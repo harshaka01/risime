@@ -18,6 +18,9 @@ defmodule RisiMe.Messaging.Store do
         }
   @type event :: %{event_id: uuid, kind: String.t(), data: map}
 
+  @doc "The reply recorded for (sender, client_msg_id), if any."
+  @callback get_sent(sender_id :: uuid, client_msg_id :: uuid) :: {:ok, sent} | :not_found
+
   @doc "Records `sent` for (sender, client_msg_id) unless already present (24 h window)."
   @callback claim_send(sender_id :: uuid, client_msg_id :: uuid, sent) :: :ok | {:exists, sent}
 

@@ -12,7 +12,9 @@ defmodule RisiMe.Messaging.Store.CassandraTest do
     ts = ~U[2026-10-06 08:15:30.456Z]
     first = %{message_id: uuid1(), conversation_id: "dm:a_b", server_ts: ts}
 
+    assert :not_found = Store.get_sent(sender, cmid)
     assert :ok = Store.claim_send(sender, cmid, first)
+    assert {:ok, ^first} = Store.get_sent(sender, cmid)
     assert {:exists, ^first} = Store.claim_send(sender, cmid, %{first | message_id: uuid1()})
   end
 

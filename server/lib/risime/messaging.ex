@@ -1,0 +1,231 @@
+defmodule RisiMe.Messaging do
+  @moduledoc """
+  One-to-one messaging with store-and-forward per-user inboxes (PROTOCOL.md §2).
+
+  Every change a user must see is appended to their inbox as an event and broadcast on
+  `topic/1`. Clients fetch from a cursor (`since`) and receive live events while connected.
+  A message event's `event_id` equals its `message_id`, which makes re-delivery after a
+  partial failure idempotent. Clients must not rely on that.
+  """
+
+  alias RisiMe.{Accounts, RateLimiter}
+  alias RisiMe.Messaging.Store
+
+  @max_body 4096
+  @max_page 500
+  @send_limit 20
+  @send_window :timer.seconds(10)
+  @status_rank %{"sent" => 0, "delivered" => 1, "read" => 2}
+
+  @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+  @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+  @doc "Internal PubSub topic for a user's live inbox events."
+  def topic(user_id), do: "inbox_live:" <> user_id
+
+  def subscribe(user_id), do: Phoenix.PubSub.subscribe(RisiMe.PubSub, topic(user_id))
+
+  @doc "`dm:<a>_<b>` with the two lowercase user ids sorted (PROTOCOL.md §2.4)."
+  def conversation_id(a, b) do
+    [x, y] = Enum.sort([String.downcase(a), String.downcase(b)])
+    "dm:#{x}_#{y}"
+  end
+
+  def max_page, do: @max_page
+
+  ## Send
+
+  @type send_error :: :unknown_recipient | :empty_body | :too_long | :rate_limited | :bad_request
+
+  @doc """
+  Sends a DM. `params` is the `msg:send` payload. Idempotent per (sender, client_msg_id):
+  a repeat returns the original reply and creates nothing new.
+  """
+  @spec send(String.t(), map) :: {:ok, map} | {:error, send_error}
+  def send(sender_id, params) do
+    with {:ok, req} <- parse_send(params),
+         :ok <- validate_body(req.body) do
+      case store().get_sent(sender_id, req.client_msg_id) do
+        {:ok, prior} -> {:ok, resend(sender_id, req, prior)}
+        :not_found -> send_new(sender_id, req)
+      end
+    end
+  end
+
+  defp parse_send(%{"client_msg_id" => cmid, "to" => to, "body" => body})
+       when is_binary(cmid) and is_binary(to) and is_binary(body) do
+    cmid = String.downcase(cmid)
+    to = String.downcase(to)
+
+    cond do
+      not uuid?(cmid) -> {:error, :bad_request}
+      not uuid?(to) -> {:error, :unknown_recipient}
+      true -> {:ok, %{client_msg_id: cmid, to: to, body: body}}
+    end
+  end
+
+  defp parse_send(%{"to" => _, "client_msg_id" => _}), do: {:error, :empty_body}
+  defp parse_send(_), do: {:error, :bad_request}
+
+  defp validate_body(body) do
+    cond do
+      String.trim(body) == "" -> {:error, :empty_body}
+      String.length(body) > @max_body -> {:error, :too_long}
+      true -> :ok
+    end
+  end
+
+  defp send_new(sender_id, req) do
+    with :ok <- check_recipient(sender_id, req.to),
+         :ok <- RateLimiter.hit(:msg_send, sender_id, @send_limit, @send_window) do
+      sent = %{
+        message_id: Uniq.UUID.uuid1(),
+        conversation_id: conversation_id(sender_id, req.to),
+        server_ts: now()
+      }
+
+      case store().claim_send(sender_id, req.client_msg_id, sent) do
+        :ok ->
+          deliver(sender_id, req, sent)
+          {:ok, send_reply(sent)}
+
+        {:exists, prior} ->
+          {:ok, resend(sender_id, req, prior)}
+      end
+    end
+  end
+
+  defp check_recipient(sender_id, to) do
+    if to != sender_id and Accounts.get_user(to), do: :ok, else: {:error, :unknown_recipient}
+  end
+
+  # A repeat of an earlier send. If that send stopped before indexing the message, finish it.
+  defp resend(sender_id, req, prior) do
+    if store().get_message(prior.message_id) == :not_found, do: deliver(sender_id, req, prior)
+    send_reply(prior)
+  end
+
+  defp deliver(sender_id, req, sent) do
+    :ok =
+      store().put_message(%{
+        message_id: sent.message_id,
+        sender_id: sender_id,
+        recipient_id: req.to,
+        client_msg_id: req.client_msg_id,
+        conversation_id: sent.conversation_id,
+        status: "sent"
+      })
+
+    publish(req.to, %{
+      event_id: sent.message_id,
+      kind: "message",
+      data: %{
+        "message_id" => sent.message_id,
+        "client_msg_id" => req.client_msg_id,
+        "conversation_id" => sent.conversation_id,
+        "from" => sender_id,
+        "to" => req.to,
+        "body" => req.body,
+        "server_ts" => iso(sent.server_ts)
+      }
+    })
+  end
+
+  defp send_reply(sent) do
+    %{
+      message_id: sent.message_id,
+      conversation_id: sent.conversation_id,
+      server_ts: iso(sent.server_ts)
+    }
+  end
+
+  ## Ack
+
+  @doc """
+  Applies a `delivered` or `read` ack from the recipient. Unknown ids and messages the user
+  did not receive are ignored. Status only moves forward; each change is sent to the sender
+  as a `status` event.
+  """
+  @spec ack(String.t(), term, term) :: :ok | {:error, :bad_request}
+  def ack(user_id, message_ids, status)
+      when is_list(message_ids) and status in ["delivered", "read"] and
+             length(message_ids) <= @max_page do
+    ids = for id <- message_ids, is_binary(id), do: String.downcase(id)
+
+    for id <- Enum.uniq(ids), timeuuid?(id) do
+      case store().get_message(id) do
+        {:ok, %{recipient_id: ^user_id} = message} -> advance(message, status, user_id)
+        _ -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  def ack(_user_id, _message_ids, _status), do: {:error, :bad_request}
+
+  defp advance(message, status, by) do
+    if @status_rank[status] > @status_rank[message.status] do
+      case store().compare_and_set_status(message.message_id, message.status, status) do
+        :ok -> publish_status(message, status, by)
+        {:conflict, current} -> advance(%{message | status: current}, status, by)
+      end
+    end
+
+    :ok
+  end
+
+  defp publish_status(message, status, by) do
+    publish(message.sender_id, %{
+      event_id: Uniq.UUID.uuid1(),
+      kind: "status",
+      data: %{
+        "message_id" => message.message_id,
+        "client_msg_id" => message.client_msg_id,
+        "conversation_id" => message.conversation_id,
+        "status" => status,
+        "by" => by,
+        "at" => iso(now())
+      }
+    })
+  end
+
+  ## Inbox
+
+  @doc """
+  Events after `since` (nil = from the start), oldest first, at most `limit` (default and
+  maximum #{@max_page}). Returns `{:ok, events, has_more}`.
+  """
+  @spec fetch_events(String.t(), term, term) :: {:ok, [map], boolean} | {:error, :bad_request}
+  def fetch_events(user_id, since, limit \\ nil) do
+    limit = if is_integer(limit) and limit > 0, do: min(limit, @max_page), else: @max_page
+    since = if is_binary(since), do: String.downcase(since), else: since
+
+    if since == nil or (is_binary(since) and timeuuid?(since)) do
+      events = store().list_events(user_id, since, limit + 1)
+      {:ok, Enum.take(events, limit), length(events) > limit}
+    else
+      {:error, :bad_request}
+    end
+  end
+
+  defp publish(user_id, event) do
+    :ok = store().append_event(user_id, event)
+    Phoenix.PubSub.broadcast(RisiMe.PubSub, topic(user_id), {:inbox_event, event})
+  end
+
+  ## Helpers
+
+  @doc "ISO-8601 UTC with milliseconds, e.g. `2026-10-06T08:15:30.123Z`."
+  def iso(%DateTime{} = dt) do
+    {us, _} = dt.microsecond
+    %{dt | microsecond: {div(us, 1000) * 1000, 3}} |> DateTime.to_iso8601()
+  end
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+
+  defp uuid?(s), do: Regex.match?(@uuid, s)
+  defp timeuuid?(s), do: Regex.match?(@timeuuid, s)
+
+  defp store, do: Store.impl()
+end

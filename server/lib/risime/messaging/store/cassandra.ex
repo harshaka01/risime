@@ -22,6 +22,21 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   end
 
   @impl true
+  def get_sent(sender_id, client_msg_id) do
+    page =
+      run!(
+        "SELECT message_id, conversation_id, server_ts FROM sent_dedupe " <>
+          "WHERE sender_id = ? AND client_msg_id = ?",
+        [sender_id, client_msg_id]
+      )
+
+    case Enum.at(page, 0) do
+      nil -> :not_found
+      row -> {:ok, to_sent(row)}
+    end
+  end
+
+  @impl true
   def claim_send(sender_id, client_msg_id, sent) do
     page =
       run!(
@@ -35,13 +50,16 @@ defmodule RisiMe.Messaging.Store.Cassandra do
         :ok
 
       %{"[applied]" => false} = row ->
-        {:exists,
-         %{
-           message_id: row["message_id"],
-           conversation_id: row["conversation_id"],
-           server_ts: row["server_ts"]
-         }}
+        {:exists, to_sent(row)}
     end
+  end
+
+  defp to_sent(row) do
+    %{
+      message_id: row["message_id"],
+      conversation_id: row["conversation_id"],
+      server_ts: row["server_ts"]
+    }
   end
 
   @impl true
