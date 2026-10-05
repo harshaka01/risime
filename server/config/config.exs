@@ -28,7 +28,7 @@ config :risime, :otp_dev_log, false
 config :risime, :cassandra,
   nodes: ["127.0.0.1:9042"],
   keyspace: "risime_dev",
-  pool_size: 4
+  pool_size: 16
 
 # Background jobs (docs/decisions/004-oban-background-jobs.md). Cron times are UTC.
 config :risime, Oban,

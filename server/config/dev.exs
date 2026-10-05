@@ -27,7 +27,8 @@ config :risime, RisiMeWeb.Endpoint,
 config :risime, :cassandra,
   nodes: ["127.0.0.1:9042"],
   keyspace: "risime_dev",
-  pool_size: 4
+  # Connections to the node; each carries up to 100 concurrent requests (docs/status/loadtest.md).
+  pool_size: 16
 
 # ## SSL Support
 #

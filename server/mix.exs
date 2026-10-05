@@ -34,7 +34,9 @@ defmodule RisiMe.MixProject do
   end
 
   # Specifies which paths to compile per environment.
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  # dev/ holds dev-only tooling (the load test); never compiled into prod.
+  defp elixirc_paths(:test), do: ["lib", "dev", "test/support"]
+  defp elixirc_paths(:dev), do: ["lib", "dev"]
   defp elixirc_paths(_), do: ["lib"]
 
   # Specifies your project dependencies.
@@ -56,7 +58,9 @@ defmodule RisiMe.MixProject do
       {:xandra, "~> 0.20.0"},
       {:uniq, "~> 0.6.3"},
       {:gen_smtp, "~> 1.3"},
-      {:oban, "~> 2.24"}
+      {:oban, "~> 2.24"},
+      # Load-test WebSocket client (mix risime.loadtest); never in prod builds.
+      {:mint_web_socket, "~> 1.0", only: [:dev, :test]}
     ]
   end
 

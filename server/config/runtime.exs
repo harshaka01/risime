@@ -38,6 +38,15 @@ end
 log_format = System.get_env("LOG_FORMAT", if(config_env() == :prod, do: "json", else: "text"))
 config :risime, :log_format, if(log_format == "json", do: :json, else: :text)
 
+if pool = System.get_env("CASSANDRA_POOL_SIZE") do
+  config :risime, :cassandra, pool_size: String.to_integer(pool)
+end
+
+# LOG_LEVEL=info|warning|… overrides the env's level (e.g. a dev server for a load test).
+if level = System.get_env("LOG_LEVEL") do
+  config :risime, :log_level, String.to_existing_atom(level)
+end
+
 # SMTP is wired up but only used when RISIME_MAILER=smtp (Release 0.2). Dev uses the local
 # mailbox at /dev/mailbox plus the `[DEV OTP]` log line.
 config :risime, :mail_from, System.get_env("SMTP_FROM", "RisiMe <no-reply@example.com>")

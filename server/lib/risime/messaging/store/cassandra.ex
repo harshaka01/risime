@@ -161,12 +161,32 @@ defmodule RisiMe.Messaging.Store.Cassandra do
     %{event_id: row["event_id"], kind: row["kind"], data: Jason.decode!(row["payload"])}
   end
 
-  defp run!(statement, params) do
-    with {:ok, prepared} <- Xandra.Cluster.prepare(@cluster, statement),
-         {:ok, result} <- Xandra.Cluster.execute(@cluster, prepared, params) do
-      result
-    else
-      {:error, error} -> raise error
+  # Backoff (ms) when every pooled connection is at its in-flight limit. Xandra fails such a
+  # request at once instead of queueing it, so a burst would otherwise crash the caller's
+  # channel (docs/status/loadtest.md).
+  @overload_backoff [2, 10, 25, 50, 100]
+
+  defp run!(statement, params, backoff \\ @overload_backoff) do
+    # One pool checkout per query: prepare (served from the connection's prepared cache after the
+    # first time) and execute on the same connection. Separate Cluster.prepare/execute calls
+    # meant two trips through the cluster process, the hottest serial process under load.
+    Xandra.Cluster.run(@cluster, fn conn ->
+      with {:ok, prepared} <- Xandra.prepare(conn, statement) do
+        Xandra.execute(conn, prepared, params)
+      end
+    end)
+    |> case do
+      {:ok, result} ->
+        result
+
+      {:error, %Xandra.ConnectionError{reason: :too_many_concurrent_requests}}
+      when backoff != [] ->
+        [ms | rest] = backoff
+        Process.sleep(ms + :rand.uniform(ms))
+        run!(statement, params, rest)
+
+      {:error, error} ->
+        raise error
     end
   end
 end

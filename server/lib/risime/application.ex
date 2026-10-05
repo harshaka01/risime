@@ -9,6 +9,7 @@ defmodule RisiMe.Application do
 
   @impl true
   def start(_type, _args) do
+    if level = Application.get_env(:risime, :log_level), do: Logger.configure(level: level)
     if Application.get_env(:risime, :log_format) == :json, do: RisiMe.JSONLogFormatter.install()
     Logger.info("RisiMe server #{version()} starting")
     RisiMe.TimeUUID.init()
