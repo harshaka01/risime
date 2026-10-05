@@ -11,6 +11,8 @@ defmodule RisiMe.Accounts do
   @otp_max_attempts 5
   @otp_requests_per_window 3
   @otp_request_window :timer.minutes(15)
+  @otp_challenge_retention_hours 24
+  @revoked_token_retention_days 30
 
   def otp_ttl_seconds, do: @otp_ttl_seconds
 
@@ -153,6 +155,35 @@ defmodule RisiMe.Accounts do
   defp code_hash(phone, code) do
     secret = Application.fetch_env!(:risime, RisiMeWeb.Endpoint)[:secret_key_base]
     :crypto.mac(:hmac, :sha256, secret, phone <> code)
+  end
+
+  ## Maintenance (run daily by RisiMe.Workers.PruneAccounts)
+
+  @doc """
+  Deletes OTP challenges created more than 24 hours before `now`. They expire after
+  #{@otp_ttl_seconds} s, so nothing live is lost. Returns the number deleted.
+  """
+  @spec prune_otp_challenges(DateTime.t()) :: non_neg_integer
+  def prune_otp_challenges(now \\ DateTime.utc_now()) do
+    cutoff = DateTime.add(now, -@otp_challenge_retention_hours, :hour)
+    {count, _} = Repo.delete_all(from c in OtpChallenge, where: c.inserted_at < ^cutoff)
+    count
+  end
+
+  @doc """
+  Deletes user tokens revoked more than 30 days before `now`. Live tokens are never touched.
+  Returns the number deleted.
+  """
+  @spec prune_revoked_tokens(DateTime.t()) :: non_neg_integer
+  def prune_revoked_tokens(now \\ DateTime.utc_now()) do
+    cutoff = DateTime.add(now, -@revoked_token_retention_days, :day)
+
+    {count, _} =
+      Repo.delete_all(
+        from t in UserToken, where: not is_nil(t.revoked_at) and t.revoked_at < ^cutoff
+      )
+
+    count
   end
 
   ## Users

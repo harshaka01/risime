@@ -27,6 +27,9 @@ config :risime, :cassandra,
 
 config :risime, :otp_dev_log, false
 
+# Jobs are only inserted (and asserted with Oban.Testing); no queues or plugins run.
+config :risime, Oban, testing: :manual
+
 # In test we don't send emails
 config :risime, RisiMe.Mailer, adapter: Swoosh.Adapters.Test
 

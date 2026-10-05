@@ -30,6 +30,21 @@ config :risime, :cassandra,
   keyspace: "risime_dev",
   pool_size: 4
 
+# Background jobs (docs/decisions/004-oban-background-jobs.md). Cron times are UTC.
+config :risime, Oban,
+  engine: Oban.Engines.Basic,
+  repo: RisiMe.Repo,
+  queues: [maintenance: 1],
+  plugins: [
+    # Completed/cancelled/discarded jobs are deleted after 7 days.
+    {Oban.Plugins.Pruner, max_age: 7 * 24 * 60 * 60},
+    {Oban.Plugins.Lifeline, rescue_after: :timer.minutes(30)},
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"17 3 * * *", RisiMe.Workers.PruneAccounts}
+     ]}
+  ]
+
 # Configure the mailer
 #
 # By default it uses the "Local" adapter which stores the emails

@@ -55,7 +55,8 @@ defmodule RisiMe.MixProject do
       {:bandit, "~> 1.5"},
       {:xandra, "~> 0.20.0"},
       {:uniq, "~> 0.6.3"},
-      {:gen_smtp, "~> 1.3"}
+      {:gen_smtp, "~> 1.3"},
+      {:oban, "~> 2.24"}
     ]
   end
 

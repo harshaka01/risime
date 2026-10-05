@@ -15,6 +15,7 @@ defmodule RisiMe.Application do
     children = [
       RisiMeWeb.Telemetry,
       RisiMe.Repo,
+      {Oban, Application.fetch_env!(:risime, Oban)},
       RisiMe.Messaging.Store.Cassandra,
       RisiMe.RateLimiter,
       {DNSCluster, query: Application.get_env(:risime, :dns_cluster_query) || :ignore},
