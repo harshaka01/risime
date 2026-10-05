@@ -1,0 +1,16 @@
+# Nightly prod backup (scripts/backup --env prod), triggered by risime-backup.timer.
+# BACKUP_DEST / BACKUP_KEEP come from .env.prod (symlinked into the deployed tag's worktree).
+# Logs: journalctl --user -u risime-backup.service
+[Unit]
+Description=RisiMe prod backup (Postgres + Cassandra, off-box)
+Documentation=file://%h/development/risime/docs/PROD.md
+After=risime-prod.service
+Requisite=risime-prod.service
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ExecStart=%h/risime-prod/current/scripts/backup --env prod
+TimeoutStartSec=3h

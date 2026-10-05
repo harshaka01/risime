@@ -1,0 +1,14 @@
+# Runs risime-backup.service every night at 21:30 UTC (03:00 in Sri Lanka, the quietest hour;
+# after the 20:13 UTC nightly release). Persistent: a run missed while the machine was off happens at next boot.
+#   install: ln -sf ~/development/risime/infra/systemd/risime-backup.{service,timer} ~/.config/systemd/user/
+#   enable:  systemctl --user daemon-reload && systemctl --user enable --now risime-backup.timer
+[Unit]
+Description=Nightly RisiMe prod backup
+
+[Timer]
+OnCalendar=*-*-* 21:30:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

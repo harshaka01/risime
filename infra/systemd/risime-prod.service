@@ -1,0 +1,27 @@
+# RisiMe PROD stack as a systemd *user* unit (docs/PROD.md, "systemd").
+# Runs the compose file of the deployed release tag (~/risime-prod/current -> ~/risime-run/<tag>)
+# with secrets from ~/development/risime/.env.prod. Not installed or enabled by default.
+#   install:  ln -sf ~/development/risime/infra/systemd/risime-prod.service ~/.config/systemd/user/
+#   enable:   systemctl --user daemon-reload && systemctl --user enable --now risime-prod.service
+#   needs:    sudo loginctl enable-linger harsha   (so user units run without a login session)
+[Unit]
+Description=RisiMe prod stack (docker compose project risime-prod)
+Documentation=file://%h/development/risime/docs/PROD.md
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=RISIME_PROD_DIR=%h/risime-prod/current
+Environment=RISIME_PROD_ENV=%h/development/risime/.env.prod
+# The docker daemon is a system service; a user unit cannot order after it, so wait for it.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do docker info >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1'
+ExecStartPre=/usr/bin/test -f ${RISIME_PROD_DIR}/infra/docker-compose.prod.yml
+ExecStartPre=/usr/bin/test -f ${RISIME_PROD_ENV}
+ExecStart=/usr/bin/docker compose --env-file ${RISIME_PROD_ENV} -f ${RISIME_PROD_DIR}/infra/docker-compose.prod.yml up -d --wait --wait-timeout 600
+ExecStop=/usr/bin/docker compose --env-file ${RISIME_PROD_ENV} -f ${RISIME_PROD_DIR}/infra/docker-compose.prod.yml stop --timeout 60
+TimeoutStartSec=900
+TimeoutStopSec=180
+
+[Install]
+WantedBy=default.target

@@ -51,7 +51,7 @@ runbook.
 8. **systemd *user* units** in `infra/systemd/`, which are installed but not enabled by this
    change:
    - `risime-prod.service` runs compose up/down;
-   - `risime-backup.service` and `.timer` run nightly at 02:30 UTC.
+   - `risime-backup.service` and `.timer` run nightly at 21:30 UTC (03:00 in Sri Lanka).
 
    They need `loginctl enable-linger harsha`, which needs sudo.
 9. **Backups** are made by `scripts/backup` and restored with `scripts/restore`:
