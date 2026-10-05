@@ -1,6 +1,6 @@
 # Proposal: presence / last seen and typing indicator (PROTOCOL v1.2)
 
-**Status:** accepted by root (orchestrator) on 2026-10-06 under the nightly mandate (backlog 0.2:
+**Status:** accepted by root (orchestrator) on 2026-10-06, revised the same day with the server review (grace period, `typing:false` exempt from the rate limit, registered-only watch) under the nightly mandate (backlog 0.2:
 "presence and last seen, typing indicator"). It is merged into `contract/v1` as v1.2 when both
 sides start implementing it. It is additive, so v1.1 clients keep working.
 
@@ -11,12 +11,17 @@ never move the cursor. They travel in a second server→client push, **`signal`*
 
 ### 2.5 Presence (online / last seen)
 - A user is **online** while at least one of their sockets has joined their own `inbox:` topic.
-- `last_seen` is the time their last such channel left (disconnect or leave). It is stored on the
-  server.
+- **Grace period.** When a user's last inbox channel leaves, the server waits **5 s** before it
+  publishes them as offline. A reconnect within that time publishes nothing, so brief reconnects
+  don't flap.
+- `last_seen` is the time their last inbox channel left (disconnect or leave), not the end of the
+  grace period. It is stored on the server and also refreshed on join, so a crash leaves it
+  roughly right.
 - **`presence:watch`** (client → server) `{"user_ids": ["uuid", ...]}`, with at most 200 ids.
   - The watch list **replaces** the previous one for this channel. `[]` stops watching.
-  - The reply ok is `{"presences": [Presence, ...]}`, one per known user id. Unknown ids are
-    left out.
+  - The reply ok is `{"presences": [Presence, ...]}`, one per **registered** user id. Ids that
+    aren't registered users (allowlisted people who have never logged in, unknown ids) are left out.
+    Watching yourself is allowed.
   - While watched, every online/offline change of those users is pushed as a `signal` of kind
     `presence`.
 - `Presence = {"user_id": "uuid", "online": true|false, "last_seen": "<ISO-8601 ms>" | null}`
@@ -29,7 +34,8 @@ never move the cursor. They travel in a second server→client push, **`signal`*
   - Send `true` when the user starts typing, and again at most every 3 s while they keep typing.
   - Send `false` when they stop for 3 s, clear the input, or send the message.
   - The server forwards it only to the recipient's connected inbox channels. It is dropped if
-    the recipient is offline, and dropped silently (reply ok) above 2 pushes per second per user.
+    the recipient is offline. `typing: true` pushes above 2 per second per user are dropped
+    silently (reply ok). `typing: false` is never rate-limited, so a stop is never lost.
   - `unknown_recipient` and `bad_request` behave as in `msg:send`.
 - The recipient shows "typing…" until it receives `typing: false`, a message from that user, or
   **6 s pass** without a refresh.
