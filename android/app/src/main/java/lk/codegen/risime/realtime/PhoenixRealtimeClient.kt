@@ -36,7 +36,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Minimal Phoenix V2 channels client on OkHttp WebSocket (see docs/status/android.md, Decisions): join/push/reply refs,
+ * Minimal Phoenix V2 channels client on OkHttp WebSocket (docs/decisions/002): join/push/reply refs,
  * heartbeat, reconnect backoff and the `since`/`sync` loop on topic `inbox:<user id>`.
  */
 class PhoenixRealtimeClient(
