@@ -1,0 +1,125 @@
+# RisiMe PROD stack (docs/PROD.md, docs/decisions/007-prod-environment.md).
+# Separate from dev: own project name, network, volumes, DB/keyspace names and host ports.
+# Every published port is loopback-only (spark2 has a public IP and Docker bypasses ufw).
+#
+#   docker compose --env-file .env.prod -f infra/docker-compose.prod.yml config   # validate
+#   docker compose --env-file .env.prod -f infra/docker-compose.prod.yml up -d    # (systemd does this)
+#
+# Host ports: postgres 127.0.0.1:5442, cassandra 127.0.0.1:9142, server 127.0.0.1:4500.
+# (Dev uses 5432 / 9042 / 4000; the load-test instance 4100.)
+name: risime-prod
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "50m", max-file: "5" }
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: risime
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env.prod}
+      POSTGRES_DB: risime_prod
+    command: ["postgres", "-c", "shared_buffers=1GB", "-c", "max_connections=100"]
+    ports: ["127.0.0.1:5442:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    shm_size: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U risime -d risime_prod"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 4g }
+    logging: *logging
+    networks: [prod]
+
+  cassandra:
+    image: cassandra:5.0.9
+    restart: unless-stopped
+    environment:
+      CASSANDRA_CLUSTER_NAME: risime-prod
+      MAX_HEAP_SIZE: 4G
+      HEAP_NEWSIZE: 400M
+    ports: ["127.0.0.1:9142:9042"]
+    volumes: [cassdata:/var/lib/cassandra]
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' >/dev/null 2>&1"]
+      interval: 20s
+      timeout: 15s
+      retries: 30
+      start_period: 120s
+    deploy:
+      resources:
+        limits: { cpus: "4", memory: 8g }
+    logging: *logging
+    networks: [prod]
+
+  # One-shot: Ecto + CQL migrations from the same image, before the server starts.
+  migrate:
+    image: risime-server:${RISIME_VERSION:?set in .env.prod}
+    pull_policy: never
+    command: ["/app/bin/risime", "eval", "RisiMe.Release.migrate()"]
+    restart: "no"
+    environment: &server_env
+      DATABASE_URL: ecto://risime:${POSTGRES_PASSWORD}@postgres:5432/risime_prod
+      POOL_SIZE: ${POOL_SIZE:-10}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?set in .env.prod}
+      PHX_HOST: ${PHX_HOST:?set in .env.prod}
+      PORT: "4000"
+      # Read by config/runtime.exs once the server adds prod Cassandra config (docs/PROD.md, P1).
+      CASSANDRA_NODES: cassandra:9042
+      CASSANDRA_KEYSPACE: risime_prod
+      RELEASE_COOKIE: ${RELEASE_COOKIE:?set in .env.prod}
+      RISIME_MAILER: ${RISIME_MAILER:-smtp}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      cassandra: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 1g }
+    logging: *logging
+    networks: [prod]
+
+  server:
+    image: risime-server:${RISIME_VERSION:?set in .env.prod}
+    # Built from a clean worktree of a release tag (docs/PROD.md), never from the shared checkout.
+    pull_policy: never
+    restart: unless-stopped
+    environment: *server_env
+    ports: ["127.0.0.1:4500:4000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      cassandra: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      # 200 only when Postgres and Cassandra both answer (GET /health, docs/decisions/008).
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:4000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "4", memory: 2g }
+    logging: *logging
+    networks: [prod]
+
+networks:
+  prod:
+    name: risime-prod
+
+volumes:
+  pgdata:
+    name: risime-prod-pgdata
+  cassdata:
+    name: risime-prod-cassdata

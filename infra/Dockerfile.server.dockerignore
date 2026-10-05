@@ -1,0 +1,8 @@
+# BuildKit uses <Dockerfile>.dockerignore; the context is the repo root.
+*
+!VERSION
+!server/mix.exs
+!server/mix.lock
+!server/config/
+!server/lib/
+!server/priv/

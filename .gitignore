@@ -14,3 +14,4 @@ android/local.properties
 android/.idea/
 android/captures/
 .DS_Store
+.env.prod

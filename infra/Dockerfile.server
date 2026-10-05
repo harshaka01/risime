@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1
+# RisiMe server: multi-stage Elixir release image (docs/PROD.md).
+# Multi-arch: the base images ship linux/arm64 (spark2) and linux/amd64 (laptop).
+# Build context = repo root (mix.exs reads ../VERSION). Build from a clean worktree of a tag:
+#   docker build -f infra/Dockerfile.server -t risime-server:<version> <worktree>
+ARG ELIXIR_IMAGE=hexpm/elixir:1.19.6-erlang-28.5.0.7-debian-bookworm-20260918-slim
+ARG RUNNER_IMAGE=debian:bookworm-20260918-slim
+
+# ---------- build ----------
+FROM ${ELIXIR_IMAGE} AS build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+ENV MIX_ENV=prod LANG=C.UTF-8
+RUN mix local.hex --force && mix local.rebar --force
+
+WORKDIR /app
+COPY VERSION ./VERSION
+WORKDIR /app/server
+COPY server/mix.exs server/mix.lock ./
+RUN mix deps.get --only prod
+# Compile-time config first so deps are cached separately from app code.
+RUN mkdir config
+COPY server/config/config.exs server/config/prod.exs config/
+RUN mix deps.compile
+
+COPY server/priv priv
+COPY server/lib lib
+RUN mix compile --warnings-as-errors
+# runtime.exs last: changing it does not recompile anything.
+COPY server/config/runtime.exs config/
+RUN mix release
+
+# ---------- runtime ----------
+FROM ${RUNNER_IMAGE} AS runtime
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 ca-certificates curl tini \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 --user-group --home-dir /app --shell /usr/sbin/nologin risime
+ENV LANG=C.UTF-8 MIX_ENV=prod PHX_SERVER=true PORT=4000
+WORKDIR /app
+COPY --from=build --chown=risime:risime /app/server/_build/prod/rel/risime ./
+USER risime
+EXPOSE 4000
+# GET /health is 200 only when Postgres and Cassandra answer (docs/decisions/008).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
+  CMD curl -fsS -o /dev/null http://127.0.0.1:4000/health || exit 1
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/app/bin/risime", "start"]
