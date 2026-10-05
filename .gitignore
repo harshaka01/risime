@@ -15,3 +15,5 @@ android/.idea/
 android/captures/
 .DS_Store
 .env.prod
+# Rust (crypto/)
+crypto/**/target/

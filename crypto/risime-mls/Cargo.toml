@@ -1,0 +1,13 @@
+[package]
+name = "risime-mls"
+version = "0.1.0"
+description = "RisiMe E2EE core: a small bytes-in/bytes-out API over OpenMLS"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+openmls = "0.9.0"
+openmls_basic_credential = "0.6.0"
+openmls_rust_crypto = "0.6.0"
+thiserror = "2.0.21"
