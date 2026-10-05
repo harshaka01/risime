@@ -11,6 +11,9 @@ import androidx.compose.ui.graphics.Color
 val Teal = Color(0xFF0B6E69)
 val Saffron = Color(0xFFF2A93B)
 
+/** Presence dot (non-text; ringed by the surface colour so it reads on any avatar). */
+val OnlineGreen = Color(0xFF1FA463)
+
 private val Light = lightColorScheme(
     primary = Teal,
     onPrimary = Color.White,

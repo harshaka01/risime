@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import lk.codegen.risime.net.Event
@@ -38,6 +39,18 @@ class PhoenixRealtimeClientTest {
     private val live = CountDownLatch(1)
     private var cursor: String? = "e0"
     private val serverSockets = Collections.synchronizedList(mutableListOf<WebSocket>())
+
+    private val snapshots = Collections.synchronizedList(mutableListOf<List<String>>())
+    private val signalKinds = Collections.synchronizedList(mutableListOf<String>())
+    private val sink = object : SignalSink {
+        override fun onPresenceSnapshot(presences: List<lk.codegen.risime.net.Presence>) {
+            snapshots += presences.map { it.userId }
+        }
+        override fun onSignal(signal: lk.codegen.risime.net.Signal) {
+            signalKinds += signal.kind
+        }
+        override fun onDisconnected() = Unit
+    }
 
     private val listener = object : RealtimeListener {
         override suspend fun cursor() = cursor
@@ -70,6 +83,9 @@ class PhoenixRealtimeClientTest {
                     webSocket.send(reply(f, "ok", """{"events":[${event("e1")},${event("e2")}],"has_more":true,"server_time":"x"}"""))
                     // A live push that arrives while the client is still syncing must be applied after the sync.
                     webSocket.send("""[null,null,"${f.topic}","event",${event("e4")}]""")
+                    // Signals are ephemeral: delivered at once, never buffered behind sync or applied as events.
+                    webSocket.send("""[null,null,"${f.topic}","signal",{"kind":"typing","data":{"from":"u2","conversation_id":"dm:u1_u2","typing":true}}]""")
+                    webSocket.send("""[null,null,"${f.topic}","signal",{"kind":"mood","data":{}}]""")
                 }
                 "sync" -> webSocket.send(reply(f, "ok", """{"events":[${event("e3")}],"has_more":false,"server_time":"x"}"""))
                 "msg:send" -> {
@@ -81,6 +97,12 @@ class PhoenixRealtimeClientTest {
                     }
                 }
                 "heartbeat" -> webSocket.send(reply(f, "ok", "{}"))
+                "typing" -> webSocket.send(reply(f, "ok", "{}"))
+                "presence:watch" -> {
+                    val ids = (f.payload as JsonObject)["user_ids"]!!.jsonArray.map { it.jsonPrimitive.content }
+                    val ps = ids.joinToString(",") { """{"user_id":"$it","online":true,"last_seen":null}""" }
+                    webSocket.send(reply(f, "ok", """{"presences":[$ps]}"""))
+                }
             }
         }
     }
@@ -146,6 +168,46 @@ class PhoenixRealtimeClientTest {
     fun sendWhileDisconnectedIsUnavailable() = runBlocking {
         val client = PhoenixRealtimeClient(OkHttpClient(), scope, listener)
         assertEquals(PushResult.Unavailable, client.sendMessage(MsgSend("c1", "u2", "hi", "t")))
+        // Typing is never queued.
+        assertEquals(PushResult.Unavailable, client.typing("u2", true))
+    }
+
+    @Test
+    fun signalsBypassTheCursorAndWatchIsSentAfterEveryJoin() = runBlocking {
+        server.enqueue(MockResponse().withWebSocketUpgrade(FakeServer()))
+        val client = PhoenixRealtimeClient(OkHttpClient(), scope, listener, backoffMs = listOf(50), heartbeatMs = 60_000, signals = sink)
+        client.setWatch(linkedSetOf("u2", "u3"))
+        client.start(RealtimeSession(server.url("/").toString(), "tok", "u1"))
+        withTimeout(5_000) { client.state.first { it == ConnectionState.Live } }
+        withTimeout(5_000) { while (applied.size < 4 || signalKinds.size < 2) kotlinx.coroutines.delay(10) }
+        assertEquals(listOf("e1", "e2", "e3", "e4"), applied.toList()) // signals never become events
+        assertEquals("e4", cursor)
+        assertEquals(listOf("typing", "mood"), signalKinds.toList()) // unknown kinds reach the sink, which ignores them
+
+        // Watch right after the join reply, before or during sync.
+        val firstJoin = received.indexOfFirst { it.event == "phx_join" }
+        val firstWatch = received.indexOfFirst { it.event == "presence:watch" }
+        assertTrue(firstWatch > firstJoin)
+        withTimeout(5_000) { while (snapshots.isEmpty()) kotlinx.coroutines.delay(10) }
+        assertEquals(listOf("u2", "u3"), snapshots.first())
+
+        // A changed list is pushed while live.
+        client.setWatch(setOf("u4"))
+        withTimeout(5_000) { while (snapshots.size < 2) kotlinx.coroutines.delay(10) }
+        assertEquals(listOf("u4"), snapshots[1])
+        assertEquals(PushResult.Ok(Unit), client.typing("u2", false))
+        val typing = received.first { it.event == "typing" }
+        assertEquals(JsonPrimitive(false), typing.payload.jsonObject["typing"])
+
+        // Rejoin: the current list is sent again after the new join reply.
+        serverSockets.first().close(1000, "bye")
+        withTimeout(5_000) { while (received.count { it.event == "presence:watch" } < 3) kotlinx.coroutines.delay(10) }
+        val joins = received.withIndex().filter { it.value.event == "phx_join" }
+        assertEquals(2, joins.size)
+        val rewatch = received.withIndex().filter { it.value.event == "presence:watch" }.last()
+        assertTrue(rewatch.index > joins[1].index)
+        assertEquals(listOf("u4"), rewatch.value.payload.jsonObject["user_ids"]!!.jsonArray.map { it.jsonPrimitive.content })
+        client.stop()
     }
 
     @Test

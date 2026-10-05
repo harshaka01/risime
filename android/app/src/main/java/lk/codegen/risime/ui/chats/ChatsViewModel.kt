@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import lk.codegen.risime.AppContainer
 import lk.codegen.risime.data.db.LastMessage
 import lk.codegen.risime.net.ApiResult
+import lk.codegen.risime.net.Presence
 import lk.codegen.risime.net.dmConversationId
 import lk.codegen.risime.realtime.ConnectionState
 
@@ -20,6 +21,8 @@ data class ChatRow(
     val company: String,
     val registered: Boolean,
     val last: LastMessage?,
+    val presence: Presence? = null,
+    val typing: Boolean = false,
 )
 
 class ChatsViewModel(private val c: AppContainer, private val meId: String) : ViewModel() {
@@ -27,11 +30,19 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
     val connection: StateFlow<ConnectionState> = c.realtime.state
 
     /** Registered contacts first (most recent chat on top), then unregistered greyed out. */
-    val rows: StateFlow<List<ChatRow>> = combine(c.contacts.contacts, c.db.messages().lastMessages()) { contacts, lasts ->
+    val rows: StateFlow<List<ChatRow>> = combine(
+        c.contacts.contacts,
+        c.db.messages().lastMessages(),
+        c.presence.presence,
+        c.presence.typing,
+    ) { contacts, lasts, presence, typing ->
         val byConv = lasts.associateBy { it.conversationId }
         contacts.map { ct ->
+            val id = ct.userId?.lowercase()
             ChatRow(ct.userId, ct.displayName, ct.company, ct.registered && ct.userId != null,
-                ct.userId?.let { byConv[dmConversationId(meId, it)] })
+                ct.userId?.let { byConv[dmConversationId(meId, it)] },
+                presence = id?.let { presence[it] },
+                typing = id != null && id in typing)
         }.sortedWith(
             compareByDescending<ChatRow> { it.registered }
                 .thenByDescending { it.last?.localTs ?: 0L }

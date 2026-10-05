@@ -25,7 +25,12 @@ import lk.codegen.risime.net.JoinPayload
 import lk.codegen.risime.net.MsgAck
 import lk.codegen.risime.net.MsgSend
 import lk.codegen.risime.net.MsgSendReply
+import lk.codegen.risime.net.PRESENCE_WATCH_MAX
+import lk.codegen.risime.net.PresenceWatch
+import lk.codegen.risime.net.PresenceWatchReply
 import lk.codegen.risime.net.ProtocolJson
+import lk.codegen.risime.net.Signal
+import lk.codegen.risime.net.TypingPush
 import lk.codegen.risime.net.SyncPayload
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -48,7 +53,10 @@ class PhoenixRealtimeClient(
     private val heartbeatMs: Long = 30_000,
     private val replyTimeoutMs: Long = 10_000,
     private val pageLimit: Int = 500,
+    private val signals: SignalSink? = null,
 ) : RealtimeClient {
+
+    private val watch = MutableStateFlow<Set<String>>(emptySet())
 
     private val _state = MutableStateFlow(ConnectionState.Disconnected)
     override val state: StateFlow<ConnectionState> = _state.asStateFlow()
@@ -82,6 +90,16 @@ class PhoenixRealtimeClient(
             ?.map { }
             ?: PushResult.Unavailable
 
+    override fun setWatch(userIds: Set<String>) {
+        watch.value = userIds
+    }
+
+    override suspend fun typing(to: String, typing: Boolean): PushResult<Unit> =
+        current?.takeIf { _state.value == ConnectionState.Live }
+            ?.push("typing", ProtocolJson.encodeToJsonElement(TypingPush(to, typing)))
+            ?.map { }
+            ?: PushResult.Unavailable
+
     private fun liveConnection(): Connection? =
         current?.takeIf { _state.value == ConnectionState.Live || _state.value == ConnectionState.Syncing }
 
@@ -100,6 +118,7 @@ class PhoenixRealtimeClient(
             } finally {
                 conn.close()
                 if (current === conn) current = null
+                signals?.onDisconnected()
             }
             if (outcome == Outcome.AuthFailed) {
                 _state.value = ConnectionState.AuthFailed
@@ -197,6 +216,24 @@ class PhoenixRealtimeClient(
                     return@coroutineScope if (join.reason == "unauthorized") Outcome.AuthFailed else Outcome.Closed
                 PushResult.Unavailable -> return@coroutineScope Outcome.Closed
             }
+            // §2.5: watches don't survive a rejoin; send the list right after every join reply, then on change.
+            val watcher = launch {
+                watch.collect { ids ->
+                    val r = push("presence:watch", ProtocolJson.encodeToJsonElement(PresenceWatch(ids.take(PRESENCE_WATCH_MAX))))
+                    if (r is PushResult.Ok) {
+                        runCatching { ProtocolJson.decodeFromJsonElement<PresenceWatchReply>(r.value) }
+                            .onSuccess { signals?.onPresenceSnapshot(it.presences) }
+                    }
+                }
+            }
+            try {
+                syncThenLive(page)
+            } finally {
+                watcher.cancel()
+            }
+        }
+
+        private suspend fun syncThenLive(page: EventsPage): Outcome? = coroutineScope {
             var current = page
             listener.onEvents(current.events)
             while (current.hasMore && current.events.isNotEmpty()) {
@@ -260,6 +297,10 @@ class PhoenixRealtimeClient(
         private fun handleFrame(f: PhoenixFrame) {
             when (f.event) {
                 PhoenixFrame.PHX_REPLY -> f.ref?.let { pending[it]?.complete(f) }
+                "signal" -> if (f.topic == topic) {
+                    runCatching { ProtocolJson.decodeFromJsonElement<Signal>(f.payload) }
+                        .onSuccess { sig -> signals?.onSignal(sig) }
+                }
                 "event" -> if (f.topic == topic) {
                     runCatching { ProtocolJson.decodeFromJsonElement<Event>(f.payload) }
                         .onSuccess { liveEvents.trySend(it) }

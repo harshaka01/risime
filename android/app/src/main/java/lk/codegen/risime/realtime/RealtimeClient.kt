@@ -4,6 +4,8 @@ import kotlinx.coroutines.flow.StateFlow
 import lk.codegen.risime.net.Event
 import lk.codegen.risime.net.MsgSend
 import lk.codegen.risime.net.MsgSendReply
+import lk.codegen.risime.net.Presence
+import lk.codegen.risime.net.Signal
 
 enum class ConnectionState { Disconnected, Connecting, Syncing, Live, AuthFailed }
 
@@ -32,6 +34,20 @@ interface RealtimeListener {
     suspend fun onAuthFailed()
 }
 
+/**
+ * Ephemeral state (§2.3 `signal`, §2.5, §2.6). Called straight from the socket reader: never buffered
+ * behind the sync loop, never touching the cursor. Implementations must be thread-safe and fast.
+ */
+interface SignalSink {
+    /** Reply to `presence:watch`: the full presence list for the watched ids (missing id = unknown). */
+    fun onPresenceSnapshot(presences: List<Presence>)
+
+    fun onSignal(signal: Signal)
+
+    /** The socket is gone: presence and typing are no longer known. */
+    fun onDisconnected()
+}
+
 /** The app's view of the realtime connection (PROTOCOL.md §2). Hides the Phoenix details. */
 interface RealtimeClient {
     val state: StateFlow<ConnectionState>
@@ -43,4 +59,13 @@ interface RealtimeClient {
     suspend fun sendMessage(msg: MsgSend): PushResult<MsgSendReply>
 
     suspend fun ack(messageIds: List<String>, status: String): PushResult<Unit>
+
+    /**
+     * Users whose presence to watch (at most 200 are sent). Remembered across reconnects and sent
+     * as `presence:watch` right after every successful join reply, and again whenever it changes.
+     */
+    fun setWatch(userIds: Set<String>)
+
+    /** §2.6 typing. Never queued: returns [PushResult.Unavailable] when not connected. */
+    suspend fun typing(to: String, typing: Boolean): PushResult<Unit>
 }

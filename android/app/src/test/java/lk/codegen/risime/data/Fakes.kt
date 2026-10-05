@@ -116,4 +116,17 @@ class FakeRealtime : RealtimeClient {
         acks += messageIds to status
         return ackReply
     }
+
+    val watches = mutableListOf<Set<String>>()
+    val typings = mutableListOf<Pair<String, Boolean>>()
+
+    override fun setWatch(userIds: Set<String>) {
+        watches += userIds
+    }
+
+    override suspend fun typing(to: String, typing: Boolean): PushResult<Unit> {
+        if (!connected) return PushResult.Unavailable
+        typings += to to typing
+        return PushResult.Ok(Unit)
+    }
 }

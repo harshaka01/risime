@@ -38,6 +38,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import lk.codegen.risime.realtime.ConnectionState
 import lk.codegen.risime.ui.common.InitialsAvatar
+import lk.codegen.risime.ui.common.TYPING_LABEL
+import lk.codegen.risime.ui.common.presenceLabel
 import lk.codegen.risime.ui.common.shortStamp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -116,7 +118,7 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
         Modifier.fillMaxWidth().clickable(enabled = row.registered, onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        InitialsAvatar(row.name, enabled = row.registered)
+        InitialsAvatar(row.name, enabled = row.registered, online = row.presence?.online == true)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -126,13 +128,20 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
                     Text(shortStamp(it.localTs), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+            val presence = presenceLabel(row.presence, System.currentTimeMillis())
             val sub = when {
                 dim -> "${row.company} · not on RisiMe yet"
+                row.typing -> TYPING_LABEL
                 row.last != null -> (if (row.last.outgoing) "You: " else "") + row.last.body
+                presence != null -> presence
                 else -> row.company
             }
-            Text(sub, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Text(sub, style = MaterialTheme.typography.bodyMedium,
+                color = if (row.typing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (presence != null && !row.typing && row.last != null) {
+                Text(presence, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            }
         }
     }
 }

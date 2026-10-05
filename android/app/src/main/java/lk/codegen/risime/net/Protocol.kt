@@ -153,3 +153,47 @@ fun dmConversationId(a: String, b: String): String {
     val y = b.lowercase()
     return if (x <= y) "dm:${x}_$y" else "dm:${y}_$x"
 }
+
+// ---- Presence and typing (§2.3 signal, §2.5, §2.6; v1.2). Ephemeral: never stored, no cursor. ----
+
+@Serializable
+data class PresenceWatch(@SerialName("user_ids") val userIds: List<String>)
+
+@Serializable
+data class Presence(
+    @SerialName("user_id") val userId: String,
+    val online: Boolean,
+    /** Null while online, and for a user who has never connected. May be arbitrarily old. */
+    @SerialName("last_seen") val lastSeen: String? = null,
+)
+
+@Serializable
+data class PresenceWatchReply(val presences: List<Presence>)
+
+@Serializable
+data class TypingPush(val to: String, val typing: Boolean)
+
+@Serializable
+data class TypingData(
+    val from: String,
+    @SerialName("conversation_id") val conversationId: String,
+    val typing: Boolean,
+)
+
+/** §2.3 `signal` push. Clients ignore unknown kinds (the decoders return null). */
+@Serializable
+data class Signal(val kind: String, val data: JsonObject) {
+    fun presence(): Presence? =
+        if (kind == KIND_PRESENCE) runCatching { ProtocolJson.decodeFromJsonElement<Presence>(data) }.getOrNull() else null
+
+    fun typing(): TypingData? =
+        if (kind == KIND_TYPING) runCatching { ProtocolJson.decodeFromJsonElement<TypingData>(data) }.getOrNull() else null
+
+    companion object {
+        const val KIND_PRESENCE = "presence"
+        const val KIND_TYPING = "typing"
+    }
+}
+
+/** Max ids per `presence:watch` (§2.5). */
+const val PRESENCE_WATCH_MAX = 200

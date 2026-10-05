@@ -20,6 +20,8 @@ import lk.codegen.risime.data.BehaviourLog
 import lk.codegen.risime.data.ChatEngine
 import lk.codegen.risime.data.ContactsRepository
 import lk.codegen.risime.data.PhoneNormalizer
+import lk.codegen.risime.data.PresenceTracker
+import lk.codegen.risime.data.watchList
 import lk.codegen.risime.data.SessionStore
 import lk.codegen.risime.data.TransactionRunner
 import lk.codegen.risime.data.db.AppDatabase
@@ -54,6 +56,11 @@ class AppContainer(context: Context) {
     val behaviour = BehaviourLog(db.behaviour(), { sessionStore.installSalt() })
     val contacts = ContactsRepository(api, db.contacts())
 
+    val presence = PresenceTracker(scope)
+
+    /** The peer of the chat on screen, if any; always included in the presence watch. */
+    val openChatPeer = MutableStateFlow<String?>(null)
+
     val engine: ChatEngine = ChatEngine(
         messages = db.messages(),
         sync = db.sync(),
@@ -64,9 +71,10 @@ class AppContainer(context: Context) {
         realtime = { realtime },
         meId = { sessionStore.current()?.user?.id },
         behaviour = behaviour,
+        onIncomingFrom = presence::onMessageFrom,
     )
 
-    val realtime: RealtimeClient = PhoenixRealtimeClient(http, scope, engine)
+    val realtime: RealtimeClient = PhoenixRealtimeClient(http, scope, engine, signals = presence)
 
     private val foreground = MutableStateFlow(false)
 
@@ -92,6 +100,12 @@ class AppContainer(context: Context) {
         }
         scope.launch {
             realtime.state.collect { if (it == ConnectionState.AuthFailed) clearLocal() }
+        }
+        // §2.5: watch the registered contacts shown in Chats plus the open chat.
+        scope.launch {
+            combine(contacts.contacts, openChatPeer) { list, open ->
+                watchList(list.mapNotNull { c -> c.userId?.takeIf { c.registered } }, open)
+            }.distinctUntilChanged().collect { realtime.setWatch(it) }
         }
     }
 

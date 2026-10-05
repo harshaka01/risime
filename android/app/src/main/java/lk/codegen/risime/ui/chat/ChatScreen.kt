@@ -53,6 +53,8 @@ import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.ui.chats.connectionLabel
 import lk.codegen.risime.ui.common.InitialsAvatar
 import lk.codegen.risime.ui.common.PendingClock
+import lk.codegen.risime.ui.common.TYPING_LABEL
+import lk.codegen.risime.ui.common.presenceLabel
 import lk.codegen.risime.ui.common.timeOf
 import lk.codegen.risime.ui.theme.Saffron
 
@@ -62,6 +64,8 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     val messages by vm.messages.collectAsStateWithLifecycle()
     val peer by vm.peer.collectAsStateWithLifecycle()
     val conn by vm.connection.collectAsStateWithLifecycle()
+    val presence by vm.peerPresence.collectAsStateWithLifecycle()
+    val typing by vm.peerTyping.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val lifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
@@ -85,13 +89,18 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        InitialsAvatar(name, size = 36.dp)
+                        InitialsAvatar(name, size = 36.dp, online = presence?.online == true)
                         Column(Modifier.padding(start = 12.dp)) {
                             Text(name, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
                             Text(
-                                connectionLabel(conn) ?: (peer?.company ?: ""),
+                                when {
+                                    typing -> TYPING_LABEL
+                                    else -> connectionLabel(conn)
+                                        ?: presenceLabel(presence, System.currentTimeMillis())
+                                        ?: (peer?.company ?: "")
+                                },
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (typing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
@@ -111,7 +120,12 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
             }
             InputBar(
                 draft = draft,
-                onDraft = { if (it.length <= 4096) draft = it },
+                onDraft = {
+                    if (it.length <= 4096) {
+                        draft = it
+                        vm.onDraftChanged(it)
+                    }
+                },
                 onSend = {
                     if (draft.isNotBlank()) {
                         vm.send(draft)

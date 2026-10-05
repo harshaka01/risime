@@ -27,13 +27,11 @@ class ContractExamplesTest {
         "join_reply.json" to { s -> ProtocolJson.decodeFromString<EventsPage>(s) },
         "msg_send.json" to { s -> ProtocolJson.decodeFromString<MsgSend>(s) },
         "msg_send_reply.json" to { s -> ProtocolJson.decodeFromString<MsgSendReply>(s) },
-        // v1.2 (presence/typing): parse-only placeholders added by root with the contract merge;
-        // the android role replaces them with typed decoders when it implements §2.5/§2.6.
-        "presence_watch.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "presence_watch_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "signal_presence.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "signal_typing.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "typing.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "presence_watch.json" to { s -> ProtocolJson.decodeFromString<PresenceWatch>(s) },
+        "presence_watch_reply.json" to { s -> ProtocolJson.decodeFromString<PresenceWatchReply>(s) },
+        "signal_presence.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.presence()) } },
+        "signal_typing.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.typing()) } },
+        "typing.json" to { s -> ProtocolJson.decodeFromString<TypingPush>(s) },
     )
 
     @Test
@@ -51,6 +49,51 @@ class ContractExamplesTest {
         val original = ProtocolJson.parseToJsonElement(read("msg_send.json")) as JsonObject
         val model = ProtocolJson.decodeFromJsonElement<MsgSend>(original)
         assertEquals(original, ProtocolJson.encodeToJsonElement(model))
+    }
+
+    @Test
+    fun clientSentV12PayloadsRoundTrip() {
+        for (name in listOf("presence_watch.json", "typing.json")) {
+            val original = ProtocolJson.parseToJsonElement(read(name)) as JsonObject
+            val encoded = when (name) {
+                "typing.json" -> ProtocolJson.encodeToJsonElement(ProtocolJson.decodeFromJsonElement<TypingPush>(original))
+                else -> ProtocolJson.encodeToJsonElement(ProtocolJson.decodeFromJsonElement<PresenceWatch>(original))
+            }
+            assertEquals(name, original, encoded)
+        }
+    }
+
+    @Test
+    fun presenceExamples() {
+        val reply = ProtocolJson.decodeFromString<PresenceWatchReply>(read("presence_watch_reply.json"))
+        val p = reply.presences.single()
+        assertFalse(p.online)
+        assertNotNull(p.lastSeen)
+        val watch = ProtocolJson.decodeFromString<PresenceWatch>(read("presence_watch.json"))
+        assertEquals(watch.userIds, listOf(p.userId))
+
+        val sig = ProtocolJson.decodeFromString<Signal>(read("signal_presence.json"))
+        assertEquals(Signal.KIND_PRESENCE, sig.kind)
+        val live = sig.presence()!!
+        assertTrue(live.online)
+        assertEquals(null, live.lastSeen)
+        assertEquals(null, sig.typing())
+    }
+
+    @Test
+    fun typingExamples() {
+        val t = ProtocolJson.decodeFromString<Signal>(read("signal_typing.json")).typing()!!
+        assertTrue(t.typing)
+        val push = ProtocolJson.decodeFromString<TypingPush>(read("typing.json"))
+        assertEquals(dmConversationId(t.from, push.to), t.conversationId)
+        assertTrue(push.typing)
+    }
+
+    @Test
+    fun unknownSignalKindIsIgnored() {
+        val s = ProtocolJson.decodeFromString<Signal>("""{"kind":"mood","data":{"x":1}}""")
+        assertEquals(null, s.presence())
+        assertEquals(null, s.typing())
     }
 
     @Test

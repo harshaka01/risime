@@ -43,6 +43,8 @@ class ChatEngine(
     private val newClientMsgId: () -> String = { UUID.randomUUID().toString() },
     private val behaviour: BehaviourLog? = null,
     private val rateLimitRetryMs: Long = 10_000,
+    /** Called after a new incoming message from this user id is stored (ends their "typing…"). */
+    private val onIncomingFrom: (String) -> Unit = {},
 ) : RealtimeListener {
 
     private val outboxLock = Mutex()
@@ -105,6 +107,7 @@ class ChatEngine(
                 outgoing = outgoing,
             ),
         )
+        if (!outgoing) onIncomingFrom(m.from)
         return !outgoing
     }
 

@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import lk.codegen.risime.ui.theme.OnlineGreen
 
 const val DEV_BANNER_TEXT = "Dev build — not end-to-end encrypted"
 
@@ -41,9 +42,28 @@ fun DevEncryptionBanner(modifier: Modifier = Modifier) {
     )
 }
 
-/** Initials avatar for a contact. */
+/** Initials avatar for a contact, with a presence dot when [online]. */
 @Composable
-fun InitialsAvatar(name: String, enabled: Boolean = true, size: Dp = 44.dp) {
+fun InitialsAvatar(name: String, enabled: Boolean = true, size: Dp = 44.dp, online: Boolean = false) {
+    Box {
+        InitialsCircle(name, enabled, size)
+        if (online) PresenceDot(Modifier.align(Alignment.BottomEnd), size)
+    }
+}
+
+/** Green-teal dot with a surface ring; TalkBack reads "online". */
+@Composable
+fun PresenceDot(modifier: Modifier = Modifier, avatarSize: Dp = 44.dp) {
+    val d = (avatarSize.value * 0.3f).coerceAtLeast(10f).dp
+    Box(
+        modifier.size(d).clip(CircleShape).background(MaterialTheme.colorScheme.surface).padding(2.dp)
+            .clip(CircleShape).background(OnlineGreen)
+            .semantics { contentDescription = "online" },
+    )
+}
+
+@Composable
+private fun InitialsCircle(name: String, enabled: Boolean, size: Dp) {
     val initials = name.split(' ', '-', '.').filter { it.isNotBlank() }.take(2)
         .joinToString("") { it.first().uppercase() }.ifEmpty { "?" }
     val bg = if (enabled) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
