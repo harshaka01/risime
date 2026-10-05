@@ -37,6 +37,7 @@ class PhoenixRealtimeClientTest {
     private val applied = Collections.synchronizedList(mutableListOf<String>())
     private val live = CountDownLatch(1)
     private var cursor: String? = "e0"
+    private val serverSockets = Collections.synchronizedList(mutableListOf<WebSocket>())
 
     private val listener = object : RealtimeListener {
         override suspend fun cursor() = cursor
@@ -55,7 +56,9 @@ class PhoenixRealtimeClientTest {
 
     /** Fake server: join returns page 1 (has_more), sync returns page 2, msg:send is acked. */
     private inner class FakeServer : WebSocketListener() {
-        override fun onOpen(webSocket: WebSocket, response: Response) = Unit
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            serverSockets += webSocket
+        }
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
             webSocket.close(1000, null)
         }
@@ -119,6 +122,23 @@ class PhoenixRealtimeClientTest {
         assertEquals(PushResult.Rejected("unknown_recipient"), bad)
         val sent = received.first { it.event == "msg:send" }
         assertEquals(join.joinRef, sent.joinRef)
+        client.stop()
+    }
+
+    /** Server closes the socket after the first sync; the client rejoins with the advanced cursor. */
+    @Test
+    fun reconnectsAfterCloseAndRejoinsWithCursor() = runBlocking {
+        server.enqueue(MockResponse().withWebSocketUpgrade(FakeServer()))
+        val client = PhoenixRealtimeClient(OkHttpClient(), scope, listener, backoffMs = listOf(50), heartbeatMs = 60_000)
+        client.start(RealtimeSession(server.url("/").toString(), "tok", "u1"))
+        withTimeout(5_000) { while (applied.size < 4) kotlinx.coroutines.delay(10) }
+        // Drop the first connection from the server side.
+        server.takeRequest()
+        withTimeout(5_000) { while (received.none { it.event == "phx_join" }) kotlinx.coroutines.delay(10) }
+        serverSockets.first().close(1000, "bye")
+        withTimeout(5_000) { while (received.count { it.event == "phx_join" } < 2) kotlinx.coroutines.delay(10) }
+        val rejoin = received.filter { it.event == "phx_join" }[1]
+        assertEquals(JsonPrimitive("e4"), rejoin.payload.jsonObject["since"])
         client.stop()
     }
 

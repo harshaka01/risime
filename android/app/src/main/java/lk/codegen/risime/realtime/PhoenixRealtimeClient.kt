@@ -1,5 +1,6 @@
 package lk.codegen.risime.realtime
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -92,6 +93,10 @@ class PhoenixRealtimeClient(
             current = conn
             val outcome = try {
                 conn.run { attempt = 0 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                Outcome.Closed // e.g. a malformed reply; reconnect with the persisted cursor
             } finally {
                 conn.close()
                 if (current === conn) current = null
@@ -143,7 +148,11 @@ class PhoenixRealtimeClient(
             }
             val reply = withTimeoutOrNull(replyTimeoutMs) { deferred.await() }
             pending.remove(ref)
-            if (reply == null) return PushResult.Unavailable
+            if (reply == null) {
+                // No reply in time: treat the socket as dead so we reconnect (and resend) promptly.
+                socket.cancel()
+                return PushResult.Unavailable
+            }
             return when (reply.replyStatus) {
                 "ok" -> PushResult.Ok(reply.replyResponse)
                 else -> PushResult.Rejected(

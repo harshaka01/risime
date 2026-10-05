@@ -59,13 +59,14 @@ class ChatEngine(
         for (e in events) {
             val applied = tx.run {
                 if (sync.seenCount(e.eventId) > 0) return@run false
+                // Unknown kinds and undecodable data are skipped but still advance the cursor.
                 val incoming = when (e.kind) {
-                    Event.KIND_MESSAGE -> e.messageData()?.let { applyMessage(me, it) } ?: false
+                    Event.KIND_MESSAGE -> runCatching { e.messageData() }.getOrNull()?.let { applyMessage(me, it) } ?: false
                     Event.KIND_STATUS -> {
-                        e.statusData()?.let { applyStatus(it) }
+                        runCatching { e.statusData() }.getOrNull()?.let { applyStatus(it) }
                         false
                     }
-                    else -> false // unknown kinds are skipped but still advance the cursor
+                    else -> false
                 }
                 sync.markSeen(SeenEventEntity(e.eventId))
                 sync.setState(SyncStateEntity(0, e.eventId))
