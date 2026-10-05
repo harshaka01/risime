@@ -1,6 +1,6 @@
 # Proposal: presence / last seen and typing indicator (PROTOCOL v1.2)
 
-**Status:** accepted by root (orchestrator) on 2026-10-06, revised the same day with the server review (grace period, `typing:false` exempt from the rate limit, registered-only watch) under the nightly mandate (backlog 0.2:
+**Status:** accepted by root (orchestrator) on 2026-10-06, revised the same day with the server and Android reviews (grace period, `typing:false` exempt from the rate limit, registered-only watch) under the nightly mandate (backlog 0.2:
 "presence and last seen, typing indicator"). It is merged into `contract/v1` as v1.2 when both
 sides start implementing it. It is additive, so v1.1 clients keep working.
 
@@ -29,6 +29,14 @@ never move the cursor. They travel in a second server→client push, **`signal`*
 - Clients watch the contacts they show (the Chats list, the open chat), and send the watch again
   after every (re)join.
 
+- **Online means the app is open.** 0.x clients keep a socket only while the app is in the
+  foreground, so a backgrounded app shows offline (after the grace period).
+- Clients send `presence:watch` right after **every** successful join reply, before or during the
+  `sync` loop. Watches don't survive a rejoin.
+- A watched id that is missing from the reply means "unknown", not "offline". The UI shows nothing
+  for it.
+- `last_seen` can be arbitrarily old. Clients format it as a date when it's not today.
+
 ### 2.6 Typing
 - **`typing`** (client → server) `{"to": "<user uuid>", "typing": true|false}`, reply ok `{}`.
   - Send `true` when the user starts typing, and again at most every 3 s while they keep typing.
@@ -37,6 +45,7 @@ never move the cursor. They travel in a second server→client push, **`signal`*
     the recipient is offline. `typing: true` pushes above 2 per second per user are dropped
     silently (reply ok). `typing: false` is never rate-limited, so a stop is never lost.
   - `unknown_recipient` and `bad_request` behave as in `msg:send`.
+  - Typing is never queued: a client that isn't connected drops it.
 - The recipient shows "typing…" until it receives `typing: false`, a message from that user, or
   **6 s pass** without a refresh.
 
