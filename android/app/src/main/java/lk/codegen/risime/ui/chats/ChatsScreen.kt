@@ -1,14 +1,8 @@
 package lk.codegen.risime.ui.chats
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -17,35 +11,32 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import lk.codegen.risime.realtime.ConnectionState
+import lk.codegen.risime.ui.common.EmptyState
+import lk.codegen.risime.ui.common.ErrorState
 import lk.codegen.risime.ui.common.InitialsAvatar
+import lk.codegen.risime.ui.common.ListRow
+import lk.codegen.risime.ui.common.RisiTopBar
 import lk.codegen.risime.ui.common.TYPING_LABEL
+import lk.codegen.risime.ui.common.UnreadBadge
 import lk.codegen.risime.ui.common.presenceLabel
 import lk.codegen.risime.ui.common.shortStamp
+import lk.codegen.risime.ui.theme.Sizes
+import lk.codegen.risime.ui.theme.Spacing
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit, onSettings: () -> Unit, onSearch: () -> Unit) {
     val rows by vm.rows.collectAsStateWithLifecycle()
@@ -54,19 +45,13 @@ fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit, onSettings: () -> 
     var menu by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("RisiMe", fontWeight = FontWeight.Bold)
-                        connectionLabel(conn)?.let {
-                            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                },
+            RisiTopBar(
+                title = "RisiMe",
+                subtitle = connectionLabel(conn),
                 actions = {
                     IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search") }
                     IconButton(onClick = vm::refresh) { Icon(Icons.Default.Refresh, "Refresh contacts") }
-                    IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More") }
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More options") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(text = { Text("Settings") }, onClick = {
                             menu = false
@@ -78,29 +63,21 @@ fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit, onSettings: () -> 
                         })
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
             )
         },
-        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0),
+        contentWindowInsets = WindowInsets(0),
     ) { pad ->
         LazyColumn(Modifier.fillMaxSize().padding(pad)) {
-            err?.let { e ->
-                item {
-                    Text(e, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-            }
+            err?.let { e -> item { ErrorState(e, onRetry = vm::refresh) } }
             if (rows.isEmpty()) {
-                item {
-                    Text(
-                        "No contacts yet. Pull them with the refresh button.",
-                        Modifier.padding(24.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                item { EmptyState("No contacts yet.", actionLabel = "Refresh", onAction = vm::refresh) }
             }
             items(rows, key = { it.userId ?: it.name }) { row ->
                 ChatRowItem(row, onClick = { row.userId?.takeIf { row.registered }?.let(onOpen) })
-                HorizontalDivider(Modifier.padding(start = 76.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                HorizontalDivider(
+                    Modifier.padding(start = Spacing.lg + Sizes.avatar + Spacing.md + Spacing.xxs),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                )
             }
         }
     }
@@ -116,57 +93,25 @@ fun connectionLabel(s: ConnectionState): String? = when (s) {
 
 @Composable
 private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
-    val dim = !row.registered
-    val main = if (dim) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface
-    Row(
-        Modifier.fillMaxWidth().clickable(enabled = row.registered, onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        InitialsAvatar(row.name, enabled = row.registered, online = row.presence?.online == true)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val unread = row.unread > 0
-                Text(row.name, color = main, fontWeight = if (unread) FontWeight.ExtraBold else FontWeight.SemiBold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                row.last?.let {
-                    Text(shortStamp(it.localTs), style = MaterialTheme.typography.labelSmall,
-                        color = if (unread) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = if (unread) FontWeight.Bold else null)
-                }
-            }
-            val presence = presenceLabel(row.presence, System.currentTimeMillis())
-            val sub = when {
-                dim -> "${row.company} · not on RisiMe yet"
-                row.typing -> TYPING_LABEL
-                row.last != null -> (if (row.last.outgoing) "You: " else "") + row.last.body
-                presence != null -> presence
-                else -> row.company
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(sub, style = MaterialTheme.typography.bodyMedium,
-                    color = when {
-                        row.typing -> MaterialTheme.colorScheme.primary
-                        row.unread > 0 -> MaterialTheme.colorScheme.onSurface
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    fontWeight = if (row.unread > 0) FontWeight.SemiBold else null,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                if (row.unread > 0) UnreadBadge(row.unread)
-            }
-            if (presence != null && !row.typing && row.last != null) {
-                Text(presence, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            }
-        }
+    val presence = presenceLabel(row.presence, System.currentTimeMillis())
+    val sub = when {
+        !row.registered -> "${row.company} · not on RisiMe yet"
+        row.typing -> TYPING_LABEL
+        row.last != null -> (if (row.last.outgoing) "You: " else "") + row.last.body
+        presence != null -> presence
+        else -> row.company
     }
+    ListRow(
+        title = row.name,
+        subtitle = sub,
+        leading = { InitialsAvatar(row.name, enabled = row.registered, online = row.presence?.online == true) },
+        meta = row.last?.let { shortStamp(it.localTs) },
+        strong = row.unread > 0,
+        enabled = row.registered,
+        subtitleColor = if (row.typing) MaterialTheme.colorScheme.primary else null,
+        badge = if (row.unread > 0) ({ UnreadBadge(row.unread) }) else null,
+        footer = presence?.takeIf { !row.typing && row.last != null },
+        onClick = onClick,
+    )
 }
 
-@Composable
-private fun UnreadBadge(n: Int) {
-    val label = if (n > 99) "99+" else n.toString()
-    androidx.compose.material3.Badge(
-        containerColor = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
-        modifier = Modifier.padding(start = 8.dp).semantics { contentDescription = "$n unread" },
-    ) { Text(label) }
-}

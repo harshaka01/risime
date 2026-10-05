@@ -30,6 +30,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import lk.codegen.risime.ui.theme.Spacing
+import lk.codegen.risime.ui.theme.WordmarkStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
@@ -40,7 +46,7 @@ fun LoginFlow(vm: LoginViewModel) {
 
 @Composable
 private fun Wordmark() {
-    Text("RisiMe", fontSize = 40.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+    Text("RisiMe", style = WordmarkStyle, color = MaterialTheme.colorScheme.primary, modifier = Modifier.semantics { heading() })
     Text(
         "Talk. Connect. Act.",
         style = MaterialTheme.typography.titleMedium,
@@ -51,9 +57,9 @@ private fun Wordmark() {
 @Composable
 private fun FormColumn(content: @Composable () -> Unit) {
     Column(
-        Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 40.dp),
+        Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = Spacing.xl, vertical = Spacing.xxl),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) { content() }
 }
 
@@ -96,7 +102,7 @@ private fun LoginScreen(s: LoginUiState, vm: LoginViewModel) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Done),
             modifier = Modifier.fillMaxWidth(),
         )
-        s.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        s.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
         Button(onClick = vm::requestCode, enabled = !s.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
             Text(if (s.busy) "Sending…" else "Send code")
         }
@@ -125,7 +131,7 @@ private fun OtpScreen(s: LoginUiState, vm: LoginViewModel) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
             modifier = Modifier.fillMaxWidth(),
         )
-        s.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        s.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
         Button(onClick = vm::verify, enabled = !s.busy && s.code.length == 6, modifier = Modifier.fillMaxWidth().height(52.dp)) {
             Text(if (s.busy) "Verifying…" else "Verify")
         }

@@ -1,14 +1,39 @@
 package lk.codegen.risime.ui.common
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Badge
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -16,14 +41,28 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import lk.codegen.risime.ui.theme.OnlineGreen
+import lk.codegen.risime.data.MessageStatus
+import lk.codegen.risime.ui.theme.RisiShapes
+import lk.codegen.risime.ui.theme.RisiTheme
+import lk.codegen.risime.ui.theme.Sizes
+import lk.codegen.risime.ui.theme.Spacing
+
+/*
+ * RisiMe component library (design pass 0.2). Screens compose these instead of styling Material
+ * widgets ad hoc. Colours come from MaterialTheme / RisiTheme tokens only.
+ */
 
 const val DEV_BANNER_TEXT = "Dev build — not end-to-end encrypted"
 
@@ -34,52 +73,299 @@ fun DevEncryptionBanner(modifier: Modifier = Modifier) {
         text = DEV_BANNER_TEXT,
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.tertiaryContainer)
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        color = MaterialTheme.colorScheme.onTertiaryContainer,
+            .background(RisiTheme.colors.banner)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.xs + Spacing.xxs)
+            .semantics { contentDescription = "Warning: $DEV_BANNER_TEXT. Don't share secrets in this build." },
+        color = RisiTheme.colors.onBanner,
         style = MaterialTheme.typography.labelMedium,
         textAlign = TextAlign.Center,
     )
 }
 
-/** Initials avatar for a contact, with a presence dot when [online]. */
+// ---- Avatar and presence ----
+
+/** Initials avatar, with a presence dot when [online]. Decorative for TalkBack except the dot. */
 @Composable
-fun InitialsAvatar(name: String, enabled: Boolean = true, size: Dp = 44.dp, online: Boolean = false) {
+fun InitialsAvatar(name: String, enabled: Boolean = true, size: Dp = Sizes.avatar, online: Boolean = false) {
     Box {
-        InitialsCircle(name, enabled, size)
+        val initials = name.split(' ', '-', '.').filter { it.isNotBlank() }.take(2)
+            .joinToString("") { it.first().uppercase() }.ifEmpty { "?" }
+        val bg = if (enabled) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+        val fg = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer else RisiTheme.colors.textMuted
+        Box(
+            Modifier.size(size).clip(CircleShape).background(bg).clearAndSetSemantics { },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(initials, color = fg, fontWeight = FontWeight.SemiBold, fontSize = (size.value * 0.38f).sp)
+        }
         if (online) PresenceDot(Modifier.align(Alignment.BottomEnd), size)
     }
 }
 
-/** Green-teal dot with a surface ring; TalkBack reads "online". */
+/** Presence dot with a surface ring so it reads on any avatar; TalkBack: "online". */
 @Composable
-fun PresenceDot(modifier: Modifier = Modifier, avatarSize: Dp = 44.dp) {
+fun PresenceDot(modifier: Modifier = Modifier, avatarSize: Dp = Sizes.avatar) {
     val d = (avatarSize.value * 0.3f).coerceAtLeast(10f).dp
     Box(
-        modifier.size(d).clip(CircleShape).background(MaterialTheme.colorScheme.surface).padding(2.dp)
-            .clip(CircleShape).background(OnlineGreen)
+        modifier.size(d).clip(CircleShape).background(MaterialTheme.colorScheme.surface).padding(Spacing.xxs)
+            .clip(CircleShape).background(RisiTheme.colors.online)
             .semantics { contentDescription = "online" },
     )
 }
 
+// ---- Top bar ----
+
+/**
+ * App bar: optional back button, optional avatar, title and a one-line subtitle. [emphasis]
+ * colours the subtitle (e.g. "typing…").
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun InitialsCircle(name: String, enabled: Boolean, size: Dp) {
-    val initials = name.split(' ', '-', '.').filter { it.isNotBlank() }.take(2)
-        .joinToString("") { it.first().uppercase() }.ifEmpty { "?" }
-    val bg = if (enabled) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
-    val fg = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.outline
-    Box(
-        Modifier.size(size).clip(CircleShape).background(bg),
-        contentAlignment = Alignment.Center,
+fun RisiTopBar(
+    title: String,
+    subtitle: String? = null,
+    emphasis: Boolean = false,
+    onBack: (() -> Unit)? = null,
+    avatar: (@Composable () -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
+    TopAppBar(
+        navigationIcon = {
+            if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+        },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                avatar?.let {
+                    it()
+                    Spacer(Modifier.width(Spacing.md))
+                }
+                Column {
+                    Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.semantics { heading() })
+                    if (!subtitle.isNullOrEmpty()) {
+                        Text(
+                            subtitle,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (emphasis) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
+                }
+            }
+        },
+        actions = actions,
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+    )
+}
+
+// ---- Lists ----
+
+/** Standard row: leading slot, title + trailing meta, subtitle + trailing badge. ≥ 72 dp tall. */
+@Composable
+fun ListRow(
+    title: String,
+    subtitle: String?,
+    modifier: Modifier = Modifier,
+    leading: (@Composable () -> Unit)? = null,
+    meta: String? = null,
+    strong: Boolean = false,
+    enabled: Boolean = true,
+    subtitleColor: Color? = null,
+    badge: (@Composable () -> Unit)? = null,
+    footer: String? = null,
+    onClick: (() -> Unit)? = null,
+) {
+    val titleColor = if (enabled) MaterialTheme.colorScheme.onSurface else RisiTheme.colors.textMuted
+    Row(
+        modifier.fillMaxWidth().heightIn(min = Sizes.listRowMin)
+            .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(initials, color = fg, fontWeight = FontWeight.SemiBold, fontSize = (size.value * 0.38f).sp)
+        leading?.let {
+            it()
+            Spacer(Modifier.width(Spacing.md + Spacing.xxs))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, color = titleColor, fontWeight = if (strong) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                meta?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall,
+                        color = if (strong) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = if (strong) FontWeight.Bold else null)
+                }
+            }
+            if (subtitle != null || badge != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(subtitle.orEmpty(), style = MaterialTheme.typography.bodyMedium,
+                        color = subtitleColor ?: when {
+                            !enabled -> RisiTheme.colors.textMuted
+                            strong -> MaterialTheme.colorScheme.onSurface
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        fontWeight = if (strong) FontWeight.SemiBold else null,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    badge?.invoke()
+                }
+            }
+            footer?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            }
+        }
+    }
+}
+
+@Composable
+fun UnreadBadge(n: Int, modifier: Modifier = Modifier) {
+    Badge(
+        containerColor = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        modifier = modifier.padding(start = Spacing.sm).clearAndSetSemantics { contentDescription = "$n unread" },
+    ) { Text(if (n > 99) "99+" else n.toString()) }
+}
+
+@Composable
+fun SectionHeader(text: String, modifier: Modifier = Modifier) {
+    Text(text, modifier.semantics { heading() }, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+}
+
+// ---- Empty and error states ----
+
+@Composable
+fun EmptyState(message: String, modifier: Modifier = Modifier, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
+    Column(
+        modifier.fillMaxWidth().padding(horizontal = Spacing.xl, vertical = Spacing.xxl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+    ) {
+        Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.bodyLarge)
+        if (actionLabel != null && onAction != null) TextButton(onClick = onAction) { Text(actionLabel) }
+    }
+}
+
+/** Inline error line with an optional retry; announced by TalkBack when it appears. */
+@Composable
+fun ErrorState(message: String, modifier: Modifier = Modifier, onRetry: (() -> Unit)? = null) {
+    Row(
+        modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.xs)
+            .semantics { liveRegion = LiveRegionMode.Polite },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.Warning, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
+        Spacer(Modifier.width(Spacing.sm))
+        Text(message, Modifier.weight(1f), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+        if (onRetry != null) TextButton(onClick = onRetry) { Text("Retry") }
+    }
+}
+
+// ---- Messages ----
+
+/** Day separator chip in a chat. */
+@Composable
+fun DaySeparator(label: String) {
+    Box(Modifier.fillMaxWidth().padding(vertical = Spacing.xs + Spacing.xxs), contentAlignment = Alignment.Center) {
+        Surface(color = RisiTheme.colors.daySeparator, shape = RisiShapes.pill) {
+            Text(label, Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs).semantics { heading() },
+                style = MaterialTheme.typography.labelMedium, color = RisiTheme.colors.onDaySeparator)
+        }
+    }
+}
+
+/**
+ * Chat bubble. Mine: right, bubbleMine; theirs: left, bubbleTheirs. TalkBack reads one merged
+ * node ("You: hi, 14:05, Read"). Long-press (and tap when [tapOpensMenu]) opens [menu].
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun MessageBubble(
+    body: String,
+    time: String,
+    mine: Boolean,
+    status: MessageStatus?,
+    note: String? = null,
+    tapOpensMenu: Boolean = false,
+    onMenu: () -> Unit,
+    menu: @Composable () -> Unit = {},
+) {
+    val c = RisiTheme.colors
+    val statusLabel = status?.let { tickLabel(it) }
+    Box(Modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
+        menu()
+        Surface(
+            color = if (mine) c.bubbleMine else c.bubbleTheirs,
+            contentColor = if (mine) c.onBubbleMine else c.onBubbleTheirs,
+            shape = if (mine) RisiShapes.mine else RisiShapes.theirs,
+            modifier = Modifier.widthIn(max = Sizes.bubbleMaxWidth)
+                .minimumInteractiveComponentSize()
+                .combinedClickable(
+                    onClickLabel = if (tapOpensMenu) "Show options" else null,
+                    onLongClickLabel = "Message options",
+                    onClick = { if (tapOpensMenu) onMenu() },
+                    onLongClick = onMenu,
+                )
+                .clearAndSetSemantics {
+                    contentDescription = buildString {
+                        append(if (mine) "You: " else "")
+                        append(body)
+                        append(", ").append(time)
+                        statusLabel?.let { append(", ").append(it) }
+                        note?.let { append(". ").append(it) }
+                    }
+                },
+        ) {
+            Column(Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
+                Text(body, style = MaterialTheme.typography.bodyLarge)
+                note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
+                Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
+                    Text(time, style = MaterialTheme.typography.labelSmall, color = if (mine) c.bubbleMineMeta else c.bubbleTheirsMeta)
+                    if (status != null) {
+                        Spacer(Modifier.size(Spacing.xs))
+                        MessageTicks(status)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun tickLabel(status: MessageStatus): String = when (status) {
+    MessageStatus.PENDING -> "Pending"
+    MessageStatus.SENT -> "Sent"
+    MessageStatus.DELIVERED -> "Delivered"
+    MessageStatus.READ -> "Read"
+    MessageStatus.FAILED -> "Not sent"
+}
+
+/** PROTOCOL.md §3: pending clock, ✓ sent, ✓✓ delivered, ✓✓ saffron for read. */
+@Composable
+fun MessageTicks(status: MessageStatus) {
+    val muted = RisiTheme.colors.bubbleMineMeta
+    val label = tickLabel(status)
+    when (status) {
+        MessageStatus.PENDING -> PendingClock(muted, label)
+        MessageStatus.SENT -> Icon(Icons.Default.Check, label, Modifier.size(Sizes.tick), tint = muted)
+        MessageStatus.DELIVERED -> DoubleCheck(muted, label)
+        MessageStatus.READ -> DoubleCheck(RisiTheme.colors.readTick, label)
+        MessageStatus.FAILED -> Icon(Icons.Default.Warning, label, Modifier.size(Sizes.tick), tint = MaterialTheme.colorScheme.error)
+    }
+}
+
+@Composable
+private fun DoubleCheck(tint: Color, label: String) {
+    Box(Modifier.size(width = 20.dp, height = Sizes.tick).semantics { contentDescription = label }) {
+        Icon(Icons.Default.Check, null, Modifier.size(Sizes.tick), tint = tint)
+        Icon(Icons.Default.Check, null, Modifier.size(Sizes.tick).offset(x = 5.dp), tint = tint)
     }
 }
 
 /** Small clock glyph for `pending`. */
 @Composable
-fun PendingClock(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(13.dp).semantics { contentDescription = "Pending" }) {
+fun PendingClock(color: Color, label: String = "Pending", modifier: Modifier = Modifier) {
+    Canvas(modifier.size(13.dp).semantics { contentDescription = label }) {
         val r = size.minDimension / 2 - 1.dp.toPx()
         val c = center
         val w = 1.3.dp.toPx()

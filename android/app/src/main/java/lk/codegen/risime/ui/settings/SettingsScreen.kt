@@ -15,23 +15,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -44,27 +37,22 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import lk.codegen.risime.BuildConfig
 import lk.codegen.risime.net.PROTOCOL_VERSION
 import lk.codegen.risime.ui.common.InitialsAvatar
+import lk.codegen.risime.ui.common.RisiTopBar
+import lk.codegen.risime.ui.common.SectionHeader
+import lk.codegen.risime.ui.theme.Sizes
+import lk.codegen.risime.ui.theme.Spacing
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
     val s by vm.state.collectAsStateWithLifecycle()
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
-            )
-        },
+        topBar = { RisiTopBar(title = "Settings", onBack = onBack) },
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(
             Modifier.fillMaxSize().padding(pad).imePadding().verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = Spacing.xl, vertical = Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             ProfileSection(s, vm)
             HorizontalDivider()
@@ -105,10 +93,6 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
     }
 }
 
-@Composable
-private fun SectionTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-}
 
 @Composable
 private fun InfoRow(label: String, value: String) {
@@ -121,10 +105,10 @@ private fun InfoRow(label: String, value: String) {
 
 @Composable
 private fun ProfileSection(s: SettingsUiState, vm: SettingsViewModel) {
-    SectionTitle("Profile")
+    SectionHeader("Profile")
     val user = s.user ?: return
     Row(verticalAlignment = Alignment.CenterVertically) {
-        InitialsAvatar(user.displayName, size = 56.dp)
+        InitialsAvatar(user.displayName, size = Sizes.avatarLarge)
         Spacer(Modifier.width(16.dp))
         Column {
             Text(user.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -158,7 +142,7 @@ private fun ProfileSection(s: SettingsUiState, vm: SettingsViewModel) {
 
 @Composable
 private fun ServerSection(s: SettingsUiState, vm: SettingsViewModel) {
-    SectionTitle("Server")
+    SectionHeader("Server")
     OutlinedTextField(
         value = s.serverDraft,
         onValueChange = vm::onServerDraft,
@@ -180,7 +164,7 @@ private fun ServerSection(s: SettingsUiState, vm: SettingsViewModel) {
 
 @Composable
 private fun AboutSection() {
-    SectionTitle("About")
+    SectionHeader("About")
     InfoRow("App version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
     InfoRow("Build", if (BuildConfig.DEBUG) "Debug" else "Release")
     InfoRow("Protocol", "v$PROTOCOL_VERSION")
