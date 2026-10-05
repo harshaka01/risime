@@ -60,5 +60,9 @@ if [ "$TARGET" = "spark2" ]; then
 else
   mise exec -- sdkmanager "platform-tools" "emulator" "system-images;android-$ANDROID_API;google_apis;x86_64"
   echo no | mise exec -- avdmanager create avd -n risime_a -k "system-images;android-$ANDROID_API;google_apis;x86_64" -d pixel_8 || true
+  # avdmanager honours XDG_CONFIG_HOME but the emulator only reads ~/.android: align them
+  if [ -n "${XDG_CONFIG_HOME:-}" ] && [ -d "$XDG_CONFIG_HOME/.android/avd" ] && ! grep -q ANDROID_AVD_HOME ~/.bashrc; then
+    echo "export ANDROID_AVD_HOME=\"$XDG_CONFIG_HOME/.android/avd\"" >> ~/.bashrc
+  fi
 fi
 echo "Toolchain ready on $TARGET"
