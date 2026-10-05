@@ -46,6 +46,18 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         store.edit { it[USER] = ProtocolJson.encodeToString(User.serializer(), user) }
     }
 
+    /**
+     * Forgets the login and points the app at another server in one atomic edit, so nothing ever
+     * sees the old token paired with the new server URL.
+     */
+    suspend fun clearLoginAndSetServerUrl(url: String) {
+        store.edit {
+            it.remove(TOKEN)
+            it.remove(USER)
+            it[SERVER_URL] = url.trim().trimEnd('/')
+        }
+    }
+
     /** Clears the login. The server URL and install salt stay. */
     suspend fun clearLogin() {
         store.edit {

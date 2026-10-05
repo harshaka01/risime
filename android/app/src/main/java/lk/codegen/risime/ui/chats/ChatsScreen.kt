@@ -42,7 +42,7 @@ import lk.codegen.risime.ui.common.shortStamp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit) {
+fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit, onSettings: () -> Unit) {
     val rows by vm.rows.collectAsStateWithLifecycle()
     val conn by vm.connection.collectAsStateWithLifecycle()
     val err by vm.refreshError.collectAsStateWithLifecycle()
@@ -62,6 +62,10 @@ fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit) {
                     IconButton(onClick = vm::refresh) { Icon(Icons.Default.Refresh, "Refresh contacts") }
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("Settings") }, onClick = {
+                            menu = false
+                            onSettings()
+                        })
                         DropdownMenuItem(text = { Text("Log out") }, onClick = {
                             menu = false
                             vm.logout()

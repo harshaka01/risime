@@ -19,6 +19,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -28,7 +31,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import lk.codegen.risime.BuildConfig
 
 @Composable
 fun LoginFlow(vm: LoginViewModel) {
@@ -60,15 +62,23 @@ private fun LoginScreen(s: LoginUiState, vm: LoginViewModel) {
     FormColumn {
         Wordmark()
         Spacer(Modifier.height(24.dp))
-        if (BuildConfig.DEBUG) {
+        // Every build: release users point the app at the tailnet HTTPS URL before logging in.
+        var editServer by rememberSaveable { mutableStateOf(false) }
+        if (editServer || s.serverError != null) {
             OutlinedTextField(
                 value = s.serverUrl,
                 onValueChange = vm::onServerUrl,
-                label = { Text("Server URL (debug)") },
+                label = { Text("Server URL") },
                 singleLine = true,
+                isError = s.serverError != null,
+                supportingText = s.serverError?.let { { Text(it) } },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
                 modifier = Modifier.fillMaxWidth(),
             )
+        } else {
+            TextButton(onClick = { editServer = true }) {
+                Text("Server: ${s.serverUrl} · Change", style = MaterialTheme.typography.bodySmall)
+            }
         }
         OutlinedTextField(
             value = s.phone,

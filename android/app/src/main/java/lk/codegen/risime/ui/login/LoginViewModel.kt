@@ -5,11 +5,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import lk.codegen.risime.AppContainer
 import lk.codegen.risime.net.ApiResult
+import lk.codegen.risime.ui.settings.Checked
+import lk.codegen.risime.ui.settings.checkServerUrl
 
 data class LoginUiState(
     val serverUrl: String = "",
@@ -21,6 +23,7 @@ data class LoginUiState(
     val resendInSec: Int = 0,
     val busy: Boolean = false,
     val error: String? = null,
+    val serverError: String? = null,
 )
 
 class LoginViewModel(private val c: AppContainer) : ViewModel() {
@@ -28,7 +31,12 @@ class LoginViewModel(private val c: AppContainer) : ViewModel() {
     val state = _state.asStateFlow()
 
     init {
-        viewModelScope.launch { _state.update { it.copy(serverUrl = c.sessionStore.serverUrl.first()) } }
+        // Follows the stored URL (also when Settings switched servers while this ViewModel lived on).
+        viewModelScope.launch {
+            c.sessionStore.serverUrl.distinctUntilChanged().collect { url ->
+                _state.update { it.copy(serverUrl = url, serverError = null) }
+            }
+        }
         // This ViewModel outlives a login; start clean when the user comes back after logout.
         viewModelScope.launch {
             c.sessionStore.session.collect { s ->
@@ -37,7 +45,7 @@ class LoginViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    fun onServerUrl(v: String) = _state.update { it.copy(serverUrl = v, error = null) }
+    fun onServerUrl(v: String) = _state.update { it.copy(serverUrl = v, error = null, serverError = null) }
     fun onPhone(v: String) = _state.update { it.copy(phone = v, error = null) }
     fun onEmail(v: String) = _state.update { it.copy(email = v, error = null) }
     fun onCode(v: String) = _state.update { it.copy(code = v.filter(Char::isDigit).take(6), error = null) }
@@ -47,21 +55,24 @@ class LoginViewModel(private val c: AppContainer) : ViewModel() {
         val s = _state.value
         val phone = c.phone.normalize(s.phone)
         val email = s.email.trim()
+        val server = when (val r = checkServerUrl(s.serverUrl)) {
+            is Checked.Invalid -> return _state.update { it.copy(serverError = r.message) }
+            is Checked.Valid -> r.value
+        }
         when {
             phone == null -> return _state.update { it.copy(error = "Enter a valid phone number") }
             !EMAIL.matches(email) -> return _state.update { it.copy(error = "Enter a valid email address") }
-            s.serverUrl.isBlank() -> return _state.update { it.copy(error = "Enter the server URL") }
         }
-        _state.update { it.copy(busy = true, error = null, phone = phone) }
+        _state.update { it.copy(busy = true, error = null, serverError = null, phone = phone, serverUrl = server) }
         viewModelScope.launch {
-            c.sessionStore.setServerUrl(s.serverUrl)
+            c.sessionStore.setServerUrl(server)
             when (val r = c.api.requestCode(phone, email)) {
                 is ApiResult.Ok -> {
                     _state.update { it.copy(busy = false, codeSentTo = phone, code = "") }
                     startResendTimer()
                 }
                 is ApiResult.Error -> _state.update { it.copy(busy = false, error = message(r)) }
-                is ApiResult.NetworkError -> _state.update { it.copy(busy = false, error = "Can't reach the server") }
+                is ApiResult.NetworkError -> _state.update { it.copy(busy = false, error = "Can't reach the server at $server") }
             }
         }
     }

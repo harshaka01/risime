@@ -107,6 +107,17 @@ class AppContainer(context: Context) {
         clearLocal()
     }
 
+    /**
+     * The token belongs to the server that issued it: revoke it there (best effort), then forget
+     * it and the local chat data, and switch to [url].
+     */
+    suspend fun switchServer(url: String) {
+        api.logout()
+        realtime.stop()
+        sessionStore.clearLoginAndSetServerUrl(url)
+        wipeDb()
+    }
+
     /** Token revoked or rejected: back to login. */
     suspend fun clearLocal() {
         realtime.stop()

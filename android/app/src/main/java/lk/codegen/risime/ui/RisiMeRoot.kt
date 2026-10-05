@@ -22,6 +22,9 @@ import lk.codegen.risime.ui.chats.ChatsViewModel
 import lk.codegen.risime.ui.common.DevEncryptionBanner
 import lk.codegen.risime.ui.login.LoginFlow
 import lk.codegen.risime.ui.login.LoginViewModel
+import lk.codegen.risime.ui.settings.AppSettingsBackend
+import lk.codegen.risime.ui.settings.SettingsScreen
+import lk.codegen.risime.ui.settings.SettingsViewModel
 
 private sealed interface Gate {
     data object Loading : Gate
@@ -56,11 +59,18 @@ private fun MainNav(c: AppContainer, meId: String) {
     val nav = rememberNavController()
     NavHost(nav, startDestination = "chats") {
         composable("chats") {
-            ChatsScreen(viewModel { ChatsViewModel(c, meId) }, onOpen = { nav.navigate("chat/$it") })
+            ChatsScreen(
+                viewModel { ChatsViewModel(c, meId) },
+                onOpen = { nav.navigate("chat/$it") },
+                onSettings = { nav.navigate("settings") { launchSingleTop = true } },
+            )
         }
         composable("chat/{peer}") { entry ->
             val peer = entry.arguments?.getString("peer") ?: return@composable
             ChatScreen(viewModel { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() })
+        }
+        composable("settings") {
+            SettingsScreen(viewModel { SettingsViewModel(AppSettingsBackend(c)) }, onBack = { nav.popBackStack() })
         }
     }
 }
