@@ -25,7 +25,10 @@ in one checkout: `/home/harsha/development/risime`, branch `main`.
 
 - **Laptop** (Deepin 25, x86_64) has the same path, `/home/harsha/development/risime`, as a Git
   mirror. It also runs the emulator, the USB phone and the `spark2-tunnel`.
-- **Git origin:** `/srv/git/risime.git` on spark2; `spark2:/srv/git/risime.git` from the laptop.
+- **Git origin:** GitHub, `git@github.com:harshaka01/risime.git` (spark2 and laptop).
+  `spark2-backup` = the bare repo `/srv/git/risime.git` on spark2 (`spark2:/srv/git/risime.git`
+  from the laptop); `scripts/risi-handoff` mirrors to it when present.
+- **Handoff locks** stay in `/srv/git/locks/<role>.lock` on spark2 (not in Git).
 - **Shared checkout:** stage only your own paths (`git add server/`, never `git add -A`), then
   `git pull --rebase` before every push. Root may touch other paths only to fix integration
   breakage, and must say so in the commit message.

@@ -9,5 +9,6 @@ git add $P
 git diff --cached --quiet || git commit --no-verify -m "wip($ROLE): handoff from $(hostname) $(date -Iseconds)"
 git pull --rebase origin "$BR"
 git push origin "$BR"
+if git remote get-url spark2-backup >/dev/null 2>&1; then git push spark2-backup "$BR" || echo "warn: spark2-backup push failed"; fi
 run "rm -f /srv/git/locks/$ROLE.lock"
 echo "Handed off role=$ROLE, branch $BR at $(git rev-parse --short HEAD). Safe to switch machines."

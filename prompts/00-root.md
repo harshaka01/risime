@@ -7,7 +7,8 @@ the same checkout. First read `CLAUDE.md`, `docs/RELEASE-0.1.md`, `contract/v1/P
 ## 1–3. Verify the bootstrap (don't redo it)
 The laptop bootstrap session already set up the toolchain, the repo and the databases (see
 `docs/status/bootstrap.md`). Check quickly:
-- `git remote -v` shows `/srv/git/risime.git`, and `git status` is clean.
+- `git remote -v` shows origin `git@github.com:harshaka01/risime.git` and `spark2-backup`
+  `/srv/git/risime.git`, and `git status` is clean.
 - `mise ls` lists erlang, elixir, java and gradle; `aapt2 version` runs; the gradle.properties
   override exists.
 - `docker compose -f infra/docker-compose.dev.yml ps` shows both containers healthy, and `.env`
@@ -20,8 +21,8 @@ Print a short block telling him to:
 - open tmux window 1 (`Ctrl+B` then `C`), run `claude`, and say
   "Read prompts/10-server.md and execute it.";
 - open window 2 the same way, and say "Read prompts/20-android.md and execute it.";
-- on the laptop, once you have pushed: `git clone spark2:/srv/git/risime.git ~/development/risime`
-  (SETUP.md step 8).
+- on the laptop, once you have pushed: `git clone git@github.com:harshaka01/risime.git ~/development/risime`,
+  or switch an existing mirror (SETUP.md "Git remotes").
 
 ## 5. Integration loop (about every 10 minutes until release)
 - `git pull --rebase`, then review new `server/` and `android/` commits against the contract.

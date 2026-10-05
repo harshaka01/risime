@@ -40,7 +40,9 @@ is needed.
    platform-tools, the emulator, the API 36 x86_64 image and the `risime_a` AVD.
 3. Verify: `adb version`, `emulator -list-avds` shows `risime_a`, and `java -version` reports 17.
 
-## Task 3 — Git: laptop → origin on spark2
+## Task 3 — Git: laptop → spark2 bare repo
+(Historical. Origin is now GitHub `git@github.com:harshaka01/risime.git`; the spark2 bare repo is
+remote `spark2-backup`. See SETUP.md "Git remotes".)
 1. In `/home/harsha/development/risime`, check that `.gitignore` exists, then run `git init -b main`
    (if it isn't a repo yet).
 2. Commit: `chore(root): starter`.

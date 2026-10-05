@@ -8,9 +8,22 @@
 - **spark** (`ssh spark`): not used by RisiMe.
 
 ## Done
-spark2 has its system packages, firewall, fail2ban, Docker group, Git origin, Erlang/Elixir/
+spark2 has its system packages, firewall, fail2ban, Docker group, Git repo and handoff locks, Erlang/Elixir/
 Phoenix, Java/Gradle, Android SDK, arm64 aapt2 and the Gradle override in place. SSH keys work
 from the laptop to both Sparks.
+
+## Git remotes
+- **origin** = GitHub `git@github.com:harshaka01/risime.git` (main branch). spark2 pushes with
+  its own key (`~/.ssh/id_ed25519`, comment `spark2-risime`).
+- **spark2-backup** = the old bare repo `/srv/git/risime.git` on spark2. `scripts/risi-handoff`
+  also pushes to it when the remote exists. `/srv/git/locks` still holds the handoff locks.
+- **Laptop, one-time switch** (needs a laptop SSH key on GitHub; check with `ssh -T git@github.com`):
+  ```bash
+  cd ~/development/risime
+  git remote rename origin spark2-backup
+  git remote add origin git@github.com:harshaka01/risime.git
+  git fetch origin && git branch -u origin/main main && git pull
+  ```
 
 ## Next
 1. **Lock down spark2 SSH** (key-only login; your key already works):

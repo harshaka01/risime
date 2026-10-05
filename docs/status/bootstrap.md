@@ -14,7 +14,7 @@ for Harsha (see the end of this file).
 | `~/.gradle/gradle.properties` | `android.aapt2FromMavenOverride=…/build-tools/36.1.0/aapt2`. **Was missing; added.** |
 | ufw | not checked: `sudo` needs a password |
 | `/srv/git` | `risime.git` (bare) and `locks`, owned by harsha |
-| Checkout | `~/development/risime` cloned from `/srv/git/risime.git`; `scripts/*` executable |
+| Checkout | `~/development/risime` cloned from `/srv/git/risime.git` (now remote `spark2-backup`; origin is GitHub); `scripts/*` executable |
 | `.env` | created from `.env.example` with random secrets, mode 600, gitignored |
 | Postgres | `pgvector/pgvector:pg17` (arm64), PostgreSQL 17.11, healthy, `select 1` OK |
 | Cassandra | `cassandra:5.0` (arm64), Cassandra 5.0.9, healthy, `describe keyspaces` OK |
@@ -29,7 +29,7 @@ for Harsha (see the end of this file).
 | mise | same versions as spark2 (java 17.0.20) |
 | adb | 1.0.41, platform-tools 37.0.1 |
 | emulator | 37.2.12, AVD `risime_a` (pixel_8, android-36 google_apis x86_64) |
-| Git | `origin = spark2:/srv/git/risime.git`; push and pull OK; laptop and spark2 are at the same commit |
+| Git | `origin = spark2:/srv/git/risime.git`; push and pull OK; laptop and spark2 are at the same commit. **Superseded 2026-10-05:** origin is now GitHub `git@github.com:harshaka01/risime.git`; the spark2 bare repo is remote `spark2-backup` |
 | SSH tunnel | `spark2-tunnel` (`LocalForward 4400` → spark2 `127.0.0.1:4000`) comes up cleanly |
 
 ## Fixes made during bootstrap

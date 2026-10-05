@@ -13,7 +13,7 @@ command -v docker >/dev/null || { echo "Docker missing: install Docker Engine fi
 docker compose version >/dev/null 2>&1 || apt-get install -y docker-compose-plugin
 usermod -aG docker "$U"      # takes effect on your next login
 
-echo "==> Git origin"
+echo "==> Git backup repo (remote spark2-backup; origin is GitHub) + handoff locks"
 install -d -o "$U" -g "$U" /srv/git /srv/git/locks
 [ -d /srv/git/risime.git ] || sudo -u "$U" git init --bare -b main /srv/git/risime.git
 
