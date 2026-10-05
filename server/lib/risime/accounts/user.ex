@@ -15,7 +15,7 @@ defmodule RisiMe.Accounts.User do
   def profile_changeset(user, attrs) do
     user
     |> cast(attrs, [:display_name])
-    |> update_change(:display_name, &String.trim/1)
+    |> update_change(:display_name, &(&1 && String.trim(&1)))
     |> validate_required([:display_name])
     |> validate_length(:display_name, min: 1, max: 64)
   end

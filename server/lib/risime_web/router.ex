@@ -5,11 +5,27 @@ defmodule RisiMeWeb.Router do
     plug :accepts, ["json"]
   end
 
-  scope "/api", RisiMeWeb do
-    pipe_through :api
+  pipeline :authenticated do
+    plug RisiMeWeb.Plugs.RequireToken
   end
 
-  # Enable Swoosh mailbox preview in development
+  scope "/api/v1", RisiMeWeb do
+    pipe_through :api
+
+    post "/auth/request", AuthController, :request
+    post "/auth/verify", AuthController, :verify
+  end
+
+  scope "/api/v1", RisiMeWeb do
+    pipe_through [:api, :authenticated]
+
+    post "/auth/logout", AuthController, :logout
+    get "/me", MeController, :show
+    patch "/me", MeController, :update
+    get "/contacts", ContactsController, :index
+  end
+
+  # Swoosh mailbox preview in development: the dev OTP emails land here.
   if Application.compile_env(:risime, :dev_routes) do
     scope "/dev" do
       pipe_through [:fetch_session, :protect_from_forgery]
