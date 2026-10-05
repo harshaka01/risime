@@ -3,6 +3,7 @@ defmodule RisiMeWeb.ApiTest do
 
   import RisiMe.Fixtures
   import Swoosh.TestAssertions
+  import Ecto.Query, only: [from: 2]
 
   defp authed(conn, token), do: put_req_header(conn, "authorization", "Bearer " <> token)
 
@@ -33,6 +34,46 @@ defmodule RisiMeWeb.ApiTest do
              |> authed(token)
              |> patch(~p"/api/v1/me", %{display_name: ""})
              |> json_response(422)
+  end
+
+  # Regression (2026-10-06 smoke test): first-time verify over HTTP for an allowlisted person who
+  # has never logged in must create the user from the allowlist entry (and not 500); a later
+  # login reuses that user.
+  test "first-time verify creates the user from the allowlist; later logins reuse it", %{
+    conn: conn
+  } do
+    entry =
+      allowlist_entry(phone: unique_phone(), display_name: "Shenika Herath", company: "CodeGen")
+
+    refute RisiMe.Repo.get_by(RisiMe.Accounts.User, phone: entry.phone)
+
+    login = fn ->
+      conn
+      |> post(~p"/api/v1/auth/request", %{phone: entry.phone, email: entry.email})
+      |> json_response(200)
+
+      code = receive_code()
+
+      conn
+      |> post(~p"/api/v1/auth/verify", %{phone: entry.phone, code: code, device_name: "Pixel 7"})
+      |> json_response(200)
+    end
+
+    assert %{"token" => token1, "user" => user} = login.()
+
+    assert user == %{
+             "id" => user["id"],
+             "phone" => entry.phone,
+             "display_name" => "Shenika Herath",
+             "company" => "CodeGen"
+           }
+
+    db_user = RisiMe.Repo.get_by!(RisiMe.Accounts.User, phone: entry.phone)
+    assert db_user.id == user["id"] and db_user.email == entry.email
+
+    assert %{"token" => token2, "user" => ^user} = login.()
+    assert token1 != token2
+    assert [_] = RisiMe.Repo.all(from u in RisiMe.Accounts.User, where: u.phone == ^entry.phone)
   end
 
   test "request errors", %{conn: conn} do
