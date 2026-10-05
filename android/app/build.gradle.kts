@@ -1,9 +1,43 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
 }
+
+// ---- Version (decision 003) ----
+// versionName = the repo's top-level VERSION file (trimmed): "X.Y.Z" or "X.Y.Z-nightly.N".
+// versionCode = major*1_000_000 + minor*10_000 + patch*100 + (N for -nightly.N, 99 for a final),
+// so codes always increase: 0.2.0-nightly.1 = 20001 < 0.2.0 = 20099 < 0.3.0-nightly.1 = 30001.
+// Limits keep the parts from overlapping: minor <= 99, patch <= 99, N <= 98.
+fun risiVersionCode(version: String): Int {
+    val m = Regex("""^(\d+)\.(\d+)\.(\d+)(?:-nightly\.(\d+))?$""").matchEntire(version)
+        ?: throw GradleException("VERSION '$version' is not X.Y.Z or X.Y.Z-nightly.N")
+    val (major, minor, patch, nightly) = m.destructured
+    val n = if (nightly.isEmpty()) 99 else nightly.toInt()
+    if (minor.toInt() > 99 || patch.toInt() > 99 || n !in 1..99 || (nightly.isNotEmpty() && n > 98)) {
+        throw GradleException("VERSION '$version' is out of range for the versionCode formula")
+    }
+    return major.toInt() * 1_000_000 + minor.toInt() * 10_000 + patch.toInt() * 100 + n
+}
+
+// Self-check of the formula against the examples in decision 003 (runs at configuration time).
+check(risiVersionCode("0.2.0-nightly.1") == 20001 && risiVersionCode("0.2.0") == 20099 &&
+    risiVersionCode("1.2.3-nightly.4") == 1_020_304) { "versionCode formula self-check failed" }
+
+val risiVersionName: String = providers
+    .fileContents(rootProject.layout.projectDirectory.file("../VERSION")).asText.get().trim()
+val risiVersionCodeValue: Int = risiVersionCode(risiVersionName)
+
+// ---- Release signing (decision 003) ----
+// Read from $HOME/risime-keys/keystore.properties when it exists (spark2); otherwise the release
+// build is unsigned (e.g. on the laptop). Machine paths and secrets never live in the repo.
+val releaseKeystoreProps: Properties? =
+    File(System.getProperty("user.home"), "risime-keys/keystore.properties")
+        .takeIf { it.isFile }
+        ?.let { f -> Properties().apply { f.inputStream().use { load(it) } } }
 
 android {
     namespace = "lk.codegen.risime"
@@ -15,19 +49,33 @@ android {
         applicationId = "lk.codegen.risime"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
-        // Release builds have no default server in 0.1.
-        buildConfigField("String", "DEFAULT_SERVER_URL", "\"\"")
+        versionCode = risiVersionCodeValue
+        versionName = risiVersionName
+        // Every build (decision 003, release builds are dev builds for now): laptop tunnel port
+        // (emulator -> 10.0.2.2:4400 -> spark2 127.0.0.1:4000). Editable in Settings / on login.
+        buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:4400\"")
+    }
+
+    signingConfigs {
+        if (releaseKeystoreProps != null) {
+            create("release") {
+                storeFile = file(releaseKeystoreProps.getProperty("storeFile"))
+                storePassword = releaseKeystoreProps.getProperty("storePassword")
+                keyAlias = releaseKeystoreProps.getProperty("keyAlias")
+                keyPassword = releaseKeystoreProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         debug {
-            // Laptop tunnel port (emulator -> 10.0.2.2:4400 -> spark2 127.0.0.1:4000).
-            buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:4400\"")
+            // Installs side by side with the release build (decision 003).
+            applicationIdSuffix = ".debug"
         }
         release {
+            // R8/minify stays off until the prod release (decision 003).
             isMinifyEnabled = false
+            if (releaseKeystoreProps != null) signingConfig = signingConfigs.getByName("release")
         }
     }
 

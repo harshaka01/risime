@@ -1,0 +1,4 @@
+<resources>
+    <!-- Debug builds (id lk.codegen.risime.debug) install next to release builds; tell them apart. -->
+    <string name="app_name">RisiMe Dev</string>
+</resources>
