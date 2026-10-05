@@ -1,6 +1,6 @@
 # Proposal: presence / last seen and typing indicator (PROTOCOL v1.2)
 
-**Status:** accepted by root (orchestrator) on 2026-10-06, revised the same day with the server and Android reviews (grace period, `typing:false` exempt from the rate limit, registered-only watch) under the nightly mandate (backlog 0.2:
+**Status:** merged into `contract/v1` as v1.2 on 2026-10-06. Accepted by root (orchestrator) on 2026-10-06, revised the same day with the server and Android reviews (grace period, `typing:false` exempt from the rate limit, registered-only watch) under the nightly mandate (backlog 0.2:
 "presence and last seen, typing indicator"). It is merged into `contract/v1` as v1.2 when both
 sides start implementing it. It is additive, so v1.1 clients keep working.
 

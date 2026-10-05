@@ -27,6 +27,13 @@ class ContractExamplesTest {
         "join_reply.json" to { s -> ProtocolJson.decodeFromString<EventsPage>(s) },
         "msg_send.json" to { s -> ProtocolJson.decodeFromString<MsgSend>(s) },
         "msg_send_reply.json" to { s -> ProtocolJson.decodeFromString<MsgSendReply>(s) },
+        // v1.2 (presence/typing): parse-only placeholders added by root with the contract merge;
+        // the android role replaces them with typed decoders when it implements §2.5/§2.6.
+        "presence_watch.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "presence_watch_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "signal_presence.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "signal_typing.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "typing.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
     )
 
     @Test

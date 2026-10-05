@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.1 (Release 0.1)
+# RisiMe Wire Protocol — v1.2 (Release 0.2)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -87,9 +87,49 @@ keeps ordering and the cursor simple.
 (re)join. Events may arrive more than once (live push plus join replay), so clients dedupe by
 `event_id` and `message_id`.
 
+**`signal`** (v1.2) is a second server→client push for **ephemeral** state. Signals are not stored,
+carry no `event_id`, never move the cursor, and are not replayed on join.
+`Signal = {"kind": "presence" | "typing", "data": {...}}`. Clients ignore unknown kinds.
+- kind `presence`: `data` is a `Presence` (§2.5).
+- kind `typing`: `{"from": "uuid", "conversation_id": "dm:…", "typing": true | false}` (§2.6).
+
 ### 2.4 Conversation id
 For a DM: `"dm:" + a + "_" + b`, where a and b are the two lowercase user UUIDs sorted
 lexicographically.
+
+### 2.5 Presence / last seen (v1.2)
+- A user is **online** while at least one of their sockets has joined their own `inbox:` topic.
+  0.x clients connect only while the app is in the foreground, so online means "app open".
+- **Grace period:** when a user's last inbox channel leaves, the server waits **5 s** before
+  publishing them as offline. A reconnect within that time publishes nothing.
+- `last_seen` = the time the last inbox channel left (not the end of the grace period). It is also
+  refreshed on join. It may be arbitrarily old.
+- `Presence = {"user_id": "uuid", "online": true | false, "last_seen": "<ISO-8601 ms>" | null}`.
+  `last_seen` is null while online, and for a user who has never connected.
+
+**`presence:watch`** (client → server) `{"user_ids": ["uuid", ...]}`, with at most 200 ids.
+- It **replaces** this channel's previous watch list. `[]` stops watching.
+- reply ok: `{"presences": [Presence, ...]}`, one per **registered** user id. Ids that aren't
+  registered users are left out, and clients treat a missing id as "unknown", not "offline".
+  Watching yourself is allowed.
+- While watched, every online/offline change of those users arrives as a `signal` of kind
+  `presence`.
+- Watches don't survive a rejoin. Clients send `presence:watch` again right after every
+  successful join reply.
+- reply error: `{"reason": "bad_request"}` (malformed, or more than 200 ids).
+
+### 2.6 Typing (v1.2)
+**`typing`** (client → server) `{"to": "<user uuid>", "typing": true | false}`, reply ok `{}`.
+- Send `true` when the user starts typing, and again at most every 3 s while they keep typing.
+- Send `false` after 3 s idle, when the input is cleared, or when the message is sent.
+- The server forwards it as a `typing` signal only to the recipient's connected inbox channels.
+  - It is dropped if the recipient is offline.
+  - `typing: true` above 2 per second per user is dropped silently (reply ok).
+  - `typing: false` is never rate-limited.
+- reply error: `unknown_recipient` | `bad_request`, as in `msg:send`.
+- Typing is never queued: a client that isn't connected drops it.
+- The recipient shows "typing…" until it receives `typing: false`, a message from that user, or
+  **6 s pass** without a refresh.
 
 ## 3. Client message states
 | State | Meaning | UI |
@@ -108,6 +148,9 @@ lexicographically.
 `contract/v1/examples/*.json`. Both sides' tests parse every file.
 
 ## Changelog
+- **v1.2** (2026-10-06): presence / last seen (`presence:watch`, §2.5), typing (`typing`, §2.6),
+  and the ephemeral server push `signal` (§2.3). An additive change: v1.1 clients ignore the
+  unknown push.
 - **v1.1** (2026-10-06): added the error reason `bad_request` for malformed pushes and joins (§2.1,
   §2.2). An additive change; v1.0 clients stay compatible.
 - **v1.0**: the Release 0.1 baseline.

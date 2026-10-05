@@ -15,6 +15,10 @@ defmodule RisiMe.ContractExamplesTest do
   @files @dir |> File.ls!() |> Enum.filter(&String.ends_with?(&1, ".json")) |> Enum.sort()
   @checked ~w(auth_verify_reply.json contacts_reply.json event_message.json event_status.json
               join_reply.json msg_send.json msg_send_reply.json)
+  # v1.2 (presence/typing): parse-only placeholders added by root with the contract merge; the
+  # server role replaces them with real encoder/decoder checks when it implements §2.5/§2.6.
+  @pending_v1_2 ~w(presence_watch.json presence_watch_reply.json signal_presence.json
+                   signal_typing.json typing.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -46,7 +50,13 @@ defmodule RisiMe.ContractExamplesTest do
 
   test "every example file is covered by this test" do
     assert length(@files) > 0
-    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
+
+    assert @files -- (@checked ++ @pending_v1_2) == [],
+           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_2))}"
+  end
+
+  test "v1.2 examples are valid JSON objects (placeholder)" do
+    for name <- @pending_v1_2, do: assert(is_map(example(name)))
   end
 
   setup do
