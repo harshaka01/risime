@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Usage: scripts/risi-resume server|android|root   (FORCE=1 to take a stale lock)
+set -euo pipefail
+ROLE="${1:?usage: risi-resume server|android|root}"
+HOST="$(hostname)"
+run() { if [ -d /srv/git/locks ]; then bash -c "$1"; else ssh spark2 "$1"; fi; }
+LOCK="/srv/git/locks/$ROLE.lock"
+cur="$(run "cat $LOCK 2>/dev/null || true")"
+if [ -n "$cur" ] && [ "${cur%% *}" != "$HOST" ] && [ "${FORCE:-0}" != 1 ]; then
+  echo "Lock held by: $cur"
+  echo "Run scripts/risi-handoff $ROLE on that machine first, or FORCE=1 if it is gone."
+  exit 1
+fi
+run "echo '$HOST $(date -Iseconds)' > $LOCK"
+BR="$(git rev-parse --abbrev-ref HEAD)"
+git fetch origin
+git pull --rebase origin "$BR"
+echo "Resumed role=$ROLE on $HOST, branch $BR at $(git rev-parse --short HEAD)"

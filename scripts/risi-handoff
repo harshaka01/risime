@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Usage: scripts/risi-handoff server|android|root
+set -euo pipefail
+ROLE="${1:?usage: risi-handoff server|android|root}"
+run() { if [ -d /srv/git/locks ]; then bash -c "$1"; else ssh spark2 "$1"; fi; }
+BR="$(git rev-parse --abbrev-ref HEAD)"
+case "$ROLE" in server) P="server docs/status/server.md";; android) P="android docs/status/android.md";; *) P=".";; esac
+git add $P
+git diff --cached --quiet || git commit --no-verify -m "wip($ROLE): handoff from $(hostname) $(date -Iseconds)"
+git pull --rebase origin "$BR"
+git push origin "$BR"
+run "rm -f /srv/git/locks/$ROLE.lock"
+echo "Handed off role=$ROLE, branch $BR at $(git rev-parse --short HEAD). Safe to switch machines."

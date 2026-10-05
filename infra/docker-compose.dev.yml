@@ -1,0 +1,34 @@
+name: risime-dev
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: risime
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: risime_dev
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U risime -d risime_dev"]
+      interval: 5s
+      retries: 20
+
+  cassandra:
+    image: cassandra:5.0
+    restart: unless-stopped
+    environment:
+      CASSANDRA_CLUSTER_NAME: risime-dev
+      MAX_HEAP_SIZE: 8G
+      HEAP_NEWSIZE: 800M
+    ports: ["127.0.0.1:9042:9042"]
+    volumes: [cassdata:/var/lib/cassandra]
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' >/dev/null 2>&1"]
+      interval: 20s
+      retries: 20
+      start_period: 90s
+
+volumes:
+  pgdata:
+  cassdata:

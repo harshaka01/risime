@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Laptop: fetch the debug APK built on spark2 and install it on every connected device/emulator.
+set -euo pipefail
+SRC="spark2:development/risime/android/app/build/outputs/apk/debug/app-debug.apk"
+OUT="/tmp/risime-debug.apk"
+scp "$SRC" "$OUT"
+mapfile -t DEVS < <(adb devices | awk 'NR>1 && $2=="device"{print $1}')
+[ ${#DEVS[@]} -gt 0 ] || { echo "No devices. Start the emulator (emulator -avd risime_a) or plug in the phone."; exit 1; }
+for d in "${DEVS[@]}"; do echo "==> $d"; adb -s "$d" install -r "$OUT"; done
+echo "Remember: USB phone needs 'adb reverse tcp:4000 tcp:4000' and the spark2-tunnel running."

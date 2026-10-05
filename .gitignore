@@ -1,0 +1,16 @@
+.env
+*.apk
+*.aab
+# Elixir
+server/_build/
+server/deps/
+server/.elixir_ls/
+server/erl_crash.dump
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+.DS_Store
