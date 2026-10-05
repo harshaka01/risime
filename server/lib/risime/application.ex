@@ -10,6 +10,7 @@ defmodule RisiMe.Application do
     children = [
       RisiMeWeb.Telemetry,
       RisiMe.Repo,
+      RisiMe.Messaging.Store.Cassandra,
       {DNSCluster, query: Application.get_env(:risime, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: RisiMe.PubSub},
       # Start a worker by calling: RisiMe.Worker.start_link(arg)

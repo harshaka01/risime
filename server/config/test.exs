@@ -22,7 +22,8 @@ config :risime, RisiMeWeb.Endpoint,
 config :risime, :cassandra,
   nodes: ["127.0.0.1:9042"],
   keyspace: "risime_test",
-  pool_size: 2
+  pool_size: 2,
+  sync_connect: 10_000
 
 config :risime, :otp_dev_log, false
 
