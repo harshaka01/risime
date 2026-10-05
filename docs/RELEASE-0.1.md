@@ -159,8 +159,8 @@ Room entities:
 
 ### A4. Screens
 1. **Login:** "RisiMe" wordmark with the tagline "Talk. Connect. Act."; a debug-only Server URL
-   field (default `http://10.0.2.2:4000`); phone (default `+94`, normalised with
-   libphonenumber); email.
+   field (default `http://10.0.2.2:4400`, the laptop tunnel port); phone (default `+94`,
+   normalised with libphonenumber); email.
 2. **OTP:** a 6-digit field with a resend timer.
 3. **Chats:** registered contacts with initials avatar, name, company, last-message preview and
    time; unregistered contacts greyed out.

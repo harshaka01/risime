@@ -44,7 +44,8 @@ for Harsha (see the end of this file).
   `user.email=harsha@codegen.co.uk` in both checkouts. Global config is untouched.
 
 ## Open items for Harsha
-1. **Port 4000 clash on the laptop.** Container `aoa-litellm-1` (another project) publishes
+1. **Port 4000 clash on the laptop.** *Resolved: the tunnel now uses `LocalForward 4400`; docs
+   and the Android debug default were updated to match.* Container `aoa-litellm-1` (another project) publishes
    `0.0.0.0:4000`, so `ssh -N spark2-tunnel` fails with `Address already in use`. Either stop
    that container while working on RisiMe (`docker stop aoa-litellm-1`), or move the tunnel's
    local port (for example `LocalForward 4400 127.0.0.1:4000`, then `adb reverse tcp:4000 tcp:4400`

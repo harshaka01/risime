@@ -29,7 +29,8 @@ After each green step: `git add android/ docs/status/android.md`, commit, `git p
 7. **A6:** the local behaviour event log (local only).
 8. For a device test: there is no emulator on spark2. Push, then ask Harsha to run `git pull` and
    `scripts/install-apk` on the laptop and report what he sees. Once the server is READY, the
-   emulator uses `http://10.0.2.2:4000` through his `spark2-tunnel`.
+   emulator uses `http://10.0.2.2:4400` through his `spark2-tunnel` (laptop port 4400 → spark2
+   port 4000). That is the debug default server URL.
 9. Write `docs/status/android.md`: READY, how to build and install, and known limits.
 
 ## Rules

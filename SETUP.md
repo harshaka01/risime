@@ -46,8 +46,10 @@ from the laptop to both Sparks.
 ssh -N spark2-tunnel &
 cd ~/development/risime && git pull && scripts/install-apk
 ```
-- **Emulator** (`emulator -avd risime_a`): server URL `http://10.0.2.2:4000`
-- **USB phone**: run `adb reverse tcp:4000 tcp:4000`, then use server URL `http://127.0.0.1:4000`
+- The tunnel forwards laptop port **4400** to spark2's `127.0.0.1:4000` (`LocalForward 4400
+  127.0.0.1:4000`), because laptop port 4000 is taken by another project.
+- **Emulator** (`emulator -avd risime_a`): server URL `http://10.0.2.2:4400` (the debug default)
+- **USB phone**: run `adb reverse tcp:4000 tcp:4400`, then use server URL `http://127.0.0.1:4000`
 - Login codes appear in the server log on spark2: `tmux attach -t risime-server`
 
 ## Important

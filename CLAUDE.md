@@ -116,6 +116,6 @@ Tests use `risime_test`. Prod comes later in separate containers; never point de
 - Server (spark2): `tmux new -d -s risime-server 'cd ~/development/risime/server && ~/.local/bin/mise exec -- mix phx.server'`
 - Android build (spark2): `cd android && ./gradlew assembleDebug testDebugUnitTest`
 - Install on devices (laptop): `git pull && scripts/install-apk`
-- Tunnel (laptop): `ssh -N spark2-tunnel`
-- Emulator server URL: `http://10.0.2.2:4000`
-- USB phone: `adb reverse tcp:4000 tcp:4000`, then use `http://127.0.0.1:4000`
+- Tunnel (laptop): `ssh -N spark2-tunnel` (`LocalForward 4400` → spark2 `127.0.0.1:4000`)
+- Emulator server URL: `http://10.0.2.2:4400` (the Android debug default)
+- USB phone: `adb reverse tcp:4000 tcp:4400`, then use `http://127.0.0.1:4000`

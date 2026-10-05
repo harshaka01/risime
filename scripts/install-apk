@@ -7,4 +7,6 @@ scp "$SRC" "$OUT"
 mapfile -t DEVS < <(adb devices | awk 'NR>1 && $2=="device"{print $1}')
 [ ${#DEVS[@]} -gt 0 ] || { echo "No devices. Start the emulator (emulator -avd risime_a) or plug in the phone."; exit 1; }
 for d in "${DEVS[@]}"; do echo "==> $d"; adb -s "$d" install -r "$OUT"; done
-echo "Remember: USB phone needs 'adb reverse tcp:4000 tcp:4000' and the spark2-tunnel running."
+echo "Remember: start the spark2-tunnel (laptop :4400 -> spark2 :4000)."
+echo "  Emulator:  server URL http://10.0.2.2:4400 (debug default)"
+echo "  USB phone: adb reverse tcp:4000 tcp:4400, then server URL http://127.0.0.1:4000"
