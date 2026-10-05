@@ -1,7 +1,26 @@
-# Android status — Release 0.1
+# Android status — 0.2 nightlies
 
-**READY** — A1–A7 done. Gate green on `main`: `cd android && ./gradlew assembleDebug testDebugUnitTest`
-(33 JVM unit tests). Not yet run on a device or emulator (spark2 has none): see "Device check" below.
+**READY** — 0.1 (A1–A7) plus 0.2 night 1: release plumbing and the Settings screen. Gate green on
+`main`: `cd android && ./gradlew assembleDebug testDebugUnitTest assembleRelease` (45 JVM unit
+tests). Not yet run on a device or emulator (spark2 has none): see "Device check" below.
+
+## Release build (decision 003, details in decision 005)
+- `versionName` = top-level `VERSION`; `versionCode` = major·1 000 000 + minor·10 000 + patch·100
+  + (N for `-nightly.N`, else 99). A bad `VERSION` fails the build.
+- Release is signed with the dev release key when `~/risime-keys/keystore.properties` exists
+  (spark2); otherwise (laptop) it is unsigned. Check:
+  `$ANDROID_HOME/build-tools/36.1.0/apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk`
+  → `CN=RisiMe Dev Release`, SHA-256 `da7b9824…c99e2e`.
+- Ids: release `lk.codegen.risime` ("RisiMe"), debug `lk.codegen.risime.debug` ("RisiMe Dev");
+  both can be installed side by side. Minify off.
+- Both builds: cleartext only to `10.0.2.2` and `127.0.0.1`; default server `http://10.0.2.2:4400`.
+
+### Installing releases (laptop)
+```bash
+adb uninstall lk.codegen.risime        # ONE TIME: removes the debug-signed v0.1.0 build (wipes its local data)
+scripts/fetch-latest-apk --install     # newest ~/risime-releases/v*/ from spark2, checksum-verified
+```
+Debug builds still go through `scripts/install-apk` (now id `lk.codegen.risime.debug`).
 
 ## Build (spark2 or laptop)
 ```bash
@@ -22,10 +41,10 @@ cd android
 git pull && scripts/install-apk      # scp's the APK built on spark2, installs on every adb device
 ssh -N spark2-tunnel                 # laptop :4400 -> spark2 127.0.0.1:4000
 ```
-- Emulator: the debug default server URL is `http://10.0.2.2:4400` (editable on the login screen,
-  debug builds only).
+- Emulator: the default server URL is `http://10.0.2.2:4400` in every build. Change it on the login
+  screen ("Server: … · Change") or in Settings; the tailnet uses `https://…ts.net` (`docs/TAILSCALE.md`).
 - USB phone: `adb reverse tcp:4000 tcp:4400`, then set the server URL to `http://127.0.0.1:4000`.
-- Debug cleartext is allowed only for `10.0.2.2` and `127.0.0.1`; release builds allow none.
+- Cleartext is allowed only for `10.0.2.2` and `127.0.0.1` (debug and release).
 - Login: phone (defaults to `+94`, normalised to E.164 with libphonenumber, local `07…` numbers
   read as Sri Lankan) + allowlisted email → code from the server log
   (`tmux capture-pane -p -t risime-server -S -500 | grep "DEV OTP" | tail -3`).
@@ -56,6 +75,8 @@ ssh -N spark2-tunnel                 # laptop :4400 -> spark2 127.0.0.1:4000
 ## Decisions
 `docs/decisions/002-android-client-stack.md`: own Phoenix client, compileSdk 37, build-tools pin,
 local `failed` state, per-row ack tracking, Room logic tested via DAO fakes.
+`docs/decisions/005-android-release-build-and-settings.md`: versionCode in the build script with a
+self-check, default server in every build, atomic server switch, protocol-version test.
 
 ## Known limits (0.1)
 - **Not device-tested yet.** Everything above is covered by JVM unit tests (contract parsing,
@@ -68,17 +89,21 @@ local `failed` state, per-row ack tracking, Room logic tested via DAO fakes.
 - Message order in a chat is by local time (send time for mine, receive time for theirs).
 - `seen_events` is never pruned (one small row per event).
 - Server cursor race (see `docs/status/server.md`) can, rarely, skip an event after a reconnect.
-- Server error reason `bad_request` isn't in PROTOCOL.md §2.2 yet; the client treats it as a
-  permanent failure. Candidate for a contract update by root.
-- No display-name editing UI (`PATCH /me` is implemented in the API client only).
+- `bad_request` (contract v1.1) and any unknown reason are treated as permanent send failures.
+- `PROTOCOL_VERSION` (1.1) is checked against the PROTOCOL.md header by a unit test, so a contract
+  version bump fails the Android gate until the client implements it (decision 005).
 - Logout wipes messages and contacts on the device (single-device history in 0.1).
 
 ## Device check (step 8, for Harsha on the laptop)
 1. `git pull && scripts/install-apk` with the emulator running; start `ssh -N spark2-tunnel`.
-2. Login screen shows the banner, "RisiMe", "Talk. Connect. Act.", server URL `http://10.0.2.2:4400`.
+2. Login screen shows the banner, "RisiMe", "Talk. Connect. Act.", "Server: http://10.0.2.2:4400 · Change".
 3. Log in with an allowlisted phone + email and the code from the server log.
 4. Chats lists contacts (empty until the second person is allowlisted); unregistered ones greyed.
 5. With a second account (USB phone): messages both ways within ~1 s; ticks clock → ✓ → ✓✓ →
    saffron ✓✓ when the other side opens the chat.
 6. Kill B, send 3 from A, reopen B: all 3 in order, no duplicates.
 7. Airplane mode on A while sending: clock stays, then ✓ after reconnect, no duplicate on B.
+8. Release build (`scripts/fetch-latest-apk --install`): launcher shows "RisiMe"; a debug build
+   next to it shows "RisiMe Dev". Settings → About shows the version from `VERSION` and its code.
+9. Settings: change the display name (the other phone's contact list shows it after refresh);
+   enter an invalid URL (error), then a new valid one → confirm → back on login with that URL.
