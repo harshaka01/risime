@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# Back up RisiMe's databases (Postgres + Cassandra) from the running containers (docs/PROD.md).
+#
+#   scripts/backup --env prod                         # dest/keep from .env.prod (BACKUP_DEST, BACKUP_KEEP)
+#   scripts/backup --env dev --dest /tmp/x --keep 3   # local directory
+#   scripts/backup --env prod --dest backup@nas:/srv/risime-backups   # off-box, rsync over ssh
+#
+# Options:
+#   --env dev|prod        which stack (container names, DB and keyspace). Default: dev.
+#   --dest DIR|user@host:/path   where backups go. Env: BACKUP_DEST.
+#   --keep N              keep the newest N backups of this env at the destination. Env: BACKUP_KEEP (14).
+#   --staging DIR         local scratch for remote destinations. Env: BACKUP_STAGING (default: mktemp).
+#   --no-postgres / --no-cassandra   skip one store.
+#
+# Each backup is a directory  risime-<env>-<UTC stamp>/  containing:
+#   postgres.dump         pg_dump custom format (-Fc) of the database
+#   postgres.list         pg_restore --list of the dump (proves it is readable)
+#   postgres-globals.sql  roles (pg_dumpall --globals-only)
+#   cassandra-schema.cql  DESCRIBE KEYSPACE
+#   cassandra-data.tar.gz the keyspace's snapshot directories (nodetool snapshot; flushes first)
+#   MANIFEST              what/when/versions
+#   SHA256SUMS            checksums of all of the above, verified after the copy
+# A backup is written as <name>.partial and renamed only when complete and verified.
+# Restore and verification: scripts/restore.
+set -euo pipefail
+
+ENV_NAME=dev DEST="" KEEP="" STAGING="${BACKUP_STAGING:-}" DO_PG=1 DO_CASS=1
+die() { echo "backup: $*" >&2; exit 1; }
+log() { echo "backup: $*" >&2; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --env) ENV_NAME="${2:?}"; shift 2 ;;
+    --dest) DEST="${2:?}"; shift 2 ;;
+    --keep) KEEP="${2:?}"; shift 2 ;;
+    --staging) STAGING="${2:?}"; shift 2 ;;
+    --no-postgres) DO_PG=0; shift ;;
+    --no-cassandra) DO_CASS=0; shift ;;
+    -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument: $1 (see --help)" ;;
+  esac
+done
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+case "$ENV_NAME" in
+  dev)  PG_CTR=risime-dev-postgres-1;  CASS_CTR=risime-dev-cassandra-1;  DB=risime_dev;  KS=risime_dev;  ENV_FILE="$REPO/.env" ;;
+  prod) PG_CTR=risime-prod-postgres-1; CASS_CTR=risime-prod-cassandra-1; DB=risime_prod; KS=risime_prod; ENV_FILE="$REPO/.env.prod" ;;
+  *) die "--env must be dev or prod" ;;
+esac
+PG_USER=risime
+
+# Only BACKUP_* keys are read from the env file (it is not sourced: values may contain spaces/<>).
+env_value() { [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 | sed "s/^[\"']//; s/[\"']\$//"; true; }
+DEST="${DEST:-${BACKUP_DEST:-$(env_value BACKUP_DEST)}}"
+KEEP="${KEEP:-${BACKUP_KEEP:-$(env_value BACKUP_KEEP)}}"
+KEEP="${KEEP:-14}"
+[ -n "$DEST" ] || die "no destination: pass --dest or set BACKUP_DEST"
+[[ "$KEEP" =~ ^[1-9][0-9]*$ ]] || die "--keep must be a positive integer"
+
+# user@host:/path or host:/path is remote (rsync over ssh); anything else is a local directory.
+REMOTE_HOST="" REMOTE_PATH=""
+if [[ "$DEST" =~ ^([^/:]+):(.+)$ ]]; then
+  REMOTE_HOST="${BASH_REMATCH[1]}" REMOTE_PATH="${BASH_REMATCH[2]}"
+  case "$REMOTE_PATH" in /*) ;; *) die "remote path must be absolute: $DEST" ;; esac
+fi
+
+for c in $([ $DO_PG = 1 ] && echo "$PG_CTR") $([ $DO_CASS = 1 ] && echo "$CASS_CTR"); do
+  [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = true ] || die "container $c is not running"
+done
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+NAME="risime-$ENV_NAME-$STAMP"
+if [ -n "$REMOTE_HOST" ]; then
+  if [ -n "$STAGING" ]; then mkdir -p "$STAGING"; WORKROOT="$(mktemp -d "$STAGING/backup.XXXXXX")"
+  else WORKROOT="$(mktemp -d)"; fi
+  WORK="$WORKROOT/$NAME"
+else
+  mkdir -p "$DEST"
+  WORKROOT="" WORK="$DEST/$NAME.partial"
+fi
+mkdir -p "$WORK"
+
+SNAP_TAG="risime-backup-$STAMP"
+SNAP_TAKEN=0
+cleanup() {
+  local rc=$?
+  if [ "$SNAP_TAKEN" = 1 ]; then
+    docker exec "$CASS_CTR" nodetool clearsnapshot -t "$SNAP_TAG" -- "$KS" >/dev/null 2>&1 \
+      || log "WARNING: could not clear snapshot $SNAP_TAG; run: docker exec $CASS_CTR nodetool clearsnapshot -t $SNAP_TAG -- $KS"
+  fi
+  if [ -n "$WORKROOT" ]; then rm -rf "$WORKROOT"
+  elif [ $rc -ne 0 ]; then rm -rf "$WORK"; fi
+  [ $rc -eq 0 ] || log "FAILED (exit $rc)"
+}
+trap cleanup EXIT
+
+# ---- Postgres ----
+if [ $DO_PG = 1 ]; then
+  log "postgres: pg_dump $DB from $PG_CTR"
+  docker exec "$PG_CTR" pg_dump -U "$PG_USER" -d "$DB" -Fc -Z 6 > "$WORK/postgres.dump"
+  docker exec "$PG_CTR" pg_dumpall -U "$PG_USER" --globals-only > "$WORK/postgres-globals.sql"
+  docker exec -i "$PG_CTR" pg_restore --list < "$WORK/postgres.dump" > "$WORK/postgres.list" \
+    || die "pg_restore --list failed: the dump is not readable"
+  grep -q 'TABLE DATA' "$WORK/postgres.list" || die "dump has no table data"
+  log "postgres: $(grep -c 'TABLE DATA' "$WORK/postgres.list") tables, $(du -h "$WORK/postgres.dump" | cut -f1)"
+fi
+
+# ---- Cassandra ----
+if [ $DO_CASS = 1 ]; then
+  log "cassandra: snapshot $SNAP_TAG of $KS on $CASS_CTR"
+  docker exec "$CASS_CTR" cqlsh -e "DESCRIBE KEYSPACE $KS" > "$WORK/cassandra-schema.cql"
+  grep -q "CREATE KEYSPACE $KS" "$WORK/cassandra-schema.cql" || die "keyspace $KS not found"
+  SNAP_TAKEN=1
+  docker exec "$CASS_CTR" nodetool snapshot -t "$SNAP_TAG" -- "$KS" >/dev/null
+  # Copy only this snapshot's directories: <ks>/<table>-<id>/snapshots/<tag>/...
+  docker exec "$CASS_CTR" sh -c \
+    "cd /var/lib/cassandra/data && ls -d $KS/*/snapshots/$SNAP_TAG >/dev/null && tar -cf - $KS/*/snapshots/$SNAP_TAG" \
+    | gzip -6 > "$WORK/cassandra-data.tar.gz"
+  docker exec "$CASS_CTR" nodetool clearsnapshot -t "$SNAP_TAG" -- "$KS" >/dev/null
+  SNAP_TAKEN=0
+  tables="$(tar -tzf "$WORK/cassandra-data.tar.gz" | sed -n "s|^$KS/\([^/]*\)/snapshots/$SNAP_TAG/manifest.json\$|\1|p" | wc -l)"
+  [ "$tables" -gt 0 ] || die "cassandra snapshot archive has no tables"
+  log "cassandra: $tables tables, $(du -h "$WORK/cassandra-data.tar.gz" | cut -f1)"
+fi
+
+# ---- manifest + checksums ----
+{
+  echo "name=$NAME"
+  echo "env=$ENV_NAME"
+  echo "created_utc=$STAMP"
+  echo "host=$(hostname)"
+  echo "repo_version=$(cat "$REPO/VERSION" 2>/dev/null || echo unknown)"
+  [ $DO_PG = 1 ] && echo "postgres=$PG_CTR db=$DB server=$(docker exec "$PG_CTR" postgres --version)"
+  [ $DO_CASS = 1 ] && echo "cassandra=$CASS_CTR keyspace=$KS snapshot_tag=$SNAP_TAG $(docker exec "$CASS_CTR" nodetool version)"
+} > "$WORK/MANIFEST"
+(cd "$WORK" && sha256sum -- * > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS && sha256sum --quiet -c SHA256SUMS)
+
+# ---- ship + retention ----
+prune_list() { grep -E "^risime-$ENV_NAME-[0-9]{8}T[0-9]{6}Z\$" | sort | head -n "-$KEEP"; }
+if [ -n "$REMOTE_HOST" ]; then
+  log "copying to $REMOTE_HOST:$REMOTE_PATH/$NAME"
+  # shellcheck disable=SC2029  # the remote path is meant to expand on this side
+  ssh -o BatchMode=yes "$REMOTE_HOST" "mkdir -p '$REMOTE_PATH'"
+  rsync -a --partial "$WORK/" "$REMOTE_HOST:$REMOTE_PATH/$NAME.partial/"
+  # shellcheck disable=SC2029
+  ssh -o BatchMode=yes "$REMOTE_HOST" \
+    "cd '$REMOTE_PATH/$NAME.partial' && sha256sum --quiet -c SHA256SUMS && cd .. && mv '$NAME.partial' '$NAME'" \
+    || die "remote checksum verification failed; left $REMOTE_PATH/$NAME.partial"
+  # shellcheck disable=SC2029
+  for old in $(ssh -o BatchMode=yes "$REMOTE_HOST" "ls -1 '$REMOTE_PATH'" | prune_list); do
+    log "retention: removing $REMOTE_HOST:$REMOTE_PATH/$old"
+    ssh -o BatchMode=yes "$REMOTE_HOST" "rm -rf -- '$REMOTE_PATH/$old'"
+  done
+  FINAL="$REMOTE_HOST:$REMOTE_PATH/$NAME"
+else
+  mv "$WORK" "$DEST/$NAME"
+  for old in $(find "$DEST" -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | prune_list); do
+    log "retention: removing $DEST/$old"
+    rm -rf -- "${DEST:?}/$old"
+  done
+  FINAL="$DEST/$NAME"
+fi
+log "OK $FINAL"
+echo "$FINAL"
