@@ -20,6 +20,7 @@ defmodule RisiMe.Application do
       RisiMe.RateLimiter,
       {DNSCluster, query: Application.get_env(:risime, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: RisiMe.PubSub},
+      RisiMe.Presence,
       # Start a worker by calling: RisiMe.Worker.start_link(arg)
       # {RisiMe.Worker, arg},
       # Start to serve requests, typically the last entry

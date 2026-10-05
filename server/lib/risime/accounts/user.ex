@@ -8,6 +8,7 @@ defmodule RisiMe.Accounts.User do
     field :email, :string
     field :display_name, :string
     field :company, :string
+    field :last_seen_at, :utc_datetime_usec
 
     timestamps(type: :utc_datetime_usec)
   end

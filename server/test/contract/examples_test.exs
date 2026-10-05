@@ -14,11 +14,8 @@ defmodule RisiMe.ContractExamplesTest do
   @dir Path.expand("../../../contract/v1/examples", __DIR__)
   @files @dir |> File.ls!() |> Enum.filter(&String.ends_with?(&1, ".json")) |> Enum.sort()
   @checked ~w(auth_verify_reply.json contacts_reply.json event_message.json event_status.json
-              join_reply.json msg_send.json msg_send_reply.json)
-  # v1.2 (presence/typing): parse-only placeholders added by root with the contract merge; the
-  # server role replaces them with real encoder/decoder checks when it implements §2.5/§2.6.
-  @pending_v1_2 ~w(presence_watch.json presence_watch_reply.json signal_presence.json
-                   signal_typing.json typing.json)
+              join_reply.json msg_send.json msg_send_reply.json presence_watch.json
+              presence_watch_reply.json signal_presence.json signal_typing.json typing.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -51,12 +48,7 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- (@checked ++ @pending_v1_2) == [],
-           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_2))}"
-  end
-
-  test "v1.2 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_2, do: assert(is_map(example(name)))
+    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
   end
 
   setup do
@@ -143,6 +135,49 @@ defmodule RisiMe.ContractExamplesTest do
       subscribe_and_join(sock_b, InboxChannel, "inbox:" <> b.user.id, %{"since" => nil})
 
     assert_same_shape(wire(reply), ex)
+  end
+
+  test "presence_watch.json and presence_watch_reply.json", %{chan_a: chan_a} do
+    # The decoder accepts the example; its id isn't a registered user here, so it is left out.
+    ref = push(chan_a, "presence:watch", example("presence_watch.json"))
+    assert_reply ref, :ok, %{presences: []}
+
+    %{user: c} = logged_in_user()
+    RisiMe.Accounts.touch_last_seen(c.id, DateTime.utc_now())
+    ref = push(chan_a, "presence:watch", %{"user_ids" => [c.id]})
+    assert_reply ref, :ok, reply
+    ex = example("presence_watch_reply.json")
+    assert_same_shape(wire(reply), ex)
+    assert_same_shape(hd(wire(reply)["presences"]), hd(ex["presences"]))
+  end
+
+  test "signal_presence.json", %{chan_a: chan_a, a: a} do
+    %{user: d, token: token} = logged_in_user()
+    ref = push(chan_a, "presence:watch", %{"user_ids" => [d.id]})
+    assert_reply ref, :ok, _
+
+    {:ok, sock_d} = connect(UserSocket, %{"token" => token})
+    {:ok, _, _} = subscribe_and_join(sock_d, InboxChannel, "inbox:" <> d.id, %{})
+
+    topic_a = "inbox:" <> a.user.id
+    assert_receive %Phoenix.Socket.Message{topic: ^topic_a, event: "signal", payload: signal}
+    ex = example("signal_presence.json")
+    assert_same_shape(wire(signal), ex)
+    assert wire(signal)["data"]["last_seen"] == nil
+  end
+
+  test "typing.json and signal_typing.json", %{a: a, b: b, chan_a: chan_a} do
+    ex = example("typing.json")
+    # The example's recipient does not exist here: it parses, then fails on the recipient.
+    assert {:error, :unknown_recipient} = Messaging.typing(a.user.id, ex)
+
+    ref = push(chan_a, "typing", %{ex | "to" => b.user.id})
+    assert_reply ref, :ok, %{}
+
+    topic_b = "inbox:" <> b.user.id
+    assert_receive %Phoenix.Socket.Message{topic: ^topic_b, event: "signal", payload: signal}
+    assert_same_shape(wire(signal), example("signal_typing.json"))
+    assert wire(signal)["data"]["conversation_id"] =~ ~r/^dm:[0-9a-f-]{36}_[0-9a-f-]{36}$/
   end
 
   defp atomize(map), do: Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)

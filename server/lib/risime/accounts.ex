@@ -195,6 +195,33 @@ defmodule RisiMe.Accounts do
     end
   end
 
+  @doc "True if `id` is a registered user's id."
+  def user_exists?(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, id} -> Repo.exists?(from u in User, where: u.id == ^id)
+      :error -> false
+    end
+  end
+
+  @doc """
+  `%{user_id => last_seen_at | nil}` for the ids that are registered users. Other ids,
+  including strings that aren't UUIDs, are left out.
+  """
+  @spec last_seen_by_id([String.t()]) :: %{String.t() => DateTime.t() | nil}
+  def last_seen_by_id(ids) do
+    ids = for id <- ids, {:ok, id} <- [Ecto.UUID.cast(id)], uniq: true, do: id
+
+    from(u in User, where: u.id in ^ids, select: {u.id, u.last_seen_at})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  @doc "Sets the user's `last_seen_at` (presence, PROTOCOL.md §2.5)."
+  def touch_last_seen(user_id, %DateTime{} = at) do
+    Repo.update_all(from(u in User, where: u.id == ^user_id), set: [last_seen_at: at])
+    :ok
+  end
+
   defp get_or_create_user!(entry) do
     Repo.insert!(
       %User{

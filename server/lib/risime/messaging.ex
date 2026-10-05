@@ -139,6 +139,47 @@ defmodule RisiMe.Messaging do
     }
   end
 
+  ## Typing (PROTOCOL.md v1.2 §2.6)
+
+  @typing_limit 2
+  @typing_window 1_000
+
+  @doc """
+  Forwards a `typing` push to the recipient's connected inbox channels as an ephemeral
+  `signal`: never stored, dropped if nobody is connected. `typing: true` above 2 per second
+  per sender is dropped silently (still `:ok`); `typing: false` is never limited.
+  """
+  @spec typing(String.t(), map) :: :ok | {:error, :unknown_recipient | :bad_request}
+  def typing(sender_id, %{"to" => to, "typing" => typing})
+      when is_binary(to) and is_boolean(typing) do
+    to = String.downcase(to)
+
+    cond do
+      not uuid?(to) or to == sender_id or not Accounts.user_exists?(to) ->
+        {:error, :unknown_recipient}
+
+      typing and RateLimiter.hit(:typing, sender_id, @typing_limit, @typing_window) != :ok ->
+        :ok
+
+      true ->
+        signal(to, %{
+          kind: "typing",
+          data: %{
+            "from" => sender_id,
+            "conversation_id" => conversation_id(sender_id, to),
+            "typing" => typing
+          }
+        })
+    end
+  end
+
+  def typing(_sender_id, _params), do: {:error, :bad_request}
+
+  @doc "Sends an ephemeral signal to a user's live inbox channels (not stored)."
+  def signal(user_id, signal) do
+    Phoenix.PubSub.broadcast(RisiMe.PubSub, topic(user_id), {:signal, signal})
+  end
+
   ## Ack
 
   @doc """

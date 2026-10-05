@@ -2,10 +2,16 @@ defmodule RisiMeWeb.InboxChannel do
   @moduledoc """
   `inbox:<own user id>` (PROTOCOL.md §2). The join reply and `sync` replies page through stored
   events; new events are pushed live as `"event"`.
+  Ephemeral presence and typing state is pushed as `"signal"` (v1.2 §2.3, §2.5, §2.6); it is
+  never stored or replayed.
   """
   use RisiMeWeb, :channel
 
-  alias RisiMe.Messaging
+  require Logger
+
+  alias RisiMe.{Accounts, Messaging, Presence}
+
+  @max_watch 200
 
   @impl true
   def join("inbox:" <> user_id, payload, socket) do
@@ -15,8 +21,13 @@ defmodule RisiMeWeb.InboxChannel do
       payload = if is_map(payload), do: payload, else: %{}
 
       case page(user_id, payload) do
-        {:ok, reply} -> {:ok, reply, socket}
-        {:error, reason} -> {:error, %{reason: to_string(reason)}}
+        {:ok, reply} ->
+          :ok = Presence.track(user_id)
+          touch_last_seen(user_id)
+          {:ok, reply, assign(socket, :watching, MapSet.new())}
+
+        {:error, reason} ->
+          {:error, %{reason: to_string(reason)}}
       end
     else
       {:error, %{reason: "unauthorized"}}
@@ -45,6 +56,30 @@ defmodule RisiMeWeb.InboxChannel do
     end
   end
 
+  def handle_in("presence:watch", %{"user_ids" => ids}, socket)
+      when is_list(ids) and length(ids) <= @max_watch do
+    if Enum.all?(ids, &is_binary/1) do
+      ids = ids |> Enum.map(&String.downcase/1) |> Enum.uniq()
+      new = MapSet.new(ids)
+      old = socket.assigns.watching
+
+      # Subscribe before reading state so no change falls in between.
+      for id <- MapSet.difference(old, new), do: Presence.unsubscribe(id)
+      for id <- MapSet.difference(new, old), do: Presence.subscribe(id)
+
+      {:reply, {:ok, %{presences: Presence.presences(ids)}}, assign(socket, :watching, new)}
+    else
+      {:reply, {:error, %{reason: "bad_request"}}, socket}
+    end
+  end
+
+  def handle_in("typing", payload, socket) when is_map(payload) do
+    case Messaging.typing(socket.assigns.user_id, payload) do
+      :ok -> {:reply, {:ok, %{}}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
+
   def handle_in(_event, _payload, socket) do
     {:reply, {:error, %{reason: "bad_request"}}, socket}
   end
@@ -53,6 +88,34 @@ defmodule RisiMeWeb.InboxChannel do
   def handle_info({:inbox_event, event}, socket) do
     push(socket, "event", event)
     {:noreply, socket}
+  end
+
+  def handle_info({:signal, signal}, socket) do
+    push(socket, "signal", signal)
+    {:noreply, socket}
+  end
+
+  def handle_info({:presence_signal, %{"user_id" => id} = presence}, socket) do
+    # A change can still arrive just after its user was dropped from the watch list.
+    if MapSet.member?(socket.assigns.watching, id),
+      do: push(socket, "signal", %{kind: "presence", data: presence})
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def terminate(_reason, socket) do
+    if socket.joined, do: touch_last_seen(socket.assigns.user_id)
+    :ok
+  end
+
+  # last_seen is best effort: a failed write must never break a join or a leave.
+  defp touch_last_seen(user_id) do
+    Accounts.touch_last_seen(user_id, DateTime.utc_now())
+  rescue
+    e -> Logger.debug("last_seen write failed: #{Exception.message(e)}")
+  catch
+    :exit, _ -> :ok
   end
 
   defp page(user_id, payload) do

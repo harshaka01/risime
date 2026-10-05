@@ -27,6 +27,9 @@ config :risime, :cassandra,
 
 config :risime, :otp_dev_log, false
 
+# Short presence grace period so the offline path is testable (5 s in dev/prod).
+config :risime, :presence_grace_ms, 150
+
 # Jobs are only inserted (and asserted with Oban.Testing); no queues or plugins run.
 config :risime, Oban, testing: :manual
 
