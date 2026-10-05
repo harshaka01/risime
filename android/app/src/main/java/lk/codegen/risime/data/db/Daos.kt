@@ -71,6 +71,22 @@ interface SyncDao {
     suspend fun markSeen(e: SeenEventEntity)
 }
 
+/** Wipes chat data on logout. The behaviour log is kept (it is the device owner's, never uploaded). */
+@Dao
+interface WipeDao {
+    @Query("DELETE FROM messages")
+    suspend fun messages()
+
+    @Query("DELETE FROM contacts")
+    suspend fun contacts()
+
+    @Query("DELETE FROM sync_state")
+    suspend fun syncState()
+
+    @Query("DELETE FROM seen_events")
+    suspend fun seenEvents()
+}
+
 @Dao
 interface ContactDao {
     @Query("SELECT * FROM contacts ORDER BY registered DESC, display_name COLLATE NOCASE ASC")

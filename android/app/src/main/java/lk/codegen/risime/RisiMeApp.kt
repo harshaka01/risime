@@ -2,4 +2,12 @@ package lk.codegen.risime
 
 import android.app.Application
 
-class RisiMeApp : Application()
+class RisiMeApp : Application() {
+    lateinit var container: AppContainer
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        container = AppContainer(this)
+    }
+}

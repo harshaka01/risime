@@ -36,6 +36,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    testOptions {
+        // Exposes merged assets (libphonenumber metadata) to JVM unit tests via test_config.properties.
+        unitTests.isIncludeAndroidResources = true
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true

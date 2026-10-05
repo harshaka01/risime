@@ -21,6 +21,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sync(): SyncDao
     abstract fun contacts(): ContactDao
     abstract fun behaviour(): BehaviourDao
+    abstract fun wipe(): WipeDao
 
     companion object {
         fun create(context: Context): AppDatabase =
