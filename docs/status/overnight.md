@@ -54,8 +54,7 @@
 ## Needs you
 1. **The two-phone smoke test below.** It's the first time the app runs on a device. If anything
    crashes, send me `adb logcat -s RisiMe AndroidRuntime`.
-2. **Approve or reject `contract/proposals/2026-10-05-bad-request-reason.md`.** It's an additive
-   contract change: both sides already use `bad_request` for malformed payloads.
+2. ~~Approve the `bad_request` proposal~~: done. Merged as PROTOCOL v1.1 on 2026-10-06. The "not in PROTOCOL.md yet" notes in both role status files are now out of date.
 3. After a good smoke test, tell me to **tag `v0.1.0`**. I'll write `docs/releases/v0.1.0.md` and
    copy the APK to `~/risime-releases/v0.1.0/`.
 4. FYI: AGP put an unused x86 build-tools 36.0.0 and platform-tools into `~/Android/Sdk` on

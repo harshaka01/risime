@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.0 (Release 0.1)
+# RisiMe Wire Protocol — v1.1 (Release 0.1)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -46,6 +46,7 @@ Connect to `{SERVER_WS}/socket/websocket?token=<token>&vsn=<2.0.0|1.0.0>`.
 
 ### 2.1 Topic `inbox:<own user id>`
 Joining another user's inbox returns error `{"reason": "unauthorized"}`.
+A join whose `since` is not a TimeUUID returns error `{"reason": "bad_request"}`.
 - Join payload: `{"since": "<event_id>" | null, "limit": 500}`
 - Join reply (ok): `{"events": [Event], "has_more": false, "server_time": "..."}`
 - If `has_more` is true, push `sync` `{"since": "<last event_id>"}`. Each reply has the same
@@ -54,17 +55,23 @@ Joining another user's inbox returns error `{"reason": "unauthorized"}`.
 ### 2.2 Client → server pushes
 **`msg:send`** `{"client_msg_id": "uuid-v4", "to": "<user uuid>", "body": "text", "client_ts": "..."}`
 - reply ok: `{"message_id": "timeuuid", "conversation_id": "dm:<a>_<b>", "server_ts": "..."}`
-- reply error: `{"reason": "unknown_recipient" | "empty_body" | "too_long" | "rate_limited"}`
+- reply error: `{"reason": "unknown_recipient" | "empty_body" | "too_long" | "rate_limited" | "bad_request"}`
 - Idempotent: the same `client_msg_id` from the same sender within 24 h returns the original
   reply and creates no duplicate.
 
 **`msg:ack`** `{"message_ids": ["timeuuid", ...], "status": "delivered" | "read"}`
 - reply ok: `{}`
+- reply error: `{"reason": "bad_request"}`
 - Send `delivered` once a message is stored in the client DB, and `read` once it is shown on
   screen to the recipient.
 - Status only ever moves forward. The server forwards each status change to the original sender.
 
-**`sync`**: see 2.1.
+**`sync`**: see 2.1. reply error: `{"reason": "bad_request"}`
+
+**Malformed payloads (v1.1).** A push or join that is malformed (for example a `client_msg_id` that
+is not a UUID, a missing field, an unknown `msg:ack` status, a `since` that is not a TimeUUID, or
+an unknown event name) gets the error reply `{"reason": "bad_request"}`. Clients treat
+`bad_request` and any reason they don't recognise as a permanent failure, and don't retry.
 
 ### 2.3 Server → client push (on the inbox topic)
 There is one generic push, **`event`**, whose payload is an `Event`. Using a single event name
@@ -99,3 +106,8 @@ lexicographically.
 
 ## 5. Examples
 `contract/v1/examples/*.json`. Both sides' tests parse every file.
+
+## Changelog
+- **v1.1** (2026-10-06): added the error reason `bad_request` for malformed pushes and joins (§2.1,
+  §2.2). An additive change; v1.0 clients stay compatible.
+- **v1.0**: the Release 0.1 baseline.

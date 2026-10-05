@@ -1,6 +1,6 @@
 # Proposal: add `bad_request` as an error reason for channel pushes
 
-**Status:** proposed (root, 2026-10-05). Needs Harsha's OK before it is merged into `contract/v1/PROTOCOL.md`.
+**Status:** accepted by Harsha on 2026-10-06 and merged into `contract/v1/PROTOCOL.md` as v1.1.
 
 ## Problem
 PROTOCOL.md §2.2 lists these `msg:send` error reasons: `unknown_recipient | empty_body | too_long | rate_limited`.
