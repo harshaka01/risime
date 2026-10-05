@@ -32,7 +32,12 @@ prod environment, Tailscale install (sudo).
      deleted afterwards.
    - Fix integration breakage as root, and say so in the commit message.
 5. **Release:** write `docs/releases/v<next>.md`, then run `scripts/nightly-release`. It bumps
-   the version, runs the gates, signs, publishes and restarts the server.
+   the version, runs the gates, signs and publishes. Only then does it switch the test server to
+   the new tag via `scripts/run-dev-server v<next>`.
+   - **Test server rule** (decision 006): the server Harsha tests against (`risime-server`,
+     :4000) runs from `~/risime-run/<tag>`, never from the shared checkout.
+   - Sessions never restart it. For live testing of unreleased code, they start a temporary
+     instance from `main` on another loopback port (for example :4100) and stop it afterwards.
 6. **Morning summary:** `docs/status/overnight.md` (what was built, tests, decisions, needs
    Harsha, laptop steps). Update the queue statuses above.
 7. If anything fails and can't be fixed safely: don't release, leave `main` green, and explain in
