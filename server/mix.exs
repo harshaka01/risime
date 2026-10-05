@@ -1,10 +1,13 @@
 defmodule RisiMe.MixProject do
   use Mix.Project
 
+  # One version for the whole repo (docs/decisions/003-nightly-release-cycle.md).
+  @version "../VERSION" |> Path.expand(__DIR__) |> File.read!() |> String.trim()
+
   def project do
     [
       app: :risime,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -65,6 +68,7 @@ defmodule RisiMe.MixProject do
   defp aliases do
     [
       setup: ["deps.get", "ecto.setup"],
+      compile: [&sync_app_version/1, "compile"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: [
@@ -75,5 +79,18 @@ defmodule RisiMe.MixProject do
       ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
+  end
+
+  # Mix only regenerates risime.app when mix.exs or config changes, not when ../VERSION does.
+  # Drop a .app built with another version so `compile` writes a fresh one.
+  defp sync_app_version(_args) do
+    app_file = Path.join(Mix.Project.compile_path(), "risime.app")
+
+    with {:ok, [{:application, :risime, props}]} <- :file.consult(app_file),
+         vsn when vsn != @version <- props |> Keyword.get(:vsn) |> to_string() do
+      File.rm!(app_file)
+    end
+
+    :ok
   end
 end

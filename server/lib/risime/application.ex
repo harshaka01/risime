@@ -5,8 +5,11 @@ defmodule RisiMe.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
+    Logger.info("RisiMe server #{version()} starting")
     RisiMe.TimeUUID.init()
 
     children = [
@@ -27,6 +30,9 @@ defmodule RisiMe.Application do
     opts = [strategy: :one_for_one, name: RisiMe.Supervisor]
     Supervisor.start_link(children, opts)
   end
+
+  @doc false
+  def version, do: :risime |> Application.spec(:vsn) |> to_string()
 
   # Tell Phoenix to update the endpoint configuration
   # whenever the application is updated.
