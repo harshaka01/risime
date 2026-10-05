@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Laptop: copy the newest release from spark2 (~/risime-releases/v<version>/) into ~/risime-releases/
+# here.  --install also installs it on every connected adb device/emulator.
+#   scripts/fetch-latest-apk [--install] [v0.2.0-nightly.3]
+set -euo pipefail
+HOST="${RISIME_SPARK2:-spark2}"
+INSTALL=0; WANT=""
+for a in "$@"; do case "$a" in --install) INSTALL=1;; v*) WANT="$a";; *) echo "usage: $0 [--install] [vX.Y.Z...]"; exit 2;; esac; done
+
+ver="${WANT:-$(ssh "$HOST" 'cat ~/risime-releases/LATEST 2>/dev/null || ls -1td ~/risime-releases/v*/ | head -1 | xargs basename')}"
+[ -n "$ver" ] || { echo "no releases on $HOST"; exit 1; }
+mkdir -p ~/risime-releases
+if command -v rsync >/dev/null; then rsync -a "$HOST:risime-releases/$ver" ~/risime-releases/
+else scp -rq "$HOST:risime-releases/$ver" ~/risime-releases/; fi
+dir=~/risime-releases/"$ver"
+(cd "$dir" && sha256sum -c --quiet SHA256SUMS) && echo "fetched $dir (checksum ok)"
+apk="$(ls "$dir"/*.apk | head -1)"; echo "  $apk"
+[ -f "$dir/RELEASE-NOTES.md" ] && sed -n '1,25p' "$dir/RELEASE-NOTES.md"
+
+if [ "$INSTALL" = 1 ]; then
+  mapfile -t DEVS < <(adb devices | awk 'NR>1 && $2=="device"{print $1}')
+  [ ${#DEVS[@]} -gt 0 ] || { echo "No adb devices."; exit 1; }
+  for d in "${DEVS[@]}"; do
+    echo "==> $d"
+    if ! out="$(adb -s "$d" install -r "$apk" 2>&1)"; then
+      echo "$out"
+      if grep -q INSTALL_FAILED_UPDATE_INCOMPATIBLE <<<"$out"; then
+        echo "  A build signed with a different key is installed (e.g. the v0.1.0 debug build)."
+        echo "  One-time fix (wipes the app's local data): adb -s $d uninstall lk.codegen.risime"
+      fi
+    else echo "  installed"; fi
+  done
+fi

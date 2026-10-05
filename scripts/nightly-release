@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# spark2, root role: bump VERSION to the next nightly, run both gates, commit + tag + push, build the
+# release-signed APK and publish it to ~/risime-releases/v<version>/. See docs/NIGHTLY.md.
+#   scripts/nightly-release            # next nightly (X.Y+1.0-nightly.1 after a release, else nightly.N+1)
+#   scripts/nightly-release 0.2.0      # an explicit version (e.g. a final release)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+M="$HOME/.local/bin/mise exec --"
+KEYS="$HOME/risime-keys/keystore.properties"
+REL="$HOME/risime-releases"
+
+[ -f "$KEYS" ] || { echo "missing $KEYS (dev release keystore)"; exit 1; }
+[ "$(git rev-parse --abbrev-ref HEAD)" = main ] || { echo "not on main"; exit 1; }
+git diff --quiet && git diff --cached --quiet || { echo "working tree not clean"; exit 1; }
+git pull -q --rebase origin main
+
+cur="$(cat VERSION)"
+if [ $# -ge 1 ]; then next="$1"
+elif [[ "$cur" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-nightly\.([0-9]+)$ ]]; then
+  next="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-nightly.$((BASH_REMATCH[4] + 1))"
+elif [[ "$cur" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+  next="${BASH_REMATCH[1]}.$((BASH_REMATCH[2] + 1)).0-nightly.1"
+else echo "can't parse VERSION '$cur'"; exit 1; fi
+[[ "$next" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-nightly\.[0-9]+)?$ ]] || { echo "bad version $next"; exit 1; }
+git rev-parse -q --verify "refs/tags/v$next" >/dev/null && { echo "tag v$next exists"; exit 1; }
+echo "==> $cur -> $next"
+echo "$next" > VERSION
+trap 'git checkout -q -- VERSION 2>/dev/null || true' ERR
+
+echo "==> server gate"
+(cd server && $M mix format --check-formatted && $M mix compile --warnings-as-errors && $M mix test)
+echo "==> android gate + release build"
+(cd android && $M ./gradlew --no-configuration-cache assembleDebug testDebugUnitTest assembleRelease)
+
+APK=android/app/build/outputs/apk/release/app-release.apk
+BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
+"$BT/apksigner" verify --print-certs "$APK" | grep -q "CN=RisiMe Dev Release" \
+  || { echo "release APK is not signed with the dev release key"; exit 1; }
+
+last="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+notes="docs/releases/v$next.md"
+if [ ! -f "$notes" ]; then
+  { echo "# RisiMe v$next"; echo; echo "Nightly build from \`main\`. Protocol: \`contract/v1/PROTOCOL.md\` $(grep -m1 -o 'v1\.[0-9]*' contract/v1/PROTOCOL.md)."
+    echo; echo "## Changes since ${last:-the start}"; git log --no-merges --format='- %s' ${last:+$last..}HEAD; } > "$notes"
+fi
+git add VERSION "$notes"
+git commit -q -m "chore(root): release v$next
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git tag -a "v$next" -m "RisiMe v$next"
+git push -q origin main "v$next"
+git push -q spark2-backup main "v$next" 2>/dev/null || echo "warn: spark2-backup push failed"
+trap - ERR
+
+out="$REL/v$next"; mkdir -p "$out"
+cp "$APK" "$out/risime-$next.apk"
+cp "$notes" "$out/RELEASE-NOTES.md"
+"$BT/apksigner" verify --print-certs "$out/risime-$next.apk" | grep -E "SHA-256 digest" > "$out/SIGNER.txt" || true
+(cd "$out" && sha256sum "risime-$next.apk" > SHA256SUMS)
+echo "v$next" > "$REL/LATEST"
+echo "==> published $out"
+
+echo "==> migrate + restart dev server from main"
+(cd server && $M mix ecto.migrate && $M mix risime.cql.migrate)
+tmux kill-session -t risime-server 2>/dev/null || true
+tmux new -d -s risime-server 'cd ~/development/risime/server && ~/.local/bin/mise exec -- mix phx.server'
+for _ in $(seq 1 90); do [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/api/v1/me)" = 401 ] && break; sleep 1; done
+echo "server: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/api/v1/me) (401 = up)"
+echo "DONE v$next"
