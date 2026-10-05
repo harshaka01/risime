@@ -8,7 +8,7 @@ defmodule RisiMe.Messaging do
   partial failure idempotent. Clients must not rely on that.
   """
 
-  alias RisiMe.{Accounts, RateLimiter}
+  alias RisiMe.{Accounts, RateLimiter, TimeUUID}
   alias RisiMe.Messaging.Store
 
   @max_body 4096
@@ -79,7 +79,7 @@ defmodule RisiMe.Messaging do
     with :ok <- check_recipient(sender_id, req.to),
          :ok <- RateLimiter.hit(:msg_send, sender_id, @send_limit, @send_window) do
       sent = %{
-        message_id: Uniq.UUID.uuid1(),
+        message_id: TimeUUID.generate(),
         conversation_id: conversation_id(sender_id, req.to),
         server_ts: now()
       }
@@ -177,7 +177,7 @@ defmodule RisiMe.Messaging do
 
   defp publish_status(message, status, by) do
     publish(message.sender_id, %{
-      event_id: Uniq.UUID.uuid1(),
+      event_id: TimeUUID.generate(),
       kind: "status",
       data: %{
         "message_id" => message.message_id,

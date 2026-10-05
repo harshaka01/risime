@@ -3,7 +3,7 @@ defmodule RisiMe.Messaging.Store.CassandraTest do
 
   alias RisiMe.Messaging.Store.Cassandra, as: Store
 
-  defp uuid1, do: Uniq.UUID.uuid1()
+  defp uuid1, do: RisiMe.TimeUUID.generate()
   defp uuid4, do: Uniq.UUID.uuid4()
 
   test "claim_send is first-writer-wins" do

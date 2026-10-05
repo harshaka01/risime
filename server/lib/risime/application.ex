@@ -7,6 +7,8 @@ defmodule RisiMe.Application do
 
   @impl true
   def start(_type, _args) do
+    RisiMe.TimeUUID.init()
+
     children = [
       RisiMeWeb.Telemetry,
       RisiMe.Repo,

@@ -85,7 +85,7 @@ defmodule RisiMe.MessagingTest do
   test "only the recipient can ack", %{a: a, b: b} do
     {:ok, %{message_id: id}} = Messaging.send(a, msg(b))
     assert :ok = Messaging.ack(a, [id], "read")
-    assert :ok = Messaging.ack(b, [Uniq.UUID.uuid1(), "junk"], "read")
+    assert :ok = Messaging.ack(b, [RisiMe.TimeUUID.generate(), "junk"], "read")
     assert {:ok, [], false} = Messaging.fetch_events(a, nil)
     assert {:error, :bad_request} = Messaging.ack(b, [id], "seen")
     assert {:error, :bad_request} = Messaging.ack(b, id, "read")

@@ -5,6 +5,8 @@ defmodule RisiMeWeb.UserSocket do
   """
   use Phoenix.Socket
 
+  channel "inbox:*", RisiMeWeb.InboxChannel
+
   @impl true
   def connect(%{"token" => token}, socket, _connect_info) when is_binary(token) do
     case RisiMe.Accounts.fetch_by_token(token) do
