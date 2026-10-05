@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# Inspect, verify and restore backups made by scripts/backup (docs/PROD.md, "Restore").
+#
+#   scripts/restore list   [--env dev|prod] [--dest DIR|user@host:/path]
+#   scripts/restore fetch  user@host:/path/risime-prod-<stamp> LOCAL_DIR   # copy a remote backup here
+#   scripts/restore verify BACKUP_DIR                 # checksums, pg_restore --list, tar listing
+#   scripts/restore postgres  BACKUP_DIR --env prod [--target-db NAME]       --confirm NAME
+#   scripts/restore cassandra BACKUP_DIR --env prod [--target-keyspace NAME] --confirm NAME
+#
+# Safety:
+#   * verify runs before every restore, and nothing is restored without --confirm <target name>.
+#   * The default target is the env's live DB/keyspace (risime_<env>). Use --target-db /
+#     --target-keyspace to restore into a NEW scratch DB/keyspace for a check; the script refuses
+#     to restore into a scratch target that already exists.
+#   * Restoring over a live target: stop the server first
+#       docker compose --env-file .env.prod -f infra/docker-compose.prod.yml stop server
+#     postgres: pg_restore --clean --if-exists in a single transaction.
+#     cassandra: TRUNCATE every table of the keyspace (auto_snapshot keeps a "truncated-*" copy),
+#     then nodetool import of the backed-up SSTables.
+set -euo pipefail
+
+die() { echo "restore: $*" >&2; exit 1; }
+log() { echo "restore: $*" >&2; }
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
+
+CMD="${1:-}"; [ -n "$CMD" ] || { usage; exit 1; }; shift
+ENV_NAME=dev DEST="" TARGET="" CONFIRM="" POS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --env) ENV_NAME="${2:?}"; shift 2 ;;
+    --dest) DEST="${2:?}"; shift 2 ;;
+    --target-db|--target-keyspace) TARGET="${2:?}"; shift 2 ;;
+    --confirm) CONFIRM="${2:?}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    -*) die "unknown option: $1" ;;
+    *) POS+=("$1"); shift ;;
+  esac
+done
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+case "$ENV_NAME" in
+  dev)  PG_CTR=risime-dev-postgres-1;  CASS_CTR=risime-dev-cassandra-1;  LIVE=risime_dev;  ENV_FILE="$REPO/.env" ;;
+  prod) PG_CTR=risime-prod-postgres-1; CASS_CTR=risime-prod-cassandra-1; LIVE=risime_prod; ENV_FILE="$REPO/.env.prod" ;;
+  *) die "--env must be dev or prod" ;;
+esac
+PG_USER=risime
+env_value() { [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 | sed "s/^[\"']//; s/[\"']\$//"; true; }
+
+running() { [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = true ] || die "container $1 is not running"; }
+manifest() { sed -n "s/^$2=//p" "$1/MANIFEST" | head -1; }
+
+verify() {
+  local dir="$1" n
+  [ -f "$dir/MANIFEST" ] && [ -f "$dir/SHA256SUMS" ] || die "$dir is not a backup (no MANIFEST/SHA256SUMS)"
+  (cd "$dir" && sha256sum --quiet -c SHA256SUMS) || die "checksum mismatch in $dir"
+  log "checksums OK ($(wc -l < "$dir/SHA256SUMS") files)"
+  if [ -f "$dir/postgres.dump" ]; then
+    # pg_restore from the postgres image when one is running, else the host's, if any.
+    if docker inspect -f '{{.State.Running}}' "$PG_CTR" 2>/dev/null | grep -q true; then
+      docker exec -i "$PG_CTR" pg_restore --list < "$dir/postgres.dump" > /dev/null || die "pg_restore --list failed"
+    elif command -v pg_restore >/dev/null; then
+      pg_restore --list "$dir/postgres.dump" > /dev/null || die "pg_restore --list failed"
+    else
+      log "postgres: no pg_restore available; checksum only"
+    fi
+    log "postgres.dump OK ($(grep -c 'TABLE DATA' "$dir/postgres.list") tables)"
+  fi
+  if [ -f "$dir/cassandra-data.tar.gz" ]; then
+    n="$(tar -tzf "$dir/cassandra-data.tar.gz" | grep -c '/manifest.json$')" || die "cassandra archive unreadable"
+    [ "$n" -gt 0 ] || die "cassandra archive has no tables"
+    log "cassandra-data.tar.gz OK ($n tables, keyspace $(manifest "$dir" cassandra | sed -n 's/.*keyspace=\([^ ]*\).*/\1/p'))"
+  fi
+  log "VERIFIED $dir ($(manifest "$dir" env), $(manifest "$dir" created_utc))"
+}
+
+need_confirm() {
+  [ "$CONFIRM" = "$1" ] || die "refusing: pass --confirm $1 to restore into $1 ($2)"
+}
+
+restore_postgres() {
+  local dir="$1" target="${TARGET:-$LIVE}" exists
+  [[ "$target" =~ ^[a-z][a-z0-9_]*$ ]] || die "bad database name: $target"
+  [ -f "$dir/postgres.dump" ] || die "no postgres.dump in $dir"
+  running "$PG_CTR"
+  exists="$(docker exec "$PG_CTR" psql -U "$PG_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$target'")"
+  if [ "$target" = "$LIVE" ]; then
+    need_confirm "$target" "the LIVE $ENV_NAME database; stop the server first"
+    log "postgres: restoring over live $target (--clean --if-exists, single transaction)"
+  else
+    [ -z "$exists" ] || die "scratch database $target already exists; drop it or pick another name"
+    need_confirm "$target" "a new scratch database"
+    docker exec "$PG_CTR" createdb -U "$PG_USER" "$target"
+    log "postgres: created scratch database $target"
+  fi
+  docker exec -i "$PG_CTR" pg_restore -U "$PG_USER" -d "$target" --no-owner --role="$PG_USER" \
+    --clean --if-exists --single-transaction --exit-on-error < "$dir/postgres.dump"
+  log "postgres: restored into $target"
+  docker exec "$PG_CTR" psql -U "$PG_USER" -d "$target" -tAc \
+    "SELECT relname || '=' || n_live_tup FROM pg_stat_user_tables ORDER BY relname" | tr '\n' ' ' >&2; echo >&2
+}
+
+restore_cassandra() {
+  local dir="$1" target="${TARGET:-$LIVE}" src tag R t tdir table
+  [[ "$target" =~ ^[a-z][a-z0-9_]*$ ]] || die "bad keyspace name: $target"
+  [ -f "$dir/cassandra-data.tar.gz" ] || die "no cassandra-data.tar.gz in $dir"
+  running "$CASS_CTR"
+  src="$(manifest "$dir" cassandra | sed -n 's/.*keyspace=\([^ ]*\).*/\1/p')"
+  tag="$(manifest "$dir" cassandra | sed -n 's/.*snapshot_tag=\([^ ]*\).*/\1/p')"
+  [ -n "$src" ] && [ -n "$tag" ] || die "MANIFEST has no cassandra keyspace/snapshot_tag"
+  local have; have="$(docker exec "$CASS_CTR" cqlsh -e "DESCRIBE KEYSPACES")"
+  if [ "$target" = "$LIVE" ]; then
+    need_confirm "$target" "the LIVE $ENV_NAME keyspace; stop the server first"
+    grep -qw "$target" <<<"$have" || die "keyspace $target does not exist; run the migrations first"
+    log "cassandra: truncating every table of live $target (auto_snapshot keeps a copy)"
+    for t in $(docker exec "$CASS_CTR" cqlsh -e "SELECT table_name FROM system_schema.tables WHERE keyspace_name='$target'" \
+               | sed -n 's/^ *\([a-z0-9_]*\) *$/\1/p' | grep -v '^table_name$'); do
+      docker exec "$CASS_CTR" cqlsh -e "TRUNCATE $target.$t"
+    done
+  else
+    grep -qw "$target" <<<"$have" && die "scratch keyspace $target already exists; drop it or pick another name"
+    need_confirm "$target" "a new scratch keyspace"
+    log "cassandra: creating scratch keyspace $target from the backed-up schema"
+    sed "s/\b$src\b/$target/g" "$dir/cassandra-schema.cql" \
+      | docker exec -i "$CASS_CTR" sh -c 'cat > /tmp/risime-restore-schema.cql && cqlsh -f /tmp/risime-restore-schema.cql; rc=$?; rm -f /tmp/risime-restore-schema.cql; exit $rc'
+  fi
+  R="/var/lib/cassandra/risime-restore-$$"
+  docker exec -u cassandra "$CASS_CTR" mkdir -p "$R"
+  # shellcheck disable=SC2064  # expand $R now
+  trap "docker exec -u cassandra '$CASS_CTR' rm -rf '$R' >/dev/null 2>&1 || true" EXIT
+  docker exec -i -u cassandra "$CASS_CTR" tar -xzf - -C "$R" < "$dir/cassandra-data.tar.gz"
+  for tdir in $(docker exec "$CASS_CTR" sh -c "cd $R/$src && ls -d */snapshots/$tag | cut -d/ -f1"); do
+    table="${tdir%-*}"
+    docker exec -u cassandra "$CASS_CTR" rm -f "$R/$src/$tdir/snapshots/$tag/manifest.json" "$R/$src/$tdir/snapshots/$tag/schema.cql"
+    log "cassandra: nodetool import $target.$table"
+    docker exec "$CASS_CTR" nodetool import -- "$target" "$table" "$R/$src/$tdir/snapshots/$tag" >/dev/null
+  done
+  log "cassandra: restored into $target"
+}
+
+case "$CMD" in
+  list)
+    DEST="${DEST:-${BACKUP_DEST:-$(env_value BACKUP_DEST)}}"
+    [ -n "$DEST" ] || die "no destination: pass --dest or set BACKUP_DEST"
+    if [[ "$DEST" =~ ^([^/:]+):(.+)$ ]]; then
+      # shellcheck disable=SC2029
+      ssh -o BatchMode=yes "${BASH_REMATCH[1]}" "ls -1 '${BASH_REMATCH[2]}'" | grep -E "^risime-$ENV_NAME-" || true
+    else
+      find "$DEST" -mindepth 1 -maxdepth 1 -type d -name "risime-$ENV_NAME-*" -printf '%f\n' | sort
+    fi ;;
+  fetch)
+    [ ${#POS[@]} -eq 2 ] || die "usage: scripts/restore fetch user@host:/path/<backup> LOCAL_DIR"
+    mkdir -p "${POS[1]}"
+    rsync -a "${POS[0]%/}" "${POS[1]}/"
+    verify "${POS[1]}/$(basename "${POS[0]%/}")" ;;
+  verify)
+    [ ${#POS[@]} -eq 1 ] || die "usage: scripts/restore verify BACKUP_DIR"
+    verify "${POS[0]}" ;;
+  postgres|cassandra)
+    [ ${#POS[@]} -eq 1 ] || die "usage: scripts/restore $CMD BACKUP_DIR --env E [--target-...] --confirm NAME"
+    verify "${POS[0]}"
+    [ "$(manifest "${POS[0]}" env)" = "$ENV_NAME" ] || log "note: backup is from env $(manifest "${POS[0]}" env), restoring into $ENV_NAME"
+    "restore_$CMD" "${POS[0]}" ;;
+  *) usage; exit 1 ;;
+esac
