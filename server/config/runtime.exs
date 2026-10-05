@@ -88,6 +88,12 @@ if config_env() != :test do
 end
 
 if config_env() == :prod do
+  # Cassandra for prod (docs/PROD.md). Without this, a release would use the dev defaults.
+  config :risime, :cassandra,
+    nodes: "CASSANDRA_NODES" |> System.get_env("127.0.0.1:9042") |> String.split(",", trim: true),
+    keyspace: System.get_env("CASSANDRA_KEYSPACE", "risime_prod"),
+    pool_size: String.to_integer(System.get_env("CASSANDRA_POOL_SIZE", "16"))
+
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """
