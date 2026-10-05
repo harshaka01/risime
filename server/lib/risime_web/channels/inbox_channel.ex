@@ -22,14 +22,17 @@ defmodule RisiMeWeb.InboxChannel do
 
       case page(user_id, payload) do
         {:ok, reply} ->
+          :telemetry.execute([:risime, :inbox, :join], %{count: 1}, %{result: :ok})
           :ok = Presence.track(user_id)
           touch_last_seen(user_id)
           {:ok, reply, assign(socket, :watching, MapSet.new())}
 
         {:error, reason} ->
+          :telemetry.execute([:risime, :inbox, :join], %{count: 1}, %{result: reason})
           {:error, %{reason: to_string(reason)}}
       end
     else
+      :telemetry.execute([:risime, :inbox, :join], %{count: 1}, %{result: :unauthorized})
       {:error, %{reason: "unauthorized"}}
     end
   end

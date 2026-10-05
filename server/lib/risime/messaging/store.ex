@@ -36,5 +36,8 @@ defmodule RisiMe.Messaging.Store do
   @doc "Events after `since` (exclusive, or from the start when nil), oldest first."
   @callback list_events(user_id :: uuid, since :: uuid | nil, limit :: pos_integer) :: [event]
 
+  @doc "Cheap liveness check of the backing store (used by `GET /health`)."
+  @callback health() :: :ok | {:error, term}
+
   def impl, do: Application.get_env(:risime, :message_store, RisiMe.Messaging.Store.Cassandra)
 end

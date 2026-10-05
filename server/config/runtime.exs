@@ -33,6 +33,11 @@ if config_env() == :dev do
   config :risime, :otp_dev_log, System.get_env("OTP_DEV_LOG") == "true"
 end
 
+# Log format (docs/decisions/008-observability.md): JSON lines when LOG_FORMAT=json, and by
+# default in prod (LOG_FORMAT=text turns it off). Dev and test keep the readable console.
+log_format = System.get_env("LOG_FORMAT", if(config_env() == :prod, do: "json", else: "text"))
+config :risime, :log_format, if(log_format == "json", do: :json, else: :text)
+
 # SMTP is wired up but only used when RISIME_MAILER=smtp (Release 0.2). Dev uses the local
 # mailbox at /dev/mailbox plus the `[DEV OTP]` log line.
 config :risime, :mail_from, System.get_env("SMTP_FROM", "RisiMe <no-reply@example.com>")

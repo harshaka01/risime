@@ -43,6 +43,18 @@ defmodule RisiMe.Messaging do
   """
   @spec send(String.t(), map) :: {:ok, map} | {:error, send_error}
   def send(sender_id, params) do
+    # Emits [:risime, :message, :send, :start | :stop | :exception]; :stop has the duration
+    # and `result` (:ok or the error reason). Never the body.
+    :telemetry.span([:risime, :message, :send], %{}, fn ->
+      result = do_send(sender_id, params)
+      {result, %{result: result_tag(result)}}
+    end)
+  end
+
+  defp result_tag({:ok, _}), do: :ok
+  defp result_tag({:error, reason}), do: reason
+
+  defp do_send(sender_id, params) do
     with {:ok, req} <- parse_send(params),
          :ok <- validate_body(req.body) do
       case store().get_sent(sender_id, req.client_msg_id) do
@@ -193,12 +205,18 @@ defmodule RisiMe.Messaging do
              length(message_ids) <= @max_page do
     ids = for id <- message_ids, is_binary(id), do: String.downcase(id)
 
-    for id <- Enum.uniq(ids), timeuuid?(id) do
+    ids = for id <- Enum.uniq(ids), timeuuid?(id), do: id
+
+    for id <- ids do
       case store().get_message(id) do
         {:ok, %{recipient_id: ^user_id} = message} -> advance(message, status, user_id)
         _ -> :ok
       end
     end
+
+    :telemetry.execute([:risime, :message, :ack], %{count: length(ids)}, %{
+      status: if(status == "read", do: :read, else: :delivered)
+    })
 
     :ok
   end
@@ -254,6 +272,9 @@ defmodule RisiMe.Messaging do
     :ok = store().append_event(user_id, event)
     Phoenix.PubSub.broadcast(RisiMe.PubSub, topic(user_id), {:inbox_event, event})
   end
+
+  @doc "Health of the message store (`GET /health`)."
+  def store_health, do: store().health()
 
   ## Helpers
 

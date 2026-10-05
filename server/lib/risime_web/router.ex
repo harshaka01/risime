@@ -9,6 +9,13 @@ defmodule RisiMeWeb.Router do
     plug RisiMeWeb.Plugs.RequireToken
   end
 
+  # Ops, not wire protocol: no auth, outside /api/v1.
+  scope "/", RisiMeWeb do
+    pipe_through :api
+
+    get "/health", HealthController, :show
+  end
+
   scope "/api/v1", RisiMeWeb do
     pipe_through :api
 

@@ -145,6 +145,18 @@ defmodule RisiMe.Messaging.Store.Cassandra do
     :ok
   end
 
+  @impl true
+  def health do
+    case Xandra.Cluster.execute(@cluster, "SELECT release_version FROM system.local", [],
+           timeout: 2_000
+         ) do
+      {:ok, _} -> :ok
+      {:error, error} -> {:error, error}
+    end
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
   defp to_event(row) do
     %{event_id: row["event_id"], kind: row["kind"], data: Jason.decode!(row["payload"])}
   end

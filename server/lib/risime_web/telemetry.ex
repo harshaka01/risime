@@ -75,6 +75,23 @@ defmodule RisiMeWeb.Telemetry do
           "The time the connection spent waiting before being checked out for the query"
       ),
 
+      # RisiMe (docs/decisions/008-observability.md)
+      counter("risime.message.send.stop.duration", tags: [:result]),
+      summary("risime.message.send.stop.duration",
+        unit: {:native, :millisecond},
+        tags: [:result]
+      ),
+      distribution("risime.message.send.stop.duration",
+        unit: {:native, :millisecond},
+        reporter_options: [buckets: [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000]]
+      ),
+      sum("risime.message.ack.count", tags: [:status]),
+      counter("risime.socket.connect.count", tags: [:result]),
+      counter("risime.socket.disconnect.duration", tags: [:reason]),
+      summary("risime.socket.disconnect.duration", unit: {:native, :second}),
+      last_value("risime.socket.open.count"),
+      counter("risime.inbox.join.count", tags: [:result]),
+
       # VM Metrics
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),
@@ -87,7 +104,7 @@ defmodule RisiMeWeb.Telemetry do
     [
       # A module, function and arguments to be invoked periodically.
       # This function must call :telemetry.execute/3 and a metric must be added above.
-      # {RisiMeWeb, :count_users, []}
+      {RisiMe.SocketTracker, :emit_open_count, []}
     ]
   end
 end

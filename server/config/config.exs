@@ -59,6 +59,10 @@ config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
 
+# Never log message bodies, OTP codes or tokens: Phoenix replaces params whose key contains
+# any of these with "[FILTERED]" (request logs, channel join/handle_in logs, socket connect).
+config :phoenix, :filter_parameters, ["password", "code", "token", "body", "secret"]
+
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 

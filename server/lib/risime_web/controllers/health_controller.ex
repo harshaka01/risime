@@ -1,0 +1,53 @@
+defmodule RisiMeWeb.HealthController do
+  @moduledoc """
+  `GET /health` (ops, not part of the wire protocol; no auth). Checks Postgres and Cassandra.
+  200 `{"status": "ok", ...}` when both answer, otherwise 503 `{"status": "error", ...}`.
+  Only says "ok"/"error" per dependency, never error details.
+  """
+  use RisiMeWeb, :controller
+
+  require Logger
+
+  def show(conn, _params) do
+    checks = %{
+      "postgres" => check(:postgres, &postgres/0),
+      "cassandra" => check(:cassandra, &RisiMe.Messaging.store_health/0)
+    }
+
+    healthy = Enum.all?(checks, fn {_, v} -> v == "ok" end)
+
+    conn
+    |> put_status(if healthy, do: 200, else: 503)
+    |> json(%{
+      status: if(healthy, do: "ok", else: "error"),
+      version: RisiMe.Application.version(),
+      checks: checks
+    })
+  end
+
+  defp postgres do
+    case Ecto.Adapters.SQL.query(RisiMe.Repo, "SELECT 1", [], timeout: 2_000) do
+      {:ok, _} -> :ok
+      {:error, e} -> {:error, e}
+    end
+  end
+
+  defp check(name, fun) do
+    case fun.() do
+      :ok ->
+        "ok"
+
+      {:error, reason} ->
+        Logger.warning("health: #{name} failed: #{inspect(reason, limit: 5)}")
+        "error"
+    end
+  rescue
+    e ->
+      Logger.warning("health: #{name} raised #{inspect(e.__struct__)}")
+      "error"
+  catch
+    :exit, _ ->
+      Logger.warning("health: #{name} exited")
+      "error"
+  end
+end

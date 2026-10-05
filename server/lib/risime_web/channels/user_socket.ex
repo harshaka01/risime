@@ -12,14 +12,21 @@ defmodule RisiMeWeb.UserSocket do
     case RisiMe.Accounts.fetch_by_token(token) do
       {user, token_record} ->
         RisiMe.Accounts.touch_token(token_record)
+        :telemetry.execute([:risime, :socket, :connect], %{count: 1}, %{result: :ok})
+        RisiMe.SocketTracker.track(user.id)
         {:ok, assign(socket, user_id: user.id, token_id: token_record.id)}
 
       nil ->
-        :error
+        refused()
     end
   end
 
-  def connect(_params, _socket, _connect_info), do: :error
+  def connect(_params, _socket, _connect_info), do: refused()
+
+  defp refused do
+    :telemetry.execute([:risime, :socket, :connect], %{count: 1}, %{result: :refused})
+    :error
+  end
 
   @doc "Socket id per token, so logging out disconnects that token's sockets."
   def id_for(%{id: token_id}), do: "user_token:#{token_id}"

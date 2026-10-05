@@ -9,6 +9,7 @@ defmodule RisiMe.Application do
 
   @impl true
   def start(_type, _args) do
+    if Application.get_env(:risime, :log_format) == :json, do: RisiMe.JSONLogFormatter.install()
     Logger.info("RisiMe server #{version()} starting")
     RisiMe.TimeUUID.init()
 
@@ -21,6 +22,7 @@ defmodule RisiMe.Application do
       {DNSCluster, query: Application.get_env(:risime, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: RisiMe.PubSub},
       RisiMe.Presence,
+      RisiMe.SocketTracker,
       # Start a worker by calling: RisiMe.Worker.start_link(arg)
       # {RisiMe.Worker, arg},
       # Start to serve requests, typically the last entry
