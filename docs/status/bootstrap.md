@@ -30,7 +30,7 @@ for Harsha (see the end of this file).
 | adb | 1.0.41, platform-tools 37.0.1 |
 | emulator | 37.2.12, AVD `risime_a` (pixel_8, android-36 google_apis x86_64) |
 | Git | `origin = spark2:/srv/git/risime.git`; push and pull OK; laptop and spark2 are at the same commit |
-| SSH tunnel | `spark2-tunnel` alias exists; SSH forwarding works (tested on spare port 14000) |
+| SSH tunnel | `spark2-tunnel` (`LocalForward 4400` → spark2 `127.0.0.1:4000`) comes up cleanly |
 
 ## Fixes made during bootstrap
 - **`scripts/dev-tools.sh`, spark2:** cmdline-tools 23.0 `sdkmanager` wraps a native x86-64
@@ -44,12 +44,9 @@ for Harsha (see the end of this file).
   `user.email=harsha@codegen.co.uk` in both checkouts. Global config is untouched.
 
 ## Open items for Harsha
-1. **Port 4000 clash on the laptop.** *Resolved: the tunnel now uses `LocalForward 4400`; docs
-   and the Android debug default were updated to match.* Container `aoa-litellm-1` (another project) publishes
-   `0.0.0.0:4000`, so `ssh -N spark2-tunnel` fails with `Address already in use`. Either stop
-   that container while working on RisiMe (`docker stop aoa-litellm-1`), or move the tunnel's
-   local port (for example `LocalForward 4400 127.0.0.1:4000`, then `adb reverse tcp:4000 tcp:4400`
-   and emulator URL `http://10.0.2.2:4400`).
-2. **Claude Code login on spark2:** `ssh spark2`, run `claude` once interactively, and complete
-   the browser login.
+1. ~~Port 4000 clash on the laptop~~ **Resolved.** `aoa-litellm-1` keeps laptop port 4000, so
+   the tunnel uses `LocalForward 4400 127.0.0.1:4000` (tested OK). The emulator uses
+   `http://10.0.2.2:4400` (the debug default). The USB phone uses `adb reverse tcp:4000 tcp:4400`
+   and `http://127.0.0.1:4000`.
+2. ~~Claude Code login on spark2~~ **Done** (credentials present).
 3. **Optional:** verify ufw with `ssh -t spark2 'sudo ufw status verbose'`.
