@@ -1,15 +1,24 @@
-# Server status — Release 0.1
+# Server status — Release 0.2 (in progress)
 
-**READY** — S1–S7 done. Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test` (57 tests).
+**READY** — 0.1 (S1–S7) done. Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test` (63 tests).
+
+## 0.2 progress
+- [x] Version from the repo `VERSION` file: `Application.spec(:risime, :vsn)` matches it, and the
+  server logs `RisiMe server <version> starting` on boot. A compile alias in `mix.exs` rebuilds
+  `risime.app` when only VERSION changed.
+- [x] Oban 2.24 (Postgres): queue `maintenance`. The daily cron job `RisiMe.Workers.PruneAccounts`
+  (03:17 UTC) deletes OTP challenges older than 24 h and tokens revoked more than 30 days ago.
+  See `docs/decisions/004-oban-background-jobs.md`.
+- [ ] Presence / last seen + typing (contract v1.2), phase B.
 
 ## How to run (spark2)
 ```bash
 # databases (once)
 docker compose --env-file .env -f infra/docker-compose.dev.yml up -d
-# first time / after pulling new migrations
+# first time / after every pull (new deps, new migrations)
 cd server
 ~/.local/bin/mise exec -- mix deps.get
-~/.local/bin/mise exec -- mix ecto.migrate
+~/.local/bin/mise exec -- mix ecto.migrate   # required after pulling 0.2: creates the Oban tables
 ~/.local/bin/mise exec -- mix risime.cql.migrate                         # risime_dev
 ~/.local/bin/mise exec -- mix risime.cql.migrate --keyspace risime_test  # the test alias also runs this
 # server (127.0.0.1:4000 only)
@@ -49,15 +58,15 @@ Codes are never logged unless `OTP_DEV_LOG=true`.
 - A `message` event's `event_id` equals its `message_id`. This makes re-delivery idempotent.
   Clients must not rely on it.
 - A `msg:send` / `sync` / `msg:ack` payload that is malformed (for example a `client_msg_id` that
-  isn't a UUID, or an unknown ack status) gets error reason `bad_request`. That reason isn't in
-  PROTOCOL.md §2.2; it is a candidate to add to the contract.
+  isn't a UUID, or an unknown ack status) gets error reason `bad_request`, as specified in
+  PROTOCOL.md v1.1.
 - Sending to yourself is `unknown_recipient`.
 - After logout the server sends a `disconnect` to that token's sockets.
 - Rate limits: OTP requests 3 per phone per 15 min (counted whether or not the pair is
   allowlisted); sends 20 per 10 s per user. Idempotent resends of an already-sent `client_msg_id`
   don't count. `docs/decisions/001-rate-limiter.md` explains the limiter.
 
-## Known limits (0.1)
+## Known limits
 - **TimeUUIDs:** `uniq` 0.6's `uuid1` timestamps wrap every 0.1 s, which breaks timeuuid
   ordering, so ids come from `RisiMe.TimeUUID` (strictly increasing per node). `uniq` is only
   used for v4 in tests.
@@ -72,4 +81,6 @@ Codes are never logged unless `OTP_DEV_LOG=true`.
 - Tests truncate the Cassandra tables once per run (`test_helper.exs`), not between tests,
   because TRUNCATE is slow. Every test uses fresh user ids, so partitions never overlap.
 - SMTP is wired up (`RISIME_MAILER=smtp` plus `SMTP_*`), but dev uses the local mailbox.
+- Oban job args are stored in plain text in Postgres: never put secrets, OTPs or message bodies
+  in them.
 - The `inbox_events` partition grows per user. Monthly bucketing is in the backlog (0.4).
