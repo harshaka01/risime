@@ -6,14 +6,25 @@ The rules are in `docs/decisions/003-nightly-release-cycle.md`. The cycle fires 
 ## Queue (backlog items that don't need Harsha; top = next)
 | # | Item | Roles | Status |
 |---|---|---|---|
-| 1 | Release plumbing: VERSION wiring, release signing, `.debug` id suffix, release network config | server, android | night 1 |
-| 2 | Settings screen: server URL (every build), profile (display name via `PATCH /me`), app version, log out | android | night 1 |
-| 3 | Oban: Postgres-backed jobs and cron. First jobs prune expired OTP challenges and stale revoked tokens | server | night 1 |
-| 4 | Presence / last seen + typing indicator (contract v1.2, `contract/proposals/2026-10-06-presence-typing.md`) | root, server, android | night 1 (phase B) |
-| 5 | Design system pass: tokens (colour, type, spacing, shape), components, light/dark, accessibility | android | night 2 |
+| 1 | Release plumbing (VERSION, signing, `.debug` suffix, release network config) | server, android | done in v0.2.0-nightly.1 |
+| 2 | Settings screen (server URL, profile, version, log out) | android | done in v0.2.0-nightly.1 |
+| 3 | Oban + prune jobs | server | done in v0.2.0-nightly.1 |
+| 4 | Presence / last seen + typing (contract v1.2) | root, server, android | done in v0.2.0-nightly.1 |
+| 5 | Chat polish (unread, day separators, copy, retry/delete, search) | android | done in v0.2.0-nightly.1 |
+| 6 | Design system pass + a11y | android | done in v0.2.0-nightly.1 |
+| 7 | Observability (JSON logs, telemetry, /health) | server | done in v0.2.0-nightly.1 |
+| 8 | Load test, 200 users plus a 2000-user stress run, with fixes | server | done in v0.2.0-nightly.1 |
+| 9 | Prod prep (compose, Dockerfile, systemd, backup/restore, PROD.md) | root/ops | done (not deployed) |
+| 10 | E2EE spike: `crypto/risime-mls` on OpenMLS, decision 012 | root/crypto | done; next steps wait on Harsha's answers in 012 |
 
-Needs Harsha, so never picked automatically: FCM push (Firebase project), real SMTP (credentials),
-prod environment, Tailscale install (sudo).
+The queue of items that don't need Harsha is **empty**. The next 0.2/0.3 items need him.
+
+Needs Harsha, so never picked automatically:
+- FCM push (a Firebase project);
+- real SMTP (credentials);
+- prod deploy (`.env.prod`, linger, the backup host);
+- Tailscale install (sudo);
+- E2EE next steps (the decision 012 questions; the NDK download).
 
 ## Each night
 1. **Preflight.**
