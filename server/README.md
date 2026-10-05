@@ -1,18 +1,11 @@
-# RisiMe
+# RisiMe server (Elixir/Phoenix)
 
-To start your Phoenix server:
+The wire protocol is defined in `../contract/v1/PROTOCOL.md`. How to run it, the allowlist,
+the dev OTP log and known limits are in `../docs/status/server.md`.
 
-* Run `mix setup` to install and setup dependencies
-* Start Phoenix endpoint with `mix phx.server` or inside IEx with `iex -S mix phx.server`
+- `RisiMe.Accounts`: allowlist, users, OTP and tokens (Postgres).
+- `RisiMe.Messaging`: send, ack and the inbox. `RisiMe.Messaging.Store.Cassandra` is the only
+  Cassandra access for messages.
+- `RisiMeWeb`: REST under `/api/v1`, plus `UserSocket` and `InboxChannel` at `/socket`.
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
-
-Ready to run in production? Please [check our deployment guides](https://phoenix.hexdocs.pm/deployment.html).
-
-## Learn more
-
-* Official website: https://www.phoenixframework.org/
-* Guides: https://phoenix.hexdocs.pm/overview.html
-* Docs: https://phoenix.hexdocs.pm
-* Forum: https://elixirforum.com/c/phoenix-forum
-* Source: https://github.com/phoenixframework/phoenix
+Test gate: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
