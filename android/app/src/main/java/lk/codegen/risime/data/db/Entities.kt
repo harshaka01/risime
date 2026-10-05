@@ -67,3 +67,9 @@ data class LastMessage(
     val outgoing: Boolean,
     val status: String,
 )
+
+/** Chats-list badge: unread incoming messages in one conversation. */
+data class UnreadCount(
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    val unread: Int,
+)

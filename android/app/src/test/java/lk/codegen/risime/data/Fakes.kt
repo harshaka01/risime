@@ -12,6 +12,7 @@ import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.data.db.SeenEventEntity
 import lk.codegen.risime.data.db.SyncDao
 import lk.codegen.risime.data.db.SyncStateEntity
+import lk.codegen.risime.data.db.UnreadCount
 import lk.codegen.risime.net.MsgSend
 import lk.codegen.risime.net.MsgSendReply
 import lk.codegen.risime.realtime.ConnectionState
@@ -71,6 +72,22 @@ class FakeMessageDao : MessageDao {
         rows.values.filter { it.conversationId == conversationId }.maxByOrNull { it.localTs }
 
     override fun lastMessages(): Flow<List<LastMessage>> = flowOf(emptyList())
+
+    override fun unreadCounts(): Flow<List<UnreadCount>> = flowOf(
+        rows.values.filter { !it.outgoing && it.status != "READ" }.groupingBy { it.conversationId }.eachCount()
+            .map { (k, v) -> UnreadCount(k, v) },
+    )
+
+    override suspend fun retryFailed(clientMsgId: String): Int {
+        val r = rows[clientMsgId]?.takeIf { it.status == "FAILED" } ?: return 0
+        rows[clientMsgId] = r.copy(status = "PENDING", failReason = null)
+        return 1
+    }
+
+    override suspend fun deleteFailed(clientMsgId: String): Int =
+        if (rows[clientMsgId]?.status == "FAILED") { rows.remove(clientMsgId); 1 } else 0
+
+    override fun search(pattern: String, limit: Int): Flow<List<MessageEntity>> = flowOf(emptyList())
 }
 
 class FakeSyncDao : SyncDao {

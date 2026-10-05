@@ -1,5 +1,8 @@
 package lk.codegen.risime.ui.chat
 
+import android.content.ClipData
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +26,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,11 +41,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -48,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 import lk.codegen.risime.data.MessageStatus
 import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.ui.chats.connectionLabel
@@ -76,8 +86,9 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     LaunchedEffect(messages, resumed) {
         if (resumed && messages.any { !it.outgoing && it.status != MessageStatus.READ.name }) vm.markRead()
     }
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    val items = remember(messages) { withDaySeparators(messages, System.currentTimeMillis()) }
+    LaunchedEffect(items.size) {
+        if (items.isNotEmpty()) listState.animateScrollToItem(items.lastIndex)
     }
 
     val name = peer?.displayName ?: "Chat"
@@ -116,7 +127,12 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(messages, key = { it.clientMsgId }) { Bubble(it) }
+                items(items, key = { it.key }) { item ->
+                    when (item) {
+                        is ChatItem.Day -> DaySeparator(item.label)
+                        is ChatItem.Msg -> Bubble(item.m, onRetry = vm::retry, onDelete = vm::delete)
+                    }
+                }
             }
             InputBar(
                 draft = draft,
@@ -138,9 +154,40 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
 }
 
 @Composable
-private fun Bubble(m: MessageEntity) {
+private fun DaySeparator(label: String) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+        Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(12.dp)) {
+            Text(label, Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun Bubble(m: MessageEntity, onRetry: (String) -> Unit, onDelete: (String) -> Unit) {
     val mine = m.outgoing
+    val failed = m.status == MessageStatus.FAILED.name
+    var menu by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     Box(Modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(text = { Text("Copy") }, onClick = {
+                menu = false
+                scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) }
+            })
+            if (failed) {
+                DropdownMenuItem(text = { Text("Retry") }, onClick = {
+                    menu = false
+                    onRetry(m.clientMsgId)
+                })
+                DropdownMenuItem(text = { Text("Delete") }, onClick = {
+                    menu = false
+                    onDelete(m.clientMsgId)
+                })
+            }
+        }
         Surface(
             color = if (mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
             contentColor = if (mine) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -148,10 +195,19 @@ private fun Bubble(m: MessageEntity) {
                 topStart = 18.dp, topEnd = 18.dp,
                 bottomStart = if (mine) 18.dp else 4.dp, bottomEnd = if (mine) 4.dp else 18.dp,
             ),
-            modifier = Modifier.widthIn(max = 300.dp),
+            modifier = Modifier.widthIn(max = 300.dp).combinedClickable(
+                onClickLabel = if (failed) "Show retry options" else null,
+                onLongClickLabel = "Message options",
+                onClick = { if (failed) menu = true },
+                onLongClick = { menu = true },
+            ),
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 Text(m.body, style = MaterialTheme.typography.bodyLarge)
+                if (failed) {
+                    Text("Not sent — tap to retry or delete", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error)
+                }
                 Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         timeOf(m.localTs),

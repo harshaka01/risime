@@ -21,6 +21,9 @@ enum class MessageStatus(val rank: Int) {
 
     val wire: String get() = name.lowercase()
 
+    /** User-initiated retry: only FAILED goes back to PENDING (the one backward step, local only). */
+    fun retry(): MessageStatus? = if (this == FAILED) PENDING else null
+
     companion object {
         fun fromWire(s: String?): MessageStatus? = entries.firstOrNull { it.wire == s }
     }

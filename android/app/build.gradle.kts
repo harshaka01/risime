@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.room)
 }
 
 // ---- Version (decision 003) ----
@@ -93,6 +94,11 @@ android {
         compose = true
         buildConfig = true
     }
+}
+
+// Exported Room schemas are committed: every version bump needs a Migration (no destructive fallback).
+room {
+    schemaDirectory("$projectDir/schemas")
 }
 
 dependencies {

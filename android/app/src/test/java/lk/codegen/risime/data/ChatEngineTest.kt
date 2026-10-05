@@ -113,6 +113,33 @@ class ChatEngineTest {
     }
 
     @Test
+    fun retryFailedResendsWithSameIdAndDeleteOnlyFailed() = runTest {
+        val e = engine()
+        realtime.sendReplies = { PushResult.Rejected("bad_request") }
+        val a = e.sendText(peer, "x")!!
+        advanceUntilIdle()
+        assertEquals("FAILED", messages.rows[a]!!.status)
+
+        realtime.sendReplies = { m -> PushResult.Ok(MsgSendReply("mid-${m.clientMsgId}", conv, "t")) }
+        assertTrue(e.retry(a))
+        advanceUntilIdle()
+        assertEquals("SENT", messages.rows[a]!!.status)
+        assertNull(messages.rows[a]!!.failReason)
+        assertEquals(listOf(a, a), realtime.sent.map { it.clientMsgId })
+        // Only FAILED can be retried or deleted.
+        assertEquals(false, e.retry(a))
+        assertEquals(false, e.deleteFailed(a))
+        assertTrue(messages.rows.containsKey(a))
+
+        realtime.sendReplies = { PushResult.Rejected("unknown_recipient") }
+        val b = e.sendText(peer, "y")!!
+        advanceUntilIdle()
+        assertTrue(e.deleteFailed(b))
+        assertNull(messages.rows[b])
+        assertEquals(false, e.retry("nope"))
+    }
+
+    @Test
     fun emptyOrTooLongBodyIsNotQueued() = runTest {
         val e = engine()
         assertNull(e.sendText(peer, "   "))

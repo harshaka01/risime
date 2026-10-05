@@ -54,6 +54,27 @@ interface MessageDao {
             "GROUP BY conversation_id",
     )
     fun lastMessages(): Flow<List<LastMessage>>
+
+    /** Incoming messages not yet read, per conversation (only conversations with unread > 0). */
+    @Query(
+        "SELECT conversation_id, COUNT(*) AS unread FROM messages " +
+            "WHERE outgoing = 0 AND status != 'READ' GROUP BY conversation_id",
+    )
+    fun unreadCounts(): Flow<List<UnreadCount>>
+
+    /** FAILED → PENDING (local only; the outbox resends with the same client_msg_id). */
+    @Query("UPDATE messages SET status = 'PENDING', fail_reason = NULL WHERE client_msg_id = :clientMsgId AND status = 'FAILED'")
+    suspend fun retryFailed(clientMsgId: String): Int
+
+    /** Only messages the server never accepted can be deleted (they exist nowhere else). */
+    @Query("DELETE FROM messages WHERE client_msg_id = :clientMsgId AND status = 'FAILED'")
+    suspend fun deleteFailed(clientMsgId: String): Int
+
+    /** Local search (decision 009: LIKE, no FTS). [pattern] comes from likePattern (backslash escapes). */
+    @Query(
+        "SELECT * FROM messages WHERE body LIKE :pattern ESCAPE '\\' ORDER BY local_ts DESC LIMIT :limit",
+    )
+    fun search(pattern: String, limit: Int): Flow<List<MessageEntity>>
 }
 
 @Dao

@@ -50,6 +50,14 @@ class ChatViewModel(private val c: AppContainer, meId: String, val peerId: Strin
         viewModelScope.launch { c.engine.sendText(peerId, text) }
     }
 
+    fun retry(clientMsgId: String) {
+        c.scope.launch { c.engine.retry(clientMsgId) }
+    }
+
+    fun delete(clientMsgId: String) {
+        c.scope.launch { c.engine.deleteFailed(clientMsgId) }
+    }
+
     override fun onCleared() {
         typingSender.stop()
         c.openChatPeer.compareAndSet(peerId, null)

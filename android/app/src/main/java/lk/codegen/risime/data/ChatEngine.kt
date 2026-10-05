@@ -176,6 +176,18 @@ class ChatEngine(
         }
     }
 
+    /** FAILED → PENDING, then resend with the same client_msg_id. Returns false if it wasn't FAILED. */
+    suspend fun retry(clientMsgId: String): Boolean {
+        val row = messages.byClientMsgId(clientMsgId) ?: return false
+        if (MessageStatus.valueOf(row.status).retry() == null) return false
+        if (messages.retryFailed(clientMsgId) == 0) return false
+        scope.launch { flushOutbox() }
+        return true
+    }
+
+    /** Deletes a FAILED message (never accepted by the server). */
+    suspend fun deleteFailed(clientMsgId: String): Boolean = messages.deleteFailed(clientMsgId) > 0
+
     // ---- Acks ----
 
     /** The chat screen is showing this conversation: mark incoming as read and ack. */

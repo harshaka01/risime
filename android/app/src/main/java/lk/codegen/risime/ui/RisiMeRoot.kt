@@ -22,6 +22,8 @@ import lk.codegen.risime.ui.chats.ChatsViewModel
 import lk.codegen.risime.ui.common.DevEncryptionBanner
 import lk.codegen.risime.ui.login.LoginFlow
 import lk.codegen.risime.ui.login.LoginViewModel
+import lk.codegen.risime.ui.search.SearchScreen
+import lk.codegen.risime.ui.search.SearchViewModel
 import lk.codegen.risime.ui.settings.AppSettingsBackend
 import lk.codegen.risime.ui.settings.SettingsScreen
 import lk.codegen.risime.ui.settings.SettingsViewModel
@@ -63,11 +65,19 @@ private fun MainNav(c: AppContainer, meId: String) {
                 viewModel { ChatsViewModel(c, meId) },
                 onOpen = { nav.navigate("chat/$it") },
                 onSettings = { nav.navigate("settings") { launchSingleTop = true } },
+                onSearch = { nav.navigate("search") { launchSingleTop = true } },
             )
         }
         composable("chat/{peer}") { entry ->
             val peer = entry.arguments?.getString("peer") ?: return@composable
             ChatScreen(viewModel { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() })
+        }
+        composable("search") {
+            SearchScreen(
+                viewModel { SearchViewModel(c) },
+                onOpen = { peer -> nav.navigate("chat/$peer") { popUpTo("chats") } },
+                onBack = { nav.popBackStack() },
+            )
         }
         composable("settings") {
             SettingsScreen(viewModel { SettingsViewModel(AppSettingsBackend(c)) }, onBack = { nav.popBackStack() })

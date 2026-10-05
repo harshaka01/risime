@@ -38,4 +38,12 @@ class MessageStatusTest {
         assertEquals(READ, MessageStatus.fromWire("read"))
         assertEquals(null, MessageStatus.fromWire("bogus"))
     }
+
+    @Test
+    fun onlyFailedCanBeRetried() {
+        org.junit.Assert.assertEquals(MessageStatus.PENDING, MessageStatus.FAILED.retry())
+        for (st in MessageStatus.entries.filter { it != MessageStatus.FAILED }) {
+            org.junit.Assert.assertNull(st.retry())
+        }
+    }
 }

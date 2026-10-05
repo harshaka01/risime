@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,6 +33,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,7 +47,7 @@ import lk.codegen.risime.ui.common.shortStamp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit, onSettings: () -> Unit) {
+fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit, onSettings: () -> Unit, onSearch: () -> Unit) {
     val rows by vm.rows.collectAsStateWithLifecycle()
     val conn by vm.connection.collectAsStateWithLifecycle()
     val err by vm.refreshError.collectAsStateWithLifecycle()
@@ -61,6 +64,7 @@ fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit, onSettings: () -> 
                     }
                 },
                 actions = {
+                    IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search") }
                     IconButton(onClick = vm::refresh) { Icon(Icons.Default.Refresh, "Refresh contacts") }
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -122,10 +126,13 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(row.name, color = main, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f))
+                val unread = row.unread > 0
+                Text(row.name, color = main, fontWeight = if (unread) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 row.last?.let {
-                    Text(shortStamp(it.localTs), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(shortStamp(it.localTs), style = MaterialTheme.typography.labelSmall,
+                        color = if (unread) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = if (unread) FontWeight.Bold else null)
                 }
             }
             val presence = presenceLabel(row.presence, System.currentTimeMillis())
@@ -136,12 +143,30 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
                 presence != null -> presence
                 else -> row.company
             }
-            Text(sub, style = MaterialTheme.typography.bodyMedium,
-                color = if (row.typing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(sub, style = MaterialTheme.typography.bodyMedium,
+                    color = when {
+                        row.typing -> MaterialTheme.colorScheme.primary
+                        row.unread > 0 -> MaterialTheme.colorScheme.onSurface
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    fontWeight = if (row.unread > 0) FontWeight.SemiBold else null,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (row.unread > 0) UnreadBadge(row.unread)
+            }
             if (presence != null && !row.typing && row.last != null) {
                 Text(presence, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             }
         }
     }
+}
+
+@Composable
+private fun UnreadBadge(n: Int) {
+    val label = if (n > 99) "99+" else n.toString()
+    androidx.compose.material3.Badge(
+        containerColor = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        modifier = Modifier.padding(start = 8.dp).semantics { contentDescription = "$n unread" },
+    ) { Text(label) }
 }
