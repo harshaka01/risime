@@ -71,3 +71,36 @@ dependencies {
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
 }
+
+// ---- Contract examples -> unit test resources ----
+// The tests parse the real contract/v1/examples/*.json (never a copy committed under android/).
+abstract class CopyContractExamples : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val source: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val out = outputDir.get().asFile.resolve("contract/v1/examples")
+        out.deleteRecursively()
+        out.mkdirs()
+        val files = source.get().asFile.listFiles { f -> f.name.endsWith(".json") }!!.sortedBy { it.name }
+        files.forEach { it.copyTo(out.resolve(it.name)) }
+        out.resolve("index.txt").writeText(files.joinToString("\n") { it.name })
+    }
+}
+
+val copyContractExamples = tasks.register<CopyContractExamples>("copyContractExamples") {
+    source.set(rootProject.layout.projectDirectory.dir("../contract/v1/examples"))
+    outputDir.set(layout.buildDirectory.dir("generated/contractExamples"))
+}
+
+androidComponents {
+    onVariants { variant ->
+        (variant as? com.android.build.api.variant.HasUnitTest)?.unitTest?.sources?.resources
+            ?.addGeneratedSourceDirectory(copyContractExamples, CopyContractExamples::outputDir)
+    }
+}
