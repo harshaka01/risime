@@ -58,6 +58,8 @@ Google ships the Android build tools for linux-x86_64 only.
    numbers or emails.
 6. **Bind every service to 127.0.0.1.** spark2 has a public IP, and Docker port publishing
    bypasses ufw, so compose ports must be written as `"127.0.0.1:PORT:PORT"`.
+   This includes Erlang's epmd (port 4369), which listens on 0.0.0.0 by default. Run any named
+   node or `bin/risime` release on the host with `ERL_EPMD_ADDRESS=127.0.0.1`.
 7. **spark2 is aarch64.** Use multi-arch images only.
 8. **Decide and record.** Don't add a framework outside the stack below without a short note in
    `docs/decisions/NNN-title.md`. Ask Harsha only when blocked (sudo, credentials, product

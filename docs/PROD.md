@@ -277,3 +277,12 @@ systemctl --user status risime-prod.service risime-backup.timer
 ```
 Stopping prod (`systemctl --user stop risime-prod`) runs `compose stop` and keeps the containers.
 `$C down` removes the containers but keeps the named volumes. **Never** run `down -v`.
+
+
+## Erlang distribution / epmd
+On the host, epmd (port 4369) binds 0.0.0.0 by default, and spark2 has a public IP. Anything that
+starts a named node or runs `bin/risime` outside the container must set
+`ERL_EPMD_ADDRESS=127.0.0.1`, or `RELEASE_DISTRIBUTION=none` for one-off `eval` commands.
+Inside the prod containers this isn't exposed, because no epmd port is published.
+On 2026-10-06 a stray host epmd was found on 0.0.0.0:4369, left over from release testing, and
+was stopped.

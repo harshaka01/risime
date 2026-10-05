@@ -100,7 +100,10 @@ migrations · 010 prod environment · 011 load-test tool · 012 E2EE binding pla
    - Is on-device history encryption in scope for 0.3?
 6. **Back up `~/risime-keys/`** (the dev release key). If it's lost, every phone must uninstall
    the app.
-7. FYI: `sdkmanager` can't run on spark2 (its cmdline-tools call an x86_64 binary). Install SDK
+7. FYI: a stray **epmd on 0.0.0.0:4369** (from tonight's release testing, with no nodes
+   registered) was exposed on the public IP. I stopped it and added a rule to CLAUDE.md (golden
+   rule 6) and `docs/PROD.md`. It's worth checking that ufw blocks 4369.
+8. FYI: `sdkmanager` can't run on spark2 (its cmdline-tools call an x86_64 binary). Install SDK
    packages from the laptop, or by unpacking zips.
 
 ## Install on your phone and Shenika's (laptop)
