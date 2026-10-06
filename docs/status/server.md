@@ -1,9 +1,9 @@
 # Server status — Release 0.2 (in progress)
 
 **READY** — 0.1 (S1–S7), the 0.2 night-1 items, contract **v1.3** (Keycloak sign-in),
-**v1.4** (one-time SMS phone verification) and the **prod-mode pilot release** (decision 024)
-are done. Gate green on `main`:
-`mix format --check-formatted && mix compile --warnings-as-errors && mix test` (194 tests).
+**v1.4** (one-time SMS phone verification), the **prod-mode pilot release** (decision 024) and
+**v1.5** (push wake-ups, decision 028) are done. Gate green on `main`:
+`mix format --check-formatted && mix compile --warnings-as-errors && mix test` (214 tests).
 
 ## 0.2 progress
 - [x] Version from the repo `VERSION` file: `Application.spec(:risime, :vsn)` matches it, and the
@@ -100,6 +100,33 @@ bin/risime start                             # foreground; under tmux or systemd
   - `/dev/mailbox` and unknown routes return a 404 JSON error; a bad body returns a 400 JSON error;
   - tokens show as `[FILTERED]` in the log;
   - SIGTERM shuts it down cleanly.
+
+### Push notifications (v1.5, decision 028)
+- **Off** until Harsha provides the Firebase service-account key. Devices register
+  (`PUT /api/v1/me/devices/{id}`) regardless, so tokens are stored the moment push turns on.
+- **What a push is:** a data-only FCM message `{"type":"inbox","v":"1"}`, sent only when the
+  recipient has no live inbox channel. At most one push now and one trailing push per user per
+  10 s. Never any content, sender, phone or name.
+
+**Enabling push** (needs Harsha's key):
+1. In the Firebase console (project with the Android app `lk.codegen.risime`): Project settings →
+   Service accounts → "Generate new private key". This downloads a JSON file.
+2. Put it on spark2 at `~/risime-keys/fcm-service-account.json`, outside the repo, and run
+   `chmod 600` on it. **Never commit it, and never paste its contents anywhere.**
+3. Set in the server's environment (the pilot unit's env file, or the shell for a temp server):
+   - `FCM_ENABLED=true`
+   - `FCM_SERVICE_ACCOUNT_FILE=/home/harsha/risime-keys/fcm-service-account.json` (this is the
+     default, so it can be left out)
+
+   `project_id` is read from the file.
+4. Restart the server. The boot log must **not** show "FCM_ENABLED=true but
+   FCM_SERVICE_ACCOUNT_FILE is missing".
+5. Test: sign in on a phone (an app built with `google-services.json`, decision 026), close the
+   app, and send it a message from another account. A wake-up should arrive within seconds.
+6. Rollback: `FCM_ENABLED=false` and restart.
+- FCM failures are logged with the HTTP status and FCM's error code only, never a push token,
+  access token or key. `UNREGISTERED` / `INVALID_ARGUMENT` tokens delete their device.
+- Devices unseen for 60 days are pruned daily (Oban).
 
 ### fail2ban auth log
 One line per authentication failure, in `RISIME_AUTH_LOG` (and in the normal log at info):
@@ -238,6 +265,11 @@ Codes are never logged unless `OTP_DEV_LOG=true`.
   don't count. `docs/decisions/001-rate-limiter.md` explains the limiter.
 
 ## Known limits
+- **Push:**
+  - Never tested against real FCM (no key yet). The token exchange and send are tested against
+    `Req.Test` stubs with a generated key, shaped like Google's documented responses.
+  - Coalescing and the online check are per node and in memory: a restart can drop one pending
+    trailing push, and the app catches up on next open.
 - **Prod pilot:**
   - It shares the `risime_dev` databases with the test server (:4000) until the prod
     environment exists (decision 010).
