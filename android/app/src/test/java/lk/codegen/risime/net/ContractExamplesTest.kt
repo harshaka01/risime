@@ -95,50 +95,79 @@ class ContractExamplesTest {
         "error_unknown_target.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
         "error_invalid_emoji.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
         "limits_graphemes.json" to { s -> ProtocolJson.parseToJsonElement(s).jsonObject.also { require("cases" in it) } },
-        // v1.9 (MLS groups): parse-only placeholders added by root with the contract merge;
-        // the android role replaces them with typed decoders when it implements §12.
-        "group_create.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "group_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "groups_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "group_members_add.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "group_role_patch.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "group_reset.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "group_reset_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "group_meta.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "group_receipts_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "blob_upload_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "device_put_groups.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "key_packages_upload_replace.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "key_packages_claim_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_commit_request_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_commits_reply_paged.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "friends_reply_v19.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "msg_send_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "msg_send_group_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "typing_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "signal_typing_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_message_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_mls_commit_group_ref.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_mls_welcome_ref.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_group_created.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_group_added.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_group_removed.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_group_left.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_group_role_changed.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_group_metadata_changed.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_group_add_expired.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_group_reset.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_group_op.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_group_receipt.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_not_member.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_not_admin.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_too_many_members.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_too_many_devices.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_last_admin.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_log_expired.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_generation_conflict.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_not_ready_groups.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.9 (MLS groups, §12): typed decoders into the app's models.
+        "group_create.json" to { s -> ProtocolJson.decodeFromString<GroupCreate>(s) },
+        "group_reply.json" to { s -> ProtocolJson.decodeFromString<GroupReply>(s).also { g -> require(g.group.pending.single().committer != null && g.group.members.any { it.state == GroupMember.STATE_PENDING_ADD }) } },
+        "groups_reply.json" to { s -> ProtocolJson.decodeFromString<GroupsReply>(s).also { require(it.groups.isNotEmpty()) } },
+        "group_members_add.json" to { s -> ProtocolJson.decodeFromString<GroupMembersAdd>(s) },
+        "group_role_patch.json" to { s -> ProtocolJson.decodeFromString<GroupRolePatch>(s) },
+        "group_reset.json" to { s -> ProtocolJson.decodeFromString<GroupReset>(s) },
+        "group_reset_reply.json" to { s -> ProtocolJson.decodeFromString<GroupResetReply>(s) },
+        "group_meta.json" to { s -> requireNotNull(GroupMeta.decode(s.toByteArray())).also { require(it.admins.isNotEmpty()) } },
+        "group_receipts_reply.json" to { s -> ProtocolJson.decodeFromString<GroupReceiptsReply>(s) },
+        "blob_upload_reply.json" to { s -> ProtocolJson.decodeFromString<BlobUploadReply>(s) },
+        "device_put_groups.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(it.mls?.capabilities == listOf(DeviceMls.CAP_GROUPS)) } },
+        "key_packages_upload_replace.json" to { s -> ProtocolJson.decodeFromString<KeyPackagesUpload>(s).also { require(it.replace == true) } },
+        "key_packages_claim_group.json" to { s -> ProtocolJson.decodeFromString<KeyPackagesClaim>(s).also { requireNotNull(it.conversationId) } },
+        "mls_commit_request_group.json" to { s -> ProtocolJson.decodeFromString<GroupCommitRequest>(s).also { requireNotNull(it.welcomeRef) } },
+        "mls_commits_reply_paged.json" to { s -> ProtocolJson.decodeFromString<MlsCommitsReply>(s).also { require(it.hasMore && it.commits[1].commitRef != null) } },
+        "friends_reply_v19.json" to { s -> ProtocolJson.decodeFromString<FriendsReply>(s) },
+        "msg_send_group.json" to { s -> ProtocolJson.decodeFromString<MsgSendGroup>(s) },
+        "msg_send_group_reply.json" to { s -> ProtocolJson.decodeFromString<MsgSendReply>(s) },
+        "typing_group.json" to { s -> ProtocolJson.decodeFromString<TypingGroupPush>(s) },
+        "signal_typing_group.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { require(isGroupConversation(it.typing()!!.conversationId)) } },
+        "event_message_group.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { require(it.messageData()!!.to == null) } },
+        "event_mls_commit_group_ref.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.mlsCommit()!!.commitRef) } },
+        "event_mls_welcome_ref.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.mlsWelcome()!!.welcomeRef) } },
+        "event_group_created.json" to { s -> groupEvent(s, GroupEvent.CREATED).also { requireNotNull(it.members) } },
+        "event_group_added.json" to { s -> groupEvent(s, GroupEvent.ADDED) },
+        "event_group_removed.json" to { s -> groupEvent(s, GroupEvent.REMOVED) },
+        "event_group_left.json" to { s -> groupEvent(s, GroupEvent.LEFT) },
+        "event_group_role_changed.json" to { s -> groupEvent(s, GroupEvent.ROLE_CHANGED).also { requireNotNull(it.role) } },
+        "event_group_metadata_changed.json" to { s -> groupEvent(s, GroupEvent.METADATA_CHANGED) },
+        "event_group_add_expired.json" to { s -> groupEvent(s, GroupEvent.ADD_EXPIRED) },
+        "event_group_reset.json" to { s -> groupEvent(s, GroupEvent.RESET).also { requireNotNull(it.rebuilder); require(it.epoch == null) } },
+        "event_group_op.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.groupOp()!!.op.committer) } },
+        "event_group_receipt.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.groupReceipt()) } },
+        "error_not_member.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s).also { require(it.reason == AuthErrors.NOT_MEMBER) } },
+        "error_not_admin.json" to { s -> apiError(s, AuthErrors.NOT_ADMIN) },
+        "error_too_many_members.json" to { s -> apiError(s, AuthErrors.TOO_MANY_MEMBERS) },
+        "error_too_many_devices.json" to { s -> apiError(s, AuthErrors.TOO_MANY_DEVICES) },
+        "error_last_admin.json" to { s -> apiError(s, AuthErrors.LAST_ADMIN) },
+        "error_log_expired.json" to { s -> apiError(s, AuthErrors.LOG_EXPIRED) },
+        "error_generation_conflict.json" to { s -> apiError(s, AuthErrors.GENERATION_CONFLICT).also { requireNotNull(it.error.generation) } },
+        "error_not_ready_groups.json" to { s -> apiError(s, AuthErrors.NOT_READY).also { require(it.error.missing!!.single().reason == MlsMissing.LEGACY_APP) } },
     )
+
+    private fun groupEvent(s: String, action: String): GroupEvent =
+        ProtocolJson.decodeFromString<Event>(s).groupEvent()!!.also { require(it.action == action) { "action ${it.action} != $action" } }
+
+    private fun apiError(s: String, code: String): ApiErrorEnvelope =
+        ProtocolJson.decodeFromString<ApiErrorEnvelope>(s).also { require(it.error.code == code) }
+
+    /** v1.9 client-sent payloads re-encode to exactly the example JSON. */
+    @Test
+    fun groupClientPayloadsRoundTrip() {
+        fun <T> check(name: String, ser: kotlinx.serialization.KSerializer<T>) {
+            val original = ProtocolJson.parseToJsonElement(read(name))
+            assertEquals(name, original, ProtocolJson.encodeToJsonElement(ser, ProtocolJson.decodeFromJsonElement(ser, original)))
+        }
+        check("group_create.json", GroupCreate.serializer())
+        check("group_members_add.json", GroupMembersAdd.serializer())
+        check("group_role_patch.json", GroupRolePatch.serializer())
+        check("group_reset.json", GroupReset.serializer())
+        check("msg_send_group.json", MsgSendGroup.serializer())
+        check("typing_group.json", TypingGroupPush.serializer())
+        check("mls_commit_request_group.json", GroupCommitRequest.serializer())
+        check("device_put_groups.json", DevicePut.serializer())
+        check("key_packages_upload_replace.json", KeyPackagesUpload.serializer())
+        check("key_packages_claim_group.json", KeyPackagesClaim.serializer())
+        check("group_meta.json", GroupMeta.serializer())
+        // The v1.7 shapes stay exactly as they were (no new fields when unused).
+        check("device_put_mls.json", DevicePut.serializer())
+        check("key_packages_upload.json", KeyPackagesUpload.serializer())
+        check("key_packages_claim.json", KeyPackagesClaim.serializer())
+    }
 
     @Test
     fun everyExampleParses() {
@@ -454,7 +483,7 @@ class ContractExamplesTest {
         val e = ProtocolJson.decodeFromString<Event>(read("event_message.json"))
         val m = e.messageData()!!
         assertEquals(Event.KIND_MESSAGE, e.kind)
-        assertEquals(dmConversationId(m.from, m.to), m.conversationId)
+        assertEquals(dmConversationId(m.from, m.to!!), m.conversationId)
         assertEquals(null, e.statusData())
     }
 

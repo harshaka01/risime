@@ -78,6 +78,8 @@ data class ApiErrorBody(
     val epoch: Long? = null,
     /** §10.2: why a conversation isn't ready (409 not_ready). */
     val missing: List<MlsMissing>? = null,
+    /** §12.8: the current generation on 409 generation_conflict. */
+    val generation: Long? = null,
 )
 
 @Serializable
@@ -145,6 +147,13 @@ data class Event(
     fun mlsMembership(): MlsMembershipEvent? =
         if (kind == KIND_MLS_MEMBERSHIP) ProtocolJson.decodeFromJsonElement<MlsMembershipEvent>(data) else null
 
+    fun groupEvent(): GroupEvent? = if (kind == KIND_GROUP_EVENT) ProtocolJson.decodeFromJsonElement<GroupEvent>(data) else null
+
+    fun groupOp(): GroupOpEvent? = if (kind == KIND_GROUP_OP) ProtocolJson.decodeFromJsonElement<GroupOpEvent>(data) else null
+
+    fun groupReceipt(): GroupReceiptEvent? =
+        if (kind == KIND_GROUP_RECEIPT) ProtocolJson.decodeFromJsonElement<GroupReceiptEvent>(data) else null
+
     companion object {
         const val KIND_MESSAGE = "message"
         const val KIND_STATUS = "status"
@@ -152,6 +161,9 @@ data class Event(
         const val KIND_MLS_COMMIT = "mls_commit"
         const val KIND_MLS_WELCOME = "mls_welcome"
         const val KIND_MLS_MEMBERSHIP = "mls_membership"
+        const val KIND_GROUP_EVENT = "group_event"
+        const val KIND_GROUP_OP = "group_op"
+        const val KIND_GROUP_RECEIPT = "group_receipt"
     }
 }
 
@@ -161,7 +173,8 @@ data class MessageData(
     @SerialName("client_msg_id") val clientMsgId: String,
     @SerialName("conversation_id") val conversationId: String,
     val from: String,
-    val to: String,
+    /** DMs only: group messages (§12.7) have no `to`. */
+    val to: String? = null,
     /** Plaintext conversations. Null for e2ee (§10.3), which carry ciphertext instead. */
     val body: String? = null,
     @SerialName("server_ts") val serverTs: String,
@@ -313,6 +326,17 @@ object AuthErrors {
     const val UNKNOWN_TARGET = "unknown_target"
     const val INVALID_EMOJI = "invalid_emoji"
     const val TOO_LONG = "too_long"
+
+    // §12 groups
+    const val NOT_MEMBER = "not_member"
+    const val NOT_ADMIN = "not_admin"
+    const val LAST_ADMIN = "last_admin"
+    const val TOO_MANY_MEMBERS = "too_many_members"
+    const val TOO_MANY_DEVICES = "too_many_devices"
+    const val INVALID_ROLE = "invalid_role"
+    const val LOG_EXPIRED = "log_expired"
+    const val GENERATION_CONFLICT = "generation_conflict"
+    const val TOO_LARGE = "too_large"
 }
 
 // ---- One-time phone verification (§7, v1.4) ----
@@ -403,6 +427,8 @@ data class Friend(
     val company: String = "",
     @SerialName("vouched_by") val vouchedBy: VouchedBy? = null,
     val since: String? = null,
+    /** §12.1 (v1.9): can be added to a group now; absent = false ("needs to update"). */
+    @SerialName("group_ready") val groupReady: Boolean = false,
 )
 
 /** Incoming: user_id/display_name/company set. Outgoing: only the phone you entered (never reveals registration). */
@@ -461,7 +487,17 @@ data class FriendSignal(
 // ---- End-to-end encryption with MLS (§10, v1.7). Binary fields are standard base64. ----
 
 @Serializable
-data class DeviceMls(@SerialName("signature_key") val signatureKey: String)
+data class DeviceMls(
+    @SerialName("signature_key") val signatureKey: String,
+    /** §12.1: `["groups"]` once this app can really decrypt groups; omitted before (v1.7 shape). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val capabilities: List<String>? = null,
+) {
+    companion object {
+        const val CAP_GROUPS = "groups"
+    }
+}
 
 @Serializable
 data class DevicePutReply(val attestation: String)
@@ -473,13 +509,23 @@ data class AttestationKeys(val keys: List<JsonObject>)
 data class KeyPackagesUpload(
     @SerialName("key_packages") val keyPackages: List<String>,
     @SerialName("last_resort") val lastResort: String? = null,
+    /** §12.1: delete the device's stored normal key packages first (once, when `groups` is first advertised). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val replace: Boolean? = null,
 )
 
 @Serializable
 data class KeyPackageCount(val count: Int)
 
 @Serializable
-data class KeyPackagesClaim(@SerialName("user_ids") val userIds: List<String>)
+data class KeyPackagesClaim(
+    @SerialName("user_ids") val userIds: List<String>,
+    /** §12.5: claim co-members of this group (`not_member` otherwise). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("conversation_id") val conversationId: String? = null,
+)
 
 @Serializable
 data class ClaimedDevice(
@@ -532,10 +578,20 @@ data class MlsCommitRequest(
 data class MlsCommitReply(val epoch: Long)
 
 @Serializable
-data class MlsLoggedCommit(val epoch: Long, val commit: String, @SerialName("from_device") val fromDevice: String)
+data class MlsLoggedCommit(
+    val epoch: Long,
+    val commit: String? = null,
+    @SerialName("from_device") val fromDevice: String,
+    /** §12.8: a commit over 64 KiB, by blob reference. */
+    @SerialName("commit_ref") val commitRef: BlobRef? = null,
+)
 
 @Serializable
-data class MlsCommitsReply(val commits: List<MlsLoggedCommit>)
+data class MlsCommitsReply(
+    val commits: List<MlsLoggedCommit>,
+    /** §12.8: absent = false. */
+    @SerialName("has_more") val hasMore: Boolean = false,
+)
 
 /** §10.3 msg:send for an e2ee conversation (no body). */
 @Serializable
@@ -553,8 +609,10 @@ data class MlsCommitEvent(
     @SerialName("conversation_id") val conversationId: String,
     val generation: Long,
     val epoch: Long,
-    val commit: String,
+    /** Null when [commitRef] is set (§12.7). */
+    val commit: String? = null,
     @SerialName("from_device") val fromDevice: String,
+    @SerialName("commit_ref") val commitRef: BlobRef? = null,
 )
 
 @Serializable
@@ -562,8 +620,10 @@ data class MlsWelcomeEvent(
     @SerialName("conversation_id") val conversationId: String,
     val generation: Long,
     val epoch: Long,
-    val welcome: String,
+    /** Null when [welcomeRef] is set (§12.7). */
+    val welcome: String? = null,
     @SerialName("to_devices") val toDevices: List<String>,
+    @SerialName("welcome_ref") val welcomeRef: BlobRef? = null,
 )
 
 @Serializable
@@ -609,3 +669,201 @@ data class ReactionEvent(
     val op: String,
     @SerialName("server_ts") val serverTs: String,
 )
+
+// ---- Groups with MLS (§12, v1.9) ----
+
+/** §12.6 a blob reference: clients verify size and SHA-256 after download. */
+@Serializable
+data class BlobRef(@SerialName("blob_id") val blobId: String, val size: Long, val sha256: String)
+
+@Serializable
+data class BlobUploadReply(
+    @SerialName("blob_id") val blobId: String,
+    val size: Long,
+    val sha256: String,
+    @SerialName("expires_at") val expiresAt: String? = null,
+) {
+    fun ref() = BlobRef(blobId, size, sha256)
+}
+
+@Serializable
+data class GroupMember(
+    @SerialName("user_id") val userId: String,
+    @SerialName("display_name") val displayName: String,
+    val phone: String? = null,
+    val role: String = ROLE_MEMBER,
+    val kind: String = KIND_USER,
+    val state: String = STATE_ACTIVE,
+    @SerialName("joined_at") val joinedAt: String? = null,
+) {
+    val admin: Boolean get() = role == ROLE_ADMIN
+
+    companion object {
+        const val ROLE_ADMIN = "admin"
+        const val ROLE_MEMBER = "member"
+        const val KIND_USER = "user"
+        const val KIND_AGENT = "agent"
+        const val STATE_ACTIVE = "active"
+        const val STATE_PENDING_ADD = "pending_add"
+        const val STATE_PENDING_REMOVE = "pending_remove"
+    }
+}
+
+@Serializable
+data class PendingOp(
+    @SerialName("op_id") val opId: String,
+    val type: String,
+    val actor: String? = null,
+    @SerialName("user_ids") val userIds: List<String> = emptyList(),
+    val role: String? = null,
+    val added: List<MlsDeviceRef> = emptyList(),
+    val removed: List<MlsDeviceRef> = emptyList(),
+    val committer: MlsDeviceRef? = null,
+    @SerialName("committer_until") val committerUntil: String? = null,
+    @SerialName("expires_at") val expiresAt: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+) {
+    companion object {
+        const val ADD = "add"
+        const val REMOVE = "remove"
+        const val ROLE = "role"
+        const val DEVICES = "devices"
+        const val REBUILD = "rebuild"
+    }
+}
+
+@Serializable
+data class Group(
+    val id: String,
+    val state: String = STATE_ACTIVE,
+    @SerialName("created_by") val createdBy: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+    val generation: Long = 1,
+    val epoch: Long? = null,
+    @SerialName("my_role") val myRole: String = GroupMember.ROLE_MEMBER,
+    val members: List<GroupMember> = emptyList(),
+    val pending: List<PendingOp> = emptyList(),
+) {
+    companion object {
+        const val STATE_CREATING = "creating"
+        const val STATE_ACTIVE = "active"
+    }
+}
+
+@Serializable
+data class GroupReply(val group: Group)
+
+@Serializable
+data class GroupsReply(val groups: List<Group>)
+
+@Serializable
+data class GroupCreate(
+    @SerialName("client_group_id") val clientGroupId: String,
+    @SerialName("member_ids") val memberIds: List<String>,
+)
+
+@Serializable
+data class GroupMembersAdd(@SerialName("user_ids") val userIds: List<String>)
+
+@Serializable
+data class GroupRolePatch(val role: String)
+
+@Serializable
+data class GroupReset(val generation: Long)
+
+@Serializable
+data class GroupResetReply(val generation: Long)
+
+/** §12.2 the encrypted GroupContext extension `risime.group_meta` (0xFA01), UTF-8 JSON. */
+@Serializable
+data class GroupMeta(val v: Int = 1, val name: String, val icon: String? = null, val admins: List<String> = emptyList()) {
+    fun encode(): ByteArray = ProtocolJson.encodeToString(serializer(), this).toByteArray(Charsets.UTF_8)
+
+    companion object {
+        fun decode(bytes: ByteArray): GroupMeta? = runCatching { ProtocolJson.decodeFromString(serializer(), bytes.toString(Charsets.UTF_8)) }.getOrNull()
+    }
+}
+
+/** §12.4 commit request for `grp:` (extends §10.2). */
+@Serializable
+data class GroupCommitRequest(
+    val generation: Long,
+    val epoch: Long,
+    val commit: String? = null,
+    @SerialName("commit_ref") val commitRef: BlobRef? = null,
+    val welcome: String? = null,
+    @SerialName("welcome_ref") val welcomeRef: BlobRef? = null,
+    val added: List<MlsDeviceRef> = emptyList(),
+    val removed: List<MlsDeviceRef> = emptyList(),
+    @SerialName("op_id") val opId: String? = null,
+    @SerialName("meta_changed") val metaChanged: Boolean = false,
+)
+
+/** §12.7 `group_event`. */
+@Serializable
+data class GroupEvent(
+    @SerialName("group_id") val groupId: String,
+    val generation: Long,
+    val epoch: Long? = null,
+    val action: String,
+    val actor: String,
+    val targets: List<String> = emptyList(),
+    val role: String? = null,
+    val members: List<GroupMember>? = null,
+    val rebuilder: MlsDeviceRef? = null,
+    @SerialName("server_ts") val serverTs: String? = null,
+) {
+    companion object {
+        const val CREATED = "created"
+        const val ADDED = "added"
+        const val REMOVED = "removed"
+        const val LEFT = "left"
+        const val ROLE_CHANGED = "role_changed"
+        const val METADATA_CHANGED = "metadata_changed"
+        const val ADD_EXPIRED = "add_expired"
+        const val RESET = "reset"
+    }
+}
+
+/** §12.7 `group_op`: a committer was named; only the device in `op.committer` acts. */
+@Serializable
+data class GroupOpEvent(@SerialName("group_id") val groupId: String, val generation: Long, val op: PendingOp)
+
+/** §12.7 aggregated receipts (to the sender's user only). */
+@Serializable
+data class GroupReceiptEvent(
+    @SerialName("conversation_id") val conversationId: String,
+    @SerialName("message_id") val messageId: String,
+    @SerialName("client_msg_id") val clientMsgId: String? = null,
+    val delivered: Int,
+    val read: Int,
+    val of: Int,
+    @SerialName("all_delivered") val allDelivered: Boolean,
+    @SerialName("all_read") val allRead: Boolean,
+    val at: String? = null,
+)
+
+@Serializable
+data class GroupReceipt(
+    @SerialName("user_id") val userId: String,
+    @SerialName("delivered_at") val deliveredAt: String? = null,
+    @SerialName("read_at") val readAt: String? = null,
+)
+
+@Serializable
+data class GroupReceiptsReply(val of: Int, val receipts: List<GroupReceipt>)
+
+/** §12.9 group msg:send (`conversation_id` instead of `to`; always ciphertext). */
+@Serializable
+data class MsgSendGroup(
+    @SerialName("client_msg_id") val clientMsgId: String,
+    @SerialName("conversation_id") val conversationId: String,
+    val ciphertext: String,
+    val generation: Long,
+    val epoch: Long,
+    @SerialName("client_ts") val clientTs: String,
+)
+
+/** §12.9 typing in a group. */
+@Serializable
+data class TypingGroupPush(@SerialName("conversation_id") val conversationId: String, val typing: Boolean)

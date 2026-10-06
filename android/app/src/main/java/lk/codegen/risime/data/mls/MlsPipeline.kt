@@ -70,8 +70,10 @@ class MlsPipeline(
             if (w.toDevices.none { it.equals(mls.deviceId, true) }) return MlsResult.Ignored
             val current = mls.group(w.conversationId)
             if (current != null && current.generation >= w.generation && current.epoch >= w.epoch) return MlsResult.Ignored
+            // §12.6: a referenced Welcome is fetched and inlined before this call; a missing one is unrecoverable.
+            val welcome = w.welcome ?: return MlsResult.Dropped("welcome blob not fetched")
             return try {
-                mls.joinFromWelcome(w.conversationId, w.generation, b64.decode(w.welcome))
+                mls.joinFromWelcome(w.conversationId, w.generation, b64.decode(welcome))
                 pending.dropOlderGenerations(w.conversationId, w.generation)
                 onJoined()
                 MlsResult.GroupChanged(w.conversationId)
@@ -88,6 +90,7 @@ class MlsPipeline(
                 c.generation > g.generation -> park(e, c.conversationId, c.generation, c.epoch)
                 c.epoch < g.epoch -> MlsResult.Ignored // already applied, or below our Welcome's epoch
                 c.epoch > g.epoch -> park(e, c.conversationId, c.generation, c.epoch) // missing commits first
+                c.commit == null -> MlsResult.Dropped("commit blob not fetched")
                 else -> when (val r = mls.processCommit(c.conversationId, c.generation, b64.decode(c.commit))) {
                     is CommitOutcome.Applied -> MlsResult.GroupChanged(c.conversationId)
                     CommitOutcome.RemovedSelf -> {

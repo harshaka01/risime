@@ -86,6 +86,9 @@ interface RealtimeClient {
     /** §10.3 encrypted msg:send (no body). */
     suspend fun sendEncrypted(msg: lk.codegen.risime.net.MsgSendE2ee): PushResult<MsgSendReply>
 
+    /** §12.9 group msg:send (`conversation_id`, always ciphertext). */
+    suspend fun sendGroup(msg: lk.codegen.risime.net.MsgSendGroup): PushResult<MsgSendReply> = PushResult.Unavailable
+
     suspend fun ack(messageIds: List<String>, status: String): PushResult<Unit>
 
     /**
@@ -97,6 +100,6 @@ interface RealtimeClient {
     /** §6.2 `auth:refresh` on the live connection; Unavailable when not connected (reconnect uses the new token). */
     suspend fun refreshAuth(token: String): PushResult<lk.codegen.risime.net.AuthRefreshReply>
 
-    /** §2.6 typing. Never queued: returns [PushResult.Unavailable] when not connected. */
+    /** §2.6 typing ([to] = a peer) or §12.9 group typing ([to] = a `grp:` id). Never queued: Unavailable when not connected. */
     suspend fun typing(to: String, typing: Boolean): PushResult<Unit>
 }

@@ -559,7 +559,7 @@ class AppContainer(context: Context) {
                     "catchup:$conversationId:${g.generation}:${c.epoch}", lk.codegen.risime.net.Event.KIND_MLS_COMMIT,
                     lk.codegen.risime.net.ProtocolJson.encodeToJsonElement(
                         lk.codegen.risime.net.MlsCommitEvent.serializer(),
-                        lk.codegen.risime.net.MlsCommitEvent(conversationId, g.generation, c.epoch, c.commit, c.fromDevice),
+                        lk.codegen.risime.net.MlsCommitEvent(conversationId, g.generation, c.epoch, c.commit, c.fromDevice, c.commitRef),
                     ) as kotlinx.serialization.json.JsonObject,
                 )
             },

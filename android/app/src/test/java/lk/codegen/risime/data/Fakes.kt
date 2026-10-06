@@ -153,6 +153,17 @@ class FakeRealtime : RealtimeClient {
         return encryptedReplies(msg)
     }
 
+    val sentGroup = mutableListOf<lk.codegen.risime.net.MsgSendGroup>()
+    var groupReplies: (lk.codegen.risime.net.MsgSendGroup) -> PushResult<MsgSendReply> = { m ->
+        PushResult.Ok(MsgSendReply("gid-${m.clientMsgId}", m.conversationId, "2026-10-06T08:15:30.456Z"))
+    }
+
+    override suspend fun sendGroup(msg: lk.codegen.risime.net.MsgSendGroup): PushResult<MsgSendReply> {
+        if (!connected) return PushResult.Unavailable
+        sentGroup += msg
+        return groupReplies(msg)
+    }
+
     override suspend fun ack(messageIds: List<String>, status: String): PushResult<Unit> {
         if (!connected) return PushResult.Unavailable
         acks += messageIds to status

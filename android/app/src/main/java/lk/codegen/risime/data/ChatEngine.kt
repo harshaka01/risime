@@ -165,7 +165,7 @@ class ChatEngine(
                 messageId = m.messageId,
                 conversationId = m.conversationId,
                 from = m.from,
-                to = m.to,
+                to = m.to ?: m.conversationId, // §12.7: group messages have no `to`
                 body = body,
                 serverTs = m.serverTs,
                 localTs = clock(),

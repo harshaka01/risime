@@ -107,6 +107,11 @@ class PhoenixRealtimeClient(
             ?.map { ProtocolJson.decodeFromJsonElement<MsgSendReply>(it) }
             ?: PushResult.Unavailable
 
+    override suspend fun sendGroup(msg: lk.codegen.risime.net.MsgSendGroup): PushResult<MsgSendReply> =
+        liveConnection()?.push("msg:send", ProtocolJson.encodeToJsonElement(msg))
+            ?.map { ProtocolJson.decodeFromJsonElement<MsgSendReply>(it) }
+            ?: PushResult.Unavailable
+
     override suspend fun ack(messageIds: List<String>, status: String): PushResult<Unit> =
         liveConnection()?.push("msg:ack", ProtocolJson.encodeToJsonElement(MsgAck(messageIds, status)))
             ?.map { }
@@ -124,7 +129,14 @@ class PhoenixRealtimeClient(
 
     override suspend fun typing(to: String, typing: Boolean): PushResult<Unit> =
         current?.takeIf { _state.value == ConnectionState.Live }
-            ?.push("typing", ProtocolJson.encodeToJsonElement(TypingPush(to, typing)))
+            ?.push(
+                "typing",
+                if (lk.codegen.risime.net.isGroupConversation(to)) {
+                    ProtocolJson.encodeToJsonElement(lk.codegen.risime.net.TypingGroupPush(to, typing))
+                } else {
+                    ProtocolJson.encodeToJsonElement(TypingPush(to, typing))
+                },
+            )
             ?.map { }
             ?: PushResult.Unavailable
 

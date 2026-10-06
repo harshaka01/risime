@@ -71,8 +71,8 @@ class ApiClient(
         call<Unit, KeyPackageCount>("GET", "me/devices/$deviceId/key_packages/count", null)
 
     /** §10.2: [deviceId] (X-Device-Id) excludes the calling device from my own devices. */
-    suspend fun claimKeyPackages(userIds: List<String>, deviceId: String? = null): ApiResult<KeyPackagesClaimReply> =
-        call("POST", "mls/key_packages/claim", KeyPackagesClaim(userIds), headers = deviceId?.let { mapOf(DEVICE_HEADER to it) }.orEmpty())
+    suspend fun claimKeyPackages(userIds: List<String>, deviceId: String? = null, conversationId: String? = null): ApiResult<KeyPackagesClaimReply> =
+        call("POST", "mls/key_packages/claim", KeyPackagesClaim(userIds, conversationId), headers = deviceId?.let { mapOf(DEVICE_HEADER to it) }.orEmpty())
 
     suspend fun mlsGroup(conversationId: String): ApiResult<MlsGroup> = call<Unit, MlsGroup>("GET", "mls/groups/$conversationId", null)
 
@@ -80,8 +80,47 @@ class ApiClient(
     suspend fun mlsCommit(conversationId: String, body: MlsCommitRequest, deviceId: String): ApiResult<MlsCommitReply> =
         call("POST", "mls/groups/$conversationId/commit", body, headers = mapOf(DEVICE_HEADER to deviceId))
 
-    suspend fun mlsCommits(conversationId: String, sinceEpoch: Long): ApiResult<MlsCommitsReply> =
-        call<Unit, MlsCommitsReply>("GET", "mls/groups/$conversationId/commits?since_epoch=$sinceEpoch", null)
+    suspend fun mlsCommits(conversationId: String, sinceEpoch: Long, limit: Int? = null): ApiResult<MlsCommitsReply> =
+        call<Unit, MlsCommitsReply>("GET", "mls/groups/$conversationId/commits?since_epoch=$sinceEpoch" + (limit?.let { "&limit=$it" } ?: ""), null)
+
+    // ---- §12 groups (mutating calls carry X-Device-Id) ----
+    suspend fun groups(): ApiResult<GroupsReply> = call<Unit, GroupsReply>("GET", "groups", null)
+
+    suspend fun group(id: String): ApiResult<GroupReply> = call<Unit, GroupReply>("GET", "groups/$id", null)
+
+    suspend fun createGroup(body: GroupCreate, deviceId: String): ApiResult<GroupReply> =
+        call("POST", "groups", body, headers = mapOf(DEVICE_HEADER to deviceId))
+
+    suspend fun addGroupMembers(id: String, userIds: List<String>, deviceId: String): ApiResult<GroupReply> =
+        call("POST", "groups/$id/members", GroupMembersAdd(userIds), headers = mapOf(DEVICE_HEADER to deviceId))
+
+    suspend fun removeGroupMember(id: String, userId: String, deviceId: String): ApiResult<Unit> =
+        call<Unit, Unit>("DELETE", "groups/$id/members/$userId", null, headers = mapOf(DEVICE_HEADER to deviceId))
+
+    suspend fun leaveGroup(id: String, deviceId: String): ApiResult<Unit> =
+        call<Unit, Unit>("POST", "groups/$id/leave", null, headers = mapOf(DEVICE_HEADER to deviceId))
+
+    suspend fun setGroupRole(id: String, userId: String, role: String, deviceId: String): ApiResult<GroupReply> =
+        call("PATCH", "groups/$id/members/$userId", GroupRolePatch(role), headers = mapOf(DEVICE_HEADER to deviceId))
+
+    suspend fun rejoinGroup(id: String, deviceId: String): ApiResult<GroupReply> =
+        call<Unit, GroupReply>("POST", "groups/$id/rejoin", null, headers = mapOf(DEVICE_HEADER to deviceId))
+
+    suspend fun resetGroup(id: String, generation: Long, deviceId: String): ApiResult<GroupResetReply> =
+        call("POST", "mls/groups/$id/reset", GroupReset(generation), headers = mapOf(DEVICE_HEADER to deviceId))
+
+    suspend fun groupCommit(id: String, body: GroupCommitRequest, deviceId: String): ApiResult<MlsCommitReply> =
+        call("POST", "mls/groups/$id/commit", body, headers = mapOf(DEVICE_HEADER to deviceId))
+
+    suspend fun groupReceipts(id: String, messageId: String): ApiResult<GroupReceiptsReply> =
+        call<Unit, GroupReceiptsReply>("GET", "groups/$id/messages/$messageId/receipts", null)
+
+    /** §12.6: opaque bytes (an MLS commit or Welcome over 64 KiB). */
+    suspend fun uploadBlob(conversationId: String, bytes: ByteArray): ApiResult<BlobUploadReply> =
+        execute("POST", "blobs?purpose=mls&conversation_id=$conversationId", bytes.toRequestBody(OCTET), true, serializer<BlobUploadReply>())
+
+    suspend fun downloadBlob(blobId: String): ApiResult<ByteArray> =
+        execute("GET", "blobs/$blobId", null, true, BYTES)
 
     /** §8.1: at logout (idempotent). */
     suspend fun deleteDevice(deviceId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "me/devices/$deviceId", null)
@@ -162,12 +201,16 @@ class ApiClient(
         return withContext(Dispatchers.IO) {
             try {
                 http.newCall(builder.build()).execute().use { res ->
-                    val text = res.body.string()
-                    if (res.isSuccessful) {
+                    if (res.isSuccessful && resSerializer === BYTES) {
+                        @Suppress("UNCHECKED_CAST")
+                        ApiResult.Ok(res.body.bytes() as R)
+                    } else if (res.isSuccessful) {
+                        val text = res.body.string()
                         @Suppress("UNCHECKED_CAST")
                         val value = if (res.code == 204 || text.isBlank()) Unit as R else ProtocolJson.decodeFromString(resSerializer, text)
                         ApiResult.Ok(value)
                     } else {
+                        val text = res.body.string()
                         val err = runCatching { ProtocolJson.decodeFromString<ApiErrorEnvelope>(text).error }.getOrNull()
                         ApiResult.Error(
                             res.code, err?.code ?: "http_${res.code}", err?.message ?: "",
@@ -186,6 +229,10 @@ class ApiClient(
 
     companion object {
         private val JSON = "application/json".toMediaType()
+        private val OCTET = "application/octet-stream".toMediaType()
+
+        /** Marker serializer: the raw response body (blobs). */
+        private val BYTES: KSerializer<ByteArray> = serializer<ByteArray>()
 
         /** §10.2: the calling device on MLS REST calls. */
         const val DEVICE_HEADER = "X-Device-Id"
