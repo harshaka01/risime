@@ -43,7 +43,54 @@ class Notifier(private val context: Context) {
     fun postChats(plan: List<ChatNotification>) {
         if (plan.isEmpty() || !allowed()) return
         ensureChannels()
-        plan.forEach { n ->
+        plan.forEach { n -> nm.notify(chatId(n.conversationId), chatBuilder(n, silent = false).build()) }
+        postSummary(silent = false)
+    }
+
+    /** Ids of the chat notifications currently in the shade (not "added you", requests or the summary). */
+    fun activeChatIds(): Set<Int> = runCatching {
+        context.getSystemService(NotificationManager::class.java).activeNotifications
+            .filter { it.notification.extras?.getString(EXTRA_KIND) == KIND_CHAT }.map { it.id }.toSet()
+    }.getOrDefault(emptySet())
+
+    /**
+     * §15.6 (android R7) after a delete: re-plan every chat that has a posted notification from [plan]
+     * (built from all its unread rows) and repost it **silently** (`setOnlyAlertOnce`, `setSilent`);
+     * a chat left empty is cancelled; with no chat notification left, the summary goes too.
+     */
+    @Suppress("MissingPermission")
+    fun refreshChats(plan: List<ChatNotification>) {
+        val active = activeChatIds()
+        if (active.isEmpty()) return
+        val r = planNotificationRefresh(active, plan.associateBy { chatId(it.conversationId) })
+        r.cancel.forEach { nm.cancel(it) }
+        if (r.repost.isNotEmpty() && allowed()) {
+            r.repost.forEach { n -> nm.notify(chatId(n.conversationId), chatBuilder(n, silent = true).build()) }
+            postSummary(silent = true)
+        }
+        if (r.repost.isEmpty()) nm.cancel(SUMMARY_ID)
+    }
+
+    private fun postSummary(silent: Boolean) {
+        @Suppress("MissingPermission")
+        nm.notify(
+            SUMMARY_ID,
+            NotificationCompat.Builder(context, CH_MESSAGES)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("RisiMe")
+                .setContentText("New messages")
+                .setGroup(GROUP_MESSAGES)
+                .setGroupSummary(true)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(silent)
+                .setSilent(silent)
+                .setContentIntent(openIntent(null, SUMMARY_ID))
+                .build(),
+        )
+    }
+
+    private fun chatBuilder(n: ChatNotification, silent: Boolean): NotificationCompat.Builder {
+        run {
             val style: NotificationCompat.Style = if (n.group) {
                 // §12: one notification per group conversation, a sender Person per line.
                 NotificationCompat.MessagingStyle(androidx.core.app.Person.Builder().setName("You").build())
@@ -68,18 +115,11 @@ class Notifier(private val context: Context) {
                 .setAutoCancel(true)
                 .setWhen(n.newestTs)
                 .setContentIntent(openIntent(n.conversationId, chatId(n.conversationId)))
-            nm.notify(chatId(n.conversationId), b.build())
+                .setOnlyAlertOnce(silent)
+                .setSilent(silent)
+                .addExtras(android.os.Bundle().apply { putString(EXTRA_KIND, KIND_CHAT) })
+            return b
         }
-        val summary = NotificationCompat.Builder(context, CH_MESSAGES)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("RisiMe")
-            .setContentText("New messages")
-            .setGroup(GROUP_MESSAGES)
-            .setGroupSummary(true)
-            .setAutoCancel(true)
-            .setContentIntent(openIntent(null, SUMMARY_ID))
-            .build()
-        nm.notify(SUMMARY_ID, summary)
     }
 
     /** §12.7 S4: "Kamal added you to Pilot team" (opens the group). */
@@ -151,6 +191,8 @@ class Notifier(private val context: Context) {
 
     companion object {
         const val EXTRA_OPEN_CHAT = "lk.codegen.risime.OPEN_CHAT"
+        const val EXTRA_KIND = "lk.codegen.risime.KIND"
+        const val KIND_CHAT = "chat"
         const val CH_MESSAGES = "messages"
         const val CH_REQUESTS = "requests"
         const val CH_SYNC = "sync"

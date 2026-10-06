@@ -18,6 +18,9 @@ import lk.codegen.risime.realtime.ConnectionState
 class ChatViewModel(private val c: AppContainer, private val meId: String, val peerId: String) : ViewModel() {
     val conversationId = dmConversationId(meId, peerId)
 
+    /** My user id (tombstone wording, §15.6). */
+    val me: String get() = meId
+
     val messages: StateFlow<List<MessageEntity>> = c.db.messages().conversation(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

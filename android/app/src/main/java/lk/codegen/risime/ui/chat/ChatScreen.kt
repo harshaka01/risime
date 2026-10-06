@@ -130,6 +130,10 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 when (val item = items[i]) {
                     is ChatItem.Day -> DaySeparator(item.label)
                     is ChatItem.Msg -> DmMessageRow(item.m) {
+                        if (item.m.showsAsDeleted) {
+                            TombstoneBubble(item.m, vm.me)
+                            return@DmMessageRow
+                        }
                         Bubble(
                             item.m, canRetry = isFriend, onRetry = vm::retry, onDelete = vm::delete,
                             media = media[item.m.clientMsgId], loader = vm.imgs.loader,
@@ -210,7 +214,7 @@ private fun Bubble(
         mine = m.outgoing,
         status = if (m.outgoing) MessageStatus.valueOf(m.status) else null,
         note = when {
-            !failed -> null
+            !failed -> if (m.deleteUnverified) lk.codegen.risime.data.deletes.DeleteRules.UNVERIFIED_NOTE else null
             m.failReason == AuthErrors.NOT_FRIENDS -> "Not sent — you're not friends"
             m.failReason == AuthErrors.TOO_LONG -> "Not sent — too long"
             retryable -> "Not sent — tap to retry or delete"
@@ -218,6 +222,7 @@ private fun Bubble(
         },
         tapOpensMenu = failed,
         onMenu = { sheet = true },
+        noteIsInfo = !failed,
         footer = { ReactionChipsRow(chips, onOpenReactions) },
         image = if (m.image) ({ ImageBubbleContent(media, loader, onImageVisible) }) else null,
         onTap = if (m.image) onImageTap else null,

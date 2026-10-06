@@ -142,6 +142,13 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
     }
 
     /** Push notifications: newest local_ts already notified, and notified request ids. */
+    /** §15.7 the server-clock offset (ms), persisted for a cold start. */
+    suspend fun serverOffset(): Long? = store.data.first()[SERVER_OFFSET]?.toLongOrNull()
+
+    suspend fun setServerOffset(ms: Long) {
+        store.edit { it[SERVER_OFFSET] = ms.toString() }
+    }
+
     suspend fun notifiedUpTo(): Long = store.data.first()[NOTIFIED_UP_TO]?.toLongOrNull() ?: 0L
 
     suspend fun setNotifiedUpTo(ts: Long) {
@@ -203,6 +210,7 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         private val AUTH_OVERRIDE = stringPreferencesKey("auth_override")
         private val DEVICE_ID = stringPreferencesKey("device_id")
         private val NOTIFIED_UP_TO = stringPreferencesKey("notified_up_to")
+        private val SERVER_OFFSET = stringPreferencesKey("server_offset_ms")
         private val NOTIFIED_REQUESTS = stringPreferencesKey("notified_requests")
         private val NOTIF_PROMPTED = stringPreferencesKey("notif_prompted")
         private val HISTORY_REPLAY = stringPreferencesKey("history_replay_version")

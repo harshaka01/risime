@@ -57,6 +57,14 @@ fun groupTypingLabel(names: List<String>): String? = when (names.size) {
     else -> "${names.size} people are typing…"
 }
 
+/** §15.6: a tombstone (or a row being deleted) previews as its tombstone text. */
+fun LastMessage.forPreview(me: String): LastMessage =
+    if (kind != lk.codegen.risime.data.db.MessageEntity.KIND_DELETED && deleteState == null) this
+    else copy(
+        body = lk.codegen.risime.data.deletes.DeleteRules.tombstoneText(if (deleteState != null) me else deletedBy, me, deletedByAdmin),
+        kind = lk.codegen.risime.data.db.MessageEntity.KIND_DELETED,
+    )
+
 /** One row per group, ordered with the DMs by last activity (a new group by when it appeared). */
 fun buildGroupRows(
     meId: String,
@@ -66,7 +74,7 @@ fun buildGroupRows(
     unread: List<UnreadCount>,
     typing: Map<String, Set<String>> = emptyMap(),
 ): List<ChatRow> {
-    val byConv = lasts.associateBy { it.conversationId }
+    val byConv = lasts.associateBy { it.conversationId }.mapValues { it.value.forPreview(meId) }
     val unreadByConv = unread.associate { it.conversationId to it.unread }
     val names = members.groupBy { it.conversationId }.mapValues { (_, ms) -> ms.associate { it.userId.lowercase() to it.displayName } }
     return groups.map { g ->
@@ -82,7 +90,7 @@ fun buildGroupRows(
             conversationId = g.conversationId,
             group = true,
             typingLabel = groupTypingLabel(typing[g.conversationId].orEmpty().filter { !it.equals(meId, true) }.map(nameOf).sorted()),
-            lastSender = last?.takeIf { !it.outgoing && it.kind != lk.codegen.risime.data.db.MessageEntity.KIND_SYSTEM }?.let { nameOf(it.from) },
+            lastSender = last?.takeIf { !it.outgoing && it.kind != lk.codegen.risime.data.db.MessageEntity.KIND_SYSTEM && it.kind != lk.codegen.risime.data.db.MessageEntity.KIND_DELETED }?.let { nameOf(it.from) },
             stateLine = when (g.state) {
                 lk.codegen.risime.data.db.GroupEntity.STATE_CREATING -> "Creating…"
                 lk.codegen.risime.data.db.GroupEntity.STATE_LEFT -> "You left"
@@ -107,7 +115,7 @@ fun buildChatRows(
     /** §12: group rows (from [buildGroupRows]), mixed in by last activity. */
     groupRows: List<ChatRow> = emptyList(),
 ): List<ChatRow> {
-    val byConv = lasts.associateBy { it.conversationId }
+    val byConv = lasts.associateBy { it.conversationId }.mapValues { it.value.forPreview(meId) }
     val unreadByConv = unread.associate { it.conversationId to it.unread }
     return contacts.filter { ct ->
         // Former friends only while there's a conversation to show.

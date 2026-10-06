@@ -127,7 +127,7 @@ fun mergeReactionNotifications(
     val byConv = plan.associateBy { it.conversationId }.toMutableMap()
     adds.filter { it.op == "add" && !it.pending && !it.reactorUserId.equals(me, true) }
         .filter { it.conversationId != suppressConversation }
-        .mapNotNull { r -> myMessage(r.targetMessageId)?.takeIf { it.outgoing }?.let { r to it } }
+        .mapNotNull { r -> myMessage(r.targetMessageId)?.takeIf { it.outgoing && !it.showsAsDeleted }?.let { r to it } }
         .sortedBy { it.first.localTs }
         .forEach { (r, target) ->
             val line = "${nameOf(r.reactorUserId)} reacted ${r.emoji} to: ${preview(bodyPreview(target.kind, target.body))}"
@@ -144,3 +144,13 @@ fun mergeReactionNotifications(
 /** §12.7 S4 notification text. */
 fun addedToGroupText(actor: String, groupName: String?): String =
     if (groupName.isNullOrBlank()) "$actor added you to a group" else "$actor added you to $groupName"
+
+/** §15.6 (android R7) what a silent refresh does with the chat notifications in the shade. */
+data class NotificationRefresh(val repost: List<ChatNotification>, val cancel: Set<Int>)
+
+/** Only chats that already have a posted notification are touched: reposted from the new plan, or cancelled when empty. */
+fun planNotificationRefresh(activeChatIds: Set<Int>, planById: Map<Int, ChatNotification>): NotificationRefresh =
+    NotificationRefresh(
+        repost = activeChatIds.mapNotNull { planById[it] }.sortedByDescending { it.newestTs },
+        cancel = activeChatIds.filter { it !in planById }.toSet(),
+    )

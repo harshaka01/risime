@@ -195,8 +195,8 @@ class UniffiMlsEngine(
         client.encryptWithAad(g, plaintext, aad)
     }
 
-    // Advertised (§15.1 `deletes`) once the app applies delete events: turned on with the receive path.
-    override val deletesSupported: Boolean get() = false
+    // §15.1 `deletes`: the app applies delete events (tombstones, hidden tombstones, notification refresh).
+    override val deletesSupported: Boolean get() = true
 
     override fun deleteGroup(conversationId: String) = tx {
         current(conversationId)?.let { (_, g) -> client.deleteGroup(g) }

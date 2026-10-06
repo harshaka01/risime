@@ -77,7 +77,22 @@ class ChatEngine(
     private val onFreshReplayDone: suspend () -> Unit = {},
     /** §14: image envelopes (null = an app without images: `image` payloads are ignored). */
     private val images: lk.codegen.risime.data.media.ImageHooks? = null,
+    /** §15 deletes (null = an app without delete support: `delete` events are skipped like a v1.11 app). */
+    private val deletes: lk.codegen.risime.data.db.DeleteDao? = null,
+    /**
+     * After the transactions of a batch that deleted something (files already unlinked): refresh
+     * posted notifications silently and checkpoint the WAL (§15.6). Never inside a transaction.
+     */
+    private val onDeletesApplied: () -> Unit = {},
+    /** §15.7 the server-clock offset (from every join/sync reply). */
+    private val serverClock: lk.codegen.risime.data.deletes.ServerClock? = null,
+    private val log: (String) -> Unit = {},
 ) : RealtimeListener {
+    /** §15.4–§15.6 applied inside each event's transaction. */
+    private val applier = deletes?.let { lk.codegen.risime.data.deletes.DeleteApplier(it, messages, images, clock, log) }
+
+    /** Set inside a transaction that purged something; acted on after the batch. */
+    @Volatile private var deletesApplied = false
     /** §13.2: this join's `history_before` (in memory only; every join returns it). */
     @Volatile private var historyBefore: Instant? = null
 
@@ -97,6 +112,10 @@ class ChatEngine(
 
     override suspend fun onHistoryBefore(ts: String?) {
         historyBefore = ts?.let { runCatching { Instant.parse(it) }.getOrNull() }
+    }
+
+    override suspend fun onServerTime(ts: String?) {
+        serverClock?.onServerTime(ts)
     }
 
     override suspend fun onEvents(events: List<Event>) {
@@ -135,7 +154,17 @@ class ChatEngine(
                         false
                     }
                     Event.KIND_GROUP_EVENT -> {
-                        runCatching { e.groupEvent() }.getOrNull()?.let { groups?.applyEvent(e.eventId, it, me, historicalLocalTs(it.serverTs)) }
+                        runCatching { e.groupEvent() }.getOrNull()?.let {
+                            // §15.7: a cleared chat's system lines at or before the watermark stay gone (state still applies).
+                            val suppress = applier?.cleared(it.groupId, lk.codegen.risime.data.deletes.TimeUuid.ticks(e.eventId)) == true
+                            groups?.applyEvent(e.eventId, it, me, historicalLocalTs(it.serverTs), suppressLine = suppress)
+                        }
+                        false
+                    }
+                    Event.KIND_DELETE -> {
+                        if (applier != null) {
+                            runCatching { e.deleteData() }.getOrNull()?.let { d -> if (d.encrypted) applyMls(me, e) else applyPlainDelete(me, d) }
+                        }
                         false
                     }
                     Event.KIND_GROUP_OP -> {
@@ -159,6 +188,15 @@ class ChatEngine(
             imagesStored = false
             images?.received()
         }
+        afterDeletes()
+    }
+
+    /** After the commit (android R10): unlink purged files, cancel their transfers; then refresh notifications and checkpoint. */
+    private fun afterDeletes() {
+        if (!deletesApplied) return
+        deletesApplied = false
+        applier?.takePurged()?.forEach { p -> runCatching { images?.afterPurge(p.clientMsgId, p.files) } }
+        onDeletesApplied()
     }
 
     /** §14.7: set when an image row was stored; downloads are scheduled after the transactions (never inside). */
@@ -199,6 +237,7 @@ class ChatEngine(
             newIncoming = tx.run { runCatching { applyMls(me, e) }.getOrDefault(false) } || newIncoming
         }
         if (newIncoming) flushAcks()
+        afterDeletes()
     }
 
     override suspend fun onLive() {
@@ -242,6 +281,10 @@ class ChatEngine(
             if (r is MlsResult.Reaction) {
                 applyReaction(r.message.conversationId, r.target, r.message.from, r.emoji, r.op, r.message.serverTs, r.message.messageId, r.message.clientMsgId)
             }
+            // §15.4–§15.6: controls never create §13.3 lines (ControlDropped is logged by the pipeline).
+            if (r is MlsResult.Delete) applyDeleteEveryone(me, r.event, r.deleter, r.senderIsAdmin, e2ee = true)
+            if (r is MlsResult.OwnDelete) completeOwnDelete(me, r.event)
+            if (r is MlsResult.DeleteUnverified) markUnverified(r.event)
             if (r is MlsResult.Unrecoverable) onUnrecoverable(r.conversationId)
             (r as? MlsResult.GroupChanged)?.let { gc ->
                 val conv = gc.conversationId
@@ -257,8 +300,66 @@ class ChatEngine(
     }
 
     private suspend fun upsertMarker(conversationId: String, action: String, serverTs: String?) {
+        // §15.7: no marker at or before a Clear chat watermark.
+        if (applier?.cleared(conversationId, lk.codegen.risime.data.deletes.TimeUuid.ticksOfIso(serverTs)) == true) return
         messages.upsertSystemLine(HistoryMarkers.row(conversationId, action, serverTs, clock()))
     }
+
+    // ---- Deletes (§15) ----
+
+    /** §15.4–§15.6 a delete for everyone from [deleter] (attested user id; plaintext: the event's `from`). */
+    private suspend fun applyDeleteEveryone(me: String, d: lk.codegen.risime.net.DeleteEvent, deleter: String, senderIsAdmin: Boolean?, e2ee: Boolean) {
+        val a = applier ?: return
+        if (a.cleared(d.conversationId, lk.codegen.risime.data.deletes.TimeUuid.ticks(d.messageId))) return
+        if (a.applyEveryone(d.conversationId, deleter, d.serverTs, d.targets, senderIsAdmin, e2ee, historyBefore, me)) deletesApplied = true
+    }
+
+    /**
+     * §15.5 a plaintext `delete` (legacy DMs only: the server's authorisation is the check). Never in
+     * a group or a DM this device holds an MLS group for (those carry ciphertext; a plaintext one there
+     * could only come from a misbehaving server).
+     */
+    private suspend fun applyPlainDelete(me: String, d: lk.codegen.risime.net.DeleteEvent) {
+        if (isGroupConversation(d.conversationId) || mlsEngine()?.group(d.conversationId) != null) {
+            log("plaintext delete ${d.messageId} in an e2ee conversation: ignored")
+            return
+        }
+        if (d.from.equals(me, true) && deletes?.outboxRow(d.clientMsgId) != null) return completeOwnDelete(me, d)
+        applyDeleteEveryone(me, d, d.from, null, e2ee = false)
+    }
+
+    /**
+     * §15.6 my own control (crypto R4): an outbox row with that client_msg_id completes (a crash before
+     * the reply); without one, only cleartext targets whose local row is mine, or any if group_meta names
+     * me admin now.
+     */
+    private suspend fun completeOwnDelete(me: String, d: lk.codegen.risime.net.DeleteEvent) {
+        val a = applier ?: return
+        val dao = deletes ?: return
+        if (a.cleared(d.conversationId, lk.codegen.risime.data.deletes.TimeUuid.ticks(d.messageId))) return
+        val row = dao.outboxRow(d.clientMsgId)
+        val eventIds = d.targets.map { it.messageId.lowercase() }.toSet()
+        val ids = if (row != null) decodeIds(row.targetsJson).filter { it in eventIds } else eventIds.toList()
+        val admin = isGroupConversation(d.conversationId) && mlsEngine()?.groupMeta(d.conversationId)?.admins?.any { it.equals(me, true) } == true
+        for (id in ids) {
+            val local = messages.byMessageId(id) ?: continue
+            if (!local.conversationId.equals(d.conversationId, true) || local.system || local.deleted) continue
+            if (row == null && !local.from.equals(me, true) && !admin) continue
+            a.purge(local, me, byAdmin = !local.from.equals(me, true))
+            deletesApplied = true
+        }
+        if (row != null) dao.removeOutbox(row.clientMsgId)
+    }
+
+    /** §15.4: the core couldn't verify the control (Malformed): a note on the stored targets, never a silent drop. */
+    private suspend fun markUnverified(d: lk.codegen.risime.net.DeleteEvent) {
+        val a = applier ?: return
+        if (a.cleared(d.conversationId, lk.codegen.risime.data.deletes.TimeUuid.ticks(d.messageId))) return
+        a.markUnverified(d.conversationId, d.targets)
+    }
+
+    private fun decodeIds(json: String): List<String> =
+        lk.codegen.risime.data.deletes.DeleteJson.ids(json)
 
     /**
      * §13.3 R5: a row restored from the inbox that is clearly historical (before `history_before`, or
@@ -281,13 +382,38 @@ class ChatEngine(
         /** In the same transaction, right after the new row (§14.7: the image's media row). */
         onInserted: suspend (MessageEntity) -> Unit = {},
     ): Boolean {
-        if (messages.byMessageId(m.messageId) != null) return false
+        val a = applier
+        // §15.7: nothing at or before a Clear chat watermark comes back (parked replays, re-login replays).
+        if (a != null && a.cleared(m.conversationId, lk.codegen.risime.data.deletes.TimeUuid.ticks(m.messageId))) return false
+        val existing = messages.byMessageId(m.messageId)
+        // §15.6 (crypto R3): a (hidden or placed) tombstone is re-judged now that the message is decrypted.
+        val arrival = when {
+            existing != null && (a == null || !existing.clientMsgId.startsWith(lk.codegen.risime.data.deletes.DeleteApplier.PLACEHOLDER)) -> return false
+            a != null -> a.judgeArrival(m.conversationId, m.messageId, m.from, m.serverTs)
+            else -> lk.codegen.risime.data.deletes.DeleteApplier.Arrival.Store
+        }
+        if (existing != null && arrival != lk.codegen.risime.data.deletes.DeleteApplier.Arrival.Store) return false // the placed tombstone stays
+        if (arrival == lk.codegen.risime.data.deletes.DeleteApplier.Arrival.Drop) return false
         val outgoing = m.from.equals(me, ignoreCase = true)
         messages.byClientMsgId(m.clientMsgId)?.let { row ->
             // §13.1 S-a: my own copy for a PENDING outbox row (the msg:send reply was lost): it reached the server.
             if (outgoing && row.outgoing && row.status == MessageStatus.PENDING.name) {
                 messages.updateStatus(row.clientMsgId, MessageStatus.SENT.name, m.messageId, m.serverTs, null)
+                if (row.deleteState == MessageEntity.DELETE_STATE_CANCEL_AFTER_SEND) cancelAfterSend(row.clientMsgId, m.messageId)
             }
+            return false
+        }
+        if (arrival is lk.codegen.risime.data.deletes.DeleteApplier.Arrival.Tombstone) {
+            // Authorised: stored as a tombstone, never notified, unread or acked; no image key.
+            messages.insert(
+                MessageEntity(
+                    clientMsgId = m.clientMsgId, messageId = m.messageId, conversationId = m.conversationId, from = m.from,
+                    to = m.to ?: m.conversationId, body = "", serverTs = m.serverTs, localTs = historicalLocalTs(m.serverTs) ?: clock(),
+                    status = if (outgoing) MessageStatus.SENT.name else MessageStatus.READ.name, outgoing = outgoing,
+                    ackedStatus = if (outgoing) null else MessageStatus.READ.name, kind = MessageEntity.KIND_DELETED,
+                    deletedBy = arrival.by, deletedByAdmin = arrival.byAdmin, deletedAt = clock(),
+                ),
+            )
             return false
         }
         val restored = historicalLocalTs(m.serverTs)
@@ -313,6 +439,7 @@ class ChatEngine(
             blobId = blobId,
         )
         if (messages.insert(row) == -1L) return false
+        deletes?.unhide(row.conversationId) // §15.7 Delete chat: a new message brings the chat back
         onInserted(row)
         if (outgoing || preInstall) return false
         onIncomingFrom(m.from)
@@ -470,8 +597,23 @@ class ChatEngine(
     private fun conversationPeer(conv: String, me: String): String = dmPeer(conv, me) ?: conv
 
     private suspend fun applyReaction(conv: String, target: String, reactor: String, emoji: String, op: String, ts: String, messageId: String, clientMsgId: String?) {
+        if (applier != null) {
+            if (applier.cleared(conv, lk.codegen.risime.data.deletes.TimeUuid.ticks(messageId))) return
+            // §15.6: reactions on a tombstone (or a message deleted for me) are dropped and never notified.
+            val row = messages.byMessageId(target)
+            if (row != null && row.showsAsDeleted) return
+            if (deletes?.deletedId(target)?.scope == lk.codegen.risime.net.MsgDelete.SCOPE_ME) return
+        }
         reactionStore?.applyConfirmed(conv, target, reactor, emoji, op, ts, messageId, clientMsgId)
     }
+
+    /** §15.7 (android R2): a pushed message the user deleted meanwhile: now that it has a message_id, delete it for everyone. */
+    private suspend fun cancelAfterSend(clientMsgId: String, messageId: String) {
+        onCancelAfterSend(clientMsgId, messageId)
+    }
+
+    /** Set by the send side (chunk: send path); a no-op until then. */
+    @Volatile var onCancelAfterSend: suspend (clientMsgId: String, messageId: String) -> Unit = { _, _ -> }
 
     suspend fun flushOutbox() {
         flushMessages()

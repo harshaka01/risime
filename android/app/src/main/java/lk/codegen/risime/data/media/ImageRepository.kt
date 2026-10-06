@@ -27,6 +27,20 @@ interface ImageHooks {
 
     /** The message row was deleted locally: its key and cached ciphertext go too. */
     suspend fun deleted(clientMsgId: String)
+
+    /**
+     * §15.6 (android R10), inside the delete's transaction: the media row (sealed key, thumbnail,
+     * blob reference) goes; returns the files to unlink **after** the commit.
+     */
+    suspend fun purgeRow(clientMsgId: String): List<java.io.File> {
+        deleted(clientMsgId)
+        return emptyList()
+    }
+
+    /** After the commit: unlink [files], cancel the transfer jobs of [clientMsgId]. */
+    fun afterPurge(clientMsgId: String, files: List<java.io.File>) {
+        files.forEach { it.delete() }
+    }
 }
 
 /** Auto-download policy (§14.7 Receiving 7). */
@@ -253,6 +267,21 @@ class ImageRepository(
         row?.blobId?.let { id -> runCatching { api?.deleteBlob(id) } }
         return true
     }
+
+    override suspend fun purgeRow(clientMsgId: String): List<File> {
+        val row = media.get(clientMsgId) ?: return listOf(files.part(clientMsgId))
+        media.delete(clientMsgId)
+        return listOfNotNull(row.fileName?.let { files.file(it) }, files.part(clientMsgId))
+    }
+
+    override fun afterPurge(clientMsgId: String, files: List<File>) {
+        cancelUpload(clientMsgId)
+        files.forEach { it.delete() }
+        purgedIds.tryEmit(clientMsgId)
+    }
+
+    /** §15.6: purged images (the UI drops in-memory bitmaps and closes a viewer showing one). */
+    val purgedIds = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 64)
 
     override suspend fun deleted(clientMsgId: String) {
         val row = media.get(clientMsgId) ?: return

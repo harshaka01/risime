@@ -64,7 +64,31 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
         return "${g.generation}|${g.epoch}|$userId/$deviceId|${plaintext.decodeToString()}".toByteArray()
     }
 
+    // ---- v1.12 delete controls: "AAD:<b64 aad>#" + the normal fake ciphertext ----
+    var deletesOn = false
+    override val deletesSupported: Boolean get() = deletesOn
+
+    /** Admin list per (conversation, epoch); default: the current group_meta admins. A null answer in a group = no record. */
+    var adminsAt: (String, Long) -> List<String>? = { conv, _ -> metas[conv]?.admins }
+
+    override fun encryptWithAad(conversationId: String, plaintext: ByteArray, aad: ByteArray): ByteArray =
+        "AAD:${java.util.Base64.getEncoder().encodeToString(aad)}#".toByteArray() + encrypt(conversationId, plaintext)
+
     override fun decrypt(conversationId: String, generation: Long, ciphertext: ByteArray): Decrypted {
+        val text = ciphertext.decodeToString()
+        if (text.startsWith("AAD:")) {
+            val aad = java.util.Base64.getDecoder().decode(text.substringAfter("AAD:").substringBefore('#'))
+            val inner = decryptPlain(conversationId, text.substringAfter('#').toByteArray())
+            val admin = if (lk.codegen.risime.net.isGroupConversation(conversationId)) {
+                val list = adminsAt(conversationId, inner.epoch) ?: throw MlsMalformedException("no admin record for epoch ${inner.epoch}")
+                list.any { it.equals(inner.sender.userId, true) }
+            } else null
+            return Decrypted(inner.sender, inner.epoch, inner.plaintext, aad, admin)
+        }
+        return decryptPlain(conversationId, ciphertext)
+    }
+
+    private fun decryptPlain(conversationId: String, ciphertext: ByteArray): Decrypted {
         val parts = ciphertext.decodeToString().split('|', limit = 4)
         if (parts.size != 4) throw MlsDecryptException("garbage")
         val g = groups[conversationId] ?: throw MlsDecryptException("no group")
@@ -119,6 +143,10 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
             java.util.Base64.getEncoder().encodeToString("$gen|$epoch|$user/$device|$text".toByteArray())
 
         fun b64(s: String): String = java.util.Base64.getEncoder().encodeToString(s.toByteArray())
+
+        /** A delete control's fake ciphertext (base64) with its AAD. */
+        fun deleteCiphertext(gen: Long, epoch: Long, user: String, device: String, envelope: ByteArray, aad: ByteArray) =
+            java.util.Base64.getEncoder().encodeToString("AAD:${java.util.Base64.getEncoder().encodeToString(aad)}#$gen|$epoch|$user/$device|".toByteArray() + envelope)
     }
 }
 

@@ -248,6 +248,11 @@ internal fun GroupMessageList(
             is ChatItem.Msg -> if (item.m.system) {
                 val line = item.m.systemLine()
                 SystemLineText(line?.let { l -> systemText(l, meId) { memberName(it) ?: "Someone" } } ?: item.m.body)
+            } else if (item.m.showsAsDeleted) {
+                // §15.5 crypto S2: a server-placed tombstone shows no sender unless the sender deleted it.
+                val placed = item.m.clientMsgId.startsWith(lk.codegen.risime.data.deletes.DeleteApplier.PLACEHOLDER)
+                val attributed = !placed || item.m.deletedBy.equals(item.m.from, true)
+                lk.codegen.risime.ui.chat.TombstoneBubble(item.m, meId, sender = if (attributed && showSenderAt(items, i)) nameOf(item.m.from) else null)
             } else {
                 GroupBubble(
                     item.m,
@@ -293,7 +298,7 @@ private fun GroupBubble(
         mine = m.outgoing,
         status = if (m.outgoing) MessageStatus.valueOf(m.status) else null,
         note = when {
-            !failed -> null
+            !failed -> if (m.deleteUnverified) lk.codegen.risime.data.deletes.DeleteRules.UNVERIFIED_NOTE else null
             m.failReason == AuthErrors.NOT_MEMBER -> "Not sent — you're not in this group"
             m.failReason == AuthErrors.TOO_LONG -> "Not sent — too long"
             retryable -> "Not sent — tap to retry or delete"
@@ -301,6 +306,7 @@ private fun GroupBubble(
         },
         tapOpensMenu = failed,
         onMenu = { sheet = true },
+        noteIsInfo = !failed,
         footer = { ReactionChipsRow(chips, onOpenReactions) },
         sender = sender,
         senderColor = memberColor(m.from),

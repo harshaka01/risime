@@ -1,6 +1,7 @@
 package lk.codegen.risime.data.deletes
 
 import lk.codegen.risime.BuildConfig
+import kotlinx.serialization.builtins.serializer
 import java.time.Instant
 import java.util.UUID
 
@@ -171,4 +172,13 @@ class ServerClock(private val now: () -> Long = System::currentTimeMillis, priva
 
     /** The server's "now" as this device estimates it. */
     fun serverNow(): Long = now() + offsetMs
+}
+
+/** The outbox's JSON id lists. */
+object DeleteJson {
+    private val ser = kotlinx.serialization.builtins.ListSerializer(String.serializer())
+
+    fun ids(json: String): List<String> = runCatching { lk.codegen.risime.net.ProtocolJson.decodeFromString(ser, json) }.getOrDefault(emptyList()).map { it.lowercase() }
+
+    fun encode(ids: List<String>): String = lk.codegen.risime.net.ProtocolJson.encodeToString(ser, ids)
 }

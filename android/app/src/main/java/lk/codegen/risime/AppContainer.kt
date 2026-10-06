@@ -479,6 +479,54 @@ class AppContainer(
     /** The conversation on screen (`dm:`/`grp:`), if any: its notifications are suppressed, a DM peer is watched. */
     val openConversation = MutableStateFlow<String?>(null)
 
+    /** §15.7 server-clock offset (in memory, persisted for a cold start). */
+    val serverClock = lk.codegen.risime.data.deletes.ServerClock(persist = { sessionStore.setServerOffset(it) })
+
+    /**
+     * §15.6 after a delete committed: posted notifications are rebuilt silently (foreground too), a
+     * best-effort WAL checkpoint runs off the UI thread, purged image bitmaps leave memory.
+     */
+    fun onDeletesApplied() {
+        scope.launch { runCatching { refreshPostedNotifications() }.onFailure { Log.w("RisiMe", "notification refresh: ${it.message}") } }
+        checkpointSoon()
+    }
+
+    private val checkpointLock = kotlinx.coroutines.sync.Mutex()
+
+    /** `PRAGMA wal_checkpoint(TRUNCATE)`, best effort (busy while readers are active: retried by the next delete). */
+    fun checkpointSoon() {
+        scope.launch(Dispatchers.IO) {
+            if (!checkpointLock.tryLock()) return@launch
+            try {
+                delay(500)
+                runCatching { db.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(TRUNCATE)").use { it.moveToFirst() } }
+            } finally {
+                checkpointLock.unlock()
+            }
+        }
+    }
+
+    /** §15.6 (android R7): every chat with a posted notification, re-planned from all its unread rows, reposted silently. */
+    suspend fun refreshPostedNotifications() {
+        if (notifier.activeChatIds().isEmpty()) return
+        val me = sessionStore.current()?.user?.id ?: return
+        val open = openConversation.value.takeIf { foreground.value }
+        val contactList = contacts.contacts.first()
+        val names = contactList.filter { it.userId != null }.associate { it.userId!!.lowercase() to it.displayName }
+        val reactionAdds = db.reactions().addsSince(System.currentTimeMillis() - 24 * 3600_000L)
+        val targets = reactionAdds.map { it.targetMessageId }.distinct().associateWith { db.messages().byMessageId(it) }
+        val plan = lk.codegen.risime.push.mergeReactionNotifications(
+            planChatNotifications(
+                db.messages().unreadIncoming(), contactList, Long.MIN_VALUE, open,
+                groupNames = db.groups().allNow().associate { it.conversationId to lk.codegen.risime.data.groups.groupDisplayName(it.name) },
+                memberNames = db.groups().observeAllMembers().first().groupBy { it.conversationId }
+                    .mapValues { (_, ms) -> ms.associate { it.userId.lowercase() to it.displayName } },
+            ),
+            reactionAdds, { targets[it] }, { id -> names[id.lowercase()] ?: "Someone" }, me, open,
+        )
+        notifier.refreshChats(plan)
+    }
+
     val engine: ChatEngine = ChatEngine(
         messages = db.messages(),
         sync = db.sync(),
@@ -501,6 +549,10 @@ class AppContainer(
         // §13.3 R7: a fresh install never notifies for replayed events (messages, reactions).
         onFreshReplayDone = { sessionStore.setNotifiedUpTo(maxOf(System.currentTimeMillis(), sessionStore.notifiedUpTo())) },
         images = images.takeIf { BuildConfig.CRYPTO_AVAILABLE },
+        deletes = db.deletes(),
+        onDeletesApplied = { onDeletesApplied() },
+        serverClock = serverClock,
+        log = { Log.w("RisiMe", "deletes: $it") },
     )
 
     val realtime: RealtimeClient = PhoenixRealtimeClient(
@@ -595,6 +647,12 @@ class AppContainer(
         scope.launch {
             realtime.state.collect { if (it == ConnectionState.Live) requestFriendsRefresh() }
         }
+        // §15.7: the server-clock offset from the last run, until the next join reply.
+        scope.launch { serverClock.restore(runCatching { sessionStore.serverOffset() }.getOrNull()) }
+        // §15.6: purged images leave the in-memory bitmap caches.
+        scope.launch { images.purgedIds.collect { id -> imageLoader.forget(id) } }
+        // §15.6: hidden tombstones are kept 30 days.
+        scope.launch { runCatching { db.deletes().pruneDeletedIds(System.currentTimeMillis() - 30L * 24 * 3600_000) } }
         // §14.7: temp plaintext and orphans go, owed uploads/downloads resume, the cache is trimmed.
         scope.launch { runCatching { images.startup() }.onFailure { Log.w("RisiMe", "image startup: ${it.message}") } }
         // §12: group state and owed ops after every (re)join.

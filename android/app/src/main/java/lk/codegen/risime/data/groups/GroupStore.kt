@@ -166,7 +166,7 @@ class GroupStore(
     }
 
     /** @return true if the event changed anything visible. */
-    suspend fun applyEvent(eventId: String, e: GroupEvent, me: String, restoredLocalTs: Long? = null): Boolean {
+    suspend fun applyEvent(eventId: String, e: GroupEvent, me: String, restoredLocalTs: Long? = null, suppressLine: Boolean = false): Boolean {
         val conv = e.groupId
         val now = clock()
         val existing = groups.get(conv)
@@ -227,7 +227,8 @@ class GroupStore(
         }
         groups.upsert(g)
         // §13.3 R5: a replayed line sits at its server time, not under "Today".
-        line?.let { insertSystemLine(eventId, conv, it, me, restoredLocalTs ?: now) }
+        // §15.7: no line at or before a Clear chat watermark ([suppressLine]); the state above still applies.
+        if (!suppressLine) line?.let { insertSystemLine(eventId, conv, it, me, restoredLocalTs ?: now) }
         return true
     }
 

@@ -165,6 +165,7 @@ fun ChatsScreen(
 /** A DM row's preview: "You: …" for mine; a §13.3 marker or other system line as is (shown muted, no ticks). */
 fun dmPreview(last: lk.codegen.risime.data.db.LastMessage): String = when {
     last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_SYSTEM -> last.body
+    last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_DELETED -> last.body // §15.6 tombstone text (forPreview)
     last.outgoing -> "You: " + lk.codegen.risime.push.bodyPreview(last.kind, last.body)
     else -> lk.codegen.risime.push.bodyPreview(last.kind, last.body)
 }
@@ -220,6 +221,7 @@ private fun GroupRowItem(row: ChatRow, onClick: () -> Unit) {
         row.typingLabel != null -> row.typingLabel
         row.stateLine != null -> row.stateLine
         last == null || lastText.isEmpty() -> "Group"
+        last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_DELETED -> lastText
         last.outgoing -> "You: $lastText"
         row.lastSender != null -> "${row.lastSender}: $lastText"
         else -> lastText

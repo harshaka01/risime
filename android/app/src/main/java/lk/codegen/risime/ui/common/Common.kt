@@ -300,10 +300,19 @@ fun MessageBubble(
     image: (@Composable () -> Unit)? = null,
     onTap: (() -> Unit)? = null,
     tapLabel: String? = null,
+    /** §15.7 select mode: this bubble is selected (row highlighted). */
+    selected: Boolean = false,
+    /** §15.6 a tombstone: italic, muted text. */
+    muted: Boolean = false,
+    /** A non-error note (e.g. "Couldn't verify a delete for this message"). */
+    noteIsInfo: Boolean = false,
 ) {
     val c = RisiTheme.colors
     val statusLabel = status?.let { tickLabel(it) }
-    Box(Modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
+    Box(
+        Modifier.fillMaxWidth().then(if (selected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)) else Modifier),
+        contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart,
+    ) {
         menu()
         Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
         Surface(
@@ -325,6 +334,7 @@ fun MessageBubble(
                         append(", ").append(time)
                         statusLabel?.let { append(", ").append(it) }
                         note?.let { append(". ").append(it) }
+                        if (selected) append(", selected")
                     }
                 },
         ) {
@@ -332,9 +342,14 @@ fun MessageBubble(
                 sender?.let { Text(it, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = senderColor, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 image?.invoke()
                 if (image == null || body.isNotBlank()) {
-                    Text(body, style = MaterialTheme.typography.bodyLarge, modifier = if (image != null) Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs) else Modifier)
+                    Text(
+                        body,
+                        style = if (muted) MaterialTheme.typography.bodyLarge.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic) else MaterialTheme.typography.bodyLarge,
+                        color = if (muted) androidx.compose.material3.LocalContentColor.current.copy(alpha = 0.7f) else Color.Unspecified,
+                        modifier = if (image != null) Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs) else Modifier,
+                    )
                 }
-                note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
+                note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = if (noteIsInfo) androidx.compose.material3.LocalContentColor.current.copy(alpha = 0.7f) else MaterialTheme.colorScheme.error) }
                 Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
                     Text(time, style = MaterialTheme.typography.labelSmall, color = if (mine) c.bubbleMineMeta else c.bubbleTheirsMeta)
                     if (status != null) {

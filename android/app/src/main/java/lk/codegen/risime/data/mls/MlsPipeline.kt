@@ -32,6 +32,21 @@ sealed interface MlsResult {
      */
     data class BeforeInstall(val conversationId: String, val serverTs: String?) : MlsResult
 
+    /**
+     * §15.4: an authenticated `delete` control: the deleter's attested user id, the core's
+     * `sender_is_admin` at the control's epoch, and a verified binding (AAD = envelope = event targets).
+     */
+    data class Delete(val event: lk.codegen.risime.net.DeleteEvent, val deleter: String, val senderIsAdmin: Boolean?) : MlsResult
+
+    /** §15.6: this device's own `delete` control (OwnEcho: not decryptable here); completes the outbox. */
+    data class OwnDelete(val event: lk.codegen.risime.net.DeleteEvent) : MlsResult
+
+    /** §15.4: the core said `Malformed` (no admin record for that epoch, > 3 epochs back): shown as a note on the targets. */
+    data class DeleteUnverified(val event: lk.codegen.risime.net.DeleteEvent, val reason: String) : MlsResult
+
+    /** §15.6 (android R5): a control that is pre-install, undecryptable or fails its checks: logged only, never a line or tombstone. */
+    data class ControlDropped(val reason: String) : MlsResult
+
     /** Ahead of the local epoch/generation, or no group yet: kept in mls_pending. */
     data object Pending : MlsResult
 
@@ -177,6 +192,7 @@ class MlsPipeline(
             membershipAction(m, mls.userId, mls.deviceId, random)?.let(onMembership)
             return MlsResult.Ignored
         }
+        e.deleteData()?.takeIf { it.encrypted }?.let { d -> return applyDelete(mls, e, d, historyBefore, joined) }
         val msg = e.messageData()?.takeIf { it.encrypted } ?: return MlsResult.Ignored
         if (msg.fromDevice.equals(mls.deviceId, true)) return MlsResult.Ignored // our own send (already in the outbox row)
         val conv = msg.conversationId
@@ -198,6 +214,10 @@ class MlsPipeline(
             if (!d.sender.userId.equals(msg.from, true) || !d.sender.deviceId.equals(msg.fromDevice ?: "", true)) {
                 log("sender mismatch on ${msg.messageId}")
                 undecryptable("sender mismatch")
+            } else if (d.authenticatedData.isNotEmpty()) {
+                // §15.3: only a delete control carries authenticated_data.
+                log("non-empty authenticated_data on message ${msg.messageId}: dropped")
+                undecryptable("unexpected authenticated_data")
             } else {
                 when (val p = MlsPayload.decode(d.plaintext)) {
                     is MlsPayload.Decoded.Text -> MlsResult.Plaintext(msg, p.body)
@@ -219,6 +239,47 @@ class MlsPipeline(
             log("undecryptable ${msg.messageId}: ${ex.message}")
             undecryptable("decrypt: ${ex.message}")
         }
+    }
+
+    /**
+     * §15.4/§15.6 a `delete` control: ordered and parked exactly like a message; every failure is a
+     * [MlsResult.ControlDropped] (no §13.3 line, no tombstone).
+     */
+    private suspend fun applyDelete(mls: MlsEngine, e: Event, d: lk.codegen.risime.net.DeleteEvent, historyBefore: java.time.Instant?, joined: GroupRef?): MlsResult {
+        if (d.fromDevice.equals(mls.deviceId, true)) return MlsResult.OwnDelete(d) // our own control (OwnEcho)
+        val conv = d.conversationId
+        fun dropped(reason: String): MlsResult {
+            log("delete ${d.messageId} dropped: $reason")
+            return MlsResult.ControlDropped(reason)
+        }
+        val gen = d.generation ?: return dropped("no generation")
+        val epoch = d.epoch ?: return dropped("no epoch")
+        val rule1 = beforeHistory(d.serverTs, historyBefore)
+        if (joined != null && gen == joined.generation && epoch < joined.epoch) return dropped("before this device joined")
+        val g = mls.group(conv) ?: return if (rule1) dropped("pre-install") else park(e, conv, gen, epoch)
+        if (gen < g.generation) return dropped("stale generation")
+        if (gen > g.generation) return if (rule1) dropped("pre-install") else park(e, conv, gen, epoch)
+        if (epoch > g.epoch) return park(e, conv, gen, epoch)
+        val dec = try {
+            mls.decrypt(conv, gen, b64.decode(d.ciphertext))
+        } catch (ex: MlsMalformedException) {
+            log("delete ${d.messageId} unverifiable: ${ex.message}")
+            return MlsResult.DeleteUnverified(d, ex.message ?: "Malformed")
+        } catch (ex: MlsDecryptException) {
+            return dropped(if (rule1) "pre-install" else "decrypt: ${ex.message}")
+        } catch (ex: IllegalArgumentException) {
+            return dropped("bad base64")
+        }
+        // §15.4 step 1: the attested deleter is the event's from / from_device.
+        if (!dec.sender.userId.equals(d.from, true) || !dec.sender.deviceId.equals(d.fromDevice ?: "", true)) return dropped("sender mismatch")
+        val env = MlsPayload.decode(dec.plaintext) as? MlsPayload.Decoded.Delete ?: return dropped("not a delete envelope")
+        // §15.4 step 2: AAD set = envelope set = event targets set (duplicates are malformed).
+        val aad = lk.codegen.risime.data.deletes.DeleteAad.decode(dec.authenticatedData) ?: return dropped("bad authenticated_data")
+        val eventIds = d.targets.map { t -> lk.codegen.risime.data.deletes.TimeUuid.canonical(t.messageId)?.lowercase() ?: return dropped("bad target id") }
+        if (eventIds.toSet().size != eventIds.size) return dropped("duplicate targets")
+        val set = aad.toSet()
+        if (env.targets.toSet() != set || eventIds.toSet() != set) return dropped("binding mismatch")
+        return MlsResult.Delete(d, dec.sender.userId, dec.senderIsAdmin)
     }
 
     /**
