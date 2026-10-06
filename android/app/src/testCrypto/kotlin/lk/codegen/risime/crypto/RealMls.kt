@@ -43,7 +43,8 @@ object RealMls {
         fun close() = conn.close()
     }
 
-    fun device(userId: String, deviceId: String, trusted: List<String> = listOf(attestor.publicJwk())): Device {
+    /** [attest] = sign the attestation with the test attestor (false: the live server attests). */
+    fun device(userId: String, deviceId: String, trusted: List<String> = listOf(attestor.publicJwk()), attest: Boolean = true): Device {
         val conn = BundledSQLiteDriver().open(":memory:")
         conn.execSQL(Migration2To3.SQL.first()) // mls_kv
         val sql = object : KvSql {
@@ -79,7 +80,7 @@ object RealMls {
             }
         }
         val engine = UniffiMlsEngineFactory().open(sql, KvSealer(ByteArray(32) { 9 }), runInTx, userId, deviceId, trusted)
-        engine.setAttestation(attestor.attest(userId, deviceId, engine.signatureKey(), (System.currentTimeMillis() / 1000).toULong()))
+        if (attest) engine.setAttestation(attestor.attest(userId, deviceId, engine.signatureKey(), (System.currentTimeMillis() / 1000).toULong()))
         return Device(DeviceRef(userId, deviceId), conn, engine)
     }
 }

@@ -85,6 +85,20 @@ ssh -N spark2-tunnel                 # laptop :4400 -> spark2 127.0.0.1:4000
 - **Logout:** revoke the refresh token, then Keycloak `end_session` in the browser, then delete
   the key, then wipe chats. Auth trouble never wipes; another user signing in does.
 
+## E2EE phase B (decisions 036, 037)
+- **The real engine** (`UniffiMlsEngine` over risime-mls-ffi) loads only when the server serves
+  attestation keys. The pilot answers `mls_unavailable` today, so release behaves exactly like
+  v1.6.
+  - Trusted keys = `BuildConfig.MLS_PINNED_KEYS` (empty until rollout) + the server's keys.
+- **Release packages the core** for arm64-v8a, x86_64, armeabi-v7a and x86, with compressed
+  native libs: release APK 12.7 → 19.9 MB.
+- **Registration with the MLS key** → attestation (verified in the core) → key packages topped up
+  (also after every Welcome and on the low signal).
+- **Membership executor:** add/remove after the named-committer delay. A `409` catches up and
+  re-checks.
+- **Real-crypto JVM tests** (`src/testCrypto`, host build via JNA): `RealMlsPipelineTest` (6
+  tests). `LiveE2eeInteropTest` runs when the interop config has an `"e2ee"` block.
+
 ## E2EE phase A (contract v1.7; decisions 033, 035)
 Built against an `MlsEngine` interface; the real core arrives in phase B. Until then the app
 behaves exactly like v1.6 and the dev banner stays.
@@ -409,7 +423,16 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
     - The release build has no such button.
 43. Upgrade from 0.2.x (Room v2 → v3): install over it. Chats, friends and login survive.
     Everything looks as before (no MLS core yet), with no lock and no strip.
-44. (Phase B, with the real core) Two v1.7 phones that are friends: opening the chat shows
+44. (Needs E2EE on: an attestation key on the server, and the key pinned in the build.) Two v1.7
+    phones that are friends: opening the chat shows
     "🔒 End-to-end encrypted" within a second or two. Messages flow, and the server log shows
     only ciphertext. With one phone still on 0.2.x: "Not end-to-end encrypted yet: <name> needs
     to update", and plaintext keeps working.
+45. E2EE off (today's pilot): a 0.3 build behaves exactly like 0.2. No lock, no strip; the
+    server log shows `GET /mls/attestation_keys` → 503 once per sign-in and no `PUT` with `mls`.
+46. E2EE on, multi-device: sign in on a second phone with the same account. Within about 30 s
+    your first phone (the named committer) adds it. The new phone shows the lock and receives new
+    messages; old history isn't shared (decision 032). Sign out on the second phone: it's removed
+    from the group, and new messages don't reach it.
+47. E2EE on, 32-bit phone (armeabi-v7a): it registers with MLS (the server shows `mls` for its
+    device), and a chat with it becomes encrypted.
