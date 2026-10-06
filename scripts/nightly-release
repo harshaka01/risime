@@ -158,7 +158,17 @@ git commit -q -m "chore(root): release v$next
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git tag -a "v$next" -m "RisiMe v$next"
-git push -q origin HEAD:main "v$next"   # HEAD:main, so a release can run from a clean worktree
+# Push main first (HEAD:main also works from a clean worktree). Other sessions may have pushed
+# meanwhile: merge origin/main (never rebase: the tag must stay on the tested commit) and retry.
+for attempt in 1 2 3; do
+  git push -q origin HEAD:main && break
+  [ "$attempt" = 3 ] && { echo "could not push main; the tag v$next is local only"; exit 1; }
+  git fetch -q origin main
+  git merge -q --no-edit -m "chore(root): merge release v$next into main
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" origin/main
+done
+git push -q origin "v$next"
 RELEASED=1
 git push -q spark2-backup HEAD:main "v$next" 2>/dev/null || echo "warn: spark2-backup push failed"
 
