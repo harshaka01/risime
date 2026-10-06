@@ -70,4 +70,14 @@ class MergedManifestThemeTest {
     @Test fun debugManifestThemesAreAppCompat() = check("debug")
 
     @Test fun releaseManifestThemesAreAppCompat() = check("release")
+
+    /** §14.7 / android R7: the Photo Picker and the Save dialog need no storage permission on any version. */
+    @Test fun noStoragePermissionInEitherVariant() {
+        for (variant in listOf("debug", "release")) {
+            val text = File(System.getProperty("risime.mergedManifest.$variant")).readText()
+            for (p in listOf("WRITE_EXTERNAL_STORAGE", "READ_EXTERNAL_STORAGE", "READ_MEDIA_IMAGES", "READ_MEDIA_VISUAL_USER_SELECTED", "MANAGE_EXTERNAL_STORAGE")) {
+                org.junit.Assert.assertFalse("$variant declares $p", text.contains("android.permission.$p"))
+            }
+        }
+    }
 }

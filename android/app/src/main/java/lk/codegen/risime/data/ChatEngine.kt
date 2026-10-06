@@ -75,6 +75,8 @@ class ChatEngine(
      * everything up to now as already notified.
      */
     private val onFreshReplayDone: suspend () -> Unit = {},
+    /** §14: image envelopes (null = an app without images: `image` payloads are ignored). */
+    private val images: lk.codegen.risime.data.media.ImageHooks? = null,
 ) : RealtimeListener {
     /** §13.2: this join's `history_before` (in memory only; every join returns it). */
     @Volatile private var historyBefore: Instant? = null
@@ -153,7 +155,14 @@ class ChatEngine(
             newIncoming = newIncoming || applied
         }
         if (newIncoming) flushAcks()
+        if (imagesStored) {
+            imagesStored = false
+            images?.received()
+        }
     }
+
+    /** §14.7: set when an image row was stored; downloads are scheduled after the transactions (never inside). */
+    @Volatile private var imagesStored = false
 
     /**
      * Inline a referenced commit/Welcome (§12.6). Returns the event to apply, or null on a transient
@@ -221,6 +230,15 @@ class ChatEngine(
             if (r is MlsResult.BeforeInstall) upsertMarker(r.conversationId, SystemLine.HISTORY_GAP, r.serverTs)
             if (r is MlsResult.Dropped) r.conversationId?.let { upsertMarker(it, SystemLine.UNDECRYPTABLE, r.serverTs) }
             if (r is MlsResult.Plaintext) incoming = applyMessage(me, r.message, r.body) || incoming
+            if (r is MlsResult.Image) {
+                val hooks = images
+                if (hooks != null) {
+                    incoming = applyMessage(me, r.message, r.envelope.caption.orEmpty(), MessageEntity.KIND_IMAGE, r.envelope.blob.blobId) { row ->
+                        hooks.stored(row, r.envelope)
+                        imagesStored = true
+                    } || incoming
+                }
+            }
             if (r is MlsResult.Reaction) {
                 applyReaction(r.message.conversationId, r.target, r.message.from, r.emoji, r.op, r.message.serverTs, r.message.messageId, r.message.clientMsgId)
             }
@@ -254,7 +272,15 @@ class ChatEngine(
     }
 
     /** @return true if a new incoming message was stored (needs a delivered ack). */
-    private suspend fun applyMessage(me: String, m: MessageData, body: String): Boolean {
+    private suspend fun applyMessage(
+        me: String,
+        m: MessageData,
+        body: String,
+        kind: String = MessageEntity.KIND_TEXT,
+        blobId: String? = null,
+        /** In the same transaction, right after the new row (§14.7: the image's media row). */
+        onInserted: suspend (MessageEntity) -> Unit = {},
+    ): Boolean {
         if (messages.byMessageId(m.messageId) != null) return false
         val outgoing = m.from.equals(me, ignoreCase = true)
         messages.byClientMsgId(m.clientMsgId)?.let { row ->
@@ -267,25 +293,27 @@ class ChatEngine(
         val restored = historicalLocalTs(m.serverTs)
         // S-b: received history from before this install was handled by the old one: read, no acks, no badge.
         val preInstall = !outgoing && historyBefore?.let { hb -> HistoryMarkers.epochMs(m.serverTs)?.let { it < hb.toEpochMilli() } } == true
-        messages.insert(
-            MessageEntity(
-                clientMsgId = m.clientMsgId,
-                messageId = m.messageId,
-                conversationId = m.conversationId,
-                from = m.from,
-                to = m.to ?: m.conversationId, // §12.7: group messages have no `to`
-                body = body,
-                serverTs = m.serverTs,
-                localTs = restored ?: clock(),
-                status = when {
-                    outgoing -> MessageStatus.SENT
-                    preInstall -> MessageStatus.READ
-                    else -> MessageStatus.DELIVERED
-                }.name,
-                outgoing = outgoing,
-                ackedStatus = if (preInstall) MessageStatus.READ.name else null,
-            ),
+        val row = MessageEntity(
+            clientMsgId = m.clientMsgId,
+            messageId = m.messageId,
+            conversationId = m.conversationId,
+            from = m.from,
+            to = m.to ?: m.conversationId, // §12.7: group messages have no `to`
+            body = body,
+            serverTs = m.serverTs,
+            localTs = restored ?: clock(),
+            status = when {
+                outgoing -> MessageStatus.SENT
+                preInstall -> MessageStatus.READ
+                else -> MessageStatus.DELIVERED
+            }.name,
+            outgoing = outgoing,
+            ackedStatus = if (preInstall) MessageStatus.READ.name else null,
+            kind = kind,
+            blobId = blobId,
         )
+        if (messages.insert(row) == -1L) return false
+        onInserted(row)
         if (outgoing || preInstall) return false
         onIncomingFrom(m.from)
         return true
@@ -344,10 +372,16 @@ class ChatEngine(
      * advances). stale_epoch → catch up, re-encrypt with the same client_msg_id, up to
      * [staleEpochRetries] times, then back off; e2ee_required → catch up and encrypt (never FAILED).
      */
-    private suspend fun send(m: MessageEntity): PushResult<lk.codegen.risime.net.MsgSendReply> =
-        sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { lk.codegen.risime.data.mls.MlsPayload.text(m.body) }) {
+    private suspend fun send(m: MessageEntity): PushResult<lk.codegen.risime.net.MsgSendReply> {
+        if (m.image) {
+            // §14.7 Sending 6: the stored envelope, encrypted at send time; never in plaintext.
+            val env = images?.envelope(m.clientMsgId) ?: return PushResult.Rejected(IMAGE_UNAVAILABLE)
+            return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { env }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
+        }
+        return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { lk.codegen.risime.data.mls.MlsPayload.text(m.body) }) {
             realtime().sendMessage(MsgSend(m.clientMsgId, m.to, m.body, isoMillis(m.localTs)))
         }
+    }
 
     /** e2ee when the conversation has a group (envelope encrypted at send time), else [plain]; shared retry loops. */
     private suspend fun sendPayload(
@@ -477,8 +511,13 @@ class ChatEngine(
         return true
     }
 
-    /** Deletes a FAILED message (never accepted by the server). */
-    suspend fun deleteFailed(clientMsgId: String): Boolean = messages.deleteFailed(clientMsgId) > 0
+    /** Deletes a FAILED message (never accepted by the server), with an image's key and cached file. */
+    suspend fun deleteFailed(clientMsgId: String): Boolean {
+        val deleted = tx.run {
+            (messages.deleteFailed(clientMsgId) > 0).also { if (it) images?.deleted(clientMsgId) }
+        }
+        return deleted
+    }
 
     // ---- Acks ----
 
@@ -508,6 +547,9 @@ class ChatEngine(
 
         /** Local only: stale_epoch/e2ee_required couldn't be resolved now; stays PENDING, retried later. */
         const val RETRY_LATER = "retry_later"
+
+        /** Local only: an image row without a stored envelope (deleted meanwhile). */
+        const val IMAGE_UNAVAILABLE = "image_unavailable"
 
         /** Local only: a group message whose MLS group isn't here yet; stays PENDING without blocking the outbox. */
         const val WAITING_FOR_GROUP = "waiting_for_group"

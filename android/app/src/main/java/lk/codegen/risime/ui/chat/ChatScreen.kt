@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -34,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.unit.dp
@@ -76,6 +78,11 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     }
     val reactions by vm.reactions.collectAsStateWithLifecycle()
     var reactionsFor by remember { mutableStateOf<String?>(null) }
+    val media by vm.imgs.media.collectAsStateWithLifecycle()
+    val imagesReady by vm.imgs.imagesReady.collectAsStateWithLifecycle()
+    val missingIsMe by vm.imgs.missingIsMe.collectAsStateWithLifecycle()
+    val toast by vm.imgs.toast.collectAsStateWithLifecycle()
+    val pickPhoto = rememberImageLayer(vm.imgs, messages)
 
     // Read acks only while this chat is actually on screen.
     LaunchedEffect(messages, resumed) {
@@ -125,6 +132,8 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                     is ChatItem.Msg -> DmMessageRow(item.m) {
                         Bubble(
                             item.m, canRetry = isFriend, onRetry = vm::retry, onDelete = vm::delete,
+                            media = media[item.m.clientMsgId], loader = vm.imgs.loader,
+                            onImageTap = { vm.imgs.tap(item.m) }, onImageVisible = vm.imgs::onVisible,
                             chips = item.m.messageId?.let { reactions[it] }.orEmpty(),
                             canReact = isFriend && item.m.messageId != null,
                             onReact = { e, op -> item.m.messageId?.let { vm.react(it, e, op) } },
@@ -133,9 +142,22 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                     }
                 }
             }
+            toast?.let { ImageToast(it) }
             if (!isFriend) {
                 NotFriendsBar(name, requested, onAddFriend = vm::requestFriend)
             } else Composer(
+                attach = if (!vm.imgs.available) null else ({
+                    val blocked = dmImagesBlockedText(encrypted, imagesReady, missingIsMe, name)
+                    AttachButton(enabled = blocked == null) {
+                        if (blocked == null) {
+                            pickPhoto()
+                        } else {
+                            vm.imgs.toast.value = blocked
+                            vm.imgs.refreshImagesReady()
+                            if (!encrypted) vm.refreshE2ee()
+                        }
+                    }
+                }),
                 placeholder = if (encrypted) "Encrypted message" else "Message",
                 value = draftValue,
                 onValue = {
@@ -172,6 +194,10 @@ private fun Bubble(
     canReact: Boolean,
     onReact: (String, String) -> Unit,
     onOpenReactions: () -> Unit,
+    media: lk.codegen.risime.data.db.MediaEntity? = null,
+    loader: ImageLoader? = null,
+    onImageTap: () -> Unit = {},
+    onImageVisible: (String) -> Unit = {},
 ) {
     val failed = m.status == MessageStatus.FAILED.name
     var sheet by remember { mutableStateOf(false) }
@@ -193,12 +219,17 @@ private fun Bubble(
         tapOpensMenu = failed,
         onMenu = { sheet = true },
         footer = { ReactionChipsRow(chips, onOpenReactions) },
+        image = if (m.image) ({ ImageBubbleContent(media, loader, onImageVisible) }) else null,
+        onTap = if (m.image) onImageTap else null,
+        tapLabel = if (m.image) imageTapLabel(imageTap(media)) else null,
     )
     if (sheet) {
         val actions = buildList<Pair<String, () -> Unit>> {
-            add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
+            if (!m.image || m.body.isNotBlank()) add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
             if (retryable) add("Retry" to { onRetry(m.clientMsgId) })
             if (failed) add("Delete" to { onDelete(m.clientMsgId) })
+            // §14.7: cancelling an uploading photo deletes it (and an uploaded blob).
+            if (m.image && m.outgoing && m.status == MessageStatus.PENDING.name) add("Cancel" to { onDelete(m.clientMsgId) })
         }
         MessageActionsSheet(
             canReact = canReact,
@@ -231,6 +262,8 @@ internal fun Composer(
     onValue: (androidx.compose.ui.text.input.TextFieldValue) -> Unit,
     onSend: () -> Unit,
     placeholder: String = "Message",
+    /** §14: the attach-photo button (null: photos aren't available in this app/chat). */
+    attach: (@Composable () -> Unit)? = null,
 ) {
     var picker by remember { mutableStateOf(false) }
     val text = value.text
@@ -247,6 +280,7 @@ internal fun Composer(
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
+                attach?.invoke()
                 IconButton(onClick = { picker = true }) {
                     Text("🙂", style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { contentDescription = "Emoji" })
                 }
@@ -271,4 +305,28 @@ internal fun Composer(
             onValue(androidx.compose.ui.text.input.TextFieldValue(newText, androidx.compose.ui.text.TextRange(sel.min + e.length)))
         }, onDismiss = { picker = false })
     }
+}
+
+/** §14.1: attach a photo; a disabled-looking button still answers a tap with the reason (and refetches readiness). */
+@Composable
+internal fun AttachButton(enabled: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick) {
+        Icon(
+            Icons.Default.Add,
+            if (enabled) "Attach photo" else "Attach photo (unavailable)",
+            tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+        )
+    }
+}
+
+/** A short notice above the composer (refusals, "Saved to Pictures/RisiMe"). */
+@Composable
+internal fun ImageToast(text: String) {
+    Text(
+        text,
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.secondaryContainer).padding(horizontal = Spacing.lg, vertical = Spacing.xs)
+            .semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSecondaryContainer,
+    )
 }

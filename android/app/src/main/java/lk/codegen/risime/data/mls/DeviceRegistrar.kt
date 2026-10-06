@@ -33,6 +33,8 @@ class DeviceRegistrar(
     private val appVersion: String,
     private val engine: () -> MlsEngine?,
     private val topUpTo: Int = 50,
+    /** §14.1: advertise `images` once this app can receive and render images. */
+    private val imagesSupported: () -> Boolean = { false },
     private val lowWater: Int = 20,
     /** §12.1: the signature key (b64) whose key packages were already replaced with 0xFA01 ones. */
     private val groupsReplacedFor: suspend () -> String? = { null },
@@ -53,7 +55,11 @@ class DeviceRegistrar(
         }
         val sigKey = b64.encodeToString(mls.signatureKey())
         // §12.1: advertise `groups` only with a core that really does groups (0xFA01 key packages).
-        val caps = if (mls.groupsSupported) listOf(DeviceMls.CAP_GROUPS) else null
+        val caps = when {
+            mls.groupsSupported && imagesSupported() -> listOf(DeviceMls.CAP_GROUPS, DeviceMls.CAP_IMAGES)
+            mls.groupsSupported -> listOf(DeviceMls.CAP_GROUPS)
+            else -> null
+        }
         val body = DevicePut(DevicePut.PLATFORM_ANDROID, pushToken?.takeIf { it.isNotBlank() }, appVersion, DeviceMls(sigKey, caps))
         return when (val r = api.putMlsDevice(id, body)) {
             is ApiResult.Ok -> {

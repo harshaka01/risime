@@ -34,6 +34,7 @@ class ImageTransferTest {
     private val sealer = MediaSealer { KvSealer(ByteArray(32) { 9 }) }
     private val crypto = FakeMediaCrypto()
     private var ids = 0
+    private var now = 1_000L
     private lateinit var uploader: ImageUploader
     private lateinit var downloader: ImageDownloader
 
@@ -46,7 +47,7 @@ class ImageTransferTest {
         server.start()
         api = ApiClient(OkHttpClient(), { server.url("/").toString() }, { "tok" })
         files = MediaFiles(tmp.newFolder("media"))
-        uploader = ImageUploader(api, media, messages, files, clock = { 1_000 }, newBlobId = { "cb${++ids}" })
+        uploader = ImageUploader(api, media, messages, files, clock = { now }, newBlobId = { "cb${++ids}" })
         downloader = ImageDownloader(api, media, files, sealer, { crypto }, clock = { 1_000 })
         crypto.register(key, blob)
     }
@@ -94,7 +95,7 @@ class ImageTransferTest {
         server.enqueue(MockResponse().setResponseCode(503))
         server.enqueue(reply(code = 200))
         val sleeps = mutableListOf<Long>()
-        assertEquals(UploadOutcome.Done("b1"), uploader.run("c1") { sleeps += it })
+        assertEquals(UploadOutcome.Done("b1"), uploader.run("c1") { sleeps += it; now += it })
         assertEquals(listOf(1000L), sleeps)
         val first = server.takeRequest().path
         assertEquals(first, server.takeRequest().path) // same client_blob_id
@@ -137,6 +138,10 @@ class ImageTransferTest {
         outgoing()
         server.enqueue(MockResponse().setResponseCode(429).setHeader("Retry-After", "7200"))
         assertEquals(UploadOutcome.Retry(7_200_000), uploader.run("c1") { error("too long to wait in-run") })
+        // Before Retry-After nothing is sent.
+        assertEquals(UploadOutcome.Retry(7_200_000), uploader.attempt("c1"))
+        assertEquals(1, server.requestCount)
+        media.update(media.get("c1")!!.copy(nextAt = 0))
         server.enqueue(MockResponse().setResponseCode(507).setBody("""{"error":{"code":"storage_full","message":""}}"""))
         assertEquals(UploadOutcome.Retry(ImageUploader.HOUR_MS), uploader.run("c1") { error("hourly") })
         assertEquals(MediaState.ENCRYPTED.name, media.get("c1")!!.state)

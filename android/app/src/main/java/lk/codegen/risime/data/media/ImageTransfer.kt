@@ -106,6 +106,7 @@ class ImageUploader(
             MediaState.ENCRYPTED.name, MediaState.UPLOADING.name -> Unit
             else -> return UploadOutcome.Failed("not an upload")
         }
+        if (row.nextAt > clock()) return UploadOutcome.Retry(row.nextAt - clock()) // Retry-After, 507 hourly
         val file = row.fileName?.let(files::file)?.takeIf { it.isFile && it.length() == row.blobSize }
             ?: return fail(row, "file_lost")
         val cbid = row.clientBlobId ?: newBlobId()

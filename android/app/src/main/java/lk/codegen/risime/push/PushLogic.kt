@@ -63,23 +63,30 @@ fun planChatNotifications(
                     conversationId = conv,
                     peerId = peer,
                     title = groupNames[conv] ?: lk.codegen.risime.data.groups.GROUP_NAME_PENDING,
-                    lines = shown.map { "${who(it.from)}: ${preview(it.body)}" },
+                    lines = shown.map { "${who(it.from)}: ${preview(bodyPreview(it.kind, it.body))}" },
                     count = sorted.size,
                     newestTs = sorted.last().localTs,
                     group = true,
-                    messages = shown.map { NotifLine(who(it.from), preview(it.body), it.localTs) },
+                    messages = shown.map { NotifLine(who(it.from), preview(bodyPreview(it.kind, it.body)), it.localTs) },
                 )
             }
             ChatNotification(
                 conversationId = conv,
                 peerId = peer,
                 title = names[peer.lowercase()] ?: "New message",
-                lines = sorted.takeLast(MAX_LINES).map { preview(it.body) },
+                lines = sorted.takeLast(MAX_LINES).map { preview(bodyPreview(it.kind, it.body)) },
                 count = sorted.size,
                 newestTs = sorted.last().localTs,
             )
         }
         .sortedByDescending { it.newestTs }
+}
+
+/** §14.7 Receiving 9: an image reads "📷 Photo" or "📷 <caption>" (never the image itself). */
+fun bodyPreview(kind: String, body: String): String = when {
+    kind != lk.codegen.risime.data.db.MessageEntity.KIND_IMAGE -> body
+    body.isBlank() -> "📷 Photo"
+    else -> "📷 $body"
 }
 
 fun preview(body: String): String {
@@ -123,7 +130,7 @@ fun mergeReactionNotifications(
         .mapNotNull { r -> myMessage(r.targetMessageId)?.takeIf { it.outgoing }?.let { r to it } }
         .sortedBy { it.first.localTs }
         .forEach { (r, target) ->
-            val line = "${nameOf(r.reactorUserId)} reacted ${r.emoji} to: ${preview(target.body)}"
+            val line = "${nameOf(r.reactorUserId)} reacted ${r.emoji} to: ${preview(bodyPreview(target.kind, target.body))}"
             val cur = byConv[r.conversationId]
             byConv[r.conversationId] = if (cur == null) {
                 ChatNotification(r.conversationId, r.reactorUserId, nameOf(r.reactorUserId), listOf(line), 1, r.localTs)

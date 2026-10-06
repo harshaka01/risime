@@ -165,8 +165,8 @@ fun ChatsScreen(
 /** A DM row's preview: "You: …" for mine; a §13.3 marker or other system line as is (shown muted, no ticks). */
 fun dmPreview(last: lk.codegen.risime.data.db.LastMessage): String = when {
     last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_SYSTEM -> last.body
-    last.outgoing -> "You: " + last.body
-    else -> last.body
+    last.outgoing -> "You: " + lk.codegen.risime.push.bodyPreview(last.kind, last.body)
+    else -> lk.codegen.risime.push.bodyPreview(last.kind, last.body)
 }
 
 fun connectionLabel(s: ConnectionState): String? = when (s) {
@@ -215,19 +215,20 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
 @Composable
 private fun GroupRowItem(row: ChatRow, onClick: () -> Unit) {
     val last = row.last
+    val lastText = last?.let { lk.codegen.risime.push.bodyPreview(it.kind, it.body) }.orEmpty()
     val sub = when {
         row.typingLabel != null -> row.typingLabel
         row.stateLine != null -> row.stateLine
-        last == null || last.body.isEmpty() -> "Group"
-        last.outgoing -> "You: " + last.body
-        row.lastSender != null -> "${row.lastSender}: " + last.body
-        else -> last.body
+        last == null || lastText.isEmpty() -> "Group"
+        last.outgoing -> "You: $lastText"
+        row.lastSender != null -> "${row.lastSender}: $lastText"
+        else -> lastText
     }
     ListRow(
         title = row.name,
         subtitle = sub,
         leading = { InitialsAvatar(row.name) },
-        meta = last?.takeIf { it.body.isNotEmpty() }?.let { shortStamp(it.localTs) },
+        meta = last?.takeIf { lastText.isNotEmpty() }?.let { shortStamp(it.localTs) },
         strong = row.unread > 0,
         subtitleColor = when {
             row.typingLabel != null -> MaterialTheme.colorScheme.primary

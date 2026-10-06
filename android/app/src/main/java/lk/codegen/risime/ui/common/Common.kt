@@ -296,6 +296,10 @@ fun MessageBubble(
     /** §12 groups: the sender's name above an incoming bubble (first of a run), in [senderColor]. */
     sender: String? = null,
     senderColor: Color = Color.Unspecified,
+    /** §14: the photo above the caption; [onTap] (open, download, retry) with [tapLabel] for TalkBack. */
+    image: (@Composable () -> Unit)? = null,
+    onTap: (() -> Unit)? = null,
+    tapLabel: String? = null,
 ) {
     val c = RisiTheme.colors
     val statusLabel = status?.let { tickLabel(it) }
@@ -309,24 +313,27 @@ fun MessageBubble(
             modifier = Modifier.widthIn(max = Sizes.bubbleMaxWidth)
                 .minimumInteractiveComponentSize()
                 .combinedClickable(
-                    onClickLabel = if (tapOpensMenu) "Show options" else null,
+                    onClickLabel = if (tapOpensMenu) "Show options" else tapLabel,
                     onLongClickLabel = "Message options",
-                    onClick = { if (tapOpensMenu) onMenu() },
+                    onClick = { if (tapOpensMenu) onMenu() else onTap?.invoke() },
                     onLongClick = onMenu,
                 )
                 .clearAndSetSemantics {
                     contentDescription = buildString {
                         append(if (mine) "You: " else sender?.let { "$it: " } ?: "")
-                        append(body)
+                        append(if (image == null) body else if (body.isBlank()) "Photo" else "Photo, $body")
                         append(", ").append(time)
                         statusLabel?.let { append(", ").append(it) }
                         note?.let { append(". ").append(it) }
                     }
                 },
         ) {
-            Column(Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
+            Column(Modifier.padding(horizontal = if (image != null) Spacing.xs else Spacing.md, vertical = if (image != null) Spacing.xs else Spacing.sm)) {
                 sender?.let { Text(it, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = senderColor, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                Text(body, style = MaterialTheme.typography.bodyLarge)
+                image?.invoke()
+                if (image == null || body.isNotBlank()) {
+                    Text(body, style = MaterialTheme.typography.bodyLarge, modifier = if (image != null) Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs) else Modifier)
+                }
                 note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
                 Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
                     Text(time, style = MaterialTheme.typography.labelSmall, color = if (mine) c.bubbleMineMeta else c.bubbleTheirsMeta)

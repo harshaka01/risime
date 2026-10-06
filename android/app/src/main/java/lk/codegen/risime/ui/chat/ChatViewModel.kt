@@ -70,8 +70,12 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
         }
     }
 
+    /** §14: photos in this chat. */
+    val imgs = ImageActions(c, viewModelScope, meId, conversationId)
+
     init {
         refreshE2ee()
+        imgs.refreshImagesReady()
         viewModelScope.launch { c.behaviour.chatOpen(peerId) }
         c.openConversation.value = conversationId
         c.notifier.cancelChat(conversationId)
@@ -101,11 +105,15 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
         viewModelScope.launch { c.engine.sendText(peerId, text) }
     }
 
+    private fun isImage(id: String) = messages.value.firstOrNull { it.clientMsgId == id }?.image == true
+
     fun retry(clientMsgId: String) {
+        if (isImage(clientMsgId)) return imgs.retry(clientMsgId)
         c.scope.launch { c.engine.retry(clientMsgId) }
     }
 
     fun delete(clientMsgId: String) {
+        if (isImage(clientMsgId)) return imgs.delete(clientMsgId)
         c.scope.launch { c.engine.deleteFailed(clientMsgId) }
     }
 

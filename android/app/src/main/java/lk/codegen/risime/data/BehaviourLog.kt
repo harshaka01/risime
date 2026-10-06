@@ -28,6 +28,10 @@ class BehaviourLog(
         }
     }
 
+    /** §14.9: "image sent" with byte size and dimensions only, never content or caption. */
+    suspend fun imageSent(peerId: String, bytes: Long, w: Int, h: Int) =
+        log(IMAGE_SENT, peerHash(peerId), buildJsonObject { put("bytes", bytes); put("w", w); put("h", h) }.toString())
+
     suspend fun peerHash(peerId: String): String = hash(peerId.lowercase(), salt())
 
     private suspend fun log(type: String, peerHash: String?, meta: String?) {
@@ -39,6 +43,7 @@ class BehaviourLog(
         const val CHAT_OPEN = "chat_open"
         const val MESSAGE_SENT = "message_sent"
         const val REPLY_LATENCY_MS = "reply_latency_ms"
+        const val IMAGE_SENT = "image_sent"
 
         fun hash(peerId: String, salt: String): String =
             MessageDigest.getInstance("SHA-256").digest((peerId + salt).toByteArray())

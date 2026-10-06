@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import lk.codegen.risime.data.BehaviourLog
@@ -240,6 +241,77 @@ class AppContainer(
         override suspend fun <T> run(block: suspend () -> T): T = db.withTransaction { block() }
     }
 
+    // ---- Images (contract v1.11 §14, decision 042). Only with the native core (media API). ----
+    private val appContext: Context = context.applicationContext
+
+    fun appContentResolver(): android.content.ContentResolver = appContext.contentResolver
+    val mediaCrypto: lk.codegen.risime.data.media.MediaCrypto? by lazy {
+        if (BuildConfig.CRYPTO_AVAILABLE) lk.codegen.risime.data.media.MediaCrypto.get() else null
+    }
+    private val mediaFiles = lk.codegen.risime.data.media.MediaFiles(File(context.noBackupFilesDir, "media"))
+    private val mediaSealer = lk.codegen.risime.data.media.MediaSealer { KvSealer(mlsDbKey.get()) }
+    val images = lk.codegen.risime.data.media.ImageRepository(
+        db.media(), db.messages(), dbTx, mediaSealer, mediaFiles, { mediaCrypto }, api,
+        enqueueUpload = { id -> lk.codegen.risime.push.MediaUploadWorker.enqueue(appContext, id) },
+        cancelUpload = { id -> lk.codegen.risime.push.MediaUploadWorker.cancel(appContext, id) },
+        enqueueDownloads = { scheduleImageDownloads() },
+        log = { Log.w("RisiMe", it) },
+    )
+    val imageUploader = lk.codegen.risime.data.media.ImageUploader(api, db.media(), db.messages(), mediaFiles)
+    val imageDownloader = lk.codegen.risime.data.media.ImageDownloader(api, db.media(), mediaFiles, mediaSealer, { mediaCrypto })
+    val imageLoader by lazy { lk.codegen.risime.ui.chat.ImageLoader(images) }
+
+    /** §14.1: advertise `images` only with a groups-capable core whose media API is present (receive and render work). */
+    fun imagesSupported(): Boolean = mlsEngine?.groupsSupported == true && mediaCrypto != null
+
+    /** §14.7 Receiving 7: background downloads on unmetered networks (WorkManager), and now if the app is open on one. */
+    fun scheduleImageDownloads() {
+        lk.codegen.risime.push.MediaDownloadWorker.enqueue(appContext)
+        if (foreground.value && lk.codegen.risime.push.currentNetKind(appContext) == lk.codegen.risime.data.media.NetKind.UNMETERED) {
+            scope.launch { downloadAllImages() }
+        }
+    }
+
+    /** Downloads every downloadable image, newest first (the downloader allows 3 at a time). */
+    suspend fun downloadAllImages(): List<lk.codegen.risime.data.media.DownloadOutcome> = kotlinx.coroutines.coroutineScope {
+        val rows = db.media().downloadable()
+        rows.map { r -> async { downloadImage(r.clientMsgId) } }.map { it.await() }.also { images.evict() }
+    }
+
+    /** One image now (tap, or visible in an open chat when the network allows it); a failed check gets one re-download. */
+    suspend fun downloadImage(clientMsgId: String): lk.codegen.risime.data.media.DownloadOutcome {
+        var o = imageDownloader.download(clientMsgId)
+        if (o == lk.codegen.risime.data.media.DownloadOutcome.Retry(0)) o = imageDownloader.download(clientMsgId)
+        return o
+    }
+
+    /** A bubble is on screen: download it if the network policy allows (tap-only on Data Saver / roaming). */
+    fun onImageVisible(clientMsgId: String) {
+        val net = lk.codegen.risime.push.currentNetKind(appContext)
+        if (lk.codegen.risime.data.media.autoDownload(net, visibleInOpenChat = true)) {
+            scope.launch { downloadImage(clientMsgId) }
+        } else {
+            lk.codegen.risime.push.MediaDownloadWorker.enqueue(appContext) // the next unmetered network
+        }
+    }
+
+    /** After an upload: the outbox sends the envelope (a short background connection if the app isn't open). */
+    suspend fun flushOutboxAfterUpload() {
+        if (realtime.state.value == ConnectionState.Live) {
+            engine.flushOutbox()
+            return
+        }
+        if (foreground.value) return // connecting: onLive flushes the outbox
+        if (sessionStore.current() == null) return
+        backgroundSync.value = true
+        try {
+            withTimeoutOrNull(25_000) { realtime.state.first { it == ConnectionState.Live } }
+            delay(2_000) // onLive flushes the outbox
+        } finally {
+            backgroundSync.value = false
+        }
+    }
+
     val groupOps by lazy {
         lk.codegen.risime.data.groups.GroupOpsExecutor(
             { mlsEngine }, groupApi, db.groupOps(), db.groups(), groupStore, dbTx,
@@ -308,6 +380,7 @@ class AppContainer(
     val deviceRegistrar by lazy {
         DeviceRegistrar(
             api, { sessionStore.deviceId() }, BuildConfig.VERSION_NAME, { mlsEngine },
+            imagesSupported = { imagesSupported() },
             groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
             setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },
         )
@@ -427,6 +500,7 @@ class AppContainer(
         onUnrecoverable = { conv -> onGroupUnrecoverable(conv) },
         // §13.3 R7: a fresh install never notifies for replayed events (messages, reactions).
         onFreshReplayDone = { sessionStore.setNotifiedUpTo(maxOf(System.currentTimeMillis(), sessionStore.notifiedUpTo())) },
+        images = images.takeIf { BuildConfig.CRYPTO_AVAILABLE },
     )
 
     val realtime: RealtimeClient = PhoenixRealtimeClient(
@@ -521,6 +595,8 @@ class AppContainer(
         scope.launch {
             realtime.state.collect { if (it == ConnectionState.Live) requestFriendsRefresh() }
         }
+        // §14.7: temp plaintext and orphans go, owed uploads/downloads resume, the cache is trimmed.
+        scope.launch { runCatching { images.startup() }.onFailure { Log.w("RisiMe", "image startup: ${it.message}") } }
         // §12: group state and owed ops after every (re)join.
         scope.launch {
             realtime.state.collect { if (it == ConnectionState.Live) runCatching { syncGroups() } }
@@ -835,6 +911,8 @@ class AppContainer(
     private suspend fun wipeDb(reason: WipeReason) {
         Log.w("RisiMe", "wiping local chats: $reason")
         db.wipe().allChatData()
+        runCatching { androidx.work.WorkManager.getInstance(appContext).cancelAllWork() }
+        mediaFiles.wipe()
         mlsEngine = null
         mlsDbKey.destroy()
     }

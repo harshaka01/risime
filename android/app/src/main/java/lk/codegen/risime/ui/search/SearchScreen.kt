@@ -79,7 +79,7 @@ fun SearchScreen(vm: SearchViewModel, onOpen: (String) -> Unit, onBack: () -> Un
             items(r.messages, key = { "m:" + it.message.clientMsgId }) { h ->
                 ListRow(
                     title = h.peerName,
-                    subtitle = (if (h.message.outgoing) "You: " else "") + h.message.body,
+                    subtitle = (if (h.message.outgoing) "You: " else "") + lk.codegen.risime.push.bodyPreview(h.message.kind, h.message.body),
                     leading = { InitialsAvatar(h.peerName) },
                     meta = shortStamp(h.message.localTs),
                     onClick = { onOpen(h.peerId) },

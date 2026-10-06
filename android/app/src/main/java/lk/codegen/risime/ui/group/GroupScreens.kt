@@ -120,6 +120,13 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
     val resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
     var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     val scroll = rememberChatScrollState()
+    val media by vm.imgs.media.collectAsStateWithLifecycle()
+    val imagesReady by vm.imgs.imagesReady.collectAsStateWithLifecycle()
+    val toast by vm.imgs.toast.collectAsStateWithLifecycle()
+    // §14.1: groups may send while not ready; the sheet says who can't see photos yet.
+    val pickPhoto = lk.codegen.risime.ui.chat.rememberImageLayer(
+        vm.imgs, messages, groupNotice = if (imagesReady == false) lk.codegen.risime.ui.chat.GROUP_IMAGES_NOTICE else null,
+    )
 
     LaunchedEffect(messages, resumed) {
         if (resumed && messages.any { !it.outgoing && it.status != MessageStatus.READ.name }) vm.markRead()
@@ -168,7 +175,12 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 onInfo = vm::openReadBy,
                 scroll = scroll,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
+                media = media,
+                loader = vm.imgs.loader,
+                onImageTap = vm.imgs::tap,
+                onImageVisible = vm.imgs::onVisible,
             )
+            toast?.let { lk.codegen.risime.ui.chat.ImageToast(it) }
             val off = composer as? GroupComposer.Disabled
             if (off != null) {
                 Surface(tonalElevation = 2.dp) {
@@ -180,6 +192,12 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 }
             } else {
                 Composer(
+                    attach = if (!vm.imgs.available || encrypted != true) null else ({
+                        lk.codegen.risime.ui.chat.AttachButton(enabled = true) {
+                            vm.imgs.refreshImagesReady()
+                            pickPhoto()
+                        }
+                    }),
                     placeholder = if (encrypted == true) "Encrypted message" else "Message",
                     value = draft,
                     onValue = { draft = it; vm.onDraftChanged(it.text) },
@@ -213,6 +231,10 @@ internal fun GroupMessageList(
     onInfo: (String) -> Unit,
     modifier: Modifier = Modifier,
     scroll: ChatScrollState = rememberChatScrollState(),
+    media: Map<String, lk.codegen.risime.data.db.MediaEntity> = emptyMap(),
+    loader: lk.codegen.risime.ui.chat.ImageLoader? = null,
+    onImageTap: (MessageEntity) -> Unit = {},
+    onImageVisible: (String) -> Unit = {},
 ) {
     ChatMessageList(
         messages = messages,
@@ -236,6 +258,8 @@ internal fun GroupMessageList(
                     onOpenReactions = { onOpenReactions(item.m.messageId) },
                     onRetry = onRetry, onDelete = onDelete,
                     onInfo = { item.m.messageId?.let(onInfo) },
+                    media = media[item.m.clientMsgId], loader = loader,
+                    onImageTap = { onImageTap(item.m) }, onImageVisible = onImageVisible,
                 )
             }
         }
@@ -253,6 +277,10 @@ private fun GroupBubble(
     onRetry: (String) -> Unit,
     onDelete: (String) -> Unit,
     onInfo: () -> Unit,
+    media: lk.codegen.risime.data.db.MediaEntity? = null,
+    loader: lk.codegen.risime.ui.chat.ImageLoader? = null,
+    onImageTap: () -> Unit = {},
+    onImageVisible: (String) -> Unit = {},
 ) {
     val failed = m.status == MessageStatus.FAILED.name
     var sheet by remember { mutableStateOf(false) }
@@ -276,13 +304,17 @@ private fun GroupBubble(
         footer = { ReactionChipsRow(chips, onOpenReactions) },
         sender = sender,
         senderColor = memberColor(m.from),
+        image = if (m.image) ({ lk.codegen.risime.ui.chat.ImageBubbleContent(media, loader, onImageVisible) }) else null,
+        onTap = if (m.image) onImageTap else null,
+        tapLabel = if (m.image) lk.codegen.risime.ui.chat.imageTapLabel(lk.codegen.risime.ui.chat.imageTap(media)) else null,
     )
     if (sheet) {
         val actions = buildList<Pair<String, () -> Unit>> {
-            add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
+            if (!m.image || m.body.isNotBlank()) add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
             if (m.outgoing && m.messageId != null) add("Info" to onInfo)
             if (retryable) add("Retry" to { onRetry(m.clientMsgId) })
             if (failed) add("Delete" to { onDelete(m.clientMsgId) })
+            if (m.image && m.outgoing && m.status == MessageStatus.PENDING.name) add("Cancel" to { onDelete(m.clientMsgId) })
         }
         MessageActionsSheet(
             canReact = canAct && m.messageId != null,
@@ -337,6 +369,12 @@ fun GroupInfoContent(
                         ui.stateLine ?: if (ui.memberCount == 1) "1 member" else "${ui.memberCount} members",
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (ui.photosNeedUpdate.isNotEmpty()) {
+                        Text(
+                            "Need to update to see photos: " + ui.photosNeedUpdate.joinToString(", "),
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     if (ui.iAmAdmin) TextButton(onClick = { renaming = true }) { Text("Rename") }
                 }
             }

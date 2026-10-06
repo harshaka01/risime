@@ -67,6 +67,15 @@ class DeviceRegistrarTest {
         assertEquals("/api/v1/me/devices/dev-1/key_packages/count", server.takeRequest().path)
     }
 
+    @Test fun imagesAreAdvertisedOnlyWhenTheAppCanRenderThem() = runBlocking {
+        val reg = DeviceRegistrar(api, { "dev-1" }, "0.3.0", { mls }, imagesSupported = { true }, groupsReplacedFor = { "x" })
+        server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+        server.enqueue(json(200, """{"count":30}"""))
+        reg.register(null)
+        val put = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("[\"groups\",\"images\"]", put["mls"]!!.jsonObject["capabilities"].toString())
+    }
+
     @Test fun coreWithoutGroupsKeepsTheV17Registration() = runBlocking {
         mls.groupsOn = false
         server.enqueue(json(200, """{"attestation":"a.b.c"}"""))

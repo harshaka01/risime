@@ -102,6 +102,8 @@ data class GroupInfoUi(
     val addCandidates: List<PickFriend> = emptyList(),
     val error: String? = null,
     val busy: Boolean = false,
+    /** §14.1 `missing_images`: members whose app can't show photos yet. */
+    val photosNeedUpdate: List<String> = emptyList(),
 ) {
     val memberCount: Int get() = members.count { it.state != GroupMember.STATE_PENDING_ADD }
 
@@ -132,17 +134,26 @@ fun groupInfoUi(meId: String, g: GroupEntity?, members: List<GroupMemberEntity>,
 
 class GroupInfoViewModel(private val c: AppContainer, private val meId: String, val conversationId: String) : ViewModel() {
     private val error = MutableStateFlow<String?>(null)
+    private val missingImages = MutableStateFlow<List<String>>(emptyList())
 
     val ui: StateFlow<GroupInfoUi> = combine(
         c.db.groups().observe(conversationId),
         c.db.groups().observeMembers(conversationId),
         c.contacts.contacts,
         error,
-    ) { g, members, contacts, err -> groupInfoUi(meId, g, members, contacts).copy(error = err) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GroupInfoUi())
+        missingImages,
+    ) { g, members, contacts, err, missing ->
+        val names = missing.distinctBy { it.lowercase() }.map { id ->
+            if (id.equals(meId, true)) "Your other phone" else members.firstOrNull { it.userId.equals(id, true) }?.displayName ?: "Someone"
+        }
+        groupInfoUi(meId, g, members, contacts).copy(error = err, photosNeedUpdate = names)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GroupInfoUi())
 
     init {
         viewModelScope.launch { c.refreshGroup(conversationId) }
+        if (c.mediaCrypto != null) viewModelScope.launch {
+            (c.api.mlsGroup(conversationId) as? ApiResult.Ok)?.let { r -> missingImages.value = r.value.missingImages.map { it.userId } }
+        }
     }
 
     /** Queue an op and report its failure here (success shows through the group's own state). */
@@ -245,10 +256,14 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         c.scope.launch { c.realtime.typing(conversationId, typing) }
     })
 
+    /** §14: photos in this group. */
+    val imgs = lk.codegen.risime.ui.chat.ImageActions(c, viewModelScope, meId, conversationId)
+
     init {
         c.openConversation.value = conversationId
         c.notifier.cancelChat(conversationId)
         viewModelScope.launch { c.refreshGroup(conversationId) }
+        imgs.refreshImagesReady()
         viewModelScope.launch {
             // Re-checked on new rows, on group row changes and whenever a Welcome/commit changed the MLS state.
             combine(messages, group, c.groupStore.stateChanges) { _, _, _ -> }.collect {
@@ -275,11 +290,15 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         c.scope.launch { c.engine.react(conversationId, targetMessageId, emoji, op) }
     }
 
+    private fun isImage(id: String) = messages.value.firstOrNull { it.clientMsgId == id }?.image == true
+
     fun retry(clientMsgId: String) {
+        if (isImage(clientMsgId)) return imgs.retry(clientMsgId)
         c.scope.launch { c.engine.retry(clientMsgId) }
     }
 
     fun delete(clientMsgId: String) {
+        if (isImage(clientMsgId)) return imgs.delete(clientMsgId)
         c.scope.launch { c.engine.deleteFailed(clientMsgId) }
     }
 
