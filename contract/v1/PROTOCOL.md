@@ -294,9 +294,14 @@ Decision 026. Data-only FCM wake-ups; the content is always fetched over the cha
     token (FCM rotates tokens), so it's idempotent.
   - `422 invalid_device` for a bad UUID, an unknown platform, or an empty token.
   - At most 10 devices per user; the oldest is evicted.
-- **`DELETE /api/v1/me/devices/{device_id}`** → `204`. Clients call it at logout. It is
-  idempotent.
-- `POST /auth/logout` with a dev token also removes the devices registered with that token.
+- **`DELETE /api/v1/me/devices/{device_id}`** → `204`. Idempotent. Clients call it only for
+  **"Log out and delete chats from this phone"** (decision 050). Real removals are this DELETE,
+  eviction, prune and a changed key.
+- **`DELETE /api/v1/me/devices/{device_id}/push_token`** → `204`. Unregisters push only, at a
+  plain **Log out** (decision 050). An MLS device keeps its registration, groups and inbox; a
+  push-only device is removed.
+- `POST /auth/logout` with a dev token does the same as the push_token DELETE for its token's
+  devices.
 
 ### 8.2 Push payload (FCM data message, high priority)
 `{"type": "inbox", "v": "1"}`, and nothing else. Clients ignore unknown `type`s.
@@ -480,8 +485,13 @@ device must belong to the authenticated user; otherwise the call gets `403`.
   - Rate limit: 30 claims per user per minute.
 - **`GET /api/v1/mls/groups/{conversation_id}`** →
   `{"e2ee": bool, "generation": n, "epoch": n | null, "ready": bool, "missing": [{"user_id", "device_id" | null, "reason": "no_mls" | "legacy_app"}], "devices": [{"user_id", "device_id"}]}`.
-  - **`ready`** means every app instance of both members seen in the last 30 days is
-    MLS-capable, and each member has at least one MLS device.
+  - **`ready`** means each member has at least one MLS device, and every install of both members
+    **that can still receive** (as in §12.1) is MLS-capable. Census rows of removed or reinstalled
+    device ids, and pre-v1.7 rows seen before the user's latest registration, never block. `claim`
+    lists only such installs as `mls:false`. `missing[]`: `legacy_app` with `device_id: null` = an
+    old app still in use; `no_mls` with a `device_id` = MLS setup not finished on that device;
+    `no_mls` with `null` = no MLS device yet. (Clarified 2026-10-06: stale rows blocked a 1:1
+    upgrade.)
 - **`POST /api/v1/mls/groups/{conversation_id}/commit`** with body:
   `{"generation": n, "epoch": e, "commit": "<b64 PublicMessage>", "welcome": "<b64>" | null, "added": [{"user_id","device_id"}], "removed": [{"user_id","device_id"}]}`
   - **`epoch` is the epoch the commit was built in.** The reply is `200 {"epoch": e + 1}`.
@@ -577,12 +587,9 @@ Later versions add types (reactions, group events, images) without breaking olde
     "…waiting for <name>'s phone".
 - **Rollout:** a `required` app update brings everyone to a v1.7 app before E2EE is switched on
   for the pilot.
-- **The dev banner is removed** only when all of these hold:
-  - every conversation of the user is e2ee;
-  - plaintext is no longer offered;
-  - every app version still allowed by the updater speaks v1.7;
-  - the live interop gate covers E2EE;
-  - it is recorded in a decision.
+- **Encryption state per chat (decision 048, replaces the global dev banner):** a lock and "Messages
+  are end-to-end encrypted" for e2ee chats. Every other chat shows "Not end-to-end encrypted yet:
+  <reason from `missing[]`>". The app never claims encryption for a plaintext chat.
 
 ### 10.5 Server storage
 - Postgres:
@@ -901,6 +908,8 @@ per-purpose readers (§14.2).
     still active.
   - It is sent when `all_delivered` or `all_read` turns true, and otherwise coalesced to at most
     one per message per 10 s. Ticks: ✓ sent, ✓✓ when `all_delivered`, accent ✓✓ when `all_read`.
+  - Clients match a `group_receipt` by `message_id`, falling back to `client_msg_id` (it may
+    arrive before the `msg:send` reply). A member who never receives keeps the sender at ✓.
   - **`GET /api/v1/groups/{id}/messages/{message_id}/receipts`** →
     `{"of": n, "receipts": [{"user_id", "delivered_at" | null, "read_at" | null}]}`
     (`group_receipts_reply.json`), for the sender only (`404` otherwise), while the message is
