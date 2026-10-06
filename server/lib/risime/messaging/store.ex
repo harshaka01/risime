@@ -44,6 +44,9 @@ defmodule RisiMe.Messaging.Store do
 
   @callback append_event(user_id :: uuid, event) :: :ok
 
+  @doc "Appends the same event to several inboxes in one request (v1.10 §13.1 sender copies)."
+  @callback append_event_to_all(user_ids :: [uuid], event) :: :ok
+
   @doc "Events after `since` (exclusive, or from the start when nil), oldest first."
   @callback list_events(user_id :: uuid, since :: uuid | nil, limit :: pos_integer) :: [event]
 

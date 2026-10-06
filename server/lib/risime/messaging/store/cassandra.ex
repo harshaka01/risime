@@ -197,6 +197,27 @@ defmodule RisiMe.Messaging.Store.Cassandra do
     :ok
   end
 
+  # Cassandra's default batch_size_warn_threshold (5 KiB); larger batches log warnings and
+  # past 50 KiB fail, so bigger events (long texts, e2ee) are written one row at a time.
+  @max_batch_bytes 5 * 1024
+
+  # One unlogged batch: a single request (one pool slot, one round trip) for a DM's two rows.
+  @impl true
+  def append_event_to_all(user_ids, %{event_id: event_id, kind: kind, data: data} = event) do
+    payload = Jason.encode!(data)
+
+    if byte_size(payload) * length(user_ids) <= @max_batch_bytes do
+      statement =
+        "INSERT INTO inbox_events (user_id, event_id, kind, payload) VALUES (?, ?, ?, ?)"
+
+      run_batch!(statement, for(u <- user_ids, do: [u, event_id, kind, payload]))
+    else
+      for u <- user_ids, do: :ok = append_event(u, event)
+    end
+
+    :ok
+  end
+
   @impl true
   def list_events(user_id, nil, limit) do
     "SELECT event_id, kind, payload FROM inbox_events WHERE user_id = ? LIMIT ?"
@@ -356,6 +377,30 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   # request at once instead of queueing it, so a burst would otherwise crash the caller's
   # channel (docs/status/loadtest.md).
   @overload_backoff [2, 10, 25, 50, 100]
+
+  defp run_batch!(statement, rows, backoff \\ @overload_backoff) do
+    Xandra.Cluster.run(@cluster, fn conn ->
+      with {:ok, prepared} <- Xandra.prepare(conn, statement) do
+        batch =
+          Enum.reduce(rows, Xandra.Batch.new(:unlogged), &Xandra.Batch.add(&2, prepared, &1))
+
+        Xandra.execute(conn, batch)
+      end
+    end)
+    |> case do
+      {:ok, result} ->
+        result
+
+      {:error, %Xandra.ConnectionError{reason: :too_many_concurrent_requests}}
+      when backoff != [] ->
+        [ms | rest] = backoff
+        Process.sleep(ms + :rand.uniform(ms))
+        run_batch!(statement, rows, rest)
+
+      {:error, error} ->
+        raise error
+    end
+  end
 
   defp run!(statement, params, backoff \\ @overload_backoff) do
     # One pool checkout per query: prepare (served from the connection's prepared cache after the

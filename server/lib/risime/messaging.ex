@@ -300,8 +300,7 @@ defmodule RisiMe.Messaging do
     }
 
     # Both inboxes, the same event_id, the sender's first (§13.1); reactions never push (§11.2).
-    publish(sender_id, event, push: false)
-    publish(req.to, event, push: false)
+    publish_dm(sender_id, req.to, event, false)
   end
 
   defp deliver(sender_id, req, sent) do
@@ -339,11 +338,19 @@ defmodule RisiMe.Messaging do
 
     event = %{event_id: sent.message_id, kind: "message", data: data}
 
-    # v1.10 §13.1: plaintext and e2ee alike go to both inboxes under the same event_id. The
-    # sender's copy is published first and never pushed, so a recipient's live ack can never
-    # put a `status` ahead of the copy on the sender's other devices.
-    publish(sender_id, event, push: false)
-    publish(req.to, event)
+    # v1.10 §13.1: plaintext and e2ee alike go to both inboxes under the same event_id.
+    publish_dm(sender_id, req.to, event, true)
+  end
+
+  # Both inbox rows are written in one store request, then the sender's copy is broadcast first
+  # and never pushed, so a recipient's live ack can never put a `status` ahead of the copy on
+  # the sender's other devices (§13.1).
+  defp publish_dm(sender_id, to, event, push_recipient?) do
+    :ok = store().append_event_to_all([sender_id, to], event)
+    broadcast(sender_id, event)
+    broadcast(to, event)
+    if push_recipient?, do: RisiMe.Push.notify(to)
+    :ok
   end
 
   ## Group send (v1.9 §12.9)
@@ -653,10 +660,13 @@ defmodule RisiMe.Messaging do
 
   defp publish(user_id, event, opts \\ []) do
     :ok = store().append_event(user_id, event)
-    Phoenix.PubSub.broadcast(RisiMe.PubSub, topic(user_id), {:inbox_event, event})
+    broadcast(user_id, event)
     # Contract v1.5: a data-only wake-up if the user has no live inbox channel.
     if Keyword.get(opts, :push, true), do: RisiMe.Push.notify(user_id)
   end
+
+  defp broadcast(user_id, event),
+    do: Phoenix.PubSub.broadcast(RisiMe.PubSub, topic(user_id), {:inbox_event, event})
 
   @doc """
   Publishes `[{user_id, event, opts}]`: per user in the given order, users in parallel (group

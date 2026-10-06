@@ -28,6 +28,15 @@ defmodule RisiMeWeb.HistoryV110Test do
       Cassandra.append_event(user_id, event)
     end
 
+    # The DM path writes both rows in one request; it broadcasts in the same order.
+    @impl true
+    def append_event_to_all(user_ids, event) do
+      if pid = Application.get_env(:risime, :recording_store_pid),
+        do: for(u <- user_ids, do: send(pid, {:appended, u, event.event_id}))
+
+      Cassandra.append_event_to_all(user_ids, event)
+    end
+
     @impl true
     defdelegate get_sent(s, c), to: Cassandra
     @impl true
