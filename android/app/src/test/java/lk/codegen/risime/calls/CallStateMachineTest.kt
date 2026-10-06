@@ -189,6 +189,20 @@ class CallStateMachineTest {
     }
 
     @Test
+    fun callingSomeoneWhoIsRingingYouAnswersTheirCall() = runTest {
+        val (w, d) = world()
+        val (a1, b1) = listOf(d["A1"]!!, d["B1"]!!)
+        a1.machine.placeCall(conv)
+        settle(w.net)
+        assertEquals(CallPhase.RINGING_IN, b1.phase())
+        b1.machine.placeCall(conv)
+        settle(w.net)
+        assertEquals(1, b1.sent.count { it.env is CallEnvelope.Answer })
+        assertTrue(b1.sent.none { it.env is CallEnvelope.Offer })
+        assertEquals(CallPhase.CONNECTING, a1.phase())
+    }
+
+    @Test
     fun noAnswerTimesOutAfter45sCallerSendsTimeoutCalleesStop() = runTest {
         val (w, d) = world()
         val (a1, b1, b2) = listOf(d["A1"]!!, d["B1"]!!, d["B2"]!!)

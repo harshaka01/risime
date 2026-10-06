@@ -411,6 +411,23 @@ class LiveE2eeInteropTest {
     }
 
     /**
+     * §16 (v1.13) 1:1 voice calls: signalling end to end through the real server (the "groups" block's
+     * A, B and C: the DMs C–B, A–B and A–C, which no other live test uses). Prints "INTEROP PASS|FAIL e2ee: calls: …".
+     */
+    @Test fun liveCalls() {
+        val path = System.getenv("RISIME_INTEROP_CONFIG")
+        assumeTrue("RISIME_INTEROP_CONFIG not set", !path.isNullOrBlank() && File(path).isFile)
+        RealMls.assumeHostLibrary()
+        val root = ProtocolJson.parseToJsonElement(File(path!!).readText()).jsonObject
+        val g = root["groups"]?.jsonObject
+        assumeTrue("no \"groups\" block in the interop config", g != null)
+        val url = root["url"]!!.jsonPrimitive.content
+        fun u(k: String) = g!![k]!!.jsonObject.let { it["id"]!!.jsonPrimitive.content to it["token"]!!.jsonPrimitive.content }
+        val trusted = (runBlocking { ApiClient(http, { url }, { null }).attestationKeys() } as ApiResult.Ok).value.keys.map { it.toString() }
+        LiveCalls(http, scope, url, trusted).run(u("A"), u("B"), u("C")) { name, block -> check(name, block) }
+    }
+
+    /**
      * §13 (v1.10) with the real core: plaintext sender copies and history_before on the wire, then
      * (i) a second fresh device for A while the first stays active, (ii) a reinstall (new device id),
      * (iii) logout and login on the same device id. Each restores both sides of the plaintext chat with

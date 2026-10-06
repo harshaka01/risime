@@ -177,6 +177,9 @@ class CallStateMachine(
     /** The call button (the UI checked `calls_ready`, e2ee and RECORD_AUDIO). False = busy already. */
     suspend fun placeCall(conversationId: String): Boolean {
         val peer = dmPeer(conversationId, me) ?: return false
+        // Calling someone who is ringing this device right now: both want the call, so answer it (as glare would).
+        val ringingFromPeer = lock.withLock { current?.takeIf { !it.ended && !it.outgoing && it.phase == CallPhase.RINGING_IN && it.peer.equals(peer, true) }?.id }
+        if (ringingFromPeer != null) return answer(ringingFromPeer)
         val call = lock.withLock {
             if (current?.let { !it.ended } == true || platform.audioBusy()) {
                 publishNotice(conversationId, peer, true, CallNotice.IN_ANOTHER_CALL)
