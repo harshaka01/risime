@@ -16,10 +16,12 @@ defmodule RisiMe.Workers.PruneAccounts do
     tokens = Accounts.prune_revoked_tokens()
     phone_challenges = Accounts.prune_phone_challenges()
     devices = RisiMe.Devices.prune()
+    {invites, requests} = RisiMe.Social.expire()
 
     Logger.info(
       "PruneAccounts: deleted #{challenges} OTP challenge(s), #{tokens} revoked token(s), " <>
-        "#{phone_challenges} phone challenge(s), #{devices} stale device(s)"
+        "#{phone_challenges} phone challenge(s), #{devices} stale device(s); expired #{invites} " <>
+        "invite(s), #{requests} friend request(s)"
     )
 
     {:ok,
@@ -27,7 +29,9 @@ defmodule RisiMe.Workers.PruneAccounts do
        otp_challenges: challenges,
        revoked_tokens: tokens,
        phone_challenges: phone_challenges,
-       devices: devices
+       devices: devices,
+       expired_invites: invites,
+       expired_requests: requests
      }}
   end
 end
