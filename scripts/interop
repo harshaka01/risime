@@ -9,6 +9,8 @@ cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 DIR="$(mktemp -d "${TMPDIR:-/tmp}/risime-interop.XXXXXX")"
 cleanup() {
+  [ -f "$DIR/gradle.log" ] && cp "$DIR/gradle.log" "$HOME/risime-logs/interop-last.log" 2>/dev/null || true
+  [ -f "$DIR/server.log" ] && cp "$DIR/server.log" "$HOME/risime-logs/interop-last-server.log" 2>/dev/null || true
   tmux kill-session -t risime-interop 2>/dev/null || true
   tmux kill-session -t risime-interop-jwks 2>/dev/null || true
   (cd "$REPO/server" && $M mix run "$REPO/scripts/interop-fixtures.exs" cleanup "$DIR" 2>/dev/null | grep 'interop cleanup' || true)

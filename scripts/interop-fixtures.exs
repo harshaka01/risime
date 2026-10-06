@@ -82,7 +82,19 @@ case mode do
                "phone" => "+94770000915", "name" => "Interop Invitee"},
       "P_X" => "+94770000916"
     }
-    cfg = Map.put(cfg, "friends", friends)
+    me_id = fn t ->
+      {:ok, %{status: 200, body: %{"user" => u}}} =
+        Req.get("http://127.0.0.1:4100/api/v1/me", headers: [{"authorization", "Bearer " <> t}], retry: false)
+      u["id"]
+    end
+    # The base flow (chat, presence, typing, JWT path) runs between friends (v1.6).
+    jwt_ids = %{"A" => me_id.(cfg["jwt"]["A"]), "B" => me_id.(cfg["jwt"]["B"])}
+    RisiMe.Social.make_friends!(a["id"], b["id"])
+    RisiMe.Social.make_friends!(jwt_ids["A"], jwt_ids["B"])
+    cfg =
+      cfg
+      |> Map.put("friends", friends)
+      |> Map.put("ids", jwt_ids)
     File.write!(Path.join(dir, "interop.json"), Jason.encode!(cfg))
     IO.puts("interop setup: #{Path.join(dir, "interop.json")}")
 end
