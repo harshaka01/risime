@@ -5,7 +5,7 @@
 **v1.5** (push wake-ups, decision 028), **v1.6** (invites and friends, decision 030) and **v1.7**
 (E2EE routing with MLS, decision 034; **off until the attestation key exists**) are done.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(266 tests).
+(265 tests).
 
 ## 0.2 progress
 - [x] Version from the repo `VERSION` file: `Application.spec(:risime, :vsn)` matches it, and the
