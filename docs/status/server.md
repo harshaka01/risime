@@ -5,10 +5,67 @@
 **v1.5** (push wake-ups, decision 028), **v1.6** (invites and friends, decision 030), **v1.7**
 (E2EE routing with MLS, decision 034; **off until the attestation key exists**), **v1.8**
 (reactions), **v1.9** (groups with MLS, §12, decision 041), **v1.10** (history after a
-reinstall, §13, decision 043) and **v1.11** (encrypted images, §14, decision 042) are done, plus
-the group-readiness hotfix.
+reinstall, §13, decision 043), **v1.11** (encrypted images, §14, decision 042) and **v1.12**
+(deleting messages and chats, §15, decision 047) are done, plus the group-readiness hotfix and
+the two §14 fixes root decided.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(360 tests); `scripts/interop` OK after v1.11.
+(392 tests); `scripts/interop` OK after v1.12.
+
+## v1.12 deleting messages and chats (§15) — READY
+- **Commits:** `539ead3` (§14 fixes), `d1c65ba` (implementation), `29ce11b` (§15.12 tests),
+  `0f85d3b` (contract examples; `@pending_v1_12` removed), `793b307` (MLS header vectors).
+- **Cassandra migration `004_delete.cql`** (run by `scripts/run-server` before the switch; the
+  new code needs it): `message_refs ((message_id), user_id, event_id)` + `ref_id`, TWCS, 30-day
+  TTL, `gc_grace_seconds = 86400`; `message_index` + `deleted_at`, `deleted_by`;
+  `inbox_events` + `conversation_id` (written on every append from now on; older rows fall back
+  to the payload); `sent_dedupe` + `kind`; `gc_grace_seconds = 86400` on `inbox_events` and
+  `group_receipts`. No `ALLOW FILTERING`, no index (a test greps every CQL string).
+- **`RisiMe.Messaging.Deletes`** (`msg:delete`, `chat:clear`), behind `Messaging.Store`.
+  `everyone`, in order: `sent_dedupe` hit (a `kind = 'delete'` claim → crash recovery; any
+  other claim → `bad_request`) → participant / active member (`not_member`) → e2ee checks →
+  **under the `mls:<conv>` advisory lock** (groups and e2ee DMs): `stale_epoch`, the landed
+  role (`group_members`), the planned `delete` event id/`server_ts` and the member list → the
+  AAD binding → **rate limit** (`:msg_send`, 20/10 s, counted refused or not) → `message_index`
+  reads (16 in parallel) → §15.4 per target (48 h = 172 800 000 ms against the planned
+  `server_ts`; admins no limit; `gone` for absent/tombstoned/other conversation/`kind` set) →
+  all-or-nothing `{reason, failures}` → blob owner check → claim (`kind = 'delete'`) → enqueue
+  `RisiMe.Workers.DeleteFinish` (queue `messaging`, +15 s, unique on `message_id`) → Q3d
+  tombstones with `TTL(sender_id)` → `GroupReceipts.drop/1` (cancels a pending coalesced
+  receipt) → Q1d per partition (sender + `recipient_id`/`recipients`, one unlogged batch each)
+  → the `delete` event (deleter's copy first and unpushed, others pushed; per-recipient
+  `from`/`server_ts` only for users who had the target, R4; `server_ts` = the target's TimeUUID
+  time in ms) → its own `message_index` row (`kind = 'delete'`, written last = "announced") →
+  step 6 (refs → reaction rows + their index tombstones, Q5d, refs partition, `Blobs.remove/1`)
+  inline **and** again in the job. Everything is idempotent; the job finishes a delete the
+  client never retried. All-gone requests store nothing and claim nothing (null ids).
+- **AAD (§15.3):** `RisiMe.MLS.Wire` parses the cleartext `MLSMessage`/PrivateMessage header
+  (version 1, wire format 2, content type application) and compares `authenticated_data` with
+  `0x01 'D'` + sorted distinct 16-byte UUIDs. Verified against real OpenMLS 0.9 output
+  (`set_aad` + `create_message`; vectors in `test/risime/mls/wire_test.exs`). `msg:send` refuses
+  a parseable PrivateMessage with non-empty AAD (`bad_request`); unparseable bytes pass as
+  before. The header's `group_id`/`epoch` are **not** compared with the request (the request
+  fields keep deciding `stale_epoch`).
+- **Blobs:** `Blobs.media_ids_owned_by/3` (one query: `media`, this conversation, owner = a
+  sender of a deleted or already tombstoned target); others are skipped with a `warning` log
+  (ids only); removal is inline (file gone at once) and repeated by the job.
+- **`scope: "me"`:** no claim (a reused id of any claim → `bad_request`), rate limit, one point
+  read per target of the caller's own row (`kind ∈ message/reaction` and the conversation), one
+  batch delete, plus the caller's refs rows. A retry reports already-removed targets as `gone`.
+- **Tombstoned rows are absent** for `msg:ack` (no CAS, status or receipt; `delete` events are
+  not ackable), plaintext reactions (`unknown_target`, also for `delete` ids), receipts (`404`)
+  and resends (no re-delivery). `Store.get_message/1` returns `deleted_at`, `deleted_by`, `ttl`.
+- **`chat:clear`:** validate → 10/min/user → `RisiMe.Workers.ChatClear` (unique on user,
+  conversation, `upto`). Q1s `event_id <= maxTimeuuid(<upto ms + 1>)`, pages of 500, exact cut
+  by the 100 ns TimeUUID time; kinds `message reaction status group_receipt delete` only; one
+  unlogged batch per page; refs of cleared DM messages.
+- **`deletes`** capability stored; `deletes_ready`/`missing_deletes` from the same census as
+  `images_ready` (installs that can still receive), also for plaintext DMs (no e2ee condition).
+- **§14 fixes:** upload idempotency (replay `200`, mismatch `400`, deleted `404`) now runs right
+  after the purpose cap, **before** the quota, disk guard, rate and slot; `images_ready` counts
+  only installs that can still receive (tested explicitly).
+- **Not done / notes:** no admin-list history on the server (receivers use the core's
+  per-epoch record); E2EE reaction ciphertext stays until its TTL (accepted); members removed
+  after a message lose their copies without a `delete` event (§15.8). Learning log: none.
 
 ## v1.11 encrypted images (§14) — READY
 The server never sees plaintext; it stores and serves opaque `application/octet-stream` blobs.
