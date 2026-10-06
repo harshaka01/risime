@@ -49,13 +49,21 @@ else
   echo "==> push: no google-services.json (push off in this build)"
 fi
 echo "==> android gate + release build"
-(cd android && $M ./gradlew --no-configuration-cache assembleDebug testDebugUnitTest assembleRelease)
+# E2EE: pin the pilot attestation public key (decision 032; public by design, committed).
+PIN_FILE=infra/pilot/attestation-public.jwk
+PIN_ARGS=(); [ -f "$PIN_FILE" ] && PIN_ARGS=("-Prisime.mlsPinnedKeys=$(tr -d '\n' < "$PIN_FILE")")
+(cd android && $M ./gradlew --no-configuration-cache "${PIN_ARGS[@]}" assembleDebug testDebugUnitTest assembleRelease)
 
 echo "==> live interop (scripts/interop: real Android clients vs a temp server from this checkout)"
 scripts/interop
 
 APK=android/app/build/outputs/apk/release/app-release.apk
 BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
+if [ -f "$PIN_FILE" ]; then
+  kid="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["kid"])' "$PIN_FILE")"
+  unzip -p "$APK" 'classes*.dex' | grep -aq "$kid" || { echo "release APK lacks the pinned attestation key $kid"; exit 1; }
+  echo "==> E2EE: release pins attestation key $kid"
+fi
 "$BT/apksigner" verify --print-certs "$APK" | grep -q "CN=RisiMe Dev Release" \
   || { echo "release APK is not signed with the dev release key"; exit 1; }
 
