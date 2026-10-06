@@ -15,7 +15,11 @@ KEYS="$HOME/risime-keys/keystore.properties"
 REL="$HOME/risime-releases"
 
 [ -f "$KEYS" ] || { echo "missing $KEYS (dev release keystore)"; exit 1; }
-[ "$(git rev-parse --abbrev-ref HEAD)" = main ] || { echo "not on main"; exit 1; }
+# On main, or (a clean release worktree) a detached HEAD that is exactly origin/main.
+git fetch -q origin main
+if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then
+  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "not on main (and HEAD is not origin/main)"; exit 1; }
+fi
 git diff --quiet && git diff --cached --quiet || { echo "working tree not clean"; exit 1; }
 git pull -q --rebase origin main
 
