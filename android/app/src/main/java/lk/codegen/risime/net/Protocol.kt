@@ -197,3 +197,33 @@ data class Signal(val kind: String, val data: JsonObject) {
 
 /** Max ids per `presence:watch` (§2.5). */
 const val PRESENCE_WATCH_MAX = 200
+
+// ---- Authentication via RisiCloud Keycloak (§6, v1.3) ----
+
+/** `GET /api/v1/auth/config` (unauthenticated). `modes` ⊆ {"oidc", "dev"}. */
+@Serializable
+data class AuthConfig(
+    val modes: List<String>,
+    val issuer: String? = null,
+    @SerialName("client_id") val clientId: String? = null,
+) {
+    companion object {
+        const val MODE_OIDC = "oidc"
+        const val MODE_DEV = "dev"
+    }
+}
+
+/** §6.2 client → server push. */
+@Serializable
+data class AuthRefresh(val token: String)
+
+@Serializable
+data class AuthRefreshReply(@SerialName("expires_at") val expiresAt: String)
+
+/** §6.1 error codes. Messages for NOT_ALLOWLISTED and IDENTITY_CONFLICT may be shown verbatim. */
+object AuthErrors {
+    const val INVALID_TOKEN = "invalid_token"
+    const val NOT_ALLOWLISTED = "not_allowlisted"
+    const val IDENTITY_CONFLICT = "identity_conflict"
+    const val IDENTITY_MISMATCH = "identity_mismatch"
+}

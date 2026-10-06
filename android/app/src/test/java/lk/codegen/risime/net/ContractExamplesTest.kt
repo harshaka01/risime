@@ -32,15 +32,13 @@ class ContractExamplesTest {
         "signal_presence.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.presence()) } },
         "signal_typing.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.typing()) } },
         "typing.json" to { s -> ProtocolJson.decodeFromString<TypingPush>(s) },
-        // v1.3 (Keycloak auth): parse-only placeholders added by root with the contract merge;
-        // the android role replaces them with typed decoders when it implements §6.
-        "auth_config.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_not_allowlisted.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_invalid_token.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_identity_conflict.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "auth_refresh.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "auth_refresh_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "auth_refresh_error.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "auth_config.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s) },
+        "error_not_allowlisted.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
+        "error_invalid_token.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
+        "error_identity_conflict.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
+        "auth_refresh.json" to { s -> ProtocolJson.decodeFromString<AuthRefresh>(s) },
+        "auth_refresh_reply.json" to { s -> ProtocolJson.decodeFromString<AuthRefreshReply>(s) },
+        "auth_refresh_error.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
     )
 
     @Test
@@ -103,6 +101,30 @@ class ContractExamplesTest {
         val s = ProtocolJson.decodeFromString<Signal>("""{"kind":"mood","data":{"x":1}}""")
         assertEquals(null, s.presence())
         assertEquals(null, s.typing())
+    }
+
+    @Test
+    fun authV13Examples() {
+        val cfg = ProtocolJson.decodeFromString<AuthConfig>(read("auth_config.json"))
+        assertEquals(listOf(AuthConfig.MODE_OIDC, AuthConfig.MODE_DEV), cfg.modes)
+        assertEquals("https://risicloud.ai/realms/aoa", cfg.issuer)
+        assertEquals("risime", cfg.clientId)
+        mapOf(
+            "error_not_allowlisted.json" to AuthErrors.NOT_ALLOWLISTED,
+            "error_invalid_token.json" to AuthErrors.INVALID_TOKEN,
+            "error_identity_conflict.json" to AuthErrors.IDENTITY_CONFLICT,
+        ).forEach { (file, code) ->
+            val e = ProtocolJson.decodeFromString<ApiErrorEnvelope>(read(file)).error
+            assertEquals(code, e.code)
+            assertTrue(e.message.isNotBlank())
+        }
+        val refresh = ProtocolJson.parseToJsonElement(read("auth_refresh.json")) as JsonObject
+        assertEquals(refresh, ProtocolJson.encodeToJsonElement(ProtocolJson.decodeFromJsonElement<AuthRefresh>(refresh)))
+        assertTrue(ProtocolJson.decodeFromString<AuthRefreshReply>(read("auth_refresh_reply.json")).expiresAt.endsWith("Z"))
+        assertEquals(AuthErrors.IDENTITY_MISMATCH, ProtocolJson.decodeFromString<ErrorReason>(read("auth_refresh_error.json")).reason)
+        // A config with only "dev" has no issuer/client_id.
+        val dev = ProtocolJson.decodeFromString<AuthConfig>("""{"modes":["dev"]}""")
+        assertEquals(null, dev.issuer)
     }
 
     @Test

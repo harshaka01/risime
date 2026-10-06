@@ -31,6 +31,9 @@ class ApiClient(
     suspend fun verify(phone: String, code: String, deviceName: String): ApiResult<AuthVerifyReply> =
         call("POST", "auth/verify", AuthVerify(phone, code, deviceName), auth = false)
 
+    /** §6.1: which sign-in modes the server offers. A pre-v1.3 server answers 404. */
+    suspend fun authConfig(): ApiResult<AuthConfig> = call<Unit, AuthConfig>("GET", "auth/config", null, auth = false)
+
     suspend fun me(): ApiResult<MeReply> = call<Unit, MeReply>("GET", "me", null)
 
     suspend fun updateDisplayName(name: String): ApiResult<MeReply> = call("PATCH", "me", PatchMe(name))

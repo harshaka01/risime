@@ -52,9 +52,9 @@ android {
         targetSdk = 37
         versionCode = risiVersionCodeValue
         versionName = risiVersionName
-        // Every build (decision 003, release builds are dev builds for now): laptop tunnel port
-        // (emulator -> 10.0.2.2:4400 -> spark2 127.0.0.1:4000). Editable in Settings / on login.
-        buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:4400\"")
+        // Release: RisiCloud (decision 017, option 2b). Debug overrides it with the laptop tunnel.
+        // Editable in Settings / on login in every build.
+        buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://risicloud.ai/risime\"")
     }
 
     signingConfigs {
@@ -72,6 +72,8 @@ android {
         debug {
             // Installs side by side with the release build (decision 003).
             applicationIdSuffix = ".debug"
+            // Laptop tunnel port (emulator -> 10.0.2.2:4400 -> spark2 127.0.0.1:4000).
+            buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:4400\"")
         }
         release {
             // R8/minify stays off until the prod release (decision 003).
