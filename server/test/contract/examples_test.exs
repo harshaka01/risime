@@ -639,8 +639,11 @@ defmodule RisiMe.ContractExamplesTest do
       :ok = RisiMe.MLS.record_instance(b.user.id, nil, "jwt", nil)
       {200, view} = mls_req(:get, "/api/v1/mls/groups/#{conv}", a.token, nil, a_dev)
       ex = example("mls_group.json")
-      # v1.11 adds images_ready / missing_images (absent = false; mls_group_images_ready.json).
-      assert keys(Map.drop(view, ~w(images_ready missing_images))) == keys(ex)
+      # v1.11 adds images_ready / missing_images (absent = false; mls_group_images_ready.json),
+      # v1.12 deletes_ready / missing_deletes (mls_group_deletes_ready.json).
+      assert keys(Map.drop(view, ~w(images_ready missing_images deletes_ready missing_deletes))) ==
+               keys(ex)
+
       assert_same_shape(hd(view["missing"]), hd(ex["missing"]))
 
       body = %{
@@ -1422,10 +1425,10 @@ defmodule RisiMe.ContractExamplesTest do
       conv = e2ee_group!(a, b)
       ex = example("mls_group_images_ready.json")
       {200, view} = v_api(:get, "/api/v1/mls/groups/#{conv}", a.token)
-      assert keys(view) == keys(ex)
+      assert keys(Map.drop(view, ~w(deletes_ready missing_deletes))) == keys(ex)
 
       assert_same_shape(
-        Map.drop(view, ~w(missing devices missing_images)),
+        Map.drop(view, ~w(missing devices missing_images deletes_ready missing_deletes)),
         Map.drop(ex, ~w(missing devices missing_images))
       )
 

@@ -9,6 +9,10 @@ defmodule RisiMe.MLS.Images do
   device (a removed device id can't receive anything), or a device-less (pre-v1.7) instance seen
   after the user's latest device registration. A member with no `images` device and no such
   instance (e.g. one that never connected) is listed with `device_id: null`.
+
+  The `deletes` capability (v1.12 §15.1) is computed the same way into `deletes_ready` /
+  `missing_deletes`, also for plaintext DMs (`deletes_ready` doesn't require e2ee; an instance
+  without MLS capabilities counts as missing).
   """
   import Ecto.Query
 
@@ -17,10 +21,21 @@ defmodule RisiMe.MLS.Images do
 
   @census_days 30
 
-  @doc "Adds `images_ready` and `missing_images` to a `GET /mls/groups/{id}` view."
+  @doc """
+  Adds `images_ready`/`missing_images` (§14.1) and `deletes_ready`/`missing_deletes` (§15.1) to
+  a `GET /mls/groups/{id}` view.
+  """
   def put_readiness(%{e2ee: e2ee} = view, conversation_id) do
-    missing = conversation_id |> member_ids() |> missing()
-    Map.merge(view, %{images_ready: e2ee and missing == [], missing_images: missing})
+    members = member_ids(conversation_id)
+    missing = missing(members, "images")
+    missing_deletes = missing(members, "deletes")
+
+    Map.merge(view, %{
+      images_ready: e2ee and missing == [],
+      missing_images: missing,
+      deletes_ready: missing_deletes == [],
+      missing_deletes: missing_deletes
+    })
   end
 
   defp member_ids("grp:" <> _ = conv), do: Groups.active_member_ids(conv)
@@ -32,10 +47,11 @@ defmodule RisiMe.MLS.Images do
     end
   end
 
-  @doc "The instances of `user_ids` that can still receive and don't advertise `images`."
-  def missing([]), do: []
+  @doc "The instances of `user_ids` that can still receive and don't advertise `capability`."
+  def missing(user_ids, capability \\ "images")
+  def missing([], _capability), do: []
 
-  def missing(user_ids) do
+  def missing(user_ids, capability) do
     since = DateTime.add(DateTime.utc_now(), -@census_days, :day)
 
     instances =
@@ -57,9 +73,9 @@ defmodule RisiMe.MLS.Images do
       )
       |> Map.new()
 
-    images? = fn ref ->
+    capable? = fn ref ->
       case devices[ref] do
-        {key, caps, _} when is_binary(key) -> "images" in (caps || [])
+        {key, caps, _} when is_binary(key) -> capability in (caps || [])
         _ -> false
       end
     end
@@ -72,16 +88,16 @@ defmodule RisiMe.MLS.Images do
     from_instances =
       for {u, d, seen} <- instances,
           receives?(devices, last_registration, u, d, seen),
-          not (d != nil and images?.({u, d})),
+          not (d != nil and capable?.({u, d})),
           do: %{user_id: u, device_id: d}
 
     listed = MapSet.new(from_instances, & &1.user_id)
 
-    # A member with no `images` device and nothing listed yet (e.g. never connected).
+    # A member with no capable device and nothing listed yet (e.g. never connected).
     without =
       for u <- user_ids,
           not MapSet.member?(listed, u),
-          not Enum.any?(Map.keys(devices), fn {du, _} = ref -> du == u and images?.(ref) end),
+          not Enum.any?(Map.keys(devices), fn {du, _} = ref -> du == u and capable?.(ref) end),
           do: %{user_id: u, device_id: nil}
 
     Enum.uniq(from_instances ++ without)

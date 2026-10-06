@@ -14,6 +14,7 @@ defmodule RisiMe.Messaging.Store.CassandraTest do
 
     assert :not_found = Store.get_sent(sender, cmid)
     assert :ok = Store.claim_send(sender, cmid, first)
+    first = Map.put(first, :kind, nil)
     assert {:ok, ^first} = Store.get_sent(sender, cmid)
     assert {:exists, ^first} = Store.claim_send(sender, cmid, %{first | message_id: uuid1()})
   end
@@ -30,8 +31,10 @@ defmodule RisiMe.Messaging.Store.CassandraTest do
 
     assert Store.get_message(m.message_id) == :not_found
     assert :ok = Store.put_message(m)
-    expected = Map.merge(m, %{kind: nil, recipients: nil})
-    assert {:ok, ^expected} = Store.get_message(m.message_id)
+    expected = Map.merge(m, %{kind: nil, recipients: nil, deleted_at: nil, deleted_by: nil})
+    assert {:ok, %{ttl: ttl} = got} = Store.get_message(m.message_id)
+    assert Map.delete(got, :ttl) == expected
+    assert ttl in (2_592_000 - 60)..2_592_000
 
     # v1.8: reactions are indexed with kind = "reaction".
     r = %{m | message_id: uuid1()} |> Map.put(:kind, "reaction")

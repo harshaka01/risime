@@ -97,7 +97,14 @@ defmodule RisiMe.Messaging.GroupReceipts do
   """
   def list(me, group_id, message_id) do
     with true <- is_binary(message_id) and Regex.match?(~r/^[0-9a-f-]{36}$/, message_id),
-         {:ok, %{kind: nil, conversation_id: ^group_id, sender_id: ^me, recipients: rs}}
+         {:ok,
+          %{
+            kind: nil,
+            conversation_id: ^group_id,
+            sender_id: ^me,
+            recipients: rs,
+            deleted_at: nil
+          }}
          when is_list(rs) <- store().get_message(message_id) do
       rows = Map.new(store().list_group_receipts(message_id), &{&1.user_id, &1})
       active = active(group_id, rs)
@@ -121,6 +128,12 @@ defmodule RisiMe.Messaging.GroupReceipts do
     end
   end
 
+  @doc """
+  v1.12 §15.8: forgets a deleted message's cached aggregation on this node and cancels its
+  coalescing timer, so a pending `group_receipt` is never emitted for it.
+  """
+  def drop(message_id), do: GenServer.call(server(message_id), {:drop, message_id})
+
   ## Server: state = %{message_id => entry}
 
   @impl true
@@ -132,6 +145,17 @@ defmodule RisiMe.Messaging.GroupReceipts do
   @impl true
   def handle_call({:load, id, entry}, _from, state) do
     {:reply, :ok, Map.put_new(state, id, Map.put(entry, :touched, now_ms()))}
+  end
+
+  def handle_call({:drop, id}, _from, state) do
+    case Map.pop(state, id) do
+      {%{timer: t}, state} when t != nil ->
+        Process.cancel_timer(t)
+        {:reply, :ok, state}
+
+      {_, state} ->
+        {:reply, :ok, state}
+    end
   end
 
   def handle_call({:ack, id, user, status, at}, _from, state) do

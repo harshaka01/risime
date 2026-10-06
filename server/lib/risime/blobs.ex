@@ -522,6 +522,26 @@ defmodule RisiMe.Blobs do
     :ok
   end
 
+  @doc """
+  v1.12 §15.2: the ids among `ids` that are `media` blobs of `conv` owned by one of `owners`
+  (the senders of the deleted targets), in one query. Deleted or expired rows still match, so
+  a repeated delete stays idempotent (`remove/1` is a no-op for them).
+  """
+  def media_ids_owned_by([], _conv, _owners), do: []
+  def media_ids_owned_by(_ids, _conv, []), do: []
+
+  def media_ids_owned_by(ids, conv, owners) do
+    ids = for id <- ids, {:ok, id} <- [Ecto.UUID.cast(id)], do: id
+
+    Repo.all(
+      from b in "blobs",
+        where:
+          b.id in type(^ids, {:array, :binary_id}) and b.conversation_id == ^conv and
+            b.purpose == "media" and b.owner in type(^owners, {:array, :binary_id}),
+        select: type(b.id, :binary_id)
+    )
+  end
+
   @doc "Expires every blob of a conversation now (a group deleted or reset, §14.5)."
   def expire_conversation(conv) do
     now = DateTime.utc_now()

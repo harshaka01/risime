@@ -7,16 +7,30 @@ defmodule RisiMe.Messaging.Store do
   """
 
   @type uuid :: String.t()
-  @type sent :: %{message_id: uuid, conversation_id: String.t(), server_ts: DateTime.t()}
+  @typedoc "`kind` is nil for a `msg:send` claim and `\"delete\"` for a `msg:delete` one (v1.12)."
+  @type sent :: %{
+          required(:message_id) => uuid,
+          required(:conversation_id) => String.t(),
+          required(:server_ts) => DateTime.t(),
+          optional(:kind) => String.t() | nil
+        }
+  @typedoc """
+  A `message_index` row. `kind`: nil (a message), `"reaction"` or `"delete"` (v1.12).
+  Reads also return `deleted_at`/`deleted_by` (the v1.12 index tombstone; set = deleted) and
+  `ttl`, the row's remaining TTL in seconds.
+  """
   @type message :: %{
-          message_id: uuid,
-          sender_id: uuid,
-          recipient_id: uuid | nil,
-          client_msg_id: uuid,
-          conversation_id: String.t(),
-          status: String.t(),
-          kind: String.t() | nil,
-          recipients: [uuid] | nil
+          required(:message_id) => uuid,
+          required(:sender_id) => uuid,
+          required(:recipient_id) => uuid | nil,
+          required(:client_msg_id) => uuid,
+          required(:conversation_id) => String.t(),
+          required(:status) => String.t(),
+          optional(:kind) => String.t() | nil,
+          optional(:recipients) => [uuid] | nil,
+          optional(:deleted_at) => DateTime.t() | nil,
+          optional(:deleted_by) => uuid | nil,
+          optional(:ttl) => non_neg_integer | nil
         }
   @type event :: %{event_id: uuid, kind: String.t(), data: map}
   @type receipt :: %{
@@ -60,6 +74,51 @@ defmodule RisiMe.Messaging.Store do
 
   @doc "Every stored receipt of a group message."
   @callback list_group_receipts(message_id :: uuid) :: [receipt]
+
+  ## v1.12 deletes (§15.8)
+
+  @doc "Q3d: the index tombstone, written with the row's remaining TTL (seconds)."
+  @callback tombstone_message(
+              message_id :: uuid,
+              deleted_by :: uuid,
+              deleted_at :: DateTime.t(),
+              ttl :: pos_integer
+            ) :: :ok
+
+  @doc "One inbox event's kind and conversation (the column, else the payload's), by point read."
+  @callback get_event(user_id :: uuid, event_id :: uuid) ::
+              {:ok, %{event_id: uuid, kind: String.t(), conversation_id: String.t() | nil}}
+              | :not_found
+
+  @doc "Q1d: deletes events of one inbox partition (one unlogged batch)."
+  @callback delete_events(user_id :: uuid, event_ids :: [uuid]) :: :ok
+
+  @doc "Q8: records that `event_id` in `user_id`'s inbox (plaintext reaction `ref_id`) references `message_id`."
+  @callback put_message_ref(message_id :: uuid, user_id :: uuid, event_id :: uuid, ref_id :: uuid) ::
+              :ok
+
+  @doc "Q7: the refs of a message, optionally of one inbox partition."
+  @callback list_message_refs(message_id :: uuid, user_id :: uuid | nil) :: [
+              %{user_id: uuid, event_id: uuid, ref_id: uuid | nil}
+            ]
+
+  @doc "Deletes a message's refs partition (or one user's rows of it)."
+  @callback delete_message_refs(message_id :: uuid, user_id :: uuid | nil) :: :ok
+
+  @doc "Q5d: deletes a group message's receipts partition."
+  @callback delete_group_receipts(message_id :: uuid) :: :ok
+
+  @doc """
+  `chat:clear` (§15.9): deletes from `user_id`'s partition every event of `kinds` whose
+  conversation is `conversation_id` and whose TimeUUID time is at or before `upto`'s, paged,
+  plus that user's refs rows of the deleted messages. Returns the number of events deleted.
+  """
+  @callback clear_conversation(
+              user_id :: uuid,
+              conversation_id :: String.t(),
+              upto :: uuid,
+              kinds :: [String.t()]
+            ) :: {:ok, non_neg_integer}
 
   @typedoc "What `backfill_sender_copies/2` found and did (counts only, never content)."
   @type backfill_counts :: %{

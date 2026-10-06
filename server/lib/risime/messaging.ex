@@ -71,6 +71,8 @@ defmodule RisiMe.Messaging do
       req = Map.put(req, :from_device, device_id)
 
       case store().get_sent(sender_id, req.client_msg_id) do
+        # v1.12 §15.2: a client_msg_id already used by another push (msg:delete).
+        {:ok, %{kind: k}} when k != nil -> {:error, :bad_request}
         {:ok, prior} -> {:ok, resend(sender_id, req, prior)}
         :not_found -> send_new(sender_id, req)
       end
@@ -159,7 +161,8 @@ defmodule RisiMe.Messaging do
   defp validate_body(%{ciphertext: ct}) do
     case Base.decode64(ct) do
       {:ok, bin} when byte_size(bin) > @max_ciphertext -> {:error, :too_long}
-      {:ok, bin} when byte_size(bin) > 0 -> :ok
+      # v1.12 §15.3: only a `delete` control (msg:delete) carries authenticated_data.
+      {:ok, bin} when byte_size(bin) > 0 -> if aad?(bin), do: {:error, :bad_request}, else: :ok
       _ -> {:error, :bad_request}
     end
   end
@@ -174,6 +177,13 @@ defmodule RisiMe.Messaging do
       String.trim(body) == "" -> {:error, :empty_body}
       String.length(body) > @max_body -> {:error, :too_long}
       true -> :ok
+    end
+  end
+
+  defp aad?(bin) do
+    case RisiMe.MLS.Wire.private_message(bin) do
+      {:ok, %{authenticated_data: aad}} -> aad != ""
+      :error -> false
     end
   end
 
@@ -192,6 +202,9 @@ defmodule RisiMe.Messaging do
         :ok ->
           deliver(sender_id, req, sent)
           {:ok, send_reply(sent)}
+
+        {:exists, %{kind: k}} when k != nil ->
+          {:error, :bad_request}
 
         {:exists, prior} ->
           {:ok, resend(sender_id, req, prior)}
@@ -242,8 +255,9 @@ defmodule RisiMe.Messaging do
         {:error, :unknown_target}
 
       true ->
+        # v1.12 §15.8: a deleted (tombstoned) target is unknown too.
         case store().get_message(target) do
-          {:ok, %{conversation_id: ^conv, kind: nil}} -> :ok
+          {:ok, %{conversation_id: ^conv, kind: nil, deleted_at: nil}} -> :ok
           _ -> {:error, :unknown_target}
         end
     end
@@ -272,6 +286,13 @@ defmodule RisiMe.Messaging do
   end
 
   defp deliver(sender_id, %{reaction: r} = req, sent) when is_map(r) do
+    target = String.downcase(r["target"])
+
+    # v1.12 §15.8 Q8: the refs rows go before the events they describe (never in one batch),
+    # so a crash leaves at most a dangling ref.
+    for u <- [sender_id, req.to],
+        do: :ok = store().put_message_ref(target, u, sent.message_id, sent.message_id)
+
     :ok =
       store().put_message(%{
         message_id: sent.message_id,
@@ -292,7 +313,7 @@ defmodule RisiMe.Messaging do
         "conversation_id" => sent.conversation_id,
         "from" => sender_id,
         "to" => req.to,
-        "target" => String.downcase(r["target"]),
+        "target" => target,
         "emoji" => r["emoji"],
         "op" => r["op"],
         "server_ts" => iso(sent.server_ts)
@@ -361,6 +382,9 @@ defmodule RisiMe.Messaging do
       req = Map.put(req, :from_device, device_id)
 
       case store().get_sent(sender_id, req.client_msg_id) do
+        {:ok, %{kind: k}} when k != nil ->
+          {:error, :bad_request}
+
         {:ok, prior} ->
           if (req.ciphertext && store().get_message(prior.message_id) == :not_found) and
                RisiMe.Groups.active_member?(req.conversation_id, sender_id),
@@ -420,6 +444,9 @@ defmodule RisiMe.Messaging do
         :ok ->
           deliver_group(sender_id, req, sent)
           {:ok, send_reply(sent)}
+
+        {:exists, %{kind: k}} when k != nil ->
+          {:error, :bad_request}
 
         {:exists, prior} ->
           {:ok, send_reply(prior)}
@@ -583,8 +610,12 @@ defmodule RisiMe.Messaging do
 
     for id <- ids do
       case store().get_message(id) do
-        # v1.8: reactions have no acks or status events; acks naming them are ignored.
-        {:ok, %{kind: "reaction"}} ->
+        # v1.8: reactions have no acks or status events; acks naming them are ignored. v1.12
+        # §15.8: nor do `delete` events, and a deleted (tombstoned) message is absent.
+        {:ok, %{kind: kind}} when kind in ["reaction", "delete"] ->
+          :ok
+
+        {:ok, %{deleted_at: %DateTime{}}} ->
           :ok
 
         # v1.10 §13.1: own copies are outgoing; a sender's ack of their own message (DM or

@@ -59,6 +59,30 @@ defmodule RisiMeWeb.InboxChannel do
     end
   end
 
+  # v1.12 §15.2: errors may carry per-target `failures` (all-or-nothing authorisation).
+  def handle_in("msg:delete", payload, socket) when is_map(payload) do
+    case Messaging.Deletes.delete(socket.assigns.user_id, payload,
+           device_id: socket.assigns[:device_id]
+         ) do
+      {:ok, reply} ->
+        {:reply, {:ok, reply}, socket}
+
+      {:error, reason, failures} ->
+        {:reply, {:error, %{reason: to_string(reason), failures: failures}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
+
+  # v1.12 §15.9: the reply only means "accepted".
+  def handle_in("chat:clear", payload, socket) when is_map(payload) do
+    case Messaging.Deletes.clear(socket.assigns.user_id, payload) do
+      {:ok, reply} -> {:reply, {:ok, reply}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
+
   def handle_in("msg:ack", payload, socket) when is_map(payload) do
     case Messaging.ack(socket.assigns.user_id, payload["message_ids"], payload["status"]) do
       :ok -> {:reply, {:ok, %{}}, socket}

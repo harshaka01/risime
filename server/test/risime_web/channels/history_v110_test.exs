@@ -57,6 +57,22 @@ defmodule RisiMeWeb.HistoryV110Test do
     defdelegate backfill_sender_copies(k, o), to: Cassandra
     @impl true
     defdelegate health(), to: Cassandra
+    @impl true
+    defdelegate tombstone_message(m, b, a, t), to: Cassandra
+    @impl true
+    defdelegate get_event(u, e), to: Cassandra
+    @impl true
+    defdelegate delete_events(u, e), to: Cassandra
+    @impl true
+    defdelegate put_message_ref(m, u, e, r), to: Cassandra
+    @impl true
+    defdelegate list_message_refs(m, u), to: Cassandra
+    @impl true
+    defdelegate delete_message_refs(m, u), to: Cassandra
+    @impl true
+    defdelegate delete_group_receipts(m), to: Cassandra
+    @impl true
+    defdelegate clear_conversation(u, c, t, k), to: Cassandra
   end
 
   setup :with_attestation_key

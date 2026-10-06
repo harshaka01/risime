@@ -56,7 +56,7 @@ config :risime, :push_sender, nil
 config :risime, Oban,
   engine: Oban.Engines.Basic,
   repo: RisiMe.Repo,
-  queues: [maintenance: 1, groups: 5],
+  queues: [maintenance: 1, groups: 5, messaging: 5],
   plugins: [
     # Completed/cancelled/discarded jobs are deleted after 7 days.
     {Oban.Plugins.Pruner, max_age: 7 * 24 * 60 * 60},
