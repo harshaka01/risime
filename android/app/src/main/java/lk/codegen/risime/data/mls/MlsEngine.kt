@@ -47,8 +47,20 @@ interface MlsEngine {
 
     fun encrypt(conversationId: String, plaintext: ByteArray): ByteArray
 
-    /** Throws [MlsDecryptException] for anything undecryptable. */
+    /**
+     * Throws [MlsDecryptException] for anything undecryptable. v1.12: the result carries the
+     * PrivateMessage's `authenticated_data` and `sender_is_admin` at the message's epoch (§15.4,
+     * the core's `processDetailed`); a delete control from an epoch with no admin record throws
+     * [MlsMalformedException] (rolled back, nothing consumed).
+     */
     fun decrypt(conversationId: String, generation: Long, ciphertext: ByteArray): Decrypted
+
+    /** §15.3: `encrypt` with the PrivateMessage `authenticated_data` (a delete control's canonical AAD). */
+    fun encryptWithAad(conversationId: String, plaintext: ByteArray, aad: ByteArray): ByteArray =
+        throw UnsupportedOperationException("delete controls not supported by this MLS core")
+
+    /** True once the core answers `authenticated_data` and `sender_is_admin` (v1.12): only then is `deletes` advertised. */
+    val deletesSupported: Boolean get() = false
 
     fun deleteGroup(conversationId: String)
 
@@ -113,10 +125,23 @@ sealed interface CommitOutcome {
     data class Rejected(val reason: String) : CommitOutcome
 }
 
-/** The sender as authenticated by MLS (credential identity "<user_id>/<device_id>"). */
-data class Decrypted(val sender: DeviceRef, val epoch: Long, val plaintext: ByteArray)
+/**
+ * The sender as authenticated by MLS (credential identity "<user_id>/<device_id>"). v1.12:
+ * [authenticatedData] (empty for everything but a delete control) and [senderIsAdmin] (admin at
+ * the message's epoch; null in DMs and for pre-v1.12 epochs of a group).
+ */
+class Decrypted(
+    val sender: DeviceRef,
+    val epoch: Long,
+    val plaintext: ByteArray,
+    val authenticatedData: ByteArray = ByteArray(0),
+    val senderIsAdmin: Boolean? = null,
+)
 
-class MlsDecryptException(message: String) : Exception(message)
+open class MlsDecryptException(message: String) : Exception(message)
+
+/** The core's `Malformed` on decrypt: e.g. a delete control from an epoch with no admin record (more than 3 epochs back). */
+class MlsMalformedException(message: String) : MlsDecryptException(message)
 
 fun groupId(conversationId: String, generation: Long) = "$conversationId#$generation"
 

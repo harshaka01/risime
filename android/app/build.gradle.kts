@@ -89,6 +89,10 @@ android {
         // Native MLS core packaged (decision 037: release carries it ahead of the E2EE rollout; it is
         // only loaded once the server offers attestation keys).
         buildConfigField("boolean", "CRYPTO_AVAILABLE", cryptoToolchain.toString())
+        // v1.12 §15.11 rollout: the delete send UI (long-press Delete / Select, for me / for everyone)
+        // is off until most installs apply deletes; a later nightly flips it. Receive is always on.
+        // The one switch: lk.codegen.risime.data.deletes.DeleteFeature.sendEnabled reads this.
+        buildConfigField("boolean", "DELETES_SEND_ENABLED", (providers.gradleProperty("risime.deletesSend").orNull == "true").toString())
         // Pinned server attestation keys (public JWK JSON, ';'-separated). Empty until root provides
         // the pilot key at rollout; the server's /mls/attestation_keys are trusted in addition.
         buildConfigField("String", "MLS_PINNED_KEYS", "\"${providers.gradleProperty("risime.mlsPinnedKeys").orNull.orEmpty().replace("\"", "\\\"")}\"")

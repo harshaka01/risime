@@ -117,6 +117,14 @@ class PhoenixRealtimeClient(
             ?.map { }
             ?: PushResult.Unavailable
 
+    override suspend fun deleteMessages(msg: lk.codegen.risime.net.MsgDelete): PushResult<lk.codegen.risime.net.MsgDeleteReply> =
+        liveConnection()?.push("msg:delete", ProtocolJson.encodeToJsonElement(msg))
+            ?.map { ProtocolJson.decodeFromJsonElement<lk.codegen.risime.net.MsgDeleteReply>(it) }
+            ?: PushResult.Unavailable
+
+    override suspend fun clearChat(msg: lk.codegen.risime.net.ChatClear): PushResult<Unit> =
+        liveConnection()?.push("chat:clear", ProtocolJson.encodeToJsonElement(msg))?.map { } ?: PushResult.Unavailable
+
     override fun setWatch(userIds: Set<String>) {
         watch.value = userIds
     }
@@ -239,9 +247,10 @@ class PhoenixRealtimeClient(
             }
             return when (reply.replyStatus) {
                 "ok" -> PushResult.Ok(reply.replyResponse)
-                else -> PushResult.Rejected(
+                else -> PushResult.Rejected.withBody(
                     runCatching { ProtocolJson.decodeFromJsonElement<ErrorReason>(reply.replyResponse).reason }
                         .getOrDefault("unknown"),
+                    reply.replyResponse,
                 )
             }
         }
@@ -305,6 +314,7 @@ class PhoenixRealtimeClient(
         private suspend fun syncThenLive(page: EventsPage): Outcome? = coroutineScope {
             var current = page
             listener.onHistoryBefore(current.historyBefore)
+            listener.onServerTime(current.serverTime)
             listener.onEvents(current.events)
             while (current.hasMore && current.events.isNotEmpty()) {
                 val since = current.events.last().eventId
@@ -313,6 +323,7 @@ class PhoenixRealtimeClient(
                     else -> return@coroutineScope Outcome.Closed
                 }
                 listener.onHistoryBefore(current.historyBefore)
+                listener.onServerTime(current.serverTime)
                 listener.onEvents(current.events)
             }
             _state.value = ConnectionState.Live

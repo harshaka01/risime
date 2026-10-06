@@ -161,23 +161,45 @@ class ContractExamplesTest {
         "error_not_e2ee.json" to { s -> apiError(s, AuthErrors.NOT_E2EE) },
         "error_storage_full.json" to { s -> apiError(s, AuthErrors.STORAGE_FULL) },
         "error_bad_media_type.json" to { s -> apiError(s, AuthErrors.BAD_MEDIA_TYPE) },
-        // v1.12 (deleting messages and chats, §15): parse-only placeholders added by root with the
-        // contract merge; the android role replaces them with typed decoders when it implements §15.
-        "delete_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "delete_payload_bad.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "msg_delete_everyone_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "msg_delete_everyone_dm.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "msg_delete_me.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "msg_delete_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "msg_delete_reply_gone.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_delete_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_delete_dm.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_delete_dm_e2ee.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_delete_too_old.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_not_sender.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "chat_clear.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "device_put_deletes.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_group_deletes_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.12 (deleting messages and chats, §15)
+        "delete_payload.json" to { s ->
+            (lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) as lk.codegen.risime.data.mls.MlsPayload.Decoded.Delete).also { require(it.targets.size == 2) }
+        },
+        // 101 targets: must be dropped as malformed (§15.3).
+        "delete_payload_bad.json" to { s ->
+            require(lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) is lk.codegen.risime.data.mls.MlsPayload.Decoded.Ignored)
+        },
+        "msg_delete_everyone_group.json" to { s ->
+            ProtocolJson.decodeFromString<MsgDelete>(s).also { require(it.scope == MsgDelete.SCOPE_EVERYONE && it.ciphertext != null && it.blobIds!!.size == 1 && it.epoch == 4L) }
+        },
+        "msg_delete_everyone_dm.json" to { s ->
+            ProtocolJson.decodeFromString<MsgDelete>(s).also { require(it.ciphertext == null && it.blobIds == null && it.clientTs != null) }
+        },
+        "msg_delete_me.json" to { s -> ProtocolJson.decodeFromString<MsgDelete>(s).also { require(it.scope == MsgDelete.SCOPE_ME && it.clientTs == null) } },
+        "msg_delete_reply.json" to { s -> ProtocolJson.decodeFromString<MsgDeleteReply>(s).also { require(it.messageId != null && it.deleted.size == 1 && it.gone.size == 1) } },
+        "msg_delete_reply_gone.json" to { s -> ProtocolJson.decodeFromString<MsgDeleteReply>(s).also { require(it.messageId == null && it.serverTs == null && it.deleted.isEmpty()) } },
+        "event_delete_group.json" to { s ->
+            ProtocolJson.decodeFromString<Event>(s).deleteData()!!.also { d ->
+                require(d.encrypted && d.to == null && d.fromDevice != null && d.targets.size == 2 && d.targets[1].from == null && d.targets[1].serverTs == null)
+            }
+        },
+        "event_delete_dm.json" to { s ->
+            ProtocolJson.decodeFromString<Event>(s).deleteData()!!.also { d -> require(!d.encrypted && d.to != null && d.fromDevice == null && d.targets.single().from != null) }
+        },
+        "event_delete_dm_e2ee.json" to { s ->
+            ProtocolJson.decodeFromString<Event>(s).deleteData()!!.also { d -> require(d.encrypted && d.to != null && d.fromDevice != null && d.generation == 1L && d.epoch == 1L) }
+        },
+        "error_delete_too_old.json" to { s ->
+            ProtocolJson.decodeFromString<DeleteError>(s).also { require(it.reason == AuthErrors.TOO_OLD && it.failures.map { f -> f.reason } == listOf(AuthErrors.TOO_OLD, AuthErrors.NOT_ADMIN)) }
+        },
+        "error_not_sender.json" to { s -> ProtocolJson.decodeFromString<DeleteError>(s).also { require(it.reason == AuthErrors.NOT_SENDER && it.failures.size == 1) } },
+        "chat_clear.json" to { s -> ProtocolJson.decodeFromString<ChatClear>(s).also { require(it.conversationId.startsWith("dm:")) } },
+        "device_put_deletes.json" to { s ->
+            ProtocolJson.decodeFromString<DevicePut>(s).also { require(it.mls?.capabilities == listOf(DeviceMls.CAP_GROUPS, DeviceMls.CAP_IMAGES, DeviceMls.CAP_DELETES)) }
+        },
+        "mls_group_deletes_ready.json" to { s ->
+            ProtocolJson.decodeFromString<MlsGroup>(s).also { require(!it.deletesReady && it.missingDeletes.single().deviceId != null && it.imagesReady) }
+        },
     )
 
     private fun groupEvent(s: String, action: String): GroupEvent =
@@ -205,6 +227,12 @@ class ContractExamplesTest {
         check("mls_commit_request_group.json", GroupCommitRequest.serializer())
         check("device_put_groups.json", DevicePut.serializer())
         check("device_put_images.json", DevicePut.serializer())
+        // v1.12 client-sent payloads (§15.2, §15.9, §15.1).
+        check("msg_delete_everyone_group.json", MsgDelete.serializer())
+        check("msg_delete_everyone_dm.json", MsgDelete.serializer())
+        check("msg_delete_me.json", MsgDelete.serializer())
+        check("chat_clear.json", ChatClear.serializer())
+        check("device_put_deletes.json", DevicePut.serializer())
         check("key_packages_upload_replace.json", KeyPackagesUpload.serializer())
         check("key_packages_claim_group.json", KeyPackagesClaim.serializer())
         check("group_meta.json", GroupMeta.serializer())

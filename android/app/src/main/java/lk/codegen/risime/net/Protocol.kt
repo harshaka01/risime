@@ -159,6 +159,9 @@ data class Event(
     fun groupReceipt(): GroupReceiptEvent? =
         if (kind == KIND_GROUP_RECEIPT) ProtocolJson.decodeFromJsonElement<GroupReceiptEvent>(data) else null
 
+    /** §15.5 (v1.12) a `delete` event. */
+    fun deleteData(): DeleteEvent? = if (kind == KIND_DELETE) ProtocolJson.decodeFromJsonElement<DeleteEvent>(data) else null
+
     companion object {
         const val KIND_MESSAGE = "message"
         const val KIND_STATUS = "status"
@@ -169,6 +172,7 @@ data class Event(
         const val KIND_GROUP_EVENT = "group_event"
         const val KIND_GROUP_OP = "group_op"
         const val KIND_GROUP_RECEIPT = "group_receipt"
+        const val KIND_DELETE = "delete"
     }
 }
 
@@ -348,6 +352,11 @@ object AuthErrors {
     const val BAD_MEDIA_TYPE = "bad_media_type"
     const val STORAGE_FULL = "storage_full"
     const val QUOTA_EXCEEDED = "quota_exceeded"
+
+    // §15.2 (v1.12) msg:delete refusals.
+    const val NOT_SENDER = "not_sender"
+    const val TOO_OLD = "too_old"
+    const val BAD_REQUEST = "bad_request"
 }
 
 // ---- One-time phone verification (§7, v1.4) ----
@@ -510,6 +519,9 @@ data class DeviceMls(
 
         /** §14.1: advertised only once the app can receive and render images. */
         const val CAP_IMAGES = "images"
+
+        /** §15.1: advertised once the app can receive and apply `delete` events (whether or not its send UI is on). */
+        const val CAP_DELETES = "deletes"
     }
 }
 
@@ -579,6 +591,9 @@ data class MlsGroup(
     /** §14.1: every app instance of every member advertises `images` (absent = false). */
     @SerialName("images_ready") val imagesReady: Boolean = false,
     @SerialName("missing_images") val missingImages: List<MissingImages> = emptyList(),
+    /** §15.1: every app instance of every member advertises `deletes` (absent = false). A hint only. */
+    @SerialName("deletes_ready") val deletesReady: Boolean = false,
+    @SerialName("missing_deletes") val missingDeletes: List<MissingImages> = emptyList(),
 )
 
 /** §14.1 an app instance that doesn't advertise `images` (`device_id` null: an old app without one). */
@@ -911,3 +926,80 @@ data class MsgSendGroup(
 /** §12.9 typing in a group. */
 @Serializable
 data class TypingGroupPush(@SerialName("conversation_id") val conversationId: String, val typing: Boolean)
+
+// ---- Deleting messages and chats (§15, v1.12) ----
+
+/** §15.2 the push `msg:delete` (scope `me` or `everyone`). Absent optional fields are omitted, as in the examples. */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+@Serializable
+data class MsgDelete(
+    @SerialName("client_msg_id") val clientMsgId: String,
+    @SerialName("conversation_id") val conversationId: String,
+    val scope: String,
+    val targets: List<String>,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("blob_ids") val blobIds: List<String>? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val ciphertext: String? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val generation: Long? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val epoch: Long? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("client_ts") val clientTs: String? = null,
+) {
+    companion object {
+        const val SCOPE_ME = "me"
+        const val SCOPE_EVERYONE = "everyone"
+
+        /** §15.2: 1..100 targets per request. */
+        const val MAX_TARGETS = 100
+    }
+}
+
+/** §15.2 reply ok. `message_id`/`server_ts` are null for `me` and when every target is `gone`. */
+@Serializable
+data class MsgDeleteReply(
+    @SerialName("message_id") val messageId: String? = null,
+    @SerialName("conversation_id") val conversationId: String,
+    @SerialName("server_ts") val serverTs: String? = null,
+    val deleted: List<String> = emptyList(),
+    val gone: List<String> = emptyList(),
+)
+
+/** §15.2 reply error: all-or-nothing, with the per-target failures. */
+@Serializable
+data class DeleteError(val reason: String, val failures: List<DeleteFailure> = emptyList())
+
+@Serializable
+data class DeleteFailure(val target: String, val reason: String)
+
+/** §15.5 one target of a `delete` event (`from`/`server_ts` null unless this user had it and it was deleted). */
+@Serializable
+data class DeleteTarget(
+    @SerialName("message_id") val messageId: String,
+    val from: String? = null,
+    @SerialName("server_ts") val serverTs: String? = null,
+)
+
+/** §15.5 the event kind `delete`. */
+@Serializable
+data class DeleteEvent(
+    @SerialName("message_id") val messageId: String,
+    @SerialName("client_msg_id") val clientMsgId: String,
+    @SerialName("conversation_id") val conversationId: String,
+    val from: String,
+    val to: String? = null,
+    @SerialName("from_device") val fromDevice: String? = null,
+    val targets: List<DeleteTarget>,
+    val ciphertext: String? = null,
+    val generation: Long? = null,
+    val epoch: Long? = null,
+    @SerialName("server_ts") val serverTs: String,
+) {
+    val encrypted: Boolean get() = ciphertext != null
+}
+
+/** §15.9 the push `chat:clear`. */
+@Serializable
+data class ChatClear(@SerialName("conversation_id") val conversationId: String, val upto: String)

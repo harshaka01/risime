@@ -55,9 +55,13 @@ class DeviceRegistrar(
         }
         val sigKey = b64.encodeToString(mls.signatureKey())
         // §12.1: advertise `groups` only with a core that really does groups (0xFA01 key packages).
+        // §15.1: `deletes` once the core answers AAD + sender_is_admin and the app applies delete events.
         val caps = when {
-            mls.groupsSupported && imagesSupported() -> listOf(DeviceMls.CAP_GROUPS, DeviceMls.CAP_IMAGES)
-            mls.groupsSupported -> listOf(DeviceMls.CAP_GROUPS)
+            mls.groupsSupported -> listOfNotNull(
+                DeviceMls.CAP_GROUPS,
+                DeviceMls.CAP_IMAGES.takeIf { imagesSupported() },
+                DeviceMls.CAP_DELETES.takeIf { mls.deletesSupported },
+            )
             else -> null
         }
         val body = DevicePut(DevicePut.PLATFORM_ANDROID, pushToken?.takeIf { it.isNotBlank() }, appVersion, DeviceMls(sigKey, caps))

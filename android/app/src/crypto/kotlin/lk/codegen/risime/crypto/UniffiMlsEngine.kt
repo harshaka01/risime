@@ -174,14 +174,29 @@ class UniffiMlsEngine(
 
     override fun decrypt(conversationId: String, generation: Long, ciphertext: ByteArray): Decrypted = tx {
         try {
-            when (val r = client.process(gid(conversationId, generation), ciphertext)) {
-                is IncomingMessage.Application -> Decrypted(DeviceRef(r.sender.userId, r.sender.deviceId), r.epoch.toLong(), r.plaintext)
+            // v1.12: processDetailed (same transaction as process) adds the AAD and sender_is_admin (§15.4).
+            val p = client.processDetailed(gid(conversationId, generation), ciphertext)
+            when (val r = p.incoming) {
+                is IncomingMessage.Application -> Decrypted(
+                    DeviceRef(r.sender.userId, r.sender.deviceId), r.epoch.toLong(), r.plaintext,
+                    p.application?.authenticatedData ?: ByteArray(0), p.application?.senderIsAdmin,
+                )
                 else -> throw MlsDecryptException("not an application message")
             }
+        } catch (e: RisiMlsException.Malformed) {
+            throw lk.codegen.risime.data.mls.MlsMalformedException("Malformed: ${e.message}")
         } catch (e: RisiMlsException) {
             throw MlsDecryptException("${e.javaClass.simpleName}: ${e.message}")
         }
     }
+
+    override fun encryptWithAad(conversationId: String, plaintext: ByteArray, aad: ByteArray): ByteArray = tx {
+        val (_, g) = current(conversationId) ?: throw IllegalStateException("no group for $conversationId")
+        client.encryptWithAad(g, plaintext, aad)
+    }
+
+    // Advertised (§15.1 `deletes`) once the app applies delete events: turned on with the receive path.
+    override val deletesSupported: Boolean get() = false
 
     override fun deleteGroup(conversationId: String) = tx {
         current(conversationId)?.let { (_, g) -> client.deleteGroup(g) }

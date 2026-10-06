@@ -203,6 +203,11 @@ class MlsPipeline(
                     is MlsPayload.Decoded.Text -> MlsResult.Plaintext(msg, p.body)
                     is MlsPayload.Decoded.Reaction -> MlsResult.Reaction(msg, p.target, p.emoji, p.op)
                     is MlsPayload.Decoded.Image -> MlsResult.Image(msg, p.envelope)
+                    // §15.3: a delete envelope is only valid in a `delete` event; in a `message` event it is dropped and logged.
+                    is MlsPayload.Decoded.Delete -> {
+                        log("delete envelope in a message event ${msg.messageId}: dropped")
+                        MlsResult.Ignored
+                    }
                     is MlsPayload.Decoded.Ignored -> {
                         log("ignored payload type ${p.type} in ${msg.messageId}")
                         MlsResult.Ignored

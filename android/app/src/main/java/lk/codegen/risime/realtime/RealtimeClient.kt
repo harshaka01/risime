@@ -36,7 +36,15 @@ fun interface AuthRefusalHandler {
 sealed interface PushResult<out T> {
     data class Ok<T>(val value: T) : PushResult<T>
     /** The server answered with an error `reason` (e.g. unknown_recipient, rate_limited, bad_request). */
-    data class Rejected(val reason: String) : PushResult<Nothing>
+    data class Rejected(val reason: String) : PushResult<Nothing> {
+        /** The whole error reply (§15.2 `failures`); not part of equality. */
+        var body: kotlinx.serialization.json.JsonObject? = null
+            private set
+
+        companion object {
+            fun withBody(reason: String, body: kotlinx.serialization.json.JsonObject?) = Rejected(reason).also { it.body = body }
+        }
+    }
     /** Not connected, socket dropped, or no reply in time. Safe to retry with the same ids. */
     data object Unavailable : PushResult<Nothing>
 }
@@ -48,6 +56,9 @@ interface RealtimeListener {
 
     /** §13.2: the page's `history_before` (null = absent), delivered before that page's [onEvents]. */
     suspend fun onHistoryBefore(ts: String?) = Unit
+
+    /** §15.7: the page's `server_time` (the server-clock offset for the 48 h check). */
+    suspend fun onServerTime(ts: String?) = Unit
 
     /** Apply events in order (dedupe + persist cursor). Called for join/sync pages and live pushes. */
     suspend fun onEvents(events: List<Event>)
@@ -93,6 +104,12 @@ interface RealtimeClient {
     suspend fun sendGroup(msg: lk.codegen.risime.net.MsgSendGroup): PushResult<MsgSendReply> = PushResult.Unavailable
 
     suspend fun ack(messageIds: List<String>, status: String): PushResult<Unit>
+
+    /** §15.2 `msg:delete`; a refusal carries the reply body (`failures`) in [PushResult.Rejected.body]. */
+    suspend fun deleteMessages(msg: lk.codegen.risime.net.MsgDelete): PushResult<lk.codegen.risime.net.MsgDeleteReply> = PushResult.Unavailable
+
+    /** §15.9 `chat:clear` (reply ok `{}`). */
+    suspend fun clearChat(msg: lk.codegen.risime.net.ChatClear): PushResult<Unit> = PushResult.Unavailable
 
     /**
      * Users whose presence to watch (at most 200 are sent). Remembered across reconnects and sent

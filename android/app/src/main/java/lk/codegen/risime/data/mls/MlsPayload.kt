@@ -26,6 +26,9 @@ object MlsPayload {
         /** §14.4: a strictly validated image envelope. */
         data class Image(val envelope: lk.codegen.risime.data.media.ImageEnvelope) : Decoded
 
+        /** §15.3: a strictly validated delete control (1..100 distinct lowercase TimeUUIDs). */
+        data class Delete(val targets: List<String>) : Decoded
+
         /** A type this app doesn't know yet: store nothing visible. */
         data class Ignored(val type: String) : Decoded
     }
@@ -52,6 +55,32 @@ object MlsPayload {
         },
     ).toByteArray(Charsets.UTF_8)
 
+    const val TYPE_DELETE = "delete"
+
+    /** §15.3 envelope `{"v":1,"type":"delete","targets":[…]}` (nothing else). */
+    fun delete(targets: List<String>): ByteArray = ProtocolJson.encodeToString(
+        JsonObject.serializer(),
+        buildJsonObject {
+            put("v", VERSION)
+            put("type", TYPE_DELETE)
+            put("targets", kotlinx.serialization.json.JsonArray(targets.map { JsonPrimitive(it) }))
+        },
+    ).toByteArray(Charsets.UTF_8)
+
+    /** §15.3 strict validation: `v` = 1 and 1..100 distinct TimeUUID strings, else null (drop the whole control). */
+    fun validateDelete(obj: JsonObject): List<String>? {
+        val v = (obj["v"] as? JsonPrimitive)?.takeIf { !it.isString }?.contentOrNull?.toIntOrNull()
+        if (v != VERSION) return null
+        val arr = obj["targets"] as? kotlinx.serialization.json.JsonArray ?: return null
+        if (arr.isEmpty() || arr.size > lk.codegen.risime.net.MsgDelete.MAX_TARGETS) return null
+        val ids = arr.map { el ->
+            val p = (el as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: return null
+            val u = runCatching { java.util.UUID.fromString(p) }.getOrNull()?.takeIf { it.version() == 1 && it.toString().equals(p, true) } ?: return null
+            u.toString()
+        }
+        return ids.takeIf { it.toSet().size == it.size }
+    }
+
     /**
      * Receiving: a JSON object with a string `type` → "text" gives its `body`, anything else is
      * ignored; everything else (not JSON, not an object, no string type) is legacy plain text.
@@ -64,6 +93,9 @@ object MlsPayload {
             fun str(k: String) = (obj[k] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
             val target = str("target"); val emoji = str("emoji"); val op = str("op")
             return if (target != null && emoji != null && (op == "add" || op == "remove")) Decoded.Reaction(target, emoji, op) else Decoded.Ignored("reaction (malformed)")
+        }
+        if (type == TYPE_DELETE) {
+            return validateDelete(obj)?.let { Decoded.Delete(it) } ?: Decoded.Ignored("delete (malformed)")
         }
         if (type == lk.codegen.risime.data.media.ImageEnvelope.TYPE) {
             // §14.4: malformed → dropped and logged like an unknown type (never stored, fetched or decoded).
