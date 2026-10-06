@@ -8,6 +8,12 @@ plugins {
     alias(libs.plugins.room)
 }
 
+// ---- Push (decision 026) ----
+// Firebase config is Harsha's credential: app/google-services.json (gitignored), copied from
+// ~/risime-keys/. Without it the plugin isn't applied and the app builds and runs without push.
+val pushConfigured = file("google-services.json").isFile
+if (pushConfigured) pluginManager.apply("com.google.gms.google-services")
+
 // ---- Version (decision 003) ----
 // versionName = the repo's top-level VERSION file (trimmed): "X.Y.Z" or "X.Y.Z-nightly.N".
 // versionCode = major*1_000_000 + minor*10_000 + patch*100 + (N for -nightly.N, 99 for a final),
@@ -62,6 +68,7 @@ android {
         // In-app updater (decision 016): release only.
         buildConfigField("boolean", "UPDATER_ENABLED", "true")
         buildConfigField("String", "UPDATE_BASE_URL", "\"https://risicloud.ai/app/risime/\"")
+        buildConfigField("boolean", "PUSH_CONFIGURED", pushConfigured.toString())
     }
 
     signingConfigs {
@@ -142,6 +149,9 @@ dependencies {
     implementation(libs.appauth)
     implementation(libs.androidx.browser)
     implementation(libs.androidx.appcompat) // Theme.AppCompat for AppAuth activities + biometric dialog
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging) // push wake-ups (decision 026); inert without google-services.json
+    implementation(libs.androidx.work.runtime)
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.fragment.ktx)
 
