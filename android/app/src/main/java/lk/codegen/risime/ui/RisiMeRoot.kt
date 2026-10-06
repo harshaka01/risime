@@ -36,7 +36,6 @@ import lk.codegen.risime.ui.chat.ChatScreen
 import lk.codegen.risime.ui.chat.ChatViewModel
 import lk.codegen.risime.ui.chats.ChatsScreen
 import lk.codegen.risime.ui.chats.ChatsViewModel
-import lk.codegen.risime.ui.common.DevEncryptionBanner
 import lk.codegen.risime.ui.login.LoginFlow
 import lk.codegen.risime.ui.login.LoginViewModel
 import lk.codegen.risime.ui.search.SearchScreen
@@ -58,7 +57,6 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
     val required = update.blocking()
     val gate = appGate(session != Unit, current, unlocked, blocked, required != null)
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
-        DevEncryptionBanner()
         if (required == null) UpdateBar(update, c)
         Box(Modifier.weight(1f)) {
             // Order: update required → blocked → locked → confirm phone → chats (contract §7).

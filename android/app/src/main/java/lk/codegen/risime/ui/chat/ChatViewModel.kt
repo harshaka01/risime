@@ -6,7 +6,13 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import lk.codegen.risime.data.mls.E2eeRetryBackoff
+import lk.codegen.risime.data.mls.E2eeState
 import lk.codegen.risime.AppContainer
 import lk.codegen.risime.data.TypingSender
 import lk.codegen.risime.net.Presence
@@ -57,19 +63,41 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
         else -> "Former friend"
     }
 
-    /** §10.4: lock / "not end-to-end encrypted yet" strip. Unavailable without an MLS core. */
-    private val _e2ee = kotlinx.coroutines.flow.MutableStateFlow<lk.codegen.risime.data.mls.E2eeState>(lk.codegen.risime.data.mls.E2eeState.Unavailable)
-    val e2ee: StateFlow<lk.codegen.risime.data.mls.E2eeState> = _e2ee
+    /** §10.4 / decision 048: header lock, or the "Not end-to-end encrypted yet: <reason>" strip. */
+    private val _e2ee = kotlinx.coroutines.flow.MutableStateFlow<E2eeState>(E2eeState.Checking)
+    val e2ee: StateFlow<E2eeState> = _e2ee
 
-    /** Opening (or sending to) a chat that isn't e2ee yet tries the upgrade (claim → epoch-0 commit). */
+    /** This install's device id (the strip says "this phone" for it). */
+    var myDeviceId: String? = null
+        private set
+
+    private val e2eeKick = Channel<Unit>(Channel.CONFLATED)
+
+    /**
+     * Re-check now (chat open/resume, a tapped disabled button, `mls_membership`, reconnect).
+     * Opening (or sending to) a chat that isn't e2ee yet tries the upgrade (claim → epoch-0 commit).
+     */
     fun refreshE2ee() {
-        if (c.mlsEngine == null || peer.value?.friend == false) return
-        viewModelScope.launch {
-            // Engine calls are synchronous Room transactions: never on the main thread.
-            _e2ee.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                c.mlsUpgrader.ensure(conversationId, meId, peerId)
+        e2eeKick.trySend(Unit)
+    }
+
+    /** P0-1: the upgrade retries on its own while the chat is open and not E2EE (backoff 5 s … 5 min). */
+    private suspend fun e2eeLoop() {
+        val backoff = E2eeRetryBackoff()
+        myDeviceId = runCatching { c.sessionStore.deviceId() }.getOrNull()
+        while (true) {
+            if (c.mlsEngine == null) {
+                _e2ee.value = E2eeState.Unavailable
+            } else if (peer.value?.friend != false) {
+                val was = _e2ee.value
+                // Engine calls are synchronous Room transactions: never on the main thread.
+                val now = withContext(Dispatchers.IO) { c.mlsUpgrader.ensure(conversationId, meId, peerId) }
+                _e2ee.value = now
+                if (now is E2eeState.Encrypted && was !is E2eeState.Encrypted) c.engine.flushOutbox()
             }
-            if (_e2ee.value is lk.codegen.risime.data.mls.E2eeState.Encrypted) c.engine.flushOutbox()
+            val wait = backoff.delayAfter(_e2ee.value)
+            val kicked = if (wait == null) e2eeKick.receive() else withTimeoutOrNull(wait) { e2eeKick.receive() }
+            if (kicked != null) backoff.reset()
         }
     }
 
@@ -77,7 +105,15 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
     val imgs = ImageActions(c, viewModelScope, meId, conversationId)
 
     init {
-        refreshE2ee()
+        viewModelScope.launch { e2eeLoop() }
+        viewModelScope.launch {
+            c.mlsMembershipSeen.collect { e ->
+                if (e.conversationId == conversationId || e.userId.equals(peerId, true) || e.userId.equals(meId, true)) refreshE2ee()
+            }
+        }
+        viewModelScope.launch {
+            c.realtime.state.collect { if (it == ConnectionState.Live && _e2ee.value !is E2eeState.Encrypted) refreshE2ee() }
+        }
         imgs.refreshImagesReady()
         viewModelScope.launch { c.behaviour.chatOpen(peerId) }
         c.openConversation.value = conversationId

@@ -65,24 +65,6 @@ import lk.codegen.risime.ui.theme.Spacing
  * widgets ad hoc. Colours come from MaterialTheme / RisiTheme tokens only.
  */
 
-const val DEV_BANNER_TEXT = "Dev build — not end-to-end encrypted"
-
-/** Mandatory until E2EE (MLS) ships in 0.3. Never remove before then. */
-@Composable
-fun DevEncryptionBanner(modifier: Modifier = Modifier) {
-    Text(
-        text = DEV_BANNER_TEXT,
-        modifier = modifier
-            .fillMaxWidth()
-            .background(RisiTheme.colors.banner)
-            .padding(horizontal = Spacing.lg, vertical = Spacing.xs + Spacing.xxs)
-            .semantics { contentDescription = "Warning: $DEV_BANNER_TEXT. Don't share secrets in this build." },
-        color = RisiTheme.colors.onBanner,
-        style = MaterialTheme.typography.labelMedium,
-        textAlign = TextAlign.Center,
-    )
-}
-
 // ---- Avatar and presence ----
 
 /** Initials avatar, with a presence dot when [online]. Decorative for TalkBack except the dot. */

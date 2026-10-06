@@ -162,15 +162,19 @@ private fun ServerSection(s: SettingsUiState, vm: SettingsViewModel) {
     ) { Text("Change server") }
 }
 
+/** Decision 048: About states the real rule; each chat shows its own state. */
+const val ABOUT_E2EE_TEXT =
+    "Chats are end-to-end encrypted (MLS) once everyone in them runs a current RisiMe. Each chat shows its state."
+
 @Composable
-private fun AboutSection() {
+internal fun AboutSection() {
     SectionHeader("About")
     InfoRow("App version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
     InfoRow("Build", if (BuildConfig.DEBUG) "Debug" else "Release")
     InfoRow("Protocol", "v$PROTOCOL_VERSION")
     if (BuildConfig.DEBUG) CryptoSelfTest()
     Text(
-        "Dev build: messages are not end-to-end encrypted yet (MLS arrives in 0.3).",
+        ABOUT_E2EE_TEXT,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

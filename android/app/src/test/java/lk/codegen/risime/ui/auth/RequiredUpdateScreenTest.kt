@@ -24,8 +24,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.Density
-import lk.codegen.risime.ui.common.DEV_BANNER_TEXT
-import lk.codegen.risime.ui.common.DevEncryptionBanner
 import lk.codegen.risime.ui.theme.RisiMeTheme
 import lk.codegen.risime.update.UpdateInfo
 import lk.codegen.risime.update.UpdateState
@@ -64,9 +62,8 @@ class RequiredUpdateScreenTest {
             RisiMeTheme(dark = dark) {
                 val d = LocalDensity.current
                 CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale)) {
-                    // As in RisiMeRoot: the dev banner above, the gate in the remaining space.
+                    // As in RisiMeRoot: the gate in the remaining space (no global banner, decision 048).
                     Column(Modifier.fillMaxSize()) {
-                        DevEncryptionBanner()
                         Box(Modifier.weight(1f)) {
                             RequiredUpdateContent(state, info, { updates++ }, { downloads++ }, { signOuts++ })
                         }
@@ -82,7 +79,6 @@ class RequiredUpdateScreenTest {
         assertTrue("$primary below the screen", rule.onNodeWithText(primary).fetchSemanticsNode().boundsInRoot.bottom <= rootBottom)
         rule.onNodeWithText(OPEN_DOWNLOAD_PAGE).assertIsDisplayed().assertIsEnabled()
         rule.onNodeWithText(SIGN_OUT_KEEPS_CHATS).assertIsDisplayed().assertIsEnabled()
-        rule.onNodeWithText(DEV_BANNER_TEXT).assertIsDisplayed()
     }
 
     private fun assertNotesScroll() {

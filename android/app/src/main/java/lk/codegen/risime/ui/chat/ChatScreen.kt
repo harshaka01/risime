@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -90,6 +91,15 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     }
 
     val name = peer?.displayName ?: "Chat"
+    // Decision 048: the real per-chat state (no global banner).
+    val stripText = lk.codegen.risime.data.mls.e2eeStripText(
+        e2ee, nameOf = { id -> if (id.equals(vm.peerId, true)) name else "Someone" },
+        isMe = { id -> id.equals(vm.me, true) }, myDeviceId = vm.myDeviceId,
+    )
+    var showInfo by remember { mutableStateOf(false) }
+    if (showInfo) DmChatInfoDialog(name, encrypted, stripText) { showInfo = false }
+    // Back on screen: re-check readiness at once (P0-1).
+    LaunchedEffect(resumed) { if (resumed && !encrypted) vm.refreshE2ee() }
     // Unknown while loading: assume friend (the server refuses non-friends anyway).
     val isFriend = peer?.friend != false
     Scaffold(
@@ -107,19 +117,16 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 emphasis = typing,
                 onBack = onBack,
                 avatar = { InitialsAvatar(name, size = Sizes.avatarSmall, online = presence?.online == true) },
+                actions = {
+                    E2eeHeaderLock(encrypted) { showInfo = true }
+                    IconButton(onClick = { showInfo = true }) { Icon(Icons.Default.Info, "Chat info") }
+                },
             )
         },
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
-            lk.codegen.risime.data.mls.e2eeStripText(e2ee) { id -> if (id.equals(vm.peerId, true)) name else "your other device" }?.let { strip ->
-                Text(
-                    strip,
-                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            E2eeStrip(stripText)
             lk.codegen.risime.ui.common.ChatMessageList(
                 messages = messages,
                 modifier = Modifier.weight(1f).fillMaxWidth(),

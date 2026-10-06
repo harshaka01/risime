@@ -186,11 +186,14 @@ class AppContainer(
         override suspend fun commit(conversationId: String, body: lk.codegen.risime.net.MlsCommitRequest) =
             api.mlsCommit(conversationId, body, sessionStore.deviceId())
     }
+    /** §10.3 `mls_membership` seen (any conversation): open chats that aren't E2EE re-check readiness (P0-1). */
+    val mlsMembershipSeen = kotlinx.coroutines.flow.MutableSharedFlow<lk.codegen.risime.net.MlsMembershipEvent>(extraBufferCapacity = 16)
     val membershipExecutor by lazy { MembershipExecutor({ mlsEngine }, mlsApi) { conv -> catchUpCommits(conv) } }
     val mlsPipeline by lazy {
         MlsPipeline(
             { mlsEngine }, db.mlsPending(),
             onMembership = { a ->
+                mlsMembershipSeen.tryEmit(a.event)
                 scope.launch {
                     delay(a.delayMs)
                     val r = membershipExecutor.execute(a)

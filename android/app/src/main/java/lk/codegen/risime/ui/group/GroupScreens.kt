@@ -148,7 +148,10 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 emphasis = typingLabel != null,
                 onBack = onBack,
                 avatar = { Box(Modifier.clickable(onClickLabel = "Group info", onClick = onInfo)) { InitialsAvatar(name, size = Sizes.avatarSmall) } },
-                actions = { IconButton(onClick = onInfo) { Icon(Icons.Default.Info, "Group info") } },
+                actions = {
+                    lk.codegen.risime.ui.chat.E2eeHeaderLock(encrypted == true, onInfo)
+                    IconButton(onClick = onInfo) { Icon(Icons.Default.Info, "Group info") }
+                },
             )
         },
         contentWindowInsets = WindowInsets(0),
@@ -156,7 +159,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
             if (encrypted == false && !readOnly && composer == GroupComposer.Enabled) {
                 Text(
-                    "Setting up end-to-end encryption…",
+                    "${lk.codegen.risime.data.mls.NOT_E2EE_PREFIX}: setting up end-to-end encryption…",
                     Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = Spacing.lg, vertical = Spacing.xs),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -375,6 +378,8 @@ fun GroupInfoContent(
                         ui.stateLine ?: if (ui.memberCount == 1) "1 member" else "${ui.memberCount} members",
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // §12.0: groups are E2EE-only (decision 048: chat info states it).
+                    lk.codegen.risime.ui.chat.E2eeInfoLine(encrypted = true, notEncryptedText = null)
                     if (ui.photosNeedUpdate.isNotEmpty()) {
                         Text(
                             "Need to update to see photos: " + ui.photosNeedUpdate.joinToString(", "),
