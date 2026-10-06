@@ -8,7 +8,7 @@ defmodule RisiMe.ProdConfigTest do
   @runtime Path.expand("../../config/runtime.exs", __DIR__)
 
   @vars ~w(DATABASE_URL POSTGRES_PASSWORD POSTGRES_HOST POSTGRES_PORT POSTGRES_DB POSTGRES_USER
-           SECRET_KEY_BASE PHX_HOST PHX_PATH PHX_ORIGINS PHX_BIND PORT CASSANDRA_NODES
+           SECRET_KEY_BASE PHX_HOST PHX_PATH PHX_ORIGINS PHX_BIND PORT PHX_SERVER CASSANDRA_NODES
            CASSANDRA_KEYSPACE)
 
   setup do
@@ -43,6 +43,7 @@ defmodule RisiMe.ProdConfigTest do
 
     assert e[:http][:ip] == {127, 0, 0, 1}
     assert e[:http][:port] == 4000
+    assert e[:server] == true
     assert e[:url] == [host: "risime.risicloud.ai", port: 443, scheme: "https", path: "/"]
     assert e[:check_origin] == ["https://risime.risicloud.ai"]
 

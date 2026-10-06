@@ -189,6 +189,8 @@ if config_env() == :prod do
   config :risime, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :risime, RisiMeWeb.Endpoint,
+    # A prod release serves HTTP unless PHX_SERVER=false (bin/risime eval never starts it).
+    server: System.get_env("PHX_SERVER", "true") != "false",
     url: [host: host, port: 443, scheme: "https", path: url_path],
     # Browsers only from the public origin(s); OkHttp sends no Origin header, which is allowed.
     check_origin: origins,
