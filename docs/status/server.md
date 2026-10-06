@@ -121,6 +121,9 @@ bin/risime start                             # foreground; under tmux or systemd
 - **Census:** the socket connect carries `device_id` and `app_version`. Pre-v1.7 apps count as
   `legacy_app`: one instance per dev token, or per user for Keycloak tokens. A conversation is
   ready only when every instance of both members seen in the last 30 days is MLS-capable.
+- **Ciphertext cap:** 24 KiB decoded (PROTOCOL §10.3, raised from 16 KiB so a max-size text fits
+  in the envelope plus MLS framing; decision 034 still says 16 KiB and is superseded on this
+  point).
 - **REST calling device:** commits need the `X-Device-Id` header; claims accept it to exclude the
   caller.
 - **Load test:** `mix risime.loadtest --e2ee` runs the e2ee send path with opaque ciphertext. It

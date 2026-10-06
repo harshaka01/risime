@@ -70,8 +70,11 @@ defmodule RisiMeWeb.E2EESendTest do
     assert {:error, %{reason: "stale_epoch"}} = send_msg(chan, cipher(b.user.id, 1, 0))
     assert {:error, %{reason: "stale_epoch"}} = send_msg(chan, cipher(b.user.id, 2, 1))
 
+    # The cap is 24 KiB of decoded ciphertext: exactly 24 KiB is accepted, one byte more isn't.
     assert {:error, %{reason: "too_long"}} =
-             send_msg(chan, cipher(b.user.id, 1, 1, 16 * 1024 + 1))
+             send_msg(chan, cipher(b.user.id, 1, 1, 24 * 1024 + 1))
+
+    assert {:ok, %{message_id: _}} = send_msg(chan, cipher(b.user.id, 1, 1, 24 * 1024))
 
     {:ok, nil} =
       RisiMe.Devices.register(b.user.id, Ecto.UUID.generate(), %{

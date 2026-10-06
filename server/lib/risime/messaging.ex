@@ -73,7 +73,8 @@ defmodule RisiMe.Messaging do
     end
   end
 
-  @max_ciphertext 16 * 1024
+  # PROTOCOL §10.3: 24 KiB decoded, enough for a max-size text in the envelope plus MLS framing.
+  @max_ciphertext 24 * 1024
 
   # v1.7: an e2ee send carries `ciphertext`, `generation` and `epoch` and no `body`.
   defp parse_send(%{"client_msg_id" => cmid, "to" => to, "ciphertext" => ct} = p)
