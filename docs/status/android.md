@@ -85,6 +85,13 @@ ssh -N spark2-tunnel                 # laptop :4400 -> spark2 127.0.0.1:4000
 - **Logout:** revoke the refresh token, then Keycloak `end_session` in the browser, then delete
   the key, then wipe chats. Auth trouble never wipes; another user signing in does.
 
+## E2EE groundwork: the native MLS core in debug builds (decisions 012, 031)
+- Debug builds made on spark2 (where Rust and the NDK exist) package `libuniffi_risime.so`
+  (arm64-v8a, x86_64) and JNA, built by `cargoBuildAndroid` from `crypto/risime-mls-ffi`.
+- Without the toolchain (the laptop), the debug build skips it.
+- Release builds never contain it (`CryptoPackagingTest`).
+- Settings → About → **Crypto self-test** (debug only) runs the MLS lifecycle in-process.
+
 ## Push notifications (contract v1.5; decision 026)
 - **Off until Harsha's Firebase config exists.**
   - With `android/app/google-services.json` present at build time, the `google-services` plugin
@@ -374,3 +381,9 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
     produce no notifications.
 41. Without `google-services.json` (today's builds): no prompt failures, no crash at start, no
     device registration calls. Chat works only while the app is open, as before.
+42. **Crypto self-test** (debug build from spark2: `scripts/install-apk`):
+    - Settings → About → "Crypto self-test" shows **"ok: epoch 3, risime-mls 0.1.0
+      (MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519)"** on the emulator (x86_64) and on the USB
+      phone (arm64).
+    - A "failed: …" line (for example `UnsatisfiedLinkError`) is the finding to report.
+    - The release build has no such button.
