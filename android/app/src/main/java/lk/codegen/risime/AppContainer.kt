@@ -189,7 +189,8 @@ class AppContainer(context: Context) {
             db.groups(), db.groupOps(), db.messages(), { sessionStore.deviceId() },
             metaOf = { conv -> mlsEngine?.groupMeta(conv) },
             needsRefresh = { conv -> scope.launch { refreshGroup(conv) } },
-            onAddedMe = { conv, actor -> scope.launch { notifyAddedToGroup(conv, actor) } },
+            // §13.3: decided at apply time, so a fresh-install replay never posts "added you" later.
+            onAddedMe = { conv, actor -> if (!engine.replayingFresh) scope.launch { notifyAddedToGroup(conv, actor) } },
             onOpQueued = { kickGroupOps() },
             onReset = { conv, generation ->
                 mlsEngine?.let { e -> e.group(conv)?.takeIf { it.generation < generation }?.let { e.deleteGroup(conv) } }
@@ -250,7 +251,7 @@ class AppContainer(context: Context) {
 
     /** §12.7 S4: "Kamal added you to <name>" (the name from the Welcome's group_meta), unless that chat is open. */
     private suspend fun notifyAddedToGroup(conversationId: String, actor: String) {
-        if (foreground.value || engine.replayingFresh) return // §13.3: no notifications for a fresh-install replay
+        if (foreground.value) return
         val name = db.groups().get(conversationId)?.name ?: mlsEngine?.groupMeta(conversationId)?.name
         val who = db.groups().members(conversationId).firstOrNull { it.userId.equals(actor, true) }?.displayName
             ?: contacts.contacts.first().firstOrNull { it.userId.equals(actor, true) }?.displayName ?: "Someone"

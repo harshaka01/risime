@@ -15,6 +15,24 @@ class PushLogicTest {
 
     private val contacts = listOf(ContactEntity("+1", "Kamal", "Rise", "K1", true), ContactEntity("+2", "Nimal", "CG", "n1", true))
 
+    /** §13.3: after a fresh-install replay notifiedUpTo = the moment it went live; restored rows and markers never notify. */
+    @Test fun freshInstallPlanAfterTheReplayIsEmpty() {
+        val live = 1_000_000L
+        val restored = listOf(inc("1", "k1", 10), inc("2", "k1", live - 1)) // replayed, local_ts from server_ts or the replay
+        val marker = lk.codegen.risime.data.HistoryMarkers.row("dm:k1", lk.codegen.risime.data.groups.SystemLine.HISTORY_GAP, null, live + 5)
+        val plan = planChatNotifications(restored + marker, contacts, notifiedUpTo = live)
+        assertTrue(plan.isEmpty())
+        val myCopy = MessageEntity("c", "mine", "dm:k1", "me", "k1", "my restored copy", null, 5, "READ", outgoing = true)
+        val replayedAdd = lk.codegen.risime.data.db.ReactionEntity(
+            conversationId = "dm:k1", targetMessageId = "mine", reactorUserId = "k1", emoji = "👍", op = "add", confirmedOp = "add",
+            confirmedTs = "t", confirmedMessageId = "r1", pending = false, pendingClientMsgId = null, localTs = live - 1,
+        )
+        val adds = listOf(replayedAdd).filter { it.localTs > live } // ReactionDao.addsSince(notifiedUpTo)
+        assertTrue(mergeReactionNotifications(plan, adds, { if (it == "mine") myCopy else null }, { "Kamal" }, "me").isEmpty())
+        // The same reaction after going live does notify (the rule isn't over-broad).
+        assertEquals(1, mergeReactionNotifications(plan, listOf(replayedAdd.copy(localTs = live + 1)), { myCopy }, { "Kamal" }, "me").size)
+    }
+
     @Test fun wakeUpPayload() {
         assertTrue(isInboxWakeUp(mapOf("type" to "inbox", "v" to "1")))
         assertFalse(isInboxWakeUp(mapOf("type" to "other")))
