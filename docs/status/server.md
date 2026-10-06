@@ -61,9 +61,10 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 ## Group-readiness hotfix (§12.1) — READY
 - `Groups.readiness/1` counts only installs that can still receive: census rows with a
   `device_id` that is a **registered device** of the user, seen in the last 30 days. A row
-  without a `device_id` never makes a user not-ready by itself. It is listed as
-  `legacy_app` (`device_id: null`) only when the user is not ready anyway and it is their newest
-  instance not superseded by a later `PUT /me/devices`. Tests: `test/risime/groups/readiness_test.exs`.
+  without a `device_id` blocks (`legacy_app`, `device_id: null`) only if it was seen **after** the
+  user's latest `PUT /me/devices` (or the user has no registration). Seen before, it's superseded.
+  (Tightened in 6163192 after interop 10c; 7cc60a0 was too lenient.) Tests:
+  `test/risime/groups/readiness_test.exs`.
 - **risime_dev (read-only counts):** 10 users; only **1** has any `devices` row (it is
   groups-capable, and the new rule makes it ready, where the old rule did not). The 2 other users on
   nightly.10 have **no registered device**, so they stay not-ready (`no_mls`) under any rule.
