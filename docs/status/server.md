@@ -1,8 +1,8 @@
 # Server status — Release 0.2 (in progress)
 
-**READY** — 0.1 (S1–S7), the 0.2 night-1 items and contract **v1.3** (Keycloak sign-in) are
-done. Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors &&
-mix test` (140 tests).
+**READY** — 0.1 (S1–S7), the 0.2 night-1 items, contract **v1.3** (Keycloak sign-in) and
+**v1.4** (one-time SMS phone verification) are done. Gate green on `main`:
+`mix format --check-formatted && mix compile --warnings-as-errors && mix test` (178 tests).
 
 ## 0.2 progress
 - [x] Version from the repo `VERSION` file: `Application.spec(:risime, :vsn)` matches it, and the
@@ -40,6 +40,16 @@ mix test` (140 tests).
   - prod endpoint for `https://risicloud.ai/risime/` (no `force_ssl`; `check_origin`).
   - It needs `mix deps.get` and `mix ecto.migrate` (`users.keycloak_sub`, unique
     `lower(allowlist.email)`).
+- [x] **v1.4 one-time SMS phone verification** (decision 022):
+  - `OtpSender` behaviour (Email, NotifyLk, DevLog, Test); the NotifyDEMO guard;
+  - `POST /me/phone/verify/request` and `/confirm`, with `Retry-After` on every 429 and
+    `attempts_left`; SMS budgets counted in Postgres;
+  - the `PHONE_VERIFICATION` gate (default off) on REST and the socket; `auth:refresh`
+    `phone_unverified`; `Contact.registered`; sockets closed on reset (Postgres trigger +
+    `LISTEN`);
+  - `checks.sms` in `/health`.
+  - It needs `mix ecto.migrate` (`phone_challenges`, `users.phone_verified_for`, the reset
+    trigger).
 
 ## How to run (spark2)
 ```bash
@@ -80,6 +90,29 @@ Auth env (decision 018):
 | `OIDC_JWKS_URL` | (discovery) | Skip discovery and use this JWKS URL |
 | `DEV_LOCAL_AUTH` | dev/test `true`, prod `false` | Dev OTP login + opaque tokens. Prod logs a warning if on |
 | `PHX_HOST` / `PHX_PATH` | `risicloud.ai` / `/risime` | Prod public URL; `check_origin` is `https://<PHX_HOST>` |
+
+Phone verification env (decision 022). The `NOTIFYLK_*` values live only in the repo `.env`;
+the server reads them from the OS environment when sending and never logs or prints them.
+| Var | Default | Meaning |
+|---|---|---|
+| `PHONE_VERIFICATION` | `off` | `required` turns on the gate (`/auth/config` advertises it) |
+| `SMS_MODE` | prod `notifylk`, else `log` | `log` delivers codes only to the `[DEV OTP]` log (needs `OTP_DEV_LOG=true`) |
+| `NOTIFYLK_USER_ID` / `NOTIFYLK_API_KEY` / `NOTIFYLK_SENDER_ID` | (in `.env`) | Notify.lk credentials. While the sender ID is `NotifyDEMO`, OTP SMS are **blocked** (503) |
+| `NOTIFYLK_ALLOW_DEMO_OTP` | unset | `true` lets OTPs go out from NotifyDEMO. Harsha's call only; it risks the Notify.lk account |
+| `SMS_BALANCE_WARN` | `100` | Below this balance, `checks.sms` is `low_balance` and a warning is logged |
+
+**Turning phone verification on once the `RisiMe` sender ID is approved:**
+1. In `.env`, set `NOTIFYLK_SENDER_ID=RisiMe` (no code change).
+2. Start the server with `SMS_MODE=notifylk` and `PHONE_VERIFICATION=required`. The boot log
+   must show neither "SMS OTP disabled…" nor "PHONE_VERIFICATION=required but no SMS can be
+   sent".
+3. `curl -s http://127.0.0.1:4000/health`: `checks.sms` should be `ok` within 10 min (the
+   background poll), not `demo_sender_blocked`, `inactive` or `low_balance`.
+4. Have one tester sign in through Keycloak, tap "Send code", and confirm.
+5. Rollback: `PHONE_VERIFICATION=off` (users read as verified; nothing is lost).
+
+Before that, the whole flow can be tried with `PHONE_VERIFICATION=required SMS_MODE=log
+OTP_DEV_LOG=true`. The code appears as `[DEV OTP] +9477•••••01: <code>` in the server log.
 
 **Enabling RisiCloud sign-in once the `risime` client exists:**
 1. The RisiCloud lead creates client `risime`: public, standard flow + PKCE (S256), the redirect
@@ -137,6 +170,16 @@ Codes are never logged unless `OTP_DEV_LOG=true`.
   don't count. `docs/decisions/001-rate-limiter.md` explains the limiter.
 
 ## Known limits
+- **v1.4 phone verification:**
+  - No real SMS has been sent: the sender is still NotifyDEMO, the guard blocks it, and the
+    override was never used. Notify.lk success parsing and the status endpoint are tested only
+    against `Req.Test` stubs shaped like their documentation.
+  - While the gate is on, users who only ever used the dev login count as unregistered to
+    Keycloak users (dev verification isn't stored).
+  - The SMS budgets count, then insert, so concurrent requests can overshoot a cap by one or
+    two.
+  - The reset NOTIFY fires on commit. Tests drive the listener directly; the trigger was checked
+    live on :4100 (a `--rebind` from another VM closed the open socket).
 - **v1.3 auth:**
   - Not yet checked against a real token from the realm, because the `risime` client doesn't
     exist yet. Every rule is tested only with locally generated RSA/EC/Ed25519 keys. The temp
