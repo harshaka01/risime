@@ -40,6 +40,10 @@ import lk.codegen.risime.data.auth.SignInOption
 import lk.codegen.risime.ui.auth.AuthUi
 import lk.codegen.risime.ui.auth.RisiCloudSignIn
 import lk.codegen.risime.ui.common.ErrorState
+import lk.codegen.risime.ui.phone.CodeLimits
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.platform.testTag
 import lk.codegen.risime.ui.theme.Spacing
 import lk.codegen.risime.ui.theme.WordmarkStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -47,6 +51,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @Composable
 fun LoginFlow(vm: LoginViewModel, authUi: AuthUi, notice: String?) {
     val s by vm.state.collectAsStateWithLifecycle()
+    // The code cooldown deadline (wall clock) survives rotation and process death.
+    var savedUntil by rememberSaveable { mutableLongStateOf(0L) }
+    LaunchedEffect(vm) {
+        vm.restore(savedUntil)
+        vm.state.collect { savedUntil = it.resendUntilMs }
+    }
     if (s.codeSentTo == null) LoginScreen(s, vm, authUi, notice) else OtpScreen(s, vm)
 }
 
@@ -137,8 +147,14 @@ private fun DevLoginForm(s: LoginUiState, vm: LoginViewModel) {
         modifier = Modifier.fillMaxWidth(),
     )
     s.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
-    Button(onClick = vm::requestCode, enabled = !s.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-        Text(if (s.busy) "Sending…" else "Send code")
+    Button(onClick = vm::requestCode, enabled = s.canSend, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+        Text(
+            when {
+                s.busy -> "Sending…"
+                s.resendInSec > 0 -> "Send code in ${CodeLimits.countdown(s.resendInSec)}"
+                else -> "Send code"
+            },
+        )
     }
     Text(
         "We email a 6-digit code if this phone and email are on the RisiMe allowlist.",
@@ -151,26 +167,39 @@ private fun DevLoginForm(s: LoginUiState, vm: LoginViewModel) {
 @Composable
 private fun OtpScreen(s: LoginUiState, vm: LoginViewModel) {
     BackHandler(onBack = vm::back)
+    OtpContent(s, vm::onCode, vm::verify, vm::requestCode, vm::back)
+}
+
+const val OTP_VERIFY_TAG = "otp_verify"
+const val OTP_RESEND_TAG = "otp_resend"
+
+/** The dev OTP step (stateless, UI-tested): Verify only once per request, resend after the server's cooldown. */
+@Composable
+fun OtpContent(s: LoginUiState, onCode: (String) -> Unit, onVerify: () -> Unit, onResend: () -> Unit, onBack: () -> Unit) {
     FormColumn {
         Wordmark()
         Spacer(Modifier.height(24.dp))
         Text("Enter the code sent for ${s.codeSentTo}", style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
         OutlinedTextField(
             value = s.code,
-            onValueChange = vm::onCode,
+            onValueChange = onCode,
             label = { Text("6-digit code") },
             singleLine = true,
+            enabled = !s.busy && !s.codeLocked,
             textStyle = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 6.sp, textAlign = TextAlign.Center),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
             modifier = Modifier.fillMaxWidth(),
         )
         s.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
-        Button(onClick = vm::verify, enabled = !s.busy && s.code.length == 6, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+        if (s.error == null && !s.codeLocked && s.attemptsLeft == 1) {
+            Text("1 attempt left", color = MaterialTheme.colorScheme.error)
+        }
+        Button(onClick = onVerify, enabled = s.canVerify, modifier = Modifier.fillMaxWidth().height(52.dp).testTag(OTP_VERIFY_TAG)) {
             Text(if (s.busy) "Verifying…" else "Verify")
         }
-        TextButton(onClick = vm::requestCode, enabled = !s.busy && s.resendInSec == 0) {
-            Text(if (s.resendInSec > 0) "Resend code in ${s.resendInSec}s" else "Resend code")
+        TextButton(onClick = onResend, enabled = s.canSend, modifier = Modifier.testTag(OTP_RESEND_TAG)) {
+            Text(if (s.resendInSec > 0) "Resend in ${CodeLimits.countdown(s.resendInSec)}" else "Resend code")
         }
-        TextButton(onClick = vm::back) { Text("Change phone or email") }
+        TextButton(onClick = onBack) { Text("Change phone or email") }
     }
 }

@@ -2,6 +2,19 @@ package lk.codegen.risime.data
 
 import lk.codegen.risime.net.User
 
+/**
+ * Proof that the user confirmed "Log out" in the confirm dialog. Logout deletes local chats, so
+ * [lk.codegen.risime.AppContainer.logout] requires one: no automatic path (refresh failure, 401,
+ * identity check, recomposition) can log out. Only `ui/common/ConfirmLogout.kt` creates it (a unit
+ * test greps the call sites).
+ */
+class UserConfirmation private constructor() {
+    companion object {
+        /** Call only from the confirm dialog's confirm button (see LogoutCallSitesTest). */
+        fun fromConfirmDialog(): UserConfirmation = UserConfirmation()
+    }
+}
+
 /** Why local chat data is deleted. These are the only reasons (P0 nightly.10, hotfix rules). */
 enum class WipeReason {
     /** The user confirmed "Log out" / "Sign out". */

@@ -41,7 +41,7 @@ class SettingsViewModelTest {
             session.value = null
         }
 
-        override suspend fun logout() {
+        override suspend fun logout(confirmed: lk.codegen.risime.data.UserConfirmation) {
             loggedOut++
             session.value = null
         }
@@ -141,7 +141,7 @@ class SettingsViewModelTest {
         vm.askLogout()
         assertTrue(vm.state.value.confirmLogout)
         assertEquals(0, backend.loggedOut)
-        vm.logout()
+        vm.logout(lk.codegen.risime.data.testConfirmation())
         assertEquals(1, backend.loggedOut)
     }
 }

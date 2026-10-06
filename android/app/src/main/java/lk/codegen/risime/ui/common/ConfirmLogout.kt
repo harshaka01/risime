@@ -15,12 +15,12 @@ const val LOGOUT_CONFIRM_TEXT =
 
 /** The confirmation itself (stateless): "Log out" deletes local chats, so it is never one tap. */
 @Composable
-fun LogoutConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+fun LogoutConfirmDialog(onConfirm: (lk.codegen.risime.data.UserConfirmation) -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(LOGOUT_CONFIRM_TITLE) },
         text = { Text(LOGOUT_CONFIRM_TEXT) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("Log out") } },
+        confirmButton = { TextButton(onClick = { onConfirm(lk.codegen.risime.data.UserConfirmation.fromConfirmDialog()) }) { Text("Log out") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
@@ -30,14 +30,14 @@ fun LogoutConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
  * the function that opens it; keep [content] in the composition while the dialog is open.
  */
 @Composable
-fun ConfirmLogout(onConfirm: () -> Unit, content: @Composable (askLogout: () -> Unit) -> Unit) {
+fun ConfirmLogout(onConfirm: (lk.codegen.risime.data.UserConfirmation) -> Unit, content: @Composable (askLogout: () -> Unit) -> Unit) {
     var asking by remember { mutableStateOf(false) }
     content { asking = true }
     if (asking) {
         LogoutConfirmDialog(
-            onConfirm = {
+            onConfirm = { confirmed ->
                 asking = false
-                onConfirm()
+                onConfirm(confirmed)
             },
             onDismiss = { asking = false },
         )

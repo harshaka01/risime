@@ -42,14 +42,14 @@ class PhoneVerifyTest {
         }
         override suspend fun me() = meReply
         override suspend fun verified(user: User) { verifiedUser = user }
-        override suspend fun signOut() { signedOut = true }
+        override suspend fun signOut(confirmed: lk.codegen.risime.data.UserConfirmation) { signedOut = true }
     }
 
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
 
     @After fun tearDown() = Dispatchers.resetMain()
 
-    private fun TestScope.vm(b: Backend) = PhoneVerifyViewModel(b, me.phone).also { runCurrent() }
+    private fun TestScope.vm(b: Backend) = PhoneVerifyViewModel(b, me.phone) { testScheduler.currentTime }.also { runCurrent() }
 
     @Test fun masking() {
         assertEquals("+9477•••••22", maskPhone("+94771234522"))
@@ -132,7 +132,7 @@ class PhoneVerifyTest {
         b.requestReply = ApiResult.Ok(PhoneVerifyRequestReply("sent", 300, "+9477•••••22"))
         vm.sendCode(); runCurrent()
         assertTrue(vm.state.value.sent)
-        vm.signOut(); runCurrent()
+        vm.signOut(lk.codegen.risime.data.testConfirmation()); runCurrent()
         assertTrue(b.signedOut)
     }
 }

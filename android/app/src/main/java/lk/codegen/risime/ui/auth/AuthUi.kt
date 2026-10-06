@@ -164,12 +164,12 @@ class AuthUi(private val activity: FragmentActivity, private val c: AppContainer
     }
 
     /** Locked screen → Sign out: unlock once to revoke; a cancel deletes the key anyway. */
-    fun signOutLocked() {
+    fun signOutLocked(confirmed: lk.codegen.risime.data.UserConfirmation) {
         activity.lifecycleScope.launch {
             val cipher = c.auth.unlockCipher()
             val authed = cipher?.let { prompt("Sign out of RisiMe", it) }
             c.auth.revokeStored(authed)
-            c.logout()
+            c.logout(confirmed)
         }
     }
 

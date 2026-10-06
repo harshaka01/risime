@@ -128,7 +128,7 @@ fun RequiredUpdateScreen(state: UpdateState, info: UpdateInfo, c: AppContainer) 
         info = info,
         onUpdate = { scope.launch { c.updater.update(info) } },
         onOpenDownloadPage = { runCatching { uri.openUri(DOWNLOAD_PAGE_URL) } },
-        onSignOut = { scope.launch { c.logout() } },
+        onSignOut = { confirmed -> scope.launch { c.logout(confirmed) } },
     )
 }
 
@@ -142,7 +142,7 @@ fun RequiredUpdateContent(
     info: UpdateInfo,
     onUpdate: () -> Unit,
     onOpenDownloadPage: () -> Unit,
-    onSignOut: () -> Unit,
+    onSignOut: (lk.codegen.risime.data.UserConfirmation) -> Unit,
 ) {
     val colors = updateGateColors(MaterialTheme.colorScheme)
     val working = state is UpdateState.Working

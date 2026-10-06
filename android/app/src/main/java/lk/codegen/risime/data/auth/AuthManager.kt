@@ -150,6 +150,13 @@ class AuthManager(
         vault.clear()
     }
 
+    /** Local half of a logout, no network: forget memory and the sealed set (idempotent). */
+    suspend fun forgetLocally() {
+        lock.withLock { live = null }
+        _unlocked.value = false
+        vault.clear()
+    }
+
     /** Locked-screen sign out after the prompt unlocked the set (so it can be revoked first). */
     suspend fun revokeStored(authenticated: Cipher?) {
         authenticated?.let { c -> vault.open(c)?.let { runCatching { gateway.revoke(it.issuer, it.clientId, it.refreshToken) } } }

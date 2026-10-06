@@ -93,7 +93,7 @@ fun BlockedScreen(blocked: Blocked, c: AppContainer, authUi: AuthUi) {
                 }
             }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Use another account") }
         }
-        lk.codegen.risime.ui.common.ConfirmLogout(onConfirm = { scope.launch { c.logout() } }) { ask ->
+        lk.codegen.risime.ui.common.ConfirmLogout(onConfirm = { confirmed -> scope.launch { c.logout(confirmed) } }) { ask ->
             OutlinedButton(onClick = ask, modifier = Modifier.fillMaxWidth()) { Text("Sign out") }
         }
     }

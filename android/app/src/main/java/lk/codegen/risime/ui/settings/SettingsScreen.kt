@@ -89,13 +89,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
         )
     }
     if (s.confirmLogout) {
-        AlertDialog(
-            onDismissRequest = vm::cancelLogout,
-            title = { Text("Log out?") },
-            text = { Text("Chats on this device are removed. You can log in again with a new code.") },
-            confirmButton = { TextButton(onClick = vm::logout) { Text("Log out") } },
-            dismissButton = { TextButton(onClick = vm::cancelLogout) { Text("Cancel") } },
-        )
+        lk.codegen.risime.ui.common.LogoutConfirmDialog(onConfirm = vm::logout, onDismiss = vm::cancelLogout)
     }
 }
 

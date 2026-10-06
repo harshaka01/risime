@@ -16,7 +16,13 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.ContentType
@@ -37,6 +43,37 @@ import lk.codegen.risime.ui.theme.Spacing
 @Composable
 fun PhoneVerifyScreen(vm: PhoneVerifyViewModel) {
     val s by vm.state.collectAsStateWithLifecycle()
+    // The cooldown deadline (wall clock) and step survive rotation and process death.
+    var savedUntil by rememberSaveable { mutableLongStateOf(0L) }
+    var savedSent by rememberSaveable { mutableStateOf(false) }
+    var savedLocked by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(vm) {
+        vm.restore(savedUntil, savedSent, savedLocked)
+        vm.state.collect {
+            savedUntil = it.resendUntilMs
+            savedSent = it.sent
+            savedLocked = it.codeLocked
+        }
+    }
+    PhoneVerifyContent(s, vm::onCode, vm::confirm, vm::sendCode) {
+        lk.codegen.risime.ui.common.ConfirmLogout(onConfirm = vm::signOut) { open ->
+            TextButton(onClick = open, enabled = !s.busy) { Text("Sign out") }
+        }
+    }
+}
+
+const val PHONE_RESEND_TAG = "phone_resend"
+const val PHONE_CONFIRM_TAG = "phone_confirm"
+
+/** Stateless "Confirm your phone" (UI-tested): countdowns, locked states and one request at a time. */
+@Composable
+fun PhoneVerifyContent(
+    s: PhoneVerifyState,
+    onCode: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onSend: () -> Unit,
+    signOut: @Composable () -> Unit = {},
+) {
     Column(
         Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState())
             .padding(horizontal = Spacing.xl, vertical = Spacing.xxl),
@@ -54,10 +91,10 @@ fun PhoneVerifyScreen(vm: PhoneVerifyViewModel) {
             Text("We sent a 6-digit code by SMS.", textAlign = TextAlign.Center)
             OutlinedTextField(
                 value = s.code,
-                onValueChange = vm::onCode,
+                onValueChange = onCode,
                 label = { Text("6-digit code") },
                 singleLine = true,
-                enabled = !s.busy,
+                enabled = !s.busy && !s.codeLocked,
                 textStyle = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 6.sp, textAlign = TextAlign.Center),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
                 // Keyboard/autofill suggest the code from the SMS; no SMS Retriever (decision 020).
@@ -68,26 +105,30 @@ fun PhoneVerifyScreen(vm: PhoneVerifyViewModel) {
             Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center,
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         }
+        if (s.sent && !s.codeLocked && s.attemptsLeft == 1 && s.error == null) {
+            Text("1 attempt left", color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+        }
         if (s.sent) {
-            Button(onClick = vm::confirm, enabled = !s.busy && s.code.length == 6, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            Button(
+                onClick = onConfirm, enabled = s.canConfirm,
+                modifier = Modifier.fillMaxWidth().height(52.dp).testTag(PHONE_CONFIRM_TAG),
+            ) {
                 Text(if (s.busy) "Checking…" else "Confirm")
             }
-            TextButton(onClick = vm::sendCode, enabled = !s.busy && s.resendInSec == 0) {
-                Text(if (s.resendInSec > 0) "Resend code in ${waitText(s.resendInSec)}" else "Resend code")
+            TextButton(onClick = onSend, enabled = s.canSend, modifier = Modifier.testTag(PHONE_RESEND_TAG)) {
+                Text(if (s.resendInSec > 0) "Resend in ${CodeLimits.countdown(s.resendInSec)}" else "Resend code")
             }
         } else {
-            Button(onClick = vm::sendCode, enabled = !s.busy && s.resendInSec == 0, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            Button(onClick = onSend, enabled = s.canSend, modifier = Modifier.fillMaxWidth().height(52.dp).testTag(PHONE_RESEND_TAG)) {
                 Text(
                     when {
                         s.busy -> "Sending…"
-                        s.resendInSec > 0 -> "Send code in ${waitText(s.resendInSec)}"
+                        s.resendInSec > 0 -> "Send code in ${CodeLimits.countdown(s.resendInSec)}"
                         else -> "Send code"
                     },
                 )
             }
         }
-        lk.codegen.risime.ui.common.ConfirmLogout(onConfirm = vm::signOut) { ask ->
-            TextButton(onClick = ask, enabled = !s.busy) { Text("Sign out") }
-        }
+        signOut()
     }
 }

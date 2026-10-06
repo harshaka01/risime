@@ -153,6 +153,32 @@ class UpgradeKeepsDataTest : ReleasedInstallFixture() {
         c.db.close()
     }
 
+    /** Every former "back to sign-in" path keeps the chats and the owner (no automatic logout). */
+    @Test fun automaticSignInProblemsKeepChats() {
+        writeReleasedDb(4)
+        writeReleasedPrefs(me, signedIn = true)
+        val c = container()
+        runBlocking {
+            c.handleAuthError(lk.codegen.risime.net.ApiResult.Error(401, "invalid_token", ""))
+            c.handleAuthError401(lk.codegen.risime.net.ApiResult.Error(401, "invalid_token", ""))
+            c.signOutKeepData("Your RisiCloud session ended. Sign in again — your chats are kept.")
+        }
+        assertEquals(2 to 1, c.counts())
+        assertEquals(me, runBlocking { c.sessionStore.lastUserId() })
+        assertNull("signed out: the sign-in screen shows", runBlocking { c.sessionStore.current() })
+        c.db.close()
+    }
+
+    @Test fun confirmedLogoutWipesLocallyEvenWithTheServerUnreachable() {
+        writeReleasedDb(4)
+        writeReleasedPrefs(me, signedIn = true) // server_url points at a closed port
+        val c = container()
+        runBlocking { c.logout(testConfirmation()) }
+        assertEquals(0 to 0, c.counts())
+        assertNull(runBlocking { c.sessionStore.current() })
+        c.db.close()
+    }
+
     @Test fun recoveryReplaysTheInboxOnceOnTheFixedBuild() {
         writeReleasedDb(4)
         writeReleasedPrefs(me, signedIn = true)

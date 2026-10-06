@@ -1,5 +1,10 @@
 package lk.codegen.risime.ui.group
 
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -79,19 +84,38 @@ fun FriendPicker(
     emptyText: String = "No friends to add yet.",
 ) {
     val shown = filterFriends(friends, query)
+    var notice by remember { mutableStateOf<String?>(null) }
     Column(modifier) {
         OutlinedTextField(
             value = query, onValueChange = onQuery, singleLine = true,
             placeholder = { Text("Search friends") },
             modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         )
+        notice?.let {
+            Text(
+                it,
+                Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = true)) {
             if (shown.isEmpty()) item { EmptyState(if (friends.isEmpty()) emptyText else "No match") }
             items(shown, key = { it.userId }) { f ->
                 val checked = f.userId in selected
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = Sizes.listRowMin)
-                        .toggleable(value = checked, enabled = f.ready, role = Role.Checkbox) { onToggle(f.userId) }
+                        .then(
+                            // The whole row (≥ 48dp) toggles. A friend who isn't group-ready can't be
+                            // ticked (§12.1), but a tap says why instead of doing nothing.
+                            if (f.ready) {
+                                Modifier.toggleable(value = checked, role = Role.Checkbox) {
+                                    notice = null
+                                    onToggle(f.userId)
+                                }
+                            } else {
+                                Modifier.clickable(onClickLabel = "Why can't I add ${f.name}?") { notice = notReadyExplanation(f.name) }
+                            },
+                        )
                         .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -111,6 +135,10 @@ fun FriendPicker(
         }
     }
 }
+
+/** Shown when a greyed friend is tapped (the server's §12.1 readiness: every app instance in 30 days). */
+fun notReadyExplanation(name: String) =
+    "$name can't be added yet: a device of theirs used an older RisiMe in the last 30 days. They need to update RisiMe on every device they use."
 
 // ---- Create group: pick friends → name → Create ----
 

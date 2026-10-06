@@ -72,9 +72,9 @@ fun ChatsScreen(
     var tab by rememberSaveable { mutableIntStateOf(0) }
     if (askLogout) {
         lk.codegen.risime.ui.common.LogoutConfirmDialog(
-            onConfirm = {
+            onConfirm = { confirmed ->
                 askLogout = false
-                vm.logout()
+                vm.logout(confirmed)
             },
             onDismiss = { askLogout = false },
         )

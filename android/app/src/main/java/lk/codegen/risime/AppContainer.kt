@@ -72,9 +72,14 @@ import lk.codegen.risime.push.planChatNotifications
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import java.io.File
 import java.util.concurrent.TimeUnit
+
+/** Bound on each best-effort server call at logout (the local logout never waits longer). */
+private const val LOGOUT_NETWORK_MS = 5_000L
 
 /** A Keycloak end_session to open in the browser (id_token_hint + post-logout redirect). */
 data class EndSession(val issuer: String, val idToken: String)
@@ -333,9 +338,13 @@ class AppContainer(
     val push by lazy { PushManager(context, api, sessionStore, deviceRegistrar) { mlsEngine != null } }
 
     init {
-        // E2EE: try once per signed-in, verified session (and again after sign-in).
+        // E2EE: try once per signed-in, verified session that can authenticate. An OIDC session is
+        // locked (no bearer) until the fingerprint unlock, so registering before it got 401 and left
+        // E2EE and groups off for the whole process (P0 nightly.10 finding): wait for the unlock.
         scope.launch {
-            sessionStore.session.map { s -> s?.takeIf { it.user.phoneVerified }?.user?.id }.distinctUntilChanged().collect { id ->
+            combine(sessionStore.session, auth.unlocked) { s, unlocked ->
+                s?.takeIf { it.user.phoneVerified && (it.kind == AuthKind.DEV || unlocked) }?.user?.id
+            }.distinctUntilChanged().collect { id ->
                 if (id == null) mlsEngine = null else runCatching { activateMls() }
             }
         }
@@ -573,17 +582,27 @@ class AppContainer(
      * Logout (decision 014): revoke the refresh token, end the Keycloak session in the browser,
      * delete the key pair, wipe local chat data. Dev tokens: POST /auth/logout as before.
      */
-    suspend fun logout() {
-        runCatching { push.unregister() } // DELETE /me/devices while the token still works
+    suspend fun logout(@Suppress("UNUSED_PARAMETER") confirmed: lk.codegen.risime.data.UserConfirmation) {
         notifier.cancelAll()
         val end = auth.issuerAndClient()?.let { (issuer, _) -> auth.idToken()?.let { EndSession(issuer, it) } }
-        if (sessionStore.current()?.kind == AuthKind.DEV) api.logout()
-        auth.signOut()
+        try {
+            // Server side is best effort and bounded: a dead network or a Keycloak error never
+            // blocks or reverts the local logout.
+            withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { push.unregister() } } // DELETE /me/devices while the token still works
+            if (sessionStore.current()?.kind == AuthKind.DEV) withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { api.logout() } }
+            withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { auth.signOut() } }
+        } finally {
+            withContext(NonCancellable) {
+                runCatching { auth.forgetLocally() }
+                blocked.value = null
+                signInNotice.value = null
+                clearFriendsMemory()
+                clearLocal()
+            }
+        }
+        // Keycloak end_session in the browser, after the local logout: its failure (e.g. an
+        // unregistered post-logout redirect) changes nothing here.
         end?.let { endSessionRequests.tryEmit(it) }
-        blocked.value = null
-        signInNotice.value = null
-        clearFriendsMemory()
-        clearLocal()
     }
 
     /** §6: token rejected (refresh already tried): back to sign-in, keeping local chats. */

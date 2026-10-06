@@ -22,7 +22,7 @@ interface SettingsBackend {
     /** Log out of the current server (its token is useless elsewhere) and switch to [url]. */
     suspend fun switchServer(url: String)
 
-    suspend fun logout()
+    suspend fun logout(confirmed: lk.codegen.risime.data.UserConfirmation)
 
     /** Debug-only sign-in override (AuthOverride name). */
     val authOverride: Flow<String?>
@@ -51,8 +51,8 @@ class AppSettingsBackend(private val c: AppContainer) : SettingsBackend {
         c.scope.launch { c.switchServer(url) }.join()
     }
 
-    override suspend fun logout() {
-        c.scope.launch { c.logout() }.join()
+    override suspend fun logout(confirmed: lk.codegen.risime.data.UserConfirmation) {
+        c.scope.launch { c.logout(confirmed) }.join()
     }
 
     override val authOverride: Flow<String?> = c.sessionStore.authOverride
@@ -154,8 +154,8 @@ class SettingsViewModel(private val backend: SettingsBackend) : ViewModel() {
 
     fun cancelLogout() = _state.update { it.copy(confirmLogout = false) }
 
-    fun logout() {
+    fun logout(confirmed: lk.codegen.risime.data.UserConfirmation) {
         _state.update { it.copy(confirmLogout = false, busy = true) }
-        viewModelScope.launch { backend.logout() }
+        viewModelScope.launch { backend.logout(confirmed) }
     }
 }

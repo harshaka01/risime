@@ -175,7 +175,7 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
         }
     }
 
-    fun logout() {
-        viewModelScope.launch { c.logout() }
+    fun logout(confirmed: lk.codegen.risime.data.UserConfirmation) {
+        viewModelScope.launch { c.logout(confirmed) }
     }
 }
