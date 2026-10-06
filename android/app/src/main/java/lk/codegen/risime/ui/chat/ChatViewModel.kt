@@ -46,7 +46,10 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
     fun refreshE2ee() {
         if (c.mlsEngine == null || peer.value?.friend == false) return
         viewModelScope.launch {
-            _e2ee.value = c.mlsUpgrader.ensure(conversationId, meId, peerId)
+            // Engine calls are synchronous Room transactions: never on the main thread.
+            _e2ee.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                c.mlsUpgrader.ensure(conversationId, meId, peerId)
+            }
             if (_e2ee.value is lk.codegen.risime.data.mls.E2eeState.Encrypted) c.engine.flushOutbox()
         }
     }

@@ -11,6 +11,8 @@ import lk.codegen.risime.data.mls.KvSql
 import lk.codegen.risime.data.mls.MlsEngine
 import org.junit.Assume.assumeTrue
 import java.io.File
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Real MLS devices for JVM tests: the host build of risime-mls-ffi via JNA, each device with its
@@ -24,14 +26,14 @@ object RealMls {
 
     val attestor: TestAttestor by lazy { TestAttestor.fromSeed(ByteArray(32) { 42 }) }
 
-    class Device(val ref: DeviceRef, val conn: SQLiteConnection, val engine: MlsEngine) {
-        /** The app's outer transaction around one unit of work. */
-        fun <T> transaction(block: () -> T): T {
+    class Device(val ref: DeviceRef, val conn: SQLiteConnection, val engine: MlsEngine, private val connLock: ReentrantLock) {
+        /** The app's outer transaction around one unit of work (holds the connection's lock throughout). */
+        fun <T> transaction(block: () -> T): T = connLock.withLock {
             conn.execSQL("BEGIN")
             try {
                 val r = block()
                 conn.execSQL("COMMIT")
-                return r
+                r
             } catch (t: Throwable) {
                 conn.execSQL("ROLLBACK")
                 throw t
@@ -68,19 +70,24 @@ object RealMls {
                 if (st.step()) st.getBlob(0) else null
             }
         }
-        // Join the caller's transaction, or open one (like Room's runInTransaction).
+        // A bundled SQLiteConnection is not thread-safe: confine it with a per-device lock held for
+        // the whole transaction (the role Room's transaction lock plays in the app). Join the
+        // caller's transaction (same thread, re-entrant), or open one.
+        val connLock = ReentrantLock()
         val runInTx: (() -> Any?) -> Any? = { block ->
-            if (conn.inTransaction()) {
-                block()
-            } else {
-                conn.execSQL("BEGIN")
-                val r = try { block() } catch (t: Throwable) { conn.execSQL("ROLLBACK"); throw t }
-                conn.execSQL("COMMIT")
-                r
+            connLock.withLock {
+                if (conn.inTransaction()) {
+                    block()
+                } else {
+                    conn.execSQL("BEGIN")
+                    val r = try { block() } catch (t: Throwable) { conn.execSQL("ROLLBACK"); throw t }
+                    conn.execSQL("COMMIT")
+                    r
+                }
             }
         }
         val engine = UniffiMlsEngineFactory().open(sql, KvSealer(ByteArray(32) { 9 }), runInTx, userId, deviceId, trusted)
         if (attest) engine.setAttestation(attestor.attest(userId, deviceId, engine.signatureKey(), (System.currentTimeMillis() / 1000).toULong()))
-        return Device(DeviceRef(userId, deviceId), conn, engine)
+        return Device(DeviceRef(userId, deviceId), conn, engine, connLock)
     }
 }

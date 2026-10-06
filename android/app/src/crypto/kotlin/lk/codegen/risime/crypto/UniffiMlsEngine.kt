@@ -48,8 +48,23 @@ class UniffiMlsEngine(
     override val userId: String,
     override val deviceId: String,
 ) : MlsEngine {
+    /**
+     * Serialises every engine and KvStore access of this device (interop SIGSEGV, nightly.8: the
+     * store must never be touched from two threads at once). Lock order is always
+     * transaction → lock: [inTx] first joins/opens the Room transaction (which itself serialises
+     * writers), then the lock; nested calls on the same thread re-enter.
+     */
+    private val lock = java.util.concurrent.locks.ReentrantLock()
+
     @Suppress("UNCHECKED_CAST")
-    private fun <T> tx(block: () -> T): T = inTx { block() } as T
+    private fun <T> tx(block: () -> T): T = inTx {
+        lock.lock()
+        try {
+            block()
+        } finally {
+            lock.unlock()
+        }
+    } as T
 
     private fun genKey(conv: String) = "gen/$conv".toByteArray()
 
