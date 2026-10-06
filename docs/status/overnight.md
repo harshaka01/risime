@@ -1,5 +1,14 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
+## v0.2.0-nightly.13 (live 18:06 UTC, not required): encrypted photos, chats stay at the bottom
+- **Photos:** E2EE, resized to 2048 px, metadata stripped (proven on real Android 14 decoders in
+  Redroid), encrypted blob, preview first, full screen, save to gallery.
+- **Scrolling:** one bottom-anchored list for DMs and groups, with 14 UI tests.
+- **Server:** v1.12 delete is live (`004_delete.cql` applied). The app's delete UI comes next,
+  receive side first.
+- **Release:** the automatic Redroid gate passed (nightly.12 → nightly.13). The fixed push merged
+  cleanly with no manual steps.
+
 ## v0.2.0-nightly.12 (live 17:16 UTC, not required): groups rejoin after logout/login
 - **Cause:** after logout, the app never rejoined its groups. Two server bugs also let a pending
   removal undo the re-add.
