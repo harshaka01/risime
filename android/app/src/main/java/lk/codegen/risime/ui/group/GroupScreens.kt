@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.AlertDialog
@@ -58,6 +57,9 @@ import lk.codegen.risime.data.MessageStatus
 import lk.codegen.risime.data.ReactionChip
 import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.data.groups.groupDisplayName
+import lk.codegen.risime.ui.common.ChatMessageList
+import lk.codegen.risime.ui.common.ChatScrollState
+import lk.codegen.risime.ui.common.rememberChatScrollState
 import lk.codegen.risime.data.groups.systemLine
 import lk.codegen.risime.data.groups.systemText
 import lk.codegen.risime.net.AuthErrors
@@ -67,10 +69,8 @@ import lk.codegen.risime.ui.chat.Composer
 import lk.codegen.risime.ui.chat.MessageActionsSheet
 import lk.codegen.risime.ui.chat.ReactionChipsRow
 import lk.codegen.risime.ui.chat.ReactionsSheet
-import lk.codegen.risime.ui.chat.withDaySeparators
 import lk.codegen.risime.ui.chats.connectionLabel
 import lk.codegen.risime.ui.common.DaySeparator
-import lk.codegen.risime.ui.common.EmptyState
 import lk.codegen.risime.ui.common.InitialsAvatar
 import lk.codegen.risime.ui.common.MessageBubble
 import lk.codegen.risime.ui.common.RisiTopBar
@@ -119,12 +119,11 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
     var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
-    val listState = rememberLazyListState()
+    val scroll = rememberChatScrollState()
 
     LaunchedEffect(messages, resumed) {
         if (resumed && messages.any { !it.outgoing && it.status != MessageStatus.READ.name }) vm.markRead()
     }
-    val items = remember(messages) { withDaySeparators(messages, System.currentTimeMillis()) }
 
     val name = groupDisplayName(group?.name)
     val readOnly = group?.readOnly == true
@@ -155,37 +154,21 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            lk.codegen.risime.ui.common.ChatMessageList(
-                count = items.size,
-                lastKey = messages.lastOrNull()?.clientMsgId,
-                lastOutgoing = messages.lastOrNull()?.outgoing == true,
+            GroupMessageList(
+                messages = messages,
+                meId = meId,
+                nameOf = vm::nameOf,
+                memberName = { names[it.lowercase()] },
+                readOnly = readOnly,
+                reactions = reactions,
+                onReact = vm::react,
+                onOpenReactions = { reactionsFor = it },
+                onRetry = vm::retry,
+                onDelete = vm::delete,
+                onInfo = vm::openReadBy,
+                scroll = scroll,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.md),
-                spacing = Spacing.xs + Spacing.xxs,
-                state = listState,
-            ) {
-                items(items.size, key = { items[it].key }) { i ->
-                    when (val item = items[i]) {
-                        is ChatItem.Day -> DaySeparator(item.label)
-                        is ChatItem.Msg -> if (item.m.system) {
-                            val line = item.m.systemLine()
-                            SystemLineText(line?.let { l -> systemText(l, meId) { names[it.lowercase()] ?: "Someone" } } ?: item.m.body)
-                        } else {
-                            GroupBubble(
-                                item.m,
-                                sender = if (showSenderAt(items, i)) vm.nameOf(item.m.from) else null,
-                                canAct = !readOnly,
-                                chips = item.m.messageId?.let { reactions[it] }.orEmpty(),
-                                onReact = { e, op -> item.m.messageId?.let { vm.react(it, e, op) } },
-                                onOpenReactions = { reactionsFor = item.m.messageId },
-                                onRetry = vm::retry, onDelete = vm::delete,
-                                onInfo = { item.m.messageId?.let(vm::openReadBy) },
-                            )
-                        }
-                    }
-                }
-                if (messages.isEmpty()) item { EmptyState("No messages yet. Say hello!") }
-            }
+            )
             val off = composer as? GroupComposer.Disabled
             if (off != null) {
                 Surface(tonalElevation = 2.dp) {
@@ -210,6 +193,51 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
             }
             reactionsFor?.let { target -> ReactionsSheet(reactions[target].orEmpty(), vm::nameOf) { reactionsFor = null } }
             readBy?.let { (mid, state) -> ReadBySheet(state, vm::nameOf, onRetry = { vm.openReadBy(mid) }, onDismiss = vm::closeReadBy) }
+        }
+    }
+}
+
+/** The group chat's message list: the shared [ChatMessageList] (same scroll rules as a DM) with group rows. */
+@Composable
+internal fun GroupMessageList(
+    messages: List<MessageEntity>,
+    meId: String,
+    nameOf: (String) -> String,
+    memberName: (String) -> String?,
+    readOnly: Boolean,
+    reactions: Map<String, List<ReactionChip>>,
+    onReact: (messageId: String, emoji: String, op: String) -> Unit,
+    onOpenReactions: (String?) -> Unit,
+    onRetry: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onInfo: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    scroll: ChatScrollState = rememberChatScrollState(),
+) {
+    ChatMessageList(
+        messages = messages,
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.md),
+        spacing = Spacing.xs + Spacing.xxs,
+        scroll = scroll,
+    ) { items, i ->
+        when (val item = items[i]) {
+            is ChatItem.Day -> DaySeparator(item.label)
+            is ChatItem.Msg -> if (item.m.system) {
+                val line = item.m.systemLine()
+                SystemLineText(line?.let { l -> systemText(l, meId) { memberName(it) ?: "Someone" } } ?: item.m.body)
+            } else {
+                GroupBubble(
+                    item.m,
+                    sender = if (showSenderAt(items, i)) nameOf(item.m.from) else null,
+                    canAct = !readOnly,
+                    chips = item.m.messageId?.let { reactions[it] }.orEmpty(),
+                    onReact = { e, op -> item.m.messageId?.let { onReact(it, e, op) } },
+                    onOpenReactions = { onOpenReactions(item.m.messageId) },
+                    onRetry = onRetry, onDelete = onDelete,
+                    onInfo = { item.m.messageId?.let(onInfo) },
+                )
+            }
         }
     }
 }

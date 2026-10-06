@@ -11,9 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.DropdownMenu
@@ -50,7 +47,6 @@ import lk.codegen.risime.net.AuthErrors
 import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.ui.chats.connectionLabel
 import lk.codegen.risime.ui.common.DaySeparator
-import lk.codegen.risime.ui.common.EmptyState
 import lk.codegen.risime.ui.common.InitialsAvatar
 import lk.codegen.risime.ui.common.MessageBubble
 import lk.codegen.risime.ui.common.RisiTopBar
@@ -74,7 +70,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val lifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
-    val listState = rememberLazyListState()
+    val scroll = lk.codegen.risime.ui.common.rememberChatScrollState()
     var draftValue by rememberSaveable(stateSaver = androidx.compose.ui.text.input.TextFieldValue.Saver) {
         mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(""))
     }
@@ -85,7 +81,6 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     LaunchedEffect(messages, resumed) {
         if (resumed && messages.any { !it.outgoing && it.status != MessageStatus.READ.name }) vm.markRead()
     }
-    val items = remember(messages) { withDaySeparators(messages, System.currentTimeMillis()) }
 
     val name = peer?.displayName ?: "Chat"
     // Unknown while loading: assume friend (the server refuses non-friends anyway).
@@ -119,29 +114,24 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 )
             }
             lk.codegen.risime.ui.common.ChatMessageList(
-                count = items.size,
-                lastKey = messages.lastOrNull()?.clientMsgId,
-                lastOutgoing = messages.lastOrNull()?.outgoing == true,
+                messages = messages,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = Spacing.md, vertical = Spacing.md),
                 spacing = Spacing.xs + Spacing.xxs,
-                state = listState,
-            ) {
-                items(items, key = { it.key }) { item ->
-                    when (item) {
-                        is ChatItem.Day -> DaySeparator(item.label)
-                        is ChatItem.Msg -> DmMessageRow(item.m) {
-                            Bubble(
-                                item.m, canRetry = isFriend, onRetry = vm::retry, onDelete = vm::delete,
-                                chips = item.m.messageId?.let { reactions[it] }.orEmpty(),
-                                canReact = isFriend && item.m.messageId != null,
-                                onReact = { e, op -> item.m.messageId?.let { vm.react(it, e, op) } },
-                                onOpenReactions = { reactionsFor = item.m.messageId },
-                            )
-                        }
+                scroll = scroll,
+            ) { items, i ->
+                when (val item = items[i]) {
+                    is ChatItem.Day -> DaySeparator(item.label)
+                    is ChatItem.Msg -> DmMessageRow(item.m) {
+                        Bubble(
+                            item.m, canRetry = isFriend, onRetry = vm::retry, onDelete = vm::delete,
+                            chips = item.m.messageId?.let { reactions[it] }.orEmpty(),
+                            canReact = isFriend && item.m.messageId != null,
+                            onReact = { e, op -> item.m.messageId?.let { vm.react(it, e, op) } },
+                            onOpenReactions = { reactionsFor = item.m.messageId },
+                        )
                     }
                 }
-                if (messages.isEmpty()) item { EmptyState("No messages yet. Say hello!") }
             }
             if (!isFriend) {
                 NotFriendsBar(name, requested, onAddFriend = vm::requestFriend)
