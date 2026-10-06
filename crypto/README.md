@@ -57,10 +57,82 @@ handle opaque bytes.
   `MissingAttestation`, `UnknownGroup`, `GroupExists`, `UnknownMember`, `RemovedFromGroup`,
   `WrongEpoch`, `DecryptionFailed`, `NotApplicationMessage`, `Welcome`, `CommitPending`,
   `NoPendingCommit`, `Storage` and `Other`.
-- **Wire rules.** Commits use PublicMessage framing and application messages PrivateMessage.
-  `MAX_PAST_EPOCHS` = 3. Standalone proposals are rejected.
+- **Wire rules.** DM commits use PublicMessage framing; `grp:` commits and all application
+  messages use PrivateMessage. `MAX_PAST_EPOCHS` = 3. Standalone proposals are rejected.
+- **`PolicyViolation`** (v1.9) is the extra `MlsError` variant for group commits that break the
+  admin policy or the caps.
 
-## Tests (`cargo test`: 43 core + 4 FFI)
+## Group API (contract v1.9 §12, decision 041)
+A group's MLS id is `"grp:<uuid>#<generation>"`; the `grp:` prefix selects the group rules
+(PrivateMessage handshakes, `group_meta`, the admin policy). The DM calls above refuse `grp:` ids
+(`create_group`, `add_members`, `remove_members`), and the group calls refuse DM ids. Every
+group commit is a **`GroupCommit`** `{commit, welcome?, epoch (source), added, removed,
+meta_changed}` and stays **pending** until `commit_accepted` / `commit_rejected`, as for DMs.
+
+| Core call (Kotlin name) | What it does |
+|---|---|
+| `create_group_with_meta(gid, kps, meta)` (`createGroupWithMeta`) | Epoch 0 with `group_meta` set, adding every claimed key package (all must carry 0xFA01). The caller's user must be in `meta.admins`. Also the **rebuild** after a reset (new generation in the id). `kps` may be empty |
+| `change_members(gid, kps, remove)` (`changeMembers`) | One commit for an `add`, `remove` or `devices` op. A device listed in both is **re-added** (a `rejoin`). Own device can't be removed |
+| `remove_users(gid, user_ids)` (`removeUsers`) | Removes every leaf of those users (a removal or a member's leave, committed by an admin) |
+| `update_group_meta(gid, meta)` (`updateGroupMeta`) | A GroupContextExtensions commit: rename, or a `role` op's admin list. `meta_changed` = true. Unknown meta fields are carried over |
+| `self_update(gid)` (`selfUpdate`) | Empty commit with a fresh path (key rotation); anyone may send it |
+| `group_meta(gid)` (`groupMeta`) | The current `GroupMeta {name, icon, admins}` (`icon_json` over the FFI); `None` for DMs |
+| `process_commits(gid, commits)` (`processCommits`) | Catch-up from `GET …/commits`, all or nothing: skips commits below our epoch, `WrongEpoch` on a gap, **merges our own pending commit** found in the log (restart between `200` and `commit_accepted`), stops after `removed_self`. Returns `CatchUp {epoch, applied, skipped, removed_self}` |
+| `key_package_supports_groups(kp)` (free fn) | Validates a key package and reports whether it carries 0xFA01 |
+| `group_limits()` (FFI free fn) | 64 KiB inline, 1 MiB commit, 2 MiB Welcome, 256 users, 768 leaves, 0xFA01 |
+
+- **`group_meta`** is the GroupContext extension 0xFA01 (JSON `{"v":1,"name","icon","admins"}`,
+  name 1–100 grapheme clusters, non-empty distinct admins), named in the group's
+  `required_capabilities`. Joiners get it in the Welcome; `Incoming::Commit.meta_changed` says
+  when a commit changed it.
+- **Key packages** now always advertise capability 0xFA01 (normal and last-resort). Upload them
+  with `replace: true` the first time the device advertises `groups` (§12.1), and regenerate the
+  last-resort package then too.
+- **Admin policy** (`policy::check_commit_policy`, run on every staged `grp:` commit before merge
+  and on our own commits before they are built): a non-admin may add/remove only its own user's
+  leaves and may not touch `group_meta`; a new admin list must be non-empty and agent-free.
+  Admins come from `group_meta.admins` of the commit's epoch. The core has no agent list yet
+  (agents arrive in 0.5), so it passes none. A violating peer commit fails with
+  `PolicyViolation` and nothing is merged: the state is unrecoverable for that commit (§12.8).
+- **Caps** (256 users, 768 leaves) are checked before building; a commit over 1 MiB or a Welcome
+  over 2 MiB is refused (`PolicyViolation`) and rolled back. `GroupCommit::commit_needs_ref` /
+  `welcome_needs_ref` (FFI `commitNeedsRef` / `welcomeNeedsRef`, plus `commitSize` /
+  `welcomeSize`) tell the caller to upload a blob (> 64 KiB). In a 256-user group the epoch-0
+  commit (~173 KiB) and every Welcome (~150–180 KiB) need a ref.
+- **Rejoin:** the committer calls `change_members(gid, [new kp], [that device])`; the broken
+  device joins from the Welcome (a stale or missing local group is replaced).
+  **Reset:** the rebuilder calls `create_group_with_meta("grp:…#<n+1>", kps, last meta with the
+  event's admins)`; members `delete_group` the old generation and join from the Welcome.
+- **Leave:** MLS can't commit its own removal. The leaver calls `POST …/leave`; an admin device
+  commits `remove_users`; the leaver sees `removed_self` and wipes the group.
+
+### 256-member timing (`tests/group_scale.rs`, spark2 aarch64)
+`cargo test --test group_scale -- --nocapture` (add `--release` for optimised numbers):
+
+| | debug | release |
+|---|---|---|
+| create + add 255 (stage) | 856 ms | 65 ms |
+| join from Welcome | 254 ms | 18 ms |
+| remove 1 user: build / process | 136 / 99 ms | 7.4 / 4.8 ms |
+| add 1 user: build / process | 138 / 96 ms | 6.6 / 3.5 ms |
+| self-update: process | 122 ms | 5.0 ms |
+| decrypt (includes loading the state) | 42 ms | 2.6 ms |
+
+Sizes: create commit 176,670 B, its Welcome 180,957 B; remove commit 21,930 B; add commit 898 B
+with a 151,520 B Welcome. **State per device ≈ 0.93 MB; the largest single `KvStore` value (the
+tree) ≈ 0.6 MB**, growing roughly linearly with leaves (so ~1.8 MB at 768 leaves): the app's
+`mls_kv` chunking above 512 KB is needed for Android's 2 MB `CursorWindow`.
+
+## Tests (`cargo test`: 62 core + 5 FFI)
+- **`groups`** (v1.9): create/join with PrivateMessage handshakes and meta; DM and group APIs
+  don't mix; 0xFA01 key packages (a legacy key package is refused); admin adds/removes users and
+  removed devices are locked out; members manage only their own devices; **peers reject
+  policy-breaking commits** built straight with OpenMLS (non-admin removal, rename, self-promotion,
+  empty admin list) with state unchanged; rename and promotion; pending until accepted, 409, a
+  foreign commit discards ours, creation race; rejoin by re-add; reset to a new generation;
+  catch-up (skip, gap, removal stops); own accepted commit merged after a restart.
+- **`group_policy`:** every case of `contract/v1/group_policy_cases.json`.
+- **`group_scale`:** 256 users (timings and sizes above).
 - **`group_lifecycle`:**
   - **(a) creation:** `a_create_group`.
   - **(b) join, same epoch:** `b_add_member_join_from_welcome_same_epoch`.
@@ -106,7 +178,8 @@ handle opaque bytes.
   - late messages decrypt within 3 past epochs (older → `WrongEpoch`).
 - **`robustness`:** random and truncated input never panics and never changes state.
 - **`risime-mls-ffi/tests/self_test`:**
-  - `self_test` passes;
+  - `self_test` passes (it also runs a group lifecycle: `…, groups epoch 4`);
+  - the group API crosses the FFI;
   - error mapping;
   - a foreign `KvStore` failure maps to `Storage` and rolls back;
   - commit fields cross the FFI.
