@@ -321,6 +321,54 @@ impl From<Incoming> for IncomingMessage {
     }
 }
 
+/// What `processDetailed` adds for an application message (contract v1.12 §15).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ApplicationDetails {
+    /// The sender's leaf index at the message's epoch. Diagnostics only: leaf indices are reused,
+    /// so never store or compare it as an identity (compare `sender.userId`).
+    pub sender_leaf: u32,
+    /// The message's MLS `authenticated_data` (signed and AEAD-covered). Empty for everything but
+    /// a `delete` control; decode it with `deleteAadDecode` and compare the target set.
+    pub authenticated_data: Vec<u8>,
+    /// The sender's user was an admin at the message's epoch (the core's per-epoch record).
+    /// Null in DM groups. In a group without a record for that epoch, a message with a non-empty
+    /// AAD throws `Malformed`; one with an empty AAD gets null (only pre-v1.12 epochs).
+    pub sender_is_admin: Option<bool>,
+}
+
+impl From<risime_mls::ApplicationDetails> for ApplicationDetails {
+    fn from(d: risime_mls::ApplicationDetails) -> Self {
+        Self {
+            sender_leaf: d.sender_leaf,
+            authenticated_data: d.authenticated_data,
+            sender_is_admin: d.sender_is_admin,
+        }
+    }
+}
+
+/// Result of `processDetailed`: the same `IncomingMessage` as `process`, plus `application`
+/// exactly when it is an `Application`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProcessedMessage {
+    pub incoming: IncomingMessage,
+    pub application: Option<ApplicationDetails>,
+}
+
+/// The canonical MLS `authenticated_data` of a `delete` control (contract v1.12 §15.3):
+/// `0x01 0x44` + the targets as 16-byte UUIDs, sorted, distinct, 1..=100. Pass it to
+/// `encryptWithAad`. Duplicates, an empty list, > 100 or a non-UUID throw `Malformed`.
+#[uniffi::export]
+pub fn delete_aad_encode(targets: Vec<String>) -> Result<Vec<u8>> {
+    Ok(risime_mls::encode_delete_aad(&targets)?)
+}
+
+/// The targets of a delete control's AAD (lowercase UUIDs, ascending). Anything but the exact
+/// canonical encoding throws `Malformed`: drop the control.
+#[uniffi::export]
+pub fn delete_aad_decode(aad: Vec<u8>) -> Result<Vec<String>> {
+    Ok(risime_mls::decode_delete_aad(&aad)?)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Group records (contract v1.9 §12)
 // ---------------------------------------------------------------------------------------------
@@ -582,6 +630,17 @@ impl MlsClient {
         self.with(|c| c.encrypt(&group_id, &plaintext))
     }
 
+    /// `encrypt` with the PrivateMessage's `authenticated_data` set to `aad` (contract v1.12
+    /// §15.3: a delete control sends `deleteAadEncode(targets)`; everything else uses `encrypt`).
+    pub fn encrypt_with_aad(
+        &self,
+        group_id: Vec<u8>,
+        plaintext: Vec<u8>,
+        aad: Vec<u8>,
+    ) -> Result<Vec<u8>> {
+        self.with(|c| c.encrypt_with_aad(&group_id, &plaintext, &aad))
+    }
+
     pub fn decrypt(&self, group_id: Vec<u8>, message: Vec<u8>) -> Result<Vec<u8>> {
         self.with(|c| c.decrypt(&group_id, &message))
     }
@@ -589,6 +648,32 @@ impl MlsClient {
     pub fn process(&self, group_id: Vec<u8>, message: Vec<u8>) -> Result<IncomingMessage> {
         self.with(|c| c.process(&group_id, &message))
             .map(Into::into)
+    }
+
+    /// `process`, plus for an application message the sender's leaf, the `authenticated_data`
+    /// and `senderIsAdmin` at the message's epoch (contract v1.12 §15.3, §15.4). Same transaction.
+    pub fn process_detailed(
+        &self,
+        group_id: Vec<u8>,
+        message: Vec<u8>,
+    ) -> Result<ProcessedMessage> {
+        self.with(|c| c.process_detailed(&group_id, &message))
+            .map(|p| ProcessedMessage {
+                incoming: p.incoming.into(),
+                application: p.application.map(Into::into),
+            })
+    }
+
+    /// The admin list recorded for `epoch` of a group (current epoch plus the 3 past ones); null
+    /// for a DM, an epoch outside that window, or before this device joined.
+    pub fn admins_at_epoch(&self, group_id: Vec<u8>, epoch: u64) -> Result<Option<Vec<String>>> {
+        self.with(|c| c.admins_at_epoch(&group_id, epoch))
+    }
+
+    /// Remove all core state for the group (OpenMLS state, pending commit, admin records), known
+    /// or not; idempotent. For Delete chat and the start-up orphan sweep.
+    pub fn purge_group(&self, group_id: Vec<u8>) -> Result<()> {
+        self.with(|c| c.purge_group(&group_id))
     }
 
     pub fn delete_group(&self, group_id: Vec<u8>) -> Result<()> {

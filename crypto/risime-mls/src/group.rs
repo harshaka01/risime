@@ -459,6 +459,7 @@ impl Client {
                 .use_ratchet_tree_extension(true)
                 .with_wire_format_policy(wire_policy(group_id))
                 .max_past_epochs(crate::MAX_PAST_EPOCHS)
+                .sender_ratchet_configuration(crate::sender_ratchet_config())
                 .with_capabilities(Self::capabilities())
                 .with_group_context_extensions(initial_extensions(meta)?)
                 .with_leaf_node_extensions(ext)
@@ -468,6 +469,8 @@ impl Client {
             let kps: Vec<KeyPackage> = kps.into_iter().map(|(k, _)| k).collect();
             let force = kps.is_empty();
             let (commit, welcome) = c.build_commit(&mut group, kps, vec![], None, force)?;
+            c.purge_admins(group_id)?;
+            c.record_admins(&group)?;
             c.finish_group_commit(group_id, 0, commit, welcome, added, vec![], false)
         })
     }
@@ -659,6 +662,7 @@ impl Client {
                 {
                     group.merge_pending_commit(&c.provider).map_err(other)?;
                     c.clear_pending_record(group_id)?;
+                    c.record_admins(&group)?;
                     out.applied.push(Incoming::Commit {
                         epoch: group.epoch().as_u64(),
                         committer: c.device.clone(),
@@ -670,7 +674,7 @@ impl Client {
                     });
                     continue;
                 }
-                match c.process_inner(group_id, bytes)? {
+                match c.process_inner(group_id, bytes, false)?.incoming {
                     i @ Incoming::Commit { removed_self, .. } => {
                         out.applied.push(i);
                         if removed_self {

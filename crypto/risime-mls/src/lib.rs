@@ -28,6 +28,8 @@
 //! - `grp:` groups carry [`GroupMeta`] (extension 0xFA01), and every staged commit passes the
 //!   admin policy ([`policy`]); see [`group`].
 
+pub mod aad;
+mod admins;
 pub mod attestation;
 pub mod group;
 pub mod media;
@@ -42,6 +44,7 @@ use openmls::prelude::tls_codec::{Deserialize, Serialize};
 use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 
+pub use aad::{DELETE_AAD_PREFIX, MAX_DELETE_TARGETS, decode_delete_aad, encode_delete_aad};
 pub use attestation::{CredentialValidator, DeviceId, TestAttestor, TrustAnchors};
 pub use group::{
     CatchUp, GroupCommit, MAX_COMMIT_BYTES, MAX_GROUP_LEAVES, MAX_GROUP_USERS, MAX_INLINE_BYTES,
@@ -55,6 +58,18 @@ pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_
 
 /// Past epochs whose secrets are kept for late application messages (contract §10.0).
 pub const MAX_PAST_EPOCHS: usize = 3;
+
+/// How far ahead of a sender's ratchet head a message may be (contract v1.12 §15.10; OpenMLS's
+/// default is 1000). Deleted events, `scope: "me"`, `chat:clear` and old apps leave generation
+/// gaps; this keeps them decryptable. Applied to new groups and, once on load, to stored ones.
+pub const MAX_FORWARD_DISTANCE: u32 = 20_000;
+
+/// Message keys kept per sender for out-of-order delivery (OpenMLS default; v1.13 decides).
+pub const OUT_OF_ORDER_TOLERANCE: u32 = 5;
+
+pub(crate) fn sender_ratchet_config() -> SenderRatchetConfiguration {
+    SenderRatchetConfiguration::new(OUT_OF_ORDER_TOLERANCE, MAX_FORWARD_DISTANCE)
+}
 
 /// Maximum number of key packages generated in one call (the contract's upload limit).
 pub const MAX_KEY_PACKAGE_BATCH: u16 = 100;
@@ -192,6 +207,31 @@ pub enum Incoming {
     },
     /// A message this device sent itself, echoed back. Ignore it.
     OwnEcho,
+}
+
+/// What [`Client::process_detailed`] adds for an application message (contract v1.12 §15).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationDetails {
+    /// The sender's leaf index at the message's epoch. Diagnostics only: leaf indices are reused
+    /// after a removal, so never store or compare it as an identity (compare `sender.user_id`).
+    pub sender_leaf: u32,
+    /// The message's MLS `authenticated_data` (signed and AEAD-covered). Empty for every message
+    /// but a `delete` control, whose AAD is [`encode_delete_aad`] of its targets.
+    pub authenticated_data: Vec<u8>,
+    /// Whether the sender's user was an admin at the message's epoch, from the admin list the core
+    /// recorded for that epoch. `None` in DM groups. In a `grp:` group without a record for that
+    /// epoch, a message with a non-empty AAD fails with [`MlsError::Malformed`]; one with an
+    /// empty AAD (not a delete) gets `None` (only epochs from before the v1.12 upgrade).
+    pub sender_is_admin: Option<bool>,
+}
+
+/// Result of [`Client::process_detailed`]: the same [`Incoming`] as [`Client::process`], plus the
+/// details of an application message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Processed {
+    pub incoming: Incoming,
+    /// Present exactly when `incoming` is [`Incoming::Application`].
+    pub application: Option<ApplicationDetails>,
 }
 
 /// What is stored about this device itself, next to the OpenMLS state.
@@ -446,10 +486,53 @@ impl Client {
         Ok(out)
     }
 
+    /// Load a group. A group stored before v1.12 (OpenMLS's default sender ratchet) is migrated
+    /// once, in its own nested transaction: the v1.12 configuration ([`MAX_FORWARD_DISTANCE`]),
+    /// and for a `grp:` group the admin record of its current epoch.
     fn load(&self, group_id: &[u8]) -> Result<MlsGroup> {
-        MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
+        let mut group = MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
             .map_err(storage)?
-            .ok_or(MlsError::UnknownGroup)
+            .ok_or(MlsError::UnknownGroup)?;
+        if group
+            .configuration()
+            .sender_ratchet_configuration()
+            .maximum_forward_distance()
+            != MAX_FORWARD_DISTANCE
+        {
+            self.tx(|c| {
+                group
+                    .set_configuration(c.provider.storage(), &Self::join_config(group_id))
+                    .map_err(storage)?;
+                if group::is_group_id(group_id)
+                    && c.admins_record(group_id, group.epoch().as_u64())?.is_none()
+                {
+                    c.record_admins(&group)?;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(group)
+    }
+
+    /// **Tests only:** put a stored group back on OpenMLS's default sender ratchet configuration
+    /// (forward distance 1000) and drop its admin records, as a group stored before v1.12. The
+    /// next load migrates it.
+    #[doc(hidden)]
+    pub fn downgrade_group_config_for_tests(&self, group_id: &[u8]) -> Result<()> {
+        self.tx(|c| {
+            let mut group = MlsGroup::load(c.provider.storage(), &GroupId::from_slice(group_id))
+                .map_err(storage)?
+                .ok_or(MlsError::UnknownGroup)?;
+            let cfg = MlsGroupJoinConfig::builder()
+                .use_ratchet_tree_extension(true)
+                .wire_format_policy(group::wire_policy(group_id))
+                .max_past_epochs(MAX_PAST_EPOCHS)
+                .build();
+            group
+                .set_configuration(c.provider.storage(), &cfg)
+                .map_err(storage)?;
+            c.purge_admins(group_id)
+        })
     }
 
     fn join_config(group_id: &[u8]) -> MlsGroupJoinConfig {
@@ -457,6 +540,7 @@ impl Client {
             .use_ratchet_tree_extension(true)
             .wire_format_policy(group::wire_policy(group_id))
             .max_past_epochs(MAX_PAST_EPOCHS)
+            .sender_ratchet_configuration(sender_ratchet_config())
             .build()
     }
 
@@ -537,6 +621,7 @@ impl Client {
                 .use_ratchet_tree_extension(true)
                 .with_wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
                 .max_past_epochs(MAX_PAST_EPOCHS)
+                .sender_ratchet_configuration(sender_ratchet_config())
                 .with_capabilities(Self::capabilities())
                 .with_leaf_node_extensions(ext)
                 .map_err(other)?
@@ -620,6 +705,7 @@ impl Client {
             }
             group.merge_pending_commit(&c.provider).map_err(other)?;
             c.clear_pending_record(group_id)?;
+            c.record_admins(&group)?;
             Ok(group.epoch().as_u64())
         })
     }
@@ -634,6 +720,7 @@ impl Client {
             }
             c.clear_pending_record(group_id)?;
             if group.epoch().as_u64() == 0 {
+                c.purge_admins(group_id)?;
                 group.delete(c.provider.storage()).map_err(storage)
             } else {
                 group
@@ -671,6 +758,7 @@ impl Client {
                     return Err(MlsError::GroupExists);
                 }
                 old.delete(c.provider.storage()).map_err(storage)?;
+                c.purge_admins(gid.as_slice())?;
             }
             let staged = processed
                 .into_staged_welcome(&c.provider, None)
@@ -685,6 +773,7 @@ impl Client {
                 .map_err(|e| MlsError::Welcome(e.to_string()))?;
             if group::is_group_id(gid.as_slice()) {
                 c.finish_group_join(&mut group)?;
+                c.record_admins(&group)?;
             }
             for m in group.members() {
                 let leaf = group
@@ -703,11 +792,25 @@ impl Client {
 
     /// Encrypt an application message (a PrivateMessage) for the group's current epoch.
     pub fn encrypt(&self, group_id: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
+        self.encrypt_with_aad(group_id, plaintext, &[])
+    }
+
+    /// [`Client::encrypt`] with the PrivateMessage's `authenticated_data` set to `aad` (OpenMLS
+    /// `set_aad`). It is cleartext on the wire but signed and AEAD-covered. Contract v1.12 §15.3:
+    /// a `delete` control sends [`encode_delete_aad`] of its targets; everything else sends an
+    /// empty AAD (plain [`Client::encrypt`]).
+    pub fn encrypt_with_aad(
+        &self,
+        group_id: &[u8],
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> Result<Vec<u8>> {
         self.tx(|c| {
             let mut group = c.load(group_id)?;
             if !group.is_active() {
                 return Err(MlsError::RemovedFromGroup);
             }
+            group.set_aad(aad.to_vec());
             let out = group
                 .create_message(&c.provider, &c.signer, plaintext)
                 .map_err(|e| match e {
@@ -734,10 +837,27 @@ impl Client {
     /// - verify commits, check their new leaves with the validator, and merge them;
     /// - reject standalone proposals, which RisiMe doesn't use.
     pub fn process(&self, group_id: &[u8], message: &[u8]) -> Result<Incoming> {
-        self.tx(|c| c.process_inner(group_id, message))
+        self.tx(|c| {
+            c.process_inner(group_id, message, false)
+                .map(|p| p.incoming)
+        })
     }
 
-    fn process_inner(&self, group_id: &[u8], message: &[u8]) -> Result<Incoming> {
+    /// [`Client::process`], plus for an application message its [`ApplicationDetails`]: the
+    /// sender's leaf, the `authenticated_data`, and `sender_is_admin` at the message's epoch
+    /// (contract v1.12 §15.3, §15.4). Same transaction, same effects.
+    pub fn process_detailed(&self, group_id: &[u8], message: &[u8]) -> Result<Processed> {
+        self.tx(|c| c.process_inner(group_id, message, true))
+    }
+
+    /// `admin_check`: evaluate `sender_is_admin` (only [`Client::process_detailed`]; the plain
+    /// `process` never fails on a missing admin record).
+    pub(crate) fn process_inner(
+        &self,
+        group_id: &[u8],
+        message: &[u8],
+        admin_check: bool,
+    ) -> Result<Processed> {
         let mut group = self.load(group_id)?;
         if !group.is_active() {
             return Err(MlsError::RemovedFromGroup);
@@ -757,12 +877,36 @@ impl Client {
         let sender = processed.sender().clone();
         let epoch = processed.epoch().as_u64();
         let credential = processed.credential().clone();
-        match processed.into_content() {
-            ProcessedMessageContent::ApplicationMessage(app) => Ok(Incoming::Application {
-                sender: DeviceId::parse(credential.serialized_content())?,
-                plaintext: app.into_bytes(),
-                epoch,
-            }),
+        let aad = processed.aad().to_vec();
+        let incoming = match processed.into_content() {
+            ProcessedMessageContent::ApplicationMessage(app) => {
+                let sender_device = DeviceId::parse(credential.serialized_content())?;
+                let Sender::Member(leaf) = sender else {
+                    return Err(MlsError::UntrustedCredential(
+                        "application message from a non-member".into(),
+                    ));
+                };
+                let sender_is_admin = if !admin_check {
+                    None
+                } else {
+                    match self.admin_at(group_id, epoch, &sender_device.user_id) {
+                        Err(MlsError::Malformed(_)) if aad.is_empty() => None,
+                        r => r?,
+                    }
+                };
+                return Ok(Processed {
+                    incoming: Incoming::Application {
+                        sender: sender_device,
+                        plaintext: app.into_bytes(),
+                        epoch,
+                    },
+                    application: Some(ApplicationDetails {
+                        sender_leaf: leaf.u32(),
+                        authenticated_data: aad,
+                        sender_is_admin,
+                    }),
+                });
+            }
             ProcessedMessageContent::StagedCommitMessage(staged) => {
                 let Sender::Member(committer_index) = sender else {
                     return Err(MlsError::UntrustedCredential(
@@ -812,7 +956,8 @@ impl Client {
                 if had_pending {
                     self.clear_pending_record(group_id)?;
                 }
-                Ok(Incoming::Commit {
+                self.record_admins(&group)?;
+                Incoming::Commit {
                     epoch: group.epoch().as_u64(),
                     committer,
                     added,
@@ -820,23 +965,47 @@ impl Client {
                     removed_self,
                     discarded_own_pending: had_pending,
                     meta_changed,
-                })
+                }
             }
             ProcessedMessageContent::ProposalMessage(_)
-            | ProcessedMessageContent::ExternalJoinProposalMessage(_) => Err(MlsError::Malformed(
-                "standalone proposals are not used".into(),
-            )),
+            | ProcessedMessageContent::ExternalJoinProposalMessage(_) => {
+                return Err(MlsError::Malformed(
+                    "standalone proposals are not used".into(),
+                ));
+            }
             ProcessedMessageContent::OwnPendingCommit
-            | ProcessedMessageContent::OwnPrivateMessage => Ok(Incoming::OwnEcho),
-        }
+            | ProcessedMessageContent::OwnPrivateMessage => Incoming::OwnEcho,
+        };
+        Ok(Processed {
+            incoming,
+            application: None,
+        })
     }
 
-    /// Forget a group entirely (after `removed_self`, or when the conversation is deleted).
+    /// Forget a group entirely (after `removed_self`, or when the conversation is deleted),
+    /// including the core's own records for it (pending commit, per-epoch admins).
     pub fn delete_group(&self, group_id: &[u8]) -> Result<()> {
         self.tx(|c| {
             let mut group = c.load(group_id)?;
             c.clear_pending_record(group_id)?;
+            c.purge_admins(group_id)?;
             group.delete(c.provider.storage()).map_err(storage)
+        })
+    }
+
+    /// Remove **all** core state for `group_id`, whether or not the group is still known: the
+    /// OpenMLS group (secrets, past-epoch secrets, tree), the pending-commit record and the
+    /// per-epoch admin records. Idempotent: `Ok` when there is nothing left. For Delete chat
+    /// (contract v1.12 §15.7) and the start-up sweep of orphaned conversations. The core keeps no
+    /// application plaintext, so messages themselves need no core purge (§15.6).
+    pub fn purge_group(&self, group_id: &[u8]) -> Result<()> {
+        self.tx(|c| {
+            let gid = GroupId::from_slice(group_id);
+            if let Some(mut group) = MlsGroup::load(c.provider.storage(), &gid).map_err(storage)? {
+                group.delete(c.provider.storage()).map_err(storage)?;
+            }
+            c.clear_pending_record(group_id)?;
+            c.purge_admins(group_id)
         })
     }
 

@@ -31,6 +31,11 @@ pub struct CommitSummary<'a> {
     pub meta: Option<MetaChange>,
 }
 
+/// Whether `user` is an admin: listed in `admins` and not an agent.
+pub fn is_admin(admins: &[String], agents: &[String], user: &str) -> bool {
+    !agents.iter().any(|a| a == user) && admins.iter().any(|a| a == user)
+}
+
 /// `Ok` if the commit is allowed, otherwise the reason.
 pub fn check_commit_policy(
     admins: &[String],
@@ -38,7 +43,7 @@ pub fn check_commit_policy(
     commit: &CommitSummary<'_>,
 ) -> std::result::Result<(), String> {
     let is_agent = |u: &str| agents.iter().any(|a| a == u);
-    let is_admin = |u: &str| !is_agent(u) && admins.iter().any(|a| a == u);
+    let is_admin = |u: &str| is_admin(admins, agents, u);
     let me = commit.committer_user;
 
     if !is_admin(me) {

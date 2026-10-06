@@ -220,3 +220,77 @@ fn group_api_crosses_the_ffi() {
         Err(RisiMlsError::Malformed(_))
     ));
 }
+
+/// Contract v1.12 §15 through the FFI: delete AAD, `encryptWithAad`, `processDetailed`
+/// (`senderIsAdmin`, AAD, leaf), `adminsAtEpoch`, `purgeGroup`.
+#[test]
+fn delete_controls_cross_the_ffi() {
+    let attestor = TestAttestor::from_seed(vec![9; 32]).unwrap();
+    let jwks = vec![attestor.public_jwk()];
+    let open = |user: &str| {
+        let c = MlsClient::open(
+            InMemoryKvStore::new(),
+            user.into(),
+            "d1".into(),
+            jwks.clone(),
+        )
+        .unwrap();
+        let jws = attestor
+            .attest(
+                user.into(),
+                "d1".into(),
+                c.signature_public_key().unwrap(),
+                1,
+            )
+            .unwrap();
+        c.set_attestation(jws).unwrap();
+        c
+    };
+    let (alice, bob) = (open("alice"), open("bob"));
+    let g = b"grp:0b6d1c1e-2a3b-4c5d-8e9f-0a1b2c3d4e5f#1".to_vec();
+    let meta = uniffi_risime::GroupMeta {
+        name: "FFI".into(),
+        icon_json: None,
+        admins: vec!["alice".into()],
+    };
+    let gc = alice
+        .create_group_with_meta(g.clone(), bob.generate_key_packages(1).unwrap(), meta)
+        .unwrap();
+    alice.commit_accepted(g.clone()).unwrap();
+    bob.join_from_welcome(gc.welcome.unwrap()).unwrap();
+
+    let t = vec![
+        "C1A2B3F0-A0B1-11F0-8000-0242AC120002".to_string(),
+        "c1a2b3e1-a0b1-11f0-8000-0242ac120002".to_string(),
+    ];
+    let aad = uniffi_risime::delete_aad_encode(t).unwrap();
+    let ct = alice
+        .encrypt_with_aad(g.clone(), b"{}".to_vec(), aad.clone())
+        .unwrap();
+    let p = bob.process_detailed(g.clone(), ct).unwrap();
+    assert!(matches!(
+        p.incoming,
+        IncomingMessage::Application { epoch: 1, .. }
+    ));
+    let d = p.application.unwrap();
+    assert_eq!(d.sender_is_admin, Some(true));
+    assert_eq!(d.sender_leaf, 0);
+    assert_eq!(
+        uniffi_risime::delete_aad_decode(d.authenticated_data).unwrap(),
+        vec![
+            "c1a2b3e1-a0b1-11f0-8000-0242ac120002",
+            "c1a2b3f0-a0b1-11f0-8000-0242ac120002"
+        ]
+    );
+    assert!(matches!(
+        uniffi_risime::delete_aad_decode(aad[..10].to_vec()),
+        Err(RisiMlsError::Malformed(_))
+    ));
+    assert_eq!(
+        bob.admins_at_epoch(g.clone(), 1).unwrap(),
+        Some(vec!["alice".to_string()])
+    );
+    bob.purge_group(g.clone()).unwrap();
+    bob.purge_group(g.clone()).unwrap();
+    assert!(!bob.has_group(g).unwrap());
+}

@@ -123,6 +123,49 @@ with a 151,520 B Welcome. **State per device ≈ 0.93 MB; the largest single `Kv
 tree) ≈ 0.6 MB**, growing roughly linearly with leaves (so ~1.8 MB at 768 leaves): the app's
 `mls_kv` chunking above 512 KB is needed for Android's 2 MB `CursorWindow`.
 
+## Delete API (contract v1.12 §15, decision 047; crypto review R1, R2, R5, R6, S1)
+All additive: every existing call (including `process` and `encrypt`) behaves as before.
+
+| Core call (Kotlin name) | What it does |
+|---|---|
+| `process_detailed(gid, msg)` (`processDetailed`) | `process` in the same transaction, plus for an application message `ApplicationDetails {sender_leaf, authenticated_data, sender_is_admin}`. Compare the deleter with the original sender by **`sender.user_id`** (R1); `sender_leaf` is diagnostics only (leaf indices are reused) |
+| `encrypt_with_aad(gid, plaintext, aad)` (`encryptWithAad`) | `encrypt` with the PrivateMessage `authenticated_data` (OpenMLS `set_aad`); signed and AEAD-covered, so a changed AAD fails as `DecryptionFailed` |
+| `encode_delete_aad(targets)` / `decode_delete_aad(aad)` (FFI free fns `deleteAadEncode` / `deleteAadDecode`) | The canonical delete AAD: `0x01 0x44` + 16-byte UUIDs, sorted ascending, distinct, 1..=100 (≤ 1 602 bytes). Decoding refuses anything non-canonical (`Malformed`: drop the control) and returns lowercase UUIDs |
+| `admins_at_epoch(gid, epoch)` (`adminsAtEpoch`) | The admin list recorded for that epoch; `None` for DMs, outside the window, or before the join |
+| `purge_group(gid)` (`purgeGroup`) | Removes all core state of a group (OpenMLS state, pending record, admin records), known or not; idempotent. `delete_group` now drops the admin records too |
+
+- **`sender_is_admin`** is "admin at the message's epoch `e`" (never "still admin now"), from
+  `group_meta.admins` that the core records per epoch at **every** merge, in the same transaction:
+  create (epoch 0), `commit_accepted`, Welcome, peer commit in `process`, each commit of
+  `process_commits` (own or peer). Keys `risime/admins/<gid>/<epoch>` plus an index
+  `risime/admins/<gid>`; kept for the current epoch plus `MAX_PAST_EPOCHS` (3), the same window as
+  the past-epoch secrets. `None` in DM groups. Agents are never admins (`policy::is_admin`). A
+  `grp:` message whose epoch has no record: a non-empty AAD (a delete) is `Malformed` (rolled back,
+  nothing consumed); an empty AAD gets `None`.
+- **Sender ratchet:** `SenderRatchetConfiguration::new(5, 20_000)` (`OUT_OF_ORDER_TOLERANCE`,
+  `MAX_FORWARD_DISTANCE`) in the create, join and Welcome configs. `out_of_order_tolerance` stays 5
+  until v1.13 decides it.
+
+### Migration of stored groups (automatic, on load)
+The first load of a group stored before v1.12 (forward distance 1000) runs, in one nested
+transaction: `set_configuration` with the v1.12 join config, and for a `grp:` group the admin
+record of the **current** epoch from its `group_meta`. Pre-upgrade past epochs (at most 3) have
+no record: a late delete control from one of them fails with `Malformed` in `processDetailed`
+(the app drops it, fail closed), while ordinary messages decrypt as before. No app action and no
+schema change are needed. Test: `stored_group_is_migrated_and_accepts_a_5000_jump`.
+
+### Purge notes for the app (R6, §15.6)
+- The core keeps **no application plaintext**, and consumed generation keys are deleted, so a
+  message delete needs no core call. Delete chat calls `purgeGroup` (or `deleteGroup`) only when
+  the MLS group itself is dropped (left/removed); Clear chat never touches MLS state.
+- Run the messages database (which also holds the MLS `KvStore` table, decision 033) with
+  **`PRAGMA secure_delete = ON`**: deleted cells, including old epoch secrets and admin records,
+  are zero-filled instead of lingering in free pages. Set it on every connection open.
+- After a delete transaction, run **`PRAGMA wal_checkpoint(TRUNCATE)`** best-effort, off the UI
+  thread (it can return busy while readers are active; retry later, never block on it), so the
+  deleted rows don't linger in the WAL.
+- Delete the cached blob file after the transaction commits; a start-up sweep removes orphans.
+
 ## Media API (contract v1.11 §14.3, decision 042): `risime_mls::media`
 Encrypted images and group icons use the blob format **`A256GCM-S64K`**:
 - a fresh 32-byte key `K` from the OS CSPRNG, generated **inside** the encrypt call;
@@ -191,7 +234,7 @@ single 64 KiB buffer. The unit test `streams_beyond_the_cap` encrypts 20 MiB thr
 uncapped path. A 2 MiB photo takes about 8 ms. Benchmark on the oldest pilot phone before
 release.
 
-## Tests (`cargo test`: 78 core + 1 ignored generator, 6 FFI)
+## Tests (`cargo test`: 89 core + 1 ignored generator, 7 FFI)
 - **`groups`** (v1.9): create/join with PrivateMessage handshakes and meta; DM and group APIs
   don't mix; 0xFA01 key packages (a legacy key package is refused); admin adds/removes users and
   removed devices are locked out; members manage only their own devices; **peers reject
@@ -245,6 +288,13 @@ release.
   - a stale Welcome doesn't roll back;
   - late messages decrypt within 3 past epochs (older → `WrongEpoch`).
 - **`robustness`:** random and truncated input never panics and never changes state.
+- **`delete_v112`** (v1.12): sender, leaf and AAD from `process_detailed`; DM → `None`; a
+  tampered AAD fails decryption; `sender_is_admin` at the message's epoch after a demotion
+  (admin at `e`, not at `e+1`) across a catch-up; every merge path records its epoch, catch-up
+  records each intermediate epoch, pruning keeps current + 3; a missing record (`Malformed` for a
+  delete, `None` otherwise, nothing consumed); a 1 500-generation gap decrypts; a stored
+  old-config group migrates on load and accepts a 5 000-generation jump; `purge_group`.
+  Unit (`aad`): canonical encoding, sorting, case, duplicates, 0/101 targets, non-canonical AAD.
 - **`media`** (v1.11):
   - unit: Padmé values and bounds, the nonce layout, crafted negatives (final flag on a
     non-final segment, nonzero padding, a 16-byte last segment, a skipped index), deterministic
@@ -258,7 +308,8 @@ release.
   - the group API crosses the FFI;
   - error mapping;
   - a foreign `KvStore` failure maps to `Storage` and rolls back;
-  - commit fields cross the FFI.
+  - commit fields cross the FFI;
+  - v1.12: delete AAD, `encryptWithAad`, `processDetailed`, `adminsAtEpoch`, `purgeGroup`.
 - **`risime-mls-ffi/tests/media`:** the media calls and their errors across the FFI.
 
 ## Contract fixtures
