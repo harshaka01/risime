@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Writes the A256GCM-S64K media test vectors (PROTOCOL §14.3) to stdout.
+
+An independent Python reference for contract/v1/media_vectors.json. It mirrors the case list and
+the seeded inputs of the crypto core's generator (risime-mls `media`, crypto review R6), so the two
+implementations must produce the same JSON value; the crypto tests compare against the contract
+file. Needs python3-cryptography.
+
+Usage: scripts/gen-media-vectors > contract/v1/media_vectors.json
+"""
+import hashlib
+import json
+import sys
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+ALG = "A256GCM-S64K"
+SEG, TAG = 65536, 16
+CSEG = SEG + TAG
+AAD = b"risime-media-v1"
+INFO = b"risime-media-v1 A256GCM-S64K"
+
+
+def padme(n):
+    if n < 2:
+        return n
+    e = n.bit_length() - 1
+    s = e.bit_length()
+    mask = (1 << (e - s)) - 1
+    return (n + mask) & ~mask
+
+
+def payload_key(k):
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=INFO).derive(k)
+
+
+def nonce(i, last):
+    return b"\x00" * 7 + i.to_bytes(4, "big") + (b"\x01" if last else b"\x00")
+
+
+def seeded(label, n):
+    """SHA-256 in counter mode over a label (test-only deterministic bytes)."""
+    out, ctr = b"", 0
+    while len(out) < n:
+        out += hashlib.sha256(label.encode() + ctr.to_bytes(8, "big")).digest()
+        ctr += 1
+    return out[:n]
+
+
+def seeded_key(label):
+    return seeded(f"risime-media-vector key {label}", 32)
+
+
+def raw_segments(k, segs):
+    g = AESGCM(payload_key(k))
+    return b"".join(g.encrypt(nonce(i, last), bytes(p), AAD) for p, i, last in segs)
+
+
+def seal(k, plain):
+    padded = plain + b"\x00" * (padme(len(plain)) - len(plain))
+    chunks = [padded[i:i + SEG] for i in range(0, len(padded), SEG)]
+    return raw_segments(k, [(c, i, i == len(chunks) - 1) for i, c in enumerate(chunks)])
+
+
+def sha(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def positive(name, n):
+    plain = seeded(f"risime-media-vector plain {name}", n)
+    k = seeded_key(name)
+    return {"name": name, "key": k, "plain": plain, "cipher": seal(k, plain)}
+
+
+def seg(c, i):
+    return c[i * CSEG:(i + 1) * CSEG]
+
+
+def pos_json(p):
+    padded = padme(len(p["plain"]))
+    return {"name": p["name"], "key": p["key"].hex(), "payload_key": payload_key(p["key"]).hex(),
+            "plain_size": len(p["plain"]), "padded_size": padded, "segments": -(-padded // SEG),
+            "cipher_size": len(p["cipher"]), "sha256": sha(p["cipher"]),
+            "plain": p["plain"].hex(), "cipher": p["cipher"].hex()}
+
+
+def neg_json(name, why, k, plain_size, cipher, expect):
+    return {"name": name, "why": why, "key": k.hex(), "plain_size": plain_size,
+            "cipher_size": len(cipher), "sha256": sha(cipher), "cipher": cipher.hex(),
+            "expect": expect}
+
+
+def build():
+    pos = [positive("len_1", 1), positive("len_100", 100),
+           positive("one_full_segment", 65_000), positive("two_segments", 70_000),
+           positive("three_full_segments", 195_000)]
+    small, two, other = pos[1], pos[3], pos[2]
+    two_size = len(two["plain"])
+    neg = [neg_json("truncated_last_segment",
+                    "two_segments with its last segment dropped (truncation at a boundary); plain_size "
+                    "65536 makes the sizes consistent, so only the final flag catches it",
+                    two["key"], 65_536, seg(two["cipher"], 0), "Integrity"),
+           neg_json("segments_swapped", "two_segments with segments 0 and 1 swapped", two["key"],
+                    two_size, seg(two["cipher"], 1) + seg(two["cipher"], 0), "Integrity"),
+           neg_json("segment_from_other_blob",
+                    "segment 0 of two_segments followed by segment 0 of one_full_segment (another key); "
+                    "plain_size 131072 makes the sizes consistent",
+                    two["key"], 131_072, seg(two["cipher"], 0) + seg(other["cipher"], 0), "Integrity")]
+    k = seeded_key("final_flag_on_non_final")
+    s0 = seeded("risime-media-vector plain final_flag_on_non_final", 65_536)
+    s1 = bytearray(seeded("risime-media-vector plain final_flag_on_non_final 1", 2048))
+    s1[67_000 - 65_536:] = b"\x00" * (2048 - (67_000 - 65_536))
+    neg.append(neg_json("final_flag_on_non_final", "plain_size 67000; segment 0 encrypted with the final flag set",
+                        k, 67_000, raw_segments(k, [(s0, 0, True), (s1, 1, True)]), "Integrity"))
+    neg.append(neg_json("last_segment_16_bytes",
+                        "a full segment followed by a 16-byte last segment (no plaintext byte)",
+                        two["key"], two_size, seg(two["cipher"], 0) + seg(two["cipher"], 1)[:16], "Format"))
+    flipped = bytearray(small["cipher"])
+    flipped[-1] ^= 0x01
+    neg.append(neg_json("tag_bit_flipped", "len_100 with one bit of its tag flipped (sha256 is of the flipped blob)",
+                        small["key"], 100, bytes(flipped), "Integrity"))
+    k = seeded_key("nonzero_padding")
+    p = bytearray(seeded("risime-media-vector plain nonzero_padding", 10))
+    assert padme(9) == 10
+    p[9] = 0x80
+    neg.append(neg_json("nonzero_padding", "plain_size 9 padded to 10 with a 0x80 pad byte, correctly encrypted",
+                        k, 9, raw_segments(k, [(p, 0, True)]), "Format"))
+    neg.append(neg_json("plain_size_inconsistent", "len_100 with plain_size 101 (Padmé(101) + 16 != cipher_size)",
+                        small["key"], 101, small["cipher"], "Format"))
+    neg.append(neg_json("wrong_key", "len_100 opened with len_1's key", pos[0]["key"], 100,
+                        small["cipher"], "Integrity"))
+    return {
+        "comment": "A256GCM-S64K media vectors (contract v1.11, crypto review R6). Generated by "
+                   "`cargo test -p risime-mls media_vectors -- --ignored`. All binary fields are "
+                   "lowercase hex. A negative case must fail with `expect` when opened with "
+                   "alg A256GCM-S64K and its key, plain_size, cipher_size and sha256.",
+        "alg": ALG,
+        "hkdf": "HKDF-SHA256, salt empty, info = hkdf_info, L = 32",
+        "hkdf_info": INFO.decode(),
+        "aad": AAD.decode(),
+        "segment_size": SEG,
+        "tag_size": TAG,
+        "nonce": "0x00 x 7 || uint32_be(i) || (0x01 if last segment else 0x00)",
+        "padding": "Padmé(L), zero bytes",
+        "positive": [pos_json(x) for x in pos],
+        "negative": neg,
+    }
+
+
+if __name__ == "__main__":
+    sys.stdout.write(json.dumps(build(), indent=2, sort_keys=True, ensure_ascii=False) + "\n")

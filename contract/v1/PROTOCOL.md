@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.10 (Release 0.3)
+# RisiMe Wire Protocol — v1.11 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -717,8 +717,8 @@ where they differ for them. DMs are unchanged. Apps before v1.9 never see group 
   - `GET /groups/{id}` returns every pending op, so a client finds owed work after a restart.
 - **`group_meta`**, the GroupContext extension `risime.group_meta` (type `0xFA01`), is UTF-8 JSON
   `{"v": 1, "name": "…", "icon": null, "admins": ["uuid", …]}` (`group_meta.json`).
-  - `name` is 1–100 grapheme clusters. `icon` stays null until the images slice defines it as a
-    blob reference with its key.
+  - `name` is 1–100 grapheme clusters. `icon` is null, or from v1.11 an encrypted blob reference
+    with its key (§14.4).
   - `admins` mirrors the server's admin roles; it changes only through a `role` op commit.
   - It is set in the epoch-0 commit, delivered to joiners in the Welcome, and changed by a
     GroupContextExtensions proposal. The server never sees it.
@@ -836,7 +836,8 @@ caller isn't a member of is always `404 not_found`, so membership is never revea
 
 ### 12.6 Blobs (generic, v1.9)
 A minimal store of **opaque, client-encrypted bytes**. v1.9 uses it for large commits and
-Welcomes; the encrypted-images slice extends it (decision 041).
+Welcomes; v1.11 adds the `media` and `icon` purposes, idempotent streamed uploads, ranges and
+per-purpose readers (§14.2).
 - **`POST /api/v1/blobs?purpose=mls&conversation_id=grp:…`** with the raw bytes as the body
   (`Content-Type: application/octet-stream`) →
   `201 {"blob_id": "uuid", "size": n, "sha256": "<b64>", "expires_at"}` (`blob_upload_reply.json`).
@@ -1139,7 +1140,358 @@ Not a wire change; recorded so the release is reproducible.
   - parsing `inbox_join_reply_v110.json`, `event_message_sender_copy.json` and
     `error_quota_exceeded.json`.
 
+## 14. Encrypted images (v1.11)
+Decision 042. Reviewed by crypto, server and android
+(`proposals/reviews/2026-10-06-images-v1.11-*.md`). Additive to v1.10: one envelope type, two blob
+purposes (`media`, `icon`), one device capability and small REST additions. **No new event kinds.**
+Apps before v1.11 ignore the `image` envelope type (§10.3).
+
+### 14.0 Principles
+- **E2EE-only.** Images are sent only in e2ee conversations: DMs after their upgrade (§10) and
+  every group (§12). Plaintext DMs refuse them (`409 not_e2ee`); there is no plaintext fallback.
+- **Two layers, one key per image.** The image bytes are encrypted on the sender's device in the
+  `A256GCM-S64K` format (§14.3) under a fresh random key, and uploaded as an opaque blob. The key,
+  the ciphertext digest, metadata, caption and thumbnail travel in an ordinary MLS application
+  message (the `image` envelope, §14.4), so only the conversation's MLS members can read them.
+- **The server never sees** plaintext, the real MIME type, dimensions, caption or thumbnail. It
+  stores `application/octet-stream` blobs of padded size and learns sizes, timing, and who uploads
+  and downloads in which conversation (§14.9).
+- **Privacy by re-encoding.** The sender always decodes and re-encodes (§14.7). The original file
+  never leaves the device.
+- **One upload serves every recipient.** Each member (and each of the sender's other devices)
+  downloads the same ciphertext.
+- Reactions (§11), receipts and "Read by" (§12.7) work on image messages unchanged: an image
+  message is a normal message with a `message_id`.
+
+### 14.1 Capability and readiness
+- A v1.11 app advertises **`"images"`** with its MLS device:
+  `PUT /me/devices/{device_id}` `"mls": {"signature_key", "capabilities": ["groups", "images"]}`
+  (`device_put_images.json`). An app advertises it only once it can **receive and render** images.
+- **`GET /api/v1/mls/groups/{conversation_id}`** gains **`"images_ready": bool`** (absent = false)
+  and **`"missing_images": [{"user_id", "device_id" | null}]`** (`mls_group_images_ready.json`).
+  `images_ready` means the conversation is e2ee **and** every app instance of every member user
+  seen in the last 30 days (the §10.1 census, the caller's own instances included) advertises
+  `images`. `missing_images` names the instances that don't (empty when ready).
+- The server does **not** enforce it (it can't see message types). It's a client hint, refetched
+  on chat open, on `mls_membership` for that conversation, and when a disabled attach button is
+  tapped:
+  - **DMs:** the attach button is disabled until ready: "<name> needs to update the app to receive
+    photos" ("Your other phone needs to update to receive photos" when the missing user is me).
+  - **Groups:** sending is allowed. While not ready, a one-line notice "Some members need to update
+    to see photos" shows above the composer when an image is attached; group info lists who.
+- Rollout as for v1.7/v1.9: a `required` app update precedes announcing images to the pilot.
+
+### 14.2 Blob REST (extends §12.6)
+**Upload.** `POST /api/v1/blobs?purpose=<media|icon|mls>&conversation_id=<…>&client_blob_id=<uuid-v4>`,
+the raw bytes as the body, `Content-Type: application/octet-stream`, **`Content-Length` required**
+→ `201 {"blob_id", "size", "sha256", "expires_at" | null}` (`blob_upload_media_reply.json`).
+- **Who may upload:**
+  - `media`, `dm:`: one of the two users, friends with no block, and the conversation is e2ee.
+    Otherwise `404 not_found` (not a participant, not friends, blocked) or **`409 not_e2ee`**
+    (`error_not_e2ee.json`) for a plaintext DM.
+  - `media`, `grp:`: an **active** member (`404` otherwise).
+  - `icon`: an admin of the `grp:` (`403 not_admin`; `404` for a non-member); `icon` with a `dm:`
+    is `400 bad_request`.
+  - `mls`: unchanged (§12.6).
+- **Checked before the body is read**, in this order, each answered with `Connection: close` and
+  without draining the body: purpose and conversation (`400`), rights (`404`/`403`/`409`),
+  `Content-Type` (**`415 bad_media_type`**, `error_bad_media_type.json`), `Content-Length` (missing
+  → `400`), the purpose cap (`413 too_large`), the quota (`413 quota_exceeded`), the free-space
+  guard (`507 storage_full`), the rate (`429`), a concurrency slot (`429`), idempotency.
+- **Streamed, never buffered:** the body is streamed to a temp file and hashed while it arrives;
+  it is aborted with `413 too_large` the moment it exceeds the cap or `Content-Length`. The blob
+  exists only after the full body, its SHA-256 and the row are committed. An interrupted upload
+  stores nothing; the client retries the whole request.
+- **Idempotent by `client_blob_id`** (required for `media` and `icon`, optional for `mls`):
+  - a repeat from the same user after a **completed** upload returns the same reply with `200`,
+    without reading the body; it doesn't count against the rate;
+  - the same id with a different `purpose`, `conversation_id` or `Content-Length` →
+    `400 bad_request`;
+  - the id of a **deleted** blob → `404 not_found` (never a silent re-upload).
+- **The server computes** `size` and `sha256` (base64, of the bytes it received). The client
+  compares them with its **own locally computed** values and puts only its own values in the
+  envelope; `blob_id` is the only value taken from the server. A mismatch (including a `200` that
+  returns an older blob) means the reference is never sent: the client retries the same stored
+  ciphertext file with a **new** `client_blob_id`.
+- **Retries** with backoff (1 s, 2 s, 4 s … capped at 60 s) on network errors, `5xx` and `429`
+  (honouring `Retry-After`; a daily `Retry-After` can be up to 24 h, shown as "later today"); never
+  on other `4xx`. `507` is retried at most hourly.
+
+**Download.** `GET /api/v1/blobs/{blob_id}` → `200` with the bytes,
+`Content-Type: application/octet-stream`, `X-Content-Type-Options: nosniff`,
+`Content-Disposition: attachment`, `Accept-Ranges: bytes`, the strong `ETag: "<sha256 hex>"` and
+`Cache-Control: private, max-age=86400, immutable`. Never content-encoded.
+- **A single range** (`bytes=a-b`, `bytes=a-` or the suffix `bytes=-n`) → `206` with
+  `Content-Range: bytes a-b/size`. Multi-range or unsatisfiable → `416` with
+  `Content-Range: bytes */size`. `If-Range` with a mismatched ETag → full `200`. `If-None-Match`
+  matching → `304`. `HEAD` works.
+- **Readers**, by purpose (every other case, including expiry and deletion, is `404 not_found`):
+
+  | purpose | readers |
+  |---|---|
+  | `mls` | as §12.6 |
+  | `media` | the **owner** (uploader), always, for the blob's TTL; for `dm:` either of the two users, independent of any later unfriend or block; for `grp:` a user with an **active-membership interval overlapping `[uploaded_at, now]`** (so a member removed after the upload can still read it; one removed before can't; `pending_add` can't) |
+  | `icon` | current `active` and `pending_add` members only; a removed member loses access at once |
+
+  Revoking icon reads is housekeeping, not a cryptographic guarantee (§14.9).
+- **Download limits:** 600 per user per minute and at most 8 concurrent per user (`429`).
+  Clients use at most 3 concurrent downloads and honour `Retry-After`.
+
+**Usage.** `GET /api/v1/blobs/usage` →
+`{"media": {"used", "limit", "uploads_last_hour", "hourly_limit", "uploads_last_day", "daily_limit"}, "mls": {"used", "limit"}}`
+(`blob_usage_reply.json`). `used` counts the caller's live (unexpired, undeleted) bytes.
+
+**Delete.** `DELETE /api/v1/blobs/{blob_id}` is unchanged (owner only, idempotent `204`). The file
+is removed at once; the row stays until its expiry, so a replayed `client_blob_id` gets `404`.
+Clients use it for cancelled sends (after the upload, before `msg:send`), and for `mls` blobs of a
+failed commit (§13.4). There is no "delete for everyone" in v1.11.
+
+### 14.3 Blob format `A256GCM-S64K` (normative; crypto review R1–R3)
+- **Content key** `K`: 32 bytes from the OS CSPRNG, fresh for every blob (image or icon version),
+  generated **inside** the encrypt call of the crypto core. No production API accepts a
+  caller-supplied key; keys are never derived from content (no convergent encryption) and never
+  reused.
+- **Payload key** `Kp = HKDF-SHA256(salt = empty, IKM = K, info = "risime-media-v1 A256GCM-S64K", L = 32)`.
+- **Padding (Padmé):** `P' = P ‖ 0x00 × (Padmé(L) − L)` with `L = |P| ≥ 1`, where for `L ≥ 2`:
+  `E = ⌊log2 L⌋, S = ⌊log2 E⌋ + 1, mask = 2^(E−S) − 1, Padmé(L) = (L + mask) & ~mask`; `Padmé(1) = 1`.
+- **Segments:** `P'` is split into 65 536-byte plaintext segments; the last holds 1 to 65 536
+  bytes (no empty trailing segment). `n = ceil(|P'| / 65536)`, `n ≥ 1`.
+- **Nonce of segment `i`** (0-based): `0x00 × 7 ‖ uint32_be(i) ‖ flag`, the flag `0x01` on the last
+  segment and `0x00` on every other.
+- **AAD of every segment:** the ASCII bytes `risime-media-v1`.
+- **Blob** = `C_0 ‖ … ‖ C_{n−1}`, each `C_i = AES-256-GCM(Kp, nonce_i, AAD, segment_i)` with its
+  16-byte tag appended. No header. `cipher_size = |P'| + 16·n`; segment `i` starts at `i·65552`.
+- **Opening:** `n = ceil(cipher_size / 65552)`; the last ciphertext segment must be ≥ 17 bytes
+  (`Format`). Each segment is opened with flag `0x00` except the last with `0x01`; any tag failure
+  is `Integrity` (this rejects truncation, extension, reordering and splicing). Then `|P'|` must
+  equal `Padmé(plain_size)` and the bytes after `plain_size` must be zero (`Format`); the output
+  is the first `plain_size` bytes.
+- **Release of plaintext:** nothing is decoded or displayed until **every** segment and the final
+  flag have verified.
+- **Caps** apply to `cipher_size`: `media` 16 MiB (the largest plaintext is 16 515 072 bytes),
+  `icon` 512 KiB, checked by senders after encrypting.
+- **Retry unit:** retries re-upload the **same stored blob file**. If it's lost, the client
+  re-encrypts with a new key (a new encrypt call) and a new `client_blob_id`, and rewrites its
+  stored envelope.
+- **Implementation:** the Rust crypto core (`risime-mls` `media`, through UniFFI), streaming file
+  to file. The deterministic keyed form exists only for tests and is never exported.
+- **Test vectors:** `contract/v1/media_vectors.json` (5 positive, 9 negative cases: truncation at
+  a boundary, swapped segments, a segment from another blob, the final flag on a non-final
+  segment, a 16-byte last segment, a flipped tag bit, a nonzero pad byte, an inconsistent
+  `plain_size`, the wrong key). It is produced by the crypto core's generator and, byte for byte,
+  by the independent reference `scripts/gen-media-vectors`. The crypto and Android tests run every
+  vector.
+- The ciphertext `sha256` is a corruption check (it catches a bad resume early), **not** the
+  security boundary; the AEAD check is never skipped because the hash matched.
+
+### 14.4 The `image` envelope (MLS application message)
+`image_payload.json`:
+```json
+{"v": 1, "type": "image",
+ "blob": {"blob_id": "…", "size": 1311040, "sha256": "<b64 SHA-256 of the ciphertext>"},
+ "enc": {"alg": "A256GCM-S64K", "key": "<b64 32 bytes>", "plain_size": 1300000},
+ "mime": "image/jpeg", "w": 2048, "h": 1536,
+ "thumb": {"mime": "image/jpeg", "w": 128, "h": 96, "data": "<b64, ≤ 4096 bytes decoded>"},
+ "caption": "Site visit, level 3"}
+```
+- **`blob`** is a §12.6 reference to the ciphertext: `size` = `cipher_size`, `sha256` of exactly
+  the bytes served, both as computed by the sender.
+- **`enc`:** `alg` is exactly `"A256GCM-S64K"`; `key` is `K`; `plain_size` is `L`. There is no
+  nonce field and no plaintext digest (it would only add a cross-chat fingerprint).
+- **`mime`:** `image/jpeg`, `image/png` or `image/webp`; receivers render all three. Senders should
+  produce JPEG (q85), and PNG only for sources with transparency whose PNG is ≤ 4 MiB (otherwise
+  flatten onto white and use JPEG). Animated sources are sent as their first frame.
+- **`w`, `h`:** the pixel size after orientation and scaling, 1–2048 each.
+- **`thumb`** (or `null`, `image_payload_no_thumb.json`): JPEG or WebP, longest side ≤ 128 px,
+  ≤ 4096 bytes decoded. Senders start at quality 60 and step down (50, 40, then 96 px, then 64 px)
+  until it fits. It is protected by MLS only, like the caption.
+- **Envelope bound:** the UTF-8 JSON (serialised without escaping non-ASCII) is at most
+  **22 528 bytes** (22 KiB), under the 24 KiB ciphertext cap (§10.3). If a long caption pushes it
+  over, the sender sets `thumb` to `null`.
+- **`caption`** is optional (omitted when empty) and follows §11.1 (1–4096 graphemes, ≤ 16 KiB
+  UTF-8, not whitespace-only). Receivers cut at 4096 graphemes.
+- Receivers ignore unknown fields.
+- **Strict validation before anything is stored, fetched or decoded** (crypto R4, android R3). The
+  envelope is **dropped as malformed and logged** (as an unknown type, §10.3) unless:
+  `alg` is exactly `A256GCM-S64K`; `key` decodes to exactly 32 bytes; `plain_size ≥ 1` and the
+  `cipher_size` computed from it equals `blob.size`; `blob.size` is at most the `media` cap;
+  `sha256` decodes to exactly 32 bytes; `mime` is one of the three; `1 ≤ w, h ≤ 2048`; and `thumb`
+  is null or has a JPEG/WebP `mime`, `1 ≤ w, h ≤ 128` and `data` ≤ 4096 bytes decoded
+  (`image_payload_bad_key.json` must be dropped).
+
+**Group icon.** `group_meta.icon` (§12.2) becomes
+`{"blob": {…}, "enc": {"alg": "A256GCM-S64K", "key", "plain_size"}, "mime": "image/jpeg", "w": 512, "h": 512}`
+or `null` (`group_meta_icon.json`). Square 512×512, JPEG q85, re-encoded and stripped as for
+images, uploaded with `purpose=icon`, no thumbnail. It is set or removed by the existing
+`meta_changed` commit (§12.4), with a fresh key for every icon version (even the same picture).
+A receiver that can't fetch it (`404`) shows the default avatar; it's never unrecoverable. The icon
+reference lives in the GroupContext, so the server can't roll it back. v1.9 apps keep the default
+avatar.
+
+### 14.5 Purposes, caps and limits
+| | `mls` | **`media`** | **`icon`** |
+|---|---|---|---|
+| Conversations | `grp:` | `dm:` (e2ee) and `grp:` | `grp:` only |
+| Max size (ciphertext) | 2 MiB | **16 MiB** (16 777 216 B) | **512 KiB** |
+| TTL | 30 days | **30 days from upload** | **none while current**; 7 days after being replaced |
+| Readers | §12.6 | §14.2 | §14.2 |
+| Upload rate | 60 / h | **120 / h and 1000 / day** | **3 / h** |
+| Concurrent uploads | shared | **3 per user** (all purposes) | shared |
+| Quota (live bytes per user) | 256 MiB (§13.4) | **2 GiB** | not counted |
+
+- **Quota:** an upload that would take `used` over the purpose's limit gets
+  `413 quota_exceeded {"used", "limit"}` (`error_quota_exceeded.json`, v1.10), checked from
+  `Content-Length` before the body is read and again under a per-owner lock at commit, so
+  concurrent uploads can't overshoot it.
+- **Too large:** over the purpose's cap → `413 too_large`, from `Content-Length` and enforced while
+  streaming.
+- **Rate and concurrency:** `429 rate_limited` with `Retry-After`; a 4th concurrent upload gets
+  `Retry-After: 2`. Only accepted uploads count; idempotent `200` replays don't.
+- **Server-wide guard:** below a **server-configured free-space guard** (or over a server-wide
+  live `media` cap), `media` uploads get **`507 storage_full`** (`error_storage_full.json`); `mls`
+  and `icon` keep working down to a lower guard. The numbers are server configuration (defaults in
+  decision 042), not protocol.
+- **Clients** may treat a `media` blob as fetchable until `server_ts + 29 days` (the TTL counts
+  from upload, one day of margin).
+- **Group icons:** one current icon per group; a new `icon` upload makes it current and gives the
+  previous one 7 days (members on an old epoch can still fetch it). Deleting or resetting a group
+  expires all its blobs.
+
+### 14.6 Errors (new in v1.11)
+| Code | HTTP | When |
+|---|---|---|
+| **`not_e2ee`** | 409 | `media` upload for a DM that isn't e2ee yet |
+| **`bad_media_type`** | 415 | `Content-Type` isn't `application/octet-stream` |
+| **`storage_full`** | 507 | below the server's free-space guard or over its global `media` cap |
+
+Reused: `quota_exceeded` 413 (v1.10), `too_large` 413, `rate_limited` 429, `not_admin` 403,
+`not_found` 404, `bad_request` 400 (unknown `purpose`, missing `client_blob_id` for `media`/`icon`,
+missing `Content-Length`, `icon` for a `dm:`, a reused `client_blob_id` that doesn't match).
+
+### 14.7 Client rules
+**Sending**
+1. Pick with the system Photo Picker (no storage permission). Camera capture comes later.
+2. **Re-encode** from a **software, sRGB, 8-bit bitmap with no gain map**, orientation applied to
+   the pixels, longest side ≤ 2048 (never upscaled). The output contains no APP1 (EXIF/XMP), APP2
+   (ICC/MPF) or APP13 segment (JPEG), no `eXIf`, `iTXt`, `tEXt` or `iCCP` chunk (PNG), and no
+   `EXIF`, `XMP ` or `ICCP` chunk (WebP). Senders should keep a JPEG under 6 MiB (step q85 → q75 →
+   q65).
+3. **The thumbnail is a downscale of the same oriented, scaled bitmap** that was re-encoded. An
+   embedded EXIF/JFIF thumbnail, the MediaStore thumbnail or the picker's preview is never used.
+4. **Decode, re-encode, encrypt (§14.3) and persist** (the ciphertext file plus the sealed
+   envelope) complete **in-process before the row is committed as sending**; the picker grant dies
+   with the process. A half-made row is deleted on the next start.
+5. **The sender stores the complete envelope it sends** (blob reference, key, `plain_size`, mime,
+   size, thumb, caption); its local ciphertext file is only a cache of the blob. So its own image
+   is restorable on its other devices and after a reinstall (§13) while the blob lives.
+6. A background job uploads (§14.2) and stores the blob reference; then the outbox sends the
+   envelope as an e2ee `msg:send` (encrypted at send time, `stale_epoch` handling unchanged). An
+   image row **never blocks the outbox**, while uploading or after failing; text typed during an
+   upload is sent first. The sender's bubble keeps its pick position; recipients order by arrival.
+7. Failures: `quota_exceeded` → "You've reached your photo storage limit. Older photos free up
+   space after 30 days."; `too_large` → "This photo is too large"; `not_e2ee` → "Couldn't send:
+   this chat isn't end-to-end encrypted yet."; `storage_full` → "Couldn't send the photo. Try
+   again later." Each failed bubble offers Retry / Delete; cancel deletes an uploaded blob.
+
+**Receiving**
+1. Validate the envelope (§14.4), then persist it and show the thumbnail inside the same
+   transaction as the cursor. Nothing is fetched inside it.
+2. **Storage:** the `enc` key and the thumbnail bytes are stored **sealed with the client's
+   database key** (on Android, `KvSealer` under `MlsDbKey`, AAD bound to the message row). The
+   ciphertext is cached as served, in app-private storage; no plaintext image is written to disk
+   (no image library disk cache, no temp files).
+3. **Download** outside the transaction (streamed, resumable with `Range` + `If-Range`). **Order:**
+   size → SHA-256 → every segment and the final flag (§14.3) → padding → decode. Unverified bytes
+   never reach a decoder.
+4. **Decoding untrusted images** (a 0-click surface): sniff the format from the bytes, accept only
+   JPEG, PNG and WebP, and require it to match `mime`; never route to HEIF, GIF, DNG or video
+   decoders. Read the header first and refuse any image larger than 2048 px per side (128 px for a
+   thumbnail) or differing from the envelope `w`/`h` beyond rounding, before allocating pixels.
+   Software allocation only, off the main thread, with a per-image timeout, and decode to the
+   display size.
+5. Errors: `404` → "This photo is no longer available" (the thumbnail stays); a size, digest, AEAD,
+   padding or decode failure → "Couldn't open this photo" (one re-download, then give up; logged
+   without bytes).
+6. **Cache eviction never destroys the last copy:** an LRU (about 500 MiB) evicts only images
+   whose blob is still fetchable (`server_ts + 29 days`); older images and unsent outgoing images
+   are kept until an explicit user action. Deleting a message or chat deletes its key and cached
+   ciphertext in the same transaction.
+7. **Auto-download:** on unmetered networks in the background; on metered networks only images
+   visible in an open chat (and queued for the next unmetered network); tap-only with Data Saver
+   or roaming. A setting comes later.
+8. **Save to gallery** (user action only) **re-encodes** the decrypted image (§14.7 Sending 2) and
+   never writes the sender's bytes as received: a receiver doesn't rely on a sender's re-encode.
+   MediaStore (`Pictures/RisiMe`) on API 29+, the system Save dialog (`ACTION_CREATE_DOCUMENT`) on
+   API 26–28; no storage permission on any version. It's the only path by which plaintext leaves
+   the app.
+9. **Notifications and the chat list:** "📷 Photo" or "📷 <caption>"; never the image itself.
+   Reactions, "Read by" and long-press work as for text; Copy copies the caption.
+
+### 14.8 Server storage
+- `blobs` (§12.10) gains `client_blob_id` (unique per owner), `deleted_at`, and `purpose` values
+  `media` and `icon`; `inserted_at` is the upload time; **`expires_at` becomes nullable** (null =
+  the current group icon). Indexes on `(owner, purpose)` for the quota and on `conversation_id`.
+- Bytes stay in `BLOB_DIR/<2 hex>/<uuid>`, mode 600, written through `BLOB_DIR/.tmp/` and renamed
+  after the SHA-256 is known. Never served with a client-chosen name.
+- **Membership history** for the `media` read rule, in Postgres:
+  `group_member_intervals(group_id, user_id, active_from, active_until | null)`, opened when a
+  member becomes `active` and closed when they turn `pending_remove` (or are deleted or reset), in
+  the same transaction as the state change; at most one open interval per pair. Read check: an
+  interval with `active_until` null or ≥ the blob's upload time. Existing active members get one
+  open interval at migration.
+- **Expiry:** one sweep deletes rows with `expires_at ≤ now` in batches and then their files; a
+  weekly pass removes files without a row (crashes, deleted users, restores); `.tmp/` files older
+  than an hour are removed.
+- Upload concurrency is bound to the request process (released when it dies), not a counter.
+- **Backups:** blobs are immutable, so blob backups are **incremental** (`rsync --link-dest` to
+  the previous set): each set looks complete but stores only new blobs. A row whose file is missing
+  after a restore serves `404`.
+- Image messages are ordinary ciphertext rows in Cassandra; no Cassandra change.
+
+### 14.9 Privacy and the learning log
+- **The server learns:** padded blob sizes (Padmé leaks O(log log L) bits), upload and download
+  times and identities (an upload followed by a `msg:send` links the blob to the message; a
+  download is a read signal similar to a receipt; auto-download is an "opened the chat" signal),
+  the conversation and the `purpose`. The pilot's access logs hold the same who-uploaded-where
+  trail. It does not learn content, MIME type, dimensions, caption or thumbnail.
+- MLS application messages are not padded yet, so a message's length shows text versus image and
+  the caption length (crypto S1, a later core change).
+- **People removed from a group keep what was shared while they were in it** (MLS removal gives
+  secrecy for later messages, not retroactive revocation). Joiners can fetch pre-join `media`
+  blobs only if they learn a `blob_id`, which lives inside encrypted envelopes.
+- **On the device,** captions, like text bodies, are stored in the clear in the app sandbox until
+  the database itself is encrypted (a later decision); keys and thumbnails are sealed (§14.7).
+- No server-side model ever sees an image. On the device, the behaviour log records "image sent"
+  with byte size and dimensions only, never content or caption.
+- This goes in the app's privacy note with the typing and presence metadata (§10.0).
+
+### 14.10 Test coverage (all gates)
+- **Crypto:** every vector in `media_vectors.json`; key reuse impossible through the API.
+- **Server:** streaming upload (no body buffering; `413` mid-stream when `Content-Length` lies);
+  each pre-body refusal and its order; idempotency (`200` replay, mismatch `400`, deleted `404`,
+  concurrent same-id race); quota under concurrency; `507` from the guard; the `dm:` upload and
+  read branches (both users, a third user `404`, read after unfriending, plaintext DM `409`); the
+  interval invariant (an open interval exists iff `state = active`) and the removed-after /
+  removed-before / `pending_add` / owner-after-leaving reads; icon revocation on removal; ranges
+  (`206`, suffix, `416`, `If-Range`, `304`, an expiry race → `404`); the sweep, superseded icons
+  and the orphan pass; the release checklist's edge test that Caddy returns `206` without
+  `Content-Encoding`.
+- **Android:** the vectors through the core; envelope encode/decode of every new example and the
+  malformed drops; the 22 KiB bound; the re-encode byte-level metadata checks (EXIF orientation,
+  GPS, XMP, P3 ICC, embedded thumbnail, gain map); the upload state machine; the outbox
+  never blocking; resumed downloads with digest-before-decrypt; the LRU rules; no network inside
+  the receive transaction; the live interop cases (DM, range, refusals, group membership reads,
+  the sender's other device, `images_ready`, usage and limits).
+
 ## Changelog
+- **v1.11** (2026-10-06): encrypted images (§14), reviewed by crypto, server and android. The
+  `images` capability with `images_ready`/`missing_images`; blob purposes `media` (16 MiB, 2 GiB
+  live per user, 120/h, 1000/day) and `icon`; streamed idempotent uploads by `client_blob_id`;
+  single-range downloads with ETag/`If-Range`/`304`/`416`; per-purpose readers with the
+  membership-interval rule and the owner; `GET /blobs/usage`; the `A256GCM-S64K` segmented,
+  Padmé-padded blob format with `contract/v1/media_vectors.json`; the `image` envelope with strict
+  receive validation; encrypted group icons; errors `409 not_e2ee`, `415 bad_media_type`,
+  `507 storage_full`. No new event kinds. An additive change.
 - **v1.10** (2026-10-06): history after a reinstall (§13), reviewed by server and android.
   Every stored `message`/`reaction` event goes to every member user, the sender included (the
   plaintext DM sender copy, never pushed, published before the recipient's event); self-acks are

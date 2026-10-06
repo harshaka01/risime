@@ -142,6 +142,20 @@ class ContractExamplesTest {
         "inbox_join_reply_v110.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "event_message_sender_copy.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "error_quota_exceeded.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.11 (encrypted images, §14): parse-only placeholders added by root with the contract
+        // merge; the android role replaces them with typed decoders when it implements §14.
+        "image_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "image_payload_no_thumb.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "image_payload_png.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "image_payload_bad_key.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "group_meta_icon.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "blob_upload_media_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "blob_usage_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "device_put_images.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_group_images_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_not_e2ee.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_storage_full.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_bad_media_type.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
     )
 
     private fun groupEvent(s: String, action: String): GroupEvent =
