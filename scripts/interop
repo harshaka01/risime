@@ -17,6 +17,7 @@ cleanup() {
   rm -rf -- "${DIR:?}"
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM   # make interrupts run the EXIT cleanup too
 for p in 4100 4799; do ss -ltnH "sport = :$p" | grep -q . && { echo "port $p busy"; exit 1; }; done
 
 cat > "$DIR/jwks.py" <<'PY'

@@ -9,15 +9,23 @@ import Ecto.Query
 [mode, dir] = System.argv() |> Enum.take(2) |> then(fn a -> a ++ List.duplicate(nil, 2 - length(a)) end)
 phones = ~w(+94770000921 +94770000922 +94770000911 +94770000912 +94770000913 +94770000914 +94770000915 +94770000916 +94770000931 +94770000932 +94770000933)
 
-case mode do
-  "cleanup" ->
-    # MLS group rows are keyed by conversation id (not linked to users): remove those first.
-    ids = Repo.all(from x in User, where: x.phone in ^phones, select: x.id)
-    pats = Enum.map(ids, &("%" <> &1 <> "%"))
+# Removes every interop fixture: users (cascading devices, tokens, friendships, invites...),
+# allowlist rows, and MLS group rows (keyed by conversation id, not linked to users).
+purge = fn ->
+  ids = Repo.all(from x in User, where: x.phone in ^phones, select: x.id)
+  pats = Enum.map(ids, &("%" <> &1 <> "%"))
+  if pats != [] do
     for t <- ~w(mls_commits mls_group_devices mls_groups),
         do: Repo.query!("DELETE FROM #{t} WHERE conversation_id LIKE ANY($1)", [pats])
-    {u, _} = Repo.delete_all(from x in User, where: x.phone in ^phones)
-    {a, _} = Repo.delete_all(from x in AllowlistEntry, where: x.phone in ^phones)
+  end
+  {u, _} = Repo.delete_all(from x in User, where: x.phone in ^phones)
+  {a, _} = Repo.delete_all(from x in AllowlistEntry, where: x.phone in ^phones)
+  {u, a}
+end
+
+case mode do
+  "cleanup" ->
+    {u, a} = purge.()
     IO.puts("interop cleanup: users=#{u} allowlist=#{a}")
 
   "keys" ->
@@ -33,6 +41,9 @@ case mode do
     IO.puts("interop keys: ok")
 
   "setup" ->
+    # A killed earlier run skips its cleanup; never reuse its users (stale MLS groups, friendships).
+    {su, sa} = purge.()
+    if su + sa > 0, do: IO.puts("interop setup: purged leftovers users=#{su} allowlist=#{sa}")
     iss = "http://127.0.0.1:4799/realms/itest"
     jwk = dir |> Path.join("key.json") |> File.read!() |> Jason.decode!() |> JOSE.JWK.from_map()
 
