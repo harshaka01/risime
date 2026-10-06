@@ -1,5 +1,6 @@
 package lk.codegen.risime.data.media
 
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -77,7 +78,25 @@ fun uploadFailureText(reason: String?): String = when (reason) {
     AuthErrors.TOO_LARGE -> "This photo is too large"
     AuthErrors.NOT_E2EE -> "Couldn't send: this chat isn't end-to-end encrypted yet."
     AuthErrors.STORAGE_FULL -> "Couldn't send the photo. Try again later."
-    else -> "Couldn't send the photo"
+    else -> "Couldn't send photo"
+}
+
+/**
+ * In-memory upload progress per client_msg_id (0..1), fed by the upload job's request body and
+ * shown as a determinate ring and "Uploading 42%" on the sender's bubble. Updates only when the
+ * whole percent changes; an entry goes when its attempt ends (the row's state takes over).
+ */
+class UploadProgress {
+    private val state = kotlinx.coroutines.flow.MutableStateFlow<Map<String, Float>>(emptyMap())
+    val flow: kotlinx.coroutines.flow.StateFlow<Map<String, Float>> get() = state
+
+    fun set(clientMsgId: String, sent: Long, total: Long) {
+        if (total <= 0) return
+        val f = (sent.toDouble() / total).coerceIn(0.0, 1.0).toFloat()
+        state.update { m -> if (m[clientMsgId]?.let { (it * 100).toInt() == (f * 100).toInt() } == true) m else m + (clientMsgId to f) }
+    }
+
+    fun clear(clientMsgId: String) = state.update { it - clientMsgId }
 }
 
 /**
@@ -93,12 +112,19 @@ class ImageUploader(
     private val files: MediaFiles,
     private val clock: () -> Long = System::currentTimeMillis,
     private val newBlobId: () -> String = { UUID.randomUUID().toString() },
+    val progress: UploadProgress = UploadProgress(),
 ) {
     private val locks = HashMap<String, Mutex>()
 
     private fun lockFor(id: String) = synchronized(locks) { locks.getOrPut(id) { Mutex() } }
 
-    suspend fun attempt(clientMsgId: String): UploadOutcome = lockFor(clientMsgId).withLock {
+    suspend fun attempt(clientMsgId: String): UploadOutcome = try {
+        attemptLocked(clientMsgId)
+    } finally {
+        progress.clear(clientMsgId)
+    }
+
+    private suspend fun attemptLocked(clientMsgId: String): UploadOutcome = lockFor(clientMsgId).withLock {
         val row = media.get(clientMsgId) ?: return UploadOutcome.Failed("deleted")
         when (row.state) {
             MediaState.UPLOADED.name -> return UploadOutcome.Done(row.blobId!!)
@@ -111,7 +137,7 @@ class ImageUploader(
             ?: return fail(row, "file_lost")
         val cbid = row.clientBlobId ?: newBlobId()
         media.update(row.copy(state = MediaState.UPLOADING.name, clientBlobId = cbid))
-        val r = api.uploadMediaBlob(row.conversationId, cbid, file)
+        val r = api.uploadMediaBlob(row.conversationId, cbid, file, onProgress = { sent, total -> progress.set(clientMsgId, sent, total) })
         val cur = media.get(clientMsgId) ?: return UploadOutcome.Failed("deleted") // cancelled meanwhile
         when (r) {
             is ApiResult.Ok -> {

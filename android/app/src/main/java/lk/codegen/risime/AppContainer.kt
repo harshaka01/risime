@@ -256,6 +256,7 @@ class AppContainer(
     val images = lk.codegen.risime.data.media.ImageRepository(
         db.media(), db.messages(), dbTx, mediaSealer, mediaFiles, { mediaCrypto }, api,
         enqueueUpload = { id -> lk.codegen.risime.push.MediaUploadWorker.enqueue(appContext, id) },
+        restartUpload = { id -> lk.codegen.risime.push.MediaUploadWorker.enqueue(appContext, id, replace = true) },
         cancelUpload = { id -> lk.codegen.risime.push.MediaUploadWorker.cancel(appContext, id) },
         enqueueDownloads = { scheduleImageDownloads() },
         log = { Log.w("RisiMe", it) },

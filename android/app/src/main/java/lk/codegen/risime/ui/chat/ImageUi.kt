@@ -55,7 +55,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import lk.codegen.risime.data.MessageStatus
 import lk.codegen.risime.data.db.MediaEntity
+import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.data.db.MediaState
 import lk.codegen.risime.data.media.uploadFailureText
 import lk.codegen.risime.ui.theme.Spacing
@@ -91,6 +93,52 @@ fun imageTapLabel(t: ImageTap): String? = when (t) {
     ImageTap.NONE -> null
 }
 
+/** The sender's side of a photo going out (§14.7 Sending 6–7), shown on its bubble. */
+sealed interface PhotoSend {
+    /** Encrypted and stored; the upload job hasn't started (or waits for a network). */
+    data object Encrypted : PhotoSend
+
+    /** The upload runs; [fraction] 0..1 from the request body (null before the first byte). */
+    data class Uploading(val fraction: Float?) : PhotoSend
+
+    /** An attempt failed on the network / 5xx / 429 / 507: retried automatically with backoff (Retry runs it now). */
+    data object Waiting : PhotoSend
+
+    /** Uploaded; the outbox sends the envelope. */
+    data object Sending : PhotoSend
+
+    /** A refusal no automatic retry fixes, or the send failed: Retry / Delete. */
+    data class Failed(val text: String) : PhotoSend
+}
+
+const val PHOTO_SEND_FAILED = "Couldn't send photo"
+const val PHOTO_RETRY = "Retry"
+
+fun photoSendState(m: MessageEntity, row: MediaEntity?, progress: Float?): PhotoSend? {
+    if (!m.outgoing || !m.image) return null
+    val failed = m.status == MessageStatus.FAILED.name
+    return when {
+        row?.state == MediaState.FAILED.name -> PhotoSend.Failed(uploadFailureText(row.failReason))
+        failed -> PhotoSend.Failed(uploadFailureText(m.failReason ?: row?.failReason))
+        row?.state == MediaState.UPLOADING.name -> PhotoSend.Uploading(progress)
+        row?.state == MediaState.ENCRYPTED.name -> when {
+            progress != null -> PhotoSend.Uploading(progress)
+            row.attempts > 0 -> PhotoSend.Waiting
+            else -> PhotoSend.Encrypted
+        }
+        m.status == MessageStatus.PENDING.name && row != null -> PhotoSend.Sending
+        else -> null
+    }
+}
+
+fun photoSendText(s: PhotoSend): String = when (s) {
+    PhotoSend.Encrypted -> "Encrypted · waiting to upload"
+    is PhotoSend.Uploading -> s.fraction?.let { "Uploading ${(it * 100).toInt()}%" } ?: "Uploading…"
+    PhotoSend.Waiting -> "Upload interrupted · retrying"
+    PhotoSend.Sending -> "Sending…"
+    is PhotoSend.Failed -> s.text
+}
+
 /** The bubble's aspect ratio from the envelope size, clamped so a panorama or a strip stays tappable. */
 fun bubbleAspect(w: Int, h: Int): Float = (w.toFloat() / h.coerceAtLeast(1)).coerceIn(0.5f, 2.5f)
 
@@ -108,6 +156,10 @@ fun ImageBox(
     status: String?,
     busy: Boolean,
     modifier: Modifier = Modifier,
+    /** Determinate upload progress 0..1 (a ring that fills) instead of the spinner. */
+    progress: Float? = null,
+    /** A tap target on the state line ("Couldn't send photo · Retry"). */
+    action: Pair<String, () -> Unit>? = null,
 ) {
     Box(
         modifier.widthIn(max = 260.dp).fillMaxWidth().aspectRatio(bubbleAspect(w, h)).heightIn(min = 96.dp)
@@ -122,24 +174,48 @@ fun ImageBox(
                 contentScale = ContentScale.Crop,
             )
         }
-        if (busy) CircularProgressIndicator(Modifier.size(36.dp), color = Color.White, trackColor = Color.Black.copy(alpha = 0.3f))
-        status?.let {
-            Text(
-                it,
-                Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color.Black.copy(alpha = 0.55f))
-                    .padding(horizontal = Spacing.sm, vertical = Spacing.xxs),
-                color = Color.White,
-                style = MaterialTheme.typography.labelMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+        if (progress != null) {
+            CircularProgressIndicator(
+                progress = { progress }, modifier = Modifier.size(36.dp), color = Color.White, trackColor = Color.Black.copy(alpha = 0.3f),
             )
+        } else if (busy) {
+            CircularProgressIndicator(Modifier.size(36.dp), color = Color.White, trackColor = Color.Black.copy(alpha = 0.3f))
+        }
+        if (status != null) {
+            Row(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color.Black.copy(alpha = 0.55f))
+                    .padding(start = Spacing.sm, end = if (action != null) Spacing.xxs else Spacing.sm, top = Spacing.xxs, bottom = Spacing.xxs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    status,
+                    Modifier.weight(1f),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                action?.let { (label, onClick) ->
+                    TextButton(onClick = onClick) { Text(label, color = Color.White, style = MaterialTheme.typography.labelLarge) }
+                }
+            }
         }
     }
 }
 
-/** Loads the thumbnail and (when cached) the full image for one bubble; asks for a download when visible. */
+/**
+ * Loads the thumbnail and (when cached) the full image for one bubble; asks for a download when
+ * visible. [send] is the sender's progress / failure ([photoSendState]); [onRetry] the Retry tap
+ * target of a failed or waiting photo (null: not offered).
+ */
 @Composable
-fun ImageBubbleContent(row: MediaEntity?, loader: ImageLoader?, onVisible: (String) -> Unit) {
+fun ImageBubbleContent(
+    row: MediaEntity?,
+    loader: ImageLoader?,
+    onVisible: (String) -> Unit,
+    send: PhotoSend? = null,
+    onRetry: (() -> Unit)? = null,
+) {
     val slotPx = with(LocalDensity.current) { 260.dp.roundToPx() }
     var thumb by remember(row?.clientMsgId) { mutableStateOf(row?.clientMsgId?.let { loader?.cachedThumb(it) }) }
     var full by remember(row?.clientMsgId) { mutableStateOf(row?.clientMsgId?.let { loader?.cached(it, slotPx) }) }
@@ -152,12 +228,18 @@ fun ImageBubbleContent(row: MediaEntity?, loader: ImageLoader?, onVisible: (Stri
             onVisible(row.clientMsgId)
         }
     }
-    val status = imageStatusText(row)
+    val status = send?.let(::photoSendText) ?: imageStatusText(row)
     ImageBox(
         w = row?.w ?: 4, h = row?.h ?: 3,
         thumb = thumb?.asImageBitmap(), full = full?.asImageBitmap(),
         status = status,
-        busy = row?.state in setOf(MediaState.ENCRYPTED.name, MediaState.UPLOADING.name, MediaState.DOWNLOADING.name),
+        busy = when (send) {
+            null -> row?.state in setOf(MediaState.ENCRYPTED.name, MediaState.UPLOADING.name, MediaState.DOWNLOADING.name)
+            PhotoSend.Encrypted, PhotoSend.Sending, is PhotoSend.Uploading -> true
+            PhotoSend.Waiting, is PhotoSend.Failed -> false
+        },
+        progress = (send as? PhotoSend.Uploading)?.fraction,
+        action = onRetry?.takeIf { send is PhotoSend.Failed || send == PhotoSend.Waiting }?.let { PHOTO_RETRY to it },
     )
 }
 
@@ -236,7 +318,11 @@ fun ImageViewerContent(
 
 /** Attach flow states (§14.7 Sending): preparing (re-encode + encrypt in-process), ready to send, or refused. */
 sealed interface AttachState {
+    /** Re-encoding (metadata stripped, ≤ 2048 px). */
     data object Preparing : AttachState
+
+    /** Encrypting into the blob file (the key never leaves the device unencrypted). */
+    data object Encrypting : AttachState
 
     class Ready(val thumb: Bitmap?, val w: Int, val h: Int) : AttachState
 
@@ -274,10 +360,10 @@ fun AttachSheetContent(
         Column(Modifier.padding(Spacing.lg).width(300.dp), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
             Text("Send photo", style = MaterialTheme.typography.titleMedium)
             when (state) {
-                AttachState.Preparing -> Row(verticalAlignment = Alignment.CenterVertically) {
+                AttachState.Preparing, AttachState.Encrypting -> Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(24.dp))
                     Spacer(Modifier.size(Spacing.sm))
-                    Text("Preparing photo…")
+                    Text(if (state == AttachState.Encrypting) "Encrypting photo…" else "Preparing photo…")
                 }
                 is AttachState.Ready -> ImageBox(state.w, state.h, state.thumb?.asImageBitmap(), null, null, busy = false)
                 is AttachState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = state.message })

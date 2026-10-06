@@ -48,14 +48,15 @@ class MediaUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
 
         fun name(id: String) = "media-up-$id"
 
-        fun enqueue(context: Context, clientMsgId: String) {
+        /** [replace]: run now even if a previous job waits in its backoff ("Retry" on a waiting photo). */
+        fun enqueue(context: Context, clientMsgId: String, replace: Boolean = false) {
             val req = OneTimeWorkRequestBuilder<MediaUploadWorker>()
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .setInputData(workDataOf(KEY_ID to clientMsgId))
                 .build()
-            WorkManager.getInstance(context).enqueueUniqueWork(name(clientMsgId), ExistingWorkPolicy.KEEP, req)
+            WorkManager.getInstance(context).enqueueUniqueWork(name(clientMsgId), if (replace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, req)
         }
 
         fun cancel(context: Context, clientMsgId: String) {

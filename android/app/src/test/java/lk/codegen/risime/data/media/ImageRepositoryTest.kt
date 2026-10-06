@@ -42,7 +42,7 @@ class ImageRepositoryTest {
         files = MediaFiles(tmp.newFolder("media"))
         repo = ImageRepository(
             media, messages, tx, sealer, files, { crypto }, ApiClient(OkHttpClient(), { server.url("/").toString() }, { "t" }),
-            enqueueUpload = { log += "upload $it" }, cancelUpload = { log += "cancel $it" }, enqueueDownloads = { log += "downloads" },
+            enqueueUpload = { log += "upload $it" }, restartUpload = { log += "restart $it" }, cancelUpload = { log += "cancel $it" }, enqueueDownloads = { log += "downloads" },
             clock = { 5_000 }, newId = { "id${++ids}" },
         )
     }
@@ -97,19 +97,58 @@ class ImageRepositoryTest {
     }
 
     @Test
-    fun retryAfterAFailedUploadUsesANewClientBlobId() = runBlocking {
+    fun retryAfterAFailedUploadKeepsTheClientBlobIdForTheServersReplay() = runBlocking {
         val p = repo.prepare(Fixtures.jpeg(Fixtures.image(40, 30)), ImagePipeline(AwtBitmapOps()))
         val row = repo.commit(p, "dm:a_b", "a", "b", "")
         val before = media.get(row.clientMsgId)!!
-        media.update(before.copy(state = MediaState.FAILED.name, failReason = "quota_exceeded"))
+        media.update(before.copy(state = MediaState.FAILED.name, failReason = "quota_exceeded", attempts = 3))
         messages.failPending(row.clientMsgId, "quota_exceeded")
         log.clear()
         assertTrue(repo.retry(row.clientMsgId))
         val after = media.get(row.clientMsgId)!!
         assertEquals(MediaState.ENCRYPTED.name, after.state)
-        assertTrue(after.clientBlobId != before.clientBlobId)
+        assertEquals(before.clientBlobId, after.clientBlobId) // §14.2: a lost 201 replays 200, even at the quota
+        assertEquals(0, after.attempts)
+        assertNull(after.failReason)
         assertEquals("PENDING", messages.rows[row.clientMsgId]!!.status)
         assertEquals(listOf("upload ${row.clientMsgId}"), log)
+    }
+
+    @Test
+    fun retryAfterADigestMismatchOrADeletedIdUsesANewClientBlobId() = runBlocking {
+        for (reason in listOf("digest_mismatch", "not_found", "bad_request")) {
+            val row = repo.commit(repo.prepare(Fixtures.jpeg(Fixtures.image(40, 30)), ImagePipeline(AwtBitmapOps())), "dm:a_b", "a", "b", "")
+            val before = media.get(row.clientMsgId)!!
+            media.update(before.copy(state = MediaState.FAILED.name, failReason = reason))
+            messages.failPending(row.clientMsgId, reason)
+            assertTrue(repo.retry(row.clientMsgId))
+            assertTrue(reason, media.get(row.clientMsgId)!!.clientBlobId != before.clientBlobId)
+        }
+    }
+
+    @Test
+    fun retryOnAnUploadWaitingInItsBackoffRunsItNow() = runBlocking {
+        val row = repo.commit(repo.prepare(Fixtures.jpeg(Fixtures.image(40, 30)), ImagePipeline(AwtBitmapOps())), "dm:a_b", "a", "b", "")
+        val before = media.get(row.clientMsgId)!!
+        media.update(before.copy(attempts = 2, nextAt = 60_000))
+        log.clear()
+        assertTrue(repo.retry(row.clientMsgId))
+        val after = media.get(row.clientMsgId)!!
+        assertEquals(0L, after.nextAt)
+        assertEquals(before.clientBlobId, after.clientBlobId)
+        assertEquals(listOf("restart ${row.clientMsgId}"), log)
+        // Not waiting (never tried yet, or uploading right now): nothing to restart.
+        media.update(after.copy(attempts = 0))
+        log.clear()
+        assertFalse(repo.retry(row.clientMsgId))
+        assertTrue(log.isEmpty())
+    }
+
+    @Test
+    fun prepareReportsTheEncryptingStep() {
+        val steps = mutableListOf<PrepareStep>()
+        repo.prepare(Fixtures.jpeg(Fixtures.image(40, 30)), ImagePipeline(AwtBitmapOps())) { steps += it }
+        assertEquals(listOf(PrepareStep.REENCODING, PrepareStep.ENCRYPTING), steps)
     }
 
     @Test
