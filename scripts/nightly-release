@@ -36,7 +36,9 @@ else echo "can't parse VERSION '$cur'"; exit 1; fi
 git rev-parse -q --verify "refs/tags/v$next" >/dev/null && { echo "tag v$next exists"; exit 1; }
 echo "==> $cur -> $next"
 echo "$next" > VERSION
-trap 'git checkout -q -- VERSION 2>/dev/null || true' ERR
+RELEASED=0
+# Restore VERSION on ANY failed exit (explicit `exit 1` included), not only on command errors.
+trap '[ "$RELEASED" = 1 ] || git checkout -q -- VERSION 2>/dev/null || true' EXIT
 
 echo "==> server gate"
 (cd server && $M mix format --check-formatted && $M mix compile --warnings-as-errors && $M mix test)
@@ -55,7 +57,7 @@ PIN_ARGS=(); [ -f "$PIN_FILE" ] && PIN_ARGS=("-Prisime.mlsPinnedKeys=$(tr -d '\n
 (cd android && $M ./gradlew --no-configuration-cache "${PIN_ARGS[@]}" assembleDebug testDebugUnitTest assembleRelease)
 
 echo "==> live interop (scripts/interop: real Android clients vs a temp server from this checkout)"
-scripts/interop
+RISIME_GRADLE_ARGS="${PIN_ARGS[*]}" scripts/interop
 
 APK=android/app/build/outputs/apk/release/app-release.apk
 BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
@@ -79,8 +81,8 @@ git commit -q -m "chore(root): release v$next
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git tag -a "v$next" -m "RisiMe v$next"
 git push -q origin main "v$next"
+RELEASED=1
 git push -q spark2-backup main "v$next" 2>/dev/null || echo "warn: spark2-backup push failed"
-trap - ERR
 
 out="$REL/v$next"; mkdir -p "$out"
 cp "$APK" "$out/risime-$next.apk"

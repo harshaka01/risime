@@ -44,7 +44,10 @@ curl -sf -o /dev/null http://127.0.0.1:4100/health || { echo "interop server did
 
 echo "==> LiveInteropTest + LiveE2eeInteropTest against 127.0.0.1:4100 (E2EE on with a temp key)"
 set +e
-(cd android && RISIME_INTEROP_CONFIG="$DIR/interop.json" $M ./gradlew --no-configuration-cache \
+# Extra Gradle args from the caller (nightly-release passes the pinned attestation key, so the
+# release outputs it regenerates keep the pin).
+read -r -a EXTRA_GRADLE <<< "${RISIME_GRADLE_ARGS:-}"
+(cd android && RISIME_INTEROP_CONFIG="$DIR/interop.json" $M ./gradlew --no-configuration-cache "${EXTRA_GRADLE[@]}" \
   testDebugUnitTest --tests 'lk.codegen.risime.live.LiveInteropTest' --tests 'lk.codegen.risime.live.LiveE2eeInteropTest' -i 2>&1) > "$DIR/gradle.log"
 rc=$?
 set -e
