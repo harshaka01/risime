@@ -20,17 +20,25 @@ defmodule RisiMeWeb.AuthController do
   def request(conn, params) do
     case Accounts.request_otp(params["phone"], params["email"]) do
       :ok -> json(conn, %{status: "sent", expires_in: Accounts.otp_ttl_seconds()})
-      {:error, :rate_limited} -> ApiError.send_error(conn, 429, :rate_limited)
+      {:error, :rate_limited} -> ApiError.send_error(conn, 429, :rate_limited, retry_after: 900)
       {:error, code} -> ApiError.send_error(conn, 422, code)
     end
   end
 
   def verify(conn, params) do
     case Accounts.verify_otp(params["phone"], params["code"], params["device_name"]) do
-      {:ok, token, user} -> json(conn, %{token: token, user: ApiJSON.user(user)})
-      {:error, :invalid_code} -> ApiError.send_error(conn, 401, :invalid_code)
-      {:error, :expired} -> ApiError.send_error(conn, 410, :expired)
-      {:error, :too_many_attempts} -> ApiError.send_error(conn, 429, :too_many_attempts)
+      # A dev-login session counts as verified (contract v1.4 §7.1).
+      {:ok, token, user} ->
+        json(conn, %{token: token, user: ApiJSON.user(user, true)})
+
+      {:error, :invalid_code} ->
+        ApiError.send_error(conn, 401, :invalid_code)
+
+      {:error, :expired} ->
+        ApiError.send_error(conn, 410, :expired)
+
+      {:error, :too_many_attempts} ->
+        ApiError.send_error(conn, 429, :too_many_attempts, retry_after: 60)
     end
   end
 

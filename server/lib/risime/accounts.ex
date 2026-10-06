@@ -4,6 +4,8 @@ defmodule RisiMe.Accounts do
   """
   import Ecto.Query
 
+  require Logger
+
   alias RisiMe.{RateLimiter, Repo}
 
   alias RisiMe.Accounts.{
@@ -298,6 +300,217 @@ defmodule RisiMe.Accounts do
       )
 
     count
+  end
+
+  ## Phone verification (contract v1.4 §7, decision 021)
+
+  @phone_ttl_seconds 300
+  @phone_max_attempts 5
+  @phone_requests_per_user 3
+  @phone_request_window :timer.minutes(15)
+  @sms_per_phone_24h 5
+  @sms_per_server_hour 30
+
+  @doc "True when the server requires phone verification (`PHONE_VERIFICATION=required`)."
+  def phone_verification_required?,
+    do: Application.get_env(:risime, :phone_verification, :off) == :required
+
+  @doc "The user's current phone is the one they last verified (stored state only)."
+  def phone_verified?(%User{phone: phone, phone_verified_for: verified}),
+    do: is_binary(verified) and verified == phone
+
+  @doc """
+  `User.phone_verified` for a session: true when verification isn't required, for dev-login
+  sessions (never stored), or when the stored phone is verified.
+  """
+  def phone_verified?(%User{} = user, auth_kind) do
+    not phone_verification_required?() or auth_kind == :dev or phone_verified?(user)
+  end
+
+  @type phone_request_error ::
+          :already_verified | :sms_unavailable | {:rate_limited, pos_integer}
+
+  @doc """
+  Sends a 6-digit code by SMS to the user's allowlisted phone. Checks, in order: already
+  verified, an SMS-reachable `+94` number and an available sender, then 3 requests per user per
+  15 min (in memory), 5 SMS per phone per 24 h and 30 per server per hour (counted in
+  `phone_challenges`, so they survive restarts). Every attempted send counts.
+  """
+  @spec request_phone_verification(%User{}) ::
+          {:ok, %{expires_in: pos_integer, to: String.t()}} | {:error, phone_request_error}
+  def request_phone_verification(%User{} = user) do
+    with :ok <- not_verified(user),
+         :ok <- sms_reachable(user.phone),
+         :ok <- per_user_limit(user),
+         :ok <- budget(:phone, user.phone),
+         :ok <- budget(:server, nil) do
+      send_phone_code(user)
+    end
+  end
+
+  defp not_verified(user),
+    do: if(phone_verified?(user), do: {:error, :already_verified}, else: :ok)
+
+  defp sms_reachable("+94" <> _) do
+    case OtpSender.sms_sender() do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("phone verification: no SMS sender (#{reason})")
+        {:error, :sms_unavailable}
+    end
+  end
+
+  defp sms_reachable(_phone) do
+    Logger.warning("phone verification: allowlisted phone isn't a +94 number; SMS not sent")
+    {:error, :sms_unavailable}
+  end
+
+  defp per_user_limit(user) do
+    case RateLimiter.hit(
+           :phone_verify_request,
+           user.id,
+           @phone_requests_per_user,
+           @phone_request_window
+         ) do
+      :ok ->
+        :ok
+
+      {:error, :rate_limited} ->
+        {:error, {:rate_limited, window_retry_after(@phone_request_window)}}
+    end
+  end
+
+  defp window_retry_after(window_ms) do
+    now = System.system_time(:millisecond)
+    max(1, div(window_ms - rem(now, window_ms) + 999, 1000))
+  end
+
+  defp budget(scope, phone) do
+    {limit, window_s} =
+      if scope == :phone, do: {@sms_per_phone_24h, 86_400}, else: {@sms_per_server_hour, 3_600}
+
+    since = DateTime.add(DateTime.utc_now(), -window_s, :second)
+    query = from c in PhoneChallenge, where: c.inserted_at > ^since
+    query = if scope == :phone, do: where(query, [c], c.phone == ^phone), else: query
+
+    case Repo.one(from c in query, select: {count(c.id), min(c.inserted_at)}) do
+      {n, oldest} when n >= limit ->
+        if scope == :server and RateLimiter.hit(:sms_budget_warning, :global, 1, 3_600_000) == :ok,
+          do:
+            Logger.warning(
+              "SMS server budget reached (#{limit}/h): verification requests refused"
+            )
+
+        retry = DateTime.diff(DateTime.add(oldest, window_s, :second), DateTime.utc_now())
+        {:error, {:rate_limited, max(retry, 1)}}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp send_phone_code(user) do
+    code = :crypto.strong_rand_bytes(4) |> :binary.decode_unsigned() |> rem(1_000_000)
+    code = code |> Integer.to_string() |> String.pad_leading(6, "0")
+
+    Repo.insert!(%PhoneChallenge{
+      user_id: user.id,
+      phone: user.phone,
+      code_hash: phone_code_hash(user.id, user.phone, code),
+      expires_at: DateTime.add(DateTime.utc_now(), @phone_ttl_seconds, :second)
+    })
+
+    message = %{
+      subject: nil,
+      code: code,
+      body: "Your RisiMe verification code is #{code}. It expires in 5 minutes. Do not share it."
+    }
+
+    masked = OtpSender.mask(user.phone)
+
+    case OtpSender.deliver(:sms, user.phone, message, masked) do
+      :ok -> {:ok, %{expires_in: @phone_ttl_seconds, to: masked}}
+      {:error, _} -> {:error, :sms_unavailable}
+    end
+  end
+
+  @doc """
+  Checks `code` against the user's latest phone challenge; on success stores the phone as
+  verified. Errors: `:already_verified`, `{:invalid_code, attempts_left | nil}`, `:expired`,
+  `:too_many_attempts`.
+  """
+  def confirm_phone_verification(%User{} = user, code) do
+    challenge =
+      Repo.one(
+        from c in PhoneChallenge,
+          where: c.user_id == ^user.id,
+          order_by: [desc: c.inserted_at],
+          limit: 1
+      )
+
+    cond do
+      phone_verified?(user) ->
+        {:error, :already_verified}
+
+      is_nil(challenge) or challenge.consumed_at != nil or challenge.phone != user.phone ->
+        {:error, {:invalid_code, nil}}
+
+      DateTime.compare(DateTime.utc_now(), challenge.expires_at) != :lt ->
+        {:error, :expired}
+
+      challenge.attempts >= @phone_max_attempts ->
+        {:error, :too_many_attempts}
+
+      not (is_binary(code) and
+               Plug.Crypto.secure_compare(
+                 phone_code_hash(user.id, user.phone, code),
+                 challenge.code_hash
+               )) ->
+        {n, _} =
+          Repo.update_all(
+            from(c in PhoneChallenge,
+              where: c.id == ^challenge.id and c.attempts < @phone_max_attempts
+            ),
+            inc: [attempts: 1]
+          )
+
+        if n == 0,
+          do: {:error, :too_many_attempts},
+          else: {:error, {:invalid_code, @phone_max_attempts - challenge.attempts - 1}}
+
+      true ->
+        consume_phone_challenge(user, challenge)
+    end
+  end
+
+  defp consume_phone_challenge(user, challenge) do
+    Repo.transaction(fn ->
+      {consumed, _} =
+        Repo.update_all(
+          from(c in PhoneChallenge,
+            where:
+              c.id == ^challenge.id and is_nil(c.consumed_at) and
+                c.attempts < @phone_max_attempts
+          ),
+          set: [consumed_at: DateTime.utc_now()]
+        )
+
+      {verified, _} =
+        Repo.update_all(from(u in User, where: u.id == ^user.id and u.phone == ^challenge.phone),
+          set: [phone_verified_for: challenge.phone]
+        )
+
+      if consumed == 1 and verified == 1,
+        do: Repo.get!(User, user.id),
+        else: Repo.rollback({:invalid_code, nil})
+    end)
+  end
+
+  defp phone_code_hash(user_id, phone, code) do
+    secret = Application.fetch_env!(:risime, RisiMeWeb.Endpoint)[:secret_key_base]
+    :crypto.mac(:hmac, :sha256, secret, user_id <> phone <> code)
   end
 
   ## Users

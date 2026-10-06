@@ -18,7 +18,7 @@ defmodule RisiMeWeb.ApiTest do
       post(conn, ~p"/api/v1/auth/verify", %{phone: entry.phone, code: code, device_name: "Pixel"})
 
     assert %{"token" => token, "user" => user} = json_response(conn2, 200)
-    assert Map.keys(user) |> Enum.sort() == ~w(company display_name id phone)
+    assert Map.keys(user) |> Enum.sort() == ~w(company display_name id phone phone_verified)
     assert user["phone"] == entry.phone
 
     assert %{"user" => ^user} = conn |> authed(token) |> get(~p"/api/v1/me") |> json_response(200)
@@ -65,7 +65,8 @@ defmodule RisiMeWeb.ApiTest do
              "id" => user["id"],
              "phone" => entry.phone,
              "display_name" => "Shenika Herath",
-             "company" => "CodeGen"
+             "company" => "CodeGen",
+             "phone_verified" => true
            }
 
     db_user = RisiMe.Repo.get_by!(RisiMe.Accounts.User, phone: entry.phone)

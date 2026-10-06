@@ -38,6 +38,8 @@ defmodule RisiMeWeb.Router do
 
     post "/auth/logout", AuthController, :logout
     get "/me", MeController, :show
+    post "/me/phone/verify/request", MeController, :phone_request
+    post "/me/phone/verify/confirm", MeController, :phone_confirm
     patch "/me", MeController, :update
     get "/contacts", ContactsController, :index
   end
