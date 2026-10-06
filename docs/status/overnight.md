@@ -1,23 +1,26 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
-## Where things stand (updated 2026-10-06 ~07:25 UTC)
-- **Live:** https://risime.risicloud.ai runs **v0.2.0-nightly.5 (invites and friends)** as the
-  systemd user service `risime.service`, with a health timer, pre-deploy backups (keep 7) and
-  `scripts/rollback` (decision 025).
-  - RisiCloud sign-in is on. Harsha and Shenika are both bound to Keycloak and are friends.
-- **Published:** https://risicloud.ai/app/risime/ (versionCode 20005, sha256 verified). Installed
-  apps get the update banner.
-- **Every release** now runs both gates plus `scripts/interop` (23 live checks with real Android
-  clients, friends flow included), backs up, publishes and switches.
+## Where things stand (updated 2026-10-06 ~08:35 UTC)
+- **Live:** https://risime.risicloud.ai runs **v0.2.0-nightly.7** (`risime.service`, health
+  timer, backups, rollback). Downloads are at https://risicloud.ai/app/risime/ (versionCode 20007).
+- **Invites and friends** (v1.6) are live. Testers onboard via invites (tester instructions sent
+  2026-10-06).
+- **E2EE (0.3, contract v1.7) is built end to end and proven live:**
+  - the crypto core: 47 tests;
+  - the server: 265 tests;
+  - the app: 162 tests, with the MLS core in all 4 ABIs;
+  - the **live interop gate: 32 checks, including 9 real-MLS E2EE checks** against a server with
+    E2EE on (temporary key).
+  - **Dormant on the pilot** (`mls_unavailable`) until Harsha approves the rollout. The dev banner
+    stays.
+- **Push** is built (server and app) and dormant until the Firebase files exist.
 
-## Built since nightly.5 (on `main`; ships with the next green nightly)
-- **Push client** (contract v1.5): local, content-free-to-Google notifications, device
-  registration and the notification permission. **Dormant** until `google-services.json` (with
-  both `lk.codegen.risime` and `lk.codegen.risime.debug`) and `fcm-service-account.json` are in
-  `~/risime-keys/`. `nightly-release` copies the json in automatically.
-- **E2EE groundwork:** debug builds made on spark2 package the MLS core (arm64-v8a and x86_64;
-  4.5 MB each) with Settings → About → "Crypto self-test" (device check 42). The release APK is
-  unchanged (12.7 MB). Known limit: no 32-bit ABIs yet; to be added before 0.3 ships.
+## Rollout of E2EE (needs Harsha's go-ahead)
+1. Create the pilot attestation key (`mix risime.attestation.gen`, in `~/risime-keys`; back it up).
+2. Pin its public key in the app (`-Prisime.mlsPinnedKeys`) and release that build as
+   **required**.
+3. When the census shows every tester on it, conversations upgrade automatically, chat by chat.
+4. Remove the dev banner only when decision 012's criteria are met, and record it.
 
 ## Waiting on Harsha (batched)
 - `sudo loginctl enable-linger harsha` (start at boot).
