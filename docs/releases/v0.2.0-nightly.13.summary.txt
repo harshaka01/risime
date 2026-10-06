@@ -1,0 +1,2 @@
+New: end-to-end encrypted photos (location and camera details removed before sending). Chats now always open at the newest message.
+Always update over the old app; never uninstall.
