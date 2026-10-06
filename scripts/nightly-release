@@ -84,15 +84,15 @@ UT_COMMIT="$(git rev-parse HEAD)"
 CAND="$REL/candidate"; mkdir -p "$CAND" "$HOME/risime-logs/upgrade-test"
 UT_RESULT="${UPGRADE_TEST_RESULT:-$HOME/risime-logs/upgrade-test/v$next.result}"
 ut() { sed -n "/^$1=/{s/^$1=//p;q}" "$UT_RESULT" 2>/dev/null || true; }
-# A PASS for an earlier commit still counts when everything changed since is upgrade-test tooling
-# or docs (no app/server/crypto/contract change). Then the EXACT tested binary (the staged
+# A PASS for an earlier commit still counts when everything changed since is release tooling
+# (scripts/upgrade-test, scripts/nightly-release) or docs (no app/server/crypto/contract change). Then the EXACT tested binary (the staged
 # candidate, sha256 checked against the result) is released, not this rebuild.
 REUSED=0
 if [ -f "$UT_RESULT" ] && [ "$(ut result)" = PASS ] && [ -n "$(ut commit)" ] && [ "$(ut commit)" != "$UT_COMMIT" ] \
    && [ -f "$CAND/CANDIDATE" ] && [ "$(sed -n 's/^commit=//p' "$CAND/CANDIDATE")" = "$(ut commit)" ] \
    && git cat-file -e "$(ut commit)^{commit}" 2>/dev/null; then
   changed="$(git diff --name-only "$(ut commit)" HEAD)"
-  other="$(printf '%s\n' "$changed" | grep -vE '^(scripts/upgrade-test|docs/)' || true)"
+  other="$(printf '%s\n' "$changed" | grep -vE '^(scripts/upgrade-test|scripts/nightly-release|docs/)' || true)"
   cand_sha="$(sha256sum "$CAND/app-release.apk" | cut -d' ' -f1)"
   if [ -z "$other" ] && [ "$cand_sha" = "$(ut new_sha256)" ]; then
     [ "$("$BT/apksigner" verify --print-certs "$CAND/app-release.apk" | grep -c "CN=RisiMe Dev Release" || true)" -gt 0 ] \
