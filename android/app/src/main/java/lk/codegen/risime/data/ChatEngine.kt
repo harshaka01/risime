@@ -63,6 +63,12 @@ class ChatEngine(
     private val reactionDebounceMs: Long = 500,
     /** §12: false = a pre-groups app; `grp:` events are skipped (they still advance the cursor). */
     private val groupsEnabled: () -> Boolean = { false },
+    /** §12.7 group_event / group_op / group_receipt (null = no groups). */
+    private val groups: lk.codegen.risime.data.groups.GroupStore? = null,
+    /** §12.6: fetches a referenced commit/Welcome before the event's transaction. */
+    private val blobs: (suspend (lk.codegen.risime.net.BlobRef) -> BlobFetch)? = null,
+    /** §12.8: this device can't follow the group any more (rejoin). */
+    private val onUnrecoverable: (conversationId: String) -> Unit = {},
 ) : RealtimeListener {
     private val reactionStore = reactionsDao?.let { ReactionStore(it, clock) }
     private val reactionLock = Mutex()
@@ -79,7 +85,13 @@ class ChatEngine(
         if (events.isEmpty()) return
         val me = meId() ?: return
         var newIncoming = false
-        for (e in events) {
+        for (e0 in events) {
+            // §12.6: a referenced blob is fetched first, outside the ordered transaction. A transient
+            // failure stops here without moving the cursor (the next sync redelivers from it).
+            val e = when (val r = resolveBlobRefs(e0, me)) {
+                null -> break
+                else -> r
+            }
             val applied = tx.run {
                 if (sync.seenCount(e.eventId) > 0) return@run false
                 // Unknown kinds and undecodable data are skipped but still advance the cursor.
@@ -99,6 +111,18 @@ class ChatEngine(
                         runCatching { e.statusData() }.getOrNull()?.let { applyStatus(it) }
                         false
                     }
+                    Event.KIND_GROUP_EVENT -> {
+                        runCatching { e.groupEvent() }.getOrNull()?.let { groups?.applyEvent(e.eventId, it, me) }
+                        false
+                    }
+                    Event.KIND_GROUP_OP -> {
+                        runCatching { e.groupOp() }.getOrNull()?.let { groups?.applyOp(it, me) }
+                        false
+                    }
+                    Event.KIND_GROUP_RECEIPT -> {
+                        runCatching { e.groupReceipt() }.getOrNull()?.let { groups?.applyReceipt(it) }
+                        false
+                    }
                     else -> false
                 }
                 sync.markSeen(SeenEventEntity(e.eventId))
@@ -110,6 +134,27 @@ class ChatEngine(
         if (newIncoming) flushAcks()
     }
 
+    /**
+     * Inline a referenced commit/Welcome (§12.6). Returns the event to apply, or null on a transient
+     * failure. A blob that is gone (404, bad hash) is left unresolved: the pipeline reports it as
+     * unrecoverable.
+     */
+    private suspend fun resolveBlobRefs(e: Event, me: String): Event? {
+        val fetch = blobs ?: return e
+        val (field, ref) = when (e.kind) {
+            Event.KIND_MLS_COMMIT -> runCatching { e.mlsCommit() }.getOrNull()?.takeIf { it.commit == null }?.commitRef?.let { "commit" to it }
+            Event.KIND_MLS_WELCOME -> runCatching { e.mlsWelcome() }.getOrNull()
+                ?.takeIf { w -> w.welcome == null && w.toDevices.any { it.equals(mlsEngine()?.deviceId, true) } }?.welcomeRef?.let { "welcome" to it }
+            else -> null
+        } ?: return e
+        if (sync.seenCount(e.eventId) > 0) return e
+        return when (val r = fetch(ref)) {
+            is BlobFetch.Ok -> e.copy(data = kotlinx.serialization.json.JsonObject(e.data + (field to kotlinx.serialization.json.JsonPrimitive(java.util.Base64.getEncoder().encodeToString(r.bytes)))))
+            BlobFetch.Gone -> e
+            BlobFetch.Transient -> null
+        }
+    }
+
     private fun isGroupEvent(e: Event): Boolean {
         val conv = (e.data["conversation_id"] ?: e.data["group_id"]) as? kotlinx.serialization.json.JsonPrimitive
         return conv?.isString == true && isGroupConversation(conv.content)
@@ -119,7 +164,10 @@ class ChatEngine(
     suspend fun applyOutOfBand(events: List<Event>) {
         val me = meId() ?: return
         var newIncoming = false
-        for (e in events) newIncoming = tx.run { runCatching { applyMls(me, e) }.getOrDefault(false) } || newIncoming
+        for (e0 in events) {
+            val e = resolveBlobRefs(e0, me) ?: return
+            newIncoming = tx.run { runCatching { applyMls(me, e) }.getOrDefault(false) } || newIncoming
+        }
         if (newIncoming) flushAcks()
     }
 
@@ -149,7 +197,14 @@ class ChatEngine(
             if (r is MlsResult.Reaction) {
                 applyReaction(r.message.conversationId, r.target, r.message.from, r.emoji, r.op, r.message.serverTs, r.message.messageId, r.message.clientMsgId)
             }
-            handle(r)?.let { conv -> results += pipeline.replay(conv) }
+            if (r is MlsResult.Unrecoverable) onUnrecoverable(r.conversationId)
+            handle(r)?.let { conv ->
+                if (isGroupConversation(conv)) {
+                    groups?.onGroupStateChanged(conv, removedSelf = mlsEngine()?.group(conv) == null)
+                    scope.launch { flushOutbox() } // messages waiting for this group's Welcome
+                }
+                results += pipeline.replay(conv)
+            }
         }
         return incoming
     }
@@ -248,7 +303,14 @@ class ChatEngine(
         while (true) {
             val engine = mlsEngine()
             val group = engine?.group(conv)
-            val r = if (engine != null && group != null) {
+            val r = if (isGroupConversation(conv)) {
+                // §12.9: groups are e2ee-only; without the local group (Welcome not here yet) the message waits.
+                if (engine == null || group == null) return PushResult.Rejected(WAITING_FOR_GROUP)
+                val ct = tx.run { engine.encrypt(conv, envelope()) }
+                realtime().sendGroup(
+                    lk.codegen.risime.net.MsgSendGroup(clientMsgId, conv, java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(localTs)),
+                )
+            } else if (engine != null && group != null) {
                 val ct = tx.run { engine.encrypt(conv, envelope()) }
                 realtime().sendEncrypted(
                     MsgSendE2ee(clientMsgId, to, java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(localTs)),
@@ -261,6 +323,7 @@ class ChatEngine(
             if (attempt++ >= staleEpochRetries) return PushResult.Rejected(RETRY_LATER)
             catchUp(conv)
             if (reason == AuthErrors.E2EE_REQUIRED && mlsEngine()?.group(conv) == null) return PushResult.Rejected(RETRY_LATER)
+            if (isGroupConversation(conv) && mlsEngine()?.group(conv) == null) return PushResult.Rejected(WAITING_FOR_GROUP)
         }
     }
 
@@ -297,7 +360,9 @@ class ChatEngine(
             }
             when (res) {
                 is PushResult.Ok -> store.confirmOwn(r, res.value.serverTs, res.value.messageId)
-                is PushResult.Rejected -> if (res.reason == "rate_limited" || res.reason == RETRY_LATER) {
+                is PushResult.Rejected -> if (res.reason == WAITING_FOR_GROUP) {
+                    continue
+                } else if (res.reason == "rate_limited" || res.reason == RETRY_LATER) {
                     scope.launch { delay(rateLimitRetryMs); flushReactions() }
                     return@withLock
                 } else {
@@ -328,7 +393,9 @@ class ChatEngine(
                     val next = MessageStatus.valueOf(cur.status).advance(MessageStatus.SENT)
                     messages.updateStatus(m.clientMsgId, next.name, r.value.messageId, r.value.serverTs, null)
                 }
-                is PushResult.Rejected -> if (r.reason == "rate_limited" || r.reason == RETRY_LATER) {
+                is PushResult.Rejected -> if (r.reason == WAITING_FOR_GROUP) {
+                    continue // stays PENDING; retried when the group arrives (and on every onLive)
+                } else if (r.reason == "rate_limited" || r.reason == RETRY_LATER) {
                     scope.launch {
                         delay(rateLimitRetryMs)
                         flushOutbox()
@@ -382,9 +449,23 @@ class ChatEngine(
 
         /** Local only: stale_epoch/e2ee_required couldn't be resolved now; stays PENDING, retried later. */
         const val RETRY_LATER = "retry_later"
+
+        /** Local only: a group message whose MLS group isn't here yet; stays PENDING without blocking the outbox. */
+        const val WAITING_FOR_GROUP = "waiting_for_group"
         const val ACK_BATCH = 100
         private val ISO_MILLIS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
 
         fun isoMillis(epochMs: Long): String = ISO_MILLIS.format(Instant.ofEpochMilli(epochMs))
     }
+}
+
+/** §12.6 blob download outcome. */
+sealed interface BlobFetch {
+    class Ok(val bytes: ByteArray) : BlobFetch
+
+    /** 404 / expired / size or SHA-256 mismatch: unrecoverable for this event. */
+    data object Gone : BlobFetch
+
+    /** Network or server trouble: retry later. */
+    data object Transient : BlobFetch
 }

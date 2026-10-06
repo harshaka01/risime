@@ -115,4 +115,32 @@ class SealedKvStoreTest {
         assertFalse(f.exists())
         assertFalse(MlsDbKey(f, wrapper).get().contentEquals(k1))
     }
+
+    @Test fun largeValuesAreChunkedBelowTheCursorWindowAndReassembled() {
+        val small = SealedKvStore(sql, KvSealer(key), chunkBytes = 1000)
+        val big = ByteArray(2_500) { (it * 7).toByte() }
+        small.put("ns", k, big)
+        assertArrayEquals(big, small.get("ns", k))
+        val rows = sql.queryBlob("SELECT COUNT(*) || '' FROM mls_kv WHERE namespace = 'ns#c'", emptyArray())
+        assertEquals("3", rows!!.decodeToString())
+        // Every stored row stays under the chunk size plus sealing overhead.
+        assertTrue(conn.prepare("SELECT MAX(LENGTH(value)) FROM mls_kv").use { it.step(); it.getLong(0) } <= 1000 + 28)
+        // Shrinking back to a single row drops the chunks; growing again works; delete removes all.
+        small.put("ns", k, byteArrayOf(1, 2, 3))
+        assertArrayEquals(byteArrayOf(1, 2, 3), small.get("ns", k))
+        assertEquals("0", sql.queryBlob("SELECT COUNT(*) || '' FROM mls_kv WHERE namespace = 'ns#c'", emptyArray())!!.decodeToString())
+        small.put("ns", k, big)
+        small.delete("ns", k)
+        assertNull(small.get("ns", k))
+        assertEquals("0", sql.queryBlob("SELECT COUNT(*) || '' FROM mls_kv", emptyArray())!!.decodeToString())
+    }
+
+    @Test fun chunkedWritesRollBackWithTheSavepoint() {
+        val small = SealedKvStore(sql, KvSealer(key), chunkBytes = 100)
+        small.put("ns", k, ByteArray(50) { 1 })
+        small.begin()
+        small.put("ns", k, ByteArray(450) { 2 })
+        small.rollback()
+        assertArrayEquals(ByteArray(50) { 1 }, small.get("ns", k))
+    }
 }

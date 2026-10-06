@@ -29,9 +29,13 @@ class PresenceTracker(
     private val _presence = MutableStateFlow<Map<String, Presence>>(emptyMap())
     val presence: StateFlow<Map<String, Presence>> = _presence.asStateFlow()
 
-    /** User ids currently shown as "typing…". */
+    /** User ids currently shown as "typing…" (DMs). */
     private val _typing = MutableStateFlow<Set<String>>(emptySet())
     val typing: StateFlow<Set<String>> = _typing.asStateFlow()
+
+    /** §12.9: per group conversation, the members typing there (a typist can be in several groups). */
+    private val _groupTyping = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
+    val groupTyping: StateFlow<Map<String, Set<String>>> = _groupTyping.asStateFlow()
 
     private val expiry = ConcurrentHashMap<String, Job>()
 
@@ -45,7 +49,14 @@ class PresenceTracker(
             _presence.update { it + (p.userId.lowercase() to p) }
             if (!p.online) stopTyping(p.userId)
         }
-        signal.typing()?.let { t -> if (t.typing) startTyping(t.from) else stopTyping(t.from) }
+        signal.typing()?.let { t ->
+            when {
+                lk.codegen.risime.net.isGroupConversation(t.conversationId) ->
+                    if (t.typing) startGroupTyping(t.conversationId, t.from) else stopGroupTyping(t.conversationId, t.from)
+                t.typing -> startTyping(t.from)
+                else -> stopTyping(t.from)
+            }
+        }
         signal.friend()?.let(onFriendSignal)
         signal.keyPackagesLow()?.let { onKeyPackagesLow() }
     }
@@ -55,10 +66,30 @@ class PresenceTracker(
         expiry.values.forEach { it.cancel() }
         expiry.clear()
         _typing.value = emptySet()
+        _groupTyping.value = emptyMap()
     }
 
-    /** A message from [userId] arrived: they've stopped typing. */
-    fun onMessageFrom(userId: String) = stopTyping(userId)
+    /** A message from [userId] arrived: they've stopped typing (in DMs and every group). */
+    fun onMessageFrom(userId: String) {
+        stopTyping(userId)
+        _groupTyping.value.filterValues { userId.lowercase() in it }.keys.forEach { stopGroupTyping(it, userId) }
+    }
+
+    private fun startGroupTyping(conv: String, userId: String) {
+        val id = userId.lowercase()
+        _groupTyping.update { it + (conv to (it[conv].orEmpty() + id)) }
+        val job = scope.launch {
+            delay(typingTimeoutMs)
+            _groupTyping.update { m -> (m[conv].orEmpty() - id).let { s -> if (s.isEmpty()) m - conv else m + (conv to s) } }
+        }
+        expiry.put("$conv|$id", job)?.cancel()
+    }
+
+    private fun stopGroupTyping(conv: String, userId: String) {
+        val id = userId.lowercase()
+        expiry.remove("$conv|$id")?.cancel()
+        _groupTyping.update { m -> (m[conv].orEmpty() - id).let { s -> if (s.isEmpty()) m - conv else m + (conv to s) } }
+    }
 
     /** `typing: true` (re)starts the 6 s window; the indicator ends when it passes without a refresh. */
     private fun startTyping(userId: String) {

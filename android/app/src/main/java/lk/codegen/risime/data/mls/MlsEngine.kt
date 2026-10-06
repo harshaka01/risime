@@ -1,5 +1,7 @@
 package lk.codegen.risime.data.mls
 
+import lk.codegen.risime.net.GroupMeta
+
 /**
  * What the app needs from the MLS core (contract §10). Phase B implements it over the new
  * `risime-mls-ffi` API (MlsClient.open(store, userId, deviceId, trustedKeysJwks), PendingCommit,
@@ -52,7 +54,35 @@ interface MlsEngine {
 
     /** The group's current leaves (for the membership executor). */
     fun members(conversationId: String): List<DeviceRef>
+
+    // ---- §12 groups. Defaults = a core without group support (the v1.8 FFI): the app then never
+    // advertises the `groups` capability, so the server never sends it group traffic. ----
+
+    /**
+     * True once this core creates and joins groups with `group_meta` (GroupContext extension
+     * 0xFA01), uses PrivateMessage handshakes for `grp:`, enforces the admin policy, and its key
+     * packages carry capability 0xFA01. Only then does the app advertise `groups` (§12.1).
+     */
+    val groupsSupported: Boolean get() = false
+
+    /** Epoch 0 of a `grp:` group (or the rebuild after a reset) with every claimed device and [meta]; my user must be in its admins. */
+    fun createGroupWithMeta(conversationId: String, generation: Long, members: List<ClaimedKeyPackage>, meta: GroupMeta): PendingCommit =
+        unsupported()
+
+    /** One commit for an `add`, `remove` or `devices` op; a device in both lists is re-added (rejoin). */
+    fun changeGroupMembers(conversationId: String, add: List<ClaimedKeyPackage>, removeDevices: List<DeviceRef>): PendingCommit = unsupported()
+
+    /** Removes every leaf of [userIds] (a removal, or an admin committing someone's leave). */
+    fun removeGroupUsers(conversationId: String, userIds: List<String>): PendingCommit = unsupported()
+
+    /** A GroupContextExtensions commit: rename, or a `role` op's admin list. */
+    fun updateGroupMeta(conversationId: String, meta: GroupMeta): PendingCommit = unsupported()
+
+    /** The group's current `group_meta`, or null (no group, or a DM). */
+    fun groupMeta(conversationId: String): GroupMeta? = null
 }
+
+private fun unsupported(): Nothing = throw UnsupportedOperationException("groups not supported by this MLS core")
 
 data class GroupRef(val conversationId: String, val generation: Long, val epoch: Long)
 
@@ -68,6 +98,8 @@ class PendingCommit(
     val welcome: ByteArray?,
     val added: List<DeviceRef>,
     val removed: List<DeviceRef>,
+    /** §12.4 `meta_changed` (a rename or role commit). */
+    val metaChanged: Boolean = false,
 )
 
 sealed interface CommitOutcome {

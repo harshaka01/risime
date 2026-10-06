@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import lk.codegen.risime.data.BehaviourLog
 import lk.codegen.risime.data.ChatEngine
 import lk.codegen.risime.data.ContactsRepository
@@ -171,9 +172,56 @@ class AppContainer(context: Context) {
             },
             log = { Log.w("RisiMe", "mls: $it") },
             onJoined = { scope.launch { deviceRegistrar.topUp() } },
+            onParkedAhead = { conv -> scope.launch { catchUpCommits(conv) } },
         )
     }
     val mlsUpgrader by lazy { MlsUpgrader({ mlsEngine }, mlsApi) }
+
+    // ---- Groups (contract v1.9 §12). Enabled only with a groups-capable MLS core. ----
+    val groupStore by lazy {
+        lk.codegen.risime.data.groups.GroupStore(
+            db.groups(), db.groupOps(), db.messages(), { sessionStore.deviceId() },
+            metaOf = { conv -> mlsEngine?.groupMeta(conv) },
+            needsRefresh = { conv -> scope.launch { refreshGroup(conv) } },
+            onAddedMe = { conv, actor -> scope.launch { notifyAddedToGroup(conv, actor) } },
+            onOpQueued = { kickGroupOps() },
+            onReset = { conv, generation ->
+                mlsEngine?.let { e -> e.group(conv)?.takeIf { it.generation < generation }?.let { e.deleteGroup(conv) } }
+                db.mlsPending().dropOlderGenerations(conv, generation)
+            },
+        )
+    }
+
+    /** Set by the group-op executor (chunk 6); a no-op until then. */
+    @Volatile private var groupOpsKick: () -> Unit = {}
+
+    private fun kickGroupOps() = groupOpsKick()
+
+    /** S4 notification (chunk 8). */
+    private suspend fun notifyAddedToGroup(conversationId: String, actor: String) = Unit
+
+    /** GET /groups/{id}: server truth for members, roles and owed ops; 404 keeps the local snapshot read-only (S3). */
+    suspend fun refreshGroup(conversationId: String) {
+        val me = sessionStore.current()?.user?.id ?: return
+        when (val r = api.group(conversationId)) {
+            is ApiResult.Ok -> db.withTransaction { groupStore.applyServerGroup(r.value.group, me) }
+            is ApiResult.Error -> if (r.httpStatus == 404) db.withTransaction { groupStore.markGone(conversationId) }
+            is ApiResult.NetworkError -> Unit
+        }
+    }
+
+    /** §12.6: download, then check size and SHA-256. */
+    private suspend fun fetchBlob(ref: lk.codegen.risime.net.BlobRef): lk.codegen.risime.data.BlobFetch = when (val r = api.downloadBlob(ref.blobId)) {
+        is ApiResult.Ok -> if (lk.codegen.risime.data.groups.blobMatches(r.value, ref)) lk.codegen.risime.data.BlobFetch.Ok(r.value) else lk.codegen.risime.data.BlobFetch.Gone
+        is ApiResult.Error -> if (r.httpStatus == 404) lk.codegen.risime.data.BlobFetch.Gone else lk.codegen.risime.data.BlobFetch.Transient
+        is ApiResult.NetworkError -> lk.codegen.risime.data.BlobFetch.Transient
+    }
+
+    /** §12.8: this device's group state is lost or broken: rejoin (a `devices` op re-adds it). */
+    private fun onGroupUnrecoverable(conversationId: String) {
+        Log.w("RisiMe", "group $conversationId unrecoverable: rejoining")
+        scope.launch { groupStore.queueLocal(conversationId, lk.codegen.risime.data.groups.GroupOpType.REJOIN) }
+    }
     val deviceRegistrar by lazy { DeviceRegistrar(api, { sessionStore.deviceId() }, BuildConfig.VERSION_NAME, { mlsEngine }) }
 
     /**
@@ -246,6 +294,10 @@ class AppContainer(context: Context) {
         mlsEngine = { mlsEngine },
         catchUp = { conv -> catchUpCommits(conv) },
         reactionsDao = db.reactions(),
+        groupsEnabled = { mlsEngine?.groupsSupported == true },
+        groups = groupStore,
+        blobs = { ref -> fetchBlob(ref) },
+        onUnrecoverable = { conv -> onGroupUnrecoverable(conv) },
     )
 
     val realtime: RealtimeClient = PhoenixRealtimeClient(
@@ -549,21 +601,39 @@ class AppContainer(context: Context) {
         sessionStore.setNotifiedRequests(incoming.map { it.id }.toSet())
     }
 
-    /** §10.2 recovery: fetch commits since our epoch and apply them out of band (no cursor move). */
-    private suspend fun catchUpCommits(conversationId: String) {
-        val g = mlsEngine?.group(conversationId) ?: return // no group yet: our Welcome comes through the inbox
-        val r = api.mlsCommits(conversationId, g.epoch) as? ApiResult.Ok ?: return
-        engine.applyOutOfBand(
-            r.value.commits.map { c ->
-                lk.codegen.risime.net.Event(
-                    "catchup:$conversationId:${g.generation}:${c.epoch}", lk.codegen.risime.net.Event.KIND_MLS_COMMIT,
-                    lk.codegen.risime.net.ProtocolJson.encodeToJsonElement(
-                        lk.codegen.risime.net.MlsCommitEvent.serializer(),
-                        lk.codegen.risime.net.MlsCommitEvent(conversationId, g.generation, c.epoch, c.commit, c.fromDevice, c.commitRef),
-                    ) as kotlinx.serialization.json.JsonObject,
-                )
-            },
-        )
+    private val catchUpLock = kotlinx.coroutines.sync.Mutex()
+
+    /**
+     * §10.2/§12.8 recovery: fetch commits since our epoch and apply them out of band (no cursor
+     * move), page by page while `has_more`. A `grp:` log that no longer reaches our epoch (410
+     * log_expired) is unrecoverable: rejoin.
+     */
+    private suspend fun catchUpCommits(conversationId: String): Unit = catchUpLock.withLock {
+        var pages = 0
+        while (pages++ < 40) {
+            val g = mlsEngine?.group(conversationId) ?: return // no group yet: our Welcome comes through the inbox
+            val r = when (val res = api.mlsCommits(conversationId, g.epoch, if (lk.codegen.risime.net.isGroupConversation(conversationId)) 50 else null)) {
+                is ApiResult.Ok -> res.value
+                is ApiResult.Error -> {
+                    if (res.code == AuthErrors.LOG_EXPIRED || res.httpStatus == 410) onGroupUnrecoverable(conversationId)
+                    return
+                }
+                is ApiResult.NetworkError -> return
+            }
+            engine.applyOutOfBand(
+                r.commits.map { c ->
+                    lk.codegen.risime.net.Event(
+                        "catchup:$conversationId:${g.generation}:${c.epoch}", lk.codegen.risime.net.Event.KIND_MLS_COMMIT,
+                        lk.codegen.risime.net.ProtocolJson.encodeToJsonElement(
+                            lk.codegen.risime.net.MlsCommitEvent.serializer(),
+                            lk.codegen.risime.net.MlsCommitEvent(conversationId, g.generation, c.epoch, c.commit, c.fromDevice, c.commitRef),
+                        ) as kotlinx.serialization.json.JsonObject,
+                    )
+                },
+            )
+            val after = mlsEngine?.group(conversationId)?.epoch ?: return
+            if (!r.hasMore || after <= g.epoch) return
+        }
     }
 
     /** Chat data only; the local behaviour log stays on the device. */

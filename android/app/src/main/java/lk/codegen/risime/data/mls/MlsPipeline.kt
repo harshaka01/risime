@@ -27,6 +27,12 @@ sealed interface MlsResult {
 
     /** Undecryptable or failed verification: dropped (and logged). */
     data class Dropped(val reason: String) : MlsResult
+
+    /**
+     * §12.8 (groups only): this device's group state can't follow any more (the core rejected a
+     * commit, or a referenced blob is gone). Never for a transient error. The app rejoins.
+     */
+    data class Unrecoverable(val conversationId: String, val reason: String) : MlsResult
 }
 
 /** §10.3 `mls_membership`: who commits the add/remove, and when. */
@@ -56,13 +62,22 @@ class MlsPipeline(
     private val log: (String) -> Unit = {},
     /** After joining from a Welcome (a key package was used): top up. */
     private val onJoined: () -> Unit = {},
+    /** §12.8: a `grp:` event was parked ahead of the local epoch: fetch the missing commits (no limit beyond the rate limit). */
+    private val onParkedAhead: (conversationId: String) -> Unit = {},
 ) {
     private val b64 = Base64.getDecoder()
 
     private suspend fun park(e: Event, conv: String, generation: Long, epoch: Long): MlsResult {
         pending.add(MlsPendingEntity(e.eventId, conv, generation, epoch, seq(), ProtocolJson.encodeToString(Event.serializer(), e)))
+        if (lk.codegen.risime.net.isGroupConversation(conv)) {
+            val g = engine()?.group(conv)
+            if (g != null && g.generation == generation && epoch > g.epoch) onParkedAhead(conv)
+        }
         return MlsResult.Pending
     }
+
+    private fun unrecoverableOr(conv: String, reason: String): MlsResult =
+        if (lk.codegen.risime.net.isGroupConversation(conv)) MlsResult.Unrecoverable(conv, reason) else MlsResult.Dropped(reason)
 
     suspend fun apply(e: Event): MlsResult {
         val mls = engine() ?: return MlsResult.Ignored // no MLS core: behave like a v1.6 app
@@ -71,7 +86,7 @@ class MlsPipeline(
             val current = mls.group(w.conversationId)
             if (current != null && current.generation >= w.generation && current.epoch >= w.epoch) return MlsResult.Ignored
             // §12.6: a referenced Welcome is fetched and inlined before this call; a missing one is unrecoverable.
-            val welcome = w.welcome ?: return MlsResult.Dropped("welcome blob not fetched")
+            val welcome = w.welcome ?: return unrecoverableOr(w.conversationId, "welcome blob not fetched")
             return try {
                 mls.joinFromWelcome(w.conversationId, w.generation, b64.decode(welcome))
                 pending.dropOlderGenerations(w.conversationId, w.generation)
@@ -83,14 +98,16 @@ class MlsPipeline(
             }
         }
         e.mlsCommit()?.let { c ->
-            if (c.fromDevice.equals(mls.deviceId, true)) return MlsResult.Ignored // merged on our own 200
+            // DMs: merged on our own 200. Groups: an own commit still at our epoch means the process died
+            // between the 200 and the merge (or the event beat the reply); the core merges it from the log.
+            if (c.fromDevice.equals(mls.deviceId, true) && !lk.codegen.risime.net.isGroupConversation(c.conversationId)) return MlsResult.Ignored
             val g = mls.group(c.conversationId) ?: return park(e, c.conversationId, c.generation, c.epoch)
             return when {
                 c.generation < g.generation -> MlsResult.Ignored
                 c.generation > g.generation -> park(e, c.conversationId, c.generation, c.epoch)
                 c.epoch < g.epoch -> MlsResult.Ignored // already applied, or below our Welcome's epoch
                 c.epoch > g.epoch -> park(e, c.conversationId, c.generation, c.epoch) // missing commits first
-                c.commit == null -> MlsResult.Dropped("commit blob not fetched")
+                c.commit == null -> unrecoverableOr(c.conversationId, "commit blob not fetched")
                 else -> when (val r = mls.processCommit(c.conversationId, c.generation, b64.decode(c.commit))) {
                     is CommitOutcome.Applied -> MlsResult.GroupChanged(c.conversationId)
                     CommitOutcome.RemovedSelf -> {
@@ -99,7 +116,7 @@ class MlsPipeline(
                     }
                     is CommitOutcome.Rejected -> {
                         log("commit rejected: ${r.reason}")
-                        MlsResult.Dropped(r.reason)
+                        unrecoverableOr(c.conversationId, r.reason)
                     }
                 }
             }

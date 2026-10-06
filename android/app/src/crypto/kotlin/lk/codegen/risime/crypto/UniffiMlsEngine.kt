@@ -120,7 +120,8 @@ class UniffiMlsEngine(
 
     override fun commitAccepted(conversationId: String) = tx {
         val (_, g) = current(conversationId) ?: return@tx
-        client.commitAccepted(g)
+        // A group commit may already be merged from the log (processCommits) when the 200 arrives.
+        if (client.hasPendingCommit(g)) client.commitAccepted(g)
         Unit
     }
 
@@ -134,6 +135,14 @@ class UniffiMlsEngine(
     override fun processCommit(conversationId: String, generation: Long, commit: ByteArray): CommitOutcome = tx {
         val g = gid(conversationId, generation)
         try {
+            if (lk.codegen.risime.net.isGroupConversation(conversationId)) {
+                // All-or-nothing catch-up path: also merges our own pending commit found in the log.
+                val u = client.processCommits(g, listOf(commit))
+                return@tx when {
+                    u.removedSelf -> CommitOutcome.RemovedSelf
+                    else -> CommitOutcome.Applied(u.epoch.toLong(), u.applied.any { (it as? IncomingMessage.Commit)?.discardedOwnPending == true })
+                }
+            }
             when (val r = client.process(g, commit)) {
                 is IncomingMessage.Commit -> when {
                     r.removedSelf -> CommitOutcome.RemovedSelf
@@ -182,6 +191,50 @@ class UniffiMlsEngine(
     override fun members(conversationId: String): List<DeviceRef> = tx {
         val (_, g) = current(conversationId) ?: return@tx emptyList()
         client.members(g).map { DeviceRef(it.userId, it.deviceId) }
+    }
+
+    // ---- §12 groups (risime-mls-ffi group API, crypto/README "Group API") ----
+
+    override val groupsSupported: Boolean get() = true
+
+    private fun GroupCommit.toApp(gen: Long) = AppPendingCommit(
+        gen, epoch.toLong(), commit, welcome,
+        added.map { DeviceRef(it.userId, it.deviceId) }, removed.map { DeviceRef(it.userId, it.deviceId) }, metaChanged,
+    )
+
+    private fun lk.codegen.risime.net.GroupMeta.toFfi() = GroupMeta(name, icon, admins)
+
+    private fun currentOrThrow(conv: String) = current(conv) ?: throw IllegalStateException("no group for $conv")
+
+    override fun createGroupWithMeta(
+        conversationId: String,
+        generation: Long,
+        members: List<ClaimedKeyPackage>,
+        meta: lk.codegen.risime.net.GroupMeta,
+    ): AppPendingCommit = tx {
+        val pc = client.createGroupWithMeta(gid(conversationId, generation), members.map { it.keyPackage }, meta.toFfi())
+        setGeneration(conversationId, generation)
+        pc.toApp(generation)
+    }
+
+    override fun changeGroupMembers(conversationId: String, add: List<ClaimedKeyPackage>, removeDevices: List<DeviceRef>): AppPendingCommit = tx {
+        val (gen, g) = currentOrThrow(conversationId)
+        client.changeMembers(g, add.map { it.keyPackage }, removeDevices.map { DeviceId(it.userId, it.deviceId) }).toApp(gen)
+    }
+
+    override fun removeGroupUsers(conversationId: String, userIds: List<String>): AppPendingCommit = tx {
+        val (gen, g) = currentOrThrow(conversationId)
+        client.removeUsers(g, userIds).toApp(gen)
+    }
+
+    override fun updateGroupMeta(conversationId: String, meta: lk.codegen.risime.net.GroupMeta): AppPendingCommit = tx {
+        val (gen, g) = currentOrThrow(conversationId)
+        client.updateGroupMeta(g, meta.toFfi()).toApp(gen)
+    }
+
+    override fun groupMeta(conversationId: String): lk.codegen.risime.net.GroupMeta? = tx {
+        val (_, g) = current(conversationId) ?: return@tx null
+        client.groupMeta(g)?.let { lk.codegen.risime.net.GroupMeta(name = it.name, icon = null, admins = it.admins) }
     }
 
     private companion object {

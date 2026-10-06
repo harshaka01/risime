@@ -27,7 +27,8 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
     }
 
     override fun commitAccepted(conversationId: String) {
-        val pc = pendingCommits.remove(conversationId) ?: error("nothing pending")
+        pendingMeta.remove(conversationId)?.let { metas[conversationId] = it }
+        val pc = pendingCommits.remove(conversationId) ?: if (lk.codegen.risime.net.isGroupConversation(conversationId)) return else error("nothing pending")
         val list = memberLists.getOrPut(conversationId) { mutableListOf() }
         list += pc.added
         list -= pc.removed.toSet()
@@ -35,7 +36,9 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
     }
 
     override fun commitRejected(conversationId: String) {
-        pendingCommits.remove(conversationId)
+        pendingMeta.remove(conversationId)
+        val pc = pendingCommits.remove(conversationId)
+        if (pc != null && pc.epoch == 0L && groups[conversationId] == null) memberLists.remove(conversationId)
     }
 
     val hasPending: Boolean get() = pendingCommits.isNotEmpty()
@@ -77,6 +80,38 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
 
     val memberLists = mutableMapOf<String, MutableList<DeviceRef>>()
     override fun members(conversationId: String): List<DeviceRef> = memberLists[conversationId].orEmpty()
+
+    // ---- §12 groups (stand-in for the FFI group calls) ----
+    var groupsOn = true
+    override val groupsSupported: Boolean get() = groupsOn
+    val metas = mutableMapOf<String, lk.codegen.risime.net.GroupMeta>()
+    private val pendingMeta = mutableMapOf<String, lk.codegen.risime.net.GroupMeta?>()
+    val groupCommits = mutableListOf<Pair<String, PendingCommit>>()
+    var failNextGroupCommit: Exception? = null
+
+    private fun groupCommit(conv: String, note: String, add: List<DeviceRef>, remove: List<DeviceRef>, meta: lk.codegen.risime.net.GroupMeta?): PendingCommit {
+        failNextGroupCommit?.let { failNextGroupCommit = null; throw it }
+        val g = groups.getValue(conv)
+        return PendingCommit(g.generation, g.epoch, "commit|$note".toByteArray(), if (add.isEmpty()) null else "welcome|${g.epoch + 1}".toByteArray(),
+            add, remove, metaChanged = meta != null).also { pendingCommits[conv] = it; pendingMeta[conv] = meta; groupCommits += conv to it }
+    }
+
+    override fun createGroupWithMeta(conversationId: String, generation: Long, members: List<ClaimedKeyPackage>, meta: lk.codegen.risime.net.GroupMeta): PendingCommit {
+        failNextGroupCommit?.let { failNextGroupCommit = null; throw it }
+        return PendingCommit(generation, 0, "commit|create".toByteArray(), if (members.isEmpty()) null else "welcome|1".toByteArray(), members.map { it.device }, emptyList(), metaChanged = true)
+            .also { pendingCommits[conversationId] = it; pendingMeta[conversationId] = meta; groupCommits += conversationId to it }
+    }
+
+    override fun changeGroupMembers(conversationId: String, add: List<ClaimedKeyPackage>, removeDevices: List<DeviceRef>) =
+        groupCommit(conversationId, "change", add.map { it.device }, removeDevices, null)
+
+    override fun removeGroupUsers(conversationId: String, userIds: List<String>) =
+        groupCommit(conversationId, "remove-users", emptyList(), members(conversationId).filter { m -> userIds.any { it.equals(m.userId, true) } }, null)
+
+    override fun updateGroupMeta(conversationId: String, meta: lk.codegen.risime.net.GroupMeta) =
+        groupCommit(conversationId, "meta", emptyList(), emptyList(), meta)
+
+    override fun groupMeta(conversationId: String) = metas[conversationId]
 
     companion object {
         fun ciphertext(gen: Long, epoch: Long, user: String, device: String, text: String) =

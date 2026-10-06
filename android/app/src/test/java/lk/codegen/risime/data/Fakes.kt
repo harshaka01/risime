@@ -204,3 +204,42 @@ class FakeReactionDao : lk.codegen.risime.data.db.ReactionDao {
     override suspend fun isReaction(messageId: String) = rows.values.count { it.confirmedMessageId == messageId }
     override suspend fun addsSince(since: Long) = rows.values.filter { it.op == "add" && !it.pending && it.localTs > since }
 }
+
+/** In-memory GroupDao (Room semantics; flows are snapshots). */
+class FakeGroupDao : lk.codegen.risime.data.db.GroupDao {
+    val groups = linkedMapOf<String, lk.codegen.risime.data.db.GroupEntity>()
+    val members = linkedMapOf<Pair<String, String>, lk.codegen.risime.data.db.GroupMemberEntity>()
+    override suspend fun upsert(g: lk.codegen.risime.data.db.GroupEntity) { groups[g.conversationId] = g }
+    override suspend fun get(conv: String) = groups[conv]
+    override fun observe(conv: String) = kotlinx.coroutines.flow.flowOf(groups[conv])
+    override fun all() = kotlinx.coroutines.flow.flowOf(groups.values.filter { it.state != "creating" })
+    override suspend fun allNow() = groups.values.toList()
+    override suspend fun upsertMembers(m: List<lk.codegen.risime.data.db.GroupMemberEntity>) { m.forEach { members[it.conversationId to it.userId] = it } }
+    override suspend fun members(conv: String) = members.values.filter { it.conversationId == conv }
+    override fun observeMembers(conv: String) = kotlinx.coroutines.flow.flowOf(members.values.filter { it.conversationId == conv }.sortedBy { it.displayName.lowercase() })
+    override fun observeAllMembers() = kotlinx.coroutines.flow.flowOf(members.values.toList())
+    override suspend fun setMemberState(conv: String, userIds: List<String>, state: String) {
+        userIds.forEach { id -> members[conv to id]?.let { members[conv to id] = it.copy(state = state) } }
+    }
+    override suspend fun setMemberRole(conv: String, userIds: List<String>, role: String) {
+        userIds.forEach { id -> members[conv to id]?.let { members[conv to id] = it.copy(role = role) } }
+    }
+    override suspend fun delete(conv: String) { groups.remove(conv) }
+}
+
+/** In-memory GroupOpDao with the unique op_id index. */
+class FakeGroupOpDao : lk.codegen.risime.data.db.GroupOpDao {
+    val rows = linkedMapOf<Long, lk.codegen.risime.data.db.GroupOpEntity>()
+    private var next = 1L
+    override suspend fun insert(op: lk.codegen.risime.data.db.GroupOpEntity): Long {
+        if (op.opId != null && rows.values.any { it.opId == op.opId }) return -1
+        val id = next++
+        rows[id] = op.copy(id = id)
+        return id
+    }
+    override suspend fun due(now: Long) = rows.values.filter { it.state == "queued" && it.nextAt <= now }.sortedBy { it.id }
+    override suspend fun queued() = rows.values.filter { it.state == "queued" }.sortedBy { it.id }
+    override suspend fun get(id: Long) = rows[id]
+    override suspend fun update(op: lk.codegen.risime.data.db.GroupOpEntity) { rows[op.id] = op }
+    override fun observeQueued(conv: String) = kotlinx.coroutines.flow.flowOf(rows.values.filter { it.conversationId == conv && it.state == "queued" })
+}
