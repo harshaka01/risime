@@ -50,19 +50,17 @@ class ContractExamplesTest {
         "device_put.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s) },
         "push_inbox.json" to { s -> ProtocolJson.decodeFromString<PushPayload>(s) },
         "error_invalid_device.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
-        // v1.6 (invites + friends): parse-only placeholders added by root with the contract merge;
-        // the android role replaces them with typed decoders when it implements §9.
-        "invite_create.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "invite_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "invites_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "friend_request.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "friend_request_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "friends_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "friend_accept_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "block.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "signal_friend.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_not_friends.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "user_vouched.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "invite_create.json" to { s -> ProtocolJson.decodeFromString<InviteCreate>(s) },
+        "invite_reply.json" to { s -> ProtocolJson.decodeFromString<InviteReply>(s) },
+        "invites_reply.json" to { s -> ProtocolJson.decodeFromString<InvitesReply>(s) },
+        "friend_request.json" to { s -> ProtocolJson.decodeFromString<FriendRequestCreate>(s) },
+        "friend_request_reply.json" to { s -> ProtocolJson.decodeFromString<FriendRequestReply>(s) },
+        "friends_reply.json" to { s -> ProtocolJson.decodeFromString<FriendsReply>(s) },
+        "friend_accept_reply.json" to { s -> ProtocolJson.decodeFromString<FriendAcceptReply>(s) },
+        "block.json" to { s -> ProtocolJson.decodeFromString<BlockCreate>(s) },
+        "signal_friend.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.friend()) } },
+        "error_not_friends.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
+        "user_vouched.json" to { s -> ProtocolJson.decodeFromString<MeReply>(s) },
     )
 
     @Test
@@ -213,6 +211,50 @@ class ContractExamplesTest {
         assertEquals(null, PushPayload.fromData(emptyMap()))
 
         assertEquals(AuthErrors.INVALID_DEVICE, ProtocolJson.decodeFromString<ApiErrorEnvelope>(read("error_invalid_device.json")).error.code)
+    }
+
+    @Test
+    fun friendsV16Examples() {
+        // Client-sent payloads round-trip exactly.
+        for ((file, enc) in listOf<Pair<String, (JsonObject) -> kotlinx.serialization.json.JsonElement>>(
+            "invite_create.json" to { o -> ProtocolJson.encodeToJsonElement(ProtocolJson.decodeFromJsonElement<InviteCreate>(o)) },
+            "friend_request.json" to { o -> ProtocolJson.encodeToJsonElement(ProtocolJson.decodeFromJsonElement<FriendRequestCreate>(o)) },
+            "block.json" to { o -> ProtocolJson.encodeToJsonElement(ProtocolJson.decodeFromJsonElement<BlockCreate>(o)) },
+        )) {
+            val o = ProtocolJson.parseToJsonElement(read(file)) as JsonObject
+            assertEquals(file, o, enc(o))
+        }
+        val inv = ProtocolJson.decodeFromString<InviteReply>(read("invite_reply.json")).invite
+        assertTrue(inv.pending)
+        assertEquals("Join me on RisiMe", inv.subject)
+        assertTrue(inv.shareText.contains(inv.link) && inv.shareText.contains(inv.email))
+        assertTrue(inv.shareText.length <= 300)
+        assertEquals(inv, ProtocolJson.decodeFromString<InvitesReply>(read("invites_reply.json")).invites.single())
+        assertEquals("requested", ProtocolJson.decodeFromString<FriendRequestReply>(read("friend_request_reply.json")).status)
+
+        val f = ProtocolJson.decodeFromString<FriendsReply>(read("friends_reply.json"))
+        assertEquals(1, f.friends.size)
+        assertEquals(null, f.friends.single().vouchedBy)
+        val incoming = f.incoming.single()
+        assertNotNull(incoming.userId)
+        assertNotNull(incoming.displayName)
+        val outgoing = f.outgoing.single()
+        assertEquals(null, outgoing.userId) // outgoing never reveals registration
+        assertEquals(null, outgoing.displayName)
+        assertEquals("Test User F", f.blocked.single().displayName)
+        assertEquals(f.friends.single(), ProtocolJson.decodeFromString<FriendAcceptReply>(read("friend_accept_reply.json")).friend)
+
+        val sig = ProtocolJson.decodeFromString<Signal>(read("signal_friend.json"))
+        val fs = sig.friend()!!
+        assertEquals(FriendSignal.REQUEST_RECEIVED, fs.action)
+        assertEquals(incoming.id, fs.requestId)
+        assertEquals(incoming.userId, fs.user.userId)
+        assertEquals(null, sig.presence())
+
+        assertEquals(AuthErrors.NOT_FRIENDS, ProtocolJson.decodeFromString<ErrorReason>(read("error_not_friends.json")).reason)
+        val vouched = ProtocolJson.decodeFromString<MeReply>(read("user_vouched.json")).user
+        assertEquals("Test User B", vouched.vouchedBy!!.displayName)
+        assertEquals(null, ProtocolJson.decodeFromString<AuthVerifyReply>(read("auth_verify_reply.json")).user.vouchedBy)
     }
 
     @Test

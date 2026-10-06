@@ -58,6 +58,29 @@ class ApiClient(
     /** §8.1: at logout (idempotent). */
     suspend fun deleteDevice(deviceId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "me/devices/$deviceId", null)
 
+    // ---- §9 invites and friends ----
+    suspend fun createInvite(body: InviteCreate): ApiResult<InviteReply> = call("POST", "invites", body)
+
+    suspend fun invites(): ApiResult<InvitesReply> = call<Unit, InvitesReply>("GET", "invites", null)
+
+    suspend fun revokeInvite(id: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "invites/$id", null)
+
+    suspend fun requestFriend(phone: String): ApiResult<FriendRequestReply> = call("POST", "friends/requests", FriendRequestCreate(phone))
+
+    suspend fun friends(): ApiResult<FriendsReply> = call<Unit, FriendsReply>("GET", "friends", null)
+
+    suspend fun acceptRequest(id: String): ApiResult<FriendAcceptReply> = call<Unit, FriendAcceptReply>("POST", "friends/requests/$id/accept", null)
+
+    suspend fun declineRequest(id: String): ApiResult<Unit> = call<Unit, Unit>("POST", "friends/requests/$id/decline", null)
+
+    suspend fun cancelRequest(id: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "friends/requests/$id", null)
+
+    suspend fun unfriend(userId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "friends/$userId", null)
+
+    suspend fun block(userId: String): ApiResult<Unit> = call("POST", "blocks", BlockCreate(userId))
+
+    suspend fun unblock(userId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "blocks/$userId", null)
+
     suspend fun me(): ApiResult<MeReply> = call<Unit, MeReply>("GET", "me", null)
 
     suspend fun updateDisplayName(name: String): ApiResult<MeReply> = call("PATCH", "me", PatchMe(name))

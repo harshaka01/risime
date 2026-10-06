@@ -40,7 +40,12 @@ data class User(
     val company: String,
     /** §7: absent means true (pre-v1.4 servers have no gate). */
     @SerialName("phone_verified") val phoneVerified: Boolean = true,
+    /** §9.1: set while the user joined by invite and isn't SMS-verified. */
+    @SerialName("vouched_by") val vouchedBy: VouchedBy? = null,
 )
+
+@Serializable
+data class VouchedBy(@SerialName("user_id") val userId: String, @SerialName("display_name") val displayName: String)
 
 @Serializable
 data class AuthVerifyReply(val token: String, val user: User)
@@ -196,9 +201,13 @@ data class Signal(val kind: String, val data: JsonObject) {
     fun typing(): TypingData? =
         if (kind == KIND_TYPING) runCatching { ProtocolJson.decodeFromJsonElement<TypingData>(data) }.getOrNull() else null
 
+    fun friend(): FriendSignal? =
+        if (kind == KIND_FRIEND) runCatching { ProtocolJson.decodeFromJsonElement<FriendSignal>(data) }.getOrNull() else null
+
     companion object {
         const val KIND_PRESENCE = "presence"
         const val KIND_TYPING = "typing"
+        const val KIND_FRIEND = "friend"
     }
 }
 
@@ -246,6 +255,11 @@ object AuthErrors {
     const val RATE_LIMITED = "rate_limited"
     const val TOO_MANY_ATTEMPTS = "too_many_attempts"
     const val INVALID_DEVICE = "invalid_device"
+    const val NOT_FRIENDS = "not_friends"
+    const val NOT_FOUND = "not_found"
+    const val INVALID_PHONE = "invalid_phone"
+    const val INVALID_EMAIL = "invalid_email"
+    const val INVALID_NAME = "invalid_name"
 }
 
 // ---- One-time phone verification (§7, v1.4) ----
@@ -287,5 +301,101 @@ data class PushPayload(val type: String, val v: String? = null) {
 
         /** From FCM's `RemoteMessage.data` map. */
         fun fromData(data: Map<String, String>): PushPayload? = data["type"]?.let { PushPayload(it, data["v"]) }
+    }
+}
+
+// ---- Invites and friends (§9, v1.6) ----
+
+@Serializable
+data class InviteCreate(val phone: String, val email: String, val name: String)
+
+@Serializable
+data class Invite(
+    val id: String,
+    val phone: String,
+    val email: String,
+    val name: String,
+    val status: String,
+    @SerialName("expires_at") val expiresAt: String,
+    @SerialName("inserted_at") val insertedAt: String,
+    val subject: String = "Join me on RisiMe",
+    @SerialName("share_text") val shareText: String,
+    val link: String,
+) {
+    val pending: Boolean get() = status == "pending"
+}
+
+@Serializable
+data class InviteReply(val invite: Invite)
+
+@Serializable
+data class InvitesReply(val invites: List<Invite>)
+
+@Serializable
+data class FriendRequestCreate(val phone: String)
+
+@Serializable
+data class FriendRequestReply(val status: String)
+
+@Serializable
+data class Friend(
+    @SerialName("user_id") val userId: String,
+    val phone: String,
+    @SerialName("display_name") val displayName: String,
+    val company: String = "",
+    @SerialName("vouched_by") val vouchedBy: VouchedBy? = null,
+    val since: String? = null,
+)
+
+/** Incoming: user_id/display_name/company set. Outgoing: only the phone you entered (never reveals registration). */
+@Serializable
+data class FriendRequest(
+    val id: String,
+    val phone: String,
+    @SerialName("user_id") val userId: String? = null,
+    @SerialName("display_name") val displayName: String? = null,
+    val company: String? = null,
+    @SerialName("inserted_at") val insertedAt: String? = null,
+)
+
+@Serializable
+data class BlockedUser(
+    @SerialName("user_id") val userId: String,
+    val phone: String,
+    @SerialName("display_name") val displayName: String,
+)
+
+@Serializable
+data class FriendsReply(
+    val friends: List<Friend> = emptyList(),
+    val incoming: List<FriendRequest> = emptyList(),
+    val outgoing: List<FriendRequest> = emptyList(),
+    val blocked: List<BlockedUser> = emptyList(),
+)
+
+@Serializable
+data class FriendAcceptReply(val friend: Friend)
+
+@Serializable
+data class BlockCreate(@SerialName("user_id") val userId: String)
+
+@Serializable
+data class FriendSignalUser(
+    @SerialName("user_id") val userId: String,
+    val phone: String,
+    @SerialName("display_name") val displayName: String,
+    val company: String = "",
+)
+
+/** §9.3 `signal` kind `friend`. */
+@Serializable
+data class FriendSignal(
+    val action: String,
+    @SerialName("request_id") val requestId: String,
+    val user: FriendSignalUser,
+) {
+    companion object {
+        const val REQUEST_RECEIVED = "request_received"
+        const val REQUEST_ACCEPTED = "request_accepted"
     }
 }
