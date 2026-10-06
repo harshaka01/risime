@@ -18,10 +18,13 @@ defmodule RisiMe.ContractExamplesTest do
               presence_watch_reply.json signal_presence.json signal_typing.json typing.json
               auth_config.json error_not_allowlisted.json error_invalid_token.json
               error_identity_conflict.json auth_refresh.json auth_refresh_reply.json
-              auth_refresh_error.json)
+              auth_refresh_error.json auth_config_v14.json me_reply_unverified.json
+              phone_verify_request_reply.json phone_verify_confirm.json
+              error_phone_unverified.json error_invalid_code_attempts.json
+              error_already_verified.json error_sms_unavailable.json)
+
   # v1.4 (SMS phone verification): parse-only placeholders added by root with the contract
   # merge; the server role replaces them with real checks when it implements §7.
-  @pending_v1_4 ~w(auth_config_v14.json me_reply_unverified.json phone_verify_request_reply.json phone_verify_confirm.json error_phone_unverified.json error_invalid_code_attempts.json error_already_verified.json error_sms_unavailable.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -54,12 +57,7 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- (@checked ++ @pending_v1_4) == [],
-           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_4))}"
-  end
-
-  test "v1.4 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_4, do: assert(is_map(example(name)))
+    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
   end
 
   setup do
@@ -250,6 +248,85 @@ defmodule RisiMe.ContractExamplesTest do
     ref = push(chan, "auth:refresh", %{"token" => access_token(other.email)})
     assert_reply ref, :error, error
     assert wire(error) == example("auth_refresh_error.json")
+  end
+
+  ## v1.4 (§7)
+
+  defp post_json(path, token, body) do
+    conn =
+      http()
+      |> Plug.Conn.put_req_header("authorization", "Bearer " <> token)
+      |> Phoenix.ConnTest.dispatch(@endpoint, :post, path, body)
+
+    {conn.status, Jason.decode!(conn.resp_body)}
+  end
+
+  describe "v1.4 with the phone gate on" do
+    setup do
+      RisiMe.Auth.clear_cache()
+      Application.put_env(:risime, :phone_verification, :required)
+
+      on_exit(fn ->
+        Application.put_env(:risime, :phone_verification, :off)
+        Application.put_env(:risime, :dev_local_auth, true)
+        Application.put_env(:risime, :sms_mode, :test)
+      end)
+
+      entry = allowlist_entry()
+
+      %{
+        entry: entry,
+        token: RisiMe.OIDCHelpers.access_token(entry.email, %{"sub" => "v14-" <> entry.phone})
+      }
+    end
+
+    test "auth_config_v14.json" do
+      Application.put_env(:risime, :dev_local_auth, false)
+      assert get_json("/api/v1/auth/config") == {200, example("auth_config_v14.json")}
+    end
+
+    test "me_reply_unverified.json and error_phone_unverified.json", %{token: t} do
+      ex = example("me_reply_unverified.json")
+      assert ApiJSON.user(atomize(ex["user"])) |> wire() == ex["user"]
+      {200, ours} = get_json("/api/v1/me", t)
+      assert_same_shape(ours, ex)
+      assert ours["user"]["phone_verified"] == false
+
+      assert get_json("/api/v1/contacts", t) == {403, example("error_phone_unverified.json")}
+    end
+
+    test "phone_verify_request_reply.json, phone_verify_confirm.json, error_invalid_code_attempts.json, error_already_verified.json",
+         %{entry: e, token: t} do
+      {200, reply} = post_json("/api/v1/me/phone/verify/request", t, %{})
+      ex = example("phone_verify_request_reply.json")
+      assert_same_shape(reply, ex)
+      assert reply["to"] =~ ~r/^\+9477(•)+\d\d$/u and ex["to"] =~ ~r/^\+9477(•)+\d\d$/u
+      assert_receive {:otp, :sms, phone, %{code: code}}
+      assert phone == e.phone
+
+      # The decoder accepts the example payload (its code is wrong here: two wrong tries).
+      confirm = example("phone_verify_confirm.json")
+      wrong = if confirm["code"] == code, do: "000000", else: confirm["code"]
+      {401, _} = post_json("/api/v1/me/phone/verify/confirm", t, %{"code" => wrong})
+
+      assert post_json("/api/v1/me/phone/verify/confirm", t, %{"code" => wrong}) ==
+               {401, example("error_invalid_code_attempts.json")}
+
+      {200, %{"user" => %{"phone_verified" => true}}} =
+        post_json("/api/v1/me/phone/verify/confirm", t, %{"code" => code})
+
+      assert post_json("/api/v1/me/phone/verify/request", t, %{}) ==
+               {409, example("error_already_verified.json")}
+    end
+
+    test "error_sms_unavailable.json", %{token: t} do
+      Application.put_env(:risime, :sms_mode, :log)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert post_json("/api/v1/me/phone/verify/request", t, %{}) ==
+                 {503, example("error_sms_unavailable.json")}
+      end)
+    end
   end
 
   defp atomize(map), do: Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)
