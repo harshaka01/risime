@@ -248,8 +248,14 @@ class AppContainer(context: Context) {
         kickGroupOps()
     }
 
-    /** S4 notification (chunk 8). */
-    private suspend fun notifyAddedToGroup(conversationId: String, actor: String) = Unit
+    /** §12.7 S4: "Kamal added you to <name>" (the name from the Welcome's group_meta), unless that chat is open. */
+    private suspend fun notifyAddedToGroup(conversationId: String, actor: String) {
+        if (foreground.value) return
+        val name = db.groups().get(conversationId)?.name ?: mlsEngine?.groupMeta(conversationId)?.name
+        val who = db.groups().members(conversationId).firstOrNull { it.userId.equals(actor, true) }?.displayName
+            ?: contacts.contacts.first().firstOrNull { it.userId.equals(actor, true) }?.displayName ?: "Someone"
+        notifier.postAddedToGroup(conversationId, lk.codegen.risime.push.addedToGroupText(who, name))
+    }
 
     /** GET /groups/{id}: server truth for members, roles and owed ops; 404 keeps the local snapshot read-only (S3). */
     suspend fun refreshGroup(conversationId: String) {
@@ -661,7 +667,12 @@ class AppContainer(context: Context) {
         val reactionAdds = db.reactions().addsSince(since)
         val targets = reactionAdds.map { it.targetMessageId }.distinct().associateWith { db.messages().byMessageId(it) }
         val plan = lk.codegen.risime.push.mergeReactionNotifications(
-            planChatNotifications(db.messages().unreadIncoming(), contactList, since, open),
+            planChatNotifications(
+                db.messages().unreadIncoming(), contactList, since, open,
+                groupNames = db.groups().allNow().associate { it.conversationId to lk.codegen.risime.data.groups.groupDisplayName(it.name) },
+                memberNames = db.groups().observeAllMembers().first().groupBy { it.conversationId }
+                    .mapValues { (_, ms) -> ms.associate { it.userId.lowercase() to it.displayName } },
+            ),
             reactionAdds, { targets[it] }, { id -> names[id.lowercase()] ?: "Someone" }, me, open,
         )
         if (!foreground.value) notifier.postChats(plan)

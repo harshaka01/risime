@@ -44,8 +44,18 @@ class Notifier(private val context: Context) {
         if (plan.isEmpty() || !allowed()) return
         ensureChannels()
         plan.forEach { n ->
-            val style = NotificationCompat.InboxStyle().also { st -> n.lines.forEach { st.addLine(it) } }
-            if (n.count > n.lines.size) style.setSummaryText("${n.count} new messages")
+            val style: NotificationCompat.Style = if (n.group) {
+                // §12: one notification per group conversation, a sender Person per line.
+                NotificationCompat.MessagingStyle(androidx.core.app.Person.Builder().setName("You").build())
+                    .setConversationTitle(n.title)
+                    .setGroupConversation(true)
+                    .also { st -> n.messages.forEach { m -> st.addMessage(m.text, m.ts, androidx.core.app.Person.Builder().setName(m.sender).build()) } }
+            } else {
+                NotificationCompat.InboxStyle().also { st ->
+                    n.lines.forEach { st.addLine(it) }
+                    if (n.count > n.lines.size) st.setSummaryText("${n.count} new messages")
+                }
+            }
             val b = NotificationCompat.Builder(context, CH_MESSAGES)
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setContentTitle(n.title)
@@ -70,6 +80,25 @@ class Notifier(private val context: Context) {
             .setContentIntent(openIntent(null, SUMMARY_ID))
             .build()
         nm.notify(SUMMARY_ID, summary)
+    }
+
+    /** §12.7 S4: "Kamal added you to Pilot team" (opens the group). */
+    @Suppress("MissingPermission")
+    fun postAddedToGroup(conversationId: String, text: String) {
+        if (!allowed()) return
+        ensureChannels()
+        nm.notify(
+            chatId(conversationId),
+            NotificationCompat.Builder(context, CH_MESSAGES)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("Added to a group")
+                .setContentText(text)
+                .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+                .setGroup(GROUP_MESSAGES)
+                .setAutoCancel(true)
+                .setContentIntent(openIntent(conversationId, chatId(conversationId)))
+                .build(),
+        )
     }
 
     /** Couldn't sync in the background (fingerprint-locked): say so, without any content. */

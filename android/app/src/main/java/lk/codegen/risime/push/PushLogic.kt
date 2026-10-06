@@ -23,7 +23,13 @@ data class ChatNotification(
     val lines: List<String>,
     val count: Int,
     val newestTs: Long,
+    /** §12: a group conversation (MessagingStyle with sender names; [title] = the group name). */
+    val group: Boolean = false,
+    /** Group: the lines with their senders, newest last (at most [MAX_LINES]). */
+    val messages: List<NotifLine> = emptyList(),
 )
+
+data class NotifLine(val sender: String, val text: String, val ts: Long)
 
 const val MAX_LINES = 5
 const val PREVIEW_CHARS = 120
@@ -37,6 +43,10 @@ fun planChatNotifications(
     contacts: List<ContactEntity>,
     notifiedUpTo: Long,
     suppressConversation: String? = null,
+    /** §12: group name per `grp:` conversation (the cached group_meta name). */
+    groupNames: Map<String, String> = emptyMap(),
+    /** §12: member display names per `grp:` conversation (non-friends included). */
+    memberNames: Map<String, Map<String, String>> = emptyMap(),
 ): List<ChatNotification> {
     val names = contacts.filter { it.userId != null }.associate { it.userId!!.lowercase() to it.displayName }
     return unreadIncoming
@@ -46,6 +56,20 @@ fun planChatNotifications(
         .mapNotNull { (conv, msgs) ->
             val sorted = msgs.sortedBy { it.localTs }
             val peer = sorted.last().from
+            if (lk.codegen.risime.net.isGroupConversation(conv)) {
+                val who = { id: String -> memberNames[conv]?.get(id.lowercase()) ?: names[id.lowercase()] ?: "Someone" }
+                val shown = sorted.takeLast(MAX_LINES)
+                return@mapNotNull ChatNotification(
+                    conversationId = conv,
+                    peerId = peer,
+                    title = groupNames[conv] ?: "New group",
+                    lines = shown.map { "${who(it.from)}: ${preview(it.body)}" },
+                    count = sorted.size,
+                    newestTs = sorted.last().localTs,
+                    group = true,
+                    messages = shown.map { NotifLine(who(it.from), preview(it.body), it.localTs) },
+                )
+            }
             ChatNotification(
                 conversationId = conv,
                 peerId = peer,
@@ -109,3 +133,7 @@ fun mergeReactionNotifications(
         }
     return byConv.values.sortedByDescending { it.newestTs }
 }
+
+/** §12.7 S4 notification text. */
+fun addedToGroupText(actor: String, groupName: String?): String =
+    if (groupName.isNullOrBlank()) "$actor added you to a group" else "$actor added you to $groupName"
