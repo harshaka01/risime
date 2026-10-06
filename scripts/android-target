@@ -11,7 +11,9 @@
 # a one-time `sudo modprobe binder_linux ...` (see check); everything else is user space.
 set -euo pipefail
 IMAGE="${REDROID_IMAGE:-redroid/redroid:14.0.0_64only-latest@sha256:0a611199ba2e0b5d60af39b3327a517f6407231f4352114ed3bd3cbfe2be69aa}"
-NAME=risime-redroid
+# REDROID_INSTANCE (e.g. -rel for the release gate) + REDROID_PORT give a separate container, so
+# sessions don't stop each other's redroid.
+NAME="risime-redroid${REDROID_INSTANCE:-}"
 PORT="${REDROID_PORT:-5655}"
 SERIAL="127.0.0.1:$PORT"
 ADB_DIR="$HOME/.local/opt/adb-arm64"

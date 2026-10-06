@@ -34,7 +34,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
 M="$HOME/.local/bin/mise exec --"
-PORT=4110
+# UPGRADE_INSTANCE (e.g. _rel) isolates a run: its own temp-server port, tmux session, DB/keyspace,
+# worktree and redroid container (REDROID_INSTANCE/REDROID_PORT are derived unless already set).
+USUF="${UPGRADE_INSTANCE:-}"; PORT="${UPGRADE_PORT:-4110}"
+if [ -n "$USUF" ]; then export REDROID_INSTANCE="${REDROID_INSTANCE:-${USUF//_/-}}" REDROID_PORT="${REDROID_PORT:-$((5655 + PORT - 4110))}"; fi
 PKG=lk.codegen.risime
 SPARK="${SPARK_HOST:-spark2}"
 OUTDIR="$HOME/risime-logs/upgrade-test"
@@ -46,12 +49,12 @@ field() { [[ "$1" =~ $2=([0-9]+) ]] && echo "${BASH_REMATCH[1]}" || echo ""; }  
 
 # ---------------------------------------------------------------- server half (runs on spark2) --
 if [ "${1:-}" = _server ]; then
-  shift; cmd="$1"; RUN="$HOME/risime-logs/upgrade-test/server"; mkdir -p "$RUN"
-  export RISIME_DEV_DB=risime_upgrade RISIME_DEV_KEYSPACE=risime_upgrade ERL_EPMD_ADDRESS=127.0.0.1
+  shift; cmd="$1"; RUN="$HOME/risime-logs/upgrade-test/server$USUF"; mkdir -p "$RUN"
+  export RISIME_DEV_DB=risime_upgrade$USUF RISIME_DEV_KEYSPACE=risime_upgrade$USUF ERL_EPMD_ADDRESS=127.0.0.1
   # The temp server runs from a clean worktree at the commit under test (UPGRADE_SERVER_REV, default
   # HEAD), never from the shared checkout: other sessions' uncommitted edits or compiles can't break
   # or stall it. Its own build dir, deps shared read-only, and no code reloading.
-  WT="$HOME/.cache/risime-upgrade-wt"; REV="${UPGRADE_SERVER_REV:-$(git -C "$REPO" rev-parse HEAD)}"
+  WT="$HOME/.cache/risime-upgrade-wt$USUF"; REV="${UPGRADE_SERVER_REV:-$(git -C "$REPO" rev-parse HEAD)}"
   if [ "$cmd" = start ]; then
     if [ -e "$WT/.git" ]; then git -C "$WT" checkout -q --force --detach "$REV"
     else mkdir -p "$(dirname "$WT")"; git -C "$REPO" worktree add -q --force --detach "$WT" "$REV"; fi
@@ -64,7 +67,7 @@ if [ "${1:-}" = _server ]; then
   fx() { (cd "$SRV" && $M mix run "$RUN/fixtures.exs" "$@" 2>/dev/null | grep '^upgrade:' || true); }
   case "$cmd" in
     start)
-      tmux kill-session -t risime-upgrade 2>/dev/null || true; sleep 1
+      tmux kill-session -t "risime-upgrade$USUF" 2>/dev/null || true; sleep 1
       busy="$(ss -ltnH "sport = :$PORT" || true)"; [ -z "$busy" ] || { echo "port $PORT busy"; exit 1; }
       cat > "$RUN/fixtures.exs" <<'EXS'
 alias RisiMe.{Accounts, Repo}
@@ -101,7 +104,7 @@ EXS
        $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
         || { echo "could not create/migrate the upgrade store"; exit 1; }
       (cd "$SRV" && $M mix compile >/dev/null 2>&1) || { echo "temp server: compile failed"; exit 1; }
-      tmux new -d -s risime-upgrade "cd '$SRV' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=risime_upgrade RISIME_DEV_KEYSPACE=risime_upgrade ERL_EPMD_ADDRESS=127.0.0.1 \
+      tmux new -d -s "risime-upgrade$USUF" "cd '$SRV' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=risime_upgrade$USUF RISIME_DEV_KEYSPACE=risime_upgrade$USUF ERL_EPMD_ADDRESS=127.0.0.1 \
         PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
         RISIME_AUTH_LOG='$RUN/auth.log' $M mix phx.server > '$RUN/server.log' 2>&1"
       for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
@@ -111,7 +114,7 @@ EXS
     send) fx send "${2:?count}" ;;
     # The newest dev OTP for a phone (the code is printed to the caller only, never logged here).
     otp) grep -a "\[DEV OTP\] ${2:?phone}:" "$RUN/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true ;;
-    stop) tmux kill-session -t risime-upgrade 2>/dev/null || true ;;
+    stop) tmux kill-session -t "risime-upgrade$USUF" 2>/dev/null || true ;;
     *) echo "unknown _server $cmd"; exit 2 ;;
   esac
   exit 0
