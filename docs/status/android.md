@@ -1,5 +1,55 @@
 # Android status — 0.2 nightlies
 
+## v1.10 history after a reinstall (§13) — READY
+**READY** for contract v1.10 §13 (decision 043), following the review's chunk order
+(`contract/proposals/reviews/2026-10-06-history-v1.10-android.md`). Gate green on `main` with
+`app/google-services.json` in place (push build): `./gradlew assembleDebug testDebugUnitTest`
+(279 JVM tests, 5 skipped live/opt-in). `scripts/interop` (own `risime_interop` store, server v1.10
+`5c037a1`): **INTEROP OK 3 runs in a row**, including the new `LiveE2eeInteropTest.liveHistory`.
+
+What's in the app:
+- **Protocol:** `EventsPage.historyBefore`, `RealtimeListener.onHistoryBefore` (called before each
+  join/sync page's events), `ApiErrorBody.used/limit` (`quota_exceeded`); typed decoders for the
+  three v1.10 examples.
+- **Pipeline:** `MlsResult.BeforeInstall` at the three loss points: no group / a generation the
+  device doesn't hold (rule 1, `server_ts < history_before` as `Instant`s), the Welcome's replay of
+  parked lower epochs (rule 2), and parked older-generation rows read before `dropOlderGenerations`
+  (one marker, max `server_ts`). Rule 1 never pre-empts a decryptable message (existing group at our
+  epoch decrypts first; a decrypt failure before `history_before` counts as pre-install) and never
+  runs on replayed `mls_pending` rows. Null `history_before` = rule 2 only. Every other drop (decrypt
+  exception, sender mismatch, missing generation/epoch, live stale generation, rejected Welcome)
+  becomes the "Some messages couldn't be decrypted" line.
+- **Markers:** `sys:history:<conv>` / `sys:undecryptable:<conv>`, `kind = system`, READ/acked READ,
+  `INSERT OR IGNORE` + forward-only move (`local_ts` = server_ts + 1 ms), in the event's
+  transaction. DM chat renders them as centred system lines (no bubble/ticks/reactions); chat-list
+  preview is muted with no "You:"; group screen uses the new `systemText` branches; search skips
+  system rows. Never unread, acked or notified.
+- **Replay:** restored rows (before `history_before`, or > 5 min older than the clock) take
+  `local_ts` from `server_ts` (group_event lines too); received pre-install plaintext is stored read
+  with no acks (S-b); own copies are outgoing, never acked, ticked by replayed `status` /
+  `group_receipt`; a copy matching a PENDING outbox row by `client_msg_id` fills its id and moves it
+  to SENT (S-a). A `since: null` join suppresses notifications (`notifyFromLocal`, "added you to")
+  until it is live, then sets `notifiedUpTo = now`.
+- **Found in the live run, fixed client-side:** after logout + login on the same `device_id`, the
+  replayed inbox holds the old Welcome for the wiped key package (no server_ts on Welcomes). A Welcome
+  whose event_id TimeUUID is before `history_before` is now ignored instead of showing the
+  undecryptable line. Root may want this sentence in §13.3.
+
+Tests: `MlsPipelineTest` (rule 1/2 guards, null hb, parked rows never re-judged, older-generation
+marker, old device's own sends, corrupted ciphertext, stale Welcome), `FreshInstallReplayTest`
+(DM fresh install: both plaintext sides with ticks, one marker between old plaintext and readable
+messages, server-time `local_ts`, only the readable message acked, idempotent across duplicate
+delivery and restart, empty notification plan incl. reactions; group variant; new member without a
+marker; live copy before the send reply), `HistoryMarkerRoomTest` (real Room SQL: upsert and all
+exclusions), `DmSystemRowTest` (Robolectric Compose), `PushLogicTest`, `PhoenixRealtimeClientTest`,
+`ContractExamplesTest`. Live: `liveHistory` (history_before stable / null without device_id, sender
+copy event id, (i) second device, (ii) reinstall, (iii) logout/login with a new history_before).
+
+Push (nightly.11): builds with `google-services.json`; registration path unchanged by v1.10; wake-ups
+only sync; own sender copies are outgoing and never notify; a fresh-install replay never notifies.
+
+Not done: the device run on the emulator + USB phone (needs the laptop); S-d/S-e/S-f/S-g.
+
 ## v1.9 groups with MLS (§12) — READY
 **READY** for contract v1.9 §12 (decision 041), following the review's chunk order
 (`contract/proposals/reviews/2026-10-06-groups-v1.9-android.md`). Gate green on `main`:
