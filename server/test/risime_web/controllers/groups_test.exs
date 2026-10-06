@@ -176,8 +176,17 @@ defmodule RisiMeWeb.GroupsTest do
     end
 
     test "friends carry group_ready", %{a: a, b: b, c: c} do
-      # An old instance without device_id + a current groups-capable device ⇒ ready (hotfix).
+      # An old instance without device_id, last seen before c's device registered ⇒ ready.
+      import Ecto.Query, only: [from: 2]
       :ok = RisiMe.MLS.record_instance(c.user.id, nil, "jwt", nil)
+
+      Repo.update_all(
+        from(i in "app_instances",
+          where: i.user_id == type(^c.user.id, :binary_id) and i.instance_key == "legacy:jwt"
+        ),
+        set: [last_seen_at: DateTime.add(DateTime.utc_now(), -3600, :second)]
+      )
+
       {200, %{"friends" => friends}} = api(:get, "/api/v1/friends", a.token)
       ready = Map.new(friends, &{&1["user_id"], &1["group_ready"]})
       assert ready == %{b.user.id => true, c.user.id => true}

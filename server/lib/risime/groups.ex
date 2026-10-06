@@ -82,12 +82,11 @@ defmodule RisiMe.Groups do
   current MLS device with `groups`, and every other install of theirs that can still receive
   being groups-capable. `missing` reasons: `no_mls` (no current MLS device) or `legacy_app`.
 
-  Only instances that can still receive count: a census row with a `device_id` that is a
-  registered device of the user, seen in the last 30 days. An instance without a `device_id`
-  (a pre-v1.7 build) never makes a user not-ready on its own: it is listed as `legacy_app` only
-  when the user is not ready anyway and it is their most recent instance, not superseded by a
-  later device registration. A registration (`PUT /me/devices`) supersedes every older
-  instance without a `device_id`.
+  Only installs that can still receive count: a registered device of the user seen in the
+  census (30 days), or a census instance without a `device_id` (a pre-v1.7 build) seen **after**
+  the user's latest device registration. Such an instance seen before that registration is
+  superseded and never blocks. A blocking device-less instance is listed as `legacy_app` with
+  `device_id: nil`.
   """
   def readiness(user_ids) do
     user_ids = Enum.uniq(user_ids)
@@ -136,16 +135,15 @@ defmodule RisiMe.Groups do
         end
       end
 
-    not_ready = MapSet.new(stale ++ without, & &1.user_id)
-
-    # A pre-v1.7 instance is only an explanation, never a cause.
+    # An old build still in use (seen after the latest registration) would miss group messages.
     legacy =
-      for u <- not_ready,
-          {^u, nil, seen} <- [instances |> Enum.filter(&(elem(&1, 0) == u)) |> List.last()],
+      for {u, nil, seen} <- instances,
           not superseded?(seen, last_registration[u]),
+          uniq: true,
           do: %{user_id: u, device_id: nil, reason: "legacy_app"}
 
     missing = Enum.uniq_by(legacy ++ stale ++ without, &{&1.user_id, &1.device_id})
+    not_ready = MapSet.new(missing, & &1.user_id)
     {user_ids |> Enum.reject(&MapSet.member?(not_ready, &1)) |> MapSet.new(), missing}
   end
 
