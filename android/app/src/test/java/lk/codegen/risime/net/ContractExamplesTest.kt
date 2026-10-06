@@ -1,6 +1,11 @@
 package lk.codegen.risime.net
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import org.junit.Assert.assertEquals
@@ -81,15 +86,15 @@ class ContractExamplesTest {
         "event_mls_membership.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.mlsMembership()) } },
         "signal_mls_key_packages_low.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.keyPackagesLow()) } },
         "error_e2ee_required.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
-        // v1.8 (emoji + reactions): parse-only placeholders added by root with the contract merge;
-        // the android role replaces them with typed decoders when it implements §11.
-        "reaction_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "msg_send_reaction.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "msg_send_reaction_and_body.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_reaction.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_unknown_target.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_invalid_emoji.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "limits_graphemes.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "reaction_payload.json" to { s ->
+            (lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) as lk.codegen.risime.data.mls.MlsPayload.Decoded.Reaction)
+        },
+        "msg_send_reaction.json" to { s -> ProtocolJson.decodeFromString<MsgSendReaction>(s) },
+        "msg_send_reaction_and_body.json" to { s -> ProtocolJson.parseToJsonElement(s).jsonObject.also { require("body" in it && "reaction" in it) } },
+        "event_reaction.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.reaction()) } },
+        "error_unknown_target.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
+        "error_invalid_emoji.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
+        "limits_graphemes.json" to { s -> ProtocolJson.parseToJsonElement(s).jsonObject.also { require("cases" in it) } },
     )
 
     @Test
@@ -337,6 +342,68 @@ class ContractExamplesTest {
         assertEquals(AuthErrors.E2EE_REQUIRED, ProtocolJson.decodeFromString<ErrorReason>(read("error_e2ee_required.json")).reason)
         // A plaintext event still has its body and no ciphertext.
         assertTrue(!ProtocolJson.decodeFromString<Event>(read("event_message.json")).messageData()!!.encrypted)
+    }
+
+    @Test
+    fun reactionsV18Examples() {
+        val env = lk.codegen.risime.data.mls.MlsPayload.decode(read("reaction_payload.json").toByteArray())
+        assertEquals(lk.codegen.risime.data.mls.MlsPayload.Decoded.Reaction("c1a2b3c4-a0b1-11f0-8000-0242ac120002", "👍", ReactionBody.ADD), env)
+        // Our envelope encoder produces exactly the contract's JSON.
+        assertEquals(
+            ProtocolJson.parseToJsonElement(read("reaction_payload.json")),
+            ProtocolJson.parseToJsonElement(lk.codegen.risime.data.mls.MlsPayload.reaction("c1a2b3c4-a0b1-11f0-8000-0242ac120002", "👍", "add").decodeToString()),
+        )
+        val send = ProtocolJson.parseToJsonElement(read("msg_send_reaction.json")) as JsonObject
+        val model = ProtocolJson.decodeFromJsonElement<MsgSendReaction>(send)
+        assertEquals(send, ProtocolJson.encodeToJsonElement(model)) // exactly one content field, no "body"
+        assertFalse("body" in ProtocolJson.encodeToJsonElement(model).jsonObject)
+        assertEquals("❤️", model.reaction.emoji)
+        val both = ProtocolJson.parseToJsonElement(read("msg_send_reaction_and_body.json")).jsonObject
+        assertTrue("body" in both && "reaction" in both) // the bad_request case: the client never sends it
+        val ev = ProtocolJson.decodeFromString<Event>(read("event_reaction.json"))
+        val r = ev.reaction()!!
+        assertEquals(ev.eventId, r.messageId)
+        assertEquals(model.reaction.target, r.target)
+        assertEquals(null, ev.messageData()) // not a message
+        assertEquals(AuthErrors.UNKNOWN_TARGET, ProtocolJson.decodeFromString<ErrorReason>(read("error_unknown_target.json")).reason)
+        assertEquals(AuthErrors.INVALID_EMOJI, ProtocolJson.decodeFromString<ErrorReason>(read("error_invalid_emoji.json")).reason)
+    }
+
+    /** §11.1: the shared fixture through ICU4J (= android.icu on devices). */
+    @Test
+    fun graphemeLimitsMatchTheFixture() {
+        val icu = lk.codegen.risime.data.GraphemeCounter { t ->
+            val it = com.ibm.icu.text.BreakIterator.getCharacterInstance()
+            it.setText(t)
+            var n = 0
+            while (it.next() != com.ibm.icu.text.BreakIterator.DONE) n++
+            n
+        }
+        val fx = ProtocolJson.parseToJsonElement(read("limits_graphemes.json")).jsonObject
+        val cases = fx["cases"]!!.jsonArray
+        assertTrue(cases.size >= 6)
+        for (c in cases) {
+            val o = c.jsonObject
+            assertEquals(o["name"].toString(), o["graphemes"]!!.jsonPrimitive.int, icu.count(o["text"]!!.jsonPrimitive.content))
+        }
+        assertEquals(lk.codegen.risime.data.BodyLimits.MAX_GRAPHEMES, fx["max_graphemes"]!!.jsonPrimitive.int)
+        assertEquals(lk.codegen.risime.data.BodyLimits.MAX_BYTES, fx["max_bytes"]!!.jsonPrimitive.int)
+        for (g in fx["generated"]!!.jsonArray) {
+            val o = g.jsonObject
+            val text = o["repeat"]!!.jsonPrimitive.content.repeat(o["count"]!!.jsonPrimitive.int)
+            val ok = o["ok"]!!.jsonPrimitive.boolean
+            assertEquals(o["name"].toString(), ok, !lk.codegen.risime.data.BodyLimits.of(text, icu).tooLong)
+        }
+        // The same rule with 4096 ZWJ families (25 bytes each → over the 16 KiB byte cap first).
+        val fam = "👨‍👩‍👧‍👦"
+        val l = lk.codegen.risime.data.BodyLimits.of(fam.repeat(4096), icu)
+        assertEquals(4096, l.graphemes)
+        assertTrue(l.tooLong && l.bytes > lk.codegen.risime.data.BodyLimits.MAX_BYTES)
+        assertTrue(lk.codegen.risime.data.BodyLimits.of("a".repeat(3900), icu).showCounter)
+        assertFalse(lk.codegen.risime.data.BodyLimits.of("a".repeat(3899), icu).showCounter)
+        // Reaction emoji rules.
+        for (e in listOf("👍", "❤️", "👍🏽", "🇱🇰", fam, "🏴󠁧󠁢󠁥󠁮󠁧󠁿")) assertTrue(e, lk.codegen.risime.data.isValidReactionEmoji(e, icu))
+        for (e in listOf("", "👍👍", "a b", " ", "\u0007", "x".repeat(33))) assertFalse(e, lk.codegen.risime.data.isValidReactionEmoji(e, icu))
     }
 
     @Test

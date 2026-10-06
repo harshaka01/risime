@@ -136,6 +136,8 @@ data class Event(
     fun statusData(): StatusData? =
         if (kind == KIND_STATUS) ProtocolJson.decodeFromJsonElement<StatusData>(data) else null
 
+    fun reaction(): ReactionEvent? = if (kind == KIND_REACTION) ProtocolJson.decodeFromJsonElement<ReactionEvent>(data) else null
+
     fun mlsCommit(): MlsCommitEvent? = if (kind == KIND_MLS_COMMIT) ProtocolJson.decodeFromJsonElement<MlsCommitEvent>(data) else null
 
     fun mlsWelcome(): MlsWelcomeEvent? = if (kind == KIND_MLS_WELCOME) ProtocolJson.decodeFromJsonElement<MlsWelcomeEvent>(data) else null
@@ -146,6 +148,7 @@ data class Event(
     companion object {
         const val KIND_MESSAGE = "message"
         const val KIND_STATUS = "status"
+        const val KIND_REACTION = "reaction"
         const val KIND_MLS_COMMIT = "mls_commit"
         const val KIND_MLS_WELCOME = "mls_welcome"
         const val KIND_MLS_MEMBERSHIP = "mls_membership"
@@ -291,6 +294,9 @@ object AuthErrors {
     const val NOT_READY = "not_ready"
     const val E2EE_REQUIRED = "e2ee_required"
     const val STALE_EPOCH = "stale_epoch"
+    const val UNKNOWN_TARGET = "unknown_target"
+    const val INVALID_EMOJI = "invalid_emoji"
+    const val TOO_LONG = "too_long"
 }
 
 // ---- One-time phone verification (§7, v1.4) ----
@@ -554,3 +560,36 @@ data class MlsMembershipEvent(
 
 @Serializable
 data class MlsKeyPackagesLow(val count: Int)
+
+// ---- Emoji and reactions (§11, v1.8) ----
+
+@Serializable
+data class ReactionBody(val target: String, val emoji: String, val op: String) {
+    companion object {
+        const val ADD = "add"
+        const val REMOVE = "remove"
+    }
+}
+
+/** Plaintext reaction: `msg:send` with `reaction` instead of `body` (exactly one content field). */
+@Serializable
+data class MsgSendReaction(
+    @SerialName("client_msg_id") val clientMsgId: String,
+    val to: String,
+    val reaction: ReactionBody,
+    @SerialName("client_ts") val clientTs: String,
+)
+
+/** §11.2 inbox event kind `reaction` (plaintext conversations). */
+@Serializable
+data class ReactionEvent(
+    @SerialName("message_id") val messageId: String,
+    @SerialName("client_msg_id") val clientMsgId: String,
+    @SerialName("conversation_id") val conversationId: String,
+    val from: String,
+    val to: String,
+    val target: String,
+    val emoji: String,
+    val op: String,
+    @SerialName("server_ts") val serverTs: String,
+)

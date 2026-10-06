@@ -23,6 +23,8 @@ firebaseBom = "34.19.0"
 googleServices = "4.5.0"
 work = "2.12.0"
 jna = "5.19.1"
+icu4j = "78.3"
+emojipicker = "1.7.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -56,6 +58,8 @@ firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
 androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 sqlite-bundled-jvm = { module = "androidx.sqlite:sqlite-bundled-jvm", version = "2.6.2" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+icu4j = { module = "com.ibm.icu:icu4j", version.ref = "icu4j" }
+emoji2-emojipicker = { module = "androidx.emoji2:emoji2-emojipicker", version.ref = "emojipicker" }
 androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
 androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }
 

@@ -13,6 +13,9 @@ sealed interface MlsResult {
     /** A decrypted e2ee message: insert it like a plaintext one (same transaction). */
     data class Plaintext(val message: MessageData, val body: String) : MlsResult
 
+    /** §11.2: a decrypted reaction (effective state by server_ts + message_id). */
+    data class Reaction(val message: MessageData, val target: String, val emoji: String, val op: String) : MlsResult
+
     /** Group state changed (commit applied, welcome joined): replay this conversation's pending events. */
     data class GroupChanged(val conversationId: String) : MlsResult
 
@@ -118,6 +121,7 @@ class MlsPipeline(
             } else {
                 when (val p = MlsPayload.decode(d.plaintext)) {
                     is MlsPayload.Decoded.Text -> MlsResult.Plaintext(msg, p.body)
+                    is MlsPayload.Decoded.Reaction -> MlsResult.Reaction(msg, p.target, p.emoji, p.op)
                     is MlsPayload.Decoded.Ignored -> {
                         log("ignored payload type ${p.type} in ${msg.messageId}")
                         MlsResult.Ignored

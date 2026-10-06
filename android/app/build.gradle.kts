@@ -186,7 +186,9 @@ dependencies {
 
     // JNA for the UniFFI bindings (only with the Rust toolchain: the laptop builds without crypto).
     if (cryptoToolchain) implementation(libs.jna) { artifact { type = "aar" } }
+    implementation(libs.emoji2.emojipicker) // composer + reaction picker (downloadable EmojiCompat font, no bundled font)
     testImplementation(libs.junit)
+    testImplementation(libs.icu4j) // grapheme clusters on the JVM, as android.icu does on devices
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.sqlite.bundled.jvm) // JVM SQLite for the Room migration test

@@ -1,6 +1,7 @@
 package lk.codegen.risime.data.mls
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MlsPayloadTest {
@@ -21,7 +22,12 @@ class MlsPayloadTest {
     }
 
     @Test fun unknownTypesAreIgnored() {
-        assertEquals(MlsPayload.Decoded.Ignored("reaction"), MlsPayload.decode("""{"v":1,"type":"reaction","emoji":"+1","target":"m1"}""".toByteArray()))
+        assertEquals(MlsPayload.Decoded.Ignored("poll"), MlsPayload.decode("""{"v":1,"type":"poll","q":"?"}""".toByteArray()))
+        // v1.8: reactions are understood; a malformed one shows nothing.
+        assertEquals(MlsPayload.Decoded.Reaction("m1", "👍", "add"), MlsPayload.decode(MlsPayload.reaction("m1", "👍", "add")))
+        assertEquals(MlsPayload.Decoded.Reaction("m1", "👍", "remove"), MlsPayload.decode("""{"v":1,"type":"reaction","target":"m1","emoji":"👍","op":"remove","x":1}""".toByteArray()))
+        assertTrue(MlsPayload.decode("""{"v":1,"type":"reaction","emoji":"+1","target":"m1"}""".toByteArray()) is MlsPayload.Decoded.Ignored)
+        assertTrue(MlsPayload.decode("""{"v":1,"type":"reaction","target":"m1","emoji":"👍","op":"toggle"}""".toByteArray()) is MlsPayload.Decoded.Ignored)
         assertEquals(MlsPayload.Decoded.Ignored("image"), MlsPayload.decode("""{"v":2,"type":"image"}""".toByteArray()))
         // Forward compatible: extra fields and other versions of "text" still read the body.
         assertEquals(MlsPayload.Decoded.Text("hi"), MlsPayload.decode("""{"v":2,"type":"text","body":"hi","fmt":"md"}""".toByteArray()))
