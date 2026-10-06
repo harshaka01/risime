@@ -228,8 +228,8 @@ class AppContainer(context: Context) {
     /** Release-only self-updater (decision 016); disabled in debug builds. */
     val updater = Updater(context, http)
 
-    /** The peer of the chat on screen, if any; always included in the presence watch. */
-    val openChatPeer = MutableStateFlow<String?>(null)
+    /** The conversation on screen (`dm:`/`grp:`), if any: its notifications are suppressed, a DM peer is watched. */
+    val openConversation = MutableStateFlow<String?>(null)
 
     val engine: ChatEngine = ChatEngine(
         messages = db.messages(),
@@ -325,9 +325,10 @@ class AppContainer(context: Context) {
         }
         // §2.5/§9.3: watch friends only (plus the open chat if it's a friend).
         scope.launch {
-            combine(contacts.contacts, openChatPeer) { list, open ->
+            combine(contacts.contacts, openConversation, sessionStore.session) { list, open, s ->
                 val friends = list.filter { it.friend }.mapNotNull { it.userId }
-                watchList(friends, open?.takeIf { o -> friends.any { it.equals(o, ignoreCase = true) } })
+                val peer = s?.user?.id?.let { me -> open?.let { lk.codegen.risime.net.dmPeer(it, me) } }
+                watchList(friends, peer?.takeIf { o -> friends.any { it.equals(o, ignoreCase = true) } })
             }.distinctUntilChanged().collect { realtime.setWatch(it) }
         }
         // §8.1: register this install for push once signed in and verified (no-op without Firebase).
@@ -529,7 +530,7 @@ class AppContainer(context: Context) {
     }
 
     private suspend fun notifyFromLocal() {
-        val open = openChatPeer.value.takeIf { foreground.value }
+        val open = openConversation.value.takeIf { foreground.value }
         val since = sessionStore.notifiedUpTo()
         val contactList = contacts.contacts.first()
         val me = sessionStore.current()?.user?.id ?: return

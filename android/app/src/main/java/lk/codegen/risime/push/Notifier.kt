@@ -31,10 +31,11 @@ class Notifier(private val context: Context) {
         nm.areNotificationsEnabled() && (Build.VERSION.SDK_INT < 33 ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
 
-    private fun openIntent(peerId: String?, code: Int): PendingIntent {
+    /** [conversationId]: the chat to open (`dm:`/`grp:`; older intents carried a peer id, still accepted). */
+    private fun openIntent(conversationId: String?, code: Int): PendingIntent {
         val i = Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            .apply { peerId?.let { putExtra(EXTRA_OPEN_CHAT, it) } }
+            .apply { conversationId?.let { putExtra(EXTRA_OPEN_CHAT, it) } }
         return PendingIntent.getActivity(context, code, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
@@ -56,7 +57,7 @@ class Notifier(private val context: Context) {
                 .setGroup(GROUP_MESSAGES)
                 .setAutoCancel(true)
                 .setWhen(n.newestTs)
-                .setContentIntent(openIntent(n.peerId, chatId(n.conversationId)))
+                .setContentIntent(openIntent(n.conversationId, chatId(n.conversationId)))
             nm.notify(chatId(n.conversationId), b.build())
         }
         val summary = NotificationCompat.Builder(context, CH_MESSAGES)

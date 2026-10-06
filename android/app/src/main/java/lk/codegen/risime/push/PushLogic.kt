@@ -30,23 +30,22 @@ const val PREVIEW_CHARS = 120
 
 /**
  * Unread incoming messages newer than [notifiedUpTo] → one notification per conversation, newest
- * chat first. Chats that are open on screen ([suppressPeer]) are skipped.
+ * chat first. The chat open on screen ([suppressConversation]) is skipped.
  */
 fun planChatNotifications(
     unreadIncoming: List<MessageEntity>,
     contacts: List<ContactEntity>,
     notifiedUpTo: Long,
-    suppressPeer: String? = null,
+    suppressConversation: String? = null,
 ): List<ChatNotification> {
     val names = contacts.filter { it.userId != null }.associate { it.userId!!.lowercase() to it.displayName }
     return unreadIncoming
         .filter { !it.outgoing && it.status != "READ" }
         .groupBy { it.conversationId }
-        .filter { (_, msgs) -> msgs.any { it.localTs > notifiedUpTo } }
+        .filter { (conv, msgs) -> conv != suppressConversation && msgs.any { it.localTs > notifiedUpTo } }
         .mapNotNull { (conv, msgs) ->
             val sorted = msgs.sortedBy { it.localTs }
             val peer = sorted.last().from
-            if (suppressPeer != null && peer.equals(suppressPeer, ignoreCase = true)) return@mapNotNull null
             ChatNotification(
                 conversationId = conv,
                 peerId = peer,
@@ -92,11 +91,11 @@ fun mergeReactionNotifications(
     myMessage: (targetMessageId: String) -> MessageEntity?,
     nameOf: (userId: String) -> String,
     me: String,
-    suppressPeer: String? = null,
+    suppressConversation: String? = null,
 ): List<ChatNotification> {
     val byConv = plan.associateBy { it.conversationId }.toMutableMap()
     adds.filter { it.op == "add" && !it.pending && !it.reactorUserId.equals(me, true) }
-        .filter { suppressPeer == null || !it.reactorUserId.equals(suppressPeer, true) }
+        .filter { it.conversationId != suppressConversation }
         .mapNotNull { r -> myMessage(r.targetMessageId)?.takeIf { it.outgoing }?.let { r to it } }
         .sortedBy { it.first.localTs }
         .forEach { (r, target) ->

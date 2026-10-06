@@ -37,7 +37,7 @@ class PushLogicTest {
         // Nothing newer than what was notified → nothing to post.
         assertTrue(planChatNotifications(msgs, contacts, notifiedUpTo = 30).isEmpty())
         // The chat on screen is never notified.
-        assertTrue(planChatNotifications(msgs, contacts, 0, suppressPeer = "K1").none { it.peerId == "k1" })
+        assertTrue(planChatNotifications(msgs, contacts, 0, suppressConversation = msgs.first { it.from == "k1" }.conversationId).none { it.peerId == "k1" })
     }
 
     @Test fun linesAreCappedAndPreviewed() {
@@ -94,6 +94,6 @@ class PushLogicTest {
         assertEquals(listOf("hi 1", "Kamal reacted 👍 to: lunch at 1?"), merged.lines)
         assertEquals(2, merged.count)
         // The open chat never notifies.
-        assertTrue(mergeReactionNotifications(emptyList(), adds, { lookup[it] }, { "Kamal" }, "me", suppressPeer = "K1").isEmpty())
+        assertTrue(mergeReactionNotifications(emptyList(), adds, { lookup[it] }, { "Kamal" }, "me", suppressConversation = adds.first().conversationId).isEmpty())
     }
 }

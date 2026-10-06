@@ -73,7 +73,7 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
     init {
         refreshE2ee()
         viewModelScope.launch { c.behaviour.chatOpen(peerId) }
-        c.openChatPeer.value = peerId
+        c.openConversation.value = conversationId
         c.notifier.cancelChat(conversationId)
     }
 
@@ -111,7 +111,7 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
 
     override fun onCleared() {
         typingSender.stop()
-        c.openChatPeer.compareAndSet(peerId, null)
+        c.openConversation.compareAndSet(conversationId, null)
     }
 
     /** Called while the chat is on screen (resumed): incoming → read, then ack. */

@@ -83,9 +83,9 @@ private fun MainNav(c: AppContainer, meId: String) {
     // Notification tap → that chat (once signed in, unlocked and verified).
     val openChat by c.openChatRequest.collectAsState()
     LaunchedEffect(openChat) {
-        openChat?.let { peer ->
+        openChat?.let { target ->
             c.openChatRequest.value = null
-            nav.navigate("chat/$peer") { popUpTo("chats") }
+            nav.navigate("chat/$target") { popUpTo("chats") }
         }
     }
     NotificationPermissionPrompt(c)
@@ -101,9 +101,11 @@ private fun MainNav(c: AppContainer, meId: String) {
                 onInvites = { nav.navigate("invites") { launchSingleTop = true } },
             )
         }
-        composable("chat/{peer}") { entry ->
-            val peer = entry.arguments?.getString("peer") ?: return@composable
-            ChatScreen(viewModel { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() })
+        // A conversation id (dm:/grp:) or a DM peer's user id (older notification intents, search).
+        composable("chat/{target}") { entry ->
+            val conv = lk.codegen.risime.net.conversationFor(meId, entry.arguments?.getString("target") ?: return@composable)
+            val peer = lk.codegen.risime.net.dmPeer(conv, meId) ?: return@composable
+            ChatScreen(viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() })
         }
         composable("add_friend") {
             AddFriendScreen(viewModel { FriendsViewModel(c) }, onBack = { nav.popBackStack() })

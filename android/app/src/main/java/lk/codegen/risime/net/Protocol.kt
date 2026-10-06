@@ -191,6 +191,22 @@ fun dmConversationId(a: String, b: String): String {
     return if (x <= y) "dm:${x}_$y" else "dm:${y}_$x"
 }
 
+/** §12.1: `grp:<uuid>` conversations. */
+fun isGroupConversation(conversationId: String): Boolean = conversationId.startsWith(GROUP_PREFIX)
+
+const val GROUP_PREFIX = "grp:"
+
+/** The other member of a `dm:` conversation (yourself for a note-to-self); null for anything else. */
+fun dmPeer(conversationId: String, me: String): String? {
+    if (!conversationId.startsWith("dm:")) return null
+    val ids = conversationId.removePrefix("dm:").split('_')
+    return ids.firstOrNull { !it.equals(me, true) } ?: ids.firstOrNull()
+}
+
+/** A conversation id (`dm:`/`grp:`) as is; anything else is a DM peer's user id. */
+fun conversationFor(me: String, target: String): String =
+    if (target.startsWith("dm:") || isGroupConversation(target)) target else dmConversationId(me, target)
+
 // ---- Presence and typing (§2.3 signal, §2.5, §2.6; v1.2). Ephemeral: never stored, no cursor. ----
 
 @Serializable

@@ -19,7 +19,9 @@ import lk.codegen.risime.net.AuthErrors
 import lk.codegen.risime.net.MsgSend
 import lk.codegen.risime.net.MsgSendE2ee
 import lk.codegen.risime.net.StatusData
-import lk.codegen.risime.net.dmConversationId
+import lk.codegen.risime.net.conversationFor
+import lk.codegen.risime.net.dmPeer
+import lk.codegen.risime.net.isGroupConversation
 import lk.codegen.risime.realtime.PushResult
 import lk.codegen.risime.realtime.RealtimeClient
 import lk.codegen.risime.realtime.RealtimeListener
@@ -59,6 +61,8 @@ class ChatEngine(
     /** §11.2 reaction state (null in tests that don't cover reactions). */
     private val reactionsDao: lk.codegen.risime.data.db.ReactionDao? = null,
     private val reactionDebounceMs: Long = 500,
+    /** §12: false = a pre-groups app; `grp:` events are skipped (they still advance the cursor). */
+    private val groupsEnabled: () -> Boolean = { false },
 ) : RealtimeListener {
     private val reactionStore = reactionsDao?.let { ReactionStore(it, clock) }
     private val reactionLock = Mutex()
@@ -79,7 +83,7 @@ class ChatEngine(
             val applied = tx.run {
                 if (sync.seenCount(e.eventId) > 0) return@run false
                 // Unknown kinds and undecodable data are skipped but still advance the cursor.
-                val incoming = when (e.kind) {
+                val incoming = if (!groupsEnabled() && isGroupEvent(e)) false else when (e.kind) {
                     Event.KIND_MESSAGE -> runCatching { e.messageData() }.getOrNull()?.let { md ->
                         if (md.encrypted) applyMls(me, e) else md.body?.let { applyMessage(me, md, it) } ?: false
                     } ?: false
@@ -104,6 +108,11 @@ class ChatEngine(
             newIncoming = newIncoming || applied
         }
         if (newIncoming) flushAcks()
+    }
+
+    private fun isGroupEvent(e: Event): Boolean {
+        val conv = (e.data["conversation_id"] ?: e.data["group_id"]) as? kotlinx.serialization.json.JsonPrimitive
+        return conv?.isString == true && isGroupConversation(conv.content)
     }
 
     /** Commits fetched by catch-up (GET …/commits): applied in order, each in its own transaction, no cursor move. */
@@ -181,14 +190,19 @@ class ChatEngine(
 
     // ---- Outbox ----
 
-    /** Insert as pending first, then try to push. Returns the client_msg_id. */
-    suspend fun sendText(peerId: String, text: String): String? {
+    /**
+     * Insert as pending first, then try to push. [target] is a conversation id (`dm:`/`grp:`) or,
+     * for a DM, the peer's user id. Returns the client_msg_id.
+     */
+    suspend fun sendText(target: String, text: String): String? {
         val body = text.trim()
         // §11.1: the server counts graphemes (authoritative); the composer warns with ICU. Here only the byte cap.
         if (body.isEmpty() || body.toByteArray(Charsets.UTF_8).size > MAX_BODY_BYTES) return null
         val me = meId() ?: return null
         val id = newClientMsgId()
-        val conv = dmConversationId(me, peerId)
+        val conv = conversationFor(me, target)
+        // §12 (Room v5): `to_id` holds the conversation id for groups.
+        val to = dmPeer(conv, me) ?: conv
         val previous = messages.lastInConversation(conv)
         val now = clock()
         messages.insert(
@@ -197,7 +211,7 @@ class ChatEngine(
                 messageId = null,
                 conversationId = conv,
                 from = me,
-                to = peerId,
+                to = to,
                 body = body,
                 serverTs = null,
                 localTs = now,
@@ -205,7 +219,7 @@ class ChatEngine(
                 outgoing = true,
             ),
         )
-        behaviour?.messageSent(peerId, body.length, previous?.takeIf { !it.outgoing }?.let { now - it.localTs })
+        behaviour?.messageSent(to, body.length, previous?.takeIf { !it.outgoing }?.let { now - it.localTs })
         scope.launch { flushOutbox() }
         return id
     }
@@ -256,10 +270,10 @@ class ChatEngine(
      * My tap: shown at once (pending), sent after [reactionDebounceMs] if nothing changed, as the
      * final state only. Only on messages that have a server message_id.
      */
-    suspend fun react(peerId: String, targetMessageId: String, emoji: String, op: String) {
+    suspend fun react(target: String, targetMessageId: String, emoji: String, op: String) {
         val store = reactionStore ?: return
         val me = meId() ?: return
-        val conv = dmConversationId(me, peerId)
+        val conv = conversationFor(me, target)
         val row = store.tap(conv, targetMessageId, me, emoji, op)
         scope.launch {
             delay(reactionDebounceMs)
@@ -276,7 +290,7 @@ class ChatEngine(
             if (debounced && clock() - r0.localTs < reactionDebounceMs) continue // its own timer sends it
             if (!store.needsSend(r0)) { store.settleNoSend(r0); continue }
             val r = store.assignId(r0, newClientMsgId)
-            val peer = conversationPeer(r.conversationId, me) ?: continue
+            val peer = conversationPeer(r.conversationId, me)
             val body = lk.codegen.risime.net.ReactionBody(r.targetMessageId, r.emoji, r.op)
             val res = sendPayload(r.conversationId, peer, r.pendingClientMsgId!!, r.localTs, { lk.codegen.risime.data.mls.MlsPayload.reaction(body.target, body.emoji, body.op) }) {
                 realtime().sendReaction(lk.codegen.risime.net.MsgSendReaction(r.pendingClientMsgId, peer, body, isoMillis(r.localTs)))
@@ -294,10 +308,8 @@ class ChatEngine(
         }
     }
 
-    private fun conversationPeer(conv: String, me: String): String? {
-        val ids = conv.removePrefix("dm:").split('_')
-        return ids.firstOrNull { !it.equals(me, true) } ?: ids.firstOrNull()
-    }
+    /** The `to` of a send: the DM peer, or the conversation id itself for a group. */
+    private fun conversationPeer(conv: String, me: String): String = dmPeer(conv, me) ?: conv
 
     private suspend fun applyReaction(conv: String, target: String, reactor: String, emoji: String, op: String, ts: String, messageId: String, clientMsgId: String?) {
         reactionStore?.applyConfirmed(conv, target, reactor, emoji, op, ts, messageId, clientMsgId)
