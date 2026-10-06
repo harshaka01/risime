@@ -56,7 +56,7 @@ interface MessageDao {
     suspend fun lastInConversation(conversationId: String): MessageEntity?
 
     @Query(
-        "SELECT conversation_id, body, local_ts, outgoing, status FROM messages m " +
+        "SELECT conversation_id, body, local_ts, outgoing, status, from_id, kind FROM messages m " +
             "WHERE local_ts = (SELECT MAX(local_ts) FROM messages WHERE conversation_id = m.conversation_id) " +
             "GROUP BY conversation_id",
     )

@@ -228,7 +228,7 @@ private fun NotFriendsBar(name: String, requested: Boolean, onAddFriend: () -> U
 
 /** Composer: emoji picker (inserts at the cursor), grapheme counter from 3,900, send disabled when too long (§11.1). */
 @Composable
-private fun Composer(
+internal fun Composer(
     value: androidx.compose.ui.text.input.TextFieldValue,
     onValue: (androidx.compose.ui.text.input.TextFieldValue) -> Unit,
     onSend: () -> Unit,

@@ -151,7 +151,13 @@ class AppContainer(context: Context) {
     val notifier = Notifier(context)
     // ---- E2EE (contract v1.7, decisions 035, 037). The engine loads only once the server offers
     // attestation keys; until then (pilot: mls_unavailable) the app behaves exactly like v1.6.
-    @Volatile var mlsEngine: MlsEngine? = null
+    val mlsEngineState = MutableStateFlow<MlsEngine?>(null)
+    var mlsEngine: MlsEngine?
+        get() = mlsEngineState.value
+        set(v) { mlsEngineState.value = v }
+
+    /** §12: groups UI only with a groups-capable core (the same condition as the `groups` capability). */
+    val groupsAvailable = mlsEngineState.map { it?.groupsSupported == true }
     private val mlsDbKey = MlsDbKey(File(context.noBackupFilesDir, "mls_dbkey.bin"), KeystoreDbKeyWrapper())
     private val mlsApi = object : MlsApi {
         override suspend fun group(conversationId: String) = api.mlsGroup(conversationId)

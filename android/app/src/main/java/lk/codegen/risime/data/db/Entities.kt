@@ -87,6 +87,9 @@ data class LastMessage(
     @ColumnInfo(name = "local_ts") val localTs: Long,
     val outgoing: Boolean,
     val status: String,
+    /** v5: the sender ("Kamal: …" in group rows) and text/system. */
+    @ColumnInfo(name = "from_id") val from: String = "",
+    val kind: String = MessageEntity.KIND_TEXT,
 )
 
 /** Chats-list badge: unread incoming messages in one conversation. */

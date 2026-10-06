@@ -23,7 +23,7 @@ data class FriendsState(
 
 /** §9.2: friends as local contact rows (friend = true). */
 fun friendEntities(reply: FriendsReply): List<ContactEntity> = reply.friends.map {
-    ContactEntity(it.phone, it.displayName, it.company, it.userId, registered = true, friend = true, vouchedByName = it.vouchedBy?.displayName)
+    ContactEntity(it.phone, it.displayName, it.company, it.userId, registered = true, friend = true, vouchedByName = it.vouchedBy?.displayName, groupReady = it.groupReady)
 }
 
 /** Pre-v1.6 server (no /friends): the old allowlist contacts; everyone registered counts as a friend. */

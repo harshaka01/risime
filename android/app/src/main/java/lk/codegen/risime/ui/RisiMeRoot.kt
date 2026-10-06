@@ -85,7 +85,7 @@ private fun MainNav(c: AppContainer, meId: String) {
     LaunchedEffect(openChat) {
         openChat?.let { target ->
             c.openChatRequest.value = null
-            nav.navigate("chat/$target") { popUpTo("chats") }
+            nav.navigate("chat/${android.net.Uri.encode(target)}") { popUpTo("chats") }
         }
     }
     NotificationPermissionPrompt(c)
@@ -94,7 +94,8 @@ private fun MainNav(c: AppContainer, meId: String) {
             ChatsScreen(
                 viewModel { ChatsViewModel(c, meId) },
                 viewModel(key = "friends") { FriendsViewModel(c) },
-                onOpen = { nav.navigate("chat/$it") },
+                onOpen = { nav.navigate("chat/${android.net.Uri.encode(it)}") },
+                onNewGroup = { nav.navigate("group_new") { launchSingleTop = true } },
                 onSettings = { nav.navigate("settings") { launchSingleTop = true } },
                 onSearch = { nav.navigate("search") { launchSingleTop = true } },
                 onAddFriend = { nav.navigate("add_friend") { launchSingleTop = true } },
@@ -104,8 +105,30 @@ private fun MainNav(c: AppContainer, meId: String) {
         // A conversation id (dm:/grp:) or a DM peer's user id (older notification intents, search).
         composable("chat/{target}") { entry ->
             val conv = lk.codegen.risime.net.conversationFor(meId, entry.arguments?.getString("target") ?: return@composable)
+            if (lk.codegen.risime.net.isGroupConversation(conv)) {
+                lk.codegen.risime.ui.group.GroupChatScreen(
+                    viewModel(key = conv) { lk.codegen.risime.ui.group.GroupChatViewModel(c, meId, conv) }, meId,
+                    onBack = { nav.popBackStack() },
+                    onInfo = { nav.navigate("group_info/${android.net.Uri.encode(conv)}") { launchSingleTop = true } },
+                )
+                return@composable
+            }
             val peer = lk.codegen.risime.net.dmPeer(conv, meId) ?: return@composable
             ChatScreen(viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() })
+        }
+        composable("group_new") {
+            lk.codegen.risime.ui.group.CreateGroupScreen(
+                viewModel { lk.codegen.risime.ui.group.CreateGroupViewModel(c) },
+                onCreated = { conv -> nav.navigate("chat/${android.net.Uri.encode(conv)}") { popUpTo("chats") } },
+                onBack = { nav.popBackStack() },
+            )
+        }
+        composable("group_info/{conv}") { entry ->
+            val conv = entry.arguments?.getString("conv") ?: return@composable
+            lk.codegen.risime.ui.group.GroupInfoScreen(
+                viewModel(key = "info:$conv") { lk.codegen.risime.ui.group.GroupInfoViewModel(c, meId, conv) },
+                onBack = { nav.popBackStack() },
+            )
         }
         composable("add_friend") {
             AddFriendScreen(viewModel { FriendsViewModel(c) }, onBack = { nav.popBackStack() })
@@ -116,7 +139,7 @@ private fun MainNav(c: AppContainer, meId: String) {
         composable("search") {
             SearchScreen(
                 viewModel { SearchViewModel(c) },
-                onOpen = { peer -> nav.navigate("chat/$peer") { popUpTo("chats") } },
+                onOpen = { peer -> nav.navigate("chat/${android.net.Uri.encode(peer)}") { popUpTo("chats") } },
                 onBack = { nav.popBackStack() },
             )
         }

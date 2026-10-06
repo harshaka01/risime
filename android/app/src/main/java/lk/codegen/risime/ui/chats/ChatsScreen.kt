@@ -3,6 +3,7 @@ package lk.codegen.risime.ui.chats
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Create
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -59,8 +60,10 @@ fun ChatsScreen(
     onSearch: () -> Unit,
     onAddFriend: () -> Unit,
     onInvites: () -> Unit,
+    onNewGroup: () -> Unit = {},
 ) {
     val rows by vm.rows.collectAsStateWithLifecycle()
+    val groupsAvailable by vm.groupsAvailable.collectAsStateWithLifecycle()
     val conn by vm.connection.collectAsStateWithLifecycle()
     val err by vm.refreshError.collectAsStateWithLifecycle()
     val friends by vm.friendsState.collectAsStateWithLifecycle()
@@ -93,11 +96,22 @@ fun ChatsScreen(
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onAddFriend,
-                icon = { Icon(Icons.Default.Add, null) },
-                text = { Text("Add friend") },
-            )
+            Column(horizontalAlignment = androidx.compose.ui.Alignment.End, verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.md)) {
+                if (groupsAvailable && tab == 0) {
+                    ExtendedFloatingActionButton(
+                        onClick = onNewGroup,
+                        icon = { Icon(Icons.Default.Create, null) },
+                        text = { Text("New group") },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+                ExtendedFloatingActionButton(
+                    onClick = onAddFriend,
+                    icon = { Icon(Icons.Default.Add, null) },
+                    text = { Text("Add friend") },
+                )
+            }
         },
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
@@ -125,8 +139,8 @@ fun ChatsScreen(
                     if (rows.isEmpty()) {
                         item { EmptyState("No friends yet. Add a friend by phone number.", actionLabel = "Add friend", onAction = onAddFriend) }
                     }
-                    items(rows, key = { it.userId ?: it.name }) { row ->
-                        ChatRowItem(row, onClick = { row.userId?.takeIf { row.openable }?.let(onOpen) })
+                    items(rows, key = { it.key }) { row ->
+                        ChatRowItem(row, onClick = { row.target?.takeIf { row.openable }?.let(onOpen) })
                         HorizontalDivider(
                             Modifier.padding(start = Spacing.lg + Sizes.avatar + Spacing.md + Spacing.xxs),
                             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -149,6 +163,7 @@ fun connectionLabel(s: ConnectionState): String? = when (s) {
 @Composable
 private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
     val presence = presenceLabel(row.presence, System.currentTimeMillis())
+    if (row.group) return GroupRowItem(row, onClick)
     val sub = when {
         !row.friend -> "Not friends any more"
         !row.registered -> "Waiting for them to confirm their phone"
@@ -174,3 +189,27 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
     )
 }
 
+
+/** §12 group row: decrypted name ("New group" until the Welcome), "Kamal: …" last line, typing, unread. */
+@Composable
+private fun GroupRowItem(row: ChatRow, onClick: () -> Unit) {
+    val last = row.last
+    val sub = when {
+        row.typingLabel != null -> row.typingLabel
+        row.stateLine != null -> row.stateLine
+        last == null || last.body.isEmpty() -> "Group"
+        last.outgoing -> "You: " + last.body
+        row.lastSender != null -> "${row.lastSender}: " + last.body
+        else -> last.body
+    }
+    ListRow(
+        title = row.name,
+        subtitle = sub,
+        leading = { InitialsAvatar(row.name) },
+        meta = last?.takeIf { it.body.isNotEmpty() }?.let { shortStamp(it.localTs) },
+        strong = row.unread > 0,
+        subtitleColor = if (row.typingLabel != null) MaterialTheme.colorScheme.primary else null,
+        badge = if (row.unread > 0) ({ UnreadBadge(row.unread) }) else null,
+        onClick = onClick,
+    )
+}

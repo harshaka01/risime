@@ -48,6 +48,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -292,6 +293,9 @@ fun MessageBubble(
     menu: @Composable () -> Unit = {},
     /** Under the bubble (reaction chips). */
     footer: @Composable () -> Unit = {},
+    /** §12 groups: the sender's name above an incoming bubble (first of a run), in [senderColor]. */
+    sender: String? = null,
+    senderColor: Color = Color.Unspecified,
 ) {
     val c = RisiTheme.colors
     val statusLabel = status?.let { tickLabel(it) }
@@ -312,7 +316,7 @@ fun MessageBubble(
                 )
                 .clearAndSetSemantics {
                     contentDescription = buildString {
-                        append(if (mine) "You: " else "")
+                        append(if (mine) "You: " else sender?.let { "$it: " } ?: "")
                         append(body)
                         append(", ").append(time)
                         statusLabel?.let { append(", ").append(it) }
@@ -321,6 +325,7 @@ fun MessageBubble(
                 },
         ) {
             Column(Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
+                sender?.let { Text(it, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = senderColor, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 Text(body, style = MaterialTheme.typography.bodyLarge)
                 note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
                 Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
@@ -379,3 +384,25 @@ fun PendingClock(color: Color, label: String = "Pending", modifier: Modifier = M
         drawLine(color, c, Offset(c.x + r * 0.45f, c.y), strokeWidth = w)
     }
 }
+
+/** §12 system line ("Kamal added Nimal"): centred, muted, no bubble, no actions. */
+@Composable
+fun SystemLineText(text: String) {
+    Box(Modifier.fillMaxWidth().padding(vertical = Spacing.xxs), contentAlignment = Alignment.Center) {
+        Surface(color = RisiTheme.colors.daySeparator, contentColor = RisiTheme.colors.onDaySeparator, shape = MaterialTheme.shapes.small) {
+            Text(text, style = MaterialTheme.typography.labelMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs))
+        }
+    }
+}
+
+/** A stable per-member name colour, readable on the incoming bubble in both themes. */
+@Composable
+fun memberColor(userId: String): Color {
+    val dark = RisiTheme.colors.bubbleTheirs.luminance() < 0.5f
+    val palette = if (dark) MEMBER_COLORS_DARK else MEMBER_COLORS_LIGHT
+    return palette[(userId.lowercase().hashCode() and 0x7fffffff) % palette.size]
+}
+
+private val MEMBER_COLORS_LIGHT = listOf(Color(0xFF0B6E69), Color(0xFF9C4A00), Color(0xFF6A3FA0), Color(0xFF1F5FAD), Color(0xFFA0306A), Color(0xFF3C6E1F))
+private val MEMBER_COLORS_DARK = listOf(Color(0xFF6FD6CF), Color(0xFFFFB873), Color(0xFFCDB0FF), Color(0xFF9CC3FF), Color(0xFFFF9CC9), Color(0xFFA9DB86))
