@@ -50,6 +50,19 @@ class ContractExamplesTest {
         "device_put.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s) },
         "push_inbox.json" to { s -> ProtocolJson.decodeFromString<PushPayload>(s) },
         "error_invalid_device.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
+        // v1.6 (invites + friends): parse-only placeholders added by root with the contract merge;
+        // the android role replaces them with typed decoders when it implements §9.
+        "invite_create.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "invite_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "invites_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "friend_request.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "friend_request_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "friends_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "friend_accept_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "block.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "signal_friend.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_not_friends.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "user_vouched.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
     )
 
     @Test

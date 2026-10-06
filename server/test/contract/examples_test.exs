@@ -23,6 +23,9 @@ defmodule RisiMe.ContractExamplesTest do
               error_phone_unverified.json error_invalid_code_attempts.json
               error_already_verified.json error_sms_unavailable.json device_put.json
               error_invalid_device.json push_inbox.json)
+  # v1.6 (invites + friends): parse-only placeholders added by root with the contract merge; the
+  # server role replaces them with real checks when it implements §9.
+  @pending_v1_6 ~w(invite_create.json invite_reply.json invites_reply.json friend_request.json friend_request_reply.json friends_reply.json friend_accept_reply.json block.json signal_friend.json error_not_friends.json user_vouched.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -55,7 +58,12 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
+    assert @files -- (@checked ++ @pending_v1_6) == [],
+           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_6))}"
+  end
+
+  test "v1.6 examples are valid JSON objects (placeholder)" do
+    for name <- @pending_v1_6, do: assert(is_map(example(name)))
   end
 
   setup do
