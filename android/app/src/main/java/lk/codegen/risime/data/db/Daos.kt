@@ -35,8 +35,25 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE message_id = :messageId")
     suspend fun byMessageId(messageId: String): MessageEntity?
 
-    @Query("SELECT * FROM messages WHERE outgoing = 1 AND status = 'PENDING' ORDER BY local_ts ASC")
+    /**
+     * §14.7 (android R5): an image row is sent only once its blob reference is stored; until then
+     * (uploading, or after a failed upload) it is skipped and never blocks the rows behind it.
+     */
+    @Query(
+        "SELECT m.* FROM messages m LEFT JOIN media x ON x.client_msg_id = m.client_msg_id " +
+            "WHERE m.outgoing = 1 AND m.status = 'PENDING' AND (m.kind != 'image' OR x.state = 'UPLOADED') ORDER BY m.local_ts ASC",
+    )
     suspend fun pendingOutbox(): List<MessageEntity>
+
+    @Query("UPDATE messages SET blob_id = :blobId WHERE client_msg_id = :clientMsgId")
+    suspend fun setBlobId(clientMsgId: String, blobId: String?)
+
+    /** An outgoing image whose upload failed: FAILED with the reason (Retry / Delete). */
+    @Query("UPDATE messages SET status = 'FAILED', fail_reason = :reason WHERE client_msg_id = :clientMsgId AND status = 'PENDING'")
+    suspend fun failPending(clientMsgId: String, reason: String): Int
+
+    @Query("DELETE FROM messages WHERE client_msg_id = :clientMsgId")
+    suspend fun delete(clientMsgId: String): Int
 
     /** Incoming messages whose local status is ahead of what the server has confirmed. */
     @Query(
@@ -136,6 +153,7 @@ interface WipeDao {
         groups()
         groupMembers()
         groupOps()
+        media()
     }
 
     @Query("DELETE FROM messages")
@@ -168,6 +186,51 @@ interface WipeDao {
 
     @Query("DELETE FROM group_ops")
     suspend fun groupOps()
+
+    @Query("DELETE FROM media")
+    suspend fun media()
+}
+
+/** v6 (§14.7) image media rows. */
+@Dao
+interface MediaDao {
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(m: MediaEntity): Long
+
+    @androidx.room.Update
+    suspend fun update(m: MediaEntity)
+
+    @Query("SELECT * FROM media WHERE client_msg_id = :clientMsgId")
+    suspend fun get(clientMsgId: String): MediaEntity?
+
+    @Query("SELECT * FROM media WHERE client_msg_id = :clientMsgId")
+    fun observe(clientMsgId: String): Flow<MediaEntity?>
+
+    @Query("SELECT * FROM media WHERE conversation_id = :conversationId")
+    fun forConversation(conversationId: String): Flow<List<MediaEntity>>
+
+    @Query("SELECT * FROM media WHERE outgoing = 1 AND state IN ('ENCRYPTED', 'UPLOADING')")
+    suspend fun owedUploads(): List<MediaEntity>
+
+    /** Downloadable images, newest message first (§14.7 Receiving 7). */
+    @Query(
+        "SELECT x.* FROM media x JOIN messages m ON m.client_msg_id = x.client_msg_id " +
+            "WHERE x.state IN ('NONE', 'DOWNLOADING') AND x.blob_id IS NOT NULL ORDER BY m.local_ts DESC",
+    )
+    suspend fun downloadable(): List<MediaEntity>
+
+    /** Rows with a cache file, with their message's status (eviction, R4). */
+    @Query(
+        "SELECT x.client_msg_id, x.file_name, x.blob_size, x.last_access, x.expires_at_est, x.outgoing, x.state, m.status AS message_status " +
+            "FROM media x JOIN messages m ON m.client_msg_id = x.client_msg_id WHERE x.file_name IS NOT NULL",
+    )
+    suspend fun cached(): List<CachedMedia>
+
+    @Query("SELECT file_name FROM media WHERE file_name IS NOT NULL")
+    suspend fun fileNames(): List<String>
+
+    @Query("DELETE FROM media WHERE client_msg_id = :clientMsgId")
+    suspend fun delete(clientMsgId: String): Int
 }
 
 @Dao

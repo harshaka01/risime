@@ -41,8 +41,24 @@ class FakeMessageDao : MessageDao {
 
     override suspend fun byClientMsgId(clientMsgId: String) = rows[clientMsgId]
     override suspend fun byMessageId(messageId: String) = rows.values.firstOrNull { it.messageId == messageId }
+    /** v6: the media state of an image row (the Room query joins `media`). */
+    var mediaState: (String) -> String? = { null }
+
     override suspend fun pendingOutbox() =
-        rows.values.filter { it.outgoing && it.status == "PENDING" }.sortedBy { it.localTs }
+        rows.values.filter { it.outgoing && it.status == "PENDING" && (it.kind != MessageEntity.KIND_IMAGE || mediaState(it.clientMsgId) == "UPLOADED") }
+            .sortedBy { it.localTs }
+
+    override suspend fun setBlobId(clientMsgId: String, blobId: String?) {
+        rows[clientMsgId]?.let { rows[clientMsgId] = it.copy(blobId = blobId) }
+    }
+
+    override suspend fun failPending(clientMsgId: String, reason: String): Int {
+        val r = rows[clientMsgId]?.takeIf { it.status == "PENDING" } ?: return 0
+        rows[clientMsgId] = r.copy(status = "FAILED", failReason = reason)
+        return 1
+    }
+
+    override suspend fun delete(clientMsgId: String): Int = if (rows.remove(clientMsgId) != null) 1 else 0
 
     override suspend fun unackedIncoming() = rows.values
         .filter { !it.outgoing && it.messageId != null && it.ackedStatus != it.status }

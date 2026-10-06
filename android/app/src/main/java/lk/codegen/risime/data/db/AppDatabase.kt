@@ -22,6 +22,7 @@ import androidx.sqlite.execSQL
         GroupEntity::class,
         GroupMemberEntity::class,
         GroupOpEntity::class,
+        MediaEntity::class,
     ],
     version = AppDatabase.VERSION,
     exportSchema = true,
@@ -36,16 +37,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun reactions(): ReactionDao
     abstract fun groups(): GroupDao
     abstract fun groupOps(): GroupOpDao
+    abstract fun media(): MediaDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 5
+        const val VERSION = 6
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
@@ -116,6 +118,24 @@ object Migration4To5 : Migration(4, 5) {
         "CREATE INDEX IF NOT EXISTS `index_group_ops_conversation_id` ON `group_ops` (`conversation_id`)",
         "CREATE UNIQUE INDEX IF NOT EXISTS `index_group_ops_op_id` ON `group_ops` (`op_id`)",
         "CREATE INDEX IF NOT EXISTS `index_group_ops_state_next_at` ON `group_ops` (`state`, `next_at`)",
+    )
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/**
+ * v5 → v6 (contract v1.11 images): messages gain `blob_id`; the `media` table holds each image's
+ * sealed key and thumbnail, blob reference and cache state. Additive only.
+ */
+object Migration5To6 : Migration(5, 6) {
+    val SQL = listOf(
+        "ALTER TABLE `messages` ADD COLUMN `blob_id` TEXT",
+        "CREATE TABLE IF NOT EXISTS `media` (`client_msg_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `outgoing` INTEGER NOT NULL, `state` TEXT NOT NULL, `blob_id` TEXT, `blob_size` INTEGER NOT NULL, `blob_sha256` TEXT NOT NULL, `client_blob_id` TEXT, `sealed_enc` BLOB NOT NULL, `sealed_thumb` BLOB, `mime` TEXT NOT NULL, `w` INTEGER NOT NULL, `h` INTEGER NOT NULL, `file_name` TEXT, `bytes_have` INTEGER NOT NULL, `expires_at_est` INTEGER, `last_access` INTEGER NOT NULL, `attempts` INTEGER NOT NULL, `next_at` INTEGER NOT NULL, `fail_reason` TEXT, PRIMARY KEY(`client_msg_id`))",
+        "CREATE INDEX IF NOT EXISTS `index_media_state_next_at` ON `media` (`state`, `next_at`)",
+        "CREATE INDEX IF NOT EXISTS `index_media_last_access` ON `media` (`last_access`)",
+        "CREATE INDEX IF NOT EXISTS `index_media_conversation_id` ON `media` (`conversation_id`)",
     )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)

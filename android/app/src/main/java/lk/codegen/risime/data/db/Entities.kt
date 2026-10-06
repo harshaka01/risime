@@ -35,12 +35,18 @@ data class MessageEntity(
     @ColumnInfo(name = "receipt_delivered") val receiptDelivered: Int? = null,
     @ColumnInfo(name = "receipt_read") val receiptRead: Int? = null,
     @ColumnInfo(name = "receipt_of") val receiptOf: Int? = null,
+    /** v6 (§14): an image message's blob (kept for v1.12 "delete for everyone"); null for text. */
+    @ColumnInfo(name = "blob_id") val blobId: String? = null,
 ) {
     val system: Boolean get() = kind == KIND_SYSTEM
+    val image: Boolean get() = kind == KIND_IMAGE
 
     companion object {
         const val KIND_TEXT = "text"
         const val KIND_SYSTEM = "system"
+
+        /** v6 (§14): an image; [body] holds the caption (or ""). */
+        const val KIND_IMAGE = "image"
     }
 }
 
@@ -220,4 +226,102 @@ data class GroupOpEntity(
     @ColumnInfo(name = "op_id") val opId: String? = null,
     @ColumnInfo(name = "next_at") val nextAt: Long = 0,
     @ColumnInfo(name = "last_error") val lastError: String? = null,
+)
+
+/**
+ * v6 (§14.7): one image message's media state, keyed like its `messages` row. The content key and
+ * the thumbnail are **sealed** with the database key (KvSealer under MlsDbKey, AAD bound to the
+ * row, android R1); the ciphertext file in `noBackupFilesDir/media` is a cache of the blob. The
+ * sender keeps the complete envelope too (R8), so its own image is restorable while the blob lives.
+ */
+@Entity(
+    tableName = "media",
+    indices = [Index(value = ["state", "next_at"]), Index("last_access"), Index("conversation_id")],
+)
+class MediaEntity(
+    @PrimaryKey @ColumnInfo(name = "client_msg_id") val clientMsgId: String,
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    val outgoing: Boolean,
+    /** [MediaState] name. */
+    val state: String,
+    /** The server's blob id (null until the upload committed, for an outgoing image). */
+    @ColumnInfo(name = "blob_id") val blobId: String?,
+    /** `cipher_size` and the base64 SHA-256 of the ciphertext, as computed by the sender. */
+    @ColumnInfo(name = "blob_size") val blobSize: Long,
+    @ColumnInfo(name = "blob_sha256") val blobSha256: String,
+    /** Outgoing: the idempotency id of the upload (a new one after a digest mismatch). */
+    @ColumnInfo(name = "client_blob_id") val clientBlobId: String?,
+    /** Sealed JSON `{"alg","key","plain_size"}`. */
+    @ColumnInfo(name = "sealed_enc") val sealedEnc: ByteArray,
+    /** Sealed JSON `{"mime","w","h","data"}`, or null without a thumbnail. */
+    @ColumnInfo(name = "sealed_thumb") val sealedThumb: ByteArray?,
+    val mime: String,
+    val w: Int,
+    val h: Int,
+    /** The ciphertext cache file name (in the media directory), null when not on the device. */
+    @ColumnInfo(name = "file_name") val fileName: String?,
+    /** Bytes of the `.part` file (resumable download). */
+    @ColumnInfo(name = "bytes_have") val bytesHave: Long = 0,
+    /** When the blob stops being fetchable (`server_ts + 29 days`, ms); null until known. */
+    @ColumnInfo(name = "expires_at_est") val expiresAtEst: Long?,
+    @ColumnInfo(name = "last_access") val lastAccess: Long,
+    val attempts: Int = 0,
+    @ColumnInfo(name = "next_at") val nextAt: Long = 0,
+    @ColumnInfo(name = "fail_reason") val failReason: String? = null,
+) {
+    fun copy(
+        state: String = this.state,
+        blobId: String? = this.blobId,
+        blobSize: Long = this.blobSize,
+        blobSha256: String = this.blobSha256,
+        clientBlobId: String? = this.clientBlobId,
+        fileName: String? = this.fileName,
+        bytesHave: Long = this.bytesHave,
+        expiresAtEst: Long? = this.expiresAtEst,
+        lastAccess: Long = this.lastAccess,
+        attempts: Int = this.attempts,
+        nextAt: Long = this.nextAt,
+        failReason: String? = this.failReason,
+    ) = MediaEntity(
+        clientMsgId, conversationId, outgoing, state, blobId, blobSize, blobSha256, clientBlobId, sealedEnc, sealedThumb,
+        mime, w, h, fileName, bytesHave, expiresAtEst, lastAccess, attempts, nextAt, failReason,
+    )
+}
+
+/** §14.7 media states (outgoing: encrypted → uploading → uploaded | failed; incoming: none → downloading → cached | gone | corrupt). */
+enum class MediaState {
+    /** Outgoing: encrypted and persisted, waiting for the upload job. */
+    ENCRYPTED,
+    UPLOADING,
+
+    /** Outgoing: the blob reference is stored; the outbox may send the envelope. */
+    UPLOADED,
+
+    /** Outgoing: the upload was refused ([MediaEntity.failReason]); Retry or Delete. */
+    FAILED,
+
+    /** Not on the device (incoming, or evicted while fetchable): downloadable. */
+    NONE,
+    DOWNLOADING,
+
+    /** The verified ciphertext is in the cache. */
+    CACHED,
+
+    /** 404: "This photo is no longer available" (the thumbnail stays). */
+    GONE,
+
+    /** Size, digest, AEAD, padding or decode failure after one re-download: "Couldn't open this photo". */
+    CORRUPT,
+}
+
+/** A cached image for the LRU (android R4). */
+data class CachedMedia(
+    @ColumnInfo(name = "client_msg_id") val clientMsgId: String,
+    @ColumnInfo(name = "file_name") val fileName: String,
+    @ColumnInfo(name = "blob_size") val blobSize: Long,
+    @ColumnInfo(name = "last_access") val lastAccess: Long,
+    @ColumnInfo(name = "expires_at_est") val expiresAtEst: Long?,
+    val outgoing: Boolean,
+    val state: String,
+    @ColumnInfo(name = "message_status") val messageStatus: String,
 )
