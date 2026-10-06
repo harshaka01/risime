@@ -67,4 +67,40 @@ class AuthLogicTest {
         assertFalse(RefreshTiming.needsRefresh(exp, 1_000))
         assertTrue(RefreshTiming.needsRefresh(exp, 241_000))
     }
+
+    @Test fun phoneVerificationMapping() {
+        val unverified = User("u", "+94770000001", "H", "C", phoneVerified = false)
+        assertEquals(MeOutcome.NeedsPhone(unverified), meOutcome(ApiResult.Ok(MeReply(unverified))))
+        assertEquals(MeOutcome.NeedsPhone(null), meOutcome(ApiResult.Error(403, "phone_unverified", "Confirm your phone number to continue")))
+        // Other 403s keep their meaning.
+        assertTrue(meOutcome(ApiResult.Error(403, "not_allowlisted", "x")) is MeOutcome.Refused)
+    }
+
+    private val verified = lk.codegen.risime.data.Session("s", null, User("u", "+94", "H", "C"), lk.codegen.risime.data.AuthKind.OIDC)
+    private val unverifiedS = verified.copy(user = verified.user.copy(phoneVerified = false))
+    private val dev = verified.copy(token = "t", kind = lk.codegen.risime.data.AuthKind.DEV)
+    private val blocked = Blocked(BlockKind.NOT_ALLOWLISTED, "x")
+
+    @Test fun gateOrder() {
+        // update required beats everything, then blocked, then locked, then phone.
+        assertEquals(AppGate.UPDATE_REQUIRED, appGate(true, unverifiedS, false, blocked, true))
+        assertEquals(AppGate.BLOCKED, appGate(true, unverifiedS, false, blocked, false))
+        assertEquals(AppGate.BLOCKED, appGate(true, null, false, blocked, false))
+        assertEquals(AppGate.LOADING, appGate(false, null, false, null, false))
+        assertEquals(AppGate.SIGNED_OUT, appGate(true, null, false, null, false))
+        assertEquals(AppGate.LOCKED, appGate(true, unverifiedS, false, null, false))
+        assertEquals(AppGate.CONFIRM_PHONE, appGate(true, unverifiedS, true, null, false))
+        assertEquals(AppGate.CHATS, appGate(true, verified, true, null, false))
+        assertEquals(AppGate.CHATS, appGate(true, dev, false, null, false)) // dev sessions never lock
+    }
+
+    @Test fun socketOnlyWhenVerified() {
+        assertTrue(shouldConnect(true, verified, true, null))
+        assertFalse(shouldConnect(true, unverifiedS, true, null))
+        assertFalse(shouldConnect(true, verified, false, null))
+        assertFalse(shouldConnect(false, verified, true, null))
+        assertFalse(shouldConnect(true, verified, true, blocked))
+        assertTrue(shouldConnect(true, dev, false, null))
+        assertFalse(shouldConnect(true, null, true, null))
+    }
 }

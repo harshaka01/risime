@@ -66,15 +66,23 @@ sealed interface MeOutcome {
 
     data class Refused(val blocked: Blocked) : MeOutcome
 
+    /**
+     * §7: signed in, but the allowlisted phone isn't confirmed yet (GET /me with
+     * `phone_verified: false`, or `403 phone_unverified` anywhere). Show "Confirm your phone",
+     * don't connect, keep data. [user] is null when only the 403 is known.
+     */
+    data class NeedsPhone(val user: User?) : MeOutcome
+
     /** Network or server trouble: keep going (reconnect with backoff). */
     data class Transient(val reason: String) : MeOutcome
 }
 
 fun meOutcome(r: ApiResult<MeReply>): MeOutcome = when (r) {
-    is ApiResult.Ok -> MeOutcome.Ok(r.value.user)
+    is ApiResult.Ok -> if (r.value.user.phoneVerified) MeOutcome.Ok(r.value.user) else MeOutcome.NeedsPhone(r.value.user)
     is ApiResult.NetworkError -> MeOutcome.Transient("network")
     is ApiResult.Error -> when {
         r.httpStatus == 401 -> MeOutcome.Unauthorized
+        r.httpStatus == 403 && r.code == AuthErrors.PHONE_UNVERIFIED -> MeOutcome.NeedsPhone(null)
         r.httpStatus == 403 && r.code == AuthErrors.NOT_ALLOWLISTED ->
             MeOutcome.Refused(Blocked(BlockKind.NOT_ALLOWLISTED, r.message.ifBlank { "This email is not on the RisiMe allowlist" }))
         r.httpStatus == 409 && r.code == AuthErrors.IDENTITY_CONFLICT ->
@@ -112,3 +120,31 @@ object RefreshTiming {
     fun needsRefresh(expiresAtElapsedMs: Long, nowElapsedMs: Long, marginMs: Long = MARGIN_MS): Boolean =
         expiresAtElapsedMs - nowElapsedMs <= marginMs
 }
+
+/** Top-level screen, in priority order (decision 020 / contract §7). */
+enum class AppGate { LOADING, UPDATE_REQUIRED, BLOCKED, SIGNED_OUT, LOCKED, CONFIRM_PHONE, CHATS }
+
+/**
+ * update required → blocked (403/409) → locked (fingerprint) → confirm phone → chats.
+ * [session] is null when signed out; [sessionLoaded] false while DataStore hasn't answered yet.
+ */
+fun appGate(
+    sessionLoaded: Boolean,
+    session: lk.codegen.risime.data.Session?,
+    unlocked: Boolean,
+    blocked: Blocked?,
+    updateRequired: Boolean,
+): AppGate = when {
+    updateRequired -> AppGate.UPDATE_REQUIRED
+    blocked != null -> AppGate.BLOCKED
+    !sessionLoaded -> AppGate.LOADING
+    session == null -> AppGate.SIGNED_OUT
+    session.kind == lk.codegen.risime.data.AuthKind.OIDC && !unlocked -> AppGate.LOCKED
+    !session.user.phoneVerified -> AppGate.CONFIRM_PHONE
+    else -> AppGate.CHATS
+}
+
+/** The socket runs only for a signed-in, unlocked, verified, unblocked session in the foreground. */
+fun shouldConnect(foreground: Boolean, session: lk.codegen.risime.data.Session?, unlocked: Boolean, blocked: Blocked?): Boolean =
+    foreground && blocked == null && session != null && session.user.phoneVerified &&
+        (session.kind == lk.codegen.risime.data.AuthKind.DEV || unlocked)

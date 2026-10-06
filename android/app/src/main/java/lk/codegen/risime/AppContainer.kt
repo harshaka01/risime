@@ -33,6 +33,9 @@ import lk.codegen.risime.data.auth.MeOutcome
 import lk.codegen.risime.data.auth.OidcTokens
 import lk.codegen.risime.data.auth.TokenVault
 import lk.codegen.risime.data.auth.meOutcome
+import lk.codegen.risime.data.auth.shouldConnect
+import lk.codegen.risime.net.AuthErrors
+import lk.codegen.risime.realtime.PushResult
 import lk.codegen.risime.data.PresenceTracker
 import lk.codegen.risime.data.watchList
 import lk.codegen.risime.data.SessionStore
@@ -75,7 +78,13 @@ class AppContainer(context: Context) {
         gateway = oidc,
         vault = TokenVault(File(context.noBackupFilesDir, "tokens.bin"), KeystoreWrappingKey()),
         elapsed = SystemClock::elapsedRealtime,
-        onNewAccessToken = { t -> scope.launch { realtime.refreshAuth(t) } },
+        onNewAccessToken = { t ->
+            scope.launch {
+                val r = realtime.refreshAuth(t)
+                // §7.2: verification was reset while connected.
+                if (r is PushResult.Rejected && r.reason == AuthErrors.PHONE_UNVERIFIED) markPhoneUnverified(null)
+            }
+        },
     )
 
     /** 403 not_allowlisted / 409 identity_conflict from GET /me: a blocking screen. */
@@ -143,7 +152,7 @@ class AppContainer(context: Context) {
         // Connected only while in the foreground, signed in and unlocked (no background connection).
         scope.launch {
             combine(foreground, sessionStore.session, auth.unlocked, blocked) { fg, s, unlocked, b ->
-                if (fg && s != null && b == null && (s.kind == AuthKind.DEV || unlocked)) s.serverUrl to s.user.id else null
+                if (shouldConnect(fg, s, unlocked, b)) s!!.serverUrl to s.user.id else null
             }
                 .distinctUntilChanged()
                 .collect { s ->
@@ -203,12 +212,19 @@ class AppContainer(context: Context) {
         auth.adopt(issuer, clientId, tokens)
         return when (val o = meOutcome(api.me())) {
             is MeOutcome.Ok -> {
-                val previous = sessionStore.lastUserId()
-                if (previous != null && previous != o.user.id) wipeDb()
-                blocked.value = null
-                signInNotice.value = null
-                sessionStore.saveOidcLogin(o.user)
+                adoptOidcUser(o.user)
                 null
+            }
+            is MeOutcome.NeedsPhone -> {
+                // Signed in; the gate shows "Confirm your phone" before anything connects.
+                val user = o.user ?: (api.me() as? ApiResult.Ok)?.value?.user?.copy(phoneVerified = false)
+                if (user == null) {
+                    auth.signOut()
+                    "Can't reach the RisiMe server. Try again."
+                } else {
+                    adoptOidcUser(user)
+                    null
+                }
             }
             is MeOutcome.Refused -> {
                 blocked.value = o.blocked // tokens stay in memory so "Sign out" can revoke them
@@ -223,6 +239,31 @@ class AppContainer(context: Context) {
                 "Can't reach the RisiMe server. Try again."
             }
         }
+    }
+
+    private suspend fun adoptOidcUser(user: User) {
+        val previous = sessionStore.lastUserId()
+        if (previous != null && previous != user.id) wipeDb()
+        blocked.value = null
+        signInNotice.value = null
+        sessionStore.saveOidcLogin(user)
+    }
+
+    /**
+     * §7: the phone isn't (or no longer) verified. Stop the socket and let the gate show
+     * "Confirm your phone". Never wipes data.
+     */
+    suspend fun markPhoneUnverified(user: User?) {
+        realtime.stop()
+        val current = sessionStore.current() ?: return
+        val fresh = user ?: (api.me() as? ApiResult.Ok)?.value?.user
+        // Server truth when reachable (it may already be verified again); else assume unverified.
+        sessionStore.updateUser(fresh ?: current.user.copy(phoneVerified = false))
+    }
+
+    /** "Confirm your phone" succeeded (200 or 409 already_verified + GET /me). */
+    suspend fun onPhoneVerified(user: User) {
+        if (sessionStore.current() != null) sessionStore.updateUser(user.copy(phoneVerified = true))
     }
 
     /** Blocked screen → "Use another account": drop this account's tokens; the UI starts a fresh sign-in. */
@@ -256,6 +297,11 @@ class AppContainer(context: Context) {
     /** Socket upgrade refused / join unauthorized: ask GET /me why (contract §6.2). */
     private suspend fun onSocketRefused(): Boolean = when (val o = meOutcome(api.me())) {
         is MeOutcome.Ok -> true
+        is MeOutcome.NeedsPhone -> {
+            // §7.2: show the phone screen; don't reconnect in a loop.
+            markPhoneUnverified(o.user)
+            false
+        }
         MeOutcome.Unauthorized -> {
             signOutKeepData("Sign in again — your chats are kept.")
             false
@@ -285,6 +331,13 @@ class AppContainer(context: Context) {
         realtime.stop()
         sessionStore.clearLogin()
         wipeDb()
+    }
+
+    /** Only a 401 (refresh already tried) matters on the phone screen: back to sign-in, data kept. */
+    suspend fun handleAuthError401(r: ApiResult<*>) {
+        if (r is ApiResult.Error && r.httpStatus == 401 && r.code != AuthErrors.INVALID_CODE) {
+            signOutKeepData("Sign in again — your chats are kept.")
+        }
     }
 
     /** REST errors after the client already tried a refresh: map like GET /me (§6.1). */

@@ -15,7 +15,11 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import lk.codegen.risime.AppContainer
-import lk.codegen.risime.data.AuthKind
+import lk.codegen.risime.data.auth.AppGate
+import lk.codegen.risime.data.auth.appGate
+import lk.codegen.risime.ui.phone.AppPhoneBackend
+import lk.codegen.risime.ui.phone.PhoneVerifyScreen
+import lk.codegen.risime.ui.phone.PhoneVerifyViewModel
 import lk.codegen.risime.data.Session
 import lk.codegen.risime.ui.auth.AuthUi
 import lk.codegen.risime.ui.auth.BlockedScreen
@@ -36,13 +40,6 @@ import lk.codegen.risime.ui.settings.AppSettingsBackend
 import lk.codegen.risime.ui.settings.SettingsScreen
 import lk.codegen.risime.ui.settings.SettingsViewModel
 
-private sealed interface Gate {
-    data object Loading : Gate
-    data object LoggedOut : Gate
-    data object Locked : Gate
-    data class Blocked(val b: lk.codegen.risime.data.auth.Blocked) : Gate
-    data class LoggedIn(val meId: String) : Gate
-}
 
 /** App root: the dev encryption banner sits above every screen, always. */
 @Composable
@@ -52,28 +49,24 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
     val blocked by c.blocked.collectAsState()
     val notice by c.signInNotice.collectAsState()
     val update by c.updater.state.collectAsState()
-    val b = blocked
-    val gate = if (b != null) Gate.Blocked(b) else when (val s = session) {
-        Unit -> Gate.Loading
-        null -> Gate.LoggedOut
-        is Session -> if (s.kind == AuthKind.OIDC && !unlocked) Gate.Locked else Gate.LoggedIn(s.user.id)
-        else -> Gate.Loading
-    }
+    val current = session as? Session
+    val required = update.blocking()
+    val gate = appGate(session != Unit, current, unlocked, blocked, required != null)
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
         DevEncryptionBanner()
-        val required = update.blocking()
         if (required == null) UpdateBar(update, c)
         Box(Modifier.weight(1f)) {
-            if (required != null) {
-                RequiredUpdateScreen(update, required, c)
-                return@Box
-            }
+            // Order: update required → blocked → locked → confirm phone → chats (contract §7).
             when (gate) {
-                Gate.Loading -> Unit
-                Gate.LoggedOut -> LoginFlow(viewModel(key = "login") { LoginViewModel(c) }, authUi, notice)
-                Gate.Locked -> LockedScreen(authUi)
-                is Gate.Blocked -> BlockedScreen(gate.b, c, authUi)
-                is Gate.LoggedIn -> MainNav(c, gate.meId)
+                AppGate.UPDATE_REQUIRED -> RequiredUpdateScreen(update, required!!, c)
+                AppGate.BLOCKED -> BlockedScreen(blocked!!, c, authUi)
+                AppGate.LOADING -> Unit
+                AppGate.SIGNED_OUT -> LoginFlow(viewModel(key = "login") { LoginViewModel(c) }, authUi, notice)
+                AppGate.LOCKED -> LockedScreen(authUi)
+                AppGate.CONFIRM_PHONE -> PhoneVerifyScreen(
+                    viewModel(key = "phone:${current!!.user.id}") { PhoneVerifyViewModel(AppPhoneBackend(c), current.user.phone) },
+                )
+                AppGate.CHATS -> MainNav(c, current!!.user.id)
             }
         }
     }
