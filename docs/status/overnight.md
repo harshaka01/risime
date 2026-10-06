@@ -1,5 +1,25 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
+## v0.2.0-nightly.14 (live 19:05 UTC, not required): E2EE switches on, per-chat lock, logout keeps chats, group ticks
+- **1:1 E2EE now activates.** Cause: the 1:1 readiness counted stale installs (an old pre-v1.7 row
+  each for Harsha and Hasitha, plus 2 dead install ids). Readiness now uses the §12.1 "can still
+  receive" rule. The app retries until the chat is encrypted and shows the real reason.
+- **No global dev banner** (decision 048). There's a lock per encrypted chat, an honest strip
+  elsewhere, and the About text is fixed.
+- **Log out keeps chats and MLS state** (decision 050). "Log out and delete chats from this phone"
+  is the wipe. A live check: messages that arrive while logged out are there after signing back
+  in, with no gap.
+- **Group ticks:** a receipt that beat the send reply was dropped; fixed. ✓ stays while any member
+  hasn't received the message.
+- **Delete for everyone:** the receive side is in. The send UI ships later, behind
+  `DELETES_SEND_ENABLED`, once everyone has this version.
+- **Server:** v1.13 calls signalling is deployed (`005_call_signals.cql`). It's dormant until the
+  calls app ships. TURN answers 503 until the ports are open.
+- **Release-process fixes tonight:**
+  - the test DB pool is capped (concurrent tests could exhaust the Postgres the pilot shares);
+  - the release gate has its own test DB and keyspace;
+  - interop runs are isolated per instance.
+
 ## v0.2.0-nightly.13 (live 18:06 UTC, not required): encrypted photos, chats stay at the bottom
 - **Photos:** E2EE, resized to 2048 px, metadata stripped (proven on real Android 14 decoders in
   Redroid), encrypted blob, preview first, full screen, save to gallery.
