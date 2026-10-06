@@ -250,6 +250,10 @@ interface MlsPendingDao {
     @Query("DELETE FROM mls_pending WHERE event_id = :eventId")
     suspend fun remove(eventId: String)
 
+    /** §13.3: the rows [dropOlderGenerations] would delete (read first: they count as pre-install). */
+    @Query("SELECT * FROM mls_pending WHERE conversation_id = :conversationId AND generation < :generation ORDER BY seq ASC")
+    suspend fun olderGenerations(conversationId: String, generation: Long): List<MlsPendingEntity>
+
     @Query("DELETE FROM mls_pending WHERE conversation_id = :conversationId AND generation < :generation")
     suspend fun dropOlderGenerations(conversationId: String, generation: Long)
 }

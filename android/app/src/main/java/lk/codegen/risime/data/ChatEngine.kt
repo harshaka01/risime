@@ -15,6 +15,7 @@ import lk.codegen.risime.net.MessageData
 import lk.codegen.risime.data.mls.MlsEngine
 import lk.codegen.risime.data.mls.MlsPipeline
 import lk.codegen.risime.data.mls.MlsResult
+import lk.codegen.risime.data.groups.SystemLine
 import lk.codegen.risime.net.AuthErrors
 import lk.codegen.risime.net.MsgSend
 import lk.codegen.risime.net.MsgSendE2ee
@@ -69,7 +70,18 @@ class ChatEngine(
     private val blobs: (suspend (lk.codegen.risime.net.BlobRef) -> BlobFetch)? = null,
     /** §12.8: this device can't follow the group any more (rejoin). */
     private val onUnrecoverable: (conversationId: String) -> Unit = {},
+    /**
+     * §13.3: the first `since: null` join has caught up (called at the start of that onLive): treat
+     * everything up to now as already notified.
+     */
+    private val onFreshReplayDone: suspend () -> Unit = {},
 ) : RealtimeListener {
+    /** §13.2: this join's `history_before` (in memory only; every join returns it). */
+    @Volatile private var historyBefore: Instant? = null
+
+    /** §13.3: a `since: null` join is replaying the inbox (no notifications until it is live). */
+    @Volatile var replayingFresh: Boolean = false
+        private set
     private val reactionStore = reactionsDao?.let { ReactionStore(it, clock) }
     private val reactionLock = Mutex()
 
@@ -79,7 +91,11 @@ class ChatEngine(
 
     // ---- RealtimeListener ----
 
-    override suspend fun cursor(): String? = sync.cursor()
+    override suspend fun cursor(): String? = sync.cursor().also { if (it == null) replayingFresh = true }
+
+    override suspend fun onHistoryBefore(ts: String?) {
+        historyBefore = ts?.let { runCatching { Instant.parse(it) }.getOrNull() }
+    }
 
     override suspend fun onEvents(events: List<Event>) {
         if (events.isEmpty()) return
@@ -112,7 +128,7 @@ class ChatEngine(
                         false
                     }
                     Event.KIND_GROUP_EVENT -> {
-                        runCatching { e.groupEvent() }.getOrNull()?.let { groups?.applyEvent(e.eventId, it, me) }
+                        runCatching { e.groupEvent() }.getOrNull()?.let { groups?.applyEvent(e.eventId, it, me, historicalLocalTs(it.serverTs)) }
                         false
                     }
                     Event.KIND_GROUP_OP -> {
@@ -172,6 +188,10 @@ class ChatEngine(
     }
 
     override suspend fun onLive() {
+        if (replayingFresh) {
+            onFreshReplayDone()
+            replayingFresh = false
+        }
         flushOutbox()
         flushAcks()
     }
@@ -188,32 +208,60 @@ class ChatEngine(
     private suspend fun applyMls(me: String, e: Event): Boolean {
         val pipeline = mls ?: return false
         var incoming = false
-        fun handle(r: MlsResult): String? = (r as? MlsResult.GroupChanged)?.conversationId
-        val results = mutableListOf(pipeline.apply(e))
+        val results = mutableListOf(pipeline.apply(e, historyBefore))
         var i = 0
         while (i < results.size) {
             val r = results[i++]
+            // §13.3: lost history is always visible (one deduplicated line per chat), never silent.
+            if (r is MlsResult.BeforeInstall) upsertMarker(r.conversationId, SystemLine.HISTORY_GAP, r.serverTs)
+            if (r is MlsResult.Dropped) r.conversationId?.let { upsertMarker(it, SystemLine.UNDECRYPTABLE, r.serverTs) }
             if (r is MlsResult.Plaintext) incoming = applyMessage(me, r.message, r.body) || incoming
             if (r is MlsResult.Reaction) {
                 applyReaction(r.message.conversationId, r.target, r.message.from, r.emoji, r.op, r.message.serverTs, r.message.messageId, r.message.clientMsgId)
             }
             if (r is MlsResult.Unrecoverable) onUnrecoverable(r.conversationId)
-            handle(r)?.let { conv ->
+            (r as? MlsResult.GroupChanged)?.let { gc ->
+                val conv = gc.conversationId
+                results += gc.extra
                 if (isGroupConversation(conv)) {
                     groups?.onGroupStateChanged(conv, removedSelf = mlsEngine()?.group(conv) == null)
                     scope.launch { flushOutbox() } // messages waiting for this group's Welcome
                 }
-                results += pipeline.replay(conv)
+                results += pipeline.replay(conv, gc.joined)
             }
         }
         return incoming
     }
 
+    private suspend fun upsertMarker(conversationId: String, action: String, serverTs: String?) {
+        messages.upsertSystemLine(HistoryMarkers.row(conversationId, action, serverTs, clock()))
+    }
+
+    /**
+     * §13.3 R5: a row restored from the inbox that is clearly historical (before `history_before`, or
+     * more than [HISTORICAL_MS] older than the device clock) takes its local time from `server_ts`.
+     * Null = live: keep the device clock.
+     */
+    private fun historicalLocalTs(serverTs: String?): Long? {
+        val ts = HistoryMarkers.epochMs(serverTs) ?: return null
+        val hb = historyBefore?.toEpochMilli()
+        return ts.takeIf { (hb != null && it < hb) || it < clock() - HISTORICAL_MS }
+    }
+
     /** @return true if a new incoming message was stored (needs a delivered ack). */
     private suspend fun applyMessage(me: String, m: MessageData, body: String): Boolean {
         if (messages.byMessageId(m.messageId) != null) return false
-        if (messages.byClientMsgId(m.clientMsgId) != null) return false
         val outgoing = m.from.equals(me, ignoreCase = true)
+        messages.byClientMsgId(m.clientMsgId)?.let { row ->
+            // §13.1 S-a: my own copy for a PENDING outbox row (the msg:send reply was lost): it reached the server.
+            if (outgoing && row.outgoing && row.status == MessageStatus.PENDING.name) {
+                messages.updateStatus(row.clientMsgId, MessageStatus.SENT.name, m.messageId, m.serverTs, null)
+            }
+            return false
+        }
+        val restored = historicalLocalTs(m.serverTs)
+        // S-b: received history from before this install was handled by the old one: read, no acks, no badge.
+        val preInstall = !outgoing && historyBefore?.let { hb -> HistoryMarkers.epochMs(m.serverTs)?.let { it < hb.toEpochMilli() } } == true
         messages.insert(
             MessageEntity(
                 clientMsgId = m.clientMsgId,
@@ -223,13 +271,19 @@ class ChatEngine(
                 to = m.to ?: m.conversationId, // §12.7: group messages have no `to`
                 body = body,
                 serverTs = m.serverTs,
-                localTs = clock(),
-                status = (if (outgoing) MessageStatus.SENT else MessageStatus.DELIVERED).name,
+                localTs = restored ?: clock(),
+                status = when {
+                    outgoing -> MessageStatus.SENT
+                    preInstall -> MessageStatus.READ
+                    else -> MessageStatus.DELIVERED
+                }.name,
                 outgoing = outgoing,
+                ackedStatus = if (preInstall) MessageStatus.READ.name else null,
             ),
         )
-        if (!outgoing) onIncomingFrom(m.from)
-        return !outgoing
+        if (outgoing || preInstall) return false
+        onIncomingFrom(m.from)
+        return true
     }
 
     private suspend fun applyStatus(s: StatusData) {
@@ -453,6 +507,9 @@ class ChatEngine(
         /** Local only: a group message whose MLS group isn't here yet; stays PENDING without blocking the outbox. */
         const val WAITING_FOR_GROUP = "waiting_for_group"
         const val ACK_BATCH = 100
+
+        /** §13.3: rows this much older than the device clock are restored history. */
+        const val HISTORICAL_MS = 5 * 60_000L
         private val ISO_MILLIS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
 
         fun isoMillis(epochMs: Long): String = ISO_MILLIS.format(Instant.ofEpochMilli(epochMs))

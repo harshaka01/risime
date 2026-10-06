@@ -171,9 +171,9 @@ class RealMlsPipelineTest {
         appB.chat.onEvents(listOf(welcomeEv(welcome, 1, listOf("someone-else"))))
         assertNull(b.engine.group(conv))
         appB.chat.onEvents(listOf(welcomeEv(welcome, 1, listOf("b-phone"))))
-        // A real message from A's phone, but the event claims the tablet: dropped.
+        // A real message from A's phone, but the event claims the tablet: dropped, with the §13.3 line.
         appB.chat.onEvents(listOf(msgEv(a, a.engine.encrypt(conv, MlsPayload.text("forged")), 1, fromDev = "a-tablet")))
-        assertTrue(appB.messages.rows.isEmpty())
+        assertEquals(listOf("sys:undecryptable:$conv"), appB.messages.rows.keys.toList())
         // A's own commit event is skipped by A (it merged on the 200).
         val appA = App(a, this)
         val pc = a.engine.changeMembers(conv, emptyList(), listOf(a2.ref))

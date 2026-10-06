@@ -129,6 +129,8 @@ class FakeMlsPendingDao : lk.codegen.risime.data.db.MlsPendingDao {
     }
     override suspend fun forConversation(conversationId: String) = rows.filter { it.conversationId == conversationId }.sortedBy { it.seq }
     override suspend fun remove(eventId: String) { rows.removeAll { it.eventId == eventId } }
+    override suspend fun olderGenerations(conversationId: String, generation: Long) =
+        rows.filter { it.conversationId == conversationId && it.generation < generation }.sortedBy { it.seq }
     override suspend fun dropOlderGenerations(conversationId: String, generation: Long) {
         rows.removeAll { it.conversationId == conversationId && it.generation < generation }
     }

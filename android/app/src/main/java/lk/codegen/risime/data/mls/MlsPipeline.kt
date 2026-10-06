@@ -16,8 +16,18 @@ sealed interface MlsResult {
     /** §11.2: a decrypted reaction (effective state by server_ts + message_id). */
     data class Reaction(val message: MessageData, val target: String, val emoji: String, val op: String) : MlsResult
 
-    /** Group state changed (commit applied, welcome joined): replay this conversation's pending events. */
-    data class GroupChanged(val conversationId: String) : MlsResult
+    /**
+     * Group state changed (commit applied, welcome joined): replay this conversation's pending
+     * events. [joined] = the Welcome's (generation, epoch) for §13.3 rule 2; [extra] = results the
+     * change produced besides (a BeforeInstall for discarded older-generation rows).
+     */
+    data class GroupChanged(val conversationId: String, val joined: GroupRef? = null, val extra: List<MlsResult> = emptyList()) : MlsResult
+
+    /**
+     * §13.3: an e2ee message encrypted before this device (or its current MLS state) existed. Not
+     * parked, not decrypted, not stored, not acked: the chat shows one "Earlier messages…" marker.
+     */
+    data class BeforeInstall(val conversationId: String, val serverTs: String?) : MlsResult
 
     /** Ahead of the local epoch/generation, or no group yet: kept in mls_pending. */
     data object Pending : MlsResult
@@ -25,8 +35,11 @@ sealed interface MlsResult {
     /** Not for this device, already applied, or our own: nothing to do. */
     data object Ignored : MlsResult
 
-    /** Undecryptable or failed verification: dropped (and logged). */
-    data class Dropped(val reason: String) : MlsResult
+    /**
+     * Undecryptable or failed verification: dropped (and logged). With a [conversationId] the chat
+     * shows the §13.3 "Some messages couldn't be decrypted" line (never a silent drop).
+     */
+    data class Dropped(val reason: String, val conversationId: String? = null, val serverTs: String? = null) : MlsResult
 
     /**
      * §12.8 (groups only): this device's group state can't follow any more (the core rejected a
@@ -76,10 +89,24 @@ class MlsPipeline(
         return MlsResult.Pending
     }
 
+    private fun tsKey(ts: String): Long = runCatching { java.time.Instant.parse(ts).toEpochMilli() }.getOrDefault(Long.MIN_VALUE)
+
     private fun unrecoverableOr(conv: String, reason: String): MlsResult =
         if (lk.codegen.risime.net.isGroupConversation(conv)) MlsResult.Unrecoverable(conv, reason) else MlsResult.Dropped(reason)
 
-    suspend fun apply(e: Event): MlsResult {
+    /**
+     * An event first seen from the inbox. [historyBefore] (§13.2) enables rule 1, only where the
+     * message would otherwise be parked or dropped.
+     */
+    suspend fun apply(e: Event, historyBefore: java.time.Instant? = null): MlsResult = applyInner(e, historyBefore, null)
+
+    private fun beforeHistory(ts: String?, historyBefore: java.time.Instant?): Boolean {
+        if (historyBefore == null || ts == null) return false
+        val t = runCatching { java.time.Instant.parse(ts) }.getOrNull() ?: return false
+        return t.isBefore(historyBefore)
+    }
+
+    private suspend fun applyInner(e: Event, historyBefore: java.time.Instant?, joined: GroupRef?): MlsResult {
         val mls = engine() ?: return MlsResult.Ignored // no MLS core: behave like a v1.6 app
         e.mlsWelcome()?.let { w ->
             if (w.toDevices.none { it.equals(mls.deviceId, true) }) return MlsResult.Ignored
@@ -88,13 +115,18 @@ class MlsPipeline(
             // §12.6: a referenced Welcome is fetched and inlined before this call; a missing one is unrecoverable.
             val welcome = w.welcome ?: return unrecoverableOr(w.conversationId, "welcome blob not fetched")
             return try {
-                mls.joinFromWelcome(w.conversationId, w.generation, b64.decode(welcome))
+                val ref = mls.joinFromWelcome(w.conversationId, w.generation, b64.decode(welcome))
+                // §13.3: parked messages of an older generation are pre-install (one marker), never a silent drop.
+                val older = pending.olderGenerations(w.conversationId, w.generation).mapNotNull { p ->
+                    runCatching { ProtocolJson.decodeFromString(Event.serializer(), p.eventJson).messageData() }.getOrNull()?.takeIf { it.encrypted }
+                }
                 pending.dropOlderGenerations(w.conversationId, w.generation)
                 onJoined()
-                MlsResult.GroupChanged(w.conversationId)
+                val extra = if (older.isEmpty()) emptyList() else listOf(MlsResult.BeforeInstall(w.conversationId, older.maxByOrNull { tsKey(it.serverTs) }?.serverTs))
+                MlsResult.GroupChanged(w.conversationId, GroupRef(w.conversationId, w.generation, maxOf(w.epoch, ref.epoch)), extra)
             } catch (t: Exception) {
                 log("welcome rejected: ${t.message}")
-                MlsResult.Dropped("welcome: ${t.message}")
+                MlsResult.Dropped("welcome: ${t.message}", w.conversationId)
             }
         }
         e.mlsCommit()?.let { c ->
@@ -127,17 +159,25 @@ class MlsPipeline(
         }
         val msg = e.messageData()?.takeIf { it.encrypted } ?: return MlsResult.Ignored
         if (msg.fromDevice.equals(mls.deviceId, true)) return MlsResult.Ignored // our own send (already in the outbox row)
-        val gen = msg.generation ?: return MlsResult.Dropped("no generation")
-        val epoch = msg.epoch ?: return MlsResult.Dropped("no epoch")
-        val g = mls.group(msg.conversationId) ?: return park(e, msg.conversationId, gen, epoch)
-        if (gen < g.generation) return MlsResult.Dropped("stale generation")
-        if (gen > g.generation || epoch > g.epoch) return park(e, msg.conversationId, gen, epoch)
+        val conv = msg.conversationId
+        fun undecryptable(reason: String) = MlsResult.Dropped(reason, conv, msg.serverTs)
+        val beforeInstall = MlsResult.BeforeInstall(conv, msg.serverTs)
+        // Rule 1 (§13.3): only where the message would otherwise be parked or dropped; never on replayed rows (null there).
+        val rule1 = beforeHistory(msg.serverTs, historyBefore)
+        val gen = msg.generation ?: return undecryptable("no generation")
+        val epoch = msg.epoch ?: return undecryptable("no epoch")
+        // Rule 2: below the epoch this device joined at from the Welcome being replayed.
+        if (joined != null && gen == joined.generation && epoch < joined.epoch) return beforeInstall
+        val g = mls.group(conv) ?: return if (rule1) beforeInstall else park(e, conv, gen, epoch)
+        if (gen < g.generation) return if (rule1) beforeInstall else undecryptable("stale generation")
+        if (gen > g.generation) return if (rule1) beforeInstall else park(e, conv, gen, epoch)
+        if (epoch > g.epoch) return park(e, conv, gen, epoch)
         return try {
             val d = mls.decrypt(msg.conversationId, gen, b64.decode(msg.ciphertext))
             // §10.3: the authenticated sender must be the event's from/from_device.
             if (!d.sender.userId.equals(msg.from, true) || !d.sender.deviceId.equals(msg.fromDevice ?: "", true)) {
                 log("sender mismatch on ${msg.messageId}")
-                MlsResult.Dropped("sender mismatch")
+                undecryptable("sender mismatch")
             } else {
                 when (val p = MlsPayload.decode(d.plaintext)) {
                     is MlsPayload.Decoded.Text -> MlsResult.Plaintext(msg, p.body)
@@ -149,8 +189,9 @@ class MlsPipeline(
                 }
             }
         } catch (ex: MlsDecryptException) {
+            if (rule1) return beforeInstall
             log("undecryptable ${msg.messageId}: ${ex.message}")
-            MlsResult.Dropped("decrypt: ${ex.message}")
+            undecryptable("decrypt: ${ex.message}")
         }
     }
 
@@ -158,7 +199,7 @@ class MlsPipeline(
      * After a group change: re-apply this conversation's pending events in arrival order. Returns
      * the results of the ones that are no longer pending (they're removed from mls_pending).
      */
-    suspend fun replay(conversationId: String): List<MlsResult> {
+    suspend fun replay(conversationId: String, joined: GroupRef? = null): List<MlsResult> {
         val out = mutableListOf<MlsResult>()
         var progressed = true
         while (progressed) {
@@ -166,7 +207,8 @@ class MlsPipeline(
             for (p in pending.forConversation(conversationId)) {
                 val ev = ProtocolJson.decodeFromString(Event.serializer(), p.eventJson)
                 pending.remove(p.eventId)
-                val r = apply(ev)
+                // Parked rows are never re-judged by rule 1 (no historyBefore); rule 2 applies after a Welcome.
+                val r = applyInner(ev, null, joined)
                 if (r == MlsResult.Pending) continue // apply() parked it again
                 out += r
                 if (r is MlsResult.GroupChanged) {

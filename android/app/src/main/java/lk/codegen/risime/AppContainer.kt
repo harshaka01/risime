@@ -250,7 +250,7 @@ class AppContainer(context: Context) {
 
     /** §12.7 S4: "Kamal added you to <name>" (the name from the Welcome's group_meta), unless that chat is open. */
     private suspend fun notifyAddedToGroup(conversationId: String, actor: String) {
-        if (foreground.value) return
+        if (foreground.value || engine.replayingFresh) return // §13.3: no notifications for a fresh-install replay
         val name = db.groups().get(conversationId)?.name ?: mlsEngine?.groupMeta(conversationId)?.name
         val who = db.groups().members(conversationId).firstOrNull { it.userId.equals(actor, true) }?.displayName
             ?: contacts.contacts.first().firstOrNull { it.userId.equals(actor, true) }?.displayName ?: "Someone"
@@ -361,6 +361,8 @@ class AppContainer(context: Context) {
         groups = groupStore,
         blobs = { ref -> fetchBlob(ref) },
         onUnrecoverable = { conv -> onGroupUnrecoverable(conv) },
+        // §13.3 R7: a fresh install never notifies for replayed events (messages, reactions).
+        onFreshReplayDone = { sessionStore.setNotifiedUpTo(maxOf(System.currentTimeMillis(), sessionStore.notifiedUpTo())) },
     )
 
     val realtime: RealtimeClient = PhoenixRealtimeClient(
@@ -659,6 +661,7 @@ class AppContainer(context: Context) {
     }
 
     private suspend fun notifyFromLocal() {
+        if (engine.replayingFresh) return // §13.3: the replay isn't live yet; onFreshReplayDone moves notifiedUpTo
         val open = openConversation.value.takeIf { foreground.value }
         val since = sessionStore.notifiedUpTo()
         val contactList = contacts.contacts.first()

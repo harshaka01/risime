@@ -58,11 +58,11 @@ class MlsPipelineTest {
     private var evN = 0
     private fun ev(kind: String, data: JsonObject) = Event("e${++evN}", kind, data)
 
-    private fun msg(epoch: Long, text: String, gen: Long = 1, fromDev: String = peerDev, from: String = peer) = ev("message", buildJsonObject {
+    private fun msg(epoch: Long, text: String, gen: Long = 1, fromDev: String = peerDev, from: String = peer, ts: String = "2026-10-06T08:00:00.000Z") = ev("message", buildJsonObject {
         put("message_id", "m${evN + 1}"); put("client_msg_id", "cm${evN + 1}"); put("conversation_id", conv)
         put("from", from); put("to", if (from == me) peer else me); put("from_device", fromDev)
         put("ciphertext", FakeMlsEngine.ciphertext(gen, epoch, from, fromDev, text)); put("generation", gen); put("epoch", epoch)
-        put("server_ts", "2026-10-06T08:00:00.000Z")
+        put("server_ts", ts)
     })
 
     private fun commit(epoch: Long, note: String = "x", fromDev: String = peerDev, gen: Long = 1) = ev("mls_commit", buildJsonObject {
@@ -74,7 +74,12 @@ class MlsPipelineTest {
         put("to_devices", buildJsonArray { to.forEach { add(JsonPrimitive(it)) } })
     })
 
-    private fun bodies() = messages.rows.values.filter { !it.outgoing }.sortedBy { it.localTs }.map { it.body }
+    private fun bodies() = messages.rows.values.filter { !it.outgoing && !it.system }.sortedBy { it.localTs }.map { it.body }
+
+    private fun markers() = messages.rows.values.filter { it.system }.map { it.clientMsgId }
+
+    private val gap = "sys:history:$conv"
+    private val undecryptable = "sys:undecryptable:$conv"
 
     @Test fun welcomeThenMessagesDecryptIntoTheSameTransactionAsTheCursor() = runTest {
         val e = engine()
@@ -120,17 +125,18 @@ class MlsPipelineTest {
             Event(ev.eventId, ev.kind, JsonObject(ev.data + ("from_device" to JsonPrimitive("d-other"))))
         }
         e.onEvents(listOf(forged))
-        assertTrue(messages.rows.isEmpty())
+        assertEquals(listOf(undecryptable), markers()) // §13.3: never silent
         // My other device's message is mine (outgoing) and decrypts.
         e.onEvents(listOf(msg(1, "from my tablet", fromDev = "d-tablet", from = me)))
-        assertEquals(listOf(true), messages.rows.values.map { it.outgoing })
+        assertEquals(listOf(true), messages.rows.values.filter { !it.system }.map { it.outgoing })
     }
 
     @Test fun staleGenerationDroppedNewerGenerationWaitsRemovedSelfDeletesTheGroup() = runTest {
         val e = engine()
         mls.groups[conv] = GroupRef(conv, 2, 1)
         e.onEvents(listOf(msg(1, "old gen", gen = 1)))
-        assertTrue(messages.rows.isEmpty() && pending.rows.isEmpty())
+        assertTrue(bodies().isEmpty() && pending.rows.isEmpty())
+        assertEquals(listOf(undecryptable), markers()) // a live stale generation is a visible loss
         e.onEvents(listOf(msg(1, "new gen", gen = 3)))
         assertEquals(1, pending.rows.size)
         e.onEvents(listOf(commit(1, "remove-me", gen = 2)))
@@ -157,6 +163,104 @@ class MlsPipelineTest {
         e.onEvents(listOf(welcome(1, listOf(myDev)), m))
         assertTrue(messages.rows.isEmpty() && pending.rows.isEmpty())
         assertEquals(m.eventId, sync.last)
+    }
+
+    // ---- §13.3 history after a reinstall ----
+
+    private val hb = "2026-10-06T09:00:00.000Z"
+    private val before = "2026-10-06T08:30:00.000Z"
+    private val after = "2026-10-06T09:30:00.000Z"
+
+    @Test fun rule1NoGroupBeforeHistoryIsPreInstallNotParked() = runTest {
+        val e = engine()
+        e.onHistoryBefore(hb)
+        e.onEvents(listOf(msg(0, "old", ts = before), msg(0, "older", ts = "2026-10-06T08:00:00.000Z")))
+        assertTrue(pending.rows.isEmpty())
+        assertTrue(bodies().isEmpty())
+        val marker = messages.rows[gap]!!
+        assertEquals(lk.codegen.risime.data.groups.SystemLine.HISTORY_GAP_TEXT, marker.body)
+        assertEquals(java.time.Instant.parse(before).toEpochMilli() + 1, marker.localTs) // forward-only: the later one wins
+        assertEquals("READ", marker.status)
+        assertTrue(realtime.acks.isEmpty())
+        // At or after history_before: parked (the Welcome may still come).
+        e.onEvents(listOf(msg(0, "new", ts = after), msg(0, "edge", ts = hb)))
+        assertEquals(2, pending.rows.size)
+        assertEquals(listOf(gap), markers())
+    }
+
+    @Test fun nullHistoryBeforeMeansEpochRuleOnly() = runTest {
+        val e = engine()
+        e.onHistoryBefore(null)
+        e.onEvents(listOf(msg(0, "old", ts = before)))
+        assertEquals(1, pending.rows.size)
+        assertTrue(markers().isEmpty())
+    }
+
+    @Test fun anExistingGroupAtOurEpochDecryptsEvenBeforeHistory() = runTest {
+        // Key packages published before the first census connect: decryptable despite server_ts < history_before.
+        mls.groups[conv] = GroupRef(conv, 1, 1)
+        val e = engine()
+        e.onHistoryBefore(hb)
+        e.onEvents(listOf(msg(1, "readable", ts = before)))
+        assertEquals(listOf("readable"), bodies())
+        assertTrue(markers().isEmpty())
+    }
+
+    @Test fun parkedRowsAreNeverReJudgedByRule1() = runTest {
+        val e = engine()
+        e.onHistoryBefore(null) // an upgraded device: parked before v1.10
+        e.onEvents(listOf(msg(1, "parked", ts = before)))
+        assertEquals(1, pending.rows.size)
+        e.onHistoryBefore(hb) // a later join with a (late) boundary
+        e.onEvents(listOf(welcome(1, listOf(myDev))))
+        assertEquals(listOf("parked"), bodies())
+        assertTrue(markers().isEmpty())
+    }
+
+    @Test fun rule2WelcomeReplayBelowTheJoinEpochIsPreInstall() = runTest {
+        val e = engine()
+        e.onHistoryBefore(null)
+        e.onEvents(listOf(msg(0, "e0", ts = "2026-10-06T08:00:00.000Z"), commit(0, "c"), msg(1, "e1", ts = before), welcome(2, listOf(myDev)), msg(2, "now", ts = after)))
+        assertEquals(listOf("now"), bodies())
+        assertEquals(listOf(gap), markers())
+        assertEquals(java.time.Instant.parse(before).toEpochMilli() + 1, messages.rows[gap]!!.localTs)
+        assertTrue(pending.rows.isEmpty())
+        assertTrue(mls.processed.isEmpty()) // the parked commit is below the Welcome too
+    }
+
+    @Test fun discardedOlderGenerationRowsGiveOneMarker() = runTest {
+        val e = engine()
+        e.onHistoryBefore(null)
+        e.onEvents(listOf(msg(1, "g1-a", gen = 1, ts = "2026-10-06T08:00:00.000Z"), msg(3, "g1-b", gen = 1, ts = before)))
+        assertEquals(2, pending.rows.size)
+        e.onEvents(listOf(welcome(1, listOf(myDev), gen = 2)))
+        assertTrue(pending.rows.isEmpty())
+        assertEquals(listOf(gap), markers())
+        assertEquals(java.time.Instant.parse(before).toEpochMilli() + 1, messages.rows[gap]!!.localTs)
+    }
+
+    @Test fun theOldDevicesOwnSendsArePreInstall() = runTest {
+        val e = engine()
+        e.onHistoryBefore(hb)
+        e.onEvents(listOf(msg(0, "mine from the old install", fromDev = "d-old", from = me, ts = before)))
+        assertTrue(messages.rows.values.none { !it.system })
+        assertEquals(listOf(gap), markers())
+        // This device's own send is still skipped first (no marker for it).
+        messages.rows.clear()
+        e.onEvents(listOf(msg(0, "mine", fromDev = myDev, from = me, ts = before)))
+        assertTrue(messages.rows.isEmpty())
+    }
+
+    @Test fun aCorruptedCiphertextGivesOneUndecryptableLine() = runTest {
+        mls.groups[conv] = GroupRef(conv, 1, 1)
+        val e = engine()
+        fun corrupt(ts: String) = msg(1, "x", ts = ts).let { ev -> Event(ev.eventId, ev.kind, JsonObject(ev.data + ("ciphertext" to JsonPrimitive(FakeMlsEngine.b64("garbage"))))) }
+        e.onEvents(listOf(corrupt(before), corrupt(after)))
+        e.onEvents(listOf(corrupt("2026-10-06T08:00:00.000Z"))) // earlier: the line doesn't move back
+        assertEquals(listOf(undecryptable), markers())
+        assertEquals(lk.codegen.risime.data.groups.SystemLine.UNDECRYPTABLE_TEXT, messages.rows[undecryptable]!!.body)
+        assertEquals(java.time.Instant.parse(after).toEpochMilli() + 1, messages.rows[undecryptable]!!.localTs)
+        assertTrue(realtime.acks.isEmpty())
     }
 
     // ---- outbox ----

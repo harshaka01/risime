@@ -116,7 +116,7 @@ class GroupStore(
     fun observeGroups() = groups.all()
 
     /** @return true if the event changed anything visible. */
-    suspend fun applyEvent(eventId: String, e: GroupEvent, me: String): Boolean {
+    suspend fun applyEvent(eventId: String, e: GroupEvent, me: String, restoredLocalTs: Long? = null): Boolean {
         val conv = e.groupId
         val now = clock()
         val existing = groups.get(conv)
@@ -176,7 +176,8 @@ class GroupStore(
             else -> line = null // unknown action: ignore (§10.0)
         }
         groups.upsert(g)
-        line?.let { insertSystemLine(eventId, conv, it, me, now) }
+        // §13.3 R5: a replayed line sits at its server time, not under "Today".
+        line?.let { insertSystemLine(eventId, conv, it, me, restoredLocalTs ?: now) }
         return true
     }
 
