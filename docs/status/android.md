@@ -1,5 +1,68 @@
 # Android status — 0.2 nightlies
 
+## v1.9 groups with MLS (§12) — READY
+**READY** for contract v1.9 §12 (decision 041), following the review's chunk order
+(`contract/proposals/reviews/2026-10-06-groups-v1.9-android.md`). Gate green on `main`:
+`cd android && ./gradlew assembleDebug testDebugUnitTest` (258 JVM tests, 3 live-server ones skipped, including the
+real-core `RealGroupTest`). Not yet run against the live server or on a device.
+
+What's in the app:
+- **Keyed by conversation id** (chunk 1): engine, open chat, notification suppression and intents
+  (old peer-id intents still open the DM). An open DM no longer hides the same person's group
+  messages.
+- **Wire models** for every v1.9 shape; `ContractExamplesTest` decodes all v1.9 examples into them and
+  round-trips the client-sent ones (v1.7 payloads unchanged: new fields are omitted when unused).
+- **Room v5** (additive): `groups`, `group_members`, `group_ops`; messages gain `kind`/`system_json`
+  and the aggregated receipt columns (`to_id` holds the conversation id for groups); contacts gain
+  `group_ready`. `Migration4To5Test` compares a migrated v4 DB with a fresh v5 one column by column.
+- **`mls_kv` chunking:** values over 512 KB are split into sealed chunk rows (the 768-leaf tree is
+  about 1.8 MB; Android's `CursorWindow` is 2 MB). No schema change.
+- **Receive path:** `group_event` → members/roles + local system lines (never unread, acked or
+  notified); `group_op` naming this device → the op outbox (deduped by `op_id`); `group_receipt` →
+  ✓✓ / read ticks; group messages without `to`; commit/Welcome blob refs fetched and SHA-256
+  checked before the event's transaction (a transient failure keeps the cursor); catch-up when a
+  `grp:` event parks ahead (paged, `410 log_expired` → rejoin); a rejected commit or a gone blob →
+  rejoin; group typing per conversation.
+- **MLS:** `MlsEngine` group API over the crypto FFI (`createGroupWithMeta`, `changeMembers`,
+  `removeUsers`, `updateGroupMeta`, `groupMeta`). Our own `grp:` commit still at our epoch (a crash
+  between the `200` and the merge, or the event beating the reply) is merged from the log via
+  `processCommits`.
+- **Registration:** `mls.capabilities: ["groups"]` is sent only when the core is groups-capable
+  (the real FFI is); the first time per signature key the key packages are re-uploaded with
+  `replace: true` and a fresh last-resort package.
+- **Op outbox** (`GroupOpsExecutor`, persisted): create (idempotent `client_group_id` → claim →
+  epoch-0 commit with `group_meta`), add/remove/role (REST, then the op naming this device),
+  leave (immediate locally, undone on `last_admin`), rename (`meta_changed`), server ops
+  (add/remove/role/devices/rebuild) **re-derived from `GET /groups/{id}` every attempt**, rejoin,
+  reset. Blob refs over 64 KiB; merge only on `200`; `409` → drop, catch up, rebuild; backoff and a
+  final failed state. `GET /groups` on every (re)join finds owed ops (R5).
+- **UI:** group rows in the chats list; "New group" FAB (only with a groups-capable core): friend
+  picker (non-ready friends greyed "needs to update") → name (1–100 graphemes) → Create; group chat
+  with coloured sender names per run, system lines, typing names, the e2ee strip until the Welcome,
+  read-only after leave/removal; info screen (members, Admin chip, Adding…/Removing…, admin add /
+  rename / remove / make or dismiss admin / reset, Leave with confirm, `last_admin` suggests the
+  longest-standing member); long-press your message → Info → "Read by" sheet. Back always works
+  (decision 016). The dev banner is unchanged.
+- **Notifications:** MessagingStyle per group (group title, sender per line), "Kamal added you to
+  <name>" (S4).
+
+Tests: `GroupStoreTest`, `GroupChatEngineTest`, `GroupOpsExecutorTest` (the op state machine),
+`GroupLogicTest`, `GroupNotificationsTest`, `GroupScreensTest` (Robolectric Compose: create group,
+info, Read by; light and dark; 320×480 dp), `Migration4To5Test`, `SealedKvStoreTest` (chunking),
+`DeviceRegistrarTest` (capability + replace), and `RealGroupTest` with the real core (create, join,
+group messages through `ChatEngine`, rename, non-admin rename refused, removal lock-out, own commit
+recovered from the log).
+
+Known gaps / next:
+- Not yet exercised against the server's §12 endpoints (server role in progress); the interop gate
+  has no group cases yet, and no device run.
+- No 256-member on-device benchmark yet (the crypto role measured 2.6 ms decrypt / 18 ms join in
+  release on spark2); the FFI has no in-memory group cache.
+- System lines appear when their `group_event` arrives, not gated on the local epoch reaching it.
+- A network error on our own commit drops the pending commit; if the server did take it, the device
+  rejoins (rare).
+- Search doesn't cover group messages yet; per-group mute (local) not built.
+
 **READY** — 0.1 (A1–A7) plus 0.2: release plumbing, Settings, presence/last seen and typing
 (v1.2), chat polish, the design system pass, and **contract v1.3**: RisiCloud (Keycloak) sign-in,
 fingerprint-unlocked tokens and the release-only in-app updater, and **contract v1.4**: one-time
