@@ -35,6 +35,7 @@ dependencies = [
  "ctr",
  "ghash",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1771,8 +1772,11 @@ dependencies = [
 name = "risime-mls"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "base64",
  "ed25519-dalek",
+ "getrandom 0.2.17",
+ "hkdf 0.12.4",
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto",
@@ -1782,6 +1786,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror",
  "unicode-segmentation",
+ "zeroize",
 ]
 
 [[package]]

@@ -1,0 +1,7 @@
+# Hardware AES and PMULL (GHASH) on aarch64 for the RustCrypto `aes` 0.8 / `polyval` 0.6 crates,
+# which only build their ARMv8 backends behind these cfgs. Both still detect the CPU features at
+# run time and fall back to the constant-time software code on cores without them. Measured on
+# spark2: media AEAD ~3x faster (crypto/README.md). Joined with any CARGO_TARGET_<triple>_RUSTFLAGS
+# (scripts/build-rust-android); a plain RUSTFLAGS in the environment overrides it.
+[target.'cfg(target_arch = "aarch64")']
+rustflags = ["--cfg", "aes_armv8", "--cfg", "polyval_armv8"]

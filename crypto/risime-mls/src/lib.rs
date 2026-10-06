@@ -30,6 +30,7 @@
 
 pub mod attestation;
 pub mod group;
+pub mod media;
 pub mod meta;
 pub mod policy;
 pub mod storage;
