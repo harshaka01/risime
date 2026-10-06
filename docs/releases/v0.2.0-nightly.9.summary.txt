@@ -1,0 +1,2 @@
+Fixes the "Update required" screen: the Update button is always visible, text is readable in dark mode, and there's an "Open download page" link.
+New: emoji picker and reactions (long-press a message).
