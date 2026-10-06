@@ -1,5 +1,97 @@
 # Android status — 0.2 nightlies
 
+## v1.13 1:1 voice calls (§16) — READY
+**READY** for contract v1.13 §16 (decisions 046, 051, new **052**), in the chunk order of
+`contract/proposals/reviews/2026-10-06-calls-v1.13-android.md` with crypto R1–R6. Commits `8ffb708` (protocol, envelopes,
+SDP rules, state machine), `d6c2110` (pipeline, lanes, Room v8, call lines), `68deb50` (libwebrtc + decision 052),
+`0586fec` (Telecom, service, notifications, UI, push, capability, button), `f91b14d` (live interop), `6cbe05f`
+(redroid device tests), `ed47623` (FSI card, push tests), `4330b09` (rollout switch).
+Gates green: `./gradlew assembleDebug testDebugUnitTest` (**529** JVM tests, 0 failed); `scripts/interop` on
+`INTEROP_INSTANCE=_calls` (4300/4999) **INTEROP OK twice in a row** with 10 new call checks; instrumented on redroid
+Android 14 arm64 (own instances `-calls`/`-calls2` on 5700/5701, stopped afterwards) **OK (3 tests)** three times, plus
+the two-container run **OK** on both sides.
+- **Library (decision 052):** `io.github.webrtc-sdk:android-prefixed` 144.7559.14 (= livekit-android 2.29.0's pin,
+  "must equal" comment in `libs.versions.toml`), `androidx.core:core-telecom` 1.0.1. The WebRTC `.so` only for
+  arm64-v8a/x86_64 (`packaging.jniLibs.excludes`); `check<Variant>SingleWebRtc` (run by `assemble*`) and
+  `WebRtcPackagingTest` fail on a second libwebrtc. Debug APK 42.6 MB.
+- **Signalling over MLS (§16.2–16.3):** `calls/CallEnvelope` (strict decode: lowercase UUIDs, `sent_at`, 20 480 B, ICE
+  ≤ 20 × 512 B, restart needs `to_device`; `call_end` with an unknown reason renders "Voice call"), `calls/SdpRules`
+  (16 KiB, one `m=audio` UDP/TLS/RTP/SAVPF, exactly one `a=fingerprint:sha-256` of 32 bytes, no `a=crypto`, setup
+  actpass/active|passive, ufrag/pwd, rtcp-mux, Opus, no audio-level extmap; we strip it and set Opus
+  `useinbandfec=1;usedtx=1;cbr=1;stereo=0;maxaveragebitrate=32000`, ptime 20). `call_signal` events go through
+  `MlsPipeline` in event order (parked like messages; a park ahead of the epoch now triggers commit catch-up in **DMs
+  too**, android R7), binding `call_id`/`ring`/sender (crypto R3), every failure a `ControlDropped` (no §13.3 line).
+  The calls layer gets each signal **after the event's transaction commits** and `onPageEnd` after every batch
+  (ring after the page, android R3). **One encrypt-and-push lane per conversation** (`ChatEngine.lane(conv)`, was one
+  global mutex) shared by texts, reactions, images, deletes and `call:signal`; stale_epoch → catch up, re-encrypt,
+  same client_msg_id.
+- **State machine (`calls/CallStateMachine`, pure Kotlin, ports for media/signals/marks/clock):** offer sent at once with
+  `sent_at` (server-corrected), trickle ICE in 250-ms batches ≤ 20 (`to_device: null` before accepted), ringing,
+  first answer wins + `call_accepted`, 10-s accept wait (no call_end), 45-s ring timeout/validity, 20-s connect,
+  ICE failed → "Can't connect the call" at once, reconnect: the caller restarts ICE (same fingerprint required) for
+  15 s, 4-h max; freshness (server_ts and sent_at < 45 s), 24-h persisted dedupe (`call_marks`), sender pinning;
+  glare (lower id wins, `call_cancel` glare, loser auto-answers, no call_end) + the sibling rule; busy (own call or
+  `AudioManager.mode` IN_CALL/IN_COMMUNICATION, no READ_PHONE_STATE) with siblings stopping on the sender copy;
+  decline; the fingerprint pinned from the MLS SDP and the §16.10 (e) `getStats` check (dtlsState connected, SRTP
+  cipher, remote certificate fingerprint) before "End-to-end encrypted"; debug-only tamper hook (Settings → Calls).
+  Placing a call to someone who is ringing you answers their call.
+- **History lines (§16.6):** `call_end` is an outbox row (kind `call`, Room **v8**: `messages.call_id` + index,
+  `call_marks`); one line per call id; both perspectives incl. failed-but-rang = "Missed voice call"; missed is
+  unread and posts "Missed call from <name>" (live only, never on a replay/restore); previews "📞 …"; tap → Call back,
+  Delete for me; no reactions; Clear chat removes them.
+- **Android:** `CallManager` (socket kept up while a call/ring/wake exists, partial wake lock ≤ 4 h, proximity only on
+  the earpiece while active), core-telecom self-managed calls (answer/active/disconnect, endpoints for the picker;
+  a cellular call taking over ends ours), `CallService` (phoneCall; + microphone only with RECORD_AUDIO), `calls`
+  channel (ringtone, vibration, IMPORTANCE_HIGH) with an insistent `CallStyle.forIncomingCall` that always has the
+  full-screen intent (canUseFullScreenIntent checked before every ring; denied → a card on the chats screen and the
+  Settings row), `CallActivity` (showWhenLocked/turnScreenOn, API 26 flags; Answer is an activity intent; RECORD_AUDIO
+  asked there or at the call button), TURN fetch ≤ 3 s (503 → direct ICE only; cached only while ≥ 4 h 5 min left).
+  **Call push** (`{"type":"call"}`) has its own handler: the phoneCall service starts at once; unlocked → sync on the
+  kept-up socket; **locked → decision 051**: full-screen "Incoming RisiMe call", no name; Answer → MainActivity's
+  fingerprint unlock → the unlocked sync answers if the offer is still ringing, else "Call ended"; Decline only stops
+  the local ring; 45-s cap.
+- **Enable:** `calls` is advertised only with libwebrtc loaded + Telecom registered + notifications allowed (and
+  `BuildConfig.CALLS_ENABLED`, default on; `-Prisime.calls=false` = the §16.14 receive-only nightly). DM header call
+  button: this phone → e2ee → `calls_ready` (refetched on open, `mls_membership`, reconnect) with the §16.1 texts.
+  Settings → Calls (what's missing, deep links, OEM hint) and Open-source licences.
+- **Live interop (JVM, real server + real MLS core, fake media):** C calls B → both of B's devices ring, B answers on
+  B1, B2 stops, SDP rules and fingerprints checked on what crossed the server, trickled ICE, DTLS check → active;
+  hangup → one line per call id on C, B1, B2; missed (B→C, cancel: C unread + notification, B1/B2 "No answer"); A→B
+  declined on B2; the negative fingerprint test; glare A↔C; calls_not_ready. Uses the "groups" block's A, B, C (DMs
+  C–B, A–B, A–C), no fixture change. TURN answered 503 (no secret on the interop server).
+- **Redroid (real libwebrtc on arm64 Android):** `androidTest/.../calls/WebRtcDeviceTest`: the library loads, our
+  prepared SDP passes our rules and libwebrtc accepts it, a loopback call connects over host candidates, DTLS-SRTP
+  up, both getStats fingerprints equal the delivered SDP's; a tampered fingerprint never reaches DTLS connected; two
+  state machines with real media reach active + verified and hang up with `call_end hangup`.
+  `WebRtcTwoDeviceTest` ran on **two containers** (172.17.0.2 ↔ .3) with a host line relay via `adb reverse`:
+  pair **host/host**, verified, on both sides. Redroid has no audio HAL, so no sound was played.
+  Run: `REDROID_INSTANCE=-calls REDROID_PORT=5700 scripts/android-target start` (and `-calls2`/5701), install both
+  APKs, `pm grant lk.codegen.risime.debug android.permission.RECORD_AUDIO`, `am instrument -w -e class
+  lk.codegen.risime.calls.WebRtcDeviceTest …`; the two-device test takes `-e role caller|callee -e relayPort N`.
+- **Findings / open:**
+  - SRTP negotiates **AES_CM_128_HMAC_SHA1_80** (the allowed fallback) on this libwebrtc build although
+    `CryptoOptions.enableGcmCryptoSuites` is set; GCM preference to investigate (doesn't block: §16.9 allows it).
+  - Server: the ring limit "1 per callee per 5 s" is a sliding-window approximation keyed by (caller, callee): a
+    repeat ring to the same pair can be refused for up to ~10 s (the app shows "Too many calls…").
+  - `LiveInteropTest`'s 60-s Bshort token has little margin as the live suites grow (root: mint later/longer); the
+    calls checks are kept short (no waits) for this.
+  - Not done: the on-screen debug stats overlay (stats go to logcat in debug only), the "Always relay calls" setting
+    (relay-only code path exists in `WebRtcConfig`), the "Your tablet won't ring until it updates" line from
+    `missing_calls`, the API 26–33 ConnectionService path and the real-network matrix (needs phones).
+- **Harsha, on real phones (debug build; TURN ports are still blocked, so calls connect only directly):**
+  1. Same Wi-Fi, phone ↔ phone and emulator ↔ phone: call both ways; hear each other; mute; earpiece/speaker/wired/
+     Bluetooth switching; proximity turns the screen off on the earpiece; "End-to-end encrypted" appears.
+  2. Two devices on one account: both ring, answer on one, the other stops; decline from the notification.
+  3. Locked/killed: phone screen-locked (known caller, answer from the lock screen); app swiped away / Doze
+     (`adb shell dumpsys deviceidle force-idle`) → FCM rings; fingerprint-locked session → "Incoming RisiMe call"
+     with no name → Answer → fingerprint → answers (or "Call ended").
+  4. Missed call: notification "Missed call from <name>", line in the chat, Call back.
+  5. Android 14/15/16 from the browser install and the updater install: full-screen ring (Settings → Calls shows if
+     the permission is missing); Xiaomi/Samsung background/lock-screen toggles.
+  6. Wi-Fi ↔ mobile data: expect "Can't connect the call" quickly (no TURN yet), never a hang.
+  7. Settings → Calls → debug tamper switch on → a call must fail with "Can't connect the call".
+  8. Check the pilot phones for 32-bit (they'd show "Calls aren't supported on this phone").
+
 ## P3 scrolling on a real device + P4 photos polish — READY
 Commits `a6354c9` (device scroll tests), `45a40e4` (photos going out), `f4e943b` (live 13a2). Gates green:
 `./gradlew assembleDebug testDebugUnitTest` (472 JVM tests, 0 failed); instrumented on redroid Android 14 arm64
