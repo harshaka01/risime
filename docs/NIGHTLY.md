@@ -17,7 +17,17 @@ The rules are in `docs/decisions/003-nightly-release-cycle.md`. The cycle fires 
 | 9 | Prod prep (compose, Dockerfile, systemd, backup/restore, PROD.md) | root/ops | done (not deployed) |
 | 10 | E2EE spike: `crypto/risime-mls` on OpenMLS, decision 012 | root/crypto | done; next steps wait on Harsha's answers in 012 |
 
-The queue of items that don't need Harsha is **empty**. The next 0.2/0.3 items need him.
+**Phase: sign-in and distribution through RisiCloud** (decisions 013–017; contract proposal v1.3):
+| # | Item | Roles | Status | Blocked on |
+|---|---|---|---|---|
+| 11 | Review the v1.3 proposal (server + android), then root merges it with placeholders | root, server, android | next | — |
+| 12 | Server: allowlist keyed on email+phone; Keycloak JWT auth (JWKS cache, claim checks), `/me` upsert, 403/409, `DEV_LOCAL_AUTH` gating, socket JWT + `auth:refresh`. Tested with a local test JWKS | server | next | — |
+| 13 | Android: AppAuth + PKCE, Keystore/BiometricPrompt refresh token, dev login behind a debug switch, `auth:refresh`. Unit tests | android | next | — (a live sign-in needs the Keycloak client) |
+| 14 | `scripts/nightly-release` publish step (mirror of the last 5, `version.json`, `index.html`, rsync to `spark1`), plus `--publish-only` / `--required` | root | after 12–13 | rrsync key on spark; RisiWork `version.json` example |
+| 15 | Android in-app updater (`version.json`, sha256 and cert pin, PackageInstaller, blocking `required`) | android | after 14 | RisiWork `version.json` example |
+| 16 | Server reachability for testers | root | — | Harsha's choice (decision 017); build against Tailscale until then |
+| 17 | Proof of done: books@codegen.co.uk signs in by email code, then by fingerprint the next day; installs from `/app/risime/`; the app updates itself on the next release | Harsha + tester | last | 12–16, Keycloak client, Caddy route, tester's phone on the allowlist |
+
 
 Needs Harsha, so never picked automatically:
 - FCM push (a Firebase project);
