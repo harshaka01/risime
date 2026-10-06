@@ -20,12 +20,12 @@
 | v0.2.0-nightly.1 | Presence/last seen and typing (contract v1.2), Settings, chat polish (unread, day separators, copy, retry/delete, search), design system + accessibility, Oban, JSON logs/metrics/`/health`, 200- and 2000-user load tests with fixes, prod prep files (not deployed), the E2EE spike (OpenMLS crate) |
 | v0.2.0-nightly.2 | RisiCloud sign-in (contract v1.3; dormant until the Keycloak client exists), fingerprint-unlocked refresh tokens, the release-only in-app updater, the publish step to risicloud.ai, the option 2b config (off), the E2EE `.so` built natively on spark2 |
 
-## In progress (item 18)
-**One-time SMS phone verification via Notify.lk** (decision 020, proposal v1.4). Both role agents
-are reviewing it. Then root merges it, and server and android implement it in parallel.
-- **Guard:** Notify.lk's docs warn that OTP content sent with `NotifyDEMO` risks **account
-  suspension**. While `NOTIFYLK_SENDER_ID=NotifyDEMO`, OTPs are logged (DevLog), not sent. Real
-  SMS starts when the approved ID is in `.env`.
+## Done since nightly.2 (in v0.2.0-nightly.3)
+- **SMS phone verification** (contract v1.4): server and app done. It is **off on the pilot**
+  (`PHONE_VERIFICATION=off`) until Notify.lk approves the "RisiMe" sender ID. The NotifyDEMO guard
+  blocks OTP sends, per Notify.lk's suspension warning.
+- **Prod-mode pilot release** (decisions 023, 024): per-IP auth limits, the fail2ban auth log and
+  jail, `scripts/run-server`. The release app defaults to `https://risime.risicloud.ai`.
 
 ## Blocked, and on whom
 | Item | Waiting for | Who |
@@ -41,5 +41,5 @@ are reviewing it. Then root merges it, and server and android implement it in pa
 ## Notes
 - spark key: rrsync works and gives no shell, but the forced command lacks `-wo`, so reads are
   allowed. Adding `-wo` is recommended; publishing doesn't need reads.
-- After a release, a fresh install defaults to `https://risicloud.ai/risime`, which isn't live
-  yet. Use "Server · Change" until 2b is switched on.
+- Release builds from nightly.3 on default to `https://risime.risicloud.ai`. It works once the
+  public URL is live; until then, testers use "Server · Change".
