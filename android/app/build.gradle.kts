@@ -194,4 +194,11 @@ tasks.withType<Test>().configureEach {
     systemProperty("risime.mergedManifest.debug", mergedManifestDebug.get().asFile.absolutePath)
     systemProperty("risime.mergedManifest.release", mergedManifestRelease.get().asFile.absolutePath)
     systemProperty("risime.themes", layout.projectDirectory.file("src/main/res/values/themes.xml").asFile.absolutePath)
+    // Opt-in live interop (LiveInteropTest): forwarded explicitly, never cached, output shown.
+    val interop = providers.environmentVariable("RISIME_INTEROP_CONFIG").orNull
+    if (!interop.isNullOrBlank()) {
+        environment("RISIME_INTEROP_CONFIG", interop)
+        outputs.upToDateWhen { false }
+        testLogging.showStandardStreams = true
+    }
 }
