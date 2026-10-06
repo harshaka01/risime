@@ -4,6 +4,19 @@ defmodule RisiMeWeb.AuthController do
   alias RisiMe.Accounts
   alias RisiMeWeb.{ApiError, ApiJSON}
 
+  @doc "`GET /auth/config` (contract v1.3 §6.1): which sign-in modes this server offers."
+  def config(conn, _params) do
+    alias RisiMe.Auth.Config
+    modes = Config.modes()
+
+    body =
+      if "oidc" in modes,
+        do: %{modes: modes, issuer: Config.oidc(:issuer), client_id: Config.oidc(:client_id)},
+        else: %{modes: modes}
+
+    json(conn, body)
+  end
+
   def request(conn, params) do
     case Accounts.request_otp(params["phone"], params["email"]) do
       :ok -> json(conn, %{status: "sent", expires_in: Accounts.otp_ttl_seconds()})
@@ -21,10 +34,17 @@ defmodule RisiMeWeb.AuthController do
     end
   end
 
+  # With a JWT this is a no-op: the client ends its Keycloak session itself (§6.1).
   def logout(conn, _params) do
-    token = conn.assigns.current_token
-    :ok = Accounts.revoke_token(token)
-    RisiMeWeb.Endpoint.broadcast(RisiMeWeb.UserSocket.id_for(token), "disconnect", %{})
+    case conn.assigns.current_auth do
+      %{kind: :dev, token_record: token} ->
+        :ok = Accounts.revoke_token(token)
+        RisiMeWeb.Endpoint.broadcast(RisiMeWeb.UserSocket.id_for(token), "disconnect", %{})
+
+      %{kind: :jwt} ->
+        :ok
+    end
+
     send_resp(conn, 204, "")
   end
 end

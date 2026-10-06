@@ -5,6 +5,10 @@ defmodule RisiMeWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :dev_auth do
+    plug RisiMeWeb.Plugs.DevLocalAuth
+  end
+
   pipeline :authenticated do
     plug RisiMeWeb.Plugs.RequireToken
   end
@@ -18,6 +22,12 @@ defmodule RisiMeWeb.Router do
 
   scope "/api/v1", RisiMeWeb do
     pipe_through :api
+
+    get "/auth/config", AuthController, :config
+  end
+
+  scope "/api/v1", RisiMeWeb do
+    pipe_through [:api, :dev_auth]
 
     post "/auth/request", AuthController, :request
     post "/auth/verify", AuthController, :verify

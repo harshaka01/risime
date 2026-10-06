@@ -10,7 +10,10 @@ defmodule RisiMeWeb.ApiError do
     invalid_code: "The code is incorrect",
     expired: "The code has expired, request a new one",
     too_many_attempts: "Too many attempts, request a new code",
-    unauthorized: "Missing or invalid token",
+    invalid_token: "Missing, invalid or expired token",
+    not_allowlisted: "This email is not on the RisiMe allowlist",
+    identity_conflict: "This phone number is linked to another RisiCloud account",
+    not_found: "Not found",
     invalid_display_name: "Display name must be 1-64 characters"
   }
 

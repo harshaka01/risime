@@ -33,6 +33,71 @@ defmodule RisiMe.Accounts do
     |> Repo.insert_or_update()
   end
 
+  ## Keycloak identity mapping (contract v1.3 §6.1)
+
+  @doc """
+  Maps a verified Keycloak identity (`sub`, lowercased `email`) to a RisiMe user:
+
+    1. a user bound to `sub` → that user, if their phone is still on the allowlist;
+    2. else the allowlist entry for `email` (none → `:not_allowlisted`);
+    3. that entry's phone: no user → create it bound to `sub`; an unbound user → bind atomically;
+       a user bound to another `sub` → `:identity_conflict`.
+
+  Once bound, `sub` wins over later email changes. Re-binding is admin-only (`rebind/1`).
+  """
+  @spec map_identity(%{sub: String.t(), email: String.t()}) ::
+          {:ok, %User{}} | {:error, :not_allowlisted | :identity_conflict}
+  def map_identity(%{sub: sub, email: email}) do
+    case Repo.get_by(User, keycloak_sub: sub) do
+      %User{} = user ->
+        if Repo.exists?(from a in AllowlistEntry, where: a.phone == ^user.phone),
+          do: {:ok, user},
+          else: {:error, :not_allowlisted}
+
+      nil ->
+        case Repo.one(from a in AllowlistEntry, where: fragment("lower(?)", a.email) == ^email) do
+          nil -> {:error, :not_allowlisted}
+          entry -> bind(entry, sub)
+        end
+    end
+  end
+
+  defp bind(entry, sub) do
+    case Repo.get_by(User, phone: entry.phone) do
+      nil ->
+        Repo.insert(
+          %User{
+            phone: entry.phone,
+            email: entry.email,
+            display_name: entry.display_name,
+            company: entry.company,
+            keycloak_sub: sub
+          },
+          on_conflict: :nothing
+        )
+
+        # A concurrent first request may have created or bound it; re-read either way.
+        bound_user(entry.phone, sub)
+
+      %User{keycloak_sub: nil} = user ->
+        Repo.update_all(from(u in User, where: u.id == ^user.id and is_nil(u.keycloak_sub)),
+          set: [keycloak_sub: sub]
+        )
+
+        bound_user(entry.phone, sub)
+
+      %User{} ->
+        bound_user(entry.phone, sub)
+    end
+  end
+
+  defp bound_user(phone, sub) do
+    case Repo.get_by(User, phone: phone) do
+      %User{keycloak_sub: ^sub} = user -> {:ok, user}
+      _ -> {:error, :identity_conflict}
+    end
+  end
+
   @doc """
   Clears the Keycloak binding of the user with `phone` (admin re-bind, contract v1.3 §6.1), so
   the next sign-in binds whichever account owns the allowlisted email.

@@ -137,7 +137,7 @@ defmodule RisiMeWeb.ApiTest do
   end
 
   test "authenticated endpoints need a valid token; logout revokes it", %{conn: conn} do
-    assert %{"error" => %{"code" => "unauthorized"}} =
+    assert %{"error" => %{"code" => "invalid_token"}} =
              conn |> get(~p"/api/v1/me") |> json_response(401)
 
     assert conn |> authed("nope") |> get(~p"/api/v1/contacts") |> json_response(401)
