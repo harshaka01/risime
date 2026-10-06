@@ -10,18 +10,25 @@
   The orchestrator session and its agents ended with the reboot. Their uncommitted work was
   checked: the v1.8 interop test edits passed the gate and their live checks, and were committed
   (`4e6bb89`). Nothing was discarded.
-- **P0, in progress:** testers were locked out by the nightly.8 "Update required" gate (raw
-  Markdown, dark-on-dark text, Update button unreachable).
-  - **Mitigated:** `version.json` is republished with `required: false` (stuck apps recover on
-    relaunch). Testers were told to install from https://risicloud.ai/app/risime/ in a browser.
-  - **The fix** (pinned button, scrollable notes, theme colours, a plain-text `summary`, a download
-    page link, errors with Retry, UI tests) ships as nightly.9.
+- **P0 fixed in v0.2.0-nightly.9** (live, not required, versionCode 20009): the "Update required"
+  gate locked testers out.
+  - **Root causes:** notes passed raw into `Text`; no `Surface` behind the screen, so text was
+    black on dark; a non-scrolling column pushed the buttons off-screen.
+  - **Fix:** a pinned Update button, scrolling notes, theme colours, a plain-text `summary`
+    (published in `version.json`), Open download page, Sign out, errors with Retry.
+  - Robolectric Compose UI tests cover long notes, 320×480 dp, 2× font, dark and light mode, and
+    the button visible and enabled.
+  - Testers install from https://risicloud.ai/app/risime/ in the browser.
+- **The interop E2EE "flake" was a test-harness bug**, now fixed. A killed run left its users, so
+  the next run reused them and hit a stale MLS group. Setup now purges leftovers; proven by
+  SIGKILLing a run.
 - **E2EE is on:** pilot key `x-nu0EBHzGv-…`. Chats upgrade once both people run an E2EE-capable
   app (nightly.7+).
-- **Open issue:** the live E2EE interop check "epoch-0 group creation" was flaky (1 failure in 3
-  runs: `WaitingForWelcome`). It's under investigation after the P0; no release ships on a red gate.
-- **Queue after the P0:** finish emoji and reactions (v1.8, implemented on both sides) → MLS groups
-  (v1.9, reviewed by crypto and server) → encrypted images.
+- **Watch:** one release attempt failed in the server gate on a test that passed 4× right after,
+  so it's flaky. Release logs are now kept in full (`~/risime-logs/release-last.log`) so a
+  recurrence names the test.
+- **Emoji and reactions (v1.8) shipped in nightly.9.**
+- **Queue:** MLS groups (v1.9, reviewed by crypto and server; android review next) → encrypted images.
 
 ## Waiting on Harsha (batched)
 - The fail2ban jail and removing Tailscale, if not done yet (`docs/PROD.md`).
