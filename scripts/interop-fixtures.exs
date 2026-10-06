@@ -55,7 +55,7 @@ case mode do
     # A killed earlier run skips its cleanup; never reuse its users (stale MLS groups, friendships).
     {su, sa} = purge.()
     if su + sa > 0, do: IO.puts("interop setup: purged leftovers users=#{su} allowlist=#{sa}")
-    iss = "http://127.0.0.1:4799/realms/itest"
+    iss = "http://127.0.0.1:#{System.get_env("INTEROP_JWKS_PORT", "4799")}/realms/itest"
     jwk = dir |> Path.join("key.json") |> File.read!() |> Jason.decode!() |> JOSE.JWK.from_map()
 
     dev_user = fn phone, name ->
@@ -81,7 +81,7 @@ case mode do
     end
 
     cfg = %{
-      "url" => "http://127.0.0.1:4100",
+      "url" => "http://127.0.0.1:#{System.get_env("INTEROP_PORT", "4100")}",
       "dev" => %{"a" => a, "b" => b},
       "jwt" => %{
         "A" => mint.("sub-itest-a", "itest-a@example.com", 900),
@@ -99,7 +99,7 @@ case mode do
       t = mint.(sub, email, 900)
       # First-use mapping creates the user; we need its id for the test.
       {:ok, %{status: 200, body: %{"user" => u}}} =
-        Req.get("http://127.0.0.1:4100/api/v1/me", headers: [{"authorization", "Bearer " <> t}], retry: false)
+        Req.get("http://127.0.0.1:#{System.get_env("INTEROP_PORT", "4100")}/api/v1/me", headers: [{"authorization", "Bearer " <> t}], retry: false)
       %{"id" => u["id"], "jwt" => t, "phone" => phone}
     end
     friends = %{
@@ -111,7 +111,7 @@ case mode do
     }
     me_id = fn t ->
       {:ok, %{status: 200, body: %{"user" => u}}} =
-        Req.get("http://127.0.0.1:4100/api/v1/me", headers: [{"authorization", "Bearer " <> t}], retry: false)
+        Req.get("http://127.0.0.1:#{System.get_env("INTEROP_PORT", "4100")}/api/v1/me", headers: [{"authorization", "Bearer " <> t}], retry: false)
       u["id"]
     end
     # The base flow (chat, presence, typing, JWT path) runs between friends (v1.6).

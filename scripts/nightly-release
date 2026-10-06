@@ -64,7 +64,9 @@ PIN_ARGS=(); [ -f "$PIN_FILE" ] && PIN_ARGS=("-Prisime.mlsPinnedKeys=$(tr -d '\n
 (cd android && $M ./gradlew --no-configuration-cache "${PIN_ARGS[@]}" assembleDebug testDebugUnitTest assembleRelease)
 
 echo "==> live interop (scripts/interop: real Android clients vs a temp server from this checkout)"
-RISIME_GRADLE_ARGS="${PIN_ARGS[*]}" scripts/interop
+# Own interop instance (ports 4200/4899, DB/keyspace risime_interop_rel): other sessions may be
+# running scripts/interop on the default ports at the same time.
+INTEROP_INSTANCE=_rel INTEROP_PORT=4200 INTEROP_JWKS_PORT=4899 RISIME_GRADLE_ARGS="${PIN_ARGS[*]}" scripts/interop
 
 APK=android/app/build/outputs/apk/release/app-release.apk
 BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"

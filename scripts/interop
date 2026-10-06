@@ -8,21 +8,25 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 # Own store: the pilot release runs on risime_dev, which is only migrated by run-server after a backup.
-export RISIME_DEV_DB=risime_interop RISIME_DEV_KEYSPACE=risime_interop
+# INTEROP_INSTANCE (e.g. _rel for the release gate) isolates a run from other sessions' interop:
+# its own ports, tmux sessions, DB/keyspace and build dir.
+SUF="${INTEROP_INSTANCE:-}"; IPORT="${INTEROP_PORT:-4100}"; JPORT="${INTEROP_JWKS_PORT:-4799}"
+export INTEROP_PORT="$IPORT" INTEROP_JWKS_PORT="$JPORT"
+export RISIME_DEV_DB="risime_interop$SUF" RISIME_DEV_KEYSPACE="risime_interop$SUF"
 # Own build dir and no code reloading: other sessions compiling server/ can't stall the temp server.
-export MIX_BUILD_PATH="$REPO/server/_build/interop" RISIME_CODE_RELOADER=false
+export MIX_BUILD_PATH="$REPO/server/_build/interop$SUF" RISIME_CODE_RELOADER=false
 DIR="$(mktemp -d "${TMPDIR:-/tmp}/risime-interop.XXXXXX")"
 cleanup() {
   [ -f "$DIR/gradle.log" ] && cp "$DIR/gradle.log" "$HOME/risime-logs/interop-last.log" 2>/dev/null || true
   [ -f "$DIR/server.log" ] && cp "$DIR/server.log" "$HOME/risime-logs/interop-last-server.log" 2>/dev/null || true
-  tmux kill-session -t risime-interop 2>/dev/null || true
-  tmux kill-session -t risime-interop-jwks 2>/dev/null || true
+  tmux kill-session -t "risime-interop$SUF" 2>/dev/null || true
+  tmux kill-session -t "risime-interop-jwks$SUF" 2>/dev/null || true
   (cd "$REPO/server" && $M mix run "$REPO/scripts/interop-fixtures.exs" cleanup "$DIR" 2>/dev/null | grep 'interop cleanup' || true)
   rm -rf -- "${DIR:?}"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM   # make interrupts run the EXIT cleanup too
-for p in 4100 4799; do ss -ltnH "sport = :$p" | grep -q . && { echo "port $p busy"; exit 1; }; done
+for p in $IPORT $JPORT; do ss -ltnH "sport = :$p" | grep -q . && { echo "port $p busy"; exit 1; }; done
 
 cat > "$DIR/jwks.py" <<'PY'
 import http.server, sys
@@ -31,7 +35,7 @@ class H(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **k): super().__init__(*a, directory=root, **k)
     def guess_type(self, path): return "application/json"
     def log_message(self, *a): pass
-http.server.ThreadingHTTPServer(("127.0.0.1", 4799), H).serve_forever()
+http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[2])), H).serve_forever()
 PY
 echo "==> interop store: $RISIME_DEV_DB / $RISIME_DEV_KEYSPACE (create + migrate)"
 (cd server && $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
@@ -40,17 +44,17 @@ echo "==> interop store: $RISIME_DEV_DB / $RISIME_DEV_KEYSPACE (create + migrate
 # A per-run E2EE attestation key: the temp server runs with E2EE ON (never the pilot's key).
 (cd server && $M mix risime.attestation.gen "$DIR/attest.jwk" 2>/dev/null | grep -o 'attestation key created' || true)
 [ -f "$DIR/attest.jwk" ] || { echo "could not create a temp attestation key"; exit 1; }
-tmux new -d -s risime-interop-jwks "python3 '$DIR/jwks.py' '$DIR/www'"
-tmux new -d -s risime-interop "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE PORT=4100 DEV_LOCAL_AUTH=true OIDC_ENABLED=true \
-  OIDC_ISSUER=http://127.0.0.1:4799/realms/itest \
-  OIDC_JWKS_URL=http://127.0.0.1:4799/realms/itest/protocol/openid-connect/certs \
+tmux new -d -s "risime-interop-jwks$SUF" "python3 '$DIR/jwks.py' '$DIR/www' $JPORT"
+tmux new -d -s "risime-interop$SUF" "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE PORT=$IPORT DEV_LOCAL_AUTH=true OIDC_ENABLED=true \
+  OIDC_ISSUER=http://127.0.0.1:$JPORT/realms/itest \
+  OIDC_JWKS_URL=http://127.0.0.1:$JPORT/realms/itest/protocol/openid-connect/certs \
   PHONE_VERIFICATION=off FCM_ENABLED=false RISIME_AUTH_LOG='$DIR/auth.log' ATTESTATION_KEY_FILE='$DIR/attest.jwk' \
   $M mix phx.server > '$DIR/server.log' 2>&1"
-for _ in $(seq 1 120); do curl -sf -o /dev/null http://127.0.0.1:4100/health && break; sleep 1; done
-curl -sf -o /dev/null http://127.0.0.1:4100/health || { echo "interop server didn't start"; tail -20 "$DIR/server.log"; exit 1; }
+for _ in $(seq 1 120); do curl -sf -o /dev/null http://127.0.0.1:$IPORT/health && break; sleep 1; done
+curl -sf -o /dev/null http://127.0.0.1:$IPORT/health || { echo "interop server didn't start"; tail -20 "$DIR/server.log"; exit 1; }
 (cd server && $M mix run "$REPO/scripts/interop-fixtures.exs" setup "$DIR" 2>/dev/null | grep 'interop setup')
 
-echo "==> LiveInteropTest + LiveE2eeInteropTest + LiveGroupInteropTest against 127.0.0.1:4100 (E2EE on with a temp key)"
+echo "==> LiveInteropTest + LiveE2eeInteropTest + LiveGroupInteropTest against 127.0.0.1:$IPORT (E2EE on with a temp key)"
 set +e
 # Extra Gradle args from the caller (nightly-release passes the pinned attestation key, so the
 # release outputs it regenerates keep the pin).
