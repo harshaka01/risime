@@ -18,6 +18,14 @@ defmodule RisiMeWeb.DeviceController do
     end
   end
 
+  @doc "Decision 050: plain logout unregisters push only; the device stays in its groups."
+  def unregister_push(conn, %{"device_id" => device_id}) do
+    case Devices.unregister_push(conn.assigns.current_user.id, device_id) do
+      :ok -> send_resp(conn, 204, "")
+      {:error, :invalid_device} -> ApiError.send_error(conn, 422, :invalid_device)
+    end
+  end
+
   def delete(conn, %{"device_id" => device_id}) do
     case Devices.delete(conn.assigns.current_user.id, device_id) do
       :ok -> send_resp(conn, 204, "")

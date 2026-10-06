@@ -378,6 +378,88 @@ defmodule RisiMeWeb.MLSTest do
     end
   end
 
+  describe "decision 050: a plain logout keeps the device in its groups" do
+    setup :with_attestation_key
+
+    test "dev logout and DELETE …/push_token clear push only; DELETE /me/devices removes",
+         %{conn: conn} do
+      a = logged_in_user()
+      b = logged_in_user()
+      befriend!(a, b)
+      conv = RisiMe.Messaging.conversation_id(a.user.id, b.user.id)
+      a_dev = Ecto.UUID.generate()
+      key = Base.encode64(:crypto.strong_rand_bytes(32))
+      put = %{"platform" => "android", "push_token" => "t-a", "mls" => %{"signature_key" => key}}
+      assert call(conn, a.token, :put, "/api/v1/me/devices/#{a_dev}", put) |> json_response(200)
+      b_dev = mls_device!(b)
+
+      assert %{"epoch" => 1} =
+               call(
+                 conn,
+                 a.token,
+                 :post,
+                 "/api/v1/mls/groups/#{conv}/commit",
+                 %{
+                   "generation" => 1,
+                   "epoch" => 0,
+                   "commit" => b64(),
+                   "welcome" => b64(),
+                   "added" => [%{"user_id" => b.user.id, "device_id" => b_dev}],
+                   "removed" => []
+                 },
+                 a_dev
+               )
+               |> json_response(200)
+
+      in_group = fn ->
+        Repo.exists?(
+          from gd in "mls_group_devices",
+            where: gd.conversation_id == ^conv and gd.device_id == type(^a_dev, :binary_id)
+        )
+      end
+
+      # Plain logout (dev token): push stops, the device stays a member, no removal is announced.
+      assert call(conn, a.token, :post, "/api/v1/auth/logout") |> response(204)
+
+      assert [%Device{push_token: nil, mls_signature_key: k}] =
+               Repo.all(from d in Device, where: d.user_id == ^a.user.id)
+
+      assert is_binary(k)
+      assert in_group.()
+      assert events(b.user.id, "mls_membership") == []
+
+      # Same account, same device, same key: no change, no rejoin.
+      a2 = sign_in_again(a)
+      assert call(conn, a2, :put, "/api/v1/me/devices/#{a_dev}", put) |> json_response(200)
+      assert in_group.()
+      assert events(b.user.id, "mls_membership") == []
+
+      assert %{"e2ee" => true, "devices" => devs} =
+               call(conn, a2, :get, "/api/v1/mls/groups/#{conv}") |> json_response(200)
+
+      assert length(devs) == 2
+
+      # OIDC-style plain logout: the push-only unregister.
+      assert call(conn, a2, :delete, "/api/v1/me/devices/#{a_dev}/push_token") |> response(204)
+
+      assert [%Device{push_token: nil}] =
+               Repo.all(from d in Device, where: d.user_id == ^a.user.id)
+
+      assert in_group.()
+      assert call(conn, a2, :delete, "/api/v1/me/devices/nope/push_token") |> json_response(422)
+
+      # "Log out and delete chats": the device leaves its groups.
+      assert call(conn, a2, :delete, "/api/v1/me/devices/#{a_dev}") |> response(204)
+      assert [%{data: %{"change" => "removed"}}] = events(b.user.id, "mls_membership")
+    end
+
+    defp sign_in_again(%{entry: entry}) do
+      :ok = RisiMe.Accounts.request_otp(entry.phone, entry.email)
+      {:ok, token, _} = RisiMe.Accounts.verify_otp(entry.phone, receive_code(), "test")
+      token
+    end
+  end
+
   describe "commits" do
     setup :with_attestation_key
 

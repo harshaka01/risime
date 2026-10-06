@@ -89,7 +89,8 @@ defmodule RisiMeWeb.AuthController do
     case conn.assigns.current_auth do
       %{kind: :dev, token_record: token} ->
         :ok = Accounts.revoke_token(token)
-        RisiMe.Devices.delete_for_token(token.id)
+        # Decision 050: a plain logout keeps MLS devices in their groups; push stops.
+        RisiMe.Devices.clear_push_for_token(token.id)
         RisiMeWeb.Endpoint.broadcast(RisiMeWeb.UserSocket.id_for(token), "disconnect", %{})
 
       %{kind: :jwt} ->

@@ -272,9 +272,38 @@ defmodule RisiMe.Devices do
     end
   end
 
-  @doc "Removes the devices registered with a dev token (dev logout)."
-  def delete_for_token(user_token_id),
-    do: removed(from d in Device, where: d.user_token_id == ^user_token_id)
+  @doc """
+  Dev logout (decision 050): the token's devices stop getting push, but MLS devices stay
+  registered members of their groups (a plain logout keeps the chats; the same account signs back
+  in with no rejoin). Push-only devices have nothing left and are removed. Returns the count.
+  """
+  def clear_push_for_token(user_token_id),
+    do: clear_push(from(d in Device, where: d.user_token_id == ^user_token_id))
+
+  @doc """
+  `DELETE /me/devices/{device_id}/push_token` (decision 050, plain logout): unregisters push only.
+  An MLS device keeps its registration, groups and inbox; a push-only device is removed.
+  Idempotent; a bad id is `:invalid_device`.
+  """
+  def unregister_push(user_id, device_id) do
+    case Ecto.UUID.cast(device_id) do
+      {:ok, id} ->
+        _ = clear_push(from(d in Device, where: d.user_id == ^user_id and d.device_id == ^id))
+        :ok
+
+      :error ->
+        {:error, :invalid_device}
+    end
+  end
+
+  defp clear_push(query) do
+    {cleared, _} =
+      Repo.update_all(from(d in query, where: not is_nil(d.mls_signature_key)),
+        set: [push_token: nil]
+      )
+
+    cleared + removed(from(d in query, where: is_nil(d.mls_signature_key)))
+  end
 
   @doc """
   FCM said `push_token` is no longer valid: MLS devices just lose the token, push-only devices

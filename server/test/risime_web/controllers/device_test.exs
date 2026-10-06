@@ -98,7 +98,7 @@ defmodule RisiMeWeb.DeviceTest do
     assert [_] = devices(other.id)
   end
 
-  test "dev-token logout removes that token's devices", %{conn: conn, user: u, token: t} do
+  test "dev-token logout removes that token's push-only devices", %{conn: conn, user: u, token: t} do
     put_device(conn, t, Ecto.UUID.generate(), body("tok"))
     assert conn |> authed(t) |> post("/api/v1/auth/logout") |> response(204)
     assert devices(u.id) == []

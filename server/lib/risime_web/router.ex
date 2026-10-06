@@ -84,6 +84,7 @@ defmodule RisiMeWeb.Router do
     delete "/blobs/:id", BlobController, :delete
     put "/me/devices/:device_id", DeviceController, :put
     delete "/me/devices/:device_id", DeviceController, :delete
+    delete "/me/devices/:device_id/push_token", DeviceController, :unregister_push
     get "/contacts", ContactsController, :index
   end
 
