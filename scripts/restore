@@ -6,6 +6,7 @@
 #   scripts/restore verify BACKUP_DIR                 # checksums, pg_restore --list, tar listing
 #   scripts/restore postgres  BACKUP_DIR --env prod [--target-db NAME]       --confirm NAME
 #   scripts/restore cassandra BACKUP_DIR --env prod [--target-keyspace NAME] --confirm NAME
+#   scripts/restore blobs     BACKUP_DIR --target-dir DIR --confirm DIR    # DIR must be empty or new
 #
 # Safety:
 #   * verify runs before every restore, and nothing is restored without --confirm <target name>.
@@ -29,7 +30,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --env) ENV_NAME="${2:?}"; shift 2 ;;
     --dest) DEST="${2:?}"; shift 2 ;;
-    --target-db|--target-keyspace) TARGET="${2:?}"; shift 2 ;;
+    --target-db|--target-keyspace|--target-dir) TARGET="${2:?}"; shift 2 ;;
     --confirm) CONFIRM="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown option: $1" ;;
@@ -69,6 +70,10 @@ verify() {
     n="$(tar -tzf "$dir/cassandra-data.tar.gz" | grep -c '/manifest.json$')" || die "cassandra archive unreadable"
     [ "$n" -gt 0 ] || die "cassandra archive has no tables"
     log "cassandra-data.tar.gz OK ($n tables, keyspace $(manifest "$dir" cassandra | sed -n 's/.*keyspace=\([^ ]*\).*/\1/p'))"
+  fi
+  if [ -f "$dir/blobs.tar.gz" ]; then
+    n="$(tar -tzf "$dir/blobs.tar.gz" | grep -vc '/$')" || n=0
+    log "blobs.tar.gz OK ($n files)"
   fi
   log "VERIFIED $dir ($(manifest "$dir" env), $(manifest "$dir" created_utc))"
 }
@@ -137,6 +142,19 @@ restore_cassandra() {
   log "cassandra: restored into $target"
 }
 
+restore_blobs() {
+  local dir="$1"
+  [ -f "$dir/blobs.tar.gz" ] || die "$dir has no blobs.tar.gz"
+  [ -n "$TARGET" ] || die "pass --target-dir DIR (the server's BLOB_DIR)"
+  need_confirm "$TARGET" "blob store"
+  # Never merge into a live store: restore into an empty or new directory, then point BLOB_DIR at it
+  # (or stop the server and swap directories).
+  if [ -d "$TARGET" ] && [ -n "$(ls -A "$TARGET")" ]; then die "$TARGET is not empty"; fi
+  mkdir -p "$TARGET" && chmod 700 "$TARGET"
+  tar -C "$TARGET" -xzf "$dir/blobs.tar.gz"
+  log "blobs: restored $(find "$TARGET" -type f | wc -l) files into $TARGET"
+}
+
 case "$CMD" in
   list)
     DEST="${DEST:-${BACKUP_DEST:-$(env_value BACKUP_DEST)}}"
@@ -160,5 +178,9 @@ case "$CMD" in
     verify "${POS[0]}"
     [ "$(manifest "${POS[0]}" env)" = "$ENV_NAME" ] || log "note: backup is from env $(manifest "${POS[0]}" env), restoring into $ENV_NAME"
     "restore_$CMD" "${POS[0]}" ;;
+  blobs)
+    [ ${#POS[@]} -eq 1 ] || die "usage: scripts/restore blobs BACKUP_DIR --target-dir DIR --confirm DIR"
+    verify "${POS[0]}"
+    restore_blobs "${POS[0]}" ;;
   *) usage; exit 1 ;;
 esac

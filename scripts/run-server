@@ -32,8 +32,9 @@ echo "==> building prod release in $RUN ($(git -C "$RUN" log -1 --format='%h %s'
 REL="$RUN/server/_build/prod/rel/risime"
 
 if [ "$BACKUP" = 1 ]; then
-  echo "==> backup before migrating (Postgres + Cassandra, keep 7) -> $BACKUPS"
-  scripts/backup --env dev --dest "$BACKUPS" --keep 7 | tail -2
+  BLOB_DIR="$(sed -n 's/^BLOB_DIR=//p' infra/pilot/pilot.env | tail -1)"
+  echo "==> backup before migrating (Postgres + Cassandra + blobs, keep 7) -> $BACKUPS"
+  scripts/backup --env dev --dest "$BACKUPS" --keep 7 ${BLOB_DIR:+--blobs "$BLOB_DIR"} | tail -2
 fi
 echo "==> migrate (Ecto + CQL)"
 bash -c "$ENVLOAD; exec '$REL/bin/risime' eval 'RisiMe.Release.migrate()'"

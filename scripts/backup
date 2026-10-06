@@ -11,6 +11,7 @@
 #   --keep N              keep the newest N backups of this env at the destination. Env: BACKUP_KEEP (14).
 #   --staging DIR         local scratch for remote destinations. Env: BACKUP_STAGING (default: mktemp).
 #   --no-postgres / --no-cassandra   skip one store.
+#   --blobs DIR           also archive the blob store DIR (v1.9 §12.6; encrypted bytes only).
 #
 # Each backup is a directory  risime-<env>-<UTC stamp>/  containing:
 #   postgres.dump         pg_dump custom format (-Fc) of the database
@@ -18,13 +19,14 @@
 #   postgres-globals.sql  roles (pg_dumpall --globals-only)
 #   cassandra-schema.cql  DESCRIBE KEYSPACE
 #   cassandra-data.tar.gz the keyspace's snapshot directories (nodetool snapshot; flushes first)
+#   blobs.tar.gz          the blob store (only with --blobs)
 #   MANIFEST              what/when/versions
 #   SHA256SUMS            checksums of all of the above, verified after the copy
 # A backup is written as <name>.partial and renamed only when complete and verified.
 # Restore and verification: scripts/restore.
 set -euo pipefail
 
-ENV_NAME=dev DEST="" KEEP="" STAGING="${BACKUP_STAGING:-}" DO_PG=1 DO_CASS=1
+ENV_NAME=dev DEST="" KEEP="" STAGING="${BACKUP_STAGING:-}" DO_PG=1 DO_CASS=1 BLOBS=""
 die() { echo "backup: $*" >&2; exit 1; }
 log() { echo "backup: $*" >&2; }
 
@@ -36,6 +38,7 @@ while [ $# -gt 0 ]; do
     --staging) STAGING="${2:?}"; shift 2 ;;
     --no-postgres) DO_PG=0; shift ;;
     --no-cassandra) DO_CASS=0; shift ;;
+    --blobs) BLOBS="${2:?}"; shift 2 ;;
     -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1 (see --help)" ;;
   esac
@@ -123,6 +126,14 @@ if [ $DO_CASS = 1 ]; then
   log "cassandra: $tables tables, $(du -h "$WORK/cassandra-data.tar.gz" | cut -f1)"
 fi
 
+# ---- Blobs ----
+if [ -n "$BLOBS" ]; then
+  mkdir -p "$BLOBS"
+  tar -C "$BLOBS" -czf "$WORK/blobs.tar.gz" .
+  tar -tzf "$WORK/blobs.tar.gz" >/dev/null || die "blob archive unreadable"
+  log "blobs: $(find "$BLOBS" -type f | wc -l) files, $(du -h "$WORK/blobs.tar.gz" | cut -f1)"
+fi
+
 # ---- manifest + checksums ----
 {
   echo "name=$NAME"
@@ -131,6 +142,7 @@ fi
   echo "host=$(hostname)"
   echo "repo_version=$(cat "$REPO/VERSION" 2>/dev/null || echo unknown)"
   [ $DO_PG = 1 ] && echo "postgres=$PG_CTR db=$DB server=$(docker exec "$PG_CTR" postgres --version)"
+  [ -n "$BLOBS" ] && echo "blobs=$BLOBS files=$(find "$BLOBS" -type f | wc -l)"
   [ $DO_CASS = 1 ] && echo "cassandra=$CASS_CTR keyspace=$KS snapshot_tag=$SNAP_TAG $(docker exec "$CASS_CTR" nodetool version)"
 } > "$WORK/MANIFEST"
 (cd "$WORK" && sha256sum -- * > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS && sha256sum --quiet -c SHA256SUMS)

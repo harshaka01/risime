@@ -359,3 +359,8 @@ scripts/run-server vX.Y.Z                       # deploy: backup (keep 7) -> mig
 scripts/rollback                                # previous tag (code only)
 scripts/restore list --env dev --dest ~/risime-backups
 ```
+Blobs (v1.9 §12.6, later encrypted images) live in `BLOB_DIR=~/risime-blobs/prod`, set in
+`infra/pilot/pilot.env`. They are encrypted bytes only. `scripts/run-server` archives them into each
+backup as `blobs.tar.gz`. To restore, unpack into an empty directory, then point `BLOB_DIR` at it or
+swap the directories while the service is stopped:
+`scripts/restore blobs <backup> --target-dir DIR --confirm DIR`.
