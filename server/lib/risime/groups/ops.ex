@@ -50,6 +50,52 @@ defmodule RisiMe.Groups.Ops do
     |> Enum.find(&(&1.type == "devices" and ref in &1.payload["added"]))
   end
 
+  @doc """
+  Makes sure a device with a new MLS state on a (possibly) stale leaf is removed and re-added
+  (§12.8 rejoin): a sign-in after a logout keeps the device id but wipes its MLS state. Pending
+  removal-only `devices` ops of the device are dropped first, as they would otherwise remove the
+  re-added leaf. Idempotent: an op that already (re-)adds the device is kept.
+  """
+  def ensure_rejoin(%Group{} = g, {u, _d} = ref) do
+    json = ref_json(ref)
+
+    case rejoin_op(g.id, ref) do
+      %Op{} ->
+        :ok
+
+      nil ->
+        for %Op{type: "devices"} = op <- list(g.id), json in (op.payload["removed"] || []) do
+          removed = op.payload["removed"] -- [json]
+
+          if (op.payload["added"] || []) == [] and removed == [],
+            do: Repo.delete!(op),
+            else:
+              op
+              |> Ecto.Changeset.change(payload: %{op.payload | "removed" => removed})
+              |> Repo.update!()
+        end
+
+        removed = if MapSet.member?(Groups.in_group(g.id), ref), do: [ref], else: []
+        create(g, "devices", u, %{added: [ref], removed: removed}, :auto)
+    end
+  end
+
+  @doc """
+  The device refs a `devices` op changes. None of them can commit it: a device can't commit its
+  own removal, and a device being (re-)added has no state for the group yet.
+  """
+  def changing(%Op{type: "devices"} = op),
+    do: MapSet.new(refs(op, "added") ++ refs(op, "removed"))
+
+  def changing(_op), do: MapSet.new()
+
+  @doc """
+  The `removed` list a commit completing this `devices` op must declare: only the op's devices
+  still in the group (a rejoining device's old leaf may already be gone).
+  """
+  def removed_now(%Op{} = op, in_group),
+    do: Enum.filter(refs(op, "removed"), &MapSet.member?(in_group, &1))
+
   ## JSON
 
   @doc "The `PendingOp` object."
@@ -221,10 +267,13 @@ defmodule RisiMe.Groups.Ops do
 
     leaving = if op.type == "remove", do: op.payload["user_ids"], else: []
 
-    # MLS can't commit its own removal: a remove op never names the removed users' devices.
+    changing = changing(op)
+
+    # MLS can't commit its own removal: a remove op never names the removed users' devices; a
+    # `devices` op never names a device it changes (e.g. the rejoining device itself).
     (by_recency(own) ++ by_recency(admin_devices(g)))
     |> Enum.uniq()
-    |> Enum.reject(fn {u, _d} -> u in leaving end)
+    |> Enum.reject(fn {u, _d} = ref -> u in leaving or MapSet.member?(changing, ref) end)
     |> Enum.filter(fn {_u, d} -> Presence.device_online?(d) end)
   end
 
@@ -267,10 +316,18 @@ defmodule RisiMe.Groups.Ops do
     in_group? = epoch != nil and MapSet.member?(Groups.in_group(g.id), ref)
 
     case op.type do
-      "devices" -> in_group? and (admin? or u == affected_user(op))
-      "rebuild" -> admin? and epoch == nil and MapSet.member?(Groups.device_refs([u]), ref)
-      "remove" -> admin? and in_group? and u not in op.payload["user_ids"]
-      _ -> admin? and in_group?
+      "devices" ->
+        in_group? and (admin? or u == affected_user(op)) and
+          not MapSet.member?(changing(op), ref)
+
+      "rebuild" ->
+        admin? and epoch == nil and MapSet.member?(Groups.device_refs([u]), ref)
+
+      "remove" ->
+        admin? and in_group? and u not in op.payload["user_ids"]
+
+      _ ->
+        admin? and in_group?
     end
   end
 

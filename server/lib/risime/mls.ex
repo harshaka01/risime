@@ -684,18 +684,19 @@ defmodule RisiMe.MLS do
 
   @doc false
   def set_group_devices(conv, added, removed) do
-    rows =
-      for {u, d} <- added,
-          do: %{conversation_id: conv, user_id: Ecto.UUID.dump!(u), device_id: Ecto.UUID.dump!(d)}
-
-    Repo.insert_all("mls_group_devices", rows, on_conflict: :nothing)
-
+    # Removals first: a rejoin removes and re-adds the same device, which must end up in the set.
     for {_u, d} <- removed do
       Repo.delete_all(
         from gd in "mls_group_devices",
           where: gd.conversation_id == ^conv and gd.device_id == type(^d, :binary_id)
       )
     end
+
+    rows =
+      for {u, d} <- added,
+          do: %{conversation_id: conv, user_id: Ecto.UUID.dump!(u), device_id: Ecto.UUID.dump!(d)}
+
+    Repo.insert_all("mls_group_devices", rows, on_conflict: :nothing)
   end
 
   defp finish_commit(conv, members, caller_device, req, generation, new_epoch) do

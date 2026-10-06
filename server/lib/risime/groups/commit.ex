@@ -305,7 +305,7 @@ defmodule RisiMe.Groups.Commit do
         expect(
           admin? or own?,
           MapSet.new(req.added) == MapSet.new(Ops.refs(op, "added")) and
-            MapSet.new(req.removed) == MapSet.new(Ops.refs(op, "removed"))
+            MapSet.new(req.removed) == MapSet.new(Ops.removed_now(op, in_group))
         )
 
       _ ->
@@ -326,11 +326,12 @@ defmodule RisiMe.Groups.Commit do
         set: [epoch: new_epoch, updated_at: DateTime.utc_now()]
       )
 
+    in_before = Groups.in_group(g.id)
     MLS.set_group_devices(g.id, req.added, req.removed)
     removed_users = req.removed |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
     route_events = route(g, dev, req, Enum.uniq(active_before ++ removed_users))
 
-    op = op || devices_op_for(g, req)
+    op = op || devices_op_for(g, req, in_before)
     group_events = complete(g, me, op, req, new_epoch, removed_users)
     if op, do: Repo.delete!(op)
     Ops.settle_devices(g)
@@ -340,16 +341,18 @@ defmodule RisiMe.Groups.Commit do
   end
 
   # An op-less commit completes the `devices` op whose lists it matches (§12.4).
-  defp devices_op_for(g, %{added: added, removed: removed}) when added != [] or removed != [] do
+  # `in_group` is the leaf set before the commit (a rejoining device's old leaf may be gone).
+  defp devices_op_for(g, %{added: added, removed: removed}, in_group)
+       when added != [] or removed != [] do
     g.id
     |> Ops.list()
     |> Enum.find(fn op ->
       op.type == "devices" and MapSet.new(Ops.refs(op, "added")) == MapSet.new(added) and
-        MapSet.new(Ops.refs(op, "removed")) == MapSet.new(removed)
+        MapSet.new(Ops.removed_now(op, in_group)) == MapSet.new(removed)
     end)
   end
 
-  defp devices_op_for(_g, _req), do: nil
+  defp devices_op_for(_g, _req, _in_group), do: nil
 
   # Membership effects of the completed op and its `group_event` (after the mls_* events).
   defp complete(g, me, op, req, new_epoch, removed_users) do

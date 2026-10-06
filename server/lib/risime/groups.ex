@@ -628,12 +628,8 @@ defmodule RisiMe.Groups do
             epoch(id) == nil ->
               :ok
 
-            Ops.rejoin_op(g.id, ref) != nil ->
-              :ok
-
             true ->
-              removed = if MapSet.member?(in_group(id), ref), do: [ref], else: []
-              Ops.create(g, "devices", me, %{added: [ref], removed: removed}, :auto)
+              Ops.ensure_rejoin(g, ref)
           end
 
           {:ok, group_json(g, me)}
@@ -670,6 +666,11 @@ defmodule RisiMe.Groups do
 
           change == :added and not in? ->
             Ops.create(g, "devices", user_id, %{added: [ref]}, :auto)
+
+          # A device id that comes back (sign-in after a logout) with a new MLS state while its old
+          # leaf is still in the group (its removal hasn't landed yet): remove and re-add it.
+          change == :added ->
+            Ops.ensure_rejoin(g, ref)
 
           change == :removed ->
             Ops.forget_device(g, ref)

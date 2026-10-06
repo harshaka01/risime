@@ -563,6 +563,86 @@ defmodule RisiMeWeb.GroupsTest do
       assert rejoin["committer"]["device_id"] in [nil, b_dev]
     end
 
+    test "logout + login on the same device id: the stale leaf is removed and re-added", ctx do
+      %{a: a, b: b, a_dev: a_dev, b_dev: b_dev} = ctx
+      id = active_group!(ctx)
+      bid = b.user.id
+
+      # Logout: the device goes; a removal op waits (no admin device online).
+      :ok = RisiMe.Devices.delete(bid, b_dev)
+      [removal] = Ops.list(id)
+      assert Ops.refs(removal, "removed") == [{bid, b_dev}] and Ops.refs(removal, "added") == []
+
+      # Login with a new MLS state before the removal landed: one rejoin op, no removal-only op.
+      ^b_dev = groups_device!(b, b_dev)
+      [op] = Ops.list(id)
+      assert Ops.refs(op, "added") == [{bid, b_dev}] and Ops.refs(op, "removed") == [{bid, b_dev}]
+
+      # The app's rejoin is idempotent; the rejoining device itself is never named.
+      join!(b, b_dev)
+      join!(a, a_dev)
+
+      {202, %{"group" => %{"pending" => [p]}}} =
+        api(:post, "/api/v1/groups/#{id}/rejoin", b.token, nil, b_dev)
+
+      assert p["op_id"] == op.op_id
+      Ops.name_next(Groups.get_group(id), Repo.get(Op, op.op_id))
+      assert Repo.get(Op, op.op_id).committer_device == a_dev
+
+      body = %{
+        "generation" => 1,
+        "epoch" => 1,
+        "commit" => b64(),
+        "welcome" => b64(),
+        "added" => [ref(bid, b_dev)],
+        "removed" => [ref(bid, b_dev)],
+        "op_id" => op.op_id,
+        "meta_changed" => false
+      }
+
+      assert {200, %{"epoch" => 2}} =
+               api(:post, "/api/v1/mls/groups/#{id}/commit", a.token, body, a_dev)
+
+      assert Ops.list(id) == []
+      # The re-added device is in the leaf set (removal applied before the add).
+      assert MapSet.member?(Groups.in_group(id), {bid, b_dev})
+      assert last_event(bid, "mls_welcome")["data"]["to_devices"] == [b_dev]
+    end
+
+    test "a rejoin whose old leaf is already gone completes without the removal", ctx do
+      %{a: a, b: b, a_dev: a_dev, b_dev: b_dev} = ctx
+      id = active_group!(ctx)
+      bid = b.user.id
+
+      {202, %{"group" => %{"pending" => [p]}}} =
+        api(:post, "/api/v1/groups/#{id}/rejoin", b.token, nil, b_dev)
+
+      # The old leaf goes by another commit first (e.g. an earlier removal).
+      import Ecto.Query
+
+      Repo.delete_all(
+        from gd in "mls_group_devices",
+          where: gd.conversation_id == ^id and gd.device_id == type(^b_dev, :binary_id)
+      )
+
+      body = %{
+        "generation" => 1,
+        "epoch" => 1,
+        "commit" => b64(),
+        "welcome" => b64(),
+        "added" => [ref(bid, b_dev)],
+        "removed" => [],
+        "op_id" => p["op_id"],
+        "meta_changed" => false
+      }
+
+      assert {200, %{"epoch" => 2}} =
+               api(:post, "/api/v1/mls/groups/#{id}/commit", a.token, body, a_dev)
+
+      assert Ops.list(id) == []
+      assert MapSet.member?(Groups.in_group(id), {bid, b_dev})
+    end
+
     test "commit catch-up paging and 410 log_expired", ctx do
       %{a: a, a_dev: a_dev} = ctx
       id = active_group!(ctx)
