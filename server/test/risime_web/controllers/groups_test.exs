@@ -143,8 +143,15 @@ defmodule RisiMeWeb.GroupsTest do
       assert {403, %{"error" => %{"code" => "not_friends"}}} =
                api(:post, "/api/v1/groups", a.token, cg.([b.user.id, stranger.user.id]), a_dev)
 
-      # c also runs an old app instance (no groups capability).
+      # c also runs an old app on a second registered install (no groups capability).
       old = Ecto.UUID.generate()
+
+      {:ok, nil} =
+        RisiMe.Devices.register(c.user.id, old, %{
+          "platform" => "android",
+          "push_token" => "t-#{old}"
+        })
+
       :ok = RisiMe.MLS.record_instance(c.user.id, old, nil, "0.2.0")
 
       {409, err} = api(:post, "/api/v1/groups", a.token, cg.([b.user.id, c.user.id]), a_dev)
@@ -169,7 +176,22 @@ defmodule RisiMeWeb.GroupsTest do
     end
 
     test "friends carry group_ready", %{a: a, b: b, c: c} do
+      # An old instance without device_id + a current groups-capable device ⇒ ready (hotfix).
       :ok = RisiMe.MLS.record_instance(c.user.id, nil, "jwt", nil)
+      {200, %{"friends" => friends}} = api(:get, "/api/v1/friends", a.token)
+      ready = Map.new(friends, &{&1["user_id"], &1["group_ready"]})
+      assert ready == %{b.user.id => true, c.user.id => true}
+
+      # A registered install on an old build keeps c not-ready.
+      old = Ecto.UUID.generate()
+
+      {:ok, nil} =
+        RisiMe.Devices.register(c.user.id, old, %{
+          "platform" => "android",
+          "push_token" => "t-#{old}"
+        })
+
+      :ok = RisiMe.MLS.record_instance(c.user.id, old, nil, "0.2.0")
       {200, %{"friends" => friends}} = api(:get, "/api/v1/friends", a.token)
       ready = Map.new(friends, &{&1["user_id"], &1["group_ready"]})
       assert ready == %{b.user.id => true, c.user.id => false}

@@ -881,6 +881,13 @@ defmodule RisiMe.ContractExamplesTest do
       befriend!(a, kamal)
       k_old = Ecto.UUID.generate()
       groups_device!(kamal)
+
+      {:ok, nil} =
+        RisiMe.Devices.register(kamal.user.id, k_old, %{
+          "platform" => "android",
+          "push_token" => "t-#{k_old}"
+        })
+
       :ok = RisiMe.MLS.record_instance(kamal.user.id, k_old, nil, "0.2.0")
       clear.()
 

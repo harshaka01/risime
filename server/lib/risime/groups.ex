@@ -79,8 +79,15 @@ defmodule RisiMe.Groups do
 
   @doc """
   Group readiness (§12.1). Returns `{ready_user_ids, missing}`: a user is ready with at least one
-  current MLS device with `groups`, and every app instance of theirs seen in the last 30 days
+  current MLS device with `groups`, and every other install of theirs that can still receive
   being groups-capable. `missing` reasons: `no_mls` (no current MLS device) or `legacy_app`.
+
+  Only instances that can still receive count: a census row with a `device_id` that is a
+  registered device of the user, seen in the last 30 days. An instance without a `device_id`
+  (a pre-v1.7 build) never makes a user not-ready on its own: it is listed as `legacy_app` only
+  when the user is not ready anyway and it is their most recent instance, not superseded by a
+  later device registration. A registration (`PUT /me/devices`) supersedes every older
+  instance without a `device_id`.
   """
   def readiness(user_ids) do
     user_ids = Enum.uniq(user_ids)
@@ -91,16 +98,34 @@ defmodule RisiMe.Groups do
         from i in "app_instances",
           where: i.user_id in type(^user_ids, {:array, :binary_id}) and i.last_seen_at > ^since,
           order_by: [asc: i.last_seen_at],
-          select: {type(i.user_id, :binary_id), type(i.device_id, :binary_id)}
+          select:
+            {type(i.user_id, :binary_id), type(i.device_id, :binary_id),
+             type(i.last_seen_at, :utc_datetime_usec)}
       )
+
+    registered =
+      Repo.all(
+        from d in RisiMe.Devices.Device,
+          where: d.user_id in ^user_ids,
+          select: {d.user_id, d.device_id, d.last_seen_at}
+      )
+
+    registered_ids = MapSet.new(registered, fn {u, d, _} -> {u, d} end)
+
+    last_registration =
+      Enum.reduce(registered, %{}, fn {u, _, t}, acc ->
+        Map.update(acc, u, t, &if(DateTime.compare(t, &1) == :gt, do: t, else: &1))
+      end)
 
     gdevs = groups_devices(user_ids)
     g_ids = MapSet.new(gdevs, & &1.device_id)
     mls = MLS.current_mls_devices(user_ids)
 
-    legacy =
-      for {u, d} <- instances,
-          d == nil or not MapSet.member?(g_ids, d),
+    # Registered installs seen recently that aren't groups-capable (e.g. a second phone on an
+    # older build): these keep the user not-ready.
+    stale =
+      for {u, d, _} <- instances,
+          d != nil and MapSet.member?(registered_ids, {u, d}) and not MapSet.member?(g_ids, d),
           do: %{user_id: u, device_id: d, reason: "legacy_app"}
 
     without =
@@ -111,10 +136,21 @@ defmodule RisiMe.Groups do
         end
       end
 
-    missing = Enum.uniq_by(legacy ++ without, &{&1.user_id, &1.device_id})
-    not_ready = MapSet.new(missing, & &1.user_id)
+    not_ready = MapSet.new(stale ++ without, & &1.user_id)
+
+    # A pre-v1.7 instance is only an explanation, never a cause.
+    legacy =
+      for u <- not_ready,
+          {^u, nil, seen} <- [instances |> Enum.filter(&(elem(&1, 0) == u)) |> List.last()],
+          not superseded?(seen, last_registration[u]),
+          do: %{user_id: u, device_id: nil, reason: "legacy_app"}
+
+    missing = Enum.uniq_by(legacy ++ stale ++ without, &{&1.user_id, &1.device_id})
     {user_ids |> Enum.reject(&MapSet.member?(not_ready, &1)) |> MapSet.new(), missing}
   end
+
+  defp superseded?(_seen, nil), do: false
+  defp superseded?(seen, registered_at), do: DateTime.compare(seen, registered_at) == :lt
 
   @doc "The subset of `user_ids` that is group-ready (`Friend.group_ready`)."
   def ready_set(user_ids) do
