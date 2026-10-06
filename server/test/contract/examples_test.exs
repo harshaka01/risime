@@ -28,10 +28,10 @@ defmodule RisiMe.ContractExamplesTest do
               invites_reply.json friend_request.json friend_request_reply.json friends_reply.json
               friend_accept_reply.json block.json signal_friend.json error_not_friends.json
               user_vouched.json
-              device_put_mls.json device_put_mls_reply.json attestation_keys.json key_packages_upload.json key_packages_count.json key_packages_claim.json key_packages_claim_reply.json mls_group.json mls_commit_request.json mls_commit_reply.json mls_commits_reply.json error_epoch_conflict.json error_not_ready.json msg_send_e2ee.json event_message_e2ee.json event_mls_commit.json event_mls_welcome.json event_mls_membership.json signal_mls_key_packages_low.json error_e2ee_required.json)
-  # v1.8 (emoji + reactions): parse-only placeholders added by root with the contract merge; the
-  # server role replaces them with real checks when it implements §11.
-  @pending_v1_8 ~w(reaction_payload.json msg_send_reaction.json msg_send_reaction_and_body.json event_reaction.json error_unknown_target.json error_invalid_emoji.json limits_graphemes.json)
+              device_put_mls.json device_put_mls_reply.json attestation_keys.json key_packages_upload.json key_packages_count.json key_packages_claim.json key_packages_claim_reply.json mls_group.json mls_commit_request.json mls_commit_reply.json mls_commits_reply.json error_epoch_conflict.json error_not_ready.json msg_send_e2ee.json event_message_e2ee.json event_mls_commit.json event_mls_welcome.json event_mls_membership.json signal_mls_key_packages_low.json error_e2ee_required.json
+              reaction_payload.json msg_send_reaction.json msg_send_reaction_and_body.json
+              event_reaction.json error_unknown_target.json error_invalid_emoji.json
+              limits_graphemes.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -64,12 +64,7 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- (@checked ++ @pending_v1_8) == [],
-           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_8))}"
-  end
-
-  test "v1.8 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_8, do: assert(is_map(example(name)))
+    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
   end
 
   setup do
@@ -627,6 +622,96 @@ defmodule RisiMe.ContractExamplesTest do
 
       assert_receive {:signal, %{kind: "mls_key_packages_low"} = signal}
       assert_same_shape(wire(signal), example("signal_mls_key_packages_low.json"))
+    end
+  end
+
+  ## v1.8 (§11)
+
+  describe "v1.8" do
+    defp send_payload(chan, payload) do
+      ref = push(chan, "msg:send", payload)
+
+      receive do
+        %Phoenix.Socket.Reply{ref: ^ref, status: s, payload: p} -> {s, p}
+      after
+        2000 -> flunk("no reply")
+      end
+    end
+
+    test "limits_graphemes.json: every case and the generated 4096/4097 rule", %{
+      b: b,
+      chan_a: chan
+    } do
+      ex = example("limits_graphemes.json")
+      assert ex["max_graphemes"] == 4096 and ex["max_bytes"] == 16 * 1024
+
+      for c <- ex["cases"], do: assert(String.length(c["text"]) == c["graphemes"], c["name"])
+
+      for g <- ex["generated"] do
+        text = String.duplicate(g["repeat"], g["count"])
+        assert String.length(text) == g["count"]
+
+        reply =
+          send_payload(chan, %{
+            "client_msg_id" => Uniq.UUID.uuid4(),
+            "to" => b.user.id,
+            "body" => text
+          })
+
+        if g["ok"],
+          do: assert({:ok, _} = reply),
+          else: assert({:error, %{reason: "too_long"}} = reply)
+      end
+    end
+
+    test "reaction_payload.json is a valid envelope by the server's rules" do
+      ex = example("reaction_payload.json")
+
+      assert %{"v" => 1, "type" => "reaction", "op" => op, "target" => target, "emoji" => emoji} =
+               ex
+
+      assert op in ["add", "remove"] and target =~ @timeuuid
+      assert Messaging.valid_emoji?(emoji)
+    end
+
+    test "msg_send_reaction.json, event_reaction.json, error_*; msg_send_reaction_and_body.json",
+         %{b: b, chan_a: chan} do
+      {:ok, %{message_id: target}} =
+        send_payload(chan, %{
+          "client_msg_id" => Uniq.UUID.uuid4(),
+          "to" => b.user.id,
+          "body" => "hi"
+        })
+
+      ex = example("msg_send_reaction.json")
+      reaction = %{ex["reaction"] | "target" => target}
+
+      assert {:ok, %{message_id: rid}} =
+               send_payload(chan, %{ex | "to" => b.user.id, "reaction" => reaction})
+
+      {:ok, events, _} = Messaging.fetch_events(b.user.id, nil)
+      ev = events |> Enum.find(&(&1.event_id == rid)) |> wire()
+      assert_same_shape(ev, example("event_reaction.json"))
+
+      assert {:error, e} =
+               send_payload(chan, %{ex | "to" => b.user.id, "client_msg_id" => Uniq.UUID.uuid4()})
+
+      assert wire(e) == example("error_unknown_target.json")
+
+      bad = %{reaction | "emoji" => "no"}
+
+      assert {:error, e} =
+               send_payload(chan, %{
+                 ex
+                 | "to" => b.user.id,
+                   "client_msg_id" => Uniq.UUID.uuid4(),
+                   "reaction" => bad
+               })
+
+      assert wire(e) == example("error_invalid_emoji.json")
+
+      both = example("msg_send_reaction_and_body.json")
+      assert {:error, %{reason: "bad_request"}} = send_payload(chan, %{both | "to" => b.user.id})
     end
   end
 

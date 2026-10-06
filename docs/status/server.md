@@ -5,7 +5,7 @@
 **v1.5** (push wake-ups, decision 028), **v1.6** (invites and friends, decision 030) and **v1.7**
 (E2EE routing with MLS, decision 034; **off until the attestation key exists**) are done.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(265 tests).
+(274 tests).
 
 ## 0.2 progress
 - [x] Version from the repo `VERSION` file: `Application.spec(:risime, :vsn)` matches it, and the
@@ -102,6 +102,21 @@ bin/risime start                             # foreground; under tmux or systemd
   - `/dev/mailbox` and unknown routes return a 404 JSON error; a bad body returns a 400 JSON error;
   - tokens show as `[FILTERED]` in the log;
   - SIGTERM shuts it down cleanly.
+
+### Emoji and reactions (v1.8)
+- **Length:** a body is at most 16 KiB of UTF-8 (checked first) and 1–4096 extended grapheme
+  clusters (`String.length/1`, Unicode 17 on Elixir 1.19; the server's count is
+  authoritative).
+- **Plaintext reactions:** `msg:send` with exactly one of `body`, `reaction` or `ciphertext`.
+  - Order of checks: resend → `not_friends` → `e2ee_required` → `invalid_emoji` /
+    `unknown_target` → the shared 20-per-10-s limit.
+  - The target needs one primary-key read on `message_index`.
+  - Reactions are indexed with `kind = 'reaction'` (CQL `002_message_kind.cql`, additive; the
+    deploy's `migrate()` applies it). Acks naming them are ignored, and a reaction can't be a
+    target.
+  - The `reaction` event goes to both inboxes with the same `event_id`, with no push and no status.
+- **E2EE reactions** are ordinary e2ee `msg:send` (an MLS envelope); the server can't tell them
+  apart.
 
 ### E2EE with MLS (v1.7, decision 034)
 - **Off on the pilot.** With no attestation key, every MLS endpoint answers
