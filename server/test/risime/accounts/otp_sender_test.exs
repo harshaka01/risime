@@ -164,4 +164,20 @@ defmodule RisiMe.Accounts.OtpSenderTest do
                Agent.get(c, & &1)
     end
   end
+
+  test "boot checks: NotifyDEMO warning; PHONE_VERIFICATION=required without a sender is an error" do
+    Application.put_env(:risime, :sms_mode, :notifylk)
+    System.put_env("NOTIFYLK_SENDER_ID", "NotifyDEMO")
+    Application.put_env(:risime, :phone_verification, :required)
+    on_exit(fn -> Application.put_env(:risime, :phone_verification, :off) end)
+
+    log = capture_log(fn -> RisiMe.Accounts.SmsStatus.boot_checks() end)
+    assert log =~ "SMS OTP disabled until an approved sender ID is set"
+    assert log =~ "PHONE_VERIFICATION=required but no SMS can be sent"
+    refute log =~ "fake-key-never-shown"
+
+    System.put_env("NOTIFYLK_SENDER_ID", "RisiMe")
+    log = capture_log(fn -> RisiMe.Accounts.SmsStatus.boot_checks() end)
+    refute log =~ "PHONE_VERIFICATION=required"
+  end
 end

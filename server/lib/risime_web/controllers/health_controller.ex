@@ -1,6 +1,7 @@
 defmodule RisiMeWeb.HealthController do
   @moduledoc """
-  `GET /health` (ops, not part of the wire protocol; no auth). Checks Postgres and Cassandra.
+  `GET /health` (ops, not part of the wire protocol; no auth). Checks Postgres and Cassandra;
+  `checks.sms` is informational (`RisiMe.Accounts.SmsStatus`).
   200 `{"status": "ok", ...}` when both answer, otherwise 503 `{"status": "error", ...}`.
   Only says "ok"/"error" per dependency, never error details.
   """
@@ -15,6 +16,9 @@ defmodule RisiMeWeb.HealthController do
     }
 
     healthy = Enum.all?(checks, fn {_, v} -> v == "ok" end)
+
+    # SMS is a detail for ops, never a reason for 503 (decision 021); never the balance.
+    checks = Map.put(checks, "sms", RisiMe.Accounts.SmsStatus.check())
 
     conn
     |> put_status(if healthy, do: 200, else: 503)

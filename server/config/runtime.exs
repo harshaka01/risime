@@ -69,6 +69,10 @@ if config_env() != :test do
 
   default_sms = if config_env() == :prod, do: "notifylk", else: "log"
 
+  if warn = System.get_env("SMS_BALANCE_WARN") do
+    config :risime, :sms_balance_warn, String.to_integer(warn)
+  end
+
   config :risime,
          :sms_mode,
          if(System.get_env("SMS_MODE", default_sms) == "notifylk", do: :notifylk, else: :log)

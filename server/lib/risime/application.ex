@@ -31,6 +31,7 @@ defmodule RisiMe.Application do
       RisiMe.Auth.JWKS,
       RisiMe.Auth,
       RisiMe.Accounts.ResetListener,
+      RisiMe.Accounts.SmsStatus,
       # Start a worker by calling: RisiMe.Worker.start_link(arg)
       # {RisiMe.Worker, arg},
       # Start to serve requests, typically the last entry
