@@ -101,7 +101,7 @@ defmodule RisiMe.Blobs do
             conversation_id: b.conversation_id,
             size: b.size,
             sha256: b.sha256,
-            expires_at: b.expires_at
+            expires_at: type(b.expires_at, :utc_datetime_usec)
           }
       )
     else
