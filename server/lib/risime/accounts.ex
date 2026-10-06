@@ -33,6 +33,22 @@ defmodule RisiMe.Accounts do
     |> Repo.insert_or_update()
   end
 
+  @doc """
+  Clears the Keycloak binding of the user with `phone` (admin re-bind, contract v1.3 §6.1), so
+  the next sign-in binds whichever account owns the allowlisted email.
+  Returns `{:ok, previous_sub}` or `{:error, :not_found}`.
+  """
+  def rebind(phone) do
+    case Repo.get_by(User, phone: phone) do
+      nil ->
+        {:error, :not_found}
+
+      user ->
+        Repo.update_all(from(u in User, where: u.id == ^user.id), set: [keycloak_sub: nil])
+        {:ok, user.keycloak_sub}
+    end
+  end
+
   def list_allowlist do
     Repo.all(from a in AllowlistEntry, order_by: [asc: fragment("lower(?)", a.display_name)])
   end

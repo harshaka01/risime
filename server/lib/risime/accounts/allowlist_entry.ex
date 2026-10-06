@@ -25,5 +25,6 @@ defmodule RisiMe.Accounts.AllowlistEntry do
     |> validate_length(:display_name, min: 1, max: 64)
     |> validate_length(:company, min: 1, max: 64)
     |> unique_constraint(:phone)
+    |> unique_constraint(:email, name: :allowlist_lower_email_index)
   end
 end

@@ -4,15 +4,30 @@ defmodule Mix.Tasks.Risime.Allow do
   Adds or updates (by phone) a person who may log in.
 
       mix risime.allow --phone +94771234567 --email name@company.lk --name "Name" --company CodeGen
+      mix risime.allow --rebind +94771234567   # clear the user's Keycloak binding (409 fix)
   """
   use Mix.Task
 
-  @switches [phone: :string, email: :string, name: :string, company: :string]
+  @switches [phone: :string, email: :string, name: :string, company: :string, rebind: :string]
 
   @impl true
   def run(argv) do
     {opts, _, invalid} = OptionParser.parse(argv, strict: @switches)
 
+    if phone = opts[:rebind], do: rebind(phone), else: allow(opts, invalid)
+  end
+
+  defp rebind(phone) do
+    Mix.Task.run("app.start")
+
+    case RisiMe.Accounts.rebind(phone) do
+      {:ok, nil} -> Mix.shell().info("#{phone} had no Keycloak binding")
+      {:ok, _sub} -> Mix.shell().info("cleared the Keycloak binding of #{phone}")
+      {:error, :not_found} -> Mix.raise("no user with phone #{phone}")
+    end
+  end
+
+  defp allow(opts, invalid) do
     missing = Enum.reject([:phone, :email, :name, :company], &opts[&1])
 
     if invalid != [] or missing != [] do
