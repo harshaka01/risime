@@ -28,7 +28,8 @@ class MlsPayloadTest {
         assertEquals(MlsPayload.Decoded.Reaction("m1", "👍", "remove"), MlsPayload.decode("""{"v":1,"type":"reaction","target":"m1","emoji":"👍","op":"remove","x":1}""".toByteArray()))
         assertTrue(MlsPayload.decode("""{"v":1,"type":"reaction","emoji":"+1","target":"m1"}""".toByteArray()) is MlsPayload.Decoded.Ignored)
         assertTrue(MlsPayload.decode("""{"v":1,"type":"reaction","target":"m1","emoji":"👍","op":"toggle"}""".toByteArray()) is MlsPayload.Decoded.Ignored)
-        assertEquals(MlsPayload.Decoded.Ignored("image"), MlsPayload.decode("""{"v":2,"type":"image"}""".toByteArray()))
+        // v1.11: images are understood; one missing its fields is dropped as malformed.
+        assertEquals(MlsPayload.Decoded.Ignored("image (malformed)"), MlsPayload.decode("""{"v":2,"type":"image"}""".toByteArray()))
         // Forward compatible: extra fields and other versions of "text" still read the body.
         assertEquals(MlsPayload.Decoded.Text("hi"), MlsPayload.decode("""{"v":2,"type":"text","body":"hi","fmt":"md"}""".toByteArray()))
     }

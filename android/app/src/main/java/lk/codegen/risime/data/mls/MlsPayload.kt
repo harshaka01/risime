@@ -23,6 +23,9 @@ object MlsPayload {
         /** §11.2: an encrypted reaction (op "add" sets, "remove" clears). */
         data class Reaction(val target: String, val emoji: String, val op: String) : Decoded
 
+        /** §14.4: a strictly validated image envelope. */
+        data class Image(val envelope: lk.codegen.risime.data.media.ImageEnvelope) : Decoded
+
         /** A type this app doesn't know yet: store nothing visible. */
         data class Ignored(val type: String) : Decoded
     }
@@ -61,6 +64,10 @@ object MlsPayload {
             fun str(k: String) = (obj[k] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
             val target = str("target"); val emoji = str("emoji"); val op = str("op")
             return if (target != null && emoji != null && (op == "add" || op == "remove")) Decoded.Reaction(target, emoji, op) else Decoded.Ignored("reaction (malformed)")
+        }
+        if (type == lk.codegen.risime.data.media.ImageEnvelope.TYPE) {
+            // §14.4: malformed → dropped and logged like an unknown type (never stored, fetched or decoded).
+            return lk.codegen.risime.data.media.ImageEnvelope.validate(obj)?.let { Decoded.Image(it) } ?: Decoded.Ignored("image (malformed)")
         }
         if (type != TYPE_TEXT) return Decoded.Ignored(type)
         val body = (obj["body"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: return Decoded.Ignored("text without body")

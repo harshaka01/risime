@@ -342,6 +342,12 @@ object AuthErrors {
     const val LOG_EXPIRED = "log_expired"
     const val GENERATION_CONFLICT = "generation_conflict"
     const val TOO_LARGE = "too_large"
+
+    // §14.6 (v1.11)
+    const val NOT_E2EE = "not_e2ee"
+    const val BAD_MEDIA_TYPE = "bad_media_type"
+    const val STORAGE_FULL = "storage_full"
+    const val QUOTA_EXCEEDED = "quota_exceeded"
 }
 
 // ---- One-time phone verification (§7, v1.4) ----
@@ -501,6 +507,9 @@ data class DeviceMls(
 ) {
     companion object {
         const val CAP_GROUPS = "groups"
+
+        /** §14.1: advertised only once the app can receive and render images. */
+        const val CAP_IMAGES = "images"
     }
 }
 
@@ -567,7 +576,31 @@ data class MlsGroup(
     val ready: Boolean = false,
     val missing: List<MlsMissing> = emptyList(),
     val devices: List<MlsDeviceRef> = emptyList(),
+    /** §14.1: every app instance of every member advertises `images` (absent = false). */
+    @SerialName("images_ready") val imagesReady: Boolean = false,
+    @SerialName("missing_images") val missingImages: List<MissingImages> = emptyList(),
 )
+
+/** §14.1 an app instance that doesn't advertise `images` (`device_id` null: an old app without one). */
+@Serializable
+data class MissingImages(@SerialName("user_id") val userId: String, @SerialName("device_id") val deviceId: String? = null)
+
+/** §14.2 `GET /blobs/usage`. */
+@Serializable
+data class BlobUsageReply(val media: MediaUsage, val mls: MlsUsage? = null)
+
+@Serializable
+data class MediaUsage(
+    val used: Long,
+    val limit: Long,
+    @SerialName("uploads_last_hour") val uploadsLastHour: Int = 0,
+    @SerialName("hourly_limit") val hourlyLimit: Int = 0,
+    @SerialName("uploads_last_day") val uploadsLastDay: Int = 0,
+    @SerialName("daily_limit") val dailyLimit: Int = 0,
+)
+
+@Serializable
+data class MlsUsage(val used: Long, val limit: Long)
 
 @Serializable
 data class MlsCommitRequest(
@@ -781,7 +814,13 @@ data class GroupResetReply(val generation: Long)
 
 /** §12.2 the encrypted GroupContext extension `risime.group_meta` (0xFA01), UTF-8 JSON. */
 @Serializable
-data class GroupMeta(val v: Int = 1, val name: String, val icon: String? = null, val admins: List<String> = emptyList()) {
+data class GroupMeta(
+    val v: Int = 1,
+    val name: String,
+    /** §14.4 group icon (a blob reference with its key), kept verbatim; v1.11 apps still show the default avatar. */
+    val icon: kotlinx.serialization.json.JsonElement? = null,
+    val admins: List<String> = emptyList(),
+) {
     fun encode(): ByteArray = ProtocolJson.encodeToString(serializer(), this).toByteArray(Charsets.UTF_8)
 
     companion object {

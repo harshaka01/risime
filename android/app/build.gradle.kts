@@ -244,6 +244,8 @@ tasks.withType<Test>().configureEach {
     systemProperty("risime.mergedManifest.debug", mergedManifestDebug.get().asFile.absolutePath)
     systemProperty("risime.mergedManifest.release", mergedManifestRelease.get().asFile.absolutePath)
     systemProperty("risime.schemas", layout.projectDirectory.dir("schemas").asFile.absolutePath)
+    // contract/v1 (media_vectors.json for the real-core media tests).
+    systemProperty("risime.contract", File(rootProject.projectDir.parentFile, "contract/v1").absolutePath)
     systemProperty("risime.themes", layout.projectDirectory.file("src/main/res/values/themes.xml").asFile.absolutePath)
     // Opt-in live interop (LiveInteropTest): forwarded explicitly, never cached, output shown.
     val interop = providers.environmentVariable("RISIME_INTEROP_CONFIG").orNull

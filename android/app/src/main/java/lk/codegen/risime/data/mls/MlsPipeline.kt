@@ -13,6 +13,9 @@ sealed interface MlsResult {
     /** A decrypted e2ee message: insert it like a plaintext one (same transaction). */
     data class Plaintext(val message: MessageData, val body: String) : MlsResult
 
+    /** §14.4: a decrypted, validated image envelope (stored with its thumbnail in the same transaction). */
+    data class Image(val message: MessageData, val envelope: lk.codegen.risime.data.media.ImageEnvelope) : MlsResult
+
     /** §11.2: a decrypted reaction (effective state by server_ts + message_id). */
     data class Reaction(val message: MessageData, val target: String, val emoji: String, val op: String) : MlsResult
 
@@ -199,6 +202,7 @@ class MlsPipeline(
                 when (val p = MlsPayload.decode(d.plaintext)) {
                     is MlsPayload.Decoded.Text -> MlsResult.Plaintext(msg, p.body)
                     is MlsPayload.Decoded.Reaction -> MlsResult.Reaction(msg, p.target, p.emoji, p.op)
+                    is MlsPayload.Decoded.Image -> MlsResult.Image(msg, p.envelope)
                     is MlsPayload.Decoded.Ignored -> {
                         log("ignored payload type ${p.type} in ${msg.messageId}")
                         MlsResult.Ignored

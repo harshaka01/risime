@@ -143,20 +143,24 @@ class ContractExamplesTest {
             ProtocolJson.decodeFromString<Event>(s).also { e -> val m = e.messageData()!!; require(m.messageId == e.eventId && m.body != null && !m.encrypted) }
         },
         "error_quota_exceeded.json" to { s -> apiError(s, "quota_exceeded").also { require(it.error.used!! < it.error.limit!!) } },
-        // v1.11 (encrypted images, §14): parse-only placeholders added by root with the contract
-        // merge; the android role replaces them with typed decoders when it implements §14.
-        "image_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "image_payload_no_thumb.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "image_payload_png.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "image_payload_bad_key.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "group_meta_icon.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "blob_upload_media_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "blob_usage_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "device_put_images.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_group_images_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_not_e2ee.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_storage_full.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_bad_media_type.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.11 (encrypted images, §14)
+        "image_payload.json" to { s -> imageEnvelope(s).also { require(it.thumb != null && it.caption != null && it.mime == "image/jpeg") } },
+        "image_payload_no_thumb.json" to { s -> imageEnvelope(s).also { require(it.thumb == null && it.caption == null) } },
+        "image_payload_png.json" to { s -> imageEnvelope(s).also { require(it.mime == "image/png") } },
+        // Malformed (31-byte key): must be dropped, never stored.
+        "image_payload_bad_key.json" to { s ->
+            require(lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) is lk.codegen.risime.data.mls.MlsPayload.Decoded.Ignored)
+        },
+        "group_meta_icon.json" to { s -> GroupMeta.decode(s.toByteArray())!!.also { require(it.icon is JsonObject && it.name.isNotEmpty()) } },
+        "blob_upload_media_reply.json" to { s -> ProtocolJson.decodeFromString<BlobUploadReply>(s).also { requireNotNull(it.expiresAt) } },
+        "blob_usage_reply.json" to { s -> ProtocolJson.decodeFromString<BlobUsageReply>(s).also { require(it.media.used < it.media.limit && it.mls != null) } },
+        "device_put_images.json" to { s ->
+            ProtocolJson.decodeFromString<DevicePut>(s).also { require(it.mls?.capabilities == listOf(DeviceMls.CAP_GROUPS, DeviceMls.CAP_IMAGES)) }
+        },
+        "mls_group_images_ready.json" to { s -> ProtocolJson.decodeFromString<MlsGroup>(s).also { require(!it.imagesReady && it.missingImages.size == 1) } },
+        "error_not_e2ee.json" to { s -> apiError(s, AuthErrors.NOT_E2EE) },
+        "error_storage_full.json" to { s -> apiError(s, AuthErrors.STORAGE_FULL) },
+        "error_bad_media_type.json" to { s -> apiError(s, AuthErrors.BAD_MEDIA_TYPE) },
         // v1.12 (deleting messages and chats, §15): parse-only placeholders added by root with the
         // contract merge; the android role replaces them with typed decoders when it implements §15.
         "delete_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
@@ -179,6 +183,9 @@ class ContractExamplesTest {
     private fun groupEvent(s: String, action: String): GroupEvent =
         ProtocolJson.decodeFromString<Event>(s).groupEvent()!!.also { require(it.action == action) { "action ${it.action} != $action" } }
 
+    private fun imageEnvelope(s: String): lk.codegen.risime.data.media.ImageEnvelope =
+        (lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) as lk.codegen.risime.data.mls.MlsPayload.Decoded.Image).envelope
+
     private fun apiError(s: String, code: String): ApiErrorEnvelope =
         ProtocolJson.decodeFromString<ApiErrorEnvelope>(s).also { require(it.error.code == code) }
 
@@ -197,6 +204,7 @@ class ContractExamplesTest {
         check("typing_group.json", TypingGroupPush.serializer())
         check("mls_commit_request_group.json", GroupCommitRequest.serializer())
         check("device_put_groups.json", DevicePut.serializer())
+        check("device_put_images.json", DevicePut.serializer())
         check("key_packages_upload_replace.json", KeyPackagesUpload.serializer())
         check("key_packages_claim_group.json", KeyPackagesClaim.serializer())
         check("group_meta.json", GroupMeta.serializer())

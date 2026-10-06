@@ -202,7 +202,7 @@ class UniffiMlsEngine(
         added.map { DeviceRef(it.userId, it.deviceId) }, removed.map { DeviceRef(it.userId, it.deviceId) }, metaChanged,
     )
 
-    private fun lk.codegen.risime.net.GroupMeta.toFfi() = GroupMeta(name, icon, admins)
+    private fun lk.codegen.risime.net.GroupMeta.toFfi() = GroupMeta(name, icon?.toString(), admins)
 
     private fun currentOrThrow(conv: String) = current(conv) ?: throw IllegalStateException("no group for $conv")
 
