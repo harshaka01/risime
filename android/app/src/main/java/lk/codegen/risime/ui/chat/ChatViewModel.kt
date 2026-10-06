@@ -101,6 +101,9 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
         }
     }
 
+    /** §15.7 deletes in this chat (message actions behind DeleteFeature.sendEnabled; Clear/Delete chat always). */
+    val del = DeleteController(c, viewModelScope, meId, conversationId).also { it.refreshReady() }
+
     /** §14: photos in this chat. */
     val imgs = ImageActions(c, viewModelScope, meId, conversationId)
 

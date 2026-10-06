@@ -132,6 +132,16 @@ class DeleteController(
 
     fun dismiss() { dialog.value = null }
 
+    /** Per-bubble hooks; null while the delete UI is off. */
+    fun selectFor(m: MessageEntity, selection: Set<String>): MsgSelect? =
+        if (!enabled) null else MsgSelect(
+            selecting = selection.isNotEmpty(),
+            selected = m.clientMsgId in selection,
+            onToggle = { toggle(m.clientMsgId) },
+            onSelect = { select(m.clientMsgId) },
+            onDelete = { ask(listOf(m)) },
+        )
+
     fun dismissNotice() { notice.value = null }
 
     /** Clear chat (keeps the chat listed) or Delete chat (hidden until a new message). Always on. */
@@ -245,4 +255,30 @@ fun DeleteHost(ctl: DeleteController, clearAsk: Boolean?, onClearAskDone: () -> 
             if (hide) onDeletedChat()
         }, onDismiss = onClearAskDone)
     }
+}
+
+/** Per-bubble select/delete hooks (null while the delete UI is off). */
+class MsgSelect(val selecting: Boolean, val selected: Boolean, val onToggle: () -> Unit, val onSelect: () -> Unit, val onDelete: () -> Unit)
+
+/** Copy in select mode: the selected text rows in order (tombstones and system lines carry no text). */
+fun copyText(rows: List<MessageEntity>, selection: Set<String>): String =
+    rows.filter { it.clientMsgId in selection && !it.system && !it.showsAsDeleted && it.body.isNotBlank() }.joinToString("\n") { it.body }
+
+/** The select-mode bar wired to a controller and the chat's rows. */
+@Composable
+fun SelectionBarFor(ctl: DeleteController, rows: List<MessageEntity>, selection: Set<String>) {
+    if (selection.isEmpty()) return
+    val clipboard = androidx.compose.ui.platform.LocalClipboard.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    androidx.activity.compose.BackHandler { ctl.clearSelection() }
+    SelectionTopBar(
+        count = selection.size,
+        onCopy = {
+            val text = copyText(rows, selection)
+            scope.launch { clipboard.setClipEntry(androidx.compose.ui.platform.ClipEntry(android.content.ClipData.newPlainText("messages", text))) }
+            ctl.clearSelection()
+        },
+        onDelete = { ctl.ask(rows.filter { it.clientMsgId in selection }) },
+        onClose = ctl::clearSelection,
+    )
 }

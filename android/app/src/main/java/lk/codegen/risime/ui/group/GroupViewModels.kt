@@ -256,6 +256,10 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         c.scope.launch { c.realtime.typing(conversationId, typing) }
     })
 
+    /** §15.7 deletes (message actions behind DeleteFeature.sendEnabled; admins delete any message, §15.4). */
+    val del = lk.codegen.risime.ui.chat.DeleteController(c, viewModelScope, meId, conversationId, iAmAdmin = { group.value?.myRole == lk.codegen.risime.net.GroupMember.ROLE_ADMIN })
+        .also { it.refreshReady() }
+
     /** §14: photos in this group. */
     val imgs = lk.codegen.risime.ui.chat.ImageActions(c, viewModelScope, meId, conversationId)
 

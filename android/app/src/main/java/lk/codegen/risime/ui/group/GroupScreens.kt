@@ -115,6 +115,8 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
     val composer by vm.composer.collectAsStateWithLifecycle()
     val reactions by vm.reactions.collectAsStateWithLifecycle()
     val readBy by vm.readBy.collectAsStateWithLifecycle()
+    val selection by vm.del.selected.collectAsStateWithLifecycle()
+    var clearAsk by remember { mutableStateOf<Boolean?>(null) }
     var reactionsFor by remember { mutableStateOf<String?>(null) }
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
@@ -151,12 +153,15 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 actions = {
                     lk.codegen.risime.ui.chat.E2eeHeaderLock(encrypted == true, onInfo)
                     IconButton(onClick = onInfo) { Icon(Icons.Default.Info, "Group info") }
+                    lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true })
                 },
             )
         },
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
+            lk.codegen.risime.ui.chat.SelectionBarFor(vm.del, messages, selection)
+            lk.codegen.risime.ui.chat.DeleteHost(vm.del, clearAsk, onClearAskDone = { clearAsk = null }, onDeletedChat = onBack)
             if (encrypted == false && !readOnly && composer == GroupComposer.Enabled) {
                 Text(
                     "${lk.codegen.risime.data.mls.NOT_E2EE_PREFIX}: setting up end-to-end encryption…",
@@ -182,6 +187,8 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 loader = vm.imgs.loader,
                 onImageTap = vm.imgs::tap,
                 onImageVisible = vm.imgs::onVisible,
+                del = vm.del,
+                selection = selection,
             )
             toast?.let { lk.codegen.risime.ui.chat.ImageToast(it) }
             val off = composer as? GroupComposer.Disabled
@@ -238,6 +245,9 @@ internal fun GroupMessageList(
     loader: lk.codegen.risime.ui.chat.ImageLoader? = null,
     onImageTap: (MessageEntity) -> Unit = {},
     onImageVisible: (String) -> Unit = {},
+    /** §15.7 select/delete (null: off). */
+    del: lk.codegen.risime.ui.chat.DeleteController? = null,
+    selection: Set<String> = emptySet(),
 ) {
     ChatMessageList(
         messages = messages,
@@ -255,7 +265,11 @@ internal fun GroupMessageList(
                 // §15.5 crypto S2: a server-placed tombstone shows no sender unless the sender deleted it.
                 val placed = item.m.clientMsgId.startsWith(lk.codegen.risime.data.deletes.DeleteApplier.PLACEHOLDER)
                 val attributed = !placed || item.m.deletedBy.equals(item.m.from, true)
-                lk.codegen.risime.ui.chat.TombstoneBubble(item.m, meId, sender = if (attributed && showSenderAt(items, i)) nameOf(item.m.from) else null)
+                val s = del?.selectFor(item.m, selection)
+                lk.codegen.risime.ui.chat.TombstoneBubble(
+                    item.m, meId, sender = if (attributed && showSenderAt(items, i)) nameOf(item.m.from) else null, selected = s?.selected == true,
+                    onMenu = s?.let { x -> { if (x.selecting) x.onToggle() else x.onDelete() } }, onTap = s?.takeIf { it.selecting }?.onToggle,
+                )
             } else {
                 GroupBubble(
                     item.m,
@@ -268,6 +282,7 @@ internal fun GroupMessageList(
                     onInfo = { item.m.messageId?.let(onInfo) },
                     media = media[item.m.clientMsgId], loader = loader,
                     onImageTap = { onImageTap(item.m) }, onImageVisible = onImageVisible,
+                    sel = del?.selectFor(item.m, selection),
                 )
             }
         }
@@ -289,6 +304,7 @@ private fun GroupBubble(
     loader: lk.codegen.risime.ui.chat.ImageLoader? = null,
     onImageTap: () -> Unit = {},
     onImageVisible: (String) -> Unit = {},
+    sel: lk.codegen.risime.ui.chat.MsgSelect? = null,
 ) {
     val failed = m.status == MessageStatus.FAILED.name
     var sheet by remember { mutableStateOf(false) }
@@ -307,14 +323,15 @@ private fun GroupBubble(
             retryable -> "Not sent — tap to retry or delete"
             else -> "Not sent — tap to delete"
         },
-        tapOpensMenu = failed,
-        onMenu = { sheet = true },
+        tapOpensMenu = failed && sel?.selecting != true,
+        onMenu = { if (sel?.selecting == true) sel.onToggle() else sheet = true },
+        selected = sel?.selected == true,
         noteIsInfo = !failed,
         footer = { ReactionChipsRow(chips, onOpenReactions) },
         sender = sender,
         senderColor = memberColor(m.from),
         image = if (m.image) ({ lk.codegen.risime.ui.chat.ImageBubbleContent(media, loader, onImageVisible) }) else null,
-        onTap = if (m.image) onImageTap else null,
+        onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else null,
         tapLabel = if (m.image) lk.codegen.risime.ui.chat.imageTapLabel(lk.codegen.risime.ui.chat.imageTap(media)) else null,
     )
     if (sheet) {
@@ -322,7 +339,11 @@ private fun GroupBubble(
             if (!m.image || m.body.isNotBlank()) add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
             if (m.outgoing && m.messageId != null) add("Info" to onInfo)
             if (retryable) add("Retry" to { onRetry(m.clientMsgId) })
-            if (failed) add("Delete" to { onDelete(m.clientMsgId) })
+            if (failed) add((if (sel != null) "Discard" else "Delete") to { onDelete(m.clientMsgId) })
+            if (sel != null && !failed && canAct) {
+                add("Delete" to sel.onDelete)
+                add("Select" to sel.onSelect)
+            }
             if (m.image && m.outgoing && m.status == MessageStatus.PENDING.name) add("Cancel" to { onDelete(m.clientMsgId) })
         }
         MessageActionsSheet(

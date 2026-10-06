@@ -78,6 +78,8 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
         mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(""))
     }
     val reactions by vm.reactions.collectAsStateWithLifecycle()
+    val selection by vm.del.selected.collectAsStateWithLifecycle()
+    var clearAsk by remember { mutableStateOf<Boolean?>(null) }
     var reactionsFor by remember { mutableStateOf<String?>(null) }
     val media by vm.imgs.media.collectAsStateWithLifecycle()
     val imagesReady by vm.imgs.imagesReady.collectAsStateWithLifecycle()
@@ -120,12 +122,15 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 actions = {
                     E2eeHeaderLock(encrypted) { showInfo = true }
                     IconButton(onClick = { showInfo = true }) { Icon(Icons.Default.Info, "Chat info") }
+                    ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true })
                 },
             )
         },
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
+            SelectionBarFor(vm.del, messages, selection)
+            DeleteHost(vm.del, clearAsk, onClearAskDone = { clearAsk = null }, onDeletedChat = onBack)
             E2eeStrip(stripText)
             lk.codegen.risime.ui.common.ChatMessageList(
                 messages = messages,
@@ -138,7 +143,12 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                     is ChatItem.Day -> DaySeparator(item.label)
                     is ChatItem.Msg -> DmMessageRow(item.m) {
                         if (item.m.showsAsDeleted) {
-                            TombstoneBubble(item.m, vm.me)
+                            val s = vm.del.selectFor(item.m, selection)
+                            TombstoneBubble(
+                                item.m, vm.me, selected = s?.selected == true,
+                                onMenu = s?.let { x -> { if (x.selecting) x.onToggle() else x.onDelete() } },
+                                onTap = s?.takeIf { it.selecting }?.onToggle,
+                            )
                             return@DmMessageRow
                         }
                         Bubble(
@@ -149,6 +159,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                             canReact = isFriend && item.m.messageId != null,
                             onReact = { e, op -> item.m.messageId?.let { vm.react(it, e, op) } },
                             onOpenReactions = { reactionsFor = item.m.messageId },
+                            sel = vm.del.selectFor(item.m, selection),
                         )
                     }
                 }
@@ -209,6 +220,8 @@ private fun Bubble(
     loader: ImageLoader? = null,
     onImageTap: () -> Unit = {},
     onImageVisible: (String) -> Unit = {},
+    /** §15.7 select/delete hooks (null while the delete UI is off). */
+    sel: MsgSelect? = null,
 ) {
     val failed = m.status == MessageStatus.FAILED.name
     var sheet by remember { mutableStateOf(false) }
@@ -227,19 +240,25 @@ private fun Bubble(
             retryable -> "Not sent — tap to retry or delete"
             else -> "Not sent — tap to delete"
         },
-        tapOpensMenu = failed,
-        onMenu = { sheet = true },
+        tapOpensMenu = failed && sel?.selecting != true,
+        onMenu = { if (sel?.selecting == true) sel.onToggle() else sheet = true },
+        selected = sel?.selected == true,
         noteIsInfo = !failed,
         footer = { ReactionChipsRow(chips, onOpenReactions) },
         image = if (m.image) ({ ImageBubbleContent(media, loader, onImageVisible) }) else null,
-        onTap = if (m.image) onImageTap else null,
+        onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else null,
         tapLabel = if (m.image) imageTapLabel(imageTap(media)) else null,
     )
     if (sheet) {
         val actions = buildList<Pair<String, () -> Unit>> {
             if (!m.image || m.body.isNotBlank()) add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
             if (retryable) add("Retry" to { onRetry(m.clientMsgId) })
-            if (failed) add("Delete" to { onDelete(m.clientMsgId) })
+            // §15.7 (android S-d): with the delete UI on, a never-accepted row's action is "Discard".
+            if (failed) add((if (sel != null) "Discard" else "Delete") to { onDelete(m.clientMsgId) })
+            if (sel != null && !failed) {
+                add("Delete" to sel.onDelete)
+                add("Select" to sel.onSelect)
+            }
             // §14.7: cancelling an uploading photo deletes it (and an uploaded blob).
             if (m.image && m.outgoing && m.status == MessageStatus.PENDING.name) add("Cancel" to { onDelete(m.clientMsgId) })
         }
