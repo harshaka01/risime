@@ -190,7 +190,11 @@ class AppContainer(context: Context) {
                 .distinctUntilChanged()
                 .collect { s ->
                     realtime.stop()
-                    if (s != null) realtime.start(RealtimeSession(s.first, s.second) { force -> bearer(force) })
+                    if (s != null) {
+                        realtime.start(
+                            RealtimeSession(s.first, s.second, sessionStore.deviceId(), BuildConfig.VERSION_NAME) { force -> bearer(force) },
+                        )
+                    }
                 }
         }
         // Updater: launch check happens in onStart; then at most every 6 h while in the foreground.

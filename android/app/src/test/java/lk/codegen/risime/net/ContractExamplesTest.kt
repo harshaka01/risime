@@ -61,28 +61,26 @@ class ContractExamplesTest {
         "signal_friend.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.friend()) } },
         "error_not_friends.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
         "user_vouched.json" to { s -> ProtocolJson.decodeFromString<MeReply>(s) },
-        // v1.7 (E2EE/MLS): parse-only placeholders added by root with the contract merge; the android
-        // role replaces them with typed decoders when it implements §10.
-        "device_put_mls.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "device_put_mls_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "attestation_keys.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "key_packages_upload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "key_packages_count.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "key_packages_claim.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "key_packages_claim_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_commit_request.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_commit_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_commits_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_epoch_conflict.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_not_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "msg_send_e2ee.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_message_e2ee.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_mls_commit.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_mls_welcome.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_mls_membership.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "signal_mls_key_packages_low.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_e2ee_required.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "device_put_mls.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { requireNotNull(it.mls) } },
+        "device_put_mls_reply.json" to { s -> ProtocolJson.decodeFromString<DevicePutReply>(s) },
+        "attestation_keys.json" to { s -> ProtocolJson.decodeFromString<AttestationKeys>(s) },
+        "key_packages_upload.json" to { s -> ProtocolJson.decodeFromString<KeyPackagesUpload>(s) },
+        "key_packages_count.json" to { s -> ProtocolJson.decodeFromString<KeyPackageCount>(s) },
+        "key_packages_claim.json" to { s -> ProtocolJson.decodeFromString<KeyPackagesClaim>(s) },
+        "key_packages_claim_reply.json" to { s -> ProtocolJson.decodeFromString<KeyPackagesClaimReply>(s) },
+        "mls_group.json" to { s -> ProtocolJson.decodeFromString<MlsGroup>(s) },
+        "mls_commit_request.json" to { s -> ProtocolJson.decodeFromString<MlsCommitRequest>(s) },
+        "mls_commit_reply.json" to { s -> ProtocolJson.decodeFromString<MlsCommitReply>(s) },
+        "mls_commits_reply.json" to { s -> ProtocolJson.decodeFromString<MlsCommitsReply>(s) },
+        "error_epoch_conflict.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
+        "error_not_ready.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
+        "msg_send_e2ee.json" to { s -> ProtocolJson.decodeFromString<MsgSendE2ee>(s) },
+        "event_message_e2ee.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.messageData()?.ciphertext) } },
+        "event_mls_commit.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.mlsCommit()) } },
+        "event_mls_welcome.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.mlsWelcome()) } },
+        "event_mls_membership.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.mlsMembership()) } },
+        "signal_mls_key_packages_low.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.keyPackagesLow()) } },
+        "error_e2ee_required.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
     )
 
     @Test
@@ -222,7 +220,7 @@ class ContractExamplesTest {
         val model = ProtocolJson.decodeFromJsonElement<DevicePut>(put)
         assertEquals(DevicePut.PLATFORM_ANDROID, model.platform)
         assertEquals(put, ProtocolJson.encodeToJsonElement(model))
-        assertFalse(model.toString().contains(model.pushToken))
+        assertFalse(model.toString().contains(model.pushToken!!))
 
         val push = ProtocolJson.decodeFromString<PushPayload>(read("push_inbox.json"))
         assertTrue(push.isInbox)
@@ -277,6 +275,59 @@ class ContractExamplesTest {
         val vouched = ProtocolJson.decodeFromString<MeReply>(read("user_vouched.json")).user
         assertEquals("Test User B", vouched.vouchedBy!!.displayName)
         assertEquals(null, ProtocolJson.decodeFromString<AuthVerifyReply>(read("auth_verify_reply.json")).user.vouchedBy)
+    }
+
+    @Test
+    fun e2eeV17Examples() {
+        fun roundTrip(file: String, enc: (JsonObject) -> kotlinx.serialization.json.JsonElement) {
+            val o = ProtocolJson.parseToJsonElement(read(file)) as JsonObject
+            assertEquals(file, o, enc(o))
+        }
+        roundTrip("device_put_mls.json") { ProtocolJson.encodeToJsonElement(ProtocolJson.decodeFromJsonElement<DevicePut>(it)) }
+        roundTrip("key_packages_upload.json") { ProtocolJson.encodeToJsonElement(ProtocolJson.decodeFromJsonElement<KeyPackagesUpload>(it)) }
+        roundTrip("key_packages_claim.json") { ProtocolJson.encodeToJsonElement(ProtocolJson.decodeFromJsonElement<KeyPackagesClaim>(it)) }
+        roundTrip("mls_commit_request.json") { ProtocolJson.encodeToJsonElement(ProtocolJson.decodeFromJsonElement<MlsCommitRequest>(it)) }
+        roundTrip("msg_send_e2ee.json") { ProtocolJson.encodeToJsonElement(ProtocolJson.decodeFromJsonElement<MsgSendE2ee>(it)) }
+
+        val put = ProtocolJson.decodeFromString<DevicePut>(read("device_put_mls.json"))
+        assertEquals(null, put.pushToken) // no Firebase: still registers for MLS
+        assertEquals(32, java.util.Base64.getDecoder().decode(put.mls!!.signatureKey).size)
+        assertTrue(ProtocolJson.decodeFromString<DevicePutReply>(read("device_put_mls_reply.json")).attestation.count { it == '.' } == 2)
+        assertEquals("OKP", ProtocolJson.decodeFromString<AttestationKeys>(read("attestation_keys.json")).keys.single()["kty"].toString().trim('"'))
+        assertEquals(42, ProtocolJson.decodeFromString<KeyPackageCount>(read("key_packages_count.json")).count)
+
+        val claim = ProtocolJson.decodeFromString<KeyPackagesClaimReply>(read("key_packages_claim_reply.json")).devices
+        assertTrue(claim[0].mls && claim[0].keyPackage != null && claim[0].attestation != null)
+        assertTrue(!claim[1].mls && claim[1].deviceId == null) // a legacy app blocks the upgrade
+
+        val g = ProtocolJson.decodeFromString<MlsGroup>(read("mls_group.json"))
+        assertTrue(!g.e2ee && !g.ready && g.epoch == null && g.generation == 1L)
+        assertEquals(MlsMissing.LEGACY_APP, g.missing.single().reason)
+        assertEquals(1L, ProtocolJson.decodeFromString<MlsCommitReply>(read("mls_commit_reply.json")).epoch)
+        assertEquals(1L, ProtocolJson.decodeFromString<MlsCommitsReply>(read("mls_commits_reply.json")).commits.single().epoch)
+
+        val conflict = ProtocolJson.decodeFromString<ApiErrorEnvelope>(read("error_epoch_conflict.json")).error
+        assertEquals(AuthErrors.EPOCH_CONFLICT, conflict.code)
+        assertEquals(3L, conflict.epoch)
+        val notReady = ProtocolJson.decodeFromString<ApiErrorEnvelope>(read("error_not_ready.json")).error
+        assertEquals(AuthErrors.NOT_READY, notReady.code)
+        assertEquals(MlsMissing.LEGACY_APP, notReady.missing!!.single().reason)
+
+        val msg = ProtocolJson.decodeFromString<Event>(read("event_message_e2ee.json")).messageData()!!
+        assertTrue(msg.encrypted)
+        assertEquals(null, msg.body) // the server never has plaintext
+        assertEquals(1L, msg.generation)
+        assertNotNull(msg.fromDevice)
+
+        val commit = ProtocolJson.decodeFromString<Event>(read("event_mls_commit.json")).mlsCommit()!!
+        assertEquals(1L, commit.epoch)
+        val welcome = ProtocolJson.decodeFromString<Event>(read("event_mls_welcome.json")).mlsWelcome()!!
+        assertEquals(1, welcome.toDevices.size)
+        assertEquals("added", ProtocolJson.decodeFromString<Event>(read("event_mls_membership.json")).mlsMembership()!!.change)
+        assertEquals(12, ProtocolJson.decodeFromString<Signal>(read("signal_mls_key_packages_low.json")).keyPackagesLow()!!.count)
+        assertEquals(AuthErrors.E2EE_REQUIRED, ProtocolJson.decodeFromString<ErrorReason>(read("error_e2ee_required.json")).reason)
+        // A plaintext event still has its body and no ciphertext.
+        assertTrue(!ProtocolJson.decodeFromString<Event>(read("event_message.json")).messageData()!!.encrypted)
     }
 
     @Test

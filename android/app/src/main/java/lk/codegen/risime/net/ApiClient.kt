@@ -23,6 +23,9 @@ sealed interface ApiResult<out T> {
         /** §7.1: `Retry-After` seconds on a 429 (null when absent/unparseable). */
         val retryAfterSec: Long? = null,
         val attemptsLeft: Int? = null,
+        /** §10.2: 409 epoch_conflict's current epoch; 409 not_ready's missing devices. */
+        val epoch: Long? = null,
+        val missing: List<MlsMissing>? = null,
     ) : ApiResult<Nothing>
     data class NetworkError(val cause: IOException) : ApiResult<Nothing>
 }
@@ -51,9 +54,32 @@ class ApiClient(
     suspend fun confirmPhoneCode(code: String): ApiResult<MeReply> =
         call("POST", "me/phone/verify/confirm", PhoneVerifyConfirm(code))
 
-    /** §8.1: register/refresh this install's push token (idempotent). */
+    /** §8.1: register/refresh this install's push token (idempotent). 204 without MLS. */
     suspend fun putDevice(deviceId: String, body: DevicePut): ApiResult<Unit> =
         call<DevicePut, Unit>("PUT", "me/devices/$deviceId", body)
+
+    /** §10.1: with `mls`, the reply is 200 {"attestation"}; 503 mls_unavailable when E2EE is off. */
+    suspend fun putMlsDevice(deviceId: String, body: DevicePut): ApiResult<DevicePutReply> =
+        call("PUT", "me/devices/$deviceId", body)
+
+    suspend fun attestationKeys(): ApiResult<AttestationKeys> = call<Unit, AttestationKeys>("GET", "mls/attestation_keys", null, auth = false)
+
+    suspend fun uploadKeyPackages(deviceId: String, body: KeyPackagesUpload): ApiResult<Unit> =
+        call("POST", "me/devices/$deviceId/key_packages", body)
+
+    suspend fun keyPackageCount(deviceId: String): ApiResult<KeyPackageCount> =
+        call<Unit, KeyPackageCount>("GET", "me/devices/$deviceId/key_packages/count", null)
+
+    suspend fun claimKeyPackages(userIds: List<String>): ApiResult<KeyPackagesClaimReply> =
+        call("POST", "mls/key_packages/claim", KeyPackagesClaim(userIds))
+
+    suspend fun mlsGroup(conversationId: String): ApiResult<MlsGroup> = call<Unit, MlsGroup>("GET", "mls/groups/$conversationId", null)
+
+    suspend fun mlsCommit(conversationId: String, body: MlsCommitRequest): ApiResult<MlsCommitReply> =
+        call("POST", "mls/groups/$conversationId/commit", body)
+
+    suspend fun mlsCommits(conversationId: String, sinceEpoch: Long): ApiResult<MlsCommitsReply> =
+        call<Unit, MlsCommitsReply>("GET", "mls/groups/$conversationId/commits?since_epoch=$sinceEpoch", null)
 
     /** §8.1: at logout (idempotent). */
     suspend fun deleteDevice(deviceId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "me/devices/$deviceId", null)
@@ -121,7 +147,8 @@ class ApiClient(
         resSerializer: KSerializer<R>,
     ): ApiResult<R> {
         val url = serverUrl().trimEnd('/').toHttpUrl().newBuilder()
-            .addPathSegments("api/v1/$path")
+            .addPathSegments("api/v1/${path.substringBefore('?')}")
+            .apply { if ('?' in path) encodedQuery(path.substringAfter('?')) }
             .build()
         val builder = Request.Builder().url(url)
             .method(method, body ?: if (method == "GET") null else ByteArray(0).toRequestBody(JSON))
@@ -140,6 +167,8 @@ class ApiClient(
                             res.code, err?.code ?: "http_${res.code}", err?.message ?: "",
                             retryAfterSec = parseRetryAfter(res.header("Retry-After"), System.currentTimeMillis()),
                             attemptsLeft = err?.attemptsLeft,
+                            epoch = err?.epoch,
+                            missing = err?.missing,
                         )
                     }
                 }

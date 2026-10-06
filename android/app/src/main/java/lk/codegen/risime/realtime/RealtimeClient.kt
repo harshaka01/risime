@@ -16,9 +16,15 @@ enum class ConnectionState { Disconnected, Connecting, Syncing, Live, AuthFailed
 class RealtimeSession(
     val serverUrl: String,
     val userId: String,
+    /** §10.1 census: stable per-install id and app version, sent on every connect. */
+    val deviceId: String? = null,
+    val appVersion: String? = null,
     val token: suspend (forceRefresh: Boolean) -> String?,
 ) {
-    constructor(serverUrl: String, token: String, userId: String) : this(serverUrl, userId, { _: Boolean -> token })
+    constructor(serverUrl: String, userId: String, token: suspend (forceRefresh: Boolean) -> String?) :
+        this(serverUrl, userId, null, null, token)
+
+    constructor(serverUrl: String, token: String, userId: String) : this(serverUrl, userId, null, null, { _: Boolean -> token })
 }
 
 /** What to do when the server refuses our token (upgrade 401/403 or join `unauthorized`). */
@@ -73,6 +79,9 @@ interface RealtimeClient {
     fun stop()
 
     suspend fun sendMessage(msg: MsgSend): PushResult<MsgSendReply>
+
+    /** §10.3 encrypted msg:send (no body). */
+    suspend fun sendEncrypted(msg: lk.codegen.risime.net.MsgSendE2ee): PushResult<MsgSendReply>
 
     suspend fun ack(messageIds: List<String>, status: String): PushResult<Unit>
 

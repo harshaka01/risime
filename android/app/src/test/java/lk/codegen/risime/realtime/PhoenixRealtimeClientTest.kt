@@ -273,6 +273,16 @@ class PhoenixRealtimeClientTest {
     }
 
     @Test
+    fun socketUrlCarriesTheCensus() {
+        assertEquals(
+            "https://risime.risicloud.ai/socket/websocket?vsn=2.0.0&device_id=c0a80101-0000-4000-8000-000000000001&app_version=0.3.0-nightly.1",
+            PhoenixRealtimeClient.socketUrl(
+                RealtimeSession("https://risime.risicloud.ai", "u", "c0a80101-0000-4000-8000-000000000001", "0.3.0-nightly.1") { "t" },
+            ),
+        )
+    }
+
+    @Test
     fun socketUrl() {
         assertEquals(
             "http://10.0.2.2:4400/socket/websocket?vsn=2.0.0",

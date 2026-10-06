@@ -74,6 +74,10 @@ data class ApiErrorBody(
     val message: String = "",
     /** §7.1: optional on 401 invalid_code from the phone confirm. */
     @SerialName("attempts_left") val attemptsLeft: Int? = null,
+    /** §10.2: the group's current epoch on 409 epoch_conflict. */
+    val epoch: Long? = null,
+    /** §10.2: why a conversation isn't ready (409 not_ready). */
+    val missing: List<MlsMissing>? = null,
 )
 
 @Serializable
@@ -132,9 +136,19 @@ data class Event(
     fun statusData(): StatusData? =
         if (kind == KIND_STATUS) ProtocolJson.decodeFromJsonElement<StatusData>(data) else null
 
+    fun mlsCommit(): MlsCommitEvent? = if (kind == KIND_MLS_COMMIT) ProtocolJson.decodeFromJsonElement<MlsCommitEvent>(data) else null
+
+    fun mlsWelcome(): MlsWelcomeEvent? = if (kind == KIND_MLS_WELCOME) ProtocolJson.decodeFromJsonElement<MlsWelcomeEvent>(data) else null
+
+    fun mlsMembership(): MlsMembershipEvent? =
+        if (kind == KIND_MLS_MEMBERSHIP) ProtocolJson.decodeFromJsonElement<MlsMembershipEvent>(data) else null
+
     companion object {
         const val KIND_MESSAGE = "message"
         const val KIND_STATUS = "status"
+        const val KIND_MLS_COMMIT = "mls_commit"
+        const val KIND_MLS_WELCOME = "mls_welcome"
+        const val KIND_MLS_MEMBERSHIP = "mls_membership"
     }
 }
 
@@ -145,9 +159,17 @@ data class MessageData(
     @SerialName("conversation_id") val conversationId: String,
     val from: String,
     val to: String,
-    val body: String,
+    /** Plaintext conversations. Null for e2ee (§10.3), which carry ciphertext instead. */
+    val body: String? = null,
     @SerialName("server_ts") val serverTs: String,
-)
+    @SerialName("from_device") val fromDevice: String? = null,
+    /** §10.3 e2ee: base64 MLS PrivateMessage. */
+    val ciphertext: String? = null,
+    val generation: Long? = null,
+    val epoch: Long? = null,
+) {
+    val encrypted: Boolean get() = ciphertext != null
+}
 
 @Serializable
 data class StatusData(
@@ -201,6 +223,9 @@ data class Signal(val kind: String, val data: JsonObject) {
     fun typing(): TypingData? =
         if (kind == KIND_TYPING) runCatching { ProtocolJson.decodeFromJsonElement<TypingData>(data) }.getOrNull() else null
 
+    fun keyPackagesLow(): MlsKeyPackagesLow? =
+        if (kind == KIND_MLS_KEY_PACKAGES_LOW) runCatching { ProtocolJson.decodeFromJsonElement<MlsKeyPackagesLow>(data) }.getOrNull() else null
+
     fun friend(): FriendSignal? =
         if (kind == KIND_FRIEND) runCatching { ProtocolJson.decodeFromJsonElement<FriendSignal>(data) }.getOrNull() else null
 
@@ -208,6 +233,7 @@ data class Signal(val kind: String, val data: JsonObject) {
         const val KIND_PRESENCE = "presence"
         const val KIND_TYPING = "typing"
         const val KIND_FRIEND = "friend"
+        const val KIND_MLS_KEY_PACKAGES_LOW = "mls_key_packages_low"
     }
 }
 
@@ -260,6 +286,11 @@ object AuthErrors {
     const val INVALID_PHONE = "invalid_phone"
     const val INVALID_EMAIL = "invalid_email"
     const val INVALID_NAME = "invalid_name"
+    const val MLS_UNAVAILABLE = "mls_unavailable"
+    const val EPOCH_CONFLICT = "epoch_conflict"
+    const val NOT_READY = "not_ready"
+    const val E2EE_REQUIRED = "e2ee_required"
+    const val STALE_EPOCH = "stale_epoch"
 }
 
 // ---- One-time phone verification (§7, v1.4) ----
@@ -281,8 +312,13 @@ data class PhoneVerifyConfirm(val code: String)
 @Serializable
 data class DevicePut(
     val platform: String,
-    @SerialName("push_token") val pushToken: String,
+    /** §10.1: optional when `mls` is present (an app without Firebase still registers). */
+    @SerialName("push_token") val pushToken: String?,
     @SerialName("app_version") val appVersion: String,
+    /** Omitted (not null) when absent: a push-only registration stays exactly v1.5. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val mls: DeviceMls? = null,
 ) {
     override fun toString() = "DevicePut(platform=$platform, appVersion=$appVersion, <token hidden>)"
 
@@ -399,3 +435,122 @@ data class FriendSignal(
         const val REQUEST_ACCEPTED = "request_accepted"
     }
 }
+
+// ---- End-to-end encryption with MLS (§10, v1.7). Binary fields are standard base64. ----
+
+@Serializable
+data class DeviceMls(@SerialName("signature_key") val signatureKey: String)
+
+@Serializable
+data class DevicePutReply(val attestation: String)
+
+@Serializable
+data class AttestationKeys(val keys: List<JsonObject>)
+
+@Serializable
+data class KeyPackagesUpload(
+    @SerialName("key_packages") val keyPackages: List<String>,
+    @SerialName("last_resort") val lastResort: String? = null,
+)
+
+@Serializable
+data class KeyPackageCount(val count: Int)
+
+@Serializable
+data class KeyPackagesClaim(@SerialName("user_ids") val userIds: List<String>)
+
+@Serializable
+data class ClaimedDevice(
+    @SerialName("user_id") val userId: String,
+    @SerialName("device_id") val deviceId: String? = null,
+    val mls: Boolean,
+    val attestation: String? = null,
+    @SerialName("key_package") val keyPackage: String? = null,
+)
+
+@Serializable
+data class KeyPackagesClaimReply(val devices: List<ClaimedDevice>)
+
+@Serializable
+data class MlsMissing(
+    @SerialName("user_id") val userId: String,
+    @SerialName("device_id") val deviceId: String? = null,
+    val reason: String,
+) {
+    companion object {
+        const val NO_MLS = "no_mls"
+        const val LEGACY_APP = "legacy_app"
+    }
+}
+
+@Serializable
+data class MlsDeviceRef(@SerialName("user_id") val userId: String, @SerialName("device_id") val deviceId: String)
+
+@Serializable
+data class MlsGroup(
+    val e2ee: Boolean,
+    val generation: Long = 1,
+    val epoch: Long? = null,
+    val ready: Boolean = false,
+    val missing: List<MlsMissing> = emptyList(),
+    val devices: List<MlsDeviceRef> = emptyList(),
+)
+
+@Serializable
+data class MlsCommitRequest(
+    val generation: Long,
+    val epoch: Long,
+    val commit: String,
+    val welcome: String? = null,
+    val added: List<MlsDeviceRef> = emptyList(),
+    val removed: List<MlsDeviceRef> = emptyList(),
+)
+
+@Serializable
+data class MlsCommitReply(val epoch: Long)
+
+@Serializable
+data class MlsLoggedCommit(val epoch: Long, val commit: String, @SerialName("from_device") val fromDevice: String)
+
+@Serializable
+data class MlsCommitsReply(val commits: List<MlsLoggedCommit>)
+
+/** §10.3 msg:send for an e2ee conversation (no body). */
+@Serializable
+data class MsgSendE2ee(
+    @SerialName("client_msg_id") val clientMsgId: String,
+    val to: String,
+    val ciphertext: String,
+    val generation: Long,
+    val epoch: Long,
+    @SerialName("client_ts") val clientTs: String,
+)
+
+@Serializable
+data class MlsCommitEvent(
+    @SerialName("conversation_id") val conversationId: String,
+    val generation: Long,
+    val epoch: Long,
+    val commit: String,
+    @SerialName("from_device") val fromDevice: String,
+)
+
+@Serializable
+data class MlsWelcomeEvent(
+    @SerialName("conversation_id") val conversationId: String,
+    val generation: Long,
+    val epoch: Long,
+    val welcome: String,
+    @SerialName("to_devices") val toDevices: List<String>,
+)
+
+@Serializable
+data class MlsMembershipEvent(
+    @SerialName("conversation_id") val conversationId: String,
+    @SerialName("user_id") val userId: String,
+    @SerialName("device_id") val deviceId: String,
+    val change: String,
+)
+
+@Serializable
+data class MlsKeyPackagesLow(val count: Int)

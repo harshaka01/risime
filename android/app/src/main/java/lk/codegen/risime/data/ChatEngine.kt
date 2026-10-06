@@ -91,6 +91,7 @@ class ChatEngine(
     /** @return true if a new incoming message was stored (needs a delivered ack). */
     private suspend fun applyMessage(me: String, m: MessageData): Boolean {
         if (messages.byMessageId(m.messageId) != null) return false
+        val body = m.body ?: return false // e2ee without an MLS engine: not ours to read (phase B)
         if (messages.byClientMsgId(m.clientMsgId) != null) return false
         val outgoing = m.from.equals(me, ignoreCase = true)
         messages.insert(
@@ -100,7 +101,7 @@ class ChatEngine(
                 conversationId = m.conversationId,
                 from = m.from,
                 to = m.to,
-                body = m.body,
+                body = body,
                 serverTs = m.serverTs,
                 localTs = clock(),
                 status = (if (outgoing) MessageStatus.SENT else MessageStatus.DELIVERED).name,
