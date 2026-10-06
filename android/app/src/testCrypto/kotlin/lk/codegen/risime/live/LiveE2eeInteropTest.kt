@@ -179,6 +179,26 @@ class LiveE2eeInteropTest {
             trusted = (r as ApiResult.Ok).value.keys.map { it.toString() }
             "${trusted.size} key(s)"
         }
+        // P0-1: the pilot shape. Before (re)installing, each user had an old pre-v1.7 app (no
+        // device_id) and an earlier install whose device id is no longer registered. Those census
+        // rows can't receive anything and must not block the 1:1 upgrade below (§12.1 rule).
+        check("stale census rows (pre-v1.7 socket, dead reinstall device id) recorded before registration") {
+            for ((id, tok) in listOf(aId to aTok, bId to bTok)) {
+                for (dev in listOf<String?>(null, UUID.randomUUID().toString())) {
+                    val old = PhoenixRealtimeClient(http, scope, object : RealtimeListener {
+                        override suspend fun cursor(): String? = null
+                        override suspend fun onEvents(events: List<Event>) = Unit
+                        override suspend fun onLive() = Unit
+                        override suspend fun onAuthFailed() = Unit
+                    })
+                    old.start(RealtimeSession(url, id, dev, dev?.let { "0.2.0-nightly.7" }) { tok })
+                    await(15_000, "stale ${dev ?: "no-device"} Live") { old.state.value.takeIf { it == ConnectionState.Live } }
+                    old.stop()
+                }
+            }
+            delay(50) // registration below is strictly later than these rows
+            "2 per user"
+        }
         val a1 = Dev(url, aId, aTok, java.util.UUID.randomUUID().toString(), trusted)
         val a2 = Dev(url, aId, aTok, java.util.UUID.randomUUID().toString(), trusted)
         val b1 = Dev(url, bId, bTok, java.util.UUID.randomUUID().toString(), trusted)
@@ -195,6 +215,11 @@ class LiveE2eeInteropTest {
         listOf(a1, a2, b1).forEach { it.start() }
         runBlocking { listOf(a1, a2, b1).forEach { it.live() } }
 
+        check("stale rows don't block: GET /mls/groups says ready with nothing missing") {
+            val g = a1.api.mlsGroup(conv)
+            ensure(g is ApiResult.Ok && g.value.ready && g.value.missing.isEmpty()) { "A–B readiness: $g" }
+            null
+        }
         check("A opens the DM → claim → epoch-0 commit + Welcome → B and A's tablet join") {
             val s = MlsUpgrader({ a1.mls.engine }, a1.mlsApi).ensure(conv, aId, bId)
             ensure(s is E2eeState.Encrypted) { "upgrade: $s" }
