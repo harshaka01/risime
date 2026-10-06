@@ -22,6 +22,8 @@ class PushManager(
     private val store: SessionStore,
     private val registrar: lk.codegen.risime.data.mls.DeviceRegistrar,
     private val mlsAvailable: () -> Boolean = { false },
+    /** False while an OIDC session is locked: no bearer, so a PUT would only get 401. */
+    private val canAuthenticate: suspend () -> Boolean = { true },
 ) {
     val available: Boolean
         get() = BuildConfig.PUSH_CONFIGURED && runCatching { FirebaseApp.getApps(context).isNotEmpty() }.getOrDefault(false)
@@ -38,14 +40,17 @@ class PushManager(
     }
 
     /** At sign-in (verified) and on every FCM token refresh. */
-    suspend fun register(token: String? = null, phoneVerified: Boolean = true) {
+    suspend fun register(token: String? = null, phoneVerified: Boolean = true): lk.codegen.risime.data.mls.Registration {
         val session = store.current()
-        if (session == null || !phoneVerified) return
+        if (session == null || !phoneVerified) return lk.codegen.risime.data.mls.Registration.Skipped
+        // Locked: the registration loop runs again right after the unlock (never a 401 here).
+        if (!canAuthenticate()) return lk.codegen.risime.data.mls.Registration.Failed("locked")
         val t = token ?: fcmToken()
         // Push needs Firebase; an MLS-capable app registers even without it (contract §10.1).
-        if (!shouldRegisterDevice(available, true, true, t) && !mlsAvailable()) return
+        if (!shouldRegisterDevice(available, true, true, t) && !mlsAvailable()) return lk.codegen.risime.data.mls.Registration.Skipped
         val r = registrar.register(t)
         if (r is lk.codegen.risime.data.mls.Registration.Failed) Log.w("RisiMe", "device registration failed: ${r.code}")
+        return r
     }
 
     /** At logout, while the token is still valid (idempotent on the server). */

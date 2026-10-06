@@ -35,6 +35,8 @@ import lk.codegen.risime.data.mls.MembershipExecutor
 import lk.codegen.risime.data.mls.MlsDbKey
 import lk.codegen.risime.data.mls.MlsEngineFactory
 import lk.codegen.risime.data.mls.Registration
+import lk.codegen.risime.data.mls.RegistrationRetry
+import lk.codegen.risime.data.mls.settled
 import lk.codegen.risime.data.mls.SupportKvSql
 import lk.codegen.risime.data.mls.MlsApi
 import lk.codegen.risime.data.mls.MlsEngine
@@ -305,14 +307,18 @@ class AppContainer(
 
     /**
      * Load the MLS core if this build has it and the server offers attestation keys (E2EE on), then
-     * register with the MLS key (→ attestation → key packages). Otherwise nothing changes.
+     * register with the MLS key (→ attestation → key packages). Returns null when MLS doesn't apply
+     * (no core, E2EE off: register for push instead), else whether the device is registered.
      */
-    suspend fun activateMls() {
-        if (mlsEngine != null || !BuildConfig.CRYPTO_AVAILABLE) return
-        val session = sessionStore.current()?.takeIf { it.user.phoneVerified } ?: return
-        val factory = MlsEngineFactory.get() ?: return
-        val served = (api.attestationKeys() as? ApiResult.Ok)?.value?.keys.orEmpty()
-        if (served.isEmpty()) return // mls_unavailable / no key: E2EE is off
+    suspend fun activateMls(): Boolean? {
+        if (mlsEngine != null) return true
+        if (!BuildConfig.CRYPTO_AVAILABLE) return null
+        val session = sessionStore.current()?.takeIf { it.user.phoneVerified } ?: return false
+        val factory = MlsEngineFactory.get() ?: return null
+        val keys = api.attestationKeys()
+        if (keys !is ApiResult.Ok) return if (keys is ApiResult.Error && keys.httpStatus in 400..499) null else false
+        val served = keys.value.keys
+        if (served.isEmpty()) return null // mls_unavailable / no key: E2EE is off
         val pinned = BuildConfig.MLS_PINNED_KEYS.split(';').map { it.trim() }.filter { it.isNotEmpty() }
         val trusted = pinned + served.map { it.toString() }
         val engine = runCatching {
@@ -323,19 +329,40 @@ class AppContainer(
             )
         }.getOrElse {
             Log.w("RisiMe", "MLS core unavailable: ${it.javaClass.simpleName}: ${it.message}")
-            return
+            return null
         }
         mlsEngine = engine
-        when (val r = deviceRegistrar.register(runCatching { push.currentToken() }.getOrNull())) {
-            is Registration.Mls -> Log.i("RisiMe", "MLS device registered, ${r.keyPackages} key packages")
+        return when (val r = deviceRegistrar.register(runCatching { push.currentToken() }.getOrNull())) {
+            is Registration.Mls -> {
+                Log.i("RisiMe", "MLS device registered, ${r.keyPackages} key packages")
+                true
+            }
+            Registration.MlsUnavailable -> {
+                mlsEngine = null // the server turned it down: stay a v1.6 client (pushed-only registration done)
+                null
+            }
             else -> {
-                Log.i("RisiMe", "MLS not active: $r")
-                mlsEngine = null // the server turned it down: stay a v1.6 client
+                Log.i("RisiMe", "MLS registration failed, will retry: $r")
+                mlsEngine = null
+                false
             }
         }
     }
 
-    val push by lazy { PushManager(context, api, sessionStore, deviceRegistrar) { mlsEngine != null } }
+    /** One registration attempt: MLS when it applies, else push-only. True when nothing is left to retry. */
+    private suspend fun registerDeviceOnce(): Boolean = when (activateMls()) {
+        true -> true
+        false -> false
+        null -> push.register().settled()
+    }
+
+    val push by lazy {
+        PushManager(context, api, sessionStore, deviceRegistrar, { mlsEngine != null }, canAuthenticate = { canAuthenticate() })
+    }
+
+    /** A bearer exists: a dev token, or an unlocked OIDC session (a locked one sends no token → 401). */
+    private suspend fun canAuthenticate(): Boolean =
+        sessionStore.current()?.let { it.kind == AuthKind.DEV || auth.unlocked.value } ?: false
 
     init {
         // E2EE: try once per signed-in, verified session that can authenticate. An OIDC session is
@@ -344,8 +371,15 @@ class AppContainer(
         scope.launch {
             combine(sessionStore.session, auth.unlocked) { s, unlocked ->
                 s?.takeIf { it.user.phoneVerified && (it.kind == AuthKind.DEV || unlocked) }?.user?.id
-            }.distinctUntilChanged().collect { id ->
-                if (id == null) mlsEngine = null else runCatching { activateMls() }
+            }.distinctUntilChanged().collectLatest { id ->
+                if (id == null) {
+                    mlsEngine = null
+                    return@collectLatest
+                }
+                // Device registration (MLS, else push) until it succeeds, with backoff; again after
+                // every unlock / sign-in (this restarts). A 401 is retried after a token refresh by
+                // ApiClient; it never signs out or wipes.
+                RegistrationRetry.untilDone { registerDeviceOnce() }
             }
         }
     }
@@ -472,12 +506,7 @@ class AppContainer(
                 watchList(friends, peer?.takeIf { o -> friends.any { it.equals(o, ignoreCase = true) } })
             }.distinctUntilChanged().collect { realtime.setWatch(it) }
         }
-        // §8.1: register this install for push once signed in and verified (no-op without Firebase).
-        scope.launch {
-            sessionStore.session.map { s -> s?.takeIf { it.user.phoneVerified }?.user?.id }.distinctUntilChanged().collect { id ->
-                if (id != null) push.register()
-            }
-        }
+        // §8.1: push registration is part of the device registration loop above (after unlock).
         // §9.3: refetch GET /friends after every (re)join and on `friend` signals, debounced.
         scope.launch {
             realtime.state.collect { if (it == ConnectionState.Live) requestFriendsRefresh() }
