@@ -80,6 +80,9 @@ interface RealtimeClient {
 
     suspend fun sendMessage(msg: MsgSend): PushResult<MsgSendReply>
 
+    /** §11.2 plaintext reaction: msg:send with `reaction` instead of `body`. */
+    suspend fun sendReaction(msg: lk.codegen.risime.net.MsgSendReaction): PushResult<MsgSendReply>
+
     /** §10.3 encrypted msg:send (no body). */
     suspend fun sendEncrypted(msg: lk.codegen.risime.net.MsgSendE2ee): PushResult<MsgSendReply>
 

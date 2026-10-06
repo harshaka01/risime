@@ -93,6 +93,11 @@ class PhoenixRealtimeClient(
             ?.map { ProtocolJson.decodeFromJsonElement<MsgSendReply>(it) }
             ?: PushResult.Unavailable
 
+    override suspend fun sendReaction(msg: lk.codegen.risime.net.MsgSendReaction): PushResult<MsgSendReply> =
+        liveConnection()?.push("msg:send", ProtocolJson.encodeToJsonElement(msg))
+            ?.map { ProtocolJson.decodeFromJsonElement<MsgSendReply>(it) }
+            ?: PushResult.Unavailable
+
     override suspend fun sendEncrypted(msg: lk.codegen.risime.net.MsgSendE2ee): PushResult<MsgSendReply> =
         liveConnection()?.push("msg:send", ProtocolJson.encodeToJsonElement(msg))
             ?.map { ProtocolJson.decodeFromJsonElement<MsgSendReply>(it) }

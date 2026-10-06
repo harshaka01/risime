@@ -245,6 +245,7 @@ class AppContainer(context: Context) {
         mls = mlsPipeline,
         mlsEngine = { mlsEngine },
         catchUp = { conv -> catchUpCommits(conv) },
+        reactionsDao = db.reactions(),
     )
 
     val realtime: RealtimeClient = PhoenixRealtimeClient(
@@ -565,6 +566,7 @@ class AppContainer(context: Context) {
         db.wipe().seenEvents()
         db.wipe().mlsKv()
         db.wipe().mlsPending()
+        db.wipe().reactions()
         mlsEngine = null
         mlsDbKey.destroy()
     }

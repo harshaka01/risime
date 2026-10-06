@@ -56,7 +56,13 @@ class ChatEngine(
     /** §10.4: fetch missing commits for a conversation (stale_epoch / e2ee_required). */
     private val catchUp: suspend (conversationId: String) -> Unit = {},
     private val staleEpochRetries: Int = 3,
+    /** §11.2 reaction state (null in tests that don't cover reactions). */
+    private val reactionsDao: lk.codegen.risime.data.db.ReactionDao? = null,
+    private val reactionDebounceMs: Long = 500,
 ) : RealtimeListener {
+    private val reactionStore = reactionsDao?.let { ReactionStore(it, clock) }
+    private val reactionLock = Mutex()
+
 
     private val outboxLock = Mutex()
     private val ackLock = Mutex()
@@ -77,6 +83,12 @@ class ChatEngine(
                     Event.KIND_MESSAGE -> runCatching { e.messageData() }.getOrNull()?.let { md ->
                         if (md.encrypted) applyMls(me, e) else md.body?.let { applyMessage(me, md, it) } ?: false
                     } ?: false
+                    Event.KIND_REACTION -> {
+                        runCatching { e.reaction() }.getOrNull()?.let { r ->
+                            applyReaction(r.conversationId, r.target, r.from, r.emoji, r.op, r.serverTs, r.messageId, r.clientMsgId)
+                        }
+                        false
+                    }
                     Event.KIND_MLS_COMMIT, Event.KIND_MLS_WELCOME, Event.KIND_MLS_MEMBERSHIP ->
                         runCatching { applyMls(me, e) }.getOrDefault(false)
                     Event.KIND_STATUS -> {
@@ -125,6 +137,9 @@ class ChatEngine(
         while (i < results.size) {
             val r = results[i++]
             if (r is MlsResult.Plaintext) incoming = applyMessage(me, r.message, r.body) || incoming
+            if (r is MlsResult.Reaction) {
+                applyReaction(r.message.conversationId, r.target, r.message.from, r.emoji, r.op, r.message.serverTs, r.message.messageId, r.message.clientMsgId)
+            }
             handle(r)?.let { conv -> results += pipeline.replay(conv) }
         }
         return incoming
@@ -200,28 +215,99 @@ class ChatEngine(
      * advances). stale_epoch → catch up, re-encrypt with the same client_msg_id, up to
      * [staleEpochRetries] times, then back off; e2ee_required → catch up and encrypt (never FAILED).
      */
-    private suspend fun send(m: MessageEntity): PushResult<lk.codegen.risime.net.MsgSendReply> {
+    private suspend fun send(m: MessageEntity): PushResult<lk.codegen.risime.net.MsgSendReply> =
+        sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { lk.codegen.risime.data.mls.MlsPayload.text(m.body) }) {
+            realtime().sendMessage(MsgSend(m.clientMsgId, m.to, m.body, isoMillis(m.localTs)))
+        }
+
+    /** e2ee when the conversation has a group (envelope encrypted at send time), else [plain]; shared retry loops. */
+    private suspend fun sendPayload(
+        conv: String,
+        to: String,
+        clientMsgId: String,
+        localTs: Long,
+        envelope: () -> ByteArray,
+        plain: suspend () -> PushResult<lk.codegen.risime.net.MsgSendReply>,
+    ): PushResult<lk.codegen.risime.net.MsgSendReply> {
         var attempt = 0
         while (true) {
             val engine = mlsEngine()
-            val group = engine?.group(m.conversationId)
+            val group = engine?.group(conv)
             val r = if (engine != null && group != null) {
-                val ct = tx.run { engine.encrypt(m.conversationId, lk.codegen.risime.data.mls.MlsPayload.text(m.body)) }
+                val ct = tx.run { engine.encrypt(conv, envelope()) }
                 realtime().sendEncrypted(
-                    MsgSendE2ee(m.clientMsgId, m.to, java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(m.localTs)),
+                    MsgSendE2ee(clientMsgId, to, java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(localTs)),
                 )
             } else {
-                realtime().sendMessage(MsgSend(m.clientMsgId, m.to, m.body, isoMillis(m.localTs)))
+                plain()
             }
             val reason = (r as? PushResult.Rejected)?.reason
             if (reason != AuthErrors.STALE_EPOCH && reason != AuthErrors.E2EE_REQUIRED) return r
             if (attempt++ >= staleEpochRetries) return PushResult.Rejected(RETRY_LATER)
-            catchUp(m.conversationId)
-            if (reason == AuthErrors.E2EE_REQUIRED && mlsEngine()?.group(m.conversationId) == null) return PushResult.Rejected(RETRY_LATER)
+            catchUp(conv)
+            if (reason == AuthErrors.E2EE_REQUIRED && mlsEngine()?.group(conv) == null) return PushResult.Rejected(RETRY_LATER)
         }
     }
 
-    suspend fun flushOutbox(): Unit = outboxLock.withLock {
+    // ---- Reactions (§11.2) ----
+
+    /**
+     * My tap: shown at once (pending), sent after [reactionDebounceMs] if nothing changed, as the
+     * final state only. Only on messages that have a server message_id.
+     */
+    suspend fun react(peerId: String, targetMessageId: String, emoji: String, op: String) {
+        val store = reactionStore ?: return
+        val me = meId() ?: return
+        val conv = dmConversationId(me, peerId)
+        val row = store.tap(conv, targetMessageId, me, emoji, op)
+        scope.launch {
+            delay(reactionDebounceMs)
+            val cur = reactionsDao?.get(conv, targetMessageId, me, emoji)
+            if (cur != null && cur.localTs == row.localTs) flushReactions(debounced = false)
+        }
+    }
+
+    private suspend fun flushReactions(debounced: Boolean = true): Unit = reactionLock.withLock {
+        val store = reactionStore ?: return@withLock
+        val dao = reactionsDao ?: return@withLock
+        val me = meId() ?: return@withLock
+        for (r0 in dao.pending()) {
+            if (debounced && clock() - r0.localTs < reactionDebounceMs) continue // its own timer sends it
+            if (!store.needsSend(r0)) { store.settleNoSend(r0); continue }
+            val r = store.assignId(r0, newClientMsgId)
+            val peer = conversationPeer(r.conversationId, me) ?: continue
+            val body = lk.codegen.risime.net.ReactionBody(r.targetMessageId, r.emoji, r.op)
+            val res = sendPayload(r.conversationId, peer, r.pendingClientMsgId!!, r.localTs, { lk.codegen.risime.data.mls.MlsPayload.reaction(body.target, body.emoji, body.op) }) {
+                realtime().sendReaction(lk.codegen.risime.net.MsgSendReaction(r.pendingClientMsgId, peer, body, isoMillis(r.localTs)))
+            }
+            when (res) {
+                is PushResult.Ok -> store.confirmOwn(r, res.value.serverTs, res.value.messageId)
+                is PushResult.Rejected -> if (res.reason == "rate_limited" || res.reason == RETRY_LATER) {
+                    scope.launch { delay(rateLimitRetryMs); flushReactions() }
+                    return@withLock
+                } else {
+                    store.revert(r) // unknown_target, invalid_emoji, not_friends, bad_request, …
+                }
+                PushResult.Unavailable -> return@withLock // retried on the next onLive()
+            }
+        }
+    }
+
+    private fun conversationPeer(conv: String, me: String): String? {
+        val ids = conv.removePrefix("dm:").split('_')
+        return ids.firstOrNull { !it.equals(me, true) } ?: ids.firstOrNull()
+    }
+
+    private suspend fun applyReaction(conv: String, target: String, reactor: String, emoji: String, op: String, ts: String, messageId: String, clientMsgId: String?) {
+        reactionStore?.applyConfirmed(conv, target, reactor, emoji, op, ts, messageId, clientMsgId)
+    }
+
+    suspend fun flushOutbox() {
+        flushMessages()
+        flushReactions()
+    }
+
+    private suspend fun flushMessages(): Unit = outboxLock.withLock {
         for (m in messages.pendingOutbox()) {
             when (val r = send(m)) {
                 is PushResult.Ok -> {

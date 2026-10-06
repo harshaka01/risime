@@ -102,3 +102,31 @@ data class MlsPendingEntity(
     /** The whole Event JSON, re-applied through the normal pipeline. */
     @ColumnInfo(name = "event_json") val eventJson: String,
 )
+
+/**
+ * v4 (§11.2): reaction state per (conversation, target message, reactor user, emoji). [op] is what
+ * the UI shows (my pending tap, else the confirmed op); confirmed_* is the latest op from the
+ * server by (server_ts, message_id), which decides between devices.
+ */
+@Entity(
+    tableName = "reactions",
+    primaryKeys = ["conversation_id", "target_message_id", "reactor_user_id", "emoji"],
+    indices = [Index(value = ["conversation_id", "target_message_id"]), Index("pending_client_msg_id")],
+)
+data class ReactionEntity(
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    @ColumnInfo(name = "target_message_id") val targetMessageId: String,
+    @ColumnInfo(name = "reactor_user_id") val reactorUserId: String,
+    val emoji: String,
+    /** "add" or "remove" as displayed. */
+    val op: String,
+    @ColumnInfo(name = "confirmed_op") val confirmedOp: String?,
+    @ColumnInfo(name = "confirmed_ts") val confirmedTs: String?,
+    @ColumnInfo(name = "confirmed_message_id") val confirmedMessageId: String?,
+    /** My own tap not yet confirmed by the server. */
+    val pending: Boolean,
+    /** Assigned at the first send attempt; a retry reuses it (§11.2). */
+    @ColumnInfo(name = "pending_client_msg_id") val pendingClientMsgId: String?,
+    /** When this row last changed locally (debounce and notifications). */
+    @ColumnInfo(name = "local_ts") val localTs: Long,
+)

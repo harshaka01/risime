@@ -131,6 +131,17 @@ class FakeRealtime : RealtimeClient {
         return sendReplies(msg)
     }
 
+    val sentReactions = mutableListOf<lk.codegen.risime.net.MsgSendReaction>()
+    var reactionReplies: (lk.codegen.risime.net.MsgSendReaction) -> PushResult<MsgSendReply> = { m ->
+        PushResult.Ok(MsgSendReply("rid-${m.clientMsgId}", "dm:x", "2026-10-06T08:20:00.000Z"))
+    }
+
+    override suspend fun sendReaction(msg: lk.codegen.risime.net.MsgSendReaction): PushResult<MsgSendReply> {
+        if (!connected) return PushResult.Unavailable
+        sentReactions += msg
+        return reactionReplies(msg)
+    }
+
     val sentEncrypted = mutableListOf<lk.codegen.risime.net.MsgSendE2ee>()
     var encryptedReplies: (lk.codegen.risime.net.MsgSendE2ee) -> PushResult<MsgSendReply> = { m ->
         PushResult.Ok(MsgSendReply("mid-${m.clientMsgId}", "dm:x", "2026-10-06T08:15:30.456Z"))
@@ -163,4 +174,16 @@ class FakeRealtime : RealtimeClient {
         typings += to to typing
         return PushResult.Ok(Unit)
     }
+}
+
+/** In-memory ReactionDao with the Room queries' semantics. */
+class FakeReactionDao : lk.codegen.risime.data.db.ReactionDao {
+    val rows = linkedMapOf<List<String>, lk.codegen.risime.data.db.ReactionEntity>()
+    private fun k(c: String, t: String, r: String, e: String) = listOf(c, t, r, e)
+    override suspend fun get(conv: String, target: String, reactor: String, emoji: String) = rows[k(conv, target, reactor, emoji)]
+    override suspend fun upsert(r: lk.codegen.risime.data.db.ReactionEntity) { rows[k(r.conversationId, r.targetMessageId, r.reactorUserId, r.emoji)] = r }
+    override fun forConversation(conv: String) = kotlinx.coroutines.flow.flowOf(rows.values.filter { it.conversationId == conv })
+    override suspend fun pending() = rows.values.filter { it.pending }.sortedBy { it.localTs }
+    override suspend fun isReaction(messageId: String) = rows.values.count { it.confirmedMessageId == messageId }
+    override suspend fun addsSince(since: Long) = rows.values.filter { it.op == "add" && !it.pending && it.localTs > since }
 }

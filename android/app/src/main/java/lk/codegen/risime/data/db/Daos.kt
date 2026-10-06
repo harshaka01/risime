@@ -117,6 +117,32 @@ interface WipeDao {
 
     @Query("DELETE FROM mls_pending")
     suspend fun mlsPending()
+
+    @Query("DELETE FROM reactions")
+    suspend fun reactions()
+}
+
+@Dao
+interface ReactionDao {
+    @Query("SELECT * FROM reactions WHERE conversation_id = :conv AND target_message_id = :target AND reactor_user_id = :reactor AND emoji = :emoji")
+    suspend fun get(conv: String, target: String, reactor: String, emoji: String): ReactionEntity?
+
+    @Upsert
+    suspend fun upsert(r: ReactionEntity)
+
+    @Query("SELECT * FROM reactions WHERE conversation_id = :conv")
+    fun forConversation(conv: String): Flow<List<ReactionEntity>>
+
+    @Query("SELECT * FROM reactions WHERE pending = 1 ORDER BY local_ts ASC")
+    suspend fun pending(): List<ReactionEntity>
+
+    /** §11.2: a reaction's own message_id (reactions to reactions are ignored). */
+    @Query("SELECT COUNT(*) FROM reactions WHERE confirmed_message_id = :messageId")
+    suspend fun isReaction(messageId: String): Int
+
+    /** Notifications: effective adds that changed after [since] (filtered to my messages by the caller). */
+    @Query("SELECT * FROM reactions WHERE op = 'add' AND pending = 0 AND local_ts > :since")
+    suspend fun addsSince(since: Long): List<ReactionEntity>
 }
 
 @Dao
