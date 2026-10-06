@@ -287,6 +287,11 @@ These are proposals only. **PROTOCOL.md is not changed here**; the real text goe
   (`max_past_epochs`, for example 3) for late application messages.
 
 ## Open questions for Harsha
+
+**Answered 2026-10-06:** 1–2 by §5a (the official NDK works; no community NDK needed). 3–6 in
+decision 032: server attestation now and QR later; per-device members; no history by default;
+at-rest encryption later.
+
 1. **NDK download (≈700 MB to `~/Android/Sdk/ndk/`):** OK to unpack the official
    `android-ndk-r30-linux.zip` on spark2 for option B? There is no sudo involved.
    (`sdkmanager` itself no longer runs on aarch64; see §5.)
