@@ -47,6 +47,11 @@ class ContractExamplesTest {
         "error_invalid_code_attempts.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
         "error_already_verified.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
         "error_sms_unavailable.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
+        // v1.5 (push): parse-only placeholders added by root with the contract merge; the android
+        // role replaces them with typed decoders when it implements §8.
+        "device_put.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "push_inbox.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_invalid_device.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
     )
 
     @Test

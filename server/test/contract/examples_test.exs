@@ -22,6 +22,9 @@ defmodule RisiMe.ContractExamplesTest do
               phone_verify_request_reply.json phone_verify_confirm.json
               error_phone_unverified.json error_invalid_code_attempts.json
               error_already_verified.json error_sms_unavailable.json)
+  # v1.5 (push): parse-only placeholders added by root with the contract merge; the server role
+  # replaces them with real checks when it implements §8.
+  @pending_v1_5 ~w(device_put.json push_inbox.json error_invalid_device.json)
 
   # v1.4 (SMS phone verification): parse-only placeholders added by root with the contract
   # merge; the server role replaces them with real checks when it implements §7.
@@ -57,7 +60,12 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
+    assert @files -- (@checked ++ @pending_v1_5) == [],
+           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_5))}"
+  end
+
+  test "v1.5 examples are valid JSON objects (placeholder)" do
+    for name <- @pending_v1_5, do: assert(is_map(example(name)))
   end
 
   setup do

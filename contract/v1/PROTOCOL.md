@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.4 (Release 0.2)
+# RisiMe Wire Protocol — v1.5 (Release 0.2)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -276,7 +276,38 @@ Decision 020. Applies only when `GET /auth/config` reports `"phone_verification"
 - When verification is reset (phone change or re-bind), the server **closes that user's open
   sockets**.
 
+## 8. Push notifications (v1.5)
+Decision 026. Data-only FCM wake-ups; the content is always fetched over the channel.
+
+### 8.0 Principles
+- **Push is only a wake-up.** Pushes carry **no message content, sender name or phone**: no
+  `body`, no `from`. The app wakes, syncs its inbox over the normal channel, and builds the
+  notification **locally**. This keeps Google out of the content, and it stays correct after E2EE
+  (0.3), when the server can't read bodies anyway.
+- The server sends a push only when the recipient has **no live inbox channel**. Pushes for one
+  user are coalesced: at most one every 10 s while events keep arriving.
+
+### 8.1 REST
+- **`PUT /api/v1/me/devices/{device_id}`** `{"platform": "android", "push_token": "<FCM registration token>", "app_version": "0.2.0-nightly.5"}` → `204`.
+  - `device_id` is a client-generated UUID, stable per app install. Calling it again updates the
+    token (FCM rotates tokens), so it's idempotent.
+  - `422 invalid_device` for a bad UUID, an unknown platform, or an empty token.
+  - At most 10 devices per user; the oldest is evicted.
+- **`DELETE /api/v1/me/devices/{device_id}`** → `204`. Clients call it at logout. It is
+  idempotent.
+- `POST /auth/logout` with a dev token also removes the devices registered with that token.
+
+### 8.2 Push payload (FCM data message, high priority)
+`{"type": "inbox", "v": "1"}`, and nothing else. Clients ignore unknown `type`s.
+FCM `collapse_key` is `inbox`, and the TTL is 1 h.
+
+### 8.3 Server housekeeping
+- An FCM `UNREGISTERED` or `INVALID_ARGUMENT` response for a token deletes that device.
+- Devices unseen (no `PUT`) for 60 days are pruned (Oban).
+
 ## Changelog
+- **v1.5** (2026-10-06): push notifications (§8). Adds `PUT`/`DELETE /me/devices/{id}` and the
+  data-only FCM payload `{"type":"inbox","v":"1"}`. An additive change.
 - **v1.4** (2026-10-06): one-time SMS phone verification (§7). Adds `phone_verification` in
   `/auth/config`, `User.phone_verified` (absent means true), `403 phone_unverified`,
   `/me/phone/verify/request|confirm`, `Retry-After` on every 429, and `phone_unverified` on
