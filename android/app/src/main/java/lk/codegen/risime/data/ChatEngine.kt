@@ -206,7 +206,7 @@ class ChatEngine(
             val engine = mlsEngine()
             val group = engine?.group(m.conversationId)
             val r = if (engine != null && group != null) {
-                val ct = tx.run { engine.encrypt(m.conversationId, m.body.toByteArray()) }
+                val ct = tx.run { engine.encrypt(m.conversationId, lk.codegen.risime.data.mls.MlsPayload.text(m.body)) }
                 realtime().sendEncrypted(
                     MsgSendE2ee(m.clientMsgId, m.to, java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(m.localTs)),
                 )

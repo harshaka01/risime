@@ -116,7 +116,13 @@ class MlsPipeline(
                 log("sender mismatch on ${msg.messageId}")
                 MlsResult.Dropped("sender mismatch")
             } else {
-                MlsResult.Plaintext(msg, d.plaintext.decodeToString())
+                when (val p = MlsPayload.decode(d.plaintext)) {
+                    is MlsPayload.Decoded.Text -> MlsResult.Plaintext(msg, p.body)
+                    is MlsPayload.Decoded.Ignored -> {
+                        log("ignored payload type ${p.type} in ${msg.messageId}")
+                        MlsResult.Ignored
+                    }
+                }
             }
         } catch (ex: MlsDecryptException) {
             log("undecryptable ${msg.messageId}: ${ex.message}")

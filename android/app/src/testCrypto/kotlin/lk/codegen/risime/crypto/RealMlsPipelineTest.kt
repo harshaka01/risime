@@ -18,6 +18,7 @@ import lk.codegen.risime.data.TransactionRunner
 import lk.codegen.risime.data.mls.CommitOutcome
 import lk.codegen.risime.data.mls.FakeMlsPendingDao
 import lk.codegen.risime.data.mls.MlsDecryptException
+import lk.codegen.risime.data.mls.MlsPayload
 import lk.codegen.risime.data.mls.MlsPipeline
 import lk.codegen.risime.net.Event
 import lk.codegen.risime.net.MsgSendReply
@@ -105,16 +106,30 @@ class RealMlsPipelineTest {
         appA2.chat.onEvents(listOf(welcomeEv(welcome, 1, listOf("b-phone", "a-tablet"))))
         assertEquals(1L, b.engine.group(conv)!!.epoch)
 
-        appB.chat.onEvents(listOf(msgEv(a, a.engine.encrypt(conv, "hello from A".toByteArray()), 1)))
+        appB.chat.onEvents(listOf(msgEv(a, a.engine.encrypt(conv, MlsPayload.text("hello from A")), 1)))
         assertEquals(listOf("hello from A"), appB.bodies())
         // A's other device sees A's message as its own (outgoing).
-        val m2 = a.engine.encrypt(conv, "to everyone".toByteArray())
+        val m2 = a.engine.encrypt(conv, MlsPayload.text("to everyone"))
         appA2.chat.onEvents(listOf(msgEv(a, m2, 1)))
         assertEquals(listOf(true), appA2.messages.rows.values.map { it.outgoing })
 
         val reply = b.engine.encrypt(conv, "hi A".toByteArray())
         assertArrayEquals("hi A".toByteArray(), a.engine.decrypt(conv, 1, reply).plaintext)
         assertEquals(b.ref, a.engine.decrypt(conv, 1, b.engine.encrypt(conv, "x".toByteArray())).sender)
+    }
+
+    @Test fun envelopeTypesThroughRealMls() = runTest {
+        val welcome = createGroup()
+        val appB = App(b, this)
+        appB.chat.onEvents(listOf(welcomeEv(welcome, 1, listOf("b-phone"))))
+        appB.chat.onEvents(
+            listOf(
+                msgEv(a, a.engine.encrypt(conv, """{"v":1,"type":"reaction","emoji":"+1"}""".toByteArray()), 1), // future type: nothing visible
+                msgEv(a, a.engine.encrypt(conv, "legacy raw text".toByteArray()), 1), // pre-envelope sender
+                msgEv(a, a.engine.encrypt(conv, MlsPayload.text("enveloped")), 1),
+            ),
+        )
+        assertEquals(listOf("legacy raw text", "enveloped"), appB.bodies())
     }
 
     @Test fun messageAheadOfItsCommitIsParkedThenReplayed() = runTest {
@@ -124,7 +139,7 @@ class RealMlsPipelineTest {
         // A removes the tablet (epoch 1 → 2) and immediately sends at epoch 2.
         val pc = a.engine.changeMembers(conv, emptyList(), listOf(a2.ref))
         a.engine.commitAccepted(conv)
-        val ct = a.engine.encrypt(conv, "after the change".toByteArray())
+        val ct = a.engine.encrypt(conv, MlsPayload.text("after the change"))
         // B gets the message first: parked; then the commit: applied + replayed.
         appB.chat.onEvents(listOf(msgEv(a, ct, 2)))
         assertTrue(appB.bodies().isEmpty())
@@ -157,7 +172,7 @@ class RealMlsPipelineTest {
         assertNull(b.engine.group(conv))
         appB.chat.onEvents(listOf(welcomeEv(welcome, 1, listOf("b-phone"))))
         // A real message from A's phone, but the event claims the tablet: dropped.
-        appB.chat.onEvents(listOf(msgEv(a, a.engine.encrypt(conv, "forged".toByteArray()), 1, fromDev = "a-tablet")))
+        appB.chat.onEvents(listOf(msgEv(a, a.engine.encrypt(conv, MlsPayload.text("forged")), 1, fromDev = "a-tablet")))
         assertTrue(appB.messages.rows.isEmpty())
         // A's own commit event is skipped by A (it merged on the 200).
         val appA = App(a, this)
@@ -200,9 +215,9 @@ class RealMlsPipelineTest {
         val sent = appB.realtime.sentEncrypted
         assertEquals(listOf(1L, 2L), sent.map { it.epoch })
         assertEquals(setOf(id), sent.map { it.clientMsgId }.toSet())
-        // A reads the re-encrypted one.
+        // A reads the re-encrypted one: the envelope, not raw text.
         val ct = Base64.getDecoder().decode(sent.last().ciphertext)
-        assertArrayEquals("late".toByteArray(), a.engine.decrypt(conv, 1, ct).plaintext)
+        assertEquals(MlsPayload.Decoded.Text("late"), MlsPayload.decode(a.engine.decrypt(conv, 1, ct).plaintext))
         assertEquals("SENT", appB.messages.rows[id]!!.status)
     }
 }
