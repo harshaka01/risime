@@ -1,0 +1,2 @@
+New: end-to-end encrypted 1:1 voice calls. For now calls connect only when both phones can reach each other directly (e.g. the same Wi-Fi).
+Always update over the old app; never uninstall.
