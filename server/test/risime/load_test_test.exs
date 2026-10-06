@@ -17,7 +17,13 @@ defmodule RisiMe.LoadTestTest do
     [a, b, _] = users
     assert RisiMe.Social.friends?(a.id, b.id)
 
+    # --e2ee: MLS devices and e2ee groups for the ring, removed by cleanup.
+    [ea | _] = LoadTest.prepare_e2ee(users)
+    assert is_binary(ea.device_id)
+    assert RisiMe.MLS.e2ee?(RisiMe.Messaging.conversation_id(a.id, b.id))
+
     assert LoadTest.cleanup() == {3, 3}
+    refute RisiMe.MLS.e2ee?(RisiMe.Messaging.conversation_id(a.id, b.id))
     for u <- users, do: refute(Accounts.get_user(u.id))
   end
 

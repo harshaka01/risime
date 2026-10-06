@@ -75,6 +75,20 @@ defmodule RisiMe.LoadTest do
 
   @doc "Deletes every load-test user and allowlist entry (the `+999` prefix), from any run."
   def cleanup do
+    # e2ee groups of load-test users (their device rows go with the users).
+    load_ids =
+      MapSet.new(Repo.all(from u in User, where: like(u.phone, ^"#{@phone_prefix}%"), select: u.id))
+
+    convs =
+      for conv <- Repo.all(from g in "mls_groups", select: g.conversation_id),
+          {:ok, members} <- [RisiMe.MLS.members(conv)],
+          Enum.any?(members, &MapSet.member?(load_ids, &1)),
+          do: conv
+
+    Repo.delete_all(from g in "mls_group_devices", where: g.conversation_id in ^convs)
+    Repo.delete_all(from g in "mls_commits", where: g.conversation_id in ^convs)
+    Repo.delete_all(from g in "mls_groups", where: g.conversation_id in ^convs)
+
     {users, _} = Repo.delete_all(from u in User, where: like(u.phone, ^"#{@phone_prefix}%"))
 
     {entries, _} =
@@ -107,6 +121,7 @@ defmodule RisiMe.LoadTest do
           stats: stats,
           sends: sends,
           interval: opts[:interval_ms],
+          e2ee: opts[:e2ee] == true,
           deadline: deadline,
           parent: parent
         }
@@ -146,6 +161,7 @@ defmodule RisiMe.LoadTest do
     %URI{host: host, port: port} = cfg.uri
     {:ok, conn} = Mint.HTTP.connect(:http, host, port, protocols: [:http1])
     path = "/socket/websocket?vsn=2.0.0&token=" <> cfg.user.token
+    path = if cfg.user[:device_id], do: path <> "&device_id=" <> cfg.user.device_id, else: path
     {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, path, [])
     await_upgrade(conn, ref, nil, nil)
   end
@@ -263,6 +279,9 @@ defmodule RisiMe.LoadTest do
     end
   end
 
+  # e2ee: the sender's own copy (for its other devices) is skipped.
+  defp on_message(%{cfg: %{user: %{id: me}}} = state, %{"from" => me}), do: state
+
   defp on_message(state, %{"client_msg_id" => cmid, "message_id" => id}) do
     case :ets.take(state.cfg.sends, cmid) do
       [{^cmid, t0}] -> :ets.insert(state.cfg.stats, {:push, now_us() - t0})
@@ -301,7 +320,7 @@ defmodule RisiMe.LoadTest do
       ref,
       "inbox:" <> state.cfg.user.id,
       "msg:send",
-      %{client_msg_id: cmid, to: to, body: "load test message", client_ts: nil}
+      message_payload(state.cfg, cmid, to)
     ])
     |> Map.update!(:pending, &Map.put(&1, ref, {cmid, t0}))
     |> bump()
@@ -315,6 +334,72 @@ defmodule RisiMe.LoadTest do
     {old, live} = Enum.split_with(state.pending, fn {_, {_, t0}} -> t0 < cutoff end)
     for _ <- old, do: :ets.insert(state.cfg.stats, {:error, :reply_timeout})
     %{state | pending: Map.new(live)}
+  end
+
+  # Plaintext, or (--e2ee) opaque random ciphertext at the group's generation/epoch: the server
+  # can't tell, so this measures its real e2ee path (group lookup, larger payloads).
+  defp message_payload(%{e2ee: true}, cmid, to) do
+    %{
+      client_msg_id: cmid,
+      to: to,
+      ciphertext: Base.encode64(:crypto.strong_rand_bytes(160)),
+      generation: 1,
+      epoch: 1,
+      client_ts: nil
+    }
+  end
+
+  defp message_payload(_cfg, cmid, to),
+    do: %{client_msg_id: cmid, to: to, body: "load test message", client_ts: nil}
+
+  @doc """
+  `--e2ee`: gives every user an MLS device (fake key, fake attestation; the server never checks
+  either on the send path) and makes every friendship of the ring an e2ee group at epoch 1.
+  Returns the users with `:device_id`. Everything is deleted with the users.
+  """
+  def prepare_e2ee(users) do
+    now = DateTime.utc_now()
+
+    users =
+      for u <- users do
+        device_id = Ecto.UUID.generate()
+
+        Repo.insert!(%RisiMe.Devices.Device{
+          user_id: u.id,
+          device_id: device_id,
+          platform: "android",
+          mls_signature_key: :crypto.strong_rand_bytes(32),
+          mls_attestation: "loadtest",
+          mls_attested_at: now,
+          last_seen_at: now
+        })
+
+        Map.put(u, :device_id, device_id)
+      end
+
+    ids = users |> Enum.map(& &1.id) |> List.to_tuple()
+    devs = Map.new(users, &{&1.id, &1.device_id})
+    n = tuple_size(ids)
+    k = ring_size(n)
+
+    for i <- 0..(n - 1), j <- 1..k//1, k > 0 do
+      {a, b} = {elem(ids, i), elem(ids, rem(i + j, n))}
+      conv = RisiMe.Messaging.conversation_id(a, b)
+
+      Repo.insert_all(
+        "mls_groups",
+        [%{conversation_id: conv, generation: 1, epoch: 1, e2ee_since: now, updated_at: now}],
+        on_conflict: :nothing
+      )
+
+      Repo.insert_all(
+        "mls_group_devices",
+        for(u <- [a, b], do: %{conversation_id: conv, user_id: Ecto.UUID.dump!(u), device_id: Ecto.UUID.dump!(devs[u])}),
+        on_conflict: :nothing
+      )
+    end
+
+    users
   end
 
   defp send_frame(state, frame) do

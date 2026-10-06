@@ -2,9 +2,10 @@
 
 **READY** — 0.1 (S1–S7), the 0.2 night-1 items, contract **v1.3** (Keycloak sign-in),
 **v1.4** (one-time SMS phone verification), the **prod-mode pilot release** (decision 024) and
-**v1.5** (push wake-ups, decision 028) and **v1.6** (invites and friends, decision 030) are done.
+**v1.5** (push wake-ups, decision 028), **v1.6** (invites and friends, decision 030) and **v1.7**
+(E2EE routing with MLS, decision 034; **off until the attestation key exists**) are done.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(244 tests).
+(266 tests).
 
 ## 0.2 progress
 - [x] Version from the repo `VERSION` file: `Application.spec(:risime, :vsn)` matches it, and the
@@ -101,6 +102,29 @@ bin/risime start                             # foreground; under tmux or systemd
   - `/dev/mailbox` and unknown routes return a 404 JSON error; a bad body returns a 400 JSON error;
   - tokens show as `[FILTERED]` in the log;
   - SIGTERM shuts it down cleanly.
+
+### E2EE with MLS (v1.7, decision 034)
+- **Off on the pilot.** With no attestation key, every MLS endpoint answers
+  `503 mls_unavailable` and groups report `ready: false`; plaintext chat is unchanged. Don't
+  create the key until rollout.
+- **Turning it on (root, at rollout, after the required app update brings everyone to v1.7):**
+  1. `mix risime.attestation.gen` (or `bin/risime eval
+     'RisiMe.MLS.Attestation.generate("/home/harsha/risime-keys/attestation_ed25519.jwk")'`).
+     It writes `~/risime-keys/attestation_ed25519.jwk` with mode 600, refuses to overwrite, and
+     prints the kid. **Back the file up with the release keystore; never commit it.**
+  2. Restart the server. `ATTESTATION_KEY_FILE` defaults to that path.
+     `curl …/api/v1/mls/attestation_keys` should return one key.
+  3. Pin the public key (`x`, `kid`) in the app build.
+  4. **Rotation:** generate a new key at a new path, put the old public JWK into a file
+     `{"keys":[…]}` named by `ATTESTATION_PREVIOUS_KEYS`, point `ATTESTATION_KEY_FILE` at the new
+     key, and restart. Both keys are then published.
+- **Census:** the socket connect carries `device_id` and `app_version`. Pre-v1.7 apps count as
+  `legacy_app`: one instance per dev token, or per user for Keycloak tokens. A conversation is
+  ready only when every instance of both members seen in the last 30 days is MLS-capable.
+- **REST calling device:** commits need the `X-Device-Id` header; claims accept it to exclude the
+  caller.
+- **Load test:** `mix risime.loadtest --e2ee` runs the e2ee send path with opaque ciphertext. It
+  needs a server started with `ATTESTATION_KEY_FILE` pointing at a temp key.
 
 ### Invites and friends (v1.6, decision 030)
 - **Deploy:** `bin/risime eval "RisiMe.Release.migrate()"` runs Ecto, then CQL, then
@@ -280,6 +304,12 @@ Codes are never logged unless `OTP_DEV_LOG=true`.
   don't count. `docs/decisions/001-rate-limiter.md` explains the limiter.
 
 ## Known limits
+- **E2EE (v1.7):**
+  - `generation` is always 1, because group re-creation isn't specified yet.
+  - The optional PrivateMessage header check isn't done (the server doesn't parse MLS).
+  - The e2ee send path costs about 2–3× plaintext at p99 (a second inbox write plus a group
+    lookup); see decision 034.
+  - The MLS blobs in the contract examples are placeholders, until crypto supplies real ones.
 - **Invites and friends:**
   - The friend-request rate limit (30 per 24 h) is in memory and resets on restart. The invite
     limits are counted in Postgres.

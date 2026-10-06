@@ -7,6 +7,7 @@ defmodule Mix.Tasks.Risime.Loadtest do
       mix risime.loadtest [--url http://127.0.0.1:4100] [--users 200] [--duration 180]
                           [--interval 1500]
       mix risime.loadtest --cleanup   # delete leftover load-test users only
+      mix risime.loadtest --e2ee ...  # MLS devices + e2ee groups, random opaque ciphertext
 
   Never point it at the server Harsha tests on (:4000). Start a temporary one from this
   checkout (docs/decisions/006):
@@ -27,6 +28,7 @@ defmodule Mix.Tasks.Risime.Loadtest do
     duration: :integer,
     interval: :integer,
     cleanup: :boolean,
+    e2ee: :boolean,
     json: :string
   ]
 
@@ -57,12 +59,19 @@ defmodule Mix.Tasks.Risime.Loadtest do
     Mix.shell().info("creating #{n} throwaway users…")
     users = RisiMe.LoadTest.create_users(n)
     :ok = RisiMe.LoadTest.befriend_ring(users)
+    users = if opts[:e2ee], do: RisiMe.LoadTest.prepare_e2ee(users), else: users
 
     try do
       Mix.shell().info("running #{n} users for #{duration} s against #{url}, 1 msg/#{interval} ms each")
 
       report =
-        RisiMe.LoadTest.run(users, url: url, users: n, duration_s: duration, interval_ms: interval)
+        RisiMe.LoadTest.run(users,
+          url: url,
+          users: n,
+          duration_s: duration,
+          interval_ms: interval,
+          e2ee: opts[:e2ee] == true
+        )
 
       Mix.shell().info(inspect(report, pretty: true, limit: :infinity))
       if path = opts[:json], do: File.write!(path, Jason.encode!(report, pretty: true))
