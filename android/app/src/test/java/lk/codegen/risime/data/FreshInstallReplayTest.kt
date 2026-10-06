@@ -226,4 +226,17 @@ class FreshInstallReplayTest {
         assertEquals("m77", messages.rows[id]!!.messageId)
         assertTrue(realtime.acks.isEmpty())
     }
+
+    @Test fun aReplayOfAlreadySeenEventsStillStoresTheCursor() = runTest {
+        val e = engine()
+        // Applied once, then the cursor reset (the one-time replay): every event is already seen.
+        e.onEvents(dmInbox)
+        sync.last = null
+        assertNull(e.cursor())
+        e.onEvents(dmInbox)
+        assertEquals(dmInbox.last().eventId, sync.last)
+        // The next join resumes from it (`since: <id>`), no longer a fresh `since: null` replay.
+        assertEquals(dmInbox.last().eventId, e.cursor())
+        advanceUntilIdle()
+    }
 }

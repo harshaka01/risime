@@ -109,7 +109,12 @@ class ChatEngine(
                 else -> r
             }
             val applied = tx.run {
-                if (sync.seenCount(e.eventId) > 0) return@run false
+                if (sync.seenCount(e.eventId) > 0) {
+                    // Already applied (e.g. the one-time inbox replay): still advance the cursor to it,
+                    // or every reconnect would join with `since: null` again (P0 found by the upgrade gate).
+                    sync.setState(SyncStateEntity(0, e.eventId))
+                    return@run false
+                }
                 // Unknown kinds and undecodable data are skipped but still advance the cursor.
                 val incoming = if (!groupsEnabled() && isGroupEvent(e)) false else when (e.kind) {
                     Event.KIND_MESSAGE -> runCatching { e.messageData() }.getOrNull()?.let { md ->
