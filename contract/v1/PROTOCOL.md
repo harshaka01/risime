@@ -463,6 +463,13 @@ Decisions 012, 032 and 033.
   - Using a last-resort package weakens forward secrecy for that join; this is accepted.
 
 ### 10.2 Groups
+
+**Calling device (REST).** MLS REST calls identify the calling device with the header
+**`X-Device-Id: <device_id>`**. It is **required** on `POST /mls/groups/{id}/commit`, where it
+names `from_device` and is checked against group membership. It is **optional** on
+`POST /mls/key_packages/claim`, where it excludes the caller's own device from the result. The
+device must belong to the authenticated user; otherwise the call gets `403`.
+
 - **`POST /api/v1/mls/key_packages/claim`** `{"user_ids": ["uuid", …]}` →
   `{"devices": [{"user_id", "device_id", "mls": bool, "attestation": "<JWS>" | null, "key_package": "<b64>" | null}]}`
   - It's allowed for **friends and yourself**. For yourself, your other devices are returned,
@@ -580,7 +587,8 @@ Decisions 012, 032 and 033.
   `ATTESTATION_PREVIOUS_KEYS` lists the public keys still trusted during rotation.
 
 ## Changelog
-- **v1.7** (2026-10-06): E2EE with MLS (§10). Adds the device census, attestation, key
+- **v1.7** (2026-10-06): E2EE with MLS (§10). The calling device is identified by the
+  `X-Device-Id` header on MLS REST calls, a clarification added at implementation. Adds the device census, attestation, key
   packages, groups with epoch compare-and-set, ciphertext messages, the `mls_*` events and the
   readiness check. Additive: conversations upgrade only when every app instance is MLS-capable.
 - **v1.6** (2026-10-06): invites and friends (§9). Invite-only sign-up (with the allowlist kept),
