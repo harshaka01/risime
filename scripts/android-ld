@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Linker shim for Rust's *-linux-android targets on hosts where the NDK's clang can't run (spark2
+# is aarch64; NDK host tools are x86_64-only). rustc calls this like a clang driver; we translate
+# to rust-lld (shipped by rustup for this host) plus the official NDK's host-independent files:
+# the Bionic sysroot stubs, crtbegin_so/crtend_so, libunwind.a and the clang builtins.
+# docs/decisions/012 option B. Driven by scripts/build-rust-android, which sets:
+#   RISIME_NDK (NDK root), RISIME_ANDROID_API (min API), and passes -C link-arg=--risime-triple=<t>.
+set -euo pipefail
+: "${RISIME_NDK:?set RISIME_NDK}"; API="${RISIME_ANDROID_API:-26}"
+lld=( "$HOME"/.rustup/toolchains/*/lib/rustlib/*/bin/rust-lld ); LLD="${lld[0]}"
+[ -x "$LLD" ] || { echo "android-ld: rust-lld not found (rustup toolchain)" >&2; exit 1; }
+
+triple=""; args=()
+# rustc picks the "ld" flavour from this file's name (*-ld), so arguments arrive in GNU ld form and
+# pass straight through to lld. Clang-driver forms are still translated in case the flavour changes.
+for a in "$@"; do
+  case "$a" in
+    --risime-triple=*) triple="${a#--risime-triple=}" ;;
+    --risime-ld-rev=*) ;;                                           # cache-buster from build script
+    -Wl,*) IFS=, read -ra parts <<<"${a#-Wl,}"; args+=("${parts[@]}") ;;
+    -nodefaultlibs|-fuse-ld=*|--target=*|-m64|-fPIC) ;;            # clang-driver only
+    *) args+=("$a") ;;
+  esac
+done
+case "$triple" in
+  aarch64-linux-android) arch=aarch64 ;;
+  x86_64-linux-android)  arch=x86_64 ;;
+  *) echo "android-ld: missing/unsupported --risime-triple ('$triple')" >&2; exit 1 ;;
+esac
+
+TC="$RISIME_NDK/toolchains/llvm/prebuilt/linux-x86_64"
+SYS="$TC/sysroot"; LIB="$SYS/usr/lib/$triple/$API"
+CLANG="$(printf '%s\n' "$TC"/lib/clang/*/lib/linux | sort -V | tail -1)"
+BUILTINS="$CLANG/libclang_rt.builtins-$arch-android.a"
+for f in "$LIB/crtbegin_so.o" "$LIB/crtend_so.o" "$LIB/crtbegin_dynamic.o" "$LIB/crtend_android.o" "$LIB/libc.so" "$BUILTINS" "$CLANG/$arch/libunwind.a"; do
+  [ -e "$f" ] || { echo "android-ld: missing $f (NDK layout changed?)" >&2; exit 1; }
+done
+
+shared=0; out=""; soname=0; prev=""
+for a in "${args[@]}"; do
+  case "$a" in -shared) shared=1;; -soname|-soname=*|--soname|--soname=*|-h) soname=1;; esac
+  [ "$prev" = "-o" ] && out="$a"; prev="$a"
+done
+if [ "$shared" = 1 ]; then                                  # JNI library
+  crt=("$LIB/crtbegin_so.o"); crtend="$LIB/crtend_so.o"
+  [ "$soname" = 1 ] || [ -z "$out" ] || args+=(-soname "$(basename "$out")")
+else                                                        # PIE executable (adb shell self-test)
+  crt=(-pie --dynamic-linker=/system/bin/linker64 "$LIB/crtbegin_dynamic.o"); crtend="$LIB/crtend_android.o"
+fi
+
+exec "$LLD" -flavor gnu \
+  --sysroot="$SYS" -L "$LIB" -L "$SYS/usr/lib/$triple" -L "$CLANG/$arch" \
+  --hash-style=both --build-id=sha1 -z max-page-size=16384 -z separate-loadable-segments \
+  "${crt[@]}" "${args[@]}" "$BUILTINS" "$crtend"

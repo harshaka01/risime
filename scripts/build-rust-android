@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Build crypto/risime-mls-ffi as Android .so files natively on spark2 (aarch64) or the laptop, using
+# Rust's Android targets + scripts/android-ld (rust-lld + official NDK sysroot), then verify the
+# ELF and generate the Kotlin bindings. docs/decisions/012 option B.
+#   scripts/build-rust-android [--abis arm64-v8a,x86_64] [--debug] [--out DIR] [--kotlin-out DIR]
+# Output: <out>/<abi>/libuniffi_risime.so (+ risime-mls-selftest, an adb-shell executable that runs
+# the MLS lifecycle on a real device), and the Kotlin bindings in <kotlin-out>.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"; CARGO="${CARGO:-$HOME/.cargo/bin/cargo}"
+ABIS="arm64-v8a,x86_64"; PROFILE=release; OUT="$REPO/android/app/build/rustJniLibs"
+KOUT="$REPO/android/app/build/generated/uniffi"
+while [ $# -gt 0 ]; do case "$1" in
+  --abis) ABIS="$2"; shift 2;; --debug) PROFILE=debug; shift;;
+  --out) OUT="$2"; shift 2;; --kotlin-out) KOUT="$2"; shift 2;;
+  *) echo "usage: $0 [--abis a,b] [--debug] [--out DIR] [--kotlin-out DIR]"; exit 2;; esac; done
+
+export RISIME_NDK="${ANDROID_NDK_HOME:-$(printf '%s\n' "${ANDROID_HOME:-$HOME/Android/Sdk}"/ndk/* | sort -V | tail -1)}"
+[ -d "$RISIME_NDK/toolchains" ] || { echo "no NDK (set ANDROID_NDK_HOME or unpack one into ~/Android/Sdk/ndk/)"; exit 1; }
+export RISIME_ANDROID_API="${RISIME_ANDROID_API:-26}"                # = android minSdk
+ro=( "$HOME"/.rustup/toolchains/*/lib/rustlib/*/bin/llvm-readobj ); TOOLS="$(dirname "${ro[0]}")"   # rustup component llvm-tools
+readelf() { "$TOOLS/llvm-readobj" --elf-output-style=GNU "$@"; }
+echo "==> NDK $(basename "$RISIME_NDK"), API $RISIME_ANDROID_API, $PROFILE, ABIs $ABIS"
+
+flag=(); [ "$PROFILE" = release ] && flag=(--release)
+first_so=""
+IFS=, read -ra list <<<"$ABIS"
+for abi in "${list[@]}"; do
+  case "$abi" in
+    arm64-v8a) t=aarch64-linux-android ;;
+    x86_64)    t=x86_64-linux-android ;;
+    *) echo "unsupported ABI $abi"; exit 2 ;;
+  esac
+  T="$(echo "$t" | tr 'a-z-' 'A-Z_')"
+  export "CARGO_TARGET_${T}_LINKER=$REPO/scripts/android-ld"
+  # The shim's hash rides along in RUSTFLAGS so cargo relinks whenever scripts/android-ld changes.
+  export "CARGO_TARGET_${T}_RUSTFLAGS=-C link-arg=--risime-triple=$t -C link-arg=--risime-ld-rev=$(sha1sum scripts/android-ld | cut -c1-12)"
+  (cd crypto && "$CARGO" build -q "${flag[@]}" --target "$t" -p risime-mls-ffi --lib)
+  so="crypto/target/$t/$PROFILE/libuniffi_risime.so"
+  mkdir -p "$OUT/$abi"; cp "$so" "$OUT/$abi/"
+  dst="$OUT/$abi/libuniffi_risime.so"; [ -n "$first_so" ] || first_so="$dst"
+
+  # Verify: right machine, only Bionic system libs, 16 KB pages, no unexpected undefined symbols.
+  hdr="$(readelf -h "$dst")"
+  want=$([ "$abi" = arm64-v8a ] && echo AArch64 || echo X86-64)
+  grep -q "Machine:.*$want" <<<"$hdr" || { echo "$abi: wrong machine"; exit 1; }
+  needed="$(readelf -d "$dst" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | sort | tr '\n' ' ')"
+  for n in $needed; do case "$n" in libc.so|libm.so|libdl.so|liblog.so) ;; *) echo "$abi: unexpected NEEDED $n"; exit 1;; esac; done
+  align="$(readelf -lW "$dst" | awk '$1=="LOAD"{print $NF}' | sort -u | tr '\n' ' ')"
+  [ "$align" = "0x4000 " ] || { echo "$abi: LOAD alignment '$align' (want 0x4000)"; exit 1; }
+  # Every *strong* undefined symbol must exist in the minSdk Bionic stubs, or dlopen fails on old
+  # Android. Weak ones (e.g. getrandom, API 28+) resolve to null and the crates fall back.
+  stubs="$(for l in libc libdl libm liblog; do "$TOOLS/llvm-nm" -D --defined-only "$RISIME_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$t/$RISIME_ANDROID_API/$l.so"; done | awk '{print $NF}' | sed 's/@.*//' | sort -u)"
+  strong="$("$TOOLS/llvm-nm" -D --undefined-only "$dst" | awk '$1=="U"{print $2}' | sed 's/@.*//' | sort -u)"
+  missing="$(comm -23 <(echo "$strong") <(echo "$stubs") | tr '\n' ' ')"
+  [ -z "${missing// /}" ] || { echo "$abi: symbols missing from API $RISIME_ANDROID_API Bionic: $missing"; exit 1; }
+  [ "$(readelf -lW "$dst" | grep -c ' TLS ')" = 0 ] || { echo "$abi: has PT_TLS (unsupported before API 29)"; exit 1; }
+  readelf -d "$dst" | grep -q TEXTREL && { echo "$abi: has text relocations"; exit 1; }
+  readelf -d "$dst" | grep -q "soname: \[libuniffi_risime.so\]" || { echo "$abi: missing DT_SONAME"; exit 1; }
+  nexp="$("$TOOLS/llvm-nm" -D --defined-only "$dst" | grep -c ' T uniffi_' || true)"
+  [ "$nexp" -gt 0 ] || { echo "$abi: no exported uniffi_* symbols"; exit 1; }
+  echo "  $abi: $(du -h "$dst" | cut -f1), NEEDED: $needed| LOAD 0x4000 | API-$RISIME_ANDROID_API symbols ok | no TLS/TEXTREL | SONAME ok | $nexp uniffi exports"
+
+  # Device self-test executable: adb push it, run it (see crypto/README.md).
+  (cd crypto && "$CARGO" build -q "${flag[@]}" --target "$t" -p risime-mls-ffi --example selftest)
+  cp "crypto/target/$t/$PROFILE/examples/selftest" "$OUT/$abi/risime-mls-selftest"
+done
+
+# Kotlin bindings, library mode (reads metadata from the .so, never runs it).
+rm -rf "$KOUT"; mkdir -p "$KOUT"
+(cd crypto && "$CARGO" run -q -p risime-mls-ffi --features cli --bin uniffi-bindgen -- \
+  generate --library "$first_so" --language kotlin --out-dir "$KOUT" --no-format)
+echo "  kotlin: $(find "$KOUT" -name '*.kt' | sed "s|$REPO/||")"
+echo "DONE"

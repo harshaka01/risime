@@ -147,6 +147,54 @@ This fits the "build on spark2, install from the laptop" flow unchanged: `./grad
 on spark2 builds the `.so`, the bindings and the APK, and `scripts/install-apk` on the laptop stays
 as it is.
 
+### 5a. Option B verified on spark2 (2026-10-06)
+Harsha approved the NDK download, and **option B works**. Option C (the community NDK) is not
+needed.
+- **NDK:** official r30, `ndk;30.0.16248370`, unpacked to `~/Android/Sdk/ndk/30.0.16248370` from
+  `android-ndk-r30-linux.zip` (738,633,529 bytes, SHA-1 `5107f898…dee9`, matching Google's
+  `repository2-3.xml`). Only its host-independent files are used: the sysroot stubs,
+  `crt*_so.o` / `crt*_dynamic.o`, `libunwind.a` and the clang builtins. None of its x86_64
+  executables run.
+- **`scripts/android-ld`:** the linker shim. rustc chooses the GNU-ld flavour from the `*-ld`
+  file name, so arguments pass straight to rustup's `rust-lld`. The shim adds the NDK
+  sysroot, CRT objects, builtins, `--hash-style=both`, `-z max-page-size=16384`, a build-id,
+  and `DT_SONAME`. It also links PIE executables, for the device self-test.
+- **`scripts/build-rust-android [--abis …]`:** builds `crypto/risime-mls-ffi` for `arm64-v8a`
+  and `x86_64` into `android/app/build/rustJniLibs/<abi>/`, generates the Kotlin bindings
+  (UniFFI library mode) into `android/app/build/generated/uniffi/`, and **fails** unless each
+  `.so` passes all of these checks:
+  - the right ELF machine;
+  - only Bionic `NEEDED` libraries (currently `libc.so`, `libdl.so`);
+  - every `LOAD` segment 16 KB-aligned;
+  - **every strong undefined symbol present in the minSdk (API 26) Bionic stubs**;
+  - no `PT_TLS` (unsupported before API 29);
+  - no text relocations;
+  - `DT_SONAME` set;
+  - exported `uniffi_*` symbols (28 today).
+  - Weak references are allowed. `getrandom` (API 28+) is weak: the `getrandom` crate falls back
+    to the syscall on API 26–27.
+- **Results:** `libuniffi_risime.so` is 4.5 MB on arm64 and 4.7 MB on x86_64 (release, not
+  stripped further). All checks pass. The Kotlin `lk.codegen.risime.crypto.uniffi_risime.kt` is
+  generated.
+- **`crypto/risime-mls-ffi`** (new crate) is the UniFFI 0.32.2 proc-macro wrapper:
+  - `MlsClient` object;
+  - `RisiMlsError` (flat, 1:1 with the core);
+  - `AddMemberResult`, `IncomingMessage`;
+  - `mls_info()`;
+  - `self_test()`, which runs create → add ×2 → two-way encrypt/decrypt → remove → the removed
+    member fails to decrypt.
+
+  uniffi's `cli` feature is only on the `uniffi-bindgen` binary (`--features cli`), so clap,
+  toml and so on stay out of the `.so`.
+- **Not yet verified: a real run on Android.** There is no Android runtime on spark2. The script
+  also builds `risime-mls-selftest` (a PIE, `/system/bin/linker64`) for each ABI. Running it with
+  `adb shell` on the emulator (x86_64) and the phone (arm64) proves that the native code loads
+  and works on Bionic, before any Gradle/JNA wiring. The steps are in `crypto/README.md`.
+  Expected output:
+  `risime-mls self-test ok: epoch 3, risime-mls 0.1.0 (MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519)`.
+- `sdkmanager` still can't run on spark2. Future NDK updates are a manual
+  download + SHA-1 check + unzip, as above.
+
 ### 6. Persisting keys and group state on Android
 MLS state is security-critical and changes on **every** message: the sender ratchet advances, and
 re-using a ratchet secret after a crash breaks forward secrecy, or desynchronises the group.
