@@ -879,40 +879,13 @@ mod tests {
 
     /// `contract/v1/media_vectors.json` (written by root's independent Python reference,
     /// `scripts/gen-media-vectors`) is the same JSON value as ours.
-    ///
-    /// Known contract bug (v1.11 as merged): its `plain_size_inconsistent` case uses
-    /// `plain_size` 101, which shares len_100's Padmé bucket (104), so that blob **opens**
-    /// (101 bytes) instead of failing with `Format`. Ours uses 120. Until root regenerates the
-    /// contract file, that one case may differ (with a warning); every other byte must match.
     #[test]
     fn media_vectors_match_the_contract() {
         let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/v1/media_vectors.json");
-        let Ok(text) = fs::read_to_string(&p) else {
-            eprintln!("note: {} not present yet", p.display());
-            return;
-        };
-        let mut have: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let want = build_vectors();
-        let bad = have["negative"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|c| c["name"] == "plain_size_inconsistent" && c["plain_size"] == 101);
-        if let Some(case) = bad {
-            eprintln!(
-                "WARNING: contract/v1/media_vectors.json plain_size_inconsistent uses plain_size \
-                 101 (same Padmé bucket as 100: it decrypts); regenerate it with 120"
-            );
-            let fixed = want["negative"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|c| c["name"] == "plain_size_inconsistent")
-                .unwrap();
-            *case = fixed.clone();
-        }
+        let have: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&p).expect("contract vectors")).unwrap();
         assert!(
-            have == want,
+            have == build_vectors(),
             "contract/v1/media_vectors.json differs from the core's vectors"
         );
     }

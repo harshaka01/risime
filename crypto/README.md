@@ -123,7 +123,75 @@ with a 151,520 B Welcome. **State per device ≈ 0.93 MB; the largest single `Kv
 tree) ≈ 0.6 MB**, growing roughly linearly with leaves (so ~1.8 MB at 768 leaves): the app's
 `mls_kv` chunking above 512 KB is needed for Android's 2 MB `CursorWindow`.
 
-## Tests (`cargo test`: 62 core + 5 FFI)
+## Media API (contract v1.11 §14.3, decision 042): `risime_mls::media`
+Encrypted images and group icons use the blob format **`A256GCM-S64K`**:
+- a fresh 32-byte key `K` from the OS CSPRNG, generated **inside** the encrypt call;
+- `Kp = HKDF-SHA256(salt = empty, IKM = K, info = "risime-media-v1 A256GCM-S64K")`;
+- Padmé padding with zero bytes;
+- 64 KiB AES-256-GCM segments, nonce `0x00×7 ‖ BE32(i) ‖ final`, AAD `risime-media-v1`, each
+  tag appended;
+- no header.
+
+No API takes a caller-supplied key for encryption. The keyed form (`seal_file_with_key`) is
+private and only the unit tests use it, so the Android `.so` can't reuse a key.
+
+| Core (`media::`) | FFI (Kotlin) | What it does |
+|---|---|---|
+| `encrypt_file(src, dst)` | `mediaEncryptFile(src, dst): SealedMedia` | Streams `src` to the blob file `dst` (temp file + fsync + rename). Returns `{key, alg, plainSize, cipherSize, sha256}` for `enc` and `blob`. Refuses an empty input (`Format`) or more than 16 515 072 bytes (`TooLarge`) before writing |
+| `decrypt_file(src, &MediaRef)` | `mediaDecryptFile(src, key, alg, plainSize, cipherSize, sha256): ByteArray` | Decrypt-on-display into memory |
+| `decrypt_file_to_file(src, dst, &MediaRef)` | `mediaDecryptFileToFile(src, dst, …)` | Constant memory. `dst` appears only after every check passed |
+| `verified_prefix(src, key, alg, cipher_size)` | `mediaVerifiedPrefix(src, key, alg, cipherSize): ULong` | `Range` resume: the bytes of leading whole segments of a `.part` file that verify in order. Truncate to it and resume |
+| `cipher_size_for(plain_size)` | `mediaCipherSize(plainSize): ULong?` | `Padmé(L) + 16·n`. Receivers check that it equals `blob.size` |
+| constants | `mediaLimits()` | alg, 64 KiB segment, 16 MiB media cap, 512 KiB icon cap (checked by the caller), max plaintext 16 515 072 |
+
+- **Release of plaintext.** Decryption checks, in one streaming pass:
+  - the file size against `cipher_size`;
+  - every segment tag, with the final flag only on the last segment;
+  - the zero padding;
+  - the ciphertext SHA-256.
+
+  Nothing is returned or renamed into place unless all of them pass. A segment's plaintext is
+  produced only after its tag verified.
+- **Envelope checks** (`check_ref`) come before any read:
+  - `alg` is exactly `A256GCM-S64K` (`Unsupported`);
+  - the key and the SHA-256 are 32 bytes;
+  - `cipher_size ≤ 16 MiB` (`TooLarge`);
+  - `cipher_size_for(plain_size) == cipher_size`;
+  - the last segment is ≥ 17 bytes (`Format`).
+- **Errors.** `MediaError` / `RisiMediaException` has the variants `Integrity`, `Format`,
+  `Unsupported`, `TooLarge` and `Io`. Each one means "Couldn't open this photo".
+- **Zeroizing.** `K`, `Kp`, the AES key schedule and every segment buffer are wiped
+  (`zeroize`).
+- **Vectors.** `risime-mls/tests/media_vectors.json` holds 5 positive and 9 negative cases, all
+  lowercase hex. Regenerate it with
+  `cargo test -p risime-mls media_vectors_write -- --ignored`.
+  - A test fails if the file is stale.
+  - Another test checks that it equals `contract/v1/media_vectors.json`, which root's independent
+    Python reference `scripts/gen-media-vectors` writes. The two are byte-identical.
+- **Hardware AES on aarch64.** `.cargo/config.toml` sets `--cfg aes_armv8 --cfg polyval_armv8`.
+  Without these cfgs, RustCrypto's `aes` 0.8 and `polyval` 0.6 use software AES and GHASH on ARM.
+  - With them, the crates still detect the CPU features at run time and fall back on cores that
+    lack them.
+  - The flags join with `scripts/build-rust-android`'s per-target `RUSTFLAGS`. The arm64 `.so`
+    contains `aese`/`pmull`. A plain `RUSTFLAGS` in the environment would override them.
+  - They also speed up the MLS AEAD.
+
+### Media timing and memory (`tests/media_memory.rs`, spark2 aarch64, release)
+`cargo test --release --test media_memory -- --nocapture` runs on a 15.75 MiB image, the largest
+allowed:
+
+| | software AES (no cfg) | ARMv8 AES + PMULL |
+|---|---|---|
+| `encrypt_file` (read, encrypt, SHA-256, fsync) | 130 ms (121 MiB/s) | 59 ms (267 MiB/s) |
+| `decrypt_file_to_file` | 116 ms (135 MiB/s) | 59 ms (267 MiB/s) |
+| `verified_prefix` (AEAD only) | 84 ms | 28 ms (~560 MiB/s) |
+
+**Peak RSS grows by 4 KiB** over encrypt + decrypt + verify, because every call works through a
+single 64 KiB buffer. The unit test `streams_beyond_the_cap` encrypts 20 MiB through the private
+uncapped path. A 2 MiB photo takes about 8 ms. Benchmark on the oldest pilot phone before
+release.
+
+## Tests (`cargo test`: 78 core + 1 ignored generator, 6 FFI)
 - **`groups`** (v1.9): create/join with PrivateMessage handshakes and meta; DM and group APIs
   don't mix; 0xFA01 key packages (a legacy key package is refused); admin adds/removes users and
   removed devices are locked out; members manage only their own devices; **peers reject
@@ -177,12 +245,21 @@ tree) ≈ 0.6 MB**, growing roughly linearly with leaves (so ~1.8 MB at 768 leav
   - a stale Welcome doesn't roll back;
   - late messages decrypt within 3 past epochs (older → `WrongEpoch`).
 - **`robustness`:** random and truncated input never panics and never changes state.
+- **`media`** (v1.11):
+  - unit: Padmé values and bounds, the nonce layout, crafted negatives (final flag on a
+    non-final segment, nonzero padding, a 16-byte last segment, a skipped index), deterministic
+    keyed sealing, streaming past the cap, vectors current and equal to the contract file;
+  - `tests/media.rs`: round trips at the segment edges, a fresh key per call, a flipped bit,
+    swapped, duplicated and missing segments, truncation, wrong key, bad envelopes, oversize and
+    empty input, the max size, `verified_prefix`, and every committed vector;
+  - `tests/media_memory.rs`: constant memory and throughput (above).
 - **`risime-mls-ffi/tests/self_test`:**
   - `self_test` passes (it also runs a group lifecycle: `…, groups epoch 4`);
   - the group API crosses the FFI;
   - error mapping;
   - a foreign `KvStore` failure maps to `Storage` and rolls back;
   - commit fields cross the FFI.
+- **`risime-mls-ffi/tests/media`:** the media calls and their errors across the FFI.
 
 ## Contract fixtures
 ```sh
