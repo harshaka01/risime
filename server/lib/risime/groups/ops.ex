@@ -246,7 +246,7 @@ defmodule RisiMe.Groups.Ops do
       Repo.all(
         from i in "app_instances",
           where: i.instance_key in ^keys,
-          select: {i.instance_key, i.last_seen_at}
+          select: {i.instance_key, type(i.last_seen_at, :utc_datetime_usec)}
       )
       |> Map.new()
 
