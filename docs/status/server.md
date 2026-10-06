@@ -4,10 +4,74 @@
 **v1.4** (one-time SMS phone verification), the **prod-mode pilot release** (decision 024) and
 **v1.5** (push wake-ups, decision 028), **v1.6** (invites and friends, decision 030), **v1.7**
 (E2EE routing with MLS, decision 034; **off until the attestation key exists**), **v1.8**
-(reactions), **v1.9** (groups with MLS, §12, decision 041) and **v1.10** (history after a
-reinstall, §13, decision 043) are done, plus the group-readiness hotfix.
+(reactions), **v1.9** (groups with MLS, §12, decision 041), **v1.10** (history after a
+reinstall, §13, decision 043) and **v1.11** (encrypted images, §14, decision 042) are done, plus
+the group-readiness hotfix.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(329 tests).
+(360 tests); `scripts/interop` OK after v1.11.
+
+## v1.11 encrypted images (§14) — READY
+The server never sees plaintext; it stores and serves opaque `application/octet-stream` blobs.
+- **Commits:** `ded467a` (blob store), `8e253e3` (images capability, contract examples).
+- **Migrations:** `20261006160000` (`blobs`: `client_blob_id` with a unique `(owner,
+  client_blob_id)` index, `deleted_at`, **`expires_at` nullable**, indexes on `conversation_id`,
+  `(owner, purpose) INCLUDE (size) WHERE deleted_at IS NULL`, `(owner, purpose, inserted_at)`;
+  replaces the v1.10 `(owner, purpose)` index) and `20261006160100` (`group_member_intervals`,
+  partial unique `gmi_one_open`, **backfilled with one open interval per current active member**,
+  `active_from = coalesce(joined_at, inserted_at)`).
+- **Upload** (`BlobController.create`, `Blobs.begin_upload/4` → `finish/5`): every pre-body check
+  in the §14.2 order, answered with `Connection: close` (checked over real HTTP: Bandit closes
+  without draining 16 MiB). Content-Length is now required for every purpose (`mls` too; OkHttp
+  always sends it, interop passes). The body streams in 64 KiB reads to `BLOB_DIR/.tmp/<uuid>`
+  (exclusive, mode 600), hashed on the way, aborted with `413 too_large` past Content-Length;
+  15-minute overall deadline; `fsync`, rename to `BLOB_DIR/<2 hex>/<id>`, then the row in a
+  transaction holding `pg_advisory_xact_lock(hashtext("blobs:" <> owner))` that rechecks
+  idempotency and the quota. A concurrent same-id loser deletes its file and replays `200`.
+- **Rates** count committed rows (`inserted_at`), so refusals and `200` replays never count;
+  `Retry-After` is when the oldest counted upload leaves the window. `mls` 60/h moved from the ETS
+  limiter to this. Downloads: 600/min (ETS, refused hits not counted) and 8 concurrent.
+- **Concurrency:** `RisiMe.Blobs.Slots`, a duplicate-key Registry; slot value = declared bytes,
+  so in-flight bytes feed the guard. Released after the response and on process death (tested by
+  killing holders, and over HTTP with a client that disconnects mid-upload).
+- **Disk guard** (`RisiMe.Blobs.DiskGuard`, `config :risime, :blob_guard`): `df -Pk BLOB_DIR`
+  every 30 s; `media` → `507` under max(50 GiB, 10 %) free − in-flight, or over the global live
+  `media` cap (`BLOB_MEDIA_MAX`, default 200 GiB, sum cached 60 s); `mls`/`icon` down to 20 GiB;
+  `warning` log + `/health` `checks.blob_storage: "low"` under 100 GiB (never a 503).
+- **Downloads:** strong ETag (sha256 hex), single range incl. suffix, `416 bytes */size`,
+  `If-Range`, `If-None-Match` → 304, HEAD, nosniff/attachment/`private, max-age=86400,
+  immutable`; `GET /blobs/:id` has its own route without JSON `Accept` negotiation. A file swept
+  after the read check is `404`. Over HTTP: `206` with `Content-Length` and no `Content-Encoding`
+  (Bandit; the Caddy edge test from the release checklist is still root's).
+- **Readers:** `media` owner / both DM users (from the id, independent of friendship or block) /
+  a group interval with `active_until` null or ≥ the upload; `icon` current active and
+  pending_add members only; `mls` unchanged. A commit `*_ref` must now name an `mls` blob.
+- **Intervals** (`RisiMe.Groups.Membership`): opened at create (creator), the epoch-0 commit and
+  completed adds; closed in `mark_removing` (remove and leave), `delete_member` and the reset
+  cleanup. Invariant test: open interval ⇔ `state = active`, across create, remove, re-add (two
+  intervals), leave, reset and a timed-out `creating` group.
+- **Cleanup:** `DELETE` = `Blobs.remove/1` (soft delete, file removed at once; an icon gets a
+  7-day expiry so its row goes too). **`Blobs.remove/1` is the internal delete-by-id for v1.12**
+  (no authorisation inside; callers check). Group reset and the `creating` timeout call
+  `Blobs.expire_conversation/1`. `BlobCleanup` hourly: `DELETE … LIMIT 1000` batches then files,
+  then `.tmp` files older than 1 h (also at boot); weekly (Sun 04:53 UTC) `orphans/1`.
+- **`images`** (`RisiMe.MLS.Images`): the capability is stored; `images_ready`/`missing_images`
+  on `GET /mls/groups/{id}`. Census = installs that can still receive, as in the §12.1 hotfix
+  (registered devices; device-less instances seen after the latest registration), so a
+  reinstall's dead device id doesn't block for 30 days. A member with no images device and no
+  listed instance appears with `device_id: null`.
+- **Contract tests:** `@pending_v1_11` is gone; server-produced replies/errors are compared with
+  their examples; the envelopes and `group_meta_icon.json` are checked against §14.4 and the
+  §14.3 size formula; `media_vectors.json` positives are uploaded and served byte-exact (size,
+  SHA-256 = ETag, a segment-boundary range). Tests: `blobs_v111_test.exs` (21),
+  `blobs_http_test.exs` (3, real Bandit), `examples_test.exs` "v1.11" (4).
+- **Notes for root:**
+  - No contract deviation. Two readings worth a sentence in §14: `images_ready` uses the
+    "installs that can still receive" census of §12.1 (not every raw census row), and, by the
+    §14.2 order, idempotency is checked last, so a replay of a lost `201` while the user is at the
+    quota, guard or rate limit gets `413`/`507`/`429` instead of `200` (clients retry later).
+  - Reset expires all of a group's blobs (§14.5), including not-yet-downloaded images.
+  - Before `media` ships: incremental blob backups (decision 042, root) and the Caddy `206`
+    edge test. Deploy needs no new env; `BLOB_MEDIA_MAX` is optional.
 
 ## v1.10 history after a reinstall (§13) — READY
 - **Sender copy (§13.1):** every plaintext DM `message` and every `reaction` is written to the
