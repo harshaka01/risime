@@ -152,6 +152,13 @@ fun ChatsScreen(
     }
 }
 
+/** A DM row's preview: "You: …" for mine; a §13.3 marker or other system line as is (shown muted, no ticks). */
+fun dmPreview(last: lk.codegen.risime.data.db.LastMessage): String = when {
+    last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_SYSTEM -> last.body
+    last.outgoing -> "You: " + last.body
+    else -> last.body
+}
+
 fun connectionLabel(s: ConnectionState): String? = when (s) {
     ConnectionState.Live -> null
     ConnectionState.Syncing -> "Syncing…"
@@ -168,7 +175,7 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
         !row.friend -> "Not friends any more"
         !row.registered -> "Waiting for them to confirm their phone"
         row.typing -> TYPING_LABEL
-        row.last != null -> (if (row.last.outgoing) "You: " else "") + row.last.body
+        row.last != null -> dmPreview(row.last)
         presence != null -> presence
         else -> row.company
     }
@@ -179,7 +186,11 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
         meta = row.last?.let { shortStamp(it.localTs) },
         strong = row.unread > 0,
         enabled = row.openable,
-        subtitleColor = if (row.typing) MaterialTheme.colorScheme.primary else null,
+        subtitleColor = when {
+            row.typing -> MaterialTheme.colorScheme.primary
+            row.last?.kind == lk.codegen.risime.data.db.MessageEntity.KIND_SYSTEM -> lk.codegen.risime.ui.theme.RisiTheme.colors.textMuted
+            else -> null
+        },
         badge = if (row.unread > 0) ({ UnreadBadge(row.unread) }) else null,
         footer = listOfNotNull(
             presence?.takeIf { !row.typing && row.last != null },
@@ -208,7 +219,11 @@ private fun GroupRowItem(row: ChatRow, onClick: () -> Unit) {
         leading = { InitialsAvatar(row.name) },
         meta = last?.takeIf { it.body.isNotEmpty() }?.let { shortStamp(it.localTs) },
         strong = row.unread > 0,
-        subtitleColor = if (row.typingLabel != null) MaterialTheme.colorScheme.primary else null,
+        subtitleColor = when {
+            row.typingLabel != null -> MaterialTheme.colorScheme.primary
+            last?.kind == lk.codegen.risime.data.db.MessageEntity.KIND_SYSTEM -> lk.codegen.risime.ui.theme.RisiTheme.colors.textMuted
+            else -> null
+        },
         badge = if (row.unread > 0) ({ UnreadBadge(row.unread) }) else null,
         onClick = onClick,
     )

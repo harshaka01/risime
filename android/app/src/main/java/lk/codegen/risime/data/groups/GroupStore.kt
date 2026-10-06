@@ -30,6 +30,12 @@ data class SystemLine(
     fun encode(): String = ProtocolJson.encodeToString(serializer(), this)
 
     companion object {
+        /** §13.3 local lines (never on the wire). */
+        const val HISTORY_GAP = "history_gap"
+        const val UNDECRYPTABLE = "undecryptable"
+        const val HISTORY_GAP_TEXT = "Earlier messages aren't available on this device"
+        const val UNDECRYPTABLE_TEXT = "Some messages couldn't be decrypted"
+
         fun decode(json: String?): SystemLine? = json?.let { runCatching { ProtocolJson.decodeFromString(serializer(), it) }.getOrNull() }
     }
 }
@@ -60,6 +66,8 @@ fun systemText(line: SystemLine, me: String, nameOf: (String) -> String): String
         GroupEvent.METADATA_CHANGED -> if (line.name != null) "$actor changed the group name to “${line.name}”" else "$actor changed the group name"
         GroupEvent.ADD_EXPIRED -> "Couldn't add ${list(line.targets)}"
         GroupEvent.RESET -> "Encryption was reset; some messages may be missing"
+        SystemLine.HISTORY_GAP -> SystemLine.HISTORY_GAP_TEXT
+        SystemLine.UNDECRYPTABLE -> SystemLine.UNDECRYPTABLE_TEXT
         else -> "The group changed"
     }
 }

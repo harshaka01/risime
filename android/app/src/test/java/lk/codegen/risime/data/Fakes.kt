@@ -31,6 +31,12 @@ class FakeMessageDao : MessageDao {
         return rows.size.toLong()
     }
 
+    override suspend fun moveSystemLineForward(clientMsgId: String, serverTs: String?, localTs: Long): Int {
+        val r = rows[clientMsgId]?.takeIf { it.kind == MessageEntity.KIND_SYSTEM && it.localTs < localTs } ?: return 0
+        rows[clientMsgId] = r.copy(serverTs = serverTs, localTs = localTs)
+        return 1
+    }
+
     override suspend fun byClientMsgId(clientMsgId: String) = rows[clientMsgId]
     override suspend fun byMessageId(messageId: String) = rows.values.firstOrNull { it.messageId == messageId }
     override suspend fun pendingOutbox() =

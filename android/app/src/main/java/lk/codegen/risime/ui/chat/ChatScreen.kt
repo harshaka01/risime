@@ -130,13 +130,15 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 items(items, key = { it.key }) { item ->
                     when (item) {
                         is ChatItem.Day -> DaySeparator(item.label)
-                        is ChatItem.Msg -> Bubble(
-                            item.m, canRetry = isFriend, onRetry = vm::retry, onDelete = vm::delete,
-                            chips = item.m.messageId?.let { reactions[it] }.orEmpty(),
-                            canReact = isFriend && item.m.messageId != null,
-                            onReact = { e, op -> item.m.messageId?.let { vm.react(it, e, op) } },
-                            onOpenReactions = { reactionsFor = item.m.messageId },
-                        )
+                        is ChatItem.Msg -> DmMessageRow(item.m) {
+                            Bubble(
+                                item.m, canRetry = isFriend, onRetry = vm::retry, onDelete = vm::delete,
+                                chips = item.m.messageId?.let { reactions[it] }.orEmpty(),
+                                canReact = isFriend && item.m.messageId != null,
+                                onReact = { e, op -> item.m.messageId?.let { vm.react(it, e, op) } },
+                                onOpenReactions = { reactionsFor = item.m.messageId },
+                            )
+                        }
                     }
                 }
                 if (messages.isEmpty()) item { EmptyState("No messages yet. Say hello!") }
@@ -162,6 +164,12 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
             }
         }
     }
+}
+
+/** One DM row: a §13.3 marker (or other system line) is centred text with no bubble, ticks or actions. */
+@Composable
+internal fun DmMessageRow(m: MessageEntity, bubble: @Composable () -> Unit) {
+    if (m.system) lk.codegen.risime.ui.common.SystemLineText(m.body) else bubble()
 }
 
 @Composable

@@ -12,6 +12,19 @@ interface MessageDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(m: MessageEntity): Long
 
+    /** §13.3 marker lines: move a local system row forward only (never earlier). */
+    @Query(
+        "UPDATE messages SET server_ts = :serverTs, local_ts = :localTs " +
+            "WHERE client_msg_id = :clientMsgId AND kind = 'system' AND local_ts < :localTs",
+    )
+    suspend fun moveSystemLineForward(clientMsgId: String, serverTs: String?, localTs: Long): Int
+
+    /** §13.3: one row per deterministic id (`sys:history:<conv>`), forward-only position. */
+    @androidx.room.Transaction
+    suspend fun upsertSystemLine(m: MessageEntity) {
+        if (insert(m) == -1L) moveSystemLineForward(m.clientMsgId, m.serverTs, m.localTs)
+    }
+
     @Query("SELECT * FROM messages WHERE client_msg_id = :clientMsgId")
     suspend fun byClientMsgId(clientMsgId: String): MessageEntity?
 
@@ -83,7 +96,7 @@ interface MessageDao {
 
     /** Local search (decision 009: LIKE, no FTS). [pattern] comes from likePattern (backslash escapes). */
     @Query(
-        "SELECT * FROM messages WHERE body LIKE :pattern ESCAPE '\\' ORDER BY local_ts DESC LIMIT :limit",
+        "SELECT * FROM messages WHERE kind != 'system' AND body LIKE :pattern ESCAPE '\\' ORDER BY local_ts DESC LIMIT :limit",
     )
     fun search(pattern: String, limit: Int): Flow<List<MessageEntity>>
 }
