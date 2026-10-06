@@ -1,5 +1,13 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
+## v0.2.0-nightly.15 (live, not required): photo progress and retry, scrolling verified on a device
+- **Photos:** "Encrypting photo…" and an upload percentage, "Couldn't send photo · Retry", retries
+  idempotent by `client_blob_id`, and the same behaviour in groups as in 1:1.
+- **Scrolling:** 11 instrumented tests on real Android 14 (Redroid), 240 mixed-height messages. As a
+  control, removing stick-to-bottom on purpose made 6 of them fail.
+- **Release process:** upgrade-test and redroid instances; the release gate uses its own `-rel`
+  container.
+
 ## v0.2.0-nightly.14 (live 19:05 UTC, not required): E2EE switches on, per-chat lock, logout keeps chats, group ticks
 - **1:1 E2EE now activates.** Cause: the 1:1 readiness counted stale installs (an old pre-v1.7 row
   each for Harsha and Hasitha, plus 2 dead install ids). Readiness now uses the §12.1 "can still
