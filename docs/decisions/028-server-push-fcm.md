@@ -1,4 +1,4 @@
-# 027 — Server: device registry and FCM push wake-ups (contract v1.5)
+# 028 — Server: device registry and FCM push wake-ups (contract v1.5)
 
 ## Context
 Contract v1.5 §8 and decision 026: data-only FCM wake-ups when a user has no live inbox

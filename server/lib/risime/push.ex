@@ -1,6 +1,6 @@
 defmodule RisiMe.Push do
   @moduledoc """
-  Data-only push wake-ups (contract v1.5 §8, decisions 026 and 027).
+  Data-only push wake-ups (contract v1.5 §8, decisions 026 and 028).
 
   A push carries exactly `#{inspect(%{"type" => "inbox", "v" => "1"})}`: never a body, sender,
   phone or name. The app syncs over its channel and builds the notification itself.

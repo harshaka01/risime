@@ -1,6 +1,6 @@
 defmodule RisiMe.Push.FCM do
   @moduledoc """
-  FCM HTTP v1 sender (decision 027).
+  FCM HTTP v1 sender (decision 028).
 
   * **Credentials:** the service-account JSON at `FCM_SERVICE_ACCOUNT_FILE` (outside the repo,
     mode 600), read when a token is needed and never logged. `project_id`, `client_email`,

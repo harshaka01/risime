@@ -1,6 +1,6 @@
 defmodule RisiMe.Devices do
   @moduledoc """
-  App installs and their push tokens (contract v1.5 §8.1, decision 027).
+  App installs and their push tokens (contract v1.5 §8.1, decision 028).
   """
   import Ecto.Query
 

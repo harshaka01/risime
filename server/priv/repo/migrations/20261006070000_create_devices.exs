@@ -1,7 +1,7 @@
 defmodule RisiMe.Repo.Migrations.CreateDevices do
   use Ecto.Migration
 
-  # Contract v1.5 §8 / decision 027: app installs and their FCM tokens.
+  # Contract v1.5 §8 / decision 028: app installs and their FCM tokens.
   def change do
     create table(:devices, primary_key: false) do
       add :id, :binary_id, primary_key: true

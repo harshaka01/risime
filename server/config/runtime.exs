@@ -82,7 +82,7 @@ if config_env() != :test do
          if(System.get_env("SMS_MODE", default_sms) == "notifylk", do: :notifylk, else: :log)
 end
 
-# Push (decision 027). FCM_SERVICE_ACCOUNT_FILE is a path outside the repo
+# Push (decision 028). FCM_SERVICE_ACCOUNT_FILE is a path outside the repo
 # (~/risime-keys/fcm-service-account.json, mode 600); its contents are read at use only.
 if config_env() != :test do
   if System.get_env("FCM_ENABLED") == "true", do: config(:risime, :push_sender, RisiMe.Push.FCM)

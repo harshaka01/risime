@@ -1,6 +1,6 @@
 defmodule RisiMe.Push.Dispatcher do
   @moduledoc """
-  When to push (contract v1.5 §8.0, decision 027).
+  When to push (contract v1.5 §8.0, decision 028).
 
   `notify/1` is called for every stored inbox event. If the user has a live inbox channel
   (`RisiMe.Presence.online?/1`, which includes the 5 s offline grace) nothing happens.
