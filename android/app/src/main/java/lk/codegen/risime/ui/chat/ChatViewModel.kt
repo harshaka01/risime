@@ -15,7 +15,7 @@ import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.net.dmConversationId
 import lk.codegen.risime.realtime.ConnectionState
 
-class ChatViewModel(private val c: AppContainer, meId: String, val peerId: String) : ViewModel() {
+class ChatViewModel(private val c: AppContainer, private val meId: String, val peerId: String) : ViewModel() {
     val conversationId = dmConversationId(meId, peerId)
 
     val messages: StateFlow<List<MessageEntity>> = c.db.messages().conversation(conversationId)
@@ -38,7 +38,21 @@ class ChatViewModel(private val c: AppContainer, meId: String, val peerId: Strin
         c.scope.launch { c.realtime.typing(peerId, typing) }
     })
 
+    /** §10.4: lock / "not end-to-end encrypted yet" strip. Unavailable without an MLS core. */
+    private val _e2ee = kotlinx.coroutines.flow.MutableStateFlow<lk.codegen.risime.data.mls.E2eeState>(lk.codegen.risime.data.mls.E2eeState.Unavailable)
+    val e2ee: StateFlow<lk.codegen.risime.data.mls.E2eeState> = _e2ee
+
+    /** Opening (or sending to) a chat that isn't e2ee yet tries the upgrade (claim → epoch-0 commit). */
+    fun refreshE2ee() {
+        if (c.mlsEngine == null || peer.value?.friend == false) return
+        viewModelScope.launch {
+            _e2ee.value = c.mlsUpgrader.ensure(conversationId, meId, peerId)
+            if (_e2ee.value is lk.codegen.risime.data.mls.E2eeState.Encrypted) c.engine.flushOutbox()
+        }
+    }
+
     init {
+        refreshE2ee()
         viewModelScope.launch { c.behaviour.chatOpen(peerId) }
         c.openChatPeer.value = peerId
         c.notifier.cancelChat(conversationId)

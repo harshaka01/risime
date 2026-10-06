@@ -25,6 +25,11 @@ import lk.codegen.risime.data.ChatEngine
 import lk.codegen.risime.data.ContactsRepository
 import lk.codegen.risime.data.AuthKind
 import lk.codegen.risime.data.LegacyServerUrlMigration
+import lk.codegen.risime.data.mls.DeviceRegistrar
+import lk.codegen.risime.data.mls.MlsApi
+import lk.codegen.risime.data.mls.MlsEngine
+import lk.codegen.risime.data.mls.MlsPipeline
+import lk.codegen.risime.data.mls.MlsUpgrader
 import lk.codegen.risime.data.PhoneNormalizer
 import lk.codegen.risime.data.auth.AppAuthGateway
 import lk.codegen.risime.data.auth.AuthManager
@@ -128,11 +133,28 @@ class AppContainer(context: Context) {
         friendsRefresh.tryEmit(Unit)
     }
 
-    val presence = PresenceTracker(scope, onFriendSignal = { requestFriendsRefresh() })
+    val presence = PresenceTracker(
+        scope,
+        onFriendSignal = { requestFriendsRefresh() },
+        onKeyPackagesLow = { scope.launch { deviceRegistrar.topUp() } },
+    )
 
     // ---- Push (contract v1.5, decision 026) ----
     val notifier = Notifier(context)
-    val push by lazy { PushManager(context, api, sessionStore) }
+    // ---- E2EE (contract v1.7). Phase B plugs the real MLS core in here; until then null = v1.6 behaviour.
+    @Volatile var mlsEngine: MlsEngine? = null
+    val mlsPipeline by lazy {
+        MlsPipeline({ mlsEngine }, db.mlsPending(), onMembership = { a -> Log.i("RisiMe", "mls_membership ${a.event.change} in ${a.delayMs} ms (phase B)") })
+    }
+    val mlsUpgrader by lazy {
+        MlsUpgrader({ mlsEngine }, object : MlsApi {
+            override suspend fun group(conversationId: String) = api.mlsGroup(conversationId)
+            override suspend fun claim(userIds: List<String>) = api.claimKeyPackages(userIds)
+            override suspend fun commit(conversationId: String, body: lk.codegen.risime.net.MlsCommitRequest) = api.mlsCommit(conversationId, body)
+        })
+    }
+    val deviceRegistrar by lazy { DeviceRegistrar(api, { sessionStore.deviceId() }, BuildConfig.VERSION_NAME, { mlsEngine }) }
+    val push by lazy { PushManager(context, api, sessionStore, deviceRegistrar) { mlsEngine != null } }
 
     /** A short background connection for a push wake-up (the socket is otherwise foreground-only). */
     private val backgroundSync = MutableStateFlow(false)
@@ -157,6 +179,9 @@ class AppContainer(context: Context) {
         meId = { sessionStore.current()?.user?.id },
         behaviour = behaviour,
         onIncomingFrom = presence::onMessageFrom,
+        mls = mlsPipeline,
+        mlsEngine = { mlsEngine },
+        catchUp = { conv -> catchUpCommits(conv) },
     )
 
     val realtime: RealtimeClient = PhoenixRealtimeClient(
@@ -448,6 +473,23 @@ class AppContainer(context: Context) {
         val fresh = newRequests(incoming, sessionStore.notifiedRequests())
         if (!foreground.value) notifier.postRequests(fresh)
         sessionStore.setNotifiedRequests(incoming.map { it.id }.toSet())
+    }
+
+    /** §10.2 recovery: fetch commits since our epoch and apply them out of band (no cursor move). */
+    private suspend fun catchUpCommits(conversationId: String) {
+        val g = mlsEngine?.group(conversationId) ?: return // no group yet: our Welcome comes through the inbox
+        val r = api.mlsCommits(conversationId, g.epoch) as? ApiResult.Ok ?: return
+        engine.applyOutOfBand(
+            r.value.commits.map { c ->
+                lk.codegen.risime.net.Event(
+                    "catchup:$conversationId:${g.generation}:${c.epoch}", lk.codegen.risime.net.Event.KIND_MLS_COMMIT,
+                    lk.codegen.risime.net.ProtocolJson.encodeToJsonElement(
+                        lk.codegen.risime.net.MlsCommitEvent.serializer(),
+                        lk.codegen.risime.net.MlsCommitEvent(conversationId, g.generation, c.epoch, c.commit, c.fromDevice),
+                    ) as kotlinx.serialization.json.JsonObject,
+                )
+            },
+        )
     }
 
     /** Chat data only; the local behaviour log stays on the device. */

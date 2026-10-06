@@ -23,6 +23,8 @@ class PresenceTracker(
     private val typingTimeoutMs: Long = TYPING_TIMEOUT_MS,
     /** §9.3 `friend` signal (request received/accepted): the app refetches GET /friends. */
     private val onFriendSignal: (lk.codegen.risime.net.FriendSignal) -> Unit = {},
+    /** §10.1 `mls_key_packages_low`: top up this device's key packages. */
+    private val onKeyPackagesLow: () -> Unit = {},
 ) : SignalSink {
     private val _presence = MutableStateFlow<Map<String, Presence>>(emptyMap())
     val presence: StateFlow<Map<String, Presence>> = _presence.asStateFlow()
@@ -45,6 +47,7 @@ class PresenceTracker(
         }
         signal.typing()?.let { t -> if (t.typing) startTyping(t.from) else stopTyping(t.from) }
         signal.friend()?.let(onFriendSignal)
+        signal.keyPackagesLow()?.let { onKeyPackagesLow() }
     }
 
     override fun onDisconnected() {

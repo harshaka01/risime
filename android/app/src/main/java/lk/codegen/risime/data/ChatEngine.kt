@@ -94,6 +94,14 @@ class ChatEngine(
         if (newIncoming) flushAcks()
     }
 
+    /** Commits fetched by catch-up (GET …/commits): applied in order, each in its own transaction, no cursor move. */
+    suspend fun applyOutOfBand(events: List<Event>) {
+        val me = meId() ?: return
+        var newIncoming = false
+        for (e in events) newIncoming = tx.run { runCatching { applyMls(me, e) }.getOrDefault(false) } || newIncoming
+        if (newIncoming) flushAcks()
+    }
+
     override suspend fun onLive() {
         flushOutbox()
         flushAcks()

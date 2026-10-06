@@ -1,6 +1,7 @@
 package lk.codegen.risime.ui.chat
 
 import android.content.ClipData
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -65,6 +66,8 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     val conn by vm.connection.collectAsStateWithLifecycle()
     val presence by vm.peerPresence.collectAsStateWithLifecycle()
     val requested by vm.requested.collectAsStateWithLifecycle()
+    val e2ee by vm.e2ee.collectAsStateWithLifecycle()
+    val encrypted = e2ee is lk.codegen.risime.data.mls.E2eeState.Encrypted
     val typing by vm.peerTyping.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val lifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
@@ -91,6 +94,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 subtitle = when {
                     typing -> TYPING_LABEL
                     else -> connectionLabel(conn)
+                        ?: if (encrypted) "🔒 End-to-end encrypted" else null
                         ?: presenceLabel(presence, System.currentTimeMillis())
                         ?: peer?.vouchedByName?.let { "vouched by $it" }
                         ?: (peer?.company ?: "")
@@ -103,6 +107,14 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
+            lk.codegen.risime.data.mls.e2eeStripText(e2ee) { id -> if (id.equals(vm.peerId, true)) name else "your other device" }?.let { strip ->
+                Text(
+                    strip,
+                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -120,6 +132,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
             if (!isFriend) {
                 NotFriendsBar(name, requested, onAddFriend = vm::requestFriend)
             } else InputBar(
+                placeholder = if (encrypted) "Encrypted message" else "Message",
                 draft = draft,
                 onDraft = {
                     if (it.length <= 4096) {
@@ -195,7 +208,7 @@ private fun NotFriendsBar(name: String, requested: Boolean, onAddFriend: () -> U
 }
 
 @Composable
-private fun InputBar(draft: String, onDraft: (String) -> Unit, onSend: () -> Unit) {
+private fun InputBar(draft: String, onDraft: (String) -> Unit, onSend: () -> Unit, placeholder: String = "Message") {
     Surface(tonalElevation = 2.dp) {
         Row(
             Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = Spacing.sm, vertical = Spacing.xs + Spacing.xxs),
@@ -204,7 +217,7 @@ private fun InputBar(draft: String, onDraft: (String) -> Unit, onSend: () -> Uni
             OutlinedTextField(
                 value = draft,
                 onValueChange = onDraft,
-                placeholder = { Text("Message") },
+                placeholder = { Text(placeholder) },
                 modifier = Modifier.weight(1f),
                 maxLines = 5,
                 shape = RisiShapes.input,
