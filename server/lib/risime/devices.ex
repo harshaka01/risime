@@ -114,8 +114,9 @@ defmodule RisiMe.Devices do
 
   defp mls_key(_), do: :error
 
-  # v1.9 §12.1: `mls.capabilities`; only known ones are kept (unknown ones are ignored).
-  @known_capabilities ~w(groups)
+  # v1.9 §12.1, v1.11 §14.1: `mls.capabilities`; only known ones are kept (unknown ones are
+  # ignored).
+  @known_capabilities ~w(groups images)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1),

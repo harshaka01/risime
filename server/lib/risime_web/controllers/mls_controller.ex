@@ -55,7 +55,7 @@ defmodule RisiMeWeb.MLSController do
 
   def group(conn, %{"conversation_id" => conv}) do
     case MLS.group_view(me(conn), conv) do
-      {:ok, view} -> json(conn, view)
+      {:ok, view} -> json(conn, RisiMe.MLS.Images.put_readiness(view, conv))
       error -> error(conn, error)
     end
   end

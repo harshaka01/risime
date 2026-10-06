@@ -51,9 +51,10 @@ defmodule RisiMe.ContractExamplesTest do
   # v1.10 (history, §13): checked by the tests named after them below.
   @checked_v1_10 ~w(inbox_join_reply_v110.json event_message_sender_copy.json
                    error_quota_exceeded.json)
-  # v1.11 (encrypted images, §14): parse-only placeholders added by root with the contract merge;
-  # the server role replaces them with real checks when it implements §14.
-  @pending_v1_11 ~w(image_payload.json image_payload_no_thumb.json image_payload_png.json
+  # v1.11 (encrypted images, §14): checked in the "v1.11" describe below. The `image` envelopes
+  # and `group_meta_icon.json` travel inside MLS (the server never sees them): they are checked
+  # against the §14.4 validation rules and the §14.3 size formula instead.
+  @checked_v1_11 ~w(image_payload.json image_payload_no_thumb.json image_payload_png.json
                    image_payload_bad_key.json group_meta_icon.json blob_upload_media_reply.json
                    blob_usage_reply.json device_put_images.json mls_group_images_ready.json
                    error_not_e2ee.json error_storage_full.json error_bad_media_type.json)
@@ -89,12 +90,8 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    covered = @checked ++ @checked_v1_9 ++ @checked_v1_10 ++ @pending_v1_11
+    covered = @checked ++ @checked_v1_9 ++ @checked_v1_10 ++ @checked_v1_11
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
-  end
-
-  test "v1.11 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_11, do: assert(is_map(example(name)))
   end
 
   setup do
@@ -631,7 +628,8 @@ defmodule RisiMe.ContractExamplesTest do
       :ok = RisiMe.MLS.record_instance(b.user.id, nil, "jwt", nil)
       {200, view} = mls_req(:get, "/api/v1/mls/groups/#{conv}", a.token, nil, a_dev)
       ex = example("mls_group.json")
-      assert keys(view) == keys(ex)
+      # v1.11 adds images_ready / missing_images (absent = false; mls_group_images_ready.json).
+      assert keys(Map.drop(view, ~w(images_ready missing_images))) == keys(ex)
       assert_same_shape(hd(view["missing"]), hd(ex["missing"]))
 
       body = %{
@@ -1227,6 +1225,282 @@ defmodule RisiMe.ContractExamplesTest do
         )
 
       assert_error(err, "error_generation_conflict.json")
+    end
+  end
+
+  describe "v1.11" do
+    setup :with_attestation_key
+
+    @vectors Path.expand("../../../contract/v1/media_vectors.json", __DIR__)
+    @mib 1024 * 1024
+
+    defp v_api(method, path, token, body \\ nil, device \\ nil),
+      do: RisiMe.GroupHelpers.api(method, path, token, body, device)
+
+    # PUT /me/devices with the given capabilities and a fixed key (so a re-PUT isn't a key change).
+    defp put_device(user, device_id, key, caps) do
+      body = %{
+        example("device_put_images.json")
+        | "mls" => %{"signature_key" => key, "capabilities" => caps}
+      }
+
+      {200, %{"attestation" => _}} =
+        v_api(:put, "/api/v1/me/devices/#{device_id}", user.token, body)
+
+      :ok = RisiMe.MLS.record_instance(user.user.id, device_id, nil, "0.3.0")
+      device_id
+    end
+
+    defp raw_upload(token, params, bytes, ct \\ "application/octet-stream") do
+      conn =
+        http()
+        |> Plug.Conn.put_req_header("authorization", "Bearer " <> token)
+        |> Plug.Conn.put_req_header("content-type", ct)
+        |> Plug.Conn.put_req_header("content-length", Integer.to_string(byte_size(bytes)))
+        |> Phoenix.ConnTest.dispatch(
+          @endpoint,
+          :post,
+          "/api/v1/blobs?" <> URI.encode_query(params),
+          bytes
+        )
+
+      {conn.status, Jason.decode!(conn.resp_body)}
+    end
+
+    defp media_params(conv),
+      do: %{
+        "purpose" => "media",
+        "conversation_id" => conv,
+        "client_blob_id" => Ecto.UUID.generate()
+      }
+
+    # §14.3: Padmé(L) and the ciphertext size of a plaintext of L bytes.
+    defp padme(1), do: 1
+
+    defp padme(l) do
+      e = trunc(:math.log2(l))
+      e = if Bitwise.bsl(1, e + 1) <= l, do: e + 1, else: e
+      sz = trunc(:math.log2(e)) + 1
+      mask = Bitwise.bsl(1, e - sz) - 1
+      Bitwise.band(l + mask, Bitwise.bnot(mask))
+    end
+
+    defp cipher_size(plain) do
+      p = padme(plain)
+      p + 16 * div(p + 65_535, 65_536)
+    end
+
+    defp vint(n) when is_integer(n), do: n
+    defp vint(s) when is_binary(s), do: String.to_integer(s)
+
+    defp b64_len(s, n), do: match?({:ok, <<_::binary-size(n)>>}, Base.decode64(s))
+
+    defp b64_max(s, n) do
+      case Base.decode64(s) do
+        {:ok, b} -> byte_size(b) <= n
+        _ -> false
+      end
+    end
+
+    # The §14.4 strict receive validation (what every client must apply before storing).
+    defp valid_image_ref?(%{"blob" => blob, "enc" => enc}) do
+      enc["alg"] == "A256GCM-S64K" and b64_len(enc["key"], 32) and is_integer(enc["plain_size"]) and
+        enc["plain_size"] >= 1 and cipher_size(enc["plain_size"]) == blob["size"] and
+        blob["size"] <= 16 * @mib and b64_len(blob["sha256"], 32) and
+        match?({:ok, _}, Ecto.UUID.cast(blob["blob_id"]))
+    end
+
+    defp valid_image?(%{"v" => 1, "type" => "image"} = e) do
+      thumb = e["thumb"]
+
+      valid_image_ref?(e) and e["mime"] in ~w(image/jpeg image/png image/webp) and
+        e["w"] in 1..2048 and e["h"] in 1..2048 and
+        (thumb == nil or
+           (thumb["mime"] in ~w(image/jpeg image/webp) and thumb["w"] in 1..128 and
+              thumb["h"] in 1..128 and b64_max(thumb["data"], 4096))) and
+        byte_size(Jason.encode!(e)) <= 22_528
+    end
+
+    test "image envelopes and group_meta_icon.json follow §14.3/§14.4; bad_key is dropped" do
+      for name <- ~w(image_payload.json image_payload_no_thumb.json image_payload_png.json),
+          do: assert(valid_image?(example(name)), name)
+
+      refute valid_image?(example("image_payload_bad_key.json"))
+      assert example("image_payload_no_thumb.json")["thumb"] == nil
+
+      meta = example("group_meta_icon.json")
+      assert meta["v"] == 1 and Enum.all?(meta["admins"], &(&1 =~ @uuid))
+      icon = meta["icon"]
+      assert valid_image_ref?(icon) and icon["blob"]["size"] <= 512 * 1024
+      assert {icon["mime"], icon["w"], icon["h"]} == {"image/jpeg", 512, 512}
+    end
+
+    test "media_vectors.json: the server stores and serves the ciphertext byte-exact, with the client's size and SHA-256",
+         %{a: a, b: b} do
+      vectors = @vectors |> File.read!() |> Jason.decode!()
+      ka = Base.encode64(:crypto.strong_rand_bytes(32))
+      put_device(a, Ecto.UUID.generate(), ka, ["groups", "images"])
+
+      put_device(b, Ecto.UUID.generate(), Base.encode64(:crypto.strong_rand_bytes(32)), [
+        "groups",
+        "images"
+      ])
+
+      conv = e2ee_group!(a, b)
+
+      for v <- vectors["positive"] do
+        cipher = Base.decode16!(v["cipher"], case: :lower)
+        size = vint(v["cipher_size"])
+        assert byte_size(cipher) == size
+        assert cipher_size(vint(v["plain_size"])) == size, v["name"]
+        assert padme(vint(v["plain_size"])) == vint(v["padded_size"])
+
+        {201, up} = raw_upload(a.token, media_params(conv), cipher)
+        assert up["size"] == size
+        assert up["sha256"] == v["sha256"] |> Base.decode16!(case: :lower) |> Base.encode64()
+
+        conn =
+          http()
+          |> Plug.Conn.put_req_header("authorization", "Bearer " <> b.token)
+          |> Phoenix.ConnTest.dispatch(@endpoint, :get, "/api/v1/blobs/#{up["blob_id"]}")
+
+        assert conn.resp_body == cipher
+        assert Plug.Conn.get_resp_header(conn, "etag") == [~s("#{v["sha256"]}")]
+
+        # A resume at the last segment boundary (segment i starts at i·65552).
+        last = (vint(v["segments"]) - 1) * 65_552
+
+        conn =
+          http()
+          |> Plug.Conn.put_req_header("authorization", "Bearer " <> b.token)
+          |> Plug.Conn.put_req_header("range", "bytes=#{last}-")
+          |> Phoenix.ConnTest.dispatch(@endpoint, :get, "/api/v1/blobs/#{up["blob_id"]}")
+
+        assert conn.status == 206
+        assert conn.resp_body == binary_part(cipher, last, size - last)
+      end
+    end
+
+    test "device_put_images.json, mls_group_images_ready.json, blob_upload_media_reply.json, blob_usage_reply.json and the errors",
+         %{a: a, b: b} do
+      # device_put_images.json: the capability is stored.
+      a_dev = Ecto.UUID.generate()
+
+      {200, %{"attestation" => _}} =
+        v_api(:put, "/api/v1/me/devices/#{a_dev}", a.token, example("device_put_images.json"))
+
+      :ok = RisiMe.MLS.record_instance(a.user.id, a_dev, nil, "0.3.0")
+
+      assert %{capabilities: ["groups", "images"]} =
+               Repo.get_by(RisiMe.Devices.Device, device_id: a_dev)
+
+      kb = Base.encode64(:crypto.strong_rand_bytes(32))
+      b_dev = put_device(b, Ecto.UUID.generate(), kb, ["groups"])
+      RisiMe.GroupHelpers.clear_legacy!()
+
+      # Plaintext: never images_ready.
+      plain = Messaging.conversation_id(a.user.id, b.user.id)
+      {200, view} = v_api(:get, "/api/v1/mls/groups/#{plain}", a.token)
+      assert view["images_ready"] == false
+
+      # error_not_e2ee.json
+      assert raw_upload(a.token, media_params(plain), "x") ==
+               {409, example("error_not_e2ee.json")}
+
+      # mls_group_images_ready.json: b's device lacks `images`.
+      conv = e2ee_group!(a, b)
+      ex = example("mls_group_images_ready.json")
+      {200, view} = v_api(:get, "/api/v1/mls/groups/#{conv}", a.token)
+      assert keys(view) == keys(ex)
+
+      assert_same_shape(
+        Map.drop(view, ~w(missing devices missing_images)),
+        Map.drop(ex, ~w(missing devices missing_images))
+      )
+
+      assert view["images_ready"] == false
+      assert view["missing_images"] == [%{"user_id" => b.user.id, "device_id" => b_dev}]
+      assert_same_shape(hd(view["missing_images"]), hd(ex["missing_images"]))
+
+      # b updates (same key): ready, for both callers.
+      put_device(b, b_dev, kb, ["groups", "images"])
+      {200, view} = v_api(:get, "/api/v1/mls/groups/#{conv}", b.token)
+      assert {view["images_ready"], view["missing_images"]} == {true, []}
+
+      # blob_upload_media_reply.json
+      {201, up} = raw_upload(a.token, media_params(conv), :crypto.strong_rand_bytes(1000))
+      assert_same_shape(up, example("blob_upload_media_reply.json"))
+
+      # blob_usage_reply.json
+      {200, usage} = v_api(:get, "/api/v1/blobs/usage", a.token)
+      assert_same_shape(usage, example("blob_usage_reply.json"))
+      ex_usage = example("blob_usage_reply.json")
+      assert usage["media"]["limit"] == ex_usage["media"]["limit"]
+      assert usage["media"]["hourly_limit"] == ex_usage["media"]["hourly_limit"]
+      assert usage["media"]["daily_limit"] == ex_usage["media"]["daily_limit"]
+      assert usage["mls"]["limit"] == ex_usage["mls"]["limit"]
+      assert usage["media"]["used"] == 1000 and usage["media"]["uploads_last_hour"] == 1
+
+      # error_bad_media_type.json
+      assert raw_upload(a.token, media_params(conv), "x", "image/jpeg") ==
+               {415, example("error_bad_media_type.json")}
+
+      # error_storage_full.json
+      prev = Application.get_env(:risime, :blob_disk)
+      Application.put_env(:risime, :blob_disk, {1, 1024 ** 4})
+      on_exit(fn -> Application.put_env(:risime, :blob_disk, prev) end)
+
+      assert raw_upload(a.token, media_params(conv), "x") ==
+               {507, example("error_storage_full.json")}
+    end
+
+    test "images_ready in a group, and a legacy instance or a member without an images device",
+         %{a: a, b: b} do
+      import RisiMe.GroupHelpers, only: [create_commit: 2, clear_legacy!: 0]
+
+      a_dev =
+        put_device(a, Ecto.UUID.generate(), Base.encode64(:crypto.strong_rand_bytes(32)), [
+          "groups",
+          "images"
+        ])
+
+      put_device(b, Ecto.UUID.generate(), Base.encode64(:crypto.strong_rand_bytes(32)), [
+        "groups",
+        "images"
+      ])
+
+      clear_legacy!()
+
+      body = %{"client_group_id" => Ecto.UUID.generate(), "member_ids" => [b.user.id]}
+      {201, %{"group" => %{"id" => id}}} = v_api(:post, "/api/v1/groups", a.token, body, a_dev)
+
+      {200, _} =
+        v_api(
+          :post,
+          "/api/v1/mls/groups/#{id}/commit",
+          a.token,
+          create_commit([a.user.id, b.user.id], {a.user.id, a_dev}),
+          a_dev
+        )
+
+      {200, view} = v_api(:get, "/api/v1/mls/groups/#{id}", a.token, nil, a_dev)
+      assert {view["images_ready"], view["missing_images"]} == {true, []}
+
+      # A pre-v1.7 instance of b seen after b's latest registration blocks (device_id null).
+      Process.sleep(5)
+      :ok = RisiMe.MLS.record_instance(b.user.id, nil, "tok", "0.1.0")
+      {200, view} = v_api(:get, "/api/v1/mls/groups/#{id}", a.token, nil, a_dev)
+      assert view["images_ready"] == false
+      assert view["missing_images"] == [%{"user_id" => b.user.id, "device_id" => nil}]
+
+      # A removed device (e.g. an old install) no longer counts; a user with no images device does.
+      clear_legacy!()
+      c = logged_in_user()
+      RisiMe.GroupHelpers.clear_legacy!()
+      assert RisiMe.MLS.Images.missing([c.user.id]) == [%{user_id: c.user.id, device_id: nil}]
+      old = Ecto.UUID.generate()
+      :ok = RisiMe.MLS.record_instance(a.user.id, old, nil, "0.2.0")
+      assert RisiMe.MLS.Images.missing([a.user.id]) == []
     end
   end
 
