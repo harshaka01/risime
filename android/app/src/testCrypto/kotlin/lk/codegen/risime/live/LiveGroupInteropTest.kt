@@ -823,5 +823,51 @@ class LiveGroupInteropTest {
             ensure(g.pending.isEmpty()) { "pending after the rejoin: ${g.pending}" }
             "epoch ${nb.epoch(conv2)}"
         }
+
+        // ---- Decision 050: a plain logout keeps the chats; the same account resumes with no rejoin. ----
+        var markersBefore = 0
+        var rejoinsBefore = 0
+        check("L1. A logs out (plain: push unregistered, device kept); D (DM) and B (group) write meanwhile") {
+            val dm = dmConversationId(aId, dId)
+            val epochs = listOf(dm, conv2).associateWith { a.epoch(it) }
+            markersBefore = a.on { a.messages.rows.values.count { it.clientMsgId.startsWith("sys:history:") } }
+            rejoinsBefore = a.on { a.opDao.rows.values.count { it.type == GroupOpType.REJOIN } }
+            ensure(a.on { a.api.unregisterPush(a.deviceId) } is ApiResult.Ok) { "DELETE …/push_token" }
+            a.on { a.client.stop() }
+            // The server kept A's device in both groups: no removal, no pending rejoin.
+            ensure((b2!!.api.group(conv2) as ApiResult.Ok).value.group.pending.isEmpty()) { "pending after A's logout" }
+            ensure((d.api.mlsGroup(dm) as ApiResult.Ok).value.devices.any { it.deviceId == a.deviceId }) { "A's device left the DM group" }
+            d.on { d.chat.sendText(aId, "dm while A was out $run") }
+            b2!!.on { b2!!.chat.sendText(conv2, "group while A was out $run") }
+            delay(1_000)
+            ensure(epochs.all { (conv, e) -> a.epoch(conv) == e }) { "A's MLS state changed while logged out" }
+            null
+        }
+        var resumeMsg = ""
+        check("L2. A signs back in (same account, same device, same MLS state): old chats, new messages, sends; no rejoin") {
+            val dm = dmConversationId(aId, dId)
+            ensure(a.on { a.registrar.register(pushToken = null) } is Registration.Mls) { "A re-registration" }
+            a.start()
+            a.live()
+            ensure(a.awaitText(dm, "dm while A was out $run").from == dId) { "A: D's DM" }
+            ensure(a.awaitText(conv2, "group while A was out $run").from == bId) { "A: B's group message" }
+            val old = a.texts(conv2) + a.texts(dm)
+            ensure(listOf("before 1 $run", "before 2 $run", "dm hello $run", "dm back $run").all { it in old }) { "old content missing" }
+            ensure(a.on { a.messages.rows.values.count { it.clientMsgId.startsWith("sys:history:") } } == markersBefore) { "a history gap marker after a plain logout" }
+            ensure(a.on { a.opDao.rows.values.count { it.type == GroupOpType.REJOIN } } == rejoinsBefore) { "A queued a rejoin" }
+            a.on { a.chat.sendText(dId, "dm after resume $run") }
+            ensure(d.awaitText(dm, "dm after resume $run").from == aId) { "D: A's DM after resume" }
+            resumeMsg = a.on { a.chat.sendText(conv2, "group after resume $run") }!!
+            for (x in listOf(b2!!, c)) ensure(x.awaitText(conv2, "group after resume $run").from == aId) { "${x.name}: A's group message after resume" }
+            null
+        }
+        check("L3. group ticks after the resume: ✓✓ when B and C have it, read when both read") {
+            a.await(20_000, "all_delivered after resume") {
+                a.messages.rows[resumeMsg]?.takeIf { it.status in listOf(MessageStatus.DELIVERED.name, MessageStatus.READ.name) }
+            }
+            for (x in listOf(b2!!, c)) x.on { x.chat.markConversationRead(conv2) }
+            a.await(20_000, "all_read after resume") { a.messages.rows[resumeMsg]?.takeIf { it.status == MessageStatus.READ.name } }
+            null
+        }
 }
 }
