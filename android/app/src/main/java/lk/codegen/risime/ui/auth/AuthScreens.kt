@@ -58,7 +58,9 @@ fun LockedScreen(authUi: AuthUi) {
             textAlign = TextAlign.Center,
         )
         Button(onClick = authUi::unlock, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Unlock") }
-        TextButton(onClick = authUi::signOutLocked, enabled = !busy) { Text("Sign out") }
+        lk.codegen.risime.ui.common.ConfirmLogout(onConfirm = authUi::signOutLocked) { ask ->
+            TextButton(onClick = ask, enabled = !busy) { Text("Sign out") }
+        }
     }
 }
 
@@ -91,7 +93,9 @@ fun BlockedScreen(blocked: Blocked, c: AppContainer, authUi: AuthUi) {
                 }
             }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Use another account") }
         }
-        OutlinedButton(onClick = { scope.launch { c.logout() } }, modifier = Modifier.fillMaxWidth()) { Text("Sign out") }
+        lk.codegen.risime.ui.common.ConfirmLogout(onConfirm = { scope.launch { c.logout() } }) { ask ->
+            OutlinedButton(onClick = ask, modifier = Modifier.fillMaxWidth()) { Text("Sign out") }
+        }
     }
 }
 

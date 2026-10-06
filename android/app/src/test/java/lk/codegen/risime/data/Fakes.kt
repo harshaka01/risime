@@ -24,6 +24,8 @@ import lk.codegen.risime.realtime.RealtimeSession
 class FakeMessageDao : MessageDao {
     val rows = linkedMapOf<String, MessageEntity>()
 
+    override suspend fun countAll(): Int = rows.size
+
     override suspend fun insert(m: MessageEntity): Long {
         if (rows.containsKey(m.clientMsgId)) return -1
         if (m.messageId != null && rows.values.any { it.messageId == m.messageId }) return -1

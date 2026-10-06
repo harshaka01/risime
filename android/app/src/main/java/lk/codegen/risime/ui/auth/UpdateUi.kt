@@ -192,7 +192,9 @@ fun RequiredUpdateContent(
                     OutlinedButton(onClick = onOpenDownloadPage, modifier = Modifier.weight(1f)) {
                         Text(OPEN_DOWNLOAD_PAGE, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
-                    TextButton(onClick = onSignOut) { Text("Sign out", maxLines = 1) }
+                    lk.codegen.risime.ui.common.ConfirmLogout(onConfirm = onSignOut) { ask ->
+                        TextButton(onClick = ask) { Text("Sign out", maxLines = 1) }
+                    }
                 }
             }
         }

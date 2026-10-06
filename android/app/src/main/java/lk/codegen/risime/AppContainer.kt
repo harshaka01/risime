@@ -26,6 +26,8 @@ import lk.codegen.risime.data.ChatEngine
 import lk.codegen.risime.data.ContactsRepository
 import lk.codegen.risime.data.AuthKind
 import lk.codegen.risime.data.LegacyServerUrlMigration
+import lk.codegen.risime.data.LocalAccount
+import lk.codegen.risime.data.WipeReason
 import lk.codegen.risime.data.mls.DeviceRegistrar
 import lk.codegen.risime.data.mls.KeystoreDbKeyWrapper
 import lk.codegen.risime.data.mls.KvSealer
@@ -83,7 +85,12 @@ private val Context.dataStore by preferencesDataStore(
 )
 
 /** Manual DI for 0.1 (no framework). One instance per process, owned by [RisiMeApp]. */
-class AppContainer(context: Context) {
+class AppContainer(
+    context: Context,
+    /** Tests open the same file with the bundled SQLite driver (no framework SQLite on the JVM). */
+    openDb: (Context) -> AppDatabase = AppDatabase::create,
+    prefs: androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> = context.dataStore,
+) {
     val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default +
             CoroutineExceptionHandler { _, e -> Log.w("RisiMe", "background task failed", e) },
@@ -94,8 +101,11 @@ class AppContainer(context: Context) {
         .readTimeout(20, TimeUnit.SECONDS)
         .build()
 
-    val sessionStore = SessionStore(context.dataStore, BuildConfig.DEFAULT_SERVER_URL)
-    val db = AppDatabase.create(context)
+    val sessionStore = SessionStore(prefs, BuildConfig.DEFAULT_SERVER_URL)
+    val db = openDb(context)
+
+    /** The only place that decides to delete local chats (logout, server change, confirmed other account). */
+    val localAccount = LocalAccount(sessionStore, { reason -> wipeDb(reason) }, { Log.w("RisiMe", it) })
     // ---- Auth (contract v1.3, decision 014) ----
     val oidc = AppAuthGateway(context, http)
     val auth = AuthManager(
@@ -398,6 +408,10 @@ class AppContainer(context: Context) {
                 .collect { s ->
                     realtime.stop()
                     if (s != null) {
+                        // History recovery before the join reads the cursor (P0 nightly.10).
+                        runCatching {
+                            localAccount.recoverHistoryIfNeeded({ db.messages().countAll() }, { db.sync().cursor() }, { db.wipe().syncState() })
+                        }
                         realtime.start(
                             RealtimeSession(s.first, s.second, sessionStore.deviceId(), BuildConfig.VERSION_NAME) { force -> bearer(force) },
                         )
@@ -427,7 +441,7 @@ class AppContainer(context: Context) {
             auth.signInNeeded.collect { needed ->
                 if (needed) {
                     realtime.stop()
-                    sessionStore.clearLogin(forgetUser = false)
+                    localAccount.signOutKeepData()
                     signInNotice.value = "Your RisiCloud session ended. Sign in again — your chats are kept."
                     auth.acknowledgeSignInNeeded()
                 }
@@ -437,7 +451,7 @@ class AppContainer(context: Context) {
         scope.launch {
             val s = sessionStore.current()
             if (s?.kind == AuthKind.OIDC && !auth.canUnlock() && !auth.unlocked.value) {
-                sessionStore.clearLogin(forgetUser = false)
+                localAccount.signOutKeepData()
                 signInNotice.value = "Sign in again — your chats are kept."
             }
         }
@@ -481,10 +495,9 @@ class AppContainer(context: Context) {
         }
     }
 
-    /** Dev OTP login (DEV_LOCAL_AUTH servers). A different user than last time wipes local chats. */
+    /** Dev OTP login (DEV_LOCAL_AUTH servers). Only a confirmed different account wipes local chats. */
     suspend fun onLoggedIn(token: String, user: User) {
-        val previous = sessionStore.lastUserId()
-        if (previous != null && previous != user.id) wipeDb()
+        localAccount.beforeSignIn(user)
         signInNotice.value = null
         sessionStore.saveLogin(token, user)
     }
@@ -527,8 +540,7 @@ class AppContainer(context: Context) {
     }
 
     private suspend fun adoptOidcUser(user: User) {
-        val previous = sessionStore.lastUserId()
-        if (previous != null && previous != user.id) wipeDb()
+        localAccount.beforeSignIn(user)
         blocked.value = null
         signInNotice.value = null
         sessionStore.saveOidcLogin(user)
@@ -578,7 +590,7 @@ class AppContainer(context: Context) {
     suspend fun signOutKeepData(notice: String) {
         realtime.stop()
         if (auth.unlocked.value) auth.signOut()
-        sessionStore.clearLogin(forgetUser = false)
+        localAccount.signOutKeepData()
         signInNotice.value = notice
     }
 
@@ -610,15 +622,13 @@ class AppContainer(context: Context) {
         auth.signOut()
         blocked.value = null
         realtime.stop()
-        sessionStore.clearLoginAndSetServerUrl(url)
-        wipeDb()
+        localAccount.switchServer(url)
     }
 
-    /** Token revoked or rejected: back to login. */
-    suspend fun clearLocal() {
+    /** Explicit logout only: forget the account and delete local chats. */
+    private suspend fun clearLocal() {
         realtime.stop()
-        sessionStore.clearLogin()
-        wipeDb()
+        localAccount.logout()
     }
 
     /** Only a 401 (refresh already tried) matters on the phone screen: back to sign-in, data kept. */
@@ -725,17 +735,9 @@ class AppContainer(context: Context) {
     /** Chat data only; the local behaviour log stays on the device. */
     private fun clearFriendsMemory() = contacts.clearMemory()
 
-    private suspend fun wipeDb() = db.withTransaction {
-        db.wipe().messages()
-        db.wipe().contacts()
-        db.wipe().syncState()
-        db.wipe().seenEvents()
-        db.wipe().mlsKv()
-        db.wipe().mlsPending()
-        db.wipe().reactions()
-        db.wipe().groups()
-        db.wipe().groupMembers()
-        db.wipe().groupOps()
+    private suspend fun wipeDb(reason: WipeReason) {
+        Log.w("RisiMe", "wiping local chats: $reason")
+        db.wipe().allChatData()
         mlsEngine = null
         mlsDbKey.destroy()
     }

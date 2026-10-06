@@ -78,7 +78,7 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
             it[TOKEN] = token
             it[KIND] = AuthKind.DEV.name
             it[USER] = ProtocolJson.encodeToString(User.serializer(), user)
-            it[LAST_USER] = user.id
+            it[LAST_USER] = AccountIds.stable(user.id) ?: user.id
         }
     }
 
@@ -88,7 +88,7 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
             it.remove(TOKEN)
             it[KIND] = AuthKind.OIDC.name
             it[USER] = ProtocolJson.encodeToString(User.serializer(), user)
-            it[LAST_USER] = user.id
+            it[LAST_USER] = AccountIds.stable(user.id) ?: user.id
         }
     }
 
@@ -153,6 +153,20 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         store.edit { it[GROUPS_KP] = signatureKey }
     }
 
+    /** The one-time inbox replay ([LocalAccount.HISTORY_REPLAY_VERSION]) done on this install. */
+    suspend fun historyReplayVersion(): Int = store.data.first()[HISTORY_REPLAY]?.toIntOrNull() ?: 0
+
+    suspend fun setHistoryReplayVersion(v: Int) {
+        store.edit { it[HISTORY_REPLAY] = v.toString() }
+    }
+
+    /** The cursor at which an empty message table last triggered a replay (no replay loop). */
+    suspend fun emptyReplayCursor(): String? = store.data.first()[EMPTY_REPLAY_CURSOR]
+
+    suspend fun setEmptyReplayCursor(c: String) {
+        store.edit { it[EMPTY_REPLAY_CURSOR] = c }
+    }
+
     suspend fun notificationsPrompted(): Boolean = store.data.first()[NOTIF_PROMPTED] == "1"
 
     suspend fun setNotificationsPrompted() {
@@ -181,6 +195,8 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         private val NOTIFIED_UP_TO = stringPreferencesKey("notified_up_to")
         private val NOTIFIED_REQUESTS = stringPreferencesKey("notified_requests")
         private val NOTIF_PROMPTED = stringPreferencesKey("notif_prompted")
+        private val HISTORY_REPLAY = stringPreferencesKey("history_replay_version")
+        private val EMPTY_REPLAY_CURSOR = stringPreferencesKey("empty_replay_cursor")
         private val GROUPS_KP = stringPreferencesKey("groups_kp_replaced_for")
     }
 }

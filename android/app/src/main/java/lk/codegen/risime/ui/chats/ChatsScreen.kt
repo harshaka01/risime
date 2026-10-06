@@ -68,7 +68,17 @@ fun ChatsScreen(
     val err by vm.refreshError.collectAsStateWithLifecycle()
     val friends by vm.friendsState.collectAsStateWithLifecycle()
     var menu by remember { mutableStateOf(false) }
+    var askLogout by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    if (askLogout) {
+        lk.codegen.risime.ui.common.LogoutConfirmDialog(
+            onConfirm = {
+                askLogout = false
+                vm.logout()
+            },
+            onDismiss = { askLogout = false },
+        )
+    }
     Scaffold(
         topBar = {
             RisiTopBar(
@@ -89,7 +99,7 @@ fun ChatsScreen(
                         })
                         DropdownMenuItem(text = { Text("Log out") }, onClick = {
                             menu = false
-                            vm.logout()
+                            askLogout = true
                         })
                     }
                 },

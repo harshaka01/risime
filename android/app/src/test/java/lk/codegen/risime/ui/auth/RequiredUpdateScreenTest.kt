@@ -104,6 +104,11 @@ class RequiredUpdateScreenTest {
         rule.onNodeWithText("Update").performClick()
         rule.onNodeWithText(OPEN_DOWNLOAD_PAGE).performClick()
         rule.onNodeWithText("Sign out").performClick()
+        assertEquals("sign out is never one tap (it deletes chats)", 0, signOuts)
+        rule.onNodeWithText("Cancel").performClick()
+        assertEquals(0, signOuts)
+        rule.onNodeWithText("Sign out").performClick()
+        rule.onNodeWithText("Log out").performClick()
         assertEquals(listOf(1, 1, 1), listOf(updates, downloads, signOuts))
     }
 

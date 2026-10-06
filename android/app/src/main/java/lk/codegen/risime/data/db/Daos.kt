@@ -12,6 +12,10 @@ interface MessageDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(m: MessageEntity): Long
 
+    /** Every row (history recovery: a cursor with no messages means lost data). */
+    @Query("SELECT COUNT(*) FROM messages")
+    suspend fun countAll(): Int
+
     /** §13.3 marker lines: move a local system row forward only (never earlier). */
     @Query(
         "UPDATE messages SET server_ts = :serverTs, local_ts = :localTs " +
@@ -119,6 +123,21 @@ interface SyncDao {
 /** Wipes chat data on logout. The behaviour log is kept (it is the device owner's, never uploaded). */
 @Dao
 interface WipeDao {
+    /** Every chat table in one transaction (logout, server change, confirmed other account only). */
+    @androidx.room.Transaction
+    suspend fun allChatData() {
+        messages()
+        contacts()
+        syncState()
+        seenEvents()
+        mlsKv()
+        mlsPending()
+        reactions()
+        groups()
+        groupMembers()
+        groupOps()
+    }
+
     @Query("DELETE FROM messages")
     suspend fun messages()
 
