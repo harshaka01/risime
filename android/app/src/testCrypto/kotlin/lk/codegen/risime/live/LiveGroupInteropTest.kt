@@ -481,6 +481,46 @@ class LiveGroupInteropTest {
             "${a.img.media.get(id)!!.blobSize} bytes"
         }
 
+        check("13a2. group photo send path as the app shows it: upload 0→100 %, A's row SENT with the blob; Retry keeps client_blob_id and gets the 200 replay") {
+            val seen = a.img.progressSeen[img1].orEmpty().toList()
+            ensure(seen.size >= 2 && seen.first() < 1f && seen.last() == 1f && seen == seen.sorted()) { "A's upload progress: $seen" }
+            ensure(a.img.uploader.progress.flow.value[img1] == null) { "progress left after the upload" }
+            val sent = a.await(15_000, "A's group photo accepted") { a.messages.rows[img1]?.takeIf { it.status != "PENDING" } }
+            val m = a.on { a.img.media.get(img1)!! }
+            ensure(sent.status in listOf("SENT", "DELIVERED", "READ") && sent.messageId != null && sent.blobId == m.blobId) { "A's row $sent / ${m.blobId}" }
+            ensure(lk.codegen.risime.ui.chat.photoSendState(sent, m, null) == null) { "A's bubble still shows a send state" }
+            // A second photo whose 201 was lost: the server stored the blob, the row never got it, and the send failed.
+            // The tap Retry re-uploads under the same client_blob_id, the server replays 200 with the same blob (§14.2),
+            // then the outbox sends it and B and C decrypt it.
+            val src = lk.codegen.risime.data.media.Fixtures.jpeg(lk.codegen.risime.data.media.Fixtures.image(320, 240, noise = true))
+            val p = a.on { a.img.repo.prepare(src, lk.codegen.risime.data.media.ImagePipeline(lk.codegen.risime.data.media.AwtBitmapOps())) }
+            val id2 = a.on { a.img.repo.commit(p, conv, aId, conv, "retry probe $run").clientMsgId }
+            val first = a.on { a.img.media.get(id2)!! }
+            val lost = a.on { a.api.uploadMediaBlob(conv, first.clientBlobId!!, a.img.files.file(first.fileName!!)) }
+            ensure(lost is ApiResult.Ok) { "first upload: $lost" }
+            val lostBlob = (lost as ApiResult.Ok).value.blobId
+            a.on {
+                a.img.media.update(first.copy(state = "FAILED", failReason = "quota_exceeded"))
+                a.messages.failPending(id2, "quota_exceeded")
+            }
+            val failedState = a.on { lk.codegen.risime.ui.chat.photoSendState(a.messages.rows[id2]!!, a.img.media.get(id2), null) }
+            ensure(failedState is lk.codegen.risime.ui.chat.PhotoSend.Failed) { "not a failed bubble: $failedState" }
+            ensure(a.on { a.img.repo.retry(id2) }) { "retry refused" }
+            val again = a.on { a.img.uploader.run(id2) }
+            val after = a.on { a.img.media.get(id2)!! }
+            ensure(again == lk.codegen.risime.data.media.UploadOutcome.Done(lostBlob) && after.clientBlobId == first.clientBlobId) {
+                "retry: $again (lost $lostBlob), ${after.clientBlobId} vs ${first.clientBlobId}"
+            }
+            val sha2 = a.on { LiveImageKit.sha((a.img.repo.decrypt(id2) as lk.codegen.risime.data.media.Decrypted.Ok).bytes) }
+            a.on { a.chat.flushOutbox() }
+            a.await(15_000, "retried photo accepted") { a.messages.rows[id2]?.takeIf { it.status != "PENDING" && it.status != "FAILED" } }
+            for (x in listOf(b, c)) {
+                x.await(20_000, "retried photo") { x.img.media.rows.value[id2] }
+                ensure(x.on { x.img.fetch(id2) } == sha2) { "${x.name}: retried photo differs" }
+            }
+            "progress ${seen.size} steps; replay blob $lostBlob"
+        }
+
         check("10b. a member's legacy app (no groups) gets no group fan-out") {
             val sent = a.on { a.client.sendMessage(lk.codegen.risime.net.MsgSend(UUID.randomUUID().toString(), bId, "dm to legacy $run", now())) }
             if (sent is PushResult.Ok) {

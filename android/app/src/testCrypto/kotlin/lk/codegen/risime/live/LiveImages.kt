@@ -18,6 +18,7 @@ import lk.codegen.risime.data.media.MediaSealer
 import lk.codegen.risime.data.media.UploadOutcome
 import lk.codegen.risime.data.mls.KvSealer
 import lk.codegen.risime.net.ApiClient
+import kotlinx.coroutines.launch
 import java.nio.file.Files
 import java.security.MessageDigest
 
@@ -33,6 +34,12 @@ class LiveImageKit(api: ApiClient, messages: FakeMessageDao, name: String) {
     private val tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() }
     val repo = ImageRepository(media, messages, tx, sealer, files, { crypto }, api)
     val uploader = ImageUploader(api, media, messages, files)
+
+    /** Every upload progress value seen per client_msg_id (the bubble's "Uploading N%"). */
+    val progressSeen = java.util.concurrent.ConcurrentHashMap<String, MutableList<Float>>()
+    private val progressWatch = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined).launch {
+        uploader.progress.flow.collect { m -> m.forEach { (id, f) -> progressSeen.getOrPut(id) { java.util.Collections.synchronizedList(mutableListOf()) }.let { l -> if (l.lastOrNull() != f) l += f } } }
+    }
     val downloader = ImageDownloader(api, media, files, sealer, { crypto })
 
     /** Pick → re-encode → encrypt → commit → upload, like the app; returns (client_msg_id, SHA-256 of the sent plaintext). */
@@ -55,7 +62,10 @@ class LiveImageKit(api: ApiClient, messages: FakeMessageDao, name: String) {
         return sha(d.bytes)
     }
 
-    fun close() = files.wipe()
+    fun close() {
+        progressWatch.cancel()
+        files.wipe()
+    }
 
     companion object {
         fun sha(b: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
