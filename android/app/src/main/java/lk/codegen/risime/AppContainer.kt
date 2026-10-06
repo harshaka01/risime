@@ -45,6 +45,7 @@ import lk.codegen.risime.realtime.ConnectionState
 import lk.codegen.risime.realtime.PhoenixRealtimeClient
 import lk.codegen.risime.realtime.RealtimeClient
 import lk.codegen.risime.realtime.RealtimeSession
+import lk.codegen.risime.update.Updater
 import okhttp3.OkHttpClient
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -102,6 +103,9 @@ class AppContainer(context: Context) {
 
     val presence = PresenceTracker(scope)
 
+    /** Release-only self-updater (decision 016); disabled in debug builds. */
+    val updater = Updater(context, http)
+
     /** The peer of the chat on screen, if any; always included in the presence watch. */
     val openChatPeer = MutableStateFlow<String?>(null)
 
@@ -128,6 +132,7 @@ class AppContainer(context: Context) {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 foreground.value = true
+                scope.launch { updater.maybeCheck(SystemClock.elapsedRealtime()) }
                 scope.launch { behaviour.appOpen() }
             }
 

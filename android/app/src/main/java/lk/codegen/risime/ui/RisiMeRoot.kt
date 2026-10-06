@@ -20,6 +20,9 @@ import lk.codegen.risime.data.Session
 import lk.codegen.risime.ui.auth.AuthUi
 import lk.codegen.risime.ui.auth.BlockedScreen
 import lk.codegen.risime.ui.auth.LockedScreen
+import lk.codegen.risime.ui.auth.RequiredUpdateScreen
+import lk.codegen.risime.ui.auth.UpdateBar
+import lk.codegen.risime.update.blocking
 import lk.codegen.risime.ui.chat.ChatScreen
 import lk.codegen.risime.ui.chat.ChatViewModel
 import lk.codegen.risime.ui.chats.ChatsScreen
@@ -48,6 +51,7 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
     val unlocked by c.auth.unlocked.collectAsState()
     val blocked by c.blocked.collectAsState()
     val notice by c.signInNotice.collectAsState()
+    val update by c.updater.state.collectAsState()
     val b = blocked
     val gate = if (b != null) Gate.Blocked(b) else when (val s = session) {
         Unit -> Gate.Loading
@@ -57,7 +61,13 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
         DevEncryptionBanner()
+        val required = update.blocking()
+        if (required == null) UpdateBar(update, c)
         Box(Modifier.weight(1f)) {
+            if (required != null) {
+                RequiredUpdateScreen(update, required, c)
+                return@Box
+            }
             when (gate) {
                 Gate.Loading -> Unit
                 Gate.LoggedOut -> LoginFlow(viewModel(key = "login") { LoginViewModel(c) }, authUi, notice)
