@@ -194,6 +194,25 @@ class FakeRealtime : RealtimeClient {
         return groupReplies(msg)
     }
 
+    /** §15.2 / §15.9 pushes. */
+    val sentDeletes = mutableListOf<lk.codegen.risime.net.MsgDelete>()
+    var deleteReplies: (lk.codegen.risime.net.MsgDelete) -> PushResult<lk.codegen.risime.net.MsgDeleteReply> = { m ->
+        PushResult.Ok(lk.codegen.risime.net.MsgDeleteReply(if (m.scope == "me") null else "del-${m.clientMsgId}", m.conversationId, if (m.scope == "me") null else "2026-10-06T09:00:00.000Z", m.targets, emptyList()))
+    }
+    val clears = mutableListOf<lk.codegen.risime.net.ChatClear>()
+
+    override suspend fun deleteMessages(msg: lk.codegen.risime.net.MsgDelete): PushResult<lk.codegen.risime.net.MsgDeleteReply> {
+        if (!connected) return PushResult.Unavailable
+        sentDeletes += msg
+        return deleteReplies(msg)
+    }
+
+    override suspend fun clearChat(msg: lk.codegen.risime.net.ChatClear): PushResult<Unit> {
+        if (!connected) return PushResult.Unavailable
+        clears += msg
+        return PushResult.Ok(Unit)
+    }
+
     override suspend fun ack(messageIds: List<String>, status: String): PushResult<Unit> {
         if (!connected) return PushResult.Unavailable
         acks += messageIds to status

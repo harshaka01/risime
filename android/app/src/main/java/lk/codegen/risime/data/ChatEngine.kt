@@ -106,6 +106,10 @@ class ChatEngine(
     private val outboxLock = Mutex()
     private val ackLock = Mutex()
 
+    /** §15.7 (android R6): the serial encrypt-and-push lane (texts, reactions, images, deletes). */
+    private val lane = Mutex()
+    private val deleteLock = Mutex()
+
     // ---- RealtimeListener ----
 
     override suspend fun cursor(): String? = sync.cursor().also { if (it == null) replayingFresh = true }
@@ -488,6 +492,7 @@ class ChatEngine(
                 outgoing = true,
             ),
         )
+        deletes?.unhide(conv) // §15.7: a deleted chat comes back with my new message
         behaviour?.messageSent(to, body.length, previous?.takeIf { !it.outgoing }?.let { now - it.localTs })
         scope.launch { flushOutbox() }
         return id
@@ -523,7 +528,9 @@ class ChatEngine(
         while (true) {
             val engine = mlsEngine()
             val group = engine?.group(conv)
-            val r = if (isGroupConversation(conv)) {
+            // §15.7 (android R6): one serial encrypt-and-push lane for every application message
+            // (text, reaction, image, delete): generation n is pushed before n+1 is encrypted.
+            val r = lane.withLock { if (isGroupConversation(conv)) {
                 // §12.9: groups are e2ee-only; without the local group (Welcome not here yet) the message waits.
                 if (engine == null || group == null) return PushResult.Rejected(WAITING_FOR_GROUP)
                 val ct = tx.run { engine.encrypt(conv, envelope()) }
@@ -537,7 +544,7 @@ class ChatEngine(
                 )
             } else {
                 plain()
-            }
+            } }
             val reason = (r as? PushResult.Rejected)?.reason
             if (reason != AuthErrors.STALE_EPOCH && reason != AuthErrors.E2EE_REQUIRED) return r
             if (attempt++ >= staleEpochRetries) return PushResult.Rejected(RETRY_LATER)
@@ -609,24 +616,276 @@ class ChatEngine(
 
     /** §15.7 (android R2): a pushed message the user deleted meanwhile: now that it has a message_id, delete it for everyone. */
     private suspend fun cancelAfterSend(clientMsgId: String, messageId: String) {
-        onCancelAfterSend(clientMsgId, messageId)
+        val dao = deletes ?: return
+        val row = messages.byClientMsgId(clientMsgId) ?: return
+        dao.setDeleteState(listOf(clientMsgId), MessageEntity.DELETE_STATE_DELETING)
+        queueEveryone(row.conversationId, listOf(row.copy(messageId = messageId)))
+        scope.launch { flushDeletes() }
     }
 
-    /** Set by the send side (chunk: send path); a no-op until then. */
-    @Volatile var onCancelAfterSend: suspend (clientMsgId: String, messageId: String) -> Unit = { _, _ -> }
+    // ---- Sending deletes (§15.2, §15.7). The UI that calls these is behind DeleteFeature.sendEnabled. ----
+
+    /** §15.7: one notice for the chat that asked ("Couldn't delete for everyone", with the rows to offer "Delete for me"). */
+    data class DeleteNotice(val conversationId: String, val text: String, val failedClientMsgIds: List<String>)
+
+    val deleteNotices = kotlinx.coroutines.flow.MutableSharedFlow<DeleteNotice>(extraBufferCapacity = 8)
+
+    /** Rows without a message_id (§15.7 pending rules): never pushed → cancelled locally; pushed → cancel after send. */
+    private suspend fun cancelOrDefer(rows: List<MessageEntity>) {
+        val dao = deletes ?: return
+        for (r in rows) {
+            val neverAccepted = r.status == MessageStatus.FAILED.name || r.sendAttempts == 0
+            if (neverAccepted) {
+                cancelUnsent(r)
+            } else {
+                dao.setDeleteState(listOf(r.clientMsgId), MessageEntity.DELETE_STATE_CANCEL_AFTER_SEND)
+            }
+        }
+    }
+
+    /** Never-pushed or refused message: it exists nowhere else (an image's upload is cancelled and an uploaded blob deleted). */
+    private suspend fun cancelUnsent(r: MessageEntity) {
+        if (r.image && images is lk.codegen.risime.data.media.ImageRepository) {
+            images.deleteUnsent(r.clientMsgId)
+            return
+        }
+        tx.run {
+            messages.delete(r.clientMsgId)
+            if (r.image) applier?.purge(r, meId() ?: "", byAdmin = false, tombstone = false)
+        }
+        if (r.image) deletesApplied = true
+    }
+
+    private suspend fun queueEveryone(conv: String, rows: List<MessageEntity>) {
+        val dao = deletes ?: return
+        for (chunk in rows.filter { it.messageId != null }.chunked(lk.codegen.risime.net.MsgDelete.MAX_TARGETS)) {
+            dao.queue(
+                lk.codegen.risime.data.db.DeleteOutboxEntity(
+                    clientMsgId = newClientMsgId(), conversationId = conv, scope = lk.codegen.risime.net.MsgDelete.SCOPE_EVERYONE,
+                    targetsJson = lk.codegen.risime.data.deletes.DeleteJson.encode(chunk.map { it.messageId!!.lowercase() }),
+                    blobIdsJson = lk.codegen.risime.data.deletes.DeleteJson.encode(chunk.mapNotNull { it.blobId }),
+                    state = lk.codegen.risime.data.db.DeleteOutboxEntity.QUEUED, createdAt = clock(),
+                ),
+            )
+        }
+    }
+
+    /**
+     * §15.7 Delete for everyone: the rows show as "You deleted this message" at once (content and ticks
+     * kept until the reply), requests of ≤ 100 targets go through the outbox; pending rows follow the
+     * pending rules (cancel, or cancel after send).
+     */
+    suspend fun deleteForEveryone(conversationId: String, clientMsgIds: List<String>) {
+        val dao = deletes ?: return
+        outboxLock.withLock {
+            val rows = clientMsgIds.mapNotNull { messages.byClientMsgId(it) }.filter { it.conversationId == conversationId && !it.system && !it.deleted }
+            cancelOrDefer(rows.filter { it.messageId == null })
+            val sent = rows.filter { it.messageId != null }
+            tx.run {
+                dao.setDeleteState(sent.map { it.clientMsgId }, MessageEntity.DELETE_STATE_DELETING)
+                queueEveryone(conversationId, sent)
+            }
+        }
+        afterDeletes()
+        scope.launch { flushDeletes() }
+    }
+
+    /**
+     * §15.7 Delete for me: the rows (or tombstones, system lines) disappear here, a hidden tombstone
+     * (scope me) keeps a replay from bringing them back, then `msg:delete` `me` for my own inbox copies.
+     */
+    suspend fun deleteForMe(conversationId: String, clientMsgIds: List<String>) {
+        val dao = deletes ?: return
+        val a = applier ?: return
+        val me = meId() ?: return
+        outboxLock.withLock {
+            val rows = clientMsgIds.mapNotNull { messages.byClientMsgId(it) }.filter { it.conversationId == conversationId }
+            cancelOrDefer(rows.filter { it.messageId == null && !it.system })
+            val local = rows.filter { it.messageId != null || it.system }
+            val requested = mutableListOf<String>()
+            tx.run {
+                for (r in local) {
+                    a.purge(r, me, byAdmin = false, tombstone = false)
+                    val id = r.messageId?.lowercase() ?: continue
+                    dao.putDeletedId(lk.codegen.risime.data.db.DeletedIdEntity(id, conversationId, me, false, null, lk.codegen.risime.net.MsgDelete.SCOPE_ME, clock()))
+                    // Tombstones and placed rows have no server copy left: local only.
+                    if (!r.deleted) requested += id
+                }
+                for (chunk in requested.chunked(lk.codegen.risime.net.MsgDelete.MAX_TARGETS)) {
+                    dao.queue(
+                        lk.codegen.risime.data.db.DeleteOutboxEntity(
+                            clientMsgId = newClientMsgId(), conversationId = conversationId, scope = lk.codegen.risime.net.MsgDelete.SCOPE_ME,
+                            targetsJson = lk.codegen.risime.data.deletes.DeleteJson.encode(chunk), blobIdsJson = "[]",
+                            state = lk.codegen.risime.data.db.DeleteOutboxEntity.QUEUED, createdAt = clock(),
+                        ),
+                    )
+                }
+            }
+            if (local.isNotEmpty()) deletesApplied = true
+        }
+        afterDeletes()
+        scope.launch { flushDeletes() }
+    }
+
+    /**
+     * §15.7 Clear chat ([hide] = false) / Delete chat ([hide] = true): every row of the chat goes (pushed
+     * pending messages still complete and appear after it), with the `cleared_upto` watermark in the
+     * same transaction; then `chat:clear` for my inbox. Never touches MLS state, the cursor, pending
+     * `msg:delete` requests or membership.
+     */
+    suspend fun clearChat(conversationId: String, hide: Boolean) {
+        val dao = deletes ?: return
+        val a = applier ?: return
+        val me = meId() ?: return
+        outboxLock.withLock {
+            tx.run {
+                val rows = dao.conversationRows(conversationId)
+                val keep = rows.filter { it.outgoing && it.status == MessageStatus.PENDING.name && it.messageId == null && it.sendAttempts > 0 }.toSet()
+                val remove = rows - keep
+                val cursor = sync.cursor()?.takeIf { lk.codegen.risime.data.deletes.TimeUuid.ticks(it) != null }
+                val candidates = listOfNotNull(cursor) + remove.mapNotNull { it.messageId }.filter { lk.codegen.risime.data.deletes.TimeUuid.ticks(it) != null }
+                val upto = candidates.maxByOrNull { lk.codegen.risime.data.deletes.TimeUuid.ticks(it)!! }
+                for (r in remove) {
+                    if (r.image) a.purge(r, me, byAdmin = false, tombstone = false) else messages.delete(r.clientMsgId)
+                }
+                dao.deleteConversationReactions(conversationId)
+                val prev = dao.chatState(conversationId)?.clearedUpto
+                val ticks = listOfNotNull(prev, upto?.let { lk.codegen.risime.data.deletes.TimeUuid.ticks(it) }).maxOrNull()
+                dao.putChatState(lk.codegen.risime.data.db.ChatStateEntity(conversationId, ticks, hidden = hide))
+                if (upto != null) {
+                    dao.queue(
+                        lk.codegen.risime.data.db.DeleteOutboxEntity(
+                            clientMsgId = newClientMsgId(), conversationId = conversationId, scope = lk.codegen.risime.data.db.DeleteOutboxEntity.SCOPE_CLEAR,
+                            targetsJson = "[]", blobIdsJson = "[]", state = lk.codegen.risime.data.db.DeleteOutboxEntity.QUEUED, createdAt = clock(), upto = upto.lowercase(),
+                        ),
+                    )
+                }
+            }
+            deletesApplied = true
+        }
+        afterDeletes()
+        scope.launch { flushDeletes() }
+    }
+
+    /** The delete outbox: `msg:delete` (me / everyone) and `chat:clear`, each retried with its own client_msg_id. */
+    suspend fun flushDeletes(): Unit = deleteLock.withLock {
+        val dao = deletes ?: return@withLock
+        for (o in dao.queued()) {
+            if (o.nextAt > clock()) continue
+            val targets = lk.codegen.risime.data.deletes.DeleteJson.ids(o.targetsJson)
+            when (o.scope) {
+                lk.codegen.risime.data.db.DeleteOutboxEntity.SCOPE_CLEAR -> when (val r = realtime().clearChat(lk.codegen.risime.net.ChatClear(o.conversationId, o.upto ?: ""))) {
+                    is PushResult.Ok -> dao.removeOutbox(o.clientMsgId)
+                    is PushResult.Rejected -> if (r.reason == "rate_limited") retryLater(o) else { log("chat:clear refused: ${r.reason}"); dao.removeOutbox(o.clientMsgId) }
+                    PushResult.Unavailable -> return@withLock
+                }
+                lk.codegen.risime.net.MsgDelete.SCOPE_ME -> when (val r = realtime().deleteMessages(lk.codegen.risime.net.MsgDelete(o.clientMsgId, o.conversationId, lk.codegen.risime.net.MsgDelete.SCOPE_ME, targets))) {
+                    is PushResult.Ok -> dao.removeOutbox(o.clientMsgId)
+                    // Failures are logged, never shown (§15.7).
+                    is PushResult.Rejected -> if (r.reason == "rate_limited") retryLater(o) else { log("delete for me refused: ${r.reason}"); dao.removeOutbox(o.clientMsgId) }
+                    PushResult.Unavailable -> return@withLock
+                }
+                else -> if (!sendEveryone(o, targets)) return@withLock
+            }
+        }
+    }
+
+    private suspend fun retryLater(o: lk.codegen.risime.data.db.DeleteOutboxEntity) {
+        deletes?.updateOutbox(o.copy(attempts = o.attempts + 1, nextAt = clock() + rateLimitRetryMs))
+        scope.launch { delay(rateLimitRetryMs); flushDeletes() }
+    }
+
+    /** One `msg:delete` `everyone`; false = stop the flush (offline). */
+    private suspend fun sendEveryone(o: lk.codegen.risime.data.db.DeleteOutboxEntity, targets: List<String>): Boolean {
+        val dao = deletes ?: return true
+        val conv = o.conversationId
+        val blobIds = lk.codegen.risime.data.deletes.DeleteJson.ids(o.blobIdsJson)
+        var attempt = 0
+        var res: PushResult<lk.codegen.risime.net.MsgDeleteReply>
+        while (true) {
+            val engine = mlsEngine()
+            val group = engine?.group(conv)
+            res = lane.withLock {
+                if (isGroupConversation(conv) && (engine == null || group == null)) return true // waits for the group (Welcome)
+                val msg = if (engine != null && group != null) {
+                    // §15.3: the envelope, with the targets bound into the PrivateMessage's authenticated_data.
+                    val ct = tx.run { engine.encryptWithAad(conv, lk.codegen.risime.data.mls.MlsPayload.delete(targets), lk.codegen.risime.data.deletes.DeleteAad.encode(targets)) }
+                    lk.codegen.risime.net.MsgDelete(
+                        o.clientMsgId, conv, lk.codegen.risime.net.MsgDelete.SCOPE_EVERYONE, targets, blobIds,
+                        java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(o.createdAt),
+                    )
+                } else {
+                    lk.codegen.risime.net.MsgDelete(o.clientMsgId, conv, lk.codegen.risime.net.MsgDelete.SCOPE_EVERYONE, targets, clientTs = isoMillis(o.createdAt))
+                }
+                realtime().deleteMessages(msg)
+            }
+            val reason = (res as? PushResult.Rejected)?.reason
+            if (reason != AuthErrors.STALE_EPOCH && reason != AuthErrors.E2EE_REQUIRED) break
+            if (attempt++ >= staleEpochRetries) { retryLater(o); return true }
+            catchUp(conv)
+        }
+        val me = meId() ?: return true
+        when (val r = res) {
+            is PushResult.Ok -> {
+                // §15.7 step 3: purge `deleted` and `gone` (gone = already deleted, idempotent).
+                val done = (r.value.deleted + r.value.gone).map { it.lowercase() }.toSet()
+                tx.run {
+                    for (id in targets.filter { it in done }) {
+                        val row = messages.byMessageId(id) ?: continue
+                        if (!row.deleted) applier?.purge(row, me, byAdmin = !row.from.equals(me, true))
+                    }
+                    dao.removeOutbox(o.clientMsgId)
+                }
+                deletesApplied = true
+                afterDeletes()
+            }
+            is PushResult.Rejected -> when (r.reason) {
+                "rate_limited", RETRY_LATER -> retryLater(o)
+                else -> refused(o, targets, r)
+            }
+            PushResult.Unavailable -> return false
+        }
+        return true
+    }
+
+    /**
+     * §15.7 a refusal: the rows come back as they were; the failing targets are offered "Delete for
+     * me"; the others (all-or-nothing refused them too) are requested again on their own.
+     */
+    private suspend fun refused(o: lk.codegen.risime.data.db.DeleteOutboxEntity, targets: List<String>, r: PushResult.Rejected) {
+        val dao = deletes ?: return
+        val failures = runCatching { r.body?.let { lk.codegen.risime.net.ProtocolJson.decodeFromJsonElement(lk.codegen.risime.net.DeleteError.serializer(), it).failures } }
+            .getOrNull().orEmpty()
+        val failing = failures.map { it.target.lowercase() }.toSet().ifEmpty { targets.toSet() }
+        val rows = targets.mapNotNull { messages.byMessageId(it) }
+        val retry = rows.filter { it.messageId!!.lowercase() !in failing }
+        tx.run {
+            dao.setDeleteState(rows.filter { it.messageId!!.lowercase() in failing }.map { it.clientMsgId }, null)
+            dao.removeOutbox(o.clientMsgId)
+            if (retry.isNotEmpty()) queueEveryone(o.conversationId, retry)
+        }
+        log("delete for everyone refused: ${r.reason} ${failures.size} failure(s)")
+        val text = if (r.reason == AuthErrors.TOO_OLD) lk.codegen.risime.data.deletes.DeleteRules.TOO_OLD_TEXT else lk.codegen.risime.data.deletes.DeleteRules.FAILED
+        deleteNotices.tryEmit(DeleteNotice(o.conversationId, text, rows.filter { it.messageId!!.lowercase() in failing }.map { it.clientMsgId }))
+        if (retry.isNotEmpty()) scope.launch { flushDeletes() }
+    }
 
     suspend fun flushOutbox() {
         flushMessages()
         flushReactions()
+        flushDeletes()
     }
 
     private suspend fun flushMessages(): Unit = outboxLock.withLock {
         for (m in messages.pendingOutbox()) {
+            deletes?.countAttempt(m.clientMsgId) // android R2: from now on it may be on the server
             when (val r = send(m)) {
                 is PushResult.Ok -> {
                     val cur = messages.byClientMsgId(m.clientMsgId) ?: continue
                     val next = MessageStatus.valueOf(cur.status).advance(MessageStatus.SENT)
                     messages.updateStatus(m.clientMsgId, next.name, r.value.messageId, r.value.serverTs, null)
+                    // §15.7: deleted while it was being sent: now delete it for everyone.
+                    if (cur.deleteState == MessageEntity.DELETE_STATE_CANCEL_AFTER_SEND) cancelAfterSend(m.clientMsgId, r.value.messageId)
                 }
                 is PushResult.Rejected -> if (r.reason == WAITING_FOR_GROUP) {
                     continue // stays PENDING; retried when the group arrives (and on every onLive)

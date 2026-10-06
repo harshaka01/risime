@@ -790,6 +790,8 @@ class AppContainer(
         try {
             // Server side is best effort and bounded: a dead network or a Keycloak error never
             // blocks or reverts the local logout.
+            // §15.7 (android S-f): deletes and clears done just before logout reach the server (best effort, bounded).
+            withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { engine.flushDeletes() } }
             withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { push.unregister() } } // DELETE /me/devices while the token still works
             if (sessionStore.current()?.kind == AuthKind.DEV) withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { api.logout() } }
             withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { auth.signOut() } }

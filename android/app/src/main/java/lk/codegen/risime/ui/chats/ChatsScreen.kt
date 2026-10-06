@@ -70,6 +70,25 @@ fun ChatsScreen(
     var menu by remember { mutableStateOf(false) }
     var askLogout by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    // §15.7: chat-list long-press → Clear chat / Delete chat (always on: local + my own inbox).
+    var chatMenuFor by remember { mutableStateOf<ChatRow?>(null) }
+    var clearAsk by remember { mutableStateOf<Pair<ChatRow, Boolean>?>(null) }
+    chatMenuFor?.let { r ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { chatMenuFor = null },
+            title = { Text(r.name) },
+            text = {
+                androidx.compose.foundation.layout.Column {
+                    androidx.compose.material3.TextButton(onClick = { chatMenuFor = null; clearAsk = r to false }) { Text("Clear chat") }
+                    androidx.compose.material3.TextButton(onClick = { chatMenuFor = null; clearAsk = r to true }) { Text("Delete chat") }
+                }
+            },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { chatMenuFor = null }) { Text("Cancel") } },
+        )
+    }
+    clearAsk?.let { (r, hide) ->
+        lk.codegen.risime.ui.chat.ClearChatDialog(hide, onConfirm = { clearAsk = null; vm.clearChat(r, hide) }, onDismiss = { clearAsk = null })
+    }
     if (askLogout) {
         lk.codegen.risime.ui.common.LogoutConfirmDialog(
             onConfirm = { confirmed ->
@@ -150,7 +169,7 @@ fun ChatsScreen(
                         item { EmptyState("No friends yet. Add a friend by phone number.", actionLabel = "Add friend", onAction = onAddFriend) }
                     }
                     items(rows, key = { it.key }) { row ->
-                        ChatRowItem(row, onClick = { row.target?.takeIf { row.openable }?.let(onOpen) })
+                        ChatRowItem(row, onClick = { row.target?.takeIf { row.openable }?.let(onOpen) }, onLongClick = { chatMenuFor = row })
                         HorizontalDivider(
                             Modifier.padding(start = Spacing.lg + Sizes.avatar + Spacing.md + Spacing.xxs),
                             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -179,9 +198,9 @@ fun connectionLabel(s: ConnectionState): String? = when (s) {
 }
 
 @Composable
-private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
+private fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> Unit)? = null) {
     val presence = presenceLabel(row.presence, System.currentTimeMillis())
-    if (row.group) return GroupRowItem(row, onClick)
+    if (row.group) return GroupRowItem(row, onClick, onLongClick)
     val sub = when {
         !row.friend -> "Not friends any more"
         !row.registered -> "Waiting for them to confirm their phone"
@@ -208,13 +227,14 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
             row.vouchedBy?.let { "vouched by $it" },
         ).joinToString(" · ").ifEmpty { null },
         onClick = onClick,
+        onLongClick = onLongClick?.takeIf { row.userId != null && (row.friend || row.last != null) },
     )
 }
 
 
 /** §12 group row: decrypted name ("Rejoining group…" until the Welcome), "Kamal: …" last line, typing, unread. */
 @Composable
-private fun GroupRowItem(row: ChatRow, onClick: () -> Unit) {
+private fun GroupRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> Unit)? = null) {
     val last = row.last
     val lastText = last?.let { lk.codegen.risime.push.bodyPreview(it.kind, it.body) }.orEmpty()
     val sub = when {
@@ -239,5 +259,6 @@ private fun GroupRowItem(row: ChatRow, onClick: () -> Unit) {
         },
         badge = if (row.unread > 0) ({ UnreadBadge(row.unread) }) else null,
         onClick = onClick,
+        onLongClick = onLongClick,
     )
 }

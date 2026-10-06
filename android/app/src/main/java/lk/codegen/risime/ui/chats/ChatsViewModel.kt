@@ -65,6 +65,16 @@ fun LastMessage.forPreview(me: String): LastMessage =
         kind = lk.codegen.risime.data.db.MessageEntity.KIND_DELETED,
     )
 
+/** The row's conversation id (`grp:` as is; a DM from the peer). */
+fun ChatRow.conversationOf(meId: String): String? = conversationId ?: userId?.let { dmConversationId(meId, it) }
+
+/** §15.7 Delete chat: hidden rows stay off the list until `chat_state.hidden` is cleared by a new message. */
+fun hideDeletedChats(rows: List<ChatRow>, states: List<lk.codegen.risime.data.db.ChatStateEntity>, meId: String): List<ChatRow> {
+    val hidden = states.filter { it.hidden }.map { it.conversationId }.toSet()
+    if (hidden.isEmpty()) return rows
+    return rows.filter { it.conversationOf(meId) !in hidden }
+}
+
 /** One row per group, ordered with the DMs by last activity (a new group by when it appeared). */
 fun buildGroupRows(
     meId: String,
@@ -155,14 +165,25 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
     ) { groups, members, lasts, unread, typing -> buildGroupRows(meId, groups, members, lasts, unread, typing) }
 
     val rows: StateFlow<List<ChatRow>> = combine(
-        c.contacts.contacts,
-        c.db.messages().lastMessages(),
-        c.db.messages().unreadCounts(),
-        combine(c.presence.presence, c.presence.typing) { p, t -> p to t },
-        groupRows,
-    ) { contacts, lasts, unread, (presence, typing), groups ->
-        buildChatRows(meId, contacts, lasts, unread, presence, typing, groups)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        combine(
+            c.contacts.contacts,
+            c.db.messages().lastMessages(),
+            c.db.messages().unreadCounts(),
+            combine(c.presence.presence, c.presence.typing) { p, t -> p to t },
+            groupRows,
+        ) { contacts, lasts, unread, (presence, typing), groups ->
+            buildChatRows(meId, contacts, lasts, unread, presence, typing, groups)
+        },
+        c.db.deletes().observeChatStates(),
+    ) { rows, states -> hideDeletedChats(rows, states, meId) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** §15.7 chat-list long-press: Clear chat (row stays) / Delete chat (hidden until a new message). */
+    fun clearChat(row: ChatRow, hide: Boolean) {
+        val conv = row.conversationOf(meId) ?: return
+        c.notifier.cancelChat(conv)
+        c.scope.launch { c.engine.clearChat(conv, hide) }
+    }
 
     /** "New group" is offered only with a groups-capable MLS core (§12.1). */
     val groupsAvailable: StateFlow<Boolean> = c.groupsAvailable.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)

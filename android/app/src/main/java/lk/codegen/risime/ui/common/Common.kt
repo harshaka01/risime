@@ -159,11 +159,19 @@ fun ListRow(
     badge: (@Composable () -> Unit)? = null,
     footer: String? = null,
     onClick: (() -> Unit)? = null,
+    /** §15.7: the chat list's long-press (Clear chat / Delete chat). */
+    onLongClick: (() -> Unit)? = null,
 ) {
     val titleColor = if (enabled) MaterialTheme.colorScheme.onSurface else RisiTheme.colors.textMuted
     Row(
         modifier.fillMaxWidth().heightIn(min = Sizes.listRowMin)
-            .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier)
+            .then(
+                when {
+                    onLongClick != null -> Modifier.combinedClickable(onClick = { if (enabled) onClick?.invoke() }, onLongClick = onLongClick, onLongClickLabel = "Chat options")
+                    onClick != null -> Modifier.clickable(enabled = enabled, onClick = onClick)
+                    else -> Modifier
+                },
+            )
             .padding(horizontal = Spacing.lg, vertical = Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
