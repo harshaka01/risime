@@ -141,29 +141,31 @@ defmodule RisiMe.MLS do
   end
 
   @doc """
-  Readiness (§10.2): every app instance of both members seen in the last 30 days is
-  MLS-capable, and each member has at least one MLS device. Returns `{ready?, missing}`.
+  Readiness (§10.2): each member has at least one MLS device, and every install of both members
+  that **can still receive** is MLS-capable. Returns `{ready?, missing}`.
+
+  The same rule as group readiness (§12.1) and `images_ready` (§14.1): only installs that can
+  still receive count (`receiving_instances/1`). A census row of a removed or reinstalled device
+  id, or a device-less (pre-v1.7) row last seen before the user's latest device registration,
+  can't receive anything and never blocks.
+
+  `missing[]`: `legacy_app` + `device_id: nil` = an old (pre-v1.7) app still in use;
+  `no_mls` + a `device_id` = a current install that hasn't registered its MLS key yet;
+  `no_mls` + `device_id: nil` = the member has no MLS device at all (e.g. hasn't opened a
+  current app yet).
   """
   def readiness(user_ids) do
-    since = DateTime.add(DateTime.utc_now(), -@census_window_days, :day)
-
-    instances =
-      Repo.all(
-        from i in "app_instances",
-          where: i.user_id in type(^user_ids, {:array, :binary_id}) and i.last_seen_at > ^since,
-          select: {type(i.user_id, :binary_id), type(i.device_id, :binary_id)}
-      )
-
+    user_ids = Enum.uniq(user_ids)
     mls = current_mls_devices(user_ids)
-    mls_ids = MapSet.new(mls, & &1.device_id)
+    mls_ids = MapSet.new(mls, &{&1.user_id, &1.device_id})
 
     missing =
-      Enum.flat_map(instances, fn
+      Enum.flat_map(receiving_instances(user_ids), fn
         {u, nil} ->
           [%{user_id: u, device_id: nil, reason: "legacy_app"}]
 
         {u, d} ->
-          if MapSet.member?(mls_ids, d),
+          if MapSet.member?(mls_ids, {u, d}),
             do: [],
             else: [%{user_id: u, device_id: d, reason: "no_mls"}]
       end)
@@ -173,8 +175,54 @@ defmodule RisiMe.MLS do
           not Enum.any?(mls, &(&1.user_id == u)),
           do: %{user_id: u, device_id: nil, reason: "no_mls"}
 
-    missing = Enum.uniq(missing ++ without_device)
+    missing = Enum.uniq_by(missing ++ without_device, &{&1.user_id, &1.device_id})
     {missing == [] and available?(), missing}
+  end
+
+  @doc """
+  The §12.1 rule: the census instances of `user_ids` that can still receive, as
+  `[{user_id, device_id | nil}]` (unique). That is a **registered** device seen in the last
+  30 days, or a device-less (pre-v1.7) instance seen in the last 30 days and not before the
+  user's latest device registration (an old app still in use, e.g. on a second phone).
+  """
+  def receiving_instances([]), do: []
+
+  def receiving_instances(user_ids) do
+    since = DateTime.add(DateTime.utc_now(), -@census_window_days, :day)
+
+    instances =
+      Repo.all(
+        from i in "app_instances",
+          where: i.user_id in type(^user_ids, {:array, :binary_id}) and i.last_seen_at > ^since,
+          order_by: [asc: i.last_seen_at],
+          select:
+            {type(i.user_id, :binary_id), type(i.device_id, :binary_id),
+             type(i.last_seen_at, :utc_datetime_usec)}
+      )
+
+    registered =
+      Repo.all(
+        from d in Device,
+          where: d.user_id in ^user_ids,
+          select: {d.user_id, d.device_id, d.last_seen_at}
+      )
+
+    registered_ids = MapSet.new(registered, fn {u, d, _} -> {u, d} end)
+
+    last_registration =
+      Enum.reduce(registered, %{}, fn {u, _, t}, acc ->
+        Map.update(acc, u, t, &if(DateTime.compare(t, &1) == :gt, do: t, else: &1))
+      end)
+
+    for {u, d, seen} <- instances,
+        if(d,
+          do: MapSet.member?(registered_ids, {u, d}),
+          else:
+            last_registration[u] == nil or
+              DateTime.compare(seen, last_registration[u]) != :lt
+        ),
+        uniq: true,
+        do: {u, d}
   end
 
   @doc "Current MLS devices (attested, not pruned) of the given users."
@@ -384,8 +432,6 @@ defmodule RisiMe.MLS do
   end
 
   defp do_claim(me, ids, caller_device_id, kind) do
-    since = DateTime.add(DateTime.utc_now(), -@census_window_days, :day)
-
     mls =
       if kind == :groups, do: RisiMe.Groups.groups_devices(ids), else: current_mls_devices(ids)
 
@@ -403,21 +449,18 @@ defmodule RisiMe.MLS do
         }
       end
 
-    # Non-MLS app instances (legacy apps, devices without MLS) are listed so the caller knows
-    # the conversation can't be E2EE yet.
+    # Non-MLS installs that can still receive (§12.1 rule) are listed so the caller knows the
+    # conversation can't be E2EE yet. Dead census rows (removed / reinstalled device ids,
+    # superseded pre-v1.7 rows) never block.
     mls_ids = MapSet.new(mls, & &1.device_id)
 
     others =
       if(kind == :groups,
         do: [],
         else:
-          Repo.all(
-            from i in "app_instances",
-              where: i.user_id in type(^ids, {:array, :binary_id}) and i.last_seen_at > ^since,
-              select: {type(i.user_id, :binary_id), type(i.device_id, :binary_id)}
-          )
+          ids
+          |> receiving_instances()
           |> Enum.reject(fn {_u, d} -> d && MapSet.member?(mls_ids, d) end)
-          |> Enum.uniq()
           |> Enum.map(fn {u, d} ->
             %{user_id: u, device_id: d, mls: false, attestation: nil, key_package: nil}
           end)

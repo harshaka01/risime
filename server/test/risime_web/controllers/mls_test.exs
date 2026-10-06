@@ -296,7 +296,12 @@ defmodule RisiMeWeb.MLSTest do
       :ok = MLS.record_instance(b.user.id, nil, "jwt", nil)
       assert %{"ready" => false, "missing" => [%{"reason" => "legacy_app"}]} = view.()
       Repo.delete_all(from i in "app_instances", where: i.instance_key == "legacy:jwt")
+      # A registered install (push only) that hasn't set up MLS yet.
       other = Ecto.UUID.generate()
+
+      {:ok, nil} =
+        RisiMe.Devices.register(b.user.id, other, %{"platform" => "android", "push_token" => "t"})
+
       :ok = MLS.record_instance(b.user.id, other, nil, "0.3.0")
       assert %{"missing" => [%{"device_id" => ^other, "reason" => "no_mls"}]} = view.()
       _ = b_dev
@@ -304,6 +309,72 @@ defmodule RisiMeWeb.MLSTest do
       # Only members may look.
       %{token: outsider} = logged_in_user()
       assert call(conn, outsider, :get, "/api/v1/mls/groups/#{conv}") |> json_response(404)
+    end
+  end
+
+  describe "1:1 readiness uses the §12.1 'can still receive' rule (P0-1)" do
+    setup :with_attestation_key
+
+    defp age_instance!(user_id, key, seconds) do
+      Repo.update_all(
+        from(i in "app_instances",
+          where: i.user_id == type(^user_id, :binary_id) and i.instance_key == ^key
+        ),
+        set: [last_seen_at: DateTime.add(DateTime.utc_now(), -seconds, :second)]
+      )
+    end
+
+    test "superseded pre-v1.7 rows and dead (reinstalled) device ids don't block; claim agrees",
+         %{conn: conn} do
+      a = logged_in_user()
+      b = logged_in_user()
+      befriend!(a, b)
+      conv = RisiMe.Messaging.conversation_id(a.user.id, b.user.id)
+
+      # The live pilot shape: each user has an old pre-v1.7 row from before the update, and
+      # census rows of device ids from earlier installs that are no longer registered.
+      for u <- [a, b] do
+        :ok = MLS.record_instance(u.user.id, nil, "jwt", nil)
+        age_instance!(u.user.id, "legacy:jwt", 3600)
+        dead = Ecto.UUID.generate()
+        :ok = MLS.record_instance(u.user.id, dead, nil, "0.2.0-nightly.7")
+        age_instance!(u.user.id, "device:" <> dead, 1800)
+      end
+
+      a_dev = mls_device!(a)
+      b_dev = mls_device!(b)
+      :ok = MLS.record_instance(a.user.id, a_dev, nil, "0.2.0-nightly.13")
+      :ok = MLS.record_instance(b.user.id, b_dev, nil, "0.2.0-nightly.13")
+
+      assert {true, []} = MLS.readiness([a.user.id, b.user.id])
+
+      assert %{"ready" => true, "missing" => []} =
+               call(conn, a.token, :get, "/api/v1/mls/groups/#{conv}") |> json_response(200)
+
+      devices =
+        call(conn, a.token, :post, "/api/v1/mls/key_packages/claim", %{"user_ids" => [b.user.id]})
+        |> json_response(200)
+        |> Map.fetch!("devices")
+
+      assert Enum.all?(devices, & &1["mls"])
+      assert [b_dev] == Enum.map(devices, & &1["device_id"])
+    end
+
+    test "an old app still in use after the registration blocks as legacy_app" do
+      a = logged_in_user().user
+      _ = mls_device!(a)
+
+      Repo.update_all(from(d in Device, where: d.user_id == ^a.id),
+        set: [last_seen_at: DateTime.add(DateTime.utc_now(), -60, :second)]
+      )
+
+      :ok = MLS.record_instance(a.id, nil, "jwt", nil)
+      assert {false, [%{device_id: nil, reason: "legacy_app"}]} = MLS.readiness([a.id])
+    end
+
+    test "a member without any MLS device is no_mls with device_id null" do
+      a = logged_in_user().user
+      assert {false, [%{device_id: nil, reason: "no_mls"}]} = MLS.readiness([a.id])
     end
   end
 
