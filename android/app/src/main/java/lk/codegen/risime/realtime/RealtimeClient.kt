@@ -46,6 +46,9 @@ interface RealtimeListener {
     /** Last processed event_id, sent as `since` on every (re)join. */
     suspend fun cursor(): String?
 
+    /** §13.2: the page's `history_before` (null = absent), delivered before that page's [onEvents]. */
+    suspend fun onHistoryBefore(ts: String?) = Unit
+
     /** Apply events in order (dedupe + persist cursor). Called for join/sync pages and live pushes. */
     suspend fun onEvents(events: List<Event>)
 

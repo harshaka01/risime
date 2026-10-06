@@ -36,6 +36,7 @@ class PhoenixRealtimeClientTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val received = Collections.synchronizedList(mutableListOf<PhoenixFrame>())
     private val applied = Collections.synchronizedList(mutableListOf<String>())
+    private val trace = Collections.synchronizedList(mutableListOf<String>())
     private val live = CountDownLatch(1)
     private var cursor: String? = "e0"
     private val serverSockets = Collections.synchronizedList(mutableListOf<WebSocket>())
@@ -54,8 +55,11 @@ class PhoenixRealtimeClientTest {
 
     private val listener = object : RealtimeListener {
         override suspend fun cursor() = cursor
+        override suspend fun onHistoryBefore(ts: String?) {
+            trace += "hb=$ts"
+        }
         override suspend fun onEvents(events: List<Event>) {
-            events.forEach { applied += it.eventId; cursor = it.eventId }
+            events.forEach { applied += it.eventId; trace += it.eventId; cursor = it.eventId }
         }
         override suspend fun onLive() = live.countDown()
         override suspend fun onAuthFailed() = Unit
@@ -80,7 +84,7 @@ class PhoenixRealtimeClientTest {
             received += f
             when (f.event) {
                 "phx_join" -> {
-                    webSocket.send(reply(f, "ok", """{"events":[${event("e1")},${event("e2")}],"has_more":true,"server_time":"x"}"""))
+                    webSocket.send(reply(f, "ok", """{"events":[${event("e1")},${event("e2")}],"has_more":true,"server_time":"x","history_before":"2026-10-06T08:15:30.123Z"}"""))
                     // A live push that arrives while the client is still syncing must be applied after the sync.
                     webSocket.send("""[null,null,"${f.topic}","event",${event("e4")}]""")
                     // Signals are ephemeral: delivered at once, never buffered behind sync or applied as events.
@@ -138,6 +142,8 @@ class PhoenixRealtimeClientTest {
         assertEquals(JsonPrimitive("e2"), sync.payload.jsonObject["since"])
 
         withTimeout(5_000) { while (applied.size < 4) kotlinx.coroutines.delay(10) }
+        // §13.2: history_before reaches the listener before each page's events (a missing one is null).
+        assertEquals(listOf("hb=2026-10-06T08:15:30.123Z", "e1", "e2", "hb=null", "e3", "e4"), trace.toList())
         assertEquals(listOf("e1", "e2", "e3", "e4"), applied.toList())
 
         val ok = client.sendMessage(MsgSend("c1", "u2", "hi", "2026-10-06T08:15:30.123Z"))

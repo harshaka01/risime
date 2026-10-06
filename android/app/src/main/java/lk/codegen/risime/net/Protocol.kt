@@ -80,6 +80,9 @@ data class ApiErrorBody(
     val missing: List<MlsMissing>? = null,
     /** §12.8: the current generation on 409 generation_conflict. */
     val generation: Long? = null,
+    /** §13.4: blob quota numbers on 413 quota_exceeded. */
+    val used: Long? = null,
+    val limit: Long? = null,
 )
 
 @Serializable
@@ -99,6 +102,8 @@ data class EventsPage(
     val events: List<Event>,
     @SerialName("has_more") val hasMore: Boolean,
     @SerialName("server_time") val serverTime: String? = null,
+    /** §13.2 (v1.10): this device's first census time; null = the epoch rule only. Same on every page of a join. */
+    @SerialName("history_before") val historyBefore: String? = null,
 )
 
 @Serializable

@@ -304,6 +304,7 @@ class PhoenixRealtimeClient(
 
         private suspend fun syncThenLive(page: EventsPage): Outcome? = coroutineScope {
             var current = page
+            listener.onHistoryBefore(current.historyBefore)
             listener.onEvents(current.events)
             while (current.hasMore && current.events.isNotEmpty()) {
                 val since = current.events.last().eventId
@@ -311,6 +312,7 @@ class PhoenixRealtimeClient(
                     is PushResult.Ok -> ProtocolJson.decodeFromJsonElement<EventsPage>(r.value)
                     else -> return@coroutineScope Outcome.Closed
                 }
+                listener.onHistoryBefore(current.historyBefore)
                 listener.onEvents(current.events)
             }
             _state.value = ConnectionState.Live
