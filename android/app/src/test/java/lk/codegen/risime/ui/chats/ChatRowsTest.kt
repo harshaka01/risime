@@ -36,4 +36,21 @@ class ChatRowsTest {
         val rows = buildChatRows(me, listOf(kamal), emptyList(), emptyList())
         assertEquals(0, rows.single().unread)
     }
+
+    @Test fun formerFriendsStayOnlyWithHistoryAndAreReadOnly() {
+        val former = ContactEntity("+4", "Old Pal", "Rise", "dddd", registered = false, friend = false)
+        val formerNoChat = ContactEntity("+5", "Stranger", "Rise", "eeee", registered = false, friend = false)
+        val vouched = ContactEntity("+6", "New Pal", "", "ffff", registered = true, friend = true, vouchedByName = "Kamal")
+        val rows = buildChatRows(
+            me, listOf(former, formerNoChat, vouched),
+            listOf(LastMessage(dmConversationId(me, "dddd"), "bye", 5, false, "READ")), emptyList(),
+        )
+        assertEquals(listOf("New Pal", "Old Pal"), rows.map { it.name }) // friends first; no-history ex-friend hidden
+        val old = rows.single { it.name == "Old Pal" }
+        assertEquals(false, old.friend)
+        assertTrue(old.openable) // history stays visible, read-only
+        assertEquals("Kamal", rows.single { it.name == "New Pal" }.vouchedBy)
+        val pending = buildChatRows(me, listOf(ContactEntity("+7", "No Id", "", null, false)), emptyList(), emptyList()).single()
+        assertEquals(false, pending.openable)
+    }
 }

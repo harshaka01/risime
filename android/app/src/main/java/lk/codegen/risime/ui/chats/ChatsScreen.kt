@@ -1,6 +1,19 @@
 package lk.codegen.risime.ui.chats
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import lk.codegen.risime.ui.friends.FriendsViewModel
+import lk.codegen.risime.ui.friends.RequestsTab
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -38,11 +51,21 @@ import lk.codegen.risime.ui.theme.Sizes
 import lk.codegen.risime.ui.theme.Spacing
 
 @Composable
-fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit, onSettings: () -> Unit, onSearch: () -> Unit) {
+fun ChatsScreen(
+    vm: ChatsViewModel,
+    friendsVm: FriendsViewModel,
+    onOpen: (String) -> Unit,
+    onSettings: () -> Unit,
+    onSearch: () -> Unit,
+    onAddFriend: () -> Unit,
+    onInvites: () -> Unit,
+) {
     val rows by vm.rows.collectAsStateWithLifecycle()
     val conn by vm.connection.collectAsStateWithLifecycle()
     val err by vm.refreshError.collectAsStateWithLifecycle()
+    val friends by vm.friendsState.collectAsStateWithLifecycle()
     var menu by remember { mutableStateOf(false) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     Scaffold(
         topBar = {
             RisiTopBar(
@@ -50,9 +73,13 @@ fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit, onSettings: () -> 
                 subtitle = connectionLabel(conn),
                 actions = {
                     IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search") }
-                    IconButton(onClick = vm::refresh) { Icon(Icons.Default.Refresh, "Refresh contacts") }
+                    IconButton(onClick = vm::refresh) { Icon(Icons.Default.Refresh, "Refresh friends") }
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More options") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("Invites") }, onClick = {
+                            menu = false
+                            onInvites()
+                        })
                         DropdownMenuItem(text = { Text("Settings") }, onClick = {
                             menu = false
                             onSettings()
@@ -65,19 +92,47 @@ fun ChatsScreen(vm: ChatsViewModel, onOpen: (String) -> Unit, onSettings: () -> 
                 },
             )
         },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = onAddFriend,
+                icon = { Icon(Icons.Default.Add, null) },
+                text = { Text("Add friend") },
+            )
+        },
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
-        LazyColumn(Modifier.fillMaxSize().padding(pad)) {
-            err?.let { e -> item { ErrorState(e, onRetry = vm::refresh) } }
-            if (rows.isEmpty()) {
-                item { EmptyState("No contacts yet.", actionLabel = "Refresh", onAction = vm::refresh) }
-            }
-            items(rows, key = { it.userId ?: it.name }) { row ->
-                ChatRowItem(row, onClick = { row.userId?.takeIf { row.registered }?.let(onOpen) })
-                HorizontalDivider(
-                    Modifier.padding(start = Spacing.lg + Sizes.avatar + Spacing.md + Spacing.xxs),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
+        Column(Modifier.fillMaxSize().padding(pad)) {
+            TabRow(selectedTabIndex = tab) {
+                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Chats") })
+                Tab(
+                    selected = tab == 1,
+                    onClick = { tab = 1 },
+                    text = {
+                        BadgedBox(badge = {
+                            if (friends.incoming.isNotEmpty()) Badge { Text(friends.incoming.size.toString()) }
+                        }) { Text("Requests") }
+                    },
+                    modifier = Modifier.semantics {
+                        contentDescription = "Requests" + if (friends.incoming.isNotEmpty()) ", ${friends.incoming.size} new" else ""
+                    },
                 )
+            }
+            if (tab == 1) {
+                RequestsTab(friendsVm, onAddFriend)
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    err?.let { e -> item { ErrorState(e, onRetry = vm::refresh) } }
+                    if (rows.isEmpty()) {
+                        item { EmptyState("No friends yet. Add a friend by phone number.", actionLabel = "Add friend", onAction = onAddFriend) }
+                    }
+                    items(rows, key = { it.userId ?: it.name }) { row ->
+                        ChatRowItem(row, onClick = { row.userId?.takeIf { row.openable }?.let(onOpen) })
+                        HorizontalDivider(
+                            Modifier.padding(start = Spacing.lg + Sizes.avatar + Spacing.md + Spacing.xxs),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                        )
+                    }
+                }
             }
         }
     }
@@ -95,7 +150,8 @@ fun connectionLabel(s: ConnectionState): String? = when (s) {
 private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
     val presence = presenceLabel(row.presence, System.currentTimeMillis())
     val sub = when {
-        !row.registered -> "${row.company} · not on RisiMe yet"
+        !row.friend -> "Not friends any more"
+        !row.registered -> "Waiting for them to confirm their phone"
         row.typing -> TYPING_LABEL
         row.last != null -> (if (row.last.outgoing) "You: " else "") + row.last.body
         presence != null -> presence
@@ -107,10 +163,13 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
         leading = { InitialsAvatar(row.name, enabled = row.registered, online = row.presence?.online == true) },
         meta = row.last?.let { shortStamp(it.localTs) },
         strong = row.unread > 0,
-        enabled = row.registered,
+        enabled = row.openable,
         subtitleColor = if (row.typing) MaterialTheme.colorScheme.primary else null,
         badge = if (row.unread > 0) ({ UnreadBadge(row.unread) }) else null,
-        footer = presence?.takeIf { !row.typing && row.last != null },
+        footer = listOfNotNull(
+            presence?.takeIf { !row.typing && row.last != null },
+            row.vouchedBy?.let { "vouched by $it" },
+        ).joinToString(" · ").ifEmpty { null },
         onClick = onClick,
     )
 }

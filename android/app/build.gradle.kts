@@ -158,6 +158,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.sqlite.bundled.jvm) // JVM SQLite for the Room migration test
 }
 
 // ---- Contract examples -> unit test resources ----
@@ -203,6 +204,7 @@ tasks.withType<Test>().configureEach {
     inputs.dir(layout.projectDirectory.dir("src/main/res/values")).withPathSensitivity(PathSensitivity.RELATIVE)
     systemProperty("risime.mergedManifest.debug", mergedManifestDebug.get().asFile.absolutePath)
     systemProperty("risime.mergedManifest.release", mergedManifestRelease.get().asFile.absolutePath)
+    systemProperty("risime.schemas", layout.projectDirectory.dir("schemas").asFile.absolutePath)
     systemProperty("risime.themes", layout.projectDirectory.file("src/main/res/values/themes.xml").asFile.absolutePath)
     // Opt-in live interop (LiveInteropTest): forwarded explicitly, never cached, output shown.
     val interop = providers.environmentVariable("RISIME_INTEROP_CONFIG").orNull

@@ -43,7 +43,24 @@ class ChatViewModel(private val c: AppContainer, meId: String, val peerId: Strin
         c.openChatPeer.value = peerId
     }
 
-    fun onDraftChanged(text: String) = typingSender.onInput(text)
+    /** Typing goes to friends only (§9.3: non-friends get not_friends). */
+    fun onDraftChanged(text: String) {
+        if (peer.value?.friend != false) typingSender.onInput(text)
+    }
+
+    private val _requested = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val requested: StateFlow<Boolean> = _requested
+
+    /** Read-only former-friend chat → "Add friend" (always the same 202 reply). */
+    fun requestFriend() {
+        val phone = peer.value?.phone ?: return
+        viewModelScope.launch {
+            if (c.api.requestFriend(phone) is lk.codegen.risime.net.ApiResult.Ok) {
+                _requested.value = true
+                c.requestFriendsRefresh()
+            }
+        }
+    }
 
     fun send(text: String) {
         typingSender.stop()

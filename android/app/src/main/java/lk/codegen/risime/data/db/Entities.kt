@@ -36,7 +36,12 @@ data class ContactEntity(
     @ColumnInfo(name = "display_name") val displayName: String,
     val company: String,
     @ColumnInfo(name = "user_id") val userId: String?,
+    /** Can be messaged right now (§9.2: a friend whose phone gate is passed). */
     val registered: Boolean,
+    /** v2: an accepted friend. Former friends keep their row so the chat stays visible, read-only. */
+    @ColumnInfo(name = "friend", defaultValue = "0") val friend: Boolean = true,
+    /** v2: "vouched by <name>" (§9.1), null for allowlisted/verified users. */
+    @ColumnInfo(name = "vouched_by_name") val vouchedByName: String? = null,
 )
 
 @Entity(tableName = "sync_state")

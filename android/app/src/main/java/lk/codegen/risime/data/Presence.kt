@@ -21,6 +21,8 @@ import java.util.concurrent.ConcurrentHashMap
 class PresenceTracker(
     private val scope: CoroutineScope,
     private val typingTimeoutMs: Long = TYPING_TIMEOUT_MS,
+    /** §9.3 `friend` signal (request received/accepted): the app refetches GET /friends. */
+    private val onFriendSignal: (lk.codegen.risime.net.FriendSignal) -> Unit = {},
 ) : SignalSink {
     private val _presence = MutableStateFlow<Map<String, Presence>>(emptyMap())
     val presence: StateFlow<Map<String, Presence>> = _presence.asStateFlow()
@@ -42,6 +44,7 @@ class PresenceTracker(
             if (!p.online) stopTyping(p.userId)
         }
         signal.typing()?.let { t -> if (t.typing) startTyping(t.from) else stopTyping(t.from) }
+        signal.friend()?.let(onFriendSignal)
     }
 
     override fun onDisconnected() {

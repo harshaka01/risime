@@ -113,6 +113,16 @@ interface ContactDao {
     @Query("SELECT * FROM contacts ORDER BY registered DESC, display_name COLLATE NOCASE ASC")
     fun all(): Flow<List<ContactEntity>>
 
+    /** §9: everyone stops being a friend, then the fresh list is upserted (same transaction). */
+    @Query("UPDATE contacts SET friend = 0, registered = 0")
+    suspend fun unfriendAll()
+
+    @androidx.room.Transaction
+    suspend fun replaceFriends(friends: List<ContactEntity>) {
+        unfriendAll()
+        upsertAll(friends)
+    }
+
     @Query("SELECT * FROM contacts WHERE user_id = :userId LIMIT 1")
     suspend fun byUserId(userId: String): ContactEntity?
 

@@ -41,7 +41,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import androidx.compose.material3.TextButton
 import lk.codegen.risime.data.MessageStatus
+import lk.codegen.risime.net.AuthErrors
 import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.ui.chats.connectionLabel
 import lk.codegen.risime.ui.common.DaySeparator
@@ -62,6 +64,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     val peer by vm.peer.collectAsStateWithLifecycle()
     val conn by vm.connection.collectAsStateWithLifecycle()
     val presence by vm.peerPresence.collectAsStateWithLifecycle()
+    val requested by vm.requested.collectAsStateWithLifecycle()
     val typing by vm.peerTyping.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val lifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
@@ -79,6 +82,8 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     }
 
     val name = peer?.displayName ?: "Chat"
+    // Unknown while loading: assume friend (the server refuses non-friends anyway).
+    val isFriend = peer?.friend != false
     Scaffold(
         topBar = {
             RisiTopBar(
@@ -87,6 +92,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                     typing -> TYPING_LABEL
                     else -> connectionLabel(conn)
                         ?: presenceLabel(presence, System.currentTimeMillis())
+                        ?: peer?.vouchedByName?.let { "vouched by $it" }
                         ?: (peer?.company ?: "")
                 },
                 emphasis = typing,
@@ -106,12 +112,14 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 items(items, key = { it.key }) { item ->
                     when (item) {
                         is ChatItem.Day -> DaySeparator(item.label)
-                        is ChatItem.Msg -> Bubble(item.m, onRetry = vm::retry, onDelete = vm::delete)
+                        is ChatItem.Msg -> Bubble(item.m, canRetry = isFriend, onRetry = vm::retry, onDelete = vm::delete)
                     }
                 }
                 if (messages.isEmpty()) item { EmptyState("No messages yet. Say hello!") }
             }
-            InputBar(
+            if (!isFriend) {
+                NotFriendsBar(name, requested, onAddFriend = vm::requestFriend)
+            } else InputBar(
                 draft = draft,
                 onDraft = {
                     if (it.length <= 4096) {
@@ -131,7 +139,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
 }
 
 @Composable
-private fun Bubble(m: MessageEntity, onRetry: (String) -> Unit, onDelete: (String) -> Unit) {
+private fun Bubble(m: MessageEntity, canRetry: Boolean, onRetry: (String) -> Unit, onDelete: (String) -> Unit) {
     val failed = m.status == MessageStatus.FAILED.name
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
@@ -141,7 +149,12 @@ private fun Bubble(m: MessageEntity, onRetry: (String) -> Unit, onDelete: (Strin
         time = timeOf(m.localTs),
         mine = m.outgoing,
         status = if (m.outgoing) MessageStatus.valueOf(m.status) else null,
-        note = if (failed) "Not sent — tap to retry or delete" else null,
+        note = when {
+            !failed -> null
+            m.failReason == AuthErrors.NOT_FRIENDS -> "Not sent — you're not friends"
+            canRetry -> "Not sent — tap to retry or delete"
+            else -> "Not sent — tap to delete"
+        },
         tapOpensMenu = failed,
         onMenu = { menu = true },
         menu = {
@@ -150,11 +163,13 @@ private fun Bubble(m: MessageEntity, onRetry: (String) -> Unit, onDelete: (Strin
                     menu = false
                     scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) }
                 })
-                if (failed) {
+                if (failed && canRetry && m.failReason != AuthErrors.NOT_FRIENDS) {
                     DropdownMenuItem(text = { Text("Retry") }, onClick = {
                         menu = false
                         onRetry(m.clientMsgId)
                     })
+                }
+                if (failed) {
                     DropdownMenuItem(text = { Text("Delete") }, onClick = {
                         menu = false
                         onDelete(m.clientMsgId)
@@ -163,6 +178,20 @@ private fun Bubble(m: MessageEntity, onRetry: (String) -> Unit, onDelete: (Strin
             }
         },
     )
+}
+
+/** §9: a former friend's chat is read-only; offer a new friend request instead of a composer. */
+@Composable
+private fun NotFriendsBar(name: String, requested: Boolean, onAddFriend: () -> Unit) {
+    Surface(tonalElevation = 2.dp) {
+        Column(
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(Spacing.md),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("You're not friends with $name any more.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(onClick = onAddFriend, enabled = !requested) { Text(if (requested) "Request sent" else "Add friend") }
+        }
+    }
 }
 
 @Composable

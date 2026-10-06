@@ -114,7 +114,14 @@ class AppContainer(context: Context) {
     val behaviour = BehaviourLog(db.behaviour(), { sessionStore.installSalt() })
     val contacts = ContactsRepository(api, db.contacts())
 
-    val presence = PresenceTracker(scope)
+    /** Debounced `GET /friends` triggers (friend signal, every (re)join). */
+    private val friendsRefresh = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    fun requestFriendsRefresh() {
+        friendsRefresh.tryEmit(Unit)
+    }
+
+    val presence = PresenceTracker(scope, onFriendSignal = { requestFriendsRefresh() })
 
     /** Release-only self-updater (decision 016); disabled in debug builds. */
     val updater = Updater(context, http)
@@ -204,11 +211,22 @@ class AppContainer(context: Context) {
                 signInNotice.value = "Sign in again — your chats are kept."
             }
         }
-        // §2.5: watch the registered contacts shown in Chats plus the open chat.
+        // §2.5/§9.3: watch friends only (plus the open chat if it's a friend).
         scope.launch {
             combine(contacts.contacts, openChatPeer) { list, open ->
-                watchList(list.mapNotNull { c -> c.userId?.takeIf { c.registered } }, open)
+                val friends = list.filter { it.friend }.mapNotNull { it.userId }
+                watchList(friends, open?.takeIf { o -> friends.any { it.equals(o, ignoreCase = true) } })
             }.distinctUntilChanged().collect { realtime.setWatch(it) }
+        }
+        // §9.3: refetch GET /friends after every (re)join and on `friend` signals, debounced.
+        scope.launch {
+            realtime.state.collect { if (it == ConnectionState.Live) requestFriendsRefresh() }
+        }
+        scope.launch {
+            friendsRefresh.collectLatest {
+                delay(500)
+                if (sessionStore.current() != null) handleAuthError(contacts.refresh())
+            }
         }
     }
 
@@ -299,6 +317,7 @@ class AppContainer(context: Context) {
         end?.let { endSessionRequests.tryEmit(it) }
         blocked.value = null
         signInNotice.value = null
+        clearFriendsMemory()
         clearLocal()
     }
 
@@ -366,6 +385,8 @@ class AppContainer(context: Context) {
     }
 
     /** Chat data only; the local behaviour log stays on the device. */
+    private fun clearFriendsMemory() = contacts.clearMemory()
+
     private suspend fun wipeDb() = db.withTransaction {
         db.wipe().messages()
         db.wipe().contacts()

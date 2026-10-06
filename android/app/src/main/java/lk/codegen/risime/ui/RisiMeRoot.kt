@@ -17,6 +17,9 @@ import androidx.navigation.compose.rememberNavController
 import lk.codegen.risime.AppContainer
 import lk.codegen.risime.data.auth.AppGate
 import lk.codegen.risime.data.auth.appGate
+import lk.codegen.risime.ui.friends.AddFriendScreen
+import lk.codegen.risime.ui.friends.FriendsViewModel
+import lk.codegen.risime.ui.friends.InvitesScreen
 import lk.codegen.risime.ui.phone.AppPhoneBackend
 import lk.codegen.risime.ui.phone.PhoneVerifyScreen
 import lk.codegen.risime.ui.phone.PhoneVerifyViewModel
@@ -79,14 +82,23 @@ private fun MainNav(c: AppContainer, meId: String) {
         composable("chats") {
             ChatsScreen(
                 viewModel { ChatsViewModel(c, meId) },
+                viewModel(key = "friends") { FriendsViewModel(c) },
                 onOpen = { nav.navigate("chat/$it") },
                 onSettings = { nav.navigate("settings") { launchSingleTop = true } },
                 onSearch = { nav.navigate("search") { launchSingleTop = true } },
+                onAddFriend = { nav.navigate("add_friend") { launchSingleTop = true } },
+                onInvites = { nav.navigate("invites") { launchSingleTop = true } },
             )
         }
         composable("chat/{peer}") { entry ->
             val peer = entry.arguments?.getString("peer") ?: return@composable
             ChatScreen(viewModel { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() })
+        }
+        composable("add_friend") {
+            AddFriendScreen(viewModel { FriendsViewModel(c) }, onBack = { nav.popBackStack() })
+        }
+        composable("invites") {
+            InvitesScreen(viewModel { FriendsViewModel(c) }, onBack = { nav.popBackStack() })
         }
         composable("search") {
             SearchScreen(
