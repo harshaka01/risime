@@ -81,9 +81,9 @@
       "expect": "Format",
       "key": "5af8dcdc83db72ec2eb021ad978645b7399b67ecf528e58db5559a860cb39e7b",
       "name": "plain_size_inconsistent",
-      "plain_size": 101,
+      "plain_size": 120,
       "sha256": "1702bae0e5cf3c6e363dc952504e09d886ff114e9e856fdad9ba7ce4f19335c5",
-      "why": "len_100 with plain_size 101 (Padmé(101) + 16 != cipher_size)"
+      "why": "len_100 with plain_size 120 (Padmé(120) + 16 = 136 != cipher_size 120; 101..=104 share len_100's bucket)"
     },
     {
       "cipher": "95b7cc642eca251f7523798d9dfca2ed964fd31b3638e3fcef660527d325f4cfd42c74872edb31a6b9cb70dba9f08bc80e5d39556e6e0775668808c34d8a50a49055f94500d60a2e7d26da94b0c9595a03aeff498a4e699dd059eaefe6d1087f9139651beea920eca60069cac7ae278413c7161280fdfc2c",

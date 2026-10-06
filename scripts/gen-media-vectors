@@ -127,8 +127,9 @@ def build():
     p[9] = 0x80
     neg.append(neg_json("nonzero_padding", "plain_size 9 padded to 10 with a 0x80 pad byte, correctly encrypted",
                         k, 9, raw_segments(k, [(p, 0, True)]), "Format"))
-    neg.append(neg_json("plain_size_inconsistent", "len_100 with plain_size 101 (Padmé(101) + 16 != cipher_size)",
-                        small["key"], 101, small["cipher"], "Format"))
+    neg.append(neg_json("plain_size_inconsistent",
+                        "len_100 with plain_size 120 (Padmé(120) + 16 = 136 != cipher_size 120; 101..=104 share len_100's bucket)",
+                        small["key"], 120, small["cipher"], "Format"))
     neg.append(neg_json("wrong_key", "len_100 opened with len_1's key", pos[0]["key"], 100,
                         small["cipher"], "Integrity"))
     return {
