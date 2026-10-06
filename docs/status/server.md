@@ -2,10 +2,59 @@
 
 **READY** — 0.1 (S1–S7), the 0.2 night-1 items, contract **v1.3** (Keycloak sign-in),
 **v1.4** (one-time SMS phone verification), the **prod-mode pilot release** (decision 024) and
-**v1.5** (push wake-ups, decision 028), **v1.6** (invites and friends, decision 030) and **v1.7**
-(E2EE routing with MLS, decision 034; **off until the attestation key exists**) are done.
+**v1.5** (push wake-ups, decision 028), **v1.6** (invites and friends, decision 030), **v1.7**
+(E2EE routing with MLS, decision 034; **off until the attestation key exists**), **v1.8**
+(reactions) and **v1.9** (groups with MLS, §12, decision 041) are done.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(274 tests).
+(309 tests).
+
+## v1.9 groups with MLS (§12) — READY
+- **Code:** `RisiMe.Groups` (REST, readiness, views, device churn), `Groups.Ops` (pending ops,
+  committer naming, expiry), `Groups.Commit` (grp: commit authorisation and routing, paged
+  catch-up, reset), `Groups.Policy` (the shared admin policy), `RisiMe.Blobs`,
+  `Messaging.GroupReceipts`, workers `GroupTimer` and `BlobCleanup`; controllers `GroupController`,
+  `BlobController`; `MLSController` dispatches `grp:` ids (commit, commits, claim, reset, view).
+- **Migrations:** Postgres `20261006120000_create_groups` (`devices.capabilities`, `groups`,
+  `group_members`, `group_ops`, `blobs`, `blob_readers`, `mls_commits.commit` nullable +
+  `commit_ref`); CQL `003_group_receipts.cql` (`message_index.recipients set<uuid>`, table
+  `group_receipts` per message, TWCS + 30-day TTL). Deploy runs both (`RisiMe.Release.migrate`).
+- **Blobs:** bytes on disk at `BLOB_DIR` (default `~/risime-blobs/<env>`, e.g.
+  `~/risime-blobs/prod` for the pilot release; tests use a temp dir), `<dir>/<2 hex>/<blob_id>`,
+  mode 600, written via tmp + rename. 2 MiB cap (413), 60 uploads/user/hour, 30-day TTL with an
+  hourly Oban cleanup (`:41`). A 256-member create uses 2 uploads (commit + Welcome by ref), so
+  the contract limits leave plenty of room for re-adds.
+- **Oban:** new queue `groups` (5). Jobs: committer timeout (60 s; a `naming` counter makes a
+  superseded timer a no-op), op expiry (24 h, add/role), creating-group deletion (10 min).
+  Args are ids only.
+- **Committer naming:** first candidate = the requesting admin's device (or, for `devices` ops,
+  the user's other in-group device); then online admin devices by recency (`app_instances`).
+  Online = an inbox channel joined with that `device_id` (per node, `Presence.device_online?`).
+  With no candidate online the op waits with `committer: null` / `committer_until: null`
+  (clients must accept null there) and the first authorised device whose inbox joins is named.
+  A `remove` op never names the removed user's devices (MLS can't commit its own removal), so
+  a leave is always committed by another admin.
+- **Socket filter:** each inbox channel tracks whether its device has `groups` (updated live when
+  the device is re-registered or removed). `grp:` events and typing signals are left out of live
+  pushes and join/sync pages; a page that filters down to nothing is skipped so old clients'
+  cursors keep advancing.
+- **Receipts:** per-message aggregation in a `PartitionSupervisor` of GenServers (loaded from
+  `group_receipts` on a miss, idle entries dropped after 30 min). One row write per real
+  change; a `group_receipt` at once on an all_delivered/all_read flip, otherwise coalesced to
+  one per 10 s. Per node, like presence.
+- **Fan-out cost (256 members, `test/risime/groups/fanout_cost_test.exs`, spark2, dev Cassandra
+  in Docker):** create 90–190 ms; epoch-0 commit (256 `mls_commit` + 255 `mls_welcome` + 256
+  `group_event` inbox writes) 110–160 ms; one group message to 256 inboxes 12–23 ms; 255
+  concurrent acks 29–36 ms producing 2 `group_receipt` events. Inbox writes run per user in
+  parallel (32 at a time) inside the group lock.
+- **Tests:** every §12 example (`@pending_v1_9` is gone), all 16 cases of
+  `contract/v1/group_policy_cases.json` (read in place, not copied), plus REST/ops/commit/reset,
+  messaging/receipts/filter and blob suites.
+- **Known limits:** committer online state, receipts aggregation and the reset rate limit
+  (1/group/hour) are per node and in memory. A removed user can't fetch a `commit_ref` blob of
+  their own removal commit (they're no longer a member, §12.6); harmless since they drop the
+  group anyway. Intermittent, pre-existing: `reactions_test` "no push" can see a stray trailing
+  push from the previous test's user under heavy machine load (cross-test push timer);
+  not reproduced in 8 quiet runs.
 
 ## 0.2 progress
 - [x] Version from the repo `VERSION` file: `Application.spec(:risime, :vsn)` matches it, and the
