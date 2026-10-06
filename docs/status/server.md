@@ -6,10 +6,69 @@
 (E2EE routing with MLS, decision 034; **off until the attestation key exists**), **v1.8**
 (reactions), **v1.9** (groups with MLS, §12, decision 041), **v1.10** (history after a
 reinstall, §13, decision 043), **v1.11** (encrypted images, §14, decision 042) and **v1.12**
-(deleting messages and chats, §15, decision 047) are done, plus the group-readiness hotfix and
+(deleting messages and chats, §15, decision 047) and **v1.13** (1:1 voice calls, §16, decisions
+046 and 051) are done, plus the group-readiness hotfix and
 the two §14 fixes root decided.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(392 tests); `scripts/interop` OK after v1.12.
+(425 tests); `scripts/interop` run after v1.13 (see below).
+
+## v1.13 1:1 voice calls (§16) — READY
+- **Commit:** `25019ce` (implementation, tests, the 19 v1.13 examples; `@pending_v1_13` removed).
+- **Cassandra migration `005_call_signals.cql`** (additive; `scripts/run-server` runs it before
+  the switch, and the new code needs it): `call_signals ((user_id), event_id) payload`,
+  `CLUSTERING ORDER BY event_id ASC`, `default_time_to_live = 120`, `gc_grace_seconds = 0`,
+  TWCS 10-minute windows. Q9 `SELECT event_id, payload … WHERE user_id = ? AND event_id > ?
+  LIMIT ?`, Q10 the insert (a ring row `USING TTL 60`). No `ALLOW FILTERING`, no index.
+- **`call:signal`** (`RisiMe.Calls.signal/3`), order of checks: total **60/10 s** (`hit/4`,
+  before parsing) → parse (`bad_request`: `grp:` target or `conversation_id`, `call_id` not a
+  lowercase UUID, `ring` not a boolean, `generation`/`epoch` not integers, bad base64 or a
+  non-empty AAD; `too_long` over 24 KiB decoded) → **idempotent resend** from an in-memory ETS
+  map `{sender, client_msg_id} → reply`, 5 min, lost on restart (never `sent_dedupe`) →
+  `unknown_recipient` (self) / `not_friends` → **`not_e2ee`** (no MLS group) / `bad_request` (no
+  device id) / `stale_epoch` → **`calls_not_ready`** (ring only: no callee device with `calls`
+  and a signature key; one Postgres query) → limits: ring = 1 per (caller, callee) per 5 s, 6
+  per caller per minute, 20 per pair per hour (all `hit_if_allowed`, so refused rings don't
+  extend the lockout; each refusal logged at `warning` with the two ids only); `ring: false` =
+  30 per pair per 10 s (restarts never count toward ring limits) → store.
+- **Event:** `call_signal`, the same `event_id` (= `message_id`) for sender and recipient, one
+  unlogged batch to `call_signals` (one row at a time above 5 KiB). No `message_index`, no
+  `sent_dedupe`, no `status`, no receipts: `msg:ack` naming one is ignored, `msg:delete` reports
+  it `gone`, reactions can't target it. Never `Push.notify/1`.
+- **Delivery filter:** the inbox channel's `:calls` assign (the device row at join, kept current
+  by `{:device_calls, device_id, calls?}` broadcast from `Devices.register/4` and removals).
+  Live `call_signal` events go only to `calls` sockets; join/sync of a `calls` socket calls
+  `Store.list_events/4` with `include_calls? = true`: both stores with `event_id > since LIMIT
+  n+1`, merged by TimeUUID time, `n` taken, `has_more` from the merged length. A non-`calls`
+  socket never queries `call_signals`.
+- **Call push (§16.8):** `{"type":"call","v":"1"}`, FCM `priority high`, `collapse_key call`,
+  `ttl 45s` (`Push.FCM.message/2` picks the options by type). For every accepted `ring: true`:
+  at once to each callee device with `calls` + push token and no live channel
+  (`Presence.device_online?/1`); the rest armed in `RisiMe.Calls.State` (a GenServer timer,
+  `:call_fallback_ms`, 3 s) and pushed unless any `call:signal` with that `call_id` arrives from
+  the callee's user first. Entries dropped after 45 s. Sends go through the push task supervisor
+  with the existing retry/unregistered cleanup.
+- **`calls` capability** (`Devices` keeps it); **`calls_ready` / `missing_calls`** on DM views
+  of `GET /mls/groups/{id}` only (groups get them in v1.14): ready = e2ee and **each** member
+  has at least one census instance (30 days) on a registered MLS device advertising `calls`;
+  `missing_calls` = the usual instance list (`device_id: null` for legacy instances).
+- **`GET /api/v1/calls/turn`** (`RisiMeWeb.CallsController`, `RisiMe.Calls.Turn`): username
+  `"<unix expiry>:<16 hex>"`, credential `base64(HMAC-SHA1(TURN_SECRET, username))`, `ttl`
+  18 000 (`TURN_TTL` overrides), `expires_at`; `stun:` URLs in their own entry without
+  credentials. 20 per user per hour with `hit_if_allowed` → `429 rate_limited` + `Retry-After`;
+  **`503 calls_unavailable`** when `TURN_SECRET` (< 32 bytes counts as unset, boot warning
+  without the value) or `TURN_URLS` is missing. Nothing about the credential is logged.
+- **`call_end` / missed calls:** nothing new on the server: `call_end` is an ordinary e2ee
+  `msg:send` (30 days, sender copy, the normal inbox push); the device builds the missed-call
+  line and notification. A test pins that.
+- **Config to set (Harsha / root, not committed):** `TURN_SECRET` (the coturn
+  `static-auth-secret`, >= 32 bytes, e.g. `openssl rand -base64 48`) and `TURN_URLS`, e.g.
+  `stun:risime.risicloud.ai:3478,turn:risime.risicloud.ai:3478?transport=udp,turn:risime.risicloud.ai:3478?transport=tcp`,
+  in `.env` and `pilot.env`. Until then the endpoint answers 503 and clients call with STUN only.
+- **Note:** root's `f5179f1` (test DB pool) also committed my `:call_fallback_ms` line in
+  `server/config/test.exs` from the shared working tree; it belongs to this change.
+- **Tests:** `test/risime_web/channels/calls_v113_test.exs` (25: every §16.16 server item) and
+  the v1.13 describe in `test/contract/examples_test.exs`.
+- **Not done (not the server's):** coturn reachability (decision 046 ports), `scripts/turn-smoke`.
 
 ## v1.12 deleting messages and chats (§15) — READY
 - **Commits:** `539ead3` (§14 fixes), `d1c65ba` (implementation), `29ce11b` (§15.12 tests),
