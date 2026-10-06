@@ -146,17 +146,19 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   end
 
   @doc """
-  Every distinct `{sender_id, recipient_id}` pair in `message_index`, over a given connection
+  Every distinct `{sender_id, recipient_id}` pair in `message_index` for which `keep?` is true
+  (filtered while streaming, so memory stays small), over a given connection
   (used by `RisiMe.Release.migrate_friendships/0`, which runs without the app). A full,
   paged scan of the table, so no `ALLOW FILTERING`.
   """
-  def conversation_pairs(conn, page_size \\ 1000) do
+  def conversation_pairs(conn, keep? \\ fn _, _ -> true end, page_size \\ 1000) do
     conn
     |> Xandra.stream_pages!("SELECT sender_id, recipient_id FROM message_index", [],
       page_size: page_size
     )
     |> Stream.flat_map(& &1)
     |> Stream.map(&{&1["sender_id"], &1["recipient_id"]})
+    |> Stream.filter(fn {a, b} -> keep?.(a, b) end)
     |> Enum.into(MapSet.new())
   end
 

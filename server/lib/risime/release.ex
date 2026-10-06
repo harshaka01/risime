@@ -41,16 +41,27 @@ defmodule RisiMe.Release do
     [node | _] = opts[:nodes] || config[:nodes]
     keyspace = opts[:keyspace] || config[:keyspace]
 
+    [repo] = repos()
+
+    # Only pairs whose users both still exist matter; at pilot size that set is tiny, while
+    # message_index may hold millions of load-test rows.
+    {:ok, existing, _} =
+      Ecto.Migrator.with_repo(repo, fn _ ->
+        import Ecto.Query
+        MapSet.new(RisiMe.Repo.all(from u in RisiMe.Accounts.User, select: u.id))
+      end)
+
     {:ok, conn} = Xandra.start_link(nodes: [node], keyspace: keyspace)
 
     pairs =
       try do
-        RisiMe.Messaging.Store.Cassandra.conversation_pairs(conn)
+        RisiMe.Messaging.Store.Cassandra.conversation_pairs(conn, fn a, b ->
+          a != b and MapSet.member?(existing, a) and MapSet.member?(existing, b)
+        end)
       after
         GenServer.stop(conn)
       end
 
-    [repo] = repos()
     {:ok, created, _} = Ecto.Migrator.with_repo(repo, fn _ -> backfill_friendships(pairs) end)
     Logger.info("friendships: #{created} created from #{MapSet.size(pairs)} conversation pair(s)")
     {:ok, created}

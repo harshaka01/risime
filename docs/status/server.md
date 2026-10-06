@@ -2,8 +2,9 @@
 
 **READY** — 0.1 (S1–S7), the 0.2 night-1 items, contract **v1.3** (Keycloak sign-in),
 **v1.4** (one-time SMS phone verification), the **prod-mode pilot release** (decision 024) and
-**v1.5** (push wake-ups, decision 028) are done. Gate green on `main`:
-`mix format --check-formatted && mix compile --warnings-as-errors && mix test` (214 tests).
+**v1.5** (push wake-ups, decision 028) and **v1.6** (invites and friends, decision 030) are done.
+Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
+(244 tests).
 
 ## 0.2 progress
 - [x] Version from the repo `VERSION` file: `Application.spec(:risime, :vsn)` matches it, and the
@@ -100,6 +101,20 @@ bin/risime start                             # foreground; under tmux or systemd
   - `/dev/mailbox` and unknown routes return a 404 JSON error; a bad body returns a 400 JSON error;
   - tokens show as `[FILTERED]` in the log;
   - SIGTERM shuts it down cleanly.
+
+### Invites and friends (v1.6, decision 030)
+- **Deploy:** `bin/risime eval "RisiMe.Release.migrate()"` runs Ecto, then CQL, then
+  **`RisiMe.Release.migrate_friendships/0`**. The last turns every existing conversation pair
+  into friends (Harsha ↔ Shenika on the pilot data), idempotently; it takes about 8 s on today's
+  dev data. It was already run once on `risime_dev`, creating 1 friendship.
+- **Admin:**
+  - `mix risime.friends --pair <phoneA> <phoneB>` makes two users friends (fixtures, interop);
+  - `mix risime.friends --migrate` runs the backfill by hand;
+  - `mix risime.user.disable <phone>` removes an invited (or any) member: sign-in stops and
+    their sockets close.
+- **Config:** `INVITE_LINK` (default `https://risicloud.ai/app/risime/`) is the link in
+  invites. The server never emails or texts invitees.
+- Only friends can message, type or see presence. `/contacts` returns friends only.
 
 ### Push notifications (v1.5, decision 028)
 - **Off** until Harsha provides the Firebase service-account key. Devices register
@@ -265,6 +280,11 @@ Codes are never logged unless `OTP_DEV_LOG=true`.
   don't count. `docs/decisions/001-rate-limiter.md` explains the limiter.
 
 ## Known limits
+- **Invites and friends:**
+  - The friend-request rate limit (30 per 24 h) is in memory and resets on restart. The invite
+    limits are counted in Postgres.
+  - Replies are identical, but the per-path timing isn't perfectly constant; the rate limits
+    are the real defence against probing.
 - **Push:**
   - Never tested against real FCM (no key yet). The token exchange and send are tested against
     `Req.Test` stubs with a generated key, shaped like Google's documented responses.
