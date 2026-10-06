@@ -1,5 +1,16 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
+## v0.2.0-nightly.12 (live 17:16 UTC, not required): groups rejoin after logout/login
+- **Cause:** after logout, the app never rejoined its groups. Two server bugs also let a pending
+  removal undo the re-add.
+- **Fix:** automatic rejoin (another member's phone re-adds yours). The group shows "Rejoining
+  group…", never "New group", and sending is blocked with a reason until the rejoin is done.
+- **Also:** the cursor fix (nightly.11 kept replaying the inbox until a new message arrived).
+- **First release through the automatic Redroid upgrade gate on spark2** (published nightly.11 →
+  nightly.12: messages kept, no sign-in, new message delivered). No override was needed.
+- Released from a clean worktree (`scripts/release-from-worktree`). The push race was fixed
+  afterwards; nightly.12 itself was merged into main by hand, with the tag on the tested commit.
+
 ## P0 fixed in v0.2.0-nightly.11 (live 15:52 UTC, not required)
 - **Cause of the lost chats:** in nightly.10, every Log out or Sign out button wiped all chats in
   one tap, including the escape screens (not allowlisted, locked, update, phone). Pilot logs show
@@ -58,7 +69,8 @@
 - **Queue:** encrypted images (contract v1.10, extends the v1.9 blob API), then group icons.
 
 ## Waiting on Harsha (batched)
-- **One sudo step on spark2, so releases are gated automatically with no human (decision 045):**
+- ~~One sudo step on spark2 for redroid~~ **done by Harsha**: the gate runs automatically since
+  nightly.12. For reference (decision 045):
   ```
   sudo modprobe binder_linux devices="binder,hwbinder,vndbinder"
   echo binder_linux | sudo tee /etc/modules-load.d/redroid.conf
