@@ -45,6 +45,10 @@ config :risime, :oidc,
 
 config :risime, :auth_expiry_grace_ms, 300
 
+# SMS codes go to the test process; Notify.lk is only ever reached through Req.Test stubs.
+config :risime, :sms_mode, :test
+config :risime, :notifylk, req_options: [plug: {Req.Test, RisiMe.NotifyLk}]
+
 # In test we don't send emails
 config :risime, RisiMe.Mailer, adapter: Swoosh.Adapters.Test
 

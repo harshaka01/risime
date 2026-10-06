@@ -5,7 +5,7 @@ defmodule RisiMe.Accounts do
   import Ecto.Query
 
   alias RisiMe.{RateLimiter, Repo}
-  alias RisiMe.Accounts.{AllowlistEntry, OtpChallenge, OtpNotifier, User, UserToken, Validate}
+  alias RisiMe.Accounts.{AllowlistEntry, OtpChallenge, OtpSender, User, UserToken, Validate}
 
   @otp_ttl_seconds 300
   @otp_max_attempts 5
@@ -161,7 +161,19 @@ defmodule RisiMe.Accounts do
       expires_at: DateTime.add(DateTime.utc_now(), @otp_ttl_seconds, :second)
     })
 
-    OtpNotifier.deliver(entry, code)
+    message = %{
+      subject: "Your RisiMe code: #{code}",
+      code: code,
+      body: """
+      Hi #{entry.display_name},
+
+      Your RisiMe login code is #{code}. It expires in 5 minutes.
+
+      If you didn't ask for this code, you can ignore this email.
+      """
+    }
+
+    OtpSender.deliver(:email, {entry.display_name, entry.email}, message, entry.phone)
   end
 
   @doc """

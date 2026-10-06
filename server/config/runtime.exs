@@ -60,6 +60,20 @@ if config_env() != :test do
   end
 end
 
+# Phone verification (decision 021). PHONE_VERIFICATION=required turns the gate on; SMS_MODE is
+# notifylk | log (default notifylk in prod, log elsewhere).
+if config_env() != :test do
+  config :risime,
+         :phone_verification,
+         if(System.get_env("PHONE_VERIFICATION") == "required", do: :required, else: :off)
+
+  default_sms = if config_env() == :prod, do: "notifylk", else: "log"
+
+  config :risime,
+         :sms_mode,
+         if(System.get_env("SMS_MODE", default_sms) == "notifylk", do: :notifylk, else: :log)
+end
+
 # LOG_LEVEL=info|warning|… overrides the env's level (e.g. a dev server for a load test).
 if level = System.get_env("LOG_LEVEL") do
   config :risime, :log_level, String.to_existing_atom(level)
