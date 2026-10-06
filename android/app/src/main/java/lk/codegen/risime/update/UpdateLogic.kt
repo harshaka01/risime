@@ -21,18 +21,29 @@ data class UpdateInfo(
     val versionCode: Long,
     val versionName: String,
     val date: String?,
+    /** Release notes as published (Markdown). Shown via [displayNotes], never raw. */
     val notes: String?,
     val url: String,
     val sha256: String,
     val certSha256: String,
     val required: Boolean,
+    /** Optional short plain-text summary; preferred over [notes] when present. */
+    val summary: String? = null,
 )
+
+/** What the updater UI shows as "what's new": [UpdateInfo.summary], else the notes as plain text. */
+fun UpdateInfo.displayNotes(): String? =
+    summary?.trim()?.takeIf { it.isNotEmpty() } ?: notes?.let(::markdownToPlainText)?.takeIf { it.isNotBlank() }
+
+/** Fallback when the in-app download or install can't complete: the public download page. */
+const val DOWNLOAD_PAGE_URL = "https://risicloud.ai/app/risime/"
 
 /**
  * `version.json` parsing, with every field name in this one place. The format is a draft until
  * RisiWork's example arrives (decision 016); rename the constants here when it does.
  * Current publisher (scripts/publish-release):
- * {"versionCode","versionName","date","notes","url","sha256","certSha256","required"}.
+ * {"versionCode","versionName","date","notes","url","sha256","certSha256","required"}, plus the
+ * optional "summary" (short plain text; absent in older files).
  */
 object VersionJson {
     const val VERSION_CODE = "versionCode"
@@ -43,6 +54,7 @@ object VersionJson {
     const val SHA256 = "sha256"
     const val CERT_SHA256 = "certSha256"
     const val REQUIRED = "required"
+    const val SUMMARY = "summary"
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -59,6 +71,7 @@ object VersionJson {
             sha256 = normalizeHex(str(SHA256) ?: return null).takeIf { it.length == 64 } ?: return null,
             certSha256 = normalizeHex(str(CERT_SHA256) ?: return null).takeIf { it.length == 64 } ?: return null,
             required = o[REQUIRED]?.jsonPrimitive?.booleanOrNull ?: false,
+            summary = str(SUMMARY),
         )
     }.getOrNull()
 }
@@ -158,7 +171,7 @@ fun requestSilentUpdate(deviceSdk: Int, apkTargetSdk: Int): Boolean =
 /** What the update banner shows (null: no banner; `required` uses the blocking screen instead). */
 data class UpdateBanner(
     val title: String,
-    /** version.json `notes`, shown expandable/scrollable. */
+    /** [displayNotes] (summary, or notes as plain text), shown expandable/scrollable. */
     val notes: String?,
     val status: String?,
     /** The single action ("Update", "Retry"); null while working. */
@@ -171,10 +184,43 @@ fun updateBanner(state: UpdateState): UpdateBanner? {
     if (state.blocking() != null) return null
     return when (state) {
         UpdateState.Idle -> null
-        is UpdateState.Available -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.notes?.takeIf { it.isNotBlank() }, null, "Update", canDismiss = true, busy = false)
-        is UpdateState.Working -> UpdateBanner("Updating to ${state.info.versionName}", state.info.notes?.takeIf { it.isNotBlank() }, state.step, null, canDismiss = false, busy = true)
-        is UpdateState.NeedsPermission -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.notes?.takeIf { it.isNotBlank() },
+        is UpdateState.Available -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.displayNotes(), null, "Update", canDismiss = true, busy = false)
+        is UpdateState.Working -> UpdateBanner("Updating to ${state.info.versionName}", state.info.displayNotes(), state.step, null, canDismiss = false, busy = true)
+        is UpdateState.NeedsPermission -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.displayNotes(),
             "Allow RisiMe to install updates; the update continues when you come back.", "Update", canDismiss = true, busy = false)
-        is UpdateState.Failed -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.notes?.takeIf { it.isNotBlank() }, state.message, "Retry", canDismiss = true, busy = false)
+        is UpdateState.Failed -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.displayNotes(), state.message, "Retry", canDismiss = true, busy = false)
     }
+}
+
+/** A download/verify failure as the user should read it (the gate then offers Retry + download page). */
+fun downloadFailureMessage(e: Throwable): String = when (e) {
+    is java.net.UnknownHostException, is java.net.ConnectException, is java.net.SocketTimeoutException,
+    is java.io.InterruptedIOException,
+    -> "Couldn't download the update: no connection to the update server. Check your internet and retry."
+    is javax.net.ssl.SSLException -> "Couldn't download the update: secure connection failed (certificate problem)."
+    is java.io.IOException -> "Couldn't download the update (network error). Retry, or use the download page."
+    else -> "Update failed (${e.message ?: e.javaClass.simpleName}). Retry, or use the download page."
+}
+
+/** A rejected download (checksum, signing certificate, package or version mismatch). Nothing was installed. */
+fun verifyFailureMessage(reason: String): String =
+    "The downloaded update failed its security check ($reason), so nothing was installed. Retry, or use the download page."
+
+/**
+ * PackageInstaller status → message. Codes are PackageInstaller.STATUS_* (literal so this stays JVM-pure):
+ * 1 FAILURE, 2 BLOCKED, 3 ABORTED, 4 INVALID, 5 CONFLICT, 6 STORAGE, 7 INCOMPATIBLE, 8 TIMEOUT.
+ */
+fun installFailureMessage(status: Int, detail: String?): String {
+    val what = when (status) {
+        3 -> return "Install cancelled. Tap Retry to install the update."
+        2 -> "the install was blocked on this device"
+        4 -> "the downloaded file isn't a valid app"
+        5 -> "it conflicts with the installed app"
+        6 -> "not enough storage"
+        7 -> "it isn't compatible with this device"
+        8 -> "the install timed out"
+        else -> "the installer reported a failure"
+    }
+    val extra = detail?.trim()?.takeIf { it.isNotEmpty() }?.let { " ($it)" } ?: ""
+    return "Install failed: $what$extra. Retry, or use the download page."
 }

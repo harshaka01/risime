@@ -193,6 +193,11 @@ dependencies {
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.sqlite.bundled.jvm) // JVM SQLite for the Room migration test
     testImplementation(libs.jna) // JNA jar (host jnidispatch) for the real MLS core in JVM tests
+    // Compose UI tests on the JVM (decision 040): Robolectric, no emulator (spark2 has none).
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }
 
 // ---- Contract examples -> unit test resources ----

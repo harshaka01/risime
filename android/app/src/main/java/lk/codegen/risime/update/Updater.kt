@@ -116,10 +116,14 @@ class Updater(
         if (!enabled) return
         if (!context.packageManager.canRequestPackageInstalls()) {
             _state.value = UpdateState.NeedsPermission(info)
-            context.startActivity(
-                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
+            runCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }.onFailure {
+                _state.value = UpdateState.Failed(info, "This device won't let RisiMe install updates. Use the download page.")
+            }
             return
         }
         val dir = File(context.filesDir, "updates").apply { mkdirs() }
@@ -134,16 +138,21 @@ class Updater(
             when (val v = verifyApk(info, facts, context.packageName)) {
                 is VerifyResult.Failed -> {
                     file.delete()
-                    _state.value = UpdateState.Failed(info, "Update rejected: ${v.reason}")
+                    _state.value = UpdateState.Failed(info, verifyFailureMessage(v.reason))
                     return
                 }
                 VerifyResult.Ok -> Unit
             }
             _state.value = UpdateState.Working(info, "Installing…")
             withContext(Dispatchers.IO) { install(file, requestSilentUpdate(Build.VERSION.SDK_INT, apkTargetSdk)) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            file.delete()
+            _state.value = UpdateState.Failed(info, "Update interrupted. Tap Retry.")
+            throw e
         } catch (e: Exception) {
             file.delete()
-            _state.value = UpdateState.Failed(info, "Update failed: ${e.javaClass.simpleName}")
+            Log.w("RisiMe", "update failed", e)
+            _state.value = UpdateState.Failed(info, downloadFailureMessage(e))
         }
     }
 
@@ -151,7 +160,7 @@ class Updater(
     fun onInstallStatus(status: Int, message: String?) {
         val info = (_state.value as? UpdateState.Working)?.info ?: return
         if (status != PackageInstaller.STATUS_SUCCESS) {
-            _state.value = UpdateState.Failed(info, "Install didn't finish (${message ?: status})")
+            _state.value = UpdateState.Failed(info, installFailureMessage(status, message))
         }
         // On success the app is replaced and restarted by the system.
     }

@@ -37,6 +37,34 @@ class UpdateLogicTest {
         assertFalse(VersionJson.parse(published.replace("\"required\": false,", ""))!!.required)
     }
 
+    @Test fun summaryIsOptionalAndPreferred() {
+        assertNull(info.summary) // today's publisher has no summary
+        assertEquals("Presence and typing", info.displayNotes())
+        val withSummary = VersionJson.parse(published.replace("\"required\": false,", "\"required\": false, \"summary\": \"Short and plain.\","))!!
+        assertEquals("Short and plain.", withSummary.summary)
+        assertEquals("Short and plain.", withSummary.displayNotes())
+        assertEquals("Short and plain.", updateBanner(UpdateState.Available(withSummary))!!.notes)
+        // Blank summary falls back to the notes, Markdown stripped.
+        val md = info.copy(summary = " ", notes = "## Fixes\n\n- **Gate** scrolls")
+        assertEquals("Fixes\n\n• Gate scrolls", md.displayNotes())
+        assertNull(info.copy(summary = null, notes = "#  \n").displayNotes())
+    }
+
+    @Test fun failureMessagesAreActionable() {
+        assertTrue(downloadFailureMessage(java.net.UnknownHostException("x")).contains("no connection"))
+        assertTrue(downloadFailureMessage(java.net.SocketTimeoutException()).contains("no connection"))
+        assertTrue(downloadFailureMessage(javax.net.ssl.SSLHandshakeException("bad cert")).contains("certificate"))
+        assertTrue(downloadFailureMessage(java.io.IOException("reset")).contains("network error"))
+        assertTrue(downloadFailureMessage(IllegalStateException("HTTP 404")).contains("HTTP 404"))
+        assertTrue(verifyFailureMessage("checksum mismatch").contains("checksum mismatch"))
+        assertTrue(verifyFailureMessage("checksum mismatch").contains("nothing was installed"))
+        assertEquals("Install cancelled. Tap Retry to install the update.", installFailureMessage(3, null))
+        assertEquals("Install failed: the installer reported a failure (INSTALL_FAILED_X). Retry, or use the download page.",
+            installFailureMessage(1, "INSTALL_FAILED_X"))
+        assertTrue(installFailureMessage(6, " ").contains("storage"))
+        assertEquals("https://risicloud.ai/app/risime/", DOWNLOAD_PAGE_URL)
+    }
+
     @Test fun urlAllowlist() {
         assertTrue(urlAllowed("https://risicloud.ai/app/risime/risime-1.apk", base))
         assertFalse(urlAllowed("http://risicloud.ai/app/risime/risime-1.apk", base)) // not https
