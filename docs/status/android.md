@@ -1,5 +1,85 @@
 # Android status — 0.2 nightlies
 
+## v1.12 deleting messages and chats (§15) — READY (receive live, send UI behind a flag)
+**READY** for contract v1.12 §15 (decision 047), following `contract/proposals/reviews/2026-10-06-delete-v1.12-android.md`
+R1–R10. Commits `c792017` (protocol, envelope, AAD, rules, examples), `3a5eb72` (Room v7), `759b6d6` (receive side),
+`2203e76` (send side, Clear/Delete chat), `006a854` (UI), `990c5c6` (real-core tests), plus the live interop commit.
+Gate green: `./gradlew assembleDebug testDebugUnitTest` (in a clean worktree of these commits; the shared checkout had
+other sessions' uncommitted work). `scripts/interop`: **INTEROP OK 2 runs in a row** (85 checks each, 6 new delete checks D1–D6), on HEAD + the live commit.
+
+**Rollout (§15.11): the send UI flag.** One switch: `BuildConfig.DELETES_SEND_ENABLED` (`app/build.gradle.kts`,
+`defaultConfig`; **false**, `-Prisime.deletesSend=true` turns it on), read once into
+`lk.codegen.risime.data.deletes.DeleteFeature.sendEnabled` (a plain `@Volatile var`, so a later remote flag or a test
+can flip it at runtime). It gates long-press **Delete / Select**, select mode and the Delete for me / for everyone
+dialog. **Always on:** the whole receive side, the `deletes` capability, and **Clear chat / Delete chat** (chat menu ⋮
+and chat-list long-press; local plus `chat:clear` on my own inbox). The live tests set the flag on.
+
+Receive side (live in this build):
+- `delete` events (plaintext legacy DMs; E2EE through `MlsPipeline`, parked/replayed like messages). The deleter is the
+  **attested user id** from the core (`processDetailed`), never the device; `sender_is_admin` at the control's epoch for
+  groups; AAD (`deleteAadDecode` rules, Kotlin `DeleteAad` checked equal to the core) = envelope = event targets, else the
+  whole control is dropped and logged. 48 h + 5 min grace on `server_ts`. A plaintext delete in a group or in a DM this
+  device holds an MLS group for is ignored (could only come from a misbehaving server).
+- Tombstones in place (`kind = 'deleted'`, body/image ref/receipts cleared, never unread, acked READ): "This message was
+  deleted" / "You deleted this message" / "This message was deleted by an admin"; chat-list previews too; search
+  excludes them. Reactions on it are purged and later ones dropped (also never notified).
+- Pre-arrival deletes: a **hidden tombstone** (`deleted_ids`, 30 days) or, with server metadata, a placed `del:<id>`
+  tombstone (no sender shown unless S = D). When the message arrives it is **decrypted first and re-judged**: authorised →
+  tombstone; unauthorised → shown normally, the hidden/placed tombstone dropped (never blind hiding).
+- Images: media row (sealed key, thumbnail, blob ref) purged in the transaction; files unlinked, upload cancelled and
+  bitmaps evicted **after the commit**; the existing start-up sweep removes orphans.
+- Notifications: after any delete, every chat with a posted notification is re-planned from its unread rows and reposted
+  **silently** (`setOnlyAlertOnce` + `setSilent`) or cancelled; the summary goes when none is left; "added you"
+  notifications are untouched (chat notifications are tagged). Runs in the foreground too.
+- Controls never create §13.3 lines (pre-install, undecryptable, parked-then-failed: logged only).
+- **Malformed (> 3 epochs back) — choice: shown, not dropped.** When the core throws `Malformed` for a delete control
+  (no admin record for that epoch), the stored targets keep their content with a small muted note **"Couldn't verify a
+  delete for this message"** (`messages.delete_unverified`); nothing is deleted and no §13.3 line is added.
+- `PRAGMA secure_delete = ON` on open (callback on the primary connection), best-effort `wal_checkpoint(TRUNCATE)` on IO
+  after delete transactions. Server-clock offset from every join/sync `server_time`, persisted in DataStore.
+- `deletes` advertised with a delete-capable core (`["groups","images","deletes"]`).
+
+Send side (flagged off): delete outbox (`delete_outbox`, retried with the same `client_msg_id`), rows shown as "You
+deleted this message" at once; ≤ 100 targets per request (101 → 2 requests); `encryptWithAad` with the canonical AAD;
+`stale_epoch` re-encrypts; refusals (`too_old`, `not_sender`, `not_admin`, `bad_request`) restore the failing rows
+(ticks kept), re-request the others, and offer "Delete for me" ("You can only delete messages for everyone within 48
+hours"); own echo completes the outbox after a crash. Pending rules (R2): `send_attempts` counted before every push
+(migration counts existing PENDING rows once); never pushed → cancelled locally; pushed → **cancel after send**
+(finishes with the same id, then deleted for everyone). One serial encrypt-and-push lane for texts, reactions, images and
+deletes (R6). Delete for me: rows go, a `scope = me` hidden tombstone blocks replays, `msg:delete` `me`. Eligibility uses
+the server-clock offset (48 h − 1 min) and `groups.my_role`; "People on older app versions may still see it" while
+`deletes_ready` is false. Clear/Delete chat: one transaction with the `cleared_upto` watermark (max of the cursor and the
+removed ids, compared as TimeUUID times) on every apply path (messages, reactions, deletes, markers, group lines, parked
+replays, re-login replays); pushed pending sends and pending deletes for everyone are kept; Delete chat hides the row
+until a new message. Logout flushes the delete outbox within its 5 s bound.
+
+Room **v7** (`Migration6To7` + `Migration6To7Test`; `EveryReleasedSchemaUpgradeTest` covers 1–7): messages gain
+`deleted_by`, `deleted_by_admin`, `deleted_at`, `delete_state`, `send_attempts`, `delete_unverified`; new `deleted_ids`,
+`delete_outbox`, `chat_state`; wipe covers them.
+
+Tests: `DeleteRulesTest` (envelope strictness, AAD, the 48 h rule, eligibility with the offset, texts, TimeUUID order),
+`DeleteReceiveTest` (13: tombstones, other own device, not authorised, window ± grace, admin at epoch, AAD/envelope
+mismatch dropped without a line, pre-arrival re-check both ways, placed then corrected, Malformed note, pre-install no
+marker, image files after commit, plaintext rules, own echo, watermark + Delete chat unhide), `DeleteSendTest` (10:
+AAD-bound request, split at 100, refusal restore/retry/notice, pending cancel vs cancel-after-send, attempts counted,
+delete for me + replay, Clear chat watermark/chat:clear/kept pending delete, Delete chat hide/unhide, stale_epoch),
+`NotificationRefreshTest` (Robolectric: silent repost, cancel, summary, "added you" untouched), `DeleteUiTest`
+(Robolectric: tombstone texts and placed attribution, dialog, previews, select-mode copy), `SecureDeleteTest`,
+`Migration6To7Test`, `DeviceRegistrarTest` (capability), typed v1.12 examples + round trips, `RealDeleteTest` (real core:
+AAD equals the core's, admin delete, binding mismatch, non-admin refused).
+Live (`LiveGroupInteropTest`, flag on): D1 own delete in a group; D2 admin deletes another member's message; D3 non-admin
+→ `not_admin`, rows restored; D4 image → tombstones and `GET /blobs/{id}` 404 for every member; D5 e2ee DM delete, the
+other user's attempt → `not_sender`, and a reinstall-style replay no longer returns the deleted event (only the delete);
+D6 Clear chat → watermark, `chat:clear`, MLS untouched, a cursor-reset replay restores nothing and the server stops
+replaying the cleared events. **Not testable live:** `too_old` (needs a message older than 48 h on the server clock;
+covered by unit tests of the refusal path).
+
+Later / notes: the one-time catch-up replay of skipped deletes (deferred, S-g); "Delete for me"/Clear sync to my other
+devices (A6); quotes. Concurrency note for root: `scripts/interop` uses fixed tmux session names, ports (4100/4799), store
+(`risime_interop`) and log paths, so two sessions running it at once kill each other's server (seen 4 times today). The
+two green runs above used a local, uncommitted copy of the script in a scratch worktree with other ports/names/store;
+root has since added `INTEROP_INSTANCE`/ports (`2a08768`), which fixes this.
+
 ## v1.11 encrypted images (§14) — READY
 **READY** for contract v1.11 §14 (decision 042), following the android review's chunk order and R1–R8
 (`contract/proposals/reviews/2026-10-06-images-v1.11-android.md`). Commits `db339dc` (envelope, examples,

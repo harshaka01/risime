@@ -1,5 +1,6 @@
 package lk.codegen.risime.data.media
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import lk.codegen.risime.data.FakeMessageDao
 import lk.codegen.risime.data.db.MediaEntity
@@ -67,6 +68,27 @@ class ImageTransferTest {
 
     private fun reply(size: Long = blob.size.toLong(), s: String = sha, code: Int = 201) =
         MockResponse().setResponseCode(code).setBody("""{"blob_id":"b1","size":$size,"sha256":"$s","expires_at":"2026-11-05T08:15:30.456Z"}""")
+
+    @Test
+    fun uploadReportsDeterminateProgressAndClearsItWhenTheAttemptEnds() = runBlocking {
+        outgoing()
+        val seen = mutableListOf<Float>()
+        val watcher = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined).launch {
+            uploader.progress.flow.collect { m -> m["c1"]?.let { seen += it } }
+        }
+        server.enqueue(reply())
+        assertEquals(UploadOutcome.Done("b1"), uploader.run("c1"))
+        watcher.cancel()
+        assertTrue("progress steps: $seen", seen.size >= 3 && seen.first() == 0f && seen.last() == 1f)
+        assertEquals(seen.sorted(), seen) // never goes back within one attempt
+        assertNull(uploader.progress.flow.value["c1"]) // the row's state takes over
+        // A failed attempt clears it too.
+        val row = media.get("c1")!!
+        media.update(row.copy(state = MediaState.ENCRYPTED.name))
+        server.enqueue(MockResponse().setResponseCode(415).setBody("""{"error":"bad_media_type","message":"x"}"""))
+        uploader.attempt("c1")
+        assertNull(uploader.progress.flow.value["c1"])
+    }
 
     @Test
     fun uploadStoresTheReferenceAndTheOutboxCanSend() = runBlocking {

@@ -67,6 +67,9 @@ fun evictionPlan(cached: List<CachedMedia>, now: Long, budgetBytes: Long): List<
     return out
 }
 
+/** The attach sheet's steps while a picked photo is prepared in-process. */
+enum class PrepareStep { REENCODING, ENCRYPTING }
+
 /** An image re-encoded and encrypted in-process (§14.7 Sending 4), not yet committed as a message. */
 class PreparedSend(
     val clientMsgId: String,
@@ -102,6 +105,8 @@ class ImageRepository(
     private val crypto: () -> MediaCrypto?,
     private val api: ApiClient?,
     private val enqueueUpload: (String) -> Unit = {},
+    /** Re-run the upload job now, replacing one that waits in its backoff ("Retry" on a waiting photo). */
+    private val restartUpload: (String) -> Unit = enqueueUpload,
     private val cancelUpload: (String) -> Unit = {},
     private val enqueueDownloads: () -> Unit = {},
     private val clock: () -> Long = System::currentTimeMillis,
@@ -180,10 +185,12 @@ class ImageRepository(
      * encrypt into the blob file. The plaintext encrypt input lives only in `media/tmp` for the
      * duration of the encrypt call (the core streams file to file) and is deleted right after.
      */
-    fun <B> prepare(source: ByteArray, pipeline: ImagePipeline<B>): PreparedSend {
+    fun <B> prepare(source: ByteArray, pipeline: ImagePipeline<B>, onStep: (PrepareStep) -> Unit = {}): PreparedSend {
         val core = crypto() ?: throw ImageRejected("Photos need end-to-end encryption on this phone")
         if (source.size > ImagePipeline.MAX_SOURCE_BYTES) throw ImageRejected("This photo is too large")
+        onStep(PrepareStep.REENCODING)
         val p = pipeline.prepare(source)
+        onStep(PrepareStep.ENCRYPTING)
         val id = newId()
         val name = files.nameFor(id)
         val plain = File(files.tmp, "$name.plain")
@@ -239,14 +246,27 @@ class ImageRepository(
         ).encode()
     }
 
-    /** Retry on a failed image bubble: a failed upload restarts (new client_blob_id); a failed send just resends. */
+    /**
+     * Retry on an image bubble (the tap target and the menu):
+     * - a failed upload restarts with the **same** `client_blob_id` (§14.2: a completed upload whose
+     *   reply was lost replays `200`, even at the quota); a new one only after a digest mismatch,
+     *   or a `404` / `400` that the same id would get again (a deleted blob's id, a changed length);
+     * - an upload waiting in its backoff runs now;
+     * - a failed send (uploaded) just resends.
+     */
     suspend fun retry(clientMsgId: String): Boolean {
         val row = media.get(clientMsgId) ?: return false
         if (row.state == MediaState.FAILED.name) {
             if (row.fileName == null || !files.file(row.fileName).isFile) return false
-            media.update(row.copy(state = MediaState.ENCRYPTED.name, clientBlobId = newId(), attempts = 0, nextAt = 0, failReason = null))
+            val id = if (row.clientBlobId == null || row.failReason in NEW_ID_AFTER) newId() else row.clientBlobId
+            media.update(row.copy(state = MediaState.ENCRYPTED.name, clientBlobId = id, attempts = 0, nextAt = 0, failReason = null))
             messages.retryFailed(clientMsgId)
             enqueueUpload(clientMsgId)
+            return true
+        }
+        if (row.state == MediaState.ENCRYPTED.name && row.attempts > 0) {
+            media.update(row.copy(nextAt = 0))
+            restartUpload(clientMsgId)
             return true
         }
         return messages.retryFailed(clientMsgId) > 0
@@ -319,5 +339,7 @@ class ImageRepository(
 
     companion object {
         const val CACHE_BUDGET = 500L * 1024 * 1024
+        /** Upload failures the same client_blob_id would hit again. */
+        val NEW_ID_AFTER = setOf("digest_mismatch", "not_found", "bad_request")
     }
 }

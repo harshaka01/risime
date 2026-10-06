@@ -125,6 +125,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
     val media by vm.imgs.media.collectAsStateWithLifecycle()
     val imagesReady by vm.imgs.imagesReady.collectAsStateWithLifecycle()
     val toast by vm.imgs.toast.collectAsStateWithLifecycle()
+    val uploads by vm.imgs.uploads.collectAsStateWithLifecycle()
     // §14.1: groups may send while not ready; the sheet says who can't see photos yet.
     val pickPhoto = lk.codegen.risime.ui.chat.rememberImageLayer(
         vm.imgs, messages, groupNotice = if (imagesReady == false) lk.codegen.risime.ui.chat.GROUP_IMAGES_NOTICE else null,
@@ -189,6 +190,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 onImageVisible = vm.imgs::onVisible,
                 del = vm.del,
                 selection = selection,
+                uploads = uploads,
             )
             toast?.let { lk.codegen.risime.ui.chat.ImageToast(it) }
             val off = composer as? GroupComposer.Disabled
@@ -248,6 +250,8 @@ internal fun GroupMessageList(
     /** §15.7 select/delete (null: off). */
     del: lk.codegen.risime.ui.chat.DeleteController? = null,
     selection: Set<String> = emptySet(),
+    /** Upload progress of this phone's photos going out (client_msg_id → 0..1). */
+    uploads: Map<String, Float> = emptyMap(),
 ) {
     ChatMessageList(
         messages = messages,
@@ -283,6 +287,7 @@ internal fun GroupMessageList(
                     media = media[item.m.clientMsgId], loader = loader,
                     onImageTap = { onImageTap(item.m) }, onImageVisible = onImageVisible,
                     sel = del?.selectFor(item.m, selection),
+                    upload = uploads[item.m.clientMsgId],
                 )
             }
         }
@@ -305,12 +310,16 @@ private fun GroupBubble(
     onImageTap: () -> Unit = {},
     onImageVisible: (String) -> Unit = {},
     sel: lk.codegen.risime.ui.chat.MsgSelect? = null,
+    upload: Float? = null,
 ) {
     val failed = m.status == MessageStatus.FAILED.name
     var sheet by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val retryable = failed && canAct && m.failReason != AuthErrors.NOT_MEMBER && m.failReason != AuthErrors.TOO_LONG
+    val send = if (m.image) lk.codegen.risime.ui.chat.photoSendState(m, media, upload) else null
+    // The photo's tap target: a failed photo (when a retry can help) or one waiting in its backoff.
+    val retryPhoto: (() -> Unit)? = if (canAct && (retryable || !failed) && (send is lk.codegen.risime.ui.chat.PhotoSend.Failed || send == lk.codegen.risime.ui.chat.PhotoSend.Waiting)) ({ onRetry(m.clientMsgId) }) else null
     MessageBubble(
         body = m.body,
         time = timeOf(m.localTs),
@@ -330,7 +339,9 @@ private fun GroupBubble(
         footer = { ReactionChipsRow(chips, onOpenReactions) },
         sender = sender,
         senderColor = memberColor(m.from),
-        image = if (m.image) ({ lk.codegen.risime.ui.chat.ImageBubbleContent(media, loader, onImageVisible) }) else null,
+        image = if (m.image) ({ lk.codegen.risime.ui.chat.ImageBubbleContent(media, loader, onImageVisible, send = send, onRetry = retryPhoto) }) else null,
+        imageStatus = if (m.image) send?.let { lk.codegen.risime.ui.chat.photoSendText(it) } ?: lk.codegen.risime.ui.chat.imageStatusText(media) else null,
+        imageAction = retryPhoto?.let { lk.codegen.risime.ui.chat.PHOTO_RETRY to it },
         onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else null,
         tapLabel = if (m.image) lk.codegen.risime.ui.chat.imageTapLabel(lk.codegen.risime.ui.chat.imageTap(media)) else null,
     )

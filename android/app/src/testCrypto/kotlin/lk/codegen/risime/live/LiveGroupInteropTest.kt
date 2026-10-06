@@ -148,6 +148,10 @@ class LiveGroupInteropTest {
         val img = LiveImageKit(api, messages, name + deviceId.take(4))
         val groupDao = FakeGroupDao()
         val opDao = FakeGroupOpDao()
+        /** §15: this device's delete state (hidden tombstones, outbox, chat_state) and its cursor (replays). */
+        val reactions = lk.codegen.risime.data.FakeReactionDao()
+        val deletes = lk.codegen.risime.data.deletes.FakeDeleteDao(messages, reactions)
+        val sync = FakeSyncDao()
         val raw = CopyOnWriteArrayList<Event>()
         val blobChecks = CopyOnWriteArrayList<Pair<BlobRef, Boolean>>()
         val unrecoverable = CopyOnWriteArrayList<String>()
@@ -171,7 +175,7 @@ class LiveGroupInteropTest {
         )
         lateinit var client: PhoenixRealtimeClient
         val chat: ChatEngine = ChatEngine(
-            messages = messages, sync = FakeSyncDao(), tx = tx,
+            messages = messages, sync = sync, tx = tx,
             scope = scope, realtime = { client }, meId = { userId },
             behaviour = BehaviourLog(FakeBehaviourDao(), { "s" }, { 0L }),
             mls = MlsPipeline(
@@ -181,13 +185,28 @@ class LiveGroupInteropTest {
                 onParkedAhead = { conv -> scope.launch { catchUp(conv) } },
             ),
             mlsEngine = { mls.engine }, catchUp = { catchUp(it) },
-            reactionsDao = lk.codegen.risime.data.FakeReactionDao(),
+            reactionsDao = reactions,
             groupsEnabled = { mls.engine.groupsSupported },
             groups = store,
             blobs = { ref -> fetchBlob(ref) },
             onUnrecoverable = { conv -> println("  [$name] unrecoverable $conv"); unrecoverable += conv },
             images = img.repo,
+            deletes = deletes,
+            log = { println("  [$name] deletes: $it") },
         )
+
+        /** §15.7 a reinstall-style replay: the cursor and dedupe are reset, the socket joins with `since: null`. */
+        suspend fun replayInbox(): Int {
+            on { client.stop() }
+            val from = raw.size
+            on { sync.last = null; sync.seen.clear() }
+            start()
+            live()
+            delay(1_500)
+            return from
+        }
+
+        fun row(messageId: String) = messages.rows.values.firstOrNull { it.messageId == messageId }
 
         /** The app's GroupApi (AppContainer): every mutating call carries this device's X-Device-Id. */
         val groupApi = object : GroupApi {
@@ -822,6 +841,127 @@ class LiveGroupInteropTest {
             val g = (nb.api.group(conv2) as ApiResult.Ok).value.group
             ensure(g.pending.isEmpty()) { "pending after the rejoin: ${g.pending}" }
             "epoch ${nb.epoch(conv2)}"
+        }
+
+        // ---- v1.12 deletes (§15). The send UI flag is on for this run (the app ships it off). ----
+        lk.codegen.risime.data.deletes.DeleteFeature.sendEnabled = true
+        val nb = b2!!
+        fun idOf(x: Dev, conv: String, text: String) = x.messages.rows.values.first { it.conversationId == conv && it.body == text }
+
+        check("D1. B deletes its own group message for everyone → A and C see the tombstone; B 'You deleted'") {
+            nb.on { nb.chat.sendText(conv2, "oops $run") }
+            for (x in listOf(a, c)) x.awaitText(conv2, "oops $run")
+            val mine = nb.await(10_000, "B's message id") { idOf(nb, conv2, "oops $run").takeIf { it.messageId != null } }
+            nb.on { nb.chat.deleteForEveryone(conv2, listOf(mine.clientMsgId)) }
+            for (x in listOf(a, c)) {
+                val r = x.await(20_000, "tombstone") { x.row(mine.messageId!!)?.takeIf { it.deleted } }
+                ensure(r.body.isEmpty() && r.deletedBy == bId && !r.deletedByAdmin) { "${x.name}: $r" }
+            }
+            val own = nb.await(20_000, "own tombstone") { nb.row(mine.messageId!!)?.takeIf { it.deleted } }
+            ensure(lk.codegen.risime.ui.chat.tombstoneText(own, bId) == "You deleted this message") { "B: ${own.deletedBy}" }
+            ensure(nb.deletes.outbox.isEmpty()) { "B's outbox: ${nb.deletes.outbox}" }
+            null
+        }
+
+        check("D2. the admin (A) deletes C's message → C and B see 'deleted by an admin'") {
+            c.on { c.chat.sendText(conv2, "c says $run") }
+            for (x in listOf(a, nb)) x.awaitText(conv2, "c says $run")
+            val target = a.await(10_000, "C's message at A") { idOf(a, conv2, "c says $run").takeIf { it.messageId != null } }
+            a.on { a.chat.deleteForEveryone(conv2, listOf(target.clientMsgId)) }
+            for (x in listOf(c, nb)) {
+                val r = x.await(20_000, "admin tombstone") { x.row(target.messageId!!)?.takeIf { it.deleted } }
+                ensure(r.deletedByAdmin && lk.codegen.risime.ui.chat.tombstoneText(r, x.userId) == "This message was deleted by an admin") { "${x.name}: $r" }
+            }
+            null
+        }
+
+        check("D3. a non-admin (C) can't delete A's message: not_admin, all-or-nothing, the row comes back") {
+            a.on { a.chat.sendText(conv2, "admin's $run") }
+            c.awaitText(conv2, "admin's $run")
+            val t = c.await(10_000, "A's message at C") { idOf(c, conv2, "admin's $run").takeIf { it.messageId != null } }
+            val notices = CopyOnWriteArrayList<ChatEngine.DeleteNotice>()
+            val job = c.scope.launch { c.chat.deleteNotices.collect { notices += it } }
+            c.on { c.chat.deleteForEveryone(conv2, listOf(t.clientMsgId)) }
+            val n = c.await(20_000, "refusal notice") { notices.firstOrNull() }
+            job.cancel()
+            ensure(n.failedClientMsgIds == listOf(t.clientMsgId)) { "notice: $n" }
+            val back = c.on { c.messages.rows[t.clientMsgId]!! }
+            ensure(!back.showsAsDeleted && back.body == "admin's $run") { "C's row: $back" }
+            for (x in listOf(a, nb)) ensure(x.on { x.row(t.messageId!!) }?.deleted != true) { "${x.name} deleted it" }
+            null
+        }
+
+        var imgBlob = ""
+        check("D4. an image deleted for everyone: tombstones, and the blob answers 404 to every member") {
+            val (id, _) = a.on { a.img.send(conv2, aId, conv2, "to delete $run", w = 400, h = 300) }
+            a.on { a.chat.flushOutbox() }
+            val sent = a.await(30_000, "image sent") { a.messages.rows[id]?.takeIf { it.messageId != null && it.blobId != null } }
+            imgBlob = sent.blobId!!
+            for (x in listOf(c, nb)) x.await(20_000, "image row") { x.row(sent.messageId!!) }
+            ensure(c.api.downloadBlob(imgBlob) is ApiResult.Ok) { "the blob before the delete" }
+            a.on { a.chat.deleteForEveryone(conv2, listOf(id)) }
+            for (x in listOf(c, nb)) x.await(20_000, "image tombstone") { x.row(sent.messageId!!)?.takeIf { it.deleted && it.blobId == null } }
+            ensure(c.on { c.img.media.rows.value[c.row(sent.messageId!!)!!.clientMsgId] } == null) { "C kept the media row (key)" }
+            for (x in listOf(c, nb, a)) {
+                x.await(45_000, "404 for the blob") { (x.api.downloadBlob(imgBlob) as? ApiResult.Error)?.takeIf { it.httpStatus == 404 } }
+            }
+            null
+        }
+
+        check("D5. DM (e2ee A–D): A deletes for everyone; D's reinstall-style replay no longer gets the message, only the tombstone") {
+            val dm = dmConversationId(aId, dId)
+            a.on { a.chat.sendText(dId, "dm secret $run") }
+            a.on { a.chat.sendText(dId, "dm keep $run") }
+            for (m in listOf("dm secret $run", "dm keep $run")) d.awaitText(dm, m)
+            val secret = a.await(10_000, "id") { idOf(a, dm, "dm secret $run").takeIf { it.messageId != null } }
+            val keep = a.await(10_000, "id") { idOf(a, dm, "dm keep $run").takeIf { it.messageId != null } }
+            a.on { a.chat.deleteForEveryone(dm, listOf(secret.clientMsgId)) }
+            d.await(20_000, "D's tombstone") { d.row(secret.messageId!!)?.takeIf { it.deleted } }
+            // The other user can't delete A's message for everyone: not_sender, the row comes back at D.
+            val atD = d.await(10_000, "keep at D") { d.row(keep.messageId!!) }
+            val notices = CopyOnWriteArrayList<ChatEngine.DeleteNotice>()
+            val job = d.scope.launch { d.chat.deleteNotices.collect { notices += it } }
+            d.on { d.chat.deleteForEveryone(dm, listOf(atD.clientMsgId)) }
+            d.await(20_000, "not_sender notice") { notices.firstOrNull() }
+            job.cancel()
+            ensure(d.on { d.messages.rows[atD.clientMsgId]!!.showsAsDeleted } == false) { "D's row stayed deleted" }
+            ensure(a.on { a.row(keep.messageId!!)!!.deleted } == false) { "A's copy got deleted" }
+            val from = d.replayInbox()
+            val replayed = d.raw.drop(from)
+            ensure(replayed.any { it.eventId == keep.messageId }) { "the kept message didn't replay (${replayed.size} events)" }
+            ensure(replayed.none { it.eventId == secret.messageId }) { "the deleted message is still in D's inbox" }
+            ensure(replayed.any { it.kind == Event.KIND_DELETE }) { "no delete event in the replay" }
+            null
+        }
+
+        check("D6. Clear chat (C, the group): local purge with the watermark; chat:clear; a replay brings nothing back") {
+            c.on { c.chat.sendText(conv2, "before clear $run") }
+            c.awaitText(conv2, "before clear $run").let { }
+            val before = c.on { c.messages.rows.values.filter { it.conversationId == conv2 && it.messageId != null }.mapNotNull { it.messageId } }
+            c.on { c.chat.clearChat(conv2, hide = false) }
+            ensure(c.on { c.messages.rows.values.none { it.conversationId == conv2 } }) { "rows left after Clear chat" }
+            ensure(c.on { c.deletes.chatState(conv2)?.clearedUpto } != null) { "no watermark" }
+            c.await(20_000, "chat:clear sent") { c.deletes.outbox.values.none { it.scope == "clear" }.takeIf { it } }
+            // MLS state is untouched: C still sends and receives in the group.
+            a.on { a.chat.sendText(conv2, "after clear $run") }
+            c.awaitText(conv2, "after clear $run")
+            // A reinstall-style replay (cursor reset; the watermark is the local guarantee, chat:clear the server one).
+            val from = c.replayInbox()
+            val back = c.on { c.messages.rows.values.filter { it.conversationId == conv2 && it.messageId in before } }
+            ensure(back.isEmpty()) { "came back: ${back.map { it.body }}" }
+            ensure(c.on { c.messages.rows.values.any { it.conversationId == conv2 && it.body == "after clear $run" } }) { "the newer message is gone" }
+            // The server job removed C's own inbox copies (polled: it runs in the background).
+            var left = before
+            withTimeoutOrNull(30_000) {
+                while (true) {
+                    val f = c.replayInbox()
+                    left = before.filter { id -> c.raw.drop(f).any { it.eventId == id } }
+                    if (left.isEmpty()) break
+                    delay(3_000)
+                }
+            }
+            ensure(left.isEmpty()) { "server still replays ${left.size} cleared event(s) (first replay from $from)" }
+            "${before.size} cleared"
         }
 
         // ---- Decision 050: a plain logout keeps the chats; the same account resumes with no rejoin. ----

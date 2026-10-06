@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -296,6 +297,10 @@ fun MessageBubble(
     muted: Boolean = false,
     /** A non-error note (e.g. "Couldn't verify a delete for this message"). */
     noteIsInfo: Boolean = false,
+    /** §14: the photo's state line ("Uploading 42%", "Couldn't send photo"), read by TalkBack with the bubble. */
+    imageStatus: String? = null,
+    /** §14: the photo's tap target ("Retry"), also a TalkBack action of the merged bubble. */
+    imageAction: Pair<String, () -> Unit>? = null,
 ) {
     val c = RisiTheme.colors
     val statusLabel = status?.let { tickLabel(it) }
@@ -321,10 +326,14 @@ fun MessageBubble(
                     contentDescription = buildString {
                         append(if (mine) "You: " else sender?.let { "$it: " } ?: "")
                         append(if (image == null) body else if (body.isBlank()) "Photo" else "Photo, $body")
+                        imageStatus?.let { append(", ").append(it) }
                         append(", ").append(time)
                         statusLabel?.let { append(", ").append(it) }
                         note?.let { append(". ").append(it) }
                         if (selected) append(", selected")
+                    }
+                    imageAction?.let { (label, run) ->
+                        customActions = listOf(androidx.compose.ui.semantics.CustomAccessibilityAction(label) { run(); true })
                     }
                 },
         ) {

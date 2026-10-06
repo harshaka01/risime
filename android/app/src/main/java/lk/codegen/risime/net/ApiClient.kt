@@ -132,10 +132,17 @@ class ApiClient(
      * Streams [file] as the body (OkHttp sends its Content-Length; never buffered in memory).
      * Idempotent by [clientBlobId]: a repeat after a completed upload answers 200 with the same blob.
      */
-    suspend fun uploadMediaBlob(conversationId: String, clientBlobId: String, file: java.io.File, purpose: String = "media"): ApiResult<BlobUploadReply> =
+    suspend fun uploadMediaBlob(
+        conversationId: String,
+        clientBlobId: String,
+        file: java.io.File,
+        purpose: String = "media",
+        /** Bytes written to the socket so far and the total (restarts at 0 if the request is retried). */
+        onProgress: ((sent: Long, total: Long) -> Unit)? = null,
+    ): ApiResult<BlobUploadReply> =
         execute(
             "POST", "blobs?purpose=$purpose&conversation_id=$conversationId&client_blob_id=$clientBlobId",
-            file.asRequestBody(OCTET), true, serializer<BlobUploadReply>(),
+            if (onProgress == null) file.asRequestBody(OCTET) else ProgressFileBody(file, OCTET, onProgress), true, serializer<BlobUploadReply>(),
         )
 
     /** Owner only, idempotent 204 (a cancelled send after the upload). */
@@ -319,4 +326,31 @@ fun parseRetryAfter(value: String?, nowMs: Long): Long? {
         val at = java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
         ((at - nowMs + 999) / 1000).coerceAtLeast(0)
     }.getOrNull()
+}
+
+/** A file body that reports the bytes written (the upload's determinate progress); Content-Length stays the file's size. */
+internal class ProgressFileBody(
+    private val file: java.io.File,
+    private val type: okhttp3.MediaType,
+    private val onProgress: (sent: Long, total: Long) -> Unit,
+) : RequestBody() {
+    override fun contentType() = type
+
+    override fun contentLength() = file.length()
+
+    override fun writeTo(sink: okio.BufferedSink) {
+        val total = contentLength()
+        var sent = 0L
+        onProgress(0, total)
+        file.inputStream().use { input ->
+            val buf = ByteArray(32 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                sink.write(buf, 0, n)
+                sent += n
+                onProgress(sent, total)
+            }
+        }
+    }
 }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import lk.codegen.risime.AppContainer
@@ -32,6 +33,9 @@ class ImageActions(private val c: AppContainer, private val scope: CoroutineScop
     val media: StateFlow<Map<String, MediaEntity>> = c.db.media().forConversation(conversationId)
         .map { rows -> rows.associateBy { it.clientMsgId } }
         .stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** The determinate upload progress of this phone's photos going out (client_msg_id → 0..1). */
+    val uploads: StateFlow<Map<String, Float>> get() = c.imageUploader.progress.flow
 
     val loader: ImageLoader? get() = if (c.mediaCrypto != null) c.imageLoader else null
 
@@ -116,7 +120,11 @@ class ImageActions(private val c: AppContainer, private val scope: CoroutineScop
                         }
                         out.toByteArray()
                     } ?: throw ImageRejected("Couldn't open this photo")
-                    Result.success(c.images.prepare(bytes, ImagePipeline(AndroidBitmapOps)))
+                    Result.success(
+                        c.images.prepare(bytes, ImagePipeline(AndroidBitmapOps)) { step ->
+                            if (step == lk.codegen.risime.data.media.PrepareStep.ENCRYPTING) attach.update { it?.copy(state = AttachState.Encrypting) }
+                        },
+                    )
                 } catch (e: ImageRejected) {
                     Result.failure(e)
                 } catch (e: Exception) {

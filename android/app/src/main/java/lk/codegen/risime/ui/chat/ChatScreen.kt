@@ -85,6 +85,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     val imagesReady by vm.imgs.imagesReady.collectAsStateWithLifecycle()
     val missingIsMe by vm.imgs.missingIsMe.collectAsStateWithLifecycle()
     val toast by vm.imgs.toast.collectAsStateWithLifecycle()
+    val uploads by vm.imgs.uploads.collectAsStateWithLifecycle()
     val pickPhoto = rememberImageLayer(vm.imgs, messages)
 
     // Read acks only while this chat is actually on screen.
@@ -160,6 +161,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                             onReact = { e, op -> item.m.messageId?.let { vm.react(it, e, op) } },
                             onOpenReactions = { reactionsFor = item.m.messageId },
                             sel = vm.del.selectFor(item.m, selection),
+                            upload = uploads[item.m.clientMsgId],
                         )
                     }
                 }
@@ -222,12 +224,17 @@ internal fun Bubble(
     onImageVisible: (String) -> Unit = {},
     /** §15.7 select/delete hooks (null while the delete UI is off). */
     sel: MsgSelect? = null,
+    /** This photo's upload progress (0..1) while it goes out. */
+    upload: Float? = null,
 ) {
     val failed = m.status == MessageStatus.FAILED.name
     var sheet by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val retryable = failed && canRetry && m.failReason != AuthErrors.NOT_FRIENDS && m.failReason != AuthErrors.TOO_LONG
+    val send = if (m.image) photoSendState(m, media, upload) else null
+    // The photo's tap target: a failed photo (when a retry can help) or one waiting in its backoff.
+    val retryPhoto: (() -> Unit)? = if (canRetry && (retryable || !failed) && (send is PhotoSend.Failed || send == PhotoSend.Waiting)) ({ onRetry(m.clientMsgId) }) else null
     MessageBubble(
         body = m.body,
         time = timeOf(m.localTs),
@@ -245,7 +252,9 @@ internal fun Bubble(
         selected = sel?.selected == true,
         noteIsInfo = !failed,
         footer = { ReactionChipsRow(chips, onOpenReactions) },
-        image = if (m.image) ({ ImageBubbleContent(media, loader, onImageVisible) }) else null,
+        image = if (m.image) ({ ImageBubbleContent(media, loader, onImageVisible, send = send, onRetry = retryPhoto) }) else null,
+        imageStatus = if (m.image) send?.let { photoSendText(it) } ?: imageStatusText(media) else null,
+        imageAction = retryPhoto?.let { PHOTO_RETRY to it },
         onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else null,
         tapLabel = if (m.image) imageTapLabel(imageTap(media)) else null,
     )
