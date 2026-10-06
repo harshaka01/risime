@@ -24,13 +24,16 @@
   SIGKILLing a run.
 - **E2EE is on:** pilot key `x-nu0EBHzGv-…`. Chats upgrade once both people run an E2EE-capable
   app (nightly.7+).
-- **Watch:** one release attempt failed in the server gate on a test that passed 4× right after,
-  so it's flaky. Release logs are now kept in full (`~/risime-logs/release-last.log`) so a
-  recurrence names the test.
 - **Emoji and reactions (v1.8) shipped in nightly.9.**
-- **Groups (contract v1.9) merged** (`d20de76`, decision 041; all three reviews in). Crypto, server
-  and android are implementing it in parallel.
-- **Queue after groups:** encrypted images (they reuse the v1.9 blob API).
+- **v0.2.0-nightly.10 live: end-to-end encrypted groups** (contract v1.9, decision 041;
+  versionCode 20010, not required). Both gates passed, live interop passed with 11 new group checks
+  (real MLS core, 5 devices), and the backup now includes blobs. The pilot was migrated by
+  run-server after the backup.
+- **Interop now runs on its own store** (`risime_interop` DB and keyspace, migrated each run). It
+  used to write throwaway users into the pilot's `risime_dev`.
+- **Server test flake fixed** (`5d4a61a`): test pushes leaked into the next test under load; they
+  are now routed by a per-test token. 30/30 under heavy load.
+- **Queue:** encrypted images (contract v1.10, extends the v1.9 blob API), then group icons.
 
 ## Waiting on Harsha (batched)
 - The fail2ban jail and removing Tailscale, if not done yet (`docs/PROD.md`).
@@ -43,6 +46,8 @@
 |---|---|
 | v0.1.0 | One-to-one chat, store-and-forward, ticks, dev OTP login (smoke-tested on two devices) |
 | v0.2.0-nightly.1 | Presence/last seen and typing (contract v1.2), Settings, chat polish (unread, day separators, copy, retry/delete, search), design system + accessibility, Oban, JSON logs/metrics/`/health`, 200- and 2000-user load tests with fixes, prod prep files (not deployed), the E2EE spike (OpenMLS crate) |
+| v0.2.0-nightly.9 | P0 update-screen fix, emoji and reactions (v1.8) |
+| v0.2.0-nightly.10 | Encrypted MLS groups (v1.9), blob store, interop store isolation |
 | v0.2.0-nightly.2 | RisiCloud sign-in (contract v1.3; dormant until the Keycloak client exists), fingerprint-unlocked refresh tokens, the release-only in-app updater, the publish step to risicloud.ai, the option 2b config (off), the E2EE `.so` built natively on spark2 |
 
 ## Done since nightly.2 (in v0.2.0-nightly.3)
