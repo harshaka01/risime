@@ -425,14 +425,16 @@ defmodule RisiMe.Messaging.Store.Cassandra do
           {:halt, :done}
 
         paging_state ->
+          opts = [page_size: @clear_page]
+          opts = if paging_state, do: [paging_state: paging_state] ++ opts, else: opts
+
           page =
             run!(
               "SELECT event_id, kind, conversation_id FROM inbox_events " <>
                 "WHERE user_id = ? AND event_id <= maxTimeuuid(?)",
               [user_id, bound],
               @overload_backoff,
-              page_size: @clear_page,
-              paging_state: paging_state
+              opts
             )
 
           next = if page.paging_state, do: page.paging_state, else: :done

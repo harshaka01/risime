@@ -84,4 +84,55 @@ defmodule RisiMe.Messaging.Store.CassandraTest do
     assert %{delivered_at: ^t, read_at: ^t} = rows[a]
     assert %{delivered_at: ^t, read_at: nil} = rows[b]
   end
+
+  test "v1.12 clear_conversation pages (500 per page), filters kind and conversation, keeps the rest" do
+    user = uuid4()
+    conv = "grp:" <> uuid4()
+    other = "dm:" <> uuid4()
+
+    ids =
+      for i <- 1..1_103 do
+        id = uuid1()
+
+        {kind, c} =
+          cond do
+            rem(i, 50) == 0 -> {"mls_commit", conv}
+            rem(i, 7) == 0 -> {"message", other}
+            true -> {Enum.at(~w(message reaction status group_receipt delete), rem(i, 5)), conv}
+          end
+
+        :ok =
+          Store.append_event(user, %{event_id: id, kind: kind, data: %{"conversation_id" => c}})
+
+        {id, kind, c}
+      end
+
+    after_upto = uuid1()
+
+    :ok =
+      Store.append_event(user, %{
+        event_id: after_upto,
+        kind: "message",
+        data: %{"conversation_id" => conv}
+      })
+
+    {upto, _, _} = List.last(ids)
+
+    expected = Enum.count(ids, fn {_, k, c} -> c == conv and k != "mls_commit" end)
+
+    assert {:ok, ^expected} =
+             Store.clear_conversation(
+               user,
+               conv,
+               upto,
+               ~w(message reaction status group_receipt delete)
+             )
+
+    left = Store.list_events(user, nil, 2_000) |> Enum.map(& &1.event_id)
+    assert length(left) == length(ids) - expected + 1
+    assert after_upto in left
+
+    assert {:ok, %{kind: "mls_commit", conversation_id: ^conv}} =
+             Store.get_event(user, elem(Enum.at(ids, 49), 0))
+  end
 end

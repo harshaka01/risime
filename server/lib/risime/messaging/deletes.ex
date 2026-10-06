@@ -423,7 +423,7 @@ defmodule RisiMe.Messaging.Deletes do
 
     if skipped != [],
       do:
-        Logger.info(
+        Logger.warning(
           "msg:delete #{req.client_msg_id}: skipped #{length(skipped)} blob id(s) " <>
             "not owned by a target sender: #{Enum.join(skipped, ",")}"
         )
