@@ -207,7 +207,7 @@ internal fun DmMessageRow(m: MessageEntity, bubble: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Bubble(
+internal fun Bubble(
     m: MessageEntity,
     canRetry: Boolean,
     onRetry: (String) -> Unit,

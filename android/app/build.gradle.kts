@@ -197,6 +197,9 @@ dependencies {
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+    // Compose UI tests on a real device (redroid on spark2): the chat scroll rules with the real IME and rotation.
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.compose.ui.test.junit4)
     testImplementation(libs.icu4j) // grapheme clusters on the JVM, as android.icu does on devices
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
