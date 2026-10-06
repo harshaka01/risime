@@ -82,12 +82,33 @@ fi
 echo "==> upgrade test (previous published APK -> v$next)"
 UT_COMMIT="$(git rev-parse HEAD)"
 CAND="$REL/candidate"; mkdir -p "$CAND" "$HOME/risime-logs/upgrade-test"
-cp "$APK" "$CAND/app-release.apk"; printf 'version=%s\ncommit=%s\n' "$next" "$UT_COMMIT" > "$CAND/CANDIDATE"
 UT_RESULT="${UPGRADE_TEST_RESULT:-$HOME/risime-logs/upgrade-test/v$next.result}"
-if [ -z "${UPGRADE_TEST_RESULT:-}" ] && command -v adb >/dev/null && adb devices 2>/dev/null | awk 'NR>1 && $2=="device"' | grep -q .; then
+ut() { sed -n "/^$1=/{s/^$1=//p;q}" "$UT_RESULT" 2>/dev/null || true; }
+# A PASS for an earlier commit still counts when everything changed since is upgrade-test tooling
+# or docs (no app/server/crypto/contract change). Then the EXACT tested binary (the staged
+# candidate, sha256 checked against the result) is released, not this rebuild.
+REUSED=0
+if [ -f "$UT_RESULT" ] && [ "$(ut result)" = PASS ] && [ -n "$(ut commit)" ] && [ "$(ut commit)" != "$UT_COMMIT" ] \
+   && [ -f "$CAND/CANDIDATE" ] && [ "$(sed -n 's/^commit=//p' "$CAND/CANDIDATE")" = "$(ut commit)" ] \
+   && git cat-file -e "$(ut commit)^{commit}" 2>/dev/null; then
+  changed="$(git diff --name-only "$(ut commit)" HEAD)"
+  other="$(printf '%s\n' "$changed" | grep -vE '^(scripts/upgrade-test|docs/)' || true)"
+  cand_sha="$(sha256sum "$CAND/app-release.apk" | cut -d' ' -f1)"
+  if [ -z "$other" ] && [ "$cand_sha" = "$(ut new_sha256)" ]; then
+    [ "$("$BT/apksigner" verify --print-certs "$CAND/app-release.apk" | grep -c "CN=RisiMe Dev Release" || true)" -gt 0 ] \
+      || { echo "staged candidate is not signed with the dev release key"; exit 1; }
+    echo "==> upgrade test ran on $(ut commit); since then only: $(echo $changed). Releasing the tested candidate (sha256 ${cand_sha:0:12})."
+    APK="$CAND/app-release.apk"; UT_COMMIT="$(ut commit)"; REUSED=1
+  else
+    echo "==> earlier upgrade result not reusable (other changes: $(echo ${other:-none}); sha match: $([ "$cand_sha" = "$(ut new_sha256)" ] && echo yes || echo no))"
+  fi
+fi
+if [ "$REUSED" = 0 ]; then
+  cp "$APK" "$CAND/app-release.apk"; printf 'version=%s\ncommit=%s\n' "$next" "$UT_COMMIT" > "$CAND/CANDIDATE"
+fi
+if [ "$REUSED" = 0 ] && [ -z "${UPGRADE_TEST_RESULT:-}" ] && command -v adb >/dev/null && [ -n "$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device"' || true)" ]; then
   scripts/upgrade-test --new "$APK" --version "$next" --commit "$UT_COMMIT" || { echo "UPGRADE TEST FAILED: not releasing"; exit 1; }
 fi
-ut() { sed -n "s/^$1=//p" "$UT_RESULT" 2>/dev/null | head -1; }
 if [ ! -f "$UT_RESULT" ]; then
   echo "NO UPGRADE TEST RESULT for v$next. Candidate staged in $CAND."
   echo "  Laptop: scripts/upgrade-test --fetch-candidate, then re-run scripts/nightly-release here (same HEAD)."
