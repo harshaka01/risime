@@ -4,6 +4,8 @@
 # new tag's worktree (~/risime-run/v<version>, docs/decisions/006). See docs/NIGHTLY.md.
 #   scripts/nightly-release            # next nightly (X.Y+1.0-nightly.1 after a release, else nightly.N+1)
 #   scripts/nightly-release 0.2.0      # an explicit version (e.g. a final release)
+#   scripts/nightly-release --required # mark this release as a required update (version.json)
+#   scripts/nightly-release --publish-only v0.2.0-nightly.3   # re-run only the spark publish step
 set -euo pipefail
 cd "$(dirname "$0")/.."
 M="$HOME/.local/bin/mise exec --"
@@ -15,8 +17,14 @@ REL="$HOME/risime-releases"
 git diff --quiet && git diff --cached --quiet || { echo "working tree not clean"; exit 1; }
 git pull -q --rebase origin main
 
+REQ=(); EXPLICIT=""
+while [ $# -gt 0 ]; do case "$1" in
+  --required) REQ=(--required); shift;;
+  --publish-only) exec scripts/publish-release "${2:?--publish-only needs v<version>}" "${REQ[@]}";;
+  *) EXPLICIT="$1"; shift;; esac; done
+
 cur="$(cat VERSION)"
-if [ $# -ge 1 ]; then next="$1"
+if [ -n "$EXPLICIT" ]; then next="$EXPLICIT"
 elif [[ "$cur" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-nightly\.([0-9]+)$ ]]; then
   next="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-nightly.$((BASH_REMATCH[4] + 1))"
 elif [[ "$cur" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
@@ -61,6 +69,11 @@ cp "$notes" "$out/RELEASE-NOTES.md"
 echo "v$next" > "$REL/LATEST"
 echo "==> published $out"
 
+echo "==> publish to risicloud.ai/app/risime/ (docs/decisions/016)"
+published=1
+scripts/publish-release "v$next" "${REQ[@]}" || { published=0; echo "WARN: publish failed; tag and local release are intact. Retry: scripts/nightly-release --publish-only v$next"; }
+
 echo "==> switch the test server to v$next (docs/decisions/006)"
 scripts/run-dev-server "v$next"
+[ "$published" = 1 ] || { echo "DONE v$next (NOT published)"; exit 1; }
 echo "DONE v$next"

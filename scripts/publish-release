@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Publish a built release to risicloud.ai/app/risime/ (docs/decisions/015, 016).
+# Keeps a local mirror of the last five APKs + version.json + index.html in
+# ~/risime-releases/publish/ and rsyncs it to `spark1:` (rrsync root ~/accounts/releases/risime/,
+# upload-only key). Only APKs, version.json and index.html ever cross the link (decision 015).
+#   scripts/publish-release v0.2.0-nightly.2 [--required] [--no-upload]
+# Test hooks: RISIME_PUBLISH_DEST (default spark1:), RISIME_PUBLISH_RSH (rsync -e program).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REL="$HOME/risime-releases"; MIRROR="$REL/publish"; KEEP=5
+BASE_URL="${RISIME_PUBLISH_BASE_URL:-https://risicloud.ai/app/risime/}"
+DEST="${RISIME_PUBLISH_DEST:-spark1:}"
+TAG=""; REQUIRED=false; UPLOAD=1
+for a in "$@"; do case "$a" in
+  --required) REQUIRED=true;; --no-upload) UPLOAD=0;;
+  v*) TAG="$a";; *) echo "usage: $0 v<version> [--required] [--no-upload]"; exit 2;; esac; done
+[ -n "$TAG" ] || { echo "usage: $0 v<version> [--required] [--no-upload]"; exit 2; }
+ver="${TAG#v}"; src="$REL/$TAG"; apk="$src/risime-$ver.apk"
+[ -f "$apk" ] || { echo "no $apk (run scripts/nightly-release first)"; exit 1; }
+(cd "$src" && sha256sum -c --quiet SHA256SUMS) || { echo "checksum mismatch in $src"; exit 1; }
+
+BT="$(printf '%s\n' "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
+certs="$("$BT/apksigner" verify --print-certs "$apk")"
+grep -q "CN=RisiMe Dev Release" <<<"$certs" || { echo "$apk is not signed with the release key"; exit 1; }
+cert="$(sed -n 's/.*certificate SHA-256 digest: //p' <<<"$certs" | sed -n 1p)"
+badging="$("$BT/aapt2" dump badging "$apk" | sed -n 1p)"   # not head: SIGPIPE under pipefail
+code="$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" <<<"$badging")"
+pkg="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")"
+[ "$pkg" = lk.codegen.risime ] || { echo "unexpected package $pkg"; exit 1; }
+sha="$(sha256sum "$apk" | cut -d' ' -f1)"
+notes_md="$src/RELEASE-NOTES.md"
+
+mkdir -p "$MIRROR"
+cp "$apk" "$MIRROR/"
+# Keep the newest $KEEP APKs by real versionCode (sort -V misorders 0.2.0 vs 0.2.0-nightly.N).
+mapfile -t apks < <(for f in "$MIRROR"/risime-*.apk; do
+  printf '%s %s\n' "$("$BT/aapt2" dump badging "$f" | sed -n "1s/.*versionCode='\([0-9]*\)'.*/\1/p")" "$f"
+done | sort -n | cut -d' ' -f2-)
+if [ "${#apks[@]}" -gt "$KEEP" ]; then
+  for old in "${apks[@]:0:${#apks[@]}-KEEP}"; do rm -f "$old"; done
+fi
+
+python3 - "$MIRROR" "$ver" "$code" "$sha" "$cert" "$REQUIRED" "$BASE_URL" "$notes_md" <<'PY'
+import json, sys, html, datetime, os, re
+mirror, ver, code, sha, cert, required, base, notes_md = sys.argv[1:]
+notes = open(notes_md).read() if os.path.exists(notes_md) else ""
+# Short plain-text notes for the app: the "New for users" section, else the first lines.
+m = re.search(r"## New for users\n(.*?)(\n## |\Z)", notes, re.S)
+short = (m.group(1) if m else notes).strip()[:2000]
+apk = f"risime-{ver}.apk"
+vj = {"versionCode": int(code), "versionName": ver,
+      "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+      "notes": short, "url": base + apk, "sha256": sha, "certSha256": cert.lower(),
+      "required": required == "true"}
+open(os.path.join(mirror, "version.json"), "w").write(json.dumps(vj, indent=2) + "\n")
+e = html.escape
+page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Get RisiMe</title>
+<style>body{{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;color:#1b1b1b}}
+a.btn{{display:inline-block;background:#0B6E69;color:#fff;padding:.9rem 1.4rem;border-radius:.6rem;text-decoration:none;font-weight:600}}
+code{{word-break:break-all;font-size:.8rem}} pre{{white-space:pre-wrap;background:#f4f6f6;padding:1rem;border-radius:.5rem}}
+@media (prefers-color-scheme:dark){{body{{background:#111;color:#eee}} pre{{background:#1d2222}}}}</style></head><body>
+<h1>RisiMe</h1><p>Talk. Connect. Act.</p>
+<p><a class="btn" href="{e(apk)}">Download RisiMe {e(ver)} for Android</a></p>
+<p>After installing, RisiMe keeps itself up to date.</p>
+<h2>What's new</h2><pre>{e(short)}</pre>
+<h2>Install</h2><ol><li>Open the downloaded file and allow "install unknown apps" for your browser when asked.</li>
+<li>Sign in with your work email; you'll get a code by email.</li></ol>
+<h2>Verify</h2><p>SHA-256: <code>{e(sha)}</code><br>Signing certificate SHA-256: <code>{e(cert.lower())}</code></p>
+<p>Internal pilot build for CodeGen and Rise. Not end-to-end encrypted yet.</p></body></html>
+"""
+open(os.path.join(mirror, "index.html"), "w").write(page)
+PY
+echo "==> mirror $MIRROR:"; printf '    %s\n' "$MIRROR"/*
+[ "$UPLOAD" = 1 ] || { echo "==> --no-upload: done"; exit 0; }
+
+rsh=(); [ -n "${RISIME_PUBLISH_RSH:-}" ] && rsh=(-e "$RISIME_PUBLISH_RSH")
+# 1) APKs first, so version.json never points at a missing file; 2) index + version.json;
+# 3) prune anything not in the mirror (older APKs).
+rsync -rt --chmod=F644,D755 "${rsh[@]}" --include='risime-*.apk' --exclude='*' "$MIRROR/" "$DEST"
+rsync -rt --chmod=F644,D755 "${rsh[@]}" --delay-updates "$MIRROR/index.html" "$MIRROR/version.json" "$DEST"
+rsync -rt --chmod=F644,D755 "${rsh[@]}" --delete "$MIRROR/" "$DEST"
+echo "==> published $TAG to $DEST ($BASE_URL)"
