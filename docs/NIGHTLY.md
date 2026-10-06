@@ -23,7 +23,7 @@ The rules are in `docs/decisions/003-nightly-release-cycle.md`. The cycle fires 
 | 11 | Contract v1.3 (reviewed by server + android, merged) | done (`e0824a9`) | — |
 | 12 | Server: Keycloak JWT/JWKS, phone-first mapping, `DEV_LOCAL_AUTH` / `OIDC_ENABLED`, socket Bearer + `auth:refresh`/`auth:expired` | done, in v0.2.0-nightly.2 | a real-token check needs the Keycloak client |
 | 13 | Android: AppAuth + PKCE, fingerprint vault, sign-in mode from `/auth/config` | done, in v0.2.0-nightly.2 | a live sign-in needs the Keycloak client |
-| 14 | Publish step (`scripts/publish-release`) | done; v0.2.0-nightly.2 is staged in `~/risime-releases/publish/` | **the key on spark** (Harsha); the `/app/risime/` Caddy route (RisiCloud lead) |
+| 14 | Publish step (`scripts/publish-release`) | **done and live**: v0.2.0-nightly.2 published 2026-10-06 and served at https://risicloud.ai/app/risime/ (sha256 verified end to end) | — (spark key: rrsync without `-wo`, so reads are allowed; adding `-wo` is recommended) |
 | 15 | In-app updater (release-only) | done, in v0.2.0-nightly.2 | RisiWork `version.json` example (field names, Harsha) |
 | 16 | Option 2b (decided): Caddy `/risime/` → spark2 `tailscale serve` | prepared in `infra/risicloud/`, off | Tailscale on spark2 (Harsha, sudo) and on spark; `/risime/` route (RisiCloud lead) |
 | 17 | Proof of done (books@codegen.co.uk) | waiting | everything above, plus the tester's phone/name/company for the allowlist |
