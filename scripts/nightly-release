@@ -154,9 +154,9 @@ git commit -q -m "chore(root): release v$next
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git tag -a "v$next" -m "RisiMe v$next"
-git push -q origin main "v$next"
+git push -q origin HEAD:main "v$next"   # HEAD:main, so a release can run from a clean worktree
 RELEASED=1
-git push -q spark2-backup main "v$next" 2>/dev/null || echo "warn: spark2-backup push failed"
+git push -q spark2-backup HEAD:main "v$next" 2>/dev/null || echo "warn: spark2-backup push failed"
 
 out="$REL/v$next"; mkdir -p "$out"
 cp "$APK" "$out/risime-$next.apk"

@@ -22,7 +22,9 @@ config :risime, RisiMeWeb.Endpoint,
   # spark2 has a public IP: always bind to loopback. secret_key_base comes from `.env`.
   http: [ip: {127, 0, 0, 1}, port: 4000],
   check_origin: false,
-  code_reloader: true,
+  # scripts/interop and scripts/upgrade-test run temp servers with RISIME_CODE_RELOADER=false and
+  # their own MIX_BUILD_PATH, so other sessions' compiles in this checkout can't stall them.
+  code_reloader: System.get_env("RISIME_CODE_RELOADER", "true") == "true",
   debug_errors: true,
   watchers: []
 

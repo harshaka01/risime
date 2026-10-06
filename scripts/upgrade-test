@@ -48,7 +48,20 @@ field() { [[ "$1" =~ $2=([0-9]+) ]] && echo "${BASH_REMATCH[1]}" || echo ""; }  
 if [ "${1:-}" = _server ]; then
   shift; cmd="$1"; RUN="$HOME/risime-logs/upgrade-test/server"; mkdir -p "$RUN"
   export RISIME_DEV_DB=risime_upgrade RISIME_DEV_KEYSPACE=risime_upgrade ERL_EPMD_ADDRESS=127.0.0.1
-  fx() { (cd "$REPO/server" && $M mix run "$RUN/fixtures.exs" "$@" 2>/dev/null | grep '^upgrade:' || true); }
+  # The temp server runs from a clean worktree at the commit under test (UPGRADE_SERVER_REV, default
+  # HEAD), never from the shared checkout: other sessions' uncommitted edits or compiles can't break
+  # or stall it. Its own build dir, deps shared read-only, and no code reloading.
+  WT="$HOME/.cache/risime-upgrade-wt"; REV="${UPGRADE_SERVER_REV:-$(git -C "$REPO" rev-parse HEAD)}"
+  if [ "$cmd" = start ]; then
+    if [ -e "$WT/.git" ]; then git -C "$WT" checkout -q --force --detach "$REV"
+    else mkdir -p "$(dirname "$WT")"; git -C "$REPO" worktree add -q --force --detach "$WT" "$REV"; fi
+    ln -sfn "$REPO/.env" "$WT/.env"
+    [ -e "$WT/server/deps" ] || ln -s "$REPO/server/deps" "$WT/server/deps"
+    echo "    temp server source: $(git -C "$WT" log -1 --format='%h %s' | cut -c1-70)"
+  fi
+  SRV="$WT/server"
+  export MIX_BUILD_PATH="$SRV/_build/upgrade-test" RISIME_CODE_RELOADER=false
+  fx() { (cd "$SRV" && $M mix run "$RUN/fixtures.exs" "$@" 2>/dev/null | grep '^upgrade:' || true); }
   case "$cmd" in
     start)
       tmux kill-session -t risime-upgrade 2>/dev/null || true; sleep 1
@@ -84,10 +97,11 @@ case mode do
     IO.puts("upgrade: sent #{ok}")
 end
 EXS
-      (cd "$REPO/server" && $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true
+      (cd "$SRV" && $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true
        $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
         || { echo "could not create/migrate the upgrade store"; exit 1; }
-      tmux new -d -s risime-upgrade "cd '$REPO/server' && RISIME_DEV_DB=risime_upgrade RISIME_DEV_KEYSPACE=risime_upgrade ERL_EPMD_ADDRESS=127.0.0.1 \
+      (cd "$SRV" && $M mix compile >/dev/null 2>&1) || { echo "temp server: compile failed"; exit 1; }
+      tmux new -d -s risime-upgrade "cd '$SRV' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=risime_upgrade RISIME_DEV_KEYSPACE=risime_upgrade ERL_EPMD_ADDRESS=127.0.0.1 \
         PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
         RISIME_AUTH_LOG='$RUN/auth.log' $M mix phx.server > '$RUN/server.log' 2>&1"
       for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
@@ -253,27 +267,41 @@ PY
   [ -n "$b" ] || { echo "no UI node: $1"; return 1; }
   A shell input tap $b
 }
-type_into() { tap "$1"; sleep 0.5; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
-dismiss_prompts() { has "Not now" && tap "Not now" || true; }
+# Empty the focused field wherever the cursor landed (Compose ignores MOVE_END): delete backwards
+# and forwards, in one batched shell call.
+clear_field() { A shell "for i in \$(seq 1 80); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true; }
+type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
+hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; has_text "$st" "mInputShown=true" && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
+dismiss_prompts() {   # notification prompt, and the old app's "update available" banner
+  has "Not now" && { tap "Not now" || true; }
+  has "Later" && { tap "Later" || true; sleep 1; }
+  true
+}
 
 sign_in() {  # $1 phone, $2 email
   A shell am start -W -n "$PKG/.MainActivity" >/dev/null
   if [ "$MANUAL" = 1 ]; then manual_sign_in "$1" "$2"; return; fi
+  # The old app's "update available" banner takes a third of the screen: dismiss it.
+  wait_for "Server:" 30 || return 1
+  has "Later" && { tap "Later" || true; sleep 1; }
   echo "    point the app at http://127.0.0.1:$PORT"
   wait_for "Server:" 30 || return 1
   tap "Server:*" || return 1; sleep 1
   # Focus the field (its label, or its current value as a fallback).
   tap "Server URL" || tap "https://*" || tap "http://*" || { echo "    the Server URL field didn't appear"; return 1; }; sleep 0.5
-  A shell input keyevent KEYCODE_MOVE_END; for _ in $(seq 1 60); do A shell input keyevent KEYCODE_DEL; done
+  clear_field
   A shell input text "http://127.0.0.1:$PORT"; sleep 0.5
-  tap "Use this server" || return 1; sleep 2
+  # The keyboard hides "Use this server": close it first; the field's Done action is the fallback.
+  hide_keyboard
+  if ! tap "Use this server"; then tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; fi
+  sleep 2
   has "Server: http://127.0.0.1:$PORT" || { echo "    the server change didn't take (the app still shows another server)"; return 1; }
   if ! wait_for "Phone number" 30; then
     has "Sign in with RisiCloud" && echo "    the server offers only RisiCloud sign-in (dev login missing)"
     return 1
   fi
   echo "    request a code"
-  type_into "Phone number" "$1"; type_into "Work email" "$2"; A shell input keyevent KEYCODE_BACK; tap "Send code" || return 1
+  type_into "Phone number" "$1"; type_into "Work email" "$2"; hide_keyboard; tap "Send code" || return 1
   wait_for "6-digit code" 30 || { echo "    no code screen after Send code"; return 1; }
   local code=""; for _ in $(seq 1 20); do code="$(srv otp "$1")"; [ -n "$code" ] && break; sleep 1; done
   [ -n "$code" ] || { echo "    the temp server never issued a code for the test user"; return 1; }
@@ -309,7 +337,7 @@ install_old() {
 
 open_chat() { A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/.MainActivity" >/dev/null; wait_for "$1" 40; dismiss_prompts; tap "$1"; sleep 2; }
 send_ui() { type_into "Message" "$1"; tap "Send"; sleep 1; }
-visible_msgs() { dump; grep -oE 'upgrade-test [AB][0-9]+' "$WORK/ui.xml" | sort -u; }
+visible_msgs() { hide_keyboard; dismiss_prompts; sleep 1; dump; grep -oE 'upgrade-test [AB][0-9]+' "$WORK/ui.xml" | sort -u; }
 
 # Room rows and DataStore keys need root (google_apis emulator images allow `adb root`).
 db_snapshot() {
@@ -381,7 +409,18 @@ DB_AFTER="$(db_snapshot)"; echo "    after (Room): $DB_AFTER"
 if [ "$DB_BEFORE" != no-root ]; then
   b_msgs="$(field "$DB_BEFORE" messages)"; a_msgs="$(field "$DB_AFTER" messages)"
   [ "${a_msgs:-0}" -ge "${b_msgs:-1}" ] || fail "Room messages dropped (${b_msgs:-?} -> ${a_msgs:-?})"
-  has_text "$DB_AFTER" "cursor=set" || fail "sync cursor lost"
+  # Delivery still works after the upgrade: one new message from B must arrive and be stored, and
+  # the sync cursor must be stored again (nightly.11+ replays the inbox once after an upgrade).
+  step "deliver one new message after the upgrade"
+  srv send 1
+  for _ in $(seq 1 12); do
+    a_msgs="$(field "$DB_AFTER" messages)"
+    [ "${a_msgs:-0}" -gt "${b_msgs:-0}" ] && has_text "$DB_AFTER" "cursor=set" && break
+    sleep 5; DB_AFTER="$(db_snapshot)"
+  done
+  echo "    after a new message (Room): $DB_AFTER"
+  [ "$(field "$DB_AFTER" messages)" -gt "${b_msgs:-0}" ] 2>/dev/null || fail "a new message after the upgrade was not stored within 60 s"
+  has_text "$DB_AFTER" "cursor=set" || fail "sync cursor not stored after the upgrade"
   [ "$(field "$DB_AFTER" datastore_keys)" -ge 2 ] 2>/dev/null || fail "DataStore session/owner keys lost"
   [ -z "$SERIAL_B" ] || [ "$(field "$DB_AFTER" groups)" -ge 1 ] 2>/dev/null || fail "group row lost"
 else

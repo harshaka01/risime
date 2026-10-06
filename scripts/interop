@@ -9,6 +9,8 @@ cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 # Own store: the pilot release runs on risime_dev, which is only migrated by run-server after a backup.
 export RISIME_DEV_DB=risime_interop RISIME_DEV_KEYSPACE=risime_interop
+# Own build dir and no code reloading: other sessions compiling server/ can't stall the temp server.
+export MIX_BUILD_PATH="$REPO/server/_build/interop" RISIME_CODE_RELOADER=false
 DIR="$(mktemp -d "${TMPDIR:-/tmp}/risime-interop.XXXXXX")"
 cleanup() {
   [ -f "$DIR/gradle.log" ] && cp "$DIR/gradle.log" "$HOME/risime-logs/interop-last.log" 2>/dev/null || true
@@ -39,7 +41,7 @@ echo "==> interop store: $RISIME_DEV_DB / $RISIME_DEV_KEYSPACE (create + migrate
 (cd server && $M mix risime.attestation.gen "$DIR/attest.jwk" 2>/dev/null | grep -o 'attestation key created' || true)
 [ -f "$DIR/attest.jwk" ] || { echo "could not create a temp attestation key"; exit 1; }
 tmux new -d -s risime-interop-jwks "python3 '$DIR/jwks.py' '$DIR/www'"
-tmux new -d -s risime-interop "cd '$REPO/server' && RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE PORT=4100 DEV_LOCAL_AUTH=true OIDC_ENABLED=true \
+tmux new -d -s risime-interop "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE PORT=4100 DEV_LOCAL_AUTH=true OIDC_ENABLED=true \
   OIDC_ISSUER=http://127.0.0.1:4799/realms/itest \
   OIDC_JWKS_URL=http://127.0.0.1:4799/realms/itest/protocol/openid-connect/certs \
   PHONE_VERIFICATION=off FCM_ENABLED=false RISIME_AUTH_LOG='$DIR/auth.log' ATTESTATION_KEY_FILE='$DIR/attest.jwk' \
