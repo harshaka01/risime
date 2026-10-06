@@ -5,7 +5,9 @@ import Config
 config :risime, RisiMe.Repo,
   username: "risime",
   hostname: "127.0.0.1",
-  database: "risime_dev",
+  # RISIME_DEV_DB / RISIME_DEV_KEYSPACE let scripts/interop use its own store (risime_interop),
+  # never the pilot's risime_dev.
+  database: System.get_env("RISIME_DEV_DB", "risime_dev"),
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10
@@ -26,7 +28,7 @@ config :risime, RisiMeWeb.Endpoint,
 
 config :risime, :cassandra,
   nodes: ["127.0.0.1:9042"],
-  keyspace: "risime_dev",
+  keyspace: System.get_env("RISIME_DEV_KEYSPACE", "risime_dev"),
   # Connections to the node; each carries up to 100 concurrent requests (docs/status/loadtest.md).
   pool_size: 16
 
