@@ -1,9 +1,9 @@
 # Android status — 0.2 nightlies
 
-**READY** — 0.1 (A1–A7) plus 0.2 night 1: release plumbing, Settings, presence/last seen and
-typing (contract v1.2), chat polish (unread, day separators, copy, retry/delete, search) and the
-design system pass. Gate green on `main`:
-`cd android && ./gradlew assembleDebug testDebugUnitTest assembleRelease` (72 JVM unit tests).
+**READY** — 0.1 (A1–A7) plus 0.2: release plumbing, Settings, presence/last seen and typing
+(v1.2), chat polish, the design system pass, and **contract v1.3**: RisiCloud (Keycloak) sign-in,
+fingerprint-unlocked tokens and the release-only in-app updater. Gate green on `main`:
+`cd android && ./gradlew assembleDebug testDebugUnitTest assembleRelease` (98 JVM unit tests).
 Not yet run on a device or emulator (spark2 has none): see "Device check" below.
 
 ## Release build (decision 003, details in decision 005)
@@ -50,6 +50,52 @@ ssh -N spark2-tunnel                 # laptop :4400 -> spark2 127.0.0.1:4000
 - Login: phone (defaults to `+94`, normalised to E.164 with libphonenumber, local `07…` numbers
   read as Sri Lankan) + allowlisted email → code from the server log
   (`tmux capture-pane -p -t risime-server -S -500 | grep "DEV OTP" | tail -3`).
+
+## Sign-in (contract v1.3; decisions 014, 019)
+- The login screen asks the server `GET /api/v1/auth/config`:
+  - **release** builds show "Sign in with RisiCloud" when `oidc` is listed, and the dev OTP form
+    only while it isn't (the interim);
+  - **debug** builds also show "Developer sign-in (OTP)" whenever `dev` is listed. Settings →
+    "Sign-in mode (debug)" can force either.
+  - A pre-v1.3 server (404) means dev only.
+- Default server: release `https://risicloud.ai/risime`, debug `http://10.0.2.2:4400`.
+- RisiCloud sign-in uses AppAuth (PKCE S256, Custom Tabs, scopes
+  `openid email profile offline_access`). Redirects: `ai.risicloud.risime://callback` and
+  `ai.risicloud.risime.debug://callback`; post-logout `…://logout`. `GET /me` runs right after.
+- **Tokens:**
+  - The access token and the unlocked refresh token live in memory only.
+  - The refresh token and ID token are sealed in `noBackupFilesDir/tokens.bin` (AES-256-GCM data
+    key wrapped by a Keystore RSA-OAEP key). The key needs a fingerprint for every use (or the
+    device PIN on API 30+) and is invalidated by a new enrolment.
+  - There is one prompt per process start (the "RisiMe is locked" screen); rotated refresh tokens
+    are stored without one.
+- The socket sends `Authorization: Bearer` on the upgrade. `auth:refresh` goes about 60 s before
+  expiry (from `expires_in`). `auth:expired` and refused upgrades lead to refresh/`GET /me`, then
+  a reconnect.
+- **`GET /me` outcomes:**
+  - `401` → one refresh, then sign in again (chats kept);
+  - `403 not_allowlisted` → full screen with "Use another account" / "Sign out";
+  - `409 identity_conflict` → full screen with "Sign out".
+
+  These screens show the server's message verbatim.
+- **Logout:** revoke the refresh token, then Keycloak `end_session` in the browser, then delete
+  the key, then wipe chats. Auth trouble never wipes; another user signing in does.
+
+## In-app updater (release only; decisions 016, 019)
+- `https://risicloud.ai/app/risime/version.json` is fetched at start and at most every 6 h in the
+  foreground. A newer `versionCode` shows an "Update available" bar. `required: true` shows a
+  blocking "Update required" screen; the dev banner and "Sign out" stay.
+- The APK downloads only from https URLs under that base, into app-private storage. It is then
+  verified:
+  - sha256;
+  - the signing cert equals the pinned `da7b98…9e2e` and the advertised `certSha256`;
+  - package `lk.codegen.risime`;
+  - `versionCode`.
+
+  It installs through a PackageInstaller session; the first time, Android asks to allow "install
+  unknown apps".
+- `VersionJson` holds every field name; the format is a draft until RisiWork's example arrives.
+  Debug builds never self-update.
 
 ## What's in the app
 - **Screens:** Login (wordmark, "Talk. Connect. Act."), OTP (6 digits, 60 s resend timer),
@@ -120,12 +166,19 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
   Retry. `rate_limited` stays pending and retries after 10 s.
 - Presence is unknown while disconnected and refreshes only with the next watch reply. "last seen"
   labels are computed when the list recomposes (not on a timer).
+- **No live Keycloak test yet:** the `risime` client doesn't exist. The browser hop,
+  BiometricPrompt, Keystore and PackageInstaller only run on a device.
+- Devices without a secure lock screen keep tokens in memory only, so they need a browser sign-in
+  after every process start.
+- Keycloak's default 5-minute access tokens mean an `auth:refresh` about every 4 min while in the
+  foreground.
+- The updater's `version.json` format may change; it doesn't verify release notes or the date.
 - Search is a plain substring match (no ranking, no diacritics folding), newest 100 messages.
 - Message order in a chat is by local time (send time for mine, receive time for theirs).
 - `seen_events` is never pruned (one small row per event).
 - Server cursor race (see `docs/status/server.md`) can, rarely, skip an event after a reconnect.
 - `bad_request` (contract v1.1) and any unknown reason are treated as permanent send failures.
-- `PROTOCOL_VERSION` (1.2) is checked against the PROTOCOL.md header by a unit test, so a contract
+- `PROTOCOL_VERSION` (1.3) is checked against the PROTOCOL.md header by a unit test, so a contract
   version bump fails the Android gate until the client implements it (decision 005).
 - Logout wipes messages and contacts on the device (single-device history in 0.1).
 
@@ -159,3 +212,25 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
 17. Upgrade path: install the previous release, log in, chat, then install this release over it
     (`adb install -r`): chats and login survive (no migration needed at DB v1; repeat this check on
     every DB version bump).
+18. Sign-in mode (interim, server without OIDC): the release build shows only the phone/email
+    form; the debug build shows the same. With `OIDC_ENABLED` and `DEV_LOCAL_AUTH` both on, debug
+    shows the RisiCloud button and "Developer sign-in (OTP)", and release only the button.
+19. **Once the Keycloak `risime` client exists:** "Sign in with RisiCloud" opens a Custom Tab on
+    risicloud.ai and takes the email code. You come back to Chats. Then:
+    - kill the app and reopen: "RisiMe is locked" plus the fingerprint prompt (PIN allowed on
+      Android 11+), then Chats with no browser;
+    - cancel the prompt: you stay on the locked screen; "Unlock" prompts again.
+20. Keep the chat open for over 5 min: messages keep flowing (`auth:refresh` every ~4 min, no
+    reconnect storm in the server log).
+21. Enrol a new fingerprint, then reopen: "Sign in again — your chats are kept"; after browser
+    sign-in, the old chats are still there.
+22. A RisiCloud account whose email isn't allowlisted shows "Not on the RisiMe allowlist" with
+    the server's text; "Use another account" opens a fresh login form. An identity conflict
+    (phone bound to another account) shows the conflict screen with only "Sign out".
+23. Sign out (Settings): the browser flashes the Keycloak logout and returns. Reopen: the login
+    screen, with no locked screen. In the Keycloak admin, the offline session is gone.
+24. Updater (release build, after a newer nightly is published): "Update available" →
+    Update → allow "install unknown apps" once → Update → the system install dialog → the app
+    restarts on the new version with chats and sign-in kept. With `--required`, a blocking
+    screen appears instead. Tampering (wrong sha in `version.json`) gives "Update rejected:
+    checksum mismatch".
