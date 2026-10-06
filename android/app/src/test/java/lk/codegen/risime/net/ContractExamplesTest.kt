@@ -39,16 +39,14 @@ class ContractExamplesTest {
         "auth_refresh.json" to { s -> ProtocolJson.decodeFromString<AuthRefresh>(s) },
         "auth_refresh_reply.json" to { s -> ProtocolJson.decodeFromString<AuthRefreshReply>(s) },
         "auth_refresh_error.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
-        // v1.4 (SMS phone verification): parse-only placeholders added by root with the contract
-        // merge; the android role replaces them with typed decoders when it implements §7.
-        "auth_config_v14.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "me_reply_unverified.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "phone_verify_request_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "phone_verify_confirm.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_phone_unverified.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_invalid_code_attempts.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_already_verified.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_sms_unavailable.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "auth_config_v14.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s) },
+        "me_reply_unverified.json" to { s -> ProtocolJson.decodeFromString<MeReply>(s) },
+        "phone_verify_request_reply.json" to { s -> ProtocolJson.decodeFromString<PhoneVerifyRequestReply>(s) },
+        "phone_verify_confirm.json" to { s -> ProtocolJson.decodeFromString<PhoneVerifyConfirm>(s) },
+        "error_phone_unverified.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
+        "error_invalid_code_attempts.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
+        "error_already_verified.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
+        "error_sms_unavailable.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
     )
 
     @Test
@@ -135,6 +133,51 @@ class ContractExamplesTest {
         // A config with only "dev" has no issuer/client_id.
         val dev = ProtocolJson.decodeFromString<AuthConfig>("""{"modes":["dev"]}""")
         assertEquals(null, dev.issuer)
+    }
+
+    @Test
+    fun phoneVerificationV14Examples() {
+        val cfg = ProtocolJson.decodeFromString<AuthConfig>(read("auth_config_v14.json"))
+        assertTrue(cfg.phoneVerificationRequired)
+        assertFalse(ProtocolJson.decodeFromString<AuthConfig>(read("auth_config.json")).phoneVerificationRequired) // absent = off
+
+        val unverified = ProtocolJson.decodeFromString<MeReply>(read("me_reply_unverified.json")).user
+        assertFalse(unverified.phoneVerified)
+        // Absent phone_verified means true (pre-v1.4 servers).
+        assertTrue(ProtocolJson.decodeFromString<AuthVerifyReply>(read("auth_verify_reply.json")).user.phoneVerified)
+
+        val sent = ProtocolJson.decodeFromString<PhoneVerifyRequestReply>(read("phone_verify_request_reply.json"))
+        assertEquals("sent", sent.status)
+        assertEquals(300, sent.expiresIn)
+        assertTrue(sent.to.contains('\u2022'))
+        assertTrue(sent.to.endsWith("01"))
+
+        val confirm = ProtocolJson.parseToJsonElement(read("phone_verify_confirm.json")) as JsonObject
+        assertEquals(confirm, ProtocolJson.encodeToJsonElement(PhoneVerifyConfirm("123456")))
+
+        mapOf(
+            "error_phone_unverified.json" to AuthErrors.PHONE_UNVERIFIED,
+            "error_already_verified.json" to AuthErrors.ALREADY_VERIFIED,
+            "error_sms_unavailable.json" to AuthErrors.SMS_UNAVAILABLE,
+            "error_invalid_code_attempts.json" to AuthErrors.INVALID_CODE,
+        ).forEach { (file, code) ->
+            val e = ProtocolJson.decodeFromString<ApiErrorEnvelope>(read(file)).error
+            assertEquals(file, code, e.code)
+            assertTrue(e.message.isNotBlank())
+        }
+        assertEquals(3, ProtocolJson.decodeFromString<ApiErrorEnvelope>(read("error_invalid_code_attempts.json")).error.attemptsLeft)
+        assertEquals(null, ProtocolJson.decodeFromString<ApiErrorEnvelope>(read("error_sms_unavailable.json")).error.attemptsLeft)
+    }
+
+    @Test
+    fun retryAfterParsing() {
+        assertEquals(120L, parseRetryAfter("120", 0))
+        assertEquals(0L, parseRetryAfter("-5", 0))
+        assertEquals(null, parseRetryAfter(null, 0))
+        assertEquals(null, parseRetryAfter("soon", 0))
+        val now = java.time.Instant.parse("2026-10-06T08:00:00Z").toEpochMilli()
+        assertEquals(90L, parseRetryAfter("Tue, 06 Oct 2026 08:01:30 GMT", now))
+        assertEquals(0L, parseRetryAfter("Tue, 06 Oct 2026 07:00:00 GMT", now))
     }
 
     @Test

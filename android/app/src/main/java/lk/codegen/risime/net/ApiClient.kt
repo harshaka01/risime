@@ -3,6 +3,7 @@ package lk.codegen.risime.net
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.serializer
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -15,7 +16,14 @@ import java.io.IOException
 sealed interface ApiResult<out T> {
     data class Ok<T>(val value: T) : ApiResult<T>
     /** The server answered with an error envelope (§0) or a bare status. */
-    data class Error(val httpStatus: Int, val code: String, val message: String) : ApiResult<Nothing>
+    data class Error(
+        val httpStatus: Int,
+        val code: String,
+        val message: String,
+        /** §7.1: `Retry-After` seconds on a 429 (null when absent/unparseable). */
+        val retryAfterSec: Long? = null,
+        val attemptsLeft: Int? = null,
+    ) : ApiResult<Nothing>
     data class NetworkError(val cause: IOException) : ApiResult<Nothing>
 }
 
@@ -35,6 +43,13 @@ class ApiClient(
 
     /** §6.1: which sign-in modes the server offers. A pre-v1.3 server answers 404. */
     suspend fun authConfig(): ApiResult<AuthConfig> = call<Unit, AuthConfig>("GET", "auth/config", null, auth = false)
+
+    /** §7.1: SMS a code to the user's allowlisted phone. */
+    suspend fun requestPhoneCode(): ApiResult<PhoneVerifyRequestReply> =
+        call("POST", "me/phone/verify/request", JsonObject(emptyMap()))
+
+    suspend fun confirmPhoneCode(code: String): ApiResult<MeReply> =
+        call("POST", "me/phone/verify/confirm", PhoneVerifyConfirm(code))
 
     suspend fun me(): ApiResult<MeReply> = call<Unit, MeReply>("GET", "me", null)
 
@@ -91,7 +106,11 @@ class ApiClient(
                         ApiResult.Ok(value)
                     } else {
                         val err = runCatching { ProtocolJson.decodeFromString<ApiErrorEnvelope>(text).error }.getOrNull()
-                        ApiResult.Error(res.code, err?.code ?: "http_${res.code}", err?.message ?: "")
+                        ApiResult.Error(
+                            res.code, err?.code ?: "http_${res.code}", err?.message ?: "",
+                            retryAfterSec = parseRetryAfter(res.header("Retry-After"), System.currentTimeMillis()),
+                            attemptsLeft = err?.attemptsLeft,
+                        )
                     }
                 }
             } catch (e: IOException) {
@@ -103,4 +122,14 @@ class ApiClient(
     private companion object {
         val JSON = "application/json".toMediaType()
     }
+}
+
+/** `Retry-After`: delta-seconds or an HTTP-date (RFC 9110); null if absent or unparseable. */
+fun parseRetryAfter(value: String?, nowMs: Long): Long? {
+    val v = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    v.toLongOrNull()?.let { return it.coerceAtLeast(0) }
+    return runCatching {
+        val at = java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
+        ((at - nowMs + 999) / 1000).coerceAtLeast(0)
+    }.getOrNull()
 }

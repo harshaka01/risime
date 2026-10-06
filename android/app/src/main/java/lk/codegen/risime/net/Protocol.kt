@@ -38,6 +38,8 @@ data class User(
     val phone: String,
     @SerialName("display_name") val displayName: String,
     val company: String,
+    /** §7: absent means true (pre-v1.4 servers have no gate). */
+    @SerialName("phone_verified") val phoneVerified: Boolean = true,
 )
 
 @Serializable
@@ -62,7 +64,12 @@ data class Contact(
 data class ContactsReply(val contacts: List<Contact>)
 
 @Serializable
-data class ApiErrorBody(val code: String, val message: String = "")
+data class ApiErrorBody(
+    val code: String,
+    val message: String = "",
+    /** §7.1: optional on 401 invalid_code from the phone confirm. */
+    @SerialName("attempts_left") val attemptsLeft: Int? = null,
+)
 
 @Serializable
 data class ApiErrorEnvelope(val error: ApiErrorBody)
@@ -206,10 +213,15 @@ data class AuthConfig(
     val modes: List<String>,
     val issuer: String? = null,
     @SerialName("client_id") val clientId: String? = null,
+    /** §7.1 (v1.4): "required" | "off"; absent = off. */
+    @SerialName("phone_verification") val phoneVerification: String? = null,
 ) {
+    val phoneVerificationRequired: Boolean get() = phoneVerification == PHONE_REQUIRED
+
     companion object {
         const val MODE_OIDC = "oidc"
         const val MODE_DEV = "dev"
+        const val PHONE_REQUIRED = "required"
     }
 }
 
@@ -226,4 +238,24 @@ object AuthErrors {
     const val NOT_ALLOWLISTED = "not_allowlisted"
     const val IDENTITY_CONFLICT = "identity_conflict"
     const val IDENTITY_MISMATCH = "identity_mismatch"
+    const val PHONE_UNVERIFIED = "phone_unverified"
+    const val ALREADY_VERIFIED = "already_verified"
+    const val SMS_UNAVAILABLE = "sms_unavailable"
+    const val INVALID_CODE = "invalid_code"
+    const val EXPIRED = "expired"
+    const val RATE_LIMITED = "rate_limited"
+    const val TOO_MANY_ATTEMPTS = "too_many_attempts"
 }
+
+// ---- One-time phone verification (§7, v1.4) ----
+
+@Serializable
+data class PhoneVerifyRequestReply(
+    val status: String,
+    @SerialName("expires_in") val expiresIn: Int,
+    /** Masked allowlisted phone, e.g. "+9477•••••22" (U+2022). */
+    val to: String,
+)
+
+@Serializable
+data class PhoneVerifyConfirm(val code: String)
