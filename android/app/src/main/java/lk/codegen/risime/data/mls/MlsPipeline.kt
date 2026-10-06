@@ -47,6 +47,12 @@ sealed interface MlsResult {
     /** §15.6 (android R5): a control that is pre-install, undecryptable or fails its checks: logged only, never a line or tombstone. */
     data class ControlDropped(val reason: String) : MlsResult
 
+    /** §16.3 a decrypted, validated and bound ephemeral call envelope (applied by the call machine after the commit). */
+    data class CallSignal(val event: lk.codegen.risime.net.CallSignalEvent, val env: lk.codegen.risime.calls.CallEnvelope.Env) : MlsResult
+
+    /** §16.2 a durable `call_end` (a message event): the call-history line. */
+    data class CallEnd(val message: MessageData, val env: lk.codegen.risime.calls.CallEnvelope.End) : MlsResult
+
     /** Ahead of the local epoch/generation, or no group yet: kept in mls_pending. */
     data object Pending : MlsResult
 
@@ -100,10 +106,9 @@ class MlsPipeline(
 
     private suspend fun park(e: Event, conv: String, generation: Long, epoch: Long): MlsResult {
         pending.add(MlsPendingEntity(e.eventId, conv, generation, epoch, seq(), ProtocolJson.encodeToString(Event.serializer(), e)))
-        if (lk.codegen.risime.net.isGroupConversation(conv)) {
-            val g = engine()?.group(conv)
-            if (g != null && g.generation == generation && epoch > g.epoch) onParkedAhead(conv)
-        }
+        // §12.8 groups, §16.3/android R7 DMs too: parked ahead of the local epoch → fetch the commits now.
+        val g = engine()?.group(conv)
+        if (g != null && g.generation == generation && epoch > g.epoch) onParkedAhead(conv)
         return MlsResult.Pending
     }
 
@@ -193,6 +198,10 @@ class MlsPipeline(
             return MlsResult.Ignored
         }
         e.deleteData()?.takeIf { it.encrypted }?.let { d -> return applyDelete(mls, e, d, historyBefore, joined) }
+        if (e.kind == Event.KIND_CALL_SIGNAL) {
+            val c = runCatching { e.callSignal() }.getOrNull() ?: return MlsResult.ControlDropped("call_signal: undecodable")
+            return applyCallSignal(mls, e, c, historyBefore, joined)
+        }
         val msg = e.messageData()?.takeIf { it.encrypted } ?: return MlsResult.Ignored
         if (msg.fromDevice.equals(mls.deviceId, true)) return MlsResult.Ignored // our own send (already in the outbox row)
         val conv = msg.conversationId
@@ -226,6 +235,11 @@ class MlsPipeline(
                     // §15.3: a delete envelope is only valid in a `delete` event; in a `message` event it is dropped and logged.
                     is MlsPayload.Decoded.Delete -> {
                         log("delete envelope in a message event ${msg.messageId}: dropped")
+                        MlsResult.Ignored
+                    }
+                    // §16.2: only `call_end` travels as a message; any other call envelope here is dropped.
+                    is MlsPayload.Decoded.Call -> (p.env as? lk.codegen.risime.calls.CallEnvelope.End)?.let { MlsResult.CallEnd(msg, it) } ?: run {
+                        log("call envelope ${p.env.type} in a message event ${msg.messageId}: dropped")
                         MlsResult.Ignored
                     }
                     is MlsPayload.Decoded.Ignored -> {
@@ -280,6 +294,44 @@ class MlsPipeline(
         val set = aad.toSet()
         if (env.targets.toSet() != set || eventIds.toSet() != set) return dropped("binding mismatch")
         return MlsResult.Delete(d, dec.sender.userId, dec.senderIsAdmin)
+    }
+
+    /**
+     * §16.3 a `call_signal`: ordered and parked exactly like a message (no fast path, crypto R2);
+     * every failure is a [MlsResult.ControlDropped] (no §13.3 line, android R7); then the binding of
+     * the cleartext `call_id`/`ring` to the envelope and of `from`/`from_device` to the core's sender.
+     */
+    private suspend fun applyCallSignal(mls: MlsEngine, e: Event, c: lk.codegen.risime.net.CallSignalEvent, historyBefore: java.time.Instant?, joined: GroupRef?): MlsResult {
+        if (c.fromDevice.equals(mls.deviceId, true)) return MlsResult.Ignored // my own copy
+        val conv = c.conversationId
+        if (lk.codegen.risime.net.isGroupConversation(conv)) return MlsResult.ControlDropped("call_signal in a group")
+        fun dropped(reason: String): MlsResult {
+            log("call_signal ${c.messageId} dropped: $reason")
+            return MlsResult.ControlDropped(reason)
+        }
+        val gen = c.generation
+        val epoch = c.epoch
+        val rule1 = beforeHistory(c.serverTs, historyBefore)
+        if (joined != null && gen == joined.generation && epoch < joined.epoch) return dropped("before this device joined")
+        val g = mls.group(conv) ?: return if (rule1) dropped("pre-install") else park(e, conv, gen, epoch)
+        if (gen < g.generation) return dropped("stale generation")
+        if (gen > g.generation) return if (rule1) dropped("pre-install") else park(e, conv, gen, epoch)
+        if (epoch > g.epoch) return park(e, conv, gen, epoch)
+        val dec = try {
+            mls.decrypt(conv, gen, b64.decode(c.ciphertext))
+        } catch (ex: MlsDecryptException) {
+            return dropped(if (rule1) "pre-install" else "decrypt: ${ex.message}")
+        } catch (ex: IllegalArgumentException) {
+            return dropped("bad base64")
+        }
+        if (!dec.sender.userId.equals(c.from, true) || !dec.sender.deviceId.equals(c.fromDevice, true)) return dropped("sender mismatch")
+        if (dec.authenticatedData.isNotEmpty()) return dropped("unexpected authenticated_data")
+        val env = (MlsPayload.decode(dec.plaintext) as? MlsPayload.Decoded.Call)?.env ?: return dropped("not a valid call envelope")
+        if (env is lk.codegen.risime.calls.CallEnvelope.End) return dropped("call_end in a call_signal")
+        // crypto R3 binding.
+        if (env.callId != c.callId) return dropped("call_id mismatch")
+        if (c.ring != lk.codegen.risime.calls.CallEnvelope.ringFor(env)) return dropped("ring flag mismatch")
+        return MlsResult.CallSignal(c, env)
     }
 
     /**

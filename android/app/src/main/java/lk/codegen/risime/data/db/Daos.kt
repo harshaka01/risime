@@ -35,6 +35,10 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE message_id = :messageId")
     suspend fun byMessageId(messageId: String): MessageEntity?
 
+    /** §16.6: the one call-history line of [callId] in a conversation. */
+    @Query("SELECT * FROM messages WHERE conversation_id = :conversationId AND call_id = :callId LIMIT 1")
+    suspend fun callLine(conversationId: String, callId: String): MessageEntity?
+
     /**
      * §14.7 (android R5): an image row is sent only once its blob reference is stored; until then
      * (uploading, or after a failed upload) it is skipped and never blocks the rows behind it.
@@ -157,6 +161,7 @@ interface WipeDao {
         deletedIds()
         deleteOutbox()
         chatState()
+        callMarks()
     }
 
     @Query("DELETE FROM messages")
@@ -201,6 +206,9 @@ interface WipeDao {
 
     @Query("DELETE FROM chat_state")
     suspend fun chatState()
+
+    @Query("DELETE FROM call_marks")
+    suspend fun callMarks()
 }
 
 /** v7 (§15): tombstones, hidden tombstones, the delete outbox and Clear/Delete chat state. */
@@ -476,4 +484,16 @@ interface BehaviourDao {
 
     @Query("SELECT * FROM behaviour_events ORDER BY id ASC")
     suspend fun all(): List<BehaviourEventEntity>
+}
+
+@Dao
+interface CallMarkDao {
+    @Query("SELECT * FROM call_marks WHERE call_id = :callId")
+    suspend fun get(callId: String): CallMarkEntity?
+
+    @Upsert
+    suspend fun put(m: CallMarkEntity)
+
+    @Query("DELETE FROM call_marks WHERE at < :before")
+    suspend fun prune(before: Long): Int
 }

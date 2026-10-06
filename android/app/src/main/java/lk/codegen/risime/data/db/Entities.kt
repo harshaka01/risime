@@ -11,6 +11,7 @@ import androidx.room.PrimaryKey
         Index(value = ["message_id"], unique = true),
         Index(value = ["conversation_id", "local_ts"]),
         Index(value = ["status", "local_ts"]),
+        Index(value = ["conversation_id", "call_id"]),
     ],
 )
 data class MessageEntity(
@@ -47,9 +48,12 @@ data class MessageEntity(
     @ColumnInfo(name = "send_attempts", defaultValue = "0") val sendAttempts: Int = 0,
     /** v7 (§15.4): a delete control for this message couldn't be verified (the core said Malformed): shown as a note. */
     @ColumnInfo(name = "delete_unverified", defaultValue = "0") val deleteUnverified: Boolean = false,
+    /** v8 (§16.6): a call-history line's call id (kind [KIND_CALL]): one line per call id. [systemJson] = the `call_end` envelope. */
+    @ColumnInfo(name = "call_id") val callId: String? = null,
 ) {
     val system: Boolean get() = kind == KIND_SYSTEM
     val image: Boolean get() = kind == KIND_IMAGE
+    val call: Boolean get() = kind == KIND_CALL
 
     /** §15.6 a tombstone row, or a row being deleted for everyone (rendered as the tombstone meanwhile). */
     val deleted: Boolean get() = kind == KIND_DELETED
@@ -61,6 +65,9 @@ data class MessageEntity(
 
         /** v6 (§14): an image; [body] holds the caption (or ""). */
         const val KIND_IMAGE = "image"
+
+        /** v8 (§16.6): a call-history line ("Missed voice call"); [body] = the line from this user's perspective. */
+        const val KIND_CALL = "call"
 
         /** v7 (§15.6): a tombstone ("This message was deleted"); body is "". */
         const val KIND_DELETED = "deleted"
@@ -408,4 +415,14 @@ data class ChatStateEntity(
     @PrimaryKey @ColumnInfo(name = "conversation_id") val conversationId: String,
     @ColumnInfo(name = "cleared_upto") val clearedUpto: Long?,
     @ColumnInfo(name = "hidden", defaultValue = "0") val hidden: Boolean = false,
+)
+
+/** v8 (§16.3): call ids this device rang, answered or ended (24 h dedupe, and the "Missed" line rule). */
+@Entity(tableName = "call_marks", indices = [Index("at")])
+data class CallMarkEntity(
+    @PrimaryKey @ColumnInfo(name = "call_id") val callId: String,
+    val rang: Boolean,
+    val answered: Boolean,
+    val ended: Boolean,
+    val at: Long,
 )

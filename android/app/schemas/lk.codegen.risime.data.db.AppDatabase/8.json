@@ -1,0 +1,1202 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 8,
+    "identityHash": "607a22d253b62011afd25105e71c3f84",
+    "entities": [
+      {
+        "tableName": "messages",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`client_msg_id` TEXT NOT NULL, `message_id` TEXT, `conversation_id` TEXT NOT NULL, `from_id` TEXT NOT NULL, `to_id` TEXT NOT NULL, `body` TEXT NOT NULL, `server_ts` TEXT, `local_ts` INTEGER NOT NULL, `status` TEXT NOT NULL, `outgoing` INTEGER NOT NULL, `acked_status` TEXT, `fail_reason` TEXT, `kind` TEXT NOT NULL DEFAULT 'text', `system_json` TEXT, `receipt_delivered` INTEGER, `receipt_read` INTEGER, `receipt_of` INTEGER, `blob_id` TEXT, `deleted_by` TEXT, `deleted_by_admin` INTEGER NOT NULL DEFAULT 0, `deleted_at` INTEGER, `delete_state` TEXT, `send_attempts` INTEGER NOT NULL DEFAULT 0, `delete_unverified` INTEGER NOT NULL DEFAULT 0, `call_id` TEXT, PRIMARY KEY(`client_msg_id`))",
+        "fields": [
+          {
+            "fieldPath": "clientMsgId",
+            "columnName": "client_msg_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "from",
+            "columnName": "from_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "to",
+            "columnName": "to_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "body",
+            "columnName": "body",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverTs",
+            "columnName": "server_ts",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "localTs",
+            "columnName": "local_ts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "outgoing",
+            "columnName": "outgoing",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ackedStatus",
+            "columnName": "acked_status",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "failReason",
+            "columnName": "fail_reason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'text'"
+          },
+          {
+            "fieldPath": "systemJson",
+            "columnName": "system_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "receiptDelivered",
+            "columnName": "receipt_delivered",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "receiptRead",
+            "columnName": "receipt_read",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "receiptOf",
+            "columnName": "receipt_of",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "blobId",
+            "columnName": "blob_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deletedBy",
+            "columnName": "deleted_by",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deletedByAdmin",
+            "columnName": "deleted_by_admin",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "deletedAt",
+            "columnName": "deleted_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "deleteState",
+            "columnName": "delete_state",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sendAttempts",
+            "columnName": "send_attempts",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "deleteUnverified",
+            "columnName": "delete_unverified",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "callId",
+            "columnName": "call_id",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "client_msg_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_messages_message_id",
+            "unique": true,
+            "columnNames": [
+              "message_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_messages_message_id` ON `${TABLE_NAME}` (`message_id`)"
+          },
+          {
+            "name": "index_messages_conversation_id_local_ts",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "local_ts"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_conversation_id_local_ts` ON `${TABLE_NAME}` (`conversation_id`, `local_ts`)"
+          },
+          {
+            "name": "index_messages_status_local_ts",
+            "unique": false,
+            "columnNames": [
+              "status",
+              "local_ts"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_status_local_ts` ON `${TABLE_NAME}` (`status`, `local_ts`)"
+          },
+          {
+            "name": "index_messages_conversation_id_call_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "call_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_conversation_id_call_id` ON `${TABLE_NAME}` (`conversation_id`, `call_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "contacts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`phone` TEXT NOT NULL, `display_name` TEXT NOT NULL, `company` TEXT NOT NULL, `user_id` TEXT, `registered` INTEGER NOT NULL, `friend` INTEGER NOT NULL DEFAULT 0, `vouched_by_name` TEXT, `group_ready` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`phone`))",
+        "fields": [
+          {
+            "fieldPath": "phone",
+            "columnName": "phone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "company",
+            "columnName": "company",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userId",
+            "columnName": "user_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "registered",
+            "columnName": "registered",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "friend",
+            "columnName": "friend",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "vouchedByName",
+            "columnName": "vouched_by_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "groupReady",
+            "columnName": "group_ready",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "phone"
+          ]
+        }
+      },
+      {
+        "tableName": "sync_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `last_event_id` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastEventId",
+            "columnName": "last_event_id",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "seen_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`event_id` TEXT NOT NULL, PRIMARY KEY(`event_id`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "event_id"
+          ]
+        }
+      },
+      {
+        "tableName": "behaviour_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `type` TEXT NOT NULL, `peer_hash` TEXT, `at` INTEGER NOT NULL, `meta_json` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "peerHash",
+            "columnName": "peer_hash",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "at",
+            "columnName": "at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "metaJson",
+            "columnName": "meta_json",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_behaviour_events_type",
+            "unique": false,
+            "columnNames": [
+              "type"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_behaviour_events_type` ON `${TABLE_NAME}` (`type`)"
+          },
+          {
+            "name": "index_behaviour_events_at",
+            "unique": false,
+            "columnNames": [
+              "at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_behaviour_events_at` ON `${TABLE_NAME}` (`at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "mls_kv",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`namespace` TEXT NOT NULL, `key` BLOB NOT NULL, `value` BLOB NOT NULL, PRIMARY KEY(`namespace`, `key`))",
+        "fields": [
+          {
+            "fieldPath": "namespace",
+            "columnName": "namespace",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "key",
+            "columnName": "key",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "value",
+            "columnName": "value",
+            "affinity": "BLOB",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "namespace",
+            "key"
+          ]
+        }
+      },
+      {
+        "tableName": "mls_pending",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`event_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `generation` INTEGER NOT NULL, `epoch` INTEGER NOT NULL, `seq` INTEGER NOT NULL, `event_json` TEXT NOT NULL, PRIMARY KEY(`event_id`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "epoch",
+            "columnName": "epoch",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seq",
+            "columnName": "seq",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventJson",
+            "columnName": "event_json",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "event_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_mls_pending_conversation_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_mls_pending_conversation_id` ON `${TABLE_NAME}` (`conversation_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "reactions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `target_message_id` TEXT NOT NULL, `reactor_user_id` TEXT NOT NULL, `emoji` TEXT NOT NULL, `op` TEXT NOT NULL, `confirmed_op` TEXT, `confirmed_ts` TEXT, `confirmed_message_id` TEXT, `pending` INTEGER NOT NULL, `pending_client_msg_id` TEXT, `local_ts` INTEGER NOT NULL, PRIMARY KEY(`conversation_id`, `target_message_id`, `reactor_user_id`, `emoji`))",
+        "fields": [
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetMessageId",
+            "columnName": "target_message_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reactorUserId",
+            "columnName": "reactor_user_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "emoji",
+            "columnName": "emoji",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "op",
+            "columnName": "op",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "confirmedOp",
+            "columnName": "confirmed_op",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "confirmedTs",
+            "columnName": "confirmed_ts",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "confirmedMessageId",
+            "columnName": "confirmed_message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pending",
+            "columnName": "pending",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pendingClientMsgId",
+            "columnName": "pending_client_msg_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "localTs",
+            "columnName": "local_ts",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "conversation_id",
+            "target_message_id",
+            "reactor_user_id",
+            "emoji"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_reactions_conversation_id_target_message_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "target_message_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reactions_conversation_id_target_message_id` ON `${TABLE_NAME}` (`conversation_id`, `target_message_id`)"
+          },
+          {
+            "name": "index_reactions_pending_client_msg_id",
+            "unique": false,
+            "columnNames": [
+              "pending_client_msg_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reactions_pending_client_msg_id` ON `${TABLE_NAME}` (`pending_client_msg_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "groups",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `name` TEXT, `my_role` TEXT NOT NULL, `state` TEXT NOT NULL, `created_by` TEXT, `created_at` TEXT, `generation` INTEGER NOT NULL, `epoch_seen` INTEGER, `meta_updated_at` INTEGER, `last_refreshed_at` INTEGER, `local_ts` INTEGER NOT NULL, PRIMARY KEY(`conversation_id`))",
+        "fields": [
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "myRole",
+            "columnName": "my_role",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdBy",
+            "columnName": "created_by",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "epochSeen",
+            "columnName": "epoch_seen",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "metaUpdatedAt",
+            "columnName": "meta_updated_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastRefreshedAt",
+            "columnName": "last_refreshed_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "localTs",
+            "columnName": "local_ts",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "conversation_id"
+          ]
+        }
+      },
+      {
+        "tableName": "group_members",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `user_id` TEXT NOT NULL, `display_name` TEXT NOT NULL, `phone` TEXT, `role` TEXT NOT NULL, `kind` TEXT NOT NULL, `state` TEXT NOT NULL, `joined_at` TEXT, PRIMARY KEY(`conversation_id`, `user_id`))",
+        "fields": [
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userId",
+            "columnName": "user_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phone",
+            "columnName": "phone",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "role",
+            "columnName": "role",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "joinedAt",
+            "columnName": "joined_at",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "conversation_id",
+            "user_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_group_members_user_id",
+            "unique": false,
+            "columnNames": [
+              "user_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_group_members_user_id` ON `${TABLE_NAME}` (`user_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "group_ops",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `conversation_id` TEXT, `type` TEXT NOT NULL, `payload_json` TEXT NOT NULL, `state` TEXT NOT NULL, `attempts` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `client_group_id` TEXT, `op_id` TEXT, `next_at` INTEGER NOT NULL, `last_error` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payloadJson",
+            "columnName": "payload_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attempts",
+            "columnName": "attempts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "clientGroupId",
+            "columnName": "client_group_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "opId",
+            "columnName": "op_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "nextAt",
+            "columnName": "next_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "last_error",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_group_ops_conversation_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_group_ops_conversation_id` ON `${TABLE_NAME}` (`conversation_id`)"
+          },
+          {
+            "name": "index_group_ops_op_id",
+            "unique": true,
+            "columnNames": [
+              "op_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_group_ops_op_id` ON `${TABLE_NAME}` (`op_id`)"
+          },
+          {
+            "name": "index_group_ops_state_next_at",
+            "unique": false,
+            "columnNames": [
+              "state",
+              "next_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_group_ops_state_next_at` ON `${TABLE_NAME}` (`state`, `next_at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "media",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`client_msg_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `outgoing` INTEGER NOT NULL, `state` TEXT NOT NULL, `blob_id` TEXT, `blob_size` INTEGER NOT NULL, `blob_sha256` TEXT NOT NULL, `client_blob_id` TEXT, `sealed_enc` BLOB NOT NULL, `sealed_thumb` BLOB, `mime` TEXT NOT NULL, `w` INTEGER NOT NULL, `h` INTEGER NOT NULL, `file_name` TEXT, `bytes_have` INTEGER NOT NULL, `expires_at_est` INTEGER, `last_access` INTEGER NOT NULL, `attempts` INTEGER NOT NULL, `next_at` INTEGER NOT NULL, `fail_reason` TEXT, PRIMARY KEY(`client_msg_id`))",
+        "fields": [
+          {
+            "fieldPath": "clientMsgId",
+            "columnName": "client_msg_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "outgoing",
+            "columnName": "outgoing",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blobId",
+            "columnName": "blob_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "blobSize",
+            "columnName": "blob_size",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blobSha256",
+            "columnName": "blob_sha256",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "clientBlobId",
+            "columnName": "client_blob_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sealedEnc",
+            "columnName": "sealed_enc",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sealedThumb",
+            "columnName": "sealed_thumb",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "mime",
+            "columnName": "mime",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "w",
+            "columnName": "w",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "h",
+            "columnName": "h",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileName",
+            "columnName": "file_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "bytesHave",
+            "columnName": "bytes_have",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expiresAtEst",
+            "columnName": "expires_at_est",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastAccess",
+            "columnName": "last_access",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attempts",
+            "columnName": "attempts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nextAt",
+            "columnName": "next_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failReason",
+            "columnName": "fail_reason",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "client_msg_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_state_next_at",
+            "unique": false,
+            "columnNames": [
+              "state",
+              "next_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_state_next_at` ON `${TABLE_NAME}` (`state`, `next_at`)"
+          },
+          {
+            "name": "index_media_last_access",
+            "unique": false,
+            "columnNames": [
+              "last_access"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_last_access` ON `${TABLE_NAME}` (`last_access`)"
+          },
+          {
+            "name": "index_media_conversation_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_conversation_id` ON `${TABLE_NAME}` (`conversation_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "deleted_ids",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`message_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `deleted_by` TEXT NOT NULL, `deleter_is_admin` INTEGER NOT NULL, `delete_server_ts` TEXT, `scope` TEXT NOT NULL, `at` INTEGER NOT NULL, PRIMARY KEY(`message_id`))",
+        "fields": [
+          {
+            "fieldPath": "messageId",
+            "columnName": "message_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deletedBy",
+            "columnName": "deleted_by",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deleterIsAdmin",
+            "columnName": "deleter_is_admin",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deleteServerTs",
+            "columnName": "delete_server_ts",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "scope",
+            "columnName": "scope",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "at",
+            "columnName": "at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "message_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_deleted_ids_at",
+            "unique": false,
+            "columnNames": [
+              "at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_deleted_ids_at` ON `${TABLE_NAME}` (`at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "delete_outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`client_msg_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `scope` TEXT NOT NULL, `targets_json` TEXT NOT NULL, `blob_ids_json` TEXT NOT NULL, `state` TEXT NOT NULL, `attempts` INTEGER NOT NULL, `next_at` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `last_error` TEXT, `upto` TEXT, PRIMARY KEY(`client_msg_id`))",
+        "fields": [
+          {
+            "fieldPath": "clientMsgId",
+            "columnName": "client_msg_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scope",
+            "columnName": "scope",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetsJson",
+            "columnName": "targets_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blobIdsJson",
+            "columnName": "blob_ids_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attempts",
+            "columnName": "attempts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nextAt",
+            "columnName": "next_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "last_error",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "upto",
+            "columnName": "upto",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "client_msg_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_delete_outbox_state_next_at",
+            "unique": false,
+            "columnNames": [
+              "state",
+              "next_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_delete_outbox_state_next_at` ON `${TABLE_NAME}` (`state`, `next_at`)"
+          },
+          {
+            "name": "index_delete_outbox_conversation_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_delete_outbox_conversation_id` ON `${TABLE_NAME}` (`conversation_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "chat_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `cleared_upto` INTEGER, `hidden` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`conversation_id`))",
+        "fields": [
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "clearedUpto",
+            "columnName": "cleared_upto",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "hidden",
+            "columnName": "hidden",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "conversation_id"
+          ]
+        }
+      },
+      {
+        "tableName": "call_marks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`call_id` TEXT NOT NULL, `rang` INTEGER NOT NULL, `answered` INTEGER NOT NULL, `ended` INTEGER NOT NULL, `at` INTEGER NOT NULL, PRIMARY KEY(`call_id`))",
+        "fields": [
+          {
+            "fieldPath": "callId",
+            "columnName": "call_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rang",
+            "columnName": "rang",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "answered",
+            "columnName": "answered",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ended",
+            "columnName": "ended",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "at",
+            "columnName": "at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "call_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_call_marks_at",
+            "unique": false,
+            "columnNames": [
+              "at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_call_marks_at` ON `${TABLE_NAME}` (`at`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '607a22d253b62011afd25105e71c3f84')"
+    ]
+  }
+}

@@ -29,6 +29,9 @@ object MlsPayload {
         /** §15.3: a strictly validated delete control (1..100 distinct lowercase TimeUUIDs). */
         data class Delete(val targets: List<String>) : Decoded
 
+        /** §16.2 a strictly validated call envelope (`call_end` in a message event, the rest in `call_signal` events). */
+        data class Call(val env: lk.codegen.risime.calls.CallEnvelope.Env) : Decoded
+
         /** A type this app doesn't know yet: store nothing visible. */
         data class Ignored(val type: String) : Decoded
     }
@@ -100,6 +103,11 @@ object MlsPayload {
         if (type == lk.codegen.risime.data.media.ImageEnvelope.TYPE) {
             // §14.4: malformed → dropped and logged like an unknown type (never stored, fetched or decoded).
             return lk.codegen.risime.data.media.ImageEnvelope.validate(obj)?.let { Decoded.Image(it) } ?: Decoded.Ignored("image (malformed)")
+        }
+        if (lk.codegen.risime.calls.CallEnvelope.isCallType(type)) {
+            // §16.2: malformed → dropped and logged (no line, no marker).
+            var why = ""
+            return lk.codegen.risime.calls.CallEnvelope.decode(obj, plaintext.size) { why = it }?.let { Decoded.Call(it) } ?: Decoded.Ignored("$type (malformed: $why)")
         }
         if (type != TYPE_TEXT) return Decoded.Ignored(type)
         val body = (obj["body"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: return Decoded.Ignored("text without body")
