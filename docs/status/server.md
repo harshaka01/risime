@@ -1,7 +1,8 @@
 # Server status — Release 0.2 (in progress)
 
-**READY** — 0.1 (S1–S7) and the 0.2 night-1 items below are done. Gate green on `main`:
-`mix format --check-formatted && mix compile --warnings-as-errors && mix test` (93 tests).
+**READY** — 0.1 (S1–S7), the 0.2 night-1 items and contract **v1.3** (Keycloak sign-in) are
+done. Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors &&
+mix test` (140 tests).
 
 ## 0.2 progress
 - [x] Version from the repo `VERSION` file: `Application.spec(:risime, :vsn)` matches it, and the
@@ -28,6 +29,17 @@
   - Now 3200 msg/s gives p99 47 ms with 0 errors.
 - [x] Prod config: `CASSANDRA_NODES` / `CASSANDRA_KEYSPACE` / `CASSANDRA_POOL_SIZE`.
   `mix risime.cql.migrate` delegates to `RisiMe.Release.migrate_cql/1`.
+- [x] **v1.3 RisiCloud Keycloak sign-in** (decision 018):
+  - JOSE verification against the realm JWKS (cached, 10 min refresh, unknown-`kid` refetch at
+    most once per 60 s, fail closed), with every §6.0 claim rule;
+  - mapping to phone-first users, `403 not_allowlisted`, `409 identity_conflict`;
+  - `GET /api/v1/auth/config`; `/auth/request` and `/auth/verify` exist only with
+    `DEV_LOCAL_AUTH`;
+  - socket `Authorization: Bearer` (or `token=`), with `auth:expired` and a disconnect at
+    `exp + 60 s`, and `auth:refresh`;
+  - prod endpoint for `https://risicloud.ai/risime/` (no `force_ssl`; `check_origin`).
+  - It needs `mix deps.get` and `mix ecto.migrate` (`users.keycloak_sub`, unique
+    `lower(allowlist.email)`).
 
 ## How to run (spark2)
 ```bash
@@ -58,6 +70,31 @@ afterwards. Don't run it while someone is testing against the dev DB.
 
 Env: `LOG_FORMAT=json|text`, `LOG_LEVEL`, `CASSANDRA_POOL_SIZE`; prod also needs
 `CASSANDRA_NODES` and `CASSANDRA_KEYSPACE` (docs/PROD.md).
+
+Auth env (decision 018):
+| Var | Default | Meaning |
+|---|---|---|
+| `OIDC_ENABLED` | `false` (test: on) | Accept Keycloak JWTs; `"oidc"` appears in `/auth/config` |
+| `OIDC_ISSUER` | `https://risicloud.ai/realms/aoa` | Exact `iss`; discovery base |
+| `OIDC_CLIENT_ID` | `risime` | `azp` / `aud` check; returned by `/auth/config` |
+| `OIDC_JWKS_URL` | (discovery) | Skip discovery and use this JWKS URL |
+| `DEV_LOCAL_AUTH` | dev/test `true`, prod `false` | Dev OTP login + opaque tokens. Prod logs a warning if on |
+| `PHX_HOST` / `PHX_PATH` | `risicloud.ai` / `/risime` | Prod public URL; `check_origin` is `https://<PHX_HOST>` |
+
+**Enabling RisiCloud sign-in once the `risime` client exists:**
+1. The RisiCloud lead creates client `risime`: public, standard flow + PKCE (S256), the redirect
+   URI from the Android build (decision 014), and the default `email` client scope (so `email`
+   and `email_verified` are in the *access* token).
+2. Verify one real access token (for example from the Android debug build), with
+   `RisiMe.Auth.JWT.verify(token)` in `iex -S mix`. Expect `{:ok, %{sub, email, exp}}`. If it
+   fails, the error atom names the rule: `:bad_typ`, `:bad_audience`, `:email_not_verified`,
+   `:kty_mismatch`, …
+3. Make sure every tester's email is on the allowlist (`mix risime.allow`; emails are unique,
+   case-insensitive).
+4. Start the server with `OIDC_ENABLED=true`. Keep `DEV_LOCAL_AUTH=true` on the test server
+   during the switch: both modes then work at once.
+5. A tester who gets **409** (their phone is bound to another Keycloak account) needs
+   `mix risime.allow --rebind <phone>`, after which they sign in again.
 Config comes from the repo `.env`: `POSTGRES_PASSWORD`, `SECRET_KEY_BASE`, `OTP_DEV_LOG`, `SMTP_*`.
 
 ## Allowlist
@@ -100,6 +137,16 @@ Codes are never logged unless `OTP_DEV_LOG=true`.
   don't count. `docs/decisions/001-rate-limiter.md` explains the limiter.
 
 ## Known limits
+- **v1.3 auth:**
+  - Not yet checked against a real token from the realm, because the `risime` client doesn't
+    exist yet. Every rule is tested only with locally generated RSA/EC/Ed25519 keys. The temp
+    server did fetch the real realm JWKS.
+  - JWT mappings are cached per token until expiry, so allowlist removal and `--rebind` take
+    effect at the next token (about 5 min) and, on other nodes, only then.
+  - A dev-token socket that refreshes with a JWT gets a deadline; its expiry disconnect then
+    closes every socket of that dev token.
+  - The expiry disconnect relies on Bandit running `connect/3` in the WebSocket process (true
+    for HTTP/1 WebSockets).
 - **TimeUUIDs:** `uniq` 0.6's `uuid1` timestamps wrap every 0.1 s, which breaks timeuuid
   ordering, so ids come from `RisiMe.TimeUUID` (strictly increasing per node). `uniq` is only
   used for v4 in tests.
