@@ -92,6 +92,9 @@ android {
         // v1.12 §15.11 rollout: the delete send UI (long-press Delete / Select, for me / for everyone)
         // is off until most installs apply deletes; a later nightly flips it. Receive is always on.
         // The one switch: lk.codegen.risime.data.deletes.DeleteFeature.sendEnabled reads this.
+        // v1.13 §16.14 rollout: advertise `calls` and enable the call button. On by default; a
+        // receive-only nightly (call_end lines, no ringing) builds with -Prisime.calls=false.
+        buildConfigField("boolean", "CALLS_ENABLED", (providers.gradleProperty("risime.calls").orNull != "false").toString())
         buildConfigField("boolean", "DELETES_SEND_ENABLED", (providers.gradleProperty("risime.deletesSend").orNull == "true").toString())
         // Pinned server attestation keys (public JWK JSON, ';'-separated). Empty until root provides
         // the pilot key at rollout; the server's /mls/attestation_keys are trusted in addition.

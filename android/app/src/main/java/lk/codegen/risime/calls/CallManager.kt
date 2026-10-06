@@ -105,10 +105,11 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     }
 
     /** §16.1 (S-f): advertise `calls` only when this phone can ring, answer and play a call. */
-    fun canAdvertise(): Boolean = media.available && callsManager != null && notifications.notificationsAllowed()
+    fun canAdvertise(): Boolean = BuildConfig.CALLS_ENABLED && media.available && callsManager != null && notifications.notificationsAllowed()
 
     /** Why this phone can't make or take calls (the Settings "Calls" row), null when it can. */
     fun unsupportedReason(): String? = when {
+        !BuildConfig.CALLS_ENABLED -> "calls are off in this build"
         !media.available -> "Calls aren't supported on this phone"
         callsManager == null -> "This phone's calling service isn't available to RisiMe"
         !notifications.notificationsAllowed() -> "Turn on notifications so RisiMe calls can ring"
