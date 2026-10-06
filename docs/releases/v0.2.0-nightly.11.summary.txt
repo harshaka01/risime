@@ -1,2 +1,2 @@
-New: message notifications (content-free wake-ups). After a reinstall your own sent messages come back, and encrypted chats say clearly when earlier messages are not available.
+Hotfix: chats are never deleted without your confirmation, and messages lost after nightly.10 come back. Group member picking, chat scrolling and code-resend countdowns are fixed. New: notifications.
 Always update over the old app; never uninstall.
