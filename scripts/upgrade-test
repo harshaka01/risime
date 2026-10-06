@@ -413,6 +413,9 @@ if [ "$DB_BEFORE" != no-root ]; then
   # the sync cursor must be stored again (nightly.11+ replays the inbox once after an upgrade).
   step "deliver one new message after the upgrade"
   srv send 1
+  # redroid has no Google Play services (no FCM wake-up): bring the app to the foreground so it syncs.
+  A shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1 || true; sleep 3; dismiss_prompts
+  open_chat "ZZ Upgrade B" || true
   for _ in $(seq 1 12); do
     a_msgs="$(field "$DB_AFTER" messages)"
     [ "${a_msgs:-0}" -gt "${b_msgs:-0}" ] && has_text "$DB_AFTER" "cursor=set" && break
