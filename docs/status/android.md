@@ -217,6 +217,13 @@ behaves exactly like v1.6 and the dev banner stays.
   unknown apps".
 - `VersionJson` holds every field name; the format is a draft until RisiWork's example arrives.
   Debug builds never self-update.
+- **"Update required" gate (P0 fix):** the notes scroll in the space left; a bottom bar is always
+  on screen with Update (Retry after a failure), "Open download page"
+  (`https://risicloud.ai/app/risime/`) and Sign out. All colours come from the theme. The optional
+  `summary` field is shown if present, otherwise the notes with Markdown stripped to plain text.
+  Download, checksum/certificate, cancelled and failed installs show a readable error. The optional
+  banner also has "Open download page". Robolectric Compose tests cover 320×480 dp at 2× font
+  scale, light and dark (decision 040).
 
 ## What's in the app
 - **Screens:** Login (wordmark, "Talk. Connect. Act."), OTP (6 digits, 60 s resend timer),
@@ -356,8 +363,8 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
 24. Updater (release build, after a newer nightly is published): "Update available" →
     Update → allow "install unknown apps" once → Update → the system install dialog → the app
     restarts on the new version with chats and sign-in kept. With `--required`, a blocking
-    screen appears instead. Tampering (wrong sha in `version.json`) gives "Update rejected:
-    checksum mismatch".
+    screen appears instead. Tampering (wrong sha in `version.json`) gives "The downloaded update
+    failed its security check (checksum mismatch), so nothing was installed" with Retry.
 25. Phone verification. The server runs `PHONE_VERIFICATION=required` with `SMS_MODE=log` until
     the "RisiMe" sender ID is approved, so take the code from the server log:
     `tmux capture-pane -p -t risime-server -S -500 | grep "DEV OTP" | tail -3`.
@@ -375,6 +382,12 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
     your phone" with the new masked number. Local chats are still there after confirming.
 29. With an update marked `required` published, the update screen covers the phone screen; Sign
     out still works.
+    - **Gate, dark mode, long notes (P0 fix):** phone in dark mode, display size and font at their
+      largest, a `required` release with long Markdown notes. The title and subtitle are light on
+      dark and readable. The notes show no `#`/`**`, and they scroll. Update, "Open download page"
+      and Sign out stay visible at the bottom the whole time. Turn on airplane mode → Update →
+      a "no connection" error and Retry. Cancel the system install dialog → "Install cancelled"
+      and Retry. "Open download page" opens the browser on risicloud.ai/app/risime/.
 30. Server URL: a fresh release install shows "Server: https://risime.risicloud.ai" on the login
     screen and reaches the server with no tunnel. An install upgraded from a build that stored
     `https://risicloud.ai/risime` also shows the new URL; a URL you typed yourself is kept.
