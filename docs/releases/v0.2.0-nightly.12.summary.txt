@@ -1,0 +1,2 @@
+Fixed: groups come back automatically after you log out and sign in again (no more "New group" or broken sending). Fewer re-downloads after updating.
+Always update over the old app; never uninstall.
