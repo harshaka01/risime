@@ -78,7 +78,7 @@ Later / notes: the one-time catch-up replay of skipped deletes (deferred, S-g); 
 devices (A6); quotes. Concurrency note for root: `scripts/interop` uses fixed tmux session names, ports (4100/4799), store
 (`risime_interop`) and log paths, so two sessions running it at once kill each other's server (seen 4 times today). The
 two green runs above used a local, uncommitted copy of the script in a scratch worktree with other ports/names/store;
-`scripts/` itself is unchanged (root's). Suggest a lock or per-run ports.
+root has since added `INTEROP_INSTANCE`/ports (`2a08768`), which fixes this.
 
 ## v1.11 encrypted images (§14) — READY
 **READY** for contract v1.11 §14 (decision 042), following the android review's chunk order and R1–R8
