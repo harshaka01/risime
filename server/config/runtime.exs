@@ -82,6 +82,11 @@ if config_env() != :test do
          if(System.get_env("SMS_MODE", default_sms) == "notifylk", do: :notifylk, else: :log)
 end
 
+# fail2ban auth log (decision 024); default ~/risime-logs/auth.log.
+if config_env() != :test do
+  if path = System.get_env("RISIME_AUTH_LOG"), do: config(:risime, :auth_log_path, path)
+end
+
 # LOG_LEVEL=info|warning|… overrides the env's level (e.g. a dev server for a load test).
 if level = System.get_env("LOG_LEVEL") do
   config :risime, :log_level, String.to_existing_atom(level)

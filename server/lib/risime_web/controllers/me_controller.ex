@@ -28,6 +28,7 @@ defmodule RisiMeWeb.MeController do
         ApiError.send_error(conn, 409, :already_verified)
 
       {:error, {:rate_limited, seconds}} ->
+        failure(conn, :rate_limited)
         ApiError.send_error(conn, 429, :rate_limited, retry_after: seconds)
 
       {:error, :sms_unavailable} ->
@@ -50,18 +51,24 @@ defmodule RisiMeWeb.MeController do
         ApiError.send_error(conn, 409, :already_verified)
 
       {:error, {:invalid_code, nil}} ->
+        failure(conn, :phone_code_invalid)
         ApiError.send_error(conn, 401, :invalid_code)
 
       {:error, {:invalid_code, left}} ->
+        failure(conn, :phone_code_invalid)
         ApiError.send_error(conn, 401, :invalid_code, extra: [attempts_left: left])
 
       {:error, :expired} ->
         ApiError.send_error(conn, 410, :expired)
 
       {:error, :too_many_attempts} ->
+        failure(conn, :too_many_attempts)
         ApiError.send_error(conn, 429, :too_many_attempts, retry_after: 60)
     end
   end
+
+  defp failure(conn, kind),
+    do: RisiMe.AuthLog.failure(RisiMeWeb.ClientIP.from_conn(conn), kind, conn.request_path)
 
   defp user_json(conn, user),
     do: ApiJSON.user(user, Accounts.phone_verified?(user, conn.assigns.current_auth.kind))

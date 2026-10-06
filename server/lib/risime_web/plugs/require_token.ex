@@ -30,13 +30,19 @@ defmodule RisiMeWeb.Plugs.RequireToken do
         end
 
       {:error, :invalid_token} ->
+        failure(conn, :invalid_token)
         ApiError.send_error(conn, 401, :invalid_token)
 
       {:error, :not_allowlisted} ->
+        failure(conn, :not_allowlisted)
         ApiError.send_error(conn, 403, :not_allowlisted)
 
       {:error, :identity_conflict} ->
+        failure(conn, :identity_conflict)
         ApiError.send_error(conn, 409, :identity_conflict)
     end
   end
+
+  defp failure(conn, kind),
+    do: RisiMe.AuthLog.failure(RisiMeWeb.ClientIP.from_conn(conn), kind, conn.request_path)
 end

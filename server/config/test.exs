@@ -49,6 +49,9 @@ config :risime, :auth_expiry_grace_ms, 300
 config :risime, :sms_mode, :test
 config :risime, :notifylk, req_options: [plug: {Req.Test, RisiMe.NotifyLk}]
 
+# fail2ban auth log: a per-run temp file in tests.
+config :risime, :auth_log_path, Path.join(System.tmp_dir!(), "risime-test-auth.log")
+
 # In test we don't send emails
 config :risime, RisiMe.Mailer, adapter: Swoosh.Adapters.Test
 

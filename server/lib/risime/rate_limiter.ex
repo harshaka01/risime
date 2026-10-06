@@ -35,6 +35,12 @@ defmodule RisiMe.RateLimiter do
     if previous * overlap + current > limit, do: {:error, :rate_limited}, else: :ok
   end
 
+  @doc "Seconds until the current fixed window ends (a `Retry-After` value, at least 1)."
+  def retry_after_s(window_ms) do
+    now = System.system_time(:millisecond)
+    max(1, div(window_ms - rem(now, window_ms) + 999, 1000))
+  end
+
   @impl true
   def init(:ok) do
     :ets.new(@table, [:named_table, :public, :set, write_concurrency: true])

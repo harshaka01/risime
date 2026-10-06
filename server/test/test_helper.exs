@@ -18,3 +18,6 @@ for {k, v} <- [
     do: System.put_env(k, v)
 
 System.delete_env("NOTIFYLK_ALLOW_DEMO_OTP")
+
+# Fresh fail2ban auth log per run (tests match lines by client IP).
+File.rm(RisiMe.AuthLog.path())

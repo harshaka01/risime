@@ -12,7 +12,7 @@ defmodule RisiMeWeb.Endpoint do
   ]
 
   socket "/socket", RisiMeWeb.UserSocket,
-    websocket: true,
+    websocket: [connect_info: [:peer_data, :x_headers]],
     longpoll: false,
     auth_token: true
 

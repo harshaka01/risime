@@ -30,6 +30,8 @@ defmodule RisiMeWeb.UserSocket do
 
       {:error, _} ->
         :telemetry.execute([:risime, :socket, :connect], %{count: 1}, %{result: :refused})
+        ip = RisiMeWeb.ClientIP.from_connect_info(connect_info)
+        RisiMe.AuthLog.failure(ip, :socket_refused, "/socket/websocket")
         :error
     end
   end

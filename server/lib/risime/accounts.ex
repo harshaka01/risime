@@ -378,13 +378,8 @@ defmodule RisiMe.Accounts do
         :ok
 
       {:error, :rate_limited} ->
-        {:error, {:rate_limited, window_retry_after(@phone_request_window)}}
+        {:error, {:rate_limited, RateLimiter.retry_after_s(@phone_request_window)}}
     end
-  end
-
-  defp window_retry_after(window_ms) do
-    now = System.system_time(:millisecond)
-    max(1, div(window_ms - rem(now, window_ms) + 999, 1000))
   end
 
   defp budget(scope, phone) do
