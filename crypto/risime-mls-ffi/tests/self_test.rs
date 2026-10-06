@@ -134,3 +134,89 @@ fn incoming_commit_fields_cross_the_ffi() {
         o => panic!("{o:?}"),
     }
 }
+
+#[test]
+fn group_api_crosses_the_ffi() {
+    use uniffi_risime::{GroupMeta, group_limits, key_package_supports_groups};
+    let a = TestAttestor::from_seed(vec![3; 32]).unwrap();
+    let jwks = vec![a.public_jwk()];
+    let mk = |u: &str| {
+        let c =
+            MlsClient::open(InMemoryKvStore::new(), u.into(), "p".into(), jwks.clone()).unwrap();
+        c.set_attestation(
+            a.attest(u.into(), "p".into(), c.signature_public_key().unwrap(), 1)
+                .unwrap(),
+        )
+        .unwrap();
+        c
+    };
+    let (alice, bob, carol) = (mk("alice"), mk("bob"), mk("carol"));
+    let limits = group_limits();
+    assert_eq!(limits.max_inline_bytes, 64 * 1024);
+    assert_eq!(limits.group_meta_extension, 0xFA01);
+    let kp = bob.generate_key_packages(1).unwrap();
+    assert!(key_package_supports_groups(kp[0].clone()).unwrap());
+
+    let g = b"grp:ffi#1".to_vec();
+    let meta = |name: &str, admins: &[&str]| GroupMeta {
+        name: name.into(),
+        icon_json: None,
+        admins: admins.iter().map(|s| s.to_string()).collect(),
+    };
+    let gc = alice
+        .create_group_with_meta(g.clone(), kp, meta("FFI", &["alice"]))
+        .unwrap();
+    assert_eq!(gc.commit_size, gc.commit.len() as u64);
+    assert!(!gc.commit_needs_ref && !gc.welcome_needs_ref);
+    alice.commit_accepted(g.clone()).unwrap();
+    bob.join_from_welcome(gc.welcome.unwrap()).unwrap();
+    assert_eq!(bob.group_meta(g.clone()).unwrap().unwrap().name, "FFI");
+
+    // Non-admin Bob can't add Carol.
+    assert!(matches!(
+        bob.change_members(g.clone(), carol.generate_key_packages(1).unwrap(), vec![]),
+        Err(RisiMlsError::PolicyViolation(_))
+    ));
+    let rn = alice
+        .update_group_meta(g.clone(), meta("FFI 2", &["alice", "bob"]))
+        .unwrap();
+    assert!(rn.meta_changed);
+    alice.commit_accepted(g.clone()).unwrap();
+    let up = bob.process_commits(g.clone(), vec![rn.commit]).unwrap();
+    assert!(matches!(
+        up.applied[0],
+        IncomingMessage::Commit {
+            meta_changed: true,
+            ..
+        }
+    ));
+    assert_eq!(
+        bob.group_meta(g.clone()).unwrap().unwrap().admins,
+        vec!["alice", "bob"]
+    );
+    // Now an admin, Bob adds Carol.
+    let add = bob
+        .change_members(g.clone(), carol.generate_key_packages(1).unwrap(), vec![])
+        .unwrap();
+    bob.commit_accepted(g.clone()).unwrap();
+    alice.process(g.clone(), add.commit).unwrap();
+    carol.join_from_welcome(add.welcome.unwrap()).unwrap();
+    let rm = alice.remove_users(g.clone(), vec!["carol".into()]).unwrap();
+    alice.commit_rejected(g.clone()).unwrap();
+    assert_eq!(rm.removed.len(), 1);
+    let su = carol.self_update(g.clone()).unwrap();
+    carol.commit_accepted(g.clone()).unwrap();
+    alice.process(g.clone(), su.commit.clone()).unwrap();
+    bob.process(g.clone(), su.commit).unwrap();
+    assert_eq!(
+        alice.epoch_authenticator(g.clone()).unwrap(),
+        carol.epoch_authenticator(g.clone()).unwrap()
+    );
+    // Bad icon JSON is refused.
+    let mut bad = meta("x", &["alice"]);
+    bad.icon_json = Some("{".into());
+    assert!(matches!(
+        alice.update_group_meta(g, bad),
+        Err(RisiMlsError::Malformed(_))
+    ));
+}

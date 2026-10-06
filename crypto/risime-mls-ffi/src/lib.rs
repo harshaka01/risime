@@ -322,6 +322,133 @@ impl From<Incoming> for IncomingMessage {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Group records (contract v1.9 §12)
+// ---------------------------------------------------------------------------------------------
+
+/// `group_meta` (GroupContext extension 0xFA01). `icon_json` is the raw JSON of `icon` (null
+/// until the images slice defines it). Fields unknown to this version are kept by the core when
+/// it rewrites the meta.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GroupMeta {
+    pub name: String,
+    pub icon_json: Option<String>,
+    pub admins: Vec<String>,
+}
+
+impl From<risime_mls::GroupMeta> for GroupMeta {
+    fn from(m: risime_mls::GroupMeta) -> Self {
+        Self {
+            name: m.name,
+            icon_json: m.icon.map(|v| v.to_string()),
+            admins: m.admins,
+        }
+    }
+}
+
+impl TryFrom<GroupMeta> for risime_mls::GroupMeta {
+    type Error = RisiMlsError;
+    fn try_from(m: GroupMeta) -> Result<Self> {
+        let mut meta = risime_mls::GroupMeta::new(m.name, m.admins);
+        meta.icon = match m.icon_json {
+            None => None,
+            Some(j) => match serde_json::from_str::<serde_json::Value>(&j)
+                .map_err(|e| RisiMlsError::Malformed(format!("icon_json: {e}")))?
+            {
+                serde_json::Value::Null => None,
+                v => Some(v),
+            },
+        };
+        meta.validate()?;
+        Ok(meta)
+    }
+}
+
+/// A group commit of ours waiting for `POST /mls/groups/{id}/commit` (§12.4). Send `epoch` as
+/// the request's `epoch` and `meta_changed` as-is. If `commit_needs_ref` / `welcome_needs_ref`
+/// (larger than 64 KiB), upload the bytes as a blob and send `commit_ref` / `welcome_ref`. On
+/// `200` call `commitAccepted`; on a `409` call `commitRejected`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GroupCommit {
+    pub commit: Vec<u8>,
+    pub welcome: Option<Vec<u8>>,
+    pub epoch: u64,
+    pub added: Vec<DeviceId>,
+    pub removed: Vec<DeviceId>,
+    pub meta_changed: bool,
+    pub commit_size: u64,
+    pub welcome_size: u64,
+    pub commit_needs_ref: bool,
+    pub welcome_needs_ref: bool,
+}
+
+impl From<risime_mls::GroupCommit> for GroupCommit {
+    fn from(g: risime_mls::GroupCommit) -> Self {
+        Self {
+            commit_size: g.commit_size() as u64,
+            welcome_size: g.welcome_size() as u64,
+            commit_needs_ref: g.commit_needs_ref(),
+            welcome_needs_ref: g.welcome_needs_ref(),
+            commit: g.commit,
+            welcome: g.welcome,
+            epoch: g.epoch,
+            added: devices(g.added),
+            removed: devices(g.removed),
+            meta_changed: g.meta_changed,
+        }
+    }
+}
+
+/// Result of `processCommits` (catch-up, §12.8).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CatchUpResult {
+    /// The group's epoch afterwards.
+    pub epoch: u64,
+    /// One `Commit` per applied commit, in order. Our own accepted commit (found in the log after
+    /// a restart) is merged and reported with `committer` = this device.
+    pub applied: Vec<IncomingMessage>,
+    /// Commits below our epoch (already applied).
+    pub skipped: u32,
+    /// The batch removed this device; later commits were not looked at. Wipe the group.
+    pub removed_self: bool,
+}
+
+/// The contract's group limits (v1.9 §12.0, §12.4).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GroupLimits {
+    /// Inline commit/Welcome values above this go by blob reference.
+    pub max_inline_bytes: u64,
+    pub max_commit_bytes: u64,
+    pub max_welcome_bytes: u64,
+    pub max_group_users: u32,
+    pub max_group_leaves: u32,
+    /// The `risime.group_meta` extension type and key-package capability (0xFA01).
+    pub group_meta_extension: u16,
+}
+
+#[uniffi::export]
+pub fn group_limits() -> GroupLimits {
+    GroupLimits {
+        max_inline_bytes: risime_mls::MAX_INLINE_BYTES as u64,
+        max_commit_bytes: risime_mls::MAX_COMMIT_BYTES as u64,
+        max_welcome_bytes: risime_mls::MAX_WELCOME_BYTES as u64,
+        max_group_users: risime_mls::MAX_GROUP_USERS as u32,
+        max_group_leaves: risime_mls::MAX_GROUP_LEAVES as u32,
+        group_meta_extension: risime_mls::GROUP_META_EXTENSION,
+    }
+}
+
+/// Whether a key package (TLS bytes) is groups-capable (carries capability 0xFA01). It is
+/// validated first.
+#[uniffi::export]
+pub fn key_package_supports_groups(key_package: Vec<u8>) -> Result<bool> {
+    Ok(risime_mls::key_package_supports_groups(&key_package)?)
+}
+
+fn core_devices(v: Vec<DeviceId>) -> Result<Vec<risime_mls::DeviceId>> {
+    v.into_iter().map(risime_mls::DeviceId::try_from).collect()
+}
+
+// ---------------------------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------------------------
 
@@ -488,6 +615,79 @@ impl MlsClient {
     pub fn is_active(&self, group_id: Vec<u8>) -> Result<bool> {
         self.with(|c| c.is_active(&group_id))
     }
+
+    // ---- Groups (contract v1.9 §12) ----
+
+    /// Create a `grp:` group (id `"grp:<uuid>#<generation>"`) at epoch 0 with `meta`, adding every
+    /// claimed key package (each must be groups-capable). This device's user must be in
+    /// `meta.admins`. Also the rebuild after a reset (a new generation). The commit stays pending.
+    pub fn create_group_with_meta(
+        &self,
+        group_id: Vec<u8>,
+        key_packages: Vec<Vec<u8>>,
+        meta: GroupMeta,
+    ) -> Result<GroupCommit> {
+        let meta = meta.try_into()?;
+        self.with(|c| c.create_group_with_meta(&group_id, &key_packages, &meta))
+            .map(Into::into)
+    }
+
+    /// One commit that adds the owners of `key_packages` and removes `remove` (an `add`, `remove`
+    /// or `devices` op). A device in both lists is re-added (`rejoin`). Admin policy and caps are
+    /// checked first (`PolicyViolation`).
+    pub fn change_members(
+        &self,
+        group_id: Vec<u8>,
+        key_packages: Vec<Vec<u8>>,
+        remove: Vec<DeviceId>,
+    ) -> Result<GroupCommit> {
+        let remove = core_devices(remove)?;
+        self.with(|c| c.change_members(&group_id, &key_packages, &remove))
+            .map(Into::into)
+    }
+
+    /// One commit that removes every leaf of `user_ids` (a `remove` op or a member's leave).
+    /// This device's own user can't be listed.
+    pub fn remove_users(&self, group_id: Vec<u8>, user_ids: Vec<String>) -> Result<GroupCommit> {
+        self.with(|c| c.remove_users(&group_id, &user_ids))
+            .map(Into::into)
+    }
+
+    /// A GroupContextExtensions commit setting `group_meta` (rename, or a `role` op's admin
+    /// list). Admins only. `meta_changed` is true.
+    pub fn update_group_meta(&self, group_id: Vec<u8>, meta: GroupMeta) -> Result<GroupCommit> {
+        let meta = meta.try_into()?;
+        self.with(|c| c.update_group_meta(&group_id, &meta))
+            .map(Into::into)
+    }
+
+    /// An empty commit with a fresh path (key rotation). Anyone may send it.
+    pub fn self_update(&self, group_id: Vec<u8>) -> Result<GroupCommit> {
+        self.with(|c| c.self_update(&group_id)).map(Into::into)
+    }
+
+    /// The group's current `group_meta`; null for a DM group.
+    pub fn group_meta(&self, group_id: Vec<u8>) -> Result<Option<GroupMeta>> {
+        self.with(|c| c.group_meta(&group_id))
+            .map(|m| m.map(Into::into))
+    }
+
+    /// Apply a run of commits in log order (`GET …/commits`), all or nothing. Commits below our
+    /// epoch are skipped; a gap is `WrongEpoch`; our own pending commit found in the log is
+    /// merged; it stops after a commit that removes this device.
+    pub fn process_commits(
+        &self,
+        group_id: Vec<u8>,
+        commits: Vec<Vec<u8>>,
+    ) -> Result<CatchUpResult> {
+        self.with(|c| c.process_commits(&group_id, &commits))
+            .map(|u| CatchUpResult {
+                epoch: u.epoch,
+                applied: u.applied.into_iter().map(Into::into).collect(),
+                skipped: u.skipped,
+                removed_self: u.removed_self,
+            })
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -637,8 +837,59 @@ pub fn self_test() -> Result<String> {
         "bob after reopen",
     )?;
     check(bob_store.depth() == 0, "no open transaction")?;
+    let dm_epoch = alice.epoch(g)?;
 
-    Ok(format!("ok: epoch {}, {}", alice.epoch(g)?, mls_info()))
+    // Groups (v1.9): create with meta, add, rename, remove; PrivateMessage handshakes.
+    let gg = b"grp:self-test#1".to_vec();
+    let meta = GroupMeta {
+        name: "Self-test".into(),
+        icon_json: None,
+        admins: vec!["alice".into()],
+    };
+    let gc = alice.create_group_with_meta(gg.clone(), bob.generate_key_packages(1)?, meta)?;
+    alice.commit_accepted(gg.clone())?;
+    bob.join_from_welcome(gc.welcome.unwrap_or_default())?;
+    let add = alice.change_members(gg.clone(), carol.generate_key_packages(1)?, vec![])?;
+    alice.commit_accepted(gg.clone())?;
+    bob.process(gg.clone(), add.commit)?;
+    carol.join_from_welcome(add.welcome.unwrap_or_default())?;
+    let rn = alice.update_group_meta(
+        gg.clone(),
+        GroupMeta {
+            name: "Renamed".into(),
+            icon_json: None,
+            admins: vec!["alice".into()],
+        },
+    )?;
+    alice.commit_accepted(gg.clone())?;
+    let up = carol.process_commits(gg.clone(), vec![rn.commit.clone()])?;
+    bob.process(gg.clone(), rn.commit)?;
+    check(
+        up.epoch == 3 && carol.group_meta(gg.clone())?.map(|m| m.name) == Some("Renamed".into()),
+        "group rename",
+    )?;
+    let rm = alice.remove_users(gg.clone(), vec!["carol".into()])?;
+    alice.commit_accepted(gg.clone())?;
+    bob.process(gg.clone(), rm.commit.clone())?;
+    let removed = matches!(
+        carol.process(gg.clone(), rm.commit)?,
+        IncomingMessage::Commit {
+            removed_self: true,
+            ..
+        }
+    );
+    check(removed, "carol removed from the group")?;
+    let hi = bob.encrypt(gg.clone(), b"group hello".to_vec())?;
+    check(
+        alice.decrypt(gg.clone(), hi)? == b"group hello",
+        "group message",
+    )?;
+
+    Ok(format!(
+        "ok: epoch {dm_epoch}, {}, groups epoch {}",
+        mls_info(),
+        alice.epoch(gg)?
+    ))
 }
 
 fn check(ok: bool, what: &str) -> Result<()> {
