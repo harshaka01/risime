@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+# Upgrade test (release gate since the nightly.10 data loss): the PREVIOUS published APK, signed in
+# and holding chats, is upgraded in place (`adb install -r`) to the NEW APK; every message must
+# survive and the app must not ask to sign in again.
+#
+#   scripts/upgrade-test --new <apk> [--version X] [--commit SHA] [--old <apk|vX.Y.Z...>] [--serial S] [--serial-b S2]
+#   scripts/upgrade-test --fetch-candidate      # laptop: pull spark2's staged release candidate, test it, send the result back
+#
+# Needs one adb device (an emulator or a test phone; never a tester's own phone: the app is
+# uninstalled first). spark2 has no Android emulator (no linux-aarch64 build exists), so this runs
+# on the laptop (x86_64 emulator) or with a device attached to spark2.
+#
+# What it does:
+#  1. A temporary server from this checkout on 127.0.0.1:4110 (own DB/keyspace risime_upgrade,
+#     dropped and recreated each run; dev OTP login, codes only in its own log; E2EE off). On the
+#     laptop it runs on spark2 over ssh and is reached through an ssh -L tunnel. Never :4000.
+#  2. Device: uninstall, install OLD, adb reverse tcp:4110, sign user A in through the real login
+#     UI (dev OTP), befriend B (server fixture), B sends DMs to A (server fixture), A replies via UI.
+#     With --serial-b, B also runs the old app on a second device and A creates a group with B.
+#  3. Snapshot: the messages A sees (UI dump; plus Room rows when `adb root` works, i.e. a
+#     google_apis emulator image).
+#  4. `adb install -r NEW`, start it, then verify: no sign-in screen, the chat list shows B (and the
+#     group), every seeded message is still in the chat, and (with root) the Room row counts and
+#     the session/owner keys in the DataStore are unchanged.
+#  5. Writes ~/risime-logs/upgrade-test/v<version>.result (PASS|FAIL, versions, commit, sha256, host,
+#     time). scripts/nightly-release refuses to release without a fresh PASS for its version+commit.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"
+M="$HOME/.local/bin/mise exec --"
+PORT=4110
+PKG=lk.codegen.risime
+SPARK="${SPARK_HOST:-spark2}"
+OUTDIR="$HOME/risime-logs/upgrade-test"
+on_spark2() { [ -d /srv/git/locks ]; }
+
+# ---------------------------------------------------------------- server half (runs on spark2) --
+if [ "${1:-}" = _server ]; then
+  shift; cmd="$1"; RUN="$HOME/risime-logs/upgrade-test/server"; mkdir -p "$RUN"
+  export RISIME_DEV_DB=risime_upgrade RISIME_DEV_KEYSPACE=risime_upgrade ERL_EPMD_ADDRESS=127.0.0.1
+  fx() { (cd "$REPO/server" && $M mix run "$RUN/fixtures.exs" "$@" 2>/dev/null | grep '^upgrade:' || true); }
+  case "$cmd" in
+    start)
+      tmux kill-session -t risime-upgrade 2>/dev/null || true; sleep 1
+      ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT busy"; exit 1; }
+      cat > "$RUN/fixtures.exs" <<'EXS'
+alias RisiMe.{Accounts, Repo}
+alias RisiMe.Accounts.User
+[mode | rest] = System.argv()
+a_phone = "+94770000961"; b_phone = "+94770000962"
+user! = fn phone ->
+  Repo.get_by(User, phone: phone) ||
+    (e = Accounts.get_allowlist_entry(phone)
+     Repo.insert!(%User{phone: e.phone, email: e.email, display_name: e.display_name, company: e.company}))
+end
+case mode do
+  "setup" ->
+    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "upgrade61@example.com", display_name: "ZZ Upgrade A", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "upgrade62@example.com", display_name: "ZZ Upgrade B", company: "CodeGen"})
+    IO.puts("upgrade: setup ok")
+  "friends" ->
+    RisiMe.Social.make_friends!(user!.(a_phone).id, user!.(b_phone).id)
+    IO.puts("upgrade: friends ok")
+  "send" ->
+    [n] = rest
+    a = user!.(a_phone); b = user!.(b_phone)
+    ok = for i <- 1..String.to_integer(n), reduce: 0 do
+      acc ->
+        case RisiMe.Messaging.send(b.id, %{"to" => a.id, "client_msg_id" => Ecto.UUID.generate(), "body" => "upgrade-test B#{i}"}) do
+          {:ok, _} -> acc + 1
+          _ -> acc
+        end
+    end
+    IO.puts("upgrade: sent #{ok}")
+end
+EXS
+      (cd "$REPO/server" && $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true
+       $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
+        || { echo "could not create/migrate the upgrade store"; exit 1; }
+      tmux new -d -s risime-upgrade "cd '$REPO/server' && RISIME_DEV_DB=risime_upgrade RISIME_DEV_KEYSPACE=risime_upgrade ERL_EPMD_ADDRESS=127.0.0.1 \
+        PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
+        RISIME_AUTH_LOG='$RUN/auth.log' $M mix phx.server > '$RUN/server.log' 2>&1"
+      for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+      curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "upgrade server didn't start"; tail -20 "$RUN/server.log"; exit 1; }
+      fx setup ;;
+    friends) fx friends ;;
+    send) fx send "${2:?count}" ;;
+    # The newest dev OTP for a phone (the code is printed to the caller only, never logged here).
+    otp) grep -a "\[DEV OTP\] ${2:?phone}:" "$RUN/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true ;;
+    stop) tmux kill-session -t risime-upgrade 2>/dev/null || true ;;
+    *) echo "unknown _server $cmd"; exit 2 ;;
+  esac
+  exit 0
+fi
+
+# ---------------------------------------------------------------- driver half ------------------
+NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0
+while [ $# -gt 0 ]; do case "$1" in
+  --new) NEW="$2"; shift 2;; --old) OLD="$2"; shift 2;; --version) VERSION="$2"; shift 2;;
+  --commit) COMMIT="$2"; shift 2;; --serial) SERIAL="$2"; shift 2;; --serial-b) SERIAL_B="$2"; shift 2;;
+  --fetch-candidate) FETCH=1; shift;;
+  *) echo "unknown arg $1"; exit 2;; esac; done
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-upgrade.XXXXXX")"
+TUNNEL_PID=""
+srv() { if on_spark2; then "$REPO/scripts/upgrade-test" _server "$@"; else ssh "$SPARK" "cd ~/development/risime && scripts/upgrade-test _server $*"; fi; }
+cleanup() {
+  srv stop >/dev/null 2>&1 || true
+  [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
+  rm -rf -- "${WORK:?}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+if [ "$FETCH" = 1 ]; then
+  # Laptop: spark2's nightly-release staged the candidate in ~/risime-releases/candidate/.
+  scp -q "$SPARK:risime-releases/candidate/app-release.apk" "$WORK/new.apk"
+  scp -q "$SPARK:risime-releases/candidate/CANDIDATE" "$WORK/CANDIDATE"
+  NEW="$WORK/new.apk"
+  VERSION="$(sed -n 's/^version=//p' "$WORK/CANDIDATE")"; COMMIT="$(sed -n 's/^commit=//p' "$WORK/CANDIDATE")"
+fi
+[ -n "$NEW" ] && [ -f "$NEW" ] || { echo "--new <apk> is required"; exit 2; }
+command -v adb >/dev/null || { echo "adb not found (Android platform-tools on PATH)"; exit 1; }
+BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* 2>/dev/null | sort -V | tail -1)"
+badging() { "$BT/aapt2" dump badging "$1" 2>/dev/null | head -1; }
+NEW_VC="$(badging "$NEW" | grep -oE "versionCode='[0-9]+'" | grep -oE '[0-9]+')"
+NEW_VN="$(badging "$NEW" | grep -oE "versionName='[^']+'" | cut -d"'" -f2)"
+VERSION="${VERSION:-$NEW_VN}"; COMMIT="${COMMIT:-$(git rev-parse HEAD)}"
+
+# The previous published APK: version.json (what testers have), else the newest local release.
+if [ -z "$OLD" ]; then
+  if curl -fsSL https://risicloud.ai/app/risime/version.json -o "$WORK/version.json"; then
+    url="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["url"])' "$WORK/version.json")"
+    sha="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["sha256"])' "$WORK/version.json")"
+    curl -fsSL "$url" -o "$WORK/old.apk"
+    echo "$sha  $WORK/old.apk" | sha256sum -c --quiet || { echo "published APK sha256 mismatch"; exit 1; }
+    OLD="$WORK/old.apk"
+  else
+    OLD="$HOME/risime-releases/$(cat "$HOME/risime-releases/LATEST")"
+  fi
+fi
+case "$OLD" in v*) OLD="$(ls "$HOME/risime-releases/$OLD"/risime-*.apk)";; esac
+[ -d "$OLD" ] && OLD="$(ls "$OLD"/risime-*.apk)"
+OLD_VC="$(badging "$OLD" | grep -oE "versionCode='[0-9]+'" | grep -oE '[0-9]+')"
+OLD_VN="$(badging "$OLD" | grep -oE "versionName='[^']+'" | cut -d"'" -f2)"
+[ "${NEW_VC:-0}" -gt "${OLD_VC:-0}" ] || { echo "new versionCode ($NEW_VC) must be above the old one ($OLD_VC)"; exit 1; }
+echo "==> upgrade $OLD_VN ($OLD_VC) -> $NEW_VN ($NEW_VC)"
+
+mapfile -t DEVS < <(adb devices | awk 'NR>1 && $2=="device"{print $1}')
+[ ${#DEVS[@]} -gt 0 ] || { echo "no adb device. Start an emulator (laptop: emulator -avd risime_a) or attach a TEST phone."; exit 1; }
+SERIAL="${SERIAL:-${DEVS[0]}}"
+for s in "$SERIAL" ${SERIAL_B:+"$SERIAL_B"}; do
+  case "$s" in emulator-*) ;; *) [ "${UPGRADE_TEST_WIPE_DEVICE:-0}" = 1 ] || { echo "$s is not an emulator: set UPGRADE_TEST_WIPE_DEVICE=1 to allow uninstalling RisiMe on it"; exit 1; };; esac
+done
+
+# ---- server
+echo "==> temp server on 127.0.0.1:$PORT ($(on_spark2 && echo local || echo "on $SPARK via ssh tunnel"))"
+srv start
+if ! on_spark2; then
+  ssh -N -o ExitOnForwardFailure=yes -L "$PORT:127.0.0.1:$PORT" "$SPARK" & TUNNEL_PID=$!
+  for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+fi
+curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server not reachable on :$PORT"; exit 1; }
+
+# ---- UI helpers (uiautomator dump + taps by visible text)
+A() { adb -s "$DEV" "$@"; }
+dump() { A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui.xml"; }
+has() { dump; grep -qF -- "$1" "$WORK/ui.xml"; }
+wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "timeout waiting for a UI element: $1"; return 1; }
+tap() {  # tap the node whose text or content-desc equals $1
+  dump
+  local b; b="$(python3 -I - "$WORK/ui.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+want = sys.argv[2]
+for n in ET.parse(sys.argv[1]).iter('node'):
+    if n.get('text') == want or n.get('content-desc') == want or (want.endswith('*') and (n.get('text') or '').startswith(want[:-1])):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+)"
+  [ -n "$b" ] || { echo "no UI node: $1"; return 1; }
+  A shell input tap $b
+}
+type_into() { tap "$1"; sleep 0.5; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
+dismiss_prompts() { has "Not now" && tap "Not now" || true; }
+
+sign_in() {  # $1 phone, $2 email
+  A shell am start -W -n "$PKG/.MainActivity" >/dev/null
+  wait_for "Server:" 30
+  tap "Server:*"; sleep 1
+  A shell input keyevent KEYCODE_MOVE_END; for _ in $(seq 1 60); do A shell input keyevent KEYCODE_DEL; done
+  A shell input text "http://127.0.0.1:$PORT"; tap "Use this server"; sleep 2
+  wait_for "Phone number" 30
+  type_into "Phone number" "$1"; type_into "Work email" "$2"; A shell input keyevent KEYCODE_BACK; tap "Send code"
+  wait_for "6-digit code" 30
+  local code=""; for _ in $(seq 1 20); do code="$(srv otp "$1")"; [ -n "$code" ] && break; sleep 1; done
+  [ -n "$code" ] || { echo "no dev OTP for the test user"; return 1; }
+  type_into "6-digit code" "$code"; sleep 1; has "Verify" && tap "Verify" || true
+  wait_for "Add friend" 40 || return 1
+  dismiss_prompts
+}
+
+install_old() {
+  A uninstall "$PKG" >/dev/null 2>&1 || true
+  A install "$OLD" >/dev/null
+  A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+}
+
+open_chat() { A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/.MainActivity" >/dev/null; wait_for "$1" 40; dismiss_prompts; tap "$1"; sleep 2; }
+send_ui() { type_into "Message" "$1"; tap "Send"; sleep 1; }
+visible_msgs() { dump; grep -oE 'upgrade-test [AB][0-9]+' "$WORK/ui.xml" | sort -u; }
+
+# Room rows and DataStore keys need root (google_apis emulator images allow `adb root`).
+db_snapshot() {
+  A root >/dev/null 2>&1 || true; sleep 2
+  A shell id 2>/dev/null | grep -q 'uid=0' || { echo "no-root"; return 0; }
+  rm -f "$WORK"/risime.db*
+  for f in risime.db risime.db-wal risime.db-shm; do A exec-out cat "/data/data/$PKG/databases/$f" > "$WORK/$f" 2>/dev/null || rm -f "$WORK/$f"; done
+  python3 -I - "$WORK/risime.db" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+q = lambda s: c.execute(s).fetchone()[0]
+groups = q("SELECT COUNT(*) FROM sqlite_master WHERE name='groups'") and q("SELECT COUNT(*) FROM `groups`") or 0
+print(f"messages={q('SELECT COUNT(*) FROM messages')} contacts={q('SELECT COUNT(*) FROM contacts')} groups={groups} cursor={'set' if q('SELECT COUNT(*) FROM sync_state') else 'none'}")
+PY
+  local ds; ds="$(A exec-out cat "/data/data/$PKG/files/datastore/risime.preferences_pb" 2>/dev/null | strings | grep -cE '^(last_user_id|token|user)$' || true)"
+  echo "datastore_keys=$ds"
+}
+
+RESULT=FAIL; REASON=""
+fail() { REASON="$1"; echo "UPGRADE TEST FAILED: $1"; write_result; exit 1; }
+write_result() {
+  mkdir -p "$OUTDIR"
+  local f="$OUTDIR/v$VERSION.result"
+  { echo "result=$RESULT"; echo "version=$VERSION"; echo "commit=$COMMIT"; echo "old=$OLD_VN"; echo "new=$NEW_VN"
+    echo "new_sha256=$(sha256sum "$NEW" | cut -d' ' -f1)"; echo "host=$(hostname)"; echo "device=$(adb -s "$SERIAL" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+    echo "group=${SERIAL_B:+yes}"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
+  echo "==> result: $f"
+  if [ "$FETCH" = 1 ]; then scp -q "$f" "$SPARK:risime-logs/upgrade-test/" && echo "==> result copied to $SPARK"; fi
+}
+
+# ---- 1. old app, signed in, with chats
+DEV="$SERIAL"; install_old
+[ -n "$SERIAL_B" ] && { DEV="$SERIAL_B"; install_old; }
+DEV="$SERIAL"; sign_in "+94770000961" "upgrade61@example.com" || fail "old app sign-in (A)"
+if [ -n "$SERIAL_B" ]; then DEV="$SERIAL_B"; sign_in "+94770000962" "upgrade62@example.com" || fail "old app sign-in (B)"; fi
+srv friends; srv send 3
+DEV="$SERIAL"; open_chat "ZZ Upgrade B" || fail "chat with B not listed on the old app"
+for i in 1 2 3; do send_ui "upgrade-test A$i"; done
+sleep 3
+BEFORE="$(visible_msgs)"; echo "==> before: $(echo "$BEFORE" | grep -c . ) messages visible"
+[ "$(echo "$BEFORE" | grep -c .)" -ge 6 ] || fail "seeding: expected 6 messages on the old app"
+if [ -n "$SERIAL_B" ]; then
+  A shell input keyevent KEYCODE_BACK; sleep 1
+  tap "New group" && sleep 2 && tap "ZZ Upgrade B" && tap "Next" && sleep 1 && type_into "Group name" "Upgrade group" && tap "Create" \
+    || fail "group creation on the old app"
+  wait_for "Upgrade group" 60 || fail "group not created"; sleep 5; send_ui "upgrade-test A9"
+fi
+DB_BEFORE="$(db_snapshot)"; echo "==> before (Room): $DB_BEFORE"
+
+# ---- 2. upgrade in place
+echo "==> adb install -r new"
+A install -r "$NEW" >/dev/null || fail "adb install -r rejected the new APK"
+A shell am start -W -n "$PKG/.MainActivity" >/dev/null; sleep 6; dismiss_prompts
+
+# ---- 3. verify
+dump
+for t in "Phone number" "Send code" "Sign in with RisiCloud" "RisiMe is locked"; do
+  grep -qF "$t" "$WORK/ui.xml" && fail "the new app asks to sign in again ($t)"
+done
+has "ZZ Upgrade B" || fail "chat with B missing after the upgrade"
+[ -n "$SERIAL_B" ] && { has "Upgrade group" || fail "group missing after the upgrade"; }
+open_chat "ZZ Upgrade B" || fail "cannot open the chat after the upgrade"
+AFTER="$(visible_msgs)"
+missing="$(comm -23 <(echo "$BEFORE") <(echo "$AFTER") | grep -c . || true)"
+[ "$missing" = 0 ] || fail "$missing messages missing after the upgrade"
+DB_AFTER="$(db_snapshot)"; echo "==> after (Room): $DB_AFTER"
+if [ "$DB_BEFORE" != no-root ]; then
+  b_msgs="$(echo "$DB_BEFORE" | grep -oE 'messages=[0-9]+' | cut -d= -f2)"; a_msgs="$(echo "$DB_AFTER" | grep -oE 'messages=[0-9]+' | cut -d= -f2)"
+  [ "${a_msgs:-0}" -ge "${b_msgs:-1}" ] || fail "Room messages dropped ($b_msgs -> $a_msgs)"
+  echo "$DB_AFTER" | grep -q "cursor=set" || fail "sync cursor lost"
+  [ "$(echo "$DB_AFTER" | grep -oE 'datastore_keys=[0-9]+' | cut -d= -f2)" -ge 2 ] || fail "DataStore session/owner keys lost"
+  [ -z "$SERIAL_B" ] || [ "$(echo "$DB_AFTER" | grep -oE 'groups=[0-9]+' | cut -d= -f2)" -ge 1 ] || fail "group row lost"
+else
+  echo "==> no root on this device: verified through the UI only (use a google_apis emulator image for Room checks)"
+fi
+RESULT=PASS; REASON="ok"; write_result
+echo "UPGRADE TEST PASS ($OLD_VN -> $NEW_VN)"
