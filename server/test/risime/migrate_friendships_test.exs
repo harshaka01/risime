@@ -25,11 +25,18 @@ defmodule RisiMe.MigrateFriendshipsTest do
     message!(b.id, a.id)
     message!(c.id, Ecto.UUID.generate())
 
-    {:ok, created} = RisiMe.Release.migrate_friendships(keyspace: "risime_test")
+    {:ok, created} =
+      RisiMe.Release.migrate_friendships(
+        keyspace: Application.fetch_env!(:risime, :cassandra)[:keyspace]
+      )
+
     assert created == 1
     assert RisiMe.Social.friends?(a.id, b.id)
     refute RisiMe.Social.friends?(a.id, c.id)
 
-    assert {:ok, 0} = RisiMe.Release.migrate_friendships(keyspace: "risime_test")
+    assert {:ok, 0} =
+             RisiMe.Release.migrate_friendships(
+               keyspace: Application.fetch_env!(:risime, :cassandra)[:keyspace]
+             )
   end
 end

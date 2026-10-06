@@ -83,13 +83,22 @@ defmodule RisiMe.BackfillSenderCopiesTest do
     {own, _} = old_event!(a.id, dm(a.id, b.id), 1_000_000)
 
     # Dry run (the default): counts, no writes.
-    {:ok, dry} = RisiMe.Release.backfill_sender_copies(keyspace: "risime_test")
+    {:ok, dry} =
+      RisiMe.Release.backfill_sender_copies(
+        keyspace: Application.fetch_env!(:risime, :cassandra)[:keyspace]
+      )
+
     assert dry.dry_run and dry.copied == 2 and dry.existing == 0
     # The test keyspace also holds other tests' DMs, whose users are gone (sandboxed).
     assert dry.skipped_missing_user >= 2 and dry.skipped_ttl == 1
     assert row(a.id, copy) == nil
 
-    {:ok, run} = RisiMe.Release.backfill_sender_copies(keyspace: "risime_test", dry_run: false)
+    {:ok, run} =
+      RisiMe.Release.backfill_sender_copies(
+        keyspace: Application.fetch_env!(:risime, :cassandra)[:keyspace],
+        dry_run: false
+      )
+
     assert %{copied: 2, existing: 0, skipped_ttl: 1, dry_run: false} = run
     assert run.skipped_missing_user >= 2
 
@@ -110,7 +119,10 @@ defmodule RisiMe.BackfillSenderCopiesTest do
 
     # Idempotent: a second run finds both copies.
     assert {:ok, %{copied: 0, existing: 2}} =
-             RisiMe.Release.backfill_sender_copies(keyspace: "risime_test", dry_run: false)
+             RisiMe.Release.backfill_sender_copies(
+               keyspace: Application.fetch_env!(:risime, :cassandra)[:keyspace],
+               dry_run: false
+             )
 
     # The copy is what a fresh install of the sender replays.
     {:ok, events, false} = Messaging.fetch_events(a.id, nil)

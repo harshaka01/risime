@@ -46,7 +46,9 @@ RELEASED=0
 trap '[ "$RELEASED" = 1 ] || git checkout -q -- VERSION 2>/dev/null || true' EXIT
 
 echo "==> server gate"
-(cd server && $M mix format --check-formatted && $M mix compile --warnings-as-errors && $M mix test)
+# Own test DB and keyspace (risime_test_release): other sessions' concurrent `mix test` runs can't
+# truncate or collide with the gate's data.
+(cd server && $M mix format --check-formatted && $M mix compile --warnings-as-errors && MIX_TEST_PARTITION=_release $M mix test)
 # Firebase config (decision 026): Harsha's file lives outside git; copy it in when present.
 if [ -f "$HOME/risime-keys/google-services.json" ]; then
   install -m 600 "$HOME/risime-keys/google-services.json" android/app/google-services.json

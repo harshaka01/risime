@@ -23,7 +23,9 @@ config :risime, RisiMeWeb.Endpoint,
 
 config :risime, :cassandra,
   nodes: ["127.0.0.1:9042"],
-  keyspace: "risime_test",
+  # Follows MIX_TEST_PARTITION like the database, so a separate run (e.g. the release gate,
+  # MIX_TEST_PARTITION=_release) never shares or truncates another run's keyspace.
+  keyspace: "risime_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool_size: 2,
   sync_connect: 10_000
 

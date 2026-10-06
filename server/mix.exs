@@ -80,7 +80,7 @@ defmodule RisiMe.MixProject do
       test: [
         "ecto.create --quiet",
         "ecto.migrate --quiet",
-        "risime.cql.migrate --keyspace risime_test --quiet",
+        "risime.cql.migrate --quiet",
         "test"
       ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
