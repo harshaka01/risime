@@ -35,6 +35,8 @@ class DeviceRegistrar(
     private val topUpTo: Int = 50,
     /** §14.1: advertise `images` once this app can receive and render images. */
     private val imagesSupported: () -> Boolean = { false },
+    /** §16.1: advertise `calls` once this app can ring, answer and play a call (WebRTC loaded, Telecom registered, notifications allowed). */
+    private val callsSupported: () -> Boolean = { false },
     private val lowWater: Int = 20,
     /** §12.1: the signature key (b64) whose key packages were already replaced with 0xFA01 ones. */
     private val groupsReplacedFor: suspend () -> String? = { null },
@@ -61,6 +63,7 @@ class DeviceRegistrar(
                 DeviceMls.CAP_GROUPS,
                 DeviceMls.CAP_IMAGES.takeIf { imagesSupported() },
                 DeviceMls.CAP_DELETES.takeIf { mls.deletesSupported },
+                DeviceMls.CAP_CALLS.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() },
             )
             else -> null
         }

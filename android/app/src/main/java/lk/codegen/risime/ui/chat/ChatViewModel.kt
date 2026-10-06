@@ -104,6 +104,16 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
     /** §15.7 deletes in this chat (message actions behind DeleteFeature.sendEnabled; Clear/Delete chat always). */
     val del = DeleteController(c, viewModelScope, meId, conversationId).also { it.refreshReady() }
 
+    /** §16: the call button. */
+    val calls = CallActions(c, viewModelScope, conversationId)
+
+    fun startCall() = calls.start()
+
+    /** §16.6 "Delete for me" on a call line. */
+    fun deleteCallLine(clientMsgId: String) {
+        c.scope.launch { c.engine.deleteForMe(conversationId, listOf(clientMsgId)) }
+    }
+
     /** §14: photos in this chat. */
     val imgs = ImageActions(c, viewModelScope, meId, conversationId)
 
@@ -118,6 +128,9 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
             c.realtime.state.collect { if (it == ConnectionState.Live && _e2ee.value !is E2eeState.Encrypted) refreshE2ee() }
         }
         imgs.refreshImagesReady()
+        calls.refresh()
+        viewModelScope.launch { c.mlsMembershipSeen.collect { e -> if (e.conversationId == conversationId) calls.refresh() } }
+        viewModelScope.launch { c.realtime.state.collect { if (it == ConnectionState.Live) calls.refresh() } }
         viewModelScope.launch { c.behaviour.chatOpen(peerId) }
         c.openConversation.value = conversationId
         c.notifier.cancelChat(conversationId)

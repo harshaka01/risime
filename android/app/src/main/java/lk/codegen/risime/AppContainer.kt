@@ -385,6 +385,7 @@ class AppContainer(
         DeviceRegistrar(
             api, { sessionStore.deviceId() }, BuildConfig.VERSION_NAME, { mlsEngine },
             imagesSupported = { imagesSupported() },
+            callsSupported = { runCatching { calls.canAdvertise() }.getOrDefault(false) },
             groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
             setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },
         )
@@ -531,6 +532,39 @@ class AppContainer(
         notifier.refreshChats(plan)
     }
 
+    // ---- 1:1 voice calls (contract v1.13 §16, decisions 051, 052) ----
+    private val callPort = object : lk.codegen.risime.calls.CallAppPort {
+        override val scope get() = this@AppContainer.scope
+        override val api get() = this@AppContainer.api
+        override val connection get() = realtime.state
+        override val callMarkDao get() = db.callMarks()
+        override suspend fun me() = sessionStore.current()?.user?.id
+        override suspend fun deviceId() = sessionStore.deviceId()
+        override suspend fun sessionLocked(): Boolean = !auth.unlocked.value && sessionStore.current()?.kind == AuthKind.OIDC
+        override fun serverNow() = serverClock.serverNow()
+        override suspend fun displayName(userId: String) =
+            contacts.contacts.first().firstOrNull { it.userId.equals(userId, true) }?.displayName ?: "Someone"
+        override suspend fun sendSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env) = engine.sendCallSignal(conv, peer, env)
+        override suspend fun queueCallEnd(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.End, rangUnanswered: Boolean) {
+            engine.queueCallEnd(conv, peer, env, rangUnanswered)
+        }
+        override fun foreground() = foreground.value
+    }
+
+    val calls: lk.codegen.risime.calls.CallManager by lazy {
+        lk.codegen.risime.calls.CallManager(appContext, callPort).also { m -> m.openConversation = { openConversation.value } }
+    }
+
+    /** The pipeline's call hooks (the manager is created on first use). */
+    private val callHooks = object : lk.codegen.risime.calls.CallHooks {
+        override suspend fun rangUnanswered(callId: String) = calls.hooks.rangUnanswered(callId)
+        override suspend fun onSignal(s: lk.codegen.risime.calls.InboundCall) = calls.hooks.onSignal(s)
+        override suspend fun onCallEnd(conversationId: String, fromUser: String, fromDevice: String?, end: lk.codegen.risime.calls.CallEnvelope.End) =
+            calls.hooks.onCallEnd(conversationId, fromUser, fromDevice, end)
+        override suspend fun onPageEnd() = calls.hooks.onPageEnd()
+        override fun onMissedCall(conversationId: String, from: String) = calls.hooks.onMissedCall(conversationId, from)
+    }
+
     val engine: ChatEngine = ChatEngine(
         messages = db.messages(),
         sync = db.sync(),
@@ -557,6 +591,7 @@ class AppContainer(
         onDeletesApplied = { onDeletesApplied() },
         serverClock = serverClock,
         log = { Log.w("RisiMe", "deletes: $it") },
+        calls = callHooks,
     )
 
     val realtime: RealtimeClient = PhoenixRealtimeClient(
@@ -584,7 +619,8 @@ class AppContainer(
         })
         // Connected only while in the foreground, signed in and unlocked (no background connection).
         scope.launch {
-            combine(combine(foreground, backgroundSync) { f, b -> f || b }, sessionStore.session, auth.unlocked, blocked) { fg, s, unlocked, b ->
+            // android R6: a ringing, connecting or active call keeps the socket up regardless of foreground.
+            combine(combine(foreground, backgroundSync, calls.keepConnected) { f, b, c -> f || b || c }, sessionStore.session, auth.unlocked, blocked) { fg, s, unlocked, b ->
                 if (shouldConnect(fg, s, unlocked, b)) s!!.serverUrl to s.user.id else null
             }
                 .distinctUntilChanged()

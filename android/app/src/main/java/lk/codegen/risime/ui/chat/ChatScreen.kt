@@ -121,6 +121,12 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 onBack = onBack,
                 avatar = { InitialsAvatar(name, size = Sizes.avatarSmall, online = presence?.online == true) },
                 actions = {
+                    val callsReady by vm.calls.callsReady.collectAsStateWithLifecycle()
+                    CallHeaderButton(
+                        blocked = vm.calls.blockedText(encrypted, callsReady, name),
+                        onBlocked = { t -> vm.imgs.toast.value = t; vm.calls.refresh() },
+                        onCall = vm::startCall,
+                    )
                     E2eeHeaderLock(encrypted) { showInfo = true }
                     IconButton(onClick = { showInfo = true }) { Icon(Icons.Default.Info, "Chat info") }
                     ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true })
@@ -142,7 +148,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
             ) { items, i ->
                 when (val item = items[i]) {
                     is ChatItem.Day -> DaySeparator(item.label)
-                    is ChatItem.Msg -> DmMessageRow(item.m) {
+                    is ChatItem.Msg -> DmMessageRow(item.m, onCallBack = vm::startCall.takeIf { isFriend }, onDeleteForMe = vm::deleteCallLine) {
                         if (item.m.showsAsDeleted) {
                             val s = vm.del.selectFor(item.m, selection)
                             TombstoneBubble(
@@ -204,8 +210,21 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
 
 /** One DM row: a §13.3 marker (or other system line) is centred text with no bubble, ticks or actions. */
 @Composable
-internal fun DmMessageRow(m: MessageEntity, bubble: @Composable () -> Unit) {
-    if (m.system) lk.codegen.risime.ui.common.SystemLineText(m.body) else bubble()
+internal fun DmMessageRow(
+    m: MessageEntity,
+    onCallBack: (() -> Unit)? = null,
+    onDeleteForMe: ((String) -> Unit)? = null,
+    bubble: @Composable () -> Unit,
+) {
+    when {
+        m.system -> lk.codegen.risime.ui.common.SystemLineText(m.body)
+        // §16.6 a call-history line: centred, "Call back", only "Delete for me", no reactions.
+        m.call -> lk.codegen.risime.calls.CallLineRow(
+            m.body, missed = !m.outgoing && m.body == lk.codegen.risime.calls.CallLines.MISSED,
+            onCallBack = onCallBack, onDeleteForMe = onDeleteForMe?.let { f -> { f(m.clientMsgId) } },
+        )
+        else -> bubble()
+    }
 }
 
 @Composable

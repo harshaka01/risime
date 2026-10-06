@@ -64,6 +64,8 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
                 DebugAuthSection(s.authOverride, vm::setAuthOverride)
                 HorizontalDivider()
             }
+            lk.codegen.risime.calls.CallsSettingsSection()
+            HorizontalDivider()
             AboutSection()
             HorizontalDivider()
             OutlinedButton(

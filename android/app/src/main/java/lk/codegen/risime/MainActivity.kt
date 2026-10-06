@@ -6,6 +6,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -44,7 +45,20 @@ class MainActivity : FragmentActivity() {
 
     /** Notification tap → that chat (after any gate: unlock, phone, update). */
     private fun handleOpenChat(intent: Intent?) {
+        // §16.8 (decision 051): Answer on the nameless ring → the fingerprint unlock, then the sync decides.
+        if (intent?.getBooleanExtra(EXTRA_BLIND_ANSWER, false) == true) {
+            intent.removeExtra(EXTRA_BLIND_ANSWER)
+            val c = (application as RisiMeApp).container
+            lifecycleScope.launch {
+                c.auth.unlocked.first { it }
+                c.calls.onUnlockedAfterBlindAnswer { text -> android.widget.Toast.makeText(this@MainActivity, text, android.widget.Toast.LENGTH_LONG).show() }
+            }
+        }
         intent?.getStringExtra(Notifier.EXTRA_OPEN_CHAT)?.let { (application as RisiMeApp).container.openChatRequest.value = it }
+    }
+
+    companion object {
+        const val EXTRA_BLIND_ANSWER = "lk.codegen.risime.BLIND_ANSWER"
     }
 
     override fun onDestroy() {

@@ -5,6 +5,16 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Android 13+: local notifications for push wake-ups (decision 026); asked once, after sign-in. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- v1.13 1:1 voice calls (§16.9). Never READ_PHONE_STATE, BLUETOOTH_CONNECT or CAMERA. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:name=".RisiMeApp"
@@ -27,6 +37,24 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- §16.9 calls: the incoming/in-call screen (lock screen, turns the screen on), the call's
+             foreground service (phoneCall, + microphone once RECORD_AUDIO is granted), Decline/Hang up. -->
+        <activity
+            android:name=".calls.CallActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="lk.codegen.risime.calls"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true" />
+        <service
+            android:name=".calls.CallService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall|microphone" />
+        <receiver
+            android:name=".calls.CallActionReceiver"
+            android:exported="false" />
 
         <!-- FCM data-only wake-ups (contract v1.5). Inert unless google-services.json was present at build. -->
         <service

@@ -16,6 +16,11 @@ import lk.codegen.risime.RisiMeApp
 /** FCM entry point: a data-only `{"type":"inbox"}` wake-up → an expedited sync. Nothing is shown from it. */
 class RisiMeMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
+        // §16.8: the call push has its own handler: the phoneCall service starts at once (never the inbox worker).
+        if (lk.codegen.risime.net.PushPayload.fromData(message.data)?.isCall == true) {
+            (application as RisiMeApp).container.calls.onCallPush()
+            return
+        }
         if (isInboxWakeUp(message.data)) InboxSyncWorker.enqueue(applicationContext)
     }
 
