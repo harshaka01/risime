@@ -18,6 +18,7 @@ appauth = "0.11.1"
 biometric = "1.1.0"
 fragment = "1.9.1"
 browser = "1.10.0"
+appcompat = "1.7.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -46,6 +47,7 @@ junit = { module = "junit:junit", version.ref = "junit" }
 appauth = { module = "net.openid:appauth", version.ref = "appauth" }
 androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
 androidx-fragment-ktx = { module = "androidx.fragment:fragment-ktx", version.ref = "fragment" }
+androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
 androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }
 
 [plugins]

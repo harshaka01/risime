@@ -141,6 +141,7 @@ dependencies {
     implementation(libs.libphonenumber)
     implementation(libs.appauth)
     implementation(libs.androidx.browser)
+    implementation(libs.androidx.appcompat) // Theme.AppCompat for AppAuth activities + biometric dialog
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.fragment.ktx)
 
@@ -180,4 +181,17 @@ androidComponents {
         (variant as? com.android.build.api.variant.HasUnitTest)?.unitTest?.sources?.resources
             ?.addGeneratedSourceDirectory(copyContractExamples, CopyContractExamples::outputDir)
     }
+}
+
+// ---- Merged-manifest regression test (AppAuth activities need an AppCompat theme) ----
+// Unit tests read the merged debug + release manifests; the paths come in as system properties.
+val mergedManifestDebug = layout.buildDirectory.file("intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml")
+val mergedManifestRelease = layout.buildDirectory.file("intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml")
+tasks.withType<Test>().configureEach {
+    dependsOn("processDebugManifest", "processReleaseManifest")
+    inputs.files(mergedManifestDebug, mergedManifestRelease).withPathSensitivity(PathSensitivity.NONE)
+    inputs.dir(layout.projectDirectory.dir("src/main/res/values")).withPathSensitivity(PathSensitivity.RELATIVE)
+    systemProperty("risime.mergedManifest.debug", mergedManifestDebug.get().asFile.absolutePath)
+    systemProperty("risime.mergedManifest.release", mergedManifestRelease.get().asFile.absolutePath)
+    systemProperty("risime.themes", layout.projectDirectory.file("src/main/res/values/themes.xml").asFile.absolutePath)
 }
