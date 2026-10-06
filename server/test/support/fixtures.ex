@@ -46,6 +46,27 @@ defmodule RisiMe.Fixtures do
   end
 
   @doc "Makes two users friends (v1.6). Accepts users or `logged_in_user/1` maps."
+  @doc """
+  Switches push to `RisiMe.Push.Test` for the calling test (off again on exit). Use with
+  `push_token/1`: pushes reach a test only through tokens it registered itself.
+  """
+  def test_push!(_ctx \\ %{}) do
+    Application.put_env(:risime, :push_sender, RisiMe.Push.Test)
+    ExUnit.Callbacks.on_exit(fn -> Application.put_env(:risime, :push_sender, nil) end)
+    :ok
+  end
+
+  @doc """
+  A push token unique to the calling test (`prefix-N`; prefixes `unregistered`/`retry` keep
+  their `RisiMe.Push.Test` meaning). Its pushes arrive here as `{:push, token, payload}`; a
+  late push from an earlier test can never match it.
+  """
+  def push_token(prefix \\ "fcm") do
+    token = "#{prefix}-#{System.unique_integer([:positive])}"
+    :ok = RisiMe.Push.Test.register(token)
+    token
+  end
+
   def befriend!(a, b), do: RisiMe.Social.make_friends!(id_of(a), id_of(b))
 
   defp id_of(%{user: %{id: id}}), do: id

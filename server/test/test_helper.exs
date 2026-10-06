@@ -3,6 +3,9 @@
 RisiMe.Messaging.Store.Cassandra.truncate!()
 
 ExUnit.start()
+
+# Push.Test routes each push to the test that registered its token (see RisiMe.Fixtures.push_token/1).
+{:ok, _} = Registry.start_link(keys: :unique, name: RisiMe.Push.Test.registry())
 Ecto.Adapters.SQL.Sandbox.mode(RisiMe.Repo, :manual)
 
 # Locally generated signing keys as the realm JWKS (contract v1.3 tests).

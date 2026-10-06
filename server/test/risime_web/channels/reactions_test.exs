@@ -8,27 +8,22 @@ defmodule RisiMeWeb.ReactionsTest do
   alias RisiMeWeb.{InboxChannel, UserSocket}
 
   setup do
-    Application.put_env(:risime, :push_sender, RisiMe.Push.Test)
-    Application.put_env(:risime, :push_test_pid, self())
-
-    on_exit(fn ->
-      Application.put_env(:risime, :push_sender, nil)
-      Application.delete_env(:risime, :push_test_pid)
-    end)
+    test_push!()
 
     a = logged_in_user()
     b = logged_in_user()
     befriend!(a, b)
+    b_token = push_token("fcm-b")
 
     {:ok, nil} =
       RisiMe.Devices.register(b.user.id, Ecto.UUID.generate(), %{
         "platform" => "android",
-        "push_token" => "fcm-b"
+        "push_token" => b_token
       })
 
     {:ok, sock} = connect(UserSocket, %{"token" => a.token})
     {:ok, _, chan} = subscribe_and_join(sock, InboxChannel, "inbox:" <> a.user.id, %{})
-    %{a: a, b: b, chan: chan}
+    %{a: a, b: b, b_token: b_token, chan: chan}
   end
 
   defp send_msg(chan, payload) do
@@ -86,11 +81,12 @@ defmodule RisiMeWeb.ReactionsTest do
     test "both inboxes get the same reaction event; no push; no status", %{
       a: a,
       b: b,
+      b_token: b_token,
       chan: chan,
       target: target
     } do
       # Drain the push for the message itself.
-      assert_receive {:push, "fcm-b", _}, 1_000
+      assert_receive {:push, ^b_token, _}, 1_000
 
       cmid = Uniq.UUID.uuid4()
 

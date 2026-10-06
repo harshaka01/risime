@@ -217,11 +217,14 @@ defmodule RisiMeWeb.GroupMessagingTest do
     assert %{"delivered" => 2, "all_delivered" => true} =
              last_event(a.user.id, "group_receipt")["data"]
 
-    # A read inside the window is coalesced, then sent once the window ends.
-    :ok = Messaging.ack(b.user.id, [mid], "read")
-    :ok = Messaging.ack(b.user.id, [mid], "read")
+    # A read inside the window is coalesced, then sent once the window ends (200 ms in test).
+    # Counted before the acks and polled for, so a slow machine can't make the trailing
+    # receipt land before or after a fixed sleep.
     n = length(events(a.user.id, "group_receipt"))
-    Process.sleep(300)
+    :ok = Messaging.ack(b.user.id, [mid], "read")
+    :ok = Messaging.ack(b.user.id, [mid], "read")
+    wait_until(fn -> length(events(a.user.id, "group_receipt")) > n end)
+    Process.sleep(250)
     assert length(events(a.user.id, "group_receipt")) == n + 1
     assert %{"read" => 1, "all_read" => false} = last_event(a.user.id, "group_receipt")["data"]
 
@@ -326,6 +329,20 @@ defmodule RisiMeWeb.GroupMessagingTest do
       # TTL cleanup removes the row and the file.
       assert RisiMe.Blobs.cleanup(DateTime.add(DateTime.utc_now(), 31, :day)) >= 1
       assert {404, _} = get.(b.token)
+    end
+  end
+
+  defp wait_until(fun, timeout \\ 5_000) do
+    cond do
+      fun.() ->
+        :ok
+
+      timeout <= 0 ->
+        flunk("condition not met in time")
+
+      true ->
+        Process.sleep(20)
+        wait_until(fun, timeout - 20)
     end
   end
 end

@@ -11,13 +11,7 @@ defmodule RisiMeWeb.E2EESendTest do
   setup :with_attestation_key
 
   setup do
-    Application.put_env(:risime, :push_sender, RisiMe.Push.Test)
-    Application.put_env(:risime, :push_test_pid, self())
-
-    on_exit(fn ->
-      Application.put_env(:risime, :push_sender, nil)
-      Application.delete_env(:risime, :push_test_pid)
-    end)
+    test_push!()
 
     a = logged_in_user()
     b = logged_in_user()
@@ -79,7 +73,7 @@ defmodule RisiMeWeb.E2EESendTest do
     {:ok, nil} =
       RisiMe.Devices.register(b.user.id, Ecto.UUID.generate(), %{
         "platform" => "android",
-        "push_token" => "fcm-b"
+        "push_token" => b_token = push_token("fcm-b")
       })
 
     payload = cipher(b.user.id)
@@ -94,7 +88,7 @@ defmodule RisiMeWeb.E2EESendTest do
     end
 
     # A message wakes the recipient; MLS events never push.
-    assert_receive {:push, _, %{"type" => "inbox"}}, 1_000
+    assert_receive {:push, ^b_token, %{"type" => "inbox"}}, 1_000
     RisiMe.Messaging.publish_mls(b.user.id, "mls_membership", %{"x" => 1})
     refute_receive {:push, _, _}, 500
   end

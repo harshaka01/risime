@@ -12,13 +12,7 @@ defmodule RisiMe.PushTest do
   alias RisiMeWeb.{InboxChannel, UserSocket}
 
   setup do
-    Application.put_env(:risime, :push_sender, RisiMe.Push.Test)
-    Application.put_env(:risime, :push_test_pid, self())
-
-    on_exit(fn ->
-      Application.put_env(:risime, :push_sender, nil)
-      Application.delete_env(:risime, :push_test_pid)
-    end)
+    test_push!()
 
     a = logged_in_user()
     b = logged_in_user()
@@ -28,13 +22,18 @@ defmodule RisiMe.PushTest do
     %{a: a, b: b, chan_a: chan_a}
   end
 
-  defp device!(user, token),
-    do:
-      {:ok, nil} =
-        Devices.register(user.id, Ecto.UUID.generate(), %{
-          "platform" => "android",
-          "push_token" => token
-        })
+  # Registers a device with a token unique to this test (`prefix-N`) and returns the token.
+  defp device!(user, prefix) do
+    token = push_token(prefix)
+
+    {:ok, nil} =
+      Devices.register(user.id, Ecto.UUID.generate(), %{
+        "platform" => "android",
+        "push_token" => token
+      })
+
+    token
+  end
 
   defp send_to(chan, to) do
     ref =
@@ -44,14 +43,14 @@ defmodule RisiMe.PushTest do
         "body" => "secret body"
       })
 
-    assert_reply ref, :ok, _
+    assert_reply ref, :ok, _, 1_000
   end
 
   describe "trigger" do
     test "an offline recipient gets exactly the content-free payload", %{b: b, chan_a: chan_a} do
-      device!(b.user, "tok-b")
+      tok = device!(b.user, "tok-b")
       send_to(chan_a, b.user.id)
-      assert_receive {:push, "tok-b", payload}, 1_000
+      assert_receive {:push, ^tok, payload}, 1_000
       assert payload == %{"type" => "inbox", "v" => "1"}
       assert payload == Push.payload()
     end
@@ -66,11 +65,11 @@ defmodule RisiMe.PushTest do
 
     test "coalesced: one now and one trailing push per 10 s window (300 ms in test)",
          %{b: b, chan_a: chan_a} do
-      device!(b.user, "tok-b")
+      tok = device!(b.user, "tok-b")
       for _ <- 1..5, do: send_to(chan_a, b.user.id)
 
-      assert_receive {:push, "tok-b", _}, 1_000
-      assert_receive {:push, "tok-b", _}, 1_000
+      assert_receive {:push, ^tok, _}, 1_000
+      assert_receive {:push, ^tok, _}, 1_000
       refute_receive {:push, _, _}, 600
     end
 
@@ -78,7 +77,7 @@ defmodule RisiMe.PushTest do
       c = logged_in_user()
       d = logged_in_user()
       befriend!(c, d)
-      device!(c.user, "tok-c")
+      tok = device!(c.user, "tok-c")
 
       {:ok, %{message_id: id}} =
         RisiMe.Messaging.send(c.user.id, %{
@@ -88,23 +87,23 @@ defmodule RisiMe.PushTest do
         })
 
       :ok = RisiMe.Messaging.ack(d.user.id, [id], "read")
-      assert_receive {:push, "tok-c", %{"type" => "inbox", "v" => "1"}}, 1_000
+      assert_receive {:push, ^tok, %{"type" => "inbox", "v" => "1"}}, 1_000
     end
 
     test "an unregistered token deletes the device; retryable errors are retried once",
          %{b: b, chan_a: chan_a} do
-      device!(b.user, "unregistered-1")
-      device!(b.user, "retry-1")
+      gone = device!(b.user, "unregistered-1")
+      retry = device!(b.user, "retry-1")
       send_to(chan_a, b.user.id)
 
-      assert_receive {:push, "unregistered-1", _}, 1_000
-      assert_receive {:push, "retry-1", _}, 1_000
-      assert_receive {:push, "retry-1", _}, 1_000
-      refute_receive {:push, "retry-1", _}, 300
+      assert_receive {:push, ^gone, _}, 1_000
+      assert_receive {:push, ^retry, _}, 1_000
+      assert_receive {:push, ^retry, _}, 1_000
+      refute_receive {:push, ^retry, _}, 300
 
       Process.sleep(50)
       tokens = Repo.all(from d in Device, where: d.user_id == ^b.user.id, select: d.push_token)
-      assert tokens == ["retry-1"]
+      assert tokens == [retry]
     end
 
     test "push off: nothing is sent", %{b: b, chan_a: chan_a} do
