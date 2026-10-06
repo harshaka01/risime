@@ -1,17 +1,19 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
-## Where things stand (updated 2026-10-06 ~05:00 UTC)
-- **Pilot server:** `risime-server` runs **v0.2.0-nightly.3 as a prod-mode release** from
-  `~/risime-run/v0.2.0-nightly.3`, on `127.0.0.1:4000` only (no epmd, no dev routes, JSON
-  errors, `check_origin` = https://risime.risicloud.ai). `/health` is ok.
-  `/auth/config` = `{"modes":["dev"],"phone_verification":"off"}`.
-- **Public URL https://risime.risicloud.ai: not live yet.** It waits for the DNS A record, the
-  network firewall (80/443 → spark2), and Harsha's sudo steps (Caddy, ufw, fail2ban, removing
-  Tailscale). See `docs/PROD.md` "Pilot on spark2".
-- **v0.2.0-nightly.3 is tagged but not published.** It goes to risicloud.ai/app/risime/ once the
-  public end-to-end check passes. **v0.2.0-nightly.2** is the current download there.
-- **Device test of v0.2.0-nightly.2:** installed on the emulator and Harsha's phone; result not
-  reported yet.
+## Where things stand (updated 2026-10-06 ~05:20 UTC)
+- **Public pilot is live: https://risime.risicloud.ai.**
+  - Caddy on spark2 has a Let's Encrypt cert and proxies to the **v0.2.0-nightly.3 prod release**
+    on 127.0.0.1:4000. There is no epmd, and port 4000 isn't reachable from outside.
+  - End-to-end through the public URL: `/health` ok; `/auth/config` = dev mode; dev login (code
+    only in the server log, never in a response); `/me` and `/contacts` 200; `wss://` upgrade 101
+    with Bearer; inbox join ok; `/dev/mailbox` 404. Throwaway user removed.
+- **v0.2.0-nightly.3 is published** at https://risicloud.ai/app/risime/ (versionCode 20003; the
+  public APK's sha256 matches). Installed nightly.2 apps get the update offer from the in-app
+  updater.
+- **Caddy:** the live `/etc/caddy/Caddyfile` is Harsha's minimal one. The stricter repo version
+  (`infra/caddy/Caddyfile`, adding `/` → download page) is waiting for Harsha to install it with
+  sudo.
+- **Device test of v0.2.0-nightly.2:** result not reported yet.
 
 ## Built so far (shipped)
 | Release | Contents |
@@ -30,10 +32,7 @@
 ## Blocked, and on whom
 | Item | Waiting for | Who |
 |---|---|---|
-| https://risime.risicloud.ai | DNS `risime.risicloud.ai A 203.115.26.139` | Harsha → DNS owner |
-| | Inbound TCP 80+443 to 203.115.26.139 → spark2 10.20.20.15 | Network team |
-| | Install Caddy plus `infra/caddy/Caddyfile`; ufw 80/443; fail2ban jail; remove Tailscale (sudo) | Harsha |
-| Publish nightly.3 | The public end-to-end check above | root (automatic once unblocked) |
+| Stricter edge config | `sudo install` of `infra/caddy/Caddyfile`, plus the fail2ban jail and removing Tailscale if not done | Harsha |
 | Real Keycloak sign-in | Keycloak client `risime` (redirects `ai.risicloud.risime[.debug]://callback` and `…://logout`, `email` in access tokens) | RisiCloud lead |
 | Real verification SMS | "RisiMe" sender ID approved by Notify.lk | Harsha / Notify.lk |
 | Updater field names | RisiWork's `version.json` example | Harsha |
