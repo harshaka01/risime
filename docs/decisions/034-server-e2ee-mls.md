@@ -76,3 +76,5 @@ must stay **off on the pilot** until root creates the attestation key at rollout
   section, is the obvious next step if it matters.
 - The pilot stays on plaintext until root runs `mix risime.attestation.gen` and restarts the
   server with the key, after the required app update has brought every app to v1.7.
+
+**Amended 2026-10-06:** the e2ee ciphertext cap is **24 KiB** decoded (PROTOCOL §10.3), not 16 KiB; 16 KiB couldn't hold a max-size text in the envelope plus MLS framing.
