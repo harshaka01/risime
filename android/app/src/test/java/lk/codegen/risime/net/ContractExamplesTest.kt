@@ -200,6 +200,27 @@ class ContractExamplesTest {
         "mls_group_deletes_ready.json" to { s ->
             ProtocolJson.decodeFromString<MlsGroup>(s).also { require(!it.deletesReady && it.missingDeletes.single().deviceId != null && it.imagesReady) }
         },
+        // v1.13 (1:1 voice calls, §16): parse-only placeholders added by root with the contract
+        // merge; the android role replaces them with typed decoders when it implements §16.
+        "call_offer_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_offer_payload_bad.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_ringing_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_answer_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_accepted_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_ice_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_busy_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_cancel_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_end_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_end_missed_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_signal_push.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_signal_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_signal_event.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "calls_turn_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "push_call.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "device_put_calls.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_group_calls_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_calls_unavailable.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_calls_not_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
     )
 
     private fun groupEvent(s: String, action: String): GroupEvent =

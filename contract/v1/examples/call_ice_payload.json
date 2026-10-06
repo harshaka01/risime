@@ -1,0 +1,1 @@
+{"v":1,"type":"call_ice","call_id":"4b7e1c1e-3c0e-4b55-9f43-0b8f8a1f2d10","to_device":null,"candidates":[{"candidate":"candidate:1 1 udp 2122260223 192.0.2.10 49203 typ host","sdp_mid":"0","sdp_m_line_index":0},{"candidate":"candidate:2 1 udp 1686052607 198.51.100.7 61022 typ srflx raddr 192.0.2.10 rport 49203","sdp_mid":"0","sdp_m_line_index":0}],"done":false}

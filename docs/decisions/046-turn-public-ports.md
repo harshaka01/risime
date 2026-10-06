@@ -3,6 +3,10 @@
 **Status:** accepted 2026-10-06 (root); coturn is **configured and smoke-tested on loopback, not
 started publicly**. It goes live after the port check below passes and the server serves
 `GET /api/v1/calls/turn` (contract proposal `contract/proposals/2026-10-06-calls-v1.13.md`).
+**Kept at the v1.13 merge (2026-10-06):** the contract is PROTOCOL §16; the credential TTL is 5 h
+(below). The ports were **still blocked from outside as of 2026-10-06 19:00 UTC** (all TURN and
+LiveKit ports; 443 open), so until they open calls connect only directly (same LAN, or a NAT pair
+that allows it) and the app fails fast with "Can't connect the call" (§16.11).
 
 ## Context
 1:1 voice calls (proposal v1.13) are WebRTC peer-to-peer with Opus. About 10–20 % of mobile
@@ -30,7 +34,9 @@ v1.14) will need public media ports too.
   built-in TURN is off (coturn serves both).
 - **Auth:** `use-auth-secret` (TURN REST credentials). The server mints
   `username = "<expiry unix ts>:<random id>"`, `credential = base64(HMAC-SHA1(TURN_SECRET, username))`,
-  TTL 1 h. **`TURN_SECRET` lives only in `.env`** (gitignored) and is shared by Phoenix and
+  TTL **5 h** (updated at the v1.13 merge, server review R1: coturn checks the username's expiry on
+  every `Refresh`/permission request, so the credential must outlive the 4-h maximum call).
+  **`TURN_SECRET` lives only in `.env`** (gitignored) and is shared by Phoenix and
   coturn; `infra/coturn/entrypoint.sh` appends it to a private copy of the config at start, so
   it's never in the repo, on a command line or in a log. Rotation: set a new value, restart both.
 - **Hardening:** `no-cli`, `no-tcp-relay` (no TCP relaying to arbitrary hosts), no web admin, no
@@ -46,7 +52,8 @@ v1.14) will need public media ports too.
   (seen in the smoke test: `403 Forbidden IP`).
 - **Quotas:** `user-quota=8` allocations per username, `total-quota=600`, `max-bps=64000` bytes/s
   per session (512 kbit/s, ample for Opus voice), `max-allocate-lifetime=3600`, `stale-nonce=600`.
-  The REST endpoint is rate-limited per user (proposal v1.13 §16.3).
+  The REST endpoint is rate-limited per user (20 per hour, PROTOCOL §16.7). Rotating
+  `TURN_SECRET` drops every relayed call in progress (5-h credentials): rotate at night.
 - **TLS on 5349: later.** Caddy's certificate for risime.risicloud.ai is under `/var/lib/caddy`
   (root-only, not readable without sudo). TURN/TLS on 5349 starts once a copy is readable by the
   container (one sudo step: a root cron/`caddy` event hook copying the cert and key to

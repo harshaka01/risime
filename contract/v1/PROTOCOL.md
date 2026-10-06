@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.12 (Release 0.3)
+# RisiMe Wire Protocol — v1.13 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -1982,7 +1982,7 @@ receivers are idempotent.
   (`MlsGroup::set_configuration`), with a test that a group created under the old configuration
   accepts a 5 000-generation jump. Deleted events, `scope: "me"`, `chat:clear` and old apps
   skipping `delete` all leave generation gaps; the cap stays as the DoS bound.
-  `out_of_order_tolerance` stays 5 until v1.13 decides it.
+  `out_of_order_tolerance` stays 5 until v1.13 decides it (v1.13: 32, §16.12).
 
 **Privacy** (the app's privacy note says this):
 - "Delete for everyone" removes the message **from every API response at once**. The deletion on
@@ -2053,7 +2053,662 @@ later nightly enables the **send UI** (behind a local flag until then) → annou
   `404` to every member); a reinstall after Clear chat shows nothing restored; an old-app peer
   (§15.11).
 
+## 16. Voice calls, 1:1 (v1.13)
+Decisions 046 (coturn, public ports) and 051 (ringing a locked app). Reviewed by server, android
+and crypto (`proposals/reviews/2026-10-06-calls-v1.13-*.md`). Additive to v1.12: one device
+capability `calls`, one push `call:signal`, one event kind `call_signal` (in its own short-lived
+store), MLS envelope types `call_offer`, `call_ringing`, `call_answer`, `call_accepted`, `call_ice`,
+`call_busy`, `call_cancel` (ephemeral) and `call_end` (durable), `GET /api/v1/calls/turn`, and the
+push type `call`. Apps without `calls` never ring and never receive call signals; what they show is
+in §16.14.
+
+### 16.0 Principles
+- **1:1 voice first.** WebRTC with Opus, **direct peer-to-peer**, with a **TURN relay on spark2**
+  (coturn, decision 046) as the fallback. Group voice comes later through a self-hosted LiveKit
+  (§16.15, v1.14).
+- **E2EE DMs only.** A call is offered only in a DM that is e2ee (§10). Plaintext DMs refuse it
+  (`not_e2ee`), as images do (§14.0). There is no plaintext signalling path. No group calls in
+  v1.13 (`bad_request` for a `grp:` target).
+- **Signalling is MLS.** Every call message is an MLS application message in the DM's group,
+  carried in the §10.3 envelope `{"v":1,"type":"call_…",…}`. The server sees ciphertext, a
+  cleartext `call_id` and a `ring` flag (§16.3), which receivers check against the envelope
+  (§16.3 binding). It never sees SDP, ICE candidates or IP addresses.
+- **Media is authenticated by MLS.** The SDP carries the DTLS-SRTP certificate fingerprint. The
+  SDP arrives inside MLS from an attested leaf, so the DTLS handshake is bound to the peer's
+  attested device: a relay (coturn), the RisiMe server or the network can forward or drop packets
+  but can't man-in-the-middle the media. Media is DTLS-SRTP end to end, also when relayed. This
+  holds only under the client rules of §16.10, which the Android gate tests.
+- **Two transport classes.**
+  - **Ephemeral call signals** (offer, ringing, answer, accepted, ICE, busy, cancel) go through
+    the push `call:signal` (§16.3). The server keeps them in a **separate short-lived store**
+    (60 s / 120 s, physically gone within minutes), never in the inbox table, never in history,
+    with no receipts and no `message_index` row.
+  - **The end of a call is a durable message** (`call_end` through the normal e2ee `msg:send`).
+    It is the call-history line both users keep ("Missed voice call", "Voice call · 3:12"), on
+    every device, after a reinstall (§13), and when a device was offline during the call.
+- **The server stores no media, records no audio and keeps no call table**: no state machine, no
+  "who is in a call" (busy is decided on the devices). Its only per-call state is a 45-s in-memory
+  timer for the fallback push (§16.8).
+- **A locked phone rings without a name** (decision 051, §16.8): the fingerprint lock (decision
+  014) stays absolute.
+- **Reachability depends on decision 046's public ports**, which are **still blocked from outside
+  as of 2026-10-06 19:00 UTC** (all TURN ports 3478/udp+tcp, 5349/tcp, 49152–49999/udp, and the
+  reserved LiveKit ports; 443/tcp open). Until they open, calls connect **only where the peers reach
+  each other directly** (same LAN, or a NAT pair that allows it), and the app must fail fast with
+  "Can't connect the call", never hang (§16.11).
+- **No model calls,** so nothing for the learning log (§16.13).
+
+### 16.1 Capability and readiness
+- A v1.13 app advertises **`"calls"`** with its MLS device:
+  `PUT /me/devices/{device_id}` `"mls": {"signature_key", "capabilities": ["groups", "images", "deletes", "calls"]}`
+  (`device_put_calls.json`). It advertises it only once it can **ring, answer and play a call**:
+  the WebRTC native library loaded (`System.loadLibrary` succeeded; a phone whose ABI has no
+  WebRTC library, §16.9, never advertises it), core-telecom registered, and `POST_NOTIFICATIONS`
+  granted (API 33+).
+- **`GET /api/v1/mls/groups/{conversation_id}`** (DMs) gains **`"calls_ready": bool`** (absent =
+  false) and **`"missing_calls": [{"user_id", "device_id" | null}]`** (`mls_group_calls_ready.json`).
+  - `calls_ready` is true when the DM is e2ee and **each of the two users has at least one** app
+    instance seen in the last 30 days that advertises `calls` (server review: a device without
+    `calls` simply doesn't ring while another one does; unlike images, not every instance is
+    needed).
+  - `missing_calls` lists every instance seen in the last 30 days without `calls`, as information
+    ("Your tablet won't ring until it updates"). An instance without MLS capabilities has
+    `device_id: null`.
+- **Server enforcement (server S6):** a `call:signal` with `ring: true` to a user with no device
+  that advertises `calls` and has a signature key is refused with **`calls_not_ready`**
+  (`error_calls_not_ready.json`), so a stale client `calls_ready` doesn't ring into nothing for 45 s.
+- **Delivery filter (server).** `call_signal` events are delivered live only to sockets whose
+  device advertises `calls` (a `:calls` socket assign, kept current like the `groups` filter of
+  §12.1), and only those sockets read the call-signal store on join/sync (§16.3). The `call` push
+  (§16.8) goes only to `calls` devices.
+- **UI:** the call button in a DM header is disabled until `calls_ready`: "<name> needs to update
+  the app to receive calls"; on a device that doesn't advertise `calls` itself: "Update RisiMe on
+  this phone to make calls" (or "Calls aren't supported on this phone", §16.9). A plaintext DM: "Calls need an end-to-end encrypted chat." In groups the button
+  is absent until v1.14. Refetched on chat open and on `mls_membership` for that DM.
+
+### 16.2 The call envelopes (MLS application messages)
+All are UTF-8 JSON in the §10.3 envelope, serialised without escaping non-ASCII. Receivers ignore
+unknown fields; an unknown `type` is ignored as before (§10.3). **`call_id`** is a UUIDv4 made by
+the caller, one per call attempt, written in lowercase. `from`/`from_device` come from the MLS
+sender (the verified leaf, §10.3), never from the JSON.
+
+**Ephemeral (sent with `call:signal`, §16.3):**
+
+`call_offer` (`ring: true`), caller → the callee's devices (and, by the sender copy, the caller's
+other devices, which note it for §16.5 and don't ring) — `call_offer_payload.json`:
+```json
+{"v": 1, "type": "call_offer", "call_id": "4b7e1c1e-3c0e-4b55-9f43-0b8f8a1f2d10",
+ "media": "audio", "sdp": "v=0\r\no=- 46117317 2 IN IP4 127.0.0.1\r\n…", "restart": false,
+ "sent_at": "2026-10-06T08:15:30.123Z"}
+```
+- `media` is `"audio"` in v1.13 (`"video"` reserved).
+- `sdp` is the full offer SDP (§16.10 rules). **The offer is sent as soon as it is created**
+  (android S-a), with whatever candidates are already gathered; the rest follow as `call_ice`
+  (full trickle). The callee needs the caller's candidates only after a human taps Answer.
+- **`sent_at`** (crypto R3) is the sender's **server-corrected** time (`device_now + offset`,
+  §16.3), RFC 3339 with milliseconds, inside MLS. Required on every `call_offer`.
+- **`restart: true`** is an ICE restart on the same `call_id` (network change). It is sent with
+  `ring: false`, carries a `to_device` field naming the selected peer device and a fresh
+  `sent_at`, and must carry **the same `a=fingerprint`** as that device's first SDP (§16.10).
+  Either side of a connected call may send it; the other side answers with `call_answer`.
+
+`call_ringing`, callee device → caller (`call_ringing_payload.json`):
+`{"v":1,"type":"call_ringing","call_id":"…"}`. Sent when the device actually rings; the caller
+shows "Ringing" instead of "Calling".
+
+`call_answer`, callee device → caller (and by the sender copy to the callee's other devices, which
+stop ringing at once) — `call_answer_payload.json`:
+```json
+{"v": 1, "type": "call_answer", "call_id": "…", "to_device": "<caller device_id>", "sdp": "v=0\r\n…"}
+```
+
+`call_accepted`, caller → callee user (all devices): names the one device that won
+(`call_accepted_payload.json`):
+```json
+{"v": 1, "type": "call_accepted", "call_id": "…", "device_id": "<winning callee device_id>"}
+```
+
+`call_ice`, either way, after the offer (`call_ice_payload.json`):
+```json
+{"v": 1, "type": "call_ice", "call_id": "…", "to_device": "<device_id>" | null,
+ "candidates": [{"candidate": "candidate:1 1 udp 2122260223 192.0.2.10 49203 typ host", "sdp_mid": "0", "sdp_m_line_index": 0}],
+ "done": false}
+```
+- Candidates are **batched**: at most one `call_ice` per 250 ms per call, at most 20 candidates
+  each. `done: true` marks end-of-candidates. Each `call_ice` consumes a sender-ratchet
+  generation (§16.3), so don't send empty batches.
+- `to_device: null` only for the caller's candidates before `call_accepted` (every ringing callee
+  device may use them); otherwise it names the peer device, and other devices ignore it.
+
+`call_busy`, callee device → caller (`call_busy_payload.json`):
+`{"v":1,"type":"call_busy","call_id":"…"}` (§16.5).
+
+`call_cancel`, caller device → callee user (android R2) — `call_cancel_payload.json`:
+`{"v":1,"type":"call_cancel","call_id":"…","reason":"glare"}`. Stops ringing for that `call_id`
+everywhere and renders nothing. `reason` is `"glare"` in v1.13; unknown reasons are treated alike.
+
+**Durable (sent with the normal e2ee `msg:send`, §10.3; stored 30 days, sender copy §13.1, inbox
+push §8):**
+
+`call_end` (`call_end_payload.json`, `call_end_missed_payload.json`):
+```json
+{"v": 1, "type": "call_end", "call_id": "…", "media": "audio",
+ "reason": "hangup", "connected_at": "2026-10-06T08:15:41.880Z", "duration_s": 192}
+```
+- `reason`: `hangup` (connected, then ended by `from`), `cancelled` (the caller stopped before an
+  answer), `timeout` (no answer in 45 s), `declined` (a callee device declined), `busy` (§16.5),
+  `failed` (no media path: ICE failed, 20 s without connecting after `call_accepted`, 15 s of
+  failed restarts, a fingerprint or DTLS check failed, §16.10).
+- `connected_at` and `duration_s` are set only after a connection (`null` otherwise). They are
+  inside MLS: the server sees only when the message is sent. They are the sender's claims
+  (crypto S4): shown as they are, never used for anything that matters.
+- **One line per `call_id`:** both sides may send a `call_end` (both hang up at once); receivers
+  keep the first by event order and ignore later ones for the same `call_id`. A `call_end` is
+  accepted from either DM member (display only).
+- A `call_end` from a client that never saw the call (offline throughout) is still rendered
+  (§16.6), so missed calls survive offline periods, other devices and reinstalls.
+- **Glare never produces a `call_end`** (§16.5).
+
+**Bound:** every call envelope is at most **20 480 bytes** (under the 24 KiB ciphertext cap,
+§10.3). An Opus-only offer is 2–4 KiB; a sender over the bound drops candidates from the SDP and
+sends them as `call_ice`.
+
+**Strict validation** before anything rings (offer) or is applied (answer, restart, ICE), or the
+envelope is **dropped and logged** (no visible line, §16.3): `call_id` is a lowercase UUID; `media`
+is `audio`; `sent_at` parses; for an SDP, all of §16.10's SDP rules (`call_offer_payload_bad.json`
+carries the audio-level header extension and must be dropped); for `call_ice`, at most 20
+candidates, each a `candidate:` line of at most 512 bytes; `to_device`/`device_id` are UUIDs;
+`call_end` `reason` is one of the six (an unknown reason renders as "Voice call").
+
+### 16.3 Realtime: `call:signal` and the `call_signal` event
+**`call:signal`** (client → server, on the inbox topic) — `call_signal_push.json`:
+```json
+{"client_msg_id": "uuid-v4", "to": "<user uuid>", "call_id": "uuid-v4", "ring": true,
+ "ciphertext": "<b64 PrivateMessage>", "generation": 1, "epoch": 7, "client_ts": "…"}
+```
+- reply ok (`call_signal_reply.json`): `{"message_id": "timeuuid", "server_ts": "…"}`.
+- reply error: `rate_limited` | `not_friends` | `unknown_recipient` | **`not_e2ee`** (the DM isn't
+  e2ee) | `stale_epoch` | **`calls_not_ready`** (`ring: true` only, §16.1) | `too_long`
+  (ciphertext > 24 KiB decoded) | `bad_request` (malformed, a `grp:` target, `call_id` not a
+  UUID, `ring` not a boolean).
+- **Order of checks** (server suggestion; cheap first): total rate limit (60 per user per 10 s) →
+  idempotent resend → `not_friends`/`unknown_recipient` → e2ee (`not_e2ee`, `stale_epoch`) →
+  `calls_not_ready` (only for `ring: true`) → the ring and per-pair limits → store.
+- **Idempotency is best effort, in memory** (server R4): the same `client_msg_id` from the same
+  sender within 5 min returns the original reply, **lost on a server restart**. A duplicate after
+  a restart gets a new `event_id`; the receiver's second decrypt of a consumed generation fails and
+  it drops the copy as a replay.
+- **Rate limits** (per user; they don't count against the 20-per-10-s message limit of §4):
+  - 60 `call:signal` per 10 s in total (ICE bursts);
+  - `ring: true`: at most 6 per minute, 1 per callee per 5 s, and **20 per (caller, callee) per
+    hour**;
+  - `ring: false`: at most 30 per (caller, callee) per 10 s.
+  - Every refused ring is logged with the pair (ids only). ICE restarts use `ring: false` and
+    don't count toward the ring limits.
+- **Clients use `msg:send` only for `call_end`.** The server can't tell a `call_end` from a text.
+- The server **should** check the PrivateMessage's cleartext group id and epoch as for `msg:send`
+  (§10.3).
+
+**Event kind `call_signal`** (cursor-ordered like every event) — `call_signal_event.json`:
+`{"message_id", "conversation_id", "from", "to", "from_device", "call_id", "ring", "ciphertext", "generation", "epoch", "server_ts"}`
+- Written for the **recipient and the sender** with the same `event_id` (the sender's other
+  devices need answers and ICE of their own user; the sending device skips it by `from_device`).
+- **Storage (server R2):** **not** in `inbox_events`. A separate Cassandra table, one per query:
+  ```sql
+  -- Q9: SELECT event_id, payload FROM call_signals WHERE user_id = ? AND event_id > ? LIMIT ?
+  CREATE TABLE IF NOT EXISTS call_signals (
+    user_id uuid, event_id timeuuid, payload text,
+    PRIMARY KEY ((user_id), event_id)
+  ) WITH CLUSTERING ORDER BY (event_id ASC)
+    AND default_time_to_live = 120 AND gc_grace_seconds = 0
+    AND compaction = {'class': 'TimeWindowCompactionStrategy',
+                      'compaction_window_unit': 'MINUTES', 'compaction_window_size': 10};
+  ```
+  A ring row is written `USING TTL 60`, others use the 120-s default. `gc_grace_seconds = 0` is
+  safe on one node (revisit for a cluster). Whole SSTables expire within minutes, so physical
+  deletion matches the contract. It sits behind `RisiMe.Messaging.Store` (`append_call_signal/2`;
+  `list_events/4` gains an `include_calls?` flag).
+- **Join/sync** for a `calls` socket reads both stores with `event_id > since LIMIT n+1`, merges
+  them by `event_id`, takes `n` and sets `has_more` from the merged length. Cursor semantics are
+  unchanged; one cursor covers both. A non-`calls` socket never reads `call_signals`.
+- **Not a message (server R4):** no `message_index` row, no `sent_dedupe` row, no `status`
+  events, no receipts. `msg:ack` naming a `call_signal` is ignored (`not_found`), `msg:delete`
+  naming one reports it `gone`, a reaction naming one gets `unknown_target`. Not counted in
+  `history_before`, never backfilled, never in the sender copy of §13.1.
+- **No inbox push (server R5):** a `call_signal` never triggers the §8 inbox push or its 10-s
+  coalescer. Only `ring: true` gets the device-level `call` push (§16.8).
+
+**Client processing (normative).**
+- **Strict per-group order, no fast path** (crypto R2, android R7): `call_signal` events are
+  processed in event order with the DM's other events (§10.3). Each advances the MLS secret tree
+  like any application message, in the same transaction as the cursor. A `call_signal` at a newer
+  epoch is parked like a message, and in a **DM** a park triggers an immediate commit catch-up (as
+  groups already do). There is **no** "decrypt call signals first" path: decrypting a later
+  generation first would discard the keys of earlier pending chat messages.
+- **Generation gaps** (crypto R1, server R3): expired or filtered signals leave gaps in the
+  sender's ratchet. The core tolerates gaps up to **20 000 generations** between two received
+  messages of one sender device (`maximum_forward_distance`, §15.10), and keeps
+  **32 out-of-order keys** per sender (§16.12).
+- **No visible traces:** a `call_signal` (or any call envelope) that predates the install, can't
+  be decrypted, has expired, or fails validation or binding creates **no** "couldn't be decrypted"
+  line and no history marker (§13.3). It is logged only. This applies to every control kind.
+- **Binding** (crypto R3), before any action, or drop and log:
+  - `envelope.call_id == event.call_id`;
+  - `event.ring == (envelope.type == "call_offer" && !envelope.restart)`;
+  - `event.from`/`from_device` == the core's authenticated sender (§10.3).
+- **Freshness.** The client keeps `offset = server_time − device_now` from every join and sync
+  reply (§15.7; a push wake-up always gets a fresh one before the page's events). A device rings
+  only if **both** `server_time − server_ts < 45 s` and `|device_now + offset − sent_at| < 45 s`.
+  Older offers are not rung; nothing is shown unless a `call_end` follows.
+- **Dedupe:** each device remembers the `call_id`s it has rung, answered or ended for **24 h**
+  (persisted) and never rings or answers the same `call_id` twice.
+- **Sender pinning** (crypto R3): per `call_id`, record the offer's sender device `C`.
+  - Callee devices accept `call_accepted`, `call_ice`, restarts and `call_cancel` for that call
+    only from `C`.
+  - The caller accepts `call_answer` only from a device of the peer user, and after
+    `call_accepted` only from the selected device.
+  - `call_end` is accepted from either user's devices (display only).
+  - Signals from other devices are ignored, not errors.
+- **Ring after the page** (android R3): a device that receives an offer in a join or sync page
+  rings only **after applying every event of that page**, and only if its state for that
+  `call_id` is still *incoming* (no later answer, accepted, busy, cancel or `call_end` in the same
+  page). Live pushes after the join follow the per-event rule.
+
+### 16.4 Call flow, timeouts and multi-device
+1. **Caller:** fetches TURN credentials (§16.7; on `503` or a network error it goes on with STUN
+   only), creates the `RTCPeerConnection` (a fresh certificate, §16.10), sends `call_offer`
+   (`ring: true`). UI "Calling…".
+2. **Every device of the callee with `calls`** rings (live socket, or the call push, §16.8) and
+   sends `call_ringing`. The caller's other devices never ring for their own user's offer.
+3. **First answer wins.** A callee device that answers sends `call_answer` (`to_device` = the
+   offer's `from_device`). Its siblings see it through the sender copy and stop ringing
+   ("Answered on another device"). The caller applies the **first `call_answer` in its event
+   order**, sends `call_accepted` naming that device, and ignores later answers. A device that
+   answered but isn't named in `call_accepted` tears down quietly.
+4. ICE (`call_ice`) flows between the selected pair; DTLS completes; the §16.10 post-connect check
+   passes; both show the in-call UI.
+5. **End:** whoever hangs up closes the connection and sends `call_end` (durable).
+
+**One encrypt-and-push lane per conversation** (crypto R2, android R8): `call:signal` shares the
+§15.7 serial lane with texts, reactions, images and deletes; one `Mutex` per `conversation_id`.
+A ciphertext not accepted before a later one from this device was pushed is **re-encrypted**, never
+resent (same `client_msg_id`/`call_id`). A push that is stuck (e.g. `Unavailable`) gives up the
+lane and is re-encrypted on retry, so ICE batches don't stall behind a text.
+
+| Timer | Value | Action |
+|---|---|---|
+| Ring timeout (caller) | 45 s after the offer | `call_end` `timeout` |
+| Ring validity (callee) | §16.3 freshness, `server_ts + 45 s` | stop ringing; wait for the `call_end` |
+| **Accept wait** (answering callee, android R4) | 10 s after sending `call_answer` without a `call_accepted` naming this device | tear down quietly: "Answered on another device" if a sibling answer was seen, else "Call ended"; **no `call_end`** |
+| Connect timeout | 20 s after `call_accepted` without ICE `connected` and the §16.10 check | `call_end` `failed` |
+| ICE `failed` | at once | `call_end` `failed` (§16.11) |
+| Reconnect | ICE `disconnected` → restart (`restart: true`) for up to 15 s | then `call_end` `failed` |
+| Max call length | 4 h | `call_end` `hangup` (relay quotas; the TURN credential covers it, §16.7) |
+
+A caller that loses its app mid-ring (crash, killed) sends no `call_end`; the callee stops at 45 s
+and shows nothing more until a later sync brings one (or not).
+
+### 16.5 Glare, busy and decline
+- **Glare** (A and B call each other at once): a device with an outgoing ringing call to X that
+  receives a `call_offer` from X compares the two `call_id`s as lowercase strings. **The lower
+  `call_id` wins.** The device whose own call has the higher id drops its outgoing call (no
+  `call_end`; it never connected), sends **`call_cancel` `reason: "glare"`** for its own
+  `call_id` (`ring: false`), and **answers the winning offer automatically** (both users asked for
+  this call). The other side keeps waiting for its answer. Ties are impossible (UUIDv4).
+- **Sibling rule** (android R2): a device of user U that has seen its own user's `call_offer` to X
+  (sender copy) records "U is calling X" until that call ends (`call_end`, `call_cancel`, or 45 s).
+  While that holds it **doesn't ring** for an offer from X; only the calling device resolves glare.
+  `call_cancel` covers rings that started before a sibling saw its own user's offer: receivers stop
+  ringing and render nothing.
+- **Busy:** a device that is already in another call answers an offer from a different user with
+  `call_busy` and doesn't ring. "In another call" (android R9) = its own call state is ringing out,
+  connecting or active, **or** `AudioManager.mode` is `MODE_IN_CALL` or `MODE_IN_COMMUNICATION`
+  (no permission needed; **never `READ_PHONE_STATE`**). Telecom also tells an active RisiMe call
+  when a cellular call takes over. Through the sender copy the callee's other devices see the
+  `call_busy` and don't ring either (the user is busy, not the device). The caller shows "<name>
+  is on another call" and sends `call_end` `busy`; the callee gets a "Missed voice call" line.
+  (Call waiting comes later.)
+- **Decline:** Decline sends `call_end` `declined` (durable); siblings stop via the sender copy;
+  the caller shows "Call declined" briefly, then the history line.
+
+### 16.6 Call-history lines (client)
+From one `call_end` per `call_id`, rendered as a centred system line in the DM, from the caller's
+and the callee's own perspective:
+
+| reason | Caller sees | Callee sees |
+|---|---|---|
+| `hangup` | "Voice call · 3:12" | "Voice call · 3:12" |
+| `cancelled`, `timeout`, `busy` | "Voice call · No answer" | **"Missed voice call"** + a notification "Missed call from <name>" |
+| `declined` | "Voice call · Declined" | "Declined voice call" |
+| `failed` | "Voice call · Couldn't connect" | "Voice call · Couldn't connect" (if it never connected and this device rang without answering: "Missed voice call") |
+
+- Tapping a line offers "Call back". Lines sort by `server_ts` like messages and appear in the
+  chat-list preview ("📞 Missed voice call"). They take no reactions and offer only "Delete for
+  me" (§15.7 system rows); receipts are sent as for any message (they are messages).
+- Rows store `call_id` in their own column (`kind = 'call'`), so "one line per `call_id`" is a
+  lookup. `chat:clear` (§15.9) removes call lines like any message.
+- A missed-call notification is built locally from the `call_end` (the push is the normal inbox
+  push); replays (re-login, catch-up) never notify.
+- A **Calls tab/log** later reads the same lines; there is no server call log.
+
+### 16.7 TURN credentials: `GET /api/v1/calls/turn`
+Auth required (`Authorization: Bearer`), no body → `200` (`calls_turn_reply.json`):
+```json
+{"ice_servers": [
+   {"urls": ["stun:risime.risicloud.ai:3478"]},
+   {"urls": ["turn:risime.risicloud.ai:3478?transport=udp",
+             "turn:risime.risicloud.ai:3478?transport=tcp"],
+    "username": "1791292530:6f1c0e9a2b7d4c31",
+    "credential": "<b64 HMAC-SHA1>"}],
+ "ttl": 18000, "expires_at": "2026-10-06T13:15:30.000Z"}
+```
+- **TURN REST (coturn `use-auth-secret`):** `username = "<unix expiry>:<16 random hex>"`,
+  `credential = base64(HMAC-SHA1(TURN_SECRET, username))`. **TTL 18 000 s (5 h)** (server R1):
+  coturn checks the username's expiry on every authenticated request (`Refresh`,
+  `CreatePermission`, `ChannelBind`), so the credential must outlive the 4-h maximum call.
+  HMAC-SHA1 is coturn's scheme, not our choice.
+- The username carries **no user id or phone** (coturn logs it), and the server **never** logs
+  the username → user mapping, not even at debug level.
+- `turns:` (5349) is listed only when the server's config says TLS is live (decision 046: later).
+  The URL list is server configuration (`TURN_URLS`, comma-separated), not protocol; clients use
+  whatever comes back. `TURN_SECRET` and `TURN_URLS` (and an optional `TURN_TTL`) come from
+  `.env`/`pilot.env`; a secret shorter than 32 bytes counts as unset (boot warning).
+- **Errors:** `401` (auth); `429 rate_limited` with `Retry-After` (**20 per user per hour**,
+  counted only for allowed requests, so polling while limited doesn't extend the lockout);
+  **`503 calls_unavailable`** (`error_calls_unavailable.json`) when `TURN_SECRET` or `TURN_URLS`
+  is unset. Clients then call with STUN only (Google's public STUN is never used) and show nothing
+  special.
+- **Clients** fetch fresh credentials when starting or answering a call (the callee may prefetch
+  on ring but allocates nothing until Answer). A cached credential may be reused only while
+  `expires_at − now ≥ 4 h 5 min`. Never persisted to disk.
+- `scripts/turn-smoke` checks that with a 60-s TTL a `Refresh` after expiry is refused (the coturn
+  behaviour R1 relies on). Rotating `TURN_SECRET` invalidates every outstanding credential and
+  every relayed call in progress: rotate at night.
+
+### 16.8 Push: the call wake-up, and ringing a locked phone
+- **Payload** (`push_call.json`): `{"type": "call", "v": "1"}` and nothing else, FCM data
+  message, **`priority: high`**, **`ttl: 45s`**, `collapse_key: "call"`. Like §8.2 it carries no
+  caller, no `call_id`, no content.
+- **When** (server R5): for every `call_signal` with `ring: true`:
+  1. at once, to **each device of the recipient that has `calls` and no live inbox channel**
+     (device-level, `Presence.device_online?/1`, not the user-level rule of §8.0);
+  2. **3-s fallback:** if no `call:signal` with that `call_id` arrives from the callee's user within
+     3 s (no `call_ringing`, `call_answer` or `call_busy`), push to the callee's **remaining**
+     `calls` devices too. This covers half-open sockets (a hand-over or Doze leaves a socket
+     "live" for about 60 s). The state is an in-memory timer dropped after 45 s, not a call table.
+- **Never coalesced** with inbox pushes, never delayed by the 10-s rule, and `call_signal` never
+  calls the user-level inbox push. No push for other `call_signal`s. `call_end` is a normal
+  message and triggers the normal `{"type":"inbox"}` push; a woken device builds "Missed call from
+  <name>" locally.
+- **On receipt (unlocked app)** the app **at once starts a foreground service of type `phoneCall`**
+  from `onMessageReceived` (high-priority FCM grants the background start of a foreground service;
+  `MANAGE_OWN_CALLS` is its prerequisite) and syncs inside it. The call push has its own handler:
+  it never goes through the inbox sync worker's unique work (which can swallow it) or an
+  expedited job (quota-deferred). The app decrypts the offer, applies the page (§16.3), and only
+  then shows the ringing UI with the caller's name from its own database. If the offer turns out
+  stale, cancelled, answered elsewhere or busy, nothing rings.
+- **Locked or dead app (decision 051, option B).** The fingerprint lock (decision 014) stays
+  absolute: without the user's fingerprint there is no access token, no socket and no MLS. When a
+  `call` push arrives and the session is locked (process dead, or locked):
+  - the app starts the `phoneCall` foreground service and rings at once with a full-screen
+    **"Incoming RisiMe call"** and **no caller name** (it knows none; the push carries none), on
+    the `calls` channel (§16.9), with Answer and Decline;
+  - **Answer** (or tapping the call) asks for the fingerprint. After unlocking, the app syncs,
+    decrypts and shows the caller, and **only then answers** if the offer passes §16.3
+    (fresh, binding, not answered elsewhere, not cancelled). Otherwise it shows "Call ended" (or
+    "Answered on another device") and stops; no `call_end` is sent for it;
+  - **Decline** while locked just stops the local ring (nothing can be sent without the session);
+    the caller times out and the missed-call line arrives with the next unlocked sync;
+  - the blind ring stops after 45 s, or at once when the user unlocks and the sync finds nothing
+    to ring for;
+  - the blind ring is **not** "Missed call from <name>": if unanswered it leaves no notification
+    of its own; the `call_end` brings the named missed-call line after the next unlock.
+  - Known costs: false rings for calls that ended or were answered elsewhere, and a slower answer
+    (fingerprint + sync). Accepted for the pilot.
+  - **Option A** (a device-bound, narrowly scoped background token that lets a locked app sync,
+    show the name and ring for real) is a possible later step; it needs its own decision because
+    it weakens decision 014 for those scopes.
+- **What the `call` hint leaks.** Google (FCM) learns that *this app install received a call
+  attempt at time T* (as opposed to a message), how often, and whether it's delivered; with
+  network-level timing it could correlate calls between two devices it also serves. It learns no
+  caller, no content and no duration. Our server knows all of this anyway. **Accepted** (crypto
+  S6): an `inbox`-typed push would delay ringing by a sync and be deprioritised by FCM.
+- FCM deprioritises high-priority messages that produce no visible notification; stale offers make
+  none, so keep them rare (never `ring: true` for restarts).
+
+### 16.9 Android client (normative where it says "must")
+- **WebRTC library** (android A1): **`io.github.webrtc-sdk:android-prefixed`**, pinned to **the
+  version `io.livekit:livekit-android` pins** (144.7559.14 for livekit-android 2.29.0;
+  `livekit.org.webrtc` package, `liblkjingle_peerconnection_so.so`), so v1.14 adds only the
+  LiveKit Kotlin SDK on the same native library. Not `stream-webrtc-android` (a second libwebrtc
+  copy later). `libs.versions.toml` carries the comment "must equal livekit-android's pom", and a
+  Gradle check fails the build if two `*jingle_peerconnection_so.so` end up in the APK.
+  - **ABIs:** the WebRTC `.so` is packaged **only for `arm64-v8a` and `x86_64`** (the emulator)
+    via `packaging.jniLibs.excludes`; the MLS core keeps all four ABIs. About +12.5 MB on the
+    release APK. A 32-bit phone never advertises `calls` (§16.1) and shows "Calls aren't supported
+    on this phone". Check the pilot phones for 32-bit before release. Per-ABI APKs (a decision-016
+    amendment) only if size hurts.
+  - Behind a `CallMedia` interface with a fake for JVM/Robolectric tests (the native library
+    can't load there).
+- **Audio:** Opus mono, 48 kHz, ~32 kbit/s, in-band FEC (`useinbandfec=1`), DTX on, **CBR
+  (`cbr=1`, crypto S1)**, 20 ms ptime; `JavaAudioDeviceModule` with the hardware AEC/NS when
+  available, `USAGE_VOICE_COMMUNICATION`. SRTP: prefer `AEAD_AES_128_GCM`
+  (`enableGcmCryptoSuites`), with `AES_CM_128_HMAC_SHA1_80` as the fallback.
+- **Telecom** (android A2): **`androidx.core:core-telecom` 1.0.1** (stable; not the 1.1 betas),
+  a **self-managed** call (`CallsManager.registerAppWithTelecom`, `addCall`; ConnectionService
+  underneath on API 26–33, transactional Telecom on 34+), `MANAGE_OWN_CALLS`. Audio focus, audio
+  mode and routing belong to Telecom: the app never calls `requestAudioFocus`, `setMode` or
+  `setSpeakerphoneOn`; routing only through `requestEndpointChange` (earpiece, speaker, wired,
+  Bluetooth). A connected Bluetooth headset is routed by Telecom on answer. No
+  `BLUETOOTH_CONNECT` until a pilot phone shows unnamed endpoints. Speaker is never the default; a
+  wired headset wins over the earpiece. Proximity wake lock only while the endpoint is the earpiece
+  and the call is active.
+- **Foreground service and Android 14+ rules** (android R5):
+  - **Ringing** (incoming or outgoing) runs a foreground service of type **`phoneCall`** only
+    (prerequisite `MANAGE_OWN_CALLS`), startable from the high-priority FCM window.
+  - **Answer is an activity:** the Answer action is a `PendingIntent.getActivity` to the in-call
+    activity (`showWhenLocked`, `turnScreenOn`; on API 26 the window flags
+    `FLAG_SHOW_WHEN_LOCKED | FLAG_TURN_SCREEN_ON`). Never a broadcast or service `PendingIntent`
+    (it doesn't count as visible for the while-in-use microphone rule on 14+). That activity
+    checks `RECORD_AUDIO` (asked on the first call), then upgrades the service to
+    **`phoneCall|microphone`**. Outgoing calls start from the call button (user interaction).
+  - **The `microphone` type is requested only after `RECORD_AUDIO` is granted**, otherwise
+    `startForeground` throws on 14+.
+  - **CallStyle:** `NotificationCompat.CallStyle.forIncomingCall(person, decline, answer)` **always
+    sets the full-screen intent** (API 31+ throws without one or a foreground service); the system
+    turns it into a heads-up when full-screen intents aren't allowed. `forOngoingCall` is the
+    foreground-service notification while connected. A `Person` on the CallStyle (the caller when
+    known; none for the locked ring of §16.8).
+  - **`USE_FULL_SCREEN_INTENT`** (android A3): declared; on 14+ check
+    `NotificationManager.canUseFullScreenIntent()` at sign-in **and before every ring** (the user
+    can revoke it). If false, ring as an insistent heads-up and afterwards show one in-app card
+    opening `Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT`. Expected granted for our non-Play
+    installs; verify on Android 14, 15 and 16 from both the browser and the updater install.
+  - **Answer from the lock screen** for a call whose caller is known (an unlocked session that is
+    screen-locked) without unlocking the device, as for phone calls; the rest of the app stays
+    behind the lock. The fingerprint-locked session of §16.8 always needs the fingerprint first.
+- **The socket is kept up during a call** (android R6): while a call is ringing, connecting or
+  active, the realtime connection stays up regardless of foreground
+  (`combine(foreground, backgroundSync, callActive)`), and a partial wake lock is held (released
+  at the end, capped at 4 h). Otherwise the 25-s background sync closes the socket mid-ring.
+- **Ringtone and DND** (android S-b): a dedicated **`calls`** notification channel at
+  `IMPORTANCE_HIGH`, default ringtone (`USAGE_NOTIFICATION_RINGTONE`) and a vibration pattern,
+  `FLAG_INSISTENT` on the incoming notification, category `CALL`. Ringer mode, DND and
+  per-channel settings then apply without our own player.
+- **Permissions:** `RECORD_AUDIO` (runtime), `MANAGE_OWN_CALLS`, `FOREGROUND_SERVICE`,
+  `FOREGROUND_SERVICE_PHONE_CALL`, `FOREGROUND_SERVICE_MICROPHONE`, `USE_FULL_SCREEN_INTENT`,
+  `WAKE_LOCK`, `MODIFY_AUDIO_SETTINGS`, `ACCESS_NETWORK_STATE`; `POST_NOTIFICATIONS` (33+).
+  **Not** `READ_PHONE_STATE`, `BLUETOOTH_CONNECT` or `CAMERA`. `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+  only if the pilot shows missed rings.
+- **Settings → "Calls"** row explains what is missing (notifications, full-screen permission,
+  battery optimisation, OEM toggles such as Xiaomi's "Show on lock screen") with deep links.
+  Settings → "Open-source licences" lists libwebrtc (BSD-3-Clause + PATENTS) and its bundled
+  components, and core-telecom (Apache-2.0).
+- A debug-only stats overlay (`getStats()`: candidate pair type, RTT, loss, jitter, codec, SRTP
+  suite). Release builds never log IPs or candidates.
+
+### 16.10 Media security: DTLS-SRTP bound to MLS (normative; crypto R4–R6)
+- **(a) One SDP source.** The remote SDP comes **only** from a decrypted MLS envelope whose sender
+  passed §16.3's binding and pinning. There is no other `setRemoteDescription` source: no debug
+  intent, no server field, no deep link.
+- **(b) Encryption can't be off.** `PeerConnectionFactory.Options.disableEncryption` stays
+  `false`; a unit test reads the options the factory was built with.
+- **(c) A fresh certificate per call.** libwebrtc generates it per `RTCPeerConnection` (ECDSA
+  P-256); an `RTCCertificate` is never persisted or reused across calls (that would link calls).
+- **(d) The fingerprint is pinned for the whole call.** A `restart: true` offer or any
+  renegotiation must carry **the same** `a=fingerprint` as that peer device's first SDP of the
+  call. A different one tears the call down (`call_end` `failed`).
+- **(e) Post-connect assertion.** After ICE `connected`, `getStats()` must show
+  `transport.dtlsState == "connected"`, a non-empty `srtpCipher`, and the `remoteCertificateId` →
+  `RTCCertificateStats.fingerprint` equal (case-insensitive, colons ignored) to the fingerprint in
+  the MLS-delivered SDP. On failure: tear down with `failed`, log `dtls_fingerprint_mismatch`.
+  Only then does the UI show "End-to-end encrypted" in the call.
+- **(f) Negative test.** A debug-build-only hook flips one byte of the fingerprint in the answer
+  SDP before `setRemoteDescription`: the call must fail to connect. A relay-only call
+  (`iceTransportPolicy = relay`) through coturn must pass (e).
+- **Header extensions** (crypto R5): `urn:ietf:params:rtp-hdrext:ssrc-audio-level` (RFC 6464,
+  a per-packet speech level readable by coturn and on-path observers, since SRTP doesn't encrypt
+  header extensions) is **stripped** from every offer and answer the app produces, and an SDP
+  that still carries it is **rejected**.
+- **Strict SDP validation** (crypto R4b, R6; before ringing for an offer, before applying for an
+  answer or restart), or drop and log:
+  - at most 16 KiB; exactly **one `m=audio`** line with `UDP/TLS/RTP/SAVPF`; no video,
+    application or other m-lines;
+  - exactly **one `a=fingerprint:sha-256`** with 32 colon-separated hex bytes; no other
+    fingerprint algorithm; no second fingerprint line;
+  - **no `a=crypto`** (SDES);
+  - `a=setup:actpass` in an offer (also a restart), `a=setup:active` or `a=setup:passive` in an
+    answer;
+  - `a=ice-ufrag` and `a=ice-pwd` present; `a=rtcp-mux` present;
+  - no `a=extmap` with `ssrc-audio-level` (above);
+  - the Opus codec (`opus/48000/2`) offered.
+
+### 16.11 Reachability and failing fast
+- **Status 2026-10-06 19:00 UTC:** decision 046's ports are **still blocked from outside** (all
+  TURN ports and the reserved LiveKit ports; 443/tcp open). The relay is unreachable for phones
+  outside spark2's network, and so is STUN, so most phones see only host candidates (and
+  server-reflexive ones only if some other STUN path works; we never use a third-party STUN).
+- **So until the ports open, a call connects only where the peers reach each other directly:**
+  the same LAN, or a NAT pair that happens to allow it. The server may already serve
+  `GET /calls/turn` (the URLs are harmless when unreachable) or answer `503`; both work.
+- **The app must fail fast, never hang:**
+  - ICE `failed` → "Can't connect the call" **at once**, and `call_end` `failed`;
+  - otherwise the 20-s connect timeout (§16.4) is the upper bound after `call_accepted`;
+  - the TURN fetch never blocks a call for more than 3 s (then STUN only);
+  - a caller whose offer gets no `call_ringing` keeps "Calling…" until the 45-s ring timeout,
+    as for any unanswered call.
+- When the port check passes (decision 046), nothing in the protocol changes; the §16.13 relay
+  tests and the real-network matrix then become the release check.
+
+### 16.12 MLS core changes for v1.13
+- `maximum_forward_distance` **20 000** in every group config with the stored-group migration:
+  already shipped for v1.12 (§15.10, crypto `a542755`); it covers call-signal gaps too.
+- **`out_of_order_tolerance` 32** (from 5) in the create, join and Welcome configs, and applied to
+  stored groups on load like the forward distance (crypto R2): a margin for the burstier traffic.
+  Up to 32 message keys per sender per epoch are kept; the forward-secrecy cost is accepted.
+- A test: 2 000 expired signals from one sender, then a text that still decrypts on the device
+  that missed them.
+- No other core change for 1:1 calls; the SDP rides in a normal `encrypt`.
+
+### 16.13 Privacy, security and the learning log
+- **The server learns:** who calls whom (DM participants, devices), when a call rings (`ring:
+  true`), the timing and number of signals (answer timing, so "answered or not"), and when a
+  `call_end` is sent, hence roughly the duration. It doesn't learn the reason or the duration
+  field, SDP, ICE candidates or IPs (all inside MLS). Signals are physically gone within minutes
+  (§16.3).
+- **coturn (spark2) learns**, for relayed calls only: both public IPs and ports, allocation start
+  and end, bytes relayed, and packet timing, which with DTX reveals talk/silence patterns (CBR
+  hides the rest). The audio-level header extension is stripped (§16.10). Usernames are random
+  (§16.7). Logs to stdout, no packet logs (decision 046).
+- **The peers learn each other's IP addresses** in a direct call (host and server-reflexive
+  candidates), as in every P2P calling app. Calls are only between friends (§9). A later setting
+  "Always relay calls" (`iceTransportPolicy = relay`) hides them at a quality cost.
+- **Google** learns the push timing (§16.8).
+- **Media:** DTLS-SRTP keys are negotiated between the phones; the fingerprint is
+  MLS-authenticated and checked after connect (§16.10). The server can't inject a call into an MLS
+  group, and a call from a non-member device fails leaf verification and is dropped.
+- **Call audio is never recorded** by the app; no audio, transcript or voice feature goes to any
+  model in v1.13.
+- Goes into the app's privacy note with the typing/presence/images/delete metadata.
+- **Learning log:** none; there are no model calls in calling.
+- **On-device behaviour log** (stays on the device): "call placed/received/missed", direction,
+  duration, never audio. Twin sync rules apply (off by default).
+
+### 16.14 Rollout and old apps
+- **Order:** deploy the server (with `TURN_SECRET`/`TURN_URLS` or without: `503`) → the core
+  change (§16.12) → a nightly with the pipeline and history lines (receives `call_end`, doesn't
+  advertise `calls`) → a nightly that advertises `calls` and enables the call button → announce.
+  A **normal (optional)** update, never `required` (decision 016).
+- **A ≤ v1.12 app** never rings and shows **no call lines**: it gets no `call_signal` (delivery
+  filter) and no `call` push, and a `call_end` is an e2ee message with an unknown envelope type,
+  stored invisibly (§10.3). Its user sees nothing until they update. The skipped generations are
+  within the forward distance (§16.12).
+
+### 16.15 Group calls with LiveKit — outline for v1.14 (not normative)
+- **SFU:** self-hosted LiveKit (`livekit/livekit-server`, multi-arch) on spark2. Signalling
+  (7880) on 127.0.0.1 behind Caddy at `wss://risime.risicloud.ai/livekit`; media **7881/tcp** and
+  **50000–60000/udp** (decision 046, reserved). LiveKit's embedded TURN off; coturn serves both.
+  The Android client adds `io.livekit:livekit-android` on the same native library (§16.9).
+- **E2EE** (crypto review, v1.14 comments): LiveKit's frame encryption (`FrameCryptor`) with
+  **per-sender keys** derived from the MLS exporter, `call_epoch_secret =
+  MLS-Exporter("risime-call-v1", call_id as 16 raw bytes, 32)` and
+  `sender_base_key[i] = HKDF-Expand(call_epoch_secret, "risime-call-v1 sender" || uint32_be(leaf i), 32)`
+  (SFrame-like nonce separation; members can still forge each other's audio, a stated limit);
+  key index = `epoch mod 16` with a ≤ 10-s keyring across epoch changes; the core exports at
+  merge time (a new FFI `export_secret`); removal also revokes the LiveKit access at once (short
+  token TTLs); the roster comes from MLS, not from LiveKit; fail closed (never play undecrypted
+  frames); a registry of exporter labels in §10.
+- **Rooms:** `POST /api/v1/calls/rooms {"conversation_id": "grp:…"}` → a short-TTL LiveKit token
+  (identity `<user_id>/<device_id>`, a random room name), for active members only; invitation
+  through the same MLS envelopes (`call_offer` with `"mode": "sfu"`, `ring: true` to the group).
+- **Limits:** up to 32 participants audio-only at first; video later.
+
+### 16.16 Test coverage (all gates)
+- **Crypto:** `out_of_order_tolerance` 32 for new and migrated stored groups; 2 000 skipped
+  generations then a text decrypts.
+- **Server:** `call:signal` happy path and each error in the order of checks (total rate limit
+  first; `calls_not_ready` only for `ring: true`); best-effort idempotency (5 min); one `event_id`
+  for both users; rows in `call_signals` (not `inbox_events`) with TTL 60/120 s; join/sync merge
+  in `event_id` order with a correct `has_more`; a non-`calls` socket never sees them (live and
+  join/sync); no `message_index`/`sent_dedupe` row, ack ignored, `msg:delete` → `gone`; the rate
+  limits including 1 ring per callee per 5 s and the per-pair caps; `ring: true` never calls the
+  inbox push; the device-level `call` push only to `calls` devices without a live channel; the
+  3-s fallback fires without a returning signal and not with one; FCM options (`collapse_key
+  call`, `ttl 45s`, high); `GET /calls/turn` (credential = HMAC of the username with the test
+  secret, TTL 18 000, `429` with `Retry-After`, `503` without a secret or URLs); `calls_ready` /
+  `missing_calls` (one `calls` device per user); every new example.
+- **Android (JVM):** encode/decode of every call example; the strict drops
+  (`call_offer_payload_bad.json`, SDP rules of §16.10, a tampered or second fingerprint,
+  `a=crypto`); binding, freshness with `sent_at`, the 24-h dedupe, sender pinning; the state
+  machine (ring, answer, first-answer-wins, answered elsewhere, accept wait, glare both directions
+  with `call_cancel` and the sibling rule, busy incl. audio mode, decline, cancel, timeout, failed,
+  restart with the same and with a changed fingerprint); ring-after-page; the history-line table;
+  call push handling incl. the locked ring of §16.8; the shared lane with re-encryption; no markers
+  for call envelopes; `disableEncryption` false; the duplicate-libwebrtc build check.
+- **Live interop** (laptop emulator + USB phone; not a gate until unattended): same-LAN call both
+  ways; the negative fingerprint test (§16.10 f); the post-connect assertion; once decision 046's
+  ports are open, a relay-only call through coturn and the real-network matrix of the android
+  review (Wi-Fi ↔ mobile, two carriers, UDP-hostile Wi-Fi, hand-over, Doze/killed/locked, audio
+  routing, impairment).
+- **Infra:** `scripts/turn-smoke` (loopback) incl. the expired-refresh refusal; once public, a
+  relay-only call from mobile data.
+
 ## Changelog
+- **v1.13** (2026-10-06): 1:1 voice calls (§16), reviewed by server, android and crypto. The
+  `calls` capability with `calls_ready` (one `calls` device per user) / `missing_calls` and the
+  `calls_not_ready` refusal; the MLS call envelopes (`call_offer` with `sent_at`, `call_ringing`,
+  `call_answer`, `call_accepted`, `call_ice`, `call_busy`, `call_cancel`; the durable `call_end`);
+  the push `call:signal` (best-effort idempotency, per-pair ring caps) and the event kind
+  `call_signal` in its own short-lived `call_signals` store (60/120 s), never a message; binding of
+  the cleartext `call_id`/`ring` to the envelope, freshness, a 24-h dedupe and sender pinning; one
+  encrypt-and-push lane, no fast path, ring after the page; first-answer-wins with a 10-s accept
+  wait; glare by lowest `call_id` with the sibling rule; busy without `READ_PHONE_STATE`; DTLS-SRTP
+  bound to MLS with strict SDP validation, a per-call certificate, a pinned fingerprint, a
+  post-connect check and the audio-level extension stripped; `GET /api/v1/calls/turn` (5-h TURN
+  REST credentials, `503 calls_unavailable`); the device-level high-priority `{"type":"call"}`
+  push with a 3-s fallback; a locked app rings without a name (decision 051); the Android library
+  and platform rules; `out_of_order_tolerance` 32. Calls connect only directly until decision
+  046's ports open. An additive change.
 - **v1.12** (2026-10-06): deleting messages and chats (§15), reviewed by server, android and
   crypto. The push `msg:delete` with `scope: "me" | "everyone"` (1–100 targets, `deleted`/`gone`
   reply, all-or-nothing errors with `failures`, new reasons `not_sender` and `too_old`); own

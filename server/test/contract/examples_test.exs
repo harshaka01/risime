@@ -65,6 +65,15 @@ defmodule RisiMe.ContractExamplesTest do
                    msg_delete_reply_gone.json event_delete_group.json event_delete_dm.json
                    event_delete_dm_e2ee.json error_delete_too_old.json error_not_sender.json
                    chat_clear.json device_put_deletes.json mls_group_deletes_ready.json)
+  # v1.13 (1:1 voice calls, §16): parse-only placeholders added by root with the contract merge;
+  # the server role replaces them with real checks when it implements §16.
+  @pending_v1_13 ~w(call_offer_payload.json call_offer_payload_bad.json call_ringing_payload.json
+                   call_answer_payload.json call_accepted_payload.json call_ice_payload.json
+                   call_busy_payload.json call_cancel_payload.json call_end_payload.json
+                   call_end_missed_payload.json call_signal_push.json call_signal_reply.json
+                   call_signal_event.json calls_turn_reply.json push_call.json
+                   device_put_calls.json mls_group_calls_ready.json error_calls_unavailable.json
+                   error_calls_not_ready.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -97,8 +106,15 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    covered = @checked ++ @checked_v1_9 ++ @checked_v1_10 ++ @checked_v1_11 ++ @checked_v1_12
+    covered =
+      @checked ++
+        @checked_v1_9 ++ @checked_v1_10 ++ @checked_v1_11 ++ @checked_v1_12 ++ @pending_v1_13
+
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
+  end
+
+  test "v1.13 examples are valid JSON objects (placeholder)" do
+    for name <- @pending_v1_13, do: assert(is_map(example(name)))
   end
 
   setup do

@@ -1,0 +1,1 @@
+{"ice_servers":[{"urls":["stun:risime.risicloud.ai:3478"]},{"urls":["turn:risime.risicloud.ai:3478?transport=udp","turn:risime.risicloud.ai:3478?transport=tcp"],"username":"1791292530:6f1c0e9a2b7d4c31","credential":"cGxhY2Vob2xkZXItaG1hYy1zaGExPQ=="}],"ttl":18000,"expires_at":"2026-10-06T13:15:30.000Z"}
