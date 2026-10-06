@@ -21,13 +21,11 @@ defmodule RisiMe.ContractExamplesTest do
               auth_refresh_error.json auth_config_v14.json me_reply_unverified.json
               phone_verify_request_reply.json phone_verify_confirm.json
               error_phone_unverified.json error_invalid_code_attempts.json
-              error_already_verified.json error_sms_unavailable.json)
+              error_already_verified.json error_sms_unavailable.json device_put.json
+              error_invalid_device.json)
   # v1.5 (push): parse-only placeholders added by root with the contract merge; the server role
   # replaces them with real checks when it implements §8.
-  @pending_v1_5 ~w(device_put.json push_inbox.json error_invalid_device.json)
-
-  # v1.4 (SMS phone verification): parse-only placeholders added by root with the contract
-  # merge; the server role replaces them with real checks when it implements §7.
+  @pending_v1_5 ~w(push_inbox.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -335,6 +333,24 @@ defmodule RisiMe.ContractExamplesTest do
                  {503, example("error_sms_unavailable.json")}
       end)
     end
+  end
+
+  ## v1.5 (§8)
+
+  test "device_put.json is accepted; error_invalid_device.json is the 422 body", %{a: a} do
+    put = fn id, body ->
+      conn =
+        http()
+        |> Plug.Conn.put_req_header("authorization", "Bearer " <> a.token)
+        |> Phoenix.ConnTest.dispatch(@endpoint, :put, "/api/v1/me/devices/#{id}", body)
+
+      {conn.status, conn.resp_body}
+    end
+
+    assert {204, ""} = put.(Ecto.UUID.generate(), example("device_put.json"))
+
+    {422, body} = put.("not-a-uuid", example("device_put.json"))
+    assert Jason.decode!(body) == example("error_invalid_device.json")
   end
 
   defp atomize(map), do: Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)

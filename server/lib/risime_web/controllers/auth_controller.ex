@@ -89,6 +89,7 @@ defmodule RisiMeWeb.AuthController do
     case conn.assigns.current_auth do
       %{kind: :dev, token_record: token} ->
         :ok = Accounts.revoke_token(token)
+        RisiMe.Devices.delete_for_token(token.id)
         RisiMeWeb.Endpoint.broadcast(RisiMeWeb.UserSocket.id_for(token), "disconnect", %{})
 
       %{kind: :jwt} ->

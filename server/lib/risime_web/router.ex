@@ -51,6 +51,8 @@ defmodule RisiMeWeb.Router do
     pipe_through [:api, :authenticated]
 
     patch "/me", MeController, :update
+    put "/me/devices/:device_id", DeviceController, :put
+    delete "/me/devices/:device_id", DeviceController, :delete
     get "/contacts", ContactsController, :index
   end
 

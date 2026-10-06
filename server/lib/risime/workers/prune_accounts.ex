@@ -15,13 +15,19 @@ defmodule RisiMe.Workers.PruneAccounts do
     challenges = Accounts.prune_otp_challenges()
     tokens = Accounts.prune_revoked_tokens()
     phone_challenges = Accounts.prune_phone_challenges()
+    devices = RisiMe.Devices.prune()
 
     Logger.info(
       "PruneAccounts: deleted #{challenges} OTP challenge(s), #{tokens} revoked token(s), " <>
-        "#{phone_challenges} phone challenge(s)"
+        "#{phone_challenges} phone challenge(s), #{devices} stale device(s)"
     )
 
     {:ok,
-     %{otp_challenges: challenges, revoked_tokens: tokens, phone_challenges: phone_challenges}}
+     %{
+       otp_challenges: challenges,
+       revoked_tokens: tokens,
+       phone_challenges: phone_challenges,
+       devices: devices
+     }}
   end
 end

@@ -16,6 +16,7 @@ defmodule RisiMeWeb.ApiError do
     not_found: "Not found",
     phone_unverified: "Confirm your phone number to continue",
     already_verified: "Your phone number is already confirmed",
+    invalid_device: "Device registration is invalid",
     sms_unavailable: "Couldn't send the SMS right now, try again shortly",
     invalid_display_name: "Display name must be 1-64 characters"
   }
