@@ -110,6 +110,29 @@ interface WipeDao {
 
     @Query("DELETE FROM seen_events")
     suspend fun seenEvents()
+
+    /** Logout wipes MLS state too (the device is removed on the server). */
+    @Query("DELETE FROM mls_kv")
+    suspend fun mlsKv()
+
+    @Query("DELETE FROM mls_pending")
+    suspend fun mlsPending()
+}
+
+@Dao
+interface MlsPendingDao {
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun add(e: MlsPendingEntity)
+
+    /** In arrival (= inbox) order. */
+    @Query("SELECT * FROM mls_pending WHERE conversation_id = :conversationId ORDER BY seq ASC")
+    suspend fun forConversation(conversationId: String): List<MlsPendingEntity>
+
+    @Query("DELETE FROM mls_pending WHERE event_id = :eventId")
+    suspend fun remove(eventId: String)
+
+    @Query("DELETE FROM mls_pending WHERE conversation_id = :conversationId AND generation < :generation")
+    suspend fun dropOlderGenerations(conversationId: String, generation: Long)
 }
 
 @Dao

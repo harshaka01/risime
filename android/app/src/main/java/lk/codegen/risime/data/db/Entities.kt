@@ -78,3 +78,27 @@ data class UnreadCount(
     @ColumnInfo(name = "conversation_id") val conversationId: String,
     val unread: Int,
 )
+
+/**
+ * v3 (§10.4, decision 033): the MLS core's key-value state, in the same database as messages so
+ * decrypt → insert → cursor is one transaction. Values are AES-GCM sealed (SealedKvStore).
+ */
+@Entity(tableName = "mls_kv", primaryKeys = ["namespace", "key"])
+class MlsKvEntity(
+    val namespace: String,
+    val key: ByteArray,
+    val value: ByteArray,
+)
+
+/** v3: e2ee events that arrived ahead of their epoch, replayed after the matching commit. */
+@Entity(tableName = "mls_pending", indices = [Index("conversation_id")])
+data class MlsPendingEntity(
+    @PrimaryKey @ColumnInfo(name = "event_id") val eventId: String,
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    val generation: Long,
+    val epoch: Long,
+    /** Arrival order (event_id TimeUUID strings don't sort by time). */
+    val seq: Long,
+    /** The whole Event JSON, re-applied through the normal pipeline. */
+    @ColumnInfo(name = "event_json") val eventJson: String,
+)

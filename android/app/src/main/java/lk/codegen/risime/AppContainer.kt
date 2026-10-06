@@ -458,5 +458,7 @@ class AppContainer(context: Context) {
         db.wipe().contacts()
         db.wipe().syncState()
         db.wipe().seenEvents()
+        db.wipe().mlsKv()
+        db.wipe().mlsPending()
     }
 }
