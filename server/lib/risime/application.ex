@@ -20,6 +20,9 @@ defmodule RisiMe.Application do
     if Application.get_env(:risime, :env) == :prod and RisiMe.Auth.Config.dev_local_auth?(),
       do: Logger.warning("DEV_LOCAL_AUTH=true in prod: dev login and opaque tokens are enabled")
 
+    # v1.13 §16.7: a short TURN_SECRET counts as unset (never logs the value).
+    RisiMe.Calls.Turn.boot_check()
+
     RisiMe.TimeUUID.init()
     # v1.11 §14.8: temp files of uploads killed with the previous run.
     RisiMe.Blobs.sweep_tmp()
@@ -45,6 +48,7 @@ defmodule RisiMe.Application do
       {Task.Supervisor, name: RisiMe.Push.TaskSupervisor},
       RisiMe.Push.FCM,
       RisiMe.Push.Dispatcher,
+      RisiMe.Calls.State,
       # Start a worker by calling: RisiMe.Worker.start_link(arg)
       # {RisiMe.Worker, arg},
       # Start to serve requests, typically the last entry

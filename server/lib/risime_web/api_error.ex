@@ -37,7 +37,8 @@ defmodule RisiMeWeb.ApiError do
     quota_exceeded: "Blob storage quota exceeded",
     bad_media_type: "Blobs must be application/octet-stream",
     not_e2ee: "This chat isn't end-to-end encrypted yet",
-    storage_full: "The server is low on storage; try again later"
+    storage_full: "The server is low on storage; try again later",
+    calls_unavailable: "Calls aren't available on this server yet"
   }
 
   @doc """

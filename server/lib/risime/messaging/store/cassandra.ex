@@ -272,16 +272,67 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   end
 
   @impl true
-  def list_events(user_id, nil, limit) do
+  def list_events(user_id, since, limit, include_calls? \\ false)
+
+  def list_events(user_id, since, limit, false), do: list_inbox(user_id, since, limit)
+
+  # v1.13 §16.3: both stores with the same bound and limit, merged by TimeUUID order.
+  def list_events(user_id, since, limit, true) do
+    (list_inbox(user_id, since, limit) ++ list_call_signals(user_id, since, limit))
+    |> Enum.sort_by(&{RisiMe.TimeUUID.timestamp(&1.event_id), &1.event_id})
+    |> Enum.take(limit)
+  end
+
+  defp list_inbox(user_id, nil, limit) do
     "SELECT event_id, kind, payload FROM inbox_events WHERE user_id = ? LIMIT ?"
     |> run!([user_id, limit])
     |> Enum.map(&to_event/1)
   end
 
-  def list_events(user_id, since, limit) do
+  defp list_inbox(user_id, since, limit) do
     "SELECT event_id, kind, payload FROM inbox_events WHERE user_id = ? AND event_id > ? LIMIT ?"
     |> run!([user_id, since, limit])
     |> Enum.map(&to_event/1)
+  end
+
+  # Q9.
+  defp list_call_signals(user_id, nil, limit) do
+    "SELECT event_id, payload FROM call_signals WHERE user_id = ? LIMIT ?"
+    |> run!([user_id, limit])
+    |> Enum.map(&to_call_signal/1)
+  end
+
+  defp list_call_signals(user_id, since, limit) do
+    "SELECT event_id, payload FROM call_signals WHERE user_id = ? AND event_id > ? LIMIT ?"
+    |> run!([user_id, since, limit])
+    |> Enum.map(&to_call_signal/1)
+  end
+
+  defp to_call_signal(row),
+    do: %{event_id: row["event_id"], kind: "call_signal", data: Jason.decode!(row["payload"])}
+
+  @call_ring_ttl 60
+
+  # Q10: one unlogged batch for the two rows (a signal is at most ~33 KiB of base64, so large
+  # ones go one row at a time like inbox events). A ring row lives 60 s, others the 120-s default.
+  @impl true
+  def append_call_signal(user_ids, %{event_id: event_id, kind: "call_signal", data: data}) do
+    payload = Jason.encode!(data)
+
+    {statement, extra} =
+      if data["ring"] == true,
+        do:
+          {"INSERT INTO call_signals (user_id, event_id, payload) VALUES (?, ?, ?) USING TTL ?",
+           [@call_ring_ttl]},
+        else: {"INSERT INTO call_signals (user_id, event_id, payload) VALUES (?, ?, ?)", []}
+
+    rows = for u <- user_ids, do: [u, event_id, payload] ++ extra
+
+    if byte_size(payload) * length(user_ids) <= @max_batch_bytes,
+      do: run_batch!(statement, rows),
+      else: for(r <- rows, do: run!(statement, r))
+
+    :ok
   end
 
   ## v1.12 deletes (§15.8)
@@ -456,7 +507,8 @@ defmodule RisiMe.Messaging.Store.Cassandra do
 
   @doc "Test helper: empties the message tables of the configured keyspace."
   def truncate! do
-    for table <- ~w(inbox_events sent_dedupe message_index group_receipts message_refs) do
+    for table <-
+          ~w(inbox_events sent_dedupe message_index group_receipts message_refs call_signals) do
       {:ok, _} = Xandra.Cluster.execute(@cluster, "TRUNCATE #{table}", [], timeout: 60_000)
     end
 

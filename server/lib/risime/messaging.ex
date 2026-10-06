@@ -180,6 +180,11 @@ defmodule RisiMe.Messaging do
     end
   end
 
+  @doc false
+  # v1.13 §16.3: the `call:signal` ciphertext follows the msg:send rules (24 KiB decoded, no AAD).
+  def validate_ciphertext(ct) when is_binary(ct), do: validate_body(%{ciphertext: ct})
+  def validate_ciphertext(_ct), do: {:error, :bad_request}
+
   defp aad?(bin) do
     case RisiMe.MLS.Wire.private_message(bin) do
       {:ok, %{authenticated_data: aad}} -> aad != ""
@@ -674,15 +679,18 @@ defmodule RisiMe.Messaging do
 
   @doc """
   Events after `since` (nil = from the start), oldest first, at most `limit` (default and
-  maximum #{@max_page}). Returns `{:ok, events, has_more}`.
+  maximum #{@max_page}). Returns `{:ok, events, has_more}`. `include_calls?` (a `calls` socket,
+  v1.13 §16.3) merges in the user's `call_signal` events.
   """
-  @spec fetch_events(String.t(), term, term) :: {:ok, [map], boolean} | {:error, :bad_request}
-  def fetch_events(user_id, since, limit \\ nil) do
+  @spec fetch_events(String.t(), term, term, boolean) ::
+          {:ok, [map], boolean} | {:error, :bad_request}
+  def fetch_events(user_id, since, limit \\ nil, include_calls? \\ false) do
     limit = if is_integer(limit) and limit > 0, do: min(limit, @max_page), else: @max_page
     since = if is_binary(since), do: String.downcase(since), else: since
 
     if since == nil or (is_binary(since) and timeuuid?(since)) do
-      events = store().list_events(user_id, since, limit + 1)
+      # v1.13 §16.3: a `calls` socket also reads the call-signal store, merged by event_id.
+      events = store().list_events(user_id, since, limit + 1, include_calls?)
       {:ok, Enum.take(events, limit), length(events) > limit}
     else
       {:error, :bad_request}
@@ -696,7 +704,8 @@ defmodule RisiMe.Messaging do
     if Keyword.get(opts, :push, true), do: RisiMe.Push.notify(user_id)
   end
 
-  defp broadcast(user_id, event),
+  @doc false
+  def broadcast(user_id, event),
     do: Phoenix.PubSub.broadcast(RisiMe.PubSub, topic(user_id), {:inbox_event, event})
 
   @doc """

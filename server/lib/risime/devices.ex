@@ -64,6 +64,12 @@ defmodule RisiMe.Devices do
 
         groups_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
 
+        calls_changed(
+          user_id,
+          device_id,
+          if(mls_key, do: "calls" in caps, else: calls?(existing))
+        )
+
         # v1.10 §13.2: a removal (here a changed key, or an eviction) resets first_seen_at.
         MLS.reset_first_seen(
           if(key_changed?, do: [{user_id, device_id}], else: []) ++
@@ -116,7 +122,8 @@ defmodule RisiMe.Devices do
 
   # v1.9 §12.1, v1.11 §14.1, v1.12 §15.1: `mls.capabilities`; only known ones are kept
   # (unknown ones are ignored).
-  @known_capabilities ~w(groups images deletes)
+  # v1.13 §16.1: `calls`.
+  @known_capabilities ~w(groups images deletes calls)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1),
@@ -134,6 +141,43 @@ defmodule RisiMe.Devices do
       RisiMe.PubSub,
       RisiMe.Messaging.topic(user_id),
       {:device_groups, device_id, groups?}
+    )
+  end
+
+  # v1.13 §16.1: live sockets of this device start or stop receiving `call_signal` events.
+  defp calls_changed(user_id, device_id, calls?) do
+    Phoenix.PubSub.broadcast(
+      RisiMe.PubSub,
+      RisiMe.Messaging.topic(user_id),
+      {:device_calls, device_id, calls?}
+    )
+  end
+
+  @doc "True if the device is a current MLS device with the `calls` capability (§16.1)."
+  def calls?(%Device{mls_signature_key: k, capabilities: caps}) when is_binary(k),
+    do: "calls" in (caps || [])
+
+  def calls?(_), do: false
+
+  @doc "v1.13 §16.1 (server S6): true if the user has a device with `calls` and a signature key."
+  def calls_device?(user_id) do
+    Repo.exists?(
+      from d in Device,
+        where:
+          d.user_id == ^user_id and not is_nil(d.mls_signature_key) and
+            "calls" in d.capabilities
+    )
+  end
+
+  @doc "v1.13 §16.8: `{device_id, push_token}` of the user's `calls` devices that have a token."
+  def calls_push_targets(user_id) do
+    Repo.all(
+      from d in Device,
+        where:
+          d.user_id == ^user_id and not is_nil(d.mls_signature_key) and
+            not is_nil(d.push_token) and
+            "calls" in d.capabilities,
+        select: {d.device_id, d.push_token}
     )
   end
 
@@ -345,7 +389,10 @@ defmodule RisiMe.Devices do
 
     MLS.reset_first_seen(for d <- rows, do: {d.user_id, d.device_id})
 
-    for d <- rows, do: caps_changed(d.user_id, d.device_id, false)
+    for d <- rows do
+      caps_changed(d.user_id, d.device_id, false)
+      calls_changed(d.user_id, d.device_id, false)
+    end
 
     for d <- rows, d.mls_signature_key do
       MLS.device_changed(d.user_id, d.device_id, :removed)

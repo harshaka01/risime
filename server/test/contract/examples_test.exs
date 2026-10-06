@@ -65,9 +65,9 @@ defmodule RisiMe.ContractExamplesTest do
                    msg_delete_reply_gone.json event_delete_group.json event_delete_dm.json
                    event_delete_dm_e2ee.json error_delete_too_old.json error_not_sender.json
                    chat_clear.json device_put_deletes.json mls_group_deletes_ready.json)
-  # v1.13 (1:1 voice calls, §16): parse-only placeholders added by root with the contract merge;
-  # the server role replaces them with real checks when it implements §16.
-  @pending_v1_13 ~w(call_offer_payload.json call_offer_payload_bad.json call_ringing_payload.json
+  # v1.13 (1:1 voice calls, §16): checked in the "v1.13" describe below. The call envelopes
+  # travel inside MLS (the server never sees them): they are checked against the §16.2 rules.
+  @checked_v1_13 ~w(call_offer_payload.json call_offer_payload_bad.json call_ringing_payload.json
                    call_answer_payload.json call_accepted_payload.json call_ice_payload.json
                    call_busy_payload.json call_cancel_payload.json call_end_payload.json
                    call_end_missed_payload.json call_signal_push.json call_signal_reply.json
@@ -108,13 +108,9 @@ defmodule RisiMe.ContractExamplesTest do
 
     covered =
       @checked ++
-        @checked_v1_9 ++ @checked_v1_10 ++ @checked_v1_11 ++ @checked_v1_12 ++ @pending_v1_13
+        @checked_v1_9 ++ @checked_v1_10 ++ @checked_v1_11 ++ @checked_v1_12 ++ @checked_v1_13
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
-  end
-
-  test "v1.13 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_13, do: assert(is_map(example(name)))
   end
 
   setup do
@@ -652,8 +648,14 @@ defmodule RisiMe.ContractExamplesTest do
       {200, view} = mls_req(:get, "/api/v1/mls/groups/#{conv}", a.token, nil, a_dev)
       ex = example("mls_group.json")
       # v1.11 adds images_ready / missing_images (absent = false; mls_group_images_ready.json),
-      # v1.12 deletes_ready / missing_deletes (mls_group_deletes_ready.json).
-      assert keys(Map.drop(view, ~w(images_ready missing_images deletes_ready missing_deletes))) ==
+      # v1.12 deletes_ready / missing_deletes (mls_group_deletes_ready.json), v1.13 calls_ready /
+      # missing_calls (DMs; mls_group_calls_ready.json).
+      assert keys(
+               Map.drop(
+                 view,
+                 ~w(images_ready missing_images deletes_ready missing_deletes calls_ready missing_calls)
+               )
+             ) ==
                keys(ex)
 
       assert_same_shape(hd(view["missing"]), hd(ex["missing"]))
@@ -1437,10 +1439,15 @@ defmodule RisiMe.ContractExamplesTest do
       conv = e2ee_group!(a, b)
       ex = example("mls_group_images_ready.json")
       {200, view} = v_api(:get, "/api/v1/mls/groups/#{conv}", a.token)
-      assert keys(Map.drop(view, ~w(deletes_ready missing_deletes))) == keys(ex)
+
+      assert keys(Map.drop(view, ~w(deletes_ready missing_deletes calls_ready missing_calls))) ==
+               keys(ex)
 
       assert_same_shape(
-        Map.drop(view, ~w(missing devices missing_images deletes_ready missing_deletes)),
+        Map.drop(
+          view,
+          ~w(missing devices missing_images deletes_ready missing_deletes calls_ready missing_calls)
+        ),
         Map.drop(ex, ~w(missing devices missing_images))
       )
 
@@ -1819,11 +1826,194 @@ defmodule RisiMe.ContractExamplesTest do
 
       ex = example("mls_group_deletes_ready.json")
       {200, view} = v_api(:get, "/api/v1/mls/groups/#{conv}", a.token)
-      assert keys(view) == keys(ex)
-      assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
+      assert keys(Map.drop(view, ~w(calls_ready missing_calls))) == keys(ex)
+
+      assert_same_shape(
+        Map.drop(view, ~w(missing devices calls_ready missing_calls)),
+        Map.drop(ex, ~w(missing devices))
+      )
+
       assert view["deletes_ready"] == false and view["images_ready"] == true
       assert view["missing_deletes"] == [%{"user_id" => b.user.id, "device_id" => b_dev}]
       assert_same_shape(hd(view["missing_deletes"]), hd(ex["missing_deletes"]))
+    end
+  end
+
+  describe "v1.13" do
+    setup :with_attestation_key
+
+    @call_types ~w(call_offer call_ringing call_answer call_accepted call_ice call_busy call_cancel
+                   call_end)
+    @end_reasons ~w(hangup cancelled timeout declined busy failed)
+
+    defp c_device(user, caps) do
+      dev = Ecto.UUID.generate()
+
+      {:ok, _} =
+        RisiMe.Devices.register(user.user.id, dev, %{
+          "platform" => "android",
+          "mls" => %{"signature_key" => b64(), "capabilities" => caps}
+        })
+
+      :ok = RisiMe.MLS.record_instance(user.user.id, dev, nil, "0.3.0")
+      dev
+    end
+
+    defp c_chan(user, dev) do
+      {:ok, sock} = connect(UserSocket, %{"token" => user.token, "device_id" => dev})
+      {:ok, _, chan} = subscribe_and_join(sock, InboxChannel, "inbox:" <> user.user.id, %{})
+      chan
+    end
+
+    defp c_push(chan, payload) do
+      ref = push(chan, "call:signal", payload)
+
+      receive do
+        %Phoenix.Socket.Reply{ref: ^ref, status: st, payload: p} -> {st, wire(p)}
+      after
+        2000 -> flunk("no reply to call:signal")
+      end
+    end
+
+    test "the call envelopes follow the §16.2 rules (they travel inside MLS)" do
+      for name <- @checked_v1_13,
+          String.ends_with?(name, "_payload.json") or name =~ "_payload_" do
+        ex = example(name)
+        assert ex["v"] == 1 and ex["type"] in @call_types, name
+        assert ex["call_id"] =~ @uuid, name
+        assert byte_size(Jason.encode!(ex)) <= 20_480, name
+      end
+
+      for name <- ~w(call_offer_payload.json call_offer_payload_bad.json) do
+        ex = example(name)
+        assert ex["media"] == "audio" and ex["restart"] == false and ex["sent_at"] =~ @ts
+        assert length(Regex.scan(~r/a=fingerprint:sha-256 /, ex["sdp"])) == 1
+        assert ex["sdp"] =~ "a=setup:actpass" and ex["sdp"] =~ "opus/48000/2"
+        refute ex["sdp"] =~ "a=crypto"
+      end
+
+      # The bad offer carries the audio-level header extension (must be dropped); the good one not.
+      refute example("call_offer_payload.json")["sdp"] =~ "ssrc-audio-level"
+      assert example("call_offer_payload_bad.json")["sdp"] =~ "ssrc-audio-level"
+
+      assert example("call_answer_payload.json")["sdp"] =~ "a=setup:active"
+      assert example("call_answer_payload.json")["to_device"] =~ @uuid
+      assert example("call_accepted_payload.json")["device_id"] =~ @uuid
+      assert example("call_cancel_payload.json")["reason"] == "glare"
+
+      ice = example("call_ice_payload.json")
+      assert length(ice["candidates"]) <= 20 and is_boolean(ice["done"])
+
+      for c <- ice["candidates"],
+          do:
+            assert(
+              String.starts_with?(c["candidate"], "candidate:") and
+                byte_size(c["candidate"]) <= 512
+            )
+
+      done = example("call_end_payload.json")
+      assert done["reason"] in @end_reasons and done["connected_at"] =~ @ts
+      assert is_integer(done["duration_s"])
+      missed = example("call_end_missed_payload.json")
+      assert missed["reason"] in @end_reasons
+      assert {missed["connected_at"], missed["duration_s"]} == {nil, nil}
+    end
+
+    test "call_signal_push.json, call_signal_reply.json, call_signal_event.json, error_calls_not_ready.json",
+         %{a: a, b: b} do
+      caps = ~w(groups images deletes calls)
+      a_dev = c_device(a, caps)
+      _b_dev = c_device(b, caps)
+      e2ee_group!(a, b)
+      chan = c_chan(a, a_dev)
+
+      ex = example("call_signal_push.json")
+      {:ok, reply} = c_push(chan, %{ex | "to" => b.user.id})
+      assert keys(reply) == keys(example("call_signal_reply.json"))
+      assert_same_shape(reply, example("call_signal_reply.json"))
+
+      # The sender copy on a's calls socket (b's sockets here have no device id, so no `calls`).
+      topic_a = "inbox:" <> a.user.id
+
+      assert_receive %Phoenix.Socket.Message{
+        topic: ^topic_a,
+        event: "event",
+        payload: %{kind: "call_signal"} = event
+      }
+
+      assert_same_shape(wire(event), example("call_signal_event.json"))
+      assert event.data["call_id"] == ex["call_id"] and event.data["ring"] == true
+
+      # A friend in an e2ee DM without any calls device: ring refused.
+      c = logged_in_user()
+      befriend!(a, c)
+      _ = c_device(c, ~w(groups images deletes))
+      e2ee_group!(a, c)
+
+      assert {:error, err} =
+               c_push(chan, %{ex | "to" => c.user.id, "client_msg_id" => Uniq.UUID.uuid4()})
+
+      assert err == example("error_calls_not_ready.json")
+    end
+
+    test "device_put_calls.json, mls_group_calls_ready.json, push_call.json", %{a: a, b: b} do
+      a_dev = Ecto.UUID.generate()
+
+      {200, %{"attestation" => _}} =
+        RisiMe.GroupHelpers.api(
+          :put,
+          "/api/v1/me/devices/#{a_dev}",
+          a.token,
+          example("device_put_calls.json")
+        )
+
+      :ok = RisiMe.MLS.record_instance(a.user.id, a_dev, nil, "0.3.0")
+
+      assert %{capabilities: ["groups", "images", "deletes", "calls"]} =
+               Repo.get_by(RisiMe.Devices.Device, device_id: a_dev)
+
+      _ = c_device(b, ~w(groups images deletes calls))
+      tablet = c_device(b, ~w(groups images deletes))
+      RisiMe.GroupHelpers.clear_legacy!()
+      conv = e2ee_group!(a, b)
+
+      {200, view} = RisiMe.GroupHelpers.api(:get, "/api/v1/mls/groups/#{conv}", a.token)
+      ex = example("mls_group_calls_ready.json")
+      assert keys(view) == keys(ex)
+      assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
+      assert view["calls_ready"] == true
+      assert view["missing_calls"] == [%{"user_id" => b.user.id, "device_id" => tablet}]
+      assert_same_shape(hd(view["missing_calls"]), hd(ex["missing_calls"]))
+
+      assert RisiMe.Push.call_payload() == example("push_call.json")
+    end
+
+    test "calls_turn_reply.json and error_calls_unavailable.json", %{a: a} do
+      on_exit(fn -> Application.delete_env(:risime, :turn) end)
+      Application.put_env(:risime, :turn, [])
+
+      assert {503, example("error_calls_unavailable.json")} ==
+               RisiMe.GroupHelpers.api(:get, "/api/v1/calls/turn", a.token)
+
+      Application.put_env(:risime, :turn,
+        secret: String.duplicate("s", 48),
+        urls: [
+          "stun:risime.risicloud.ai:3478",
+          "turn:risime.risicloud.ai:3478?transport=udp",
+          "turn:risime.risicloud.ai:3478?transport=tcp"
+        ]
+      )
+
+      ex = example("calls_turn_reply.json")
+      {200, reply} = RisiMe.GroupHelpers.api(:get, "/api/v1/calls/turn", a.token)
+      assert_same_shape(reply, ex)
+      assert reply["ttl"] == ex["ttl"]
+      assert Enum.map(reply["ice_servers"], &keys/1) == Enum.map(ex["ice_servers"], &keys/1)
+
+      assert Enum.map(reply["ice_servers"], & &1["urls"]) ==
+               Enum.map(ex["ice_servers"], & &1["urls"])
+
+      assert hd(tl(reply["ice_servers"]))["username"] =~ ~r/^\d+:[0-9a-f]{16}$/
     end
   end
 

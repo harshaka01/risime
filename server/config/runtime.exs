@@ -117,6 +117,21 @@ if config_env() != :test do
     do: config(:risime, :blob_guard, media_max: String.to_integer(max))
 end
 
+# v1.13 §16.7 (decision 046): TURN REST credentials for coturn `use-auth-secret`. TURN_SECRET
+# (>= 32 bytes, the coturn static-auth-secret) and TURN_URLS (comma-separated) from .env /
+# pilot.env; without both, GET /calls/turn answers 503 calls_unavailable. Never logged.
+# Tests configure their own secret.
+if config_env() != :test do
+  config :risime, :turn,
+    secret: if(System.get_env("TURN_SECRET", "") != "", do: System.get_env("TURN_SECRET")),
+    urls:
+      (System.get_env("TURN_URLS") || "")
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == "")),
+    ttl: String.to_integer(System.get_env("TURN_TTL") || "18000")
+end
+
 # Invite link in v1.6 invites (decision 030).
 if link = System.get_env("INVITE_LINK"), do: config(:risime, :invite_link, link)
 

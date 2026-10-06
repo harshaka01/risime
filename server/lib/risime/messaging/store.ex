@@ -61,8 +61,24 @@ defmodule RisiMe.Messaging.Store do
   @doc "Appends the same event to several inboxes in one request (v1.10 §13.1 sender copies)."
   @callback append_event_to_all(user_ids :: [uuid], event) :: :ok
 
-  @doc "Events after `since` (exclusive, or from the start when nil), oldest first."
-  @callback list_events(user_id :: uuid, since :: uuid | nil, limit :: pos_integer) :: [event]
+  @doc """
+  Events after `since` (exclusive, or from the start when nil), oldest first. With
+  `include_calls?` (v1.13 §16.3, a `calls` socket) the user's `call_signal` rows are read with
+  the same bound and limit and merged in by `event_id` (TimeUUID order); at most `limit` events.
+  """
+  @callback list_events(
+              user_id :: uuid,
+              since :: uuid | nil,
+              limit :: pos_integer,
+              include_calls? :: boolean
+            ) :: [event]
+
+  @doc """
+  v1.13 §16.3: appends a `call_signal` event to the short-lived call-signal store of each user
+  (never `inbox_events`), with the same `event_id`. A ring (`data["ring"] == true`) lives 60 s,
+  any other signal 120 s.
+  """
+  @callback append_call_signal(user_ids :: [uuid], event) :: :ok
 
   @doc "Records a member's delivered and/or read time of a group message (v1.9 §12.7)."
   @callback put_group_receipt(

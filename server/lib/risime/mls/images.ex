@@ -30,12 +30,48 @@ defmodule RisiMe.MLS.Images do
     missing = missing(members, "images")
     missing_deletes = missing(members, "deletes")
 
-    Map.merge(view, %{
+    view
+    |> Map.merge(%{
       images_ready: e2ee and missing == [],
       missing_images: missing,
       deletes_ready: missing_deletes == [],
       missing_deletes: missing_deletes
     })
+    |> put_calls(conversation_id, members)
+  end
+
+  # v1.13 §16.1 (DMs only; groups get calls in v1.14): `calls_ready` when the DM is e2ee and each
+  # of the two users has at least one instance seen in the last 30 days that advertises `calls`
+  # (a device without it just doesn't ring); `missing_calls` lists the other instances.
+  defp put_calls(%{e2ee: e2ee} = view, "dm:" <> _, members) do
+    ready = ready_users(members, "calls")
+
+    Map.merge(view, %{
+      calls_ready: e2ee and members != [] and Enum.all?(members, &MapSet.member?(ready, &1)),
+      missing_calls: missing(members, "calls")
+    })
+  end
+
+  defp put_calls(view, _conv, _members), do: view
+
+  @doc """
+  The users among `user_ids` with at least one census instance seen in the last 30 days on a
+  registered MLS device that advertises `capability`.
+  """
+  def ready_users(user_ids, capability) do
+    since = DateTime.add(DateTime.utc_now(), -@census_days, :day)
+
+    Repo.all(
+      from i in "app_instances",
+        join: d in Device,
+        on: d.user_id == i.user_id and d.device_id == i.device_id,
+        where:
+          i.user_id in type(^user_ids, {:array, :binary_id}) and i.last_seen_at > ^since and
+            not is_nil(d.mls_signature_key) and ^capability in d.capabilities,
+        distinct: true,
+        select: d.user_id
+    )
+    |> MapSet.new()
   end
 
   defp member_ids("grp:" <> _ = conv), do: Groups.active_member_ids(conv)

@@ -41,9 +41,31 @@ defmodule RisiMe.Push.Dispatcher do
     :ok
   end
 
+  @doc """
+  v1.13 §16.8: sends the call wake-up to these push tokens now, in the push task supervisor
+  (never coalesced, never the 10-s rule, never the user-level inbox push).
+  """
+  def push_call([]), do: :ok
+
+  def push_call(tokens) do
+    case Push.sender() do
+      nil ->
+        :ok
+
+      sender ->
+        for token <- tokens do
+          Task.Supervisor.start_child(RisiMe.Push.TaskSupervisor, fn ->
+            deliver(sender, token, Push.call_payload())
+          end)
+        end
+
+        :ok
+    end
+  end
+
   # One attempt plus one retry on a retryable error; an unregistered token deletes the device.
-  defp deliver(sender, token, retries \\ 1) do
-    case sender.deliver(token, Push.payload()) do
+  defp deliver(sender, token, payload \\ Push.payload(), retries \\ 1) do
+    case sender.deliver(token, payload) do
       :ok ->
         :telemetry.execute([:risime, :push, :sent], %{count: 1}, %{result: :ok})
 
@@ -53,7 +75,7 @@ defmodule RisiMe.Push.Dispatcher do
 
       {:error, :retryable} when retries > 0 ->
         Process.sleep(Application.get_env(:risime, :push_retry_ms, 1_000))
-        deliver(sender, token, retries - 1)
+        deliver(sender, token, payload, retries - 1)
 
       {:error, reason} ->
         :telemetry.execute([:risime, :push, :sent], %{count: 1}, %{result: reason})

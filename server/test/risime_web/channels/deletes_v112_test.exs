@@ -56,7 +56,9 @@ defmodule RisiMeWeb.DeletesV112Test do
     @impl true
     defdelegate compare_and_set_status(id, e, n), to: Cassandra
     @impl true
-    defdelegate list_events(u, s, l), to: Cassandra
+    defdelegate list_events(u, s, l, c), to: Cassandra
+    @impl true
+    defdelegate append_call_signal(us, e), to: Cassandra
     @impl true
     defdelegate put_group_receipt(m, u, d, r), to: Cassandra
     @impl true

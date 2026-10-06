@@ -86,6 +86,7 @@ defmodule RisiMeWeb.Router do
     delete "/me/devices/:device_id", DeviceController, :delete
     delete "/me/devices/:device_id/push_token", DeviceController, :unregister_push
     get "/contacts", ContactsController, :index
+    get "/calls/turn", CallsController, :turn
   end
 
   # v1.11 §14.2: blob bytes are served to any `Accept` (no JSON content negotiation).

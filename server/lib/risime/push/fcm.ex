@@ -10,7 +10,8 @@ defmodule RisiMe.Push.FCM do
     this process and refreshed 5 min before it expires. A 401 from FCM drops the cache.
   * **Send:** `POST https://fcm.googleapis.com/v1/projects/{project_id}/messages:send` with
     `data` = `RisiMe.Push.payload/0`, `android.priority: high`, `collapse_key: inbox`,
-    `ttl: 3600s`. Nothing else.
+    `ttl: 3600s`; for the call wake-up (`RisiMe.Push.call_payload/0`, v1.13 §16.8)
+    `collapse_key: call`, `ttl: 45s`. Nothing else.
   * **Results:** 200 → `:ok`; `UNREGISTERED` / `INVALID_ARGUMENT` → `{:error, :unregistered}`
     (the dispatcher deletes the device); 5xx, 429 or 401 → `{:error, :retryable}` (the dispatcher
     retries once); anything else → `{:error, :failed}`.
@@ -40,14 +41,12 @@ defmodule RisiMe.Push.FCM do
 
   @doc false
   def message(push_token, payload) do
-    %{
-      message: %{
-        token: push_token,
-        data: payload,
-        android: %{priority: "high", collapse_key: "inbox", ttl: "3600s"}
-      }
-    }
+    %{message: %{token: push_token, data: payload, android: android(payload)}}
   end
+
+  # v1.13 §16.8: the call wake-up is high priority, lives 45 s and collapses on "call".
+  defp android(%{"type" => "call"}), do: %{priority: "high", collapse_key: "call", ttl: "45s"}
+  defp android(_inbox), do: %{priority: "high", collapse_key: "inbox", ttl: "3600s"}
 
   defp send_message(access, project, push_token, payload) do
     url = "https://fcm.googleapis.com/v1/projects/#{project}/messages:send"

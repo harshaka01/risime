@@ -19,8 +19,14 @@ defmodule RisiMeWeb.InboxChannel do
       # Subscribe before reading the backlog so nothing falls between the two.
       :ok = Messaging.subscribe(user_id)
       payload = if is_map(payload), do: payload, else: %{}
-      # v1.9 §12.1: only a groups-capable device gets `grp:` traffic.
-      socket = assign(socket, :groups, groups_device?(user_id, socket.assigns[:device_id]))
+      # v1.9 §12.1: only a groups-capable device gets `grp:` traffic; v1.13 §16.1: only a
+      # calls-capable one gets `call_signal` events.
+      device = device(user_id, socket.assigns[:device_id])
+
+      socket =
+        socket
+        |> assign(:groups, RisiMe.Devices.groups?(device))
+        |> assign(:calls, RisiMe.Devices.calls?(device))
 
       case page(socket, payload) do
         {:ok, reply} ->
@@ -78,6 +84,16 @@ defmodule RisiMeWeb.InboxChannel do
   # v1.12 §15.9: the reply only means "accepted".
   def handle_in("chat:clear", payload, socket) when is_map(payload) do
     case Messaging.Deletes.clear(socket.assigns.user_id, payload) do
+      {:ok, reply} -> {:reply, {:ok, reply}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
+
+  # v1.13 §16.3: ephemeral call signalling (MLS ciphertext; never a message).
+  def handle_in("call:signal", payload, socket) when is_map(payload) do
+    case RisiMe.Calls.signal(socket.assigns.user_id, payload,
+           device_id: socket.assigns[:device_id]
+         ) do
       {:ok, reply} -> {:reply, {:ok, reply}, socket}
       {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
     end
@@ -175,6 +191,13 @@ defmodule RisiMeWeb.InboxChannel do
     end
   end
 
+  # The device registered (or lost) the `calls` capability while connected (§16.1).
+  def handle_info({:device_calls, device_id, calls?}, socket) do
+    if device_id == socket.assigns[:device_id],
+      do: {:noreply, assign(socket, :calls, calls?)},
+      else: {:noreply, socket}
+  end
+
   def handle_info({:auth_expired}, socket) do
     push(socket, "auth:expired", %{})
     # Same sender as the push, so the client gets auth:expired before the socket closes.
@@ -236,7 +259,12 @@ defmodule RisiMeWeb.InboxChannel do
   # nothing while more remain is skipped, so the client's cursor always advances.
   defp filtered_page(socket, since, limit) do
     with {:ok, events, has_more} <-
-           Messaging.fetch_events(socket.assigns.user_id, since, limit) do
+           Messaging.fetch_events(
+             socket.assigns.user_id,
+             since,
+             limit,
+             socket.assigns[:calls] == true
+           ) do
       case Enum.filter(events, &visible?(socket, &1)) do
         [] when has_more -> filtered_page(socket, List.last(events).event_id, limit)
         kept -> {:ok, kept, has_more}
@@ -244,6 +272,8 @@ defmodule RisiMeWeb.InboxChannel do
     end
   end
 
+  # v1.13 §16.1: `call_signal` events only for a `calls` socket (DMs only, so no groups rule).
+  defp visible?(socket, %{kind: "call_signal"}), do: socket.assigns[:calls] == true
   defp visible?(%{assigns: %{groups: true}}, _event), do: true
 
   defp visible?(_socket, %{data: data}) when is_map(data) do
@@ -253,14 +283,10 @@ defmodule RisiMeWeb.InboxChannel do
 
   defp visible?(_socket, _), do: true
 
-  defp groups_device?(_user_id, nil), do: false
+  defp device(_user_id, nil), do: nil
 
-  defp groups_device?(user_id, device_id) do
-    case RisiMe.Repo.get_by(RisiMe.Devices.Device, user_id: user_id, device_id: device_id) do
-      nil -> false
-      d -> RisiMe.Devices.groups?(d)
-    end
-  end
+  defp device(user_id, device_id),
+    do: RisiMe.Repo.get_by(RisiMe.Devices.Device, user_id: user_id, device_id: device_id)
 
   # §12.4: a waiting op names the first authorised device whose inbox joins. Best effort.
   defp name_committer(user_id, device_id) do
