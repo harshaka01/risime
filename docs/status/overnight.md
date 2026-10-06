@@ -1,5 +1,13 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
+## P0 (open), 2026-10-06: data loss after updating to nightly.10
+- Both testers lost all chats after updating to nightly.10 and had to sign in again. The suspect is
+  the app's wipe on sign-in when the user looks different (AppContainer `wipeDb`); under
+  investigation.
+- **Releases are on hold** (nightly.11 and images) until a hotfix passes a new upgrade test (the
+  previous APK → the new APK, every message kept).
+- The same hotfix fixes the group picker checkboxes and chat scrolling.
+
 ## Where things stand (updated 2026-10-06, after the spark2 reboot)
 - **Reboot recovery verified.** spark2 rebooted and **everything came back by itself**:
   - Postgres and Cassandra healthy (Docker restart policy);
