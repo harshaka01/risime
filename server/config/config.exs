@@ -49,6 +49,9 @@ config :risime, :env, config_env()
 config :risime, :phone_verification, :off
 config :risime, :sms_mode, :log
 
+# Push (contract v1.5, decision 027): off unless FCM_ENABLED=true (runtime.exs).
+config :risime, :push_sender, nil
+
 # Background jobs (docs/decisions/004-oban-background-jobs.md). Cron times are UTC.
 config :risime, Oban,
   engine: Oban.Engines.Basic,

@@ -271,6 +271,8 @@ defmodule RisiMe.Messaging do
   defp publish(user_id, event) do
     :ok = store().append_event(user_id, event)
     Phoenix.PubSub.broadcast(RisiMe.PubSub, topic(user_id), {:inbox_event, event})
+    # Contract v1.5: a data-only wake-up if the user has no live inbox channel.
+    RisiMe.Push.notify(user_id)
   end
 
   @doc "Health of the message store (`GET /health`)."

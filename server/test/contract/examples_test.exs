@@ -22,10 +22,7 @@ defmodule RisiMe.ContractExamplesTest do
               phone_verify_request_reply.json phone_verify_confirm.json
               error_phone_unverified.json error_invalid_code_attempts.json
               error_already_verified.json error_sms_unavailable.json device_put.json
-              error_invalid_device.json)
-  # v1.5 (push): parse-only placeholders added by root with the contract merge; the server role
-  # replaces them with real checks when it implements §8.
-  @pending_v1_5 ~w(push_inbox.json)
+              error_invalid_device.json push_inbox.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -58,12 +55,7 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- (@checked ++ @pending_v1_5) == [],
-           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_5))}"
-  end
-
-  test "v1.5 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_5, do: assert(is_map(example(name)))
+    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
   end
 
   setup do
@@ -351,6 +343,15 @@ defmodule RisiMe.ContractExamplesTest do
 
     {422, body} = put.("not-a-uuid", example("device_put.json"))
     assert Jason.decode!(body) == example("error_invalid_device.json")
+  end
+
+  test "push_inbox.json is the only push payload, and FCM sends exactly it as data" do
+    assert RisiMe.Push.payload() == example("push_inbox.json")
+
+    assert RisiMe.Push.FCM.message("t", RisiMe.Push.payload())
+           |> wire()
+           |> get_in(["message", "data"]) ==
+             example("push_inbox.json")
   end
 
   defp atomize(map), do: Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)

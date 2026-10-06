@@ -13,6 +13,10 @@ defmodule RisiMe.Application do
     if Application.get_env(:risime, :log_format) == :json, do: RisiMe.JSONLogFormatter.install()
     Logger.info("RisiMe server #{version()} starting")
 
+    if Application.get_env(:risime, :push_sender) == RisiMe.Push.FCM and
+         not File.regular?(Application.get_env(:risime, :fcm_service_account_file) || ""),
+       do: Logger.error("FCM_ENABLED=true but FCM_SERVICE_ACCOUNT_FILE is missing or not a file")
+
     if Application.get_env(:risime, :env) == :prod and RisiMe.Auth.Config.dev_local_auth?(),
       do: Logger.warning("DEV_LOCAL_AUTH=true in prod: dev login and opaque tokens are enabled")
 
@@ -32,6 +36,9 @@ defmodule RisiMe.Application do
       RisiMe.Auth,
       RisiMe.Accounts.ResetListener,
       RisiMe.Accounts.SmsStatus,
+      {Task.Supervisor, name: RisiMe.Push.TaskSupervisor},
+      RisiMe.Push.FCM,
+      RisiMe.Push.Dispatcher,
       # Start a worker by calling: RisiMe.Worker.start_link(arg)
       # {RisiMe.Worker, arg},
       # Start to serve requests, typically the last entry
