@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["risime-mls"]
-# Planned: "risime-mls-ffi" (UniFFI cdylib for Android), see docs/decisions/012-e2ee-android-binding-plan.md
+members = ["risime-mls", "risime-mls-ffi"]
 
 [workspace.package]
 edition = "2024"

@@ -1,0 +1,26 @@
+[package]
+name = "risime-mls-ffi"
+version = "0.1.0"
+description = "UniFFI binding of risime-mls for Android (docs/decisions/012)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "uniffi_risime"
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+# Library-mode bindgen; its version always matches the runtime below.
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+# Only the host bindgen binary needs uniffi's CLI (clap, toml, ...); keep it out of the Android .so.
+cli = ["uniffi/cli"]
+
+[dependencies]
+risime-mls = { path = "../risime-mls" }
+thiserror = "2.0.21"
+uniffi = "=0.32.2"
