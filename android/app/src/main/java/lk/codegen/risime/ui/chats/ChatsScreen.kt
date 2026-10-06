@@ -195,6 +195,7 @@ fun ChatsScreen(
 fun dmPreview(last: lk.codegen.risime.data.db.LastMessage): String = when {
     last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_SYSTEM -> last.body
     last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_DELETED -> last.body // §15.6 tombstone text (forPreview)
+    last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_CALL -> lk.codegen.risime.push.bodyPreview(last.kind, last.body) // §16.6, no "You:"
     last.outgoing -> "You: " + lk.codegen.risime.push.bodyPreview(last.kind, last.body)
     else -> lk.codegen.risime.push.bodyPreview(last.kind, last.body)
 }

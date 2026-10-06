@@ -41,6 +41,7 @@ class FakeMessageDao : MessageDao {
 
     override suspend fun byClientMsgId(clientMsgId: String) = rows[clientMsgId]
     override suspend fun byMessageId(messageId: String) = rows.values.firstOrNull { it.messageId == messageId }
+    override suspend fun callLine(conversationId: String, callId: String) = rows.values.firstOrNull { it.conversationId == conversationId && it.callId == callId }
     /** v6: the media state of an image row (the Room query joins `media`). */
     var mediaState: (String) -> String? = { null }
 
@@ -172,6 +173,17 @@ class FakeRealtime : RealtimeClient {
         return reactionReplies(msg)
     }
 
+    val sentCallSignals = mutableListOf<lk.codegen.risime.net.CallSignalPush>()
+    var callSignalReply: (lk.codegen.risime.net.CallSignalPush) -> PushResult<lk.codegen.risime.net.CallSignalReply> = { m ->
+        PushResult.Ok(lk.codegen.risime.net.CallSignalReply("cs-${m.clientMsgId}", "2026-10-06T08:20:00.000Z"))
+    }
+
+    override suspend fun sendCallSignal(msg: lk.codegen.risime.net.CallSignalPush): PushResult<lk.codegen.risime.net.CallSignalReply> {
+        if (!connected) return PushResult.Unavailable
+        sentCallSignals += msg
+        return callSignalReply(msg)
+    }
+
     val sentEncrypted = mutableListOf<lk.codegen.risime.net.MsgSendE2ee>()
     var encryptedReplies: (lk.codegen.risime.net.MsgSendE2ee) -> PushResult<MsgSendReply> = { m ->
         PushResult.Ok(MsgSendReply("mid-${m.clientMsgId}", "dm:x", "2026-10-06T08:15:30.456Z"))
@@ -286,4 +298,11 @@ class FakeGroupOpDao : lk.codegen.risime.data.db.GroupOpDao {
     override suspend fun update(op: lk.codegen.risime.data.db.GroupOpEntity) { rows[op.id] = op }
     override fun observeQueued(conv: String) = kotlinx.coroutines.flow.flowOf(rows.values.filter { it.conversationId == conv && it.state == "queued" })
     override fun observe(id: Long) = kotlinx.coroutines.flow.flowOf(rows[id])
+}
+
+class FakeCallMarkDao : lk.codegen.risime.data.db.CallMarkDao {
+    val rows = java.util.concurrent.ConcurrentHashMap<String, lk.codegen.risime.data.db.CallMarkEntity>()
+    override suspend fun get(callId: String) = rows[callId]
+    override suspend fun put(m: lk.codegen.risime.data.db.CallMarkEntity) { rows[m.callId] = m }
+    override suspend fun prune(before: Long): Int { val old = rows.values.filter { it.at < before }; old.forEach { rows.remove(it.callId) }; return old.size }
 }

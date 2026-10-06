@@ -50,7 +50,8 @@ fun planChatNotifications(
 ): List<ChatNotification> {
     val names = contacts.filter { it.userId != null }.associate { it.userId!!.lowercase() to it.displayName }
     return unreadIncoming
-        .filter { !it.outgoing && it.status != "READ" }
+        // §16.6: a missed call has its own notification ("Missed call from <name>").
+        .filter { !it.outgoing && it.status != "READ" && it.kind != lk.codegen.risime.data.db.MessageEntity.KIND_CALL }
         .groupBy { it.conversationId }
         .filter { (conv, msgs) -> conv != suppressConversation && msgs.any { it.localTs > notifiedUpTo } }
         .mapNotNull { (conv, msgs) ->
@@ -84,6 +85,7 @@ fun planChatNotifications(
 
 /** §14.7 Receiving 9: an image reads "📷 Photo" or "📷 <caption>" (never the image itself). */
 fun bodyPreview(kind: String, body: String): String = when {
+    kind == lk.codegen.risime.data.db.MessageEntity.KIND_CALL -> "📞 $body" // §16.6 "📞 Missed voice call"
     kind != lk.codegen.risime.data.db.MessageEntity.KIND_IMAGE -> body
     body.isBlank() -> "📷 Photo"
     else -> "📷 $body"

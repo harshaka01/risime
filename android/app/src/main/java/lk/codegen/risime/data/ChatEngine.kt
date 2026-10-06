@@ -87,6 +87,8 @@ class ChatEngine(
     /** §15.7 the server-clock offset (from every join/sync reply). */
     private val serverClock: lk.codegen.risime.data.deletes.ServerClock? = null,
     private val log: (String) -> Unit = {},
+    /** §16 calls (null = an app without calls: `call_signal` events are skipped, `call_end` is stored invisibly). */
+    private val calls: lk.codegen.risime.calls.CallHooks? = null,
 ) : RealtimeListener {
     /** §15.4–§15.6 applied inside each event's transaction. */
     private val applier = deletes?.let { lk.codegen.risime.data.deletes.DeleteApplier(it, messages, images, clock, log) }
@@ -106,8 +108,17 @@ class ChatEngine(
     private val outboxLock = Mutex()
     private val ackLock = Mutex()
 
-    /** §15.7 (android R6): the serial encrypt-and-push lane (texts, reactions, images, deletes). */
-    private val lane = Mutex()
+    /**
+     * §15.7 (android R6) / §16.4 (crypto R2, android R8): one serial encrypt-and-push lane per
+     * conversation, shared by texts, reactions, images, deletes and `call:signal`: generation n is
+     * pushed before n+1 is encrypted. A push that fails gives up the lane and is re-encrypted on retry.
+     */
+    private val lanes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+
+    private fun lane(conversationId: String): Mutex = lanes.getOrPut(conversationId.lowercase()) { Mutex() }
+
+    /** §16: call results of the current event, handed to [calls] after its transaction commits (never inside). */
+    private val callQueue = java.util.concurrent.ConcurrentLinkedQueue<suspend (lk.codegen.risime.calls.CallHooks) -> Unit>()
     private val deleteLock = Mutex()
 
     // ---- RealtimeListener ----
@@ -175,6 +186,11 @@ class ChatEngine(
                         runCatching { e.groupOp() }.getOrNull()?.let { groups?.applyOp(it, me) }
                         false
                     }
+                    // §16.3: ordered with the DM's other events, through the MLS pipeline; never a message.
+                    Event.KIND_CALL_SIGNAL -> {
+                        if (calls != null) runCatching { applyMls(me, e) }.onFailure { log("call_signal: ${it.message}") }
+                        false
+                    }
                     Event.KIND_GROUP_RECEIPT -> {
                         runCatching { e.groupReceipt() }.getOrNull()?.let { groups?.applyReceipt(it) }
                         false
@@ -186,13 +202,24 @@ class ChatEngine(
                 incoming
             }
             newIncoming = newIncoming || applied
+            dispatchCalls()
         }
+        calls?.let { runCatching { it.onPageEnd() }.onFailure { e -> log("calls page end: ${e.message}") } }
         if (newIncoming) flushAcks()
         if (imagesStored) {
             imagesStored = false
             images?.received()
         }
         afterDeletes()
+    }
+
+    /** §16: after the event's transaction committed, in event order. */
+    private suspend fun dispatchCalls() {
+        val hooks = calls ?: return
+        while (true) {
+            val f = callQueue.poll() ?: break
+            runCatching { f(hooks) }.onFailure { log("calls: ${it.message}") }
+        }
     }
 
     /** After the commit (android R10): unlink purged files, cancel their transfers; then refresh notifications and checkpoint. */
@@ -239,7 +266,9 @@ class ChatEngine(
         for (e0 in events) {
             val e = resolveBlobRefs(e0, me) ?: return
             newIncoming = tx.run { runCatching { applyMls(me, e) }.getOrDefault(false) } || newIncoming
+            dispatchCalls()
         }
+        calls?.let { runCatching { it.onPageEnd() } }
         if (newIncoming) flushAcks()
         afterDeletes()
     }
@@ -290,6 +319,8 @@ class ChatEngine(
             if (r is MlsResult.OwnDelete) completeOwnDelete(me, r.event)
             if (r is MlsResult.DeleteUnverified) markUnverified(r.event)
             if (r is MlsResult.Unrecoverable) onUnrecoverable(r.conversationId)
+            if (r is MlsResult.CallSignal) queueCall(r)
+            if (r is MlsResult.CallEnd) incoming = applyCallEnd(me, r.message, r.env) || incoming
             (r as? MlsResult.GroupChanged)?.let { gc ->
                 val conv = gc.conversationId
                 results += gc.extra
@@ -301,6 +332,106 @@ class ChatEngine(
             }
         }
         return incoming
+    }
+
+    private fun queueCall(r: MlsResult.CallSignal) {
+        val ev = r.event
+        val ts = HistoryMarkers.epochMs(ev.serverTs) ?: return
+        val inbound = lk.codegen.risime.calls.InboundCall(ev.conversationId, ev.from, ev.fromDevice, ts, r.env, inPage = true)
+        callQueue.add { h -> h.onSignal(inbound) }
+    }
+
+    /**
+     * §16.6 a durable `call_end`: one line per call id (the first by event order wins), from this
+     * user's perspective; "Missed voice call" is unread and notifies (never on a replay).
+     * @return true if a new incoming row needs a delivered ack.
+     */
+    private suspend fun applyCallEnd(me: String, m: MessageData, env: lk.codegen.risime.calls.CallEnvelope.End): Boolean {
+        val hooks = calls
+        val conv = m.conversationId
+        if (hooks != null) callQueue.add { h -> h.onCallEnd(conv, m.from, m.fromDevice, env) }
+        if (hooks == null) return false // an app without calls stores nothing visible (§16.14)
+        val a = applier
+        if (a != null && a.cleared(conv, lk.codegen.risime.data.deletes.TimeUuid.ticks(m.messageId))) return false
+        if (messages.byMessageId(m.messageId) != null || messages.byClientMsgId(m.clientMsgId) != null) return false
+        if (messages.callLine(conv, env.callId) != null) return false
+        val outgoing = m.from.equals(me, true)
+        val line = lk.codegen.risime.calls.CallLines.line(env.reason, outgoing, env.durationS, !outgoing && hooks.rangUnanswered(env.callId))
+        val restored = historicalLocalTs(m.serverTs)
+        val preInstall = !outgoing && historyBefore?.let { hb -> HistoryMarkers.epochMs(m.serverTs)?.let { it < hb.toEpochMilli() } } == true
+        val unread = !outgoing && line.missed && !preInstall
+        val row = MessageEntity(
+            clientMsgId = m.clientMsgId, messageId = m.messageId, conversationId = conv, from = m.from,
+            to = m.to ?: conv, body = line.text, serverTs = m.serverTs, localTs = restored ?: clock(),
+            status = when {
+                outgoing -> MessageStatus.SENT
+                unread -> MessageStatus.DELIVERED
+                else -> MessageStatus.READ
+            }.name,
+            outgoing = outgoing,
+            ackedStatus = if (preInstall) MessageStatus.READ.name else null,
+            kind = MessageEntity.KIND_CALL,
+            systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), lk.codegen.risime.calls.CallEnvelope.toJson(env)),
+            callId = env.callId,
+        )
+        if (messages.insert(row) == -1L) return false
+        deletes?.unhide(conv)
+        if (outgoing || preInstall) return false
+        // A live missed call notifies (replays and restored history never do, §16.6).
+        if (unread && !replayingFresh && restored == null) callQueue.add { h -> h.onMissedCall(conv, m.from) }
+        return true
+    }
+
+    // ---- Calls: sending (§16.3, §16.4) ----
+
+    /**
+     * One ephemeral `call:signal` through the conversation's lane (encrypt and push together);
+     * stale_epoch → catch up and re-encrypt with the same client_msg_id.
+     */
+    suspend fun sendCallSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env): PushResult<lk.codegen.risime.net.CallSignalReply> {
+        val clientMsgId = newClientMsgId()
+        val plaintext = lk.codegen.risime.calls.CallEnvelope.encode(env)
+        var attempt = 0
+        while (true) {
+            val engine = mlsEngine() ?: return PushResult.Rejected(AuthErrors.NOT_E2EE)
+            val r = lane(conv).withLock {
+                val group = engine.group(conv) ?: return PushResult.Rejected(AuthErrors.NOT_E2EE)
+                val ct = tx.run { engine.encrypt(conv, plaintext) }
+                realtime().sendCallSignal(
+                    lk.codegen.risime.net.CallSignalPush(
+                        clientMsgId, peer, env.callId, lk.codegen.risime.calls.CallEnvelope.ringFor(env),
+                        java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(clock()),
+                    ),
+                )
+            }
+            val reason = (r as? PushResult.Rejected)?.reason
+            if (reason != AuthErrors.STALE_EPOCH) return r
+            if (attempt++ >= staleEpochRetries) return r
+            catchUp(conv)
+        }
+    }
+
+    /**
+     * §16.2 my durable `call_end`: an outgoing outbox row (kind call) that is also my history line.
+     * Nothing is queued when this call already has a line (the peer's `call_end` came first).
+     */
+    suspend fun queueCallEnd(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.End, rangUnanswered: Boolean = false): String? {
+        val me = meId() ?: return null
+        if (messages.callLine(conv, env.callId) != null) return null
+        val id = newClientMsgId()
+        val line = lk.codegen.risime.calls.CallLines.line(env.reason, true, env.durationS, rangUnanswered)
+        messages.insert(
+            MessageEntity(
+                clientMsgId = id, messageId = null, conversationId = conv, from = me, to = peer, body = line.text,
+                serverTs = null, localTs = clock(), status = MessageStatus.PENDING.name, outgoing = true,
+                kind = MessageEntity.KIND_CALL,
+                systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), lk.codegen.risime.calls.CallEnvelope.toJson(env)),
+                callId = env.callId,
+            ),
+        )
+        deletes?.unhide(conv)
+        scope.launch { flushOutbox() }
+        return id
     }
 
     private suspend fun upsertMarker(conversationId: String, action: String, serverTs: String?) {
@@ -505,6 +636,11 @@ class ChatEngine(
      * [staleEpochRetries] times, then back off; e2ee_required → catch up and encrypt (never FAILED).
      */
     private suspend fun send(m: MessageEntity): PushResult<lk.codegen.risime.net.MsgSendReply> {
+        if (m.call) {
+            // §16.2: the stored call_end envelope, encrypted at send time; e2ee only (never plaintext).
+            val json = m.systemJson ?: return PushResult.Rejected(AuthErrors.BAD_REQUEST)
+            return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { json.toByteArray(Charsets.UTF_8) }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
+        }
         if (m.image) {
             // §14.7 Sending 6: the stored envelope, encrypted at send time; never in plaintext.
             val env = images?.envelope(m.clientMsgId) ?: return PushResult.Rejected(IMAGE_UNAVAILABLE)
@@ -530,7 +666,7 @@ class ChatEngine(
             val group = engine?.group(conv)
             // §15.7 (android R6): one serial encrypt-and-push lane for every application message
             // (text, reaction, image, delete): generation n is pushed before n+1 is encrypted.
-            val r = lane.withLock { if (isGroupConversation(conv)) {
+            val r = lane(conv).withLock { if (isGroupConversation(conv)) {
                 // §12.9: groups are e2ee-only; without the local group (Welcome not here yet) the message waits.
                 if (engine == null || group == null) return PushResult.Rejected(WAITING_FOR_GROUP)
                 val ct = tx.run { engine.encrypt(conv, envelope()) }
@@ -805,7 +941,7 @@ class ChatEngine(
         while (true) {
             val engine = mlsEngine()
             val group = engine?.group(conv)
-            res = lane.withLock {
+            res = lane(conv).withLock {
                 if (isGroupConversation(conv) && (engine == null || group == null)) return true // waits for the group (Welcome)
                 val msg = if (engine != null && group != null) {
                     // §15.3: the envelope, with the targets bound into the PrivateMessage's authenticated_data.

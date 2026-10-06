@@ -26,6 +26,7 @@ import androidx.sqlite.execSQL
         DeletedIdEntity::class,
         DeleteOutboxEntity::class,
         ChatStateEntity::class,
+        CallMarkEntity::class,
     ],
     version = AppDatabase.VERSION,
     exportSchema = true,
@@ -42,16 +43,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun groupOps(): GroupOpDao
     abstract fun media(): MediaDao
     abstract fun deletes(): DeleteDao
+    abstract fun callMarks(): CallMarkDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 7
+        const val VERSION = 8
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
@@ -192,6 +194,23 @@ object Migration6To7 : Migration(6, 7) {
         "CREATE INDEX IF NOT EXISTS `index_delete_outbox_state_next_at` ON `delete_outbox` (`state`, `next_at`)",
         "CREATE INDEX IF NOT EXISTS `index_delete_outbox_conversation_id` ON `delete_outbox` (`conversation_id`)",
         "CREATE TABLE IF NOT EXISTS `chat_state` (`conversation_id` TEXT NOT NULL, `cleared_upto` INTEGER, `hidden` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`conversation_id`))",
+    )
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/**
+ * v7 → v8 (contract v1.13 calls): call-history lines keep their call id in their own column (one
+ * line per call id, android S-h), and the per-device call marks (24-h dedupe). Additive only.
+ */
+object Migration7To8 : Migration(7, 8) {
+    val SQL = listOf(
+        "ALTER TABLE `messages` ADD COLUMN `call_id` TEXT",
+        "CREATE INDEX IF NOT EXISTS `index_messages_conversation_id_call_id` ON `messages` (`conversation_id`, `call_id`)",
+        "CREATE TABLE IF NOT EXISTS `call_marks` (`call_id` TEXT NOT NULL, `rang` INTEGER NOT NULL, `answered` INTEGER NOT NULL, `ended` INTEGER NOT NULL, `at` INTEGER NOT NULL, PRIMARY KEY(`call_id`))",
+        "CREATE INDEX IF NOT EXISTS `index_call_marks_at` ON `call_marks` (`at`)",
     )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
