@@ -200,28 +200,32 @@ class ContractExamplesTest {
         "mls_group_deletes_ready.json" to { s ->
             ProtocolJson.decodeFromString<MlsGroup>(s).also { require(!it.deletesReady && it.missingDeletes.single().deviceId != null && it.imagesReady) }
         },
-        // v1.13 (1:1 voice calls, §16): parse-only placeholders added by root with the contract
-        // merge; the android role replaces them with typed decoders when it implements §16.
-        "call_offer_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_offer_payload_bad.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_ringing_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_answer_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_accepted_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_ice_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_busy_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_cancel_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_end_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_end_missed_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_signal_push.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_signal_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_signal_event.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "calls_turn_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "push_call.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "device_put_calls.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_group_calls_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_calls_unavailable.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_calls_not_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.13 (1:1 voice calls, §16): the MLS envelopes through the strict decoder, the rest typed.
+        "call_offer_payload.json" to { s -> callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Offer },
+        "call_offer_payload_bad.json" to { s -> require(lk.codegen.risime.calls.CallEnvelope.decode(s.toByteArray()) == null) { "the bad offer must be dropped" }; s },
+        "call_ringing_payload.json" to { s -> callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Ringing },
+        "call_answer_payload.json" to { s -> callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Answer },
+        "call_accepted_payload.json" to { s -> callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Accepted },
+        "call_ice_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Ice).also { require(it.candidates.size == 2 && it.toDevice == null) } },
+        "call_busy_payload.json" to { s -> callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Busy },
+        "call_cancel_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Cancel).also { require(it.reason == "glare") } },
+        "call_end_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.End).also { require(it.durationS == 192L && it.connectedAt != null) } },
+        "call_end_missed_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.End).also { require(it.reason == "timeout" && it.durationS == null) } },
+        "call_signal_push.json" to { s -> ProtocolJson.decodeFromString<CallSignalPush>(s).also { require(it.ring) } },
+        "call_signal_reply.json" to { s -> ProtocolJson.decodeFromString<CallSignalReply>(s) },
+        "call_signal_event.json" to { s -> ProtocolJson.decodeFromString<Event>(s).callSignal()!!.also { require(it.ring && it.fromDevice.isNotEmpty()) } },
+        "calls_turn_reply.json" to { s -> ProtocolJson.decodeFromString<CallsTurnReply>(s).also { require(it.ttl == 18_000L && it.iceServers.size == 2 && it.iceServers[1].credential != null) } },
+        "push_call.json" to { s -> ProtocolJson.decodeFromString<PushPayload>(s).also { require(it.isCall && !it.isInbox) } },
+        "device_put_calls.json" to { s ->
+            ProtocolJson.decodeFromString<DevicePut>(s).also { require(it.mls?.capabilities == listOf(DeviceMls.CAP_GROUPS, DeviceMls.CAP_IMAGES, DeviceMls.CAP_DELETES, DeviceMls.CAP_CALLS)) }
+        },
+        "mls_group_calls_ready.json" to { s -> ProtocolJson.decodeFromString<MlsGroup>(s).also { require(it.callsReady && it.missingCalls.single().deviceId != null) } },
+        "error_calls_unavailable.json" to { s -> apiError(s, CallErrors.CALLS_UNAVAILABLE) },
+        "error_calls_not_ready.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s).also { require(it.reason == CallErrors.CALLS_NOT_READY) } },
     )
+
+    private fun callEnv(s: String): lk.codegen.risime.calls.CallEnvelope.Env =
+        requireNotNull(lk.codegen.risime.calls.CallEnvelope.decode(s.toByteArray())) { "call envelope dropped" }
 
     private fun groupEvent(s: String, action: String): GroupEvent =
         ProtocolJson.decodeFromString<Event>(s).groupEvent()!!.also { require(it.action == action) { "action ${it.action} != $action" } }
@@ -254,6 +258,9 @@ class ContractExamplesTest {
         check("msg_delete_me.json", MsgDelete.serializer())
         check("chat_clear.json", ChatClear.serializer())
         check("device_put_deletes.json", DevicePut.serializer())
+        // v1.13 client-sent payloads (§16.1, §16.3).
+        check("device_put_calls.json", DevicePut.serializer())
+        check("call_signal_push.json", CallSignalPush.serializer())
         check("key_packages_upload_replace.json", KeyPackagesUpload.serializer())
         check("key_packages_claim_group.json", KeyPackagesClaim.serializer())
         check("group_meta.json", GroupMeta.serializer())

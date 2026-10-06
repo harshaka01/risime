@@ -108,6 +108,9 @@ interface RealtimeClient {
     /** §15.2 `msg:delete`; a refusal carries the reply body (`failures`) in [PushResult.Rejected.body]. */
     suspend fun deleteMessages(msg: lk.codegen.risime.net.MsgDelete): PushResult<lk.codegen.risime.net.MsgDeleteReply> = PushResult.Unavailable
 
+    /** §16.3 `call:signal` (an ephemeral call envelope; never a message). */
+    suspend fun sendCallSignal(msg: lk.codegen.risime.net.CallSignalPush): PushResult<lk.codegen.risime.net.CallSignalReply> = PushResult.Unavailable
+
     /** §15.9 `chat:clear` (reply ok `{}`). */
     suspend fun clearChat(msg: lk.codegen.risime.net.ChatClear): PushResult<Unit> = PushResult.Unavailable
 

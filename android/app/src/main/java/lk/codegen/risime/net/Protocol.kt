@@ -162,6 +162,9 @@ data class Event(
     /** §15.5 (v1.12) a `delete` event. */
     fun deleteData(): DeleteEvent? = if (kind == KIND_DELETE) ProtocolJson.decodeFromJsonElement<DeleteEvent>(data) else null
 
+    /** §16.3 (v1.13) a `call_signal` event (ephemeral, its own store). */
+    fun callSignal(): CallSignalEvent? = if (kind == KIND_CALL_SIGNAL) ProtocolJson.decodeFromJsonElement<CallSignalEvent>(data) else null
+
     companion object {
         const val KIND_MESSAGE = "message"
         const val KIND_STATUS = "status"
@@ -173,6 +176,7 @@ data class Event(
         const val KIND_GROUP_OP = "group_op"
         const val KIND_GROUP_RECEIPT = "group_receipt"
         const val KIND_DELETE = "delete"
+        const val KIND_CALL_SIGNAL = "call_signal"
     }
 }
 
@@ -397,9 +401,13 @@ data class DevicePut(
 @Serializable
 data class PushPayload(val type: String, val v: String? = null) {
     val isInbox: Boolean get() = type == TYPE_INBOX
+    val isCall: Boolean get() = type == TYPE_CALL
 
     companion object {
         const val TYPE_INBOX = "inbox"
+
+        /** §16.8 (v1.13): a call wake-up (high priority, no caller, no call id). */
+        const val TYPE_CALL = "call"
 
         /** From FCM's `RemoteMessage.data` map. */
         fun fromData(data: Map<String, String>): PushPayload? = data["type"]?.let { PushPayload(it, data["v"]) }
@@ -522,6 +530,9 @@ data class DeviceMls(
 
         /** §15.1: advertised once the app can receive and apply `delete` events (whether or not its send UI is on). */
         const val CAP_DELETES = "deletes"
+
+        /** §16.1: advertised only once the app can ring, answer and play a call (WebRTC loaded, Telecom registered, notifications allowed). */
+        const val CAP_CALLS = "calls"
     }
 }
 
@@ -594,6 +605,9 @@ data class MlsGroup(
     /** §15.1: every app instance of every member advertises `deletes` (absent = false). A hint only. */
     @SerialName("deletes_ready") val deletesReady: Boolean = false,
     @SerialName("missing_deletes") val missingDeletes: List<MissingImages> = emptyList(),
+    /** §16.1 (DMs): each of the two users has at least one recent instance that advertises `calls` (absent = false). */
+    @SerialName("calls_ready") val callsReady: Boolean = false,
+    @SerialName("missing_calls") val missingCalls: List<MissingImages> = emptyList(),
 )
 
 /** §14.1 an app instance that doesn't advertise `images` (`device_id` null: an old app without one). */
@@ -1003,3 +1017,63 @@ data class DeleteEvent(
 /** §15.9 the push `chat:clear`. */
 @Serializable
 data class ChatClear(@SerialName("conversation_id") val conversationId: String, val upto: String)
+
+// ---- Voice calls, 1:1 (§16, v1.13) ----
+
+/** §16.3 the push `call:signal` (an ephemeral MLS call envelope; never stored as a message). */
+@Serializable
+data class CallSignalPush(
+    @SerialName("client_msg_id") val clientMsgId: String,
+    val to: String,
+    @SerialName("call_id") val callId: String,
+    val ring: Boolean,
+    val ciphertext: String,
+    val generation: Long,
+    val epoch: Long,
+    @SerialName("client_ts") val clientTs: String,
+)
+
+/** §16.3 reply ok. */
+@Serializable
+data class CallSignalReply(
+    @SerialName("message_id") val messageId: String,
+    @SerialName("server_ts") val serverTs: String,
+)
+
+/** §16.3 the event kind `call_signal` (cleartext `call_id`/`ring` are checked against the envelope). */
+@Serializable
+data class CallSignalEvent(
+    @SerialName("message_id") val messageId: String,
+    @SerialName("conversation_id") val conversationId: String,
+    val from: String,
+    val to: String,
+    @SerialName("from_device") val fromDevice: String,
+    @SerialName("call_id") val callId: String,
+    val ring: Boolean,
+    val ciphertext: String,
+    val generation: Long,
+    val epoch: Long,
+    @SerialName("server_ts") val serverTs: String,
+)
+
+/** §16.7 one ICE server of `GET /calls/turn`. */
+@Serializable
+data class IceServerDto(
+    val urls: List<String>,
+    val username: String? = null,
+    val credential: String? = null,
+)
+
+/** §16.7 `GET /api/v1/calls/turn` (never persisted). */
+@Serializable
+data class CallsTurnReply(
+    @SerialName("ice_servers") val iceServers: List<IceServerDto>,
+    val ttl: Long,
+    @SerialName("expires_at") val expiresAt: String,
+)
+
+/** §16 error codes. */
+object CallErrors {
+    const val CALLS_NOT_READY = "calls_not_ready"
+    const val CALLS_UNAVAILABLE = "calls_unavailable"
+}

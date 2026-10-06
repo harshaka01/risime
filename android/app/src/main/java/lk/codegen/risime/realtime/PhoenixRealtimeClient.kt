@@ -122,6 +122,11 @@ class PhoenixRealtimeClient(
             ?.map { ProtocolJson.decodeFromJsonElement<lk.codegen.risime.net.MsgDeleteReply>(it) }
             ?: PushResult.Unavailable
 
+    override suspend fun sendCallSignal(msg: lk.codegen.risime.net.CallSignalPush): PushResult<lk.codegen.risime.net.CallSignalReply> =
+        liveConnection()?.push("call:signal", ProtocolJson.encodeToJsonElement(msg))
+            ?.map { ProtocolJson.decodeFromJsonElement<lk.codegen.risime.net.CallSignalReply>(it) }
+            ?: PushResult.Unavailable
+
     override suspend fun clearChat(msg: lk.codegen.risime.net.ChatClear): PushResult<Unit> =
         liveConnection()?.push("chat:clear", ProtocolJson.encodeToJsonElement(msg))?.map { } ?: PushResult.Unavailable
 

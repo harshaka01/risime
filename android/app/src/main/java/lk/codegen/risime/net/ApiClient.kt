@@ -88,6 +88,9 @@ class ApiClient(
         call<Unit, MlsCommitsReply>("GET", "mls/groups/$conversationId/commits?since_epoch=$sinceEpoch" + (limit?.let { "&limit=$it" } ?: ""), null)
 
     // ---- §12 groups (mutating calls carry X-Device-Id) ----
+    /** §16.7 TURN REST credentials (503 calls_unavailable while the server has none: STUN only). Never persisted. */
+    suspend fun callsTurn(): ApiResult<CallsTurnReply> = call<Unit, CallsTurnReply>("GET", "calls/turn", null)
+
     suspend fun groups(): ApiResult<GroupsReply> = call<Unit, GroupsReply>("GET", "groups", null)
 
     suspend fun group(id: String): ApiResult<GroupReply> = call<Unit, GroupReply>("GET", "groups/$id", null)
