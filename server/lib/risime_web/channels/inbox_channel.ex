@@ -9,7 +9,7 @@ defmodule RisiMeWeb.InboxChannel do
 
   require Logger
 
-  alias RisiMe.{Accounts, Messaging, Presence}
+  alias RisiMe.{Accounts, Messaging, Presence, SocketTracker}
 
   @max_watch 200
 
@@ -24,6 +24,10 @@ defmodule RisiMeWeb.InboxChannel do
         {:ok, reply} ->
           :telemetry.execute([:risime, :inbox, :join], %{count: 1}, %{result: :ok})
           :ok = Presence.track(user_id)
+
+          if socket_id = socket.assigns[:socket_id],
+            do: Phoenix.PubSub.subscribe(RisiMe.PubSub, SocketTracker.control_topic(socket_id))
+
           touch_last_seen(user_id)
           {:ok, reply, assign(socket, :watching, MapSet.new())}
 
@@ -83,6 +87,34 @@ defmodule RisiMeWeb.InboxChannel do
     end
   end
 
+  # Contract v1.3 §6.2: a fresh access token for the same user moves the expiry deadline.
+  def handle_in("auth:refresh", %{"token" => token}, socket) when is_binary(token) do
+    user_id = socket.assigns.user_id
+
+    case RisiMe.Auth.authenticate(token) do
+      {:ok, %{kind: :jwt, user: %{id: ^user_id}, exp: exp}} ->
+        :ok = SocketTracker.refresh(socket.transport_pid, exp)
+        expires_at = exp |> DateTime.from_unix!() |> Messaging.iso()
+        {:reply, {:ok, %{expires_at: expires_at}}, assign(socket, :auth_kind, :jwt)}
+
+      {:ok, %{kind: :jwt}} ->
+        {:reply, {:error, %{reason: "identity_mismatch"}}, socket}
+
+      {:error, :identity_conflict} ->
+        {:reply, {:error, %{reason: "identity_mismatch"}}, socket}
+
+      {:error, :not_allowlisted} ->
+        {:reply, {:error, %{reason: "not_allowlisted"}}, socket}
+
+      _ ->
+        {:reply, {:error, %{reason: "invalid_token"}}, socket}
+    end
+  end
+
+  def handle_in("auth:refresh", _payload, socket) do
+    {:reply, {:error, %{reason: "bad_request"}}, socket}
+  end
+
   def handle_in(_event, _payload, socket) do
     {:reply, {:error, %{reason: "bad_request"}}, socket}
   end
@@ -90,6 +122,13 @@ defmodule RisiMeWeb.InboxChannel do
   @impl true
   def handle_info({:inbox_event, event}, socket) do
     push(socket, "event", event)
+    {:noreply, socket}
+  end
+
+  def handle_info({:auth_expired}, socket) do
+    push(socket, "auth:expired", %{})
+    # Same sender as the push, so the client gets auth:expired before the socket closes.
+    RisiMeWeb.Endpoint.broadcast(socket.id, "disconnect", %{})
     {:noreply, socket}
   end
 

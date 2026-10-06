@@ -13,7 +13,26 @@ defmodule RisiMeWeb.Endpoint do
 
   socket "/socket", RisiMeWeb.UserSocket,
     websocket: true,
-    longpoll: false
+    longpoll: false,
+    auth_token: true
+
+  # Contract v1.3 §6.2: the socket upgrade takes `Authorization: Bearer <token>`. Phoenix only
+  # exposes the channels client's subprotocol token as `connect_info[:auth_token]`, so the
+  # header is copied there before socket dispatch (a subprotocol token, if sent, wins).
+  def call(%Plug.Conn{path_info: ["socket", "websocket"]} = conn, opts) do
+    conn =
+      case Plug.Conn.get_req_header(conn, "authorization") do
+        ["Bearer " <> token] ->
+          Plug.Conn.put_private(conn, :phoenix_transport_auth_token, String.trim(token))
+
+        _ ->
+          conn
+      end
+
+    super(conn, opts)
+  end
+
+  def call(conn, opts), do: super(conn, opts)
 
   # Serve at "/" the static files from "priv/static" directory.
   #
