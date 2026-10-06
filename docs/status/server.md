@@ -131,7 +131,7 @@ cd server
 ~/.local/bin/mise exec -- mix risime.cql.migrate --keyspace risime_test  # the test alias also runs this
 ```
 **The test server** (tmux `risime-server`, 127.0.0.1:4000) runs from a release-tag worktree
-`~/risime-run/<tag>` (decision 006). Start or switch it only with `scripts/run-dev-server [<tag>]`;
+`~/risime-run/<tag>` (decision 006). Start or switch it only with `scripts/run-server [<tag>]`;
 `scripts/nightly-release` does this after the gates pass. Never start a server from the shared
 checkout on :4000.
 

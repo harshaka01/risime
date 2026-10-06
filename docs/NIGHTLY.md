@@ -58,7 +58,7 @@ Needs Harsha, so never picked automatically:
    - Fix integration breakage as root, and say so in the commit message.
 5. **Release:** write `docs/releases/v<next>.md`, then run `scripts/nightly-release`. It bumps
    the version, runs the gates, signs and publishes. Only then does it switch the test server to
-   the new tag via `scripts/run-dev-server v<next>`.
+   the new tag via `scripts/run-server v<next>`.
    - **Test server rule** (decision 006): the server Harsha tests against (`risime-server`,
      :4000) runs from `~/risime-run/<tag>`, never from the shared checkout.
    - Sessions never restart it. For live testing of unreleased code, they start a temporary

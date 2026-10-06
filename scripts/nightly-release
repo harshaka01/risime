@@ -5,6 +5,7 @@
 #   scripts/nightly-release            # next nightly (X.Y+1.0-nightly.1 after a release, else nightly.N+1)
 #   scripts/nightly-release 0.2.0      # an explicit version (e.g. a final release)
 #   scripts/nightly-release --required # mark this release as a required update (version.json)
+#   scripts/nightly-release --no-publish   # tag + build + switch the pilot, publish later
 #   scripts/nightly-release --publish-only v0.2.0-nightly.3   # re-run only the spark publish step
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -17,9 +18,10 @@ REL="$HOME/risime-releases"
 git diff --quiet && git diff --cached --quiet || { echo "working tree not clean"; exit 1; }
 git pull -q --rebase origin main
 
-REQ=(); EXPLICIT=""
+REQ=(); EXPLICIT=""; PUBLISH=1
 while [ $# -gt 0 ]; do case "$1" in
   --required) REQ=(--required); shift;;
+  --no-publish) PUBLISH=0; shift;;
   --publish-only) exec scripts/publish-release "${2:?--publish-only needs v<version>}" "${REQ[@]}";;
   *) EXPLICIT="$1"; shift;; esac; done
 
@@ -71,9 +73,13 @@ echo "==> published $out"
 
 echo "==> publish to risicloud.ai/app/risime/ (docs/decisions/016)"
 published=1
-scripts/publish-release "v$next" "${REQ[@]}" || { published=0; echo "WARN: publish failed; tag and local release are intact. Retry: scripts/nightly-release --publish-only v$next"; }
+if [ "$PUBLISH" = 1 ]; then
+  scripts/publish-release "v$next" "${REQ[@]}" || { published=0; echo "WARN: publish failed; tag and local release are intact. Retry: scripts/nightly-release --publish-only v$next"; }
+else
+  echo "==> --no-publish: run scripts/nightly-release --publish-only v$next when ready"
+fi
 
-echo "==> switch the test server to v$next (docs/decisions/006)"
-scripts/run-dev-server "v$next"
+echo "==> switch the pilot server to v$next (prod release; docs/decisions/006, 023)"
+scripts/run-server "v$next"
 [ "$published" = 1 ] || { echo "DONE v$next (NOT published)"; exit 1; }
 echo "DONE v$next"

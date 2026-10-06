@@ -16,7 +16,7 @@ first-time verify was added anyway.
 - The server Harsha tests against (tmux `risime-server`, 127.0.0.1:4000) runs from a **separate
   git worktree of the latest release tag**: `~/risime-run/<tag>`, detached at the tag, with
   `.env` symlinked from the repo. The tag in use is in `~/risime-run/CURRENT`.
-- `scripts/run-dev-server [<tag>]` creates the worktree if needed, runs `deps.get`, `compile`,
+- `scripts/run-server [<tag>]` creates the worktree if needed, runs `deps.get`, `compile`,
   `ecto.migrate` and the CQL migrate, restarts tmux `risime-server`, and waits for a 401 on
   `/api/v1/me`.
 - **It is switched only by `scripts/nightly-release`,** after both gates pass and the tag is

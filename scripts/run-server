@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# spark2: (re)start the public pilot server (docs/decisions/006, 023) as a PROD-MODE RELEASE built
+# from a release tag in its own worktree (~/risime-run/<tag>), never from the shared checkout.
+# Phoenix listens on 127.0.0.1:4000 only; Caddy fronts it at https://risime.risicloud.ai.
+# Secrets come from the repo .env, settings from infra/pilot/pilot.env (both sourced inside the
+# tmux shell, never echoed). Only scripts/nightly-release switches tags after the gates pass.
+#   scripts/run-server            # the latest release (~/risime-releases/LATEST, else newest v* tag)
+#   scripts/run-server v0.2.0-nightly.3
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"; PORT=4000
+
+git fetch -q origin --tags
+TAG="${1:-$(cat "$HOME/risime-releases/LATEST" 2>/dev/null || git tag -l 'v*' --sort=-creatordate | sed -n 1p)}"
+git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "no such tag: $TAG"; exit 1; }
+RUN="$HOME/risime-run/$TAG"
+mkdir -p "$HOME/risime-run" "$HOME/risime-logs"
+[ -e "$RUN/.git" ] || git worktree add -q --detach "$RUN" "$TAG"
+[ "$(git -C "$RUN" rev-parse HEAD)" = "$(git rev-parse "$TAG^{commit}")" ] || { echo "$RUN is not at $TAG"; exit 1; }
+[ -f "$RUN/server/rel/env.sh.eex" ] || { echo "$TAG predates the prod-mode release (decision 023/024)"; exit 1; }
+ln -sfn "$REPO/.env" "$RUN/.env"
+ENVLOAD="set -a; . '$REPO/.env'; . '$REPO/infra/pilot/pilot.env'; set +a"
+echo "==> building prod release in $RUN ($(git -C "$RUN" log -1 --format='%h %s'))"
+
+cd "$RUN/server"
+MIX_ENV=prod $M mix deps.get --only prod >/dev/null
+MIX_ENV=prod $M mix release --overwrite --quiet
+REL="$RUN/server/_build/prod/rel/risime"
+echo "==> migrate (Ecto + CQL)"
+bash -c "$ENVLOAD; exec '$REL/bin/risime' eval 'RisiMe.Release.migrate()'"
+
+echo "==> stop the current server (SIGTERM, graceful)"
+# Whatever BEAM serves :$PORT (the old dev phx.server or a previous release) gets SIGTERM; a release
+# without distribution can't be stopped with `bin/risime stop` (decision 024).
+for pid in $(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
+  kill -TERM "$pid"
+done
+for _ in $(seq 1 30); do ss -ltnH "sport = :$PORT" | grep -q . || break; sleep 1; done
+tmux kill-session -t risime-server 2>/dev/null || true
+ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT still busy"; exit 1; }
+
+echo "==> start $TAG"
+tmux new -d -s risime-server "$ENVLOAD; exec '$REL/bin/risime' start"
+for _ in $(seq 1 90); do
+  [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")" = 200 ] && break; sleep 1
+done
+health="$(curl -s "http://127.0.0.1:$PORT/health" || true)"
+listen="$(ss -ltnH "sport = :$PORT" | awk '{print $4}' | tr '\n' ' ')"
+epmd="$(ss -ltnH 'sport = :4369' | grep -c . || true)"
+echo "$TAG" > "$HOME/risime-run/CURRENT"
+echo "health: $health"; echo "listening: $listen| epmd sockets: $epmd"
+grep -q '"status":"ok"' <<<"$health" || { echo "server not healthy"; exit 1; }
+[ "$listen" = "127.0.0.1:$PORT " ] || { echo "UNEXPECTED BIND: $listen"; exit 1; }
+[ "$epmd" = 0 ] || { echo "epmd is listening (4369)"; exit 1; }
+echo "running $TAG (prod release) on 127.0.0.1:$PORT"
