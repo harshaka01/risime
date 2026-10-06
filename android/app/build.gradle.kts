@@ -1,3 +1,4 @@
+import java.io.ByteArrayOutputStream
 import java.util.Properties
 import javax.inject.Inject
 
@@ -183,6 +184,7 @@ dependencies {
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.sqlite.bundled.jvm) // JVM SQLite for the Room migration test
+    testImplementation(libs.jna) // JNA jar (host jnidispatch) for the real MLS core in JVM tests
 }
 
 // ---- Contract examples -> unit test resources ----
@@ -298,4 +300,49 @@ tasks.withType<Test>().configureEach {
     systemProperty("risime.nativeLibs.release", layout.buildDirectory.dir("intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib").get().asFile.absolutePath)
     systemProperty("risime.buildConfig.release", layout.buildDirectory.file("generated/source/buildConfig/release/lk/codegen/risime/BuildConfig.java").get().asFile.absolutePath)
     dependsOn("generateReleaseBuildConfig")
+}
+
+// ---- Real MLS core on the JVM (decision 033): host build of risime-mls-ffi loaded through JNA ----
+abstract class CargoBuildHost : DefaultTask() {
+    @get:Inject abstract val exec: ExecOperations
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sources: ConfigurableFileCollection
+
+    @get:Internal abstract val script: RegularFileProperty
+
+    /** Holds the directory with the host libuniffi_risime.so, or is empty if the build failed. */
+    @get:OutputFile abstract val libDirFile: RegularFileProperty
+
+    @TaskAction
+    fun build() {
+        val out = ByteArrayOutputStream()
+        val result = exec.exec {
+            commandLine(script.get().asFile.absolutePath)
+            standardOutput = out
+            isIgnoreExitValue = true
+        }
+        val dir = out.toString().trim().lines().lastOrNull().orEmpty()
+        val ok = result.exitValue == 0 && File(dir, "libuniffi_risime.so").isFile
+        if (!ok) logger.warn("risime: host build of risime-mls-ffi failed; real-crypto JVM tests will be skipped")
+        libDirFile.get().asFile.writeText(if (ok) dir else "")
+    }
+}
+
+if (cryptoToolchain && File(repoDir, "scripts/build-rust-host").canExecute()) {
+    val cargoBuildHost = tasks.register<CargoBuildHost>("cargoBuildHost") {
+        description = "Builds risime-mls-ffi for this host (JVM tests via JNA)"
+        script.set(File(repoDir, "scripts/build-rust-host"))
+        sources.from(fileTree(File(repoDir, "crypto")) { exclude("target/**") }, File(repoDir, "scripts/build-rust-host"))
+        libDirFile.set(layout.buildDirectory.file("rustHost/libdir.txt"))
+    }
+    val hostLibDirFile = layout.buildDirectory.file("rustHost/libdir.txt")
+    tasks.withType<Test>().configureEach {
+        dependsOn(cargoBuildHost)
+        doFirst {
+            val dir = hostLibDirFile.get().asFile.takeIf { it.isFile }?.readText()?.trim().orEmpty()
+            if (dir.isNotEmpty()) (this as Test).systemProperty("jna.library.path", dir)
+        }
+    }
 }
