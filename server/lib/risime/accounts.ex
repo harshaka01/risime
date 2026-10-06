@@ -5,7 +5,16 @@ defmodule RisiMe.Accounts do
   import Ecto.Query
 
   alias RisiMe.{RateLimiter, Repo}
-  alias RisiMe.Accounts.{AllowlistEntry, OtpChallenge, OtpSender, User, UserToken, Validate}
+
+  alias RisiMe.Accounts.{
+    AllowlistEntry,
+    OtpChallenge,
+    OtpSender,
+    PhoneChallenge,
+    User,
+    UserToken,
+    Validate
+  }
 
   @otp_ttl_seconds 300
   @otp_max_attempts 5
@@ -109,7 +118,11 @@ defmodule RisiMe.Accounts do
         {:error, :not_found}
 
       user ->
-        Repo.update_all(from(u in User, where: u.id == ^user.id), set: [keycloak_sub: nil])
+        # A new Keycloak account may be another person: they verify the phone again.
+        Repo.update_all(from(u in User, where: u.id == ^user.id),
+          set: [keycloak_sub: nil, phone_verified_for: nil]
+        )
+
         {:ok, user.keycloak_sub}
     end
   end
@@ -260,6 +273,14 @@ defmodule RisiMe.Accounts do
   def prune_otp_challenges(now \\ DateTime.utc_now()) do
     cutoff = DateTime.add(now, -@otp_challenge_retention_hours, :hour)
     {count, _} = Repo.delete_all(from c in OtpChallenge, where: c.inserted_at < ^cutoff)
+    count
+  end
+
+  @doc "Deletes phone challenges created more than 48 hours before `now` (past every SMS budget window)."
+  @spec prune_phone_challenges(DateTime.t()) :: non_neg_integer
+  def prune_phone_challenges(now \\ DateTime.utc_now()) do
+    cutoff = DateTime.add(now, -48, :hour)
+    {count, _} = Repo.delete_all(from c in PhoneChallenge, where: c.inserted_at < ^cutoff)
     count
   end
 

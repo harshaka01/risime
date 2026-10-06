@@ -31,11 +31,11 @@ defmodule RisiMe.AllowlistTest do
     %{user: user} = RisiMe.Fixtures.logged_in_user()
 
     Repo.update_all(from(u in RisiMe.Accounts.User, where: u.id == ^user.id),
-      set: [keycloak_sub: "sub-1"]
+      set: [keycloak_sub: "sub-1", phone_verified_for: user.phone]
     )
 
     assert {:ok, "sub-1"} = Accounts.rebind(user.phone)
-    assert Accounts.get_user(user.id).keycloak_sub == nil
+    assert %{keycloak_sub: nil, phone_verified_for: nil} = Accounts.get_user(user.id)
     assert {:error, :not_found} = Accounts.rebind("+94770009999")
   end
 end

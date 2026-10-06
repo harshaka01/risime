@@ -51,4 +51,28 @@ defmodule RisiMe.AccountsPruneTest do
       assert {_, _} = Accounts.fetch_by_token(live_token)
     end
   end
+
+  describe "prune_phone_challenges/1" do
+    test "deletes phone challenges older than 48 h" do
+      %{user: user} = logged_in_user()
+      now = DateTime.utc_now()
+
+      mk = fn at ->
+        Repo.insert!(%RisiMe.Accounts.PhoneChallenge{
+          user_id: user.id,
+          phone: user.phone,
+          code_hash: :crypto.strong_rand_bytes(32),
+          expires_at: DateTime.add(at, 300, :second),
+          inserted_at: at
+        })
+      end
+
+      old = mk.(DateTime.add(now, -49, :hour))
+      recent = mk.(DateTime.add(now, -47, :hour))
+
+      assert Accounts.prune_phone_challenges(now) == 1
+      refute Repo.get(RisiMe.Accounts.PhoneChallenge, old.id)
+      assert Repo.get(RisiMe.Accounts.PhoneChallenge, recent.id)
+    end
+  end
 end
