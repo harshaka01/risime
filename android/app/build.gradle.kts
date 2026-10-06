@@ -73,6 +73,8 @@ android {
         targetSdk = 37
         versionCode = risiVersionCodeValue
         versionName = risiVersionName
+        // Instrumented tests (§14 metadata on real decoders; redroid on spark2, decision 045).
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Release: spark2 via Caddy at risime.risicloud.ai. Debug overrides it with the laptop tunnel.
         // Editable in Settings / on login in every build.
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://risime.risicloud.ai\"")
@@ -188,6 +190,9 @@ dependencies {
     if (cryptoToolchain) implementation(libs.jna) { artifact { type = "aar" } }
     implementation(libs.emoji2.emojipicker) // composer + reaction picker (downloadable EmojiCompat font, no bundled font)
     testImplementation(libs.junit)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
     testImplementation(libs.icu4j) // grapheme clusters on the JVM, as android.icu does on devices
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)

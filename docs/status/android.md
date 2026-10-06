@@ -52,6 +52,18 @@ What's in the app:
   `images_ready` false → true after re-PUT, usage); group (B and C decrypt; removed C still fetches the old image
   and gets 404 for a new one; non-member L gets 404; D, active since after the upload, may read it (§14.2 interval
   overlaps `[uploaded_at, now]`); the owner reads its own).
+- **Real decoders (release blocker closed):** `androidTest` `RealDecoderMetadataTest` runs the real pipeline
+  (ImageDecoder + Skia) on redroid Android 14 arm64: **OK (4 tests)**. Fixtures in `androidTest/assets`
+  (`fixtures/make_fixtures.py`): a 3000×2000 JPEG with EXIF orientation 6 + GPS IFD + IFD1 (blue) thumbnail + XMP
+  (hdrgm) + MPF + IPTC + COM; a PNG with tEXt/zTXt/iTXt/iCCP/eXIf; a Display P3 JPEG made by the platform encoder.
+  Asserted on the produced bytes: `ExifInterface` finds no lat/long, GPS tags, Software, XMP, thumbnail or
+  orientation; no APP1–APP15/COM marker, no ICC/MPF/XMP/IPTC/GPS strings, no PNG ancillary chunks; 1365×2048
+  portrait with the red corner rotated to top-right; decoded colour space sRGB and the P3 pixel converted to its
+  sRGB value; thumbnail ≤ 4096 B, 128 px, from the re-encoded pixels (rotated red corner, not the blue EXIF one).
+  HEIC skipped (no HEIF encoder on spark2 for a fixture). The API 26–27 BitmapFactory path still needs a device.
+  Run: `scripts/android-target start`; with the arm64 adb on PATH, `./gradlew assembleDebug assembleDebugAndroidTest`,
+  `adb install -r -t` both APKs, `adb shell am instrument -w lk.codegen.risime.debug.test/androidx.test.runner.AndroidJUnitRunner`
+  (`connectedDebugAndroidTest` can't be used: AGP insists on the SDK's x86 adb); then `scripts/android-target stop`.
 - **Later:** group icon (§14.4), camera capture, the auto-download setting / storage screen, v1.12 delete-for-
   everyone of images (the blob id is on the row). On-device checks for Harsha: HEIC, Ultra HDR (no gain map in the
   received file), P3 colours, save on Android 14 and on 8/9, kill mid-upload.
