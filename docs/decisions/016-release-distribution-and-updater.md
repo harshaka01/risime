@@ -48,3 +48,16 @@ publish.
   - The certificate check uses `GET_SIGNING_CERTIFICATES` on API 28+ and `GET_SIGNATURES` on
     API 26–27. **minSdk stays 26**, so no devices are dropped.
   - The `required` screen keeps the dev E2EE banner and a "Sign out" action.
+
+## Amendment (2026-10-06, P0 "Update required" lock-out)
+- **`version.json` gains `summary`**: short plain text, at most 400 characters and about three
+  lines. The app shows it on the update screen instead of the raw Markdown `notes`.
+  - The publisher writes it from `docs/releases/v<ver>.summary.txt` if that file exists, otherwise
+    from the first bullets of the notes' "New" section with the Markdown stripped.
+  - `summary` is optional for clients. Without it they strip Markdown from `notes`.
+- **Rule: the app never blocks use without a working, reachable action.** The gate pins "Update" at
+  the bottom with the notes scrolling above it, uses theme colours only, and offers "Open download
+  page" and "Sign out". Every download or install failure shows an error with Retry. UI tests cover
+  long notes, a small screen, dark mode and the button being visible and enabled.
+- **`required` is only set when the server drops support** for an older protocol (as before). On
+  2026-10-06 it was cleared on nightly.8 after testers were locked out by the broken gate.

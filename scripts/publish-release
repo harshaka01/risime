@@ -45,12 +45,30 @@ import json, sys, html, datetime, os, re
 mirror, ver, code, sha, cert, required, base, notes_md = sys.argv[1:]
 notes = open(notes_md).read() if os.path.exists(notes_md) else ""
 # Short plain-text notes for the app: the "New for users" section, else the first lines.
-m = re.search(r"## New for users\n(.*?)(\n## |\Z)", notes, re.S)
+m = re.search(r"## New for users\n(.*?)(\n## |\Z)", notes, re.S) or re.search(r"## New\n(.*?)(\n## |\Z)", notes, re.S)
 short = (m.group(1) if m else notes).strip()[:2000]
+def plain(md):
+    # Markdown -> readable plain text: headings, emphasis, code, links, list markers.
+    t = re.sub(r"`([^`]*)`", r"\1", md)
+    t = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", t)
+    t = re.sub(r"(\*\*|__|\*|_)(\S[^*_]*?)\1", r"\2", t)
+    t = re.sub(r"^\s*#+\s*", "", t, flags=re.M)
+    t = re.sub(r"^\s*[-*+]\s+", "• ", t, flags=re.M)
+    t = re.sub(r"\n[ \t]+(?!• )", " ", t)   # join wrapped continuation lines
+    return re.sub(r"\n{3,}", "\n\n", t).strip()
+# summary: short plain text the app shows on the update screen (decision 016 amendment).
+# An explicit docs/releases/v<ver>.summary.txt wins; otherwise the first lines of "New", made plain.
+summary_path = os.path.join(os.getcwd(), "docs", "releases", f"v{ver}.summary.txt")
+if os.path.exists(summary_path):
+    summary = open(summary_path).read().strip()
+else:
+    lines = [l for l in plain(short).splitlines() if l.strip()]
+    summary = "\n".join(lines[:3])
+summary = summary[:400]
 apk = f"risime-{ver}.apk"
 vj = {"versionCode": int(code), "versionName": ver,
       "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-      "notes": short, "url": base + apk, "sha256": sha, "certSha256": cert.lower(),
+      "summary": summary, "notes": short, "url": base + apk, "sha256": sha, "certSha256": cert.lower(),
       "required": required == "true"}
 open(os.path.join(mirror, "version.json"), "w").write(json.dumps(vj, indent=2) + "\n")
 e = html.escape
