@@ -1183,6 +1183,10 @@ Apps before v1.11 ignore the `image` envelope type (§10.3).
   `images_ready` means the conversation is e2ee **and** every app instance of every member user
   seen in the last 30 days (the §10.1 census, the caller's own instances included) advertises
   `images`. `missing_images` names the instances that don't (empty when ready).
+  As for §12.1 readiness, only installs that can still receive count: a census instance of a
+  registered device, or a device-less (pre-v1.7) instance seen after the user's latest device
+  registration. A member with no `images` device and no such instance is listed with
+  `device_id: null`.
 - The server does **not** enforce it (it can't see message types). It's a client hint, refetched
   on chat open, on `mls_membership` for that conversation, and when a disabled attach button is
   tapped:
@@ -1207,8 +1211,11 @@ the raw bytes as the body, `Content-Type: application/octet-stream`, **`Content-
 - **Checked before the body is read**, in this order, each answered with `Connection: close` and
   without draining the body: purpose and conversation (`400`), rights (`404`/`403`/`409`),
   `Content-Type` (**`415 bad_media_type`**, `error_bad_media_type.json`), `Content-Length` (missing
-  → `400`), the purpose cap (`413 too_large`), the quota (`413 quota_exceeded`), the free-space
-  guard (`507 storage_full`), the rate (`429`), a concurrency slot (`429`), idempotency.
+  → `400`), the purpose cap (`413 too_large`), **idempotency** (`200` replay / `400` mismatch /
+  `404` deleted), the quota (`413 quota_exceeded`), the free-space guard (`507 storage_full`), the
+  rate (`429`), a concurrency slot (`429`). Idempotency comes before the quota, guard, rate and
+  slot, so a retry whose `201` was lost always gets its `200` replay, even at the quota or while
+  limited. A replay takes no slot and doesn't count against the rate.
 - **Streamed, never buffered:** the body is streamed to a temp file and hashed while it arrives;
   it is aborted with `413 too_large` the moment it exceeds the cap or `Content-Length`. The blob
   exists only after the full body, its SHA-256 and the row are committed. An interrupted upload
