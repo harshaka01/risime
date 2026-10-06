@@ -58,6 +58,30 @@ defmodule RisiMe.Messaging.Store do
   @doc "Every stored receipt of a group message."
   @callback list_group_receipts(message_id :: uuid) :: [receipt]
 
+  @typedoc "What `backfill_sender_copies/2` found and did (counts only, never content)."
+  @type backfill_counts :: %{
+          scanned: non_neg_integer,
+          candidates: non_neg_integer,
+          skipped_missing_user: non_neg_integer,
+          skipped_ttl: non_neg_integer,
+          existing: non_neg_integer,
+          copied: non_neg_integer,
+          dry_run: boolean
+        }
+
+  @doc """
+  v1.10 §13.5 one-off backfill: copies each plaintext DM `message` event from the recipient's
+  inbox into the sender's, with the same `event_id` and payload, the source's remaining TTL and
+  original write time, when `keep?.(sender_id, recipient_id)` is true. Rows with under 60 s
+  left and copies that already exist are skipped, so it is idempotent. With `dry_run: true`
+  nothing is written and `copied` counts what would be. Implementation options (e.g. `:conn`)
+  pass through `opts`.
+  """
+  @callback backfill_sender_copies(
+              keep? :: (sender_id :: uuid, recipient_id :: uuid -> boolean),
+              opts :: keyword
+            ) :: {:ok, backfill_counts}
+
   @doc "Cheap liveness check of the backing store (used by `GET /health`)."
   @callback health() :: :ok | {:error, term}
 

@@ -236,6 +236,106 @@ defmodule RisiMe.Messaging.Store.Cassandra do
     |> Enum.into(MapSet.new())
   end
 
+  @min_backfill_ttl 60
+
+  @doc """
+  `c:RisiMe.Messaging.Store.backfill_sender_copies/2` over the Xandra connection `opts[:conn]`
+  (the release task runs without the app). A paged full scan of `inbox_events` (no
+  `ALLOW FILTERING`); each copy is one primary-key read and, unless it exists or `dry_run`,
+  one `INSERT … USING TTL ? AND TIMESTAMP ?`. Options: `:conn` (required), `:dry_run`
+  (default true), `:page_size` (default 5000).
+  """
+  @impl true
+  def backfill_sender_copies(keep?, opts) do
+    conn = Keyword.fetch!(opts, :conn)
+    dry_run = Keyword.get(opts, :dry_run, true)
+
+    {:ok, exists} =
+      Xandra.prepare(conn, "SELECT event_id FROM inbox_events WHERE user_id = ? AND event_id = ?")
+
+    {:ok, insert} =
+      Xandra.prepare(
+        conn,
+        "INSERT INTO inbox_events (user_id, event_id, kind, payload) VALUES (?, ?, ?, ?) " <>
+          "USING TTL ? AND TIMESTAMP ?"
+      )
+
+    zero = %{
+      scanned: 0,
+      candidates: 0,
+      skipped_missing_user: 0,
+      skipped_ttl: 0,
+      existing: 0,
+      copied: 0,
+      dry_run: dry_run
+    }
+
+    counts =
+      conn
+      |> Xandra.stream_pages!(
+        "SELECT user_id, event_id, kind, payload, TTL(payload) AS ttl, " <>
+          "WRITETIME(payload) AS wt FROM inbox_events",
+        [],
+        page_size: Keyword.get(opts, :page_size, 5000),
+        timeout: 60_000
+      )
+      |> Stream.flat_map(& &1)
+      |> Enum.reduce(zero, fn row, acc ->
+        acc = %{acc | scanned: acc.scanned + 1}
+
+        case copy_source(row) do
+          nil ->
+            acc
+
+          sender ->
+            acc = %{acc | candidates: acc.candidates + 1}
+
+            cond do
+              not keep?.(sender, row["user_id"]) ->
+                %{acc | skipped_missing_user: acc.skipped_missing_user + 1}
+
+              not (is_integer(row["ttl"]) and row["ttl"] >= @min_backfill_ttl) ->
+                %{acc | skipped_ttl: acc.skipped_ttl + 1}
+
+              Enum.any?(Xandra.execute!(conn, exists, [sender, row["event_id"]])) ->
+                %{acc | existing: acc.existing + 1}
+
+              dry_run ->
+                %{acc | copied: acc.copied + 1}
+
+              true ->
+                Xandra.execute!(conn, insert, [
+                  sender,
+                  row["event_id"],
+                  row["kind"],
+                  row["payload"],
+                  row["ttl"],
+                  row["wt"]
+                ])
+
+                %{acc | copied: acc.copied + 1}
+            end
+        end
+      end)
+
+    {:ok, counts}
+  end
+
+  # The sender of a plaintext DM `message` event in its recipient's partition, else nil. Only
+  # `message` payloads are decoded.
+  defp copy_source(%{"kind" => "message", "user_id" => owner, "payload" => payload}) do
+    case Jason.decode(payload) do
+      {:ok, %{"body" => body, "from" => from, "to" => ^owner, "conversation_id" => "dm:" <> _}}
+      when is_binary(body) and is_binary(from) and from != owner ->
+        from
+
+      _ ->
+        nil
+    end
+  end
+
+  defp copy_source(_row), do: nil
+
   @impl true
   def health do
     case Xandra.Cluster.execute(@cluster, "SELECT release_version FROM system.local", [],

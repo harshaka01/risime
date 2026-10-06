@@ -81,6 +81,11 @@ defmodule RisiMeWeb.GroupController do
   def error(conn, {:error, :last_admin}), do: ApiError.send_error(conn, 409, :last_admin)
   def error(conn, {:error, :log_expired}), do: ApiError.send_error(conn, 410, :log_expired)
   def error(conn, {:error, :too_large}), do: ApiError.send_error(conn, 413, :too_large)
+
+  # v1.10 §13.4.
+  def error(conn, {:error, {:quota_exceeded, used, limit}}),
+    do: ApiError.send_error(conn, 413, :quota_exceeded, extra: [used: used, limit: limit])
+
   def error(conn, {:error, :invalid_role}), do: ApiError.send_error(conn, 422, :invalid_role)
 
   def error(conn, {:error, :too_many_members}),

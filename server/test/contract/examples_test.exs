@@ -48,9 +48,8 @@ defmodule RisiMe.ContractExamplesTest do
                   error_not_member.json error_not_admin.json error_too_many_members.json
                   error_too_many_devices.json error_last_admin.json error_log_expired.json
                   error_generation_conflict.json error_not_ready_groups.json)
-  # v1.10 (history, §13): parse-only placeholders added by root with the contract merge; the server
-  # role replaces them with real checks when it implements §13.
-  @pending_v1_10 ~w(inbox_join_reply_v110.json event_message_sender_copy.json
+  # v1.10 (history, §13): checked by the tests named after them below.
+  @checked_v1_10 ~w(inbox_join_reply_v110.json event_message_sender_copy.json
                    error_quota_exceeded.json)
   # v1.11 (encrypted images, §14): parse-only placeholders added by root with the contract merge;
   # the server role replaces them with real checks when it implements §14.
@@ -90,12 +89,8 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    covered = @checked ++ @checked_v1_9 ++ @pending_v1_10 ++ @pending_v1_11
+    covered = @checked ++ @checked_v1_9 ++ @checked_v1_10 ++ @pending_v1_11
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
-  end
-
-  test "v1.10 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_10, do: assert(is_map(example(name)))
   end
 
   test "v1.11 examples are valid JSON objects (placeholder)" do
@@ -174,6 +169,12 @@ defmodule RisiMe.ContractExamplesTest do
     ref = push(chan_b, "msg:ack", %{"message_ids" => [id], "status" => "delivered"})
     assert_reply ref, :ok, %{}
     topic_a = "inbox:" <> a.user.id
+    # v1.10 §13.1: the sender's copy comes first (event_message_sender_copy.json).
+    assert_receive %Phoenix.Socket.Message{topic: ^topic_a, event: "event", payload: copy}
+    assert_same_shape(wire(copy), example("event_message_sender_copy.json"))
+    assert wire(copy) == wire(message)
+    assert copy.data["from"] == a.user.id
+
     assert_receive %Phoenix.Socket.Message{topic: ^topic_a, event: "event", payload: status}
     assert_same_shape(wire(status), example("event_status.json"))
 
@@ -189,7 +190,62 @@ defmodule RisiMe.ContractExamplesTest do
     {:ok, reply, _} =
       subscribe_and_join(sock_b, InboxChannel, "inbox:" <> b.user.id, %{"since" => nil})
 
+    # v1.10 adds `history_before`, null on a socket without a device_id.
+    assert %{"history_before" => nil} = wire(reply)
+    assert_same_shape(wire(reply) |> Map.delete("history_before"), ex)
+  end
+
+  test "inbox_join_reply_v110.json: history_before on join and sync", %{b: b} do
+    ex = example("inbox_join_reply_v110.json")
+    {:ok, sock} = connect(UserSocket, %{"token" => b.token, "device_id" => Ecto.UUID.generate()})
+
+    {:ok, reply, chan} =
+      subscribe_and_join(sock, InboxChannel, "inbox:" <> b.user.id, %{"since" => nil})
+
     assert_same_shape(wire(reply), ex)
+    ref = push(chan, "sync", %{"since" => nil})
+    assert_reply ref, :ok, sync
+    assert_same_shape(wire(sync), ex)
+    assert sync.history_before == reply.history_before
+  end
+
+  test "error_quota_exceeded.json", %{a: a, b: b} do
+    import RisiMe.GroupHelpers, only: [groups_device!: 1, api: 5, assert_status: 2]
+    with_attestation_key(%{})
+    a_dev = groups_device!(a)
+    groups_device!(b)
+    RisiMe.GroupHelpers.clear_legacy!()
+    body = %{"client_group_id" => Ecto.UUID.generate(), "member_ids" => [b.user.id]}
+
+    %{"group" => %{"id" => id}} =
+      api(:post, "/api/v1/groups", a.token, body, a_dev) |> assert_status(201)
+
+    ex = example("error_quota_exceeded.json")
+    limit = ex["error"]["limit"]
+    used = ex["error"]["used"]
+    # A blob row of `used` bytes (the quota counts metadata; no file needed).
+    Repo.insert_all("blobs", [
+      %{
+        id: Ecto.UUID.dump!(Ecto.UUID.generate()),
+        owner: Ecto.UUID.dump!(a.user.id),
+        purpose: "mls",
+        conversation_id: id,
+        size: used,
+        sha256: :crypto.hash(:sha256, ""),
+        expires_at: DateTime.add(DateTime.utc_now(), 1, :day),
+        inserted_at: DateTime.utc_now()
+      }
+    ])
+
+    {413, err} =
+      RisiMe.GroupHelpers.api_raw(
+        "/api/v1/blobs?purpose=mls&conversation_id=#{id}",
+        a.token,
+        :binary.copy(<<0>>, limit - used + 1)
+      )
+
+    assert_same_shape(err, ex)
+    assert err == ex
   end
 
   test "presence_watch.json and presence_watch_reply.json", %{chan_a: chan_a, a: a} do

@@ -33,7 +33,8 @@ defmodule RisiMeWeb.ApiError do
     invalid_role: "That member can't have this role",
     generation_conflict: "The group was already reset",
     log_expired: "The commit log no longer reaches that epoch; reset or rejoin the group",
-    too_large: "The upload is too large"
+    too_large: "The upload is too large",
+    quota_exceeded: "Blob storage quota exceeded"
   }
 
   @doc """

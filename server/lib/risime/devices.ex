@@ -64,6 +64,12 @@ defmodule RisiMe.Devices do
 
         groups_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
 
+        # v1.10 §13.2: a removal (here a changed key, or an eviction) resets first_seen_at.
+        MLS.reset_first_seen(
+          if(key_changed?, do: [{user_id, device_id}], else: []) ++
+            for(d <- evicted, do: {d.user_id, d.device_id})
+        )
+
         cond do
           key_changed? ->
             MLS.device_changed(user_id, device_id, :removed)
@@ -306,6 +312,8 @@ defmodule RisiMe.Devices do
   # Deletes and emits mls_membership `removed` for MLS devices. Returns the count.
   defp removed(query) do
     {n, rows} = Repo.delete_all(from(d in query, select: d))
+
+    MLS.reset_first_seen(for d <- rows, do: {d.user_id, d.device_id})
 
     for d <- rows, do: caps_changed(d.user_id, d.device_id, false)
 

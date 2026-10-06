@@ -7,6 +7,7 @@ defmodule RisiMe.Release do
       bin/risime eval "RisiMe.Release.migrate_ecto()"
       bin/risime eval "RisiMe.Release.migrate_cql()"
       bin/risime eval "RisiMe.Release.rollback(RisiMe.Repo, 20261005000000)"
+      bin/risime eval "RisiMe.Release.backfill_sender_copies()"   # v1.10, dry run by default
 
   `migrate_cql/1` applies `priv/cql/*.cql` exactly like `mix risime.cql.migrate`: it creates the
   keyspace if needed, applies each file once in name order and records it in the keyspace's
@@ -65,6 +66,53 @@ defmodule RisiMe.Release do
     {:ok, created, _} = Ecto.Migrator.with_repo(repo, fn _ -> backfill_friendships(pairs) end)
     Logger.info("friendships: #{created} created from #{MapSet.size(pairs)} conversation pair(s)")
     {:ok, created}
+  end
+
+  @doc """
+  Contract v1.10 §13.5, one-off after the v1.10 deploy: copies each plaintext DM still inside
+  the TTL into its sender's inbox (same `event_id` and payload, the source's remaining TTL and
+  write time), only when both the sender and the recipient still exist in `users`. Idempotent;
+  logs and prints counts only. Returns `{:ok, counts}`.
+
+      bin/risime eval "RisiMe.Release.backfill_sender_copies()"                # dry run
+      bin/risime eval "RisiMe.Release.backfill_sender_copies(dry_run: false)"  # writes
+
+  Options: `:dry_run` (default **true**), `:keyspace`, `:nodes` (default: the `:cassandra`
+  config), `:page_size`.
+  """
+  def backfill_sender_copies(opts \\ []) do
+    load_app()
+    {:ok, _} = Application.ensure_all_started(:xandra)
+    config = Application.fetch_env!(@app, :cassandra)
+    [node | _] = opts[:nodes] || config[:nodes]
+    keyspace = opts[:keyspace] || config[:keyspace]
+    dry_run = Keyword.get(opts, :dry_run, true)
+    [repo] = repos()
+
+    {:ok, existing, _} =
+      Ecto.Migrator.with_repo(repo, fn _ ->
+        import Ecto.Query
+        MapSet.new(RisiMe.Repo.all(from u in RisiMe.Accounts.User, select: u.id))
+      end)
+
+    {:ok, conn} = Xandra.start_link(nodes: [node], keyspace: keyspace)
+
+    {:ok, counts} =
+      try do
+        RisiMe.Messaging.Store.impl().backfill_sender_copies(
+          fn from, to -> MapSet.member?(existing, from) and MapSet.member?(existing, to) end,
+          conn: conn,
+          dry_run: dry_run,
+          page_size: opts[:page_size] || 5000
+        )
+      after
+        GenServer.stop(conn)
+      end
+
+    line = "sender copies (#{keyspace}): #{inspect(counts)}"
+    Logger.info(line)
+    IO.puts(line)
+    {:ok, counts}
   end
 
   @doc false

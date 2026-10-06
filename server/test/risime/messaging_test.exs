@@ -25,7 +25,7 @@ defmodule RisiMe.MessagingTest do
     assert Messaging.iso(~U[2026-10-06 08:15:30.123456Z]) == "2026-10-06T08:15:30.123Z"
   end
 
-  test "send stores the message in the recipient inbox and broadcasts it", %{a: a, b: b} do
+  test "send stores the message in both inboxes and broadcasts it", %{a: a, b: b} do
     Messaging.subscribe(b)
     params = msg(b)
     assert {:ok, reply} = Messaging.send(a, params)
@@ -38,7 +38,8 @@ defmodule RisiMe.MessagingTest do
     assert data["message_id"] == reply.message_id
 
     assert {:ok, [^event], false} = Messaging.fetch_events(b, nil)
-    assert {:ok, [], false} = Messaging.fetch_events(a, nil)
+    # v1.10 §13.1: the sender's copy, the same event_id and payload.
+    assert {:ok, [^event], false} = Messaging.fetch_events(a, nil)
   end
 
   test "send is idempotent per client_msg_id", %{a: a, b: b} do
@@ -82,7 +83,9 @@ defmodule RisiMe.MessagingTest do
     assert :ok = Messaging.ack(b, [id], "delivered")
     refute_receive {:inbox_event, _}, 100
 
-    assert {:ok, events, false} = Messaging.fetch_events(a, nil)
+    assert {:ok, [%{event_id: ^id, kind: "message"} | events], false} =
+             Messaging.fetch_events(a, nil)
+
     assert Enum.map(events, & &1.data["status"]) == ["delivered", "read"]
   end
 
@@ -90,7 +93,9 @@ defmodule RisiMe.MessagingTest do
     {:ok, %{message_id: id}} = Messaging.send(a, msg(b))
     assert :ok = Messaging.ack(a, [id], "read")
     assert :ok = Messaging.ack(b, [RisiMe.TimeUUID.generate(), "junk"], "read")
-    assert {:ok, [], false} = Messaging.fetch_events(a, nil)
+    # Only a's own copy (v1.10): no status event.
+    assert {:ok, [%{event_id: ^id, kind: "message"}], false} = Messaging.fetch_events(a, nil)
+    assert {:ok, %{status: "sent"}} = RisiMe.Messaging.Store.impl().get_message(id)
     assert {:error, :bad_request} = Messaging.ack(b, [id], "seen")
     assert {:error, :bad_request} = Messaging.ack(b, id, "read")
   end

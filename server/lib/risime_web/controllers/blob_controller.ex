@@ -7,9 +7,11 @@ defmodule RisiMeWeb.BlobController do
 
   defp me(conn), do: conn.assigns.current_user.id
 
+  # v1.10 §13.4: membership, size (Content-Length), quota and rate limit before the body is read.
   def create(conn, params) do
-    with {:ok, bytes, conn} <- read_all(conn, Blobs.max_bytes()),
-         {:ok, reply} <- Blobs.upload(me(conn), params, bytes) do
+    with :ok <- Blobs.precheck(me(conn), params, content_length(conn)),
+         {:ok, bytes, conn} <- read_all(conn, Blobs.max_bytes()),
+         {:ok, reply} <- Blobs.store(me(conn), params, bytes) do
       conn |> put_status(201) |> json(reply)
     else
       {:error, :too_large, conn} -> GroupController.error(conn, {:error, :too_large})
@@ -33,6 +35,15 @@ defmodule RisiMeWeb.BlobController do
     case Blobs.delete(me(conn), id) do
       :ok -> send_resp(conn, 204, "")
       error -> GroupController.error(conn, error)
+    end
+  end
+
+  defp content_length(conn) do
+    with [v | _] <- Plug.Conn.get_req_header(conn, "content-length"),
+         {n, ""} when n >= 0 <- Integer.parse(v) do
+      n
+    else
+      _ -> nil
     end
   end
 

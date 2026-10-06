@@ -31,16 +31,36 @@ defmodule RisiMe.Blobs do
 
   defp path(id), do: Path.join([blob_dir(), String.slice(id, 0, 2), id])
 
+  @doc "The per-user limit on live `mls` blob bytes (v1.10 §13.4, `:mls_blob_quota`)."
+  def mls_quota, do: Application.get_env(:risime, :mls_blob_quota, 256 * 1024 * 1024)
+
   @doc """
-  `POST /blobs?purpose=mls&conversation_id=grp:…`: stores `bytes` for an active member of the
-  conversation. Returns `{:ok, reply}` or `{:error, :not_found | :too_large | :rate_limited |
-  :bad_request}`.
+  The checks before the body of `POST /blobs?purpose=mls&conversation_id=grp:…` is read
+  (v1.10 §13.4 order): membership (`:not_found`) → `:too_large` (from `Content-Length`) →
+  quota → rate limit. `declared` is the `Content-Length`, or nil when the request has none.
+  Returns `:ok` or `{:error, :not_found | :too_large | {:quota_exceeded, used, limit} |
+  :rate_limited | :bad_request}`.
   """
-  def upload(me, %{"purpose" => purpose, "conversation_id" => conv}, bytes)
-      when purpose in @purposes and is_binary(conv) and is_binary(bytes) do
+  def precheck(me, %{"purpose" => purpose, "conversation_id" => conv}, declared)
+      when purpose in @purposes and is_binary(conv) do
     with {:ok, _g, _m} <- Groups.visible(me, conv),
-         true <- byte_size(bytes) in 1..@max_bytes || {:error, :too_large},
-         :ok <- upload_limit(me) do
+         true <- (declared || 0) <= @max_bytes || {:error, :too_large},
+         :ok <- check_quota(me, purpose, declared || 0) do
+      upload_limit(me)
+    end
+  end
+
+  def precheck(_me, _params, _declared), do: {:error, :bad_request}
+
+  @doc """
+  Stores `bytes` read after `precheck/3` passed: the size and the quota are checked again on
+  the actual size. Returns `{:ok, reply}` or `{:error, :too_large | {:quota_exceeded, used,
+  limit} | :bad_request}`.
+  """
+  def store(me, %{"purpose" => purpose, "conversation_id" => conv}, bytes)
+      when purpose in @purposes and is_binary(conv) and is_binary(bytes) do
+    with true <- byte_size(bytes) in 1..@max_bytes || {:error, :too_large},
+         :ok <- check_quota(me, purpose, byte_size(bytes)) do
       id = Ecto.UUID.generate()
       sha = :crypto.hash(:sha256, bytes)
       now = DateTime.utc_now()
@@ -70,7 +90,30 @@ defmodule RisiMe.Blobs do
     end
   end
 
-  def upload(_me, _params, _bytes), do: {:error, :bad_request}
+  def store(_me, _params, _bytes), do: {:error, :bad_request}
+
+  # v1.10 §13.4: the sum of the caller's unexpired blobs of this purpose, across conversations.
+  # Concurrent uploads may overshoot by at most one blob each.
+  defp check_quota(me, "mls", size) do
+    used = used_bytes(me, "mls")
+    limit = mls_quota()
+    if used + size > limit, do: {:error, {:quota_exceeded, used, limit}}, else: :ok
+  end
+
+  @doc "Bytes of `owner`'s live blobs of `purpose`."
+  def used_bytes(owner, purpose) do
+    Repo.one(
+      from b in "blobs",
+        where:
+          b.owner == type(^owner, :binary_id) and b.purpose == ^purpose and
+            b.expires_at > ^DateTime.utc_now(),
+        select: coalesce(sum(b.size), 0)
+    )
+    |> to_int()
+  end
+
+  defp to_int(%Decimal{} = d), do: Decimal.to_integer(d)
+  defp to_int(n) when is_integer(n), do: n
 
   defp upload_limit(me) do
     case RateLimiter.hit(:blob_upload, me, @uploads_per_hour, :timer.hours(1)) do

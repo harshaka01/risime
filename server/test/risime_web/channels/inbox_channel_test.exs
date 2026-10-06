@@ -134,6 +134,8 @@ defmodule RisiMeWeb.InboxChannelTest do
     {:ok, _, chan_b} = join_inbox(sock_b, b)
     {:ok, %{message_id: id}} = send_msg(chan_a, b)
     assert_event(b, "message")
+    # v1.10 §13.1: A's own copy.
+    assert %{event_id: ^id} = assert_event(a, "message")
 
     ref = push(chan_b, "msg:ack", %{"message_ids" => [id], "status" => "delivered"})
     assert_reply ref, :ok, %{}

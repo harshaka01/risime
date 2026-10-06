@@ -202,7 +202,8 @@ defmodule RisiMeWeb.InboxChannel do
        %{
          events: events,
          has_more: has_more,
-         server_time: Messaging.iso(DateTime.utc_now())
+         server_time: Messaging.iso(DateTime.utc_now()),
+         history_before: socket.assigns[:history_before]
        }}
     end
   end

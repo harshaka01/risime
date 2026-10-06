@@ -299,9 +299,9 @@ defmodule RisiMe.Messaging do
       }
     }
 
-    # Both inboxes, the same event_id; reactions never push (§11.2).
-    publish(req.to, event, push: false)
+    # Both inboxes, the same event_id, the sender's first (§13.1); reactions never push (§11.2).
     publish(sender_id, event, push: false)
+    publish(req.to, event, push: false)
   end
 
   defp deliver(sender_id, req, sent) do
@@ -324,27 +324,26 @@ defmodule RisiMe.Messaging do
       "server_ts" => iso(sent.server_ts)
     }
 
-    if req.body do
-      publish(req.to, %{
-        event_id: sent.message_id,
-        kind: "message",
-        data: Map.put(base, "body", req.body)
-      })
-    else
-      # v1.7: ciphertext only, and the sender's inbox too (their other devices; the sending
-      # device skips it by from_device).
-      data =
+    data =
+      if req.body do
+        Map.put(base, "body", req.body)
+      else
+        # v1.7: ciphertext only (the sending device skips its own copy by from_device).
         Map.merge(base, %{
           "from_device" => req.from_device,
           "ciphertext" => req.ciphertext,
           "generation" => req.generation,
           "epoch" => req.epoch
         })
+      end
 
-      event = %{event_id: sent.message_id, kind: "message", data: data}
-      publish(req.to, event)
-      publish(sender_id, event, push: false)
-    end
+    event = %{event_id: sent.message_id, kind: "message", data: data}
+
+    # v1.10 §13.1: plaintext and e2ee alike go to both inboxes under the same event_id. The
+    # sender's copy is published first and never pushed, so a recipient's live ack can never
+    # put a `status` ahead of the copy on the sender's other devices.
+    publish(sender_id, event, push: false)
+    publish(req.to, event)
   end
 
   ## Group send (v1.9 §12.9)
@@ -579,6 +578,11 @@ defmodule RisiMe.Messaging do
       case store().get_message(id) do
         # v1.8: reactions have no acks or status events; acks naming them are ignored.
         {:ok, %{kind: "reaction"}} ->
+          :ok
+
+        # v1.10 §13.1: own copies are outgoing; a sender's ack of their own message (DM or
+        # group) is ignored: no status, no receipt.
+        {:ok, %{sender_id: ^user_id}} ->
           :ok
 
         {:ok, %{recipient_id: ^user_id} = message} ->

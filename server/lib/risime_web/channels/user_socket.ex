@@ -59,7 +59,7 @@ defmodule RisiMeWeb.UserSocket do
       end
 
     legacy_key = if kind == :dev, do: "token:#{extra[:token_id]}", else: "jwt"
-    RisiMe.MLS.record_instance(user.id, device_id, legacy_key, params["app_version"])
+    first_seen = RisiMe.MLS.census(user.id, device_id, legacy_key, params["app_version"])
 
     {:ok,
      assign(
@@ -69,7 +69,9 @@ defmodule RisiMeWeb.UserSocket do
          socket_id: socket_id,
          auth_kind: kind,
          token_id: nil,
-         device_id: device_id
+         device_id: device_id,
+         # v1.10 §13.2: `history_before` on every join and `sync` reply of this socket.
+         history_before: first_seen && RisiMe.Messaging.iso(first_seen)
        ] ++
          extra
      )}

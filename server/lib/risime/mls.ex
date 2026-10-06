@@ -62,25 +62,80 @@ defmodule RisiMe.MLS do
   legacy instance per `legacy_key` (the dev token id, or "jwt" per user).
   """
   def record_instance(user_id, device_id, legacy_key, app_version) do
+    _ = census(user_id, device_id, legacy_key, app_version)
+    :ok
+  end
+
+  @doc """
+  `record_instance/4`, returning the instance's `first_seen_at` (v1.10 §13.2, `history_before`): set when the row is
+  inserted, or on the first connect after the device was removed; never moved otherwise. Rows
+  from before v1.10 keep null. Always nil without a `device_id`.
+  """
+  def census(user_id, device_id, legacy_key, app_version) do
     key = if device_id, do: "device:" <> device_id, else: "legacy:" <> legacy_key
 
     version =
       if is_binary(app_version) and byte_size(app_version) <= 64, do: app_version, else: nil
 
-    Repo.insert_all(
-      "app_instances",
-      [
-        %{
-          user_id: Ecto.UUID.dump!(user_id),
-          instance_key: key,
-          device_id: device_id && Ecto.UUID.dump!(device_id),
-          app_version: version,
-          last_seen_at: DateTime.utc_now()
-        }
-      ],
-      on_conflict: {:replace, [:app_version, :last_seen_at]},
-      conflict_target: [:user_id, :instance_key]
-    )
+    # The app clock, the same clock as `server_ts`.
+    now = DateTime.utc_now()
+
+    {1, [%{first_seen_at: first_seen}]} =
+      Repo.insert_all(
+        "app_instances",
+        [
+          %{
+            user_id: Ecto.UUID.dump!(user_id),
+            instance_key: key,
+            device_id: device_id && Ecto.UUID.dump!(device_id),
+            app_version: version,
+            last_seen_at: now,
+            first_seen_at: now
+          }
+        ],
+        on_conflict:
+          from(i in "app_instances",
+            update: [
+              set: [
+                app_version: fragment("EXCLUDED.app_version"),
+                last_seen_at: fragment("EXCLUDED.last_seen_at"),
+                first_seen_at:
+                  fragment(
+                    "CASE WHEN ? THEN EXCLUDED.first_seen_at ELSE ? END",
+                    i.history_reset,
+                    i.first_seen_at
+                  ),
+                history_reset: false
+              ]
+            ]
+          ),
+        conflict_target: [:user_id, :instance_key],
+        returning: [:first_seen_at]
+      )
+
+    if device_id && first_seen, do: to_utc(first_seen)
+  end
+
+  defp to_utc(%DateTime{} = dt), do: dt
+  defp to_utc(%NaiveDateTime{} = n), do: DateTime.from_naive!(n, "Etc/UTC")
+
+  @doc """
+  v1.10 §13.2: the devices were removed (DELETE, logout, eviction, prune, a changed key), so
+  each one's next connect sets a new `first_seen_at`. `devices` is `[{user_id, device_id}]`.
+  """
+  def reset_first_seen([]), do: :ok
+
+  def reset_first_seen(devices) do
+    for {user_id, device_id} <- Enum.uniq(devices) do
+      Repo.update_all(
+        from(i in "app_instances",
+          where:
+            i.user_id == type(^user_id, :binary_id) and
+              i.instance_key == ^("device:" <> device_id)
+        ),
+        set: [history_reset: true]
+      )
+    end
 
     :ok
   end
