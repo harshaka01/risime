@@ -124,7 +124,6 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
         if (resumed && messages.any { !it.outgoing && it.status != MessageStatus.READ.name }) vm.markRead()
     }
     val items = remember(messages) { withDaySeparators(messages, System.currentTimeMillis()) }
-    LaunchedEffect(items.size) { if (items.isNotEmpty()) listState.animateScrollToItem(items.lastIndex) }
 
     val name = groupDisplayName(group?.name)
     val readOnly = group?.readOnly == true
@@ -155,11 +154,14 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            LazyColumn(
-                state = listState,
+            lk.codegen.risime.ui.common.ChatMessageList(
+                count = items.size,
+                lastKey = messages.lastOrNull()?.clientMsgId,
+                lastOutgoing = messages.lastOrNull()?.outgoing == true,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.md),
-                verticalArrangement = Arrangement.spacedBy(Spacing.xs + Spacing.xxs),
+                spacing = Spacing.xs + Spacing.xxs,
+                state = listState,
             ) {
                 items(items.size, key = { items[it].key }) { i ->
                     when (val item = items[i]) {

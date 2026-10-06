@@ -86,9 +86,6 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
         if (resumed && messages.any { !it.outgoing && it.status != MessageStatus.READ.name }) vm.markRead()
     }
     val items = remember(messages) { withDaySeparators(messages, System.currentTimeMillis()) }
-    LaunchedEffect(items.size) {
-        if (items.isNotEmpty()) listState.animateScrollToItem(items.lastIndex)
-    }
 
     val name = peer?.displayName ?: "Chat"
     // Unknown while loading: assume friend (the server refuses non-friends anyway).
@@ -121,11 +118,14 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            LazyColumn(
-                state = listState,
+            lk.codegen.risime.ui.common.ChatMessageList(
+                count = items.size,
+                lastKey = messages.lastOrNull()?.clientMsgId,
+                lastOutgoing = messages.lastOrNull()?.outgoing == true,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = Spacing.md, vertical = Spacing.md),
-                verticalArrangement = Arrangement.spacedBy(Spacing.xs + Spacing.xxs),
+                spacing = Spacing.xs + Spacing.xxs,
+                state = listState,
             ) {
                 items(items, key = { it.key }) { item ->
                     when (item) {
