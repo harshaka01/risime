@@ -308,7 +308,9 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo 
 sudo chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
 sudo apt update && sudo apt install -y caddy
 sudo install -m 644 /home/harsha/development/risime/infra/caddy/Caddyfile /etc/caddy/Caddyfile
-sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+sudo -u caddy caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+# Always validate AS THE caddy USER: validating as root creates the access log root-owned (0600)
+# and the next reload fails with "open /var/log/caddy/risime-access.log: permission denied".
 
 # 2. Firewall on spark2
 sudo ufw allow 80/tcp comment 'RisiMe Caddy (ACME + redirect)'

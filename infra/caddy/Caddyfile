@@ -3,7 +3,6 @@
 # Caddy terminates TLS (automatic HTTPS via Let's Encrypt: needs DNS A risime.risicloud.ai ->
 # 203.115.26.139 and inbound 80+443 reaching spark2) and proxies to Phoenix on 127.0.0.1:4000.
 # Phoenix never listens on a public interface. Install: see docs/PROD.md "Pilot on spark2".
-
 {
 	# No admin API on the network; local only (default 127.0.0.1:2019, kept explicit).
 	admin 127.0.0.1:2019
