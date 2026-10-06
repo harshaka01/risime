@@ -522,6 +522,27 @@ defmodule RisiMe.Accounts do
     end
   end
 
+  @doc """
+  True if `id` is a user who may be messaged: registered and, while phone verification is
+  required, verified (contract v1.4 §7.1, `Contact.registered`).
+  """
+  def messageable?(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, id} ->
+        query = from u in User, where: u.id == ^id
+
+        query =
+          if phone_verification_required?(),
+            do: from(u in query, where: u.phone_verified_for == u.phone),
+            else: query
+
+        Repo.exists?(query)
+
+      :error ->
+        false
+    end
+  end
+
   @doc "True if `id` is a registered user's id."
   def user_exists?(id) do
     case Ecto.UUID.cast(id) do
@@ -620,6 +641,9 @@ defmodule RisiMe.Accounts do
 
   @doc "Every other allowlisted person, with their user id once they have logged in."
   def list_contacts(%User{phone: own_phone}) do
+    # v1.4: only verified users (or everyone, while verification isn't required) are registered.
+    gate_off? = not phone_verification_required?()
+
     from(a in AllowlistEntry,
       left_join: u in User,
       on: u.phone == a.phone,
@@ -628,11 +652,15 @@ defmodule RisiMe.Accounts do
         phone: a.phone,
         display_name: coalesce(u.display_name, a.display_name),
         company: a.company,
-        user_id: u.id
+        user_id: u.id,
+        verified_for: u.phone_verified_for
       }
     )
     |> Repo.all()
-    |> Enum.map(&Map.put(&1, :registered, &1.user_id != nil))
+    |> Enum.map(fn c ->
+      registered = c.user_id != nil and (gate_off? or c.verified_for == c.phone)
+      c |> Map.delete(:verified_for) |> Map.put(:registered, registered)
+    end)
     |> Enum.sort_by(&{String.downcase(&1.display_name), &1.phone})
   end
 end

@@ -27,11 +27,16 @@ defmodule RisiMeWeb.OIDCApiTest do
       assert get(conn, ~p"/api/v1/auth/config") |> json_response(200) == %{
                "modes" => ["oidc", "dev"],
                "issuer" => "https://risicloud.ai/realms/aoa",
-               "client_id" => "risime"
+               "client_id" => "risime",
+               "phone_verification" => "off"
              }
 
       put_oidc(enabled: false)
-      assert get(conn, ~p"/api/v1/auth/config") |> json_response(200) == %{"modes" => ["dev"]}
+
+      assert get(conn, ~p"/api/v1/auth/config") |> json_response(200) == %{
+               "modes" => ["dev"],
+               "phone_verification" => "off"
+             }
 
       put_oidc(enabled: true)
       Application.put_env(:risime, :dev_local_auth, false)

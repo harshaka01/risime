@@ -92,10 +92,14 @@ defmodule RisiMeWeb.InboxChannel do
     user_id = socket.assigns.user_id
 
     case RisiMe.Auth.authenticate(token) do
-      {:ok, %{kind: :jwt, user: %{id: ^user_id}, exp: exp}} ->
-        :ok = SocketTracker.refresh(socket.transport_pid, exp)
-        expires_at = exp |> DateTime.from_unix!() |> Messaging.iso()
-        {:reply, {:ok, %{expires_at: expires_at}}, assign(socket, :auth_kind, :jwt)}
+      {:ok, %{kind: :jwt, user: %{id: ^user_id} = user, exp: exp}} ->
+        if Accounts.phone_verified?(user, :jwt) do
+          :ok = SocketTracker.refresh(socket.transport_pid, exp)
+          expires_at = exp |> DateTime.from_unix!() |> Messaging.iso()
+          {:reply, {:ok, %{expires_at: expires_at}}, assign(socket, :auth_kind, :jwt)}
+        else
+          {:reply, {:error, %{reason: "phone_unverified"}}, socket}
+        end
 
       {:ok, %{kind: :jwt}} ->
         {:reply, {:error, %{reason: "identity_mismatch"}}, socket}

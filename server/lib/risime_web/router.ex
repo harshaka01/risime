@@ -13,6 +13,11 @@ defmodule RisiMeWeb.Router do
     plug RisiMeWeb.Plugs.RequireToken
   end
 
+  # Exempt from the phone gate (contract v1.4 §7.1).
+  pipeline :authenticated_ungated do
+    plug RisiMeWeb.Plugs.RequireToken, phone_gate: false
+  end
+
   # Ops, not wire protocol: no auth, outside /api/v1.
   scope "/", RisiMeWeb do
     pipe_through :api
@@ -34,12 +39,17 @@ defmodule RisiMeWeb.Router do
   end
 
   scope "/api/v1", RisiMeWeb do
-    pipe_through [:api, :authenticated]
+    pipe_through [:api, :authenticated_ungated]
 
     post "/auth/logout", AuthController, :logout
     get "/me", MeController, :show
     post "/me/phone/verify/request", MeController, :phone_request
     post "/me/phone/verify/confirm", MeController, :phone_confirm
+  end
+
+  scope "/api/v1", RisiMeWeb do
+    pipe_through [:api, :authenticated]
+
     patch "/me", MeController, :update
     get "/contacts", ContactsController, :index
   end

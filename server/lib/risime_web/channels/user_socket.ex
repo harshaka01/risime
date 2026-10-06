@@ -18,7 +18,7 @@ defmodule RisiMeWeb.UserSocket do
   def connect(params, socket, connect_info) do
     token = connect_info[:auth_token] || params["token"]
 
-    case RisiMe.Auth.authenticate(token) do
+    case RisiMe.Auth.authenticate(token) |> phone_gate() do
       {:ok, %{kind: :dev, user: user, token_record: record}} ->
         RisiMe.Accounts.touch_token(record)
         socket_id = id_for(record)
@@ -33,6 +33,16 @@ defmodule RisiMeWeb.UserSocket do
         :error
     end
   end
+
+  # Contract v1.4 §7.2: an unverified user's upgrade is refused like a 403.
+  defp phone_gate({:ok, auth} = ok),
+    do:
+      if(RisiMe.Accounts.phone_verified?(auth.user, auth.kind),
+        do: ok,
+        else: {:error, :phone_unverified}
+      )
+
+  defp phone_gate(error), do: error
 
   defp connected(socket, user, socket_id, kind, exp, extra) do
     :telemetry.execute([:risime, :socket, :connect], %{count: 1}, %{result: :ok})

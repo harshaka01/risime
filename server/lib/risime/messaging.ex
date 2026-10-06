@@ -108,7 +108,7 @@ defmodule RisiMe.Messaging do
   end
 
   defp check_recipient(sender_id, to) do
-    if to != sender_id and Accounts.get_user(to), do: :ok, else: {:error, :unknown_recipient}
+    if to != sender_id and Accounts.messageable?(to), do: :ok, else: {:error, :unknown_recipient}
   end
 
   # A repeat of an earlier send. If that send stopped before indexing the message, finish it.
@@ -167,7 +167,7 @@ defmodule RisiMe.Messaging do
     to = String.downcase(to)
 
     cond do
-      not uuid?(to) or to == sender_id or not Accounts.user_exists?(to) ->
+      not uuid?(to) or to == sender_id or not Accounts.messageable?(to) ->
         {:error, :unknown_recipient}
 
       typing and RateLimiter.hit(:typing, sender_id, @typing_limit, @typing_window) != :ok ->

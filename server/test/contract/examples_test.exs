@@ -206,7 +206,9 @@ defmodule RisiMe.ContractExamplesTest do
   end
 
   test "auth_config.json is what GET /auth/config returns with both modes" do
-    assert get_json("/api/v1/auth/config") == {200, example("auth_config.json")}
+    # The v1.3 example predates `phone_verification` (v1.4), which clients may ignore.
+    {200, ours} = get_json("/api/v1/auth/config")
+    assert Map.delete(ours, "phone_verification") == example("auth_config.json")
   end
 
   test "error_invalid_token.json, error_not_allowlisted.json, error_identity_conflict.json" do

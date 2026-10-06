@@ -9,10 +9,14 @@ defmodule RisiMeWeb.AuthController do
     alias RisiMe.Auth.Config
     modes = Config.modes()
 
+    phone = if Accounts.phone_verification_required?(), do: "required", else: "off"
+
     body =
       if "oidc" in modes,
         do: %{modes: modes, issuer: Config.oidc(:issuer), client_id: Config.oidc(:client_id)},
         else: %{modes: modes}
+
+    body = Map.put(body, :phone_verification, phone)
 
     json(conn, body)
   end

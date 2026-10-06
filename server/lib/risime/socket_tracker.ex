@@ -32,6 +32,9 @@ defmodule RisiMe.SocketTracker do
   @spec refresh(pid, integer) :: :ok | :error
   def refresh(pid, exp), do: GenServer.call(__MODULE__, {:refresh, pid, exp})
 
+  @doc "Disconnects every tracked socket of `user_id`. Returns how many."
+  def disconnect_user(user_id), do: GenServer.call(__MODULE__, {:disconnect_user, user_id})
+
   @doc "PubSub topic the socket's channels listen on for `{:auth_expired}`."
   def control_topic(socket_id), do: "socket_ctl:" <> socket_id
 
@@ -84,6 +87,17 @@ defmodule RisiMe.SocketTracker do
     else
       _ -> {:reply, :error, state}
     end
+  end
+
+  def handle_call({:disconnect_user, user_id}, _from, state) do
+    ids =
+      for {ref, %{user_id: ^user_id, socket_id: id}} when is_reference(ref) and is_binary(id) <-
+            state,
+          uniq: true,
+          do: id
+
+    for id <- ids, do: RisiMeWeb.Endpoint.broadcast(id, "disconnect", %{})
+    {:reply, length(ids), state}
   end
 
   @impl true
