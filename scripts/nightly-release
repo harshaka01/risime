@@ -68,7 +68,7 @@ if [ -f "$PIN_FILE" ]; then
   [ "${hits:-0}" -gt 0 ] || { echo "release APK lacks the pinned attestation key $kid"; exit 1; }
   echo "==> E2EE: release pins attestation key $kid"
 fi
-"$BT/apksigner" verify --print-certs "$APK" | grep -q "CN=RisiMe Dev Release" \
+[ "$("$BT/apksigner" verify --print-certs "$APK" | grep -c "CN=RisiMe Dev Release" || true)" -gt 0 ] \
   || { echo "release APK is not signed with the dev release key"; exit 1; }
 
 last="$(git describe --tags --abbrev=0 2>/dev/null || true)"

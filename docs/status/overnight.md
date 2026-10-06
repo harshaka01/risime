@@ -1,26 +1,14 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
-## Where things stand (updated 2026-10-06 ~08:35 UTC)
-- **Live:** https://risime.risicloud.ai runs **v0.2.0-nightly.7** (`risime.service`, health
-  timer, backups, rollback). Downloads are at https://risicloud.ai/app/risime/ (versionCode 20007).
-- **Invites and friends** (v1.6) are live. Testers onboard via invites (tester instructions sent
-  2026-10-06).
-- **E2EE (0.3, contract v1.7) is built end to end and proven live:**
-  - the crypto core: 47 tests;
-  - the server: 265 tests;
-  - the app: 162 tests, with the MLS core in all 4 ABIs;
-  - the **live interop gate: 32 checks, including 9 real-MLS E2EE checks** against a server with
-    E2EE on (temporary key).
-  - **Dormant on the pilot** (`mls_unavailable`) until Harsha approves the rollout. The dev banner
-    stays.
-- **Push** is built (server and app) and dormant until the Firebase files exist.
-
-## Rollout of E2EE (needs Harsha's go-ahead)
-1. Create the pilot attestation key (`mix risime.attestation.gen`, in `~/risime-keys`; back it up).
-2. Pin its public key in the app (`-Prisime.mlsPinnedKeys`) and release that build as
-   **required**.
-3. When the census shows every tester on it, conversations upgrade automatically, chat by chat.
-4. Remove the dev banner only when decision 012's criteria are met, and record it.
+## Where things stand (updated 2026-10-06 ~10:10 UTC)
+- **E2EE is ON** (decision 038): https://risime.risicloud.ai runs **v0.2.0-nightly.8**, published as a
+  **required** update (versionCode 20008).
+  - `/mls/attestation_keys` serves the pinned pilot key `x-nu0EBHzGv-…`.
+  - Chats upgrade automatically once both people are on nightly.8. The dev banner stays.
+- The service runs under systemd (linger on, so it starts at boot), with the health timer, backups
+  and rollback. Caddy runs the repo config (HSTS, `/` redirects to downloads).
+- **Next (in order):** emoji and reactions (v1.8 proposal reviewed by server; android review
+  next) → MLS groups → encrypted images.
 
 ## Waiting on Harsha (batched)
 - `sudo loginctl enable-linger harsha` (start at boot).
