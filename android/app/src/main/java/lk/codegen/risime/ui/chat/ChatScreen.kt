@@ -36,6 +36,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -73,7 +75,11 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     val lifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
     val listState = rememberLazyListState()
-    var draft by rememberSaveable { mutableStateOf("") }
+    var draftValue by rememberSaveable(stateSaver = androidx.compose.ui.text.input.TextFieldValue.Saver) {
+        mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(""))
+    }
+    val reactions by vm.reactions.collectAsStateWithLifecycle()
+    var reactionsFor by remember { mutableStateOf<String?>(null) }
 
     // Read acks only while this chat is actually on screen.
     LaunchedEffect(messages, resumed) {
@@ -124,39 +130,56 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 items(items, key = { it.key }) { item ->
                     when (item) {
                         is ChatItem.Day -> DaySeparator(item.label)
-                        is ChatItem.Msg -> Bubble(item.m, canRetry = isFriend, onRetry = vm::retry, onDelete = vm::delete)
+                        is ChatItem.Msg -> Bubble(
+                            item.m, canRetry = isFriend, onRetry = vm::retry, onDelete = vm::delete,
+                            chips = item.m.messageId?.let { reactions[it] }.orEmpty(),
+                            canReact = isFriend && item.m.messageId != null,
+                            onReact = { e, op -> item.m.messageId?.let { vm.react(it, e, op) } },
+                            onOpenReactions = { reactionsFor = item.m.messageId },
+                        )
                     }
                 }
                 if (messages.isEmpty()) item { EmptyState("No messages yet. Say hello!") }
             }
             if (!isFriend) {
                 NotFriendsBar(name, requested, onAddFriend = vm::requestFriend)
-            } else InputBar(
+            } else Composer(
                 placeholder = if (encrypted) "Encrypted message" else "Message",
-                draft = draft,
-                onDraft = {
-                    if (it.length <= 4096) {
-                        draft = it
-                        vm.onDraftChanged(it)
-                    }
+                value = draftValue,
+                onValue = {
+                    draftValue = it
+                    vm.onDraftChanged(it.text)
                 },
                 onSend = {
-                    if (draft.isNotBlank()) {
-                        vm.send(draft)
-                        draft = ""
+                    if (draftValue.text.isNotBlank()) {
+                        vm.send(draftValue.text)
+                        draftValue = androidx.compose.ui.text.input.TextFieldValue("")
                     }
                 },
             )
+            reactionsFor?.let { target ->
+                ReactionsSheet(reactions[target].orEmpty(), vm::nameOf) { reactionsFor = null }
+            }
         }
     }
 }
 
 @Composable
-private fun Bubble(m: MessageEntity, canRetry: Boolean, onRetry: (String) -> Unit, onDelete: (String) -> Unit) {
+private fun Bubble(
+    m: MessageEntity,
+    canRetry: Boolean,
+    onRetry: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    chips: List<lk.codegen.risime.data.ReactionChip>,
+    canReact: Boolean,
+    onReact: (String, String) -> Unit,
+    onOpenReactions: () -> Unit,
+) {
     val failed = m.status == MessageStatus.FAILED.name
-    var menu by remember { mutableStateOf(false) }
+    var sheet by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
+    val retryable = failed && canRetry && m.failReason != AuthErrors.NOT_FRIENDS && m.failReason != AuthErrors.TOO_LONG
     MessageBubble(
         body = m.body,
         time = timeOf(m.localTs),
@@ -165,32 +188,28 @@ private fun Bubble(m: MessageEntity, canRetry: Boolean, onRetry: (String) -> Uni
         note = when {
             !failed -> null
             m.failReason == AuthErrors.NOT_FRIENDS -> "Not sent — you're not friends"
-            canRetry -> "Not sent — tap to retry or delete"
+            m.failReason == AuthErrors.TOO_LONG -> "Not sent — too long"
+            retryable -> "Not sent — tap to retry or delete"
             else -> "Not sent — tap to delete"
         },
         tapOpensMenu = failed,
-        onMenu = { menu = true },
-        menu = {
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(text = { Text("Copy") }, onClick = {
-                    menu = false
-                    scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) }
-                })
-                if (failed && canRetry && m.failReason != AuthErrors.NOT_FRIENDS) {
-                    DropdownMenuItem(text = { Text("Retry") }, onClick = {
-                        menu = false
-                        onRetry(m.clientMsgId)
-                    })
-                }
-                if (failed) {
-                    DropdownMenuItem(text = { Text("Delete") }, onClick = {
-                        menu = false
-                        onDelete(m.clientMsgId)
-                    })
-                }
-            }
-        },
+        onMenu = { sheet = true },
+        footer = { ReactionChipsRow(chips, onOpenReactions) },
     )
+    if (sheet) {
+        val actions = buildList<Pair<String, () -> Unit>> {
+            add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
+            if (retryable) add("Retry" to { onRetry(m.clientMsgId) })
+            if (failed) add("Delete" to { onDelete(m.clientMsgId) })
+        }
+        MessageActionsSheet(
+            canReact = canReact,
+            myReactions = chips.filter { it.mine }.map { it.emoji }.toSet(),
+            onReact = onReact,
+            actions = actions,
+            onDismiss = { sheet = false },
+        )
+    }
 }
 
 /** §9: a former friend's chat is read-only; offer a new friend request instead of a composer. */
@@ -207,24 +226,51 @@ private fun NotFriendsBar(name: String, requested: Boolean, onAddFriend: () -> U
     }
 }
 
+/** Composer: emoji picker (inserts at the cursor), grapheme counter from 3,900, send disabled when too long (§11.1). */
 @Composable
-private fun InputBar(draft: String, onDraft: (String) -> Unit, onSend: () -> Unit, placeholder: String = "Message") {
+private fun Composer(
+    value: androidx.compose.ui.text.input.TextFieldValue,
+    onValue: (androidx.compose.ui.text.input.TextFieldValue) -> Unit,
+    onSend: () -> Unit,
+    placeholder: String = "Message",
+) {
+    var picker by remember { mutableStateOf(false) }
+    val text = value.text
+    // Graphemes ≤ chars: only count when it could matter.
+    val limits = if (text.length < lk.codegen.risime.data.BodyLimits.COUNTER_FROM) null else lk.codegen.risime.data.BodyLimits.of(text, lk.codegen.risime.data.IcuGraphemes)
     Surface(tonalElevation = 2.dp) {
-        Row(
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = Spacing.sm, vertical = Spacing.xs + Spacing.xxs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = onDraft,
-                placeholder = { Text(placeholder) },
-                modifier = Modifier.weight(1f),
-                maxLines = 5,
-                shape = RisiShapes.input,
-            )
-            IconButton(onClick = onSend, enabled = draft.isNotBlank()) {
-                Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = MaterialTheme.colorScheme.primary)
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = Spacing.sm, vertical = Spacing.xs + Spacing.xxs)) {
+            if (limits?.showCounter == true) {
+                Text(
+                    "%,d / %,d".format(limits.graphemes, lk.codegen.risime.data.BodyLimits.MAX_GRAPHEMES) + if (limits.tooLong) " · too long" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (limits.tooLong) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.End).padding(end = Spacing.sm),
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { picker = true }) {
+                    Text("🙂", style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { contentDescription = "Emoji" })
+                }
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onValue,
+                    placeholder = { Text(placeholder) },
+                    modifier = Modifier.weight(1f),
+                    maxLines = 5,
+                    shape = RisiShapes.input,
+                )
+                IconButton(onClick = onSend, enabled = text.isNotBlank() && limits?.tooLong != true) {
+                    Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = MaterialTheme.colorScheme.primary)
+                }
             }
         }
+    }
+    if (picker) {
+        EmojiPickerSheet(onPick = { e ->
+            val sel = value.selection
+            val newText = text.replaceRange(sel.min, sel.max, e)
+            onValue(androidx.compose.ui.text.input.TextFieldValue(newText, androidx.compose.ui.text.TextRange(sel.min + e.length)))
+        }, onDismiss = { picker = false })
     }
 }

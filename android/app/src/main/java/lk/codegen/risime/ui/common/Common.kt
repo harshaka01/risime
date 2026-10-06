@@ -290,11 +290,14 @@ fun MessageBubble(
     tapOpensMenu: Boolean = false,
     onMenu: () -> Unit,
     menu: @Composable () -> Unit = {},
+    /** Under the bubble (reaction chips). */
+    footer: @Composable () -> Unit = {},
 ) {
     val c = RisiTheme.colors
     val statusLabel = status?.let { tickLabel(it) }
     Box(Modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
         menu()
+        Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
         Surface(
             color = if (mine) c.bubbleMine else c.bubbleTheirs,
             contentColor = if (mine) c.onBubbleMine else c.onBubbleTheirs,
@@ -328,6 +331,8 @@ fun MessageBubble(
                     }
                 }
             }
+        }
+        footer()
         }
     }
 }

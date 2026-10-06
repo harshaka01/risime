@@ -143,7 +143,7 @@ class ChatEngineTest {
     fun emptyOrTooLongBodyIsNotQueued() = runTest {
         val e = engine()
         assertNull(e.sendText(peer, "   "))
-        assertNull(e.sendText(peer, "a".repeat(4097)))
+        assertNull(e.sendText(peer, "a".repeat(16 * 1024 + 1))) // §11.1 byte cap; graphemes are the server's call
         assertTrue(messages.rows.isEmpty())
     }
 

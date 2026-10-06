@@ -184,7 +184,8 @@ class ChatEngine(
     /** Insert as pending first, then try to push. Returns the client_msg_id. */
     suspend fun sendText(peerId: String, text: String): String? {
         val body = text.trim()
-        if (body.isEmpty() || body.length > MAX_BODY) return null
+        // §11.1: the server counts graphemes (authoritative); the composer warns with ICU. Here only the byte cap.
+        if (body.isEmpty() || body.toByteArray(Charsets.UTF_8).size > MAX_BODY_BYTES) return null
         val me = meId() ?: return null
         val id = newClientMsgId()
         val conv = dmConversationId(me, peerId)
@@ -365,6 +366,7 @@ class ChatEngine(
 
     companion object {
         const val MAX_BODY = 4096
+        const val MAX_BODY_BYTES = 16 * 1024
 
         /** Local only: stale_epoch/e2ee_required couldn't be resolved now; stays PENDING, retried later. */
         const val RETRY_LATER = "retry_later"

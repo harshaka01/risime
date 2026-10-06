@@ -530,7 +530,16 @@ class AppContainer(context: Context) {
 
     private suspend fun notifyFromLocal() {
         val open = openChatPeer.value.takeIf { foreground.value }
-        val plan = planChatNotifications(db.messages().unreadIncoming(), contacts.contacts.first(), sessionStore.notifiedUpTo(), open)
+        val since = sessionStore.notifiedUpTo()
+        val contactList = contacts.contacts.first()
+        val me = sessionStore.current()?.user?.id ?: return
+        val names = contactList.filter { it.userId != null }.associate { it.userId!!.lowercase() to it.displayName }
+        val reactionAdds = db.reactions().addsSince(since)
+        val targets = reactionAdds.map { it.targetMessageId }.distinct().associateWith { db.messages().byMessageId(it) }
+        val plan = lk.codegen.risime.push.mergeReactionNotifications(
+            planChatNotifications(db.messages().unreadIncoming(), contactList, since, open),
+            reactionAdds, { targets[it] }, { id -> names[id.lowercase()] ?: "Someone" }, me, open,
+        )
         if (!foreground.value) notifier.postChats(plan)
         plan.maxOfOrNull { it.newestTs }?.let { sessionStore.setNotifiedUpTo(maxOf(it, sessionStore.notifiedUpTo())) }
         val incoming = contacts.friendsState.value.incoming

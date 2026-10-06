@@ -81,3 +81,32 @@ fun shouldRegisterDevice(pushConfigured: Boolean, signedIn: Boolean, phoneVerifi
 /** Ask for POST_NOTIFICATIONS once, after sign-in, on Android 13+; respect a denial. */
 fun shouldPromptNotifications(sdk: Int, granted: Boolean, alreadyAsked: Boolean, signedIn: Boolean): Boolean =
     sdk >= 33 && signedIn && !granted && !alreadyAsked
+
+/**
+ * §11.2: only an effective `add` on one of MY messages by someone else notifies:
+ * "<name> reacted 👍 to: <preview>". Merged into that chat's notification (or a new one).
+ */
+fun mergeReactionNotifications(
+    plan: List<ChatNotification>,
+    adds: List<lk.codegen.risime.data.db.ReactionEntity>,
+    myMessage: (targetMessageId: String) -> MessageEntity?,
+    nameOf: (userId: String) -> String,
+    me: String,
+    suppressPeer: String? = null,
+): List<ChatNotification> {
+    val byConv = plan.associateBy { it.conversationId }.toMutableMap()
+    adds.filter { it.op == "add" && !it.pending && !it.reactorUserId.equals(me, true) }
+        .filter { suppressPeer == null || !it.reactorUserId.equals(suppressPeer, true) }
+        .mapNotNull { r -> myMessage(r.targetMessageId)?.takeIf { it.outgoing }?.let { r to it } }
+        .sortedBy { it.first.localTs }
+        .forEach { (r, target) ->
+            val line = "${nameOf(r.reactorUserId)} reacted ${r.emoji} to: ${preview(target.body)}"
+            val cur = byConv[r.conversationId]
+            byConv[r.conversationId] = if (cur == null) {
+                ChatNotification(r.conversationId, r.reactorUserId, nameOf(r.reactorUserId), listOf(line), 1, r.localTs)
+            } else {
+                cur.copy(lines = (cur.lines + line).takeLast(MAX_LINES), count = cur.count + 1, newestTs = maxOf(cur.newestTs, r.localTs))
+            }
+        }
+    return byConv.values.sortedByDescending { it.newestTs }
+}

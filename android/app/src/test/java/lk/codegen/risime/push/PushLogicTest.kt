@@ -70,4 +70,30 @@ class PushLogicTest {
         assertFalse(shouldPromptNotifications(34, granted = true, alreadyAsked = false, signedIn = true))
         assertFalse(shouldPromptNotifications(34, false, false, signedIn = false))
     }
+
+    @Test fun reactionsNotifyOnlyForEffectiveAddsOnMyMessages() {
+        fun r(target: String, reactor: String, emoji: String, op: String = "add", pending: Boolean = false, ts: Long = 50) =
+            lk.codegen.risime.data.db.ReactionEntity("dm:k1", target, reactor, emoji, op, op, "t", "mid", pending, null, ts)
+        val mine = MessageEntity("c-mine", "m-mine", "dm:k1", "me", "k1", "lunch at 1?", null, 10, "READ", outgoing = true)
+        val theirs = inc("t1", "k1", 11)
+        val adds = listOf(
+            r("m-mine", "k1", "👍"),
+            r("m-mine", "k1", "😂", op = "remove"), // a remove never notifies
+            r("m-theirs", "me2", "❤️"), // not my message
+            r("m-mine", "me", "🙏"), // my own reaction
+            r("m-mine", "k1", "😮", pending = true),
+        )
+        val lookup = mapOf("m-mine" to mine, "m-theirs" to theirs.copy(messageId = "m-theirs"))
+        val out = mergeReactionNotifications(emptyList(), adds, { lookup[it] }, { if (it == "k1") "Kamal" else it }, "me")
+        val n = out.single()
+        assertEquals(listOf("Kamal reacted 👍 to: lunch at 1?"), n.lines)
+        assertEquals("Kamal", n.title)
+        // Merged into an existing chat notification.
+        val existing = planChatNotifications(listOf(inc("1", "k1", 60)), contacts, 0)
+        val merged = mergeReactionNotifications(existing, adds, { lookup[it] }, { "Kamal" }, "me").single()
+        assertEquals(listOf("hi 1", "Kamal reacted 👍 to: lunch at 1?"), merged.lines)
+        assertEquals(2, merged.count)
+        // The open chat never notifies.
+        assertTrue(mergeReactionNotifications(emptyList(), adds, { lookup[it] }, { "Kamal" }, "me", suppressPeer = "K1").isEmpty())
+    }
 }

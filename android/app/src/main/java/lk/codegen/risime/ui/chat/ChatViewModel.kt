@@ -38,6 +38,22 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
         c.scope.launch { c.realtime.typing(peerId, typing) }
     })
 
+    /** §11.2: reaction chips per target message_id. */
+    val reactions: StateFlow<Map<String, List<lk.codegen.risime.data.ReactionChip>>> =
+        c.db.reactions().forConversation(conversationId)
+            .map { rows -> rows.groupBy { it.targetMessageId }.mapValues { (_, rs) -> lk.codegen.risime.data.chipsFor(rs, meId) } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    fun react(targetMessageId: String, emoji: String, op: String) {
+        c.scope.launch { c.engine.react(peerId, targetMessageId, emoji, op) }
+    }
+
+    fun nameOf(userId: String): String = when {
+        userId.equals(meId, true) -> "You"
+        userId.equals(peerId, true) -> peer.value?.displayName ?: "Friend"
+        else -> "Former friend"
+    }
+
     /** §10.4: lock / "not end-to-end encrypted yet" strip. Unavailable without an MLS core. */
     private val _e2ee = kotlinx.coroutines.flow.MutableStateFlow<lk.codegen.risime.data.mls.E2eeState>(lk.codegen.risime.data.mls.E2eeState.Unavailable)
     val e2ee: StateFlow<lk.codegen.risime.data.mls.E2eeState> = _e2ee
