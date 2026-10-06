@@ -75,6 +75,14 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
             }
         }
     }
+    val switch by c.accountSwitch.collectAsState()
+    switch?.let { q ->
+        lk.codegen.risime.ui.common.AccountSwitchDialog(
+            q.previousName, q.newName,
+            onContinue = { q.answer.complete(true) },
+            onCancel = { q.answer.complete(false) },
+        )
+    }
 }
 
 @Composable

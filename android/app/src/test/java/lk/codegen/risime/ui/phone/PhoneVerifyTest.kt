@@ -42,7 +42,7 @@ class PhoneVerifyTest {
         }
         override suspend fun me() = meReply
         override suspend fun verified(user: User) { verifiedUser = user }
-        override suspend fun signOut(confirmed: lk.codegen.risime.data.UserConfirmation) { signedOut = true }
+        override suspend fun signOut() { signedOut = true }
     }
 
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
@@ -132,7 +132,7 @@ class PhoneVerifyTest {
         b.requestReply = ApiResult.Ok(PhoneVerifyRequestReply("sent", 300, "+9477•••••22"))
         vm.sendCode(); runCurrent()
         assertTrue(vm.state.value.sent)
-        vm.signOut(lk.codegen.risime.data.testConfirmation()); runCurrent()
+        vm.signOut(); runCurrent()
         assertTrue(b.signedOut)
     }
 }

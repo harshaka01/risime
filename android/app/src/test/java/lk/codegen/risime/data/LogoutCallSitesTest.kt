@@ -30,6 +30,13 @@ class LogoutCallSitesTest {
         assertEquals(setOf("AppContainer.kt", "Daos.kt"), files(Regex("""allChatData\(""")))
         assertEquals(setOf("AppContainer.kt"), files(Regex("""wipeDb\(""")))
         assertEquals("only clearLocal (explicit logout) and switchServer", 2, sites(Regex("""localAccount\.(logout|switchServer)\(""")).size)
+        // Only the explicit "Log out" (Settings, chats menu) calls the wiping logout; escape screens
+        // (blocked, identity conflict, locked, required update, confirm phone) use signOutKeepChats.
+        assertEquals(setOf("ChatsViewModel.kt", "SettingsViewModel.kt"), files(Regex("""\bc\.logout\(""")))
+        assertEquals(
+            setOf("AppContainer.kt", "AuthScreens.kt", "AuthUi.kt", "UpdateUi.kt", "PhoneVerifyViewModel.kt"),
+            files(Regex("""signOutKeepChats\(""")),
+        )
         // Nothing outside the confirmed logout calls the container's logout.
         val callers = sites(Regex("""\bc\.logout\(|\bcontainer\.logout\("""))
         assertTrue("every caller passes the dialog's confirmation: $callers", callers.all { site ->

@@ -147,7 +147,10 @@ class LoginViewModel(private val c: AppContainer, private val clock: () -> Long 
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             when (val r = c.api.verify(phone, s.code, Build.MODEL ?: "Android")) {
-                is ApiResult.Ok -> c.onLoggedIn(r.value.token, r.value.user) // session flow switches to the chats
+                is ApiResult.Ok -> if (!c.onLoggedIn(r.value.token, r.value.user)) {
+                    // Another account's chats were kept: back to the sign-in form.
+                    _state.update { it.copy(busy = false, code = "") }
+                } // else the session flow switches to the chats
                 is ApiResult.Error -> {
                     val locked = r.httpStatus == 410 || r.code == "too_many_attempts" || (r.code == "invalid_code" && r.attemptsLeft == 0)
                     _state.update {

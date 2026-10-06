@@ -15,15 +15,18 @@ class UserConfirmation private constructor() {
     }
 }
 
+/** What [LocalAccount.beforeSignIn] decided. */
+enum class SignInDecision { KEEP, WIPED, CANCELLED }
+
 /** Why local chat data is deleted. These are the only reasons (P0 nightly.10, hotfix rules). */
 enum class WipeReason {
-    /** The user confirmed "Log out" / "Sign out". */
+    /** The user confirmed "Log out" (Settings or the chats menu only). */
     LOGOUT,
 
     /** The user confirmed a different server: its tokens and data don't belong to the new one. */
     SWITCH_SERVER,
 
-    /** A sign-in confirmed as a different account (stable ids that compare unequal). */
+    /** A different account (stable ids that compare unequal) and the user confirmed the switch. */
     DIFFERENT_ACCOUNT,
 }
 
@@ -55,16 +58,27 @@ class LocalAccount(
     private val wipe: suspend (WipeReason) -> Unit,
     private val log: (String) -> Unit = {},
 ) {
-    /** Before a new login is saved: wipes only for a confirmed different account. Returns true if it wiped. */
-    suspend fun beforeSignIn(user: User): Boolean {
+    /**
+     * Before a new login is saved. The same (or an uncertain) account keeps everything. A confirmed
+     * different account asks first ([confirmSwitch] with the previous and the new display name):
+     * yes wipes, no keeps the data and the caller abandons this sign-in. The default never wipes.
+     */
+    suspend fun beforeSignIn(
+        user: User,
+        confirmSwitch: suspend (previousName: String?, newName: String) -> Boolean = { _, _ -> false },
+    ): SignInDecision {
         val previous = store.lastUserId()
         if (!AccountIds.confirmedDifferent(previous, user.id)) {
             if (previous != null && AccountIds.stable(previous) == null) log("sign-in: previous account id not comparable, data kept")
-            return false
+            return SignInDecision.KEEP
         }
-        log("sign-in: a different account, wiping local chats")
+        if (!confirmSwitch(store.lastUserName(), user.displayName)) {
+            log("sign-in: a different account, the user kept the chats")
+            return SignInDecision.CANCELLED
+        }
+        log("sign-in: a different account, confirmed: wiping local chats")
         wipe(WipeReason.DIFFERENT_ACCOUNT)
-        return true
+        return SignInDecision.WIPED
     }
 
     /** Session ended / token rejected / key invalidated: back to sign-in, chats and owner kept. */

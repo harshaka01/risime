@@ -61,6 +61,9 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
     /** The user whose chats are on this device (survives sign-outs that keep data). */
     suspend fun lastUserId(): String? = store.data.first()[LAST_USER]
 
+    /** The display name of [lastUserId] (for "Chats from <name> are on this phone"). */
+    suspend fun lastUserName(): String? = store.data.first()[LAST_USER_NAME]
+
     val serverUrl: Flow<String> = store.data.map { it[SERVER_URL] ?: defaultServerUrl }
 
     suspend fun currentServerUrl(): String = serverUrl.first()
@@ -79,6 +82,7 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
             it[KIND] = AuthKind.DEV.name
             it[USER] = ProtocolJson.encodeToString(User.serializer(), user)
             it[LAST_USER] = AccountIds.stable(user.id) ?: user.id
+            it[LAST_USER_NAME] = user.displayName
         }
     }
 
@@ -89,6 +93,7 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
             it[KIND] = AuthKind.OIDC.name
             it[USER] = ProtocolJson.encodeToString(User.serializer(), user)
             it[LAST_USER] = AccountIds.stable(user.id) ?: user.id
+            it[LAST_USER_NAME] = user.displayName
         }
     }
 
@@ -106,6 +111,7 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
             it.remove(USER)
             it.remove(KIND)
             it.remove(LAST_USER)
+            it.remove(LAST_USER_NAME)
             it[SERVER_URL] = url.trim().trimEnd('/')
         }
     }
@@ -119,7 +125,10 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
             it.remove(TOKEN)
             it.remove(USER)
             it.remove(KIND)
-            if (forgetUser) it.remove(LAST_USER)
+            if (forgetUser) {
+                it.remove(LAST_USER)
+                it.remove(LAST_USER_NAME)
+            }
         }
     }
 
@@ -190,6 +199,7 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         private val SALT = stringPreferencesKey("install_salt")
         private val KIND = stringPreferencesKey("auth_kind")
         private val LAST_USER = stringPreferencesKey("last_user_id")
+        private val LAST_USER_NAME = stringPreferencesKey("last_user_name")
         private val AUTH_OVERRIDE = stringPreferencesKey("auth_override")
         private val DEVICE_ID = stringPreferencesKey("device_id")
         private val NOTIFIED_UP_TO = stringPreferencesKey("notified_up_to")

@@ -44,6 +44,12 @@ private fun CenteredColumn(content: @Composable () -> Unit) {
     ) { content() }
 }
 
+/** Escape screens sign out without deleting chats (P0 nightly.10: people tap through to get unstuck). */
+const val SIGN_OUT_KEEPS_CHATS = "Sign out (keeps your chats)"
+const val SIGN_IN_ANOTHER_ACCOUNT = "Sign in with another account"
+const val NOT_ALLOWLISTED_TEXT =
+    "This RisiCloud account isn't on the RisiMe pilot list. Sign in with the account you were invited with."
+
 /** "RisiMe is locked — Unlock": one fingerprint per process start (decision 014). */
 @Composable
 fun LockedScreen(authUi: AuthUi) {
@@ -58,9 +64,7 @@ fun LockedScreen(authUi: AuthUi) {
             textAlign = TextAlign.Center,
         )
         Button(onClick = authUi::unlock, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Unlock") }
-        lk.codegen.risime.ui.common.ConfirmLogout(onConfirm = authUi::signOutLocked) { ask ->
-            TextButton(onClick = ask, enabled = !busy) { Text("Sign out") }
-        }
+        TextButton(onClick = authUi::signOutLocked, enabled = !busy) { Text(SIGN_OUT_KEEPS_CHATS) }
     }
 }
 
@@ -74,10 +78,10 @@ fun BlockedScreen(blocked: Blocked, c: AppContainer, authUi: AuthUi) {
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.semantics { heading() },
         )
-        Text(blocked.message, textAlign = TextAlign.Center)
+        Text(if (blocked.kind == BlockKind.NOT_ALLOWLISTED) NOT_ALLOWLISTED_TEXT else blocked.message, textAlign = TextAlign.Center)
         Text(
             if (blocked.kind == BlockKind.NOT_ALLOWLISTED) {
-                "Ask your RisiMe admin to add your email, or use another account."
+                "Your chats on this phone are kept."
             } else {
                 "An admin must re-bind this phone number to your account."
             },
@@ -87,15 +91,13 @@ fun BlockedScreen(blocked: Blocked, c: AppContainer, authUi: AuthUi) {
         if (blocked.kind == BlockKind.NOT_ALLOWLISTED) {
             Button(onClick = {
                 scope.launch {
-                    c.abandonAccount()
+                    c.signOutKeepChats(notice = null)
                     val choice = signInChoice(c.api.authConfig(), BuildConfig.DEBUG, AuthOverride.FORCE_OIDC)
                     if (choice is SignInChoice.Options && SignInOption.OIDC in choice.options) authUi.signIn(choice.config, fresh = true)
                 }
-            }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Use another account") }
+            }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(SIGN_IN_ANOTHER_ACCOUNT) }
         }
-        lk.codegen.risime.ui.common.ConfirmLogout(onConfirm = { confirmed -> scope.launch { c.logout(confirmed) } }) { ask ->
-            OutlinedButton(onClick = ask, modifier = Modifier.fillMaxWidth()) { Text("Sign out") }
-        }
+        OutlinedButton(onClick = { scope.launch { c.signOutKeepChats() } }, modifier = Modifier.fillMaxWidth()) { Text(SIGN_OUT_KEEPS_CHATS) }
     }
 }
 

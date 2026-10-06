@@ -9,6 +9,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.room.withTransaction
 import io.michaelrocks.libphonenumber.android.PhoneNumberUtil
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,6 +83,8 @@ import java.util.concurrent.TimeUnit
 
 /** Bound on each best-effort server call at logout (the local logout never waits longer). */
 private const val LOGOUT_NETWORK_MS = 5_000L
+
+private const val SWITCH_CANCELLED = "Sign-in cancelled — the chats on this phone are kept."
 
 /** A Keycloak end_session to open in the browser (id_token_hint + post-logout redirect). */
 data class EndSession(val issuer: String, val idToken: String)
@@ -533,11 +536,33 @@ class AppContainer(
         }
     }
 
-    /** Dev OTP login (DEV_LOCAL_AUTH servers). Only a confirmed different account wipes local chats. */
-    suspend fun onLoggedIn(token: String, user: User) {
-        localAccount.beforeSignIn(user)
+    /**
+     * A sign-in by a different account than the one whose chats are on this phone: the UI asks
+     * "delete them?" ([accountSwitch]); no answer = keep.
+     */
+    data class AccountSwitch(val previousName: String, val newName: String, val answer: CompletableDeferred<Boolean>)
+
+    val accountSwitch = MutableStateFlow<AccountSwitch?>(null)
+
+    private suspend fun askAccountSwitch(previousName: String?, newName: String): Boolean {
+        val q = AccountSwitch(previousName?.takeIf { it.isNotBlank() } ?: "another account", newName, CompletableDeferred())
+        accountSwitch.value = q
+        return try {
+            q.answer.await()
+        } finally {
+            accountSwitch.value = null
+        }
+    }
+
+    /** Dev OTP login (DEV_LOCAL_AUTH servers). False when the user kept another account's chats (not signed in). */
+    suspend fun onLoggedIn(token: String, user: User): Boolean {
+        if (localAccount.beforeSignIn(user, ::askAccountSwitch) == lk.codegen.risime.data.SignInDecision.CANCELLED) {
+            signInNotice.value = SWITCH_CANCELLED
+            return false
+        }
         signInNotice.value = null
         sessionStore.saveLogin(token, user)
+        return true
     }
 
     /**
@@ -547,19 +572,17 @@ class AppContainer(
     suspend fun completeOidcSignIn(issuer: String, clientId: String, tokens: OidcTokens): String? {
         auth.adopt(issuer, clientId, tokens)
         return when (val o = meOutcome(api.me())) {
-            is MeOutcome.Ok -> {
-                adoptOidcUser(o.user)
-                null
-            }
+            is MeOutcome.Ok -> if (adoptOidcUser(o.user)) null else SWITCH_CANCELLED
             is MeOutcome.NeedsPhone -> {
                 // Signed in; the gate shows "Confirm your phone" before anything connects.
                 val user = o.user ?: (api.me() as? ApiResult.Ok)?.value?.user?.copy(phoneVerified = false)
                 if (user == null) {
                     auth.signOut()
                     "Can't reach the RisiMe server. Try again."
-                } else {
-                    adoptOidcUser(user)
+                } else if (adoptOidcUser(user)) {
                     null
+                } else {
+                    SWITCH_CANCELLED
                 }
             }
             is MeOutcome.Refused -> {
@@ -577,11 +600,17 @@ class AppContainer(
         }
     }
 
-    private suspend fun adoptOidcUser(user: User) {
-        localAccount.beforeSignIn(user)
+    /** False when the user kept another account's chats: this sign-in is dropped. */
+    private suspend fun adoptOidcUser(user: User): Boolean {
+        if (localAccount.beforeSignIn(user, ::askAccountSwitch) == lk.codegen.risime.data.SignInDecision.CANCELLED) {
+            withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { auth.signOut() } }
+            runCatching { auth.forgetLocally() }
+            return false
+        }
         blocked.value = null
         signInNotice.value = null
         sessionStore.saveOidcLogin(user)
+        return true
     }
 
     /**
@@ -632,6 +661,19 @@ class AppContainer(
         // Keycloak end_session in the browser, after the local logout: its failure (e.g. an
         // unregistered post-logout redirect) changes nothing here.
         end?.let { endSessionRequests.tryEmit(it) }
+    }
+
+    /**
+     * Every escape-screen "Sign out" (blocked, identity conflict, locked, required update, confirm
+     * phone): tokens and session go, the chats stay. Only Settings / the chats menu "Log out" wipes.
+     */
+    suspend fun signOutKeepChats(notice: String? = "Signed out — your chats are kept.") {
+        realtime.stop()
+        withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { auth.signOut() } }
+        runCatching { auth.forgetLocally() }
+        blocked.value = null
+        localAccount.signOutKeepData()
+        signInNotice.value = notice
     }
 
     /** §6: token rejected (refresh already tried): back to sign-in, keeping local chats. */

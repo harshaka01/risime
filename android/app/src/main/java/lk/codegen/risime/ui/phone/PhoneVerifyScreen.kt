@@ -56,9 +56,7 @@ fun PhoneVerifyScreen(vm: PhoneVerifyViewModel) {
         }
     }
     PhoneVerifyContent(s, vm::onCode, vm::confirm, vm::sendCode) {
-        lk.codegen.risime.ui.common.ConfirmLogout(onConfirm = vm::signOut) { open ->
-            TextButton(onClick = open, enabled = !s.busy) { Text("Sign out") }
-        }
+        TextButton(onClick = vm::signOut, enabled = !s.busy) { Text(lk.codegen.risime.ui.auth.SIGN_OUT_KEEPS_CHATS) }
     }
 }
 

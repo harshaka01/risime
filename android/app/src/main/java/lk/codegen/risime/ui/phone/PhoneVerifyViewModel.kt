@@ -76,7 +76,8 @@ interface PhoneVerifyBackend {
     /** Confirmed: store the verified user; the gate moves on to Chats. */
     suspend fun verified(user: User)
 
-    suspend fun signOut(confirmed: lk.codegen.risime.data.UserConfirmation)
+    /** Escape: tokens go, chats stay. */
+    suspend fun signOut()
 }
 
 class AppPhoneBackend(private val c: AppContainer) : PhoneVerifyBackend {
@@ -84,8 +85,8 @@ class AppPhoneBackend(private val c: AppContainer) : PhoneVerifyBackend {
     override suspend fun confirm(code: String) = c.api.confirmPhoneCode(code).also { c.handleAuthError401(it) }
     override suspend fun me() = c.api.me()
     override suspend fun verified(user: User) = c.onPhoneVerified(user)
-    override suspend fun signOut(confirmed: lk.codegen.risime.data.UserConfirmation) {
-        c.scope.launch { c.logout(confirmed) }.join()
+    override suspend fun signOut() {
+        c.scope.launch { c.signOutKeepChats() }.join()
     }
 }
 
@@ -165,9 +166,9 @@ class PhoneVerifyViewModel(
         }
     }
 
-    fun signOut(confirmed: lk.codegen.risime.data.UserConfirmation) {
+    fun signOut() {
         _state.update { it.copy(busy = true) }
-        viewModelScope.launch { backend.signOut(confirmed) }
+        viewModelScope.launch { backend.signOut() }
     }
 
     private suspend fun applyError(e: PhoneErrorUi) {

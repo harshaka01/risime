@@ -9,9 +9,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 
-const val LOGOUT_CONFIRM_TITLE = "Log out and delete chats?"
-const val LOGOUT_CONFIRM_TEXT =
-    "Chats on this phone are deleted. To keep them, cancel: your chats stay when you just sign in again."
+const val LOGOUT_CONFIRM_TITLE = "Log out?"
+const val LOGOUT_CONFIRM_TEXT = "This deletes the chats on this phone."
 
 /** The confirmation itself (stateless): "Log out" deletes local chats, so it is never one tap. */
 @Composable
@@ -42,4 +41,19 @@ fun ConfirmLogout(onConfirm: (lk.codegen.risime.data.UserConfirmation) -> Unit, 
             onDismiss = { asking = false },
         )
     }
+}
+
+fun accountSwitchText(previousName: String, newName: String) =
+    "Chats from $previousName are on this phone. Signing in as $newName deletes them. Continue?"
+
+/** A different account signs in: ask before deleting the previous account's chats (cancel keeps them). */
+@Composable
+fun AccountSwitchDialog(previousName: String, newName: String, onContinue: () -> Unit, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Switch account?") },
+        text = { Text(accountSwitchText(previousName, newName)) },
+        confirmButton = { TextButton(onClick = onContinue) { Text("Delete chats and continue") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+    )
 }

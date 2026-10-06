@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -105,6 +106,10 @@ abstract class ReleasedInstallFixture {
 
     protected fun AppContainer.counts() = runBlocking { db.messages().countAll() to db.contacts().all().first().size }
 
+    /** The answer the "Switch account?" dialog gives (null = it must not be asked). */
+    protected var switchAnswer: Boolean? = null
+    protected var switchAsked = 0
+
     protected fun upgradeThenSignIn(fromVersion: Int, storedId: String, signInId: String, signedIn: Boolean): AppContainer {
         writeReleasedDb(fromVersion)
         writeReleasedPrefs(storedId, signedIn)
@@ -113,7 +118,16 @@ abstract class ReleasedInstallFixture {
         runBlocking {
             // A forced re-sign-in (session ended), then the same account signs in again.
             c.signOutKeepData("Sign in again — your chats are kept.")
+            val answerer = kotlinx.coroutines.CoroutineScope(Dispatchers.Default).launch {
+                c.accountSwitch.collect { q ->
+                    if (q != null) {
+                        switchAsked++
+                        q.answer.complete(switchAnswer ?: error("asked to switch accounts for the same account"))
+                    }
+                }
+            }
             c.onLoggedIn("dev-token", user(signInId))
+            answerer.cancel()
         }
         return c
     }
@@ -146,8 +160,20 @@ class UpgradeKeepsDataTest : ReleasedInstallFixture() {
         c.db.close()
     }
 
-    @Test fun aConfirmedDifferentAccountWipes() {
+    @Test fun aDifferentAccountWhoCancelsKeepsChats() {
+        switchAnswer = false
         val c = upgradeThenSignIn(4, peer, me, signedIn = false)
+        assertEquals(1, switchAsked)
+        assertEquals(2 to 1, c.counts())
+        assertNull("not signed in", runBlocking { c.sessionStore.current() })
+        assertEquals(peer, runBlocking { c.sessionStore.lastUserId() })
+        c.db.close()
+    }
+
+    @Test fun aConfirmedDifferentAccountWipes() {
+        switchAnswer = true
+        val c = upgradeThenSignIn(4, peer, me, signedIn = false)
+        assertEquals(1, switchAsked)
         assertEquals(0 to 0, c.counts())
         assertNull(runBlocking { c.db.sync().cursor() })
         c.db.close()

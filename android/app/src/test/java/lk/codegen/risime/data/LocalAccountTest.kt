@@ -35,16 +35,16 @@ class LocalAccountTest {
     @After fun close() = scope.cancel()
 
     @Test fun firstSignInNeverWipes() = runBlocking {
-        assertFalse(account.beforeSignIn(user(a)))
+        assertEquals(SignInDecision.KEEP, account.beforeSignIn(user(a)))
         assertTrue(wipes.isEmpty())
     }
 
     @Test fun sameAccountAgainKeepsData() = runBlocking {
         store.saveOidcLogin(user(a))
         account.signOutKeepData() // session ended / refresh failed / key invalidated
-        assertFalse(account.beforeSignIn(user(a)))
-        assertFalse(account.beforeSignIn(user(a.uppercase())))
-        assertFalse(account.beforeSignIn(user(" $a ")))
+        assertEquals(SignInDecision.KEEP, account.beforeSignIn(user(a)))
+        assertEquals(SignInDecision.KEEP, account.beforeSignIn(user(a.uppercase())))
+        assertEquals(SignInDecision.KEEP, account.beforeSignIn(user(" $a ")))
         assertTrue(wipes.isEmpty())
         assertEquals(a, store.lastUserId())
     }
@@ -52,22 +52,43 @@ class LocalAccountTest {
     @Test fun storedIdFromAnOlderBuildInAnotherSpellingKeepsData() = runBlocking {
         store.saveLogin("t", user(a.uppercase())) // stored normalized from now on
         assertEquals(a, store.lastUserId())
-        assertFalse(account.beforeSignIn(user(a)))
+        assertEquals(SignInDecision.KEEP, account.beforeSignIn(user(a)))
         assertTrue(wipes.isEmpty())
     }
 
     @Test fun uncertainIdentityKeepsData() = runBlocking {
         store.saveLogin("t", user("legacy-id"))
-        assertFalse(account.beforeSignIn(user(a)))
-        assertFalse(account.beforeSignIn(user("")))
+        assertEquals(SignInDecision.KEEP, account.beforeSignIn(user(a)))
+        assertEquals(SignInDecision.KEEP, account.beforeSignIn(user("")))
         assertTrue(wipes.isEmpty())
     }
 
-    @Test fun confirmedDifferentAccountWipes() = runBlocking {
-        store.saveOidcLogin(user(a))
-        account.signOutKeepData()
-        assertTrue(account.beforeSignIn(user(b)))
+    @Test fun aDifferentAccountAsksFirstAndWipesOnlyOnYes() = runBlocking {
+        store.saveOidcLogin(user(a).copy(displayName = "Kamal"))
+        account.signOutKeepData() // e.g. blocked screen → "Sign in with another account"
+        val asked = mutableListOf<Pair<String?, String>>()
+        // Cancel: data kept, nothing wiped, the owner stays.
+        assertEquals(SignInDecision.CANCELLED, account.beforeSignIn(user(b).copy(displayName = "Nimal")) { p, n -> asked += p to n; false })
+        assertTrue(wipes.isEmpty())
+        assertEquals(a, store.lastUserId())
+        assertEquals(listOf<Pair<String?, String>>("Kamal" to "Nimal"), asked)
+        // No answer given (default): never wipes.
+        assertEquals(SignInDecision.CANCELLED, account.beforeSignIn(user(b)))
+        assertTrue(wipes.isEmpty())
+        // Yes: wipes.
+        assertEquals(SignInDecision.WIPED, account.beforeSignIn(user(b)) { _, _ -> true })
         assertEquals(listOf(WipeReason.DIFFERENT_ACCOUNT), wipes)
+    }
+
+    @Test fun escapeScreenSignOutsNeverWipe() = runBlocking {
+        // Blocked / identity conflict / locked / required update / confirm phone all end in signOutKeepData.
+        repeat(5) {
+            store.saveOidcLogin(user(a))
+            account.signOutKeepData()
+        }
+        assertTrue(wipes.isEmpty())
+        assertEquals(a, store.lastUserId())
+        assertEquals(SignInDecision.KEEP, account.beforeSignIn(user(a)) { _, _ -> error("same account: never asks") })
     }
 
     @Test fun signOutKeepDataNeverWipesAndKeepsTheOwner() = runBlocking {
@@ -85,7 +106,7 @@ class LocalAccountTest {
         assertNull(store.current())
         assertNull(store.lastUserId())
         // The next sign-in (any account) has nothing more to wipe.
-        assertFalse(account.beforeSignIn(user(b)))
+        assertEquals(SignInDecision.KEEP, account.beforeSignIn(user(b)))
         assertEquals(1, wipes.size)
     }
 

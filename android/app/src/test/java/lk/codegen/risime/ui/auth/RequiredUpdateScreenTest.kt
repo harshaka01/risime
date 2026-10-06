@@ -81,7 +81,7 @@ class RequiredUpdateScreenTest {
         rule.onNodeWithText(primary).assertIsDisplayed().assertIsEnabled().assertHasClickAction()
         assertTrue("$primary below the screen", rule.onNodeWithText(primary).fetchSemanticsNode().boundsInRoot.bottom <= rootBottom)
         rule.onNodeWithText(OPEN_DOWNLOAD_PAGE).assertIsDisplayed().assertIsEnabled()
-        rule.onNodeWithText("Sign out").assertIsDisplayed().assertIsEnabled()
+        rule.onNodeWithText(SIGN_OUT_KEEPS_CHATS).assertIsDisplayed().assertIsEnabled()
         rule.onNodeWithText(DEV_BANNER_TEXT).assertIsDisplayed()
     }
 
@@ -103,12 +103,7 @@ class RequiredUpdateScreenTest {
         assertNotesScroll()
         rule.onNodeWithText("Update").performClick()
         rule.onNodeWithText(OPEN_DOWNLOAD_PAGE).performClick()
-        rule.onNodeWithText("Sign out").performClick()
-        assertEquals("sign out is never one tap (it deletes chats)", 0, signOuts)
-        rule.onNodeWithText("Cancel").performClick()
-        assertEquals(0, signOuts)
-        rule.onNodeWithText("Sign out").performClick()
-        rule.onNodeWithText("Log out").performClick()
+        rule.onNodeWithText(SIGN_OUT_KEEPS_CHATS).performClick() // an escape: keeps chats, no dialog
         assertEquals(listOf(1, 1, 1), listOf(updates, downloads, signOuts))
     }
 
@@ -148,7 +143,7 @@ class RequiredUpdateScreenTest {
         gate(UpdateState.Working(info, "Downloading…"), dark = true)
         rule.onNodeWithText("Update").assertIsDisplayed()
         rule.onNodeWithText(OPEN_DOWNLOAD_PAGE).assertIsDisplayed().assertIsEnabled()
-        rule.onNodeWithText("Sign out").assertIsDisplayed().assertIsEnabled()
+        rule.onNodeWithText(SIGN_OUT_KEEPS_CHATS).assertIsDisplayed().assertIsEnabled()
     }
 
     // ---- colours: theme roles only, readable on the gate background in dark and light ----

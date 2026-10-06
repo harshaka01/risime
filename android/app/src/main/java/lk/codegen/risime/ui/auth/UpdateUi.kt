@@ -128,7 +128,7 @@ fun RequiredUpdateScreen(state: UpdateState, info: UpdateInfo, c: AppContainer) 
         info = info,
         onUpdate = { scope.launch { c.updater.update(info) } },
         onOpenDownloadPage = { runCatching { uri.openUri(DOWNLOAD_PAGE_URL) } },
-        onSignOut = { confirmed -> scope.launch { c.logout(confirmed) } },
+        onSignOut = { scope.launch { c.signOutKeepChats() } },
     )
 }
 
@@ -142,7 +142,7 @@ fun RequiredUpdateContent(
     info: UpdateInfo,
     onUpdate: () -> Unit,
     onOpenDownloadPage: () -> Unit,
-    onSignOut: (lk.codegen.risime.data.UserConfirmation) -> Unit,
+    onSignOut: () -> Unit,
 ) {
     val colors = updateGateColors(MaterialTheme.colorScheme)
     val working = state is UpdateState.Working
@@ -192,9 +192,7 @@ fun RequiredUpdateContent(
                     OutlinedButton(onClick = onOpenDownloadPage, modifier = Modifier.weight(1f)) {
                         Text(OPEN_DOWNLOAD_PAGE, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
-                    lk.codegen.risime.ui.common.ConfirmLogout(onConfirm = onSignOut) { ask ->
-                        TextButton(onClick = ask) { Text("Sign out", maxLines = 1) }
-                    }
+                    TextButton(onClick = onSignOut) { Text(SIGN_OUT_KEEPS_CHATS, maxLines = 1) }
                 }
             }
         }

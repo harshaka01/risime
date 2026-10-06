@@ -58,7 +58,7 @@ class CodeScreensTest {
         }
         override suspend fun me(): ApiResult<MeReply> = ApiResult.Ok(MeReply(me.copy(phoneVerified = true)))
         override suspend fun verified(user: User) = Unit
-        override suspend fun signOut(confirmed: lk.codegen.risime.data.UserConfirmation) = Unit
+        override suspend fun signOut() = Unit
     }
 
     private fun phone(b: Backend): PhoneVerifyViewModel {
