@@ -72,6 +72,11 @@ impl MemoryKvStore {
         self.lock().map.iter().map(|(k, v)| k.len() + v.len()).sum()
     }
 
+    /// The largest single value in bytes (tests: the app's `CursorWindow` budget).
+    pub fn largest_value(&self) -> usize {
+        self.lock().map.values().map(Vec::len).max().unwrap_or(0)
+    }
+
     /// Open transaction depth (tests: must be back to 0 after every call).
     pub fn depth(&self) -> usize {
         self.lock().savepoints.len()
