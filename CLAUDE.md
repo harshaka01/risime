@@ -91,8 +91,9 @@ channels client, Room, DataStore, coroutines/Flow. Folder `android/`.
   - Never use `ALLOW FILTERING` or secondary indexes.
 - **Store-and-forward.** The server queues events for each user until they are fetched; the
   client keeps the history.
-- **Encryption banner.** E2EE (MLS) arrives in 0.3. Until then the app shows
-  "Dev build — not end-to-end encrypted". Never remove this banner before E2EE ships.
+- **Encryption state (decision 048).** There is no global dev banner any more. Every chat shows
+  its real state: a lock for E2EE, or "Not end-to-end encrypted yet: <reason>" for a chat that
+  isn't. Never claim encryption for a plaintext chat.
 - **Learning log.** Every future model call is recorded in it (input, output, model, latency,
   cost, user feedback). Keep APIs shaped so this can be added.
 - **On-device data stays on-device.** Behaviour data never leaves the device unless the user
