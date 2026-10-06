@@ -1,0 +1,46 @@
+# RisiMe routes for the risicloud.ai Caddy on spark (owned by the RisiCloud lead).
+# PREPARED, NOT ENABLED (docs/decisions/017, option 2b). Import this inside the existing
+# `risicloud.ai { ... }` site block, e.g. `import /etc/caddy/risime.caddy`.
+# Replace the two placeholders:
+#   {$RISIME_RELEASES}  absolute path of ~/accounts/releases/risime/ on spark
+#   {$RISIME_UPSTREAM}  spark2's tailnet name, e.g. spark2.<tailnet>.ts.net (needs spark on the tailnet)
+
+# 1) Downloads: "Get RisiMe" page, version.json, last five signed APKs (uploaded by
+#    scripts/publish-release over the rrsync-restricted key).
+redir /app/risime /app/risime/ 308
+handle_path /app/risime/* {
+	root * {$RISIME_RELEASES}
+	header /version.json Cache-Control "no-cache"
+	header / Cache-Control "no-cache"
+	header /index.html Cache-Control "no-cache"
+	header *.apk Content-Type "application/vnd.android.package-archive"
+	header *.apk Cache-Control "public, max-age=86400, immutable"
+	file_server
+}
+
+# 2) API + realtime socket (option 2b), only when Harsha says "switch on": Caddy -> spark2's
+#    `tailscale serve` (HTTPS on the tailnet) -> 127.0.0.1:4000. Prefix is stripped; the app's
+#    server URL is https://risicloud.ai/risime . WebSocket upgrades pass through.
+# redir /risime /risime/ 308
+# handle_path /risime/* {
+# 	reverse_proxy https://{$RISIME_UPSTREAM} {
+# 		header_up Host {upstream_hostport}
+# 		transport http {
+# 			tls_server_name {$RISIME_UPSTREAM}
+# 			dial_timeout 5s
+# 		}
+# 		# Phoenix heartbeats every 30 s; keep idle sockets open well past that.
+# 		stream_timeout 24h
+# 		stream_close_delay 5m
+# 	}
+# }
+
+# Logging: the app sends tokens in the Authorization header (contract v1.3 §6.2), which Caddy
+# never logs. Older clients may still use ?token=; strip it from access logs:
+# log {
+# 	format filter {
+# 		request>uri query {
+# 			delete token
+# 		}
+# 	}
+# }
