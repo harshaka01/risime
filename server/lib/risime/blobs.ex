@@ -79,9 +79,11 @@ defmodule RisiMe.Blobs do
   Every check before the body of `POST /blobs` is read, in the contract's order: purpose and
   conversation (`:bad_request`) → rights (`:not_found`, `:not_admin`, `:not_e2ee`) →
   `Content-Type` (`:bad_media_type`) → `Content-Length` (`:bad_request` when missing) → the
-  purpose cap (`:too_large`) → the quota (`{:quota_exceeded, used, limit}`) → the free-space
-  guard (`:storage_full`) → the rate (`{:rate_limited, retry_after_s}`) → a concurrency slot
-  (`{:rate_limited, 2}`) → idempotency.
+  purpose cap (`:too_large`) → idempotency (a replay, a mismatch `:bad_request`, a deleted blob
+  `:not_found`) → the quota (`{:quota_exceeded, used, limit}`) → the free-space guard
+  (`:storage_full`) → the rate (`{:rate_limited, retry_after_s}`) → a concurrency slot
+  (`{:rate_limited, 2}`). Idempotency comes before the quota, guard, rate and slot, so a retry
+  whose `201` was lost always gets its `200` replay, even at the quota (root decision, §14.2).
 
   Returns `{:ok, upload}` (the caller now holds an upload slot and must call
   `release_upload/1`), `{:replay, reply}` for a completed earlier upload with the same
@@ -93,20 +95,12 @@ defmodule RisiMe.Blobs do
          :ok <- octet_stream(content_type),
          {:ok, len} <- declared_length(declared),
          true <- len <= limits(up.purpose).max || {:error, :too_large},
+         :new <- existing(me, up, len),
          :ok <- check_quota(me, up.purpose, len),
          :ok <- DiskGuard.check(up.purpose, len),
          :ok <- check_rate(me, up.purpose),
          :ok <- Slots.acquire(:up, me, @upload_slots, len) do
-      up = Map.put(up, :length, len)
-
-      case existing(me, up, len) do
-        :new ->
-          {:ok, up}
-
-        other ->
-          release_upload(me)
-          other
-      end
+      {:ok, Map.put(up, :length, len)}
     end
   end
 

@@ -45,7 +45,6 @@ defmodule RisiMe.Fixtures do
     end
   end
 
-  @doc "Makes two users friends (v1.6). Accepts users or `logged_in_user/1` maps."
   @doc """
   Switches push to `RisiMe.Push.Test` for the calling test (off again on exit). Use with
   `push_token/1`: pushes reach a test only through tokens it registered itself.
@@ -67,6 +66,7 @@ defmodule RisiMe.Fixtures do
     token
   end
 
+  @doc "Makes two users friends (v1.6). Accepts users or `logged_in_user/1` maps."
   def befriend!(a, b), do: RisiMe.Social.make_friends!(id_of(a), id_of(b))
 
   defp id_of(%{user: %{id: id}}), do: id

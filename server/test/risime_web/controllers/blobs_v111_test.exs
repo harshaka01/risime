@@ -377,6 +377,65 @@ defmodule RisiMeWeb.BlobsV111Test do
     end
   end
 
+  describe "§14 fixes (root decisions)" do
+    test "idempotency before the quota, guard, rate and slot: a retry whose 201 was lost gets 200",
+         ctx do
+      %{a: a, id: id} = ctx
+      p = media(id)
+      up = up!(a.token, p, "xyz")
+
+      # At the quota.
+      with_env(:media_blob_quota, 1)
+      assert {200, ^up, _} = upload(a.token, p, "xyz")
+      assert {413, _, _} = upload(a.token, media(id), "xyz")
+
+      # Disk full.
+      with_env(:blob_disk, {1, 2 * 1024 ** 4})
+      assert {200, ^up, _} = upload(a.token, p, "xyz")
+
+      # Rate exhausted and every slot held.
+      Application.put_env(:risime, :blob_disk, {1024 ** 4, 2 * 1024 ** 4})
+      Application.put_env(:risime, :media_blob_quota, 2048 * @mib)
+      insert_uploads(a.user.id, "media", id, 1200)
+      pids = hold_slots(:up, a.user.id, 3)
+      assert {200, ^up, _} = upload(a.token, p, "xyz")
+      assert {429, _, _} = upload(a.token, media(id), "xyz")
+
+      # A mismatch is still 400 and a deleted blob 404, also when limited.
+      assert {400, _, _} = upload(a.token, p, "xyzw")
+      assert {204, _} = api(:delete, "/api/v1/blobs/#{up["blob_id"]}", a.token)
+      assert {404, _, _} = upload(a.token, p, "xyz")
+      for pid <- pids, do: Process.exit(pid, :kill)
+    end
+
+    test "images_ready counts only installs that can still receive (as §12.1)", ctx do
+      %{a: a, b: b, dm: dm} = ctx
+      alias RisiMe.MLS.Images
+      assert Images.missing([a.user.id, b.user.id]) == []
+
+      # A census instance of a device id that isn't registered (removed) can't receive.
+      :ok = RisiMe.MLS.record_instance(b.user.id, Ecto.UUID.generate(), nil, "0.2.0")
+      assert Images.missing([b.user.id]) == []
+
+      # A device-less (pre-v1.7) instance seen before b's latest registration can't either...
+      :ok = RisiMe.MLS.record_instance(b.user.id, nil, "old", "0.1.0")
+
+      Repo.update_all(
+        from(i in "app_instances", where: i.instance_key == "legacy:old"),
+        set: [last_seen_at: DateTime.add(DateTime.utc_now(), -3600)]
+      )
+
+      assert Images.missing([b.user.id]) == []
+
+      # ...but one seen after it can.
+      Process.sleep(5)
+      :ok = RisiMe.MLS.record_instance(b.user.id, nil, "new", "0.1.0")
+      assert Images.missing([b.user.id]) == [%{user_id: b.user.id, device_id: nil}]
+      {200, view} = api(:get, "/api/v1/mls/groups/#{dm}", a.token)
+      assert view["images_ready"] == false
+    end
+  end
+
   describe "streaming (§14.2)" do
     test "a lying Content-Length is aborted mid-stream with 413; short bodies store nothing",
          ctx do
