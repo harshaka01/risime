@@ -4,9 +4,73 @@
 **v1.4** (one-time SMS phone verification), the **prod-mode pilot release** (decision 024) and
 **v1.5** (push wake-ups, decision 028), **v1.6** (invites and friends, decision 030), **v1.7**
 (E2EE routing with MLS, decision 034; **off until the attestation key exists**), **v1.8**
-(reactions) and **v1.9** (groups with MLS, §12, decision 041) are done.
+(reactions), **v1.9** (groups with MLS, §12, decision 041) and **v1.10** (history after a
+reinstall, §13, decision 043) are done, plus the group-readiness hotfix.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(309 tests).
+(329 tests).
+
+## v1.10 history after a reinstall (§13) — READY
+- **Sender copy (§13.1):** every plaintext DM `message` and every `reaction` is written to the
+  sender's inbox too (same `event_id`, payload and TTL, never pushed). DMs (plaintext and e2ee)
+  write both rows in one store request (`Store.append_event_to_all/2`: one unlogged batch under
+  5 KiB, else one insert each), then broadcast the **sender's copy first**, then the recipient's
+  event, then push the recipient. An idempotent resend with the index missing rewrites both rows.
+- **Self-acks ignored:** `Messaging.ack/3` drops any ack by the message's sender (DM: no
+  `status`, stays `sent`; group: no receipt row, no `group_receipt`).
+- **`history_before` (§13.2):** migration `20261006140000` adds `app_instances.first_seen_at`
+  (nullable, existing rows stay null) and `history_reset`. `MLS.census/4` sets `first_seen_at`
+  (app clock) on insert or on the first connect after a removal, returns it once per socket;
+  join and every `sync` reply carry it (null without a `device_id`). Every device removal
+  (DELETE, logout, eviction, 60-day prune, changed key) sets `history_reset`.
+- **`mls` blob quota (§13.4):** 256 MiB live per user (`:risime, :mls_blob_quota`); order
+  membership → `too_large` (Content-Length) → quota → rate limit → read body → size + quota again.
+  `413 quota_exceeded {used, limit}`. Migration `20261006140100` indexes `blobs(owner, purpose)`.
+- **Contract:** `@pending_v1_10` is gone; the three v1.10 examples are checked. §13.6 server tests:
+  `test/risime_web/channels/history_v110_test.exs`, `test/risime/backfill_sender_copies_test.exs`.
+- **Backfill (§13.5):** `RisiMe.Release.backfill_sender_copies(opts)` → `Store` callback
+  `backfill_sender_copies/2`: paged full scan, copies plaintext DMs whose sender and recipient
+  both exist, `USING TTL <remaining> AND TIMESTAMP <source writetime>`, skips < 60 s left and
+  copies that already exist (idempotent), prints counts only. `dry_run: true` is the default.
+  - **Dry run on risime_dev (2026-10-06 14:10, read-only):** 2 268 965 rows scanned in ~17 s,
+    934 368 plaintext DMs, 934 233 skipped (deleted load-test users), **135 to copy**, 0 existing.
+  - **Run on the pilot, after the v1.10 deploy and its backup** (load the env exactly as
+    `scripts/run-server` does, i.e. `infra/pilot/pilot.env` plus the repo `.env`):
+
+        cd /home/harsha/development/risime && set -a && . ./.env && . infra/pilot/pilot.env && set +a && \
+          ERL_EPMD_ADDRESS=127.0.0.1 ~/risime-run/current/bin/risime eval \
+          'RisiMe.Release.backfill_sender_copies(dry_run: true)'
+        # then the same with dry_run: false; a second run must report copied: 0
+
+- **Load test** (`mix risime.loadtest`, temp dev server on 127.0.0.1:4150 with its own store
+  `RISIME_DEV_DB=RISIME_DEV_KEYSPACE=risime_load`; the same day an A/B against the parent commit
+  `2eb5fd7` on :4151; send→reply ms):
+
+  | run | parent p50 / p99 | v1.10 p50 / p99 | `loadtest.md` p50 / p99 |
+  |---|---|---|---|
+  | 200 × 1/s, 180 s | 4.84 / 7.43; 5.18 / 7.47 | 5.10 / 7.57; 5.20 / 7.61 | 4.28 / 6.29 |
+  | 2000 × 1/0.6 s, 60 s | 6.26 / 171; 8.13 / 105 | 5.98 / 100; 6.21 / 98.8 | 3.6 / 44.9 |
+
+  0 errors and 0 missing pushes in every row above. The same-day A/B shows no regression: p99
+  +2 % (standard), not worse under stress. Against the older `loadtest.md` figures, today's
+  *parent* is already about +19 % (standard) and about 3× (stress) because spark2 now also runs
+  the other roles' builds. The first v1.10 variant (two sequential inserts, then two parallel
+  inserts) gave p99 8.17 ms and saturated the stress run; the batched write replaced it.
+  One stress rerun that started within 20 s of another run (Cassandra still compacting) hit
+  p99 876 ms; on a quiet machine it reproduced at 98.8 ms.
+
+## Group-readiness hotfix (§12.1) — READY
+- `Groups.readiness/1` counts only installs that can still receive: census rows with a
+  `device_id` that is a **registered device** of the user, seen in the last 30 days. A row
+  without a `device_id` never makes a user not-ready by itself. It is listed as
+  `legacy_app` (`device_id: null`) only when the user is not ready anyway and it is their newest
+  instance not superseded by a later `PUT /me/devices`. Tests: `test/risime/groups/readiness_test.exs`.
+- **risime_dev (read-only counts):** 10 users; only **1** has any `devices` row (it is
+  groups-capable, and the new rule makes it ready, where the old rule did not). The 2 other users on
+  nightly.10 have **no registered device**, so they stay not-ready (`no_mls`) under any rule.
+  The pilot log shows `PUT /me/devices` mostly answered **401 `invalid_token`** today (15 of 21)
+  from outside IPs, while their sockets connect. So the app registers with a stale token. That
+  is an android issue (or a token-refresh gap), not readiness.
+- The DM e2ee readiness (`MLS.readiness/1`, §10.2) is unchanged.
 
 ## v1.9 groups with MLS (§12) — READY
 - **Code:** `RisiMe.Groups` (REST, readiness, views, device churn), `Groups.Ops` (pending ops,
