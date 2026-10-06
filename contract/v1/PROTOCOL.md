@@ -1051,6 +1051,11 @@ from this device (`from_device` = mine) is still skipped first, as in §10.3.
   conversation), never a silent drop.
 - A pre-install message is not parked, not decrypted, not stored as a message and not acked. It
   still advances the cursor.
+- **Stale Welcomes:** an `mls_welcome` whose event time (from its event id) is before a non-null
+  `history_before` was made for a key package of an earlier install (or of this device before a
+  logout). The client ignores it: it doesn't try to join from it, and it adds no marker. The real
+  Welcome for the current install comes after `history_before`. (Found by live interop:
+  logout/login on the same device id.)
 
 **The marker line.** Each conversation with at least one pre-install message shows **one** system
 line: **"Earlier messages aren't available on this device"**. The wording is neutral, because the
