@@ -11,7 +11,10 @@
 #   --keep N              keep the newest N backups of this env at the destination. Env: BACKUP_KEEP (14).
 #   --staging DIR         local scratch for remote destinations. Env: BACKUP_STAGING (default: mktemp).
 #   --no-postgres / --no-cassandra   skip one store.
-#   --blobs DIR           also archive the blob store DIR (v1.9 §12.6; encrypted bytes only).
+#   --blobs DIR           also back up the blob store DIR (§12.6/§14; encrypted bytes only). Local
+#                         destinations get an incremental snapshot (rsync --link-dest against the
+#                         previous backup: unchanged blobs are hard links, so 7 backups cost about
+#                         one copy); remote destinations get a blobs.tar.gz.
 #
 # Each backup is a directory  risime-<env>-<UTC stamp>/  containing:
 #   postgres.dump         pg_dump custom format (-Fc) of the database
@@ -19,7 +22,8 @@
 #   postgres-globals.sql  roles (pg_dumpall --globals-only)
 #   cassandra-schema.cql  DESCRIBE KEYSPACE
 #   cassandra-data.tar.gz the keyspace's snapshot directories (nodetool snapshot; flushes first)
-#   blobs.tar.gz          the blob store (only with --blobs)
+#   blobs/ + blobs.list   the blob store snapshot and its "path size" list (local dest, --blobs)
+#   blobs.tar.gz          the blob store (remote dest, --blobs)
 #   MANIFEST              what/when/versions
 #   SHA256SUMS            checksums of all of the above, verified after the copy
 # A backup is written as <name>.partial and renamed only when complete and verified.
@@ -129,9 +133,17 @@ fi
 # ---- Blobs ----
 if [ -n "$BLOBS" ]; then
   mkdir -p "$BLOBS"
-  tar -C "$BLOBS" -czf "$WORK/blobs.tar.gz" .
-  tar -tzf "$WORK/blobs.tar.gz" >/dev/null || die "blob archive unreadable"
-  log "blobs: $(find "$BLOBS" -type f | wc -l) files, $(du -h "$WORK/blobs.tar.gz" | cut -f1)"
+  if [ -n "$REMOTE_HOST" ]; then
+    tar -C "$BLOBS" -czf "$WORK/blobs.tar.gz" .
+    tar -tzf "$WORK/blobs.tar.gz" >/dev/null || die "blob archive unreadable"
+    log "blobs: $(find "$BLOBS" -type f | wc -l) files, $(du -h "$WORK/blobs.tar.gz" | cut -f1)"
+  else
+    prev="$(find "$DEST" -mindepth 2 -maxdepth 2 -type d -name blobs -path "*/risime-$ENV_NAME-*/blobs" | { grep -v '\.partial/' || true; } | sort | tail -1)"
+    rsync -a --delete ${prev:+--link-dest="$prev"} "$BLOBS/" "$WORK/blobs/"
+    (cd "$WORK/blobs" && find . -type f -printf '%P %s\n' | sort) > "$WORK/blobs.list"
+    [ "$(wc -l < "$WORK/blobs.list")" = "$(find "$BLOBS" -type f | wc -l)" ] || die "blob snapshot incomplete"
+    log "blobs: $(wc -l < "$WORK/blobs.list") files, ${prev:+unchanged ones hard-linked to $(basename "$(dirname "$prev")"))}"
+  fi
 fi
 
 # ---- manifest + checksums ----
@@ -145,7 +157,7 @@ fi
   [ -n "$BLOBS" ] && echo "blobs=$BLOBS files=$(find "$BLOBS" -type f | wc -l)"
   [ $DO_CASS = 1 ] && echo "cassandra=$CASS_CTR keyspace=$KS snapshot_tag=$SNAP_TAG $(docker exec "$CASS_CTR" nodetool version)"
 } > "$WORK/MANIFEST"
-(cd "$WORK" && sha256sum -- * > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS && sha256sum --quiet -c SHA256SUMS)
+(cd "$WORK" && find . -maxdepth 1 -type f ! -name 'SHA256SUMS*' -printf '%P\0' | sort -z | xargs -0 sha256sum -- > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS && sha256sum --quiet -c SHA256SUMS)
 
 # ---- ship + retention ----
 prune_list() { grep -E "^risime-$ENV_NAME-[0-9]{8}T[0-9]{6}Z\$" | sort | head -n "-$KEEP"; }

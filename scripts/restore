@@ -75,6 +75,12 @@ verify() {
     n="$(tar -tzf "$dir/blobs.tar.gz" | grep -vc '/$')" || n=0
     log "blobs.tar.gz OK ($n files)"
   fi
+  if [ -f "$dir/blobs.list" ]; then
+    [ -d "$dir/blobs" ] || die "blobs.list without blobs/"
+    diff -q <(cd "$dir/blobs" && find . -type f -printf '%P %s\n' | sort) "$dir/blobs.list" >/dev/null \
+      || die "blob snapshot doesn't match blobs.list (missing or resized files)"
+    log "blobs/ OK ($(wc -l < "$dir/blobs.list") files)"
+  fi
   log "VERIFIED $dir ($(manifest "$dir" env), $(manifest "$dir" created_utc))"
 }
 
@@ -144,14 +150,15 @@ restore_cassandra() {
 
 restore_blobs() {
   local dir="$1"
-  [ -f "$dir/blobs.tar.gz" ] || die "$dir has no blobs.tar.gz"
+  [ -f "$dir/blobs.tar.gz" ] || [ -f "$dir/blobs.list" ] || die "$dir has no blob backup"
   [ -n "$TARGET" ] || die "pass --target-dir DIR (the server's BLOB_DIR)"
   need_confirm "$TARGET" "blob store"
   # Never merge into a live store: restore into an empty or new directory, then point BLOB_DIR at it
   # (or stop the server and swap directories).
   if [ -d "$TARGET" ] && [ -n "$(ls -A "$TARGET")" ]; then die "$TARGET is not empty"; fi
   mkdir -p "$TARGET" && chmod 700 "$TARGET"
-  tar -C "$TARGET" -xzf "$dir/blobs.tar.gz"
+  if [ -f "$dir/blobs.list" ]; then cp -a "$dir/blobs/." "$TARGET/"   # a copy, never hard links into the backup
+  else tar -C "$TARGET" -xzf "$dir/blobs.tar.gz"; fi
   log "blobs: restored $(find "$TARGET" -type f | wc -l) files into $TARGET"
 }
 
