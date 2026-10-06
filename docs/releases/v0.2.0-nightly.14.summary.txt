@@ -1,0 +1,2 @@
+Fixed: 1:1 chats now switch to end-to-end encryption automatically; encrypted chats show a lock (the "Dev build" banner is gone). Log out keeps your chats. Group ticks update.
+Always update over the old app; never uninstall.
