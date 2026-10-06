@@ -245,6 +245,7 @@ object AuthErrors {
     const val EXPIRED = "expired"
     const val RATE_LIMITED = "rate_limited"
     const val TOO_MANY_ATTEMPTS = "too_many_attempts"
+    const val INVALID_DEVICE = "invalid_device"
 }
 
 // ---- One-time phone verification (§7, v1.4) ----
@@ -259,3 +260,32 @@ data class PhoneVerifyRequestReply(
 
 @Serializable
 data class PhoneVerifyConfirm(val code: String)
+
+// ---- Push notifications (§8, v1.5) ----
+
+/** `PUT /me/devices/{device_id}` body. */
+@Serializable
+data class DevicePut(
+    val platform: String,
+    @SerialName("push_token") val pushToken: String,
+    @SerialName("app_version") val appVersion: String,
+) {
+    override fun toString() = "DevicePut(platform=$platform, appVersion=$appVersion, <token hidden>)"
+
+    companion object {
+        const val PLATFORM_ANDROID = "android"
+    }
+}
+
+/** §8.2 FCM data payload: a wake-up only, never content. Unknown types are ignored. */
+@Serializable
+data class PushPayload(val type: String, val v: String? = null) {
+    val isInbox: Boolean get() = type == TYPE_INBOX
+
+    companion object {
+        const val TYPE_INBOX = "inbox"
+
+        /** From FCM's `RemoteMessage.data` map. */
+        fun fromData(data: Map<String, String>): PushPayload? = data["type"]?.let { PushPayload(it, data["v"]) }
+    }
+}

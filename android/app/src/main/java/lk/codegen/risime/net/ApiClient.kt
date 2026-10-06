@@ -51,6 +51,13 @@ class ApiClient(
     suspend fun confirmPhoneCode(code: String): ApiResult<MeReply> =
         call("POST", "me/phone/verify/confirm", PhoneVerifyConfirm(code))
 
+    /** §8.1: register/refresh this install's push token (idempotent). */
+    suspend fun putDevice(deviceId: String, body: DevicePut): ApiResult<Unit> =
+        call<DevicePut, Unit>("PUT", "me/devices/$deviceId", body)
+
+    /** §8.1: at logout (idempotent). */
+    suspend fun deleteDevice(deviceId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "me/devices/$deviceId", null)
+
     suspend fun me(): ApiResult<MeReply> = call<Unit, MeReply>("GET", "me", null)
 
     suspend fun updateDisplayName(name: String): ApiResult<MeReply> = call("PATCH", "me", PatchMe(name))

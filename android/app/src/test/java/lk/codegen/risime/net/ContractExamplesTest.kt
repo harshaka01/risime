@@ -47,11 +47,9 @@ class ContractExamplesTest {
         "error_invalid_code_attempts.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
         "error_already_verified.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
         "error_sms_unavailable.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
-        // v1.5 (push): parse-only placeholders added by root with the contract merge; the android
-        // role replaces them with typed decoders when it implements §8.
-        "device_put.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "push_inbox.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_invalid_device.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "device_put.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s) },
+        "push_inbox.json" to { s -> ProtocolJson.decodeFromString<PushPayload>(s) },
+        "error_invalid_device.json" to { s -> ProtocolJson.decodeFromString<ApiErrorEnvelope>(s) },
     )
 
     @Test
@@ -183,6 +181,25 @@ class ContractExamplesTest {
         val now = java.time.Instant.parse("2026-10-06T08:00:00Z").toEpochMilli()
         assertEquals(90L, parseRetryAfter("Tue, 06 Oct 2026 08:01:30 GMT", now))
         assertEquals(0L, parseRetryAfter("Tue, 06 Oct 2026 07:00:00 GMT", now))
+    }
+
+    @Test
+    fun pushV15Examples() {
+        val put = ProtocolJson.parseToJsonElement(read("device_put.json")) as JsonObject
+        val model = ProtocolJson.decodeFromJsonElement<DevicePut>(put)
+        assertEquals(DevicePut.PLATFORM_ANDROID, model.platform)
+        assertEquals(put, ProtocolJson.encodeToJsonElement(model))
+        assertFalse(model.toString().contains(model.pushToken))
+
+        val push = ProtocolJson.decodeFromString<PushPayload>(read("push_inbox.json"))
+        assertTrue(push.isInbox)
+        assertEquals("1", push.v)
+        // FCM delivers data as a string map; no content fields exist in the payload.
+        assertEquals(push, PushPayload.fromData(mapOf("type" to "inbox", "v" to "1")))
+        assertFalse(PushPayload.fromData(mapOf("type" to "other"))!!.isInbox)
+        assertEquals(null, PushPayload.fromData(emptyMap()))
+
+        assertEquals(AuthErrors.INVALID_DEVICE, ProtocolJson.decodeFromString<ApiErrorEnvelope>(read("error_invalid_device.json")).error.code)
     }
 
     @Test
