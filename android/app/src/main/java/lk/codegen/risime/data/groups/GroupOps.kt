@@ -100,6 +100,8 @@ class GroupOpsExecutor(
     private val clock: () -> Long = System::currentTimeMillis,
     private val maxAttempts: Int = 8,
     private val log: (String) -> Unit = {},
+    /** Commits/Welcomes larger than this go by blob reference (§12.6); live interop lowers it. */
+    private val inlineMaxBytes: Int = INLINE_MAX_BYTES,
 ) {
     private val lock = Mutex()
     private val enc = Base64.getEncoder()
@@ -362,7 +364,7 @@ class GroupOpsExecutor(
             tx.run { mls.commitRejected(conv) }
             return o
         }
-        val commitRef = if (pc.commit.size > INLINE_MAX_BYTES) {
+        val commitRef = if (pc.commit.size > inlineMaxBytes) {
             when (val r = api.uploadBlob(conv, pc.commit)) {
                 is ApiResult.Ok -> r.value
                 is ApiResult.Error -> return reject(errorOutcome(r).let { if (it is OpOutcome.Failed) OpOutcome.Retry(it.reason, 30_000) else it })
@@ -372,7 +374,7 @@ class GroupOpsExecutor(
             null
         }
         val welcome = pc.welcome
-        val welcomeRef = if (welcome != null && welcome.size > INLINE_MAX_BYTES) {
+        val welcomeRef = if (welcome != null && welcome.size > inlineMaxBytes) {
             when (val r = api.uploadBlob(conv, welcome)) {
                 is ApiResult.Ok -> r.value
                 is ApiResult.Error -> return reject(OpOutcome.Retry(r.code, 30_000))

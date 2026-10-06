@@ -7,16 +7,27 @@ alias RisiMe.Accounts.{AllowlistEntry, User, UserToken}
 import Ecto.Query
 
 [mode, dir] = System.argv() |> Enum.take(2) |> then(fn a -> a ++ List.duplicate(nil, 2 - length(a)) end)
-phones = ~w(+94770000921 +94770000922 +94770000911 +94770000912 +94770000913 +94770000914 +94770000915 +94770000916 +94770000931 +94770000932 +94770000933)
+phones = ~w(+94770000921 +94770000922 +94770000911 +94770000912 +94770000913 +94770000914 +94770000915 +94770000916 +94770000931 +94770000932 +94770000933 +94770000941 +94770000942 +94770000943 +94770000944 +94770000945)
 
 # Removes every interop fixture: users (cascading devices, tokens, friendships, invites...),
-# allowlist rows, and MLS group rows (keyed by conversation id, not linked to users).
+# allowlist rows, MLS group rows (keyed by conversation id, not linked to users), and v1.9
+# `grp:` groups the users are in (their MLS rows, members, ops) plus their blobs (rows and files).
 purge = fn ->
   ids = Repo.all(from x in User, where: x.phone in ^phones, select: x.id)
   pats = Enum.map(ids, &("%" <> &1 <> "%"))
   if pats != [] do
     for t <- ~w(mls_commits mls_group_devices mls_groups),
         do: Repo.query!("DELETE FROM #{t} WHERE conversation_id LIKE ANY($1)", [pats])
+    uids = Enum.map(ids, &Ecto.UUID.dump!/1)
+    %{rows: g} =
+      Repo.query!("SELECT id FROM groups WHERE created_by = ANY($1) UNION SELECT group_id FROM group_members WHERE user_id = ANY($1)", [uids])
+    gids = List.flatten(g)
+    for t <- ~w(mls_commits mls_group_devices mls_groups),
+        do: Repo.query!("DELETE FROM #{t} WHERE conversation_id = ANY($1)", [gids])
+    Repo.query!("DELETE FROM groups WHERE id = ANY($1)", [gids])
+    %{rows: b} = Repo.query!("SELECT id FROM blobs WHERE owner = ANY($1)", [uids])
+    for [raw] <- b, id = Ecto.UUID.load!(raw), do: File.rm(Path.join([RisiMe.Blobs.blob_dir(), String.slice(id, 0, 2), id]))
+    Repo.query!("DELETE FROM blobs WHERE owner = ANY($1)", [uids])
   end
   {u, _} = Repo.delete_all(from x in User, where: x.phone in ^phones)
   {a, _} = Repo.delete_all(from x in AllowlistEntry, where: x.phone in ^phones)
@@ -113,8 +124,16 @@ case mode do
     el = dev_user.("+94770000933", "ZZ Interop EL")
     RisiMe.Social.make_friends!(ea["id"], eb["id"])
     RisiMe.Social.make_friends!(ea["id"], el["id"])
+    # Groups block (v1.9): A is friends with B, C, D and L; B–C friends; D is not B's friend.
+    # L also connects as a legacy app in the test (not group-ready).
+    [ga, gb, gc, gd, gl] =
+      for {p, n} <- [{"941", "GA"}, {"942", "GB"}, {"943", "GC"}, {"944", "GD"}, {"945", "GL"}],
+          do: dev_user.("+94770000" <> p, "ZZ Interop " <> n)
+    for {x, y} <- [{ga, gb}, {ga, gc}, {ga, gd}, {ga, gl}, {gb, gc}],
+        do: RisiMe.Social.make_friends!(x["id"], y["id"])
     cfg =
       cfg
+      |> Map.put("groups", %{"A" => ga, "B" => gb, "C" => gc, "D" => gd, "L" => gl})
       |> Map.put("e2ee", %{"A" => ea, "B" => eb, "L" => el})
       |> Map.put("friends", friends)
       |> Map.put("ids", jwt_ids)

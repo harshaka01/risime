@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Live interop gate (RULES: before every release). Starts a temporary server from THIS checkout on
-# 127.0.0.1:4100 (dev env, shared dev DB) with a local stand-in OIDC issuer (127.0.0.1:4799),
+# 127.0.0.1:4100 (dev env, its own DB and keyspace risime_interop, migrated each run; never the pilot's risime_dev) with a local stand-in OIDC issuer (127.0.0.1:4799),
 # creates throwaway users/tokens, runs the Android LiveInteropTest (real ApiClient +
 # PhoenixRealtimeClient) against it, and always cleans up. Never touches :4000 / risime.service.
 #   scripts/interop
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+# Own store: the pilot release runs on risime_dev, which is only migrated by run-server after a backup.
+export RISIME_DEV_DB=risime_interop RISIME_DEV_KEYSPACE=risime_interop
 DIR="$(mktemp -d "${TMPDIR:-/tmp}/risime-interop.XXXXXX")"
 cleanup() {
   [ -f "$DIR/gradle.log" ] && cp "$DIR/gradle.log" "$HOME/risime-logs/interop-last.log" 2>/dev/null || true
@@ -29,12 +31,15 @@ class H(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(("127.0.0.1", 4799), H).serve_forever()
 PY
+echo "==> interop store: $RISIME_DEV_DB / $RISIME_DEV_KEYSPACE (create + migrate)"
+(cd server && $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
+  || { echo "could not create/migrate the interop store"; exit 1; }
 (cd server && $M mix run "$REPO/scripts/interop-fixtures.exs" keys "$DIR" 2>/dev/null | grep 'interop keys')
 # A per-run E2EE attestation key: the temp server runs with E2EE ON (never the pilot's key).
 (cd server && $M mix risime.attestation.gen "$DIR/attest.jwk" 2>/dev/null | grep -o 'attestation key created' || true)
 [ -f "$DIR/attest.jwk" ] || { echo "could not create a temp attestation key"; exit 1; }
 tmux new -d -s risime-interop-jwks "python3 '$DIR/jwks.py' '$DIR/www'"
-tmux new -d -s risime-interop "cd '$REPO/server' && PORT=4100 DEV_LOCAL_AUTH=true OIDC_ENABLED=true \
+tmux new -d -s risime-interop "cd '$REPO/server' && RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE PORT=4100 DEV_LOCAL_AUTH=true OIDC_ENABLED=true \
   OIDC_ISSUER=http://127.0.0.1:4799/realms/itest \
   OIDC_JWKS_URL=http://127.0.0.1:4799/realms/itest/protocol/openid-connect/certs \
   PHONE_VERIFICATION=off FCM_ENABLED=false RISIME_AUTH_LOG='$DIR/auth.log' ATTESTATION_KEY_FILE='$DIR/attest.jwk' \
@@ -43,16 +48,17 @@ for _ in $(seq 1 120); do curl -sf -o /dev/null http://127.0.0.1:4100/health && 
 curl -sf -o /dev/null http://127.0.0.1:4100/health || { echo "interop server didn't start"; tail -20 "$DIR/server.log"; exit 1; }
 (cd server && $M mix run "$REPO/scripts/interop-fixtures.exs" setup "$DIR" 2>/dev/null | grep 'interop setup')
 
-echo "==> LiveInteropTest + LiveE2eeInteropTest against 127.0.0.1:4100 (E2EE on with a temp key)"
+echo "==> LiveInteropTest + LiveE2eeInteropTest + LiveGroupInteropTest against 127.0.0.1:4100 (E2EE on with a temp key)"
 set +e
 # Extra Gradle args from the caller (nightly-release passes the pinned attestation key, so the
 # release outputs it regenerates keep the pin).
 read -r -a EXTRA_GRADLE <<< "${RISIME_GRADLE_ARGS:-}"
 (cd android && RISIME_INTEROP_CONFIG="$DIR/interop.json" $M ./gradlew --no-configuration-cache "${EXTRA_GRADLE[@]}" \
-  testDebugUnitTest --tests 'lk.codegen.risime.live.LiveInteropTest' --tests 'lk.codegen.risime.live.LiveE2eeInteropTest' -i 2>&1) > "$DIR/gradle.log"
+  testDebugUnitTest --tests 'lk.codegen.risime.live.LiveInteropTest' --tests 'lk.codegen.risime.live.LiveE2eeInteropTest' \
+  --tests 'lk.codegen.risime.live.LiveGroupInteropTest' -i 2>&1) > "$DIR/gradle.log"
 rc=$?
 set -e
-grep -E '^\s{4}\S' "$DIR/gradle.log" | grep -vE 'isLoggable|^\s+at |Exception in|\.kt:' | sed 's/^ *//' | grep -vE '^(Kotlin|Input|Calculating|Watching|Task|Starting)' | head -60
-grep -qE "Live(E2ee)?InteropTest > .* SKIPPED" "$DIR/gradle.log" && { echo "INTEROP SKIPPED (config not picked up)"; exit 1; }
+grep -E '^\s{4}\S' "$DIR/gradle.log" | grep -vE 'isLoggable|^\s+at |Exception in|\.kt:' | sed 's/^ *//' | grep -vE '^(Kotlin|Input|Calculating|Watching|Task|Starting)' | head -100
+grep -qE "Live(E2ee|Group)?InteropTest > .* SKIPPED" "$DIR/gradle.log" && { echo "INTEROP SKIPPED (config not picked up)"; exit 1; }
 [ "$rc" = 0 ] || { echo "INTEROP FAILED"; grep -E "FAILED|AssertionError|expected" "$DIR/gradle.log" | head -10; exit 1; }
 echo "INTEROP OK"
