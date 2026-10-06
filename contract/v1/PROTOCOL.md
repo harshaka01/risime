@@ -690,11 +690,12 @@ where they differ for them. DMs are unchanged. Apps before v1.9 never see group 
   uploads with `replace: true` the first time it advertises `groups`.
 - **Group-ready user:** at least one current MLS device with `groups`, **and** every install of
   that user that can still receive is groups-capable. Readiness counts only installs that can still
-  receive: a registered device seen in the last 30 days. A census instance without a `device_id`
-  never makes a user not-ready on its own. It is listed as `legacy_app` (with `device_id: null`)
-  only when the user is not ready anyway and it is their most recent instance not superseded by a
-  later device registration. (Clarified in v1.10 hotfix: an old pre-v1.7 instance blocked testers
-  for 30 days.)
+  receive: a registered device seen in the last 30 days, or a census instance without a
+  `device_id` that was **seen after the user's latest device registration** (an old app still in
+  use, e.g. on a second phone, that would silently miss group messages). A census instance without
+  a `device_id` last seen **before** that registration is superseded and never blocks. A blocking
+  instance is listed as `legacy_app` with `device_id: null`. (Clarified in the v1.10 hotfix: old
+  instances from before an update blocked testers for 30 days.)
   - `missing[].reason` (in `409 not_ready`, `error_not_ready_groups.json`): `"no_mls"` (no
     current MLS device), or **`"legacy_app"`** (an app instance seen in 30 days lacks `groups`;
     `device_id` names it, or is null for a pre-v1.7 instance). Clients show "<name> needs to
