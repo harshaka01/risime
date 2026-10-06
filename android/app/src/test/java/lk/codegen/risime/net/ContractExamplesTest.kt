@@ -157,6 +157,23 @@ class ContractExamplesTest {
         "error_not_e2ee.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "error_storage_full.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "error_bad_media_type.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.12 (deleting messages and chats, §15): parse-only placeholders added by root with the
+        // contract merge; the android role replaces them with typed decoders when it implements §15.
+        "delete_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "delete_payload_bad.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "msg_delete_everyone_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "msg_delete_everyone_dm.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "msg_delete_me.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "msg_delete_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "msg_delete_reply_gone.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_delete_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_delete_dm.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_delete_dm_e2ee.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_delete_too_old.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_not_sender.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "chat_clear.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "device_put_deletes.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_group_deletes_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
     )
 
     private fun groupEvent(s: String, action: String): GroupEvent =

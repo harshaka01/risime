@@ -58,6 +58,13 @@ defmodule RisiMe.ContractExamplesTest do
                    image_payload_bad_key.json group_meta_icon.json blob_upload_media_reply.json
                    blob_usage_reply.json device_put_images.json mls_group_images_ready.json
                    error_not_e2ee.json error_storage_full.json error_bad_media_type.json)
+  # v1.12 (deleting messages and chats, §15): parse-only placeholders added by root with the
+  # contract merge; the server role replaces them with real checks when it implements §15.
+  @pending_v1_12 ~w(delete_payload.json delete_payload_bad.json msg_delete_everyone_group.json
+                   msg_delete_everyone_dm.json msg_delete_me.json msg_delete_reply.json
+                   msg_delete_reply_gone.json event_delete_group.json event_delete_dm.json
+                   event_delete_dm_e2ee.json error_delete_too_old.json error_not_sender.json
+                   chat_clear.json device_put_deletes.json mls_group_deletes_ready.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -90,8 +97,12 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    covered = @checked ++ @checked_v1_9 ++ @checked_v1_10 ++ @checked_v1_11
+    covered = @checked ++ @checked_v1_9 ++ @checked_v1_10 ++ @checked_v1_11 ++ @pending_v1_12
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
+  end
+
+  test "v1.12 examples are valid JSON objects (placeholder)" do
+    for name <- @pending_v1_12, do: assert(is_map(example(name)))
   end
 
   setup do
