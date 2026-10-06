@@ -32,6 +32,15 @@ class ContractExamplesTest {
         "signal_presence.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.presence()) } },
         "signal_typing.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.typing()) } },
         "typing.json" to { s -> ProtocolJson.decodeFromString<TypingPush>(s) },
+        // v1.3 (Keycloak auth): parse-only placeholders added by root with the contract merge;
+        // the android role replaces them with typed decoders when it implements §6.
+        "auth_config.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_not_allowlisted.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_invalid_token.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_identity_conflict.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "auth_refresh.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "auth_refresh_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "auth_refresh_error.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
     )
 
     @Test

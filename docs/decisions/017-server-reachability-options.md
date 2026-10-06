@@ -1,7 +1,10 @@
 # 017 — How phones reach the RisiMe server (options; **Harsha decides**)
 
-**Status:** open. Until Harsha chooses, we build and test against **Tailscale serve**
-(`docs/TAILSCALE.md`).
+**Status: decided 2026-10-06. Harsha chose option 2b.** Caddy on spark serves
+`https://risicloud.ai/risime/` by proxying over the tailnet to spark2's `tailscale serve`. spark2
+stays bound to 127.0.0.1, and the broken LAN path doesn't matter. The config is prepared in
+`infra/risicloud/` but **not switched on** until the RisiCloud lead adds the route and spark joins
+the tailnet. Until then, Harsha tests with option 1 (Tailscale on the phone).
 
 Today the server binds `127.0.0.1:4000` on spark2 (golden rule 6). Phones reach it only through
 the laptop tunnel / `adb reverse`, which doesn't work for testers away from the laptop.

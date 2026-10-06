@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.2 (Release 0.2)
+# RisiMe Wire Protocol — v1.3 (Release 0.2)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -12,7 +12,7 @@ Owner: root session. Server and Android implement this exactly.
 - Errors (REST): `{"error": {"code": "invalid_code", "message": "human readable"}}`
 
 ## 1. REST — base `{SERVER}/api/v1`
-Every endpoint except `/auth/*` requires the header `Authorization: Bearer <token>`.
+Every endpoint except `/auth/*` requires the header `Authorization: Bearer <token>`. From v1.3, tokens are Keycloak access tokens, or dev tokens only on `DEV_LOCAL_AUTH` servers (§6).
 
 ### 1.1 `POST /auth/request`
 Request: `{"phone": "+94771234567", "email": "name@company.lk"}`
@@ -147,7 +147,98 @@ lexicographically.
 ## 5. Examples
 `contract/v1/examples/*.json`. Both sides' tests parse every file.
 
+## 6. Authentication via RisiCloud Keycloak (v1.3)
+Decisions 013 and 014. This section overrides §1.1, §1.2 and §1.5 where they differ.
+
+### 6.0 Tokens
+- **Bearer tokens** are either:
+  - (a) a **Keycloak access token** (a JWT from realm `https://risicloud.ai/realms/aoa`, client
+    `risime`); or
+  - (b) **only when the server runs with `DEV_LOCAL_AUTH=true`**, a legacy opaque RisiMe token
+    from `/auth/verify`.
+
+  The two are told apart by shape: a JWT is three dot-separated base64url segments, and an opaque
+  token is 43 characters with no dot.
+- **JWT acceptance.** All of the following must hold:
+  - **Keys:** the signature verifies against the JWKS from the issuer's `jwks_uri`.
+    - Keys are cached and refreshed every 10 min in the background. An unknown `kid` triggers an
+      immediate single-flight refetch, at most once per 60 s.
+    - A fetch failure keeps the cached keys. With no keys at all, the token is rejected (fail
+      closed).
+    - JWKs whose `use` isn't `sig` are ignored.
+  - **`alg`** is one of RS256/384/512, PS256/384/512, ES256/384/512 or EdDSA, and matches the
+    JWK's `kty`. `none` and `HS*` are never accepted.
+  - **`iss`** equals the realm issuer exactly.
+  - **`typ` claim == `"Bearer"`.** Keycloak ID and refresh tokens are rejected.
+  - **`azp == "risime"`**, or `aud` contains `"risime"`.
+  - **Expiry:** `exp` is present. `nbf` and `iat` are checked only if present. There is 60 s of
+    leeway on all of them.
+  - **`email` is present and `email_verified == true`.**
+- **Error `message`s** for `not_allowlisted` and `identity_conflict` may be shown to the user
+  verbatim.
+
+### 6.1 REST
+- **New, unauthenticated `GET /api/v1/auth/config`** → `{"modes": [...], "issuer": "...",
+  "client_id": "risime"}`.
+  - `modes` is a non-empty subset of `"oidc"` and `"dev"`. `"dev"` is present only when
+    `DEV_LOCAL_AUTH=true`, and `"oidc"` only when OIDC is enabled on the server (the
+    `OIDC_ENABLED` flag).
+  - Clients choose their sign-in UI from it.
+  - Release clients show the dev login **only while `modes` lacks `"oidc"`** (the interim before
+    the Keycloak client exists). Debug clients may always offer it when it is listed.
+  - `issuer` and `client_id` are present when `"oidc"` is listed.
+- Every authenticated endpoint accepts `Authorization: Bearer <token>` (as in §0). New errors:
+  - `401 invalid_token`: a missing, bad, expired or foreign token. Also returned for opaque
+    tokens when `DEV_LOCAL_AUTH` is off.
+  - `403 not_allowlisted`: a valid token, but the email isn't on the allowlist, or the user's
+    phone was removed from it.
+  - `409 identity_conflict`: the allowlisted phone is bound to another Keycloak account. An admin
+    must re-bind it.
+- **Mapping** runs on **every** authenticated request and socket connect (cached per token until
+  `exp`). Clients call **`GET /me` first** after sign-in, because only REST can return the reason
+  for a refusal.
+  1. If a user has `keycloak_sub == sub`, that user is used. Their phone must still be on the
+     allowlist, else `403 not_allowlisted`.
+  2. Otherwise the allowlist entry for `lower(email)` is used. If there is none: `403 not_allowlisted`.
+  3. The users row with that entry's phone:
+     - none → create it, bound to `sub`;
+     - one with no `keycloak_sub` → bind it atomically;
+     - one bound to another `sub` → `409 identity_conflict`.
+  4. Once bound, `sub` wins. Later Keycloak email changes don't move the user. Re-binding is
+     admin-only.
+
+  `GET /me` responds unchanged: `{"user": User}`. User and Contact are unchanged, and identity
+  stays phone/user-id based.
+- **`POST /auth/request` and `POST /auth/verify`** exist only when `DEV_LOCAL_AUTH=true`.
+  Otherwise they return `404`.
+- **`POST /auth/logout`:** `204`. With a JWT it is a no-op: the client revokes its refresh token
+  and ends the Keycloak session itself. With a dev token it revokes the token, as before.
+
+### 6.2 Realtime
+- **Authentication:** the socket upgrade accepts **`Authorization: Bearer <token>`**, which is
+  preferred: clients that can set headers (Android/OkHttp) must use it, so tokens stay out of
+  proxy access logs. The `token=` query parameter remains for others.
+- **A refused upgrade (401/403) no longer means "logged out"** by itself. Clients call `GET /me`
+  and act on its answer: refresh on `401`, the `403`/`409` screens, otherwise reconnect.
+- **Expiry:** the server records each JWT socket's `exp`. At `exp + 60 s` without a successful
+  `auth:refresh`, it pushes **`auth:expired`** `{}` on `inbox:<own id>`, then disconnects the
+  socket. This is enforced even if no channel is joined. Clients treat it as "refresh, then
+  reconnect with `since`", never as a logout.
+- **`auth:refresh`** (client → server, on `inbox:<own id>`): `{"token": "<new access token>"}`.
+  - The token must pass §0 and map to the **same user**.
+  - reply ok: `{"expires_at": "<the token's exp, ISO-8601 ms>"}`.
+  - reply error: `{"reason": "invalid_token" | "identity_mismatch" | "not_allowlisted"}`. After an
+    error, the old deadline stays.
+  - Clients refresh about 60 s before expiry, computed from `expires_in` at receipt (or from the
+    last `expires_at` reply) and **not from the device clock against `exp`**. Reconnecting with
+    `since` is always a valid alternative.
+  - Keycloak's default access-token lifetime is 5 min, so expect a refresh about every 4 min.
+
 ## Changelog
+- **v1.3** (2026-10-06): Keycloak access tokens on REST and the socket (§6). Adds
+  `GET /auth/config`; mapping to phone-first users; `403 not_allowlisted` and
+  `409 identity_conflict`; `DEV_LOCAL_AUTH`-only dev login; `Authorization` on the socket upgrade;
+  `auth:refresh` and `auth:expired`. An additive change.
 - **v1.2** (2026-10-06): presence / last seen (`presence:watch`, §2.5), typing (`typing`, §2.6),
   and the ephemeral server push `signal` (§2.3). An additive change: v1.1 clients ignore the
   unknown push.

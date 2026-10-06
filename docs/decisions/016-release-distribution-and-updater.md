@@ -41,3 +41,10 @@ publish.
 - Any mismatch: delete the file, show an error, and don't install.
 - Install with the `PackageInstaller` session API, which needs `REQUEST_INSTALL_PACKAGES`. The
   user grants "install unknown apps" once.
+- From the Android review:
+  - **The updater is release-only.** Debug builds (`.debug` id) never self-update, and the
+    permission sits in a release-only manifest.
+  - Only `url`s under the update base URL are accepted.
+  - The certificate check uses `GET_SIGNING_CERTIFICATES` on API 28+ and `GET_SIGNATURES` on
+    API 26–27. **minSdk stays 26**, so no devices are dropped.
+  - The `required` screen keeps the dev E2EE banner and a "Sign out" action.
