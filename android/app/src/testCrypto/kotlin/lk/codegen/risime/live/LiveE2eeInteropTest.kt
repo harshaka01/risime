@@ -97,6 +97,7 @@ class LiveE2eeInteropTest {
         val api = ApiClient(http, { url }, { token })
         val mls = RealMls.device(userId, deviceId, trusted, attest = false)
         val messages = FakeMessageDao()
+        val reactions = lk.codegen.risime.data.FakeReactionDao()
         val raw = CopyOnWriteArrayList<Event>()
         val memberships = CopyOnWriteArrayList<MembershipAction>()
         val conflicts = CopyOnWriteArrayList<String>()
@@ -114,7 +115,11 @@ class LiveE2eeInteropTest {
             behaviour = BehaviourLog(FakeBehaviourDao(), { "s" }, { 0L }),
             mls = MlsPipeline({ mls.engine }, FakeMlsPendingDao(), onMembership = { memberships += it }, log = { println("  [$deviceId] mls: $it") }),
             mlsEngine = { mls.engine }, catchUp = { catchUp(it) },
+            reactionsDao = reactions,
         )
+
+        /** Effective adds on [target] as (reactor, emoji). */
+        fun adds(target: String) = reactions.rows.values.filter { it.targetMessageId == target && it.op == "add" }.map { it.reactorUserId to it.emoji }.toSet()
         val executor = MembershipExecutor({ mls.engine }, mlsApi) { catchUp(it) }
 
         init {
@@ -197,6 +202,28 @@ class LiveE2eeInteropTest {
             ensure(msgEvents.isNotEmpty() && msgEvents.all { it.body == null && it.ciphertext != null }) { "plaintext in e2ee events: $msgEvents" }
             null
         }
+        var bMsgId = ""
+        check("e2ee reaction ❤️: B decodes a reaction, A's tablet sees it as A's own, event looks like any ciphertext") {
+            bMsgId = a1.messages.rows.values.first { it.body == "hi A $run" }.messageId!!
+            a1.chat.react(bId, bMsgId, "❤️", "add")
+            await(15_000, "B shows A's ❤️") { b1.adds(bMsgId).takeIf { (aId to "❤️") in it } }
+            await(15_000, "A's tablet shows its own ❤️") { a2.adds(bMsgId).takeIf { (aId to "❤️") in it } }
+            ensure(b1.bodies().none { it.contains("reaction") }) { "a reaction surfaced as a message" }
+            val confirmed = a1.reactions.rows.values.first { it.targetMessageId == bMsgId }.confirmedMessageId!!
+            val ev = await(10_000, "the stored reaction event at B") { b1.raw.firstOrNull { it.messageData()?.messageId == confirmed } }
+            ensure(ev.kind == "message" && ev.messageData()!!.body == null && "reaction" !in ev.data && "target" !in ev.data) { "server can see it's a reaction: ${ev.data.keys}" }
+            // A v1.7 decoder (anything but "text" is ignored) shows nothing for it.
+            val plain = lk.codegen.risime.data.mls.MlsPayload.reaction(bMsgId, "❤️", "add").decodeToString()
+            ensure(Regex("\"type\":\"reaction\"").containsMatchIn(plain)) { "envelope type" }
+            null
+        }
+        check("e2ee reaction remove → cleared on every device") {
+            a1.chat.react(bId, bMsgId, "❤️", "remove")
+            await(15_000, "B cleared") { b1.adds(bMsgId).takeIf { (aId to "❤️") !in it } }
+            await(15_000, "tablet cleared") { a2.adds(bMsgId).takeIf { (aId to "❤️") !in it } }
+            ensure(a1.adds(bMsgId).isEmpty()) { "A still shows it" }
+            null
+        }
         check("plaintext refused: e2ee_required") {
             val r = a1.client.sendMessage(MsgSend(UUID.randomUUID().toString(), bId, "plain", now()))
             ensure(r == PushResult.Rejected(AuthErrors.E2EE_REQUIRED)) { "got $r" }
@@ -225,6 +252,10 @@ class LiveE2eeInteropTest {
             await(15_000, "a3 joined") { a3.mls.engine.group(conv) }
             a1.chat.sendText(bId, "four devices $run")
             await(15_000, "a3 decrypts") { a3.bodies().firstOrNull { it == "four devices $run" } }
+            // Reactions across the member-change commit converge on all four devices.
+            val target4 = await(15_000, "B has the four-device message") { b1.messages.rows.values.firstOrNull { it.body == "four devices $run" }?.messageId }
+            b1.chat.react(aId, target4, "😂", "add")
+            for (d in listOf(a1, a2, a3)) await(15_000, "${d.deviceId} shows B's 😂") { d.adds(target4).takeIf { (bId to "😂") in it } }
             "winner=${if (r1 == MembershipOutcome.Done) "A" else "B"}"
         }
         check("A's tablet removed → it can't decrypt new messages") {

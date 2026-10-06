@@ -227,6 +227,63 @@ class LiveInteropTest {
             null
         }
 
+        // ---- reactions + limits (§11, plaintext conversation: these dev users have no MLS devices) ----
+        var reactTarget = ""
+        check("reactions: 👍 on B's message reaches both inboxes with the same event_id") {
+            val r = b.client.sendMessage(MsgSend(UUID.randomUUID().toString(), aId, "react to me", now()))
+            ensure(r is PushResult.Ok) { "B's message: $r" }
+            reactTarget = (r as PushResult.Ok).value.messageId
+            val add = a.client.sendReaction(lk.codegen.risime.net.MsgSendReaction(UUID.randomUUID().toString(), bId, lk.codegen.risime.net.ReactionBody(reactTarget, "👍", "add"), now()))
+            ensure(add is PushResult.Ok) { "reaction add: $add" }
+            val atB = await(10_000, "B gets the reaction") { b.events.firstOrNull { it.reaction()?.target == reactTarget } }
+            val atA = await(10_000, "A gets its own copy") { a.events.firstOrNull { it.reaction()?.target == reactTarget } }
+            ensure(atA.eventId == atB.eventId) { "event ids differ: ${atA.eventId} vs ${atB.eventId}" }
+            ensure(atB.messageData() == null) { "a reaction must not look like a message" }
+            null
+        }
+        check("reactions: remove then add converge on both sides (by server_ts, message_id)") {
+            for (op in listOf("remove", "add", "remove")) {
+                val r = a.client.sendReaction(lk.codegen.risime.net.MsgSendReaction(UUID.randomUUID().toString(), bId, lk.codegen.risime.net.ReactionBody(reactTarget, "❤️", op), now()))
+                ensure(r is PushResult.Ok) { "$op: $r" }
+            }
+            suspend fun effective(p: Peer) = await(10_000, "3 ❤️ ops at ${p.name}") {
+                p.events.mapNotNull { it.reaction() }.filter { it.target == reactTarget && it.emoji == "❤️" }.takeIf { it.size >= 3 }
+            }.maxWith(compareBy({ it.serverTs }, { it.messageId })).op
+            val ea = effective(a); val eb = effective(b)
+            ensure(ea == "remove" && eb == "remove") { "A=$ea B=$eb" }
+            null
+        }
+        check("reactions: unknown_target, invalid_emoji, body+reaction → bad_request, op check") {
+            fun r(target: String, emoji: String, op: String = "add") = a.client.let { c ->
+                runBlocking { c.sendReaction(lk.codegen.risime.net.MsgSendReaction(UUID.randomUUID().toString(), bId, lk.codegen.risime.net.ReactionBody(target, emoji, op), now())) }
+            }
+            ensure(r("c1a2b3c4-a0b1-11f0-8000-0242ac120099", "👍") == PushResult.Rejected("unknown_target")) { "unknown target" }
+            ensure(r(reactTarget, "x".repeat(33)) == PushResult.Rejected("invalid_emoji")) { "invalid emoji" }
+            ensure(r(reactTarget, "👍", "toggle") == PushResult.Rejected("bad_request")) { "bad op" }
+            val both = ProtocolJson.parseToJsonElement(
+                """{"client_msg_id":"${UUID.randomUUID()}","to":"$bId","body":"hi","reaction":{"target":"$reactTarget","emoji":"👍","op":"add"},"client_ts":"${now()}"}""",
+            )
+            val rb = a.client.pushRaw("msg:send", both)
+            ensure(rb is PushResult.Rejected && rb.reason == "bad_request") { "body+reaction: $rb" }
+            null
+        }
+        check("reactions: no status for a reaction; msg:ack naming one is ignored") {
+            val r = a.client.sendReaction(lk.codegen.risime.net.MsgSendReaction(UUID.randomUUID().toString(), bId, lk.codegen.risime.net.ReactionBody(reactTarget, "😂", "add"), now()))
+            val mid = (r as PushResult.Ok).value.messageId
+            ensure(b.client.ack(listOf(mid), "read") is PushResult.Ok) { "ack on a reaction should be accepted silently" }
+            delay(2_000)
+            ensure(a.statuses().none { it.messageId == mid }) { "status event for a reaction" }
+            null
+        }
+        check("limits: graphemes and the 16 KiB cap (server authoritative)") {
+            fun body(t: String) = runBlocking { a.client.sendMessage(MsgSend(UUID.randomUUID().toString(), bId, t, now())) }
+            ensure(body("a".repeat(4096)) is PushResult.Ok) { "4096 graphemes" }
+            ensure(body("a".repeat(4097)) == PushResult.Rejected("too_long")) { "4097 graphemes" }
+            ensure(body("🇱🇰".repeat(2048)) is PushResult.Ok) { "2048 flags = 16384 bytes" }
+            ensure(body("👨‍👩‍👧‍👦".repeat(700)) == PushResult.Rejected("too_long")) { "700 ZWJ families = 17500 bytes" }
+            null
+        }
+
         // ---- presence + typing ----
         check("presence snapshot + online signal") {
             a.client.setWatch(setOf(bId))

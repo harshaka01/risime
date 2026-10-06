@@ -93,6 +93,10 @@ class PhoenixRealtimeClient(
             ?.map { ProtocolJson.decodeFromJsonElement<MsgSendReply>(it) }
             ?: PushResult.Unavailable
 
+    /** A raw push on the live connection (interop checks of malformed payloads; not used by the app). */
+    suspend fun pushRaw(event: String, payload: JsonElement): PushResult<JsonObject> =
+        liveConnection()?.push(event, payload) ?: PushResult.Unavailable
+
     override suspend fun sendReaction(msg: lk.codegen.risime.net.MsgSendReaction): PushResult<MsgSendReply> =
         liveConnection()?.push("msg:send", ProtocolJson.encodeToJsonElement(msg))
             ?.map { ProtocolJson.decodeFromJsonElement<MsgSendReply>(it) }
