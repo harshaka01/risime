@@ -29,23 +29,26 @@ class H(http.server.SimpleHTTPRequestHandler):
 http.server.ThreadingHTTPServer(("127.0.0.1", 4799), H).serve_forever()
 PY
 (cd server && $M mix run "$REPO/scripts/interop-fixtures.exs" keys "$DIR" 2>/dev/null | grep 'interop keys')
+# A per-run E2EE attestation key: the temp server runs with E2EE ON (never the pilot's key).
+(cd server && $M mix risime.attestation.gen "$DIR/attest.jwk" 2>/dev/null | grep -o 'attestation key created' || true)
+[ -f "$DIR/attest.jwk" ] || { echo "could not create a temp attestation key"; exit 1; }
 tmux new -d -s risime-interop-jwks "python3 '$DIR/jwks.py' '$DIR/www'"
 tmux new -d -s risime-interop "cd '$REPO/server' && PORT=4100 DEV_LOCAL_AUTH=true OIDC_ENABLED=true \
   OIDC_ISSUER=http://127.0.0.1:4799/realms/itest \
   OIDC_JWKS_URL=http://127.0.0.1:4799/realms/itest/protocol/openid-connect/certs \
-  PHONE_VERIFICATION=off FCM_ENABLED=false RISIME_AUTH_LOG='$DIR/auth.log' \
+  PHONE_VERIFICATION=off FCM_ENABLED=false RISIME_AUTH_LOG='$DIR/auth.log' ATTESTATION_KEY_FILE='$DIR/attest.jwk' \
   $M mix phx.server > '$DIR/server.log' 2>&1"
 for _ in $(seq 1 120); do curl -sf -o /dev/null http://127.0.0.1:4100/health && break; sleep 1; done
 curl -sf -o /dev/null http://127.0.0.1:4100/health || { echo "interop server didn't start"; tail -20 "$DIR/server.log"; exit 1; }
 (cd server && $M mix run "$REPO/scripts/interop-fixtures.exs" setup "$DIR" 2>/dev/null | grep 'interop setup')
 
-echo "==> LiveInteropTest against 127.0.0.1:4100"
+echo "==> LiveInteropTest + LiveE2eeInteropTest against 127.0.0.1:4100 (E2EE on with a temp key)"
 set +e
 (cd android && RISIME_INTEROP_CONFIG="$DIR/interop.json" $M ./gradlew --no-configuration-cache \
-  testDebugUnitTest --tests 'lk.codegen.risime.live.LiveInteropTest' -i 2>&1) > "$DIR/gradle.log"
+  testDebugUnitTest --tests 'lk.codegen.risime.live.LiveInteropTest' --tests 'lk.codegen.risime.live.LiveE2eeInteropTest' -i 2>&1) > "$DIR/gradle.log"
 rc=$?
 set -e
 grep -E '^\s{4}\S' "$DIR/gradle.log" | grep -vE 'isLoggable|^\s+at |Exception in|\.kt:' | sed 's/^ *//' | grep -vE '^(Kotlin|Input|Calculating|Watching|Task|Starting)' | head -60
-grep -qE "LiveInteropTest > .* SKIPPED" "$DIR/gradle.log" && { echo "INTEROP SKIPPED (config not picked up)"; exit 1; }
+grep -qE "Live(E2ee)?InteropTest > .* SKIPPED" "$DIR/gradle.log" && { echo "INTEROP SKIPPED (config not picked up)"; exit 1; }
 [ "$rc" = 0 ] || { echo "INTEROP FAILED"; grep -E "FAILED|AssertionError|expected" "$DIR/gradle.log" | head -10; exit 1; }
 echo "INTEROP OK"

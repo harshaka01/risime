@@ -164,9 +164,9 @@ class LiveE2eeInteropTest {
             trusted = (r as ApiResult.Ok).value.keys.map { it.toString() }
             "${trusted.size} key(s)"
         }
-        val a1 = Dev(url, aId, aTok, "a1-$run", trusted)
-        val a2 = Dev(url, aId, aTok, "a2-$run", trusted)
-        val b1 = Dev(url, bId, bTok, "b1-$run", trusted)
+        val a1 = Dev(url, aId, aTok, java.util.UUID.randomUUID().toString(), trusted)
+        val a2 = Dev(url, aId, aTok, java.util.UUID.randomUUID().toString(), trusted)
+        val b1 = Dev(url, bId, bTok, java.util.UUID.randomUUID().toString(), trusted)
 
         check("registration: attestation verifies in the core, key packages uploaded") {
             for (d in listOf(a1, a2, b1)) {
@@ -213,7 +213,7 @@ class LiveE2eeInteropTest {
             null
         }
         check("new device: concurrent adds → exactly one epoch_conflict, then converged") {
-            val a3 = Dev(url, aId, aTok, "a3-$run", trusted)
+            val a3 = Dev(url, aId, aTok, java.util.UUID.randomUUID().toString(), trusted)
             val reg = DeviceRegistrar(a3.api, { a3.deviceId }, "0.3.0-interop", { a3.mls.engine }).register(null)
             ensure(reg is Registration.Mls) { "a3: $reg" }
             a3.start(); a3.live()

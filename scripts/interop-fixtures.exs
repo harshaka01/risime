@@ -7,10 +7,15 @@ alias RisiMe.Accounts.{AllowlistEntry, User, UserToken}
 import Ecto.Query
 
 [mode, dir] = System.argv() |> Enum.take(2) |> then(fn a -> a ++ List.duplicate(nil, 2 - length(a)) end)
-phones = ~w(+94770000921 +94770000922 +94770000911 +94770000912 +94770000913 +94770000914 +94770000915 +94770000916)
+phones = ~w(+94770000921 +94770000922 +94770000911 +94770000912 +94770000913 +94770000914 +94770000915 +94770000916 +94770000931 +94770000932 +94770000933)
 
 case mode do
   "cleanup" ->
+    # MLS group rows are keyed by conversation id (not linked to users): remove those first.
+    ids = Repo.all(from x in User, where: x.phone in ^phones, select: x.id)
+    pats = Enum.map(ids, &("%" <> &1 <> "%"))
+    for t <- ~w(mls_commits mls_group_devices mls_groups),
+        do: Repo.query!("DELETE FROM #{t} WHERE conversation_id LIKE ANY($1)", [pats])
     {u, _} = Repo.delete_all(from x in User, where: x.phone in ^phones)
     {a, _} = Repo.delete_all(from x in AllowlistEntry, where: x.phone in ^phones)
     IO.puts("interop cleanup: users=#{u} allowlist=#{a}")
@@ -91,8 +96,15 @@ case mode do
     jwt_ids = %{"A" => me_id.(cfg["jwt"]["A"]), "B" => me_id.(cfg["jwt"]["B"])}
     RisiMe.Social.make_friends!(a["id"], b["id"])
     RisiMe.Social.make_friends!(jwt_ids["A"], jwt_ids["B"])
+    # E2EE block (v1.7): fresh dev-token users; A–B and A–L friends; L stays a legacy client.
+    ea = dev_user.("+94770000931", "ZZ Interop EA")
+    eb = dev_user.("+94770000932", "ZZ Interop EB")
+    el = dev_user.("+94770000933", "ZZ Interop EL")
+    RisiMe.Social.make_friends!(ea["id"], eb["id"])
+    RisiMe.Social.make_friends!(ea["id"], el["id"])
     cfg =
       cfg
+      |> Map.put("e2ee", %{"A" => ea, "B" => eb, "L" => el})
       |> Map.put("friends", friends)
       |> Map.put("ids", jwt_ids)
     File.write!(Path.join(dir, "interop.json"), Jason.encode!(cfg))
