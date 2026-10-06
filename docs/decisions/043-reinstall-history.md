@@ -1,4 +1,4 @@
-# 042 — History after a reinstall (sender copy + history gap marker)
+# 043 — History after a reinstall (sender copy + history gap marker)
 
 **Status:** proposed 2026-10-06 (root). Contract proposal:
 `contract/proposals/2026-10-06-history-v1.10.md` (v1.10), awaiting the server and android reviews.
