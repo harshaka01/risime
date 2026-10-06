@@ -1,0 +1,2 @@
+New: end-to-end encrypted groups. Create one from the chat list (New group), add friends, see who read your message.
+Everyone in a group needs this version.
