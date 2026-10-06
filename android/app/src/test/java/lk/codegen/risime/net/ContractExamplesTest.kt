@@ -39,6 +39,16 @@ class ContractExamplesTest {
         "auth_refresh.json" to { s -> ProtocolJson.decodeFromString<AuthRefresh>(s) },
         "auth_refresh_reply.json" to { s -> ProtocolJson.decodeFromString<AuthRefreshReply>(s) },
         "auth_refresh_error.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
+        // v1.4 (SMS phone verification): parse-only placeholders added by root with the contract
+        // merge; the android role replaces them with typed decoders when it implements §7.
+        "auth_config_v14.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "me_reply_unverified.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "phone_verify_request_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "phone_verify_confirm.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_phone_unverified.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_invalid_code_attempts.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_already_verified.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_sms_unavailable.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
     )
 
     @Test

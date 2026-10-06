@@ -67,3 +67,41 @@ The credentials are in the repo `.env` on spark2: `NOTIFYLK_USER_ID`, `NOTIFYLK_
   balance visible.
 - Until the `RisiMe` sender ID is approved, no real verification SMS is sent unless Harsha
   explicitly overrides the guard. The full flow still works end to end with `DevLog`.
+
+## Amendments from review (2026-10-06, server + android)
+- **The `PHONE_VERIFICATION=required|off` gate flag** defaults to `off` and is advertised in
+  `/auth/config`. Otherwise the `NotifyDEMO` guard would lock every Keycloak user out. Turning it
+  on while the guard blocks sending is logged as a misconfiguration at boot.
+- **Guard behaviour:** with `NotifyDEMO`, a request returns **`503 sms_unavailable`**, not a fake
+  "sent". DevLog is used only when `OTP_DEV_LOG=true`. The sender ID is compared
+  case-insensitively.
+- **`phone_verified = (users.phone_verified_for == users.phone)`.** Any phone change resets it
+  automatically. `--rebind` clears it. Dev sessions count as verified per request, never stored.
+- **SMS cost caps live in Postgres** (a `phone_challenges` table, counted per phone over 24 h and
+  per server per hour), not in the in-memory limiter, which resets at every restart. Every
+  attempted send counts. Oban prunes rows older than 48 h. The per-user 3/15 min limit stays
+  in-memory.
+- **The key stays out of app config:** `NOTIFYLK_API_KEY` is read from the OS environment inside
+  the private function that builds the form body.
+  - No Req retry (no duplicate paid SMS) and no Req logging steps.
+  - Errors log only the HTTP status and up to 200 characters of the provider's text.
+  - No function receives the form list as an argument, so crash reports can't print it.
+- **`/health` never calls Notify.lk.** A 10-min background poll (only when `SMS_MODE=notifylk`)
+  exposes `checks.sms` as one of `ok`, `inactive`, `low_balance`, `error`, `demo_sender_blocked`
+  or `log`. **The balance amount is never exposed**; it is only logged, with a warning below
+  `SMS_BALANCE_WARN`. SMS trouble never makes `/health` return 503.
+  - The status endpoint may need GET query parameters. Then Notify.lk's own logs see the key; our
+    code never logs that URL.
+- **Only `+94` numbers** go to Notify.lk; others → `503`.
+- **Sender behaviour:** `deliver(to, %{subject, body})`. The message text is built in
+  `RisiMe.Accounts`. Senders are configured per channel: email, and sms (`NotifyLk`, `DevLog` or
+  `Test`).
+- **Clients:**
+  - an absent `phone_verified` means `true`;
+  - a `NeedsPhone` state;
+  - the gate order is update → blocked → locked → confirm phone → chats;
+  - `Retry-After` drives the timers;
+  - **no SMS Retriever** (its app hash differs between builds); instead the `SmsOtpCode`
+    autofill hint, with the SMS User Consent API as an option only if Harsha wants one-tap entry.
+- The message stays `Your RisiMe verification code is 123456. It expires in 5 minutes. Do not
+  share it.` It is under 160 characters (GSM-7), with one multi-digit number.

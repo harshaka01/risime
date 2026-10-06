@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.3 (Release 0.2)
+# RisiMe Wire Protocol — v1.4 (Release 0.2)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -234,7 +234,53 @@ Decisions 013 and 014. This section overrides §1.1, §1.2 and §1.5 where they 
     `since` is always a valid alternative.
   - Keycloak's default access-token lifetime is 5 min, so expect a refresh about every 4 min.
 
+## 7. One-time phone verification by SMS (v1.4)
+Decision 020. Applies only when `GET /auth/config` reports `"phone_verification": "required"`.
+
+### 7.1 REST
+- **`GET /auth/config` gains `"phone_verification": "required" | "off"`.** The gate below is
+  active only when it is `required`. The server enables it only once SMS can actually be sent: an
+  approved sender ID, or a deliberate demo override.
+- **`User` gains `"phone_verified": true | false`.** **An absent field means `true`** (pre-v1.4
+  servers have no gate).
+  - It is true when the user's current phone equals the phone they last verified. Any phone change
+    or identity re-bind resets it.
+  - **Dev-login sessions are treated as verified.** That isn't persisted: the same user signing in
+    through Keycloak must still verify.
+  - Verification status is never cached with the token.
+- **`Contact.registered`** is `true` only for users who are verified, or who need no
+  verification. Unconfirmed identities can't be messaged.
+- **Gate:** checks run in the order `401` → `403 not_allowlisted` / `409 identity_conflict` →
+  **`403 phone_unverified`**. Exempt: `GET /me`, `POST /auth/logout`, `GET /auth/config` and the
+  two routes below. The `phone_unverified` message may be shown verbatim.
+- **`POST /api/v1/me/phone/verify/request`** with body `{}`. The code always goes to the user's
+  **allowlisted** phone; clients can't choose the number. Responses:
+  - `200 {"status": "sent", "expires_in": 300, "to": "+9477•••••22"}`. The masked number uses
+    U+2022, UTF-8.
+  - `409 already_verified`. Clients treat it as success and re-fetch `/me`.
+  - `429 rate_limited`, which includes the per-user, per-phone and server budgets.
+  - `503 sms_unavailable`: the provider failed, the sender is disabled, or the number isn't
+    reachable through the gateway.
+- **`POST /api/v1/me/phone/verify/confirm`** `{"code": "123456"}`. Responses:
+  - `200 {"user": User}`, with `phone_verified: true`.
+  - `401 invalid_code`. The error object may include `"attempts_left": n`.
+  - `410 expired`.
+  - `429 too_many_attempts` (5 per code).
+  - `409 already_verified`.
+- **Every `429` carries a `Retry-After` header** (seconds). Clients fall back to 60 s.
+
+### 7.2 Realtime
+- An unverified user's socket upgrade is refused, as for `403` above. Clients call `GET /me` and
+  show the phone screen; **they don't reconnect in a loop.**
+- **`auth:refresh` gains the error `phone_unverified`.**
+- When verification is reset (phone change or re-bind), the server **closes that user's open
+  sockets**.
+
 ## Changelog
+- **v1.4** (2026-10-06): one-time SMS phone verification (§7). Adds `phone_verification` in
+  `/auth/config`, `User.phone_verified` (absent means true), `403 phone_unverified`,
+  `/me/phone/verify/request|confirm`, `Retry-After` on every 429, and `phone_unverified` on
+  `auth:refresh`. An additive change.
 - **v1.3** (2026-10-06): Keycloak access tokens on REST and the socket (§6). Adds
   `GET /auth/config`; mapping to phone-first users; `403 not_allowlisted` and
   `409 identity_conflict`; `DEV_LOCAL_AUTH`-only dev login; `Authorization` on the socket upgrade;

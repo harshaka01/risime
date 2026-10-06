@@ -19,6 +19,9 @@ defmodule RisiMe.ContractExamplesTest do
               auth_config.json error_not_allowlisted.json error_invalid_token.json
               error_identity_conflict.json auth_refresh.json auth_refresh_reply.json
               auth_refresh_error.json)
+  # v1.4 (SMS phone verification): parse-only placeholders added by root with the contract
+  # merge; the server role replaces them with real checks when it implements §7.
+  @pending_v1_4 ~w(auth_config_v14.json me_reply_unverified.json phone_verify_request_reply.json phone_verify_confirm.json error_phone_unverified.json error_invalid_code_attempts.json error_already_verified.json error_sms_unavailable.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -51,7 +54,12 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
+    assert @files -- (@checked ++ @pending_v1_4) == [],
+           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_4))}"
+  end
+
+  test "v1.4 examples are valid JSON objects (placeholder)" do
+    for name <- @pending_v1_4, do: assert(is_map(example(name)))
   end
 
   setup do
