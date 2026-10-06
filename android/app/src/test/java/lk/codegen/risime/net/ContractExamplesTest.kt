@@ -81,6 +81,15 @@ class ContractExamplesTest {
         "event_mls_membership.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.mlsMembership()) } },
         "signal_mls_key_packages_low.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.keyPackagesLow()) } },
         "error_e2ee_required.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
+        // v1.8 (emoji + reactions): parse-only placeholders added by root with the contract merge;
+        // the android role replaces them with typed decoders when it implements §11.
+        "reaction_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "msg_send_reaction.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "msg_send_reaction_and_body.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_reaction.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_unknown_target.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_invalid_emoji.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "limits_graphemes.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
     )
 
     @Test

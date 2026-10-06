@@ -1,55 +1,65 @@
 # Proposal: PROTOCOL v1.8 — emoji and reactions
 
-**Status:** proposed by root on 2026-10-06 (Harsha's slice 1, "emojis"). It needs server and
-android review before merge. It is additive: v1.7 apps ignore reactions (unknown envelope type, or
-unknown event kind) and keep working.
+**Status:** merged into `contract/v1` as **v1.8** on 2026-10-06, after review by the server and
+android roles. It is additive: v1.7 apps ignore reactions (unknown envelope type, or unknown event
+kind).
 
 ## 1. Message length (clarifies §4)
-- A body is **1–4096 extended grapheme clusters** (Unicode UAX #29), not bytes or code points. An
-  emoji with skin tone or ZWJ sequence counts as 1.
-- It also has a hard cap of **16 KiB of UTF-8**. Over either limit gives `too_long`.
-- Empty or whitespace-only gives `empty_body`, as before.
-- The server counts graphemes with `String.length/1`; Android counts with ICU `BreakIterator`
-  (character instance). Both sides test the same fixtures (`limits_graphemes.json`).
+- A body is **1–4096 extended grapheme clusters** (UAX #29) **and at most 16 KiB of UTF-8**.
+  Over either gives `too_long`; empty or whitespace-only gives `empty_body`.
+- **The server's count is authoritative.** The server checks the byte cap first, then counts with
+  `String.length/1`.
+- Clients count with ICU `BreakIterator` (character instance; on the JVM, ICU4J) only to warn.
+  They must accept `too_long`, and must never retry it.
+- `limits_graphemes.json` contains only cases that ICU 60+ (Android 8) and the server agree on.
+- The e2ee ciphertext cap is 24 KiB (§10.3).
 
 ## 2. Reactions
-A reaction is `{target message, emoji, op}`. **`op: "add"` toggles a reaction on and
-`"remove"` toggles it off.** The client sends `remove` when the user taps their own reaction again.
-- **`emoji`** is exactly one grapheme cluster, at most 32 bytes of UTF-8, and must be an emoji
-  (clients check against the emoji2 set; the server checks only the size in plaintext chats).
-- **State:** per conversation, the effective set is the latest op for each
-  `(reactor user, target, emoji)`, in inbox event order. A user may have several emojis on one
-  message.
-- **E2EE conversations** (the usual case): the reaction is an MLS application message with the
-  envelope `{"v":1,"type":"reaction","target":"<message_id>","emoji":"👍","op":"add"}`.
-  - It is sent with the normal e2ee `msg:send` (its own `client_msg_id`) and gets a `message_id`
-    like any message.
-  - The server can't tell it's a reaction. v1.7 apps ignore it (envelope rule).
-- **Plaintext conversations:** `msg:send` takes `"reaction": {"target", "emoji", "op"}` **instead
-  of** `body`.
-  - The server checks that `target` is a message of this conversation (`unknown_target`) and the
-    emoji size (`invalid_emoji`).
-  - It stores a new event kind **`reaction`**:
+- A reaction is `{target, emoji, op}`:
+  - **`op: "add"` sets** the reactor's `(target, emoji)`, and **`"remove"` clears** it. Both are
+    idempotent.
+  - Clients send `remove` when the user taps their own reaction again, and debounce rapid taps
+    (about 500 ms; only the final state is sent).
+  - **Every tap is a new `client_msg_id`; a retry reuses its id**, so a retried `add` can't come
+    back after a later `remove`.
+- **`target`** is the server `message_id` of a normal message, never of a reaction, and never a
+  `client_msg_id`. Clients offer reactions only on messages that have a `message_id`.
+- **`emoji`** is exactly one grapheme cluster, at most 32 bytes of UTF-8, with no control or
+  whitespace characters except ZWJ and variation selectors.
+- **Effective state:** for each `(reactor user, target, emoji)`, the latest op **by
+  `(server_ts, message_id)`**, so every device agrees whatever order it synced in. A user counts
+  once across all their devices.
+- **E2EE conversations:** the MLS envelope
+  `{"v":1,"type":"reaction","target":"<message_id>","emoji":"👍","op":"add"}` is sent with the
+  normal e2ee `msg:send`. The server can't tell it apart from a message.
+- **Plaintext conversations:**
+  - **`msg:send` carries exactly one content field:** `body`, `reaction` or `ciphertext`. More than
+    one is `bad_request`.
+  - `"reaction": {"target", "emoji", "op"}` sent to an e2ee conversation is `e2ee_required`.
+  - **Order of checks:** idempotent resend → `not_friends` → e2ee → reaction checks → rate limit →
+    store.
+  - **`unknown_target`:** the target isn't a TimeUUID, isn't a normal message of this conversation,
+    or has expired. Every case returns the same error.
+  - **`invalid_emoji`**; an `op` other than `add`/`remove` is `bad_request`.
+  - **Event kind `reaction`:**
     `{"message_id", "client_msg_id", "conversation_id", "from", "to", "target", "emoji", "op", "server_ts"}`.
-  - It goes to the recipient's and the sender's inboxes. v1.7 apps ignore the unknown kind.
-- **Acks and push:** reactions get **no** delivered/read acks (clients don't send them; the server
-  ignores them).
-  - In plaintext chats a `reaction` event never triggers push.
-  - E2EE reactions are indistinguishable, so they may wake the app, which then shows "<name>
-    reacted 👍 to your message" locally only if the target is the user's own message, and never
-    for `remove`.
-- **Rate limit:** reactions count toward the 20-per-10-s send limit.
+    It goes to the recipient's and the sender's inboxes **with the same `event_id`**. It never
+    triggers push.
+- **No acks or status for reactions:** the server emits no `status` events for reaction
+  `message_id`s, and `msg:ack` entries naming one are silently ignored.
+- **Rate limit:** reactions share the 20-per-10-s send limit.
+- **Notifications** (clients): only an effective `add` on one of **your own** messages notifies
+  ("<name> reacted 👍 to: …"); a `remove` never does.
 
-## 3. UI (clients, informative)
-- An emoji button in the composer opens the emoji2 picker, and EmojiCompat renders new emoji on
-  older Android versions.
-- **Long-press** a message → 6 quick reactions (👍 ❤️ 😂 😮 😢 🙏) plus "more" (the full picker),
-  next to the existing Copy, Retry and Delete actions.
-- Counts appear under the bubble (for example "👍 2 ❤️ 1"); tapping them opens "Reactions" (who
-  reacted with what).
+## 3. UI (informative)
+- **Composer:** an emoji button opens the `emoji2-emojipicker` (recent emojis, skin tones).
+  EmojiCompat uses the downloadable font, with no bundled font (about 0 MB).
+- **Long-press:** 👍 ❤️ 😂 😮 😢 🙏 plus "+", then Copy and Retry/Delete. Your own active reactions
+  are highlighted.
+- **Under the bubble:** chips like "👍 2 ❤️ 1"; tapping them opens "Reactions" with per-emoji tabs
+  listing people.
 
 ## Examples
-`reaction_payload.json` (the envelope), `msg_send_reaction.json` (plaintext),
-`event_reaction.json`, `error_unknown_target.json`, `error_invalid_emoji.json`,
-`limits_graphemes.json` (strings with their expected grapheme counts: ZWJ family, flag, skin tone,
-combining marks, 4096 and 4097 clusters).
+`reaction_payload.json`, `msg_send_reaction.json`, `msg_send_reaction_and_body.json` (→
+`bad_request`), `event_reaction.json`, `error_unknown_target.json`, `error_invalid_emoji.json`,
+`limits_graphemes.json`.
