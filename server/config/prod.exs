@@ -4,6 +4,13 @@ import Config
 # server listens on loopback (or in a container published on loopback), and a redirect built
 # here would drop the /risime prefix. Nothing trusts x-forwarded-* headers.
 
+# No SMTP unless RISIME_MAILER=smtp (runtime.exs): send nothing, log nothing of the email.
+config :risime, RisiMe.Mailer, adapter: RisiMe.Mailer.Disabled
+
+# Explicitly off in prod (dev.exs turns them on): no /dev routes, no debug error pages.
+config :risime, dev_routes: false
+config :risime, RisiMeWeb.Endpoint, debug_errors: false, code_reloader: false
+
 # Configure Swoosh API Client
 config :swoosh, api_client: Swoosh.ApiClient.Req
 

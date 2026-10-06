@@ -174,4 +174,19 @@ defmodule RisiMeWeb.ApiTest do
     assert %{"error" => %{"code" => "not_found"}} =
              conn |> get("/api/v1/nope") |> json_response(404)
   end
+
+  test "login codes never appear in HTTP responses", %{conn: conn} do
+    entry = allowlist_entry()
+    conn1 = post(conn, ~p"/api/v1/auth/request", %{phone: entry.phone, email: entry.email})
+    code = receive_code()
+    refute conn1.resp_body =~ code
+
+    conn2 = post(conn, ~p"/api/v1/auth/verify", %{phone: entry.phone, code: code})
+    assert conn2.status == 200
+    refute conn2.resp_body =~ code
+
+    conn3 = post(conn, ~p"/api/v1/auth/verify", %{phone: entry.phone, code: code})
+    refute conn3.resp_body =~ code
+    refute conn |> get("/health") |> Map.get(:resp_body) =~ code
+  end
 end
