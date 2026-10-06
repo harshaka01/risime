@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.11 (Release 0.3)
+# RisiMe Wire Protocol — v1.12 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -1255,7 +1255,8 @@ the raw bytes as the body, `Content-Type: application/octet-stream`, **`Content-
 **Delete.** `DELETE /api/v1/blobs/{blob_id}` is unchanged (owner only, idempotent `204`). The file
 is removed at once; the row stays until its expiry, so a replayed `client_blob_id` gets `404`.
 Clients use it for cancelled sends (after the upload, before `msg:send`), and for `mls` blobs of a
-failed commit (§13.4). There is no "delete for everyone" in v1.11.
+failed commit (§13.4). "Delete for everyone" of an image (v1.12) is §15; its blob is removed
+by the server with the message.
 
 ### 14.3 Blob format `A256GCM-S64K` (normative; crypto review R1–R3)
 - **Content key** `K`: 32 bytes from the OS CSPRNG, fresh for every blob (image or icon version),
@@ -1494,7 +1495,569 @@ missing `Content-Length`, `icon` for a `dm:`, a reused `client_blob_id` that doe
   the receive transaction; the live interop cases (DM, range, refusals, group membership reads,
   the sender's other device, `images_ready`, usage and limits).
 
+## 15. Deleting messages and chats (v1.12)
+Decision 047. Reviewed by server, android and crypto
+(`proposals/reviews/2026-10-06-delete-v1.12-*.md`). Additive to v1.11: one push `msg:delete` with
+`scope: "me" | "everyone"`, one push `chat:clear`, one event kind `delete`, one envelope type
+`delete`, one device capability `deletes`. Apps before v1.12 ignore the new kind (§10.0) and the new
+envelope type (§10.3); what they show is in §15.11.
+
+### 15.0 Principles
+- **Two scopes.** `me` touches only the caller's own devices' view and the caller's **own inbox
+  partition**. `everyone` touches every member's devices and every server copy.
+- **The server acts only on cleartext metadata it already has.** It never reads an E2EE body. The
+  client names the targets (`message_id`s) and any image `blob_id`s in cleartext request fields;
+  the server authorises them against what it stored at send time (`message_index.sender_id`,
+  `conversation_id`, the TimeUUID time, group roles).
+- **Receivers authorise again, end to end.** In E2EE chats the targets also travel inside an MLS
+  application message whose sender the MLS core authenticates, and are bound into its MLS
+  `authenticated_data` (§15.3). A receiver applies a target only if the authenticated deleter is
+  the target's authenticated original sender (within 48 h) or was a group admin at the control
+  message's epoch (§15.4). The server can drop a delete, but it can't make a device delete another
+  member's message.
+- **A tombstone, not a gap.** A message deleted for everyone becomes a local tombstone row: the
+  same `message_id`, sender and position, and no content (§15.6).
+- **Server copies are removed from every API response at once** and physically purged by TTL and
+  cleanup (§15.8, §15.10). Only a content-free index tombstone stays until the original's TTL.
+- **Idempotent everywhere.** A target that is already deleted, expired or unknown is reported as
+  `gone` and counts as success. A retry with the same `client_msg_id` returns the first reply.
+- **No required update** (decision 016: `required` is only for dropping a protocol). Old apps keep
+  a deleted message on screen (§15.11); the `deletes` capability (§15.1) lets the delete dialog say
+  so. The receive side ships before the send side (§15.11).
+- **No learning-log entries**: no model call is involved (§15.10).
+
+### 15.1 Capability and readiness
+- A v1.12 app advertises **`"deletes"`** with its MLS device:
+  `PUT /me/devices/{device_id}` `"mls": {"signature_key", "capabilities": ["groups", "images", "deletes"]}`
+  (`device_put_deletes.json`). An app advertises it only once it can **receive and apply** `delete`
+  events (tombstones, hidden tombstones, notification withdrawal), whether or not its send UI is
+  enabled yet.
+- **`GET /api/v1/mls/groups/{conversation_id}`** gains **`"deletes_ready": bool`** (absent = false)
+  and **`"missing_deletes": [{"user_id", "device_id" | null}]`** (`mls_group_deletes_ready.json`),
+  computed exactly like `images_ready` (§14.1) over every app instance of every member user seen in
+  the last 30 days, the caller's own instances included. It is answered for plaintext DMs too (an
+  instance without MLS capabilities counts as missing).
+- **A hint only.** The server never enforces it and the client never blocks on it. While the
+  conversation isn't `deletes_ready`, the "Delete for everyone" dialog adds the small print
+  **"People on older app versions may still see it"**. Refetched on chat open and on
+  `mls_membership` for that conversation.
+
+### 15.2 The push `msg:delete` (client → server)
+One push for both scopes and every conversation type. `conversation_id` is used for DMs too
+(`dm:…`), unlike `msg:send`.
+
+**Delete for everyone, E2EE (DM or group)** — `msg_delete_everyone_group.json`:
+```json
+{"client_msg_id": "5d1e2f3a-4b5c-4d6e-8f70-81920a1b2c3d",
+ "conversation_id": "grp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d",
+ "scope": "everyone",
+ "targets": ["c1a2b3e1-a0b1-11f0-8000-0242ac120002", "c1a2b3f0-a0b1-11f0-8000-0242ac120002"],
+ "blob_ids": ["8e7d6c5b-4a39-4281-9706-f5e4d3c2b1a0"],
+ "ciphertext": "<b64 PrivateMessage>", "generation": 1, "epoch": 4,
+ "client_ts": "2026-10-06T09:00:00.000Z"}
+```
+- `targets`: 1–**100** distinct lowercase TimeUUID `message_id`s of this conversation. The server
+  removes duplicates; 0 or more than 100 is `bad_request`.
+- `blob_ids`: 0–100 `media` blob ids referenced by image targets (§14.4 `blob.blob_id`), taken
+  from the client's stored envelopes; may be omitted (= `[]`). A target whose envelope the device
+  never stored contributes none (that blob lives until its expiry, §15.10).
+- `ciphertext`, `generation`, `epoch`: the MLS PrivateMessage carrying the `delete` envelope and
+  the targets in its `authenticated_data` (§15.3), with the §10.3 rules (`stale_epoch`, 24 KiB).
+  Required in an e2ee conversation (otherwise `e2ee_required`), forbidden in a plaintext one
+  (`bad_request`).
+
+**Delete for everyone, plaintext legacy DM** — `msg_delete_everyone_dm.json`: the same without
+`ciphertext`, `generation`, `epoch` and `blob_ids` (plaintext DMs carry no images, §14.0). The
+server's authorisation is the only check (plaintext chats trust the server anyway).
+
+**Delete for me** — `msg_delete_me.json`:
+`{"client_msg_id", "conversation_id", "scope": "me", "targets": [...]}`.
+- Any message of the conversation, any age, any sender. No `ciphertext`, no `blob_ids` (a blob is
+  never deleted for "me"), no event, no push.
+- The server deletes, **from the caller's own inbox partition only**, the event
+  `(user_id = caller, event_id = target)` if, in the same point read, its `kind` is `message` or
+  `reaction` **and** its payload's `conversation_id` matches; plus the caller's own
+  `message_refs` rows for it (§15.8). Any other kind (`mls_*`, `group_*`, `delete`, `status`, …)
+  is left alone and reported `gone`. Other users' inboxes and the caller's other devices are
+  untouched.
+- Membership isn't checked (a former member may tidy their own copies).
+
+**Reply ok** — `msg_delete_reply.json`:
+`{"message_id", "conversation_id", "server_ts", "deleted": [...], "gone": [...]}`.
+- `deleted`: targets removed by this request. `gone`: targets already deleted, expired, unknown,
+  or not a normal message of this conversation (a reaction, a delete, another conversation's
+  message). **`gone` is success**: it makes retries and races idempotent and never reveals whether
+  a `message_id` exists elsewhere.
+- `message_id`/`server_ts` name the stored `delete` event for `scope: "everyone"`; they are `null`
+  for `scope: "me"`, and when every target is `gone` (no event is stored: the earlier delete was
+  already announced; `msg_delete_reply_gone.json`).
+
+**Reply error.** All-or-nothing: if any target fails authorisation, nothing is deleted and nothing
+is stored. `{"reason": "<reason of the first failure>", "failures": [{"target", "reason"}, …]}`
+(`error_delete_too_old.json`, `error_not_sender.json`). Clients that read only `reason` still
+work; v1.12 clients drop the failing targets from the selection and offer "Delete for me" for them.
+
+| reason | when |
+|---|---|
+| **`not_sender`** (new) | DM, `everyone`: the target was sent by the other user |
+| **`too_old`** (new) | `everyone`: an own target more than **48 h** old on the server clock, and the caller isn't an admin of this group |
+| `not_admin` | group, `everyone`: another member's message and the caller isn't an active admin |
+| `not_member` | group, `everyone`: the caller isn't an active member (also unknown groups, §12.9); DM: the caller isn't a participant |
+| `e2ee_required` | `everyone` without `ciphertext` in an e2ee conversation |
+| `stale_epoch`, `too_long` | as §10.3 for the ciphertext |
+| `rate_limited` | shares the 20-per-10-s send limit; one request counts once, refused or not |
+| `bad_request` | malformed; 0 or > 100 targets; unknown `scope`; `ciphertext` in a plaintext conversation; a PrivateMessage whose `authenticated_data` isn't the canonical encoding of exactly the request's `targets` (§15.3); a `client_msg_id` already used by a `msg:send` (or another push) within 24 h |
+
+- **Blob mismatches never fail a request.** A `blob_id` that isn't a `media` blob of this
+  conversation owned by a sender of a `deleted` target (or of a target that is `gone` because it
+  was already tombstoned) is skipped and logged.
+- A DM participant can always delete their own messages for everyone: `not_friends` and blocks are
+  **not** checked (deleting only removes data, and the other user's copy must still go).
+
+**Order of checks** (`everyone`): idempotent resend (`sent_dedupe`) → `not_member` / participant
+→ e2ee checks → shape (including the `authenticated_data` check) → **rate limit** → per-target
+authorisation (§15.4) → blob checks → delete + store. The rate limit comes before any per-target
+`message_index` read. `scope: "me"`: idempotent resend → shape → rate limit → delete.
+
+### 15.3 The `delete` envelope and its `authenticated_data`
+`delete_payload.json`:
+```json
+{"v": 1, "type": "delete",
+ "targets": ["c1a2b3e1-a0b1-11f0-8000-0242ac120002", "c1a2b3f0-a0b1-11f0-8000-0242ac120002"]}
+```
+- `targets`: 1–100 distinct lowercase TimeUUIDs, the same **set** as the request's `targets`.
+  Nothing else: no bodies, no reasons, no blob ids. Unknown fields are ignored.
+- Sent only inside `msg:delete`, never with `msg:send`. A `delete` envelope that arrives in a
+  `message` event is dropped and logged.
+- **Strict validation:** `v` = 1 and `targets` a non-empty array of at most 100 distinct TimeUUID
+  strings; otherwise the whole control is dropped as malformed and logged
+  (`delete_payload_bad.json`, 101 targets, must be dropped).
+- **MLS `authenticated_data`** (crypto review S1, required in v1.12): the sender sets the
+  PrivateMessage's `authenticated_data` (OpenMLS `set_aad`, through the core's
+  `encrypt_with_aad`) to the canonical binary encoding **`0x01 0x44` (`'D'`) followed by the
+  targets as 16-byte UUIDs, sorted ascending by bytes, distinct** (at most 1 602 bytes). It is
+  cleartext in the PrivateMessage but covered by the sender's signature and the content AEAD, so
+  it can be neither altered nor stripped. It reveals nothing beyond the cleartext `targets`.
+  - **Server:** parses the `MLSMessage`/PrivateMessage header (`group_id`, `epoch`,
+    `content_type` = application, `authenticated_data`) and refuses a request whose decoded set
+    differs from the request's `targets` set with `bad_request`, **before** anything is deleted.
+    (It still never decrypts.)
+  - **Every other application message** carries an **empty** `authenticated_data`. Receivers drop
+    a non-`delete` application message with non-empty `authenticated_data`, and the server should
+    refuse one on `msg:send` (`bad_request`).
+
+### 15.4 Authorisation
+
+**Server** (per target, `scope: "everyone"`). Read `message_index` by `message_id`.
+1. Absent, already tombstoned (`deleted_at` set), `kind` = `reaction` or `delete`, or another
+   `conversation_id` → **`gone`** (no further check).
+2. `sender_id` = caller → allowed if `now − time(message_id) ≤ 48 h`; else allowed only if the
+   caller is an active **admin** of this group; else **`too_old`**.
+3. `sender_id` ≠ caller → DM: **`not_sender`**; group: allowed if the caller is an active admin
+   (`group_members.role = 'admin'`, `state = 'active'`), else **`not_admin`**. Admins have no age
+   limit inside the 30-day retention.
+
+`time(message_id)` is the TimeUUID time. It and the message's `server_ts` come from two clock reads
+microseconds to milliseconds apart; the receivers' grace absorbs that. 48 h = 172 800 000 ms on
+the server clock at the moment of the check.
+
+**One consistent snapshot for groups** (crypto C2). The `stale_epoch` check, the caller's role
+read and the planning of the `delete` event's `message_id` happen together under the
+conversation's critical section (§10.2 ordering, the per-conversation advisory lock), reading the
+**landed** role (never a pending `role` op). So a delete accepted at epoch `e` is ordered before
+the commit `e → e+1` in every inbox, and the server's "admin now" equals `group_meta.admins` at
+`e`. The section is short: the Cassandra reads of the targets, the deletes and the fan-out run
+after it is released.
+
+**Receivers** (per target; E2EE and plaintext), after decrypting (E2EE) or reading (plaintext)
+the `delete` event:
+1. **Identity** (crypto R1). E2EE: `D` = the `user_id` of the credential `"<user_id>/<device_id>"`
+   the core returns for the control (`Incoming::Application.sender`); it must equal the event's
+   `from`, and its device the event's `from_device`, else drop the whole control (§10.3).
+   Plaintext: `D` = the event's `from`.
+2. **Binding.** E2EE: the core's `authenticated_data` set, the envelope's `targets` set and the
+   event's `targets[].message_id` set must be equal (set equality on lowercase canonical UUIDs;
+   duplicates are malformed), else drop the whole control (logged).
+3. **Original sender `S`:** the `from` stored with the local row if the target is stored locally
+   (for E2EE the verified user id from the original message's leaf credential, **never a leaf
+   index**: leaf indices are reused); otherwise the event's `targets[].from` (server metadata,
+   §15.5). A local row of another `conversation_id` → ignore the target.
+4. **Allowed** if `D = S` and `delete.server_ts − target.server_ts ≤ 48 h + 5 min`, **or** the
+   conversation is a group and the core's **`sender_is_admin`** for the control is true. Otherwise
+   ignore the target and log `delete_unauthorised`.
+   - `D = S` compares **user ids only**: a delete from my laptop of a message sent from my phone,
+     or after a rejoin, evict or re-add of a device, is allowed. Never compare `from_device`.
+   - **`sender_is_admin`** (crypto R2) is "admin at the control's epoch `e`", answered by the
+     core: `Incoming::Application.sender_is_admin: Option<bool>` (`None` for DM groups) evaluated
+     on the admin list the core recorded for epoch `e` (`risime/admins/<gid>/<epoch>`, written in
+     the same transaction as every merge on every path — create, Welcome, peer commit, each
+     intermediate epoch of a catch-up, own commits — and pruned with the past-epoch secrets). A
+     missing record in a `grp:` group is an error (`Malformed`), not `false`. The app keeps **no**
+     admin history of its own. The rule is "admin at `e`", **not** "and still admin now", so the
+     result is a function of the event stream, identical on every device. Agents are never
+     admins.
+   - Plaintext DMs have no admins; plaintext receivers trust the event's metadata.
+5. Apply the tombstone (§15.6); by-admin when `D ≠ S`.
+
+Receivers should check, when a `meta_changed` commit completes a `role` op, that
+`new.admins = old.admins ± op.user_ids`, and log `admin_list_mismatch` (telemetry only; never
+reject).
+
+### 15.5 The event kind `delete` (server → client)
+Stored, cursor-ordered, written to **every member user's inbox, the deleter included**, with the
+same `event_id` (= its `message_id`), the deleter's copy first (§13.1). DM: both users. Group: the
+current active members. Never a visible notification; the other users get the normal coalesced
+data-only push (§8.2), **always**, so a shown notification can be withdrawn. The deleter's own copy
+is never pushed.
+
+`event_delete_group.json`:
+```json
+{"event_id": "d2b3c4d5-a0b2-11f0-8000-0242ac120002", "kind": "delete",
+ "data": {"message_id": "d2b3c4d5-a0b2-11f0-8000-0242ac120002",
+          "client_msg_id": "5d1e2f3a-4b5c-4d6e-8f70-81920a1b2c3d",
+          "conversation_id": "grp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d",
+          "from": "7e3f1a2b-…", "from_device": "c0a80101-…",
+          "targets": [
+            {"message_id": "c1a2b3e1-…", "from": "0b9d7e8a-…", "server_ts": "2026-10-06T08:15:30.456Z"},
+            {"message_id": "c1a2b3f0-…", "from": null, "server_ts": null}],
+          "ciphertext": "<b64>", "generation": 1, "epoch": 4,
+          "server_ts": "2026-10-06T09:00:00.512Z"}}
+```
+- **DMs** add `"to"`. A plaintext DM (`event_delete_dm.json`) has no `from_device`, `ciphertext`,
+  `generation` or `epoch`. An e2ee DM (`event_delete_dm_e2ee.json`) has `to`, `from_device`,
+  `ciphertext`, `generation` and `epoch`.
+- `targets` lists **every requested target** in request order. **Per recipient user** (server R4),
+  `from`/`server_ts` are filled only for a `deleted` target that this user had (the user is its
+  `sender_id` or in its `recipient_id`/`recipients`); otherwise, and for `gone` targets, they are
+  `null`. So a member who joined after a message learns nothing about it. The ciphertext is the
+  same for everyone.
+- No `status`, receipts or acks for `delete` events; a `delete` is never a reaction or delete
+  target (`unknown_target` / `gone`).
+- **Targets the device never stored** (it was offline; the server removed the message's rows):
+  - non-null `from`/`server_ts` and §15.4 allows it (with `S` from the event): insert a tombstone
+    at that position (local id **`del:<message_id>`**, local order = the target's `server_ts`),
+    never notified or unread. Server-placed tombstones show **no sender attribution** unless
+    `S = D` (crypto S2: placement metadata is presentation, not authentication);
+  - e2ee and `history_before` non-null and the target's `server_ts < history_before`: insert
+    nothing (§13.3's marker covers it);
+  - null metadata: a **hidden tombstone** only (§15.6).
+
+### 15.6 Client: tombstones, hidden tombstones and the purge
+**Tombstone row.** Keeps `message_id`, `client_msg_id`, `conversation_id`, `from`, position and
+direction; adds `deleted_at`, `deleted_by` (user id), `deleted_by_admin`.
+- Text: **"This message was deleted"**; on the deleter's own devices (`deleted_by` = me) **"You
+  deleted this message"**; by an admin (`D ≠ S`) **"This message was deleted by an admin"**.
+- Not unread (an unread target decrements the unread count), never notified, no ticks, no
+  reactions, no long-press except "Delete for me". The chat list preview shows the tombstone text
+  if it is the latest row. Tombstones never revert; repeats are no-ops (by `message_id`).
+
+**The purge** (crypto R6, android R10), in **one transaction with the cursor**: the body and
+caption; the image envelope including the content key `K`, `sha256` and thumbnail (sealed store);
+reaction rows on it; receipt state; pending transfer rows; the parked ciphertext of the target in
+`mls_pending` if still parked; search entries (the body); any derived row. **After the commit:**
+unlink the cached blob ciphertext and any temporary plaintext (viewer or share copies), cancel
+downloads/uploads for it, evict in-memory bitmaps and close any UI showing a purged id; a start-up
+sweep deletes cache files that have no row (a crash leaves only a key-less orphan). The messages
+database runs with **`PRAGMA secure_delete = ON`**, and a delete transaction is followed by a
+best-effort `wal_checkpoint(TRUNCATE)` off the UI thread, so deleted cells don't linger in free
+pages or the WAL. The core keeps no application plaintext and deletes consumed generation keys
+(crypto C4), so there is nothing to purge in MLS state.
+
+**Hidden tombstone** (a delete for a target the device doesn't hold and can't place, §15.5; also
+"Delete for me", §15.7): a separate store `(message_id, conversation_id, deleted_by,
+deleter_is_admin, delete_server_ts, scope)`, kept 30 days. When a `message` with that id arrives
+later, the device **decrypts it first** (to advance the ratchet and learn `S`), then re-runs §15.4
+step 4 with the stored values (crypto R3):
+- allowed (`D = S` within 48 h + 5 min of the message's `server_ts`, or `deleter_is_admin`), or
+  `scope = me`: store it as a tombstone (or, for `me`, not at all), unnotified and not unread;
+- otherwise: store and show it normally, drop the hidden tombstone, log `delete_unauthorised`.
+
+A reaction for a hidden-tombstoned target waits with it and is dropped only if the tombstone turns
+out authorised. Reactions for a tombstoned target are dropped and never notified.
+
+**Receiving a `delete`.**
+- Processed in the group's `event_id` order like any message: parked at a newer epoch and replayed
+  through the same path after its commit (§10.3). §15.4, then the purge per allowed target, in one
+  transaction with the cursor.
+- **Control events never create §13.3 lines** (android R5): a `delete` that is pre-install,
+  undecryptable, or fails to decrypt (e.g. a byte replay: the generation key is consumed) adds
+  **no history marker, no "couldn't be decrypted" line and no tombstone**; it is logged only.
+  Plaintext `delete` events replay normally on a fresh install and create tombstones from their
+  metadata.
+- **Notifications** (android R7): after any delete, re-plan **every chat that currently has a
+  posted notification** from all its unread rows and repost it **silently**
+  (`setOnlyAlertOnce(true)`, `setSilent(true)`): never a new sound or heads-up. A chat left empty
+  is cancelled; when no chat notification is left, the group summary is cancelled too. Reaction
+  lines about a deleted target go with the purge. This runs in the foreground as well.
+- A delete whose target is a reaction, a system row or another delete is ignored.
+- **Quotes/replies** (later): a quote of a deleted message renders as "This message was deleted"
+  and never keeps a copy of its body.
+
+**The sending device's own copy** (crypto R4). The device can't decrypt its own PrivateMessage
+(the core reports `OwnEcho`); it skips its copy by `from_device` (E2EE) or `client_msg_id`
+(plaintext). If its outbox still holds a request with that `client_msg_id` (a crash before the
+reply), the event completes it: purge the `deleted` and `gone` targets **of the outbox row's own
+list**. With no matching outbox row (lost local state), apply the event's cleartext targets only
+where the local row's `from` is this user, or the group's current `group_meta` names this user as
+admin.
+
+### 15.7 Client: sending, Delete for me, Clear chat, Delete chat
+**Long-press and multi-select.** Long-press → the existing sheet (§11.3) gains **Delete** and
+**Select**; select mode toggles bubbles and shows the count and a bin. The dialog offers **"Delete
+for me"**, **"Delete for everyone"** (only when every selected message is eligible), Cancel; the
+small print says "Recipients may have already seen it", plus §15.1's line while not
+`deletes_ready`. System rows and tombstones offer only "Delete for me" (local only). More than 100
+selected → requests of ≤ 100, each with its own `client_msg_id` and envelope.
+
+**Eligibility** (android R8): the client keeps `offset = server_time − device_now` from every join
+and sync reply (in memory and persisted for a cold start). "For everyone" is offered while
+`server_ts + 48 h − 1 min > device_now + offset`, or on any message with a `message_id` when the
+user is an admin (`groups.my_role`, from `GET /groups/{id}`). The server decides at receipt; a
+request waiting offline is judged then.
+
+**Sending a delete for everyone.**
+1. Mark the rows **deleting** at once (rendered as the tombstone) but keep their content and tick
+   state until the reply.
+2. **One serial encrypt-and-push lane per conversation** for every application message (text,
+   reaction, image, delete; android R6, crypto S4): the `delete` consumes a sender-ratchet
+   generation like any message. The envelope is encrypted at send time; `stale_epoch` →
+   re-encrypt with the same `client_msg_id` (§10.4). A ciphertext not accepted before a later one
+   from this device was pushed is **re-encrypted** on retry, never resent.
+3. Reply ok → purge `deleted` and `gone`. Reply error → restore the rows and show "Couldn't delete
+   for everyone" (`too_old`: "You can only delete messages for everyone within 48 hours"); offer
+   "Delete for me". `bad_request` and unknown reasons are permanent (§2.2). Network errors retry
+   with the same `client_msg_id`.
+
+**Pending messages** (android R2). A message without a `message_id`:
+- **never pushed:** both options cancel it locally (no request; an uploaded but unsent blob is
+  `DELETE`d, §14.2);
+- **pushed at least once** (it may be stored on the server, its reply lost): it becomes **cancel
+  after send**: the outbox finishes sending it with the same `client_msg_id` (the server's dedupe
+  returns the original `message_id` without re-delivering), then sends `msg:delete` `everyone` for
+  it; shown as the tombstone meanwhile. "Delete for me" on such a row does the same;
+- a `msg:send` in flight waits for its reply, then proceeds as above.
+
+**Delete for me.** Purge the rows (or tombstones) as §15.6, with no tombstone; the bubble
+disappears. Keep a hidden tombstone with `scope = me` (always honoured locally) so a replay can't
+bring it back. Then send `msg:delete` `scope: "me"` (outbox, retried; failures logged, never shown).
+
+**Clear chat** (chat menu, chat-list long-press) removes every row of the conversation (messages,
+tombstones, system lines, reactions, receipts, image keys and cached files) and keeps the chat in
+the list with an empty preview. **Delete chat** does the same and hides it from the list until a
+new `message` (for a group, a notifying `group_event`, §12.7) arrives after the watermark; for a
+group the user stays a member. A former friend's DM is listed only while it has rows, so Clear chat
+removes it from the list too.
+- **Watermark** (android R3): in the same transaction as the local purge, store
+  `cleared_upto` = the time of **`upto`**, the client's global inbox cursor read in that
+  transaction. Clients **ignore the visible effect of any event of that conversation at or before
+  `cleared_upto`**: `message`, `reaction` and `delete` rows, §13.3 markers, and (v1.13) call lines,
+  including parked `mls_pending` messages replayed later and a re-login replay before the server
+  job ran. MLS and group-state effects of such events still apply. Times are compared as TimeUUID
+  times, never as strings.
+- Neither touches MLS state, `mls_pending` ordering, the cursor, membership or mute settings. Both
+  cancel the chat's notifications and its **unsent** messages and reactions (with the pending rules
+  above: pushed ones still complete and appear after the clear, which is correct). They **never
+  cancel a pending `msg:delete` `everyone`** (android R4): the user asked for that to happen for
+  everyone.
+- Both send **`chat:clear`** (§15.9) with that `upto`, so a reinstall doesn't bring the chat back.
+- The purge rules of §15.6 (`secure_delete`, file unlink after commit) apply to every row removed.
+- Logout flushes the delete/clear outbox best-effort within its existing 5-s bound.
+- "Delete for me" and Clear chat don't sync to the user's other devices in v1.12 (a later
+  proposal).
+
+### 15.8 Server storage and steps
+Postgres changes only through blobs (`Blobs.remove/1`, §14.8). Cassandra (`004_delete.cql`), queries
+first, no `ALLOW FILTERING`, no secondary index:
+
+| Q | Query | Table |
+|---|---|---|
+| Q3 | `SELECT …, TTL(sender_id) FROM message_index WHERE message_id = ?` | `message_index` |
+| Q3d | `UPDATE message_index USING TTL <remaining> SET deleted_at = ?, deleted_by = ? WHERE message_id = ?` | `message_index` (+2 columns) |
+| Q1d | `DELETE FROM inbox_events WHERE user_id = ? AND event_id = ?` | `inbox_events` |
+| Q7 | `SELECT user_id, event_id, ref_id FROM message_refs WHERE message_id = ?` (`… AND user_id = ?` for `me`) | **`message_refs`** (new) |
+| Q8 | `INSERT INTO message_refs …` before a plaintext `reaction` event is appended | `message_refs` |
+| Q5d | `DELETE FROM group_receipts WHERE message_id = ?` | `group_receipts` |
+| Q1s | `SELECT event_id, kind, conversation_id FROM inbox_events WHERE user_id = ? AND event_id <= ?`, paged (`chat:clear`) | `inbox_events` (+1 column) |
+
+```sql
+CREATE TABLE IF NOT EXISTS message_refs (
+  message_id timeuuid,   -- the target message
+  user_id uuid,          -- the inbox partition holding the referencing row
+  event_id timeuuid,     -- the referencing event's id there
+  ref_id timeuuid,       -- the plaintext reaction's own message_id (its message_index row)
+  PRIMARY KEY ((message_id), user_id, event_id)
+) WITH default_time_to_live = 2592000 AND gc_grace_seconds = 86400
+  AND compaction = {'class': 'TimeWindowCompactionStrategy',
+                    'compaction_window_unit': 'DAYS', 'compaction_window_size': 1};
+ALTER TABLE message_index ADD deleted_at timestamp;
+ALTER TABLE message_index ADD deleted_by uuid;
+ALTER TABLE inbox_events ADD conversation_id text;   -- written on every append from v1.12
+ALTER TABLE sent_dedupe ADD kind text;               -- 'delete' for msg:delete claims
+ALTER TABLE inbox_events WITH gc_grace_seconds = 86400;
+ALTER TABLE group_receipts WITH gc_grace_seconds = 86400;
+```
+- **The inbox partitions** of a target come from its `message_index` row (`sender_id` plus
+  `recipient_id` or `recipients`); its own event is at `event_id = message_id` in each (§13.1).
+- **`message_refs` covers plaintext reactions only** (server suggestion). `status` and
+  `group_receipt` events carry no content and stay until their TTL; clients ignore them for
+  unknown or tombstoned messages. The refs row is written **before** the event it describes (never
+  in a cross-partition batch), so a crash leaves at most a dangling ref.
+- E2EE reactions are opaque to the server (`kind` null), so their ciphertext stays until the 30-day
+  TTL; it reveals nothing new and every v1.12 receiver drops it (accepted limit).
+- **The index tombstone** is written with the row's remaining TTL (Q3 reads `TTL(sender_id)`), so
+  it never outlives the original row (server R6).
+- `gc_grace_seconds = 86400` (single node, no repair to protect) speeds the purge of expired TTL
+  cells; point-delete tombstones still live until the shadowed data's TTL. Revisit both with a
+  multi-node cluster.
+
+**Steps of `scope: "everyone"`** (behind `RisiMe.Messaging.Store`):
+1. Q3 for each target (after the rate limit); authorise (§15.4) using the group snapshot; blob
+   checks (one query, `media` blobs of this conversation owned by the target senders).
+2. Claim `sent_dedupe` for `(caller, client_msg_id)` with `kind = 'delete'` and the planned
+   `message_id`/`server_ts` of the `delete` event. **Right after the claim, enqueue the finishing
+   Oban job** (scheduled about 15 s later) carrying the `deleted` targets, the blobs and the event
+   data, so the delete completes even if the client never retries.
+3. Q3d tombstone each `deleted` target (`deleted_by` = caller, `deleted_at` = the claim's
+   `server_ts`).
+4. Q1d delete each target's event in every partition, grouped per partition into one unlogged
+   batch.
+5. Append the `delete` event to every member inbox under the planned `event_id` (per-recipient
+   metadata, §15.5), **`put_message` its own `message_index` row** (`kind = 'delete'`, sender,
+   `recipient_id`/`recipients`, 30-day TTL), publish, push; reply.
+6. **The finishing job** (idempotent): re-runs 3–5 if needed (same ids; a rewrite of an existing row
+   is a no-op), then Q7 → delete each referenced inbox row and tombstone each plaintext reaction's
+   index row → Q5d → evict the `GroupReceipts` cache entry and cancel its coalescing timer → delete
+   the `message_refs` partition → `Blobs.remove/1` each blob (file removed now, row kept until
+   expiry, so a replayed `client_blob_id` gets `404`).
+
+**Crash recovery** (server R2). A retry that finds a `kind = 'delete'` claim re-runs steps 1 and
+3–6 with the claim's `message_id`/`server_ts`: a target tombstoned by the caller at the claim's
+`server_ts` is `deleted`; a target not yet tombstoned is authorised again with 48 h measured
+against the **claim's** `server_ts`, then tombstoned; a target tombstoned by someone else is
+`gone`. It returns the same reply. A claim without `kind = 'delete'` (a `msg:send`) →
+`bad_request`. Two concurrent deleters of one target (a sender and an admin) both announce it;
+receivers are idempotent.
+
+**Every path that reads `message_index` treats a tombstoned row as absent** (server R5):
+- `msg:ack`: no status CAS, no `status` event, no group receipt; acks naming a `delete` event are
+  ignored too (`kind = 'delete'`, like `reaction`);
+- plaintext reactions to it: `unknown_target`;
+- `GET /groups/{id}/messages/{id}/receipts`: `404`;
+- an idempotent resend of the **original** message's `client_msg_id` (within 24 h) returns its
+  original reply **without re-delivering**;
+- `Store.get_message/1` returns `deleted_at`. An ack racing the tombstone may still append a
+  content-free `status`; it expires with its TTL (accepted).
+- Members removed from a group after the message was sent lose their server copies but get no
+  `delete` event (no `grp:` traffic after removal, §12.3): their device keeps what it had.
+
+### 15.9 The push `chat:clear` (client → server) — `chat_clear.json`
+`{"conversation_id": "dm:…" | "grp:…", "upto": "<event_id>"}` → reply ok `{}`. Errors:
+`bad_request` (malformed, `upto` not a TimeUUID), `rate_limited` (at most 10 per user per minute).
+- Removes from **the caller's own inbox partition** every event whose **TimeUUID time** is ≤
+  `upto`'s (compared as times, never as strings), whose kind is `message`, `reaction`, `status`,
+  `group_receipt` or `delete`, and whose `conversation_id` matches (the column, falling back to the
+  payload for older rows), plus the caller's `message_refs` rows for those messages.
+- **Never** removes `mls_commit`, `mls_welcome`, `mls_membership`, `group_event`, `group_op` or
+  `friend`-type events: MLS state and group lifecycle must still replay.
+- A background Oban job, unique on `(user, conversation_id, upto)`, streaming pages of 500 and
+  deleting per page in one single-partition unlogged batch; the reply only means "accepted".
+  Membership isn't checked. There is no "clear for everyone".
+- `msg:delete` `scope: "me"` and `chat:clear` can remove events the caller's **other devices**
+  haven't fetched yet; those devices never see them, which is what the action means, and the core's
+  `maximum_forward_distance` (§15.10) keeps the resulting generation gaps harmless.
+
+### 15.10 MLS core, privacy and the learning log
+**Core changes (crypto review; required before the receive path ships):**
+- per-epoch admin record and `sender_is_admin` (§15.4);
+- `encrypt_with_aad` and `Incoming::Application.authenticated_data` (§15.3);
+- **`SenderRatchetConfiguration` with `maximum_forward_distance` 20 000** (from OpenMLS's 1000) in
+  the create, join and Welcome configs, **and applied once to every stored group on load**
+  (`MlsGroup::set_configuration`), with a test that a group created under the old configuration
+  accepts a 5 000-generation jump. Deleted events, `scope: "me"`, `chat:clear` and old apps
+  skipping `delete` all leave generation gaps; the cap stays as the DoS bound.
+  `out_of_order_tolerance` stays 5 until v1.13 decides it.
+
+**Privacy** (the app's privacy note says this):
+- "Delete for everyone" removes the message **from every API response at once**. The deletion on
+  the server is **logical**: the bytes (ciphertext; for legacy plaintext DMs, plaintext) stay in
+  Cassandra's files until their 30-day TTL window expires, the image file is removed at once, and
+  **backups keep the bytes for up to 14 days after that** (`BACKUP_KEEP`). A restore would bring
+  the rows back into inboxes; devices with (hidden) tombstones drop them again.
+- The server learns which messages were deleted, by whom and when (it already knew sender and
+  time) and keeps a content-free index tombstone until the original's TTL. Logs carry counts and
+  ids only.
+- Deletion is best-effort: a recipient may have read, screenshotted or (later) forwarded it; old
+  apps (§15.11) and removed members keep their copies; an image whose envelope the deleter's device
+  never stored isn't named in `blob_ids` and lives until its expiry; E2EE reactions to it stay on
+  the server until their TTL. Server-placed tombstones (§15.5) are presentation, not proof.
+- "Delete for me" and Clear chat are local to this device (and the user's own inbox copies).
+- **Learning log: none.** The on-device behaviour log records nothing about deletes.
+
+### 15.11 Rollout and old apps
+**Order:** deploy the server → a nightly with the **receive side** (tombstones, hidden tombstones,
+notification withdrawal, the core changes; it advertises `deletes`) → once most devices run it, a
+later nightly enables the **send UI** (behind a local flag until then) → announce. A **normal
+(optional)** update, never `required`.
+
+**What a ≤ v1.11 app shows** (verified against the code by both reviews):
+- **The deleted message stays on screen** (text or image bubble, ticks, reactions, chat-list
+  preview, search hit), and a posted notification stays until the chat is opened.
+- The `delete` event hits the unknown-kind branch, is marked seen and passed by the cursor. When
+  that device later updates it never sees the event again, so **the message stays on that device
+  for good**. (A one-time catch-up replay is deferred.)
+- An image not yet downloaded gets `404` and shows "This photo is no longer available".
+- A reinstall of the old app doesn't bring the message back (the server rows are gone).
+- Acks for it are ignored; a plaintext reaction gets `unknown_target` (reverted silently); receipts
+  return `404`. Nothing crashes, nothing blocks, and no MLS state is harmed (a skipped generation
+  is within the forward distance).
+
+### 15.12 Test coverage (all gates)
+- **Crypto:** a delete decrypted at `e+2` after a demotion at `e+1` → `sender_is_admin = true`; the
+  same author at `e+1` → `false`; a catch-up over 3 commits records each intermediate epoch; the
+  pruning bound; a missing record in a group → `Malformed`; the 5 000-generation jump after the
+  config migration; AAD round trip and tampered AAD → `DecryptionFailed`.
+- **Server:** each authorisation branch (own < 48 h, own > 48 h, admin any age, `not_admin`,
+  `not_sender`, `gone` for unknown/expired/tombstoned/other-conversation/reaction/delete targets);
+  all-or-nothing with `failures`; 100/101 targets; the AAD mismatch → `bad_request`; the rate limit
+  before any `message_index` read; both inboxes lose the event and the `delete` event lands in every
+  member inbox with one `event_id`, deleter first, no push to the deleter; a later joiner gets null
+  metadata; plaintext reaction refs removed, the `group_receipts` partition gone, a pending
+  receipt timer emits nothing; DM acks of a deleted message produce no `status`; the tombstone TTL
+  equals the remaining TTL; the blob deleted and the owner check; a concurrent duplicate with
+  `blob_ids` succeeds as all `gone`; idempotent retry, including a crash between the claim and the
+  tombstones, and the finishing job without a retry; a `msg:send` `client_msg_id` reused for
+  `msg:delete` → `bad_request`; a `delete` event is not ackable or reactable; resend of the
+  original doesn't re-deliver; receipts `404`; `scope: "me"` touches only the caller's partition and
+  only `message`/`reaction` rows (an `mls_commit` id deletes nothing); `chat:clear` keeps
+  `mls_*`/`group_*` and events after `upto` and compares by time; `deletes_ready`; no
+  `ALLOW FILTERING`.
+- **Android:** envelope and AAD encode/decode and the strict drops (`delete_payload_bad.json`);
+  the binding checks; §15.4 with own, other device of the same user, other user, admin-at-epoch,
+  48 h ± grace; the purge in one transaction plus files after commit and the orphan sweep;
+  `secure_delete` on; a hidden tombstone that is authorised suppresses the later message and an
+  unauthorised one doesn't; a positioned `del:` tombstone for an offline device, none for a later
+  joiner; a fresh-install replay with only `delete` events before `history_before` shows no marker;
+  OwnEcho crash completion; silent notification rebuild and summary cancel; multi-select split at
+  100; deleting-state restore on `too_old`; cancel-after-send of a pushed pending message; the
+  serial lane; the clock offset; the Clear chat watermark against a parked replay and a re-login
+  replay; Clear chat keeps a pending delete-for-everyone and MLS state; Delete chat reappears on a
+  new message; parse every new example; the Room migration in the upgrade test.
+- **Live interop:** e2ee DM delete both ways; group admin delete; an image delete (the blob returns
+  `404` to every member); a reinstall after Clear chat shows nothing restored; an old-app peer
+  (§15.11).
+
 ## Changelog
+- **v1.12** (2026-10-06): deleting messages and chats (§15), reviewed by server, android and
+  crypto. The push `msg:delete` with `scope: "me" | "everyone"` (1–100 targets, `deleted`/`gone`
+  reply, all-or-nothing errors with `failures`, new reasons `not_sender` and `too_old`); own
+  messages within 48 h, group admins any age; the event kind `delete` with per-recipient target
+  metadata; the `delete` envelope with the targets bound into MLS `authenticated_data`, checked by
+  the server; receivers authorise by attested user id and the core's `sender_is_admin` at the
+  control's epoch; tombstones, hidden tombstones re-checked on arrival, the purge with
+  `secure_delete`; the push `chat:clear` and the local `cleared_upto` watermark; Clear chat and
+  Delete chat; the `deletes` capability with `deletes_ready`/`missing_deletes`; logical server
+  deletion (purged by TTL, backups up to 14 days); `maximum_forward_distance` 20 000; a
+  receive-first rollout with no required update. An additive change.
 - **v1.11** (2026-10-06): encrypted images (§14), reviewed by crypto, server and android. The
   `images` capability with `images_ready`/`missing_images`; blob purposes `media` (16 MiB, 2 GiB
   live per user, 120/h, 1000/day) and `icon`; streamed idempotent uploads by `client_blob_id`;
