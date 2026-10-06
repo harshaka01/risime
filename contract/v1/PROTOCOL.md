@@ -548,6 +548,14 @@ device must belong to the authenticated user; otherwise the call gets `403`.
     attestation, is dropped and logged.
 - **No push is sent for `mls_*` events.** Only `message` events wake devices.
 
+**Application payload envelope (v1.7, set before rollout).** The plaintext of an MLS application
+message is UTF-8 JSON `{"v": 1, "type": "<type>", …}`.
+- `type: "text"` carries `"body"`, with the same limits as plaintext messages (§4).
+- Receivers **ignore** unknown types: they store nothing visible and never show the raw JSON.
+- Plaintext that isn't a JSON object with a string `type` is treated as legacy text.
+
+Later versions add types (reactions, group events, images) without breaking older v1.7 apps.
+
 ### 10.4 Client rules and UI
 - **Storage:** MLS state lives in the **same SQLite database as messages** (a sealed key-value
   table, decision 033).
