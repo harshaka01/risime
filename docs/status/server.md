@@ -1,8 +1,9 @@
 # Server status — Release 0.2 (in progress)
 
-**READY** — 0.1 (S1–S7), the 0.2 night-1 items, contract **v1.3** (Keycloak sign-in) and
-**v1.4** (one-time SMS phone verification) are done. Gate green on `main`:
-`mix format --check-formatted && mix compile --warnings-as-errors && mix test` (178 tests).
+**READY** — 0.1 (S1–S7), the 0.2 night-1 items, contract **v1.3** (Keycloak sign-in),
+**v1.4** (one-time SMS phone verification) and the **prod-mode pilot release** (decision 024)
+are done. Gate green on `main`:
+`mix format --check-formatted && mix compile --warnings-as-errors && mix test` (194 tests).
 
 ## 0.2 progress
 - [x] Version from the repo `VERSION` file: `Application.spec(:risime, :vsn)` matches it, and the
@@ -50,6 +51,73 @@
   - `checks.sms` in `/health`.
   - It needs `mix ecto.migrate` (`phone_challenges`, `users.phone_verified_for`, the reset
     trigger).
+
+## Prod pilot release (`https://risime.risicloud.ai`, decisions 023 and 024)
+Caddy on spark2 terminates TLS and proxies to `127.0.0.1:4000`. The server runs as a prod-mode
+**release** against the existing `risime_dev` databases.
+
+Build (root, from the latest green tag; arm64 on spark2 is verified):
+```bash
+cd server
+MIX_ENV=prod ~/.local/bin/mise exec -- mix deps.get
+MIX_ENV=prod ~/.local/bin/mise exec -- mix release --overwrite   # → _build/prod/rel/risime
+```
+
+Environment for the pilot. Secrets (`SECRET_KEY_BASE`, `POSTGRES_PASSWORD`, `NOTIFYLK_*`) come
+from the repo `.env`, loaded with `set -a; . .env; set +a`, never printed.
+| Var | Pilot value | Notes |
+|---|---|---|
+| `SECRET_KEY_BASE` | from `.env` | required |
+| `POSTGRES_PASSWORD` | from `.env` | or `DATABASE_URL` instead of the five `POSTGRES_*` |
+| `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_USER` | `127.0.0.1` / `5432` / `risime` | defaults |
+| `POSTGRES_DB` | `risime_dev` | default `risime_prod` |
+| `CASSANDRA_NODES` | `127.0.0.1:9042` | default |
+| `CASSANDRA_KEYSPACE` | `risime_dev` | default `risime_prod` |
+| `PHX_HOST` | `risime.risicloud.ai` | default |
+| `PHX_PATH` | `/` | default |
+| `PHX_ORIGINS` | (unset → `https://risime.risicloud.ai`) | comma-separated `check_origin` list |
+| `PHX_BIND` | (unset → `127.0.0.1`) | loopback only; anything else makes boot fail |
+| `PORT` | `4000` | default |
+| `DEV_LOCAL_AUTH` | `true` until Keycloak is live | boot warning in prod |
+| `OTP_DEV_LOG` | `true` while `DEV_LOCAL_AUTH` is on | codes appear only in the server log (`[DEV OTP]`) |
+| `SMS_MODE` | `log` until the RisiMe sender ID is approved | prod default is `notifylk` |
+| `OIDC_ENABLED`, `PHONE_VERIFICATION` | `false`, `off` for now | see the sections below |
+| `RISIME_AUTH_LOG` | (unset → `~/risime-logs/auth.log`) | fail2ban file, see below |
+| `LOG_FORMAT` | (unset → `json` in prod) | |
+
+Run:
+```bash
+cd server/_build/prod/rel/risime
+bin/risime eval "RisiMe.Release.migrate()"   # Ecto + CQL, before every start of a new build
+bin/risime start                             # foreground; under tmux or systemd
+```
+- **Stop with SIGTERM** (systemd's default, or `kill -TERM <beam pid>`). The release runs
+  without Erlang distribution (`RELEASE_DISTRIBUTION=none`, no epmd), so `bin/risime stop` and
+  `remote` don't work by design.
+- Checked on :4100 (2026-10-06):
+  - it listens on `127.0.0.1:4100` only, and no epmd runs;
+  - `/health` returns `ok`;
+  - `/dev/mailbox` and unknown routes return a 404 JSON error; a bad body returns a 400 JSON error;
+  - tokens show as `[FILTERED]` in the log;
+  - SIGTERM shuts it down cleanly.
+
+### fail2ban auth log
+One line per authentication failure, in `RISIME_AUTH_LOG` (and in the normal log at info):
+```
+2026-10-06T08:15:30Z risime auth_failure ip=203.0.113.9 kind=invalid_code path=/api/v1/auth/verify
+```
+- **Format:** `<UTC ISO-8601 to the second>Z risime auth_failure ip=<client IP> kind=<kind> path=<route path>`.
+  Fields contain only `[A-Za-z0-9.:/_-]`; there is never a phone, email, token, code or query
+  string.
+- **Kinds:** `invalid_code`, `too_many_attempts`, `rate_limited`, `invalid_token`,
+  `not_allowlisted`, `identity_conflict`, `socket_refused`, `phone_code_invalid`.
+- **Client IP:** `X-Forwarded-For` (its last entry) is used only when the TCP peer is loopback,
+  which is Caddy on the same host; otherwise the peer address is used.
+- **fail2ban:** `failregex = ^.* risime auth_failure ip=<HOST> `, and `ignoreip = 127.0.0.1/8 ::1`
+  (direct local requests are logged with the loopback IP).
+- **Per-IP limits** (on top of the existing ones), each answering `429 rate_limited` with
+  `Retry-After`: `POST /auth/request` 10 per IP per 15 min, `POST /auth/verify` 20 per IP per
+  15 min. Refused socket upgrades are logged for fail2ban, not limited in the app.
 
 ## How to run (spark2)
 ```bash
@@ -170,6 +238,10 @@ Codes are never logged unless `OTP_DEV_LOG=true`.
   don't count. `docs/decisions/001-rate-limiter.md` explains the limiter.
 
 ## Known limits
+- **Prod pilot:**
+  - It shares the `risime_dev` databases with the test server (:4000) until the prod
+    environment exists (decision 010).
+  - The in-app limiter is in memory and resets on restart; fail2ban's firewall bans persist.
 - **v1.4 phone verification:**
   - No real SMS has been sent: the sender is still NotifyDEMO, the guard blocks it, and the
     override was never used. Notify.lk success parsing and the status endpoint are tested only
