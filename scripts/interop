@@ -17,7 +17,6 @@ cleanup() {
 trap cleanup EXIT
 for p in 4100 4799; do ss -ltnH "sport = :$p" | grep -q . && { echo "port $p busy"; exit 1; }; done
 
-(cd server && $M mix run "$REPO/scripts/interop-fixtures.exs" setup "$DIR" 2>/dev/null | grep 'interop setup')
 cat > "$DIR/jwks.py" <<'PY'
 import http.server, sys
 root = sys.argv[1]
@@ -27,6 +26,7 @@ class H(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(("127.0.0.1", 4799), H).serve_forever()
 PY
+(cd server && $M mix run "$REPO/scripts/interop-fixtures.exs" keys "$DIR" 2>/dev/null | grep 'interop keys')
 tmux new -d -s risime-interop-jwks "python3 '$DIR/jwks.py' '$DIR/www'"
 tmux new -d -s risime-interop "cd '$REPO/server' && PORT=4100 DEV_LOCAL_AUTH=true OIDC_ENABLED=true \
   OIDC_ISSUER=http://127.0.0.1:4799/realms/itest \
@@ -35,6 +35,7 @@ tmux new -d -s risime-interop "cd '$REPO/server' && PORT=4100 DEV_LOCAL_AUTH=tru
   $M mix phx.server > '$DIR/server.log' 2>&1"
 for _ in $(seq 1 120); do curl -sf -o /dev/null http://127.0.0.1:4100/health && break; sleep 1; done
 curl -sf -o /dev/null http://127.0.0.1:4100/health || { echo "interop server didn't start"; tail -20 "$DIR/server.log"; exit 1; }
+(cd server && $M mix run "$REPO/scripts/interop-fixtures.exs" setup "$DIR" 2>/dev/null | grep 'interop setup')
 
 echo "==> LiveInteropTest against 127.0.0.1:4100"
 set +e
