@@ -1,0 +1,2 @@
+New: message notifications (content-free wake-ups). After a reinstall your own sent messages come back, and encrypted chats say clearly when earlier messages are not available.
+Always update over the old app; never uninstall.
