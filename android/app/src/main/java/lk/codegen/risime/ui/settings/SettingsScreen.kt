@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -34,6 +35,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 import lk.codegen.risime.BuildConfig
 import lk.codegen.risime.net.PROTOCOL_VERSION
 import lk.codegen.risime.ui.common.InitialsAvatar
@@ -172,6 +174,7 @@ private fun AboutSection() {
     InfoRow("App version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
     InfoRow("Build", if (BuildConfig.DEBUG) "Debug" else "Release")
     InfoRow("Protocol", "v$PROTOCOL_VERSION")
+    if (BuildConfig.DEBUG) CryptoSelfTest()
     Text(
         "Dev build: messages are not end-to-end encrypted yet (MLS arrives in 0.3).",
         style = MaterialTheme.typography.bodySmall,
@@ -191,5 +194,33 @@ private fun DebugAuthSection(current: String, onPick: (String) -> Unit) {
                 label = { Text(label) },
             )
         }
+    }
+}
+
+/** Debug only (decision 031): proves the native MLS core loads and runs on this device. */
+@Composable
+private fun CryptoSelfTest() {
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var result by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    var running by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    OutlinedButton(
+        onClick = {
+            running = true
+            result = null
+            scope.launch {
+                result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    lk.codegen.risime.CryptoProbes.runSelfTest(lk.codegen.risime.CryptoProbes.get())
+                }
+                running = false
+            }
+        },
+        enabled = !running,
+    ) { Text(if (running) "Running crypto self-test…" else "Crypto self-test") }
+    result?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (it.startsWith("ok")) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+        )
     }
 }

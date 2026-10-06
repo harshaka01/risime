@@ -1,4 +1,5 @@
 import java.util.Properties
+import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.application)
@@ -13,6 +14,19 @@ plugins {
 // ~/risime-keys/. Without it the plugin isn't applied and the app builds and runs without push.
 val pushConfigured = file("google-services.json").isFile
 if (pushConfigured) pluginManager.apply("com.google.gms.google-services")
+
+// ---- E2EE groundwork (decisions 012 §5a, 031): native MLS core in DEBUG builds only ----
+// Built by ../scripts/build-rust-android when rustup's cargo and an NDK exist (spark2); otherwise
+// (laptop, CI without Rust) the app builds without crypto. Opt out with -Prisime.crypto=false.
+val repoDir: File = rootProject.projectDir.parentFile
+val cargoBin = File(System.getProperty("user.home"), ".cargo/bin/cargo")
+val ndkDir: File? = (System.getenv("ANDROID_NDK_HOME")?.let(::File)?.takeIf { File(it, "toolchains").isDirectory })
+    ?: File(System.getenv("ANDROID_HOME") ?: "${System.getProperty("user.home")}/Android/Sdk", "ndk")
+        .listFiles()?.filter { File(it, "toolchains").isDirectory }?.maxByOrNull { it.name }
+val cryptoToolchain: Boolean = providers.gradleProperty("risime.crypto").orNull != "false" &&
+    cargoBin.canExecute() && ndkDir != null &&
+    File(repoDir, "scripts/build-rust-android").canExecute() && File(repoDir, "crypto/risime-mls-ffi").isDirectory
+if (!cryptoToolchain) logger.lifecycle("risime: Rust/NDK not found (or -Prisime.crypto=false): debug build without the MLS core")
 
 // ---- Version (decision 003) ----
 // versionName = the repo's top-level VERSION file (trimmed): "X.Y.Z" or "X.Y.Z-nightly.N".
@@ -69,6 +83,8 @@ android {
         buildConfigField("boolean", "UPDATER_ENABLED", "true")
         buildConfigField("String", "UPDATE_BASE_URL", "\"https://risicloud.ai/app/risime/\"")
         buildConfigField("boolean", "PUSH_CONFIGURED", pushConfigured.toString())
+        // Native MLS core (0.3 groundwork): never in release until E2EE ships.
+        buildConfigField("boolean", "CRYPTO_AVAILABLE", "false")
     }
 
     signingConfigs {
@@ -93,12 +109,18 @@ android {
             buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"ai.risicloud.risime.debug://logout\"")
             // Debug builds (.debug id, debug key) never self-update.
             buildConfigField("boolean", "UPDATER_ENABLED", "false")
+            buildConfigField("boolean", "CRYPTO_AVAILABLE", cryptoToolchain.toString())
         }
         release {
             // R8/minify stays off until the prod release (decision 003).
             isMinifyEnabled = false
             if (releaseKeystoreProps != null) signingConfig = signingConfigs.getByName("release")
         }
+    }
+
+    packaging {
+        // JNA ships ABIs Android 8+ can't run (minSdk 26); keep the APK lean.
+        jniLibs.excludes += listOf("lib/armeabi/**", "lib/mips/**", "lib/mips64/**")
     }
 
     compileOptions {
@@ -155,6 +177,8 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.fragment.ktx)
 
+    // JNA for the UniFFI bindings: debug only until 0.3 (release stays without it).
+    debugImplementation(libs.jna) { artifact { type = "aar" } }
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
@@ -213,4 +237,65 @@ tasks.withType<Test>().configureEach {
         outputs.upToDateWhen { false }
         testLogging.showStandardStreams = true
     }
+}
+
+// ---- Native MLS core: cargo build for the debug variant ----
+abstract class CargoBuildAndroid : DefaultTask() {
+    @get:Inject abstract val exec: ExecOperations
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sources: ConfigurableFileCollection
+
+    @get:Input abstract val abis: Property<String>
+
+    @get:Input abstract val profileFlag: Property<String>
+
+    @get:Internal abstract val script: RegularFileProperty
+
+    @get:OutputDirectory abstract val jniLibsDir: DirectoryProperty
+
+    @get:OutputDirectory abstract val kotlinDir: DirectoryProperty
+
+    @TaskAction
+    fun build() {
+        val args = mutableListOf(script.get().asFile.absolutePath, "--abis", abis.get())
+        profileFlag.get().takeIf { it.isNotEmpty() }?.let { args += it }
+        args += listOf("--out", jniLibsDir.get().asFile.absolutePath, "--kotlin-out", kotlinDir.get().asFile.absolutePath)
+        exec.exec { commandLine(args) }
+    }
+}
+
+if (cryptoToolchain) {
+    val cargoBuildAndroid = tasks.register<CargoBuildAndroid>("cargoBuildAndroid") {
+        description = "Builds crypto/risime-mls-ffi for arm64-v8a + x86_64 (debug app only)"
+        script.set(File(repoDir, "scripts/build-rust-android"))
+        abis.set("arm64-v8a,x86_64")
+        // Rust release profile by default: the cargo debug profile makes 59-61 MB .so files per ABI
+        // (stored uncompressed in the APK). -Prisime.rustProfile=debug for a debuggable core.
+        profileFlag.set(if (providers.gradleProperty("risime.rustProfile").orNull == "debug") "--debug" else "")
+        sources.from(
+            fileTree(File(repoDir, "crypto")) { exclude("target/**") },
+            File(repoDir, "scripts/build-rust-android"),
+            File(repoDir, "scripts/android-ld"),
+        )
+        jniLibsDir.set(layout.buildDirectory.dir("rustJniLibs"))
+        kotlinDir.set(layout.buildDirectory.dir("generated/uniffi"))
+    }
+    androidComponents {
+        onVariants(selector().withBuildType("debug")) { variant ->
+            variant.sources.jniLibs?.addGeneratedSourceDirectory(cargoBuildAndroid, CargoBuildAndroid::jniLibsDir)
+            variant.sources.kotlin?.addGeneratedSourceDirectory(cargoBuildAndroid, CargoBuildAndroid::kotlinDir)
+            variant.sources.kotlin?.addStaticSourceDirectory("src/debugCrypto/kotlin")
+        }
+    }
+}
+
+// Packaging test inputs: the merged native libs of both variants (CryptoPackagingTest).
+tasks.withType<Test>().configureEach {
+    dependsOn("mergeDebugNativeLibs", "mergeReleaseNativeLibs")
+    systemProperty("risime.nativeLibs.debug", layout.buildDirectory.dir("intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib").get().asFile.absolutePath)
+    systemProperty("risime.nativeLibs.release", layout.buildDirectory.dir("intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib").get().asFile.absolutePath)
+    systemProperty("risime.buildConfig.release", layout.buildDirectory.file("generated/source/buildConfig/release/lk/codegen/risime/BuildConfig.java").get().asFile.absolutePath)
+    dependsOn("generateReleaseBuildConfig")
 }

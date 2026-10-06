@@ -22,6 +22,7 @@ appcompat = "1.7.1"
 firebaseBom = "34.19.0"
 googleServices = "4.5.0"
 work = "2.12.0"
+jna = "5.19.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -54,6 +55,7 @@ firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "fir
 firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
 androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 sqlite-bundled-jvm = { module = "androidx.sqlite:sqlite-bundled-jvm", version = "2.6.2" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
 androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }
 
