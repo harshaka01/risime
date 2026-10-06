@@ -517,7 +517,9 @@ device must belong to the authenticated user; otherwise the call gets `403`.
     - **`e2ee_required`**: plaintext sent to an e2ee conversation;
     - **`stale_epoch`**: `generation` or `epoch` isn't the current one;
     - `bad_request`: ciphertext sent to a non-e2ee conversation;
-    - `too_long`: ciphertext larger than 16 KiB.
+    - `too_long`: ciphertext larger than **24 KiB** decoded. It is sized to fit a maximum text message in
+      the envelope with JSON escaping plus MLS framing and padding; clients serialise the envelope
+      without escaping non-ASCII.
   - The server **should** also check that the group id and epoch in the PrivateMessage's cleartext
     header match the JSON fields.
 - **The `message` event for e2ee conversations:**
