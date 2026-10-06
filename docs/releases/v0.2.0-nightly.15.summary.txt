@@ -1,0 +1,2 @@
+Photos now show encrypting and upload progress, with Retry if sending fails (1:1 and groups). Chats always open at the newest message.
+Always update over the old app; never uninstall.
