@@ -1,0 +1,1 @@
+{"event_id":"c1a2b3e4-a0b1-11f0-8000-0242ac120002","kind":"mls_welcome","data":{"conversation_id":"grp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d","generation":1,"epoch":5,"welcome":null,"welcome_ref":{"blob_id":"4e5f6a7b-8c9d-4e0f-9a1b-2c3d4e5f6a7b","size":81234,"sha256":"n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg="},"to_devices":["c0a80101-0000-4000-8000-000000000003"]}}

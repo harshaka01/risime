@@ -1,0 +1,1 @@
+{"error":{"code":"log_expired","message":"The commit log no longer reaches that epoch; reset or rejoin the group"}}

@@ -32,6 +32,23 @@ defmodule RisiMe.ContractExamplesTest do
               reaction_payload.json msg_send_reaction.json msg_send_reaction_and_body.json
               event_reaction.json error_unknown_target.json error_invalid_emoji.json
               limits_graphemes.json)
+  # v1.9 (MLS groups): parse-only placeholders added by root with the contract merge; the server
+  # role replaces them with real checks when it implements §12.
+  @pending_v1_9 ~w(group_create.json group_reply.json groups_reply.json group_members_add.json
+                  group_role_patch.json group_reset.json group_reset_reply.json group_meta.json
+                  group_receipts_reply.json blob_upload_reply.json device_put_groups.json
+                  key_packages_upload_replace.json key_packages_claim_group.json
+                  mls_commit_request_group.json mls_commits_reply_paged.json
+                  friends_reply_v19.json msg_send_group.json msg_send_group_reply.json
+                  typing_group.json signal_typing_group.json event_message_group.json
+                  event_mls_commit_group_ref.json event_mls_welcome_ref.json
+                  event_group_created.json event_group_added.json event_group_removed.json
+                  event_group_left.json event_group_role_changed.json
+                  event_group_metadata_changed.json event_group_add_expired.json
+                  event_group_reset.json event_group_op.json event_group_receipt.json
+                  error_not_member.json error_not_admin.json error_too_many_members.json
+                  error_too_many_devices.json error_last_admin.json error_log_expired.json
+                  error_generation_conflict.json error_not_ready_groups.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -64,7 +81,12 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
+    assert @files -- (@checked ++ @pending_v1_9) == [],
+           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_9))}"
+  end
+
+  test "v1.9 examples are valid JSON objects (placeholder)" do
+    for name <- @pending_v1_9, do: assert(is_map(example(name)))
   end
 
   setup do

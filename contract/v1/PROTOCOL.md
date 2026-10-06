@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.8 (Release 0.3)
+# RisiMe Wire Protocol — v1.9 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -654,7 +654,323 @@ This section overrides §4 on message length.
 - **Under the bubble:** chips like "👍 2 ❤️ 1"; tapping them opens "Reactions" with per-emoji tabs
   listing people.
 
+## 12. Groups with MLS (v1.9)
+Decision 041. This section extends §10 to `grp:` conversations and overrides §2, §9.3 and §10
+where they differ for them. DMs are unchanged. Apps before v1.9 never see group traffic (§12.1).
+
+### 12.0 Principles
+- **Groups are E2EE-only.** A group is one MLS group and each device is a leaf, as in §10. There
+  is no plaintext group and no upgrade step: the group exists from its epoch-0 commit.
+- **The server knows membership, roles and pending operations only.** It needs them to authorise
+  and order commits. Group name and icon live in an encrypted GroupContext extension (§12.3).
+- **No history for new members** (decision 032). **Removal rotates keys:** the removal commit
+  advances the epoch, so removed devices can't read new messages.
+- **Group commits use the MLS PrivateMessage framing** (handshake encrypted). This overrides the
+  §10.0 PublicMessage rule for `grp:`; DMs keep PublicMessage. The server routes on the declared
+  lists and the op (§12.4); clients verify the actual proposals.
+- **Admin policy is enforced twice**, in the MLS core (a staged-commit check against the admin
+  list in `group_meta`) and on the server (§12.4), from one shared fixture,
+  `contract/v1/group_policy_cases.json`, that both test suites run.
+- **Caps:** at most **256 member users** (the creator included) and **768 devices (leaves)** per
+  group.
+- **Risi-ready:** a member has `"kind": "user"` now, and `"agent"` from 0.5. An agent is always
+  visible in the member list, can never be an admin, and its keys never live on the chat server.
+
+### 12.1 Identity, capability and readiness
+- `conversation_id` = `"grp:<uuid>"` (lowercase). The MLS group id is `"grp:<uuid>#<generation>"`
+  (§10.0).
+- **The `groups` capability.** A v1.9 app advertises it when it registers its MLS device:
+  `PUT /me/devices/{device_id}` takes `"mls": {"signature_key", "capabilities": ["groups"]}`
+  (`device_put_groups.json`). The server stores the capability per device. A device without it
+  (including every pre-v1.9 app) is **not groups-capable**.
+- **Key packages for groups** must carry the MLS capability **`0xFA01`** (the `risime.group_meta`
+  extension). `POST …/key_packages` gains `"replace": true`, which deletes the device's stored
+  normal key packages before storing the new ones (`key_packages_upload_replace.json`). A device
+  uploads with `replace: true` the first time it advertises `groups`.
+- **Group-ready user:** at least one current MLS device with `groups`, **and** every app instance
+  of that user seen in the last 30 days (the §10.1 census) is groups-capable.
+  - `missing[].reason` (in `409 not_ready`, `error_not_ready_groups.json`): `"no_mls"` (no
+    current MLS device), or **`"legacy_app"`** (an app instance seen in 30 days lacks `groups`;
+    `device_id` names it, or is null for a pre-v1.7 instance). Clients show "<name> needs to
+    update".
+  - A user is added **with all their groups-capable devices or not at all**.
+  - `Friend` (§9.2) gains **`"group_ready": bool`** (absent = false) so pickers can grey out
+    friends who need to update (`friends_reply_v19.json`).
+- **No group traffic to non-capable devices.** The server never delivers `grp:` events
+  (`message`, `mls_*`, `group_*`) or `grp:` typing signals to a socket whose `device_id` lacks
+  `groups` (or that sent no `device_id`): they are left out of live pushes and of join/sync
+  replies for that socket. Such a device is never a leaf, so it has nothing to decrypt.
+
+### 12.2 Objects
+- `Group = {"id": "grp:…", "state": "creating" | "active", "created_by", "created_at", "generation", "epoch" | null, "my_role": "admin" | "member", "members": [Member], "pending": [PendingOp]}`
+  (`group_reply.json`).
+- `Member = {"user_id", "display_name", "phone" | null, "role": "admin" | "member", "kind": "user", "state": "active" | "pending_add" | "pending_remove", "joined_at" | null}`
+  - `phone` is shown only if the viewer is a friend of that member.
+  - `display_name` is **live** (current at request time). Clients cache it and refresh with
+    `GET /groups/{id}` when the chat opens; there is no `profile_changed` event.
+  - `joined_at` is null while `pending_add`.
+  - Members whose removal has landed are no longer listed.
+- `PendingOp = {"op_id": "uuid", "type": "add" | "remove" | "role" | "devices" | "rebuild", "actor", "user_ids": [uuid], "role": "admin" | "member" | null, "added": [{"user_id","device_id"}], "removed": [{"user_id","device_id"}], "committer": {"user_id","device_id"}, "committer_until", "expires_at" | null, "created_at"}`
+  - `user_ids` names the users of `add`/`remove`/`role`; `role` is set only for `role`;
+    `added`/`removed` are set only for `devices`. Unused fields are empty or null.
+  - `GET /groups/{id}` returns every pending op, so a client finds owed work after a restart.
+- **`group_meta`**, the GroupContext extension `risime.group_meta` (type `0xFA01`), is UTF-8 JSON
+  `{"v": 1, "name": "…", "icon": null, "admins": ["uuid", …]}` (`group_meta.json`).
+  - `name` is 1–100 grapheme clusters. `icon` stays null until the images slice defines it as a
+    blob reference with its key.
+  - `admins` mirrors the server's admin roles; it changes only through a `role` op commit.
+  - It is set in the epoch-0 commit, delivered to joiners in the Welcome, and changed by a
+    GroupContextExtensions proposal. The server never sees it.
+
+### 12.3 REST — groups
+Every mutating call below requires **`X-Device-Id`**, naming a groups-capable MLS device of the
+caller; otherwise `403 invalid_device`. For an admin's add, remove or role change, that device is
+the op's first committer. A group the
+caller isn't a member of is always `404 not_found`, so membership is never revealed.
+- **`POST /api/v1/groups`** `{"client_group_id": "uuid-v4", "member_ids": ["uuid", …]}` →
+  `201 {"group": Group}` (`group_create.json`).
+  - The creator becomes admin. Every `member_id` must be an **accepted friend of the creator**
+    (`not_friends`), and group-ready (`409 not_ready {missing}`). 1–255 others
+    (`422 too_many_members`), and at most 768 devices in all (`422 too_many_devices`). All or
+    nothing.
+  - **Idempotent by `client_group_id`:** a repeat from the same user returns the same group with
+    `200`.
+  - The group starts in `state: "creating"`, visible **only to the creator**. The creating device
+    then claims (§12.5) and makes the epoch-0 commit adding every groups-capable device of every
+    member, with `group_meta` set. Only when that commit is accepted does the group become
+    `active` and the `created` event go out (§12.7).
+  - A group still `creating` after **10 minutes** is deleted by the server (then `404`).
+- **`GET /api/v1/groups`** → `{"groups": [Group]}` (mine, `groups_reply.json`).
+  **`GET /api/v1/groups/{id}`** → `{"group": Group}`.
+- **`POST /api/v1/groups/{id}/members`** `{"user_ids": [...]}` (**admin**) → `200 {"group": Group}`
+  (`group_members_add.json`).
+  - Each user must be a friend of the acting admin and group-ready, within both caps. All or
+    nothing. Users already active or pending are ignored.
+  - They become `pending_add`, and one `add` op is created for them (§12.4).
+- **`DELETE /api/v1/groups/{id}/members/{user_id}`** (**admin**) → `204`.
+  - The member becomes `pending_remove` and a `remove` op is created. An admin can be removed only
+    by the group creator.
+- **`POST /api/v1/groups/{id}/leave`** → `204`.
+  - The leaver becomes `pending_remove` (a `remove` op whose actor is the leaver).
+  - **The last admin can't leave:** `409 last_admin` while no other member is an admin. The client
+    first makes someone else an admin (the UI suggests the longest-standing member), then leaves.
+    This replaces any implicit successor rule (decision 041).
+- **`PATCH /api/v1/groups/{id}/members/{user_id}`** `{"role": "admin" | "member"}` (**admin**) →
+  `200 {"group": Group}` (`group_role_patch.json`).
+  - It creates a `role` op; the role changes when its `group_meta` commit lands. Demoting another
+    admin is creator-only; demoting yourself is allowed unless you're the last admin
+    (`409 last_admin`). An agent can't be made admin (`422 invalid_role`).
+- **`POST /api/v1/groups/{id}/rejoin`** → `202 {"group": Group}`. For a device whose own group
+  state is lost or broken (§12.8): it creates a `devices` op that removes and re-adds the calling
+  device.
+- **Idempotency:** repeating a leave, a removal or a role change that's already pending or done
+  returns the same success (`204`/`200`).
+- **While `pending_remove`** (removed or left), the user's devices get no more `grp:` events of
+  that group, and their sends and typing are refused with `not_member`. Keys rotate when the
+  removal commit lands.
+- **Errors:** `403 not_admin`, `403 invalid_device`, `404 not_found`, `409 not_ready`,
+  `409 last_admin`, `422 too_many_members`, `422 too_many_devices`, `422 invalid_role`,
+  `not_friends` (as in §9), `429 rate_limited`.
+
+### 12.4 Pending operations, committers and commit authorisation
+- **Every membership or role change is a pending op** that some device must commit:
+  - `add` (from `POST …/members`), `remove` (from `DELETE …/members/…` or leave), `role` (from
+    `PATCH`), `rebuild` (from reset, §12.8);
+  - `devices`, created by the server when a member's device set changes: a new groups-capable MLS
+    device to add, or a device that is no longer current (§10.1 removals) to remove, or a `rejoin`.
+    For `grp:` conversations these replace `mls_membership` events, which are not sent.
+- **The server names exactly one committer per op** (R4). Only the named device acts; others never
+  race.
+  - Candidates, in order:
+    1. for `add`/`remove`/`role`/`rebuild` requested by an admin: that admin's device
+       (`X-Device-Id`; a leave has no first candidate); for `devices`: one of the affected
+       user's other in-group devices;
+    2. then a server-chosen **admin** device that is online (an inbox channel is joined), most
+       recently seen first. A non-admin device is never named for another user's op.
+  - The named device has **60 s** (`committer_until`). If no accepted commit completes the op by
+    then, the server names the next candidate. If no candidate is online, it names the first
+    authorised device whose inbox joins.
+  - Each naming is sent as a **`group_op`** event (§12.7) to the named device's user.
+- **Who may complete an op.** The server accepts a commit that completes an op from **any device
+  authorised for it** (not only the named one), so an in-flight commit isn't wasted:
+  - `add`, `remove`, `role`, `rebuild`: any admin device (including the same admin's other
+    devices);
+  - `devices`: the affected user's own in-group device, or any admin device.
+- **Expiry:** `add` and `role` ops expire **24 h** after creation (`expires_at`). An expired add
+  drops its `pending_add` members and emits `add_expired`; an expired role op is dropped silently.
+  `remove`, `devices` and `rebuild` ops never expire: they're renamed until done.
+- **A failed commit is never replayed blindly.** After `409 epoch_conflict` the client catches up
+  and re-derives the op from `GET /groups/{id}`.
+- **Commit request for `grp:`** (extends §10.2, `mls_commit_request_group.json`):
+  `{"generation", "epoch", "commit" | null, "commit_ref" | null, "welcome" | null, "welcome_ref" | null, "added": [...], "removed": [...], "op_id": "uuid" | null, "meta_changed": bool}`
+  - Exactly one of `commit`/`commit_ref` is non-null, and at most one of `welcome`/`welcome_ref`.
+    Inline values are at most **64 KiB** decoded; anything larger goes by blob reference (§12.6).
+    Totals: a commit at most **1 MiB**, a Welcome at most **2 MiB**.
+  - `op_id` names the op the commit completes. It is required for `add`, `remove`, `role` and
+    `rebuild`. A `devices` op may be completed without it; the server matches the declared lists.
+  - `meta_changed: true` marks a name/icon change (a GroupContextExtensions proposal with no op).
+- **Server authorisation** (by the caller's device and its user's role, at that moment):
+  - **anyone:** a self-update (no `added`/`removed`, no op, `meta_changed: false`);
+  - **any active member, for their own user only:** add their current groups-capable MLS devices that
+    aren't in the group yet, and remove their own devices;
+  - **admins only:** everything that touches another user: completing `add` (exactly all
+    groups-capable devices of the op's users), `remove` (exactly all in-group devices of the op's
+    users), `devices` ops of other users, `role` (with no adds or removes), `rebuild`, and
+    `meta_changed`;
+  - plus the §10.2 checks: the caller is a member device, each added device is current, the
+    Welcome is present exactly when `added` isn't empty, the caps, and the rate limit.
+  - Anything else is `403 not_admin` (another user's change by a non-admin) or `bad_request`
+    (lists that don't match the op).
+- **The MLS core applies the same rule** from `group_meta.admins`: a commit by a non-admin may
+  add or remove only leaves of the committer's own user and may not change `group_meta`; agents are
+  never admins. The server-only parts are the pending-op matching and the caps.
+
+### 12.5 Key-package claim for co-members
+`POST /api/v1/mls/key_packages/claim` takes an optional **`"conversation_id": "grp:…"`**
+(`key_packages_claim_group.json`).
+- Without it, §10.2 is unchanged (friends and yourself).
+- With it, the caller must be an **active member** of that group, and each id must be an active
+  or `pending_add` member of it (or the caller's own user). Otherwise **`not_member`**, all or
+  nothing, and nothing is consumed. The rate limit is unchanged; one call may name up to 255 users.
+
+### 12.6 Blobs (generic, v1.9)
+A minimal store of **opaque, client-encrypted bytes**. v1.9 uses it for large commits and
+Welcomes; the encrypted-images slice extends it (decision 041).
+- **`POST /api/v1/blobs?purpose=mls&conversation_id=grp:…`** with the raw bytes as the body
+  (`Content-Type: application/octet-stream`) →
+  `201 {"blob_id": "uuid", "size": n, "sha256": "<b64>", "expires_at"}` (`blob_upload_reply.json`).
+  - The caller must be an active member of the conversation (`404 not_found`).
+  - At most **2 MiB** per blob (`413 too_large`); 60 uploads per user per hour (`429`).
+- **`GET /api/v1/blobs/{blob_id}`** → `200` with the bytes (`application/octet-stream`).
+  - Readable by the **owner** (uploader), by the conversation's active and `pending_add`
+    members, and by the users of any device named in a Welcome's `to_devices` that references it.
+    Every other case, including expiry, is `404 not_found`.
+- **`DELETE /api/v1/blobs/{blob_id}`** (owner only) → `204`; idempotent.
+- **TTL:** 30 days from upload, matching the commit log. Blobs are immutable.
+- **A reference** is `{"blob_id", "size", "sha256"}`. Clients verify the size and SHA-256 after
+  download. A commit request may reference only blobs the caller uploaded for that conversation
+  (`bad_request` otherwise).
+- **Clients fetch a referenced blob before processing the event**, outside the ordered
+  transaction, then apply the event in one transaction as usual. A blob that can't be fetched
+  (`404`) makes the event unrecoverable (§12.8).
+
+### 12.7 Events (realtime)
+- **`mls_commit`, `mls_welcome`** for `grp:` carry **`commit_ref` / `welcome_ref`** instead of
+  `commit` / `welcome` when the request used a reference; the other field is then null
+  (`event_mls_commit_group_ref.json`, `event_mls_welcome_ref.json`). They go to every active
+  member user and to the users whose devices the commit removes, as in §10.3.
+- **The new event kind `group_event`** (stored, cursor-ordered), to every member user of the group
+  **and** to the users the event affects:
+  `{"group_id", "generation", "epoch" | null, "action", "actor": "uuid", "targets": ["uuid", …], "role": "admin" | "member" | null, "members": [Member] | null, "rebuilder": {"user_id","device_id"} | null, "server_ts"}`
+  - **`action`:** `"created"` | `"added"` | `"removed"` | `"left"` | `"role_changed"` |
+    `"metadata_changed"` | `"add_expired"` | `"reset"`.
+  - **Every action that comes from a commit** (`created`, `added`, `removed`, `left`,
+    `role_changed`, `metadata_changed`) is written **in the same critical section as the commit's
+    `mls_*` events**, after them, before the `200` (the §10.2 ordering rule), never at REST time.
+    `epoch` is the **new** epoch. Clients show the system line once their MLS state reaches it.
+  - `created` fires only when the epoch-0 commit is accepted, and carries the full `members`.
+  - `role_changed` carries `role`. `left` has the leaver as both actor and only target.
+  - **A removed or leaving user** gets the `mls_commit` (their `removed_self`) first, then the
+    `group_event`; it is the last event of that group they receive.
+  - `add_expired` carries the current epoch. `reset` carries the new `generation`, `epoch: null`,
+    the `members` the rebuild will add, and the `rebuilder`.
+  - Device-only changes (`devices` ops, self-updates) emit no `group_event`.
+  - Examples: `event_group_*.json`.
+- **The new event kind `group_op`** `{"group_id", "generation", "op": PendingOp}` (stored,
+  `event_group_op.json`) goes to **the named committer's user** each time a committer is named
+  (§12.4). Only the device named in `op.committer` acts; it wakes that user by push like a message.
+- **Group messages:** the `message` event for `grp:` carries `conversation_id`, `from`,
+  `from_device`, `ciphertext`, `generation`, `epoch`, and **no `to`** (`event_message_group.json`).
+  It goes to every active member user, the sender included (the sending device skips it by
+  `from_device`). Pushes as for DMs.
+- **Receipts are aggregated only.** For `grp:`, member acks never create `status` events.
+  - Members send `msg:ack` as usual. The server keeps per-member delivered/read times and sends
+    the sender's user the stored event **`group_receipt`** (`event_group_receipt.json`):
+    `{"conversation_id", "message_id", "client_msg_id", "delivered": n, "read": n, "of": n, "all_delivered": bool, "all_read": bool, "at"}`
+  - `read` implies `delivered`. `of` counts the members at send time (the sender excluded) who are
+    still active.
+  - It is sent when `all_delivered` or `all_read` turns true, and otherwise coalesced to at most
+    one per message per 10 s. Ticks: ✓ sent, ✓✓ when `all_delivered`, accent ✓✓ when `all_read`.
+  - **`GET /api/v1/groups/{id}/messages/{message_id}/receipts`** →
+    `{"of": n, "receipts": [{"user_id", "delivered_at" | null, "read_at" | null}]}`
+    (`group_receipts_reply.json`), for the sender only (`404` otherwise), while the message is
+    retained.
+- **Reactions** in groups use the §11 envelope over group `msg:send`; no acks, as in §11.
+- **Notifications** (clients): a `group_event` `added` naming the recipient notifies ("Kamal added
+  you to <name>", the name from the Welcome's `group_meta`) and wakes them by push. Leaves,
+  removals, renames and role changes don't notify. Per-group mute is local-only.
+
+### 12.8 Catch-up, rejoin and reset
+- **`GET …/commits?since_epoch=e&limit=n`** gains `limit` (default 50, at most 200) and
+  **`has_more`** (`mls_commits_reply_paged.json`); entries carry `commit` or `commit_ref`. This
+  applies to every conversation; an absent `has_more` means false.
+- For `grp:`, a `since_epoch` older than the retained log (1000 epochs or 30 days) gets
+  **`410 log_expired`** (`error_log_expired.json`).
+- Clients may fetch commits whenever they park a commit whose epoch is ahead of their state; the
+  server doesn't limit this beyond the normal rate limit.
+- **Unrecoverable state** for a device: the core rejects a commit, the local group is missing, a
+  referenced blob is gone, or `410 log_expired`. Never a transient error. Then:
+  - a **non-admin** calls `POST /groups/{id}/rejoin`; the named committer removes and re-adds the
+    device, and it joins from the new Welcome;
+  - an **admin** may instead reset the whole group when more than its own device is broken (for
+    example every commit is rejected).
+- **`POST /api/v1/mls/groups/{grp:…}/reset`** `{"generation": n}` (**admins only**, `X-Device-Id`)
+  → `200 {"generation": n + 1}` (`group_reset.json`, `group_reset_reply.json`).
+  - `409 generation_conflict {"generation": current}` if it already moved; `403 not_admin`;
+    `429 rate_limited` at more than 1 reset per group per hour.
+  - In one critical section, the server bumps `generation`, sets `epoch` to null, drops `add` and
+    `role` ops (their `pending_add` members are dropped), finishes `remove` ops (those users are
+    out), drops `devices` ops, creates a `rebuild` op with the caller's device as committer, and
+    writes `group_event` `reset` to every member.
+  - **The admin list from the last accepted epoch wins:** the server's roles as of the last
+    accepted commit, as listed in the `reset` event's `members`.
+  - **The rebuilder** claims (§12.5) and makes epoch 0 of the new generation, adding every current
+    groups-capable device of every member in the event, with `group_meta` = its last local name
+    and icon plus the admin list from the event. A member with no such device is added later by a
+    `devices` op. If it doesn't land, the committer rules (§12.4) name another admin device.
+  - **Clients** drop the old-generation group, park new-generation events until their Welcome, and
+    show "Encryption was reset; some messages may be missing". Old-generation messages that were
+    never decrypted are lost; this is accepted. The outbox re-encrypts on `stale_epoch`.
+
+### 12.9 Messages and typing (realtime)
+- **`msg:send` for a group** (`msg_send_group.json`):
+  `{"client_msg_id", "conversation_id": "grp:…", "ciphertext", "generation", "epoch", "client_ts"}`
+  → reply ok `{"message_id", "conversation_id", "server_ts"}` (`msg_send_group_reply.json`).
+  - `to` and `conversation_id` are **mutually exclusive**: both, or neither, is `bad_request`.
+    `conversation_id` is accepted only for `grp:` ids in v1.9.
+  - `body` or `reaction` with a `grp:` id is `e2ee_required`.
+  - **Order of checks:** idempotent resend → **`not_member`** → the e2ee checks (`stale_epoch`,
+    `too_long` at 24 KiB, as in §10.3) → rate limit → store. The resend check comes first so that
+    a retry of an already-accepted message by a just-removed member still gets its original reply.
+  - **`not_member`** (`error_not_member.json`): the sender isn't an active member, or the group
+    doesn't exist or is malformed. The same error for all, so membership isn't revealed.
+- **`typing` in a group** (`typing_group.json`): `{"conversation_id": "grp:…", "typing": bool}`,
+  reply ok `{}`.
+  - Errors: `not_member`; `bad_request` for both or neither of `to`/`conversation_id`.
+  - Forwarded as the `typing` signal `{"from", "conversation_id": "grp:…", "typing"}`
+    (`signal_typing_group.json`) to the other active members' connected, groups-capable channels.
+  - **Rate:** at most one `typing: true` per member per group per 3 s; extra ones are dropped
+    silently (reply ok). `false` is never limited.
+  - Presence stays per friend (§9.3); groups don't widen it.
+
+### 12.10 Server storage
+- Postgres:
+  - `groups(id, created_by, client_group_id, state, created_at, generation)`;
+  - `group_members(group_id, user_id, role, kind, state, joined_at)`;
+  - `group_ops(op_id, group_id, type, actor, payload, committer_device, committer_until, expires_at)`;
+  - `blobs(id, owner, purpose, conversation_id, size, sha256, expires_at)`, with the bytes on local
+    disk outside the database;
+  - `devices` gains `capabilities`.
+- They reuse the §10.5 MLS tables, keyed by conversation id. Caps are counted in Postgres.
+- Group receipts sit behind the messaging store boundary.
+
 ## Changelog
+- **v1.9** (2026-10-06): groups with MLS (§12), reviewed by crypto, server and android.
+  `grp:` conversations, the `groups` device capability and group readiness, group REST
+  (create, members, leave, roles, rejoin), pending ops with one named committer, commit
+  authorisation and the shared policy fixture, co-member key-package claim, generic blobs,
+  `group_event`, `group_op` and `group_receipt`, paged commit catch-up with `410 log_expired`,
+  reset, group `msg:send` and typing, caps of 256 users and 768 devices. An additive change.
 - **v1.8** (2026-10-06): emoji and reactions (§11). Grapheme-cluster limits with the server
   authoritative, reactions as an e2ee envelope type or a plaintext `reaction` field and event
   kind, no acks for reactions. An additive change.

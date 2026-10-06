@@ -1,0 +1,487 @@
+{
+ "v": 1,
+ "about": "Contract v1.9 §12.4: the admin policy both the MLS core (staged-commit check against group_meta.admins) and the server run. Users are symbolic (A, B, …); leaves are 'user/device'. adds/removes are the commit's proposals; meta is the group_meta change (admins = the new admin list, or null if unchanged). Server-only checks (pending ops, caps) are not covered here.",
+ "cases": [
+  {
+   "name": "member self-update",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "member adds own new device",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "B/b3"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "member removes own other device",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [
+    "B/b2"
+   ],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "member adds another user's device",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "C/c2"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "member removes another user",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [
+    "C/c1"
+   ],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "member mixes own add with another user's removal",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "B/b3"
+   ],
+   "removes": [
+    "C/c1"
+   ],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "admin adds a new user with all devices",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "D/d1",
+    "D/d2"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "admin removes a user's devices",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [
+    "C/c1"
+   ],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "admin adds another member's new device",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "C/c2"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "member renames the group",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": null,
+    "name_changed": true
+   },
+   "expect": "reject"
+  },
+  {
+   "name": "admin renames the group",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": null,
+    "name_changed": true
+   },
+   "expect": "accept"
+  },
+  {
+   "name": "admin promotes a member",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": [
+     "A",
+     "B"
+    ],
+    "name_changed": false
+   },
+   "expect": "accept"
+  },
+  {
+   "name": "member promotes themself",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": [
+     "A",
+     "B"
+    ],
+    "name_changed": false
+   },
+   "expect": "reject"
+  },
+  {
+   "name": "admin makes an agent admin",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": [
+     "A",
+     "R"
+    ],
+    "name_changed": false
+   },
+   "expect": "reject"
+  },
+  {
+   "name": "admin list may not become empty",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": [],
+    "name_changed": false
+   },
+   "expect": "reject"
+  }
+ ]
+}
