@@ -13,6 +13,7 @@ defmodule RisiMeWeb.PresenceTypingTest do
 
   setup do
     [a, b, c] = for name <- ~w(A B C), do: logged_in_user(display_name: name)
+    for {x, y} <- [{a, b}, {a, c}, {b, c}], do: befriend!(x, y)
 
     sockets =
       for u <- [a, b, c], into: %{} do
@@ -213,10 +214,14 @@ defmodule RisiMeWeb.PresenceTypingTest do
     test "unknown_recipient and bad_request as in msg:send", ctx do
       chan_a = join_inbox(ctx.sockets, ctx.a)
 
-      for to <- [Uniq.UUID.uuid4(), ctx.a, "nope"] do
+      for to <- [ctx.a, "nope"] do
         assert {:error, %{reason: "unknown_recipient"}} =
                  reply(chan_a, "typing", %{"to" => to, "typing" => true})
       end
+
+      # v1.6: any other non-friend, unknown ids included.
+      assert {:error, %{reason: "not_friends"}} =
+               reply(chan_a, "typing", %{"to" => Uniq.UUID.uuid4(), "typing" => true})
 
       for bad <- [%{"to" => ctx.b}, %{"to" => ctx.b, "typing" => "yes"}, %{"typing" => true}] do
         assert {:error, %{reason: "bad_request"}} = reply(chan_a, "typing", bad)

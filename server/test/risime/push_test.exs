@@ -22,6 +22,7 @@ defmodule RisiMe.PushTest do
 
     a = logged_in_user()
     b = logged_in_user()
+    befriend!(a, b)
     {:ok, sock_a} = connect(UserSocket, %{"token" => a.token})
     {:ok, _, chan_a} = subscribe_and_join(sock_a, InboxChannel, "inbox:" <> a.user.id, %{})
     %{a: a, b: b, chan_a: chan_a}
@@ -76,6 +77,7 @@ defmodule RisiMe.PushTest do
     test "status events (acks) wake an offline sender too" do
       c = logged_in_user()
       d = logged_in_user()
+      befriend!(c, d)
       device!(c.user, "tok-c")
 
       {:ok, %{message_id: id}} =

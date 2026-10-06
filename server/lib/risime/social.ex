@@ -388,7 +388,7 @@ defmodule RisiMe.Social do
             (f.user_a == type(^me.id, :binary_id) and u.id == f.user_b) or
               (f.user_b == type(^me.id, :binary_id) and u.id == f.user_a),
           order_by: [asc: fragment("lower(?)", u.display_name)],
-          select: {u, f.inserted_at}
+          select: {u, type(f.inserted_at, :utc_datetime_usec)}
       )
       |> Enum.map(fn {u, since} -> friend_json(u, since) end)
 

@@ -35,7 +35,13 @@ defmodule RisiMe.Messaging do
 
   ## Send
 
-  @type send_error :: :unknown_recipient | :empty_body | :too_long | :rate_limited | :bad_request
+  @type send_error ::
+          :unknown_recipient
+          | :not_friends
+          | :empty_body
+          | :too_long
+          | :rate_limited
+          | :bad_request
 
   @doc """
   Sends a DM. `params` is the `msg:send` payload. Idempotent per (sender, client_msg_id):
@@ -107,8 +113,15 @@ defmodule RisiMe.Messaging do
     end
   end
 
+  # v1.6 §9.3: `unknown_recipient` only for yourself (malformed ids are caught in parsing);
+  # every other non-friend, unknown ids included, is `not_friends`. While the phone gate is on,
+  # an unverified friend can't be messaged either.
   defp check_recipient(sender_id, to) do
-    if to != sender_id and Accounts.messageable?(to), do: :ok, else: {:error, :unknown_recipient}
+    cond do
+      to == sender_id -> {:error, :unknown_recipient}
+      RisiMe.Social.friends?(sender_id, to) and Accounts.messageable?(to) -> :ok
+      true -> {:error, :not_friends}
+    end
   end
 
   # A repeat of an earlier send. If that send stopped before indexing the message, finish it.
@@ -161,14 +174,18 @@ defmodule RisiMe.Messaging do
   `signal`: never stored, dropped if nobody is connected. `typing: true` above 2 per second
   per sender is dropped silently (still `:ok`); `typing: false` is never limited.
   """
-  @spec typing(String.t(), map) :: :ok | {:error, :unknown_recipient | :bad_request}
+  @spec typing(String.t(), map) ::
+          :ok | {:error, :unknown_recipient | :not_friends | :bad_request}
   def typing(sender_id, %{"to" => to, "typing" => typing})
       when is_binary(to) and is_boolean(typing) do
     to = String.downcase(to)
 
     cond do
-      not uuid?(to) or to == sender_id or not Accounts.messageable?(to) ->
+      not uuid?(to) or to == sender_id ->
         {:error, :unknown_recipient}
+
+      not (RisiMe.Social.friends?(sender_id, to) and Accounts.messageable?(to)) ->
+        {:error, :not_friends}
 
       typing and RateLimiter.hit(:typing, sender_id, @typing_limit, @typing_window) != :ok ->
         :ok

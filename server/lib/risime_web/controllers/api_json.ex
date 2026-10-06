@@ -12,9 +12,14 @@ defmodule RisiMeWeb.ApiJSON do
       display_name: user.display_name,
       company: user.company,
       phone_verified:
-        if(is_nil(phone_verified), do: Map.get(user, :phone_verified, true), else: phone_verified)
+        if(is_nil(phone_verified), do: Map.get(user, :phone_verified, true), else: phone_verified),
+      vouched_by: vouched_by(user)
     }
   end
+
+  # v1.6 §9.1: the inviter while an invited user's phone isn't SMS-verified.
+  defp vouched_by(%RisiMe.Accounts.User{} = user), do: RisiMe.Social.vouched_by(user)
+  defp vouched_by(map), do: Map.get(map, :vouched_by)
 
   def contact(c) do
     %{

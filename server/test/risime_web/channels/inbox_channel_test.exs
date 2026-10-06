@@ -9,6 +9,7 @@ defmodule RisiMeWeb.InboxChannelTest do
   setup do
     a = logged_in_user(display_name: "A")
     b = logged_in_user(display_name: "B")
+    befriend!(a, b)
     {:ok, sock_a} = connect(UserSocket, %{"token" => a.token})
     {:ok, sock_b} = connect(UserSocket, %{"token" => b.token})
     %{a: a.user.id, b: b.user.id, sock_a: sock_a, sock_b: sock_b}
@@ -175,7 +176,8 @@ defmodule RisiMeWeb.InboxChannelTest do
     {:ok, _, chan_a} = join_inbox(sock_a, a)
     assert {:error, %{reason: "too_long"}} = send_msg(chan_a, b, String.duplicate("x", 4097))
     assert {:error, %{reason: "empty_body"}} = send_msg(chan_a, b, "")
-    assert {:error, %{reason: "unknown_recipient"}} = send_msg(chan_a, Uniq.UUID.uuid4())
+    assert {:error, %{reason: "unknown_recipient"}} = send_msg(chan_a, a)
+    assert {:error, %{reason: "not_friends"}} = send_msg(chan_a, Uniq.UUID.uuid4())
   end
 
   test "rate_limited after 20 messages in 10 s", %{sock_a: sock_a, a: a, b: b} do

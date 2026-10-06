@@ -18,7 +18,10 @@ defmodule RisiMeWeb.ApiTest do
       post(conn, ~p"/api/v1/auth/verify", %{phone: entry.phone, code: code, device_name: "Pixel"})
 
     assert %{"token" => token, "user" => user} = json_response(conn2, 200)
-    assert Map.keys(user) |> Enum.sort() == ~w(company display_name id phone phone_verified)
+
+    assert Map.keys(user) |> Enum.sort() ==
+             ~w(company display_name id phone phone_verified vouched_by)
+
     assert user["phone"] == entry.phone
 
     assert %{"user" => ^user} = conn |> authed(token) |> get(~p"/api/v1/me") |> json_response(200)
@@ -66,7 +69,8 @@ defmodule RisiMeWeb.ApiTest do
              "phone" => entry.phone,
              "display_name" => "Shenika Herath",
              "company" => "CodeGen",
-             "phone_verified" => true
+             "phone_verified" => true,
+             "vouched_by" => nil
            }
 
     db_user = RisiMe.Repo.get_by!(RisiMe.Accounts.User, phone: entry.phone)
@@ -148,26 +152,26 @@ defmodule RisiMeWeb.ApiTest do
     assert conn |> authed(token) |> get(~p"/api/v1/me") |> json_response(401)
   end
 
-  test "contacts", %{conn: conn} do
-    %{token: token} = logged_in_user(display_name: "A")
+  test "contacts: friends only (v1.6)", %{conn: conn} do
+    %{token: token, user: a} = logged_in_user(display_name: "A")
     %{user: b} = logged_in_user(display_name: "B", company: "Rise")
-    c = allowlist_entry(display_name: "C")
+    %{user: stranger} = logged_in_user(display_name: "S")
+    befriend!(a, b)
 
     assert %{"contacts" => contacts} =
              conn |> authed(token) |> get(~p"/api/v1/contacts") |> json_response(200)
 
-    assert %{
-             "phone" => b.phone,
-             "display_name" => "B",
-             "company" => "Rise",
-             "user_id" => b.id,
-             "registered" => true
-           } in contacts
+    assert contacts == [
+             %{
+               "phone" => b.phone,
+               "display_name" => "B",
+               "company" => "Rise",
+               "user_id" => b.id,
+               "registered" => true
+             }
+           ]
 
-    c_phone = c.phone
-
-    assert %{"phone" => ^c_phone, "user_id" => nil, "registered" => false} =
-             Enum.find(contacts, &(&1["phone"] == c_phone))
+    refute Enum.any?(contacts, &(&1["user_id"] == stranger.id))
   end
 
   test "unknown route renders the contract error shape", %{conn: conn} do

@@ -66,7 +66,16 @@ defmodule RisiMeWeb.InboxChannel do
   def handle_in("presence:watch", %{"user_ids" => ids}, socket)
       when is_list(ids) and length(ids) <= @max_watch do
     if Enum.all?(ids, &is_binary/1) do
-      ids = ids |> Enum.map(&String.downcase/1) |> Enum.uniq()
+      # v1.6 §9.3: friends only (and yourself); other ids are left out like unknown ones.
+      me = socket.assigns.user_id
+      allowed = MapSet.new([me | RisiMe.Social.friend_ids(me)])
+
+      ids =
+        ids
+        |> Enum.map(&String.downcase/1)
+        |> Enum.uniq()
+        |> Enum.filter(&MapSet.member?(allowed, &1))
+
       new = MapSet.new(ids)
       old = socket.assigns.watching
 
@@ -134,6 +143,16 @@ defmodule RisiMeWeb.InboxChannel do
     # Same sender as the push, so the client gets auth:expired before the socket closes.
     RisiMeWeb.Endpoint.broadcast(socket.id, "disconnect", %{})
     {:noreply, socket}
+  end
+
+  # v1.6: unfriend or block drops the other user from this channel's watch set at once.
+  def handle_info({:drop_watch, other_id}, socket) do
+    if MapSet.member?(socket.assigns.watching, other_id) do
+      Presence.unsubscribe(other_id)
+      {:noreply, assign(socket, :watching, MapSet.delete(socket.assigns.watching, other_id))}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info({:signal, signal}, socket) do

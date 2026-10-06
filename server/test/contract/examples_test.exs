@@ -69,6 +69,7 @@ defmodule RisiMe.ContractExamplesTest do
   setup do
     a = logged_in_user(display_name: "A", company: "CodeGen")
     b = logged_in_user(display_name: "B", company: "Rise")
+    befriend!(a, b)
     {:ok, sock_a} = connect(UserSocket, %{"token" => a.token})
     {:ok, sock_b} = connect(UserSocket, %{"token" => b.token})
     {:ok, _, chan_a} = subscribe_and_join(sock_a, InboxChannel, "inbox:" <> a.user.id, %{})
@@ -79,8 +80,11 @@ defmodule RisiMe.ContractExamplesTest do
   test "auth_verify_reply.json", %{a: a} do
     ex = example("auth_verify_reply.json")
     assert is_binary(ex["token"])
-    assert ApiJSON.user(atomize(ex["user"])) |> wire() == ex["user"]
-    assert_same_shape(wire(%{token: a.token, user: ApiJSON.user(a.user)}), ex)
+    # v1.6 added `vouched_by`; examples written before it omit it (absent = null).
+    assert ApiJSON.user(atomize(ex["user"])) |> wire() |> Map.delete("vouched_by") == ex["user"]
+    ours = wire(%{token: a.token, user: ApiJSON.user(a.user)})
+    assert ours["user"]["vouched_by"] == nil
+    assert_same_shape(update_in(ours["user"], &Map.delete(&1, "vouched_by")), ex)
   end
 
   test "contacts_reply.json", %{a: a} do
@@ -98,7 +102,7 @@ defmodule RisiMe.ContractExamplesTest do
   test "msg_send.json is accepted by the server decoder", %{a: a, b: b, chan_a: chan_a} do
     ex = example("msg_send.json")
     # The example's recipient does not exist here: it parses, then fails on the recipient.
-    assert {:error, :unknown_recipient} = Messaging.send(a.user.id, ex)
+    assert {:error, :not_friends} = Messaging.send(a.user.id, ex)
 
     ref = push(chan_a, "msg:send", %{ex | "to" => b.user.id})
     assert_reply ref, :ok, reply
@@ -152,12 +156,13 @@ defmodule RisiMe.ContractExamplesTest do
     assert_same_shape(wire(reply), ex)
   end
 
-  test "presence_watch.json and presence_watch_reply.json", %{chan_a: chan_a} do
+  test "presence_watch.json and presence_watch_reply.json", %{chan_a: chan_a, a: a} do
     # The decoder accepts the example; its id isn't a registered user here, so it is left out.
     ref = push(chan_a, "presence:watch", example("presence_watch.json"))
     assert_reply ref, :ok, %{presences: []}
 
     %{user: c} = logged_in_user()
+    befriend!(a.user, c)
     RisiMe.Accounts.touch_last_seen(c.id, DateTime.utc_now())
     ref = push(chan_a, "presence:watch", %{"user_ids" => [c.id]})
     assert_reply ref, :ok, reply
@@ -168,6 +173,7 @@ defmodule RisiMe.ContractExamplesTest do
 
   test "signal_presence.json", %{chan_a: chan_a, a: a} do
     %{user: d, token: token} = logged_in_user()
+    befriend!(a.user, d)
     ref = push(chan_a, "presence:watch", %{"user_ids" => [d.id]})
     assert_reply ref, :ok, _
 
@@ -184,7 +190,7 @@ defmodule RisiMe.ContractExamplesTest do
   test "typing.json and signal_typing.json", %{a: a, b: b, chan_a: chan_a} do
     ex = example("typing.json")
     # The example's recipient does not exist here: it parses, then fails on the recipient.
-    assert {:error, :unknown_recipient} = Messaging.typing(a.user.id, ex)
+    assert {:error, :not_friends} = Messaging.typing(a.user.id, ex)
 
     ref = push(chan_a, "typing", %{ex | "to" => b.user.id})
     assert_reply ref, :ok, %{}
@@ -293,9 +299,9 @@ defmodule RisiMe.ContractExamplesTest do
 
     test "me_reply_unverified.json and error_phone_unverified.json", %{token: t} do
       ex = example("me_reply_unverified.json")
-      assert ApiJSON.user(atomize(ex["user"])) |> wire() == ex["user"]
+      assert ApiJSON.user(atomize(ex["user"])) |> wire() |> Map.delete("vouched_by") == ex["user"]
       {200, ours} = get_json("/api/v1/me", t)
-      assert_same_shape(ours, ex)
+      assert_same_shape(update_in(ours["user"], &Map.delete(&1, "vouched_by")), ex)
       assert ours["user"]["phone_verified"] == false
 
       assert get_json("/api/v1/contacts", t) == {403, example("error_phone_unverified.json")}

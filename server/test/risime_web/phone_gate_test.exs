@@ -94,12 +94,14 @@ defmodule RisiMeWeb.PhoneGateTest do
     end
 
     test "Contact.registered only for verified users while the gate is on", %{token: t} do
-      verify!(t)
+      me = verify!(t)
       b = allowlist_entry()
       b_token = access_token(b.email)
-      verify!(b_token)
+      b_user = verify!(b_token)
       c = allowlist_entry()
-      {:ok, _} = RisiMe.Auth.authenticate(access_token(c.email))
+      {:ok, %{user: c_user}} = RisiMe.Auth.authenticate(access_token(c.email))
+      befriend!(me, b_user)
+      befriend!(me, c_user)
 
       contacts = api(:get, "/api/v1/contacts", t) |> body() |> Map.fetch!("contacts")
       by_phone = Map.new(contacts, &{&1["phone"], &1})
@@ -133,10 +135,11 @@ defmodule RisiMeWeb.PhoneGateTest do
       assert_reply ref, :error, %{reason: "phone_unverified"}
     end
 
-    test "msg:send to an unverified user is unknown_recipient while the gate is on", %{token: t} do
+    test "msg:send to an unverified friend is not_friends while the gate is on", %{token: t} do
       user = verify!(t)
       other = allowlist_entry()
       {:ok, %{user: unverified}} = RisiMe.Auth.authenticate(access_token(other.email))
+      befriend!(user, unverified)
 
       {:ok, sock} = connect(UserSocket, %{}, connect_info: %{auth_token: t})
       {:ok, _, chan} = subscribe_and_join(sock, InboxChannel, "inbox:" <> user.id, %{})
@@ -148,7 +151,7 @@ defmodule RisiMeWeb.PhoneGateTest do
           "body" => "hi"
         })
 
-      assert_reply ref, :error, %{reason: "unknown_recipient"}
+      assert_reply ref, :error, %{reason: "not_friends"}
     end
 
     test "a verification reset notification closes the user's sockets", %{token: t} do

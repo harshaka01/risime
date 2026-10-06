@@ -75,6 +75,7 @@ defmodule RisiMe.ObservabilityTest do
     test "connect, join, send, ack and disconnect emit events", %{ref: ref} do
       a = logged_in_user()
       b = logged_in_user()
+      befriend!(a, b)
       assert :error = connect(UserSocket, %{"token" => "nope"})
       assert_receive {[:risime, :socket, :connect], ^ref, %{count: 1}, %{result: :refused}}
 

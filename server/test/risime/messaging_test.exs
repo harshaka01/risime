@@ -8,6 +8,7 @@ defmodule RisiMe.MessagingTest do
   setup do
     %{user: a} = logged_in_user()
     %{user: b} = logged_in_user()
+    befriend!(a, b)
     %{a: a.id, b: b.id}
   end
 
@@ -53,7 +54,10 @@ defmodule RisiMe.MessagingTest do
     assert {:error, :empty_body} = Messaging.send(a, msg(b, "  \n "))
     assert {:error, :too_long} = Messaging.send(a, msg(b, String.duplicate("é", 4097)))
     assert {:ok, _} = Messaging.send(a, msg(b, String.duplicate("é", 4096)))
-    assert {:error, :unknown_recipient} = Messaging.send(a, msg(Uniq.UUID.uuid4()))
+    # v1.6: every non-friend, unknown ids included, is not_friends.
+    assert {:error, :not_friends} = Messaging.send(a, msg(Uniq.UUID.uuid4()))
+    %{user: stranger} = logged_in_user()
+    assert {:error, :not_friends} = Messaging.send(a, msg(stranger.id))
     assert {:error, :unknown_recipient} = Messaging.send(a, msg("nope"))
     assert {:error, :unknown_recipient} = Messaging.send(a, msg(a))
     assert {:error, :bad_request} = Messaging.send(a, %{"to" => b})

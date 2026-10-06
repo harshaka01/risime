@@ -51,6 +51,17 @@ defmodule RisiMeWeb.Router do
     pipe_through [:api, :authenticated]
 
     patch "/me", MeController, :update
+    post "/invites", SocialController, :create_invite
+    get "/invites", SocialController, :list_invites
+    delete "/invites/:id", SocialController, :revoke_invite
+    get "/friends", SocialController, :index
+    post "/friends/requests", SocialController, :request
+    post "/friends/requests/:id/accept", SocialController, :accept
+    post "/friends/requests/:id/decline", SocialController, :decline
+    delete "/friends/requests/:id", SocialController, :cancel
+    delete "/friends/:user_id", SocialController, :unfriend
+    post "/blocks", SocialController, :block
+    delete "/blocks/:user_id", SocialController, :unblock
     put "/me/devices/:device_id", DeviceController, :put
     delete "/me/devices/:device_id", DeviceController, :delete
     get "/contacts", ContactsController, :index

@@ -44,4 +44,11 @@ defmodule RisiMe.Fixtures do
       1000 -> raise "no OTP email received"
     end
   end
+
+  @doc "Makes two users friends (v1.6). Accepts users or `logged_in_user/1` maps."
+  def befriend!(a, b), do: RisiMe.Social.make_friends!(id_of(a), id_of(b))
+
+  defp id_of(%{user: %{id: id}}), do: id
+  defp id_of(%{id: id}), do: id
+  defp id_of(id) when is_binary(id), do: id
 end
