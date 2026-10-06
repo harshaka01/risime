@@ -7,8 +7,10 @@ defmodule RisiMe.ContractExamplesTest do
   use RisiMeWeb.ChannelCase, async: false
 
   import RisiMe.Fixtures
+  import RisiMe.MLSHelpers
+  import Ecto.Query, only: [from: 2]
 
-  alias RisiMe.Messaging
+  alias RisiMe.{Messaging, Repo}
   alias RisiMeWeb.{ApiJSON, InboxChannel, UserSocket}
 
   @dir Path.expand("../../../contract/v1/examples", __DIR__)
@@ -25,10 +27,8 @@ defmodule RisiMe.ContractExamplesTest do
               error_invalid_device.json push_inbox.json invite_create.json invite_reply.json
               invites_reply.json friend_request.json friend_request_reply.json friends_reply.json
               friend_accept_reply.json block.json signal_friend.json error_not_friends.json
-              user_vouched.json)
-  # v1.7 (E2EE/MLS): parse-only placeholders added by root with the contract merge; the server
-  # role replaces them with real checks when it implements §10.
-  @pending_v1_7 ~w(device_put_mls.json device_put_mls_reply.json attestation_keys.json key_packages_upload.json key_packages_count.json key_packages_claim.json key_packages_claim_reply.json mls_group.json mls_commit_request.json mls_commit_reply.json mls_commits_reply.json error_epoch_conflict.json error_not_ready.json msg_send_e2ee.json event_message_e2ee.json event_mls_commit.json event_mls_welcome.json event_mls_membership.json signal_mls_key_packages_low.json error_e2ee_required.json)
+              user_vouched.json
+              device_put_mls.json device_put_mls_reply.json attestation_keys.json key_packages_upload.json key_packages_count.json key_packages_claim.json key_packages_claim_reply.json mls_group.json mls_commit_request.json mls_commit_reply.json mls_commits_reply.json error_epoch_conflict.json error_not_ready.json msg_send_e2ee.json event_message_e2ee.json event_mls_commit.json event_mls_welcome.json event_mls_membership.json signal_mls_key_packages_low.json error_e2ee_required.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -61,12 +61,7 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- (@checked ++ @pending_v1_7) == [],
-           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_7))}"
-  end
-
-  test "v1.7 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_7, do: assert(is_map(example(name)))
+    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
   end
 
   setup do
@@ -464,6 +459,166 @@ defmodule RisiMe.ContractExamplesTest do
       # The example predates nothing else but omits phone_verified (absent = true).
       assert_same_shape(update_in(ours["user"], &Map.delete(&1, "phone_verified")), ex)
       assert ours["user"]["company"] == ""
+    end
+  end
+
+  ## v1.7 (§10). MLS blobs are opaque placeholders; the server checks shapes and routing only.
+
+  describe "v1.7" do
+    setup :with_attestation_key
+
+    defp mls_req(method, path, token, body, device) do
+      conn =
+        http()
+        |> Plug.Conn.put_req_header("authorization", "Bearer " <> token)
+        |> Plug.Conn.put_req_header("x-device-id", device)
+        |> Phoenix.ConnTest.dispatch(@endpoint, method, path, body)
+
+      {conn.status, if(conn.resp_body == "", do: nil, else: Jason.decode!(conn.resp_body))}
+    end
+
+    defp stored(user_id, kind) do
+      {:ok, events, _} = Messaging.fetch_events(user_id, nil)
+      events |> Enum.filter(&(&1.kind == kind)) |> List.last() |> wire()
+    end
+
+    test "devices, attestation keys, key packages, claim", %{a: a, b: b} do
+      a_dev = Ecto.UUID.generate()
+
+      {200, reply} =
+        mls_req(
+          :put,
+          "/api/v1/me/devices/#{a_dev}",
+          a.token,
+          example("device_put_mls.json"),
+          a_dev
+        )
+
+      assert_same_shape(reply, example("device_put_mls_reply.json"))
+
+      {200, %{"keys" => [ours]}} = get_json("/api/v1/mls/attestation_keys")
+
+      assert_same_shape(ours, hd(example("attestation_keys.json")["keys"]))
+
+      b_dev = mls_device!(b)
+
+      {204, nil} =
+        mls_req(
+          :post,
+          "/api/v1/me/devices/#{b_dev}/key_packages",
+          b.token,
+          example("key_packages_upload.json"),
+          b_dev
+        )
+
+      {200, count} =
+        mls_req(:get, "/api/v1/me/devices/#{b_dev}/key_packages/count", b.token, nil, b_dev)
+
+      assert_same_shape(count, example("key_packages_count.json"))
+
+      :ok = RisiMe.MLS.record_instance(b.user.id, nil, "jwt", nil)
+      claim = %{example("key_packages_claim.json") | "user_ids" => [b.user.id]}
+
+      {200, %{"devices" => devices}} =
+        mls_req(:post, "/api/v1/mls/key_packages/claim", a.token, claim, a_dev)
+
+      [ex_mls, ex_legacy] = example("key_packages_claim_reply.json")["devices"]
+      assert_same_shape(Enum.find(devices, & &1["mls"]), ex_mls)
+      assert_same_shape(Enum.find(devices, &(!&1["mls"])), ex_legacy)
+    end
+
+    test "groups, commits, conflicts, readiness", %{a: a, b: b} do
+      a_dev = mls_device!(a)
+      b_dev = mls_device!(b)
+      conv = Messaging.conversation_id(a.user.id, b.user.id)
+
+      :ok = RisiMe.MLS.record_instance(b.user.id, nil, "jwt", nil)
+      {200, view} = mls_req(:get, "/api/v1/mls/groups/#{conv}", a.token, nil, a_dev)
+      ex = example("mls_group.json")
+      assert keys(view) == keys(ex)
+      assert_same_shape(hd(view["missing"]), hd(ex["missing"]))
+
+      body = %{
+        example("mls_commit_request.json")
+        | "added" => [%{"user_id" => b.user.id, "device_id" => b_dev}]
+      }
+
+      {409, not_ready} = mls_req(:post, "/api/v1/mls/groups/#{conv}/commit", a.token, body, a_dev)
+      assert_same_shape(not_ready, example("error_not_ready.json"))
+      assert not_ready["error"]["message"] == example("error_not_ready.json")["error"]["message"]
+
+      # The setup's sockets are pre-v1.7 (no device_id): clear every legacy instance.
+      Repo.delete_all(from i in "app_instances", where: like(i.instance_key, "legacy:%"))
+
+      assert {200, reply} =
+               mls_req(:post, "/api/v1/mls/groups/#{conv}/commit", a.token, body, a_dev)
+
+      assert reply == example("mls_commit_reply.json")
+
+      {200, commits} =
+        mls_req(:get, "/api/v1/mls/groups/#{conv}/commits?since_epoch=0", a.token, nil, a_dev)
+
+      assert_same_shape(hd(commits["commits"]), hd(example("mls_commits_reply.json")["commits"]))
+
+      {409, conflict} = mls_req(:post, "/api/v1/mls/groups/#{conv}/commit", a.token, body, a_dev)
+      assert_same_shape(conflict, example("error_epoch_conflict.json"))
+
+      assert conflict["error"]["message"] ==
+               example("error_epoch_conflict.json")["error"]["message"]
+
+      assert_same_shape(stored(b.user.id, "mls_commit"), example("event_mls_commit.json"))
+      assert_same_shape(stored(b.user.id, "mls_welcome"), example("event_mls_welcome.json"))
+
+      {204, nil} = mls_req(:delete, "/api/v1/me/devices/#{b_dev}", b.token, nil, b_dev)
+      assert_same_shape(stored(a.user.id, "mls_membership"), example("event_mls_membership.json"))
+    end
+
+    test "msg_send_e2ee.json, event_message_e2ee.json, error_e2ee_required.json, signal_mls_key_packages_low.json",
+         %{a: a, b: b} do
+      a_dev = mls_device!(a)
+      b_dev = mls_device!(b)
+      e2ee_group!(a, b)
+      {:ok, sock} = connect(UserSocket, %{"token" => a.token, "device_id" => a_dev})
+      {:ok, _, chan} = subscribe_and_join(sock, InboxChannel, "inbox:" <> a.user.id, %{})
+
+      ref = push(chan, "msg:send", %{example("msg_send_e2ee.json") | "to" => b.user.id})
+      assert_reply ref, :ok, %{message_id: id}
+      ev = stored(b.user.id, "message")
+      assert ev["event_id"] == id
+      assert_same_shape(ev, example("event_message_e2ee.json"))
+
+      ref =
+        push(chan, "msg:send", %{
+          "client_msg_id" => Uniq.UUID.uuid4(),
+          "to" => b.user.id,
+          "body" => "x"
+        })
+
+      assert_reply ref, :error, error
+      assert wire(error) == example("error_e2ee_required.json")
+
+      {204, nil} =
+        mls_req(
+          :post,
+          "/api/v1/me/devices/#{b_dev}/key_packages",
+          b.token,
+          %{"key_packages" => [b64(), b64()]},
+          b_dev
+        )
+
+      Phoenix.PubSub.subscribe(RisiMe.PubSub, Messaging.topic(b.user.id))
+
+      {200, _} =
+        mls_req(
+          :post,
+          "/api/v1/mls/key_packages/claim",
+          a.token,
+          %{"user_ids" => [b.user.id]},
+          a_dev
+        )
+
+      assert_receive {:signal, %{kind: "mls_key_packages_low"} = signal}
+      assert_same_shape(wire(signal), example("signal_mls_key_packages_low.json"))
     end
   end
 
