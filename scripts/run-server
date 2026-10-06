@@ -40,7 +40,9 @@ tmux kill-session -t risime-server 2>/dev/null || true
 ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT still busy"; exit 1; }
 
 echo "==> start $TAG"
-tmux new -d -s risime-server "$ENVLOAD; exec '$REL/bin/risime' start"
+# Output goes to the tmux pane AND ~/risime-logs/server.log (mode 600; it contains [DEV OTP] lines).
+touch "$HOME/risime-logs/server.log" && chmod 600 "$HOME/risime-logs/server.log"
+tmux new -d -s risime-server "$ENVLOAD; '$REL/bin/risime' start 2>&1 | tee -a '$HOME/risime-logs/server.log'"
 for _ in $(seq 1 90); do
   [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")" = 200 ] && break; sleep 1
 done
