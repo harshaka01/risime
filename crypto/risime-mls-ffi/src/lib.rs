@@ -899,3 +899,171 @@ fn check(ok: bool, what: &str) -> Result<()> {
         Err(RisiMlsError::Other(format!("self-test failed: {what}")))
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Media (contract v1.11 §14.3, blob format `A256GCM-S64K`)
+// ---------------------------------------------------------------------------------------------
+
+/// Media failures; every one of them is "Couldn't open this photo". Kotlin: `RisiMediaException`.
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+#[uniffi(flat_error)]
+pub enum RisiMediaError {
+    /// The blob doesn't match the envelope (size, SHA-256, a segment tag, the final flag, the
+    /// key).
+    #[error("media integrity check failed: {0}")]
+    Integrity(String),
+    /// Malformed envelope or blob (key/digest length, `plain_size` vs size, padding, empty).
+    #[error("malformed media: {0}")]
+    Format(String),
+    /// `alg` is not `A256GCM-S64K`.
+    #[error("unsupported media alg: {0}")]
+    Unsupported(String),
+    /// Over the 16 MiB `media` cap.
+    #[error("media too large: {0}")]
+    TooLarge(String),
+    /// A file couldn't be read or written.
+    #[error("media io: {0}")]
+    Io(String),
+}
+
+impl From<risime_mls::media::MediaError> for RisiMediaError {
+    fn from(e: risime_mls::media::MediaError) -> Self {
+        use risime_mls::media::MediaError as E;
+        match e {
+            E::Integrity(s) => Self::Integrity(s),
+            E::Format(s) => Self::Format(s),
+            E::Unsupported(s) => Self::Unsupported(s),
+            E::TooLarge(s) => Self::TooLarge(s),
+            E::Io(s) => Self::Io(s),
+        }
+    }
+}
+
+/// What [`media_encrypt_file`] produced: the envelope's `enc` (`key`, `alg`, `plain_size`) and
+/// `blob` (`size` = `cipher_size`, `sha256`). Seal `key` at rest and drop it as soon as possible.
+#[derive(uniffi::Record)]
+pub struct SealedMedia {
+    pub key: Vec<u8>,
+    pub alg: String,
+    pub plain_size: u64,
+    pub cipher_size: u64,
+    pub sha256: Vec<u8>,
+}
+
+/// Format constants and caps.
+#[derive(uniffi::Record)]
+pub struct MediaLimits {
+    /// `"A256GCM-S64K"`.
+    pub alg: String,
+    /// Plaintext bytes per segment (65 536); ciphertext segments are 16 bytes longer.
+    pub segment_size: u64,
+    /// The `media` cap on `cipher_size` (16 MiB).
+    pub max_media_cipher_size: u64,
+    /// The `icon` cap on `cipher_size` (512 KiB); the caller checks it after encrypting.
+    pub max_icon_cipher_size: u64,
+    /// The largest plaintext under the `media` cap (16 515 072).
+    pub max_media_plain_size: u64,
+}
+
+#[uniffi::export]
+pub fn media_limits() -> MediaLimits {
+    use risime_mls::media as m;
+    MediaLimits {
+        alg: m::MEDIA_ALG.into(),
+        segment_size: m::MEDIA_SEGMENT,
+        max_media_cipher_size: m::MAX_MEDIA_CIPHER_SIZE,
+        max_icon_cipher_size: m::MAX_ICON_CIPHER_SIZE,
+        max_media_plain_size: m::MAX_MEDIA_PLAIN_SIZE,
+    }
+}
+
+/// The `cipher_size` (`blob.size`) of a `plain_size`-byte image: `Padmé(L) + 16·segments`.
+/// `null` for 0. Receivers check `blob.size == mediaCipherSize(enc.plain_size)` before fetching.
+#[uniffi::export]
+pub fn media_cipher_size(plain_size: u64) -> Option<u64> {
+    risime_mls::media::cipher_size_for(plain_size)
+}
+
+/// Encrypts the (re-encoded) image file `src` into the blob file `dst` under a **fresh random
+/// key** generated here. `dst` is written atomically. Blocking: call it off the main thread.
+/// Retries re-upload the same `dst`; if it is lost, call this again (new key, new
+/// `client_blob_id`).
+#[uniffi::export]
+pub fn media_encrypt_file(
+    src: String,
+    dst: String,
+) -> std::result::Result<SealedMedia, RisiMediaError> {
+    let s = risime_mls::media::encrypt_file(src.as_ref(), dst.as_ref())?;
+    Ok(SealedMedia {
+        key: s.key.to_vec(),
+        alg: s.alg.clone(),
+        plain_size: s.plain_size,
+        cipher_size: s.cipher_size,
+        sha256: s.sha256.to_vec(),
+    })
+}
+
+/// Decrypts the blob file `src` into memory (decrypt-on-display). Returns only after the size,
+/// the SHA-256, every segment, the final flag and the padding verified. Blocking.
+#[uniffi::export]
+pub fn media_decrypt_file(
+    src: String,
+    key: Vec<u8>,
+    alg: String,
+    plain_size: u64,
+    cipher_size: u64,
+    sha256: Vec<u8>,
+) -> std::result::Result<Vec<u8>, RisiMediaError> {
+    let r = risime_mls::media::MediaRef {
+        key: &key,
+        alg: &alg,
+        plain_size,
+        cipher_size,
+        sha256: &sha256,
+    };
+    Ok(risime_mls::media::decrypt_file(src.as_ref(), &r)?.to_vec())
+}
+
+/// As [`media_decrypt_file`], streaming into the file `dst` with constant memory (save to
+/// gallery, share). `dst` appears only after every check passed. Blocking.
+#[uniffi::export]
+pub fn media_decrypt_file_to_file(
+    src: String,
+    dst: String,
+    key: Vec<u8>,
+    alg: String,
+    plain_size: u64,
+    cipher_size: u64,
+    sha256: Vec<u8>,
+) -> std::result::Result<(), RisiMediaError> {
+    let r = risime_mls::media::MediaRef {
+        key: &key,
+        alg: &alg,
+        plain_size,
+        cipher_size,
+        sha256: &sha256,
+    };
+    Ok(risime_mls::media::decrypt_file_to_file(
+        src.as_ref(),
+        dst.as_ref(),
+        &r,
+    )?)
+}
+
+/// For a `Range`-resumed download: the length of the leading whole segments of the partial file
+/// `src` that verify in order. Truncate the `.part` file to it and resume from there. A missing
+/// file is 0; a complete valid blob is `cipher_size`.
+#[uniffi::export]
+pub fn media_verified_prefix(
+    src: String,
+    key: Vec<u8>,
+    alg: String,
+    cipher_size: u64,
+) -> std::result::Result<u64, RisiMediaError> {
+    Ok(risime_mls::media::verified_prefix(
+        src.as_ref(),
+        &key,
+        &alg,
+        cipher_size,
+    )?)
+}
