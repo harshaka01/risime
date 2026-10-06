@@ -1,5 +1,23 @@
 # Android status — 0.2 nightlies
 
+## P0 hotfix after nightly.10 (data loss, group picker, scrolling, OTP) — READY (pending upgrade-test run)
+Commits `3502c2c`, `1ea68a4`, `790a980`, `024afbd`. Gate green: `./gradlew assembleDebug testDebugUnitTest` (319 JVM tests).
+- **Wipe rules:** `LocalAccount` is the only wipe decision: confirmed logout, confirmed server change, or a
+  sign-in whose stable id (UUID, case-insensitive) differs. `logout()` needs a `UserConfirmation` that only
+  `ui/common/ConfirmLogout.kt` creates; every Log out / Sign out has a confirm dialog. Logout is local-first
+  (network best effort, 5 s bound; Keycloak end_session after the wipe). No destructive Room fallback (test).
+- **Recovery:** one-time inbox replay per install (cursor reset; `seen_events` keep it additive).
+- **MLS:** activates only once an OIDC session is unlocked (before: 401 while locked, E2EE/groups off).
+- **Tests:** `LocalAccountTest`, `UpgradeKeepsDataTest` + `EveryReleasedSchemaUpgradeTest` (schemas 1..5 through
+  the real `AppContainer`), `LogoutCallSitesTest`, `NoDestructiveMigrationTest`, `CreateGroupFlowTest`,
+  `ChatScrollTest`, OTP `CodeScreensTest`.
+- **Upgrade test:** `scripts/upgrade-test` needs an adb device (no aarch64 emulator exists for spark2); run it
+  on the laptop (`--fetch-candidate`). `scripts/nightly-release` refuses to publish without a fresh PASS.
+- **Server/root follow-ups:** group readiness (§12.1) counts every app instance of 30 days, including
+  socket connects without `device_id`/`app_version` (old builds) — both testers are not group-ready today;
+  Keycloak client `risime` needs valid post-logout redirect URIs `ai.risicloud.risime://logout` and
+  `ai.risicloud.risime.debug://logout`.
+
 ## v1.10 history after a reinstall (§13) — READY
 **READY** for contract v1.10 §13 (decision 043), following the review's chunk order
 (`contract/proposals/reviews/2026-10-06-history-v1.10-android.md`). Gate green on `main` with
