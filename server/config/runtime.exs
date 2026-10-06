@@ -141,12 +141,16 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  # Public URL: https://risicloud.ai/risime/ via Caddy (decision 017, option 2b).
+  host = System.get_env("PHX_HOST") || "risicloud.ai"
+  url_path = System.get_env("PHX_PATH", "/risime")
 
   config :risime, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :risime, RisiMeWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
+    url: [host: host, port: 443, scheme: "https", path: url_path],
+    # Browsers only from the public origin; OkHttp sends no Origin header, which Phoenix allows.
+    check_origin: ["https://" <> host],
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.

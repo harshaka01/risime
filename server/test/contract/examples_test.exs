@@ -15,12 +15,10 @@ defmodule RisiMe.ContractExamplesTest do
   @files @dir |> File.ls!() |> Enum.filter(&String.ends_with?(&1, ".json")) |> Enum.sort()
   @checked ~w(auth_verify_reply.json contacts_reply.json event_message.json event_status.json
               join_reply.json msg_send.json msg_send_reply.json presence_watch.json
-              presence_watch_reply.json signal_presence.json signal_typing.json typing.json)
-  # v1.3 (Keycloak auth): parse-only placeholders added by root with the contract merge; the
-  # server role replaces them with real encoder/decoder checks when it implements §6.
-  @pending_v1_3 ~w(auth_config.json error_not_allowlisted.json error_invalid_token.json
-                   error_identity_conflict.json auth_refresh.json auth_refresh_reply.json
-                   auth_refresh_error.json)
+              presence_watch_reply.json signal_presence.json signal_typing.json typing.json
+              auth_config.json error_not_allowlisted.json error_invalid_token.json
+              error_identity_conflict.json auth_refresh.json auth_refresh_reply.json
+              auth_refresh_error.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -53,12 +51,7 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- (@checked ++ @pending_v1_3) == [],
-           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_3))}"
-  end
-
-  test "v1.3 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_3, do: assert(is_map(example(name)))
+    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
   end
 
   setup do
@@ -188,6 +181,65 @@ defmodule RisiMe.ContractExamplesTest do
     assert_receive %Phoenix.Socket.Message{topic: ^topic_b, event: "signal", payload: signal}
     assert_same_shape(wire(signal), example("signal_typing.json"))
     assert wire(signal)["data"]["conversation_id"] =~ ~r/^dm:[0-9a-f-]{36}_[0-9a-f-]{36}$/
+  end
+
+  ## v1.3 (§6)
+
+  defp http, do: Phoenix.ConnTest.build_conn()
+
+  defp get_json(path, token \\ nil) do
+    conn =
+      if token,
+        do: Plug.Conn.put_req_header(http(), "authorization", "Bearer " <> token),
+        else: http()
+
+    conn = Phoenix.ConnTest.dispatch(conn, @endpoint, :get, path, nil)
+    {conn.status, Jason.decode!(conn.resp_body)}
+  end
+
+  test "auth_config.json is what GET /auth/config returns with both modes" do
+    assert get_json("/api/v1/auth/config") == {200, example("auth_config.json")}
+  end
+
+  test "error_invalid_token.json, error_not_allowlisted.json, error_identity_conflict.json" do
+    RisiMe.Auth.clear_cache()
+    assert get_json("/api/v1/me", "nope") == {401, example("error_invalid_token.json")}
+
+    assert get_json("/api/v1/me", RisiMe.OIDCHelpers.access_token("nobody@example.com")) ==
+             {403, example("error_not_allowlisted.json")}
+
+    entry = allowlist_entry()
+
+    {200, _} =
+      get_json("/api/v1/me", RisiMe.OIDCHelpers.access_token(entry.email, %{"sub" => "x1"}))
+
+    assert get_json("/api/v1/me", RisiMe.OIDCHelpers.access_token(entry.email, %{"sub" => "x2"})) ==
+             {409, example("error_identity_conflict.json")}
+  end
+
+  test "auth_refresh.json, auth_refresh_reply.json and auth_refresh_error.json" do
+    import RisiMe.OIDCHelpers
+    entry = allowlist_entry()
+
+    {:ok, sock} =
+      connect(UserSocket, %{},
+        connect_info: %{auth_token: access_token(entry.email, %{"sub" => "c1"})}
+      )
+
+    {:ok, _, chan} = subscribe_and_join(sock, InboxChannel, "inbox:" <> sock.assigns.user_id, %{})
+
+    # The decoder accepts the example payload (its token is not a valid JWT here).
+    ref = push(chan, "auth:refresh", example("auth_refresh.json"))
+    assert_reply ref, :error, %{reason: "invalid_token"}
+
+    ref = push(chan, "auth:refresh", %{"token" => access_token(entry.email, %{"sub" => "c1"})})
+    assert_reply ref, :ok, reply
+    assert_same_shape(wire(reply), example("auth_refresh_reply.json"))
+
+    other = allowlist_entry()
+    ref = push(chan, "auth:refresh", %{"token" => access_token(other.email)})
+    assert_reply ref, :error, error
+    assert wire(error) == example("auth_refresh_error.json")
   end
 
   defp atomize(map), do: Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)
