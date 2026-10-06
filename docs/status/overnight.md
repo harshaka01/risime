@@ -1,19 +1,24 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
-## Where things stand (updated 2026-10-06 ~06:15 UTC)
-- **Public pilot https://risime.risicloud.ai** runs **v0.2.0-nightly.4** (prod release on
-  127.0.0.1:4000, behind Caddy, Let's Encrypt). **RisiCloud sign-in is ON**
-  (`/auth/config` = oidc + dev). Keycloak realm `aoa`, client `risime`, emails the codes.
-- **v0.2.0-nightly.4 is published** (versionCode 20004; public APK sha256 verified). It fixes the
-  crash when Keycloak returned to the app (AppAuth redirect activity theme), plus the latent
-  Android 8–9 fingerprint-dialog crash, with a merged-manifest regression test.
-- **Waiting on Harsha's sign-in with nightly.4.** Then root checks that `/me` bound
-  `harsha@codegen.co.uk` → `+94770802222` (user `de9b6235…`, currently unbound).
-- **Logs:** the server writes to the tmux pane and to `~/risime-logs/server.log`. Auth failures go
-  to `~/risime-logs/auth.log`.
-- **Caddy:** the stricter repo Caddyfile isn't live yet (the reload failed on a root-owned access
-  log). The fix command is in the conversation and in `docs/PROD.md`.
-- A login-theme request was sent to the RisiCloud lead (2026-10-06).
+## Where things stand (updated 2026-10-06 ~07:25 UTC)
+- **Live:** https://risime.risicloud.ai runs **v0.2.0-nightly.5 (invites and friends)** as the
+  systemd user service `risime.service`, with a health timer, pre-deploy backups (keep 7) and
+  `scripts/rollback` (decision 025).
+  - RisiCloud sign-in is on. Harsha and Shenika are both bound to Keycloak and are friends.
+- **Published:** https://risicloud.ai/app/risime/ (versionCode 20005, sha256 verified). Installed
+  apps get the update banner.
+- **Every release** now runs both gates plus `scripts/interop` (23 live checks with real Android
+  clients, friends flow included), backs up, publishes and switches.
+
+## Waiting on Harsha (batched)
+- `sudo loginctl enable-linger harsha` (start at boot).
+- The Caddy fix command (chown the access log, install `infra/caddy/Caddyfile`, reload); the
+  fail2ban jail; removing Tailscale.
+- Firebase: `google-services.json` and `fcm-service-account.json` into `~/risime-keys/`.
+- E2EE product decisions a–d (identity binding, per-device members, history for new members,
+  at-rest encryption).
+- Notify.lk "RisiMe" sender approval (SMS phone verification goes live then).
+- RisiWork `version.json` example.
 
 ## Built so far (shipped)
 | Release | Contents |
