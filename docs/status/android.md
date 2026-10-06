@@ -1,5 +1,61 @@
 # Android status — 0.2 nightlies
 
+## v1.11 encrypted images (§14) — READY
+**READY** for contract v1.11 §14 (decision 042), following the android review's chunk order and R1–R8
+(`contract/proposals/reviews/2026-10-06-images-v1.11-android.md`). Commits `db339dc` (envelope, examples,
+vectors), `0fd00bb` (Room v6), `2b8618f` (codec), `8ef9cc3` (blob client), `699f083` (receive, viewer, send),
+plus the live interop commit. Gate green: `./gradlew assembleDebug testDebugUnitTest`. `scripts/interop`:
+**INTEROP OK 2 runs in a row** (74 checks each, 9 new image checks).
+
+What's in the app:
+- **Envelope:** `MlsPayload` decodes `image` with every §14.4 drop (alg, 32-byte key, `cipher_size(plain_size) ==
+  blob.size`, cap, 32-byte sha, mime, 1–2048, thumb JPEG/WebP ≤ 128 px ≤ 4096 B); malformed → ignored and logged.
+  Encoder keeps 22 KiB (drops the thumbnail for a long caption). Typed decoders for all v1.11 examples;
+  `media_vectors.json` (5 + 9) through the real core on the JVM; Kotlin Padmé/cipher_size checked against it.
+- **Storage (R1, R8):** Room **v6** (`Migration5To6` + test): `media` table (sealed `enc` and thumbnail with
+  KvSealer under MlsDbKey, AAD `media|client_msg_id` / `media-thumb|…`; blob ref, state, cache file, TTL estimate)
+  and `messages.blob_id` (kept for v1.12). The sender stores the complete envelope; its file is only a cache.
+- **Codec (R2):** decode (ImageDecoder 28+, BitmapFactory 26–27 + EXIF orientation parsed in Kotlin), redraw into
+  a fresh software sRGB ARGB_8888 bitmap (no gain map), ≤ 2048 px never upscaled, JPEG q85→75→65 under 6 MiB, PNG
+  only with alpha ≤ 4 MiB (else flattened JPEG), then a byte-level strip of every APPn/COM, PNG ancillary and WebP
+  ICCP/EXIF/XMP. Thumbnail from the same bitmap, q60→50→40, 96, 64 px. Tests re-read the output and find no
+  EXIF/GPS/XMP/ICC/MPF/IPTC/embedded thumbnail (hostile AWT encoders that inject them; Robolectric has no native
+  graphics on linux-aarch64, so the platform decoders are covered on devices only).
+- **Receive (R3, R4):** envelope + sealed key/thumb stored with the cursor; downloads scheduled after the
+  transaction. Streamed, resumable download (`Range` + `If-Range`, resume from the core's verified prefix),
+  size → SHA-256 → AEAD before caching; one re-download, then "Couldn't open this photo"; 404 → "This photo is no
+  longer available" (thumbnail stays). Display: sniff must match mime, header ≤ 2048 and = w/h, BitmapFactory only,
+  sampled to the slot, 2 decode threads, 10 s timeout, memory LRUs only (no image library, no plaintext on disk).
+  Auto-download: unmetered in the background (WorkManager, UNMETERED), metered only when visible, tap-only on Data
+  Saver/roaming. LRU 500 MiB evicts only sent/received images still fetchable (`server_ts + 29 d`).
+- **Send (R5):** Photo Picker (no permission) → in-process re-encode + encrypt (core, file to file; the plaintext
+  encrypt input lives in `media/tmp` only during that call) → caption sheet → one transaction → `MediaUploadWorker`
+  (unique per message, expedited, CONNECTED) → idempotent upload by `client_blob_id`, own size/sha compared (mismatch
+  → new id), backoff 1–60 s, Retry-After, 507 hourly → the outbox sends the stored envelope (an image row never blocks
+  it; text typed meanwhile goes first; `stale_epoch` re-encrypts the same envelope). Failures show the §14.7 texts
+  with Retry/Delete; Cancel deletes an uploaded blob. Never plaintext: a DM without a group fails `not_e2ee`.
+- **UI:** image bubble (blurred thumbnail first, spinner, state line), full-screen viewer (pinch 1–5×, double tap,
+  caption), Save re-encodes decrypted pixels (MediaStore `Pictures/RisiMe` on 29+, system Save dialog on 26–28; no
+  storage permission — manifest test). DM attach disabled unless e2ee and `images_ready` ("<name> needs to update…",
+  "Your other phone…", the not-e2ee text; a tap explains and refetches). Groups: allowed, the sheet shows "Some
+  members need to update to see photos", group info lists who. "📷 Photo" / "📷 <caption>" in the chat list,
+  notifications, reaction lines and search; Copy copies the caption; TalkBack "Photo, <caption>".
+- **Capability:** `images` advertised with a groups core whose media API is present (`device_put_images.json`).
+- **Behaviour log:** `image_sent` with bytes and w/h only.
+- **Tests:** ImageEnvelopeTest, MediaSealerTest, ImageBytesTest, ImagePipelineTest, ImageTransferTest (upload state
+  machine, resume, digest-before-AEAD, 404, cleanup), ImageRepositoryTest (prepare/commit, R8 envelope, cancel →
+  DELETE, retry, startup, LRU rules, auto-download policy), ImageChatEngineTest (stored in the transaction, no
+  network inside, outbox order, stale_epoch, never plaintext), ImageUiTest (Robolectric, dark, 320 dp: attach
+  states, viewer, not-e2ee refusal, bubble, previews), Migration5To6Test, MediaVectorsTest, DeviceRegistrar.
+- **Live interop:** DM A→B (thumbnail first, download + decrypt SHA match, A's tablet as its own, same
+  `client_blob_id` replay, `Range` 206 + `.part` resume, 409 not_e2ee / 415 / 400 / non-participant 404,
+  `images_ready` false → true after re-PUT, usage); group (B and C decrypt; removed C still fetches the old image
+  and gets 404 for a new one; non-member L gets 404; D, active since after the upload, may read it (§14.2 interval
+  overlaps `[uploaded_at, now]`); the owner reads its own).
+- **Later:** group icon (§14.4), camera capture, the auto-download setting / storage screen, v1.12 delete-for-
+  everyone of images (the blob id is on the row). On-device checks for Harsha: HEIC, Ultra HDR (no gain map in the
+  received file), P3 colours, save on Android 14 and on 8/9, kill mid-upload.
+
 ## P0 after nightly.11: groups after logout/login — READY
 Commits `7f99b13` (server, by the android role), `53e3184` (android). Gates green: android
 `assembleDebug testDebugUnitTest`, server `mix format/compile/test`; `scripts/interop` **OK 2 runs in a row**

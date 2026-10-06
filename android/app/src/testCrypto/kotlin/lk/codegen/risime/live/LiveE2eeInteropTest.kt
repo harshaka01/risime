@@ -44,7 +44,9 @@ import lk.codegen.risime.realtime.PhoenixRealtimeClient
 import lk.codegen.risime.realtime.PushResult
 import lk.codegen.risime.realtime.RealtimeListener
 import lk.codegen.risime.realtime.RealtimeSession
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -70,7 +72,7 @@ class LiveE2eeInteropTest {
     private val devices = mutableListOf<Dev>()
 
     @After fun tearDown() {
-        devices.forEach { runCatching { it.client.stop(); it.mls.close() } }
+        devices.forEach { runCatching { it.client.stop(); it.mls.close(); it.img.close() } }
         scope.cancel()
     }
 
@@ -98,6 +100,8 @@ class LiveE2eeInteropTest {
         val mls = RealMls.device(userId, deviceId, trusted, attest = false)
         val messages = FakeMessageDao()
         val reactions = lk.codegen.risime.data.FakeReactionDao()
+        /** §14: this device's image stack (real media core). */
+        val img = LiveImageKit(api, messages, deviceId.take(8))
         val raw = CopyOnWriteArrayList<Event>()
         val memberships = CopyOnWriteArrayList<MembershipAction>()
         val conflicts = CopyOnWriteArrayList<String>()
@@ -120,6 +124,7 @@ class LiveE2eeInteropTest {
             mlsEngine = { mls.engine }, catchUp = { catchUp(it) },
             reactionsDao = reactions,
             onFreshReplayDone = { freshReplayDone++ },
+            images = img.repo,
         )
 
         /** Effective adds on [target] as (reactor, emoji). */
@@ -206,6 +211,91 @@ class LiveE2eeInteropTest {
             val msgEvents = (a1.raw + b1.raw + a2.raw).mapNotNull { it.messageData() }.filter { it.conversationId == conv }
             ensure(msgEvents.isNotEmpty() && msgEvents.all { it.body == null && it.ciphertext != null }) { "plaintext in e2ee events: $msgEvents" }
             null
+        }
+        // ---- §14 images (v1.11) in the e2ee DM ----
+        var imgId = ""
+        var imgSha = ""
+        check("image DM: A sends; B gets the thumbnail first, then downloads and decrypts with a SHA-256 match") {
+            val (id, sha) = a1.img.send(conv, aId, bId, "Site visit $run")
+            imgId = id; imgSha = sha
+            a1.chat.flushOutbox()
+            await(15_000, "A's image accepted") { a1.messages.rows[id]?.takeIf { it.status != "PENDING" } }
+            ensure(a1.messages.rows[id]!!.status in listOf("SENT", "DELIVERED", "READ")) { "A's image: ${a1.messages.rows[id]}" }
+            val row = await(15_000, "B stores the envelope") { b1.img.media.rows.value[id] }
+            // Thumbnail first: sealed, clean, ≤ 4096 bytes, before any download.
+            ensure(row.state == "NONE" && row.fileName == null) { "B row ${row.state}" }
+            val t = b1.img.repo.thumb(id, row) ?: throw AssertionError("no thumbnail")
+            ensure(t.data.size <= 4096 && lk.codegen.risime.data.media.ImageBytes.findMetadata(t.data).isEmpty()) { "thumb ${t.data.size}" }
+            val bm = b1.messages.rows[id]!!
+            ensure(bm.image && bm.body == "Site visit $run" && bm.blobId == row.blobId) { "B message $bm" }
+            ensure(b1.img.fetch(id) == sha) { "B's plaintext differs" }
+            // The stored event is ordinary ciphertext: no blob id, mime or size visible.
+            val ev = b1.raw.first { it.messageData()?.clientMsgId == id }
+            ensure(ev.messageData()!!.body == null && row.blobId!! !in ev.data.toString()) { "event leaks: ${ev.data.keys}" }
+            "${row.blobSize} bytes, ${row.w}x${row.h}"
+        }
+        check("image DM: the sender's other device gets it as its own and downloads it") {
+            val row = await(15_000, "A's tablet stores it") { a2.img.media.rows.value[imgId] }
+            ensure(row.outgoing && a2.messages.rows[imgId]!!.outgoing) { "tablet row not outgoing" }
+            ensure(a2.img.fetch(imgId) == imgSha) { "tablet plaintext differs" }
+            null
+        }
+        check("image DM: a repeat upload with the same client_blob_id returns the same blob") {
+            val m = a1.img.media.get(imgId)!!
+            val again = a1.api.uploadMediaBlob(conv, m.clientBlobId!!, a1.img.files.file(m.fileName!!))
+            ensure(again is ApiResult.Ok && again.value.blobId == m.blobId && again.value.sha256 == m.blobSha256) { "replay: $again" }
+            null
+        }
+        check("image DM: Range resume (206 + Content-Range), and the downloader resumes a .part") {
+            val m = b1.img.media.get(imgId)!!
+            val full = b1.img.files.file(m.fileName!!).readBytes()
+            val req = okhttp3.Request.Builder().url("$url/api/v1/blobs/${m.blobId}").header("Authorization", "Bearer $bTok").header("Range", "bytes=100-").build()
+            http.newCall(req).execute().use { r ->
+                ensure(r.code == 206) { "range: ${r.code}" }
+                ensure(r.header("Content-Range") == "bytes 100-${full.size - 1}/${full.size}") { "Content-Range ${r.header("Content-Range")}" }
+                ensure((full.copyOf(100) + r.body.bytes()).contentEquals(full)) { "stitched bytes differ" }
+            }
+            // Drop B's copy, keep 100 000 bytes as a partial download: resumed from the verified 65 552.
+            b1.img.files.file(m.fileName).delete()
+            b1.img.files.part(imgId).writeBytes(full.copyOf(100_000))
+            b1.img.media.update(m.copy(state = "NONE", fileName = null))
+            ensure(b1.img.fetch(imgId) == imgSha) { "resumed plaintext differs" }
+            null
+        }
+        check("image refusals: plaintext DM 409 not_e2ee, wrong type 415, no client_blob_id 400, non-participant 404") {
+            val f = a1.img.files.file(a1.img.media.get(imgId)!!.fileName!!)
+            val plain = a1.api.uploadMediaBlob(dmConversationId(aId, lId), UUID.randomUUID().toString(), f)
+            ensure(plain is ApiResult.Error && plain.httpStatus == 409 && plain.code == AuthErrors.NOT_E2EE) { "plaintext DM: $plain" }
+            fun post(q: String, type: String, token: String): Int = http.newCall(
+                okhttp3.Request.Builder().url("$url/api/v1/blobs?$q").header("Authorization", "Bearer $token")
+                    .post(f.readBytes().toRequestBody(type.toMediaType())).build(),
+            ).execute().use { it.code }
+            val t415 = post("purpose=media&conversation_id=$conv&client_blob_id=${UUID.randomUUID()}", "text/plain", aTok)
+            ensure(t415 == 415) { "wrong type: $t415" }
+            val t400 = post("purpose=media&conversation_id=$conv", "application/octet-stream", aTok)
+            ensure(t400 == 400) { "no client_blob_id: $t400" }
+            val lApi = ApiClient(http, { url }, { lTok })
+            val up = lApi.uploadMediaBlob(conv, UUID.randomUUID().toString(), f)
+            ensure(up is ApiResult.Error && up.httpStatus == 404) { "L upload into A–B: $up" }
+            val down = lApi.downloadBlob(a1.img.media.get(imgId)!!.blobId!!)
+            ensure(down is ApiResult.Error && down.httpStatus == 404) { "L download: $down" }
+            null
+        }
+        check("images_ready: false while installs advertise only groups, true once every install advertises images") {
+            val before = a1.api.mlsGroup(conv)
+            ensure(before is ApiResult.Ok && !before.value.imagesReady && before.value.missingImages.isNotEmpty()) { "before: $before" }
+            for (d in listOf(a1, a2, b1)) {
+                val r = DeviceRegistrar(d.api, { d.deviceId }, "0.3.0-interop", { d.mls.engine }, imagesSupported = { true }, groupsReplacedFor = { "done" }).register(null)
+                ensure(r is Registration.Mls) { "${d.deviceId}: $r" }
+            }
+            val after = a1.api.mlsGroup(conv)
+            ensure(after is ApiResult.Ok && after.value.imagesReady && after.value.missingImages.isEmpty()) { "after: $after" }
+            "missing before: ${(before as ApiResult.Ok).value.missingImages.size}"
+        }
+        check("blob usage counts the upload") {
+            val u = a1.api.blobUsage()
+            ensure(u is ApiResult.Ok && u.value.media.used >= a1.img.media.get(imgId)!!.blobSize && u.value.media.uploadsLastHour >= 1) { "usage: $u" }
+            "${(u as ApiResult.Ok).value.media.used} / ${u.value.media.limit}"
         }
         var bMsgId = ""
         check("e2ee reaction ❤️: B decodes a reaction, A's tablet sees it as A's own, event looks like any ciphertext") {

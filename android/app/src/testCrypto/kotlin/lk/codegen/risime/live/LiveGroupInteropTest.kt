@@ -144,6 +144,8 @@ class LiveGroupInteropTest {
         val api = ApiClient(http, { url }, { token })
         val mls = RealMls.device(userId, deviceId, trusted, attest = false)
         val messages = FakeMessageDao()
+        /** §14: this device's image stack (real media core). */
+        val img = LiveImageKit(api, messages, name + deviceId.take(4))
         val groupDao = FakeGroupDao()
         val opDao = FakeGroupOpDao()
         val raw = CopyOnWriteArrayList<Event>()
@@ -184,6 +186,7 @@ class LiveGroupInteropTest {
             groups = store,
             blobs = { ref -> fetchBlob(ref) },
             onUnrecoverable = { conv -> println("  [$name] unrecoverable $conv"); unrecoverable += conv },
+            images = img.repo,
         )
 
         /** The app's GroupApi (AppContainer): every mutating call carries this device's X-Device-Id. */
@@ -327,6 +330,7 @@ class LiveGroupInteropTest {
             pool.shutdown()
             pool.awaitTermination(5, TimeUnit.SECONDS)
             mls.close()
+            img.close()
         }
     }
 
@@ -443,6 +447,21 @@ class LiveGroupInteropTest {
             null
         }
 
+        var img1 = ""
+        var img1Sha = ""
+        check("13a. image in the group: B and C get the thumbnail first, then download and decrypt (SHA match)") {
+            val (id, sha) = a.on { a.img.send(conv, aId, conv, "Group photo $run", w = 700, h = 500) }
+            img1 = id; img1Sha = sha
+            a.on { a.chat.flushOutbox() }
+            for (x in listOf(b, c)) {
+                val row = x.await(20_000, "image envelope") { x.img.media.rows.value[id] }
+                ensure(row.state == "NONE" && x.on { x.img.repo.thumb(id, row) } != null) { "${x.name}: no thumbnail first (${row.state})" }
+                ensure(x.on { x.img.fetch(id) } == sha) { "${x.name}: plaintext differs" }
+                ensure(x.messages.rows[id]?.body == "Group photo $run") { "${x.name}: caption" }
+            }
+            "${a.img.media.get(id)!!.blobSize} bytes"
+        }
+
         check("10b. a member's legacy app (no groups) gets no group fan-out") {
             val sent = a.on { a.client.sendMessage(lk.codegen.risime.net.MsgSend(UUID.randomUUID().toString(), bId, "dm to legacy $run", now())) }
             if (sent is PushResult.Ok) {
@@ -535,6 +554,35 @@ class LiveGroupInteropTest {
             ensure(m !in c.texts(conv)) { "C shows the new message" }
             ensure(c.raw.none { it.messageData()?.clientMsgId == ev.clientMsgId }) { "C was sent the new message" }
             "epoch $e0 → ${a.epoch(conv)}"
+        }
+
+        check("13b. media reads: removed C still fetches the old image, not a new one; non-member L gets 404") {
+            // C fetches the image from while it was a member again (fresh download).
+            c.on {
+                val row = c.img.media.get(img1)!!
+                row.fileName?.let { c.img.files.file(it).delete() }
+                c.img.media.update(row.copy(state = "NONE", fileName = null))
+            }
+            ensure(c.on { c.img.fetch(img1) } == img1Sha) { "removed C can't fetch its old image" }
+            val (id2, sha2) = a.on { a.img.send(conv, aId, conv, "after C left $run", w = 300, h = 200) }
+            a.on { a.chat.flushOutbox() }
+            for (x in listOf(b, d)) {
+                x.await(20_000, "second image") { x.img.media.rows.value[id2] }
+                ensure(x.on { x.img.fetch(id2) } == sha2) { "${x.name}: second image differs" }
+            }
+            val blob2 = a.img.media.get(id2)!!.blobId!!
+            val blob1 = a.img.media.get(img1)!!.blobId!!
+            val cNew = c.api.downloadBlob(blob2)
+            ensure(cNew is ApiResult.Error && cNew.httpStatus == 404) { "removed C fetched a new image: $cNew" }
+            // §14.2: D's active interval overlaps [uploaded_at, now], so it may read the older blob if it learns
+            // the id (§14.9: joiners only learn ids from envelopes they can decrypt).
+            val dOld = d.api.downloadBlob(blob1)
+            ensure(dOld is ApiResult.Ok) { "D (active since after the upload): $dOld" }
+            val lOld = l.api.downloadBlob(blob1)
+            ensure(lOld is ApiResult.Error && lOld.httpStatus == 404) { "non-member L: $lOld" }
+            val own = a.api.downloadBlob(blob1)
+            ensure(own is ApiResult.Ok) { "the owner can't read its own blob: $own" }
+            null
         }
 
         check("9. blob refs: A re-adds C with commit_ref + welcome_ref; size/SHA-256 verified") {
