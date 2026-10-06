@@ -17,17 +17,19 @@ The rules are in `docs/decisions/003-nightly-release-cycle.md`. The cycle fires 
 | 9 | Prod prep (compose, Dockerfile, systemd, backup/restore, PROD.md) | root/ops | done (not deployed) |
 | 10 | E2EE spike: `crypto/risime-mls` on OpenMLS, decision 012 | root/crypto | done; next steps wait on Harsha's answers in 012 |
 
-**Phase: sign-in and distribution through RisiCloud** (decisions 013–017; contract proposal v1.3):
-| # | Item | Roles | Status | Blocked on |
-|---|---|---|---|---|
-| 11 | Review the v1.3 proposal (server + android), then root merges it with placeholders | root, server, android | next | — |
-| 12 | Server: allowlist keyed on email+phone; Keycloak JWT auth (JWKS cache, claim checks), `/me` upsert, 403/409, `DEV_LOCAL_AUTH` gating, socket JWT + `auth:refresh`. Tested with a local test JWKS | server | next | — |
-| 13 | Android: AppAuth + PKCE, Keystore/BiometricPrompt refresh token, dev login behind a debug switch, `auth:refresh`. Unit tests | android | next | — (a live sign-in needs the Keycloak client) |
-| 14 | `scripts/nightly-release` publish step (mirror of the last 5, `version.json`, `index.html`, rsync to `spark1`), plus `--publish-only` / `--required` | root | after 12–13 | rrsync key on spark; RisiWork `version.json` example |
-| 15 | Android in-app updater (`version.json`, sha256 and cert pin, PackageInstaller, blocking `required`) | android | after 14 | RisiWork `version.json` example |
-| 16 | Server reachability for testers | root | — | Harsha's choice (decision 017); build against Tailscale until then |
-| 17 | Proof of done: books@codegen.co.uk signs in by email code, then by fingerprint the next day; installs from `/app/risime/`; the app updates itself on the next release | Harsha + tester | last | 12–16, Keycloak client, Caddy route, tester's phone on the allowlist |
+**Phase: sign-in and distribution through RisiCloud** (decisions 013–019; contract v1.3):
+| # | Item | Status | Blocked on |
+|---|---|---|---|
+| 11 | Contract v1.3 (reviewed by server + android, merged) | done (`e0824a9`) | — |
+| 12 | Server: Keycloak JWT/JWKS, phone-first mapping, `DEV_LOCAL_AUTH` / `OIDC_ENABLED`, socket Bearer + `auth:refresh`/`auth:expired` | done, in v0.2.0-nightly.2 | a real-token check needs the Keycloak client |
+| 13 | Android: AppAuth + PKCE, fingerprint vault, sign-in mode from `/auth/config` | done, in v0.2.0-nightly.2 | a live sign-in needs the Keycloak client |
+| 14 | Publish step (`scripts/publish-release`) | done; v0.2.0-nightly.2 is staged in `~/risime-releases/publish/` | **the key on spark** (Harsha); the `/app/risime/` Caddy route (RisiCloud lead) |
+| 15 | In-app updater (release-only) | done, in v0.2.0-nightly.2 | RisiWork `version.json` example (field names, Harsha) |
+| 16 | Option 2b (decided): Caddy `/risime/` → spark2 `tailscale serve` | prepared in `infra/risicloud/`, off | Tailscale on spark2 (Harsha, sudo) and on spark; `/risime/` route (RisiCloud lead) |
+| 17 | Proof of done (books@codegen.co.uk) | waiting | everything above, plus the tester's phone/name/company for the allowlist |
 
+No unblocked items are left in this phase. A nightly run only does the preflight until something
+is unblocked.
 
 Needs Harsha, so never picked automatically:
 - FCM push (a Firebase project);
