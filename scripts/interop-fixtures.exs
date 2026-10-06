@@ -1,5 +1,5 @@
 # Fixtures for scripts/interop (run with `mix run` in server/, dev env, shared dev DB).
-# Creates throwaway users (+9477000092x dev-token users, +9477000091x JWT users, all "ZZ Interop"),
+# Creates throwaway users (+9477000092x/93x/94x/95x dev-token users, +9477000091x JWT users, all "ZZ Interop"),
 # a stand-in OIDC issuer key + JWKS (served by scripts/interop on 127.0.0.1:4799), Keycloak-shaped
 # tokens, and writes the config JSON the Android LiveInteropTest reads. `cleanup` removes it all.
 alias RisiMe.{Accounts, Repo}
@@ -7,7 +7,7 @@ alias RisiMe.Accounts.{AllowlistEntry, User, UserToken}
 import Ecto.Query
 
 [mode, dir] = System.argv() |> Enum.take(2) |> then(fn a -> a ++ List.duplicate(nil, 2 - length(a)) end)
-phones = ~w(+94770000921 +94770000922 +94770000911 +94770000912 +94770000913 +94770000914 +94770000915 +94770000916 +94770000931 +94770000932 +94770000933 +94770000941 +94770000942 +94770000943 +94770000944 +94770000945)
+phones = ~w(+94770000921 +94770000922 +94770000911 +94770000912 +94770000913 +94770000914 +94770000915 +94770000916 +94770000931 +94770000932 +94770000933 +94770000941 +94770000942 +94770000943 +94770000944 +94770000945 +94770000951 +94770000952)
 
 # Removes every interop fixture: users (cascading devices, tokens, friendships, invites...),
 # allowlist rows, MLS group rows (keyed by conversation id, not linked to users), and v1.9
@@ -131,8 +131,13 @@ case mode do
           do: dev_user.("+94770000" <> p, "ZZ Interop " <> n)
     for {x, y} <- [{ga, gb}, {ga, gc}, {ga, gd}, {ga, gl}, {gb, gc}],
         do: RisiMe.Social.make_friends!(x["id"], y["id"])
+    # History block (v1.10): HA–HB friends; HA gets extra devices (second phone, reinstall, re-login).
+    ha = dev_user.("+94770000951", "ZZ Interop HA")
+    hb = dev_user.("+94770000952", "ZZ Interop HB")
+    RisiMe.Social.make_friends!(ha["id"], hb["id"])
     cfg =
       cfg
+      |> Map.put("history", %{"A" => ha, "B" => hb})
       |> Map.put("groups", %{"A" => ga, "B" => gb, "C" => gc, "D" => gd, "L" => gl})
       |> Map.put("e2ee", %{"A" => ea, "B" => eb, "L" => el})
       |> Map.put("friends", friends)

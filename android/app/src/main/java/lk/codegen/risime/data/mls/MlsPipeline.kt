@@ -89,6 +89,15 @@ class MlsPipeline(
         return MlsResult.Pending
     }
 
+    /** The time of a version-1 (TimeUUID) event id; null for anything else. */
+    private fun eventTime(eventId: String): java.time.Instant? = runCatching {
+        val u = java.util.UUID.fromString(eventId)
+        if (u.version() != 1) return null
+        // 100 ns intervals since 1582-10-15.
+        val ms = (u.timestamp() - 0x01B21DD213814000L) / 10_000
+        java.time.Instant.ofEpochMilli(ms)
+    }.getOrNull()
+
     private fun tsKey(ts: String): Long = runCatching { java.time.Instant.parse(ts).toEpochMilli() }.getOrDefault(Long.MIN_VALUE)
 
     private fun unrecoverableOr(conv: String, reason: String): MlsResult =
@@ -125,6 +134,14 @@ class MlsPipeline(
                 val extra = if (older.isEmpty()) emptyList() else listOf(MlsResult.BeforeInstall(w.conversationId, older.maxByOrNull { tsKey(it.serverTs) }?.serverTs))
                 MlsResult.GroupChanged(w.conversationId, GroupRef(w.conversationId, w.generation, maxOf(w.epoch, ref.epoch)), extra)
             } catch (t: Exception) {
+                // §13.3: a Welcome stored before history_before was made for an earlier MLS state of this
+                // device id (logout and login keep the id): expected, not a decrypt failure. Its time is the
+                // event_id's TimeUUID (Welcome events carry no server_ts).
+                val at = eventTime(e.eventId)
+                if (historyBefore != null && at != null && at.isBefore(historyBefore)) {
+                    log("welcome from before this device's MLS state ignored: ${t.message}")
+                    return MlsResult.Ignored
+                }
                 log("welcome rejected: ${t.message}")
                 MlsResult.Dropped("welcome: ${t.message}", w.conversationId)
             }

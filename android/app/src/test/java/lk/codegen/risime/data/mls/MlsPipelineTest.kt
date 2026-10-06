@@ -251,6 +251,20 @@ class MlsPipelineTest {
         assertTrue(messages.rows.isEmpty())
     }
 
+    @Test fun aWelcomeFromBeforeThisDevicesMlsStateIsIgnoredButALaterRejectedOneIsVisible() = runTest {
+        // Logout + login keeps the device id: the replayed inbox holds a Welcome for the wiped key package.
+        val e = engine()
+        fun badWelcome(eventId: String) = welcome(1, listOf(myDev)).let { w ->
+            Event(eventId, w.kind, JsonObject(w.data + ("welcome" to JsonPrimitive(FakeMlsEngine.b64("welcome|not-a-key-package")))))
+        }
+        e.onHistoryBefore("2026-01-01T00:00:00.000Z")
+        e.onEvents(listOf(badWelcome("c1a2b3c7-a0b1-11f0-8000-0242ac120002"))) // TimeUUID of 2025-10-03
+        assertTrue(markers().isEmpty())
+        e.onHistoryBefore("2025-01-01T00:00:00.000Z")
+        e.onEvents(listOf(badWelcome("c1a2b3c8-a0b1-11f0-8000-0242ac120002"))) // after history_before: a real failure
+        assertEquals(listOf(undecryptable), markers())
+    }
+
     @Test fun aCorruptedCiphertextGivesOneUndecryptableLine() = runTest {
         mls.groups[conv] = GroupRef(conv, 1, 1)
         val e = engine()

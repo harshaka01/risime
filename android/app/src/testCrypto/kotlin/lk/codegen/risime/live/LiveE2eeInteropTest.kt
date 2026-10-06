@@ -93,7 +93,7 @@ class LiveE2eeInteropTest {
     private fun now() = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC).format(Instant.now())
 
     /** One MLS-capable app instance: real engine + the app's pipeline/outbox + a real socket. */
-    private inner class Dev(val url: String, val userId: String, val token: String, val deviceId: String, trusted: List<String>) {
+    private inner class Dev(val url: String, val userId: String, val token: String, val deviceId: String, trusted: List<String>, pageLimit: Int = 500) {
         val api = ApiClient(http, { url }, { token })
         val mls = RealMls.device(userId, deviceId, trusted, attest = false)
         val messages = FakeMessageDao()
@@ -108,6 +108,9 @@ class LiveE2eeInteropTest {
                 api.mlsCommit(conversationId, body, deviceId).also { if (it is ApiResult.Error && it.code == AuthErrors.EPOCH_CONFLICT) conflicts += conversationId }
         }
         lateinit var client: PhoenixRealtimeClient
+        /** §13.2: every page's history_before, in order. */
+        val hbs = CopyOnWriteArrayList<String?>()
+        @Volatile var freshReplayDone = 0
         val chat: ChatEngine = ChatEngine(
             messages = messages, sync = FakeSyncDao(),
             tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
@@ -116,6 +119,7 @@ class LiveE2eeInteropTest {
             mls = MlsPipeline({ mls.engine }, FakeMlsPendingDao(), onMembership = { memberships += it }, log = { println("  [$deviceId] mls: $it") }),
             mlsEngine = { mls.engine }, catchUp = { catchUp(it) },
             reactionsDao = reactions,
+            onFreshReplayDone = { freshReplayDone++ },
         )
 
         /** Effective adds on [target] as (reactor, emoji). */
@@ -125,11 +129,12 @@ class LiveE2eeInteropTest {
         init {
             val recorder = object : RealtimeListener {
                 override suspend fun cursor() = chat.cursor()
+                override suspend fun onHistoryBefore(ts: String?) { hbs += ts; chat.onHistoryBefore(ts) }
                 override suspend fun onEvents(events: List<Event>) { raw += events; chat.onEvents(events) }
                 override suspend fun onLive() = chat.onLive()
                 override suspend fun onAuthFailed() = Unit
             }
-            client = PhoenixRealtimeClient(http, scope, recorder, backoffMs = listOf(200, 500))
+            client = PhoenixRealtimeClient(http, scope, recorder, backoffMs = listOf(200, 500), pageLimit = pageLimit)
             devices += this
         }
 
@@ -287,6 +292,156 @@ class LiveE2eeInteropTest {
             val g = a1.api.mlsGroup(dmConversationId(aId, lId))
             ensure(g is ApiResult.Ok && !g.value.ready && g.value.missing.any { it.userId == lId }) { "A–L group: $g" }
             "missing=${(g as ApiResult.Ok).value.missing.map { it.reason }}"
+        }
+    }
+
+    /**
+     * §13 (v1.10) with the real core: plaintext sender copies and history_before on the wire, then
+     * (i) a second fresh device for A while the first stays active, (ii) a reinstall (new device id),
+     * (iii) logout and login on the same device id. Each restores both sides of the plaintext chat with
+     * ticks, shows one "Earlier messages…" marker for the e2ee part, decrypts new messages and doesn't
+     * notify for the replay.
+     */
+    @Test fun liveHistory() {
+        val path = System.getenv("RISIME_INTEROP_CONFIG")
+        assumeTrue("RISIME_INTEROP_CONFIG not set", !path.isNullOrBlank() && File(path).isFile)
+        RealMls.assumeHostLibrary()
+        val root = ProtocolJson.parseToJsonElement(File(path!!).readText()).jsonObject
+        val h = root["history"]?.jsonObject
+        assumeTrue("no \"history\" block in the interop config", h != null)
+        val url = root["url"]!!.jsonPrimitive.content
+        fun u(k: String) = h!![k]!!.jsonObject.let { it["id"]!!.jsonPrimitive.content to it["token"]!!.jsonPrimitive.content }
+        val (aId, aTok) = u("A"); val (bId, bTok) = u("B")
+        val conv = dmConversationId(aId, bId)
+        val run = UUID.randomUUID().toString().take(8)
+        val trusted = (runBlocking { ApiClient(http, { url }, { null }).attestationKeys() } as ApiResult.Ok).value.keys.map { it.toString() }
+
+        suspend fun register(d: Dev) {
+            val r = DeviceRegistrar(d.api, { d.deviceId }, "0.3.0-interop", { d.mls.engine }).register(pushToken = null)
+            ensure(r is Registration.Mls) { "${d.deviceId}: $r" }
+        }
+        val a1 = Dev(url, aId, aTok, UUID.randomUUID().toString(), trusted)
+        val b1 = Dev(url, bId, bTok, UUID.randomUUID().toString(), trusted)
+        runBlocking { register(a1); register(b1) }
+        a1.start(); b1.start()
+        runBlocking { a1.live(); b1.live() }
+
+        check("history: history_before set on the first connect, stable across a rejoin") {
+            val first = await(5_000, "a1 history_before") { a1.hbs.firstOrNull() }
+            Instant.parse(first)
+            a1.client.stop(); a1.start(); a1.live()
+            ensure(a1.hbs.all { it == first }) { "changed across a rejoin: ${a1.hbs}" }
+            first
+        }
+        var copyEventId = ""
+        check("history: plaintext sender copy on A's own device, never acked; B reads → ticks") {
+            a1.chat.sendText(bId, "plain from A $run")
+            val atB = await(15_000, "B gets it") { b1.raw.firstOrNull { it.messageData()?.body == "plain from A $run" } }
+            copyEventId = atB.eventId
+            // The sending device skips its own copy (same client_msg_id): still one row.
+            val atA = await(15_000, "A's copy event") { a1.raw.firstOrNull { it.eventId == atB.eventId } }
+            ensure(atA.messageData()!!.from == aId) { "copy from ${atA.messageData()!!.from}" }
+            ensure(a1.messages.rows.values.count { it.body == "plain from A $run" } == 1) { "duplicate row at A" }
+            b1.chat.sendText(aId, "plain from B $run")
+            await(15_000, "A gets B's") { a1.bodies().firstOrNull { it == "plain from B $run" } }
+            b1.chat.markConversationRead(conv)
+            await(15_000, "A's row read") { a1.messages.rows.values.firstOrNull { it.body == "plain from A $run" && it.status == "READ" } }
+            null
+        }
+        check("history: the DM upgrades to e2ee and carries messages both ways") {
+            val s = MlsUpgrader({ a1.mls.engine }, a1.mlsApi).ensure(conv, aId, bId)
+            ensure(s is E2eeState.Encrypted) { "upgrade: $s" }
+            await(15_000, "B joined") { b1.mls.engine.group(conv) }
+            a1.chat.sendText(bId, "secret from A $run")
+            await(15_000, "B decrypts") { b1.bodies().firstOrNull { it == "secret from A $run" } }
+            b1.chat.sendText(aId, "secret from B $run")
+            await(15_000, "A decrypts") { a1.bodies().firstOrNull { it == "secret from B $run" } }
+            null
+        }
+
+        /** A new install of A: register, connect with since:null, get added by a1, then assert the restored chat. */
+        suspend fun freshInstall(label: String, deviceId: String, previousHb: String?): Dev {
+            val d = Dev(url, aId, aTok, deviceId, trusted, pageLimit = 3)
+            register(d)
+            d.start(); d.live()
+            // §10.3: a1 (same user) is the named committer for A's new device.
+            val m = withTimeoutOrNull(10_000) {
+                var v = a1.memberships.lastOrNull { it.event.deviceId == deviceId && it.event.change == "added" }
+                while (v == null) { delay(50); v = a1.memberships.lastOrNull { it.event.deviceId == deviceId && it.event.change == "added" } }
+                v
+            }?.also { a1.memberships.remove(it) } ?: MembershipAction(MlsMembershipEvent(conv, aId, deviceId, "added"), 0)
+            val r = a1.executor.execute(m.copy(delayMs = 0))
+            ensure(r == MembershipOutcome.Done || r == MembershipOutcome.NotNeeded) { "add $label: $r" }
+            await(20_000, "$label joined from the Welcome") { d.mls.engine.group(conv) }
+            // history_before: present, the same on every page of the join (pageLimit 3 → several sync pages).
+            val hb = d.hbs.firstOrNull() ?: throw AssertionError("$label: no history_before")
+            ensure(d.hbs.size > 1 && d.hbs.all { it == hb }) { "$label pages: ${d.hbs}" }
+            previousHb?.let { ensure(Instant.parse(hb).isAfter(Instant.parse(it))) { "$label: history_before $hb not after $it" } }
+            // Both sides of plaintext, the copy outgoing with read ticks and the same event id as B's event.
+            val rows = d.messages.rows.values.filter { it.conversationId == conv }
+            val mine = rows.firstOrNull { it.body == "plain from A $run" } ?: throw AssertionError("$label: own plaintext missing: ${d.bodies()}")
+            ensure(mine.outgoing && mine.status == "READ") { "$label: own copy ${mine.outgoing}/${mine.status}" }
+            ensure(d.raw.any { it.eventId == copyEventId }) { "$label: copy event id differs" }
+            ensure(rows.any { it.body == "plain from B $run" && !it.outgoing }) { "$label: B's plaintext missing" }
+            // The e2ee part: not decrypted, one marker; no stray undecryptable line.
+            ensure(rows.none { it.body.startsWith("secret from") }) { "$label decrypted pre-install history" }
+            ensure(rows.count { it.clientMsgId == "sys:history:$conv" } == 1) { "$label markers: ${rows.filter { it.system }.map { it.clientMsgId }}" }
+            ensure(rows.none { it.clientMsgId.startsWith("sys:undecryptable") }) { "$label: undecryptable line" }
+            // No notifications: the replay completed as a fresh one, and nothing restored is unread.
+            ensure(d.freshReplayDone == 1 && !d.chat.replayingFresh) { "$label fresh replay: ${d.freshReplayDone}" }
+            ensure(d.messages.unreadIncoming().none { (lk.codegen.risime.data.HistoryMarkers.epochMs(it.serverTs) ?: 0) < Instant.parse(hb).toEpochMilli() }) {
+                "$label: pre-install rows unread"
+            }
+            // New messages decrypt on both of A's devices.
+            b1.chat.sendText(aId, "after $label $run")
+            await(15_000, "$label decrypts B") { d.bodies().firstOrNull { it == "after $label $run" } }
+            await(15_000, "a1 decrypts B") { a1.bodies().firstOrNull { it == "after $label $run" } }
+            d.chat.sendText(bId, "from $label $run")
+            await(15_000, "B decrypts $label") { b1.bodies().firstOrNull { it == "from $label $run" } }
+            await(15_000, "a1 sees $label's send") { a1.bodies().firstOrNull { it == "from $label $run" } }
+            return d
+        }
+
+        var second: Dev? = null
+        check("history (i): a second fresh device for A while the first stays active") {
+            second = freshInstall("second device", UUID.randomUUID().toString(), null)
+            "history_before ${second!!.hbs.first()}"
+        }
+        var reinstall: Dev? = null
+        check("history (ii): a reinstall (new device id; the old install stays listed)") {
+            second!!.client.stop()
+            reinstall = freshInstall("reinstall", UUID.randomUUID().toString(), second!!.hbs.first())
+            null
+        }
+        check("history (iii): logout and login on the same device id (MLS state wiped, new history_before)") {
+            val old = reinstall!!
+            val del = old.api.deleteDevice(old.deviceId) // what logout does (PushManager.unregister)
+            ensure(del is ApiResult.Ok) { "logout DELETE: $del" }
+            old.client.stop()
+            val removed = await(20_000, "mls_membership removed at a1") {
+                a1.memberships.lastOrNull { it.event.deviceId == old.deviceId && it.event.change == "removed" }
+            }
+            a1.memberships.remove(removed)
+            val r = a1.executor.execute(removed.copy(delayMs = 0))
+            ensure(r == MembershipOutcome.Done || r == MembershipOutcome.NotNeeded) { "remove: $r" }
+            val again = freshInstall("re-login", old.deviceId, old.hbs.first())
+            "history_before ${old.hbs.first()} → ${again.hbs.first()}"
+        }
+        // Last: a socket without device_id counts as a legacy app and would block the e2ee upgrade above.
+        check("history: history_before is null without a device_id") {
+            val noDevice = CopyOnWriteArrayList<String?>()
+            val legacy = PhoenixRealtimeClient(http, scope, object : RealtimeListener {
+                override suspend fun cursor(): String? = null
+                override suspend fun onHistoryBefore(ts: String?) { noDevice += ts ?: "null" }
+                override suspend fun onEvents(events: List<Event>) = Unit
+                override suspend fun onLive() = Unit
+                override suspend fun onAuthFailed() = Unit
+            })
+            legacy.start(RealtimeSession(url, aTok, aId))
+            await(15_000, "no-device Live") { legacy.state.value.takeIf { it == ConnectionState.Live } }
+            legacy.stop()
+            ensure(noDevice.isNotEmpty() && noDevice.all { it == "null" }) { "without device_id: $noDevice" }
+            null
         }
     }
 }
