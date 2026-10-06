@@ -10,7 +10,9 @@ config :risime, RisiMe.Repo,
   hostname: "127.0.0.1",
   database: "risime_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: System.schedulers_online() * 2
+  # Capped: the pilot shares this Postgres (max_connections 100) and several sessions run tests at
+  # once; schedulers*2 = 40 per run starved it. Override with TEST_DB_POOL.
+  pool_size: String.to_integer(System.get_env("TEST_DB_POOL", "10"))
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
@@ -53,6 +55,8 @@ config :risime, :notifylk, req_options: [plug: {Req.Test, RisiMe.NotifyLk}]
 # reached through Req.Test stubs.
 config :risime, :push_sender, nil
 config :risime, :push_coalesce_ms, 300
+# v1.13 §16.8: the 3-s call fallback push, shortened for tests.
+config :risime, :call_fallback_ms, 200
 config :risime, :push_retry_ms, 10
 config :risime, :fcm, req_options: [plug: {Req.Test, RisiMe.FCM}]
 
