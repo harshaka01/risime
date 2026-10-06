@@ -1,5 +1,29 @@
 # Android status — 0.2 nightlies
 
+## P3 scrolling on a real device + P4 photos polish — READY
+Commits `a6354c9` (device scroll tests), `45a40e4` (photos going out), `f4e943b` (live 13a2). Gates green:
+`./gradlew assembleDebug testDebugUnitTest` (472 JVM tests, 0 failed); instrumented on redroid Android 14 arm64
+**OK (15 tests)** twice (11 scroll + 4 decoder); `scripts/interop` **OK twice** (86 checks, new 13a2).
+- **Scrolling (P3):** `androidTest/.../ui/ChatScrollDeviceTest` runs the real `ChatMessageList` with the real DM
+  `Bubble` and the group `GroupMessageList` inside the screens' layout (Scaffold, `imePadding`, Composer) in an
+  edge-to-edge adjustResize activity, 240 messages of 1–9 lines with day separators, data through a StateFlow:
+  opens at the latest (preloaded / Room after the first frame); a 50-message replay in emissions (some in one
+  frame); a fresh-install restore in pages (and older history landing under a live message); a group rejoin with
+  and without the old history; the real LatinIME opening/closing (+ a message while typing); a real rotation
+  (`UiAutomation.setRotation`, the activity is recreated; also scrolled-up + 2 unseen survives it); scrolled up
+  (real swipes) + 3 incoming + a 50 batch → "New messages ↓" 53, the viewport doesn't move, the button jumps.
+  **Nothing failed on the device**; a mutation that drops the stick-to-bottom rule fails 6 of the 11.
+  Run: as for the decoder test below (`am instrument -w -e class lk.codegen.risime.ui.ChatScrollDeviceTest …`).
+- **Photos (P4), DM and group alike:** determinate upload % from the upload job's request body (`UploadProgress`,
+  ring + "Uploading 42%"); "Encrypting photo…" step in the attach sheet; "Encrypted · waiting to upload",
+  "Upload interrupted · retrying" (automatic backoff unchanged), "Sending…"; failures "Couldn't send photo · Retry"
+  (§14.7 texts for quota/too large/not e2ee) with a Retry tap target on the photo, also a TalkBack custom action
+  (the merged bubble now reads the photo state). Retry keeps `client_blob_id` (a lost 201 replays 200, even at the
+  quota); a new id only after digest_mismatch/not_found/bad_request; on a waiting upload Retry re-runs the job now
+  (WorkManager REPLACE). Groups: attach (when encrypted), thumbnail, full screen and "📷 Photo" previews and
+  notifications checked; no gap found. Live 13a2: group upload progress 0→100 %, A's row SENT with the blob,
+  lost-201 Retry → same blob, B and C decrypt.
+
 ## v1.12 deleting messages and chats (§15) — READY (receive live, send UI behind a flag)
 **READY** for contract v1.12 §15 (decision 047), following `contract/proposals/reviews/2026-10-06-delete-v1.12-android.md`
 R1–R10. Commits `c792017` (protocol, envelope, AAD, rules, examples), `3a5eb72` (Room v7), `759b6d6` (receive side),
