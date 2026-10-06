@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Build crypto/risime-mls-ffi for THIS host (spark2 aarch64 or laptop x86_64) so JVM unit tests and
+# the live interop gate can load the real MLS core via JNA (decision 033).
+#   scripts/build-rust-host [--debug]      # prints the directory containing libuniffi_risime.so
+set -euo pipefail
+cd "$(dirname "$0")/.."
+CARGO="${CARGO:-$HOME/.cargo/bin/cargo}"; PROFILE=release; flag=(--release)
+[ "${1:-}" = --debug ] && { PROFILE=debug; flag=(); }
+[ -x "$CARGO" ] || { echo "no cargo at $CARGO" >&2; exit 1; }
+(cd crypto && "$CARGO" build -q "${flag[@]}" -p risime-mls-ffi --lib)
+out="$PWD/crypto/target/$PROFILE"
+[ -f "$out/libuniffi_risime.so" ] || { echo "build produced no libuniffi_risime.so" >&2; exit 1; }
+echo "$out"

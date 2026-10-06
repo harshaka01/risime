@@ -26,6 +26,9 @@ defmodule RisiMe.ContractExamplesTest do
               invites_reply.json friend_request.json friend_request_reply.json friends_reply.json
               friend_accept_reply.json block.json signal_friend.json error_not_friends.json
               user_vouched.json)
+  # v1.7 (E2EE/MLS): parse-only placeholders added by root with the contract merge; the server
+  # role replaces them with real checks when it implements §10.
+  @pending_v1_7 ~w(device_put_mls.json device_put_mls_reply.json attestation_keys.json key_packages_upload.json key_packages_count.json key_packages_claim.json key_packages_claim_reply.json mls_group.json mls_commit_request.json mls_commit_reply.json mls_commits_reply.json error_epoch_conflict.json error_not_ready.json msg_send_e2ee.json event_message_e2ee.json event_mls_commit.json event_mls_welcome.json event_mls_membership.json signal_mls_key_packages_low.json error_e2ee_required.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -58,7 +61,12 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
+    assert @files -- (@checked ++ @pending_v1_7) == [],
+           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_7))}"
+  end
+
+  test "v1.7 examples are valid JSON objects (placeholder)" do
+    for name <- @pending_v1_7, do: assert(is_map(example(name)))
   end
 
   setup do

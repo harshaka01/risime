@@ -61,6 +61,28 @@ class ContractExamplesTest {
         "signal_friend.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).also { requireNotNull(it.friend()) } },
         "error_not_friends.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s) },
         "user_vouched.json" to { s -> ProtocolJson.decodeFromString<MeReply>(s) },
+        // v1.7 (E2EE/MLS): parse-only placeholders added by root with the contract merge; the android
+        // role replaces them with typed decoders when it implements §10.
+        "device_put_mls.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "device_put_mls_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "attestation_keys.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "key_packages_upload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "key_packages_count.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "key_packages_claim.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "key_packages_claim_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_commit_request.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_commit_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_commits_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_epoch_conflict.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_not_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "msg_send_e2ee.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_message_e2ee.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_mls_commit.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_mls_welcome.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_mls_membership.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "signal_mls_key_packages_low.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_e2ee_required.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
     )
 
     @Test

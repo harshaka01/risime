@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.6 (Release 0.2)
+# RisiMe Wire Protocol — v1.7 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -409,7 +409,180 @@ Decision 029. This section overrides §1.4 (contacts) and the §6.1 step-1 membe
 Today that makes Harsha ↔ Shenika friends, so no existing chat breaks. It runs in the deploy
 step after `migrate()`.
 
+## 10. End-to-end encryption with MLS (v1.7)
+Decisions 012, 032 and 033.
+
+### 10.0 Principles
+- **The server stores only ciphertext** for E2EE conversations. It routes and orders (epoch
+  compare-and-set) opaque MLS messages, and it can't read content or change membership by itself.
+- **One MLS group per conversation; each device is a leaf.** The MLS group id is
+  `"<conversation_id>#<generation>"`. `generation` starts at 1 and is bumped only when a group must
+  be re-created, so stale events from an earlier generation are dropped.
+- **Attestation:** the server signs each device's binding.
+  - The JWS is EdDSA. Header: `typ` = `risime-attest+jwt`, plus `kid`. Claims:
+    `{"aud":"risime-mls","user_id","device_id","signature_key","iat","v":1}`.
+  - The JWS travels **inside each leaf** (the RFC 9420 `application_id` extension, set in the key
+    package), so every member verifies every leaf **offline, in the MLS core**, against attestation
+    keys pinned in the app.
+  - The leaf credential identity must equal `"<user_id>/<device_id>"`, and the leaf signature key
+    must equal the attested key.
+- **Upgrade, never downgrade.** A conversation becomes e2ee when it's **ready** (§2) and the group
+  is created. After that, plaintext is refused (`e2ee_required`).
+- **Ciphersuite** 0x0001 (`MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`).
+  - **Handshakes (commits) use the PublicMessage framing**, and application messages always use
+    PrivateMessage. Clients keep at least 3 past epochs.
+  - All binary fields are standard base64. Clients must ignore unknown event kinds and fields.
+- **Typing and presence stay unencrypted metadata.** That is documented, not hidden.
+
+### 10.1 Devices, census and attestation
+- **The socket connect** sends the query parameters `device_id` (a stable per-install UUID) and
+  `app_version`, and the server records `last_seen` per device. That builds a **census of every
+  app instance**, including apps that never register for push.
+  - Apps before v1.7 send neither; they're counted per token as "legacy, unknown device".
+- **`PUT /api/v1/me/devices/{device_id}`** gains `"mls": {"signature_key": "<b64 32-byte Ed25519>"}`.
+  - `push_token` becomes optional when `mls` is present (at least one of the two).
+  - The reply is `200 {"attestation": "<JWS>"}` when `mls` is present.
+  - Errors:
+    - `422 invalid_device` (bad key length);
+    - **`503 mls_unavailable`** (the server has no attestation key);
+    - a changed `signature_key` on the same device counts as remove plus add, at most 5 per day.
+- **Push-token cleanup only clears `push_token`** (FCM `UNREGISTERED`, a token moving to another
+  install). Real device removals emit `mls_membership` (§3): `DELETE`, dev logout, eviction beyond
+  10 devices, the 60-day prune, or a changed key.
+- **`GET /api/v1/mls/attestation_keys`** (no auth) → `{"keys": [public JWK, …]}`, with the active
+  key plus still-trusted previous ones. `kid` is the RFC 7638 thumbprint.
+- **`POST /api/v1/me/devices/{device_id}/key_packages`**
+  `{"key_packages": ["<b64>", …], "last_resort": "<b64>" | null}` → `204`.
+  - At most 100 per request and 100 stored per device, each at most 4 KiB.
+  - **One last-resort key package per device**; a new one replaces the old. It must carry the
+    RFC 9420 `last_resort` extension, and clients rotate it weekly.
+  - **`GET …/key_packages/count`** → `{"count": n}`. Clients top up to 50 on sign-in, on join and
+    after a Welcome.
+  - When a device's count drops below 20, the server sends it the ephemeral **signal
+    `mls_key_packages_low`** `{"count": n}`.
+  - Using a last-resort package weakens forward secrecy for that join; this is accepted.
+
+### 10.2 Groups
+- **`POST /api/v1/mls/key_packages/claim`** `{"user_ids": ["uuid", …]}` →
+  `{"devices": [{"user_id", "device_id", "mls": bool, "attestation": "<JWS>" | null, "key_package": "<b64>" | null}]}`
+  - It's allowed for **friends and yourself**. For yourself, your other devices are returned,
+    excluding the calling device.
+  - **All or nothing:** any id that isn't a friend → `not_friends`, and nothing is consumed.
+  - It is atomic: each normal key package is consumed once; the last-resort one is never consumed.
+  - Rate limit: 30 claims per user per minute.
+- **`GET /api/v1/mls/groups/{conversation_id}`** →
+  `{"e2ee": bool, "generation": n, "epoch": n | null, "ready": bool, "missing": [{"user_id", "device_id" | null, "reason": "no_mls" | "legacy_app"}], "devices": [{"user_id", "device_id"}]}`.
+  - **`ready`** means every app instance of both members seen in the last 30 days is
+    MLS-capable, and each member has at least one MLS device.
+- **`POST /api/v1/mls/groups/{conversation_id}/commit`** with body:
+  `{"generation": n, "epoch": e, "commit": "<b64 PublicMessage>", "welcome": "<b64>" | null, "added": [{"user_id","device_id"}], "removed": [{"user_id","device_id"}]}`
+  - **`epoch` is the epoch the commit was built in.** The reply is `200 {"epoch": e + 1}`.
+  - **`409 epoch_conflict {"epoch": current}`**: the client clears its pending commit, catches up,
+    then redoes the change only if it's still needed.
+  - **Epoch 0 creates the group** and must add **all** current MLS devices of both members.
+    - `409 not_ready {"missing": […]}` if the conversation isn't ready.
+    - **Two creators racing:** the loser gets `epoch_conflict`, discards its local group, and joins
+      from the winner's `mls_welcome`.
+  - **Server checks:**
+    - the caller is a member device (or, at epoch 0, a current MLS device of a member);
+    - the members are friends, with no block either way;
+    - each `added` device is a current MLS device of a member and not already in the group;
+    - `removed` may only list devices that are no longer current, or the caller's own user's
+      devices;
+    - `welcome` is present exactly when `added` isn't empty;
+    - `commit` is at most 64 KiB and `welcome` at most 256 KiB;
+    - rate limited.
+
+    The server routes on the declared lists. **Clients verify the commit's actual proposals**
+    against the attestations.
+  - **Ordering:** the compare-and-set and the writing of every resulting inbox event happen in one
+    per-conversation critical section, before the `200`.
+- **`GET /api/v1/mls/groups/{conversation_id}/commits?since_epoch=e`** → `{"commits": [{"epoch", "commit", "from_device"}]}`.
+  This is for recovery after a 409 or a missed event. The server keeps the last 1000 epochs or
+  30 days.
+
+### 10.3 Events and messages (realtime)
+- **`msg:send` for an e2ee conversation:**
+  `{"client_msg_id", "to", "ciphertext": "<b64 PrivateMessage>", "generation": n, "epoch": e, "client_ts"}`.
+  There is **no `body`**, and the reply is unchanged.
+  - **Order of checks:** idempotent resend → `not_friends` → the e2ee checks → rate limit → store.
+  - **Errors:**
+    - **`e2ee_required`**: plaintext sent to an e2ee conversation;
+    - **`stale_epoch`**: `generation` or `epoch` isn't the current one;
+    - `bad_request`: ciphertext sent to a non-e2ee conversation;
+    - `too_long`: ciphertext larger than 16 KiB.
+  - The server **should** also check that the group id and epoch in the PrivateMessage's cleartext
+    header match the JSON fields.
+- **The `message` event for e2ee conversations:**
+  `{"message_id", "client_msg_id", "conversation_id", "from", "to", "from_device", "ciphertext", "generation", "epoch", "server_ts"}`,
+  with **no `body`**.
+  - It goes to the recipient **and the sender's inbox**, so the sender's other devices see it; the
+    sending device skips it by `from_device`.
+  - Status events and acks are unchanged.
+- **Inbox event kinds** (cursor-ordered, delivered offline, one event per member *user*):
+  - **`mls_commit`** `{"conversation_id", "generation", "epoch", "commit", "from_device"}`.
+    - `epoch` is the commit's source epoch.
+    - It goes to **every member user**, including the committer's user (for their other devices)
+      and users whose devices are removed (so a removed device sees `removed_self` and wipes the
+      group).
+    - The committing device skips it.
+  - **`mls_welcome`** `{"conversation_id", "generation", "epoch", "welcome", "to_devices": ["device_id", …]}`.
+    - `epoch` is the new epoch.
+    - Devices not in `to_devices` ignore it. A joining device ignores `mls_commit` events below the
+      Welcome's epoch.
+  - **`mls_membership`** `{"conversation_id", "user_id", "device_id", "change": "added" | "removed"}`.
+    - It goes to every member of each e2ee conversation of that user.
+    - **The committer is named:** one of the same user's other devices commits first; others wait
+      a random 5–30 s and act only if nothing has landed.
+- **Clients process each group's events strictly in `event_id` order.**
+  - A message at a newer epoch than the local state is persisted as pending, in the same
+    transaction as the cursor, and replayed after its commit.
+  - The sender's leaf identity must match `from`/`from_device`. A mismatch, or an unverifiable
+    attestation, is dropped and logged.
+- **No push is sent for `mls_*` events.** Only `message` events wake devices.
+
+### 10.4 Client rules and UI
+- **Storage:** MLS state lives in the **same SQLite database as messages** (a sealed key-value
+  table, decision 033).
+  - Decryption, the plaintext insert, the seen event and the cursor commit in **one** transaction.
+    The MLS core's own begin/commit map to savepoints.
+  - The database key is wrapped by an Android Keystore key that needs no user authentication.
+  - The databases are excluded from backup and from device-to-device transfer.
+- **The outbox** keeps plaintext locally and **encrypts at send time**.
+  - `stale_epoch` → catch up, re-encrypt with the same `client_msg_id`, retry (up to 3 times, then
+    backoff).
+  - `e2ee_required` → encrypt and resend.
+  - A client never merges its own commit before the `200`.
+- **UI:**
+  - e2ee chats show a lock and "End-to-end encrypted".
+  - Chats that aren't ready show "Not end-to-end encrypted yet: <name> needs to update", or
+    "…waiting for <name>'s phone".
+- **Rollout:** a `required` app update brings everyone to a v1.7 app before E2EE is switched on
+  for the pilot.
+- **The dev banner is removed** only when all of these hold:
+  - every conversation of the user is e2ee;
+  - plaintext is no longer offered;
+  - every app version still allowed by the updater speaks v1.7;
+  - the live interop gate covers E2EE;
+  - it is recorded in a decision.
+
+### 10.5 Server storage
+- Postgres:
+  - `devices` gains `mls_signature_key`, `mls_attestation`, `mls_attested_at`, `last_seen_at` and
+    `app_version`;
+  - `mls_key_packages`;
+  - `mls_groups(conversation_id, generation, epoch, e2ee_since)`;
+  - `mls_group_devices`;
+  - `mls_commits`.
+- Ciphertext lives in the Cassandra inbox payloads.
+- The attestation key file is `ATTESTATION_KEY_FILE` (default
+  `~/risime-keys/attestation_ed25519.jwk`, mode 600), created by `mix risime.attestation.gen`.
+  `ATTESTATION_PREVIOUS_KEYS` lists the public keys still trusted during rotation.
+
 ## Changelog
+- **v1.7** (2026-10-06): E2EE with MLS (§10). Adds the device census, attestation, key
+  packages, groups with epoch compare-and-set, ciphertext messages, the `mls_*` events and the
+  readiness check. Additive: conversations upgrade only when every app instance is MLS-capable.
 - **v1.6** (2026-10-06): invites and friends (§9). Invite-only sign-up (with the allowlist kept),
   `User.vouched_by`, friend requests by phone (no registration leak), accept, decline, cancel,
   block, `/contacts` returning friends only, `not_friends` on `msg:send` and `typing`, and the
