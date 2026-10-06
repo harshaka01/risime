@@ -67,6 +67,11 @@ impl MemoryKvStore {
         self.len() == 0
     }
 
+    /// Total bytes of keys and values (tests: state size).
+    pub fn size_bytes(&self) -> usize {
+        self.lock().map.iter().map(|(k, v)| k.len() + v.len()).sum()
+    }
+
     /// Open transaction depth (tests: must be back to 0 after every call).
     pub fn depth(&self) -> usize {
         self.lock().savepoints.len()

@@ -48,6 +48,9 @@ pub enum RisiMlsError {
     Storage(String),
     #[error("mls: {0}")]
     Other(String),
+    /// A group commit breaks the admin policy or the caps (contract v1.9 §12.4).
+    #[error("policy violation: {0}")]
+    PolicyViolation(String),
 }
 
 impl From<MlsError> for RisiMlsError {
@@ -69,6 +72,7 @@ impl From<MlsError> for RisiMlsError {
             MlsError::NoPendingCommit => Self::NoPendingCommit,
             MlsError::Storage(s) => Self::Storage(s),
             MlsError::Other(s) => Self::Other(s),
+            MlsError::PolicyViolation(s) => Self::PolicyViolation(s),
         }
     }
 }
@@ -269,7 +273,7 @@ pub enum IncomingMessage {
         epoch: u64,
     },
     /// If `removed_self` is set, wipe the group (`deleteGroup`). If `discarded_own_pending` is
-    /// set, redo our change if it is still needed.
+    /// set, redo our change if it is still needed. `meta_changed` (groups): re-read `groupMeta`.
     Commit {
         epoch: u64,
         committer: DeviceId,
@@ -277,6 +281,7 @@ pub enum IncomingMessage {
         removed: Vec<DeviceId>,
         removed_self: bool,
         discarded_own_pending: bool,
+        meta_changed: bool,
     },
     /// Our own message, echoed back. Ignore it.
     OwnEcho,
@@ -301,6 +306,7 @@ impl From<Incoming> for IncomingMessage {
                 removed,
                 removed_self,
                 discarded_own_pending,
+                meta_changed,
             } => Self::Commit {
                 epoch,
                 committer: committer.into(),
@@ -308,6 +314,7 @@ impl From<Incoming> for IncomingMessage {
                 removed: devices(removed),
                 removed_self,
                 discarded_own_pending,
+                meta_changed,
             },
             Incoming::OwnEcho => Self::OwnEcho,
         }

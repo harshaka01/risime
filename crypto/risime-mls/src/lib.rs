@@ -16,7 +16,8 @@
 //!
 //! Rules enforced here:
 //! - Ciphersuite [`CIPHERSUITE`].
-//! - Commits use PublicMessage framing; application messages always use PrivateMessage.
+//! - DM commits use PublicMessage framing; `grp:` commits (contract v1.9 §12) and application
+//!   messages always use PrivateMessage.
 //! - [`MAX_PAST_EPOCHS`] past epochs are kept.
 //! - Every leaf is checked by the [`CredentialValidator`]:
 //!   - in key packages we add;
@@ -24,8 +25,13 @@
 //!   - in every leaf a commit adds or replaces.
 //! - Own commits are **pending** until the server accepts them: [`Client::commit_accepted`] or
 //!   [`Client::commit_rejected`].
+//! - `grp:` groups carry [`GroupMeta`] (extension 0xFA01), and every staged commit passes the
+//!   admin policy ([`policy`]); see [`group`].
 
 pub mod attestation;
+pub mod group;
+pub mod meta;
+pub mod policy;
 pub mod storage;
 
 use std::sync::Arc;
@@ -36,6 +42,11 @@ use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 
 pub use attestation::{CredentialValidator, DeviceId, TestAttestor, TrustAnchors};
+pub use group::{
+    CatchUp, GroupCommit, MAX_COMMIT_BYTES, MAX_GROUP_LEAVES, MAX_GROUP_USERS, MAX_INLINE_BYTES,
+    MAX_WELCOME_BYTES, key_package_supports_groups,
+};
+pub use meta::{GROUP_META_EXTENSION, GroupMeta};
 pub use storage::{KvError, KvStore, MemoryKvStore, Provider};
 
 /// X25519 + AES-128-GCM + SHA-256 + Ed25519 (RFC 9420 mandatory suite 0x0001).
@@ -96,6 +107,9 @@ pub enum MlsError {
     /// Any other OpenMLS failure.
     #[error("mls: {0}")]
     Other(String),
+    /// A group commit breaks the admin policy or the caps (contract v1.9 §12.4).
+    #[error("policy violation: {0}")]
+    PolicyViolation(String),
 }
 
 pub type Result<T> = std::result::Result<T, MlsError>;
@@ -172,6 +186,8 @@ pub enum Incoming {
         removed_self: bool,
         /// Our own pending commit was dropped. Redo the change if it is still needed.
         discarded_own_pending: bool,
+        /// The commit changed `group_meta` (`grp:` only); read it with [`Client::group_meta`].
+        meta_changed: bool,
     },
     /// A message this device sent itself, echoed back. Ignore it.
     OwnEcho,
@@ -346,9 +362,16 @@ impl Client {
         .map_err(other)
     }
 
-    /// Leaf capabilities: the defaults plus `last_resort`, so any of our key packages may carry it.
+    /// Leaf capabilities: the defaults plus `last_resort` (so any of our key packages may carry
+    /// it) and `risime.group_meta` (0xFA01, contract v1.9 §12.1: groups-capable).
     fn capabilities() -> Capabilities {
-        Capabilities::new(None, None, Some(&[ExtensionType::LastResort]), None, None)
+        Capabilities::new(
+            None,
+            None,
+            Some(&[ExtensionType::LastResort, group::meta_extension_type()]),
+            None,
+            None,
+        )
     }
 
     fn key_package(&self, last_resort: bool) -> Result<Vec<u8>> {
@@ -428,10 +451,10 @@ impl Client {
             .ok_or(MlsError::UnknownGroup)
     }
 
-    fn join_config() -> MlsGroupJoinConfig {
+    fn join_config(group_id: &[u8]) -> MlsGroupJoinConfig {
         MlsGroupJoinConfig::builder()
             .use_ratchet_tree_extension(true)
-            .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
+            .wire_format_policy(group::wire_policy(group_id))
             .max_past_epochs(MAX_PAST_EPOCHS)
             .build()
     }
@@ -476,8 +499,10 @@ impl Client {
         let (commit, welcome, _group_info) = group
             .add_members(&self.provider, &self.signer, &key_packages)
             .map_err(other)?;
+        let commit = commit.to_bytes().map_err(other)?;
+        self.record_pending(group.group_id().as_slice(), &commit, &added, &[], false)?;
         Ok(PendingCommit {
-            commit: commit.to_bytes().map_err(other)?,
+            commit,
             welcome: Some(welcome.to_bytes().map_err(other)?),
             epoch,
             added,
@@ -488,7 +513,13 @@ impl Client {
     /// Create the group at epoch 0 and stage the commit that adds `key_packages` (all current MLS
     /// devices of both members, contract §10.2). Send it with `epoch` 0. A local epoch-0 group
     /// left over from a lost creation race is replaced.
+    /// `grp:` ids need [`Client::create_group_with_meta`].
     pub fn create_group(&self, group_id: &[u8], key_packages: &[Vec<u8>]) -> Result<PendingCommit> {
+        if group::is_group_id(group_id) {
+            return Err(MlsError::Malformed(
+                "grp: groups are created with create_group_with_meta".into(),
+            ));
+        }
         self.tx(|c| {
             let ext = c.leaf_extensions()?;
             let kps = c.validate_key_packages(key_packages)?;
@@ -518,6 +549,9 @@ impl Client {
     /// [`Client::commit_accepted`].
     pub fn add_members(&self, group_id: &[u8], key_packages: &[Vec<u8>]) -> Result<PendingCommit> {
         self.tx(|c| {
+            if group::is_group_id(group_id) {
+                return Err(MlsError::Malformed("grp: groups use change_members".into()));
+            }
             let mut group = c.load(group_id)?;
             c.check_can_commit(&group)?;
             let kps = c.validate_key_packages(key_packages)?;
@@ -527,6 +561,9 @@ impl Client {
 
     /// Stage a commit that removes `devices`. It is not merged; see [`Client::commit_accepted`].
     pub fn remove_members(&self, group_id: &[u8], devices: &[DeviceId]) -> Result<PendingCommit> {
+        if group::is_group_id(group_id) {
+            return Err(MlsError::Malformed("grp: groups use change_members".into()));
+        }
         self.tx(|c| {
             let mut group = c.load(group_id)?;
             c.check_can_commit(&group)?;
@@ -551,8 +588,10 @@ impl Client {
             let (commit, _welcome, _gi) = group
                 .remove_members(&c.provider, &c.signer, &indices)
                 .map_err(other)?;
+            let commit = commit.to_bytes().map_err(other)?;
+            c.record_pending(group_id, &commit, &[], devices, false)?;
             Ok(PendingCommit {
-                commit: commit.to_bytes().map_err(other)?,
+                commit,
                 welcome: None,
                 epoch,
                 added: vec![],
@@ -579,6 +618,7 @@ impl Client {
                 return Err(MlsError::NoPendingCommit);
             }
             group.merge_pending_commit(&c.provider).map_err(other)?;
+            c.clear_pending_record(group_id)?;
             Ok(group.epoch().as_u64())
         })
     }
@@ -591,6 +631,7 @@ impl Client {
             if group.pending_commit().is_none() {
                 return Err(MlsError::NoPendingCommit);
             }
+            c.clear_pending_record(group_id)?;
             if group.epoch().as_u64() == 0 {
                 group.delete(c.provider.storage()).map_err(storage)
             } else {
@@ -618,7 +659,7 @@ impl Client {
                 return Err(MlsError::Malformed("not a Welcome".into()));
             };
             let processed =
-                ProcessedWelcome::new_from_welcome(&c.provider, &Self::join_config(), welcome)
+                ProcessedWelcome::new_from_welcome(&c.provider, &Self::join_config(b""), welcome)
                     .map_err(|e| MlsError::Welcome(e.to_string()))?;
             // Unverified until staged, but any replacement below is rolled back if staging or the
             // leaf checks fail.
@@ -638,9 +679,12 @@ impl Client {
             {
                 return Err(MlsError::Welcome("group info mismatch".into()));
             }
-            let group = staged
+            let mut group = staged
                 .into_group(&c.provider)
                 .map_err(|e| MlsError::Welcome(e.to_string()))?;
+            if group::is_group_id(gid.as_slice()) {
+                c.finish_group_join(&mut group)?;
+            }
             for m in group.members() {
                 let leaf = group
                     .public_group()
@@ -755,10 +799,18 @@ impl Client {
                     .remove_proposals()
                     .map(|r| Self::device_at(&group, r.remove_proposal().removed()))
                     .collect::<Result<Vec<_>>>()?;
+                let meta_changed = if group::is_group_id(group_id) {
+                    self.check_staged_policy(&group, &staged, &committer, &added, &removed)?
+                } else {
+                    false
+                };
                 let removed_self = staged.self_removed();
                 group
                     .merge_staged_commit(&self.provider, *staged)
                     .map_err(other)?;
+                if had_pending {
+                    self.clear_pending_record(group_id)?;
+                }
                 Ok(Incoming::Commit {
                     epoch: group.epoch().as_u64(),
                     committer,
@@ -766,6 +818,7 @@ impl Client {
                     removed,
                     removed_self,
                     discarded_own_pending: had_pending,
+                    meta_changed,
                 })
             }
             ProcessedMessageContent::ProposalMessage(_)
@@ -781,6 +834,7 @@ impl Client {
     pub fn delete_group(&self, group_id: &[u8]) -> Result<()> {
         self.tx(|c| {
             let mut group = c.load(group_id)?;
+            c.clear_pending_record(group_id)?;
             group.delete(c.provider.storage()).map_err(storage)
         })
     }
@@ -834,7 +888,7 @@ fn map_process_error<E: std::fmt::Display>(e: ProcessMessageError<E>) -> MlsErro
             v @ (ValidationError::UnableToDecrypt(_) | ValidationError::InvalidSignature),
         ) => MlsError::DecryptionFailed(v.to_string()),
         ProcessMessageError::IncompatibleWireFormat => {
-            MlsError::Malformed("handshake must be a PublicMessage".into())
+            MlsError::Malformed("wrong wire format for this group's handshakes".into())
         }
         ProcessMessageError::StorageError(s) => MlsError::Storage(s.to_string()),
         other_err => MlsError::Other(other_err.to_string()),
