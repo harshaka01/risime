@@ -72,6 +72,12 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Log out") }
+            androidx.compose.material3.TextButton(
+                onClick = vm::askLogoutAndDelete,
+                enabled = !s.busy,
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(lk.codegen.risime.ui.common.LOGOUT_DELETE_LABEL) }
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -88,8 +94,8 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
             dismissButton = { TextButton(onClick = vm::cancelServerChange) { Text("Cancel") } },
         )
     }
-    if (s.confirmLogout) {
-        lk.codegen.risime.ui.common.LogoutConfirmDialog(onConfirm = vm::logout, onDismiss = vm::cancelLogout)
+    if (s.confirmLogout || s.confirmDeleteChats) {
+        lk.codegen.risime.ui.common.LogoutConfirmDialog(onConfirm = vm::logout, onDismiss = vm::cancelLogout, deleteChats = s.confirmDeleteChats)
     }
 }
 

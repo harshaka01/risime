@@ -29,7 +29,8 @@ class LogoutCallSitesTest {
     @Test fun wipesAreReachableOnlyThroughLocalAccount() {
         assertEquals(setOf("AppContainer.kt", "Daos.kt"), files(Regex("""allChatData\(""")))
         assertEquals(setOf("AppContainer.kt"), files(Regex("""wipeDb\(""")))
-        assertEquals("only clearLocal (explicit logout) and switchServer", 2, sites(Regex("""localAccount\.(logout|switchServer)\(""")).size)
+        assertEquals("only clearLocal (confirmed delete) and switchServer", 2, sites(Regex("""localAccount\.(logoutAndDeleteChats|switchServer)\(""")).size)
+        assertEquals(setOf("AppContainer.kt"), files(Regex("""localAccount\.(logoutKeepChats|logoutAndDeleteChats)\(""")))
         // Only the explicit "Log out" (Settings, chats menu) calls the wiping logout; escape screens
         // (blocked, identity conflict, locked, required update, confirm phone) use signOutKeepChats.
         assertEquals(setOf("ChatsViewModel.kt", "SettingsViewModel.kt"), files(Regex("""\bc\.logout\(""")))
@@ -37,6 +38,14 @@ class LogoutCallSitesTest {
             setOf("AppContainer.kt", "AuthScreens.kt", "AuthUi.kt", "UpdateUi.kt", "PhoneVerifyViewModel.kt"),
             files(Regex("""signOutKeepChats\(""")),
         )
+        // Decision 050: only the labelled "Log out and delete chats" wipes or removes the device.
+        val app = main.walkTopDown().first { it.name == "AppContainer.kt" }.readLines()
+        val clear = app.withIndex().filter { (_, l) -> l.trim() == "clearLocal()" }
+        assertEquals("clearLocal() is called once, from the logout", 1, clear.size)
+        assertTrue("clearLocal() only when the user picked delete", app[clear.single().index - 2].contains("if (confirmed.deleteChats)"))
+        val unreg = app.filter { it.contains("push.unregister()") }
+        assertEquals(1, unreg.size)
+        assertTrue("DELETE /me/devices only for delete: ${unreg.single()}", unreg.single().contains("if (confirmed.deleteChats) push.unregister() else push.unregisterPushOnly()"))
         // Nothing outside the confirmed logout calls the container's logout.
         val callers = sites(Regex("""\bc\.logout\(|\bcontainer\.logout\("""))
         assertTrue("every caller passes the dialog's confirmation: $callers", callers.all { site ->

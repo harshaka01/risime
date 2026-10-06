@@ -781,10 +781,13 @@ class AppContainer(
     }
 
     /**
-     * Logout (decision 014): revoke the refresh token, end the Keycloak session in the browser,
-     * delete the key pair, wipe local chat data. Dev tokens: POST /auth/logout as before.
+     * Logout (decisions 014, 050): revoke the refresh token, end the Keycloak session in the
+     * browser, delete the key pair. Dev tokens: POST /auth/logout (the server keeps the device).
+     * A plain logout unregisters push only and keeps the chats, the MLS state and the device id;
+     * [confirmed].deleteChats ("Log out and delete chats from this phone") removes the device on
+     * the server (it leaves its groups) and wipes local chat data.
      */
-    suspend fun logout(@Suppress("UNUSED_PARAMETER") confirmed: lk.codegen.risime.data.UserConfirmation) {
+    suspend fun logout(confirmed: lk.codegen.risime.data.UserConfirmation) {
         notifier.cancelAll()
         val end = auth.issuerAndClient()?.let { (issuer, _) -> auth.idToken()?.let { EndSession(issuer, it) } }
         try {
@@ -792,7 +795,10 @@ class AppContainer(
             // blocks or reverts the local logout.
             // §15.7 (android S-f): deletes and clears done just before logout reach the server (best effort, bounded).
             withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { engine.flushDeletes() } }
-            withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { push.unregister() } } // DELETE /me/devices while the token still works
+            withTimeoutOrNull(LOGOUT_NETWORK_MS) {
+                // While the token still works: DELETE /me/devices (leave the groups) or push only.
+                runCatching { if (confirmed.deleteChats) push.unregister() else push.unregisterPushOnly() }
+            }
             if (sessionStore.current()?.kind == AuthKind.DEV) withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { api.logout() } }
             withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { auth.signOut() } }
         } finally {
@@ -800,8 +806,13 @@ class AppContainer(
                 runCatching { auth.forgetLocally() }
                 blocked.value = null
                 signInNotice.value = null
-                clearFriendsMemory()
-                clearLocal()
+                if (confirmed.deleteChats) {
+                    clearFriendsMemory()
+                    clearLocal()
+                } else {
+                    realtime.stop()
+                    localAccount.logoutKeepChats()
+                }
             }
         }
         // Keycloak end_session in the browser, after the local logout: its failure (e.g. an
@@ -864,7 +875,7 @@ class AppContainer(
     /** Explicit logout only: forget the account and delete local chats. */
     private suspend fun clearLocal() {
         realtime.stop()
-        localAccount.logout()
+        localAccount.logoutAndDeleteChats()
     }
 
     /** Only a 401 (refresh already tried) matters on the phone screen: back to sign-in, data kept. */

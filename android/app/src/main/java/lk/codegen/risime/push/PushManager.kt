@@ -53,7 +53,13 @@ class PushManager(
         return r
     }
 
-    /** At logout, while the token is still valid (idempotent on the server). */
+    /** Plain logout (decision 050), while the token is still valid: push stops, the device stays. */
+    suspend fun unregisterPushOnly() {
+        if ((!available && !mlsAvailable()) || store.current() == null) return
+        api.unregisterPush(store.deviceId())
+    }
+
+    /** "Log out and delete chats", while the token is still valid (idempotent on the server). */
     suspend fun unregister() {
         if ((!available && !mlsAvailable()) || store.current() == null) return
         api.deleteDevice(store.deviceId())

@@ -192,6 +192,9 @@ class ApiClient(
     /** §8.1: at logout (idempotent). */
     suspend fun deleteDevice(deviceId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "me/devices/$deviceId", null)
 
+    /** Decision 050: plain logout unregisters push only; the device stays in its groups. */
+    suspend fun unregisterPush(deviceId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "me/devices/$deviceId/push_token", null)
+
     // ---- §9 invites and friends ----
     suspend fun createInvite(body: InviteCreate): ApiResult<InviteReply> = call("POST", "invites", body)
 

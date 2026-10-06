@@ -11,6 +11,7 @@ import lk.codegen.risime.net.ApiResult
 import lk.codegen.risime.net.User
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -41,7 +42,10 @@ class SettingsViewModelTest {
             session.value = null
         }
 
+        val deleteChoices = mutableListOf<Boolean>()
+
         override suspend fun logout(confirmed: lk.codegen.risime.data.UserConfirmation) {
+            deleteChoices += confirmed.deleteChats
             loggedOut++
             session.value = null
         }
@@ -143,5 +147,19 @@ class SettingsViewModelTest {
         assertEquals(0, backend.loggedOut)
         vm.logout(lk.codegen.risime.data.testConfirmation())
         assertEquals(1, backend.loggedOut)
+        assertEquals(listOf(false), backend.deleteChoices)
+    }
+
+    /** Decision 050: the labelled wipe is a separate confirmation and carries the choice. */
+    @Test fun logoutAndDeleteIsSeparateAndConfirmed() {
+        vm.askLogoutAndDelete()
+        assertTrue(vm.state.value.confirmDeleteChats)
+        assertFalse(vm.state.value.confirmLogout)
+        assertEquals(0, backend.loggedOut)
+        vm.cancelLogout()
+        assertFalse(vm.state.value.confirmDeleteChats)
+        vm.askLogoutAndDelete()
+        vm.logout(lk.codegen.risime.data.testConfirmation(deleteChats = true))
+        assertEquals(listOf(true), backend.deleteChoices)
     }
 }

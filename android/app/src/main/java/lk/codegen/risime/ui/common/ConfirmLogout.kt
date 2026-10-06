@@ -10,16 +10,35 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 
 const val LOGOUT_CONFIRM_TITLE = "Log out?"
-const val LOGOUT_CONFIRM_TEXT = "This deletes the chats on this phone."
+const val LOGOUT_CONFIRM_TEXT =
+    "Your chats stay on this phone, encrypted, and come back when you sign in again with this account."
 
-/** The confirmation itself (stateless): "Log out" deletes local chats, so it is never one tap. */
+/** Decision 050: the separate, clearly labelled wipe (menu item, dialog title and button). */
+const val LOGOUT_DELETE_LABEL = "Log out and delete chats from this phone"
+const val LOGOUT_DELETE_TITLE = "Log out and delete chats?"
+const val LOGOUT_DELETE_TEXT =
+    "This deletes all chats, photos and encryption keys on this phone. Signing in again starts with " +
+        "no earlier messages on this phone. This can't be undone."
+
+/**
+ * The confirmation itself (stateless); logging out is never one tap. [deleteChats] picks the
+ * labelled wipe; otherwise it is the plain logout that keeps the chats (decision 050).
+ */
 @Composable
-fun LogoutConfirmDialog(onConfirm: (lk.codegen.risime.data.UserConfirmation) -> Unit, onDismiss: () -> Unit) {
+fun LogoutConfirmDialog(
+    onConfirm: (lk.codegen.risime.data.UserConfirmation) -> Unit,
+    onDismiss: () -> Unit,
+    deleteChats: Boolean = false,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(LOGOUT_CONFIRM_TITLE) },
-        text = { Text(LOGOUT_CONFIRM_TEXT) },
-        confirmButton = { TextButton(onClick = { onConfirm(lk.codegen.risime.data.UserConfirmation.fromConfirmDialog()) }) { Text("Log out") } },
+        title = { Text(if (deleteChats) LOGOUT_DELETE_TITLE else LOGOUT_CONFIRM_TITLE) },
+        text = { Text(if (deleteChats) LOGOUT_DELETE_TEXT else LOGOUT_CONFIRM_TEXT) },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(lk.codegen.risime.data.UserConfirmation.fromConfirmDialog(deleteChats)) }) {
+                Text(if (deleteChats) "Delete chats and log out" else "Log out")
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

@@ -72,6 +72,8 @@ data class SettingsUiState(
     val nameError: String? = null,
     val nameSaved: Boolean = false,
     val confirmLogout: Boolean = false,
+    /** Decision 050: the labelled wipe's confirmation is open. */
+    val confirmDeleteChats: Boolean = false,
     val busy: Boolean = false,
     val authOverride: String = "AUTO",
 )
@@ -150,12 +152,15 @@ class SettingsViewModel(private val backend: SettingsBackend) : ViewModel() {
         }
     }
 
-    fun askLogout() = _state.update { it.copy(confirmLogout = true) }
+    fun askLogout() = _state.update { it.copy(confirmLogout = true, confirmDeleteChats = false) }
 
-    fun cancelLogout() = _state.update { it.copy(confirmLogout = false) }
+    /** Decision 050: "Log out and delete chats from this phone". */
+    fun askLogoutAndDelete() = _state.update { it.copy(confirmLogout = false, confirmDeleteChats = true) }
+
+    fun cancelLogout() = _state.update { it.copy(confirmLogout = false, confirmDeleteChats = false) }
 
     fun logout(confirmed: lk.codegen.risime.data.UserConfirmation) {
-        _state.update { it.copy(confirmLogout = false, busy = true) }
+        _state.update { it.copy(confirmLogout = false, confirmDeleteChats = false, busy = true) }
         viewModelScope.launch { backend.logout(confirmed) }
     }
 }

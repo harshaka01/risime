@@ -3,15 +3,16 @@ package lk.codegen.risime.data
 import lk.codegen.risime.net.User
 
 /**
- * Proof that the user confirmed "Log out" in the confirm dialog. Logout deletes local chats, so
- * [lk.codegen.risime.AppContainer.logout] requires one: no automatic path (refresh failure, 401,
- * identity check, recomposition) can log out. Only `ui/common/ConfirmLogout.kt` creates it (a unit
- * test greps the call sites).
+ * Proof that the user confirmed "Log out" (or "Log out and delete chats from this phone") in its
+ * confirm dialog. [lk.codegen.risime.AppContainer.logout] requires one: no automatic path (refresh
+ * failure, 401, identity check, recomposition) can log out. Only `ui/common/ConfirmLogout.kt`
+ * creates it (a unit test greps the call sites). [deleteChats] = the user picked the labelled
+ * delete action (decision 050); a plain logout keeps the chats, the MLS state and the device id.
  */
-class UserConfirmation private constructor() {
+class UserConfirmation private constructor(val deleteChats: Boolean) {
     companion object {
         /** Call only from the confirm dialog's confirm button (see LogoutCallSitesTest). */
-        fun fromConfirmDialog(): UserConfirmation = UserConfirmation()
+        fun fromConfirmDialog(deleteChats: Boolean = false): UserConfirmation = UserConfirmation(deleteChats)
     }
 }
 
@@ -20,7 +21,7 @@ enum class SignInDecision { KEEP, WIPED, CANCELLED }
 
 /** Why local chat data is deleted. These are the only reasons (P0 nightly.10, hotfix rules). */
 enum class WipeReason {
-    /** The user confirmed "Log out" (Settings or the chats menu only). */
+    /** The user confirmed "Log out and delete chats from this phone" (Settings or the chats menu only). */
     LOGOUT,
 
     /** The user confirmed a different server: its tokens and data don't belong to the new one. */
@@ -84,8 +85,15 @@ class LocalAccount(
     /** Session ended / token rejected / key invalidated: back to sign-in, chats and owner kept. */
     suspend fun signOutKeepData() = store.clearLogin(forgetUser = false)
 
-    /** Explicit, confirmed logout. */
-    suspend fun logout() {
+    /**
+     * Decision 050: confirmed plain "Log out". The login goes, everything else stays (chats, MLS
+     * state, device id, the owner): the same account signs back in with no rejoin and no gap; a
+     * different account is asked first ([beforeSignIn]).
+     */
+    suspend fun logoutKeepChats() = store.clearLogin(forgetUser = false)
+
+    /** Confirmed "Log out and delete chats from this phone": today's full wipe. */
+    suspend fun logoutAndDeleteChats() {
         store.clearLogin(forgetUser = true)
         wipe(WipeReason.LOGOUT)
     }

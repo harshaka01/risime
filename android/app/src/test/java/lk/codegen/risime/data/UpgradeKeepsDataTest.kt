@@ -195,13 +195,28 @@ class UpgradeKeepsDataTest : ReleasedInstallFixture() {
         c.db.close()
     }
 
-    @Test fun confirmedLogoutWipesLocallyEvenWithTheServerUnreachable() {
+    @Test fun confirmedLogoutAndDeleteWipesLocallyEvenWithTheServerUnreachable() {
         writeReleasedDb(4)
         writeReleasedPrefs(me, signedIn = true) // server_url points at a closed port
         val c = container()
-        runBlocking { c.logout(testConfirmation()) }
+        runBlocking { c.logout(testConfirmation(deleteChats = true)) }
         assertEquals(0 to 0, c.counts())
         assertNull(runBlocking { c.sessionStore.current() })
+        c.db.close()
+    }
+
+    /** Decision 050: a plain logout keeps the chats and the owner, even with the server unreachable. */
+    @Test fun plainLogoutKeepsTheChatsEvenWithTheServerUnreachable() {
+        writeReleasedDb(4)
+        writeReleasedPrefs(me, signedIn = true)
+        val c = container()
+        val before = c.counts()
+        val device = runBlocking { c.sessionStore.deviceId() }
+        runBlocking { c.logout(testConfirmation()) }
+        assertEquals(before, c.counts())
+        assertNull(runBlocking { c.sessionStore.current() })
+        assertEquals(device, runBlocking { c.sessionStore.deviceId() })
+        assertEquals(me, runBlocking { c.sessionStore.lastUserId() })
         c.db.close()
     }
 

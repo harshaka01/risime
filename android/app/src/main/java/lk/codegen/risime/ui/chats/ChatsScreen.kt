@@ -69,6 +69,7 @@ fun ChatsScreen(
     val friends by vm.friendsState.collectAsStateWithLifecycle()
     var menu by remember { mutableStateOf(false) }
     var askLogout by remember { mutableStateOf(false) }
+    var askLogoutDelete by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
     // §15.7: chat-list long-press → Clear chat / Delete chat (always on: local + my own inbox).
     var chatMenuFor by remember { mutableStateOf<ChatRow?>(null) }
@@ -89,13 +90,15 @@ fun ChatsScreen(
     clearAsk?.let { (r, hide) ->
         lk.codegen.risime.ui.chat.ClearChatDialog(hide, onConfirm = { clearAsk = null; vm.clearChat(r, hide) }, onDismiss = { clearAsk = null })
     }
-    if (askLogout) {
+    if (askLogout || askLogoutDelete) {
         lk.codegen.risime.ui.common.LogoutConfirmDialog(
             onConfirm = { confirmed ->
                 askLogout = false
+                askLogoutDelete = false
                 vm.logout(confirmed)
             },
-            onDismiss = { askLogout = false },
+            onDismiss = { askLogout = false; askLogoutDelete = false },
+            deleteChats = askLogoutDelete,
         )
     }
     Scaffold(
@@ -120,6 +123,13 @@ fun ChatsScreen(
                             menu = false
                             askLogout = true
                         })
+                        DropdownMenuItem(
+                            text = { Text(lk.codegen.risime.ui.common.LOGOUT_DELETE_LABEL, color = MaterialTheme.colorScheme.error) },
+                            onClick = {
+                                menu = false
+                                askLogoutDelete = true
+                            },
+                        )
                     }
                 },
             )

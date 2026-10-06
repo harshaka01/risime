@@ -99,9 +99,32 @@ class LocalAccountTest {
         assertTrue(wipes.isEmpty())
     }
 
-    @Test fun explicitLogoutWipesAndForgetsTheOwner() = runBlocking {
+    /** Decision 050: plain "Log out" keeps everything; the same account resumes without asking or wiping. */
+    @Test fun plainLogoutKeepsChatsAndTheOwner() = runBlocking {
         store.saveOidcLogin(user(a))
-        account.logout()
+        val device = store.deviceId()
+        account.logoutKeepChats()
+        assertNull(store.current())
+        assertEquals(a, store.lastUserId())
+        assertEquals(device, store.deviceId())
+        assertTrue(wipes.isEmpty())
+        assertEquals(SignInDecision.KEEP, account.beforeSignIn(user(a)) { _, _ -> error("same account: never asks") })
+        assertTrue(wipes.isEmpty())
+    }
+
+    /** Decision 050: after a plain logout a different account is asked first; only yes wipes. */
+    @Test fun plainLogoutThenADifferentAccountAsksThenWipes() = runBlocking {
+        store.saveOidcLogin(user(a))
+        account.logoutKeepChats()
+        assertEquals(SignInDecision.CANCELLED, account.beforeSignIn(user(b)) { _, _ -> false })
+        assertTrue(wipes.isEmpty())
+        assertEquals(SignInDecision.WIPED, account.beforeSignIn(user(b)) { _, _ -> true })
+        assertEquals(listOf(WipeReason.DIFFERENT_ACCOUNT), wipes)
+    }
+
+    @Test fun logoutAndDeleteChatsWipesAndForgetsTheOwner() = runBlocking {
+        store.saveOidcLogin(user(a))
+        account.logoutAndDeleteChats()
         assertEquals(listOf(WipeReason.LOGOUT), wipes)
         assertNull(store.current())
         assertNull(store.lastUserId())

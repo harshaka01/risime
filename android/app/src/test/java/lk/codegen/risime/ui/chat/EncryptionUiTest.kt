@@ -92,3 +92,27 @@ class EncryptionUiTest {
         assertFalse(ABOUT_E2EE_TEXT.contains("0.3"))
     }
 }
+
+/** Decision 050: plain "Log out" says the chats stay; the labelled delete is its own dialog. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = Application::class)
+class LogoutDialogsTest {
+    @get:Rule val rule = createComposeRule()
+
+    @Test fun plainLogoutKeepsChats() {
+        var got: Boolean? = null
+        rule.setContent { RisiMeTheme { lk.codegen.risime.ui.common.LogoutConfirmDialog({ got = it.deleteChats }, {}) } }
+        rule.onNodeWithText(lk.codegen.risime.ui.common.LOGOUT_CONFIRM_TEXT).assertIsDisplayed()
+        rule.onNodeWithText("Log out").performClick()
+        assertEquals(false, got)
+    }
+
+    @Test fun deleteChatsIsLabelledAndCarriesTheChoice() {
+        var got: Boolean? = null
+        rule.setContent { RisiMeTheme { lk.codegen.risime.ui.common.LogoutConfirmDialog({ got = it.deleteChats }, {}, deleteChats = true) } }
+        rule.onNodeWithText(lk.codegen.risime.ui.common.LOGOUT_DELETE_TITLE).assertIsDisplayed()
+        rule.onNodeWithText(lk.codegen.risime.ui.common.LOGOUT_DELETE_TEXT).assertIsDisplayed()
+        rule.onNodeWithText("Delete chats and log out").performClick()
+        assertEquals(true, got)
+    }
+}
