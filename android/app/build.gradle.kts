@@ -131,6 +131,9 @@ android {
     packaging {
         // JNA ships ABIs Android 8+ can't run (minSdk 26); keep the APK lean.
         jniLibs.excludes += listOf("lib/armeabi/**", "lib/mips/**", "lib/mips64/**")
+        // §16.9 (android A1): the WebRTC .so only for arm64-v8a and x86_64 (the emulator); the MLS core
+        // keeps all four ABIs. A 32-bit phone can't load it and never advertises `calls`.
+        jniLibs.excludes += listOf("lib/armeabi-v7a/*jingle_peerconnection_so.so", "lib/x86/*jingle_peerconnection_so.so")
         // Compress native libs (extracted at install): the MLS core for 4 ABIs is ~19 MB stored,
         // ~7 MB compressed, and every update is a sideloaded download (decision 037).
         jniLibs.useLegacyPackaging = true
@@ -192,6 +195,9 @@ dependencies {
 
     // JNA for the UniFFI bindings (only with the Rust toolchain: the laptop builds without crypto).
     if (cryptoToolchain) implementation(libs.jna) { artifact { type = "aar" } }
+    // §16.9 1:1 voice calls: libwebrtc (LiveKit's prefixed build, livekit.org.webrtc) and core-telecom.
+    implementation(libs.webrtc.android.prefixed)
+    implementation(libs.androidx.core.telecom)
     implementation(libs.emoji2.emojipicker) // composer + reaction picker (downloadable EmojiCompat font, no bundled font)
     testImplementation(libs.junit)
     androidTestImplementation(libs.junit)
@@ -374,4 +380,30 @@ if (cryptoToolchain && File(repoDir, "scripts/build-rust-host").canExecute()) {
             if (dir.isNotEmpty()) (this as Test).systemProperty("jna.library.path", dir)
         }
     }
+}
+
+// ---- §16.9 (android A1): a second libwebrtc copy in the APK fails the build ----
+abstract class CheckSingleWebRtc : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val libs: DirectoryProperty
+
+    @get:OutputFile abstract val stamp: RegularFileProperty
+
+    @TaskAction
+    fun check() {
+        libs.get().asFile.listFiles()?.filter { it.isDirectory }?.forEach { abi ->
+            val copies = abi.listFiles { f -> f.name.endsWith("jingle_peerconnection_so.so") }?.map { it.name }.orEmpty()
+            if (copies.size > 1) throw GradleException("two libwebrtc copies in ${abi.name}: $copies (must equal livekit-android's single build)")
+        }
+        stamp.get().asFile.writeText("ok")
+    }
+}
+for (v in listOf("Debug", "Release")) {
+    val check = tasks.register<CheckSingleWebRtc>("check${v}SingleWebRtc") {
+        dependsOn("merge${v}NativeLibs")
+        libs.set(layout.buildDirectory.dir("intermediates/merged_native_libs/${v.lowercase()}/merge${v}NativeLibs/out/lib"))
+        stamp.set(layout.buildDirectory.file("singleWebRtc/$v.txt"))
+    }
+    tasks.matching { it.name == "assemble$v" }.configureEach { dependsOn(check) }
 }

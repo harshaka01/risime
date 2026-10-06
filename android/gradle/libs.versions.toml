@@ -26,6 +26,10 @@ jna = "5.19.1"
 icu4j = "78.3"
 emojipicker = "1.7.0"
 robolectric = "4.17"
+# §16.9 (android A1): LiveKit's libwebrtc build. MUST EQUAL livekit-android's pom (2.29.0 pins
+# 144.7559.14), so v1.14 adds only the LiveKit Kotlin SDK on the same native library.
+webrtc = "144.7559.14"
+coreTelecom = "1.0.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -68,6 +72,9 @@ icu4j = { module = "com.ibm.icu:icu4j", version.ref = "icu4j" }
 emoji2-emojipicker = { module = "androidx.emoji2:emoji2-emojipicker", version.ref = "emojipicker" }
 androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
 androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }
+
+webrtc-android-prefixed = { module = "io.github.webrtc-sdk:android-prefixed", version.ref = "webrtc" }
+androidx-core-telecom = { module = "androidx.core:core-telecom", version.ref = "coreTelecom" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
