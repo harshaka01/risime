@@ -58,9 +58,9 @@ defmodule RisiMe.ContractExamplesTest do
                    image_payload_bad_key.json group_meta_icon.json blob_upload_media_reply.json
                    blob_usage_reply.json device_put_images.json mls_group_images_ready.json
                    error_not_e2ee.json error_storage_full.json error_bad_media_type.json)
-  # v1.12 (deleting messages and chats, §15): parse-only placeholders added by root with the
-  # contract merge; the server role replaces them with real checks when it implements §15.
-  @pending_v1_12 ~w(delete_payload.json delete_payload_bad.json msg_delete_everyone_group.json
+  # v1.12 (deleting messages and chats, §15): checked in the "v1.12" describe below. The `delete`
+  # envelopes travel inside MLS: they are checked against the §15.3 strict validation instead.
+  @checked_v1_12 ~w(delete_payload.json delete_payload_bad.json msg_delete_everyone_group.json
                    msg_delete_everyone_dm.json msg_delete_me.json msg_delete_reply.json
                    msg_delete_reply_gone.json event_delete_group.json event_delete_dm.json
                    event_delete_dm_e2ee.json error_delete_too_old.json error_not_sender.json
@@ -97,12 +97,8 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    covered = @checked ++ @checked_v1_9 ++ @checked_v1_10 ++ @checked_v1_11 ++ @pending_v1_12
+    covered = @checked ++ @checked_v1_9 ++ @checked_v1_10 ++ @checked_v1_11 ++ @checked_v1_12
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
-  end
-
-  test "v1.12 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_12, do: assert(is_map(example(name)))
   end
 
   setup do
@@ -1515,6 +1511,303 @@ defmodule RisiMe.ContractExamplesTest do
       old = Ecto.UUID.generate()
       :ok = RisiMe.MLS.record_instance(a.user.id, old, nil, "0.2.0")
       assert RisiMe.MLS.Images.missing([a.user.id]) == []
+    end
+  end
+
+  ## v1.12 (§15)
+
+  describe "v1.12" do
+    setup :with_attestation_key
+
+    alias RisiMe.MLS.Wire
+
+    defp d_device(user, caps) do
+      dev = Ecto.UUID.generate()
+
+      {:ok, _} =
+        RisiMe.Devices.register(user.user.id, dev, %{
+          "platform" => "android",
+          "mls" => %{"signature_key" => b64(), "capabilities" => caps}
+        })
+
+      :ok = RisiMe.MLS.record_instance(user.user.id, dev, nil, "0.3.0")
+      dev
+    end
+
+    defp d_ct(targets),
+      do:
+        Wire.encode_private_message("g", 1, Wire.delete_aad(targets), b64raw(), b64raw())
+        |> Base.encode64()
+
+    defp b64raw, do: :crypto.strong_rand_bytes(24)
+
+    # A push on a socket of `user` with `device` (nil = legacy), as the wire sees the reply.
+    defp d_push(user, device, event, payload) do
+      params = %{"token" => user.token}
+      params = if device, do: Map.put(params, "device_id", device), else: params
+      {:ok, sock} = connect(UserSocket, params)
+      {:ok, _, chan} = subscribe_and_join(sock, InboxChannel, "inbox:" <> user.user.id, %{})
+      ref = push(chan, event, payload)
+
+      receive do
+        %Phoenix.Socket.Reply{ref: ^ref, status: st, payload: p} -> {st, wire(p)}
+      after
+        2000 -> flunk("no reply to #{event}")
+      end
+    end
+
+    defp d_event(user_id, id),
+      do: user_id |> RisiMe.GroupHelpers.events() |> Enum.find(&(&1["event_id"] == id))
+
+    defp assert_delete_event(ev, ex) do
+      assert_same_shape(ev, ex)
+      [full, null] = ex["data"]["targets"]
+
+      for t <- ev["data"]["targets"] do
+        theirs = if t["from"], do: full, else: null
+        assert keys(t) == keys(theirs)
+        assert_same_shape(t, theirs)
+      end
+    end
+
+    # §15.3 strict validation (what every client applies before acting).
+    defp valid_delete?(%{"v" => 1, "type" => "delete", "targets" => ts}) when is_list(ts) do
+      length(ts) in 1..100 and Enum.uniq(ts) == ts and
+        Enum.all?(ts, &(is_binary(&1) and &1 =~ @timeuuid))
+    end
+
+    defp valid_delete?(_), do: false
+
+    defp plant_old(sender, conv, recipients) do
+      id = RisiMe.TimeUUID.at(DateTime.add(DateTime.utc_now(), -49, :hour))
+      store = RisiMe.Messaging.Store.impl()
+
+      :ok =
+        store.put_message(%{
+          message_id: id,
+          sender_id: sender,
+          recipient_id: nil,
+          recipients: recipients,
+          client_msg_id: Ecto.UUID.generate(),
+          conversation_id: conv,
+          status: "sent"
+        })
+
+      id
+    end
+
+    test "delete_payload.json and delete_payload_bad.json (§15.3); the AAD encoding" do
+      ok = example("delete_payload.json")
+      assert valid_delete?(ok)
+      refute valid_delete?(example("delete_payload_bad.json"))
+      assert length(example("delete_payload_bad.json")["targets"]) == 101
+
+      aad = Wire.delete_aad(Enum.reverse(ok["targets"]))
+      assert <<1, ?D, rest::binary>> = aad
+      assert byte_size(rest) == 32
+      assert aad == Wire.delete_aad(ok["targets"])
+      [x, y] = for <<u::binary-16 <- rest>>, do: u
+      assert x < y
+    end
+
+    test "msg:delete examples, replies, events and errors against the server", %{a: a, b: b} do
+      import RisiMe.GroupHelpers, only: [create_commit: 2, clear_legacy!: 0]
+      caps = ["groups", "images", "deletes"]
+      a_dev = d_device(a, caps)
+      b_dev = d_device(b, caps)
+      clear_legacy!()
+
+      body = %{"client_group_id" => Ecto.UUID.generate(), "member_ids" => [b.user.id]}
+      {201, %{"group" => %{"id" => id}}} = v_api(:post, "/api/v1/groups", a.token, body, a_dev)
+
+      {200, _} =
+        v_api(
+          :post,
+          "/api/v1/mls/groups/#{id}/commit",
+          a.token,
+          create_commit([a.user.id, b.user.id], {a.user.id, a_dev}),
+          a_dev
+        )
+
+      # The examples as they are parse; their group is unknown to us.
+      grp = example("msg_delete_everyone_group.json")
+      assert {:error, %{"reason" => "not_member"}} = d_push(a, a_dev, "msg:delete", grp)
+
+      # msg_delete_everyone_group.json → msg_delete_reply.json, event_delete_group.json
+      {:ok, %{message_id: m}} =
+        Messaging.send(
+          b.user.id,
+          %{
+            "client_msg_id" => Ecto.UUID.generate(),
+            "conversation_id" => id,
+            "ciphertext" => b64(),
+            "generation" => 1,
+            "epoch" => 1
+          },
+          device_id: b_dev
+        )
+
+      unknown = RisiMe.TimeUUID.generate()
+
+      req = %{
+        grp
+        | "client_msg_id" => Ecto.UUID.generate(),
+          "conversation_id" => id,
+          "targets" => [m, unknown],
+          "blob_ids" => [],
+          "ciphertext" => d_ct([m, unknown]),
+          "epoch" => 1
+      }
+
+      {:ok, reply} = d_push(a, a_dev, "msg:delete", req)
+      ex = example("msg_delete_reply.json")
+      assert keys(reply) == keys(ex)
+      assert_same_shape(reply, ex)
+      assert {reply["deleted"], reply["gone"]} == {[m], [unknown]}
+
+      assert_delete_event(
+        d_event(b.user.id, reply["message_id"]),
+        example("event_delete_group.json")
+      )
+
+      # msg_delete_reply_gone.json: nothing new, no event.
+      {:ok, gone} =
+        d_push(a, a_dev, "msg:delete", %{req | "client_msg_id" => Ecto.UUID.generate()})
+
+      ex = example("msg_delete_reply_gone.json")
+      assert keys(gone) == keys(ex) and gone["message_id"] == nil and gone["server_ts"] == nil
+      assert gone["deleted"] == [] and gone["gone"] == [m, unknown]
+
+      # error_delete_too_old.json: b's own 49 h message and a's message, from member b.
+      old = plant_old(b.user.id, id, [a.user.id])
+
+      {:ok, %{message_id: m_a}} =
+        Messaging.send(
+          a.user.id,
+          %{
+            "client_msg_id" => Ecto.UUID.generate(),
+            "conversation_id" => id,
+            "ciphertext" => b64(),
+            "generation" => 1,
+            "epoch" => 1
+          },
+          device_id: a_dev
+        )
+
+      {:error, err} =
+        d_push(b, b_dev, "msg:delete", %{
+          req
+          | "client_msg_id" => Ecto.UUID.generate(),
+            "targets" => [old, m_a],
+            "ciphertext" => d_ct([old, m_a])
+        })
+
+      ex = example("error_delete_too_old.json")
+      [t1, t2] = ex["failures"]
+      assert err == %{ex | "failures" => [%{t1 | "target" => old}, %{t2 | "target" => m_a}]}
+
+      # msg_delete_me.json
+      {:ok, mine} =
+        d_push(b, b_dev, "msg:delete", %{
+          example("msg_delete_me.json")
+          | "conversation_id" => id,
+            "targets" => [m_a]
+        })
+
+      assert keys(mine) == keys(example("msg_delete_reply.json"))
+      assert mine["message_id"] == nil and mine["deleted"] == [m_a]
+
+      # msg_delete_everyone_dm.json (plaintext) → event_delete_dm.json; error_not_sender.json
+      plain = Messaging.conversation_id(a.user.id, b.user.id)
+
+      {:ok, %{message_id: p}} =
+        Messaging.send(a.user.id, %{
+          "client_msg_id" => Ecto.UUID.generate(),
+          "to" => b.user.id,
+          "body" => "hi"
+        })
+
+      dm_req = %{
+        example("msg_delete_everyone_dm.json")
+        | "client_msg_id" => Ecto.UUID.generate(),
+          "conversation_id" => plain,
+          "targets" => [p]
+      }
+
+      {:error, err} = d_push(b, nil, "msg:delete", dm_req)
+      ex = example("error_not_sender.json")
+      assert err == %{ex | "failures" => [%{hd(ex["failures"]) | "target" => p}]}
+
+      {:ok, reply} = d_push(a, nil, "msg:delete", dm_req)
+      ev = d_event(b.user.id, reply["message_id"])
+      ex = example("event_delete_dm.json")
+      assert keys(ev["data"]) == keys(ex["data"])
+      assert_same_shape(Map.delete(ev, "data"), Map.delete(ex, "data"))
+      assert_same_shape(Map.delete(ev["data"], "targets"), Map.delete(ex["data"], "targets"))
+      assert_same_shape(hd(ev["data"]["targets"]), hd(ex["data"]["targets"]))
+
+      # event_delete_dm_e2ee.json
+      dm = e2ee_group!(a, b)
+
+      {:ok, %{message_id: e}} =
+        Messaging.send(
+          a.user.id,
+          %{
+            "client_msg_id" => Ecto.UUID.generate(),
+            "to" => b.user.id,
+            "ciphertext" => b64(),
+            "generation" => 1,
+            "epoch" => 1
+          },
+          device_id: a_dev
+        )
+
+      {:ok, reply} =
+        d_push(
+          a,
+          a_dev,
+          "msg:delete",
+          %{
+            dm_req
+            | "client_msg_id" => Ecto.UUID.generate(),
+              "conversation_id" => dm,
+              "targets" => [e]
+          }
+          |> Map.merge(%{"ciphertext" => d_ct([e]), "generation" => 1, "epoch" => 1})
+        )
+
+      ev = d_event(b.user.id, reply["message_id"])
+      ex = example("event_delete_dm_e2ee.json")
+      assert keys(ev["data"]) == keys(ex["data"])
+      assert_same_shape(Map.delete(ev["data"], "targets"), Map.delete(ex["data"], "targets"))
+      assert_same_shape(hd(ev["data"]["targets"]), hd(ex["data"]["targets"]))
+
+      # chat_clear.json as it is: accepted.
+      assert {:ok, %{}} = d_push(a, a_dev, "chat:clear", example("chat_clear.json"))
+    end
+
+    test "device_put_deletes.json and mls_group_deletes_ready.json", %{a: a, b: b} do
+      a_dev = Ecto.UUID.generate()
+
+      {200, %{"attestation" => _}} =
+        v_api(:put, "/api/v1/me/devices/#{a_dev}", a.token, example("device_put_deletes.json"))
+
+      :ok = RisiMe.MLS.record_instance(a.user.id, a_dev, nil, "0.3.0")
+
+      assert %{capabilities: ["groups", "images", "deletes"]} =
+               Repo.get_by(RisiMe.Devices.Device, device_id: a_dev)
+
+      b_dev = d_device(b, ["groups", "images"])
+      RisiMe.GroupHelpers.clear_legacy!()
+      conv = e2ee_group!(a, b)
+
+      ex = example("mls_group_deletes_ready.json")
+      {200, view} = v_api(:get, "/api/v1/mls/groups/#{conv}", a.token)
+      assert keys(view) == keys(ex)
+      assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
+      assert view["deletes_ready"] == false and view["images_ready"] == true
+      assert view["missing_deletes"] == [%{"user_id" => b.user.id, "device_id" => b_dev}]
+      assert_same_shape(hd(view["missing_deletes"]), hd(ex["missing_deletes"]))
     end
   end
 
