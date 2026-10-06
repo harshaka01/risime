@@ -85,6 +85,36 @@ ssh -N spark2-tunnel                 # laptop :4400 -> spark2 127.0.0.1:4000
 - **Logout:** revoke the refresh token, then Keycloak `end_session` in the browser, then delete
   the key, then wipe chats. Auth trouble never wipes; another user signing in does.
 
+## Invites and friends (contract v1.6; decision 029)
+- **Friends replace contacts.**
+  - `GET /friends` is the source of the local rows. A pre-v1.6 server's `/contacts` is used as a
+    fallback.
+  - The list is refetched after every (re)join and on the `friend` signal (debounced).
+  - Presence is watched for friends only.
+  - A former friend keeps their row (`friend = 0`), so an old chat stays visible but read-only.
+- **Chats screen:** the tabs are **Chats** and **Requests**, with a badge showing the incoming
+  count. An **Add friend** button sits bottom right, and **Invites** is in the ⋮ menu.
+  "vouched by <name>" appears on rows and in the chat header.
+- **Add friend:**
+  - Enter a phone (normalised to E.164). The reply is always the same ("Request sent to …").
+  - Then "Not on RisiMe yet? Send an invite": enter a name and the email they'll sign in with, and
+    the Android share sheet opens with the server's `subject` and `share_text`. The server never
+    messages invitees.
+  - Invites list: Share again / Revoke.
+- **Requests:**
+  - incoming: Accept / Decline / Block (each confirmed);
+  - sent: Cancel;
+  - blocked: Unblock.
+- **Not friends:**
+  - the chat shows "You're not friends with X any more" with **Add friend** instead of the
+    composer;
+  - typing isn't sent;
+  - a `not_friends` send stays "Not sent — you're not friends", with no Retry.
+- **Room DB v2** (first real migration): `contacts.friend` (default 0) and
+  `contacts.vouched_by_name`. Existing rows start as `friend = registered` until the first
+  `/friends` refetch. `Migration1To2Test` runs the SQL on real SQLite against the exported
+  schemas.
+
 ## Phone verification (contract v1.4; decisions 020, 021)
 - When `GET /me` says `phone_verified: false` (or any call answers `403 phone_unverified`), the
   app shows **"Confirm your phone"**:
@@ -206,7 +236,7 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
 - `seen_events` is never pruned (one small row per event).
 - Server cursor race (see `docs/status/server.md`) can, rarely, skip an event after a reconnect.
 - `bad_request` (contract v1.1) and any unknown reason are treated as permanent send failures.
-- `PROTOCOL_VERSION` (1.3) is checked against the PROTOCOL.md header by a unit test, so a contract
+- `PROTOCOL_VERSION` (1.6) is checked against the PROTOCOL.md header by a unit test, so a contract
   version bump fails the Android gate until the client implements it (decision 005).
 - Logout wipes messages and contacts on the device (single-device history in 0.1).
 
@@ -286,3 +316,21 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
     the email code; Keycloak redirects back to the app **without a crash**, and you land on
     "Confirm your phone" or Chats. On an Android 8–9 phone (API 26–28) the fingerprint unlock
     dialog also opens without a crash (it's an AppCompat dialog).
+32. Friends: on a fresh sign-in with no friends, Chats shows "No friends yet…" with Add friend.
+    - Add friend → enter Shenika's number → "Request sent to +94…". On her phone the
+      **Requests** tab badge shows 1, with Accept / Decline / Block.
+    - She accepts: both phones list each other within a second, and the chat works (presence dot,
+      typing).
+33. Invite: Add friend → a number not on RisiMe → "Send an invite" → name + email → the share
+    sheet opens (WhatsApp/SMS) with the subject and the text containing the link and the email.
+    - The invitee installs from the link, signs in with that email: they land in Chats with you
+      as a friend, and you see "vouched by <you>" on their side until they verify their phone.
+    - Invites (⋮ menu) shows the invite as accepted. A second, pending one can be revoked.
+34. Block: on the Requests tab, block an incoming request (confirm). Their new requests never
+    show. Unblock is under "Blocked".
+35. Unfriend (from the other side, or by admin): the old chat stays visible. The composer becomes
+    "You're not friends with X any more · Add friend". An old failed message shows "Not sent —
+    you're not friends" with no Retry.
+36. Upgrade from 0.2.0-nightly.4 (Room v1): install over it. Old chats and login survive (the
+    v1 → v2 migration). Chats then shows only friends after the first refresh; a migrated chat
+    partner (Harsha ↔ Shenika) is still a friend.

@@ -43,6 +43,11 @@ import java.util.concurrent.TimeUnit
  * PhoenixRealtimeClient. Skipped unless RISIME_INTEROP_CONFIG points to the JSON root writes:
  * {"url", "dev": {"a": {"id","token"}, "b": {...}}, "jwt": {"A","A2","B","Bshort","Z"},
  *  "ids": {"A","B"}, "bshort_exp": <unix s>}
+ * Optional "friends" block (contract v1.6), checked by [liveFriendsFlow] when present:
+ * "friends": {"A": {"id","jwt","phone"}, "C": {"id","jwt","phone"},
+ *             "I": {"jwt","email","phone","name"}, "P_X": "+94…"}
+ *   A = allowlisted inviter; C = allowlisted, not A's friend; I = no allowlist entry, verified
+ *   email, a free phone, phone verification off (or pre-verified); P_X = an unregistered phone.
  * Prints one "INTEROP PASS|FAIL <check>" line per check. Takes up to ~4 min (Bshort expiry).
  *
  *   RISIME_INTEROP_CONFIG=/path/cfg.json ./gradlew testDebugUnitTest --tests '*LiveInteropTest*'
@@ -314,5 +319,102 @@ class LiveInteropTest {
             bad.stop()
             null
         }
+    }
+
+    @Test fun liveFriendsFlow() {
+        val path = System.getenv("RISIME_INTEROP_CONFIG")
+        assumeTrue("RISIME_INTEROP_CONFIG not set: live interop skipped", !path.isNullOrBlank() && File(path).isFile)
+        val root = ProtocolJson.parseToJsonElement(File(path!!).readText()).jsonObject
+        val fr = root["friends"]?.jsonObject
+        assumeTrue("no \"friends\" block in the interop config: friends flow skipped", fr != null)
+        val url = root["url"]!!.jsonPrimitive.content
+        fun user(k: String) = fr!![k]!!.jsonObject
+        fun str(o: JsonObject, k: String) = o[k]!!.jsonPrimitive.content
+        val a = user("A"); val c = user("C"); val inv = user("I")
+        val aId = str(a, "id"); val cId = str(c, "id")
+        val aApi = api(url, str(a, "jwt")); val cApi = api(url, str(c, "jwt")); val iApi = api(url, str(inv, "jwt"))
+        val pX = fr!!["P_X"]!!.jsonPrimitive.content
+        var iId = ""
+
+        check("friends: A invites I (identical 201, share_text has link + email)") {
+            val r = aApi.createInvite(lk.codegen.risime.net.InviteCreate(str(inv, "phone"), str(inv, "email"), str(inv, "name")))
+            ensure(r is ApiResult.Ok) { "POST /invites: $r" }
+            val i = (r as ApiResult.Ok).value.invite
+            ensure(i.pending && i.shareText.contains(i.link) && i.shareText.contains(str(inv, "email"))) { "invite: $i" }
+            null
+        }
+        check("friends: I signs in → created from the invite, vouched_by = A") {
+            val r = iApi.me()
+            ensure(r is ApiResult.Ok) { "GET /me as I: $r" }
+            val u = (r as ApiResult.Ok).value.user
+            iId = u.id
+            ensure(u.phone == str(inv, "phone")) { "I's phone ${u.phone} != invited ${str(inv, "phone")}" }
+            ensure(u.vouchedBy?.userId == aId) { "vouched_by=${u.vouchedBy}, expected $aId" }
+            null
+        }
+        check("friends: A and I are friends both ways") {
+            val fa = (aApi.friends() as? ApiResult.Ok)?.value ?: throw AssertionError("A /friends failed")
+            val fi = (iApi.friends() as? ApiResult.Ok)?.value ?: throw AssertionError("I /friends failed")
+            ensure(fa.friends.any { it.userId == iId }) { "I missing from A's friends" }
+            ensure(fi.friends.any { it.userId == aId }) { "A missing from I's friends" }
+            null
+        }
+
+        // C online, to see the friend signal.
+        val cPeer = Peer("jwtC", cId, url, { str(c, "jwt") }, refusals = { false })
+        val aPeer = Peer("jwtA", aId, url, { str(a, "jwt") }, refusals = { false })
+        cPeer.start(); aPeer.start()
+        runBlocking { cPeer.live(); aPeer.live() }
+
+        check("friends: requests to unregistered P_X and to C get identical 202 replies") {
+            val rx = aApi.requestFriend(pX)
+            val rc = aApi.requestFriend(str(c, "phone"))
+            ensure(rx is ApiResult.Ok && rc is ApiResult.Ok) { "P_X: $rx, C: $rc" }
+            ensure((rx as ApiResult.Ok).value == (rc as ApiResult.Ok).value) { "replies differ: $rx vs $rc" }
+            val out = (aApi.friends() as ApiResult.Ok).value.outgoing
+            ensure(out.all { it.userId == null && it.displayName == null }) { "outgoing reveals registration: $out" }
+            null
+        }
+        var requestId = ""
+        check("friends: C gets the friend signal and the incoming request") {
+            val sig = await(10_000, "friend signal at C") {
+                cPeer.signals.firstNotNullOfOrNull { it.friend()?.takeIf { f -> f.action == "request_received" && f.user.userId == aId } }
+            }
+            val incoming = (cApi.friends() as ApiResult.Ok).value.incoming.firstOrNull { it.userId == aId }
+                ?: throw AssertionError("A's request not in C's incoming")
+            ensure(incoming.id == sig.requestId) { "signal request_id ${sig.requestId} != ${incoming.id}" }
+            requestId = incoming.id
+            null
+        }
+        check("friends: C accepts → A gets request_accepted") {
+            val r = cApi.acceptRequest(requestId)
+            ensure(r is ApiResult.Ok && r.value.friend.userId == aId) { "accept: $r" }
+            await(10_000, "request_accepted at A") {
+                aPeer.signals.firstOrNull { it.friend()?.let { f -> f.action == "request_accepted" && f.user.userId == cId } == true }
+            }
+            null
+        }
+        check("friends: A ↔ C chat after accepting") {
+            val body = "friends hello ${UUID.randomUUID().toString().take(6)}"
+            val r = aPeer.client.sendMessage(MsgSend(UUID.randomUUID().toString(), cId, body, now()))
+            ensure(r is PushResult.Ok) { "A→C: $r" }
+            await(10_000, "C receives") { cPeer.messages().firstOrNull { it.second.body == body } }
+            null
+        }
+        check("friends: C blocks A → not_friends; a new request is still 202 and reaches nobody") {
+            ensure(cApi.block(aId) is ApiResult.Ok) { "block failed" }
+            val r = aPeer.client.sendMessage(MsgSend(UUID.randomUUID().toString(), cId, "after block", now()))
+            ensure(r == PushResult.Rejected(AuthErrors.NOT_FRIENDS)) { "expected not_friends, got $r" }
+            val t = aPeer.client.typing(cId, true)
+            ensure(t == PushResult.Rejected(AuthErrors.NOT_FRIENDS)) { "typing after block: $t" }
+            val signalsBefore = cPeer.signals.size
+            val again = aApi.requestFriend(str(c, "phone"))
+            ensure(again is ApiResult.Ok && again.value.status == "requested") { "re-request: $again" }
+            delay(3_000)
+            ensure(cPeer.signals.drop(signalsBefore).none { it.friend() != null }) { "C got a friend signal after blocking" }
+            ensure((cApi.friends() as ApiResult.Ok).value.incoming.none { it.userId == aId }) { "blocked request reached C" }
+            null
+        }
+        aPeer.stop(); cPeer.stop()
     }
 }
