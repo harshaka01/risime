@@ -62,7 +62,7 @@ fun planChatNotifications(
                 return@mapNotNull ChatNotification(
                     conversationId = conv,
                     peerId = peer,
-                    title = groupNames[conv] ?: "New group",
+                    title = groupNames[conv] ?: lk.codegen.risime.data.groups.GROUP_NAME_PENDING,
                     lines = shown.map { "${who(it.from)}: ${preview(it.body)}" },
                     count = sorted.size,
                     newestTs = sorted.last().localTs,

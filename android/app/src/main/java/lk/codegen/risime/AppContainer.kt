@@ -266,6 +266,11 @@ class AppContainer(
             r.value.groups.forEach { groupStore.applyServerGroup(it, me) }
             db.groups().allNow().filter { it.conversationId !in listed && !it.readOnly }.forEach { groupStore.markGone(it.conversationId) }
         }
+        // §12.8: groups this device holds no MLS state for (a sign-in after a logout keeps the device
+        // id but starts a new MLS state): rejoin them, in the background, idempotently.
+        val engine = mlsEngine ?: return
+        val queued = groupStore.queueRejoins(r.value.groups, me, { conv -> engine.group(conv)?.generation })
+        if (queued.isNotEmpty()) Log.i("RisiMe", "rejoining ${queued.size} group(s) on this device")
         kickGroupOps()
     }
 
@@ -338,6 +343,8 @@ class AppContainer(
         return when (val r = deviceRegistrar.register(runCatching { push.currentToken() }.getOrNull())) {
             is Registration.Mls -> {
                 Log.i("RisiMe", "MLS device registered, ${r.keyPackages} key packages")
+                // Key packages are up with `groups`: now the server can re-add this device (§12.8).
+                scope.launch { runCatching { syncGroups() } }
                 true
             }
             Registration.MlsUnavailable -> {

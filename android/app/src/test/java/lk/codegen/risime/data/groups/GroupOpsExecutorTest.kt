@@ -245,4 +245,28 @@ class GroupOpsExecutorTest {
         exec.runDue()
         assertEquals(listOf("rejoin", "reset:3"), api.calls)
     }
+
+    @Test fun anAutomaticRejoinSkipsItselfWhenTheWelcomeArrivedMeanwhile() = runTest {
+        groupDao.upsert(GroupEntity(conv, null, "member", "active", null, null, 2, null, null, null, 1))
+        val auto = ProtocolJson.encodeToString(RejoinPayload.serializer(), RejoinPayload(ifMissing = true))
+        // Still no state: the server is asked.
+        val first = queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertEquals(listOf("rejoin"), api.calls)
+        assertEquals(GroupOpType.DONE, opsDao.rows[first]!!.state)
+        // Joined from the Welcome at the current generation: done without a call.
+        mls.groups[conv] = lk.codegen.risime.data.mls.GroupRef(conv, 2, 5)
+        queue(GroupOpType.REJOIN, auto)
+        queue(GroupOpType.RESET, auto)
+        exec.runDue()
+        assertEquals(listOf("rejoin"), api.calls)
+        // An old generation still needs it; a rejoin for broken state (no if_missing) always calls.
+        mls.groups[conv] = lk.codegen.risime.data.mls.GroupRef(conv, 1, 5)
+        queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        mls.groups[conv] = lk.codegen.risime.data.mls.GroupRef(conv, 2, 5)
+        queue(GroupOpType.REJOIN)
+        exec.runDue()
+        assertEquals(listOf("rejoin", "rejoin", "rejoin"), api.calls)
+    }
 }

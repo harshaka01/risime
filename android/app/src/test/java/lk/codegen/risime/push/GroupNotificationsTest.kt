@@ -36,7 +36,7 @@ class GroupNotificationsTest {
         val msgs = listOf(inc("1", grp, "k1", 10), inc("2", dm, "k1", 11))
         val plan = planChatNotifications(msgs, contacts, 0, suppressConversation = dm)
         assertEquals(listOf(grp), plan.map { it.conversationId })
-        assertEquals("New group", plan.single().title)
+        assertEquals("Rejoining group…", plan.single().title)
         assertEquals(listOf(dm), planChatNotifications(msgs, contacts, 0, suppressConversation = grp).map { it.conversationId })
     }
 

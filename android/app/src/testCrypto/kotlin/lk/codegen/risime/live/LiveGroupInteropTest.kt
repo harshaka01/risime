@@ -40,7 +40,12 @@ import lk.codegen.risime.data.groups.INLINE_MAX_BYTES
 import lk.codegen.risime.data.groups.RenamePayload
 import lk.codegen.risime.data.groups.RolePayload
 import lk.codegen.risime.data.groups.UsersPayload
+import lk.codegen.risime.data.groups.GROUP_NAME_PENDING
 import lk.codegen.risime.data.groups.blobMatches
+import lk.codegen.risime.data.groups.groupDisplayName
+import lk.codegen.risime.ui.group.COMPOSER_REJOINING
+import lk.codegen.risime.ui.group.GroupComposer
+import lk.codegen.risime.ui.group.groupComposer
 import lk.codegen.risime.data.mls.DeviceRegistrar
 import lk.codegen.risime.data.mls.E2eeState
 import lk.codegen.risime.data.mls.FakeMlsPendingDao
@@ -124,8 +129,15 @@ class LiveGroupInteropTest {
      * One groups-capable app instance. Everything of this device (socket loop, event handling, op
      * outbox, test probes) runs on one thread, as the in-memory DAOs aren't thread-safe.
      */
-    private inner class Dev(val url: String, val userId: String, val token: String, val name: String, trusted: List<String>) {
-        val deviceId = UUID.randomUUID().toString()
+    private inner class Dev(
+        val url: String,
+        val userId: String,
+        val token: String,
+        val name: String,
+        trusted: List<String>,
+        /** A sign-in after a logout keeps the device id (and starts a new MLS state). */
+        val deviceId: String = UUID.randomUUID().toString(),
+    ) {
         private val pool = Executors.newSingleThreadExecutor { r -> Thread(r, "dev-$name").apply { isDaemon = true } }
         val dispatcher = pool.asCoroutineDispatcher()
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -249,6 +261,16 @@ class LiveGroupInteropTest {
                 val after = mls.engine.group(conv)?.epoch ?: return
                 if (!r.hasMore || after <= g.epoch) return
             }
+        }
+
+        /**
+         * AppContainer.syncGroups after registration / on every join: server truth, then §12.8
+         * automatic rejoin for groups this device holds no MLS state for.
+         */
+        suspend fun syncGroups(graceMs: Long): List<String> {
+            val r = api.groups() as? ApiResult.Ok ?: return emptyList()
+            r.value.groups.forEach { store.applyServerGroup(it, userId) }
+            return store.queueRejoins(r.value.groups, userId, { conv -> mls.engine.group(conv)?.generation }, graceMs)
         }
 
         suspend fun refreshGroup(conv: String) {
@@ -658,5 +680,92 @@ class LiveGroupInteropTest {
             ensure(g1.members.map { it.userId }.toSet() == setOf(cId, dId) && g1.members.first { it.userId == dId }.admin) { "members: ${g1.members}" }
             null
         }
-    }
+    
+        // P0 nightly.12: logout (wipe) and login on the same device id start a new MLS state; the
+        // app rejoins its groups (§12.8) and shows the §13.3 marker for what it can't read.
+        bLegacy.stop()
+        var b2: Dev? = null
+        var conv2 = ""
+        val name2 = "ZZ Rejoin $run"
+        check("12a. a new group of A, B, C; messages each way") {
+            ensure(b.on { b.registrar.register(pushToken = null) } is Registration.Mls) { "B re-register (supersedes B's legacy app)" }
+            val id = a.queue(null, GroupOpType.CREATE, json(CreatePayload.serializer(), CreatePayload(name2, listOf(bId, cId))), clientGroupId = UUID.randomUUID().toString())
+            val op = a.awaitOp(id)
+            ensure(op.state == GroupOpType.DONE) { "create op: ${op.state} ${op.lastError}" }
+            conv2 = op.conversationId!!
+            for (x in listOf(b, c)) x.await(20_000, "joined $conv2") { x.mls.engine.group(conv2) }
+            a.on { a.chat.sendText(conv2, "before 1 $run") }
+            b.on { b.chat.sendText(conv2, "before 2 $run") }
+            c.on { c.chat.sendText(conv2, "before 3 $run") }
+            for (x in listOf(a, b, c)) for (m in listOf("before 1 $run", "before 2 $run", "before 3 $run")) x.awaitText(conv2, m)
+            conv2
+        }
+
+        check("12b. B logs out (device deleted, MLS state wiped) while A, the only admin, is offline; C writes meanwhile") {
+            a.client.stop()
+            ensure(b.api.deleteDevice(b.deviceId) is ApiResult.Ok) { "DELETE /me/devices" }
+            b.close()
+            c.on { c.chat.sendText(conv2, "while B was away $run") }
+            null
+        }
+
+        check("12c. B logs in again (same device id, new MLS state): the group shows its pending name, the composer says rejoining") {
+            val nb = Dev(url, bId, bTok, "B2", trusted, deviceId = b.deviceId)
+            b2 = nb
+            ensure(nb.on { nb.registrar.register(pushToken = null) } is Registration.Mls) { "B2 registration" }
+            nb.start()
+            nb.live()
+            val queued = nb.on { nb.syncGroups(graceMs = 300) }
+            ensure(conv2 in queued) { "B2 queued rejoins: $queued" }
+            val row = nb.await(10_000, "B2's group row") { nb.groupDao.groups[conv2] }
+            ensure(nb.mls.engine.group(conv2) == null) { "B2 has the group before the rejoin" }
+            ensure(groupDisplayName(row.name) == GROUP_NAME_PENDING) { "B2 shows \"${groupDisplayName(row.name)}\"" }
+            ensure(groupComposer(row, encrypted = false) == GroupComposer.Disabled(COMPOSER_REJOINING)) { "composer: ${groupComposer(row, false)}" }
+            val rejoin = nb.await(15_000, "B2's rejoin op done") { nb.opDao.rows.values.firstOrNull { it.conversationId == conv2 && it.type == GroupOpType.REJOIN && it.state != GroupOpType.QUEUED } }
+            ensure(rejoin.state == GroupOpType.DONE) { "rejoin: ${rejoin.lastError}" }
+            // The server holds one op that removes and re-adds B2's device, waiting for an admin device.
+            val g = (nb.api.group(conv2) as ApiResult.Ok).value.group
+            val pend = g.pending.filter { it.type == PendingOp.DEVICES }
+            ensure(pend.size == 1 && pend[0].added.map { it.deviceId } == listOf(nb.deviceId) && pend[0].removed.map { it.deviceId } == listOf(nb.deviceId)) { "pending: ${g.pending}" }
+            ensure(pend[0].committer == null) { "named while no admin device is online: ${pend[0].committer}" }
+            // A send while rejoining waits in the outbox (retried after the join).
+            nb.on { nb.chat.sendText(conv2, "queued while rejoining $run") }
+            delay(500)
+            ensure(nb.on { nb.messages.rows.values.first { it.body == "queued while rejoining $run" }.status } == MessageStatus.PENDING.name) { "queued send state" }
+            null
+        }
+
+        check("12d. A comes back → A's device commits the re-add; B2 joins: right name, history marker, send and receive") {
+            val nb = b2!!
+            a.start()
+            a.live()
+            nb.await(45_000, "B2 joined from the Welcome") { nb.mls.engine.group(conv2) }
+            val row = nb.await(10_000, "B2's name from group_meta") { nb.groupDao.groups[conv2]?.takeIf { it.name == name2 } }
+            ensure(groupComposer(row, encrypted = true) == GroupComposer.Enabled) { "composer after join" }
+            ensure(row.state == GroupEntity.STATE_ACTIVE) { "B2 row state ${row.state}" }
+            val last = a.commits(conv2).last()
+            ensure(last.fromDevice == a.deviceId) { "the re-add commit came from ${last.fromDevice}" }
+            // §13.3: one marker for what this device can't read; never silent gaps, never those messages.
+            val marker = nb.await(10_000, "history marker") { nb.messages.rows.values.firstOrNull { it.clientMsgId == "sys:history:$conv2" } }
+            ensure(marker.body == "Earlier messages aren't available on this device") { "marker: ${marker.body}" }
+            ensure(nb.on { nb.messages.rows.values.count { it.conversationId == conv2 && it.clientMsgId.startsWith("sys:history:") } } == 1) { "more than one marker" }
+            val texts = nb.texts(conv2)
+            ensure(texts.none { it.startsWith("before ") || it.startsWith("while B was away") }) { "B2 shows pre-rejoin messages: $texts" }
+            ensure(nb.unrecoverable.isEmpty()) { "unrecoverable: ${nb.unrecoverable}" }
+            // The queued send went out after the join; a new one too; A and C receive both.
+            for (x in listOf(a, c)) ensure(x.awaitText(conv2, "queued while rejoining $run", 30_000).from == bId) { "${x.name}: queued send" }
+            nb.on { nb.chat.sendText(conv2, "B is back $run") }
+            for (x in listOf(a, c)) ensure(x.awaitText(conv2, "B is back $run").from == bId) { "${x.name}: B's new message" }
+            // B2 receives new messages from both.
+            a.on { a.chat.sendText(conv2, "welcome back $run") }
+            c.on { c.chat.sendText(conv2, "hi again $run") }
+            ensure(nb.awaitText(conv2, "welcome back $run").from == aId) { "B2: A's message" }
+            ensure(nb.awaitText(conv2, "hi again $run").from == cId) { "B2: C's message" }
+            ensure(listOf(a, c).all { it.epoch(conv2) == nb.epoch(conv2) }) { "epochs a=${a.epoch(conv2)} b2=${nb.epoch(conv2)} c=${c.epoch(conv2)}" }
+            // Server: no ops left, B2's device is in the group again.
+            val g = (nb.api.group(conv2) as ApiResult.Ok).value.group
+            ensure(g.pending.isEmpty()) { "pending after the rejoin: ${g.pending}" }
+            "epoch ${nb.epoch(conv2)}"
+        }
+}
 }

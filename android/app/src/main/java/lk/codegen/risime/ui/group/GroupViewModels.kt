@@ -190,6 +190,27 @@ class GroupInfoViewModel(private val c: AppContainer, private val meId: String, 
     }
 }
 
+/** The group chat's composer: on, or off with the reason shown in its place (never a silent failure). */
+sealed interface GroupComposer {
+    data object Enabled : GroupComposer
+
+    data class Disabled(val reason: String) : GroupComposer
+}
+
+const val COMPOSER_REJOINING = "Rejoining… you can send once this phone is back in the group"
+
+/**
+ * [encrypted] = this device holds the group's MLS state (null = not checked yet). An active group
+ * without it is waiting for its rejoin Welcome (§12.8): sends would only queue, so the composer
+ * says so. A group still being created keeps the composer (its sends wait for the epoch-0 commit).
+ */
+fun groupComposer(g: GroupEntity?, encrypted: Boolean?): GroupComposer = when {
+    g == null -> GroupComposer.Enabled
+    g.readOnly -> GroupComposer.Disabled(if (g.state == GroupEntity.STATE_LEFT) "You left this group." else "You were removed from this group.")
+    g.state == GroupEntity.STATE_ACTIVE && encrypted == false -> GroupComposer.Disabled(COMPOSER_REJOINING)
+    else -> GroupComposer.Enabled
+}
+
 class GroupChatViewModel(private val c: AppContainer, private val meId: String, val conversationId: String) : ViewModel() {
     val group: StateFlow<GroupEntity?> = c.db.groups().observe(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -212,9 +233,13 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
             .map { rows -> rows.groupBy { it.targetMessageId }.mapValues { (_, rs) -> lk.codegen.risime.data.chipsFor(rs, meId) } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
-    /** The local MLS group exists (else: "Setting up end-to-end encryption…" until the Welcome). */
-    private val _encrypted = MutableStateFlow(false)
-    val encrypted: StateFlow<Boolean> = _encrypted
+    /** The local MLS group exists (null until first checked; false: rejoining / setting up until the Welcome). */
+    private val _encrypted = MutableStateFlow<Boolean?>(null)
+    val encrypted: StateFlow<Boolean?> = _encrypted
+
+    /** The composer, or why it's off (left/removed, or rejoining after a sign-in, §12.8). */
+    val composer: StateFlow<GroupComposer> = combine(group, _encrypted) { g, e -> groupComposer(g, e) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GroupComposer.Enabled)
 
     private val typingSender = TypingSender(viewModelScope, System::currentTimeMillis, { typing ->
         c.scope.launch { c.realtime.typing(conversationId, typing) }
@@ -225,7 +250,10 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         c.notifier.cancelChat(conversationId)
         viewModelScope.launch { c.refreshGroup(conversationId) }
         viewModelScope.launch {
-            messages.collect { _encrypted.value = withContext(Dispatchers.IO) { c.mlsEngine?.group(conversationId) != null } }
+            // Re-checked on new rows, on group row changes and whenever a Welcome/commit changed the MLS state.
+            combine(messages, group, c.groupStore.stateChanges) { _, _, _ -> }.collect {
+                _encrypted.value = withContext(Dispatchers.IO) { c.mlsEngine?.group(conversationId) != null }
+            }
         }
     }
 

@@ -72,6 +72,28 @@ fun systemText(line: SystemLine, me: String, nameOf: (String) -> String): String
     }
 }
 
+/** A `rejoin`/`reset` outbox row's payload: [ifMissing] = skip it if this device has the group by then. */
+@Serializable
+data class RejoinPayload(@kotlinx.serialization.SerialName("if_missing") val ifMissing: Boolean = false)
+
+/**
+ * §12.8 for a group the server lists: what this device must do when it holds no MLS state for the
+ * group's current generation (a sign-in after a logout keeps the device id but starts a new MLS
+ * state). [GroupOpType.REJOIN]: an admin's device (named by the server) removes and re-adds this
+ * device, and it joins from the Welcome. Only admins may re-add another user's device (§12.4), so
+ * the only admin can't be re-added: it resets the group instead ([GroupOpType.RESET], §12.8).
+ * Null when nothing is owed: the device holds the generation, the group is still creating or
+ * waiting for a rebuild (epoch null), or I'm not an active member.
+ */
+fun rejoinPlan(g: Group, me: String, localGeneration: Long?): String? {
+    if (g.state != Group.STATE_ACTIVE || g.epoch == null) return null
+    val mine = g.members.firstOrNull { it.userId.equals(me, true) } ?: return null
+    if (mine.state != GroupMember.STATE_ACTIVE) return null
+    if (localGeneration != null && localGeneration >= g.generation) return null
+    val otherAdmin = g.members.any { it.admin && it.state == GroupMember.STATE_ACTIVE && !it.userId.equals(me, true) }
+    return if (mine.admin && !otherAdmin) GroupOpType.RESET else GroupOpType.REJOIN
+}
+
 /** The kinds of group-op outbox rows (GroupOpEntity.type). */
 object GroupOpType {
     const val CREATE = "create"
@@ -85,6 +107,9 @@ object GroupOpType {
     const val COMMIT = "commit"
     const val REJOIN = "rejoin"
     const val RESET = "reset"
+
+    /** §12.8 [rejoinPlan]: wait this long before calling rejoin, so a Welcome already on its way can land first. */
+    const val REJOIN_GRACE_MS = 8_000L
 
     const val QUEUED = "queued"
     const val DONE = "done"
@@ -114,6 +139,31 @@ class GroupStore(
     private val onReset: suspend (conversationId: String, generation: Long) -> Unit = { _, _ -> },
 ) {
     fun observeGroups() = groups.all()
+
+    private val _stateChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
+
+    /** Bumped when this device's MLS state of a group changed (Welcome joined, commit applied, removed). */
+    val stateChanges: kotlinx.coroutines.flow.StateFlow<Long> = _stateChanges
+
+    /**
+     * §12.8 automatic rejoin (after sign-in, on every sync): for each listed group this device holds
+     * no state for, queue a rejoin (or the only admin's reset) once, after [delayMs]. The op skips
+     * itself if the Welcome arrived meanwhile; the server's rejoin is idempotent. Never blocks.
+     * @return the conversations queued now.
+     */
+    suspend fun queueRejoins(server: List<Group>, me: String, localGeneration: (String) -> Long?, delayMs: Long = GroupOpType.REJOIN_GRACE_MS): List<String> {
+        val owed = ops.queued().filter { it.type == GroupOpType.REJOIN || it.type == GroupOpType.RESET }.mapNotNull { it.conversationId }.toSet()
+        val now = clock()
+        val payload = ProtocolJson.encodeToString(RejoinPayload.serializer(), RejoinPayload(ifMissing = true))
+        val queued = server.mapNotNull { g ->
+            val plan = rejoinPlan(g, me, localGeneration(g.id)) ?: return@mapNotNull null
+            if (g.id in owed) return@mapNotNull null
+            ops.insert(GroupOpEntity(conversationId = g.id, type = plan, payloadJson = payload, state = GroupOpType.QUEUED, createdAt = now, nextAt = now + delayMs))
+            g.id
+        }
+        if (queued.isNotEmpty()) onOpQueued()
+        return queued
+    }
 
     /** @return true if the event changed anything visible. */
     suspend fun applyEvent(eventId: String, e: GroupEvent, me: String, restoredLocalTs: Long? = null): Boolean {
@@ -221,6 +271,7 @@ class GroupStore(
 
     /** A Welcome joined or a commit changed the group: make sure the row exists and the name is current. */
     suspend fun onGroupStateChanged(conv: String, removedSelf: Boolean) {
+        _stateChanges.value += 1
         val existing = groups.get(conv)
         val meta = metaOf(conv)
         if (existing == null) {
@@ -232,7 +283,11 @@ class GroupStore(
         var g = existing
         if (meta != null && meta.name != existing.name) g = g.copy(name = meta.name, metaUpdatedAt = clock())
         if (removedSelf && !existing.readOnly) g = g.copy(state = GroupEntity.STATE_REMOVED)
+        // §12.8: a rejoin removes this device's old leaf and re-adds it; the Welcome brings it back.
+        if (!removedSelf && existing.state == GroupEntity.STATE_REMOVED) g = g.copy(state = GroupEntity.STATE_ACTIVE)
         if (g != existing) groups.upsert(g)
+        // After a rejoin: members and roles again from the server.
+        if (!removedSelf && existing.name == null) needsRefresh(conv)
     }
 
     /**
@@ -318,8 +373,14 @@ class GroupStore(
     }
 }
 
-/** A group's display name: the local `group_meta` name, else "New group" until the Welcome is processed. */
-fun groupDisplayName(name: String?): String = name?.takeIf { it.isNotBlank() } ?: "New group"
+/** Shown for a group whose name this device doesn't know yet (its Welcome hasn't been processed). */
+const val GROUP_NAME_PENDING = "Rejoining group…"
+
+/**
+ * A group's display name: the local `group_meta` name (kept across sign-outs that keep the chats),
+ * else [GROUP_NAME_PENDING] until the Welcome is processed. Never a made-up name.
+ */
+fun groupDisplayName(name: String?): String = name?.takeIf { it.isNotBlank() } ?: GROUP_NAME_PENDING
 
 /** `messages.system_json` → line; null for normal messages. */
 fun MessageEntity.systemLine(): SystemLine? = if (system) SystemLine.decode(systemJson) else null

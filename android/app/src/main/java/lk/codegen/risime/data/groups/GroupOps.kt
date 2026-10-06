@@ -181,8 +181,12 @@ class GroupOpsExecutor(
             }
             GroupOpType.RENAME -> rename(op, myId)
             GroupOpType.COMMIT -> commitServerOp(op, myId)
-            GroupOpType.REJOIN -> net(api.rejoin(op.conversationId!!)) { OpOutcome.Done }
+            GroupOpType.REJOIN -> {
+                if (alreadyJoined(op)) return OpOutcome.Done
+                net(api.rejoin(op.conversationId!!)) { OpOutcome.Done }
+            }
             GroupOpType.RESET -> {
+                if (alreadyJoined(op)) return OpOutcome.Done
                 val g = groups.get(op.conversationId!!) ?: return OpOutcome.Done
                 when (val r = api.reset(op.conversationId, g.generation)) {
                     is ApiResult.Error -> if (r.code == AuthErrors.GENERATION_CONFLICT) OpOutcome.Done else errorOutcome(r)
@@ -191,6 +195,17 @@ class GroupOpsExecutor(
             }
             else -> OpOutcome.Failed("unknown op type ${op.type}")
         }
+    }
+
+    /**
+     * An automatic rejoin/reset ([RejoinPayload.ifMissing]) that's no longer needed: this device
+     * holds the group's current generation (its Welcome arrived during the grace period).
+     */
+    private suspend fun alreadyJoined(op: GroupOpEntity): Boolean {
+        val p = runCatching { ProtocolJson.decodeFromString(RejoinPayload.serializer(), op.payloadJson) }.getOrNull() ?: return false
+        if (!p.ifMissing) return false
+        val local = engine()?.group(op.conversationId ?: return false) ?: return false
+        return local.generation >= (groups.get(op.conversationId)?.generation ?: 0)
     }
 
     /** A REST reply with the group: apply it (this queues any op naming this device as committer). */

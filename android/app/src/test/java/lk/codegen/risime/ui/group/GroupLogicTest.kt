@@ -60,7 +60,7 @@ class GroupLogicTest {
     @Test fun newAndLeftGroupsShowStateLines() {
         val creating = GroupEntity(conv, null, "admin", "creating", null, null, 1, null, null, null, 10)
         assertEquals("Creating…", buildGroupRows(me, listOf(creating), emptyList(), emptyList(), emptyList()).single().stateLine)
-        assertEquals("New group", buildGroupRows(me, listOf(creating), emptyList(), emptyList(), emptyList()).single().name)
+        assertEquals("Rejoining group…", buildGroupRows(me, listOf(creating), emptyList(), emptyList(), emptyList()).single().name)
         val left = creating.copy(name = "x", state = "left")
         val last = LastMessage(conv, "You left", 20, false, "READ", me, "system")
         val row = buildGroupRows(me, listOf(left), emptyList(), listOf(last), emptyList()).single()
@@ -96,5 +96,27 @@ class GroupLogicTest {
         assertTrue(left.readOnly)
         assertFalse(left.iAmAdmin)
         assertEquals("You left this group", left.stateLine)
+    }
+
+    @Test fun composerSaysRejoiningUntilThisPhoneIsBackInTheGroup() {
+        val g = GroupEntity(conv, "Pilot team", "member", GroupEntity.STATE_ACTIVE, null, null, 1, null, null, null, 10)
+        // Rejoining (no MLS state yet): disabled with the reason, never a silent failure.
+        assertEquals(GroupComposer.Disabled(COMPOSER_REJOINING), groupComposer(g, encrypted = false))
+        assertEquals("Rejoining… you can send once this phone is back in the group", COMPOSER_REJOINING)
+        // Joined: works at once. Not checked yet: no flicker.
+        assertEquals(GroupComposer.Enabled, groupComposer(g, encrypted = true))
+        assertEquals(GroupComposer.Enabled, groupComposer(g, encrypted = null))
+        // A group being created keeps the composer (sends wait for the epoch-0 commit).
+        assertEquals(GroupComposer.Enabled, groupComposer(g.copy(state = GroupEntity.STATE_CREATING), encrypted = false))
+        // Left / removed keep their own reasons.
+        assertEquals(GroupComposer.Disabled("You left this group."), groupComposer(g.copy(state = GroupEntity.STATE_LEFT), encrypted = false))
+        assertEquals(GroupComposer.Disabled("You were removed from this group."), groupComposer(g.copy(state = GroupEntity.STATE_REMOVED), encrypted = true))
+    }
+
+    @Test fun aGroupWithoutAKnownNameIsNeverNewGroup() {
+        val g = GroupEntity(conv, null, "member", GroupEntity.STATE_ACTIVE, null, null, 1, null, null, null, 10)
+        val row = buildGroupRows(me, listOf(g), emptyList(), emptyList(), emptyList()).single()
+        assertEquals("Rejoining group…", row.name)
+        assertEquals("Pilot team", buildGroupRows(me, listOf(g.copy(name = "Pilot team")), emptyList(), emptyList(), emptyList()).single().name)
     }
 }

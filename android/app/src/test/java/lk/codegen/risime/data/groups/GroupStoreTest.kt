@@ -168,7 +168,85 @@ class GroupStoreTest {
         store.onGroupStateChanged(conv, removedSelf = false)
         assertEquals("Pilot team", dao.groups[conv]!!.name)
         assertEquals(listOf(conv), refreshed)
-        assertEquals("New group", groupDisplayName(null))
+        assertEquals("Rejoining group…", groupDisplayName(null))
+    }
+
+    // ---- §12.8 automatic rejoin after a sign-in with a new MLS state (P0 nightly.12) ----
+
+    private fun serverGroup(myRole: String = GroupMember.ROLE_MEMBER, myState: String = "active", state: String = Group.STATE_ACTIVE, epoch: Long? = 4, gen: Long = 1, otherAdmin: Boolean = true) =
+        Group(
+            conv, state, kamal, null, gen, epoch, myRole,
+            listOf(
+                member(kamal, "Kamal", if (otherAdmin) GroupMember.ROLE_ADMIN else GroupMember.ROLE_MEMBER),
+                member(me, "Me", myRole).copy(state = myState),
+                member(nimal, "Nimal"),
+            ),
+        )
+
+    @Test fun rejoinPlanRejoinsActiveGroupsThisDeviceHasNoStateFor() {
+        assertEquals(GroupOpType.REJOIN, rejoinPlan(serverGroup(), me, null))
+        // A stale generation (a rebuild landed without our Welcome) also rejoins.
+        assertEquals(GroupOpType.REJOIN, rejoinPlan(serverGroup(gen = 2), me, 1))
+        // Holding the current generation: nothing owed.
+        assertNull(rejoinPlan(serverGroup(), me, 1))
+        // Nothing yet: creating, a reset waiting for its rebuild, my add/removal still pending.
+        assertNull(rejoinPlan(serverGroup(state = Group.STATE_CREATING), me, null))
+        assertNull(rejoinPlan(serverGroup(epoch = null), me, null))
+        assertNull(rejoinPlan(serverGroup(myState = GroupMember.STATE_PENDING_ADD), me, null))
+        assertNull(rejoinPlan(serverGroup(myState = GroupMember.STATE_PENDING_REMOVE), me, null))
+        assertNull(rejoinPlan(serverGroup().copy(members = emptyList()), me, null))
+    }
+
+    @Test fun theOnlyAdminResetsInsteadBecauseNobodyElseMayReAddItsDevice() {
+        assertEquals(GroupOpType.RESET, rejoinPlan(serverGroup(myRole = GroupMember.ROLE_ADMIN, otherAdmin = false), me, null))
+        assertEquals(GroupOpType.REJOIN, rejoinPlan(serverGroup(myRole = GroupMember.ROLE_ADMIN, otherAdmin = true), me, null))
+    }
+
+    @Test fun queueRejoinsQueuesOnceAfterTheGracePeriodAndSkipsHeldGroups() = runTest {
+        var kicks = 0
+        val s = GroupStore(dao, ops, messages, { "dev-me" }, { meta }, { now }, onOpQueued = { kicks++ })
+        val other = serverGroup().copy(id = "grp:00000000-0000-4000-8000-000000000001")
+        val held = mapOf(other.id to 1L)
+        assertEquals(listOf(conv), s.queueRejoins(listOf(serverGroup(), other), me, { held[it] }, delayMs = 5_000))
+        val row = ops.rows.values.single()
+        assertEquals(GroupOpType.REJOIN, row.type)
+        assertEquals(GroupOpType.QUEUED, row.state)
+        assertEquals(now + 5_000, row.nextAt)
+        assertTrue(ProtocolJson.decodeFromString(RejoinPayload.serializer(), row.payloadJson).ifMissing)
+        assertEquals(1, kicks)
+        // Every sync calls it again: still one queued op (the server's rejoin is idempotent anyway).
+        assertEquals(emptyList<String>(), s.queueRejoins(listOf(serverGroup()), me, { null }))
+        assertEquals(1, ops.rows.size)
+        // Done or failed: a later sync queues it again (e.g. after a long offline spell).
+        ops.update(row.copy(state = GroupOpType.FAILED))
+        assertEquals(listOf(conv), s.queueRejoins(listOf(serverGroup()), me, { null }))
+    }
+
+    @Test fun aWelcomeAfterARejoinRestoresTheGroupAndItsName() = runTest {
+        // The group row from the replayed `created` event: no name known on this device yet.
+        meta = null
+        dao.upsert(GroupEntity(conv, null, "member", GroupEntity.STATE_ACTIVE, kamal, null, 1, null, null, null, 1))
+        assertEquals(GROUP_NAME_PENDING, groupDisplayName(dao.groups[conv]!!.name))
+        val before = store.stateChanges.value
+        // An in-place rejoin first removes the old leaf (removed_self) …
+        store.onGroupStateChanged(conv, removedSelf = true)
+        assertEquals(GroupEntity.STATE_REMOVED, dao.groups[conv]!!.state)
+        // … then the Welcome brings the device back with the name from group_meta, and members are refreshed.
+        meta = GroupMeta(name = "Pilot team", admins = listOf(kamal))
+        refreshed.clear()
+        store.onGroupStateChanged(conv, removedSelf = false)
+        assertEquals(GroupEntity.STATE_ACTIVE, dao.groups[conv]!!.state)
+        assertEquals("Pilot team", dao.groups[conv]!!.name)
+        assertEquals(listOf(conv), refreshed)
+        assertEquals(before + 2, store.stateChanges.value)
+    }
+
+    @Test fun aLocallyKnownNameIsKeptUntilTheWelcome() = runTest {
+        meta = null
+        dao.upsert(GroupEntity(conv, "Pilot team", "member", GroupEntity.STATE_ACTIVE, kamal, null, 1, null, null, null, 1))
+        store.applyServerGroup(serverGroup(), me)
+        store.applyEvent("e9", ev(GroupEvent.ADDED, kamal, listOf(nimal)), me)
+        assertEquals("Pilot team", dao.groups[conv]!!.name)
     }
 
     private fun example(name: String) = javaClass.classLoader!!.getResource("contract/v1/examples/$name")!!.readText()

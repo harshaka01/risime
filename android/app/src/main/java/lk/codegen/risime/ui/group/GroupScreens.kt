@@ -112,6 +112,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
     val conn by vm.connection.collectAsStateWithLifecycle()
     val typing by vm.typingNames.collectAsStateWithLifecycle()
     val encrypted by vm.encrypted.collectAsStateWithLifecycle()
+    val composer by vm.composer.collectAsStateWithLifecycle()
     val reactions by vm.reactions.collectAsStateWithLifecycle()
     val readBy by vm.readBy.collectAsStateWithLifecycle()
     var reactionsFor by remember { mutableStateOf<String?>(null) }
@@ -135,7 +136,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
             RisiTopBar(
                 title = name,
                 subtitle = typingLabel ?: connectionLabel(conn) ?: buildString {
-                    if (encrypted) append("🔒 ")
+                    if (encrypted == true) append("🔒 ")
                     append(if (count == 1) "1 member" else "$count members")
                 },
                 emphasis = typingLabel != null,
@@ -147,7 +148,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
-            if (!encrypted && !readOnly) {
+            if (encrypted == false && !readOnly && composer == GroupComposer.Enabled) {
                 Text(
                     "Setting up end-to-end encryption…",
                     Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = Spacing.lg, vertical = Spacing.xs),
@@ -185,17 +186,18 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 }
                 if (messages.isEmpty()) item { EmptyState("No messages yet. Say hello!") }
             }
-            if (readOnly) {
+            val off = composer as? GroupComposer.Disabled
+            if (off != null) {
                 Surface(tonalElevation = 2.dp) {
                     Text(
-                        if (group?.state == "left") "You left this group." else "You were removed from this group.",
+                        off.reason,
                         Modifier.fillMaxWidth().navigationBarsPadding().padding(Spacing.lg),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             } else {
                 Composer(
-                    placeholder = if (encrypted) "Encrypted message" else "Message",
+                    placeholder = if (encrypted == true) "Encrypted message" else "Message",
                     value = draft,
                     onValue = { draft = it; vm.onDraftChanged(it.text) },
                     onSend = {

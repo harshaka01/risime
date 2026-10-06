@@ -211,7 +211,7 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
 }
 
 
-/** §12 group row: decrypted name ("New group" until the Welcome), "Kamal: …" last line, typing, unread. */
+/** §12 group row: decrypted name ("Rejoining group…" until the Welcome), "Kamal: …" last line, typing, unread. */
 @Composable
 private fun GroupRowItem(row: ChatRow, onClick: () -> Unit) {
     val last = row.last
