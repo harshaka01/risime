@@ -11,6 +11,14 @@
 risime.risicloud.ai {
 	encode zstd gzip
 
+	# The bare domain sends people to the download page.
+	redir / https://risicloud.ai/app/risime/ 302
+
+	# Dev-only paths never reach Phoenix (the prod release has none anyway).
+	handle /dev/* {
+		respond 404
+	}
+
 	# Only the app's paths are proxied; everything else is 404 at the edge.
 	@app path /api/* /socket/* /health
 	handle @app {
