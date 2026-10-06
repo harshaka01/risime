@@ -149,8 +149,9 @@ class AppContainer(context: Context) {
     val mlsUpgrader by lazy {
         MlsUpgrader({ mlsEngine }, object : MlsApi {
             override suspend fun group(conversationId: String) = api.mlsGroup(conversationId)
-            override suspend fun claim(userIds: List<String>) = api.claimKeyPackages(userIds)
-            override suspend fun commit(conversationId: String, body: lk.codegen.risime.net.MlsCommitRequest) = api.mlsCommit(conversationId, body)
+            override suspend fun claim(userIds: List<String>) = api.claimKeyPackages(userIds, sessionStore.deviceId())
+            override suspend fun commit(conversationId: String, body: lk.codegen.risime.net.MlsCommitRequest) =
+                api.mlsCommit(conversationId, body, sessionStore.deviceId())
         })
     }
     val deviceRegistrar by lazy { DeviceRegistrar(api, { sessionStore.deviceId() }, BuildConfig.VERSION_NAME, { mlsEngine }) }

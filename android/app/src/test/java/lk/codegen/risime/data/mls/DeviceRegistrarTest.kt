@@ -66,3 +66,23 @@ class DeviceRegistrarTest {
         assertEquals(Registration.Mls(30), registrar(mls).topUp())
     }
 }
+
+class MlsDeviceHeaderTest {
+    @Test fun commitAndClaimCarryXDeviceId() = runBlocking {
+        val server = MockWebServer().apply { start() }
+        try {
+            val api = ApiClient(OkHttpClient(), { server.url("/").toString() }, { "tok" })
+            server.enqueue(MockResponse().setResponseCode(200).setBody("""{"epoch":1}"""))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("""{"devices":[]}"""))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("""{"devices":[]}"""))
+            api.mlsCommit("dm:a_b", lk.codegen.risime.net.MlsCommitRequest(1, 0, "Yw=="), "dev-1")
+            api.claimKeyPackages(listOf("b"), "dev-1")
+            api.claimKeyPackages(listOf("b"))
+            assertEquals("dev-1", server.takeRequest().getHeader(ApiClient.DEVICE_HEADER))
+            assertEquals("dev-1", server.takeRequest().getHeader(ApiClient.DEVICE_HEADER))
+            assertNull(server.takeRequest().getHeader(ApiClient.DEVICE_HEADER)) // optional on claim
+        } finally {
+            server.shutdown()
+        }
+    }
+}

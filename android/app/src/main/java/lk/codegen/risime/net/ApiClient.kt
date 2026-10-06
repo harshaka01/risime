@@ -70,13 +70,15 @@ class ApiClient(
     suspend fun keyPackageCount(deviceId: String): ApiResult<KeyPackageCount> =
         call<Unit, KeyPackageCount>("GET", "me/devices/$deviceId/key_packages/count", null)
 
-    suspend fun claimKeyPackages(userIds: List<String>): ApiResult<KeyPackagesClaimReply> =
-        call("POST", "mls/key_packages/claim", KeyPackagesClaim(userIds))
+    /** §10.2: [deviceId] (X-Device-Id) excludes the calling device from my own devices. */
+    suspend fun claimKeyPackages(userIds: List<String>, deviceId: String? = null): ApiResult<KeyPackagesClaimReply> =
+        call("POST", "mls/key_packages/claim", KeyPackagesClaim(userIds), headers = deviceId?.let { mapOf(DEVICE_HEADER to it) }.orEmpty())
 
     suspend fun mlsGroup(conversationId: String): ApiResult<MlsGroup> = call<Unit, MlsGroup>("GET", "mls/groups/$conversationId", null)
 
-    suspend fun mlsCommit(conversationId: String, body: MlsCommitRequest): ApiResult<MlsCommitReply> =
-        call("POST", "mls/groups/$conversationId/commit", body)
+    /** §10.2: X-Device-Id is required here (it names from_device). */
+    suspend fun mlsCommit(conversationId: String, body: MlsCommitRequest, deviceId: String): ApiResult<MlsCommitReply> =
+        call("POST", "mls/groups/$conversationId/commit", body, headers = mapOf(DEVICE_HEADER to deviceId))
 
     suspend fun mlsCommits(conversationId: String, sinceEpoch: Long): ApiResult<MlsCommitsReply> =
         call<Unit, MlsCommitsReply>("GET", "mls/groups/$conversationId/commits?since_epoch=$sinceEpoch", null)
@@ -120,7 +122,8 @@ class ApiClient(
         path: String,
         body: B?,
         auth: Boolean = true,
-    ): ApiResult<R> = execute(method, path, body?.let { encode(serializer<B>(), it) }, auth, serializer<R>())
+        headers: Map<String, String> = emptyMap(),
+    ): ApiResult<R> = execute(method, path, body?.let { encode(serializer<B>(), it) }, auth, serializer<R>(), headers)
 
     private fun <B> encode(s: KSerializer<B>, body: B): RequestBody =
         ProtocolJson.encodeToString(s, body).toRequestBody(JSON)
@@ -131,10 +134,11 @@ class ApiClient(
         body: RequestBody?,
         auth: Boolean,
         resSerializer: KSerializer<R>,
+        headers: Map<String, String> = emptyMap(),
     ): ApiResult<R> {
-        val first = executeOnce(method, path, body, auth, resSerializer)
+        val first = executeOnce(method, path, body, auth, resSerializer, headers)
         if (auth && first is ApiResult.Error && first.httpStatus == 401 && onUnauthorized()) {
-            return executeOnce(method, path, body, auth, resSerializer)
+            return executeOnce(method, path, body, auth, resSerializer, headers)
         }
         return first
     }
@@ -145,6 +149,7 @@ class ApiClient(
         body: RequestBody?,
         auth: Boolean,
         resSerializer: KSerializer<R>,
+        headers: Map<String, String>,
     ): ApiResult<R> {
         val url = serverUrl().trimEnd('/').toHttpUrl().newBuilder()
             .addPathSegments("api/v1/${path.substringBefore('?')}")
@@ -153,6 +158,7 @@ class ApiClient(
         val builder = Request.Builder().url(url)
             .method(method, body ?: if (method == "GET") null else ByteArray(0).toRequestBody(JSON))
         if (auth) token()?.let { builder.header("Authorization", "Bearer $it") }
+        headers.forEach { (k, v) -> builder.header(k, v) }
         return withContext(Dispatchers.IO) {
             try {
                 http.newCall(builder.build()).execute().use { res ->
@@ -178,8 +184,11 @@ class ApiClient(
         }
     }
 
-    private companion object {
-        val JSON = "application/json".toMediaType()
+    companion object {
+        private val JSON = "application/json".toMediaType()
+
+        /** §10.2: the calling device on MLS REST calls. */
+        const val DEVICE_HEADER = "X-Device-Id"
     }
 }
 
