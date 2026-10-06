@@ -1,19 +1,19 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
-## Where things stand (updated 2026-10-06 ~05:20 UTC)
-- **Public pilot is live: https://risime.risicloud.ai.**
-  - Caddy on spark2 has a Let's Encrypt cert and proxies to the **v0.2.0-nightly.3 prod release**
-    on 127.0.0.1:4000. There is no epmd, and port 4000 isn't reachable from outside.
-  - End-to-end through the public URL: `/health` ok; `/auth/config` = dev mode; dev login (code
-    only in the server log, never in a response); `/me` and `/contacts` 200; `wss://` upgrade 101
-    with Bearer; inbox join ok; `/dev/mailbox` 404. Throwaway user removed.
-- **v0.2.0-nightly.3 is published** at https://risicloud.ai/app/risime/ (versionCode 20003; the
-  public APK's sha256 matches). Installed nightly.2 apps get the update offer from the in-app
-  updater.
-- **Caddy:** the live `/etc/caddy/Caddyfile` is Harsha's minimal one. The stricter repo version
-  (`infra/caddy/Caddyfile`, adding `/` → download page) is waiting for Harsha to install it with
-  sudo.
-- **Device test of v0.2.0-nightly.2:** result not reported yet.
+## Where things stand (updated 2026-10-06 ~06:15 UTC)
+- **Public pilot https://risime.risicloud.ai** runs **v0.2.0-nightly.4** (prod release on
+  127.0.0.1:4000, behind Caddy, Let's Encrypt). **RisiCloud sign-in is ON**
+  (`/auth/config` = oidc + dev). Keycloak realm `aoa`, client `risime`, emails the codes.
+- **v0.2.0-nightly.4 is published** (versionCode 20004; public APK sha256 verified). It fixes the
+  crash when Keycloak returned to the app (AppAuth redirect activity theme), plus the latent
+  Android 8–9 fingerprint-dialog crash, with a merged-manifest regression test.
+- **Waiting on Harsha's sign-in with nightly.4.** Then root checks that `/me` bound
+  `harsha@codegen.co.uk` → `+94770802222` (user `de9b6235…`, currently unbound).
+- **Logs:** the server writes to the tmux pane and to `~/risime-logs/server.log`. Auth failures go
+  to `~/risime-logs/auth.log`.
+- **Caddy:** the stricter repo Caddyfile isn't live yet (the reload failed on a root-owned access
+  log). The fix command is in the conversation and in `docs/PROD.md`.
+- A login-theme request was sent to the RisiCloud lead (2026-10-06).
 
 ## Built so far (shipped)
 | Release | Contents |
