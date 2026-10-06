@@ -160,7 +160,12 @@ defmodule RisiMe.MLS do
       Repo.transaction(fn ->
         rows =
           for kp <- kps,
-              do: %{device_ref: device.id, key_package: kp, last_resort: false, inserted_at: now}
+              do: %{
+                device_ref: Ecto.UUID.dump!(device.id),
+                key_package: kp,
+                last_resort: false,
+                inserted_at: now
+              }
 
         Repo.insert_all("mls_key_packages", rows)
 
@@ -172,7 +177,7 @@ defmodule RisiMe.MLS do
 
           Repo.insert_all("mls_key_packages", [
             %{
-              device_ref: device.id,
+              device_ref: Ecto.UUID.dump!(device.id),
               key_package: last_resort,
               last_resort: true,
               inserted_at: now

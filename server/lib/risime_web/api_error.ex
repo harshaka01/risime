@@ -17,6 +17,7 @@ defmodule RisiMeWeb.ApiError do
     phone_unverified: "Confirm your phone number to continue",
     already_verified: "Your phone number is already confirmed",
     invalid_name: "Name must be 1-64 characters",
+    bad_request: "Bad request",
     mls_unavailable: "End-to-end encryption isn't available on this server yet",
     epoch_conflict: "The group moved on; catch up and retry",
     not_ready: "Not every device can use end-to-end encryption yet",

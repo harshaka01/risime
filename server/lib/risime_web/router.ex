@@ -29,6 +29,7 @@ defmodule RisiMeWeb.Router do
     pipe_through :api
 
     get "/auth/config", AuthController, :config
+    get "/mls/attestation_keys", MLSController, :attestation_keys
   end
 
   scope "/api/v1", RisiMeWeb do
@@ -62,6 +63,12 @@ defmodule RisiMeWeb.Router do
     delete "/friends/:user_id", SocialController, :unfriend
     post "/blocks", SocialController, :block
     delete "/blocks/:user_id", SocialController, :unblock
+    post "/me/devices/:device_id/key_packages", MLSController, :upload_key_packages
+    get "/me/devices/:device_id/key_packages/count", MLSController, :key_package_count
+    post "/mls/key_packages/claim", MLSController, :claim
+    get "/mls/groups/:conversation_id", MLSController, :group
+    post "/mls/groups/:conversation_id/commit", MLSController, :commit
+    get "/mls/groups/:conversation_id/commits", MLSController, :commits
     put "/me/devices/:device_id", DeviceController, :put
     delete "/me/devices/:device_id", DeviceController, :delete
     get "/contacts", ContactsController, :index
