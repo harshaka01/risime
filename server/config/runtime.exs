@@ -42,6 +42,24 @@ if pool = System.get_env("CASSANDRA_POOL_SIZE") do
   config :risime, :cassandra, pool_size: String.to_integer(pool)
 end
 
+# Authentication (decision 018). OIDC_ENABLED=true once the `risime` Keycloak client exists.
+if config_env() != :test do
+  oidc =
+    [
+      enabled: System.get_env("OIDC_ENABLED") == "true",
+      issuer: System.get_env("OIDC_ISSUER", "https://risicloud.ai/realms/aoa"),
+      client_id: System.get_env("OIDC_CLIENT_ID", "risime")
+    ] ++
+      if(url = System.get_env("OIDC_JWKS_URL"), do: [jwks: {:url, url}], else: [])
+
+  config :risime, :oidc, oidc
+
+  case System.get_env("DEV_LOCAL_AUTH") do
+    nil -> :ok
+    value -> config :risime, :dev_local_auth, value == "true"
+  end
+end
+
 # LOG_LEVEL=info|warning|… overrides the env's level (e.g. a dev server for a load test).
 if level = System.get_env("LOG_LEVEL") do
   config :risime, :log_level, String.to_existing_atom(level)

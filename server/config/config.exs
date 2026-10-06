@@ -30,6 +30,18 @@ config :risime, :cassandra,
   keyspace: "risime_dev",
   pool_size: 16
 
+# Authentication (contract v1.3 §6, docs/decisions/018-keycloak-token-verification.md).
+# runtime.exs overrides these from OIDC_ENABLED / OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_JWKS_URL /
+# DEV_LOCAL_AUTH. OIDC stays off until the `risime` Keycloak client exists.
+config :risime, :oidc,
+  enabled: false,
+  issuer: "https://risicloud.ai/realms/aoa",
+  client_id: "risime",
+  jwks: :discovery
+
+config :risime, :dev_local_auth, false
+config :risime, :env, config_env()
+
 # Background jobs (docs/decisions/004-oban-background-jobs.md). Cron times are UTC.
 config :risime, Oban,
   engine: Oban.Engines.Basic,

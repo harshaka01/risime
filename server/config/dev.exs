@@ -68,3 +68,6 @@ config :phoenix, :plug_init_mode, :runtime
 
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
+
+# Dev login (/auth/request + /auth/verify, opaque tokens) for the local/test server.
+config :risime, :dev_local_auth, true

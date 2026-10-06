@@ -4,3 +4,6 @@ RisiMe.Messaging.Store.Cassandra.truncate!()
 
 ExUnit.start()
 Ecto.Adapters.SQL.Sandbox.mode(RisiMe.Repo, :manual)
+
+# Locally generated signing keys as the realm JWKS (contract v1.3 tests).
+RisiMe.OIDCHelpers.install_jwks()

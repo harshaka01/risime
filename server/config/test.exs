@@ -33,6 +33,18 @@ config :risime, :presence_grace_ms, 150
 # Jobs are only inserted (and asserted with Oban.Testing); no queues or plugins run.
 config :risime, Oban, testing: :manual
 
+# Both sign-in modes in test. Tests install locally generated keys as a static JWKS.
+config :risime, :dev_local_auth, true
+
+config :risime, :oidc,
+  enabled: true,
+  issuer: "https://risicloud.ai/realms/aoa",
+  client_id: "risime",
+  jwks: {:static, %{"keys" => []}},
+  req_options: [plug: {Req.Test, RisiMe.Auth.JWKS}]
+
+config :risime, :auth_expiry_grace_ms, 300
+
 # In test we don't send emails
 config :risime, RisiMe.Mailer, adapter: Swoosh.Adapters.Test
 

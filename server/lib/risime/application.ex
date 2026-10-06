@@ -12,6 +12,10 @@ defmodule RisiMe.Application do
     if level = Application.get_env(:risime, :log_level), do: Logger.configure(level: level)
     if Application.get_env(:risime, :log_format) == :json, do: RisiMe.JSONLogFormatter.install()
     Logger.info("RisiMe server #{version()} starting")
+
+    if Application.get_env(:risime, :env) == :prod and RisiMe.Auth.Config.dev_local_auth?(),
+      do: Logger.warning("DEV_LOCAL_AUTH=true in prod: dev login and opaque tokens are enabled")
+
     RisiMe.TimeUUID.init()
 
     children = [
@@ -24,6 +28,7 @@ defmodule RisiMe.Application do
       {Phoenix.PubSub, name: RisiMe.PubSub},
       RisiMe.Presence,
       RisiMe.SocketTracker,
+      RisiMe.Auth.JWKS,
       # Start a worker by calling: RisiMe.Worker.start_link(arg)
       # {RisiMe.Worker, arg},
       # Start to serve requests, typically the last entry

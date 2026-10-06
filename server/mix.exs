@@ -59,6 +59,7 @@ defmodule RisiMe.MixProject do
       {:uniq, "~> 0.6.3"},
       {:gen_smtp, "~> 1.3"},
       {:oban, "~> 2.24"},
+      {:jose, "~> 1.11"},
       # Load-test WebSocket client (mix risime.loadtest); never in prod builds.
       {:mint_web_socket, "~> 1.0", only: [:dev, :test]}
     ]
