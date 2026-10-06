@@ -63,7 +63,9 @@ APK=android/app/build/outputs/apk/release/app-release.apk
 BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
 if [ -f "$PIN_FILE" ]; then
   kid="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["kid"])' "$PIN_FILE")"
-  unzip -p "$APK" 'classes*.dex' | grep -aq "$kid" || { echo "release APK lacks the pinned attestation key $kid"; exit 1; }
+  # grep -c reads the whole stream: `grep -q` would SIGPIPE unzip and fail the pipeline under pipefail.
+  hits="$(unzip -p "$APK" 'classes*.dex' | grep -ac -- "$kid" || true)"
+  [ "${hits:-0}" -gt 0 ] || { echo "release APK lacks the pinned attestation key $kid"; exit 1; }
   echo "==> E2EE: release pins attestation key $kid"
 fi
 "$BT/apksigner" verify --print-certs "$APK" | grep -q "CN=RisiMe Dev Release" \
