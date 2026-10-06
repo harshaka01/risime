@@ -4,14 +4,17 @@
 # survive and the app must not ask to sign in again.
 #
 #   scripts/upgrade-test --new <apk> [--version X] [--commit SHA] [--old <apk|vX.Y.Z...>] [--serial S] [--serial-b S2]
+#                        [--target auto|redroid|emulator|device]
+#     auto (default): an attached adb device if there is one, else redroid on spark2.
+#     redroid: spark2 starts a throwaway Android container (scripts/android-target) and removes it after.
 #   scripts/upgrade-test --fetch-candidate      # laptop: pull spark2's staged release candidate, test it, send the result back
 #   scripts/upgrade-test --fetch-candidate --manual-signin   # you sign in on the emulator; the script shows the code
 # On a failure the script saves a screenshot, a UI dump and the app's logcat next to the result
 # (~/risime-logs/upgrade-test/v<version>-<time>/), and copies them to spark2 with the result.
 #
-# Needs one adb device (an emulator or a test phone; never a tester's own phone: the app is
-# uninstalled first). spark2 has no Android emulator (no linux-aarch64 build exists), so this runs
-# on the laptop (x86_64 emulator) or with a device attached to spark2.
+# Needs one adb device (an emulator, a test phone, or redroid; never a tester's own phone: the app is
+# uninstalled first). spark2 has no Android emulator (no linux-aarch64 build exists); it runs the test
+# unattended in redroid (native arm64 Android in Docker, decision 045). The laptop emulator still works.
 #
 # What it does:
 #  1. A temporary server from this checkout on 127.0.0.1:4110 (own DB/keyspace risime_upgrade,
@@ -101,16 +104,20 @@ EXS
 fi
 
 # ---------------------------------------------------------------- driver half ------------------
-NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0; MANUAL=0; DEV=""
+NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0; MANUAL=0; DEV=""; TARGET=auto
 while [ $# -gt 0 ]; do case "$1" in
   --new) NEW="$2"; shift 2;; --old) OLD="$2"; shift 2;; --version) VERSION="$2"; shift 2;;
   --commit) COMMIT="$2"; shift 2;; --serial) SERIAL="$2"; shift 2;; --serial-b) SERIAL_B="$2"; shift 2;;
   --fetch-candidate) FETCH=1; shift;;
+  --target) TARGET="$2"; shift 2;;
   --manual-signin) MANUAL=1; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 
+case "$TARGET" in auto|redroid|emulator|device) ;; *) echo "--target auto|redroid|emulator|device"; exit 2;; esac
+# spark2's SDK adb is x86-64: use the arm64 adb (user space, scripts/android-target adb).
+if [ "$(uname -m)" = aarch64 ]; then PATH="$("$REPO/scripts/android-target" adb):$PATH"; fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-upgrade.XXXXXX")"
-TUNNEL_PID=""
+TUNNEL_PID=""; STARTED_TARGET=""
 STEP="start"; RESULT=FAIL; REASON=""; RESULT_WRITTEN=0; VERSION_FOR_RESULT=""
 step() { STEP="$*"; echo "==> $*"; }
 fail() { REASON="$1"; echo "UPGRADE TEST FAILED: $1"; write_result; exit 1; }
@@ -151,6 +158,7 @@ cleanup() {
     [ -n "$VERSION" ] && [ -n "$NEW" ] && [ -f "$NEW" ] && write_result || true
   fi
   srv stop >/dev/null 2>&1 || true
+  [ -n "$STARTED_TARGET" ] && "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
   [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
   rm -rf -- "${WORK:?}"
 }
@@ -199,13 +207,23 @@ OLD_VC="$(vc_of "$OLD")"; OLD_VN="$(vn_of "$OLD")"
 [ "${NEW_VC:-0}" -gt "${OLD_VC:-0}" ] || { echo "new versionCode ($NEW_VC) must be above the old one ($OLD_VC)"; exit 1; }
 echo "==> upgrade $OLD_VN ($OLD_VC) -> $NEW_VN ($NEW_VC)"
 
-step "find the adb device"
-mapfile -t DEVS < <(adb devices | awk 'NR>1 && $2=="device"{print $1}')
-[ ${#DEVS[@]} -gt 0 ] || { echo "no adb device. Start an emulator (laptop: emulator -avd risime_a) or attach a TEST phone."; exit 1; }
-SERIAL="${SERIAL:-${DEVS[0]}}"
-for s in "$SERIAL" ${SERIAL_B:+"$SERIAL_B"}; do
-  case "$s" in emulator-*) ;; *) [ "${UPGRADE_TEST_WIPE_DEVICE:-0}" = 1 ] || { echo "$s is not an emulator: set UPGRADE_TEST_WIPE_DEVICE=1 to allow uninstalling RisiMe on it"; exit 1; };; esac
-done
+step "find the adb device (target: $TARGET)"
+adb start-server >/dev/null 2>&1 || true
+devs_now() { local out; out="$(adb devices 2>/dev/null || true)"; awk 'NR>1 && $2=="device"{print $1}' <<<"$out"; }
+mapfile -t DEVS < <(devs_now)
+if [ "$TARGET" = redroid ] || { [ "$TARGET" = auto ] && [ ${#DEVS[@]} -eq 0 ] && on_spark2; }; then
+  [ -z "$SERIAL_B" ] || { echo "--serial-b is not supported with redroid (one container)"; exit 2; }
+  step "start redroid (scripts/android-target start)"
+  STARTED_TARGET=redroid
+  SERIAL="$("$REPO/scripts/android-target" start)" || { STARTED_TARGET=""; echo "could not start redroid"; exit 1; }
+  echo "    redroid up: $SERIAL ($(adb -s "$SERIAL" shell getprop ro.build.version.release | tr -d '\r'), $(adb -s "$SERIAL" shell getprop ro.product.cpu.abi | tr -d '\r'))"
+else
+  [ ${#DEVS[@]} -gt 0 ] || { echo "no adb device. Start an emulator (laptop: emulator -avd risime_a) or attach a TEST phone (spark2: --target redroid)."; exit 1; }
+  SERIAL="${SERIAL:-${DEVS[0]}}"
+  for s in "$SERIAL" ${SERIAL_B:+"$SERIAL_B"}; do
+    case "$s" in emulator-*) ;; *) [ "${UPGRADE_TEST_WIPE_DEVICE:-0}" = 1 ] || { echo "$s is not an emulator: set UPGRADE_TEST_WIPE_DEVICE=1 to allow uninstalling RisiMe on it"; exit 1; };; esac
+  done
+fi
 
 # ---- server
 step "temp server on 127.0.0.1:$PORT ($(on_spark2 && echo local || echo "on $SPARK via ssh tunnel"))"
@@ -295,8 +313,15 @@ visible_msgs() { dump; grep -oE 'upgrade-test [AB][0-9]+' "$WORK/ui.xml" | sort 
 
 # Room rows and DataStore keys need root (google_apis emulator images allow `adb root`).
 db_snapshot() {
-  A root >/dev/null 2>&1 || true; sleep 2
-  local who; who="$(A shell id 2>/dev/null || true)"; has_text "$who" "uid=0" || { echo "no-root"; return 0; }
+  local who; who="$(A shell id 2>/dev/null || true)"
+  if ! has_text "$who" "uid=0"; then
+    A root >/dev/null 2>&1 || true; sleep 2
+    case "$DEV" in *:*) adb connect "$DEV" >/dev/null 2>&1 || true;; esac   # adbd restarted: a TCP device reconnects
+    A wait-for-device >/dev/null 2>&1 || true
+    A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null 2>&1 || true            # the restart drops adb reverse
+    who="$(A shell id 2>/dev/null || true)"
+  fi
+  has_text "$who" "uid=0" || { echo "no-root"; return 0; }
   rm -f "$WORK"/risime.db*
   for f in risime.db risime.db-wal risime.db-shm; do A exec-out cat "/data/data/$PKG/databases/$f" > "$WORK/$f" 2>/dev/null || rm -f "$WORK/$f"; done
   python3 -I - "$WORK/risime.db" <<'PY'

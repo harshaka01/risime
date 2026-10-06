@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# An Android device for scripts/upgrade-test on spark2 (aarch64), with no human (decision 045):
+# redroid (AOSP in a Docker container, native arm64, no KVM) plus an arm64 adb in user space.
+#
+#   scripts/android-target adb        # install the arm64 adb if missing; print its bin dir (for PATH)
+#   scripts/android-target check      # exit 0 if redroid can run here (binder in the kernel), else say why
+#   scripts/android-target start      # start redroid, wait for boot; prints the adb serial (127.0.0.1:5655)
+#   scripts/android-target stop       # remove the container (its /data goes with it)
+#
+# The container listens on 127.0.0.1 only (CLAUDE.md rule 6). It needs the kernel's binder driver:
+# a one-time `sudo modprobe binder_linux ...` (see check); everything else is user space.
+set -euo pipefail
+IMAGE="${REDROID_IMAGE:-redroid/redroid:14.0.0_64only-latest@sha256:0a611199ba2e0b5d60af39b3327a517f6407231f4352114ed3bd3cbfe2be69aa}"
+NAME=risime-redroid
+PORT="${REDROID_PORT:-5655}"
+SERIAL="127.0.0.1:$PORT"
+ADB_DIR="$HOME/.local/opt/adb-arm64"
+
+ensure_adb() {
+  if [ "$(uname -m)" != aarch64 ]; then command -v adb >/dev/null && dirname "$(command -v adb)"; return; fi
+  if [ ! -x "$ADB_DIR/bin/adb" ]; then
+    # Ubuntu's arm64 adb (android-tools 34) and its private libs, unpacked without root.
+    local t; t="$(mktemp -d)"
+    (cd "$t" && apt-get download -q adb android-libbase android-libboringssl android-libcutils android-liblog android-libziparchive >/dev/null)
+    rm -rf "$ADB_DIR"; mkdir -p "$ADB_DIR/bin"
+    for f in "$t"/*.deb; do dpkg-deb -x "$f" "$ADB_DIR/root"; done
+    rm -rf "$t"
+    cat > "$ADB_DIR/bin/adb" <<EOF
+#!/bin/sh
+LD_LIBRARY_PATH="$ADB_DIR/root/usr/lib/aarch64-linux-gnu/android\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}" exec "$ADB_DIR/root/usr/lib/android-sdk/platform-tools/adb" "\$@"
+EOF
+    chmod +x "$ADB_DIR/bin/adb"
+  fi
+  "$ADB_DIR/bin/adb" version >/dev/null || { echo "arm64 adb in $ADB_DIR does not run" >&2; return 1; }
+  echo "$ADB_DIR/bin"
+}
+
+check() {
+  [ "$(uname -m)" = aarch64 ] || { echo "redroid target is set up for spark2 (aarch64)"; return 1; }
+  docker info >/dev/null 2>&1 || { echo "docker not usable"; return 1; }
+  if grep -qw binder /proc/filesystems || [ -e /dev/binder ]; then return 0; fi
+  cat <<'EOF'
+redroid needs the kernel binder driver, which is built (binder_linux.ko) but not loaded. Once, with sudo:
+  sudo modprobe binder_linux devices="binder,hwbinder,vndbinder"
+  echo binder_linux | sudo tee /etc/modules-load.d/redroid.conf
+  echo 'options binder_linux devices="binder,hwbinder,vndbinder"' | sudo tee /etc/modprobe.d/redroid.conf
+EOF
+  return 3
+}
+
+A() { "$(ensure_adb)/adb" "$@"; }
+
+start() {
+  check >&2 || exit $?
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+  docker image inspect "$IMAGE" >/dev/null 2>&1 || docker pull -q "$IMAGE" >&2
+  # --privileged: redroid mounts binderfs and runs Android's init. Only 127.0.0.1 is published.
+  docker run -d --name "$NAME" --privileged -p "127.0.0.1:$PORT:5555" "$IMAGE" \
+    androidboot.redroid_width=720 androidboot.redroid_height=1280 androidboot.redroid_dpi=320 \
+    androidboot.redroid_gpu_mode=guest >/dev/null
+  local booted=""
+  for _ in $(seq 1 120); do
+    A connect "$SERIAL" >/dev/null 2>&1 || true
+    booted="$(A -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+    [ "$booted" = 1 ] && break
+    docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null | grep -q true || break
+    sleep 2
+  done
+  if [ "$booted" != 1 ]; then
+    echo "redroid did not boot; last container log:" >&2; docker logs --tail 30 "$NAME" >&2 2>&1 || true
+    stop; exit 1
+  fi
+  # No lock screen / screen-off during the test.
+  A -s "$SERIAL" shell settings put global stay_on_while_plugged_in 7 >/dev/null 2>&1 || true
+  A -s "$SERIAL" shell settings put system screen_off_timeout 1800000 >/dev/null 2>&1 || true
+  A -s "$SERIAL" shell locksettings set-disabled true >/dev/null 2>&1 || true
+  A -s "$SERIAL" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+  A -s "$SERIAL" shell wm dismiss-keyguard >/dev/null 2>&1 || true
+  echo "$SERIAL"
+}
+
+stop() {
+  A disconnect "$SERIAL" >/dev/null 2>&1 || true
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+  adb) ensure_adb ;;
+  check) check ;;
+  start) start ;;
+  stop) stop ;;
+  serial) echo "$SERIAL" ;;
+  *) sed -n '2,12p' "$0"; exit 2 ;;
+esac

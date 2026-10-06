@@ -58,6 +58,15 @@
 - **Queue:** encrypted images (contract v1.10, extends the v1.9 blob API), then group icons.
 
 ## Waiting on Harsha (batched)
+- **One sudo step on spark2, so releases are gated automatically with no human (decision 045):**
+  ```
+  sudo modprobe binder_linux devices="binder,hwbinder,vndbinder"
+  echo binder_linux | sudo tee /etc/modules-load.d/redroid.conf
+  echo 'options binder_linux devices="binder,hwbinder,vndbinder"' | sudo tee /etc/modprobe.d/redroid.conf
+  ```
+  The first line loads the kernel's binder driver now; the other two load it at every boot. Check
+  afterwards with `scripts/android-target check`. From then on, `scripts/nightly-release` runs the
+  upgrade test in a redroid container on 127.0.0.1 and refuses to publish without a PASS.
 - The fail2ban jail and removing Tailscale, if not done yet (`docs/PROD.md`).
 - Firebase: `google-services.json` and `fcm-service-account.json` into `~/risime-keys/`.
 - Notify.lk "RisiMe" sender approval (SMS phone verification goes live then).

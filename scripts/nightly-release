@@ -74,7 +74,8 @@ fi
 
 # Upgrade gate (P0 nightly.10 data loss): the previous published APK, signed in with chats, must
 # upgrade in place to THIS candidate with every message kept and no new sign-in. Needs an adb
-# device; spark2 has no emulator, so without one the candidate is staged and the run stops:
+# device; spark2 runs it in redroid (Android in Docker, scripts/android-target, decision 045) with no
+# human. If redroid can't run (binder driver not loaded), the candidate is staged and the run stops:
 #   laptop: scripts/upgrade-test --fetch-candidate   (tests it, copies the result back to spark2)
 #   spark2: scripts/nightly-release ...              (same HEAD: accepts the fresh PASS)
 # Escape hatch for a result produced elsewhere: UPGRADE_TEST_RESULT=<file> (still checked: PASS,
@@ -106,8 +107,13 @@ fi
 if [ "$REUSED" = 0 ] && [ -z "${UPGRADE_GATE_OVERRIDE:-}" ]; then
   cp "$APK" "$CAND/app-release.apk"; printf 'version=%s\ncommit=%s\n' "$next" "$UT_COMMIT" > "$CAND/CANDIDATE"
 fi
-if [ "$REUSED" = 0 ] && [ -z "${UPGRADE_GATE_OVERRIDE:-}" ] && [ -z "${UPGRADE_TEST_RESULT:-}" ] && command -v adb >/dev/null && [ -n "$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device"' || true)" ]; then
-  scripts/upgrade-test --new "$APK" --version "$next" --commit "$UT_COMMIT" || { echo "UPGRADE TEST FAILED: not releasing"; exit 1; }
+if [ "$REUSED" = 0 ] && [ -z "${UPGRADE_GATE_OVERRIDE:-}" ] && [ -z "${UPGRADE_TEST_RESULT:-}" ]; then
+  # spark2 runs it unattended in redroid (decision 045): upgrade-test starts and removes the container.
+  if UT_WHY="$(scripts/android-target check 2>&1)"; then
+    scripts/upgrade-test --target redroid --new "$APK" --version "$next" --commit "$UT_COMMIT" || { echo "UPGRADE TEST FAILED: not releasing"; exit 1; }
+  else
+    echo "==> no redroid here: $UT_WHY"
+  fi
 fi
 # Explicit owner override (docs/decisions/044): a committed decision file naming this version.
 # Releases the staged candidate when only release tooling/docs changed since it was built.
