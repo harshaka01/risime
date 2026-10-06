@@ -142,17 +142,31 @@ All additive: every existing call (including `process` and `encrypt`) behaves as
   the past-epoch secrets. `None` in DM groups. Agents are never admins (`policy::is_admin`). A
   `grp:` message whose epoch has no record: a non-empty AAD (a delete) is `Malformed` (rolled back,
   nothing consumed); an empty AAD gets `None`.
-- **Sender ratchet:** `SenderRatchetConfiguration::new(5, 20_000)` (`OUT_OF_ORDER_TOLERANCE`,
-  `MAX_FORWARD_DISTANCE`) in the create, join and Welcome configs. `out_of_order_tolerance` stays 5
-  until v1.13 decides it.
+- **Sender ratchet:** `SenderRatchetConfiguration::new(32, 20_000)` (`OUT_OF_ORDER_TOLERANCE`,
+  `MAX_FORWARD_DISTANCE`) in the create, join and Welcome configs (tolerance 32 since v1.13, see
+  "Calls" below).
 
 ### Migration of stored groups (automatic, on load)
-The first load of a group stored before v1.12 (forward distance 1000) runs, in one nested
-transaction: `set_configuration` with the v1.12 join config, and for a `grp:` group the admin
-record of the **current** epoch from its `group_meta`. Pre-upgrade past epochs (at most 3) have
+The first load of a group whose stored sender ratchet differs from the current one (before v1.12:
+5/1000; v1.12: 5/20 000) runs, in one nested transaction: `set_configuration` with the current
+join config, and for a `grp:` group the admin record of the **current** epoch from its
+`group_meta` if it is missing. Pre-upgrade past epochs (at most 3) have
 no record: a late delete control from one of them fails with `Malformed` in `processDetailed`
 (the app drops it, fail closed), while ordinary messages decrypt as before. No app action and no
 schema change are needed. Test: `stored_group_is_migrated_and_accepts_a_5000_jump`.
+
+## Calls (contract v1.13 §16.12; crypto review R1, R2)
+- **`out_of_order_tolerance` 32** (from 5) for new groups and for stored groups (migrated on load,
+  above). OpenMLS semantics: after a sender's generation `n` decrypts, the keys of the 31 earlier
+  generations `n-1 … n-31` stay usable (once each); `n-32` and older fail with
+  `DecryptionFailed`. So one burst of call signals encrypted before a text can't push that text
+  out of the window, as long as the app keeps one encrypt-and-send lane per group (§16.3).
+- **Forward gaps:** expired or filtered call signals leave gaps; `maximum_forward_distance`
+  20 000 (v1.12) covers them.
+- **Nothing else in the core** for 1:1 calls (§16.12): call envelopes are ordinary `encrypt`ed
+  JSON; `call_id`/`ring` binding, `sent_at` freshness, dedupe and per-call sender pinning are app
+  checks on the decrypted envelope plus `processDetailed`'s authenticated sender (no AAD).
+- Tests: `tests/calls_v113.rs`.
 
 ### Purge notes for the app (R6, §15.6)
 - The core keeps **no application plaintext**, and consumed generation keys are deleted, so a
@@ -234,7 +248,7 @@ single 64 KiB buffer. The unit test `streams_beyond_the_cap` encrypts 20 MiB thr
 uncapped path. A 2 MiB photo takes about 8 ms. Benchmark on the oldest pilot phone before
 release.
 
-## Tests (`cargo test`: 89 core + 1 ignored generator, 7 FFI)
+## Tests (`cargo test`: 95 core + 1 ignored generator, 7 FFI)
 - **`groups`** (v1.9): create/join with PrivateMessage handshakes and meta; DM and group APIs
   don't mix; 0xFA01 key packages (a legacy key package is refused); admin adds/removes users and
   removed devices are locked out; members manage only their own devices; **peers reject
@@ -295,6 +309,10 @@ release.
   delete, `None` otherwise, nothing consumed); a 1 500-generation gap decrypts; a stored
   old-config group migrates on load and accepts a 5 000-generation jump; `purge_group`.
   Unit (`aad`): canonical encoding, sorting, case, duplicates, 0/101 targets, non-canonical AAD.
+- **`calls_v113`** (v1.13): tolerance 32 stored for creator and joiner; the window boundary
+  (generation 32 first, then 31…1 decrypt, 0 fails, no key reuse); a v1.12-stored group (5/20 000)
+  and a pre-v1.12 one (5/1000) migrate to 32/20 000 on load; 2 000 missed call signals, then a
+  text decrypts on a device that got none of them (also after migration).
 - **`media`** (v1.11):
   - unit: Padmé values and bounds, the nonce layout, crafted negatives (final flag on a
     non-final segment, nonzero padding, a 16-byte last segment, a skipped index), deterministic

@@ -64,8 +64,11 @@ pub const MAX_PAST_EPOCHS: usize = 3;
 /// gaps; this keeps them decryptable. Applied to new groups and, once on load, to stored ones.
 pub const MAX_FORWARD_DISTANCE: u32 = 20_000;
 
-/// Message keys kept per sender for out-of-order delivery (OpenMLS default; v1.13 decides).
-pub const OUT_OF_ORDER_TOLERANCE: u32 = 5;
+/// Message keys kept per sender for out-of-order delivery (contract v1.13 §16.12, crypto R2; OpenMLS's
+/// default is 5). A margin for bursty call signalling next to texts on the same leaf ratchet; up to
+/// this many past message keys per sender per epoch are kept (the forward-secrecy cost is
+/// accepted). Applied to new groups and, once on load, to stored ones.
+pub const OUT_OF_ORDER_TOLERANCE: u32 = 32;
 
 pub(crate) fn sender_ratchet_config() -> SenderRatchetConfiguration {
     SenderRatchetConfiguration::new(OUT_OF_ORDER_TOLERANCE, MAX_FORWARD_DISTANCE)
@@ -486,18 +489,18 @@ impl Client {
         Ok(out)
     }
 
-    /// Load a group. A group stored before v1.12 (OpenMLS's default sender ratchet) is migrated
-    /// once, in its own nested transaction: the v1.12 configuration ([`MAX_FORWARD_DISTANCE`]),
-    /// and for a `grp:` group the admin record of its current epoch.
+    /// Load a group. A group stored with an older sender ratchet configuration (OpenMLS's default
+    /// before v1.12, or v1.12's tolerance 5 before v1.13) is migrated once, in its own nested
+    /// transaction: the current configuration ([`MAX_FORWARD_DISTANCE`],
+    /// [`OUT_OF_ORDER_TOLERANCE`]), and for a `grp:` group the admin record of its current epoch
+    /// if it is missing.
     fn load(&self, group_id: &[u8]) -> Result<MlsGroup> {
         let mut group = MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
             .map_err(storage)?
             .ok_or(MlsError::UnknownGroup)?;
-        if group
-            .configuration()
-            .sender_ratchet_configuration()
-            .maximum_forward_distance()
-            != MAX_FORWARD_DISTANCE
+        let ratchet = group.configuration().sender_ratchet_configuration();
+        if ratchet.maximum_forward_distance() != MAX_FORWARD_DISTANCE
+            || ratchet.out_of_order_tolerance() != OUT_OF_ORDER_TOLERANCE
         {
             self.tx(|c| {
                 group
@@ -519,19 +522,51 @@ impl Client {
     /// next load migrates it.
     #[doc(hidden)]
     pub fn downgrade_group_config_for_tests(&self, group_id: &[u8]) -> Result<()> {
+        self.set_group_ratchet_for_tests(group_id, None)?;
+        self.tx(|c| c.purge_admins(group_id))
+    }
+
+    /// **Tests only:** put a stored group on the v1.12 sender ratchet configuration (out-of-order
+    /// tolerance 5, forward distance [`MAX_FORWARD_DISTANCE`]), keeping its admin records, as a
+    /// group stored before v1.13. The next load migrates it.
+    #[doc(hidden)]
+    pub fn downgrade_group_to_v112_for_tests(&self, group_id: &[u8]) -> Result<()> {
+        self.set_group_ratchet_for_tests(
+            group_id,
+            Some(SenderRatchetConfiguration::new(5, MAX_FORWARD_DISTANCE)),
+        )
+    }
+
+    /// **Tests only:** the stored group's sender ratchet configuration as
+    /// `(out_of_order_tolerance, maximum_forward_distance)`, read without the migrating load.
+    #[doc(hidden)]
+    pub fn stored_ratchet_config_for_tests(&self, group_id: &[u8]) -> Result<(u32, u32)> {
+        let group = MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
+            .map_err(storage)?
+            .ok_or(MlsError::UnknownGroup)?;
+        let r = group.configuration().sender_ratchet_configuration();
+        Ok((r.out_of_order_tolerance(), r.maximum_forward_distance()))
+    }
+
+    fn set_group_ratchet_for_tests(
+        &self,
+        group_id: &[u8],
+        ratchet: Option<SenderRatchetConfiguration>,
+    ) -> Result<()> {
         self.tx(|c| {
             let mut group = MlsGroup::load(c.provider.storage(), &GroupId::from_slice(group_id))
                 .map_err(storage)?
                 .ok_or(MlsError::UnknownGroup)?;
-            let cfg = MlsGroupJoinConfig::builder()
+            let mut b = MlsGroupJoinConfig::builder()
                 .use_ratchet_tree_extension(true)
                 .wire_format_policy(group::wire_policy(group_id))
-                .max_past_epochs(MAX_PAST_EPOCHS)
-                .build();
+                .max_past_epochs(MAX_PAST_EPOCHS);
+            if let Some(r) = ratchet {
+                b = b.sender_ratchet_configuration(r);
+            }
             group
-                .set_configuration(c.provider.storage(), &cfg)
-                .map_err(storage)?;
-            c.purge_admins(group_id)
+                .set_configuration(c.provider.storage(), &b.build())
+                .map_err(storage)
         })
     }
 
