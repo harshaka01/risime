@@ -1,5 +1,6 @@
 package lk.codegen.risime.data
 
+import androidx.datastore.core.DataMigration
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
@@ -17,6 +18,25 @@ enum class AuthKind { DEV, OIDC }
  * A signed-in user. [token] is the dev token for [AuthKind.DEV]; OIDC access tokens are never
  * persisted (they live in [lk.codegen.risime.data.auth.AuthManager] memory).
  */
+/**
+ * One-time rewrite of the never-live 0.2 default `https://risicloud.ai/risime` to the current
+ * default (`https://risime.risicloud.ai` in release). Only that exact stored value changes;
+ * user-chosen URLs stay. Runs inside DataStore before the first read.
+ */
+class LegacyServerUrlMigration(private val defaultServerUrl: String) : DataMigration<Preferences> {
+    override suspend fun shouldMigrate(currentData: Preferences): Boolean =
+        currentData[SessionStore.SERVER_URL_KEY]?.trimEnd('/') == LEGACY_URL && defaultServerUrl != LEGACY_URL
+
+    override suspend fun migrate(currentData: Preferences): Preferences =
+        currentData.toMutablePreferences().apply { this[SessionStore.SERVER_URL_KEY] = defaultServerUrl }
+
+    override suspend fun cleanUp() = Unit
+
+    companion object {
+        const val LEGACY_URL = "https://risicloud.ai/risime"
+    }
+}
+
 data class Session(val serverUrl: String, val token: String?, val user: User, val kind: AuthKind = AuthKind.DEV)
 
 /** Token, user and server URL in DataStore (never in logs). Also holds the per-install salt for A6. */
@@ -112,13 +132,14 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         return result
     }
 
-    private companion object {
-        val TOKEN = stringPreferencesKey("token")
-        val USER = stringPreferencesKey("user")
-        val SERVER_URL = stringPreferencesKey("server_url")
-        val SALT = stringPreferencesKey("install_salt")
-        val KIND = stringPreferencesKey("auth_kind")
-        val LAST_USER = stringPreferencesKey("last_user_id")
-        val AUTH_OVERRIDE = stringPreferencesKey("auth_override")
+    companion object {
+        val SERVER_URL_KEY = stringPreferencesKey("server_url")
+        private val TOKEN = stringPreferencesKey("token")
+        private val USER = stringPreferencesKey("user")
+        private val SERVER_URL = SERVER_URL_KEY
+        private val SALT = stringPreferencesKey("install_salt")
+        private val KIND = stringPreferencesKey("auth_kind")
+        private val LAST_USER = stringPreferencesKey("last_user_id")
+        private val AUTH_OVERRIDE = stringPreferencesKey("auth_override")
     }
 }

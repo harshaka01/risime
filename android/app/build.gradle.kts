@@ -52,9 +52,9 @@ android {
         targetSdk = 37
         versionCode = risiVersionCodeValue
         versionName = risiVersionName
-        // Release: RisiCloud (decision 017, option 2b). Debug overrides it with the laptop tunnel.
+        // Release: spark2 via Caddy at risime.risicloud.ai. Debug overrides it with the laptop tunnel.
         // Editable in Settings / on login in every build.
-        buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://risicloud.ai/risime\"")
+        buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://risime.risicloud.ai\"")
         // Keycloak redirects (decision 014): custom scheme per build type so both can be installed.
         manifestPlaceholders["appAuthRedirectScheme"] = "ai.risicloud.risime"
         buildConfigField("String", "OIDC_REDIRECT_URI", "\"ai.risicloud.risime://callback\"")

@@ -44,8 +44,8 @@ cd android
 git pull && scripts/install-apk      # scp's the APK built on spark2, installs on every adb device
 ssh -N spark2-tunnel                 # laptop :4400 -> spark2 127.0.0.1:4000
 ```
-- Emulator: the default server URL is `http://10.0.2.2:4400` in every build. Change it on the login
-  screen ("Server: … · Change") or in Settings; the tailnet uses `https://…ts.net` (`docs/TAILSCALE.md`).
+- Emulator: the debug default server URL is `http://10.0.2.2:4400`. Change it on the login
+  screen ("Server: … · Change") or in Settings; phones use `https://risime.risicloud.ai` (the release default).
 - USB phone: `adb reverse tcp:4000 tcp:4400`, then set the server URL to `http://127.0.0.1:4000`.
 - Cleartext is allowed only for `10.0.2.2` and `127.0.0.1` (debug and release).
 - Login: phone (defaults to `+94`, normalised to E.164 with libphonenumber, local `07…` numbers
@@ -59,7 +59,10 @@ ssh -N spark2-tunnel                 # laptop :4400 -> spark2 127.0.0.1:4000
   - **debug** builds also show "Developer sign-in (OTP)" whenever `dev` is listed. Settings →
     "Sign-in mode (debug)" can force either.
   - A pre-v1.3 server (404) means dev only.
-- Default server: release `https://risicloud.ai/risime`, debug `http://10.0.2.2:4400`.
+- Default server: release `https://risime.risicloud.ai` (spark2, Caddy → 127.0.0.1:4000), debug
+  `http://10.0.2.2:4400`. Installs that stored the old, never-live default
+  `https://risicloud.ai/risime` are moved to the new one once on upgrade (DataStore migration);
+  user-chosen URLs are kept. Downloads (updater) stay on `https://risicloud.ai/app/risime/`.
 - RisiCloud sign-in uses AppAuth (PKCE S256, Custom Tabs, scopes
   `openid email profile offline_access`). Redirects: `ai.risicloud.risime://callback` and
   `ai.risicloud.risime.debug://callback`; post-logout `…://logout`. `GET /me` runs right after.
@@ -273,3 +276,6 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
     your phone" with the new masked number. Local chats are still there after confirming.
 29. With an update marked `required` published, the update screen covers the phone screen; Sign
     out still works.
+30. Server URL: a fresh release install shows "Server: https://risime.risicloud.ai" on the login
+    screen and reaches the server with no tunnel. An install upgraded from a build that stored
+    `https://risicloud.ai/risime` also shows the new URL; a URL you typed yourself is kept.

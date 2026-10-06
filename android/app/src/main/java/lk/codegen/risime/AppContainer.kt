@@ -24,6 +24,7 @@ import lk.codegen.risime.data.BehaviourLog
 import lk.codegen.risime.data.ChatEngine
 import lk.codegen.risime.data.ContactsRepository
 import lk.codegen.risime.data.AuthKind
+import lk.codegen.risime.data.LegacyServerUrlMigration
 import lk.codegen.risime.data.PhoneNormalizer
 import lk.codegen.risime.data.auth.AppAuthGateway
 import lk.codegen.risime.data.auth.AuthManager
@@ -56,7 +57,10 @@ import java.util.concurrent.TimeUnit
 /** A Keycloak end_session to open in the browser (id_token_hint + post-logout redirect). */
 data class EndSession(val issuer: String, val idToken: String)
 
-private val Context.dataStore by preferencesDataStore(name = "risime")
+private val Context.dataStore by preferencesDataStore(
+    name = "risime",
+    produceMigrations = { listOf(LegacyServerUrlMigration(BuildConfig.DEFAULT_SERVER_URL)) },
+)
 
 /** Manual DI for 0.1 (no framework). One instance per process, owned by [RisiMeApp]. */
 class AppContainer(context: Context) {
