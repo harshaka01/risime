@@ -1,4 +1,59 @@
-# Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
+# Status / morning summary — 2026-10-06 night (orchestrator, cc-root window 0)
+
+## Morning summary
+| Version | What's in it |
+|---|---|
+| nightly.12 | Groups rejoin automatically after logout/login (P0); inbox-cursor fix. First release through the automatic Redroid upgrade gate |
+| nightly.13 | Encrypted photos (metadata stripping proven on real Android decoders); chats open at the newest message |
+| nightly.14 | 1:1 E2EE now activates (stale installs no longer block it); no global dev banner, 🔒 per chat (decision 048); Log out keeps chats (decision 050); group ticks; delete-for-everyone receive side |
+| nightly.15 | Photo progress and retry (groups too); scrolling verified on real Android 14 |
+| **nightly.16** | **1:1 voice calls** (E2EE signalling, DTLS fingerprint verified, ringing when closed or locked, Bluetooth). Connects only directly until the TURN ports are open |
+
+Every release went through: both gates, isolated live interop, the automatic Redroid upgrade gate
+(the previous published APK upgraded in place), a backup, then publish and deploy. No overrides
+were needed after nightly.11.
+
+## Tester notes (per feature)
+- **Encryption:** 1:1 chats switch to E2EE by themselves once both run nightly.14+. Encrypted
+  chats show a 🔒. A chat that isn't encrypted yet says why.
+- **Log out:** keeps your chats; signing back in brings everything back. "Log out and delete chats
+  from this phone" removes them.
+- **Groups:** after signing back in, groups are complete. After "Log out and delete chats", groups
+  rejoin by themselves ("Rejoining group…"). Older group messages stay unavailable until history
+  sharing ships (decision 049).
+- **Photos:** attach in an encrypted chat, with progress and Retry. Location and camera details are
+  removed. Tap for full screen and Save.
+- **Calls (nightly.16):** the 📞 in an encrypted 1:1 chat. For now they work on the same Wi-Fi;
+  across networks or on mobile data you get "Can't connect the call" until the ports open. A locked
+  phone rings as "Incoming RisiMe call"; unlock to see who.
+- **Always update over the old app. Never uninstall.**
+
+## Needs Harsha
+1. **Call ports (blocking calls across networks):** still blocked from outside at 19:00 UTC. 443
+   is open; 3478 udp+tcp, 5349 tcp, 49152–49999 udp, 7881 tcp and 50000–60000 udp are not, and
+   nothing reaches spark2. Ask Shirazi to forward them to 10.20.20.15 at the edge, and/or check
+   `sudo ufw status verbose` (the `ufw allow` lines are in decision 046). Then tell me: I'll rerun
+   the outside check, start coturn and set `TURN_URLS`, and calls will work everywhere.
+2. **History sharing consent (decision 049):** A = approve once per new phone (recommended), or
+   B = fully automatic.
+3. **Calls option A or B (decision 051):** B is shipped (no caller name while locked). Say if you
+   want A (a scoped background token that shows the name).
+4. Still pending: the Notify.lk sender ID, and RisiWork's `version.json`.
+5. Optional: Keycloak post-logout redirect URIs (`ai.risicloud.risime://logout`, `.debug`); the TLS
+   certificate copy for TURN 5349 (decision 046).
+
+## Next in the queue
+- Delete-for-everyone **send** UI: turn on `DELETES_SEND_ENABLED` once most testers are on
+  nightly.14+.
+- History sharing (needs answer 2), then group voice via LiveKit (v1.14).
+
+## v0.2.0-nightly.16 (live, not required): 1:1 voice calls
+- **What's in:** WebRTC/Opus with MLS signalling, the DTLS fingerprint verified end to end, the
+  audio-level header extension stripped. Core-telecom, a full-screen ring, a nameless ring when
+  locked (decision 051), Bluetooth.
+- **Proof:** live interop with 10 call checks; real libwebrtc on arm64 Redroid, 3 of 3 direct
+  connections, and a tampered fingerprint refused.
+- **Rollout:** one release (decision 053). TURN answers 503 until the ports are open.
 
 ## v0.2.0-nightly.15 (live, not required): photo progress and retry, scrolling verified on a device
 - **Photos:** "Encrypting photo…" and an upload percentage, "Couldn't send photo · Retry", retries
