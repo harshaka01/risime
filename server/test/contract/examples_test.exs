@@ -32,9 +32,8 @@ defmodule RisiMe.ContractExamplesTest do
               reaction_payload.json msg_send_reaction.json msg_send_reaction_and_body.json
               event_reaction.json error_unknown_target.json error_invalid_emoji.json
               limits_graphemes.json)
-  # v1.9 (MLS groups): parse-only placeholders added by root with the contract merge; the server
-  # role replaces them with real checks when it implements §12.
-  @pending_v1_9 ~w(group_create.json group_reply.json groups_reply.json group_members_add.json
+  # v1.9 (MLS groups, §12): checked in the "v1.9" describe below.
+  @checked_v1_9 ~w(group_create.json group_reply.json groups_reply.json group_members_add.json
                   group_role_patch.json group_reset.json group_reset_reply.json group_meta.json
                   group_receipts_reply.json blob_upload_reply.json device_put_groups.json
                   key_packages_upload_replace.json key_packages_claim_group.json
@@ -81,12 +80,8 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- (@checked ++ @pending_v1_9) == [],
-           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_9))}"
-  end
-
-  test "v1.9 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_9, do: assert(is_map(example(name)))
+    assert @files -- (@checked ++ @checked_v1_9) == [],
+           "add checks for: #{inspect(@files -- (@checked ++ @checked_v1_9))}"
   end
 
   setup do
@@ -736,6 +731,421 @@ defmodule RisiMe.ContractExamplesTest do
 
       both = example("msg_send_reaction_and_body.json")
       assert {:error, %{reason: "bad_request"}} = send_payload(chan, %{both | "to" => b.user.id})
+    end
+  end
+
+  ## v1.9 (§12)
+
+  describe "v1.9" do
+    setup :with_attestation_key
+
+    defp g_api(method, path, token, body \\ nil, device \\ nil),
+      do: RisiMe.GroupHelpers.api(method, path, token, body, device)
+
+    defp g_last(user_id, kind), do: RisiMe.GroupHelpers.last_event(user_id, kind)
+
+    # Members/receipts: compare with the example entry of the same phone/null shape.
+    defp assert_entries(ours, theirs, key) do
+      for o <- ours do
+        t = Enum.find(theirs, &(is_nil(&1[key]) == is_nil(o[key]))) || hd(theirs)
+        assert_same_shape(Map.put(o, key, t[key] && o[key]), Map.put(t, key, o[key] && t[key]))
+      end
+    end
+
+    defp assert_group(ours, ex) do
+      assert keys(ours) == keys(ex)
+      assert_same_shape(Map.drop(ours, ~w(members pending)), Map.drop(ex, ~w(members pending)))
+      assert_entries(ours["members"], ex["members"], "phone")
+      assert_entries(ours["members"], ex["members"], "joined_at")
+      for p <- ours["pending"], do: assert_same_shape(p, hd(ex["pending"]))
+    end
+
+    defp assert_error(ours, name, dynamic \\ []) do
+      ex = example(name)
+      assert_same_shape(ours, ex)
+      assert Map.drop(ours["error"], dynamic) == Map.drop(ex["error"], dynamic)
+    end
+
+    test "every §12 example against the server's real payloads", %{a: a, b: b} do
+      import RisiMe.GroupHelpers, only: [groups_device!: 1, ref: 2, create_commit: 2]
+
+      clear = fn ->
+        Repo.delete_all(from i in "app_instances", where: like(i.instance_key, "legacy:%"))
+      end
+
+      # device_put_groups.json, key_packages_upload_replace.json
+      a_dev = Ecto.UUID.generate()
+
+      {200, %{"attestation" => _}} =
+        g_api(:put, "/api/v1/me/devices/#{a_dev}", a.token, example("device_put_groups.json"))
+
+      :ok = RisiMe.MLS.record_instance(a.user.id, a_dev, nil, "0.3.0")
+      assert %{capabilities: ["groups"]} = Repo.get_by(RisiMe.Devices.Device, device_id: a_dev)
+
+      {204, nil} =
+        g_api(
+          :post,
+          "/api/v1/me/devices/#{a_dev}/key_packages",
+          a.token,
+          %{"key_packages" => [b64(), b64()]},
+          a_dev
+        )
+
+      {204, nil} =
+        g_api(
+          :post,
+          "/api/v1/me/devices/#{a_dev}/key_packages",
+          a.token,
+          example("key_packages_upload_replace.json"),
+          a_dev
+        )
+
+      assert {:ok, 1} = RisiMe.MLS.key_package_count(a.user.id, a_dev)
+
+      b_dev = groups_device!(b)
+      kamal = logged_in_user(display_name: "Kamal")
+      befriend!(a, kamal)
+      k_old = Ecto.UUID.generate()
+      groups_device!(kamal)
+      :ok = RisiMe.MLS.record_instance(kamal.user.id, k_old, nil, "0.2.0")
+      clear.()
+
+      # friends_reply_v19.json
+      {200, friends} = g_api(:get, "/api/v1/friends", a.token)
+      ex = example("friends_reply_v19.json")
+      assert keys(friends) == keys(ex)
+      for f <- friends["friends"], do: assert_same_shape(f, hd(ex["friends"]))
+      assert Enum.find(friends["friends"], &(&1["user_id"] == b.user.id))["group_ready"]
+      refute Enum.find(friends["friends"], &(&1["user_id"] == kamal.user.id))["group_ready"]
+
+      # error_not_ready_groups.json
+      create = %{example("group_create.json") | "member_ids" => [b.user.id, kamal.user.id]}
+      {409, err} = g_api(:post, "/api/v1/groups", a.token, create, a_dev)
+      assert_same_shape(err, example("error_not_ready_groups.json"))
+      assert err["error"]["message"] == example("error_not_ready_groups.json")["error"]["message"]
+
+      assert_same_shape(
+        hd(err["error"]["missing"]),
+        hd(example("error_not_ready_groups.json")["error"]["missing"])
+      )
+
+      # error_too_many_members.json
+      many = %{create | "member_ids" => for(_ <- 1..256, do: Ecto.UUID.generate())}
+      {422, err} = g_api(:post, "/api/v1/groups", a.token, many, a_dev)
+      assert_error(err, "error_too_many_members.json")
+
+      # error_too_many_devices.json: 77 friends with 10 groups devices each (> 768).
+      now = DateTime.utc_now()
+
+      big =
+        for _ <- 1..77 do
+          u = RisiMe.GroupHelpers.fast_user!()
+          befriend!(a, u)
+
+          Repo.insert_all(
+            RisiMe.Devices.Device,
+            for _ <- 1..10 do
+              %{
+                user_id: u.id,
+                device_id: Ecto.UUID.generate(),
+                platform: "android",
+                mls_signature_key: :crypto.strong_rand_bytes(32),
+                mls_attestation: "x",
+                capabilities: ["groups"],
+                last_seen_at: now,
+                inserted_at: now,
+                updated_at: now
+              }
+            end
+          )
+
+          u.id
+        end
+
+      {422, err} = g_api(:post, "/api/v1/groups", a.token, %{create | "member_ids" => big}, a_dev)
+      assert_error(err, "error_too_many_devices.json")
+
+      # group_create.json → 201, then the epoch-0 commit.
+      {201, %{"group" => %{"id" => id} = g}} =
+        g_api(:post, "/api/v1/groups", a.token, %{create | "member_ids" => [b.user.id]}, a_dev)
+
+      assert g["state"] == "creating"
+
+      # key_packages_claim_group.json
+      :ok = RisiMe.MLS.upload_key_packages(b.user.id, b_dev, %{"key_packages" => [b64()]})
+
+      claim = %{
+        example("key_packages_claim_group.json")
+        | "user_ids" => [b.user.id],
+          "conversation_id" => id
+      }
+
+      {200, %{"devices" => [dev]}} =
+        g_api(:post, "/api/v1/mls/key_packages/claim", a.token, claim, a_dev)
+
+      assert_same_shape(dev, hd(example("key_packages_claim_reply.json")["devices"]))
+
+      {200, %{"epoch" => 1}} =
+        g_api(
+          :post,
+          "/api/v1/mls/groups/#{id}/commit",
+          a.token,
+          create_commit([a.user.id, b.user.id], {a.user.id, a_dev}),
+          a_dev
+        )
+
+      assert_same_shape(g_last(b.user.id, "group_event"), example("event_group_created.json"))
+
+      assert_entries(
+        g_last(b.user.id, "group_event")["data"]["members"],
+        example("event_group_created.json")["data"]["members"],
+        "phone"
+      )
+
+      # error_not_admin.json; group_members_add.json → group_reply.json / groups_reply.json
+      nimal = logged_in_user(display_name: "Nimal")
+      befriend!(a, nimal)
+      n_dev = groups_device!(nimal)
+      add = %{example("group_members_add.json") | "user_ids" => [nimal.user.id]}
+      {403, err} = g_api(:post, "/api/v1/groups/#{id}/members", b.token, add, b_dev)
+      assert_error(err, "error_not_admin.json")
+
+      {200, _} = g_api(:post, "/api/v1/groups/#{id}/members", a.token, add, a_dev)
+      {200, %{"group" => gb}} = g_api(:get, "/api/v1/groups/#{id}", b.token)
+      assert_group(gb, example("group_reply.json")["group"])
+      {200, %{"groups" => [gl]}} = g_api(:get, "/api/v1/groups", b.token)
+      assert_group(gl, hd(example("groups_reply.json")["groups"]))
+
+      # event_group_op.json
+      op_ev = g_last(a.user.id, "group_op")
+      assert_same_shape(op_ev, example("event_group_op.json"))
+      op_id = op_ev["data"]["op"]["op_id"]
+
+      # blob_upload_reply.json, then mls_commit_request_group.json with a welcome_ref.
+      bytes = :crypto.strong_rand_bytes(70_000)
+
+      {201, up} =
+        RisiMe.GroupHelpers.api_raw(
+          "/api/v1/blobs?purpose=mls&conversation_id=#{id}",
+          a.token,
+          bytes
+        )
+
+      assert_same_shape(up, example("blob_upload_reply.json"))
+
+      req = %{
+        example("mls_commit_request_group.json")
+        | "epoch" => 1,
+          "welcome_ref" => Map.take(up, ~w(blob_id size sha256)),
+          "added" => [ref(nimal.user.id, n_dev)],
+          "op_id" => op_id
+      }
+
+      {200, %{"epoch" => 2}} =
+        g_api(:post, "/api/v1/mls/groups/#{id}/commit", a.token, req, a_dev)
+
+      assert_same_shape(
+        g_last(nimal.user.id, "mls_welcome"),
+        example("event_mls_welcome_ref.json")
+      )
+
+      assert_same_shape(g_last(b.user.id, "group_event"), example("event_group_added.json"))
+
+      # event_mls_commit_group_ref.json (a self-update by reference)
+      {201, up2} =
+        RisiMe.GroupHelpers.api_raw(
+          "/api/v1/blobs?purpose=mls&conversation_id=#{id}",
+          a.token,
+          bytes
+        )
+
+      ref_commit = %{
+        "generation" => 1,
+        "epoch" => 2,
+        "commit" => nil,
+        "commit_ref" => Map.take(up2, ~w(blob_id size sha256))
+      }
+
+      {200, %{"epoch" => 3}} =
+        g_api(:post, "/api/v1/mls/groups/#{id}/commit", a.token, ref_commit, a_dev)
+
+      assert_same_shape(
+        g_last(b.user.id, "mls_commit"),
+        example("event_mls_commit_group_ref.json")
+      )
+
+      # mls_commits_reply_paged.json
+      {200, first} =
+        g_api(:get, "/api/v1/mls/groups/#{id}/commits?since_epoch=0&limit=1", a.token)
+
+      assert first["has_more"]
+      {200, page} = g_api(:get, "/api/v1/mls/groups/#{id}/commits?since_epoch=1&limit=2", a.token)
+      ex = example("mls_commits_reply_paged.json")
+      assert keys(page) == keys(ex)
+      [inline, by_ref] = page["commits"]
+      assert_same_shape(inline, hd(ex["commits"]))
+      assert_same_shape(by_ref, List.last(ex["commits"]))
+
+      # msg_send_group.json → msg_send_group_reply.json, event_message_group.json
+      {:ok, sock} = connect(UserSocket, %{"token" => a.token, "device_id" => a_dev})
+      {:ok, _, chan} = subscribe_and_join(sock, InboxChannel, "inbox:" <> a.user.id, %{})
+      send = %{example("msg_send_group.json") | "conversation_id" => id, "epoch" => 3}
+      ref = push(chan, "msg:send", send)
+      assert_reply ref, :ok, reply
+      assert_same_shape(wire(reply), example("msg_send_group_reply.json"))
+      mid = reply.message_id
+      assert_same_shape(g_last(b.user.id, "message"), example("event_message_group.json"))
+
+      # typing_group.json → signal_typing_group.json
+      Phoenix.PubSub.subscribe(RisiMe.PubSub, Messaging.topic(b.user.id))
+      ref = push(chan, "typing", %{example("typing_group.json") | "conversation_id" => id})
+      assert_reply ref, :ok, %{}
+      assert_receive {:signal, %{kind: "typing"} = signal}
+      assert_same_shape(wire(signal), example("signal_typing_group.json"))
+
+      # error_not_member.json
+      ref =
+        push(chan, "msg:send", %{
+          send
+          | "conversation_id" => "grp:" <> Ecto.UUID.generate(),
+            "client_msg_id" => Ecto.UUID.generate()
+        })
+
+      assert_reply ref, :error, err
+      assert wire(err) == example("error_not_member.json")
+
+      # event_group_receipt.json, group_receipts_reply.json
+      :ok = Messaging.ack(b.user.id, [mid], "read")
+      assert_same_shape(g_last(a.user.id, "group_receipt"), example("event_group_receipt.json"))
+      {200, receipts} = g_api(:get, "/api/v1/groups/#{id}/messages/#{mid}/receipts", a.token)
+      ex = example("group_receipts_reply.json")
+      assert keys(receipts) == keys(ex)
+      assert_entries(receipts["receipts"], ex["receipts"], "read_at")
+
+      # group_role_patch.json → event_group_role_changed.json; then metadata_changed
+      {200, %{"group" => %{"pending" => [role_op]} = gr}} =
+        g_api(
+          :patch,
+          "/api/v1/groups/#{id}/members/#{b.user.id}",
+          a.token,
+          example("group_role_patch.json"),
+          a_dev
+        )
+
+      assert_group(gr, example("group_reply.json")["group"])
+
+      role_commit = %{
+        "generation" => 1,
+        "epoch" => 3,
+        "commit" => b64(),
+        "op_id" => role_op["op_id"],
+        "meta_changed" => true
+      }
+
+      {200, %{"epoch" => 4}} =
+        g_api(:post, "/api/v1/mls/groups/#{id}/commit", a.token, role_commit, a_dev)
+
+      assert_same_shape(
+        g_last(nimal.user.id, "group_event"),
+        example("event_group_role_changed.json")
+      )
+
+      {200, _} =
+        g_api(
+          :post,
+          "/api/v1/mls/groups/#{id}/commit",
+          a.token,
+          %{role_commit | "epoch" => 4, "op_id" => nil},
+          a_dev
+        )
+
+      assert_same_shape(
+        g_last(nimal.user.id, "group_event"),
+        example("event_group_metadata_changed.json")
+      )
+
+      # group_meta.json: the server never sees it; its admin list is a list of user ids.
+      meta = example("group_meta.json")
+      assert meta["v"] == 1 and String.length(meta["name"]) in 1..100 and meta["icon"] == nil
+      assert Enum.all?(meta["admins"], &(&1 =~ @uuid))
+
+      # event_group_left.json: Nimal leaves; admin b commits the removal.
+      {204, nil} = g_api(:post, "/api/v1/groups/#{id}/leave", nimal.token, nil, n_dev)
+      [leave_op] = RisiMe.Groups.Ops.list(id)
+
+      leave = %{
+        "generation" => 1,
+        "epoch" => 5,
+        "commit" => b64(),
+        "removed" => [ref(nimal.user.id, n_dev)],
+        "op_id" => leave_op.op_id
+      }
+
+      {200, %{"epoch" => 6}} =
+        g_api(:post, "/api/v1/mls/groups/#{id}/commit", b.token, leave, b_dev)
+
+      assert_same_shape(g_last(nimal.user.id, "group_event"), example("event_group_left.json"))
+
+      # event_group_removed.json: a removes b (a is the creator, so may remove an admin).
+      {204, nil} =
+        g_api(:delete, "/api/v1/groups/#{id}/members/#{b.user.id}", a.token, nil, a_dev)
+
+      [rm_op] = RisiMe.Groups.Ops.list(id)
+      rm = %{leave | "epoch" => 6, "removed" => [ref(b.user.id, b_dev)], "op_id" => rm_op.op_id}
+      {200, %{"epoch" => 7}} = g_api(:post, "/api/v1/mls/groups/#{id}/commit", a.token, rm, a_dev)
+      assert_same_shape(g_last(b.user.id, "group_event"), example("event_group_removed.json"))
+
+      {409, err} = g_api(:post, "/api/v1/groups/#{id}/leave", a.token, nil, a_dev)
+      assert_error(err, "error_last_admin.json")
+
+      # event_group_add_expired.json (Kamal updates his old app first)
+      Repo.delete_all(from i in "app_instances", where: i.instance_key == ^("device:" <> k_old))
+
+      {200, %{"group" => %{"pending" => [add_op]}}} =
+        g_api(
+          :post,
+          "/api/v1/groups/#{id}/members",
+          a.token,
+          %{"user_ids" => [kamal.user.id]},
+          a_dev
+        )
+
+      :ok =
+        RisiMe.Workers.GroupTimer.perform(%Oban.Job{
+          args: %{"kind" => "expire", "op_id" => add_op["op_id"]}
+        })
+
+      assert_same_shape(g_last(a.user.id, "group_event"), example("event_group_add_expired.json"))
+
+      # error_log_expired.json
+      Repo.delete_all(from c in "mls_commits", where: c.conversation_id == ^id and c.epoch < 3)
+      {410, err} = g_api(:get, "/api/v1/mls/groups/#{id}/commits?since_epoch=0", a.token)
+      assert_error(err, "error_log_expired.json")
+
+      # group_reset.json → group_reset_reply.json, event_group_reset.json, error_generation_conflict.json
+      {200, reply} =
+        g_api(
+          :post,
+          "/api/v1/mls/groups/#{id}/reset",
+          a.token,
+          example("group_reset.json"),
+          a_dev
+        )
+
+      assert reply == example("group_reset_reply.json")
+      ev = g_last(a.user.id, "group_event")
+      assert_same_shape(ev, example("event_group_reset.json"))
+
+      {409, err} =
+        g_api(
+          :post,
+          "/api/v1/mls/groups/#{id}/reset",
+          a.token,
+          example("group_reset.json"),
+          a_dev
+        )
+
+      assert_error(err, "error_generation_conflict.json")
     end
   end
 
