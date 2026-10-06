@@ -12,6 +12,9 @@ defmodule RisiMe.Devices.Device do
     field :app_version, :string
     field :user_token_id, :binary_id
     field :last_seen_at, :utc_datetime_usec
+    field :mls_signature_key, :binary
+    field :mls_attestation, :string
+    field :mls_attested_at, :utc_datetime_usec
 
     timestamps(type: :utc_datetime_usec)
   end

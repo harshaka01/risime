@@ -48,11 +48,11 @@ defmodule RisiMe.Messaging do
   a repeat returns the original reply and creates nothing new.
   """
   @spec send(String.t(), map) :: {:ok, map} | {:error, send_error}
-  def send(sender_id, params) do
+  def send(sender_id, params, opts \\ []) do
     # Emits [:risime, :message, :send, :start | :stop | :exception]; :stop has the duration
     # and `result` (:ok or the error reason). Never the body.
     :telemetry.span([:risime, :message, :send], %{}, fn ->
-      result = do_send(sender_id, params)
+      result = do_send(sender_id, params, opts[:device_id])
       {result, %{result: result_tag(result)}}
     end)
   end
@@ -60,13 +60,50 @@ defmodule RisiMe.Messaging do
   defp result_tag({:ok, _}), do: :ok
   defp result_tag({:error, reason}), do: reason
 
-  defp do_send(sender_id, params) do
+  # v1.7 §10.3 order: idempotent resend → not_friends → e2ee checks → rate limit → store.
+  defp do_send(sender_id, params, device_id) do
     with {:ok, req} <- parse_send(params),
-         :ok <- validate_body(req.body) do
+         :ok <- validate_body(req) do
+      req = Map.put(req, :from_device, device_id)
+
       case store().get_sent(sender_id, req.client_msg_id) do
         {:ok, prior} -> {:ok, resend(sender_id, req, prior)}
         :not_found -> send_new(sender_id, req)
       end
+    end
+  end
+
+  @max_ciphertext 16 * 1024
+
+  # v1.7: an e2ee send carries `ciphertext`, `generation` and `epoch` and no `body`.
+  defp parse_send(%{"client_msg_id" => cmid, "to" => to, "ciphertext" => ct} = p)
+       when is_binary(cmid) and is_binary(to) and not is_map_key(p, "body") do
+    cmid = String.downcase(cmid)
+    to = String.downcase(to)
+
+    cond do
+      not uuid?(cmid) ->
+        {:error, :bad_request}
+
+      not uuid?(to) ->
+        {:error, :unknown_recipient}
+
+      not (is_integer(p["generation"]) and is_integer(p["epoch"])) ->
+        {:error, :bad_request}
+
+      not is_binary(ct) ->
+        {:error, :bad_request}
+
+      true ->
+        {:ok,
+         %{
+           client_msg_id: cmid,
+           to: to,
+           ciphertext: ct,
+           generation: p["generation"],
+           epoch: p["epoch"],
+           body: nil
+         }}
     end
   end
 
@@ -85,7 +122,15 @@ defmodule RisiMe.Messaging do
   defp parse_send(%{"to" => _, "client_msg_id" => _}), do: {:error, :empty_body}
   defp parse_send(_), do: {:error, :bad_request}
 
-  defp validate_body(body) do
+  defp validate_body(%{ciphertext: ct}) do
+    case Base.decode64(ct) do
+      {:ok, bin} when byte_size(bin) > @max_ciphertext -> {:error, :too_long}
+      {:ok, bin} when byte_size(bin) > 0 -> :ok
+      _ -> {:error, :bad_request}
+    end
+  end
+
+  defp validate_body(%{body: body}) do
     cond do
       String.trim(body) == "" -> {:error, :empty_body}
       String.length(body) > @max_body -> {:error, :too_long}
@@ -95,6 +140,7 @@ defmodule RisiMe.Messaging do
 
   defp send_new(sender_id, req) do
     with :ok <- check_recipient(sender_id, req.to),
+         :ok <- check_e2ee(sender_id, req),
          :ok <- RateLimiter.hit(:msg_send, sender_id, @send_limit, @send_window) do
       sent = %{
         message_id: TimeUUID.generate(),
@@ -124,6 +170,20 @@ defmodule RisiMe.Messaging do
     end
   end
 
+  # v1.7 §10.3: plaintext to an e2ee conversation, ciphertext to a plaintext one, stale
+  # generation/epoch, or ciphertext from a socket without a device id.
+  defp check_e2ee(sender_id, req) do
+    group = RisiMe.MLS.group(conversation_id(sender_id, req.to))
+
+    cond do
+      req.body != nil and group != nil -> {:error, :e2ee_required}
+      req.body != nil -> :ok
+      group == nil or req.from_device == nil -> {:error, :bad_request}
+      req.generation != group.generation or req.epoch != group.epoch -> {:error, :stale_epoch}
+      true -> :ok
+    end
+  end
+
   # A repeat of an earlier send. If that send stopped before indexing the message, finish it.
   defp resend(sender_id, req, prior) do
     if store().get_message(prior.message_id) == :not_found, do: deliver(sender_id, req, prior)
@@ -141,19 +201,36 @@ defmodule RisiMe.Messaging do
         status: "sent"
       })
 
-    publish(req.to, %{
-      event_id: sent.message_id,
-      kind: "message",
-      data: %{
-        "message_id" => sent.message_id,
-        "client_msg_id" => req.client_msg_id,
-        "conversation_id" => sent.conversation_id,
-        "from" => sender_id,
-        "to" => req.to,
-        "body" => req.body,
-        "server_ts" => iso(sent.server_ts)
-      }
-    })
+    base = %{
+      "message_id" => sent.message_id,
+      "client_msg_id" => req.client_msg_id,
+      "conversation_id" => sent.conversation_id,
+      "from" => sender_id,
+      "to" => req.to,
+      "server_ts" => iso(sent.server_ts)
+    }
+
+    if req.body do
+      publish(req.to, %{
+        event_id: sent.message_id,
+        kind: "message",
+        data: Map.put(base, "body", req.body)
+      })
+    else
+      # v1.7: ciphertext only, and the sender's inbox too (their other devices; the sending
+      # device skips it by from_device).
+      data =
+        Map.merge(base, %{
+          "from_device" => req.from_device,
+          "ciphertext" => req.ciphertext,
+          "generation" => req.generation,
+          "epoch" => req.epoch
+        })
+
+      event = %{event_id: sent.message_id, kind: "message", data: data}
+      publish(req.to, event)
+      publish(sender_id, event, push: false)
+    end
   end
 
   defp send_reply(sent) do
@@ -285,11 +362,16 @@ defmodule RisiMe.Messaging do
     end
   end
 
-  defp publish(user_id, event) do
+  defp publish(user_id, event, opts \\ []) do
     :ok = store().append_event(user_id, event)
     Phoenix.PubSub.broadcast(RisiMe.PubSub, topic(user_id), {:inbox_event, event})
     # Contract v1.5: a data-only wake-up if the user has no live inbox channel.
-    RisiMe.Push.notify(user_id)
+    if Keyword.get(opts, :push, true), do: RisiMe.Push.notify(user_id)
+  end
+
+  @doc "Stores and pushes an MLS inbox event (`mls_commit`, `mls_welcome`, `mls_membership`); never a push (§10.3)."
+  def publish_mls(user_id, kind, data) do
+    publish(user_id, %{event_id: TimeUUID.generate(), kind: kind, data: data}, push: false)
   end
 
   @doc "Health of the message store (`GET /health`)."

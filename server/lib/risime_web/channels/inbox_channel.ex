@@ -50,7 +50,7 @@ defmodule RisiMeWeb.InboxChannel do
   end
 
   def handle_in("msg:send", payload, socket) when is_map(payload) do
-    case Messaging.send(socket.assigns.user_id, payload) do
+    case Messaging.send(socket.assigns.user_id, payload, device_id: socket.assigns[:device_id]) do
       {:ok, reply} -> {:reply, {:ok, reply}, socket}
       {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
     end

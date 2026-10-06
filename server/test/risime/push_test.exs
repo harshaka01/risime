@@ -30,7 +30,7 @@ defmodule RisiMe.PushTest do
 
   defp device!(user, token),
     do:
-      :ok =
+      {:ok, nil} =
         Devices.register(user.id, Ecto.UUID.generate(), %{
           "platform" => "android",
           "push_token" => token

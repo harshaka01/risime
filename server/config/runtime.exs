@@ -95,6 +95,19 @@ if config_env() != :test do
          )
 end
 
+# E2EE attestation key (decision 034). Without the file, E2EE stays off (503 mls_unavailable).
+if config_env() != :test do
+  config :risime,
+         :attestation_key_file,
+         System.get_env(
+           "ATTESTATION_KEY_FILE",
+           Path.expand("~/risime-keys/attestation_ed25519.jwk")
+         )
+
+  if prev = System.get_env("ATTESTATION_PREVIOUS_KEYS"),
+    do: config(:risime, :attestation_previous_keys, prev)
+end
+
 # Invite link in v1.6 invites (decision 030).
 if link = System.get_env("INVITE_LINK"), do: config(:risime, :invite_link, link)
 

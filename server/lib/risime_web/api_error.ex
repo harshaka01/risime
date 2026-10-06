@@ -17,6 +17,10 @@ defmodule RisiMeWeb.ApiError do
     phone_unverified: "Confirm your phone number to continue",
     already_verified: "Your phone number is already confirmed",
     invalid_name: "Name must be 1-64 characters",
+    mls_unavailable: "End-to-end encryption isn't available on this server yet",
+    epoch_conflict: "The group moved on; catch up and retry",
+    not_ready: "Not every device can use end-to-end encryption yet",
+    not_friends: "You can only do this with friends",
     invalid_device: "Device registration is invalid",
     sms_unavailable: "Couldn't send the SMS right now, try again shortly",
     invalid_display_name: "Display name must be 1-64 characters"

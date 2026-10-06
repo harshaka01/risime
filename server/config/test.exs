@@ -56,6 +56,9 @@ config :risime, :push_coalesce_ms, 300
 config :risime, :push_retry_ms, 10
 config :risime, :fcm, req_options: [plug: {Req.Test, RisiMe.FCM}]
 
+# E2EE: off unless a test installs a temp attestation key (RisiMe.MLSHelpers).
+config :risime, :attestation_key_file, nil
+
 # fail2ban auth log: a per-run temp file in tests.
 config :risime, :auth_log_path, Path.join(System.tmp_dir!(), "risime-test-auth.log")
 

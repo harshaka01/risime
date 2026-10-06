@@ -105,8 +105,8 @@ defmodule RisiMeWeb.DeviceTest do
   end
 
   test "prune removes devices unseen for 60 days", %{user: u} do
-    :ok = Devices.register(u.id, Ecto.UUID.generate(), body("old"))
-    :ok = Devices.register(u.id, Ecto.UUID.generate(), body("new"))
+    {:ok, nil} = Devices.register(u.id, Ecto.UUID.generate(), body("old"))
+    {:ok, nil} = Devices.register(u.id, Ecto.UUID.generate(), body("new"))
 
     Repo.update_all(from(d in Device, where: d.push_token == "old"),
       set: [last_seen_at: DateTime.add(DateTime.utc_now(), -61, :day)]
@@ -117,7 +117,7 @@ defmodule RisiMeWeb.DeviceTest do
   end
 
   test "inspect never shows the push token", %{user: u} do
-    :ok = Devices.register(u.id, Ecto.UUID.generate(), body("secret-fcm-token"))
+    {:ok, nil} = Devices.register(u.id, Ecto.UUID.generate(), body("secret-fcm-token"))
     refute inspect(devices(u.id)) =~ "secret-fcm-token"
   end
 end

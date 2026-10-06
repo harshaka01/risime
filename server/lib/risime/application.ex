@@ -33,6 +33,7 @@ defmodule RisiMe.Application do
       RisiMe.Presence,
       RisiMe.SocketTracker,
       RisiMe.Auth.JWKS,
+      RisiMe.MLS.Attestation,
       RisiMe.Auth,
       RisiMe.Accounts.ResetListener,
       RisiMe.Accounts.SmsStatus,
