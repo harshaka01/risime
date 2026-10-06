@@ -2,8 +2,9 @@
 
 **READY** — 0.1 (A1–A7) plus 0.2: release plumbing, Settings, presence/last seen and typing
 (v1.2), chat polish, the design system pass, and **contract v1.3**: RisiCloud (Keycloak) sign-in,
-fingerprint-unlocked tokens and the release-only in-app updater. Gate green on `main`:
-`cd android && ./gradlew assembleDebug testDebugUnitTest assembleRelease` (98 JVM unit tests).
+fingerprint-unlocked tokens and the release-only in-app updater, and **contract v1.4**: one-time
+SMS phone verification. Gate green on `main`:
+`cd android && ./gradlew assembleDebug testDebugUnitTest assembleRelease` (109 JVM unit tests).
 Not yet run on a device or emulator (spark2 has none): see "Device check" below.
 
 ## Release build (decision 003, details in decision 005)
@@ -80,6 +81,27 @@ ssh -N spark2-tunnel                 # laptop :4400 -> spark2 127.0.0.1:4000
   These screens show the server's message verbatim.
 - **Logout:** revoke the refresh token, then Keycloak `end_session` in the browser, then delete
   the key, then wipe chats. Auth trouble never wipes; another user signing in does.
+
+## Phone verification (contract v1.4; decisions 020, 021)
+- When `GET /me` says `phone_verified: false` (or any call answers `403 phone_unverified`), the
+  app shows **"Confirm your phone"**:
+  - the masked allowlisted number, with "This number comes from your company's RisiMe
+    allowlist…";
+  - **Send code**, then a 6-digit field (SMS autofill hint, submits on the 6th digit);
+  - Resend after 60 s, or after `Retry-After` on a 429;
+  - Sign out.
+- **Errors:**
+  - wrong code (with "N attempts left" when the server sends it);
+  - expired → send a new one;
+  - too many attempts;
+  - too many codes (wait N min);
+  - `409 already_verified` → continues;
+  - SMS unavailable → retry;
+  - offline.
+- **Gate order:** update required → blocked → locked → confirm phone → chats. Nothing connects
+  until the phone is verified, and verification problems never wipe data.
+- An absent `phone_verified` (pre-v1.4 server) counts as verified. Dev-login users are always
+  verified.
 
 ## In-app updater (release only; decisions 016, 019)
 - `https://risicloud.ai/app/risime/version.json` is fetched at start and at most every 6 h in the
@@ -234,3 +256,20 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
     restarts on the new version with chats and sign-in kept. With `--required`, a blocking
     screen appears instead. Tampering (wrong sha in `version.json`) gives "Update rejected:
     checksum mismatch".
+25. Phone verification. The server runs `PHONE_VERIFICATION=required` with `SMS_MODE=log` until
+    the "RisiMe" sender ID is approved, so take the code from the server log:
+    `tmux capture-pane -p -t risime-server -S -500 | grep "DEV OTP" | tail -3`.
+    - Sign in with RisiCloud as a not-yet-verified user: "Confirm your phone" appears, with the
+      masked number and no Chats.
+    - Send code → "Resend code in 60 s" counts down.
+    - Wrong code: "Wrong code — N attempts left", and the field clears.
+    - Right code (or paste it): it submits by itself, and Chats loads with contacts and
+      connection.
+26. Kill and reopen during verification: fingerprint unlock, then "Confirm your phone" again (no
+    Chats).
+27. Request codes until the server limits you: "Too many codes requested. Try again in N min",
+    and the button stays disabled for that long.
+28. An admin changes your allowlisted phone while you're in Chats: the socket drops, then "Confirm
+    your phone" with the new masked number. Local chats are still there after confirming.
+29. With an update marked `required` published, the update screen covers the phone screen; Sign
+    out still works.
