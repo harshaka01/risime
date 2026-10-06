@@ -1,22 +1,31 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
-## Where things stand (updated 2026-10-06 ~10:10 UTC)
-- **E2EE is ON** (decision 038): https://risime.risicloud.ai runs **v0.2.0-nightly.8**, published as a
-  **required** update (versionCode 20008).
-  - `/mls/attestation_keys` serves the pinned pilot key `x-nu0EBHzGv-…`.
-  - Chats upgrade automatically once both people are on nightly.8. The dev banner stays.
-- The service runs under systemd (linger on, so it starts at boot), with the health timer, backups
-  and rollback. Caddy runs the repo config (HSTS, `/` redirects to downloads).
-- **Next (in order):** emoji and reactions (v1.8 proposal reviewed by server; android review
-  next) → MLS groups → encrypted images.
+## Where things stand (updated 2026-10-06, after the spark2 reboot)
+- **Reboot recovery verified.** spark2 rebooted and **everything came back by itself**:
+  - Postgres and Cassandra healthy (Docker restart policy);
+  - Caddy active;
+  - `risime.service` active (systemd user unit with linger), with its health timer;
+  - `https://risime.risicloud.ai/health` 200 on nightly.8.
+
+  The orchestrator session and its agents ended with the reboot. Their uncommitted work was
+  checked: the v1.8 interop test edits passed the gate and their live checks, and were committed
+  (`4e6bb89`). Nothing was discarded.
+- **P0, in progress:** testers were locked out by the nightly.8 "Update required" gate (raw
+  Markdown, dark-on-dark text, Update button unreachable).
+  - **Mitigated:** `version.json` is republished with `required: false` (stuck apps recover on
+    relaunch). Testers were told to install from https://risicloud.ai/app/risime/ in a browser.
+  - **The fix** (pinned button, scrollable notes, theme colours, a plain-text `summary`, a download
+    page link, errors with Retry, UI tests) ships as nightly.9.
+- **E2EE is on:** pilot key `x-nu0EBHzGv-…`. Chats upgrade once both people run an E2EE-capable
+  app (nightly.7+).
+- **Open issue:** the live E2EE interop check "epoch-0 group creation" was flaky (1 failure in 3
+  runs: `WaitingForWelcome`). It's under investigation after the P0; no release ships on a red gate.
+- **Queue after the P0:** finish emoji and reactions (v1.8, implemented on both sides) → MLS groups
+  (v1.9, reviewed by crypto and server) → encrypted images.
 
 ## Waiting on Harsha (batched)
-- `sudo loginctl enable-linger harsha` (start at boot).
-- The Caddy fix command (chown the access log, install `infra/caddy/Caddyfile`, reload); the
-  fail2ban jail; removing Tailscale.
+- The fail2ban jail and removing Tailscale, if not done yet (`docs/PROD.md`).
 - Firebase: `google-services.json` and `fcm-service-account.json` into `~/risime-keys/`.
-- E2EE product decisions a–d (identity binding, per-device members, history for new members,
-  at-rest encryption).
 - Notify.lk "RisiMe" sender approval (SMS phone verification goes live then).
 - RisiWork `version.json` example.
 
@@ -37,7 +46,6 @@
 ## Blocked, and on whom
 | Item | Waiting for | Who |
 |---|---|---|
-| Stricter edge config | `sudo install` of `infra/caddy/Caddyfile`, plus the fail2ban jail and removing Tailscale if not done | Harsha |
 | Real Keycloak sign-in | Keycloak client `risime` (redirects `ai.risicloud.risime[.debug]://callback` and `…://logout`, `email` in access tokens) | RisiCloud lead |
 | Real verification SMS | "RisiMe" sender ID approved by Notify.lk | Harsha / Notify.lk |
 | Updater field names | RisiWork's `version.json` example | Harsha |
