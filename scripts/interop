@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Live interop gate (RULES: before every release). Starts a temporary server from THIS checkout on
+# 127.0.0.1:4100 (dev env, shared dev DB) with a local stand-in OIDC issuer (127.0.0.1:4799),
+# creates throwaway users/tokens, runs the Android LiveInteropTest (real ApiClient +
+# PhoenixRealtimeClient) against it, and always cleans up. Never touches :4000 / risime.service.
+#   scripts/interop
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+DIR="$(mktemp -d "${TMPDIR:-/tmp}/risime-interop.XXXXXX")"
+cleanup() {
+  tmux kill-session -t risime-interop 2>/dev/null || true
+  tmux kill-session -t risime-interop-jwks 2>/dev/null || true
+  (cd "$REPO/server" && $M mix run "$REPO/scripts/interop-fixtures.exs" cleanup "$DIR" 2>/dev/null | grep 'interop cleanup' || true)
+  rm -rf -- "${DIR:?}"
+}
+trap cleanup EXIT
+for p in 4100 4799; do ss -ltnH "sport = :$p" | grep -q . && { echo "port $p busy"; exit 1; }; done
+
+(cd server && $M mix run "$REPO/scripts/interop-fixtures.exs" setup "$DIR" 2>/dev/null | grep 'interop setup')
+cat > "$DIR/jwks.py" <<'PY'
+import http.server, sys
+root = sys.argv[1]
+class H(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *a, **k): super().__init__(*a, directory=root, **k)
+    def guess_type(self, path): return "application/json"
+    def log_message(self, *a): pass
+http.server.ThreadingHTTPServer(("127.0.0.1", 4799), H).serve_forever()
+PY
+tmux new -d -s risime-interop-jwks "python3 '$DIR/jwks.py' '$DIR/www'"
+tmux new -d -s risime-interop "cd '$REPO/server' && PORT=4100 DEV_LOCAL_AUTH=true OIDC_ENABLED=true \
+  OIDC_ISSUER=http://127.0.0.1:4799/realms/itest \
+  OIDC_JWKS_URL=http://127.0.0.1:4799/realms/itest/protocol/openid-connect/certs \
+  PHONE_VERIFICATION=off FCM_ENABLED=false RISIME_AUTH_LOG='$DIR/auth.log' \
+  $M mix phx.server > '$DIR/server.log' 2>&1"
+for _ in $(seq 1 120); do curl -sf -o /dev/null http://127.0.0.1:4100/health && break; sleep 1; done
+curl -sf -o /dev/null http://127.0.0.1:4100/health || { echo "interop server didn't start"; tail -20 "$DIR/server.log"; exit 1; }
+
+echo "==> LiveInteropTest against 127.0.0.1:4100"
+set +e
+(cd android && RISIME_INTEROP_CONFIG="$DIR/interop.json" $M ./gradlew --no-configuration-cache \
+  testDebugUnitTest --tests 'lk.codegen.risime.live.LiveInteropTest' -i 2>&1) > "$DIR/gradle.log"
+rc=$?
+set -e
+grep -E '^\s{4}\S' "$DIR/gradle.log" | grep -vE 'isLoggable|^\s+at |Exception in|\.kt:' | sed 's/^ *//' | grep -vE '^(Kotlin|Input|Calculating|Watching|Task|Starting)' | head -60
+grep -qE "LiveInteropTest > .* SKIPPED" "$DIR/gradle.log" && { echo "INTEROP SKIPPED (config not picked up)"; exit 1; }
+[ "$rc" = 0 ] || { echo "INTEROP FAILED"; grep -E "FAILED|AssertionError|expected" "$DIR/gradle.log" | head -10; exit 1; }
+echo "INTEROP OK"
