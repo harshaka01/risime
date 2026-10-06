@@ -1,4 +1,4 @@
-# 044 — nightly.11 released with the upgrade gate overridden by Harsha
+# 044 — v0.2.0-nightly.11 released with the upgrade gate overridden by Harsha
 
 - **Status:** accepted (2026-10-06)
 - **Decided by:** Harsha (product owner), explicitly: "Release nightly.11 now. I accept the risk and
