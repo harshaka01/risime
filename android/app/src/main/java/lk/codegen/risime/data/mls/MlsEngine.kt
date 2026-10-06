@@ -49,6 +49,9 @@ interface MlsEngine {
     fun decrypt(conversationId: String, generation: Long, ciphertext: ByteArray): Decrypted
 
     fun deleteGroup(conversationId: String)
+
+    /** The group's current leaves (for the membership executor). */
+    fun members(conversationId: String): List<DeviceRef>
 }
 
 data class GroupRef(val conversationId: String, val generation: Long, val epoch: Long)
@@ -68,7 +71,8 @@ class PendingCommit(
 )
 
 sealed interface CommitOutcome {
-    data class Applied(val epoch: Long) : CommitOutcome
+    /** [discardedOwnPending]: our own pending change lost to this commit; redo it if still needed. */
+    data class Applied(val epoch: Long, val discardedOwnPending: Boolean = false) : CommitOutcome
 
     /** This device was removed: the group is gone locally. */
     data object RemovedSelf : CommitOutcome
@@ -83,3 +87,18 @@ data class Decrypted(val sender: DeviceRef, val epoch: Long, val plaintext: Byte
 class MlsDecryptException(message: String) : Exception(message)
 
 fun groupId(conversationId: String, generation: Long) = "$conversationId#$generation"
+
+/** Creates the real engine (found by name: only builds with the Rust toolchain have it). */
+interface MlsEngineFactory {
+    /**
+     * Opens this device's MLS state. [store] must route into the app's Room transaction;
+     * [trustedKeysJwks] = pinned keys + the server's /mls/attestation_keys.
+     */
+    fun open(sql: KvSql, sealer: KvSealer, inTransaction: (() -> Any?) -> Any?, userId: String, deviceId: String, trustedKeysJwks: List<String>): MlsEngine
+
+    companion object {
+        private const val IMPL = "lk.codegen.risime.crypto.UniffiMlsEngineFactory"
+
+        fun get(): MlsEngineFactory? = runCatching { Class.forName(IMPL).getDeclaredConstructor().newInstance() as MlsEngineFactory }.getOrNull()
+    }
+}

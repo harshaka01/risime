@@ -16,7 +16,7 @@ plugins {
 val pushConfigured = file("google-services.json").isFile
 if (pushConfigured) pluginManager.apply("com.google.gms.google-services")
 
-// ---- E2EE groundwork (decisions 012 §5a, 031): native MLS core in DEBUG builds only ----
+// ---- E2EE (decisions 012 §5a, 031, 037): native MLS core in debug AND release builds ----
 // Built by ../scripts/build-rust-android when rustup's cargo and an NDK exist (spark2); otherwise
 // (laptop, CI without Rust) the app builds without crypto. Opt out with -Prisime.crypto=false.
 val repoDir: File = rootProject.projectDir.parentFile
@@ -84,8 +84,12 @@ android {
         buildConfigField("boolean", "UPDATER_ENABLED", "true")
         buildConfigField("String", "UPDATE_BASE_URL", "\"https://risicloud.ai/app/risime/\"")
         buildConfigField("boolean", "PUSH_CONFIGURED", pushConfigured.toString())
-        // Native MLS core (0.3 groundwork): never in release until E2EE ships.
-        buildConfigField("boolean", "CRYPTO_AVAILABLE", "false")
+        // Native MLS core packaged (decision 037: release carries it ahead of the E2EE rollout; it is
+        // only loaded once the server offers attestation keys).
+        buildConfigField("boolean", "CRYPTO_AVAILABLE", cryptoToolchain.toString())
+        // Pinned server attestation keys (public JWK JSON, ';'-separated). Empty until root provides
+        // the pilot key at rollout; the server's /mls/attestation_keys are trusted in addition.
+        buildConfigField("String", "MLS_PINNED_KEYS", "\"${providers.gradleProperty("risime.mlsPinnedKeys").orNull.orEmpty().replace("\"", "\\\"")}\"")
     }
 
     signingConfigs {
@@ -110,7 +114,6 @@ android {
             buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"ai.risicloud.risime.debug://logout\"")
             // Debug builds (.debug id, debug key) never self-update.
             buildConfigField("boolean", "UPDATER_ENABLED", "false")
-            buildConfigField("boolean", "CRYPTO_AVAILABLE", cryptoToolchain.toString())
         }
         release {
             // R8/minify stays off until the prod release (decision 003).
@@ -122,6 +125,9 @@ android {
     packaging {
         // JNA ships ABIs Android 8+ can't run (minSdk 26); keep the APK lean.
         jniLibs.excludes += listOf("lib/armeabi/**", "lib/mips/**", "lib/mips64/**")
+        // Compress native libs (extracted at install): the MLS core for 4 ABIs is ~19 MB stored,
+        // ~7 MB compressed, and every update is a sideloaded download (decision 037).
+        jniLibs.useLegacyPackaging = true
     }
 
     compileOptions {
@@ -178,8 +184,8 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.fragment.ktx)
 
-    // JNA for the UniFFI bindings: debug only until 0.3 (release stays without it).
-    debugImplementation(libs.jna) { artifact { type = "aar" } }
+    // JNA for the UniFFI bindings (only with the Rust toolchain: the laptop builds without crypto).
+    if (cryptoToolchain) implementation(libs.jna) { artifact { type = "aar" } }
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
@@ -270,9 +276,9 @@ abstract class CargoBuildAndroid : DefaultTask() {
 
 if (cryptoToolchain) {
     val cargoBuildAndroid = tasks.register<CargoBuildAndroid>("cargoBuildAndroid") {
-        description = "Builds crypto/risime-mls-ffi for arm64-v8a + x86_64 (debug app only)"
+        description = "Builds crypto/risime-mls-ffi for arm64-v8a, x86_64, armeabi-v7a and x86 (debug and release)"
         script.set(File(repoDir, "scripts/build-rust-android"))
-        abis.set("arm64-v8a,x86_64")
+        abis.set("arm64-v8a,x86_64,armeabi-v7a,x86")
         // Rust release profile by default: the cargo debug profile makes 59-61 MB .so files per ABI
         // (stored uncompressed in the APK). -Prisime.rustProfile=debug for a debuggable core.
         profileFlag.set(if (providers.gradleProperty("risime.rustProfile").orNull == "debug") "--debug" else "")
@@ -285,10 +291,12 @@ if (cryptoToolchain) {
         kotlinDir.set(layout.buildDirectory.dir("generated/uniffi"))
     }
     androidComponents {
-        onVariants(selector().withBuildType("debug")) { variant ->
+        onVariants { variant ->
             variant.sources.jniLibs?.addGeneratedSourceDirectory(cargoBuildAndroid, CargoBuildAndroid::jniLibsDir)
             variant.sources.kotlin?.addGeneratedSourceDirectory(cargoBuildAndroid, CargoBuildAndroid::kotlinDir)
-            variant.sources.kotlin?.addStaticSourceDirectory("src/debugCrypto/kotlin")
+            variant.sources.kotlin?.addStaticSourceDirectory("src/crypto/kotlin")
+            // Real-crypto JVM tests (host build via JNA) compile only with the toolchain.
+            (variant as? com.android.build.api.variant.HasUnitTest)?.unitTest?.sources?.kotlin?.addStaticSourceDirectory("src/testCrypto/kotlin")
         }
     }
 }

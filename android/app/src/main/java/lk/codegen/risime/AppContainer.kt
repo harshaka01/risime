@@ -26,6 +26,13 @@ import lk.codegen.risime.data.ContactsRepository
 import lk.codegen.risime.data.AuthKind
 import lk.codegen.risime.data.LegacyServerUrlMigration
 import lk.codegen.risime.data.mls.DeviceRegistrar
+import lk.codegen.risime.data.mls.KeystoreDbKeyWrapper
+import lk.codegen.risime.data.mls.KvSealer
+import lk.codegen.risime.data.mls.MembershipExecutor
+import lk.codegen.risime.data.mls.MlsDbKey
+import lk.codegen.risime.data.mls.MlsEngineFactory
+import lk.codegen.risime.data.mls.Registration
+import lk.codegen.risime.data.mls.SupportKvSql
 import lk.codegen.risime.data.mls.MlsApi
 import lk.codegen.risime.data.mls.MlsEngine
 import lk.codegen.risime.data.mls.MlsPipeline
@@ -141,21 +148,76 @@ class AppContainer(context: Context) {
 
     // ---- Push (contract v1.5, decision 026) ----
     val notifier = Notifier(context)
-    // ---- E2EE (contract v1.7). Phase B plugs the real MLS core in here; until then null = v1.6 behaviour.
+    // ---- E2EE (contract v1.7, decisions 035, 037). The engine loads only once the server offers
+    // attestation keys; until then (pilot: mls_unavailable) the app behaves exactly like v1.6.
     @Volatile var mlsEngine: MlsEngine? = null
+    private val mlsDbKey = MlsDbKey(File(context.noBackupFilesDir, "mls_dbkey.bin"), KeystoreDbKeyWrapper())
+    private val mlsApi = object : MlsApi {
+        override suspend fun group(conversationId: String) = api.mlsGroup(conversationId)
+        override suspend fun claim(userIds: List<String>) = api.claimKeyPackages(userIds, sessionStore.deviceId())
+        override suspend fun commit(conversationId: String, body: lk.codegen.risime.net.MlsCommitRequest) =
+            api.mlsCommit(conversationId, body, sessionStore.deviceId())
+    }
+    val membershipExecutor by lazy { MembershipExecutor({ mlsEngine }, mlsApi) { conv -> catchUpCommits(conv) } }
     val mlsPipeline by lazy {
-        MlsPipeline({ mlsEngine }, db.mlsPending(), onMembership = { a -> Log.i("RisiMe", "mls_membership ${a.event.change} in ${a.delayMs} ms (phase B)") })
+        MlsPipeline(
+            { mlsEngine }, db.mlsPending(),
+            onMembership = { a ->
+                scope.launch {
+                    delay(a.delayMs)
+                    val r = membershipExecutor.execute(a)
+                    Log.i("RisiMe", "mls_membership ${a.event.change}: $r")
+                }
+            },
+            log = { Log.w("RisiMe", "mls: $it") },
+            onJoined = { scope.launch { deviceRegistrar.topUp() } },
+        )
     }
-    val mlsUpgrader by lazy {
-        MlsUpgrader({ mlsEngine }, object : MlsApi {
-            override suspend fun group(conversationId: String) = api.mlsGroup(conversationId)
-            override suspend fun claim(userIds: List<String>) = api.claimKeyPackages(userIds, sessionStore.deviceId())
-            override suspend fun commit(conversationId: String, body: lk.codegen.risime.net.MlsCommitRequest) =
-                api.mlsCommit(conversationId, body, sessionStore.deviceId())
-        })
-    }
+    val mlsUpgrader by lazy { MlsUpgrader({ mlsEngine }, mlsApi) }
     val deviceRegistrar by lazy { DeviceRegistrar(api, { sessionStore.deviceId() }, BuildConfig.VERSION_NAME, { mlsEngine }) }
+
+    /**
+     * Load the MLS core if this build has it and the server offers attestation keys (E2EE on), then
+     * register with the MLS key (→ attestation → key packages). Otherwise nothing changes.
+     */
+    suspend fun activateMls() {
+        if (mlsEngine != null || !BuildConfig.CRYPTO_AVAILABLE) return
+        val session = sessionStore.current()?.takeIf { it.user.phoneVerified } ?: return
+        val factory = MlsEngineFactory.get() ?: return
+        val served = (api.attestationKeys() as? ApiResult.Ok)?.value?.keys.orEmpty()
+        if (served.isEmpty()) return // mls_unavailable / no key: E2EE is off
+        val pinned = BuildConfig.MLS_PINNED_KEYS.split(';').map { it.trim() }.filter { it.isNotEmpty() }
+        val trusted = pinned + served.map { it.toString() }
+        val engine = runCatching {
+            factory.open(
+                SupportKvSql(db.openHelper.writableDatabase), KvSealer(mlsDbKey.get()),
+                { block -> if (db.inTransaction()) block() else db.runInTransaction(java.util.concurrent.Callable { block() }) },
+                session.user.id, sessionStore.deviceId(), trusted,
+            )
+        }.getOrElse {
+            Log.w("RisiMe", "MLS core unavailable: ${it.javaClass.simpleName}: ${it.message}")
+            return
+        }
+        mlsEngine = engine
+        when (val r = deviceRegistrar.register(runCatching { push.currentToken() }.getOrNull())) {
+            is Registration.Mls -> Log.i("RisiMe", "MLS device registered, ${r.keyPackages} key packages")
+            else -> {
+                Log.i("RisiMe", "MLS not active: $r")
+                mlsEngine = null // the server turned it down: stay a v1.6 client
+            }
+        }
+    }
+
     val push by lazy { PushManager(context, api, sessionStore, deviceRegistrar) { mlsEngine != null } }
+
+    init {
+        // E2EE: try once per signed-in, verified session (and again after sign-in).
+        scope.launch {
+            sessionStore.session.map { s -> s?.takeIf { it.user.phoneVerified }?.user?.id }.distinctUntilChanged().collect { id ->
+                if (id == null) mlsEngine = null else runCatching { activateMls() }
+            }
+        }
+    }
 
     /** A short background connection for a push wake-up (the socket is otherwise foreground-only). */
     private val backgroundSync = MutableStateFlow(false)
@@ -503,5 +565,7 @@ class AppContainer(context: Context) {
         db.wipe().seenEvents()
         db.wipe().mlsKv()
         db.wipe().mlsPending()
+        mlsEngine = null
+        mlsDbKey.destroy()
     }
 }

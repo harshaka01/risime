@@ -51,6 +51,8 @@ class MlsPipeline(
     private val onMembership: (MembershipAction) -> Unit = {},
     private val random: (IntRange) -> Int = { it.random() },
     private val log: (String) -> Unit = {},
+    /** After joining from a Welcome (a key package was used): top up. */
+    private val onJoined: () -> Unit = {},
 ) {
     private val b64 = Base64.getDecoder()
 
@@ -68,6 +70,7 @@ class MlsPipeline(
             return try {
                 mls.joinFromWelcome(w.conversationId, w.generation, b64.decode(w.welcome))
                 pending.dropOlderGenerations(w.conversationId, w.generation)
+                onJoined()
                 MlsResult.GroupChanged(w.conversationId)
             } catch (t: Exception) {
                 log("welcome rejected: ${t.message}")

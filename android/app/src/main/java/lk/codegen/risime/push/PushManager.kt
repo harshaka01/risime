@@ -26,6 +26,8 @@ class PushManager(
     val available: Boolean
         get() = BuildConfig.PUSH_CONFIGURED && runCatching { FirebaseApp.getApps(context).isNotEmpty() }.getOrDefault(false)
 
+    suspend fun currentToken(): String? = fcmToken()
+
     private suspend fun fcmToken(): String? {
         if (!available) return null
         return suspendCancellableCoroutine { cont ->

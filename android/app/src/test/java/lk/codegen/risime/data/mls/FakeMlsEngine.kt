@@ -28,6 +28,9 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
 
     override fun commitAccepted(conversationId: String) {
         val pc = pendingCommits.remove(conversationId) ?: error("nothing pending")
+        val list = memberLists.getOrPut(conversationId) { mutableListOf() }
+        list += pc.added
+        list -= pc.removed.toSet()
         groups[conversationId] = GroupRef(conversationId, pc.generation, pc.epoch + 1)
     }
 
@@ -71,6 +74,9 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
     override fun deleteGroup(conversationId: String) {
         groups.remove(conversationId)
     }
+
+    val memberLists = mutableMapOf<String, MutableList<DeviceRef>>()
+    override fun members(conversationId: String): List<DeviceRef> = memberLists[conversationId].orEmpty()
 
     companion object {
         fun ciphertext(gen: Long, epoch: Long, user: String, device: String, text: String) =
