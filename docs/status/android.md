@@ -191,6 +191,9 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
   Retry. `rate_limited` stays pending and retries after 10 s.
 - Presence is unknown while disconnected and refreshes only with the next watch reply. "last seen"
   labels are computed when the list recomposes (not on a timer).
+- The app theme is an AppCompat descendant, and AppAuth's `RedirectUriReceiverActivity` is
+  themed `Theme.AppCompat.Translucent.NoTitleBar`. `MergedManifestThemeTest` checks both merged
+  manifests, so a library activity that inherits a non-AppCompat theme fails the gate.
 - **No live Keycloak test yet:** the `risime` client doesn't exist. The browser hop,
   BiometricPrompt, Keystore and PackageInstaller only run on a device.
 - Devices without a secure lock screen keep tokens in memory only, so they need a browser sign-in
@@ -279,3 +282,7 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
 30. Server URL: a fresh release install shows "Server: https://risime.risicloud.ai" on the login
     screen and reaches the server with no tunnel. An install upgraded from a build that stored
     `https://risicloud.ai/risime` also shows the new URL; a URL you typed yourself is kept.
+31. **Keycloak redirect (crash fixed after v0.2.0-nightly.3):** "Sign in with RisiCloud", enter
+    the email code; Keycloak redirects back to the app **without a crash**, and you land on
+    "Confirm your phone" or Chats. On an Android 8–9 phone (API 26–28) the fingerprint unlock
+    dialog also opens without a crash (it's an AppCompat dialog).
