@@ -5,6 +5,9 @@
 #
 #   scripts/upgrade-test --new <apk> [--version X] [--commit SHA] [--old <apk|vX.Y.Z...>] [--serial S] [--serial-b S2]
 #   scripts/upgrade-test --fetch-candidate      # laptop: pull spark2's staged release candidate, test it, send the result back
+#   scripts/upgrade-test --fetch-candidate --manual-signin   # you sign in on the emulator; the script shows the code
+# On a failure the script saves a screenshot, a UI dump and the app's logcat next to the result
+# (~/risime-logs/upgrade-test/v<version>-<time>/), and copies them to spark2 with the result.
 #
 # Needs one adb device (an emulator or a test phone; never a tester's own phone: the app is
 # uninstalled first). spark2 has no Android emulator (no linux-aarch64 build exists), so this runs
@@ -98,11 +101,12 @@ EXS
 fi
 
 # ---------------------------------------------------------------- driver half ------------------
-NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0
+NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0; MANUAL=0; DEV=""
 while [ $# -gt 0 ]; do case "$1" in
   --new) NEW="$2"; shift 2;; --old) OLD="$2"; shift 2;; --version) VERSION="$2"; shift 2;;
   --commit) COMMIT="$2"; shift 2;; --serial) SERIAL="$2"; shift 2;; --serial-b) SERIAL_B="$2"; shift 2;;
   --fetch-candidate) FETCH=1; shift;;
+  --manual-signin) MANUAL=1; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-upgrade.XXXXXX")"
@@ -118,7 +122,25 @@ write_result() {
     echo "new_sha256=$(sha256sum "$NEW" | cut -d' ' -f1)"; echo "host=$(hostname)"; echo "device=$(adb -s "$SERIAL" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
     echo "group=${SERIAL_B:+yes}"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
   echo "==> result: $f"
-  if [ "$FETCH" = 1 ]; then scp -q "$f" "$SPARK:risime-logs/upgrade-test/" && echo "==> result copied to $SPARK"; fi
+  local diag=""
+  [ "$RESULT" = PASS ] || diag="$(save_diagnostics || true)"
+  if [ "$FETCH" = 1 ]; then
+    scp -q "$f" "$SPARK:risime-logs/upgrade-test/" && echo "==> result copied to $SPARK" || echo "WARN: could not copy the result to $SPARK"
+    [ -n "$diag" ] && scp -qr "$diag" "$SPARK:risime-logs/upgrade-test/" && echo "==> diagnostics copied to $SPARK:risime-logs/upgrade-test/$(basename "$diag")" || true
+  fi
+}
+# Screenshot + UI dump + the app's own logcat lines (never the whole device log) of the device that failed.
+save_diagnostics() {
+  local d="$OUTDIR/v${VERSION:-unknown}-$(date -u +%Y%m%dT%H%M%SZ)" dev="${DEV:-$SERIAL}"
+  [ -n "$dev" ] || return 1
+  mkdir -p "$d"
+  adb -s "$dev" exec-out screencap -p > "$d/screen.png" 2>/dev/null || rm -f "$d/screen.png"
+  adb -s "$dev" shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 && adb -s "$dev" exec-out cat /sdcard/ui.xml > "$d/ui.xml" 2>/dev/null || true
+  local pid; pid="$(adb -s "$dev" shell pidof "$PKG" 2>/dev/null | tr -d '\r' || true)"
+  if [ -n "$pid" ]; then adb -s "$dev" logcat -d --pid="$pid" -t 400 > "$d/logcat.txt" 2>/dev/null || true; fi
+  { echo "step=$STEP"; echo "reason=$REASON"; echo "device=$dev"; } > "$d/INFO"
+  echo "==> diagnostics: $d (screen.png, ui.xml, logcat.txt)" >&2
+  echo "$d"
 }
 srv() { if on_spark2; then "$REPO/scripts/upgrade-test" _server "$@"; else ssh "$SPARK" "cd ~/development/risime && scripts/upgrade-test _server $*"; fi; }
 cleanup() {
@@ -218,18 +240,46 @@ dismiss_prompts() { has "Not now" && tap "Not now" || true; }
 
 sign_in() {  # $1 phone, $2 email
   A shell am start -W -n "$PKG/.MainActivity" >/dev/null
-  wait_for "Server:" 30
-  tap "Server:*"; sleep 1
+  if [ "$MANUAL" = 1 ]; then manual_sign_in "$1" "$2"; return; fi
+  echo "    point the app at http://127.0.0.1:$PORT"
+  wait_for "Server:" 30 || return 1
+  tap "Server:*" || return 1; sleep 1
+  # Focus the field (its label, or its current value as a fallback).
+  tap "Server URL" || tap "https://*" || tap "http://*" || { echo "    the Server URL field didn't appear"; return 1; }; sleep 0.5
   A shell input keyevent KEYCODE_MOVE_END; for _ in $(seq 1 60); do A shell input keyevent KEYCODE_DEL; done
-  A shell input text "http://127.0.0.1:$PORT"; tap "Use this server"; sleep 2
-  wait_for "Phone number" 30
-  type_into "Phone number" "$1"; type_into "Work email" "$2"; A shell input keyevent KEYCODE_BACK; tap "Send code"
-  wait_for "6-digit code" 30
+  A shell input text "http://127.0.0.1:$PORT"; sleep 0.5
+  tap "Use this server" || return 1; sleep 2
+  has "Server: http://127.0.0.1:$PORT" || { echo "    the server change didn't take (the app still shows another server)"; return 1; }
+  if ! wait_for "Phone number" 30; then
+    has "Sign in with RisiCloud" && echo "    the server offers only RisiCloud sign-in (dev login missing)"
+    return 1
+  fi
+  echo "    request a code"
+  type_into "Phone number" "$1"; type_into "Work email" "$2"; A shell input keyevent KEYCODE_BACK; tap "Send code" || return 1
+  wait_for "6-digit code" 30 || { echo "    no code screen after Send code"; return 1; }
   local code=""; for _ in $(seq 1 20); do code="$(srv otp "$1")"; [ -n "$code" ] && break; sleep 1; done
-  [ -n "$code" ] || { echo "no dev OTP for the test user"; return 1; }
+  [ -n "$code" ] || { echo "    the temp server never issued a code for the test user"; return 1; }
+  echo "    enter the code"
   type_into "6-digit code" "$code"; sleep 1; has "Verify" && tap "Verify" || true
   wait_for "Add friend" 40 || return 1
   dismiss_prompts
+}
+
+# --manual-signin: you do the taps on the emulator; the script shows the code and waits.
+manual_sign_in() {
+  echo
+  echo "    MANUAL SIGN-IN on $DEV:"
+  echo "      1. Tap 'Server: … · Change', enter  http://127.0.0.1:$PORT  and tap 'Use this server'."
+  echo "      2. Phone number: $1   Work email: $2   then 'Send code'."
+  echo "      3. The code will appear here. Enter it and tap Verify. Dismiss any prompts."
+  local code="" shown=""
+  for _ in $(seq 1 600); do
+    code="$(srv otp "$1")"
+    if [ -n "$code" ] && [ "$code" != "$shown" ]; then echo "    >>> CODE: $code"; shown="$code"; fi
+    has "Add friend" && { echo "    signed in"; dismiss_prompts; return 0; }
+    sleep 1
+  done
+  echo "    timed out after 10 minutes waiting for the chat list"; return 1
 }
 
 install_old() {
