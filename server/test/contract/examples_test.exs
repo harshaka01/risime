@@ -48,6 +48,10 @@ defmodule RisiMe.ContractExamplesTest do
                   error_not_member.json error_not_admin.json error_too_many_members.json
                   error_too_many_devices.json error_last_admin.json error_log_expired.json
                   error_generation_conflict.json error_not_ready_groups.json)
+  # v1.10 (history, §13): parse-only placeholders added by root with the contract merge; the server
+  # role replaces them with real checks when it implements §13.
+  @pending_v1_10 ~w(inbox_join_reply_v110.json event_message_sender_copy.json
+                   error_quota_exceeded.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -80,8 +84,12 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- (@checked ++ @checked_v1_9) == [],
-           "add checks for: #{inspect(@files -- (@checked ++ @checked_v1_9))}"
+    covered = @checked ++ @checked_v1_9 ++ @pending_v1_10
+    assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
+  end
+
+  test "v1.10 examples are valid JSON objects (placeholder)" do
+    for name <- @pending_v1_10, do: assert(is_map(example(name)))
   end
 
   setup do

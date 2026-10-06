@@ -137,6 +137,11 @@ class ContractExamplesTest {
         "error_log_expired.json" to { s -> apiError(s, AuthErrors.LOG_EXPIRED) },
         "error_generation_conflict.json" to { s -> apiError(s, AuthErrors.GENERATION_CONFLICT).also { requireNotNull(it.error.generation) } },
         "error_not_ready_groups.json" to { s -> apiError(s, AuthErrors.NOT_READY).also { require(it.error.missing!!.single().reason == MlsMissing.LEGACY_APP) } },
+        // v1.10 (history, §13): parse-only placeholders added by root with the contract merge;
+        // the android role replaces them with typed decoders when it implements §13.
+        "inbox_join_reply_v110.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_message_sender_copy.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_quota_exceeded.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
     )
 
     private fun groupEvent(s: String, action: String): GroupEvent =

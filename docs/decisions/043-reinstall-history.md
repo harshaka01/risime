@@ -1,7 +1,7 @@
 # 043 — History after a reinstall (sender copy + history gap marker)
 
-**Status:** proposed 2026-10-06 (root). Contract proposal:
-`contract/proposals/2026-10-06-history-v1.10.md` (v1.10), awaiting the server and android reviews.
+**Status:** accepted 2026-10-06 (root), after the server and android reviews. Contract:
+PROTOCOL §13 (v1.10); proposal `contract/proposals/2026-10-06-history-v1.10.md`.
 
 ## Context
 Harsha reinstalled the app. A chat then showed only the other person's messages; his own were
@@ -27,19 +27,34 @@ missing.
 1. **Every stored `message`/`reaction` event goes to every member user, the sender included.**
    - Plaintext DMs gain the sender copy that e2ee DMs, reactions and groups already have.
    - It uses the same `event_id` and the same TTL, and it is never pushed.
-   - Own copies are outgoing. They are never acked, and they get their ticks only from the stored
-     `status`/`group_receipt` events.
+   - Own copies are outgoing. They are never acked (the server ignores self-acks), and they get
+     their ticks only from the stored `status`/`group_receipt` events.
+   - The sender's copy is **published before** the recipient's event, so a live `status` can
+     never overtake it on the sender's other devices.
    - Old apps already handle the copy correctly.
-   - An optional one-off backfill copies plaintext DMs still inside the TTL.
+   - A one-off pilot backfill copies plaintext DMs still inside the TTL into senders' inboxes,
+     **only for users who still exist** (about 120 real DMs; the ~934k load-test DMs of deleted
+     users are skipped), keeping the source TTL and write time. It runs behind the store boundary
+     as a release task after the v1.10 deploy.
 2. **No silent half-history.**
-   - The server returns `history_before` (when this `device_id` was first seen) on join/sync
-     replies.
-   - A client treats an e2ee message as pre-install when its `server_ts` is before that time, or
-     its epoch is below the epoch the device joined at. Such a message is not parked and not
-     decrypted. Instead the chat shows **one** system line, "Earlier messages are on your
-     previous install" (a deterministic id per conversation, placed after the latest pre-install
-     message).
-3. **E2EE history is not restored by the server, by design.** The server keeps storing only
+   - The server returns `history_before` = `app_instances.first_seen_at` on join/sync replies.
+     Rows from before v1.10 stay **null** (no backfill from `last_seen_at`: a late value would
+     mark decryptable parked messages as lost). Null means the client applies only the epoch rule.
+   - `first_seen_at` is **reset when a device is removed** (including logout, which keeps the
+     `device_id` but wipes MLS state); the next connect sets a new value.
+   - A client treats an e2ee message as pre-install when its `server_ts` is before that time (only
+     where it would otherwise park or drop, never on replayed parked events), or its epoch is
+     below the epoch the device joined at. Such a message is not parked and not decrypted.
+     Instead the chat shows **one** system line, **"Earlier messages aren't available on this
+     device"** (a deterministic id per conversation, placed after the latest pre-install message).
+     The wording is neutral because the app can't tell a reinstall from a second device.
+   - Other decrypt failures get a separate deduplicated line, **"Some messages couldn't be
+     decrypted"**, so they are never silent either.
+   - Replayed history takes its local time from `server_ts`, and a fresh install never notifies
+     for replayed events.
+3. **A per-user `mls` blob quota** of 256 MiB live (`413 quota_exceeded {used, limit}`) closes
+   the v1.9 gap (about 84 GiB per user possible before). v1.11 reuses the code for `media`.
+4. **E2EE history is not restored by the server, by design.** The server keeps storing only
    ciphertext for E2EE chats (§10.0). Restoring it needs a client-encrypted backup/restore. That
    is the next step towards multi-device, in its own proposal with a crypto review.
 
@@ -48,12 +63,14 @@ missing.
   or `scripts/install-apk`, which uses `adb install -r`). Both keep your history and keys.
 - A reinstall or a new phone keeps plaintext chats (both sides once v1.10 is live, received only
   before that) for 30 days. It **loses the history of encrypted chats**, which then shows the
-  "Earlier messages are on your previous install" line.
+  "Earlier messages aren't available on this device" line.
 - If you must reinstall, expect that loss. The old install also stays listed as a device until
   it's removed or pruned after 60 days.
 
 ## Consequences
 - One extra Cassandra write per plaintext DM; no extra push.
-- `app_instances` gains `first_seen_at`.
+- `app_instances` gains a nullable `first_seen_at`, reset on device removal.
+- Known limit (unchanged): if the node dies between the message-index write and the inbox writes,
+  a resend doesn't re-deliver, so a copy can be missing.
 - The Android marker reuses the group system-line row (`KIND_SYSTEM`).
 - The dev banner rules (§10.4) are unchanged.

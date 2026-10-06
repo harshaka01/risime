@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.9 (Release 0.3)
+# RisiMe Wire Protocol — v1.10 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -48,7 +48,8 @@ Connect to `{SERVER_WS}/socket/websocket?token=<token>&vsn=<2.0.0|1.0.0>`.
 Joining another user's inbox returns error `{"reason": "unauthorized"}`.
 A join whose `since` is not a TimeUUID returns error `{"reason": "bad_request"}`.
 - Join payload: `{"since": "<event_id>" | null, "limit": 500}`
-- Join reply (ok): `{"events": [Event], "has_more": false, "server_time": "..."}`
+- Join reply (ok): `{"events": [Event], "has_more": false, "server_time": "..."}`. From v1.10 it
+  also carries `history_before` (§13.2).
 - If `has_more` is true, push `sync` `{"since": "<last event_id>"}`. Each reply has the same
   shape; repeat until `has_more` is false.
 
@@ -841,6 +842,8 @@ Welcomes; the encrypted-images slice extends it (decision 041).
   `201 {"blob_id": "uuid", "size": n, "sha256": "<b64>", "expires_at"}` (`blob_upload_reply.json`).
   - The caller must be an active member of the conversation (`404 not_found`).
   - At most **2 MiB** per blob (`413 too_large`); 60 uploads per user per hour (`429`).
+  - At most **256 MiB** of live `mls` blobs per user (`413 quota_exceeded {used, limit}`, v1.10,
+    §13.4).
 - **`GET /api/v1/blobs/{blob_id}`** → `200` with the bytes (`application/octet-stream`).
   - Readable by the **owner** (uploader), by the conversation's active and `pending_add`
     members, and by the users of any device named in a Welcome's `to_devices` that references it.
@@ -964,7 +967,187 @@ Welcomes; the encrypted-images slice extends it (decision 041).
 - They reuse the §10.5 MLS tables, keyed by conversation id. Caps are counted in Postgres.
 - Group receipts sit behind the messaging store boundary.
 
+## 13. History after a reinstall (v1.10)
+Decision 043. Reviewed by server and android (`proposals/reviews/2026-10-06-history-v1.10-*.md`).
+An additive change: v1.9 apps ignore `history_before` and already handle sender copies (§13.1).
+
+### 13.0 Principles
+- **A fresh install replays the inbox.** A first join with `since: null` returns every inbox event
+  still inside the 30-day TTL, acked or not; acks never delete events.
+- **Every stored `message` and `reaction` event goes to every member user, the sender included**
+  (§13.1). §10.3, §11.2 and §12.7 already did this for e2ee DMs, reactions and groups; v1.10 adds
+  plaintext DMs. So a reinstall restores both sides of plaintext history.
+- **E2EE history is never restored by the server.** A new install is a new device and a new leaf;
+  it can't decrypt anything encrypted before it joined (decision 032). v1.10 makes that gap
+  **visible** (§13.3) instead of silent. Restoring it needs a client-encrypted backup, which is a
+  later proposal.
+
+### 13.1 Sender copy (server)
+- A plaintext DM `message` event is written to the **sender's and the recipient's inboxes with the
+  same `event_id`** (= `message_id`) and the same payload (`event_message_sender_copy.json`).
+  There is no new kind and no flag: a copy is recognised by `from` = the inbox owner.
+- **Never pushed.** The sender's copy is written with no push (as in §10.3).
+- **Same TTL** as every inbox event (30 days).
+- **Live order: the sender's copy is published first, then the recipient's event.** This holds for
+  plaintext **and** e2ee DMs. Otherwise the recipient could ack before the copy is broadcast, and a
+  sender's other device would get a `status` for a message it hasn't seen yet. In Cassandra the
+  order is already right: `status` events get later TimeUUIDs than the `message_id`.
+- **Idempotency:** an idempotent resend that re-delivers (the message index is missing) writes both
+  rows again under the same `event_id`, which overwrites them. Clients dedupe by `event_id`,
+  `message_id` and `client_msg_id` (§2.3).
+- **Own copies are outgoing.**
+  - Clients **never `msg:ack`** a message whose `from` is themselves.
+  - The server **ignores** such acks: a DM self-ack produces no `status` event and leaves the
+    message at `sent`; a group self-ack writes no receipt and no `group_receipt` event.
+  - The copy starts at `sent` (✓). `delivered`/`read` come only from the stored `status` (DM) and
+    `group_receipt` (group) events, which replay after it.
+- **Old apps (v1.9 and earlier) need no change.** The sending device already holds the outbox row
+  with the same `client_msg_id` and skips the copy, even when it arrives before the `msg:send`
+  reply. Any other device stores it as outgoing `sent` and never acks it.
+- **Known limit (unchanged from §10.3):** the message index is written before the two inbox
+  writes. If the node dies in between, a resend sees the index and doesn't re-deliver, so a copy
+  can be missing.
+
+### 13.2 `history_before` (server)
+- The inbox **join reply and every `sync` reply** gain
+  **`"history_before": "<ISO-8601 ms>" | null`** (`inbox_join_reply_v110.json`). It is the same on
+  every page of a join.
+- Its value is **`app_instances.first_seen_at`** for this user and the socket's `device_id`: the
+  server time (the clock of `server_ts`) at which the server first recorded that instance in the
+  §10.1 census.
+  - It is set when the census row is inserted and **never moved by later connects**.
+  - **Null** when the socket sent no `device_id`, and for census rows that existed before v1.10.
+    They are **not backfilled** (a late estimate would hide decryptable messages, §13.3).
+  - **Reset on device removal.** When the server removes a device (any §10.1 removal: `DELETE`,
+    logout, eviction, the 60-day prune, a changed `signature_key`), the **next connect** with that
+    `device_id` sets `first_seen_at` to that connect's time. Logout keeps the `device_id` but wipes
+    the device's MLS state, so the next login is a new leaf and needs a new boundary.
+- **Meaning:** an e2ee message with `server_ts < history_before` was encrypted before this
+  instance existed (or before its MLS state was last wiped), so this device can never decrypt it.
+  Plaintext events are unaffected.
+
+### 13.3 The history gap marker (client)
+**Pre-install.** An e2ee `message` event (DM or `grp:`), including an undecryptable reaction
+envelope, is **pre-install** if either rule holds:
+1. **Rule 1:** `history_before` is not null and `server_ts < history_before` (compared as
+   instants, not strings).
+2. **Rule 2:** this device joined the group from a Welcome at `(generation g, epoch e)`, and the
+   message has `generation == g` and `epoch < e`.
+
+The old install's own sends (`from` = me, another `from_device`) follow the same rules. A message
+from this device (`from_device` = mine) is still skipped first, as in §10.3.
+
+**Where the rules apply** (they never pre-empt a decryptable message):
+- **Rule 1 only where the client would otherwise park or drop:** no local group for the
+  conversation, or a generation the device doesn't hold. If a local group exists at that
+  generation and the epoch is ≥ the device's join epoch, decrypt first.
+- **Rule 1 only on events first seen from the inbox**, never on events replayed from the client's
+  pending store (`mls_pending`). Those were parked by an earlier run and stay recoverable.
+- **Null `history_before` means rule 2 only.**
+- **Rule 2 is applied when the Welcome's parked events are replayed:** every parked message with
+  the Welcome's generation and a lower epoch is pre-install. Parked messages of an older generation
+  that the client discards when it joins a newer one also count as pre-install (one marker per
+  conversation), never a silent drop.
+- A pre-install message is not parked, not decrypted, not stored as a message and not acked. It
+  still advances the cursor.
+
+**The marker line.** Each conversation with at least one pre-install message shows **one** system
+line: **"Earlier messages aren't available on this device"**. The wording is neutral, because the
+app can't tell a reinstall from a second device.
+- It is a local row, never sent, never acked, never notified, never unread. The chat list shows it
+  as the preview only when nothing readable came after it (muted, no "You:" prefix, no ticks).
+- **One per conversation:** its id is deterministic, `client_msg_id = "sys:history:<conversation_id>"`
+  (an upsert), across replays, restarts and duplicate deliveries.
+- **Position is forward-only:** it sits at the latest pre-install message's `server_ts`. Each later
+  pre-install message moves it later, never earlier. Clients that order by a local timestamp set
+  it to just after that `server_ts`.
+- A chat whose only row is the marker stays listed.
+- **Groups:** the same line, keyed by the `grp:` id. `group_event` lines are plaintext metadata and
+  replay normally. A new **member** (not a new device) has no earlier events and gets no marker.
+  §12.8's "Encryption was reset; some messages may be missing" stays separate.
+- Plaintext chats need no marker: both sides replay (§13.1). Events past the 30-day TTL are gone
+  for everyone; that's retention, not a gap.
+
+**Other decrypt failures** on a device that should hold the key (a decrypt exception, a sender
+mismatch, a missing `generation`/`epoch`, a rejected Welcome) get a **separate deduplicated line**,
+**"Some messages couldn't be decrypted"**, with `client_msg_id = "sys:undecryptable:<conversation_id>"`
+and the same row rules (one per chat, forward-only, local, never unread or notified). It signals a
+bug or tampering, so testers report it. It doesn't replace §12.8's reset line for unrecoverable
+group state.
+
+**Replayed history.**
+- Rows restored from the inbox that are clearly historical (`server_ts < history_before`, or more
+  than about 5 minutes older than the device clock) take their local timestamp from `server_ts`, so
+  a restored month doesn't appear under "Today". Live rows keep the device clock.
+- **A fresh install never notifies for replayed events**, neither messages nor reactions. After the
+  first `since: null` join has caught up, the client treats everything up to that moment as
+  already notified.
+
+### 13.4 `mls` blob quota (server; extends §12.6)
+- At most **256 MiB of live `mls` blobs per user**: the sum of `size` over the caller's unexpired
+  `purpose = mls` blobs, across all conversations. The limit is server configuration (default
+  256 MiB).
+- Over it, an upload gets **`413 quota_exceeded`** with the numbers in the error object:
+  `{"error": {"code": "quota_exceeded", "message": "…", "used": n, "limit": n}}`
+  (`error_quota_exceeded.json`). It is distinct from `413 too_large`: a quota clears as blobs
+  expire or are deleted. v1.11 reuses the same code for `media`.
+- **Check order** in an upload: membership (`404`) → `too_large` (from `Content-Length`) →
+  quota (`Content-Length + used > limit`) → rate limit (`429`) → read the body. The quota is
+  checked again on the actual size after reading. Concurrent uploads may overshoot by at most one
+  blob each.
+- Clients treat it like any failed commit attempt (the op stays pending). They should `DELETE` the
+  `mls` blobs of a commit that failed (`409`), so they stop counting.
+
+### 13.5 Pilot backfill (server release task, one-off)
+Not a wire change; recorded so the release is reproducible.
+- After v1.10 is deployed (and after the deploy backup), a one-off release task copies each
+  plaintext DM `message` event still inside the TTL from the recipient's partition into the
+  sender's partition, **only when both the sender and the recipient still exist in `users`**.
+- It keeps the **same `event_id` and payload**, the **source row's remaining TTL** and its
+  **original write time** (`USING TTL ? AND TIMESTAMP ?`), so a copy never outlives the original
+  and never overwrites a row the live v1.10 code wrote later. Rows with under 60 s left are skipped.
+- It runs behind the `RisiMe.Messaging.Store` boundary (a store callback run from a
+  `RisiMe.Release` task): a paged full scan, no `ALLOW FILTERING`, idempotent, logging counts only.
+- Devices whose cursor is already past a copy never see it; a fresh install replays it in place.
+
+### 13.6 Test coverage (both gates)
+- **Server:**
+  - sender copy: both inboxes hold the event with the same `event_id` and payload; a push only for
+    the recipient; the sender's copy is published before the recipient's event; an idempotent
+    resend with the message index missing rewrites both rows (still one each);
+  - self-acks ignored: a sender's DM ack makes no `status` event and leaves the message at `sent`;
+    a sender's group ack writes no receipt row and no `group_receipt` event;
+  - `history_before`: set on the first connect of a `device_id`, stable across reconnects, the
+    same on the join and every `sync` page, null without a `device_id` and for pre-v1.10 rows,
+    reset by a device removal (the next connect sets a new value);
+  - the `mls` quota: `413 quota_exceeded` from `Content-Length` before the body is read, with
+    `used` and `limit`;
+  - the backfill: copies only plaintext DMs of existing users, idempotent when run twice, the
+    source TTL (±2 s) and write time;
+  - the load-test gate: a send→reply p99 no more than 20 % above `docs/status/loadtest.md`.
+- **Android:**
+  - `history_before` reaches the listener before the page's events (join and `sync`), null
+    tolerated;
+  - the pipeline: no group and `ts < history_before` → pre-install, nothing parked; `ts ≥` →
+    parked; an existing group at our epoch decrypts even with `ts < history_before`; parked rows
+    are never re-judged by rule 1; the Welcome replay's lower epochs → pre-install; discarded
+    older-generation rows → one marker; the old device's own sends → pre-install;
+  - one marker per chat across replays and restarts, below readable messages and above older
+    plaintext; the undecryptable line for a corrupted ciphertext;
+  - own copies are outgoing, never acked, and get their ticks from `status`/`group_receipt`;
+  - restored rows take their local time from `server_ts`; a fresh-install replay notifies nothing;
+  - parsing `inbox_join_reply_v110.json`, `event_message_sender_copy.json` and
+    `error_quota_exceeded.json`.
+
 ## Changelog
+- **v1.10** (2026-10-06): history after a reinstall (§13), reviewed by server and android.
+  Every stored `message`/`reaction` event goes to every member user, the sender included (the
+  plaintext DM sender copy, never pushed, published before the recipient's event); self-acks are
+  ignored; `history_before` on join/sync replies (`app_instances.first_seen_at`, null for
+  pre-v1.10 rows, reset by device removal); the client history gap marker "Earlier messages
+  aren't available on this device" and the "Some messages couldn't be decrypted" line; a
+  256 MiB per-user `mls` blob quota with `413 quota_exceeded {used, limit}`; a one-off pilot
+  backfill of sender copies. An additive change.
 - **v1.9** (2026-10-06): groups with MLS (§12), reviewed by crypto, server and android.
   `grp:` conversations, the `groups` device capability and group readiness, group REST
   (create, members, leave, roles, rejoin), pending ops with one named committer, commit
