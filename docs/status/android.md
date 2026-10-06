@@ -1,5 +1,20 @@
 # Android status — 0.2 nightlies
 
+## P0 after nightly.11: groups after logout/login — READY
+Commits `7f99b13` (server, by the android role), `53e3184` (android). Gates green: android
+`assembleDebug testDebugUnitTest`, server `mix format/compile/test`; `scripts/interop` **OK 2 runs in a row**
+(clean worktree at `53e3184`, new `LiveGroupInteropTest` 12a–d).
+- **Cause:** a logout wipes the MLS state but keeps the device id; nothing re-added the device. The app never
+  called `rejoin`, and the server ignored a re-registration while the old leaf was still in the group (the
+  removal op from the logout waits for an admin device), then that removal kicked the device out for good.
+- **App:** after registration and on every join, `GET /groups` → `GroupStore.queueRejoins` (rejoin, or reset
+  for the only admin) with an 8 s grace; "Rejoining group…" instead of "New group"; composer disabled with
+  "Rejoining… you can send once this phone is back in the group"; queued sends go out after the Welcome.
+- **Server:** `Ops.ensure_rejoin` (idempotent, drops stale removal-only ops), rejoining device never named,
+  removals before additions in `mls_group_devices`. No wire change.
+- **Known limit:** the only admin of a group resets it (§12.8); after a wiping logout its name is unknown
+  locally, so the rebuilt group is named "Group" until renamed.
+
 ## P0 hotfix after nightly.10 (data loss, group picker, scrolling, OTP) — READY (pending upgrade-test run)
 Commits `3502c2c`, `1ea68a4`, `790a980`, `024afbd`. Gate green: `./gradlew assembleDebug testDebugUnitTest` (319 JVM tests).
 - **Wipe rules:** `LocalAccount` is the only wipe decision: confirmed logout, confirmed server change, or a
