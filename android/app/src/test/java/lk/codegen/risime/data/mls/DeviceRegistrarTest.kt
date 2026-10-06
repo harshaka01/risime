@@ -28,6 +28,7 @@ class DeviceRegistrarTest {
     private fun registrar(engine: MlsEngine?) = DeviceRegistrar(api, { "dev-1" }, "0.3.0-nightly.1", { engine })
 
     @Test fun mlsDeviceWithoutFirebaseIsAttestedAndToppedUp() = runBlocking {
+        mls.groupsOn = false
         server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
         server.enqueue(json(200, """{"count":5}"""))
         server.enqueue(MockResponse().setResponseCode(204))
@@ -43,6 +44,36 @@ class DeviceRegistrarTest {
         val up = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
         assertEquals(45, up["key_packages"].toString().count { it == ',' } + 1)
         assertTrue(up["last_resort"] != null)
+    }
+
+    @Test fun groupsCapableCoreAdvertisesGroupsAndReplacesKeyPackagesOnce() = runBlocking {
+        var replacedFor: String? = null
+        val reg = DeviceRegistrar(api, { "dev-1" }, "0.3.0", { mls }, groupsReplacedFor = { replacedFor }, setGroupsReplacedFor = { replacedFor = it })
+        server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+        server.enqueue(MockResponse().setResponseCode(204))
+        assertEquals(Registration.Mls(50), reg.register(null))
+        val put = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("[\"groups\"]", put["mls"]!!.jsonObject["capabilities"].toString())
+        val up = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("true", up["replace"].toString())
+        assertTrue(up["last_resort"] != null)
+        assertEquals(java.util.Base64.getEncoder().encodeToString(mls.signatureKey()), replacedFor)
+
+        // Next registration: a normal top-up, no replace.
+        server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+        server.enqueue(json(200, """{"count":30}"""))
+        assertEquals(Registration.Mls(30), reg.register(null))
+        server.takeRequest()
+        assertEquals("/api/v1/me/devices/dev-1/key_packages/count", server.takeRequest().path)
+    }
+
+    @Test fun coreWithoutGroupsKeepsTheV17Registration() = runBlocking {
+        mls.groupsOn = false
+        server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+        server.enqueue(json(200, """{"count":30}"""))
+        registrar(mls).register(null)
+        val put = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertFalse("capabilities" in put["mls"]!!.jsonObject)
     }
 
     @Test fun mlsUnavailableFallsBackToPushOnly() = runBlocking {

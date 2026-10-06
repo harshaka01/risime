@@ -192,10 +192,55 @@ class AppContainer(context: Context) {
         )
     }
 
-    /** Set by the group-op executor (chunk 6); a no-op until then. */
-    @Volatile private var groupOpsKick: () -> Unit = {}
+    private val groupApi = object : lk.codegen.risime.data.groups.GroupApi {
+        private suspend fun dev() = sessionStore.deviceId()
+        override suspend fun create(clientGroupId: String, memberIds: List<String>) =
+            api.createGroup(lk.codegen.risime.net.GroupCreate(clientGroupId, memberIds), dev()).map { it.group }
+        override suspend fun group(id: String) = api.group(id).map { it.group }
+        override suspend fun addMembers(id: String, userIds: List<String>) = api.addGroupMembers(id, userIds, dev()).map { it.group }
+        override suspend fun removeMember(id: String, userId: String) = api.removeGroupMember(id, userId, dev())
+        override suspend fun leave(id: String) = api.leaveGroup(id, dev())
+        override suspend fun setRole(id: String, userId: String, role: String) = api.setGroupRole(id, userId, role, dev()).map { it.group }
+        override suspend fun rejoin(id: String) = api.rejoinGroup(id, dev()).map { it.group }
+        override suspend fun reset(id: String, generation: Long) = api.resetGroup(id, generation, dev()).map { it.generation }
+        override suspend fun claim(userIds: List<String>, conversationId: String?) =
+            api.claimKeyPackages(userIds, dev(), conversationId).map { it.devices }
+        override suspend fun commit(id: String, body: lk.codegen.risime.net.GroupCommitRequest) = api.groupCommit(id, body, dev()).map { it.epoch }
+        override suspend fun uploadBlob(conversationId: String, bytes: ByteArray) = api.uploadBlob(conversationId, bytes).map { it.ref() }
+    }
 
-    private fun kickGroupOps() = groupOpsKick()
+    private val dbTx = object : TransactionRunner {
+        override suspend fun <T> run(block: suspend () -> T): T = db.withTransaction { block() }
+    }
+
+    val groupOps by lazy {
+        lk.codegen.risime.data.groups.GroupOpsExecutor(
+            { mlsEngine }, groupApi, db.groupOps(), db.groups(), groupStore, dbTx,
+            me = { sessionStore.current()?.user?.id }, deviceId = { sessionStore.deviceId() },
+            catchUp = { conv -> catchUpCommits(conv) },
+            log = { Log.i("RisiMe", it) },
+        )
+    }
+
+    private val groupOpsRun = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /** Run due group ops now (and again when the earliest retry is due). */
+    fun kickGroupOps() {
+        groupOpsRun.tryEmit(Unit)
+    }
+
+    /** GET /groups on every (re)join: server truth, groups I'm no longer in, and owed ops after a restart (R5). */
+    private suspend fun syncGroups() {
+        if (mlsEngine?.groupsSupported != true) return
+        val me = sessionStore.current()?.user?.id ?: return
+        val r = api.groups() as? ApiResult.Ok ?: return
+        val listed = r.value.groups.map { it.id }.toSet()
+        db.withTransaction {
+            r.value.groups.forEach { groupStore.applyServerGroup(it, me) }
+            db.groups().allNow().filter { it.conversationId !in listed && !it.readOnly }.forEach { groupStore.markGone(it.conversationId) }
+        }
+        kickGroupOps()
+    }
 
     /** S4 notification (chunk 8). */
     private suspend fun notifyAddedToGroup(conversationId: String, actor: String) = Unit
@@ -222,7 +267,13 @@ class AppContainer(context: Context) {
         Log.w("RisiMe", "group $conversationId unrecoverable: rejoining")
         scope.launch { groupStore.queueLocal(conversationId, lk.codegen.risime.data.groups.GroupOpType.REJOIN) }
     }
-    val deviceRegistrar by lazy { DeviceRegistrar(api, { sessionStore.deviceId() }, BuildConfig.VERSION_NAME, { mlsEngine }) }
+    val deviceRegistrar by lazy {
+        DeviceRegistrar(
+            api, { sessionStore.deviceId() }, BuildConfig.VERSION_NAME, { mlsEngine },
+            groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
+            setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },
+        )
+    }
 
     /**
      * Load the MLS core if this build has it and the server offers attestation keys (E2EE on), then
@@ -392,6 +443,20 @@ class AppContainer(context: Context) {
         // §9.3: refetch GET /friends after every (re)join and on `friend` signals, debounced.
         scope.launch {
             realtime.state.collect { if (it == ConnectionState.Live) requestFriendsRefresh() }
+        }
+        // §12: group state and owed ops after every (re)join.
+        scope.launch {
+            realtime.state.collect { if (it == ConnectionState.Live) runCatching { syncGroups() } }
+        }
+        // The group-op outbox: one runner; a queued retry re-arms the timer.
+        scope.launch {
+            groupOpsRun.collectLatest {
+                var nextAt = runCatching { groupOps.runDue() }.getOrNull()
+                while (nextAt != null) {
+                    delay((nextAt - System.currentTimeMillis()).coerceAtLeast(250))
+                    nextAt = runCatching { groupOps.runDue() }.getOrNull()
+                }
+            }
         }
         scope.launch {
             friendsRefresh.collectLatest {
@@ -653,4 +718,10 @@ class AppContainer(context: Context) {
         mlsEngine = null
         mlsDbKey.destroy()
     }
+}
+
+private inline fun <T, R> ApiResult<T>.map(f: (T) -> R): ApiResult<R> = when (this) {
+    is ApiResult.Ok -> ApiResult.Ok(f(value))
+    is ApiResult.Error -> this
+    is ApiResult.NetworkError -> this
 }

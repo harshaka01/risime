@@ -146,6 +146,13 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         store.edit { it[NOTIFIED_REQUESTS] = ids.toList().takeLast(200).joinToString(",") }
     }
 
+    /** §12.1: the MLS signature key whose key packages were last re-uploaded with `replace: true` (groups-capable). */
+    suspend fun groupsKeyPackagesFor(): String? = store.data.first()[GROUPS_KP]
+
+    suspend fun setGroupsKeyPackagesFor(signatureKey: String) {
+        store.edit { it[GROUPS_KP] = signatureKey }
+    }
+
     suspend fun notificationsPrompted(): Boolean = store.data.first()[NOTIF_PROMPTED] == "1"
 
     suspend fun setNotificationsPrompted() {
@@ -174,5 +181,6 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         private val NOTIFIED_UP_TO = stringPreferencesKey("notified_up_to")
         private val NOTIFIED_REQUESTS = stringPreferencesKey("notified_requests")
         private val NOTIF_PROMPTED = stringPreferencesKey("notif_prompted")
+        private val GROUPS_KP = stringPreferencesKey("groups_kp_replaced_for")
     }
 }

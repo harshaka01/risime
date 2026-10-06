@@ -212,7 +212,7 @@ class FakeGroupDao : lk.codegen.risime.data.db.GroupDao {
     override suspend fun upsert(g: lk.codegen.risime.data.db.GroupEntity) { groups[g.conversationId] = g }
     override suspend fun get(conv: String) = groups[conv]
     override fun observe(conv: String) = kotlinx.coroutines.flow.flowOf(groups[conv])
-    override fun all() = kotlinx.coroutines.flow.flowOf(groups.values.filter { it.state != "creating" })
+    override fun all() = kotlinx.coroutines.flow.flowOf(groups.values.toList())
     override suspend fun allNow() = groups.values.toList()
     override suspend fun upsertMembers(m: List<lk.codegen.risime.data.db.GroupMemberEntity>) { m.forEach { members[it.conversationId to it.userId] = it } }
     override suspend fun members(conv: String) = members.values.filter { it.conversationId == conv }
@@ -242,4 +242,5 @@ class FakeGroupOpDao : lk.codegen.risime.data.db.GroupOpDao {
     override suspend fun get(id: Long) = rows[id]
     override suspend fun update(op: lk.codegen.risime.data.db.GroupOpEntity) { rows[op.id] = op }
     override fun observeQueued(conv: String) = kotlinx.coroutines.flow.flowOf(rows.values.filter { it.conversationId == conv && it.state == "queued" })
+    override fun observe(id: Long) = kotlinx.coroutines.flow.flowOf(rows[id])
 }

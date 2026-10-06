@@ -149,7 +149,7 @@ interface GroupDao {
     @Query("SELECT * FROM `groups` WHERE conversation_id = :conv")
     fun observe(conv: String): Flow<GroupEntity?>
 
-    @Query("SELECT * FROM `groups` WHERE state != 'creating'")
+    @Query("SELECT * FROM `groups`")
     fun all(): Flow<List<GroupEntity>>
 
     @Query("SELECT * FROM `groups`")
@@ -197,6 +197,9 @@ interface GroupOpDao {
 
     @Query("SELECT * FROM group_ops WHERE conversation_id = :conv AND state = 'queued'")
     fun observeQueued(conv: String): Flow<List<GroupOpEntity>>
+
+    @Query("SELECT * FROM group_ops WHERE id = :id")
+    fun observe(id: Long): Flow<GroupOpEntity?>
 }
 
 @Dao

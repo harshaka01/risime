@@ -88,11 +88,12 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
     private val pendingMeta = mutableMapOf<String, lk.codegen.risime.net.GroupMeta?>()
     val groupCommits = mutableListOf<Pair<String, PendingCommit>>()
     var failNextGroupCommit: Exception? = null
+    var bigCommit = false
 
     private fun groupCommit(conv: String, note: String, add: List<DeviceRef>, remove: List<DeviceRef>, meta: lk.codegen.risime.net.GroupMeta?): PendingCommit {
         failNextGroupCommit?.let { failNextGroupCommit = null; throw it }
         val g = groups.getValue(conv)
-        return PendingCommit(g.generation, g.epoch, "commit|$note".toByteArray(), if (add.isEmpty()) null else "welcome|${g.epoch + 1}".toByteArray(),
+        return PendingCommit(g.generation, g.epoch, if (bigCommit) ByteArray(70_000) { 1 } else "commit|$note".toByteArray(), if (add.isEmpty()) null else "welcome|${g.epoch + 1}".toByteArray(),
             add, remove, metaChanged = meta != null).also { pendingCommits[conv] = it; pendingMeta[conv] = meta; groupCommits += conv to it }
     }
 

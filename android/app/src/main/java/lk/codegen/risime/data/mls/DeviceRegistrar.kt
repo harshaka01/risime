@@ -34,6 +34,9 @@ class DeviceRegistrar(
     private val engine: () -> MlsEngine?,
     private val topUpTo: Int = 50,
     private val lowWater: Int = 20,
+    /** §12.1: the signature key (b64) whose key packages were already replaced with 0xFA01 ones. */
+    private val groupsReplacedFor: suspend () -> String? = { null },
+    private val setGroupsReplacedFor: suspend (String) -> Unit = {},
 ) {
     private val b64 = Base64.getEncoder()
 
@@ -48,11 +51,14 @@ class DeviceRegistrar(
                 is ApiResult.NetworkError -> Registration.Failed("network")
             }
         }
-        val body = DevicePut(DevicePut.PLATFORM_ANDROID, pushToken?.takeIf { it.isNotBlank() }, appVersion, DeviceMls(b64.encodeToString(mls.signatureKey())))
+        val sigKey = b64.encodeToString(mls.signatureKey())
+        // §12.1: advertise `groups` only with a core that really does groups (0xFA01 key packages).
+        val caps = if (mls.groupsSupported) listOf(DeviceMls.CAP_GROUPS) else null
+        val body = DevicePut(DevicePut.PLATFORM_ANDROID, pushToken?.takeIf { it.isNotBlank() }, appVersion, DeviceMls(sigKey, caps))
         return when (val r = api.putMlsDevice(id, body)) {
             is ApiResult.Ok -> {
                 mls.setAttestation(r.value.attestation)
-                topUp(id, mls)
+                if (caps != null && groupsReplacedFor() != sigKey) replaceForGroups(id, mls, sigKey) else topUp(id, mls)
             }
             is ApiResult.Error -> when {
                 r.code == AuthErrors.MLS_UNAVAILABLE -> {
@@ -62,6 +68,23 @@ class DeviceRegistrar(
                 }
                 else -> Registration.Failed(r.code)
             }
+            is ApiResult.NetworkError -> Registration.Failed("network")
+        }
+    }
+
+    /**
+     * The first time this device advertises `groups`: replace every stored normal key package with
+     * fresh 0xFA01 ones and regenerate the last-resort package (§12.1, crypto README).
+     */
+    private suspend fun replaceForGroups(id: String, mls: MlsEngine, sigKey: String): Registration {
+        val pkgs = mls.createKeyPackages(topUpTo).map(b64::encodeToString)
+        val last = b64.encodeToString(mls.lastResortKeyPackage())
+        return when (val r = api.uploadKeyPackages(id, KeyPackagesUpload(pkgs, last, replace = true))) {
+            is ApiResult.Ok -> {
+                setGroupsReplacedFor(sigKey)
+                Registration.Mls(topUpTo)
+            }
+            is ApiResult.Error -> Registration.Failed(r.code)
             is ApiResult.NetworkError -> Registration.Failed("network")
         }
     }
