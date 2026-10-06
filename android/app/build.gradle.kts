@@ -55,6 +55,13 @@ android {
         // Release: RisiCloud (decision 017, option 2b). Debug overrides it with the laptop tunnel.
         // Editable in Settings / on login in every build.
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://risicloud.ai/risime\"")
+        // Keycloak redirects (decision 014): custom scheme per build type so both can be installed.
+        manifestPlaceholders["appAuthRedirectScheme"] = "ai.risicloud.risime"
+        buildConfigField("String", "OIDC_REDIRECT_URI", "\"ai.risicloud.risime://callback\"")
+        buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"ai.risicloud.risime://logout\"")
+        // In-app updater (decision 016): release only.
+        buildConfigField("boolean", "UPDATER_ENABLED", "true")
+        buildConfigField("String", "UPDATE_BASE_URL", "\"https://risicloud.ai/app/risime/\"")
     }
 
     signingConfigs {
@@ -74,6 +81,11 @@ android {
             applicationIdSuffix = ".debug"
             // Laptop tunnel port (emulator -> 10.0.2.2:4400 -> spark2 127.0.0.1:4000).
             buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:4400\"")
+            manifestPlaceholders["appAuthRedirectScheme"] = "ai.risicloud.risime.debug"
+            buildConfigField("String", "OIDC_REDIRECT_URI", "\"ai.risicloud.risime.debug://callback\"")
+            buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"ai.risicloud.risime.debug://logout\"")
+            // Debug builds (.debug id, debug key) never self-update.
+            buildConfigField("boolean", "UPDATER_ENABLED", "false")
         }
         release {
             // R8/minify stays off until the prod release (decision 003).
@@ -127,6 +139,10 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.serialization.json)
     implementation(libs.libphonenumber)
+    implementation(libs.appauth)
+    implementation(libs.androidx.browser)
+    implementation(libs.androidx.biometric)
+    implementation(libs.androidx.fragment.ktx)
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)

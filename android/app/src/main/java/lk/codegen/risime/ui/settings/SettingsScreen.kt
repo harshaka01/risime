@@ -58,6 +58,10 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
             HorizontalDivider()
             ServerSection(s, vm)
             HorizontalDivider()
+            if (BuildConfig.DEBUG) {
+                DebugAuthSection(s.authOverride, vm::setAuthOverride)
+                HorizontalDivider()
+            }
             AboutSection()
             HorizontalDivider()
             OutlinedButton(
@@ -173,4 +177,19 @@ private fun AboutSection() {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/** Debug builds only: force the login screen's sign-in mode (applies after sign-out). */
+@Composable
+private fun DebugAuthSection(current: String, onPick: (String) -> Unit) {
+    SectionHeader("Sign-in mode (debug)")
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        listOf("AUTO" to "Server decides", "FORCE_OIDC" to "RisiCloud", "FORCE_DEV" to "Developer OTP").forEach { (v, label) ->
+            androidx.compose.material3.FilterChip(
+                selected = current == v,
+                onClick = { onPick(v) },
+                label = { Text(label) },
+            )
+        }
+    }
 }

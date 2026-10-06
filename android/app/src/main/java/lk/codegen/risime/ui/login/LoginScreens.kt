@@ -34,14 +34,20 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.text.KeyboardActions
+import lk.codegen.risime.data.auth.SignInChoice
+import lk.codegen.risime.data.auth.SignInOption
+import lk.codegen.risime.ui.auth.AuthUi
+import lk.codegen.risime.ui.auth.RisiCloudSignIn
+import lk.codegen.risime.ui.common.ErrorState
 import lk.codegen.risime.ui.theme.Spacing
 import lk.codegen.risime.ui.theme.WordmarkStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
-fun LoginFlow(vm: LoginViewModel) {
+fun LoginFlow(vm: LoginViewModel, authUi: AuthUi, notice: String?) {
     val s by vm.state.collectAsStateWithLifecycle()
-    if (s.codeSentTo == null) LoginScreen(s, vm) else OtpScreen(s, vm)
+    if (s.codeSentTo == null) LoginScreen(s, vm, authUi, notice) else OtpScreen(s, vm)
 }
 
 @Composable
@@ -64,11 +70,11 @@ private fun FormColumn(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun LoginScreen(s: LoginUiState, vm: LoginViewModel) {
+private fun LoginScreen(s: LoginUiState, vm: LoginViewModel, authUi: AuthUi, notice: String?) {
     FormColumn {
         Wordmark()
         Spacer(Modifier.height(24.dp))
-        // Every build: release users point the app at the tailnet HTTPS URL before logging in.
+        // Every build: point the app at a server before signing in (release default: risicloud.ai).
         var editServer by rememberSaveable { mutableStateOf(false) }
         if (editServer || s.serverError != null) {
             OutlinedTextField(
@@ -78,41 +84,68 @@ private fun LoginScreen(s: LoginUiState, vm: LoginViewModel) {
                 singleLine = true,
                 isError = s.serverError != null,
                 supportingText = s.serverError?.let { { Text(it) } },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    vm.applyServer()
+                    editServer = false
+                }),
                 modifier = Modifier.fillMaxWidth(),
             )
+            TextButton(onClick = {
+                vm.applyServer()
+                editServer = false
+            }) { Text("Use this server") }
         } else {
             TextButton(onClick = { editServer = true }) {
                 Text("Server: ${s.serverUrl} · Change", style = MaterialTheme.typography.bodySmall)
             }
         }
-        OutlinedTextField(
-            value = s.phone,
-            onValueChange = vm::onPhone,
-            label = { Text("Phone number") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Next),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = s.email,
-            onValueChange = vm::onEmail,
-            label = { Text("Work email") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Done),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        s.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
-        Button(onClick = vm::requestCode, enabled = !s.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-            Text(if (s.busy) "Sending…" else "Send code")
+        notice?.let { Text(it, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        when (val choice = s.choice) {
+            null -> Text("Checking the server…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            is SignInChoice.Unreachable -> ErrorState(choice.message, onRetry = vm::retryChoice)
+            is SignInChoice.Options -> {
+                val oidc = SignInOption.OIDC in choice.options
+                val dev = SignInOption.DEV in choice.options
+                if (oidc) RisiCloudSignIn(choice, authUi)
+                if (dev && oidc) {
+                    TextButton(onClick = vm::toggleDevForm) { Text("Developer sign-in (OTP)") }
+                }
+                if (dev && (!oidc || s.devFormOpen)) DevLoginForm(s, vm)
+            }
         }
-        Text(
-            "We email a 6-digit code if this phone and email are on the RisiMe allowlist.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
     }
+}
+
+/** Phone + email + emailed code; only against DEV_LOCAL_AUTH servers (§6.1). */
+@Composable
+private fun DevLoginForm(s: LoginUiState, vm: LoginViewModel) {
+    OutlinedTextField(
+        value = s.phone,
+        onValueChange = vm::onPhone,
+        label = { Text("Phone number") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Next),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = s.email,
+        onValueChange = vm::onEmail,
+        label = { Text("Work email") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Done),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    s.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
+    Button(onClick = vm::requestCode, enabled = !s.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+        Text(if (s.busy) "Sending…" else "Send code")
+    }
+    Text(
+        "We email a 6-digit code if this phone and email are on the RisiMe allowlist.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+    )
 }
 
 @Composable

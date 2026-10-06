@@ -15,6 +15,11 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import lk.codegen.risime.AppContainer
+import lk.codegen.risime.data.AuthKind
+import lk.codegen.risime.data.Session
+import lk.codegen.risime.ui.auth.AuthUi
+import lk.codegen.risime.ui.auth.BlockedScreen
+import lk.codegen.risime.ui.auth.LockedScreen
 import lk.codegen.risime.ui.chat.ChatScreen
 import lk.codegen.risime.ui.chat.ChatViewModel
 import lk.codegen.risime.ui.chats.ChatsScreen
@@ -31,17 +36,23 @@ import lk.codegen.risime.ui.settings.SettingsViewModel
 private sealed interface Gate {
     data object Loading : Gate
     data object LoggedOut : Gate
+    data object Locked : Gate
+    data class Blocked(val b: lk.codegen.risime.data.auth.Blocked) : Gate
     data class LoggedIn(val meId: String) : Gate
 }
 
 /** App root: the dev encryption banner sits above every screen, always. */
 @Composable
-fun RisiMeRoot(c: AppContainer) {
+fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
     val session by c.sessionStore.session.collectAsState(initial = Unit)
-    val gate = when (val s = session) {
+    val unlocked by c.auth.unlocked.collectAsState()
+    val blocked by c.blocked.collectAsState()
+    val notice by c.signInNotice.collectAsState()
+    val b = blocked
+    val gate = if (b != null) Gate.Blocked(b) else when (val s = session) {
         Unit -> Gate.Loading
         null -> Gate.LoggedOut
-        is lk.codegen.risime.data.Session -> Gate.LoggedIn(s.user.id)
+        is Session -> if (s.kind == AuthKind.OIDC && !unlocked) Gate.Locked else Gate.LoggedIn(s.user.id)
         else -> Gate.Loading
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
@@ -49,7 +60,9 @@ fun RisiMeRoot(c: AppContainer) {
         Box(Modifier.weight(1f)) {
             when (gate) {
                 Gate.Loading -> Unit
-                Gate.LoggedOut -> LoginFlow(viewModel(key = "login") { LoginViewModel(c) })
+                Gate.LoggedOut -> LoginFlow(viewModel(key = "login") { LoginViewModel(c) }, authUi, notice)
+                Gate.Locked -> LockedScreen(authUi)
+                is Gate.Blocked -> BlockedScreen(gate.b, c, authUi)
                 is Gate.LoggedIn -> MainNav(c, gate.meId)
             }
         }

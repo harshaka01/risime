@@ -14,6 +14,10 @@ coroutines = "1.11.0"
 serialization = "1.11.0"
 libphonenumber = "9.0.40"
 junit = "4.13.2"
+appauth = "0.11.1"
+biometric = "1.1.0"
+fragment = "1.9.1"
+browser = "1.10.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -39,6 +43,10 @@ coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", ve
 serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 libphonenumber = { module = "io.michaelrocks:libphonenumber-android", version.ref = "libphonenumber" }
 junit = { module = "junit:junit", version.ref = "junit" }
+appauth = { module = "net.openid:appauth", version.ref = "appauth" }
+androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
+androidx-fragment-ktx = { module = "androidx.fragment:fragment-ktx", version.ref = "fragment" }
+androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

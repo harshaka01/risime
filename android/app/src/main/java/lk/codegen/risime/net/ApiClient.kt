@@ -24,6 +24,8 @@ class ApiClient(
     private val http: OkHttpClient,
     private val serverUrl: suspend () -> String,
     private val token: suspend () -> String?,
+    /** A 401 on an authenticated call: try to refresh; true = retry the call once (§6.1). */
+    private val onUnauthorized: suspend () -> Boolean = { false },
 ) {
     suspend fun requestCode(phone: String, email: String): ApiResult<AuthRequestReply> =
         call("POST", "auth/request", AuthRequest(phone, email), auth = false)
@@ -53,6 +55,20 @@ class ApiClient(
         ProtocolJson.encodeToString(s, body).toRequestBody(JSON)
 
     private suspend fun <R> execute(
+        method: String,
+        path: String,
+        body: RequestBody?,
+        auth: Boolean,
+        resSerializer: KSerializer<R>,
+    ): ApiResult<R> {
+        val first = executeOnce(method, path, body, auth, resSerializer)
+        if (auth && first is ApiResult.Error && first.httpStatus == 401 && onUnauthorized()) {
+            return executeOnce(method, path, body, auth, resSerializer)
+        }
+        return first
+    }
+
+    private suspend fun <R> executeOnce(
         method: String,
         path: String,
         body: RequestBody?,

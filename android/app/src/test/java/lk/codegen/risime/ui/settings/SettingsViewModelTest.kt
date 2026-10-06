@@ -45,6 +45,12 @@ class SettingsViewModelTest {
             loggedOut++
             session.value = null
         }
+
+        override val authOverride = MutableStateFlow<String?>(null)
+
+        override suspend fun setAuthOverride(v: String) {
+            authOverride.value = v
+        }
     }
 
     private lateinit var backend: FakeBackend
@@ -122,6 +128,13 @@ class SettingsViewModelTest {
         vm.saveName()
         assertEquals("Can't reach the server", vm.state.value.nameError)
         assertEquals("Harsha", vm.state.value.user?.displayName)
+    }
+
+    @Test fun debugOverrideIsStored() {
+        assertEquals("AUTO", vm.state.value.authOverride)
+        vm.setAuthOverride("FORCE_DEV")
+        assertEquals("FORCE_DEV", backend.authOverride.value)
+        assertEquals("FORCE_DEV", vm.state.value.authOverride)
     }
 
     @Test fun logoutAsksFirst() {

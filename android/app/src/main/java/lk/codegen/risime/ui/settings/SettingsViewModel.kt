@@ -23,6 +23,11 @@ interface SettingsBackend {
     suspend fun switchServer(url: String)
 
     suspend fun logout()
+
+    /** Debug-only sign-in override (AuthOverride name). */
+    val authOverride: Flow<String?>
+
+    suspend fun setAuthOverride(v: String)
 }
 
 class AppSettingsBackend(private val c: AppContainer) : SettingsBackend {
@@ -49,6 +54,10 @@ class AppSettingsBackend(private val c: AppContainer) : SettingsBackend {
     override suspend fun logout() {
         c.scope.launch { c.logout() }.join()
     }
+
+    override val authOverride: Flow<String?> = c.sessionStore.authOverride
+
+    override suspend fun setAuthOverride(v: String) = c.sessionStore.setAuthOverride(v)
 }
 
 data class SettingsUiState(
@@ -64,6 +73,7 @@ data class SettingsUiState(
     val nameSaved: Boolean = false,
     val confirmLogout: Boolean = false,
     val busy: Boolean = false,
+    val authOverride: String = "AUTO",
 )
 
 class SettingsViewModel(private val backend: SettingsBackend) : ViewModel() {
@@ -71,6 +81,9 @@ class SettingsViewModel(private val backend: SettingsBackend) : ViewModel() {
     val state = _state.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            backend.authOverride.collect { v -> _state.update { it.copy(authOverride = v ?: "AUTO") } }
+        }
         viewModelScope.launch {
             backend.session.collect { s ->
                 if (s == null) return@collect
@@ -85,6 +98,11 @@ class SettingsViewModel(private val backend: SettingsBackend) : ViewModel() {
                 }
             }
         }
+    }
+
+    fun setAuthOverride(v: String) {
+        _state.update { it.copy(authOverride = v) }
+        viewModelScope.launch { backend.setAuthOverride(v) }
     }
 
     fun onServerDraft(v: String) = _state.update { it.copy(serverDraft = v, serverError = null) }

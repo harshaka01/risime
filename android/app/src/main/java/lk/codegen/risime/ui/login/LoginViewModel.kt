@@ -5,10 +5,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import lk.codegen.risime.AppContainer
+import lk.codegen.risime.BuildConfig
+import lk.codegen.risime.data.auth.AuthOverride
+import lk.codegen.risime.data.auth.SignInChoice
+import lk.codegen.risime.data.auth.signInChoice
 import lk.codegen.risime.net.ApiResult
 import lk.codegen.risime.ui.settings.Checked
 import lk.codegen.risime.ui.settings.checkServerUrl
@@ -24,6 +31,10 @@ data class LoginUiState(
     val busy: Boolean = false,
     val error: String? = null,
     val serverError: String? = null,
+    /** From GET /auth/config; null while loading. */
+    val choice: SignInChoice? = null,
+    /** Debug with both modes: the dev OTP form is behind "Developer sign-in (OTP)". */
+    val devFormOpen: Boolean = false,
 )
 
 class LoginViewModel(private val c: AppContainer) : ViewModel() {
@@ -31,11 +42,14 @@ class LoginViewModel(private val c: AppContainer) : ViewModel() {
     val state = _state.asStateFlow()
 
     init {
-        // Follows the stored URL (also when Settings switched servers while this ViewModel lived on).
+        // Follows the stored URL (also when Settings switched servers while this ViewModel lived on),
+        // and asks that server which sign-in modes it offers (§6.1).
         viewModelScope.launch {
-            c.sessionStore.serverUrl.distinctUntilChanged().collect { url ->
-                _state.update { it.copy(serverUrl = url, serverError = null) }
-            }
+            combine(c.sessionStore.serverUrl.distinctUntilChanged(), c.sessionStore.authOverride) { url, o -> url to o }
+                .collectLatest { (url, o) ->
+                    _state.update { it.copy(serverUrl = url, serverError = null, choice = null) }
+                    loadChoice(o)
+                }
         }
         // This ViewModel outlives a login; start clean when the user comes back after logout.
         viewModelScope.launch {
@@ -44,6 +58,30 @@ class LoginViewModel(private val c: AppContainer) : ViewModel() {
             }
         }
     }
+
+    private suspend fun loadChoice(override: String?) {
+        val o = runCatching { AuthOverride.valueOf(override ?: "AUTO") }.getOrDefault(AuthOverride.AUTO)
+        val choice = signInChoice(c.api.authConfig(), BuildConfig.DEBUG, o)
+        _state.update { it.copy(choice = choice) }
+    }
+
+    fun retryChoice() {
+        _state.update { it.copy(choice = null) }
+        viewModelScope.launch { loadChoice(c.sessionStore.authOverride.first()) }
+    }
+
+    /** Validate and store an edited server URL, then re-check its sign-in modes. */
+    fun applyServer() {
+        when (val r = checkServerUrl(_state.value.serverUrl)) {
+            is Checked.Invalid -> _state.update { it.copy(serverError = r.message) }
+            is Checked.Valid -> viewModelScope.launch {
+                c.sessionStore.setServerUrl(r.value)
+                retryChoice()
+            }
+        }
+    }
+
+    fun toggleDevForm() = _state.update { it.copy(devFormOpen = !it.devFormOpen) }
 
     fun onServerUrl(v: String) = _state.update { it.copy(serverUrl = v, error = null, serverError = null) }
     fun onPhone(v: String) = _state.update { it.copy(phone = v, error = null) }
