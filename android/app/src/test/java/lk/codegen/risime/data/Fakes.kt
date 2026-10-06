@@ -134,6 +134,9 @@ class FakeRealtime : RealtimeClient {
         return ackReply
     }
 
+    override suspend fun refreshAuth(token: String): PushResult<lk.codegen.risime.net.AuthRefreshReply> =
+        if (connected) PushResult.Ok(lk.codegen.risime.net.AuthRefreshReply("2026-10-07T08:20:00.000Z")) else PushResult.Unavailable
+
     val watches = mutableListOf<Set<String>>()
     val typings = mutableListOf<Pair<String, Boolean>>()
 

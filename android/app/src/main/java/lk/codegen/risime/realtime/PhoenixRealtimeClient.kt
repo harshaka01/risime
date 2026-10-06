@@ -18,6 +18,8 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
+import lk.codegen.risime.net.AuthRefresh
+import lk.codegen.risime.net.AuthRefreshReply
 import lk.codegen.risime.net.ErrorReason
 import lk.codegen.risime.net.Event
 import lk.codegen.risime.net.EventsPage
@@ -54,7 +56,13 @@ class PhoenixRealtimeClient(
     private val replyTimeoutMs: Long = 10_000,
     private val pageLimit: Int = 500,
     private val signals: SignalSink? = null,
+    /** Null: a refusal stops the client in [ConnectionState.AuthFailed] (dev tokens, tests). */
+    private val refusals: AuthRefusalHandler? = null,
 ) : RealtimeClient {
+
+    /** Set by `auth:expired`: the next connect asks for a refreshed token. */
+    @Volatile
+    private var forceRefresh = false
 
     private val watch = MutableStateFlow<Set<String>>(emptySet())
 
@@ -94,6 +102,12 @@ class PhoenixRealtimeClient(
         watch.value = userIds
     }
 
+    override suspend fun refreshAuth(token: String): PushResult<AuthRefreshReply> =
+        current?.takeIf { _state.value == ConnectionState.Live || _state.value == ConnectionState.Syncing }
+            ?.push("auth:refresh", ProtocolJson.encodeToJsonElement(AuthRefresh(token)))
+            ?.map { ProtocolJson.decodeFromJsonElement<AuthRefreshReply>(it) }
+            ?: PushResult.Unavailable
+
     override suspend fun typing(to: String, typing: Boolean): PushResult<Unit> =
         current?.takeIf { _state.value == ConnectionState.Live }
             ?.push("typing", ProtocolJson.encodeToJsonElement(TypingPush(to, typing)))
@@ -107,7 +121,28 @@ class PhoenixRealtimeClient(
         var attempt = 0
         while (scope.isActive) {
             _state.value = ConnectionState.Connecting
-            val conn = Connection(session)
+            val force = forceRefresh
+            forceRefresh = false
+            val token = try {
+                session.token(force)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            if (token == null) {
+                // No usable token (locked, refresh failed): the auth layer decides what happens next.
+                if (refusals?.onRefused() != true) {
+                    _state.value = ConnectionState.AuthFailed
+                    listener.onAuthFailed()
+                    return
+                }
+                _state.value = ConnectionState.Disconnected
+                delay(backoffMs[attempt.coerceAtMost(backoffMs.lastIndex)])
+                attempt++
+                continue
+            }
+            val conn = Connection(session, token)
             current = conn
             val outcome = try {
                 conn.run { attempt = 0 }
@@ -121,9 +156,13 @@ class PhoenixRealtimeClient(
                 signals?.onDisconnected()
             }
             if (outcome == Outcome.AuthFailed) {
-                _state.value = ConnectionState.AuthFailed
-                listener.onAuthFailed()
-                return
+                // §6.2: a refused upgrade isn't "logged out" by itself; ask the auth layer (GET /me).
+                if (refusals?.onRefused() != true) {
+                    _state.value = ConnectionState.AuthFailed
+                    listener.onAuthFailed()
+                    return
+                }
+                forceRefresh = true
             }
             _state.value = ConnectionState.Disconnected
             delay(backoffMs[attempt.coerceAtMost(backoffMs.lastIndex)])
@@ -139,7 +178,7 @@ class PhoenixRealtimeClient(
         data class Closed(val authFailed: Boolean) : Inbound
     }
 
-    private inner class Connection(private val session: RealtimeSession) {
+    private inner class Connection(private val session: RealtimeSession, private val token: String) {
         private val topic = "inbox:${session.userId}"
         private val inbound = Channel<Inbound>(Channel.UNLIMITED)
         private val liveEvents = Channel<Event>(Channel.UNLIMITED)
@@ -183,7 +222,11 @@ class PhoenixRealtimeClient(
 
         /** Runs one socket lifetime. [onJoined] is called once the join succeeded. */
         suspend fun run(onJoined: () -> Unit): Outcome = coroutineScope {
-            ws = http.newWebSocket(Request.Builder().url(socketUrl(session)).build(), SocketListener())
+            // §6.2: the token goes in the Authorization header, never the URL (proxy logs).
+            ws = http.newWebSocket(
+                Request.Builder().url(socketUrl(session)).header("Authorization", "Bearer $token").build(),
+                SocketListener(),
+            )
             // Wait for open (or failure).
             when (val first = inbound.receive()) {
                 is Inbound.Closed -> return@coroutineScope if (first.authFailed) Outcome.AuthFailed else Outcome.Closed
@@ -305,6 +348,12 @@ class PhoenixRealtimeClient(
                     runCatching { ProtocolJson.decodeFromJsonElement<Event>(f.payload) }
                         .onSuccess { liveEvents.trySend(it) }
                 }
+                "auth:expired" -> if (f.topic == topic) {
+                    // §6.2: refresh, then reconnect with `since`. Never a logout.
+                    forceRefresh = true
+                    ws?.close(1000, null)
+                    closed.complete(Outcome.Closed)
+                }
                 PhoenixFrame.PHX_ERROR, PhoenixFrame.PHX_CLOSE -> if (f.topic == topic) {
                     // Channel crashed or was closed: drop the socket and rejoin with the cursor.
                     ws?.close(1000, null)
@@ -361,11 +410,10 @@ class PhoenixRealtimeClient(
     }
 
     companion object {
-        /** `{SERVER_WS}/socket/websocket?token=<token>&vsn=2.0.0` (OkHttp maps ws/wss onto http/https). */
+        /** `{SERVER_WS}/socket/websocket?vsn=2.0.0` (OkHttp maps ws/wss onto http/https); token in the header. */
         fun socketUrl(session: RealtimeSession): String =
             session.serverUrl.trimEnd('/').toHttpUrl().newBuilder()
                 .addPathSegments("socket/websocket")
-                .addQueryParameter("token", session.token)
                 .addQueryParameter("vsn", "2.0.0")
                 .build()
                 .toString()

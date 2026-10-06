@@ -98,6 +98,7 @@ class PhoenixRealtimeClientTest {
                 }
                 "heartbeat" -> webSocket.send(reply(f, "ok", "{}"))
                 "typing" -> webSocket.send(reply(f, "ok", "{}"))
+                "auth:refresh" -> webSocket.send(reply(f, "ok", """{"expires_at":"2026-10-07T08:20:00.000Z"}"""))
                 "presence:watch" -> {
                     val ids = (f.payload as JsonObject)["user_ids"]!!.jsonArray.map { it.jsonPrimitive.content }
                     val ps = ids.joinToString(",") { """{"user_id":"$it","online":true,"last_seen":null}""" }
@@ -127,7 +128,8 @@ class PhoenixRealtimeClientTest {
         withTimeout(5_000) { client.state.first { it == ConnectionState.Live } }
 
         val req = server.takeRequest()
-        assertTrue(req.path!!.startsWith("/socket/websocket?token=tok&vsn=2.0.0"))
+        assertEquals("/socket/websocket?vsn=2.0.0", req.path) // §6.2: no token in the URL
+        assertEquals("Bearer tok", req.getHeader("Authorization"))
 
         val join = received.first { it.event == "phx_join" }
         assertEquals("inbox:u1", join.topic)
@@ -211,9 +213,69 @@ class PhoenixRealtimeClientTest {
     }
 
     @Test
+    fun refusedUpgradeAsksTheAuthLayerThenReconnectsWithAFreshToken() = runBlocking {
+        server.shutdown()
+        val s2 = MockWebServer()
+        s2.enqueue(MockResponse().setResponseCode(401))
+        s2.enqueue(MockResponse().withWebSocketUpgrade(FakeServer()))
+        s2.start()
+        val asked = Collections.synchronizedList(mutableListOf<Boolean>())
+        var refusals = 0
+        val client = PhoenixRealtimeClient(
+            OkHttpClient(), scope, listener, backoffMs = listOf(20), heartbeatMs = 60_000,
+            refusals = { refusals++; true },
+        )
+        client.start(RealtimeSession(s2.url("/").toString(), "u1") { force -> asked += force; if (force) "fresh" else "stale" })
+        withTimeout(5_000) { client.state.first { it == ConnectionState.Live } }
+        assertEquals(1, refusals)
+        assertEquals(listOf(false, true), asked.toList())
+        s2.takeRequest()
+        assertEquals("Bearer fresh", s2.takeRequest().getHeader("Authorization"))
+        assertEquals(PushResult.Ok(lk.codegen.risime.net.AuthRefreshReply("2026-10-07T08:20:00.000Z")), client.refreshAuth("newer"))
+        assertEquals(JsonPrimitive("newer"), received.first { it.event == "auth:refresh" }.payload.jsonObject["token"])
+        client.stop()
+        s2.shutdown()
+    }
+
+    @Test
+    fun refusalWithoutHandlerStopsInAuthFailed() = runBlocking {
+        server.shutdown()
+        val s2 = MockWebServer()
+        s2.enqueue(MockResponse().setResponseCode(403))
+        s2.start()
+        val client = PhoenixRealtimeClient(OkHttpClient(), scope, listener, backoffMs = listOf(20), refusals = { false })
+        client.start(RealtimeSession(s2.url("/").toString(), "tok", "u1"))
+        withTimeout(5_000) { client.state.first { it == ConnectionState.AuthFailed } }
+        s2.shutdown()
+    }
+
+    @Test
+    fun authExpiredReconnectsWithForcedRefreshNeverLogsOut() = runBlocking {
+        server.enqueue(MockResponse().withWebSocketUpgrade(FakeServer()))
+        val asked = Collections.synchronizedList(mutableListOf<Boolean>())
+        val client = PhoenixRealtimeClient(OkHttpClient(), scope, listener, backoffMs = listOf(20), heartbeatMs = 60_000,
+            refusals = { error("must not be called") })
+        client.start(RealtimeSession(server.url("/").toString(), "u1") { force -> asked += force; "t" })
+        withTimeout(5_000) { client.state.first { it == ConnectionState.Live } }
+        serverSockets.first().send("""[null,null,"inbox:u1","auth:expired",{}]""")
+        withTimeout(5_000) { while (received.count { it.event == "phx_join" } < 2) kotlinx.coroutines.delay(10) }
+        assertEquals(listOf(false, true), asked.toList())
+        withTimeout(5_000) { client.state.first { it == ConnectionState.Live } }
+        client.stop()
+    }
+
+    @Test
+    fun noTokenAndNoRetryStops() = runBlocking {
+        val client = PhoenixRealtimeClient(OkHttpClient(), scope, listener, backoffMs = listOf(20), refusals = { false })
+        client.start(RealtimeSession(server.url("/").toString(), "u1") { null })
+        withTimeout(5_000) { client.state.first { it == ConnectionState.AuthFailed } }
+        assertEquals(PushResult.Unavailable, client.refreshAuth("x"))
+    }
+
+    @Test
     fun socketUrl() {
         assertEquals(
-            "http://10.0.2.2:4400/socket/websocket?token=a%2Bb&vsn=2.0.0",
+            "http://10.0.2.2:4400/socket/websocket?vsn=2.0.0",
             PhoenixRealtimeClient.socketUrl(RealtimeSession("http://10.0.2.2:4400/", "a+b", "u")),
         )
         // keep ProtocolJson referenced for frame parsing

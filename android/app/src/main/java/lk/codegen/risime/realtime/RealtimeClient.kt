@@ -9,7 +9,23 @@ import lk.codegen.risime.net.Signal
 
 enum class ConnectionState { Disconnected, Connecting, Syncing, Live, AuthFailed }
 
-data class RealtimeSession(val serverUrl: String, val token: String, val userId: String)
+/**
+ * One signed-in session. [token] returns the current bearer token (forceRefresh = the server said
+ * it expired); it's asked again on every (re)connect, so a refreshed token is always used.
+ */
+class RealtimeSession(
+    val serverUrl: String,
+    val userId: String,
+    val token: suspend (forceRefresh: Boolean) -> String?,
+) {
+    constructor(serverUrl: String, token: String, userId: String) : this(serverUrl, userId, { _: Boolean -> token })
+}
+
+/** What to do when the server refuses our token (upgrade 401/403 or join `unauthorized`). */
+fun interface AuthRefusalHandler {
+    /** Typically: GET /me and act on it. True = reconnect (with backoff), false = stop. */
+    suspend fun onRefused(): Boolean
+}
 
 sealed interface PushResult<out T> {
     data class Ok<T>(val value: T) : PushResult<T>
@@ -65,6 +81,9 @@ interface RealtimeClient {
      * as `presence:watch` right after every successful join reply, and again whenever it changes.
      */
     fun setWatch(userIds: Set<String>)
+
+    /** §6.2 `auth:refresh` on the live connection; Unavailable when not connected (reconnect uses the new token). */
+    suspend fun refreshAuth(token: String): PushResult<lk.codegen.risime.net.AuthRefreshReply>
 
     /** §2.6 typing. Never queued: returns [PushResult.Unavailable] when not connected. */
     suspend fun typing(to: String, typing: Boolean): PushResult<Unit>
