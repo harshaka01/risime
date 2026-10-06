@@ -1,6 +1,6 @@
 # Proposal: PROTOCOL v1.6 — invites and friends
 
-**Status:** proposed by root on 2026-10-06 (Harsha's priority "invites and friends"; decision 028).
+**Status:** proposed by root on 2026-10-06 (Harsha's priority "invites and friends"; decision 029).
 Needs review by the server and android roles before merge. It is **additive**: v1.5 apps keep
 working. `/contacts` now returns friends only; the `friend` signal is ignored by older apps, which
 ignore unknown signal kinds (§2.3).

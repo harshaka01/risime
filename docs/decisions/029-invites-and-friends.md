@@ -1,4 +1,4 @@
-# 028 — Invite-only sign-up and private friend lists
+# 029 — Invite-only sign-up and private friend lists
 
 **Status:** accepted 2026-10-06 (Harsha: "build invites and friends now, ahead of the other
 slices"). Wire changes: contract v1.6 (`contract/proposals/2026-10-06-invites-friends-v1.6.md`).
