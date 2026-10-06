@@ -40,6 +40,14 @@ trap 'git checkout -q -- VERSION 2>/dev/null || true' ERR
 
 echo "==> server gate"
 (cd server && $M mix format --check-formatted && $M mix compile --warnings-as-errors && $M mix test)
+# Firebase config (decision 026): Harsha's file lives outside git; copy it in when present.
+if [ -f "$HOME/risime-keys/google-services.json" ]; then
+  install -m 600 "$HOME/risime-keys/google-services.json" android/app/google-services.json
+  echo "==> push: google-services.json present (Firebase plugin on)"
+else
+  rm -f android/app/google-services.json
+  echo "==> push: no google-services.json (push off in this build)"
+fi
 echo "==> android gate + release build"
 (cd android && $M ./gradlew --no-configuration-cache assembleDebug testDebugUnitTest assembleRelease)
 
