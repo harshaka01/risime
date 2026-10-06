@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Smoke test of infra/coturn on LOOPBACK only (decision 046): starts coturn with the repo config,
+# rebound to 127.0.0.1 and with a throwaway secret, runs turnutils_uclient (REST credentials,
+# client-to-client relay over UDP and TCP), then removes the container. Never touches public ports.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+img=coturn/coturn:4.7
+name=risime-turn-smoke
+tmp=$(mktemp -d); trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$tmp"' EXIT
+secret=$(head -c 32 /dev/urandom | base64 | tr -d '/+=')
+
+# Loopback copy: same file, only the addresses differ; the relay may reach 127.0.0.1 for the test.
+sed -e 's/^listening-ip=.*/listening-ip=127.0.0.1/' \
+    -e 's/^relay-ip=.*/relay-ip=127.0.0.1/' \
+    -e '/^external-ip=/d' infra/coturn/turnserver.conf > "$tmp/turnserver.conf"
+printf 'allowed-peer-ip=127.0.0.1\nallow-loopback-peers\n' >> "$tmp/turnserver.conf"
+chmod 644 "$tmp/turnserver.conf"
+
+docker run --rm "$img" --version >/dev/null
+docker run -d --name "$name" --network host -e TURN_SECRET="$secret" \
+  -v "$tmp/turnserver.conf:/etc/coturn/turnserver.conf:ro" \
+  -v "$PWD/infra/coturn/entrypoint.sh:/risime-entrypoint.sh:ro" \
+  --read-only --tmpfs /tmp --tmpfs /var/lib/coturn --cap-drop ALL --cap-add NET_BIND_SERVICE \
+  --entrypoint /risime-entrypoint.sh "$img" >/dev/null
+sleep 2
+if ss -lntu | grep -E ':(3478|5349) ' | grep -vq '127.0.0.1'; then
+  echo "FAIL: something listens on 3478/5349 beyond loopback" >&2; ss -lntu | grep -E ':(3478|5349) '; exit 1
+fi
+ss -lntu | grep -m2 -E ':3478 ' || { docker logs "$name"; echo "FAIL: not listening" >&2; exit 1; }
+
+run() { docker run --rm --network host --entrypoint turnutils_uclient "$img" -W "$secret" -r risime.risicloud.ai "$@" 127.0.0.1; }
+echo "== UDP allocation, client-to-client relay"; run -y -n 20 -m 1 -l 120 2>&1 | tail -4
+echo "== TCP to TURN, UDP relay";               run -t -y -n 20 -m 1 -l 120 2>&1 | tail -4
+echo "== wrong secret must fail"
+out=$(docker run --rm --network host --entrypoint turnutils_uclient "$img" -W wrong-secret -y -n 2 -m 1 127.0.0.1 2>&1 || true)
+if grep -q 'Total lost packets' <<<"$out"; then
+  echo "FAIL: wrong secret accepted" >&2; echo "$out" | tail -5; exit 1; fi
+echo "ok: rejected ($(grep -m1 -oE 'error [0-9]+[^)]*\)?' <<<"$out" || echo 'no allocation'))"
+echo "== server log (tail)"; docker logs "$name" 2>&1 | tail -5
+echo "smoke OK"

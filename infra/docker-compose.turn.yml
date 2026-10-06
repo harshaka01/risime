@@ -1,0 +1,29 @@
+# coturn (TURN/STUN) for RisiMe voice calls on spark2 (decision 046).
+# PUBLIC: the one documented exception to CLAUDE.md rule 6. Host networking (no docker-proxy
+# for 848 relay ports); turnserver itself binds only 10.20.20.15 (see infra/coturn/turnserver.conf).
+#   docker compose --env-file .env -f infra/docker-compose.turn.yml up -d
+# Needs TURN_SECRET in .env (openssl rand -base64 48), the same value the server uses.
+# Smoke test on loopback only: scripts/turn-smoke
+name: risime-turn
+services:
+  coturn:
+    image: coturn/coturn:4.7
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TURN_SECRET: ${TURN_SECRET:?set in .env}
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./coturn/entrypoint.sh:/risime-entrypoint.sh:ro
+      # - /home/harsha/risime-keys/turn-tls:/certs:ro   # decision 046: TLS later
+    entrypoint: ["/risime-entrypoint.sh"]
+    read_only: true
+    tmpfs: ["/tmp:size=1m,mode=1777", "/var/lib/coturn:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]   # the image sets it as a file capability on turnserver
+    security_opt: ["no-new-privileges:true"]
+    ulimits:
+      nofile: 65536
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}

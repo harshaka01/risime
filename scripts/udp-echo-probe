@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""UDP echo probe for checking that call ports reach spark2 from the internet (decision 046).
+
+Usage (on spark2):
+  scripts/udp-echo-probe [--seconds N] [--bind ADDR] PORT [PORT ...]
+
+It listens on each UDP PORT (default bind 0.0.0.0, default 120 s), prints every datagram it
+receives with the sender's address, and echoes "risime-echo <port> " + the payload back. Then it
+exits. It's a short probe you start and stop yourself, so CLAUDE.md rule 6 (bind to 127.0.0.1)
+doesn't apply; never leave it running.
+
+Test from outside spark2's network (laptop on phone hotspot / mobile data, not the office LAN):
+  printf 'ping\n' | nc -u -w 3 203.115.26.139 3478
+  -> prints "risime-echo 3478 ping" when the port is reachable both ways.
+Or from a phone with any "UDP sender" app: send to 203.115.26.139:<port>, watch for the echo.
+Nothing printed on spark2 = inbound blocked (edge firewall or ufw); printed here but no echo on
+the sender = outbound/NAT return path broken.
+The port must not be in use (stop coturn/LiveKit first).
+"""
+import argparse
+import selectors
+import socket
+import sys
+import time
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Temporary UDP echo on one or more ports.")
+    ap.add_argument("ports", nargs="+", type=int)
+    ap.add_argument("--seconds", type=int, default=120)
+    ap.add_argument("--bind", default="0.0.0.0")
+    args = ap.parse_args()
+    if len(args.ports) > 64:
+        print("at most 64 ports at a time", file=sys.stderr)
+        return 2
+
+    sel = selectors.DefaultSelector()
+    socks = []
+    for port in args.ports:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.bind((args.bind, port))
+        except OSError as e:
+            print(f"udp/{port}: cannot bind ({e})", file=sys.stderr)
+            continue
+        s.setblocking(False)
+        sel.register(s, selectors.EVENT_READ, port)
+        socks.append(s)
+    if not socks:
+        return 1
+
+    print(f"echoing on udp {', '.join(str(p) for p in args.ports)} at {args.bind} "
+          f"for {args.seconds} s", flush=True)
+    deadline = time.monotonic() + args.seconds
+    seen = set()
+    try:
+        while (left := deadline - time.monotonic()) > 0:
+            for key, _ in sel.select(timeout=min(left, 1.0)):
+                s, port = key.fileobj, key.data
+                try:
+                    data, addr = s.recvfrom(2048)
+                except OSError:
+                    continue
+                seen.add(port)
+                print(f"udp/{port}: {len(data)} bytes from {addr[0]}:{addr[1]}", flush=True)
+                s.sendto(f"risime-echo {port} ".encode() + data[:512], addr)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for s in socks:
+            s.close()
+    print(f"done; ports that received traffic: {sorted(seen) or 'none'}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
