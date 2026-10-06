@@ -37,9 +37,23 @@ data class MessageEntity(
     @ColumnInfo(name = "receipt_of") val receiptOf: Int? = null,
     /** v6 (§14): an image message's blob (kept for v1.12 "delete for everyone"); null for text. */
     @ColumnInfo(name = "blob_id") val blobId: String? = null,
+    /** v7 (§15.6): a tombstone's deleter (user id), whether by an admin (D ≠ S), and when (device ms). */
+    @ColumnInfo(name = "deleted_by") val deletedBy: String? = null,
+    @ColumnInfo(name = "deleted_by_admin", defaultValue = "0") val deletedByAdmin: Boolean = false,
+    @ColumnInfo(name = "deleted_at") val deletedAt: Long? = null,
+    /** v7 (§15.7, android S-b): null | [DELETE_STATE_DELETING] | [DELETE_STATE_CANCEL_AFTER_SEND]; ticks survive a restore. */
+    @ColumnInfo(name = "delete_state") val deleteState: String? = null,
+    /** v7 (android R2): pushes attempted for this PENDING row (0 = never pushed: cancelled locally). */
+    @ColumnInfo(name = "send_attempts", defaultValue = "0") val sendAttempts: Int = 0,
+    /** v7 (§15.4): a delete control for this message couldn't be verified (the core said Malformed): shown as a note. */
+    @ColumnInfo(name = "delete_unverified", defaultValue = "0") val deleteUnverified: Boolean = false,
 ) {
     val system: Boolean get() = kind == KIND_SYSTEM
     val image: Boolean get() = kind == KIND_IMAGE
+
+    /** §15.6 a tombstone row, or a row being deleted for everyone (rendered as the tombstone meanwhile). */
+    val deleted: Boolean get() = kind == KIND_DELETED
+    val showsAsDeleted: Boolean get() = deleted || deleteState != null
 
     companion object {
         const val KIND_TEXT = "text"
@@ -47,6 +61,15 @@ data class MessageEntity(
 
         /** v6 (§14): an image; [body] holds the caption (or ""). */
         const val KIND_IMAGE = "image"
+
+        /** v7 (§15.6): a tombstone ("This message was deleted"); body is "". */
+        const val KIND_DELETED = "deleted"
+
+        const val DELETE_STATE_DELETING = "deleting"
+        const val DELETE_STATE_CANCEL_AFTER_SEND = "cancel_after_send"
+
+        /** §15.5 R9: the local id of a positioned tombstone for a target never stored. */
+        fun placeholderId(messageId: String) = "del:$messageId"
     }
 }
 
@@ -96,6 +119,10 @@ data class LastMessage(
     /** v5: the sender ("Kamal: …" in group rows) and text/system. */
     @ColumnInfo(name = "from_id") val from: String = "",
     val kind: String = MessageEntity.KIND_TEXT,
+    /** v7 (§15.6): a tombstone preview ("You deleted this message" / "…deleted" / "…by an admin"). */
+    @ColumnInfo(name = "deleted_by") val deletedBy: String? = null,
+    @ColumnInfo(name = "deleted_by_admin") val deletedByAdmin: Boolean = false,
+    @ColumnInfo(name = "delete_state") val deleteState: String? = null,
 )
 
 /** Chats-list badge: unread incoming messages in one conversation. */
@@ -324,4 +351,61 @@ data class CachedMedia(
     val outgoing: Boolean,
     val state: String,
     @ColumnInfo(name = "message_status") val messageStatus: String,
+)
+
+/**
+ * v7 (§15.6): hidden tombstones — a delete for a message this device doesn't hold (or "Delete for
+ * me", [scope] = me). When the message arrives later it is decrypted first and re-judged with these
+ * values (crypto R3). Kept 30 days.
+ */
+@Entity(tableName = "deleted_ids", indices = [Index("at")])
+data class DeletedIdEntity(
+    @PrimaryKey @ColumnInfo(name = "message_id") val messageId: String,
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    @ColumnInfo(name = "deleted_by") val deletedBy: String,
+    @ColumnInfo(name = "deleter_is_admin") val deleterIsAdmin: Boolean,
+    @ColumnInfo(name = "delete_server_ts") val deleteServerTs: String?,
+    /** "everyone" or "me". */
+    val scope: String,
+    val at: Long,
+)
+
+/**
+ * v7 (§15.7): the delete outbox — `msg:delete` requests (scope me/everyone) and `chat:clear`
+ * ([scope] = "clear" with [upto]). Retried with the same [clientMsgId].
+ */
+@Entity(tableName = "delete_outbox", indices = [Index(value = ["state", "next_at"]), Index("conversation_id")])
+data class DeleteOutboxEntity(
+    @PrimaryKey @ColumnInfo(name = "client_msg_id") val clientMsgId: String,
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    /** me | everyone | clear */
+    val scope: String,
+    @ColumnInfo(name = "targets_json") val targetsJson: String,
+    @ColumnInfo(name = "blob_ids_json") val blobIdsJson: String,
+    /** queued | failed */
+    val state: String,
+    val attempts: Int = 0,
+    @ColumnInfo(name = "next_at") val nextAt: Long = 0,
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    @ColumnInfo(name = "last_error") val lastError: String? = null,
+    /** chat:clear only: the cursor event id. */
+    val upto: String? = null,
+) {
+    companion object {
+        const val SCOPE_CLEAR = "clear"
+        const val QUEUED = "queued"
+        const val FAILED = "failed"
+    }
+}
+
+/**
+ * v7 (§15.7): per-chat state for Clear chat / Delete chat. [clearedUpto] = the TimeUUID time (100 ns
+ * ticks) at or before which every visible effect of this conversation is ignored; [hidden] = Delete
+ * chat (back on the list with the next new message).
+ */
+@Entity(tableName = "chat_state")
+data class ChatStateEntity(
+    @PrimaryKey @ColumnInfo(name = "conversation_id") val conversationId: String,
+    @ColumnInfo(name = "cleared_upto") val clearedUpto: Long?,
+    @ColumnInfo(name = "hidden", defaultValue = "0") val hidden: Boolean = false,
 )

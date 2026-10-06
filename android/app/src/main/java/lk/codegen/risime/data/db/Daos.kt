@@ -90,7 +90,7 @@ interface MessageDao {
     suspend fun lastInConversation(conversationId: String): MessageEntity?
 
     @Query(
-        "SELECT conversation_id, body, local_ts, outgoing, status, from_id, kind FROM messages m " +
+        "SELECT conversation_id, body, local_ts, outgoing, status, from_id, kind, deleted_by, deleted_by_admin, delete_state FROM messages m " +
             "WHERE local_ts = (SELECT MAX(local_ts) FROM messages WHERE conversation_id = m.conversation_id) " +
             "GROUP BY conversation_id",
     )
@@ -115,9 +115,9 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE client_msg_id = :clientMsgId AND status = 'FAILED'")
     suspend fun deleteFailed(clientMsgId: String): Int
 
-    /** Local search (decision 009: LIKE, no FTS). [pattern] comes from likePattern (backslash escapes). */
+    /** Local search (decision 009: LIKE, no FTS). [pattern] comes from likePattern (backslash escapes). Tombstones and system lines never match (§15.6). */
     @Query(
-        "SELECT * FROM messages WHERE kind != 'system' AND body LIKE :pattern ESCAPE '\\' ORDER BY local_ts DESC LIMIT :limit",
+        "SELECT * FROM messages WHERE kind IN ('text', 'image') AND delete_state IS NULL AND body LIKE :pattern ESCAPE '\\' ORDER BY local_ts DESC LIMIT :limit",
     )
     fun search(pattern: String, limit: Int): Flow<List<MessageEntity>>
 }
@@ -154,6 +154,9 @@ interface WipeDao {
         groupMembers()
         groupOps()
         media()
+        deletedIds()
+        deleteOutbox()
+        chatState()
     }
 
     @Query("DELETE FROM messages")
@@ -189,6 +192,104 @@ interface WipeDao {
 
     @Query("DELETE FROM media")
     suspend fun media()
+
+    @Query("DELETE FROM deleted_ids")
+    suspend fun deletedIds()
+
+    @Query("DELETE FROM delete_outbox")
+    suspend fun deleteOutbox()
+
+    @Query("DELETE FROM chat_state")
+    suspend fun chatState()
+}
+
+/** v7 (§15): tombstones, hidden tombstones, the delete outbox and Clear/Delete chat state. */
+@Dao
+interface DeleteDao {
+    // ---- hidden tombstones ----
+
+    @Upsert
+    suspend fun putDeletedId(d: DeletedIdEntity)
+
+    @Query("SELECT * FROM deleted_ids WHERE message_id = :messageId")
+    suspend fun deletedId(messageId: String): DeletedIdEntity?
+
+    @Query("DELETE FROM deleted_ids WHERE message_id = :messageId")
+    suspend fun removeDeletedId(messageId: String)
+
+    /** Kept 30 days (§15.6). */
+    @Query("DELETE FROM deleted_ids WHERE at < :before")
+    suspend fun pruneDeletedIds(before: Long): Int
+
+    // ---- tombstones and rows ----
+
+    /**
+     * §15.6: the row becomes a tombstone in place (same message_id, sender and position): no body,
+     * image reference or receipts; an incoming one is read and acked (never unread, never acked again).
+     */
+    @Query(
+        "UPDATE messages SET kind = 'deleted', body = '', system_json = NULL, blob_id = NULL, deleted_by = :by, " +
+            "deleted_by_admin = :byAdmin, deleted_at = :at, delete_state = NULL, delete_unverified = 0, " +
+            "receipt_delivered = NULL, receipt_read = NULL, receipt_of = NULL, fail_reason = NULL, " +
+            "status = CASE WHEN outgoing = 0 THEN 'READ' ELSE status END, " +
+            "acked_status = CASE WHEN outgoing = 0 THEN 'READ' ELSE acked_status END " +
+            "WHERE client_msg_id = :clientMsgId",
+    )
+    suspend fun tombstone(clientMsgId: String, by: String, byAdmin: Boolean, at: Long): Int
+
+    @Query("UPDATE messages SET delete_state = :state WHERE client_msg_id IN (:clientMsgIds)")
+    suspend fun setDeleteState(clientMsgIds: List<String>, state: String?)
+
+    @Query("UPDATE messages SET delete_unverified = 1 WHERE message_id IN (:messageIds) AND conversation_id = :conversationId AND kind != 'deleted'")
+    suspend fun markUnverified(conversationId: String, messageIds: List<String>): Int
+
+    /** Android R2: set before every push of a PENDING row. */
+    @Query("UPDATE messages SET send_attempts = send_attempts + 1 WHERE client_msg_id = :clientMsgId")
+    suspend fun countAttempt(clientMsgId: String)
+
+    @Query("SELECT * FROM messages WHERE conversation_id = :conversationId")
+    suspend fun conversationRows(conversationId: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE delete_state IS NOT NULL")
+    suspend fun deleting(): List<MessageEntity>
+
+    @Query("DELETE FROM reactions WHERE target_message_id IN (:messageIds)")
+    suspend fun deleteReactions(messageIds: List<String>)
+
+    @Query("DELETE FROM reactions WHERE conversation_id = :conversationId")
+    suspend fun deleteConversationReactions(conversationId: String)
+
+    // ---- outbox ----
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun queue(o: DeleteOutboxEntity): Long
+
+    @Query("SELECT * FROM delete_outbox WHERE state = 'queued' ORDER BY created_at ASC")
+    suspend fun queued(): List<DeleteOutboxEntity>
+
+    @Query("SELECT * FROM delete_outbox WHERE client_msg_id = :clientMsgId")
+    suspend fun outboxRow(clientMsgId: String): DeleteOutboxEntity?
+
+    @androidx.room.Update
+    suspend fun updateOutbox(o: DeleteOutboxEntity)
+
+    @Query("DELETE FROM delete_outbox WHERE client_msg_id = :clientMsgId")
+    suspend fun removeOutbox(clientMsgId: String)
+
+    // ---- Clear chat / Delete chat ----
+
+    @Upsert
+    suspend fun putChatState(s: ChatStateEntity)
+
+    @Query("SELECT * FROM chat_state WHERE conversation_id = :conversationId")
+    suspend fun chatState(conversationId: String): ChatStateEntity?
+
+    @Query("SELECT * FROM chat_state")
+    fun observeChatStates(): Flow<List<ChatStateEntity>>
+
+    /** Delete chat: a new message brings the row back. */
+    @Query("UPDATE chat_state SET hidden = 0 WHERE conversation_id = :conversationId AND hidden = 1")
+    suspend fun unhide(conversationId: String): Int
 }
 
 /** v6 (§14.7) image media rows. */

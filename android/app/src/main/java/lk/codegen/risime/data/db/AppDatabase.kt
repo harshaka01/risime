@@ -23,6 +23,9 @@ import androidx.sqlite.execSQL
         GroupMemberEntity::class,
         GroupOpEntity::class,
         MediaEntity::class,
+        DeletedIdEntity::class,
+        DeleteOutboxEntity::class,
+        ChatStateEntity::class,
     ],
     version = AppDatabase.VERSION,
     exportSchema = true,
@@ -38,21 +41,46 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun groups(): GroupDao
     abstract fun groupOps(): GroupOpDao
     abstract fun media(): MediaDao
+    abstract fun deletes(): DeleteDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 6
+        const val VERSION = 7
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
                 .addMigrations(*MIGRATIONS)
+                .addCallback(SecureDelete)
                 .build()
+    }
+}
+
+/**
+ * §15.6 / crypto README: deleted cells (messages, image keys, old epoch secrets) are zero-filled,
+ * never left in free pages. Set on open (framework SQLite: inside a transaction, so it runs on the
+ * primary connection that does every write, the MLS KvStore's included; driver: on the connection).
+ */
+object SecureDelete : RoomDatabase.Callback() {
+    const val PRAGMA = "PRAGMA secure_delete = ON"
+
+    override fun onOpen(db: SupportSQLiteDatabase) {
+        db.beginTransaction()
+        try {
+            db.query(PRAGMA).use { it.moveToFirst() }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    override fun onOpen(connection: SQLiteConnection) {
+        connection.prepare(PRAGMA).use { it.step() }
     }
 }
 
@@ -136,6 +164,34 @@ object Migration5To6 : Migration(5, 6) {
         "CREATE INDEX IF NOT EXISTS `index_media_state_next_at` ON `media` (`state`, `next_at`)",
         "CREATE INDEX IF NOT EXISTS `index_media_last_access` ON `media` (`last_access`)",
         "CREATE INDEX IF NOT EXISTS `index_media_conversation_id` ON `media` (`conversation_id`)",
+    )
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/**
+ * v6 → v7 (contract v1.12 deletes): messages gain the tombstone fields, the delete state, the push
+ * counter (android R2) and the unverified-delete note; hidden tombstones, the delete outbox and the
+ * per-chat clear state. Additive only. A PENDING row from before v7 may already have been pushed
+ * (its reply lost), so it counts as pushed once.
+ */
+object Migration6To7 : Migration(6, 7) {
+    val SQL = listOf(
+        "ALTER TABLE `messages` ADD COLUMN `deleted_by` TEXT",
+        "ALTER TABLE `messages` ADD COLUMN `deleted_by_admin` INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE `messages` ADD COLUMN `deleted_at` INTEGER",
+        "ALTER TABLE `messages` ADD COLUMN `delete_state` TEXT",
+        "ALTER TABLE `messages` ADD COLUMN `send_attempts` INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE `messages` ADD COLUMN `delete_unverified` INTEGER NOT NULL DEFAULT 0",
+        "UPDATE `messages` SET `send_attempts` = 1 WHERE `outgoing` = 1 AND `status` = 'PENDING'",
+        "CREATE TABLE IF NOT EXISTS `deleted_ids` (`message_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `deleted_by` TEXT NOT NULL, `deleter_is_admin` INTEGER NOT NULL, `delete_server_ts` TEXT, `scope` TEXT NOT NULL, `at` INTEGER NOT NULL, PRIMARY KEY(`message_id`))",
+        "CREATE INDEX IF NOT EXISTS `index_deleted_ids_at` ON `deleted_ids` (`at`)",
+        "CREATE TABLE IF NOT EXISTS `delete_outbox` (`client_msg_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `scope` TEXT NOT NULL, `targets_json` TEXT NOT NULL, `blob_ids_json` TEXT NOT NULL, `state` TEXT NOT NULL, `attempts` INTEGER NOT NULL, `next_at` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `last_error` TEXT, `upto` TEXT, PRIMARY KEY(`client_msg_id`))",
+        "CREATE INDEX IF NOT EXISTS `index_delete_outbox_state_next_at` ON `delete_outbox` (`state`, `next_at`)",
+        "CREATE INDEX IF NOT EXISTS `index_delete_outbox_conversation_id` ON `delete_outbox` (`conversation_id`)",
+        "CREATE TABLE IF NOT EXISTS `chat_state` (`conversation_id` TEXT NOT NULL, `cleared_upto` INTEGER, `hidden` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`conversation_id`))",
     )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
