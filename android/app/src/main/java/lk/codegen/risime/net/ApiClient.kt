@@ -10,6 +10,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
@@ -26,6 +27,9 @@ sealed interface ApiResult<out T> {
         /** §10.2: 409 epoch_conflict's current epoch; 409 not_ready's missing devices. */
         val epoch: Long? = null,
         val missing: List<MlsMissing>? = null,
+        /** §13.4/§14.5 413 quota_exceeded numbers. */
+        val used: Long? = null,
+        val limit: Long? = null,
     ) : ApiResult<Nothing>
     data class NetworkError(val cause: IOException) : ApiResult<Nothing>
 }
@@ -121,6 +125,69 @@ class ApiClient(
 
     suspend fun downloadBlob(blobId: String): ApiResult<ByteArray> =
         execute("GET", "blobs/$blobId", null, true, BYTES)
+
+    // ---- §14.2 media blobs (v1.11) ----
+
+    /**
+     * Streams [file] as the body (OkHttp sends its Content-Length; never buffered in memory).
+     * Idempotent by [clientBlobId]: a repeat after a completed upload answers 200 with the same blob.
+     */
+    suspend fun uploadMediaBlob(conversationId: String, clientBlobId: String, file: java.io.File, purpose: String = "media"): ApiResult<BlobUploadReply> =
+        execute(
+            "POST", "blobs?purpose=$purpose&conversation_id=$conversationId&client_blob_id=$clientBlobId",
+            file.asRequestBody(OCTET), true, serializer<BlobUploadReply>(),
+        )
+
+    /** Owner only, idempotent 204 (a cancelled send after the upload). */
+    suspend fun deleteBlob(blobId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "blobs/$blobId", null)
+
+    suspend fun blobUsage(): ApiResult<BlobUsageReply> = call<Unit, BlobUsageReply>("GET", "blobs/usage", null)
+
+    /**
+     * §14.2 streamed, resumable download into [part]: from byte [from] with `Range` and `If-Range`
+     * ([etag], the strong ETag = SHA-256 hex); a full `200` (e.g. If-Range mismatch) rewrites the
+     * file. Returns the file's length afterwards. Never holds the body in memory.
+     */
+    suspend fun downloadBlobTo(blobId: String, part: java.io.File, from: Long, etag: String?): ApiResult<Long> {
+        suspend fun once(): ApiResult<Long> {
+            val url = serverUrl().trimEnd('/').toHttpUrl().newBuilder().addPathSegments("api/v1/blobs/$blobId").build()
+            val b = Request.Builder().url(url).get()
+            token()?.let { b.header("Authorization", "Bearer $it") }
+            if (from > 0) {
+                b.header("Range", "bytes=$from-")
+                etag?.let { b.header("If-Range", "\"$it\"") }
+            }
+            return withContext(Dispatchers.IO) {
+                try {
+                    http.newCall(b.build()).execute().use { res ->
+                        when {
+                            res.code == 206 && from > 0 -> {
+                                val start = res.header("Content-Range")?.let { Regex("""bytes (\d+)-""").find(it)?.groupValues?.get(1)?.toLongOrNull() }
+                                if (start != from) return@use ApiResult.Error(206, "bad_range", "Content-Range ${res.header("Content-Range")}")
+                                java.io.FileOutputStream(part, true).use { out -> res.body.byteStream().copyTo(out) }
+                                ApiResult.Ok(part.length())
+                            }
+                            res.code == 200 -> {
+                                java.io.FileOutputStream(part, false).use { out -> res.body.byteStream().copyTo(out) }
+                                ApiResult.Ok(part.length())
+                            }
+                            res.code == 416 -> ApiResult.Ok(part.length())
+                            else -> {
+                                val text = runCatching { res.body.string() }.getOrDefault("")
+                                val err = runCatching { ProtocolJson.decodeFromString<ApiErrorEnvelope>(text).error }.getOrNull()
+                                ApiResult.Error(res.code, err?.code ?: "http_${res.code}", err?.message ?: "", retryAfterSec = parseRetryAfter(res.header("Retry-After"), System.currentTimeMillis()))
+                            }
+                        }
+                    }
+                } catch (e: IOException) {
+                    ApiResult.NetworkError(e)
+                }
+            }
+        }
+        val first = once()
+        if (first is ApiResult.Error && first.httpStatus == 401 && onUnauthorized()) return once()
+        return first
+    }
 
     /** §8.1: at logout (idempotent). */
     suspend fun deleteDevice(deviceId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "me/devices/$deviceId", null)
@@ -218,6 +285,8 @@ class ApiClient(
                             attemptsLeft = err?.attemptsLeft,
                             epoch = err?.epoch,
                             missing = err?.missing,
+                            used = err?.used,
+                            limit = err?.limit,
                         )
                     }
                 }
