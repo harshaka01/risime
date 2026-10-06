@@ -2,14 +2,14 @@
 
 **Status:** accepted 2026-10-06 (root); coturn is **configured and smoke-tested on loopback, not
 started publicly**. It goes live after the port check below passes and the server serves
-`GET /api/v1/calls/turn` (contract proposal `contract/proposals/2026-10-06-calls-v1.12.md`).
+`GET /api/v1/calls/turn` (contract proposal `contract/proposals/2026-10-06-calls-v1.13.md`).
 
 ## Context
-1:1 voice calls (proposal v1.12) are WebRTC peer-to-peer with Opus. About 10–20 % of mobile
+1:1 voice calls (proposal v1.13) are WebRTC peer-to-peer with Opus. About 10–20 % of mobile
 calls can't connect directly (symmetric NAT, carrier-grade NAT, UDP-blocking Wi-Fi) and need a
 TURN relay. spark2 is the only host we run. A TURN server is useless unless the public internet
 can reach it, while CLAUDE.md rule 6 says every service binds to 127.0.0.1. Group calls (LiveKit,
-v1.13) will need public media ports too.
+v1.14) will need public media ports too.
 
 ## Decision
 - **coturn 4.7** (`coturn/coturn:4.7`, multi-arch, arm64 verified on spark2: `turnserver 4.7.0`),
@@ -25,7 +25,7 @@ v1.13) will need public media ports too.
   | 5349 | tcp | TURN over TLS (when the certificate is in place; `no-dtls`, so no 5349/udp) |
   | 49152–49999 | udp | TURN relay range (848 ports) |
 
-  Reserved for LiveKit (v1.13, not deployed): **7881/tcp** (ICE-TCP) and **50000–60000/udp**
+  Reserved for LiveKit (v1.14, not deployed): **7881/tcp** (ICE-TCP) and **50000–60000/udp**
   (RTC). LiveKit's signalling (7880) stays on 127.0.0.1 behind Caddy (`wss://…/livekit`), and its
   built-in TURN is off (coturn serves both).
 - **Auth:** `use-auth-secret` (TURN REST credentials). The server mints
@@ -46,7 +46,7 @@ v1.13) will need public media ports too.
   (seen in the smoke test: `403 Forbidden IP`).
 - **Quotas:** `user-quota=8` allocations per username, `total-quota=600`, `max-bps=64000` bytes/s
   per session (512 kbit/s, ample for Opus voice), `max-allocate-lifetime=3600`, `stale-nonce=600`.
-  The REST endpoint is rate-limited per user (proposal v1.12 §15.3).
+  The REST endpoint is rate-limited per user (proposal v1.13 §16.3).
 - **TLS on 5349: later.** Caddy's certificate for risime.risicloud.ai is under `/var/lib/caddy`
   (root-only, not readable without sudo). TURN/TLS on 5349 starts once a copy is readable by the
   container (one sudo step: a root cron/`caddy` event hook copying the cert and key to
@@ -77,7 +77,7 @@ gap, the exact commands are:
 sudo ufw allow 3478 comment 'RisiMe TURN/STUN (decision 046)'
 sudo ufw allow 5349/tcp comment 'RisiMe TURN/TLS (decision 046)'
 sudo ufw allow 49152:49999/udp comment 'RisiMe TURN relay (decision 046)'
-# later, LiveKit (v1.13):
+# later, LiveKit (v1.14):
 sudo ufw allow 7881/tcp comment 'RisiMe LiveKit ICE-TCP'
 sudo ufw allow 50000:60000/udp comment 'RisiMe LiveKit RTC'
 ```
@@ -99,5 +99,5 @@ to 203.115.26.139:<port> works the same way. TCP re-check: on spark2
 - Relayed media stays end-to-end encrypted (DTLS-SRTP between the phones); coturn sees IPs, ports,
   timing and volume, never audio.
 - Going live is: open ports (edge + ufw) → port check passes → `TURN_SECRET` in `.env` →
-  `docker compose --env-file .env -f infra/docker-compose.turn.yml up -d` → server ships v1.12.
+  `docker compose --env-file .env -f infra/docker-compose.turn.yml up -d` → server ships v1.13.
 - `.env.example` needs a `TURN_SECRET=` line (top-level file; added with the server change).
