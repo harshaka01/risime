@@ -58,18 +58,69 @@ defmodule RisiMe.Accounts do
   """
   @spec map_identity(%{sub: String.t(), email: String.t()}) ::
           {:ok, %User{}} | {:error, :not_allowlisted | :identity_conflict}
-  def map_identity(%{sub: sub, email: email}) do
+  def map_identity(%{sub: sub, email: email} = identity) do
     case Repo.get_by(User, keycloak_sub: sub) do
       %User{} = user ->
-        if Repo.exists?(from a in AllowlistEntry, where: a.phone == ^user.phone),
-          do: {:ok, user},
-          else: {:error, :not_allowlisted}
+        if member?(user) do
+          # Invites for this email sent after the user joined (§9.1).
+          RisiMe.Social.accept_invites(user, RisiMe.Social.pending_invites(email))
+          {:ok, user}
+        else
+          {:error, :not_allowlisted}
+        end
 
       nil ->
         case Repo.one(from a in AllowlistEntry, where: fragment("lower(?)", a.email) == ^email) do
-          nil -> {:error, :not_allowlisted}
-          entry -> bind(entry, sub)
+          nil ->
+            redeem_invites(identity)
+
+          entry ->
+            with {:ok, user} <- bind(entry, sub) do
+              RisiMe.Social.accept_invites(user, RisiMe.Social.pending_invites(email))
+              {:ok, user}
+            end
         end
+    end
+  end
+
+  # Contract v1.6 §9.1: no allowlist entry → a pending invite for the email creates the user.
+  defp redeem_invites(%{sub: sub, email: email} = identity) do
+    case RisiMe.Social.pending_invites(email) do
+      [] ->
+        {:error, :not_allowlisted}
+
+      invites ->
+        case RisiMe.Social.redeem(invites, identity) do
+          {:ok, user} ->
+            {:ok, user}
+
+          {:error, :identity_conflict} ->
+            # A concurrent first request may have redeemed for this same identity.
+            case Repo.get_by(User, keycloak_sub: sub) do
+              %User{} = user -> {:ok, user}
+              nil -> {:error, :identity_conflict}
+            end
+        end
+    end
+  end
+
+  @doc """
+  Membership (contract v1.6 §9.1): not disabled, and the phone is allowlisted or the user
+  joined by invite.
+  """
+  def member?(%User{disabled_at: %DateTime{}}), do: false
+  def member?(%User{invited_by_id: id}) when is_binary(id), do: true
+
+  def member?(%User{phone: phone}),
+    do: Repo.exists?(from a in AllowlistEntry, where: a.phone == ^phone)
+
+  @doc "Disables a user (`mix risime.user.disable`): no more sign-in; their sockets close."
+  def disable_user(phone) do
+    case Repo.update_all(from(u in User, where: u.phone == ^phone and is_nil(u.disabled_at)),
+           set: [disabled_at: DateTime.utc_now()]
+         ) do
+      {1, _} -> :ok
+      _ -> if Repo.get_by(User, phone: phone), do: :ok, else: {:error, :not_found}
     end
   end
 
@@ -609,7 +660,9 @@ defmodule RisiMe.Accounts do
     Repo.one(
       from t in UserToken,
         join: u in assoc(t, :user),
-        where: t.token_hash == ^:crypto.hash(:sha256, token) and is_nil(t.revoked_at),
+        where:
+          t.token_hash == ^:crypto.hash(:sha256, token) and is_nil(t.revoked_at) and
+            is_nil(u.disabled_at),
         select: {u, t}
     )
   end

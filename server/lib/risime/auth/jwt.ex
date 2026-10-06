@@ -26,7 +26,13 @@ defmodule RisiMe.Auth.JWT do
          :ok <- kty_matches(alg, map),
          {:ok, claims} <- signature(jwk, alg, token),
          :ok <- check_claims(claims, now) do
-      {:ok, %{sub: claims["sub"], email: String.downcase(claims["email"]), exp: claims["exp"]}}
+      {:ok,
+       %{
+         sub: claims["sub"],
+         email: String.downcase(claims["email"]),
+         exp: claims["exp"],
+         name: if(is_binary(claims["name"]), do: claims["name"])
+       }}
     end
   end
 

@@ -11,6 +11,8 @@ defmodule RisiMe.Accounts.User do
     field :last_seen_at, :utc_datetime_usec
     field :keycloak_sub, :string
     field :phone_verified_for, :string
+    field :invited_by_id, :binary_id
+    field :disabled_at, :utc_datetime_usec
 
     timestamps(type: :utc_datetime_usec)
   end
