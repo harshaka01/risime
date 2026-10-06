@@ -28,7 +28,9 @@
   so it's flaky. Release logs are now kept in full (`~/risime-logs/release-last.log`) so a
   recurrence names the test.
 - **Emoji and reactions (v1.8) shipped in nightly.9.**
-- **Queue:** MLS groups (v1.9, reviewed by crypto and server; android review next) → encrypted images.
+- **Groups (contract v1.9) merged** (`d20de76`, decision 041; all three reviews in). Crypto, server
+  and android are implementing it in parallel.
+- **Queue after groups:** encrypted images (they reuse the v1.9 blob API).
 
 ## Waiting on Harsha (batched)
 - The fail2ban jail and removing Tailscale, if not done yet (`docs/PROD.md`).
