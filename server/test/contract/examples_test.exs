@@ -22,10 +22,10 @@ defmodule RisiMe.ContractExamplesTest do
               phone_verify_request_reply.json phone_verify_confirm.json
               error_phone_unverified.json error_invalid_code_attempts.json
               error_already_verified.json error_sms_unavailable.json device_put.json
-              error_invalid_device.json push_inbox.json)
-  # v1.6 (invites + friends): parse-only placeholders added by root with the contract merge; the
-  # server role replaces them with real checks when it implements §9.
-  @pending_v1_6 ~w(invite_create.json invite_reply.json invites_reply.json friend_request.json friend_request_reply.json friends_reply.json friend_accept_reply.json block.json signal_friend.json error_not_friends.json user_vouched.json)
+              error_invalid_device.json push_inbox.json invite_create.json invite_reply.json
+              invites_reply.json friend_request.json friend_request_reply.json friends_reply.json
+              friend_accept_reply.json block.json signal_friend.json error_not_friends.json
+              user_vouched.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -58,12 +58,7 @@ defmodule RisiMe.ContractExamplesTest do
   test "every example file is covered by this test" do
     assert length(@files) > 0
 
-    assert @files -- (@checked ++ @pending_v1_6) == [],
-           "add checks for: #{inspect(@files -- (@checked ++ @pending_v1_6))}"
-  end
-
-  test "v1.6 examples are valid JSON objects (placeholder)" do
-    for name <- @pending_v1_6, do: assert(is_map(example(name)))
+    assert @files -- @checked == [], "add checks for: #{inspect(@files -- @checked)}"
   end
 
   setup do
@@ -366,6 +361,102 @@ defmodule RisiMe.ContractExamplesTest do
            |> wire()
            |> get_in(["message", "data"]) ==
              example("push_inbox.json")
+  end
+
+  ## v1.6 (§9)
+
+  defp req_json(method, path, token, body \\ nil) do
+    conn =
+      http()
+      |> Plug.Conn.put_req_header("authorization", "Bearer " <> token)
+      |> Phoenix.ConnTest.dispatch(@endpoint, method, path, body)
+
+    {conn.status, if(conn.resp_body == "", do: nil, else: Jason.decode!(conn.resp_body))}
+  end
+
+  describe "v1.6" do
+    test "invite_create.json, invite_reply.json, invites_reply.json", %{a: a} do
+      {201, reply} = req_json(:post, "/api/v1/invites", a.token, example("invite_create.json"))
+      assert_same_shape(reply, example("invite_reply.json"))
+      assert reply["invite"]["link"] == example("invite_reply.json")["invite"]["link"]
+      assert reply["invite"]["subject"] == example("invite_reply.json")["invite"]["subject"]
+
+      {200, list} = req_json(:get, "/api/v1/invites", a.token)
+      assert_same_shape(hd(list["invites"]), hd(example("invites_reply.json")["invites"]))
+    end
+
+    test "friend_request.json, friend_request_reply.json, friends_reply.json, friend_accept_reply.json, block.json",
+         %{a: a} do
+      ex = example("friends_reply.json")
+      d = logged_in_user(display_name: "D")
+      f = logged_in_user(display_name: "F")
+
+      assert req_json(:post, "/api/v1/friends/requests", a.token, example("friend_request.json")) ==
+               {202, example("friend_request_reply.json")}
+
+      # incoming from d, outgoing to a new phone, a blocked user, and b (setup) as a friend.
+      {202, _} = req_json(:post, "/api/v1/friends/requests", d.token, %{"phone" => a.user.phone})
+
+      {202, _} =
+        req_json(:post, "/api/v1/friends/requests", a.token, %{"phone" => unique_phone()})
+
+      assert {204, nil} =
+               req_json(:post, "/api/v1/blocks", a.token, %{
+                 example("block.json")
+                 | "user_id" => f.user.id
+               })
+
+      {200, ours} = req_json(:get, "/api/v1/friends", a.token)
+      assert keys(ours) == keys(ex)
+      for k <- ~w(friends incoming blocked), do: assert_same_shape(hd(ours[k]), hd(ex[k]))
+      assert Enum.all?(ours["outgoing"], &(&1["user_id"] == nil and &1["display_name"] == nil))
+      assert_same_shape(hd(ours["outgoing"]), hd(ex["outgoing"]))
+
+      [%{"id" => id}] = ours["incoming"]
+      {200, accepted} = req_json(:post, "/api/v1/friends/requests/#{id}/accept", a.token)
+      assert_same_shape(accepted, example("friend_accept_reply.json"))
+    end
+
+    test "signal_friend.json", %{a: a} do
+      d = logged_in_user(display_name: "D")
+      Phoenix.PubSub.subscribe(RisiMe.PubSub, Messaging.topic(a.user.id))
+      {202, _} = req_json(:post, "/api/v1/friends/requests", d.token, %{"phone" => a.user.phone})
+      assert_receive {:signal, %{kind: "friend"} = signal}
+      assert_same_shape(wire(signal), example("signal_friend.json"))
+    end
+
+    test "error_not_friends.json", %{chan_a: chan_a} do
+      %{user: stranger} = logged_in_user()
+
+      ref =
+        push(chan_a, "msg:send", %{
+          "client_msg_id" => Uniq.UUID.uuid4(),
+          "to" => stranger.id,
+          "body" => "x"
+        })
+
+      assert_reply ref, :error, error
+      assert wire(error) == example("error_not_friends.json")
+    end
+
+    test "user_vouched.json", %{a: a} do
+      RisiMe.Auth.clear_cache()
+
+      {201, _} =
+        req_json(:post, "/api/v1/invites", a.token, %{
+          "phone" => unique_phone(),
+          "email" => "vouched@example.com",
+          "name" => "V"
+        })
+
+      {200, ours} =
+        req_json(:get, "/api/v1/me", RisiMe.OIDCHelpers.access_token("vouched@example.com"))
+
+      ex = example("user_vouched.json")
+      # The example predates nothing else but omits phone_verified (absent = true).
+      assert_same_shape(update_in(ours["user"], &Map.delete(&1, "phone_verified")), ex)
+      assert ours["user"]["company"] == ""
+    end
   end
 
   defp atomize(map), do: Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)

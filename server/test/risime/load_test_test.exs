@@ -13,6 +13,10 @@ defmodule RisiMe.LoadTestTest do
       assert id == u.id
     end
 
+    :ok = LoadTest.befriend_ring(users)
+    [a, b, _] = users
+    assert RisiMe.Social.friends?(a.id, b.id)
+
     assert LoadTest.cleanup() == {3, 3}
     for u <- users, do: refute(Accounts.get_user(u.id))
   end

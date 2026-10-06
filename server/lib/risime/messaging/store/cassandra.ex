@@ -145,6 +145,21 @@ defmodule RisiMe.Messaging.Store.Cassandra do
     :ok
   end
 
+  @doc """
+  Every distinct `{sender_id, recipient_id}` pair in `message_index`, over a given connection
+  (used by `RisiMe.Release.migrate_friendships/0`, which runs without the app). A full,
+  paged scan of the table, so no `ALLOW FILTERING`.
+  """
+  def conversation_pairs(conn, page_size \\ 1000) do
+    conn
+    |> Xandra.stream_pages!("SELECT sender_id, recipient_id FROM message_index", [],
+      page_size: page_size
+    )
+    |> Stream.flat_map(& &1)
+    |> Stream.map(&{&1["sender_id"], &1["recipient_id"]})
+    |> Enum.into(MapSet.new())
+  end
+
   @impl true
   def health do
     case Xandra.Cluster.execute(@cluster, "SELECT release_version FROM system.local", [],

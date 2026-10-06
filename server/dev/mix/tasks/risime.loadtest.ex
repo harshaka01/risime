@@ -56,6 +56,7 @@ defmodule Mix.Tasks.Risime.Loadtest do
 
     Mix.shell().info("creating #{n} throwaway users…")
     users = RisiMe.LoadTest.create_users(n)
+    :ok = RisiMe.LoadTest.befriend_ring(users)
 
     try do
       Mix.shell().info("running #{n} users for #{duration} s against #{url}, 1 msg/#{interval} ms each")

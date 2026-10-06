@@ -55,6 +55,24 @@ defmodule RisiMe.LoadTest do
     end
   end
 
+  @doc """
+  v1.6: makes each user friends with its #{10} ring neighbours on each side, so every send goes to
+  a friend (friendships are deleted with the users).
+  """
+  def befriend_ring(users) do
+    ids = Enum.map(users, & &1.id) |> List.to_tuple()
+    n = tuple_size(ids)
+    k = ring_size(n)
+
+    for i <- 0..(n - 1), j <- 1..k//1, k > 0 do
+      RisiMe.Social.make_friends!(elem(ids, i), elem(ids, rem(i + j, n)))
+    end
+
+    :ok
+  end
+
+  defp ring_size(n), do: min(10, div(n - 1, 2))
+
   @doc "Deletes every load-test user and allowlist entry (the `+999` prefix), from any run."
   def cleanup do
     {users, _} = Repo.delete_all(from u in User, where: like(u.phone, ^"#{@phone_prefix}%"))
@@ -267,7 +285,10 @@ defmodule RisiMe.LoadTest do
   defp send_message(state) do
     %{ids: ids, idx: idx} = state.cfg
     n = tuple_size(ids)
-    to = elem(ids, rem(idx + :rand.uniform(n - 1), n))
+    # v1.6: only friends can be messaged; friends are the ring neighbours (see befriend_ring/1).
+    k = ring_size(n)
+    offset = Enum.random(Enum.to_list(-k..-1) ++ Enum.to_list(1..k))
+    to = elem(ids, rem(idx + offset + n, n))
     cmid = Uniq.UUID.uuid4()
     ref = ref(state)
     t0 = now_us()

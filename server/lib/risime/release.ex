@@ -16,11 +16,68 @@ defmodule RisiMe.Release do
 
   @app :risime
 
-  @doc "Runs all pending Ecto migrations, then all pending CQL migrations."
+  @doc """
+  Runs all pending Ecto migrations, then all pending CQL migrations, then the idempotent
+  friendship backfill (contract v1.6 §9.4).
+  """
   def migrate do
     migrate_ecto()
     migrate_cql()
+    migrate_friendships()
     :ok
+  end
+
+  @doc """
+  Contract v1.6 §9.4: every pair of users who already have a conversation (a `message_index`
+  row) becomes friends, so no existing chat breaks. Idempotent: pairs that are already friends,
+  and pairs whose users no longer exist, are skipped. Returns `{:ok, friendships_created}`.
+
+  Options: `:keyspace`, `:nodes` (default: the `:cassandra` config).
+  """
+  def migrate_friendships(opts \\ []) do
+    load_app()
+    {:ok, _} = Application.ensure_all_started(:xandra)
+    config = Application.fetch_env!(@app, :cassandra)
+    [node | _] = opts[:nodes] || config[:nodes]
+    keyspace = opts[:keyspace] || config[:keyspace]
+
+    {:ok, conn} = Xandra.start_link(nodes: [node], keyspace: keyspace)
+
+    pairs =
+      try do
+        RisiMe.Messaging.Store.Cassandra.conversation_pairs(conn)
+      after
+        GenServer.stop(conn)
+      end
+
+    [repo] = repos()
+    {:ok, created, _} = Ecto.Migrator.with_repo(repo, fn _ -> backfill_friendships(pairs) end)
+    Logger.info("friendships: #{created} created from #{MapSet.size(pairs)} conversation pair(s)")
+    {:ok, created}
+  end
+
+  @doc false
+  def backfill_friendships(pairs) do
+    import Ecto.Query
+
+    ids = pairs |> Enum.flat_map(fn {a, b} -> [a, b] end) |> Enum.uniq()
+
+    existing =
+      MapSet.new(
+        RisiMe.Repo.all(from u in RisiMe.Accounts.User, where: u.id in ^ids, select: u.id)
+      )
+
+    before = RisiMe.Repo.aggregate("friendships", :count)
+
+    for {a, b} <- pairs,
+        a != b,
+        MapSet.member?(existing, a) and MapSet.member?(existing, b),
+        uniq: true do
+      if a < b, do: {a, b}, else: {b, a}
+    end
+    |> Enum.each(fn {a, b} -> RisiMe.Social.make_friends!(a, b) end)
+
+    RisiMe.Repo.aggregate("friendships", :count) - before
   end
 
   @doc "Runs all pending Ecto migrations for every repo."
