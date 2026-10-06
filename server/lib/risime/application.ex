@@ -21,6 +21,8 @@ defmodule RisiMe.Application do
       do: Logger.warning("DEV_LOCAL_AUTH=true in prod: dev login and opaque tokens are enabled")
 
     RisiMe.TimeUUID.init()
+    # v1.11 §14.8: temp files of uploads killed with the previous run.
+    RisiMe.Blobs.sweep_tmp()
 
     children = [
       RisiMeWeb.Telemetry,
@@ -28,6 +30,8 @@ defmodule RisiMe.Application do
       {Oban, Application.fetch_env!(:risime, Oban)},
       RisiMe.Messaging.Store.Cassandra,
       RisiMe.RateLimiter,
+      RisiMe.Blobs.Slots,
+      RisiMe.Blobs.DiskGuard,
       {DNSCluster, query: Application.get_env(:risime, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: RisiMe.PubSub},
       RisiMe.Presence,

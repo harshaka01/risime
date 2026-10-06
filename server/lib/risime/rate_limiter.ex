@@ -35,6 +35,31 @@ defmodule RisiMe.RateLimiter do
     if previous * overlap + current > limit, do: {:error, :rate_limited}, else: :ok
   end
 
+  @doc """
+  Like `hit/4`, but a refused hit doesn't count (check, then increment): a client that retries
+  while limited doesn't extend its own lockout.
+  """
+  @spec hit_if_allowed(atom, term, pos_integer, pos_integer) :: :ok | {:error, :rate_limited}
+  def hit_if_allowed(bucket, key, limit, window_ms) do
+    case hit(bucket, key, limit, window_ms) do
+      :ok ->
+        :ok
+
+      error ->
+        window = div(System.system_time(:millisecond), window_ms)
+
+        _ =
+          :ets.update_counter(
+            @table,
+            {bucket, key, window},
+            {2, -1},
+            {{bucket, key, window}, 1, 0}
+          )
+
+        error
+    end
+  end
+
   @doc "Seconds until the current fixed window ends (a `Retry-After` value, at least 1)."
   def retry_after_s(window_ms) do
     now = System.system_time(:millisecond)

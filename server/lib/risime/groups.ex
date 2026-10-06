@@ -19,7 +19,7 @@ defmodule RisiMe.Groups do
   alias RisiMe.{Devices, Messaging, MLS, Repo, Social, TimeUUID}
   alias RisiMe.Accounts.User
   alias RisiMe.Devices.Device
-  alias RisiMe.Groups.{Group, Member, Ops}
+  alias RisiMe.Groups.{Group, Member, Membership, Ops}
 
   @max_users 256
   @max_devices 768
@@ -397,6 +397,7 @@ defmodule RisiMe.Groups do
               for(u <- others, do: member_row(id, u, "member", "pending_add", nil, now))
 
           Repo.insert_all(Member, rows)
+          Membership.open(id, [me], now)
 
           # §12.3: a group still `creating` after 10 minutes is deleted.
           {:ok, _} =
@@ -565,13 +566,16 @@ defmodule RisiMe.Groups do
       set: [state: "pending_remove"]
     )
 
+    # v1.11 §14.8: delivery stops now, so the membership interval closes now.
+    Membership.close(g.id, [user_id])
     Ops.drop_user(g, user_id)
   end
 
   @doc false
-  def delete_member(group_id, user_id),
-    do:
-      Repo.delete_all(from m in Member, where: m.group_id == ^group_id and m.user_id == ^user_id)
+  def delete_member(group_id, user_id) do
+    Membership.close(group_id, [user_id])
+    Repo.delete_all(from m in Member, where: m.group_id == ^group_id and m.user_id == ^user_id)
+  end
 
   @doc "`PATCH /groups/{id}/members/{user_id}` (admin)."
   def set_role(me, device_id, id, target, params) do

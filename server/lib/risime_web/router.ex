@@ -80,11 +80,18 @@ defmodule RisiMeWeb.Router do
     post "/groups/:id/rejoin", GroupController, :rejoin
     get "/groups/:id/messages/:message_id/receipts", GroupController, :receipts
     post "/blobs", BlobController, :create
-    get "/blobs/:id", BlobController, :show
+    get "/blobs/usage", BlobController, :usage
     delete "/blobs/:id", BlobController, :delete
     put "/me/devices/:device_id", DeviceController, :put
     delete "/me/devices/:device_id", DeviceController, :delete
     get "/contacts", ContactsController, :index
+  end
+
+  # v1.11 §14.2: blob bytes are served to any `Accept` (no JSON content negotiation).
+  scope "/api/v1", RisiMeWeb do
+    pipe_through [:authenticated]
+
+    get "/blobs/:id", BlobController, :show
   end
 
   # Swoosh mailbox preview in development: the dev OTP emails land here.

@@ -26,6 +26,8 @@ defmodule RisiMe.Workers.GroupTimer do
     {:ok, _} =
       Groups.locked(id, fn ->
         {n, _} = Repo.delete_all(from g in Group, where: g.id == ^id and g.state == "creating")
+        # v1.11 §14.5: deleting a group expires all its blobs.
+        if n > 0, do: RisiMe.Blobs.expire_conversation(id)
         {:ok, n}
       end)
 

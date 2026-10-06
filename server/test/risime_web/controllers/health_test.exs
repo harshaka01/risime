@@ -13,7 +13,12 @@ defmodule RisiMeWeb.HealthTest do
     assert body == %{
              "status" => "ok",
              "version" => RisiMe.Application.version(),
-             "checks" => %{"postgres" => "ok", "cassandra" => "ok", "sms" => "log"}
+             "checks" => %{
+               "postgres" => "ok",
+               "cassandra" => "ok",
+               "sms" => "log",
+               "blob_storage" => "ok"
+             }
            }
   end
 
@@ -25,10 +30,21 @@ defmodule RisiMeWeb.HealthTest do
       capture_log(fn ->
         body = conn |> get("/health") |> json_response(503)
         assert body["status"] == "error"
-        assert body["checks"] == %{"postgres" => "ok", "cassandra" => "error", "sms" => "log"}
+
+        assert Map.delete(body["checks"], "blob_storage") ==
+                 %{"postgres" => "ok", "cassandra" => "error", "sms" => "log"}
       end)
 
     assert log =~ "health: cassandra failed"
+  end
+
+  test "GET /health says blob_storage low under the warning level (still 200)", %{conn: conn} do
+    prev = Application.get_env(:risime, :blob_disk)
+    Application.put_env(:risime, :blob_disk, {60 * 1024 ** 3, 900 * 1024 ** 3})
+    on_exit(fn -> Application.put_env(:risime, :blob_disk, prev) end)
+
+    assert %{"checks" => %{"blob_storage" => "low"}} =
+             conn |> get("/health") |> json_response(200)
   end
 
   test "the Cassandra store answers its health check" do

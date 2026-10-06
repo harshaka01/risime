@@ -19,6 +19,8 @@ defmodule RisiMeWeb.HealthController do
 
     # SMS is a detail for ops, never a reason for 503 (decision 022); never the balance.
     checks = Map.put(checks, "sms", RisiMe.Accounts.SmsStatus.check())
+    # Blob disk space (v1.11, decision 042): "low" under the warning level; never a 503.
+    checks = Map.put(checks, "blob_storage", RisiMe.Blobs.DiskGuard.health())
 
     conn
     |> put_status(if healthy, do: 200, else: 503)

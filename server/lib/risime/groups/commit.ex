@@ -9,7 +9,7 @@ defmodule RisiMe.Groups.Commit do
   import Ecto.Query
 
   alias RisiMe.{Blobs, Groups, Messaging, MLS, RateLimiter, Repo, TimeUUID}
-  alias RisiMe.Groups.{Group, Member, Op, Ops, Policy}
+  alias RisiMe.Groups.{Group, Member, Membership, Op, Ops, Policy}
 
   @inline_max 64 * 1024
   @commit_total_max 1024 * 1024
@@ -169,6 +169,8 @@ defmodule RisiMe.Groups.Commit do
         Repo.update_all(from(x in Member, where: x.group_id == ^g.id),
           set: [state: "active", joined_at: now]
         )
+
+        Membership.open(g.id, member_ids, now)
 
         g = %{g | state: "active"}
 
@@ -370,6 +372,8 @@ defmodule RisiMe.Groups.Commit do
             set: [state: "active", joined_at: now]
           )
 
+        Membership.open(g.id, joined, now)
+
         Groups.group_events(g, "added", op.actor, joined, epoch: new_epoch, push_targets: true)
 
       %Op{type: "remove"} ->
@@ -556,10 +560,17 @@ defmodule RisiMe.Groups.Commit do
 
     # add/role ops are dropped (their pending_add members too), remove ops finish (those users
     # are out), devices ops are dropped.
-    Repo.delete_all(
-      from m in Member,
-        where: m.group_id == ^g.id and m.state in ["pending_add", "pending_remove"]
-    )
+    {_, gone} =
+      Repo.delete_all(
+        from m in Member,
+          where: m.group_id == ^g.id and m.state in ["pending_add", "pending_remove"],
+          select: m.user_id
+      )
+
+    Membership.close(g.id, gone)
+
+    # v1.11 §14.5: a reset expires every blob of the group (the new generation starts empty).
+    Blobs.expire_conversation(g.id)
 
     Repo.delete_all(from o in Op, where: o.group_id == ^g.id)
 

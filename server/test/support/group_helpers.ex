@@ -59,6 +59,7 @@ defmodule RisiMe.GroupHelpers do
       Phoenix.ConnTest.build_conn()
       |> Plug.Conn.put_req_header("authorization", "Bearer " <> token)
       |> Plug.Conn.put_req_header("content-type", "application/octet-stream")
+      |> Plug.Conn.put_req_header("content-length", Integer.to_string(byte_size(bytes)))
       |> Phoenix.ConnTest.dispatch(@endpoint, :post, path, bytes)
 
     {conn.status, if(conn.resp_body == "", do: nil, else: Jason.decode!(conn.resp_body))}

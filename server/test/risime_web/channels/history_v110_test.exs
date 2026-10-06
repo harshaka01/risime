@@ -392,8 +392,8 @@ defmodule RisiMeWeb.HistoryV110Test do
       assert {413, %{"error" => %{"code" => "too_large"}}} =
                upload(path, a.token, "tiny", 2 * 1024 * 1024 + 1)
 
-      # Rechecked on the actual size after reading (a lying Content-Length).
-      assert {413, %{"error" => %{"code" => "quota_exceeded"}}} =
+      # A lying Content-Length is aborted mid-stream (v1.11 §14.2) before the quota recheck.
+      assert {413, %{"error" => %{"code" => "too_large"}}} =
                upload(path, a.token, :crypto.strong_rand_bytes(60_000), 10)
 
       # The quota frees up when blobs are deleted.

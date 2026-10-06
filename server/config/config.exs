@@ -64,7 +64,9 @@ config :risime, Oban,
     {Oban.Plugins.Cron,
      crontab: [
        {"17 3 * * *", RisiMe.Workers.PruneAccounts},
-       {"41 * * * *", RisiMe.Workers.BlobCleanup}
+       {"41 * * * *", RisiMe.Workers.BlobCleanup},
+       # v1.11 §14.8: the weekly orphan pass (files without a row).
+       {"53 4 * * 0", RisiMe.Workers.BlobCleanup, args: %{"pass" => "orphans"}}
      ]}
   ]
 

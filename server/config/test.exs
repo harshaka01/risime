@@ -83,3 +83,8 @@ config :phoenix, :plug_init_mode, :runtime
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# v1.11 blobs: a fixed, roomy disk for the free-space guard (tests override it for 507), and
+# no caching of the global live `media` sum.
+config :risime, :blob_disk, {1024 ** 4, 2 * 1024 ** 4}
+config :risime, :blob_guard, media_total_cache_ms: 0

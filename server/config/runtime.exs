@@ -111,6 +111,10 @@ end
 # v1.9 blobs (§12.6): bytes on local disk outside the repo. Default ~/risime-blobs/<env>.
 if config_env() != :test do
   if dir = System.get_env("BLOB_DIR"), do: config(:risime, :blob_dir, Path.expand(dir))
+
+  # v1.11 (decision 042): the server-wide live `media` cap in bytes (default 200 GiB).
+  if max = System.get_env("BLOB_MEDIA_MAX"),
+    do: config(:risime, :blob_guard, media_max: String.to_integer(max))
 end
 
 # Invite link in v1.6 invites (decision 030).

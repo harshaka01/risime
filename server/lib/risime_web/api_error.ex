@@ -34,7 +34,10 @@ defmodule RisiMeWeb.ApiError do
     generation_conflict: "The group was already reset",
     log_expired: "The commit log no longer reaches that epoch; reset or rejoin the group",
     too_large: "The upload is too large",
-    quota_exceeded: "Blob storage quota exceeded"
+    quota_exceeded: "Blob storage quota exceeded",
+    bad_media_type: "Blobs must be application/octet-stream",
+    not_e2ee: "This chat isn't end-to-end encrypted yet",
+    storage_full: "The server is low on storage; try again later"
   }
 
   @doc """
