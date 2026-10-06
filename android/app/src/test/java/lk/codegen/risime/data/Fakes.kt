@@ -87,6 +87,9 @@ class FakeMessageDao : MessageDao {
     override suspend fun deleteFailed(clientMsgId: String): Int =
         if (rows[clientMsgId]?.status == "FAILED") { rows.remove(clientMsgId); 1 } else 0
 
+    override suspend fun unreadIncoming(): List<MessageEntity> =
+        rows.values.filter { !it.outgoing && it.status != "READ" }.sortedBy { it.localTs }
+
     override fun search(pattern: String, limit: Int): Flow<List<MessageEntity>> = flowOf(emptyList())
 }
 

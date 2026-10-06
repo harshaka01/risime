@@ -123,6 +123,35 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         }
     }
 
+    /** §8.1: stable per-install device id (UUID), created on first use; kept across sign-outs. */
+    suspend fun deviceId(): String {
+        store.data.first()[DEVICE_ID]?.let { return it }
+        val fresh = java.util.UUID.randomUUID().toString()
+        var result = fresh
+        store.edit { p -> p[DEVICE_ID]?.let { result = it } ?: run { p[DEVICE_ID] = fresh } }
+        return result
+    }
+
+    /** Push notifications: newest local_ts already notified, and notified request ids. */
+    suspend fun notifiedUpTo(): Long = store.data.first()[NOTIFIED_UP_TO]?.toLongOrNull() ?: 0L
+
+    suspend fun setNotifiedUpTo(ts: Long) {
+        store.edit { it[NOTIFIED_UP_TO] = ts.toString() }
+    }
+
+    suspend fun notifiedRequests(): Set<String> =
+        store.data.first()[NOTIFIED_REQUESTS]?.split(',')?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+
+    suspend fun setNotifiedRequests(ids: Set<String>) {
+        store.edit { it[NOTIFIED_REQUESTS] = ids.toList().takeLast(200).joinToString(",") }
+    }
+
+    suspend fun notificationsPrompted(): Boolean = store.data.first()[NOTIF_PROMPTED] == "1"
+
+    suspend fun setNotificationsPrompted() {
+        store.edit { it[NOTIF_PROMPTED] = "1" }
+    }
+
     suspend fun installSalt(): String {
         store.data.first()[SALT]?.let { return it }
         val bytes = ByteArray(16).also { SecureRandom().nextBytes(it) }
@@ -141,5 +170,9 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         private val KIND = stringPreferencesKey("auth_kind")
         private val LAST_USER = stringPreferencesKey("last_user_id")
         private val AUTH_OVERRIDE = stringPreferencesKey("auth_override")
+        private val DEVICE_ID = stringPreferencesKey("device_id")
+        private val NOTIFIED_UP_TO = stringPreferencesKey("notified_up_to")
+        private val NOTIFIED_REQUESTS = stringPreferencesKey("notified_requests")
+        private val NOTIF_PROMPTED = stringPreferencesKey("notif_prompted")
     }
 }

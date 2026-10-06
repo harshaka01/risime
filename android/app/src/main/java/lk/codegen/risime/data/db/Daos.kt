@@ -62,6 +62,10 @@ interface MessageDao {
     )
     fun unreadCounts(): Flow<List<UnreadCount>>
 
+    /** Push: unread incoming messages (notifications are built from these, never from the payload). */
+    @Query("SELECT * FROM messages WHERE outgoing = 0 AND status != 'READ' ORDER BY local_ts ASC")
+    suspend fun unreadIncoming(): List<MessageEntity>
+
     /** FAILED → PENDING (local only; the outbox resends with the same client_msg_id). */
     @Query("UPDATE messages SET status = 'PENDING', fail_reason = NULL WHERE client_msg_id = :clientMsgId AND status = 'FAILED'")
     suspend fun retryFailed(clientMsgId: String): Int
