@@ -50,6 +50,13 @@ import lk.codegen.risime.realtime.PhoenixRealtimeClient
 import lk.codegen.risime.realtime.RealtimeClient
 import lk.codegen.risime.realtime.RealtimeSession
 import lk.codegen.risime.update.Updater
+import lk.codegen.risime.push.Notifier
+import lk.codegen.risime.push.PushManager
+import lk.codegen.risime.push.newRequests
+import lk.codegen.risime.push.planChatNotifications
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -123,6 +130,16 @@ class AppContainer(context: Context) {
 
     val presence = PresenceTracker(scope, onFriendSignal = { requestFriendsRefresh() })
 
+    // ---- Push (contract v1.5, decision 026) ----
+    val notifier = Notifier(context)
+    val push by lazy { PushManager(context, api, sessionStore) }
+
+    /** A short background connection for a push wake-up (the socket is otherwise foreground-only). */
+    private val backgroundSync = MutableStateFlow(false)
+
+    /** Notification tap → open this chat (MainActivity sets it, MainNav consumes it). */
+    val openChatRequest = MutableStateFlow<String?>(null)
+
     /** Release-only self-updater (decision 016); disabled in debug builds. */
     val updater = Updater(context, http)
 
@@ -161,11 +178,13 @@ class AppContainer(context: Context) {
 
             override fun onStop(owner: LifecycleOwner) {
                 foreground.value = false
+                // Everything that arrived while the app was open has been seen in the app.
+                scope.launch { sessionStore.setNotifiedUpTo(System.currentTimeMillis()) }
             }
         })
         // Connected only while in the foreground, signed in and unlocked (no background connection).
         scope.launch {
-            combine(foreground, sessionStore.session, auth.unlocked, blocked) { fg, s, unlocked, b ->
+            combine(combine(foreground, backgroundSync) { f, b -> f || b }, sessionStore.session, auth.unlocked, blocked) { fg, s, unlocked, b ->
                 if (shouldConnect(fg, s, unlocked, b)) s!!.serverUrl to s.user.id else null
             }
                 .distinctUntilChanged()
@@ -217,6 +236,12 @@ class AppContainer(context: Context) {
                 val friends = list.filter { it.friend }.mapNotNull { it.userId }
                 watchList(friends, open?.takeIf { o -> friends.any { it.equals(o, ignoreCase = true) } })
             }.distinctUntilChanged().collect { realtime.setWatch(it) }
+        }
+        // §8.1: register this install for push once signed in and verified (no-op without Firebase).
+        scope.launch {
+            sessionStore.session.map { s -> s?.takeIf { it.user.phoneVerified }?.user?.id }.distinctUntilChanged().collect { id ->
+                if (id != null) push.register()
+            }
         }
         // §9.3: refetch GET /friends after every (re)join and on `friend` signals, debounced.
         scope.launch {
@@ -311,6 +336,8 @@ class AppContainer(context: Context) {
      * delete the key pair, wipe local chat data. Dev tokens: POST /auth/logout as before.
      */
     suspend fun logout() {
+        runCatching { push.unregister() } // DELETE /me/devices while the token still works
+        notifier.cancelAll()
         val end = auth.issuerAndClient()?.let { (issuer, _) -> auth.idToken()?.let { EndSession(issuer, it) } }
         if (sessionStore.current()?.kind == AuthKind.DEV) api.logout()
         auth.signOut()
@@ -382,6 +409,41 @@ class AppContainer(context: Context) {
             r.httpStatus == 401 -> signOutKeepData("Sign in again — your chats are kept.")
             r.httpStatus == 403 || r.httpStatus == 409 -> onSocketRefused()
         }
+    }
+
+    /**
+     * Push wake-up (background): join + sync over the normal channel, refetch friends, then post
+     * local notifications. A fingerprint-locked session can't sync: a content-free notice instead.
+     */
+    suspend fun syncAndNotify() {
+        val s = sessionStore.current() ?: return
+        if (!s.user.phoneVerified) return
+        if (s.kind == AuthKind.OIDC && !auth.unlocked.value) {
+            notifier.postLocked()
+            return
+        }
+        if (!foreground.value) {
+            backgroundSync.value = true
+            try {
+                withTimeoutOrNull(25_000) { realtime.state.first { it == ConnectionState.Live } }
+                delay(1_500) // let live events and the friends refetch land
+                contacts.refresh()
+            } finally {
+                backgroundSync.value = false
+            }
+        }
+        notifyFromLocal()
+    }
+
+    private suspend fun notifyFromLocal() {
+        val open = openChatPeer.value.takeIf { foreground.value }
+        val plan = planChatNotifications(db.messages().unreadIncoming(), contacts.contacts.first(), sessionStore.notifiedUpTo(), open)
+        if (!foreground.value) notifier.postChats(plan)
+        plan.maxOfOrNull { it.newestTs }?.let { sessionStore.setNotifiedUpTo(maxOf(it, sessionStore.notifiedUpTo())) }
+        val incoming = contacts.friendsState.value.incoming
+        val fresh = newRequests(incoming, sessionStore.notifiedRequests())
+        if (!foreground.value) notifier.postRequests(fresh)
+        sessionStore.setNotifiedRequests(incoming.map { it.id }.toSet())
     }
 
     /** Chat data only; the local behaviour log stays on the device. */

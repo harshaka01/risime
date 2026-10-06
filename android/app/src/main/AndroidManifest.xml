@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13+: local notifications for push wake-ups (decision 026); asked once, after sign-in. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".RisiMeApp"
@@ -16,12 +18,22 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- FCM data-only wake-ups (contract v1.5). Inert unless google-services.json was present at build. -->
+        <service
+            android:name=".push.RisiMeMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
 
         <!-- AppAuth's redirect receiver is an AppCompat activity but ships without a theme, so it
              inherited Theme.RisiMe and crashed on the Keycloak redirect (v0.2.0-nightly.3).

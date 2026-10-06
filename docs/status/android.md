@@ -85,6 +85,31 @@ ssh -N spark2-tunnel                 # laptop :4400 -> spark2 127.0.0.1:4000
 - **Logout:** revoke the refresh token, then Keycloak `end_session` in the browser, then delete
   the key, then wipe chats. Auth trouble never wipes; another user signing in does.
 
+## Push notifications (contract v1.5; decision 026)
+- **Off until Harsha's Firebase config exists.**
+  - With `android/app/google-services.json` present at build time, the `google-services` plugin
+    applies automatically and `BuildConfig.PUSH_CONFIGURED` is true. The file is gitignored and
+    copied in from `~/risime-keys/`.
+  - It must contain **both** clients, `lk.codegen.risime` and `lk.codegen.risime.debug`, or the
+    plugin fails the debug build.
+  - Without it, everything below is a no-op: no Firebase init, and no device registration.
+- **Wake-up only:** the FCM data message `{"type":"inbox"}` triggers an expedited WorkManager
+  sync (unique, coalesced). The sync opens a short background channel connection (join + `sync`,
+  delivered acks), then refetches `/friends`.
+- **Local notifications:** sender name and preview come from the local DB; nothing from the
+  payload is shown.
+  - One notification per chat, grouped under a summary; the last 5 lines; tap → that chat.
+  - Channels: Messages (high), Friend requests, Background sync (min).
+  - Opening a chat clears its notification. Only messages that arrived after the app went to the
+    background are notified.
+  - A new incoming friend request posts "New friend request".
+- **Fingerprint-locked sessions** (after the process died) can't sync in the background. They get
+  a content-free "New messages — Open RisiMe to read them".
+- **Device registration:** `PUT /me/devices/{device_id}` (a stable per-install UUID) once signed
+  in and verified, and on every FCM token refresh. `DELETE` at logout.
+- **Android 13+:** a rationale dialog once after sign-in, then the system prompt. "Not now" or a
+  denial is respected; chat works without push.
+
 ## Invites and friends (contract v1.6; decision 029)
 - **Friends replace contacts.**
   - `GET /friends` is the source of the local rows. A pre-v1.6 server's `/contacts` is used as a
@@ -334,3 +359,18 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
 36. Upgrade from 0.2.0-nightly.4 (Room v1): install over it. Old chats and login survive (the
     v1 → v2 migration). Chats then shows only friends after the first refresh; a migrated chat
     partner (Harsha ↔ Shenika) is still a friend.
+37. **Push** (needs `google-services.json` and server `FCM_ENABLED=true`):
+    - On a fresh sign-in on Android 13+: the "Get notified of new messages?" dialog → Allow →
+      the system prompt. On the server, `PUT /me/devices/<uuid>` is logged.
+    - Swipe the app away, then send a message from another phone: within a few seconds a
+      notification appears with the sender's name and the text (from the local DB). Tapping it
+      opens that chat, and the sender sees ✓✓ (delivered).
+    - Two chats → two notifications grouped under "RisiMe".
+38. Push, locked: force-stop the app (fingerprint session), then send a message → "New messages —
+    Open RisiMe to read them", with no content. Tap → unlock → the chat list is up to date.
+39. Push, friend request: with the app in the background, another user sends you a friend request
+    → "New friend request · <name> wants to be friends".
+40. Push, logout: sign out. The server logs `DELETE /me/devices/<uuid>`, and further messages
+    produce no notifications.
+41. Without `google-services.json` (today's builds): no prompt failures, no crash at start, no
+    device registration calls. Chat works only while the app is open, as before.

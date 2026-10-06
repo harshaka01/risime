@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.fragment.app.FragmentActivity
+import lk.codegen.risime.push.Notifier
 import lk.codegen.risime.ui.RisiMeRoot
 import lk.codegen.risime.ui.auth.AuthUi
 import lk.codegen.risime.ui.theme.RisiMeTheme
@@ -23,6 +24,7 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         val container = (application as RisiMeApp).container
         authUi = AuthUi(this, container)
+        handleOpenChat(intent)
         setContent { RisiMeTheme { RisiMeRoot(container, authUi) } }
         // The installer's confirmation (when Android doesn't allow a silent self-update).
         lifecycleScope.launch {
@@ -33,6 +35,16 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleOpenChat(intent)
+    }
+
+    /** Notification tap → that chat (after any gate: unlock, phone, update). */
+    private fun handleOpenChat(intent: Intent?) {
+        intent?.getStringExtra(Notifier.EXTRA_OPEN_CHAT)?.let { (application as RisiMeApp).container.openChatRequest.value = it }
     }
 
     override fun onDestroy() {

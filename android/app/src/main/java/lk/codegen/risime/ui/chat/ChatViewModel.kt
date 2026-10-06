@@ -41,6 +41,7 @@ class ChatViewModel(private val c: AppContainer, meId: String, val peerId: Strin
     init {
         viewModelScope.launch { c.behaviour.chatOpen(peerId) }
         c.openChatPeer.value = peerId
+        c.notifier.cancelChat(conversationId)
     }
 
     /** Typing goes to friends only (§9.3: non-friends get not_friends). */

@@ -15,6 +15,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import lk.codegen.risime.AppContainer
+import androidx.compose.runtime.LaunchedEffect
+import lk.codegen.risime.ui.common.NotificationPermissionPrompt
 import lk.codegen.risime.data.auth.AppGate
 import lk.codegen.risime.data.auth.appGate
 import lk.codegen.risime.ui.friends.AddFriendScreen
@@ -78,6 +80,15 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
 @Composable
 private fun MainNav(c: AppContainer, meId: String) {
     val nav = rememberNavController()
+    // Notification tap → that chat (once signed in, unlocked and verified).
+    val openChat by c.openChatRequest.collectAsState()
+    LaunchedEffect(openChat) {
+        openChat?.let { peer ->
+            c.openChatRequest.value = null
+            nav.navigate("chat/$peer") { popUpTo("chats") }
+        }
+    }
+    NotificationPermissionPrompt(c)
     NavHost(nav, startDestination = "chats") {
         composable("chats") {
             ChatsScreen(
