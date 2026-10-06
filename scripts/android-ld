@@ -22,17 +22,20 @@ for a in "$@"; do
     *) args+=("$a") ;;
   esac
 done
+# rust target -> (NDK sysroot triple, clang runtime dir, builtins arch, dynamic linker)
 case "$triple" in
-  aarch64-linux-android) arch=aarch64 ;;
-  x86_64-linux-android)  arch=x86_64 ;;
+  aarch64-linux-android)   sys=aarch64-linux-android; rt=aarch64; bi=aarch64; linker=/system/bin/linker64 ;;
+  x86_64-linux-android)    sys=x86_64-linux-android;  rt=x86_64;  bi=x86_64;  linker=/system/bin/linker64 ;;
+  armv7-linux-androideabi) sys=arm-linux-androideabi; rt=arm;     bi=arm;     linker=/system/bin/linker ;;
+  i686-linux-android)      sys=i686-linux-android;    rt=i386;    bi=i686;    linker=/system/bin/linker ;;
   *) echo "android-ld: missing/unsupported --risime-triple ('$triple')" >&2; exit 1 ;;
 esac
 
 TC="$RISIME_NDK/toolchains/llvm/prebuilt/linux-x86_64"
-SYS="$TC/sysroot"; LIB="$SYS/usr/lib/$triple/$API"
+SYS="$TC/sysroot"; LIB="$SYS/usr/lib/$sys/$API"
 CLANG="$(printf '%s\n' "$TC"/lib/clang/*/lib/linux | sort -V | tail -1)"
-BUILTINS="$CLANG/libclang_rt.builtins-$arch-android.a"
-for f in "$LIB/crtbegin_so.o" "$LIB/crtend_so.o" "$LIB/crtbegin_dynamic.o" "$LIB/crtend_android.o" "$LIB/libc.so" "$BUILTINS" "$CLANG/$arch/libunwind.a"; do
+BUILTINS="$CLANG/libclang_rt.builtins-$bi-android.a"
+for f in "$LIB/crtbegin_so.o" "$LIB/crtend_so.o" "$LIB/crtbegin_dynamic.o" "$LIB/crtend_android.o" "$LIB/libc.so" "$BUILTINS" "$CLANG/$rt/libunwind.a"; do
   [ -e "$f" ] || { echo "android-ld: missing $f (NDK layout changed?)" >&2; exit 1; }
 done
 
@@ -45,10 +48,10 @@ if [ "$shared" = 1 ]; then                                  # JNI library
   crt=("$LIB/crtbegin_so.o"); crtend="$LIB/crtend_so.o"
   [ "$soname" = 1 ] || [ -z "$out" ] || args+=(-soname "$(basename "$out")")
 else                                                        # PIE executable (adb shell self-test)
-  crt=(-pie --dynamic-linker=/system/bin/linker64 "$LIB/crtbegin_dynamic.o"); crtend="$LIB/crtend_android.o"
+  crt=(-pie --dynamic-linker="$linker" "$LIB/crtbegin_dynamic.o"); crtend="$LIB/crtend_android.o"
 fi
 
 exec "$LLD" -flavor gnu \
-  --sysroot="$SYS" -L "$LIB" -L "$SYS/usr/lib/$triple" -L "$CLANG/$arch" \
+  --sysroot="$SYS" -L "$LIB" -L "$SYS/usr/lib/$sys" -L "$CLANG/$rt" \
   --hash-style=both --build-id=sha1 -z max-page-size=16384 -z separate-loadable-segments \
   "${crt[@]}" "${args[@]}" "$BUILTINS" "$crtend"

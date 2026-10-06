@@ -27,8 +27,10 @@ first_so=""
 IFS=, read -ra list <<<"$ABIS"
 for abi in "${list[@]}"; do
   case "$abi" in
-    arm64-v8a) t=aarch64-linux-android ;;
-    x86_64)    t=x86_64-linux-android ;;
+    arm64-v8a)   t=aarch64-linux-android;   sys=aarch64-linux-android ;;
+    x86_64)      t=x86_64-linux-android;    sys=x86_64-linux-android ;;
+    armeabi-v7a) t=armv7-linux-androideabi; sys=arm-linux-androideabi ;;
+    x86)         t=i686-linux-android;      sys=i686-linux-android ;;
     *) echo "unsupported ABI $abi"; exit 2 ;;
   esac
   T="$(echo "$t" | tr 'a-z-' 'A-Z_')"
@@ -42,7 +44,7 @@ for abi in "${list[@]}"; do
 
   # Verify: right machine, only Bionic system libs, 16 KB pages, no unexpected undefined symbols.
   hdr="$(readelf -h "$dst")"
-  want=$([ "$abi" = arm64-v8a ] && echo AArch64 || echo X86-64)
+  case "$abi" in arm64-v8a) want=AArch64;; x86_64) want=X86-64;; armeabi-v7a) want=ARM;; x86) want="Intel 80386";; esac
   grep -q "Machine:.*$want" <<<"$hdr" || { echo "$abi: wrong machine"; exit 1; }
   needed="$(readelf -d "$dst" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | sort | tr '\n' ' ')"
   for n in $needed; do case "$n" in libc.so|libm.so|libdl.so|liblog.so) ;; *) echo "$abi: unexpected NEEDED $n"; exit 1;; esac; done
@@ -50,7 +52,7 @@ for abi in "${list[@]}"; do
   [ "$align" = "0x4000 " ] || { echo "$abi: LOAD alignment '$align' (want 0x4000)"; exit 1; }
   # Every *strong* undefined symbol must exist in the minSdk Bionic stubs, or dlopen fails on old
   # Android. Weak ones (e.g. getrandom, API 28+) resolve to null and the crates fall back.
-  stubs="$(for l in libc libdl libm liblog; do "$TOOLS/llvm-nm" -D --defined-only "$RISIME_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$t/$RISIME_ANDROID_API/$l.so"; done | awk '{print $NF}' | sed 's/@.*//' | sort -u)"
+  stubs="$(for l in libc libdl libm liblog; do "$TOOLS/llvm-nm" -D --defined-only "$RISIME_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$sys/$RISIME_ANDROID_API/$l.so"; done | awk '{print $NF}' | sed 's/@.*//' | sort -u)"
   strong="$("$TOOLS/llvm-nm" -D --undefined-only "$dst" | awk '$1=="U"{print $2}' | sed 's/@.*//' | sort -u)"
   missing="$(comm -23 <(echo "$strong") <(echo "$stubs") | tr '\n' ' ')"
   [ -z "${missing// /}" ] || { echo "$abi: symbols missing from API $RISIME_ANDROID_API Bionic: $missing"; exit 1; }

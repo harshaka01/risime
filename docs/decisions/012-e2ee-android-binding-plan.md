@@ -195,6 +195,11 @@ needed.
 - `sdkmanager` still can't run on spark2. Future NDK updates are a manual
   download + SHA-1 check + unzip, as above.
 
+**32-bit ABIs (2026-10-06):** `scripts/build-rust-android --abis arm64-v8a,x86_64,armeabi-v7a,x86`
+builds all four with the same checks. The 32-bit targets are Rust's `armv7-linux-androideabi` and
+`i686-linux-android`, with NDK sysroots `arm-linux-androideabi`/`i686-linux-android` and loader
+`/system/bin/linker`. Release sizes: 4.8 / 4.9 / 3.7 / 5.4 MB.
+
 ### 6. Persisting keys and group state on Android
 MLS state is security-critical and changes on **every** message: the sender ratchet advances, and
 re-using a ratchet secret after a crash breaks forward secrecy, or desynchronises the group.
