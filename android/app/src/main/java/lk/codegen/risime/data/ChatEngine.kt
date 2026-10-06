@@ -12,7 +12,12 @@ import lk.codegen.risime.data.db.SyncDao
 import lk.codegen.risime.data.db.SyncStateEntity
 import lk.codegen.risime.net.Event
 import lk.codegen.risime.net.MessageData
+import lk.codegen.risime.data.mls.MlsEngine
+import lk.codegen.risime.data.mls.MlsPipeline
+import lk.codegen.risime.data.mls.MlsResult
+import lk.codegen.risime.net.AuthErrors
 import lk.codegen.risime.net.MsgSend
+import lk.codegen.risime.net.MsgSendE2ee
 import lk.codegen.risime.net.StatusData
 import lk.codegen.risime.net.dmConversationId
 import lk.codegen.risime.realtime.PushResult
@@ -45,6 +50,12 @@ class ChatEngine(
     private val rateLimitRetryMs: Long = 10_000,
     /** Called after a new incoming message from this user id is stored (ends their "typing…"). */
     private val onIncomingFrom: (String) -> Unit = {},
+    /** §10: e2ee events (null = no MLS core: e2ee events are skipped like a v1.6 app). */
+    private val mls: MlsPipeline? = null,
+    private val mlsEngine: () -> MlsEngine? = { null },
+    /** §10.4: fetch missing commits for a conversation (stale_epoch / e2ee_required). */
+    private val catchUp: suspend (conversationId: String) -> Unit = {},
+    private val staleEpochRetries: Int = 3,
 ) : RealtimeListener {
 
     private val outboxLock = Mutex()
@@ -63,7 +74,11 @@ class ChatEngine(
                 if (sync.seenCount(e.eventId) > 0) return@run false
                 // Unknown kinds and undecodable data are skipped but still advance the cursor.
                 val incoming = when (e.kind) {
-                    Event.KIND_MESSAGE -> runCatching { e.messageData() }.getOrNull()?.let { applyMessage(me, it) } ?: false
+                    Event.KIND_MESSAGE -> runCatching { e.messageData() }.getOrNull()?.let { md ->
+                        if (md.encrypted) applyMls(me, e) else md.body?.let { applyMessage(me, md, it) } ?: false
+                    } ?: false
+                    Event.KIND_MLS_COMMIT, Event.KIND_MLS_WELCOME, Event.KIND_MLS_MEMBERSHIP ->
+                        runCatching { applyMls(me, e) }.getOrDefault(false)
                     Event.KIND_STATUS -> {
                         runCatching { e.statusData() }.getOrNull()?.let { applyStatus(it) }
                         false
@@ -88,10 +103,28 @@ class ChatEngine(
 
     // ---- Applying events ----
 
+    /**
+     * §10.3: e2ee events through the MLS pipeline, inside this event's transaction. A group change
+     * replays the conversation's pending events in arrival order. @return true if a new incoming
+     * message was stored.
+     */
+    private suspend fun applyMls(me: String, e: Event): Boolean {
+        val pipeline = mls ?: return false
+        var incoming = false
+        fun handle(r: MlsResult): String? = (r as? MlsResult.GroupChanged)?.conversationId
+        val results = mutableListOf(pipeline.apply(e))
+        var i = 0
+        while (i < results.size) {
+            val r = results[i++]
+            if (r is MlsResult.Plaintext) incoming = applyMessage(me, r.message, r.body) || incoming
+            handle(r)?.let { conv -> results += pipeline.replay(conv) }
+        }
+        return incoming
+    }
+
     /** @return true if a new incoming message was stored (needs a delivered ack). */
-    private suspend fun applyMessage(me: String, m: MessageData): Boolean {
+    private suspend fun applyMessage(me: String, m: MessageData, body: String): Boolean {
         if (messages.byMessageId(m.messageId) != null) return false
-        val body = m.body ?: return false // e2ee without an MLS engine: not ours to read (phase B)
         if (messages.byClientMsgId(m.clientMsgId) != null) return false
         val outgoing = m.from.equals(me, ignoreCase = true)
         messages.insert(
@@ -154,16 +187,41 @@ class ChatEngine(
     }
 
     /** Push every pending message in local_ts order with its original client_msg_id. */
+    /**
+     * §10.4: e2ee conversations are encrypted **at send time** (inside a transaction, the ratchet
+     * advances). stale_epoch → catch up, re-encrypt with the same client_msg_id, up to
+     * [staleEpochRetries] times, then back off; e2ee_required → catch up and encrypt (never FAILED).
+     */
+    private suspend fun send(m: MessageEntity): PushResult<lk.codegen.risime.net.MsgSendReply> {
+        var attempt = 0
+        while (true) {
+            val engine = mlsEngine()
+            val group = engine?.group(m.conversationId)
+            val r = if (engine != null && group != null) {
+                val ct = tx.run { engine.encrypt(m.conversationId, m.body.toByteArray()) }
+                realtime().sendEncrypted(
+                    MsgSendE2ee(m.clientMsgId, m.to, java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(m.localTs)),
+                )
+            } else {
+                realtime().sendMessage(MsgSend(m.clientMsgId, m.to, m.body, isoMillis(m.localTs)))
+            }
+            val reason = (r as? PushResult.Rejected)?.reason
+            if (reason != AuthErrors.STALE_EPOCH && reason != AuthErrors.E2EE_REQUIRED) return r
+            if (attempt++ >= staleEpochRetries) return PushResult.Rejected(RETRY_LATER)
+            catchUp(m.conversationId)
+            if (reason == AuthErrors.E2EE_REQUIRED && mlsEngine()?.group(m.conversationId) == null) return PushResult.Rejected(RETRY_LATER)
+        }
+    }
+
     suspend fun flushOutbox(): Unit = outboxLock.withLock {
         for (m in messages.pendingOutbox()) {
-            val req = MsgSend(m.clientMsgId, m.to, m.body, isoMillis(m.localTs))
-            when (val r = realtime().sendMessage(req)) {
+            when (val r = send(m)) {
                 is PushResult.Ok -> {
                     val cur = messages.byClientMsgId(m.clientMsgId) ?: continue
                     val next = MessageStatus.valueOf(cur.status).advance(MessageStatus.SENT)
                     messages.updateStatus(m.clientMsgId, next.name, r.value.messageId, r.value.serverTs, null)
                 }
-                is PushResult.Rejected -> if (r.reason == "rate_limited") {
+                is PushResult.Rejected -> if (r.reason == "rate_limited" || r.reason == RETRY_LATER) {
                     scope.launch {
                         delay(rateLimitRetryMs)
                         flushOutbox()
@@ -213,6 +271,9 @@ class ChatEngine(
 
     companion object {
         const val MAX_BODY = 4096
+
+        /** Local only: stale_epoch/e2ee_required couldn't be resolved now; stays PENDING, retried later. */
+        const val RETRY_LATER = "retry_later"
         const val ACK_BATCH = 100
         private val ISO_MILLIS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
 
