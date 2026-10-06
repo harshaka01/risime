@@ -10,6 +10,15 @@
 - **Every release** now runs both gates plus `scripts/interop` (23 live checks with real Android
   clients, friends flow included), backs up, publishes and switches.
 
+## Built since nightly.5 (on `main`; ships with the next green nightly)
+- **Push client** (contract v1.5): local, content-free-to-Google notifications, device
+  registration and the notification permission. **Dormant** until `google-services.json` (with
+  both `lk.codegen.risime` and `lk.codegen.risime.debug`) and `fcm-service-account.json` are in
+  `~/risime-keys/`. `nightly-release` copies the json in automatically.
+- **E2EE groundwork:** debug builds made on spark2 package the MLS core (arm64-v8a and x86_64;
+  4.5 MB each) with Settings → About → "Crypto self-test" (device check 42). The release APK is
+  unchanged (12.7 MB). Known limit: no 32-bit ABIs yet; to be added before 0.3 ships.
+
 ## Waiting on Harsha (batched)
 - `sudo loginctl enable-linger harsha` (start at boot).
 - The Caddy fix command (chown the access log, install `infra/caddy/Caddyfile`, reload); the
