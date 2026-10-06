@@ -1,3 +1,6 @@
+> **Obsolete (2026-10-06, decision 023):** Tailscale is dropped. RisiMe is served from spark2 at
+> https://risime.risicloud.ai via Caddy. This page is kept only as history.
+
 # Dev server on the tailnet (spark2)
 
 **Goal:** team phones on Harsha's tailnet reach the dev server at

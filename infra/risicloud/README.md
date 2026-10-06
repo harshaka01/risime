@@ -1,5 +1,9 @@
 # RisiCloud integration (spark / risicloud.ai)
 
+> **2026-10-06, decision 023:** option 2b is dropped. The API is served from spark2 at
+> `https://risime.risicloud.ai` (see `infra/caddy/`). On spark, **only the `/app/risime/` downloads
+> route (§1) is used** (it is live). §2 and the tailnet steps below are history.
+
 Prepared config for **option 2b** (decision 017). **Not switched on.**
 Nothing in this folder is applied automatically. The RisiCloud lead applies the Caddy part on spark.
 

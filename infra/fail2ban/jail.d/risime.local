@@ -1,0 +1,14 @@
+# fail2ban jail for the RisiMe pilot on spark2 (docs/PROD.md "Pilot on spark2").
+# Bans an IP at the firewall (ufw) after 10 auth failures in 10 minutes, for 1 hour.
+[risime-auth]
+enabled   = true
+filter    = risime-auth
+logpath   = /home/harsha/risime-logs/auth.log
+backend   = polling
+port      = http,https
+banaction = ufw
+maxretry  = 10
+findtime  = 10m
+bantime   = 1h
+# Never ban loopback or the LAN.
+ignoreip  = 127.0.0.1/8 ::1 10.20.20.0/26

@@ -1,6 +1,6 @@
 # 017 — How phones reach the RisiMe server (options; **Harsha decides**)
 
-**Status: decided 2026-10-06. Harsha chose option 2b.** Caddy on spark serves
+**Status: superseded by decision 023 (2026-10-06): served directly from spark2 at https://risime.risicloud.ai. No Tailscale, no proxy on spark.** Earlier the same day Harsha chose option 2b. Caddy on spark serves
 `https://risicloud.ai/risime/` by proxying over the tailnet to spark2's `tailscale serve`. spark2
 stays bound to 127.0.0.1, and the broken LAN path doesn't matter. The config is prepared in
 `infra/risicloud/` but **not switched on** until the RisiCloud lead adds the route and spark joins

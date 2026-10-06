@@ -1,5 +1,11 @@
 # RisiMe prod — runbook
 
+> **Today (2026-10-06, decision 023):** the **public pilot** runs on spark2 as a prod-mode release
+> behind Caddy at https://risime.risicloud.ai, against the existing dev databases. See "Pilot on
+> spark2" below. The containerised prod in the rest of this runbook is the later real launch. Its
+> HTTPS edge is now Caddy on spark2, with no Tailscale: route a prod hostname to `127.0.0.1:4500`
+> the same way.
+
 **Status (2026-10-05):** prepared, not deployed. Nothing below has been started, installed or
 enabled.
 
@@ -286,3 +292,51 @@ starts a named node or runs `bin/risime` outside the container must set
 Inside the prod containers this isn't exposed, because no epmd port is published.
 On 2026-10-06 a stray host epmd was found on 0.0.0.0:4369, left over from release testing, and
 was stopped.
+
+
+## Pilot on spark2 (decision 023)
+**Edge:** Caddy (`infra/caddy/Caddyfile`) → `127.0.0.1:4000`. **App:** a prod-mode release from the
+latest green tag (`scripts/run-server <tag>`; `scripts/nightly-release` switches it). **Config:**
+secrets from `.env`, settings from `infra/pilot/pilot.env`.
+
+### One-time setup (Harsha, sudo)
+```bash
+# 1. Caddy (official apt repository)
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update && sudo apt install -y caddy
+sudo install -m 644 /home/harsha/development/risime/infra/caddy/Caddyfile /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+
+# 2. Firewall on spark2
+sudo ufw allow 80/tcp comment 'RisiMe Caddy (ACME + redirect)'
+sudo ufw allow 443/tcp comment 'RisiMe Caddy HTTPS'
+
+# 3. fail2ban jail for auth failures
+sudo install -m 644 /home/harsha/development/risime/infra/fail2ban/filter.d/risime-auth.conf /etc/fail2ban/filter.d/risime-auth.conf
+sudo install -m 644 /home/harsha/development/risime/infra/fail2ban/jail.d/risime.local /etc/fail2ban/jail.d/risime.local
+sudo systemctl reload fail2ban && sudo fail2ban-client status risime-auth
+
+# 4. Remove Tailscale (dropped)
+sudo tailscale down
+sudo apt remove --purge -y tailscale
+sudo rm -f /etc/apt/sources.list.d/tailscale.list /usr/share/keyrings/tailscale-archive-keyring.gpg
+sudo rm -rf /var/lib/tailscale
+# then delete the node "gx10-e23a" in the Tailscale admin console
+```
+
+### Outside spark2 (ask)
+- **DNS:** `risime.risicloud.ai.  A  203.115.26.139` (TTL 300). Add `AAAA` only if spark2 gets
+  public IPv6.
+- **Network firewall/NAT:** inbound **TCP 80 and 443** from anywhere to `203.115.26.139`, forwarded
+  to spark2 `10.20.20.15:80/443`.
+
+### Checks
+```bash
+curl -sI https://risime.risicloud.ai/health        # 200, HSTS header, valid Let's Encrypt cert
+curl -s  https://risime.risicloud.ai/api/v1/auth/config
+curl -s -o /dev/null -w '%{http_code}\n' https://risime.risicloud.ai/dev/mailbox   # 404
+ss -ltnp | grep -E ':(80|443|4000|4369) '           # 80/443 caddy; 4000 on 127.0.0.1 only; no 4369
+```

@@ -65,6 +65,15 @@ cd ~/development/risime && git pull && scripts/install-apk
 - **USB phone**: run `adb reverse tcp:4000 tcp:4400`, then use server URL `http://127.0.0.1:4000`
 - Login codes appear in the server log on spark2: `tmux attach -t risime-server`
 
+### Phones and testers: the public pilot (decision 023)
+- The pilot server is **https://risime.risicloud.ai**: Caddy on spark2 → a prod-mode release on
+  `127.0.0.1:4000`. It is the default server URL in release builds. No tunnel or VPN is needed.
+- Install or update the app from **https://risicloud.ai/app/risime/**. After that, it updates itself.
+- Until Keycloak is live, sign-in uses the dev login: codes appear in the server log on spark2
+  (`tmux capture-pane -p -t risime-server -S -500 | grep "DEV OTP" | tail -3`), never in any app or
+  HTTP response.
+- The laptop tunnel above still works for development against the same server.
+
 ## Important
 - Release 0.1 is **not end-to-end encrypted yet** (that comes in 0.3). Send test messages only.
 - Create a Firebase project before Release 0.2 (push notifications).

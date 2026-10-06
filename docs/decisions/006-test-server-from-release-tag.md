@@ -1,5 +1,10 @@
 # 006 — The test server runs from a release-tag worktree, not the shared checkout
 
+**Amended by decision 023 (2026-10-06):** the server now runs as a **prod-mode release**
+(`MIX_ENV=prod mix release`) built in the tag's worktree and started by `scripts/run-server <tag>`,
+behind Caddy at https://risime.risicloud.ai. The worktree-per-tag rule and "only nightly-release
+switches it" are unchanged.
+
 ## Context
 On 2026-10-06, Harsha's smoke-test login (`POST /auth/verify`) returned HTTP 500. The dev server
 ran in dev mode from the shared checkout. The nightly server session had changed `mix.lock` and

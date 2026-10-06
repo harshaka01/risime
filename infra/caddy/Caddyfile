@@ -1,0 +1,53 @@
+# /etc/caddy/Caddyfile on spark2 — public front of the RisiMe pilot (docs/decisions/023).
+# Caddy terminates TLS (automatic HTTPS via Let's Encrypt: needs DNS A risime.risicloud.ai ->
+# 203.115.26.139 and inbound 80+443 reaching spark2) and proxies to Phoenix on 127.0.0.1:4000.
+# Phoenix never listens on a public interface. Install: see docs/PROD.md "Pilot on spark2".
+
+{
+	# No admin API on the network; local only (default 127.0.0.1:2019, kept explicit).
+	admin 127.0.0.1:2019
+}
+
+risime.risicloud.ai {
+	encode zstd gzip
+
+	# Only the app's paths are proxied; everything else is 404 at the edge.
+	@app path /api/* /socket/* /health
+	handle @app {
+		reverse_proxy 127.0.0.1:4000 {
+			# Caddy replaces X-Forwarded-For with the real client IP (it trusts no incoming
+			# XFF by default); Phoenix trusts XFF only from loopback.
+			# WebSocket upgrades (/socket/websocket) pass through; keep idle sockets open well
+			# past the 30 s Phoenix heartbeat.
+			stream_timeout 24h
+			stream_close_delay 5m
+		}
+	}
+	handle {
+		respond "Not found" 404
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/risime-access.log {
+			roll_size 50MiB
+			roll_keep 10
+		}
+		format filter {
+			wrap json
+			fields {
+				# Tokens travel in Authorization (never logged by Caddy); strip legacy ?token=.
+				request>uri query {
+					delete token
+				}
+			}
+		}
+	}
+}

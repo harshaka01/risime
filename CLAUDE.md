@@ -118,7 +118,7 @@ Tests use `risime_test`. Prod comes later in separate containers; never point de
 
 ## Useful commands
 - Databases (spark2): `docker compose --env-file .env -f infra/docker-compose.dev.yml up -d`
-- Test server (spark2): `scripts/run-dev-server [<tag>]` runs the latest release tag from `~/risime-run/<tag>`, never from this checkout (docs/decisions/006). Only `scripts/nightly-release` switches it.
+- Pilot server (spark2): `scripts/run-server [<tag>]` runs a prod-mode release of the latest green tag from `~/risime-run/<tag>` on 127.0.0.1:4000, behind Caddy at https://risime.risicloud.ai (docs/decisions/006, 023). Only `scripts/nightly-release` switches it.
 - Android build (spark2): `cd android && ./gradlew assembleDebug testDebugUnitTest`
 - Install on devices (laptop): `git pull && scripts/install-apk`
 - Tunnel (laptop): `ssh -N spark2-tunnel` (`LocalForward 4400` → spark2 `127.0.0.1:4000`)
