@@ -135,3 +135,46 @@ fun verifyApk(
 /** At start, then at most every [intervalMs] while in the foreground. */
 fun shouldCheck(lastCheckElapsedMs: Long?, nowElapsedMs: Long, intervalMs: Long = 6 * 60 * 60 * 1000L): Boolean =
     lastCheckElapsedMs == null || nowElapsedMs - lastCheckElapsedMs >= intervalMs
+
+/**
+ * Android 12+ silent self-update (decision 027): user action can be skipped only when the APK
+ * being installed targets at least this API level on the device's Android version
+ * (PackageInstaller.SessionParams#setRequireUserAction docs). Null = not possible (pre-31).
+ */
+fun minTargetSdkForSilentUpdate(deviceSdk: Int): Int? = when {
+    deviceSdk < 31 -> null
+    deviceSdk < 33 -> 29 // S, S_V2
+    deviceSdk < 34 -> 30 // T
+    deviceSdk < 35 -> 31 // U
+    deviceSdk < 36 -> 33 // V
+    deviceSdk < 37 -> 34 // Baklava
+    else -> 35 // 37+, and assumed for newer until the docs say otherwise (the system still decides)
+}
+
+/** Ask for USER_ACTION_NOT_REQUIRED? The system makes the final call; we always handle PENDING_USER_ACTION. */
+fun requestSilentUpdate(deviceSdk: Int, apkTargetSdk: Int): Boolean =
+    minTargetSdkForSilentUpdate(deviceSdk)?.let { apkTargetSdk >= it } ?: false
+
+/** What the update banner shows (null: no banner; `required` uses the blocking screen instead). */
+data class UpdateBanner(
+    val title: String,
+    /** version.json `notes`, shown expandable/scrollable. */
+    val notes: String?,
+    val status: String?,
+    /** The single action ("Update", "Retry"); null while working. */
+    val action: String?,
+    val canDismiss: Boolean,
+    val busy: Boolean,
+)
+
+fun updateBanner(state: UpdateState): UpdateBanner? {
+    if (state.blocking() != null) return null
+    return when (state) {
+        UpdateState.Idle -> null
+        is UpdateState.Available -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.notes?.takeIf { it.isNotBlank() }, null, "Update", canDismiss = true, busy = false)
+        is UpdateState.Working -> UpdateBanner("Updating to ${state.info.versionName}", state.info.notes?.takeIf { it.isNotBlank() }, state.step, null, canDismiss = false, busy = true)
+        is UpdateState.NeedsPermission -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.notes?.takeIf { it.isNotBlank() },
+            "Allow RisiMe to install updates; the update continues when you come back.", "Update", canDismiss = true, busy = false)
+        is UpdateState.Failed -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.notes?.takeIf { it.isNotBlank() }, state.message, "Retry", canDismiss = true, busy = false)
+    }
+}

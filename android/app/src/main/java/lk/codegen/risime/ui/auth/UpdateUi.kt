@@ -8,7 +8,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -27,6 +36,7 @@ import kotlinx.coroutines.launch
 import lk.codegen.risime.AppContainer
 import lk.codegen.risime.update.UpdateInfo
 import lk.codegen.risime.update.UpdateState
+import lk.codegen.risime.update.updateBanner
 import lk.codegen.risime.ui.theme.Spacing
 
 private fun UpdateState.status(): String? = when (this) {
@@ -44,26 +54,37 @@ private fun UpdateState.info(): UpdateInfo? = when (this) {
     is UpdateState.Failed -> info
 }
 
-/** Optional update: a slim bar under the dev banner. */
+/** Optional update: a banner under the dev banner with the release notes and one "Update" tap. */
 @Composable
 fun UpdateBar(state: UpdateState, c: AppContainer) {
+    val banner = updateBanner(state) ?: return
     val info = state.info() ?: return
     val scope = rememberCoroutineScope()
-    Row(
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Column(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.secondaryContainer)
             .padding(horizontal = Spacing.lg, vertical = Spacing.xs)
             .semantics { liveRegion = LiveRegionMode.Polite },
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            state.status() ?: "Update available: ${info.versionName}",
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
-        )
-        if (state !is UpdateState.Working) {
-            TextButton(onClick = { scope.launch { c.updater.update(info) } }) { Text("Update") }
-            if (state is UpdateState.Available) TextButton(onClick = c.updater::dismiss) { Text("Later") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(banner.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                banner.status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer) }
+            }
+            if (banner.busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            banner.action?.let { TextButton(onClick = { scope.launch { c.updater.update(info) } }) { Text(it) } }
+            if (banner.canDismiss) TextButton(onClick = c.updater::dismiss) { Text("Later") }
+        }
+        banner.notes?.let { notes ->
+            TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide what's new" else "What's new") }
+            if (expanded) {
+                Text(
+                    notes,
+                    Modifier.fillMaxWidth().heightIn(max = 180.dp).verticalScroll(rememberScrollState()).padding(bottom = Spacing.xs),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
         }
     }
 }

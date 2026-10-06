@@ -92,4 +92,41 @@ class UpdateLogicTest {
         assertFalse(shouldCheck(0, 6 * 3_600_000L - 1))
         assertTrue(shouldCheck(0, 6 * 3_600_000L))
     }
+
+    @Test fun bannerStates() {
+        assertNull(updateBanner(UpdateState.Idle))
+        val avail = updateBanner(UpdateState.Available(info))!!
+        assertEquals("RisiMe 0.2.0-nightly.2 is available", avail.title)
+        assertEquals("Presence and typing", avail.notes)
+        assertEquals("Update", avail.action) // one tap installs
+        assertTrue(avail.canDismiss)
+        assertFalse(avail.busy)
+        val working = updateBanner(UpdateState.Working(info, "Downloading…"))!!
+        assertTrue(working.busy)
+        assertNull(working.action)
+        assertFalse(working.canDismiss)
+        assertEquals("Downloading…", working.status)
+        val failed = updateBanner(UpdateState.Failed(info, "Update rejected: checksum mismatch"))!!
+        assertEquals("Retry", failed.action)
+        assertEquals("Update rejected: checksum mismatch", failed.status)
+        assertTrue(updateBanner(UpdateState.NeedsPermission(info))!!.status!!.contains("Allow"))
+        assertNull(updateBanner(UpdateState.Available(info.copy(notes = "  ")))!!.notes)
+        // required → no banner (the blocking screen shows instead)
+        assertNull(updateBanner(UpdateState.Available(info.copy(required = true))))
+        assertNull(updateBanner(UpdateState.Working(info.copy(required = true), "x")))
+    }
+
+    @Test fun silentUpdateTargetTable() {
+        assertNull(minTargetSdkForSilentUpdate(30))
+        assertFalse(requestSilentUpdate(30, 37)) // Android 11: always the confirm dialog
+        assertEquals(29, minTargetSdkForSilentUpdate(31))
+        assertEquals(29, minTargetSdkForSilentUpdate(32))
+        assertEquals(30, minTargetSdkForSilentUpdate(33))
+        assertEquals(31, minTargetSdkForSilentUpdate(34))
+        assertEquals(33, minTargetSdkForSilentUpdate(35))
+        assertEquals(34, minTargetSdkForSilentUpdate(36))
+        assertEquals(35, minTargetSdkForSilentUpdate(37))
+        assertTrue(requestSilentUpdate(37, 37)) // our targetSdk 37 qualifies everywhere today
+        assertFalse(requestSilentUpdate(36, 33))
+    }
 }

@@ -145,7 +145,10 @@ class AppContainer(context: Context) {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 foreground.value = true
-                scope.launch { updater.maybeCheck(SystemClock.elapsedRealtime()) }
+                scope.launch {
+                    updater.onForeground()
+                    updater.maybeCheck(SystemClock.elapsedRealtime())
+                }
                 scope.launch { behaviour.appOpen() }
             }
 
@@ -163,6 +166,15 @@ class AppContainer(context: Context) {
                     realtime.stop()
                     if (s != null) realtime.start(RealtimeSession(s.first, s.second) { force -> bearer(force) })
                 }
+        }
+        // Updater: launch check happens in onStart; then at most every 6 h while in the foreground.
+        scope.launch {
+            foreground.collectLatest { fg ->
+                while (fg) {
+                    delay(6 * 60 * 60 * 1000L)
+                    updater.maybeCheck(SystemClock.elapsedRealtime())
+                }
+            }
         }
         // §6.2: refresh about 60 s before expiry (from expires_in); the new token is pushed as auth:refresh.
         scope.launch {

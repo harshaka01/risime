@@ -1,6 +1,12 @@
 package lk.codegen.risime
 
+import android.content.Intent
 import android.os.Bundle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.fragment.app.FragmentActivity
@@ -18,6 +24,15 @@ class MainActivity : FragmentActivity() {
         val container = (application as RisiMeApp).container
         authUi = AuthUi(this, container)
         setContent { RisiMeTheme { RisiMeRoot(container, authUi) } }
+        // The installer's confirmation (when Android doesn't allow a silent self-update).
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                container.updater.confirm.filterNotNull().collect { intent ->
+                    container.updater.confirmShown()
+                    runCatching { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                }
+            }
+        }
     }
 
     override fun onDestroy() {

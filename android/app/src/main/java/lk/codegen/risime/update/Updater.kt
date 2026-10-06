@@ -56,6 +56,26 @@ class Updater(
 
     private var lastCheck: Long? = null
 
+    /** A system confirmation to show (STATUS_PENDING_USER_ACTION); the activity launches it. */
+    private val _confirm = MutableStateFlow<Intent?>(null)
+    val confirm: StateFlow<Intent?> = _confirm.asStateFlow()
+
+    fun confirmShown() {
+        _confirm.value = null
+    }
+
+    fun onPendingUserAction(intent: Intent) {
+        _confirm.value = intent
+        val info = (_state.value as? UpdateState.Working)?.info ?: return
+        _state.value = UpdateState.Working(info, "Confirm the update…")
+    }
+
+    /** Back in the foreground: continue an update that was waiting for "install unknown apps". */
+    suspend fun onForeground() {
+        val s = _state.value
+        if (enabled && s is UpdateState.NeedsPermission && context.packageManager.canRequestPackageInstalls()) update(s.info)
+    }
+
     /** Called on start and when foregrounded; honours the 6 h interval. */
     suspend fun maybeCheck(nowElapsedMs: Long) {
         if (!enabled || !shouldCheck(lastCheck, nowElapsedMs)) return
@@ -77,8 +97,13 @@ class Updater(
     }
 
     fun dismiss() {
-        val s = _state.value
-        if (s is UpdateState.Available && !s.info.required) _state.value = UpdateState.Idle
+        val info = when (val s = _state.value) {
+            is UpdateState.Available -> s.info
+            is UpdateState.NeedsPermission -> s.info
+            is UpdateState.Failed -> s.info
+            else -> null
+        }
+        if (info != null && !info.required) _state.value = UpdateState.Idle
     }
 
     private fun installedVersionCode(): Long {
@@ -105,6 +130,7 @@ class Updater(
             val sha = withContext(Dispatchers.IO) { download(info.url, file) }
             _state.value = UpdateState.Working(info, "Verifying…")
             val facts = withContext(Dispatchers.IO) { facts(file, sha) }
+            apkTargetSdk = archiveTargetSdk(file)
             when (val v = verifyApk(info, facts, context.packageName)) {
                 is VerifyResult.Failed -> {
                     file.delete()
@@ -114,7 +140,7 @@ class Updater(
                 VerifyResult.Ok -> Unit
             }
             _state.value = UpdateState.Working(info, "Installing…")
-            withContext(Dispatchers.IO) { install(file) }
+            withContext(Dispatchers.IO) { install(file, requestSilentUpdate(Build.VERSION.SDK_INT, apkTargetSdk)) }
         } catch (e: Exception) {
             file.delete()
             _state.value = UpdateState.Failed(info, "Update failed: ${e.javaClass.simpleName}")
@@ -171,10 +197,27 @@ class Updater(
         return ApkFacts(sha, info?.packageName, code, certs.map(sha256))
     }
 
-    private fun install(file: File) {
+    private var apkTargetSdk = 0
+
+    private fun archiveTargetSdk(file: File): Int =
+        context.packageManager.getPackageArchiveInfo(file.path, 0)?.applicationInfo?.targetSdkVersion ?: 0
+
+    /**
+     * [silent]: ask Android 12+ to skip the confirmation (decision 027): we update ourselves, hold
+     * REQUEST_INSTALL_PACKAGES + UPDATE_PACKAGES_WITHOUT_USER_ACTION, and the APK's targetSdk is
+     * recent enough. The system may still ask (STATUS_PENDING_USER_ACTION → confirm dialog).
+     */
+    private fun install(file: File, silent: Boolean) {
         val installer = context.packageManager.packageInstaller
-        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-            .apply { setAppPackageName(context.packageName) }
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+            setAppPackageName(context.packageName)
+            setSize(file.length())
+            if (Build.VERSION.SDK_INT >= 31) {
+                setRequireUserAction(
+                    if (silent) PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED else PackageInstaller.SessionParams.USER_ACTION_REQUIRED,
+                )
+            }
+        }
         val id = installer.createSession(params)
         installer.openSession(id).use { session ->
             session.openWrite("risime.apk", 0, file.length()).use { out ->
@@ -194,13 +237,14 @@ class Updater(
 class InstallResultReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+        val app = context.applicationContext as? lk.codegen.risime.RisiMeApp ?: return
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            // Shown by the activity (background activity starts are blocked on Android 10+).
             @Suppress("DEPRECATION")
             val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
-            context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            app.container.updater.onPendingUserAction(confirm)
             return
         }
-        val app = context.applicationContext as? lk.codegen.risime.RisiMeApp ?: return
         app.container.updater.onInstallStatus(status, intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE))
     }
 }
