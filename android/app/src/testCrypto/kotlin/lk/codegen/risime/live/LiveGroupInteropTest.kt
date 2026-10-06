@@ -474,13 +474,20 @@ class LiveGroupInteropTest {
             "legacy saw ${bLegacyEvents.size} event(s), none for grp: (DM send: ${if (sent is PushResult.Ok) "ok" else sent})"
         }
 
-        check("3. aggregated group_receipt; receipts GET shows delivered/read per member") {
+        check("3. aggregated group_receipt: A's row goes ✓ → ✓✓ → read; receipts GET shows delivered/read per member") {
             val text = "receipt probe $run"
+            // C is offline when A sends: B's ack alone must leave A at a single ✓ (SENT, 1 of 2).
+            c.on { c.client.stop() }
             val cm = a.on { a.chat.sendText(conv, text) }!!
-            b.awaitText(conv, text); c.awaitText(conv, text)
+            b.awaitText(conv, text)
+            val partial = a.await(20_000, "B delivered (1 of 2)") { a.messages.rows[cm]?.takeIf { it.receiptDelivered == 1 && it.receiptOf == 2 } }
+            ensure(partial.status == MessageStatus.SENT.name && partial.messageId != null) { "✓ while C is offline: ${partial.status}" }
+            // C comes online and receives: ✓✓ (DELIVERED, not read).
+            c.start(); c.live(); c.awaitText(conv, text)
             val delivered = a.await(20_000, "all_delivered") {
                 a.messages.rows[cm]?.takeIf { it.receiptDelivered == 2 && it.receiptOf == 2 && it.status in listOf(MessageStatus.DELIVERED.name, MessageStatus.READ.name) }
             }
+            ensure(delivered.status == MessageStatus.DELIVERED.name) { "✓✓ before anyone read: ${delivered.status}" }
             val mid = delivered.messageId!!
             b.on { b.chat.markConversationRead(conv) }
             val r1 = a.await(20_000, "receipts GET with B read") {
@@ -488,6 +495,7 @@ class LiveGroupInteropTest {
             }
             val rb = r1.receipts.first { it.userId == bId }; val rc = r1.receipts.first { it.userId == cId }
             ensure(r1.of == 2 && rb.deliveredAt != null && rc.deliveredAt != null && rc.readAt == null && r1.receipts.none { it.userId == aId }) { "receipts: $r1" }
+            ensure(a.messages.rows[cm]?.status == MessageStatus.DELIVERED.name) { "read by B only must stay ✓✓: ${a.messages.rows[cm]?.status}" }
             c.on { c.chat.markConversationRead(conv) }
             a.await(20_000, "all_read → READ") { a.messages.rows[cm]?.takeIf { it.status == MessageStatus.READ.name && it.receiptRead == 2 } }
             val events = a.raw.mapNotNull { runCatching { it.groupReceipt() }.getOrNull() }.filter { it.messageId == mid }

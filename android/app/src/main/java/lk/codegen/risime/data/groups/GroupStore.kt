@@ -267,6 +267,11 @@ class GroupStore(
             r.allDelivered -> MessageStatus.DELIVERED
             else -> MessageStatus.SENT
         }
+        // P0-4: the receipt can beat the msg:send reply (members ack within ~100 ms), so the row may
+        // have no message_id yet; matching on it alone dropped the receipt for good. Fill it in first.
+        if (row.messageId == null) {
+            messages.updateStatus(row.clientMsgId, row.status, r.messageId, null, row.failReason)
+        }
         messages.setGroupReceipt(row.messageId ?: r.messageId, r.delivered, r.read, r.of, current.advance(target).name)
     }
 

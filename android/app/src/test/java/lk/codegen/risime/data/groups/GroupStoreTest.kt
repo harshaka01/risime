@@ -155,6 +155,20 @@ class GroupStoreTest {
         assertEquals(3, messages.rows["c1"]!!.receiptOf)
     }
 
+    /** P0-4: a receipt that beats the msg:send reply (no message_id on the row yet) still moves the ticks. */
+    @Test fun receiptBeforeTheSendReplyIsNotDropped() = runTest {
+        messages.insert(MessageEntity("c2", null, conv, me, conv, "hi", null, 1, "PENDING", true))
+        store.applyReceipt(GroupReceiptEvent(conv, "m2", "c2", 2, 0, 2, allDelivered = true, allRead = false))
+        val row = messages.rows["c2"]!!
+        assertEquals("m2", row.messageId)
+        assertEquals("DELIVERED", row.status)
+        assertEquals(2, row.receiptDelivered)
+        // The late reply can't move it back (the outbox advances from the current status).
+        assertEquals("DELIVERED", lk.codegen.risime.data.MessageStatus.valueOf(row.status).advance(lk.codegen.risime.data.MessageStatus.SENT).name)
+        store.applyReceipt(GroupReceiptEvent(conv, "m2", "c2", 2, 2, 2, allDelivered = true, allRead = true))
+        assertEquals("READ", messages.rows["c2"]!!.status)
+    }
+
     @Test fun goneGroupStaysReadOnlyAndAnUnfinishedCreationDisappears() = runTest {
         dao.upsert(GroupEntity(conv, "x", "member", "active", null, null, 1, null, null, null, 1))
         store.markGone(conv)
