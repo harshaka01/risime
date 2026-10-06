@@ -141,9 +141,21 @@ defmodule RisiMe.Auth.JWKS do
     opts = [retry: false, receive_timeout: 5_000] ++ Config.oidc(:req_options)
 
     case Req.get(url, opts) do
-      {:ok, %Req.Response{status: 200, body: body}} when is_map(body) -> {:ok, body}
-      {:ok, %Req.Response{status: status}} -> {:error, "HTTP #{status}"}
-      {:error, e} -> {:error, Exception.message(e)}
+      {:ok, %Req.Response{status: 200, body: body}} when is_map(body) ->
+        {:ok, body}
+
+      # Some servers send JSON without an application/json content type.
+      {:ok, %Req.Response{status: 200, body: body}} when is_binary(body) ->
+        case Jason.decode(body) do
+          {:ok, map} when is_map(map) -> {:ok, map}
+          _ -> {:error, "HTTP 200 without a JSON object"}
+        end
+
+      {:ok, %Req.Response{status: status}} ->
+        {:error, "HTTP #{status}"}
+
+      {:error, e} ->
+        {:error, Exception.message(e)}
     end
   rescue
     e -> {:error, Exception.message(e)}

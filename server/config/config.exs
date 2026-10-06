@@ -42,7 +42,7 @@ config :risime, :oidc,
 config :risime, :dev_local_auth, false
 config :risime, :env, config_env()
 
-# One-time phone verification (contract v1.4 §7, decisions 020 and 021). PHONE_VERIFICATION and
+# One-time phone verification (contract v1.4 §7, decisions 020 and 022). PHONE_VERIFICATION and
 # SMS_MODE come from runtime.exs. The Notify.lk credentials are read from the OS environment
 # only when sending (NOTIFYLK_USER_ID / NOTIFYLK_API_KEY / NOTIFYLK_SENDER_ID) and are never
 # put in app config.

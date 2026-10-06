@@ -21,8 +21,11 @@ defmodule RisiMe.Accounts.OtpSender do
   @spec deliver(:email | :sms, term, message, String.t()) :: :ok | {:error, term}
   def deliver(channel, to, message, log_as) do
     case sender(channel) do
+      {:ok, DevLog} ->
+        DevLog.deliver(log_as, message)
+
       {:ok, module} ->
-        if dev_log?() and module != DevLog, do: DevLog.deliver(log_as, message)
+        if dev_log?(), do: DevLog.deliver(log_as, message)
         module.deliver(to, message)
 
       {:error, _} = error ->

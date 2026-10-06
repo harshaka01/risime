@@ -77,6 +77,21 @@ defmodule RisiMe.Accounts.OtpSenderTest do
     assert_received {:otp, :sms, "+94771234522", @msg}
   end
 
+  test "with DevLog as the SMS sender, the log shows the masked destination only" do
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: :warning) end)
+    Application.put_env(:risime, :sms_mode, :log)
+    Application.put_env(:risime, :otp_dev_log, true)
+
+    log =
+      capture_log(fn ->
+        assert :ok = OtpSender.deliver(:sms, "+94771234522", @msg, "+9477•••••22")
+      end)
+
+    assert log =~ "[DEV OTP] +9477•••••22: 123456"
+    refute log =~ "+94771234522"
+  end
+
   describe "Notify.lk (Req.Test, fake credentials)" do
     setup do
       {:ok, calls} = Agent.start_link(fn -> [] end)

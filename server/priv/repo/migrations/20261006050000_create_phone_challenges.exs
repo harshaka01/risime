@@ -1,7 +1,7 @@
 defmodule RisiMe.Repo.Migrations.CreatePhoneChallenges do
   use Ecto.Migration
 
-  # Contract v1.4 §7 / decision 021. One row per attempted SMS send: it holds the code hash and
+  # Contract v1.4 §7 / decision 022. One row per attempted SMS send: it holds the code hash and
   # is what the per-phone (24 h) and per-server (1 h) SMS budgets count.
   def change do
     alter table(:users) do

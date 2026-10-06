@@ -60,7 +60,7 @@ if config_env() != :test do
   end
 end
 
-# Phone verification (decision 021). PHONE_VERIFICATION=required turns the gate on; SMS_MODE is
+# Phone verification (decision 022). PHONE_VERIFICATION=required turns the gate on; SMS_MODE is
 # notifylk | log (default notifylk in prod, log elsewhere).
 if config_env() != :test do
   config :risime,

@@ -17,7 +17,7 @@ defmodule RisiMeWeb.HealthController do
 
     healthy = Enum.all?(checks, fn {_, v} -> v == "ok" end)
 
-    # SMS is a detail for ops, never a reason for 503 (decision 021); never the balance.
+    # SMS is a detail for ops, never a reason for 503 (decision 022); never the balance.
     checks = Map.put(checks, "sms", RisiMe.Accounts.SmsStatus.check())
 
     conn

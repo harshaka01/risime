@@ -1,6 +1,6 @@
 defmodule RisiMe.Accounts.SmsStatus do
   @moduledoc """
-  SMS health for `/health` (`checks.sms`, decision 021) and the boot checks.
+  SMS health for `/health` (`checks.sms`, decision 022) and the boot checks.
 
   `/health` never calls Notify.lk. With `SMS_MODE=notifylk` this process polls Notify.lk's
   status endpoint every 10 min. `check/0` returns one of:

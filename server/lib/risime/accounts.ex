@@ -302,7 +302,7 @@ defmodule RisiMe.Accounts do
     count
   end
 
-  ## Phone verification (contract v1.4 §7, decision 021)
+  ## Phone verification (contract v1.4 §7, decision 022)
 
   @phone_ttl_seconds 300
   @phone_max_attempts 5

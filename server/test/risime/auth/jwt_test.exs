@@ -159,7 +159,10 @@ defmodule RisiMe.Auth.JWTTest do
             Req.Test.json(conn, %{"jwks_uri" => issuer() <> "/protocol/openid-connect/certs"})
 
           "/realms/aoa/protocol/openid-connect/certs" when certs_status == 200 ->
-            Req.Test.json(conn, jwks([:rsa]))
+            # JSON with a non-JSON content type must still be accepted.
+            conn
+            |> Plug.Conn.put_resp_content_type("application/octet-stream")
+            |> Plug.Conn.send_resp(200, Jason.encode!(jwks([:rsa])))
 
           _ ->
             Plug.Conn.send_resp(conn, certs_status, "")
