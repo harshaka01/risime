@@ -1,225 +1,270 @@
-//! Integration tests proving the E2EE properties the 0.3 design relies on.
-//! Every message crosses the API as serialised bytes, exactly as it would through the server.
+//! Core E2EE properties (a–d) with the v1.7 API: attested device identities, and commits pending
+//! until the server accepts them.
 
-use risime_mls::{Client, Incoming, MlsError};
+mod common;
 
-const GROUP: &[u8] = b"risime-test-group";
-
-fn client(name: &str) -> Client {
-    Client::new(name.as_bytes()).expect("client")
-}
-
-/// Alice creates the group and adds Bob; Bob joins from the Welcome.
-fn alice_and_bob() -> (Client, Client) {
-    let mut alice = client("alice");
-    let mut bob = client("bob");
-    alice.create_group(GROUP).unwrap();
-    let kp = bob.create_key_package().unwrap();
-    let out = alice.add_member(GROUP, &kp).unwrap();
-    let joined = bob.join_from_welcome(&out.welcome).unwrap();
-    assert_eq!(joined, GROUP);
-    (alice, bob)
-}
-
-/// Alice, Bob and Carol in one group, all at the same epoch.
-fn alice_bob_carol() -> (Client, Client, Client) {
-    let (mut alice, mut bob) = alice_and_bob();
-    let mut carol = client("carol");
-    let kp = carol.create_key_package().unwrap();
-    let out = alice.add_member(GROUP, &kp).unwrap();
-    // The commit goes to existing members, the Welcome to the new one.
-    assert_eq!(
-        bob.process(GROUP, &out.commit).unwrap(),
-        Incoming::Commit {
-            epoch: 2,
-            removed_self: false
-        }
-    );
-    carol.join_from_welcome(&out.welcome).unwrap();
-    for c in [&alice, &bob, &carol] {
-        assert_eq!(c.epoch(GROUP).unwrap(), 2);
-    }
-    (alice, bob, carol)
-}
+use common::*;
+use openmls::prelude::tls_codec::Deserialize;
+use openmls::prelude::{MlsMessageBodyIn, MlsMessageIn};
+use risime_mls::{Incoming, MlsError};
 
 // (a) group creation
 #[test]
 fn a_create_group() {
-    let mut alice = client("alice");
-    alice.create_group(GROUP).unwrap();
-    assert_eq!(alice.epoch(GROUP).unwrap(), 0);
-    assert_eq!(alice.members(GROUP).unwrap(), vec![b"alice".to_vec()]);
-    assert!(alice.is_active(GROUP).unwrap());
-    assert_eq!(alice.create_group(GROUP), Err(MlsError::GroupExists));
+    let alice = client("alice", "a1");
+    let bob = client("bob", "b1");
+    let pc = alice.create_group(G, &[kp(&bob)]).unwrap();
+    assert_eq!(pc.epoch, 0);
+    assert_eq!(pc.added, vec![dev("bob", "b1")]);
+    assert!(pc.removed.is_empty());
+    assert!(pc.welcome.is_some());
+    // Not merged until the server says 200.
+    assert_eq!(alice.epoch(G).unwrap(), 0);
+    assert!(alice.has_pending_commit(G).unwrap());
+    assert_eq!(alice.commit_accepted(G).unwrap(), 1);
+    assert!(!alice.has_pending_commit(G).unwrap());
+    let ids: Vec<String> = alice
+        .members(G)
+        .unwrap()
+        .iter()
+        .map(|m| m.device().identity())
+        .collect();
+    assert_eq!(ids, vec!["alice/a1", "bob/b1"]);
+    assert!(alice.is_active(G).unwrap());
+    assert!(alice.has_group(G).unwrap());
 }
 
-// (b) add a member; the member joins from the Welcome and both agree on the epoch
+// (b) join from the Welcome; both sides agree on the epoch and its secrets
 #[test]
 fn b_add_member_join_from_welcome_same_epoch() {
-    let (alice, bob) = alice_and_bob();
-    assert_eq!(alice.epoch(GROUP).unwrap(), 1);
-    assert_eq!(bob.epoch(GROUP).unwrap(), 1);
-    // Same epoch number *and* the same epoch secrets.
-    assert_eq!(
-        alice.epoch_authenticator(GROUP).unwrap(),
-        bob.epoch_authenticator(GROUP).unwrap()
-    );
-    let expected = vec![b"alice".to_vec(), b"bob".to_vec()];
-    assert_eq!(alice.members(GROUP).unwrap(), expected);
-    assert_eq!(bob.members(GROUP).unwrap(), expected);
+    let alice = client("alice", "a1");
+    let bob = client("bob", "b1");
+    let pc = alice.create_group(G, &[kp(&bob)]).unwrap();
+    alice.commit_accepted(G).unwrap();
+    let joined = bob.join_from_welcome(pc.welcome.as_ref().unwrap()).unwrap();
+    assert_eq!(joined.group_id, G);
+    assert_eq!(joined.epoch, 1);
+    assert_eq!(joined.members, alice.members(G).unwrap());
+    assert_eq!(bob.epoch(G).unwrap(), 1);
+    assert_same_epoch(&[&alice, &bob]);
+    let bob_leaf = &joined.members[1];
+    assert_eq!(bob_leaf.signature_key, bob.signature_public_key());
 }
 
-// (c) encrypt -> decrypt in both directions with the exact plaintext
+// (c) encrypt -> decrypt in both directions, with the exact plaintext and sender
 #[test]
 fn c_encrypt_decrypt_both_directions() {
-    let (mut alice, mut bob) = alice_and_bob();
+    let alice = client("alice", "a1");
+    let bob = client("bob", "b1");
+    group(&alice, &[&bob]);
 
     let hello = "Hi Bob — commitment: ship 0.3 by Friday ✓".as_bytes();
-    let ct = alice.encrypt(GROUP, hello).unwrap();
-    assert!(
-        !ct.windows(hello.len()).any(|w| w == hello),
-        "plaintext must not appear in the ciphertext"
-    );
+    let ct = alice.encrypt(G, hello).unwrap();
+    assert!(!ct.windows(hello.len()).any(|w| w == hello));
     assert_eq!(
-        bob.process(GROUP, &ct).unwrap(),
+        bob.process(G, &ct).unwrap(),
         Incoming::Application {
-            sender: b"alice".to_vec(),
-            plaintext: hello.to_vec()
+            sender: dev("alice", "a1"),
+            plaintext: hello.to_vec(),
+            epoch: 1
         }
     );
-
-    let reply = b"Hi Alice, agreed.";
-    let ct = bob.encrypt(GROUP, reply).unwrap();
-    assert_eq!(alice.decrypt(GROUP, &ct).unwrap(), reply.to_vec());
-
-    // Several messages in a row keep working (sender ratchet advances).
+    let ct = bob.encrypt(G, b"Hi Alice, agreed.").unwrap();
+    assert_eq!(alice.decrypt(G, &ct).unwrap(), b"Hi Alice, agreed.");
     for i in 0..5u8 {
         let m = vec![i; 1 + i as usize];
-        let ct = alice.encrypt(GROUP, &m).unwrap();
-        assert_eq!(bob.decrypt(GROUP, &ct).unwrap(), m);
+        assert_eq!(bob.decrypt(G, &alice.encrypt(G, &m).unwrap()).unwrap(), m);
     }
 }
 
-// (d) after removal the removed member cannot decrypt new messages; the others still can
+// Contract §10.0: commits are PublicMessages, application messages PrivateMessages.
+#[test]
+fn wire_formats_match_the_contract() {
+    let alice = client("alice", "a1");
+    let bob = client("bob", "b1");
+    let pc = alice.create_group(G, &[kp(&bob)]).unwrap();
+    let body = |b: &[u8]| MlsMessageIn::tls_deserialize_exact(b).unwrap().extract();
+    assert!(matches!(
+        body(&pc.commit),
+        MlsMessageBodyIn::PublicMessage(_)
+    ));
+    assert!(matches!(
+        body(pc.welcome.as_ref().unwrap()),
+        MlsMessageBodyIn::Welcome(_)
+    ));
+    alice.commit_accepted(G).unwrap();
+    let ct = alice.encrypt(G, b"x").unwrap();
+    assert!(matches!(body(&ct), MlsMessageBodyIn::PrivateMessage(_)));
+    // decrypt() refuses handshakes
+    let carol = client("carol", "c1");
+    bob.join_from_welcome(pc.welcome.as_ref().unwrap()).unwrap();
+    let add = alice.add_members(G, &[kp(&carol)]).unwrap();
+    assert_eq!(
+        bob.decrypt(G, &add.commit),
+        Err(MlsError::NotApplicationMessage)
+    );
+}
+
+// (d) after removal the removed member cannot decrypt; the others still can
 #[test]
 fn d_removed_member_cannot_decrypt_new_messages() {
-    let (mut alice, mut bob, mut carol) = alice_bob_carol();
+    let alice = client("alice", "a1");
+    let bob = client("bob", "b1");
+    let carol = client("carol", "c1");
+    group(&alice, &[&bob, &carol]);
 
-    let commit = alice.remove_member(GROUP, b"bob").unwrap();
-    assert_eq!(
-        carol.process(GROUP, &commit).unwrap(),
+    let pc = alice.remove_members(G, &[dev("bob", "b1")]).unwrap();
+    assert_eq!(pc.removed, vec![dev("bob", "b1")]);
+    assert!(pc.welcome.is_none());
+    alice.commit_accepted(G).unwrap();
+    match carol.process(G, &pc.commit).unwrap() {
         Incoming::Commit {
-            epoch: 3,
-            removed_self: false
+            epoch,
+            committer,
+            removed,
+            removed_self,
+            ..
+        } => {
+            assert_eq!(epoch, 2);
+            assert_eq!(committer, dev("alice", "a1"));
+            assert_eq!(removed, vec![dev("bob", "b1")]);
+            assert!(!removed_self);
         }
-    );
-    // Bob processes his own removal and learns about it.
-    assert_eq!(
-        bob.process(GROUP, &commit).unwrap(),
-        Incoming::Commit {
-            epoch: 3,
-            removed_self: true
-        }
-    );
-    assert!(!bob.is_active(GROUP).unwrap());
-    assert_eq!(
-        alice.members(GROUP).unwrap(),
-        vec![b"alice".to_vec(), b"carol".to_vec()]
-    );
+        other => panic!("{other:?}"),
+    }
+    match bob.process(G, &pc.commit).unwrap() {
+        Incoming::Commit { removed_self, .. } => assert!(removed_self),
+        other => panic!("{other:?}"),
+    }
+    assert!(!bob.is_active(G).unwrap());
 
-    let secret = b"post-removal secret";
-    let ct = alice.encrypt(GROUP, secret).unwrap();
-
-    // Remaining member still decrypts.
-    assert_eq!(carol.decrypt(GROUP, &ct).unwrap(), secret.to_vec());
-    // Removed member cannot.
-    assert_eq!(bob.decrypt(GROUP, &ct), Err(MlsError::RemovedFromGroup));
-    // ... and cannot send either.
+    let ct = alice.encrypt(G, b"post-removal secret").unwrap();
+    assert_eq!(carol.decrypt(G, &ct).unwrap(), b"post-removal secret");
+    assert_eq!(bob.decrypt(G, &ct), Err(MlsError::RemovedFromGroup));
     assert_eq!(
-        bob.encrypt(GROUP, b"still here?"),
+        bob.encrypt(G, b"still here?"),
         Err(MlsError::RemovedFromGroup)
     );
+    let ct = carol.encrypt(G, b"just us now").unwrap();
+    assert_eq!(alice.decrypt(G, &ct).unwrap(), b"just us now");
 
-    // Carol -> Alice also still works in the new epoch.
-    let ct = carol.encrypt(GROUP, b"just us now").unwrap();
-    assert_eq!(alice.decrypt(GROUP, &ct).unwrap(), b"just us now".to_vec());
+    // The removed device wipes the group.
+    bob.delete_group(G).unwrap();
+    assert!(!bob.has_group(G).unwrap());
+    assert_eq!(bob.decrypt(G, &ct), Err(MlsError::UnknownGroup));
 }
 
-// (d') a removed member that *ignores* its removal commit (e.g. a modified client that never
-// applies it) still cannot read: it has no keys for the new epoch.
+// (d') a removed member that ignores its removal commit has no keys for the new epoch
 #[test]
 fn d_removed_member_ignoring_commit_cannot_decrypt() {
-    let (mut alice, mut bob, mut carol) = alice_bob_carol();
-
-    let commit = alice.remove_member(GROUP, b"bob").unwrap();
-    carol.process(GROUP, &commit).unwrap();
-    // Bob never processes `commit`; he stays at epoch 2.
-
-    let secret = b"post-removal secret";
-    let ct = alice.encrypt(GROUP, secret).unwrap();
-    assert_eq!(carol.decrypt(GROUP, &ct).unwrap(), secret.to_vec());
-    assert_eq!(bob.epoch(GROUP).unwrap(), 2);
-    assert_eq!(bob.decrypt(GROUP, &ct), Err(MlsError::WrongEpoch));
+    let alice = client("alice", "a1");
+    let bob = client("bob", "b1");
+    let carol = client("carol", "c1");
+    group(&alice, &[&bob, &carol]);
+    let pc = alice.remove_members(G, &[dev("bob", "b1")]).unwrap();
+    deliver_commit(&alice, &pc.commit, &[&carol]);
+    let ct = alice.encrypt(G, b"post-removal secret").unwrap();
+    assert_eq!(carol.decrypt(G, &ct).unwrap(), b"post-removal secret");
+    assert_eq!(bob.epoch(G).unwrap(), 1);
+    assert_eq!(bob.decrypt(G, &ct), Err(MlsError::WrongEpoch));
 }
 
-// Negative: tampered ciphertext is rejected, not silently mis-decrypted.
 #[test]
 fn tampered_ciphertext_is_rejected() {
-    let (mut alice, mut bob) = alice_and_bob();
-    let mut ct = alice.encrypt(GROUP, b"integrity matters").unwrap();
-    // Flip one bit in the AEAD ciphertext/tag at the end of the message.
+    let alice = client("alice", "a1");
+    let bob = client("bob", "b1");
+    group(&alice, &[&bob]);
+    let mut ct = alice.encrypt(G, b"integrity matters").unwrap();
     let last = ct.len() - 1;
     ct[last] ^= 0x01;
-    match bob.decrypt(GROUP, &ct) {
-        Err(MlsError::DecryptionFailed(_)) => {}
-        other => panic!("expected DecryptionFailed, got {other:?}"),
-    }
-    // The untampered stream still works afterwards.
-    let ct = alice.encrypt(GROUP, b"next").unwrap();
-    assert_eq!(bob.decrypt(GROUP, &ct).unwrap(), b"next".to_vec());
+    assert!(matches!(
+        bob.decrypt(G, &ct),
+        Err(MlsError::DecryptionFailed(_))
+    ));
+    let ct = alice.encrypt(G, b"next").unwrap();
+    assert_eq!(bob.decrypt(G, &ct).unwrap(), b"next");
 }
 
-// Negative: an outsider who was never added cannot join with someone else's Welcome.
+#[test]
+fn tampered_commit_is_rejected_and_state_unchanged() {
+    let alice = client("alice", "a1");
+    let bob = client("bob", "b1");
+    let carol = client("carol", "c1");
+    group(&alice, &[&bob]);
+    let pc = alice.add_members(G, &[kp(&carol)]).unwrap();
+    let mut bad = pc.commit.clone();
+    let last = bad.len() - 1;
+    bad[last] ^= 0x01;
+    assert!(bob.process(G, &bad).is_err());
+    assert_eq!(bob.epoch(G).unwrap(), 1);
+    alice.commit_accepted(G).unwrap();
+    bob.process(G, &pc.commit).unwrap();
+    assert_same_epoch(&[&alice, &bob]);
+}
+
 #[test]
 fn welcome_for_someone_else_is_rejected() {
-    let mut alice = client("alice");
-    let bob = client("bob");
-    let mut mallory = client("mallory");
-    alice.create_group(GROUP).unwrap();
-    let out = alice
-        .add_member(GROUP, &bob.create_key_package().unwrap())
-        .unwrap();
+    let alice = client("alice", "a1");
+    let bob = client("bob", "b1");
+    let mallory = client("mallory", "m1");
+    let pc = alice.create_group(G, &[kp(&bob)]).unwrap();
     assert!(matches!(
-        mallory.join_from_welcome(&out.welcome),
+        mallory.join_from_welcome(pc.welcome.as_ref().unwrap()),
         Err(MlsError::Welcome(_))
     ));
+    assert!(!mallory.has_group(G).unwrap());
 }
 
-// Negative: garbage and forged key packages are rejected.
 #[test]
 fn invalid_key_package_is_rejected() {
-    let mut alice = client("alice");
-    alice.create_group(GROUP).unwrap();
+    let alice = client("alice", "a1");
     assert!(matches!(
-        alice.add_member(GROUP, b"not a key package"),
+        alice.create_group(G, &[b"not a key package".to_vec()]),
         Err(MlsError::Malformed(_))
     ));
-    let mut kp = client("bob").create_key_package().unwrap();
-    let last = kp.len() - 1;
-    kp[last] ^= 0x01; // breaks the signature
+    let mut k = kp(&client("bob", "b1"));
+    let last = k.len() - 1;
+    k[last] ^= 0x01;
     assert!(matches!(
-        alice.add_member(GROUP, &kp),
+        alice.create_group(G, &[k]),
         Err(MlsError::InvalidKeyPackage(_))
     ));
+    assert!(matches!(
+        alice.create_group(G, &[]),
+        Err(MlsError::Malformed(_))
+    ));
+    // Own key package, and the same device twice.
+    assert!(matches!(
+        alice.create_group(G, &[kp(&alice)]),
+        Err(MlsError::Malformed(_))
+    ));
+    let bob = client("bob", "b1");
+    assert!(matches!(
+        alice.create_group(G, &[kp(&bob), kp(&bob)]),
+        Err(MlsError::Malformed(_))
+    ));
+    assert!(!alice.has_group(G).unwrap());
 }
 
 #[test]
 fn unknown_group_and_member() {
-    let mut alice = client("alice");
+    let alice = client("alice", "a1");
+    let bob = client("bob", "b1");
     assert_eq!(alice.encrypt(b"nope", b"x"), Err(MlsError::UnknownGroup));
-    alice.create_group(GROUP).unwrap();
+    assert_eq!(alice.epoch(b"nope"), Err(MlsError::UnknownGroup));
+    group(&alice, &[&bob]);
     assert_eq!(
-        alice.remove_member(GROUP, b"nobody"),
+        alice.remove_members(G, &[dev("nobody", "x")]),
         Err(MlsError::UnknownMember)
     );
+    assert!(matches!(
+        alice.remove_members(G, &[dev("alice", "a1")]),
+        Err(MlsError::Malformed(_))
+    ));
+    // Adding someone who is already a member.
+    let again = client("bob", "b1");
+    assert!(matches!(
+        alice.add_members(G, &[kp(&again)]),
+        Err(MlsError::Malformed(_))
+    ));
 }

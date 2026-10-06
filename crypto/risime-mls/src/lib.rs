@@ -1,66 +1,98 @@
-//! `risime-mls` — the RisiMe end-to-end encryption core (Release 0.3 groundwork).
+//! `risime-mls`: the RisiMe end-to-end encryption core (contract v1.7 §10, decisions 012, 032,
+//! 033).
 //!
-//! A small, bytes-in / bytes-out wrapper around [OpenMLS](https://openmls.tech) that a later
-//! UniFFI `ffi` crate can expose to Kotlin unchanged. Every value that crosses the API boundary
-//! is either a primitive, a `Vec<u8>` (TLS-serialised MLS wire objects), or a plain struct/enum
-//! of those, so no OpenMLS type leaks out.
+//! A small API over [OpenMLS](https://openmls.tech) in which bytes go in and bytes come out. The
+//! UniFFI crate `risime-mls-ffi` exposes it to Kotlin. Every MLS wire object crosses the API as
+//! TLS-serialised `Vec<u8>`, and no OpenMLS type leaks out.
 //!
-//! One [`Client`] is one device: it owns a signature key pair, a basic credential (the user's
-//! identity bytes) and the OpenMLS storage provider that holds key packages and group state.
+//! One [`Client`] is one device:
+//! - a persistent Ed25519 signature key;
+//! - a basic credential whose identity is `"<user_id>/<device_id>"` ([`DeviceId`]);
+//! - the server's attestation of that binding, carried in every leaf's `application_id`;
+//! - all OpenMLS state, in the app's [`KvStore`].
 //!
-//! Ciphersuite: [`CIPHERSUITE`] (`MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`), see
-//! `docs/decisions/012-e2ee-android-binding-plan.md`.
+//! Each public call runs in one nested `KvStore` transaction (a savepoint), which is rolled back
+//! on any error.
 //!
-//! Spike limitation: storage is OpenMLS' in-memory store (`OpenMlsRustCrypto`). Persistence on
-//! Android is a custom `StorageProvider`, planned in the decision record.
+//! Rules enforced here:
+//! - Ciphersuite [`CIPHERSUITE`].
+//! - Commits use PublicMessage framing; application messages always use PrivateMessage.
+//! - [`MAX_PAST_EPOCHS`] past epochs are kept.
+//! - Every leaf is checked by the [`CredentialValidator`]:
+//!   - in key packages we add;
+//!   - in every leaf of a group we join;
+//!   - in every leaf a commit adds or replaces.
+//! - Own commits are **pending** until the server accepts them: [`Client::commit_accepted`] or
+//!   [`Client::commit_rejected`].
 
-use std::collections::HashMap;
+pub mod attestation;
+pub mod storage;
 
+use std::sync::Arc;
+
+use openmls::framing::errors::{MessageDecryptionError, SecretTreeError};
 use openmls::prelude::tls_codec::{Deserialize, Serialize};
 use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
-use openmls_rust_crypto::OpenMlsRustCrypto;
 
-/// The single ciphersuite RisiMe uses: X25519 + AES-128-GCM + SHA-256 + Ed25519 (RFC 9420
-/// mandatory-to-implement suite, 0x0001).
+pub use attestation::{CredentialValidator, DeviceId, TestAttestor, TrustAnchors};
+pub use storage::{KvError, KvStore, MemoryKvStore, Provider};
+
+/// X25519 + AES-128-GCM + SHA-256 + Ed25519 (RFC 9420 mandatory suite 0x0001).
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 
-/// Errors returned by this crate. Variants are deliberately coarse and stable so that the
-/// UniFFI layer can map them 1:1 to a Kotlin sealed exception hierarchy.
+/// Past epochs whose secrets are kept for late application messages (contract §10.0).
+pub const MAX_PAST_EPOCHS: usize = 3;
+
+/// Maximum number of key packages generated in one call (the contract's upload limit).
+pub const MAX_KEY_PACKAGE_BATCH: u16 = 100;
+
+/// Errors. They map 1:1 to the Kotlin `RisiMlsException` hierarchy.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum MlsError {
-    /// Input bytes were not a valid TLS-encoded MLS object of the expected kind.
+    /// The input bytes or ids were not valid for the expected kind.
     #[error("malformed input: {0}")]
     Malformed(String),
-    /// A key package failed signature / lifetime / ciphersuite validation.
+    /// A key package failed signature, lifetime or ciphersuite validation.
     #[error("invalid key package: {0}")]
     InvalidKeyPackage(String),
-    /// No group with this id is known to this client.
+    /// A leaf's identity or attestation was rejected by the credential validator.
+    #[error("untrusted credential: {0}")]
+    UntrustedCredential(String),
+    /// [`Client::set_attestation`] must be called before creating key packages or groups.
+    #[error("no attestation set for this device")]
+    MissingAttestation,
     #[error("unknown group")]
     UnknownGroup,
-    /// A group with this id already exists on this client.
     #[error("group already exists")]
     GroupExists,
-    /// No member with this identity is in the group.
     #[error("unknown member")]
     UnknownMember,
-    /// This client was removed from the group; it can no longer read or send.
+    /// This device was removed from the group; it can no longer read or send.
     #[error("removed from group")]
     RemovedFromGroup,
-    /// The message belongs to an epoch this client does not have keys for (for example a
-    /// member that was removed but never processed its removal commit).
+    /// This device has no keys for the message's epoch: a future epoch (commits missing), or
+    /// older than [`MAX_PAST_EPOCHS`].
     #[error("message is for a different epoch")]
     WrongEpoch,
     /// AEAD decryption or signature verification failed (tampered or foreign ciphertext).
     #[error("decryption failed: {0}")]
     DecryptionFailed(String),
-    /// A `decrypt` call received a handshake (commit/proposal) instead of an application
-    /// message. Use [`Client::process`] for those.
+    /// `decrypt` got a handshake message; use [`Client::process`].
     #[error("not an application message")]
     NotApplicationMessage,
     /// Joining from a Welcome failed (no matching key package, bad signature, ...).
     #[error("welcome failed: {0}")]
     Welcome(String),
+    /// A commit of ours is already waiting for the server's verdict.
+    #[error("a commit is already pending for this group")]
+    CommitPending,
+    /// `commit_accepted` or `commit_rejected` was called without a pending commit.
+    #[error("no pending commit")]
+    NoPendingCommit,
+    /// The app's [`KvStore`] failed, or stored state is unreadable.
+    #[error("storage: {0}")]
+    Storage(String),
     /// Any other OpenMLS failure.
     #[error("mls: {0}")]
     Other(String),
@@ -68,185 +100,600 @@ pub enum MlsError {
 
 pub type Result<T> = std::result::Result<T, MlsError>;
 
-fn other(e: impl std::fmt::Display) -> MlsError {
-    MlsError::Other(e.to_string())
+/// Any OpenMLS error. Storage failures are reported as [`MlsError::Storage`], whichever OpenMLS
+/// error type wraps them, so the app can tell "retry later" from "bad input".
+fn other(e: impl std::fmt::Display + std::fmt::Debug) -> MlsError {
+    if format!("{e:?}").contains("StorageError") {
+        MlsError::Storage(e.to_string())
+    } else {
+        MlsError::Other(e.to_string())
+    }
 }
 
-/// Output of [`Client::add_member`].
-#[derive(Debug, Clone)]
-pub struct AddMemberOutput {
-    /// The commit, to be fanned out to every *existing* member (not the new one).
+fn storage(e: impl std::fmt::Display) -> MlsError {
+    MlsError::Storage(e.to_string())
+}
+
+/// A group member: one leaf.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberInfo {
+    pub user_id: String,
+    pub device_id: String,
+    pub leaf_index: u32,
+    pub signature_key: Vec<u8>,
+}
+
+impl MemberInfo {
+    pub fn device(&self) -> DeviceId {
+        DeviceId {
+            user_id: self.user_id.clone(),
+            device_id: self.device_id.clone(),
+        }
+    }
+}
+
+/// A commit of ours, waiting for `POST /mls/groups/{id}/commit` (contract §10.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingCommit {
+    /// A PublicMessage commit.
     pub commit: Vec<u8>,
-    /// The Welcome, to be delivered to the new member only.
-    pub welcome: Vec<u8>,
+    /// The Welcome for the added devices (present exactly when `added` is not empty).
+    pub welcome: Option<Vec<u8>>,
+    /// The epoch the commit was built in (the request's `epoch`).
+    pub epoch: u64,
+    pub added: Vec<DeviceId>,
+    pub removed: Vec<DeviceId>,
+}
+
+/// Result of [`Client::join_from_welcome`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JoinedGroup {
+    pub group_id: Vec<u8>,
+    pub epoch: u64,
+    pub members: Vec<MemberInfo>,
 }
 
 /// Result of processing one incoming MLS message with [`Client::process`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Incoming {
-    /// A decrypted application message.
+    /// A decrypted application message. `sender` must match the event's `from`/`from_device`.
     Application {
-        /// Identity bytes from the sender's credential.
-        sender: Vec<u8>,
+        sender: DeviceId,
         plaintext: Vec<u8>,
+        epoch: u64,
     },
-    /// A commit was verified and merged; the group moved to `epoch`.
-    /// `removed_self` is true when this commit evicted this client.
-    Commit { epoch: u64, removed_self: bool },
-    /// A standalone proposal was stored (it takes effect with a later commit).
-    Proposal,
-    /// A message this client sent itself, echoed back by the server. Ignore it.
+    /// A verified commit was merged, and the group is now at `epoch`.
+    Commit {
+        epoch: u64,
+        committer: DeviceId,
+        added: Vec<DeviceId>,
+        removed: Vec<DeviceId>,
+        /// This commit evicted this device. Wipe the group (`delete_group`).
+        removed_self: bool,
+        /// Our own pending commit was dropped. Redo the change if it is still needed.
+        discarded_own_pending: bool,
+    },
+    /// A message this device sent itself, echoed back. Ignore it.
     OwnEcho,
 }
 
+/// What is stored about this device itself, next to the OpenMLS state.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SelfRecord {
+    user_id: String,
+    device_id: String,
+    signature_public_key: Vec<u8>,
+    attestation: Option<String>,
+}
+
+const SELF_KEY: &[u8] = b"risime/self/v1";
+
 /// One device's MLS state.
 pub struct Client {
-    provider: OpenMlsRustCrypto,
+    kv: Arc<dyn KvStore>,
+    provider: Provider,
     signer: SignatureKeyPair,
-    credential: CredentialWithKey,
-    identity: Vec<u8>,
-    groups: HashMap<Vec<u8>, MlsGroup>,
+    device: DeviceId,
+    attestation: Option<String>,
+    validator: Box<dyn CredentialValidator>,
 }
 
 impl Client {
-    /// Create a new device identity: a fresh Ed25519 signature key pair and a basic
-    /// credential carrying `identity` (for RisiMe, the stable user id, never a phone number).
-    pub fn new(identity: &[u8]) -> Result<Self> {
-        let provider = OpenMlsRustCrypto::default();
-        let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).map_err(other)?;
-        signer.store(provider.storage()).map_err(other)?;
-        let credential = CredentialWithKey {
-            credential: BasicCredential::new(identity.to_vec()).into(),
-            signature_key: signer.to_public_vec().into(),
+    /// Open (or create, on first use) this device's MLS state in `store`. A store holds exactly
+    /// one device. Opening it as another device fails with [`MlsError::Storage`].
+    pub fn open(
+        store: Arc<dyn KvStore>,
+        device: DeviceId,
+        validator: impl CredentialValidator + 'static,
+    ) -> Result<Self> {
+        DeviceId::new(device.user_id.clone(), device.device_id.clone())?;
+        let provider = Provider::new(store.clone());
+        store.begin().map_err(storage)?;
+        let res = Self::load_or_create(&store, &provider, &device);
+        match res {
+            Ok((signer, attestation)) => {
+                store.commit().map_err(storage)?;
+                Ok(Self {
+                    kv: store,
+                    provider,
+                    signer,
+                    device,
+                    attestation,
+                    validator: Box::new(validator),
+                })
+            }
+            Err(e) => {
+                let _ = store.rollback();
+                Err(e)
+            }
+        }
+    }
+
+    /// A client on a fresh [`MemoryKvStore`] (tests, fixtures, self-test).
+    pub fn in_memory(
+        device: DeviceId,
+        validator: impl CredentialValidator + 'static,
+    ) -> Result<Self> {
+        Self::open(Arc::new(MemoryKvStore::new()), device, validator)
+    }
+
+    fn load_or_create(
+        store: &Arc<dyn KvStore>,
+        provider: &Provider,
+        device: &DeviceId,
+    ) -> Result<(SignatureKeyPair, Option<String>)> {
+        let scheme = CIPHERSUITE.signature_algorithm();
+        if let Some(bytes) = store.get(SELF_KEY).map_err(storage)? {
+            let rec: SelfRecord = serde_json::from_slice(&bytes).map_err(storage)?;
+            if rec.user_id != device.user_id || rec.device_id != device.device_id {
+                return Err(MlsError::Storage(format!(
+                    "store belongs to {}/{}, not {device}",
+                    rec.user_id, rec.device_id
+                )));
+            }
+            let signer =
+                SignatureKeyPair::read(provider.storage(), &rec.signature_public_key, scheme)
+                    .ok_or_else(|| MlsError::Storage("signature key missing".into()))?;
+            return Ok((signer, rec.attestation));
+        }
+        let signer = SignatureKeyPair::new(scheme).map_err(other)?;
+        signer.store(provider.storage()).map_err(storage)?;
+        let rec = SelfRecord {
+            user_id: device.user_id.clone(),
+            device_id: device.device_id.clone(),
+            signature_public_key: signer.to_public_vec(),
+            attestation: None,
         };
-        Ok(Self {
-            provider,
-            signer,
-            credential,
-            identity: identity.to_vec(),
-            groups: HashMap::new(),
-        })
+        store
+            .put(SELF_KEY, &serde_json::to_vec(&rec).map_err(storage)?)
+            .map_err(storage)?;
+        Ok((signer, None))
     }
 
-    /// The identity bytes in this client's credential.
-    pub fn identity(&self) -> &[u8] {
-        &self.identity
+    /// Run `f` inside one nested transaction. Commit on success, roll back on error.
+    fn tx<T>(&self, f: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        self.kv.begin().map_err(storage)?;
+        match f(self) {
+            Ok(v) => match self.kv.commit() {
+                Ok(()) => Ok(v),
+                Err(e) => {
+                    let _ = self.kv.rollback();
+                    Err(storage(e))
+                }
+            },
+            Err(e) => {
+                let _ = self.kv.rollback();
+                Err(e)
+            }
+        }
     }
 
-    /// This device's public signature key (what a future key-transparency / safety-number
-    /// check would compare).
+    pub fn device(&self) -> &DeviceId {
+        &self.device
+    }
+
+    /// `"<user_id>/<device_id>"`.
+    pub fn identity(&self) -> String {
+        self.device.identity()
+    }
+
+    /// The raw 32-byte Ed25519 public key (`PUT /me/devices/{id}` → `mls.signature_key`).
     pub fn signature_public_key(&self) -> Vec<u8> {
         self.signer.to_public_vec()
     }
 
-    /// Generate a fresh single-use key package and return it TLS-serialised, ready to upload
-    /// to the server. The private half stays in this client's storage.
-    pub fn create_key_package(&self) -> Result<Vec<u8>> {
-        let bundle = KeyPackage::builder()
-            .build(
-                CIPHERSUITE,
-                &self.provider,
-                &self.signer,
-                self.credential.clone(),
-            )
+    pub fn attestation(&self) -> Option<&str> {
+        self.attestation.as_deref()
+    }
+
+    /// Store the server's attestation for this device. It is verified against the trust anchors
+    /// first, so a wrong key or device id is caught here, not by peers.
+    pub fn set_attestation(&mut self, jws: &str) -> Result<()> {
+        self.validator.validate(
+            &self.device,
+            &self.signer.to_public_vec(),
+            Some(jws.as_bytes()),
+        )?;
+        self.tx(|c| {
+            let rec = SelfRecord {
+                user_id: c.device.user_id.clone(),
+                device_id: c.device.device_id.clone(),
+                signature_public_key: c.signer.to_public_vec(),
+                attestation: Some(jws.to_string()),
+            };
+            c.kv.put(SELF_KEY, &serde_json::to_vec(&rec).map_err(storage)?)
+                .map_err(storage)
+        })?;
+        self.attestation = Some(jws.to_string());
+        Ok(())
+    }
+
+    fn credential(&self) -> CredentialWithKey {
+        CredentialWithKey {
+            credential: BasicCredential::new(self.identity().into_bytes()).into(),
+            signature_key: self.signer.to_public_vec().into(),
+        }
+    }
+
+    fn leaf_extensions(&self) -> Result<Extensions<LeafNode>> {
+        let jws = self
+            .attestation
+            .as_ref()
+            .ok_or(MlsError::MissingAttestation)?;
+        Extensions::single(Extension::ApplicationId(ApplicationIdExtension::new(
+            jws.as_bytes(),
+        )))
+        .map_err(other)
+    }
+
+    /// Leaf capabilities: the defaults plus `last_resort`, so any of our key packages may carry it.
+    fn capabilities() -> Capabilities {
+        Capabilities::new(None, None, Some(&[ExtensionType::LastResort]), None, None)
+    }
+
+    fn key_package(&self, last_resort: bool) -> Result<Vec<u8>> {
+        let mut builder = KeyPackage::builder()
+            .leaf_node_capabilities(Self::capabilities())
+            .leaf_node_extensions(self.leaf_extensions()?);
+        if last_resort {
+            builder = builder.mark_as_last_resort();
+        }
+        let bundle = builder
+            .build(CIPHERSUITE, &self.provider, &self.signer, self.credential())
             .map_err(other)?;
         bundle.key_package().tls_serialize_detached().map_err(other)
     }
 
-    /// Create a new group with this client as its only member (epoch 0).
-    pub fn create_group(&mut self, group_id: &[u8]) -> Result<()> {
-        if self.groups.contains_key(group_id) {
-            return Err(MlsError::GroupExists);
+    /// `count` (1..=100) fresh single-use key packages, ready to upload.
+    pub fn generate_key_packages(&self, count: u16) -> Result<Vec<Vec<u8>>> {
+        if count == 0 || count > MAX_KEY_PACKAGE_BATCH {
+            return Err(MlsError::Malformed(format!(
+                "count must be 1..={MAX_KEY_PACKAGE_BATCH}"
+            )));
         }
-        let group = MlsGroup::builder()
-            .ciphersuite(CIPHERSUITE)
-            .with_group_id(GroupId::from_slice(group_id))
-            // Ship the ratchet tree inside the Welcome so joiners need no extra fetch.
-            .use_ratchet_tree_extension(true)
-            .build(&self.provider, &self.signer, self.credential.clone())
-            .map_err(other)?;
-        self.groups.insert(group_id.to_vec(), group);
-        Ok(())
+        self.tx(|c| (0..count).map(|_| c.key_package(false)).collect())
     }
 
-    /// Add the owner of `key_package` to the group. The commit is merged locally at once
-    /// (spike simplification: production waits for the server to accept the commit first).
-    pub fn add_member(&mut self, group_id: &[u8], key_package: &[u8]) -> Result<AddMemberOutput> {
-        let kp_in = KeyPackageIn::tls_deserialize_exact(key_package)
-            .map_err(|e| MlsError::Malformed(e.to_string()))?;
-        let kp = kp_in
-            .validate(self.provider.crypto(), ProtocolVersion::Mls10)
-            .map_err(|e| MlsError::InvalidKeyPackage(e.to_string()))?;
-        if kp.ciphersuite() != CIPHERSUITE {
-            return Err(MlsError::InvalidKeyPackage("wrong ciphersuite".into()));
+    /// A last-resort key package (RFC 9420 `last_resort` extension). It can be used for several
+    /// joins and its private key is kept. Upload it as `last_resort`, and rotate it weekly.
+    pub fn generate_last_resort_key_package(&self) -> Result<Vec<u8>> {
+        self.tx(|c| c.key_package(true))
+    }
+
+    /// Check one leaf: basic credential, a well-formed identity, and an attestation the validator
+    /// accepts.
+    fn check_leaf(&self, leaf: &LeafNode) -> Result<DeviceId> {
+        let cred = leaf.credential();
+        if cred.credential_type() != CredentialType::Basic {
+            return Err(MlsError::UntrustedCredential(
+                "not a basic credential".into(),
+            ));
         }
-        let group = self
-            .groups
-            .get_mut(group_id)
-            .ok_or(MlsError::UnknownGroup)?;
+        let device = DeviceId::parse(cred.serialized_content())
+            .map_err(|e| MlsError::UntrustedCredential(e.to_string()))?;
+        let att = leaf.extensions().application_id().map(|a| a.as_slice());
+        self.validator
+            .validate(&device, leaf.signature_key().as_slice(), att)?;
+        Ok(device)
+    }
+
+    fn validate_key_packages(
+        &self,
+        key_packages: &[Vec<u8>],
+    ) -> Result<Vec<(KeyPackage, DeviceId)>> {
+        if key_packages.is_empty() {
+            return Err(MlsError::Malformed("no key packages".into()));
+        }
+        let mut out: Vec<(KeyPackage, DeviceId)> = Vec::with_capacity(key_packages.len());
+        for bytes in key_packages {
+            let kp = KeyPackageIn::tls_deserialize_exact(bytes)
+                .map_err(|e| MlsError::Malformed(e.to_string()))?
+                .validate(self.provider.crypto(), ProtocolVersion::Mls10)
+                .map_err(|e| MlsError::InvalidKeyPackage(e.to_string()))?;
+            if kp.ciphersuite() != CIPHERSUITE {
+                return Err(MlsError::InvalidKeyPackage("wrong ciphersuite".into()));
+            }
+            let device = self.check_leaf(kp.leaf_node())?;
+            if device == self.device || out.iter().any(|(_, d)| *d == device) {
+                return Err(MlsError::Malformed(format!("duplicate device {device}")));
+            }
+            out.push((kp, device));
+        }
+        Ok(out)
+    }
+
+    fn load(&self, group_id: &[u8]) -> Result<MlsGroup> {
+        MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
+            .map_err(storage)?
+            .ok_or(MlsError::UnknownGroup)
+    }
+
+    fn join_config() -> MlsGroupJoinConfig {
+        MlsGroupJoinConfig::builder()
+            .use_ratchet_tree_extension(true)
+            .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
+            .max_past_epochs(MAX_PAST_EPOCHS)
+            .build()
+    }
+
+    fn member_infos(group: &MlsGroup) -> Result<Vec<MemberInfo>> {
+        group
+            .members()
+            .map(|m| {
+                let d = DeviceId::parse(m.credential.serialized_content())?;
+                Ok(MemberInfo {
+                    user_id: d.user_id,
+                    device_id: d.device_id,
+                    leaf_index: m.index.u32(),
+                    signature_key: m.signature_key,
+                })
+            })
+            .collect()
+    }
+
+    fn device_at(group: &MlsGroup, index: LeafNodeIndex) -> Result<DeviceId> {
+        let leaf = group
+            .public_group()
+            .leaf(index)
+            .ok_or_else(|| MlsError::Other(format!("no leaf at {}", index.u32())))?;
+        DeviceId::parse(leaf.credential().serialized_content())
+    }
+
+    fn stage_add(
+        &self,
+        group: &mut MlsGroup,
+        kps: Vec<(KeyPackage, DeviceId)>,
+    ) -> Result<PendingCommit> {
+        let existing = Self::member_infos(group)?;
+        if let Some((_, d)) = kps
+            .iter()
+            .find(|(_, d)| existing.iter().any(|m| m.device() == *d))
+        {
+            return Err(MlsError::Malformed(format!("{d} is already a member")));
+        }
+        let epoch = group.epoch().as_u64();
+        let (key_packages, added): (Vec<KeyPackage>, Vec<DeviceId>) = kps.into_iter().unzip();
         let (commit, welcome, _group_info) = group
-            .add_members(&self.provider, &self.signer, core::slice::from_ref(&kp))
+            .add_members(&self.provider, &self.signer, &key_packages)
             .map_err(other)?;
-        group.merge_pending_commit(&self.provider).map_err(other)?;
-        Ok(AddMemberOutput {
+        Ok(PendingCommit {
             commit: commit.to_bytes().map_err(other)?,
-            welcome: welcome.to_bytes().map_err(other)?,
+            welcome: Some(welcome.to_bytes().map_err(other)?),
+            epoch,
+            added,
+            removed: vec![],
         })
     }
 
-    /// Join a group from a Welcome produced by [`Client::add_member`]. Returns the group id.
-    pub fn join_from_welcome(&mut self, welcome: &[u8]) -> Result<Vec<u8>> {
-        let msg = MlsMessageIn::tls_deserialize_exact(welcome)
-            .map_err(|e| MlsError::Malformed(e.to_string()))?;
-        let MlsMessageBodyIn::Welcome(welcome) = msg.extract() else {
-            return Err(MlsError::Malformed("not a Welcome".into()));
-        };
-        let join_config = MlsGroupJoinConfig::builder()
-            .use_ratchet_tree_extension(true)
-            .build();
-        let group = StagedWelcome::new_from_welcome(&self.provider, &join_config, welcome, None)
-            .map_err(|e| MlsError::Welcome(e.to_string()))?
-            .into_group(&self.provider)
-            .map_err(|e| MlsError::Welcome(e.to_string()))?;
-        let id = group.group_id().as_slice().to_vec();
-        if self.groups.contains_key(&id) {
-            return Err(MlsError::GroupExists);
-        }
-        self.groups.insert(id.clone(), group);
-        Ok(id)
+    /// Create the group at epoch 0 and stage the commit that adds `key_packages` (all current MLS
+    /// devices of both members, contract §10.2). Send it with `epoch` 0. A local epoch-0 group
+    /// left over from a lost creation race is replaced.
+    pub fn create_group(&self, group_id: &[u8], key_packages: &[Vec<u8>]) -> Result<PendingCommit> {
+        self.tx(|c| {
+            let ext = c.leaf_extensions()?;
+            let kps = c.validate_key_packages(key_packages)?;
+            let gid = GroupId::from_slice(group_id);
+            if let Some(mut old) = MlsGroup::load(c.provider.storage(), &gid).map_err(storage)? {
+                if old.epoch().as_u64() != 0 {
+                    return Err(MlsError::GroupExists);
+                }
+                old.delete(c.provider.storage()).map_err(storage)?;
+            }
+            let mut group = MlsGroup::builder()
+                .ciphersuite(CIPHERSUITE)
+                .with_group_id(gid)
+                .use_ratchet_tree_extension(true)
+                .with_wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
+                .max_past_epochs(MAX_PAST_EPOCHS)
+                .with_capabilities(Self::capabilities())
+                .with_leaf_node_extensions(ext)
+                .map_err(other)?
+                .build(&c.provider, &c.signer, c.credential())
+                .map_err(other)?;
+            c.stage_add(&mut group, kps)
+        })
     }
 
-    /// Encrypt an application message for the current epoch of the group.
-    pub fn encrypt(&mut self, group_id: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
-        let group = self
-            .groups
-            .get_mut(group_id)
-            .ok_or(MlsError::UnknownGroup)?;
+    /// Stage a commit that adds the owners of `key_packages`. It is not merged; see
+    /// [`Client::commit_accepted`].
+    pub fn add_members(&self, group_id: &[u8], key_packages: &[Vec<u8>]) -> Result<PendingCommit> {
+        self.tx(|c| {
+            let mut group = c.load(group_id)?;
+            c.check_can_commit(&group)?;
+            let kps = c.validate_key_packages(key_packages)?;
+            c.stage_add(&mut group, kps)
+        })
+    }
+
+    /// Stage a commit that removes `devices`. It is not merged; see [`Client::commit_accepted`].
+    pub fn remove_members(&self, group_id: &[u8], devices: &[DeviceId]) -> Result<PendingCommit> {
+        self.tx(|c| {
+            let mut group = c.load(group_id)?;
+            c.check_can_commit(&group)?;
+            if devices.is_empty() {
+                return Err(MlsError::Malformed("nothing to remove".into()));
+            }
+            if devices.contains(&c.device) {
+                return Err(MlsError::Malformed("cannot remove own device".into()));
+            }
+            let members = Self::member_infos(&group)?;
+            let indices = devices
+                .iter()
+                .map(|d| {
+                    members
+                        .iter()
+                        .find(|m| m.device() == *d)
+                        .map(|m| LeafNodeIndex::new(m.leaf_index))
+                        .ok_or(MlsError::UnknownMember)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let epoch = group.epoch().as_u64();
+            let (commit, _welcome, _gi) = group
+                .remove_members(&c.provider, &c.signer, &indices)
+                .map_err(other)?;
+            Ok(PendingCommit {
+                commit: commit.to_bytes().map_err(other)?,
+                welcome: None,
+                epoch,
+                added: vec![],
+                removed: devices.to_vec(),
+            })
+        })
+    }
+
+    fn check_can_commit(&self, group: &MlsGroup) -> Result<()> {
         if !group.is_active() {
             return Err(MlsError::RemovedFromGroup);
         }
-        let out = group
-            .create_message(&self.provider, &self.signer, plaintext)
-            .map_err(other)?;
-        out.to_bytes().map_err(other)
+        if group.pending_commit().is_some() {
+            return Err(MlsError::CommitPending);
+        }
+        Ok(())
     }
 
-    /// Decrypt an application message. Handshake messages are rejected with
-    /// [`MlsError::NotApplicationMessage`]; feed those to [`Client::process`].
-    pub fn decrypt(&mut self, group_id: &[u8], message: &[u8]) -> Result<Vec<u8>> {
+    /// The server answered `200`: merge our pending commit. Returns the new epoch.
+    pub fn commit_accepted(&self, group_id: &[u8]) -> Result<u64> {
+        self.tx(|c| {
+            let mut group = c.load(group_id)?;
+            if group.pending_commit().is_none() {
+                return Err(MlsError::NoPendingCommit);
+            }
+            group.merge_pending_commit(&c.provider).map_err(other)?;
+            Ok(group.epoch().as_u64())
+        })
+    }
+
+    /// The server refused the commit (`409` and similar): drop it. If it was the group's creating
+    /// commit (epoch 0), the local group is deleted too. The winner's Welcome will arrive.
+    pub fn commit_rejected(&self, group_id: &[u8]) -> Result<()> {
+        self.tx(|c| {
+            let mut group = c.load(group_id)?;
+            if group.pending_commit().is_none() {
+                return Err(MlsError::NoPendingCommit);
+            }
+            if group.epoch().as_u64() == 0 {
+                group.delete(c.provider.storage()).map_err(storage)
+            } else {
+                group
+                    .clear_pending_commit(c.provider.storage())
+                    .map_err(storage)
+            }
+        })
+    }
+
+    pub fn has_pending_commit(&self, group_id: &[u8]) -> Result<bool> {
+        Ok(self.load(group_id)?.pending_commit().is_some())
+    }
+
+    /// Join from a Welcome. Every leaf of the group must pass the credential validator.
+    ///
+    /// If the group id is already known locally, the local group is **replaced** when it is
+    /// inactive (we were removed) or at an older epoch (resync, or a lost creation race).
+    /// Otherwise the call fails with [`MlsError::GroupExists`].
+    pub fn join_from_welcome(&self, welcome: &[u8]) -> Result<JoinedGroup> {
+        self.tx(|c| {
+            let msg = MlsMessageIn::tls_deserialize_exact(welcome)
+                .map_err(|e| MlsError::Malformed(e.to_string()))?;
+            let MlsMessageBodyIn::Welcome(welcome) = msg.extract() else {
+                return Err(MlsError::Malformed("not a Welcome".into()));
+            };
+            let processed =
+                ProcessedWelcome::new_from_welcome(&c.provider, &Self::join_config(), welcome)
+                    .map_err(|e| MlsError::Welcome(e.to_string()))?;
+            // Unverified until staged, but any replacement below is rolled back if staging or the
+            // leaf checks fail.
+            let gid = processed.unverified_group_info().group_id().clone();
+            let new_epoch = processed.unverified_group_info().epoch().as_u64();
+            if let Some(mut old) = MlsGroup::load(c.provider.storage(), &gid).map_err(storage)? {
+                if old.is_active() && old.epoch().as_u64() >= new_epoch {
+                    return Err(MlsError::GroupExists);
+                }
+                old.delete(c.provider.storage()).map_err(storage)?;
+            }
+            let staged = processed
+                .into_staged_welcome(&c.provider, None)
+                .map_err(|e| MlsError::Welcome(e.to_string()))?;
+            if staged.group_context().group_id() != &gid
+                || staged.group_context().epoch().as_u64() != new_epoch
+            {
+                return Err(MlsError::Welcome("group info mismatch".into()));
+            }
+            let group = staged
+                .into_group(&c.provider)
+                .map_err(|e| MlsError::Welcome(e.to_string()))?;
+            for m in group.members() {
+                let leaf = group
+                    .public_group()
+                    .leaf(m.index)
+                    .ok_or_else(|| MlsError::Other("missing leaf".into()))?;
+                c.check_leaf(leaf)?;
+            }
+            Ok(JoinedGroup {
+                group_id: gid.as_slice().to_vec(),
+                epoch: new_epoch,
+                members: Self::member_infos(&group)?,
+            })
+        })
+    }
+
+    /// Encrypt an application message (a PrivateMessage) for the group's current epoch.
+    pub fn encrypt(&self, group_id: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
+        self.tx(|c| {
+            let mut group = c.load(group_id)?;
+            if !group.is_active() {
+                return Err(MlsError::RemovedFromGroup);
+            }
+            let out = group
+                .create_message(&c.provider, &c.signer, plaintext)
+                .map_err(|e| match e {
+                    CreateMessageError::GroupStateError(MlsGroupStateError::UseAfterEviction) => {
+                        MlsError::RemovedFromGroup
+                    }
+                    e => other(e),
+                })?;
+            out.to_bytes().map_err(other)
+        })
+    }
+
+    /// Decrypt an application message. Handshakes are rejected with
+    /// [`MlsError::NotApplicationMessage`]. Feed them to [`Client::process`].
+    pub fn decrypt(&self, group_id: &[u8], message: &[u8]) -> Result<Vec<u8>> {
         match self.process(group_id, message)? {
             Incoming::Application { plaintext, .. } => Ok(plaintext),
             _ => Err(MlsError::NotApplicationMessage),
         }
     }
 
-    /// Process any incoming group message: decrypts application messages, verifies and merges
-    /// commits (including one that removes this client), stores proposals.
-    pub fn process(&mut self, group_id: &[u8], message: &[u8]) -> Result<Incoming> {
-        let group = self
-            .groups
-            .get_mut(group_id)
-            .ok_or(MlsError::UnknownGroup)?;
+    /// Process any incoming group message:
+    /// - decrypt application messages;
+    /// - verify commits, check their new leaves with the validator, and merge them;
+    /// - reject standalone proposals, which RisiMe doesn't use.
+    pub fn process(&self, group_id: &[u8], message: &[u8]) -> Result<Incoming> {
+        self.tx(|c| c.process_inner(group_id, message))
+    }
+
+    fn process_inner(&self, group_id: &[u8], message: &[u8]) -> Result<Incoming> {
+        let mut group = self.load(group_id)?;
         if !group.is_active() {
             return Err(MlsError::RemovedFromGroup);
         }
@@ -258,83 +705,116 @@ impl Client {
         if protocol.group_id().as_slice() != group_id {
             return Err(MlsError::Malformed("message is for another group".into()));
         }
+        let had_pending = group.pending_commit().is_some();
         let processed = group
             .process_message(&self.provider, protocol)
             .map_err(map_process_error)?;
-        let sender = processed.credential().serialized_content().to_vec();
+        let sender = processed.sender().clone();
+        let epoch = processed.epoch().as_u64();
+        let credential = processed.credential().clone();
         match processed.into_content() {
             ProcessedMessageContent::ApplicationMessage(app) => Ok(Incoming::Application {
-                sender,
+                sender: DeviceId::parse(credential.serialized_content())?,
                 plaintext: app.into_bytes(),
+                epoch,
             }),
             ProcessedMessageContent::StagedCommitMessage(staged) => {
+                let Sender::Member(committer_index) = sender else {
+                    return Err(MlsError::UntrustedCredential(
+                        "commit from a non-member".into(),
+                    ));
+                };
+                let committer = Self::device_at(&group, committer_index)?;
+                let mut added = Vec::new();
+                for add in staged.add_proposals() {
+                    added.push(self.check_leaf(add.add_proposal().key_package().leaf_node())?);
+                }
+                for q in staged.queued_proposals() {
+                    if let Proposal::Update(update) = q.proposal() {
+                        let Sender::Member(i) = q.sender() else {
+                            return Err(MlsError::UntrustedCredential(
+                                "update from a non-member".into(),
+                            ));
+                        };
+                        let new = self.check_leaf(update.leaf_node())?;
+                        if new != Self::device_at(&group, *i)? {
+                            return Err(MlsError::UntrustedCredential(
+                                "update changes a leaf's identity".into(),
+                            ));
+                        }
+                    }
+                }
+                if let Some(leaf) = staged.update_path_leaf_node()
+                    && self.check_leaf(leaf)? != committer
+                {
+                    return Err(MlsError::UntrustedCredential(
+                        "commit changes the committer's identity".into(),
+                    ));
+                }
+                let removed = staged
+                    .remove_proposals()
+                    .map(|r| Self::device_at(&group, r.remove_proposal().removed()))
+                    .collect::<Result<Vec<_>>>()?;
                 let removed_self = staged.self_removed();
                 group
                     .merge_staged_commit(&self.provider, *staged)
                     .map_err(other)?;
                 Ok(Incoming::Commit {
                     epoch: group.epoch().as_u64(),
+                    committer,
+                    added,
+                    removed,
                     removed_self,
+                    discarded_own_pending: had_pending,
                 })
             }
-            ProcessedMessageContent::ProposalMessage(p) => {
-                group
-                    .store_pending_proposal(self.provider.storage(), *p)
-                    .map_err(other)?;
-                Ok(Incoming::Proposal)
-            }
-            ProcessedMessageContent::ExternalJoinProposalMessage(_) => Ok(Incoming::Proposal),
-            // The server fanned our own message back to us; nothing to do (commits are merged
-            // locally when they are created).
+            ProcessedMessageContent::ProposalMessage(_)
+            | ProcessedMessageContent::ExternalJoinProposalMessage(_) => Err(MlsError::Malformed(
+                "standalone proposals are not used".into(),
+            )),
             ProcessedMessageContent::OwnPendingCommit
             | ProcessedMessageContent::OwnPrivateMessage => Ok(Incoming::OwnEcho),
         }
     }
 
-    /// Remove the member whose credential identity is `identity`. Returns the commit for the
-    /// remaining members (and the removed one, so it learns it was removed). Merged locally.
-    pub fn remove_member(&mut self, group_id: &[u8], identity: &[u8]) -> Result<Vec<u8>> {
-        let group = self
-            .groups
-            .get_mut(group_id)
-            .ok_or(MlsError::UnknownGroup)?;
-        let index = group
-            .members()
-            .find(|m| m.credential.serialized_content() == identity)
-            .map(|m| m.index)
-            .ok_or(MlsError::UnknownMember)?;
-        let (commit, _welcome, _group_info) = group
-            .remove_members(&self.provider, &self.signer, &[index])
-            .map_err(other)?;
-        group.merge_pending_commit(&self.provider).map_err(other)?;
-        commit.to_bytes().map_err(other)
+    /// Forget a group entirely (after `removed_self`, or when the conversation is deleted).
+    pub fn delete_group(&self, group_id: &[u8]) -> Result<()> {
+        self.tx(|c| {
+            let mut group = c.load(group_id)?;
+            group.delete(c.provider.storage()).map_err(storage)
+        })
+    }
+
+    pub fn has_group(&self, group_id: &[u8]) -> Result<bool> {
+        Ok(
+            MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
+                .map_err(storage)?
+                .is_some(),
+        )
     }
 
     /// Current epoch of the group.
     pub fn epoch(&self, group_id: &[u8]) -> Result<u64> {
-        let group = self.groups.get(group_id).ok_or(MlsError::UnknownGroup)?;
-        Ok(group.epoch().as_u64())
+        Ok(self.load(group_id)?.epoch().as_u64())
     }
 
-    /// Epoch authenticator: equal on all members iff they share the same epoch secrets.
+    /// Equal on all members if and only if they share the same epoch secrets.
     pub fn epoch_authenticator(&self, group_id: &[u8]) -> Result<Vec<u8>> {
-        let group = self.groups.get(group_id).ok_or(MlsError::UnknownGroup)?;
-        Ok(group.epoch_authenticator().as_slice().to_vec())
+        Ok(self
+            .load(group_id)?
+            .epoch_authenticator()
+            .as_slice()
+            .to_vec())
     }
 
-    /// Identities of all current members, in leaf order.
-    pub fn members(&self, group_id: &[u8]) -> Result<Vec<Vec<u8>>> {
-        let group = self.groups.get(group_id).ok_or(MlsError::UnknownGroup)?;
-        Ok(group
-            .members()
-            .map(|m| m.credential.serialized_content().to_vec())
-            .collect())
+    /// All current members, in leaf order.
+    pub fn members(&self, group_id: &[u8]) -> Result<Vec<MemberInfo>> {
+        Self::member_infos(&self.load(group_id)?)
     }
 
-    /// Whether this client is still a member of the group.
+    /// Whether this device is still a member of the group.
     pub fn is_active(&self, group_id: &[u8]) -> Result<bool> {
-        let group = self.groups.get(group_id).ok_or(MlsError::UnknownGroup)?;
-        Ok(group.is_active())
+        Ok(self.load(group_id)?.is_active())
     }
 }
 
@@ -343,10 +823,20 @@ fn map_process_error<E: std::fmt::Display>(e: ProcessMessageError<E>) -> MlsErro
         ProcessMessageError::GroupStateError(MlsGroupStateError::UseAfterEviction) => {
             MlsError::RemovedFromGroup
         }
-        ProcessMessageError::ValidationError(ValidationError::WrongEpoch) => MlsError::WrongEpoch,
+        ProcessMessageError::ValidationError(
+            ValidationError::WrongEpoch | ValidationError::NoPastEpochData,
+        ) => MlsError::WrongEpoch,
+        // An epoch older than MAX_PAST_EPOCHS: its secrets are gone.
+        ProcessMessageError::ValidationError(ValidationError::UnableToDecrypt(
+            MessageDecryptionError::SecretTreeError(SecretTreeError::TooDistantInThePast),
+        )) => MlsError::WrongEpoch,
         ProcessMessageError::ValidationError(
             v @ (ValidationError::UnableToDecrypt(_) | ValidationError::InvalidSignature),
         ) => MlsError::DecryptionFailed(v.to_string()),
+        ProcessMessageError::IncompatibleWireFormat => {
+            MlsError::Malformed("handshake must be a PublicMessage".into())
+        }
+        ProcessMessageError::StorageError(s) => MlsError::Storage(s.to_string()),
         other_err => MlsError::Other(other_err.to_string()),
     }
 }

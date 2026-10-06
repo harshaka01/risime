@@ -124,6 +124,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1765,9 +1771,15 @@ dependencies = [
 name = "risime-mls"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "ed25519-dalek",
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto",
+ "openmls_traits",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "thiserror",
 ]
 
