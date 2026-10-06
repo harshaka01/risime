@@ -85,6 +85,26 @@ ssh -N spark2-tunnel                 # laptop :4400 -> spark2 127.0.0.1:4000
 - **Logout:** revoke the refresh token, then Keycloak `end_session` in the browser, then delete
   the key, then wipe chats. Auth trouble never wipes; another user signing in does.
 
+## E2EE phase A (contract v1.7; decisions 033, 035)
+Built against an `MlsEngine` interface; the real core arrives in phase B. Until then the app
+behaves exactly like v1.6 and the dev banner stays.
+- **Census:** the socket sends `device_id` and `app_version`.
+- **Device registration:** with the MLS key once the engine exists (`push_token` may be null).
+  `503 mls_unavailable` falls back to a push-only registration.
+- **Storage:** Room v3. `mls_kv` (sealed values, savepoints inside the message transaction) and
+  `mls_pending`. The DB key is wrapped by Keystore without user authentication. Backup and
+  device transfer exclude everything.
+- **Pipeline and outbox:**
+  - strict per-group order, welcome / commit / membership rules, sender check, pending replay;
+  - the outbox encrypts at send time, with the `stale_epoch` / `e2ee_required` catch-up loops;
+  - the upgrade on chat open.
+
+  All of this is fake-tested.
+- **UI:** "🔒 End-to-end encrypted" in the chat header, the "Encrypted message" hint, and the
+  "Not end-to-end encrypted yet: <name> needs to update / waiting for <name>'s phone" strip.
+- **JVM real crypto:** `cargoBuildHost` plus the JNA jar. `HostMlsSmokeTest` runs `self_test()`
+  on the host build (spark2: "ok: epoch 3").
+
 ## E2EE groundwork: the native MLS core in debug builds (decisions 012, 031)
 - Debug builds made on spark2 (where Rust and the NDK exist) package `libuniffi_risime.so`
   (arm64-v8a, x86_64) and JNA, built by `cargoBuildAndroid` from `crypto/risime-mls-ffi`.
@@ -387,3 +407,9 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
       phone (arm64).
     - A "failed: …" line (for example `UnsatisfiedLinkError`) is the finding to report.
     - The release build has no such button.
+43. Upgrade from 0.2.x (Room v2 → v3): install over it. Chats, friends and login survive.
+    Everything looks as before (no MLS core yet), with no lock and no strip.
+44. (Phase B, with the real core) Two v1.7 phones that are friends: opening the chat shows
+    "🔒 End-to-end encrypted" within a second or two. Messages flow, and the server log shows
+    only ciphertext. With one phone still on 0.2.x: "Not end-to-end encrypted yet: <name> needs
+    to update", and plaintext keeps working.
