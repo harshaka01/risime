@@ -56,14 +56,15 @@ config :risime, :push_sender, nil
 config :risime, Oban,
   engine: Oban.Engines.Basic,
   repo: RisiMe.Repo,
-  queues: [maintenance: 1],
+  queues: [maintenance: 1, groups: 5],
   plugins: [
     # Completed/cancelled/discarded jobs are deleted after 7 days.
     {Oban.Plugins.Pruner, max_age: 7 * 24 * 60 * 60},
     {Oban.Plugins.Lifeline, rescue_after: :timer.minutes(30)},
     {Oban.Plugins.Cron,
      crontab: [
-       {"17 3 * * *", RisiMe.Workers.PruneAccounts}
+       {"17 3 * * *", RisiMe.Workers.PruneAccounts},
+       {"41 * * * *", RisiMe.Workers.BlobCleanup}
      ]}
   ]
 

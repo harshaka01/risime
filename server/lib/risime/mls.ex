@@ -158,6 +158,15 @@ defmodule RisiMe.MLS do
       now = DateTime.utc_now()
 
       Repo.transaction(fn ->
+        # v1.9 §12.1: `replace: true` drops the stored normal packages first (they may lack
+        # the group_meta capability).
+        if params["replace"] == true,
+          do:
+            Repo.delete_all(
+              from k in "mls_key_packages",
+                where: k.device_ref == type(^device.id, :binary_id) and not k.last_resort
+            )
+
         rows =
           for kp <- kps,
               do: %{
@@ -253,25 +262,58 @@ defmodule RisiMe.MLS do
   Atomic, all-or-nothing claim for friends and myself (§10.2). `caller_device_id` (optional) is
   excluded from my own devices.
   """
-  def claim(me, user_ids, caller_device_id) do
+  def claim(me, user_ids, caller_device_id, conversation_id \\ nil)
+
+  def claim(me, user_ids, caller_device_id, nil) do
     with true <- available?() || {:error, :mls_unavailable},
          ids when is_list(ids) and ids != [] and length(ids) <= 50 <- user_ids,
          {:ok, ids} <- cast_ids(ids),
          true <- Enum.all?(ids, &(&1 == me or Social.friends?(me, &1))) || {:error, :not_friends},
          :ok <- claim_limit(me) do
-      {:ok, devices, low} =
-        Repo.transaction(fn -> do_claim(me, ids, caller_device_id) end)
-        |> then(fn {:ok, {d, l}} -> {:ok, d, l} end)
-
-      for {user_id, count} <- low,
-          do:
-            Messaging.signal(user_id, %{kind: "mls_key_packages_low", data: %{"count" => count}})
-
-      {:ok, devices}
+      finish_claim(me, ids, caller_device_id, :mls)
     else
       {:error, _} = e -> e
       _ -> {:error, :bad_request}
     end
+  end
+
+  # v1.9 §12.5: co-members of a group (active or pending_add, or myself), groups devices only.
+  def claim(me, user_ids, caller_device_id, conv) do
+    with true <- available?() || {:error, :mls_unavailable},
+         ids when is_list(ids) and ids != [] and length(ids) <= 255 <- user_ids,
+         {:ok, ids} <- cast_ids(ids),
+         true <- claimable?(me, conv, ids) || {:error, :not_member},
+         :ok <- claim_limit(me) do
+      finish_claim(me, ids, caller_device_id, :groups)
+    else
+      {:error, _} = e -> e
+      _ -> {:error, :bad_request}
+    end
+  end
+
+  defp claimable?(me, conv, ids) do
+    case RisiMe.Groups.visible(me, conv) do
+      {:ok, _g, _m} ->
+        states =
+          conv
+          |> RisiMe.Groups.members()
+          |> Map.new(&{&1.user_id, &1.state})
+
+        Enum.all?(ids, &(&1 == me or states[&1] in ["active", "pending_add"]))
+
+      _ ->
+        false
+    end
+  end
+
+  defp finish_claim(me, ids, caller_device_id, kind) do
+    {:ok, {devices, low}} =
+      Repo.transaction(fn -> do_claim(me, ids, caller_device_id, kind) end)
+
+    for {user_id, count} <- low,
+        do: Messaging.signal(user_id, %{kind: "mls_key_packages_low", data: %{"count" => count}})
+
+    {:ok, devices}
   end
 
   defp claim_limit(me) do
@@ -286,9 +328,11 @@ defmodule RisiMe.MLS do
     if length(casted) == length(ids), do: {:ok, Enum.uniq(casted)}, else: {:error, :bad_request}
   end
 
-  defp do_claim(me, ids, caller_device_id) do
+  defp do_claim(me, ids, caller_device_id, kind) do
     since = DateTime.add(DateTime.utc_now(), -@census_window_days, :day)
-    mls = current_mls_devices(ids)
+
+    mls =
+      if kind == :groups, do: RisiMe.Groups.groups_devices(ids), else: current_mls_devices(ids)
 
     claimed =
       for d <- mls, not (d.user_id == me and d.device_id == caller_device_id) do
@@ -309,16 +353,20 @@ defmodule RisiMe.MLS do
     mls_ids = MapSet.new(mls, & &1.device_id)
 
     others =
-      Repo.all(
-        from i in "app_instances",
-          where: i.user_id in type(^ids, {:array, :binary_id}) and i.last_seen_at > ^since,
-          select: {type(i.user_id, :binary_id), type(i.device_id, :binary_id)}
+      if(kind == :groups,
+        do: [],
+        else:
+          Repo.all(
+            from i in "app_instances",
+              where: i.user_id in type(^ids, {:array, :binary_id}) and i.last_seen_at > ^since,
+              select: {type(i.user_id, :binary_id), type(i.device_id, :binary_id)}
+          )
+          |> Enum.reject(fn {_u, d} -> d && MapSet.member?(mls_ids, d) end)
+          |> Enum.uniq()
+          |> Enum.map(fn {u, d} ->
+            %{user_id: u, device_id: d, mls: false, attestation: nil, key_package: nil}
+          end)
       )
-      |> Enum.reject(fn {_u, d} -> d && MapSet.member?(mls_ids, d) end)
-      |> Enum.uniq()
-      |> Enum.map(fn {u, d} ->
-        %{user_id: u, device_id: d, mls: false, attestation: nil, key_package: nil}
-      end)
 
     low =
       for c <- claimed,
@@ -360,6 +408,27 @@ defmodule RisiMe.MLS do
   ## Groups (§10.2)
 
   @doc "`GET /mls/groups/{conversation_id}` for a member."
+  def group_view(me, "grp:" <> _ = conv) do
+    alias RisiMe.Groups
+
+    with {:ok, g, _m} <- Groups.visible(me, conv) do
+      {_ready, missing} = conv |> Groups.active_member_ids() |> Groups.readiness()
+
+      {:ok,
+       %{
+         e2ee: true,
+         generation: g.generation,
+         epoch: Groups.epoch(conv),
+         ready: missing == [] and available?(),
+         missing: missing,
+         devices:
+           conv
+           |> Groups.in_group()
+           |> Enum.map(fn {u, d} -> %{user_id: u, device_id: d} end)
+       }}
+    end
+  end
+
   def group_view(me, conversation_id) do
     with {:ok, members} <- members(conversation_id),
          true <- me in members || {:error, :not_found} do
@@ -399,6 +468,9 @@ defmodule RisiMe.MLS do
   compare-and-set, the commit log and every inbox event inside one per-conversation critical
   section (an advisory lock), before the reply.
   """
+  def commit(me, caller_device, "grp:" <> _ = conversation_id, params),
+    do: RisiMe.Groups.Commit.commit(me, caller_device, conversation_id, params)
+
   def commit(me, caller_device, conversation_id, params) do
     with true <- available?() || {:error, :mls_unavailable},
          {:ok, members} <- members(conversation_id),
@@ -555,7 +627,8 @@ defmodule RisiMe.MLS do
     end
   end
 
-  defp set_group_devices(conv, added, removed) do
+  @doc false
+  def set_group_devices(conv, added, removed) do
     rows =
       for {u, d} <- added,
           do: %{conversation_id: conv, user_id: Ecto.UUID.dump!(u), device_id: Ecto.UUID.dump!(d)}
@@ -616,7 +689,8 @@ defmodule RisiMe.MLS do
     {:ok, new_epoch}
   end
 
-  defp prune_commit_log(conv) do
+  @doc false
+  def prune_commit_log(conv) do
     cutoff = DateTime.add(DateTime.utc_now(), -@commit_log_days, :day)
     Repo.delete_all(from c in "mls_commits", where: c.inserted_at < ^cutoff)
 
@@ -637,25 +711,38 @@ defmodule RisiMe.MLS do
         )
   end
 
-  @doc "`GET /mls/groups/{id}/commits?since_epoch=e` for a member (current generation)."
-  def commits_since(me, conv, since) do
+  @doc """
+  `GET /mls/groups/{id}/commits?since_epoch=e&limit=n` for a member (current generation):
+  `{:ok, commits, has_more}` (v1.9 §12.8 paging; default 50, at most 200).
+  """
+  def commits_since(me, conv, since, limit \\ nil)
+
+  def commits_since(me, "grp:" <> _ = conv, since, limit),
+    do: RisiMe.Groups.Commit.commits_since(me, conv, since, limit)
+
+  def commits_since(me, conv, since, limit) do
+    limit = RisiMe.Groups.Commit.page(limit)
+
     with {:ok, members} <- members(conv),
          true <- me in members || {:error, :not_found},
          %{generation: gen} <- group(conv) || {:error, :not_found} do
       since = if is_integer(since) and since >= 0, do: since, else: 0
 
-      {:ok,
-       Repo.all(
-         from c in "mls_commits",
-           where: c.conversation_id == ^conv and c.generation == ^gen and c.epoch >= ^since,
-           order_by: [asc: c.epoch],
-           select: %{
-             epoch: c.epoch,
-             commit: c.commit,
-             from_device: type(c.from_device, :binary_id)
-           }
-       )
-       |> Enum.map(&%{&1 | commit: Base.encode64(&1.commit)})}
+      rows =
+        Repo.all(
+          from c in "mls_commits",
+            where: c.conversation_id == ^conv and c.generation == ^gen and c.epoch >= ^since,
+            order_by: [asc: c.epoch],
+            limit: ^(limit + 1),
+            select: %{
+              epoch: c.epoch,
+              commit: c.commit,
+              from_device: type(c.from_device, :binary_id)
+            }
+        )
+
+      {:ok, rows |> Enum.take(limit) |> Enum.map(&%{&1 | commit: Base.encode64(&1.commit)}),
+       length(rows) > limit}
     else
       :error -> {:error, :not_found}
       e -> e
@@ -672,7 +759,7 @@ defmodule RisiMe.MLS do
     convs =
       Repo.all(
         from g in "mls_groups",
-          where: like(g.conversation_id, ^"%#{user_id}%"),
+          where: like(g.conversation_id, ^"dm:%#{user_id}%"),
           select: g.conversation_id
       )
 

@@ -63,6 +63,24 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   end
 
   @impl true
+  def put_message(%{recipient_id: nil, recipients: recipients} = m) when is_list(recipients) do
+    # v1.9 group message: no recipient_id cell, the recipients set instead.
+    run!(
+      "INSERT INTO message_index (message_id, sender_id, client_msg_id, conversation_id, status, recipients) " <>
+        "VALUES (?, ?, ?, ?, ?, ?)",
+      [
+        m.message_id,
+        m.sender_id,
+        m.client_msg_id,
+        m.conversation_id,
+        m.status,
+        MapSet.new(recipients)
+      ]
+    )
+
+    :ok
+  end
+
   def put_message(m) do
     # `kind` is written only for non-message rows (no null cell, so no tombstone).
     case m[:kind] do
@@ -103,7 +121,7 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   def get_message(message_id) do
     page =
       run!(
-        "SELECT message_id, sender_id, recipient_id, client_msg_id, conversation_id, status, kind " <>
+        "SELECT message_id, sender_id, recipient_id, client_msg_id, conversation_id, status, kind, recipients " <>
           "FROM message_index WHERE message_id = ?",
         [message_id]
       )
@@ -121,7 +139,8 @@ defmodule RisiMe.Messaging.Store.Cassandra do
            client_msg_id: row["client_msg_id"],
            conversation_id: row["conversation_id"],
            status: row["status"],
-           kind: row["kind"]
+           kind: row["kind"],
+           recipients: row["recipients"] && Enum.to_list(row["recipients"])
          }}
     end
   end
@@ -138,6 +157,34 @@ defmodule RisiMe.Messaging.Store.Cassandra do
       %{"[applied]" => true} -> :ok
       %{"[applied]" => false} = row -> {:conflict, row["status"]}
     end
+  end
+
+  @impl true
+  def put_group_receipt(message_id, user_id, delivered_at, read_at) do
+    # Only the given columns are written (no null cells).
+    {sets, values} =
+      [{"delivered_at", delivered_at}, {"read_at", read_at}]
+      |> Enum.reject(fn {_, v} -> v == nil end)
+      |> Enum.unzip()
+
+    if sets != [] do
+      run!(
+        "UPDATE group_receipts SET " <>
+          Enum.map_join(sets, ", ", &(&1 <> " = ?")) <> " WHERE message_id = ? AND user_id = ?",
+        values ++ [message_id, user_id]
+      )
+    end
+
+    :ok
+  end
+
+  @impl true
+  def list_group_receipts(message_id) do
+    "SELECT user_id, delivered_at, read_at FROM group_receipts WHERE message_id = ?"
+    |> run!([message_id])
+    |> Enum.map(
+      &%{user_id: &1["user_id"], delivered_at: &1["delivered_at"], read_at: &1["read_at"]}
+    )
   end
 
   @impl true
@@ -165,7 +212,7 @@ defmodule RisiMe.Messaging.Store.Cassandra do
 
   @doc "Test helper: empties the message tables of the configured keyspace."
   def truncate! do
-    for table <- ~w(inbox_events sent_dedupe message_index) do
+    for table <- ~w(inbox_events sent_dedupe message_index group_receipts) do
       {:ok, _} = Xandra.Cluster.execute(@cluster, "TRUNCATE #{table}", [], timeout: 60_000)
     end
 

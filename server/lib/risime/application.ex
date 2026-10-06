@@ -31,6 +31,7 @@ defmodule RisiMe.Application do
       {DNSCluster, query: Application.get_env(:risime, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: RisiMe.PubSub},
       RisiMe.Presence,
+      RisiMe.Messaging.GroupReceipts,
       RisiMe.SocketTracker,
       RisiMe.Auth.JWKS,
       RisiMe.MLS.Attestation,

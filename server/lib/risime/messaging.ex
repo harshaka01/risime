@@ -9,7 +9,7 @@ defmodule RisiMe.Messaging do
   """
 
   alias RisiMe.{Accounts, RateLimiter, TimeUUID}
-  alias RisiMe.Messaging.Store
+  alias RisiMe.Messaging.{GroupReceipts, Store}
 
   @max_body 4096
   @max_page 500
@@ -59,6 +59,10 @@ defmodule RisiMe.Messaging do
 
   defp result_tag({:ok, _}), do: :ok
   defp result_tag({:error, reason}), do: reason
+
+  # v1.9 §12.9: a group send carries `conversation_id` (and never `to`).
+  defp do_send(sender_id, %{"conversation_id" => _} = params, device_id),
+    do: send_group(sender_id, params, device_id)
 
   # v1.7 §10.3 order: idempotent resend → not_friends → e2ee checks → rate limit → store.
   defp do_send(sender_id, params, device_id) do
@@ -343,6 +347,142 @@ defmodule RisiMe.Messaging do
     end
   end
 
+  ## Group send (v1.9 §12.9)
+
+  # Order: idempotent resend → not_member → e2ee checks → rate limit → store.
+  defp send_group(sender_id, p, device_id) do
+    with {:ok, req} <- parse_group_send(p) do
+      req = Map.put(req, :from_device, device_id)
+
+      case store().get_sent(sender_id, req.client_msg_id) do
+        {:ok, prior} ->
+          if (req.ciphertext && store().get_message(prior.message_id) == :not_found) and
+               RisiMe.Groups.active_member?(req.conversation_id, sender_id),
+             do: deliver_group(sender_id, req, prior)
+
+          {:ok, send_reply(prior)}
+
+        :not_found ->
+          send_group_new(sender_id, req)
+      end
+    end
+  end
+
+  defp parse_group_send(p) do
+    cmid = p["client_msg_id"]
+    conv = p["conversation_id"]
+
+    cond do
+      Map.has_key?(p, "to") ->
+        {:error, :bad_request}
+
+      Enum.count(@content_fields, &Map.has_key?(p, &1)) != 1 ->
+        {:error, :bad_request}
+
+      not (is_binary(cmid) and uuid?(String.downcase(cmid))) ->
+        {:error, :bad_request}
+
+      not (is_binary(conv) and String.starts_with?(conv, "grp:")) ->
+        {:error, :bad_request}
+
+      true ->
+        {:ok,
+         %{
+           client_msg_id: String.downcase(cmid),
+           conversation_id: conv,
+           ciphertext: p["ciphertext"],
+           plaintext?: Map.has_key?(p, "body") or Map.has_key?(p, "reaction"),
+           generation: p["generation"],
+           epoch: p["epoch"]
+         }}
+    end
+  end
+
+  defp send_group_new(sender_id, req) do
+    alias RisiMe.Groups
+
+    with true <- Groups.active_member?(req.conversation_id, sender_id) || {:error, :not_member},
+         :ok <- check_group_e2ee(req),
+         :ok <- RateLimiter.hit(:msg_send, sender_id, @send_limit, @send_window) do
+      sent = %{
+        message_id: TimeUUID.generate(),
+        conversation_id: req.conversation_id,
+        server_ts: now()
+      }
+
+      case store().claim_send(sender_id, req.client_msg_id, sent) do
+        :ok ->
+          deliver_group(sender_id, req, sent)
+          {:ok, send_reply(sent)}
+
+        {:exists, prior} ->
+          {:ok, send_reply(prior)}
+      end
+    end
+  end
+
+  defp check_group_e2ee(req) do
+    g = RisiMe.Groups.get_group(req.conversation_id)
+
+    cond do
+      req.plaintext? ->
+        {:error, :e2ee_required}
+
+      not (is_binary(req.ciphertext) and is_integer(req.generation) and is_integer(req.epoch)) ->
+        {:error, :bad_request}
+
+      validate_body(%{ciphertext: req.ciphertext}) != :ok ->
+        validate_body(%{ciphertext: req.ciphertext})
+
+      req.from_device == nil ->
+        {:error, :bad_request}
+
+      req.generation != g.generation or req.epoch != RisiMe.Groups.epoch(g.id) ->
+        {:error, :stale_epoch}
+
+      true ->
+        :ok
+    end
+  end
+
+  # One `message` event per active member user, the sender included (their other devices; the
+  # sending device skips it by from_device), all with the message id as event id (§12.7).
+  defp deliver_group(sender_id, req, sent) do
+    members = RisiMe.Groups.active_member_ids(req.conversation_id)
+    others = members -- [sender_id]
+
+    :ok =
+      store().put_message(%{
+        message_id: sent.message_id,
+        sender_id: sender_id,
+        recipient_id: nil,
+        recipients: others,
+        client_msg_id: req.client_msg_id,
+        conversation_id: req.conversation_id,
+        status: "sent"
+      })
+
+    event = %{
+      event_id: sent.message_id,
+      kind: "message",
+      data: %{
+        "message_id" => sent.message_id,
+        "client_msg_id" => req.client_msg_id,
+        "conversation_id" => req.conversation_id,
+        "from" => sender_id,
+        "from_device" => req.from_device,
+        "ciphertext" => req.ciphertext,
+        "generation" => req.generation,
+        "epoch" => req.epoch,
+        "server_ts" => iso(sent.server_ts)
+      }
+    }
+
+    publish_batch(
+      [{sender_id, event, [push: false]}] ++ for(u <- others, do: {u, event, [push: true]})
+    )
+  end
+
   defp send_reply(sent) do
     %{
       message_id: sent.message_id,
@@ -362,7 +502,31 @@ defmodule RisiMe.Messaging do
   per sender is dropped silently (still `:ok`); `typing: false` is never limited.
   """
   @spec typing(String.t(), map) ::
-          :ok | {:error, :unknown_recipient | :not_friends | :bad_request}
+          :ok | {:error, :unknown_recipient | :not_friends | :not_member | :bad_request}
+  # v1.9 §12.9: group typing, to the other active members' (groups-capable) channels.
+  def typing(sender_id, %{"conversation_id" => conv, "typing" => typing} = p)
+      when is_boolean(typing) do
+    cond do
+      Map.has_key?(p, "to") or not (is_binary(conv) and String.starts_with?(conv, "grp:")) ->
+        {:error, :bad_request}
+
+      not RisiMe.Groups.active_member?(conv, sender_id) ->
+        {:error, :not_member}
+
+      typing and RateLimiter.hit(:typing_group, {sender_id, conv}, 1, 3_000) != :ok ->
+        :ok
+
+      true ->
+        signal = %{
+          kind: "typing",
+          data: %{"from" => sender_id, "conversation_id" => conv, "typing" => typing}
+        }
+
+        for u <- RisiMe.Groups.active_member_ids(conv), u != sender_id, do: signal(u, signal)
+        :ok
+    end
+  end
+
   def typing(sender_id, %{"to" => to, "typing" => typing})
       when is_binary(to) and is_boolean(typing) do
     to = String.downcase(to)
@@ -414,9 +578,18 @@ defmodule RisiMe.Messaging do
     for id <- ids do
       case store().get_message(id) do
         # v1.8: reactions have no acks or status events; acks naming them are ignored.
-        {:ok, %{kind: "reaction"}} -> :ok
-        {:ok, %{recipient_id: ^user_id} = message} -> advance(message, status, user_id)
-        _ -> :ok
+        {:ok, %{kind: "reaction"}} ->
+          :ok
+
+        {:ok, %{recipient_id: ^user_id} = message} ->
+          advance(message, status, user_id)
+
+        # v1.9: group acks feed the aggregated receipts; never a status event.
+        {:ok, %{kind: nil, recipients: [_ | _]} = message} ->
+          GroupReceipts.ack(message, user_id, status)
+
+        _ ->
+          :ok
       end
     end
 
@@ -479,6 +652,29 @@ defmodule RisiMe.Messaging do
     Phoenix.PubSub.broadcast(RisiMe.PubSub, topic(user_id), {:inbox_event, event})
     # Contract v1.5: a data-only wake-up if the user has no live inbox channel.
     if Keyword.get(opts, :push, true), do: RisiMe.Push.notify(user_id)
+  end
+
+  @doc """
+  Publishes `[{user_id, event, opts}]`: per user in the given order, users in parallel (group
+  fan-out, §12.7). `opts` as for a single publish (`push:`).
+  """
+  def publish_batch(items) do
+    case Enum.group_by(items, &elem(&1, 0)) do
+      by_user when map_size(by_user) <= 1 ->
+        for {u, event, opts} <- items, do: publish(u, event, opts)
+
+      by_user ->
+        by_user
+        |> Task.async_stream(
+          fn {u, list} -> for {_, event, opts} <- list, do: publish(u, event, opts) end,
+          max_concurrency: 32,
+          ordered: false,
+          timeout: 30_000
+        )
+        |> Stream.run()
+    end
+
+    :ok
   end
 
   @doc "Stores and pushes an MLS inbox event (`mls_commit`, `mls_welcome`, `mls_membership`); never a push (§10.3)."

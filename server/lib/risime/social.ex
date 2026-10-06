@@ -390,7 +390,14 @@ defmodule RisiMe.Social do
           order_by: [asc: fragment("lower(?)", u.display_name)],
           select: {u, type(f.inserted_at, :utc_datetime_usec)}
       )
-      |> Enum.map(fn {u, since} -> friend_json(u, since) end)
+      |> then(fn rows ->
+        # v1.9 §12.1: pickers grey out friends who need to update.
+        ready = rows |> Enum.map(fn {u, _} -> u.id end) |> RisiMe.Groups.ready_set()
+
+        Enum.map(rows, fn {u, since} ->
+          u |> friend_json(since) |> Map.put(:group_ready, MapSet.member?(ready, u.id))
+        end)
+      end)
 
     incoming =
       Repo.all(

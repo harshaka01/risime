@@ -11,7 +11,7 @@ defmodule RisiMe.Devices do
   """
   import Ecto.Query
 
-  alias RisiMe.{MLS, RateLimiter, Repo}
+  alias RisiMe.{Groups, MLS, RateLimiter, Repo}
   alias RisiMe.Devices.Device
 
   @max_per_user 10
@@ -28,6 +28,7 @@ defmodule RisiMe.Devices do
          %{"platform" => platform} when platform in @platforms <- params,
          {:ok, token} <- push_token(params["push_token"]),
          {:ok, mls_key} <- mls_key(params["mls"]),
+         {:ok, caps} <- capabilities(params["mls"]),
          true <- token != nil or mls_key != nil,
          version when is_nil(version) or (is_binary(version) and byte_size(version) <= 64) <-
            params["app_version"],
@@ -56,10 +57,12 @@ defmodule RisiMe.Devices do
             token,
             version,
             user_token_id,
-            mls_key,
+            {mls_key, caps},
             attestation,
             existing
           )
+
+        groups_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
 
         cond do
           key_changed? ->
@@ -73,9 +76,10 @@ defmodule RisiMe.Devices do
             :ok
         end
 
-        for d <- evicted,
-            d.mls_signature_key,
-            do: MLS.device_changed(d.user_id, d.device_id, :removed)
+        for d <- evicted, d.mls_signature_key do
+          MLS.device_changed(d.user_id, d.device_id, :removed)
+          if groups?(d), do: Groups.device_changed(d.user_id, d.device_id, :removed)
+        end
 
         {:ok, attestation}
       end
@@ -104,6 +108,49 @@ defmodule RisiMe.Devices do
 
   defp mls_key(_), do: :error
 
+  # v1.9 §12.1: `mls.capabilities`; only known ones are kept (unknown ones are ignored).
+  @known_capabilities ~w(groups)
+
+  defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
+    if length(caps) <= 32 and Enum.all?(caps, &is_binary/1),
+      do: {:ok, caps |> Enum.filter(&(&1 in @known_capabilities)) |> Enum.uniq()},
+      else: :error
+  end
+
+  defp capabilities(%{"capabilities" => nil}), do: {:ok, []}
+  defp capabilities(%{"capabilities" => _}), do: :error
+  defp capabilities(_), do: {:ok, []}
+
+  # Live sockets of this device start or stop receiving `grp:` traffic (§12.1 filter).
+  defp caps_changed(user_id, device_id, groups?) do
+    Phoenix.PubSub.broadcast(
+      RisiMe.PubSub,
+      RisiMe.Messaging.topic(user_id),
+      {:device_groups, device_id, groups?}
+    )
+  end
+
+  @doc "True if the device is a current MLS device with the `groups` capability (§12.1)."
+  def groups?(%Device{mls_signature_key: k, capabilities: caps}) when is_binary(k),
+    do: "groups" in (caps || [])
+
+  def groups?(_), do: false
+
+  # v1.9 §12.4: a device gaining `groups` (or a new groups device) is added to the user's groups
+  # by a `devices` op; one losing it, or changing its key, is removed (and re-added).
+  defp groups_changed(user_id, device_id, existing, mls_key, caps, key_changed?) do
+    was = groups?(existing)
+    now = if mls_key, do: "groups" in caps, else: was
+    caps_changed(user_id, device_id, now)
+
+    cond do
+      was and now and key_changed? -> Groups.device_changed(user_id, device_id, :replaced)
+      not was and now -> Groups.device_changed(user_id, device_id, :added)
+      was and mls_key != nil and not now -> Groups.device_changed(user_id, device_id, :removed)
+      true -> :ok
+    end
+  end
+
   defp attest(_user_id, _device_id, nil), do: {:ok, nil}
 
   defp attest(user_id, device_id, key) do
@@ -117,7 +164,7 @@ defmodule RisiMe.Devices do
          token,
          version,
          user_token_id,
-         mls_key,
+         {mls_key, caps},
          attestation,
          existing
        ) do
@@ -129,7 +176,12 @@ defmodule RisiMe.Devices do
 
         mls_fields =
           if mls_key,
-            do: [mls_signature_key: mls_key, mls_attestation: attestation, mls_attested_at: now],
+            do: [
+              mls_signature_key: mls_key,
+              mls_attestation: attestation,
+              mls_attested_at: now,
+              capabilities: caps
+            ],
             else: []
 
         # A PUT without `mls` keeps an existing MLS identity (push-only refresh).
@@ -254,7 +306,14 @@ defmodule RisiMe.Devices do
   # Deletes and emits mls_membership `removed` for MLS devices. Returns the count.
   defp removed(query) do
     {n, rows} = Repo.delete_all(from(d in query, select: d))
-    for d <- rows, d.mls_signature_key, do: MLS.device_changed(d.user_id, d.device_id, :removed)
+
+    for d <- rows, do: caps_changed(d.user_id, d.device_id, false)
+
+    for d <- rows, d.mls_signature_key do
+      MLS.device_changed(d.user_id, d.device_id, :removed)
+      if groups?(d), do: Groups.device_changed(d.user_id, d.device_id, :removed)
+    end
+
     n
   end
 end

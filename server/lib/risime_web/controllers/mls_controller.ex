@@ -11,7 +11,8 @@ defmodule RisiMeWeb.MLSController do
 
   defp me(conn), do: conn.assigns.current_user.id
 
-  defp caller_device(conn) do
+  @doc false
+  def caller_device(conn) do
     case get_req_header(conn, "x-device-id") do
       [id] ->
         case Ecto.UUID.cast(id),
@@ -46,7 +47,7 @@ defmodule RisiMeWeb.MLSController do
   end
 
   def claim(conn, params) do
-    case MLS.claim(me(conn), params["user_ids"], caller_device(conn)) do
+    case MLS.claim(me(conn), params["user_ids"], caller_device(conn), params["conversation_id"]) do
       {:ok, devices} -> json(conn, %{devices: devices})
       error -> error(conn, error)
     end
@@ -73,11 +74,32 @@ defmodule RisiMeWeb.MLSController do
         _ -> 0
       end
 
-    case MLS.commits_since(me(conn), conv, since) do
-      {:ok, commits} -> json(conn, %{commits: commits})
+    limit =
+      case Integer.parse(params["limit"] || "") do
+        {n, ""} -> n
+        _ -> nil
+      end
+
+    case MLS.commits_since(me(conn), conv, since, limit) do
+      {:ok, commits, has_more} -> json(conn, %{commits: commits, has_more: has_more})
       error -> error(conn, error)
     end
   end
+
+  @doc "`POST /mls/groups/grp:…/reset` (v1.9 §12.8, admins)."
+  def reset(conn, %{"conversation_id" => conv} = params) do
+    case RisiMe.Groups.Commit.reset(me(conn), caller_device(conn), conv, params) do
+      {:ok, generation} -> json(conn, %{generation: generation})
+      error -> error(conn, error)
+    end
+  end
+
+  # v1.9: group errors (403 invalid_device, the group not_ready message, …) for grp: ids.
+  defp error(%{path_params: %{"conversation_id" => "grp:" <> _}} = conn, error),
+    do: RisiMeWeb.GroupController.error(conn, error)
+
+  defp error(%{body_params: %{"conversation_id" => "grp:" <> _}} = conn, error),
+    do: RisiMeWeb.GroupController.error(conn, error)
 
   defp error(conn, {:error, :mls_unavailable}),
     do: ApiError.send_error(conn, 503, :mls_unavailable)
@@ -94,6 +116,16 @@ defmodule RisiMeWeb.MLSController do
 
   defp error(conn, {:error, {:not_ready, missing}}),
     do: ApiError.send_error(conn, 409, :not_ready, extra: [missing: missing])
+
+  defp error(conn, {:error, {:generation_conflict, g}}),
+    do: ApiError.send_error(conn, 409, :generation_conflict, extra: [generation: g])
+
+  defp error(conn, {:error, :log_expired}), do: ApiError.send_error(conn, 410, :log_expired)
+  defp error(conn, {:error, :not_admin}), do: ApiError.send_error(conn, 403, :not_admin)
+  defp error(conn, {:error, :not_member}), do: ApiError.send_error(conn, 403, :not_member)
+
+  defp error(conn, {:error, :too_many_devices}),
+    do: ApiError.send_error(conn, 422, :too_many_devices)
 
   defp error(conn, _), do: ApiError.send_error(conn, 400, :bad_request)
 end

@@ -30,7 +30,7 @@ defmodule RisiMe.Messaging.Store.CassandraTest do
 
     assert Store.get_message(m.message_id) == :not_found
     assert :ok = Store.put_message(m)
-    expected = Map.put(m, :kind, nil)
+    expected = Map.merge(m, %{kind: nil, recipients: nil})
     assert {:ok, ^expected} = Store.get_message(m.message_id)
 
     # v1.8: reactions are indexed with kind = "reaction".
@@ -51,5 +51,34 @@ defmodule RisiMe.Messaging.Store.CassandraTest do
     assert Store.list_events(user, nil, 2) == Enum.take(events, 2)
     assert Store.list_events(user, Enum.at(events, 2).event_id, 10) == Enum.drop(events, 3)
     assert Store.list_events(uuid4(), nil, 10) == []
+  end
+
+  test "v1.9 group messages carry recipients; group receipts per member" do
+    others = [uuid4(), uuid4()]
+
+    m = %{
+      message_id: uuid1(),
+      sender_id: uuid4(),
+      recipient_id: nil,
+      recipients: others,
+      client_msg_id: uuid4(),
+      conversation_id: "grp:" <> uuid4(),
+      status: "sent"
+    }
+
+    assert :ok = Store.put_message(m)
+    assert {:ok, got} = Store.get_message(m.message_id)
+    assert got.recipient_id == nil and Enum.sort(got.recipients) == Enum.sort(others)
+
+    [a, b] = others
+    t = DateTime.utc_now() |> DateTime.truncate(:millisecond)
+    assert Store.list_group_receipts(m.message_id) == []
+    :ok = Store.put_group_receipt(m.message_id, a, t, nil)
+    :ok = Store.put_group_receipt(m.message_id, a, nil, t)
+    :ok = Store.put_group_receipt(m.message_id, b, t, nil)
+
+    rows = Map.new(Store.list_group_receipts(m.message_id), &{&1.user_id, &1})
+    assert %{delivered_at: ^t, read_at: ^t} = rows[a]
+    assert %{delivered_at: ^t, read_at: nil} = rows[b]
   end
 end

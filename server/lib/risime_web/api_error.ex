@@ -24,7 +24,16 @@ defmodule RisiMeWeb.ApiError do
     not_friends: "You can only do this with friends",
     invalid_device: "Device registration is invalid",
     sms_unavailable: "Couldn't send the SMS right now, try again shortly",
-    invalid_display_name: "Display name must be 1-64 characters"
+    invalid_display_name: "Display name must be 1-64 characters",
+    not_member: "You're not a member of this group",
+    not_admin: "Only group admins can do that",
+    too_many_members: "A group can have at most 256 members",
+    too_many_devices: "A group can have at most 768 devices",
+    last_admin: "Make another member an admin before you leave",
+    invalid_role: "That member can't have this role",
+    generation_conflict: "The group was already reset",
+    log_expired: "The commit log no longer reaches that epoch; reset or rejoin the group",
+    too_large: "The upload is too large"
   }
 
   @doc """
@@ -32,7 +41,8 @@ defmodule RisiMeWeb.ApiError do
   (contract v1.4 §7.1): pass `retry_after: seconds` in `opts` (default 60).
   """
   def send_error(conn, status, code, opts \\ []) do
-    %{error: error} = RisiMeWeb.ErrorJSON.error(code, Map.fetch!(@messages, code))
+    message = Keyword.get(opts, :message) || Map.fetch!(@messages, code)
+    %{error: error} = RisiMeWeb.ErrorJSON.error(code, message)
     error = Map.merge(error, Map.new(Keyword.get(opts, :extra, [])))
 
     conn =

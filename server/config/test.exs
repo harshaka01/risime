@@ -59,6 +59,12 @@ config :risime, :fcm, req_options: [plug: {Req.Test, RisiMe.FCM}]
 # E2EE: off unless a test installs a temp attestation key (RisiMe.MLSHelpers).
 config :risime, :attestation_key_file, nil
 
+# v1.9 group receipts: a short coalescing window (10 s in dev/prod).
+config :risime, :group_receipt_coalesce_ms, 200
+
+# v1.9 blobs: a per-run temp dir, never the repo.
+config :risime, :blob_dir, Path.join(System.tmp_dir!(), "risime-test-blobs")
+
 # fail2ban auth log: a per-run temp file in tests.
 config :risime, :auth_log_path, Path.join(System.tmp_dir!(), "risime-test-auth.log")
 

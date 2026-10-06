@@ -23,8 +23,21 @@ defmodule RisiMe.Presence do
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
-  @doc "Registers the calling inbox channel process as `user_id` being online."
-  def track(user_id), do: GenServer.call(__MODULE__, {:track, user_id, self()})
+  @doc """
+  Registers the calling inbox channel process as `user_id` being online, and (v1.9) its
+  `device_id` as connected, for committer naming (§12.4).
+  """
+  def track(user_id, device_id \\ nil),
+    do: GenServer.call(__MODULE__, {:track, user_id, device_id, self()})
+
+  @doc "True while the device has a joined inbox channel on this node (no grace period)."
+  def device_online?(nil), do: false
+
+  def device_online?(device_id) do
+    :ets.member(@table, {:device, device_id})
+  rescue
+    ArgumentError -> false
+  end
 
   @doc "True while the user has a live inbox channel (or is within the offline grace period)."
   def online?(user_id) do
@@ -76,8 +89,11 @@ defmodule RisiMe.Presence do
   end
 
   @impl true
-  def handle_call({:track, user_id, pid}, _from, monitors) do
+  def handle_call({:track, user_id, device_id, pid}, _from, monitors) do
     ref = Process.monitor(pid)
+
+    if device_id,
+      do: :ets.update_counter(@table, {:device, device_id}, {2, 1}, {{:device, device_id}, 0})
 
     case :ets.lookup(@table, user_id) do
       [] ->
@@ -93,12 +109,17 @@ defmodule RisiMe.Presence do
         :ets.insert(@table, {user_id, 1, nil})
     end
 
-    {:reply, :ok, Map.put(monitors, ref, user_id)}
+    {:reply, :ok, Map.put(monitors, ref, {user_id, device_id})}
   end
 
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, monitors) do
-    {user_id, monitors} = Map.pop(monitors, ref)
+    {{user_id, device_id}, monitors} = Map.pop(monitors, ref, {nil, nil})
+
+    if device_id do
+      key = {:device, device_id}
+      if :ets.update_counter(@table, key, {2, -1}) <= 0, do: :ets.delete(@table, key)
+    end
 
     case user_id && :ets.lookup(@table, user_id) do
       [{_, 1, nil}] ->

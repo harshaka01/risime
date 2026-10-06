@@ -19,11 +19,14 @@ defmodule RisiMeWeb.InboxChannel do
       # Subscribe before reading the backlog so nothing falls between the two.
       :ok = Messaging.subscribe(user_id)
       payload = if is_map(payload), do: payload, else: %{}
+      # v1.9 §12.1: only a groups-capable device gets `grp:` traffic.
+      socket = assign(socket, :groups, groups_device?(user_id, socket.assigns[:device_id]))
 
-      case page(user_id, payload) do
+      case page(socket, payload) do
         {:ok, reply} ->
           :telemetry.execute([:risime, :inbox, :join], %{count: 1}, %{result: :ok})
-          :ok = Presence.track(user_id)
+          :ok = Presence.track(user_id, socket.assigns[:device_id])
+          if socket.assigns.groups, do: name_committer(user_id, socket.assigns.device_id)
 
           if socket_id = socket.assigns[:socket_id],
             do: Phoenix.PubSub.subscribe(RisiMe.PubSub, SocketTracker.control_topic(socket_id))
@@ -43,7 +46,7 @@ defmodule RisiMeWeb.InboxChannel do
 
   @impl true
   def handle_in("sync", payload, socket) when is_map(payload) do
-    case page(socket.assigns.user_id, payload) do
+    case page(socket, payload) do
       {:ok, reply} -> {:reply, {:ok, reply}, socket}
       {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
     end
@@ -134,8 +137,18 @@ defmodule RisiMeWeb.InboxChannel do
 
   @impl true
   def handle_info({:inbox_event, event}, socket) do
-    push(socket, "event", event)
+    if visible?(socket, event), do: push(socket, "event", event)
     {:noreply, socket}
+  end
+
+  # The device registered (or lost) the `groups` capability while connected.
+  def handle_info({:device_groups, device_id, groups?}, socket) do
+    if device_id == socket.assigns[:device_id] and groups? != socket.assigns[:groups] do
+      if groups?, do: name_committer(socket.assigns.user_id, device_id)
+      {:noreply, assign(socket, :groups, groups?)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info({:auth_expired}, socket) do
@@ -156,7 +169,7 @@ defmodule RisiMeWeb.InboxChannel do
   end
 
   def handle_info({:signal, signal}, socket) do
-    push(socket, "signal", signal)
+    if visible?(socket, signal), do: push(socket, "signal", signal)
     {:noreply, socket}
   end
 
@@ -183,9 +196,8 @@ defmodule RisiMeWeb.InboxChannel do
     :exit, _ -> :ok
   end
 
-  defp page(user_id, payload) do
-    with {:ok, events, has_more} <-
-           Messaging.fetch_events(user_id, payload["since"], payload["limit"]) do
+  defp page(socket, payload) do
+    with {:ok, events, has_more} <- filtered_page(socket, payload["since"], payload["limit"]) do
       {:ok,
        %{
          events: events,
@@ -193,5 +205,42 @@ defmodule RisiMeWeb.InboxChannel do
          server_time: Messaging.iso(DateTime.utc_now())
        }}
     end
+  end
+
+  # `grp:` events are left out for a device without `groups`. A page that filters down to
+  # nothing while more remain is skipped, so the client's cursor always advances.
+  defp filtered_page(socket, since, limit) do
+    with {:ok, events, has_more} <-
+           Messaging.fetch_events(socket.assigns.user_id, since, limit) do
+      case Enum.filter(events, &visible?(socket, &1)) do
+        [] when has_more -> filtered_page(socket, List.last(events).event_id, limit)
+        kept -> {:ok, kept, has_more}
+      end
+    end
+  end
+
+  defp visible?(%{assigns: %{groups: true}}, _event), do: true
+
+  defp visible?(_socket, %{data: data}) when is_map(data) do
+    conv = data["conversation_id"] || data["group_id"]
+    not (is_binary(conv) and String.starts_with?(conv, "grp:"))
+  end
+
+  defp visible?(_socket, _), do: true
+
+  defp groups_device?(_user_id, nil), do: false
+
+  defp groups_device?(user_id, device_id) do
+    case RisiMe.Repo.get_by(RisiMe.Devices.Device, user_id: user_id, device_id: device_id) do
+      nil -> false
+      d -> RisiMe.Devices.groups?(d)
+    end
+  end
+
+  # §12.4: a waiting op names the first authorised device whose inbox joins. Best effort.
+  defp name_committer(user_id, device_id) do
+    RisiMe.Groups.Ops.device_joined(user_id, device_id)
+  rescue
+    e -> Logger.warning("committer naming failed: #{Exception.message(e)}")
   end
 end

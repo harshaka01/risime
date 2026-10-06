@@ -15,6 +15,8 @@ defmodule RisiMe.Devices.Device do
     field :mls_signature_key, :binary
     field :mls_attestation, :string
     field :mls_attested_at, :utc_datetime_usec
+    # v1.9 §12.1: e.g. ["groups"].
+    field :capabilities, {:array, :string}, default: []
 
     timestamps(type: :utc_datetime_usec)
   end

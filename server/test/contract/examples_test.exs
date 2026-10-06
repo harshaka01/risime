@@ -436,6 +436,8 @@ defmodule RisiMe.ContractExamplesTest do
 
       {200, ours} = req_json(:get, "/api/v1/friends", a.token)
       assert keys(ours) == keys(ex)
+      # v1.9 added `group_ready` (absent = false in v1.6 examples): checked in friends_reply_v19.
+      ours = update_in(ours["friends"], fn fs -> Enum.map(fs, &Map.delete(&1, "group_ready")) end)
       for k <- ~w(friends incoming blocked), do: assert_same_shape(hd(ours[k]), hd(ex[k]))
       assert Enum.all?(ours["outgoing"], &(&1["user_id"] == nil and &1["display_name"] == nil))
       assert_same_shape(hd(ours["outgoing"]), hd(ex["outgoing"]))

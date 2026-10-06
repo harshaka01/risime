@@ -69,6 +69,19 @@ defmodule RisiMeWeb.Router do
     get "/mls/groups/:conversation_id", MLSController, :group
     post "/mls/groups/:conversation_id/commit", MLSController, :commit
     get "/mls/groups/:conversation_id/commits", MLSController, :commits
+    post "/mls/groups/:conversation_id/reset", MLSController, :reset
+    post "/groups", GroupController, :create
+    get "/groups", GroupController, :index
+    get "/groups/:id", GroupController, :show
+    post "/groups/:id/members", GroupController, :add_members
+    delete "/groups/:id/members/:user_id", GroupController, :remove_member
+    patch "/groups/:id/members/:user_id", GroupController, :set_role
+    post "/groups/:id/leave", GroupController, :leave
+    post "/groups/:id/rejoin", GroupController, :rejoin
+    get "/groups/:id/messages/:message_id/receipts", GroupController, :receipts
+    post "/blobs", BlobController, :create
+    get "/blobs/:id", BlobController, :show
+    delete "/blobs/:id", BlobController, :delete
     put "/me/devices/:device_id", DeviceController, :put
     delete "/me/devices/:device_id", DeviceController, :delete
     get "/contacts", ContactsController, :index

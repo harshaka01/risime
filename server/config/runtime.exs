@@ -108,6 +108,11 @@ if config_env() != :test do
     do: config(:risime, :attestation_previous_keys, prev)
 end
 
+# v1.9 blobs (§12.6): bytes on local disk outside the repo. Default ~/risime-blobs/<env>.
+if config_env() != :test do
+  if dir = System.get_env("BLOB_DIR"), do: config(:risime, :blob_dir, Path.expand(dir))
+end
+
 # Invite link in v1.6 invites (decision 030).
 if link = System.get_env("INVITE_LINK"), do: config(:risime, :invite_link, link)
 
