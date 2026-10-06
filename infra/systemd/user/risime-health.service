@@ -1,0 +1,7 @@
+# One health check of the RisiMe pilot (docs/decisions/025); run by risime-health.timer.
+[Unit]
+Description=RisiMe pilot health check (restart on failure)
+
+[Service]
+Type=oneshot
+ExecStart=%h/development/risime/scripts/healthcheck

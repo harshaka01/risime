@@ -1,0 +1,31 @@
+# systemd USER unit for the RisiMe pilot server (docs/decisions/025). Install (no sudo):
+#   install -Dm644 infra/systemd/user/risime.service ~/.config/systemd/user/risime.service
+#   systemctl --user daemon-reload && systemctl --user enable risime.service
+# Starts at boot only with linger: sudo loginctl enable-linger harsha  (one time)
+# The release it runs is ~/risime-run/current (a symlink set by scripts/run-server).
+[Unit]
+Description=RisiMe pilot server (prod release, 127.0.0.1:4000)
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=exec
+WorkingDirectory=%h/risime-run
+EnvironmentFile=%h/development/risime/.env
+EnvironmentFile=%h/development/risime/infra/pilot/pilot.env
+ExecStartPre=%h/development/risime/scripts/wait-db 180
+TimeoutStartSec=240
+ExecStart=%h/risime-run/current/bin/risime start
+# A release without distribution can't be stopped with `bin/risime stop`; SIGTERM is graceful.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/risime-logs/server.log
+StandardError=inherit
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

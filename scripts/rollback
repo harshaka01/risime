@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# One-command rollback of the pilot to the previous release tag (docs/decisions/025).
+# Code only: migrations are additive, so the older release runs on the newer schema. A pre-deploy
+# backup exists for every switch (~/risime-backups); restoring data is a separate, explicit step
+# (scripts/restore ... --confirm risime_dev), printed below, never automatic.
+#   scripts/rollback            # previous distinct tag in ~/risime-run/HISTORY
+#   scripts/rollback v0.2.0-nightly.3
+set -euo pipefail
+cd "$(dirname "$0")/.."
+H="$HOME/risime-run/HISTORY"; CUR="$(cat "$HOME/risime-run/CURRENT" 2>/dev/null || true)"
+TO="${1:-$(awk '{print $2}' "$H" 2>/dev/null | grep -vxF "$CUR" | tail -1)}"
+[ -n "$TO" ] || { echo "no previous tag in $H"; exit 1; }
+echo "==> rollback $CUR -> $TO"
+scripts/run-server "$TO"
+echo "Rolled back to $TO. If data must go back too, see the newest backup before the switch:"
+echo "  scripts/restore list --env dev --dest ~/risime-backups"
+echo "  (stop risime.service first; restore needs --confirm risime_dev)"

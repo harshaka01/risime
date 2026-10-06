@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Wait until the pilot's databases accept TCP connections on loopback (risime.service ExecStartPre).
+# Plain TCP checks, no `docker exec`: the systemd user manager may not have the docker group.
+#   scripts/wait-db [timeout_seconds]
+set -euo pipefail
+deadline=$(( $(date +%s) + ${1:-180} ))
+up() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+until up 5432 && up 9042; do
+  [ "$(date +%s)" -lt "$deadline" ] || { echo "wait-db: databases not reachable (5432/9042)"; exit 1; }
+  sleep 3
+done
+echo "wait-db: postgres :5432 and cassandra :9042 reachable"

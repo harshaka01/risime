@@ -1,57 +1,74 @@
 #!/usr/bin/env bash
-# spark2: (re)start the public pilot server (docs/decisions/006, 023) as a PROD-MODE RELEASE built
-# from a release tag in its own worktree (~/risime-run/<tag>), never from the shared checkout.
+# spark2: deploy a release tag as the public pilot (docs/decisions/006, 023, 025).
+# Builds a PROD-MODE release in the tag's own worktree (~/risime-run/<tag>), BACKS UP Postgres +
+# Cassandra (keep 7), runs migrations, points ~/risime-run/current at the new release and
+# (re)starts it: via the systemd user unit risime.service when installed, else in tmux.
 # Phoenix listens on 127.0.0.1:4000 only; Caddy fronts it at https://risime.risicloud.ai.
-# Secrets come from the repo .env, settings from infra/pilot/pilot.env (both sourced inside the
-# tmux shell, never echoed). Only scripts/nightly-release switches tags after the gates pass.
-#   scripts/run-server            # the latest release (~/risime-releases/LATEST, else newest v* tag)
-#   scripts/run-server v0.2.0-nightly.3
+# Secrets: repo .env; settings: infra/pilot/pilot.env (never echoed).
+#   scripts/run-server [<tag>] [--no-backup]
+#   (rollback: scripts/rollback)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"; PORT=4000
+RUNROOT="$HOME/risime-run"; BACKUPS="$HOME/risime-backups"
+TAG=""; BACKUP=1
+for a in "$@"; do case "$a" in --no-backup) BACKUP=0;; v*) TAG="$a";; *) echo "usage: $0 [vX.Y.Z] [--no-backup]"; exit 2;; esac; done
+
+mkdir -p "$RUNROOT" "$HOME/risime-logs" "$BACKUPS"
+exec 9>"$RUNROOT/.deploy.lock"
+flock -w 600 9 || { echo "another deploy holds $RUNROOT/.deploy.lock"; exit 1; }
 
 git fetch -q origin --tags
-TAG="${1:-$(cat "$HOME/risime-releases/LATEST" 2>/dev/null || git tag -l 'v*' --sort=-creatordate | sed -n 1p)}"
+TAG="${TAG:-$(cat "$HOME/risime-releases/LATEST" 2>/dev/null || git tag -l 'v*' --sort=-creatordate | sed -n 1p)}"
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "no such tag: $TAG"; exit 1; }
-RUN="$HOME/risime-run/$TAG"
-mkdir -p "$HOME/risime-run" "$HOME/risime-logs"
+RUN="$RUNROOT/$TAG"
 [ -e "$RUN/.git" ] || git worktree add -q --detach "$RUN" "$TAG"
 [ "$(git -C "$RUN" rev-parse HEAD)" = "$(git rev-parse "$TAG^{commit}")" ] || { echo "$RUN is not at $TAG"; exit 1; }
 [ -f "$RUN/server/rel/env.sh.eex" ] || { echo "$TAG predates the prod-mode release (decision 023/024)"; exit 1; }
 ln -sfn "$REPO/.env" "$RUN/.env"
 ENVLOAD="set -a; . '$REPO/.env'; . '$REPO/infra/pilot/pilot.env'; set +a"
 echo "==> building prod release in $RUN ($(git -C "$RUN" log -1 --format='%h %s'))"
-
-cd "$RUN/server"
-MIX_ENV=prod $M mix deps.get --only prod >/dev/null
-MIX_ENV=prod $M mix release --overwrite --quiet
+(cd "$RUN/server" && MIX_ENV=prod $M mix deps.get --only prod >/dev/null && MIX_ENV=prod $M mix release --overwrite --quiet)
 REL="$RUN/server/_build/prod/rel/risime"
+
+if [ "$BACKUP" = 1 ]; then
+  echo "==> backup before migrating (Postgres + Cassandra, keep 7) -> $BACKUPS"
+  scripts/backup --env dev --dest "$BACKUPS" --keep 7 | tail -2
+fi
 echo "==> migrate (Ecto + CQL)"
 bash -c "$ENVLOAD; exec '$REL/bin/risime' eval 'RisiMe.Release.migrate()'"
 
-echo "==> stop the current server (SIGTERM, graceful)"
-# Whatever BEAM serves :$PORT (the old dev phx.server or a previous release) gets SIGTERM; a release
-# without distribution can't be stopped with `bin/risime stop` (decision 024).
-for pid in $(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
-  kill -TERM "$pid"
-done
-for _ in $(seq 1 30); do ss -ltnH "sport = :$PORT" | grep -q . || break; sleep 1; done
-tmux kill-session -t risime-server 2>/dev/null || true
-ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT still busy"; exit 1; }
+ln -sfn "$REL" "$RUNROOT/current.new" && mv -T "$RUNROOT/current.new" "$RUNROOT/current"
+echo "$(date -u +%FT%TZ) $TAG" >> "$RUNROOT/HISTORY"
 
-echo "==> start $TAG"
-# Output goes to the tmux pane AND ~/risime-logs/server.log (mode 600; it contains [DEV OTP] lines).
-touch "$HOME/risime-logs/server.log" && chmod 600 "$HOME/risime-logs/server.log"
-tmux new -d -s risime-server "$ENVLOAD; '$REL/bin/risime' start 2>&1 | tee -a '$HOME/risime-logs/server.log'"
-for _ in $(seq 1 90); do
+if systemctl --user cat risime.service >/dev/null 2>&1; then
+  # Hand over from a tmux-run server if one is still around.
+  if tmux has-session -t risime-server 2>/dev/null; then
+    for pid in $(ss -ltnpH "sport = :$PORT" | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do kill -TERM "$pid"; done
+    for _ in $(seq 1 30); do ss -ltnH "sport = :$PORT" | grep -q . || break; sleep 1; done
+    tmux kill-session -t risime-server 2>/dev/null || true
+  fi
+  echo "==> systemctl --user restart risime.service ($TAG)"
+  systemctl --user restart risime.service
+else
+  echo "==> (no systemd unit yet) restart in tmux"
+  for pid in $(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do kill -TERM "$pid"; done
+  for _ in $(seq 1 30); do ss -ltnH "sport = :$PORT" | grep -q . || break; sleep 1; done
+  tmux kill-session -t risime-server 2>/dev/null || true
+  ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT still busy"; exit 1; }
+  touch "$HOME/risime-logs/server.log" && chmod 600 "$HOME/risime-logs/server.log"
+  tmux new -d -s risime-server "$ENVLOAD; '$RUNROOT/current/bin/risime' start 2>&1 | tee -a '$HOME/risime-logs/server.log'"
+fi
+
+for _ in $(seq 1 120); do
   [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")" = 200 ] && break; sleep 1
 done
 health="$(curl -s "http://127.0.0.1:$PORT/health" || true)"
 listen="$(ss -ltnH "sport = :$PORT" | awk '{print $4}' | tr '\n' ' ')"
 epmd="$(ss -ltnH 'sport = :4369' | grep -c . || true)"
-echo "$TAG" > "$HOME/risime-run/CURRENT"
+echo "$TAG" > "$RUNROOT/CURRENT"
 echo "health: $health"; echo "listening: $listen| epmd sockets: $epmd"
-grep -q '"status":"ok"' <<<"$health" || { echo "server not healthy"; exit 1; }
+grep -q "\"version\":\"${TAG#v}\"" <<<"$health" || { echo "server not healthy on $TAG"; exit 1; }
 [ "$listen" = "127.0.0.1:$PORT " ] || { echo "UNEXPECTED BIND: $listen"; exit 1; }
 [ "$epmd" = 0 ] || { echo "epmd is listening (4369)"; exit 1; }
 echo "running $TAG (prod release) on 127.0.0.1:$PORT"

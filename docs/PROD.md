@@ -342,3 +342,20 @@ curl -s  https://risime.risicloud.ai/api/v1/auth/config
 curl -s -o /dev/null -w '%{http_code}\n' https://risime.risicloud.ai/dev/mailbox   # 404
 ss -ltnp | grep -E ':(80|443|4000|4369) '           # 80/443 caddy; 4000 on 127.0.0.1 only; no 4369
 ```
+
+
+### Pilot service, backups, rollback (decision 025)
+```bash
+# one time (sudo): start the user manager at boot so risime.service runs without a login
+sudo loginctl enable-linger harsha
+# units (no sudo; already installed on spark2)
+for u in risime.service risime-health.service risime-health.timer; do install -Dm644 infra/systemd/user/$u ~/.config/systemd/user/$u; done
+systemctl --user daemon-reload && systemctl --user enable --now risime.service risime-health.timer
+# day to day
+systemctl --user status risime.service          # state
+tail -f ~/risime-logs/server.log                # app log (JSON)
+tail ~/risime-logs/health.log                   # health-check actions (empty = all ok)
+scripts/run-server vX.Y.Z                       # deploy: backup (keep 7) -> migrate -> switch
+scripts/rollback                                # previous tag (code only)
+scripts/restore list --env dev --dest ~/risime-backups
+```
