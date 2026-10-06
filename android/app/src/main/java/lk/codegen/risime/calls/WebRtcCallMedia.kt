@@ -86,9 +86,13 @@ class WebRtcCallMedia(
         }
     }
 
+    /** The last §16.10 stats read (the debug overlay and the device smoke test). */
+    @Volatile var lastStats: DtlsStats? = null
+        private set
+
     override fun open(callId: String, iceServers: List<IceServer>, listener: CallMedia.Listener): MediaSession {
         check(available) { "WebRTC not loaded" }
-        return Session(context.applicationContext, iceServers, relayOnly(), listener, debug)
+        return Session(context.applicationContext, iceServers, relayOnly(), listener, debug) { lastStats = it }
     }
 
     private class Session(
@@ -97,6 +101,7 @@ class WebRtcCallMedia(
         relay: Boolean,
         private val listener: CallMedia.Listener,
         private val debug: Boolean,
+        private val onStats: (DtlsStats) -> Unit,
     ) : MediaSession {
         private val adm = JavaAudioDeviceModule.builder(context)
             .setUseHardwareAcousticEchoCanceler(JavaAudioDeviceModule.isBuiltInAcousticEchoCancelerSupported())
@@ -217,13 +222,16 @@ class WebRtcCallMedia(
                 val transport = all.firstOrNull { it.type == "transport" && it.members["dtlsState"] != null }
                 val remoteCertId = transport?.members?.get("remoteCertificateId") as? String
                 val fp = remoteCertId?.let { id -> all.firstOrNull { it.id == id }?.members?.get("fingerprint") as? String }
-                if (debug) {
-                    val pair = all.firstOrNull { it.type == "candidate-pair" && it.members["state"] == "succeeded" && it.members["nominated"] == true }
-                    val local = pair?.members?.get("localCandidateId")?.let { id -> all.firstOrNull { it.id == id }?.members?.get("candidateType") }
-                    val remote = pair?.members?.get("remoteCandidateId")?.let { id -> all.firstOrNull { it.id == id }?.members?.get("candidateType") }
-                    Log.d("RisiMe", "call stats: pair=$local/$remote rtt=${pair?.members?.get("currentRoundTripTime")} dtls=${transport?.members?.get("dtlsState")} srtp=${transport?.members?.get("srtpCipher")}")
-                }
-                cont.resume(DtlsStats(transport?.members?.get("dtlsState") as? String, transport?.members?.get("srtpCipher") as? String, fp))
+                val pairId = transport?.members?.get("selectedCandidatePairId") as? String
+                val pair = pairId?.let { id -> all.firstOrNull { it.id == id } }
+                    ?: all.firstOrNull { it.type == "candidate-pair" && it.members["state"] == "succeeded" && it.members["nominated"] == true }
+                val local = pair?.members?.get("localCandidateId")?.let { id -> all.firstOrNull { it.id == id }?.members?.get("candidateType") } as? String
+                val remote = pair?.members?.get("remoteCandidateId")?.let { id -> all.firstOrNull { it.id == id }?.members?.get("candidateType") } as? String
+                // Debug overlay data only; release builds never log candidates or IPs (§16.9).
+                if (debug) Log.d("RisiMe", "call stats: pair=$local/$remote rtt=${pair?.members?.get("currentRoundTripTime")} dtls=${transport?.members?.get("dtlsState")} srtp=${transport?.members?.get("srtpCipher")}")
+                val st = DtlsStats(transport?.members?.get("dtlsState") as? String, transport?.members?.get("srtpCipher") as? String, fp, local, remote)
+                onStats(st)
+                cont.resume(st)
             }
         }
 

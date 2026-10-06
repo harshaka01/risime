@@ -29,7 +29,14 @@ data class IceServer(val urls: List<String>, val username: String? = null, val c
 enum class IceState { NEW, CHECKING, CONNECTED, COMPLETED, DISCONNECTED, FAILED, CLOSED }
 
 /** §16.10 (e): what `getStats()` says about the transport after ICE connected. */
-data class DtlsStats(val dtlsState: String?, val srtpCipher: String?, val remoteFingerprint: String?)
+data class DtlsStats(
+    val dtlsState: String?,
+    val srtpCipher: String?,
+    val remoteFingerprint: String?,
+    /** The selected candidate pair's types ("host", "srflx", "relay"), for the debug overlay and the device smoke test. */
+    val localCandidateType: String? = null,
+    val remoteCandidateType: String? = null,
+)
 
 interface MediaSession {
     /** A local offer, already prepared ([SdpRules.prepareLocal]) and set as the local description. */
