@@ -12,6 +12,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,4 +78,22 @@ fun CallsSettingsSection() {
     var open by remember { mutableStateOf(false) }
     TextButton(onClick = { open = !open }) { Text(if (open) "Hide" else "Show licences") }
     if (open) Text(OPEN_SOURCE_LICENCES, style = MaterialTheme.typography.bodySmall)
+}
+
+/** §16.9 (A3): after a ring without full-screen permission, one in-app card that opens the setting. */
+@Composable
+fun FullScreenIntentPrompt() {
+    val ctx = LocalContext.current
+    val calls = (ctx.applicationContext as? RisiMeApp)?.container?.calls ?: return
+    val denied by calls.fullScreenDenied.collectAsState()
+    if (!denied || Build.VERSION.SDK_INT < 34) return
+    FullScreenIntentCard(
+        onOpenSettings = {
+            calls.fullScreenDenied.value = false
+            runCatching {
+                ctx.startActivity(Intent("android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT").setData(Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        },
+        onDismiss = { calls.fullScreenDenied.value = false },
+    )
 }

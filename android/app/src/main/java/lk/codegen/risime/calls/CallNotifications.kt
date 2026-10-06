@@ -89,7 +89,7 @@ class CallNotifications(private val context: Context) {
      */
     fun incoming(name: String?): Notification {
         ensureChannels()
-        val person = Person.Builder().setName(name ?: "RisiMe").setImportant(name != null).build()
+        val person = Person.Builder().setName(name ?: "Incoming RisiMe call").setImportant(name != null).build()
         val n = NotificationCompat.Builder(context, CH_CALLS)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(name ?: "Incoming RisiMe call")

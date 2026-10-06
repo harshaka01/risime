@@ -170,6 +170,7 @@ fun ChatsScreen(
                     },
                 )
             }
+            lk.codegen.risime.calls.FullScreenIntentPrompt()
             if (tab == 1) {
                 RequestsTab(friendsVm, onAddFriend)
             } else {
