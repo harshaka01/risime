@@ -50,6 +50,12 @@ class FakeMessageDao : MessageDao {
         )
     }
 
+    override suspend fun setGroupReceipt(messageId: String, delivered: Int, read: Int, of: Int, status: String): Int {
+        val r = rows.values.firstOrNull { it.messageId == messageId && it.outgoing } ?: return 0
+        rows[r.clientMsgId] = r.copy(receiptDelivered = delivered, receiptRead = read, receiptOf = of, status = status)
+        return 1
+    }
+
     override suspend fun setAcked(clientMsgIds: List<String>, acked: String) {
         clientMsgIds.forEach { id -> rows[id]?.let { rows[id] = it.copy(ackedStatus = acked) } }
     }

@@ -28,7 +28,21 @@ data class MessageEntity(
     /** Incoming only: highest status the server confirmed via msg:ack (null = none yet). */
     @ColumnInfo(name = "acked_status") val ackedStatus: String? = null,
     @ColumnInfo(name = "fail_reason") val failReason: String? = null,
-)
+    /** v5 (§12): "text", or "system" for a local group system line ([systemJson] = the group_event). */
+    @ColumnInfo(name = "kind", defaultValue = "text") val kind: String = KIND_TEXT,
+    @ColumnInfo(name = "system_json") val systemJson: String? = null,
+    /** v5 (§12.7): the sender's aggregated group receipt (null until the first group_receipt). */
+    @ColumnInfo(name = "receipt_delivered") val receiptDelivered: Int? = null,
+    @ColumnInfo(name = "receipt_read") val receiptRead: Int? = null,
+    @ColumnInfo(name = "receipt_of") val receiptOf: Int? = null,
+) {
+    val system: Boolean get() = kind == KIND_SYSTEM
+
+    companion object {
+        const val KIND_TEXT = "text"
+        const val KIND_SYSTEM = "system"
+    }
+}
 
 @Entity(tableName = "contacts")
 data class ContactEntity(
@@ -42,6 +56,8 @@ data class ContactEntity(
     @ColumnInfo(name = "friend", defaultValue = "0") val friend: Boolean = true,
     /** v2: "vouched by <name>" (§9.1), null for allowlisted/verified users. */
     @ColumnInfo(name = "vouched_by_name") val vouchedByName: String? = null,
+    /** v5 (§12.1): can be added to a group (absent on the wire = false: "needs to update"). */
+    @ColumnInfo(name = "group_ready", defaultValue = "0") val groupReady: Boolean = false,
 )
 
 @Entity(tableName = "sync_state")
@@ -129,4 +145,76 @@ data class ReactionEntity(
     @ColumnInfo(name = "pending_client_msg_id") val pendingClientMsgId: String?,
     /** When this row last changed locally (debounce and notifications). */
     @ColumnInfo(name = "local_ts") val localTs: Long,
+)
+
+/**
+ * v5 (§12): a group conversation. [name] is a cached copy of the encrypted `group_meta` (for the
+ * list and notifications); roles shown are the server's (S6).
+ */
+@Entity(tableName = "groups")
+data class GroupEntity(
+    @PrimaryKey @ColumnInfo(name = "conversation_id") val conversationId: String,
+    val name: String?,
+    @ColumnInfo(name = "my_role") val myRole: String,
+    /** creating | active | left | removed */
+    val state: String,
+    @ColumnInfo(name = "created_by") val createdBy: String?,
+    @ColumnInfo(name = "created_at") val createdAt: String?,
+    val generation: Long,
+    /** The epoch of the last group_event applied. */
+    @ColumnInfo(name = "epoch_seen") val epochSeen: Long?,
+    @ColumnInfo(name = "meta_updated_at") val metaUpdatedAt: Long?,
+    @ColumnInfo(name = "last_refreshed_at") val lastRefreshedAt: Long?,
+    /** When this row appeared locally (orders a group with no messages yet in the chats list). */
+    @ColumnInfo(name = "local_ts") val localTs: Long,
+) {
+    val readOnly: Boolean get() = state == STATE_LEFT || state == STATE_REMOVED
+
+    companion object {
+        const val STATE_CREATING = "creating"
+        const val STATE_ACTIVE = "active"
+        const val STATE_LEFT = "left"
+        const val STATE_REMOVED = "removed"
+    }
+}
+
+/** v5: members, including former ones (state left/removed) so old bubbles keep their names. */
+@Entity(tableName = "group_members", primaryKeys = ["conversation_id", "user_id"], indices = [Index("user_id")])
+data class GroupMemberEntity(
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    @ColumnInfo(name = "user_id") val userId: String,
+    @ColumnInfo(name = "display_name") val displayName: String,
+    val phone: String?,
+    val role: String,
+    val kind: String,
+    /** active | pending_add | pending_remove | left | removed */
+    val state: String,
+    @ColumnInfo(name = "joined_at") val joinedAt: String?,
+) {
+    val current: Boolean get() = state == "active" || state == "pending_add" || state == "pending_remove"
+}
+
+/**
+ * v5: the persisted outbox for group REST + commit work, so create/add/remove/leave/role/rename and
+ * named-committer ops survive process death. [opId] (the server's PendingOp id) dedupes `group_op`.
+ */
+@Entity(
+    tableName = "group_ops",
+    indices = [Index("conversation_id"), Index(value = ["op_id"], unique = true), Index(value = ["state", "next_at"])],
+)
+data class GroupOpEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** Null for a create before the server assigned the id. */
+    @ColumnInfo(name = "conversation_id") val conversationId: String?,
+    /** create | add | remove | leave | role | rename | commit | rejoin | reset */
+    val type: String,
+    @ColumnInfo(name = "payload_json") val payloadJson: String,
+    /** queued | done | failed */
+    val state: String,
+    val attempts: Int = 0,
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    @ColumnInfo(name = "client_group_id") val clientGroupId: String? = null,
+    @ColumnInfo(name = "op_id") val opId: String? = null,
+    @ColumnInfo(name = "next_at") val nextAt: Long = 0,
+    @ColumnInfo(name = "last_error") val lastError: String? = null,
 )

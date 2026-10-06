@@ -577,6 +577,9 @@ class AppContainer(context: Context) {
         db.wipe().mlsKv()
         db.wipe().mlsPending()
         db.wipe().reactions()
+        db.wipe().groups()
+        db.wipe().groupMembers()
+        db.wipe().groupOps()
         mlsEngine = null
         mlsDbKey.destroy()
     }

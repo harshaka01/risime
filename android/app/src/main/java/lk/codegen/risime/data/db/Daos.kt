@@ -34,6 +34,13 @@ interface MessageDao {
     )
     suspend fun updateStatus(clientMsgId: String, status: String, messageId: String?, serverTs: String?, failReason: String?)
 
+    /** §12.7 group_receipt on my own message (status only moves forward: the caller decides). */
+    @Query(
+        "UPDATE messages SET receipt_delivered = :delivered, receipt_read = :read, receipt_of = :of, status = :status " +
+            "WHERE message_id = :messageId AND outgoing = 1",
+    )
+    suspend fun setGroupReceipt(messageId: String, delivered: Int, read: Int, of: Int, status: String): Int
+
     @Query("UPDATE messages SET acked_status = :acked WHERE client_msg_id IN (:clientMsgIds)")
     suspend fun setAcked(clientMsgIds: List<String>, acked: String)
 
@@ -120,6 +127,76 @@ interface WipeDao {
 
     @Query("DELETE FROM reactions")
     suspend fun reactions()
+
+    @Query("DELETE FROM `groups`")
+    suspend fun groups()
+
+    @Query("DELETE FROM group_members")
+    suspend fun groupMembers()
+
+    @Query("DELETE FROM group_ops")
+    suspend fun groupOps()
+}
+
+@Dao
+interface GroupDao {
+    @Upsert
+    suspend fun upsert(g: GroupEntity)
+
+    @Query("SELECT * FROM `groups` WHERE conversation_id = :conv")
+    suspend fun get(conv: String): GroupEntity?
+
+    @Query("SELECT * FROM `groups` WHERE conversation_id = :conv")
+    fun observe(conv: String): Flow<GroupEntity?>
+
+    @Query("SELECT * FROM `groups` WHERE state != 'creating'")
+    fun all(): Flow<List<GroupEntity>>
+
+    @Query("SELECT * FROM `groups`")
+    suspend fun allNow(): List<GroupEntity>
+
+    @Upsert
+    suspend fun upsertMembers(m: List<GroupMemberEntity>)
+
+    @Query("SELECT * FROM group_members WHERE conversation_id = :conv")
+    suspend fun members(conv: String): List<GroupMemberEntity>
+
+    @Query("SELECT * FROM group_members WHERE conversation_id = :conv ORDER BY display_name COLLATE NOCASE")
+    fun observeMembers(conv: String): Flow<List<GroupMemberEntity>>
+
+    @Query("SELECT * FROM group_members")
+    fun observeAllMembers(): Flow<List<GroupMemberEntity>>
+
+    @Query("UPDATE group_members SET state = :state WHERE conversation_id = :conv AND user_id IN (:userIds)")
+    suspend fun setMemberState(conv: String, userIds: List<String>, state: String)
+
+    @Query("UPDATE group_members SET role = :role WHERE conversation_id = :conv AND user_id IN (:userIds)")
+    suspend fun setMemberRole(conv: String, userIds: List<String>, role: String)
+
+    @Query("DELETE FROM `groups` WHERE conversation_id = :conv")
+    suspend fun delete(conv: String)
+}
+
+@Dao
+interface GroupOpDao {
+    /** -1 when [GroupOpEntity.opId] is already queued (a repeated group_op naming). */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(op: GroupOpEntity): Long
+
+    @Query("SELECT * FROM group_ops WHERE state = 'queued' AND next_at <= :now ORDER BY id ASC")
+    suspend fun due(now: Long): List<GroupOpEntity>
+
+    @Query("SELECT * FROM group_ops WHERE state = 'queued' ORDER BY id ASC")
+    suspend fun queued(): List<GroupOpEntity>
+
+    @Query("SELECT * FROM group_ops WHERE id = :id")
+    suspend fun get(id: Long): GroupOpEntity?
+
+    @androidx.room.Update
+    suspend fun update(op: GroupOpEntity)
+
+    @Query("SELECT * FROM group_ops WHERE conversation_id = :conv AND state = 'queued'")
+    fun observeQueued(conv: String): Flow<List<GroupOpEntity>>
 }
 
 @Dao
