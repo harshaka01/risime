@@ -28,10 +28,15 @@ The rules are in `docs/decisions/003-nightly-release-cycle.md`. The cycle fires 
 | 16 | Option 2b (decided): Caddy `/risime/` → spark2 `tailscale serve` | prepared in `infra/risicloud/`, off | Tailscale on spark2 (Harsha, sudo) and on spark; `/risime/` route (RisiCloud lead) |
 | 17 | Proof of done (books@codegen.co.uk) | waiting | everything above, plus the tester's phone/name/company for the allowlist |
 
-| 18 | **One-time SMS phone verification** (decision 020, proposal v1.4): `OtpSender` behaviour (Email / NotifyLk / DevLog), `SMS_MODE`, NotifyDEMO guard, hashed codes, rate limits, the Android "Confirm your phone" screen | queued: next after the Keycloak work (12–17) | review v1.4 with both roles first. Real SMS waits on the approved "RisiMe" sender ID (Harsha / Notify.lk); until then DevLog |
+| 18 | **One-time SMS phone verification** (decision 020, proposal v1.4): `OtpSender` behaviour (Email / NotifyLk / DevLog), `SMS_MODE`, NotifyDEMO guard, hashed codes, rate limits, the Android "Confirm your phone" screen | done, in v0.2.0-nightly.3 (contract v1.4; `PHONE_VERIFICATION=off` on the pilot) | real SMS waits on the approved "RisiMe" sender ID (Harsha / Notify.lk) |
 
 No unblocked items are left in this phase. A nightly run only does the preflight until something
 is unblocked.
+
+Later work (contract v1.5–v1.13: push, friends, E2EE, emoji, groups, history, images, delete,
+calls, released as nightly.4–16) was driven directly by Harsha. Its status, and what's blocked
+on whom, is in `docs/status/overnight.md`. That queue isn't mirrored here, so the nightly job
+never picks it up automatically. (Checked 2026-10-06 20:13 UTC: nothing unblocked here.)
 
 Needs Harsha, so never picked automatically:
 - FCM push (a Firebase project);
