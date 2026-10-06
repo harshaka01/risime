@@ -30,7 +30,14 @@ defmodule RisiMe.Messaging.Store.CassandraTest do
 
     assert Store.get_message(m.message_id) == :not_found
     assert :ok = Store.put_message(m)
-    assert {:ok, ^m} = Store.get_message(m.message_id)
+    expected = Map.put(m, :kind, nil)
+    assert {:ok, ^expected} = Store.get_message(m.message_id)
+
+    # v1.8: reactions are indexed with kind = "reaction".
+    r = %{m | message_id: uuid1()} |> Map.put(:kind, "reaction")
+    assert :ok = Store.put_message(r)
+    assert {:ok, %{kind: "reaction"}} = Store.get_message(r.message_id)
+
     assert :ok = Store.compare_and_set_status(m.message_id, "sent", "delivered")
     assert {:conflict, "delivered"} = Store.compare_and_set_status(m.message_id, "sent", "read")
   end

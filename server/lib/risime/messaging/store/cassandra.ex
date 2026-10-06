@@ -64,11 +64,37 @@ defmodule RisiMe.Messaging.Store.Cassandra do
 
   @impl true
   def put_message(m) do
-    run!(
-      "INSERT INTO message_index (message_id, sender_id, recipient_id, client_msg_id, conversation_id, status) " <>
-        "VALUES (?, ?, ?, ?, ?, ?)",
-      [m.message_id, m.sender_id, m.recipient_id, m.client_msg_id, m.conversation_id, m.status]
-    )
+    # `kind` is written only for non-message rows (no null cell, so no tombstone).
+    case m[:kind] do
+      nil ->
+        run!(
+          "INSERT INTO message_index (message_id, sender_id, recipient_id, client_msg_id, conversation_id, status) " <>
+            "VALUES (?, ?, ?, ?, ?, ?)",
+          [
+            m.message_id,
+            m.sender_id,
+            m.recipient_id,
+            m.client_msg_id,
+            m.conversation_id,
+            m.status
+          ]
+        )
+
+      kind ->
+        run!(
+          "INSERT INTO message_index (message_id, sender_id, recipient_id, client_msg_id, conversation_id, status, kind) " <>
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+          [
+            m.message_id,
+            m.sender_id,
+            m.recipient_id,
+            m.client_msg_id,
+            m.conversation_id,
+            m.status,
+            kind
+          ]
+        )
+    end
 
     :ok
   end
@@ -77,7 +103,7 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   def get_message(message_id) do
     page =
       run!(
-        "SELECT message_id, sender_id, recipient_id, client_msg_id, conversation_id, status " <>
+        "SELECT message_id, sender_id, recipient_id, client_msg_id, conversation_id, status, kind " <>
           "FROM message_index WHERE message_id = ?",
         [message_id]
       )
@@ -94,7 +120,8 @@ defmodule RisiMe.Messaging.Store.Cassandra do
            recipient_id: row["recipient_id"],
            client_msg_id: row["client_msg_id"],
            conversation_id: row["conversation_id"],
-           status: row["status"]
+           status: row["status"],
+           kind: row["kind"]
          }}
     end
   end

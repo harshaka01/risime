@@ -14,7 +14,8 @@ defmodule RisiMe.Messaging.Store do
           recipient_id: uuid,
           client_msg_id: uuid,
           conversation_id: String.t(),
-          status: String.t()
+          status: String.t(),
+          kind: String.t() | nil
         }
   @type event :: %{event_id: uuid, kind: String.t(), data: map}
 

@@ -76,8 +76,36 @@ defmodule RisiMe.Messaging do
   # PROTOCOL §10.3: 24 KiB decoded, enough for a max-size text in the envelope plus MLS framing.
   @max_ciphertext 24 * 1024
 
+  @content_fields ~w(body reaction ciphertext)
+  @max_body_bytes 16 * 1024
+
+  # v1.8 §11.2: exactly one content field.
+  defp parse_send(p) when is_map(p) do
+    case Enum.count(@content_fields, &Map.has_key?(p, &1)) do
+      n when n > 1 -> {:error, :bad_request}
+      _ -> parse_content(p)
+    end
+  end
+
+  defp parse_send(_), do: {:error, :bad_request}
+
+  # v1.8: a plaintext reaction carries `reaction: {target, emoji, op}` and no `body`.
+  defp parse_content(%{"client_msg_id" => cmid, "to" => to, "reaction" => r})
+       when is_binary(cmid) and is_binary(to) do
+    cmid = String.downcase(cmid)
+    to = String.downcase(to)
+
+    cond do
+      not uuid?(cmid) -> {:error, :bad_request}
+      not uuid?(to) -> {:error, :unknown_recipient}
+      not is_map(r) -> {:error, :bad_request}
+      r["op"] not in ["add", "remove"] -> {:error, :bad_request}
+      true -> {:ok, %{client_msg_id: cmid, to: to, body: nil, reaction: r}}
+    end
+  end
+
   # v1.7: an e2ee send carries `ciphertext`, `generation` and `epoch` and no `body`.
-  defp parse_send(%{"client_msg_id" => cmid, "to" => to, "ciphertext" => ct} = p)
+  defp parse_content(%{"client_msg_id" => cmid, "to" => to, "ciphertext" => ct} = p)
        when is_binary(cmid) and is_binary(to) and not is_map_key(p, "body") do
     cmid = String.downcase(cmid)
     to = String.downcase(to)
@@ -103,12 +131,13 @@ defmodule RisiMe.Messaging do
            ciphertext: ct,
            generation: p["generation"],
            epoch: p["epoch"],
-           body: nil
+           body: nil,
+           reaction: nil
          }}
     end
   end
 
-  defp parse_send(%{"client_msg_id" => cmid, "to" => to, "body" => body})
+  defp parse_content(%{"client_msg_id" => cmid, "to" => to, "body" => body})
        when is_binary(cmid) and is_binary(to) and is_binary(body) do
     cmid = String.downcase(cmid)
     to = String.downcase(to)
@@ -116,12 +145,12 @@ defmodule RisiMe.Messaging do
     cond do
       not uuid?(cmid) -> {:error, :bad_request}
       not uuid?(to) -> {:error, :unknown_recipient}
-      true -> {:ok, %{client_msg_id: cmid, to: to, body: body}}
+      true -> {:ok, %{client_msg_id: cmid, to: to, body: body, reaction: nil}}
     end
   end
 
-  defp parse_send(%{"to" => _, "client_msg_id" => _}), do: {:error, :empty_body}
-  defp parse_send(_), do: {:error, :bad_request}
+  defp parse_content(%{"to" => _, "client_msg_id" => _}), do: {:error, :empty_body}
+  defp parse_content(_), do: {:error, :bad_request}
 
   defp validate_body(%{ciphertext: ct}) do
     case Base.decode64(ct) do
@@ -131,8 +160,13 @@ defmodule RisiMe.Messaging do
     end
   end
 
+  # Reactions are checked later, after not_friends and e2ee (§11.2 order of checks).
+  defp validate_body(%{reaction: r}) when is_map(r), do: :ok
+
+  # v1.8 §11.1: the byte cap first, then the grapheme count (authoritative).
   defp validate_body(%{body: body}) do
     cond do
+      byte_size(body) > @max_body_bytes -> {:error, :too_long}
       String.trim(body) == "" -> {:error, :empty_body}
       String.length(body) > @max_body -> {:error, :too_long}
       true -> :ok
@@ -142,6 +176,7 @@ defmodule RisiMe.Messaging do
   defp send_new(sender_id, req) do
     with :ok <- check_recipient(sender_id, req.to),
          :ok <- check_e2ee(sender_id, req),
+         :ok <- check_reaction(sender_id, req),
          :ok <- RateLimiter.hit(:msg_send, sender_id, @send_limit, @send_window) do
       sent = %{
         message_id: TimeUUID.generate(),
@@ -176,19 +211,93 @@ defmodule RisiMe.Messaging do
   defp check_e2ee(sender_id, req) do
     group = RisiMe.MLS.group(conversation_id(sender_id, req.to))
 
+    plaintext? = req.body != nil or req.reaction != nil
+
     cond do
-      req.body != nil and group != nil -> {:error, :e2ee_required}
-      req.body != nil -> :ok
+      plaintext? and group != nil -> {:error, :e2ee_required}
+      plaintext? -> :ok
       group == nil or req.from_device == nil -> {:error, :bad_request}
       req.generation != group.generation or req.epoch != group.epoch -> {:error, :stale_epoch}
       true -> :ok
     end
   end
 
+  # v1.8 §11.2: the target is a normal message of this conversation (one primary-key read; every
+  # failure is the same `unknown_target`), and the emoji is one grapheme of at most 32 bytes.
+  defp check_reaction(_sender_id, %{reaction: nil}), do: :ok
+
+  defp check_reaction(sender_id, %{reaction: r, to: to}) do
+    conv = conversation_id(sender_id, to)
+    target = if is_binary(r["target"]), do: String.downcase(r["target"])
+
+    cond do
+      not valid_emoji?(r["emoji"]) ->
+        {:error, :invalid_emoji}
+
+      not (is_binary(target) and timeuuid?(target)) ->
+        {:error, :unknown_target}
+
+      true ->
+        case store().get_message(target) do
+          {:ok, %{conversation_id: ^conv, kind: nil}} -> :ok
+          _ -> {:error, :unknown_target}
+        end
+    end
+  end
+
+  # Control, separator, private-use and surrogate code points are refused; format characters
+  # only as ZWJ (U+200D) or emoji tag characters (U+E0020–U+E007F, subdivision flags).
+  # Variation selectors are marks, so they pass.
+  @doc false
+  def valid_emoji?(e) when is_binary(e) do
+    String.valid?(e) and byte_size(e) in 1..32 and String.length(e) == 1 and
+      not Regex.match?(~r/[\p{Cc}\p{Z}\p{Co}\p{Cs}\s]/u, e) and
+      e
+      |> String.to_charlist()
+      |> Enum.reject(&(&1 == 0x200D or &1 in 0xE0020..0xE007F))
+      |> List.to_string()
+      |> then(&(not Regex.match?(~r/\p{Cf}/u, &1)))
+  end
+
+  def valid_emoji?(_), do: false
+
   # A repeat of an earlier send. If that send stopped before indexing the message, finish it.
   defp resend(sender_id, req, prior) do
     if store().get_message(prior.message_id) == :not_found, do: deliver(sender_id, req, prior)
     send_reply(prior)
+  end
+
+  defp deliver(sender_id, %{reaction: r} = req, sent) when is_map(r) do
+    :ok =
+      store().put_message(%{
+        message_id: sent.message_id,
+        sender_id: sender_id,
+        recipient_id: req.to,
+        client_msg_id: req.client_msg_id,
+        conversation_id: sent.conversation_id,
+        status: "sent",
+        kind: "reaction"
+      })
+
+    event = %{
+      event_id: sent.message_id,
+      kind: "reaction",
+      data: %{
+        "message_id" => sent.message_id,
+        "client_msg_id" => req.client_msg_id,
+        "conversation_id" => sent.conversation_id,
+        "from" => sender_id,
+        "to" => req.to,
+        "target" => String.downcase(r["target"]),
+        "emoji" => r["emoji"],
+        "op" => r["op"],
+        "server_ts" => iso(sent.server_ts)
+      }
+    }
+
+    # Both inboxes, the same event_id; reactions never push (§11.2).
+    publish(req.to, event, push: false)
+    publish(sender_id, event, push: false)
   end
 
   defp deliver(sender_id, req, sent) do
@@ -304,6 +413,8 @@ defmodule RisiMe.Messaging do
 
     for id <- ids do
       case store().get_message(id) do
+        # v1.8: reactions have no acks or status events; acks naming them are ignored.
+        {:ok, %{kind: "reaction"}} -> :ok
         {:ok, %{recipient_id: ^user_id} = message} -> advance(message, status, user_id)
         _ -> :ok
       end
