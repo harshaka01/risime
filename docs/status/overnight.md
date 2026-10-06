@@ -1,12 +1,26 @@
 # Status / morning summary — 2026-10-06 (orchestrator, cc-root window 0)
 
-## P0 (open), 2026-10-06: data loss after updating to nightly.10
-- Both testers lost all chats after updating to nightly.10 and had to sign in again. The suspect is
-  the app's wipe on sign-in when the user looks different (AppContainer `wipeDb`); under
-  investigation.
-- **Releases are on hold** (nightly.11 and images) until a hotfix passes a new upgrade test (the
-  previous APK → the new APK, every message kept).
-- The same hotfix fixes the group picker checkboxes and chat scrolling.
+## P0 fixed in v0.2.0-nightly.11 (live 15:52 UTC, not required)
+- **Cause of the lost chats:** in nightly.10, every Log out or Sign out button wiped all chats in
+  one tap, including the escape screens (not allowlisted, locked, update, phone). Pilot logs show
+  real logouts from the testers' phones. Now only the Settings and Chats-menu Log out wipes, after
+  "This deletes the chats on this phone". Escape screens keep chats, and a different account asks
+  first.
+- **Recovery:** the app replays the inbox once. The server restore copied **173** senders' messages
+  (idempotent; a second run copied 0).
+- **Also fixed:**
+  - device registration ran while the app was locked (tokenless 401), so E2EE, groups and push
+    stayed off;
+  - the group readiness rule (§12.1);
+  - the picker rows;
+  - scrolling;
+  - code resend countdowns.
+- **Upgrade gate overridden by Harsha** (decision 044); the shipped APK is the staged candidate,
+  sha256 `59561bab1264`.
+- **Push is on:** FCM auth was verified on the pilot. No phone has a push token until it runs
+  nightly.11.
+- **Open:** the unattended upgrade test (Redroid on spark2) needs Harsha's one-time sudo step to load
+  the kernel binder module.
 
 ## Where things stand (updated 2026-10-06, after the spark2 reboot)
 - **Reboot recovery verified.** spark2 rebooted and **everything came back by itself**:
@@ -55,6 +69,7 @@
 | v0.1.0 | One-to-one chat, store-and-forward, ticks, dev OTP login (smoke-tested on two devices) |
 | v0.2.0-nightly.1 | Presence/last seen and typing (contract v1.2), Settings, chat polish (unread, day separators, copy, retry/delete, search), design system + accessibility, Oban, JSON logs/metrics/`/health`, 200- and 2000-user load tests with fixes, prod prep files (not deployed), the E2EE spike (OpenMLS crate) |
 | v0.2.0-nightly.9 | P0 update-screen fix, emoji and reactions (v1.8) |
+| v0.2.0-nightly.11 | P0 hotfix (chats kept), push on, reinstall history (v1.10) |
 | v0.2.0-nightly.10 | Encrypted MLS groups (v1.9), blob store, interop store isolation |
 | v0.2.0-nightly.2 | RisiCloud sign-in (contract v1.3; dormant until the Keycloak client exists), fingerprint-unlocked refresh tokens, the release-only in-app updater, the publish step to risicloud.ai, the option 2b config (off), the E2EE `.so` built natively on spark2 |
 
