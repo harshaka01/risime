@@ -883,10 +883,16 @@ class LiveGroupInteropTest {
             "epoch ${nb.epoch(conv2)}"
         }
 
-        // ---- v1.12 deletes (§15). The send UI flag is on for this run (the app ships it off). ----
+        // ---- v1.12 deletes (§15). The send UI is on by default since nightly.18; set it explicitly so a
+        // receive-only build (-Prisime.deletesSend=false) still checks the send path. ----
         lk.codegen.risime.data.deletes.DeleteFeature.sendEnabled = true
         val nb = b2!!
         fun idOf(x: Dev, conv: String, text: String) = x.messages.rows.values.first { it.conversationId == conv && it.body == text }
+
+        check("D0. deletes_ready: every member runs a delete-capable app, so the dialog drops the old-apps line") {
+            val g = a.await(20_000, "deletes_ready") { (a.api.mlsGroup(conv2) as? ApiResult.Ok)?.value?.takeIf { it.deletesReady } }
+            "deletes_ready=${g.deletesReady}"
+        }
 
         check("D1. B deletes its own group message for everyone → A and C see the tombstone; B 'You deleted'") {
             nb.on { nb.chat.sendText(conv2, "oops $run") }
@@ -1002,6 +1008,43 @@ class LiveGroupInteropTest {
             }
             ensure(left.isEmpty()) { "server still replays ${left.size} cleared event(s) (first replay from $from)" }
             "${before.size} cleared"
+        }
+
+        check("D7. reactions on a deleted message: the chips go with it, and a late reaction to the tombstone is dropped") {
+            a.on { a.chat.sendText(conv2, "react to me $run") }
+            for (x in listOf(c, nb)) x.awaitText(conv2, "react to me $run")
+            val t = a.await(10_000, "A's message id") { idOf(a, conv2, "react to me $run").takeIf { it.messageId != null } }
+            val mid = t.messageId!!
+            nb.on { nb.chat.react(conv2, mid, "👍", "add") }
+            for (x in listOf(a, c)) x.await(20_000, "B's 👍 at ${x.name}") { x.on { x.reactions.rows.values.firstOrNull { it.targetMessageId == mid && it.emoji == "👍" && it.op == "add" } } }
+            a.on { a.chat.deleteForEveryone(conv2, listOf(t.clientMsgId)) }
+            for (x in listOf(c, nb)) x.await(20_000, "tombstone at ${x.name}") { x.row(mid)?.takeIf { it.deleted } }
+            for (x in listOf(a, c, nb)) {
+                x.await(20_000, "${x.name}: reactions purged") { x.on { x.reactions.rows.values.none { it.targetMessageId == mid } }.takeIf { it } }
+            }
+            // A stale client (C) still reacts to the deleted target; members drop it (§15.6). C's next
+            // message rides the same serial lane, so once it arrives the reaction was processed.
+            c.on { c.chat.react(conv2, mid, "❤️", "add") }
+            c.on { c.chat.sendText(conv2, "after the late reaction $run") }
+            for (x in listOf(a, nb)) {
+                x.awaitText(conv2, "after the late reaction $run")
+                ensure(x.on { x.reactions.rows.values.none { it.targetMessageId == mid && !it.pending } }) { "${x.name} kept a reaction to a deleted message" }
+                ensure(x.on { x.row(mid)!!.deleted }) { "${x.name}: the tombstone came back" }
+            }
+            null
+        }
+
+        check("D8. Delete for me (B): gone at B only; A and C keep it; a replay doesn't bring it back") {
+            c.on { c.chat.sendText(conv2, "only B drops this $run") }
+            for (x in listOf(a, nb)) x.awaitText(conv2, "only B drops this $run")
+            val atB = nb.await(10_000, "id at B") { idOf(nb, conv2, "only B drops this $run").takeIf { it.messageId != null } }
+            nb.on { nb.chat.deleteForMe(conv2, listOf(atB.clientMsgId)) }
+            ensure(nb.on { nb.messages.rows[atB.clientMsgId] } == null) { "B's row is still there" }
+            nb.await(20_000, "B's me request sent") { nb.deletes.outbox.values.none { it.scope == "me" }.takeIf { it } }
+            for (x in listOf(a, c)) ensure(x.on { x.row(atB.messageId!!) }?.deleted == false) { "${x.name} lost it" }
+            nb.replayInbox()
+            ensure(nb.on { nb.messages.rows.values.none { it.messageId == atB.messageId } }) { "a replay brought it back at B" }
+            null
         }
 
         // ---- Decision 050: a plain logout keeps the chats; the same account resumes with no rejoin. ----

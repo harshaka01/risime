@@ -101,6 +101,11 @@ class AppContainer(
     /** Tests open the same file with the bundled SQLite driver (no framework SQLite on the JVM). */
     openDb: (Context) -> AppDatabase = AppDatabase::create,
     prefs: androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> = context.dataStore,
+    /**
+     * The engine's transactions: Room's withTransaction on the app's framework SQLite. A JVM test on
+     * the bundled driver (no SupportSQLiteOpenHelper) passes its own runner.
+     */
+    transactions: ((AppDatabase) -> TransactionRunner)? = null,
 ) {
     val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default +
@@ -240,7 +245,7 @@ class AppContainer(
         override suspend fun uploadBlob(conversationId: String, bytes: ByteArray) = api.uploadBlob(conversationId, bytes).map { it.ref() }
     }
 
-    private val dbTx = object : TransactionRunner {
+    private val dbTx: TransactionRunner = transactions?.invoke(db) ?: object : TransactionRunner {
         override suspend fun <T> run(block: suspend () -> T): T = db.withTransaction { block() }
     }
 
@@ -585,9 +590,7 @@ class AppContainer(
     val engine: ChatEngine = ChatEngine(
         messages = db.messages(),
         sync = db.sync(),
-        tx = object : TransactionRunner {
-            override suspend fun <T> run(block: suspend () -> T): T = db.withTransaction { block() }
-        },
+        tx = dbTx,
         scope = scope,
         realtime = { realtime },
         meId = { sessionStore.current()?.user?.id },

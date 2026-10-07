@@ -6,11 +6,11 @@ import java.time.Instant
 import java.util.UUID
 
 /**
- * Contract v1.12 §15.11 rollout: the receive side ships fully; the **send UI** (long-press Delete,
- * Select, Delete for me / for everyone) stays off until a later nightly turns it on.
+ * Contract v1.12 §15.11 rollout: the receive side shipped first (nightly.14); the **send UI**
+ * (long-press Delete, Select, Delete for me / for everyone) is on by default since nightly.18.
  *
  * The single switch is `BuildConfig.DELETES_SEND_ENABLED` (app/build.gradle.kts, `defaultConfig`,
- * overridable with `-Prisime.deletesSend=true`). [sendEnabled] reads it once; it is a plain
+ * `-Prisime.deletesSend=false` turns it off). [sendEnabled] reads it once; it is a plain
  * variable so a future remote flag (or a test) can flip it at runtime without another code path.
  * Clear chat and Delete chat are local plus `chat:clear` on my own inbox, so they are always on.
  */

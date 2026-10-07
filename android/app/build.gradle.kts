@@ -89,13 +89,14 @@ android {
         // Native MLS core packaged (decision 037: release carries it ahead of the E2EE rollout; it is
         // only loaded once the server offers attestation keys).
         buildConfigField("boolean", "CRYPTO_AVAILABLE", cryptoToolchain.toString())
-        // v1.12 §15.11 rollout: the delete send UI (long-press Delete / Select, for me / for everyone)
-        // is off until most installs apply deletes; a later nightly flips it. Receive is always on.
+        // v1.12 §15.11 rollout: the delete send UI (long-press Delete / Select, for me / for everyone).
+        // Receive shipped in nightly.14; the send UI is on by default from nightly.18 (testers are on
+        // ≥ nightly.17). -Prisime.deletesSend=false builds a receive-only APK again.
         // The one switch: lk.codegen.risime.data.deletes.DeleteFeature.sendEnabled reads this.
         // v1.13 §16.14 rollout: advertise `calls` and enable the call button. On by default; a
         // receive-only nightly (call_end lines, no ringing) builds with -Prisime.calls=false.
         buildConfigField("boolean", "CALLS_ENABLED", (providers.gradleProperty("risime.calls").orNull != "false").toString())
-        buildConfigField("boolean", "DELETES_SEND_ENABLED", (providers.gradleProperty("risime.deletesSend").orNull == "true").toString())
+        buildConfigField("boolean", "DELETES_SEND_ENABLED", (providers.gradleProperty("risime.deletesSend").orNull != "false").toString())
         // Pinned server attestation keys (public JWK JSON, ';'-separated). Empty until root provides
         // the pilot key at rollout; the server's /mls/attestation_keys are trusted in addition.
         buildConfigField("String", "MLS_PINNED_KEYS", "\"${providers.gradleProperty("risime.mlsPinnedKeys").orNull.orEmpty().replace("\"", "\\\"")}\"")
