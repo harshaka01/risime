@@ -7,10 +7,75 @@
 (reactions), **v1.9** (groups with MLS, §12, decision 041), **v1.10** (history after a
 reinstall, §13, decision 043), **v1.11** (encrypted images, §14, decision 042) and **v1.12**
 (deleting messages and chats, §15, decision 047), **v1.13** (1:1 voice calls, §16, decisions
-046 and 051) and **v1.14** (members restore an existing member's devices, §12.4a) are done, plus the group-readiness hotfix and
-the two §14 fixes root decided.
+046 and 051), **v1.14** (members restore an existing member's devices, §12.4a) and **v1.15**
+(history sharing between devices, §17, decision 049) are done, plus the group-readiness hotfix
+and the two §14 fixes root decided.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(453 tests); `scripts/interop` (instance `_mr`) green after v1.14.
+(482 tests, partition `_hs`); `scripts/interop` (instance `_hs`) green after v1.15 (INTEROP OK).
+
+## v1.15 history sharing between devices (§17) — READY
+- **Migration** `20261007100000_create_history_sharing`: `history_requests` (PK `request_id`;
+  unique partial index on `(requester_device, conversation_id)` over the open states →
+  `request_open`; `(requester_user, conversation_id, created_at)`, `(requester_user, created_at)`,
+  open-by-conversation, `created_at` for the prune), the **normalised** `history_candidates`
+  (PK `(request_id, device_id)`, `(user_id, named_at)`, `(device_id) WHERE answer IS NULL`) and
+  `blobs.request_id` (partial index). Rows are pruned 8 days after creation (daily
+  `HistoryTimer` `prune` cron, 03:29).
+- **`RisiMe.History`**: every transition under `pg_advisory_xact_lock("hist:<request_id>")` plus
+  `FOR UPDATE`; errors are decided before any change (no rollbacks, so the hooks can run inside
+  the group lock). Pushes on the inbox channel: `history:request` (checks: parse → membership
+  (`not_member`; DM `any` needs friends and no block) → `not_e2ee` → calling device in
+  `mls_group_devices` (`not_member`) with `history_share` (`bad_request`) → ciphertext
+  (`too_long`, `stale_epoch`, `'H'` AAD/group id/epoch/application → `bad_request`) → range
+  (`from` clipped to now−30 d) → requester intervals (empty → `bad_request`) → under a per-user
+  lock `request_open` and the Postgres day limits), `history:refresh`, `history:respond`,
+  `history:deliver` (idempotent by part, `parts` constant, ≤ 20), `history:ack`,
+  `history:escalate`, `history:cancel`; burst 60/min per user in the ETS limiter.
+- **Naming**: own candidates = the user's other capable devices in the group (superseded filter
+  not applied; a superseded *and offline* one is dormant, `wait = "join"`, named by the inbox-join
+  hook); a device whose census `first_seen_at` is after `range.to` is never named. Own phase ends
+  at 10 min (`own_end` job), when every own candidate answered, or on `history:escalate`; then up
+  to 3 member users (largest interval overlap, earliest `first_seen_at`, most recently seen),
+  24 h each (`member_window` job). Member limits from Postgres: ≤ 2 per requester per conversation
+  per 7 d, none within 24 h of a decline of that requester, ≤ 10 per member per day. The event's
+  `intervals` = requester intervals ∩ range ∩ the candidate's own intervals (DM: the e2ee window).
+  `history_request` carries the stored ciphertext; > 2 epochs behind (or a `stale` answer) → the
+  candidate waits (`wait = "refresh"`), state `refresh`, named after `history:refresh`.
+- **Accept/deliver**: first accept wins under the lock; other named users get
+  `history_request_closed accepted_elsewhere` (not the provider's own user). Delivery deadline
+  30 min after accept or the last part (`delivery` job): the provider is dropped (`expired` to it
+  unless it is the requester's own user), devices told `accepted_elsewhere` are named again.
+  `done` when every part is acked. Closes: `cancel`, 48 h (`expire` job), no candidate left
+  (`unavailable`; named users get `expired`), §12.8 reset (`expired`, hook in `Commit.do_reset`),
+  requester left/removed or its device removed/lost the capability/changed key (`cancelled`,
+  hooks in `Groups.mark_removing`/`delete_member` and `Devices`), `chat:clear` by the requester's
+  user (`cancelled`, at push time). A removed member or device is un-named at once (provider →
+  dropped). The request ciphertext is nulled at close.
+- **Events**: `Messaging.publish_history/3` → `Store.append_event/3` with `ttl: 172800`
+  (`USING TTL`, an optional callback; no new table), broadcast, the existing content-free inbox
+  wake (`Push.notify/1`). The inbox channel hides `history_*` from sockets whose device lacks
+  `history_share` (assign updated live). Never `message` events: no index row, so
+  `msg:delete`/`chat:clear` can't target them.
+- **`history` blobs**: `POST /blobs?purpose=history&conversation_id&request_id&client_blob_id`
+  only from the accepted provider device (`X-Device-Id`, never a query parameter) of an
+  `accepted`/`receiving` request of that conversation (`404`), ≤ 20 blobs per request (`400`),
+  16 MiB, 40/h, 512 MiB live quota (`:history_blob_quota`), the shared 3-upload slot, counted
+  with `media` in the disk guard. Readers: the uploader and the requester's user while the
+  request is open or `done`. TTL 48 h from upload; **all of a request's blobs expire 1 h after
+  the final ack** (`done`) and at once on any other close. The server can't map a single
+  `history:ack` part to a blob (the `blob_id` is inside the E2EE `history_share` envelope), so
+  per-part early deletion is the whole request's at `done`. `GET /blobs/usage` adds `history`.
+- **§15 deletes (how the server helps)**: the server never sees bundle content, so it can't
+  filter entries; the requester's gap index is the guard. What the server does: a delete removes
+  the target's inbox events (§15.8), so a deleted message is never replayed and never becomes a
+  gap row; later `delete` events reach the requester as usual (tombstoning an imported row);
+  history events are never `msg:delete`/`chat:clear` targets; a `chat:clear` by the requester's
+  user cancels its open request there; `msg:send`/`msg:delete` refuse the `'H'` AAD.
+- **Not done / notes**: a DM unfriend or block after `any` was named doesn't un-name the
+  partner (eligibility is checked at request time and at member naming); `own_devices[].device_name`
+  is the sign-in's device name (`user_tokens.device_name`), `null` for a device registered
+  without a token; "online" is per node. Tests: `test/risime_web/channels/history_v115_test.exs`
+  (26) and the v1.15 describe in `test/contract/examples_test.exs` (every new example).
 
 ## v1.14 members restore an existing member's devices (§12.4a, §12.11) — READY
 - **No migration.** `member_devices` joins `@known_capabilities` (stored per device).

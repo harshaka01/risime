@@ -17,3 +17,4 @@ android/captures/
 .env.prod
 # Rust (crypto/)
 crypto/**/target/
+__pycache__/

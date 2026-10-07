@@ -64,6 +64,7 @@ defmodule RisiMe.Devices do
 
         groups_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
         member_devices_changed(user_id, existing, mls_key, caps)
+        history_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
 
         calls_changed(
           user_id,
@@ -90,6 +91,7 @@ defmodule RisiMe.Devices do
         end
 
         for d <- evicted, d.mls_signature_key do
+          RisiMe.History.device_gone(d.user_id, d.device_id)
           MLS.device_changed(d.user_id, d.device_id, :removed)
           if groups?(d), do: Groups.device_changed(d.user_id, d.device_id, :removed)
         end
@@ -124,7 +126,8 @@ defmodule RisiMe.Devices do
   # v1.9 §12.1, v1.11 §14.1, v1.12 §15.1: `mls.capabilities`; only known ones are kept
   # (unknown ones are ignored).
   # v1.13 §16.1: `calls`.
-  @known_capabilities ~w(groups images deletes calls member_devices)
+  # v1.15 §17.1: `history_share`.
+  @known_capabilities ~w(groups images deletes calls member_devices history_share)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1),
@@ -180,6 +183,30 @@ defmodule RisiMe.Devices do
             "calls" in d.capabilities,
         select: {d.device_id, d.push_token}
     )
+  end
+
+  @doc "True if the device is a current MLS device with `history_share` (v1.15 §17.1)."
+  def history?(%Device{mls_signature_key: k, capabilities: caps}) when is_binary(k),
+    do: "history_share" in (caps || [])
+
+  def history?(_), do: false
+
+  # v1.15 §17.4: live sockets of the device start or stop getting `history_*` events; a device
+  # that loses the capability or changes its key (a new leaf) is un-named and its requests close.
+  defp history_changed(user_id, device_id, existing, mls_key, caps, key_changed?) do
+    was = history?(existing)
+    now = if mls_key, do: "history_share" in caps, else: was
+
+    if was != now do
+      Phoenix.PubSub.broadcast(
+        RisiMe.PubSub,
+        RisiMe.Messaging.topic(user_id),
+        {:device_history, device_id, now}
+      )
+    end
+
+    if was and (not now or key_changed?), do: RisiMe.History.device_gone(user_id, device_id)
+    :ok
   end
 
   @doc "True if the device is a current MLS device with the `groups` capability (§12.1)."
@@ -414,6 +441,8 @@ defmodule RisiMe.Devices do
     for d <- rows do
       caps_changed(d.user_id, d.device_id, false)
       calls_changed(d.user_id, d.device_id, false)
+      # v1.15 §17.4: a removed device is un-named and its requests are cancelled.
+      if d.mls_signature_key, do: RisiMe.History.device_gone(d.user_id, d.device_id)
     end
 
     for d <- rows, d.mls_signature_key do

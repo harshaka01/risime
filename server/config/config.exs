@@ -56,7 +56,7 @@ config :risime, :push_sender, nil
 config :risime, Oban,
   engine: Oban.Engines.Basic,
   repo: RisiMe.Repo,
-  queues: [maintenance: 1, groups: 5, messaging: 5],
+  queues: [maintenance: 1, groups: 5, messaging: 5, history: 5],
   plugins: [
     # Completed/cancelled/discarded jobs are deleted after 7 days.
     {Oban.Plugins.Pruner, max_age: 7 * 24 * 60 * 60},
@@ -66,7 +66,9 @@ config :risime, Oban,
        {"17 3 * * *", RisiMe.Workers.PruneAccounts},
        {"41 * * * *", RisiMe.Workers.BlobCleanup},
        # v1.11 §14.8: the weekly orphan pass (files without a row).
-       {"53 4 * * 0", RisiMe.Workers.BlobCleanup, args: %{"pass" => "orphans"}}
+       {"53 4 * * 0", RisiMe.Workers.BlobCleanup, args: %{"pass" => "orphans"}},
+       # v1.15 §17.11: history requests are kept 8 days after creation.
+       {"29 3 * * *", RisiMe.Workers.HistoryTimer, args: %{"kind" => "prune"}}
      ]}
   ]
 

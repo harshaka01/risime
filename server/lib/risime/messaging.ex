@@ -736,6 +736,23 @@ defmodule RisiMe.Messaging do
     publish(user_id, %{event_id: TimeUUID.generate(), kind: kind, data: data}, push: false)
   end
 
+  # v1.15 §17.5: history events live 48 h.
+  @history_ttl_s 172_800
+
+  @doc """
+  v1.15 §17.5: stores a `history_*` event in `user_id`'s inbox with the 48 h TTL, broadcasts it
+  and sends the content-free inbox wake (§8.2). Never a `message`: no index row, no acks.
+  """
+  def publish_history(user_id, kind, data) do
+    event = %{event_id: TimeUUID.generate(), kind: kind, data: data}
+    :ok = store().append_event(user_id, event, ttl: @history_ttl_s)
+    broadcast(user_id, event)
+    RisiMe.Push.notify(user_id)
+    :ok
+  end
+
+  def history_ttl_s, do: @history_ttl_s
+
   @doc "Health of the message store (`GET /health`)."
   def store_health, do: store().health()
 

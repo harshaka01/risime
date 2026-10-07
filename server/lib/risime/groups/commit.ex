@@ -605,6 +605,8 @@ defmodule RisiMe.Groups.Commit do
 
     # v1.11 §14.5: a reset expires every blob of the group (the new generation starts empty).
     Blobs.expire_conversation(g.id)
+    # v1.15 §17.4: the old generation's history requests can't be authenticated any more.
+    RisiMe.History.conversation_reset(g.id)
 
     Repo.delete_all(from o in Op, where: o.group_id == ^g.id)
 

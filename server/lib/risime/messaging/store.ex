@@ -58,6 +58,13 @@ defmodule RisiMe.Messaging.Store do
 
   @callback append_event(user_id :: uuid, event) :: :ok
 
+  @doc """
+  v1.15 §17.11: `append_event/2` with options; `ttl: seconds` writes the row `USING TTL` (the
+  history event kinds live 48 h).
+  """
+  @callback append_event(user_id :: uuid, event, opts :: keyword) :: :ok
+  @optional_callbacks append_event: 3
+
   @doc "Appends the same event to several inboxes in one request (v1.10 §13.1 sender copies)."
   @callback append_event_to_all(user_ids :: [uuid], event) :: :ok
 

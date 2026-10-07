@@ -15,6 +15,11 @@ defmodule RisiMe.Blobs do
   | `mls` | `grp:` | 2 MiB | 30 d | 60/h | 256 MiB |
   | `media` | `dm:` (e2ee), `grp:` | 16 MiB | 30 d | 120/h, 1000/day | 2 GiB |
   | `icon` | `grp:` | 512 KiB | none while current, 7 d after replaced | 3/h | none |
+  | `history` | `dm:` (e2ee), `grp:` | 16 MiB | 48 h (earlier after the ack) | 40/h | 512 MiB |
+
+  A `history` blob (v1.15 §17.9) carries its `request_id`: only the request's accepted provider
+  device uploads (at most 20 per request), and the requester's user reads it while the request
+  is open or `done`.
 
   Lifecycle: `DELETE` (and `remove/1`, the internal delete by reference) sets `deleted_at` and
   removes the file at once; the row stays until `expires_at`, so a replayed `client_blob_id`
@@ -37,7 +42,8 @@ defmodule RisiMe.Blobs do
   @limits %{
     "mls" => %{max: 2 * @mib, ttl_days: 30, hourly: 60, daily: nil},
     "media" => %{max: 16 * @mib, ttl_days: 30, hourly: 120, daily: 1000},
-    "icon" => %{max: 512 * 1024, ttl_days: nil, hourly: 3, daily: nil}
+    "icon" => %{max: 512 * 1024, ttl_days: nil, hourly: 3, daily: nil},
+    "history" => %{max: 16 * @mib, ttl_days: 2, hourly: 40, daily: nil}
   }
   @purposes Map.keys(@limits)
   @icon_grace_days 7
@@ -69,6 +75,10 @@ defmodule RisiMe.Blobs do
   @doc "The per-user limit on live `media` blob bytes (v1.11 §14.5, `:media_blob_quota`)."
   def media_quota, do: Application.get_env(:risime, :media_blob_quota, 2048 * @mib)
 
+  @doc "The per-user limit on live `history` blob bytes (v1.15 §17.9, `:history_blob_quota`)."
+  def history_quota, do: Application.get_env(:risime, :history_blob_quota, 512 * @mib)
+
+  defp quota("history"), do: history_quota()
   defp quota("mls"), do: mls_quota()
   defp quota("media"), do: media_quota()
   defp quota("icon"), do: nil
@@ -110,14 +120,33 @@ defmodule RisiMe.Blobs do
   defp parse(%{"purpose" => purpose, "conversation_id" => conv} = params)
        when purpose in @purposes and is_binary(conv) do
     with {:ok, kind} <- conversation_kind(purpose, conv),
-         {:ok, cbid} <- client_blob_id(purpose, params["client_blob_id"]) do
-      {:ok, %{purpose: purpose, conv: conv, kind: kind, client_blob_id: cbid}}
+         {:ok, cbid} <- client_blob_id(purpose, params["client_blob_id"]),
+         {:ok, rid} <- request_id(purpose, params["request_id"]) do
+      {:ok,
+       %{
+         purpose: purpose,
+         conv: conv,
+         kind: kind,
+         client_blob_id: cbid,
+         request_id: rid,
+         device_id: params["_device_id"]
+       }}
     end
   end
 
   defp parse(_), do: {:error, :bad_request}
 
-  defp conversation_kind("media", "dm:" <> _ = conv) do
+  defp request_id("history", id) when is_binary(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, id} -> {:ok, id}
+      :error -> {:error, :bad_request}
+    end
+  end
+
+  defp request_id("history", _), do: {:error, :bad_request}
+  defp request_id(_purpose, _), do: {:ok, nil}
+
+  defp conversation_kind(purpose, "dm:" <> _ = conv) when purpose in ["media", "history"] do
     if MLS.members(conv) == :error, do: {:error, :bad_request}, else: {:ok, :dm}
   end
 
@@ -125,7 +154,9 @@ defmodule RisiMe.Blobs do
     if Groups.group_id?(conv), do: {:ok, :grp}, else: {:error, :bad_request}
   end
 
-  defp client_blob_id(purpose, nil) when purpose in ["media", "icon"], do: {:error, :bad_request}
+  defp client_blob_id(purpose, nil) when purpose in ["media", "icon", "history"],
+    do: {:error, :bad_request}
+
   defp client_blob_id(_purpose, nil), do: {:ok, nil}
 
   defp client_blob_id(_purpose, id) when is_binary(id) do
@@ -150,6 +181,24 @@ defmodule RisiMe.Blobs do
     end
   end
 
+  # §17.9: only the accepted provider device (`X-Device-Id`) of an `accepted`/`receiving` request
+  # of this conversation (`404` otherwise); at most 20 blobs per request (`400`).
+  defp authorize(me, %{purpose: "history"} = up) do
+    cond do
+      not RisiMe.History.upload_allowed?(me, up.device_id, up.conv, up.request_id) ->
+        {:error, :not_found}
+
+      replay_of_request?(me, up) ->
+        :ok
+
+      request_blob_count(up.request_id) >= RisiMe.History.max_parts() ->
+        {:error, :bad_request}
+
+      true ->
+        :ok
+    end
+  end
+
   defp authorize(me, %{purpose: "icon", conv: conv}) do
     case Groups.visible(me, conv) do
       {:ok, _g, %Member{role: "admin"}} -> :ok
@@ -160,6 +209,12 @@ defmodule RisiMe.Blobs do
 
   defp authorize(me, %{conv: conv}) do
     with {:ok, _g, _m} <- Groups.visible(me, conv), do: :ok
+  end
+
+  defp replay_of_request?(me, up), do: by_client_id(me, up.client_blob_id) != nil
+
+  defp request_blob_count(rid) do
+    Repo.one(from b in "blobs", where: b.request_id == type(^rid, :binary_id), select: count())
   end
 
   defp octet_stream(content_type) do
@@ -341,6 +396,7 @@ defmodule RisiMe.Blobs do
             purpose: up.purpose,
             conversation_id: up.conv,
             client_blob_id: up.client_blob_id && Ecto.UUID.dump!(up.client_blob_id),
+            request_id: up[:request_id] && Ecto.UUID.dump!(up.request_id),
             size: size,
             sha256: sha,
             expires_at: expires_at,
@@ -384,6 +440,7 @@ defmodule RisiMe.Blobs do
       owner: type(b.owner, :binary_id),
       purpose: b.purpose,
       conversation_id: b.conversation_id,
+      request_id: type(b.request_id, :binary_id),
       size: b.size,
       sha256: b.sha256,
       expires_at: type(b.expires_at, :utc_datetime_usec),
@@ -448,6 +505,12 @@ defmodule RisiMe.Blobs do
   defp readable?(me, %{purpose: "media"} = b),
     do: Membership.active_since?(b.conversation_id, me, b.inserted_at)
 
+  # `history` (§17.9): the uploader, and the requester's user while the request is open or done.
+  defp readable?(me, %{purpose: "history", owner: me}), do: true
+
+  defp readable?(me, %{purpose: "history"} = b),
+    do: RisiMe.History.blob_reader?(me, b.request_id)
+
   # `icon`: current `active` and `pending_add` members only (a removed member loses it at once).
   defp readable?(me, %{purpose: "icon"} = b), do: current_member?(b.conversation_id, me)
 
@@ -480,7 +543,13 @@ defmodule RisiMe.Blobs do
         uploads_last_day: uploads_since(me, "media", DateTime.add(now, -86_400, :second)),
         daily_limit: media.daily
       },
-      mls: %{used: used_bytes(me, "mls"), limit: mls_quota()}
+      mls: %{used: used_bytes(me, "mls"), limit: mls_quota()},
+      history: %{
+        used: used_bytes(me, "history"),
+        limit: history_quota(),
+        uploads_last_hour: uploads_since(me, "history", DateTime.add(now, -3600, :second)),
+        hourly_limit: limits("history").hourly
+      }
     }
   end
 
@@ -553,6 +622,27 @@ defmodule RisiMe.Blobs do
       set: [expires_at: now]
     )
 
+    :ok
+  end
+
+  @doc """
+  v1.15 §17.9: the `history` blobs of a request expire at `at` (1 h after the last ack, or now on
+  any other close); a blob whose expiry is already earlier keeps it.
+  """
+  def expire_request(request_id, %DateTime{} = at) do
+    {_, ids} =
+      Repo.update_all(
+        from(b in "blobs",
+          where:
+            b.request_id == type(^request_id, :binary_id) and b.purpose == "history" and
+              (is_nil(b.expires_at) or b.expires_at > ^at),
+          select: type(b.id, :binary_id)
+        ),
+        set: [expires_at: at]
+      )
+
+    # Gone now: the file goes at once (the row stays until the sweep, so a replay gets 404).
+    if DateTime.compare(at, DateTime.utc_now()) != :gt, do: Enum.each(ids, &remove/1)
     :ok
   end
 

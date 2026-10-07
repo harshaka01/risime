@@ -197,7 +197,7 @@ fn ctx_for(c: &Case, sha256: &[u8], plain_size: u64) -> HistoryContext {
 }
 
 fn positive(dir: &Path, c: &Case) -> serde_json::Value {
-    let ikm_r = seeded32(&format!("risime-history-vector ikm_r {}", c.name));
+    let ikm_r = seeded32(&format!("risime-history-vector ikm_r {}", c.request_id));
     let ikm_e = seeded32(&format!("risime-history-vector ikm_e {}", c.name));
     let k = seeded32(&format!("risime-history-vector k {}", c.name));
     let (rsk, rpk) = derive_key_pair(&ikm_r);
@@ -420,7 +420,7 @@ fn build_vectors() -> serde_json::Value {
                     `cargo test -p risime-mls history_vectors_write -- --ignored` with seeded \
                     inputs; ikm_e makes the HPKE ephemeral key deterministic (RFC 9180 \
                     DeriveKeyPair; test builds only). All binary fields are lowercase hex. \
-                    Positive: (rsk, rpk) = DeriveKeyPair(ikm_r); hpke_enc = the public key of \
+                    Positive: (rsk, rpk) = DeriveKeyPair(ikm_r), one key pair per request_id; hpke_enc = the public key of \
                     DeriveKeyPair(ikm_e); info and aad as §17.3 from the case's fields; \
                     sealed_key = HPKE base-mode seal of k; cipher = A256GCM-S64K of plain under k \
                     with the label. Negative: the base case with `change` applied must fail with \
@@ -629,4 +629,57 @@ fn info_and_aad_layout() {
     assert_eq!(&aad[..4], &[0, 3, 0, 20]);
     assert_eq!(&aad[4..36], &[0xab; 32]);
     assert_eq!(&aad[36..], &[0, 0, 0, 0, 0, 1, 2, 3]);
+}
+
+/// §17.3 clarification: the blob's sha256 is checked before any AEAD; a mismatch is an integrity
+/// failure reported before decryption; wrong lengths are Malformed before any HPKE operation.
+#[test]
+fn sha256_before_aead_and_lengths_before_hpke() {
+    let dir = tmpdir("order");
+    let (rsk, rpk) = derive_key_pair(&seeded32("order ikm_r"));
+    let c = &cases()[0];
+    let s = seal(&rpk, &ctx_for(c, &[], 0), b"abc", &dir.join("a")).unwrap();
+    let ctx = ctx_for(c, &s.sha256, s.plain_size);
+    let mut blob = fs::read(dir.join("a")).unwrap();
+    blob[0] ^= 1;
+    fs::write(dir.join("t"), &blob).unwrap();
+    match open_with_rsk(
+        &rsk,
+        &ctx,
+        &s.hpke_enc,
+        &s.sealed_key,
+        &dir.join("t"),
+        HISTORY_BLOB_LABEL,
+    ) {
+        Err(HistoryError::OpenFailed(m)) => assert!(m.starts_with("integrity"), "{m}"),
+        r => panic!("{r:?}"),
+    }
+    let malformed =
+        |r: HistoryResult<Zeroizing<Vec<u8>>>| matches!(r, Err(HistoryError::Malformed(_)));
+    let a = dir.join("a");
+    assert!(malformed(open_with_rsk(
+        &rsk,
+        &ctx,
+        &s.hpke_enc[..31],
+        &s.sealed_key,
+        &a,
+        HISTORY_BLOB_LABEL
+    )));
+    assert!(malformed(open_with_rsk(
+        &rsk,
+        &ctx,
+        &s.hpke_enc,
+        &s.sealed_key[..47],
+        &a,
+        HISTORY_BLOB_LABEL
+    )));
+    assert!(malformed(open_with_rsk(
+        &rsk[..31],
+        &ctx,
+        &s.hpke_enc,
+        &s.sealed_key,
+        &a,
+        HISTORY_BLOB_LABEL
+    )));
+    fs::remove_dir_all(&dir).unwrap();
 }

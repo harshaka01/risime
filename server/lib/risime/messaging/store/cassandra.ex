@@ -243,9 +243,22 @@ defmodule RisiMe.Messaging.Store.Cassandra do
     do: [user_id, event_id, kind, payload, conv]
 
   @impl true
-  def append_event(user_id, %{event_id: event_id, kind: kind, data: data}) do
+  def append_event(user_id, event), do: append_event(user_id, event, [])
+
+  # v1.15 §17.11: a per-write TTL (history events, 48 h); the table default otherwise.
+  @impl true
+  def append_event(user_id, %{event_id: event_id, kind: kind, data: data}, opts) do
     conv = event_conv(data)
-    run!(insert_event(conv), event_row(user_id, event_id, kind, Jason.encode!(data), conv))
+    row = event_row(user_id, event_id, kind, Jason.encode!(data), conv)
+
+    case opts[:ttl] do
+      nil ->
+        run!(insert_event(conv), row)
+
+      ttl when is_integer(ttl) and ttl > 0 ->
+        run!(insert_event(conv) <> " USING TTL ?", row ++ [ttl])
+    end
+
     :ok
   end
 

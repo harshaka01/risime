@@ -2945,6 +2945,13 @@ provider identity, wrong requester identity, wrong `part` in `aad`, wrong `sha25
 swapped `hpke_enc` (from another positive case), truncated `sealed_key` (≠ 48 bytes), low-order
 `rpk` (`SealRefused`), wrong `rsk`, the blob opened with the `risime-media-v1` label; and in
 `aad_h`: 17 and 19 bytes, a `0x01 0x44` prefix, a wrong version byte (all `Malformed`).
+**Clarified 2026-10-07 (independent vector check):**
+- **One key pair per request:** the vectors seed `ikm_r` per `request_id`, not per case. All
+  parts of one request share `rsk`/`rpk`, so the swapped-key cases isolate the `aad` binding.
+- A `hpke_enc`, `sealed_key` or `rpk` of the wrong length is **`Malformed`**, rejected before any
+  HPKE operation.
+- Opening a part checks the blob's **`sha256` before decrypting**, as for media (§14.3). A mismatch
+  is `OpenFailed` (message "integrity: …"), and no AEAD is attempted.
 
 ### 17.4 Server: pushes, eligibility, naming
 All pushes are on the inbox topic (§2.2), from a socket with a `device_id`; replies follow §2.2
@@ -3209,7 +3216,7 @@ After the last part, cancel, or any terminal state: `history_forget` (§17.3). P
 | Max size (ciphertext) | 16 MiB |
 | Parts | at most 20 blobs per request (`400 bad_request`) |
 | Readers | the uploader, and the **requester's user** while the request is open or `done` (`404` otherwise) |
-| TTL | **48 h from upload**; deleted earlier on the requester's **`history:ack`** of that part (+1 h), on cancel, and on a close without delivery |
+| TTL | **48 h from upload**; deleted earlier **1 h after the request's last `history:ack`** (the server can't map a blob to a part, because the blob id is inside the encrypted envelope), on cancel, and on a close without delivery |
 | Upload rate | 40 / h per user; the 3-concurrent-uploads slot shared with `media` |
 | Quota | 512 MiB live per user, separate from `media` (`413 quota_exceeded`); in `GET /blobs/usage` as `"history"` (`blob_usage_reply_history.json`) |
 | Guard | counted with `media` in the free-space guard (`507 storage_full`) |
