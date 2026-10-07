@@ -48,15 +48,22 @@ import lk.codegen.risime.ui.theme.Spacing
 val QUICK_REACTIONS = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
 
 /**
- * The emoji2 picker (recent emojis, skin tones) in a bottom sheet. The view is created once, so its
- * listener always calls the **latest** [onPick] (a stale one kept the composer text of the first
- * pick: every further emoji replaced the previous one). [onBackspace] adds a ⌫ that deletes one
- * whole grapheme, for the composer, where the sheet stays open between picks.
+ * The emoji2 picker (recent emojis, skin tones) in a bottom sheet. The view is created once and
+ * keeps the callback it was given, so it gets a stable one that always calls the **latest**
+ * [onPick] (a stale one kept the composer text of the first pick: every further emoji replaced the
+ * previous one). [onBackspace] adds a ⌫ that deletes one whole grapheme, for the composer, where
+ * the sheet stays open between picks. [picker] is the picker view (a fake in tests).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EmojiPickerSheet(onPick: (String) -> Unit, onDismiss: () -> Unit, onBackspace: (() -> Unit)? = null) {
-    val pick by androidx.compose.runtime.rememberUpdatedState(onPick)
+fun EmojiPickerSheet(
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onBackspace: (() -> Unit)? = null,
+    picker: @Composable (onPick: (String) -> Unit) -> Unit = { EmojiPickerAndroidView(it) },
+) {
+    val latest by androidx.compose.runtime.rememberUpdatedState(onPick)
+    val stable = remember { { e: String -> latest(e) } }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         if (onBackspace != null) {
             Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.sm), horizontalArrangement = Arrangement.End) {
@@ -65,11 +72,17 @@ fun EmojiPickerSheet(onPick: (String) -> Unit, onDismiss: () -> Unit, onBackspac
                 }
             }
         }
-        AndroidView(
-            factory = { ctx -> EmojiPickerView(ContextThemeWrapper(ctx, androidx.appcompat.R.style.Theme_AppCompat_DayNight)).apply { setOnEmojiPickedListener { pick(it.emoji) } } },
-            modifier = Modifier.fillMaxWidth().height(380.dp),
-        )
+        picker(stable)
     }
+}
+
+/** emoji2's EmojiPickerView: its listener is set once, in the factory. */
+@Composable
+internal fun EmojiPickerAndroidView(onPick: (String) -> Unit) {
+    AndroidView(
+        factory = { ctx -> EmojiPickerView(ContextThemeWrapper(ctx, androidx.appcompat.R.style.Theme_AppCompat_DayNight)).apply { setOnEmojiPickedListener { onPick(it.emoji) } } },
+        modifier = Modifier.fillMaxWidth().height(380.dp),
+    )
 }
 
 /** Long-press: 6 quick reactions + "+", then Copy, Retry, Delete. My active reactions are highlighted. */

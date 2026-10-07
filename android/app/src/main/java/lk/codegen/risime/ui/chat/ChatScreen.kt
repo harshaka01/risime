@@ -323,6 +323,8 @@ internal fun Composer(
     placeholder: String = "Message",
     /** §14: the attach-photo button (null: photos aren't available in this app/chat). */
     attach: (@Composable () -> Unit)? = null,
+    /** The picker view inside the emoji sheet (a fake in tests). */
+    emojiPicker: (@Composable (onPick: (String) -> Unit) -> Unit)? = null,
 ) {
     var picker by remember { mutableStateOf(false) }
     val text = value.text
@@ -363,6 +365,7 @@ internal fun Composer(
             onPick = { e -> onValue(insertAtCursor(value, e)) },
             onDismiss = { picker = false },
             onBackspace = { onValue(deleteBeforeCursor(value, IcuGraphemeBoundary)) },
+            picker = emojiPicker ?: { EmojiPickerAndroidView(it) },
         )
     }
 }
