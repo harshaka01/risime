@@ -71,6 +71,8 @@ class ChatEngine(
     private val blobs: (suspend (lk.codegen.risime.net.BlobRef) -> BlobFetch)? = null,
     /** §12.8: this device can't follow the group any more (rejoin). */
     private val onUnrecoverable: (conversationId: String) -> Unit = {},
+    /** v1.16: an e2ee DM this device can't encrypt for (no or stale group): check and repair (MlsUpgrader verify). */
+    private val onDmNeedsRepair: (conversationId: String) -> Unit = {},
     /**
      * Where the work that touches the MLS core runs: its storage callbacks open Room transactions
      * synchronously, which Room refuses on the main thread (the nightly.17 crash on opening a DM while
@@ -178,7 +180,7 @@ class ChatEngine(
                         }
                         false
                     }
-                    Event.KIND_MLS_COMMIT, Event.KIND_MLS_WELCOME, Event.KIND_MLS_MEMBERSHIP ->
+                    Event.KIND_MLS_COMMIT, Event.KIND_MLS_WELCOME, Event.KIND_MLS_MEMBERSHIP, Event.KIND_MLS_DM_OP ->
                         runCatching { applyMls(me, e) }.getOrDefault(false)
                     Event.KIND_STATUS -> {
                         runCatching { e.statusData() }.getOrNull()?.let { applyStatus(it) }
@@ -385,6 +387,8 @@ class ChatEngine(
                 if (isGroupConversation(conv)) {
                     groups?.onGroupStateChanged(conv, removedSelf = mlsEngine()?.group(conv) == null)
                     scope.launch { flushOutbox() } // messages waiting for this group's Welcome
+                } else if (mlsEngine()?.group(conv) != null) {
+                    scope.launch { flushOutbox() } // v1.16: DM messages waiting while this phone was re-added
                 }
                 results += pipeline.replay(conv, gc.joined)
             }
@@ -796,9 +800,19 @@ class ChatEngine(
             } }
             val reason = (r as? PushResult.Rejected)?.reason
             if (reason != AuthErrors.STALE_EPOCH && reason != AuthErrors.E2EE_REQUIRED) return r
-            if (attempt++ >= staleEpochRetries) return PushResult.Rejected(RETRY_LATER)
+            if (attempt++ >= staleEpochRetries) {
+                if (!isGroupConversation(conv)) onDmNeedsRepair(conv) // v1.16: maybe no longer in the DM group
+                return PushResult.Rejected(RETRY_LATER)
+            }
             catchUp(conv)
-            if (reason == AuthErrors.E2EE_REQUIRED && mlsEngine()?.group(conv) == null) return PushResult.Rejected(RETRY_LATER)
+            if (reason == AuthErrors.E2EE_REQUIRED && mlsEngine()?.group(conv) == null) {
+                // v1.16: an e2ee DM this phone has no group for: ask to be re-added; the message waits (pending).
+                if (!isGroupConversation(conv) && mlsEngine() != null) {
+                    onDmNeedsRepair(conv)
+                    return PushResult.Rejected(WAITING_FOR_GROUP)
+                }
+                return PushResult.Rejected(RETRY_LATER)
+            }
             if (isGroupConversation(conv) && mlsEngine()?.group(conv) == null) return PushResult.Rejected(WAITING_FOR_GROUP)
         }
     }

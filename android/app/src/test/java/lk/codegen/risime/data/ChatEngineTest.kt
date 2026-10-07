@@ -92,6 +92,25 @@ class ChatEngineTest {
     }
 
     @Test
+    fun e2eeDmWithoutALocalGroupStaysPendingAndAsksForRepair() = runTest {
+        // v1.16: the DM is e2ee on the server but this phone has no group: no "Not sent", a repair kick.
+        realtime.sendReplies = { PushResult.Rejected(lk.codegen.risime.net.AuthErrors.E2EE_REQUIRED) }
+        val repairs = mutableListOf<String>()
+        val mls = lk.codegen.risime.data.mls.FakeMlsEngine(me, "d-me")
+        val e = ChatEngine(
+            messages = messages, sync = sync,
+            tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
+            scope = this, realtime = { realtime }, meId = { me }, clock = { now++ }, newClientMsgId = { "c${++ids}" },
+            mlsEngine = { mls }, onDmNeedsRepair = { repairs += it },
+        )
+        val id = e.sendText(peer, "while this phone is re-added")!!
+        now += ChatEngine.OUTBOX_GIVE_UP_MS + 1
+        advanceTimeBy(60_000)
+        assertEquals("PENDING", messages.rows[id]!!.status)
+        assertTrue(repairs.isNotEmpty() && repairs.all { it == conv })
+    }
+
+    @Test
     fun sendInsertsPendingThenSentWithServerIds() = runTest {
         val e = engine()
         realtime.connected = false

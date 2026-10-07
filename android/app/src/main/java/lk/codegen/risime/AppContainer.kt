@@ -34,6 +34,7 @@ import lk.codegen.risime.data.mls.DeviceRegistrar
 import lk.codegen.risime.data.mls.KeystoreDbKeyWrapper
 import lk.codegen.risime.data.mls.KvSealer
 import lk.codegen.risime.data.mls.MembershipExecutor
+import lk.codegen.risime.data.mls.MembershipOutcome
 import lk.codegen.risime.data.mls.MlsDbKey
 import lk.codegen.risime.data.mls.MlsEngineFactory
 import lk.codegen.risime.data.mls.Registration
@@ -190,6 +191,13 @@ class AppContainer(
         override suspend fun claim(userIds: List<String>) = api.claimKeyPackages(userIds, sessionStore.deviceId())
         override suspend fun commit(conversationId: String, body: lk.codegen.risime.net.MlsCommitRequest) =
             api.mlsCommit(conversationId, body, sessionStore.deviceId())
+        override suspend fun rejoin(conversationId: String) = api.mlsRejoin(conversationId, sessionStore.deviceId())
+        override suspend fun reset(conversationId: String, generation: Long) =
+            when (val r = api.resetGroup(conversationId, generation, sessionStore.deviceId())) {
+                is ApiResult.Ok -> ApiResult.Ok(r.value.generation)
+                is ApiResult.Error -> r
+                is ApiResult.NetworkError -> r
+            }
     }
     /** §10.3 `mls_membership` seen (any conversation): open chats that aren't E2EE re-check readiness (P0-1). */
     val mlsMembershipSeen = kotlinx.coroutines.flow.MutableSharedFlow<lk.codegen.risime.net.MlsMembershipEvent>(extraBufferCapacity = 16)
@@ -209,12 +217,40 @@ class AppContainer(
                     Log.i("RisiMe", "mls_membership ${a.event.change}: $r")
                 }
             },
+            onDmOp = { o ->
+                // v1.16: named to re-add a DM member's device (after this event's transaction).
+                scope.launch(Dispatchers.IO) {
+                    val r = runCatching { membershipExecutor.executeOp(o) }.getOrElse { MembershipOutcome.Failed(it.message ?: "error") }
+                    Log.i("RisiMe", "mls_dm_op: $r")
+                }
+            },
             log = { Log.w("RisiMe", "mls: $it") },
             onJoined = { scope.launch { deviceRegistrar.topUp() } },
             onParkedAhead = { conv -> scope.launch { catchUpCommits(conv) } },
         )
     }
     val mlsUpgrader by lazy { MlsUpgrader({ mlsEngine }, mlsApi) }
+
+    /** v1.16: DM repairs in flight (one per conversation; later kicks while it runs are dropped). */
+    private val dmRepairs = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** v1.16 §5: an e2ee DM send couldn't be encrypted: check against the server, re-add or reset; flush when encrypted. */
+    fun repairDm(conversationId: String) {
+        if (!dmRepairs.add(conversationId)) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val me = sessionStore.current()?.user?.id ?: return@launch
+                val peer = lk.codegen.risime.net.dmPeer(conversationId, me) ?: return@launch
+                val s = mlsUpgrader.ensure(conversationId, me, peer, verify = true)
+                Log.i("RisiMe", "dm repair: $s")
+                if (s is lk.codegen.risime.data.mls.E2eeState.Encrypted) engine.flushOutbox()
+            } catch (t: Throwable) {
+                Log.w("RisiMe", "dm repair failed: ${t.message}")
+            } finally {
+                dmRepairs.remove(conversationId)
+            }
+        }
+    }
 
     // ---- Groups (contract v1.9 §12). Enabled only with a groups-capable MLS core. ----
     val groupStore by lazy {
@@ -679,6 +715,7 @@ class AppContainer(
         groups = groupStore,
         blobs = { ref -> fetchBlob(ref) },
         onUnrecoverable = { conv -> onGroupUnrecoverable(conv) },
+        onDmNeedsRepair = { conv -> repairDm(conv) },
         // Off the main thread: the MLS core's storage callbacks run Room transactions synchronously.
         io = Dispatchers.IO,
         // §13.3 R7: a fresh install never notifies for replayed events (messages, reactions).

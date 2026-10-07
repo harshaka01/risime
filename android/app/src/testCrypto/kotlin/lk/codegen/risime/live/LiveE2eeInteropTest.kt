@@ -104,12 +104,21 @@ class LiveE2eeInteropTest {
         val img = LiveImageKit(api, messages, deviceId.take(8))
         val raw = CopyOnWriteArrayList<Event>()
         val memberships = CopyOnWriteArrayList<MembershipAction>()
+        /** v1.16 `mls_dm_op` events naming this device (run by the test, like the app's onDmOp). */
+        val dmOps = CopyOnWriteArrayList<lk.codegen.risime.net.MlsDmOpEvent>()
         val conflicts = CopyOnWriteArrayList<String>()
         val mlsApi = object : MlsApi {
             override suspend fun group(conversationId: String) = api.mlsGroup(conversationId)
             override suspend fun claim(userIds: List<String>) = api.claimKeyPackages(userIds, deviceId)
             override suspend fun commit(conversationId: String, body: MlsCommitRequest) =
                 api.mlsCommit(conversationId, body, deviceId).also { if (it is ApiResult.Error && it.code == AuthErrors.EPOCH_CONFLICT) conflicts += conversationId }
+            override suspend fun rejoin(conversationId: String) = api.mlsRejoin(conversationId, deviceId)
+            override suspend fun reset(conversationId: String, generation: Long): ApiResult<Long> =
+                when (val r = api.resetGroup(conversationId, generation, deviceId)) {
+                    is ApiResult.Ok -> ApiResult.Ok(r.value.generation)
+                    is ApiResult.Error -> r
+                    is ApiResult.NetworkError -> r
+                }
         }
         lateinit var client: PhoenixRealtimeClient
         /** §13.2: every page's history_before, in order. */
@@ -120,7 +129,7 @@ class LiveE2eeInteropTest {
             tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
             scope = scope, realtime = { client }, meId = { userId },
             behaviour = BehaviourLog(FakeBehaviourDao(), { "s" }, { 0L }),
-            mls = MlsPipeline({ mls.engine }, FakeMlsPendingDao(), onMembership = { memberships += it }, log = { println("  [$deviceId] mls: $it") }),
+            mls = MlsPipeline({ mls.engine }, FakeMlsPendingDao(), onMembership = { memberships += it }, log = { println("  [$deviceId] mls: $it") }, onDmOp = { dmOps += it }),
             mlsEngine = { mls.engine }, catchUp = { catchUp(it) },
             reactionsDao = reactions,
             onFreshReplayDone = { freshReplayDone++ },
@@ -425,6 +434,101 @@ class LiveE2eeInteropTest {
         fun u(k: String) = g!![k]!!.jsonObject.let { it["id"]!!.jsonPrimitive.content to it["token"]!!.jsonPrimitive.content }
         val trusted = (runBlocking { ApiClient(http, { url }, { null }).attestationKeys() } as ApiResult.Ok).value.keys.map { it.toString() }
         LiveCalls(http, scope, url, trusted).run(u("A"), u("B"), u("C")) { name, block -> check(name, block) }
+    }
+
+    /**
+     * v1.16 (proposal 2026-10-07-dm-device-readd): DMs heal after a reinstall (the "readd" block's
+     * A and B, a DM no other live test uses). (1) A reinstalls: A's new phone sees it isn't in the
+     * group ("Setting up encryption on this phone…"), the server names B's device, which adds A's new
+     * device and drops A's superseded leaf; then the DM sends both ways (the gate check). (2) Both
+     * reinstall: nobody can re-add, so A's phone resets the DM and rebuilds it; both ways again.
+     */
+    @Test fun liveDmReadd() {
+        val path = System.getenv("RISIME_INTEROP_CONFIG")
+        assumeTrue("RISIME_INTEROP_CONFIG not set", !path.isNullOrBlank() && File(path).isFile)
+        RealMls.assumeHostLibrary()
+        val root = ProtocolJson.parseToJsonElement(File(path!!).readText()).jsonObject
+        val r = root["readd"]?.jsonObject
+        assumeTrue("no \"readd\" block in the interop config", r != null)
+        val url = root["url"]!!.jsonPrimitive.content
+        fun u(k: String) = r!![k]!!.jsonObject.let { it["id"]!!.jsonPrimitive.content to it["token"]!!.jsonPrimitive.content }
+        val (aId, aTok) = u("A"); val (bId, bTok) = u("B")
+        val conv = dmConversationId(aId, bId)
+        val run = UUID.randomUUID().toString().take(8)
+        val trusted = (runBlocking { ApiClient(http, { url }, { null }).attestationKeys() } as ApiResult.Ok).value.keys.map { it.toString() }
+
+        suspend fun install(userId: String, token: String): Dev {
+            val d = Dev(url, userId, token, UUID.randomUUID().toString(), trusted)
+            val reg = DeviceRegistrar(d.api, { d.deviceId }, "0.4.0-interop", { d.mls.engine }).register(pushToken = null)
+            ensure(reg is Registration.Mls) { "${d.deviceId}: $reg" }
+            d.start(); d.live()
+            return d
+        }
+        suspend fun leaves(d: Dev): Set<String> {
+            val g = d.api.mlsGroup(conv)
+            ensure(g is ApiResult.Ok) { "GET group: $g" }
+            return (g as ApiResult.Ok).value.devices.map { it.deviceId.lowercase() }.toSet()
+        }
+        suspend fun bothWays(x: Dev, xPeer: String, y: Dev, yPeer: String, label: String) {
+            x.chat.sendText(xPeer, "$label x→y $run")
+            await(20_000, "$label: y decrypts") { y.bodies().firstOrNull { it == "$label x→y $run" } }
+            y.chat.sendText(yPeer, "$label y→x $run")
+            await(20_000, "$label: x decrypts") { x.bodies().firstOrNull { it == "$label y→x $run" } }
+        }
+
+        var a1: Dev? = null
+        var b1: Dev? = null
+        check("readd: A and B have an e2ee DM") {
+            a1 = install(aId, aTok); b1 = install(bId, bTok)
+            val s = MlsUpgrader({ a1!!.mls.engine }, a1!!.mlsApi).ensure(conv, aId, bId)
+            ensure(s is E2eeState.Encrypted) { "upgrade: $s" }
+            await(15_000, "B joined") { b1!!.mls.engine.group(conv) }
+            bothWays(a1!!, bId, b1!!, aId, "before")
+            null
+        }
+        var a2: Dev? = null
+        check("readd: A reinstalls; the new phone shows 'Setting up encryption on this phone…'") {
+            a1!!.client.stop() // the old install is never seen again
+            delay(50)
+            a2 = install(aId, aTok)
+            val s = MlsUpgrader({ a2!!.mls.engine }, a2!!.mlsApi).ensure(conv, aId, bId, verify = true)
+            ensure(s == E2eeState.Repairing) { "new phone: $s" }
+            ensure(lk.codegen.risime.data.mls.e2eeStripText(s, { "B" }) == "Setting up encryption on this phone…") { "strip" }
+            null
+        }
+        check("readd: B's device is named, adds A's new device and drops A's old leaf (op_id on each commit)") {
+            val op = await(20_000, "mls_dm_op naming b1") { b1!!.dmOps.lastOrNull { it.conversationId == conv } }
+            ensure(op.op.added.any { it.deviceId.equals(a2!!.deviceId, true) }) { "op added ${op.op.added}" }
+            ensure(op.op.removed.any { it.deviceId.equals(a1!!.deviceId, true) }) { "op removed ${op.op.removed}" }
+            val outcome = b1!!.executor.executeOp(op)
+            ensure(outcome == MembershipOutcome.Done) { "executeOp: $outcome" }
+            await(20_000, "A's new phone joined from the Welcome") { a2!!.mls.engine.group(conv) }
+            val l = leaves(b1!!)
+            ensure(a2!!.deviceId.lowercase() in l && a1!!.deviceId.lowercase() !in l) { "leaves $l" }
+            val again = MlsUpgrader({ a2!!.mls.engine }, a2!!.mlsApi).ensure(conv, aId, bId, verify = true)
+            ensure(again is E2eeState.Encrypted) { "after re-add: $again" }
+            "leaves ${l.size}"
+        }
+        check("readd gate: after A's device changed, the DM still sends both ways") {
+            bothWays(a2!!, bId, b1!!, aId, "after reinstall")
+            null
+        }
+        check("readd: both reinstall → no candidate → A's phone resets and rebuilds; both ways") {
+            a2!!.client.stop(); b1!!.client.stop()
+            delay(50)
+            val a3 = install(aId, aTok)
+            val b3 = install(bId, bTok)
+            val before = (a3.api.mlsGroup(conv) as ApiResult.Ok).value.generation
+            val s = MlsUpgrader({ a3.mls.engine }, a3.mlsApi).ensure(conv, aId, bId, verify = true)
+            ensure(s is E2eeState.Encrypted) { "a3: $s" }
+            val g = (a3.api.mlsGroup(conv) as ApiResult.Ok).value
+            ensure(g.e2ee && g.generation == before + 1 && g.epoch != null) { "after reset: $g" }
+            await(20_000, "B's new phone joined the new generation") { b3.mls.engine.group(conv)?.takeIf { it.generation == g.generation } }
+            val sb = MlsUpgrader({ b3.mls.engine }, b3.mlsApi).ensure(conv, bId, aId, verify = true)
+            ensure(sb is E2eeState.Encrypted) { "b3: $sb" }
+            bothWays(a3, bId, b3, aId, "after reset")
+            "generation ${g.generation}"
+        }
     }
 
     /**

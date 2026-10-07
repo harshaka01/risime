@@ -132,6 +132,8 @@ class MlsPipeline(
     private val onJoined: () -> Unit = {},
     /** §12.8: a `grp:` event was parked ahead of the local epoch: fetch the missing commits (no limit beyond the rate limit). */
     private val onParkedAhead: (conversationId: String) -> Unit = {},
+    /** v1.16 `mls_dm_op` naming this device: run it after the transaction (MembershipExecutor.executeOp). */
+    private val onDmOp: (lk.codegen.risime.net.MlsDmOpEvent) -> Unit = {},
 ) {
     private val b64 = Base64.getDecoder()
 
@@ -228,6 +230,11 @@ class MlsPipeline(
         }
         e.mlsMembership()?.let { m ->
             membershipAction(m, mls.userId, mls.deviceId, random)?.let(onMembership)
+            return MlsResult.Ignored
+        }
+        e.mlsDmOp()?.let { o ->
+            val c = o.op.committer
+            if (c != null && c.deviceId.equals(mls.deviceId, true) && c.userId.equals(mls.userId, true)) onDmOp(o)
             return MlsResult.Ignored
         }
         e.deleteData()?.takeIf { it.encrypted }?.let { d -> return applyDelete(mls, e, d, historyBefore, joined) }

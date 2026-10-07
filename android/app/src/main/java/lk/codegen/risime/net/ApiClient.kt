@@ -84,6 +84,10 @@ class ApiClient(
     suspend fun mlsCommit(conversationId: String, body: MlsCommitRequest, deviceId: String): ApiResult<MlsCommitReply> =
         call("POST", "mls/groups/$conversationId/commit", body, headers = mapOf(DEVICE_HEADER to deviceId))
 
+    /** v1.16: ask for this device to be (re-)added to an e2ee DM group (X-Device-Id required). */
+    suspend fun mlsRejoin(conversationId: String, deviceId: String): ApiResult<DmRejoinReply> =
+        call<Unit, DmRejoinReply>("POST", "mls/groups/$conversationId/rejoin", null, headers = mapOf(DEVICE_HEADER to deviceId))
+
     suspend fun mlsCommits(conversationId: String, sinceEpoch: Long, limit: Int? = null): ApiResult<MlsCommitsReply> =
         call<Unit, MlsCommitsReply>("GET", "mls/groups/$conversationId/commits?since_epoch=$sinceEpoch" + (limit?.let { "&limit=$it" } ?: ""), null)
 

@@ -2,6 +2,7 @@ package lk.codegen.risime.data.mls
 
 import lk.codegen.risime.net.ApiResult
 import lk.codegen.risime.net.AuthErrors
+import lk.codegen.risime.net.DmRejoinReply
 import lk.codegen.risime.net.KeyPackagesClaimReply
 import lk.codegen.risime.net.MlsCommitReply
 import lk.codegen.risime.net.MlsCommitRequest
@@ -17,6 +18,14 @@ interface MlsApi {
     suspend fun claim(userIds: List<String>): ApiResult<KeyPackagesClaimReply>
 
     suspend fun commit(conversationId: String, body: MlsCommitRequest): ApiResult<MlsCommitReply>
+
+    /** v1.16 `POST /mls/groups/{dm}/rejoin`: ask for this device to be (re-)added to the DM group. */
+    suspend fun rejoin(conversationId: String): ApiResult<DmRejoinReply> =
+        ApiResult.Error(404, AuthErrors.NOT_FOUND, "rejoin not supported")
+
+    /** v1.16 DM reset (`POST /mls/groups/{dm}/reset`): the new generation. */
+    suspend fun reset(conversationId: String, generation: Long): ApiResult<Long> =
+        ApiResult.Error(404, AuthErrors.NOT_FOUND, "reset not supported")
 }
 
 /** The chat's encryption state, for the header lock / "Not end-to-end encrypted yet" strip (§10.4, decision 048). */
@@ -32,6 +41,12 @@ sealed interface E2eeState {
     /** The group exists on the server (or we lost a creation race): our Welcome is on its way. */
     data object WaitingForWelcome : E2eeState
 
+    /**
+     * v1.16: the DM is e2ee but this phone isn't (or no longer) in its group: re-add requested, or a
+     * reset under way. Messages stay pending and go out once the Welcome is applied.
+     */
+    data object Repairing : E2eeState
+
     /** No MLS core in this app, or E2EE is off on the server: plaintext, exactly as before. */
     data object Unavailable : E2eeState
 
@@ -40,6 +55,9 @@ sealed interface E2eeState {
 
 /** Prefix of every "this chat is plaintext" strip (decision 048: a plaintext chat is always labelled). */
 const val NOT_E2EE_PREFIX = "Not end-to-end encrypted yet"
+
+/** v1.16 strip while this phone is being (re-)added to an e2ee DM group. */
+const val REPAIRING_TEXT = "Setting up encryption on this phone…"
 
 /** Chat info line for an E2EE chat (decision 048). */
 const val E2EE_INFO_TEXT = "Messages are end-to-end encrypted"
@@ -90,6 +108,7 @@ fun e2eeStripText(
     E2eeState.Checking -> null
     E2eeState.Unavailable -> "Not end-to-end encrypted: encryption isn't available on this server or app"
     E2eeState.WaitingForWelcome -> "$NOT_E2EE_PREFIX: setting up end-to-end encryption…"
+    E2eeState.Repairing -> REPAIRING_TEXT
     is E2eeState.Failed ->
         if (state.reason == "network") "$NOT_E2EE_PREFIX: can't reach the server, retrying"
         else "$NOT_E2EE_PREFIX: encryption setup didn't finish, retrying"
@@ -119,32 +138,119 @@ class E2eeRetryBackoff(private val firstMs: Long = 5_000, private val maxMs: Lon
 /**
  * Creates the conversation's group when it's ready (claim → epoch-0 commit with a Welcome →
  * merge only on 200). A creation race is lost gracefully: drop the local group, wait for the Welcome.
+ *
+ * v1.16 (proposal 2026-10-07-dm-device-readd §5): with [verify], an e2ee DM is checked against the
+ * server. When this device has no usable group (none, an older generation, or not in the server's
+ * `devices`), it asks to be re-added (`rejoin`), and resets the DM when nobody can re-add it
+ * (`candidates: 0`) or after [resetAfterMs]; a DM awaiting a rebuild (`epoch: null`) is rebuilt.
  */
-class MlsUpgrader(private val engine: () -> MlsEngine?, private val api: MlsApi) {
+class MlsUpgrader(
+    private val engine: () -> MlsEngine?,
+    private val api: MlsApi,
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val welcomeWaitMs: Long = WELCOME_WAIT_MS,
+    private val resetAfterMs: Long = RESET_AFTER_MS,
+    private val rejoinEveryMs: Long = REJOIN_EVERY_MS,
+) {
     private val b64 = Base64.getEncoder()
     private val dec = Base64.getDecoder()
 
-    suspend fun ensure(conversationId: String, myUserId: String, peerId: String): E2eeState {
+    /** First time this device saw it had no usable group of an e2ee DM (per conversation). */
+    private val stuckSince = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val lastRejoin = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    suspend fun ensure(conversationId: String, myUserId: String, peerId: String, verify: Boolean = false): E2eeState {
         val mls = engine() ?: return E2eeState.Unavailable
-        mls.group(conversationId)?.let { return E2eeState.Encrypted(it.epoch) }
+        val local = mls.group(conversationId)
+        if (local != null && !verify) return E2eeState.Encrypted(local.epoch)
         val g = when (val r = api.group(conversationId)) {
             is ApiResult.Ok -> r.value
-            is ApiResult.Error -> return if (r.code == AuthErrors.MLS_UNAVAILABLE) E2eeState.Unavailable else E2eeState.Failed(r.code)
-            is ApiResult.NetworkError -> return E2eeState.Failed("network")
+            is ApiResult.Error -> return local?.let { E2eeState.Encrypted(it.epoch) }
+                ?: if (r.code == AuthErrors.MLS_UNAVAILABLE) E2eeState.Unavailable else E2eeState.Failed(r.code)
+            is ApiResult.NetworkError -> return local?.let { E2eeState.Encrypted(it.epoch) } ?: E2eeState.Failed("network")
         }
-        if (g.e2ee) return E2eeState.WaitingForWelcome
+        if (!g.e2ee) {
+            if (local != null) return E2eeState.Encrypted(local.epoch)
+            if (!g.ready) return E2eeState.NotReady(g.missing)
+            return create(conversationId, myUserId, peerId, g.generation, rebuild = false)
+        }
+        val inDevices = g.devices.any { it.userId.equals(myUserId, true) && it.deviceId.equals(mls.deviceId, true) }
+        if (g.epoch != null && inDevices && local != null && local.generation == g.generation) {
+            stuckSince.remove(conversationId)
+            lastRejoin.remove(conversationId)
+            return E2eeState.Encrypted(local.epoch)
+        }
+        return repair(mls, conversationId, myUserId, peerId, g, inDevices)
+    }
+
+    private suspend fun repair(mls: MlsEngine, conv: String, me: String, peer: String, g: MlsGroup, inDevices: Boolean): E2eeState {
+        val now = clock()
+        val since = stuckSince.getOrPut(conv) { now }
+        if (g.epoch == null) return rebuild(mls, conv, me, peer, g)
+        if (now - since >= resetAfterMs) return resetAndRebuild(mls, conv, me, peer, g.generation)
+        // Our Welcome may be on its way (just added, or a rebuild that included us).
+        if (inDevices && now - since < welcomeWaitMs) return E2eeState.WaitingForWelcome
+        val last = lastRejoin[conv]
+        if (last == null || now - last >= rejoinEveryMs) {
+            lastRejoin[conv] = now
+            when (val r = api.rejoin(conv)) {
+                is ApiResult.Ok -> if (r.value.candidates == 0) {
+                    // Nobody in the group can re-add this device (e.g. both phones reinstalled).
+                    return if (r.value.op == null) recheck(mls, conv, me, peer) else resetAndRebuild(mls, conv, me, peer, g.generation)
+                }
+                is ApiResult.Error, is ApiResult.NetworkError -> Unit // retried on the next check
+            }
+        }
+        return E2eeState.Repairing
+    }
+
+    /** A fresh GET after a reset or a lost race: rebuild if the DM waits for one, else keep waiting. */
+    private suspend fun recheck(mls: MlsEngine, conv: String, me: String, peer: String): E2eeState {
+        val g = (api.group(conv) as? ApiResult.Ok)?.value ?: return E2eeState.Repairing
+        return if (g.e2ee && g.epoch == null) rebuild(mls, conv, me, peer, g) else E2eeState.Repairing
+    }
+
+    private suspend fun resetAndRebuild(mls: MlsEngine, conv: String, me: String, peer: String, generation: Long): E2eeState {
+        stuckSince[conv] = clock() // a fresh period for the rebuilt group
+        lastRejoin.remove(conv)
+        return when (val r = api.reset(conv, generation)) {
+            is ApiResult.Ok -> recheck(mls, conv, me, peer)
+            is ApiResult.Error -> if (r.code == AuthErrors.GENERATION_CONFLICT) recheck(mls, conv, me, peer) else E2eeState.Repairing
+            is ApiResult.NetworkError -> E2eeState.Repairing
+        }
+    }
+
+    private suspend fun rebuild(mls: MlsEngine, conv: String, me: String, peer: String, g: MlsGroup): E2eeState {
         if (!g.ready) return E2eeState.NotReady(g.missing)
+        // The old generation's local group can't be used any more.
+        mls.group(conv)?.takeIf { it.generation < g.generation }?.let { mls.deleteGroup(conv) }
+        val s = create(conv, me, peer, g.generation, rebuild = true)
+        if (s is E2eeState.Encrypted) {
+            stuckSince.remove(conv)
+            lastRejoin.remove(conv)
+        }
+        return if (s is E2eeState.WaitingForWelcome) E2eeState.Repairing else s
+    }
+
+    private suspend fun create(conversationId: String, myUserId: String, peerId: String, generation: Long, rebuild: Boolean): E2eeState {
+        val mls = engine() ?: return E2eeState.Unavailable
         val claimed = when (val r = api.claim(listOf(peerId, myUserId).distinct())) {
             is ApiResult.Ok -> r.value.devices
             is ApiResult.Error -> return E2eeState.Failed(r.code)
             is ApiResult.NetworkError -> return E2eeState.Failed("network")
         }
-        val notReady = claimed.filter { !it.mls || it.deviceId == null || it.keyPackage == null }
-        if (notReady.isNotEmpty()) {
-            return E2eeState.NotReady(notReady.map { MlsMissing(it.userId, it.deviceId, if (!it.mls) MlsMissing.NO_MLS else NO_KEY_PACKAGE) })
+        val usable = if (rebuild) {
+            // §3: superseded installs may have no key package left; the server requires only the live ones.
+            claimed.filter { it.mls && it.deviceId != null && it.keyPackage != null }
+        } else {
+            val notReady = claimed.filter { !it.mls || it.deviceId == null || it.keyPackage == null }
+            if (notReady.isNotEmpty()) {
+                return E2eeState.NotReady(notReady.map { MlsMissing(it.userId, it.deviceId, if (!it.mls) MlsMissing.NO_MLS else NO_KEY_PACKAGE) })
+            }
+            claimed
         }
-        val members = claimed.map { ClaimedKeyPackage(DeviceRef(it.userId, it.deviceId!!), dec.decode(it.keyPackage)) }
-        val pc = mls.createGroup(conversationId, g.generation, members)
+        val members = usable.map { ClaimedKeyPackage(DeviceRef(it.userId, it.deviceId!!), dec.decode(it.keyPackage)) }
+        val pc = mls.createGroup(conversationId, generation, members)
         val req = MlsCommitRequest(
             generation = pc.generation, epoch = pc.epoch, commit = b64.encodeToString(pc.commit),
             welcome = pc.welcome?.let(b64::encodeToString),
@@ -169,5 +275,16 @@ class MlsUpgrader(private val engine: () -> MlsEngine?, private val api: MlsApi)
                 E2eeState.Failed("network")
             }
         }
+    }
+
+    companion object {
+        /** In the server's `devices` but no local group: wait this long for the Welcome before asking again. */
+        const val WELCOME_WAIT_MS = 60_000L
+
+        /** Still not set up this long after first seen → reset the DM (§5). */
+        const val RESET_AFTER_MS = 120_000L
+
+        /** At most one rejoin request per conversation this often. */
+        const val REJOIN_EVERY_MS = 20_000L
     }
 }

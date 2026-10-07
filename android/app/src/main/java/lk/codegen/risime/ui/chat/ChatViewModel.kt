@@ -107,7 +107,7 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
             } else if (peer.value?.friend != false) {
                 val was = _e2ee.value
                 // Engine calls are synchronous Room transactions: never on the main thread.
-                val now = withContext(Dispatchers.IO) { c.mlsUpgrader.ensure(conversationId, meId, peerId) }
+                val now = withContext(Dispatchers.IO) { c.mlsUpgrader.ensure(conversationId, meId, peerId, verify = true) }
                 _e2ee.value = now
                 if (now is E2eeState.Encrypted && was !is E2eeState.Encrypted) withContext(Dispatchers.IO) { c.engine.flushOutbox() }
             }

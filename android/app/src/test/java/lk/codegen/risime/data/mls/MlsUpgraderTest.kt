@@ -68,8 +68,12 @@ class MlsUpgraderTest {
         assertEquals(E2eeState.Unavailable, MlsUpgrader({ null }, Api()).ensure(conv, "a", "b"))
         val off = Api().apply { group = ApiResult.Error(503, "mls_unavailable", "") }
         assertEquals(E2eeState.Unavailable, MlsUpgrader({ mls }, off).ensure(conv, "a", "b"))
+        // v1.16: e2ee on the server, this device not in its group → re-add requested (Repairing).
         val serverSide = Api().apply { group = ApiResult.Ok(MlsGroup(true, 1, 3, ready = true)) }
-        assertEquals(E2eeState.WaitingForWelcome, MlsUpgrader({ mls }, serverSide).ensure(conv, "a", "b"))
+        assertEquals(E2eeState.Repairing, MlsUpgrader({ mls }, serverSide).ensure(conv, "a", "b"))
+        // In the server's devices: the Welcome is on its way.
+        val inGroup = Api().apply { group = ApiResult.Ok(MlsGroup(true, 1, 3, ready = true, devices = listOf(lk.codegen.risime.net.MlsDeviceRef("a", "d-a")))) }
+        assertEquals(E2eeState.WaitingForWelcome, MlsUpgrader({ mls }, inGroup).ensure(conv, "a", "b"))
     }
 
     @Test fun stripTextsGiveTheRealReason() {

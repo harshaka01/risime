@@ -154,6 +154,9 @@ data class Event(
 
     fun groupEvent(): GroupEvent? = if (kind == KIND_GROUP_EVENT) ProtocolJson.decodeFromJsonElement<GroupEvent>(data) else null
 
+    /** v1.16 a DM `devices` op naming a committer. */
+    fun mlsDmOp(): MlsDmOpEvent? = if (kind == KIND_MLS_DM_OP) ProtocolJson.decodeFromJsonElement<MlsDmOpEvent>(data) else null
+
     fun groupOp(): GroupOpEvent? = if (kind == KIND_GROUP_OP) ProtocolJson.decodeFromJsonElement<GroupOpEvent>(data) else null
 
     fun groupReceipt(): GroupReceiptEvent? =
@@ -182,6 +185,7 @@ data class Event(
         const val KIND_MLS_COMMIT = "mls_commit"
         const val KIND_MLS_WELCOME = "mls_welcome"
         const val KIND_MLS_MEMBERSHIP = "mls_membership"
+        const val KIND_MLS_DM_OP = "mls_dm_op"
         const val KIND_GROUP_EVENT = "group_event"
         const val KIND_GROUP_OP = "group_op"
         const val KIND_GROUP_RECEIPT = "group_receipt"
@@ -659,10 +663,22 @@ data class MlsCommitRequest(
     val welcome: String? = null,
     val added: List<MlsDeviceRef> = emptyList(),
     val removed: List<MlsDeviceRef> = emptyList(),
+    /** v1.16 (proposal 2026-10-07-dm-device-readd §2.2): the DM `devices` op this commit completes, or null. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("op_id") val opId: String? = null,
 )
 
 @Serializable
 data class MlsCommitReply(val epoch: Long)
+
+/** v1.16 `mls_dm_op`: the server named this device to commit a DM `devices` op. */
+@Serializable
+data class MlsDmOpEvent(@SerialName("conversation_id") val conversationId: String, val generation: Long, val op: PendingOp)
+
+/** v1.16 `POST /mls/groups/{dm}/rejoin` → 202. `candidates` 0 = nobody can re-add this device (reset). */
+@Serializable
+data class DmRejoinReply(val op: PendingOp? = null, val candidates: Int = 0)
 
 @Serializable
 data class MlsLoggedCommit(
