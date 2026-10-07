@@ -1,0 +1,2 @@
+New: on a new phone, tap "Request history" and your other phone (or a group member) can share your earlier messages, end-to-end encrypted.
+Update over the old app; never uninstall or clear data.
