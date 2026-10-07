@@ -120,7 +120,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     /** Why this phone can't make or take calls (the Settings "Calls" row), null when it can. */
     fun unsupportedReason(): String? = when {
-        !BuildConfig.CALLS_ENABLED -> "calls are off in this build"
+        !BuildConfig.CALLS_ENABLED -> lk.codegen.risime.ui.chat.CALLS_OFF_IN_BUILD
         !media.available -> "Calls aren't supported on this phone"
         callsManager == null -> "This phone's calling service isn't available to RisiMe"
         !notifications.notificationsAllowed() -> "Turn on notifications so RisiMe calls can ring"
@@ -617,7 +617,7 @@ object CallTexts {
         CallNotice.NO_ANSWER -> "No answer"
         CallNotice.ANSWERED_ELSEWHERE -> "Answered on another device"
         CallNotice.CANT_CONNECT -> "Can't connect the call"
-        CallNotice.NOT_READY -> "$name needs to update the app to receive calls"
+        CallNotice.NOT_READY -> lk.codegen.risime.ui.chat.peerCantTakeCallsText(name)
         CallNotice.NOT_E2EE -> "Calls need an end-to-end encrypted chat."
         CallNotice.RATE_LIMITED -> "Too many calls. Try again in a minute."
         CallNotice.NOT_FRIENDS -> "You can only call friends"
