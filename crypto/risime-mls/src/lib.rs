@@ -56,6 +56,11 @@ pub use storage::{KvError, KvStore, MemoryKvStore, Provider};
 /// X25519 + AES-128-GCM + SHA-256 + Ed25519 (RFC 9420 mandatory suite 0x0001).
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 
+/// Device capabilities (contract §12.1) whose rules this core enforces on its own: an app may
+/// advertise them as soon as it bundles this core. `member_devices` (v1.14 §12.4a): the staged-commit
+/// policy accepts a member's commit that restores an existing member's devices.
+pub const CORE_CAPABILITIES: &[&str] = &["member_devices"];
+
 /// Past epochs whose secrets are kept for late application messages (contract §10.0).
 pub const MAX_PAST_EPOCHS: usize = 3;
 

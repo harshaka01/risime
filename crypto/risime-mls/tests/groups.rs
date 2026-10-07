@@ -347,6 +347,116 @@ fn member_manages_only_own_devices() {
     assert!(!bob.has_pending_commit(GG).unwrap());
 }
 
+/// A commit adding `adds` and removing leaves `removes`, built with OpenMLS **bypassing** the
+/// core's own-commit policy check (a modified client).
+fn raw_change(d: &Dev, adds: &[Vec<u8>], removes: &[u32]) -> Vec<u8> {
+    let provider = Provider::new(d.store.clone());
+    let signer = SignatureKeyPair::read(
+        provider.storage(),
+        &d.c.signature_public_key(),
+        SignatureScheme::ED25519,
+    )
+    .unwrap();
+    let mut group = MlsGroup::load(provider.storage(), &GroupId::from_slice(GG))
+        .unwrap()
+        .unwrap();
+    let kps: Vec<KeyPackage> = adds
+        .iter()
+        .map(|b| {
+            KeyPackageIn::tls_deserialize_exact(b)
+                .unwrap()
+                .validate(provider.crypto(), ProtocolVersion::Mls10)
+                .unwrap()
+        })
+        .collect();
+    let bundle = group
+        .commit_builder()
+        .propose_adds(kps)
+        .propose_removals(removes.iter().map(|i| LeafNodeIndex::new(*i)))
+        .load_psks(provider.storage())
+        .unwrap()
+        .build(provider.rand(), provider.crypto(), &signer, |_| true)
+        .unwrap()
+        .stage_commit(&provider)
+        .unwrap();
+    bundle.into_messages().0.to_bytes().unwrap()
+}
+
+/// v1.14 §12.4a: a member restores an existing member's devices (a reinstall, a rejoin), but
+/// can't bring in a new user, swap a device for another, or remove one on its own.
+#[test]
+fn member_restores_an_existing_members_devices() {
+    let alice = client("alice", "a1");
+    let bob = devc("bob", "b1");
+    let carol = client("carol", "c1");
+    make_group(&alice, &[&bob.c, &carol]);
+
+    // Carol reinstalls: a new device id. Bob (not an admin) adds it; everyone accepts.
+    let carol2 = client("carol", "c2");
+    let add = bob.c.change_members(GG, &[kp(&carol2)], &[]).unwrap();
+    assert_eq!(add.added, vec![dev("carol", "c2")]);
+    for i in deliver(&bob.c, &add, &[&alice, &carol]) {
+        assert!(matches!(i, Incoming::Commit { .. }));
+    }
+    carol2
+        .join_from_welcome(add.welcome.as_ref().unwrap())
+        .unwrap();
+    same_epoch(&[&alice, &bob.c, &carol, &carol2]);
+
+    // Carol's c1 rejoins (same device, a fresh key package): Bob removes and re-adds it.
+    carol.delete_group(GG).unwrap();
+    let re = bob
+        .c
+        .change_members(GG, &[kp(&carol)], &[dev("carol", "c1")])
+        .unwrap();
+    deliver(&bob.c, &re, &[&alice, &carol2]);
+    carol
+        .join_from_welcome(re.welcome.as_ref().unwrap())
+        .unwrap();
+    same_epoch(&[&alice, &bob.c, &carol, &carol2]);
+    let ct = carol.encrypt(GG, b"back").unwrap();
+    assert_eq!(bob.c.decrypt(GG, &ct).unwrap(), b"back");
+
+    // Refused before anything is built: a user with no leaf (Dave's key package is validly
+    // attested, but for a user who isn't in the group), a swap for another device, a standalone
+    // removal of another user's device.
+    let dave = client("dave", "d1");
+    let carol3 = client("carol", "c3");
+    for r in [
+        bob.c.change_members(GG, &[kp(&dave)], &[]),
+        bob.c
+            .change_members(GG, &[kp(&carol3)], &[dev("carol", "c1")]),
+        bob.c.change_members(GG, &[], &[dev("carol", "c2")]),
+        bob.c
+            .change_members(GG, &[kp(&carol3)], &[dev("alice", "a1")]),
+    ] {
+        assert!(matches!(r, Err(MlsError::PolicyViolation(_))), "{r:?}");
+    }
+    assert!(!bob.c.has_pending_commit(GG).unwrap());
+
+    // The same from a modified client: peers reject the staged commit and stay put.
+    let epoch = alice.epoch(GG).unwrap();
+    let c1 = leaf(&alice, "carol", "c1");
+    let c2 = leaf(&alice, "carol", "c2");
+    let cases: [(Vec<Vec<u8>>, Vec<u32>); 3] = [
+        (vec![kp(&dave)], vec![]),
+        (vec![kp(&carol3)], vec![c1]),
+        (vec![], vec![c2]),
+    ];
+    for (adds, removes) in cases {
+        let evil = raw_change(&bob, &adds, &removes);
+        for c in [&alice, &carol, &carol2] {
+            assert!(matches!(
+                c.process(GG, &evil),
+                Err(MlsError::PolicyViolation(_))
+            ));
+        }
+        bob.c.commit_rejected(GG).unwrap();
+    }
+    assert_eq!(alice.epoch(GG).unwrap(), epoch);
+    same_epoch(&[&alice, &bob.c, &carol, &carol2]);
+}
+
 #[test]
 fn peers_reject_commits_that_break_the_admin_policy() {
     let alice = client("alice", "a1");

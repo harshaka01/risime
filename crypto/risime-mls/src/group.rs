@@ -166,6 +166,24 @@ fn ids(devices: &[DeviceId]) -> Vec<String> {
     devices.iter().map(DeviceId::identity).collect()
 }
 
+/// The policy input for a commit: devices by attested id, and the base epoch's leaf owners.
+fn summary<'a>(
+    committer_user: &'a str,
+    added: &'a [DeviceId],
+    removed: &'a [DeviceId],
+    leaves: &'a [MemberInfo],
+    meta: Option<MetaChange>,
+) -> CommitSummary<'a> {
+    let leaf = |d: &'a DeviceId| (d.user_id.as_str(), d.device_id.as_str());
+    CommitSummary {
+        committer_user,
+        adds: added.iter().map(leaf).collect(),
+        removes: removed.iter().map(leaf).collect(),
+        leaf_users: leaves.iter().map(|m| m.user_id.as_str()).collect(),
+        meta,
+    }
+}
+
 fn parse_ids(ids: &[String]) -> Result<Vec<DeviceId>> {
     ids.iter()
         .map(|s| DeviceId::parse(s.as_bytes()).map_err(|e| MlsError::Storage(e.to_string())))
@@ -331,12 +349,9 @@ impl Client {
     ) -> Result<()> {
         let current = meta_of(group.extensions())?
             .ok_or_else(|| MlsError::PolicyViolation("group has no group_meta".into()))?;
-        let summary = CommitSummary {
-            committer_user: &self.device.user_id,
-            add_users: added.iter().map(|d| d.user_id.as_str()).collect(),
-            remove_users: removed.iter().map(|d| d.user_id.as_str()).collect(),
-            meta,
-        };
+        let leaves = Self::member_infos(group)?;
+        let summary = summary(&self.device.user_id, added, removed, &leaves, meta);
+        // The core has no agent list until agents ship (0.5): the agent rules are server-side.
         check_commit_policy(&current.admins, &[], &summary).map_err(MlsError::PolicyViolation)
     }
 
@@ -380,12 +395,9 @@ impl Client {
         } else {
             None
         };
-        let summary = CommitSummary {
-            committer_user: &committer.user_id,
-            add_users: added.iter().map(|d| d.user_id.as_str()).collect(),
-            remove_users: removed.iter().map(|d| d.user_id.as_str()).collect(),
-            meta,
-        };
+        // `group` is still at the base epoch: its leaves are the ones the rule is about.
+        let leaves = Self::member_infos(group)?;
+        let summary = summary(&committer.user_id, added, removed, &leaves, meta);
         check_commit_policy(&current.admins, &[], &summary).map_err(MlsError::PolicyViolation)?;
         Ok(gce)
     }

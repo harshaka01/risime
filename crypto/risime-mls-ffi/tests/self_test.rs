@@ -154,6 +154,10 @@ fn group_api_crosses_the_ffi() {
     let limits = group_limits();
     assert_eq!(limits.max_inline_bytes, 64 * 1024);
     assert_eq!(limits.group_meta_extension, 0xFA01);
+    assert_eq!(
+        uniffi_risime::core_capabilities(),
+        vec!["member_devices".to_string()]
+    );
     let kp = bob.generate_key_packages(1).unwrap();
     assert!(key_package_supports_groups(kp[0].clone()).unwrap());
 

@@ -485,6 +485,17 @@ pub fn group_limits() -> GroupLimits {
     }
 }
 
+/// The device capabilities (contract §12.1) whose rules this core enforces on its own, e.g.
+/// `member_devices` (v1.14 §12.4a). An app advertises such a capability only when it is listed
+/// here, so the advertisement never runs ahead of the bundled core.
+#[uniffi::export]
+pub fn core_capabilities() -> Vec<String> {
+    risime_mls::CORE_CAPABILITIES
+        .iter()
+        .map(|c| c.to_string())
+        .collect()
+}
+
 /// Whether a key package (TLS bytes) is groups-capable (carries capability 0xFA01). It is
 /// validated first.
 #[uniffi::export]

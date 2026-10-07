@@ -1,8 +1,9 @@
 //! Runs every case of the shared contract fixture `contract/v1/group_policy_cases.json`
-//! (contract v1.9 §12.4) through the core's admin policy. The server suite runs the same file.
+//! (contract v1.9 §12.4, v1.14 §12.4a) through the core's admin policy. The server suite runs the same file.
 
 use risime_mls::policy::{CommitSummary, MetaChange, check_commit_policy};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
 struct Fixture {
@@ -15,6 +16,7 @@ struct Case {
     name: String,
     admins: Vec<String>,
     agents: Vec<String>,
+    leaves: BTreeMap<String, Vec<String>>,
     committer: String,
     adds: Vec<String>,
     removes: Vec<String>,
@@ -29,7 +31,11 @@ struct Meta {
 }
 
 fn user(leaf: &str) -> &str {
-    leaf.split_once('/').expect("leaf is user/device").0
+    split(leaf).0
+}
+
+fn split(leaf: &str) -> (&str, &str) {
+    leaf.split_once('/').expect("leaf is user/device")
 }
 
 #[test]
@@ -40,14 +46,20 @@ fn every_contract_policy_case() {
     );
     let text = std::fs::read_to_string(path).expect("contract fixture");
     let fixture: Fixture = serde_json::from_str(&text).expect("fixture parses");
-    assert_eq!(fixture.v, 1);
-    assert!(fixture.cases.len() >= 15, "fixture shrank?");
+    assert_eq!(fixture.v, 2);
+    assert!(fixture.cases.len() >= 26, "fixture shrank?");
     let mut failures = vec![];
     for case in &fixture.cases {
         let summary = CommitSummary {
             committer_user: user(&case.committer),
-            add_users: case.adds.iter().map(|l| user(l)).collect(),
-            remove_users: case.removes.iter().map(|l| user(l)).collect(),
+            adds: case.adds.iter().map(|l| split(l)).collect(),
+            removes: case.removes.iter().map(|l| split(l)).collect(),
+            leaf_users: case
+                .leaves
+                .iter()
+                .filter(|(_, ds)| !ds.is_empty())
+                .map(|(u, _)| u.as_str())
+                .collect(),
             meta: case.meta.as_ref().map(|m| MetaChange {
                 admins: m.admins.clone(),
                 name_changed: m.name_changed,
@@ -75,9 +87,13 @@ fn agents_are_never_admins() {
     let agents = vec!["R".to_string()];
     let s = CommitSummary {
         committer_user: "R",
-        add_users: vec!["X"],
-        remove_users: vec![],
-        meta: None,
+        adds: vec![],
+        removes: vec![],
+        leaf_users: vec!["R", "X"],
+        meta: Some(MetaChange {
+            admins: None,
+            name_changed: true,
+        }),
     };
     assert!(check_commit_policy(&admins, &agents, &s).is_err());
 }
