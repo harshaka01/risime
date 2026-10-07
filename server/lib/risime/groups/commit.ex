@@ -8,6 +8,8 @@ defmodule RisiMe.Groups.Commit do
   """
   import Ecto.Query
 
+  require Logger
+
   alias RisiMe.{Blobs, Groups, Messaging, MLS, RateLimiter, Repo, TimeUUID}
   alias RisiMe.Groups.{Group, Member, Membership, Op, Ops, Policy}
 
@@ -248,29 +250,42 @@ defmodule RisiMe.Groups.Commit do
       admins: admins,
       agents: agents,
       committer: me,
-      adds: Enum.map(req.added, &elem(&1, 0)),
-      removes: Enum.map(req.removed, &elem(&1, 0)),
+      adds: req.added,
+      removes: req.removed,
+      leaf_users: in_group |> Enum.map(&elem(&1, 0)) |> Enum.uniq(),
       meta: meta
     }
 
     size = MapSet.size(in_group) - length(req.removed) + length(req.added)
+    ctx = %{g: g, me: me, admins: admins, active: active, in_group: in_group, members: members}
 
     with true <- MapSet.member?(in_group, {me, dev}) || {:error, :bad_request},
          true <- (req.op_id == nil or op != nil) || {:error, :bad_request},
          :ok <- Policy.check(policy),
-         :ok <- match_op(op, me, admins, active, in_group, members, req),
+         :ok <- member_needs_op(me in admins, Policy.others?(policy), op),
+         {:ok, role} <- match_op(op, ctx, req),
          true <- size <= Groups.max_devices() || {:error, :too_many_devices} do
+      if op && op.type == "devices",
+        do: Logger.info("group commit: op=devices committer_role=#{role}")
+
       apply_commit(me, dev, g, req, epoch, op, active)
     end
   end
+
+  # v1.14 §12.4a: a non-admin's commit on another user's leaves must name its pending `devices`
+  # op (no list-only matching for this case).
+  defp member_needs_op(false, true, %Op{type: "devices"}), do: :ok
+  defp member_needs_op(false, true, _op), do: {:error, :not_admin}
+  defp member_needs_op(_admin?, _others?, _op), do: :ok
 
   defp new_admins(admins, op) do
     [u] = op.payload["user_ids"]
     if op.payload["role"] == "admin", do: Enum.uniq(admins ++ [u]), else: admins -- [u]
   end
 
-  # Server-only checks (§12.4): the declared lists against the op, or the §10.2 rules.
-  defp match_op(nil, me, _admins, active, in_group, _members, req) do
+  # Server-only checks (§12.4): the declared lists against the op, or the §10.2 rules. Returns
+  # `{:ok, committer_role}` (`admin`, `own`, `member`; for the log only).
+  defp match_op(nil, %{me: me, admins: admins, active: active, in_group: in_group}, req) do
     current = Groups.device_refs(active)
 
     added_ok =
@@ -281,10 +296,13 @@ defmodule RisiMe.Groups.Commit do
         MapSet.member?(in_group, ref) and (u == me or not MapSet.member?(current, ref))
       end)
 
-    if added_ok and removed_ok, do: :ok, else: {:error, :bad_request}
+    if added_ok and removed_ok,
+      do: {:ok, if(me in admins, do: "admin", else: "own")},
+      else: {:error, :bad_request}
   end
 
-  defp match_op(%Op{type: type} = op, me, admins, _active, in_group, members, req) do
+  defp match_op(%Op{type: type} = op, ctx, req) do
+    %{g: g, me: me, admins: admins, in_group: in_group, members: members} = ctx
     users = op.payload["user_ids"]
     admin? = me in admins
 
@@ -304,10 +322,25 @@ defmodule RisiMe.Groups.Commit do
       "devices" ->
         own? = me == Ops.affected_user(op)
 
+        # v1.14 §12.4a: any active (non-agent) member, for a member-committable op with the
+        # `member_devices` gate open.
+        member? =
+          not admin? and not own? and
+            Enum.any?(members, &(&1.user_id == me and &1.state == "active" and &1.kind == "user")) and
+            Ops.member_path?(g, op, in_group)
+
+        role =
+          cond do
+            own? -> "own"
+            admin? -> "admin"
+            true -> "member"
+          end
+
         expect(
-          admin? or own?,
+          admin? or own? or member?,
           MapSet.new(req.added) == MapSet.new(Ops.refs(op, "added")) and
-            MapSet.new(req.removed) == MapSet.new(Ops.removed_now(op, in_group))
+            MapSet.new(req.removed) == MapSet.new(Ops.removed_now(op, in_group)),
+          role
         )
 
       _ ->
@@ -315,9 +348,10 @@ defmodule RisiMe.Groups.Commit do
     end
   end
 
-  defp expect(false, _), do: {:error, :not_admin}
-  defp expect(true, true), do: :ok
-  defp expect(true, false), do: {:error, :bad_request}
+  defp expect(ok?, match?, role \\ "admin")
+  defp expect(false, _, _role), do: {:error, :not_admin}
+  defp expect(true, true, role), do: {:ok, role}
+  defp expect(true, false, _role), do: {:error, :bad_request}
 
   defp apply_commit(me, dev, g, req, epoch, op, active_before) do
     new_epoch = epoch + 1

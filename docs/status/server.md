@@ -6,11 +6,53 @@
 (E2EE routing with MLS, decision 034; **off until the attestation key exists**), **v1.8**
 (reactions), **v1.9** (groups with MLS, §12, decision 041), **v1.10** (history after a
 reinstall, §13, decision 043), **v1.11** (encrypted images, §14, decision 042) and **v1.12**
-(deleting messages and chats, §15, decision 047) and **v1.13** (1:1 voice calls, §16, decisions
-046 and 051) are done, plus the group-readiness hotfix and
+(deleting messages and chats, §15, decision 047), **v1.13** (1:1 voice calls, §16, decisions
+046 and 051) and **v1.14** (members restore an existing member's devices, §12.4a) are done, plus the group-readiness hotfix and
 the two §14 fixes root decided.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(425 tests); `scripts/interop` run after v1.13 (see below).
+(453 tests); `scripts/interop` (instance `_mr`) green after v1.14.
+
+## v1.14 members restore an existing member's devices (§12.4a, §12.11) — READY
+- **No migration.** `member_devices` joins `@known_capabilities` (stored per device).
+- **Policy** (`Groups.Policy.check/1`, fixture v2, 27 cases): adds/removes are `{user, device}`
+  plus `leaf_users` (the base epoch's leaf owners); a non-admin may add leaves of users with a
+  leaf (never agents) and remove another user's leaf only together with the same device's re-add.
+- **Ops** (`Groups.Ops`): `member_committable?/3` (one user, active `kind: user` member with a
+  leaf, ≥1 add, every removal re-added), `gate_open?/3` (every in-group leaf not changed by the
+  op, not superseded and still registered advertises `member_devices`), `member_path?/3`.
+  `candidates/2` = own other devices → admins → (member path) other active non-agent members'
+  non-superseded leaves; each tier by recency, member tier ties by device id (the server keeps no
+  leaf index). `authorised?/3` and the join rule use the same path.
+- **Commit** (`Groups.Commit`): a non-admin commit touching another user's leaves must carry the
+  op id of a `devices` op (`403 not_admin` otherwise), then the op's `added` and the in-group part
+  of its `removed` must match exactly (`400`). Accepted `devices` commits log
+  `group commit: op=devices committer_role=own|admin|member` (no ids).
+- **Wake** (GroupTimer `wake`, unique per op while available/scheduled): whenever a `devices` op
+  is left with no committer; pushes the §8.2 inbox payload to the own token of the first 10
+  candidates (online ones skipped), at most 4 per device per 24 h (`RateLimiter :group_wake`,
+  in-node), then re-queues itself +6 h while the op waits. Logs `group_op_wake: candidates=n
+  pushed=m`.
+- **Recovery** `RisiMe.Release.name_pending_device_ops/1`: dry run by default (reads only; from
+  `bin/risime eval` it starts only the repo). The release has no distribution (no `rpc`), so
+  `dry_run: false` from `eval` queues a one-off GroupTimer `name_pending` job that the running
+  server executes under each group's lock (its log line `pending device ops (dry_run=false): …`
+  has the counts); inside the node it runs at once. Counts: `devices_ops`, `waiting`,
+  `member_committable`, `gate_closed`, `with_candidates`, `named`, `still_waiting`. A
+  `PUT /me/devices/{id}` that newly adds `member_devices` runs it (real) for the user's groups.
+- **Pilot dry run (risime_dev, read-only, 2026-10-07 03:05 UTC):** 6 pending `devices` ops, all
+  6 waiting, in 2 groups, oldest 2026-10-06 22:24 UTC; all 6 member-committable, all 6 gated
+  (no app advertises `member_devices` yet), all 6 have candidates.
+- **Pilot recovery after the deploy** (once the testers' apps advertise `member_devices`):
+  `bash -c "set -a; . ~/development/risime/.env; . ~/development/risime/infra/pilot/pilot.env; set +a; ~/risime-run/current/bin/risime eval 'RisiMe.Release.name_pending_device_ops()'"`
+  (dry; today: `waiting: 6`, `gate_closed: 6`; expect `gate_closed` → 0 as members update),
+  then the same with `name_pending_device_ops(dry_run: false)` (queues the job; the server log
+  shows `named` + `still_waiting` = waiting; the rest are named by the join rule or woken).
+  Verify `select count(*) filter (where committer_device is null), count(*) from group_ops
+  where type = 'devices'` → 0 within hours, and `committer_role=member` lines in the log.
+- **Tests:** `test/risime_web/controllers/groups_member_devices_test.exs` (naming tiers, agents,
+  gate incl. superseded and unregistered leaves, op id + exact lists, not-committable ops,
+  wake pushes and caps, dry/real/idempotent recovery, PUT re-run), the policy fixture, and
+  `device_put_member_devices.json` stored as sent.
 
 ## v1.13 1:1 voice calls (§16) — READY
 - **Commit:** `25019ce` (implementation, tests, the 19 v1.13 examples; `@pending_v1_13` removed).

@@ -74,8 +74,8 @@ defmodule RisiMe.ContractExamplesTest do
                    call_signal_event.json calls_turn_reply.json push_call.json
                    device_put_calls.json mls_group_calls_ready.json error_calls_unavailable.json
                    error_calls_not_ready.json)
-  # v1.14 (members restore an existing member's devices, §12.4a): parse-only placeholder until the
-  # server implements it.
+  # v1.14 (members restore an existing member's devices, §12.4a): checked below; the behaviour
+  # in test/risime_web/controllers/groups_member_devices_test.exs.
   @checked_v1_14 ~w(device_put_member_devices.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -1847,9 +1847,17 @@ defmodule RisiMe.ContractExamplesTest do
     end
   end
 
-  test "v1.14 placeholder: device_put_member_devices.json parses" do
+  test "v1.14 device_put_member_devices.json: the capability is stored (§12.1, §12.4a)",
+       %{a: a} do
+    with_attestation_key(%{})
     ex = example("device_put_member_devices.json")
     assert "member_devices" in ex["mls"]["capabilities"]
+    dev = Ecto.UUID.generate()
+    {:ok, att} = RisiMe.Devices.register(a.user.id, dev, ex)
+    assert is_binary(att)
+
+    stored = RisiMe.Repo.get_by!(RisiMe.Devices.Device, user_id: a.user.id, device_id: dev)
+    assert stored.capabilities == ex["mls"]["capabilities"]
   end
 
   describe "v1.13" do

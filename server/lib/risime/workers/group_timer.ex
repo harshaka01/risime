@@ -5,13 +5,19 @@ defmodule RisiMe.Workers.GroupTimer do
     * `committer`: the named committer's 60 s ran out (args `op_id`, `naming`); a newer naming
       or a completed op makes the job a no-op;
     * `expire`: an `add` or `role` op reached its 24 h `expires_at`;
-    * `creating`: a group still `creating` 10 minutes after `POST /groups` is deleted.
+    * `creating`: a group still `creating` 10 minutes after `POST /groups` is deleted;
+    * `wake` (v1.14 §12.4a): a `devices` op waits with no online candidate; push the candidates
+      and check again in 6 h (unique per op);
+    * `name_pending` (v1.14 §12.11): the one-off recovery queued by
+      `RisiMe.Release.name_pending_device_ops(dry_run: false)` from `bin/risime eval`.
 
   Args hold only ids and counters (never content).
   """
   use Oban.Worker, queue: :groups, max_attempts: 5
 
   import Ecto.Query
+
+  require Logger
 
   alias RisiMe.{Groups, Repo}
   alias RisiMe.Groups.{Group, Ops}
@@ -21,6 +27,14 @@ defmodule RisiMe.Workers.GroupTimer do
     do: Ops.committer_timeout(op_id, n)
 
   def perform(%Oban.Job{args: %{"kind" => "expire", "op_id" => op_id}}), do: Ops.expire(op_id)
+
+  def perform(%Oban.Job{args: %{"kind" => "wake", "op_id" => op_id}}), do: Ops.wake(op_id)
+
+  def perform(%Oban.Job{args: %{"kind" => "name_pending"}}) do
+    counts = Ops.name_waiting(dry_run: false)
+    Logger.info("pending device ops (dry_run=false): #{inspect(counts)}")
+    :ok
+  end
 
   def perform(%Oban.Job{args: %{"kind" => "creating", "group_id" => id}}) do
     {:ok, _} =

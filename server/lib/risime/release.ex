@@ -8,6 +8,7 @@ defmodule RisiMe.Release do
       bin/risime eval "RisiMe.Release.migrate_cql()"
       bin/risime eval "RisiMe.Release.rollback(RisiMe.Repo, 20261005000000)"
       bin/risime eval "RisiMe.Release.backfill_sender_copies()"   # v1.10, dry run by default
+      bin/risime eval "RisiMe.Release.name_pending_device_ops()"  # v1.14, dry run by default
 
   `migrate_cql/1` applies `priv/cql/*.cql` exactly like `mix risime.cql.migrate`: it creates the
   keyspace if needed, applies each file once in name order and records it in the keyspace's
@@ -113,6 +114,49 @@ defmodule RisiMe.Release do
     Logger.info(line)
     IO.puts(line)
     {:ok, counts}
+  end
+
+  @doc """
+  Contract v1.14 §12.11, one-off pilot recovery: names a committer (§12.4a) for every pending
+  `devices` op that waits with none. **Dry run by default** (reads only, changes nothing).
+  Idempotent; logs and prints counts only (no ids, no phone numbers). Returns `{:ok, counts}`.
+
+      bin/risime eval "RisiMe.Release.name_pending_device_ops()"                # dry run
+      bin/risime eval "RisiMe.Release.name_pending_device_ops(dry_run: false)"  # names
+
+  Naming needs the running node (presence, PubSub, push), and the release has no distribution
+  (no `rpc`): from `eval`, the real run queues a one-off `GroupTimer` `name_pending` job that the
+  running server executes (its log shows the counts); inside the node it runs at once.
+  """
+  def name_pending_device_ops(opts \\ []) do
+    dry_run = Keyword.get(opts, :dry_run, true)
+
+    result =
+      cond do
+        Process.whereis(RisiMe.Repo) != nil ->
+          RisiMe.Groups.Ops.name_waiting(dry_run: dry_run)
+
+        dry_run ->
+          with_repo(fn -> RisiMe.Groups.Ops.name_waiting(dry_run: true) end)
+
+        true ->
+          with_repo(fn ->
+            RisiMe.Repo.insert!(RisiMe.Workers.GroupTimer.new(%{"kind" => "name_pending"}))
+            :queued_for_the_running_server
+          end)
+      end
+
+    line = "pending device ops (dry_run=#{dry_run}): #{inspect(result)}"
+    Logger.info(line)
+    IO.puts(line)
+    {:ok, result}
+  end
+
+  defp with_repo(fun) do
+    load_app()
+    [repo] = repos()
+    {:ok, result, _} = Ecto.Migrator.with_repo(repo, fn _ -> fun.() end)
+    result
   end
 
   @doc false

@@ -65,6 +65,26 @@ defmodule RisiMe.Push.Dispatcher do
     end
   end
 
+  @doc """
+  v1.14 §12.4a: sends the inbox wake-up (§8.2) to these push tokens now (a group op waits for a
+  committer). Not coalesced per user: the caller caps it per device.
+  """
+  def push_inbox([]), do: :ok
+
+  def push_inbox(tokens) do
+    case Push.sender() do
+      nil ->
+        :ok
+
+      sender ->
+        for token <- tokens do
+          Task.Supervisor.start_child(RisiMe.Push.TaskSupervisor, fn -> deliver(sender, token) end)
+        end
+
+        :ok
+    end
+  end
+
   # One attempt plus one retry on a retryable error; an unregistered token deletes the device.
   defp deliver(sender, token, payload \\ Push.payload(), retries \\ 1) do
     case sender.deliver(token, payload) do

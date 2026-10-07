@@ -63,6 +63,7 @@ defmodule RisiMe.Devices do
           )
 
         groups_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
+        member_devices_changed(user_id, existing, mls_key, caps)
 
         calls_changed(
           user_id,
@@ -123,7 +124,7 @@ defmodule RisiMe.Devices do
   # v1.9 §12.1, v1.11 §14.1, v1.12 §15.1: `mls.capabilities`; only known ones are kept
   # (unknown ones are ignored).
   # v1.13 §16.1: `calls`.
-  @known_capabilities ~w(groups images deletes calls)
+  @known_capabilities ~w(groups images deletes calls member_devices)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1),
@@ -200,6 +201,17 @@ defmodule RisiMe.Devices do
       was and mls_key != nil and not now -> Groups.device_changed(user_id, device_id, :removed)
       true -> :ok
     end
+  end
+
+  # v1.14 §12.11: a device that newly advertises `member_devices` may open the §12.4a gate in
+  # its user's groups: name committers for their waiting `devices` ops again.
+  defp member_devices_changed(user_id, existing, mls_key, caps) do
+    had = existing != nil and "member_devices" in (existing.capabilities || [])
+
+    if mls_key != nil and "member_devices" in caps and not had,
+      do: Groups.Ops.name_waiting_for_user(user_id)
+
+    :ok
   end
 
   defp attest(_user_id, _device_id, nil), do: {:ok, nil}
@@ -366,6 +378,16 @@ defmodule RisiMe.Devices do
       )
 
     cleared + deleted
+  end
+
+  @doc "The push token of one device (any user), or nil (§12.4a wake-ups)."
+  def device_push_token(device_id) do
+    Repo.one(
+      from d in Device,
+        where: d.device_id == ^device_id and not is_nil(d.push_token),
+        select: d.push_token,
+        limit: 1
+    )
   end
 
   @doc "The push tokens of a user's devices."

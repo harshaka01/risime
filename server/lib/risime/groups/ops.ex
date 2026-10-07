@@ -12,15 +12,27 @@ defmodule RisiMe.Groups.Ops do
 
   `add` and `role` ops expire after 24 h; `remove`, `devices` and `rebuild` never expire.
   All functions here run inside `RisiMe.Groups.locked/2` unless noted.
+
+  v1.14 §12.4a: a `devices` op that is member-committable (`member_committable?/3`) may also be
+  committed by any active member's in-group device while the `member_devices` gate is open
+  (`gate_open?/3`); those devices are the third candidate tier. While a `devices` op waits with
+  no online candidate, a `wake` job pushes the first candidates' own tokens every 6 h.
   """
   import Ecto.Query
 
-  alias RisiMe.{Groups, Messaging, Presence, Repo, TimeUUID}
+  require Logger
+
+  alias RisiMe.{Devices, Groups, Messaging, MLS, Presence, RateLimiter, Repo, TimeUUID}
+  alias RisiMe.Devices.Device
   alias RisiMe.Groups.{Group, Member, Op}
   alias RisiMe.Workers.GroupTimer
 
   @committer_s 60
   @expiry_h 24
+  @member_cap "member_devices"
+  @wake_max 10
+  @wake_every_h 6
+  @wake_per_device_day 4
 
   def committer_seconds, do: @committer_s
 
@@ -185,14 +197,19 @@ defmodule RisiMe.Groups.Ops do
   end
 
   defp assign(_g, op, nil, _mode) do
+    op =
+      op
+      |> Ecto.Changeset.change(
+        committer_user: nil,
+        committer_device: nil,
+        committer_until: nil,
+        naming: op.naming + 1
+      )
+      |> Repo.update!()
+
+    # §12.4a: nobody online can commit it; wake the candidates (one wake job per op at a time).
+    if op.type == "devices", do: schedule_wake(op.op_id, DateTime.utc_now())
     op
-    |> Ecto.Changeset.change(
-      committer_user: nil,
-      committer_device: nil,
-      committer_until: nil,
-      naming: op.naming + 1
-    )
-    |> Repo.update!()
   end
 
   defp assign(g, op, {u, d}, mode) do
@@ -248,9 +265,16 @@ defmodule RisiMe.Groups.Ops do
 
   def affected_user(_), do: nil
 
-  # Devices that may commit this op, best first: for `devices`, the affected user's other
-  # in-group devices; then admin devices. Online only, most recently seen first.
-  defp online_candidates(g, op) do
+  # Devices that may commit this op, best first, online only.
+  defp online_candidates(g, op),
+    do: g |> candidates(op) |> Enum.filter(fn {_u, d} -> Presence.device_online?(d) end)
+
+  @doc """
+  Devices that may commit this op, best first, online or not: for `devices`, the affected user's
+  other in-group devices; then admin devices; then (§12.4a, member path open) the other active
+  members' in-group devices. Each tier most recently seen first.
+  """
+  def candidates(g, op) do
     own =
       case op.type do
         "devices" ->
@@ -271,10 +295,97 @@ defmodule RisiMe.Groups.Ops do
 
     # MLS can't commit its own removal: a remove op never names the removed users' devices; a
     # `devices` op never names a device it changes (e.g. the rejoining device itself).
-    (by_recency(own) ++ by_recency(admin_devices(g)))
+    (by_recency(own) ++ by_recency(admin_devices(g)) ++ by_recency(member_devices(g, op)))
     |> Enum.uniq()
     |> Enum.reject(fn {u, _d} = ref -> u in leaving or MapSet.member?(changing, ref) end)
-    |> Enum.filter(fn {_u, d} -> Presence.device_online?(d) end)
+  end
+
+  # §12.4a tier 3: the other active members' in-group devices (never agents, never superseded),
+  # only while the member path is open. Sorted by device id first, so recency ties are stable.
+  defp member_devices(g, %Op{type: "devices"} = op) do
+    in_group = Groups.in_group(g.id)
+
+    if member_path?(g, op, in_group) do
+      affected = affected_user(op)
+      users = MapSet.new(active_user_ids(g.id))
+      superseded = in_group |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> MLS.superseded_devices()
+
+      in_group
+      |> Enum.filter(fn {u, _} = ref ->
+        u != affected and MapSet.member?(users, u) and not MapSet.member?(superseded, ref)
+      end)
+      |> Enum.sort_by(&elem(&1, 1))
+    else
+      []
+    end
+  end
+
+  defp member_devices(_g, _op), do: []
+
+  defp active_user_ids(group_id),
+    do:
+      Repo.all(
+        from m in Member,
+          where: m.group_id == ^group_id and m.state == "active" and m.kind == "user",
+          select: m.user_id
+      )
+
+  @doc """
+  §12.4a: a `devices` op a non-admin may commit for another user: it changes one user's devices,
+  that user is an active member (not an agent) with a leaf in the group, it adds at least one
+  device, and every device it removes it also re-adds (a rejoin or a re-key).
+  """
+  def member_committable?(g, op, in_group \\ nil)
+
+  def member_committable?(%Group{} = g, %Op{type: "devices"} = op, in_group) do
+    added = refs(op, "added")
+    removed = refs(op, "removed")
+
+    case Enum.uniq(for {u, _} <- added ++ removed, do: u) do
+      [u] ->
+        in_group = in_group || Groups.in_group(g.id)
+
+        added != [] and Enum.all?(removed, &(&1 in added)) and
+          Enum.any?(in_group, fn {uu, _} -> uu == u end) and
+          match?(%Member{state: "active", kind: "user"}, Groups.member(g.id, u))
+
+      _ ->
+        false
+    end
+  end
+
+  def member_committable?(_g, _op, _in_group), do: false
+
+  @doc """
+  §12.4a rollout gate: true while every in-group leaf that is not superseded, still registered
+  and not changed by the op advertises `member_devices`. A leaf whose device row is gone gets no
+  `grp:` traffic (§12.1), so it can't reject a commit.
+  """
+  def gate_open?(g, op, in_group \\ nil) do
+    in_group = in_group || Groups.in_group(g.id)
+    changing = changing(op)
+    leaves = Enum.reject(in_group, &MapSet.member?(changing, &1))
+    users = leaves |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+    superseded = MLS.superseded_devices(users)
+
+    caps =
+      Repo.all(
+        from d in Device,
+          where: d.user_id in ^users,
+          select: {{d.user_id, d.device_id}, d.capabilities}
+      )
+      |> Map.new()
+
+    Enum.all?(leaves, fn ref ->
+      MapSet.member?(superseded, ref) or not Map.has_key?(caps, ref) or
+        @member_cap in (caps[ref] || [])
+    end)
+  end
+
+  @doc "§12.4a: member-committable and the gate is open."
+  def member_path?(g, op, in_group \\ nil) do
+    in_group = in_group || Groups.in_group(g.id)
+    member_committable?(g, op, in_group) and gate_open?(g, op, in_group)
   end
 
   # Leaves of active admins; after a reset (no MLS state), their current groups devices.
@@ -317,8 +428,9 @@ defmodule RisiMe.Groups.Ops do
 
     case op.type do
       "devices" ->
-        in_group? and (admin? or u == affected_user(op)) and
-          not MapSet.member?(changing(op), ref)
+        in_group? and not MapSet.member?(changing(op), ref) and
+          (admin? or u == affected_user(op) or
+             (u in active_user_ids(g.id) and member_path?(g, op)))
 
       "rebuild" ->
         admin? and epoch == nil and MapSet.member?(Groups.device_refs([u]), ref)
@@ -359,6 +471,140 @@ defmodule RisiMe.Groups.Ops do
 
     :ok
   end
+
+  ## Wake-ups (§12.4a)
+
+  defp schedule_wake(op_id, at) do
+    {:ok, _} =
+      Oban.insert(
+        GroupTimer.new(%{"kind" => "wake", "op_id" => op_id},
+          scheduled_at: at,
+          unique: [
+            period: :infinity,
+            keys: [:kind, :op_id],
+            states: [:available, :scheduled, :retryable]
+          ]
+        )
+      )
+
+    :ok
+  end
+
+  @doc """
+  A `devices` op still waits with no committer: sends the §8.2 inbox push to the own token of
+  each of the first #{@wake_max} candidates (skipping online devices and devices without a token,
+  at most #{@wake_per_device_day} per device per day), then checks again in #{@wake_every_h} h.
+  Runs outside the group lock (reads only). Logs counts only.
+  """
+  def wake(op_id) do
+    with %Op{type: "devices", committer_device: nil} = op <- Repo.get(Op, op_id),
+         %Group{} = g <- Groups.get_group(op.group_id) do
+      targets =
+        g
+        |> candidates(op)
+        |> Enum.take(@wake_max)
+        |> Enum.reject(fn {_u, d} -> Presence.device_online?(d) end)
+
+      tokens =
+        for {_u, d} <- targets,
+            token = Devices.device_push_token(d),
+            token != nil,
+            RateLimiter.hit_if_allowed(
+              :group_wake,
+              d,
+              @wake_per_device_day,
+              :timer.hours(24)
+            ) == :ok,
+            do: token
+
+      RisiMe.Push.Dispatcher.push_inbox(tokens)
+      Logger.info("group_op_wake: candidates=#{length(targets)} pushed=#{length(tokens)}")
+      schedule_wake(op.op_id, DateTime.add(DateTime.utc_now(), @wake_every_h, :hour))
+    end
+
+    :ok
+  end
+
+  ## Re-naming waiting ops (§12.11)
+
+  @doc """
+  §12.11: names a committer for every waiting `devices` op (no committer), in `group_ids` (or
+  every group). `dry_run: true` (the default) changes nothing and only counts. Each op is named
+  under its group's lock; an op named meanwhile is skipped, so a re-run is harmless. Returns
+  counts only: `devices_ops` (all pending `devices` ops in scope), `waiting`, `member_committable`,
+  `gate_closed` (member-committable but gated), `with_candidates` (any candidate, online or
+  not), `named` and `still_waiting` (real run only).
+  """
+  def name_waiting(opts \\ []) do
+    dry_run = Keyword.get(opts, :dry_run, true)
+    group_ids = Keyword.get(opts, :group_ids)
+
+    scope =
+      if group_ids,
+        do: from(o in Op, where: o.type == "devices" and o.group_id in ^group_ids),
+        else: from(o in Op, where: o.type == "devices")
+
+    all = Repo.all(from o in scope, select: {o.group_id, o.op_id, o.committer_device})
+    waiting = for {gid, oid, nil} <- all, do: {gid, oid}
+
+    zero = %{
+      devices_ops: length(all),
+      waiting: length(waiting),
+      member_committable: 0,
+      gate_closed: 0,
+      with_candidates: 0,
+      named: 0,
+      still_waiting: 0
+    }
+
+    Enum.reduce(waiting, zero, fn {gid, oid}, acc ->
+      with %Group{} = g <- Groups.get_group(gid),
+           %Op{} = op <- get(gid, oid) do
+        in_group = Groups.in_group(gid)
+        mc? = member_committable?(g, op, in_group)
+        gate? = mc? and gate_open?(g, op, in_group)
+
+        acc
+        |> bump(:member_committable, mc?)
+        |> bump(:gate_closed, mc? and not gate?)
+        |> bump(:with_candidates, candidates(g, op) != [])
+        |> then(&if(dry_run, do: &1, else: name_one(&1, gid, oid)))
+      else
+        _ -> acc
+      end
+    end)
+  end
+
+  @doc "§12.11: `name_waiting/1` (real run) for the groups where `user_id` is an active member."
+  def name_waiting_for_user(user_id) do
+    group_ids =
+      Repo.all(
+        from m in Member,
+          where: m.user_id == ^user_id and m.state == "active",
+          select: m.group_id
+      )
+
+    if group_ids == [],
+      do: :ok,
+      else: name_waiting(dry_run: false, group_ids: group_ids)
+  end
+
+  defp name_one(acc, gid, oid) do
+    {:ok, named?} =
+      Groups.locked(gid, fn ->
+        with %Group{} = g <- Groups.get_group(gid),
+             %Op{committer_device: nil} = op <- get(gid, oid) do
+          {:ok, name_next(g, op).committer_device != nil}
+        else
+          _ -> {:ok, false}
+        end
+      end)
+
+    if named?, do: bump(acc, :named, true), else: bump(acc, :still_waiting, true)
+  end
+
+  defp bump(acc, key, true), do: Map.update!(acc, key, &(&1 + 1))
+  defp bump(acc, _key, false), do: acc
 
   ## Timers (Oban)
 
