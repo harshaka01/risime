@@ -47,6 +47,19 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.24 (live 2026-10-07, not required): calls stay visible in the background, invite limits
+- **Calls:** a "Call in progress — tap to return" bar; the call screen stays in Recents; a visible
+  `call_ongoing` notification channel (lock screen, Hang up); a ringback tone for the caller.
+  Proven on Redroid: Home plus the screen off for 60 s, audio both ways, the shade's Hang up ends
+  the call on both phones.
+- **Invites:** limits are server config (20 per user per day, 200 global, 50 pending, friend
+  requests 50 per day); re-invites don't count; `INVITE_ADMINS` (in `.env`, Harsha's decision) skips
+  the per-user limit.
+- **Needs Harsha:**
+  - his invite counter (10 in 24 h) drains by itself, or he runs the UPDATE given in chat (a
+    production DB edit root won't do because the agent's attempt was refused);
+  - `INVITE_ADMINS` in `.env` if wanted.
+
 ## TURN relay live on the pilot (2026-10-07 06:34 UTC)
 - `TURN_URLS` (turn:203.115.26.139:3478 udp+tcp) is set in `infra/pilot/pilot.env` (`45dfb64`). The
   pilot was restarted at 06:34 UTC by the calls agent on Harsha's instruction to it.
