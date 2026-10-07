@@ -3216,7 +3216,7 @@ After the last part, cancel, or any terminal state: `history_forget` (§17.3). P
 | Max size (ciphertext) | 16 MiB |
 | Parts | at most 20 blobs per request (`400 bad_request`) |
 | Readers | the uploader, and the **requester's user** while the request is open or `done` (`404` otherwise) |
-| TTL | **48 h from upload**; deleted earlier on the requester's **`history:ack`** of that part (+1 h), on cancel, and on a close without delivery |
+| TTL | **48 h from upload**; deleted earlier **1 h after the request's last `history:ack`** (the server can't map a blob to a part, because the blob id is inside the encrypted envelope), on cancel, and on a close without delivery |
 | Upload rate | 40 / h per user; the 3-concurrent-uploads slot shared with `media` |
 | Quota | 512 MiB live per user, separate from `media` (`413 quota_exceeded`); in `GET /blobs/usage` as `"history"` (`blob_usage_reply_history.json`) |
 | Guard | counted with `media` in the free-space guard (`507 storage_full`) |
