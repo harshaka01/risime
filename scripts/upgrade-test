@@ -4,9 +4,11 @@
 # survive and the app must not ask to sign in again.
 #
 #   scripts/upgrade-test --new <apk> [--version X] [--commit SHA] [--old <apk|vX.Y.Z...>] [--serial S] [--serial-b S2]
-#                        [--target auto|redroid|emulator|device]
+#                        [--target auto|redroid|emulator|device] [--no-group]
 #     auto (default): an attached adb device if there is one, else redroid on spark2.
-#     redroid: spark2 starts a throwaway Android container (scripts/android-target) and removes it after.
+#     redroid: spark2 starts throwaway Android containers (scripts/android-target) and removes them after:
+#       A's, and C's (REDROID_INSTANCE + "-b", REDROID_PORT + 1) for the group checks. --no-group runs
+#       A alone (about 2 GB less RAM; the group, photo and group-delete checks are then skipped).
 #   scripts/upgrade-test --fetch-candidate      # laptop: pull spark2's staged release candidate, test it, send the result back
 #   scripts/upgrade-test --fetch-candidate --manual-signin   # you sign in on the emulator; the script shows the code
 # On a failure the script saves a screenshot, a UI dump and the app's logcat next to the result
@@ -18,16 +20,23 @@
 #
 # What it does:
 #  1. A temporary server from this checkout on 127.0.0.1:4110 (own DB/keyspace risime_upgrade,
-#     dropped and recreated each run; dev OTP login, codes only in its own log; E2EE off). On the
-#     laptop it runs on spark2 over ssh and is reached through an ssh -L tunnel. Never :4000.
+#     dropped and recreated each run; dev OTP login, codes only in its own log; E2EE on with a
+#     per-run attestation key, as on the pilot). On the laptop it runs on spark2 over ssh and is
+#     reached through an ssh -L tunnel. Never :4000.
 #  2. Device: uninstall, install OLD, adb reverse tcp:4110, sign user A in through the real login
-#     UI (dev OTP), befriend B (server fixture), B sends DMs to A (server fixture), A replies via UI.
-#     With --serial-b, B also runs the old app on a second device and A creates a group with B.
+#     UI (dev OTP), befriend B (server fixture), B sends DMs to A (server fixture: B has no device,
+#     so the DM stays plaintext), A replies via UI.
+#     With a second device (redroid's second container, or --serial-b), user C signs in on the old
+#     app there, and A creates the group "Upgrade group" with C (MLS) and sends one message.
 #  3. Snapshot: the messages A sees (UI dump; plus Room rows when `adb root` works, i.e. a
 #     google_apis emulator image).
 #  4. `adb install -r NEW`, start it, then verify: no sign-in screen, the chat list shows B (and the
 #     group), every seeded message is still in the chat, and (with root) the Room row counts and
-#     the session/owner keys in the DataStore are unchanged.
+#     the session/owner keys in the DataStore are unchanged. With root, also after the upgrade:
+#     a new message is delivered; a reaction to a seeded message is stored and confirmed (Room
+#     `reactions`). With the group: the group row (name) and MLS state are kept and A sends in the
+#     group (C receives it); a photo uploads (the server holds a blob); "Delete for everyone" of
+#     the seeded group message leaves a tombstone at A (Room) and at C (UI).
 #  5. Writes ~/risime-logs/upgrade-test/v<version>.result (PASS|FAIL, versions, commit, sha256, host,
 #     time). scripts/nightly-release refuses to release without a fresh PASS for its version+commit.
 set -euo pipefail
@@ -73,7 +82,7 @@ if [ "${1:-}" = _server ]; then
 alias RisiMe.{Accounts, Repo}
 alias RisiMe.Accounts.User
 [mode | rest] = System.argv()
-a_phone = "+94770000961"; b_phone = "+94770000962"
+a_phone = "+94770000961"; b_phone = "+94770000962"; c_phone = "+94770000963"
 user! = fn phone ->
   Repo.get_by(User, phone: phone) ||
     (e = Accounts.get_allowlist_entry(phone)
@@ -83,10 +92,16 @@ case mode do
   "setup" ->
     {:ok, _} = Accounts.allow(%{phone: a_phone, email: "upgrade61@example.com", display_name: "ZZ Upgrade A", company: "CodeGen"})
     {:ok, _} = Accounts.allow(%{phone: b_phone, email: "upgrade62@example.com", display_name: "ZZ Upgrade B", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: c_phone, email: "upgrade63@example.com", display_name: "ZZ Upgrade C", company: "CodeGen"})
     IO.puts("upgrade: setup ok")
   "friends" ->
     RisiMe.Social.make_friends!(user!.(a_phone).id, user!.(b_phone).id)
     IO.puts("upgrade: friends ok")
+  "friends_c" ->
+    RisiMe.Social.make_friends!(user!.(a_phone).id, user!.(c_phone).id)
+    IO.puts("upgrade: friends_c ok")
+  "blobs" ->
+    IO.puts("upgrade: blobs=#{Repo.aggregate("blobs", :count)}")
   "send" ->
     [n] = rest
     a = user!.(a_phone); b = user!.(b_phone)
@@ -104,13 +119,19 @@ EXS
        $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
         || { echo "could not create/migrate the upgrade store"; exit 1; }
       (cd "$SRV" && $M mix compile >/dev/null 2>&1) || { echo "temp server: compile failed"; exit 1; }
+      # A per-run E2EE attestation key (never the pilot's): groups, photos and deletes need MLS.
+      rm -f "$RUN/attest.jwk"
+      (cd "$SRV" && $M mix risime.attestation.gen "$RUN/attest.jwk" >/dev/null 2>&1) || true
+      [ -f "$RUN/attest.jwk" ] || { echo "could not create a temp attestation key"; exit 1; }
       tmux new -d -s "risime-upgrade$USUF" "cd '$SRV' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=risime_upgrade$USUF RISIME_DEV_KEYSPACE=risime_upgrade$USUF ERL_EPMD_ADDRESS=127.0.0.1 \
         PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
-        RISIME_AUTH_LOG='$RUN/auth.log' $M mix phx.server > '$RUN/server.log' 2>&1"
+        RISIME_AUTH_LOG='$RUN/auth.log' ATTESTATION_KEY_FILE='$RUN/attest.jwk' $M mix phx.server > '$RUN/server.log' 2>&1"
       for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
       curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "upgrade server didn't start"; tail -20 "$RUN/server.log"; exit 1; }
       fx setup ;;
     friends) fx friends ;;
+    friends_c) fx friends_c ;;
+    blobs) fx blobs ;;
     send) fx send "${2:?count}" ;;
     # The newest dev OTP for a phone (the code is printed to the caller only, never logged here).
     otp) grep -a "\[DEV OTP\] ${2:?phone}:" "$RUN/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true ;;
@@ -121,20 +142,21 @@ EXS
 fi
 
 # ---------------------------------------------------------------- driver half ------------------
-NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0; MANUAL=0; DEV=""; TARGET=auto
+NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0; MANUAL=0; DEV=""; TARGET=auto; GROUP=1
 while [ $# -gt 0 ]; do case "$1" in
   --new) NEW="$2"; shift 2;; --old) OLD="$2"; shift 2;; --version) VERSION="$2"; shift 2;;
   --commit) COMMIT="$2"; shift 2;; --serial) SERIAL="$2"; shift 2;; --serial-b) SERIAL_B="$2"; shift 2;;
   --fetch-candidate) FETCH=1; shift;;
   --target) TARGET="$2"; shift 2;;
   --manual-signin) MANUAL=1; shift;;
+  --no-group) GROUP=0; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 
 case "$TARGET" in auto|redroid|emulator|device) ;; *) echo "--target auto|redroid|emulator|device"; exit 2;; esac
 # spark2's SDK adb is x86-64: use the arm64 adb (user space, scripts/android-target adb).
 if [ "$(uname -m)" = aarch64 ]; then PATH="$("$REPO/scripts/android-target" adb):$PATH"; fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-upgrade.XXXXXX")"
-TUNNEL_PID=""; STARTED_TARGET=""
+TUNNEL_PID=""; STARTED_TARGET=""; STARTED_B=""; CHECKS=""
 STEP="start"; RESULT=FAIL; REASON=""; RESULT_WRITTEN=0; VERSION_FOR_RESULT=""
 step() { STEP="$*"; echo "==> $*"; }
 fail() { REASON="$1"; echo "UPGRADE TEST FAILED: $1"; write_result; exit 1; }
@@ -144,7 +166,7 @@ write_result() {
   RESULT_WRITTEN=1
   { echo "result=$RESULT"; echo "version=$VERSION"; echo "commit=$COMMIT"; echo "old=${OLD_VN:-}"; echo "new=${NEW_VN:-}"
     echo "new_sha256=$(sha256sum "$NEW" | cut -d' ' -f1)"; echo "host=$(hostname)"; echo "device=$(adb -s "$SERIAL" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
-    echo "group=${SERIAL_B:+yes}"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
+    echo "group=${SERIAL_B:+yes}"; echo "checks=${CHECKS# }"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
   echo "==> result: $f"
   local diag=""
   [ "$RESULT" = PASS ] || diag="$(save_diagnostics || true)"
@@ -166,6 +188,8 @@ save_diagnostics() {
   echo "==> diagnostics: $d (screen.png, ui.xml, logcat.txt)" >&2
   echo "$d"
 }
+# C's container: the same instance name + "-b", the next port.
+redroid_b() { REDROID_INSTANCE="${REDROID_INSTANCE:-}-b" REDROID_PORT="$(( ${REDROID_PORT:-5655} + 1 ))" "$REPO/scripts/android-target" "$@"; }
 srv() { if on_spark2; then "$REPO/scripts/upgrade-test" _server "$@"; else ssh "$SPARK" "cd ~/development/risime && scripts/upgrade-test _server $*"; fi; }
 cleanup() {
   local rc=$?
@@ -174,8 +198,11 @@ cleanup() {
     echo "UPGRADE TEST FAILED: $REASON"
     [ -n "$VERSION" ] && [ -n "$NEW" ] && [ -f "$NEW" ] && write_result || true
   fi
+  # UPGRADE_KEEP=1 (debugging the script): leave the server and containers up after a failure.
+  if [ "${UPGRADE_KEEP:-0}" = 1 ] && [ "$RESULT" != PASS ]; then echo "==> UPGRADE_KEEP=1: server and devices left running ($SERIAL ${SERIAL_B:-})"; return; fi
   srv stop >/dev/null 2>&1 || true
   [ -n "$STARTED_TARGET" ] && "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+  [ -n "$STARTED_B" ] && redroid_b stop >/dev/null 2>&1 || true
   [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
   rm -rf -- "${WORK:?}"
 }
@@ -229,11 +256,16 @@ adb start-server >/dev/null 2>&1 || true
 devs_now() { local out; out="$(adb devices 2>/dev/null || true)"; awk 'NR>1 && $2=="device"{print $1}' <<<"$out"; }
 mapfile -t DEVS < <(devs_now)
 if [ "$TARGET" = redroid ] || { [ "$TARGET" = auto ] && [ ${#DEVS[@]} -eq 0 ] && on_spark2; }; then
-  [ -z "$SERIAL_B" ] || { echo "--serial-b is not supported with redroid (one container)"; exit 2; }
-  step "start redroid (scripts/android-target start)"
+  [ -z "$SERIAL_B" ] || { echo "--serial-b is not used with redroid (it starts C's container itself; --no-group skips it)"; exit 2; }
+  step "start redroid (scripts/android-target start; C's container too unless --no-group)"
   STARTED_TARGET=redroid
+  [ "$GROUP" = 1 ] && { STARTED_B=1; redroid_b start > "$WORK/serial-b" 2> "$WORK/redroid-b.log" & RB_PID=$!; }
   SERIAL="$("$REPO/scripts/android-target" start)" || { STARTED_TARGET=""; echo "could not start redroid"; exit 1; }
   echo "    redroid up: $SERIAL ($(adb -s "$SERIAL" shell getprop ro.build.version.release | tr -d '\r'), $(adb -s "$SERIAL" shell getprop ro.product.cpu.abi | tr -d '\r'))"
+  if [ "$GROUP" = 1 ]; then
+    wait "$RB_PID" || { cat "$WORK/redroid-b.log" >&2; echo "could not start C's redroid (--no-group runs without it)"; exit 1; }
+    SERIAL_B="$(tail -1 "$WORK/serial-b")"; echo "    C's redroid up: $SERIAL_B"
+  fi
 else
   [ ${#DEVS[@]} -gt 0 ] || { echo "no adb device. Start an emulator (laptop: emulator -avd risime_a) or attach a TEST phone (spark2: --target redroid)."; exit 1; }
   SERIAL="${SERIAL:-${DEVS[0]}}"
@@ -253,22 +285,72 @@ curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server not reac
 
 # ---- UI helpers (uiautomator dump + taps by visible text)
 A() { adb -s "$DEV" "$@"; }
-dump() { A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui.xml"; }
+# A fresh dump every time (a failed dump must not leave the previous screen's file behind).
+dump() {
+  local out
+  for _ in 1 2 3; do
+    A shell rm -f /sdcard/ui.xml >/dev/null 2>&1 || true
+    out="$(A shell uiautomator dump /sdcard/ui.xml 2>&1 || true)"
+    has_text "$out" "dumped to" && break
+    sleep 1
+  done
+  A exec-out cat /sdcard/ui.xml > "$WORK/ui.xml" 2>/dev/null || : > "$WORK/ui.xml"
+}
 has() { dump; grep -qF -- "$1" "$WORK/ui.xml"; }
 wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "timeout waiting for a UI element: $1"; return 1; }
-tap() {  # tap the node whose text or content-desc equals $1
+# The centre of the node whose text or content-desc equals $1 ("x*": text starts with x; "~x":
+# text or content-desc contains x, e.g. a message bubble's merged description; "^x": text equals x,
+# never a content-desc, e.g. a sheet's "Send" button rather than the composer's Send icon).
+node_xy() {
   dump
-  local b; b="$(python3 -I - "$WORK/ui.xml" "$1" <<'PY'
+  python3 -I - "$WORK/ui.xml" "$1" <<'PY'
 import re, sys, xml.etree.ElementTree as ET
 want = sys.argv[2]
+def hit(n):
+    t, d = n.get('text') or '', n.get('content-desc') or ''
+    if want.startswith('~'):
+        return want[1:] in t or want[1:] in d
+    if want.startswith('^'):
+        return t == want[1:]
+    return t == want or d == want or (want.endswith('*') and t.startswith(want[:-1]))
 for n in ET.parse(sys.argv[1]).iter('node'):
-    if n.get('text') == want or n.get('content-desc') == want or (want.endswith('*') and (n.get('text') or '').startswith(want[:-1])):
+    if hit(n):
         x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
         print((x1 + x2) // 2, (y1 + y2) // 2); break
 PY
-)"
+}
+tap() {  # tap the node whose text or content-desc equals $1 (see node_xy)
+  local b; b="$(node_xy "$1")"
   [ -n "$b" ] || { echo "no UI node: $1"; return 1; }
   A shell input tap $b
+}
+# The chat list's "New group" FAB: uiautomator shows the extended FABs as text-less Buttons at the
+# bottom right ("New group" above "Add friend", only while groups are available).
+tap_new_group() {
+  dump
+  local b; b="$(python3 -I - "$WORK/ui.xml" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+nodes = list(ET.parse(sys.argv[1]).iter('node'))
+if any((n.get('text') == 'New group' or n.get('content-desc') == 'New group') for n in nodes):
+    n = next(n for n in nodes if n.get('text') == 'New group' or n.get('content-desc') == 'New group')
+    x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); print((x1 + x2) // 2, (y1 + y2) // 2); sys.exit()
+h = max(int(re.findall(r'\d+', n.get('bounds'))[3]) for n in nodes)
+fabs = []
+for n in nodes:
+    if n.get('class') == 'android.widget.Button' and not n.get('text') and not n.get('content-desc'):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        if y1 > h * 0.6: fabs.append((y1, (x1 + x2) // 2, (y1 + y2) // 2))
+if len(fabs) >= 2:
+    fabs.sort(); print(fabs[0][1], fabs[0][2])
+PY
+)"
+  [ -n "$b" ] || return 1
+  A shell input tap $b
+}
+long_press() {  # a long-press (900 ms) on the node $1 (see node_xy)
+  local b; b="$(node_xy "$1")"
+  [ -n "$b" ] || { echo "no UI node: $1"; return 1; }
+  A shell input swipe $b $b 900
 }
 # Empty the focused field wherever the cursor landed (Compose ignores MOVE_END): delete backwards
 # and forwards, in one batched shell call.
@@ -339,7 +421,8 @@ install_old() {
 }
 
 open_chat() { A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/.MainActivity" >/dev/null; wait_for "$1" 40; dismiss_prompts; tap "$1"; sleep 2; }
-send_ui() { type_into "Message" "$1"; tap "Send"; sleep 1; }
+# $2: the composer's placeholder ("Encrypted message" in an e2ee chat).
+send_ui() { type_into "${2:-Message}" "$1"; tap "Send"; sleep 1; }
 visible_msgs() { hide_keyboard; dismiss_prompts; sleep 1; dump; grep -oE 'upgrade-test [AB][0-9]+' "$WORK/ui.xml" | sort -u; }
 
 # Room rows and DataStore keys need root (google_apis emulator images allow `adb root`).
@@ -360,7 +443,18 @@ import sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
 q = lambda s: c.execute(s).fetchone()[0]
 groups = q("SELECT COUNT(*) FROM sqlite_master WHERE name='groups'") and q("SELECT COUNT(*) FROM `groups`") or 0
-print(f"messages={q('SELECT COUNT(*) FROM messages')} contacts={q('SELECT COUNT(*) FROM contacts')} groups={groups} cursor={'set' if q('SELECT COUNT(*) FROM sync_state') else 'none'}")
+def n(sql):
+    try: return q(sql) or 0
+    except sqlite3.Error: return 0
+extra = {
+    "group_named": n("SELECT COUNT(*) FROM `groups` WHERE name = 'Upgrade group'"),
+    "mls": n("SELECT COUNT(*) FROM mls_kv"),
+    "reactions": n("SELECT COUNT(*) FROM reactions WHERE op = 'add' AND pending = 0"),
+    "deleted": n("SELECT COUNT(*) FROM messages WHERE kind = 'deleted'"),
+    "images_sent": n("SELECT COUNT(*) FROM messages WHERE kind = 'image' AND outgoing = 1 AND message_id IS NOT NULL"),
+}
+print(f"messages={q('SELECT COUNT(*) FROM messages')} contacts={q('SELECT COUNT(*) FROM contacts')} groups={groups} cursor={'set' if q('SELECT COUNT(*) FROM sync_state') else 'none'} "
+      + " ".join(f"{k}={v}" for k, v in extra.items()))
 PY
   local ds; ds="$(A exec-out cat "/data/data/$PKG/files/datastore/risime.preferences_pb" 2>/dev/null | strings | grep -cE '^(last_user_id|token|user)$' || true)"
   echo "datastore_keys=$ds"
@@ -370,15 +464,41 @@ PY
 }
 
 
+ENC="Encrypted message"   # the composer's placeholder in an e2ee chat
+# C (second device) sees $1 in the group, reopening the chat once if the socket went quiet.
+c_sees() { local d="$DEV"; DEV="$SERIAL_B"; local r=0; wait_for "$1" 45 || { open_chat "Upgrade group" >/dev/null || true; wait_for "$1" 45; } || r=1; DEV="$d"; return $r; }
+# A small PNG (stdlib only) in A's Pictures, indexed so the Photo Picker shows it.
+push_photo() {
+  python3 -I - "$WORK/upgrade-test.png" <<'PY'
+import struct, sys, zlib
+w, h = 160, 120
+rows = b"".join(b"\x00" + b"".join(bytes((20, 90, 200) if 40 <= x < 120 and 30 <= y < 90 else (230, 120, 40)) for x in range(w)) for y in range(h))
+chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+PY
+  A push "$WORK/upgrade-test.png" /sdcard/Pictures/upgrade-test.png >/dev/null
+  A shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Pictures/upgrade-test.png >/dev/null
+}
+# Poll A's Room snapshot (DB_AFTER) until field $1 >= $2, up to $3 x 5 s.
+await_field() {
+  for _ in $(seq 1 "${3:-12}"); do
+    DB_AFTER="$(db_snapshot)"
+    [ "$(field "$DB_AFTER" "$1")" -ge "$2" ] 2>/dev/null && return 0
+    sleep 5
+  done
+  return 1
+}
+
 # ---- 1. old app, signed in, with chats
 step "install the old app ($OLD_VN) on $SERIAL${SERIAL_B:+ and $SERIAL_B}"
 DEV="$SERIAL"; install_old
 [ -n "$SERIAL_B" ] && { DEV="$SERIAL_B"; install_old; }
 step "sign in on the old app"
 DEV="$SERIAL"; sign_in "+94770000961" "upgrade61@example.com" || fail "old app sign-in (A)"
-if [ -n "$SERIAL_B" ]; then DEV="$SERIAL_B"; sign_in "+94770000962" "upgrade62@example.com" || fail "old app sign-in (B)"; fi
+if [ -n "$SERIAL_B" ]; then DEV="$SERIAL_B"; sign_in "+94770000963" "upgrade63@example.com" || fail "old app sign-in (C, second device)"; fi
 step "seed: friends, 3 messages from B, 3 replies from A"
 srv friends; srv send 3
+[ -n "$SERIAL_B" ] && srv friends_c
 DEV="$SERIAL"; open_chat "ZZ Upgrade B" || fail "chat with B not listed on the old app"
 for i in 1 2 3; do send_ui "upgrade-test A$i"; done
 sleep 3
@@ -386,10 +506,20 @@ BEFORE="$(visible_msgs || true)"; n_before="$(grep -c . <<<"$BEFORE" || true)"
 echo "    before: $n_before messages visible"
 [ "${n_before:-0}" -ge 6 ] || fail "seeding: expected 6 messages on the old app, saw ${n_before:-0}"
 if [ -n "$SERIAL_B" ]; then
-  A shell input keyevent KEYCODE_BACK; sleep 1
-  tap "New group" && sleep 2 && tap "ZZ Upgrade B" && tap "Next" && sleep 1 && type_into "Group name" "Upgrade group" && tap "Create" \
+  step "seed the group: A creates \"Upgrade group\" with C (MLS) and sends one message; C receives it"
+  hide_keyboard; A shell input keyevent KEYCODE_BACK; sleep 1
+  tap "Refresh friends" || true; sleep 3
+  for _ in $(seq 1 30); do tap_new_group && break; sleep 2; done
+  wait_for "Add members" 10 || fail "no New group button on the old app (MLS core not loaded?)"
+  sleep 2; tap "ZZ Upgrade C" && tap "Next" && sleep 1 && type_into "Group name" "Upgrade group" && hide_keyboard && tap "Create" \
     || fail "group creation on the old app"
-  wait_for "Upgrade group" 60 || fail "group not created"; sleep 5; send_ui "upgrade-test A9"
+  wait_for "Upgrade group" 60 || fail "group not created"
+  # Create opens the new group; if the app went back to the list instead, open it.
+  wait_for "$ENC" 30 || { tap "Upgrade group" || true; wait_for "$ENC" 90; } || fail "the group's MLS setup didn't finish on the old app"
+  send_ui "upgrade-test A9" "$ENC"
+  DEV="$SERIAL_B"; open_chat "Upgrade group" || fail "C: the group isn't listed (Welcome not processed)"
+  wait_for "upgrade-test A9" 60 || fail "C did not receive the group message on the old app"
+  DEV="$SERIAL"
 fi
 step "snapshot before the upgrade"
 DB_BEFORE="$(db_snapshot)"; echo "    before (Room): $DB_BEFORE"
@@ -435,6 +565,58 @@ if [ "$DB_BEFORE" != no-root ]; then
   did_b="$(sed -n 's/.*device_id=\([^ ]*\).*/\1/p' <<<"$DB_BEFORE" | tail -1)"; did_a="$(sed -n 's/.*device_id=\([^ ]*\).*/\1/p' <<<"$DB_AFTER" | tail -1)"
   echo "    device id: before ${did_b:-?} after ${did_a:-?}"
   [ -n "$did_b" ] && [ "$did_b" != none ] && [ "$did_b" = "$did_a" ] || fail "device id changed or missing across the upgrade (${did_b:-?} -> ${did_a:-?})"
+  CHECKS+=" messages session device_id cursor new_message"
+
+  # (c) a reaction after the upgrade: stored and confirmed by the server (Room `reactions`).
+  step "react to a seeded message after the upgrade"
+  open_chat "ZZ Upgrade B" || fail "cannot open the chat with B"
+  r_before="$(field "$DB_AFTER" reactions)"
+  { long_press "~upgrade-test B1" && wait_for "More reactions" 10 && tap "React 👍"; } || fail "the long-press reaction sheet didn't open on a seeded message"
+  await_field reactions "$(( ${r_before:-0} + 1 ))" || fail "the reaction after the upgrade was not stored and confirmed (Room reactions: $DB_AFTER)"
+  has "Reactions: " || echo "    note: the reaction chip isn't in the UI dump (Room has it)"
+  CHECKS+=" reaction"
+
+  if [ -n "$SERIAL_B" ]; then
+    # (a) the group survives: listed (checked above), its Room row with the name, MLS state, and
+    # A still sends in it with the same MLS group (no rejoin): C receives.
+    step "group after the upgrade: Room row, MLS state, A sends and C receives"
+    [ "$(field "$DB_AFTER" group_named)" -ge 1 ] 2>/dev/null || fail "the group's Room row (name \"Upgrade group\") was lost: $DB_AFTER"
+    [ "$(field "$DB_BEFORE" mls)" -ge 1 ] 2>/dev/null && [ "$(field "$DB_AFTER" mls)" -ge 1 ] 2>/dev/null || fail "MLS state lost (mls_kv rows ${DB_BEFORE##*mls=} -> ${DB_AFTER##*mls=})"
+    open_chat "Upgrade group" || fail "cannot open the group after the upgrade"
+    wait_for "$ENC" 60 || fail "the group isn't end-to-end encrypted after the upgrade (MLS state lost; rejoining?)"
+    send_ui "upgrade-test A10" "$ENC"
+    c_sees "upgrade-test A10" || fail "C did not receive A's group message sent after the upgrade"
+    CHECKS+=" group"
+
+    # (b) a photo after the upgrade: picked with the system Photo Picker, uploaded (a server blob).
+    step "send a photo in the group after the upgrade"
+    push_photo
+    blobs_before="$(field "$(srv blobs)" blobs)"
+    hide_keyboard; tap "Attach photo" || fail "no Attach photo button in the group"
+    wait_for "Photo taken on" 20 || fail "the Photo Picker didn't show the pushed photo"
+    tap "~Photo taken on" || fail "could not pick the photo"
+    wait_for "Send photo" 20 || fail "the attach sheet didn't open"
+    for _ in $(seq 1 10); do tap "^Send" >/dev/null || true; sleep 2; has "Send photo" || break; done
+    has "Send photo" && fail "the attach sheet's Send didn't go through"
+    blobs_after=""
+    for _ in $(seq 1 24); do blobs_after="$(field "$(srv blobs)" blobs)"; [ "${blobs_after:-0}" -gt "${blobs_before:-0}" ] && break; sleep 5; done
+    [ "${blobs_after:-0}" -gt "${blobs_before:-0}" ] || fail "the photo was not uploaded (server blobs ${blobs_before:-?} -> ${blobs_after:-?})"
+    await_field images_sent 1 || fail "the photo message was not sent (Room: $DB_AFTER)"
+    c_sees "Photo," || fail "C did not receive the photo"
+    CHECKS+=" photo"
+
+    # (d) Delete for everyone of the seeded group message: a tombstone at A (Room) and at C (UI).
+    step "delete the seeded group message for everyone"
+    d_before="$(field "$DB_AFTER" deleted)"
+    { long_press "~upgrade-test A9" && wait_for "Select" 10 && tap "Delete" && wait_for "Delete for everyone" 10 && tap "Delete for everyone"; } \
+      || fail "the delete UI didn't offer Delete for everyone on A's own message"
+    wait_for "You deleted this message" 30 || fail "A shows no tombstone"
+    await_field deleted "$(( ${d_before:-0} + 1 ))" || fail "A's Room row is not a tombstone ($DB_AFTER)"
+    c_sees "This message was deleted" || fail "C shows no tombstone for the deleted message"
+    DEV="$SERIAL_B"; dump; grep -qF "upgrade-test A9" "$WORK/ui.xml" && { DEV="$SERIAL"; fail "C still shows the deleted message"; }
+    DEV="$SERIAL"
+    CHECKS+=" delete_for_everyone"
+  fi
 else
   echo "==> no root on this device: verified through the UI only (use a google_apis emulator image for Room checks)"
 fi
