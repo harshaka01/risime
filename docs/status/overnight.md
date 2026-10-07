@@ -47,6 +47,15 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.25 (live 2026-10-07, not required): hotfix, dark screen after a call
+- **Fix:** an ended call always closes the call screen (back to the chat); a call screen opened
+  with no call closes at once; the call card leaves Recents; Back during a call goes to the chat
+  while the call continues.
+- **Real bug fixed:** closing the call screen's task counted as "app swiped away" and hung up.
+- **Redroid:** call 8 in `call-device-test`; CALLTEST OK for all 8 calls.
+- **Next (awaiting Harsha's exact list):** a UX polish slice (layout, attachment sheet, in-call
+  redesign; profile and group photos; branding).
+
 ## v0.2.0-nightly.24 (live 2026-10-07, not required): calls stay visible in the background, invite limits
 - **Calls:** a "Call in progress — tap to return" bar; the call screen stays in Recents; a visible
   `call_ongoing` notification channel (lock screen, Hang up); a ringback tone for the caller.
