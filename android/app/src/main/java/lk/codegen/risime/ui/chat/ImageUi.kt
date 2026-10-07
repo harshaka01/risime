@@ -331,7 +331,7 @@ sealed interface AttachState {
 
 /**
  * The attach sheet: the re-encoded thumbnail, a caption and Send / Cancel. [notice] is the group
- * "Some members need to update to see photos" line (§14.1).
+ * GROUP_IMAGES_NOTICE line (§14.1).
  */
 @Composable
 fun AttachSheet(
@@ -383,12 +383,16 @@ fun AttachSheetContent(
     }
 }
 
-/** §14.1 DM attach gate text: null = photos can be sent. */
+/**
+ * §14.1 DM attach gate text: null = photos can be sent. The wire doesn't carry the missing
+ * install's version, so it never says "needs to update" (nightly.16: people on the current build
+ * were told to update because of their own replaced install).
+ */
 fun dmImagesBlockedText(encrypted: Boolean, imagesReady: Boolean?, missingIsMe: Boolean, peerName: String): String? = when {
     !encrypted -> "Couldn't send: this chat isn't end-to-end encrypted yet."
-    imagesReady == false && missingIsMe -> "Your other phone needs to update to receive photos"
-    imagesReady == false -> "$peerName needs to update the app to receive photos"
+    imagesReady == false && missingIsMe -> "Your other phone can't receive photos yet"
+    imagesReady == false -> "$peerName's phone can't receive photos yet"
     else -> null
 }
 
-const val GROUP_IMAGES_NOTICE = "Some members need to update to see photos"
+const val GROUP_IMAGES_NOTICE = "Some members' phones can't show photos yet"

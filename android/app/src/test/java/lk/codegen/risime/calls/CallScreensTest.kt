@@ -96,7 +96,7 @@ class CallScreensTest(private val dark: Boolean) {
     @Test fun buttonRulesAndTexts() {
         assertEquals("Calls aren't supported on this phone", callBlockedText("Calls aren't supported on this phone", true, true, "Kamal"))
         assertEquals("Calls need an end-to-end encrypted chat.", callBlockedText(null, false, true, "Kamal"))
-        assertEquals("Kamal needs to update the app to receive calls", callBlockedText(null, true, false, "Kamal"))
+        assertEquals("Kamal's phone can't take calls yet", callBlockedText(null, true, false, "Kamal"))
         assertNull(callBlockedText(null, true, true, "Kamal"))
         assertEquals("Kamal is on another call", CallTexts.notice(CallNotice.BUSY, "Kamal"))
         assertEquals("Can't connect the call", CallTexts.notice(CallNotice.CANT_CONNECT, "Kamal"))

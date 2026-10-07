@@ -43,13 +43,25 @@ class CallActions(private val c: AppContainer, private val scope: CoroutineScope
     }
 }
 
-/** The rule order of §16.1: this phone first, then e2ee, then the peer's readiness. */
+/**
+ * The rule order of §16.1: this phone first, then e2ee, then the peer's readiness. This phone's
+ * reason is shown as it is ("Turn on notifications so RisiMe calls can ring"): "Update" only when
+ * this build really has calls off. The peer's version isn't on the wire, so a peer without `calls`
+ * is never told to update (nightly.16: a current phone that hadn't allowed notifications yet).
+ */
 fun callBlockedText(thisPhone: String?, encrypted: Boolean, ready: Boolean, peerName: String): String? = when {
-    thisPhone != null -> if (thisPhone.startsWith("Calls aren't supported")) thisPhone else "Update RisiMe on this phone to make calls ($thisPhone)"
+    thisPhone == CALLS_OFF_IN_BUILD -> "Update RisiMe on this phone to make calls"
+    thisPhone != null -> thisPhone
     !encrypted -> "Calls need an end-to-end encrypted chat."
-    !ready -> "$peerName needs to update the app to receive calls"
+    !ready -> peerCantTakeCallsText(peerName)
     else -> null
 }
+
+/** CallManager.unsupportedReason() for a build without calls (§16.14 receive-only). */
+const val CALLS_OFF_IN_BUILD = "calls are off in this build"
+
+/** §16.1 peer without a `calls` device (the button and the server's `calls_not_ready`). */
+fun peerCantTakeCallsText(peerName: String) = "$peerName's phone can't take calls yet"
 
 /** The call button: asks RECORD_AUDIO on the first call, explains when calls can't work yet. */
 @Composable

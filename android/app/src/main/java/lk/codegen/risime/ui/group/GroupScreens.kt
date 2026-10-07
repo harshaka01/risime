@@ -414,7 +414,7 @@ fun GroupInfoContent(
                     lk.codegen.risime.ui.chat.E2eeInfoLine(encrypted = true, notEncryptedText = null)
                     if (ui.photosNeedUpdate.isNotEmpty()) {
                         Text(
-                            "Need to update to see photos: " + ui.photosNeedUpdate.joinToString(", "),
+                            "Can't see photos yet: " + ui.photosNeedUpdate.joinToString(", "),
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }

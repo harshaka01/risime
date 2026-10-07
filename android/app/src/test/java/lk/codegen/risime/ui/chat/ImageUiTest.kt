@@ -102,8 +102,8 @@ class ImageUiTest {
     @Test
     fun notE2eeDmRefusesWithTheContractText() {
         assertEquals("Couldn't send: this chat isn't end-to-end encrypted yet.", dmImagesBlockedText(false, null, false, "Kamal"))
-        assertEquals("Kamal needs to update the app to receive photos", dmImagesBlockedText(true, false, false, "Kamal"))
-        assertEquals("Your other phone needs to update to receive photos", dmImagesBlockedText(true, false, true, "Kamal"))
+        assertEquals("Kamal's phone can't receive photos yet", dmImagesBlockedText(true, false, false, "Kamal"))
+        assertEquals("Your other phone can't receive photos yet", dmImagesBlockedText(true, false, true, "Kamal"))
         assertNull(dmImagesBlockedText(true, true, false, "Kamal"))
         assertNull(dmImagesBlockedText(true, null, false, "Kamal"))
 
