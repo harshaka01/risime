@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# Two-device call test with the REAL app and real libwebrtc (decision 054), on spark2 in two redroid
+# containers (native arm64 Android 14, decision 045) on the docker network:
+#   scripts/call-device-test [--apk app-debug.apk] [--keep]
+#
+#  1. A temp server from THIS checkout on 127.0.0.1:$CALLTEST_PORT (default 4400; own DB/keyspace
+#     risime_calltest$CALLTEST_INSTANCE, E2EE on with a per-run attestation key, dev OTP login).
+#  2. Two redroid containers (REDROID_INSTANCE -cf1/-cf2, ports 5720/5721 unless set), the debug APK,
+#     notifications + microphone granted, `adb reverse` to the server; A and B sign in through the
+#     real login UI, become friends, and A's chat with B upgrades to e2ee.
+#  3. A taps "Voice call"; B rings; B answers through the app's real Answer path (the activity
+#     intent the CallStyle notification's Answer button sends); media connects host/host with the
+#     §16.10 check (debug stats in logcat); A hangs up ("End call").
+#  4. A second call at once (no stuck state), answered, connected, hung up.
+#  5. A third call: the caller's process is killed mid-call (am force-stop); B ends by itself; the
+#     restarted app places the next call without "You're already in a call", and B rings.
+# Prints "CALLTEST PASS|FAIL <step>" lines and "CALLTEST OK" at the end. Never touches :4000.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+PKG=lk.codegen.risime.debug   # the debug build's application id
+CLS=lk.codegen.risime
+SUF="${CALLTEST_INSTANCE:-}"; PORT="${CALLTEST_PORT:-4400}"
+APK=""; KEEP=0
+while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
+[ -f "$APK" ] || { echo "no APK at $APK (cd android && ./gradlew assembleDebug)"; exit 2; }
+PATH="$("$REPO/scripts/android-target" adb):$PATH"
+I1="${CALLTEST_REDROID_A:--cf1}"; P1="${CALLTEST_REDROID_A_PORT:-5720}"
+I2="${CALLTEST_REDROID_B:--cf2}"; P2="${CALLTEST_REDROID_B_PORT:-5721}"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-calltest.XXXXXX")"
+LOGS="$HOME/risime-logs/calltest$SUF"; mkdir -p "$LOGS"
+export RISIME_DEV_DB="risime_calltest$SUF" RISIME_DEV_KEYSPACE="risime_calltest$SUF" ERL_EPMD_ADDRESS=127.0.0.1
+export MIX_BUILD_PATH="$REPO/server/_build/calltest$SUF" RISIME_CODE_RELOADER=false
+FAILED=0
+pass() { echo "CALLTEST PASS $*"; }
+fail() { echo "CALLTEST FAIL $*"; FAILED=1; diag; exit 1; }
+diag() {
+  for d in A B; do
+    local s; s="$(ser $d)"
+    adb -s "$s" exec-out screencap -p > "$LOGS/$d-screen.png" 2>/dev/null || true
+    adb -s "$s" logcat -d > "$LOGS/$d-logcat.txt" 2>/dev/null || true
+  done
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  echo "    diagnostics in $LOGS"
+}
+cleanup() {
+  [ "$FAILED" = 0 ] || true
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  tmux kill-session -t "risime-calltest$SUF" 2>/dev/null || true
+  if [ "$KEEP" = 0 ]; then
+    REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+    REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "${WORK:?}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+# ---------------------------------------------------------------- server
+ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT busy"; exit 1; }
+cat > "$WORK/fixtures.exs" <<'EXS'
+alias RisiMe.{Accounts, Repo}
+alias RisiMe.Accounts.User
+[mode | _] = System.argv()
+a_phone = "+94770000971"; b_phone = "+94770000972"
+case mode do
+  "setup" ->
+    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "calltest71@example.com", display_name: "ZZ Call A", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "calltest72@example.com", display_name: "ZZ Call B", company: "CodeGen"})
+    IO.puts("calltest: setup ok")
+  "friends" ->
+    a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
+    RisiMe.Social.make_friends!(a.id, b.id)
+    IO.puts("calltest: friends ok")
+  "e2ee" ->
+    a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
+    conv = RisiMe.Messaging.conversation_id(a.id, b.id)
+    IO.puts("calltest: e2ee=#{RisiMe.MLS.group(conv) != nil}")
+end
+EXS
+fx() { (cd server && $M mix run "$WORK/fixtures.exs" "$@" 2>/dev/null | grep '^calltest:' || true); }
+echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB, E2EE on)"
+(cd server && { $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true; } && $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
+  || { echo "could not create/migrate the calltest store"; exit 1; }
+(cd server && $M mix risime.attestation.gen "$WORK/attest.jwk" >/dev/null 2>&1) || true
+[ -f "$WORK/attest.jwk" ] || { echo "no attestation key"; exit 1; }
+(cd server && $M mix compile >/dev/null 2>&1) || { echo "server compile failed"; exit 1; }
+tmux new -d -s "risime-calltest$SUF" "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
+  PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
+  ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix phx.server > '$WORK/server.log' 2>&1"
+for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't start"; tail -20 "$WORK/server.log"; exit 1; }
+fx setup
+otp() { grep -a "\[DEV OTP\] $1:" "$WORK/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true; }
+
+# ---------------------------------------------------------------- devices
+echo "==> two redroid containers ($I1:$P1, $I2:$P2)"
+SA="$(REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" start)"
+SB="$(REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" start)"
+ser() { if [ "$1" = A ]; then echo "$SA"; else echo "$SB"; fi; }
+DEV=""
+A() { adb -s "$(ser "$DEV")" "$@"; }
+for DEV in A B; do
+  A uninstall "$PKG" >/dev/null 2>&1 || true
+  A install "$APK" >/dev/null
+  A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  A shell pm grant "$PKG" android.permission.RECORD_AUDIO 2>/dev/null || true
+  A shell appops set "$PKG" USE_FULL_SCREEN_INTENT allow 2>/dev/null || true
+  A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+  A logcat -c || true
+done
+
+# ---- UI helpers (uiautomator dump + taps by text or content-desc)
+dump() { A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui-$DEV.xml"; }
+has() { dump; grep -qF -- "$1" "$WORK/ui-$DEV.xml"; }
+wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "    [$DEV] timeout waiting for: $1"; return 1; }
+tap() {
+  dump
+  local b; b="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+want = sys.argv[2]
+for n in ET.parse(sys.argv[1]).iter('node'):
+    if n.get('text') == want or n.get('content-desc') == want or (want.endswith('*') and (n.get('text') or '').startswith(want[:-1])):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+)"
+  [ -n "$b" ] || { echo "    [$DEV] no UI node: $1"; return 1; }
+  A shell input tap $b
+}
+clear_field() { A shell "for i in \$(seq 1 80); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true; }
+hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; [[ "$st" == *"mInputShown=true"* ]] && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
+type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
+dismiss_prompts() { has "Not now" && { tap "Not now" || true; }; has "Later" && { tap "Later" || true; }; true; }
+
+sign_in() {  # $1 phone, $2 email
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null
+  wait_for "Server:" 40 || return 1
+  tap "Server:*" || return 1; sleep 1
+  tap "Server URL" || tap "http://*" || tap "https://*" || return 1; sleep 0.5
+  clear_field; A shell input text "http://127.0.0.1:$PORT"; sleep 0.5; hide_keyboard
+  if ! tap "Use this server"; then tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; fi
+  sleep 2
+  wait_for "Phone number" 30 || return 1
+  type_into "Phone number" "$1"; type_into "Work email" "$2"; hide_keyboard; tap "Send code" || return 1
+  wait_for "6-digit code" 30 || return 1
+  local code=""; for _ in $(seq 1 20); do code="$(otp "$1")"; [ -n "$code" ] && break; sleep 1; done
+  [ -n "$code" ] || return 1
+  type_into "6-digit code" "$code"; sleep 1; has "Verify" && tap "Verify" || true
+  wait_for "Add friend" 40 || return 1
+  dismiss_prompts
+}
+open_chat() { A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1; dismiss_prompts; wait_for "$1" 40 || return 1; tap "$1"; sleep 2; }
+# The real answer path: open the notification shade and tap the CallStyle notification's Answer
+# action (its PendingIntent starts CallActivity with ACTION_ANSWER; the activity isn't exported).
+answer_intent() {
+  A shell cmd statusbar expand-notifications >/dev/null 2>&1 || true
+  wait_for "Answer" 10 || return 1
+  tap "Answer" || return 1
+  sleep 1
+  A shell cmd statusbar collapse >/dev/null 2>&1 || true
+}
+# §16.10 verified media: the debug stats line "pair=host/host … dtls=connected srtp=…" since $1 lines.
+media_ok() { local out; out="$(A logcat -d 2>/dev/null || true)"; grep -E "call stats: pair=(host|prflx)/(host|prflx) .*dtls=connected srtp=[A-Z_0-9]+" <<<"$out" | tail -1 || true; }
+# Ringing = the incoming CallStyle notification on the `calls` channel is posted (a heads-up while the app is open).
+ringing() { local out; out="$(A shell dumpsys notification --noredact 2>/dev/null || true)"; grep -q "pkg=$PKG .*channel=calls " <<<"$out"; }
+wait_ring() { for _ in $(seq 1 "${1:-30}"); do ringing && return 0; sleep 1; done; return 1; }
+
+for DEV in A B; do
+  if [ "$DEV" = A ]; then sign_in "+94770000971" "calltest71@example.com" || fail "sign-in A"; else sign_in "+94770000972" "calltest72@example.com" || fail "sign-in B"; fi
+done
+pass "both signed in through the real login UI"
+[ "$(fx friends)" = "calltest: friends ok" ] || fail "fixture: friends"
+# The friend list is fetched at start: restart both apps.
+for DEV in A B; do A shell am force-stop "$PKG"; done
+# Both apps open the chat: the e2ee loop upgrades the DM (A commits, B joins from the Welcome).
+DEV=B; open_chat "ZZ Call A" || fail "B: chat with A not listed"
+DEV=A; open_chat "ZZ Call B" || fail "A: chat with B not listed"
+for _ in $(seq 1 60); do [ "$(fx e2ee)" = "calltest: e2ee=true" ] && break; sleep 2; done
+[ "$(fx e2ee)" = "calltest: e2ee=true" ] || fail "the DM never became e2ee"
+DEV=B; A shell input keyevent KEYCODE_BACK; sleep 1   # B waits on the chat list (foreground, live socket)
+DEV=A; A shell input keyevent KEYCODE_BACK; sleep 1; open_chat "ZZ Call B"
+sleep 5
+pass "friends; the DM is e2ee"
+
+# One call: A calls, B answers through the activity intent, media host/host, A hangs up.
+call_once() {  # $1 label
+  DEV=A; A logcat -c; DEV=B; A logcat -c
+  DEV=A; local ok=""; for _ in $(seq 1 20); do tap "Voice call" && { ok=1; break; }; sleep 2; done
+  [ -n "$ok" ] || fail "$1: no call button"
+  sleep 1
+  has "already in a call" && fail "$1: A says \"You're already in a call\""
+  DEV=B; wait_ring 30 || fail "$1: B never rang"
+  pass "$1: B rings"
+  answer_intent || fail "$1: no Answer action on the incoming-call notification"
+  local m=""; for _ in $(seq 1 30); do DEV=A; m="$(media_ok)"; [ -n "$m" ] && { DEV=B; [ -n "$(media_ok)" ] && break; }; m=""; sleep 1; done
+  [ -n "$m" ] || fail "$1: media never connected directly (host/prflx pair) with DTLS-SRTP on both"
+  pass "$1: answered via the Answer intent; direct media (host/prflx), DTLS connected, SRTP on both (${m##*call stats: })"
+}
+hang_up_a() {  # $1 label
+  DEV=A; tap "End call" || fail "$1: no End call button"
+  DEV=B; for _ in $(seq 1 20); do has "End call" || break; sleep 1; done
+  has "End call" && fail "$1: B still in the call after A hung up"
+  DEV=A; sleep 4; has "End call" && fail "$1: A still shows the call"
+  pass "$1: A hung up; both ended"
+}
+
+call_once "call 1"; hang_up_a "call 1"
+call_once "call 2 (right after)"; hang_up_a "call 2"
+call_once "call 3"
+DEV=A; A shell am force-stop "$PKG"
+pass "call 3: the caller's process killed mid-call"
+DEV=B; for _ in $(seq 1 40); do has "End call" || break; sleep 1; done
+has "End call" && fail "call 3: B still in the call 40 s after the caller died"
+pass "call 3: B ended by itself"
+DEV=A; open_chat "ZZ Call B" || fail "A: chat after the restart"
+sleep 3
+call_once "call 4 (after the kill)"; hang_up_a "call 4"
+echo "CALLTEST OK"
