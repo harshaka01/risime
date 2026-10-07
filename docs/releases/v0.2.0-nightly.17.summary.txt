@@ -1,0 +1,2 @@
+Fixed: "needs to update" shown for people already up to date, and photos not sending. The emoji picker stays open for several emoji.
+Update over the old app; never uninstall or clear data.
