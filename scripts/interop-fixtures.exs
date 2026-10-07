@@ -7,7 +7,7 @@ alias RisiMe.Accounts.{AllowlistEntry, User, UserToken}
 import Ecto.Query
 
 [mode, dir] = System.argv() |> Enum.take(2) |> then(fn a -> a ++ List.duplicate(nil, 2 - length(a)) end)
-phones = ~w(+94770000921 +94770000922 +94770000911 +94770000912 +94770000913 +94770000914 +94770000915 +94770000916 +94770000931 +94770000932 +94770000933 +94770000941 +94770000942 +94770000943 +94770000944 +94770000945 +94770000951 +94770000952)
+phones = ~w(+94770000921 +94770000922 +94770000911 +94770000912 +94770000913 +94770000914 +94770000915 +94770000916 +94770000931 +94770000932 +94770000933 +94770000941 +94770000942 +94770000943 +94770000944 +94770000945 +94770000951 +94770000952 +94770000961 +94770000962)
 
 # Removes every interop fixture: users (cascading devices, tokens, friendships, invites...),
 # allowlist rows, MLS group rows (keyed by conversation id, not linked to users), and v1.9
@@ -135,8 +135,13 @@ case mode do
     ha = dev_user.("+94770000951", "ZZ Interop HA")
     hb = dev_user.("+94770000952", "ZZ Interop HB")
     RisiMe.Social.make_friends!(ha["id"], hb["id"])
+    # DM re-add block (v1.16): RA–RB friends; both reinstall (new device ids) during the test.
+    ra = dev_user.("+94770000961", "ZZ Interop RA")
+    rb = dev_user.("+94770000962", "ZZ Interop RB")
+    RisiMe.Social.make_friends!(ra["id"], rb["id"])
     cfg =
       cfg
+      |> Map.put("readd", %{"A" => ra, "B" => rb})
       |> Map.put("history", %{"A" => ha, "B" => hb})
       |> Map.put("groups", %{"A" => ga, "B" => gb, "C" => gc, "D" => gd, "L" => gl})
       |> Map.put("e2ee", %{"A" => ea, "B" => eb, "L" => el})
