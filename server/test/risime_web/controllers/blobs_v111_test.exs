@@ -434,6 +434,52 @@ defmodule RisiMeWeb.BlobsV111Test do
       {200, view} = api(:get, "/api/v1/mls/groups/#{dm}", a.token)
       assert view["images_ready"] == false
     end
+
+    test "a nightly.16-style reinstall registers fully and its replaced install never blocks",
+         ctx do
+      %{a: a, b: b, b_dev: old, dm: dm} = ctx
+      # Before: b's install has no `deletes`/`calls`, so it's listed (as on nightly.11/12).
+      {200, view} = api(:get, "/api/v1/mls/groups/#{dm}", a.token)
+      assert %{"user_id" => b.user.id, "device_id" => old} in view["missing_deletes"]
+
+      # b's phone comes back as a new install (new device id) with every capability.
+      Process.sleep(5)
+      new = Ecto.UUID.generate()
+
+      body = %{
+        "platform" => "android",
+        "app_version" => "0.2.0-nightly.16",
+        "mls" => %{
+          "signature_key" => Base.encode64(:crypto.strong_rand_bytes(32)),
+          "capabilities" => ~w(groups images deletes calls)
+        }
+      }
+
+      {200, %{"attestation" => att}} = api(:put, "/api/v1/me/devices/#{new}", b.token, body)
+      assert is_binary(att)
+      :ok = RisiMe.MLS.record_instance(b.user.id, new, nil, "0.2.0-nightly.16")
+
+      {200, view} = api(:get, "/api/v1/mls/groups/#{dm}", a.token)
+      assert view["images_ready"] == true and view["missing_images"] == []
+
+      for k <- ~w(missing_images missing_deletes missing_calls),
+          entry <- view[k],
+          do: refute(entry["device_id"] == old)
+
+      refute Enum.any?(
+               view["missing_deletes"] ++ view["missing_calls"],
+               &(&1["user_id"] == b.user.id)
+             )
+
+      # §12.1: still group-ready for a's pickers.
+      {200, %{"friends" => friends}} = api(:get, "/api/v1/friends", a.token)
+      assert Enum.find(friends, &(&1["user_id"] == b.user.id))["group_ready"] == true
+
+      # The replaced install is seen again (a second phone after all): it counts again.
+      :ok = RisiMe.MLS.record_instance(b.user.id, old, nil, "0.2.0-nightly.12")
+      {200, view} = api(:get, "/api/v1/mls/groups/#{dm}", a.token)
+      assert %{"user_id" => b.user.id, "device_id" => old} in view["missing_deletes"]
+    end
   end
 
   describe "streaming (§14.2)" do
