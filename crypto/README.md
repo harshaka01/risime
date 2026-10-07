@@ -266,6 +266,10 @@ returns them and no production call takes them.
 | `history_limits()` (`historyLimits`) | Label, alg, lengths, max parts, max part size |
 | `history::check_vectors(json, work_dir)` (`historyVectorsCheck`) | **Test support:** verifies every case of `history_vectors.json`, returns the count (for the Android vectors test) |
 
+Order on open (§17.3 clarification): wrong-length `hpke_enc`/`sealed_key`/`rsk` are `Malformed`
+before any HPKE operation; after the HPKE open the blob's SHA-256 is checked **before any AEAD**
+(mismatch: `OpenFailed("integrity: …")`). The vectors use one key pair per `request_id`.
+
 Errors (`HistoryError`, Kotlin `RisiHistoryException`): `Malformed`, `SealRefused`, `OpenFailed`,
 `UnknownRequest`, `Io`, `Storage`. The app's `rsk` deletion follows "Purge notes" below
 (`secure_delete`, WAL checkpoint).
@@ -279,7 +283,7 @@ cross-check. `history_vectors_match_the_contract` fails if the contract file dif
 generator's output. Root's independent reference script (as `scripts/gen-media-vectors`) is still
 to be written.
 
-## Tests (`cargo test`: 107 core + 2 ignored generators, 10 FFI)
+## Tests (`cargo test`: 108 core + 2 ignored generators, 10 FFI)
 - **`groups`** (v1.9): create/join with PrivateMessage handshakes and meta; DM and group APIs
   don't mix; 0xFA01 key packages (a legacy key package is refused); admin adds/removes users and
   removed devices are locked out; members manage only their own devices; **peers reject

@@ -297,6 +297,7 @@ fn open_with_rsk(
     label: BlobLabel,
 ) -> HistoryResult<Zeroizing<Vec<u8>>> {
     let k = open_key(rsk, ctx, hpke_enc, sealed_key)?;
+    check_blob_sha256(in_path, &ctx.sha256)?;
     let cipher_size = media::cipher_size_for(ctx.plain_size)
         .ok_or_else(|| malformed("plain_size has no blob size"))?;
     media::decrypt_file_labeled(
@@ -311,6 +312,20 @@ fn open_with_rsk(
         label,
     )
     .map_err(from_media)
+}
+
+/// The blob's SHA-256 must equal the envelope's **before** any AEAD is attempted (§17.3, as for
+/// media §14.3): a mismatch is an integrity failure (`OpenFailed`), and no segment is decrypted.
+fn check_blob_sha256(in_path: &Path, want: &[u8]) -> HistoryResult<()> {
+    let mut f = std::fs::File::open(in_path).map_err(|e| HistoryError::Io(e.to_string()))?;
+    let mut h = Sha256::new();
+    std::io::copy(&mut f, &mut h).map_err(|e| HistoryError::Io(e.to_string()))?;
+    if h.finalize()[..] != *want {
+        return Err(HistoryError::OpenFailed(
+            "integrity: blob sha256 differs from the envelope".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn open_key(

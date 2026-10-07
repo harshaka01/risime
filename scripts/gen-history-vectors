@@ -264,7 +264,7 @@ CASES = [
 
 def positive(c):
     name = c["name"]
-    ikm_r = seeded(f"risime-history-vector ikm_r {name}", 32)
+    ikm_r = seeded(f"risime-history-vector ikm_r {c['request_id']}", 32)  # one key pair per request
     ikm_e = seeded(f"risime-history-vector ikm_e {name}", 32)
     k = seeded(f"risime-history-vector k {name}", 32)
     rsk, rpk = derive_key_pair(ikm_r)
@@ -293,7 +293,10 @@ def run_case(case):
     k = hpke_open(enc, bytes.fromhex(case["rsk"]), info_bytes(case), aad_bytes(case), sealed)
     if len(k) != 32:
         raise Fail("OpenFailed", "hpke key length")
-    return blob_open(k, bytes.fromhex(case["cipher"]), case["plain_size"], case.get("label", LABEL))
+    cipher = bytes.fromhex(case["cipher"])
+    if hashlib.sha256(cipher).hexdigest() != case["sha256"]:  # sha256 before any AEAD (§17.3)
+        raise Fail("OpenFailed", "blob integrity")
+    return blob_open(k, cipher, case["plain_size"], case.get("label", LABEL))
 
 
 def neg(name, base, change, expect, why):
@@ -375,7 +378,7 @@ def build():
                    "`cargo test -p risime-mls history_vectors_write -- --ignored` with seeded inputs; "
                    "ikm_e makes the HPKE ephemeral key deterministic (RFC 9180 DeriveKeyPair; test "
                    "builds only). All binary fields are lowercase hex. Positive: (rsk, rpk) = "
-                   "DeriveKeyPair(ikm_r); hpke_enc = the public key of DeriveKeyPair(ikm_e); info and "
+                   "DeriveKeyPair(ikm_r), one key pair per request_id; hpke_enc = the public key of DeriveKeyPair(ikm_e); info and "
                    "aad as §17.3 from the case's fields; sealed_key = HPKE base-mode seal of k; cipher "
                    "= A256GCM-S64K of plain under k with the label. Negative: the base case with "
                    "`change` applied must fail with `expect`: a seal of `plain` to `rpk` when `change` "
