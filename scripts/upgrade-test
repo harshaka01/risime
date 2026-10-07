@@ -298,6 +298,11 @@ dump() {
 }
 has() { dump; grep -qF -- "$1" "$WORK/ui.xml"; }
 wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "timeout waiting for a UI element: $1"; return 1; }
+# The chat list, signed in: its top bar's "Refresh friends" icon (any list), or the empty list's
+# "Add friend" button. Never the FAB's label: uiautomator shows extended FABs without text, so a
+# list with chats has no "Add friend" node (the nightly.26 re-sign-in failure).
+on_chat_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui.xml"; }
+wait_chat_list() { for _ in $(seq 1 "${1:-40}"); do on_chat_list && return 0; sleep 1; done; echo "timeout waiting for the chat list"; return 1; }
 # The centre of the node whose text or content-desc equals $1 ("x*": text starts with x; "~x":
 # text or content-desc contains x, e.g. a message bubble's merged description; "^x": text equals x,
 # never a content-desc, e.g. a sheet's "Send" button rather than the composer's Send icon).
@@ -392,7 +397,7 @@ sign_in() {  # $1 phone, $2 email
   [ -n "$code" ] || { echo "    the temp server never issued a code for the test user"; return 1; }
   echo "    enter the code"
   type_into "6-digit code" "$code"; sleep 1; has "Verify" && tap "Verify" || true
-  wait_for "Add friend" 40 || return 1
+  wait_chat_list 40 || return 1
   dismiss_prompts
 }
 
@@ -407,7 +412,7 @@ manual_sign_in() {
   for _ in $(seq 1 600); do
     code="$(srv otp "$1")"
     if [ -n "$code" ] && [ "$code" != "$shown" ]; then echo "    >>> CODE: $code"; shown="$code"; fi
-    has "Add friend" && { echo "    signed in"; dismiss_prompts; return 0; }
+    on_chat_list && { echo "    signed in"; dismiss_prompts; return 0; }
     sleep 1
   done
   echo "    timed out after 10 minutes waiting for the chat list"; return 1
@@ -641,16 +646,26 @@ fi
 if [ "$DB_BEFORE" != no-root ] && [ "$MANUAL" = 0 ]; then
   step "log out (keep chats) and sign in again after the upgrade"
   DEV="$SERIAL"; A shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1 || true; sleep 2; dismiss_prompts
-  # Back to the chat list: a chat screen has its own "More options" (Clear/Delete chat), so leave
-  # every chat (no composer visible) before opening the list's menu, which has Log out.
+  # Back to the chat list: a chat screen has its own "More options" (Clear/Delete chat), so press
+  # Back until the list's own top bar shows (never past it: Back there leaves the app).
   for _ in 1 2 3 4 5; do
     hide_keyboard
-    if has "Encrypted message" || has "Message" || has "Clear chat"; then A shell input keyevent KEYCODE_BACK; sleep 1; continue; fi
-    has "More options" && break
+    on_chat_list && break
     A shell input keyevent KEYCODE_BACK; sleep 1
   done
-  tap "More options" && sleep 1 && tap "Log out" && sleep 1 && tap "Log out" || fail "re-sign-in: could not log out"
-  sleep 2; sign_in "+94770000961" "upgrade61@example.com" || fail "re-sign-in after the upgrade"
+  on_chat_list || fail "re-sign-in: the chat list didn't show"
+  # Plain "Log out" (decision 050): the menu item, then the dialog's confirm button (the menu's
+  # other entry, "Log out and delete chats from this phone", never matches the exact text).
+  tap "More options" && sleep 1 && tap "^Log out" && sleep 1 && wait_for "Log out?" 10 && tap "^Log out" \
+    || fail "re-sign-in: could not log out"
+  # The login screen must appear, with no automatic sign-in back into the chats.
+  wait_for "Server:" 30 || fail "re-sign-in: no login screen after Log out"
+  sleep 3; has "Server:" && ! on_chat_list || fail "re-sign-in: the app left the login screen by itself after Log out"
+  echo "    logged out: the login screen shows"
+  sign_in "+94770000961" "upgrade61@example.com" || fail "re-sign-in after the upgrade"
+  # The chats are back in the list (the Room counts below compare every conversation).
+  wait_for "ZZ Upgrade B" 30 || fail "re-sign-in: the chat with B is not in the list"
+  [ -z "$SERIAL_B" ] || wait_for "Upgrade group" 30 || fail "re-sign-in: the group is not in the list"
   sleep 8; DB_RE="$(db_snapshot)"; echo "    after re-sign-in (Room): $DB_RE"
   lost="$(python3 -I - "$WORK/counts-before.json" "$WORK/counts-last.json" <<'PY'
 import json, sys
