@@ -437,6 +437,22 @@ class AppContainer(
         }
     }
 
+    /**
+     * The device's capabilities can change after registration (notifications allowed later, Telecom
+     * registered): re-advertise them when they did (nightly.16: a fresh install registered before the
+     * notification prompt was answered and never advertised `calls`). Called on every app start into
+     * the foreground and after a permission answer.
+     */
+    fun refreshCapabilities() {
+        scope.launch {
+            runCatching {
+                if (mlsEngine == null) return@runCatching
+                val r = deviceRegistrar.refreshCapabilities(runCatching { push.currentToken() }.getOrNull()) ?: return@runCatching
+                Log.i("RisiMe", "capabilities changed: re-registered ($r)")
+            }
+        }
+    }
+
     /** One registration attempt: MLS when it applies, else push-only. True when nothing is left to retry. */
     private suspend fun registerDeviceOnce(): Boolean = when (activateMls()) {
         true -> true
@@ -604,6 +620,7 @@ class AppContainer(
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 foreground.value = true
+                refreshCapabilities()
                 scope.launch {
                     updater.onForeground()
                     updater.maybeCheck(SystemClock.elapsedRealtime())

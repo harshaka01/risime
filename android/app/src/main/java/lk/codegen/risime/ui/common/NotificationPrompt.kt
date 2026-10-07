@@ -27,7 +27,8 @@ fun NotificationPermissionPrompt(c: AppContainer) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var show by remember { mutableStateOf(false) }
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    // Allowing notifications makes this phone able to ring: re-advertise `calls` (§16.1) now.
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { c.refreshCapabilities() }
     LaunchedEffect(Unit) {
         val granted = Build.VERSION.SDK_INT < 33 ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED

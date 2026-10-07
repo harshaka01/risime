@@ -87,6 +87,41 @@ class DeviceRegistrarTest {
         assertEquals("[\"groups\",\"images\",\"deletes\"]", put["mls"]!!.jsonObject["capabilities"].toString())
     }
 
+    /**
+     * nightly.16 finding: a fresh install registers at sign-in, before the user answers the
+     * notification prompt, so `calls` is left out. Allowing notifications later must re-advertise
+     * every capability (calls included), once, and nothing when nothing changed.
+     */
+    @Test fun callsAreReAdvertisedWhenNotificationsAreAllowedAfterRegistration() = runBlocking {
+        mls.deletesOn = true
+        var notificationsAllowed = false
+        val reg = DeviceRegistrar(
+            api, { "dev-1" }, "0.2.0-nightly.16", { mls }, imagesSupported = { true },
+            callsSupported = { notificationsAllowed }, groupsReplacedFor = { "x" },
+        )
+        assertNull("nothing registered yet: nothing to refresh", reg.refreshCapabilities(null))
+        server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+        server.enqueue(json(200, """{"count":30}"""))
+        reg.register("push-1")
+        val first = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("[\"groups\",\"images\",\"deletes\"]", first["mls"]!!.jsonObject["capabilities"].toString())
+        server.takeRequest() // key package count
+        assertNull("unchanged: no PUT", reg.refreshCapabilities("push-1"))
+
+        notificationsAllowed = true
+        server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+        server.enqueue(json(200, """{"count":30}"""))
+        assertTrue(reg.refreshCapabilities("push-1") is Registration.Mls)
+        val again = server.takeRequest()
+        assertEquals("PUT", again.method)
+        val put = ProtocolJson.parseToJsonElement(again.body.readUtf8()).jsonObject
+        assertEquals("[\"groups\",\"images\",\"deletes\",\"calls\"]", put["mls"]!!.jsonObject["capabilities"].toString())
+        assertEquals("push-1", put["push_token"]!!.jsonPrimitive.content)
+        server.takeRequest()
+        assertNull("advertised now: no further PUT", reg.refreshCapabilities("push-1"))
+        assertEquals(4, server.requestCount)
+    }
+
     @Test fun coreWithoutGroupsKeepsTheV17Registration() = runBlocking {
         mls.groupsOn = false
         server.enqueue(json(200, """{"attestation":"a.b.c"}"""))

@@ -44,6 +44,36 @@ class DeviceRegistrar(
 ) {
     private val b64 = Base64.getEncoder()
 
+    /** The capabilities the last successful MLS `PUT` advertised (null before the first one in this process). */
+    @Volatile var advertised: List<String>? = null
+        private set
+
+    /**
+     * §12.1/§14.1/§15.1/§16.1: what this device can advertise right now. `calls` depends on runtime
+     * state (notifications allowed, Telecom registered), so it can change after registration.
+     */
+    fun capabilities(mls: MlsEngine): List<String>? = when {
+        mls.groupsSupported -> listOfNotNull(
+            DeviceMls.CAP_GROUPS,
+            DeviceMls.CAP_IMAGES.takeIf { imagesSupported() },
+            DeviceMls.CAP_DELETES.takeIf { mls.deletesSupported },
+            DeviceMls.CAP_CALLS.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() },
+        )
+        else -> null
+    }
+
+    /**
+     * Re-registers when the capabilities changed since the last advertisement (e.g. the user allowed
+     * notifications after the sign-in registration, so `calls` was left out: nightly.16 finding).
+     * Null when nothing changed or nothing was registered yet in this process.
+     */
+    suspend fun refreshCapabilities(pushToken: String?): Registration? {
+        val mls = engine() ?: return null
+        val before = advertised ?: return null
+        if (capabilities(mls).orEmpty().toSet() == before.toSet()) return null
+        return register(pushToken)
+    }
+
     suspend fun register(pushToken: String?): Registration {
         val id = deviceId()
         val mls = engine()
@@ -58,19 +88,12 @@ class DeviceRegistrar(
         val sigKey = b64.encodeToString(mls.signatureKey())
         // §12.1: advertise `groups` only with a core that really does groups (0xFA01 key packages).
         // §15.1: `deletes` once the core answers AAD + sender_is_admin and the app applies delete events.
-        val caps = when {
-            mls.groupsSupported -> listOfNotNull(
-                DeviceMls.CAP_GROUPS,
-                DeviceMls.CAP_IMAGES.takeIf { imagesSupported() },
-                DeviceMls.CAP_DELETES.takeIf { mls.deletesSupported },
-                DeviceMls.CAP_CALLS.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() },
-            )
-            else -> null
-        }
+        val caps = capabilities(mls)
         val body = DevicePut(DevicePut.PLATFORM_ANDROID, pushToken?.takeIf { it.isNotBlank() }, appVersion, DeviceMls(sigKey, caps))
         return when (val r = api.putMlsDevice(id, body)) {
             is ApiResult.Ok -> {
                 mls.setAttestation(r.value.attestation)
+                advertised = caps.orEmpty()
                 if (caps != null && groupsReplacedFor() != sigKey) replaceForGroups(id, mls, sigKey) else topUp(id, mls)
             }
             is ApiResult.Error -> when {
