@@ -36,6 +36,21 @@ pub const MEDIA_ALG: &str = "A256GCM-S64K";
 pub const MEDIA_AAD: &[u8] = b"risime-media-v1";
 /// HKDF `info` for the payload key.
 pub const MEDIA_HKDF_INFO: &[u8] = b"risime-media-v1 A256GCM-S64K";
+/// The domain-separation label of a blob format instance (contract v1.15 §17.3, crypto S1): the
+/// segment AAD and the payload-key HKDF `info`. Media and history blobs use different labels, so
+/// one can't be opened as the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BlobLabel {
+    pub aad: &'static [u8],
+    pub hkdf_info: &'static [u8],
+}
+
+/// `risime-media-v1` (§14.3).
+pub(crate) const MEDIA_LABEL: BlobLabel = BlobLabel {
+    aad: MEDIA_AAD,
+    hkdf_info: MEDIA_HKDF_INFO,
+};
+
 /// Plaintext bytes per segment.
 pub const MEDIA_SEGMENT: u64 = 65_536;
 /// GCM tag bytes per segment.
@@ -165,15 +180,15 @@ fn nonce(i: u64, last: bool) -> Nonce<aes_gcm::aead::consts::U12> {
 }
 
 /// `Kp` from `K`. The returned cipher wipes its key schedule on drop.
-fn payload_cipher(key: &[u8; MEDIA_KEY_LEN]) -> Aes256Gcm {
+fn payload_cipher(key: &[u8; MEDIA_KEY_LEN], label: BlobLabel) -> Aes256Gcm {
     let mut kp = Zeroizing::new([0u8; 32]);
-    payload_key_into(key, &mut kp);
+    payload_key_into(key, &mut kp, label);
     Aes256Gcm::new_from_slice(&kp[..]).expect("32-byte key")
 }
 
-fn payload_key_into(key: &[u8; MEDIA_KEY_LEN], out: &mut [u8; 32]) {
+fn payload_key_into(key: &[u8; MEDIA_KEY_LEN], out: &mut [u8; 32], label: BlobLabel) {
     Hkdf::<Sha256>::new(Some(&[]), key)
-        .expand(MEDIA_HKDF_INFO, out)
+        .expand(label.hkdf_info, out)
         .expect("32 <= 255 * 32");
 }
 
@@ -251,6 +266,20 @@ fn seal_file_with_key(
 ) -> MediaResult<SealedMedia> {
     let mut input = File::open(src).map_err(io)?;
     let plain_size = input.metadata().map_err(io)?.len();
+    seal_reader_with_key(&mut input, plain_size, dst, key, max_plain, MEDIA_LABEL)
+}
+
+/// Seals `plain_size` bytes read from `input` (which must then be at EOF) into `dst`
+/// atomically, under `key` and `label`. Crate-private: the history path (§17.3) draws its own
+/// fresh key and passes the history label.
+pub(crate) fn seal_reader_with_key(
+    input: &mut impl Read,
+    plain_size: u64,
+    dst: &Path,
+    key: &[u8; MEDIA_KEY_LEN],
+    max_plain: u64,
+    label: BlobLabel,
+) -> MediaResult<SealedMedia> {
     if plain_size == 0 {
         return Err(MediaError::Format("empty input".into()));
     }
@@ -261,7 +290,7 @@ fn seal_file_with_key(
     }
     let padded = padme(plain_size);
     let n = segment_count(padded);
-    let cipher = payload_cipher(key);
+    let cipher = payload_cipher(key, label);
 
     let tmp = temp_path(dst);
     let mut out = File::create(&tmp).map_err(io)?;
@@ -274,10 +303,10 @@ fn seal_file_with_key(
         let off = i * MEDIA_SEGMENT;
         let seg_len = (padded - off).min(MEDIA_SEGMENT) as usize;
         let data_len = plain_size.saturating_sub(off).min(seg_len as u64) as usize;
-        read_full(&mut input, &mut buf[..data_len])?;
+        read_full(input, &mut buf[..data_len])?;
         buf[data_len..seg_len].fill(0);
         let tag = cipher
-            .encrypt_in_place_detached(&nonce(i, i == n - 1), MEDIA_AAD, &mut buf[..seg_len])
+            .encrypt_in_place_detached(&nonce(i, i == n - 1), label.aad, &mut buf[..seg_len])
             .map_err(|_| MediaError::Io("aead encrypt".into()))?;
         buf[seg_len..seg_len + MEDIA_TAG as usize].copy_from_slice(&tag);
         let c = &buf[..seg_len + MEDIA_TAG as usize];
@@ -285,7 +314,7 @@ fn seal_file_with_key(
         out.write_all(c).map_err(io)?;
         cipher_size += c.len() as u64;
     }
-    if !at_eof(&mut input)? {
+    if !at_eof(input)? {
         return Err(MediaError::Io("file changed while being read".into()));
     }
     finish_temp(out, guard, dst)?;
@@ -337,6 +366,7 @@ pub fn check_ref(r: &MediaRef<'_>) -> MediaResult<(Zeroizing<[u8; MEDIA_KEY_LEN]
 fn open_stream(
     src: &Path,
     r: &MediaRef<'_>,
+    label: BlobLabel,
     mut sink: impl FnMut(&[u8]) -> MediaResult<()>,
 ) -> MediaResult<()> {
     let (key, n) = check_ref(r)?;
@@ -348,7 +378,7 @@ fn open_stream(
             r.cipher_size
         )));
     }
-    let cipher = payload_cipher(&key);
+    let cipher = payload_cipher(&key, label);
     let mut sha = Sha256::new();
     let mut buf = Zeroizing::new(vec![0u8; MEDIA_CIPHER_SEGMENT as usize]);
     let mut pad_or = 0u8;
@@ -361,7 +391,7 @@ fn open_stream(
         let p_len = c_len - MEDIA_TAG as usize;
         let (body, tag) = buf[..c_len].split_at_mut(p_len);
         cipher
-            .decrypt_in_place_detached(&nonce(i, i == n - 1), MEDIA_AAD, body, Tag::from_slice(tag))
+            .decrypt_in_place_detached(&nonce(i, i == n - 1), label.aad, body, Tag::from_slice(tag))
             .map_err(|_| MediaError::Integrity(format!("segment {i} failed to verify")))?;
         let p_off = i * MEDIA_SEGMENT;
         let real = r.plain_size.saturating_sub(p_off).min(p_len as u64) as usize;
@@ -388,9 +418,18 @@ fn open_stream(
 /// Decrypts the blob file `src` into memory (decrypt-on-display). Memory: the returned
 /// plaintext plus one 64 KiB buffer. Nothing is returned unless every check passed.
 pub fn decrypt_file(src: &Path, r: &MediaRef<'_>) -> MediaResult<Zeroizing<Vec<u8>>> {
+    decrypt_file_labeled(src, r, MEDIA_LABEL)
+}
+
+/// [`decrypt_file`] under `label` (crate-private: the history path, §17.3).
+pub(crate) fn decrypt_file_labeled(
+    src: &Path,
+    r: &MediaRef<'_>,
+    label: BlobLabel,
+) -> MediaResult<Zeroizing<Vec<u8>>> {
     check_ref(r)?;
     let mut out = Zeroizing::new(Vec::with_capacity(r.plain_size as usize));
-    open_stream(src, r, |p| {
+    open_stream(src, r, label, |p| {
         out.extend_from_slice(p);
         Ok(())
     })?;
@@ -405,7 +444,7 @@ pub fn decrypt_file_to_file(src: &Path, dst: &Path, r: &MediaRef<'_>) -> MediaRe
     let tmp = temp_path(dst);
     let mut out = File::create(&tmp).map_err(io)?;
     let guard = TempGuard(Some(tmp));
-    open_stream(src, r, |p| out.write_all(p).map_err(io))?;
+    open_stream(src, r, MEDIA_LABEL, |p| out.write_all(p).map_err(io))?;
     finish_temp(out, guard, dst)
 }
 
@@ -432,7 +471,7 @@ pub fn verified_prefix(src: &Path, key: &[u8], alg: &str, cipher_size: u64) -> M
         Err(e) => return Err(io(e)),
     };
     let have = input.metadata().map_err(io)?.len().min(cipher_size);
-    let cipher = payload_cipher(&key);
+    let cipher = payload_cipher(&key, MEDIA_LABEL);
     let mut buf = Zeroizing::new(vec![0u8; MEDIA_CIPHER_SEGMENT as usize]);
     let mut ok = 0u64;
     for i in 0..n {
@@ -495,7 +534,7 @@ mod tests {
 
     /// Encrypts raw padded segments with chosen final flags (for crafted negatives).
     fn raw_segments(key: &[u8; 32], segs: &[(&[u8], u32, bool)]) -> Vec<u8> {
-        let c = payload_cipher(key);
+        let c = payload_cipher(key, MEDIA_LABEL);
         let mut out = Vec::new();
         for (p, i, fin) in segs {
             let mut b = p.to_vec();
@@ -686,7 +725,7 @@ mod tests {
 
     fn pos_json(p: &Pos) -> serde_json::Value {
         let mut kp = [0u8; 32];
-        payload_key_into(&p.key, &mut kp);
+        payload_key_into(&p.key, &mut kp, MEDIA_LABEL);
         let padded = padme(p.plain.len() as u64);
         serde_json::json!({
             "name": p.name,

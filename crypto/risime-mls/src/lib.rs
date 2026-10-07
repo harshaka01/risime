@@ -32,6 +32,7 @@ pub mod aad;
 mod admins;
 pub mod attestation;
 pub mod group;
+pub mod history;
 pub mod media;
 pub mod meta;
 pub mod policy;
@@ -44,12 +45,16 @@ use openmls::prelude::tls_codec::{Deserialize, Serialize};
 use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 
-pub use aad::{DELETE_AAD_PREFIX, MAX_DELETE_TARGETS, decode_delete_aad, encode_delete_aad};
+pub use aad::{
+    DELETE_AAD_PREFIX, HISTORY_AAD_LEN, HISTORY_AAD_PREFIX, MAX_DELETE_TARGETS, decode_delete_aad,
+    decode_history_aad, encode_delete_aad, encode_history_aad, is_history_aad,
+};
 pub use attestation::{CredentialValidator, DeviceId, TestAttestor, TrustAnchors};
 pub use group::{
     CatchUp, GroupCommit, MAX_COMMIT_BYTES, MAX_GROUP_LEAVES, MAX_GROUP_USERS, MAX_INLINE_BYTES,
     MAX_WELCOME_BYTES, key_package_supports_groups,
 };
+pub use history::{HistoryContext, HistoryError, HistorySender, SealedPart};
 pub use meta::{GROUP_META_EXTENSION, GroupMeta};
 pub use storage::{KvError, KvStore, MemoryKvStore, Provider};
 
@@ -224,12 +229,15 @@ pub struct ApplicationDetails {
     /// after a removal, so never store or compare it as an identity (compare `sender.user_id`).
     pub sender_leaf: u32,
     /// The message's MLS `authenticated_data` (signed and AEAD-covered). Empty for every message
-    /// but a `delete` control, whose AAD is [`encode_delete_aad`] of its targets.
+    /// but a `delete` control, whose AAD is [`encode_delete_aad`] of its targets, and a
+    /// `history_request`/`history_share` control, whose AAD is [`encode_history_aad`] (v1.15).
     pub authenticated_data: Vec<u8>,
     /// Whether the sender's user was an admin at the message's epoch, from the admin list the core
     /// recorded for that epoch. `None` in DM groups. In a `grp:` group without a record for that
     /// epoch, a message with a non-empty AAD fails with [`MlsError::Malformed`]; one with an
     /// empty AAD (not a delete) gets `None` (only epochs from before the v1.12 upgrade).
+    /// Always `None` for the canonical `'H'` AAD: admin status is irrelevant to history and the
+    /// lookup is skipped (v1.15 §17.3).
     pub sender_is_admin: Option<bool>,
 }
 
@@ -926,7 +934,7 @@ impl Client {
                         "application message from a non-member".into(),
                     ));
                 };
-                let sender_is_admin = if !admin_check {
+                let sender_is_admin = if !admin_check || aad::is_history_aad(&aad) {
                     None
                 } else {
                     match self.admin_at(group_id, epoch, &sender_device.user_id) {

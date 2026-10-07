@@ -1,4 +1,5 @@
-//! The MLS `authenticated_data` of a `delete` control (contract v1.12 §15.3, decision 047).
+//! The MLS `authenticated_data` of a `delete` control (contract v1.12 §15.3, decision 047) and of
+//! the `history_request` / `history_share` controls (v1.15 §17.3, the `'H'` form).
 //!
 //! Canonical binary encoding: `0x01 0x44` (`'D'`), then the targets as 16-byte UUIDs, **sorted
 //! ascending by bytes, distinct**, 1..=[`MAX_DELETE_TARGETS`] of them (at most 1 602 bytes). Every
@@ -92,6 +93,7 @@ pub fn encode_delete_aad(targets: &[String]) -> Result<Vec<u8>> {
 /// Decode a delete control's AAD into its targets (lowercase canonical UUID strings, ascending).
 /// Anything but the exact canonical encoding (wrong prefix, a partial UUID, unsorted or duplicate
 /// targets, 0 or more than [`MAX_DELETE_TARGETS`]) is [`MlsError::Malformed`]: drop the control.
+/// An `'H'` AAD is rejected here (wrong prefix), and a `'D'` AAD by [`decode_history_aad`].
 pub fn decode_delete_aad(aad: &[u8]) -> Result<Vec<String>> {
     let bad = |why: &str| MlsError::Malformed(format!("delete aad: {why}"));
     let body = aad
@@ -108,6 +110,41 @@ pub fn decode_delete_aad(aad: &[u8]) -> Result<Vec<String>> {
         return Err(bad("targets not strictly ascending"));
     }
     Ok(ids.iter().map(format_uuid).collect())
+}
+
+/// The two prefix bytes of a history control's AAD: version 1, `'H'` (contract v1.15 §17.3).
+pub const HISTORY_AAD_PREFIX: [u8; 2] = [0x01, b'H'];
+
+/// A history AAD is exactly the prefix and one 16-byte `request_id`.
+pub const HISTORY_AAD_LEN: usize = 18;
+
+/// The canonical AAD of a `history_request` / `history_share` envelope: `0x01 0x48` ‖ the
+/// `request_id` as 16 raw bytes (either case in, the bytes are the same).
+pub fn encode_history_aad(request_id: &str) -> Result<Vec<u8>> {
+    let id = parse_uuid(request_id)?;
+    let mut out = Vec::with_capacity(HISTORY_AAD_LEN);
+    out.extend_from_slice(&HISTORY_AAD_PREFIX);
+    out.extend_from_slice(&id);
+    Ok(out)
+}
+
+/// The `request_id` (lowercase canonical UUID) of a history AAD. Anything but exactly 18 bytes
+/// with the `0x01 0x48` prefix is [`MlsError::Malformed`]: drop the envelope.
+pub fn decode_history_aad(aad: &[u8]) -> Result<String> {
+    let bad = |why: &str| MlsError::Malformed(format!("history aad: {why}"));
+    if aad.len() != HISTORY_AAD_LEN {
+        return Err(bad("not 18 bytes"));
+    }
+    let body = aad
+        .strip_prefix(&HISTORY_AAD_PREFIX[..])
+        .ok_or_else(|| bad("wrong prefix"))?;
+    let id: [u8; 16] = body.try_into().map_err(|_| bad("not 18 bytes"))?;
+    Ok(format_uuid(&id))
+}
+
+/// Whether `aad` is in the canonical `'H'` form.
+pub fn is_history_aad(aad: &[u8]) -> bool {
+    decode_history_aad(aad).is_ok()
 }
 
 #[cfg(test)]
@@ -152,5 +189,29 @@ mod tests {
         let mut v2 = good.clone();
         v2[0] = 2;
         assert!(decode_delete_aad(&v2).is_err());
+    }
+
+    #[test]
+    fn history_aad_round_trip_and_type_swaps() {
+        let h = encode_history_aad(&A.to_uppercase()).unwrap();
+        assert_eq!(h.len(), HISTORY_AAD_LEN);
+        assert_eq!(&h[..2], &[0x01, 0x48]);
+        assert_eq!(decode_history_aad(&h).unwrap(), A);
+        assert!(is_history_aad(&h));
+        assert!(encode_history_aad("nope").is_err());
+        // Lengths, prefixes, versions.
+        assert!(decode_history_aad(&h[..17]).is_err());
+        let mut long = h.clone();
+        long.push(0);
+        assert!(decode_history_aad(&long).is_err());
+        let mut v2 = h.clone();
+        v2[0] = 2;
+        assert!(decode_history_aad(&v2).is_err());
+        // A 'D' AAD with one target is also 18 bytes: neither parser accepts the other's form.
+        let d = encode_delete_aad(&[A.into()]).unwrap();
+        assert_eq!(d.len(), 18);
+        assert!(decode_history_aad(&d).is_err());
+        assert!(decode_delete_aad(&h).is_err());
+        assert!(!is_history_aad(&[]));
     }
 }

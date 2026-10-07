@@ -248,7 +248,38 @@ single 64 KiB buffer. The unit test `streams_beyond_the_cap` encrypts 20 MiB thr
 uncapped path. A 2 MiB photo takes about 8 ms. Benchmark on the oldest pilot phone before
 release.
 
-## Tests (`cargo test`: 95 core + 1 ignored generator, 7 FFI)
+## History API (contract v1.15 §17.3; crypto review R1, R3, R4, R7, S1): `risime_mls::history`
+All additive: every existing call behaves as before. `rsk` and `K` never cross the FFI: no call
+returns them and no production call takes them.
+
+| Core call (Kotlin name) | What it does |
+|---|---|
+| `encode_history_aad(request_id)` / `decode_history_aad(aad)` (free fns `historyAadEncode` / `historyAadDecode`) | The canonical `'H'` AAD: `0x01 0x48` ‖ `request_id` (16 raw bytes), exactly 18 bytes. Decoding refuses anything else (`Malformed`); a `'D'` AAD never decodes as `'H'` and vice versa (the app pairs `'D'` with `delete` and `'H'` with `history_*`) |
+| `process_detailed` | Unchanged, except that for the `'H'` form the admin lookup is skipped: `sender_is_admin` is `None`, even at an epoch without an admin record (a `'D'` there is still `Malformed`) |
+| `Client::history_keygen(request_id)` (`historyKeygen`) | `(rsk, rpk)` = `derive_hpke_keypair` over 32 bytes of OS randomness; `rsk` (with `rpk`) stored under `risime/history/<request_id>` plus an index `risime/history-index/v1`, in one nested transaction inside the caller's (roll the outer one back and the key is gone); returns `rpk` (32 bytes). A second keygen for the same id is `Malformed` |
+| `Client::history_public_key(request_id)` (`historyPublicKey`) | The stored `rpk` (a `history:refresh` resends it), or `None` |
+| `history::seal(rpk, ctx, plaintext, out_path)` (free fn `historySeal`) | A fresh `K` (OS CSPRNG), the part written atomically as `A256GCM-S64K` with the label `risime-history-v1` (HKDF info `risime-history-v1 A256GCM-S64K`, segment AAD `risime-history-v1`), `K` HPKE-sealed (base mode, X25519/HKDF-SHA256/AES-128-GCM through the OpenMLS provider) with §17.3's `info`/`aad`. Returns `SealedPart {hpke_enc (32), sealed_key (48), plain_size, size, sha256}`. A low-order `rpk` is `SealRefused` and leaves no file. `ctx.sha256`/`plain_size` are ignored (computed) |
+| `Client::history_open(request_id, ctx, hpke_enc, sealed_key, in_path)` (`historyOpen`) | HPKE-opens `K` with the stored `rsk`, then opens the blob; every segment, the final flag, the padding and the SHA-256 verify before any byte is returned. No key: `UnknownRequest` (close the request locally); any mismatch: `OpenFailed` |
+| `Client::history_forget(request_id)` / `history_open_requests()` (`historyForget` / `historyOpenRequests`) | Delete `rsk` (idempotent); the ids that still have one, for the 48-h start-up sweep |
+| `Client::history_sender(gid, sender)` (`historySender`) | Own versus member (R4): `own` = the MLS sender's user is this device's user; plus the sender leaf's signature key (the option-A approval record's key). The sender must be a current leaf (`UnknownMember`); this device itself is `Malformed` |
+| `HistoryContext {request_id, conversation_id, requester, provider, part, parts, sha256, plain_size}` | The one record behind `info` = `"risime-history-v1"` ‖ request_id (16) ‖ u16‖conversation_id ‖ u16‖requester ‖ u16‖provider and `aad` = u16 part ‖ u16 parts ‖ sha256 ‖ u64 plain_size (big-endian). Identities come from MLS credentials only; `1 ≤ part ≤ parts ≤ 20`, plaintext 1..=16 515 072 bytes |
+| `history_limits()` (`historyLimits`) | Label, alg, lengths, max parts, max part size |
+| `history::check_vectors(json, work_dir)` (`historyVectorsCheck`) | **Test support:** verifies every case of `history_vectors.json`, returns the count (for the Android vectors test) |
+
+Errors (`HistoryError`, Kotlin `RisiHistoryException`): `Malformed`, `SealRefused`, `OpenFailed`,
+`UnknownRequest`, `Io`, `Storage`. The app's `rsk` deletion follows "Purge notes" below
+(`secure_delete`, WAL checkpoint).
+
+**Vectors:** `contract/v1/history_vectors.json` (8 `aad_h`, 3 positive, 17 negative cases) is
+written by `cargo test -p risime-mls history_vectors_write -- --ignored` from seeded inputs; the
+generator seals with a hand-written RFC 9180 base-mode HPKE whose ephemeral key is
+`DeriveKeyPair(ikm_e)` (test builds only, `x25519-dalek` is a dev-dependency), and every case is
+then checked through the production path (OpenMLS → hpke-rs), so the two implementations
+cross-check. `history_vectors_match_the_contract` fails if the contract file differs from the
+generator's output. Root's independent reference script (as `scripts/gen-media-vectors`) is still
+to be written.
+
+## Tests (`cargo test`: 107 core + 2 ignored generators, 10 FFI)
 - **`groups`** (v1.9): create/join with PrivateMessage handshakes and meta; DM and group APIs
   don't mix; 0xFA01 key packages (a legacy key package is refused); admin adds/removes users and
   removed devices are locked out; members manage only their own devices; **peers reject
@@ -329,6 +360,20 @@ release.
   - commit fields cross the FFI;
   - v1.12: delete AAD, `encryptWithAad`, `processDetailed`, `adminsAtEpoch`, `purgeGroup`.
 - **`risime-mls-ffi/tests/media`:** the media calls and their errors across the FFI.
+- **`history`** (v1.15):
+  - unit (`history`): the contract vectors equal the generator's and every case passes the
+    verifier, the verifier rejects altered vectors, production seal round trip (four segments)
+    with fresh `K` and ephemeral per seal, a media blob doesn't open under the history label,
+    input checks (lengths, ids, part/parts, sizes, a low-order `rpk` leaves no file), the `info`
+    and `aad` layout; (`aad`) the `'H'` round trip and `'D'`/`'H'` swaps refused;
+  - `tests/history_v115.rs`: keygen/seal/open/forget for two parts (a forged provider, swapped
+    parts, `UnknownRequest` after forget and after reopening, no key material left), `rsk` absent
+    after the caller's rollback and after a failed write, `process_detailed` on `'H'` at an epoch
+    without an admin record returns `None` (a `'D'` there is `Malformed`), own versus member from
+    the MLS sender;
+  - `risime-mls-ffi/tests/history`: the flow across the FFI, the contract vectors through
+    `historyVectorsCheck`, and a check that no exported history function or record carries `rsk`
+    or `K`.
 
 ## Contract fixtures
 ```sh

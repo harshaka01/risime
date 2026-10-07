@@ -1163,3 +1163,246 @@ pub fn media_verified_prefix(
         cipher_size,
     )?)
 }
+
+// ---------------------------------------------------------------------------------------------
+// History sharing (contract v1.15 §17.3). `rsk` and `K` never cross this boundary: no function
+// here returns them, and none takes them (except `historyVectorsCheck`, a test-vector verifier
+// that returns only a count).
+// ---------------------------------------------------------------------------------------------
+
+/// History failures. Kotlin: `RisiHistoryException`.
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+#[uniffi(flat_error)]
+pub enum RisiHistoryError {
+    /// Bad input (a length, an id, part/parts, an empty or too large plaintext, a non-canonical
+    /// AAD): drop the envelope.
+    #[error("malformed history input: {0}")]
+    Malformed(String),
+    /// A low-order `rpk`: don't share to it.
+    #[error("history seal refused: {0}")]
+    SealRefused(String),
+    /// The sealed key or the blob didn't verify: reject the part (ack `rejected`).
+    #[error("history open failed: {0}")]
+    OpenFailed(String),
+    /// No `rsk` stored for the request: close the request locally.
+    #[error("no key for this history request")]
+    UnknownRequest,
+    #[error("history io: {0}")]
+    Io(String),
+    #[error("storage: {0}")]
+    Storage(String),
+}
+
+impl From<risime_mls::HistoryError> for RisiHistoryError {
+    fn from(e: risime_mls::HistoryError) -> Self {
+        use risime_mls::HistoryError as E;
+        match e {
+            E::Malformed(s) => Self::Malformed(s),
+            E::SealRefused(s) => Self::SealRefused(s),
+            E::OpenFailed(s) => Self::OpenFailed(s),
+            E::UnknownRequest => Self::UnknownRequest,
+            E::Io(s) => Self::Io(s),
+            E::Storage(s) => Self::Storage(s),
+        }
+    }
+}
+
+type HResult<T> = std::result::Result<T, RisiHistoryError>;
+
+/// The one record behind the HPKE `info` and `aad` (§17.3). `requester` and `provider` are
+/// `"<user_id>/<device_id>"` from MLS credentials only (requester: this device; provider: the
+/// `history_share`'s MLS sender). `sha256`/`plain_size` are the share's `blob.sha256` and
+/// `enc.plain_size` when opening; `historySeal` ignores them (pass empty / 0).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HistoryContext {
+    pub request_id: String,
+    pub conversation_id: String,
+    pub requester: String,
+    pub provider: String,
+    pub part: u32,
+    pub parts: u32,
+    pub sha256: Vec<u8>,
+    pub plain_size: u64,
+}
+
+impl From<HistoryContext> for risime_mls::HistoryContext {
+    fn from(c: HistoryContext) -> Self {
+        Self {
+            request_id: c.request_id,
+            conversation_id: c.conversation_id,
+            requester: c.requester,
+            provider: c.provider,
+            part: c.part,
+            parts: c.parts,
+            sha256: c.sha256,
+            plain_size: c.plain_size,
+        }
+    }
+}
+
+/// What `historySeal` produced: `enc.hpke_enc` (32 bytes), `enc.sealed_key` (48 bytes),
+/// `enc.plain_size`, `blob.size`, `blob.sha256`. No key material.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SealedPart {
+    pub hpke_enc: Vec<u8>,
+    pub sealed_key: Vec<u8>,
+    pub plain_size: u64,
+    pub size: u64,
+    pub sha256: Vec<u8>,
+}
+
+/// Own versus member for a history envelope's MLS sender (§17.7, crypto R4).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HistorySender {
+    pub device: DeviceId,
+    /// The sender's user is this device's user (own); otherwise member (always ask).
+    pub own: bool,
+    /// The sender leaf's signature key: with `device.deviceId`, the option-A approval key.
+    pub signature_key: Vec<u8>,
+}
+
+/// History constants (§17.3, §17.6).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HistoryLimits {
+    /// `enc.label`: `"risime-history-v1"`.
+    pub label: String,
+    /// `enc.alg`: `"A256GCM-S64K"`.
+    pub alg: String,
+    pub rpk_len: u32,
+    pub hpke_enc_len: u32,
+    pub sealed_key_len: u32,
+    pub max_parts: u32,
+    /// The largest plaintext of one part (16 515 072).
+    pub max_plain_size: u64,
+}
+
+#[uniffi::export]
+pub fn history_limits() -> HistoryLimits {
+    use risime_mls::history as h;
+    HistoryLimits {
+        label: h::HISTORY_LABEL.into(),
+        alg: risime_mls::media::MEDIA_ALG.into(),
+        rpk_len: h::HISTORY_RPK_LEN as u32,
+        hpke_enc_len: h::HISTORY_HPKE_ENC_LEN as u32,
+        sealed_key_len: h::HISTORY_SEALED_KEY_LEN as u32,
+        max_parts: h::MAX_HISTORY_PARTS,
+        max_plain_size: h::MAX_HISTORY_PLAIN_SIZE,
+    }
+}
+
+/// The canonical MLS `authenticated_data` of a `history_request` / `history_share` (§17.3):
+/// `0x01 0x48` + the `request_id` as 16 raw bytes (18 bytes). Pass it to `encryptWithAad`.
+#[uniffi::export]
+pub fn history_aad_encode(request_id: String) -> Result<Vec<u8>> {
+    Ok(risime_mls::encode_history_aad(&request_id)?)
+}
+
+/// The `request_id` (lowercase UUID) of an `'H'` AAD. Anything but exactly that form throws
+/// `Malformed`: drop the envelope.
+#[uniffi::export]
+pub fn history_aad_decode(aad: Vec<u8>) -> Result<String> {
+    Ok(risime_mls::decode_history_aad(&aad)?)
+}
+
+/// Seals one bundle part for the requester's `rpk` (from the decrypted `history_request` only):
+/// a fresh `K` generated here, the part written to `out_path` as an `A256GCM-S64K` blob with the
+/// history label (atomically), `K` HPKE-sealed with `ctx`. The plaintext crosses as bytes
+/// (≤ 16 515 072), never as a file. Blocking: call it off the main thread.
+#[uniffi::export]
+pub fn history_seal(
+    rpk: Vec<u8>,
+    ctx: HistoryContext,
+    plaintext: Vec<u8>,
+    out_path: String,
+) -> HResult<SealedPart> {
+    let s = risime_mls::history::seal(&rpk, &ctx.into(), &plaintext, out_path.as_ref())?;
+    Ok(SealedPart {
+        hpke_enc: s.hpke_enc,
+        sealed_key: s.sealed_key,
+        plain_size: s.plain_size,
+        size: s.size,
+        sha256: s.sha256.to_vec(),
+    })
+}
+
+/// **Test support:** verifies every case of `contract/v1/history_vectors.json` (passed as its
+/// JSON text) with this core; returns the number of cases checked, or throws `Malformed` naming
+/// the first failing case. Scratch blobs go to `work_dir` (e.g. the app's cache dir).
+#[uniffi::export]
+pub fn history_vectors_check(vectors_json: String, work_dir: String) -> HResult<u32> {
+    Ok(risime_mls::history::check_vectors(
+        &vectors_json,
+        work_dir.as_ref(),
+    )?)
+}
+
+impl MlsClient {
+    fn with_history<T>(
+        &self,
+        f: impl FnOnce(&mut Client) -> risime_mls::history::HistoryResult<T>,
+    ) -> HResult<T> {
+        let mut c = self
+            .inner
+            .lock()
+            .map_err(|_| RisiHistoryError::Storage("poisoned".into()))?;
+        f(&mut c).map_err(Into::into)
+    }
+}
+
+#[uniffi::export]
+impl MlsClient {
+    /// Makes the request's HPKE key pair inside the core, stores `rsk` (under
+    /// `risime/history/<request_id>`) in the caller's transaction and returns only `rpk` (32
+    /// bytes). Write the request row in the same Room transaction, before `history:request`.
+    pub fn history_keygen(&self, request_id: String) -> HResult<Vec<u8>> {
+        self.with_history(|c| c.history_keygen(&request_id))
+    }
+
+    /// The stored `rpk` of a request (resend it in a refreshed `history_request`); null when no
+    /// key is stored.
+    pub fn history_public_key(&self, request_id: String) -> HResult<Option<Vec<u8>>> {
+        self.with_history(|c| c.history_public_key(&request_id))
+    }
+
+    /// Opens one part with the stored `rsk`: the HPKE open of `K`, then the blob at `in_path`
+    /// (every segment, the final flag and the SHA-256 verified before any byte is returned).
+    /// Blocking.
+    pub fn history_open(
+        &self,
+        request_id: String,
+        ctx: HistoryContext,
+        hpke_enc: Vec<u8>,
+        sealed_key: Vec<u8>,
+        in_path: String,
+    ) -> HResult<Vec<u8>> {
+        let ctx = ctx.into();
+        self.with_history(|c| {
+            c.history_open(&request_id, &ctx, &hpke_enc, &sealed_key, in_path.as_ref())
+                .map(|p| p.to_vec())
+        })
+    }
+
+    /// Deletes a request's `rsk` (after the last part, cancel, any terminal state, the 48-h
+    /// sweep). Idempotent.
+    pub fn history_forget(&self, request_id: String) -> HResult<()> {
+        self.with_history(|c| c.history_forget(&request_id))
+    }
+
+    /// Request ids that still have a stored `rsk` (for the start-up sweep).
+    pub fn history_open_requests(&self) -> HResult<Vec<String>> {
+        self.with_history(|c| c.history_open_requests())
+    }
+
+    /// Own versus member for the MLS `sender` of a decrypted history envelope (from
+    /// `processDetailed`), plus the sender leaf's signature key. The sender must be a current leaf
+    /// (`UnknownMember` otherwise).
+    pub fn history_sender(&self, group_id: Vec<u8>, sender: DeviceId) -> Result<HistorySender> {
+        let sender = risime_mls::DeviceId::try_from(sender)?;
+        self.with(|c| c.history_sender(&group_id, &sender))
+            .map(|s| HistorySender {
+                device: s.device.into(),
+                own: s.own,
+                signature_key: s.signature_key,
+            })
+    }
+}
