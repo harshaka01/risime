@@ -1,5 +1,70 @@
 # Android status — 0.2 nightlies
 
+## v1.15 history sharing (§17) — READY (behind `HISTORY_SHARE_ENABLED`, off by default)
+**READY** for contract v1.15 §17 (decision 049, consent option A), in the chunk order of
+`contract/proposals/reviews/2026-10-06-history-share-android.md`. Commits `51f4071` (gap index, Room v9), `8e3e117`
+(models, strict envelopes, 'H' AAD), `9ff76c6` (core over UniFFI + vectors), `0a88040` (reactions keep their confirmed
+client_msg_id, v9 before any release), `3f5a62e` (provider, requester, UI behind the flag), `1f66641` (live interop).
+- **Flag:** `BuildConfig.HISTORY_SHARE_ENABLED` (`-Prisime.historyShare=true`) gates the `history_share` capability, the
+  ChatEngine hooks, the "History requests" channel, every history UI and Settings → Privacy. Off by default as asked
+  (nightly.19 shipped chunks 1–3 dark). The gap index (Room v9) runs regardless, so gap rows exist when it is turned on.
+  Flipping the default is a one-line change in `app/build.gradle.kts`.
+- **Gates:** `./gradlew assembleDebug testDebugUnitTest` green (617 JVM tests, 0 failed). `scripts/interop` on
+  `INTEROP_INSTANCE=_hsa` (5000/5600): **INTEROP OK twice in a row**, with 7 new checks (H0–H6).
+- **Gap index (§17.2):** `history_gap` rows (message_id, client_msg_id, from, from_device, server_ts, generation, epoch;
+  no content) in the event's transaction, for rule 1/rule 2 pre-install messages, older-generation parked rows dropped
+  on a newer Welcome, and old-generation messages after a reset. Never for controls, own-device echoes, held,
+  hidden-tombstoned or cleared ids. Removed by `delete` events, Clear/Delete chat, a successful import and the prune at
+  `server_ts + 30 days`. Room **v9** also adds `messages.origin/shared_by/from_device`, `reactions.confirmed_client_msg_id`,
+  `history_requests`, `history_parts`, `history_provides`.
+- **Requester:** "Request history" on the gap marker (only with gap rows and no open request), with the source sheet
+  (own / own or members; in a DM "own or <name>"). The request row is written in the same transaction as the core's
+  `historyKeygen`, then `history:request` goes through the conversation's send lane (stale_epoch → catch-up and
+  re-encrypt; `request_open` for an unknown request → cancel and retry). Then status, progress lines, refresh (the same
+  request id and rpk, at the current epoch), "Ask group members now", cancel (also on Clear chat). Parts are stored by
+  the pipeline in event order. Afterwards they are fetched, the SHA-256 is checked in Kotlin, then `historyOpen`, the
+  header is checked, and the part is imported in one transaction. An entry is imported only when it matches a gap row
+  on message_id + client_msg_id + from + server_ts (from_device only when both sides have it), and the gap row is
+  older than the request. It is never imported over an existing row or past the watermark. A hidden tombstone `me`
+  blocks it; `everyone` is re-judged with the gap row's sender. Imported rows are read, never acked or notified, carry
+  `origin`/`shared_by`, and use the gap row's client_msg_id. Images keep their reference, re-sealed in the media row.
+  Reactions apply only to a target that is held. Markers follow the exception: `sys:history-shared`, and a gap marker
+  that is deleted or moved to the newest remaining gap row; after `done` it reads "couldn't be restored" and offers the
+  other source. Then `history:ack` (owed until the server takes it). Every terminal state runs `historyForget`, and a
+  start-up sweep runs at 48 h.
+- **Provider:** `history_request` is decrypted in order (parked or caught up; unreadable → `unable`/`stale`), with
+  the 'H' AAD bound to the request id and the sender bound to from/from_device. Own versus member comes from
+  `historySender`; a disagreeing `consent` hint means member. Option A: one approval per (device id, leaf signature
+  key), kept in the sealed store, and automatic afterwards while unlocked. A re-registered key asks again, and the
+  approval is forgotten when the device is removed. Members are always asked; members' prompts expire after 24 h.
+  Settings → Privacy has both switches and the approvals list with Remove. The export (R2–R4): server intervals ∩ the
+  local membership view from group lines; no tombstones, hidden, deleting, unverified, outbox or cleared rows; images
+  by reference (reconstructed and §14.4-validated); call lines only to own devices; reactions after their target with
+  their client_msg_id. Parts hold at most 5 000 entries or 16 515 072 bytes, the newest part is part 1, and the 20-part
+  cap cuts the oldest end. Nothing to share → `unable`/`no_data`. The export runs in a foreground `dataSync`
+  WorkManager worker ("Sharing chat history…", FOREGROUND_SERVICE_DATA_SYNC, holding the socket only while unlocked).
+  Each part is sealed in the core and uploaded as a `history` blob with X-Device-Id. Progress per part (boundaries,
+  client_blob_id, blob_id, sealed metadata, delivered) is persisted, so a resumed part is never re-sealed. Parts are
+  delivered through the send lane. There is a quiet "Shared chat history with your new phone".
+- **UI (Robolectric):** Request history and its sheet, progress ("Open RisiMe on Pixel 8 to share", "Receiving
+  history… 2 of 3", "No device could share…", Try again), the own approval prompt (with the small print) and the
+  member prompt, "Shared by <provider>" in the message sheet (no label for own-device restores), Settings → Privacy.
+- **Tests:** GapIndexTest, HistoryEnvelopeTest, HistoryExportTest (interval ∩ local view against a lying server,
+  deletes, call lines, part bounds), HistoryImportTest (each match key, gap newer than the request, existing row,
+  malformed, dedupe, reactions, header, marker exception), HistoryFlowTest (two app instances end to end: option A once
+  then automatic, a rotated key asks again, a member always asks with a lying consent hint, the members switch
+  declines, deleted messages never come back), HistoryUiTest, Migration8To9Test, every v1.15 example parsed and
+  re-encoded, HistoryVectorsTest (testCrypto: every `history_vectors.json` case in the core, aad_h through the app's
+  and the core's parser, limits, seal/open round trip, forget, rolled-back keygen).
+- **Live interop (`LiveGroupInteropTest.liveHistoryShare`):** D's new install (D2) gets gap rows for a group and a fresh
+  C–D DM. D1 asks once, Allow, and shares the group; then the DM goes automatically. D2 imports with no duplicates,
+  and a message deleted for everyone never returns. In the member path, B is added to an A+C group after a message;
+  B's only phone is deleted ("Log out and delete chats") and B2 rejoins. A and C are both named; C is asked and
+  shares; A's prompt closes. B2 gets only its two interval messages, labelled "Shared by C"; the bundle had 2 entries.
+- **Known limits:** reactions confirmed before v1.15 have no client_msg_id and stay residual gap rows. The approval
+  list shows device-id prefixes; there is no device name on the wire. Not covered live: a refresh after epoch drift
+  (unit-level only), a delete racing an import (covered by HistoryFlowTest), Clear chat during a request (unit path).
+
 ## Calls never get stuck (nightly.16 P0, decision 054) — READY
 **READY.** The callee couldn't answer, and the caller stayed "in call" after a kill. Root causes and
 fixes are in `docs/decisions/054-calls-never-stuck.md`: ghost core-telecom calls, busy-by-audio-mode,
