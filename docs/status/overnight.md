@@ -47,6 +47,23 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.17 (live 2026-10-07, not required): calls stuck-state fix, readiness, photos, emoji
+- **Calls (P0, decision 054):**
+  - Ghost core-telecom calls held `MODE_IN_COMMUNICATION`, which counted as busy ("already in a
+    call" on every call), and their callbacks declined the next ringing call, so the callee
+    couldn't answer.
+  - Fixed: one Telecom call per call id, busy only for a cellular call, bounded setup. The calls
+    agent's final hardening and its 2-device Redroid test follow in the next release.
+- **Readiness and photos:**
+  - Every nightly.16 phone had a new device id, because of a reinstall or cleared data. A normal
+    update keeps the id: tested nightly.12 → nightly.16 in Redroid.
+  - The old rows blocked `images_ready`/`deletes_ready` and showed "needs to update". Superseded
+    devices no longer count (§12.1). Capabilities are re-advertised on change.
+- **Groups:** nobody was removed. Reinstalled phones wait to be re-added by an in-group admin
+  device, or the admin uses Reset encryption.
+- **Emoji:** the picker stays open for several emoji.
+- **The upgrade gate now checks that the device id survives.**
+
 ## v0.2.0-nightly.16 (live, not required): 1:1 voice calls
 - **What's in:** WebRTC/Opus with MLS signalling, the DTLS fingerprint verified end to end, the
   audio-level header extension stripped. Core-telecom, a full-screen ring, a nameless ring when
