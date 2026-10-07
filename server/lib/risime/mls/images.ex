@@ -121,9 +121,12 @@ defmodule RisiMe.MLS.Images do
         Map.update(acc, u, t, &if(DateTime.compare(t, &1) == :gt, do: t, else: &1))
       end)
 
+    superseded = MLS.superseded_devices(user_ids)
+
     from_instances =
       for {u, d, seen} <- instances,
           receives?(devices, last_registration, u, d, seen),
+          not MapSet.member?(superseded, {u, d}),
           not (d != nil and capable?.({u, d})),
           do: %{user_id: u, device_id: d}
 

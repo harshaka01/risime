@@ -214,9 +214,11 @@ defmodule RisiMe.MLS do
         Map.update(acc, u, t, &if(DateTime.compare(t, &1) == :gt, do: t, else: &1))
       end)
 
+    superseded = superseded_devices(user_ids)
+
     for {u, d, seen} <- instances,
         if(d,
-          do: MapSet.member?(registered_ids, {u, d}),
+          do: MapSet.member?(registered_ids, {u, d}) and not MapSet.member?(superseded, {u, d}),
           else:
             last_registration[u] == nil or
               DateTime.compare(seen, last_registration[u]) != :lt
@@ -224,6 +226,47 @@ defmodule RisiMe.MLS do
         uniq: true,
         do: {u, d}
   end
+
+  @doc """
+  Registered devices that can no longer receive because a **later install of the same user
+  replaced them**: `{user_id, device_id}` refs of devices last seen (census or `PUT`) before
+  another device of that user was first registered. That is what a reinstall or a cleared app
+  leaves behind (the old device id is never seen again); a second phone still in use is seen
+  again and counts again from then on. The same rule as a device-less instance seen before the
+  user's latest registration (§12.1), applied to registered devices (proposal
+  2026-10-07-readiness-reasons).
+  """
+  def superseded_devices([]), do: MapSet.new()
+
+  def superseded_devices(user_ids) do
+    devices =
+      Repo.all(
+        from d in Device,
+          where: d.user_id in ^user_ids,
+          select: {d.user_id, d.device_id, d.inserted_at, d.last_seen_at}
+      )
+
+    keys = for {_u, d, _, _} <- devices, do: "device:" <> d
+
+    census =
+      Repo.all(
+        from i in "app_instances",
+          where: i.instance_key in ^keys,
+          select: {i.instance_key, type(i.last_seen_at, :utc_datetime_usec)}
+      )
+      |> Map.new()
+
+    for {u, d, _first, put_seen} = dev <- devices,
+        seen = later(census["device:" <> d], put_seen),
+        Enum.any?(devices, fn {uu, dd, first, _} = other ->
+          other != dev and uu == u and dd != d and DateTime.compare(first, seen) == :gt
+        end),
+        into: MapSet.new(),
+        do: {u, d}
+  end
+
+  defp later(nil, b), do: b
+  defp later(a, b), do: if(DateTime.compare(a, b) == :gt, do: a, else: b)
 
   @doc "Current MLS devices (attested, not pruned) of the given users."
   def current_mls_devices(user_ids) do

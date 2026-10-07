@@ -122,9 +122,12 @@ defmodule RisiMe.Groups do
 
     # Registered installs seen recently that aren't groups-capable (e.g. a second phone on an
     # older build): these keep the user not-ready.
+    superseded = MLS.superseded_devices(user_ids)
+
     stale =
       for {u, d, _} <- instances,
           d != nil and MapSet.member?(registered_ids, {u, d}) and not MapSet.member?(g_ids, d),
+          not MapSet.member?(superseded, {u, d}),
           do: %{user_id: u, device_id: d, reason: "legacy_app"}
 
     without =
