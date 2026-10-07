@@ -47,6 +47,16 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.23 (live 2026-10-07, not required): hotfix, one-way call audio
+- **Cause:** the mic track was added with `addTransceiver`, which WebRTC doesn't reuse for an
+  incoming offer, so the callee answered `a=recvonly` and was never heard (since nightly.16).
+- **Fix:** `addTrack`, plus a guard that makes the offer's audio transceiver sendrecv before the
+  answer.
+- **Proof:** reproduced on Redroid (1854 bytes sent, 0 received); after the fix, 5 calls with audio
+  both ways. `scripts/call-device-test` now requires bytes sent and received above 0 on both
+  phones.
+- **Both phones need nightly.23.**
+
 ## v0.2.0-nightly.22 (live 2026-10-07 06:15 UTC, not required): DMs repair themselves after a reinstall (v1.16)
 - **Root cause of Harsha's stuck sends** (read-only evidence): his current phone wasn't in 3 of
   his 5 DM groups; they held only his superseded installs. Nothing re-added a new device to an
