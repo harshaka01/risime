@@ -605,6 +605,8 @@ class AppContainer(
         groups = groupStore,
         blobs = { ref -> fetchBlob(ref) },
         onUnrecoverable = { conv -> onGroupUnrecoverable(conv) },
+        // Off the main thread: the MLS core's storage callbacks run Room transactions synchronously.
+        io = Dispatchers.IO,
         // §13.3 R7: a fresh install never notifies for replayed events (messages, reactions).
         onFreshReplayDone = { sessionStore.setNotifiedUpTo(maxOf(System.currentTimeMillis(), sessionStore.notifiedUpTo())) },
         images = images.takeIf { BuildConfig.CRYPTO_AVAILABLE },
@@ -1046,7 +1048,7 @@ class AppContainer(
     /** Chat data only; the local behaviour log stays on the device. */
     private fun clearFriendsMemory() = contacts.clearMemory()
 
-    private suspend fun wipeDb(reason: WipeReason) {
+    private suspend fun wipeDb(reason: WipeReason) = withContext(Dispatchers.IO) {
         Log.w("RisiMe", "wiping local chats: $reason")
         db.wipe().allChatData()
         runCatching { androidx.work.WorkManager.getInstance(appContext).cancelAllWork() }

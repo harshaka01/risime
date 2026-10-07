@@ -93,7 +93,7 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
                 // Engine calls are synchronous Room transactions: never on the main thread.
                 val now = withContext(Dispatchers.IO) { c.mlsUpgrader.ensure(conversationId, meId, peerId) }
                 _e2ee.value = now
-                if (now is E2eeState.Encrypted && was !is E2eeState.Encrypted) c.engine.flushOutbox()
+                if (now is E2eeState.Encrypted && was !is E2eeState.Encrypted) withContext(Dispatchers.IO) { c.engine.flushOutbox() }
             }
             val wait = backoff.delayAfter(_e2ee.value)
             val kicked = if (wait == null) e2eeKick.receive() else withTimeoutOrNull(wait) { e2eeKick.receive() }

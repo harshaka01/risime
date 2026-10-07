@@ -5,6 +5,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import lk.codegen.risime.data.db.MessageDao
 import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.data.db.SeenEventEntity
@@ -71,6 +72,12 @@ class ChatEngine(
     /** §12.8: this device can't follow the group any more (rejoin). */
     private val onUnrecoverable: (conversationId: String) -> Unit = {},
     /**
+     * Where the work that touches the MLS core runs: its storage callbacks open Room transactions
+     * synchronously, which Room refuses on the main thread (the nightly.17 crash on opening a DM while
+     * MLS activated). The app passes Dispatchers.IO; tests keep the caller's context.
+     */
+    private val io: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
+    /**
      * §13.3: the first `since: null` join has caught up (called at the start of that onLive): treat
      * everything up to now as already notified.
      */
@@ -135,7 +142,9 @@ class ChatEngine(
         serverClock?.onServerTime(ts)
     }
 
-    override suspend fun onEvents(events: List<Event>) {
+    override suspend fun onEvents(events: List<Event>): Unit = withContext(io) { onEventsImpl(events) }
+
+    private suspend fun onEventsImpl(events: List<Event>) {
         if (events.isEmpty()) return
         val me = meId() ?: return
         var newIncoming = false
@@ -263,7 +272,9 @@ class ChatEngine(
     }
 
     /** Commits fetched by catch-up (GET …/commits): applied in order, each in its own transaction, no cursor move. */
-    suspend fun applyOutOfBand(events: List<Event>) {
+    suspend fun applyOutOfBand(events: List<Event>): Unit = withContext(io) { applyOutOfBandImpl(events) }
+
+    private suspend fun applyOutOfBandImpl(events: List<Event>) {
         val me = meId() ?: return
         var newIncoming = false
         for (e0 in events) {
@@ -398,7 +409,10 @@ class ChatEngine(
      * One ephemeral `call:signal` through the conversation's lane (encrypt and push together);
      * stale_epoch → catch up and re-encrypt with the same client_msg_id.
      */
-    suspend fun sendCallSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env): PushResult<lk.codegen.risime.net.CallSignalReply> {
+    suspend fun sendCallSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env): PushResult<lk.codegen.risime.net.CallSignalReply> =
+        withContext(io) { sendCallSignalImpl(conv, peer, env) }
+
+    private suspend fun sendCallSignalImpl(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env): PushResult<lk.codegen.risime.net.CallSignalReply> {
         val clientMsgId = newClientMsgId()
         val plaintext = lk.codegen.risime.calls.CallEnvelope.encode(env)
         var attempt = 0
@@ -967,7 +981,9 @@ class ChatEngine(
     }
 
     /** The delete outbox: `msg:delete` (me / everyone) and `chat:clear`, each retried with its own client_msg_id. */
-    suspend fun flushDeletes(): Unit = deleteLock.withLock {
+    suspend fun flushDeletes(): Unit = withContext(io) { flushDeletesImpl() }
+
+    private suspend fun flushDeletesImpl(): Unit = deleteLock.withLock {
         val dao = deletes ?: return@withLock
         for (o in dao.queued()) {
             if (o.nextAt > clock()) continue
@@ -1069,10 +1085,10 @@ class ChatEngine(
         if (retry.isNotEmpty()) scope.launch { flushDeletes() }
     }
 
-    suspend fun flushOutbox() {
+    suspend fun flushOutbox(): Unit = withContext(io) {
         flushMessages()
         flushReactions()
-        flushDeletes()
+        flushDeletesImpl()
     }
 
     private suspend fun flushMessages(): Unit = outboxLock.withLock {

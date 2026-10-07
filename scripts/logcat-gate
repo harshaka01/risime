@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Fails (exit 1) on what must never reach testers, from an `adb logcat -d` dump on stdin:
+  * a FATAL EXCEPTION in the RisiMe process (any application id lk.codegen.risime*);
+  * a StrictMode violation (debug builds log them) whose stack reaches Room or the MLS core:
+    database or crypto-storage work on the main thread (the nightly.17 DM crash).
+Usage: adb -s S logcat -d | scripts/logcat-gate [label]"""
+import re, sys
+
+label = sys.argv[1] if len(sys.argv) > 1 else "device"
+lines = sys.stdin.read().splitlines()
+bad = []
+for i, l in enumerate(lines):
+    if "FATAL EXCEPTION" in l:
+        block = lines[i:i + 30]
+        if any(re.search(r"Process: lk\.codegen\.risime", b) for b in block):
+            bad.append("crash:\n  " + "\n  ".join(b.strip() for b in block[:14]))
+    if "StrictMode policy violation" in l:
+        block = []
+        for b in lines[i + 1:i + 60]:
+            if " at " not in b and "StrictMode" not in b:
+                break
+            block.append(b)
+        text = "\n".join(block)
+        if re.search(r"androidx\.room|lk\.codegen\.risime\.crypto|lk\.codegen\.risime\.data\.mls", text):
+            bad.append("main-thread database/MLS access (StrictMode):\n  " + l.strip() + "\n  " + "\n  ".join(x.strip() for x in block[:12]))
+for b in bad[:3]:
+    print(f"[{label}] {b}")
+sys.exit(1 if bad else 0)

@@ -620,5 +620,9 @@ if [ "$DB_BEFORE" != no-root ]; then
 else
   echo "==> no root on this device: verified through the UI only (use a google_apis emulator image for Room checks)"
 fi
+# No crash of the app during the whole test, and (debug builds log StrictMode) no Room/MLS work on
+# the main thread (the nightly.17 DM crash class): scripts/logcat-gate.
+gate_out="$(adb -s "$SERIAL" logcat -d 2>/dev/null | "$REPO/scripts/logcat-gate" upgrade || true)"
+[ -z "$gate_out" ] || { echo "$gate_out"; fail "the app crashed or touched the database on the main thread (logcat)"; }
 RESULT=PASS; REASON="ok"; write_result
 echo "UPGRADE TEST PASS ($OLD_VN -> $NEW_VN)"

@@ -167,6 +167,15 @@ media_ok() { local out; out="$(A logcat -d 2>/dev/null || true)"; grep -E "call 
 ringing() { local out; out="$(A shell dumpsys notification --noredact 2>/dev/null || true)"; grep -q "pkg=$PKG .*channel=calls " <<<"$out"; }
 wait_ring() { for _ in $(seq 1 "${1:-30}"); do ringing && return 0; sleep 1; done; return 1; }
 
+# No crash and no main-thread Room/MLS work (StrictMode, debug builds) on either phone since the last check.
+logcat_ok() {  # $1 label
+  local d out
+  for d in A B; do
+    DEV=$d; out="$(A logcat -d 2>/dev/null || true)"
+    printf '%s\n' "$out" | "$REPO/scripts/logcat-gate" "$1 $d" || fail "$1: $d crashed or touched the database on the main thread"
+  done
+}
+
 for DEV in A B; do
   if [ "$DEV" = A ]; then sign_in "+94770000971" "calltest71@example.com" || fail "sign-in A"; else sign_in "+94770000972" "calltest72@example.com" || fail "sign-in B"; fi
 done
@@ -177,15 +186,24 @@ for DEV in A B; do A shell am force-stop "$PKG"; done
 # Both apps open the chat: the e2ee loop upgrades the DM (A commits, B joins from the Welcome).
 DEV=B; open_chat "ZZ Call A" || fail "B: chat with A not listed"
 DEV=A; open_chat "ZZ Call B" || fail "A: chat with B not listed"
+# nightly.17 crash: opening a DM flushes the outbox the moment MLS is active, from the main thread.
+# A pending message (sent offline), then a fresh app start straight into the DM reproduces it.
+DEV=A; A reverse --remove "tcp:$PORT" >/dev/null 2>&1 || true; sleep 2
+{ type_into "Encrypted message" "pending while offline" || type_into "Message" "pending while offline"; } && tap "Send" || fail "A: could not type a message"
+sleep 2; A shell am force-stop "$PKG"; A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+open_chat "ZZ Call B" || fail "A: reopening the DM"
+sleep 8
 for _ in $(seq 1 60); do [ "$(fx e2ee)" = "calltest: e2ee=true" ] && break; sleep 2; done
 [ "$(fx e2ee)" = "calltest: e2ee=true" ] || fail "the DM never became e2ee"
 DEV=B; A shell input keyevent KEYCODE_BACK; sleep 1   # B waits on the chat list (foreground, live socket)
-DEV=A; A shell input keyevent KEYCODE_BACK; sleep 1; open_chat "ZZ Call B"
+DEV=A; A shell input keyevent KEYCODE_BACK; sleep 1; open_chat "ZZ Call B" || fail "A: the DM crashed on opening"
 sleep 5
-pass "friends; the DM is e2ee"
+logcat_ok "opening the DM while MLS activates"
+pass "friends; the DM is e2ee; opening it while MLS activated crashed nothing and touched no database on the main thread"
 
 # One call: A calls, B answers through the activity intent, media host/host, A hangs up.
 call_once() {  # $1 label
+  logcat_ok "before $1"
   DEV=A; A logcat -c; DEV=B; A logcat -c
   DEV=A; local ok=""; for _ in $(seq 1 20); do tap "Voice call" && { ok=1; break; }; sleep 2; done
   [ -n "$ok" ] || fail "$1: no call button"
@@ -235,4 +253,5 @@ DEV=B; no_leftovers "call 3 (B, the survivor)"
 DEV=A; open_chat "ZZ Call B" || fail "A: chat after the restart"
 sleep 3
 call_once "call 4 (after the kill)"; hang_up_a "call 4"
+logcat_ok "the end"
 echo "CALLTEST OK"
