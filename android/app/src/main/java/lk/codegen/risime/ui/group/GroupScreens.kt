@@ -183,6 +183,10 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 onDelete = vm::delete,
                 onInfo = vm::openReadBy,
                 scroll = scroll,
+                historyMarker = if (lk.codegen.risime.BuildConfig.HISTORY_SHARE_ENABLED) ({ m ->
+                    val st by vm.historyMarker.collectAsStateWithLifecycle()
+                    lk.codegen.risime.ui.history.HistoryMarkerRow(m.body, st, vm.conversationId, meId, null, vm::requestHistory, vm::escalateHistory)
+                }) else null,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 media = media,
                 loader = vm.imgs.loader,
@@ -252,6 +256,8 @@ internal fun GroupMessageList(
     selection: Set<String> = emptySet(),
     /** Upload progress of this phone's photos going out (client_msg_id → 0..1). */
     uploads: Map<String, Float> = emptyMap(),
+    /** §17.12 the gap marker with "Request history" (null: a plain line, the feature off). */
+    historyMarker: (@Composable (MessageEntity) -> Unit)? = null,
 ) {
     ChatMessageList(
         messages = messages,
@@ -262,9 +268,12 @@ internal fun GroupMessageList(
     ) { items, i ->
         when (val item = items[i]) {
             is ChatItem.Day -> DaySeparator(item.label)
-            is ChatItem.Msg -> if (item.m.system) {
+            is ChatItem.Msg -> if (item.m.system && historyMarker != null && item.m.clientMsgId == lk.codegen.risime.data.HistoryMarkers.historyId(item.m.conversationId)) {
+                historyMarker(item.m)
+            } else if (item.m.system) {
                 val line = item.m.systemLine()
-                SystemLineText(line?.let { l -> systemText(l, meId) { memberName(it) ?: "Someone" } } ?: item.m.body)
+                // §17.12 local history lines keep their stored text (it changes with imports).
+                SystemLineText(line?.takeIf { it.action !in lk.codegen.risime.data.groups.SystemLine.LOCAL_ACTIONS }?.let { l -> systemText(l, meId) { memberName(it) ?: "Someone" } } ?: item.m.body)
             } else if (item.m.showsAsDeleted) {
                 // §15.5 crypto S2: a server-placed tombstone shows no sender unless the sender deleted it.
                 val placed = item.m.clientMsgId.startsWith(lk.codegen.risime.data.deletes.DeleteApplier.PLACEHOLDER)
@@ -288,6 +297,7 @@ internal fun GroupMessageList(
                     onImageTap = { onImageTap(item.m) }, onImageVisible = onImageVisible,
                     sel = del?.selectFor(item.m, selection),
                     upload = uploads[item.m.clientMsgId],
+                    sharedBy = lk.codegen.risime.ui.history.sharedByLabel(item.m, nameOf),
                 )
             }
         }
@@ -309,6 +319,7 @@ private fun GroupBubble(
     loader: lk.codegen.risime.ui.chat.ImageLoader? = null,
     onImageTap: () -> Unit = {},
     onImageVisible: (String) -> Unit = {},
+    sharedBy: String? = null,
     sel: lk.codegen.risime.ui.chat.MsgSelect? = null,
     upload: Float? = null,
 ) {
@@ -360,7 +371,7 @@ private fun GroupBubble(
         MessageActionsSheet(
             canReact = canAct && m.messageId != null,
             myReactions = chips.filter { it.mine }.map { it.emoji }.toSet(),
-            onReact = onReact, actions = actions, onDismiss = { sheet = false },
+            onReact = onReact, actions = actions, onDismiss = { sheet = false }, info = sharedBy,
         )
     }
 }

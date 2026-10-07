@@ -199,6 +199,10 @@ class AppContainer(
             { mlsEngine }, db.mlsPending(),
             onMembership = { a ->
                 mlsMembershipSeen.tryEmit(a.event)
+                // §17.8: a device that left my device set loses its history approval.
+                if (a.event.change == "removed" && BuildConfig.HISTORY_SHARE_ENABLED) scope.launch(Dispatchers.IO) {
+                    if (a.event.userId.equals(sessionStore.current()?.user?.id, true)) runCatching { history.onOwnDeviceRemoved(a.event.deviceId) }
+                }
                 scope.launch {
                     delay(a.delayMs)
                     val r = membershipExecutor.execute(a)
@@ -391,6 +395,7 @@ class AppContainer(
         DeviceRegistrar(
             api, { sessionStore.deviceId() }, BuildConfig.VERSION_NAME, { mlsEngine },
             imagesSupported = { imagesSupported() },
+            historySupported = { BuildConfig.HISTORY_SHARE_ENABLED && history.supported() },
             callsSupported = { runCatching { calls.canAdvertise() }.getOrDefault(false) },
             groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
             setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },
@@ -588,6 +593,75 @@ class AppContainer(
         override fun onMissedCall(conversationId: String, from: String) = calls.hooks.onMissedCall(conversationId, from)
     }
 
+    // ---- History sharing (contract v1.15 §17). Behind BuildConfig.HISTORY_SHARE_ENABLED until green. ----
+    private val historyCrypto: lk.codegen.risime.data.mls.HistoryCrypto? by lazy {
+        if (BuildConfig.CRYPTO_AVAILABLE) lk.codegen.risime.data.mls.HistoryCrypto.get() else null
+    }
+
+    /** The export worker holds the realtime connection (like a push wake) while it runs. */
+    private val historyConnection = MutableStateFlow(0)
+
+    /** Only while unlocked with a verified session (a locked app has no bearer, §17.8). */
+    suspend fun canExportHistory(): Boolean =
+        BuildConfig.HISTORY_SHARE_ENABLED && sessionStore.current()?.user?.phoneVerified == true && canAuthenticateNow()
+
+    private suspend fun canAuthenticateNow(): Boolean =
+        sessionStore.current()?.let { it.kind == AuthKind.DEV || auth.unlocked.value } ?: false
+
+    suspend fun <T> withHistoryConnection(block: suspend () -> T): T {
+        historyConnection.value++
+        try {
+            withTimeoutOrNull(25_000) { realtime.state.first { it == ConnectionState.Live } }
+            return block()
+        } finally {
+            historyConnection.value--
+        }
+    }
+
+    val history: lk.codegen.risime.data.history.HistoryManager by lazy {
+        lk.codegen.risime.data.history.HistoryManager(
+            db.history(), db.messages(), db.deletes(), db.media(), mediaSealer, db.reactions(),
+            images.takeIf { BuildConfig.CRYPTO_AVAILABLE }, dbTx, { mlsEngine }, { historyCrypto }, { realtime },
+            object : lk.codegen.risime.data.history.HistoryBlobApi {
+                override suspend fun upload(conversationId: String, requestId: String, clientBlobId: String, file: File) =
+                    api.uploadHistoryBlob(conversationId, requestId, clientBlobId, file, sessionStore.deviceId())
+
+                override suspend fun download(blobId: String, into: File): ApiResult<Long> {
+                    into.delete()
+                    return api.downloadBlobTo(blobId, into, 0, null)
+                }
+            },
+            { engine }, { conv -> catchUpCommits(conv) },
+            me = { sessionStore.current()?.user?.id }, deviceId = { sessionStore.deviceId() },
+            membersAsk = { sessionStore.historyMembers.first() }, ownAllowed = { sessionStore.historyOwn.first() },
+            workDir = File(appContext.noBackupFilesDir, "history"), scope = scope,
+            ports = object : lk.codegen.risime.data.history.HistoryPorts {
+                override fun startExport(requestId: String) = lk.codegen.risime.push.HistoryExportWorker.enqueue(appContext, requestId)
+                override fun cancelExport(requestId: String) = lk.codegen.risime.push.HistoryExportWorker.cancel(appContext, requestId)
+                override fun promptsChanged(asks: List<lk.codegen.risime.data.db.HistoryProvideEntity>) {
+                    if (asks.isEmpty()) {
+                        notifier.cancelHistoryPrompt()
+                        return
+                    }
+                    scope.launch {
+                        val a = asks.first()
+                        notifier.postHistoryPrompt(lk.codegen.risime.ui.history.historyPromptText(a, historyName(a.requesterUser)), a.conversationId.takeIf { !a.own })
+                    }
+                }
+                override fun sharedWithOwnDevice() = notifier.postHistoryShared()
+                override fun imagesImported() = scheduleImageDownloads()
+                override suspend fun name(userId: String) = historyName(userId)
+            },
+            log = { Log.w("RisiMe", "history: $it") },
+        )
+    }
+
+    /** A display name for history prompts and labels (contacts, then group members). */
+    suspend fun historyName(userId: String): String =
+        contacts.contacts.first().firstOrNull { it.userId.equals(userId, true) }?.displayName
+            ?: db.groups().observeAllMembers().first().firstOrNull { it.userId.equals(userId, true) }?.displayName
+            ?: "Someone"
+
     val engine: ChatEngine = ChatEngine(
         messages = db.messages(),
         sync = db.sync(),
@@ -616,7 +690,9 @@ class AppContainer(
         log = { Log.w("RisiMe", "deletes: $it") },
         calls = callHooks,
         historyDao = db.history(),
+        history = history.takeIf { BuildConfig.HISTORY_SHARE_ENABLED },
     )
+
 
     val realtime: RealtimeClient = PhoenixRealtimeClient(
         http, scope, engine, signals = presence, refusals = { onSocketRefused() },
@@ -645,7 +721,7 @@ class AppContainer(
         // Connected only while in the foreground, signed in and unlocked (no background connection).
         scope.launch {
             // android R6: a ringing, connecting or active call keeps the socket up regardless of foreground.
-            combine(combine(foreground, backgroundSync, calls.keepConnected) { f, b, c -> f || b || c }, sessionStore.session, auth.unlocked, blocked) { fg, s, unlocked, b ->
+            combine(combine(foreground, backgroundSync, calls.keepConnected, historyConnection) { f, b, c, h -> f || b || c || h > 0 }, sessionStore.session, auth.unlocked, blocked) { fg, s, unlocked, b ->
                 if (shouldConnect(fg, s, unlocked, b)) s!!.serverUrl to s.user.id else null
             }
                 .distinctUntilChanged()
@@ -718,6 +794,11 @@ class AppContainer(
         scope.launch { images.purgedIds.collect { id -> imageLoader.forget(id) } }
         // §15.6: hidden tombstones are kept 30 days.
         scope.launch { runCatching { db.deletes().pruneDeletedIds(System.currentTimeMillis() - 30L * 24 * 3600_000) } }
+        // §17.3: the start-up sweep (keys of closed or 48-h-old requests), then owed history work, once live.
+        if (BuildConfig.HISTORY_SHARE_ENABLED) scope.launch {
+            realtime.state.first { it == ConnectionState.Live }
+            runCatching { history.startup() }.onFailure { Log.w("RisiMe", "history startup: ${it.message}") }
+        }
         // §17.2: gap rows go at server_ts + 30 days (the inbox TTL).
         scope.launch { runCatching { lk.codegen.risime.data.history.HistoryGaps.prune(db.history(), System.currentTimeMillis()) } }
         // §14.7: temp plaintext and orphans go, owed uploads/downloads resume, the cache is trimmed.

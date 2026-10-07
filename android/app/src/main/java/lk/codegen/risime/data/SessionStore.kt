@@ -189,6 +189,20 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         store.edit { it[NOTIF_PROMPTED] = "1" }
     }
 
+    /** §17.8 Settings → Privacy: share with other members' new devices (on = ask, off = decline without prompting). */
+    val historyMembers: Flow<Boolean> = store.data.map { it[HISTORY_MEMBERS] != "0" }
+
+    /** §17.8 Settings → Privacy: my own new phones (on = one approval, then automatic; off = decline). */
+    val historyOwn: Flow<Boolean> = store.data.map { it[HISTORY_OWN] != "0" }
+
+    suspend fun setHistoryMembers(on: Boolean) {
+        store.edit { it[HISTORY_MEMBERS] = if (on) "1" else "0" }
+    }
+
+    suspend fun setHistoryOwn(on: Boolean) {
+        store.edit { it[HISTORY_OWN] = if (on) "1" else "0" }
+    }
+
     suspend fun installSalt(): String {
         store.data.first()[SALT]?.let { return it }
         val bytes = ByteArray(16).also { SecureRandom().nextBytes(it) }
@@ -216,5 +230,7 @@ class SessionStore(private val store: DataStore<Preferences>, private val defaul
         private val HISTORY_REPLAY = stringPreferencesKey("history_replay_version")
         private val EMPTY_REPLAY_CURSOR = stringPreferencesKey("empty_replay_cursor")
         private val GROUPS_KP = stringPreferencesKey("groups_kp_replaced_for")
+        private val HISTORY_MEMBERS = stringPreferencesKey("history_share_members")
+        private val HISTORY_OWN = stringPreferencesKey("history_share_own")
     }
 }

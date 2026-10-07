@@ -13,6 +13,26 @@ object HistoryMarkers {
 
     fun undecryptableId(conversationId: String) = "sys:undecryptable:$conversationId"
 
+    /** §17.12 the one-per-conversation block header of imported history. */
+    fun sharedId(conversationId: String) = "sys:history-shared:$conversationId"
+
+    /** A local system row with explicit text and position (the §17.12 marker exception). */
+    fun line(id: String, conversationId: String, action: String, text: String, localTs: Long): MessageEntity = MessageEntity(
+        clientMsgId = id,
+        messageId = null,
+        conversationId = conversationId,
+        from = "",
+        to = conversationId,
+        body = text,
+        serverTs = null,
+        localTs = localTs,
+        status = MessageStatus.READ.name,
+        outgoing = false,
+        ackedStatus = MessageStatus.READ.name,
+        kind = MessageEntity.KIND_SYSTEM,
+        systemJson = SystemLine(action, "").encode(),
+    )
+
     /** An ISO-8601 server timestamp in epoch ms, or null if it doesn't parse. */
     fun epochMs(ts: String?): Long? = ts?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
 

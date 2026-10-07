@@ -534,7 +534,7 @@ interface HistoryDao {
     @Query("SELECT COUNT(*) FROM history_gap WHERE conversation_id = :conv")
     fun observeGapCount(conv: String): Flow<Int>
 
-    /** Gap rows not yet asked from [provider] (android R6: "Request history" offers the other source). */
+    /** The conversation's gap rows (the marker's state; `asked_from` per android R6). */
     @Query("SELECT * FROM history_gap WHERE conversation_id = :conv")
     fun observeGaps(conv: String): Flow<List<HistoryGapEntity>>
 
@@ -602,6 +602,13 @@ interface HistoryDao {
 
     @Query("SELECT * FROM history_provides WHERE state IN ('ask', 'accepting', 'exporting') ORDER BY created_at ASC")
     fun observeOpenProvides(): Flow<List<HistoryProvideEntity>>
+
+    @Query("SELECT * FROM history_provides WHERE state = :state ORDER BY created_at ASC")
+    suspend fun provides(state: String): List<HistoryProvideEntity>
+
+    /** Parts imported or rejected whose `history:ack` the server hasn't taken yet. */
+    @Query("SELECT * FROM history_parts WHERE state IN ('imported', 'rejected') ORDER BY request_id, part")
+    suspend fun owedAcks(): List<HistoryPartEntity>
 
     // ---- §17.7 export reads ----
 

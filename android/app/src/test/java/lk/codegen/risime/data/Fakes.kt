@@ -156,6 +156,16 @@ class FakeRealtime : RealtimeClient {
     override fun start(session: RealtimeSession) = Unit
     override fun stop() = Unit
 
+    /** §17.4 history pushes as (event, payload); [historyReply] answers them (default ok `{}`). */
+    val historyPushes = mutableListOf<Pair<String, kotlinx.serialization.json.JsonObject>>()
+    var historyReply: (String, kotlinx.serialization.json.JsonObject) -> PushResult<kotlinx.serialization.json.JsonObject> = { _, _ -> PushResult.Ok(kotlinx.serialization.json.JsonObject(emptyMap())) }
+
+    override suspend fun history(event: String, payload: kotlinx.serialization.json.JsonElement): PushResult<kotlinx.serialization.json.JsonObject> {
+        if (!connected) return PushResult.Unavailable
+        historyPushes += event to (payload as kotlinx.serialization.json.JsonObject)
+        return historyReply(event, payload)
+    }
+
     override suspend fun sendMessage(msg: MsgSend): PushResult<MsgSendReply> {
         if (!connected) return PushResult.Unavailable
         sent += msg

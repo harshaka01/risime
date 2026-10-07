@@ -148,6 +148,16 @@ class ApiClient(
             if (onProgress == null) file.asRequestBody(OCTET) else ProgressFileBody(file, OCTET, onProgress), true, serializer<BlobUploadReply>(),
         )
 
+    /**
+     * §17.9 a `history` blob (one sealed bundle part), only by the accepted provider device
+     * ([deviceId] as X-Device-Id); idempotent by [clientBlobId].
+     */
+    suspend fun uploadHistoryBlob(conversationId: String, requestId: String, clientBlobId: String, file: java.io.File, deviceId: String): ApiResult<BlobUploadReply> =
+        execute(
+            "POST", "blobs?purpose=history&conversation_id=$conversationId&request_id=$requestId&client_blob_id=$clientBlobId",
+            file.asRequestBody(OCTET), true, serializer<BlobUploadReply>(), mapOf(DEVICE_HEADER to deviceId),
+        )
+
     /** Owner only, idempotent 204 (a cancelled send after the upload). */
     suspend fun deleteBlob(blobId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "blobs/$blobId", null)
 

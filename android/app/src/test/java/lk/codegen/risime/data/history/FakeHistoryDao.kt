@@ -77,6 +77,9 @@ class FakeHistoryDao(private val messages: FakeMessageDao = FakeMessageDao(), pr
     override suspend fun openProvides() = provides.value.values.filter { it.open }.sortedBy { it.createdAt }
     override fun observeOpenProvides(): Flow<List<HistoryProvideEntity>> = provides.map { m -> m.values.filter { it.open }.sortedBy { it.createdAt } }
 
+    override suspend fun provides(state: String) = provides.value.values.filter { it.state == state }.sortedBy { it.createdAt }
+    override suspend fun owedAcks() = partRows.values.filter { it.state == HistoryPartEntity.IMPORTED || it.state == HistoryPartEntity.REJECTED }
+
     override suspend fun exportCandidates(conv: String) = messages.rows.values
         .filter { it.conversationId == conv && it.messageId != null && it.kind in setOf(MessageEntity.KIND_TEXT, MessageEntity.KIND_IMAGE, MessageEntity.KIND_CALL) }
         .sortedByDescending { it.localTs }

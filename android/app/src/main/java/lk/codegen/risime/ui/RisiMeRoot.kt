@@ -95,6 +95,7 @@ private fun MainNav(c: AppContainer, meId: String) {
         }
     }
     NotificationPermissionPrompt(c)
+    lk.codegen.risime.ui.history.HistoryPromptHost(c)
     NavHost(nav, startDestination = "chats") {
         composable("chats") {
             ChatsScreen(

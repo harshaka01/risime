@@ -79,7 +79,9 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
         if (text.startsWith("AAD:")) {
             val aad = java.util.Base64.getDecoder().decode(text.substringAfter("AAD:").substringBefore('#'))
             val inner = decryptPlain(conversationId, text.substringAfter('#').toByteArray())
-            val admin = if (lk.codegen.risime.net.isGroupConversation(conversationId)) {
+            val admin = if (lk.codegen.risime.data.history.HistoryAad.decode(aad) != null) {
+                null // §17.3: the core skips the admin lookup for the 'H' form
+            } else if (lk.codegen.risime.net.isGroupConversation(conversationId)) {
                 val list = adminsAt(conversationId, inner.epoch) ?: throw MlsMalformedException("no admin record for epoch ${inner.epoch}")
                 list.any { it.equals(inner.sender.userId, true) }
             } else null
@@ -142,6 +144,34 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
         groupCommit(conversationId, "meta", emptyList(), emptyList(), meta)
 
     override fun groupMeta(conversationId: String) = metas[conversationId]
+
+    // ---- §17 history (stand-in for the core: rpk = a hash of the request id; see FakeHistoryCrypto) ----
+    var historyOn = true
+    override val historySupported: Boolean get() = historyOn
+    val historyKeys = linkedMapOf<String, ByteArray>()
+    val appState = mutableMapOf<String, ByteArray>()
+
+    /** The leaf signature key the fake reports for a device (override to simulate a re-registered device). */
+    var sigKeyOf: (DeviceRef) -> ByteArray = { "sig:${it.deviceId}".toByteArray() }
+
+    override fun historyKeygen(requestId: String): ByteArray =
+        FakeHistoryCrypto.rpkFor(requestId).also { historyKeys[requestId] = it }
+
+    override fun historyPublicKey(requestId: String) = historyKeys[requestId]
+
+    override fun historyOpen(requestId: String, ctx: HistoryCtx, hpkeEnc: ByteArray, sealedKey: ByteArray, blob: java.io.File): ByteArray {
+        val rpk = historyKeys[requestId] ?: throw HistoryException(HistoryException.Kind.UnknownRequest, "no key")
+        return FakeHistoryCrypto.open(rpk, ctx, hpkeEnc, sealedKey, blob)
+    }
+
+    override fun historyForget(requestId: String) { historyKeys.remove(requestId) }
+    override fun historyOpenRequests() = historyKeys.keys.toList()
+
+    override fun historySender(conversationId: String, sender: DeviceRef) =
+        HistorySenderInfo(sender, sender.userId.equals(userId, true), sigKeyOf(sender))
+
+    override fun appStateGet(key: String) = appState[key]
+    override fun appStatePut(key: String, value: ByteArray?) { if (value == null) appState.remove(key) else appState[key] = value }
 
     companion object {
         fun ciphertext(gen: Long, epoch: Long, user: String, device: String, text: String) =

@@ -66,6 +66,10 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
             }
             lk.codegen.risime.calls.CallsSettingsSection()
             HorizontalDivider()
+            if (BuildConfig.HISTORY_SHARE_ENABLED) {
+                lk.codegen.risime.ui.history.HistoryPrivacySection()
+                HorizontalDivider()
+            }
             AboutSection()
             HorizontalDivider()
             OutlinedButton(
