@@ -1,0 +1,2 @@
+Fixes a dark screen that could stay after a call; closing the call screen no longer hangs up.
+Update over the old app; never uninstall or clear data.
