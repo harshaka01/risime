@@ -816,11 +816,15 @@ class LiveGroupInteropTest {
             conv2
         }
 
-        check("12b. B logs out (device deleted, MLS state wiped) while A, the only admin, is offline; C writes meanwhile") {
+        check("12b. B logs out (device deleted, MLS state wiped) while A, the only admin, is offline; C writes meanwhile, then goes offline") {
             a.client.stop()
             ensure(b.api.deleteDevice(b.deviceId) is ApiResult.Ok) { "DELETE /me/devices" }
             b.close()
-            c.on { c.chat.sendText(conv2, "while B was away $run") }
+            val sent = c.on { c.chat.sendText(conv2, "while B was away $run") }
+            c.await(15_000, "C's message accepted") { c.messages.rows[sent]?.takeIf { it.status != MessageStatus.PENDING.name } }
+            // v1.14 §12.4a: an online member would now commit B's same-device re-add; this section keeps
+            // the admin path (C is back in 12d; R1–R4 below cover the member path).
+            c.client.stop()
             null
         }
 
@@ -860,6 +864,8 @@ class LiveGroupInteropTest {
             ensure(row.state == GroupEntity.STATE_ACTIVE) { "B2 row state ${row.state}" }
             val last = a.commits(conv2).last()
             ensure(last.fromDevice == a.deviceId) { "the re-add commit came from ${last.fromDevice}" }
+            c.start()
+            c.live()
             // §13.3: one marker for what this device can't read; never silent gaps, never those messages.
             val marker = nb.await(10_000, "history marker") { nb.messages.rows.values.firstOrNull { it.clientMsgId == "sys:history:$conv2" } }
             ensure(marker.body == "Earlier messages aren't available on this device") { "marker: ${marker.body}" }
@@ -1091,6 +1097,103 @@ class LiveGroupInteropTest {
             for (x in listOf(b2!!, c)) x.on { x.chat.markConversationRead(conv2) }
             a.await(20_000, "all_read after resume") { a.messages.rows[resumeMsg]?.takeIf { it.status == MessageStatus.READ.name } }
             null
+        }
+
+        // ---- v1.14 §12.4a: a member (not admin) restores an existing member's new phone while the only admin is offline. ----
+        var conv3 = ""
+        val name3 = "ZZ Member readd $run"
+        var b3: Dev? = null
+        check("R0. every app advertises member_devices (the core reports it)") {
+            ensure("member_devices" in a.mls.engine.coreCapabilities) { "the core doesn't report member_devices: ${a.mls.engine.coreCapabilities}" }
+            ensure(listOf(a, nb, c).all { "member_devices" in it.registrar.advertised.orEmpty() }) { "advertised: ${listOf(a, nb, c).map { it.registrar.advertised }}" }
+            null
+        }
+        check("R1. a new group of A (admin), B and C (members); messages each way") {
+            val id = a.queue(null, GroupOpType.CREATE, json(CreatePayload.serializer(), CreatePayload(name3, listOf(bId, cId))), clientGroupId = UUID.randomUUID().toString())
+            val op = a.awaitOp(id)
+            ensure(op.state == GroupOpType.DONE) { "create op: ${op.state} ${op.lastError}" }
+            conv3 = op.conversationId!!
+            for (x in listOf(nb, c)) x.await(20_000, "joined $conv3") { x.mls.engine.group(conv3) }
+            nb.on { nb.chat.sendText(conv3, "r before $run") }
+            for (x in listOf(a, c)) x.awaitText(conv3, "r before $run")
+            conv3
+        }
+        var readdOp = ""
+        check("R2. A and C offline; B reinstalls (new device id): its devices op waits with no committer; B sees 'Rejoining group…'") {
+            a.on { a.client.stop() }
+            c.on { c.client.stop() }
+            nb.close() // the wiped phone: its device row stays (superseded by the new one)
+            val nb3 = Dev(url, bId, bTok, "B3", trusted)
+            b3 = nb3
+            ensure(nb3.on { nb3.registrar.register(pushToken = null) } is Registration.Mls) { "B3 registration" }
+            ensure("member_devices" in nb3.registrar.advertised.orEmpty()) { "B3 advertised ${nb3.registrar.advertised}" }
+            nb3.start()
+            nb3.live()
+            nb3.on { nb3.syncGroups(graceMs = 300) }
+            val row = nb3.await(10_000, "B3's group row") { nb3.groupDao.groups[conv3] }
+            ensure(groupDisplayName(row.name) == GROUP_NAME_PENDING) { "B3 shows \"${groupDisplayName(row.name)}\"" }
+            val pend = nb3.await(15_000, "B3's devices op") {
+                (nb3.api.group(conv3) as? ApiResult.Ok)?.value?.group?.pending?.firstOrNull { op -> op.type == PendingOp.DEVICES && op.added.any { it.deviceId == nb3.deviceId } }
+            }
+            ensure(pend.added.map { it.deviceId } == listOf(nb3.deviceId) && pend.removed.none { it.deviceId == nb3.deviceId }) { "op: $pend" }
+            ensure(pend.committer == null) { "named while no candidate is online: ${pend.committer}" }
+            readdOp = pend.opId
+            // C's members list (GET /groups/{id}): "<B>'s new phone is being added".
+            val gc = (c.api.group(conv3) as ApiResult.Ok).value.group
+            ensure(lk.codegen.risime.ui.group.newPhoneUsers(gc, cId) == setOf(bId.lowercase())) { "new phones for C: ${lk.codegen.risime.ui.group.newPhoneUsers(gc, cId)}" }
+            null
+        }
+        check("R3. member C can't add a new user or swap B's device for another one (core and server refuse)") {
+            val nb3 = b3!!
+            val dKp = d.on { d.mls.engine.createKeyPackages(1).single() }
+            val b3Kp = nb3.on { nb3.mls.engine.createKeyPackages(1).single() }
+            val epoch = c.epoch(conv3)!!
+            fun refused(what: String, block: () -> Unit) {
+                val e = runCatching { block() }.exceptionOrNull()
+                ensure(e is lk.codegen.risime.data.mls.MlsPolicyException) { "$what: the core didn't refuse it ($e)" }
+            }
+            c.on {
+                refused("add D (no leaf)") { c.mls.engine.changeGroupMembers(conv3, listOf(lk.codegen.risime.data.mls.ClaimedKeyPackage(lk.codegen.risime.data.mls.DeviceRef(dId, d.deviceId), dKp)), emptyList()) }
+                refused("swap B's old phone for B3") {
+                    c.mls.engine.changeGroupMembers(conv3, listOf(lk.codegen.risime.data.mls.ClaimedKeyPackage(lk.codegen.risime.data.mls.DeviceRef(bId, nb3.deviceId), b3Kp)), listOf(lk.codegen.risime.data.mls.DeviceRef(bId, nb.deviceId)))
+                }
+            }
+            ensure(c.epoch(conv3) == epoch) { "C's epoch moved" }
+            // The server's side of the same rule (C never sends these; forged requests to prove it).
+            val add = c.api.addGroupMembers(conv3, listOf(dId), c.deviceId)
+            ensure(add is ApiResult.Error && add.code == AuthErrors.NOT_ADMIN) { "C adds D: $add" }
+            val gen = c.mls.engine.group(conv3)!!.generation
+            fun forged(added: List<lk.codegen.risime.net.MlsDeviceRef>, removed: List<lk.codegen.risime.net.MlsDeviceRef>, opId: String?) = GroupCommitRequest(
+                generation = gen, epoch = epoch, commit = b64.encodeToString("forged".toByteArray()), commitRef = null,
+                welcome = b64.encodeToString("forged".toByteArray()), welcomeRef = null, added = added, removed = removed, opId = opId, metaChanged = false,
+            )
+            val newUser = c.api.groupCommit(conv3, forged(listOf(lk.codegen.risime.net.MlsDeviceRef(dId, d.deviceId)), emptyList(), null), c.deviceId)
+            ensure(newUser is ApiResult.Error && newUser.code in listOf(AuthErrors.NOT_ADMIN, "bad_request")) { "C commits D's device: $newUser" }
+            val swap = c.api.groupCommit(conv3, forged(listOf(lk.codegen.risime.net.MlsDeviceRef(bId, nb3.deviceId)), listOf(lk.codegen.risime.net.MlsDeviceRef(bId, nb.deviceId)), readdOp), c.deviceId)
+            ensure(swap is ApiResult.Error && swap.code in listOf(AuthErrors.NOT_ADMIN, "bad_request")) { "C swaps B's device: $swap" }
+            "add ${(add as ApiResult.Error).code}, commit D ${(newUser as ApiResult.Error).code}, swap ${(swap as ApiResult.Error).code}"
+        }
+        check("R4. C comes online → named → re-adds B's new phone; B3 joins: right name, sends; C receives") {
+            val nb3 = b3!!
+            c.start()
+            c.live()
+            nb3.await(60_000, "B3 joined from the Welcome") { nb3.mls.engine.group(conv3) }
+            val row = nb3.await(10_000, "B3's name from group_meta") { nb3.groupDao.groups[conv3]?.takeIf { it.name == name3 } }
+            ensure(groupComposer(row, encrypted = true) == GroupComposer.Enabled) { "composer after join" }
+            val last = c.await(10_000, "C's commit") { c.commits(conv3).lastOrNull() }
+            ensure(last.fromDevice == c.deviceId) { "the re-add commit came from ${last.fromDevice}" }
+            val done = c.await(10_000, "C's op row") { c.opDao.rows.values.firstOrNull { it.opId == readdOp && it.state != GroupOpType.QUEUED } }
+            ensure(done.state == GroupOpType.DONE) { "C's op: ${done.state} ${done.lastError}" }
+            ensure(c.on { c.mls.engine.groupMeta(conv3) }?.admins == listOf(aId)) { "the admin list changed" }
+            nb3.on { nb3.chat.sendText(conv3, "B3 is here $run") }
+            ensure(c.awaitText(conv3, "B3 is here $run").from == bId) { "C: B3's message" }
+            c.on { c.chat.sendText(conv3, "hi B3 $run") }
+            ensure(nb3.awaitText(conv3, "hi B3 $run").from == cId) { "B3: C's message" }
+            ensure(c.epoch(conv3) == nb3.epoch(conv3)) { "epochs c=${c.epoch(conv3)} b3=${nb3.epoch(conv3)}" }
+            val g = (nb3.api.group(conv3) as ApiResult.Ok).value.group
+            ensure(g.pending.none { it.type == PendingOp.DEVICES && it.added.any { d -> d.deviceId == nb3.deviceId } }) { "pending after the re-add: ${g.pending}" }
+            ensure(lk.codegen.risime.ui.group.newPhoneUsers(g, cId).isEmpty()) { "C still shows a new phone" }
+            "epoch ${c.epoch(conv3)} (A offline throughout)"
         }
 }
 }
