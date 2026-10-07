@@ -47,6 +47,26 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.20 (live 2026-10-07, not required): history sharing
+- **What's in:** "Request history" on the gap marker. The user's own other phone asks once per new
+  phone, then shares automatically; a group member is always asked, shares only the membership
+  period, and the messages are labelled "Shared by <name>" (decision 049, option A).
+- **Proof:** HPKE vectors cross-checked by an independent Python implementation; android 617 tests;
+  live interop with 7 history checks; the two-phone upgrade gate (nightly.19 → nightly.20).
+- **Not covered live:**
+  - refresh after epoch drift and Clear chat during a request (untested);
+  - a delete racing an import (unit tests only);
+  - reactions confirmed before v1.15 aren't shared.
+- **Switch:** `-Prisime.historyShare=false` turns it off if needed.
+
+## Open items after nightly.20
+- **Needs Harsha:** `TURN_URLS` in `infra/pilot/pilot.env` plus a restart (calls across networks;
+  coturn is up, and TCP 3478 is reachable from outside). The TLS certificate copy for 5349 is
+  optional.
+- **Still waiting:** the Notify.lk sender ID, and RisiWork's `version.json`.
+- **Possible next:** group voice via LiveKit (v1.16); the optional §3 of the readiness proposal
+  (`app_version` and the reason in `missing*`).
+
 ## v0.2.0-nightly.19 (live 2026-10-07, not required): hotfix, a chat that crashed on opening
 - **Cause:** with a message pending in an e2ee DM, opening the chat flushed the outbox on the main
   thread, and the MLS core's Room transaction threw. Every ChatEngine entry point into the MLS core
