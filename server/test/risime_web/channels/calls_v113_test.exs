@@ -8,6 +8,7 @@ defmodule RisiMeWeb.CallsV113Test do
   use RisiMeWeb.ChannelCase, async: false
 
   import ExUnit.CaptureLog
+  require Logger
   import RisiMe.Fixtures
   import RisiMe.MLSHelpers
 
@@ -434,6 +435,59 @@ defmodule RisiMeWeb.CallsV113Test do
 
       assert {:ok, %{deleted: [], gone: [^s]}} =
                Messaging.Deletes.delete(a.user.id, payload, device_id: a_dev)
+    end
+  end
+
+  describe "diagnostics (decision 054)" do
+    setup do
+      level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: level) end)
+    end
+
+    test "every call:signal is logged with ids, the ring flag and its outcome; never the ciphertext",
+         ctx do
+      %{a: a, b: b, chan_a: chan_a} = ctx
+      call_id = Ecto.UUID.generate()
+      ct = b64(64)
+
+      log =
+        capture_log([level: :info], fn ->
+          {:ok, _} = sig(chan_a, b.user.id, %{"call_id" => call_id, "ciphertext" => ct})
+
+          {:error, %{reason: "not_friends"}} =
+            sig(chan_a, Ecto.UUID.generate(), %{"ring" => false})
+
+          Process.sleep(50)
+        end)
+
+      assert log =~ "call:signal call=#{call_id} from=#{a.user.id}"
+      assert log =~ "to=#{b.user.id} ring=true ok"
+      assert log =~ "ring=false error=not_friends"
+      assert log =~ "call ring: call=#{call_id} to=#{b.user.id}"
+      refute log =~ ct
+    end
+
+    test "the call push result and the fallback push are logged", ctx do
+      %{a: a, chan_a: chan_a} = ctx
+      c = logged_in_user()
+      befriend!(a, c)
+      live = push_token("fcm-live-log")
+      c_live = device!(c, @caps, live)
+      e2ee_group!(a, c)
+
+      log =
+        capture_log([level: :info], fn ->
+          _chan_c = join_dev(c, c_live)
+          {:ok, _} = sig(chan_a, c.user.id)
+          assert_receive {:push, ^live, %{"type" => "call"}}, 1000
+          Process.sleep(100)
+        end)
+
+      assert log =~ "call ring fallback push:"
+      assert log =~ "tokens=1"
+      assert log =~ "call push: result="
+      refute log =~ live
     end
   end
 

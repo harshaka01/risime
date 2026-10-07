@@ -55,7 +55,9 @@ defmodule RisiMe.Push.Dispatcher do
       sender ->
         for token <- tokens do
           Task.Supervisor.start_child(RisiMe.Push.TaskSupervisor, fn ->
-            deliver(sender, token, Push.call_payload())
+            # Decision 054: the call push's result is logged (token never; FCM failures already are).
+            result = deliver(sender, token, Push.call_payload())
+            Logger.info("call push: result=#{result}")
           end)
         end
 
@@ -68,10 +70,12 @@ defmodule RisiMe.Push.Dispatcher do
     case sender.deliver(token, payload) do
       :ok ->
         :telemetry.execute([:risime, :push, :sent], %{count: 1}, %{result: :ok})
+        :ok
 
       {:error, :unregistered} ->
         Devices.delete_push_token(token)
         :telemetry.execute([:risime, :push, :sent], %{count: 1}, %{result: :unregistered})
+        :unregistered
 
       {:error, :retryable} when retries > 0 ->
         Process.sleep(Application.get_env(:risime, :push_retry_ms, 1_000))
@@ -79,6 +83,7 @@ defmodule RisiMe.Push.Dispatcher do
 
       {:error, reason} ->
         :telemetry.execute([:risime, :push, :sent], %{count: 1}, %{result: reason})
+        reason
     end
   end
 

@@ -14,6 +14,7 @@ defmodule RisiMe.Calls.State do
   Never a call table, never "who is in a call".
   """
   use GenServer
+  require Logger
 
   @replies __MODULE__.Replies
   @reply_ttl_ms :timer.minutes(5)
@@ -91,6 +92,12 @@ defmodule RisiMe.Calls.State do
   def handle_info({:fallback, key}, rings) do
     case rings do
       %{^key => {timer, tokens}} when timer != nil ->
+        {callee, call_id} = key
+
+        Logger.info(
+          "call ring fallback push: call=#{call_id} to=#{callee} tokens=#{length(tokens)}"
+        )
+
         RisiMe.Push.Dispatcher.push_call(tokens)
         {:noreply, Map.put(rings, key, {nil, tokens})}
 

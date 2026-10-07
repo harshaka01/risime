@@ -52,15 +52,37 @@ defmodule RisiMe.Calls do
   """
   @spec signal(String.t(), map, keyword) :: {:ok, map} | {:error, error}
   def signal(sender_id, params, opts \\ []) do
-    with :ok <- RateLimiter.hit(:call_signal, sender_id, @total_limit, @total_window),
-         {:ok, req} <- parse(params) do
-      req = Map.put(req, :from_device, opts[:device_id])
+    result =
+      with :ok <- RateLimiter.hit(:call_signal, sender_id, @total_limit, @total_window),
+           {:ok, req} <- parse(params) do
+        req = Map.put(req, :from_device, opts[:device_id])
 
-      case State.reply(sender_id, req.client_msg_id) do
-        {:ok, reply} -> {:ok, reply}
-        :not_found -> signal_new(sender_id, req)
+        case State.reply(sender_id, req.client_msg_id) do
+          {:ok, reply} -> {:ok, reply}
+          :not_found -> signal_new(sender_id, req)
+        end
       end
-    end
+
+    log_signal(sender_id, params, opts[:device_id], result)
+    result
+  end
+
+  # Decision 054: one line per `call:signal` (ids, the ring flag and the outcome only; never the
+  # ciphertext), so a failed call can be reconstructed from server.log. nightly.16 logged nothing.
+  defp log_signal(sender_id, params, device_id, result) do
+    outcome =
+      case result do
+        {:ok, _} -> "ok"
+        {:error, reason} -> "error=#{reason}"
+      end
+
+    call_id = if is_map(params) and is_binary(params["call_id"]), do: params["call_id"], else: "-"
+    to = if is_map(params) and is_binary(params["to"]), do: params["to"], else: "-"
+    ring = if is_map(params), do: params["ring"] == true, else: false
+
+    Logger.info(
+      "call:signal call=#{call_id} from=#{sender_id} dev=#{device_id || "-"} to=#{to} ring=#{ring} #{outcome}"
+    )
   end
 
   defp parse(%{"client_msg_id" => cmid, "to" => to, "call_id" => call_id} = p)
@@ -205,6 +227,11 @@ defmodule RisiMe.Calls do
   defp ring(callee_id, call_id) do
     targets = Devices.calls_push_targets(callee_id)
     {offline, live} = Enum.split_with(targets, fn {d, _} -> not Presence.device_online?(d) end)
+
+    Logger.info(
+      "call ring: call=#{call_id} to=#{callee_id} push_now=#{length(offline)} live=#{length(live)}"
+    )
+
     RisiMe.Push.Dispatcher.push_call(Enum.map(offline, &elem(&1, 1)))
     if live != [], do: State.arm_fallback(callee_id, call_id, Enum.map(live, &elem(&1, 1)))
     :ok
