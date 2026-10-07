@@ -98,7 +98,9 @@ class ChatEngine(
     private val calls: lk.codegen.risime.calls.CallHooks? = null,
     /** §17.2 the gap index (null = an app without history sharing: no gap rows). */
     private val historyDao: lk.codegen.risime.data.db.HistoryDao? = null,
-) : RealtimeListener {
+    /** §17 history sharing (null = an app without it: history events are skipped, they still advance the cursor). */
+    private val history: lk.codegen.risime.data.history.HistoryHooks? = null,
+) : RealtimeListener, lk.codegen.risime.data.history.SendLanes {
     /** §15.4–§15.6 applied inside each event's transaction. */
     private val applier = deletes?.let { lk.codegen.risime.data.deletes.DeleteApplier(it, messages, images, clock, log) }
 
@@ -125,6 +127,9 @@ class ChatEngine(
     private val lanes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
 
     private fun lane(conversationId: String): Mutex = lanes.getOrPut(conversationId.lowercase()) { Mutex() }
+
+    /** §17.16: history envelopes (request, refresh, deliver) go through the same serial lane. */
+    override suspend fun <T> withLane(conversationId: String, block: suspend () -> T): T = lane(conversationId).withLock { block() }
 
     /** §16: call results of the current event, handed to [calls] after its transaction commits (never inside). */
     private val callQueue = java.util.concurrent.ConcurrentLinkedQueue<suspend (lk.codegen.risime.calls.CallHooks) -> Unit>()
@@ -207,6 +212,19 @@ class ChatEngine(
                         runCatching { e.groupReceipt() }.getOrNull()?.let { groups?.applyReceipt(it) }
                         false
                     }
+                    // §17.5/§17.6: the MLS history envelopes in event order; the plaintext status events directly.
+                    Event.KIND_HISTORY_REQUEST, Event.KIND_HISTORY_SHARE -> {
+                        if (history != null) runCatching { applyMls(me, e) }.onFailure { log("history: ${it.message}") }
+                        false
+                    }
+                    Event.KIND_HISTORY_STATUS -> {
+                        history?.let { h -> runCatching { e.historyStatus() }.getOrNull()?.let { h.onStatusInTx(it); historyTouched = true } }
+                        false
+                    }
+                    Event.KIND_HISTORY_REQUEST_CLOSED -> {
+                        history?.let { h -> runCatching { e.historyRequestClosed() }.getOrNull()?.let { h.onClosedInTx(it); historyTouched = true } }
+                        false
+                    }
                     else -> false
                 }
                 sync.markSeen(SeenEventEntity(e.eventId))
@@ -215,6 +233,10 @@ class ChatEngine(
             }
             newIncoming = newIncoming || applied
             dispatchCalls()
+            if (historyTouched) {
+                historyTouched = false
+                history?.afterCommit()
+            }
         }
         calls?.let { runCatching { it.onPageEnd() }.onFailure { e -> log("calls page end: ${e.message}") } }
         if (newIncoming) flushAcks()
@@ -241,6 +263,9 @@ class ChatEngine(
         applier?.takePurged()?.forEach { p -> runCatching { images?.afterPurge(p.clientMsgId, p.files) } }
         onDeletesApplied()
     }
+
+    /** §17: set inside a transaction that changed history state; the manager acts after the commit. */
+    @Volatile private var historyTouched = false
 
     /** §14.7: set when an image row was stored; downloads are scheduled after the transactions (never inside). */
     @Volatile private var imagesStored = false
@@ -285,6 +310,10 @@ class ChatEngine(
         calls?.let { runCatching { it.onPageEnd() } }
         if (newIncoming) flushAcks()
         afterDeletes()
+        if (historyTouched) {
+            historyTouched = false
+            history?.afterCommit()
+        }
     }
 
     override suspend fun onLive() {
@@ -294,6 +323,7 @@ class ChatEngine(
         }
         flushOutbox()
         flushAcks()
+        history?.afterCommit() // §17: owed pushes, imports and exports resume once live
     }
 
     override suspend fun onAuthFailed() = Unit // handled by the session owner via ConnectionState
@@ -341,6 +371,14 @@ class ChatEngine(
             if (r is MlsResult.Unrecoverable) onUnrecoverable(r.conversationId)
             if (r is MlsResult.CallSignal) queueCall(r)
             if (r is MlsResult.CallEnd) incoming = applyCallEnd(me, r.message, r.env) || incoming
+            history?.let { h ->
+                when (r) {
+                    is MlsResult.HistoryRequest -> { h.onRequestInTx(r); historyTouched = true }
+                    is MlsResult.HistoryRequestStale -> { h.onRequestStaleInTx(r.event); historyTouched = true }
+                    is MlsResult.HistoryShare -> { h.onShareInTx(r); historyTouched = true }
+                    else -> Unit
+                }
+            }
             (r as? MlsResult.GroupChanged)?.let { gc ->
                 val conv = gc.conversationId
                 results += gc.extra
@@ -977,6 +1015,8 @@ class ChatEngine(
             deletesApplied = true
         }
         afterDeletes()
+        // §17.13: an open history request for this chat is cancelled.
+        history?.let { h -> runCatching { h.onChatCleared(conversationId) }.onFailure { log("history clear: ${it.message}") } }
         scope.launch { flushDeletes() }
     }
 

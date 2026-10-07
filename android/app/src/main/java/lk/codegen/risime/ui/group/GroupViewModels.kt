@@ -254,6 +254,22 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
     val members: StateFlow<List<GroupMemberEntity>> = c.db.groups().observeMembers(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** §17.12 the gap marker's state (null with the feature off). */
+    val historyMarker: StateFlow<lk.codegen.risime.data.history.HistoryMarkerState?> =
+        if (lk.codegen.risime.BuildConfig.HISTORY_SHARE_ENABLED) {
+            c.history.markerState(conversationId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+        } else {
+            kotlinx.coroutines.flow.MutableStateFlow(null)
+        }
+
+    fun requestHistory(sources: String) {
+        c.scope.launch { c.history.request(conversationId, sources) }
+    }
+
+    fun escalateHistory() {
+        c.scope.launch { c.history.escalate(conversationId) }
+    }
+
     val messages: StateFlow<List<MessageEntity>> = c.db.messages().conversation(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

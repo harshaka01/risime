@@ -87,6 +87,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     val toast by vm.imgs.toast.collectAsStateWithLifecycle()
     val uploads by vm.imgs.uploads.collectAsStateWithLifecycle()
     val pickPhoto = rememberImageLayer(vm.imgs, messages)
+    val historyMarker by vm.historyMarker.collectAsStateWithLifecycle()
 
     // Read acks only while this chat is actually on screen.
     LaunchedEffect(messages, resumed) {
@@ -148,7 +149,12 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
             ) { items, i ->
                 when (val item = items[i]) {
                     is ChatItem.Day -> DaySeparator(item.label)
-                    is ChatItem.Msg -> DmMessageRow(item.m, onCallBack = vm::startCall.takeIf { isFriend }, onDeleteForMe = vm::deleteCallLine) {
+                    is ChatItem.Msg -> DmMessageRow(
+                        item.m, onCallBack = vm::startCall.takeIf { isFriend }, onDeleteForMe = vm::deleteCallLine,
+                        historyMarker = if (lk.codegen.risime.BuildConfig.HISTORY_SHARE_ENABLED) ({ m ->
+                            lk.codegen.risime.ui.history.HistoryMarkerRow(m.body, historyMarker, vm.conversationId, vm.me, name, vm::requestHistory, vm::escalateHistory)
+                        }) else null,
+                    ) {
                         if (item.m.showsAsDeleted) {
                             val s = vm.del.selectFor(item.m, selection)
                             TombstoneBubble(
@@ -168,6 +174,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                             onOpenReactions = { reactionsFor = item.m.messageId },
                             sel = vm.del.selectFor(item.m, selection),
                             upload = uploads[item.m.clientMsgId],
+                            sharedBy = lk.codegen.risime.ui.history.sharedByLabel(item.m) { id -> if (id.equals(vm.peerId, true)) name else "your contact" },
                         )
                     }
                 }
@@ -214,9 +221,12 @@ internal fun DmMessageRow(
     m: MessageEntity,
     onCallBack: (() -> Unit)? = null,
     onDeleteForMe: ((String) -> Unit)? = null,
+    /** §17.12: the gap marker carries "Request history" (null: a plain line). */
+    historyMarker: (@Composable (MessageEntity) -> Unit)? = null,
     bubble: @Composable () -> Unit,
 ) {
     when {
+        m.system && historyMarker != null && m.clientMsgId == lk.codegen.risime.data.HistoryMarkers.historyId(m.conversationId) -> historyMarker(m)
         m.system -> lk.codegen.risime.ui.common.SystemLineText(m.body)
         // §16.6 a call-history line: centred, "Call back", only "Delete for me", no reactions.
         m.call -> lk.codegen.risime.calls.CallLineRow(
@@ -245,6 +255,8 @@ internal fun Bubble(
     sel: MsgSelect? = null,
     /** This photo's upload progress (0..1) while it goes out. */
     upload: Float? = null,
+    /** §17.12 "Shared by <provider>" for an imported row (the info line of the sheet). */
+    sharedBy: String? = null,
 ) {
     val failed = m.status == MessageStatus.FAILED.name
     var sheet by remember { mutableStateOf(false) }
@@ -296,6 +308,7 @@ internal fun Bubble(
             onReact = onReact,
             actions = actions,
             onDismiss = { sheet = false },
+            info = sharedBy,
         )
     }
 }

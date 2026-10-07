@@ -542,7 +542,7 @@ class HistoryProvideEntity(
     @ColumnInfo(name = "intervals_json") val intervalsJson: String,
     @ColumnInfo(name = "gap_count") val gapCount: Int,
     @ColumnInfo(name = "expires_at") val expiresAt: String?,
-    /** [HistoryProvideEntity] states: ask | accepting | exporting | delivered | declined | closed | unable */
+    /** ask | accepting | exporting | delivered | declining (decline owed) | declined | unable (unable owed) | closed */
     val state: String,
     val parts: Int = 0,
     @ColumnInfo(name = "progress_json") val progressJson: String? = null,
@@ -562,6 +562,7 @@ class HistoryProvideEntity(
         const val ACCEPTING = "accepting"
         const val EXPORTING = "exporting"
         const val DELIVERED = "delivered"
+        const val DECLINING = "declining"
         const val DECLINED = "declined"
         const val CLOSED = "closed"
         const val UNABLE = "unable"

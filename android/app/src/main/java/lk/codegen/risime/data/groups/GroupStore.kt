@@ -36,6 +36,17 @@ data class SystemLine(
         const val HISTORY_GAP_TEXT = "Earlier messages aren't available on this device"
         const val UNDECRYPTABLE_TEXT = "Some messages couldn't be decrypted"
 
+        /** §17.12 local lines: the block header of imported history; the gap marker after a partial import. */
+        const val HISTORY_SHARED = "history_shared"
+        const val HISTORY_GAP_SOME_TEXT = "Some earlier messages aren't available on this device"
+        const val HISTORY_GAP_RESIDUAL_TEXT = "Some earlier messages couldn't be restored"
+        const val HISTORY_RESTORED_TEXT = "History restored from your other device"
+
+        fun historySharedText(name: String) = "History shared by $name"
+
+        /** Local lines whose stored text is authoritative (never re-rendered from the line). */
+        val LOCAL_ACTIONS = setOf(HISTORY_GAP, UNDECRYPTABLE, HISTORY_SHARED)
+
         fun decode(json: String?): SystemLine? = json?.let { runCatching { ProtocolJson.decodeFromString(serializer(), it) }.getOrNull() }
     }
 }

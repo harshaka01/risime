@@ -25,6 +25,9 @@ class Notifier(private val context: Context) {
         m.createNotificationChannel(NotificationChannel(CH_MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH))
         m.createNotificationChannel(NotificationChannel(CH_REQUESTS, "Friend requests", NotificationManager.IMPORTANCE_DEFAULT))
         m.createNotificationChannel(NotificationChannel(CH_SYNC, "Background sync", NotificationManager.IMPORTANCE_MIN))
+        if (lk.codegen.risime.BuildConfig.HISTORY_SHARE_ENABLED) {
+            m.createNotificationChannel(NotificationChannel(CH_HISTORY, "History requests", NotificationManager.IMPORTANCE_DEFAULT))
+        }
     }
 
     private fun allowed(): Boolean =
@@ -176,6 +179,50 @@ class Notifier(private val context: Context) {
         )
     }
 
+    /** §17.8 a request waiting for the user's answer ("History requests"; the tap goes through the fingerprint gate). */
+    @Suppress("MissingPermission")
+    fun postHistoryPrompt(text: String, conversationId: String?) {
+        if (!allowed()) return
+        ensureChannels()
+        nm.notify(
+            HISTORY_ID,
+            NotificationCompat.Builder(context, CH_HISTORY)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("Chat history request")
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setAutoCancel(true)
+                .setContentIntent(openIntent(conversationId, HISTORY_ID))
+                .build(),
+        )
+    }
+
+    fun cancelHistoryPrompt() = nm.cancel(HISTORY_ID)
+
+    /** §17.8 option A afterwards: a quiet "Shared chat history with your new phone". */
+    @Suppress("MissingPermission")
+    fun postHistoryShared() {
+        if (!allowed()) return
+        ensureChannels()
+        nm.notify(
+            HISTORY_DONE_ID,
+            NotificationCompat.Builder(context, CH_HISTORY)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("Shared chat history with your new phone")
+                .setSilent(true)
+                .setAutoCancel(true)
+                .build(),
+        )
+    }
+
+    /** §17.16 the export worker's ongoing notification. */
+    fun historyExportNotification() = NotificationCompat.Builder(context, CH_SYNC)
+        .setSmallIcon(R.drawable.ic_launcher_foreground)
+        .setContentTitle("Sharing chat history…")
+        .setOngoing(true)
+        .setPriority(NotificationCompat.PRIORITY_LOW)
+        .build().also { ensureChannels() }
+
     fun syncNotification() = NotificationCompat.Builder(context, CH_SYNC)
         .setSmallIcon(R.drawable.ic_launcher_foreground)
         .setContentTitle("Checking for messages")
@@ -201,6 +248,10 @@ class Notifier(private val context: Context) {
         const val REQUESTS_ID = 2
         const val LOCKED_ID = 3
         const val SYNC_ID = 4
+        const val CH_HISTORY = "history"
+        const val HISTORY_ID = 5
+        const val HISTORY_EXPORT_ID = 6
+        const val HISTORY_DONE_ID = 7
 
         fun chatId(conversationId: String) = 1000 + (conversationId.hashCode() and 0x7fffffff) % 1_000_000
     }

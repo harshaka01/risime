@@ -94,10 +94,13 @@ fun MessageActionsSheet(
     onReact: (emoji: String, op: String) -> Unit,
     actions: List<Pair<String, () -> Unit>>,
     onDismiss: () -> Unit,
+    /** §17.12 the info line ("Shared by <provider>"), or null. */
+    info: String? = null,
 ) {
     var picker by remember { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = Spacing.lg)) {
+            info?.let { Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) }
             if (canReact) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.lg), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     QUICK_REACTIONS.forEach { e ->

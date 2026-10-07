@@ -53,6 +53,18 @@ sealed interface MlsResult {
     /** §16.2 a durable `call_end` (a message event): the call-history line. */
     data class CallEnd(val message: MessageData, val env: lk.codegen.risime.calls.CallEnvelope.End) : MlsResult
 
+    /**
+     * §17.7 a decrypted, verified `history_request` for this device: the envelope (with `rpk`), the
+     * MLS sender and own/member with its leaf signature key from the core (never the event's `consent`).
+     */
+    data class HistoryRequest(val event: lk.codegen.risime.net.HistoryRequestEvent, val env: lk.codegen.risime.data.history.HistoryRequestEnvelope, val sender: HistorySenderInfo) : MlsResult
+
+    /** §17.4 a `history_request` this device can't decrypt (too old an epoch, a lost generation): answer `unable`/`stale`. */
+    data class HistoryRequestStale(val event: lk.codegen.risime.net.HistoryRequestEvent, val reason: String) : MlsResult
+
+    /** §17.6 a decrypted, verified `history_share` (one part) for this device. */
+    data class HistoryShare(val event: lk.codegen.risime.net.HistoryShareEvent, val env: lk.codegen.risime.data.history.HistoryShareEnvelope, val sender: DeviceRef) : MlsResult
+
     /** Ahead of the local epoch/generation, or no group yet: kept in mls_pending. */
     data object Pending : MlsResult
 
@@ -223,6 +235,14 @@ class MlsPipeline(
             val c = runCatching { e.callSignal() }.getOrNull() ?: return MlsResult.ControlDropped("call_signal: undecodable")
             return applyCallSignal(mls, e, c, historyBefore, joined)
         }
+        if (e.kind == Event.KIND_HISTORY_REQUEST) {
+            val r = runCatching { e.historyRequest() }.getOrNull() ?: return MlsResult.ControlDropped("history_request: undecodable")
+            return applyHistoryRequest(mls, e, r, historyBefore, joined)
+        }
+        if (e.kind == Event.KIND_HISTORY_SHARE) {
+            val r = runCatching { e.historyShare() }.getOrNull() ?: return MlsResult.ControlDropped("history_share: undecodable")
+            return applyHistoryShare(mls, e, r, historyBefore, joined)
+        }
         val msg = e.messageData()?.takeIf { it.encrypted } ?: return MlsResult.Ignored
         if (msg.fromDevice.equals(mls.deviceId, true)) return MlsResult.Ignored // our own send (already in the outbox row)
         val conv = msg.conversationId
@@ -361,6 +381,81 @@ class MlsPipeline(
         if (env.callId != c.callId) return dropped("call_id mismatch")
         if (c.ring != lk.codegen.risime.calls.CallEnvelope.ringFor(env)) return dropped("ring flag mismatch")
         return MlsResult.CallSignal(c, env)
+    }
+
+    /** One decrypted history envelope, or why it was dropped (null = parked). */
+    private sealed interface HistoryDecrypt {
+        class Ok(val dec: Decrypted) : HistoryDecrypt
+
+        class Fail(val result: MlsResult) : HistoryDecrypt
+    }
+
+    /**
+     * §17.6 ordering, decrypt and the AAD/sender binding shared by both history envelopes: ordered and
+     * parked exactly like a message; the 'H' AAD must be exactly the event's request id (crypto R3).
+     * [stale] builds the result for an envelope this device can't read.
+     */
+    private suspend fun decryptHistory(
+        mls: MlsEngine, e: Event, conv: String, gen: Long, epoch: Long, from: String, fromDevice: String, requestId: String,
+        serverTs: String?, historyBefore: java.time.Instant?, joined: GroupRef?, stale: (String) -> MlsResult,
+    ): HistoryDecrypt {
+        val rule1 = beforeHistory(serverTs, historyBefore)
+        if (joined != null && gen == joined.generation && epoch < joined.epoch) return HistoryDecrypt.Fail(stale("before this device joined"))
+        val g = mls.group(conv) ?: return HistoryDecrypt.Fail(if (rule1) stale("pre-install") else park(e, conv, gen, epoch))
+        if (gen < g.generation) return HistoryDecrypt.Fail(stale("stale generation"))
+        if (gen > g.generation) return HistoryDecrypt.Fail(if (rule1) stale("pre-install") else park(e, conv, gen, epoch))
+        if (epoch > g.epoch) return HistoryDecrypt.Fail(park(e, conv, gen, epoch))
+        val dec = try {
+            mls.decrypt(conv, gen, b64.decode(e.data["ciphertext"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content } ?: ""))
+        } catch (ex: MlsDecryptException) {
+            return HistoryDecrypt.Fail(stale("decrypt: ${ex.message}"))
+        } catch (ex: IllegalArgumentException) {
+            return HistoryDecrypt.Fail(MlsResult.ControlDropped("history: bad base64"))
+        }
+        if (!dec.sender.userId.equals(from, true) || !dec.sender.deviceId.equals(fromDevice, true)) return HistoryDecrypt.Fail(MlsResult.ControlDropped("history: sender mismatch"))
+        val aadId = lk.codegen.risime.data.history.HistoryAad.decode(dec.authenticatedData)
+        if (aadId == null || !aadId.equals(requestId, true)) return HistoryDecrypt.Fail(MlsResult.ControlDropped("history: bad authenticated_data"))
+        return HistoryDecrypt.Ok(dec)
+    }
+
+    /** §17.7 a `history_request` naming this device: decrypted in order; own vs member from the MLS sender only. */
+    private suspend fun applyHistoryRequest(mls: MlsEngine, e: Event, r: lk.codegen.risime.net.HistoryRequestEvent, historyBefore: java.time.Instant?, joined: GroupRef?): MlsResult {
+        if (!mls.historySupported) return MlsResult.Ignored
+        if (r.toDevices.isNotEmpty() && r.toDevices.none { it.equals(mls.deviceId, true) }) return MlsResult.Ignored
+        if (r.fromDevice.equals(mls.deviceId, true)) return MlsResult.Ignored
+        val d = decryptHistory(mls, e, r.conversationId, r.generation, r.epoch, r.from, r.fromDevice, r.requestId, r.serverTs, historyBefore, joined) { why ->
+            log("history_request ${r.requestId}: can't read ($why): stale")
+            MlsResult.HistoryRequestStale(r, why)
+        }
+        val dec = when (d) {
+            is HistoryDecrypt.Fail -> return d.result.also { if (it is MlsResult.ControlDropped) log("history_request ${r.requestId} dropped: ${it.reason}") }
+            is HistoryDecrypt.Ok -> d.dec
+        }
+        val env = (MlsPayload.decode(dec.plaintext) as? MlsPayload.Decoded.HistoryRequest)?.env ?: return MlsResult.ControlDropped("history_request: not a valid envelope")
+        if (!env.requestId.equals(r.requestId, true)) return MlsResult.ControlDropped("history_request: request_id mismatch")
+        val sender = try {
+            mls.historySender(r.conversationId, dec.sender)
+        } catch (ex: HistoryException) {
+            return MlsResult.ControlDropped("history_request: sender ${ex.message}")
+        }
+        return MlsResult.HistoryRequest(r, env, sender)
+    }
+
+    /** §17.6 a `history_share` to this device: decrypted in order and bound (request id, part/parts, sender). */
+    private suspend fun applyHistoryShare(mls: MlsEngine, e: Event, s: lk.codegen.risime.net.HistoryShareEvent, historyBefore: java.time.Instant?, joined: GroupRef?): MlsResult {
+        if (!mls.historySupported) return MlsResult.Ignored
+        if (s.toDevices.none { it.equals(mls.deviceId, true) }) return MlsResult.Ignored
+        if (s.fromDevice.equals(mls.deviceId, true)) return MlsResult.Ignored
+        val d = decryptHistory(mls, e, s.conversationId, s.generation, s.epoch, s.from, s.fromDevice, s.requestId, s.serverTs, historyBefore, joined) { why ->
+            MlsResult.ControlDropped("history_share: $why")
+        }
+        val dec = when (d) {
+            is HistoryDecrypt.Fail -> return d.result.also { if (it is MlsResult.ControlDropped) log("history_share ${s.requestId} dropped: ${it.reason}") }
+            is HistoryDecrypt.Ok -> d.dec
+        }
+        val env = (MlsPayload.decode(dec.plaintext) as? MlsPayload.Decoded.HistoryShare)?.env ?: return MlsResult.ControlDropped("history_share: not a valid envelope")
+        if (!env.requestId.equals(s.requestId, true) || env.part != s.part || env.parts != s.parts) return MlsResult.ControlDropped("history_share: binding mismatch")
+        return MlsResult.HistoryShare(s, env, dec.sender)
     }
 
     /**
