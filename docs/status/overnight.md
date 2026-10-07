@@ -47,6 +47,15 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.19 (live 2026-10-07, not required): hotfix, a chat that crashed on opening
+- **Cause:** with a message pending in an e2ee DM, opening the chat flushed the outbox on the main
+  thread, and the MLS core's Room transaction threw. Every ChatEngine entry point into the MLS core
+  now runs on `Dispatchers.IO`.
+- **Detection:** debug StrictMode is on, and `scripts/logcat-gate` fails the release gate on a
+  crash or on main-thread Room/MLS work.
+- **Also inside (not visible):** history-sharing groundwork (Room v9 gap index); it passed the
+  two-phone upgrade gate.
+
 ## v0.2.0-nightly.18 (live 2026-10-07, not required): delete UI, call audio fix, groups restore themselves
 - **Delete for me / for everyone**, multi-select, Clear chat and Delete chat are on (§15 send UI).
 - **Calls:**
