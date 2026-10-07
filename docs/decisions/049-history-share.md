@@ -1,9 +1,9 @@
 # 049 — Group and DM history sharing between devices
 
-**Status:** accepted (consent: option A, decided by root 2026-10-07) 2026-10-06 (root). Awaiting the crypto, server and android reviews and
-Harsha's answer on own-device consent. Contract: proposal
-`contract/proposals/2026-10-06-history-share.md` (v1.14 candidate, §17; the number is fixed at
-merge).
+**Status:** accepted (consent: option A, decided by root 2026-10-07) 2026-10-06 (root); merged
+into the contract as **PROTOCOL v1.15 §17** on 2026-10-07 after the crypto, server and android
+reviews (`contract/proposals/reviews/2026-10-06-history-share-*.md`). Contract: proposal
+`contract/proposals/2026-10-06-history-share.md`; where they differ, PROTOCOL.md §17 wins.
 
 ## Context
 After a logout and login, groups show "Earlier messages aren't available on this device" (§13.3).
@@ -56,3 +56,16 @@ long-term answer, a client-encrypted backup (decision 043, "next step"), doesn't
 - **Other members' phones:** always ask their owner.
 - **Why:** fully automatic sharing would hand 30 days of every chat to anyone who takes over the
   phone number.
+
+## At merge (v1.15, 2026-10-07)
+The reviews changed the design in these ways (PROTOCOL.md §17 is normative): own devices are named
+all at once, superseded ones included when they connect, for about 10 minutes before members
+(`history:escalate` ends it early); stale request ciphertexts are refreshed by the requester
+(`history:refresh`, same `request_id` and `rpk`); a reset closes requests; a 30-minute delivery
+deadline; the `history` blob lives until `history:ack` or 48 h; day/week limits counted in
+Postgres; HPKE base mode with the MLS 0x0001 suite and exact `info`/`aad` bytes, a fresh key per
+part, vectors in `contract/v1/history_vectors.json`; the 18-byte `'H'` AAD; own versus member
+decided from the MLS sender; matching on `message_id` + `client_msg_id` + `from` + `server_ts`
+(`from_device` only when both sides have it); call lines only between one user's devices;
+"automatic" sharing only while the old phone is unlocked; and the forgery limits stated plainly
+(a shared message is as trustworthy as the sharing device and the server together).

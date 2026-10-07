@@ -77,6 +77,18 @@ defmodule RisiMe.ContractExamplesTest do
   # v1.14 (members restore an existing member's devices, §12.4a): checked below; the behaviour
   # in test/risime_web/controllers/groups_member_devices_test.exs.
   @checked_v1_14 ~w(device_put_member_devices.json)
+  # v1.15 (history sharing, §17): parse-only placeholders until the server implements it.
+  @pending_v1_15 ~w(blob_upload_history_reply.json blob_usage_reply_history.json
+                     device_put_history_share.json error_request_open.json
+                     event_history_request.json event_history_request_closed.json
+                     event_history_share.json event_history_status.json
+                     event_history_status_refresh.json history_ack.json
+                     history_bundle_entry.json history_bundle_header.json
+                     history_cancel.json history_deliver.json
+                     history_escalate.json history_refresh.json
+                     history_request_payload.json history_request_push.json
+                     history_request_reply.json history_respond.json
+                     history_respond_stale.json history_share_payload.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -116,7 +128,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_11 ++
         @checked_v1_12 ++
         @checked_v1_13 ++
-        @checked_v1_14
+        @checked_v1_14 ++
+        @pending_v1_15
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -1858,6 +1871,15 @@ defmodule RisiMe.ContractExamplesTest do
 
     stored = RisiMe.Repo.get_by!(RisiMe.Devices.Device, user_id: a.user.id, device_id: dev)
     assert stored.capabilities == ex["mls"]["capabilities"]
+  end
+
+  test "v1.15 placeholders: the history sharing examples parse (§17)" do
+    for name <- @pending_v1_15, do: assert(is_map(example(name)), name)
+
+    assert example("history_request_push.json")["sources"] in ~w(own any)
+    assert example("event_history_request.json")["kind"] == "history_request"
+    assert example("history_share_payload.json")["enc"]["label"] == "risime-history-v1"
+    assert "history_share" in example("device_put_history_share.json")["mls"]["capabilities"]
   end
 
   describe "v1.13" do

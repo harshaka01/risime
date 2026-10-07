@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.14 (Release 0.3)
+# RisiMe Wire Protocol — v1.15 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -1124,8 +1124,9 @@ An additive change: v1.9 apps ignore `history_before` and already handle sender 
     They are **not backfilled** (a late estimate would hide decryptable messages, §13.3).
   - **Reset on device removal.** When the server removes a device (any §10.1 removal: `DELETE`,
     logout, eviction, the 60-day prune, a changed `signature_key`), the **next connect** with that
-    `device_id` sets `first_seen_at` to that connect's time. Logout keeps the `device_id` but wipes
-    the device's MLS state, so the next login is a new leaf and needs a new boundary.
+    `device_id` sets `first_seen_at` to that connect's time. "Log out and delete chats" (decision
+    050) wipes the device's MLS state and removes the device, so the next login is a new leaf and
+    needs a new boundary. A plain Log out keeps the MLS state, the device id and the boundary.
 - **Meaning:** an e2ee message with `server_ts < history_before` was encrypted before this
   instance existed (or before its MLS state was last wiped), so this device can never decrypt it.
   Plaintext events are unaffected.
@@ -1169,7 +1170,10 @@ app can't tell a reinstall from a second device.
   (an upsert), across replays, restarts and duplicate deliveries.
 - **Position is forward-only:** it sits at the latest pre-install message's `server_ts`. Each later
   pre-install message moves it later, never earlier. Clients that order by a local timestamp set
-  it to just after that `server_ts`.
+  it to just after that `server_ts`. (v1.15: the one exception is a history import, which may
+  delete or move it earlier, §17.12.)
+- **Gap index (v1.15):** the same transaction also writes a content-free gap row per pre-install
+  message (§17.2), the data behind "Request history".
 - A chat whose only row is the marker stays listed.
 - **Groups:** the same line, keyed by the `grp:` id. `group_event` lines are plaintext metadata and
   replay normally. A new **member** (not a new device) has no earlier events and gets no marker.
@@ -1305,6 +1309,7 @@ the raw bytes as the body, `Content-Type: application/octet-stream`, **`Content-
   - `icon`: an admin of the `grp:` (`403 not_admin`; `404` for a non-member); `icon` with a `dm:`
     is `400 bad_request`.
   - `mls`: unchanged (§12.6).
+  - `history` (v1.15): only the accepted provider device of an open request (§17.9).
 - **Checked before the body is read**, in this order, each answered with `Connection: close` and
   without draining the body: purpose and conversation (`400`), rights (`404`/`403`/`409`),
   `Content-Type` (**`415 bad_media_type`**, `error_bad_media_type.json`), `Content-Length` (missing
@@ -1454,6 +1459,8 @@ avatar.
 | Upload rate | 60 / h | **120 / h and 1000 / day** | **3 / h** |
 | Concurrent uploads | shared | **3 per user** (all purposes) | shared |
 | Quota (live bytes per user) | 256 MiB (§13.4) | **2 GiB** | not counted |
+
+(v1.15 adds the purpose **`history`**: 16 MiB, 48 h, 40 / h, 512 MiB live; §17.9.)
 
 - **Quota:** an upload that would take `used` over the purpose's limit gets
   `413 quota_exceeded {"used", "limit"}` (`error_quota_exceeded.json`, v1.10), checked from
@@ -1749,6 +1756,9 @@ authorisation (§15.4) → blob checks → delete + store. The rate limit comes 
   - **Every other application message** carries an **empty** `authenticated_data`. Receivers drop
     a non-`delete` application message with non-empty `authenticated_data`, and the server should
     refuse one on `msg:send` (`bad_request`).
+  - **v1.15:** the one other canonical form is `'H'` (`0x01 0x48 ‖ request_id`, 18 bytes), only on
+    `history_request`/`history_share` (§17.3). A `'D'` AAD on any type but `delete`, or an `'H'`
+    AAD on any type but those two, is dropped; `msg:send` and `msg:delete` refuse `'H'`.
 
 ### 15.4 Authorisation
 
@@ -2790,7 +2800,620 @@ Auth required (`Authorization: Bearer`), no body → `200` (`calls_turn_reply.js
 - **Infra:** `scripts/turn-smoke` (loopback) incl. the expired-refresh refusal; once public, a
   relay-only call from mobile data.
 
+## 17. History sharing between devices (v1.15)
+Proposal `2026-10-06-history-share.md`, decision 049 (consent option A), reviewed by crypto,
+server and android (`contract/proposals/reviews/2026-10-06-history-share-*.md`). Additive: apps
+without the `history_share` capability are never named, never sent the new event kinds, and see
+nothing new.
+
+After **"Log out and delete chats"** (decision 050), a reinstall, a new phone, a §12.8 rejoin or a
+reset, an e2ee chat shows "Earlier messages aren't available on this device" (§13.3): the device is
+a new MLS leaf and can't decrypt older ciphertext (decision 032). (A plain Log out keeps the MLS
+state and has no gap.) v1.15 lets the user **fill that gap from a device that still holds the
+plaintext**: first the user's own other devices (usually the old phone), then, with their consent,
+other members' devices. The server never sees content or keys. A client-encrypted backup (§17.14)
+stays the complete path; sharing is the 30-day, ad-hoc path.
+
+### 17.0 Principles
+- **Device to device, end to end.** The history travels as encrypted bundle parts from **one
+  provider device** to **the one requesting device**. The server routes, stores the encrypted parts
+  as short-lived `history` blobs, and never sees plaintext or a key.
+- **MLS authenticates, HPKE gives confidentiality to one device, the gap index bounds what can be
+  imported.** The request and the reply are MLS application messages in the conversation's group
+  (attested sender, member leaf at that epoch), routed to one device only. The bundle key is
+  **HPKE-sealed to a fresh per-request key** of the requester (§17.3). Never as a group application
+  message (every current member could read it), never to an MLS leaf or key-package key (key
+  separation; those keys rotate or are consumed); a 1:1 MLS group is too much state for a one-shot.
+- **The requester accepts only what it can place:** entries matching its gap index (§17.2,
+  §17.7). The honest limits of this are in §17.15.
+- **Consent.** The user's own other device: one approval per new device, then automatic while
+  unlocked (§17.8). Another member's device: always asks its user.
+- **Deletes win.** Nothing deleted for everyone, deleted for me or cleared (§15) comes back.
+- **No learning-log entries** (no model call).
+
+### 17.1 Capability
+- A v1.15 app advertises **`"history_share"`** in `mls.capabilities` (`PUT /me/devices/{id}`,
+  `device_put_history_share.json`) only when it can both **provide** (export, seal, upload,
+  deliver) and **receive** (verify, open, import) bundles, i.e. its core has the §17.3 functions.
+- Only devices with the capability are named (§17.4) or may request. It is not part of any
+  readiness and never makes anyone "need to update". Old servers ignore it.
+- A requester none of whose candidate devices has it sees "No device that can share this history is
+  available".
+
+### 17.2 The gap index (client; extends §13.3)
+From v1.15 the client keeps a **content-free gap row** for every pre-install e2ee `message` event
+(§13.3 rules 1 and 2):
+`history_gap(conversation_id, message_id PK, client_msg_id, from, from_device, server_ts,
+generation, epoch, created_at)`, index `(conversation_id, server_ts)`.
+- Written in the **same transaction** as the cursor and the §13.3 marker upsert (the pre-install
+  branch of rule 1 and rule 2), and for messages that §12.8 rejoin/reset make unreadable (parked
+  events dropped by rule 2, old-generation events discarded on a reset or on a newer Welcome).
+- `client_msg_id` is copied from the `message` event; it is the second match key (§17.7).
+  `generation` and `epoch` are diagnostics only (not authenticated, not in the bundle).
+- E2EE reactions can't be told from messages (`kind` null), so they get gap rows too; a gap row says
+  nothing about the content type.
+- **Not** recorded: control events (`delete`, `history_*`, §15.6), own-device echoes, plaintext
+  events (they replay readable), `call_signal` (never in the inbox).
+- Removed when a `delete` event (§15.5) or a `chat:clear` watermark (§15.7) covers it, by Clear chat
+  and Delete chat (in the purge transaction), by a successful import, and by a prune at
+  `server_ts + 30 days` (the inbox TTL).
+- **Installs that passed their gap before v1.15** have no gap rows and get no re-scan: their markers
+  stay without "Request history" and age out within 30 days.
+
+The request range is `[min(server_ts), max(server_ts)]` over the conversation's gap rows.
+
+### 17.3 Crypto (normative; crypto review R1, R3, R7)
+**HPKE profile.** RFC 9180 **base mode** with the HPKE triple of MLS ciphersuite **0x0001**:
+KEM `DHKEM(X25519, HKDF-SHA256)` (0x0020), KDF `HKDF-SHA256` (0x0001), AEAD `AES-128-GCM`
+(0x0001), through the core's existing OpenMLS crypto provider (`hpke_seal`, `hpke_open`,
+`derive_hpke_keypair`; no new dependency). No auth mode: the MLS envelope carrying `hpke_enc` and
+`sealed_key` is signed.
+- **`(rsk, rpk)`**: per request, `derive_hpke_keypair(ikm)` with 32 bytes of OS randomness inside
+  the core. `rpk` is exactly 32 bytes (receivers reject any other length). Seal refuses a low-order
+  `rpk` (an all-zero DH output, RFC 9180 §7.1.4) and open fails on one.
+- **`info`** (binds the context; integers big-endian):
+  `"risime-history-v1"` (17 ASCII bytes) ‖ `request_id` (16 raw bytes) ‖
+  `u16 len ‖ conversation_id` (UTF-8) ‖ `u16 len ‖ requester "<user_id>/<device_id>"` ‖
+  `u16 len ‖ provider "<user_id>/<device_id>"`.
+  Both identities come from **MLS credentials** (requester: its own; provider: the MLS sender of the
+  `history_share`), never from JSON, the bundle header or the server's `provider`.
+- **`aad`** of the HPKE seal (binds `K` to one blob): `u16 part ‖ u16 parts ‖ sha256 (32 raw bytes
+  of the part's ciphertext) ‖ u64 plain_size`.
+- **One fresh `K` and one fresh HPKE seal per part.** `K` is 32 bytes from the OS CSPRNG inside the
+  seal call. `sealed_key` = 32 + 16 = **48 bytes**, `hpke_enc` = **32 bytes**.
+- **The part blob** is the §14.3 `A256GCM-S64K` format with the label **`risime-history-v1`**
+  instead of `risime-media-v1`: `Kp = HKDF-SHA256(salt = empty, IKM = K, info =
+  "risime-history-v1 A256GCM-S64K", L = 32)` and segment AAD `risime-history-v1` (crypto S1: media
+  and history blobs aren't interchangeable). Padmé, segments, nonces, opening and the "release of
+  plaintext" rule are §14.3's. The envelope names the label (`enc.label`).
+
+**The `'H'` authenticated data** (crypto R3). `history_request` and `history_share` envelopes carry
+the MLS `authenticated_data` **`0x01 0x48` (`'H'`) ‖ `request_id` (16 raw bytes)**, exactly **18
+bytes**. §15.3's rule becomes: a non-empty `authenticated_data` is allowed only in the two
+canonical forms, each with its own types:
+- `'D'` (§15.3) only on `delete`; `'H'` only on `history_request`/`history_share`.
+- Receivers drop a `history_*` envelope whose AAD isn't exactly that form or whose AAD `request_id`
+  differs from the envelope's; an `'H'` AAD on any other type; a `'D'` AAD on a `history_*` type;
+  an empty AAD on a `history_*` type.
+- The server parses the AAD on `history:request`, `history:refresh` and `history:deliver`
+  (§17.4) with the same canonical parser, and **`msg:send` and `msg:delete` refuse an `'H'` AAD**
+  (`bad_request`).
+- **The core's admin check:** `process_detailed` must not turn a missing admin record into
+  `Malformed` for the `'H'` form; for `'H'` it skips the `sender_is_admin` lookup and returns
+  `None` (admin status is irrelevant to history).
+
+**Key handling: `rsk` and `K` never cross the FFI** (crypto R7).
+- `Client::history_keygen(request_id) -> rpk` stores `rsk` in the core's sealed storage under
+  `risime/history/<request_id>` **in the caller's transaction** (the same `mls_kv`, savepoint
+  semantics of §10.4) and returns only `rpk`. The app writes its request row in the same
+  transaction, before `history:request` is pushed.
+- `history_seal(rpk, ctx: HistoryContext, plaintext: bytes, out_path) -> SealedPart {hpke_enc,
+  sealed_key, plain_size, size, sha256}`: generates `K`, encrypts the part (`A256GCM-S64K`, history
+  label), HPKE-seals `K` with the `info`/`aad` above. No `Client` state; `K` never leaves Rust.
+- `Client::history_open(request_id, ctx, hpke_enc, sealed_key, in_path) -> bytes`: HPKE-opens `K`
+  with the stored `rsk` and AEAD-opens the blob; every segment and the final flag are verified
+  before any byte is returned.
+- `Client::history_forget(request_id)` deletes `rsk` (after the last part, on cancel, on any
+  terminal state); `Client::history_open_requests() -> [request_id]` feeds a start-up sweep that
+  forgets anything older than 48 h. `secure_delete` and the WAL checkpoint apply (§15.6). A request
+  row whose `rsk` is gone is closed locally.
+- `HistoryContext {request_id, conversation_id, requester, provider, part, parts, sha256,
+  plain_size}` is the one record behind `info` and `aad`.
+- `history_aad_encode(request_id) -> bytes` and `history_aad_decode(bytes) -> request_id` are free
+  functions next to the `'D'` helpers (one canonical parser on every side).
+- The bundle plaintext crosses the FFI **as bytes** (≤ 16 515 072 per part), never as a plaintext
+  temp file. No production API takes a caller-supplied `K` or `rsk`.
+
+**Test vectors: `contract/v1/history_vectors.json`** (generated by the crypto core's generator and,
+byte for byte, by an independent reference script, as `media_vectors.json`; the crypto and Android
+tests run every case). Format, all binary fields lowercase hex:
+```json
+{"v": 1, "comment": "…", "suite": {"mode": "base", "kem": 32, "kdf": 1, "aead": 1},
+ "label": "risime-history-v1",
+ "aad_h": [{"name": "…", "request_id": "<uuid>", "bytes": "<hex>", "expect": "ok" | "Malformed"}],
+ "positive": [{"name": "…", "ikm_r": "<32>", "rsk": "<32>", "rpk": "<32>", "ikm_e": "<32>",
+   "request_id": "<uuid>", "conversation_id": "…", "requester": "<user>/<device>",
+   "provider": "<user>/<device>", "part": 1, "parts": 1, "plain_size": n, "sha256": "<32>",
+   "info": "<hex>", "aad": "<hex>", "k": "<32>", "hpke_enc": "<32>", "sealed_key": "<48>",
+   "plain": "<hex, small>", "cipher": "<hex>"}],
+ "negative": [{"name": "…", "base": "<positive name>", "change": {"<field>": "<value>"},
+   "expect": "OpenFailed" | "SealRefused" | "Malformed", "why": "…"}]}
+```
+`ikm_e` makes the HPKE ephemeral key deterministic (RFC 9180 `DeriveKeyPair`, test builds only;
+production seals draw it from the OS). **Required negative cases:** wrong `request_id`, wrong
+provider identity, wrong requester identity, wrong `part` in `aad`, wrong `sha256` in `aad`,
+swapped `hpke_enc` (from another positive case), truncated `sealed_key` (≠ 48 bytes), low-order
+`rpk` (`SealRefused`), wrong `rsk`, the blob opened with the `risime-media-v1` label; and in
+`aad_h`: 17 and 19 bytes, a `0x01 0x44` prefix, a wrong version byte (all `Malformed`).
+
+### 17.4 Server: pushes, eligibility, naming
+All pushes are on the inbox topic (§2.2), from a socket with a `device_id`; replies follow §2.2
+(error replies `{"reason": …}`). Every `ciphertext` is checked with the
+existing `RisiMe.MLS.Wire` parser: a PrivateMessage, `content_type` application, group id
+`"<conversation_id>#<generation>"` and `epoch` equal to the JSON fields, the current generation
+and epoch as `msg:send` (`stale_epoch` otherwise, §10.3), at most 24 KiB (`too_long`), and the
+`'H'` AAD equal to `request_id` (§17.3; `bad_request` otherwise).
+
+**`history:request`** (requester → server), `history_request_push.json`:
+`{"request_id": "<uuid-v4>", "conversation_id", "sources": "own" | "any", "range": {"from", "to"},
+"gap_count", "ciphertext", "generation", "epoch"}` → ok `{"request_id", "state": "searching",
+"own_devices": [{"device_id", "device_name", "last_seen_at", "online"}]}`
+(`history_request_reply.json`; `own_devices` = the caller's own candidate devices, so the UI can say
+"Open RisiMe on <device name>").
+- **Who may request:** an active member of the `grp:` or a participant of the e2ee `dm:`, whose
+  calling `device_id` is in `mls_group_devices` at the current generation and advertises
+  `history_share` (`not_member` otherwise; `bad_request` without the capability). A DM with
+  `sources: "any"` also requires friends and no block (`not_member`, so a block isn't revealed);
+  `sources: "own"` doesn't (the partner isn't involved).
+- **Range:** `from` is clipped to `now − 30 days`; `bad_request` when `to < now − 30 days`,
+  `from > to`, or `to > now + 5 min`.
+- **Errors:** `not_member`, `not_e2ee`, `stale_epoch`, `too_long`, `bad_request`,
+  `rate_limited` (§17.10), **`request_open`** (this device already has an open request for this
+  conversation; `error_request_open.json` carries its `request_id`). Idempotent by `request_id`: a
+  repeat from the same device returns the same reply.
+
+**Eligibility.**
+- **The requester's intervals:** `group_member_intervals` (§14.8) of the requester's user,
+  intersected with `range`; a DM: `[max(e2ee_since, now − 30 days), now]`. Empty → `bad_request`.
+- **Own candidates:** the requester user's other devices in `mls_group_devices` at the current
+  generation with `history_share`. **The §12.1 superseded filter does not apply:** a superseded
+  device is usually the old phone the user is about to open; it is *dormant* and named when its
+  inbox joins.
+- **Member candidates** (`sources: "any"` only): devices of other active members (never agents)
+  in the group at the current generation, with `history_share`, not superseded, whose user's
+  intervals overlap the requester's intervals.
+- **Both:** a device whose census `first_seen_at` (§13.2) is after `range.to` holds nothing asked
+  for and is never named.
+
+**Naming** (`RisiMe.History`; the server names, devices don't race):
+1. **Own phase.** Every own candidate is named **at once** (one user; the first `accept` wins),
+   dormant ones when their inbox joins. The phase lasts **10 minutes**, or until every own
+   candidate has answered `decline`/`unable` (not `stale`), or until the requester pushes
+   **`history:escalate`**. Own devices may accept for the **whole life** of the request, also after
+   members were named.
+2. **Member phase** (`sources: "any"`; at once when the user has no own candidate). Up to **3
+   member users at a time**, by the largest overlap with the requester's intervals, then the
+   earliest `first_seen_at`, then the most recently seen; each named user's candidate devices get
+   the request, and the user has **24 h** to answer. A decline or an expiry names the next user. The
+   first `accept` (own or member) wins; every other named user gets `history_request_closed`
+   `accepted_elsewhere`.
+3. No candidate left (all answered, none dormant) → `unavailable`. The request **expires 48 h**
+   after creation (`expired`) whatever its state.
+- A named device whose user stops being an eligible member, whose device is removed, or that loses
+  `history_share` is un-named at once.
+
+**Stale request ciphertexts** (crypto R2, server R2). The stored `history_request` ciphertext is
+copied into a candidate's event **at naming time**. When it is more than **2 epochs** behind the
+group at naming time, or a provider answered `unable` with `"reason": "stale"`, the request goes to
+**`refresh`**: the server sends `history_status` `refresh` to the requester device and names that
+candidate only after **`history:refresh`** `{"request_id", "ciphertext", "generation", "epoch"}`
+(`history_refresh.json`; same checks as `history:request`; ok `{}`; `gone` for a closed request)
+arrives. The requester encrypts a **new** `history_request` envelope at its current epoch with the
+**same `request_id` and the same `rpk`**. If the requester is offline, naming waits (the 48 h
+expiry still runs). A stale answer is not a decline. The server never "fixes" a stale request in
+any other way (never sends `rpk` in cleartext); a provider accepts `rpk` only from a decrypted
+`history_request` whose MLS sender equals the event's `from`/`from_device`.
+
+**`history:respond`** (named provider → server), `history_respond.json`,
+`history_respond_stale.json`: `{"request_id", "decision": "accept" | "decline" | "unable",
+"reason": null | "stale" | "no_data"}` → ok `{}`, or `gone` (accepted elsewhere, cancelled,
+expired, or the caller isn't a named device: never reveal more). `unable` with `no_data` counts as
+a decline; `stale` triggers the refresh. Accept races: under one lock per `request_id`, the first
+`accept` wins.
+
+**`history:deliver`** (accepted provider device → server), `history_deliver.json`:
+`{"request_id", "ciphertext", "generation", "epoch", "part", "parts"}` (the `history_share`
+envelope; `1 ≤ part ≤ parts ≤ 20`, `parts` constant per request) → ok `{}`; `gone` from any other
+device or for a closed request. Idempotent by `(request_id, part)`.
+
+**Delivery deadline.** No part within **30 minutes** of `accept`, or no new part for 30 minutes
+during delivery → the provider is dropped (`history_request_closed` `expired` to it) and naming
+resumes without it. Each delivered part resets the deadline.
+
+**`history:ack`** (requester → server), `history_ack.json`: `{"request_id", "part", "result":
+"imported" | "rejected"}` → ok `{}`. Sent after a part was imported **or rejected** (so its blob
+goes). When every part is acked the request is `done`.
+
+**`history:escalate`** (requester → server), `history_escalate.json`: `{"request_id"}` → ok `{}`;
+ends the own phase now ("Ask group members now"). `bad_request` for `sources: "own"`.
+
+**`history:cancel`** (requester → server), `history_cancel.json`: `{"request_id"}` → ok `{}`;
+closes it everywhere (`cancelled`).
+
+**Closing** (any terminal state): `history_request_closed` to every user ever named; the stored
+request ciphertext is nulled; open `history` blobs follow §17.9. Requests are also closed when:
+- a **§12.8 reset** of the conversation (new generation): `expired` (the old generation's request
+  can't be authenticated any more; the requester may ask again after it rejoins);
+- the requester user is removed or leaves, or the requesting device is removed: `cancelled`;
+- a `chat:clear` (§15.9) by the requester's user for that conversation: `cancelled`.
+
+**State machine** (`history_status.state`): `searching` (own phase), `waiting_for_member`,
+`refresh`, `accepted`, `receiving` (first part delivered), and the terminal `done`, `unavailable`,
+`cancelled`, `expired`. A decline is never reported: the requester sees `unavailable` only when no
+candidate is left, and never learns who declined or who is being asked.
+
+**Push wake.** Every new event uses the existing content-free `{"type": "inbox", "v": "1"}` wake
+(§8.2) to all tokens of the users it goes to; there is no new push type and no visible-notification
+push. The app decides what to show after it syncs (a locked app shows only its generic locked
+notification). A logged-out device has no token (decision 050) and is reached only when the user
+signs in on it.
+
+### 17.5 Events (server → client)
+Ordinary inbox events (cursor-ordered, replayed, written with `conversation_id`) with a **48 h
+TTL**. They are never `message` events: no `message_index` row, no acks, no receipts, never
+`msg:delete`/`chat:clear` targets (`gone`), never unread, never shown in history. Events with
+`to_devices` land in the user's partition; other devices advance the cursor and ignore them. Apps
+without `history_share` are never named and never get `history_status`/`history_share`; if one
+sees an unknown kind it ignores it (§0).
+- **`history_request`** to each named user, `to_devices` = the named devices
+  (`event_history_request.json`): `{"request_id", "conversation_id", "from", "from_device",
+  "range", "intervals": [{"from", "to"}], "gap_count", "ciphertext", "generation", "epoch",
+  "consent": "own" | "member", "expires_at", "to_devices", "server_ts"}`. `intervals` = the
+  requester's intervals clipped to `range` **and** to the candidate user's own overlap (a candidate
+  gets only what it may share). `consent` is a **display hint only** (§17.8). A refresh sends a new
+  `history_request` event with the same `request_id`; the provider replaces the old one.
+- **`history_request_closed`** to every user ever named (`event_history_request_closed.json`):
+  `{"request_id", "conversation_id", "reason": "accepted_elsewhere" | "cancelled" | "expired" |
+  "done", "server_ts"}`. A pending prompt or export for it disappears.
+- **`history_status`** to the requester, `to_devices: [requester]` (`event_history_status.json`,
+  `event_history_status_refresh.json`): `{"request_id", "conversation_id", "state", "provider":
+  {"user_id", "device_id"} | null, "to_devices", "server_ts"}`. `provider` only from `accepted`
+  on; it is a display hint, never the label source (§17.7).
+- **`history_share`** to the requester, `to_devices: [requester]` (`event_history_share.json`):
+  `{"request_id", "conversation_id", "from", "from_device", "ciphertext", "generation", "epoch",
+  "part", "parts", "to_devices", "server_ts"}`.
+
+### 17.6 The envelopes (MLS application messages, `'H'` AAD)
+`history_request_payload.json`:
+```json
+{"v": 1, "type": "history_request", "request_id": "…",
+ "range": {"from": "…", "to": "…"}, "gap_count": 412,
+ "hpke": {"kem": "x25519", "pk": "<b64, 32 bytes rpk>"}}
+```
+`history_share_payload.json`:
+```json
+{"v": 1, "type": "history_share", "request_id": "…", "part": 1, "parts": 1,
+ "blob": {"blob_id": "…", "size": 1048832, "sha256": "<b64>"},
+ "enc": {"alg": "A256GCM-S64K", "label": "risime-history-v1", "plain_size": 1040000,
+         "hpke_enc": "<b64, 32 bytes>", "sealed_key": "<b64, 48 bytes>"},
+ "count": 398, "range": {"from": "…", "to": "…"}}
+```
+**Strict validation** (as §14.4): `v` = 1; `request_id` a UUID equal to the `'H'` AAD and, for a
+share, to an open request **of this device**; `kem` = `x25519` and `pk` 32 bytes; `alg` and
+`label` exactly as above; `hpke_enc` 32 and `sealed_key` 48 bytes; `1 ≤ part ≤ parts ≤ 20`;
+`size` ≤ 16 MiB and consistent with `plain_size` (Padmé + 16 per segment, §14.3); `sha256` 32
+bytes. Anything else is dropped and logged by count. Old apps ignore both types (§10.3) and never
+receive them. Both are **control envelopes**: never stored as messages, never §13.3 lines.
+- **The requester** accepts a share only if its MLS sender is a device of its own user or (for
+  `sources: "any"`) of a current member of the conversation (crypto S3).
+
+### 17.7 The bundle: export (provider) and import (requester)
+**Provider: own versus member** (crypto R4). The provider decrypts the `history_request` (catching
+up to its epoch first; `unable`/`stale` when it can't, §17.4) and decides **own vs member from the
+MLS sender's `user_id`**: equal to this device's user → own; otherwise member. The event's
+`consent` field is a display hint; if it disagrees with the credential the request is treated as
+`member` (always ask) and logged. The `rpk` comes only from that decrypted envelope.
+
+**Export filters** (android R2, R3). Only rows of the one conversation that are, at export time:
+- `kind` `text` or `image` with a `message_id`, not deleted, not tombstoned or hidden-tombstoned,
+  not "deleted for me" (purged), not `deleteUnverified`, not a system row (§13.3 markers, §12.8
+  lines, `group_event` lines), not an outbox row (sending/failed), with media not in the
+  `deleting` state, and with the **TimeUUID time of `message_id` after the provider's
+  `cleared_upto`** (§15.7 compares TimeUUID times);
+- reactions from the provider's reaction state: one entry per `(target, reactor, emoji)` with its
+  confirmed `message_id`, op and time, only for targets in the bundle;
+- **call lines (`kind = 'call'`) only when the requester is the same user** (the stored `call_end`
+  envelope is then from the right perspective, §16.6); member shares skip them;
+- inside `range`, inside the event's `intervals` **and** the provider's local view of the
+  requester's membership; the narrower wins. The local view always exists: start = the
+  `group_event` that added the requester's user, or this device's own join if the requester was
+  already a member then; end = a later `removed`/`left` line; several intervals for rejoins. A DM:
+  the whole range.
+
+**Building parts** (android R4). Selected newest first, then each part written **oldest first**;
+when the 20-part cap cuts, it cuts the **oldest** end (the requester shows "Only part of the
+history was shared"). A part ends at **5 000 entries or 16 515 072 bytes of plaintext**, whichever
+comes first. Built in memory and passed to the core as bytes.
+
+**Bundle plaintext** (JSON Lines, UTF-8): a header line (`history_bundle_header.json`)
+`{"v": 1, "type": "history_bundle", "request_id", "conversation_id", "provider":
+"<user_id>/<device_id>", "part", "parts", "count"}` (informative: the requester takes the provider
+from the MLS credential), then one line per entry (`history_bundle_entry.json`):
+`{"message_id", "client_msg_id", "from", "from_device": "<device_id>" | null, "server_ts",
+"payload": {…}}`. `payload` is the original application envelope: `text`, `image` (reconstructed
+from the stored media row: `blob_id`, `blob_size`, `blob_sha256`, the unsealed `enc` and `thumb`,
+`mime`, `w`, `h`, caption; validated with §14.4 before export; expired images are still exported),
+`reaction`, or `call_end` (own shares only). Images are **by reference**: the requester's user is
+already a reader of the original `media` blob (§14.2); a blob past its TTL shows "This photo is no
+longer available".
+
+**Import** (requester, android R4b; one Room transaction per part, the cursor untouched):
+1. The `history_share` envelope verified (§17.6); the blob fetched and `sha256` checked;
+   `history_open` (§17.3) with `HistoryContext` built from this request, this device and the
+   share's **MLS sender**.
+2. The header's `request_id`, `conversation_id`, `part` and `parts` must match; otherwise the whole
+   part is dropped (and still acked `rejected`).
+3. **Matching** (crypto R6): an entry is importable only if a gap row has the same **`message_id`**,
+   **`client_msg_id`**, **`from`** and **`server_ts`** (compared as instants). `from_device` is
+   compared only when both sides have it. The gap row must have been **created before the request
+   was sent** (a later, possibly server-planted gap row isn't importable for this request). No local
+   row with that `message_id` may exist (messages, `del:` placeholders); its `message_id` time must
+   be after the requester's `cleared_upto`; the payload must pass the live validation of its type
+   (§11, §14.4, §16.2). Otherwise skipped (counted, logged by count).
+4. **Hidden tombstones** (android R8): `scope = me` always blocks the id. `scope = everyone`:
+   re-run §15.4 step 4 with `S` = the gap row's `from`; allowed → insert a tombstone instead of the
+   content; not allowed → import and drop the hidden tombstone.
+5. Stored as an ordinary row with `client_msg_id` **from the gap row**, `origin = "shared"` (member)
+   or `"own_device"`, `shared_by = <provider user_id from the MLS credential>`, local time from
+   `server_ts` (§13.3 "Replayed history"), `outgoing = (from == me)` with status sent and **no
+   ticks**, **never notified, never unread, never acked, no receipts**. Images: a `media` row in the
+   remote state with `enc`/`thumb` re-sealed under this device's store; nothing downloaded inside the
+   transaction (downloads afterwards as for live images; auto-download only unmetered and only the
+   newest 50). Reactions apply only to a target held after this part and never overwrite a newer
+   local reaction state.
+6. The matched gap rows are deleted, the markers updated (§17.12), then `history:ack`.
+
+After the last part, cancel, or any terminal state: `history_forget` (§17.3). Partial parts stay
+(they are verified rows). A `delete` arriving later tombstones an imported row through the normal
+§15.6 path, including the purge of its re-sealed image key and thumbnail.
+
+### 17.8 Consent and policy (decision 049, option A)
+- **The user's own other device: one approval per new device, then automatic.** The first time a
+  new device of mine asks, my existing device shows **"Your new phone (<device name>, signed in
+  <date>) wants your chat history. Allow?"** [Allow] [Not now], with "If this isn't you, someone may
+  be using your number. Tap Not now." After Allow, later requests from that device are answered
+  automatically, and the provider shows a quiet "Shared chat history with your new phone".
+  - The approval is keyed by **(requester `device_id`, its leaf signature key)** from the MLS
+    credential, so a re-registered device with a new key (§10.1) asks again. It lives in the sealed
+    store (`mls_kv`, same transaction rules as MLS state), is listed in Settings → Privacy ("Phones
+    allowed to get your history", with Remove), and is forgotten when that device leaves the user's
+    device set.
+  - **"Automatic" means only while unlocked.** A fingerprint-locked app (§10.4) has no bearer and
+    can't sync; it shows only its generic locked notification. The request is delivered and the
+    share starts without a prompt at the next unlock. The requester's UI says "Open RisiMe on
+    <device name>" (from `own_devices`), or "Sign in on your other phone" for a logged-out one.
+- **Another member's device: always ask.** A notification on a "History requests" channel and an
+  in-chat banner: **"<name> wants the group history from when they were in the group. Share?"**
+  [Share] [Not now] (DM: "<name> wants your chat history. Share?"), with "about <gap_count>
+  messages". Expires after 24 h. No "always" option. A notification tap goes through the
+  fingerprint gate.
+- **Settings → Privacy:** "Share chat history with other members' new devices" (default on = ask;
+  off → `decline` without prompting) and a separate own-device switch.
+- **Admin policy** ("members' phones may share automatically"): not in v1.15.
+
+### 17.9 The `history` blob purpose (extends §14.2, §14.5)
+| | `history` |
+|---|---|
+| Conversations | `dm:` (e2ee) and `grp:` |
+| Upload | `POST /api/v1/blobs?purpose=history&conversation_id=…&request_id=…&client_blob_id=…`, only by the **accepted provider device** (`X-Device-Id`) of a request in `accepted`/`receiving` (`404` otherwise); idempotent by `client_blob_id` (required) as §14.2; reply `blob_upload_history_reply.json` |
+| Max size (ciphertext) | 16 MiB |
+| Parts | at most 20 blobs per request (`400 bad_request`) |
+| Readers | the uploader, and the **requester's user** while the request is open or `done` (`404` otherwise) |
+| TTL | **48 h from upload**; deleted earlier on the requester's **`history:ack`** of that part (+1 h), on cancel, and on a close without delivery |
+| Upload rate | 40 / h per user; the 3-concurrent-uploads slot shared with `media` |
+| Quota | 512 MiB live per user, separate from `media` (`413 quota_exceeded`); in `GET /blobs/usage` as `"history"` (`blob_usage_reply_history.json`) |
+| Guard | counted with `media` in the free-space guard (`507 storage_full`) |
+
+`blobs` gains a nullable, indexed `request_id`; the reader check goes `request_id` → request →
+requester user. `msg:delete` `blob_ids` never match `history` blobs.
+
+### 17.10 Abuse limits
+Counted from **Postgres rows**, never from the in-memory limiter (a restart must not forget them):
+- `history:request`: at most **3 per user per conversation per 24 h** and **30 per user per 24 h**;
+  one open request per device per conversation (`request_open`).
+- A member user is named by a given requester **at most twice per conversation per 7 days** (a
+  "Not now" counts), never within 24 h of declining that requester, and at most **10 times per day
+  across all requesters**.
+- Burst limits on the pushes (per minute) stay in the in-memory limiter, like other channel limits.
+- A device that receives a `history_share` it didn't ask for, or one that fails verification, drops
+  it and logs by count.
+
+### 17.11 Server storage (queries first)
+**Postgres** (state, limits and the request ciphertext; no content):
+```
+history_requests(request_id uuid PK, requester_user, requester_device, conversation_id,
+  generation, range_from, range_to, gap_count, sources 'own'|'any', state, phase 'own'|'member',
+  provider_user, provider_device, accepted_at, parts, parts_delivered, parts_acked,
+  request_ciphertext bytea (≤ 24 KiB, nulled at close), request_epoch, created_at, expires_at,
+  closed_at)
+history_candidates(request_id, user_id, device_id, phase, named_at, named_until,
+  answer 'accept'|'decline'|'unable'|'stale'|null, answered_at)  PK (request_id, device_id)
+```
+| Query | Index |
+|---|---|
+| the open request of `(requester_device, conversation_id)` | unique partial index on open states |
+| a request by id, under a lock, for every transition | PK + one advisory lock per `request_id` |
+| requests of a user in 24 h, per conversation and in total | `(requester_user, conversation_id, created_at)`, `(requester_user, created_at)` |
+| candidates of a request | PK |
+| how often member `U` was named by `R` in `C` in 7 days; last decline; per day | `history_candidates (user_id, named_at)` |
+| open requests to name on an inbox join of device `D` | `history_candidates (device_id)` where unanswered |
+| open requests of a conversation / of a device (reset, removal, clear) | partial indexes on open states |
+| intervals of the requester and every member | `group_member_intervals` (exists) |
+| `history` blob readers | `blobs (request_id)` |
+
+The candidates are a **normalised table**, not a jsonb column. Rows are kept **8 days after
+creation** (so the 7-day window is complete), pruned daily. Timers: an Oban worker
+(`RisiMe.Workers.HistoryTimer`, own queue, modelled on `GroupTimer`), one job per deadline
+(own-phase end, member window, delivery deadline, expiry), args are ids only and a stale job is a
+no-op; the inbox-join hook names dormant candidates.
+
+**Cassandra:** no new table. The four event kinds are `inbox_events` rows behind
+`RisiMe.Messaging.Store` with a **per-write TTL of 48 h** (`USING TTL 172800`, an option on
+`append_event`). No `ALLOW FILTERING`, no secondary index.
+
+### 17.12 Client UI and markers
+- **"Request history"** is an action on the §13.3 marker (and on the §12.8 reset line) while the
+  conversation has gap rows and this device has no open request for it; markers with no gap rows
+  get no action. It opens "Get earlier messages from: [Your other phone] [Your other phone or group
+  members]" (DM: "[Your other phone] [Your other phone or <name>]"), i.e. `sources` `own`/`any`.
+- **Progress** on the marker line: "Looking for your other phone…", "Open RisiMe on <device name>
+  to share" (with "Ask group members now" → `history:escalate`), "Asking group members…" (never
+  naming who), "Receiving history… 2 of 3", "No device could share this history right now" with
+  "Try again".
+- **Markers: an explicit exception to §13.3's forward-only rule** (android R5):
+  - a new one-per-conversation row **`sys:history-shared:<conversation_id>`** (upsert), "History
+    shared by <name>" or "History restored from your other device", placed just before the oldest
+    imported row (`local_ts = oldest − 1`); a later share updates the text and moves it only
+    earlier;
+  - the gap marker `sys:history:<conversation_id>` is **deleted** when no gap rows remain;
+    otherwise it is **moved to the newest remaining gap row** (it may move earlier) and reads "Some
+    earlier messages aren't available on this device", still with "Request history".
+- **Residual gap rows are normal** (superseded reactions, call lines in member shares, rows the
+  provider deleted or never stored, omitted entries). After a `done` share the remaining rows of the
+  range are marked as asked from that provider, the line reads "Some earlier messages couldn't be
+  restored", and "Request history" offers only the **other** source.
+- **"Shared by <provider>"** (the name from the provider's **MLS credential**) in the info sheet of
+  every imported message not sent by the provider; the block header covers the chat view. Own-device
+  restores carry no label.
+- The provider shows the pending member request in the chat until it is answered or expires.
+
+### 17.13 Interaction with §12.8, §13 and §15
+- **§13:** the rules are unchanged except the marker exception of §17.12; the gap index is the data
+  behind the markers.
+- **§12.8:** messages lost to a rejoin or reset get gap rows and can be requested after the device
+  is in the new generation; a reset closes open requests (§17.4).
+- **§15:** deleted-for-everyone and deleted-for-me messages are never replayed, so never get gap
+  rows; a later `delete` removes the gap row or tombstones the imported row; hidden tombstones as
+  §17.7 step 4; the provider never exports tombstones or rows before its `cleared_upto`, the
+  requester skips rows before its own. Clear chat and Delete chat delete the gap rows in the purge
+  transaction and cancel an open request (`history:cancel`). Delete for me of an imported row works
+  as for any row.
+- **Removed members** can't request (`not_member`). A member removed after a message keeps it and
+  may provide it only to someone whose interval covered it.
+
+### 17.14 Encrypted backup (coordination)
+The future backup proposal reuses the bundle format (§17.7) as its unit, with `origin = "backup"`,
+so restore and sharing share one import path. A backup restore runs first on a new device; the gap
+rows left after it are what "Request history" fills. Backups are not bound to the gap index or the
+30-day window.
+
+### 17.15 Privacy, forgery limits and the learning log (crypto R5)
+**What a requester can and can't verify.** OpenMLS 0.9 can't carry the original sender's proof: the
+provider no longer holds past-epoch secrets (and handing them over would decrypt deleted and
+out-of-entitlement messages), consumed message keys are deleted, and `ProcessedMessage` doesn't
+expose the signature (whose signed content includes a `GroupContext` the requester can't verify).
+So in v1.15:
+- **Sender, `message_id`, `client_msg_id` and time are fixed by the gap index**, i.e. by server
+  metadata the requester recorded before asking, cross-checked against the provider's copy. The
+  provider's copy of `from` was MLS-verified on the provider's device; the requester trusts the
+  provider for that check.
+- **The content of other people's messages is only as honest as the provider.** A member provider
+  can alter text, change an entry's type (text, image, reaction), point an image entry at any blob
+  the requester's user can read, and omit any entry.
+- **It can't** add an entry without a gap row, change an entry's sender, time or position, revive a
+  message the requester holds as a (hidden) tombstone or cleared, or read anything.
+- **The server and a member provider together** can fabricate: the server can plant fake
+  undecryptable events (any id, any `from`) that become gap rows, and the provider fills them. **A
+  shared message is as trustworthy as the sharing device and the server together.** Own-device
+  shares have the same technical limits, but the source is the user's own phone.
+- Hence the "Shared by <provider>" label, from the MLS credential only. Verifiable shares
+  (sender-signed payloads) would make each message a transferable, non-repudiable statement; that is
+  a later product decision (deniability), not in v1.15.
+
+**Privacy.** The server learns that a device asked for a conversation's history, the range and
+count, which devices were named, who accepted (never who declined, to the requester), and part
+sizes; never content or keys. A member who shares discloses what it holds, filtered to the
+requester's membership. Logs carry counts and ids only, never ranges with user ids at info level.
+The app's privacy note says this, including the forgery limit above.
+
+**Learning log: none.** No model call. The on-device behaviour log records nothing about history
+sharing; shared plaintext stays on the two devices.
+
+### 17.16 Android client (normative where it says "must")
+- **Room v9:** `history_gap` (§17.2), `history_requests` (`request_id, conversation_id, sources,
+  state, provider_user, parts, parts_done, created_at, expires_at`), `messages.origin`,
+  `messages.shared_by`, `messages.from_device` (nullable, filled for new rows so later bundles carry
+  it). The request row must be written in the same transaction as `history_keygen`, before
+  `history:request` is pushed.
+- `history_share` events go through `MlsPipeline` in event order (decrypt, validate, store the
+  part's reference in the request row, cursor); the fetch, `history_open` and the import run in a
+  worker outside that transaction. On `history_status` `refresh`: a new `history_request` (same
+  `request_id`, same `rpk`) through the serial per-conversation send lane, then `history:refresh`.
+- **Provider export runs in a foreground worker:** a long-running WorkManager worker with
+  `setForeground` (foreground service type **`dataSync`**, `FOREGROUND_SERVICE_DATA_SYNC` in the
+  manifest) and an ongoing "Sharing chat history…" notification. It holds the realtime connection
+  for `history:respond`/`history:deliver`, and persists per-part progress (`client_blob_id`,
+  `blob_id`, delivered) so a killed process resumes rather than restarts. It starts only after an
+  explicit Share or an option-A approval, and only while unlocked.
+- **Chunk order** (each green on the Android gate): (1) the gap index only (migration, gap rows in
+  `MlsPipeline`, removal by delete/clear, the prune), shipped first so gap rows exist when sharing
+  works; (2) models and parsing of every new example, strict envelope validation, the `'H'` AAD
+  helpers; (3) the core functions through UniFFI and the vectors test (after the crypto release);
+  (4) the provider (decrypt, own vs member, consent, export filters, foreground worker, upload,
+  deliver, `unable`/`stale`); (5) the requester (marker action, request row with keygen, status,
+  refresh, share handling, the import worker, markers, labels, `history:ack`, cancel); (6) the
+  `history_share` capability on, only when 4 and 5 are both in, then live interop.
+
+### 17.17 Test coverage (all gates)
+- **Crypto:** seal/open round trip; every `history_vectors.json` case (positive and negative);
+  `rsk` absent after `history_forget` and after a rolled-back transaction; the `'H'` AAD round trip,
+  a mismatch, and `'D'`/`'H'` type swaps dropped; `process_detailed` on an `'H'` message at an epoch
+  without an admin record returns `None`; `K` and `rsk` not reachable from any FFI function.
+- **Server:** the own phase names every own candidate at once, a superseded one when its inbox
+  joins, and skips devices whose `first_seen_at` is after `range.to`; escalation after 10 minutes,
+  after every own answer, or on `history:escalate`; an own device accepting in the member phase
+  wins; member eligibility by overlapping intervals and the capability; `intervals` clipped to the
+  range and the candidate's overlap; the refresh path (`stale`, epoch drift > 2, naming waits for
+  `history:refresh`); a reset closes requests; the delivery deadline drops a silent provider;
+  `history:ack` deletes blobs and `done` needs every ack, no ack keeps them until 48 h; the blob
+  reader matrix (requester user `200`, another member `404`, after close `404`) and uploads refused
+  for a non-accepted device; limits counted from Postgres survive a restart; DM `sources: "own"`
+  without friendship, `"any"` with a block → `not_member`; range clipping; `request_open`;
+  accept races (first wins, others `gone` and `history_request_closed`); `history_status` never
+  names a decliner; the AAD checks, and an `'H'` AAD on `msg:send`/`msg:delete` → `bad_request`;
+  events only to `to_devices`, with a 48 h TTL; every new example; no `ALLOW FILTERING`.
+- **Android (JVM):** gap rows for pre-install, rejoin and reset messages (with `client_msg_id`),
+  none for control events; removal by `delete`, `chat:clear`, Clear chat and the prune; export
+  filters (intervals ∩ local view, tombstones, hidden tombstones, `cleared_upto` by TimeUUID time,
+  system rows, outbox, call lines only for own shares) and part building (byte bound, oldest end
+  cut); import rejects no gap row, a mismatch of `message_id`/`client_msg_id`/`from`/`server_ts`, a
+  gap row newer than the request, an existing row, a hidden tombstone, a malformed payload; imported
+  rows not notified, unread or acked; images by reference; the marker exception and
+  `sys:history-shared`; own vs member from the MLS sender (a lying `consent` asks); the option-A
+  record keyed by device and key; parsing every new example.
+- **Live interop** (not a gate): own new phone restored from a locked old phone after unlock, a
+  member share, a refusal, a refresh after epoch drift, a delete racing an import, Clear chat during
+  a request.
+
 ## Changelog
+- **v1.15** (2026-10-07): history sharing between devices (§17, decision 049, consent option A),
+  reviewed by crypto, server and android. The `history_share` capability; a content-free client
+  gap index (`message_id`, `client_msg_id`, sender, `server_ts`) per pre-install message; the
+  pushes `history:request` (with `own_devices`), `history:refresh`, `history:escalate`,
+  `history:respond` (`unable` with `stale`/`no_data`), `history:deliver`, `history:ack` and
+  `history:cancel`, and the error `request_open`; own devices named all at once (superseded ones
+  when they connect) for about 10 minutes, then up to 3 members at a time for 24 h; the stale-request
+  refresh; a 30-minute delivery deadline; requests closed on a reset; the event kinds
+  `history_request`, `history_request_closed`, `history_status`, `history_share` (inbox, 48 h TTL,
+  `to_devices`, content-free wake only); the MLS envelopes `history_request`/`history_share` with
+  the 18-byte `'H'` authenticated data (the core skips its admin check for it); HPKE base mode with
+  the 0x0001 suite to a per-request key, exact `info`/`aad`, a fresh `K` and seal per part, the
+  `risime-history-v1` blob label, `rsk`/`K` never crossing the FFI, and
+  `contract/v1/history_vectors.json` (format here, generated by crypto); own versus member decided
+  from the MLS sender; the bundle format and import matching on `message_id` + `client_msg_id` +
+  `from` + `server_ts`; the blob purpose `history` (deleted on `history:ack` or at 48 h); day/week
+  limits in Postgres; the marker exception and `sys:history-shared`; call lines only between own
+  devices; the honest forgery limits. Additive.
 - **v1.14** (2026-10-07): members restore an existing member's devices (§12.4a), reviewed by
   crypto, server and android, plus an independent crypto check at merge. Any active member's
   in-group device may commit a `devices` op for an existing member (adds of users who already hold

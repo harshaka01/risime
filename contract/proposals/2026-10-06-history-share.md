@@ -1,11 +1,11 @@
 # Proposal: PROTOCOL v1.15 candidate — group and DM history sharing between devices
 
-**Status:** proposal (root, 2026-10-06), for review by crypto, server and android. Not part of
-`contract/v1` until merged. The version number is decided at merge: v1.13 (calls) is already
-proposed, and its §16.12 sketches group calls as "v1.14", so whichever lands second takes the next
-number (2026-10-07: v1.13 went to calls and v1.14 to member device restore, so this is v1.15). The section numbers below assume calls take §16, so history sharing is **§17**.
-Decision 049 (proposed). Additive: apps without the `history_share` capability are never asked to
-share and never see the new event kinds (§17.1).
+**Status: merged into `contract/v1` as v1.15 on 2026-10-07** (§17, plus §13.2, §13.3, §14.2,
+§14.5 and §15.3), after review by crypto, server and android
+(`reviews/2026-10-06-history-share-{crypto,server,android}.md`; every required change applied).
+Decision 049 (accepted, consent option A). The text below is the original proposal; where it
+differs from PROTOCOL.md §17 (own-device naming, match keys, AAD, HPKE bytes, states, blob
+lifetime, limits, markers), **§17 wins**.
 
 ## 0. The problem
 After a logout and login (or a reinstall, or a new phone), a group or e2ee DM shows **"Earlier
