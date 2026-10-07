@@ -1,0 +1,2 @@
+Fixes a crash when opening a chat with a message waiting to be sent.
+Update over the old app; never uninstall or clear data.
