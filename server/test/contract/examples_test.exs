@@ -74,6 +74,9 @@ defmodule RisiMe.ContractExamplesTest do
                    call_signal_event.json calls_turn_reply.json push_call.json
                    device_put_calls.json mls_group_calls_ready.json error_calls_unavailable.json
                    error_calls_not_ready.json)
+  # v1.14 (members restore an existing member's devices, §12.4a): parse-only placeholder until the
+  # server implements it.
+  @checked_v1_14 ~w(device_put_member_devices.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -108,7 +111,12 @@ defmodule RisiMe.ContractExamplesTest do
 
     covered =
       @checked ++
-        @checked_v1_9 ++ @checked_v1_10 ++ @checked_v1_11 ++ @checked_v1_12 ++ @checked_v1_13
+        @checked_v1_9 ++
+        @checked_v1_10 ++
+        @checked_v1_11 ++
+        @checked_v1_12 ++
+        @checked_v1_13 ++
+        @checked_v1_14
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -1837,6 +1845,11 @@ defmodule RisiMe.ContractExamplesTest do
       assert view["missing_deletes"] == [%{"user_id" => b.user.id, "device_id" => b_dev}]
       assert_same_shape(hd(view["missing_deletes"]), hd(ex["missing_deletes"]))
     end
+  end
+
+  test "v1.14 placeholder: device_put_member_devices.json parses" do
+    ex = example("device_put_member_devices.json")
+    assert "member_devices" in ex["mls"]["capabilities"]
   end
 
   describe "v1.13" do

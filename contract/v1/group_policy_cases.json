@@ -1,6 +1,6 @@
 {
- "v": 1,
- "about": "Contract v1.9 §12.4: the admin policy both the MLS core (staged-commit check against group_meta.admins) and the server run. Users are symbolic (A, B, …); leaves are 'user/device'. adds/removes are the commit's proposals; meta is the group_meta change (admins = the new admin list, or null if unchanged). Server-only checks (pending ops, caps) are not covered here.",
+ "v": 2,
+ "about": "Contract v1.9 §12.4, v1.14 §12.4a: the admin policy both the MLS core (staged-commit check against group_meta.admins) and the server run. Users are symbolic (A, B, …); leaves are 'user/device'. leaves = the base epoch's leaf set (the epoch the commit is built in). adds/removes are the commit's proposals; meta is the group_meta change (admins = the new admin list, or null if unchanged). A non-admin may add leaves of its own user and of users already in leaves (never agents), and may remove another user's leaf only when the same commit re-adds that same device. Server-only checks (pending ops, the member_devices gate, liveness, caps) are not covered here.",
  "cases": [
   {
    "name": "member self-update",
@@ -94,7 +94,7 @@
    "expect": "accept"
   },
   {
-   "name": "member adds another user's device",
+   "name": "member adds an existing member's new device",
    "admins": [
     "A"
    ],
@@ -122,7 +122,365 @@
    ],
    "removes": [],
    "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "member adds a new user's device",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "D/d1"
+   ],
+   "removes": [],
+   "meta": null,
    "expect": "reject"
+  },
+  {
+   "name": "member re-adds an existing member's device (rejoin)",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "C/c1"
+   ],
+   "removes": [
+    "C/c1"
+   ],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "member swaps an existing member's device for another of theirs",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "C/c2"
+   ],
+   "removes": [
+    "C/c1"
+   ],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "member removes another user's device without a replacement",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1",
+     "c2"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [
+    "C/c1"
+   ],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "member replaces one user's device with another user's",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "C/c2"
+   ],
+   "removes": [
+    "A/a1"
+   ],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "member re-adds one user's device and removes another's",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "C/c1",
+    "A/a2"
+   ],
+   "removes": [
+    "C/c1",
+    "A/a1"
+   ],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "member adds an existing member's device and renames",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "C/c2"
+   ],
+   "removes": [],
+   "meta": {
+    "admins": null,
+    "name_changed": true
+   },
+   "expect": "reject"
+  },
+  {
+   "name": "member adds an agent's device",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "R/r2"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "member re-adds an agent's device",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "R/r1"
+   ],
+   "removes": [
+    "R/r1"
+   ],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "member adds own and an existing member's devices",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "B/b3",
+    "C/c2"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "member adds an admin's new device",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "A/a2"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
   },
   {
    "name": "member removes another user",

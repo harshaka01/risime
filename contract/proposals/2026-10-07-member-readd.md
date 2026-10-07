@@ -1,8 +1,9 @@
 # Proposal 2026-10-07: any member restores an existing member's devices (groups after reinstall)
 
-**Status: proposed, reviewed** (crypto, server, android: `reviews/2026-10-07-member-readd-*.md`;
-their required changes are applied below, see §9). Additive change to PROTOCOL §12.1, §12.4,
-§12.7 and `contract/v1/group_policy_cases.json`; the contract version is decided at merge.
+**Status: merged into `contract/v1` as v1.14 on 2026-10-07** (§12.4a, §12.1, §12.11), after review
+by crypto, server and android (`reviews/2026-10-07-member-readd-*.md`, applied in §9) and an
+independent crypto check at merge (§10, which tightened the replacement rule and the agent and
+gate wording below).
 
 From: root, 2026-10-07. Follows the open point in `2026-10-07-readiness-superseded-devices.md` §3.
 
@@ -20,19 +21,23 @@ devices**, within these limits:
   one leaf** in the group at the epoch the commit is built from. (A member whose leaves are all
   gone, e.g. after a reset with no device, can only be re-added by an admin, because the MLS core
   sees leaves, not server membership.)
-- **Removes:** a non-admin may remove another user's leaf **only in the same commit that adds a
-  leaf of that user** (a replacement: a `rejoin`, a re-keyed device, or a dead device swapped for
-  its successor). A standalone removal of another user's leaf, dead or not, stays with that user's
+- **Removes:** a non-admin may remove another user's leaf **only in the same commit that re-adds
+  that same device** (same `user_id` and `device_id`: a `rejoin` or a re-keyed device). Swapping
+  a leaf for a *different* device of the same user is admin-only (or the user's own): it would
+  evict the old device, which may be live (§10 H1). The server never creates such a swap. A standalone removal of another user's leaf, dead or not, stays with that user's
   own devices or an admin: the core can't tell a dead device from a live one, and removing a live
   device is a denial of service on its owner.
 - **Never by a non-admin:** adding a user who has no leaf (a new user), removing a user's last
   leaf, any `role`/`add`/`remove`/`rebuild` op, any `group_meta` change. Those stay admin-only.
 - **Agents:** a non-admin never adds or removes an agent's leaves, and an agent device is never
-  named for another user's op.
+  named for another user's op. The server enforces this; the core enforces it from the agent list
+  it is given, which is empty until agents ship (0.5) and the core learns them (§10 H2).
 - **Rollout gate (capability `member_devices`).** A v-next app advertises it in
   `PUT /me/devices/{id}` `"mls": {"capabilities": [..., "member_devices"]}` only when its MLS core
   enforces this rule. The member path is **open for a group** only while every in-group leaf that
-  is not superseded (§12.1) and not being changed by the op advertises `member_devices`. While it
+  is not superseded (§12.1), still registered, and not being changed by the op advertises
+  `member_devices` (a leaf whose device row is gone receives no `grp:` traffic, §12.1, so it can't
+  reject anything). While it
   is closed, the server neither names nor accepts a non-admin for another user's leaves (an old
   core would reject such a commit and fall into rejoin, §12.8). A superseded leaf that later comes
   back on an old app rejects the commit and rejoins; that is accepted.
@@ -62,7 +67,7 @@ devices for member-committable ops.
 ### 2.3 The MLS core (replaces the last bullet of §12.4)
 The core applies the same rule from `group_meta.admins` and the leaf set of the commit's base
 epoch: a non-admin commit may add leaves only of users who already have a leaf (and are not
-agents), may remove another user's leaf only when the same commit adds a leaf of that user, and
+agents), may remove another user's leaf only when the same commit re-adds that same device, and
 may not change `group_meta`. The server-only parts are the pending-op matching, the gate, liveness
 (superseded/current), and the caps.
 
@@ -75,7 +80,8 @@ set; a non-admin may add leaves of users already in `leaves` and replace another
 |---|---|---|---|---|
 | **changed:** "member adds an existing member's new device" (was "member adds another user's device", reject) | `C/c2` | — | null | **accept** |
 | new: "member adds a new user's device" | `D/d1` | — | null | reject |
-| new: "member replaces an existing member's device (rejoin/swap)" | `C/c2` | `C/c1` | null | accept |
+| new: "member re-adds an existing member's device (rejoin)" | `C/c1` | `C/c1` | null | accept |
+| new: "member swaps an existing member's device for another of theirs" | `C/c2` | `C/c1` | null | reject |
 | new: "member removes another user's device without a replacement" (leaves `C:[c1,c2]`) | — | `C/c1` | null | reject |
 | new: "member replaces one user's device with another user's" | `C/c2` | `A/a1` | null | reject |
 | new: "member adds an existing member's device and renames" | `C/c2` | — | name | reject |
@@ -130,8 +136,9 @@ already possible under §12.5 and is rate-limited.
 
 ## 6. One-off pilot recovery
 After the server deploy **and** the testers' apps advertise `member_devices`:
-- a release task `RisiMe.Release.rename_waiting_ops/0` (run once by `scripts/run-server` after
-  migrate, idempotent) calls `name_next` for every pending `devices` op with no committer; a
+- a release task `RisiMe.Release.name_pending_device_ops/1` (run once by hand after the deploy;
+  dry run by default, `dry_run: false` to act; idempotent; logs counts only) calls `name_next`
+  for every pending `devices` op with no committer, under the group lock; a
   `PUT /me/devices/{id}` that newly adds `member_devices` re-runs it for that user's groups (the
   gate may have just opened);
 - any member device that joins its inbox afterwards is named for the waiting ops it may now
@@ -179,3 +186,35 @@ counts in `docs/status/server.md`.
 - android A1–A3: the app advertises `member_devices` only with the new core; background ops never
   show "Only group admins can do that"; the push-woken sync worker runs due group ops (§4).
 - android A4: executor tests for a non-admin named committer.
+
+## 10. Independent crypto check at merge (2026-10-07)
+Done by crypto separately from the reviews above (which one agent wrote).
+- **H1 (fixed, tightened).** The reviewed rule let a non-admin remove another user's leaf when the
+  same commit added *any* leaf of that user. With a buggy or lying server, a member could then
+  evict a live phone by "swapping" it for that user's other attested device. Every remove+add the
+  server creates (`rejoin`, `:replaced`) re-adds the *same* device id, so the rule is now: removal
+  of another user's leaf only together with the re-add of that same device. The re-added leaf
+  comes from the device's own key package, so it rejoins from the Welcome instead of being cut off.
+  Fixture: the swap case is now a reject, and a same-device rejoin case is an accept.
+- **H2 (fixed, wording).** The core has no agent list (agents ship in 0.5, `admin_at` already
+  passes none). The pure policy takes one and the fixture covers it; until the core learns agents,
+  the agent exclusion is server-enforced. No agents exist today, so nothing is exposed.
+- **H3 (clarified).** Gate: a leaf whose device row is gone can't receive `grp:` traffic (§12.1),
+  so it doesn't keep the gate closed; every other non-superseded leaf must advertise.
+- **Checked, no change:**
+  - *A device that isn't the target user's:* every added leaf passes `check_leaf` (basic
+    credential `user_id/device_id`, the attestation JWS bound to that id and signature key, pinned
+    keys) on the committer (`validate_key_packages`) and on every receiver (staged adds); the core
+    rule needs that user to already hold a leaf in the base epoch; the server requires an exact
+    match with a pending `devices` op it created for an active member. C4 is existing behaviour.
+  - *Escalation:* a member never gains a role (no `group_meta` change), can't bring in a new user,
+    and can't remove any user's last leaf (a removal is always paired with that device's re-add).
+  - *Information in the core:* both checks run against the base epoch's `MlsGroup`
+    (`check_own_policy` before building, `check_staged_policy` before merge), whose `members()`
+    give every leaf's credential-attested `user_id/device_id`; the removed leaves and added key
+    packages are resolved to attested ids before the policy runs. `CommitSummary` gains the
+    added/removed device ids and the base epoch's leaf users.
+  - *Gate:* evaluated by the server at naming and again at accept time under the group lock, over
+    the base epoch's leaves; an old core that comes back after being superseded rejects and
+    rejoins (accepted, rare). The app advertises `member_devices` only from the core's
+    `core_capabilities()` (FFI), so the advertisement can't run ahead of the enforcing core.

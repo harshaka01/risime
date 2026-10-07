@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.13 (Release 0.3)
+# RisiMe Wire Protocol — v1.14 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -710,6 +710,11 @@ where they differ for them. DMs are unchanged. Apps before v1.9 never see group 
   well. (Added 2026-10-07: reinstalled phones' dead rows kept photos and deletes off for 30 days.)
   Clients re-advertise capabilities (`PUT /me/devices/{id}`) whenever they change, and never say
   "needs to update" unless the reason is an old app (`legacy_app`).
+- **The `member_devices` capability (v1.14).** An app advertises `"member_devices"` in
+  `mls.capabilities` (`device_put_member_devices.json`) only when its MLS core enforces the
+  §12.4a rule (the core reports it; the app never adds it on its own). It gates the member path of
+  §12.4a; it is not part of readiness and never makes anyone "need to update". Old servers ignore
+  it.
   - `missing[].reason` (in `409 not_ready`, `error_not_ready_groups.json`): `"no_mls"` (no
     current MLS device), or **`"legacy_app"`** (an app instance seen in 30 days lacks `groups`;
     `device_id` names it, or is null for a pre-v1.7 instance). Clients show "<name> needs to
@@ -807,7 +812,9 @@ caller isn't a member of is always `404 not_found`, so membership is never revea
        (`X-Device-Id`; a leave has no first candidate); for `devices`: one of the affected
        user's other in-group devices;
     2. then a server-chosen **admin** device that is online (an inbox channel is joined), most
-       recently seen first. A non-admin device is never named for another user's op.
+       recently seen first. A non-admin device is never named for another user's op, except
+       for a `devices` op under §12.4a (v1.14);
+    3. (v1.14, `devices` only) the §12.4a member candidates.
   - The named device has **60 s** (`committer_until`). If no accepted commit completes the op by
     then, the server names the next candidate. If no candidate is online, it names the first
     authorised device whose inbox joins.
@@ -816,7 +823,8 @@ caller isn't a member of is always `404 not_found`, so membership is never revea
   authorised for it** (not only the named one), so an in-flight commit isn't wasted:
   - `add`, `remove`, `role`, `rebuild`: any admin device (including the same admin's other
     devices);
-  - `devices`: the affected user's own in-group device, or any admin device.
+  - `devices`: the affected user's own in-group device, or any admin device, or (v1.14) any
+    active member's in-group device under §12.4a.
 - **Expiry:** `add` and `role` ops expire **24 h** after creation (`expires_at`). An expired add
   drops its `pending_add` members and emits `add_expired`; an expired role op is dropped silently.
   `remove`, `devices` and `rebuild` ops never expire: they're renamed until done.
@@ -829,6 +837,8 @@ caller isn't a member of is always `404 not_found`, so membership is never revea
     Totals: a commit at most **1 MiB**, a Welcome at most **2 MiB**.
   - `op_id` names the op the commit completes. It is required for `add`, `remove`, `role` and
     `rebuild`. A `devices` op may be completed without it; the server matches the declared lists.
+    Exception (v1.14): a non-admin completing another user's `devices` op must send its `op_id`
+    (§12.4a).
   - `meta_changed: true` marks a name/icon change (a GroupContextExtensions proposal with no op).
 - **Server authorisation** (by the caller's device and its user's role, at that moment):
   - **anyone:** a self-update (no `added`/`removed`, no op, `meta_changed: false`);
@@ -836,15 +846,74 @@ caller isn't a member of is always `404 not_found`, so membership is never revea
     aren't in the group yet, and remove their own devices;
   - **admins only:** everything that touches another user: completing `add` (exactly all
     groups-capable devices of the op's users), `remove` (exactly all in-group devices of the op's
-    users), `devices` ops of other users, `role` (with no adds or removes), `rebuild`, and
-    `meta_changed`;
+    users), `devices` ops of other users (v1.14: except under §12.4a), `role` (with no adds or
+    removes), `rebuild`, and `meta_changed`;
   - plus the §10.2 checks: the caller is a member device, each added device is current, the
     Welcome is present exactly when `added` isn't empty, the caps, and the rate limit.
   - Anything else is `403 not_admin` (another user's change by a non-admin) or `bad_request`
     (lists that don't match the op).
 - **The MLS core applies the same rule** from `group_meta.admins`: a commit by a non-admin may
   add or remove only leaves of the committer's own user and may not change `group_meta`; agents are
-  never admins. The server-only parts are the pending-op matching and the caps.
+  never admins. The server-only parts are the pending-op matching and the caps. (v1.14: widened by
+  §12.4a for other users' devices.)
+
+### 12.4a Members restore an existing member's devices (v1.14)
+Proposal `2026-10-07-member-readd.md`. A reinstalled phone gets a new `device_id`, and its
+`devices` op used to wait for an admin or the user's own other device. From v1.14 **any active
+member's in-group device may commit a `devices` op for an existing active member's devices**,
+within these limits (normative; replaces the `devices` parts of §12.4 where they differ):
+- **Adds:** only devices of a user who is an **active member** and **already has at least one
+  leaf** in the group at the epoch the commit is built in. A member with no leaf left can only be
+  re-added by an admin (the core sees leaves, not server membership).
+- **Removes:** a non-admin may remove another user's leaf **only in the same commit that re-adds
+  that same device** (same `user_id` and `device_id`: a `rejoin` or a re-keyed device). A
+  standalone removal of another user's leaf, or a swap for a *different* device, stays with that
+  user's own devices or an admin: the core can't tell a dead device from a live one.
+- **Never by a non-admin:** adding a user with no leaf, removing a user's last leaf, any
+  `add`/`remove`/`role`/`rebuild` op, any `group_meta` change.
+- **Agents:** a non-admin never adds or removes an agent's leaves, and an agent device is never
+  named for another user's op.
+- An op is **member-committable** when it is a `devices` op, every added device's user is an
+  active member (not an agent) with a leaf in the group, and every removed device is also in
+  `added` (a same-device re-add).
+- **Rollout gate.** The member path is **open for a group** only while every in-group leaf that
+  is not superseded (§12.1), still registered, and not changed by the op advertises
+  `member_devices` (§12.1). (A leaf whose device row is gone receives no `grp:` traffic, so it
+  can't reject anything.) While it is closed the server neither names nor accepts a non-admin for
+  another user's leaves: an old core would reject such a commit and rejoin (§12.8). A superseded
+  device that comes back on an old app rejects and rejoins; that is accepted.
+- **Committer naming** for a `devices` op (replaces §12.4 "Candidates, in order" for it):
+  online devices only, minus the devices the op changes:
+  1. the affected user's other in-group devices, most recently seen first;
+  2. in-group admin devices, most recently seen first;
+  3. if the op is member-committable and the gate is open: in-group devices of the other active
+     members (never agents, never superseded), most recently seen first, ties by leaf index.
+  The 60 s window, `tried` cycling and the "first authorised device whose inbox joins" rule are
+  unchanged; that rule includes member devices for member-committable ops.
+- **Server authorisation.** A `devices` op may be completed by the affected user's own in-group
+  device, any admin device, or, when member-committable and the gate is open, any active member's
+  in-group device. Such a non-admin commit on another user's leaves **must carry the op's
+  `op_id`**, and its `added` must equal the op's `added` and its `removed` the op's devices still
+  in the group (exact match, as sets). Otherwise `403 not_admin` (touching another user without
+  the right) or `bad_request` (lists that don't match the op), plus the §10.2 checks.
+- **The MLS core** (replaces the last bullet of §12.4) applies the same rule from
+  `group_meta.admins` and the leaf set of the commit's base epoch, before building its own commits
+  and before merging a staged peer commit: a non-admin commit may add leaves only of its own user
+  and of users who already have a leaf (not agents), may remove another user's leaf only when the
+  same commit re-adds that same device, and may not change `group_meta`. Every added leaf's
+  credential and attestation are verified first (§10.1), on the committer too. The agent list is
+  empty until agents ship (0.5); until then the agent rules are server-enforced. The fixture
+  `group_policy_cases.json` (`"v": 2`, with `leaves` = the base epoch's leaves) runs on both sides.
+- **Wake-up when nobody can commit.** While a `devices` op has no online candidate (`committer`
+  null), the server sends the §8.2 push `{"type": "inbox", "v": "1"}` (data-only, no content) to
+  the **device's own push token** of each of the first **10** candidates in the order above
+  (online or not), skipping devices with a live inbox channel or no token. It repeats every
+  **6 h** while the op still waits, at most **4 pushes per device per day** across ops. A woken
+  device syncs, joins its inbox, is named by the join rule, and commits. A fingerprint-locked app
+  can't commit in the background; it shows its usual content-free notification, and the op is
+  committed the next time someone opens the app. No new push type.
+- **Wire:** only the new capability string; `PendingOp.committer` may now name a non-admin device
+  for another user's `devices` op. No new events, fields or errors.
 
 ### 12.5 Key-package claim for co-members
 `POST /api/v1/mls/key_packages/claim` takes an optional **`"conversation_id": "grp:…"`**
@@ -989,6 +1058,18 @@ per-purpose readers (§14.2).
   - `devices` gains `capabilities`.
 - They reuse the §10.5 MLS tables, keyed by conversation id. Caps are counted in Postgres.
 - Group receipts sit behind the messaging store boundary.
+
+### 12.11 Pilot recovery (server release task, one-off, v1.14)
+Not a wire change; recorded so the release is reproducible.
+- `RisiMe.Release.name_pending_device_ops/1` runs `name_next` (§12.4a) for every pending `devices`
+  op with no committer, under each group's lock. **Dry run by default** (counts what it would do,
+  changes nothing); `dry_run: false` acts. Idempotent; logs and returns counts only (no ids, no
+  phone numbers): `pending`, `named`, `still_waiting`, `member_committable`, `gate_closed`.
+- Run once by hand after the v1.14 deploy, once the testers' apps advertise `member_devices`.
+  A `PUT /me/devices/{id}` that newly adds `member_devices` re-runs it for that user's groups
+  (the gate may just have opened).
+- Verify read-only: `select count(*) filter (where committer_device is null), count(*) from
+  group_ops where type = 'devices'` before and after (waiting → 0 as members open the app).
 
 ## 13. History after a reinstall (v1.10)
 Decision 043. Reviewed by server and android (`proposals/reviews/2026-10-06-history-v1.10-*.md`).
@@ -2710,6 +2791,15 @@ Auth required (`Authorization: Bearer`), no body → `200` (`calls_turn_reply.js
   relay-only call from mobile data.
 
 ## Changelog
+- **v1.14** (2026-10-07): members restore an existing member's devices (§12.4a), reviewed by
+  crypto, server and android, plus an independent crypto check at merge. Any active member's
+  in-group device may commit a `devices` op for an existing member (adds of users who already hold
+  a leaf; removals only as a same-device re-add; never agents, roles or `group_meta`); the
+  `member_devices` capability gates it per group; committer naming and authorisation (exact
+  `op_id` + list match) widened; the shared fixture `group_policy_cases.json` v2 with the base
+  epoch's leaves (one case flips to accept); wake pushes to candidates' own tokens (10, every 6 h,
+  4 per device per day); the pilot recovery task (§12.11). Additive on the wire; the policy change
+  is gated by the capability.
 - **v1.13** (2026-10-06): 1:1 voice calls (§16), reviewed by server, android and crypto. The
   `calls` capability with `calls_ready` (one `calls` device per user) / `missing_calls` and the
   `calls_not_ready` refusal; the MLS call envelopes (`call_offer` with `sent_at`, `call_ringing`,

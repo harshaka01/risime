@@ -1,9 +1,9 @@
-# Proposal: PROTOCOL v1.14 candidate — group and DM history sharing between devices
+# Proposal: PROTOCOL v1.15 candidate — group and DM history sharing between devices
 
 **Status:** proposal (root, 2026-10-06), for review by crypto, server and android. Not part of
 `contract/v1` until merged. The version number is decided at merge: v1.13 (calls) is already
 proposed, and its §16.12 sketches group calls as "v1.14", so whichever lands second takes the next
-number. The section numbers below assume calls take §16, so history sharing is **§17**.
+number (2026-10-07: v1.13 went to calls and v1.14 to member device restore, so this is v1.15). The section numbers below assume calls take §16, so history sharing is **§17**.
 Decision 049 (proposed). Additive: apps without the `history_share` capability are never asked to
 share and never see the new event kinds (§17.1).
 
@@ -47,7 +47,7 @@ ciphertext), share MLS state or keys, or let a member read messages from before 
 - **No learning-log entries:** no model call is involved (§17.12).
 
 ## 17.1 Capability
-- A v1.14 app advertises **`"history_share"`** with its MLS device
+- A v1.15 app advertises **`"history_share"`** with its MLS device
   (`PUT /me/devices/{device_id}` `"mls": {"signature_key", "capabilities": [..., "history_share"]}`)
   once it can both **provide** (export, encrypt, upload) and **receive** (verify, import) bundles.
 - Only devices with the capability are named as providers (§17.4). A requester whose eligible
@@ -55,7 +55,7 @@ ciphertext), share MLS state or keys, or let a member read messages from before 
 - No readiness flag in `GET /mls/groups/{id}`: sharing is opportunistic.
 
 ## 17.2 The gap index (client; extends §13.3)
-Today a pre-install message "advances the cursor" and leaves nothing behind. From v1.14 the client
+Today a pre-install message "advances the cursor" and leaves nothing behind. From v1.15 the client
 keeps a **content-free gap row** for every pre-install `message` event:
 `history_gap(conversation_id, message_id, from, from_device, server_ts, generation, epoch)`, in the
 same transaction as the cursor (and the §13.3 marker upsert), kept until
@@ -257,7 +257,7 @@ Then the private key `rsk` is deleted (after the last part, on cancel, or at 48 
 - **Another member's device: always ask.** A notification and an in-chat banner:
   **"<name> wants the group history from when they were in the group. Share?"** [Share] [Not now]
   (DM: "<name> signed in again and wants your chat history. Share?"). Expires after 24 h. No
-  "always" option in v1.14.
+  "always" option in v1.15.
 - **Admin policy (later, not in this version):** a group setting "Members' phones may share history
   automatically" in `group_meta`, set by a `meta_changed` commit. Left out until we see whether the
   prompts annoy people.
@@ -355,7 +355,7 @@ Then the private key `rsk` is deleted (after the last part, on cancel, or at 48 
 `blob_upload_history_reply.json`, `error_request_open.json`, `history_bundle_header.json`.
 
 ## Changelog entry (draft)
-- **v1.14 (candidate)**: history sharing between devices: a requesting device asks per conversation
+- **v1.15 (candidate)**: history sharing between devices: a requesting device asks per conversation
   (`history:request`), the server names eligible devices (own devices first, then members with
   consent), the provider sends an `A256GCM-S64K` bundle whose key is HPKE-sealed to the requester's
   per-request key inside MLS-authenticated envelopes; the requester imports only entries matching
@@ -396,5 +396,5 @@ Then the private key `rsk` is deleted (after the last part, on cancel, or at 48 
   the app is in the background after a notification tap).
 - A3. Import: one transaction per part; interaction with the chat-list preview and search index.
 - A4. UI wording for the marker, the progress states and the prompts.
-- A5. A one-off re-scan for installs that passed their gap before v1.14 (a metadata-only replay of
+- A5. A one-off re-scan for installs that passed their gap before v1.15 (a metadata-only replay of
   the user's own inbox from `since: null`), or simply "sign in again after updating".

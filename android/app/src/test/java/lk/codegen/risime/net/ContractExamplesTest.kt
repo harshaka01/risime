@@ -222,6 +222,8 @@ class ContractExamplesTest {
         "mls_group_calls_ready.json" to { s -> ProtocolJson.decodeFromString<MlsGroup>(s).also { require(it.callsReady && it.missingCalls.single().deviceId != null) } },
         "error_calls_unavailable.json" to { s -> apiError(s, CallErrors.CALLS_UNAVAILABLE) },
         "error_calls_not_ready.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s).also { require(it.reason == CallErrors.CALLS_NOT_READY) } },
+        // v1.14 (§12.4a): parse-only placeholder until the app advertises `member_devices`.
+        "device_put_member_devices.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require("member_devices" in it.mls?.capabilities.orEmpty()) } },
     )
 
     private fun callEnv(s: String): lk.codegen.risime.calls.CallEnvelope.Env =
