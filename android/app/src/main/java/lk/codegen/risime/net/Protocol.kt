@@ -165,6 +165,16 @@ data class Event(
     /** §16.3 (v1.13) a `call_signal` event (ephemeral, its own store). */
     fun callSignal(): CallSignalEvent? = if (kind == KIND_CALL_SIGNAL) ProtocolJson.decodeFromJsonElement<CallSignalEvent>(data) else null
 
+    /** §17.5 (v1.15) history sharing events (inbox, 48 h TTL, `to_devices`). */
+    fun historyRequest(): HistoryRequestEvent? = if (kind == KIND_HISTORY_REQUEST) ProtocolJson.decodeFromJsonElement<HistoryRequestEvent>(data) else null
+
+    fun historyRequestClosed(): HistoryRequestClosedEvent? =
+        if (kind == KIND_HISTORY_REQUEST_CLOSED) ProtocolJson.decodeFromJsonElement<HistoryRequestClosedEvent>(data) else null
+
+    fun historyStatus(): HistoryStatusEvent? = if (kind == KIND_HISTORY_STATUS) ProtocolJson.decodeFromJsonElement<HistoryStatusEvent>(data) else null
+
+    fun historyShare(): HistoryShareEvent? = if (kind == KIND_HISTORY_SHARE) ProtocolJson.decodeFromJsonElement<HistoryShareEvent>(data) else null
+
     companion object {
         const val KIND_MESSAGE = "message"
         const val KIND_STATUS = "status"
@@ -177,6 +187,10 @@ data class Event(
         const val KIND_GROUP_RECEIPT = "group_receipt"
         const val KIND_DELETE = "delete"
         const val KIND_CALL_SIGNAL = "call_signal"
+        const val KIND_HISTORY_REQUEST = "history_request"
+        const val KIND_HISTORY_REQUEST_CLOSED = "history_request_closed"
+        const val KIND_HISTORY_STATUS = "history_status"
+        const val KIND_HISTORY_SHARE = "history_share"
     }
 }
 
@@ -536,6 +550,9 @@ data class DeviceMls(
 
         /** v1.14 §12.1/§12.4a: advertised only when the MLS core reports it (`core_capabilities()`). */
         const val CAP_MEMBER_DEVICES = "member_devices"
+
+        /** v1.15 §17.1: advertised only when the app can both provide and receive history bundles (the core's §17.3 functions). */
+        const val CAP_HISTORY_SHARE = "history_share"
     }
 }
 
@@ -619,7 +636,7 @@ data class MissingImages(@SerialName("user_id") val userId: String, @SerialName(
 
 /** §14.2 `GET /blobs/usage`. */
 @Serializable
-data class BlobUsageReply(val media: MediaUsage, val mls: MlsUsage? = null)
+data class BlobUsageReply(val media: MediaUsage, val mls: MlsUsage? = null, val history: HistoryUsage? = null)
 
 @Serializable
 data class MediaUsage(

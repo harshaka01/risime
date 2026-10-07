@@ -266,6 +266,11 @@ class MlsPipeline(
                         log("call envelope ${p.env.type} in a message event ${msg.messageId}: dropped")
                         MlsResult.Ignored
                     }
+                    // §17.6: history envelopes are controls, valid only in their own event kinds.
+                    is MlsPayload.Decoded.HistoryRequest, is MlsPayload.Decoded.HistoryShare -> {
+                        log("history envelope in a message event ${msg.messageId}: dropped")
+                        MlsResult.Ignored
+                    }
                     is MlsPayload.Decoded.Ignored -> {
                         log("ignored payload type ${p.type} in ${msg.messageId}")
                         MlsResult.Ignored

@@ -127,6 +127,9 @@ class PhoenixRealtimeClient(
             ?.map { ProtocolJson.decodeFromJsonElement<lk.codegen.risime.net.CallSignalReply>(it) }
             ?: PushResult.Unavailable
 
+    override suspend fun history(event: String, payload: JsonElement): PushResult<JsonObject> =
+        if (event.startsWith("history:")) liveConnection()?.push(event, payload) ?: PushResult.Unavailable else PushResult.Rejected("bad_request")
+
     override suspend fun clearChat(msg: lk.codegen.risime.net.ChatClear): PushResult<Unit> =
         liveConnection()?.push("chat:clear", ProtocolJson.encodeToJsonElement(msg))?.map { } ?: PushResult.Unavailable
 

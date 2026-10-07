@@ -26,29 +26,49 @@ class ContractExamplesTest {
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
         "auth_verify_reply.json" to { s -> ProtocolJson.decodeFromString<AuthVerifyReply>(s) },
-        // v1.15 (§17 history sharing): parse-only placeholders until the app implements it.
-        "blob_upload_history_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "blob_usage_reply_history.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "device_put_history_share.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_request_open.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_history_request.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_history_request_closed.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_history_share.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_history_status.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_history_status_refresh.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_ack.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_bundle_entry.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_bundle_header.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_cancel.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_deliver.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_escalate.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_refresh.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_request_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_request_push.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_request_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_respond.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_respond_stale.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "history_share_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.15 (§17 history sharing): typed models, the envelopes through the strict validators.
+        "blob_upload_history_reply.json" to { s -> ProtocolJson.decodeFromString<BlobUploadReply>(s).also { requireNotNull(it.expiresAt) } },
+        "blob_usage_reply_history.json" to { s -> ProtocolJson.decodeFromString<BlobUsageReply>(s).also { require(it.history!!.used < it.history!!.limit && it.history!!.hourlyLimit == 40) } },
+        "device_put_history_share.json" to { s ->
+            ProtocolJson.decodeFromString<DevicePut>(s).also { require(DeviceMls.CAP_HISTORY_SHARE in it.mls!!.capabilities!!) }
+        },
+        "error_request_open.json" to { s -> ProtocolJson.decodeFromString<HistoryRequestOpenError>(s).also { require(it.reason == "request_open" && it.requestId != null) } },
+        "event_history_request.json" to { s ->
+            ProtocolJson.decodeFromString<Event>(s).historyRequest()!!.also {
+                require(it.consent == HistoryRequestEvent.CONSENT_OWN && it.intervals.size == 1 && it.toDevices.size == 1 && it.gapCount == 412 && it.expiresAt != null)
+            }
+        },
+        "event_history_request_closed.json" to { s -> ProtocolJson.decodeFromString<Event>(s).historyRequestClosed()!!.also { require(it.reason == "accepted_elsewhere") } },
+        "event_history_share.json" to { s -> ProtocolJson.decodeFromString<Event>(s).historyShare()!!.also { require(it.part == 1 && it.parts == 1 && it.toDevices.size == 1) } },
+        "event_history_status.json" to { s ->
+            ProtocolJson.decodeFromString<Event>(s).historyStatus()!!.also { require(it.state == HistoryState.ACCEPTED && it.provider != null) }
+        },
+        "event_history_status_refresh.json" to { s ->
+            ProtocolJson.decodeFromString<Event>(s).historyStatus()!!.also { require(it.state == HistoryState.REFRESH && it.provider == null) }
+        },
+        "history_ack.json" to { s -> ProtocolJson.decodeFromString<HistoryAck>(s).also { require(it.result == HistoryAck.IMPORTED) } },
+        "history_bundle_entry.json" to { s ->
+            ProtocolJson.decodeFromString<HistoryBundleEntry>(s).also {
+                require(it.fromDevice == null && lk.codegen.risime.data.mls.MlsPayload.decode(it.payload.toString().toByteArray()) is lk.codegen.risime.data.mls.MlsPayload.Decoded.Text)
+            }
+        },
+        "history_bundle_header.json" to { s -> ProtocolJson.decodeFromString<HistoryBundleHeader>(s).also { require(it.type == HistoryBundleHeader.TYPE && it.count == 398) } },
+        "history_cancel.json" to { s -> ProtocolJson.decodeFromString<HistoryRequestRef>(s) },
+        "history_deliver.json" to { s -> ProtocolJson.decodeFromString<HistoryDeliver>(s).also { require(it.part == 1 && it.parts == 1) } },
+        "history_escalate.json" to { s -> ProtocolJson.decodeFromString<HistoryRequestRef>(s) },
+        "history_refresh.json" to { s -> ProtocolJson.decodeFromString<HistoryRefresh>(s).also { require(it.epoch == 23L) } },
+        "history_request_payload.json" to { s ->
+            (lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) as lk.codegen.risime.data.mls.MlsPayload.Decoded.HistoryRequest).env.also { require(it.rpk.size == 32 && it.gapCount == 412) }
+        },
+        "history_request_push.json" to { s -> ProtocolJson.decodeFromString<HistoryRequestPush>(s).also { require(it.sources == HistoryRequestPush.SOURCES_ANY) } },
+        "history_request_reply.json" to { s -> ProtocolJson.decodeFromString<HistoryRequestReply>(s).also { require(it.state == HistoryState.SEARCHING && it.ownDevices.single().deviceName == "Pixel 8") } },
+        "history_respond.json" to { s -> ProtocolJson.decodeFromString<HistoryRespond>(s).also { require(it.decision == HistoryRespond.ACCEPT && it.reason == null) } },
+        "history_respond_stale.json" to { s -> ProtocolJson.decodeFromString<HistoryRespond>(s).also { require(it.decision == HistoryRespond.UNABLE && it.reason == HistoryRespond.REASON_STALE) } },
+        "history_share_payload.json" to { s ->
+            (lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) as lk.codegen.risime.data.mls.MlsPayload.Decoded.HistoryShare).env.also {
+                require(it.hpkeEnc.size == 32 && it.sealedKey.size == 48 && it.count == 398 && it.blob.size == 1_048_832L && it.plainSize == 1_040_000L)
+            }
+        },
         "contacts_reply.json" to { s -> ProtocolJson.decodeFromString<ContactsReply>(s) },
         "event_message.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.messageData()) } },
         "event_status.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.statusData()) } },
@@ -307,6 +327,34 @@ class ContractExamplesTest {
         for (name in all) {
             val decode = decoders[name] ?: throw AssertionError("no decoder for contract example $name")
             assertNotNull(name, decode(read(name)))
+        }
+    }
+
+    /** §17: every client-sent history payload and both envelopes re-encode to the example exactly. */
+    @Test
+    fun historyPayloadsRoundTrip() {
+        fun <T> check(name: String, ser: kotlinx.serialization.KSerializer<T>) {
+            val original = ProtocolJson.parseToJsonElement(read(name))
+            assertEquals(name, original, ProtocolJson.encodeToJsonElement(ser, ProtocolJson.decodeFromJsonElement(ser, original)))
+        }
+        check("history_request_push.json", HistoryRequestPush.serializer())
+        check("history_refresh.json", HistoryRefresh.serializer())
+        check("history_respond.json", HistoryRespond.serializer())
+        check("history_respond_stale.json", HistoryRespond.serializer())
+        check("history_deliver.json", HistoryDeliver.serializer())
+        check("history_ack.json", HistoryAck.serializer())
+        check("history_escalate.json", HistoryRequestRef.serializer())
+        check("history_cancel.json", HistoryRequestRef.serializer())
+        check("history_bundle_header.json", HistoryBundleHeader.serializer())
+        check("history_bundle_entry.json", HistoryBundleEntry.serializer())
+        for (name in listOf("history_request_payload.json", "history_share_payload.json")) {
+            val bytes = read(name).toByteArray()
+            val encoded = when (val d = lk.codegen.risime.data.mls.MlsPayload.decode(bytes)) {
+                is lk.codegen.risime.data.mls.MlsPayload.Decoded.HistoryRequest -> d.env.encode()
+                is lk.codegen.risime.data.mls.MlsPayload.Decoded.HistoryShare -> d.env.encode()
+                else -> throw AssertionError("$name: $d")
+            }
+            assertEquals(name, ProtocolJson.parseToJsonElement(read(name)), ProtocolJson.parseToJsonElement(encoded.decodeToString()))
         }
     }
 

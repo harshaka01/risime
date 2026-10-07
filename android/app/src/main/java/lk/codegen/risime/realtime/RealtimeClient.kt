@@ -111,6 +111,12 @@ interface RealtimeClient {
     /** §16.3 `call:signal` (an ephemeral call envelope; never a message). */
     suspend fun sendCallSignal(msg: lk.codegen.risime.net.CallSignalPush): PushResult<lk.codegen.risime.net.CallSignalReply> = PushResult.Unavailable
 
+    /**
+     * §17.4 the `history:*` pushes (`history:request`, `:refresh`, `:respond`, `:deliver`, `:ack`,
+     * `:escalate`, `:cancel`): the raw reply; a refusal carries its body (`request_open`'s request id).
+     */
+    suspend fun history(event: String, payload: kotlinx.serialization.json.JsonElement): PushResult<kotlinx.serialization.json.JsonObject> = PushResult.Unavailable
+
     /** §15.9 `chat:clear` (reply ok `{}`). */
     suspend fun clearChat(msg: lk.codegen.risime.net.ChatClear): PushResult<Unit> = PushResult.Unavailable
 
