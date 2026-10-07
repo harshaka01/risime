@@ -1,0 +1,2 @@
+Calls stay visible after you press Home (green "Call in progress" bar, lock-screen notification). Ringback tone. Invites: 20 per day.
+Update over the old app; never uninstall or clear data.
