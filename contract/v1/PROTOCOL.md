@@ -2945,6 +2945,13 @@ provider identity, wrong requester identity, wrong `part` in `aad`, wrong `sha25
 swapped `hpke_enc` (from another positive case), truncated `sealed_key` (≠ 48 bytes), low-order
 `rpk` (`SealRefused`), wrong `rsk`, the blob opened with the `risime-media-v1` label; and in
 `aad_h`: 17 and 19 bytes, a `0x01 0x44` prefix, a wrong version byte (all `Malformed`).
+**Clarified 2026-10-07 (independent vector check):**
+- **One key pair per request:** the vectors seed `ikm_r` per `request_id`, not per case. All
+  parts of one request share `rsk`/`rpk`, so the swapped-key cases isolate the `aad` binding.
+- A `hpke_enc`, `sealed_key` or `rpk` of the wrong length is **`Malformed`**, rejected before any
+  HPKE operation.
+- Opening a part checks the blob's **`sha256` before decrypting**, as for media (§14.3). A mismatch
+  is `Integrity`, and no AEAD is attempted.
 
 ### 17.4 Server: pushes, eligibility, naming
 All pushes are on the inbox topic (§2.2), from a socket with a `device_id`; replies follow §2.2
