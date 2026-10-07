@@ -47,6 +47,28 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.18 (live 2026-10-07, not required): delete UI, call audio fix, groups restore themselves
+- **Delete for me / for everyone**, multi-select, Clear chat and Delete chat are on (§15 send UI).
+- **Calls:**
+  - the audio-capture fix: core-telecom only accepts LOCAL/REMOTE/MISSED/REJECTED disconnect
+    causes; nightly.16/17 passed ERROR/BUSY, which left a ghost ACTIVE call holding the
+    communication mode;
+  - the audio is released on every end path; a 20-s no-audio watchdog.
+- **Groups restore themselves (contract v1.14, §12.4a):**
+  - any in-group member's phone re-adds an existing member's new device;
+  - an independent crypto check found and fixed a device-swap denial-of-service;
+  - the pilot's 6 waiting re-adds completed (group commits at 03:43 UTC); 0 waiting now.
+- **Upgrade gate:** two Redroid phones. The group survives and works both ways, a photo sends,
+  reactions work, delete for everyone leaves the deleted-message line on both phones, and the
+  device id is kept. It passed for nightly.17 → nightly.18.
+- **In progress:** history sharing (contract v1.15). Server and crypto are done, with the vectors
+  checked by an independent Python HPKE implementation (it also caught one vector seeding error).
+  The app side is being built.
+- **Needs Harsha:** add `TURN_URLS=turn:203.115.26.139:3478?transport=udp,turn:203.115.26.139:3478?transport=tcp`
+  to `infra/pilot/pilot.env` and restart (or allow root to). TCP 3478 is reachable from outside
+  now, and coturn is running. The calls agent's attempt was refused by the permission check as a
+  production change.
+
 ## v0.2.0-nightly.17 (live 2026-10-07, not required): calls stuck-state fix, readiness, photos, emoji
 - **Calls (P0, decision 054):**
   - Ghost core-telecom calls held `MODE_IN_COMMUNICATION`, which counted as busy ("already in a
