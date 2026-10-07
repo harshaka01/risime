@@ -56,7 +56,7 @@ class GroupSurvivesUpdateTest {
                     "VALUES ('g1', 'm1', '$conv', '$me', '$conv', 'hello group', '2026-10-06T08:15:30.456Z', 1, 'SENT', 1, 'text')",
             )
 
-            (Migration5To6.SQL + Migration6To7.SQL + Migration7To8.SQL).forEach { db.execSQL(it) }
+            (Migration5To6.SQL + Migration6To7.SQL + Migration7To8.SQL + Migration8To9.SQL).forEach { db.execSQL(it) }
 
             assertEquals("Team", db.text("SELECT name FROM `groups` WHERE conversation_id = '$conv'"))
             assertEquals(group.members.size.toLong(), db.long("SELECT COUNT(*) FROM group_members WHERE conversation_id = '$conv'"))

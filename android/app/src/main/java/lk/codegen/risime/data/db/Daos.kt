@@ -162,6 +162,10 @@ interface WipeDao {
         deleteOutbox()
         chatState()
         callMarks()
+        historyGaps()
+        historyRequests()
+        historyParts()
+        historyProvides()
     }
 
     @Query("DELETE FROM messages")
@@ -209,6 +213,18 @@ interface WipeDao {
 
     @Query("DELETE FROM call_marks")
     suspend fun callMarks()
+
+    @Query("DELETE FROM history_gap")
+    suspend fun historyGaps()
+
+    @Query("DELETE FROM history_requests")
+    suspend fun historyRequests()
+
+    @Query("DELETE FROM history_parts")
+    suspend fun historyParts()
+
+    @Query("DELETE FROM history_provides")
+    suspend fun historyProvides()
 }
 
 /** v7 (§15): tombstones, hidden tombstones, the delete outbox and Clear/Delete chat state. */
@@ -496,4 +512,113 @@ interface CallMarkDao {
 
     @Query("DELETE FROM call_marks WHERE at < :before")
     suspend fun prune(before: Long): Int
+}
+
+/** v9 (§17): the gap index, requests and parts (requester), provides (provider). */
+@Dao
+interface HistoryDao {
+    // ---- §17.2 gap index ----
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertGap(g: HistoryGapEntity): Long
+
+    @Query("SELECT * FROM history_gap WHERE conversation_id = :conv ORDER BY server_ts ASC")
+    suspend fun gaps(conv: String): List<HistoryGapEntity>
+
+    @Query("SELECT * FROM history_gap WHERE message_id = :messageId")
+    suspend fun gap(messageId: String): HistoryGapEntity?
+
+    @Query("SELECT COUNT(*) FROM history_gap WHERE conversation_id = :conv")
+    suspend fun gapCount(conv: String): Int
+
+    @Query("SELECT COUNT(*) FROM history_gap WHERE conversation_id = :conv")
+    fun observeGapCount(conv: String): Flow<Int>
+
+    /** Gap rows not yet asked from [provider] (android R6: "Request history" offers the other source). */
+    @Query("SELECT * FROM history_gap WHERE conversation_id = :conv")
+    fun observeGaps(conv: String): Flow<List<HistoryGapEntity>>
+
+    @Query("SELECT * FROM history_gap")
+    suspend fun allGaps(): List<HistoryGapEntity>
+
+    @Query("DELETE FROM history_gap WHERE message_id IN (:messageIds)")
+    suspend fun deleteGaps(messageIds: List<String>): Int
+
+    @Query("DELETE FROM history_gap WHERE conversation_id = :conv")
+    suspend fun deleteConversationGaps(conv: String): Int
+
+    @Query("UPDATE history_gap SET asked_from = :provider WHERE conversation_id = :conv AND server_ts >= :from AND server_ts <= :to")
+    suspend fun markAsked(conv: String, from: String, to: String, provider: String): Int
+
+    // ---- §17.16 requests and parts (requester) ----
+
+    @Upsert
+    suspend fun upsertRequest(r: HistoryRequestEntity)
+
+    @Query("SELECT * FROM history_requests WHERE request_id = :requestId")
+    suspend fun request(requestId: String): HistoryRequestEntity?
+
+    @Query("SELECT * FROM history_requests WHERE conversation_id = :conv AND closed = 0 ORDER BY created_at DESC LIMIT 1")
+    suspend fun openRequest(conv: String): HistoryRequestEntity?
+
+    @Query("SELECT * FROM history_requests WHERE closed = 0")
+    suspend fun openRequests(): List<HistoryRequestEntity>
+
+    /** The latest request of a conversation (open or not), for the marker's progress line. */
+    @Query("SELECT * FROM history_requests WHERE conversation_id = :conv ORDER BY created_at DESC LIMIT 1")
+    fun observeLatestRequest(conv: String): Flow<HistoryRequestEntity?>
+
+    @Query("SELECT * FROM history_requests WHERE conversation_id = :conv ORDER BY created_at DESC LIMIT 1")
+    suspend fun latestRequest(conv: String): HistoryRequestEntity?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertPart(p: HistoryPartEntity): Long
+
+    @Upsert
+    suspend fun updatePart(p: HistoryPartEntity)
+
+    @Query("SELECT * FROM history_parts WHERE request_id = :requestId AND part = :part")
+    suspend fun part(requestId: String, part: Int): HistoryPartEntity?
+
+    @Query("SELECT * FROM history_parts WHERE request_id = :requestId ORDER BY part ASC")
+    suspend fun parts(requestId: String): List<HistoryPartEntity>
+
+    @Query("SELECT * FROM history_parts WHERE state = 'pending' ORDER BY request_id, part")
+    suspend fun pendingParts(): List<HistoryPartEntity>
+
+    @Query("DELETE FROM history_parts WHERE request_id = :requestId")
+    suspend fun deleteParts(requestId: String)
+
+    // ---- §17.7/§17.8 provides (provider) ----
+
+    @Upsert
+    suspend fun upsertProvide(p: HistoryProvideEntity)
+
+    @Query("SELECT * FROM history_provides WHERE request_id = :requestId")
+    suspend fun provide(requestId: String): HistoryProvideEntity?
+
+    @Query("SELECT * FROM history_provides WHERE state IN ('ask', 'accepting', 'exporting') ORDER BY created_at ASC")
+    suspend fun openProvides(): List<HistoryProvideEntity>
+
+    @Query("SELECT * FROM history_provides WHERE state IN ('ask', 'accepting', 'exporting') ORDER BY created_at ASC")
+    fun observeOpenProvides(): Flow<List<HistoryProvideEntity>>
+
+    // ---- §17.7 export reads ----
+
+    /** Candidate rows of one conversation, newest first (filtered further in Kotlin, android R2). */
+    @Query(
+        "SELECT * FROM messages WHERE conversation_id = :conv AND message_id IS NOT NULL AND kind IN ('text', 'image', 'call') " +
+            "ORDER BY local_ts DESC",
+    )
+    suspend fun exportCandidates(conv: String): List<MessageEntity>
+
+    /** The conversation's system lines (group_event lines: the local view of membership). */
+    @Query("SELECT * FROM messages WHERE conversation_id = :conv AND kind = 'system' ORDER BY local_ts ASC")
+    suspend fun systemRows(conv: String): List<MessageEntity>
+
+    @Query("SELECT * FROM reactions WHERE conversation_id = :conv AND confirmed_message_id IS NOT NULL")
+    suspend fun confirmedReactions(conv: String): List<ReactionEntity>
+
+    @Query("SELECT * FROM history_requests")
+    suspend fun allRequests(): List<HistoryRequestEntity>
 }

@@ -50,6 +50,12 @@ data class MessageEntity(
     @ColumnInfo(name = "delete_unverified", defaultValue = "0") val deleteUnverified: Boolean = false,
     /** v8 (§16.6): a call-history line's call id (kind [KIND_CALL]): one line per call id. [systemJson] = the `call_end` envelope. */
     @ColumnInfo(name = "call_id") val callId: String? = null,
+    /** v9 (§17.7): null = live, [ORIGIN_SHARED] (a member's share) or [ORIGIN_OWN_DEVICE] (restored from my other phone). */
+    @ColumnInfo(name = "origin") val origin: String? = null,
+    /** v9 (§17.7): the providing user (from the share's MLS credential) of an imported row. */
+    @ColumnInfo(name = "shared_by") val sharedBy: String? = null,
+    /** v9 (§17.16): the sending device of a new e2ee row (so later bundles carry it); null for older rows. */
+    @ColumnInfo(name = "from_device") val fromDevice: String? = null,
 ) {
     val system: Boolean get() = kind == KIND_SYSTEM
     val image: Boolean get() = kind == KIND_IMAGE
@@ -74,6 +80,10 @@ data class MessageEntity(
 
         const val DELETE_STATE_DELETING = "deleting"
         const val DELETE_STATE_CANCEL_AFTER_SEND = "cancel_after_send"
+
+        /** v9 (§17.7) imported rows. */
+        const val ORIGIN_SHARED = "shared"
+        const val ORIGIN_OWN_DEVICE = "own_device"
 
         /** §15.5 R9: the local id of a positioned tombstone for a target never stored. */
         fun placeholderId(messageId: String) = "del:$messageId"
@@ -426,3 +436,132 @@ data class CallMarkEntity(
     val ended: Boolean,
     val at: Long,
 )
+
+/**
+ * v9 (§17.2): the content-free gap index. One row per pre-install e2ee `message` event this device
+ * couldn't read (message_id, client_msg_id, sender, server_ts); the request range and the import's
+ * match keys. [askedFrom] (local, android R6): after a `done` share, the provider user the
+ * remaining rows were already asked from.
+ */
+@Entity(tableName = "history_gap", indices = [Index(value = ["conversation_id", "server_ts"])])
+data class HistoryGapEntity(
+    @PrimaryKey @ColumnInfo(name = "message_id") val messageId: String,
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    @ColumnInfo(name = "client_msg_id") val clientMsgId: String,
+    @ColumnInfo(name = "from_id") val from: String,
+    @ColumnInfo(name = "from_device") val fromDevice: String?,
+    @ColumnInfo(name = "server_ts") val serverTs: String,
+    val generation: Long?,
+    val epoch: Long?,
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    @ColumnInfo(name = "asked_from") val askedFrom: String? = null,
+)
+
+/**
+ * v9 (§17.16, android R9): this device's history requests (requester side). Written in the same
+ * transaction as the core's `history_keygen`, before `history:request` is pushed.
+ */
+@Entity(tableName = "history_requests", indices = [Index("conversation_id")])
+data class HistoryRequestEntity(
+    @PrimaryKey @ColumnInfo(name = "request_id") val requestId: String,
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    /** own | any */
+    val sources: String,
+    /** [HistoryRequestState] wire name, or "new" before the server answered. */
+    val state: String,
+    @ColumnInfo(name = "provider_user") val providerUser: String? = null,
+    @ColumnInfo(name = "provider_device") val providerDevice: String? = null,
+    val parts: Int = 0,
+    @ColumnInfo(name = "parts_done") val partsDone: Int = 0,
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    @ColumnInfo(name = "expires_at") val expiresAt: Long,
+    @ColumnInfo(name = "range_from") val rangeFrom: String,
+    @ColumnInfo(name = "range_to") val rangeTo: String,
+    @ColumnInfo(name = "gap_count") val gapCount: Int,
+    /** The reply's `own_devices` (JSON), for "Open RisiMe on <device name>". */
+    @ColumnInfo(name = "own_devices_json") val ownDevicesJson: String? = null,
+    /** Entries imported so far (all parts). */
+    val imported: Int = 0,
+    /** Terminal locally (done, unavailable, cancelled, expired, failed): `history_forget` ran. */
+    @ColumnInfo(name = "closed", defaultValue = "0") val closed: Boolean = false,
+)
+
+/**
+ * v9 (§17.16): one delivered part of a request (requester side), stored by the pipeline in the
+ * `history_share` event's transaction; fetched, opened and imported by a worker afterwards.
+ */
+@Entity(tableName = "history_parts", primaryKeys = ["request_id", "part"])
+class HistoryPartEntity(
+    @ColumnInfo(name = "request_id") val requestId: String,
+    val part: Int,
+    val parts: Int,
+    /** The share's MLS sender (never the JSON or the bundle header). */
+    @ColumnInfo(name = "provider_user") val providerUser: String,
+    @ColumnInfo(name = "provider_device") val providerDevice: String,
+    @ColumnInfo(name = "blob_id") val blobId: String,
+    val size: Long,
+    /** base64 */
+    val sha256: String,
+    @ColumnInfo(name = "plain_size") val plainSize: Long,
+    @ColumnInfo(name = "hpke_enc") val hpkeEnc: ByteArray,
+    @ColumnInfo(name = "sealed_key") val sealedKey: ByteArray,
+    val count: Int,
+    /** pending | imported | rejected */
+    val state: String,
+    val attempts: Int = 0,
+) {
+    fun copy(state: String = this.state, attempts: Int = this.attempts) =
+        HistoryPartEntity(requestId, part, parts, providerUser, providerDevice, blobId, size, sha256, plainSize, hpkeEnc, sealedKey, count, state, attempts)
+
+    companion object {
+        const val PENDING = "pending"
+        const val IMPORTED = "imported"
+        const val REJECTED = "rejected"
+    }
+}
+
+/**
+ * v9 (§17.7, §17.8, §17.16): a history request this device was named for (provider side), after
+ * its envelope was decrypted and verified. [own] and [requesterSigKey] come from the MLS
+ * credential (never the event's `consent`). [progressJson] persists per-part export progress
+ * (`client_blob_id`, `blob_id`, delivered) so a killed process resumes.
+ */
+@Entity(tableName = "history_provides", indices = [Index("conversation_id"), Index("state")])
+class HistoryProvideEntity(
+    @PrimaryKey @ColumnInfo(name = "request_id") val requestId: String,
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    @ColumnInfo(name = "requester_user") val requesterUser: String,
+    @ColumnInfo(name = "requester_device") val requesterDevice: String,
+    @ColumnInfo(name = "requester_sig_key") val requesterSigKey: ByteArray,
+    val own: Boolean,
+    val rpk: ByteArray,
+    @ColumnInfo(name = "range_from") val rangeFrom: String,
+    @ColumnInfo(name = "range_to") val rangeTo: String,
+    @ColumnInfo(name = "intervals_json") val intervalsJson: String,
+    @ColumnInfo(name = "gap_count") val gapCount: Int,
+    @ColumnInfo(name = "expires_at") val expiresAt: String?,
+    /** [HistoryProvideEntity] states: ask | accepting | exporting | delivered | declined | closed | unable */
+    val state: String,
+    val parts: Int = 0,
+    @ColumnInfo(name = "progress_json") val progressJson: String? = null,
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    @ColumnInfo(name = "updated_at") val updatedAt: Long,
+) {
+    fun copy(state: String = this.state, parts: Int = this.parts, progressJson: String? = this.progressJson, updatedAt: Long = this.updatedAt) =
+        HistoryProvideEntity(
+            requestId, conversationId, requesterUser, requesterDevice, requesterSigKey, own, rpk, rangeFrom, rangeTo, intervalsJson,
+            gapCount, expiresAt, state, parts, progressJson, createdAt, updatedAt,
+        )
+
+    val open: Boolean get() = state == ASK || state == ACCEPTING || state == EXPORTING
+
+    companion object {
+        const val ASK = "ask"
+        const val ACCEPTING = "accepting"
+        const val EXPORTING = "exporting"
+        const val DELIVERED = "delivered"
+        const val DECLINED = "declined"
+        const val CLOSED = "closed"
+        const val UNABLE = "unable"
+    }
+}

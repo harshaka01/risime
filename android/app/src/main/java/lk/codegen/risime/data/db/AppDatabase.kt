@@ -27,6 +27,10 @@ import androidx.sqlite.execSQL
         DeleteOutboxEntity::class,
         ChatStateEntity::class,
         CallMarkEntity::class,
+        HistoryGapEntity::class,
+        HistoryRequestEntity::class,
+        HistoryPartEntity::class,
+        HistoryProvideEntity::class,
     ],
     version = AppDatabase.VERSION,
     exportSchema = true,
@@ -44,16 +48,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun media(): MediaDao
     abstract fun deletes(): DeleteDao
     abstract fun callMarks(): CallMarkDao
+    abstract fun history(): HistoryDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 8
+        const val VERSION = 9
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
@@ -211,6 +216,31 @@ object Migration7To8 : Migration(7, 8) {
         "CREATE INDEX IF NOT EXISTS `index_messages_conversation_id_call_id` ON `messages` (`conversation_id`, `call_id`)",
         "CREATE TABLE IF NOT EXISTS `call_marks` (`call_id` TEXT NOT NULL, `rang` INTEGER NOT NULL, `answered` INTEGER NOT NULL, `ended` INTEGER NOT NULL, `at` INTEGER NOT NULL, PRIMARY KEY(`call_id`))",
         "CREATE INDEX IF NOT EXISTS `index_call_marks_at` ON `call_marks` (`at`)",
+    )
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/**
+ * v8 → v9 (contract v1.15 history sharing, §17.16): messages gain `origin`, `shared_by` and
+ * `from_device`; the gap index, the requester's requests and parts, the provider's named requests.
+ * Additive only.
+ */
+object Migration8To9 : Migration(8, 9) {
+    val SQL = listOf(
+        "ALTER TABLE `messages` ADD COLUMN `origin` TEXT",
+        "ALTER TABLE `messages` ADD COLUMN `shared_by` TEXT",
+        "ALTER TABLE `messages` ADD COLUMN `from_device` TEXT",
+        "CREATE TABLE IF NOT EXISTS `history_gap` (`message_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `client_msg_id` TEXT NOT NULL, `from_id` TEXT NOT NULL, `from_device` TEXT, `server_ts` TEXT NOT NULL, `generation` INTEGER, `epoch` INTEGER, `created_at` INTEGER NOT NULL, `asked_from` TEXT, PRIMARY KEY(`message_id`))",
+        "CREATE INDEX IF NOT EXISTS `index_history_gap_conversation_id_server_ts` ON `history_gap` (`conversation_id`, `server_ts`)",
+        "CREATE TABLE IF NOT EXISTS `history_requests` (`request_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `sources` TEXT NOT NULL, `state` TEXT NOT NULL, `provider_user` TEXT, `provider_device` TEXT, `parts` INTEGER NOT NULL, `parts_done` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `expires_at` INTEGER NOT NULL, `range_from` TEXT NOT NULL, `range_to` TEXT NOT NULL, `gap_count` INTEGER NOT NULL, `own_devices_json` TEXT, `imported` INTEGER NOT NULL, `closed` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`request_id`))",
+        "CREATE INDEX IF NOT EXISTS `index_history_requests_conversation_id` ON `history_requests` (`conversation_id`)",
+        "CREATE TABLE IF NOT EXISTS `history_parts` (`request_id` TEXT NOT NULL, `part` INTEGER NOT NULL, `parts` INTEGER NOT NULL, `provider_user` TEXT NOT NULL, `provider_device` TEXT NOT NULL, `blob_id` TEXT NOT NULL, `size` INTEGER NOT NULL, `sha256` TEXT NOT NULL, `plain_size` INTEGER NOT NULL, `hpke_enc` BLOB NOT NULL, `sealed_key` BLOB NOT NULL, `count` INTEGER NOT NULL, `state` TEXT NOT NULL, `attempts` INTEGER NOT NULL, PRIMARY KEY(`request_id`, `part`))",
+        "CREATE TABLE IF NOT EXISTS `history_provides` (`request_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `requester_user` TEXT NOT NULL, `requester_device` TEXT NOT NULL, `requester_sig_key` BLOB NOT NULL, `own` INTEGER NOT NULL, `rpk` BLOB NOT NULL, `range_from` TEXT NOT NULL, `range_to` TEXT NOT NULL, `intervals_json` TEXT NOT NULL, `gap_count` INTEGER NOT NULL, `expires_at` TEXT, `state` TEXT NOT NULL, `parts` INTEGER NOT NULL, `progress_json` TEXT, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`request_id`))",
+        "CREATE INDEX IF NOT EXISTS `index_history_provides_conversation_id` ON `history_provides` (`conversation_id`)",
+        "CREATE INDEX IF NOT EXISTS `index_history_provides_state` ON `history_provides` (`state`)",
     )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)

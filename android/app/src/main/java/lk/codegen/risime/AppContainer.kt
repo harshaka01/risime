@@ -613,6 +613,7 @@ class AppContainer(
         serverClock = serverClock,
         log = { Log.w("RisiMe", "deletes: $it") },
         calls = callHooks,
+        historyDao = db.history(),
     )
 
     val realtime: RealtimeClient = PhoenixRealtimeClient(
@@ -715,6 +716,8 @@ class AppContainer(
         scope.launch { images.purgedIds.collect { id -> imageLoader.forget(id) } }
         // §15.6: hidden tombstones are kept 30 days.
         scope.launch { runCatching { db.deletes().pruneDeletedIds(System.currentTimeMillis() - 30L * 24 * 3600_000) } }
+        // §17.2: gap rows go at server_ts + 30 days (the inbox TTL).
+        scope.launch { runCatching { lk.codegen.risime.data.history.HistoryGaps.prune(db.history(), System.currentTimeMillis()) } }
         // §14.7: temp plaintext and orphans go, owed uploads/downloads resume, the cache is trimmed.
         scope.launch { runCatching { images.startup() }.onFailure { Log.w("RisiMe", "image startup: ${it.message}") } }
         // §12: group state and owed ops after every (re)join.

@@ -89,6 +89,8 @@ class ChatEngine(
     private val log: (String) -> Unit = {},
     /** §16 calls (null = an app without calls: `call_signal` events are skipped, `call_end` is stored invisibly). */
     private val calls: lk.codegen.risime.calls.CallHooks? = null,
+    /** §17.2 the gap index (null = an app without history sharing: no gap rows). */
+    private val historyDao: lk.codegen.risime.data.db.HistoryDao? = null,
 ) : RealtimeListener {
     /** §15.4–§15.6 applied inside each event's transaction. */
     private val applier = deletes?.let { lk.codegen.risime.data.deletes.DeleteApplier(it, messages, images, clock, log) }
@@ -177,6 +179,7 @@ class ChatEngine(
                         false
                     }
                     Event.KIND_DELETE -> {
+                        runCatching { e.deleteData() }.getOrNull()?.let { dropGaps(it) }
                         if (applier != null) {
                             runCatching { e.deleteData() }.getOrNull()?.let { d -> if (d.encrypted) applyMls(me, e) else applyPlainDelete(me, d) }
                         }
@@ -299,8 +302,14 @@ class ChatEngine(
         while (i < results.size) {
             val r = results[i++]
             // §13.3: lost history is always visible (one deduplicated line per chat), never silent.
-            if (r is MlsResult.BeforeInstall) upsertMarker(r.conversationId, SystemLine.HISTORY_GAP, r.serverTs)
-            if (r is MlsResult.Dropped) r.conversationId?.let { upsertMarker(it, SystemLine.UNDECRYPTABLE, r.serverTs) }
+            if (r is MlsResult.BeforeInstall) {
+                upsertMarker(r.conversationId, SystemLine.HISTORY_GAP, r.serverTs)
+                recordGaps(r.gaps)
+            }
+            if (r is MlsResult.Dropped) {
+                r.conversationId?.let { upsertMarker(it, SystemLine.UNDECRYPTABLE, r.serverTs) }
+                recordGaps(r.gaps)
+            }
             if (r is MlsResult.Plaintext) incoming = applyMessage(me, r.message, r.body) || incoming
             if (r is MlsResult.Image) {
                 val hooks = images
@@ -373,6 +382,7 @@ class ChatEngine(
             kind = MessageEntity.KIND_CALL,
             systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), lk.codegen.risime.calls.CallEnvelope.toJson(env)),
             callId = env.callId,
+            fromDevice = m.fromDevice?.lowercase(),
         )
         if (messages.insert(row) == -1L) return false
         deletes?.unhide(conv)
@@ -456,6 +466,32 @@ class ChatEngine(
         if (messages.insert(row) == -1L) return false
         deletes?.unhide(conv)
         return true
+    }
+
+    /**
+     * §17.2: content-free gap rows, in this event's transaction (with the cursor and the marker).
+     * Never for a message already held, deleted (hidden tombstone) or at/before a Clear chat watermark.
+     */
+    private suspend fun recordGaps(gaps: List<lk.codegen.risime.data.mls.GapInfo>) {
+        val dao = historyDao ?: return
+        for (g in gaps) {
+            if (applier?.cleared(g.conversationId, lk.codegen.risime.data.deletes.TimeUuid.ticks(g.messageId)) == true) continue
+            if (messages.byMessageId(g.messageId) != null) continue
+            if (deletes?.deletedId(g.messageId) != null) continue
+            dao.insertGap(
+                lk.codegen.risime.data.db.HistoryGapEntity(
+                    messageId = g.messageId, conversationId = g.conversationId, clientMsgId = g.clientMsgId, from = g.from.lowercase(),
+                    fromDevice = g.fromDevice?.lowercase(), serverTs = g.serverTs, generation = g.generation, epoch = g.epoch, createdAt = clock(),
+                ),
+            )
+        }
+    }
+
+    /** §17.2: a `delete` event covering gap rows removes them (deletes win; nothing deleted comes back). */
+    private suspend fun dropGaps(d: lk.codegen.risime.net.DeleteEvent) {
+        val dao = historyDao ?: return
+        val ids = d.targets.map { it.messageId.lowercase() }.filter { id -> dao.gap(id)?.conversationId?.equals(d.conversationId, true) == true }
+        if (ids.isNotEmpty()) dao.deleteGaps(ids)
     }
 
     private suspend fun upsertMarker(conversationId: String, action: String, serverTs: String?) {
@@ -596,6 +632,7 @@ class ChatEngine(
             ackedStatus = if (preInstall) MessageStatus.READ.name else null,
             kind = kind,
             blobId = blobId,
+            fromDevice = m.fromDevice?.lowercase(),
         )
         if (messages.insert(row) == -1L) return false
         deletes?.unhide(row.conversationId) // §15.7 Delete chat: a new message brings the chat back
@@ -909,6 +946,8 @@ class ChatEngine(
                     if (r.image) a.purge(r, me, byAdmin = false, tombstone = false) else messages.delete(r.clientMsgId)
                 }
                 dao.deleteConversationReactions(conversationId)
+                // §17.13: Clear chat and Delete chat delete the gap rows in the purge transaction.
+                historyDao?.deleteConversationGaps(conversationId)
                 val prev = dao.chatState(conversationId)?.clearedUpto
                 val ticks = listOfNotNull(prev, upto?.let { lk.codegen.risime.data.deletes.TimeUuid.ticks(it) }).maxOrNull()
                 dao.putChatState(lk.codegen.risime.data.db.ChatStateEntity(conversationId, ticks, hidden = hide))

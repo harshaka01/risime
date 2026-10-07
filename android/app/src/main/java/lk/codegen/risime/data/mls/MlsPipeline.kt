@@ -30,7 +30,7 @@ sealed interface MlsResult {
      * §13.3: an e2ee message encrypted before this device (or its current MLS state) existed. Not
      * parked, not decrypted, not stored, not acked: the chat shows one "Earlier messages…" marker.
      */
-    data class BeforeInstall(val conversationId: String, val serverTs: String?) : MlsResult
+    data class BeforeInstall(val conversationId: String, val serverTs: String?, val gaps: List<GapInfo> = emptyList()) : MlsResult
 
     /**
      * §15.4: an authenticated `delete` control: the deleter's attested user id, the core's
@@ -63,13 +63,32 @@ sealed interface MlsResult {
      * Undecryptable or failed verification: dropped (and logged). With a [conversationId] the chat
      * shows the §13.3 "Some messages couldn't be decrypted" line (never a silent drop).
      */
-    data class Dropped(val reason: String, val conversationId: String? = null, val serverTs: String? = null) : MlsResult
+    data class Dropped(val reason: String, val conversationId: String? = null, val serverTs: String? = null, val gaps: List<GapInfo> = emptyList()) : MlsResult
 
     /**
      * §12.8 (groups only): this device's group state can't follow any more (the core rejected a
      * commit, or a referenced blob is gone). Never for a transient error. The app rejoins.
      */
     data class Unrecoverable(val conversationId: String, val reason: String) : MlsResult
+}
+
+/**
+ * §17.2 the content-free metadata of one pre-install (or rejoin/reset-lost) e2ee `message` event:
+ * what the gap index records. Never content.
+ */
+data class GapInfo(
+    val conversationId: String,
+    val messageId: String,
+    val clientMsgId: String,
+    val from: String,
+    val fromDevice: String?,
+    val serverTs: String,
+    val generation: Long?,
+    val epoch: Long?,
+) {
+    companion object {
+        fun of(m: MessageData) = GapInfo(m.conversationId, m.messageId.lowercase(), m.clientMsgId, m.from, m.fromDevice, m.serverTs, m.generation, m.epoch)
+    }
 }
 
 /** §10.3 `mls_membership`: who commits the add/remove, and when. */
@@ -154,7 +173,9 @@ class MlsPipeline(
                 }
                 pending.dropOlderGenerations(w.conversationId, w.generation)
                 onJoined()
-                val extra = if (older.isEmpty()) emptyList() else listOf(MlsResult.BeforeInstall(w.conversationId, older.maxByOrNull { tsKey(it.serverTs) }?.serverTs))
+                // §17.2: each discarded older-generation message gets a gap row (never own-device echoes).
+                val gaps = older.filter { !it.fromDevice.equals(mls.deviceId, true) }.map(GapInfo::of)
+                val extra = if (older.isEmpty()) emptyList() else listOf(MlsResult.BeforeInstall(w.conversationId, older.maxByOrNull { tsKey(it.serverTs) }?.serverTs, gaps))
                 MlsResult.GroupChanged(w.conversationId, GroupRef(w.conversationId, w.generation, maxOf(w.epoch, ref.epoch)), extra)
             } catch (t: Exception) {
                 // §13.3: a Welcome stored before history_before was made for an earlier MLS state of this
@@ -206,7 +227,9 @@ class MlsPipeline(
         if (msg.fromDevice.equals(mls.deviceId, true)) return MlsResult.Ignored // our own send (already in the outbox row)
         val conv = msg.conversationId
         fun undecryptable(reason: String) = MlsResult.Dropped(reason, conv, msg.serverTs)
-        val beforeInstall = MlsResult.BeforeInstall(conv, msg.serverTs)
+        // §17.2: every pre-install message gets a content-free gap row (the request range, the import's match keys).
+        val gap = listOf(GapInfo.of(msg))
+        val beforeInstall = MlsResult.BeforeInstall(conv, msg.serverTs, gap)
         // Rule 1 (§13.3): only where the message would otherwise be parked or dropped; never on replayed rows (null there).
         val rule1 = beforeHistory(msg.serverTs, historyBefore)
         val gen = msg.generation ?: return undecryptable("no generation")
@@ -214,7 +237,8 @@ class MlsPipeline(
         // Rule 2: below the epoch this device joined at from the Welcome being replayed.
         if (joined != null && gen == joined.generation && epoch < joined.epoch) return beforeInstall
         val g = mls.group(conv) ?: return if (rule1) beforeInstall else park(e, conv, gen, epoch)
-        if (gen < g.generation) return if (rule1) beforeInstall else undecryptable("stale generation")
+        // §17.2/§12.8: an older generation's message (lost to a reset or rejoin) is a gap too.
+        if (gen < g.generation) return if (rule1) beforeInstall else MlsResult.Dropped("stale generation", conv, msg.serverTs, gap)
         if (gen > g.generation) return if (rule1) beforeInstall else park(e, conv, gen, epoch)
         if (epoch > g.epoch) return park(e, conv, gen, epoch)
         return try {
