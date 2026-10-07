@@ -358,11 +358,12 @@ internal fun Composer(
         }
     }
     if (picker) {
-        EmojiPickerSheet(onPick = { e ->
-            val sel = value.selection
-            val newText = text.replaceRange(sel.min, sel.max, e)
-            onValue(androidx.compose.ui.text.input.TextFieldValue(newText, androidx.compose.ui.text.TextRange(sel.min + e.length)))
-        }, onDismiss = { picker = false })
+        // Stays open: each pick goes in at the cursor after the previous one; ⌫ deletes whole graphemes.
+        EmojiPickerSheet(
+            onPick = { e -> onValue(insertAtCursor(value, e)) },
+            onDismiss = { picker = false },
+            onBackspace = { onValue(deleteBeforeCursor(value, IcuGraphemeBoundary)) },
+        )
     }
 }
 

@@ -47,13 +47,26 @@ import lk.codegen.risime.ui.theme.Spacing
 /** §11.3 quick reactions. */
 val QUICK_REACTIONS = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
 
-/** The emoji2 picker (recent emojis, skin tones) in a bottom sheet. */
+/**
+ * The emoji2 picker (recent emojis, skin tones) in a bottom sheet. The view is created once, so its
+ * listener always calls the **latest** [onPick] (a stale one kept the composer text of the first
+ * pick: every further emoji replaced the previous one). [onBackspace] adds a ⌫ that deletes one
+ * whole grapheme, for the composer, where the sheet stays open between picks.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EmojiPickerSheet(onPick: (String) -> Unit, onDismiss: () -> Unit) {
+fun EmojiPickerSheet(onPick: (String) -> Unit, onDismiss: () -> Unit, onBackspace: (() -> Unit)? = null) {
+    val pick by androidx.compose.runtime.rememberUpdatedState(onPick)
     ModalBottomSheet(onDismissRequest = onDismiss) {
+        if (onBackspace != null) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.sm), horizontalArrangement = Arrangement.End) {
+                IconButton(onClick = onBackspace) {
+                    Text("⌫", fontSize = 22.sp, modifier = Modifier.semantics { contentDescription = "Delete" })
+                }
+            }
+        }
         AndroidView(
-            factory = { ctx -> EmojiPickerView(ContextThemeWrapper(ctx, androidx.appcompat.R.style.Theme_AppCompat_DayNight)).apply { setOnEmojiPickedListener { onPick(it.emoji) } } },
+            factory = { ctx -> EmojiPickerView(ContextThemeWrapper(ctx, androidx.appcompat.R.style.Theme_AppCompat_DayNight)).apply { setOnEmojiPickedListener { pick(it.emoji) } } },
             modifier = Modifier.fillMaxWidth().height(380.dp),
         )
     }
