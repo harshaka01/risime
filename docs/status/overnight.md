@@ -47,6 +47,18 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.22 (live 2026-10-07 06:15 UTC, not required): DMs repair themselves after a reinstall (v1.16)
+- **Root cause of Harsha's stuck sends** (read-only evidence): his current phone wasn't in 3 of
+  his 5 DM groups; they held only his superseded installs. Nothing re-added a new device to an
+  existing DM.
+- **Fix (§10.6):**
+  - DM `devices` ops: either participant's in-group device re-adds the new phone and drops the
+    superseded leaves;
+  - a DM reset fallback after about 2 min if nobody can;
+  - "Setting up encryption on this phone…" in the meantime.
+- **Pilot recovery:** run 06:15 UTC. 3 ops were created (1 with a candidate committer, 2 heal by
+  the reset once Harsha's phone runs nightly.22). They complete when the phones open RisiMe.
+
 ## v0.2.0-nightly.21 (live 2026-10-07, not required): hotfix, messages stuck on the clock icon
 - **Cause:** the outbox stopped at the first message that could only be retried later (e.g. a DM
   answering `stale_epoch`/`e2ee_required`), so every chat's later messages stayed pending.
