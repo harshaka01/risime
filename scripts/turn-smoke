@@ -2,9 +2,45 @@
 # Smoke test of infra/coturn on LOOPBACK only (decision 046): starts coturn with the repo config,
 # rebound to 127.0.0.1 and with a throwaway secret, runs turnutils_uclient (REST credentials,
 # client-to-client relay over UDP and TCP), then removes the container. Never touches public ports.
+#
+# Live mode (the default since 2026-10-07, when coturn went public, decision 046): checks the running
+# risime-turn container. It must be up with restart=unless-stopped (docker/containerd enabled at
+# boot), listen on 10.20.20.15 only, and give real REST credentials from .env's TURN_SECRET (never
+# printed) relays over UDP and TCP, on 10.20.20.15 and through the public 203.115.26.139 (hairpin),
+# relay to relay. A wrong secret must be refused. `scripts/turn-smoke --loopback` = the old test.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 img=coturn/coturn:4.7
+if [ "${1:-}" != --loopback ]; then
+  live=risime-turn-coturn-1
+  st="$(docker inspect -f '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' "$live" 2>/dev/null || true)"
+  [ "$st" = "running unless-stopped" ] || { echo "FAIL: $live is '$st' (want: running unless-stopped). Start: docker compose --env-file .env -f infra/docker-compose.turn.yml up -d" >&2; exit 1; }
+  for e in $(systemctl is-enabled docker containerd 2>/dev/null); do [ "$e" = enabled ] || { echo "FAIL: docker/containerd not enabled at boot" >&2; exit 1; }; done
+  echo "ok: $live running, restart unless-stopped, docker+containerd enabled at boot"
+  binds="$(ss -lntuH | awk '{print $5}' | grep -E ':(3478|5349)$' | sort -u || true)"
+  if grep -vq '^10\.20\.20\.15:' <<<"$binds"; then echo "FAIL: 3478/5349 bound beyond 10.20.20.15:" $binds >&2; exit 1; fi
+  echo "ok: listens only on" $binds
+  sec="$(grep '^TURN_SECRET=' .env | cut -d= -f2-)"; [ -n "$sec" ] || { echo "FAIL: TURN_SECRET missing in .env" >&2; exit 1; }
+  # One username per check: coturn's user-quota (8 allocations per username) would refuse a reuse.
+  creds() { python3 -c 'import sys,hmac,hashlib,base64,time,random; u="%d:turn-smoke-%d"%(time.time()+600,random.randrange(10**9)); print(u, base64.b64encode(hmac.new(sys.argv[1].encode(),u.encode(),hashlib.sha1).digest()).decode())' "$1"; }
+  check() {  # $1 host, $2 extra flags, $3 label
+    local out U P; read -r U P < <(creds "$sec")
+    out="$(docker exec "$live" turnutils_uclient $2 -y -n 10 -m 1 -l 100 -u "$U" -w "$P" -p 3478 "$1" 2>&1 || true)"
+    local tot; tot="$(grep -oE 'start_mclient: tot_send_msgs=[0-9]+, tot_recv_msgs=[0-9]+' <<<"$out" | tail -1 | grep -oE '[0-9]+' | tr '\n' ' ' || true)"
+    set -- "$1" "$2" "$3" $tot
+    if [ -n "${4:-}" ] && [ "${4}" -gt 0 ] && [ "${4}" = "${5:-x}" ]; then echo "ok: $3 (sent $4, received $5)"; else echo "FAIL: $3" >&2; tail -4 <<<"$out" >&2; exit 1; fi
+  }
+  check 10.20.20.15 "" "UDP relay on 10.20.20.15 (relay to relay)"
+  check 10.20.20.15 "-t" "TCP to TURN, UDP relay, on 10.20.20.15"
+  check 203.115.26.139 "" "UDP relay through the public 203.115.26.139"
+  check 203.115.26.139 "-t" "TCP to TURN through the public 203.115.26.139"
+  read -r U2 P2 < <(creds "wrong-secret-$RANDOM")
+  out="$(docker exec "$live" turnutils_uclient -y -n 2 -m 1 -u "$U2" -w "$P2" -p 3478 10.20.20.15 2>&1 || true)"
+  if grep -q 'tot_recv_msgs=[1-9]' <<<"$out"; then echo "FAIL: wrong secret accepted" >&2; exit 1; fi
+  echo "ok: a wrong secret is refused"
+  echo "live smoke OK (reachability from outside: the decision-046 method / check-host.net)"
+  exit 0
+fi
 name=risime-turn-smoke
 tmp=$(mktemp -d); trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$tmp"' EXIT
 secret=$(head -c 32 /dev/urandom | base64 | tr -d '/+=')
