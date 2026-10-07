@@ -47,6 +47,16 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.21 (live 2026-10-07, not required): hotfix, messages stuck on the clock icon
+- **Cause:** the outbox stopped at the first message that could only be retried later (e.g. a DM
+  answering `stale_epoch`/`e2ee_required`), so every chat's later messages stayed pending.
+- **Fix:** messages are ordered per conversation; a waiting chat no longer blocks the others, and
+  after 30 s the message shows "Not sent — tap to retry" (`e2ee_not_ready`).
+- **Open:**
+  - why Harsha's one DM refuses (his live state; fresh accounts on Redroid don't reproduce it; the
+    calls agent is gathering read-only evidence and a safe repair);
+  - the call button possibly missing after an upgrade (being checked).
+
 ## v0.2.0-nightly.20 (live 2026-10-07, not required): history sharing
 - **What's in:** "Request history" on the gap marker. The user's own other phone asks once per new
   phone, then shares automatically; a group member is always asked, shares only the membership
