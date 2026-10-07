@@ -99,6 +99,84 @@ interface MlsEngine {
 
     /** The group's current `group_meta`, or null (no group, or a DM). */
     fun groupMeta(conversationId: String): GroupMeta? = null
+
+    // ---- §17 history sharing (v1.15). Defaults = a core without the §17.3 functions: the app then
+    // never advertises `history_share`. `rsk` and `K` never cross this interface (crypto R7). ----
+
+    /** True once the core has `history_keygen/open/forget/sender` (and [HistoryCrypto] has `history_seal`). */
+    val historySupported: Boolean get() = false
+
+    /** A fresh per-request HPKE key pair; `rsk` stored in the sealed store **in the caller's transaction**; returns `rpk` (32 bytes). */
+    fun historyKeygen(requestId: String): ByteArray = throw HistoryException(HistoryException.Kind.Storage, "history not supported")
+
+    /** The stored `rpk` (for a refreshed `history_request`), or null when no key is stored. */
+    fun historyPublicKey(requestId: String): ByteArray? = null
+
+    /** Opens one part with the stored `rsk` (HPKE, then the blob's SHA-256 and every segment). */
+    fun historyOpen(requestId: String, ctx: HistoryCtx, hpkeEnc: ByteArray, sealedKey: ByteArray, blob: java.io.File): ByteArray =
+        throw HistoryException(HistoryException.Kind.Storage, "history not supported")
+
+    /** Deletes a request's `rsk` (idempotent). */
+    fun historyForget(requestId: String) = Unit
+
+    /** Request ids that still have a stored `rsk` (the start-up sweep). */
+    fun historyOpenRequests(): List<String> = emptyList()
+
+    /** Own versus member for a decrypted history envelope's MLS sender, plus its leaf signature key (§17.7, crypto R4). */
+    fun historySender(conversationId: String, sender: DeviceRef): HistorySenderInfo =
+        throw HistoryException(HistoryException.Kind.Malformed, "history not supported")
+
+    /** Small app state in the sealed store (namespace "app"), in the caller's transaction: the §17.8 approvals. */
+    fun appStateGet(key: String): ByteArray? = null
+
+    fun appStatePut(key: String, value: ByteArray?) = Unit
+}
+
+/** §17.3 the one record behind the HPKE `info` and `aad`; identities are `"<user_id>/<device_id>"` from MLS credentials. */
+class HistoryCtx(
+    val requestId: String,
+    val conversationId: String,
+    val requester: String,
+    val provider: String,
+    val part: Int,
+    val parts: Int,
+    /** The share's `blob.sha256` (raw) when opening; empty when sealing. */
+    val sha256: ByteArray = ByteArray(0),
+    val plainSize: Long = 0,
+)
+
+/** §17.7 the MLS sender of a history envelope: own (same user) or member, and its leaf signature key (the option-A key). */
+class HistorySenderInfo(val device: DeviceRef, val own: Boolean, val signatureKey: ByteArray)
+
+/** What `history_seal` produced (no key material). */
+class SealedPartInfo(val hpkeEnc: ByteArray, val sealedKey: ByteArray, val plainSize: Long, val size: Long, val sha256: ByteArray)
+
+/** A §17.3 failure: [Kind.OpenFailed] rejects the part; [Kind.UnknownRequest] closes the request locally. */
+class HistoryException(val kind: Kind, message: String?) : Exception(message) {
+    enum class Kind { Malformed, SealRefused, OpenFailed, UnknownRequest, Io, Storage }
+}
+
+/**
+ * §17.3 the core's free history functions (no `Client` state): `history_seal` and the `'H'` AAD
+ * helpers. Found by name (only builds with the Rust toolchain have it).
+ */
+interface HistoryCrypto {
+    /** Seals one part for [rpk]: a fresh `K` inside the core, the blob written to [out] atomically. */
+    fun seal(rpk: ByteArray, ctx: HistoryCtx, plaintext: ByteArray, out: java.io.File): SealedPartInfo
+
+    fun aadEncode(requestId: String): ByteArray
+
+    /** The request id of an exact `'H'` AAD, or null. */
+    fun aadDecode(aad: ByteArray): String?
+
+    /** Test support: every case of `history_vectors.json`; returns the number checked. */
+    fun vectorsCheck(vectorsJson: String, workDir: java.io.File): Int
+
+    companion object {
+        private const val IMPL = "lk.codegen.risime.crypto.UniffiHistoryCrypto"
+
+        fun get(): HistoryCrypto? = runCatching { Class.forName(IMPL).getDeclaredConstructor().newInstance() as HistoryCrypto }.getOrNull()
+    }
 }
 
 private fun unsupported(): Nothing = throw UnsupportedOperationException("groups not supported by this MLS core")

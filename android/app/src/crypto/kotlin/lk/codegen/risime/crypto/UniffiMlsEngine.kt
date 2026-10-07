@@ -262,6 +262,48 @@ class UniffiMlsEngine(
         client.groupMeta(g)?.let { lk.codegen.risime.net.GroupMeta(name = it.name, icon = null, admins = it.admins) }
     }
 
+    // ---- §17 history sharing (risime-mls-ffi history API): rsk and K stay in the core ----
+
+    override val historySupported: Boolean by lazy { runCatching { historyLimits().maxParts > 0u }.getOrDefault(false) }
+
+    private inline fun <T> hist(block: () -> T): T = try {
+        block()
+    } catch (e: RisiHistoryException) {
+        throw e.toApp()
+    }
+
+    override fun historyKeygen(requestId: String): ByteArray = tx { hist { client.historyKeygen(requestId) } }
+
+    override fun historyPublicKey(requestId: String): ByteArray? = tx { hist { client.historyPublicKey(requestId) } }
+
+    override fun historyOpen(
+        requestId: String,
+        ctx: lk.codegen.risime.data.mls.HistoryCtx,
+        hpkeEnc: ByteArray,
+        sealedKey: ByteArray,
+        blob: java.io.File,
+    ): ByteArray = tx { hist { client.historyOpen(requestId, ctx.toFfi(), hpkeEnc, sealedKey, blob.absolutePath) } }
+
+    override fun historyForget(requestId: String) = tx { hist { client.historyForget(requestId) } }
+
+    override fun historyOpenRequests(): List<String> = tx { hist { client.historyOpenRequests() } }
+
+    override fun historySender(conversationId: String, sender: DeviceRef): lk.codegen.risime.data.mls.HistorySenderInfo = tx {
+        val (_, g) = current(conversationId) ?: throw lk.codegen.risime.data.mls.HistoryException(lk.codegen.risime.data.mls.HistoryException.Kind.Malformed, "no group")
+        try {
+            val s = client.historySender(g, DeviceId(sender.userId, sender.deviceId))
+            lk.codegen.risime.data.mls.HistorySenderInfo(DeviceRef(s.device.userId, s.device.deviceId), s.own, s.signatureKey)
+        } catch (e: RisiMlsException) {
+            throw lk.codegen.risime.data.mls.HistoryException(lk.codegen.risime.data.mls.HistoryException.Kind.Malformed, "${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    override fun appStateGet(key: String): ByteArray? = tx { kv.get(APP, "state/$key".toByteArray()) }
+
+    override fun appStatePut(key: String, value: ByteArray?) = tx {
+        if (value == null) kv.delete(APP, "state/$key".toByteArray()) else kv.put(APP, "state/$key".toByteArray(), value)
+    }
+
     private companion object {
         const val APP = "app"
     }
