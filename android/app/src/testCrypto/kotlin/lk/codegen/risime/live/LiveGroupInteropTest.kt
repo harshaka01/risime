@@ -137,6 +137,8 @@ class LiveGroupInteropTest {
         trusted: List<String>,
         /** A sign-in after a logout keeps the device id (and starts a new MLS state). */
         val deviceId: String = UUID.randomUUID().toString(),
+        /** v1.15 §17: this app runs history sharing (advertises `history_share`, has a HistoryManager). */
+        val withHistory: Boolean = false,
     ) {
         private val pool = Executors.newSingleThreadExecutor { r -> Thread(r, "dev-$name").apply { isDaemon = true } }
         val dispatcher = pool.asCoroutineDispatcher()
@@ -166,6 +168,41 @@ class LiveGroupInteropTest {
         val registrar = DeviceRegistrar(
             api, { deviceId }, "0.4.0-interop", { mls.engine },
             groupsReplacedFor = { groupsKeyPackagesFor }, setGroupsReplacedFor = { groupsKeyPackagesFor = it },
+            historySupported = { withHistory },
+        )
+        /** §17: the history tables, and what the app's ports did. */
+        val historyDao = lk.codegen.risime.data.history.FakeHistoryDao(messages, reactions)
+        val historyLog = CopyOnWriteArrayList<String>()
+        val exportsDone = CopyOnWriteArrayList<String>()
+        val history: lk.codegen.risime.data.history.HistoryManager? = if (!withHistory) null else lk.codegen.risime.data.history.HistoryManager(
+            historyDao, messages, deletes, null, null, reactions, img.repo, tx, { mls.engine }, { lk.codegen.risime.crypto.UniffiHistoryCrypto() }, { client },
+            object : lk.codegen.risime.data.history.HistoryBlobApi {
+                override suspend fun upload(conversationId: String, requestId: String, clientBlobId: String, file: File) =
+                    api.uploadHistoryBlob(conversationId, requestId, clientBlobId, file, deviceId)
+
+                override suspend fun download(blobId: String, into: File): ApiResult<Long> {
+                    into.delete()
+                    return api.downloadBlobTo(blobId, into, 0, null)
+                }
+            },
+            { chat }, { conv -> catchUp(conv) }, { userId }, { deviceId }, { true }, { true },
+            java.nio.file.Files.createTempDirectory("risime-history-$name").toFile(), scope,
+            object : lk.codegen.risime.data.history.HistoryPorts {
+                override fun startExport(requestId: String) {
+                    scope.launch {
+                        // The foreground worker: retried until done or gone.
+                        repeat(20) {
+                            when (history!!.runExport(requestId)) {
+                                lk.codegen.risime.data.history.ExportOutcome.DONE -> { exportsDone += requestId; return@launch }
+                                lk.codegen.risime.data.history.ExportOutcome.GONE -> return@launch
+                                lk.codegen.risime.data.history.ExportOutcome.RETRY -> delay(1_000)
+                            }
+                        }
+                    }
+                }
+                override suspend fun name(userId: String) = groupDao.members.values.firstOrNull { it.userId.equals(userId, true) }?.displayName ?: "Someone"
+            },
+            log = { historyLog += it; println("  [$name] history: $it") }, io = dispatcher,
         )
         val store = GroupStore(
             groupDao, opDao, messages, { deviceId },
@@ -180,6 +217,8 @@ class LiveGroupInteropTest {
             behaviour = BehaviourLog(FakeBehaviourDao(), { "s" }, { 0L }),
             mls = MlsPipeline(
                 { mls.engine }, FakeMlsPendingDao(),
+                // §10.3 new devices of a DM (history Devs only, as the app does): the named committer adds them.
+                onMembership = { m -> if (withHistory) scope.launch { delay(m.delayMs.coerceAtMost(2_000)); runCatching { lk.codegen.risime.data.mls.MembershipExecutor({ mls.engine }, mlsApi) { catchUp(it) }.execute(m) } } },
                 log = { println("  [$name] mls: $it") },
                 onJoined = { scope.launch { registrar.topUp() } },
                 onParkedAhead = { conv -> scope.launch { catchUp(conv) } },
@@ -193,6 +232,8 @@ class LiveGroupInteropTest {
             images = img.repo,
             deletes = deletes,
             log = { println("  [$name] deletes: $it") },
+            historyDao = historyDao,
+            history = history,
         )
 
         /** §15.7 a reinstall-style replay: the cursor and dedupe are reset, the socket joins with `since: null`. */
@@ -1196,4 +1237,181 @@ class LiveGroupInteropTest {
             "epoch ${c.epoch(conv3)} (A offline throughout)"
         }
 }
+
+    /**
+     * v1.15 §17 history sharing, live: D's new phone (D2) gets its group and DM history from its old
+     * phone (D1, one approval, then automatic); B's only phone is replaced and member C shares only
+     * B's interval, labelled "Shared by C"; deleted messages never come back.
+     * Prints "INTEROP PASS|FAIL group: H…".
+     */
+    @Test fun liveHistoryShare() {
+        val path = System.getenv("RISIME_INTEROP_CONFIG")
+        assumeTrue("RISIME_INTEROP_CONFIG not set", !path.isNullOrBlank() && File(path).isFile)
+        RealMls.assumeHostLibrary()
+        val root = ProtocolJson.parseToJsonElement(File(path!!).readText()).jsonObject
+        val g = root["groups"]?.jsonObject
+        assumeTrue("no \"groups\" block in the interop config", g != null)
+        val url = root["url"]!!.jsonPrimitive.content
+        fun u(k: String) = g!![k]!!.jsonObject.let { it["id"]!!.jsonPrimitive.content to it["token"]!!.jsonPrimitive.content }
+        val (aId, aTok) = u("A"); val (bId, bTok) = u("B"); val (cId, cTok) = u("C"); val (dId, dTok) = u("D")
+        val run = UUID.randomUUID().toString().take(8)
+        val trusted = runBlocking { ((ApiClient(http, { url }, { null }).attestationKeys() as? ApiResult.Ok)?.value?.keys ?: emptyList()).map { it.toString() } }
+        assumeTrue("E2EE is off on the interop server", trusted.isNotEmpty())
+        val a = Dev(url, aId, aTok, "HA", trusted, withHistory = true)
+        val b1 = Dev(url, bId, bTok, "HB1", trusted, withHistory = true)
+        val c = Dev(url, cId, cTok, "HC", trusted, withHistory = true)
+        val d1 = Dev(url, dId, dTok, "HD1", trusted, withHistory = true)
+        var g1 = ""
+        var g2 = ""
+        var dm = ""
+        var deletedId = ""
+        val g1Texts = (1..3).map { "g1 history $it $run" }
+        val dmTexts = listOf("dm from D $run", "dm from C $run")
+        val g2Before = "g2 before B $run"
+        val g2Inside = listOf("g2 C to B $run", "g2 A to B $run")
+
+        suspend fun Dev.request(conv: String, sources: String): String {
+            val out = on { history!!.request(conv, sources) }
+            ensure(out is lk.codegen.risime.data.history.RequestOutcome.Sent) { "$name request $conv: $out" }
+            return (out as lk.codegen.risime.data.history.RequestOutcome.Sent).requestId
+        }
+
+        suspend fun Dev.awaitAsk(rid: String) = await(30_000, "$name named for $rid") { historyDao.provide(rid)?.takeIf { it.state == lk.codegen.risime.data.db.HistoryProvideEntity.ASK } }
+
+        suspend fun Dev.awaitDone(rid: String) = await(60_000, "$name request $rid done") {
+            historyDao.request(rid)?.takeIf { it.closed }?.also { r -> ensure(r.state == lk.codegen.risime.net.HistoryState.DONE) { "$name request $rid closed as ${r.state}" } }
+        }
+
+        check("H0. registration advertises history_share; C and D become friends (a fresh DM)") {
+            for (x in listOf(a, b1, c, d1)) {
+                val r = x.on { x.registrar.register(pushToken = null) }
+                ensure(r is Registration.Mls) { "${x.name}: $r" }
+                ensure("history_share" in x.registrar.advertised.orEmpty()) { "${x.name} advertised ${x.registrar.advertised}" }
+            }
+            listOf(a, b1, c, d1).forEach { it.start() }
+            listOf(a, b1, c, d1).forEach { it.live() }
+            val dPhone = ((d1.api.me() as ApiResult.Ok).value.user.phone)
+            c.api.requestFriend(dPhone)
+            val inc = d1.await(15_000, "C's friend request at D") { (d1.api.friends() as? ApiResult.Ok)?.value?.incoming?.firstOrNull { it.userId == cId } }
+            ensure(d1.api.acceptRequest(inc.id) is ApiResult.Ok) { "accept" }
+            dm = dmConversationId(cId, dId)
+            val s = d1.on { MlsUpgrader({ d1.mls.engine }, d1.mlsApi).ensure(dm, dId, cId) }
+            ensure(s is E2eeState.Encrypted) { "DM upgrade: $s" }
+            c.await(30_000, "C joined the DM") { c.mls.engine.group(dm) }
+            null
+        }
+
+        check("H1. D's group and DM history on D1 (one message deleted for everyone)") {
+            val id = a.queue(null, GroupOpType.CREATE, json(CreatePayload.serializer(), CreatePayload("ZZ History $run", listOf(cId, dId))), clientGroupId = UUID.randomUUID().toString())
+            val op = a.awaitOp(id)
+            ensure(op.state == GroupOpType.DONE) { "create: ${op.lastError}" }
+            g1 = op.conversationId!!
+            for (x in listOf(c, d1)) x.await(20_000, "${x.name} joined") { x.mls.engine.group(g1) }
+            a.on { a.chat.sendText(g1, g1Texts[0]) }
+            d1.on { d1.chat.sendText(g1, g1Texts[1]) }
+            c.on { c.chat.sendText(g1, g1Texts[2]) }
+            d1.on { d1.chat.sendText(g1, "to be deleted $run") }
+            g1Texts.forEach { d1.awaitText(g1, it) }
+            val del = d1.awaitText(g1, "to be deleted $run").let { r -> d1.await(10_000, "sent") { d1.messages.byClientMsgId(r.clientMsgId)?.takeIf { it.messageId != null } } }
+            deletedId = del.messageId!!
+            d1.on { d1.chat.deleteForEveryone(g1, listOf(del.clientMsgId)) }
+            c.await(20_000, "C sees the tombstone") { c.row(deletedId)?.takeIf { it.deleted } }
+            d1.on { d1.chat.sendText(dm, dmTexts[0]) }
+            c.awaitText(dm, dmTexts[0])
+            c.on { c.chat.sendText(dm, dmTexts[1]) }
+            d1.awaitText(dm, dmTexts[1])
+            delay(1_200) // D2's first census time is strictly later
+            null
+        }
+
+        val d2 = Dev(url, dId, dTok, "HD2", trusted, withHistory = true)
+        check("H2. D2 (a new install): joins the group and the DM; the history is a gap (gap rows, no content)") {
+            ensure(d2.on { d2.registrar.register(pushToken = null) } is Registration.Mls) { "D2 registration" }
+            d2.start()
+            d2.live()
+            d2.on { d2.syncGroups(graceMs = 300) }
+            d2.await(60_000, "D2 joined the group") { d2.mls.engine.group(g1) }
+            d2.await(60_000, "D2 joined the DM") { d2.mls.engine.group(dm) }
+            val gaps = d2.await(20_000, "gap rows") { d2.historyDao.gapRows.value.values.takeIf { v -> v.count { it.conversationId == g1 } >= 3 && v.count { it.conversationId == dm } >= 2 } }
+            ensure(gaps.none { it.messageId == deletedId }) { "a gap row for the deleted message" }
+            ensure(d2.texts(g1).none { it in g1Texts }) { "D2 already reads the history" }
+            "gaps g1=${gaps.count { it.conversationId == g1 }} dm=${gaps.count { it.conversationId == dm }}"
+        }
+
+        check("H3. D2 requests the group history: D1 asks once (Allow), shares; D2 imports it, no duplicates") {
+            val rid = d2.request(g1, "own")
+            val ask = d1.awaitAsk(rid)
+            ensure(ask.own) { "D1 treated its own new phone as a member" }
+            d1.on { d1.history!!.answer(rid, allow = true) }
+            d2.awaitDone(rid)
+            for (t in g1Texts) d2.awaitText(g1, t)
+            val rows = d2.on { d2.messages.rows.values.filter { it.conversationId == g1 && !it.system } }
+            ensure(rows.groupBy { it.messageId }.all { it.value.size == 1 }) { "duplicates" }
+            ensure(rows.filter { it.body in g1Texts }.all { it.origin == lk.codegen.risime.data.db.MessageEntity.ORIGIN_OWN_DEVICE }) { "origin" }
+            ensure(d2.row(deletedId) == null && rows.none { it.body == "to be deleted $run" }) { "the deleted message came back" }
+            ensure(d2.on { d2.messages.byClientMsgId(lk.codegen.risime.data.HistoryMarkers.sharedId(g1)) }?.body == lk.codegen.risime.data.groups.SystemLine.HISTORY_RESTORED_TEXT) { "header line" }
+            "parts ${d2.historyDao.parts(rid).size}"
+        }
+
+        check("H4. D2 requests the DM history: D1 shares automatically (no prompt)") {
+            val rid = d2.request(dm, "own")
+            d1.await(30_000, "D1 accepted without asking") { d1.historyDao.provide(rid)?.takeIf { it.state != lk.codegen.risime.data.db.HistoryProvideEntity.ASK } }
+            d2.awaitDone(rid)
+            for (t in dmTexts) d2.awaitText(dm, t)
+            ensure(d2.on { d2.historyDao.gaps(dm) }.isEmpty()) { "DM gap rows left: ${d2.historyDao.gapRows.value.values.filter { it.conversationId == dm }.size}" }
+            null
+        }
+
+        check("H5. member path: a group of A and C; B added later; B's only phone is replaced") {
+            val id = a.queue(null, GroupOpType.CREATE, json(CreatePayload.serializer(), CreatePayload("ZZ History2 $run", listOf(cId))), clientGroupId = UUID.randomUUID().toString())
+            val op = a.awaitOp(id)
+            ensure(op.state == GroupOpType.DONE) { "create: ${op.lastError}" }
+            g2 = op.conversationId!!
+            c.await(20_000, "C joined") { c.mls.engine.group(g2) }
+            a.on { a.chat.sendText(g2, g2Before) }
+            c.awaitText(g2, g2Before)
+            val add = a.awaitOp(a.queue(g2, GroupOpType.ADD, json(UsersPayload.serializer(), UsersPayload(listOf(bId)))))
+            ensure(add.state == GroupOpType.DONE) { "add B: ${add.lastError}" }
+            b1.await(30_000, "B1 joined") { b1.mls.engine.group(g2) }
+            c.awaitGroupEvent(g2, GroupEvent.ADDED) { e -> e.targets.contains(bId) }
+            delay(2_500) // the added line is well before the next messages on every clock
+            c.on { c.chat.sendText(g2, g2Inside[0]) }
+            a.on { a.chat.sendText(g2, g2Inside[1]) }
+            g2Inside.forEach { b1.awaitText(g2, it) }
+            // "Log out and delete chats" on B's only phone: the device is removed on the server.
+            ensure(b1.api.deleteDevice(b1.deviceId) is ApiResult.Ok) { "delete B1" }
+            b1.close()
+            delay(1_200)
+            null
+        }
+
+        val b2 = Dev(url, bId, bTok, "HB2", trusted, withHistory = true)
+        var rid2 = ""
+        check("H6. B2 rejoins; member C is asked (always) and shares; B gets only its interval, labelled Shared by C") {
+            ensure(b2.on { b2.registrar.register(pushToken = null) } is Registration.Mls) { "B2 registration" }
+            b2.start()
+            b2.live()
+            b2.on { b2.syncGroups(graceMs = 300) }
+            b2.await(90_000, "B2 joined g2") { b2.mls.engine.group(g2) }
+            b2.await(20_000, "B2's gap rows") { b2.historyDao.gapRows.value.values.filter { it.conversationId == g2 }.takeIf { it.size >= 2 } }
+            rid2 = b2.request(g2, "any")
+            val ask = c.awaitAsk(rid2)
+            ensure(!ask.own) { "C treated B as itself" }
+            c.on { c.history!!.answer(rid2, allow = true) }
+            b2.awaitDone(rid2)
+            for (t in g2Inside) b2.awaitText(g2, t)
+            ensure(b2.on { b2.messages.rows.values.none { it.body == g2Before } }) { "B2 got a message from before its interval" }
+            val shared = b2.on { b2.messages.rows.values.filter { it.body in g2Inside } }
+            ensure(shared.all { it.origin == lk.codegen.risime.data.db.MessageEntity.ORIGIN_SHARED && it.sharedBy == cId.lowercase() }) { "labels: ${shared.map { it.origin to it.sharedBy }}" }
+            val label = lk.codegen.risime.ui.history.sharedByLabel(shared.first { it.from == aId }) { if (it.equals(cId, true)) "C" else "?" }
+            ensure(label == "Shared by C") { "label $label" }
+            val entries = b2.on { b2.historyDao.parts(rid2) }.single().count
+            ensure(entries == 2) { "C's bundle had $entries entries (interval only)" }
+            // A was named too and never answered: its prompt closed when C accepted.
+            a.await(30_000, "A's prompt closed") { val p = a.historyDao.provide(rid2); if (p == null || p.state == lk.codegen.risime.data.db.HistoryProvideEntity.CLOSED) Unit else null }
+            "shared ${shared.size}"
+        }
+        listOf(a, c, d1, d2, b2).forEach { runCatching { it.close() } }
+    }
+
 }
