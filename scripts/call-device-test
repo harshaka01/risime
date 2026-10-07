@@ -73,6 +73,11 @@ case mode do
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
     RisiMe.Social.make_friends!(a.id, b.id)
     IO.puts("calltest: friends ok")
+  "ready" ->
+    a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
+    conv = RisiMe.Messaging.conversation_id(a.id, b.id)
+    v = RisiMe.MLS.Images.put_readiness(%{e2ee: RisiMe.MLS.group(conv) != nil}, conv)
+    IO.puts("calltest: calls_ready=#{v[:calls_ready]} missing_calls=#{inspect(v[:missing_calls])}")
   "e2ee" ->
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
     conv = RisiMe.Messaging.conversation_id(a.id, b.id)
@@ -222,7 +227,7 @@ for _ in 1 2 3; do
   sleep 6; has "ZZ Call B" || fail "A: the DM crashed on opening with a message stuck in the outbox"
 done
 logcat_ok "A opens the DM with a message stuck in the outbox"
-A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+DEV=A; A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null   # (logcat_ok leaves DEV=B)
 DEV=B; A shell am force-stop "$PKG"; open_chat "ZZ Call A" || fail "B: DM"
 wait_for "stuck-while-offline" 60 || fail "the stuck message was never delivered once A was back online"
 pass "A opened the DM 3 times with a stuck message (offline, MLS active): no crash; delivered once online"
@@ -234,7 +239,11 @@ call_once() {  # $1 label
   logcat_ok "before $1"
   DEV=A; A logcat -c; DEV=B; A logcat -c
   DEV=A; local ok=""; for _ in $(seq 1 20); do tap "Voice call" && { ok=1; break; }; sleep 2; done
-  [ -n "$ok" ] || fail "$1: no call button"
+  if [ -z "$ok" ]; then
+    echo "    server: $(fx ready)"
+    tap "Voice call (unavailable)" && sleep 0.5 && dump && grep -o 'text="[^"]*"' "$WORK/ui-$DEV.xml" | grep -v 'text="m-\|text=""' | head -8 | sed 's/^/    A shows: /'
+    fail "$1: no call button"
+  fi
   sleep 1
   has "already in a call" && fail "$1: A says \"You're already in a call\""
   DEV=B; wait_ring 30 || fail "$1: B never rang"
