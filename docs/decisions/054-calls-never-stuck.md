@@ -11,6 +11,13 @@ answer; afterwards the caller stayed "in call" even after killing the app, and e
 45-s in-memory ring timer), so the stuck state was on the phones.
 
 ## Root causes (from the code; the pilot server logged no `call:signal` at all)
+0. **The audio-capture bug (found on redroid, P0 safety).** core-telecom's `disconnect` accepts only
+   `DisconnectCause` LOCAL/REMOTE/MISSED/REJECTED. nightly.16/17 passed ERROR ("Can't connect"),
+   BUSY or ANSWERED_ELSEWHERE: the disconnect threw ("not a valid Disconnect code"), and the
+   self-managed call stayed ACTIVE in Telecom, owning MODE_IN_COMMUNICATION and the mic/speaker route
+   until a reboot (normal phone calls broken). It was reproduced with the nightly.16 APK: after the
+   caller died mid-call, the callee kept a ghost ACTIVE call and answered every later offer `busy`.
+   Fixed in e4685c5: valid causes only, a LOCAL retry, and a full audio release on every end path.
 1. **Ghost core-telecom calls.** `CallManager` kept one Telecom slot (`telecomCallId`/`telecomScope`).
    A new call id (glare, a quick re-call, StateFlow conflation between "ended" and the next call)
    overwrote it without disconnecting the old self-managed call; ending a call before Telecom had
