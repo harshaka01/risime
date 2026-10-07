@@ -1,11 +1,16 @@
 package lk.codegen.risime.live
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import lk.codegen.risime.calls.ActiveCallRecord
 import lk.codegen.risime.calls.CallEnvelope
+import lk.codegen.risime.calls.CallEnvironment
 import lk.codegen.risime.calls.CallMark
 import lk.codegen.risime.calls.CallMarks
 import lk.codegen.risime.calls.CallNotice
@@ -58,6 +63,11 @@ import java.util.concurrent.CopyOnWriteArrayList
 class LiveCalls(private val http: OkHttpClient, private val scope: CoroutineScope, private val url: String, private val trusted: List<String>) {
     val devices = mutableListOf<Dev>()
 
+    companion object {
+        /** A shorter ring (both sides use it) so the crash/kill checks don't wait 45 s each. */
+        const val RING_MS = 12_000L
+    }
+
     private fun ensure(c: Boolean, m: () -> String) { if (!c) throw AssertionError(m()) }
 
     private suspend fun <T> await(ms: Long, what: String, probe: suspend () -> T?): T = awaitL(ms, { what }, probe)
@@ -69,7 +79,8 @@ class LiveCalls(private val http: OkHttpClient, private val scope: CoroutineScop
     private val lastRing = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     private suspend fun ringGap(callee: String) {
-        lastRing[callee]?.let { val left = it + 5_300 - System.currentTimeMillis(); if (left > 0) delay(left) }
+        // The callee window slides (a repeat can be refused for up to ~10 s): wait out the whole of it.
+        lastRing[callee]?.let { val left = it + 10_500 - System.currentTimeMillis(); if (left > 0) delay(left) }
         lastRing[callee] = System.currentTimeMillis()
     }
 
@@ -95,8 +106,15 @@ class LiveCalls(private val http: OkHttpClient, private val scope: CoroutineScop
         val refused = CopyOnWriteArrayList<String>()
         val logs = CopyOnWriteArrayList<String>()
         var tamper = false
+        /** Decision 054: what AudioManager.mode says (2 = MODE_IN_CALL, 3 = MODE_IN_COMMUNICATION); only 2 is busy. */
+        @Volatile var audioMode = 0
         lateinit var client: PhoenixRealtimeClient
         lateinit var machine: CallStateMachine
+        /** The "process" the machine's timers live in: a crash cancels it. */
+        private var proc = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+        private val env = object : CallEnvironment {
+            override fun audioBusy() = machine.state.value == null && audioMode == 2
+        }
         val mlsApi = object : MlsApi {
             override suspend fun group(conversationId: String) = api.mlsGroup(conversationId)
             override suspend fun claim(userIds: List<String>) = api.claimKeyPackages(userIds, deviceId)
@@ -122,10 +140,42 @@ class LiveCalls(private val http: OkHttpClient, private val scope: CoroutineScop
             override suspend fun end(conversationId: String, peer: String, env: CallEnvelope.End) {
                 chat.queueCallEnd(conversationId, peer, env, marks.get(env.callId)?.let { it.rang && !it.answered } == true)
             }
+
+            override suspend fun missed(conversationId: String, peer: String, callId: String) {
+                if (chat.insertLocalMissedCall(conversationId, peer, callId)) missed += peer
+            }
+        }
+
+        private fun newMachine() = CallStateMachine(
+            userId, deviceId, proc, media, signals, marks, env, serverNow = { clock.serverNow() },
+            log = { logs += it; System.out.println("  [$name] call: $it") }, tamperRemoteFingerprint = { tamper }, ringMs = RING_MS,
+        )
+
+        /**
+         * The app process dies (no call_end, no Telecom, its timers gone) and does NOT come back yet:
+         * the socket closes. [revive] starts the next process (MLS state and the marks survive).
+         */
+        fun crash(): ActiveCallRecord? {
+            val s = machine.state.value?.takeIf { it.phase != CallPhase.ENDED }
+            client.stop()
+            proc.cancel()
+            return s?.let { ActiveCallRecord(it.callId, it.conversationId, it.peerUserId, it.outgoing, it.phase.name, it.connectedAtMs != null) }
+        }
+
+        /** The next process: a fresh machine, and CallManager's process-start cleanup (the owed call_end). */
+        suspend fun revive(left: ActiveCallRecord?) {
+            proc = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+            machine = newMachine()
+            start()
+            live()
+            if (left != null && marks.get(left.callId)?.ended != true) {
+                marks.put((marks.get(left.callId) ?: CallMark(left.callId)).copy(ended = true))
+                ActiveCallRecord.endReason(left)?.let { chat.queueCallEnd(left.conversationId, left.peerUserId, CallEnvelope.End(left.callId, it), false) }
+            }
         }
 
         init {
-            machine = CallStateMachine(userId, deviceId, scope, media, signals, marks, serverNow = { clock.serverNow() }, log = { logs += it; System.out.println("  [$name] call: $it") }, tamperRemoteFingerprint = { tamper })
+            machine = newMachine()
             client = PhoenixRealtimeClient(http, scope, object : RealtimeListener {
                 override suspend fun cursor() = chat.cursor()
                 override suspend fun onServerTime(ts: String?) = chat.onServerTime(ts)
@@ -307,6 +357,85 @@ class LiveCalls(private val http: OkHttpClient, private val scope: CoroutineScop
                 await(10_000, "B1 refused: ${b1.why()}") { b1.notice()?.takeIf { it == CallNotice.NOT_READY } }
                 DeviceRegistrar(c1.api, { c1.deviceId }, "0.3.0-interop", { c1.mls.engine }, imagesSupported = { true }, callsSupported = { true }).register(null)
                 b1.refused.joinToString()
+            }
+            // ---- decision 054: nothing survives a crash or a kill; busy only for real ----
+            // The checks above ring without place(): let every ring window close first.
+            listOf(aUser.first, bUser.first, cUser.first).forEach { lastRing[it] = System.currentTimeMillis() }
+            check("calls (054): the caller crashes mid-ring → the callee shows a missed call by itself; the restarted caller sends the owed call_end (one line), and can call again at once") {
+                idle(c1, b1, b2)
+                place(c1, b1, cb)
+                await(15_000, "B1 rings") { b1.phase()?.takeIf { it == CallPhase.RINGING_IN } }
+                val id = c1.machine.state.value!!.callId
+                val left = c1.crash()
+                ensure(left != null && left.outgoing) { "nothing to clean: ${c1.why()}" }
+                // B's ring runs out; no call_end comes (C is gone): a local "Missed voice call" after the grace.
+                val l = await(RING_MS + CallStateMachine.MISSED_GRACE_MS + 10_000, "B1 local missed line: ${b1.why()}") { b1.lines(cb).firstOrNull { it.callId == id } }
+                ensure(l.body == "Missed voice call" && l.status == "DELIVERED") { "B1: $l" }
+                ensure(b1.phase() == null) { b1.why() }
+                await(10_000, "B2 local missed line") { b2.lines(cb).firstOrNull { it.callId == id } }
+                // The caller's next process: the owed call_end (cancelled) goes out; B still has one line.
+                c1.revive(left)
+                val own = await(15_000, "C1 own line") { c1.lines(cb).firstOrNull { it.callId == id } }
+                ensure(own.body == "Voice call · No answer") { "C1: ${own.body}" }
+                delay(1_500)
+                ensure(b1.lines(cb).count { it.callId == id } == 1) { "B1 lines: ${b1.lines(cb).map { it.body }}" }
+                // Not "in a call": a new call rings at once.
+                place(c1, b1, cb)
+                await(15_000, "B1 rings again: ${c1.why()}") { b1.phase()?.takeIf { it == CallPhase.RINGING_IN } }
+                ensure(c1.notice() != CallNotice.IN_ANOTHER_CALL) { c1.why() }
+                c1.machine.hangUp()
+                await(10_000, "B1 stops") { if (b1.phase() != CallPhase.RINGING_IN) Unit else null }
+                id
+            }
+            check("calls (054): the callee is killed mid-ring → the caller gets 'No answer' at the ring timeout, then calls again and B rings") {
+                idle(a1, b1, b2)
+                place(a1, b1, ab)
+                await(15_000, "B1 rings") { b1.phase()?.takeIf { it == CallPhase.RINGING_IN } }
+                await(15_000, "B2 rings") { b2.phase()?.takeIf { it == CallPhase.RINGING_IN } }
+                val id = a1.machine.state.value!!.callId
+                val l1 = b1.crash()
+                val l2 = b2.crash()
+                ensure(l1 != null && l2 != null && ActiveCallRecord.endReason(l1) == null) { "a ringing callee owes nothing" }
+                await(RING_MS + 10_000, "A1 No answer: ${a1.why()}") { a1.notice()?.takeIf { it == CallNotice.NO_ANSWER } }
+                ensure(await(15_000, "A1 line") { a1.lines(ab).firstOrNull { it.callId == id } }.body == "Voice call · No answer") { "A1 line" }
+                b1.revive(l1)
+                b2.revive(l2)
+                // The revived callee gets the durable call_end on its sync: one missed line.
+                ensure(await(15_000, "B1 missed line after the restart") { b1.lines(ab).firstOrNull { it.callId == id } }.body == "Missed voice call") { "B1 line" }
+                idle(a1)
+                place(a1, b1, ab)
+                await(15_000, "B1 rings again: ${a1.why()}") { b1.phase()?.takeIf { it == CallPhase.RINGING_IN } }
+                b1.machine.hangUp()
+                await(15_000, "A declined") { a1.notice()?.takeIf { it == CallNotice.DECLINED } }
+                null
+            }
+            check("calls (054): busy only for real — a stale MODE_IN_COMMUNICATION still rings; a cellular call (MODE_IN_CALL) or an active RisiMe call is busy") {
+                idle(a1, b1, b2, c1)
+                a1.audioMode = 3
+                place(b1, a1, ab)
+                await(15_000, "A1 rings despite the stale mode: ${a1.why()}") { a1.phase()?.takeIf { it == CallPhase.RINGING_IN } }
+                b1.machine.hangUp()
+                await(10_000, "A1 stops") { if (a1.phase() != CallPhase.RINGING_IN) Unit else null }
+                idle(a1, b1)
+                a1.audioMode = 2
+                place(b1, a1, ab)
+                await(15_000, "B1 sees busy (cellular): ${b1.why()}") { b1.notice()?.takeIf { it == CallNotice.BUSY } }
+                a1.audioMode = 0
+                // An active RisiMe call A–C: B's call gets busy.
+                idle(a1, c1, b1)
+                place(c1, a1, ac)
+                await(15_000, "A1 rings (C)") { a1.phase()?.takeIf { it == CallPhase.RINGING_IN } }
+                a1.machine.answer()
+                await(15_000, "C1 connecting") { c1.phase()?.takeIf { it == CallPhase.CONNECTING } }
+                await(15_000, "A1 connecting") { a1.phase()?.takeIf { it == CallPhase.CONNECTING } }
+                c1.session().listener.onIceState(IceState.CONNECTED)
+                a1.session().listener.onIceState(IceState.CONNECTED)
+                await(10_000, "A1 active") { a1.phase()?.takeIf { it == CallPhase.ACTIVE } }
+                place(b1, a1, ab)
+                await(15_000, "B1 busy (A is in a call): ${b1.why()}") { b1.notice()?.takeIf { it == CallNotice.BUSY } }
+                ensure(a1.phase() == CallPhase.ACTIVE) { "A's call was disturbed: ${a1.why()}" }
+                a1.machine.hangUp()
+                null
             }
         } finally {
             devices.forEach { it.close() }
