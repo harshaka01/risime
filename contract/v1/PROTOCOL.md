@@ -887,7 +887,7 @@ within these limits (normative; replaces the `devices` parts of §12.4 where the
   1. the affected user's other in-group devices, most recently seen first;
   2. in-group admin devices, most recently seen first;
   3. if the op is member-committable and the gate is open: in-group devices of the other active
-     members (never agents, never superseded), most recently seen first, ties by leaf index.
+     members (never agents, never superseded), most recently seen first, ties by device id.
   The 60 s window, `tried` cycling and the "first authorised device whose inbox joins" rule are
   unchanged; that rule includes member devices for member-committable ops.
 - **Server authorisation.** A `devices` op may be completed by the affected user's own in-group
