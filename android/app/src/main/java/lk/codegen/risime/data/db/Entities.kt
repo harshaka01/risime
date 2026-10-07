@@ -198,6 +198,8 @@ data class ReactionEntity(
     @ColumnInfo(name = "pending_client_msg_id") val pendingClientMsgId: String?,
     /** When this row last changed locally (debounce and notifications). */
     @ColumnInfo(name = "local_ts") val localTs: Long,
+    /** v9 (§17.7): the confirmed op's `client_msg_id` (a history bundle entry's second match key). */
+    @ColumnInfo(name = "confirmed_client_msg_id") val confirmedClientMsgId: String? = null,
 )
 
 /**

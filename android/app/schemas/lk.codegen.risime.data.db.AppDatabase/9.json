@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 9,
-    "identityHash": "c83270193108685f84b08f21564016a9",
+    "identityHash": "06c0b13db989d2411069aabc7b6b4486",
     "entities": [
       {
         "tableName": "messages",
@@ -466,7 +466,7 @@
       },
       {
         "tableName": "reactions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `target_message_id` TEXT NOT NULL, `reactor_user_id` TEXT NOT NULL, `emoji` TEXT NOT NULL, `op` TEXT NOT NULL, `confirmed_op` TEXT, `confirmed_ts` TEXT, `confirmed_message_id` TEXT, `pending` INTEGER NOT NULL, `pending_client_msg_id` TEXT, `local_ts` INTEGER NOT NULL, PRIMARY KEY(`conversation_id`, `target_message_id`, `reactor_user_id`, `emoji`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `target_message_id` TEXT NOT NULL, `reactor_user_id` TEXT NOT NULL, `emoji` TEXT NOT NULL, `op` TEXT NOT NULL, `confirmed_op` TEXT, `confirmed_ts` TEXT, `confirmed_message_id` TEXT, `pending` INTEGER NOT NULL, `pending_client_msg_id` TEXT, `local_ts` INTEGER NOT NULL, `confirmed_client_msg_id` TEXT, PRIMARY KEY(`conversation_id`, `target_message_id`, `reactor_user_id`, `emoji`))",
         "fields": [
           {
             "fieldPath": "conversationId",
@@ -529,6 +529,11 @@
             "columnName": "local_ts",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "confirmedClientMsgId",
+            "columnName": "confirmed_client_msg_id",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -1637,7 +1642,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'c83270193108685f84b08f21564016a9')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '06c0b13db989d2411069aabc7b6b4486')"
     ]
   }
 }

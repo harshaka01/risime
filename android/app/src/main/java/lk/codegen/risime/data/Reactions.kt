@@ -42,6 +42,7 @@ class ReactionStore(private val dao: ReactionDao, private val clock: () -> Long 
             confirmedOp = confirmedOp,
             confirmedTs = if (newer) ts else cur.confirmedTs,
             confirmedMessageId = if (newer) messageId else cur.confirmedMessageId,
+            confirmedClientMsgId = if (newer) clientMsgId else cur.confirmedClientMsgId,
             pending = cur.pending && !settles,
             pendingClientMsgId = if (settles) null else cur.pendingClientMsgId,
             op = if (cur.pending && !settles) cur.op else (confirmedOp ?: ReactionBody.REMOVE),

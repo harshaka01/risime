@@ -70,7 +70,7 @@ class Migration8To9Test {
             assertEquals(null, migrated.text("SELECT shared_by FROM messages WHERE client_msg_id = 'c1'"))
             assertEquals(null, migrated.text("SELECT from_device FROM messages WHERE client_msg_id = 'c1'"))
             val v8 = entities(8)
-            for (t in v8.keys - "messages") assertEquals(t, v8[t]!!["createSql"], v9[t]!!["createSql"])
+            for (t in v8.keys - "messages" - "reactions") assertEquals(t, v8[t]!!["createSql"], v9[t]!!["createSql"])
         } finally {
             migrated.close()
             fresh.close()

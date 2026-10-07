@@ -225,7 +225,7 @@ object Migration7To8 : Migration(7, 8) {
 
 /**
  * v8 → v9 (contract v1.15 history sharing, §17.16): messages gain `origin`, `shared_by` and
- * `from_device`; the gap index, the requester's requests and parts, the provider's named requests.
+ * `from_device`, reactions their confirmed `client_msg_id`; the gap index, the requester's requests and parts, the provider's named requests.
  * Additive only.
  */
 object Migration8To9 : Migration(8, 9) {
@@ -233,6 +233,7 @@ object Migration8To9 : Migration(8, 9) {
         "ALTER TABLE `messages` ADD COLUMN `origin` TEXT",
         "ALTER TABLE `messages` ADD COLUMN `shared_by` TEXT",
         "ALTER TABLE `messages` ADD COLUMN `from_device` TEXT",
+        "ALTER TABLE `reactions` ADD COLUMN `confirmed_client_msg_id` TEXT",
         "CREATE TABLE IF NOT EXISTS `history_gap` (`message_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `client_msg_id` TEXT NOT NULL, `from_id` TEXT NOT NULL, `from_device` TEXT, `server_ts` TEXT NOT NULL, `generation` INTEGER, `epoch` INTEGER, `created_at` INTEGER NOT NULL, `asked_from` TEXT, PRIMARY KEY(`message_id`))",
         "CREATE INDEX IF NOT EXISTS `index_history_gap_conversation_id_server_ts` ON `history_gap` (`conversation_id`, `server_ts`)",
         "CREATE TABLE IF NOT EXISTS `history_requests` (`request_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `sources` TEXT NOT NULL, `state` TEXT NOT NULL, `provider_user` TEXT, `provider_device` TEXT, `parts` INTEGER NOT NULL, `parts_done` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `expires_at` INTEGER NOT NULL, `range_from` TEXT NOT NULL, `range_to` TEXT NOT NULL, `gap_count` INTEGER NOT NULL, `own_devices_json` TEXT, `imported` INTEGER NOT NULL, `closed` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`request_id`))",
