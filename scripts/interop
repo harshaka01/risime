@@ -52,17 +52,25 @@ tmux new -d -s "risime-interop$SUF" "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_B
   $M mix phx.server > '$DIR/server.log' 2>&1"
 for _ in $(seq 1 120); do curl -sf -o /dev/null http://127.0.0.1:$IPORT/health && break; sleep 1; done
 curl -sf -o /dev/null http://127.0.0.1:$IPORT/health || { echo "interop server didn't start"; tail -20 "$DIR/server.log"; exit 1; }
+# Compile the tests BEFORE setup mints the 60-s Bshort token (decision 054: the longer call checks and
+# a cold compile used to eat its lifetime). Without a config every live test skips at once.
+read -r -a EXTRA_GRADLE <<< "${RISIME_GRADLE_ARGS:-}"
+(cd android && $M ./gradlew --no-configuration-cache "${EXTRA_GRADLE[@]}" testDebugUnitTest --tests 'lk.codegen.risime.live.LiveInteropTest' -q > "$DIR/precompile.log" 2>&1) \
+  || { echo "interop: test compile failed"; tail -20 "$DIR/precompile.log"; exit 1; }
 (cd server && $M mix run "$REPO/scripts/interop-fixtures.exs" setup "$DIR" 2>/dev/null | grep 'interop setup')
 
 echo "==> LiveInteropTest + LiveE2eeInteropTest + LiveGroupInteropTest against 127.0.0.1:$IPORT (E2EE on with a temp key)"
 set +e
 # Extra Gradle args from the caller (nightly-release passes the pinned attestation key, so the
 # release outputs it regenerates keep the pin).
-read -r -a EXTRA_GRADLE <<< "${RISIME_GRADLE_ARGS:-}"
+# LiveInteropTest first, on its own (its Bshort check needs the token minted just before); then the rest.
 (cd android && RISIME_INTEROP_CONFIG="$DIR/interop.json" $M ./gradlew --no-configuration-cache "${EXTRA_GRADLE[@]}" \
-  testDebugUnitTest --tests 'lk.codegen.risime.live.LiveInteropTest' --tests 'lk.codegen.risime.live.LiveE2eeInteropTest' \
-  --tests 'lk.codegen.risime.live.LiveGroupInteropTest' -i 2>&1) > "$DIR/gradle.log"
+  testDebugUnitTest --tests 'lk.codegen.risime.live.LiveInteropTest' -i 2>&1) > "$DIR/gradle.log"
 rc=$?
+(cd android && RISIME_INTEROP_CONFIG="$DIR/interop.json" $M ./gradlew --no-configuration-cache "${EXTRA_GRADLE[@]}" \
+  testDebugUnitTest --tests 'lk.codegen.risime.live.LiveE2eeInteropTest' --tests 'lk.codegen.risime.live.LiveGroupInteropTest' -i 2>&1) >> "$DIR/gradle.log"
+rc2=$?
+[ "$rc" = 0 ] && rc=$rc2
 set -e
 grep -E '^\s{4}\S' "$DIR/gradle.log" | grep -vE 'isLoggable|^\s+at |Exception in|\.kt:' | sed 's/^ *//' | grep -vE '^(Kotlin|Input|Calculating|Watching|Task|Starting)' | head -100
 grep -qE "Live(E2ee|Group)?InteropTest > .* SKIPPED" "$DIR/gradle.log" && { echo "INTEROP SKIPPED (config not picked up)"; exit 1; }
