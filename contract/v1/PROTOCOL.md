@@ -2951,7 +2951,7 @@ swapped `hpke_enc` (from another positive case), truncated `sealed_key` (≠ 48 
 - A `hpke_enc`, `sealed_key` or `rpk` of the wrong length is **`Malformed`**, rejected before any
   HPKE operation.
 - Opening a part checks the blob's **`sha256` before decrypting**, as for media (§14.3). A mismatch
-  is `Integrity`, and no AEAD is attempted.
+  is `OpenFailed` (message "integrity: …"), and no AEAD is attempted.
 
 ### 17.4 Server: pushes, eligibility, naming
 All pushes are on the inbox topic (§2.2), from a socket with a `device_id`; replies follow §2.2
