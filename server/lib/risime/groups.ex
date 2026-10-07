@@ -572,11 +572,14 @@ defmodule RisiMe.Groups do
     # v1.11 §14.8: delivery stops now, so the membership interval closes now.
     Membership.close(g.id, [user_id])
     Ops.drop_user(g, user_id)
+    # v1.15 §17.4: their history requests close and their devices are un-named.
+    RisiMe.History.member_gone(g.id, user_id)
   end
 
   @doc false
   def delete_member(group_id, user_id) do
     Membership.close(group_id, [user_id])
+    RisiMe.History.member_gone(group_id, user_id)
     Repo.delete_all(from m in Member, where: m.group_id == ^group_id and m.user_id == ^user_id)
   end
 

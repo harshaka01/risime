@@ -77,18 +77,20 @@ defmodule RisiMe.ContractExamplesTest do
   # v1.14 (members restore an existing member's devices, §12.4a): checked below; the behaviour
   # in test/risime_web/controllers/groups_member_devices_test.exs.
   @checked_v1_14 ~w(device_put_member_devices.json)
-  # v1.15 (history sharing, §17): parse-only placeholders until the server implements it.
-  @pending_v1_15 ~w(blob_upload_history_reply.json blob_usage_reply_history.json
-                     device_put_history_share.json error_request_open.json
-                     event_history_request.json event_history_request_closed.json
-                     event_history_share.json event_history_status.json
-                     event_history_status_refresh.json history_ack.json
-                     history_bundle_entry.json history_bundle_header.json
-                     history_cancel.json history_deliver.json
-                     history_escalate.json history_refresh.json
-                     history_request_payload.json history_request_push.json
-                     history_request_reply.json history_respond.json
-                     history_respond_stale.json history_share_payload.json)
+  # v1.15 (history sharing, §17): checked in the "v1.15" describe below; the behaviour in
+  # test/risime_web/channels/history_v115_test.exs. The envelopes and the bundle lines travel
+  # inside MLS / the encrypted bundle: they are checked against the §17.6/§17.7 rules instead.
+  @checked_v1_15 ~w(blob_upload_history_reply.json blob_usage_reply_history.json
+                    device_put_history_share.json error_request_open.json
+                    event_history_request.json event_history_request_closed.json
+                    event_history_share.json event_history_status.json
+                    event_history_status_refresh.json history_ack.json
+                    history_bundle_entry.json history_bundle_header.json
+                    history_cancel.json history_deliver.json
+                    history_escalate.json history_refresh.json
+                    history_request_payload.json history_request_push.json
+                    history_request_reply.json history_respond.json
+                    history_respond_stale.json history_share_payload.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -129,7 +131,7 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_12 ++
         @checked_v1_13 ++
         @checked_v1_14 ++
-        @pending_v1_15
+        @checked_v1_15
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -1487,7 +1489,8 @@ defmodule RisiMe.ContractExamplesTest do
 
       # blob_usage_reply.json
       {200, usage} = v_api(:get, "/api/v1/blobs/usage", a.token)
-      assert_same_shape(usage, example("blob_usage_reply.json"))
+      # v1.15 §17.9 adds `history` (blob_usage_reply_history.json, checked in "v1.15").
+      assert_same_shape(Map.delete(usage, "history"), example("blob_usage_reply.json"))
       ex_usage = example("blob_usage_reply.json")
       assert usage["media"]["limit"] == ex_usage["media"]["limit"]
       assert usage["media"]["hourly_limit"] == ex_usage["media"]["hourly_limit"]
@@ -1873,13 +1876,324 @@ defmodule RisiMe.ContractExamplesTest do
     assert stored.capabilities == ex["mls"]["capabilities"]
   end
 
-  test "v1.15 placeholders: the history sharing examples parse (§17)" do
-    for name <- @pending_v1_15, do: assert(is_map(example(name)), name)
+  describe "v1.15" do
+    setup :with_attestation_key
 
-    assert example("history_request_push.json")["sources"] in ~w(own any)
-    assert example("event_history_request.json")["kind"] == "history_request"
-    assert example("history_share_payload.json")["enc"]["label"] == "risime-history-v1"
-    assert "history_share" in example("device_put_history_share.json")["mls"]["capabilities"]
+    alias RisiMe.MLS.Wire
+
+    defp h_device(user, caps \\ ["groups", "history_share"]) do
+      dev = Ecto.UUID.generate()
+
+      token_id =
+        Repo.one(
+          from t in RisiMe.Accounts.UserToken,
+            where: t.user_id == ^user.user.id,
+            limit: 1,
+            select: t.id
+        )
+
+      {:ok, _} =
+        RisiMe.Devices.register(
+          user.user.id,
+          dev,
+          %{
+            "platform" => "android",
+            "mls" => %{"signature_key" => b64(), "capabilities" => caps}
+          },
+          token_id
+        )
+
+      :ok = RisiMe.MLS.record_instance(user.user.id, dev, nil, "0.3.0-test")
+      dev
+    end
+
+    defp h_join(user, dev) do
+      {:ok, sock} = connect(UserSocket, %{"token" => user.token, "device_id" => dev})
+      {:ok, _, chan} = subscribe_and_join(sock, InboxChannel, "inbox:" <> user.user.id, %{})
+      chan
+    end
+
+    defp h_ct(conv, rid) do
+      g = RisiMe.MLS.group(conv)
+
+      Base.encode64(
+        Wire.encode_private_message(
+          "#{conv}##{g.generation}",
+          g.epoch,
+          Wire.history_aad(rid),
+          "s",
+          "c"
+        )
+      )
+    end
+
+    defp h_push(chan, event, payload) do
+      ref = push(chan, event, payload)
+      assert_reply ref, status, reply
+      {status, reply}
+    end
+
+    defp h_event(user, kind) do
+      {:ok, events, _} = Messaging.fetch_events(user.user.id, nil)
+      events |> Enum.filter(&(&1.kind == kind)) |> List.last() |> wire()
+    end
+
+    # a's new device asks in an e2ee group with b; a's old device and b provide.
+    setup %{a: a, b: b} do
+      RisiMe.GroupHelpers.clear_legacy!()
+      a_old = h_device(a)
+      a_new = h_device(a)
+      b_dev = h_device(b)
+      :ok = RisiMe.MLS.record_instance(a.user.id, a_old, nil, "0.3.0-test")
+
+      %{"group" => %{"id" => conv}} =
+        RisiMe.GroupHelpers.api(
+          :post,
+          "/api/v1/groups",
+          a.token,
+          %{"client_group_id" => Ecto.UUID.generate(), "member_ids" => [b.user.id]},
+          a_new
+        )
+        |> RisiMe.GroupHelpers.assert_status(201)
+
+      RisiMe.GroupHelpers.api(
+        :post,
+        "/api/v1/mls/groups/#{conv}/commit",
+        a.token,
+        RisiMe.GroupHelpers.create_commit([a.user.id, b.user.id], {a.user.id, a_new}),
+        a_new
+      )
+      |> RisiMe.GroupHelpers.assert_status(200)
+
+      hour_ago = DateTime.add(DateTime.utc_now(), -3600, :second)
+      Repo.update_all("app_instances", set: [first_seen_at: hour_ago])
+      Repo.update_all("group_member_intervals", set: [active_from: hour_ago])
+      %{conv: conv, a_old: a_old, a_new: a_new, b_dev: b_dev}
+    end
+
+    defp h_request(ctx, chan) do
+      ex = example("history_request_push.json")
+      rid = Ecto.UUID.generate()
+      now = DateTime.utc_now()
+      g = RisiMe.MLS.group(ctx.conv)
+
+      p = %{
+        ex
+        | "request_id" => rid,
+          "conversation_id" => ctx.conv,
+          "range" => %{
+            "from" => Messaging.iso(DateTime.add(now, -1800, :second)),
+            "to" => Messaging.iso(DateTime.add(now, -60, :second))
+          },
+          "ciphertext" => h_ct(ctx.conv, rid),
+          "generation" => g.generation,
+          "epoch" => g.epoch
+      }
+
+      {:ok, reply} = h_push(chan, "history:request", p)
+      {rid, reply}
+    end
+
+    test "device_put_history_share.json: the capability is stored (§17.1)", %{a: a} do
+      ex = example("device_put_history_share.json")
+      dev = Ecto.UUID.generate()
+      {:ok, _} = RisiMe.Devices.register(a.user.id, dev, ex)
+      stored = Repo.get_by!(RisiMe.Devices.Device, user_id: a.user.id, device_id: dev)
+      assert "history_share" in stored.capabilities
+      assert RisiMe.Devices.history?(stored)
+    end
+
+    test "the pushes, replies and events of a whole request (§17.4, §17.5, §17.9)", ctx do
+      %{a: a, b: b, conv: conv} = ctx
+      chan_a = h_join(a, ctx.a_new)
+      chan_old = h_join(a, ctx.a_old)
+      chan_b = h_join(b, ctx.b_dev)
+
+      # history_request_push.json → history_request_reply.json, event_history_request.json.
+      {rid, reply} = h_request(ctx, chan_a)
+      assert_same_shape(wire(reply), example("history_request_reply.json"))
+
+      assert_same_shape(
+        hd(wire(reply)["own_devices"]),
+        hd(example("history_request_reply.json")["own_devices"])
+      )
+
+      ev = h_event(a, "history_request")
+      ex = example("event_history_request.json")
+      assert ev["kind"] == ex["kind"]
+      assert_same_shape(ev["data"], ex["data"])
+      assert_same_shape(hd(ev["data"]["intervals"]), hd(ex["data"]["intervals"]))
+      assert_same_shape(ev["data"]["range"], ex["data"]["range"])
+      assert ev["event_id"] =~ @timeuuid
+
+      # error_request_open.json.
+      other = Ecto.UUID.generate()
+
+      {:error, err} =
+        h_push(chan_a, "history:request", %{
+          example("history_request_push.json")
+          | "conversation_id" => conv,
+            "request_id" => other,
+            "ciphertext" => h_ct(conv, other),
+            "range" => ev["data"]["range"],
+            "generation" => 1,
+            "epoch" => RisiMe.MLS.group(conv).epoch
+        })
+
+      assert_same_shape(wire(err), example("error_request_open.json"))
+      assert err.request_id == rid
+
+      # history_escalate.json (members named), history_respond_stale.json → event_history_status_refresh.json.
+      assert {:ok, %{}} =
+               h_push(chan_a, "history:escalate", %{
+                 example("history_escalate.json")
+                 | "request_id" => rid
+               })
+
+      assert {:ok, %{}} =
+               h_push(chan_b, "history:respond", %{
+                 example("history_respond_stale.json")
+                 | "request_id" => rid
+               })
+
+      st = h_event(a, "history_status")
+      assert_same_shape(st, example("event_history_status_refresh.json"))
+      assert st["data"]["state"] == "refresh" and st["data"]["provider"] == nil
+
+      # history_refresh.json names b again.
+      g = RisiMe.MLS.group(conv)
+
+      refresh = %{
+        example("history_refresh.json")
+        | "request_id" => rid,
+          "ciphertext" => h_ct(conv, rid),
+          "generation" => g.generation,
+          "epoch" => g.epoch
+      }
+
+      assert {:ok, %{}} = h_push(chan_a, "history:refresh", refresh)
+
+      # history_respond.json (b accepts) → event_history_status.json; the old phone's prompt
+      # closes (event_history_request_closed.json).
+      assert {:ok, %{}} =
+               h_push(chan_b, "history:respond", %{
+                 example("history_respond.json")
+                 | "request_id" => rid
+               })
+
+      st = h_event(a, "history_status")
+      assert_same_shape(st, example("event_history_status.json"))
+
+      assert_same_shape(
+        st["data"]["provider"],
+        example("event_history_status.json")["data"]["provider"]
+      )
+
+      _ = chan_old
+
+      # blob_upload_history_reply.json, blob_usage_reply_history.json.
+      path =
+        "/api/v1/blobs?purpose=history&conversation_id=#{URI.encode_www_form(conv)}" <>
+          "&request_id=#{rid}&client_blob_id=#{Ecto.UUID.generate()}"
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.put_req_header("authorization", "Bearer " <> b.token)
+        |> Plug.Conn.put_req_header("x-device-id", ctx.b_dev)
+        |> Plug.Conn.put_req_header("content-type", "application/octet-stream")
+        |> Plug.Conn.put_req_header("content-length", "64")
+        |> Phoenix.ConnTest.dispatch(
+          RisiMeWeb.Endpoint,
+          :post,
+          path,
+          :crypto.strong_rand_bytes(64)
+        )
+
+      assert conn.status == 201
+      assert_same_shape(Jason.decode!(conn.resp_body), example("blob_upload_history_reply.json"))
+      {200, usage} = RisiMe.GroupHelpers.api(:get, "/api/v1/blobs/usage", b.token)
+      assert_same_shape(usage, example("blob_usage_reply_history.json"))
+      assert_same_shape(usage["history"], example("blob_usage_reply_history.json")["history"])
+
+      # history_deliver.json → event_history_share.json.
+      deliver = %{
+        example("history_deliver.json")
+        | "request_id" => rid,
+          "ciphertext" => h_ct(conv, rid),
+          "generation" => g.generation,
+          "epoch" => g.epoch
+      }
+
+      assert {:ok, %{}} = h_push(chan_b, "history:deliver", deliver)
+      share = h_event(a, "history_share")
+      assert_same_shape(share, example("event_history_share.json"))
+
+      # history_ack.json → done; event_history_request_closed.json to every named user.
+      assert {:ok, %{}} =
+               h_push(chan_a, "history:ack", %{example("history_ack.json") | "request_id" => rid})
+
+      closed = h_event(b, "history_request_closed")
+      assert_same_shape(closed, example("event_history_request_closed.json"))
+      assert closed["data"]["reason"] == "done"
+
+      # history_cancel.json on a new request.
+      Repo.update_all("history_requests",
+        set: [created_at: DateTime.add(DateTime.utc_now(), -2, :day)]
+      )
+
+      {rid2, _} = h_request(ctx, chan_a)
+
+      assert {:ok, %{}} =
+               h_push(chan_a, "history:cancel", %{
+                 example("history_cancel.json")
+                 | "request_id" => rid2
+               })
+
+      assert Repo.get!(RisiMe.History.Request, rid2).state == "cancelled"
+    end
+
+    test "the MLS envelopes and bundle lines follow §17.6/§17.7" do
+      req = example("history_request_payload.json")
+      assert req["v"] == 1 and req["type"] == "history_request" and req["request_id"] =~ @uuid
+      assert req["hpke"]["kem"] == "x25519"
+      assert byte_size(Base.decode64!(req["hpke"]["pk"])) == 32
+      assert_same_shape(req["range"], example("history_request_push.json")["range"])
+
+      share = example("history_share_payload.json")
+      assert share["v"] == 1 and share["type"] == "history_share"
+      assert 1 <= share["part"] and share["part"] <= share["parts"] and share["parts"] <= 20
+
+      assert share["enc"]["alg"] == "A256GCM-S64K" and
+               share["enc"]["label"] == "risime-history-v1"
+
+      assert byte_size(Base.decode64!(share["enc"]["hpke_enc"])) == 32
+      assert byte_size(Base.decode64!(share["enc"]["sealed_key"])) == 48
+      assert byte_size(Base.decode64!(share["blob"]["sha256"])) == 32
+      assert share["blob"]["size"] <= RisiMe.Blobs.max_bytes("history")
+
+      assert share["blob"] ==
+               Map.take(example("blob_upload_history_reply.json"), ~w(blob_id size sha256))
+
+      header = example("history_bundle_header.json")
+      assert header["v"] == 1 and header["type"] == "history_bundle"
+      [u, d] = String.split(header["provider"], "/")
+      assert u =~ @uuid and d =~ @uuid
+      assert header["request_id"] == share["request_id"] and header["count"] == share["count"]
+
+      entry = example("history_bundle_entry.json")
+      assert keys(entry) == ~w(client_msg_id from from_device message_id payload server_ts)
+      assert entry["message_id"] =~ @timeuuid and entry["server_ts"] =~ @ts
+      assert entry["payload"]["type"] in ~w(text image reaction call_end)
+
+      # The 'H' authenticated data: 18 bytes, one canonical form.
+      rid = req["request_id"]
+      aad = Wire.history_aad(rid)
+      assert byte_size(aad) == 18 and Wire.history_aad?(aad, rid)
+      refute Wire.history_aad?(binary_part(aad, 0, 17), rid)
+      refute Wire.history_aad?(aad <> <<0>>, rid)
+      refute Wire.history_aad?(<<1, ?D>> <> binary_part(aad, 2, 16), rid)
+      refute Wire.history_aad?(<<2, ?H>> <> binary_part(aad, 2, 16), rid)
+    end
   end
 
   describe "v1.13" do

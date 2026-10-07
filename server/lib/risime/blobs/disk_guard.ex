@@ -6,7 +6,7 @@ defmodule RisiMe.Blobs.DiskGuard do
     * `media` → `507 storage_full` when free space minus in-flight upload bytes falls under
       **max(50 GiB, 10 % of the filesystem)** (`:media_min_free`, `:media_min_free_ratio`), or
       when the live `media` bytes of all users exceed **200 GiB** (`:media_max`, `BLOB_MEDIA_MAX`;
-      the sum is cached for 60 s);
+      the sum is cached for 60 s); v1.15 §17.9: `history` uploads are counted with `media`;
     * `mls` and `icon` keep working down to **20 GiB** free (`:min_free`);
     * a warning log line (every poll) and a `/health` detail (`checks.blob_storage: "low"`)
       under **100 GiB** free (`:warn_free`).
@@ -60,7 +60,7 @@ defmodule RisiMe.Blobs.DiskGuard do
           left = free - Slots.inflight_bytes() - size
 
           min =
-            if purpose == "media",
+            if purpose in ["media", "history"],
               do: max(c[:media_min_free], trunc(total * c[:media_min_free_ratio])),
               else: c[:min_free]
 
@@ -68,13 +68,18 @@ defmodule RisiMe.Blobs.DiskGuard do
       end
 
     cond do
-      not free_ok -> {:error, :storage_full}
-      purpose == "media" and media_total(c) + size > c[:media_max] -> {:error, :storage_full}
-      true -> :ok
+      not free_ok ->
+        {:error, :storage_full}
+
+      purpose in ["media", "history"] and media_total(c) + size > c[:media_max] ->
+        {:error, :storage_full}
+
+      true ->
+        :ok
     end
   end
 
-  # The live `media` bytes of all users, cached for `:media_total_cache_ms`.
+  # The live `media` (and `history`) bytes of all users, cached for `:media_total_cache_ms`.
   defp media_total(c) do
     now = System.monotonic_time(:millisecond)
     ttl = c[:media_total_cache_ms]
@@ -88,7 +93,7 @@ defmodule RisiMe.Blobs.DiskGuard do
           Repo.one(
             from b in "blobs",
               where:
-                b.purpose == "media" and is_nil(b.deleted_at) and
+                b.purpose in ["media", "history"] and is_nil(b.deleted_at) and
                   b.expires_at > ^DateTime.utc_now(),
               select: coalesce(sum(b.size), 0)
           )

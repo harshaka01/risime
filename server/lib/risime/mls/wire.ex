@@ -96,6 +96,24 @@ defmodule RisiMe.MLS.Wire do
     end
   end
 
+  @doc """
+  The canonical `authenticated_data` of a `history_request`/`history_share` envelope (v1.15
+  §17.3): `0x01 0x48` (`'H'`) followed by `request_id` as 16 raw bytes (exactly 18 bytes).
+  """
+  @spec history_aad(String.t()) :: binary
+  def history_aad(request_id), do: <<1, ?H>> <> Ecto.UUID.dump!(request_id)
+
+  @doc "True if `aad` is exactly the `'H'` form for `request_id` (§17.3, one canonical parser)."
+  @spec history_aad?(binary, String.t()) :: boolean
+  def history_aad?(<<1, ?H, id::binary-size(16)>>, request_id) do
+    case Ecto.UUID.dump(request_id) do
+      {:ok, ^id} -> true
+      _ -> false
+    end
+  end
+
+  def history_aad?(_aad, _request_id), do: false
+
   @doc "Encodes a PrivateMessage `MLSMessage` with the given header fields (tests, tools)."
   @spec encode_private_message(binary, non_neg_integer, binary, binary, binary) :: binary
   def encode_private_message(group_id, epoch, aad, sender_data, ciphertext) do

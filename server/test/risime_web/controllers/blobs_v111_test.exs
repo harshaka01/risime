@@ -962,7 +962,14 @@ defmodule RisiMeWeb.BlobsV111Test do
                  "uploads_last_day" => 1,
                  "daily_limit" => 1000
                },
-               "mls" => %{"used" => 5, "limit" => 256 * @mib}
+               "mls" => %{"used" => 5, "limit" => 256 * @mib},
+               # v1.15 §17.9.
+               "history" => %{
+                 "used" => 0,
+                 "limit" => 512 * @mib,
+                 "uploads_last_hour" => 0,
+                 "hourly_limit" => 40
+               }
              }
     end
 

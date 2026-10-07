@@ -23,6 +23,10 @@ defmodule RisiMeWeb.BlobController do
   def create(conn, params) do
     me = me(conn)
 
+    # v1.15 §17.9: a `history` upload names the provider device by `X-Device-Id` (never a
+    # query parameter).
+    params = Map.put(params, "_device_id", List.first(get_req_header(conn, "x-device-id")))
+
     case Blobs.begin_upload(me, params, content_type(conn), content_length(conn)) do
       {:ok, up} ->
         try do

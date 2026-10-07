@@ -27,12 +27,14 @@ defmodule RisiMeWeb.InboxChannel do
         socket
         |> assign(:groups, RisiMe.Devices.groups?(device))
         |> assign(:calls, RisiMe.Devices.calls?(device))
+        |> assign(:history, RisiMe.Devices.history?(device))
 
       case page(socket, payload) do
         {:ok, reply} ->
           :telemetry.execute([:risime, :inbox, :join], %{count: 1}, %{result: :ok})
           :ok = Presence.track(user_id, socket.assigns[:device_id])
           if socket.assigns.groups, do: name_committer(user_id, socket.assigns.device_id)
+          if socket.assigns.history, do: name_history(user_id, socket.assigns.device_id)
 
           if socket_id = socket.assigns[:socket_id],
             do: Phoenix.PubSub.subscribe(RisiMe.PubSub, SocketTracker.control_topic(socket_id))
@@ -96,6 +98,20 @@ defmodule RisiMeWeb.InboxChannel do
          ) do
       {:ok, reply} -> {:reply, {:ok, reply}, socket}
       {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
+
+  # v1.15 §17.4: history sharing pushes (routing and naming only; MLS ciphertext).
+  def handle_in("history:" <> _ = event, payload, socket) when is_map(payload) do
+    case RisiMe.History.push(event, socket.assigns.user_id, socket.assigns[:device_id], payload) do
+      {:ok, reply} ->
+        {:reply, {:ok, reply}, socket}
+
+      {:error, :request_open, request_id} ->
+        {:reply, {:error, %{reason: "request_open", request_id: request_id}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: to_string(reason)}}, socket}
     end
   end
 
@@ -198,6 +214,16 @@ defmodule RisiMeWeb.InboxChannel do
       else: {:noreply, socket}
   end
 
+  # v1.15 §17.1: the device registered (or lost) `history_share` while connected.
+  def handle_info({:device_history, device_id, history?}, socket) do
+    if device_id == socket.assigns[:device_id] and history? != socket.assigns[:history] do
+      if history?, do: name_history(socket.assigns.user_id, device_id)
+      {:noreply, assign(socket, :history, history?)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info({:auth_expired}, socket) do
     push(socket, "auth:expired", %{})
     # Same sender as the push, so the client gets auth:expired before the socket closes.
@@ -274,6 +300,8 @@ defmodule RisiMeWeb.InboxChannel do
 
   # v1.13 §16.1: `call_signal` events only for a `calls` socket (DMs only, so no groups rule).
   defp visible?(socket, %{kind: "call_signal"}), do: socket.assigns[:calls] == true
+  # v1.15 §17.5: `history_*` events only for a `history_share` device.
+  defp visible?(%{assigns: %{history: false}}, %{kind: "history_" <> _}), do: false
   defp visible?(%{assigns: %{groups: true}}, _event), do: true
 
   defp visible?(_socket, %{data: data}) when is_map(data) do
@@ -287,6 +315,13 @@ defmodule RisiMeWeb.InboxChannel do
 
   defp device(user_id, device_id),
     do: RisiMe.Repo.get_by(RisiMe.Devices.Device, user_id: user_id, device_id: device_id)
+
+  # v1.15 §17.4: a dormant own candidate is named when its inbox joins. Best effort.
+  defp name_history(user_id, device_id) do
+    RisiMe.History.device_joined(user_id, device_id)
+  rescue
+    e -> Logger.warning("history naming failed: #{Exception.message(e)}")
+  end
 
   # §12.4: a waiting op names the first authorised device whose inbox joins. Best effort.
   defp name_committer(user_id, device_id) do

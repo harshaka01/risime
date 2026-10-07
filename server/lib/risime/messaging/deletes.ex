@@ -683,6 +683,9 @@ defmodule RisiMe.Messaging.Deletes do
     with {:ok, conv} <- conversation(conv),
          true <- Regex.match?(@timeuuid, upto) || {:error, :bad_request},
          :ok <- RateLimiter.hit(:chat_clear, user_id, @clear_limit, @clear_window) do
+      # v1.15 §17.4: a clear by the requester's user cancels its open history requests there.
+      RisiMe.History.chat_cleared(user_id, conv)
+
       {:ok, _} =
         %{"user_id" => user_id, "conversation_id" => conv, "upto" => upto}
         |> RisiMe.Workers.ChatClear.new()
