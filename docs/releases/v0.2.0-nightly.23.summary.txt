@@ -1,0 +1,2 @@
+Fixes calls where only the caller could be heard. Both phones need this version.
+Update over the old app; never uninstall or clear data.
