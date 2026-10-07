@@ -98,8 +98,8 @@ android {
         buildConfigField("boolean", "CALLS_ENABLED", (providers.gradleProperty("risime.calls").orNull != "false").toString())
         // v1.15 §17 history sharing: the `history_share` capability and every history UI. Off by
         // default until the whole feature is green (a release from main never shows it half-built);
-        // -Prisime.historyShare=true turns it on.
-        buildConfigField("boolean", "HISTORY_SHARE_ENABLED", (providers.gradleProperty("risime.historyShare").orNull == "true").toString())
+        // On by default since nightly.20; -Prisime.historyShare=false turns it off.
+        buildConfigField("boolean", "HISTORY_SHARE_ENABLED", (providers.gradleProperty("risime.historyShare").orNull != "false").toString())
         buildConfigField("boolean", "DELETES_SEND_ENABLED", (providers.gradleProperty("risime.deletesSend").orNull != "false").toString())
         // Pinned server attestation keys (public JWK JSON, ';'-separated). Empty until root provides
         // the pilot key at rollout; the server's /mls/attestation_keys are trusted in addition.
