@@ -1,0 +1,2 @@
+New: Delete for me / Delete for everyone, multi-select, Clear chat and Delete chat. More call fixes.
+Update over the old app; never uninstall or clear data.
