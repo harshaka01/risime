@@ -703,6 +703,13 @@ where they differ for them. DMs are unchanged. Apps before v1.9 never see group 
   a `device_id` last seen **before** that registration is superseded and never blocks. A blocking
   instance is listed as `legacy_app` with `device_id: null`. (Clarified in the v1.10 hotfix: old
   instances from before an update blocked testers for 30 days.)
+  A registered device is **superseded** when it was last seen (census or `PUT`) before another
+  device of the same user was first registered. A superseded device can't receive: it never blocks
+  readiness and is never listed in `missing*`. It counts again as soon as it's seen again (for
+  example a second phone still in use). This applies to §10.2, §14.1, §15.1 and §16.1 readiness as
+  well. (Added 2026-10-07: reinstalled phones' dead rows kept photos and deletes off for 30 days.)
+  Clients re-advertise capabilities (`PUT /me/devices/{id}`) whenever they change, and never say
+  "needs to update" unless the reason is an old app (`legacy_app`).
   - `missing[].reason` (in `409 not_ready`, `error_not_ready_groups.json`): `"no_mls"` (no
     current MLS device), or **`"legacy_app"`** (an app instance seen in 30 days lacks `groups`;
     `device_id` names it, or is null for a pre-v1.7 instance). Clients show "<name> needs to

@@ -1,5 +1,7 @@
 # Proposal: superseded registered devices never block readiness (+ optional reasons)
 
+**Status: merged** into PROTOCOL §12.1 (2026-10-07); §3 stays optional for later.
+
 From: server + android (nightly.16 tester findings), 2026-10-07. Needs root to fold into
 PROTOCOL.md §10.2, §12.1, §14.1, §15.1 and §16.1.
 
