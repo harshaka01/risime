@@ -332,6 +332,24 @@ class HistoryManager(
     /** "Request history" from the marker: [sources] = own | any. */
     suspend fun request(conversationId: String, sources: String): RequestOutcome = kotlinx.coroutines.withContext(io) { requestNow(conversationId, sources) }
 
+    /**
+     * Decision 055: after a new install or a lost database, the missing history comes back by itself:
+     * every conversation with a history gap that has never been asked for gets one request (own
+     * devices or members, §17). Conversations asked before keep their marker for a manual retry.
+     * @return how many requests went out (or were queued).
+     */
+    suspend fun autoRequestAll(): Int = kotlinx.coroutines.withContext(io) {
+        if (!supported()) return@withContext 0
+        var n = 0
+        for (conv in dao.allGaps().map { it.conversationId }.distinct()) {
+            if (dao.latestRequest(conv) != null) continue
+            val r = runCatching { requestNow(conv, lk.codegen.risime.net.HistoryRequestPush.SOURCES_ANY) }.getOrNull()
+            if (r is RequestOutcome.Sent || r is RequestOutcome.Queued) n++
+        }
+        if (n > 0) log("history: asked for the missing history of $n conversation(s)")
+        n
+    }
+
     private suspend fun requestNow(conversationId: String, sources: String): RequestOutcome {
         val eng = engine() ?: return RequestOutcome.NotAvailable
         if (!supported()) return RequestOutcome.NotAvailable

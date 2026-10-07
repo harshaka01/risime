@@ -69,6 +69,18 @@ class HistoryFlowTest {
         advanceUntilIdle()
     }
 
+    @Test fun aNewInstallAsksForTheMissingHistoryByItselfOncePerChat() = runTest {
+        // Decision 055: a phone whose chats are gone (new install) asks every chat with a gap, once.
+        val old = dev(ME, "d-old")
+        val new = dev(ME, "d-new")
+        seed(old, new, dm, listOf(msg(dm, PEER, "2026-10-02T09:00:00.000Z", "from Kamal")))
+        assertEquals(1, new.manager.autoRequestAll())
+        advanceUntilIdle()
+        assertEquals("any", new.pushed("history:request").str("sources"))
+        // Asked before (open or closed): never again by itself.
+        assertEquals(0, new.manager.autoRequestAll())
+    }
+
     @Test fun ownNewPhoneAsksOnceThenSharesAutomatically() = runTest {
         val old = dev(ME, "d-old")
         val new = dev(ME, "d-new")

@@ -735,6 +735,16 @@ class AppContainer(
         http, scope, engine, signals = presence, refusals = { onSocketRefused() },
     )
 
+    /** Decision 055: each time the connection goes live, missing history is asked for once per chat. */
+    private val historyAutoRequest = if (BuildConfig.HISTORY_SHARE_ENABLED) scope.launch {
+        realtime.state.collectLatest { st ->
+            if (st == lk.codegen.risime.realtime.ConnectionState.Live) {
+                kotlinx.coroutines.delay(20_000) // groups joined and gaps recorded first
+                runCatching { history.autoRequestAll() }.onFailure { Log.w("RisiMe", "history auto-request: ${it.message}") }
+            }
+        }
+    } else null
+
     private val foreground = MutableStateFlow(false)
 
     init {
