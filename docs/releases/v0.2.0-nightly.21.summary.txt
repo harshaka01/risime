@@ -1,0 +1,2 @@
+Fixes messages stuck on the clock icon: one chat that cannot send no longer blocks the others.
+Update over the old app; never uninstall or clear data.
