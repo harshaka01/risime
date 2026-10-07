@@ -47,6 +47,21 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## TURN relay live on the pilot (2026-10-07 06:34 UTC)
+- `TURN_URLS` (turn:203.115.26.139:3478 udp+tcp) is set in `infra/pilot/pilot.env` (`45dfb64`). The
+  pilot was restarted at 06:34 UTC by the calls agent on Harsha's instruction to it.
+- **Verified by root:**
+  - the service environment has `TURN_URLS`;
+  - `/health` is ok on nightly.23;
+  - `GET /api/v1/calls/turn` has returned 200 since 06:45 (the last 503 was at 06:31);
+  - 3478/tcp is reachable from outside (check-host, all nodes). UDP was proven by Harsha's home
+    STUN test.
+- `scripts/turn-smoke` checks the live setup (binds, REST credentials over UDP and TCP, a wrong
+  secret refused). A Redroid relay-only call had audio both ways.
+- **Harsha to verify on phones:** the 4-step check at the top of `docs/status/calls-manual-test.md`
+  (one phone on Wi-Fi, one on mobile data, both on nightly.23).
+- **Not started:** voice notes, multi-image selection, call quality (STEP 2–4).
+
 ## v0.2.0-nightly.23 (live 2026-10-07, not required): hotfix, one-way call audio
 - **Cause:** the mic track was added with `addTransceiver`, which WebRTC doesn't reuse for an
   incoming offer, so the callee answered `a=recvonly` and was never heard (since nightly.16).
