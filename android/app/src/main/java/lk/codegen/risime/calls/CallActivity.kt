@@ -53,6 +53,15 @@ class CallActivity : ComponentActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enableEdgeToEdge()
+        // Never an empty call screen: started without a call (a stale notification, Recents), it closes at once.
+        if (!hasCall()) {
+            finishAndRemoveTask()
+            return
+        }
+        // Back from the call screen goes to the chat; the call goes on (the bar over the chats returns to it).
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = leaveToChat()
+        })
         handle(intent)
         setContent {
             RisiMeTheme {
@@ -69,10 +78,11 @@ class CallActivity : ComponentActivity() {
                         tick++
                     }
                 }
+                // The call ended: close the call screen (and its task) and go back to the chat.
                 LaunchedEffect(s, blind) {
                     if (s == null && blind == null) {
                         delay(300)
-                        finish()
+                        leaveToChat()
                     }
                 }
                 val snap = s
@@ -98,6 +108,35 @@ class CallActivity : ComponentActivity() {
                         )
                     }
                 }
+            }
+        }
+    }
+
+    private var lastConversation: String? = null
+
+    private fun hasCall(): Boolean = calls.inCall() || calls.state.value != null
+
+    override fun onResume() {
+        super.onResume()
+        calls.state.value?.conversationId?.let { lastConversation = it }
+        if (!hasCall()) leaveToChat()
+    }
+
+    /** Finishes this screen and its task (never an empty activity behind it) and shows the chat. */
+    private fun leaveToChat() {
+        if (isFinishing) return
+        val conv = calls.state.value?.conversationId ?: lastConversation
+        val visible = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+        // finish(), not finishAndRemoveTask(): removing a task tells the call service the app was
+        // swiped away (onTaskRemoved), which ends the call. autoRemoveFromRecents drops the card.
+        finish()
+        if (visible && conv != null) {
+            runCatching {
+                startActivity(
+                    Intent(this, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        .putExtra(lk.codegen.risime.push.Notifier.EXTRA_OPEN_CHAT, conv),
+                )
             }
         }
     }

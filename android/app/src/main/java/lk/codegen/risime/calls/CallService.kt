@@ -49,6 +49,8 @@ class CallService : Service() {
 
     /** Decision 054: the app was swiped away during a call: end it and give the audio back. */
     override fun onTaskRemoved(rootIntent: Intent?) {
+        // Only the app itself swiped away ends the call; the call screen's own task closing never does.
+        if (rootIntent?.component?.className == CallActivity::class.java.name) return super.onTaskRemoved(rootIntent)
         runCatching { (application as RisiMeApp).container.calls.onTaskRemoved() }
         super.onTaskRemoved(rootIntent)
     }

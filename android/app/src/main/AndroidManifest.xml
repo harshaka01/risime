@@ -47,6 +47,7 @@
             android:exported="false"
             android:launchMode="singleTask"
             android:taskAffinity="lk.codegen.risime.calls"
+            android:autoRemoveFromRecents="true"
             android:showWhenLocked="true"
             android:turnScreenOn="true" />
         <service

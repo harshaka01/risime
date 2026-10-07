@@ -356,6 +356,33 @@ nt="$(A shell dumpsys notification --noredact 2>/dev/null || true)"
 grep -q "pkg=$PKG .*channel=call_ongoing" <<<"$nt" && fail "call 7: the ongoing notification stayed after hang-up"
 pass "call 7: Hang up from the notification ended the call on both phones, released the microphone, removed the notification"
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"
+# Call 8 (the nightly.24 report: Back twice after a call left a dark screen): Back from the call
+# screen goes to the chat while the call goes on; when the call ends no call screen, task or Recents
+# card is left; a hang-up on the call screen returns to the chat.
+top_act() { A shell dumpsys activity activities 2>/dev/null | grep -m1 -E 'topResumedActivity|mResumedActivity' || true; }
+no_call_screen() {  # $1 label
+  local acts rec; acts="$(A shell dumpsys activity activities 2>/dev/null || true)"; rec="$(A shell dumpsys activity recents 2>/dev/null || true)"
+  grep -q "calls.CallActivity" <<<"$acts" && fail "$1: $DEV still has a call screen ($(top_act))"
+  grep -q "lk.codegen.risime.calls" <<<"$rec" && fail "$1: $DEV's Recents still list the call task"
+  return 0
+}
+DEV=B; open_chat "ZZ Call A" || fail "B: DM"; DEV=A; open_chat "ZZ Call B" || fail "A: DM"
+call_once "call 8 (Back from the call screen)"
+DEV=A; A shell input keyevent KEYCODE_BACK; sleep 2
+[[ "$(top_act)" == *MainActivity* ]] || fail "call 8: Back from the call screen didn't show the chat ($(top_act))"
+has "Call in progress" || fail "call 8: no 'Call in progress — tap to return' bar after Back"
+A shell input keyevent KEYCODE_BACK; sleep 2
+[[ "$(top_act)" != *CallActivity* ]] || fail "call 8: a second Back landed on the call screen"
+DEV=B; tap "End call" || fail "call 8: B can't hang up"; sleep 5
+DEV=A; no_call_screen "call 8 (ended from B while A was in the chats)"
+for _ in 1 2; do A shell input keyevent KEYCODE_BACK; sleep 1; done
+[[ "$(top_act)" != *CallActivity* ]] || fail "call 8: Back after the call reached a call screen"
+pass "call 8: Back goes to the chat during the call; after the end no call screen, task or Recents card is left"
+DEV=B; no_call_screen "call 8 (B hung up)"
+[[ "$(top_act)" == *MainActivity* ]] || fail "call 8: B's hang-up didn't return to the chat ($(top_act))"
+pass "call 8: hanging up on the call screen returns to the chat"
+no_leftovers "call 8"
+DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
 # (A call to a phone whose screen is off can't be tested here: redroid has no FCM, and a backgrounded
 # app has no socket. The locked-phone full-screen ring stays on the real-phone manual test.)
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
@@ -368,4 +395,6 @@ if [ "${CALLTEST_TURN:-0}" = 1 ]; then
   for DEV in A B; do A shell run-as "$PKG" rm -f files/debug_relay_only; done
 fi
 logcat_ok "the end"
+# CALLTEST_EXTRA=<file>: more steps sourced here with every helper available (debugging scenarios).
+if [ -n "${CALLTEST_EXTRA:-}" ]; then source "$CALLTEST_EXTRA"; fi
 echo "CALLTEST OK"
