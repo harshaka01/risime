@@ -364,6 +364,9 @@ print(f"messages={q('SELECT COUNT(*) FROM messages')} contacts={q('SELECT COUNT(
 PY
   local ds; ds="$(A exec-out cat "/data/data/$PKG/files/datastore/risime.preferences_pb" 2>/dev/null | strings | grep -cE '^(last_user_id|token|user)$' || true)"
   echo "datastore_keys=$ds"
+  # The device id must survive an update (a new id = a new device: dead rows, groups to rejoin).
+  local did; did="$(A exec-out cat "/data/data/$PKG/files/datastore/risime.preferences_pb" 2>/dev/null | python3 -I -c 'import re,sys; m=re.search(rb"device_id.{0,8}?([0-9a-f]{8})-[0-9a-f]{4}-", sys.stdin.buffer.read(), re.S); print(m.group(1).decode() if m else "")' || true)"
+  echo "device_id=${did:-none}"
 }
 
 
@@ -429,6 +432,9 @@ if [ "$DB_BEFORE" != no-root ]; then
   has_text "$DB_AFTER" "cursor=set" || fail "sync cursor not stored after the upgrade"
   [ "$(field "$DB_AFTER" datastore_keys)" -ge 2 ] 2>/dev/null || fail "DataStore session/owner keys lost"
   [ -z "$SERIAL_B" ] || [ "$(field "$DB_AFTER" groups)" -ge 1 ] 2>/dev/null || fail "group row lost"
+  did_b="$(sed -n 's/.*device_id=\([^ ]*\).*/\1/p' <<<"$DB_BEFORE" | tail -1)"; did_a="$(sed -n 's/.*device_id=\([^ ]*\).*/\1/p' <<<"$DB_AFTER" | tail -1)"
+  echo "    device id: before ${did_b:-?} after ${did_a:-?}"
+  [ -n "$did_b" ] && [ "$did_b" != none ] && [ "$did_b" = "$did_a" ] || fail "device id changed or missing across the upgrade (${did_b:-?} -> ${did_a:-?})"
 else
   echo "==> no root on this device: verified through the UI only (use a google_apis emulator image for Room checks)"
 fi
