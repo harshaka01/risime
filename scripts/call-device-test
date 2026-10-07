@@ -183,23 +183,51 @@ pass "both signed in through the real login UI"
 [ "$(fx friends)" = "calltest: friends ok" ] || fail "fixture: friends"
 # The friend list is fetched at start: restart both apps.
 for DEV in A B; do A shell am force-stop "$PKG"; done
-# Both apps open the chat: the e2ee loop upgrades the DM (A commits, B joins from the Welcome).
+# The P0 scenario (nightly.17/18 crashed opening chats): the DM is activated to MLS while it is open.
 DEV=B; open_chat "ZZ Call A" || fail "B: chat with A not listed"
 DEV=A; open_chat "ZZ Call B" || fail "A: chat with B not listed"
-# nightly.17 crash: opening a DM flushes the outbox the moment MLS is active, from the main thread.
-# A pending message (sent offline), then a fresh app start straight into the DM reproduces it.
-DEV=A; A reverse --remove "tcp:$PORT" >/dev/null 2>&1 || true; sleep 2
-{ type_into "Encrypted message" "pending while offline" || type_into "Message" "pending while offline"; } && tap "Send" || fail "A: could not type a message"
-sleep 2; A shell am force-stop "$PKG"; A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
-open_chat "ZZ Call B" || fail "A: reopening the DM"
-sleep 8
 for _ in $(seq 1 60); do [ "$(fx e2ee)" = "calltest: e2ee=true" ] && break; sleep 2; done
 [ "$(fx e2ee)" = "calltest: e2ee=true" ] || fail "the DM never became e2ee"
-DEV=B; A shell input keyevent KEYCODE_BACK; sleep 1   # B waits on the chat list (foreground, live socket)
-DEV=A; A shell input keyevent KEYCODE_BACK; sleep 1; open_chat "ZZ Call B" || fail "A: the DM crashed on opening"
-sleep 5
-logcat_ok "opening the DM while MLS activates"
-pass "friends; the DM is e2ee; opening it while MLS activated crashed nothing and touched no database on the main thread"
+DEV=A; sleep 3; has "ZZ Call B" || fail "A: the DM with B closed (crash?) while it was activated to MLS"
+logcat_ok "A opens the DM with B while it is activated to MLS"
+pass "A opened the DM with B while it was activated to MLS: no crash"
+
+# Encrypted messages flow both ways, also after each phone updates in place (UPGRADE_APK, e.g. the
+# next nightly; nightly.19 left senders "pending" after an update).
+msg_check() {  # $1 label
+  local t1="m-$1-from-A" t2="m-$1-from-B"; t1="${t1// /-}"; t2="${t2// /-}"
+  DEV=A; A shell am force-stop "$PKG"; open_chat "ZZ Call B" || fail "$1: A can't open the DM"
+  { type_into "Encrypted message" "$t1" || type_into "Message" "$t1"; } && tap "Send" || fail "$1: A can't type"
+  DEV=B; A shell am force-stop "$PKG"; open_chat "ZZ Call A" || fail "$1: B can't open the DM"
+  wait_for "$t1" 45 || fail "$1: B never received A's encrypted message"
+  { type_into "Encrypted message" "$t2" || type_into "Message" "$t2"; } && tap "Send" || fail "$1: B can't type"
+  DEV=A; wait_for "$t2" 45 || fail "$1: A never received B's encrypted message"
+  logcat_ok "$1"
+  pass "$1: encrypted messages delivered both ways"
+}
+msg_check "before"
+DEV=B; A install -r "${UPGRADE_APK:-$APK}" >/dev/null || fail "B: update in place"
+msg_check "after B updated"
+DEV=A; A install -r "${UPGRADE_APK:-$APK}" >/dev/null || fail "A: update in place"
+msg_check "after both updated"
+# A message stuck in the outbox (sent offline), then fresh starts straight into chats while MLS is
+# active: the chat screen flushes the outbox (nightly.17/18 did that on the main thread and crashed).
+DEV=A; open_chat "ZZ Call B" || fail "A: DM"
+A reverse --remove "tcp:$PORT" >/dev/null 2>&1 || true; sleep 2
+{ type_into "Encrypted message" "stuck-while-offline" || type_into "Message" "stuck-while-offline"; } && tap "Send" || fail "A: could not type"
+sleep 2
+for _ in 1 2 3; do
+  A shell am force-stop "$PKG"
+  open_chat "ZZ Call B" || fail "A: opening the DM with a stuck message (crash?)"
+  sleep 6; has "ZZ Call B" || fail "A: the DM crashed on opening with a message stuck in the outbox"
+done
+logcat_ok "A opens the DM with a message stuck in the outbox"
+A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+DEV=B; A shell am force-stop "$PKG"; open_chat "ZZ Call A" || fail "B: DM"
+wait_for "stuck-while-offline" 60 || fail "the stuck message was never delivered once A was back online"
+pass "A opened the DM 3 times with a stuck message (offline, MLS active): no crash; delivered once online"
+DEV=A; A shell am force-stop "$PKG"; open_chat "ZZ Call B" || fail "A: DM"
+sleep 3
 
 # One call: A calls, B answers through the activity intent, media host/host, A hangs up.
 call_once() {  # $1 label

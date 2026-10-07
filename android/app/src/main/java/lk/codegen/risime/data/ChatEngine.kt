@@ -1131,8 +1131,21 @@ class ChatEngine(
         flushDeletesImpl()
     }
 
+    /** First time each pending message was told "retry later" (in memory): after [OUTBOX_GIVE_UP_MS] it fails visibly. */
+    private val retryingSince = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
+     * The outbox keeps the order **per conversation** only. nightly.19: one message that could only be
+     * retried later (an e2ee DM whose MLS group wasn't usable) stopped the whole outbox, so every new
+     * message in every chat stayed pending (clock) for ever. Now a conversation that has to wait is
+     * skipped for this pass (its later messages wait behind it), the others go out, and a message that
+     * still can't be sent after [OUTBOX_GIVE_UP_MS] becomes "Not sent — tap to retry" with its reason.
+     */
     private suspend fun flushMessages(): Unit = outboxLock.withLock {
+        val waiting = HashSet<String>()
+        var retry = false
         for (m in messages.pendingOutbox()) {
+            if (m.conversationId in waiting) continue
             deletes?.countAttempt(m.clientMsgId) // android R2: from now on it may be on the server
             when (val r = send(m)) {
                 is PushResult.Ok -> {
@@ -1141,20 +1154,29 @@ class ChatEngine(
                     messages.updateStatus(m.clientMsgId, next.name, r.value.messageId, r.value.serverTs, null)
                     // §15.7: deleted while it was being sent: now delete it for everyone.
                     if (cur.deleteState == MessageEntity.DELETE_STATE_CANCEL_AFTER_SEND) cancelAfterSend(m.clientMsgId, r.value.messageId)
+                    retryingSince.remove(m.clientMsgId)
                 }
                 is PushResult.Rejected -> if (r.reason == WAITING_FOR_GROUP) {
-                    continue // stays PENDING; retried when the group arrives (and on every onLive)
+                    waiting += m.conversationId // stays PENDING; retried when the group arrives (and on every onLive)
                 } else if (r.reason == "rate_limited" || r.reason == RETRY_LATER) {
-                    scope.launch {
-                        delay(rateLimitRetryMs)
-                        flushOutbox()
+                    val since = retryingSince.getOrPut(m.clientMsgId) { clock() }
+                    if (r.reason == RETRY_LATER && clock() - since >= OUTBOX_GIVE_UP_MS) {
+                        retryingSince.remove(m.clientMsgId)
+                        messages.updateStatus(m.clientMsgId, MessageStatus.FAILED.name, null, null, E2EE_NOT_READY)
+                    } else {
+                        retry = true
                     }
-                    return@withLock
+                    waiting += m.conversationId
                 } else {
+                    retryingSince.remove(m.clientMsgId)
                     messages.updateStatus(m.clientMsgId, MessageStatus.FAILED.name, null, null, r.reason)
                 }
-                PushResult.Unavailable -> return@withLock // retried on the next onLive()
+                PushResult.Unavailable -> return@withLock // the socket is down: retried on the next onLive()
             }
+        }
+        if (retry) scope.launch {
+            delay(rateLimitRetryMs)
+            flushOutbox()
         }
     }
 
@@ -1203,6 +1225,9 @@ class ChatEngine(
 
         /** Local only: stale_epoch/e2ee_required couldn't be resolved now; stays PENDING, retried later. */
         const val RETRY_LATER = "retry_later"
+        /** A message encryption couldn't send for [OUTBOX_GIVE_UP_MS] fails visibly with this reason. */
+        const val E2EE_NOT_READY = "e2ee_not_ready"
+        const val OUTBOX_GIVE_UP_MS = 30_000L
 
         /** Local only: an image row without a stored envelope (deleted meanwhile). */
         const val IMAGE_UNAVAILABLE = "image_unavailable"

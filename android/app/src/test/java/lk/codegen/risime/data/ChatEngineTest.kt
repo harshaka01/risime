@@ -1,6 +1,7 @@
 package lk.codegen.risime.data
 
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import lk.codegen.risime.net.Event
@@ -64,6 +65,30 @@ class ChatEngineTest {
         // A second one (or the durable call_end's line later) for the same call id: no new row.
         assertTrue(!e.insertLocalMissedCall(conv, peer, "call-1"))
         assertEquals(1, messages.rows.values.count { it.callId == "call-1" })
+    }
+
+    @Test
+    fun oneChatThatMustWaitNeverBlocksTheOthersAndFailsVisiblyAfter30s() = runTest {
+        // nightly.19 P0: one DM whose sends could only be retried later kept every chat "pending".
+        val other = "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"
+        realtime.sendReplies = { m ->
+            if (m.to == peer) PushResult.Rejected(lk.codegen.risime.net.AuthErrors.E2EE_REQUIRED)
+            else PushResult.Ok(MsgSendReply("mid-${m.clientMsgId}", "dm:x", "2026-10-06T08:15:30.456Z"))
+        }
+        val e = engine()
+        val stuck = e.sendText(peer, "to the broken DM")!!
+        val later = e.sendText(peer, "second to the broken DM")!!
+        val fine = e.sendText(other, "to a healthy chat")!!
+        advanceTimeBy(1_000)
+        assertEquals("the healthy chat is not blocked", "SENT", messages.rows[fine]!!.status)
+        assertEquals("PENDING", messages.rows[stuck]!!.status)
+        assertEquals("order kept inside the waiting chat", "PENDING", messages.rows[later]!!.status)
+        assertTrue("the second message of the waiting chat was never pushed before the first", realtime.sent.none { it.clientMsgId == later })
+        // Retries keep going; after 30 s it becomes "Not sent" with the reason (tap to retry).
+        now += ChatEngine.OUTBOX_GIVE_UP_MS + 1
+        advanceTimeBy(30_000)
+        assertEquals("FAILED", messages.rows[stuck]!!.status)
+        assertEquals(ChatEngine.E2EE_NOT_READY, messages.rows[stuck]!!.failReason)
     }
 
     @Test

@@ -275,6 +275,7 @@ internal fun Bubble(
             !failed -> if (m.deleteUnverified) lk.codegen.risime.data.deletes.DeleteRules.UNVERIFIED_NOTE else null
             m.failReason == AuthErrors.NOT_FRIENDS -> "Not sent — you're not friends"
             m.failReason == AuthErrors.TOO_LONG -> "Not sent — too long"
+            m.failReason == lk.codegen.risime.data.ChatEngine.E2EE_NOT_READY -> "Not sent — encryption with this chat isn't ready. Tap to retry"
             retryable -> "Not sent — tap to retry or delete"
             else -> "Not sent — tap to delete"
         },
