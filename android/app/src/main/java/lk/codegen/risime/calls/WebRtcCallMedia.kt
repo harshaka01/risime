@@ -132,8 +132,27 @@ class WebRtcCallMedia(
             ?: error("createPeerConnection failed")
 
         init {
-            pc.addTransceiver(track, RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV, listOf("risime")))
+            // addTrack, not addTransceiver: only an addTrack transceiver is reused for the remote
+            // offer's audio m-line (JSEP). nightly.16–21 used addTransceiver, so the callee's
+            // setRemoteDescription(offer) created a second, track-less transceiver and the answer
+            // said a=recvonly: only the caller was heard.
+            pc.addTrack(track, listOf("risime"))
         }
+
+        /**
+         * The callee's answer always sends: the transceiver the remote offer created or matched
+         * carries our microphone track and is sendrecv (defence in depth for the addTrack reuse).
+         */
+        private fun sendOnRemoteAudio() {
+            for (t in pc.transceivers) {
+                if (t.mediaType != livekit.org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO || t.mid == null || t.isStopped) continue
+                if (t.sender.track() == null) t.sender.setTrack(track, false)
+                if (t.direction != RtpTransceiver.RtpTransceiverDirection.SEND_RECV) t.setDirection(RtpTransceiver.RtpTransceiverDirection.SEND_RECV)
+            }
+            track.setEnabled(!mutedNow)
+        }
+
+        @Volatile private var mutedNow = false
 
         private fun observer() = object : PeerConnection.Observer {
             override fun onSignalingChange(s: PeerConnection.SignalingState?) = Unit
@@ -201,6 +220,7 @@ class WebRtcCallMedia(
         }
 
         override suspend fun createAnswer(): String {
+            sendOnRemoteAudio()
             val d = create(false, audioOnly(false))
             val sdp = SdpRules.prepareLocal(d.description)
             set(true, SessionDescription(SessionDescription.Type.ANSWER, sdp))
@@ -228,8 +248,9 @@ class WebRtcCallMedia(
                 val local = pair?.members?.get("localCandidateId")?.let { id -> all.firstOrNull { it.id == id }?.members?.get("candidateType") } as? String
                 val remote = pair?.members?.get("remoteCandidateId")?.let { id -> all.firstOrNull { it.id == id }?.members?.get("candidateType") } as? String
                 // Debug overlay data only; release builds never log candidates or IPs (§16.9).
-                if (debug) Log.d("RisiMe", "call stats: pair=$local/$remote rtt=${pair?.members?.get("currentRoundTripTime")} dtls=${transport?.members?.get("dtlsState")} srtp=${transport?.members?.get("srtpCipher")}")
                 val received = all.filter { it.type == "inbound-rtp" }.mapNotNull { (it.members["bytesReceived"] as? Number)?.toLong() }.takeIf { it.isNotEmpty() }?.sum()
+                val sent = all.filter { it.type == "outbound-rtp" }.mapNotNull { (it.members["bytesSent"] as? Number)?.toLong() }.takeIf { it.isNotEmpty() }?.sum()
+                if (debug) Log.d("RisiMe", "call stats: pair=$local/$remote rtt=${pair?.members?.get("currentRoundTripTime")} dtls=${transport?.members?.get("dtlsState")} srtp=${transport?.members?.get("srtpCipher")} sent=${sent ?: 0} recv=${received ?: 0}")
                 val st = DtlsStats(transport?.members?.get("dtlsState") as? String, transport?.members?.get("srtpCipher") as? String, fp, local, remote, received)
                 onStats(st)
                 cont.resume(st)
@@ -237,6 +258,7 @@ class WebRtcCallMedia(
         }
 
         override fun setMuted(muted: Boolean) {
+            mutedNow = muted
             track.setEnabled(!muted)
         }
 

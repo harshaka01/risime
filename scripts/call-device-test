@@ -248,10 +248,21 @@ call_once() {  # $1 label
   has "already in a call" && fail "$1: A says \"You're already in a call\""
   DEV=B; wait_ring 30 || fail "$1: B never rang"
   pass "$1: B rings"
+  if [ "${CALL_BG:-0}" = 1 ]; then A shell input keyevent KEYCODE_HOME; sleep 2; fi
   answer_intent || fail "$1: no Answer action on the incoming-call notification"
   local m=""; for _ in $(seq 1 30); do DEV=A; m="$(media_ok)"; [ -n "$m" ] && { DEV=B; [ -n "$(media_ok)" ] && break; }; m=""; sleep 1; done
   [ -n "$m" ] || fail "$1: media never connected directly (host/prflx pair) with DTLS-SRTP on both"
   pass "$1: answered via the Answer intent; direct media (host/prflx), DTLS connected, SRTP on both (${m##*call stats: })"
+  # Audio must flow BOTH ways (nightly.21: only the caller was heard): outbound-rtp bytesSent and
+  # inbound-rtp bytesReceived grow on both phones while the call is up.
+  sleep 6
+  local d line sent recv
+  for d in A B; do
+    DEV=$d; line="$(A logcat -d 2>/dev/null | grep -E 'call stats: .*sent=[0-9]+ recv=[0-9]+' | tail -1 || true)"
+    sent="$(sed -nE 's/.*sent=([0-9]+).*/\1/p' <<<"$line")"; recv="$(sed -nE 's/.*recv=([0-9]+).*/\1/p' <<<"$line")"
+    [ "${sent:-0}" -gt 0 ] && [ "${recv:-0}" -gt 0 ] || fail "$1: one-way audio: $d sent=${sent:-?} recv=${recv:-?} bytes"
+  done
+  pass "$1: audio flows both ways (bytesSent and bytesReceived > 0 on caller and callee)"
 }
 # Decision 054: no call left behind: no RisiMe call in Telecom (a ghost self-managed call held
 # MODE_IN_COMMUNICATION in nightly.16 and made every later call "busy") and no communication mode.
@@ -290,5 +301,8 @@ DEV=B; no_leftovers "call 3 (B, the survivor)"
 DEV=A; open_chat "ZZ Call B" || fail "A: chat after the restart"
 sleep 3
 call_once "call 4 (after the kill)"; hang_up_a "call 4"
+# Answering from the background: B goes to the home screen while it rings and answers from the
+# notification shade (redroid has no FCM, so a fully backgrounded app can't be woken here).
+CALL_BG=1 call_once "call 5 (answered from the background)"; hang_up_a "call 5"
 logcat_ok "the end"
 echo "CALLTEST OK"
