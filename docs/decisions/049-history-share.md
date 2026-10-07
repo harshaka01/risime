@@ -1,6 +1,6 @@
 # 049 — Group and DM history sharing between devices
 
-**Status:** proposed 2026-10-06 (root). Awaiting the crypto, server and android reviews and
+**Status:** accepted (consent: option A, decided by root 2026-10-07) 2026-10-06 (root). Awaiting the crypto, server and android reviews and
 Harsha's answer on own-device consent. Contract: proposal
 `contract/proposals/2026-10-06-history-share.md` (v1.14 candidate, §17; the number is fixed at
 merge).
@@ -48,3 +48,11 @@ long-term answer, a client-encrypted backup (decision 043, "next step"), doesn't
   rows.
 - Sharing covers only the last 30 days and needs another device online; the encrypted backup
   remains necessary.
+
+
+## Consent (decided 2026-10-07 by root; Harsha: "ask me only for what you can't do yourself")
+- **The user's own other phones:** approve once per new phone on the old phone ("Your new phone
+  wants your chat history. Allow?"); after that, automatic for that phone.
+- **Other members' phones:** always ask their owner.
+- **Why:** fully automatic sharing would hand 30 days of every chat to anyone who takes over the
+  phone number.
