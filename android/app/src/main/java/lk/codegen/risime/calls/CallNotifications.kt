@@ -28,7 +28,13 @@ import lk.codegen.risime.push.Notifier
 class CallNotifications(private val context: Context) {
     companion object {
         const val CH_CALLS = "calls"
-        const val CH_CALL_STATUS = "call_status"
+        /**
+         * The ongoing-call notification (the foreground service's). Was "call_status" at
+         * IMPORTANCE_LOW: collapsed at the bottom of the shade, so after Home the call looked gone.
+         * Channel importance can't be raised after creation, hence a new id.
+         */
+        const val CH_CALL_STATUS = "call_ongoing"
+        private const val CH_CALL_STATUS_OLD = "call_status"
         const val CH_MISSED = "missed_calls"
         const val CALL_ID = 50
         const val MISSED_BASE = 60_000
@@ -58,7 +64,14 @@ class CallNotifications(private val context: Context) {
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             },
         )
-        m.createNotificationChannel(NotificationChannel(CH_CALL_STATUS, "Call in progress", NotificationManager.IMPORTANCE_LOW).apply { setSound(null, null) })
+        runCatching { m.deleteNotificationChannel(CH_CALL_STATUS_OLD) }
+        m.createNotificationChannel(
+            NotificationChannel(CH_CALL_STATUS, "Call in progress", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                setSound(null, null)
+                enableVibration(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            },
+        )
         m.createNotificationChannel(NotificationChannel(CH_MISSED, "Missed calls", NotificationManager.IMPORTANCE_DEFAULT))
     }
 
@@ -119,6 +132,8 @@ class CallNotifications(private val context: Context) {
             .setContentIntent(activityIntent(ACTION_SHOW, 3))
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setSilent(true)
             .apply { if (connectedAtMs != null) setWhen(connectedAtMs).setUsesChronometer(true) }
             .build()

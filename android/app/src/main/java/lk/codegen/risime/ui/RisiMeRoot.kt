@@ -1,6 +1,10 @@
 package lk.codegen.risime.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -58,6 +62,7 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
     val gate = appGate(session != Unit, current, unlocked, blocked, required != null)
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
         if (required == null) UpdateBar(update, c)
+        if (gate == AppGate.CHATS) ReturnToCallBar(c)
         Box(Modifier.weight(1f)) {
             // Order: update required → blocked → locked → confirm phone → chats (contract §7).
             when (gate) {
@@ -79,6 +84,28 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
             q.previousName, q.newName,
             onContinue = { q.answer.complete(true) },
             onCancel = { q.answer.complete(false) },
+        )
+    }
+}
+
+/**
+ * A call is going on while the chats are on screen (the user pressed Home or Back on the call
+ * screen, or reopened the app): one tap goes back to it. The call itself lives in CallManager and
+ * the foreground service, never in an Activity.
+ */
+@Composable
+private fun ReturnToCallBar(c: AppContainer) {
+    val call by c.calls.state.collectAsState()
+    val s = call?.takeIf { it.phase != lk.codegen.risime.calls.CallPhase.ENDED } ?: return
+    val text = if (s.phase == lk.codegen.risime.calls.CallPhase.RINGING_IN) "Incoming call — tap to answer" else "Call in progress — tap to return"
+    androidx.compose.material3.Surface(
+        color = androidx.compose.ui.graphics.Color(0xFF1B8A3E),
+        modifier = Modifier.fillMaxWidth().clickable { c.calls.openCallScreen() },
+    ) {
+        androidx.compose.material3.Text(
+            text, color = androidx.compose.ui.graphics.Color.White,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.labelLarge,
         )
     }
 }

@@ -124,7 +124,9 @@ for DEV in A B; do
 done
 
 # ---- UI helpers (uiautomator dump + taps by text or content-desc)
-dump() { A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui-$DEV.xml"; }
+# A failed dump (e.g. a ticking call notification keeps the UI from going idle) must never leave the
+# previous screen's XML behind: taps would hit stale coordinates.
+dump() { A shell rm -f /sdcard/ui.xml >/dev/null 2>&1; A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui-$DEV.xml" 2>/dev/null || : > "$WORK/ui-$DEV.xml"; }
 has() { dump; grep -qF -- "$1" "$WORK/ui-$DEV.xml"; }
 wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "    [$DEV] timeout waiting for: $1"; return 1; }
 tap() {
@@ -218,11 +220,11 @@ msg_check() {  # $1 label
   logcat_ok "$1"
   pass "$1: encrypted messages delivered both ways"
 }
-msg_check "before"
-DEV=B; A install -r "${UPGRADE_APK:-$APK}" >/dev/null || fail "B: update in place"
-msg_check "after B updated"
-DEV=A; A install -r "${UPGRADE_APK:-$APK}" >/dev/null || fail "A: update in place"
-msg_check "after both updated"
+[ "${CALLTEST_FAST:-0}" = 1 ] || { msg_check "before"; }
+[ "${CALLTEST_FAST:-0}" = 1 ] || { DEV=B; A install -r "${UPGRADE_APK:-$APK}" >/dev/null || fail "B: update in place"; }
+[ "${CALLTEST_FAST:-0}" = 1 ] || { msg_check "after B updated"; }
+[ "${CALLTEST_FAST:-0}" = 1 ] || { DEV=A; A install -r "${UPGRADE_APK:-$APK}" >/dev/null || fail "A: update in place"; }
+[ "${CALLTEST_FAST:-0}" = 1 ] || { msg_check "after both updated"; }
 # A message stuck in the outbox (sent offline), then fresh starts straight into chats while MLS is
 # active: the chat screen flushes the outbox (nightly.17/18 did that on the main thread and crashed).
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"
@@ -297,9 +299,9 @@ hang_up_a() {  # $1 label
   no_leftovers "$1"
 }
 
-call_once "call 1"; hang_up_a "call 1"
-call_once "call 2 (right after)"; hang_up_a "call 2"
-call_once "call 3"
+[ "${CALLTEST_FAST:-0}" = 1 ] || { call_once "call 1"; hang_up_a "call 1"; }
+[ "${CALLTEST_FAST:-0}" = 1 ] || { call_once "call 2 (right after)"; hang_up_a "call 2"; }
+[ "${CALLTEST_FAST:-0}" = 1 ] || { call_once "call 3"; }
 DEV=A; A shell am force-stop "$PKG"
 pass "call 3: the caller's process killed mid-call"
 DEV=B; for _ in $(seq 1 40); do has "End call" || break; sleep 1; done
@@ -308,10 +310,55 @@ pass "call 3: B ended by itself"
 DEV=B; no_leftovers "call 3 (B, the survivor)"
 DEV=A; open_chat "ZZ Call B" || fail "A: chat after the restart"
 sleep 3
-call_once "call 4 (after the kill)"; hang_up_a "call 4"
+[ "${CALLTEST_FAST:-0}" = 1 ] || { call_once "call 4 (after the kill)"; hang_up_a "call 4"; }
 # Answering from the background: B goes to the home screen while it rings and answers from the
 # notification shade (redroid has no FCM, so a fully backgrounded app can't be woken here).
-CALL_BG=1 call_once "call 5 (answered from the background)"; hang_up_a "call 5"
+[ "${CALLTEST_FAST:-0}" = 1 ] || { CALL_BG=1 call_once "call 5 (answered from the background)"; hang_up_a "call 5"; }
+# Call 7 (the nightly.23 report: the call screen vanished after Home and the mic stayed held): A
+# calls, then goes Home and switches the screen off for a minute. The call must live on in the
+# foreground service (microphone type) with its ongoing notification and audio both ways; the
+# notification reopens the call screen; "Hang up" from the shade ends it everywhere and releases
+# the microphone.
+bytes_of() {  # $1 sent|recv: the latest debug stats value on $DEV
+  A logcat -d 2>/dev/null | grep -E 'call stats: .*sent=[0-9]+ recv=[0-9]+' | tail -1 | sed -nE "s/.*$1=([0-9]+).*/\1/p"
+}
+uid_of() { A shell pm list packages -U "$PKG" 2>/dev/null | sed -nE "s/.*package:$PKG uid:([0-9]+).*/\1/p" | head -1; }
+DEV=B; open_chat "ZZ Call A" || fail "B: DM"; DEV=A; open_chat "ZZ Call B" || fail "A: DM"
+call_once "call 7 (Home, screen off for a minute)"
+DEV=A; A shell input keyevent KEYCODE_HOME; sleep 1; A shell input keyevent KEYCODE_SLEEP
+sleep 60
+A shell input keyevent KEYCODE_WAKEUP; A shell wm dismiss-keyguard >/dev/null 2>&1 || true; sleep 2
+svc="$(A shell dumpsys activity services "$PKG" 2>/dev/null || true)"
+grep -q "CallService" <<<"$svc" && grep -q "isForeground=true" <<<"$svc" || fail "call 7: A's call service is not in the foreground after Home + screen off"
+nt="$(A shell dumpsys notification --noredact 2>/dev/null || true)"
+grep -q "pkg=$PKG .*channel=call_ongoing" <<<"$nt" || fail "call 7: A has no ongoing-call notification"
+for d in A B; do DEV=$d; s1="$(bytes_of sent)"; r1="$(bytes_of recv)"; sleep 5; s2="$(bytes_of sent)"; r2="$(bytes_of recv)"
+  [ "${s2:-0}" -gt "${s1:-0}" ] && [ "${r2:-0}" -gt "${r1:-0}" ] || fail "call 7: $d audio stopped after a minute in the background (sent $s1→$s2, recv $r1→$r2)"; done
+pass "call 7: after Home + a minute with the screen off the call lives on (foreground service, ongoing notification, audio both ways)"
+DEV=A; A shell cmd statusbar expand-notifications >/dev/null 2>&1; sleep 1
+# The ongoing CallStyle notification runs a chronometer, so uiautomator never sees the shade idle:
+# fall back to the notification's place on the 720x1280 redroid screen (its title / HANG UP button).
+tap "ZZ Call B" 2>/dev/null || A shell input tap 255 495
+sleep 2; A shell cmd statusbar collapse >/dev/null 2>&1 || true
+wait_for "End call" 10 || fail "call 7: tapping the notification didn't reopen the call screen"
+pass "call 7: the ongoing notification reopens the call screen"
+A shell input keyevent KEYCODE_HOME; sleep 1
+A shell cmd statusbar expand-notifications >/dev/null 2>&1; sleep 1
+tap "Hang up" 2>/dev/null || tap "HANG UP" 2>/dev/null || A shell input tap 310 644
+sleep 1; A shell cmd statusbar collapse >/dev/null 2>&1 || true
+DEV=B; for _ in $(seq 1 20); do has "End call" || break; sleep 1; done
+has "End call" && fail "call 7: B still in the call after A hung up from the notification"
+no_leftovers "call 7"
+DEV=A; uid="$(uid_of)"; rec=""
+for _ in $(seq 1 10); do rec="$(A shell dumpsys audio 2>/dev/null | sed -n '/RecordActivityMonitor/,/^$/p' | grep -E "uid:? ?$uid\b" || true)"; [ -z "$rec" ] && break; sleep 1; done
+[ -z "$rec" ] || fail "call 7: A still records (microphone held) after hanging up: $rec"
+nt="$(A shell dumpsys notification --noredact 2>/dev/null || true)"
+grep -q "pkg=$PKG .*channel=call_ongoing" <<<"$nt" && fail "call 7: the ongoing notification stayed after hang-up"
+pass "call 7: Hang up from the notification ended the call on both phones, released the microphone, removed the notification"
+DEV=A; open_chat "ZZ Call B" || fail "A: DM"
+# (A call to a phone whose screen is off can't be tested here: redroid has no FCM, and a backgrounded
+# app has no socket. The locked-phone full-screen ring stays on the real-phone manual test.)
+DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
 if [ "${CALLTEST_TURN:-0}" = 1 ]; then
   for DEV in A B; do A shell run-as "$PKG" touch files/debug_relay_only || fail "debug relay switch"; done
   DEV=B; open_chat "ZZ Call A" || fail "B: DM"   # back in the foreground (no FCM in redroid)

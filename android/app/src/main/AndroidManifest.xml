@@ -45,7 +45,6 @@
         <activity
             android:name=".calls.CallActivity"
             android:exported="false"
-            android:excludeFromRecents="true"
             android:launchMode="singleTask"
             android:taskAffinity="lk.codegen.risime.calls"
             android:showWhenLocked="true"
