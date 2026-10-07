@@ -1,0 +1,2 @@
+Fixes 1:1 chats that could not send after a reinstall: they now repair their encryption automatically.
+Update over the old app; never uninstall or clear data.
