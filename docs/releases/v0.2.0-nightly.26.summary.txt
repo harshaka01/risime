@@ -1,0 +1,2 @@
+Lost history now comes back by itself after a reinstall (server copies plus automatic history sharing). Updating never deletes chats; uninstalling does.
+Update over the old app; never uninstall or clear data.
