@@ -56,6 +56,9 @@ interface CallAppPort {
     suspend fun displayName(userId: String): String
     suspend fun sendSignal(conv: String, peer: String, env: CallEnvelope.Env): PushResult<*>
     suspend fun queueCallEnd(conv: String, peer: String, env: CallEnvelope.End, rangUnanswered: Boolean)
+
+    /** Decision 054: a local "Missed voice call" line (no durable `call_end` came); false if the call already has a line. */
+    suspend fun localMissedCall(conv: String, peer: String, callId: String): Boolean = false
     fun foreground(): Boolean
 }
 
@@ -95,9 +98,17 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     // ---- Telecom endpoints for the UI ----
     val endpoints = MutableStateFlow<List<CallEndpointCompat>>(emptyList())
     val currentEndpoint = MutableStateFlow<CallEndpointCompat?>(null)
-    @Volatile private var telecomScope: CallControlScope? = null
-    private var telecomJob: Job? = null
-    private var telecomCallId: String? = null
+    /**
+     * Decision 054: one core-telecom call per RisiMe call id. The nightly.16 code kept a single
+     * slot that a second call id overwrote (glare, a quick re-call) without disconnecting the first:
+     * a ghost self-managed call that held MODE_IN_COMMUNICATION (every later call "busy" / "You're
+     * already in a call") and whose Telecom callbacks hung up whatever call was current.
+     */
+    private class TelecomCall(val callId: String, val job: Job) {
+        @Volatile var scope: CallControlScope? = null
+    }
+    private val telecomCalls = java.util.concurrent.ConcurrentHashMap<String, TelecomCall>()
+    private val telecomScope: CallControlScope? get() = state.value?.callId?.let { telecomCalls[it]?.scope }
 
     private val callsManager: CallsManager? by lazy {
         runCatching { CallsManager(context).also { it.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE) } }
@@ -137,6 +148,8 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     private var turnCache: Pair<List<IceServer>, Long>? = null
 
+    private val prefs by lazy { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
+
     private val signals = object : CallSignals {
         override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env): SignalOutcome {
             repeat(3) { attempt ->
@@ -152,13 +165,20 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         override suspend fun end(conversationId: String, peer: String, env: CallEnvelope.End) {
             port.queueCallEnd(conversationId, peer, env, marks.get(env.callId)?.let { it.rang && !it.answered } == true)
         }
+
+        override suspend fun missed(conversationId: String, peer: String, callId: String) {
+            if (!port.localMissedCall(conversationId, peer, callId)) return
+            if (port.foreground() && openConversation?.invoke() == conversationId) return
+            notifications.postMissed(conversationId, port.displayName(peer))
+        }
     }
 
     private val environment = object : CallEnvironment {
         override fun audioBusy(): Boolean {
             val am = context.getSystemService(AudioManager::class.java) ?: return false
-            // android R9: no READ_PHONE_STATE; another app's call shows in the audio mode.
-            return state.value == null && (am.mode == AudioManager.MODE_IN_CALL || am.mode == AudioManager.MODE_IN_COMMUNICATION)
+            // android R9: no READ_PHONE_STATE. Decision 054: only a cellular call (MODE_IN_CALL) is
+            // busy; MODE_IN_COMMUNICATION may be stale (a ghost Telecom call, another app's leftover).
+            return state.value == null && am.mode == AudioManager.MODE_IN_CALL
         }
 
         override suspend fun iceServers(): List<IceServer> {
@@ -174,6 +194,8 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     }
 
     init {
+        // Decision 054: whatever a dead process left behind is cleaned up before anything rings.
+        scope.launch { runCatching { cleanupAfterProcessStart() }.onFailure { Log.w("RisiMe", "call cleanup: ${it.message}") } }
         // One machine per signed-in user and device.
         scope.launch {
             var lastUser: String? = null
@@ -191,6 +213,60 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         }
         // Prune 24-h marks.
         scope.launch { runCatching { port.callMarkDao.prune(System.currentTimeMillis() - CallStateMachine.DEDUPE_MS) } }
+        // Decision 054: the socket down for SOCKET_LOSS_MS while a call is being set up → "Can't connect the call".
+        scope.launch {
+            combine(state, port.connection) { s, c -> s?.takeIf { it.phase in SETUP_PHASES }?.callId to (c == ConnectionState.Live) }
+                .distinctUntilChanged()
+                .collectLatest { (callId, live) ->
+                    if (callId == null || live) return@collectLatest
+                    delay(SOCKET_LOSS_MS)
+                    log("socket down ${SOCKET_LOSS_MS} ms during call setup: ending $callId")
+                    _machine.value?.fail(callId)
+                }
+        }
+    }
+
+    companion object {
+        /** Decision 054: how long the realtime socket may stay down while a call is being set up. */
+        const val SOCKET_LOSS_MS = 15_000L
+        private val SETUP_PHASES = setOf(CallPhase.CALLING, CallPhase.RINGING_OUT, CallPhase.ANSWERING, CallPhase.CONNECTING)
+        private const val PREFS = "risime_calls"
+        private const val KEY_ACTIVE = "active_call"
+    }
+
+    // ---------------------------------------------------------------- process death (decision 054)
+
+    /** The call this process has now, persisted so the next process can end it properly after a kill. */
+    private fun persistActive(s: CallSnapshot?) {
+        runCatching {
+            val e = prefs.edit()
+            if (s == null || s.phase == CallPhase.ENDED) e.remove(KEY_ACTIVE) else e.putString(KEY_ACTIVE, ActiveCallRecord(s.callId, s.conversationId, s.peerUserId, s.outgoing, s.phase.name, s.connectedAtMs != null).encode())
+            e.apply()
+        }
+    }
+
+    /**
+     * A new process: no call exists yet, so anything left from the last one is stale. Stop the
+     * foreground service and the ringing notification, give the audio mode back, and end the call
+     * the dead process had: its `call_end` goes out (the peer stops waiting and gets its line).
+     */
+    internal suspend fun cleanupAfterProcessStart() {
+        if (state.value != null) return
+        runCatching { context.stopService(Intent(context, CallService::class.java)) }
+        runCatching { androidx.core.app.NotificationManagerCompat.from(context).cancel(CallNotifications.CALL_ID) }
+        runCatching {
+            val am = context.getSystemService(AudioManager::class.java)
+            // Only this process's own mode request (Android 12+ keeps one per process); a real cellular call is untouched.
+            if (am != null && am.mode == AudioManager.MODE_IN_COMMUNICATION) am.mode = AudioManager.MODE_NORMAL
+        }
+        val rec = runCatching { prefs.getString(KEY_ACTIVE, null)?.let(ActiveCallRecord::decode) }.getOrNull()
+        runCatching { prefs.edit().remove(KEY_ACTIVE).apply() }
+        rec ?: return
+        log("process start: ending ${rec.callId} left by the previous process (${rec.phase})")
+        val mark = marks.get(rec.callId)
+        marks.put((mark ?: CallMark(rec.callId)).copy(ended = true, at = System.currentTimeMillis()))
+        if (mark?.ended == true) return
+        ActiveCallRecord.endReason(rec)?.let { reason -> port.queueCallEnd(rec.conversationId, rec.peerUserId, CallEnvelope.End(rec.callId, reason), false) }
     }
 
     private fun newMachine(me: String, device: String) = CallStateMachine(
@@ -217,7 +293,16 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     fun hangUp() {
         if (blindRing.value != null) return stopBlindRing()
-        scope.launch { _machine.value?.hangUp() }
+        scope.launch {
+            val m = _machine.value
+            m?.hangUp()
+            // Decision 054: the button always works. Whatever is still shown without a call behind it goes.
+            val s = state.value
+            if (s != null && s.phase != CallPhase.ENDED && (m == null || m.currentCallId() != s.callId)) {
+                log("hang up: no call behind ${s.callId}: clearing")
+                onState(null)
+            }
+        }
     }
 
     fun setMuted(muted: Boolean) {
@@ -295,6 +380,9 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     private suspend fun onState(s: CallSnapshot?) {
         state.value = s
+        persistActive(s)
+        // Decision 054: a Telecom call of any other call id is over (StateFlow conflation, glare).
+        telecomCalls.keys.filter { s == null || it != s.callId || s.phase == CallPhase.ENDED }.forEach { endTelecom(it, s?.takeIf { x -> x.callId == it }?.notice) }
         if (s != null && s.phase != CallPhase.ENDED) {
             acquireWake()
             if (blindRing.value != null) {
@@ -313,7 +401,6 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             if (s.phase == CallPhase.ANSWERING) telecomAnswer()
             if (s.phase == CallPhase.CONNECTING || s.phase == CallPhase.ACTIVE) telecomActive(s)
         } else {
-            endTelecom(s)
             releaseWake()
         }
         updateProximity()
@@ -355,35 +442,43 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     private suspend fun ensureTelecom(s: CallSnapshot) {
         val cm = callsManager ?: return
-        if (telecomCallId == s.callId) return
-        telecomCallId = s.callId
+        if (telecomCalls.containsKey(s.callId)) return
+        val callId = s.callId
         val name = port.displayName(s.peerUserId)
         val attrs = CallAttributesCompat(
             name, Uri.fromParts("risime", s.peerUserId, null),
             if (s.outgoing) CallAttributesCompat.DIRECTION_OUTGOING else CallAttributesCompat.DIRECTION_INCOMING,
             CallAttributesCompat.CALL_TYPE_AUDIO_CALL, 0,
         )
-        telecomJob = scope.launch {
+        lateinit var handle: TelecomCall
+        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             runCatching {
+                // Every callback is bound to THIS call id (decision 054): an older call's callback
+                // never answers, declines or hangs up a newer one.
                 cm.addCall(
                     attrs,
-                    onAnswer = { _ -> _machine.value?.answer() },
-                    onDisconnect = { _ -> _machine.value?.onSystemDisconnect() },
+                    onAnswer = { _ -> _machine.value?.answer(callId) },
+                    onDisconnect = { _ -> _machine.value?.onSystemDisconnect(callId) },
                     onSetActive = {},
                     // A cellular call took over (android R9): no hold in v1.13, so the call ends.
-                    onSetInactive = { _machine.value?.onSystemDisconnect() },
+                    onSetInactive = { _machine.value?.onSystemDisconnect(callId) },
                 ) {
-                    telecomScope = this
-                    launch { availableEndpoints.collect { endpoints.value = it } }
-                    launch {
-                        currentCallEndpoint.collect {
-                            currentEndpoint.value = it
-                            updateProximity()
+                    handle.scope = this
+                    if (state.value?.callId == callId) {
+                        launch { availableEndpoints.collect { if (state.value?.callId == callId) endpoints.value = it } }
+                        launch {
+                            currentCallEndpoint.collect {
+                                if (state.value?.callId == callId) currentEndpoint.value = it
+                                updateProximity()
+                            }
                         }
                     }
                 }
             }.onFailure { Log.w("RisiMe", "telecom addCall: ${it.message}") }
         }
+        handle = TelecomCall(callId, job)
+        telecomCalls[callId] = handle
+        job.start()
     }
 
     private var answeredOn: String? = null
@@ -393,28 +488,32 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val id = state.value?.callId ?: return
         if (answeredOn == id) return
         answeredOn = id
-        scope.launch { waitScope()?.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL) }
+        scope.launch { waitScope(id)?.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL) }
     }
 
     private fun telecomActive(s: CallSnapshot) {
         if (activeOn == s.callId) return
         activeOn = s.callId
-        if (s.outgoing) scope.launch { waitScope()?.setActive() }
+        if (s.outgoing) scope.launch { waitScope(s.callId)?.setActive() }
     }
 
-    private suspend fun waitScope(): CallControlScope? = withTimeoutOrNull(3_000) {
-        while (telecomScope == null) delay(50)
-        telecomScope
+    private suspend fun waitScope(callId: String): CallControlScope? = withTimeoutOrNull(3_000) {
+        var sc = telecomCalls[callId]?.scope
+        while (sc == null && telecomCalls.containsKey(callId)) {
+            delay(50)
+            sc = telecomCalls[callId]?.scope
+        }
+        sc
     }
 
-    private fun endTelecom(s: CallSnapshot?) {
-        if (telecomCallId == null) return
-        val sc = telecomScope
-        telecomScope = null
-        telecomCallId = null
-        endpoints.value = emptyList()
-        currentEndpoint.value = null
-        val cause = when (s?.notice) {
+    /** Disconnects the Telecom call of [callId], waiting (≤ 3 s) for Telecom to have added it first, then drops it. */
+    private fun endTelecom(callId: String, notice: CallNotice?) {
+        val h = telecomCalls.remove(callId) ?: return
+        if (state.value?.callId == callId || state.value == null) {
+            endpoints.value = emptyList()
+            currentEndpoint.value = null
+        }
+        val cause = when (notice) {
             CallNotice.DECLINED -> DisconnectCause.REJECTED
             CallNotice.BUSY -> DisconnectCause.BUSY
             CallNotice.ANSWERED_ELSEWHERE -> DisconnectCause.ANSWERED_ELSEWHERE
@@ -422,11 +521,14 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             null -> DisconnectCause.MISSED
             else -> DisconnectCause.LOCAL
         }
-        val job = telecomJob
         scope.launch {
-            runCatching { sc?.disconnect(DisconnectCause(cause)) }
+            val sc = h.scope ?: withTimeoutOrNull(3_000) {
+                while (h.scope == null && h.job.isActive) delay(50)
+                h.scope
+            }
+            runCatching { sc?.disconnect(DisconnectCause(cause)) }.onFailure { Log.w("RisiMe", "telecom disconnect: ${it.message}") }
             delay(1_000)
-            job?.cancel()
+            h.job.cancel()
         }
     }
 
@@ -466,11 +568,34 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     @Suppress("unused")
     private fun sdk() = Build.VERSION.SDK_INT
 
+    /** Test hook: the Telecom calls this process holds (decision 054: never more than the current one). */
+    internal fun telecomCallIds(): Set<String> = telecomCalls.keys.toSet()
+
     /** Name lookups for the UI. */
     suspend fun nameOf(userId: String): String = port.displayName(userId)
 
     /** First non-null machine (tests and the debug screen). */
     suspend fun awaitMachine(): CallStateMachine? = withTimeoutOrNull(5_000) { machineFlow.map { it }.firstOrNull { it != null } }
+}
+
+/** Decision 054: the call this process had, persisted (SharedPreferences) so the next process can end it after a kill. */
+data class ActiveCallRecord(val callId: String, val conversationId: String, val peerUserId: String, val outgoing: Boolean, val phase: String, val connected: Boolean) {
+    fun encode(): String = listOf(callId, conversationId, peerUserId, outgoing.toString(), phase, connected.toString()).joinToString("|")
+
+    companion object {
+        fun decode(s: String): ActiveCallRecord? = s.split("|").takeIf { it.size == 6 }?.let { ActiveCallRecord(it[0], it[1], it[2], it[3].toBoolean(), it[4], it[5].toBoolean()) }
+
+        /**
+         * The `call_end` a killed process owes: a ringing callee owes nothing (the caller's ring
+         * timeout ends it); a caller still ringing cancels (the callee gets "Missed voice call");
+         * anything that was answered or connecting failed.
+         */
+        fun endReason(r: ActiveCallRecord): String? = when {
+            !r.outgoing && r.phase == CallPhase.RINGING_IN.name -> null
+            r.outgoing && (r.phase == CallPhase.CALLING.name || r.phase == CallPhase.RINGING_OUT.name) -> CallEnvelope.R_CANCELLED
+            else -> CallEnvelope.R_FAILED
+        }
+    }
 }
 
 /** UI texts (§16.4–§16.6, §16.11). */

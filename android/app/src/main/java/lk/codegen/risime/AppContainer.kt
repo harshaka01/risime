@@ -561,6 +561,7 @@ class AppContainer(
         override suspend fun displayName(userId: String) =
             contacts.contacts.first().firstOrNull { it.userId.equals(userId, true) }?.displayName ?: "Someone"
         override suspend fun sendSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env) = engine.sendCallSignal(conv, peer, env)
+        override suspend fun localMissedCall(conv: String, peer: String, callId: String) = engine.insertLocalMissedCall(conv, peer, callId)
         override suspend fun queueCallEnd(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.End, rangUnanswered: Boolean) {
             engine.queueCallEnd(conv, peer, env, rangUnanswered)
         }

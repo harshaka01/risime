@@ -434,6 +434,30 @@ class ChatEngine(
         return id
     }
 
+    /**
+     * Decision 054: "Missed voice call" when this device rang and no durable `call_end` came (the
+     * caller crashed or was killed mid-ring). One line per call id: a later `call_end` is dropped
+     * against it (and this is a no-op when that line came first). Unread, never acked (no message id).
+     * @return true if the line was inserted.
+     */
+    suspend fun insertLocalMissedCall(conv: String, peer: String, callId: String): Boolean {
+        val me = meId() ?: return false
+        if (messages.callLine(conv, callId) != null) return false
+        val now = clock()
+        val env = lk.codegen.risime.calls.CallEnvelope.End(callId, lk.codegen.risime.calls.CallEnvelope.R_TIMEOUT)
+        val row = MessageEntity(
+            clientMsgId = "local-missed:$callId", messageId = null, conversationId = conv, from = peer, to = me,
+            body = lk.codegen.risime.calls.CallLines.MISSED, serverTs = isoMillis(now), localTs = now,
+            status = MessageStatus.DELIVERED.name, outgoing = false, ackedStatus = MessageStatus.READ.name,
+            kind = MessageEntity.KIND_CALL,
+            systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), lk.codegen.risime.calls.CallEnvelope.toJson(env)),
+            callId = callId,
+        )
+        if (messages.insert(row) == -1L) return false
+        deletes?.unhide(conv)
+        return true
+    }
+
     private suspend fun upsertMarker(conversationId: String, action: String, serverTs: String?) {
         // §15.7: no marker at or before a Clear chat watermark.
         if (applier?.cleared(conversationId, lk.codegen.risime.data.deletes.TimeUuid.ticksOfIso(serverTs)) == true) return

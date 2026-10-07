@@ -295,7 +295,8 @@ class CallStateMachineTest {
         assertEquals(CallPhase.ANSWERING, b1.phase())
         advanceTimeBy(10_500)
         settle(w.net)
-        assertEquals(CallNotice.CALL_ENDED, b1.notice())
+        // Decision 054: a failed answer is visible ("Can't connect the call"), never a silent end.
+        assertEquals(CallNotice.CANT_CONNECT, b1.notice())
         assertTrue("no call_end from the accept wait", b1.ends.isEmpty())
     }
 
@@ -412,10 +413,33 @@ class CallStateMachineTest {
         connect(w.net, a1, b1)
         assertEquals(CallPhase.CONNECTING, a1.phase())
         assertEquals(CallPhase.CONNECTING, b1.phase())
-        advanceTimeBy(20_000)
+        // No relay (TURN 503): the direct connect timeout is 10 s (decision 054).
+        advanceTimeBy(CallStateMachine.DIRECT_CONNECT_MS)
         settle(w.net)
         assertEquals(CallNotice.CANT_CONNECT, a1.notice())
         assertTrue(a1.ends.any { it.reason == CallEnvelope.R_FAILED })
+    }
+
+    @Test
+    fun withARelayTheConnectTimeoutIs20s() = runTest {
+        val (w, d) = world()
+        val (a1, b1) = listOf(d["A1"]!!, d["B1"]!!)
+        val turn = listOf(IceServer(listOf("turn:turn.example:3478?transport=udp"), "u", "p"))
+        a1.servers = turn
+        b1.servers = turn
+        a1.machine.placeCall(conv)
+        settle(w.net)
+        b1.machine.answer()
+        settle(w.net)
+        a1.session().cipher = ""
+        b1.session().dtlsState = "connecting"
+        connect(w.net, a1, b1)
+        advanceTimeBy(CallStateMachine.DIRECT_CONNECT_MS + 1_000)
+        settle(w.net)
+        assertEquals(CallPhase.CONNECTING, a1.phase())
+        advanceTimeBy(CallStateMachine.CONNECT_MS - CallStateMachine.DIRECT_CONNECT_MS)
+        settle(w.net)
+        assertEquals(CallNotice.CANT_CONNECT, a1.notice())
     }
 
     @Test

@@ -52,6 +52,21 @@ class ChatEngineTest {
         )
 
     @Test
+    fun localMissedCallLineIsUnreadNeverAckedAndOnePerCallId() = runTest {
+        val e = engine()
+        assertTrue(e.insertLocalMissedCall(conv, peer, "call-1"))
+        val row = messages.callLine(conv, "call-1")!!
+        assertEquals("Missed voice call", row.body)
+        assertEquals("DELIVERED", row.status)
+        assertEquals("READ", row.ackedStatus)
+        assertEquals(peer, row.from)
+        assertTrue(!row.outgoing)
+        // A second one (or the durable call_end's line later) for the same call id: no new row.
+        assertTrue(!e.insertLocalMissedCall(conv, peer, "call-1"))
+        assertEquals(1, messages.rows.values.count { it.callId == "call-1" })
+    }
+
+    @Test
     fun sendInsertsPendingThenSentWithServerIds() = runTest {
         val e = engine()
         realtime.connected = false

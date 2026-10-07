@@ -114,9 +114,17 @@ class CallNet(private val scope: CoroutineScope, private val serverNow: () -> Lo
         val sent = CopyOnWriteArrayList<Sent>()
         val ends = CopyOnWriteArrayList<CallEnvelope.End>()
         var refuse: SignalOutcome? = null
+        /** Signals never complete (a stuck socket/lane), decision 054. */
+        var hang = false
+        /** This process is dead: nothing it sends reaches the network. */
+        var dead = false
+        var servers: List<IceServer> = emptyList()
+        val missedCalls = CopyOnWriteArrayList<String>()
 
         val signals = object : CallSignals {
             override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env): SignalOutcome {
+                if (hang) kotlinx.coroutines.awaitCancellation()
+                if (dead) return SignalOutcome.Unavailable
                 refuse?.let { return it }
                 val s = Sent(user, device, conversationId, env, durable = false)
                 sent += s
@@ -125,14 +133,20 @@ class CallNet(private val scope: CoroutineScope, private val serverNow: () -> Lo
             }
 
             override suspend fun end(conversationId: String, peer: String, env: CallEnvelope.End) {
+                if (dead) return
                 ends += env
                 val s = Sent(user, device, conversationId, env, durable = true)
                 sent += s
                 queue += s
             }
+
+            override suspend fun missed(conversationId: String, peer: String, callId: String) {
+                missedCalls += callId
+            }
         }
         val environment = object : CallEnvironment {
             override fun audioBusy() = busyAudio
+            override suspend fun iceServers() = servers
         }
     }
 

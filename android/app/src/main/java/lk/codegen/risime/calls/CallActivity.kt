@@ -114,7 +114,22 @@ class CallActivity : ComponentActivity() {
     }
 
     private fun answer() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) calls.answer() else mic.launch(Manifest.permission.RECORD_AUDIO)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return calls.answer()
+        // Decision 054: the permission dialog can't show over the keyguard (the answer looked dead on a
+        // locked phone): ask to dismiss the keyguard first, then ask for the microphone.
+        val km = getSystemService(android.app.KeyguardManager::class.java)
+        if (Build.VERSION.SDK_INT >= 26 && km?.isKeyguardLocked == true) {
+            km.requestDismissKeyguard(
+                this,
+                object : android.app.KeyguardManager.KeyguardDismissCallback() {
+                    override fun onDismissSucceeded() = mic.launch(Manifest.permission.RECORD_AUDIO)
+                    override fun onDismissCancelled() = Toast.makeText(this@CallActivity, "Unlock the phone to allow the microphone, then answer", Toast.LENGTH_LONG).show()
+                    override fun onDismissError() = mic.launch(Manifest.permission.RECORD_AUDIO)
+                },
+            )
+        } else {
+            mic.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
 
     /** §16.8: the fingerprint first (MainActivity's lock), then the unlocked sync decides. */

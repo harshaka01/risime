@@ -32,6 +32,14 @@ interface CallSignals {
 
     /** The durable `call_end` (§16.2): an outbox row that is also this device's call-history line. */
     suspend fun end(conversationId: String, peer: String, env: CallEnvelope.End)
+
+    /**
+     * This device rang for [callId] and the ring ran out without an answer, and no durable
+     * `call_end` arrived within [CallStateMachine.MISSED_GRACE_MS] (the caller crashed or was
+     * killed mid-ring): record "Missed voice call" locally (one line per call id; a later durable
+     * `call_end` is deduplicated against it) and notify.
+     */
+    suspend fun missed(conversationId: String, peer: String, callId: String) = Unit
 }
 
 /** Per-device memory of call ids (§16.3 dedupe, 24 h, persisted) and how this device took part. */
@@ -45,7 +53,11 @@ interface CallMarks {
 
 /** Platform facts the machine asks for. */
 interface CallEnvironment {
-    /** §16.5 (android R9): `AudioManager.mode` is `MODE_IN_CALL` or `MODE_IN_COMMUNICATION` (another app's call). */
+    /**
+     * §16.5 (android R9, decision 054): a real cellular call is active (`AudioManager.mode` is
+     * `MODE_IN_CALL`). `MODE_IN_COMMUNICATION` alone is NOT busy: a stale mode or a ghost Telecom
+     * call left by an earlier attempt kept every later call "busy" (the nightly.16 P0).
+     */
     fun audioBusy(): Boolean = false
 
     /** §16.7: TURN credentials, at most 3 s (then STUN only: an empty list or STUN-only servers). */
@@ -107,6 +119,8 @@ class CallStateMachine(
     /** Debug-only negative test (§16.10 f): flip a byte of the remote answer's fingerprint before applying it. */
     private val tamperRemoteFingerprint: () -> Boolean = { false },
     private val lingerMs: Long = 2_500,
+    /** The ring timeout (caller) and ring validity (callee), §16.4; shorter only in live tests. */
+    private val ringMs: Long = RING_MS,
 ) {
     companion object {
         const val RING_MS = 45_000L
@@ -119,6 +133,19 @@ class CallStateMachine(
         const val DEDUPE_MS = 24 * 3_600_000L
         const val SIBLING_MS = 45_000L
         const val STATS_POLL_MS = 250L
+
+        /** Decision 054: a call that has no verified media this long after it started is torn down (never stuck). */
+        const val MEDIA_WATCHDOG_MS = 80_000L
+        /** Decision 054: a `call:signal` that gets no result in this time counts as Unavailable. */
+        const val SIGNAL_TIMEOUT_MS = 10_000L
+        /** Decision 054: one WebRTC operation (create/set description) may hold the machine this long at most. */
+        const val MEDIA_OP_MS = 10_000L
+        /** Decision 054: without a relay (TURN 503) a direct path connects within seconds or never. */
+        const val DIRECT_CONNECT_MS = 10_000L
+        /** Decision 054: after the ring ran out, how long the callee waits for the caller's `call_end`. */
+        const val MISSED_GRACE_MS = 10_000L
+        /** Decision 054: Hang up / Cancel waits this long for the machine, then ends the call anyway. */
+        const val HANGUP_LOCK_MS = 2_000L
 
         private val ISO = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
 
@@ -152,6 +179,8 @@ class CallStateMachine(
         var siblingAnswered = false
         var pendingRing = false
         var offerSent = false
+        /** A TURN relay was available for this call (otherwise only direct paths: shorter connect timeout). */
+        var relay = false
         var connectedAt: Long? = null
         var connectedAtServer: Long? = null
         var verified = false
@@ -188,6 +217,12 @@ class CallStateMachine(
             Call(newCallId(), conversationId, peer, outgoing = true, phase = CallPhase.CALLING).also {
                 current = it
                 publish(it)
+                // §16.4 ring timeout, armed at once (decision 054): a stuck TURN fetch or signal can't
+                // keep "Calling…" forever.
+                timer(it, "ring", ringMs) { c ->
+                    if (c.offerSent) finish(c, CallNotice.NO_ANSWER, sendEnd = CallEnvelope.R_TIMEOUT) else finish(c, CallNotice.CANT_CONNECT, sendEnd = null)
+                }
+                watchdog(it)
             }
         }
         marks.put(CallMark(call.id, at = now()))
@@ -195,8 +230,12 @@ class CallStateMachine(
         val servers = withTimeoutOrNull(3_000) { runCatching { platform.iceServers() }.getOrDefault(emptyList()) } ?: emptyList()
         val offer = lock.withLock {
             if (current !== call || call.ended) return true
-            val s = openSession(call, servers)
-            val sdp = runCatching { s.createOffer() }.getOrElse {
+            val s = runCatching { openSession(call, servers) }.getOrElse {
+                log("open media failed: ${it.message}")
+                finish(call, CallNotice.CANT_CONNECT, sendEnd = null)
+                return true
+            }
+            val sdp = runCatching { mediaOp { s.createOffer() } }.getOrElse {
                 log("createOffer failed: ${it.message}")
                 finish(call, CallNotice.CANT_CONNECT, sendEnd = null)
                 return true
@@ -208,14 +247,13 @@ class CallStateMachine(
             }
             CallEnvelope.Offer(call.id, sdp, iso(serverNow()))
         }
-        val r = signals.signal(call.conv, call.peer, offer)
+        val r = sig(call.conv, call.peer, offer)
         lock.withLock {
             if (current !== call || call.ended) return true
             when (r) {
                 SignalOutcome.Ok -> {
                     call.offerSent = true
-                    // §16.4: ring timeout 45 s after the offer.
-                    timer(call, "ring", RING_MS) { c -> finish(c, CallNotice.NO_ANSWER, sendEnd = CallEnvelope.R_TIMEOUT) }
+                    // §16.4: the ring timeout was armed when the call started (at most 3 s before the offer).
                     scheduleIceFlush(call)
                 }
                 is SignalOutcome.Refused -> finish(
@@ -253,13 +291,13 @@ class CallStateMachine(
     private suspend fun doAnswer(call: Call, servers: List<IceServer>) {
         val answer = lock.withLock {
             if (current !== call || call.ended) return
-            val s = openSession(call, servers)
             val sdp = runCatching {
-                s.setRemote(call.offerSdp!!, isOffer = true)
+                val s = openSession(call, servers)
+                mediaOp { s.setRemote(call.offerSdp!!, isOffer = true) }
                 call.remoteSet = true
                 call.remoteBuffer.forEach(s::addRemoteCandidate)
                 call.remoteBuffer.clear()
-                s.createAnswer()
+                mediaOp { s.createAnswer() }
             }.getOrElse {
                 log("answer failed: ${it.message}")
                 finish(call, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
@@ -272,7 +310,7 @@ class CallStateMachine(
             }
             CallEnvelope.Answer(call.id, call.offerDevice!!, sdp)
         }
-        val r = signals.signal(call.conv, call.peer, answer)
+        val r = sig(call.conv, call.peer, answer)
         lock.withLock {
             if (current !== call || call.ended) return
             if (r != SignalOutcome.Ok) {
@@ -282,27 +320,65 @@ class CallStateMachine(
             }
             call.offerSent = true
             scheduleIceFlush(call)
-            // android R4: 10 s for a call_accepted naming this device.
+            // android R4: 10 s for a call_accepted naming this device. Without a sibling's answer the
+            // caller never confirmed: a failure the user must see (decision 054).
             timer(call, "accept", ACCEPT_WAIT_MS) { c ->
-                finish(c, if (c.siblingAnswered) CallNotice.ANSWERED_ELSEWHERE else CallNotice.CALL_ENDED, sendEnd = null)
+                finish(c, if (c.siblingAnswered) CallNotice.ANSWERED_ELSEWHERE else CallNotice.CANT_CONNECT, sendEnd = null)
             }
         }
     }
 
-    /** Decline (a ringing call) or hang up (any other phase). */
-    suspend fun hangUp() {
-        lock.withLock {
-            val c = current?.takeIf { !it.ended } ?: return
-            val reason = when {
-                c.phase == CallPhase.RINGING_IN -> CallEnvelope.R_DECLINED
-                c.connectedAt != null -> CallEnvelope.R_HANGUP
-                c.outgoing && !c.offerSent -> null // nothing went out yet
-                c.outgoing && c.selected == null -> CallEnvelope.R_CANCELLED
-                else -> CallEnvelope.R_HANGUP
-            }
-            finish(c, CallNotice.CALL_ENDED, sendEnd = reason)
+    /**
+     * Decline (a ringing call) or hang up (any other phase). Always works (decision 054): if the
+     * machine is held up (a stuck media operation), the call is ended anyway after
+     * [HANGUP_LOCK_MS]. [callId] = only that call (a Telecom callback of an older call is ignored).
+     */
+    suspend fun hangUp(callId: String? = null) {
+        val done = withTimeoutOrNull(HANGUP_LOCK_MS) {
+            lock.withLock { current?.takeIf { !it.ended && (callId == null || it.id == callId) }?.let(::hangUpLocked) }
+            true
+        }
+        if (done == null) {
+            log("hang up: machine busy for $HANGUP_LOCK_MS ms, ending the call anyway")
+            current?.takeIf { !it.ended && (callId == null || it.id == callId) }?.let(::hangUpLocked)
         }
     }
+
+    private fun hangUpLocked(c: Call) {
+        val reason = when {
+            c.phase == CallPhase.RINGING_IN -> CallEnvelope.R_DECLINED
+            c.connectedAt != null -> CallEnvelope.R_HANGUP
+            c.outgoing && !c.offerSent -> null // nothing went out yet
+            c.outgoing && c.selected == null -> CallEnvelope.R_CANCELLED
+            else -> CallEnvelope.R_HANGUP
+        }
+        finish(c, CallNotice.CALL_ENDED, sendEnd = reason)
+    }
+
+    /**
+     * The platform says this call can't go on (decision 054: the socket stayed down mid-call setup):
+     * end it visibly ("Can't connect the call"), telling the peer when anything went out.
+     */
+    suspend fun fail(callId: String? = null) {
+        val done = withTimeoutOrNull(HANGUP_LOCK_MS) {
+            lock.withLock { current?.takeIf { !it.ended && (callId == null || it.id == callId) }?.let(::failLocked) }
+            true
+        }
+        if (done == null) current?.takeIf { !it.ended && (callId == null || it.id == callId) }?.let(::failLocked)
+    }
+
+    private fun failLocked(c: Call) {
+        when {
+            !c.outgoing && c.phase == CallPhase.RINGING_IN -> finish(c, notice = null, sendEnd = null)
+            c.outgoing && !c.offerSent -> finish(c, CallNotice.CANT_CONNECT, sendEnd = null)
+            // The callee rang: "Missed voice call" there, "No answer" here.
+            c.outgoing && c.selected == null -> finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_CANCELLED)
+            else -> finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
+        }
+    }
+
+    /** The id of the call that exists now (not ended), if any. */
+    fun currentCallId(): String? = current?.takeIf { !it.ended }?.id
 
     suspend fun setMuted(muted: Boolean) {
         lock.withLock {
@@ -314,7 +390,7 @@ class CallStateMachine(
     }
 
     /** Telecom/the OS ended the call (a cellular call took over, the user ended it from the system UI). */
-    suspend fun onSystemDisconnect() = hangUp()
+    suspend fun onSystemDisconnect(callId: String? = null) = hangUp(callId)
 
     /** Has this device rung for [callId] without answering it (the "Missed" vs "Couldn't connect" line)? */
     suspend fun rangUnanswered(callId: String): Boolean = marks.get(callId)?.let { it.rang && !it.answered } == true
@@ -399,11 +475,12 @@ class CallStateMachine(
             val loser = cur
             dropQuietly(loser)
             marks.put(CallMark(loser.id, ended = true, at = now()))
-            scope.launch { signals.signal(loser.conv, loser.peer, CallEnvelope.Cancel(loser.id)) }
+            scope.launch { sig(loser.conv, loser.peer, CallEnvelope.Cancel(loser.id)) }
             val call = incoming(s, env)
             call.phase = CallPhase.ANSWERING
             marks.put(CallMark(env.callId, rang = false, answered = true, at = now()))
             publish(call)
+            watchdog(call)
             scope.launch {
                 val servers = withTimeoutOrNull(3_000) { runCatching { platform.iceServers() }.getOrDefault(emptyList()) } ?: emptyList()
                 doAnswer(call, servers)
@@ -419,17 +496,23 @@ class CallStateMachine(
         if (cur != null || platform.audioBusy()) {
             log("offer ${env.callId}: busy")
             marks.put(CallMark(env.callId, ended = true, at = now()))
-            scope.launch { signals.signal(s.conversationId, peer, CallEnvelope.Busy(env.callId)) }
+            scope.launch { sig(s.conversationId, peer, CallEnvelope.Busy(env.callId)) }
             return
         }
         val call = incoming(s, env)
         marks.put(CallMark(env.callId, at = now()))
         // §16.4 ring validity: server_ts + 45 s.
-        val left = s.serverTsMs + RING_MS - sn
+        val left = s.serverTsMs + ringMs - sn
         timer(call, "ring", left.coerceAtLeast(0)) { c ->
             log("ring validity over for ${c.id}")
             finish(c, notice = null, sendEnd = null)
+            // Decision 054: a caller that crashed mid-ring sends no call_end; the missed call shows anyway.
+            scope.launch {
+                delay(MISSED_GRACE_MS)
+                if (marks.get(c.id)?.let { it.rang && !it.answered } == true) runCatching { signals.missed(c.conv, c.peer, c.id) }
+            }
         }
+        watchdog(call)
         if (s.inPage) {
             call.pendingRing = true
         } else {
@@ -453,7 +536,7 @@ class CallStateMachine(
             publish(call)
         }
         marks.put((marks.get(call.id) ?: CallMark(call.id)).copy(rang = true, at = now()))
-        signals.signal(call.conv, call.peer, CallEnvelope.Ringing(call.id))
+        sig(call.conv, call.peer, CallEnvelope.Ringing(call.id))
     }
 
     private fun onRinging(s: InboundCall, own: Boolean) {
@@ -496,7 +579,7 @@ class CallStateMachine(
         c.timers.remove("ring")?.cancel()
         c.phase = CallPhase.CONNECTING
         publish(c)
-        val ok = runCatching { session.setRemote(remote, isOffer = false) }.onFailure { log("setRemote(answer) failed: ${it.message}") }.isSuccess
+        val ok = runCatching { mediaOp { session.setRemote(remote, isOffer = false) } }.onFailure { log("setRemote(answer) failed: ${it.message}") }.isSuccess
         if (!ok) {
             finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
             return
@@ -504,9 +587,9 @@ class CallStateMachine(
         c.remoteSet = true
         c.remoteBuffer.forEach(session::addRemoteCandidate)
         c.remoteBuffer.clear()
-        scope.launch { signals.signal(c.conv, c.peer, CallEnvelope.Accepted(c.id, c.selected!!)) }
-        // §16.4: 20 s to connect after call_accepted.
-        timer(c, "connect", CONNECT_MS) { x -> finish(x, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED) }
+        scope.launch { sig(c.conv, c.peer, CallEnvelope.Accepted(c.id, c.selected!!)) }
+        // §16.4: 20 s to connect after call_accepted (10 s without a relay, decision 054).
+        timer(c, "connect", connectMs(c)) { x -> finish(x, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED) }
         // From now on my candidates go to the selected device.
         scheduleIceFlush(c)
     }
@@ -528,7 +611,7 @@ class CallStateMachine(
         c.selected = c.offerDevice
         c.phase = CallPhase.CONNECTING
         publish(c)
-        timer(c, "connect", CONNECT_MS) { x -> finish(x, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED) }
+        timer(c, "connect", connectMs(c)) { x -> finish(x, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED) }
         maybeVerify(c)
     }
 
@@ -598,13 +681,13 @@ class CallStateMachine(
         }
         val session = c.session ?: return
         val answer = runCatching {
-            session.setRemote(env.sdp, isOffer = true)
-            session.createAnswer()
+            mediaOp { session.setRemote(env.sdp, isOffer = true) }
+            mediaOp { session.createAnswer() }
         }.getOrElse {
             finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
             return
         }
-        scope.launch { signals.signal(c.conv, c.peer, CallEnvelope.Answer(c.id, s.fromDevice.lowercase(), answer)) }
+        scope.launch { sig(c.conv, c.peer, CallEnvelope.Answer(c.id, s.fromDevice.lowercase(), answer)) }
     }
 
     // ---------------------------------------------------------------- media callbacks
@@ -639,6 +722,7 @@ class CallStateMachine(
             },
         )
         call.session = s
+        call.relay = servers.any { srv -> srv.urls.any { it.startsWith("turn:") || it.startsWith("turns:") } }
         s.setMuted(call.muted)
         return s
     }
@@ -675,10 +759,10 @@ class CallStateMachine(
         val offer = lock.withLock {
             if (c.ended || current !== c) return
             val s = c.session ?: return
-            val sdp = runCatching { s.createOffer(iceRestart = true) }.getOrNull() ?: return
+            val sdp = runCatching { mediaOp { s.createOffer(iceRestart = true) } }.getOrNull() ?: return
             CallEnvelope.Offer(c.id, sdp, iso(serverNow()), restart = true, toDevice = c.selected)
         }
-        signals.signal(c.conv, c.peer, offer)
+        sig(c.conv, c.peer, offer)
     }
 
     /** §16.10 (e) after ICE connected (and, for the callee, after call_accepted named it). */
@@ -708,6 +792,7 @@ class CallStateMachine(
                         }
                         stats.dtlsState == "connected" && !stats.srtpCipher.isNullOrEmpty() && stats.remoteFingerprint != null -> {
                             c.timers.remove("connect")?.cancel()
+                            c.timers.remove("watchdog")?.cancel()
                             c.phase = CallPhase.ACTIVE
                             c.connectedAt = now()
                             c.connectedAtServer = serverNow()
@@ -745,7 +830,7 @@ class CallStateMachine(
                     val to = if (c.outgoing) c.selected else c.offerDevice
                     CallEnvelope.Ice(c.id, to, take, done)
                 }
-                signals.signal(c.conv, c.peer, batch)
+                sig(c.conv, c.peer, batch)
                 delay(ICE_BATCH_MS)
             }
         }
@@ -807,6 +892,24 @@ class CallStateMachine(
         if (c.ended) return
         c.shown = true
         _state.value = CallSnapshot(c.id, c.conv, c.peer, c.outgoing, c.phase, c.muted, c.connectedAt, c.verified, null)
+    }
+
+    /** A `call:signal` that never hangs the call (decision 054). */
+    private suspend fun sig(conv: String, peer: String, env: CallEnvelope.Env): SignalOutcome =
+        withTimeoutOrNull(SIGNAL_TIMEOUT_MS) { signals.signal(conv, peer, env) } ?: SignalOutcome.Unavailable.also { log("${env.type} timed out") }
+
+    /** One WebRTC operation under the machine lock, bounded (decision 054): a stuck callback can't hold every input. */
+    private suspend fun <T> mediaOp(block: suspend () -> T): T =
+        withTimeoutOrNull(MEDIA_OP_MS) { block() } ?: throw IllegalStateException("media operation timed out")
+
+    private fun connectMs(c: Call) = if (c.relay) CONNECT_MS else DIRECT_CONNECT_MS
+
+    /** Decision 054: no verified media [MEDIA_WATCHDOG_MS] after the call started → torn down, visibly. */
+    private fun watchdog(c: Call) = timer(c, "watchdog", MEDIA_WATCHDOG_MS) { x ->
+        if (x.phase != CallPhase.ACTIVE && x.phase != CallPhase.RECONNECTING) {
+            log("watchdog: no media for ${x.id} after $MEDIA_WATCHDOG_MS ms")
+            failLocked(x)
+        }
     }
 
     private fun timer(c: Call, name: String, ms: Long, fire: suspend (Call) -> Unit) {
