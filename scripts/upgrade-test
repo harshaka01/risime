@@ -438,9 +438,15 @@ db_snapshot() {
   has_text "$who" "uid=0" || { echo "no-root"; return 0; }
   rm -f "$WORK"/risime.db*
   for f in risime.db risime.db-wal risime.db-shm; do A exec-out cat "/data/data/$PKG/databases/$f" > "$WORK/$f" 2>/dev/null || rm -f "$WORK/$f"; done
-  python3 -I - "$WORK/risime.db" <<'PY'
-import sqlite3, sys
+  python3 -I - "$WORK/risime.db" "$WORK/counts-last.json" <<'PY'
+import sqlite3, sys, json
 c = sqlite3.connect(sys.argv[1])
+# HARD RULE (CLAUDE.md, decision 055): per conversation and kind (text, image, call, ...), never fewer after an update.
+try:
+    rows = c.execute("SELECT conversation_id, COALESCE(kind, 'text'), COUNT(*) FROM messages WHERE kind IS NULL OR kind != 'system' GROUP BY 1, 2").fetchall()
+    json.dump({f"{a}|{b}": n for a, b, n in rows}, open(sys.argv[2], "w"))
+except sqlite3.Error:
+    json.dump({}, open(sys.argv[2], "w"))
 q = lambda s: c.execute(s).fetchone()[0]
 groups = q("SELECT COUNT(*) FROM sqlite_master WHERE name='groups'") and q("SELECT COUNT(*) FROM `groups`") or 0
 def n(sql):
@@ -523,6 +529,7 @@ if [ -n "$SERIAL_B" ]; then
 fi
 step "snapshot before the upgrade"
 DB_BEFORE="$(db_snapshot)"; echo "    before (Room): $DB_BEFORE"
+cp "$WORK/counts-last.json" "$WORK/counts-before.json" 2>/dev/null || true
 
 # ---- 2. upgrade in place
 step "adb install -r the candidate ($NEW_VN)"
@@ -545,6 +552,15 @@ DB_AFTER="$(db_snapshot)"; echo "    after (Room): $DB_AFTER"
 if [ "$DB_BEFORE" != no-root ]; then
   b_msgs="$(field "$DB_BEFORE" messages)"; a_msgs="$(field "$DB_AFTER" messages)"
   [ "${a_msgs:-0}" -ge "${b_msgs:-1}" ] || fail "Room messages dropped (${b_msgs:-?} -> ${a_msgs:-?})"
+  # Per conversation and kind (1:1, groups, photos, call records): equal or more, never fewer.
+  lost="$(python3 -I - "$WORK/counts-before.json" "$WORK/counts-last.json" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1])); a = json.load(open(sys.argv[2]))
+print(" ".join(f"{k}:{v}->{a.get(k, 0)}" for k, v in b.items() if a.get(k, 0) < v))
+PY
+)"
+  [ -z "$lost" ] || fail "messages lost per conversation/kind after the upgrade: $lost"
+  echo "    per-conversation counts kept ($(python3 -I -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$WORK/counts-before.json") conversation/kind pairs)"
   # Delivery still works after the upgrade: one new message from B must arrive and be stored, and
   # the sync cursor must be stored again (nightly.11+ replays the inbox once after an upgrade).
   step "deliver one new message after the upgrade"
@@ -619,6 +635,24 @@ if [ "$DB_BEFORE" != no-root ]; then
   fi
 else
   echo "==> no root on this device: verified through the UI only (use a google_apis emulator image for Room checks)"
+fi
+# Re-sign-in after the update (decision 055): plain "Log out" (keeps chats), sign in as the same
+# user again: every conversation keeps at least its messages.
+if [ "$DB_BEFORE" != no-root ] && [ "$MANUAL" = 0 ]; then
+  step "log out (keep chats) and sign in again after the upgrade"
+  DEV="$SERIAL"; A shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1 || true; sleep 2; dismiss_prompts
+  for _ in 1 2 3; do has "More options" && break; A shell input keyevent KEYCODE_BACK; sleep 1; done
+  tap "More options" && sleep 1 && tap "Log out" && sleep 1 && tap "Log out" || fail "re-sign-in: could not log out"
+  sleep 2; sign_in "+94770000961" "upgrade61@example.com" || fail "re-sign-in after the upgrade"
+  sleep 8; DB_RE="$(db_snapshot)"; echo "    after re-sign-in (Room): $DB_RE"
+  lost="$(python3 -I - "$WORK/counts-before.json" "$WORK/counts-last.json" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1])); a = json.load(open(sys.argv[2]))
+print(" ".join(f"{k}:{v}->{a.get(k, 0)}" for k, v in b.items() if a.get(k, 0) < v))
+PY
+)"
+  [ -z "$lost" ] || fail "messages lost after re-sign-in: $lost"
+  echo "    re-sign-in kept every conversation"
 fi
 # No crash of the app during the whole test, and (debug builds log StrictMode) no Room/MLS work on
 # the main thread (the nightly.17 DM crash class): scripts/logcat-gate.

@@ -65,6 +65,13 @@ Google ships the Android build tools for linux-x86_64 only.
    `docs/decisions/NNN-title.md`. Ask Harsha only when blocked (sudo, credentials, product
    decisions). Otherwise decide, record the decision, and continue.
 
+9. **An update never deletes local chats (HARD RULE, decision 055).** Under no circumstances may an
+   app update, migration, re-sign-in, re-key, reconnect or server switch-back delete local
+   messages. Only an explicit, confirmed "Log out and delete chats from this phone" (or a confirmed
+   switch to a different account or server) may wipe. The upgrade gate compares per-conversation
+   counts (1:1, groups, photos, call records) before and after the update and after a re-sign-in:
+   any loss blocks the release.
+
 ## Stack
 **Server**
 - Elixir/Phoenix: app `:risime`, module `RisiMe`, in folder `server/`.
