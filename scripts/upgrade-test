@@ -641,7 +641,14 @@ fi
 if [ "$DB_BEFORE" != no-root ] && [ "$MANUAL" = 0 ]; then
   step "log out (keep chats) and sign in again after the upgrade"
   DEV="$SERIAL"; A shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1 || true; sleep 2; dismiss_prompts
-  for _ in 1 2 3; do has "More options" && break; A shell input keyevent KEYCODE_BACK; sleep 1; done
+  # Back to the chat list: a chat screen has its own "More options" (Clear/Delete chat), so leave
+  # every chat (no composer visible) before opening the list's menu, which has Log out.
+  for _ in 1 2 3 4 5; do
+    hide_keyboard
+    if has "Encrypted message" || has "Message" || has "Clear chat"; then A shell input keyevent KEYCODE_BACK; sleep 1; continue; fi
+    has "More options" && break
+    A shell input keyevent KEYCODE_BACK; sleep 1
+  done
   tap "More options" && sleep 1 && tap "Log out" && sleep 1 && tap "Log out" || fail "re-sign-in: could not log out"
   sleep 2; sign_in "+94770000961" "upgrade61@example.com" || fail "re-sign-in after the upgrade"
   sleep 8; DB_RE="$(db_snapshot)"; echo "    after re-sign-in (Room): $DB_RE"
