@@ -12,6 +12,7 @@ import lk.codegen.risime.data.db.GroupOpEntity
 import lk.codegen.risime.data.mls.ClaimedKeyPackage
 import lk.codegen.risime.data.mls.DeviceRef
 import lk.codegen.risime.data.mls.MlsEngine
+import lk.codegen.risime.data.mls.MlsPolicyException
 import lk.codegen.risime.data.mls.PendingCommit
 import lk.codegen.risime.net.ApiResult
 import lk.codegen.risime.net.AuthErrors
@@ -310,6 +311,16 @@ class GroupOpsExecutor(
                     tx.run { mls.updateGroupMeta(conv, meta.copy(admins = adminsAfterRole(g, pending))) }
                 }
                 PendingOp.DEVICES -> {
+                    val leaves = mls.members(conv)
+                    // v1.14 §12.4a: a non-admin named for another user's devices op (the member path).
+                    val memberPath = g.myRole != GroupMember.ROLE_ADMIN &&
+                        (pending.added + pending.removed).any { !it.userId.equals(myId, true) }
+                    if (memberPath) {
+                        memberPathRefusal(pending, leaves, myId)?.let { why ->
+                            log("group op ${pending.opId}: not member-committable ($why)")
+                            return OpOutcome.Failed("policy: $why") // reported, never retried: the server names someone else
+                        }
+                    }
                     val addUsers = pending.added.map { it.userId }.distinct()
                     val claimed = if (addUsers.isEmpty()) emptyList() else when (val r = api.claim(addUsers, conv)) {
                         is ApiResult.Ok -> r.value
@@ -318,7 +329,9 @@ class GroupOpsExecutor(
                     }
                     val wanted = pending.added.map { it.deviceId.lowercase() }.toSet()
                     val kps = keyPackages(claimed.filter { it.deviceId?.lowercase() in wanted }) ?: return OpOutcome.Retry("no_key_package", 30_000)
-                    val present = mls.members(conv).map { it.deviceId.lowercase() }.toSet()
+                    // §12.4a: the member path must match the op's `added` exactly (the server rejects a subset).
+                    if (memberPath && kps.map { it.device.deviceId.lowercase() }.toSet() != wanted) return OpOutcome.Retry("no_key_package", 30_000)
+                    val present = leaves.map { it.deviceId.lowercase() }.toSet()
                     val remove = pending.removed.filter { it.deviceId.lowercase() in present }.map { DeviceRef(it.userId, it.deviceId) }
                     if (kps.isEmpty() && remove.isEmpty()) return OpOutcome.Done
                     tx.run { mls.changeGroupMembers(conv, kps, remove) }
@@ -344,11 +357,31 @@ class GroupOpsExecutor(
             }
         } catch (e: UnsupportedOperationException) {
             return OpOutcome.Failed("unsupported")
+        } catch (e: MlsPolicyException) {
+            // §12.4a: the core refuses it under the group policy. Retrying can't change that: report
+            // and stop (silently: a server op isn't the user's action); the server names someone else.
+            log("group op ${pending.opId} refused by the core: ${e.message}")
+            return OpOutcome.Failed("policy: ${e.message}")
         } catch (e: Exception) {
             // The core refused to build it (policy, unknown member …): a peer or the server is out of step.
             return OpOutcome.Retry("build: ${e.message}", 30_000)
         }
         return submit(conv, pc, opId = pending.opId, metaChanged = pc.metaChanged, myId = myId)
+    }
+
+    /**
+     * §12.4a, checked before claiming anything: a non-admin may add devices only of users who
+     * already hold a leaf (or its own), and may remove another user's leaf only when the same op
+     * re-adds that same device. Null = member-committable; else why not (the core would refuse it).
+     */
+    internal fun memberPathRefusal(op: PendingOp, leaves: List<DeviceRef>, myId: String): String? {
+        val leafUsers = leaves.map { it.userId.lowercase() }.toSet()
+        val added = op.added.map { it.userId.lowercase() to it.deviceId.lowercase() }.toSet()
+        op.added.firstOrNull { !it.userId.equals(myId, true) && it.userId.lowercase() !in leafUsers }
+            ?.let { return "adds a user with no leaf" }
+        op.removed.firstOrNull { !it.userId.equals(myId, true) && (it.userId.lowercase() to it.deviceId.lowercase()) !in added }
+            ?.let { return "removes another user's device without re-adding it" }
+        return null
     }
 
     /** §12.4 `role`: the admin list after the op, from the server's roles (S6). */

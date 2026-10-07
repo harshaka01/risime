@@ -122,6 +122,34 @@ class DeviceRegistrarTest {
         assertEquals(4, server.requestCount)
     }
 
+    /** v1.14 §12.1: `member_devices` only when the core reports it (`core_capabilities()`), never on the app's own say. */
+    @Test fun memberDevicesIsAdvertisedOnlyWhenTheCoreReportsIt() = runBlocking {
+        mls.deletesOn = true
+        val reg = DeviceRegistrar(api, { "dev-1" }, "0.3.0", { mls }, imagesSupported = { true }, callsSupported = { true }, groupsReplacedFor = { "x" })
+        assertEquals(listOf("groups", "images", "deletes", "calls"), reg.capabilities(mls))
+        mls.coreCaps = setOf("something_else")
+        assertFalse("member_devices" in reg.capabilities(mls)!!)
+        mls.coreCaps = setOf("member_devices")
+        server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+        server.enqueue(json(200, """{"count":30}"""))
+        reg.register(null)
+        val put = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("[\"groups\",\"images\",\"deletes\",\"calls\",\"member_devices\"]", put["mls"]!!.jsonObject["capabilities"].toString())
+        server.takeRequest()
+        // A core without groups never advertises it, whatever it reports.
+        mls.groupsOn = false
+        assertNull(reg.capabilities(mls))
+        mls.groupsOn = true
+        // The same capabilities again: nothing to re-advertise; a core that drops it: re-advertised.
+        assertNull(reg.refreshCapabilities(null))
+        mls.coreCaps = emptySet()
+        server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+        server.enqueue(json(200, """{"count":30}"""))
+        assertTrue(reg.refreshCapabilities(null) is Registration.Mls)
+        val again = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("[\"groups\",\"images\",\"deletes\",\"calls\"]", again["mls"]!!.jsonObject["capabilities"].toString())
+    }
+
     @Test fun coreWithoutGroupsKeepsTheV17Registration() = runBlocking {
         mls.groupsOn = false
         server.enqueue(json(200, """{"attestation":"a.b.c"}"""))

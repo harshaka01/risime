@@ -365,12 +365,13 @@ class AppContainer(
     }
 
     /** GET /groups/{id}: server truth for members, roles and owed ops; 404 keeps the local snapshot read-only (S3). */
-    suspend fun refreshGroup(conversationId: String) {
-        val me = sessionStore.current()?.user?.id ?: return
-        when (val r = api.group(conversationId)) {
-            is ApiResult.Ok -> db.withTransaction { groupStore.applyServerGroup(r.value.group, me) }
-            is ApiResult.Error -> if (r.httpStatus == 404) db.withTransaction { groupStore.markGone(conversationId) }
-            is ApiResult.NetworkError -> Unit
+    /** `GET /groups/{id}` applied locally; @return the server's group (null when unavailable). */
+    suspend fun refreshGroup(conversationId: String): lk.codegen.risime.net.Group? {
+        val me = sessionStore.current()?.user?.id ?: return null
+        return when (val r = api.group(conversationId)) {
+            is ApiResult.Ok -> r.value.group.also { db.withTransaction { groupStore.applyServerGroup(it, me) } }
+            is ApiResult.Error -> null.also { if (r.httpStatus == 404) db.withTransaction { groupStore.markGone(conversationId) } }
+            is ApiResult.NetworkError -> null
         }
     }
 
@@ -969,6 +970,8 @@ class AppContainer(
                 withTimeoutOrNull(25_000) { realtime.state.first { it == ConnectionState.Live } }
                 delay(1_500) // let live events and the friends refetch land
                 contacts.refresh()
+                // §12.4a wake push: a group op naming this device is committed before the worker ends.
+                withTimeoutOrNull(20_000) { runCatching { groupOps.runDue() } }
             } finally {
                 backgroundSync.value = false
             }

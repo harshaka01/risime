@@ -245,8 +245,12 @@ class ContractExamplesTest {
         "mls_group_calls_ready.json" to { s -> ProtocolJson.decodeFromString<MlsGroup>(s).also { require(it.callsReady && it.missingCalls.single().deviceId != null) } },
         "error_calls_unavailable.json" to { s -> apiError(s, CallErrors.CALLS_UNAVAILABLE) },
         "error_calls_not_ready.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s).also { require(it.reason == CallErrors.CALLS_NOT_READY) } },
-        // v1.14 (§12.4a): parse-only placeholder until the app advertises `member_devices`.
-        "device_put_member_devices.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require("member_devices" in it.mls?.capabilities.orEmpty()) } },
+        // v1.14 (§12.1, §12.4a): what this app sends with a core that reports `member_devices`.
+        "device_put_member_devices.json" to { s ->
+            ProtocolJson.decodeFromString<DevicePut>(s).also {
+                require(it.mls?.capabilities == listOf(DeviceMls.CAP_GROUPS, DeviceMls.CAP_IMAGES, DeviceMls.CAP_DELETES, DeviceMls.CAP_CALLS, DeviceMls.CAP_MEMBER_DEVICES))
+            }
+        },
     )
 
     private fun callEnv(s: String): lk.codegen.risime.calls.CallEnvelope.Env =
@@ -285,6 +289,8 @@ class ContractExamplesTest {
         check("device_put_deletes.json", DevicePut.serializer())
         // v1.13 client-sent payloads (§16.1, §16.3).
         check("device_put_calls.json", DevicePut.serializer())
+        // v1.14 (§12.1).
+        check("device_put_member_devices.json", DevicePut.serializer())
         check("call_signal_push.json", CallSignalPush.serializer())
         check("key_packages_upload_replace.json", KeyPackagesUpload.serializer())
         check("key_packages_claim_group.json", KeyPackagesClaim.serializer())

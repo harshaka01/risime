@@ -108,6 +108,11 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
     // ---- §12 groups (stand-in for the FFI group calls) ----
     var groupsOn = true
     override val groupsSupported: Boolean get() = groupsOn
+    var coreCaps: Set<String> = emptySet()
+    override val coreCapabilities: Set<String> get() = coreCaps
+
+    /** When set, the core refuses group-member commits under the policy (§12.4a). */
+    var policyRefusal: String? = null
     val metas = mutableMapOf<String, lk.codegen.risime.net.GroupMeta>()
     private val pendingMeta = mutableMapOf<String, lk.codegen.risime.net.GroupMeta?>()
     val groupCommits = mutableListOf<Pair<String, PendingCommit>>()
@@ -128,7 +133,7 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
     }
 
     override fun changeGroupMembers(conversationId: String, add: List<ClaimedKeyPackage>, removeDevices: List<DeviceRef>) =
-        groupCommit(conversationId, "change", add.map { it.device }, removeDevices, null)
+        policyRefusal?.let { throw MlsPolicyException(it) } ?: groupCommit(conversationId, "change", add.map { it.device }, removeDevices, null)
 
     override fun removeGroupUsers(conversationId: String, userIds: List<String>) =
         groupCommit(conversationId, "remove-users", emptyList(), members(conversationId).filter { m -> userIds.any { it.equals(m.userId, true) } }, null)

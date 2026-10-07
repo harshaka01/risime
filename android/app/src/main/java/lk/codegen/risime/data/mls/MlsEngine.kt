@@ -77,6 +77,13 @@ interface MlsEngine {
      */
     val groupsSupported: Boolean get() = false
 
+    /**
+     * The device capabilities (§12.1) whose rules this core enforces itself (FFI
+     * `core_capabilities()`), e.g. `member_devices` (v1.14 §12.4a). The app advertises such a
+     * capability only when it is listed here, never on its own.
+     */
+    val coreCapabilities: Set<String> get() = emptySet()
+
     /** Epoch 0 of a `grp:` group (or the rebuild after a reset) with every claimed device and [meta]; my user must be in its admins. */
     fun createGroupWithMeta(conversationId: String, generation: Long, members: List<ClaimedKeyPackage>, meta: GroupMeta): PendingCommit =
         unsupported()
@@ -142,6 +149,9 @@ open class MlsDecryptException(message: String) : Exception(message)
 
 /** The core's `Malformed` on decrypt: e.g. a delete control from an epoch with no admin record (more than 3 epochs back). */
 class MlsMalformedException(message: String) : MlsDecryptException(message)
+
+/** The core refused to build a commit under the group policy (§12.4/§12.4a): never retried as is. */
+class MlsPolicyException(message: String) : Exception(message)
 
 fun groupId(conversationId: String, generation: Long) = "$conversationId#$generation"
 

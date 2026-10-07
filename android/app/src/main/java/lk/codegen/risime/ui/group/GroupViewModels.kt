@@ -91,7 +91,20 @@ data class MemberUi(
     val state: String,
     val me: Boolean,
     val joinedAt: String?,
+    /** §12.4a: a `devices` op is still adding this member's new phone ("<name>'s new phone is being added"). */
+    val newPhone: Boolean = false,
 )
+
+/**
+ * §12.4a: the other members whose new phone (a device the group doesn't have yet) waits in a
+ * pending `devices` op. A same-device re-add (rejoin) isn't a new phone; my own waiting device
+ * shows "Rejoining group…" on its own group screen instead.
+ */
+fun newPhoneUsers(g: lk.codegen.risime.net.Group, me: String): Set<String> =
+    g.pending.filter { it.type == lk.codegen.risime.net.PendingOp.DEVICES }.flatMap { op ->
+        val removed = op.removed.map { it.deviceId.lowercase() }.toSet()
+        op.added.filter { it.deviceId.lowercase() !in removed && !it.userId.equals(me, true) }.map { it.userId.lowercase() }
+    }.toSet()
 
 data class GroupInfoUi(
     val name: String = "",
@@ -135,22 +148,34 @@ fun groupInfoUi(meId: String, g: GroupEntity?, members: List<GroupMemberEntity>,
 class GroupInfoViewModel(private val c: AppContainer, private val meId: String, val conversationId: String) : ViewModel() {
     private val error = MutableStateFlow<String?>(null)
     private val missingImages = MutableStateFlow<List<String>>(emptyList())
+    private val newPhones = MutableStateFlow<Set<String>>(emptySet())
 
     val ui: StateFlow<GroupInfoUi> = combine(
         c.db.groups().observe(conversationId),
         c.db.groups().observeMembers(conversationId),
         c.contacts.contacts,
-        error,
-        missingImages,
-    ) { g, members, contacts, err, missing ->
+        combine(error, missingImages, newPhones, ::Triple),
+    ) { g, members, contacts, (err, missing, phones) ->
         val names = missing.distinctBy { it.lowercase() }.map { id ->
             if (id.equals(meId, true)) "Your other phone" else members.firstOrNull { it.userId.equals(id, true) }?.displayName ?: "Someone"
         }
-        groupInfoUi(meId, g, members, contacts).copy(error = err, photosNeedUpdate = names)
+        val base = groupInfoUi(meId, g, members, contacts)
+        base.copy(
+            error = err, photosNeedUpdate = names,
+            members = base.members.map { m -> if (m.userId.lowercase() in phones && m.state == GroupMember.STATE_ACTIVE) m.copy(newPhone = true) else m },
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GroupInfoUi())
 
     init {
-        viewModelScope.launch { c.refreshGroup(conversationId) }
+        // §12.4a: device-only commits emit no group_event, so re-read while a new phone is waiting.
+        viewModelScope.launch {
+            while (true) {
+                val g = c.refreshGroup(conversationId) ?: break
+                newPhones.value = newPhoneUsers(g, meId)
+                if (newPhones.value.isEmpty()) break
+                kotlinx.coroutines.delay(15_000)
+            }
+        }
         if (c.mediaCrypto != null) viewModelScope.launch {
             (c.api.mlsGroup(conversationId) as? ApiResult.Ok)?.let { r -> missingImages.value = r.value.missingImages.map { it.userId } }
         }

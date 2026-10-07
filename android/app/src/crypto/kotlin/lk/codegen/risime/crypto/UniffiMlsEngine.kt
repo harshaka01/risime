@@ -212,6 +212,16 @@ class UniffiMlsEngine(
 
     override val groupsSupported: Boolean get() = true
 
+    // v1.14 §12.1: what the bundled core enforces (`member_devices` from the §12.4a core).
+    override val coreCapabilities: Set<String> by lazy { runCatching { lk.codegen.risime.crypto.coreCapabilities().toSet() }.getOrDefault(emptySet()) }
+
+    /** A core policy refusal becomes [lk.codegen.risime.data.mls.MlsPolicyException] (reported, not retried). */
+    private inline fun <T> policy(block: () -> T): T = try {
+        block()
+    } catch (e: RisiMlsException.PolicyViolation) {
+        throw lk.codegen.risime.data.mls.MlsPolicyException(e.message ?: "policy violation")
+    }
+
     private fun GroupCommit.toApp(gen: Long) = AppPendingCommit(
         gen, epoch.toLong(), commit, welcome,
         added.map { DeviceRef(it.userId, it.deviceId) }, removed.map { DeviceRef(it.userId, it.deviceId) }, metaChanged,
@@ -234,17 +244,17 @@ class UniffiMlsEngine(
 
     override fun changeGroupMembers(conversationId: String, add: List<ClaimedKeyPackage>, removeDevices: List<DeviceRef>): AppPendingCommit = tx {
         val (gen, g) = currentOrThrow(conversationId)
-        client.changeMembers(g, add.map { it.keyPackage }, removeDevices.map { DeviceId(it.userId, it.deviceId) }).toApp(gen)
+        policy { client.changeMembers(g, add.map { it.keyPackage }, removeDevices.map { DeviceId(it.userId, it.deviceId) }) }.toApp(gen)
     }
 
     override fun removeGroupUsers(conversationId: String, userIds: List<String>): AppPendingCommit = tx {
         val (gen, g) = currentOrThrow(conversationId)
-        client.removeUsers(g, userIds).toApp(gen)
+        policy { client.removeUsers(g, userIds) }.toApp(gen)
     }
 
     override fun updateGroupMeta(conversationId: String, meta: lk.codegen.risime.net.GroupMeta): AppPendingCommit = tx {
         val (gen, g) = currentOrThrow(conversationId)
-        client.updateGroupMeta(g, meta.toFfi()).toApp(gen)
+        policy { client.updateGroupMeta(g, meta.toFfi()) }.toApp(gen)
     }
 
     override fun groupMeta(conversationId: String): lk.codegen.risime.net.GroupMeta? = tx {

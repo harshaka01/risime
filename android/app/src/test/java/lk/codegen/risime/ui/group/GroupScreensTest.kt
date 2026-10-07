@@ -126,6 +126,12 @@ class GroupScreensTest(private val dark: Boolean) {
         }
     }
 
+    /** §12.4a: a member's new phone waiting in a `devices` op shows on that member's row; no prompt. */
+    @Test fun aMembersNewPhoneWaitingToBeAddedIsShownOnTheirRow() {
+        info(GroupInfoUi(name = "Pilot team", members = members.map { if (it.userId == "u-kamal") it.copy(newPhone = true) else it }), dark)
+        scrollTo("Kamal's new phone is being added").assertIsDisplayed()
+    }
+
     @Test fun adminInfoShowsMembersRolesPendingAndActions() {
         info(GroupInfoUi(name = "Pilot team", members = members, iAmAdmin = true), dark)
         rule.onNodeWithText("Pilot team").assertIsDisplayed()

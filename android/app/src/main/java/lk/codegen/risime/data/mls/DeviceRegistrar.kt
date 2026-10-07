@@ -58,6 +58,8 @@ class DeviceRegistrar(
             DeviceMls.CAP_IMAGES.takeIf { imagesSupported() },
             DeviceMls.CAP_DELETES.takeIf { mls.deletesSupported },
             DeviceMls.CAP_CALLS.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() },
+            // v1.14 §12.4a: only when the bundled core enforces the member rule (never on the app's own say).
+            DeviceMls.CAP_MEMBER_DEVICES.takeIf { DeviceMls.CAP_MEMBER_DEVICES in mls.coreCapabilities },
         )
         else -> null
     }

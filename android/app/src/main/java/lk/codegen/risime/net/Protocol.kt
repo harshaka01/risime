@@ -533,6 +533,9 @@ data class DeviceMls(
 
         /** §16.1: advertised only once the app can ring, answer and play a call (WebRTC loaded, Telecom registered, notifications allowed). */
         const val CAP_CALLS = "calls"
+
+        /** v1.14 §12.1/§12.4a: advertised only when the MLS core reports it (`core_capabilities()`). */
+        const val CAP_MEMBER_DEVICES = "member_devices"
     }
 }
 

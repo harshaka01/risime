@@ -149,6 +149,93 @@ class GroupOpsExecutorTest {
         assertEquals(5L, mls.group(conv)!!.epoch)
     }
 
+    /** §12.4a: this device is a member (not admin) in a group whose admin is offline; nimal holds a leaf. */
+    private fun memberGroup() {
+        mls.groups[conv] = GroupRef(conv, 1, 4)
+        mls.metas[conv] = GroupMeta(name = "Pilot team", admins = listOf(kamal))
+        mls.memberLists[conv] = mutableListOf(DeviceRef(kamal, "dev-kamal"), DeviceRef(me, "dev-me"), DeviceRef(nimal, "dev-nimal-old"))
+        api.group = Group(conv, "active", kamal, null, 1, 4, "member", listOf(member(kamal, "admin"), member(me), member(nimal)))
+    }
+
+    private fun namedDevicesOp(id: String, added: List<MlsDeviceRef>, removed: List<MlsDeviceRef> = emptyList()): PendingOp {
+        val op = PendingOp(id, PendingOp.DEVICES, null, added = added, removed = removed, committer = MlsDeviceRef(me, "dev-me"))
+        api.group = api.group.copy(pending = listOf(op))
+        return op
+    }
+
+    @Test fun aMemberNamedForAnotherMembersNewPhoneCommitsItWithTheOpIdAndExactLists() = runTest {
+        memberGroup()
+        store.queueCommit(conv, namedDevicesOp("op-dev", listOf(MlsDeviceRef(nimal, "dev-nimal"))))
+        assertNull(exec.runDue())
+        val c = api.commits.single()
+        assertEquals("op-dev", c.opId)
+        assertEquals(listOf(MlsDeviceRef(nimal, "dev-nimal")), c.added) // exactly the op's added: not my own dev-me2
+        assertTrue(c.removed.isEmpty())
+        assertTrue(c.welcome != null)
+        assertEquals(listOf(nimal) to conv, api.claims.single())
+        assertEquals(GroupOpType.DONE, opsDao.rows.values.single().state)
+        assertTrue(DeviceRef(nimal, "dev-nimal") in mls.members(conv))
+    }
+
+    @Test fun aMemberReAddsTheSameDeviceOfAnotherMember() = runTest {
+        memberGroup()
+        val d = MlsDeviceRef(nimal, "dev-nimal")
+        mls.memberLists[conv]!! += DeviceRef(nimal, "dev-nimal")
+        store.queueCommit(conv, namedDevicesOp("op-rejoin", listOf(d), listOf(d)))
+        exec.runDue()
+        val c = api.commits.single()
+        assertEquals(listOf(d), c.added)
+        assertEquals(listOf(d), c.removed)
+    }
+
+    @Test fun aMemberRefusesAnOpItMayNotCommitWithoutClaimingOrLooping() = runTest {
+        memberGroup()
+        // A new user (no leaf), and a swap of nimal's old phone for another device: both admin-only.
+        val newUser = store.queueCommit(conv, namedDevicesOp("op-new", listOf(MlsDeviceRef("u-sunil", "dev-sunil"))))
+        assertTrue(newUser)
+        exec.runDue()
+        store.queueCommit(conv, namedDevicesOp("op-swap", listOf(MlsDeviceRef(nimal, "dev-nimal")), listOf(MlsDeviceRef(nimal, "dev-nimal-old"))))
+        assertNull("nothing left to retry", exec.runDue())
+        assertTrue(api.commits.isEmpty())
+        assertTrue(api.claims.isEmpty())
+        assertTrue(opsDao.rows.values.all { it.state == GroupOpType.FAILED && it.lastError!!.startsWith("policy") })
+        // A repeated naming of the same op isn't queued again.
+        assertFalse(store.queueCommit(conv, api.group.pending.single()))
+    }
+
+    @Test fun aCorePolicyRefusalIsReportedOnceAndNeverRetried() = runTest {
+        memberGroup()
+        mls.policyRefusal = "non-admin may not swap"
+        store.queueCommit(conv, namedDevicesOp("op-dev", listOf(MlsDeviceRef(nimal, "dev-nimal"))))
+        assertNull(exec.runDue())
+        val row = opsDao.rows.values.single()
+        assertEquals(GroupOpType.FAILED, row.state)
+        assertEquals(1, api.claims.size)
+        assertTrue(api.commits.isEmpty())
+        assertFalse(mls.hasPending)
+        assertTrue(row.lastError!!.startsWith("policy"))
+    }
+
+    @Test fun aMemberWaitsWhenTheNewPhoneHasNoKeyPackageYet() = runTest {
+        memberGroup()
+        // The claim returns nimal's other device, not the op's: a subset would be bad_request.
+        store.queueCommit(conv, namedDevicesOp("op-dev", listOf(MlsDeviceRef(nimal, "dev-nimal-new"))))
+        val next = exec.runDue()
+        assertTrue(next != null)
+        assertTrue(api.commits.isEmpty())
+        assertEquals(GroupOpType.QUEUED, opsDao.rows.values.single().state)
+    }
+
+    @Test fun aServerRefusalOfAMembersCommitIsDroppedSilently() = runTest {
+        memberGroup()
+        api.commitReplies.add(ApiResult.Error(403, "not_admin", ""))
+        store.queueCommit(conv, namedDevicesOp("op-dev", listOf(MlsDeviceRef(nimal, "dev-nimal"))))
+        assertNull(exec.runDue())
+        assertEquals(GroupOpType.FAILED, opsDao.rows.values.single().state)
+        assertFalse("our commit was dropped, not merged", mls.hasPending)
+        assertEquals(4L, mls.group(conv)!!.epoch)
+    }
+
     @Test fun anOpCompletedElsewhereIsDoneWithoutACommit() = runTest {
         activeGroup()
         store.queueCommit(conv, PendingOp("op-gone", PendingOp.REMOVE, me, listOf(kamal), committer = MlsDeviceRef(me, "dev-me")))

@@ -119,4 +119,17 @@ class GroupLogicTest {
         assertEquals("Rejoining group…", row.name)
         assertEquals("Pilot team", buildGroupRows(me, listOf(g.copy(name = "Pilot team")), emptyList(), emptyList(), emptyList()).single().name)
     }
+    /** §12.4a: other members' new devices waiting in `devices` ops (a same-device rejoin and my own don't count). */
+    @Test fun newPhoneUsersComeFromPendingDevicesOps() {
+        fun d(u: String, dev: String) = lk.codegen.risime.net.MlsDeviceRef(u, dev)
+        val ops = listOf(
+            lk.codegen.risime.net.PendingOp("o1", "devices", null, added = listOf(d("u-Kamal", "k2"))),
+            lk.codegen.risime.net.PendingOp("o2", "devices", null, added = listOf(d("u-nimal", "n1")), removed = listOf(d("u-nimal", "n1"))),
+            lk.codegen.risime.net.PendingOp("o3", "devices", null, added = listOf(d(me, "m2"))),
+            lk.codegen.risime.net.PendingOp("o4", "add", null, userIds = listOf("u-sunil")),
+        )
+        val g = lk.codegen.risime.net.Group(conv, pending = ops)
+        assertEquals(setOf("u-kamal"), newPhoneUsers(g, me))
+        assertTrue(newPhoneUsers(g.copy(pending = emptyList()), me).isEmpty())
+    }
 }

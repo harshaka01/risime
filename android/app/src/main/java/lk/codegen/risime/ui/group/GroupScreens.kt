@@ -486,6 +486,7 @@ private fun MemberRow(m: MemberUi, iAmAdmin: Boolean, onRemove: (String) -> Unit
                 when (m.state) {
                     GroupMember.STATE_PENDING_ADD -> Text("Adding…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     GroupMember.STATE_PENDING_REMOVE -> Text("Removing…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    else -> if (m.newPhone) Text("${m.name}'s new phone is being added", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             if (m.admin) AssistChip(onClick = {}, label = { Text("Admin") }, enabled = false)
