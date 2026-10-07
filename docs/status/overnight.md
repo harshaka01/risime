@@ -47,6 +47,19 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.26 (live 2026-10-07, not required): lost history comes back by itself
+- **"nightly.25 wiped my chats":** not the update. Android removed the app's data on Harsha's
+  phone (a new device id at 10:40 UTC: an uninstall + reinstall or Clear storage). The update kept
+  everything in the gate.
+- **Fix:** a phone with history gaps requests the history automatically (own devices first, with
+  the one-time approval; members are asked). The inbox replay restores what the server holds.
+- **Hard rule 9 (CLAUDE.md, decision 055):** an update never deletes local chats.
+- **The gate now:**
+  - compares per-conversation message counts before and after the update, and after a plain
+    Log out and sign-in;
+  - asserts the login screen appears after Log out.
+  Two script bugs were found and fixed on the way. Plain Log out itself works.
+
 ## v0.2.0-nightly.25 (live 2026-10-07, not required): hotfix, dark screen after a call
 - **Fix:** an ended call always closes the call screen (back to the chat); a call screen opened
   with no call closes at once; the call card leaves Recents; Back during a call goes to the chat
