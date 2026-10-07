@@ -1,5 +1,15 @@
 # Calls: manual test for Harsha and Shirazi (two phones)
 
+## Quick 4-step check (needs the one-way-audio fix, nightly.22 or later, on BOTH phones; TURN is live)
+Use one phone on Wi-Fi and the other on mobile data (that forces the relay).
+1. **A calls B.** B answers. Both talk; **each must hear the other**. A hangs up.
+2. **B calls A.** A answers. Again both must hear each other. B hangs up.
+3. **B answers locked.** Lock B with the screen off; A calls; B answers from the lock screen (unlock
+   first if asked for the microphone). Both hear each other. Hang up.
+4. **A normal phone call afterwards.** Right after step 3, make an ordinary mobile call to B (or
+   from B). Its microphone and speaker must work normally (RisiMe released the audio).
+Report: which step failed, who couldn't hear whom, and the time to the minute.
+
 This is for the first build with the call fix (decision 054). Both phones need that build:
 Settings → About shows the version.
 
@@ -49,11 +59,7 @@ What the results mean:
 ## B. Mobile data on one or both phones
 
 11. Repeat steps 1 and 8 with one phone on mobile data, then with both on mobile data.
-    *Expected today:* it rings and Answer works, then within about 10 s both phones show "Can't
-    connect the call". Both chats show "Couldn't connect", and the next call is not "already in a
-    call".
-    The reason is that the call relay (TURN) ports on spark2 are still blocked from outside.
-    Rechecked 2026-10-07 01:58 UTC: 443 is open, but all TURN/LiveKit ports are filtered. Once
-    Harsha opens them (decision 046), this step should connect, and the test is to be redone.
+    *Expected:* it connects through the relay (TURN is live since 2026-10-07 06:34 UTC) and both
+    hear each other. "Can't connect the call" now means a real network problem: report the time.
 12. If a call fails in a way that doesn't match the expected result, send the time (to the minute).
     The server now logs every call signal and every call push, so the attempt can be traced.

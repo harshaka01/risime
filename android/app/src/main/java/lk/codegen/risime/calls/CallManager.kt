@@ -68,7 +68,15 @@ interface CallAppPort {
  * notifications, handles the `call` push (an unlocked sync, or the nameless locked ring of decision
  * 051) and routes audio through Telecom's endpoints.
  */
-class CallManager(private val context: Context, private val port: CallAppPort, private val mediaFactory: () -> CallMedia = { WebRtcCallMedia(context, debug = BuildConfig.DEBUG) }) {
+class CallManager(private val context: Context, private val port: CallAppPort, private val mediaFactory: () -> CallMedia = {
+    WebRtcCallMedia(
+        context,
+        // Debug builds only: `run-as <pkg> touch files/debug_relay_only` forces TURN relay candidates
+        // (the redroid relay test, §16.10 f); release builds never read it.
+        relayOnly = { BuildConfig.DEBUG && java.io.File(context.filesDir, "debug_relay_only").exists() },
+        debug = BuildConfig.DEBUG,
+    )
+}) {
     private val log: (String) -> Unit = { Log.i("RisiMe", "calls: $it") }
     val notifications = CallNotifications(context)
     val media: CallMedia by lazy { mediaFactory() }

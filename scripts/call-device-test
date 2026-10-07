@@ -59,6 +59,13 @@ trap 'exit 130' INT TERM
 
 # ---------------------------------------------------------------- server
 ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT busy"; exit 1; }
+# CALLTEST_TURN=1: the temp server hands out credentials for the LIVE coturn (decision 046), and a
+# last call runs relay-only through it (the phones' only path is turn:203.115.26.139:3478).
+TURN_ENV=""
+if [ "${CALLTEST_TURN:-0}" = 1 ]; then
+  ts="$(grep '^TURN_SECRET=' .env | cut -d= -f2-)"; [ -n "$ts" ] || { echo "CALLTEST_TURN=1 needs TURN_SECRET in .env"; exit 2; }
+  TURN_ENV="TURN_SECRET='$ts' TURN_URLS='turn:203.115.26.139:3478?transport=udp,turn:203.115.26.139:3478?transport=tcp'"
+fi
 cat > "$WORK/fixtures.exs" <<'EXS'
 alias RisiMe.{Accounts, Repo}
 alias RisiMe.Accounts.User
@@ -93,7 +100,7 @@ echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB, E2EE on)"
 (cd server && $M mix compile >/dev/null 2>&1) || { echo "server compile failed"; exit 1; }
 tmux new -d -s "risime-calltest$SUF" "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
   PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
-  ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix phx.server > '$WORK/server.log' 2>&1"
+  ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $TURN_ENV $M mix phx.server > '$WORK/server.log' 2>&1"
 for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
 curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't start"; tail -20 "$WORK/server.log"; exit 1; }
 fx setup
@@ -167,7 +174,8 @@ answer_intent() {
   A shell cmd statusbar collapse >/dev/null 2>&1 || true
 }
 # §16.10 verified media: the debug stats line "pair=host/host … dtls=connected srtp=…" since $1 lines.
-media_ok() { local out; out="$(A logcat -d 2>/dev/null || true)"; grep -E "call stats: pair=(host|prflx)/(host|prflx) .*dtls=connected srtp=[A-Z_0-9]+" <<<"$out" | tail -1 || true; }
+MEDIA_PAIR="(host|prflx)/(host|prflx)"
+media_ok() { local out; out="$(A logcat -d 2>/dev/null || true)"; grep -E "call stats: pair=$MEDIA_PAIR .*dtls=connected srtp=[A-Z_0-9]+" <<<"$out" | tail -1 || true; }
 # Ringing = the incoming CallStyle notification on the `calls` channel is posted (a heads-up while the app is open).
 ringing() { local out; out="$(A shell dumpsys notification --noredact 2>/dev/null || true)"; grep -q "pkg=$PKG .*channel=calls " <<<"$out"; }
 wait_ring() { for _ in $(seq 1 "${1:-30}"); do ringing && return 0; sleep 1; done; return 1; }
@@ -252,7 +260,7 @@ call_once() {  # $1 label
   answer_intent || fail "$1: no Answer action on the incoming-call notification"
   local m=""; for _ in $(seq 1 30); do DEV=A; m="$(media_ok)"; [ -n "$m" ] && { DEV=B; [ -n "$(media_ok)" ] && break; }; m=""; sleep 1; done
   [ -n "$m" ] || fail "$1: media never connected directly (host/prflx pair) with DTLS-SRTP on both"
-  pass "$1: answered via the Answer intent; direct media (host/prflx), DTLS connected, SRTP on both (${m##*call stats: })"
+  pass "$1: answered via the Answer intent; media on the expected path, DTLS connected, SRTP on both (${m##*call stats: })"
   # Audio must flow BOTH ways (nightly.21: only the caller was heard): outbound-rtp bytesSent and
   # inbound-rtp bytesReceived grow on both phones while the call is up.
   sleep 6
@@ -304,5 +312,13 @@ call_once "call 4 (after the kill)"; hang_up_a "call 4"
 # Answering from the background: B goes to the home screen while it rings and answers from the
 # notification shade (redroid has no FCM, so a fully backgrounded app can't be woken here).
 CALL_BG=1 call_once "call 5 (answered from the background)"; hang_up_a "call 5"
+if [ "${CALLTEST_TURN:-0}" = 1 ]; then
+  for DEV in A B; do A shell run-as "$PKG" touch files/debug_relay_only || fail "debug relay switch"; done
+  DEV=B; open_chat "ZZ Call A" || fail "B: DM"   # back in the foreground (no FCM in redroid)
+  DEV=A; open_chat "ZZ Call B" || fail "A: DM"
+  MEDIA_PAIR="relay/relay"
+  call_once "call 6 (relay only, through the live TURN server)"; hang_up_a "call 6"
+  for DEV in A B; do A shell run-as "$PKG" rm -f files/debug_relay_only; done
+fi
 logcat_ok "the end"
 echo "CALLTEST OK"
