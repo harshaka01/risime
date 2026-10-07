@@ -250,3 +250,22 @@ if config_env() == :prod do
     http: [ip: bind, port: String.to_integer(System.get_env("PORT", "4000"))],
     secret_key_base: secret_key_base
 end
+
+# Invite and friend-request limits (lib/risime/social.ex): server config, changed by env + restart.
+int_env = fn name, default ->
+  case System.get_env(name) do
+    nil -> default
+    "" -> default
+    v -> String.to_integer(v)
+  end
+end
+
+config :risime, :social,
+  requests_per_day: int_env.("FRIEND_REQUESTS_PER_DAY", 50),
+  invites_per_user_per_day: int_env.("INVITES_PER_USER_PER_DAY", 20),
+  invites_global_per_day: int_env.("INVITES_GLOBAL_PER_DAY", 200),
+  invites_pending: int_env.("INVITES_PENDING", 50),
+  invite_admins:
+    (System.get_env("INVITE_ADMINS") || "")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)

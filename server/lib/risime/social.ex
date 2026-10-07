@@ -20,9 +20,23 @@ defmodule RisiMe.Social do
 
   @request_ttl_days 30
   @invite_ttl_days 30
-  @requests_per_day 30
-  @invites_per_day 10
-  @invites_pending 50
+  # Limits are server config (`config :risime, :social`, from env in config/runtime.exs), so they
+  # change with a restart, never a release. Defaults below.
+  @defaults [
+    requests_per_day: 50,
+    invites_per_user_per_day: 20,
+    invites_global_per_day: 200,
+    invites_pending: 50,
+    # Phones or emails of admins: exempt from the per-user invite limit (never from the global cap).
+    invite_admins: []
+  ]
+
+  defp limit(key), do: Keyword.get(Application.get_env(:risime, :social, []), key, @defaults[key])
+
+  defp invite_admin?(%User{} = u) do
+    admins = Enum.map(limit(:invite_admins), &String.downcase(String.trim(&1)))
+    u.phone in admins or String.downcase(u.email || "") in admins
+  end
 
   ## Friendships
 
@@ -110,7 +124,7 @@ defmodule RisiMe.Social do
       not Validate.phone?(phone) ->
         {:error, :invalid_phone}
 
-      RateLimiter.hit(:friend_request, from.id, @requests_per_day, :timer.hours(24)) != :ok ->
+      RateLimiter.hit(:friend_request, from.id, limit(:requests_per_day), :timer.hours(24)) != :ok ->
         {:error, {:rate_limited, RateLimiter.retry_after_s(:timer.hours(24))}}
 
       true ->
@@ -529,6 +543,24 @@ defmodule RisiMe.Social do
 
   defp invite_within_limits(inviter, phone, email, name) do
     now = DateTime.utc_now()
+
+    # Re-inviting the same phone reuses the pending invite (its link): never counted.
+    existing =
+      Repo.one(
+        from i in Invite,
+          where:
+            i.inviter_id == ^inviter.id and i.status == "pending" and i.expires_at > ^now and
+              i.phone == ^phone,
+          order_by: [desc: i.inserted_at],
+          limit: 1
+      )
+
+    if existing,
+      do: {:ok, existing},
+      else: new_invite_within_limits(inviter, phone, email, name, now)
+  end
+
+  defp new_invite_within_limits(inviter, phone, email, name, now) do
     day_ago = DateTime.add(now, -1, :day)
 
     {today, oldest_today} =
@@ -546,11 +578,24 @@ defmodule RisiMe.Social do
         :count
       )
 
+    {global_today, global_oldest} =
+      Repo.one(
+        from i in Invite,
+          where: i.inserted_at > ^day_ago,
+          select: {count(i.id), min(i.inserted_at)}
+      )
+
+    admin? = invite_admin?(inviter)
+
     cond do
-      today >= @invites_per_day ->
+      global_today >= limit(:invites_global_per_day) ->
+        {:error,
+         {:rate_limited, max(DateTime.diff(DateTime.add(global_oldest, 1, :day), now), 1)}}
+
+      not admin? and today >= limit(:invites_per_user_per_day) ->
         {:error, {:rate_limited, max(DateTime.diff(DateTime.add(oldest_today, 1, :day), now), 1)}}
 
-      pending >= @invites_pending ->
+      not admin? and pending >= limit(:invites_pending) ->
         {:error, {:rate_limited, 3600}}
 
       true ->

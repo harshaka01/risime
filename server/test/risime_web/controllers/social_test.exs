@@ -105,11 +105,55 @@ defmodule RisiMeWeb.SocialTest do
       assert Enum.all?(invites, &(&1["status"] == "pending"))
     end
 
-    test "limits: 10 per 24 h and 50 pending, counted in Postgres, with Retry-After", %{
+    test "re-inviting the same phone returns the same pending invite and never counts", %{
       conn: conn,
       a: a
     } do
-      for _ <- 1..10 do
+      phone = new_phone()
+      body = %{"phone" => phone, "email" => "simi@example.com", "name" => "Simi"}
+      first = api(conn, a.token, :post, "/api/v1/invites", body) |> json_response(201)
+
+      for _ <- 1..25 do
+        again = api(conn, a.token, :post, "/api/v1/invites", body) |> json_response(201)
+        assert again["invite"]["id"] == first["invite"]["id"]
+        assert again["invite"]["link"] == first["invite"]["link"]
+      end
+
+      assert length(Repo.all(from i in Invite, where: i.inviter_id == ^a.user.id)) == 1
+    end
+
+    test "limits are server config; admins skip the per-user limit but not the global cap", %{
+      conn: conn,
+      a: a
+    } do
+      prev = Application.get_env(:risime, :social)
+      on_exit(fn -> Application.put_env(:risime, :social, prev) end)
+
+      Application.put_env(:risime, :social,
+        invites_per_user_per_day: 2,
+        invites_global_per_day: 4,
+        invite_admins: [a.user.phone]
+      )
+
+      inv = fn token ->
+        api(conn, token, :post, "/api/v1/invites", %{
+          "phone" => new_phone(),
+          "email" => "y@example.com",
+          "name" => "Y"
+        }).status
+      end
+
+      %{token: bt} = logged_in_user()
+      assert [201, 201, 429] == for(_ <- 1..3, do: inv.(bt))
+      # The admin goes past 2 per day, until the global cap (4 in all today).
+      assert [201, 201, 429] == for(_ <- 1..3, do: inv.(a.token))
+    end
+
+    test "limits: 20 per 24 h and 50 pending, counted in Postgres, with Retry-After", %{
+      conn: conn,
+      a: a
+    } do
+      for _ <- 1..20 do
         assert api(conn, a.token, :post, "/api/v1/invites", %{
                  "phone" => new_phone(),
                  "email" => "x@example.com",
@@ -384,8 +428,8 @@ defmodule RisiMeWeb.SocialTest do
              |> json_response(404)
     end
 
-    test "rate limit: 30 per user per 24 h", %{conn: conn, a: a} do
-      for _ <- 1..30, do: assert(request(conn, a.token, new_phone()).status == 202)
+    test "rate limit: 50 per user per 24 h (separate from invites)", %{conn: conn, a: a} do
+      for _ <- 1..50, do: assert(request(conn, a.token, new_phone()).status == 202)
       resp = request(conn, a.token, new_phone())
       assert json_response(resp, 429)
       assert [_] = get_resp_header(resp, "retry-after")
