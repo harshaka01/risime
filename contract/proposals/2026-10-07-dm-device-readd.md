@@ -1,5 +1,7 @@
 # Proposal 2026-10-07: DMs re-add a member's new device (DM self-heal, v1.16)
 
+**Status: merged** into PROTOCOL §10.6 as v1.16 (2026-10-07).
+
 **Status: proposed** (server + android, P0). Additive: one new event kind, one new REST call, an
 optional `op_id` on the DM commit, a DM use of the existing reset path. No core (crypto) change.
 From: server/android session for root, 2026-10-07.
