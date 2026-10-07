@@ -245,6 +245,47 @@ class CallCleanupTest {
     }
 
     @Test
+    fun audioThatStopsFlowingEndsTheCallAfter20s() = runTest {
+        world()
+        val (a, b) = d("A1") to d("B1")
+        a.machine.placeCall(conv)
+        settle()
+        b.machine.answer()
+        settle()
+        a.media.sessions.last().bytes = 1_000
+        b.media.sessions.last().bytes = 1_000
+        listOf(a, b).forEach { it.media.sessions.last().listener.onIceState(IceState.CONNECTED) }
+        settle()
+        advanceTimeBy(1_000)
+        settle()
+        assertEquals(CallPhase.ACTIVE, a.phase())
+        // B's audio keeps flowing to A for a while: A stays up.
+        repeat(5) {
+            a.media.sessions.last().bytes = a.media.sessions.last().bytes!! + 400
+            advanceTimeBy(CallStateMachine.MEDIA_STALL_POLL_MS)
+            runCurrent()
+        }
+        assertEquals(CallPhase.ACTIVE, a.phase())
+        // Then nothing arrives any more (the network died without an ICE event).
+        advanceTimeBy(CallStateMachine.MEDIA_STALL_MS - 2 * CallStateMachine.MEDIA_STALL_POLL_MS)
+        runCurrent()
+        assertEquals("not before 20 s", CallPhase.ACTIVE, a.phase())
+        advanceTimeBy(3 * CallStateMachine.MEDIA_STALL_POLL_MS)
+        settle()
+        assertTrue("ended (Can't connect, then gone): ${a.phase()}", a.phase() == null || a.notice() == CallNotice.CANT_CONNECT)
+        assertEquals(CallEnvelope.R_FAILED, a.ends.single().reason)
+        assertTrue("A's media closed (the audio device module is released)", a.media.sessions.last().closed)
+    }
+
+    @Test
+    fun everyNoticeMapsToADisconnectCauseCoreTelecomAccepts() {
+        val valid = setOf(android.telecom.DisconnectCause.LOCAL, android.telecom.DisconnectCause.REMOTE, android.telecom.DisconnectCause.MISSED, android.telecom.DisconnectCause.REJECTED)
+        for (n in CallNotice.entries.toList() + listOf<CallNotice?>(null)) assertTrue("$n", telecomDisconnectCause(n) in valid)
+        assertEquals(android.telecom.DisconnectCause.REJECTED, telecomDisconnectCause(CallNotice.DECLINED))
+        assertEquals(android.telecom.DisconnectCause.MISSED, telecomDisconnectCause(null))
+    }
+
+    @Test
     fun aKilledProcessOwesTheRightCallEnd() {
         fun r(outgoing: Boolean, phase: CallPhase) = ActiveCallRecord("c", "dm:x", "p", outgoing, phase.name, false)
         assertNull(ActiveCallRecord.endReason(r(false, CallPhase.RINGING_IN)))

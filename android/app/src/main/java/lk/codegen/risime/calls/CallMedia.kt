@@ -36,6 +36,8 @@ data class DtlsStats(
     /** The selected candidate pair's types ("host", "srflx", "relay"), for the debug overlay and the device smoke test. */
     val localCandidateType: String? = null,
     val remoteCandidateType: String? = null,
+    /** Audio bytes received so far (inbound-rtp), for the decision-054 media-stall watchdog; null = unknown. */
+    val bytesReceived: Long? = null,
 )
 
 interface MediaSession {

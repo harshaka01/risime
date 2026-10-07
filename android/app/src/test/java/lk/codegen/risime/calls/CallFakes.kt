@@ -51,6 +51,8 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
         var closed = false
         var dtlsState = "connected"
         var cipher = "AEAD_AES_128_GCM"
+        /** Audio bytes received (decision 054 stall watchdog); null = the media can't count. */
+        var bytes: Long? = null
 
         override suspend fun createOffer(iceRestart: Boolean): String {
             localOffers++
@@ -74,7 +76,7 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
             // The DTLS handshake checks the peer certificate against the fingerprint in the remote SDP.
             val expected = remote?.let { SdpRules.fingerprint(it) }
             if (peer != null && expected != SdpRules.normalize(peer.fp)) return DtlsStats("failed", null, SdpRules.normalize(peer.fp))
-            return DtlsStats(dtlsState, cipher, peer?.fp?.let(SdpRules::normalize))
+            return DtlsStats(dtlsState, cipher, peer?.fp?.let(SdpRules::normalize), bytesReceived = bytes)
         }
 
         override fun setMuted(muted: Boolean) {

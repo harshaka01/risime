@@ -1,5 +1,17 @@
 # Android status — 0.2 nightlies
 
+## Calls never get stuck (nightly.16 P0, decision 054) — READY
+**READY.** The callee couldn't answer, and the caller stayed "in call" after a kill. Root causes and
+fixes are in `docs/decisions/054-calls-never-stuck.md`: ghost core-telecom calls, busy-by-audio-mode,
+unbound Telecom callbacks, unbounded setup, and the mic prompt behind the keyguard.
+- Gates: `./gradlew assembleDebug testDebugUnitTest` green; server `mix test` green (432).
+- `scripts/interop` (`_callfix`, 4400/5099): **INTEROP OK twice**, with 3 new call checks (caller
+  crash, callee kill, busy only for real).
+- `scripts/call-device-test`: **CALLTEST OK** on two redroid containers (`-cf1`/`-cf2`, 5720/5721)
+  with the real app. Four calls answered through the notification's Answer action, with direct
+  media and DTLS-SRTP; one of them had the caller killed mid-call, and the next call was fine.
+- Manual test for the pilot: `docs/status/calls-manual-test.md`.
+
 ## v1.13 1:1 voice calls (§16) — READY
 **READY** for contract v1.13 §16 (decisions 046, 051, new **052**), in the chunk order of
 `contract/proposals/reviews/2026-10-06-calls-v1.13-android.md` with crypto R1–R6. Commits `8ffb708` (protocol, envelopes,

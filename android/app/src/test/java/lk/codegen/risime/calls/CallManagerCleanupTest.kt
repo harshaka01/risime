@@ -113,6 +113,36 @@ class CallManagerCleanupTest {
         until("record cleared") { if (prefs().getString("active_call", null) == null) Unit else null }
     }
 
+    @Test fun everyEndGivesTheAudioBack() = runBlocking {
+        val m = CallManager(app, port) { FakeCallMedia() }
+        until("machine") { m.machine }
+        delay(200)
+        offer(m)
+        until("rings") { m.state.value?.takeIf { it.phase == CallPhase.RINGING_IN } }
+        // What a stuck Telecom/WebRTC call left: the communication mode and the speakerphone.
+        audio().mode = AudioManager.MODE_IN_COMMUNICATION
+        @Suppress("DEPRECATION")
+        audio().isSpeakerphoneOn = true
+        m.hangUp()
+        until("audio mode back to normal") { if (audio().mode == AudioManager.MODE_NORMAL) Unit else null }
+        @Suppress("DEPRECATION")
+        assertTrue(!audio().isSpeakerphoneOn)
+        assertNull(m.state.value?.takeIf { it.phase != CallPhase.ENDED })
+    }
+
+    @Test fun swipingTheAppAwayEndsTheCallAndGivesTheAudioBack() = runBlocking {
+        val m = CallManager(app, port) { FakeCallMedia() }
+        until("machine") { m.machine }
+        m.placeCall(conv)
+        until("the offer went out", 8_000) { sent.firstOrNull { it is CallEnvelope.Offer } }
+        audio().mode = AudioManager.MODE_IN_COMMUNICATION
+        m.onTaskRemoved()
+        until("no call") { if (m.state.value == null || m.state.value?.phase == CallPhase.ENDED) Unit else null }
+        until("audio mode back to normal") { if (audio().mode == AudioManager.MODE_NORMAL) Unit else null }
+        until("the caller's cancel") { ends.firstOrNull { it.reason == CallEnvelope.R_CANCELLED } }
+        Unit
+    }
+
     @Test fun aCellularCallIsBusy() = runBlocking {
         val m = CallManager(app, port) { FakeCallMedia() }
         until("machine") { m.machine }

@@ -146,6 +146,9 @@ class CallStateMachine(
         const val MISSED_GRACE_MS = 10_000L
         /** Decision 054: Hang up / Cancel waits this long for the machine, then ends the call anyway. */
         const val HANGUP_LOCK_MS = 2_000L
+        /** Decision 054: audio that flowed and then stopped this long ends an active call ("Can't connect the call"). */
+        const val MEDIA_STALL_MS = 20_000L
+        const val MEDIA_STALL_POLL_MS = 2_000L
 
         private val ISO = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
 
@@ -799,6 +802,7 @@ class CallStateMachine(
                             c.verified = true
                             timer(c, "max", MAX_CALL_MS) { x -> finish(x, CallNotice.CALL_ENDED, sendEnd = CallEnvelope.R_HANGUP) }
                             publish(c)
+                            stallWatch(c)
                             true
                         }
                         else -> false
@@ -903,6 +907,36 @@ class CallStateMachine(
         withTimeoutOrNull(MEDIA_OP_MS) { block() } ?: throw IllegalStateException("media operation timed out")
 
     private fun connectMs(c: Call) = if (c.relay) CONNECT_MS else DIRECT_CONNECT_MS
+
+    /**
+     * Decision 054: while the call is up, received audio must keep growing (Opus DTX still sends
+     * every 400 ms in silence). Once audio has flowed, [MEDIA_STALL_MS] without a new byte ends the
+     * call visibly with the full cleanup. A media layer that can't count bytes (null) is never judged.
+     */
+    private fun stallWatch(c: Call) {
+        c.timers.remove("stall")?.cancel()
+        c.timers["stall"] = scope.launch {
+            var last = -1L
+            var lastChange = now()
+            while (true) {
+                delay(MEDIA_STALL_POLL_MS)
+                val session = lock.withLock { if (c.ended || current !== c) return@launch else c.session } ?: return@launch
+                val bytes = runCatching { session.stats().bytesReceived }.getOrNull() ?: continue
+                if (bytes != last) {
+                    last = bytes
+                    lastChange = now()
+                } else if (bytes > 0 && now() - lastChange >= MEDIA_STALL_MS) {
+                    lock.withLock {
+                        if (!c.ended && current === c) {
+                            log("no audio received for ${now() - lastChange} ms: ending ${c.id}")
+                            finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
+                        }
+                    }
+                    return@launch
+                }
+            }
+        }
+    }
 
     /** Decision 054: no verified media [MEDIA_WATCHDOG_MS] after the call started → torn down, visibly. */
     private fun watchdog(c: Call) = timer(c, "watchdog", MEDIA_WATCHDOG_MS) { x ->

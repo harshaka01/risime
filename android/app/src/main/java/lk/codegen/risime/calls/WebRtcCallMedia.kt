@@ -229,7 +229,8 @@ class WebRtcCallMedia(
                 val remote = pair?.members?.get("remoteCandidateId")?.let { id -> all.firstOrNull { it.id == id }?.members?.get("candidateType") } as? String
                 // Debug overlay data only; release builds never log candidates or IPs (§16.9).
                 if (debug) Log.d("RisiMe", "call stats: pair=$local/$remote rtt=${pair?.members?.get("currentRoundTripTime")} dtls=${transport?.members?.get("dtlsState")} srtp=${transport?.members?.get("srtpCipher")}")
-                val st = DtlsStats(transport?.members?.get("dtlsState") as? String, transport?.members?.get("srtpCipher") as? String, fp, local, remote)
+                val received = all.filter { it.type == "inbound-rtp" }.mapNotNull { (it.members["bytesReceived"] as? Number)?.toLong() }.takeIf { it.isNotEmpty() }?.sum()
+                val st = DtlsStats(transport?.members?.get("dtlsState") as? String, transport?.members?.get("srtpCipher") as? String, fp, local, remote, received)
                 onStats(st)
                 cont.resume(st)
             }

@@ -198,12 +198,29 @@ call_once() {  # $1 label
   [ -n "$m" ] || fail "$1: media never connected directly (host/prflx pair) with DTLS-SRTP on both"
   pass "$1: answered via the Answer intent; direct media (host/prflx), DTLS connected, SRTP on both (${m##*call stats: })"
 }
+# Decision 054: no call left behind: no RisiMe call in Telecom (a ghost self-managed call held
+# MODE_IN_COMMUNICATION in nightly.16 and made every later call "busy") and no communication mode.
+no_leftovers() {  # $1 label
+  local d t a ok
+  for d in A B; do
+    DEV=$d; ok=""
+    for _ in $(seq 1 10); do
+      t="$(A shell dumpsys telecom 2>/dev/null || true)"; a="$(A shell dumpsys audio 2>/dev/null || true)"
+      if ! grep -qE "state=(ACTIVE|RINGING|DIALING|CONNECTING|ON_HOLD|NEW|ANSWERED).*tpac=ComponentInfo\{$PKG" <<<"$t" \
+         && ! grep -A1 -- "- Mode owner:" <<<"$a" | grep -q MODE_IN_COMMUNICATION; then ok=1; break; fi
+      sleep 1
+    done
+    [ -n "$ok" ] || fail "$1: $d still has a RisiMe Telecom call or MODE_IN_COMMUNICATION after the call ended"
+  done
+  pass "$1: no Telecom call and no communication mode left on either phone"
+}
 hang_up_a() {  # $1 label
   DEV=A; tap "End call" || fail "$1: no End call button"
   DEV=B; for _ in $(seq 1 20); do has "End call" || break; sleep 1; done
   has "End call" && fail "$1: B still in the call after A hung up"
   DEV=A; sleep 4; has "End call" && fail "$1: A still shows the call"
   pass "$1: A hung up; both ended"
+  no_leftovers "$1"
 }
 
 call_once "call 1"; hang_up_a "call 1"
@@ -214,6 +231,7 @@ pass "call 3: the caller's process killed mid-call"
 DEV=B; for _ in $(seq 1 40); do has "End call" || break; sleep 1; done
 has "End call" && fail "call 3: B still in the call 40 s after the caller died"
 pass "call 3: B ended by itself"
+DEV=B; no_leftovers "call 3 (B, the survivor)"
 DEV=A; open_chat "ZZ Call B" || fail "A: chat after the restart"
 sleep 3
 call_once "call 4 (after the kill)"; hang_up_a "call 4"

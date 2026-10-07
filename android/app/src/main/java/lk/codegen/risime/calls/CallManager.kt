@@ -254,11 +254,8 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         if (state.value != null) return
         runCatching { context.stopService(Intent(context, CallService::class.java)) }
         runCatching { androidx.core.app.NotificationManagerCompat.from(context).cancel(CallNotifications.CALL_ID) }
-        runCatching {
-            val am = context.getSystemService(AudioManager::class.java)
-            // Only this process's own mode request (Android 12+ keeps one per process); a real cellular call is untouched.
-            if (am != null && am.mode == AudioManager.MODE_IN_COMMUNICATION) am.mode = AudioManager.MODE_NORMAL
-        }
+        // This process's own audio requests (Android 12+ keeps one per process); a cellular call is untouched.
+        releaseAudio()
         val rec = runCatching { prefs.getString(KEY_ACTIVE, null)?.let(ActiveCallRecord::decode) }.getOrNull()
         runCatching { prefs.edit().remove(KEY_ACTIVE).apply() }
         rec ?: return
@@ -317,6 +314,8 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     /** `{"type":"call"}`: start the phoneCall service at once, then sync (unlocked) or ring blind (locked). */
     fun onCallPush() {
+        // Decision 054: a wake-up with no call here first clears anything a crash left behind.
+        if (state.value == null) scope.launch { runCatching { cleanupAfterProcessStart() } }
         if (port.connection.value == ConnectionState.Live) return // the live socket already brings it
         // Start the phoneCall service inside the high-priority FCM window, before anything else.
         waking.value = true
@@ -383,6 +382,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         persistActive(s)
         // Decision 054: a Telecom call of any other call id is over (StateFlow conflation, glare).
         telecomCalls.keys.filter { s == null || it != s.callId || s.phase == CallPhase.ENDED }.forEach { endTelecom(it, s?.takeIf { x -> x.callId == it }?.notice) }
+        if ((s == null || s.phase == CallPhase.ENDED) && telecomCalls.isEmpty()) releaseAudio()
         if (s != null && s.phase != CallPhase.ENDED) {
             acquireWake()
             if (blindRing.value != null) {
@@ -513,22 +513,49 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             endpoints.value = emptyList()
             currentEndpoint.value = null
         }
-        val cause = when (notice) {
-            CallNotice.DECLINED -> DisconnectCause.REJECTED
-            CallNotice.BUSY -> DisconnectCause.BUSY
-            CallNotice.ANSWERED_ELSEWHERE -> DisconnectCause.ANSWERED_ELSEWHERE
-            CallNotice.CANT_CONNECT -> DisconnectCause.ERROR
-            null -> DisconnectCause.MISSED
-            else -> DisconnectCause.LOCAL
-        }
+        val cause = telecomDisconnectCause(notice)
         scope.launch {
             val sc = h.scope ?: withTimeoutOrNull(3_000) {
                 while (h.scope == null && h.job.isActive) delay(50)
                 h.scope
             }
-            runCatching { sc?.disconnect(DisconnectCause(cause)) }.onFailure { Log.w("RisiMe", "telecom disconnect: ${it.message}") }
+            // Decision 054 (the P0 safety bug): core-telecom accepts only LOCAL, REMOTE, MISSED and
+            // REJECTED; nightly.16/17 passed ERROR/BUSY/ANSWERED_ELSEWHERE, the disconnect threw, and
+            // the self-managed call stayed ACTIVE in Telecom, holding the mic, the speaker and
+            // MODE_IN_COMMUNICATION (normal phone calls broke until a reboot). Fall back to LOCAL.
+            val first = runCatching { sc?.disconnect(DisconnectCause(cause)) }
+            val ok = first.getOrNull()?.let { it is androidx.core.telecom.CallControlResult.Success } ?: (sc == null)
+            if (!ok) {
+                Log.w("RisiMe", "telecom disconnect($cause): ${first.exceptionOrNull()?.message ?: first.getOrNull()}; retrying LOCAL")
+                runCatching { sc?.disconnect(DisconnectCause(DisconnectCause.LOCAL)) }.onFailure { Log.w("RisiMe", "telecom disconnect(LOCAL): ${it.message}") }
+            }
             delay(1_000)
             h.job.cancel()
+            if (state.value.let { it == null || it.phase == CallPhase.ENDED } && telecomCalls.isEmpty()) releaseAudio()
+        }
+    }
+
+    /**
+     * Decision 054: give every audio resource back once no call is left: this process's audio mode
+     * (MODE_NORMAL, unless a cellular call holds MODE_IN_CALL), the communication device, the
+     * speakerphone. The WebRTC audio device module (and its AudioRecord) is released by
+     * MediaSession.close on every end path; RisiMe never requests audio focus (Telecom owns it).
+     */
+    fun releaseAudio() {
+        val am = context.getSystemService(AudioManager::class.java) ?: return
+        runCatching { if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice() }
+        @Suppress("DEPRECATION")
+        runCatching { if (am.isSpeakerphoneOn) am.isSpeakerphoneOn = false }
+        runCatching { if (am.mode != AudioManager.MODE_NORMAL && am.mode != AudioManager.MODE_IN_CALL) am.mode = AudioManager.MODE_NORMAL }
+    }
+
+    /** The service's task was swiped away (onTaskRemoved) or the app is going away: end everything (decision 054). */
+    fun onTaskRemoved() {
+        if (blindRing.value != null) stopBlindRing()
+        scope.launch {
+            _machine.value?.hangUp()
+            onState(null)
+            releaseAudio()
         }
     }
 
@@ -576,6 +603,17 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     /** First non-null machine (tests and the debug screen). */
     suspend fun awaitMachine(): CallStateMachine? = withTimeoutOrNull(5_000) { machineFlow.map { it }.firstOrNull { it != null } }
+}
+
+/**
+ * Decision 054: the only DisconnectCause codes core-telecom's `disconnect` accepts are LOCAL,
+ * REMOTE, MISSED and REJECTED (anything else throws, and the call stays in Telecom).
+ */
+fun telecomDisconnectCause(notice: CallNotice?): Int = when (notice) {
+    null, CallNotice.ANSWERED_ELSEWHERE -> DisconnectCause.MISSED
+    CallNotice.DECLINED -> DisconnectCause.REJECTED
+    CallNotice.CALL_ENDED, CallNotice.IN_ANOTHER_CALL -> DisconnectCause.LOCAL
+    else -> DisconnectCause.REMOTE
 }
 
 /** Decision 054: the call this process had, persisted (SharedPreferences) so the next process can end it after a kill. */

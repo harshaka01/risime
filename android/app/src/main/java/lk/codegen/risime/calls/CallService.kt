@@ -47,6 +47,12 @@ class CallService : Service() {
             }
     }
 
+    /** Decision 054: the app was swiped away during a call: end it and give the audio back. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        runCatching { (application as RisiMeApp).container.calls.onTaskRemoved() }
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         super.onDestroy()
