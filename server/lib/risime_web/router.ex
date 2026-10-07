@@ -70,6 +70,7 @@ defmodule RisiMeWeb.Router do
     post "/mls/groups/:conversation_id/commit", MLSController, :commit
     get "/mls/groups/:conversation_id/commits", MLSController, :commits
     post "/mls/groups/:conversation_id/reset", MLSController, :reset
+    post "/mls/groups/:conversation_id/rejoin", MLSController, :rejoin
     post "/groups", GroupController, :create
     get "/groups", GroupController, :index
     get "/groups/:id", GroupController, :show

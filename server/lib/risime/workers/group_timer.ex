@@ -11,6 +11,10 @@ defmodule RisiMe.Workers.GroupTimer do
     * `name_pending` (v1.14 §12.11): the one-off recovery queued by
       `RisiMe.Release.name_pending_device_ops(dry_run: false)` from `bin/risime eval`.
 
+    * `dm_committer` (v1.16): a DM `devices` op's named committer's 60 s ran out;
+    * `dm_ops` (v1.16): the one-off DM recovery queued by
+      `RisiMe.Release.dm_device_ops(dry_run: false)`.
+
   Args hold only ids and counters (never content).
   """
   use Oban.Worker, queue: :groups, max_attempts: 5
@@ -25,6 +29,15 @@ defmodule RisiMe.Workers.GroupTimer do
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"kind" => "committer", "op_id" => op_id, "naming" => n}}),
     do: Ops.committer_timeout(op_id, n)
+
+  def perform(%Oban.Job{args: %{"kind" => "dm_committer", "op_id" => op_id, "naming" => n}}),
+    do: RisiMe.MLS.DmOps.committer_timeout(op_id, n)
+
+  def perform(%Oban.Job{args: %{"kind" => "dm_ops"}}) do
+    counts = RisiMe.MLS.DmOps.recover(dry_run: false)
+    Logger.info("dm device ops (dry_run=false): #{inspect(counts)}")
+    :ok
+  end
 
   def perform(%Oban.Job{args: %{"kind" => "expire", "op_id" => op_id}}), do: Ops.expire(op_id)
 

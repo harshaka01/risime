@@ -397,9 +397,10 @@ defmodule RisiMe.Groups.Ops do
       else: g.id |> Groups.in_group() |> Enum.filter(fn {u, _} -> u in admins end)
   end
 
-  defp by_recency([]), do: []
+  @doc false
+  def by_recency([]), do: []
 
-  defp by_recency(refs) do
+  def by_recency(refs) do
     keys = for {_u, d} <- refs, do: "device:" <> d
 
     seen =

@@ -86,7 +86,25 @@ defmodule RisiMeWeb.MLSController do
     end
   end
 
-  @doc "`POST /mls/groups/grp:…/reset` (v1.9 §12.8, admins)."
+  @doc "`POST /mls/groups/{dm}/rejoin` (v1.16, proposal 2026-10-07-dm-device-readd §4)."
+  def rejoin(conn, %{"conversation_id" => conv}) do
+    case MLS.rejoin_dm(me(conn), caller_device(conn), conv) do
+      {:ok, op, candidates} -> conn |> put_status(202) |> json(%{op: op, candidates: candidates})
+      error -> error(conn, error)
+    end
+  end
+
+  @doc """
+  `POST /mls/groups/grp:…/reset` (v1.9 §12.8, admins); for a DM (v1.16 §3) any participant's
+  current MLS device.
+  """
+  def reset(conn, %{"conversation_id" => "dm:" <> _ = conv} = params) do
+    case MLS.reset_dm(me(conn), caller_device(conn), conv, params) do
+      {:ok, generation} -> json(conn, %{generation: generation})
+      error -> error(conn, error)
+    end
+  end
+
   def reset(conn, %{"conversation_id" => conv} = params) do
     case RisiMe.Groups.Commit.reset(me(conn), caller_device(conn), conv, params) do
       {:ok, generation} -> json(conn, %{generation: generation})

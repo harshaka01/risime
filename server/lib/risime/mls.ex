@@ -356,11 +356,19 @@ defmodule RisiMe.MLS do
         )
       end)
 
+      # v1.16 §2: a device with key packages can be added to the DMs that lack it.
+      dm_device_ready(user_id, device.device_id)
       :ok
     else
       {:error, _} = e -> e
       _ -> {:error, :bad_request}
     end
+  end
+
+  defp dm_device_ready(user_id, device_id) do
+    RisiMe.MLS.DmOps.device_ready(user_id, device_id)
+  rescue
+    e -> Logger.warning("dm device ops failed: #{Exception.message(e)}")
   end
 
   defp decode_all(list) do
@@ -651,6 +659,7 @@ defmodule RisiMe.MLS do
          {:ok, welcome} <- decode_welcome(p["welcome"]),
          {:ok, added} <- device_refs(p["added"] || []),
          {:ok, removed} <- device_refs(p["removed"] || []),
+         {:ok, op_id} <- op_id(p["op_id"]),
          true <- added == [] == (welcome == nil) do
       {:ok,
        %{
@@ -659,7 +668,8 @@ defmodule RisiMe.MLS do
          commit: commit,
          welcome: welcome,
          added: added,
-         removed: removed
+         removed: removed,
+         op_id: op_id
        }}
     else
       _ -> {:error, :bad_request}
@@ -667,6 +677,11 @@ defmodule RisiMe.MLS do
   end
 
   defp parse_commit(_), do: {:error, :bad_request}
+
+  # v1.16 (proposal 2026-10-07-dm-device-readd §2.2): the DM op a commit works on, optional.
+  defp op_id(nil), do: {:ok, nil}
+  defp op_id(id) when is_binary(id), do: Ecto.UUID.cast(id)
+  defp op_id(_), do: :error
 
   defp decode_welcome(nil), do: {:ok, nil}
 
@@ -704,15 +719,31 @@ defmodule RisiMe.MLS do
         )
       )
 
+    # v1.16 §2.2: what the group would be after this commit (a removal must leave the user a
+    # live leaf).
+    leaves_after =
+      in_group
+      |> MapSet.difference(MapSet.new(req.removed))
+      |> MapSet.union(MapSet.new(req.added))
+
     cond do
       group == nil and (req.epoch != 0 or req.generation != 1) ->
         {:error, {:epoch_conflict, 0}}
 
-      group != nil and (req.generation != group.generation or req.epoch != group.epoch) ->
+      # v1.16 §3: a reset DM awaits the epoch-0 commit of its new generation.
+      group != nil and group.epoch == nil and
+          (req.epoch != 0 or req.generation != group.generation) ->
+        {:error, {:epoch_conflict, 0}}
+
+      group != nil and group.epoch != nil and
+          (req.generation != group.generation or req.epoch != group.epoch) ->
         {:error, {:epoch_conflict, group.epoch}}
 
       group == nil ->
         create_group(me, caller_device, conv, members, req, current)
+
+      group.epoch == nil ->
+        create_group(me, caller_device, conv, members, req, current, group.generation)
 
       not MapSet.member?(in_group, {me, caller_device}) ->
         {:error, :bad_request}
@@ -724,7 +755,10 @@ defmodule RisiMe.MLS do
         {:error, :bad_request}
 
       not Enum.all?(req.removed, fn {u, _} = ref ->
-        MapSet.member?(in_group, ref) and (not MapSet.member?(current, ref) or u == me)
+        MapSet.member?(in_group, ref) and
+            (not MapSet.member?(current, ref) or u == me or
+               (req.op_id != nil and
+                  RisiMe.MLS.DmOps.removal_allowed?(conv, req.op_id, ref, leaves_after)))
       end) ->
         {:error, :bad_request}
 
@@ -740,21 +774,47 @@ defmodule RisiMe.MLS do
           )
 
         set_group_devices(conv, req.added, req.removed)
-        finish_commit(conv, members, caller_device, req, group.generation, new_epoch)
+        result = finish_commit(conv, members, caller_device, req, group.generation, new_epoch)
+        RisiMe.MLS.DmOps.settle(conv)
+        result
     end
   end
 
-  defp create_group(me, caller_device, conv, members, req, current) do
+  # Epoch 0 (§10.2): a new group (generation 1), or the rebuild of a reset DM (v1.16 §3, the
+  # row stays with `epoch` null until then). `added` must hold every current non-superseded MLS
+  # device of both members except the caller, and may hold superseded ones (each current).
+  defp create_group(me, caller_device, conv, members, req, current, generation \\ nil) do
     {ready, missing} = readiness(members)
-    expected = MapSet.delete(current, {me, caller_device})
+    superseded = superseded_devices(members)
+
+    required =
+      current
+      |> MapSet.delete({me, caller_device})
+      |> MapSet.reject(&MapSet.member?(superseded, &1))
+
+    added = MapSet.new(req.added)
 
     cond do
       not ready ->
         {:error, {:not_ready, missing}}
 
-      not MapSet.member?(current, {me, caller_device}) or MapSet.new(req.added) != expected or
-          req.removed != [] ->
+      not MapSet.member?(current, {me, caller_device}) or
+        MapSet.member?(added, {me, caller_device}) or not MapSet.subset?(required, added) or
+        not MapSet.subset?(added, current) or req.removed != [] ->
         {:error, :bad_request}
+
+      generation != nil ->
+        {1, _} =
+          Repo.update_all(
+            from(g in "mls_groups",
+              where:
+                g.conversation_id == ^conv and g.generation == ^generation and is_nil(g.epoch)
+            ),
+            set: [epoch: 1, updated_at: DateTime.utc_now()]
+          )
+
+        set_group_devices(conv, [{me, caller_device} | req.added], [])
+        finish_commit(conv, members, caller_device, req, generation, 1)
 
       true ->
         now = DateTime.utc_now()
@@ -765,6 +825,105 @@ defmodule RisiMe.MLS do
 
         set_group_devices(conv, [{me, caller_device} | req.added], [])
         finish_commit(conv, members, caller_device, req, 1, 1)
+    end
+  end
+
+  ## DM rejoin and reset (v1.16, proposal 2026-10-07-dm-device-readd §3, §4)
+
+  @doc """
+  `POST /mls/groups/{dm}/rejoin`: creates or widens the caller's DM `devices` op so that the
+  calling device is (re-)added. `{:ok, op_json | nil, candidates}`; `nil, 0` while the DM awaits
+  its rebuild.
+  """
+  def rejoin_dm(me, device_id, conv) do
+    with {:ok, _members, device} <- dm_caller(me, device_id, conv),
+         :ok <- dm_limit(:mls_dm_rejoin, me, 10, :timer.minutes(1)) do
+      alias RisiMe.MLS.DmOps
+
+      DmOps.locked(conv, fn ->
+        case group(conv) do
+          nil ->
+            {:error, :not_found}
+
+          %{epoch: nil} ->
+            {:ok, nil, 0}
+
+          _ ->
+            case DmOps.ensure(conv, me, rejoin: device.device_id) do
+              nil -> {:ok, nil, 0}
+              op -> {:ok, DmOps.json(op), length(DmOps.candidates(op))}
+            end
+        end
+      end)
+      |> case do
+        {:ok, {:ok, _, _} = ok} -> ok
+        {:ok, {:error, _} = e} -> e
+        {:error, _} = e -> e
+      end
+    end
+  end
+
+  @doc """
+  `POST /mls/groups/{dm}/reset` `{"generation": n}`: generation + 1, epoch null, no leaves, no
+  ops, open history requests expired. The DM stays e2ee; any participant's device rebuilds it at
+  epoch 0. `{:ok, n + 1}`.
+  """
+  def reset_dm(me, device_id, conv, params) do
+    with {:ok, _members, _device} <- dm_caller(me, device_id, conv),
+         %{"generation" => gen} when is_integer(gen) <- params || {:error, :bad_request} do
+      RisiMe.MLS.DmOps.locked(conv, fn ->
+        case group(conv) do
+          nil ->
+            {:error, :not_found}
+
+          %{generation: ^gen} ->
+            with :ok <- dm_limit(:mls_dm_reset, conv, 3, :timer.hours(1)) do
+              Repo.update_all(
+                from(g in "mls_groups", where: g.conversation_id == ^conv),
+                set: [generation: gen + 1, epoch: nil, updated_at: DateTime.utc_now()]
+              )
+
+              Repo.delete_all(from gd in "mls_group_devices", where: gd.conversation_id == ^conv)
+              RisiMe.MLS.DmOps.drop(conv)
+              RisiMe.History.conversation_reset(conv)
+              {:ok, gen + 1}
+            end
+
+          %{generation: current} ->
+            {:error, {:generation_conflict, current}}
+        end
+      end)
+      |> case do
+        {:ok, {:ok, n}} -> {:ok, n}
+        {:ok, {:error, _} = e} -> e
+        {:error, _} = e -> e
+      end
+    else
+      {:error, _} = e -> e
+      _ -> {:error, :bad_request}
+    end
+  end
+
+  # The caller of a DM rejoin/reset: a participant, with a current MLS device, friends, no block.
+  defp dm_caller(me, device_id, conv) do
+    with true <- available?() || {:error, :mls_unavailable},
+         {:ok, [a, b] = members} <- members(conv),
+         true <- me in members || {:error, :not_found},
+         {:ok, device} <- my_mls_device(me, device_id),
+         true <-
+           (Social.friends?(a, b) and not Social.blocked_between?(a, b)) || {:error, :not_friends} do
+      {:ok, members, device}
+    else
+      :error -> {:error, :not_found}
+      {:error, :invalid_device} -> {:error, :bad_request}
+      e -> e
+    end
+  end
+
+  defp dm_limit(bucket, key, n, window) do
+    case RateLimiter.hit(bucket, key, n, window) do
+      :ok -> :ok
+      _ -> {:error, :rate_limited}
     end
   end
 

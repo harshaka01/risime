@@ -34,6 +34,7 @@ defmodule RisiMeWeb.InboxChannel do
           :telemetry.execute([:risime, :inbox, :join], %{count: 1}, %{result: :ok})
           :ok = Presence.track(user_id, socket.assigns[:device_id])
           if socket.assigns.groups, do: name_committer(user_id, socket.assigns.device_id)
+          if socket.assigns[:device_id], do: name_dm_committer(user_id, socket.assigns.device_id)
           if socket.assigns.history, do: name_history(user_id, socket.assigns.device_id)
 
           if socket_id = socket.assigns[:socket_id],
@@ -321,6 +322,14 @@ defmodule RisiMeWeb.InboxChannel do
     RisiMe.History.device_joined(user_id, device_id)
   rescue
     e -> Logger.warning("history naming failed: #{Exception.message(e)}")
+  end
+
+  # v1.16 (proposal 2026-10-07-dm-device-readd §2): DM ops for this device, and waiting DM ops
+  # name it. Best effort.
+  defp name_dm_committer(user_id, device_id) do
+    RisiMe.MLS.DmOps.device_joined(user_id, device_id)
+  rescue
+    e -> Logger.warning("dm committer naming failed: #{Exception.message(e)}")
   end
 
   # §12.4: a waiting op names the first authorised device whose inbox joins. Best effort.
