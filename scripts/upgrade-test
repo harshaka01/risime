@@ -1015,6 +1015,8 @@ PY
     tap "More options" && sleep 1 && tap "Settings" || { echo "    no Settings in the chat list's menu"; return 1; }
     wait_for 'text="Settings"' 15 || return 1
     for _ in $(seq 1 8); do has 'text="Manage backups"' && break; swipe_up; done
+    # Found in the tree can still mean behind the navigation bar (nightly.35 added Settings rows): scroll once more.
+    swipe_up
     tap "Manage backups" || { echo "    no \"Manage backups\" in Settings"; return 1; }
     wait_for 'text="Back up now"' 20
   }
