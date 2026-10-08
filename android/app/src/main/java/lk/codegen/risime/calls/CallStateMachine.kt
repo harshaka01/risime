@@ -88,7 +88,38 @@ enum class CallNotice {
     CALL_ENDED, DECLINED, BUSY, NO_ANSWER, ANSWERED_ELSEWHERE, CANT_CONNECT, NOT_READY, NOT_E2EE, RATE_LIMITED, NOT_FRIENDS, IN_ANOTHER_CALL,
     /** §19.2 `video_not_ready`: the peer has no device that takes video calls. */
     VIDEO_NOT_READY,
+
+    /** §20.2 `404 call_ended`: the group call's room is gone. */
+    ROOM_ENDED,
+
+    /** §20.2 `409 call_full`. */
+    CALL_FULL,
+
+    /** §20.4 (android A8): disconnected from the SFU for more than 20 s. */
+    LOST_CONNECTION,
+
+    /** §20.6 K5: this device was removed from the group (no keys for the new epoch). */
+    REMOVED,
+
+    /** §20.3 `calls_not_ready` in a group: nobody else can join group calls yet. */
+    GROUP_NOT_READY,
 }
+
+/** §20.5 one participant of a group call as the call screen shows it (named from the app's database, android A7). */
+data class GroupMember(
+    val identity: String,
+    val userId: String,
+    val local: Boolean,
+    /** K7: a leaf of the group at the current epoch (otherwise "Not a member", never played). */
+    val member: Boolean,
+    val speaking: Boolean = false,
+    val muted: Boolean = false,
+    /** K6/K9: every track of this participant decrypts with an MLS-derived key (frame cryptor OK). */
+    val verified: Boolean = false,
+    /** K6: a track that doesn't decrypt (or says it isn't encrypted): "Can't verify", never played. */
+    val cantVerify: Boolean = false,
+    val hasVideo: Boolean = false,
+)
 
 data class CallSnapshot(
     val callId: String,
@@ -111,6 +142,10 @@ data class CallSnapshot(
     /** The peer's last `call_media` (true until one says otherwise), and when it changed (device ms). */
     val peerCamera: Boolean = true,
     val peerCameraAtMs: Long = 0,
+    /** §20: a group call (conversationId is the `grp:`; [peerUserId] is the starter). */
+    val group: Boolean = false,
+    /** §20.5 the room's participants (this device first), named by the UI. */
+    val members: List<GroupMember> = emptyList(),
 )
 
 /**

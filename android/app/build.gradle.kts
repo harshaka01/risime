@@ -142,6 +142,8 @@ android {
         // §16.9 (android A1): the WebRTC .so only for arm64-v8a and x86_64 (the emulator); the MLS core
         // keeps all four ABIs. A 32-bit phone can't load it and never advertises `calls`.
         jniLibs.excludes += listOf("lib/armeabi-v7a/*jingle_peerconnection_so.so", "lib/x86/*jingle_peerconnection_so.so")
+        // §20.5 (decision 057): LiveKit's small Rust helper only where its libwebrtc is (64-bit).
+        jniLibs.excludes += listOf("lib/armeabi-v7a/liblivekit_uniffi.so", "lib/x86/liblivekit_uniffi.so")
         // Compress native libs (extracted at install): the MLS core for 4 ABIs is ~19 MB stored,
         // ~7 MB compressed, and every update is a sideloaded download (decision 037).
         jniLibs.useLegacyPackaging = true
@@ -206,6 +208,8 @@ dependencies {
     // §16.9 1:1 voice calls: libwebrtc (LiveKit's prefixed build, livekit.org.webrtc) and core-telecom.
     implementation(libs.webrtc.android.prefixed)
     implementation(libs.androidx.core.telecom)
+    // §20.5 group calls (decision 057): the LiveKit Kotlin SDK on the same libwebrtc build (no second copy).
+    implementation(libs.livekit.android)
     implementation(libs.emoji2.emojipicker) // composer + reaction picker (downloadable EmojiCompat font, no bundled font)
     testImplementation(libs.junit)
     androidTestImplementation(libs.junit)

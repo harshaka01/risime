@@ -744,7 +744,16 @@ object CallTexts {
         CallNotice.NOT_FRIENDS -> "You can only call friends"
         CallNotice.IN_ANOTHER_CALL -> "You're already in a call"
         CallNotice.VIDEO_NOT_READY -> videoNotReadyText(name)
+        CallNotice.ROOM_ENDED -> "This call has ended"
+        CallNotice.CALL_FULL -> "This call is full"
+        CallNotice.LOST_CONNECTION -> "Lost connection"
+        CallNotice.REMOVED -> "You're no longer in this group"
+        CallNotice.GROUP_NOT_READY -> GROUP_NOT_READY_TEXT
     }
+
+    /** §20.1 the disabled group call buttons. */
+    const val GROUP_NOT_READY_TEXT = "Nobody else in this group can join calls yet"
+    const val GROUP_UPDATE_TEXT = "Update RisiMe on this phone to make calls"
 
     /** §19.1: the disabled video button and the `video_not_ready` refusal. */
     fun videoNotReadyText(name: String) = "$name needs to update the app for video calls"

@@ -127,6 +127,19 @@ interface MlsEngine {
         throw HistoryException(HistoryException.Kind.Malformed, "history not supported")
 
     /** Small app state in the sealed store (namespace "app"), in the caller's transaction: the §17.8 approvals. */
+    // ---- §20.6 group call frame keys (crypto README "Group call keys"). The exporter output never
+    // crosses this interface; only the per-identity frame keys do (memory only, never logged). ----
+
+    /** The bundled core exports `risime-call-v1` frame keys (`callFrameKeys`). Only then is `group_calls` advertised. */
+    val callKeysSupported: Boolean get() = false
+
+    /**
+     * §20.6: every leaf's frame key for [callId] at the group's current epoch, in leaf order (= the
+     * MLS roster). Throws [CallKeysException]: Malformed (a DM, a non-UUID call id), UnknownGroup,
+     * RemovedFromGroup. Catch the group's commits up first (K4).
+     */
+    fun callFrameKeys(conversationId: String, callId: String): CallKeys = throw CallKeysException(CallKeysException.Kind.Unsupported, "call keys not supported by this MLS core")
+
     fun appStateGet(key: String): ByteArray? = null
 
     fun appStatePut(key: String, value: ByteArray?) = Unit
@@ -146,6 +159,25 @@ class HistoryCtx(
 )
 
 /** §17.7 the MLS sender of a history envelope: own (same user) or member, and its leaf signature key (the option-A key). */
+/** §20.6 one member's frame key (the leaf identity `<user_id>/<device_id>` = the LiveKit participant identity). */
+class CallKey(val identity: String, val key: ByteArray) {
+    override fun toString() = "CallKey($identity)" // K10: never the key
+}
+
+/** §20.6 the frame keys of one call at [epoch]; [keyIndex] = epoch mod 16. */
+class CallKeys(val epoch: Long, val keyIndex: Int, val keys: List<CallKey>) {
+    val identities: List<String> get() = keys.map { it.identity }
+
+    /** K10: overwrite the key bytes (on leaving and at call end). */
+    fun wipe() = keys.forEach { it.key.fill(0) }
+
+    override fun toString() = "CallKeys(epoch=$epoch, index=$keyIndex, ${keys.size} keys)"
+}
+
+class CallKeysException(val kind: Kind, message: String?) : Exception(message) {
+    enum class Kind { Malformed, UnknownGroup, RemovedFromGroup, Unsupported, Other }
+}
+
 class HistorySenderInfo(val device: DeviceRef, val own: Boolean, val signatureKey: ByteArray)
 
 /** What `history_seal` produced (no key material). */

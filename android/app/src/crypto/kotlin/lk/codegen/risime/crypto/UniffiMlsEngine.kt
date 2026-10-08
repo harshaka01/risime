@@ -203,6 +203,26 @@ class UniffiMlsEngine(
         setGeneration(conversationId, null)
     }
 
+    // §20.6 (crypto README "Group call keys"): only frame keys cross the FFI; never logged or persisted.
+    override val callKeysSupported: Boolean by lazy { runCatching { "risime-call-v1" in lk.codegen.risime.crypto.exporterLabels() }.getOrDefault(false) }
+
+    override fun callFrameKeys(conversationId: String, callId: String): lk.codegen.risime.data.mls.CallKeys = tx {
+        val (_, g) = current(conversationId)
+            ?: throw lk.codegen.risime.data.mls.CallKeysException(lk.codegen.risime.data.mls.CallKeysException.Kind.UnknownGroup, "no group for $conversationId")
+        val k = try {
+            client.callFrameKeys(g, callId)
+        } catch (e: RisiMlsException.Malformed) {
+            throw lk.codegen.risime.data.mls.CallKeysException(lk.codegen.risime.data.mls.CallKeysException.Kind.Malformed, e.message)
+        } catch (e: RisiMlsException.UnknownGroup) {
+            throw lk.codegen.risime.data.mls.CallKeysException(lk.codegen.risime.data.mls.CallKeysException.Kind.UnknownGroup, e.message)
+        } catch (e: RisiMlsException.RemovedFromGroup) {
+            throw lk.codegen.risime.data.mls.CallKeysException(lk.codegen.risime.data.mls.CallKeysException.Kind.RemovedFromGroup, e.message)
+        } catch (e: RisiMlsException) {
+            throw lk.codegen.risime.data.mls.CallKeysException(lk.codegen.risime.data.mls.CallKeysException.Kind.Other, "${e.javaClass.simpleName}: ${e.message}")
+        }
+        lk.codegen.risime.data.mls.CallKeys(k.epoch.toLong(), k.keyIndex.toInt(), k.keys.map { lk.codegen.risime.data.mls.CallKey(it.identity, it.key) })
+    }
+
     override fun members(conversationId: String): List<DeviceRef> = tx {
         val (_, g) = current(conversationId) ?: return@tx emptyList()
         client.members(g).map { DeviceRef(it.userId, it.deviceId) }
