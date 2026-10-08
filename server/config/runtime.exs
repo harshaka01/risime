@@ -151,6 +151,16 @@ if link = System.get_env("INVITE_LINK"), do: config(:risime, :invite_link, link)
 # v1.22 §22.1: server backups (default on); BACKUPS=off stops the writes only.
 if backups = System.get_env("BACKUPS"), do: config(:risime, :backups, backups != "off")
 
+# v1.24 §24.15: TABS=on shows the tab bar (`/auth/config` `tabs`, default off); RISI=on lets Risi
+# join Official conversations (default off). RISI_USER_ID / RISI_DEVICE_ID: the agent's fixed
+# UUIDs (seeded by `RisiMe.Release.migrate/0` while RISI is on); RISI_DEFAULT_TZ (§24.11).
+on? = fn v -> String.downcase(v) in ["on", "1", "true"] end
+if tabs = System.get_env("TABS"), do: config(:risime, :tabs, on?.(tabs))
+if risi = System.get_env("RISI"), do: config(:risime, :risi, on?.(risi))
+if id = System.get_env("RISI_USER_ID"), do: config(:risime, :risi_user_id, id)
+if id = System.get_env("RISI_DEVICE_ID"), do: config(:risime, :risi_device_id, id)
+if tz = System.get_env("RISI_DEFAULT_TZ"), do: config(:risime, :risi_default_tz, tz)
+
 # v1.21 §12.12.6: a superseded leaf unseen this long is removed by a cleanup op (default 24).
 if hours = System.get_env("STALE_LEAF_HOURS"),
   do: config(:risime, :stale_leaf_hours, String.to_integer(hours))

@@ -387,7 +387,8 @@ defmodule RisiMe.Groups do
                 client_group_id: cgid,
                 state: "creating",
                 generation: 1,
-                created_at: now
+                created_at: now,
+                chat_id: id
               }
             ],
             on_conflict: :nothing,

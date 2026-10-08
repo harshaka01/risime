@@ -808,6 +808,25 @@ defmodule RisiMe.Accounts do
     Repo.get_by!(User, phone: entry.phone)
   end
 
+  @doc """
+  v1.24 §24.11: true for an IANA zone name known to the host's tz database (`/usr/share/zoneinfo`,
+  or `TZDIR`), or `UTC`.
+  """
+  def valid_tz?("UTC"), do: true
+
+  def valid_tz?(tz) when is_binary(tz) and byte_size(tz) in 1..64 do
+    dir = System.get_env("TZDIR") || "/usr/share/zoneinfo"
+
+    Regex.match?(~r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$", tz) and
+      File.regular?(Path.join(dir, tz))
+  end
+
+  def valid_tz?(_), do: false
+
+  @doc "Sets the user's timezone (already validated)."
+  def set_tz(%User{} = user, tz),
+    do: user |> Ecto.Changeset.change(tz: tz) |> Repo.update()
+
   def update_profile(%User{} = user, attrs) do
     user
     |> User.profile_changeset(attrs)

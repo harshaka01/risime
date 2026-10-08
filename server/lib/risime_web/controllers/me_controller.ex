@@ -6,12 +6,31 @@ defmodule RisiMeWeb.MeController do
 
   def show(conn, _params), do: json(conn, %{user: user_json(conn, conn.assigns.current_user)})
 
+  # v1.24 §24.11: `{"tz": "<IANA zone>"}` alone sets the timezone (`422 bad_request` for an
+  # unknown zone); `display_name` as before. Both may come together (tz is checked first).
   def update(conn, params) do
-    case Accounts.update_profile(conn.assigns.current_user, Map.take(params, ["display_name"])) do
-      {:ok, user} -> json(conn, %{user: user_json(conn, user)})
+    user = conn.assigns.current_user
+
+    with {:ok, user} <- update_tz(user, params),
+         {:ok, user} <- update_name(user, params) do
+      json(conn, %{user: user_json(conn, user)})
+    else
+      {:error, :bad_tz} -> ApiError.send_error(conn, 422, :bad_request)
       {:error, _changeset} -> ApiError.send_error(conn, 422, :invalid_display_name)
     end
   end
+
+  defp update_tz(user, %{"tz" => tz}) do
+    if Accounts.valid_tz?(tz), do: Accounts.set_tz(user, tz), else: {:error, :bad_tz}
+  end
+
+  defp update_tz(user, _params), do: {:ok, user}
+
+  defp update_name(user, %{"tz" => _} = params) when not is_map_key(params, "display_name"),
+    do: {:ok, user}
+
+  defp update_name(user, params),
+    do: Accounts.update_profile(user, Map.take(params, ["display_name"]))
 
   @doc "`POST /me/phone/verify/request` (contract v1.4 §7.1)."
   def phone_request(conn, _params) do
@@ -70,6 +89,9 @@ defmodule RisiMeWeb.MeController do
   defp failure(conn, kind),
     do: RisiMe.AuthLog.failure(RisiMeWeb.ClientIP.from_conn(conn), kind, conn.request_path)
 
-  defp user_json(conn, user),
-    do: ApiJSON.user(user, Accounts.phone_verified?(user, conn.assigns.current_auth.kind))
+  # v1.24 §24.11: `User` gains `tz` once set (absent: the server default).
+  defp user_json(conn, user) do
+    json = ApiJSON.user(user, Accounts.phone_verified?(user, conn.assigns.current_auth.kind))
+    if user.tz, do: Map.put(json, :tz, user.tz), else: json
+  end
 end

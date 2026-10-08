@@ -9,6 +9,27 @@ defmodule RisiMe.Groups.Group do
     field :state, :string
     field :generation, :integer, default: 1
     field :created_at, :utc_datetime_usec
+    # v1.24 §24.1: the chat (= the Private anchor id), the tab and the chat's kind.
+    field :chat_id, :string
+    field :tab, :string, default: "private"
+    field :chat_kind, :string, default: "group"
+  end
+end
+
+defmodule RisiMe.Groups.Chat do
+  @moduledoc """
+  A chat's Official setting (contract v1.24 §24.6). No row: Official is on and not created yet.
+  `official`: `on` | `off`.
+  """
+  use Ecto.Schema
+
+  @primary_key {:chat_id, :string, autogenerate: false}
+  schema "chats" do
+    field :kind, :string
+    field :official, :string, default: "on"
+    field :official_conversation_id, :string
+    field :changed_by, :binary_id
+    field :changed_at, :utc_datetime_usec
   end
 end
 

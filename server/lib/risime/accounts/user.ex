@@ -15,6 +15,9 @@ defmodule RisiMe.Accounts.User do
     field :disabled_at, :utc_datetime_usec
     # v1.20 §21: "open" for open sign-up (a self-asserted phone); nil for allowlist/invite users.
     field :signup_source, :string
+    # v1.24 §24.6: "user" or "agent" (Risi); §24.11: IANA zone, nil = server default.
+    field :kind, :string, default: "user"
+    field :tz, :string
 
     timestamps(type: :utc_datetime_usec)
   end

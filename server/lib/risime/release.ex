@@ -28,6 +28,18 @@ defmodule RisiMe.Release do
     migrate_ecto()
     migrate_cql()
     migrate_friendships()
+    seed_risi()
+    :ok
+  end
+
+  @doc "v1.24 §24.11: seeds the Risi agent user and device while `RISI` is on (idempotent)."
+  def seed_risi do
+    load_app()
+
+    for repo <- repos() do
+      {:ok, _, _} = Ecto.Migrator.with_repo(repo, fn _ -> RisiMe.Risi.seed() end)
+    end
+
     :ok
   end
 

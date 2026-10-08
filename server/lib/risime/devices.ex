@@ -512,7 +512,9 @@ defmodule RisiMe.Devices do
   @doc "Deletes devices not seen (no PUT) for #{@unseen_days} days. Returns the count."
   def prune(now \\ DateTime.utc_now()) do
     cutoff = DateTime.add(now, -@unseen_days, :day)
-    removed(from d in Device, where: d.last_seen_at < ^cutoff)
+    # v1.24: the Risi agent's device is seeded, not an app install, and is never pruned.
+    risi = RisiMe.Risi.device_id()
+    removed(from d in Device, where: d.last_seen_at < ^cutoff and d.device_id != ^risi)
   end
 
   # Deletes and emits mls_membership `removed` for MLS devices. Returns the count.
