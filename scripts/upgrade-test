@@ -462,9 +462,15 @@ long_press() {  # a long-press (900 ms) on the node $1 (see node_xy)
 clear_field() { A shell "for i in \$(seq 1 80); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true; }
 type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
 hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; has_text "$st" "mInputShown=true" && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
-dismiss_prompts() {   # notification prompt, and the old app's "update available" banner
+dismiss_prompts() {   # notification prompt, the old app's "update available" banner, the post-update health screen
   has "Not now" && { tap "Not now" || true; }
   has "Later" && { tap "Later" || true; sleep 1; }
+  # nightly.35+: "Notifications health" opens once after an update when a row fails (redroid has no
+  # Google Play services, so "Push registered" always does). A user backs out of it; so does the gate.
+  if has 'text="Notifications health"'; then
+    echo "    post-update \"Notifications health\" screen shown ($(grep -oE 'text="[✓✗]"' "$WORK/ui.xml" | tr -d '\n')); Back"
+    A shell input keyevent KEYCODE_BACK; sleep 1; dump
+  fi
   true
 }
 
@@ -801,7 +807,12 @@ dump
 for t in "Phone number" "Send code" "Sign in with RisiCloud" "RisiMe is locked"; do
   grep -qF "$t" "$WORK/ui.xml" && fail "the new app asks to sign in again ($t)"
 done
-has "ZZ Upgrade B" || fail "chat with B missing after the upgrade"
+# The post-update health screen can open up to ~60 s after start (it waits for the push registration
+# to settle): keep dismissing it while waiting for the chat list.
+ok_b=""
+for _ in $(seq 1 45); do dismiss_prompts; has "ZZ Upgrade B" && { ok_b=1; break; }; sleep 2; done
+[ -n "$ok_b" ] || fail "chat with B missing after the upgrade"
+sleep 5; dismiss_prompts
 [ -n "$SERIAL_B" ] && { has "Upgrade group" || fail "group missing after the upgrade"; }
 open_chat "ZZ Upgrade B" || fail "cannot open the chat after the upgrade"
 AFTER="$(visible_msgs || true)"
