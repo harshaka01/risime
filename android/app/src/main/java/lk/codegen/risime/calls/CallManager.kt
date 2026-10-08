@@ -271,57 +271,6 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         }
     }
 
-    init {
-        // Decision 054: whatever a dead process left behind is cleaned up before anything rings.
-        scope.launch { runCatching { cleanupAfterProcessStart() }.onFailure { Log.w("RisiMe", "call cleanup: ${it.message}") } }
-        // One machine per signed-in user and device.
-        scope.launch {
-            var lastUser: String? = null
-            while (true) {
-                val me = runCatching { port.me() }.getOrNull()
-                if (me != lastUser) {
-                    lastUser = me
-                    _machine.value = me?.let { newMachine(it, port.deviceId()) }
-                    _group.value = me?.let { newGroupMachine(it, port.deviceId()) }
-                }
-                delay(2_000)
-            }
-        }
-        scope.launch {
-            // One device, one call: the 1:1 machine's call, else the group machine's (§20.4, android A4).
-            val oneToOne = _machine.flatMapLatest { it?.state ?: kotlinx.coroutines.flow.flowOf(null) }
-            val group = _group.flatMapLatest { it?.state ?: kotlinx.coroutines.flow.flowOf(null) }
-            combine(oneToOne, group) { a, g -> pickCall(a, g) }.collectLatest { s -> onState(s) }
-        }
-        // Debug builds: the group call's receive counters every 5 s (the device test's evidence that
-        // frames decrypt: cryptor OK, packets and audio energy growing; a wrong key shows FAILED / no energy).
-        if (BuildConfig.DEBUG) scope.launch {
-            state.map { it?.takeIf { s -> s.group && s.phase != CallPhase.ENDED }?.callId }.distinctUntilChanged().collectLatest { id ->
-                if (id == null) return@collectLatest
-                while (true) {
-                    delay(5_000)
-                    val sess = groupSession() ?: continue
-                    runCatching { sess.stats() }.getOrNull()?.forEach { st ->
-                        Log.i("RisiMe", "calls: group stats ${st.identity} cryptor=${st.cryptor} audio_packets=${st.audioPackets} audio_bytes=${st.audioBytes} audio_energy=${"%.4f".format(st.audioEnergy)} concealed=${st.concealed} jb_emitted=${st.jitterEmitted} video_frames=${st.videoFrames} ${st.videoWidth}x${st.videoHeight}")
-                    }
-                }
-            }
-        }
-        // Prune 24-h marks.
-        scope.launch { runCatching { port.callMarkDao.prune(System.currentTimeMillis() - CallStateMachine.DEDUPE_MS) } }
-        // Decision 054: the socket down for SOCKET_LOSS_MS while a call is being set up → "Can't connect the call".
-        scope.launch {
-            combine(state, port.connection) { s, c -> s?.takeIf { it.phase in SETUP_PHASES }?.callId to (c == ConnectionState.Live) }
-                .distinctUntilChanged()
-                .collectLatest { (callId, live) ->
-                    if (callId == null || live) return@collectLatest
-                    delay(SOCKET_LOSS_MS)
-                    log("socket down ${SOCKET_LOSS_MS} ms during call setup: ending $callId")
-                    _machine.value?.fail(callId)
-                }
-        }
-    }
-
     companion object {
         /** Decision 054: how long the realtime socket may stay down while a call is being set up. */
         const val SOCKET_LOSS_MS = 15_000L
@@ -713,10 +662,13 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val want = s?.video != true && wantsProximity(s?.phase, currentEndpoint.value?.type, callScreenVisible.value)
         val pm = context.getSystemService(PowerManager::class.java) ?: return
         if (want && proximity?.isHeld != true && pm.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
-            proximity = pm.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "RisiMe:proximity").apply {
-                setReferenceCounted(false)
-                acquire(CallStateMachine.MAX_CALL_MS)
-            }
+            // A platform without a usable proximity sensor may still refuse the lock: no lock, no crash.
+            proximity = runCatching {
+                pm.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "RisiMe:proximity").apply {
+                    setReferenceCounted(false)
+                    acquire(CallStateMachine.MAX_CALL_MS)
+                }
+            }.onFailure { Log.w("RisiMe", "proximity lock: ${it.message}") }.getOrNull()
         } else if (!want) {
             runCatching { proximity?.takeIf { it.isHeld }?.release() }
             proximity = null
@@ -960,6 +912,61 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     /** First non-null machine (tests and the debug screen). */
     suspend fun awaitMachine(): CallStateMachine? = withTimeoutOrNull(5_000) { machineFlow.map { it }.firstOrNull { it != null } }
+
+    // Last in the class body: the init block launches collectors on the app scope (Dispatchers.Default)
+    // that may run before the constructor reaches a property declared below the block. At app start
+    // onState(null) read `callScreenVisible` while it was still null (NPE in updateProximity). Every
+    // property is declared above this block; keep new ones above it too.
+    init {
+        // Decision 054: whatever a dead process left behind is cleaned up before anything rings.
+        scope.launch { runCatching { cleanupAfterProcessStart() }.onFailure { Log.w("RisiMe", "call cleanup: ${it.message}") } }
+        // One machine per signed-in user and device.
+        scope.launch {
+            var lastUser: String? = null
+            while (true) {
+                val me = runCatching { port.me() }.getOrNull()
+                if (me != lastUser) {
+                    lastUser = me
+                    _machine.value = me?.let { newMachine(it, port.deviceId()) }
+                    _group.value = me?.let { newGroupMachine(it, port.deviceId()) }
+                }
+                delay(2_000)
+            }
+        }
+        scope.launch {
+            // One device, one call: the 1:1 machine's call, else the group machine's (§20.4, android A4).
+            val oneToOne = _machine.flatMapLatest { it?.state ?: kotlinx.coroutines.flow.flowOf(null) }
+            val group = _group.flatMapLatest { it?.state ?: kotlinx.coroutines.flow.flowOf(null) }
+            combine(oneToOne, group) { a, g -> pickCall(a, g) }.collectLatest { s -> onState(s) }
+        }
+        // Debug builds: the group call's receive counters every 5 s (the device test's evidence that
+        // frames decrypt: cryptor OK, packets and audio energy growing; a wrong key shows FAILED / no energy).
+        if (BuildConfig.DEBUG) scope.launch {
+            state.map { it?.takeIf { s -> s.group && s.phase != CallPhase.ENDED }?.callId }.distinctUntilChanged().collectLatest { id ->
+                if (id == null) return@collectLatest
+                while (true) {
+                    delay(5_000)
+                    val sess = groupSession() ?: continue
+                    runCatching { sess.stats() }.getOrNull()?.forEach { st ->
+                        Log.i("RisiMe", "calls: group stats ${st.identity} cryptor=${st.cryptor} audio_packets=${st.audioPackets} audio_bytes=${st.audioBytes} audio_energy=${"%.4f".format(st.audioEnergy)} concealed=${st.concealed} jb_emitted=${st.jitterEmitted} video_frames=${st.videoFrames} ${st.videoWidth}x${st.videoHeight}")
+                    }
+                }
+            }
+        }
+        // Prune 24-h marks.
+        scope.launch { runCatching { port.callMarkDao.prune(System.currentTimeMillis() - CallStateMachine.DEDUPE_MS) } }
+        // Decision 054: the socket down for SOCKET_LOSS_MS while a call is being set up → "Can't connect the call".
+        scope.launch {
+            combine(state, port.connection) { s, c -> s?.takeIf { it.phase in SETUP_PHASES }?.callId to (c == ConnectionState.Live) }
+                .distinctUntilChanged()
+                .collectLatest { (callId, live) ->
+                    if (callId == null || live) return@collectLatest
+                    delay(SOCKET_LOSS_MS)
+                    log("socket down ${SOCKET_LOSS_MS} ms during call setup: ending $callId")
+                    _machine.value?.fail(callId)
+                }
+        }
+    }
 }
 
 /** One device, one call: the live one wins (the 1:1 call first); otherwise whichever is lingering "ended". */
