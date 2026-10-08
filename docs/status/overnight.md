@@ -47,6 +47,45 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## Overnight run (2026-10-08 night → 10-09): Harsha unavailable, release each slice when green
+**Rules:**
+- Work non-stop. Release each slice when it is green through the full gate.
+- Stop only for sudo, credentials or a true product decision; batch those under "Needs Harsha" and
+  carry on with the next item.
+- The top model plans and reviews; Sonnet does routine work. Every step has a hard timeout.
+
+**Order and state:**
+1. ✅ Release main: nightly.32 (backups), nightly.33 (push audit, emoji panel, attachment sheet).
+2. ✅ The P0s:
+   - nightly.34: call audio routing;
+   - nightly.35: background delivery + no mandatory lock / the optional Fingerprint lock (decision
+     064).
+3. ⏳ **One call screen for voice and video, as in WhatsApp** (§23 switching, screen share, call
+   info). The android agent (top model) is on it.
+4. ⏳ **Call records** (chat rows, Calls tab, missed notification) and **locked chats**: android
+   agents (Sonnet), running.
+5. ⏳ **Risi.** Harsha answered the §24 proposal `bf1a215`: **proceed**, with a new model, **two tabs
+   in every chat: 🔒 Private | ● Official.**
+   - Each tab is its own MLS group.
+   - Private never admits an agent; the server refuses.
+   - Official always has Risi as a visible member, as secretary.
+   - Existing chats migrate into Private.
+   - Risi rules:
+     - no product pushing;
+     - offers only as a [Yes]/[Not now] question, at most about 1 per chat per day, and a topic is
+       muted after 2 Not nows;
+     - learn and delete: only derived facts are kept, raw plaintext is deleted after processing;
+     - "What Risi knows about me" with per-item delete;
+     - Risi only sees Official.
+   - Stages:
+     - **Stage 1:** commitments, confirm card, reminders, escalation, daily digest, @Risi, reports;
+       `risi-l1` first with a commercial fallback by confidence, every call logged;
+     - **Stage 2:** help offers + partner agents (A2A/MCP: Lia, then eDrop);
+     - **Stage 3:** transcription in Official (faster-whisper);
+     - **Stage 4:** the digital twin.
+   - **Next:** the two-tab contract proposal (being drafted by the top model), then PROTOCOL §24
+     (v1.24), replacing the earlier Risi-only draft.
+
 ## v0.2.0-nightly.35 (live 2026-10-08 ~16:10 UTC, not required): background delivery (P0) + no mandatory lock (decision 064)
 - **Background delivery:**
   - a call push no longer crashes the app;
