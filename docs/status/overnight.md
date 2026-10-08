@@ -47,6 +47,26 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.32 (live 2026-10-08 ~11:50 UTC, not required): backups, video-call audio, fixes
+- **What's in:**
+  - v1.22 encrypted backups (local, export, server backup with a recovery key, restore on first
+    sign-in);
+  - P0-3 video-call audio (speaker by default, the route button race);
+  - the stuck staged MLS commit fix (`943993a`);
+  - the CallManager start-up NPE fix;
+  - server v1.23 (switch and screen-share plumbing; the app UI isn't in yet).
+- **Gate:** all PASS (`e29fa19`): server, android, live interop, and the upgrade test via the
+  in-app updater with **Back during the download**. The upgrade test checked:
+  - C updated to n32 before the reinstall (no counts lost);
+  - **backup → uninstall → "Restore your chats" with the recovery key** (A's inbox replay purged,
+    1:1 counts equal);
+  - rejoin without reset.
+  The restore phase is now on by default.
+- **Not in it:**
+  - the emoji panel and attachment sheet (`49282f2`, on main);
+  - the P0 audio routing (in progress);
+  - the P0 background delivery (in progress).
+
 ## Run in progress (2026-10-08, orchestrator, after the account switch)
 - **nightly.32:** release running from `e29fa19`. Gate changes in that commit: C updates to the new app
   before the reinstall phase (`UPGRADE_C_STAYS_OLD=1` keeps it old); `RESTORE_CHECK_FROM` defaults to
@@ -284,9 +304,7 @@ fixes go out together.
   script bug fixed in `1e51b69`) and `v0.2.0-nightly.33` (aborted by hand). Neither needs resuming;
   the nightly.32 gate below re-runs the restore phase.
 - **Running now (this session):**
-  - the nightly.32 release (`scripts/release-from-worktree` at `e29fa19`; Redroid `rel`/`rel-b`,
-    tmux `risime-upgrade_rel`). Server, android and interop passed; the upgrade test is in the
-    backup/reinstall phase;
+  - the restore-from-file check on the published nightly.32 APK (Redroid `_bk`, port 4160);
   - android agent: P0 call audio routing (worktree; Redroid `andr1`/`andr2`, tmux
     `risime-calltest_andr` for its call-device-test);
   - android agent: P0 background delivery (app side + `scripts/push-device-test`);
