@@ -47,29 +47,32 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
-## Run in progress (2026-10-08, orchestrator)
-Harsha said "GO UX". The plan, released one at a time through the full gate (no-regression, interop,
-upgrade with message counts; each gate step now times out after 30 min):
-1. **UX:** logo, icon and theme; WhatsApp-style layout; + attachment sheet; several photos with
-   captions; in-call screen; the dark screen after Back from a call. Then profile and group photos
-   (contract v1.17).
-2. **1:1 video calls** (contract v1.18).
-3. **Group voice, then video,** on LiveKit (contract v1.19). LiveKit media uses UDP 49500–49999 and
-   coturn shrinks to 49152–49499.
-
-Progress:
-- **Contract:** v1.17 (profile photos §18), v1.18 (1:1 video §19) and v1.19 (group calls §20) are
-  merged, and decision 056 records the port split.
-- **coturn:** now relays on 49152–49499, with `max-bps` at 300000.
-- **LiveKit 1.13.9:** live. Signalling is on 127.0.0.1:7880 and media on 10.20.20.15:49500–49999/udp.
-  `auto_create` is off. Both the loopback and the live smoke pass, and the hairpin through
-  203.115.26.139 works.
-- **Android UX:** chunks 1–2 committed.
-- **Agents running:** android UX, server (v1.17–v1.19) and crypto (`call_frame_keys` and its
-  vectors).
+## Run finished (2026-10-08, orchestrator)
+- **Live releases:**
+  - nightly.27 GO UX;
+  - nightly.28 profile and group photos, and 1:1 video;
+  - nightly.29 group voice and video (LiveKit, MLS frame keys);
+  - nightly.30 open sign-up (`OPEN_SIGNUP=true`).
+  Each one passed the full gate, with every step under a 30-min timeout: server, android, live
+  interop, and the upgrade test with per-conversation counts. 1:1 calls were checked by
+  `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
+- **Agents:** none running.
 - **Needs Harsha:**
-  - install the Caddyfile with the `/livekit` route: `sudo cp infra/caddy/Caddyfile /etc/caddy/Caddyfile && sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl reload caddy`;
-  - a by-hand check from outside that UDP 49500 and 49999 are reachable (decision 056).
+  1. Caddy `/livekit` route:
+     `sudo cp infra/caddy/Caddyfile /etc/caddy/Caddyfile && sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl reload caddy`.
+     Then root sets `LIVEKIT_URL` in pilot.env and restarts, and group calls work for testers.
+  2. A by-hand check from outside that UDP 49500 and 49999 are reachable (decision 056).
+  3. The fail2ban `risime-signup` jail (the sudo line is in decision 058).
+  4. Dhammika: his phone has a pending invite for the gmail address. Sign up with that email, or
+     have the invite revoked (it otherwise blocks the phone with `phone_taken`).
+  5. Real-phone checks:
+     - the dark screen after Back with the proximity sensor;
+     - camera, Flip and speaker in video calls;
+     - a relayed video call from mobile data.
+- **Known limits:**
+  - a batch of photos can arrive in a different order;
+  - phone squatting by open sign-ups (an admin disables the squatter until SMS claims exist);
+  - the country box defaults to +94.
 
 ## Sign-in incident and open sign-up (2026-10-08 ~05:00 UTC)
 - **What blocked dhammikajayanath775@:** Harsha's invite at 04:35 UTC was correct (pending,
@@ -78,7 +81,7 @@ Progress:
   invited one. Keycloak itself allows self-registration (realm aoa offers Register), so nothing is
   needed from the RisiCloud lead.
 - **Open sign-up (contract v1.20 §21, decision 058):** `OPEN_SIGNUP=true` is set in
-  `infra/pilot/pilot.env` and takes effect with the nightly.30 deploy.
+  `infra/pilot/pilot.env` and is **live with nightly.30** (`/auth/config` says `"signup":"open"`).
   - **How it works:** a verified email with no invite gets "Create your RisiMe account" (name and
     phone). Phones stay unconfirmed (`phone_confirmed: false`) and are never matched by phone.
     Messaging still needs an accepted friend request.
