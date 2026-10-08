@@ -83,7 +83,15 @@ for MODE in $MODES; do
   if [ "$MODE" != on-wrongkey ]; then grep -q "Risi MLS open failed" "$LOGS/boot-$MODE.log" && fail "($MODE): Risi failed to open its store"; fi
   cfg="$(curl -sf -m 3 "http://127.0.0.1:$BC_PORT/api/v1/auth/config" || true)"
   if [ "${MODE%%-*}" = on ]; then grep -q '"tabs":"on"' <<<"$cfg" || fail "(on): /auth/config doesn't say tabs on"; fi
-  echo "    healthy and up 20 s: $(grep -oE '"risi":"[^"]*"' <<<"$h" || echo 'risi: (not reported by this release)')"
+  risi="$(grep -oE '"risi":"[^"]*"' <<<"$h" | sed -E 's/"risi":"(.*)"/\1/' || true)"
+  if [ -n "$risi" ]; then   # releases from 5503d83 on report checks.risi
+    case "$MODE" in
+      off) [ "$risi" = off ] || fail "($MODE): checks.risi is '$risi', expected off";;
+      on|on-reopen) [ "$risi" = ok ] || fail "($MODE): checks.risi is '$risi', expected ok";;
+      on-wrongkey) grep -q "kek_mismatch" <<<"$risi" || fail "($MODE): checks.risi is '$risi', expected unavailable: kek_mismatch";;
+    esac
+  fi
+  echo "    healthy and up 20 s: risi=${risi:-(not reported by this release)}"
   kill "$PID"; wait "$PID" 2>/dev/null || true; PID=""
 done
 

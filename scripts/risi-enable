@@ -52,7 +52,9 @@ healthy() {  # $1 = log line offset, $2 = "risi" to also require Risi up: 60 s b
     fi
     if curl -sf -m 3 http://127.0.0.1:4000/health | grep -q '"status":"ok"'; then
       [ "${2:-}" != risi ] && return 0
-      [ "$t" -ge 10 ] && return 0   # with Risi on: stay healthy for at least 20 s
+      # with Risi on: stay healthy for at least 20 s, and (releases from 5503d83) checks.risi must be ok
+      if curl -sf -m 3 http://127.0.0.1:4000/health | grep -q '"risi":"unavailable'; then echo "checks.risi: $(curl -sf -m 3 http://127.0.0.1:4000/health | grep -oE '"risi":"[^"]*"')"; return 1; fi
+      [ "$t" -ge 10 ] && return 0
     fi
   done
   return 1
