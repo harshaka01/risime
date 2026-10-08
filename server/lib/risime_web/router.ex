@@ -82,6 +82,10 @@ defmodule RisiMeWeb.Router do
     post "/groups/:id/leave", GroupController, :leave
     post "/groups/:id/rejoin", GroupController, :rejoin
     get "/groups/:id/messages/:message_id/receipts", GroupController, :receipts
+    # v1.24 §24.2, §24.4, §24.8.
+    get "/chats", ChatController, :index
+    get "/chats/:chat_id", ChatController, :show
+    post "/chats/:chat_id/official", ChatController, :create_official
     post "/blobs", BlobController, :create
     post "/backups", BackupController, :create
     get "/backups", BackupController, :index

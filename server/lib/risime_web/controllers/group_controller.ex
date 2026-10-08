@@ -77,6 +77,24 @@ defmodule RisiMeWeb.GroupController do
 
   @doc "Error replies for group calls (also used by `MLSController` for `grp:` conversations)."
   def error(conn, {:error, :invalid_device}), do: ApiError.send_error(conn, 403, :invalid_device)
+  # v1.24 §24.8.
+  def error(conn, {:error, :private_tab}), do: ApiError.send_error(conn, 403, :private_tab)
+  def error(conn, {:error, :risi_required}), do: ApiError.send_error(conn, 409, :risi_required)
+  def error(conn, {:error, :official_off}), do: ApiError.send_error(conn, 409, :official_off)
+  def error(conn, {:error, :not_e2ee}), do: ApiError.send_error(conn, 409, :not_e2ee)
+  def error(conn, {:error, :dm_chat}), do: ApiError.send_error(conn, 422, :dm_chat)
+  def error(conn, {:error, :invalid_member}), do: ApiError.send_error(conn, 422, :invalid_member)
+
+  def error(conn, {:error, :agent_unavailable}),
+    do: ApiError.send_error(conn, 503, :agent_unavailable)
+
+  # v1.24 §24.2: `not_ready` for Official carries `"tab": "official"`.
+  def error(conn, {:error, {:not_ready, missing, :official}}) do
+    conn
+    |> Plug.Conn.assign(:not_ready_tab, "official")
+    |> error({:error, {:not_ready, missing}})
+  end
+
   def error(conn, {:error, :not_admin}), do: ApiError.send_error(conn, 403, :not_admin)
   def error(conn, {:error, :not_member}), do: ApiError.send_error(conn, 403, :not_member)
   def error(conn, {:error, :not_friends}), do: ApiError.send_error(conn, 403, :not_friends)
@@ -127,8 +145,14 @@ defmodule RisiMeWeb.GroupController do
           "Someone"
       end
 
+    extra =
+      case conn.assigns[:not_ready_tab] do
+        nil -> [missing: missing]
+        tab -> [missing: missing, tab: tab]
+      end
+
     ApiError.send_error(conn, 409, :not_ready,
-      extra: [missing: missing],
+      extra: extra,
       message: "#{name} needs to update RisiMe"
     )
   end

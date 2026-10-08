@@ -287,18 +287,28 @@ defmodule RisiMe.Devices do
     )
   end
 
-  # v1.24 §24.7: live sockets of the device start or stop getting Official traffic.
+  # v1.24 §24.7: live sockets of the device start or stop getting Official traffic; §24.3: a
+  # groups device that gains (loses) `tabs` is added to (removed from) its Official groups. A
+  # device that gains or loses `groups` at the same time is handled by groups_changed/6.
   defp tabs_changed(user_id, device_id, existing, mls_key, caps) do
     was = tabs?(existing)
     now = if mls_key, do: "tabs" in caps and "groups" in caps, else: was
 
-    if was != now,
-      do:
-        Phoenix.PubSub.broadcast(
-          RisiMe.PubSub,
-          RisiMe.Messaging.topic(user_id),
-          {:device_tabs, device_id, now}
-        )
+    if was != now do
+      Phoenix.PubSub.broadcast(
+        RisiMe.PubSub,
+        RisiMe.Messaging.topic(user_id),
+        {:device_tabs, device_id, now}
+      )
+
+      groups_kept? = groups?(existing) and mls_key != nil and "groups" in caps
+
+      if groups_kept?,
+        do:
+          Groups.device_changed(user_id, device_id, if(now, do: :added, else: :removed),
+            only: :official
+          )
+    end
 
     :ok
   end

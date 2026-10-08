@@ -437,6 +437,8 @@ defmodule RisiMe.MLS do
     with true <- available?() || {:error, :mls_unavailable},
          ids when is_list(ids) and ids != [] and length(ids) <= 50 <- user_ids,
          {:ok, ids} <- cast_ids(ids),
+         # v1.24 §24.5: an agent's key package is never claimed for a DM.
+         true <- RisiMe.Risi.agents(ids) == [] || {:error, :private_tab},
          true <- Enum.all?(ids, &(&1 == me or Social.friends?(me, &1))) || {:error, :not_friends},
          :ok <- claim_limit(me) do
       finish_claim(me, ids, caller_device_id, :mls)
@@ -447,17 +449,48 @@ defmodule RisiMe.MLS do
   end
 
   # v1.9 §12.5: co-members of a group (active or pending_add, or myself), groups devices only.
+  # v1.24 §24.5: an agent only for an Official group's epoch 0 or its pending agent `add` op
+  # (`403 private_tab` for a `dm:` or Private id); an Official group's devices are `tabs` ones.
   def claim(me, user_ids, caller_device_id, conv) do
     with true <- available?() || {:error, :mls_unavailable},
          ids when is_list(ids) and ids != [] and length(ids) <= 255 <- user_ids,
          {:ok, ids} <- cast_ids(ids),
+         :ok <- agent_claim(me, conv, RisiMe.Risi.agents(ids)),
          true <- claimable?(me, conv, ids) || {:error, :not_member},
          :ok <- claim_limit(me) do
-      finish_claim(me, ids, caller_device_id, :groups)
+      kind = if RisiMe.Groups.Tabs.official?(conv), do: :tabs, else: :groups
+      finish_claim(me, ids, caller_device_id, kind)
     else
       {:error, _} = e -> e
       _ -> {:error, :bad_request}
     end
+  end
+
+  defp agent_claim(_me, _conv, []), do: :ok
+
+  defp agent_claim(me, conv, agents) do
+    g = RisiMe.Groups.get_group(conv)
+
+    cond do
+      g == nil or g.tab != "official" ->
+        {:error, :private_tab}
+
+      g.state == "creating" and g.created_by == me and group(conv) == nil ->
+        :ok
+
+      Enum.all?(agents, &agent_add_pending?(conv, &1)) ->
+        :ok
+
+      true ->
+        {:error, :not_member}
+    end
+  end
+
+  defp agent_add_pending?(conv, agent) do
+    Enum.any?(
+      RisiMe.Groups.Ops.list(conv),
+      &(&1.type == "add" and agent in (&1.payload["user_ids"] || []))
+    )
   end
 
   defp claimable?(me, conv, ids) do
@@ -499,7 +532,11 @@ defmodule RisiMe.MLS do
 
   defp do_claim(me, ids, caller_device_id, kind) do
     mls =
-      if kind == :groups, do: RisiMe.Groups.groups_devices(ids), else: current_mls_devices(ids)
+      case kind do
+        :groups -> RisiMe.Groups.groups_devices(ids)
+        :tabs -> RisiMe.Groups.groups_devices(ids, "tabs")
+        :mls -> current_mls_devices(ids)
+      end
 
     claimed =
       for d <- mls, not (d.user_id == me and d.device_id == caller_device_id) do
@@ -521,7 +558,7 @@ defmodule RisiMe.MLS do
     mls_ids = MapSet.new(mls, & &1.device_id)
 
     others =
-      if(kind == :groups,
+      if(kind in [:groups, :tabs],
         do: [],
         else:
           ids
@@ -641,6 +678,9 @@ defmodule RisiMe.MLS do
          true <- me in members || {:error, :not_found},
          {:ok, caller_device} <- my_mls_device(me, caller_device),
          {:ok, req} <- parse_commit(params),
+         # v1.24 §24.5: a DM never holds an agent leaf.
+         true <-
+           RisiMe.Risi.agents(Enum.map(req.added, &elem(&1, 0))) == [] || {:error, :private_tab},
          [a, b] = members,
          true <-
            (Social.friends?(a, b) and not Social.blocked_between?(a, b)) || {:error, :not_friends},

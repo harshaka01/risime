@@ -128,6 +128,8 @@ defmodule RisiMeWeb.MLSController do
     do: ApiError.send_error(conn, 503, :mls_unavailable)
 
   defp error(conn, {:error, :invalid_device}), do: ApiError.send_error(conn, 422, :invalid_device)
+  # v1.24 §24.5.
+  defp error(conn, {:error, :private_tab}), do: ApiError.send_error(conn, 403, :private_tab)
   defp error(conn, {:error, :not_friends}), do: ApiError.send_error(conn, 403, :not_friends)
   defp error(conn, {:error, :not_found}), do: ApiError.send_error(conn, 404, :not_found)
 

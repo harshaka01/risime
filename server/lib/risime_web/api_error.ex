@@ -50,7 +50,14 @@ defmodule RisiMeWeb.ApiError do
     too_many_for_video: "Video is available with 8 people or fewer",
     signup_required: "Create your RisiMe account to continue",
     signup_closed: "RisiMe sign-up is by invitation only right now",
-    phone_taken: "This phone number can't be used for a new RisiMe account"
+    phone_taken: "This phone number can't be used for a new RisiMe account",
+    # v1.24 §24.8.
+    private_tab: "Risi can't join a Private chat",
+    risi_required: "Risi stays in Official while it is on; turn Official off instead",
+    dm_chat: "A 1:1 chat's members can't be changed",
+    invalid_member: "An agent can't be added this way",
+    agent_unavailable: "Risi isn't available right now",
+    official_off: "Official is turned off for this chat"
   }
 
   @doc """

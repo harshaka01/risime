@@ -1,0 +1,315 @@
+defmodule RisiMe.Chats do
+  @moduledoc """
+  Chats with two tabs (contract v1.24 §24, decision 065).
+
+  A chat is its Private anchor conversation (`dm:` or a Private `grp:`; `chat_id` equals that id)
+  plus at most one Official `grp:` conversation (`groups.chat_id`, `tab = 'official'`). The
+  Official setting lives in `chats` (no row: on, and nothing created yet).
+
+    * `create_official/3`: `POST /api/v1/chats/{chat_id}/official` (§24.2);
+    * `official_created/2`: called by the epoch-0 commit of an Official group (§24.2);
+    * `chat_json/2`, `show/3`, `list/2`: the `Chat` object (§24.1, §24.8);
+    * `toggle/4`: `PATCH /api/v1/chats/{chat_id}` (§24.4).
+  """
+  import Ecto.Query
+
+  require Logger
+
+  alias RisiMe.{Devices, Groups, Messaging, MLS, Repo, Risi, Social, TimeUUID}
+  alias RisiMe.Groups.{Chat, Group, Member}
+
+  @creating_ttl_s 600
+
+  ## Resolving a chat
+
+  @doc """
+  The chat `chat_id` as seen by `me`: `{:ok, %{chat_id, kind, humans, admins}}` for a participant
+  of the DM or an active member of the active Private group; otherwise `{:error, :not_found}`.
+  """
+  def resolve(me, "dm:" <> _ = chat_id) do
+    case MLS.members(chat_id) do
+      {:ok, [a, b] = humans} when me in [a, b] ->
+        {:ok, %{chat_id: chat_id, kind: "dm", humans: humans, admins: humans}}
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  def resolve(me, "grp:" <> _ = chat_id) do
+    with %Group{tab: "private", state: "active"} <- Groups.get_group(chat_id),
+         %Member{state: "active"} <- Groups.member(chat_id, me) do
+      humans =
+        Repo.all(
+          from m in Member,
+            where: m.group_id == ^chat_id and m.state == "active" and m.kind == "user",
+            order_by: [asc: m.inserted_at],
+            select: m.user_id
+        )
+
+      {:ok, %{chat_id: chat_id, kind: "group", humans: humans, admins: Groups.admin_ids(chat_id)}}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  def resolve(_me, _chat_id), do: {:error, :not_found}
+
+  @doc "The chat's Official group (any state), or nil."
+  def official_group(chat_id),
+    do: Repo.one(from g in Group, where: g.chat_id == ^chat_id and g.tab == "official")
+
+  @doc "The `chats` row, or nil (Official on, nothing created yet)."
+  def row(chat_id), do: Repo.get(Chat, chat_id)
+
+  @doc "True while the chat's Official setting is off."
+  def off?(chat_id), do: match?(%Chat{official: "off"}, row(chat_id))
+
+  ## The Chat object (§24.1)
+
+  @doc "`Chat` as seen by `me` for a resolved chat."
+  def chat_json(me, chat) do
+    r = row(chat.chat_id)
+    og = official_group(chat.chat_id)
+
+    state =
+      cond do
+        r && r.official == "off" -> "off"
+        og && og.state == "active" -> "on"
+        true -> "none"
+      end
+
+    {_ready, missing} = Groups.tabs_readiness(chat.humans)
+
+    missing =
+      if Risi.available?(),
+        do: missing,
+        else: missing ++ [%{user_id: nil, device_id: nil, reason: "agent_unavailable"}]
+
+    %{
+      chat_id: chat.chat_id,
+      kind: chat.kind,
+      private: %{conversation_id: chat.chat_id},
+      official: %{
+        state: state,
+        conversation_id: if((state != "none" and og) && og.state == "active", do: og.id),
+        changed_by: r && r.changed_by,
+        changed_at: r && r.changed_at && Messaging.iso(r.changed_at)
+      },
+      official_ready: missing == [],
+      missing: missing,
+      can_toggle: chat.kind == "dm" or me in chat.admins
+    }
+  end
+
+  @doc "`GET /api/v1/chats/{chat_id}` (`tabs` devices only)."
+  def show(me, device_id, chat_id) do
+    with true <- Devices.tabs_device?(me, device_id) || {:error, :not_found},
+         {:ok, chat} <- resolve(me, chat_id),
+         do: {:ok, chat_json(me, chat)}
+  end
+
+  @doc """
+  `GET /api/v1/chats` (`tabs` devices only): one chat per DM with a friend that is e2ee or has an
+  Official conversation, and one per active Private group of the caller.
+  """
+  def list(me, device_id) do
+    if Devices.tabs_device?(me, device_id) do
+      groups =
+        Repo.all(
+          from g in Group,
+            join: m in Member,
+            on: m.group_id == g.id,
+            where:
+              m.user_id == ^me and m.state == "active" and g.state == "active" and
+                g.tab == "private",
+            order_by: [asc: g.created_at],
+            select: g.id
+        )
+
+      dms =
+        for f <- Social.friend_ids(me),
+            conv = Messaging.conversation_id(me, f),
+            MLS.e2ee?(conv) or official_group(conv) != nil,
+            do: conv
+
+      chats =
+        for id <- dms ++ groups, {:ok, chat} <- [resolve(me, id)], do: chat_json(me, chat)
+
+      {:ok, chats}
+    else
+      {:error, :not_found}
+    end
+  end
+
+  ## Creation (§24.2)
+
+  @doc """
+  `POST /api/v1/chats/{chat_id}/official`. `{:ok, :created | :existing, group_json}` or an error:
+  `invalid_device`, `not_found`, `official_off`, `not_e2ee`, `not_friends`, `agent_unavailable`,
+  `{:not_ready, missing, :official}`.
+  """
+  def create_official(me, device_id, chat_id) do
+    with true <- MLS.available?() || {:error, :mls_unavailable},
+         true <- Devices.tabs_device?(me, device_id) || {:error, :invalid_device},
+         {:ok, chat} <- resolve(me, chat_id) do
+      og = official_group(chat_id)
+
+      cond do
+        off?(chat_id) ->
+          {:error, :official_off}
+
+        og != nil ->
+          {:ok, :existing, Groups.group_json(og, me)}
+
+        true ->
+          with :ok <- dm_ok(chat),
+               true <- Risi.available?() || {:error, :agent_unavailable},
+               :ok <- ready(chat.humans) do
+            insert_official(me, chat)
+          end
+      end
+    end
+  end
+
+  # §24.2: a DM chat must be e2ee and the two users friends with no block.
+  defp dm_ok(%{kind: "dm", chat_id: id, humans: [a, b]}) do
+    cond do
+      not MLS.e2ee?(id) -> {:error, :not_e2ee}
+      not Social.friends?(a, b) or Social.blocked_between?(a, b) -> {:error, :not_friends}
+      true -> :ok
+    end
+  end
+
+  defp dm_ok(_chat), do: :ok
+
+  @doc "Every user is tabs-ready, else `{:error, {:not_ready, missing, :official}}`."
+  def ready(user_ids) do
+    case Groups.tabs_readiness(user_ids) do
+      {_, []} -> :ok
+      {_, missing} -> {:error, {:not_ready, missing, :official}}
+    end
+  end
+
+  @doc false
+  # The new Official group in `creating`; the unique (chat_id, tab) index decides a race: the
+  # loser gets the winner's group (`:existing`).
+  def insert_official(me, chat) do
+    now = DateTime.utc_now()
+    id = "grp:" <> Ecto.UUID.generate()
+
+    {:ok, result} =
+      Repo.transaction(fn ->
+        {n, _} =
+          Repo.insert_all(
+            Group,
+            [
+              %{
+                id: id,
+                created_by: me,
+                client_group_id: Ecto.UUID.generate(),
+                state: "creating",
+                generation: 1,
+                created_at: now,
+                chat_id: chat.chat_id,
+                tab: "official",
+                chat_kind: chat.kind
+              }
+            ],
+            on_conflict: :nothing,
+            conflict_target: [:chat_id, :tab]
+          )
+
+        if n == 1 do
+          RisiMe.Groups.Tabs.put(id, "official")
+
+          # §24.1: a 1:1 Official has both users as admins; a group's mirrors the Private roles.
+          humans =
+            for u <- chat.humans,
+                do:
+                  member_row(
+                    id,
+                    u,
+                    if(u in chat.admins, do: "admin", else: "member"),
+                    "user",
+                    now
+                  )
+
+          Repo.insert_all(
+            Member,
+            humans ++ [member_row(id, Risi.user_id(), "member", "agent", now)]
+          )
+
+          {:ok, _} =
+            Oban.insert(
+              RisiMe.Workers.GroupTimer.new(%{"kind" => "creating", "group_id" => id},
+                schedule_in: @creating_ttl_s
+              )
+            )
+
+          {:created, Repo.get!(Group, id)}
+        else
+          {:existing, official_group(chat.chat_id)}
+        end
+      end)
+
+    {kind, g} = result
+    {:ok, kind, Groups.group_json(g, me)}
+  end
+
+  defp member_row(group_id, user_id, role, kind, now),
+    do: %{
+      group_id: group_id,
+      user_id: user_id,
+      role: role,
+      kind: kind,
+      state: "active",
+      joined_at: now,
+      inserted_at: now
+    }
+
+  @doc """
+  The epoch-0 commit of an Official group landed (inside its lock): records it on the chat and
+  returns the `chat_event` `official_created` for every human member.
+  """
+  def official_created(%Group{} = g, actor) do
+    upsert_row(g.chat_id, g.chat_kind, %{official_conversation_id: g.id})
+    chat_events(g.chat_id, "official_created", actor, g.id, human_ids(g.id))
+  end
+
+  @doc "Active human members of a group."
+  def human_ids(group_id),
+    do:
+      Repo.all(
+        from m in Member,
+          where: m.group_id == ^group_id and m.state == "active" and m.kind == "user",
+          select: m.user_id
+      )
+
+  @doc false
+  def upsert_row(chat_id, kind, attrs) do
+    row = Map.merge(%{chat_id: chat_id, kind: kind, official: "on"}, attrs)
+
+    Repo.insert_all(Chat, [row],
+      on_conflict: {:replace, Map.keys(attrs)},
+      conflict_target: [:chat_id]
+    )
+  end
+
+  @doc """
+  §24.8: the stored `chat_event` (`tabs` sockets only) for each user, as
+  `RisiMe.Messaging.publish_batch/1` items.
+  """
+  def chat_events(chat_id, action, actor, official_id, user_ids) do
+    data = %{
+      "chat_id" => chat_id,
+      "action" => action,
+      "actor" => actor,
+      "official_conversation_id" => official_id,
+      "server_ts" => Messaging.iso(DateTime.utc_now())
+    }
+
+    for u <- user_ids,
+        do: {u, %{event_id: TimeUUID.generate(), kind: "chat_event", data: data}, [push: true]}
+  end
+end

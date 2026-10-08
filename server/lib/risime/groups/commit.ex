@@ -144,16 +144,24 @@ defmodule RisiMe.Groups.Commit do
     end
   end
 
-  # Epoch 0 of a new group: all groups-capable devices of every member (§12.3).
+  # Epoch 0 of a new group: all groups-capable devices of every member (§12.3). v1.24 §24.2: for
+  # an Official group, every `tabs` device of every human member plus the agent's device.
   defp create_commit(me, dev, g, req) do
-    member_ids = g.id |> Groups.members() |> Enum.map(& &1.user_id)
+    members = Groups.members(g.id)
+    member_ids = Enum.map(members, & &1.user_id)
+    agents = for m <- members, m.kind == "agent", do: m.user_id
     others = member_ids -- [me]
-    {ready, missing} = Groups.readiness(others)
-    devices = Groups.device_refs(member_ids)
+    cap = Groups.cap_for(g)
+    {ready, missing} = Groups.readiness(others -- agents, cap)
+    devices = Groups.device_refs(member_ids, cap)
+    agent_leaves? = Enum.all?(agents, fn a -> Enum.any?(devices, &(elem(&1, 0) == a)) end)
 
     cond do
-      MapSet.size(ready) != length(others) ->
-        {:error, {:not_ready, missing}}
+      MapSet.size(ready) != length(others -- agents) ->
+        {:error, not_ready(g, missing)}
+
+      not agent_leaves? ->
+        {:error, :agent_unavailable}
 
       MapSet.size(devices) > Groups.max_devices() ->
         {:error, :too_many_devices}
@@ -182,18 +190,22 @@ defmodule RisiMe.Groups.Commit do
               epoch: 1,
               members: true,
               push_targets: true
-            )
+            ) ++
+            if(Groups.official?(g), do: RisiMe.Chats.official_created(g, me), else: [])
 
         Messaging.publish_batch(events)
         {:ok, 1}
     end
   end
 
+  defp not_ready(g, missing),
+    do: if(Groups.official?(g), do: {:not_ready, missing, :official}, else: {:not_ready, missing})
+
   # Epoch 0 of a new generation after a reset: completes the `rebuild` op (§12.8).
   defp rebuild_commit(me, dev, g, req) do
     op = req.op_id && Ops.get(g.id, req.op_id)
     members = Groups.active_member_ids(g.id)
-    devices = Groups.device_refs(members)
+    devices = Groups.device_refs(members, Groups.cap_for(g))
 
     cond do
       op == nil or op.type != "rebuild" ->
@@ -246,13 +258,20 @@ defmodule RisiMe.Groups.Commit do
         true -> nil
       end
 
+    # v1.24 §24.1/§24.5: the tab rules, with the agent users among the changed leaves.
+    changed_users = Enum.uniq(for {u, _} <- req.added ++ req.removed, do: u)
+
     policy = %{
       admins: admins,
       agents: agents,
+      agent_users: Enum.uniq(agents ++ RisiMe.Risi.agents(changed_users)),
+      tab: g.tab || "private",
+      conversation: "grp",
       committer: me,
       adds: req.added,
       removes: req.removed,
       leaf_users: in_group |> Enum.map(&elem(&1, 0)) |> Enum.uniq(),
+      leaves: Enum.to_list(in_group),
       meta: meta
     }
 
@@ -261,6 +280,7 @@ defmodule RisiMe.Groups.Commit do
 
     with true <- MapSet.member?(in_group, {me, dev}) || {:error, :bad_request},
          true <- (req.op_id == nil or op != nil) || {:error, :bad_request},
+         :ok <- agent_self_update_only(me, agents, req),
          :ok <- Policy.check(policy),
          :ok <- member_needs_op(me in admins, Policy.others?(policy), op),
          {:ok, role} <- match_op(op, ctx, req),
@@ -272,9 +292,18 @@ defmodule RisiMe.Groups.Commit do
     end
   end
 
+  # v1.24 §24.5: an agent device commits nothing but self-updates of its own leaf.
+  defp agent_self_update_only(me, agents, req) do
+    if me in agents and (req.added != [] or req.removed != [] or req.meta_changed),
+      do: {:error, :not_admin},
+      else: :ok
+  end
+
   # v1.14 §12.4a: a non-admin's commit on another user's leaves must name its pending `devices`
   # op (no list-only matching for this case).
   defp member_needs_op(false, true, %Op{type: "devices"}), do: :ok
+  # v1.24 §24.4: the agent `remove` op (match_op/3 checks the target is an agent).
+  defp member_needs_op(false, true, %Op{type: "remove"}), do: :ok
   defp member_needs_op(false, true, _op), do: {:error, :not_admin}
   defp member_needs_op(_admin?, _others?, _op), do: :ok
 
@@ -285,8 +314,8 @@ defmodule RisiMe.Groups.Commit do
 
   # Server-only checks (§12.4): the declared lists against the op, or the §10.2 rules. Returns
   # `{:ok, committer_role}` (`admin`, `own`, `member`; for the log only).
-  defp match_op(nil, %{me: me, admins: admins, active: active, in_group: in_group}, req) do
-    current = Groups.device_refs(active)
+  defp match_op(nil, %{g: g, me: me, admins: admins, active: active, in_group: in_group}, req) do
+    current = Groups.device_refs(active, Groups.cap_for(g))
 
     added_ok =
       Enum.all?(req.added, &(MapSet.member?(current, &1) and not MapSet.member?(in_group, &1)))
@@ -309,12 +338,33 @@ defmodule RisiMe.Groups.Commit do
     case type do
       "add" ->
         pending = for m <- members, m.user_id in users, m.state == "pending_add", do: m.user_id
-        expect(admin?, req.removed == [] and MapSet.new(req.added) == Groups.device_refs(pending))
+
+        expect(
+          admin?,
+          req.removed == [] and
+            MapSet.new(req.added) == Groups.device_refs(pending, Groups.cap_for(g))
+        )
 
       "remove" ->
         out = MapSet.filter(in_group, fn {u, _} -> u in users end)
+
+        # v1.24 §24.4: removing an agent (Official off) may be committed by any active human
+        # member's in-group device.
+        agent_target? =
+          users != [] and
+            Enum.all?(users, fn u ->
+              Enum.any?(members, &(&1.user_id == u and &1.kind == "agent"))
+            end)
+
+        human? =
+          Enum.any?(members, &(&1.user_id == me and &1.state == "active" and &1.kind == "user"))
+
         # MLS can't commit its own removal (a leaving admin's devices never complete it).
-        expect(admin?, me not in users and req.added == [] and MapSet.new(req.removed) == out)
+        expect(
+          admin? or (agent_target? and human?),
+          me not in users and req.added == [] and MapSet.new(req.removed) == out,
+          if(admin?, do: "admin", else: "member")
+        )
 
       "role" ->
         expect(admin?, req.added == [] and req.removed == [])

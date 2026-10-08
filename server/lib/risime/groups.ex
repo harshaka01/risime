@@ -312,6 +312,12 @@ defmodule RisiMe.Groups do
   def official?(%Group{tab: tab}), do: tab == "official"
 
   @doc """
+  v1.24 §24.3: the capability a device needs to be a leaf of this group: `tabs` for Official
+  (a member's device without `tabs` sees the Private tab only), `groups` otherwise.
+  """
+  def cap_for(%Group{} = g), do: if(official?(g), do: "tabs", else: "groups")
+
+  @doc """
   v1.24 §24.1: `chat_id`, `tab`, `chat_kind` of an Official group. A Private group leaves them out
   (absent = Private, its own id, `group`; §24.1, §24.8), so its JSON stays exactly v1.23.
   """
@@ -367,7 +373,9 @@ defmodule RisiMe.Groups do
          {:ok, dev} <- caller_device(me, device_id),
          %{"client_group_id" => cgid, "member_ids" => ids} when is_list(ids) <- params,
          {:ok, cgid} <- cast_uuid(cgid),
-         {:ok, ids} <- cast_ids(ids) do
+         {:ok, ids} <- cast_ids(ids),
+         # v1.24 §24.5: a new (Private) group never names an agent.
+         true <- RisiMe.Risi.agents(ids) == [] || {:error, :private_tab} do
       case Repo.get_by(Group, created_by: me, client_group_id: cgid) do
         %Group{} = g -> {:ok, :existing, group_json(g, me)}
         nil -> do_create(me, dev, cgid, Enum.uniq(ids) -- [me])
@@ -476,6 +484,7 @@ defmodule RisiMe.Groups do
          {:ok, ids} <- cast_ids(ids) do
       locked(id, fn ->
         with {:ok, g, m} <- visible_active(me, id),
+             :ok <- no_agents(g, ids),
              :ok <- require_admin(m),
              {:ok, new} <- addable(g, me, Enum.uniq(ids) -- [me]) do
           if new != [] do
@@ -713,15 +722,22 @@ defmodule RisiMe.Groups do
   A user's groups-capable device was `:added`, `:removed` or `:replaced` (key change). Creates a
   `devices` op in each active group of the user where the leaf set has to change.
   """
-  def device_changed(user_id, device_id, change) do
+  def device_changed(user_id, device_id, change, opts \\ []) do
+    only_official? = Keyword.get(opts, :only) == :official
+
     group_ids =
       Repo.all(
         from m in Member,
           join: g in Group,
           on: g.id == m.group_id,
-          where: m.user_id == ^user_id and m.state == "active" and g.state == "active",
+          where:
+            m.user_id == ^user_id and m.state == "active" and g.state == "active" and
+              (not (^only_official?) or g.tab == "official"),
           select: g.id
       )
+
+    # v1.24 §24.3: only `tabs` devices become leaves of Official groups.
+    tabs? = Devices.tabs_device?(user_id, device_id)
 
     for id <- group_ids do
       locked(id, fn ->
@@ -731,6 +747,9 @@ defmodule RisiMe.Groups do
 
         cond do
           g == nil or epoch(id) == nil ->
+            :ok
+
+          official?(g) and change in [:added, :replaced] and not tabs? ->
             :ok
 
           change == :added and not in? ->
@@ -825,6 +844,16 @@ defmodule RisiMe.Groups do
       {:ok, %Group{state: "active"}, _} = ok -> ok
       {:ok, _, _} -> {:error, :bad_request}
       e -> e
+    end
+  end
+
+  # v1.24 §24.3/§24.5: an agent is never a `user_ids` entry: `403 private_tab` on a Private
+  # group, `422 invalid_member` on an Official one (its agent joins only through §24.2/§24.4).
+  defp no_agents(g, ids) do
+    cond do
+      RisiMe.Risi.agents(ids) == [] -> :ok
+      official?(g) -> {:error, :invalid_member}
+      true -> {:error, :private_tab}
     end
   end
 
