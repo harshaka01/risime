@@ -37,3 +37,20 @@ the §17.7 bundle.
   key" deletes them. Root's upgrade gate gains an "uninstall, reinstall, restore" scenario.
 - The server learns backup times, sizes and devices, never content or keys; the wrapped `BK` is
   offline-attackable by its holder (hence 120 bits and the passphrase floor).
+
+## Addendum (2026-10-08, crypto): new core dependencies
+Three pure-Rust crates were added to `risime-mls`. None has C code or needs `build.rs`.
+- **`argon2` 0.5.3** (RustCrypto): `default-features = false`, `alloc` + `zeroize`. Its output is
+  cross-checked against the C reference implementation (argon2-cffi) by `backup_vectors.json`.
+- **`miniz_oxide` 0.8:** inflate in the verify pass only, to find the end of the data and check the
+  zero padding.
+- **`unicode-normalization` 0.1.25:** NFKC of passphrases inside the core, so every platform
+  derives the same KEK.
+
+Rejected:
+- scrypt and PBKDF2: the contract fixes Argon2id;
+- C `libargon2`: no C in the tree;
+- `flate2`: a wrapper over the same `miniz_oxide`.
+
+§22.9 wording: the four stream sizes are |D| (the padded sizes are 1, 65 536, 67 584 and 200 704);
+see the vectors' comment.
