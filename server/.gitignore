@@ -25,3 +25,6 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 risime-*.tar
 
+
+# The Risi MLS NIF, built by scripts/build-mls-nif (never committed).
+/priv/native/
