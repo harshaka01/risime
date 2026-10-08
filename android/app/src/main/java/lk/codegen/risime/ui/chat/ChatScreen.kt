@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -29,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -349,6 +352,9 @@ private fun NotFriendsBar(name: String, requested: Boolean, onAddFriend: () -> U
     }
 }
 
+/** The tallest keyboard seen in this process (px): the emoji panel is as high. */
+private var lastKeyboardPx = 0
+
 /**
  * The input bar (WhatsApp-style, full width on the chat wallpaper): a rounded field holding the
  * emoji button, the text and the "+" attach button, then the round Send button. Emoji picker
@@ -365,7 +371,25 @@ internal fun Composer(
     /** The picker view inside the emoji sheet (a fake in tests). */
     emojiPicker: (@Composable (onPick: (String) -> Unit) -> Unit)? = null,
 ) {
-    var picker by remember { mutableStateOf(false) }
+    // The emoji panel takes the keyboard's place (WhatsApp-style): same height as the last keyboard.
+    var panel by remember { mutableStateOf(false) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val imePx = WindowInsets.ime.getBottom(density)
+    val navPx = WindowInsets.navigationBars.getBottom(density)
+    if (imePx > lastKeyboardPx) lastKeyboardPx = imePx
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val fieldInteractions = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    fun showKeyboard() {
+        panel = false
+        focus.requestFocus()
+        keyboard?.show()
+    }
+    LaunchedEffect(fieldInteractions) {
+        // A tap in the field while the panel is open brings the keyboard back in its place.
+        fieldInteractions.interactions.collect { if (it is androidx.compose.foundation.interaction.PressInteraction.Release) showKeyboard() }
+    }
+    androidx.activity.compose.BackHandler(enabled = panel) { panel = false }
     val text = value.text
     // Graphemes ≤ chars: only count when it could matter.
     val limits = if (text.length < lk.codegen.risime.data.BodyLimits.COUNTER_FROM) null else lk.codegen.risime.data.BodyLimits.of(text, lk.codegen.risime.data.IcuGraphemes)
@@ -389,14 +413,15 @@ internal fun Composer(
                     modifier = Modifier.weight(1f),
                 ) {
                     Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(horizontal = Spacing.xxs)) {
-                        IconButton(onClick = { picker = true }) {
+                        IconButton(onClick = { if (panel) showKeyboard() else { keyboard?.hide(); panel = true } }) {
                             Text("🙂", style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { contentDescription = "Emoji" })
                         }
                         androidx.compose.material3.TextField(
                             value = value,
                             onValueChange = onValue,
                             placeholder = { Text(placeholder) },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).focusRequester(focus),
+                            interactionSource = fieldInteractions,
                             maxLines = 6,
                             textStyle = MaterialTheme.typography.bodyLarge,
                             colors = androidx.compose.material3.TextFieldDefaults.colors(
@@ -428,16 +453,18 @@ internal fun Composer(
                     Icon(Icons.AutoMirrored.Filled.Send, "Send", Modifier.size(22.dp))
                 }
             }
+            if (panel) {
+                // Stays open: each pick goes in at the cursor after the previous one; backspace deletes whole graphemes.
+                val last = if (lastKeyboardPx > 0) with(density) { (lastKeyboardPx - navPx).coerceAtLeast(0).toDp() } else null
+                EmojiPanel(
+                    height = emojiPanelHeight(last),
+                    onPick = { e -> onValue(insertAtCursor(value, e)) },
+                    onBackspace = { onValue(deleteBeforeCursor(value, IcuGraphemeBoundary)) },
+                    onKeyboard = ::showKeyboard,
+                    picker = emojiPicker ?: { EmojiPickerAndroidView(it, Modifier.fillMaxSize()) },
+                )
+            }
         }
-    }
-    if (picker) {
-        // Stays open: each pick goes in at the cursor after the previous one; ⌫ deletes whole graphemes.
-        EmojiPickerSheet(
-            onPick = { e -> onValue(insertAtCursor(value, e)) },
-            onDismiss = { picker = false },
-            onBackspace = { onValue(deleteBeforeCursor(value, IcuGraphemeBoundary)) },
-            picker = emojiPicker ?: { EmojiPickerAndroidView(it) },
-        )
     }
 }
 

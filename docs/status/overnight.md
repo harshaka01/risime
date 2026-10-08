@@ -47,6 +47,15 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## Run in progress (2026-10-08, orchestrator, after the account switch)
+- **nightly.32:** release running from `e29fa19`. Gate changes in that commit: C updates to the new app
+  before the reinstall phase (`UPGRADE_C_STAYS_OLD=1` keeps it old); `RESTORE_CHECK_FROM` defaults to
+  20032 and `UPDATER_BACK_SAFE_FROM` to 20031 in nightly-release.
+- **Agents:** android P0 audio routing (the route button is always enabled; Earpiece↔Speaker toggle or
+  a picker with Bluetooth/headset; video on speaker; voice→video moves to speaker; Bluetooth first);
+  android emoji panel and attachment sheet (v1.23 UI); a Risi v1 plan (read-only).
+- fail2ban `risime-signup` jail: installed by Harsha (done).
+
 ## Run finished (2026-10-08, orchestrator)
 - **Live releases:**
   - nightly.27 GO UX;
@@ -268,26 +277,45 @@ fixes go out together.
     preview), now fixed.
   - **Known limit:** a batch of photos can arrive in a different order.
 
-## Current state (2026-10-08)
-- **Pilot:** v0.2.0-nightly.26 (versionCode 20026), live and healthy, contract v1.16. The TURN relay
-  has been live since 2026-10-07 06:34 UTC (`TURN_URLS`; 3478/tcp reachable from outside).
-- **Releases on 2026-10-07:** nightly.17–26 (details below). Every one went through both gates,
-  isolated live interop, and the two-phone Redroid upgrade gate (device id, groups, photos,
-  reactions and delete; since nightly.26 also per-conversation message counts after the update and
-  after a re-sign-in), then a backup, then publish and deploy.
-- **Agents:** none running. No Redroid containers. Only the release worktree remains.
-- **Brand:** `design/brand/risime-logo.png` (Harsha's logo, 1254×1254) is committed. It isn't used
-  in the app yet.
-- **Needs Harsha:**
-  1. The calls check on real phones (`docs/status/calls-manual-test.md`, one phone on mobile data,
-     plus a locked phone ringing full screen).
-  2. "go UX" or the exact UX list (logo-based adaptive icon and theme, WhatsApp-style layout,
-     attachment sheet, in-call redesign; profile and group photos after a short proposal).
-  3. Optional: `INVITE_ADMINS` in `.env`; his invite counter drains by itself.
-  4. Still waiting: the Notify.lk sender ID, and RisiWork's `version.json`.
-- **Queue after that:** voice notes, multi-photo selection, call quality, 1:1 video, group calls
-  (LiveKit). `docs/NIGHTLY.md`'s queue (the RisiCloud sign-in phase) has nothing unblocked; the
-  nightly cron only runs the preflight.
+## Current state (2026-10-08 ~11:45 UTC, checked by the orchestrator)
+- **Pilot:** v0.2.0-nightly.31 live (`risime.service` active), contract v1.20 deployed.
+- **Interrupted by the account switch:** nothing. The handoff (`a3670be`) left no agents and a clean
+  tree; the only leftovers were the two failed experiment results `v0.2.0-nightly.32-bktest` (the
+  script bug fixed in `1e51b69`) and `v0.2.0-nightly.33` (aborted by hand). Neither needs resuming;
+  the nightly.32 gate below re-runs the restore phase.
+- **Running now (this session):**
+  - the nightly.32 release (`scripts/release-from-worktree` at `e29fa19`; Redroid `rel`/`rel-b`,
+    tmux `risime-upgrade_rel`). Server, android and interop passed; the upgrade test is in the
+    backup/reinstall phase;
+  - android agent: P0 call audio routing (worktree; Redroid `andr1`/`andr2`, tmux
+    `risime-calltest_andr` for its call-device-test);
+  - android agent: P0 background delivery (app side + `scripts/push-device-test`);
+  - server agent: push audit log lines.
+- **Finished this session:**
+  - the gate changes (`e29fa19`);
+  - the emoji panel and attachment sheet (`49282f2`, not released yet);
+  - the Risi v1 proposal (`bf1a215`, waiting for Harsha).
+- **Worktrees:** the standing ones (`~/.cache/risime-upgrade-wt*`, `~/risime-release-wt`,
+  `~/risime-run/<tag>`) plus the agents' own under `.claude/worktrees/`.
+
+### P0 background delivery: server evidence (2026-10-08 11:40 UTC)
+- **Harsha's devices:** his current device (`ad92ca09…`, nightly.31, last seen 11:23 UTC) **has a
+  push token**. His six older devices (nightly.12–28) have none, since FCM unregistered them.
+- **FCM results in `~/risime-logs/server.log`:**
+  - `call push: result=ok` 34× (latest 11:20 and 11:21 UTC);
+  - `result=unregistered` 2×, both old devices;
+  - `HTTP 404 UNREGISTERED` 9× in total;
+  - 1 `:timeout` (04:08).
+  - FCM accepts the pushes. They are data-only, `android.priority: high`; calls have TTL 45 s.
+- **Gaps:** inbox (message) pushes log nothing on success, no line names the device a push went
+  to, and pushes skipped because the user counts as online (`Presence.online?`, 5 s grace) aren't
+  logged. A server change is adding per-device lines.
+- **Leading hypothesis (being checked):** the server pushes only when no inbox socket is live. If
+  the backgrounded app keeps its websocket, or Doze freezes it while the server still sees it, no
+  push is sent. The app then posts message notifications only on the sync path (`syncAndNotify`),
+  so nothing shows until the app is opened.
+- **Gate limit:** Redroid has no Google Play Services, so the new push gate emulates the FCM delivery
+  (a high-priority temporary allowlist plus the c2dm broadcast).
 
 ## v0.2.0-nightly.26 (live 2026-10-07, not required): lost history comes back by itself
 - **"nightly.25 wiped my chats":** not the update. Android removed the app's data on Harsha's
