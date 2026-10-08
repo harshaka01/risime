@@ -65,7 +65,7 @@ were needed after nightly.11.
   - switching from BT to Phone in the system output switcher stays on Phone;
   - on Android 8–11 with BT, music plays normally after a call.
 
-### HOLD (2026-10-08 ~13:30 UTC): don't release main past `d27c07c` until the background-delivery review fixes land
+### (Hold lifted ~14:40 UTC: review fixes landed in `f104b23`) Was: don't release main past `d27c07c`
 - **The blocker:** the review of `55e0a3a`/`c49647d` found that MLS events can still be lost, or the
   whole inbox can stall, when the device registration fails on a push-started cold start. That code
   is on main.
