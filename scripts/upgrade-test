@@ -27,6 +27,18 @@
 #       same (server), nobody gets an "Encryption was reset" line, A->C and C->A go through (A's send
 #       while waiting stays pending and arrives), and C's per-conversation counts don't drop.
 #       Unset (default) or an older NEW: skipped (logged). scripts/nightly-release sets it.
+#       RESTORE_CHECK_FROM=<versionCode> (§22, decision 059; v1.22+): before the uninstall, A turns on
+#       server backup in Settings → Manage backups (recovery key read from the screen, groups 2 and 7
+#       typed back, no passphrase), waits for "Backed up" + "Last server backup: <date> · <size>",
+#       exports a backup file (/sdcard/Download/risime-backup-<date>.risimebk) and records its
+#       per-conversation Room counts. After the uninstall A's inbox replay is purged on the TEMP server
+#       (its own keyspace), so the restore alone must bring the messages back. The sign-in then lands on
+#       "Restore your chats": Restore → recovery key → the chat list; every conversation/kind count is
+#       >= before (the 1:1 chats equal) and logcat has "restore <backup_id>: N imported". Then the
+#       rejoin checks. Unset (default) or an older NEW: skipped (logged). scripts/nightly-release sets it.
+#     --restore-from-file: the restore goes through the exported file instead: Skip at the gate, then
+#       Settings → Manage backups → Restore from file → the file in the system picker → recovery key →
+#       "Restored N messages." → OK.
 #     --no-reinstall: skip that phase (emergency only; the result says reinstall=off).
 #     --reinstall-dm-offline: also a DM A-C (set up first): C stays stopped REINSTALL_DM_WAIT s (180)
 #       after A's sign-in; A's DM shows "Waiting for ZZ Upgrade C to open RisiMe", the DM's generation
@@ -129,6 +141,30 @@ case mode do
     IO.puts("upgrade: friends_c ok")
   "blobs" ->
     IO.puts("upgrade: blobs=#{Repo.aggregate("blobs", :count)}")
+  "purge_inbox" ->
+    # The restore check: A's whole inbox partition goes, so nothing can come back from the replay.
+    # The temp server's own keyspace only (RISIME_DEV_KEYSPACE=risime_upgrade<instance>).
+    a = user!.(a_phone)
+    cl = RisiMe.Messaging.Store.Cassandra.Cluster
+    q = fn stmt ->
+      Enum.reduce_while(1..20, :error, fn _, _ ->
+        r = try do
+          Xandra.Cluster.run(cl, fn conn ->
+            with {:ok, p} <- Xandra.prepare(conn, stmt), do: Xandra.execute(conn, p, [a.id], timeout: 30_000)
+          end)
+        rescue
+          e -> {:error, e}
+        end
+        case r do
+          {:ok, page} -> {:halt, {:ok, page}}
+          _ -> Process.sleep(1000); {:cont, r}
+        end
+      end)
+    end
+    n = fn -> case q.("SELECT event_id FROM inbox_events WHERE user_id = ?") do {:ok, p} -> Enum.count(p); _ -> -1 end end
+    before = n.()
+    {:ok, _} = q.("DELETE FROM inbox_events WHERE user_id = ?")
+    IO.puts("upgrade: purged=#{before} left=#{n.()}")
   "send" ->
     [n] = rest
     a = user!.(a_phone); b = user!.(b_phone)
@@ -180,6 +216,7 @@ EXS
     friends_c) fx friends_c ;;
     blobs) fx blobs ;;
     mls) fx mls ;;
+    purge_inbox) fx purge_inbox ;;
     send) fx send "${2:?count}" ;;
     # The newest dev OTP for a phone (the code is printed to the caller only, never logged here).
     otp) grep -a "\[DEV OTP\] ${2:?phone}:" "$RUN/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true ;;
@@ -190,7 +227,7 @@ EXS
 fi
 
 # ---------------------------------------------------------------- driver half ------------------
-NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0; MANUAL=0; DEV=""; TARGET=auto; GROUP=1; VIA=adb; REINSTALL=1; DM_OFFLINE=0
+NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0; MANUAL=0; DEV=""; TARGET=auto; GROUP=1; VIA=adb; REINSTALL=1; DM_OFFLINE=0; RESTORE_FILE=0
 while [ $# -gt 0 ]; do case "$1" in
   --new) NEW="$2"; shift 2;; --old) OLD="$2"; shift 2;; --version) VERSION="$2"; shift 2;;
   --commit) COMMIT="$2"; shift 2;; --serial) SERIAL="$2"; shift 2;; --serial-b) SERIAL_B="$2"; shift 2;;
@@ -202,13 +239,14 @@ while [ $# -gt 0 ]; do case "$1" in
   --via-adb) VIA=adb; shift;;
   --no-reinstall) REINSTALL=0; shift;;
   --reinstall-dm-offline) DM_OFFLINE=1; shift;;
+  --restore-from-file) RESTORE_FILE=1; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 
 case "$TARGET" in auto|redroid|emulator|device) ;; *) echo "--target auto|redroid|emulator|device"; exit 2;; esac
 # spark2's SDK adb is x86-64: use the arm64 adb (user space, scripts/android-target adb).
 if [ "$(uname -m)" = aarch64 ]; then PATH="$("$REPO/scripts/android-target" adb):$PATH"; fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-upgrade.XXXXXX")"
-TUNNEL_PID=""; STARTED_TARGET=""; STARTED_B=""; CHECKS=""; UPD_PID=""; UPD_PORT=""; BACK_STEP=no; RI_STEP=no
+TUNNEL_PID=""; STARTED_TARGET=""; STARTED_B=""; CHECKS=""; UPD_PID=""; UPD_PORT=""; BACK_STEP=no; RI_STEP=no; RS_STEP=no
 STEP="start"; RESULT=FAIL; REASON=""; RESULT_WRITTEN=0; VERSION_FOR_RESULT=""
 step() { STEP="$*"; echo "==> $*"; }
 fail() { REASON="$1"; echo "UPGRADE TEST FAILED: $1"; write_result; exit 1; }
@@ -218,7 +256,7 @@ write_result() {
   RESULT_WRITTEN=1
   { echo "result=$RESULT"; echo "version=$VERSION"; echo "commit=$COMMIT"; echo "old=${OLD_VN:-}"; echo "new=${NEW_VN:-}"
     echo "new_sha256=$(sha256sum "$NEW" | cut -d' ' -f1)"; echo "host=$(hostname)"; echo "device=$(adb -s "$SERIAL" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
-    echo "group=${SERIAL_B:+yes}"; echo "via=$VIA"; echo "back_step=$BACK_STEP"; echo "reinstall=$RI_STEP"; echo "checks=${CHECKS# }"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
+    echo "group=${SERIAL_B:+yes}"; echo "via=$VIA"; echo "back_step=$BACK_STEP"; echo "reinstall=$RI_STEP"; echo "restore=$RS_STEP";echo "checks=${CHECKS# }"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
   echo "==> result: $f"
   local diag=""
   [ "$RESULT" = PASS ] || diag="$(save_diagnostics || true)"
@@ -359,7 +397,8 @@ wait_chat_list() { for _ in $(seq 1 "${1:-40}"); do on_chat_list && return 0; sl
 # The centre of the node whose text or content-desc equals $1 ("x*": text starts with x; "~x":
 # text or content-desc contains x, e.g. a message bubble's merged description; "^x": text equals x,
 # never a content-desc, e.g. a sheet's "Send" button rather than the composer's Send icon; "@x":
-# content-desc equals x, never a text, e.g. the photo preview's round Send button, not its title).
+# content-desc equals x, never a text, e.g. the photo preview's round Send button, not its title;
+# "!x": text equals x, the LAST such node, e.g. a dialog's "Restore" over the screen's own "Restore").
 node_xy() {
   dump
   python3 -I - "$WORK/ui.xml" "$1" <<'PY'
@@ -373,11 +412,14 @@ def hit(n):
         return t == want[1:]
     if want.startswith('@'):
         return d == want[1:]
+    if want.startswith('!'):
+        return t == want[1:]
     return t == want or d == want or (want.endswith('*') and t.startswith(want[:-1]))
-for n in ET.parse(sys.argv[1]).iter('node'):
-    if hit(n):
-        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
-        print((x1 + x2) // 2, (y1 + y2) // 2); break
+hits = [n for n in ET.parse(sys.argv[1]).iter('node') if hit(n)]
+if hits:
+    n = hits[-1] if want.startswith('!') else hits[0]
+    x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+    print((x1 + x2) // 2, (y1 + y2) // 2)
 PY
 }
 tap() {  # tap the node whose text or content-desc equals $1 (see node_xy)
@@ -457,7 +499,13 @@ sign_in() {  # $1 phone, $2 email
   # Verify: close both first.
   hide_keyboard; has "Later" && { tap "Later" || true; sleep 1; }
   has "Verify" && tap "Verify" || true
-  wait_chat_list 40 || return 1
+  # v1.22+: a reinstall with a server backup lands on the restore gate, not the chat list.
+  for _ in $(seq 1 40); do
+    on_chat_list && break
+    grep -qF 'text="Restore your chats"' "$WORK/ui.xml" && { echo "    the restore gate shows (\"Restore your chats\")"; return 0; }
+    sleep 1
+  done
+  on_chat_list || { echo "timeout waiting for the chat list"; return 1; }
   dismiss_prompts
 }
 
@@ -487,6 +535,9 @@ install_old() {
   A uninstall "$PKG" >/dev/null 2>&1 || true
   A install "$OLD" >/dev/null
   A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  # Redroid: showing the soft keyboard hung system_server (watchdog restart) twice; without the IME
+  # `input text` still types into Compose fields.
+  [ -n "$STARTED_TARGET" ] && { A shell pm disable-user --user 0 com.android.inputmethod.latin >/dev/null 2>&1 || true; }
   reverses
 }
 
@@ -893,6 +944,13 @@ elif [ -z "$SERIAL_B" ] || [ "$DB_BEFORE" = no-root ] || [ "$MANUAL" = 1 ]; then
 else
   RI_STEP=yes
 fi
+# The §22 backup restore inside the reinstall phase (v1.22+).
+if [ "$RI_STEP" != yes ]; then RS_STEP="$RI_STEP"
+elif [ -z "${RESTORE_CHECK_FROM:-}" ] || ! [ "$NEW_VC" -ge "$RESTORE_CHECK_FROM" ] 2>/dev/null; then
+  RS_STEP=skipped; echo "==> backup restore skipped: new app $NEW_VN ($NEW_VC) is below RESTORE_CHECK_FROM=${RESTORE_CHECK_FROM:-unset} (backups are v1.22+)"
+else
+  RS_STEP=yes
+fi
 if [ "$RI_STEP" = yes ]; then
   # Server view: "upgrade: grp=… creatora=1 admins=1 aadmin=1 grpgen=G grpepoch=E aleaves=N grpops=K dmgen=… dmepoch=… dmops=…"
   mls_state() { local out; out="$(srv mls)"; echo "${out#upgrade: }"; }
@@ -924,9 +982,122 @@ PY
   }
   # The chat screen's e2ee strip / composer state, from a fresh dump.
   strip_now() { dump; grep -oE 'Setting up encryption on this phone[^"]*' "$WORK/ui.xml" | sed -n 1p || true; }
-  # Hook: the §22 encrypted-backup restore (decision 059) goes here, right after A's sign-in on the
-  # reinstalled app and before the rejoin checks. Off until the backup gate is added.
-  reinstall_restore_hook() { :; }
+  # ---- §22 encrypted backups (decision 059): A backs up before the uninstall and restores after it.
+  BK_KEY=""; BK_FILE=""; PURGED=0
+  swipe_up() { local sz w h; sz="$(A shell wm size 2>/dev/null || true)"; [[ "$sz" =~ ([0-9]+)x([0-9]+) ]] && { w="${BASH_REMATCH[1]}"; h="${BASH_REMATCH[2]}"; } || { w=720; h=1280; }
+    A shell input swipe $((w / 2)) $((h * 3 / 4)) $((w / 2)) $((h / 4)) 300; sleep 1; }
+  # Chat list → More options → Settings → (scroll) Manage backups → the Backups screen.
+  open_backups() {
+    A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/.MainActivity" >/dev/null
+    wait_chat_list 40 || return 1; dismiss_prompts
+    tap "More options" && sleep 1 && tap "Settings" || { echo "    no Settings in the chat list's menu"; return 1; }
+    wait_for 'text="Settings"' 15 || return 1
+    for _ in $(seq 1 8); do has 'text="Manage backups"' && break; swipe_up; done
+    tap "Manage backups" || { echo "    no \"Manage backups\" in Settings"; return 1; }
+    wait_for 'text="Back up now"' 20
+  }
+  # $1: the device's file name; the counts file of A at backup time is $WORK/a-counts-backup.json.
+  backup_before_uninstall() {
+    local t i xy
+    open_backups || return 1
+    for i in $(seq 1 60); do has "Backups are available once it's ready" || break; sleep 2; done
+    wait_for 'text="Back up to the RisiMe server"' 30 || { has "This server doesn't offer backups" && echo "    the temp server offers no backups"; return 1; }
+    echo "    Settings → Manage backups: turning on \"Back up to the RisiMe server\""
+    tap "Back up to the RisiMe server" || return 1
+    wait_for 'text="Your recovery key"' 60 || { echo "    no \"Your recovery key\" dialog"; return 1; }
+    BK_KEY="$(grep -oE '[0-9A-Z]{4}(-[0-9A-Z]{4}){6}' "$WORK/ui.xml" | sed -n 1p || true)"
+    [ -n "$BK_KEY" ] || { echo "    no recovery key (XXXX-…, 7 groups) on the screen"; return 1; }
+    echo "    recovery key read from the screen (${BK_KEY:0:4}-…)"
+    tap "I saved it" || return 1
+    wait_for 'text="Type two groups back"' 15 || return 1
+    local g; IFS=- read -ra g <<<"$BK_KEY"
+    type_into "Group 2" "${g[1]}" || return 1; type_into "Group 7" "${g[6]}" || return 1
+    hide_keyboard; tap "!Confirm" || return 1
+    wait_for 'text="Add a passphrase?"' 20 || { has "That doesn't match" && echo "    the typed groups didn't match"; return 1; }
+    tap "!Not now" || return 1
+    echo "    no passphrase; waiting for \"Backed up\" and the server backup's date and size"
+    t=""
+    for i in $(seq 1 90); do
+      dump
+      t="$(grep -oE 'Last server backup: [^"]+ · [^"]+' "$WORK/ui.xml" | sed -n 1p || true)"
+      grep -qF 'text="Backed up"' "$WORK/ui.xml" && [ -n "$t" ] && break
+      sleep 2
+    done
+    grep -qF 'text="Backed up"' "$WORK/ui.xml" && [ -n "$t" ] || { echo "    no \"Backed up\" + \"Last server backup: <date> · <size>\" within 3 min ($(grep -oE 'text="(Last server backup|Backed up|Backup)[^"]*"' "$WORK/ui.xml" | tr '\n' ' '))"; return 1; }
+    echo "    \"Backed up\"; \"$t\""
+    tap "Export backup file" || return 1
+    wait_for 'Saved to Downloads: risime-backup-' 60 || { echo "    the export didn't report \"Saved to Downloads\""; return 1; }
+    BK_FILE="$(grep -oE 'risime-backup-[0-9-]+\.risimebk' "$WORK/ui.xml" | sed -n 1p)"
+    local magic; magic="$(A exec-out head -c 8 "/sdcard/Download/$BK_FILE" 2>/dev/null || true)"
+    [ "$magic" = RISIMEBK ] || { echo "    /sdcard/Download/$BK_FILE is not a RISIMEBK file ($(A shell ls -l /sdcard/Download/ 2>&1 | tr '\n' ' '))"; return 1; }
+    echo "    exported /sdcard/Download/$BK_FILE ($(A shell stat -c %s "/sdcard/Download/$BK_FILE" | tr -d '\r') bytes, RISIMEBK)"
+    A_BK="$(db_snapshot)"; cp "$WORK/counts-last.json" "$WORK/a-counts-backup.json"
+    echo "    A at backup time (Room): $A_BK"
+  }
+  # The secret dialog ("Restore your chats" / "Recovery key"): type the key, tap its Restore.
+  enter_key_and_restore() {
+    wait_for 'text="Recovery key"' 120 || { echo "    no \"Recovery key\" field ($(grep -oE 'text="[^"]+"' "$WORK/ui.xml" | head -8 | tr '\n' ' '))"; return 1; }
+    type_into "Recovery key" "$BK_KEY" || return 1
+    hide_keyboard; tap "!Restore"
+  }
+  # The DocumentsUI picker: the exported file (in Recent, else under Downloads).
+  pick_backup_file() {
+    wait_for "$BK_FILE" 15 || { tap "Show roots" >/dev/null 2>&1 && sleep 1 && tap "Downloads" >/dev/null 2>&1; wait_for "$BK_FILE" 15; } \
+      || { echo "    the picker doesn't show $BK_FILE"; return 1; }
+    tap "$BK_FILE"
+  }
+  reinstall_restore_hook() {
+    [ "$RS_STEP" = yes ] || return 0
+    local t0 lc n line
+    t0="$(A shell date +%s | tr -d '\r').000"
+    step "restore: \"Restore your chats\" after the reinstall's sign-in$([ "$RESTORE_FILE" = 1 ] && echo " (from the exported file)")"
+    wait_for 'text="Restore your chats"' 90 || fail "restore: the reinstalled app shows no \"Restore your chats\" gate after the sign-in (server backup on)"
+    echo "    gate: $(grep -oE 'text="[^"]+ · [^"]+ · [^"]+"' "$WORK/ui.xml" | sed -n 1p)"
+    if [ "$RESTORE_FILE" = 0 ]; then
+      tap "^Restore" || fail "restore: no Restore button on the gate"
+      enter_key_and_restore || fail "restore: the recovery key dialog"
+    else
+      tap "^Skip" && wait_for 'text="Skip restore?"' 10 && tap "!Skip" || fail "restore: could not skip the gate"
+      open_backups || fail "restore: Settings → Manage backups after skipping the gate"
+      tap "Restore from file" || fail "restore: no \"Restore from file\""
+      pick_backup_file || fail "restore: picking $BK_FILE"
+      enter_key_and_restore || fail "restore: the recovery key dialog (file)"
+      wait_for "Restored " 180 || fail "restore: no \"Restored N messages.\" ($(grep -oE 'text="[^"]+"' "$WORK/ui.xml" | head -8 | tr '\n' ' '))"
+      echo "    \"$(grep -oE 'Restored [0-9]+ messages\.' "$WORK/ui.xml" | sed -n 1p)\""
+      tap "!OK" || true; sleep 1
+    fi
+    for _ in $(seq 1 90); do
+      on_chat_list && break
+      grep -qE 'text="(Check the recovery key|Wrong|Encryption isn.t ready|Couldn.t|Restore failed)[^"]*"' "$WORK/ui.xml" \
+        && fail "restore: $(grep -oE 'text="(Check the recovery key|Wrong|Encryption isn.t ready|Couldn.t|Restore failed)[^"]*"' "$WORK/ui.xml" | sed -n 1p)"
+      [ "$RESTORE_FILE" = 1 ] && { A shell input keyevent KEYCODE_BACK; }
+      sleep 2
+    done
+    on_chat_list || fail "restore: the chat list didn't show after the restore ($(grep -oE 'text="[^"]+"' "$WORK/ui.xml" | head -8 | tr '\n' ' '))"
+    lc="$(A logcat -d -T "$t0" 2>/dev/null || true)"
+    line="$(grep -oE 'restore [^ :]+: [0-9]+ imported[^$]*' <<<"$lc" | tail -1 || true)"
+    [ -n "$line" ] || fail "restore: logcat has no \"restore <backup_id>: N imported\""
+    n="$(sed -E 's/.*: ([0-9]+) imported.*/\1/' <<<"$line")"
+    echo "    logcat: $line"
+    sleep 3; A_RS="$(db_snapshot)"; echo "    A after the restore (Room): $A_RS"
+    cp "$WORK/counts-last.json" "$WORK/a-counts-restored.json"
+    local cmp; cmp="$(python3 -I - "$WORK/a-counts-backup.json" "$WORK/a-counts-restored.json" "$GRP_ID" "$PURGED" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1])); a = json.load(open(sys.argv[2])); grp, purged = sys.argv[3], sys.argv[4] == "1"
+lost = [f"{k}:{v}->{a.get(k, 0)}" for k, v in b.items() if a.get(k, 0) < v]
+# 1:1 chats (not the group): nothing can come from the replay once it is purged, so exactly equal.
+diff = [f"{k}:{v}->{a.get(k, 0)}" for k, v in b.items() if purged and grp not in k and a.get(k, 0) != v]
+print("LOST " + " ".join(lost) if lost else ("DIFF " + " ".join(diff) if diff else f"OK {len(b)}"))
+PY
+)"
+    case "$cmp" in
+      LOST*) fail "restore: A lost messages per conversation/kind (backup -> restored): ${cmp#LOST }";;
+      DIFF*) fail "restore: A's 1:1 counts differ from the backup with the replay purged: ${cmp#DIFF }";;
+    esac
+    [ "${n:-0}" -ge 1 ] || fail "restore: logcat says $n imported"
+    echo "    restore: $n imported; A's ${cmp#OK } conversation/kind counts >= the backup's$([ "$PURGED" = 1 ] && echo " (1:1 equal, replay purged)")"
+    if [ "$RESTORE_FILE" = 1 ]; then CHECKS+=" restore_file"; else CHECKS+=" restore"; fi
+  }
   # C's local group-op outbox (state, attempts, last error): why C didn't commit a re-add.
   c_ops() {
     local d="$DEV"; DEV="$SERIAL_B"; rm -f "$WORK"/cops.db*
@@ -954,11 +1125,21 @@ PY
   DMGEN0="$(field "$MLS0" dmgen)"
   if [ "$DM_OFFLINE" = 1 ]; then [ -n "$DMGEN0" ] && [ -n "$(field "$MLS0" dmepoch)" ] || fail "reinstall: the DM A-C has no MLS state ($MLS0)"; fi
   C0="$(c_snapshot "$WORK/c-counts-before.json")"; echo "    C before (Room): $C0"
+  GRP_ID="$(sed -nE 's/.*grp=([^ ]+).*/\1/p' <<<"$MLS0")"
+  if [ "$RS_STEP" = yes ]; then
+    step "backup: A turns on server backup and exports a backup file (before the uninstall)"
+    DEV="$SERIAL"; backup_before_uninstall || fail "backup: server backup / export on A before the uninstall"
+  fi
 
   step "reinstall: stop C's app; uninstall A (data gone), install $NEW_VN with adb, sign in as A"
   DEV="$SERIAL_B"; A shell am force-stop "$PKG"
   DEV="$SERIAL"
   A uninstall "$PKG" >/dev/null || fail "reinstall: adb uninstall failed"
+  if [ "$RS_STEP" = yes ]; then
+    # Only the restore can bring A's messages back: purge A's inbox replay on the TEMP server.
+    pg="$(srv purge_inbox)"; echo "    temp server: A's inbox replay ${pg#upgrade: }"
+    [ "$(field "$pg" left)" = 0 ] && PURGED=1 || echo "    note: the inbox purge didn't take; counts are checked as >= only"
+  fi
   A install "$NEW" >/dev/null || fail "reinstall: adb install of the new APK failed"
   A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
   reverses

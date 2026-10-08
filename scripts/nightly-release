@@ -105,6 +105,12 @@ fi
 # the first v1.21 app) the gate also reinstalls A and requires a rejoin without reset.
 # UPGRADE_NO_REINSTALL=1 skips it (emergency only; say so in the release notes).
 export REINSTALL_CHECK_FROM="${REINSTALL_CHECK_FROM:-20031}"
+# Backup restore in that phase (§22, decision 059): from RESTORE_CHECK_FROM (default 20032 =
+# 0.2.0-nightly.32, the first app with v1.22 backups) A backs up to the server and exports a file
+# before the uninstall, its inbox replay is purged on the temp server, and the reinstalled app must
+# restore every conversation through "Restore your chats" + the recovery key.
+# Off by default until a full upgrade-test PASS with it (then: default 20032 = 0.2.0-nightly.32).
+export RESTORE_CHECK_FROM="${RESTORE_CHECK_FROM:-}"
 echo "==> upgrade test (previous published APK -> v$next)"
 UT_COMMIT="$(git rev-parse HEAD)"
 CAND="$REL/candidate"; mkdir -p "$CAND" "$HOME/risime-logs/upgrade-test"
@@ -170,7 +176,7 @@ if [ "$UT_VIA" = updater ] && [ "$UT_VIA_RES" != updater ]; then
 fi
 age=$(( $(date -u +%s) - $(ut time || echo 0) ))
 [ "$age" -ge 0 ] && [ "$age" -lt 86400 ] || { echo "upgrade test result is older than 24 h; re-run it"; exit 1; }
-echo "==> upgrade test PASS ($(ut old) -> $(ut new) via $UT_VIA_RES on $(ut host)/$(ut device), back step: $(ut back_step), $((age / 60)) min ago)"
+echo "==> upgrade test PASS ($(ut old) -> $(ut new) via $UT_VIA_RES on $(ut host)/$(ut device), back step: $(ut back_step), reinstall: $(ut reinstall), restore: $(ut restore), $((age / 60)) min ago)"
 fi
 
 last="$(git describe --tags --abbrev=0 2>/dev/null || true)"
