@@ -47,6 +47,36 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.35 (live 2026-10-08 ~16:10 UTC, not required): background delivery (P0) + no mandatory lock (decision 064)
+- **Background delivery:**
+  - a call push no longer crashes the app;
+  - the socket closes at screen-off;
+  - no MLS events lost on a cold start (registration failures included);
+  - a direct sync in the FCM window that never blocks a call push;
+  - socket messages notify while the app is in the background;
+  - the `messages_v2` channel keeps the user's settings;
+  - the Notifications health screen;
+  - the server push watchdog (decision 063, ping/pong, 8 s / 4 s).
+- **Decision 064:**
+  - a token vault without user auth, so the background always has a bearer;
+  - a one-time migration prompt for fingerprint installs;
+  - an optional Settings → Privacy → Fingerprint lock (Immediately / 1 min / 30 min, Show content);
+  - no Recents thumbnail while locked;
+  - transient Keystore errors keep the session, with a way out after about 60 s;
+  - sign-out triggers logged, and an Account row on the health screen.
+- **Gate:** all PASS (`84b5ee3`). The new push-device-test step (an OIDC-style session on B) passed
+  every scenario: deep idle, removal from Recents, a message then a call, restricted, and registration
+  failing. The upgrade test passed with restore and reinstall.
+- **Real-phone checks (Harsha):**
+  1. after updating: one "Confirm to finish updating RisiMe" prompt, then never again (also after a
+     reboot);
+  2. with RisiMe killed or locked, messages and calls arrive with names (also look for
+     `grep 'push: .*user=0b1f9c32' ~/risime-logs/server.log`);
+  3. the full-screen ring on a locked phone;
+  4. the Fingerprint lock options;
+  5. the health screen's Account row ("Stays signed in (offline session)", or "Short session" → the
+     Keycloak settings above).
+
 ## v0.2.0-nightly.34 (live 2026-10-08 ~13:40 UTC, not required): call audio routing (P0)
 - **What's in:**
   - the route button is always enabled;
