@@ -1,0 +1,555 @@
+#!/usr/bin/env python3
+"""Writes the encrypted-backup test vectors (PROTOCOL §22.9, v1.22) to stdout, or checks them.
+
+An independent Python reference for contract/v1/backup_vectors.json, written from PROTOCOL §22.2
+and §22.4 only (not from the Rust core). The crypto core's generator (`cargo test -p risime-mls
+backup_vectors_write -- --ignored`) uses the same case list and seeded inputs, so both must
+produce the same JSON value; `--check` also compares the committed file byte for byte.
+
+- Recovery key: R (15 bytes) || the first 20 bits of SHA-256("risime-recovery-v1" || R), as 28
+  Crockford base32 characters (MSB first) in 7 groups of 4; input case-insensitive, white space and
+  "-" ignored, O->0, I/L->1; length != 28 or a foreign character = Malformed, checksum = Typo.
+- Passphrase: NFKC, then leading/trailing Unicode White_Space removed, UTF-8.
+- KEK = Argon2id(password, salt, m=65536 KiB, t=3, p=1, v=0x13, 32); only these parameters.
+- Kw / check = HKDF-SHA256(salt=empty, KEK, "risime-backup-v1 wrap" / "risime-backup-v1 check");
+  AAD_wrap = "risime-backup-v1" || u16 len || user_id || u16 len || kind || bk_id;
+  bk_id = SHA-256("risime-backup-v1 bk-id" || BK)[:8].
+- Kd = HKDF(BK, "risime-backup-v1 dek-wrap"); AAD_dek = "risime-backup-v1 dek" || backup_id (16
+  raw) || u16 len || user_id; Ks = HKDF(DEK, "risime-backup-v1 stream").
+- File: "RISIMEBK" || 0x01 || u32 header_len || header || chunks; chunk i (64 KiB of P) under Ks,
+  nonce 0x00*7 || u32 i || flag, AAD "risime-backup-v1" || SHA-256(prefix || header) || u32 i ||
+  flag, flag 1 on the last chunk only; P = D || zeros to Padme(|D|).
+
+Needs python3-cryptography (system package) and argon2-cffi, e.g. in a venv:
+    python3 -m venv --system-site-packages /tmp/bkv && /tmp/bkv/bin/pip install argon2-cffi
+    /tmp/bkv/bin/python scripts/gen-backup-vectors --check
+
+Usage: scripts/gen-backup-vectors > contract/v1/backup_vectors.json
+       scripts/gen-backup-vectors --check     # verify every case and compare with the committed file
+"""
+import base64
+import hashlib
+import json
+import os
+import sys
+import unicodedata
+import uuid
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+try:
+    from argon2.low_level import Type, hash_secret_raw
+except ImportError:
+    sys.exit("gen-backup-vectors needs argon2-cffi (see the docstring for a venv)")
+
+LABEL = b"risime-backup-v1"
+CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+CHUNK, TAG = 65536, 16
+CCHUNK = CHUNK + TAG
+# Unicode White_Space (PropList.txt); Python's str.strip() uses a different set.
+WHITE_SPACE = set(map(chr, [*range(0x09, 0x0E), 0x20, 0x85, 0xA0, 0x1680, *range(0x2000, 0x200B),
+                            0x2028, 0x2029, 0x202F, 0x205F, 0x3000]))
+
+USER = "7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3"
+USER2 = "0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e"
+BACKUP_B = "9a3f6c2d-7e1b-4c58-a0d4-3b2e1f0c9d87"
+CREATED = "2026-10-08T02:00:00.000Z"
+APP = "0.3.0-nightly.31"
+PASS = "  Ｃｏｒｒｅｃｔ ﬁsh ｈｏｒｓｅ ｂａｔｔｅｒｙ ①　"
+WRONG_PASS = "Correct fish horse battery 2"
+STREAMS = [("stream_d1", 1, "6f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"),
+           ("stream_d65536", 65536, "2b8e4c1a-5d3f-4e6a-9b7c-8d1e2f3a4b5c"),
+           ("stream_d65537", 65537, "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f"),
+           ("stream_d200000", 200000, "8f7e6d5c-4b3a-4291-a0b1-c2d3e4f5a6b7")]
+
+
+class Fail(Exception):
+    """An expected failure: args[0] is the vectors' error name."""
+
+
+# ---------------------------------------------------------------- primitives
+
+def sha256(*parts):
+    return hashlib.sha256(b"".join(parts)).digest()
+
+
+def seeded(label, n):
+    out, ctr = b"", 0
+    while len(out) < n:
+        out += sha256(label.encode(), ctr.to_bytes(8, "big"))
+        ctr += 1
+    return out[:n]
+
+
+def hkdf(ikm, info, n):
+    return HKDF(algorithm=hashes.SHA256(), length=n, salt=None, info=info).derive(ikm)
+
+
+def b64(b):
+    return base64.b64encode(b).decode()
+
+
+def padme(n):
+    if n < 2:
+        return n
+    e = n.bit_length() - 1
+    s = e.bit_length()
+    mask = (1 << (e - s)) - 1
+    return (n + mask) & ~mask
+
+
+def u16(b):
+    return len(b).to_bytes(2, "big") + b
+
+
+def bk_id(bk):
+    return sha256(b"risime-backup-v1 bk-id", bk)[:8]
+
+
+def checksum(r):
+    h = sha256(b"risime-recovery-v1", r)
+    return int.from_bytes(h[:3], "big") >> 4
+
+
+def display(r):
+    v = (int.from_bytes(r, "big") << 20) | checksum(r)
+    s = "".join(CROCKFORD[(v >> (5 * (27 - i))) & 31] for i in range(28))
+    return "-".join(s[i:i + 4] for i in range(0, 28, 4))
+
+
+def parse_recovery(text):
+    sym = []
+    for c in text:
+        if c == "-" or c in WHITE_SPACE:
+            continue
+        u = c.upper() if c.isascii() else c
+        u = {"O": "0", "I": "1", "L": "1"}.get(u, u)
+        if u not in CROCKFORD:
+            raise Fail("Malformed")
+        sym.append(CROCKFORD.index(u))
+    if len(sym) != 28:
+        raise Fail("Malformed")
+    v = 0
+    for x in sym:
+        v = (v << 5) | x
+    r = (v >> 20).to_bytes(15, "big")
+    if v & 0xFFFFF != checksum(r):
+        raise Fail("Typo")
+    return r
+
+
+def passphrase_bytes(p):
+    n = unicodedata.normalize("NFKC", p)
+    i, j = 0, len(n)
+    while i < j and n[i] in WHITE_SPACE:
+        i += 1
+    while j > i and n[j - 1] in WHITE_SPACE:
+        j -= 1
+    if i == j:
+        raise Fail("Malformed")
+    return n[i:j].encode()
+
+
+def kek(password, salt):
+    return hash_secret_raw(password, salt, time_cost=3, memory_cost=65536, parallelism=1,
+                           hash_len=32, type=Type.ID, version=19)
+
+
+def wrap_aad(user_id, kind, bkid):
+    return LABEL + u16(user_id.encode()) + u16(kind.encode()) + bkid
+
+
+def seal_wrap(k, user_id, kind, bk, nonce, aad_bk_id=None):
+    aad = wrap_aad(user_id, kind, bk_id(bk) if aad_bk_id is None else aad_bk_id)
+    return (AESGCM(hkdf(k, b"risime-backup-v1 wrap", 32)).encrypt(nonce, bk, aad),
+            hkdf(k, b"risime-backup-v1 check", 16))
+
+
+def dek_aad(backup_id, user_id):
+    return b"risime-backup-v1 dek" + uuid.UUID(backup_id).bytes + u16(user_id.encode())
+
+
+def seal_dek(bk, backup_id, user_id, dek, nonce):
+    return AESGCM(hkdf(bk, b"risime-backup-v1 dek-wrap", 32)).encrypt(
+        nonce, dek, dek_aad(backup_id, user_id))
+
+
+def chunk_nonce(i, last):
+    return b"\x00" * 7 + i.to_bytes(4, "big") + bytes([last])
+
+
+def chunk_aad(hh, i, last):
+    return LABEL + hh + i.to_bytes(4, "big") + bytes([last])
+
+
+def seal_chunk(dek, hh, i, last, p):
+    return AESGCM(hkdf(dek, b"risime-backup-v1 stream", 32)).encrypt(
+        chunk_nonce(i, last), p, chunk_aad(hh, i, last))
+
+
+def prefix(header):
+    return b"RISIMEBK\x01" + len(header).to_bytes(4, "big")
+
+
+def seal_file(dek, header, p):
+    pre = prefix(header) + header
+    hh = sha256(pre)
+    chunks = [p[o:o + CHUNK] for o in range(0, len(p), CHUNK)]
+    return pre + b"".join(seal_chunk(dek, hh, i, int(i == len(chunks) - 1), c)
+                          for i, c in enumerate(chunks))
+
+
+def compact(v):
+    return json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+# ---------------------------------------------------------------- the case list
+
+def display_sub(d):
+    k0 = k1 = 0
+    out = []
+    for c in d:
+        if c == "0":
+            out.append("Oo"[k0 % 2])
+            k0 += 1
+        elif c == "1":
+            out.append("IiLl"[k1 % 4])
+            k1 += 1
+        else:
+            out.append(c)
+    return "".join(out)
+
+
+def next_symbol(c):
+    return CROCKFORD[(CROCKFORD.index(c) + 1) % 32]
+
+
+def replace_at(s, i, c):
+    return s[:i] + c + s[i + 1:]
+
+
+def neg(name, base, change, expect, why):
+    return {"name": name, "base": base, "change": change, "expect": expect, "why": why}
+
+
+def build():
+    r1 = seeded("risime-backup-vector R1", 15)
+    rc = bytes.fromhex("0040100401" * 3)
+    d1, dc = display(r1), display(rc)
+
+    def rk(name, r, inp):
+        return {"name": name, "bytes": r.hex(), "display": display(r), "input": inp,
+                "expect": "ok"}
+
+    recovery = [rk("rk_round_trip", r1, d1),
+                rk("rk_lowercase_spaces", r1, d1.lower().replace("-", " ")),
+                rk("rk_no_separators", r1, d1.replace("-", "")),
+                rk("rk_confusables", rc, display_sub(dc))]
+
+    bk = seeded("risime-backup-vector bk", 32)
+    keks, argon = {}, []
+    for name, kind, secret, salt_label in [
+            ("argon2_recovery_key", "recovery_key", r1.hex(), "recovery_key"),
+            ("argon2_passphrase_nfkc", "passphrase", PASS, "passphrase"),
+            ("argon2_passphrase_wrong", "passphrase", WRONG_PASS, "passphrase")]:
+        salt = seeded(f"risime-backup-vector salt {salt_label}", 16)
+        password = r1 if kind == "recovery_key" else passphrase_bytes(secret)
+        keks[name] = kek(password, salt)
+        argon.append({"name": name, "kind": kind, "alg": "argon2id", "secret": secret,
+                      "password": password.hex(), "salt": salt.hex(), "m": 65536, "t": 3,
+                      "p": 1, "kek": keks[name].hex()})
+
+    bkid = bk_id(bk)
+    wraps, rec_wraps = [], []
+    for kind, argon_name, salt_label in [("recovery_key", "argon2_recovery_key", "recovery_key"),
+                                         ("passphrase", "argon2_passphrase_nfkc", "passphrase")]:
+        k = keks[argon_name]
+        nonce = seeded(f"risime-backup-vector wrap-nonce {kind}", 12)
+        wrapped, check = seal_wrap(k, USER, kind, bk, nonce)
+        wraps.append({"name": f"wrap_{kind}", "user_id": USER, "kind": kind, "kek": k.hex(),
+                      "bk": bk.hex(), "bk_id": bkid.hex(), "nonce": nonce.hex(),
+                      "aad": wrap_aad(USER, kind, bkid).hex(), "check": check.hex(),
+                      "wrapped": wrapped.hex()})
+        salt = seeded(f"risime-backup-vector salt {salt_label}", 16)
+        rec_wraps.append({"kind": kind, "kdf": {"alg": "argon2id", "m": 65536, "t": 3, "p": 1,
+                                                "salt": b64(salt)},
+                          "nonce": b64(nonce), "wrapped": b64(wrapped), "check": b64(check)})
+    record = {"v": 1, "bk_id": b64(bkid), "wraps": rec_wraps}
+
+    dek_a = seeded("risime-backup-vector dek dek_a", 32)
+    dek_nonce = seeded("risime-backup-vector dek-nonce dek_a", 12)
+    dek_bid = STREAMS[0][2]
+    deks = [{"name": "dek_a", "bk": bk.hex(), "backup_id": dek_bid, "user_id": USER,
+             "nonce": dek_nonce.hex(), "aad": dek_aad(dek_bid, USER).hex(), "dek": dek_a.hex(),
+             "wrapped": seal_dek(bk, dek_bid, USER, dek_a, dek_nonce).hex()}]
+
+    ss, streams = {}, []
+    for name, d_len, bid in STREAMS:
+        dek = seeded(f"risime-backup-vector dek {name}", 32)
+        nonce = seeded(f"risime-backup-vector dek-nonce {name}", 12)
+        header = compact({
+            "v": 1, "schema": 1, "backup_id": bid, "user_id": USER, "created_at": CREATED,
+            "app_version": APP, "bk_id": b64(bkid),
+            "dek": {"alg": "A256GCM", "nonce": b64(nonce),
+                    "wrapped": b64(seal_dek(bk, bid, USER, dek, nonce))},
+            "stream": {"alg": "A256GCM-STREAM64K", "compression": "deflate", "pad": "padme"},
+            "key": record if name == "stream_d1" else None})
+        p = seeded(f"risime-backup-vector d {name}", d_len)
+        p += b"\x00" * (padme(d_len) - d_len)
+        file = seal_file(dek, header, p)
+        pl = 13 + len(header)
+        ss[name] = (dek, header, p, file, d_len)
+        streams.append({"name": name, "dek": dek.hex(), "prefix_and_header": file[:pl].hex(),
+                        "header_hash": sha256(file[:pl]).hex(), "d_len": d_len,
+                        "padded": p.hex(), "file": file.hex()})
+
+    negative = [
+        neg("rk_typo_one_char", "rk_round_trip", {"input": replace_at(d1, 5, next_symbol(d1[5]))},
+            "Typo", "one character of R changed: the checksum catches it"),
+        neg("rk_typo_checksum", "rk_round_trip",
+            {"input": replace_at(d1, 33, next_symbol(d1[33]))}, "Typo",
+            "one checksum character changed"),
+        neg("rk_27_chars", "rk_round_trip", {"input": d1[:-1]}, "Malformed", "27 characters"),
+        neg("rk_29_chars", "rk_round_trip", {"input": d1 + "0"}, "Malformed", "29 characters"),
+        neg("rk_invalid_char", "rk_round_trip", {"input": "U" + d1[1:]}, "Malformed",
+            "U is not in the Crockford alphabet"),
+        neg("argon2_m_32768", "argon2_recovery_key", {"m": 32768}, "Malformed",
+            "v1 accepts only m = 65536 (never weaker but accepted)"),
+        neg("argon2_t_2", "argon2_recovery_key", {"t": 2}, "Malformed", "v1 accepts only t = 3"),
+        neg("argon2_p_4", "argon2_recovery_key", {"p": 4}, "Malformed", "v1 accepts only p = 1"),
+        neg("argon2_alg_argon2i", "argon2_recovery_key", {"alg": "argon2i"}, "Malformed",
+            "v1 accepts only argon2id"),
+        neg("wrap_wrong_passphrase", "wrap_passphrase",
+            {"kek": keks["argon2_passphrase_wrong"].hex()}, "WrongKey",
+            "the KEK of another passphrase (argon2_passphrase_wrong): the key check fails"),
+        neg("wrap_other_user_id", "wrap_recovery_key", {"user_id": USER2}, "Integrity",
+            "opened with another user_id in the AAD"),
+        neg("wrap_other_kind", "wrap_recovery_key", {"kind": "passphrase"}, "Integrity",
+            "opened with the other kind in the AAD"),
+    ]
+    other = seeded("risime-backup-vector other-bk-id", 8)
+    nonce = seeded("risime-backup-vector wrap-nonce recovery_key", 12)
+    wrapped, _ = seal_wrap(keks["argon2_recovery_key"], USER, "recovery_key", bk, nonce, other)
+    negative.append(neg("wrap_bk_id_mismatch", "wrap_recovery_key",
+                        {"bk_id": other.hex(), "aad": wrap_aad(USER, "recovery_key", other).hex(),
+                         "wrapped": wrapped.hex()}, "Integrity",
+                        "a wrap made with another bk_id in its AAD opens, but bk_id doesn't "
+                        "match the BK"))
+
+    def flip(h):
+        b = bytearray(bytes.fromhex(h))
+        b[0] ^= 1
+        return b.hex()
+
+    negative += [
+        neg("wrap_tampered_wrapped", "wrap_recovery_key", {"wrapped": flip(wraps[0]["wrapped"])},
+            "Integrity", "a flipped bit in wrapped"),
+        neg("wrap_tampered_check", "wrap_recovery_key", {"check": flip(wraps[0]["check"])},
+            "WrongKey", "a flipped bit in check"),
+        neg("dek_other_backup_id", "dek_a", {"backup_id": BACKUP_B}, "Integrity",
+            "the DEK wrap opened with another backup_id"),
+        neg("dek_other_user_id", "dek_a", {"user_id": USER2}, "Integrity",
+            "the DEK wrap opened with another user_id"),
+    ]
+
+    dek, header, p, file, d_len = ss["stream_d65537"]
+    pl = 13 + len(header)
+    pre, c0, c1 = file[:pl], file[pl:pl + CCHUNK], file[pl + CCHUNK:]
+    hh = sha256(pre)
+    o = ss["stream_d200000"]
+    opl = 13 + len(o[1])
+    other_c0 = o[3][opl:opl + CCHUNK]
+    flagged = seal_chunk(dek, hh, 0, 1, p[:CHUNK])
+    bad_p = bytearray(p)
+    bad_p[d_len] = 1
+    bad_p = bytes(bad_p)
+    bad_pad_file = seal_file(dek, header, bad_p)
+    f1, h1 = ss["stream_d1"][3], ss["stream_d1"][1]
+    i = f1.index(b"nightly.31")
+    header_changed = f1[:i + 9] + b"2" + f1[i + 10:]
+    full = ss["stream_d65536"][3]
+    negative += [
+        neg("stream_truncated_at_chunk_boundary", "stream_d65537",
+            {"file": file[:pl + CCHUNK].hex()}, "Integrity",
+            "the last chunk removed: chunk 0 doesn't open as the final chunk"),
+        neg("stream_chunks_swapped", "stream_d65537", {"file": (pre + c1 + c0).hex()},
+            "Integrity", "chunks 0 and 1 swapped"),
+        neg("stream_chunk_from_other_backup", "stream_d65537",
+            {"file": (pre + other_c0 + c1).hex()}, "Integrity",
+            "chunk 0 replaced by chunk 0 of stream_d200000"),
+        neg("stream_final_flag_on_non_final_chunk", "stream_d65537",
+            {"file": (pre + flagged + c1).hex()}, "Integrity", "chunk 0 sealed with the final flag"),
+        neg("stream_header_byte_changed", "stream_d1", {"file": header_changed.hex()}, "Integrity",
+            "app_version 0.3.0-nightly.31 -> .32 in the header: header_hash changes"),
+        neg("stream_bytes_appended", "stream_d65536", {"file": (full + b"\x00" * 32).hex()},
+            "Integrity", "32 bytes after the last chunk (read as a 32-byte final chunk)"),
+        neg("stream_last_chunk_16_bytes", "stream_d65536", {"file": (full + b"\x00" * 16).hex()},
+            "Format", "16 bytes after the last chunk: a last chunk shorter than 17 bytes"),
+        neg("stream_header_len_past_end", "stream_d1",
+            {"file": (f1[:9] + len(f1).to_bytes(4, "big") + f1[13:]).hex()}, "Format",
+            "header_len = the file length"),
+        neg("stream_wrong_magic", "stream_d1", {"file": (b"RISIMEBX" + f1[8:]).hex()}, "Format",
+            "magic RISIMEBX"),
+        neg("stream_wrong_version", "stream_d1", {"file": (f1[:8] + b"\x02" + f1[9:]).hex()},
+            "Format", "format version 2"),
+        neg("stream_no_chunks", "stream_d1", {"file": f1[:13 + len(h1)].hex()}, "Format",
+            "the header and no chunk"),
+        neg("stream_nonzero_pad_byte", "stream_d65537",
+            {"file": bad_pad_file.hex(), "padded": bad_p.hex()}, "Format",
+            "the first padding byte is 0x01 (validly encrypted)"),
+        neg("stream_wrong_dek", "stream_d65537",
+            {"dek": seeded("risime-backup-vector dek wrong", 32).hex()}, "Integrity", "another DEK"),
+    ]
+
+    return {
+        "v": 1,
+        "comment": "Encrypted backups (contract v1.22 §22.2, §22.4, §22.9). Generated by "
+                   "`cargo test -p risime-mls backup_vectors_write -- --ignored` and, independently, "
+                   "by scripts/gen-backup-vectors (Python cryptography + argon2-cffi); the two are "
+                   "byte-identical. All binary fields are lowercase hex. recovery_key: parse input "
+                   "-> bytes and display. argon2: check alg/m/t/p (only argon2id 65536/3/1), password "
+                   "= R (hex secret) or NFKC + trim of the passphrase, kek = Argon2id v0x13 L 32. "
+                   "wrap: key check (WrongKey), AES-256-GCM open with AAD_wrap(user_id, kind, bk_id) "
+                   "(Integrity), bk_id of the opened BK (Integrity). dek: open with "
+                   "AAD_dek(backup_id, user_id). stream: prefix (Format), chunk layout (Format), "
+                   "every chunk (Integrity), then |P| = Padme(d_len) and zero padding (Format); D is "
+                   "seeded bytes, not DEFLATE (d_len is given, so no inflate is needed). The stream "
+                   "sizes are |D| = 1, 65536, 65537, 200000 (|P| = 1, 65536, 67584, 200704). "
+                   "negative: copy the base case, replace the fields in change, expect that error.",
+        "recovery_key": recovery,
+        "argon2": argon,
+        "wrap": wraps,
+        "dek": deks,
+        "stream": streams,
+        "negative": negative,
+    }
+
+
+def render(doc):
+    return json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+# ---------------------------------------------------------------- verifier (for --check)
+
+def op(array, c):
+    """The case's operation; returns its outputs, or raises Fail(error name)."""
+    if array == "recovery_key":
+        r = parse_recovery(c["input"])
+        return {"bytes": r.hex(), "display": display(r)}
+    if array == "argon2":
+        if (c.get("alg", "argon2id"), c["m"], c["t"], c["p"]) != ("argon2id", 65536, 3, 1):
+            raise Fail("Malformed")
+        if c["kind"] == "recovery_key":
+            password = bytes.fromhex(c["secret"])
+            if len(password) != 15:
+                raise Fail("Malformed")
+        elif c["kind"] == "passphrase":
+            password = passphrase_bytes(c["secret"])
+        else:
+            raise Fail("Malformed")
+        return {"password": password.hex(), "kek": kek(password, bytes.fromhex(c["salt"])).hex()}
+    if array == "wrap":
+        k = bytes.fromhex(c["kek"])
+        if hkdf(k, b"risime-backup-v1 check", 16) != bytes.fromhex(c["check"]):
+            raise Fail("WrongKey")
+        bkid = bytes.fromhex(c["bk_id"])
+        aad = wrap_aad(c["user_id"], c["kind"], bkid)
+        try:
+            bk = AESGCM(hkdf(k, b"risime-backup-v1 wrap", 32)).decrypt(
+                bytes.fromhex(c["nonce"]), bytes.fromhex(c["wrapped"]), aad)
+        except InvalidTag:
+            raise Fail("Integrity")
+        if bk_id(bk) != bkid:
+            raise Fail("Integrity")
+        wrapped, check = seal_wrap(k, c["user_id"], c["kind"], bk, bytes.fromhex(c["nonce"]))
+        return {"bk": bk.hex(), "aad": aad.hex(), "wrapped": wrapped.hex(), "check": check.hex()}
+    if array == "dek":
+        bk = bytes.fromhex(c["bk"])
+        aad = dek_aad(c["backup_id"], c["user_id"])
+        try:
+            dek = AESGCM(hkdf(bk, b"risime-backup-v1 dek-wrap", 32)).decrypt(
+                bytes.fromhex(c["nonce"]), bytes.fromhex(c["wrapped"]), aad)
+        except InvalidTag:
+            raise Fail("Integrity")
+        return {"dek": dek.hex(), "aad": aad.hex(),
+                "wrapped": seal_dek(bk, c["backup_id"], c["user_id"], dek,
+                                    bytes.fromhex(c["nonce"])).hex()}
+    if array == "stream":
+        f = bytes.fromhex(c["file"])
+        if len(f) < 13 or f[:8] != b"RISIMEBK" or f[8] != 1:
+            raise Fail("Format")
+        hl = int.from_bytes(f[9:13], "big")
+        if hl > 65536 or 13 + hl > len(f):
+            raise Fail("Format")
+        pl = 13 + hl
+        hh = sha256(f[:pl])
+        payload = f[pl:]
+        n = -(-len(payload) // CCHUNK)
+        if n == 0 or len(payload) - (n - 1) * CCHUNK < 17:
+            raise Fail("Format")
+        ks = AESGCM(hkdf(bytes.fromhex(c["dek"]), b"risime-backup-v1 stream", 32))
+        p = b""
+        for i in range(n):
+            last = int(i == n - 1)
+            try:
+                p += ks.decrypt(chunk_nonce(i, last), payload[i * CCHUNK:(i + 1) * CCHUNK],
+                                chunk_aad(hh, i, last))
+            except InvalidTag:
+                raise Fail("Integrity")
+        d_len = c["d_len"]
+        if d_len == 0 or padme(d_len) != len(p) or any(p[d_len:]):
+            raise Fail("Format")
+        return {"padded": p.hex(), "header_hash": hh.hex(), "prefix_and_header": f[:pl].hex()}
+    raise AssertionError(array)
+
+
+ARRAYS = ["recovery_key", "argon2", "wrap", "dek", "stream"]
+
+
+def verify(doc):
+    assert doc["v"] == 1
+    n = 0
+    for array in ARRAYS:
+        for c in doc[array]:
+            assert c.get("expect", "ok") == "ok", c["name"]
+            for k, v in op(array, c).items():
+                assert c[k] == v, (c["name"], k)
+            n += 1
+    bases = {c["name"]: (a, c) for a in ARRAYS for c in doc[a]}
+    for g in doc["negative"]:
+        array, base = bases[g["base"]]
+        assert g["change"], g["name"]
+        c = dict(base, **g["change"])
+        try:
+            op(array, c)
+        except Fail as e:
+            assert e.args[0] == g["expect"], (g["name"], e.args[0], g["expect"])
+        else:
+            raise AssertionError(f"{g['name']} passed, expected {g['expect']}")
+        n += 1
+    return n
+
+
+def main():
+    text = render(build())
+    if sys.argv[1:] == ["--check"]:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "contract", "v1",
+                            "backup_vectors.json")
+        with open(path, encoding="utf-8") as f:
+            committed = f.read()
+        n = verify(json.loads(committed))
+        if committed != text:
+            sys.exit("contract/v1/backup_vectors.json differs from scripts/gen-backup-vectors output")
+        print(f"ok: {n} cases verified, file byte-identical")
+        return
+    if sys.argv[1:]:
+        sys.exit("usage: gen-backup-vectors [--check]")
+    verify(json.loads(text))
+    sys.stdout.write(text)
+
+
+if __name__ == "__main__":
+    main()
