@@ -47,6 +47,24 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.34 (live 2026-10-08 ~13:40 UTC, not required): call audio routing (P0)
+- **What's in:**
+  - the route button is always enabled;
+  - Phone↔Speaker on a tap, or a picker when Bluetooth or a headset is connected;
+  - video calls start on the speaker, and voice→video moves to the speaker;
+  - Bluetooth comes first, and when it goes away, video falls back to the speaker and voice to the
+    earpiece;
+  - external route picks are respected.
+  Commits `1a40df7` + `d27c07c`, which hold the review fixes: the SCO stop, the per-call clear, a
+  verified AudioManager route, the no-Telecom path and single-lane threading.
+- **Gate:** all PASS (from `d27c07c`). call-device-test with the route steps: CALLTEST OK.
+- **Real-phone checks (Harsha):**
+  - a voice call: tap Phone↔Speaker;
+  - a video call starts on the speaker;
+  - BT buds connecting mid-call take the route;
+  - switching from BT to Phone in the system output switcher stays on Phone;
+  - on Android 8–11 with BT, music plays normally after a call.
+
 ### HOLD (2026-10-08 ~13:30 UTC): don't release main past `d27c07c` until the background-delivery review fixes land
 - **The blocker:** the review of `55e0a3a`/`c49647d` found that MLS events can still be lost, or the
   whole inbox can stall, when the device registration fails on a push-started cold start. That code
