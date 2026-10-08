@@ -143,7 +143,16 @@ class FileLockedChatsStore(private val file: File, private val key: VaultKey) : 
  * [folderOpen] is true only between a successful fingerprint/screen-lock confirmation and leaving
  * the folder or the app going to the background.
  */
-class LockedChats(private val store: LockedChatsStore, private val log: (String) -> Unit = {}) {
+class LockedChats(
+    private val store: LockedChatsStore,
+    private val log: (String) -> Unit = {},
+    /**
+     * v1.24 §24: the chat a conversation belongs to (an Official conversation → its chat's Private id;
+     * every other id is its own chat); null while that isn't known yet (then everything is redacted).
+     * A locked chat locks both its tabs.
+     */
+    private val chatOf: (String) -> String? = { it },
+) {
     private val mutex = Mutex()
     private var data = LockedChatsData()
 
@@ -186,14 +195,40 @@ class LockedChats(private val store: LockedChatsStore, private val log: (String)
      */
     fun redactBlocking(conversationId: String): Boolean {
         if (_ids.value == null) runBlocking { load() }
-        return _ids.value?.contains(conversationId.lowercase()) ?: true
+        val chat = chatOf(conversationId)?.lowercase() ?: return true
+        return _ids.value?.contains(chat) ?: true
     }
 
-    suspend fun lock(conversationId: String): Boolean =
-        change { it.copy(ids = it.ids.filterNot { x -> x.equals(conversationId, true) } + conversationId) }
+    /** Locked or not (null: not known yet). Any tab's conversation id answers for its whole chat. */
+    fun isLocked(conversationId: String): Boolean? {
+        val chat = chatOf(conversationId)?.lowercase() ?: return null
+        return _ids.value?.contains(chat)
+    }
 
-    suspend fun unlock(conversationId: String): Boolean =
-        change { it.copy(ids = it.ids.filterNot { x -> x.equals(conversationId, true) }) }
+    suspend fun lock(conversationId: String): Boolean {
+        val chat = chatOf(conversationId) ?: conversationId
+        return change { it.copy(ids = it.ids.filterNot { x -> x.equals(chat, true) } + chat) }
+    }
+
+    suspend fun unlock(conversationId: String): Boolean {
+        val chat = chatOf(conversationId) ?: conversationId
+        return change { it.copy(ids = it.ids.filterNot { x -> x.equals(chat, true) || chatOf(x)?.equals(chat, true) == true }) }
+    }
+
+    /**
+     * v1.24 migration of the stored set to chat ids (once the chat-tab rows are known): an id that is a
+     * tab of another chat is replaced by that chat's id, duplicates go. Every id stored before v1.24 is a
+     * conversation id that is its own chat (`chat_id = conversation_id`), so it stays as it is. Nothing is
+     * unlocked by this. @return true when the stored set changed.
+     */
+    suspend fun migrateToChatIds(resolve: (String) -> String = { chatOf(it) ?: it }): Boolean {
+        load()
+        val before = mutex.withLock { data.ids }
+        val after = before.map { resolve(it) }.distinctBy { it.lowercase() }
+        if (after == before) return false
+        log("RisiMe lock: locked chats moved to chat ids (${before.size} → ${after.size})")
+        return change { it.copy(ids = it.ids.map(resolve).distinctBy { x -> x.lowercase() }) }
+    }
 
     suspend fun setSecretCode(code: String): Boolean {
         if (!SecretCode.valid(code)) return false

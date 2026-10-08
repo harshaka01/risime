@@ -190,17 +190,23 @@ private fun MainNav(c: AppContainer, meId: String) {
         }
         // A conversation id (dm:/grp:) or a DM peer's user id (older notification intents, search).
         composable("chat/{target}") { entry ->
-            val conv = lk.codegen.risime.net.conversationFor(meId, entry.arguments?.getString("target") ?: return@composable)
+            val target = lk.codegen.risime.net.conversationFor(meId, entry.arguments?.getString("target") ?: return@composable)
+            // §24: a chat is its Private (anchor) id; an Official conversation id opens its chat on the Official tab.
+            val tabRows by c.chatTabs.rows.collectAsState()
+            val conv = lk.codegen.risime.data.tabs.chatIdOf(target.lowercase(), tabRows).let { if (it.equals(target, true)) target else it }
+            val openedOnOfficial = !conv.equals(target, true)
+            val tabsOn by c.chatTabs.uiOn.collectAsState()
             val lockedIds by c.lockedChats.ids.collectAsState()
             val folderOpen by c.lockedChats.folderOpen.collectAsState()
-            val isLocked = lockedIds?.contains(conv.lowercase()) ?: true
+            // Locked chats lock the whole chat (both tabs): by chat id.
+            val isLocked = (if (tabRows == null) null else lockedIds?.contains(conv.lowercase())) ?: true
             val gate = lk.codegen.risime.ui.lock.rememberLockGate()
             // A locked chat opens only after the confirmation, whichever screen sent the user here
             // (the folder has already confirmed; a notification, call record or deep link has not).
             if (isLocked && !folderOpen) {
                 lk.codegen.risime.ui.lock.LockedChatGate(
                     gate, onUnlock = { c.lockedChats.openFolder() }, onBack = { nav.popBackStack() },
-                    loading = lockedIds == null,
+                    loading = lockedIds == null || tabRows == null,
                 )
                 return@composable
             }
@@ -215,17 +221,43 @@ private fun MainNav(c: AppContainer, meId: String) {
                 }
             }
             lk.codegen.risime.ui.lock.LockGateDialog(gate)
-            if (lk.codegen.risime.net.isGroupConversation(conv)) {
-                lk.codegen.risime.ui.group.GroupChatScreen(
-                    viewModel(key = conv) { lk.codegen.risime.ui.group.GroupChatViewModel(c, meId, conv) }, meId,
-                    onBack = { nav.popBackStack() },
-                    onInfo = { nav.navigate("group_info/${android.net.Uri.encode(conv)}") { launchSingleTop = true } },
-                    lock = lockControl,
-                )
-                return@composable
-            }
-            val peer = lk.codegen.risime.net.dmPeer(conv, meId) ?: return@composable
-            ChatScreen(viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() }, lock = lockControl)
+            val groupInfo = { nav.navigate("group_info/${android.net.Uri.encode(conv)}") { launchSingleTop = true }; Unit }
+            // §24.9: with tabs off (server switch or capability) this is exactly the v1.23 screen.
+            lk.codegen.risime.ui.tabs.TabbedChat(
+                tabsOn = tabsOn,
+                vm = {
+                    viewModel(key = "tabs:$conv") {
+                        lk.codegen.risime.ui.tabs.ChatTabsViewModel(c, meId, conv, if (openedOnOfficial) lk.codegen.risime.data.tabs.Tab.OFFICIAL else null)
+                    }
+                },
+                onBack = { nav.popBackStack() },
+                privateScreen = { tabBar ->
+                    if (lk.codegen.risime.net.isGroupConversation(conv)) {
+                        lk.codegen.risime.ui.group.GroupChatScreen(
+                            viewModel(key = conv) { lk.codegen.risime.ui.group.GroupChatViewModel(c, meId, conv) }, meId,
+                            onBack = { nav.popBackStack() }, onInfo = groupInfo, lock = lockControl, tabBar = tabBar,
+                        )
+                    } else {
+                        lk.codegen.risime.net.dmPeer(conv, meId)?.let { peer ->
+                            ChatScreen(viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() }, lock = lockControl, tabBar = tabBar)
+                        }
+                    }
+                },
+                officialScreen = { official, readOnly, tabBar ->
+                    val dmChat = !lk.codegen.risime.net.isGroupConversation(conv)
+                    val peerName = if (dmChat) viewModel<lk.codegen.risime.ui.tabs.ChatTabsViewModel>(key = "tabs:$conv").title.collectAsState().value else null
+                    lk.codegen.risime.ui.group.GroupChatScreen(
+                        viewModel(key = official) { lk.codegen.risime.ui.group.GroupChatViewModel(c, meId, official) }, meId,
+                        onBack = { nav.popBackStack() },
+                        // Chat info is the chat's (the Private group's); a 1:1 Official has no member management (§24.1 dm_chat).
+                        onInfo = if (dmChat) ({}) else groupInfo,
+                        lock = lockControl, tabBar = tabBar,
+                        titleOverride = peerName,
+                        readOnlyReason = if (readOnly) lk.codegen.risime.ui.tabs.OFFICIAL_HISTORY_LABEL else null,
+                        composerHint = lk.codegen.risime.ui.tabs.RISI_LISTENING,
+                    )
+                },
+            )
         }
         composable("group_new") {
             lk.codegen.risime.ui.group.CreateGroupScreen(

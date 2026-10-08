@@ -73,7 +73,11 @@ class CreateGroupViewModel(private val c: AppContainer) : ViewModel() {
             val id = c.groupStore.queueLocal(null, GroupOpType.CREATE, payload, clientGroupId = UUID.randomUUID().toString())
             val done = c.db.groupOps().observe(id).filterNotNull().first { it.state != GroupOpType.QUEUED || it.conversationId != null && it.attempts > 2 }
             when (done.state) {
-                GroupOpType.DONE -> created.value = done.conversationId
+                GroupOpType.DONE -> {
+                    // §24.2: a new group gets its Official conversation at once (tabs on only).
+                    done.conversationId?.let { c.startOfficialForNewGroup(it) }
+                    created.value = done.conversationId
+                }
                 GroupOpType.FAILED -> _ui.update { it.copy(busy = false, error = groupOpErrorText(done.lastError)) }
                 // Still retrying in the background (offline): open it; it shows "Creating…" until it lands.
                 else -> created.value = done.conversationId

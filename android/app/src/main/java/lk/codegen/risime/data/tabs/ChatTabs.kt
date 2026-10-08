@@ -140,6 +140,26 @@ class ChatTabs(
      */
     val pendingOfficial: StateFlow<Map<String, String>> = _hints.asStateFlow()
 
+    private val _starting = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Chats whose `POST …/official` was accepted here and whose Official conversation isn't readable yet ("Starting Official…"). */
+    val starting: StateFlow<Set<String>> = _starting.asStateFlow()
+
+    fun markStarting(chatId: String) = _starting.update { it + chatId.lowercase() }
+
+    private val _notice = MutableStateFlow<Pair<String, String>?>(null)
+
+    /** A one-off line for a chat's screen (chat id → text), e.g. a new group's Official refused with `not_ready`. */
+    val notice: StateFlow<Pair<String, String>?> = _notice.asStateFlow()
+
+    fun setNotice(chatId: String, text: String) {
+        _notice.value = chatId.lowercase() to text
+    }
+
+    fun clearNotice() {
+        _notice.value = null
+    }
+
     init {
         scope.launch { dao.all().collect { list -> _rows.value = list.associateBy { it.conversationId.lowercase() } } }
         scope.launch { dao.prefs().collect { list -> _prefs.value = list.associateBy { it.chatId.lowercase() } } }
@@ -179,6 +199,7 @@ class ChatTabs(
         }
         dao.upsert(t)
         _hints.update { it - conversationId.lowercase() }
+        if (t.official) _starting.update { it - t.chatId.lowercase() }
         _rows.update { m -> m?.plus(conversationId.lowercase() to t) }
     }
 

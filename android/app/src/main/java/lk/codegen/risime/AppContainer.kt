@@ -214,7 +214,11 @@ class AppContainer(
     val lockedChats = lk.codegen.risime.data.lock.LockedChats(
         lk.codegen.risime.data.lock.FileLockedChatsStore(File(context.noBackupFilesDir, "locked_chats.bin"), lk.codegen.risime.data.auth.KeystoreVaultKey("risime_locked_chats_aes")),
         log = { Log.w("RisiMe", it) },
+        // §24: by chat id (both tabs); unknown until the chat-tab rows are read (redacted meanwhile).
+        chatOf = { conv -> chatTabsOrNull?.chatIdOrNull(conv) },
     )
+    /** Set right after [chatTabs] is built (the locked list is created first). */
+    @Volatile private var chatTabsOrNull: lk.codegen.risime.data.tabs.ChatTabs? = null
 
     // ---- Two tabs per chat (contract v1.24 §24): tab of each conversation from MLS, the server switch ----
     val chatTabs = lk.codegen.risime.data.tabs.ChatTabs(
@@ -222,7 +226,7 @@ class AppContainer(
         persistedServerOn = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getBoolean("server_on", false),
         persistServerOn = { on -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putBoolean("server_on", on).apply() },
         log = { Log.i("RisiMe", it) },
-    )
+    ).also { chatTabsOrNull = it }
 
     /** §24.15: read `/auth/config` `tabs`; a change re-advertises the capabilities. */
     suspend fun refreshTabsSwitch() {
@@ -240,6 +244,7 @@ class AppContainer(
         val r = api.createOfficial(chatId, sessionStore.deviceId())
         if (r is ApiResult.Ok) {
             chatTabs.setOfficialState(chatId, lk.codegen.risime.data.tabs.OfficialState.ON)
+            chatTabs.markStarting(chatId)
             groupStore.queueLocal(r.value.group.id, lk.codegen.risime.data.groups.GroupOpType.CREATE_OFFICIAL,
                 lk.codegen.risime.net.ProtocolJson.encodeToString(lk.codegen.risime.data.groups.OfficialPayload.serializer(), lk.codegen.risime.data.groups.OfficialPayload(chatId)))
         }
@@ -247,6 +252,21 @@ class AppContainer(
             is ApiResult.Ok -> ApiResult.Ok(r.value.group)
             is ApiResult.Error -> r
             is ApiResult.NetworkError -> r
+        }
+    }
+
+    /**
+     * §24.2 a new group (its Private group is active): `POST …/official` straight away and open on
+     * Official; `409 not_ready` (or any refusal) keeps it on Private with the reason shown in the chat.
+     */
+    fun startOfficialForNewGroup(conversationId: String) {
+        if (!chatTabs.uiOn.value) return
+        scope.launch {
+            when (val r = startOfficial(conversationId)) {
+                is ApiResult.Ok -> chatTabs.setLastTab(conversationId, lk.codegen.risime.data.tabs.Tab.OFFICIAL)
+                is ApiResult.Error -> chatTabs.setNotice(conversationId, lk.codegen.risime.ui.tabs.officialErrorText(r.code))
+                is ApiResult.NetworkError -> chatTabs.setNotice(conversationId, lk.codegen.risime.ui.tabs.officialErrorText(null))
+            }
         }
     }
 
@@ -760,6 +780,9 @@ class AppContainer(
                 kotlinx.coroutines.delay(wait)
                 wait = (wait * 2).coerceAtMost(30_000L)
             }
+            // v1.24: the stored set by chat id (a no-op for every pre-v1.24 id: chat_id = conversation_id).
+            chatTabs.rows.first { it != null }
+            runCatching { lockedChats.migrateToChatIds() }.onFailure { Log.w("RisiMe", "RisiMe lock: chat-id migration: ${it.message}") }
         }
         if (BuildConfig.DEBUG) registerDebugOidcSignIn(context)
         if (BuildConfig.DEBUG) registerDebugLockChat(context)

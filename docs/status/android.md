@@ -1,5 +1,39 @@
 # Android status — 0.2 nightlies
 
+## §24 two tabs (Private | Official), chunks A1–A3 — READY (tabs off by default; server S-chunks + RISI needed to see them)
+- **A1 Room v11 (rule 9):** `chat_tabs(conversation_id PK, chat_id, tab, chat_kind)` + `chat_prefs(chat_id PK, last_tab,
+  official_state)`. `Migration10To11` only inserts: every conversation in messages ∪ groups ∪ chat_state becomes
+  `private` with `chat_id = conversation_id`. A conversation without a row is Private, its own chat. Wiped only with
+  the other chat tables (confirmed wipe). Tests: `Migration10To11Test` (from v10 and v9: every row of every table
+  byte-identical, per-conversation and per-chat counts equal, fresh-v11 schema match, idempotent),
+  `TabsUpgradeKeepsDataTest` (v10, v9 through the real AppContainer + re-sign-in), `EveryReleasedSchemaUpgradeTest` (1..11).
+- **A2:** `tabs` is advertised only while `/auth/config` says `tabs: on` (read on every join, cached in
+  `risime_tabs` prefs; a flip re-registers) **and** the core enforces §24.1 (`MlsEngine.tabsSupported`, true for the
+  UniFFI core since 8917ae9). The tab UI needs the successful advertisement too (`ChatTabs.uiOn`).
+  `UniffiMlsEngine` maps `group_meta` tab/chat_id/agents both ways and `MemberInfo.kind` (`agentUsers`).
+  **Private-ness only from MLS:** `chat_tabs` rows are written only from the decrypted `group_meta` (GroupStore hooks:
+  group_event, Welcome/commit, GET refresh); unknown = Private; an Official row never turns Private; server `tab`
+  fields only hide a not-yet-readable Official group from the list. REST: `GET /chats[/id]`, `POST /chats/{id}/official`,
+  `PATCH /chats/{id}`. `chat_event` → `chat_prefs.official_state` + "Kamal turned Official off/on" in both tabs.
+  Official epoch 0 via the group-op outbox (`create_official`: idempotent POST, §12.5 claim with the Official id, meta
+  from the Private group's MLS meta; 1:1 = both users admin, name ""); a rebuilt Official keeps its tab.
+- **A3 UI (only while tabs are on; off = the v1.23 screens, unchanged):** "🔒 Private" | "● Official" directly under
+  the chat header with per-tab unread badges; Official: accent, "Risi is listening" strip and composer hint. Default
+  tab = `chat_prefs.last_tab`; new 1:1 → Private; new group → `POST …/official` once its Private group is active, opens
+  on Official, `409 not_ready` → "Official needs everyone on the latest app" (stays Private). No Official yet → intro
+  card + [Start Official] (lazy). Off → Private only + "Official history (read-only)" link (read-only Official screen).
+  Chat list: one row per chat_id, newest message of either tab with a small tab icon, unread summed; an Official group is
+  never its own row. A notification/link to an Official conversation opens its chat on the Official tab.
+  **Locked chats by chat id:** both tabs locked/redacted; the stored set is migrated to chat ids at start (no-op for
+  every pre-v1.24 id; nothing is unlocked); everything is redacted until the tab rows are read.
+- Tests: `ChatTabsTest`, `TabsEventsTest`, `ChatListTabsTest`, `ChatTabsControllerTest` (default tab, intro/lazy
+  creation with a fake API, not_ready, off/history, per-tab unread, Compose: tabs off = old screen, tabs on = bar + intro),
+  `LockedChatsTabsTest`, `GroupOpsExecutorTest` (Official epoch 0), `DeviceRegistrarTest` (tabs gating),
+  `ContractExamplesTest`, `RealTabsTest` (real core).
+- **Deviations / open:** read-only Official history is reached from the tab strip (not chat info yet); a 1:1 Official's
+  header tap does nothing (no member management, `dm_chat`); notification titles "Kamal · Official", Risi cards, the
+  Official switch in chat info, schema-2 backups and `PATCH /me tz` are later chunks (A4–A6).
+
 ## Call records like WhatsApp (voice and video) — READY (real phones to confirm)
 
 - **Chat:** every 1:1 call is a centred row: voice/video icon (red when missed), label, time (HH:mm).

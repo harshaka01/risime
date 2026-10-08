@@ -106,7 +106,21 @@ fun showSenderAt(items: List<ChatItem>, index: Int): Boolean {
 }
 
 @Composable
-fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, onInfo: () -> Unit, lock: lk.codegen.risime.ui.lock.ChatLockControl? = null) {
+fun GroupChatScreen(
+    vm: GroupChatViewModel,
+    meId: String,
+    onBack: () -> Unit,
+    onInfo: () -> Unit,
+    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
+    /** §24.9: the Private | Official tab bar, directly under the header (null: tabs off, the screen as before). */
+    tabBar: (@Composable () -> Unit)? = null,
+    /** §24.1: a 1:1 Official has no name: the peer's name is shown. */
+    titleOverride: String? = null,
+    /** §24.4: Official turned off: its history is read-only (the composer is replaced by this line). */
+    readOnlyReason: String? = null,
+    /** §24.9: "Risi is listening" in Official. */
+    composerHint: String? = null,
+) {
     val group by vm.group.collectAsStateWithLifecycle()
     val members by vm.members.collectAsStateWithLifecycle()
     val messages by vm.messages.collectAsStateWithLifecycle()
@@ -138,8 +152,8 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
         if (resumed && messages.any { !it.outgoing && it.status != MessageStatus.READ.name }) vm.markRead()
     }
 
-    val name = groupDisplayName(group?.name)
-    val readOnly = group?.readOnly == true
+    val name = titleOverride ?: groupDisplayName(group?.name)
+    val readOnly = group?.readOnly == true || readOnlyReason != null
     val names = members.associate { it.userId.lowercase() to it.displayName }
     val typingLabel = groupTypingLabel(typing)
     val count = members.count { it.current && it.state != GroupMember.STATE_PENDING_ADD }
@@ -172,6 +186,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
+            tabBar?.invoke()
             lk.codegen.risime.ui.chat.SelectionBarFor(vm.del, messages, selection)
             lk.codegen.risime.ui.chat.DeleteHost(vm.del, clearAsk, onClearAskDone = { clearAsk = null }, onDeletedChat = onBack)
             e2eeStrip?.let { strip ->
@@ -217,7 +232,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 }
             }
             toast?.let { lk.codegen.risime.ui.chat.ImageToast(it) }
-            val off = composer as? GroupComposer.Disabled
+            val off = readOnlyReason?.let { GroupComposer.Disabled(it) } ?: composer as? GroupComposer.Disabled
             if (off != null) {
                 Surface(tonalElevation = 2.dp) {
                     Text(
@@ -234,7 +249,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                             pickPhoto()
                         }
                     }),
-                    placeholder = if (encrypted == true) "Encrypted message" else "Message",
+                    placeholder = composerHint ?: if (encrypted == true) "Encrypted message" else "Message",
                     value = draft,
                     onValue = { draft = it; vm.onDraftChanged(it.text) },
                     onSend = {

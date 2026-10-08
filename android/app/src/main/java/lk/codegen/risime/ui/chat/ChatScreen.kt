@@ -67,7 +67,13 @@ import lk.codegen.risime.ui.theme.Sizes
 import lk.codegen.risime.ui.theme.Spacing
 
 @Composable
-fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit, lock: lk.codegen.risime.ui.lock.ChatLockControl? = null) {
+fun ChatScreen(
+    vm: ChatViewModel,
+    onBack: () -> Unit,
+    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
+    /** §24.9: the Private | Official tab bar, directly under the header (null: tabs off, the screen as before). */
+    tabBar: (@Composable () -> Unit)? = null,
+) {
     val messages by vm.messages.collectAsStateWithLifecycle()
     val peer by vm.peer.collectAsStateWithLifecycle()
     val conn by vm.connection.collectAsStateWithLifecycle()
@@ -152,6 +158,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit, lock: lk.codegen.risime.ui
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
+            tabBar?.invoke()
             SelectionBarFor(vm.del, messages, selection)
             DeleteHost(vm.del, clearAsk, onClearAskDone = { clearAsk = null }, onDeletedChat = onBack)
             E2eeStrip(stripText)

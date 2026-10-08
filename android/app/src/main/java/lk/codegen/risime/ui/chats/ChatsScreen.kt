@@ -240,6 +240,13 @@ fun connectionLabel(s: ConnectionState): String? = when (s) {
     ConnectionState.AuthFailed -> "Signed out"
 }
 
+/** §24.9 the small tab icon before a chat's last message (only while tabs are on and the chat has an Official tab). */
+fun tabIcon(tab: lk.codegen.risime.data.tabs.Tab?): String = when (tab) {
+    lk.codegen.risime.data.tabs.Tab.PRIVATE -> "🔒 "
+    lk.codegen.risime.data.tabs.Tab.OFFICIAL -> "● "
+    null -> ""
+}
+
 @Composable
 internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> Unit)? = null) {
     val presence = presenceLabel(row.presence, System.currentTimeMillis())
@@ -248,7 +255,7 @@ internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> 
         !row.friend -> "Not friends any more"
         !row.registered -> "Waiting for them to confirm their phone"
         row.typing -> TYPING_LABEL
-        row.last != null -> dmPreview(row.last)
+        row.last != null -> tabIcon(row.lastTab) + dmPreview(row.last)
         presence != null -> presence
         else -> row.company
     }
@@ -284,10 +291,10 @@ private fun GroupRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> 
         row.typingLabel != null -> row.typingLabel
         row.stateLine != null -> row.stateLine
         last == null || lastText.isEmpty() -> "Group"
-        last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_DELETED -> lastText
-        last.outgoing -> "You: $lastText"
-        row.lastSender != null -> "${row.lastSender}: $lastText"
-        else -> lastText
+        last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_DELETED -> tabIcon(row.lastTab) + lastText
+        last.outgoing -> tabIcon(row.lastTab) + "You: $lastText"
+        row.lastSender != null -> tabIcon(row.lastTab) + "${row.lastSender}: $lastText"
+        else -> tabIcon(row.lastTab) + lastText
     }
     ListRow(
         title = row.name,
