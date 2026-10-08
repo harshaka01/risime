@@ -74,6 +74,90 @@ were needed after nightly.11.
   - phone squatting by open sign-ups (an admin disables the squatter until SMS claims exist);
   - the country box defaults to +94.
 
+## Handoff (2026-10-08 ~10:30 UTC, account switch): current state and next queue
+**Live:** v0.2.0-nightly.31 (pilot healthy, contract v1.20 deployed). It contains the P0-1 updater
+fix and v1.21 rejoin without reset. After the deploy, a one-off cleanup queued 19 ops for 45 stale
+leaves.
+
+**Agents:** none running. Working tree clean. Agent worktrees were removed; only the standing gate
+and release worktrees remain (`~/.cache/risime-upgrade-wt*`, `~/risime-release-wt`).
+
+**Services on spark2:**
+- `risime.service` (n31);
+- Postgres and Cassandra;
+- coturn (49152–49499);
+- LiveKit 1.13.9 (127.0.0.1:7880, UDP 49500–49999);
+- **vLLM `risi-l1`** (Qwen3.6-35B-A3B-FP8, 127.0.0.1:8100, about 41 GB; decision 061).
+
+**On main, not released yet (all gates green):**
+- **P0-3 video-call audio** (`eb25ada`): one Telecom reader per flow, video-capable Telecom
+  registration, the speaker rule, audio-only stats and watchdog. `call-device-test` calls 9, 12 and
+  13 assert audio both ways.
+- **P0-2 backups, v1.22:**
+  - server `aff6a27`, crypto `1611634` (44 vectors, cross-checked in Python), android
+    `264984e`/`b0279bc`/`4945d78`;
+  - local daily, before every update and before any wipe; export to Downloads; server backup with a
+    recovery key; a restore screen on first sign-in.
+- **Stuck staged commit fix** (`943993a`):
+  - **Cause:** `collectLatest` cancelled a group-op pass between build and submit, and the staged
+    commit was never dropped. Every retry then failed with "a commit is already pending" and used
+    up a key package.
+  - **Fix:** a per-conversation `MlsCommitGate` that drops a staged commit at the end of an attempt
+    and sweeps leftovers at start-up, plus a non-cancellable runner and key-package reuse.
+- **CallManager start-up NPE** (`4c2a847`): field initialisation order.
+- **logcat-gate** now also fails on swallowed programming errors.
+- **Server v1.23** (`1d18fa6`): rooms `upgrade`, `media` in replies, `call_switch`/`screen_share`
+  capabilities.
+- **Contract v1.23** (`44bb655`, §23, decision 062): mid-call voice↔video and screen sharing.
+
+**The first nightly.32 attempt** (from `fd863fa`, P0-3 only) failed at interop group step 7. A
+rerun on the same commit passed, so it was a flake under load. It was then held so backups and the
+fixes go out together.
+
+**Next queue (in order):**
+1. **Release nightly.32.** Run `UPDATER_BACK_SAFE_FROM=20031 scripts/release-from-worktree`. Watch
+   these two gate settings:
+   - **`REINSTALL_CHECK_FROM` defaults to 20031 in nightly-release, but C runs the OLD app (n31,
+     without `943993a`).** So the reinstall phase can hit the stuck-commit bug intermittently.
+     Before releasing, either change `scripts/upgrade-test` to update C to NEW before the reinstall
+     phase (recommended: more realistic), or skip it for n32 only (`UPGRADE_NO_REINSTALL=1`, and
+     record why).
+   - **`RESTORE_CHECK_FROM` defaults to empty, so the restore phase is off.** One run showed the
+     restore working (11 messages before the uninstall and 11 after) and then hit a script bug, now
+     fixed in `1e51b69` but not re-run. Re-run it per the steps below, plus `--restore-from-file`,
+     then set the default to the n32 versionCode (20032):
+     `UPGRADE_INSTANCE=_bk UPGRADE_PORT=4160 REINSTALL_CHECK_FROM=20031 RESTORE_CHECK_FROM=20032 timeout 2400 scripts/upgrade-test --target redroid --via-updater --new <n32 test apk> --old v0.2.0-nightly.31 --version 0.2.0-nightly.32-bktest`
+     The test APK is built with VERSION=0.2.0-nightly.32 in a throwaway worktree with
+     `assembleRelease -Prisime.mlsPinnedKeys=…` and is never published.
+   - Make `UPDATER_BACK_SAFE_FROM` a default in nightly-release (20031).
+2. **Android v1.23,** the calling slice Harsha approved after the P0s:
+   - mid-call voice↔video, 1:1 and group;
+   - screen sharing (MediaProjection, privacy rules);
+   - the call info screen with data used.
+   Then extend `call-device-test` for switching and sharing, with audio flowing throughout.
+   Checklists are in the v1.23 merge notes and decision 062.
+3. **Risi v1 (stage 0.5),** estimated 2–3 days of agent time after 2:
+   - a contract for Risi as a visible MLS member (consent banner, any member removes it);
+   - a server-side MLS client (Rustler NIF on the crypto core);
+   - "Risi, summarise" with decisions and action items with owners, through `risi-l1`;
+   - every model call in the Cassandra learning log;
+   - no chat text leaves spark2.
+4. **Then the Commitment Ledger:** confirm ✓/✗, follow-ups, reminders.
+
+**Needs Harsha:**
+1. **Caddy `/livekit` route,** so group calls reach testers:
+   `sudo cp infra/caddy/Caddyfile /etc/caddy/Caddyfile && sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl reload caddy`.
+   Then root sets `LIVEKIT_URL` in pilot.env and restarts.
+2. A by-hand check from outside that UDP 49500 and 49999 are reachable (decision 056).
+3. The fail2ban `risime-signup` jail (the sudo line is in decision 058).
+4. Optional: `sudo swapoff -a && sudo swapon -a` (11 GB went to swap at the first LLM start).
+5. **Real-phone checks:**
+   - video calls start on speaker with a working route button (after n32);
+   - the dark screen after Back with the proximity sensor;
+   - camera and Flip.
+6. **Testers:** updating to n31 still goes through the old updater, so keep RisiMe open, or install
+   from the website over the old app. Never uninstall. From n32 on, updates survive leaving the app.
+
 ## P0 run (2026-10-08): updater, chat safety, video audio
 - **v0.2.0-nightly.31 (live ~08:50 UTC): P0-1 in-app updater fixed.**
   - **Root causes:**
