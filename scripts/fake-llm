@@ -7,7 +7,14 @@ An OpenAI-compatible stub on LOOPBACK only. It answers
   POST /v1/chat/completions    -> a chat completion whose content is JSON that is valid for the
                                   request's `response_format.json_schema.schema` (a minimal
                                   instance: required keys, empty arrays, null where allowed,
-                                  numbers in range, strings matching simple patterns)
+                                  numbers in range, strings matching simple patterns), except:
+                                  * the commitments schema: one commitment per `"new": true`
+                                    chat line that starts "I'll"/"I will" (owner = its sender,
+                                    counterparts = the other members, due = the next Friday 17:00
+                                    of the owner's "now" when the line says "Friday", else null,
+                                    source = that line, confidence 0.9), so a gate sees a card;
+                                  * the summary/answer/report schemas: fixed, content-free text
+                                    ("fake summary of N lines"), never an echo of the chat
 and appends every request body, one JSON object per line, to the record file, so a gate can
 check that a canary never reached the model. If LLM_API_KEY is set in the environment, requests
 without `Authorization: Bearer <key>` get 401 (the key is never printed).
@@ -70,6 +77,81 @@ def instance(schema):
     return None
 
 
+def _json_lines(text):
+    """The JSON objects in `text`, one per line."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                pass
+    return out
+
+
+def _chat(user_text):
+    """(members, chat lines) of a Risi prompt (RisiMe.Agent.Prompts.render/4)."""
+    head, _, rest = user_text.partition("<chat>")
+    return ([m for m in _json_lines(head) if "ref" in m],
+            _json_lines(rest.partition("</chat>")[0]) if rest else [])
+
+
+def _next_friday(now):
+    """`now` = "YYYY-MM-DD Ddd HH:MM" (the owner's local time) -> "YYYY-MM-DDT17:00" of the next Friday."""
+    import datetime
+    try:
+        day = datetime.date.fromisoformat(now[:10])
+        hhmm = now.split()[-1]
+    except (ValueError, IndexError):
+        return None
+    ahead = (4 - day.weekday()) % 7
+    if ahead == 0 and hhmm >= "16:00":
+        ahead = 7
+    return (day + datetime.timedelta(days=ahead)).isoformat() + "T17:00"
+
+
+PROMISE = re.compile(r"(?i)\s*(i'll|i’ll|i will)\b")
+
+
+def commitments(user_text):
+    members, lines = _chat(user_text)
+    out = []
+    for ln in lines:
+        text = str(ln.get("text", ""))
+        owner = ln.get("from")
+        if not ln.get("new") or not PROMISE.match(text) or not isinstance(owner, str) or not owner.startswith("u"):
+            continue
+        now = next((m.get("now") for m in members if m.get("ref") == owner), "") or ""
+        due = _next_friday(now) if re.search(r"(?i)friday", text) else None
+        out.append({
+            "text": "Send the report" if re.search(r"(?i)report", text) else "Do the promised task",
+            "owner": owner,
+            "counterparts": [m["ref"] for m in members if m.get("ref") != owner][:20],
+            "due_local": due,
+            "due_text": "Friday 5pm" if due else None,
+            "source": [ln["ref"]],
+            "confidence": 0.9,
+        })
+    return {"commitments": out[:10]}
+
+
+def answer_for(schema, user_text):
+    """A deterministic answer for Risi's schemas (None: fall back to the minimal instance)."""
+    props = (schema or {}).get("properties", {})
+    n = len(_chat(user_text)[1])
+    if "commitments" in props:
+        return commitments(user_text)
+    if "summary" in props:
+        return {"summary": f"fake summary of {n} lines", "decisions": [], "action_items": [],
+                "open_questions": []}
+    if "answer" in props:
+        return {"answer": f"fake answer from {n} lines", "refs": [], "confidence": 0.9}
+    if "sections" in props:
+        return {"title": "fake report", "sections": [{"heading": "Lines", "body": f"{n} lines"}]}
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "fake-llm"
 
@@ -112,7 +194,11 @@ class Handler(BaseHTTPRequestHandler):
             with open(self.server.record, "a", encoding="utf-8") as f:
                 f.write(json.dumps(body, ensure_ascii=False) + "\n")
         schema = (body.get("response_format") or {}).get("json_schema", {}).get("schema")
-        content = json.dumps(instance(schema) if schema else {"text": "fake"})
+        user_text = "\n".join(
+            m.get("content", "") for m in body.get("messages", [])
+            if isinstance(m, dict) and m.get("role") == "user" and isinstance(m.get("content"), str))
+        smart = answer_for(schema, user_text) if schema else None
+        content = json.dumps(smart if smart is not None else (instance(schema) if schema else {"text": "fake"}))
         return self._json(200, {
             "id": "fake", "object": "chat.completion", "model": "risi-l1",
             "choices": [{"index": 0, "finish_reason": "stop",

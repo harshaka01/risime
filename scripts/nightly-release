@@ -85,6 +85,19 @@ echo "==> live interop (scripts/interop: real Android clients vs a temp server f
 # running scripts/interop on the default ports at the same time.
 INTEROP_INSTANCE=_rel INTEROP_PORT=4200 INTEROP_JWKS_PORT=4899 RISIME_GRADLE_ARGS="${PIN_ARGS[*]}" step scripts/interop
 
+# Risi canary (§24.14, decisions 065-067; required before RISI=on, §24.15): a temp TABS=on RISI=on
+# server with the --prod NIF, throwaway keys and scripts/fake-llm; Private canaries must reach no
+# model input, risi_* table, buffer, learning log, server log or push, and the server talks to
+# loopback only. Own instance (port 4240, fake model 8298, store risime_canary_rel), hard timeout
+# RISI_CANARY_TIMEOUT (default 1500 s). RISI_CANARY_SKIP=1 skips it (emergency only; say so in the
+# release notes, and never turn RISI on for a release that skipped it).
+if [ -n "${RISI_CANARY_SKIP:-}" ]; then echo "==> risi canary SKIPPED (RISI_CANARY_SKIP)"
+else
+  echo "==> risi canary (scripts/risi-canary)"
+  CANARY_INSTANCE=_rel CANARY_PORT=4240 CANARY_LLM_PORT=8298 RISIME_GRADLE_ARGS="${PIN_ARGS[*]}" \
+    STEP_T="${RISI_CANARY_TIMEOUT:-1500}" step scripts/risi-canary
+fi
+
 # Background delivery gate (P0 2026-10-08): scripts/push-device-test with this build's debug APK on its
 # own redroids (screen off + force-idle, and after removal from Recents: message and call within 10 s).
 # PUSHTEST_SKIP=1 skips it (emergency only; say so in the release notes).

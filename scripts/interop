@@ -4,6 +4,7 @@
 # creates throwaway users/tokens, runs the Android LiveInteropTest (real ApiClient +
 # PhoenixRealtimeClient) against it, and always cleans up. Never touches :4000 / risime.service.
 #   scripts/interop
+#   RISI=1 scripts/interop   # then the Risi canary (scripts/risi-canary, §24.14) after INTEROP OK
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
@@ -76,3 +77,8 @@ grep -E '^\s{4}\S' "$DIR/gradle.log" | grep -vE 'isLoggable|^\s+at |Exception in
 grep -qE "Live(E2ee|Group)?InteropTest > .* SKIPPED" "$DIR/gradle.log" && { echo "INTEROP SKIPPED (config not picked up)"; exit 1; }
 [ "$rc" = 0 ] || { echo "INTEROP FAILED"; grep -E "FAILED|AssertionError|expected" "$DIR/gradle.log" | head -10; exit 1; }
 echo "INTEROP OK"
+if [ "${RISI:-}" = 1 ]; then
+  # Its own temp server, store and ports (CANARY_*): stop this run's server first.
+  cleanup; trap - EXIT
+  CANARY_INSTANCE="${CANARY_INSTANCE:-$SUF}" scripts/risi-canary
+fi
