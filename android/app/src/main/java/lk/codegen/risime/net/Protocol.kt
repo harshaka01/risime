@@ -9,7 +9,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Wire models for contract/v1/PROTOCOL.md. Field names match the contract exactly. */
 
 /** The PROTOCOL.md version this client implements (shown in Settings → About; checked by a test). */
-const val PROTOCOL_VERSION = "1.23"
+const val PROTOCOL_VERSION = "1.24"
 
 val ProtocolJson: Json = Json {
     ignoreUnknownKeys = true // §0: clients must ignore unknown fields
@@ -333,7 +333,10 @@ data class AuthConfig(
     val signup: String? = null,
     /** §22.1 (v1.22): "on" | "off"; absent (pre-v1.22 servers) = off. */
     val backup: String? = null,
+    /** §24 (v1.24): "on" | "off"; absent = off. */
+    val tabs: String? = null,
 ) {
+    val tabsOn: Boolean get() = tabs == "on"
     val phoneVerificationRequired: Boolean get() = phoneVerification == PHONE_REQUIRED
     val signupOpen: Boolean get() = signup == SIGNUP_OPEN
 
@@ -920,6 +923,11 @@ data class Group(
     @SerialName("my_role") val myRole: String = GroupMember.ROLE_MEMBER,
     val members: List<GroupMember> = emptyList(),
     val pending: List<PendingOp> = emptyList(),
+    /** §24 (v1.24): the chat this conversation belongs to, its tab ("private" | "official"), the chat kind ("dm" | "group") and the agent member ids. */
+    @SerialName("chat_id") val chatId: String? = null,
+    val tab: String? = null,
+    @SerialName("chat_kind") val chatKind: String? = null,
+    val agents: List<String> = emptyList(),
 ) {
     companion object {
         const val STATE_CREATING = "creating"
