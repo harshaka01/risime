@@ -1,5 +1,72 @@
 # Android status — 0.2 nightlies
 
+## Decision 064: no mandatory lock, tokens readable in the background, optional fingerprint lock — READY (real phone to confirm)
+- **Token vault** (`data/auth/SessionVault.kt`): the token set (refresh + ID token) is sealed with AES-256-GCM
+  under the Keystore key `risime_session_aes` (StrongBox, falling back to the TEE on `StrongBoxUnavailableException`;
+  no user authentication, not invalidated by an enrolment; random IV; AAD = `<alias>|v2`), in
+  `noBackupFilesDir/session.bin`. `AuthManager.restore()` reads it at process start with no UI, so a push-started
+  process, the workers and the call wake-up always have a bearer (`SessionState.READY`). Access tokens stay in memory.
+- **Migration (rule 9):** a pre-064 vault (`tokens.bin`, the fingerprint-bound RSA key) puts the app in
+  `NEEDS_MIGRATION`: the next normal open shows one prompt, **"Confirm to finish updating RisiMe"**; the set is
+  re-sealed under the new key and the old key + blob are deleted. Cancel/failure keeps the old vault and asks
+  again next open (never a sign-out). An invalidated old key → sign in again, chats kept (trigger
+  `key_invalidated`). A memory-only install (no vault) → sign in once more (trigger `no_stored_session`), then it
+  stays. While unmigrated the app behaves as before: no background bearer, the content-free "New messages"
+  notice and the nameless blind ring (decision 051 option B) — those two paths now exist only for that case.
+- **Optional app lock** (UI gate only, `data/lock/AppLock.kt`, `ui/lock/AppLockUi.kt`): Settings → Privacy →
+  **Fingerprint lock** (off by default; the row exists only when `canAuthenticate(BIOMETRIC_STRONG) == SUCCESS`;
+  turning it on asks for one fingerprint), **Automatically lock** Immediately / After 1 minute / After 30 minutes
+  (elapsedRealtime since the app left the screen, persisted so a push-started process knows it; a reboot
+  locks), **Show content in notifications** (off → "New message", no name or text; friend requests "New
+  notification"). Locked screen: the brand mark + "Unlock with fingerprint" (prompts on show). Settings live in
+  DataStore (`app_lock_*`). Calls ring with the caller's name and can be answered over it (the call screen is
+  its own activity); after the call the lock remains. A fingerprint removed later turns the lock off at the next
+  start/resume (log `RisiMe lock: fingerprint no longer available`). It never signs out, wipes or uses the network.
+- **Sign-out diagnostics:** every sign-out logs `RisiMe auth: sign-out trigger=<invalid_grant|key_invalidated|
+  vault_unreadable|no_stored_session|unauthorized|user_logout|user_logout_delete|escape_screen|switch_server|
+  another_account|sign_in_failed>`; a sign-in logs `RisiMe auth: signed in, refresh token typ=Offline exp=none`
+  (the payload's `typ`/`exp` only). Notifications health has an **Account** row for OIDC sessions: "Stays signed
+  in (offline session)" ✓ or "Short session — ask the admin" ✗ (typ=Refresh), with the last sign-out trigger.
+  A 401 while the Keycloak refresh is failing for a network reason no longer signs out (the socket retries).
+- **Tests:** 883 JVM tests (8 skipped), 0 failed. Seen flaky once in the gate and 1 of 3 `--rerun`s:
+  `CallPushTest.theStartUpCleanupNeverStopsTheServiceAPushStarted` (a timing race in the test's service
+  shadow; code untouched by this work) — to look at separately. New: `AuthManagerTest` (vault round trip without auth,
+  fresh IV, tamper/AAD rejection, process death → silent restore + refresh, transient failure keeps the
+  session, invalid_grant ends it, migration done / cancelled / no new key / invalidated / memory-only, sign-out
+  clears both vaults), `AppLockTest` (default off, Immediately/1 min/30 min, reboot, biometric removed → off,
+  never touches the session, notification content rule), `AppLockUiTest` (Privacy rows hidden without
+  biometrics, options appear when on, lock screen logo/auto-prompt, nothing on it signs out),
+  `AuthLogicTest` (gate order with migration and app lock, refresh-token typ/exp decoding),
+  `NotificationHealthTest` (Account row).
+- **Device gate (`scripts/push-device-test`, root-delegated):** B now signs in with an **OIDC-style session** by
+  default (`PUSHTEST_B_AUTH=oidc`): a stand-in issuer (discovery, JWKS, refresh-grant endpoint) and the temp
+  server with OIDC on; Redroid has no browser, so the debug build's shell-only broadcast
+  (`lk.codegen.risime.debug.OIDC_SIGN_IN`, `android.permission.DUMP`) hands the issuer's tokens to the real
+  sign-in path. Checks: force-stop + restart → chat list, no lock, no sign-in, a silent refresh from the vault;
+  the Recents-removed push wake-up refreshes with no UI; no sign-out trigger during the run.
+  `scripts/upgrade-test`: no "Unlock with fingerprint"/migration prompt after an update.
+  **Run: PUSHTEST OK** (own instances `_lk`, B on OIDC): restart after force-stop → chats, no lock, no sign-in,
+  silent refresh; message 416 ms / ring 671 ms (Home, deep idle); Recents-removed 1106 ms / 1356 ms with the
+  push-started process restoring the OIDC session and refreshing with no UI; message+call 653/2600 ms;
+  restricted 411 ms; registration failing 3/3 rows; 5 silent refreshes, no sign-out. upgrade-test not run
+  here (needs a staged candidate; the nightly gate runs it).
+- **Needs a real phone (Redroid has no biometrics):**
+  1. Upgrade a phone signed in with a fingerprint session (≤ nightly.35): the first open shows "Confirm to finish
+     updating RisiMe" once; after it, kill the app / reboot: it opens to the chats with no prompt; a message
+     sent while it was killed notifies with the name and text, and a call rings with the name.
+  2. Same, but Cancel the prompt: the screen stays (with "Sign out (keeps your chats)"); the next open asks again;
+     nothing is lost.
+  3. Enrol a new fingerprint before opening the updated app: "Sign in again — your chats are kept", then signed
+     in for good (health screen: last sign-out `key_invalidated`).
+  4. Settings → Privacy → Fingerprint lock on (one fingerprint) → Immediately: Home and back → the lock screen
+     prompts; Unlock. After 1 minute / 30 minutes: back within the time → no lock; after it → locked.
+  5. Lock on, "Show content" off: a message from the background shows "RisiMe · New message" only.
+  6. Lock on and locked: an incoming call rings with the caller's name and can be answered; after hanging up
+     RisiMe is still locked.
+  7. Lock on, then remove every fingerprint in Android settings: the next open shows no lock and the switch is off.
+  8. Notifications health → Account: "Stays signed in (offline session)" (✗ "Short session" means Keycloak issued
+     a plain refresh token: the realm/client needs `offline_access`).
+
 ## P0 background delivery (nightly.31: messages and calls only after opening the app) — READY (real phone to confirm)
 - **Root causes found (each reproduced on redroid by `scripts/push-device-test`, then fixed):**
   1. **Every call push crashed the app.** `onCallPush` launched the stale-call cleanup, which stopped the
