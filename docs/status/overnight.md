@@ -327,7 +327,14 @@ were needed after nightly.11.
   `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
 - **Agents:** none running.
 - **Needs Harsha:**
-R. **Turn on two tabs and Risi for the pilot** (all gates green in nightly.39). It's reversible
+R. ✅ **DONE 2026-10-08 23:23 UTC** (Harsha: "turn Risi on"). Verified:
+   - `/auth/config` says `tabs: on`;
+   - the Risi user `kind=agent` is seeded;
+   - its device is attested with `{groups,tabs}`;
+   - `risi_mls_kv` has 33 sealed rows and 31 key packages are uploaded;
+   - health is ok.
+   Backup of the previous `.env` in `~/risime-backups/env-before-risi-*`. Undo: set `TABS`/`RISI` to `off`
+   in pilot.env and restart. Was: **Turn on two tabs and Risi for the pilot** (all gates green in nightly.39). It's reversible
    (set both to `off`, then restart). Run on spark2:
    ```
    cd ~/development/risime && install -m 600 .env ~/risime-backups/env-before-risi-$(date -u +%Y%m%dT%H%M%SZ)
