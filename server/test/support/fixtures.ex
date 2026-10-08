@@ -1,12 +1,36 @@
 defmodule RisiMe.Fixtures do
   @moduledoc "Test data: unique allowlist entries and logged-in users."
 
+  import Bitwise
+
   alias RisiMe.Accounts
 
+  @doc """
+  A phone number unique within this VM: a random base drawn once per VM plus a monotonic
+  counter (no per-call randomness, so two calls never collide before 10^7 draws).
+  """
   def unique_phone do
-    n = rem(System.unique_integer([:positive, :monotonic]) + :rand.uniform(1_000_000), 10_000_000)
+    n = rem(vm_base(:phone) + next(), 10_000_000)
     "+9477" <> String.pad_leading(Integer.to_string(n), 7, "0")
   end
+
+  @doc "A client IP (10.x.y.z) unique within this VM, for per-IP limits and auth-log matching."
+  def unique_ip do
+    n = rem(vm_base(:ip) + next(), 1 <<< 24)
+    {10, n >>> 16 &&& 255, n >>> 8 &&& 255, n &&& 255}
+  end
+
+  defp next, do: System.unique_integer([:positive, :monotonic])
+
+  @doc "Draws the per-VM random bases (test_helper.exs, before any test runs)."
+  def init_bases! do
+    for {kind, range} <- [phone: 10_000_000, ip: 1 <<< 24],
+        do: :persistent_term.put({__MODULE__, :base, kind}, :rand.uniform(range) - 1)
+
+    :ok
+  end
+
+  defp vm_base(kind), do: :persistent_term.get({__MODULE__, :base, kind})
 
   def allowlist_entry(attrs \\ %{}) do
     phone = attrs[:phone] || unique_phone()

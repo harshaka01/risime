@@ -34,7 +34,7 @@ defmodule RisiMeWeb.ConnCase do
   setup tags do
     RisiMe.DataCase.setup_sandbox(tags)
     # A distinct client IP per test, so per-IP limits (decision 024) don't leak between tests.
-    ip = {198, 18, :rand.uniform(254), :rand.uniform(254)}
+    ip = RisiMe.Fixtures.unique_ip()
     {:ok, conn: %{Phoenix.ConnTest.build_conn() | remote_ip: ip}}
   end
 end

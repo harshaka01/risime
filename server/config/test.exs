@@ -72,10 +72,11 @@ config :risime, :attestation_key_file, nil
 # v1.9 group receipts: a short coalescing window (10 s in dev/prod).
 config :risime, :group_receipt_coalesce_ms, 200
 
-# v1.9 blobs: a per-run temp dir, never the repo.
+# v1.9 blobs: a temp dir, never the repo (test_helper.exs makes it per VM).
 config :risime, :blob_dir, Path.join(System.tmp_dir!(), "risime-test-blobs")
 
-# fail2ban auth log: a per-run temp file in tests.
+# fail2ban auth log: a temp file (test_helper.exs makes it per VM, so concurrent partitions and
+# worktrees never share or delete each other's).
 config :risime, :auth_log_path, Path.join(System.tmp_dir!(), "risime-test-auth.log")
 
 # In test we don't send emails

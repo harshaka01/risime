@@ -23,5 +23,14 @@ for {k, v} <- [
 
 System.delete_env("NOTIFYLK_ALLOW_DEMO_OTP")
 
-# Fresh fail2ban auth log per run (tests match lines by client IP).
-File.rm(RisiMe.AuthLog.path())
+# Per-VM fail2ban auth log and blob dir: concurrent runs (partitions, worktrees) never share or
+# delete each other's. Tests match auth-log lines by client IP.
+vm_tmp = Path.join(System.tmp_dir!(), "risime-test-#{System.pid()}")
+Application.put_env(:risime, :auth_log_path, Path.join(vm_tmp, "auth.log"))
+Application.put_env(:risime, :blob_dir, Path.join(vm_tmp, "blobs"))
+File.rm_rf!(vm_tmp)
+File.mkdir_p!(vm_tmp)
+ExUnit.after_suite(fn _ -> File.rm_rf(vm_tmp) end)
+
+# Per-VM random bases for unique phones and IPs (RisiMe.Fixtures).
+RisiMe.Fixtures.init_bases!()

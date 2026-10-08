@@ -12,8 +12,6 @@ defmodule RisiMeWeb.AuthLogTest do
 
   defp from_ip(conn, ip), do: %{conn | remote_ip: ip}
 
-  defp unique_ip, do: {203, 0, 113, :rand.uniform(250)}
-
   defp lines_for(ip_string) do
     AuthLog.path()
     |> File.read!()
@@ -88,11 +86,12 @@ defmodule RisiMeWeb.AuthLogTest do
 
     test "behind the local proxy, each X-Forwarded-For client has its own budget", %{conn: conn} do
       conn = from_ip(conn, {127, 0, 0, 1})
+      {p1, p2} = {unique_phone(), unique_phone()}
 
       for i <- 1..11 do
         c = put_req_header(conn, "x-forwarded-for", "198.51.100.#{i}")
 
-        assert post(c, ~p"/api/v1/auth/request", %{phone: "+94771111111", email: "z@example.com"}).status in [
+        assert post(c, ~p"/api/v1/auth/request", %{phone: p1, email: "z@example.com"}).status in [
                  200,
                  429
                ]
@@ -101,7 +100,7 @@ defmodule RisiMeWeb.AuthLogTest do
       # Distinct client IPs: only the per-phone limit (3 per 15 min) applied, not the per-IP one.
       c = put_req_header(conn, "x-forwarded-for", "198.51.100.200")
 
-      assert post(c, ~p"/api/v1/auth/request", %{phone: "+94772222222", email: "w@example.com"}).status ==
+      assert post(c, ~p"/api/v1/auth/request", %{phone: p2, email: "w@example.com"}).status ==
                200
     end
 

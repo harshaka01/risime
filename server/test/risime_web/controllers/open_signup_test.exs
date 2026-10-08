@@ -30,7 +30,6 @@ defmodule RisiMeWeb.OpenSignupTest do
 
   # Each test gets its own client IP, so the per-IP counters never leak between tests.
   defp from_ip(conn, ip), do: %{conn | remote_ip: ip}
-  defp unique_ip, do: {198, 51, 100, :rand.uniform(250)}
 
   defp authed(conn, token), do: put_req_header(conn, "authorization", "Bearer " <> token)
 
