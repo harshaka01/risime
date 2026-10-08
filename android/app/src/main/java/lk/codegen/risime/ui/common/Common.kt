@@ -74,8 +74,7 @@ fun InitialsAvatar(name: String, enabled: Boolean = true, size: Dp = Sizes.avata
     Box {
         val initials = name.split(' ', '-', '.').filter { it.isNotBlank() }.take(2)
             .joinToString("") { it.first().uppercase() }.ifEmpty { "?" }
-        val bg = if (enabled) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
-        val fg = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer else RisiTheme.colors.textMuted
+        val (bg, fg) = if (enabled) avatarColors(name) else MaterialTheme.colorScheme.surfaceVariant to RisiTheme.colors.textMuted
         Box(
             Modifier.size(size).clip(CircleShape).background(bg).clearAndSetSemantics { },
             contentAlignment = Alignment.Center,
@@ -85,6 +84,23 @@ fun InitialsAvatar(name: String, enabled: Boolean = true, size: Dp = Sizes.avata
         if (online) PresenceDot(Modifier.align(Alignment.BottomEnd), size)
     }
 }
+
+/** A stable (container, text) pair per name, from the brand's hues; ≥ 7:1 in both themes (AvatarColorsTest). */
+@Composable
+fun avatarColors(name: String): Pair<Color, Color> {
+    val dark = RisiTheme.colors.surface.luminance() < 0.5f
+    val list = if (dark) AVATAR_DARK else AVATAR_LIGHT
+    return list[(name.lowercase().hashCode() and 0x7fffffff) % list.size]
+}
+
+val AVATAR_LIGHT = listOf(
+    Color(0xFFD9E2FF) to Color(0xFF001849), Color(0xFFB8F5EE) to Color(0xFF00201D), Color(0xFFE9DDFF) to Color(0xFF22005D),
+    Color(0xFFFFD8E8) to Color(0xFF3E001D), Color(0xFFFFDDB5) to Color(0xFF2B1700), Color(0xFFC4EFCB) to Color(0xFF00210B),
+)
+val AVATAR_DARK = listOf(
+    Color(0xFF0040A3) to Color(0xFFD9E2FF), Color(0xFF00504A) to Color(0xFFB8F5EE), Color(0xFF4F2B9E) to Color(0xFFE9DDFF),
+    Color(0xFF7A1F4C) to Color(0xFFFFD8E8), Color(0xFF6A4300) to Color(0xFFFFDDB5), Color(0xFF155226) to Color(0xFFC4EFCB),
+)
 
 /** Presence dot with a surface ring so it reads on any avatar; TalkBack: "online". */
 @Composable
@@ -112,6 +128,8 @@ fun RisiTopBar(
     onBack: (() -> Unit)? = null,
     avatar: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    /** The app's home bar: the brand title (larger, in the primary colour). */
+    brand: Boolean = false,
 ) {
     TopAppBar(
         navigationIcon = {
@@ -121,11 +139,16 @@ fun RisiTopBar(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 avatar?.let {
                     it()
-                    Spacer(Modifier.width(Spacing.md))
+                    Spacer(Modifier.width(if (onBack != null) Spacing.sm + Spacing.xxs else Spacing.md))
                 }
                 Column {
-                    Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.semantics { heading() })
+                    Text(
+                        title,
+                        style = if (brand) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
+                        color = if (brand) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.semantics { heading() },
+                    )
                     if (!subtitle.isNullOrEmpty()) {
                         Text(
                             subtitle,
@@ -180,12 +203,12 @@ fun ListRow(
             it()
             Spacer(Modifier.width(Spacing.md + Spacing.xxs))
         }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.xxs + 1.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(title, color = titleColor, fontWeight = if (strong) FontWeight.ExtraBold else FontWeight.SemiBold,
+                Text(title, color = titleColor, style = MaterialTheme.typography.titleMedium, fontWeight = if (strong) FontWeight.Bold else FontWeight.SemiBold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 meta?.let {
-                    Text(it, style = MaterialTheme.typography.labelSmall,
+                    Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(start = Spacing.sm),
                         color = if (strong) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         fontWeight = if (strong) FontWeight.Bold else null)
                 }
@@ -212,11 +235,14 @@ fun ListRow(
 
 @Composable
 fun UnreadBadge(n: Int, modifier: Modifier = Modifier) {
-    Badge(
-        containerColor = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
-        modifier = modifier.padding(start = Spacing.sm).clearAndSetSemantics { contentDescription = "$n unread" },
-    ) { Text(if (n > 99) "99+" else n.toString()) }
+    Box(
+        modifier.padding(start = Spacing.sm).heightIn(min = 22.dp).widthIn(min = 22.dp).clip(RisiShapes.pill)
+            .background(MaterialTheme.colorScheme.primary).padding(horizontal = 6.dp)
+            .clearAndSetSemantics { contentDescription = "$n unread" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(if (n > 99) "99+" else n.toString(), color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    }
 }
 
 @Composable
@@ -268,8 +294,11 @@ fun DaySeparator(label: String) {
 }
 
 /**
- * Chat bubble. Mine: right, bubbleMine; theirs: left, bubbleTheirs. TalkBack reads one merged
- * node ("You: hi, 14:05, Read"). Long-press (and tap when [tapOpensMenu]) opens [menu].
+ * Chat bubble (WhatsApp-style). Mine: right, bubbleMine; theirs: left, bubbleTheirs; at most
+ * [Sizes.bubbleMaxFraction] of the chat's width. The first bubble of a run has a [tail] at its top
+ * corner. The time and ticks sit inside the bubble, bottom-right, on the last text line when they
+ * fit. TalkBack reads one merged node ("You: hi, 14:05, Read"). Long-press (and tap when
+ * [tapOpensMenu]) opens [menu].
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -301,20 +330,26 @@ fun MessageBubble(
     imageStatus: String? = null,
     /** §14: the photo's tap target ("Retry"), also a TalkBack action of the merged bubble. */
     imageAction: Pair<String, () -> Unit>? = null,
+    /** The first bubble of a run (a new sender or side): the tail and a little more space above. */
+    tail: Boolean = true,
 ) {
     val c = RisiTheme.colors
     val statusLabel = status?.let { tickLabel(it) }
+    val dark = c.bubbleTheirs.luminance() < 0.5f
     Box(
-        Modifier.fillMaxWidth().then(if (selected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)) else Modifier),
+        Modifier.fillMaxWidth()
+            .then(if (selected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)) else Modifier)
+            .padding(top = if (tail) Spacing.xs else 0.dp),
         contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart,
     ) {
         menu()
-        Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+        Column(Modifier.fillMaxWidth(Sizes.bubbleMaxFraction), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
         Surface(
             color = if (mine) c.bubbleMine else c.bubbleTheirs,
             contentColor = if (mine) c.onBubbleMine else c.onBubbleTheirs,
-            shape = if (mine) RisiShapes.mine else RisiShapes.theirs,
-            modifier = Modifier.widthIn(max = Sizes.bubbleMaxWidth)
+            shape = BubbleShape(mine, tail),
+            shadowElevation = if (dark) 0.dp else 0.5.dp,
+            modifier = Modifier
                 .minimumInteractiveComponentSize()
                 .combinedClickable(
                     onClickLabel = if (tapOpensMenu) "Show options" else tapLabel,
@@ -337,30 +372,154 @@ fun MessageBubble(
                     }
                 },
         ) {
-            Column(Modifier.padding(horizontal = if (image != null) Spacing.xs else Spacing.md, vertical = if (image != null) Spacing.xs else Spacing.sm)) {
-                sender?.let { Text(it, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = senderColor, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                image?.invoke()
-                if (image == null || body.isNotBlank()) {
+            val tailPad = RisiShapes.tailWidth
+            val inner = if (image != null) Spacing.xs else Spacing.sm + Spacing.xxs
+            Column(
+                Modifier.padding(
+                    start = inner + if (mine) 0.dp else tailPad,
+                    end = inner + if (mine) tailPad else 0.dp,
+                    top = if (image != null) Spacing.xs else Spacing.xs + Spacing.xxs,
+                    bottom = if (image != null) Spacing.xs else Spacing.xs,
+                ),
+            ) {
+                sender?.let {
                     Text(
-                        body,
-                        style = if (muted) MaterialTheme.typography.bodyLarge.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic) else MaterialTheme.typography.bodyLarge,
-                        color = if (muted) androidx.compose.material3.LocalContentColor.current.copy(alpha = 0.7f) else Color.Unspecified,
+                        it, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = senderColor,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = if (image != null) Modifier.padding(horizontal = Spacing.xs, vertical = Spacing.xxs) else Modifier,
+                    )
+                }
+                image?.invoke()
+                val meta: @Composable () -> Unit = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(time, style = MaterialTheme.typography.labelSmall, color = if (mine) c.bubbleMineMeta else c.bubbleTheirsMeta)
+                        if (status != null) {
+                            Spacer(Modifier.size(Spacing.xs))
+                            MessageTicks(status)
+                        }
+                    }
+                }
+                if (image == null || body.isNotBlank()) {
+                    TextWithMeta(
+                        text = {
+                            Text(
+                                body,
+                                style = if (muted) MaterialTheme.typography.bodyLarge.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic) else MaterialTheme.typography.bodyLarge,
+                                color = if (muted) androidx.compose.material3.LocalContentColor.current.copy(alpha = 0.7f) else Color.Unspecified,
+                                onTextLayout = it,
+                            )
+                        },
+                        meta = if (note == null) meta else null,
                         modifier = if (image != null) Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs) else Modifier,
                     )
                 }
                 note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = if (noteIsInfo) androidx.compose.material3.LocalContentColor.current.copy(alpha = 0.7f) else MaterialTheme.colorScheme.error) }
-                Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
-                    Text(time, style = MaterialTheme.typography.labelSmall, color = if (mine) c.bubbleMineMeta else c.bubbleTheirsMeta)
-                    if (status != null) {
-                        Spacer(Modifier.size(Spacing.xs))
-                        MessageTicks(status)
-                    }
+                if (note != null || (image != null && body.isBlank())) {
+                    Box(Modifier.align(Alignment.End).padding(horizontal = if (image != null) Spacing.xs else 0.dp, vertical = if (image != null) Spacing.xxs else 0.dp)) { meta() }
                 }
             }
         }
         footer()
         }
     }
+}
+
+/**
+ * The message text with its time + ticks: on the last line when there's room (WhatsApp-style),
+ * else on a line of its own, right-aligned. [meta] null: the text alone.
+ */
+@Composable
+fun TextWithMeta(
+    text: @Composable (onLayout: (androidx.compose.ui.text.TextLayoutResult) -> Unit) -> Unit,
+    meta: (@Composable () -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val holder = androidx.compose.runtime.remember { arrayOfNulls<androidx.compose.ui.text.TextLayoutResult>(1) }
+    androidx.compose.ui.layout.Layout(
+        contents = listOf({ text { holder[0] = it } }, { meta?.invoke() }),
+        modifier = modifier,
+    ) { (textM, metaM), constraints ->
+        val tp = textM.first().measure(constraints.copy(minWidth = 0))
+        val mp = metaM.firstOrNull()?.measure(androidx.compose.ui.unit.Constraints())
+        if (mp == null) return@Layout layout(tp.width, tp.height) { tp.place(0, 0) }
+        val gap = Spacing.sm.roundToPx()
+        val lay = holder[0]
+        val lastLine = lay?.let { it.lineCount - 1 } ?: 0
+        val rtl = lay?.let { it.getParagraphDirection(it.getLineStart(lastLine)) == androidx.compose.ui.text.style.ResolvedTextDirection.Rtl } ?: false
+        val lastWidth = lay?.let { kotlin.math.ceil(it.getLineRight(lastLine) - it.getLineLeft(lastLine)).toInt() } ?: tp.width
+        val inline = !rtl && lastWidth + gap + mp.width <= constraints.maxWidth
+        if (inline) {
+            val w = maxOf(tp.width, lastWidth + gap + mp.width).coerceAtMost(constraints.maxWidth)
+            val h = maxOf(tp.height, mp.height)
+            layout(w, h) {
+                tp.place(0, 0)
+                mp.place(w - mp.width, h - mp.height + (Spacing.xxs.roundToPx() / 2))
+            }
+        } else {
+            val w = maxOf(tp.width, mp.width).coerceAtMost(constraints.maxWidth)
+            layout(w, tp.height + mp.height) {
+                tp.place(0, 0)
+                mp.place(w - mp.width, tp.height)
+            }
+        }
+    }
+}
+
+/**
+ * The bubble's outline: rounded, with a WhatsApp-style tail at the top corner on [mine]'s side
+ * (end for mine, start for theirs; mirrored in RTL). The tail side always reserves
+ * [RisiShapes.tailWidth], so bubbles of a run line up with or without a tail.
+ */
+class BubbleShape(private val mine: Boolean, private val tail: Boolean) : androidx.compose.ui.graphics.Shape {
+    override fun createOutline(
+        size: androidx.compose.ui.geometry.Size,
+        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+        density: androidx.compose.ui.unit.Density,
+    ): androidx.compose.ui.graphics.Outline {
+        val t = with(density) { RisiShapes.tailWidth.toPx() }
+        val r = with(density) { RisiShapes.bubbleRadius.toPx() }.coerceAtMost(minOf(size.width - t, size.height) / 2)
+        val right = mine == (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr)
+        val w = size.width
+        val h = size.height
+        val path = androidx.compose.ui.graphics.Path()
+        // Draw as if the tail is on the right; mirror for the left.
+        fun x(v: Float) = if (right) v else w - v
+        val bodyR = w - t
+        if (tail) {
+            path.moveTo(x(r), 0f)
+            path.lineTo(x(w - 2f), 0f)
+            path.quadraticTo(x(w), 0f, x(w - 1.5f), 2f)
+            path.lineTo(x(bodyR), minOf(t * 1.6f, h / 2))
+        } else {
+            path.moveTo(x(r), 0f)
+            path.lineTo(x(bodyR - r), 0f)
+            arc(path, right, x(bodyR - r), r, r, -90f)
+        }
+        path.lineTo(x(bodyR), h - r)
+        arc(path, right, x(bodyR - r), h - r, r, 0f)
+        path.lineTo(x(r), h)
+        arc(path, right, x(r), h - r, r, 90f)
+        path.lineTo(x(0f), r)
+        arc(path, right, x(r), r, r, 180f)
+        path.close()
+        return androidx.compose.ui.graphics.Outline.Generic(path)
+    }
+
+    /** A 90° corner arc around (cx, cy) starting at [start] degrees (right-tail frame), mirrored when needed. */
+    private fun arc(path: androidx.compose.ui.graphics.Path, right: Boolean, cx: Float, cy: Float, r: Float, start: Float) {
+        val rect = androidx.compose.ui.geometry.Rect(cx - r, cy - r, cx + r, cy + r)
+        if (right) path.arcTo(rect, start, 90f, false) else path.arcTo(rect, 180f - start, -90f, false)
+    }
+
+    override fun equals(other: Any?) = other is BubbleShape && other.mine == mine && other.tail == tail
+    override fun hashCode() = (if (mine) 1 else 0) * 2 + if (tail) 1 else 0
+}
+
+/** True when the message at [index] starts a run (WhatsApp tail): the row before it is another side, sender or kind. */
+fun startsRun(items: List<lk.codegen.risime.ui.chat.ChatItem>, index: Int): Boolean {
+    val m = (items[index] as? lk.codegen.risime.ui.chat.ChatItem.Msg)?.m ?: return true
+    val prev = (items.getOrNull(index - 1) as? lk.codegen.risime.ui.chat.ChatItem.Msg)?.m ?: return true
+    return prev.system || prev.call || prev.outgoing != m.outgoing || !prev.from.equals(m.from, true)
 }
 
 fun tickLabel(status: MessageStatus): String = when (status) {

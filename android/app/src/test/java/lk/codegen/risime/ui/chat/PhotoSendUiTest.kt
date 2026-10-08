@@ -15,6 +15,7 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -182,13 +183,16 @@ class PhotoSendUiTest {
         bubble("Kamal: Photo, Level 3, Tap to download").assertIsDisplayed().assertHasClickAction()
     }
 
-    @Test fun attachSheetShowsTheEncryptingStep() {
-        var state by mutableStateOf<AttachState>(AttachState.Preparing)
-        rule.setContent { RisiMeTheme(dark = false) { AttachSheetContent(state, "", {}, GROUP_IMAGES_NOTICE, {}, {}) } }
-        rule.onNodeWithText("Preparing photo…").assertIsDisplayed()
-        state = AttachState.Encrypting
-        rule.onNodeWithText("Encrypting photo…").assertIsDisplayed()
-        rule.onNodeWithText(GROUP_IMAGES_NOTICE).assertIsDisplayed()
+    @Test fun aCaptionTooLongBlocksSend() {
+        val long = "x".repeat(lk.codegen.risime.data.BodyLimits.MAX_GRAPHEMES + 1)
+        rule.setContent {
+            RisiMeTheme(dark = false) {
+                PhotoPreviewContent(listOf(PickedPhoto("p1", android.net.Uri.parse("content://x/1"), long)), { null }, null, { _, _ -> }, {}, {}, {})
+            }
+        }
+        rule.onNodeWithText("Send photo").assertIsDisplayed()
+        rule.onNodeWithText("A caption is too long").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Send photo").assertIsNotEnabled()
     }
 
     @Test fun groupNotificationsSayPhoto() {

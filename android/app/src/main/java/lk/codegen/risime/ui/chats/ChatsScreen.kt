@@ -17,6 +17,8 @@ import lk.codegen.risime.ui.friends.FriendsViewModel
 import lk.codegen.risime.ui.friends.RequestsTab
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -25,7 +27,6 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,7 +49,6 @@ import lk.codegen.risime.ui.common.TYPING_LABEL
 import lk.codegen.risime.ui.common.UnreadBadge
 import lk.codegen.risime.ui.common.presenceLabel
 import lk.codegen.risime.ui.common.shortStamp
-import lk.codegen.risime.ui.theme.Sizes
 import lk.codegen.risime.ui.theme.Spacing
 
 @Composable
@@ -106,6 +106,13 @@ fun ChatsScreen(
             RisiTopBar(
                 title = "RisiMe",
                 subtitle = connectionLabel(conn),
+                brand = true,
+                avatar = {
+                    androidx.compose.foundation.Image(
+                        androidx.compose.ui.res.painterResource(lk.codegen.risime.R.drawable.brand_mark), null,
+                        Modifier.size(34.dp),
+                    )
+                },
                 actions = {
                     IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search") }
                     IconButton(onClick = vm::refresh) { Icon(Icons.Default.Refresh, "Refresh friends") }
@@ -181,10 +188,6 @@ fun ChatsScreen(
                     }
                     items(rows, key = { it.key }) { row ->
                         ChatRowItem(row, onClick = { row.target?.takeIf { row.openable }?.let(onOpen) }, onLongClick = { chatMenuFor = row })
-                        HorizontalDivider(
-                            Modifier.padding(start = Spacing.lg + Sizes.avatar + Spacing.md + Spacing.xxs),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                        )
                     }
                 }
             }

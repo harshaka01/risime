@@ -46,33 +46,41 @@ class ImageUiTest {
     )
 
     @Test
-    fun attachSheetGoesFromPreparingToReadyWithCaptionAndSends() {
-        var state by mutableStateOf<AttachState>(AttachState.Preparing)
+    fun previewOfSeveralPhotosHasACaptionEachRemoveAndSend() {
+        val bmp = Bitmap.createBitmap(128, 96, Bitmap.Config.ARGB_8888).asImageBitmap()
+        var photos by mutableStateOf(listOf(1, 2, 3).map { PickedPhoto("p$it", android.net.Uri.parse("content://x/$it")) })
         var sent = false
         rule.setContent {
             RisiMeTheme(dark = true) {
-                var caption by remember { mutableStateOf("") }
-                AttachSheetContent(state, caption, { caption = it }, GROUP_IMAGES_NOTICE, onSend = { sent = true }, onCancel = {})
+                PhotoPreviewContent(
+                    photos, { bmp }, GROUP_IMAGES_NOTICE,
+                    onCaption = { id, t -> photos = photos.map { if (it.id == id) it.copy(caption = t) else it } },
+                    onRemove = { id -> photos = photos.filterNot { it.id == id } },
+                    onSend = { sent = true }, onCancel = {},
+                )
             }
         }
-        rule.onNodeWithText("Preparing photo…").assertIsDisplayed()
-        rule.onNodeWithText("Send").assertIsNotEnabled()
+        rule.onNodeWithText("1 of 3").assertIsDisplayed()
         rule.onNodeWithText(GROUP_IMAGES_NOTICE).assertIsDisplayed()
-        state = AttachState.Ready(Bitmap.createBitmap(128, 96, Bitmap.Config.ARGB_8888), 2048, 1536)
-        rule.onNodeWithText("Add a caption").performTextInput("Site visit")
-        rule.onNodeWithText("Send").assertIsEnabled().performClick()
+        rule.onNodeWithText("Add a caption…").performTextInput("Level 1")
+        rule.onNodeWithContentDescription("Photo 2").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("2 of 3").assertIsDisplayed()
+        rule.onNodeWithText("Add a caption…").performTextInput("Level 2")
+        rule.onNodeWithContentDescription("Remove this photo").performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("p1" to "Level 1", "p3" to ""), photos.map { it.id to it.caption })
+        rule.onNodeWithContentDescription("Send 2 photos").assertIsEnabled().performClick()
         assertTrue(sent)
     }
 
     @Test
-    fun attachErrorIsShownAndCannotSend() {
-        rule.setContent {
-            RisiMeTheme(dark = true) {
-                AttachSheetContent(AttachState.Error("This photo format isn't supported on this phone"), "", {}, null, {}, {})
-            }
-        }
-        rule.onNodeWithText("This photo format isn't supported on this phone").assertIsDisplayed()
-        rule.onNodeWithText("Send").assertIsNotEnabled()
+    fun attachSheetOffersOnlyWhatWorks() {
+        val picked = mutableListOf<AttachOption>()
+        rule.setContent { RisiMeTheme(dark = true) { AttachOptionsContent(listOf(AttachOption.GALLERY), { picked += it }) } }
+        rule.onNodeWithText("Gallery").performClick()
+        rule.onNodeWithText("Camera").assertDoesNotExist()
+        assertEquals(listOf(AttachOption.GALLERY), picked)
     }
 
     @Test
@@ -117,7 +125,7 @@ class ImageUiTest {
             }
         }
         rule.onNodeWithText("Couldn't send: this chat isn't end-to-end encrypted yet.").assertIsDisplayed()
-        rule.onNodeWithContentDescription("Attach photo (unavailable)").performClick()
+        rule.onNodeWithContentDescription("Attach (unavailable)").performClick()
         assertTrue(tapped) // a tap still explains (and refetches readiness)
     }
 

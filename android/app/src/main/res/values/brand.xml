@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The RisiMe glyph (24 x 24): the head bubble with its tail and the eyes cut out (even-odd),
+         then the antenna, its ball and the spark. Shared by the notification and themed icons. -->
+    <string name="risime_glyph_head" translatable="false">M9,7H15A5,5 0,0 1,20 12V13A5,5 0,0 1,15 18H10.5L6,21.5L7.1,17.4A5,5 0,0 1,4 13V12A5,5 0,0 1,9 7Z M9.5,10.4A0.95,0.95 0,0 1,10.45 11.35V13.65A0.95,0.95 0,0 1,8.55 13.65V11.35A0.95,0.95 0,0 1,9.5 10.4Z M14.5,10.4A0.95,0.95 0,0 1,15.45 11.35V13.65A0.95,0.95 0,0 1,13.55 13.65V11.35A0.95,0.95 0,0 1,14.5 10.4Z</string>
+    <string name="risime_glyph_extras" translatable="false">M11.55,4.6H12.45V7.2H11.55Z M12,2.2A1.45,1.45 0,1 1,11.99 2.2Z M20.6,1.6Q21,4.1 23.2,4.5Q21,4.9 20.6,7.4Q20.2,4.9 18,4.5Q20.2,4.1 20.6,1.6Z</string>
+    <!-- Splash and window backgrounds = the theme's surface (RisiPalette.surface). -->
+    <color name="window_background">#FDFBFF</color>
+</resources>

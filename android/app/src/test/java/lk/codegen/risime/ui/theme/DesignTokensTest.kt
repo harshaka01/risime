@@ -22,8 +22,8 @@ class DesignTokensTest {
 
     @Test fun formulaMatchesKnownValues() {
         assertEquals(21.0, contrast(Color.Black, Color.White), 0.01)
-        assertEquals(1.0, contrast(Teal, Teal), 0.001)
-        assertEquals(5.8, contrast(Teal, Color(0xFFF7FAF9)), 0.05)
+        assertEquals(1.0, contrast(BrandBlue, BrandBlue), 0.001)
+        assertEquals(6.42, contrast(Color(0xFF0056D3), Color.White), 0.05)
     }
 
     @Test fun textPairsMeetAA() {
@@ -42,8 +42,9 @@ class DesignTokensTest {
     }
 
     @Test fun seedsAndReadTickDistinguishable() {
-        assertEquals(Color(0xFF0B6E69), LightPalette.primary)
-        assertEquals(Color(0xFFF2A93B), DarkPalette.readTick)
+        // GO UX: the logo's blue (seed #1565E8, tone 40) and its cyan for read ticks.
+        assertEquals(Color(0xFF0056D3), LightPalette.primary)
+        assertEquals(Color(0xFF8AF7FF), DarkPalette.readTick)
         for (p in listOf(LightPalette, DarkPalette)) {
             // Read must not look like delivered: different colour, and ≥ 1.5:1 apart.
             assertTrue(contrast(p.readTick, p.bubbleMineMeta) >= 1.5)

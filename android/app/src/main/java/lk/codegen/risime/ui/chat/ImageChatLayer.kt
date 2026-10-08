@@ -18,21 +18,36 @@ import kotlinx.coroutines.launch
 import lk.codegen.risime.data.db.MessageEntity
 
 /**
- * The dialogs of a chat's photos (viewer, attach sheet) and their activity launchers (the system
- * Photo Picker; the Save dialog on API 26–28). Returns the "pick a photo" action for the composer.
+ * The dialogs of a chat's photos (viewer, the "+" sheet, the send preview) and their activity
+ * launchers (the system Photo Picker for up to 10 photos, the camera app, the Save dialog on API
+ * 26–28). Returns the "+" action for the composer (opens the attachment sheet).
  */
 @Composable
 fun rememberImageLayer(imgs: ImageActions, messages: List<MessageEntity>, groupNotice: String? = null): () -> Unit {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val viewerId by imgs.viewer.collectAsStateWithLifecycle()
-    val attach by imgs.attach.collectAsStateWithLifecycle()
+    val selection by imgs.selection.collectAsStateWithLifecycle()
+    var sheet by remember { mutableStateOf(false) }
+    var cameraUri by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+    val canCamera = remember { runCatching { CameraCapture.available(context) }.getOrDefault(false) }
     val media by imgs.media.collectAsStateWithLifecycle()
     val toast by imgs.toast.collectAsStateWithLifecycle()
     var pendingSave by remember { mutableStateOf<ByteArray?>(null) }
 
     // No storage permission anywhere: the Photo Picker (ACTION_OPEN_DOCUMENT fallback on old phones).
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> imgs.onPicked(uri) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageActions.MAX_PHOTOS)) { uris ->
+        if (uris.size > ImageActions.MAX_PHOTOS) imgs.toast.value = "You can send up to ${ImageActions.MAX_PHOTOS} photos at a time"
+        imgs.onPicked(uris)
+    }
+    // No CAMERA permission: the camera app writes into our FileProvider cache file.
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val uri = cameraUri?.let(android.net.Uri::parse)
+        cameraUri = null
+        if (uri != null) {
+            if (ok) imgs.onPicked(listOf(uri), temp = true) else runCatching { context.contentResolver.delete(uri, null, null) }
+        }
+    }
     val saveDialog = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/jpeg")) { uri ->
         val bytes = pendingSave
         pendingSave = null
@@ -80,16 +95,34 @@ fun rememberImageLayer(imgs: ImageActions, messages: List<MessageEntity>, groupN
         )
     }
 
-    attach?.let { a ->
-        AttachSheet(
-            state = a.state,
-            caption = a.caption,
-            onCaption = imgs::onCaption,
-            notice = groupNotice,
-            onSend = imgs::sendAttach,
-            onCancel = imgs::cancelAttach,
+    if (sheet) {
+        AttachOptionsSheet(
+            options = listOfNotNull(AttachOption.GALLERY, AttachOption.CAMERA.takeIf { canCamera }),
+            onPick = { o ->
+                sheet = false
+                when (o) {
+                    AttachOption.GALLERY -> picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    AttachOption.CAMERA -> runCatching {
+                        val uri = CameraCapture.newUri(context)
+                        cameraUri = uri.toString()
+                        camera.launch(uri)
+                    }.onFailure { imgs.toast.value = "Couldn't open the camera" }
+                }
+            },
+            onDismiss = { sheet = false },
         )
     }
 
-    return { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+    selection?.let { photos ->
+        PhotoPreview(
+            photos = photos,
+            notice = groupNotice,
+            onCaption = imgs::onCaption,
+            onRemove = imgs::remove,
+            onSend = imgs::sendSelection,
+            onCancel = imgs::cancelSelection,
+        )
+    }
+
+    return { sheet = true }
 }

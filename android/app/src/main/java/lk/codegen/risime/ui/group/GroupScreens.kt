@@ -76,6 +76,7 @@ import lk.codegen.risime.ui.common.MessageBubble
 import lk.codegen.risime.ui.common.RisiTopBar
 import lk.codegen.risime.ui.common.SectionHeader
 import lk.codegen.risime.ui.common.SystemLineText
+import lk.codegen.risime.ui.common.startsRun
 import lk.codegen.risime.ui.common.memberColor
 import lk.codegen.risime.ui.common.timeOf
 import lk.codegen.risime.ui.chats.groupTypingLabel
@@ -263,7 +264,7 @@ internal fun GroupMessageList(
         messages = messages,
         modifier = modifier,
         contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.md),
-        spacing = Spacing.xs + Spacing.xxs,
+        spacing = Spacing.xxs,
         scroll = scroll,
     ) { items, i ->
         when (val item = items[i]) {
@@ -282,6 +283,7 @@ internal fun GroupMessageList(
                 lk.codegen.risime.ui.chat.TombstoneBubble(
                     item.m, meId, sender = if (attributed && showSenderAt(items, i)) nameOf(item.m.from) else null, selected = s?.selected == true,
                     onMenu = s?.let { x -> { if (x.selecting) x.onToggle() else x.onDelete() } }, onTap = s?.takeIf { it.selecting }?.onToggle,
+                    tail = startsRun(items, i),
                 )
             } else {
                 GroupBubble(
@@ -298,6 +300,7 @@ internal fun GroupMessageList(
                     sel = del?.selectFor(item.m, selection),
                     upload = uploads[item.m.clientMsgId],
                     sharedBy = lk.codegen.risime.ui.history.sharedByLabel(item.m, nameOf),
+                    tail = startsRun(items, i),
                 )
             }
         }
@@ -322,6 +325,7 @@ private fun GroupBubble(
     sharedBy: String? = null,
     sel: lk.codegen.risime.ui.chat.MsgSelect? = null,
     upload: Float? = null,
+    tail: Boolean = true,
 ) {
     val failed = m.status == MessageStatus.FAILED.name
     var sheet by remember { mutableStateOf(false) }
@@ -355,6 +359,7 @@ private fun GroupBubble(
         imageAction = retryPhoto?.let { lk.codegen.risime.ui.chat.PHOTO_RETRY to it },
         onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else null,
         tapLabel = if (m.image) lk.codegen.risime.ui.chat.imageTapLabel(lk.codegen.risime.ui.chat.imageTap(media)) else null,
+        tail = tail,
     )
     if (sheet) {
         val actions = buildList<Pair<String, () -> Unit>> {

@@ -1,6 +1,11 @@
 <resources>
     <!-- AppCompat parent: BiometricPrompt's fingerprint dialog (API 26–28) is an AppCompat
          AlertDialog on MainActivity, and any library activity without its own theme inherits
-         this one. Compose draws everything else (MaterialTheme). -->
-    <style name="Theme.RisiMe" parent="Theme.AppCompat.DayNight.NoActionBar" />
+         this one. Compose draws everything else (MaterialTheme). The window background is the
+         theme's surface, so a window never shows a black or grey frame before Compose draws
+         (the call screen, launch, Back). -->
+    <style name="Theme.RisiMe" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:colorBackground">@color/window_background</item>
+    </style>
 </resources>

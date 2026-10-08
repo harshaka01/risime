@@ -26,7 +26,7 @@ fun tombstoneText(m: MessageEntity, me: String): String =
  * offers only "Delete for me" (when the delete UI is on, [onMenu] non-null).
  */
 @Composable
-fun TombstoneBubble(m: MessageEntity, me: String, sender: String? = null, onMenu: (() -> Unit)? = null, selected: Boolean = false, onTap: (() -> Unit)? = null) {
+fun TombstoneBubble(m: MessageEntity, me: String, sender: String? = null, onMenu: (() -> Unit)? = null, selected: Boolean = false, onTap: (() -> Unit)? = null, tail: Boolean = true) {
     MessageBubble(
         body = "🚫 " + tombstoneText(m, me),
         time = timeOf(m.localTs),
@@ -37,6 +37,7 @@ fun TombstoneBubble(m: MessageEntity, me: String, sender: String? = null, onMenu
         onTap = onTap,
         selected = selected,
         muted = true,
+        tail = tail,
     )
 }
 

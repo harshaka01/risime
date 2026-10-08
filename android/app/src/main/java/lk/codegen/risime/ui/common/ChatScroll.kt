@@ -1,5 +1,6 @@
 package lk.codegen.risime.ui.common
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -134,7 +135,7 @@ fun ChatMessageList(
         snapshotFlow { scroll.atBottom }.distinctUntilChanged().filter { it }.collect { scroll.unseen = 0 }
     }
     val coroutines = rememberCoroutineScope()
-    Box(modifier) {
+    Box(modifier.background(lk.codegen.risime.ui.theme.RisiTheme.colors.chatBackground)) {
         LazyColumn(
             state = scroll.list,
             modifier = Modifier.fillMaxWidth().testTag(CHAT_LIST_TAG),

@@ -104,7 +104,7 @@ class CallNotifications(private val context: Context) {
         ensureChannels()
         val person = Person.Builder().setName(name ?: "Incoming RisiMe call").setImportant(name != null).build()
         val n = NotificationCompat.Builder(context, CH_CALLS)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_risime)
             .setContentTitle(name ?: "Incoming RisiMe call")
             .setContentText(if (name == null) "Unlock to answer" else "Incoming voice call")
             .setStyle(NotificationCompat.CallStyle.forIncomingCall(person, broadcast(ACTION_DECLINE, 2), activityIntent(ACTION_ANSWER, 1)))
@@ -125,7 +125,7 @@ class CallNotifications(private val context: Context) {
         ensureChannels()
         val person = Person.Builder().setName(name).build()
         return NotificationCompat.Builder(context, CH_CALL_STATUS)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_risime)
             .setContentTitle(name)
             .setContentText(status)
             .setStyle(NotificationCompat.CallStyle.forOngoingCall(person, broadcast(ACTION_HANGUP, 4)))
@@ -143,7 +143,7 @@ class CallNotifications(private val context: Context) {
     fun checking(): Notification {
         ensureChannels()
         return NotificationCompat.Builder(context, CH_CALL_STATUS)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_risime)
             .setContentTitle("RisiMe")
             .setContentText("Connecting a call…")
             .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -162,7 +162,7 @@ class CallNotifications(private val context: Context) {
         nm.notify(
             code,
             NotificationCompat.Builder(context, CH_MISSED)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_stat_risime)
                 .setContentTitle("Missed call from $name")
                 .setContentText("Voice call")
                 .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)

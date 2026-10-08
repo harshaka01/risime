@@ -2,6 +2,10 @@ package lk.codegen.risime.ui.chat
 
 import android.content.ClipData
 import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,7 +24,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -144,7 +147,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 messages = messages,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = Spacing.md, vertical = Spacing.md),
-                spacing = Spacing.xs + Spacing.xxs,
+                spacing = Spacing.xxs,
                 scroll = scroll,
             ) { items, i ->
                 when (val item = items[i]) {
@@ -161,6 +164,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                                 item.m, vm.me, selected = s?.selected == true,
                                 onMenu = s?.let { x -> { if (x.selecting) x.onToggle() else x.onDelete() } },
                                 onTap = s?.takeIf { it.selecting }?.onToggle,
+                                tail = lk.codegen.risime.ui.common.startsRun(items, i),
                             )
                             return@DmMessageRow
                         }
@@ -175,6 +179,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                             sel = vm.del.selectFor(item.m, selection),
                             upload = uploads[item.m.clientMsgId],
                             sharedBy = lk.codegen.risime.ui.history.sharedByLabel(item.m) { id -> if (id.equals(vm.peerId, true)) name else "your contact" },
+                            tail = lk.codegen.risime.ui.common.startsRun(items, i),
                         )
                     }
                 }
@@ -257,6 +262,8 @@ internal fun Bubble(
     upload: Float? = null,
     /** §17.12 "Shared by <provider>" for an imported row (the info line of the sheet). */
     sharedBy: String? = null,
+    /** The first bubble of a run (WhatsApp tail). */
+    tail: Boolean = true,
 ) {
     val failed = m.status == MessageStatus.FAILED.name
     var sheet by remember { mutableStateOf(false) }
@@ -289,6 +296,7 @@ internal fun Bubble(
         imageAction = retryPhoto?.let { PHOTO_RETRY to it },
         onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else null,
         tapLabel = if (m.image) imageTapLabel(imageTap(media)) else null,
+        tail = tail,
     )
     if (sheet) {
         val actions = buildList<Pair<String, () -> Unit>> {
@@ -328,14 +336,18 @@ private fun NotFriendsBar(name: String, requested: Boolean, onAddFriend: () -> U
     }
 }
 
-/** Composer: emoji picker (inserts at the cursor), grapheme counter from 3,900, send disabled when too long (§11.1). */
+/**
+ * The input bar (WhatsApp-style, full width on the chat wallpaper): a rounded field holding the
+ * emoji button, the text and the "+" attach button, then the round Send button. Emoji picker
+ * inserts at the cursor; grapheme counter from 3,900; Send disabled when too long (§11.1).
+ */
 @Composable
 internal fun Composer(
     value: androidx.compose.ui.text.input.TextFieldValue,
     onValue: (androidx.compose.ui.text.input.TextFieldValue) -> Unit,
     onSend: () -> Unit,
     placeholder: String = "Message",
-    /** §14: the attach-photo button (null: photos aren't available in this app/chat). */
+    /** §14: the "+" attach button (null: photos aren't available in this app/chat). */
     attach: (@Composable () -> Unit)? = null,
     /** The picker view inside the emoji sheet (a fake in tests). */
     emojiPicker: (@Composable (onPick: (String) -> Unit) -> Unit)? = null,
@@ -344,8 +356,10 @@ internal fun Composer(
     val text = value.text
     // Graphemes ≤ chars: only count when it could matter.
     val limits = if (text.length < lk.codegen.risime.data.BodyLimits.COUNTER_FROM) null else lk.codegen.risime.data.BodyLimits.of(text, lk.codegen.risime.data.IcuGraphemes)
-    Surface(tonalElevation = 2.dp) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = Spacing.sm, vertical = Spacing.xs + Spacing.xxs)) {
+    val colors = lk.codegen.risime.ui.theme.RisiTheme.colors
+    val dark = colors.bubbleTheirs.luminance() < 0.5f
+    Surface(color = colors.chatBackground) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = Spacing.sm, end = Spacing.sm, top = Spacing.xs, bottom = Spacing.sm)) {
             if (limits?.showCounter == true) {
                 Text(
                     "%,d / %,d".format(limits.graphemes, lk.codegen.risime.data.BodyLimits.MAX_GRAPHEMES) + if (limits.tooLong) " · too long" else "",
@@ -354,21 +368,51 @@ internal fun Composer(
                     modifier = Modifier.align(Alignment.End).padding(end = Spacing.sm),
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                attach?.invoke()
-                IconButton(onClick = { picker = true }) {
-                    Text("🙂", style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { contentDescription = "Emoji" })
-                }
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = onValue,
-                    placeholder = { Text(placeholder) },
-                    modifier = Modifier.weight(1f),
-                    maxLines = 5,
+            Row(verticalAlignment = Alignment.Bottom) {
+                Surface(
                     shape = RisiShapes.input,
-                )
-                IconButton(onClick = onSend, enabled = text.isNotBlank() && limits?.tooLong != true) {
-                    Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = MaterialTheme.colorScheme.primary)
+                    color = if (dark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest,
+                    shadowElevation = if (dark) 0.dp else 1.dp,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(horizontal = Spacing.xxs)) {
+                        IconButton(onClick = { picker = true }) {
+                            Text("🙂", style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { contentDescription = "Emoji" })
+                        }
+                        androidx.compose.material3.TextField(
+                            value = value,
+                            onValueChange = onValue,
+                            placeholder = { Text(placeholder) },
+                            modifier = Modifier.weight(1f),
+                            maxLines = 6,
+                            textStyle = MaterialTheme.typography.bodyLarge,
+                            colors = androidx.compose.material3.TextFieldDefaults.colors(
+                                focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                disabledContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            ),
+                        )
+                        attach?.invoke()
+                    }
+                }
+                Spacer(Modifier.width(Spacing.xs + Spacing.xxs))
+                val canSend = text.isNotBlank() && limits?.tooLong != true
+                androidx.compose.material3.FilledIconButton(
+                    onClick = onSend,
+                    enabled = canSend,
+                    shape = androidx.compose.foundation.shape.CircleShape,
+                    modifier = Modifier.size(Sizes.minTouch + 4.dp),
+                    colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
+                        disabledContentColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
+                    ),
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Send, "Send", Modifier.size(22.dp))
                 }
             }
         }
@@ -384,14 +428,15 @@ internal fun Composer(
     }
 }
 
-/** §14.1: attach a photo; a disabled-looking button still answers a tap with the reason (and refetches readiness). */
+/** §14.1 the "+" attach button (opens the attachment sheet); a disabled-looking button still answers a tap with the reason. */
 @Composable
 internal fun AttachButton(enabled: Boolean, onClick: () -> Unit) {
     IconButton(onClick = onClick) {
         Icon(
             Icons.Default.Add,
-            if (enabled) "Attach photo" else "Attach photo (unavailable)",
-            tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            if (enabled) "Attach" else "Attach (unavailable)",
+            tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+            modifier = Modifier.size(26.dp),
         )
     }
 }

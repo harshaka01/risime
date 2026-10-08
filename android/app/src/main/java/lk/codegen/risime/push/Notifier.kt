@@ -79,7 +79,7 @@ class Notifier(private val context: Context) {
         nm.notify(
             SUMMARY_ID,
             NotificationCompat.Builder(context, CH_MESSAGES)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_stat_risime)
                 .setContentTitle("RisiMe")
                 .setContentText("New messages")
                 .setGroup(GROUP_MESSAGES)
@@ -107,7 +107,7 @@ class Notifier(private val context: Context) {
                 }
             }
             val b = NotificationCompat.Builder(context, CH_MESSAGES)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_stat_risime)
                 .setContentTitle(n.title)
                 .setContentText(n.lines.lastOrNull())
                 .setStyle(style)
@@ -133,7 +133,7 @@ class Notifier(private val context: Context) {
         nm.notify(
             chatId(conversationId),
             NotificationCompat.Builder(context, CH_MESSAGES)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_stat_risime)
                 .setContentTitle("Added to a group")
                 .setContentText(text)
                 .setCategory(NotificationCompat.CATEGORY_SOCIAL)
@@ -152,7 +152,7 @@ class Notifier(private val context: Context) {
         nm.notify(
             LOCKED_ID,
             NotificationCompat.Builder(context, CH_MESSAGES)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_stat_risime)
                 .setContentTitle("New messages")
                 .setContentText("Open RisiMe to read them")
                 .setAutoCancel(true)
@@ -169,7 +169,7 @@ class Notifier(private val context: Context) {
         nm.notify(
             REQUESTS_ID,
             NotificationCompat.Builder(context, CH_REQUESTS)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_stat_risime)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setCategory(NotificationCompat.CATEGORY_SOCIAL)
@@ -187,7 +187,7 @@ class Notifier(private val context: Context) {
         nm.notify(
             HISTORY_ID,
             NotificationCompat.Builder(context, CH_HISTORY)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_stat_risime)
                 .setContentTitle("Chat history request")
                 .setContentText(text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(text))
@@ -207,7 +207,7 @@ class Notifier(private val context: Context) {
         nm.notify(
             HISTORY_DONE_ID,
             NotificationCompat.Builder(context, CH_HISTORY)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_stat_risime)
                 .setContentTitle("Shared chat history with your new phone")
                 .setSilent(true)
                 .setAutoCancel(true)
@@ -217,14 +217,14 @@ class Notifier(private val context: Context) {
 
     /** §17.16 the export worker's ongoing notification. */
     fun historyExportNotification() = NotificationCompat.Builder(context, CH_SYNC)
-        .setSmallIcon(R.drawable.ic_launcher_foreground)
+        .setSmallIcon(R.drawable.ic_stat_risime)
         .setContentTitle("Sharing chat history…")
         .setOngoing(true)
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .build().also { ensureChannels() }
 
     fun syncNotification() = NotificationCompat.Builder(context, CH_SYNC)
-        .setSmallIcon(R.drawable.ic_launcher_foreground)
+        .setSmallIcon(R.drawable.ic_stat_risime)
         .setContentTitle("Checking for messages")
         .setPriority(NotificationCompat.PRIORITY_MIN)
         .build().also { ensureChannels() }

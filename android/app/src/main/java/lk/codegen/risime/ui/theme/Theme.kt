@@ -15,7 +15,12 @@ private fun RisiPalette.light() = lightColorScheme(
     onSecondaryContainer = onSecondaryContainer, tertiary = tertiary, onTertiary = onTertiary,
     tertiaryContainer = tertiaryContainer, onTertiaryContainer = onTertiaryContainer, background = background,
     onBackground = onBackground, surface = surface, onSurface = onSurface, surfaceVariant = surfaceVariant,
-    onSurfaceVariant = onSurfaceVariant, outline = outline, error = error, onError = onError,
+    onSurfaceVariant = onSurfaceVariant, outline = outline, outlineVariant = outlineVariant, error = error, onError = onError,
+    errorContainer = errorContainer, onErrorContainer = onErrorContainer, inverseSurface = inverseSurface,
+    inverseOnSurface = inverseOnSurface, inversePrimary = inversePrimary, surfaceTint = primary,
+    surfaceContainerLowest = surfaceContainerLowest, surfaceContainerLow = surfaceContainerLow,
+    surfaceContainer = surfaceContainer, surfaceContainerHigh = surfaceContainerHigh,
+    surfaceContainerHighest = surfaceContainerHighest, surfaceDim = surfaceDim, surfaceBright = surfaceBright,
 )
 
 private fun RisiPalette.dark() = darkColorScheme(
@@ -24,7 +29,12 @@ private fun RisiPalette.dark() = darkColorScheme(
     onSecondaryContainer = onSecondaryContainer, tertiary = tertiary, onTertiary = onTertiary,
     tertiaryContainer = tertiaryContainer, onTertiaryContainer = onTertiaryContainer, background = background,
     onBackground = onBackground, surface = surface, onSurface = onSurface, surfaceVariant = surfaceVariant,
-    onSurfaceVariant = onSurfaceVariant, outline = outline, error = error, onError = onError,
+    onSurfaceVariant = onSurfaceVariant, outline = outline, outlineVariant = outlineVariant, error = error, onError = onError,
+    errorContainer = errorContainer, onErrorContainer = onErrorContainer, inverseSurface = inverseSurface,
+    inverseOnSurface = inverseOnSurface, inversePrimary = inversePrimary, surfaceTint = primary,
+    surfaceContainerLowest = surfaceContainerLowest, surfaceContainerLow = surfaceContainerLow,
+    surfaceContainer = surfaceContainer, surfaceContainerHigh = surfaceContainerHigh,
+    surfaceContainerHighest = surfaceContainerHighest, surfaceDim = surfaceDim, surfaceBright = surfaceBright,
 )
 
 private val LocalRisiPalette = staticCompositionLocalOf { LightPalette }
