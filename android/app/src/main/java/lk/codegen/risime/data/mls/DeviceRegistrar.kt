@@ -45,6 +45,8 @@ class DeviceRegistrar(
     private val historySupported: () -> Boolean = { false },
     /** §19.1: advertise `video` only together with `calls` and when the VP8 encoder and decoder load. */
     private val videoSupported: () -> Boolean = { false },
+    /** §20.1: advertise `group_calls` only with `groups`, `calls` and `video`, LiveKit loaded and call keys in the core. */
+    private val groupCallsSupported: () -> Boolean = { false },
 ) {
     private val b64 = Base64.getEncoder()
 
@@ -63,6 +65,9 @@ class DeviceRegistrar(
             DeviceMls.CAP_DELETES.takeIf { mls.deletesSupported },
             DeviceMls.CAP_CALLS.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() },
             DeviceMls.CAP_VIDEO.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() },
+            DeviceMls.CAP_GROUP_CALLS.takeIf {
+                mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && mls.callKeysSupported && groupCallsSupported()
+            },
             // v1.14 §12.4a: only when the bundled core enforces the member rule (never on the app's own say).
             DeviceMls.CAP_MEMBER_DEVICES.takeIf { DeviceMls.CAP_MEMBER_DEVICES in mls.coreCapabilities },
             // v1.15 §17.1: the core's §17.3 functions present and the feature on.

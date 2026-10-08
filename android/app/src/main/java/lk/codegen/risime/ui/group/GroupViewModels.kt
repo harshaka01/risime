@@ -329,6 +329,68 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
             .map { rows -> rows.groupBy { it.targetMessageId }.mapValues { (_, rs) -> lk.codegen.risime.data.chipsFor(rs, meId) } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
+    // ---- §20 group calls ----
+
+    private val _groupCallsReady = MutableStateFlow(false)
+
+    /** §20.1 `group_calls_ready` (refetched on open and before a call). */
+    val groupCallsReady: StateFlow<Boolean> = _groupCallsReady
+
+    /** §20.1: who still needs to update for group calls (group info; information only). */
+    val missingGroupCalls = MutableStateFlow<List<String>>(emptyList())
+
+    fun refreshGroupCalls() {
+        viewModelScope.launch {
+            val r = c.api.mlsGroup(conversationId)
+            if (r is lk.codegen.risime.net.ApiResult.Ok) {
+                _groupCallsReady.value = r.value.e2ee && r.value.groupCallsReady
+                missingGroupCalls.value = r.value.missingGroupCalls.map { it.userId }.distinct()
+            }
+        }
+    }
+
+    /** Null = the call buttons work; otherwise what a tap explains (§20.1 UI). */
+    fun groupCallBlockedText(encrypted: Boolean, ready: Boolean, video: Boolean): String? = when {
+        !runCatching { c.calls.canAdvertiseGroupCalls() }.getOrDefault(false) -> lk.codegen.risime.calls.CallTexts.GROUP_UPDATE_TEXT
+        !encrypted -> "Calls need an end-to-end encrypted chat."
+        !ready -> lk.codegen.risime.calls.CallTexts.GROUP_NOT_READY_TEXT
+        else -> null
+    }
+
+    fun startGroupCall(video: Boolean, camera: Boolean) {
+        c.calls.placeCall(conversationId, video = video, camera = camera)
+        c.calls.openCallScreen()
+    }
+
+    /** §20.4 Join on a running call's line. */
+    fun joinGroupCall(env: lk.codegen.risime.calls.GroupCallEnvelope, starter: String, camera: Boolean) {
+        c.calls.joinGroupCall(conversationId, env.callId, env.media, starter, camera)
+        c.calls.openCallScreen()
+    }
+
+    /** §20.4: on chat open, `status` for every `started` line under 4 h old with no `ended`. */
+    private fun checkRunningLines() {
+        viewModelScope.launch {
+            val rows = c.db.messages().conversation(conversationId).first()
+            val now = System.currentTimeMillis()
+            for (m in rows) {
+                if (!m.call) continue
+                val env = lk.codegen.risime.calls.GroupCallEnvelope.decode(m.systemJson) ?: continue
+                if (env.state != lk.codegen.risime.calls.GroupCallEnvelope.STARTED || lk.codegen.risime.calls.GroupCallLines.over(m.systemJson)) continue
+                if (now - m.localTs > lk.codegen.risime.calls.GroupCallLines.RUNNING_CHECK_MS) {
+                    c.engine.markGroupCallOver(conversationId, env.callId)
+                    continue
+                }
+                runCatching { c.calls.groupCallRunning(conversationId, env.callId, env.media) }
+            }
+        }
+    }
+
+    init {
+        refreshGroupCalls()
+        checkRunningLines()
+    }
+
     /** The local MLS group exists (null until first checked; false: rejoining / setting up until the Welcome). */
     private val _encrypted = MutableStateFlow<Boolean?>(null)
     val encrypted: StateFlow<Boolean?> = _encrypted

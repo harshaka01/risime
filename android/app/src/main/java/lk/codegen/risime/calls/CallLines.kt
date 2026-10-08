@@ -66,12 +66,18 @@ interface CallHooks {
 class MachineCallHooks(
     private val machine: () -> CallStateMachine?,
     private val marks: CallMarks,
+    private val group: () -> GroupCallMachine? = { null },
     private val missed: (conversationId: String, from: String, video: Boolean) -> Unit = { _, _, _ -> },
 ) : CallHooks {
     override suspend fun rangUnanswered(callId: String): Boolean = marks.get(callId)?.let { it.rang && !it.answered } == true
 
     override suspend fun onSignal(s: InboundCall) {
-        machine()?.onSignal(s)
+        // §20.3: group signals go to the group call machine.
+        if (lk.codegen.risime.net.isGroupConversation(s.conversationId)) group()?.onSignal(s) else machine()?.onSignal(s)
+    }
+
+    override suspend fun onGroupCallLine(conversationId: String, from: String, env: GroupCallEnvelope) {
+        group()?.onGroupCallLine(conversationId, from, env)
     }
 
     override suspend fun onCallEnd(conversationId: String, fromUser: String, fromDevice: String?, end: CallEnvelope.End) {
@@ -81,6 +87,7 @@ class MachineCallHooks(
 
     override suspend fun onPageEnd() {
         machine()?.onPageEnd()
+        group()?.onPageEnd()
     }
 
     override fun onMissedCall(conversationId: String, from: String, video: Boolean) = missed(conversationId, from, video)

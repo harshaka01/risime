@@ -80,6 +80,8 @@ androidx-browser = { module = "androidx.browser:browser", version.ref = "browser
 webrtc-android-prefixed = { module = "io.github.webrtc-sdk:android-prefixed", version.ref = "webrtc" }
 androidx-core-telecom = { module = "androidx.core:core-telecom", version.ref = "coreTelecom" }
 livekit-android = { module = "io.livekit:livekit-android", version.ref = "livekit" }
+# livekit-android 2.29.0's own runtime dependency (its track info types); compile-only for the app.
+protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version = "3.25.9" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

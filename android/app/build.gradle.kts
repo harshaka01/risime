@@ -99,6 +99,9 @@ android {
         // v1.15 §17 history sharing: the `history_share` capability and every history UI. Off by
         // default until the whole feature is green (a release from main never shows it half-built);
         // On by default since nightly.20; -Prisime.historyShare=false turns it off.
+        // v1.19 §20.10 rollout: `group_calls` and the group call buttons. -Prisime.groupCalls=false builds
+        // the receive-only step (group call lines render, nothing is advertised).
+        buildConfigField("boolean", "GROUP_CALLS_ENABLED", (providers.gradleProperty("risime.groupCalls").orNull != "false").toString())
         buildConfigField("boolean", "HISTORY_SHARE_ENABLED", (providers.gradleProperty("risime.historyShare").orNull != "false").toString())
         buildConfigField("boolean", "DELETES_SEND_ENABLED", (providers.gradleProperty("risime.deletesSend").orNull != "false").toString())
         // Pinned server attestation keys (public JWK JSON, ';'-separated). Empty until root provides
@@ -210,6 +213,7 @@ dependencies {
     implementation(libs.androidx.core.telecom)
     // §20.5 group calls (decision 057): the LiveKit Kotlin SDK on the same libwebrtc build (no second copy).
     implementation(libs.livekit.android)
+    compileOnly(libs.protobuf.javalite) // LiveKit's track info types (encryption) at compile time
     implementation(libs.emoji2.emojipicker) // composer + reaction picker (downloadable EmojiCompat font, no bundled font)
     testImplementation(libs.junit)
     androidTestImplementation(libs.junit)

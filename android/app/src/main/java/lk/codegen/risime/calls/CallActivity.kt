@@ -88,7 +88,12 @@ class CallActivity : ComponentActivity() {
                 val current by calls.currentEndpoint.collectAsStateWithLifecycle()
                 var name by remember { mutableStateOf("") }
                 var tick by remember { mutableLongStateOf(0L) }
-                LaunchedEffect(s?.peerUserId) { s?.peerUserId?.let { name = calls.nameOf(it) } }
+                // The peer (1:1), "Kamal · Pilot team" while a group call rings, else the group's name (§20.4).
+                LaunchedEffect(s?.callId, s?.phase == CallPhase.RINGING_IN) { s?.let { name = calls.callTitle(it) } }
+                // §20.5: group participants are named from the app's own database (android A7).
+                var memberNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+                val memberIds = s?.members?.map { it.userId }?.toSet().orEmpty()
+                LaunchedEffect(memberIds) { memberNames = memberIds.associateWith { calls.nameOf(it) } }
                 LaunchedEffect(s?.phase) {
                     while (true) {
                         delay(1_000)
@@ -108,8 +113,10 @@ class CallActivity : ComponentActivity() {
                     // Never an empty (black) window while the screen closes: the ended card, no controls.
                     snap == null -> InCallScreen(InCallUi(name = name, status = "Call ended", ended = true), {}, {}, {})
                     snap.phase == CallPhase.RINGING_IN -> IncomingCallScreen(
-                        name.ifEmpty { "RisiMe" }, onAnswer = { answer(camera = snap.video) }, onDecline = calls::hangUp, photoKey = snap.peerUserId,
+                        name.ifEmpty { "RisiMe" }, onAnswer = { answer(camera = snap.video) }, onDecline = calls::hangUp,
+                        photoKey = if (snap.group) snap.conversationId else snap.peerUserId,
                         onAnswerWithoutVideo = if (snap.video) ({ answer(camera = false) }) else null,
+                        subtitle = if (!snap.group) null else if (snap.video) "Group video call" else "Group voice call",
                     )
                     else -> {
                         @Suppress("UNUSED_EXPRESSION") tick
@@ -122,12 +129,19 @@ class CallActivity : ComponentActivity() {
                                 current = current?.let(::ui),
                                 verified = snap.verified,
                                 ended = snap.phase == CallPhase.ENDED,
-                                photoKey = snap.peerUserId,
+                                photoKey = if (snap.group) snap.conversationId else snap.peerUserId,
                             ),
+                            center = if (snap.group && snap.members.isNotEmpty() && !(snap.video && snap.phase != CallPhase.ENDED)) ({
+                                GroupParticipantList(snap.members.map { m -> groupMemberUi(m, memberNames[m.userId] ?: "…") })
+                            }) else null,
                             onMute = calls::setMuted,
                             onEndpoint = { e -> endpoints.firstOrNull { it.identifier.toString() == e.id }?.let(calls::selectEndpoint) },
                             onEnd = calls::hangUp,
-                            video = (calls.media as? WebRtcCallMedia)?.takeIf { snap.video && snap.phase != CallPhase.ENDED }?.let { m -> { LiveVideoStage(m, snap, name) } },
+                            video = if (snap.group) {
+                                calls.groupSession()?.takeIf { snap.video && snap.phase != CallPhase.ENDED }?.let { sess -> { GroupVideoGrid(sess, snap, memberNames) } }
+                            } else {
+                                (calls.media as? WebRtcCallMedia)?.takeIf { snap.video && snap.phase != CallPhase.ENDED }?.let { m -> { LiveVideoStage(m, snap, name) } }
+                            },
                             extraControls = {
                                 if (snap.video && snap.phase != CallPhase.ENDED) {
                                     CallControl(

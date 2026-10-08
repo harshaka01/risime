@@ -492,6 +492,7 @@ class AppContainer(
             historySupported = { BuildConfig.HISTORY_SHARE_ENABLED && history.supported() },
             callsSupported = { runCatching { calls.canAdvertise() }.getOrDefault(false) },
             videoSupported = { runCatching { calls.canAdvertiseVideo() }.getOrDefault(false) },
+            groupCallsSupported = { runCatching { calls.canAdvertiseGroupCalls() }.getOrDefault(false) },
             groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
             setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },
         )
@@ -523,7 +524,11 @@ class AppContainer(
             Log.w("RisiMe", "MLS core unavailable: ${it.javaClass.simpleName}: ${it.message}")
             return null
         }
-        mlsEngine = lk.codegen.risime.data.mls.ObservedMlsEngine(engine) { mlsChanged.tryEmit(Unit) }
+        mlsEngine = lk.codegen.risime.data.mls.ObservedMlsEngine(engine) { conv ->
+            mlsChanged.tryEmit(Unit)
+            // §20.6 K3: a merged commit rekeys a running group call at once.
+            runCatching { calls.onGroupChanged(conv) }
+        }
         mlsChanged.tryEmit(Unit)
         return when (val r = deviceRegistrar.register(runCatching { push.currentToken() }.getOrNull())) {
             is Registration.Mls -> {
@@ -666,13 +671,31 @@ class AppContainer(
         override suspend fun sessionLocked(): Boolean = !auth.unlocked.value && sessionStore.current()?.kind == AuthKind.OIDC
         override fun serverNow() = serverClock.serverNow()
         override suspend fun displayName(userId: String) =
-            contacts.contacts.first().firstOrNull { it.userId.equals(userId, true) }?.displayName ?: "Someone"
+            contacts.contacts.first().firstOrNull { it.userId.equals(userId, true) }?.displayName
+                // §20: group members who aren't my friends are named from the group's member list.
+                ?: runCatching { db.groups().observeAllMembers().first().firstOrNull { it.userId.equals(userId, true) }?.displayName }.getOrNull()?.takeIf { it.isNotBlank() }
+                ?: "Someone"
         override suspend fun sendSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env, media: String) = engine.sendCallSignal(conv, peer, env, media)
         override suspend fun localMissedCall(conv: String, peer: String, callId: String, video: Boolean) = engine.insertLocalMissedCall(conv, peer, callId, video)
         override suspend fun queueCallEnd(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.End, rangUnanswered: Boolean) {
             engine.queueCallEnd(conv, peer, env, rangUnanswered)
         }
         override fun foreground() = foreground.value
+
+        // ---- §20 group calls ----
+        override val callKeysSupported: Boolean get() = mlsEngine?.callKeysSupported == true
+        override suspend fun groupCatchUp(conv: String) { engine.catchUpGroup(conv) }
+        override suspend fun groupEpoch(conv: String): Long? = withContext(Dispatchers.IO) { mlsEngine?.group(conv)?.epoch }
+        override suspend fun groupFrameKeys(conv: String, callId: String): lk.codegen.risime.data.mls.CallKeys = withContext(Dispatchers.IO) {
+            val m = mlsEngine ?: throw lk.codegen.risime.data.mls.CallKeysException(lk.codegen.risime.data.mls.CallKeysException.Kind.UnknownGroup, "no MLS")
+            m.callFrameKeys(conv, callId)
+        }
+        override suspend fun sendGroupSignal(conv: String, env: lk.codegen.risime.calls.CallEnvelope.Env, media: String) = engine.sendGroupCallSignal(conv, env, media)
+        override suspend fun groupCallStarted(conv: String, env: lk.codegen.risime.calls.GroupCallEnvelope) { engine.queueGroupCallStarted(conv, env) }
+        override suspend fun groupCallEnded(conv: String, env: lk.codegen.risime.calls.GroupCallEnvelope) { engine.sendGroupCallEnded(conv, env) }
+        override suspend fun groupCallOver(conv: String, callId: String) { engine.markGroupCallOver(conv, callId) }
+        override suspend fun groupName(conv: String): String =
+            runCatching { db.groups().get(conv)?.name }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Group"
     }
 
     val calls: lk.codegen.risime.calls.CallManager by lazy {
@@ -687,6 +710,8 @@ class AppContainer(
             calls.hooks.onCallEnd(conversationId, fromUser, fromDevice, end)
         override suspend fun onPageEnd() = calls.hooks.onPageEnd()
         override fun onMissedCall(conversationId: String, from: String, video: Boolean) = calls.hooks.onMissedCall(conversationId, from, video)
+        override suspend fun onGroupCallLine(conversationId: String, from: String, env: lk.codegen.risime.calls.GroupCallEnvelope) =
+            calls.hooks.onGroupCallLine(conversationId, from, env)
     }
 
     // ---- History sharing (contract v1.15 §17). Behind BuildConfig.HISTORY_SHARE_ENABLED until green. ----

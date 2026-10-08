@@ -100,13 +100,13 @@ class CallNotifications(private val context: Context) {
      * without one or a foreground service; the system makes it a heads-up when FSI isn't allowed).
      * Answer is an *activity* PendingIntent (android R5). [name] null = the locked ring (§16.8).
      */
-    fun incoming(name: String?): Notification {
+    fun incoming(name: String?, video: Boolean = false, group: Boolean = false): Notification {
         ensureChannels()
         val person = Person.Builder().setName(name ?: "Incoming RisiMe call").setImportant(name != null).build()
         val n = NotificationCompat.Builder(context, CH_CALLS)
             .setSmallIcon(R.drawable.ic_stat_risime)
             .setContentTitle(name ?: "Incoming RisiMe call")
-            .setContentText(if (name == null) "Unlock to answer" else "Incoming voice call")
+            .setContentText(if (name == null) "Unlock to answer" else incomingText(video, group))
             .setStyle(NotificationCompat.CallStyle.forIncomingCall(person, broadcast(ACTION_DECLINE, 2), activityIntent(ACTION_ANSWER, 1)))
             .setFullScreenIntent(activityIntent(ACTION_SHOW, 3), true)
             .setContentIntent(activityIntent(ACTION_SHOW, 3))
@@ -173,4 +173,12 @@ class CallNotifications(private val context: Context) {
     }
 
     fun cancelMissed(conversationId: String) = nm.cancel(MISSED_BASE + (conversationId.hashCode() and 0xffff))
+}
+
+/** The incoming ring's text (§16.9, §19.6, §20.4): video calls say so, group calls too. */
+fun incomingText(video: Boolean, group: Boolean = false): String = when {
+    group && video -> "Incoming group video call"
+    group -> "Incoming group voice call"
+    video -> "Incoming video call"
+    else -> "Incoming voice call"
 }

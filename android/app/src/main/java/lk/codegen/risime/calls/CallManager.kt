@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -60,6 +61,28 @@ interface CallAppPort {
     /** Decision 054: a local "Missed voice call" line (no durable `call_end` came); false if the call already has a line. */
     suspend fun localMissedCall(conv: String, peer: String, callId: String, video: Boolean = false): Boolean = false
     fun foreground(): Boolean
+
+    // ---- §20 group calls (the container implements these; defaults = an app without group calls) ----
+
+    /** The MLS core exports call frame keys (§20.6). */
+    val callKeysSupported: Boolean get() = false
+
+    suspend fun groupCatchUp(conv: String) = Unit
+
+    suspend fun groupEpoch(conv: String): Long? = null
+
+    suspend fun groupFrameKeys(conv: String, callId: String): lk.codegen.risime.data.mls.CallKeys =
+        throw lk.codegen.risime.data.mls.CallKeysException(lk.codegen.risime.data.mls.CallKeysException.Kind.Unsupported, "no group calls")
+
+    suspend fun sendGroupSignal(conv: String, env: CallEnvelope.Env, media: String): PushResult<*> = PushResult.Unavailable
+
+    suspend fun groupCallStarted(conv: String, env: GroupCallEnvelope) = Unit
+
+    suspend fun groupCallEnded(conv: String, env: GroupCallEnvelope) = Unit
+
+    suspend fun groupCallOver(conv: String, callId: String) = Unit
+
+    suspend fun groupName(conv: String): String = "Group"
 }
 
 /**
@@ -68,7 +91,17 @@ interface CallAppPort {
  * notifications, handles the `call` push (an unlocked sync, or the nameless locked ring of decision
  * 051) and routes audio through Telecom's endpoints.
  */
-class CallManager(private val context: Context, private val port: CallAppPort, private val mediaFactory: () -> CallMedia = {
+class CallManager(private val context: Context, private val port: CallAppPort, private val sfuFactory: () -> SfuConnector = {
+    LiveKitSfu(
+        context,
+        relayOnly = { BuildConfig.DEBUG && java.io.File(context.filesDir, "debug_relay_only").exists() },
+        debug = BuildConfig.DEBUG,
+        fakeCamera = {
+            BuildConfig.DEBUG && (java.io.File(context.filesDir, "debug_fake_camera").exists() ||
+                runCatching { livekit.org.webrtc.Camera2Enumerator(context).deviceNames.isEmpty() }.getOrDefault(true))
+        },
+    )
+}, private val mediaFactory: () -> CallMedia = {
     WebRtcCallMedia(
         context,
         // Debug builds only: `run-as <pkg> touch files/debug_relay_only` forces TURN relay candidates
@@ -94,6 +127,13 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     private val _machine = MutableStateFlow<CallStateMachine?>(null)
     val machineFlow: StateFlow<CallStateMachine?> = _machine.asStateFlow()
     val machine: CallStateMachine? get() = _machine.value
+
+    /** §20 the group call machine (one per signed-in user and device, like [machine]). */
+    private val _group = MutableStateFlow<GroupCallMachine?>(null)
+    val groupMachine: GroupCallMachine? get() = _group.value
+
+    /** §20.5 LiveKit (loaded lazily: JVM tests and 32-bit phones never touch it). */
+    val sfu: SfuConnector by lazy { sfuFactory() }
 
     /** The current call snapshot (null = no call). */
     val state = MutableStateFlow<CallSnapshot?>(null)
@@ -138,6 +178,12 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     /** §19.1 (android A9): `video` only together with `calls`, and only when the VP8 encoder and decoder load. */
     fun canAdvertiseVideo(): Boolean = canAdvertise() && media.videoAvailable
 
+    /**
+     * §20.1: `group_calls` only together with `calls` and `video` (the caller adds `groups`), and only
+     * when LiveKit and its frame encryption load and the core exports call keys.
+     */
+    fun canAdvertiseGroupCalls(): Boolean = BuildConfig.GROUP_CALLS_ENABLED && canAdvertiseVideo() && port.callKeysSupported && runCatching { sfu.available }.getOrDefault(false)
+
     /** Why this phone can't make or take calls (the Settings "Calls" row), null when it can. */
     fun unsupportedReason(): String? = when {
         !BuildConfig.CALLS_ENABLED -> lk.codegen.risime.ui.chat.CALLS_OFF_IN_BUILD
@@ -156,7 +202,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     }
 
     /** The hooks the chat pipeline calls (after each commit). */
-    val hooks: CallHooks = MachineCallHooks({ _machine.value }, marks) { conv, from, video ->
+    val hooks: CallHooks = MachineCallHooks({ _machine.value }, marks, { _group.value }) { conv, from, video ->
         scope.launch {
             if (port.foreground() && openConversation?.invoke() == conv) return@launch
             notifications.postMissed(conv, port.displayName(from), video)
@@ -201,6 +247,9 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             return state.value == null && am.mode == AudioManager.MODE_IN_CALL
         }
 
+        // android A4: a group call (or its ring) makes this device busy for 1:1 calls.
+        override fun otherCallActive(): Boolean = _group.value?.active() == true
+
         override suspend fun iceServers(): List<IceServer> {
             // §16.7: reuse only while expires_at − now ≥ 4 h 5 min; never persisted; 503 → STUN only.
             turnCache?.let { (servers, exp) -> if (exp - port.serverNow() >= (4 * 3600 + 300) * 1000L) return servers }
@@ -224,12 +273,30 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                 if (me != lastUser) {
                     lastUser = me
                     _machine.value = me?.let { newMachine(it, port.deviceId()) }
+                    _group.value = me?.let { newGroupMachine(it, port.deviceId()) }
                 }
                 delay(2_000)
             }
         }
         scope.launch {
-            _machine.collectLatest { m -> m?.state?.collect { s -> onState(s) } ?: onState(null) }
+            // One device, one call: the 1:1 machine's call, else the group machine's (§20.4, android A4).
+            val oneToOne = _machine.flatMapLatest { it?.state ?: kotlinx.coroutines.flow.flowOf(null) }
+            val group = _group.flatMapLatest { it?.state ?: kotlinx.coroutines.flow.flowOf(null) }
+            combine(oneToOne, group) { a, g -> pickCall(a, g) }.collectLatest { s -> onState(s) }
+        }
+        // Debug builds: the group call's receive counters every 5 s (the device test's evidence that
+        // frames decrypt: cryptor OK, packets and audio energy growing; a wrong key shows FAILED / no energy).
+        if (BuildConfig.DEBUG) scope.launch {
+            state.map { it?.takeIf { s -> s.group && s.phase != CallPhase.ENDED }?.callId }.distinctUntilChanged().collectLatest { id ->
+                if (id == null) return@collectLatest
+                while (true) {
+                    delay(5_000)
+                    val sess = groupSession() ?: continue
+                    runCatching { sess.stats() }.getOrNull()?.forEach { st ->
+                        Log.i("RisiMe", "calls: group stats ${st.identity} cryptor=${st.cryptor} audio_packets=${st.audioPackets} audio_bytes=${st.audioBytes} audio_energy=${"%.4f".format(st.audioEnergy)} concealed=${st.concealed} jb_emitted=${st.jitterEmitted} video_frames=${st.videoFrames} ${st.videoWidth}x${st.videoHeight}")
+                    }
+                }
+            }
         }
         // Prune 24-h marks.
         scope.launch { runCatching { port.callMarkDao.prune(System.currentTimeMillis() - CallStateMachine.DEDUPE_MS) } }
@@ -286,6 +353,75 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         ActiveCallRecord.endReason(rec)?.let { reason -> port.queueCallEnd(rec.conversationId, rec.peerUserId, CallEnvelope.End(rec.callId, reason), false) }
     }
 
+    /** The group call's SFU session (debug stats, the video renderers). */
+    @Volatile private var currentGroupSession: SfuSession? = null
+
+    fun groupSession(): SfuSession? = currentGroupSession
+
+    private val groupPort = object : GroupCallPort {
+        override suspend fun iceServers(): List<IceServer> = environment.iceServers()
+        override suspend fun catchUp(conv: String) = port.groupCatchUp(conv)
+        override suspend fun epoch(conv: String): Long? = port.groupEpoch(conv)
+        override suspend fun frameKeys(conv: String, callId: String): lk.codegen.risime.data.mls.CallKeys {
+            val k = port.groupFrameKeys(conv, callId)
+            // Debug builds only (the fail-closed device test): `run-as <pkg> touch files/debug_wrong_call_keys`
+            // installs keys that are NOT the MLS-derived ones, so this phone must hear nobody and nobody it.
+            if (BuildConfig.DEBUG && java.io.File(context.filesDir, "debug_wrong_call_keys").exists()) {
+                log("DEBUG: wrong call keys installed (fail-closed test)")
+                k.keys.forEach { key -> for (i in key.key.indices) key.key[i] = (key.key[i].toInt() xor 0x5a).toByte() }
+            }
+            return k
+        }
+        override suspend fun room(conv: String, callId: String, media: String, action: String): RoomOutcome =
+            when (val r = withTimeoutOrNull(10_000) { port.api.callsRoom(lk.codegen.risime.net.CallsRoomRequest(conv, callId, media, action), port.deviceId()) }) {
+                is ApiResult.Ok -> RoomOutcome.Ok(r.value)
+                is ApiResult.Error -> when (r.code) {
+                    lk.codegen.risime.net.CallErrors.CALL_ENDED -> RoomOutcome.Ended
+                    lk.codegen.risime.net.CallErrors.CALL_FULL -> RoomOutcome.Full
+                    else -> RoomOutcome.Failed("${r.httpStatus} ${r.code}")
+                }
+                else -> RoomOutcome.Failed("network")
+            }
+        override suspend fun signal(conv: String, env: CallEnvelope.Env, media: String): SignalOutcome {
+            repeat(3) { attempt ->
+                when (val r = port.sendGroupSignal(conv, env, media)) {
+                    is PushResult.Ok -> return SignalOutcome.Ok
+                    is PushResult.Rejected -> if (r.reason == "rate_limited" && env !is CallEnvelope.SfuOffer && attempt < 2) delay(1_000) else return SignalOutcome.Refused(r.reason)
+                    PushResult.Unavailable -> withTimeoutOrNull(5_000) { port.connection.first { it == ConnectionState.Live } }
+                }
+            }
+            return SignalOutcome.Unavailable
+        }
+        override suspend fun started(conv: String, env: GroupCallEnvelope) = port.groupCallStarted(conv, env)
+        override suspend fun ended(conv: String, env: GroupCallEnvelope) = port.groupCallEnded(conv, env)
+        override suspend fun over(conv: String, callId: String) = port.groupCallOver(conv, callId)
+        override fun busy(): Boolean {
+            if (_machine.value?.currentCallId() != null) return true
+            val am = context.getSystemService(AudioManager::class.java) ?: return false
+            return am.mode == AudioManager.MODE_IN_CALL
+        }
+    }
+
+    /** The SFU as the machine sees it: remembers the live session for stats and video. */
+    private val trackedSfu = object : SfuConnector {
+        override val available: Boolean get() = sfu.available
+        override suspend fun connect(p: SfuConnect, listener: SfuListener): SfuSession {
+            val s = sfu.connect(p, listener)
+            currentGroupSession = s
+            return object : SfuSession by s {
+                override fun disconnect() {
+                    if (currentGroupSession === s) currentGroupSession = null
+                    s.disconnect()
+                }
+            }
+        }
+    }
+
+    private fun newGroupMachine(me: String, device: String) = GroupCallMachine(
+        me, device, scope, trackedSfu, groupPort, marks,
+        serverNow = { port.serverNow() }, log = log,
+    )
+
     private fun newMachine(me: String, device: String) = CallStateMachine(
         me, device, scope, media, signals, marks, environment,
         serverNow = { port.serverNow() }, log = log,
@@ -301,34 +437,66 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     /** The call button (RECORD_AUDIO already granted by the UI); [video] with [camera] = CAMERA granted (§19.6). */
     fun placeCall(conversationId: String, video: Boolean = false, camera: Boolean = video) {
+        if (lk.codegen.risime.net.isGroupConversation(conversationId)) {
+            scope.launch { _group.value?.start(conversationId, video, camera) }
+            return
+        }
         scope.launch { _machine.value?.placeCall(conversationId, video, camera) }
+    }
+
+    /** §20.4 Join from a group call's line (the room is checked by `join`). */
+    fun joinGroupCall(conversationId: String, callId: String, media: String, starter: String, camera: Boolean = false) {
+        // Join on the line of the call this phone is already in: just back to the call screen.
+        if (state.value?.callId == callId && state.value?.phase != CallPhase.ENDED && state.value?.phase != CallPhase.RINGING_IN) return
+        scope.launch { _group.value?.join(conversationId, callId, media, starter, camera) }
+    }
+
+    /**
+     * §20.4 "running" for a `started` line without `ended` (under 4 h old), on chat open and on Join:
+     * a missing room turns the line "… ended". Returns whether the call runs (null: unknown).
+     */
+    suspend fun groupCallRunning(conversationId: String, callId: String, media: String): Boolean? {
+        val r = withTimeoutOrNull(5_000) { port.api.callsRoomStatus(conversationId, callId, media, port.deviceId()) }
+        val running = when (r) {
+            // An empty room (everyone left, LiveKit closes it 20 s later) is not a call to join.
+            is ApiResult.Ok -> r.value.active && r.value.participants > 0
+            is ApiResult.Error -> if (r.code == lk.codegen.risime.net.CallErrors.CALL_ENDED || r.httpStatus == 404) false else null
+            else -> null
+        }
+        // My own call that is still going is running whatever the room list says right now.
+        if (running == false && state.value?.callId == callId && state.value?.phase != CallPhase.ENDED) return true
+        if (running == false) port.groupCallOver(conversationId, callId)
+        return running
     }
 
     /** A human tapped Answer in the call screen: [camera] for "Answer" on a video call, false for "Answer without video" (§19.6). */
     fun answer(camera: Boolean = false) {
-        scope.launch { _machine.value?.answer(camera = camera) }
+        scope.launch {
+            if (state.value?.group == true) _group.value?.answer(camera = camera) else _machine.value?.answer(camera = camera)
+        }
     }
 
     fun hasCameraPermission(): Boolean = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
     /** §19.5 the camera button. */
     fun setCameraWanted(on: Boolean) {
-        scope.launch { _machine.value?.setCameraWanted(on) }
+        scope.launch { if (state.value?.group == true) _group.value?.setCameraWanted(on) else _machine.value?.setCameraWanted(on) }
     }
 
     /** §19.7 front/back. */
     fun switchCamera() {
-        scope.launch { _machine.value?.switchCamera() }
+        scope.launch { if (state.value?.group == true) _group.value?.switchCamera() else _machine.value?.switchCamera() }
     }
 
     fun hangUp() {
         if (blindRing.value != null) return stopBlindRing()
         scope.launch {
+            _group.value?.takeIf { state.value?.group == true }?.hangUp()
             val m = _machine.value
             m?.hangUp()
             // Decision 054: the button always works. Whatever is still shown without a call behind it goes.
             val s = state.value
-            if (s != null && s.phase != CallPhase.ENDED && (m == null || m.currentCallId() != s.callId)) {
+            if (s != null && s.phase != CallPhase.ENDED && (m == null || m.currentCallId() != s.callId) && _group.value?.currentCallId() != s.callId) {
                 log("hang up: no call behind ${s.callId}: clearing")
                 onState(null)
             }
@@ -336,7 +504,12 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     }
 
     fun setMuted(muted: Boolean) {
-        scope.launch { _machine.value?.setMuted(muted) }
+        scope.launch { if (state.value?.group == true) _group.value?.setMuted(muted) else _machine.value?.setMuted(muted) }
+    }
+
+    /** §20.6 K3: a commit was merged in [conversationId] (the group machine rekeys at once). */
+    fun onGroupChanged(conversationId: String) {
+        if (lk.codegen.risime.net.isGroupConversation(conversationId)) _group.value?.onGroupChanged(conversationId)
     }
 
     fun selectEndpoint(e: CallEndpointCompat) {
@@ -486,7 +659,10 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         callScreenVisible.value = visible
         updateProximity()
         // §19.5 (android A1): the camera runs only while the call screen is visible and the phone unlocked.
-        scope.launch { _machine.value?.setScreenVisible(visible) }
+        scope.launch {
+            _machine.value?.setScreenVisible(visible)
+            _group.value?.setScreenVisible(visible)
+        }
     }
 
     /** §16.9 (S-d): the proximity wake lock only while the endpoint is the earpiece, the call is active and its screen is in front. */
@@ -513,9 +689,9 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val cm = callsManager ?: return
         if (telecomCalls.containsKey(s.callId)) return
         val callId = s.callId
-        val name = port.displayName(s.peerUserId)
+        val name = callTitle(s)
         val attrs = CallAttributesCompat(
-            name, Uri.fromParts("risime", s.peerUserId, null),
+            name, Uri.fromParts("risime", if (s.group) s.conversationId else s.peerUserId, null),
             if (s.outgoing) CallAttributesCompat.DIRECTION_OUTGOING else CallAttributesCompat.DIRECTION_INCOMING,
             // §19.6 (android A6): a video call is a Telecom video call.
             if (s.video) CallAttributesCompat.CALL_TYPE_VIDEO_CALL else CallAttributesCompat.CALL_TYPE_AUDIO_CALL, 0,
@@ -529,11 +705,11 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                 cm.addCall(
                     attrs,
                     // A Telecom answer (a watch, the car) never turns the camera on (android A3).
-                    onAnswer = { _ -> _machine.value?.answer(callId, camera = false) },
-                    onDisconnect = { _ -> _machine.value?.onSystemDisconnect(callId) },
+                    onAnswer = { _ -> if (_group.value?.currentCallId() == callId) _group.value?.answer(callId, camera = false) else _machine.value?.answer(callId, camera = false) },
+                    onDisconnect = { _ -> _machine.value?.onSystemDisconnect(callId); _group.value?.hangUp(callId) },
                     onSetActive = {},
                     // A cellular call took over (android R9): no hold in v1.13, so the call ends.
-                    onSetInactive = { _machine.value?.onSystemDisconnect(callId) },
+                    onSetInactive = { _machine.value?.onSystemDisconnect(callId); _group.value?.hangUp(callId) },
                 ) {
                     handle.scope = this
                     if (state.value?.callId == callId) {
@@ -634,6 +810,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         if (blindRing.value != null) stopBlindRing()
         scope.launch {
             _machine.value?.hangUp()
+            _group.value?.hangUp()
             onState(null)
             releaseAudio()
         }
@@ -646,9 +823,9 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val s = state.value
         if (blindRing.value != null && (s == null || s.phase == CallPhase.ENDED)) return notifications.incoming(null) to false
         if (s == null || s.phase == CallPhase.ENDED) return if (waking.value) notifications.checking() to false else null
-        val name = port.displayName(s.peerUserId)
+        val name = callTitle(s)
         return when (s.phase) {
-            CallPhase.RINGING_IN -> notifications.incoming(name) to false
+            CallPhase.RINGING_IN -> notifications.incoming(name, video = s.video, group = s.group) to false
             else -> notifications.ongoing(name, CallTexts.status(s.phase, s.connectedAtMs) ?: if (s.video) "Video call" else "Voice call", s.connectedAtMs) to hasMicPermission()
         }
     }
@@ -684,8 +861,28 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     /** Name lookups for the UI. */
     suspend fun nameOf(userId: String): String = port.displayName(userId)
 
+    /** §20.4 the group's name (the call screen's title). */
+    suspend fun groupNameOf(conversationId: String): String = port.groupName(conversationId)
+
+    /**
+     * What Telecom, the notification and the ongoing bar call this call: the peer for a 1:1 call;
+     * for a group "Kamal · Pilot team" while it rings in (§20.4 step 2), else the group's name.
+     */
+    suspend fun callTitle(s: CallSnapshot): String = when {
+        !s.group -> port.displayName(s.peerUserId)
+        s.phase == CallPhase.RINGING_IN -> "${port.displayName(s.peerUserId)} · ${port.groupName(s.conversationId)}"
+        else -> port.groupName(s.conversationId)
+    }
+
     /** First non-null machine (tests and the debug screen). */
     suspend fun awaitMachine(): CallStateMachine? = withTimeoutOrNull(5_000) { machineFlow.map { it }.firstOrNull { it != null } }
+}
+
+/** One device, one call: the live one wins (the 1:1 call first); otherwise whichever is lingering "ended". */
+fun pickCall(oneToOne: CallSnapshot?, group: CallSnapshot?): CallSnapshot? = when {
+    oneToOne != null && oneToOne.phase != CallPhase.ENDED -> oneToOne
+    group != null && group.phase != CallPhase.ENDED -> group
+    else -> oneToOne ?: group
 }
 
 /**
@@ -712,6 +909,8 @@ data class ActiveCallRecord(val callId: String, val conversationId: String, val 
          * anything that was answered or connecting failed.
          */
         fun endReason(r: ActiveCallRecord): String? = when {
+            // §20: a group call owes no `call_end`; its line reads "… ended" once the room is gone.
+            lk.codegen.risime.net.isGroupConversation(r.conversationId) -> null
             !r.outgoing && r.phase == CallPhase.RINGING_IN.name -> null
             r.outgoing && (r.phase == CallPhase.CALLING.name || r.phase == CallPhase.RINGING_OUT.name) -> CallEnvelope.R_CANCELLED
             else -> CallEnvelope.R_FAILED

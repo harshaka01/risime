@@ -90,6 +90,7 @@ data class SfuStats(
     val audioBytes: Long,
     val audioEnergy: Double,
     val concealed: Long,
+    val jitterEmitted: Long = 0,
     val videoFrames: Long = 0,
     val videoWidth: Int = 0,
     val videoHeight: Int = 0,

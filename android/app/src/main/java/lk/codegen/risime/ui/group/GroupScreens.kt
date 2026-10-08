@@ -118,6 +118,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
     val readBy by vm.readBy.collectAsStateWithLifecycle()
     val selection by vm.del.selected.collectAsStateWithLifecycle()
     var clearAsk by remember { mutableStateOf<Boolean?>(null) }
+    var joinAsk by remember { mutableStateOf<Pair<lk.codegen.risime.calls.GroupCallEnvelope, String>?>(null) }
     var reactionsFor by remember { mutableStateOf<String?>(null) }
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
@@ -155,6 +156,13 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 onTitleClick = onInfo,
                 titleClickLabel = "Group info",
                 actions = {
+                    // §20.1 the group's call and video-call buttons (disabled until group_calls_ready; a tap explains).
+                    if (lk.codegen.risime.BuildConfig.GROUP_CALLS_ENABLED && !readOnly) {
+                        val ready by vm.groupCallsReady.collectAsStateWithLifecycle()
+                        val toastOf: (String) -> Unit = { vm.imgs.toast.value = it; vm.refreshGroupCalls() }
+                        lk.codegen.risime.ui.chat.VideoHeaderButton(vm.groupCallBlockedText(encrypted == true, ready, video = true), toastOf) { cam -> vm.startGroupCall(video = true, camera = cam) }
+                        lk.codegen.risime.ui.chat.CallHeaderButton(vm.groupCallBlockedText(encrypted == true, ready, video = false), toastOf) { vm.startGroupCall(video = false, camera = false) }
+                    }
                     lk.codegen.risime.ui.chat.E2eeHeaderLock(encrypted == true, onInfo)
                     lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true })
                 },
@@ -197,7 +205,16 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 del = vm.del,
                 selection = selection,
                 uploads = uploads,
+                onJoinCall = if (lk.codegen.risime.BuildConfig.GROUP_CALLS_ENABLED && runCatching { vm.groupCallBlockedText(true, true, false) == null }.getOrDefault(false)) ({ env, starter ->
+                    joinAsk = env to starter
+                }) else null,
             )
+            joinAsk?.let { (env, starter) ->
+                JoinCallPermissions(env.video, onDenied = { vm.imgs.toast.value = it; joinAsk = null }) { cam ->
+                    joinAsk = null
+                    vm.joinGroupCall(env, starter, cam)
+                }
+            }
             toast?.let { lk.codegen.risime.ui.chat.ImageToast(it) }
             val off = composer as? GroupComposer.Disabled
             if (off != null) {
@@ -261,7 +278,7 @@ internal fun GroupMessageList(
     /** §17.12 the gap marker with "Request history" (null: a plain line, the feature off). */
     historyMarker: (@Composable (MessageEntity) -> Unit)? = null,
     /** §20.4 Join on a running group call's line (null: this phone can't join group calls). */
-    onJoinCall: ((lk.codegen.risime.calls.GroupCallEnvelope) -> Unit)? = null,
+    onJoinCall: ((lk.codegen.risime.calls.GroupCallEnvelope, String) -> Unit)? = null,
 ) {
     ChatMessageList(
         messages = messages,
@@ -289,7 +306,7 @@ internal fun GroupMessageList(
                         lk.codegen.risime.calls.GroupCallLines.text(env, nameOf(item.m.from), item.m.from.equals(meId, true), running),
                         video = env.video,
                         missed = !item.m.from.equals(meId, true) && env.reason == lk.codegen.risime.calls.GroupCallEnvelope.R_TIMEOUT,
-                        onJoin = onJoinCall?.takeIf { lk.codegen.risime.calls.GroupCallLines.joinable(env, running) }?.let { f -> { f(env) } },
+                        onJoin = onJoinCall?.takeIf { lk.codegen.risime.calls.GroupCallLines.joinable(env, running) }?.let { f -> { f(env, item.m.from) } },
                         onDeleteForMe = del?.let { d -> { d.deleteForMe(listOf(item.m.clientMsgId)) } },
                     )
                 }
@@ -592,4 +609,22 @@ private fun AddMembersDialog(candidates: List<PickFriend>, onAdd: (Set<String>) 
         confirmButton = { TextButton(onClick = { onAdd(selected); onDismiss() }, enabled = selected.isNotEmpty()) { Text("Add") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * §20.4 Join from a line: the microphone (and, for a video call, the camera: a denied camera joins
+ * with it off, android A2), asked once, then [onGranted].
+ */
+@Composable
+private fun JoinCallPermissions(video: Boolean, onDenied: (String) -> Unit, onGranted: (camera: Boolean) -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    fun granted(p: String) = androidx.core.content.ContextCompat.checkSelfPermission(ctx, p) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val ask = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        val mic = r[android.Manifest.permission.RECORD_AUDIO] ?: granted(android.Manifest.permission.RECORD_AUDIO)
+        if (!mic) onDenied("RisiMe needs the microphone for calls") else onGranted(video && (r[android.Manifest.permission.CAMERA] ?: granted(android.Manifest.permission.CAMERA)))
+    }
+    LaunchedEffect(Unit) {
+        val perms = listOfNotNull(android.Manifest.permission.RECORD_AUDIO, android.Manifest.permission.CAMERA.takeIf { video })
+        if (perms.all { granted(it) }) onGranted(video) else ask.launch(perms.toTypedArray())
+    }
 }

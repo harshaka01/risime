@@ -101,6 +101,12 @@ class GroupCallMachine(
         /** §20.6 K3: how often the group's epoch is compared with the installed keys (plus the commit hook). */
         const val EPOCH_POLL_MS = 500L
 
+        /**
+         * K6: a track whose cryptor hasn't reported OK this long after it appeared counts as "Can't
+         * verify" (a frame that never decrypts may never change the cryptor's state from NEW).
+         */
+        const val VERIFY_MS = 5_000L
+
         /** At most one commit catch-up for a missing key index per this interval. */
         const val CATCH_UP_MS = 3_000L
         const val MAX_CALL_MS = 4 * 3_600_000L
@@ -139,6 +145,8 @@ class GroupCallMachine(
         var everOthers = false
         var reconnecting = false
         var lastCatchUp = 0L
+        /** Device ms when each remote identity was first seen with a track (the "never verifies" timer). */
+        val trackSince = HashMap<String, Long>()
         val timers = HashMap<String, Job>()
         var ended = false
         var shown = false
@@ -487,7 +495,7 @@ class GroupCallMachine(
                     when (state) {
                         SfuConnection.RECONNECTING -> {
                             c.reconnecting = true
-                            timer(c, "lost", LOST_MS) { x -> leave(x, CallNotice.LOST_CONNECTION) }
+                            timer(c, "lost", LOST_MS) { x -> leave(x, CallNotice.LOST_CONNECTION, announce = false) }
                         }
                         SfuConnection.CONNECTED -> {
                             c.reconnecting = false
@@ -496,7 +504,7 @@ class GroupCallMachine(
                         // The SFU closed the room for us (removed by the server, the room is gone): over.
                         SfuConnection.DISCONNECTED -> {
                             log("group call ${c.id}: disconnected by the SFU")
-                            leave(c, CallNotice.CALL_ENDED)
+                            leave(c, CallNotice.CALL_ENDED, announce = false)
                             return@withLock
                         }
                     }
@@ -511,9 +519,11 @@ class GroupCallMachine(
         val session = c.session
         val roster = c.ring?.roster.orEmpty()
         val others = c.participants.filter { !it.local }
-        for (p in others) {
+        // Before the first keys are installed there is no roster yet: nobody is judged (no flapping subscriptions).
+        if (c.ring?.epoch != null) for (p in others) {
             val member = p.identity in roster
-            session?.setPlayable(p.identity, member && p.encrypted)
+            // K7 here; K6 (a track that says it isn't encrypted) is enforced per track by the session and the UI.
+            session?.setPlayable(p.identity, member)
         }
         if (others.isNotEmpty()) {
             if (!c.everOthers) {
@@ -532,8 +542,11 @@ class GroupCallMachine(
                 }
             }
         }
+        val t = now()
+        c.trackSince.keys.retainAll(others.filter { it.hasAudio || it.hasVideo }.map { it.identity }.toSet())
+        for (p in others) if ((p.hasAudio || p.hasVideo) && p.identity !in c.trackSince) c.trackSince[p.identity] = t
         // §20.6: a frame whose key index has no key makes the device catch up commits.
-        val missing = others.any { it.identity in roster && (it.cryptor == CryptorState.MISSING_KEY || it.cryptor == CryptorState.FAILED) }
+        val missing = others.any { it.identity in roster && failing(c, it, t) }
         if (missing && now() - c.lastCatchUp >= CATCH_UP_MS && c.ring != null) {
             c.lastCatchUp = now()
             scope.launch {
@@ -542,6 +555,13 @@ class GroupCallMachine(
             }
         }
         publish(c)
+    }
+
+    /** K6: this participant's frames don't decrypt (an error state, or never OK within [VERIFY_MS]). */
+    private fun failing(c: GCall, p: SfuParticipant, t: Long): Boolean = when (p.cryptor) {
+        CryptorState.MISSING_KEY, CryptorState.FAILED -> true
+        CryptorState.NEW, CryptorState.NONE -> (p.hasAudio || p.hasVideo) && c.trackSince[p.identity]?.let { t - it >= VERIFY_MS } == true
+        CryptorState.OK -> false
     }
 
     /** §19.5 for group video: the camera only while wanted, the screen visible and connected. */
@@ -569,9 +589,10 @@ class GroupCallMachine(
      * Leave = disconnect. A device that sees no other participant sends the durable `ended`; the
      * starter whom nobody joined also sends `call_cancel` (`ended`) so phones stop ringing.
      */
-    private fun leave(c: GCall, notice: CallNotice?) {
+    private fun leave(c: GCall, notice: CallNotice?, announce: Boolean = true) {
         if (c.ended) return
-        val connected = c.session != null
+        // Only a device that really sees the room may claim the call is over (not after the SFU dropped it).
+        val connected = c.session != null && announce
         val alone = c.participants.none { !it.local }
         if (connected && alone) {
             val env = if (c.outgoing && !c.everOthers) {
@@ -625,7 +646,7 @@ class GroupCallMachine(
     private fun snapshot(c: GCall): CallSnapshot {
         val roster = c.ring?.roster.orEmpty()
         val members = c.participants.sortedBy { !it.local }.map { p ->
-            val member = p.local || p.identity in roster
+            val member = p.local || c.ring?.epoch == null || p.identity in roster
             val tracks = p.hasAudio || p.hasVideo
             GroupMember(
                 identity = p.identity,
@@ -635,12 +656,12 @@ class GroupCallMachine(
                 speaking = p.speaking && member,
                 muted = p.audioMuted || !p.hasAudio,
                 verified = tracks && p.encrypted && p.cryptor == CryptorState.OK,
-                cantVerify = tracks && (!p.encrypted || p.cryptor == CryptorState.FAILED || p.cryptor == CryptorState.MISSING_KEY),
+                cantVerify = !p.local && tracks && (!p.encrypted || failing(c, p, now())),
                 hasVideo = p.hasVideo && !p.videoMuted && member && p.encrypted,
             )
         }
         // K9: the badge shows while every rendered participant decrypts with an MLS-derived key.
-        val rendered = members.filter { !it.local && it.member && (it.verified || it.cantVerify) }
+        val rendered = members.filter { m -> !m.local && m.member && c.participants.any { it.identity == m.identity && (it.hasAudio || it.hasVideo) } }
         val badge = rendered.isNotEmpty() && rendered.all { it.verified }
         return CallSnapshot(
             c.id, c.conv, c.starter, c.outgoing,

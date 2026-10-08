@@ -207,6 +207,8 @@ fun IncomingCallScreen(
     photoKey: String? = null,
     /** §19.6: "Incoming video call" with Answer (camera on), Answer without video and Decline. Null = a voice call. */
     onAnswerWithoutVideo: (() -> Unit)? = null,
+    /** §20.4 a group call's line under the title ("Group voice call"); null = the 1:1 texts. */
+    subtitle: String? = null,
 ) {
     val video = onAnswerWithoutVideo != null && name != null
     Box(modifier) {
@@ -217,6 +219,7 @@ fun IncomingCallScreen(
                         name ?: "Incoming RisiMe call",
                         when {
                             name == null -> "Unlock RisiMe to see who's calling"
+                            subtitle != null -> subtitle
                             video -> "Incoming video call"
                             else -> "RisiMe voice call"
                         },
@@ -327,14 +330,16 @@ fun InCallScreen(
     modifier: Modifier = Modifier,
     video: (@Composable () -> Unit)? = null,
     extraControls: @Composable RowScope.() -> Unit = {},
+    /** §20.5 a group call's participant list (voice) shown instead of the avatar. */
+    center: (@Composable () -> Unit)? = null,
 ) {
     Box(modifier) {
         CallBackdrop(video) {
             CallColumn {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = if (center != null) Modifier.weight(1f, fill = false) else Modifier) {
                     CallHeader(ui.name, ui.status, encrypted = ui.verified)
                     Spacer(Modifier.height(if (LocalCompactCall.current) Spacing.lg else Spacing.xxl))
-                    if (video == null) CallAvatar(ui.name, pulse = false, photoKey = ui.photoKey)
+                    if (center != null) center() else if (video == null) CallAvatar(ui.name, pulse = false, photoKey = ui.photoKey)
                 }
                 if (!ui.ended) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = Spacing.lg)) {
@@ -450,6 +455,64 @@ fun CallLineRow(text: String, missed: Boolean, onCallBack: (() -> Unit)?, onDele
             onVideoCallBack?.let { DropdownMenuItem(text = { Text("Video call back") }, onClick = { menu = false; it() }) }
             onCallBack?.let { DropdownMenuItem(text = { Text(if (onVideoCallBack != null) "Voice call back" else "Call back") }, onClick = { menu = false; it() }) }
             onDeleteForMe?.let { DropdownMenuItem(text = { Text("Delete for me") }, onClick = { menu = false; it() }) }
+        }
+    }
+}
+
+/** One row of a group call's participant list (§20.5 UI; names from the app's database, android A7). */
+data class GroupMemberUi(
+    val key: String,
+    val name: String,
+    val photoKey: String?,
+    val speaking: Boolean,
+    val muted: Boolean,
+    /** "Not a member" (K7) or "Can't verify" (K6); null = a verified member. */
+    val warning: String?,
+)
+
+fun groupMemberUi(m: GroupMember, name: String): GroupMemberUi = GroupMemberUi(
+    key = m.identity,
+    name = if (m.local) "You" else if (m.member) name else "Not a member",
+    photoKey = m.userId.takeIf { m.member },
+    speaking = m.speaking,
+    muted = m.muted,
+    warning = when {
+        !m.member -> "Not a member · not played"
+        m.cantVerify -> "Can't verify · not played"
+        else -> null
+    },
+)
+
+/** §20.5 the voice call's participant list: speaking ring, muted mic, the K6/K7 warnings. */
+@Composable
+fun GroupParticipantList(members: List<GroupMemberUi>, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.lazy.LazyColumn(modifier.fillMaxWidth().heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+        items(members.size, key = { members[it].key }) { i ->
+            val m = members[i]
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = Spacing.lg).semantics {
+                    contentDescription = buildString {
+                        append(m.name)
+                        if (m.speaking) append(", speaking")
+                        if (m.muted) append(", muted")
+                        m.warning?.let { append(", ").append(it) }
+                    }
+                },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(48.dp).clip(CircleShape)
+                        .background(if (m.speaking) Green else Color.Transparent)
+                        .padding(3.dp),
+                    contentAlignment = Alignment.Center,
+                ) { InitialsAvatar(m.name, size = 42.dp, photoKey = m.photoKey) }
+                Spacer(Modifier.width(Spacing.md))
+                Column(Modifier.weight(1f)) {
+                    Text(m.name, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    m.warning?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFFFFB4A9)) }
+                }
+                if (m.muted) Icon(RisiIcons.MicOff, "Muted", tint = Color.White.copy(alpha = 0.8f))
+            }
         }
     }
 }

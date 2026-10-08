@@ -355,7 +355,7 @@ class GroupCallMachineTest {
         runCurrent()
         assertEquals(true, r.session.playable["u-b/b1"])
         assertEquals(false, r.session.playable["u-x/ghost"])
-        assertEquals(false, r.session.playable["u-c/c1"])
+        assertEquals(true, r.session.playable["u-c/c1"]) // a member: K6 is per track (silent, not rendered), K7 unsubscribes ghosts
         val st = r.m.state.value!!
         assertFalse(st.members.single { it.identity == "u-x/ghost" }.member)
         assertTrue(st.members.single { it.identity == "u-c/c1" }.cantVerify)
@@ -367,6 +367,27 @@ class GroupCallMachineTest {
         runCurrent()
         assertEquals(before + 1, r.port.catchUps)
         assertTrue(r.m.state.value!!.members.single { it.identity == "u-b/b1" }.cantVerify)
+    }
+
+    @Test fun aTrackThatNeverDecryptsIsCantVerifyAfterFiveSecondsAndWithdrawsTheBadge() = runTest {
+        val r = rig()
+        r.m.start(conv)
+        runCurrent()
+        r.session.room(remote("u-b/b1"), remote("u-c/c1", CryptorState.NEW))
+        runCurrent()
+        assertFalse(r.m.state.value!!.verified) // C hasn't verified yet: no badge
+        assertFalse(r.m.state.value!!.members.single { it.identity == "u-c/c1" }.cantVerify)
+        val before = r.port.catchUps
+        advanceTimeBy(GroupCallMachine.VERIFY_MS + 1)
+        r.session.room(remote("u-b/b1"), remote("u-c/c1", CryptorState.NEW))
+        runCurrent()
+        assertTrue(r.m.state.value!!.members.single { it.identity == "u-c/c1" }.cantVerify)
+        assertFalse(r.m.state.value!!.verified)
+        assertEquals(before + 1, r.port.catchUps) // and catches up commits
+        // C's frames start decrypting: badge back.
+        r.session.room(remote("u-b/b1"), remote("u-c/c1"))
+        runCurrent()
+        assertTrue(r.m.state.value!!.verified)
     }
 
     @Test fun lostConnectionAfterTwentySecondsAndOneCallAtATime() = runTest {
