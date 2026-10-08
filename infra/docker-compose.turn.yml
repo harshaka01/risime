@@ -1,6 +1,6 @@
 # coturn (TURN/STUN) for RisiMe voice calls on spark2 (decision 046).
 # PUBLIC: the one documented exception to CLAUDE.md rule 6. Host networking (no docker-proxy
-# for 848 relay ports); turnserver itself binds only 10.20.20.15 (see infra/coturn/turnserver.conf).
+# for 348 relay ports); turnserver itself binds only 10.20.20.15 (see infra/coturn/turnserver.conf).
 #   docker compose --env-file .env -f infra/docker-compose.turn.yml up -d
 # Needs TURN_SECRET in .env (openssl rand -base64 48), the same value the server uses.
 # Smoke test on loopback only: scripts/turn-smoke
