@@ -42,6 +42,19 @@
 #       Settings → Manage backups → Restore from file → the file in the system picker → recovery key →
 #       "Restored N messages." → OK.
 #     --no-reinstall: skip that phase (emergency only; the result says reinstall=off).
+#     Per chat (§24.14, decision 065): besides per conversation, the Room counts are compared per
+#       chat_id (Room v11 `chat_tabs`; a conversation without a row is its own chat) after the update
+#       and after the re-sign-in, and every pre-update conversation must then be Private with
+#       chat_id = conversation_id: a chat_tabs row saying exactly that, or no row (the app's rule:
+#       no row = Private, its own chat). Skipped, logged, for an app without chat_tabs.
+#     Locked chat (LOCKED_CHAT_CHECK_FROM=<versionCode>, default 20037 = the first app with Locked
+#       chats): when the OLD app is at least this, user D writes to A, A gets a screen-lock PIN
+#       (`locksettings set-pin`) and locks D's chat on the old app through the real UI (long-press ->
+#       Lock chat -> the system credential prompt). After the update D's chat must stay out of the
+#       chat list, sit in the Locked chats folder (pull-down -> PIN), keep its messages in Room, and
+#       stay hidden after the re-sign-in. The PIN is cleared after the folder check (and on exit).
+#       UPGRADE_NO_LOCKED_CHAT=1 skips it (emergency only; the result says locked=off).
+#     UPGRADE_OUTDIR=<dir>: write the result there instead of ~/risime-logs/upgrade-test (a trial run).
 #     --reinstall-dm-offline: also a DM A-C (set up first): C stays stopped REINSTALL_DM_WAIT s (180)
 #       after A's sign-in; A's DM shows "Waiting for ZZ Upgrade C to open RisiMe", the DM's generation
 #       is unchanged (no reset, which apps up to v1.20 did after 2 min), and A's pending DM arrives once
@@ -90,7 +103,8 @@ USUF="${UPGRADE_INSTANCE:-}"; PORT="${UPGRADE_PORT:-4110}"
 if [ -n "$USUF" ]; then export REDROID_INSTANCE="${REDROID_INSTANCE:-${USUF//_/-}}" REDROID_PORT="${REDROID_PORT:-$((5655 + PORT - 4110))}"; fi
 PKG=lk.codegen.risime
 SPARK="${SPARK_HOST:-spark2}"
-OUTDIR="$HOME/risime-logs/upgrade-test"
+# UPGRADE_OUTDIR: where the result goes (a trial run elsewhere never counts as a release PASS).
+OUTDIR="${UPGRADE_OUTDIR:-$HOME/risime-logs/upgrade-test}"
 on_spark2() { [ -d /srv/git/locks ]; }
 # No `cmd | head` / `cmd | grep -q` under pipefail: the writer dies of SIGPIPE (exit 141) when the
 # reader stops early. Capture output into a variable, then parse it.
@@ -123,7 +137,7 @@ if [ "${1:-}" = _server ]; then
 alias RisiMe.{Accounts, Repo}
 alias RisiMe.Accounts.User
 [mode | rest] = System.argv()
-a_phone = "+94770000961"; b_phone = "+94770000962"; c_phone = "+94770000963"
+a_phone = "+94770000961"; b_phone = "+94770000962"; c_phone = "+94770000963"; d_phone = "+94770000964"
 user! = fn phone ->
   Repo.get_by(User, phone: phone) ||
     (e = Accounts.get_allowlist_entry(phone)
@@ -134,6 +148,7 @@ case mode do
     {:ok, _} = Accounts.allow(%{phone: a_phone, email: "upgrade61@example.com", display_name: "ZZ Upgrade A", company: "CodeGen"})
     {:ok, _} = Accounts.allow(%{phone: b_phone, email: "upgrade62@example.com", display_name: "ZZ Upgrade B", company: "CodeGen"})
     {:ok, _} = Accounts.allow(%{phone: c_phone, email: "upgrade63@example.com", display_name: "ZZ Upgrade C", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: d_phone, email: "upgrade64@example.com", display_name: "ZZ Upgrade D", company: "CodeGen"})
     IO.puts("upgrade: setup ok")
   "friends" ->
     RisiMe.Social.make_friends!(user!.(a_phone).id, user!.(b_phone).id)
@@ -141,6 +156,21 @@ case mode do
   "friends_c" ->
     RisiMe.Social.make_friends!(user!.(a_phone).id, user!.(c_phone).id)
     IO.puts("upgrade: friends_c ok")
+  "friends_d" ->
+    RisiMe.Social.make_friends!(user!.(a_phone).id, user!.(d_phone).id)
+    IO.puts("upgrade: friends_d ok")
+  "send_d" ->
+    # The locked-chat step: D (no device, so plaintext) writes to A.
+    [n] = rest
+    a = user!.(a_phone); d = user!.(d_phone)
+    ok = for i <- 1..String.to_integer(n), reduce: 0 do
+      acc ->
+        case RisiMe.Messaging.send(d.id, %{"to" => a.id, "client_msg_id" => Ecto.UUID.generate(), "body" => "upgrade-test D#{i}"}) do
+          {:ok, _} -> acc + 1
+          _ -> acc
+        end
+    end
+    IO.puts("upgrade: sent_d #{ok}")
   "blobs" ->
     IO.puts("upgrade: blobs=#{Repo.aggregate("blobs", :count)}")
   "purge_inbox" ->
@@ -216,6 +246,8 @@ EXS
       fx setup ;;
     friends) fx friends ;;
     friends_c) fx friends_c ;;
+    friends_d) fx friends_d ;;
+    send_d) fx send_d "${2:?count}" ;;
     blobs) fx blobs ;;
     mls) fx mls ;;
     purge_inbox) fx purge_inbox ;;
@@ -248,7 +280,7 @@ case "$TARGET" in auto|redroid|emulator|device) ;; *) echo "--target auto|redroi
 # spark2's SDK adb is x86-64: use the arm64 adb (user space, scripts/android-target adb).
 if [ "$(uname -m)" = aarch64 ]; then PATH="$("$REPO/scripts/android-target" adb):$PATH"; fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-upgrade.XXXXXX")"
-TUNNEL_PID=""; STARTED_TARGET=""; STARTED_B=""; CHECKS=""; UPD_PID=""; UPD_PORT=""; BACK_STEP=no; RI_STEP=no; RS_STEP=no
+TUNNEL_PID=""; STARTED_TARGET=""; STARTED_B=""; CHECKS=""; UPD_PID=""; UPD_PORT=""; BACK_STEP=no; RI_STEP=no; RS_STEP=no; LK_STEP=no; PIN_SET=""; LK_PIN=1357
 STEP="start"; RESULT=FAIL; REASON=""; RESULT_WRITTEN=0; VERSION_FOR_RESULT=""
 step() { STEP="$*"; echo "==> $*"; }
 fail() { REASON="$1"; echo "UPGRADE TEST FAILED: $1"; write_result; exit 1; }
@@ -258,7 +290,7 @@ write_result() {
   RESULT_WRITTEN=1
   { echo "result=$RESULT"; echo "version=$VERSION"; echo "commit=$COMMIT"; echo "old=${OLD_VN:-}"; echo "new=${NEW_VN:-}"
     echo "new_sha256=$(sha256sum "$NEW" | cut -d' ' -f1)"; echo "host=$(hostname)"; echo "device=$(adb -s "$SERIAL" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
-    echo "group=${SERIAL_B:+yes}"; echo "via=$VIA"; echo "back_step=$BACK_STEP"; echo "reinstall=$RI_STEP"; echo "restore=$RS_STEP";echo "checks=${CHECKS# }"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
+    echo "group=${SERIAL_B:+yes}"; echo "via=$VIA"; echo "back_step=$BACK_STEP"; echo "reinstall=$RI_STEP"; echo "restore=$RS_STEP"; echo "locked=$LK_STEP"; echo "checks=${CHECKS# }"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
   echo "==> result: $f"
   local diag=""
   [ "$RESULT" = PASS ] || diag="$(save_diagnostics || true)"
@@ -292,6 +324,8 @@ cleanup() {
   fi
   # UPGRADE_KEEP=1 (debugging the script): leave the server and containers up after a failure.
   if [ "${UPGRADE_KEEP:-0}" = 1 ] && [ "$RESULT" != PASS ]; then echo "==> UPGRADE_KEEP=1: server and devices left running ($SERIAL ${SERIAL_B:-})"; return; fi
+  # The locked-chat step's screen-lock PIN never outlives the run (a reused device or emulator).
+  [ -n "$PIN_SET" ] && { timeout 30 adb -s "$PIN_SET" shell locksettings clear --old "$LK_PIN" >/dev/null 2>&1 || true; }
   srv stop >/dev/null 2>&1 || true
   [ -n "$STARTED_TARGET" ] && "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
   [ -n "$STARTED_B" ] && redroid_b stop >/dev/null 2>&1 || true
@@ -567,7 +601,7 @@ db_snapshot() {
   has_text "$who" "uid=0" || { echo "no-root"; return 0; }
   rm -f "$WORK"/risime.db*
   for f in risime.db risime.db-wal risime.db-shm; do A exec-out cat "/data/data/$PKG/databases/$f" > "$WORK/$f" 2>/dev/null || rm -f "$WORK/$f"; done
-  python3 -I - "$WORK/risime.db" "$WORK/counts-last.json" <<'PY'
+  python3 -I - "$WORK/risime.db" "$WORK/counts-last.json" "$WORK/counts-chat-last.json" "$WORK/tabs-last.json" <<'PY'
 import sqlite3, sys, json
 c = sqlite3.connect(sys.argv[1])
 # HARD RULE (CLAUDE.md, decision 055): per conversation and kind (text, image, call, ...), never fewer after an update.
@@ -577,6 +611,23 @@ try:
 except sqlite3.Error:
     json.dump({}, open(sys.argv[2], "w"))
 q = lambda s: c.execute(s).fetchone()[0]
+# §24.14 (decision 065): the same per chat (both tabs of a chat summed: chat_id from Room v11's
+# chat_tabs; a conversation without a row is its own chat), and the chat_tabs rows themselves
+# (null = this app has no chat_tabs table).
+has_tabs = q("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chat_tabs'")
+try:
+    rows = c.execute("SELECT COALESCE(t.chat_id, m.conversation_id), COALESCE(m.kind, 'text'), COUNT(*) FROM messages m "
+                     "LEFT JOIN chat_tabs t ON t.conversation_id = m.conversation_id WHERE m.kind IS NULL OR m.kind != 'system' GROUP BY 1, 2"
+                     if has_tabs else
+                     "SELECT conversation_id, COALESCE(kind, 'text'), COUNT(*) FROM messages WHERE kind IS NULL OR kind != 'system' GROUP BY 1, 2").fetchall()
+    json.dump({f"{a}|{b}": n for a, b, n in rows}, open(sys.argv[3], "w"))
+except sqlite3.Error:
+    json.dump({}, open(sys.argv[3], "w"))
+try:
+    tabs = {r[0]: [r[1], r[2]] for r in c.execute("SELECT conversation_id, chat_id, tab FROM chat_tabs")} if has_tabs else None
+except sqlite3.Error:
+    tabs = None
+json.dump(tabs, open(sys.argv[4], "w"))
 groups = q("SELECT COUNT(*) FROM sqlite_master WHERE name='groups'") and q("SELECT COUNT(*) FROM `groups`") or 0
 def n(sql):
     try: return q(sql) or 0
@@ -588,6 +639,8 @@ extra = {
     "deleted": n("SELECT COUNT(*) FROM messages WHERE kind = 'deleted'"),
     "images_sent": n("SELECT COUNT(*) FROM messages WHERE kind = 'image' AND outgoing = 1 AND message_id IS NOT NULL"),
     "resets": n("SELECT COUNT(*) FROM messages WHERE kind = 'system' AND body LIKE 'Encryption was reset%'"),
+    "locked_msgs": n("SELECT COUNT(*) FROM messages WHERE body LIKE 'upgrade-test D%'"),
+    "chat_tabs": n("SELECT COUNT(*) FROM chat_tabs") if has_tabs else "none",
 }
 print(f"messages={q('SELECT COUNT(*) FROM messages')} contacts={q('SELECT COUNT(*) FROM contacts')} groups={groups} cursor={'set' if q('SELECT COUNT(*) FROM sync_state') else 'none'} "
       + " ".join(f"{k}={v}" for k, v in extra.items()))
@@ -599,6 +652,79 @@ PY
   echo "device_id=${did:-none}"
 }
 
+# "key:before->after" for every key of the counts file $1 whose count dropped in $2 (empty: none).
+pairs_lost() { python3 -I - "$1" "$2" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1])); a = json.load(open(sys.argv[2]))
+print(" ".join(f"{k}:{v}->{a.get(k, 0)}" for k, v in b.items() if a.get(k, 0) < v))
+PY
+}
+# §24.14 after the migration: every conversation of the pre-update snapshot ($1, per-conversation
+# counts) is Private with chat_id = its conversation id ($2, the rows): its chat_tabs row says
+# tab 'private' and chat_id = conversation_id, or it has no row (= Private, its own chat).
+# Prints "OK n", "NONE" (the app has no chat_tabs table) or "BAD <conv>=<chat_id>/<tab> ...".
+tabs_private() { python3 -I - "$1" "$2" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1])); t = json.load(open(sys.argv[2]))
+if t is None:
+    print("NONE"); sys.exit()
+convs = sorted({k.rsplit("|", 1)[0] for k in b})
+# No row = Private, its own chat (the app's rule, docs/status/android.md A1): a v11 app writes rows
+# only from decrypted group_meta, so a plaintext DM created on it has none. A row must say exactly that.
+bad = [f"{c}={t[c][0]}/{t[c][1]}" for c in convs if c in t and t[c] != [c, "private"]]
+rows = sum(1 for c in convs if c in t)
+print("BAD " + " ".join(bad) if bad else f"OK {len(convs)} ({rows} with a chat_tabs row, {len(convs) - rows} without = Private)")
+PY
+}
+# The per-chat and chat_tabs checks of a snapshot just taken ($1: when, for the messages).
+chat_checks() {
+  local lost t
+  lost="$(pairs_lost "$WORK/counts-chat-before.json" "$WORK/counts-chat-last.json")"
+  [ -z "$lost" ] || fail "messages lost per chat_id/kind $1: $lost"
+  echo "    per-chat counts kept $1 ($(python3 -I -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$WORK/counts-chat-before.json") chat/kind pairs)"
+  t="$(tabs_private "$WORK/counts-before.json" "$WORK/tabs-last.json")"
+  case "$t" in
+    NONE) echo "    note: this app has no chat_tabs table (pre-v1.24): the tab check is skipped";;
+    OK*) echo "    chat_tabs $1: all ${t#OK } pre-update conversations are Private with chat_id = conversation_id";;
+    *) fail "chat_tabs $1: not every pre-update conversation is Private with chat_id = conversation_id: ${t#BAD }";;
+  esac
+}
+
+# ---- locked chat across an update (old app >= LOCKED_CHAT_CHECK_FROM): a screen-lock PIN on A,
+# D's chat locked through the real UI (long-press -> Lock chat -> the system credential prompt).
+
+pin_set() { A shell locksettings set-pin "$LK_PIN" >/dev/null && PIN_SET="$DEV"; }
+pin_clear() { [ -n "$PIN_SET" ] || return 0; adb -s "$PIN_SET" shell locksettings clear --old "$LK_PIN" >/dev/null 2>&1 && PIN_SET=""; }
+# The system's credential prompt (BiometricPrompt in SystemUI, PIN pad for a device without a
+# fingerprint) titled $1: type the PIN.
+enter_pin_prompt() {
+  local i
+  for i in $(seq 1 25); do
+    dump
+    grep -qF 'package="com.android.systemui"' "$WORK/ui.xml" && grep -qF "text=\"$1\"" "$WORK/ui.xml" && break
+    sleep 1
+  done
+  grep -qF 'package="com.android.systemui"' "$WORK/ui.xml" || { echo "    no system credential prompt \"$1\""; return 1; }
+  A shell input text "$LK_PIN"; sleep 0.3; A shell input keyevent KEYCODE_ENTER; sleep 2
+}
+to_chat_list() { A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/.MainActivity" >/dev/null; wait_chat_list 40 || return 1; dismiss_prompts; }
+# The chat list shows D's row ($WORK/ui.xml from a fresh dump).
+d_listed() { dump; grep -qF 'text="ZZ Upgrade D"' "$WORK/ui.xml"; }
+# Pull down at the top of the chat list: the "Locked chats, N" row appears; confirm, the folder lists D.
+locked_folder_has_d() {
+  local sz w h i
+  sz="$(A shell wm size 2>/dev/null || true)"; [[ "$sz" =~ ([0-9]+)x([0-9]+) ]] && { w="${BASH_REMATCH[1]}"; h="${BASH_REMATCH[2]}"; } || { w=720; h=1280; }
+  for i in 1 2 3; do
+    A shell input swipe $((w / 2)) $((h * 35 / 100)) $((w / 2)) $((h * 80 / 100)) 600; sleep 1
+    has 'content-desc="Locked chats, ' && break
+  done
+  has 'content-desc="Locked chats, ' || { echo "    the pull-down shows no \"Locked chats\" row"; return 1; }
+  echo "    pull-down: \"$(grep -oE 'content-desc="Locked chats, [0-9]+"' "$WORK/ui.xml" | sed -n 1p | cut -d'"' -f2)\""
+  tap "~Locked chats, " || return 1
+  enter_pin_prompt "Locked chats" || return 1
+  wait_for 'text="ZZ Upgrade D"' 20 || { echo "    the Locked chats folder doesn't list D"; return 1; }
+  A shell input keyevent KEYCODE_BACK; sleep 1
+}
 
 ENC="Encrypted message"   # the composer's placeholder in an e2ee chat
 # C (second device) sees $1 in the group, reopening the chat once if the socket went quiet.
@@ -755,6 +881,14 @@ if [ "$VIA" = updater ]; then
   step "local update server for the in-app updater (https://risicloud.ai/app/risime/ -> 127.0.0.1, device A)"
   DEV="$SERIAL"; updater_setup || fail "in-app updater setup"
 fi
+# Locked chat across the update (Locked chats shipped in 0.2.0-nightly.37): LOCKED_CHAT_CHECK_FROM
+# (default 20037) is the first OLD versionCode that can lock a chat. UPGRADE_NO_LOCKED_CHAT=1 skips
+# it (emergency only; the result says locked=off).
+LOCKED_CHAT_CHECK_FROM="${LOCKED_CHAT_CHECK_FROM:-20037}"
+if [ -n "${UPGRADE_NO_LOCKED_CHAT:-}" ]; then LK_STEP=off; echo "==> locked-chat step OFF (UPGRADE_NO_LOCKED_CHAT)"
+elif [ "$MANUAL" = 1 ]; then LK_STEP=skipped; echo "==> locked-chat step skipped (--manual-signin)"
+elif [ "$OLD_VC" -ge "$LOCKED_CHAT_CHECK_FROM" ] 2>/dev/null; then LK_STEP=yes
+else LK_STEP=skipped; echo "==> locked-chat step skipped: old app $OLD_VN ($OLD_VC) is below LOCKED_CHAT_CHECK_FROM=$LOCKED_CHAT_CHECK_FROM (no Lock chat)"; fi
 # ---- 1. old app, signed in, with chats
 step "install the old app ($OLD_VN) on $SERIAL${SERIAL_B:+ and $SERIAL_B}"
 DEV="$SERIAL"; install_old
@@ -787,9 +921,33 @@ if [ -n "$SERIAL_B" ]; then
   wait_for "upgrade-test A9" 60 || fail "C did not receive the group message on the old app"
   DEV="$SERIAL"
 fi
+if [ "$LK_STEP" = yes ]; then
+  step "locked chat: D writes to A; a screen-lock PIN; A locks D's chat (long-press -> Lock chat -> PIN) on the old app"
+  DEV="$SERIAL"
+  srv friends_d; sd="$(srv send_d 2)"; [ "$sd" = "upgrade: sent_d 2" ] || fail "locked chat: D's messages weren't sent ($sd)"
+  to_chat_list || fail "locked chat: no chat list"
+  tap "Refresh friends" || true
+  for _ in $(seq 1 30); do d_listed && break; sleep 2; done
+  open_chat "ZZ Upgrade D" || fail "locked chat: D's chat isn't listed on the old app"
+  wait_for "upgrade-test D2" 30 || fail "locked chat: D's messages didn't arrive on the old app"
+  to_chat_list || fail "locked chat: no chat list"
+  pin_set || fail "locked chat: locksettings set-pin"
+  # Redroid never sleeps, but a PIN would turn a screen-off into a keyguard: keep the screen on.
+  A shell svc power stayon true >/dev/null 2>&1 || true
+  long_press "ZZ Upgrade D" && wait_for 'text="Lock chat"' 10 && tap "^Lock chat" || fail "locked chat: the chat list's long-press menu has no \"Lock chat\""
+  enter_pin_prompt "Lock chat" || fail "locked chat: the device-credential prompt for \"Lock chat\" didn't show"
+  hidden=""; for _ in $(seq 1 15); do on_chat_list && ! grep -qF 'text="ZZ Upgrade D"' "$WORK/ui.xml" && { hidden=1; break; }; sleep 1; done
+  [ -n "$hidden" ] || fail "locked chat: D's chat is still in the list after locking it"
+  has "ZZ Upgrade B" || fail "locked chat: B's chat left the list too"
+  echo "    D's chat locked on $OLD_VN: out of the chat list"
+fi
 step "snapshot before the upgrade"
 DB_BEFORE="$(db_snapshot)"; echo "    before (Room): $DB_BEFORE"
 cp "$WORK/counts-last.json" "$WORK/counts-before.json" 2>/dev/null || true
+cp "$WORK/counts-chat-last.json" "$WORK/counts-chat-before.json" 2>/dev/null || true
+if [ "$LK_STEP" = yes ] && [ "$DB_BEFORE" != no-root ]; then
+  [ "$(field "$DB_BEFORE" locked_msgs)" -ge 2 ] 2>/dev/null || fail "locked chat: D's 2 messages aren't in Room before the update ($DB_BEFORE)"
+fi
 
 # ---- 2. upgrade in place
 if [ "$VIA" = updater ]; then
@@ -823,6 +981,16 @@ for t in "Unlock with fingerprint" "Confirm to finish updating"; do
 done
 echo "    no lock screen and no sign-in after the update (decision 064)"
 [ -n "$SERIAL_B" ] && { has "Upgrade group" || fail "group missing after the upgrade"; }
+if [ "$LK_STEP" = yes ]; then
+  step "locked chat after the update: still out of the list, still in the Locked chats folder"
+  d_listed && fail "locked chat: D's chat is back in the chat list after the update"
+  locked_folder_has_d || fail "locked chat: D's chat isn't in the Locked chats folder after the update"
+  to_chat_list || fail "locked chat: no chat list after leaving the folder"
+  d_listed && fail "locked chat: D's chat shows in the chat list after leaving the folder"
+  echo "    D's chat stays locked across $OLD_VN -> $NEW_VN (hidden; in the folder behind the PIN)"
+  pin_clear || echo "    WARN: could not clear the screen-lock PIN (cleanup retries)"
+  CHECKS+=" locked_chat"
+fi
 open_chat "ZZ Upgrade B" || fail "cannot open the chat after the upgrade"
 AFTER="$(visible_msgs || true)"
 missing="$(comm -23 <(echo "$BEFORE") <(echo "$AFTER") | grep -c . || true)"
@@ -840,6 +1008,13 @@ PY
 )"
   [ -z "$lost" ] || fail "messages lost per conversation/kind after the upgrade: $lost"
   echo "    per-conversation counts kept ($(python3 -I -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$WORK/counts-before.json") conversation/kind pairs)"
+  chat_checks "after the update"
+  if [ "$LK_STEP" = yes ]; then
+    [ "$(field "$DB_AFTER" locked_msgs)" -ge "$(field "$DB_BEFORE" locked_msgs)" ] 2>/dev/null \
+      || fail "locked chat: D's messages dropped across the update ($(field "$DB_BEFORE" locked_msgs) -> $(field "$DB_AFTER" locked_msgs))"
+    echo "    locked chat: D's $(field "$DB_AFTER" locked_msgs) messages kept in Room"
+  fi
+  CHECKS+=" per_chat"
   # Delivery still works after the upgrade: one new message from B must arrive and be stored, and
   # the sync cursor must be stored again (nightly.11+ replays the inbox once after an upgrade).
   step "deliver one new message after the upgrade"
@@ -955,6 +1130,14 @@ PY
 )"
   [ -z "$lost" ] || fail "messages lost after re-sign-in: $lost"
   echo "    re-sign-in kept every conversation"
+  chat_checks "after re-sign-in"
+  if [ "$LK_STEP" = yes ]; then
+    # Plain "Log out" keeps the locked list (only "Log out and delete chats" wipes it).
+    d_listed && fail "locked chat: D's chat is back in the chat list after the re-sign-in"
+    [ "$(field "$DB_RE" locked_msgs)" -ge "$(field "$DB_BEFORE" locked_msgs)" ] 2>/dev/null \
+      || fail "locked chat: D's messages dropped after the re-sign-in ($(field "$DB_BEFORE" locked_msgs) -> $(field "$DB_RE" locked_msgs))"
+    echo "    locked chat: still hidden after the re-sign-in, its $(field "$DB_RE" locked_msgs) messages kept"
+  fi
 fi
 # ---- 4. reinstall without reset (§12.12, decision 060): A, the group's only admin, loses its app data
 # and signs in again as a new device; C re-adds it, the group keeps its generation, C loses nothing.
