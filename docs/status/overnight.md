@@ -47,6 +47,30 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## P0 HOTFIX in progress (2026-10-08 ~17:00 UTC): the app lock traps the user (nightly.35)
+- **Report (Harsha, real phone, n35):** "RisiMe is locked" shows, and "Unlock with fingerprint"
+  does nothing.
+- **Root cause (root's code analysis; the agent confirms it on a device):**
+  - with "Automatically lock: Immediately", the lock sets itself while the activity is stopped;
+  - the lock screen's auto-prompt then calls `BiometricPrompt.authenticate` after
+    onSaveInstanceState, which androidx silently ignores, so no callback ever comes;
+  - the coroutine never resumes, `AuthUi._busy` stays true, and every tap is ignored;
+  - errors are also dropped silently, and there is no PIN fallback.
+- **Fix (android agent, top model):**
+  - prompt only when RESUMED, and on every tap;
+  - BIOMETRIC_STRONG|DEVICE_CREDENTIAL (API 30+), "Use PIN" below that;
+  - errors shown with "Use phone PIN/pattern";
+  - the lock turns itself off when there is no credential at all;
+  - a Redroid `scripts/applock-device-test` with a PIN.
+- **Release:**
+  - **HOTFIX branch `hotfix/applock`**, cut from v0.2.0-nightly.35 plus `f8aca60` (the HOTFIX
+    release mode) and `72f7251` (the ringback crash fix);
+  - released with `HOTFIX=hotfix/applock scripts/release-from-worktree` through the full gate, as
+    **v0.2.0-nightly.36**;
+  - main's unreleased work follows as nightly.37.
+- **Workaround meanwhile:** Settings → Apps → RisiMe → Force stop, then open RisiMe. On a fresh start
+  the prompt may appear. Nothing is lost either way.
+
 ## Overnight run (2026-10-08 night → 10-09): Harsha unavailable, release each slice when green
 **Rules:**
 - Work non-stop. Release each slice when it is green through the full gate.
