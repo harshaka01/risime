@@ -47,11 +47,15 @@ defmodule RisiMe.Risi do
     do: Repo.all(from u in User, where: u.id in ^user_ids and u.kind == "agent", select: u.id)
 
   @doc """
-  True when Risi can join a conversation now (§24.2): `RISI` on, its user and device exist, the
-  device has an MLS key, and it has a key package to claim.
+  True when Risi can join a conversation now (§24.2): `RISI` on, its agent tree
+  (`RisiMe.Agent.Supervisor`, S5) running, its user and device exist, the device has an MLS key,
+  and it has a key package to claim. (`:risi_agent_check` false skips the tree check: only the
+  REST tests, which fake Risi's device.)
   """
   def available? do
     enabled?() and
+      (Application.get_env(:risime, :risi_agent_check, true) == false or
+         RisiMe.Agent.running?()) and
       Repo.exists?(
         from d in Device,
           join: u in User,

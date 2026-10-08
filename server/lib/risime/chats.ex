@@ -407,8 +407,17 @@ defmodule RisiMe.Chats do
           {:error, :rate_limited}
 
         true ->
+          og = official_group(chat_id)
+          off_official = want == "off" and og != nil and og.state == "active"
+
+          # §24.4 (S5): Risi's farewell goes out first, while Risi is still an active member and
+          # the chat is still on; only then does the off transaction mark it `pending_remove`.
+          if off_official, do: RisiMe.Agent.official_off(og.id, me)
+
           with {:ok, events} <- locked_toggle(me, dev, chat, want) do
             Messaging.publish_batch(events)
+            # §24.4: what Risi learned in the chat is deleted at once (buffer rows; S6: facts).
+            if off_official, do: RisiMe.Agent.forget(og.id)
             {:ok, chat_json(me, chat)}
           end
       end

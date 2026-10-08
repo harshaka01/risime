@@ -160,6 +160,11 @@ if risi = System.get_env("RISI"), do: config(:risime, :risi, on?.(risi))
 if id = System.get_env("RISI_USER_ID"), do: config(:risime, :risi_user_id, id)
 if id = System.get_env("RISI_DEVICE_ID"), do: config(:risime, :risi_device_id, id)
 if tz = System.get_env("RISI_DEFAULT_TZ"), do: config(:risime, :risi_default_tz, tz)
+# v1.24 S5 (decision 067): the Risi agent tree starts only with RISI=on, the MLS NIF loaded,
+# RISI_MLS_KEK (base64, 32 bytes: seals Risi's MLS state in risi_mls_kv) and RISI_DATA_KEY
+# (base64, 32 bytes: seals the risi_buffer bodies). Both live in .env only; never logged.
+if kek = System.get_env("RISI_MLS_KEK"), do: config(:risime, :risi_mls_kek, kek)
+if key = System.get_env("RISI_DATA_KEY"), do: config(:risime, :risi_data_key, key)
 
 # v1.21 §12.12.6: a superseded leaf unseen this long is removed by a cleanup op (default 24).
 if hours = System.get_env("STALE_LEAF_HOURS"),

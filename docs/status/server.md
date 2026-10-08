@@ -16,10 +16,98 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
-## v1.24 two tabs (§24, decision 065) — S1–S4 READY (S5–S8, the Risi agent tree, not started)
-- **Gate:** 709 tests, 0 failures (3 skipped: crypto's agent NIF tests; 2 `:livekit` excluded).
-  The former flakes (`fanout_cost_test`, `auth_log_test`, `open_signup_test`) passed 5× each
-  while another partition ran the full suite (see review fix 6).
+## v1.24 Risi agent tree (§24.11–§24.12, decisions 066, 067) — S5 READY (no LLM yet; S6–S8 open)
+- **Gate:** 718 tests, 0 failures with the NIF built (`scripts/build-mls-nif`); without it
+  (`RISI_MLS_NIF=/nonexistent/…`) 718 tests, 0 failures, 8 skipped (3 NIF + 5 agent tree tests);
+  2 `:livekit` excluded in both.
+- **Starts only when** `RISI=on` **and** the NIF is loaded (`scripts/build-mls-nif`, `--prod` for
+  the release) **and** `RISI_MLS_KEK` **and** `RISI_DATA_KEY` (each base64 of 32 bytes, `.env`
+  only, never logged) are present (`RisiMe.Agent.startable?/0`; a warning names what is missing).
+  Otherwise the tree isn't started and `RisiMe.Risi.available?/0` is false (`agent_unavailable`).
+  The tree is a `:temporary` application child: a tree that keeps crashing stops Risi, never the
+  server. Config for tests only: `:risi_agent_check` (false in `config/test.exs` so the S3/S4
+  REST tests can keep faking Risi's device), `:risi_hold_ms`, `:risi_retry_ms`,
+  `:risi_kp_interval_ms`.
+- **Storage:** migration `20261011100000_risi_agent`: `risi_mls_kv(device_id, key bytea, value
+  bytea)` (the NIF's sealed journal store) and `risi_agent_cursor(device_id, cursor)`. CQL
+  `006_risi_buffer.cql`: `risi_buffer` partitioned by `(conversation_id, day)` (UTC date of the
+  message TimeUUID), clustering `message_id`, TWCS hourly, **TTL 24 h**, `gc_grace 0` (one node);
+  queries Q11–Q14 in the file, no ALLOW FILTERING. `RisiMe.Messaging.Store` gains
+  `put_agent_message/2`, `list_agent_messages/3`, `purge_agent_conversation/2` and (added for
+  §15) `delete_agent_messages/2`.
+- **Tree** (`RisiMe.Agent.Supervisor`, `rest_for_one`): `Registry` → **`Agent.Mls`** (owns the
+  NIF handle, one serial lane; opens from all rows of Risi's device in `init`; every call's
+  journal is written in one transaction before the result is used; a failed write or a
+  `:poisoned` handle reopens from the rows; KEK redacted from crash reports) →
+  **`Agent.KeyPackages`** (≥ 20 normal key packages, topped up to 30, plus a last resort, through
+  `MLS.upload_key_packages/3`; at start, after each join, every minute) →
+  **`Agent.ConversationSup`** (DynamicSupervisor + `RisiMe.Agent.Registry`) with one
+  **`Agent.Conversation`** per Official group → **`Agent.Inbox`**.
+- **Attestation:** `MLS.Attestation.sign/4` gained `kind: "agent"` (claim `"kind": "agent"`).
+  `Agent.Mls` attests Risi's key on first use (or when the device row's key differs), calls
+  `set_attestation`, and writes the key, the JWS and `["groups","tabs"]` to the device row. Trust
+  anchors are `Attestation.public_keys/0`.
+- **Inbox:** subscribes to Risi's live topic and drains the stored events from its cursor exactly
+  like a client; the cursor advances only after the event was handled (journal persisted).
+  Only `mls_welcome`/`mls_commit`/`message`/`group_event` of a `grp:` that is
+  `groups.tab = 'official'` **and** passes `Tabs.agent_conversation?/2` (chat on, Risi active)
+  reach a conversation; a non-Official one is refused before any MLS call (logged without
+  content). An invisible event younger than 10 s holds the drain (a Welcome's transaction may not
+  have committed: the S4 open item 8); an invisible event of an Official group where Risi's device
+  is no longer a leaf means the removal commit landed → purge.
+- **Conversation:** Welcome → `join_from_welcome` (NIF `private_tab` refusal logged and ignored;
+  a joined group whose MLS id isn't `<conv>#<generation>` is purged at once); commits in epoch
+  order, gaps filled by `MLS.commits_since/4` (§12.8 catch-up); a commit removing Risi purges;
+  messages → `process_detailed`, and the plaintext of an **active human member's** message goes
+  only to `Agent.Transcript`; `log_expired` or an unusable state → purge + `Groups.rejoin/3`
+  (§12.8 fallback, at most once per 10 min); a `reset` purges the old generation; removal =
+  `purge_group` + transcript purge, then the process stops. Every call re-checks
+  `groups.tab = 'official'` first.
+- **Transcript** (`Agent.Transcript`): AES-256-GCM under `RISI_DATA_KEY`, random nonce, AAD
+  `"risi-buf-v1" ‖ u16be(len conv) ‖ conv ‖ message_id`; `put/2` refuses non-Official; a §15
+  delete for everyone (`Deletes.run/2`, also from the finishing job) deletes the targets' rows.
+- **Send** (`Agent.Send.text(conv, body, risi_map)`): the §24.11 `text` envelope (with `risi`
+  when given) encrypted in `Agent.Mls` and sent through `Messaging.send/3` as Risi's device, so
+  it is stored, delivered and pushed like any member message; `stale_epoch` → catch up and retry
+  once. Only where `may_act?/1` (Official, chat on, Risi active).
+- **§24.4 farewell fixed (open item 8 of S4):** `Chats.toggle/4` off now calls
+  `RisiMe.Agent.official_off/2` **before** `locked_toggle` (outside the transaction, after every
+  check and the rate limit): Risi sends "Official was turned off by <name>. I've deleted what I
+  learned in this chat." while still active and the chat on; then the off transaction marks it
+  `pending_remove`; after it commits `RisiMe.Agent.forget/1` purges the buffer at once. Risi's MLS
+  state stays until the removal commit lands (so "on" again before that still works). Best effort
+  with a 15-s cap: with the tree down the toggle proceeds without a farewell. The farewell is a
+  plain `text` (no `risi` object: no kind in §24.11 fits).
+- **Tests:** `test/risime/agent/agent_tree_test.exs` (real NIF; skipped without it): agent
+  attestation + device row + key package top-up + sealed rows; end to end through REST
+  (`POST …/official`, the §12.5 claim of Risi's key package, the epoch-0 commit with the human
+  handle's real Welcome) → automatic join → a member message decrypted into `risi_buffer`
+  (sealed) → Risi's reply decrypted by the peer → a member's self-update applied → `Agent.Mls`
+  killed and reopened from rows at the same epoch → a §15 delete drops the row → Official off:
+  farewell first, buffer empty, removal commit → MLS state purged; Private canary (real send,
+  plus a forced Private Welcome and message in Risi's inbox: no MLS group, no buffer row, every
+  entry point refuses, the canary in no log); a Welcome for another group purged; §12.8 catch-up
+  over two missed commits. `test/risime/agent/transcript_test.exs` (no NIF): seal/open binding,
+  delete, purge, Private/DM refusal, the start conditions and `available?` without the tree.
+- **For root:** `scripts/nightly-release` should now run `scripts/build-mls-nif --prod` before
+  the release build (decision 067); pilot `.env` needs `RISI_MLS_KEK` and `RISI_DATA_KEY`
+  before `RISI=on`.
+- **For S6 (LLM router, learning log, commitment extraction):** read from
+  `Agent.Transcript.list/3` (24-h window, oldest first); hook model work after `buffer/3` in
+  `Agent.Conversation` (or a per-conversation queue fed from it) — never block the inbox lane on
+  a model call; send results with `Agent.Send.text/4` (`risi.call_ref` = the learning-log id);
+  `risi_request`/`risi_action` arrive as decrypted envelopes in the buffer path (parse `type`
+  there, sender must be an active human member); the global 16-in-flight queue, the per-chat
+  limits (§24.13) and Risi's own `msg_send` limit (20 per 10 s per user, shared by all chats) need
+  a Risi-specific limiter; `forget/1` must also delete facts/commitments/embeddings and cancel
+  jobs (§24.4, within 1 h); the learning log tables `risi_llm_calls_by_day`/`_by_chat`; derived
+  facts from a §15-deleted message (`drop_buffered/2` in `Deletes`) must go too.
+
+## v1.24 two tabs (§24, decision 065) — S1–S4 READY (S5 above; S6–S8 open)
+- **Gate (S1–S4 + review fixes):** 709 tests, 0 failures (3 skipped: crypto's agent NIF tests;
+  2 `:livekit` excluded). The former flakes (`fanout_cost_test`, `auth_log_test`,
+  `open_signup_test`) passed 5× each while another partition ran the full suite (see review
+  fix 6).
 - **Env:** `TABS` (default off; `/auth/config` `tabs: "on"` only while on, absent = off),
   `RISI` (default off), `RISI_USER_ID` / `RISI_DEVICE_ID` (defaults `9e1f0000-…-0001` / `-0002`),
   `RISI_DEFAULT_TZ`. `Release.migrate/0` seeds the agent user (`kind: "agent"`, "Risi") and its
@@ -64,9 +152,10 @@ LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.1
      "has messages": that needs a Cassandra scan), plus every active Private group.
   7. Adding a member while Official is off still mirrors to the read-only Official (one op per
      existing tab, §24.3) without the tabs-ready check.
-  8. Open for the agent tree (S5+): after off the agent is `pending_remove`, so it can no longer
-     *send* the §24.4 farewell line; and an agent's live `mls_welcome` published inside the commit
-     transaction may be filtered until commit (it arrives on the next sync).
+  8. *Resolved in S5 (above):* after off the agent is `pending_remove`, so it could no longer
+     *send* the §24.4 farewell line (now sent before the off transaction); and an agent's live
+     `mls_welcome` published inside the commit transaction may be filtered until commit (the
+     agent inbox holds young invisible events and retries).
 - **Privacy review fixes (S1–S4; `chats_review_test.exs`, each test failed before its fix):**
   1. A `creating` Official is one of the chat's tabs (`chat_tabs/1`): adds/removes/leaves/roles
      during creation edit its member rows directly (no MLS group, no op). Its epoch-0 commit

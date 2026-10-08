@@ -521,7 +521,8 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   @doc "Test helper: empties the message tables of the configured keyspace."
   def truncate! do
     for table <-
-          ~w(inbox_events sent_dedupe message_index group_receipts message_refs call_signals) do
+          ~w(inbox_events sent_dedupe message_index group_receipts message_refs call_signals
+             risi_buffer) do
       {:ok, _} = Xandra.Cluster.execute(@cluster, "TRUNCATE #{table}", [], timeout: 60_000)
     end
 
@@ -644,6 +645,93 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   end
 
   defp copy_source(_row), do: nil
+
+  ## v1.24 Risi buffer (§24.12): `risi_buffer`, partitioned by (conversation_id, UTC day).
+
+  # The day partition of a buffered message: the UTC date of its TimeUUID.
+  defp buffer_day(message_id),
+    do: message_id |> RisiMe.TimeUUID.to_datetime() |> DateTime.to_date()
+
+  # Q11.
+  @impl true
+  def put_agent_message(conv, %{message_id: id} = m) do
+    run!(
+      "INSERT INTO risi_buffer (conversation_id, day, message_id, sender_id, sender_device, body) " <>
+        "VALUES (?, ?, ?, ?, ?, ?)",
+      [conv, buffer_day(id), id, m.sender_id, m[:sender_device], m.body]
+    )
+
+    :ok
+  end
+
+  # Q12: at most two partitions hold live rows (TTL 24 h): yesterday's and today's.
+  @impl true
+  def list_agent_messages(conv, since, limit) do
+    today = Date.utc_today()
+    first = if since, do: Enum.max([buffer_day(since), Date.add(today, -1)], Date), else: nil
+    first = first || Date.add(today, -1)
+
+    first
+    |> Date.range(today)
+    |> Enum.reduce_while([], fn day, acc ->
+      left = limit - length(acc)
+
+      if left <= 0 do
+        {:halt, acc}
+      else
+        rows =
+          if since,
+            do:
+              run!(
+                "SELECT message_id, sender_id, sender_device, body FROM risi_buffer " <>
+                  "WHERE conversation_id = ? AND day = ? AND message_id > ? LIMIT ?",
+                [conv, day, since, left]
+              ),
+            else:
+              run!(
+                "SELECT message_id, sender_id, sender_device, body FROM risi_buffer " <>
+                  "WHERE conversation_id = ? AND day = ? LIMIT ?",
+                [conv, day, left]
+              )
+
+        {:cont, acc ++ Enum.map(rows, &to_agent_message/1)}
+      end
+    end)
+  end
+
+  defp to_agent_message(row),
+    do: %{
+      message_id: row["message_id"],
+      sender_id: row["sender_id"],
+      sender_device: row["sender_device"],
+      body: row["body"]
+    }
+
+  # Q13: every partition that can still hold a row (and one more for clock skew).
+  @impl true
+  def purge_agent_conversation(conv, %DateTime{} = now) do
+    today = DateTime.to_date(now)
+
+    run_batch!(
+      "DELETE FROM risi_buffer WHERE conversation_id = ? AND day = ?",
+      for(d <- -2..1, do: [conv, Date.add(today, d)])
+    )
+
+    :ok
+  end
+
+  # Q14.
+  @impl true
+  def delete_agent_messages(_conv, []), do: :ok
+
+  def delete_agent_messages(conv, ids) do
+    run_batch!(
+      "DELETE FROM risi_buffer WHERE conversation_id = ? AND day = ? AND message_id = ?",
+      for(id <- Enum.uniq(ids), do: [conv, buffer_day(id), id])
+    )
+
+    :ok
+  end
 
   @impl true
   def health do
