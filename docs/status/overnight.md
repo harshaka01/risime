@@ -47,6 +47,15 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## Run in progress (2026-10-08, orchestrator, after the account switch)
+- **nightly.32:** release running from `e29fa19`. Gate changes in that commit: C updates to the new app
+  before the reinstall phase (`UPGRADE_C_STAYS_OLD=1` keeps it old); `RESTORE_CHECK_FROM` defaults to
+  20032 and `UPDATER_BACK_SAFE_FROM` to 20031 in nightly-release.
+- **Agents:** android P0 audio routing (the route button is always enabled; Earpiece↔Speaker toggle or
+  a picker with Bluetooth/headset; video on speaker; voice→video moves to speaker; Bluetooth first);
+  android emoji panel and attachment sheet (v1.23 UI); a Risi v1 plan (read-only).
+- fail2ban `risime-signup` jail: installed by Harsha (done).
+
 ## Run finished (2026-10-08, orchestrator)
 - **Live releases:**
   - nightly.27 GO UX;
