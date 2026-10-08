@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["risime-mls", "risime-mls-ffi"]
+members = ["risime-mls", "risime-mls-ffi", "risime-mls-nif"]
 
 [workspace.package]
 edition = "2024"

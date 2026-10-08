@@ -1,0 +1,25 @@
+[package]
+name = "risime-mls-nif"
+version = "0.1.0"
+description = "Rustler NIF of risime-mls for the server-side Risi member client (contract v1.24 §24.11, decision 065)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "risime_mls_nif"
+# cdylib: the .so the BEAM loads; lib: the unit tests.
+crate-type = ["cdylib", "lib"]
+
+[features]
+# Test-only NIFs (a test attestor and group creation) for the server's Elixir test. Never in a
+# production build: `scripts/build-mls-nif --prod` leaves it out.
+test-peer = []
+
+[dependencies]
+aes-gcm = { version = "0.10.3", features = ["zeroize"] }
+getrandom = "0.2.17"
+risime-mls = { path = "../risime-mls" }
+rustler = "0.38.0"
+serde_json = "1.0.151"
+zeroize = "1.9"

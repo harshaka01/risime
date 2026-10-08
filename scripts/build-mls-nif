@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Build crypto/risime-mls-nif (the Risi member client's Rustler NIF, contract v1.24 §24.11) for
+# THIS host and copy it to server/priv/native/librisime_mls_nif.so, where RisiMe.Agent.Mls.Nif
+# loads it. Without that file the server still compiles and runs; the NIF tests are skipped and
+# the Risi MLS calls return :nif_not_loaded.
+#   scripts/build-mls-nif          # release build WITH the test-only NIFs (dev, mix test)
+#   scripts/build-mls-nif --prod   # release build without them (the release, scripts/nightly-release)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+CARGO="${CARGO:-$HOME/.cargo/bin/cargo}"
+features=(--features test-peer)
+[ "${1:-}" = --prod ] && features=()
+[ -x "$CARGO" ] || { echo "no cargo at $CARGO" >&2; exit 1; }
+target="${CARGO_TARGET_DIR:-$PWD/crypto/target}"
+(cd crypto && CARGO_TARGET_DIR="$target" "$CARGO" build -q --release -p risime-mls-nif --lib "${features[@]}")
+so="$target/release/librisime_mls_nif.so"
+[ -f "$so" ] || { echo "build produced no librisime_mls_nif.so" >&2; exit 1; }
+mkdir -p server/priv/native
+# Replace atomically: a running BEAM keeps the old inode mapped.
+cp "$so" server/priv/native/.librisime_mls_nif.so.tmp
+mv -f server/priv/native/.librisime_mls_nif.so.tmp server/priv/native/librisime_mls_nif.so
+echo "$PWD/server/priv/native/librisime_mls_nif.so"

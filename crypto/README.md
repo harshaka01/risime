@@ -8,6 +8,8 @@ Plan for the Android binding: `docs/decisions/012-e2ee-android-binding-plan.md`.
 - `risime-mls/`: the core crate. A small bytes-in/bytes-out API over
   [OpenMLS](https://openmls.tech) 0.9 (`openmls_rust_crypto` 0.6, `openmls_basic_credential` 0.6).
 - `risime-mls-ffi/`: the UniFFI binding (`libuniffi_risime.so`, Kotlin `lk.codegen.risime.crypto`).
+- `risime-mls-nif/`: the Rustler NIF for the server's Risi member client (`librisime_mls_nif.so`,
+  Elixir `RisiMe.Agent.Mls.Nif`; contract v1.24 §24.11, decision 065).
 
 Ciphersuite: `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` (0x0001, the RFC 9420
 mandatory-to-implement suite). Pure Rust: there is no C code in the dependency tree.
@@ -378,6 +380,32 @@ toolchain needs, all already maintained by large ecosystems):
   every platform derives the same `KEK`.
 Rejected: `scrypt`/PBKDF2 (the contract fixes Argon2id), the C `libargon2` (C in the tree), `flate2`
 (a wrapper over the same `miniz_oxide`).
+
+## Risi NIF (contract v1.24 §24.11, decision 065): `risime-mls-nif`
+The server-side Risi device as a Rustler 0.38 NIF, loaded by `RisiMe.Agent.Mls.Nif` (plain
+`:erlang.load_nif`, no Elixir `:rustler` dependency). Build: `scripts/build-mls-nif` (with the
+test-only NIFs, feature `test-peer`) or `scripts/build-mls-nif --prod`; it copies the library to
+`server/priv/native/` (gitignored). Without it the server compiles and runs, and the NIF test skips.
+- **Journal store** (`journal.rs`): the whole state in memory, loaded at `open/5` from sealed
+  rows; nested transactions with an undo log per level. Every call returns
+  `{:ok, result, journal}`, `journal = [{key, sealed | :delete}]`; the server persists it in one
+  Postgres transaction before acting on the result.
+- **Sealing:** AES-256-GCM under `RISI_MLS_KEK` (32 bytes), random 96-bit nonce per value,
+  `sealed = nonce ‖ ct ‖ tag`, `AAD = "risi-kv-v1" ‖ u16be(len device_id) ‖ device_id ‖ key`.
+  A bad row fails `open` with `:tampered`; a wrong-length KEK is `:bad_kek` (never echoed).
+- **Official only:** `join_from_welcome` into a non-Official group (a `dm:` group, a Private
+  group) is `:private_tab` and is rolled back; `encrypt`, `process_detailed`, `process_commits`
+  and `self_update` refuse such a group too.
+- **Calls** (all `DirtyCpu`, one mutex per handle): `open`, `signature_public_key`,
+  `set_attestation`, `generate_key_packages`, `last_resort_key_package`, `join_from_welcome`,
+  `process_detailed`, `process_commits`, `encrypt` (with AAD), `self_update`, `commit_accepted`,
+  `commit_rejected`, `purge_group`, `members` (with `kind`), `group_meta` (with `tab`, `chat_id`,
+  `agents`), `epoch`. Errors are `{:error, {kind, message}}` (the `MlsError` variants in
+  snake_case, plus `private_tab`, `tampered`, `bad_kek`, `bad_arg`, `poisoned`).
+- **Tests:** 12 unit tests (seal round trip and binding, nonce uniqueness, tampered rows, the
+  journal under nested commit/rollback, a full join → decrypt → reload → send → self-update →
+  purge round trip, private_tab refusal); `server/test/risime/agent/mls/nif_test.exs` over the
+  real NIF.
 
 ## Tests (`cargo test`: 136 core + 4 ignored generators, 16 FFI)
 - **`groups`** (v1.9): create/join with PrivateMessage handshakes and meta; DM and group APIs
