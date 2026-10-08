@@ -228,6 +228,14 @@ were needed after nightly.11.
   `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
 - **Agents:** none running.
 - **Needs Harsha:**
+   - **Risi (decisions 065/066), nothing blocks; defaults are in place:**
+     - **(a)** The commercial-model fallback stays **off** until a zero-retention agreement with
+       the provider exists. Which provider, and is there an agreement?
+     - **(b)** Raw Official text is kept at most 24 h (sealed), so "summarise" covers at most the
+       last day. Say if you want longer.
+     - **(c)** Veto any of the 11 [D] decisions in `contract/proposals/2026-10-08-two-tabs-risi.md`.
+       The main ones: Official is a separate group even for a 1:1; old apps never see Official;
+       in groups only admins can turn Official off.
 0. **Keycloak, for the RisiCloud lead (realm `aoa`, client `risime`).**
    - **Update (decision 064):** the main cause of the forced email sign-ins is the app's own token
      storage. On phones without biometrics the tokens were kept in memory only, and every process
