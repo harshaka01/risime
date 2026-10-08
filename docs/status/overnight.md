@@ -71,6 +71,26 @@ Progress:
   - install the Caddyfile with the `/livekit` route: `sudo cp infra/caddy/Caddyfile /etc/caddy/Caddyfile && sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl reload caddy`;
   - a by-hand check from outside that UDP 49500 and 49999 are reachable (decision 056).
 
+## v0.2.0-nightly.28 (live 2026-10-08, not required): profile photos, group photos, 1:1 video calls
+- **Profile photos (v1.17):** Settings → Set photo. The photo is encrypted and goes to each e2ee
+  chat silently. It shows in the list, headers, info screens, member lists, next to group bubbles
+  and on call screens. Plaintext chats show initials.
+- **Group photo:** admins tap the photo in group info.
+- **Database:** Room v10 adds tables and columns only. `Migration9To10Test` passes, and so does
+  the upgrade gate with message counts.
+- **1:1 video calls (v1.18):**
+  - a video button next to the voice button, enabled once both sides run nightly.28;
+  - "Answer without video";
+  - camera off and on, and Flip;
+  - the camera runs only while the call screen is visible;
+  - "Video call · m:ss" lines.
+  - On Redroid, VP8 640×480 flowed both ways at about 14 fps, and all 8 voice calls passed.
+  - Not yet checked on real phones: the camera, Flip, the speaker default and a relayed video
+    call (coturn `max-bps` 300000).
+- **Known limits:**
+  - photos aren't used as notification icons yet;
+  - the video preview in the corner can't be dragged.
+
 ## v0.2.0-nightly.27 (live 2026-10-08 ~03:40 UTC, not required): GO UX
 - **Look:**
   - icon, splash and theme from Harsha's logo, in light and dark;
