@@ -26,6 +26,26 @@ class ContractExamplesTest {
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
         "auth_verify_reply.json" to { s -> ProtocolJson.decodeFromString<AuthVerifyReply>(s) },
+        // v1.22 (§22 encrypted backups): parse-only placeholders until the app implements it.
+        "auth_config_v122.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backup_bundle_header.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backup_create_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backup_create_request.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backup_entry_contact.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backup_entry_conversation.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backup_entry_group_event.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backup_entry_message.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backup_entry_tombstone.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backup_file_header.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backup_key_put.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backup_key_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "backups_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "blob_upload_backup_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "blob_usage_reply_backup.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_backup_device_mismatch.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_backup_key_conflict.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_backup_unavailable.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_no_backup_key.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         // v1.21 (§12.12 reinstalls without reset; plus the v1.16 DM-op examples): parse-only placeholders until the app implements it.
         "error_rejoin_pending.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "event_group_op_cleanup.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },

@@ -130,6 +130,16 @@ defmodule RisiMe.ContractExamplesTest do
                     group_rejoin_reply_v121.json mls_commit_request_dm_op.json
                     mls_dm_rejoin_reply.json mls_dm_rejoin_reply_v121.json)
 
+  # v1.22 (encrypted backups, §22): parse-only placeholders until the server implements it.
+  @pending_v1_22 ~w(auth_config_v122.json backup_bundle_header.json backup_create_reply.json
+                    backup_create_request.json backup_entry_contact.json
+                    backup_entry_conversation.json backup_entry_group_event.json
+                    backup_entry_message.json backup_entry_tombstone.json backup_file_header.json
+                    backup_key_put.json backup_key_reply.json backups_reply.json
+                    blob_upload_backup_reply.json blob_usage_reply_backup.json
+                    error_backup_device_mismatch.json error_backup_key_conflict.json
+                    error_backup_unavailable.json error_no_backup_key.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -182,7 +192,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_18 ++
         @checked_v1_19 ++
         @checked_v1_20 ++
-        @pending_v1_21
+        @pending_v1_21 ++
+        @pending_v1_22
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end

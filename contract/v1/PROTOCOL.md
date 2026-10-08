@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.21 (Release 0.3)
+# RisiMe Wire Protocol — v1.22 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -1419,8 +1419,8 @@ An additive change: v1.9 apps ignore `history_before` and already handle sender 
   plaintext DMs. So a reinstall restores both sides of plaintext history.
 - **E2EE history is never restored by the server.** A new install is a new device and a new leaf;
   it can't decrypt anything encrypted before it joined (decision 032). v1.10 makes that gap
-  **visible** (§13.3) instead of silent. Restoring it needs a client-encrypted backup, which is a
-  later proposal.
+  **visible** (§13.3) instead of silent. Restoring it needs a client-encrypted backup (v1.22,
+  §22).
 
 ### 13.1 Sender copy (server)
 - A plaintext DM `message` event is written to the **sender's and the recipient's inboxes with the
@@ -1486,6 +1486,8 @@ from this device (`from_device` = mine) is still skipped first, as in §10.3.
   pending store (`mls_pending`). Those were parked by an earlier run and stay recoverable.
 - **Null `history_before` means rule 2 only.**
 - **(v1.17)** A pre-install event with `silent: true` adds no marker and no gap row (§18.4).
+- **(v1.22)** A pre-install event whose `message_id` is already held locally (restored from a
+  backup, §22.6) adds no marker and no gap row.
 - **Rule 2 is applied when the Welcome's parked events are replayed:** every parked message with
   the Welcome's generation and a lower epoch is pre-install. Parked messages of an older generation
   that the client discards when it joins a newer one also count as pre-install (one marker per
@@ -1648,6 +1650,7 @@ the raw bytes as the body, `Content-Type: application/octet-stream`, **`Content-
   - `mls`: unchanged (§12.6).
   - `history` (v1.15): only the accepted provider device of an open request (§17.9).
   - `avatar` (v1.17): any signed-in user, without a `conversation_id` (§18.3).
+  - `backup` (v1.22): the owner only, without a `conversation_id`, with a `backup_id` (§22.3).
 - **Checked before the body is read**, in this order, each answered with `Connection: close` and
   without draining the body: purpose and conversation (`400`), rights (`404`/`403`/`409`),
   `Content-Type` (**`415 bad_media_type`**, `error_bad_media_type.json`), `Content-Length` (missing
@@ -1799,7 +1802,9 @@ avatar.
 | Quota (live bytes per user) | 256 MiB (§13.4) | **2 GiB** | not counted |
 
 (v1.15 adds the purpose **`history`**: 16 MiB, 48 h, 40 / h, 512 MiB live; §17.9. v1.17 adds
-**`avatar`**: no conversation, 512 KiB, 3 / h and 10 / day, current until replaced + 24 h; §18.3.)
+**`avatar`**: no conversation, 512 KiB, 3 / h and 10 / day, current until replaced + 24 h; §18.3.
+v1.22 adds **`backup`**: no conversation, owner-only, 33 562 624 B parts, 16 parts per backup,
+the newest 2 current and replaced ones for 7 days, 1.5 GiB live; §22.3.)
 
 - **Quota:** an upload that would take `used` over the purpose's limit gets
   `413 quota_exceeded {"used", "limit"}` (`error_quota_exceeded.json`, v1.10), checked from
@@ -3636,7 +3641,7 @@ no-op; the inbox-join hook names dormant candidates.
   may provide it only to someone whose interval covered it.
 
 ### 17.14 Encrypted backup (coordination)
-The future backup proposal reuses the bundle format (§17.7) as its unit, with `origin = "backup"`,
+(v1.22: specified in §22.) The future backup proposal reuses the bundle format (§17.7) as its unit, with `origin = "backup"`,
 so restore and sharing share one import path. A backup restore runs first on a new device; the gap
 rows left after it are what "Request history" fills. Backups are not bound to the gap index or the
 30-day window.
@@ -4511,7 +4516,450 @@ While a user's `phone_confirmed` is `false`, that phone **isn't matched to them*
   `error_signup_rate_limited.json`, `error_bad_request.json`, `friends_reply_v120.json`,
   `signal_friend_v120.json`.
 
+## 22. Encrypted backups (v1.22)
+Proposal `2026-10-08-backups-v1.22.md`, decision 059, reviewed by crypto, server and android
+(`proposals/reviews/2026-10-08-backups-v1.22-*.md`). Additive: one server switch in
+`/auth/config`, one blob purpose, four endpoints, a file format and a bundle schema. It completes
+§17.14.
+
+Why: testers uninstall and reinstall when an in-app update fails; `allowBackup` is false (§10.4),
+so nothing survives, and history sharing (§17) depends on another device that still holds the
+chats (29 requests on the pilot: 7 done). A backup is the user's own copy, encrypted on the phone
+with a key only the user's devices and the user's recovery secret can open.
+
+### 22.0 Principles
+- **Client-encrypted, server-blind.** The server stores ciphertext parts and one wrapped-key
+  record per user. It never sees a key, a recovery secret or content, and can't create a backup
+  the user's devices would accept.
+- **A backup is a bundle** in the §17.7 entry format with `origin: "backup"`, for every
+  conversation, imported through the §17.7 import path (dedupe by `message_id`, deletes win). It is
+  **not** bound to the gap index or to the 30-day window.
+- **Restore = messages and chat state only.** A restored device is a **new MLS leaf**: it joins
+  through the existing paths (§10.6, §12.8, §12.12) and never restores MLS state.
+- **One format everywhere.** A server backup, a local backup and an exported file are byte for
+  byte the same file format (§22.4).
+- **Hard rule 9.** A restore only inserts rows; it never deletes or replaces a local row. Backups
+  are written before every in-app update and before every confirmed wipe (§22.7).
+- **No learning-log entries** (no model call). The on-device behaviour log is never in a backup.
+
+### 22.1 Switch and capability
+- `GET /auth/config` gains **`"backup": "on" | "off"`** (`auth_config_v122.json`), from the server
+  config `BACKUPS` (default `on`). Absent (pre-v1.22 servers) means `off`. While `off`, the
+  writing calls (`purpose=backup` uploads, `POST /backups`, `PUT /backup_key`) answer **`503
+  backup_unavailable`** (`error_backup_unavailable.json`); reading, downloading and `DELETE` keep
+  working, so turning the switch off never strands an existing backup. Local backups and exported
+  files work regardless.
+- **No device capability:** nothing on the wire depends on another device's ability to back up or
+  restore (a backup is one user's own data), so no `mls.capabilities` string is added.
+
+### 22.2 Keys (normative; crypto review C1–C9)
+All randomness from the OS CSPRNG **inside the crypto core**. No production API takes a
+caller-supplied `BK`, `DEK`, salt or nonce (the deterministic forms exist only in test builds, for
+the vectors).
+
+**Backup key `BK`.** 32 random bytes, **one per account**, made by the first device that turns
+backups on. `bk_id` = the first 8 bytes of `SHA-256("risime-backup-v1 bk-id" ‖ BK)` (it names the
+key; it reveals nothing about it).
+- **Local copy:** `BK` lives in the core's sealed store (`mls_kv` key `risime/backup/bk`, §10.4),
+  whose database key is wrapped by an Android Keystore key without user authentication, so daily
+  backups run unattended. It is in no backup (`mls_kv` never is), and a confirmed wipe deletes it
+  with the rest.
+- **Recovery copy:** `BK` wrapped under a key derived from a **recovery secret**, stored on the
+  server (§22.3 `backup_key`) and copied into every backup file's header (§22.4), so a file can be
+  restored with the recovery secret alone.
+
+**Recovery key** (always created). `R` = 15 random bytes (120 bits). Shown as **28 characters in 7
+groups of 4** (format only: `7K2M-Q9XD-4HTW-PB3N-8FZR-CJ6V-1E0A`): the first 24 are `R` in Crockford
+base32 (alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, most significant bit first), the last 4 are
+the first 20 bits of `SHA-256("risime-recovery-v1" ‖ R)` in the same alphabet. Input is
+case-insensitive; spaces and `-` are ignored; `O`→`0`, `I`/`L`→`1`. A checksum mismatch is a
+**typo** (reported before any key derivation); a length other than 28 is `Malformed`. `R` is kept in
+`mls_kv` (`risime/backup/recovery`) so the user can view it again behind the device credential.
+
+**Optional passphrase** (an additional way to unlock, never a replacement for the recovery key).
+Input: the UTF-8 bytes of the NFKC-normalised passphrase with leading and trailing white space
+removed. **Strength floor** (client-enforced; the server never sees it): at least 14 characters
+(code points), or at least 4 words of at least 3 characters each; not in the app's bundled list of
+the 10 000 most common passwords (case-insensitive); and no run of 6 or more digits of the user's
+own phone number. The UI says the recovery key is the stronger option.
+
+**Wrapping `BK`** (one wrap per secret kind; a record holds one or two wraps):
+- `KEK = Argon2id(password, salt, m = 65536 KiB, t = 3, p = 1, version 0x13, L = 32)`. `password`
+  = the 15 bytes of `R` (kind `recovery_key`) or the passphrase bytes above (kind `passphrase`);
+  `salt` = 16 random bytes, fresh for every wrap. In v1 the parameters are fixed: any other
+  `m`/`t`/`p`/`alg` is `Malformed` (never "weaker but accepted").
+- `Kw = HKDF-SHA256(salt = empty, IKM = KEK, info = "risime-backup-v1 wrap", L = 32)`;
+  `check = HKDF-SHA256(salt = empty, IKM = KEK, info = "risime-backup-v1 check", L = 16)`.
+- `AAD_wrap = "risime-backup-v1" ‖ u16 len ‖ user_id ‖ u16 len ‖ kind ‖ bk_id` (`user_id` the
+  lowercase canonical UUID string; `kind` ASCII `recovery_key` or `passphrase`; `bk_id` 8 raw
+  bytes; integers big-endian).
+- `wrapped = AES-256-GCM(Kw, nonce, AAD_wrap, BK)`, `nonce` 12 random bytes; `wrapped` is 32 + 16
+  = **48 bytes**.
+- **Unwrap:** derive `KEK`, compare `check` in constant time (mismatch = **`WrongKey`**, "That
+  recovery key or passphrase doesn't match"; this also commits the wrap to one `KEK`, crypto C4),
+  then open (failure = `Integrity`), then require `bk_id` to match the opened `BK`
+  (`Integrity`).
+
+**Per-backup `DEK`.** 32 random bytes, fresh for every backup, never reused.
+- `Kd = HKDF-SHA256(salt = empty, IKM = BK, info = "risime-backup-v1 dek-wrap", L = 32)`;
+  `AAD_dek = "risime-backup-v1 dek" ‖ backup_id (16 raw bytes) ‖ u16 len ‖ user_id`;
+  `dek.wrapped = AES-256-GCM(Kd, dek.nonce, AAD_dek, DEK)` (48 bytes), `dek.nonce` 12 random bytes.
+- `Ks = HKDF-SHA256(salt = empty, IKM = DEK, info = "risime-backup-v1 stream", L = 32)`.
+
+**Stream `A256GCM-STREAM64K`** (crypto C5):
+- `D` = the bundle (§22.5) compressed with raw DEFLATE (RFC 1951; the app's `Deflater(nowrap)`).
+  `P = D ‖ 0x00 × (Padmé(|D|) − |D|)` (Padmé as §14.3).
+- `P` is split into 65 536-byte chunks; the last holds 1–65 536 bytes (no empty chunk).
+  `nonce_i = 0x00 × 7 ‖ u32_be(i) ‖ flag`; `AAD_i = "risime-backup-v1" ‖ header_hash ‖ u32_be(i) ‖
+  flag` (flag `0x01` on the last chunk, `0x00` otherwise; `header_hash` below);
+  `C_i = AES-256-GCM(Ks, nonce_i, AAD_i, chunk_i)` with its 16-byte tag.
+- **Opening:** chunk `i` starts at `prefix_len + i·65552`; the last ciphertext chunk must be ≥ 17
+  bytes (`Format`); every chunk opens with flag `0x00` except the last with `0x01`; any failure is
+  `Integrity` (truncation, extension, reordering, a chunk from another backup, a changed header).
+  Then inflate `D`; every byte after the end of the DEFLATE stream must be zero and their count must
+  equal `Padmé(|D|) − |D|` (`Format`).
+- **Release of plaintext:** nothing is imported until **every** chunk and the final flag verified
+  (a first, verify-only pass over an app-private copy of the file; then decrypt and import).
+
+**Compression** (crypto C6): compressing before encrypting lets whoever sees sizes (the server, a
+file holder) learn the compressed size of the whole archive once per backup. With at most 6
+backups a day, Padmé padding and no attacker-chosen secret mixed into one small stream, this is
+accepted and documented; it is the same class of leak as the ciphertext size itself.
+
+### 22.3 Server: endpoints, purpose `backup`, limits
+Every call below requires `Authorization` and, where it writes, **`X-Device-Id`** (a registered
+device of the caller; `403 invalid_device` otherwise). Owner-only throughout: another user's ids
+are always `404 not_found`.
+
+**Upload parts:** `POST /api/v1/blobs?purpose=backup&backup_id=<uuid-v4>&client_blob_id=<uuid-v4>`
+(no `conversation_id`: present → `400`) → `201 {"blob_id", "size", "sha256", "expires_at"}`
+(`blob_upload_backup_reply.json`; `expires_at` = upload + 24 h until a backup references it). The
+§14.2 rules apply (streamed, `Content-Length` required, checked before the body in the §14.2
+order, idempotent by `client_blob_id`, retries). A backup file is uploaded as **1–16 parts**, each
+a consecutive byte range of the file (any split; clients use 33 562 624-byte parts, 512 chunks).
+
+| | `backup` |
+|---|---|
+| Conversation | none |
+| Part cap | **33 562 624 B** per blob (`413 too_large`) |
+| Backup cap | **16 parts, 536 870 912 B (512 MiB)** in all (`413 too_large` at `POST /backups`) |
+| Readers | the **owner** only (`GET`/`HEAD` with ranges as §14.2) |
+| TTL | parts not referenced by a committed backup: **24 h**; a current backup: none; a replaced backup: **7 days** |
+| Upload rate | **60 parts per hour, 200 per day**; the 3 concurrent upload slots shared with `media` |
+| Backups | **6 committed backups per user per 24 h** (`429` with `Retry-After`, counted in Postgres) |
+| Quota | **1.5 GiB** live per user: current backups plus unreferenced parts (`413 quota_exceeded`); replaced backups don't count (see below) |
+| Guard | counted with `media` in the free-space guard (`507 storage_full`) |
+| Usage | `GET /blobs/usage` gains `"backup": {"used", "limit"}` (`blob_usage_reply_backup.json`) |
+
+**`POST /api/v1/backups`** (commit) `{"backup_id", "created_at", "size", "sha256", "schema",
+"app_version", "bk_id", "parts": [{"blob_id", "size", "sha256"}], "replace_device": bool}`
+(`backup_create_request.json`) → `201 {"backup": Backup}` (`backup_create_reply.json`); a repeat
+of the same `backup_id` → `200` with the same body (idempotent; it doesn't count against the rate).
+- `size` and `sha256` describe the **whole file** (client-computed; the server checks only that
+  the parts' sizes add up to `size`); each part's `size`/`sha256` must equal the server's values for
+  that blob, which must be the caller's own unexpired `backup` blob uploaded with this `backup_id`.
+  `schema` is the bundle schema (§22.5; `1`).
+- **Checks, in order:** the switch (`503 backup_unavailable`); `X-Device-Id` (`403
+  invalid_device`); the body (`400 bad_request`); a key record exists (`409 no_backup_key`,
+  `error_no_backup_key.json`) and its `bk_id` equals the request's (`409 backup_key_conflict`,
+  `error_backup_key_conflict.json`); the backup device (below; `409 backup_device_mismatch`,
+  `error_backup_device_mismatch.json`); the parts (`400`); the caps (`413 too_large`); the rate
+  (`429`).
+- **One backup device per account.** The **backup device** is the device of the newest current
+  backup. A commit from another device is refused with `409 backup_device_mismatch` `{"device_id",
+  "device_name"}` unless `replace_device: true`, or that device can no longer receive (§12.1:
+  superseded, removed, or unseen for 30 days; the reinstall case needs no flag). Clients send
+  `true` only after the user confirmed "Back up this phone instead of <device name>?" (or after
+  restoring on this phone).
+- **Retention, in the commit transaction under the per-owner lock:** the new backup is current; the
+  **newest 2 committed** backups stay current; the one that drops out becomes **replaced** with
+  `expires_at` = now + 7 days. At most **5** replaced backups are kept (the oldest goes at once).
+  Replaced backups are a safety net (an empty or bad backup can't destroy a good one for 7 days);
+  they don't count against the quota and are pruned oldest first before a quota refusal.
+- `Backup = {"backup_id", "device_id", "device_name", "created_at", "uploaded_at", "size",
+  "sha256", "schema", "app_version", "bk_id", "parts": [{"blob_id", "size", "sha256"}], "current":
+  bool, "expires_at": ts | null}`.
+
+**`GET /api/v1/backups`** → `200 {"backups": [Backup], "key": bool, "quota": {"used", "limit"}}`
+(`backups_reply.json`): current and replaced (unexpired) backups, newest `uploaded_at` first; `key`
+says whether a key record exists.
+
+**`PUT /api/v1/backup_key`** `BackupKey` (`backup_key_put.json`) → `200 {"backup_key": BackupKey}`
+(`backup_key_reply.json`). **`GET /api/v1/backup_key`** → the same `200`, or **`404
+no_backup_key`**.
+- `BackupKey = {"v": 1, "bk_id": "<b64, 8 bytes>", "wraps": [{"kind": "recovery_key" |
+  "passphrase", "kdf": {"alg": "argon2id", "m": 65536, "t": 3, "p": 1, "salt": "<b64, 16>"},
+  "nonce": "<b64, 12>", "wrapped": "<b64, 48>", "check": "<b64, 16>"}], "updated_at"}` (the
+  server sets `updated_at`). 1–2 wraps, at most one per kind, exactly one `recovery_key`. Shapes
+  and lengths are checked (`400 bad_request`); the server can't check the crypto.
+- **No silent key change** (`409 backup_key_conflict {"bk_id"}`): a `PUT` whose `bk_id` differs
+  from the stored record's while the user has any backup (current or replaced) is refused, so a
+  fresh device can't orphan the backups by making a new `BK`. The same `bk_id` replaces the record
+  (a new recovery key or passphrase for the same `BK`).
+- Limits: `PUT` 10 per user per day; `GET` 30 per user per hour (`429`). The record is
+  offline-attackable by whoever holds it (the server, an account thief): that is why the recovery
+  key has 120 bits and the passphrase a floor and Argon2id.
+
+**`DELETE /api/v1/backups`** → `204`: deletes **every** backup of the user (current, replaced,
+unreferenced parts; files removed at once) and the key record. Idempotent. Used by "Turn off and
+delete server backup" and by "Reset backup key" (forgotten recovery key).
+
+**Errors (new):**
+
+| Code | HTTP | When |
+|---|---|---|
+| `backup_unavailable` | 503 | the switch is `off` |
+| `no_backup_key` | 404 / 409 | `GET /backup_key` without a record (404); a commit before a `PUT /backup_key` (409) |
+| `backup_key_conflict` | 409 | a commit or `PUT` whose `bk_id` differs from the stored record while backups exist |
+| `backup_device_mismatch` | 409 | a commit from a device other than the live backup device without `replace_device` |
+
+Reused: `invalid_device` 403, `not_found` 404, `bad_request` 400, `too_large` 413,
+`quota_exceeded` 413, `rate_limited` 429, `storage_full` 507, `bad_media_type` 415.
+
+### 22.4 The backup file (normative; server, local and exported backups alike)
+```
+"RISIMEBK" (8 ASCII bytes) ‖ 0x01 (format version) ‖ u32_be header_len ‖ header ‖ C_0 ‖ … ‖ C_{n−1}
+```
+- `header` is UTF-8 JSON of at most 65 536 bytes (`backup_file_header.json`): `{"v": 1, "schema":
+  1, "backup_id", "user_id", "created_at", "app_version", "bk_id", "dek": {"alg": "A256GCM",
+  "nonce": "<b64, 12>", "wrapped": "<b64, 48>"}, "stream": {"alg": "A256GCM-STREAM64K",
+  "compression": "deflate", "pad": "padme"}, "key": BackupKey | null}`. `key` is the key record at
+  backup time (so a file restores with the recovery secret alone); it carries no device id.
+- `header_hash = SHA-256(the 13-byte prefix ‖ header)`, over the bytes **as written**; never
+  re-serialised. `prefix_len = 13 + header_len`. Every chunk's AAD binds it (§22.2), so a changed
+  header byte fails every chunk.
+- **Opening a file:** magic and version (else `Format`); `header_len` ≤ 65 536 and inside the file
+  (`Format`); `v` = 1 and `schema` ≤ the app's (else "Update RisiMe to restore this backup");
+  `user_id` = the signed-in user (else "This backup belongs to another account"; nothing more is
+  read); for a server backup, `backup_id` and `bk_id` equal to the record's (else `Integrity`); `BK` from `mls_kv` when its `bk_id` matches, else unwrapped (§22.2) from the server's
+  record or, failing that, the header's `key`; `DEK`; the verify pass; the import.
+- File name for exports: `risime-backup-<yyyy-mm-dd>.risimebk`, MIME `application/octet-stream`.
+
+### 22.5 The bundle (plaintext, schema 1)
+JSON Lines, UTF-8, each line at most 1 MiB. The first line is the header; then, per
+conversation, its `conversation` line followed by its rows oldest first; `contact` lines last.
+Unknown `type` values are skipped (forward-compatible additions keep `schema` 1; an incompatible
+change bumps it).
+- **Header** (`backup_bundle_header.json`): `{"v": 1, "type": "backup", "origin": "backup",
+  "schema": 1, "backup_id", "user_id", "created_at", "app_version", "counts": {"conversations",
+  "messages", "tombstones", "contacts"}}`.
+- **`conversation`** (`backup_entry_conversation.json`): `{"type": "conversation",
+  "conversation_id", "kind": "dm" | "group", "e2ee": bool, "peer": uuid | null, "group":
+  {"name", "icon": icon | null, "admins": [uuid], "created_by", "state": "active" | "left" |
+  "removed"} | null, "chat": {"cleared_upto": ts | null, "hidden": bool, "muted_until": ts | null,
+  "pinned": bool, "archived": bool, "last_read": ts | null}}`. `icon` is the §14.4 group-icon
+  object (blob reference with its key); `hidden` is a chat removed by Delete chat (§15.7).
+- **`message`** (`backup_entry_message.json`): the §17.7 entry plus `type`, `conversation_id` and
+  local state: `{"type": "message", "conversation_id", "message_id", "client_msg_id", "from",
+  "from_device", "server_ts", "payload": {…}, "origin": null | "shared" | "own_device" | "backup",
+  "shared_by": uuid | null, "status": "sent" | "delivered" | "read" | null}`. `payload` is the
+  original application envelope: `text`, `image` (as §17.7: by reference with `enc` and `thumb`;
+  full-size images are **not** in v1 backups and show "This photo is no longer available" once
+  their blob expired), `reaction`, `call_end`, `group_call`, or the plaintext DM body as `{"v": 1,
+  "type": "text", "body"}`. `status` only for outgoing rows. Same export filters as §17.7 except
+  the range, the intervals and the call-line rule (a backup is the user's own: call lines always).
+- **`tombstone`** (`backup_entry_tombstone.json`): `{"type": "tombstone", "conversation_id",
+  "message_id", "from", "server_ts", "scope": "everyone" | "me", "hidden": bool}`: visible
+  tombstones and hidden tombstones (§15.6), so deletes keep winning after a restore.
+- **`group_event`** (`backup_entry_group_event.json`): the §12.7 system lines `{"type":
+  "group_event", "conversation_id", "event_id", "generation", "action", "actor", "targets",
+  "role", "server_ts"}`.
+- **`contact`** (`backup_entry_contact.json`): `{"type": "contact", "user_id", "display_name",
+  "phone": e164 | null}`: a name cache for people in old chats; never overrides server data.
+- **Never in a backup:** MLS state and anything in `mls_kv` (`BK`, `R`, HPKE request keys, the
+  §17.8 approvals), the sync cursor, the device id, Keycloak and push tokens, the database key, gap
+  rows and §13.3/§17.12 markers, outbox rows and drafts, full-size media files, avatars, app
+  settings, and the on-device behaviour log.
+
+### 22.6 Restore (client; extends the §17.7 import)
+- **Matching:** an entry is imported unless a local row with that `message_id` exists (messages,
+  `del:` placeholders), a local (hidden) tombstone covers it (deletes win), its `message_id` time is
+  at or before the conversation's local `cleared_upto`, or its payload fails live validation (§11,
+  §14.4, §16.2). Not bound to gap rows or the 30-day window. A matching gap row (same
+  `message_id`) is deleted and the markers updated (§17.12; no `sys:history-shared` line for a
+  backup).
+- **Rows:** `origin` from the backup (`"backup"` when it was null), `shared_by` kept, `client_msg_id`
+  and `from_device` from the entry, local time from `server_ts`, outgoing with the backed-up
+  `status`; **never notified, never unread, never acked, no receipts**. Images as §17.7 step 5.
+- **Tombstone lines** create the tombstone or hidden tombstone if none exists. **Conversation
+  lines** create the local chat if absent and set `cleared_upto` to the later of local and backup,
+  `hidden`, mute, pin and archive (only when the chat is new on this device). Group name, icon and
+  admins from the backup are a display cache until a Welcome brings the current `group_meta`;
+  membership comes from the server (`GET /groups`); a group the user is no longer in is read-only.
+- **§13.3 (extended):** a pre-install event whose `message_id` is already held locally (restored)
+  adds no marker and no gap row. Restore may run before the first inbox join (preferred: the chat
+  list appears complete) or after it; both orders converge on the same rows.
+- **Resumable and idempotent:** one transaction per at most 1 000 lines, progress (`backup_id`,
+  line) persisted; a killed restore resumes, and a repeated import changes nothing.
+- **Never destructive:** a restore never deletes or overwrites a local row (hard rule 9);
+  restoring an older backup over newer chats only fills what is missing.
+
+### 22.7 Client: when backups are made (android, normative where it says "must")
+- **Turning on** (Settings → Chats → Backup; offered after the update that brings v1.22 and as a
+  dismissible "Back up your chats" card on the chat list until set up or dismissed twice; it
+  can't be on silently, because only the user can keep the recovery key):
+  explain, generate `BK` and `R` in the core, show the recovery key (Copy marks the clip as
+  sensitive; "I saved it" asks for the last group back), optionally add a passphrase (floor,
+  §22.2), `PUT /backup_key`, then the first backup. When a key record already exists (another
+  device, or after a reinstall) the device unlocks it with the recovery key or passphrase instead
+  of making a new `BK`.
+- **Server backup** (switch `on` and turned on): daily (WorkManager, unmetered by default with a
+  "Use mobile data" option, battery not low), plus before updates and wipes (below).
+- **Local backups** (always on, client-only): daily, **before every in-app update** and **before
+  any confirmed wipe**, in app-private storage (`files/backups/`, the newest 2 plus the latest
+  pre-update one). They survive an update, not an uninstall. Without `BK` (backups never turned on)
+  the core makes `BK`/`R` silently for local files and the app shows the recovery key when the user
+  exports a file or turns server backup on. Turning server backup on then publishes that `BK`
+  (`PUT`) when no key record exists; when one exists with another `bk_id`, the device unlocks the
+  account's `BK`, and the core keeps the older local `BK` (by `bk_id`) only while a local file
+  still uses it.
+- **Before an in-app update** the app **must** finish a local backup, and with server backup on
+  upload it (waiting up to 2 minutes, then "Update without the newest backup?") before handing the
+  APK to the installer. If the installer fails, the app says "Don't uninstall RisiMe: your chats
+  are only safe if they're backed up" and offers "Back up now".
+- **Before a confirmed wipe** ("Log out and delete chats from this phone", a switch to another
+  account or server) the app **must** make a backup first: uploaded when server backup is on (the
+  confirmation says so), otherwise the confirmation offers "Save a backup file" (export). The wipe
+  then deletes the app-private backups and `BK`/`R` with everything else.
+- **Export / import a file:** "Export backup file" (system picker, `ACTION_CREATE_DOCUMENT`) and
+  "Restore from file" (`ACTION_OPEN_DOCUMENT`); the file is copied into app-private storage before
+  the verify pass.
+- **First sign-in on a fresh install:** when `GET /backups` lists a backup (or the user picks a
+  file), offer "Restore your chats" (newest current backup preselected, with its device name, date
+  and size) → recovery key or passphrase → restore. "Skip" needs a confirmation. **Until the user
+  has restored or skipped, the device makes no server backup**, so an empty install can't push out
+  a good one (and replaced backups stay 7 days as a second net).
+- **Change recovery key:** a new `R`, the same `BK`, `PUT` (same `bk_id`); the UI says older files
+  still open with the old key. **Forgot it:** "Reset backup key" = `DELETE /backups`, then turn on
+  again (the old server backups are gone; local files keep needing the old key).
+
+### 22.8 Server storage (queries first)
+- `backups(backup_id uuid PK, user_id, device_id, created_at, uploaded_at, size, sha256, schema,
+  app_version, bk_id, parts jsonb (ordered refs), current bool, expires_at)`, index `(user_id,
+  uploaded_at)` (list, retention, the 24 h rate); `backup_keys(user_id PK, v, bk_id, record jsonb,
+  updated_at)`; `blobs` gains a nullable, indexed `backup_id` (unreferenced parts, the reader check
+  is the owner).
+- The existing blob sweep expires replaced backups and unreferenced parts; a deleted user's
+  backups and key record go with the user. Logs carry counts and sizes only.
+- No Cassandra.
+
+### 22.9 Test vectors: `contract/v1/backup_vectors.json` (crypto generates)
+Generated by the crypto core's generator and, byte for byte, by an independent reference script
+(`scripts/gen-backup-vectors`, Python `cryptography` + `argon2-cffi`), like `media_vectors.json`.
+The crypto and Android tests run every case. All binary fields lowercase hex:
+```json
+{"v": 1, "comment": "…",
+ "recovery_key": [{"name": "…", "bytes": "<15>", "display": "XXXX-…", "input": "<as typed>",
+   "expect": "ok" | "Typo" | "Malformed"}],
+ "argon2": [{"name": "…", "kind": "recovery_key" | "passphrase", "secret": "<utf-8 as typed, or
+   15-byte hex>", "password": "<hex, after NFKC/trim>", "salt": "<16>", "m": 65536, "t": 3, "p": 1,
+   "kek": "<32>"}],
+ "wrap": [{"name": "…", "user_id": "…", "kind": "…", "kek": "<32>", "bk": "<32>", "bk_id": "<8>",
+   "nonce": "<12>", "aad": "<hex>", "check": "<16>", "wrapped": "<48>"}],
+ "dek": [{"name": "…", "bk": "<32>", "backup_id": "<uuid>", "user_id": "…", "nonce": "<12>",
+   "aad": "<hex>", "dek": "<32>", "wrapped": "<48>"}],
+ "stream": [{"name": "…", "dek": "<32>", "prefix_and_header": "<hex>", "header_hash": "<32>",
+   "d_len": n, "padded": "<hex P>", "file": "<hex whole file>"}],
+ "negative": [{"name": "…", "base": "<positive name>", "change": {"<field>": "<value>"},
+   "expect": "Integrity" | "Format" | "WrongKey" | "Typo" | "Malformed", "why": "…"}]}
+```
+- **Positive:** recovery keys (round trip, lowercase and `O`/`I`/`L` input); Argon2id with the
+  real parameters for a recovery key and for an NFKC-changing passphrase; both wrap kinds; a DEK
+  wrap; streams of 1, 65 536, 65 537 and 200 000 bytes of `P`.
+- **Required negatives:** a one-character typo (`Typo`); 27 characters (`Malformed`); the wrong
+  passphrase (`WrongKey`); a wrap opened with another `user_id` or `kind` in the AAD
+  (`Integrity`); `m` = 32768 (`Malformed`); a `bk_id` that doesn't match the opened `BK`
+  (`Integrity`); a DEK wrap opened with another `backup_id` (`Integrity`); a file truncated at a
+  chunk boundary, two chunks swapped, a chunk from another backup, the final flag on a non-final
+  chunk, a changed header byte, bytes appended after the last chunk (all `Integrity`); a 16-byte
+  last chunk, `header_len` past the end, a wrong magic, a nonzero pad byte (all `Format`).
+- The stream vectors cover the crypto only: `padded` is given, so DEFLATE output (which differs
+  between implementations) is never compared; tests check `inflate(D)` separately.
+
+### 22.10 Core API (crypto; names informative, rules normative)
+- `Client::backup_setup(user_id) -> {recovery_key: String, key_record}` (makes `BK` and `R`, or
+  reuses a silently made local pair, §22.7; returns the `recovery_key` wrap; stores both in
+  `mls_kv` in the caller's transaction); `Client::backup_add_passphrase(user_id, passphrase) -> key_record`;
+  `Client::backup_unlock(user_id, key_record, secret, kind)` (unwraps and stores `BK`, and `R` for
+  a recovery key; `Typo`/`WrongKey`/`Integrity`/`Malformed`); `Client::backup_recovery_key() ->
+  String`; `Client::backup_rotate_recovery_key(user_id) -> {recovery_key, key_record}`;
+  `Client::backup_forget()`.
+- `Client::backup_writer(user_id, backup_id, created_at, app_version, key_record, out_path)` →
+  `write(bytes)` (the app's DEFLATE output, streamed) → `finish() -> {size, sha256}` (pads,
+  writes the last chunk with the final flag). A writer that fails is discarded; a retry is a new
+  backup (new `backup_id`, new `DEK`), never a resumed stream. `Client::backup_reader(user_id, in_path, key_record?)`
+  → `verify()` (the whole verify pass) → `read() -> bytes` (`P`, in order, only after `verify`).
+- `BK`, `KEK` and `DEK` never cross the FFI; `R` crosses only as the display string. The bundle
+  crosses as bytes, never as a plaintext temp file. Argon2id runs off the main thread (about 64 MiB
+  and 0.5–1 s on a pilot phone). New core dependency: the RustCrypto `argon2` crate (decision 059).
+
+### 22.11 Privacy and security (honest limits)
+- The server learns that a user has backups, when they were made, from which device, their sizes,
+  `app_version` and `bk_id`; never content or keys. Logs carry counts and sizes.
+- **Who can read a backup:** any device holding `BK` (the user's devices with backups on) and
+  anyone with the recovery key or passphrase **and** the ciphertext (the server, or a copied file).
+  The wrapped `BK` is offline-attackable by its holder; 120 bits of recovery key make that
+  infeasible, a passphrase is as strong as the user made it (the floor, Argon2id).
+- **Who can forge one:** only a holder of `BK`. The server can withhold backups, serve an older
+  one (rollback; the user sees each backup's date) or delete them, but can't change their content.
+- **Account takeover** (someone with the user's RisiCloud login) can delete server backups, not
+  read them. `BK` rotation means a new account backup history (Reset backup key).
+- **Not end-to-end in the MLS sense:** a restored message is as trustworthy as the device that
+  wrote the backup (the user's own), like an own-device history share (§17.15).
+
+### 22.12 Rollout and old apps
+Additive. Old apps never see the purpose or the endpoints. The server ships the switch `on`; apps
+v1.22 offer backups once `auth/config` says `on`. Local backups work against any server.
+
+### 22.13 Test coverage (all gates)
+- **Crypto:** every `backup_vectors.json` case; `BK`/`KEK`/`DEK` unreachable from the FFI;
+  `backup_setup` reusing a silent local `BK`; older local `BK`s kept by `bk_id`; `mls_kv` rollback leaves no `BK`; the verify pass rejects
+  before `read` returns a byte.
+- **Server:** the switch (`503`, `auth/config`); part uploads (owner-only reads, no
+  `conversation_id`, part cap, rates, the 24 h unreferenced TTL, idempotency); the commit (every
+  check in order, parts belong to the backup and the caller, sizes add up, idempotent replay, the
+  6/24 h rate from Postgres); retention (newest 2 current, replaced 7 days, at most 5 replaced,
+  pruned before a quota refusal); the backup device rule (mismatch, `replace_device`, a superseded
+  device needs no flag); `backup_key` (shapes, `409 backup_key_conflict` only while backups exist,
+  same `bk_id` replaces); `DELETE` removes files and the record; `GET /blobs/usage`; every new
+  example.
+- **Android (JVM):** the bundle writer (filters, line types, nothing from the "never" list, call
+  lines included); the importer (dedupe, deletes win, `cleared_upto`, hidden chats, tombstone lines,
+  gap rows and markers, no notifications or unread, resume); the §13.3 extension; the first-sign-in
+  gate (no server backup before restore or skip); recovery-key input normalisation and the
+  passphrase floor; the pre-update and pre-wipe hooks; parsing every new example.
+- **Upgrade gate (hard rule 9, root):** `scripts/upgrade-test` gains "uninstall, reinstall,
+  restore": per-conversation counts after the restore are at least the counts at the backup.
+- **Live interop:** back up, uninstall, reinstall, restore from the server; export a file, wipe,
+  restore from the file; a second phone with `replace_device`.
+- **Examples:** `auth_config_v122.json`, `blob_upload_backup_reply.json`,
+  `backup_create_request.json`, `backup_create_reply.json`, `backups_reply.json`,
+  `backup_key_put.json`, `backup_key_reply.json`, `blob_usage_reply_backup.json`,
+  `error_backup_unavailable.json`, `error_no_backup_key.json`, `error_backup_key_conflict.json`,
+  `error_backup_device_mismatch.json`, `backup_file_header.json`, `backup_bundle_header.json`,
+  `backup_entry_conversation.json`, `backup_entry_message.json`, `backup_entry_tombstone.json`,
+  `backup_entry_group_event.json`, `backup_entry_contact.json`.
+
 ## Changelog
+- **v1.22** (2026-10-08): encrypted backups (§22, decision 059), reviewed by crypto, server and
+  android. `GET /auth/config` `backup: "on" | "off"` (server `BACKUPS`; off stops writes only,
+  `503 backup_unavailable`); a per-account backup key `BK` (local copy in `mls_kv`, recovery copy
+  wrapped under Argon2id(m 64 MiB, t 3, p 1) of a 120-bit recovery key shown as 7×4 Crockford
+  characters with a checksum, and optionally of a passphrase with a strength floor; HKDF-derived
+  wrap key and a key-check value, AAD bound to `user_id`, kind and `bk_id`); a fresh `DEK` per
+  backup wrapped by `BK`; the file format `RISIMEBK` v1 (header hash bound into every chunk,
+  `A256GCM-STREAM64K` with the chunk index and last flag in nonce and AAD, raw DEFLATE, Padmé),
+  identical for server, local and exported backups; the bundle schema 1 (§17.7 entries plus
+  conversation, tombstone, group-event and contact lines; never MLS state, cursor, device id, HPKE
+  keys, tokens or the behaviour log); restore through the §17.7 import (dedupe, deletes win, not
+  bound to the gap index; restored ids add no §13.3 marker); the blob purpose `backup` (owner-only,
+  33 562 624-byte parts, 16 parts/512 MiB, newest 2 current, replaced kept 7 days, at most 5,
+  1.5 GiB live, 60 parts/h, 200/day, 6 backups/24 h); `POST`/`GET`/`DELETE /api/v1/backups` (one
+  backup device per account, `replace_device`) and `PUT`/`GET /api/v1/backup_key` (no silent key
+  change); errors `backup_unavailable`, `no_backup_key`, `backup_key_conflict`,
+  `backup_device_mismatch`; local backups daily, before every in-app update and before any
+  confirmed wipe; no server backup before a fresh install restored or skipped;
+  `contract/v1/backup_vectors.json` (format here, generated by crypto). Additive.
 - **v1.21** (2026-10-08): reinstalls without reset, and stale leaves (§12.12, decision 060),
   reviewed by server, android and crypto. Admin is a user role (a reinstalled admin's new device is
   re-added by the §12.4a member path like anyone's; the only admin is no exception); every device
