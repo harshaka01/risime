@@ -29,7 +29,11 @@ defmodule RisiMe.Groups.Commit do
          {:ok, req} <- parse(params),
          :ok <- check_refs(me, conv, req),
          :ok <- limit(me) do
-      Groups.locked(conv, fn -> locked_commit(me, dev, conv, req) end)
+      case Groups.locked(conv, fn -> locked_commit(me, dev, conv, req) end) do
+        # v1.24 §24.2: the creating Official's members were re-synced (kept), the commit refused.
+        {:ok, :members_changed} -> {:error, :members_changed}
+        other -> other
+      end
     end
   end
 
@@ -145,7 +149,9 @@ defmodule RisiMe.Groups.Commit do
   end
 
   # Epoch 0 of a new group: all groups-capable devices of every member (§12.3). v1.24 §24.2: for
-  # an Official group, every `tabs` device of every human member plus the agent's device.
+  # an Official group, every `tabs` device of every human member plus the agent's device; its
+  # human members must still be the Private group's (else `members_changed`: the client refetches
+  # the group and builds epoch 0 again).
   defp create_commit(me, dev, g, req) do
     members = Groups.members(g.id)
     member_ids = Enum.map(members, & &1.user_id)
@@ -160,6 +166,16 @@ defmodule RisiMe.Groups.Commit do
       # v1.24 §24.4: an Official turned off while it was being created never starts.
       Groups.official?(g) and RisiMe.Chats.off?(g.chat_id) ->
         {:error, :official_off}
+
+      # Drift: the rows are re-synced and kept (an :ok result, so no rollback), the commit refused.
+      Groups.official?(g) and resync_official(g) ->
+        {:ok, :members_changed}
+
+      # The human members the client built epoch 0 for (a missing agent stays `bad_request`).
+      Groups.official?(g) and
+          MapSet.new(for({u, _} <- [{me, dev} | req.added], u not in agents, do: u)) !=
+            MapSet.new(member_ids -- agents) ->
+        {:error, :members_changed}
 
       MapSet.size(ready) != length(others -- agents) ->
         {:error, not_ready(g, missing)}
@@ -201,6 +217,54 @@ defmodule RisiMe.Groups.Commit do
         {:ok, 1}
     end
   end
+
+  # A group chat's creating Official mirrors the Private group's human members (active, or added
+  # and not yet committed there) with their roles. True when rows had to change.
+  defp resync_official(%Group{chat_kind: "group"} = g) do
+    expected =
+      Repo.all(
+        from m in Member,
+          where:
+            m.group_id == ^g.chat_id and m.kind == "user" and
+              m.state in ["active", "pending_add"],
+          select: {m.user_id, m.role}
+      )
+      |> Map.new()
+
+    current =
+      Repo.all(
+        from m in Member,
+          where: m.group_id == ^g.id and m.kind == "user",
+          select: m.user_id
+      )
+
+    extra = Enum.reject(current, &Map.has_key?(expected, &1))
+    missing = Map.drop(expected, current)
+
+    for u <- extra, do: Groups.delete_member(g.id, u)
+
+    if missing != %{} do
+      now = DateTime.utc_now()
+
+      rows =
+        for {u, role} <- missing,
+            do: %{
+              group_id: g.id,
+              user_id: u,
+              role: role,
+              kind: "user",
+              state: "active",
+              joined_at: now,
+              inserted_at: now
+            }
+
+      Repo.insert_all(Member, rows)
+    end
+
+    extra != [] or missing != %{}
+  end
+
+  defp resync_official(_g), do: false
 
   defp not_ready(g, missing),
     do: if(Groups.official?(g), do: {:not_ready, missing, :official}, else: {:not_ready, missing})

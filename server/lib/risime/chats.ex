@@ -69,8 +69,22 @@ defmodule RisiMe.Chats do
 
   @doc "`Chat` as seen by `me` for a resolved chat."
   def chat_json(me, chat) do
-    r = row(chat.chat_id)
-    og = official_group(chat.chat_id)
+    {_ready, missing} = Groups.tabs_readiness(chat.humans)
+
+    build_json(
+      me,
+      chat,
+      row(chat.chat_id),
+      official_group(chat.chat_id),
+      missing,
+      Risi.available?()
+    )
+  end
+
+  # `missing` may cover more users than the chat's (a batch): only the chat's humans count.
+  defp build_json(me, chat, r, og, missing, risi?) do
+    humans = MapSet.new(chat.humans)
+    missing = Enum.filter(missing, &MapSet.member?(humans, &1.user_id))
 
     state =
       cond do
@@ -79,10 +93,8 @@ defmodule RisiMe.Chats do
         true -> "none"
       end
 
-    {_ready, missing} = Groups.tabs_readiness(chat.humans)
-
     missing =
-      if Risi.available?(),
+      if risi?,
         do: missing,
         else: missing ++ [%{user_id: nil, device_id: nil, reason: "agent_unavailable"}]
 
@@ -115,31 +127,83 @@ defmodule RisiMe.Chats do
   """
   def list(me, device_id) do
     if Devices.tabs_device?(me, device_id) do
-      groups =
-        Repo.all(
-          from g in Group,
-            join: m in Member,
-            on: m.group_id == g.id,
-            where:
-              m.user_id == ^me and m.state == "active" and g.state == "active" and
-                g.tab == "private",
-            order_by: [asc: g.created_at],
-            select: g.id
-        )
-
-      dms =
-        for f <- Social.friend_ids(me),
-            conv = Messaging.conversation_id(me, f),
-            MLS.e2ee?(conv) or official_group(conv) != nil,
-            do: conv
-
-      chats =
-        for id <- dms ++ groups, {:ok, chat} <- [resolve(me, id)], do: chat_json(me, chat)
-
-      {:ok, chats}
+      {:ok, list_chats(me)}
     else
       {:error, :not_found}
     end
+  end
+
+  # A fixed number of queries for any number of chats (no per-chat round trips).
+  defp list_chats(me) do
+    group_ids =
+      Repo.all(
+        from g in Group,
+          join: m in Member,
+          on: m.group_id == g.id,
+          where:
+            m.user_id == ^me and m.state == "active" and g.state == "active" and
+              g.tab == "private",
+          order_by: [asc: g.created_at],
+          select: g.id
+      )
+
+    dm_ids = for f <- Social.friend_ids(me), do: Messaging.conversation_id(me, f)
+
+    officials =
+      Repo.all(
+        from g in Group, where: g.chat_id in ^(dm_ids ++ group_ids) and g.tab == "official"
+      )
+      |> Map.new(&{&1.chat_id, &1})
+
+    e2ee =
+      Repo.all(
+        from g in "mls_groups", where: g.conversation_id in ^dm_ids, select: g.conversation_id
+      )
+      |> MapSet.new()
+
+    dms =
+      for conv <- dm_ids,
+          MapSet.member?(e2ee, conv) or Map.has_key?(officials, conv),
+          {:ok, humans} <- [MLS.members(conv)],
+          do: %{chat_id: conv, kind: "dm", humans: humans, admins: humans}
+
+    members =
+      Repo.all(
+        from m in Member,
+          where: m.group_id in ^group_ids and m.state == "active",
+          order_by: [asc: m.inserted_at],
+          select: {m.group_id, m.user_id, m.kind, m.role}
+      )
+      |> Enum.group_by(&elem(&1, 0))
+
+    groups =
+      for id <- group_ids do
+        ms = Map.get(members, id, [])
+
+        %{
+          chat_id: id,
+          kind: "group",
+          humans: for({_, u, "user", _} <- ms, do: u),
+          admins: for({_, u, _, "admin"} <- ms, do: u)
+        }
+      end
+
+    chats = dms ++ groups
+    rows = Repo.all(from c in Chat, where: c.chat_id in ^Enum.map(chats, & &1.chat_id))
+    rows = Map.new(rows, &{&1.chat_id, &1})
+    {_ready, missing} = chats |> Enum.flat_map(& &1.humans) |> Groups.tabs_readiness()
+    risi? = Risi.available?()
+
+    for chat <- chats,
+        do:
+          build_json(
+            me,
+            chat,
+            rows[chat.chat_id],
+            officials[chat.chat_id],
+            missing,
+            risi?
+          )
   end
 
   ## Creation (§24.2)

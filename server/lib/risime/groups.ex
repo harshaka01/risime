@@ -481,8 +481,10 @@ defmodule RisiMe.Groups do
 
   @doc """
   The tabs of the chat a group belongs to, Private first: the Private group and the chat's
-  active Official group (when one exists). A `dm:` chat's Official is alone (its membership
-  follows the DM; member calls on it are `dm_chat`).
+  Official group (when one exists), `active` or still `creating`. A `creating` Official is
+  included so membership changes during its creation reach it (its rows are edited directly, as
+  it has no MLS group yet; its epoch-0 commit re-checks the members, `members_changed`). A `dm:`
+  chat's Official is alone (its membership follows the DM; member calls on it are `dm_chat`).
   """
   def chat_tabs(%Group{} = g) do
     chat_id = g.chat_id || g.id
@@ -498,7 +500,9 @@ defmodule RisiMe.Groups do
         else:
           Repo.one(
             from x in Group,
-              where: x.chat_id == ^chat_id and x.tab == "official" and x.state == "active"
+              where:
+                x.chat_id == ^chat_id and x.tab == "official" and
+                  x.state in ["active", "creating"]
           )
 
     Enum.reject([private, official], &is_nil/1)
@@ -556,12 +560,20 @@ defmodule RisiMe.Groups do
           now = DateTime.utc_now()
 
           for {tg, new} <- plan, new != [] do
-            Repo.insert_all(
-              Member,
-              for(u <- new, do: member_row(tg.id, u, "member", "pending_add", nil, now))
-            )
+            if creating?(tg) do
+              # No MLS group yet: the new users are members of its epoch 0.
+              Repo.insert_all(
+                Member,
+                for(u <- new, do: member_row(tg.id, u, "member", "active", now, now))
+              )
+            else
+              Repo.insert_all(
+                Member,
+                for(u <- new, do: member_row(tg.id, u, "member", "pending_add", nil, now))
+              )
 
-            Ops.create(tg, "add", me, %{user_ids: new}, first_ref(tg, g, me, dev))
+              Ops.create(tg, "add", me, %{user_ids: new}, first_ref(tg, g, me, dev))
+            end
           end
 
           {:ok, group_json(g, me)}
@@ -630,7 +642,8 @@ defmodule RisiMe.Groups do
 
   @doc """
   `DELETE /groups/{id}/members/{user_id}` (admin). Removing yourself is a leave. v1.24 §24.3:
-  applied to every tab of the chat; removing the agent while Official is on is `risi_required`.
+  applied to every tab of the chat. An agent is never removed here, whichever tab is named:
+  `risi_required` while the chat's Official is on, else `invalid_member` (§24.3, §24.4).
   """
   def remove_member(me, device_id, id, target) do
     with {:ok, dev} <- caller_device(me, device_id),
@@ -642,12 +655,12 @@ defmodule RisiMe.Groups do
           with {:ok, g, m} <- visible_active(me, id),
                :ok <- not_dm_chat(g),
                :ok <- require_admin(m),
-               :ok <- risi_required(g, target) do
+               :ok <- agent_target(g, target) do
             # The creator rule is checked once, on the chat's Private group.
             creator = hd(tabs).created_by
 
             Enum.reduce_while(tabs, {:ok, nil}, fn tg, _ ->
-              case do_remove(me, first_ref(tg, g, me, dev), tg, target, creator) do
+              case remove_from_tab(me, first_ref(tg, g, me, dev), tg, target, creator) do
                 {:ok, _} -> {:cont, {:ok, nil}}
                 e -> {:halt, e}
               end
@@ -659,12 +672,27 @@ defmodule RisiMe.Groups do
     end
   end
 
-  # §24.4: no "remove Risi but keep Official".
-  defp risi_required(g, target) do
-    if official?(g) and not RisiMe.Chats.off?(g.chat_id) and
-         match?(%Member{kind: "agent"}, member(g.id, target)),
-       do: {:error, :risi_required},
-       else: :ok
+  # §24.3/§24.4: an agent's membership changes only through Official creation and the toggle,
+  # never through a member call on either tab ("no remove Risi but keep Official").
+  defp agent_target(g, target) do
+    cond do
+      RisiMe.Risi.agents([target]) == [] -> :ok
+      not RisiMe.Chats.off?(g.chat_id || g.id) -> {:error, :risi_required}
+      true -> {:error, :invalid_member}
+    end
+  end
+
+  @doc false
+  def creating?(%Group{state: state}), do: state == "creating"
+
+  # A `creating` Official has no MLS group: the user simply stops being one of its members.
+  defp remove_from_tab(me, first, tg, target, creator) do
+    if creating?(tg) do
+      if member(tg.id, target), do: delete_member(tg.id, target)
+      {:ok, nil}
+    else
+      do_remove(me, first, tg, target, creator)
+    end
   end
 
   defp do_remove(me, first, g, target, creator) do
@@ -721,8 +749,12 @@ defmodule RisiMe.Groups do
 
           true ->
             for tg <- tabs, match?(%Member{state: "active"}, member(tg.id, me)) do
-              mark_removing(tg, me)
-              Ops.create(tg, "remove", me, %{user_ids: [me]}, nil)
+              if creating?(tg) do
+                delete_member(tg.id, me)
+              else
+                mark_removing(tg, me)
+                Ops.create(tg, "remove", me, %{user_ids: [me]}, nil)
+              end
             end
 
             {:ok, nil}
@@ -805,6 +837,13 @@ defmodule RisiMe.Groups do
     pending = Ops.role_op(tg.id, target)
 
     cond do
+      # A `creating` Official: its epoch-0 members carry the role directly.
+      creating?(tg) ->
+        Repo.update_all(
+          from(m in Member, where: m.group_id == ^tg.id and m.user_id == ^target),
+          set: [role: role]
+        )
+
       pending && pending.payload["role"] == role ->
         :ok
 
@@ -825,7 +864,9 @@ defmodule RisiMe.Groups do
     with {:ok, dev} <- caller_device(me, device_id),
          :ok <- rejoin_limit(me) do
       locked(id, fn ->
-        with {:ok, g, _m} <- visible_active(me, id) do
+        with {:ok, g, _m} <- visible_active(me, id),
+             # v1.24 §24.3: only a `tabs` device is ever an Official leaf.
+             :ok <- rejoin_device_ok(g, me, dev) do
           ref = {me, dev}
 
           {op, n, exhausted?} =
@@ -848,6 +889,12 @@ defmodule RisiMe.Groups do
         end
       end)
     end
+  end
+
+  defp rejoin_device_ok(g, me, dev) do
+    if official?(g) and not Devices.tabs_device?(me, dev),
+      do: {:error, :invalid_device},
+      else: :ok
   end
 
   defp rejoin_limit(me) do

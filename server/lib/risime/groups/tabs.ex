@@ -106,4 +106,49 @@ defmodule RisiMe.Groups.Tabs do
   end
 
   def agent_conversation?(_agent_id, _conv), do: false
+
+  @doc """
+  `agent_may_see?/2` for a page of events (join/sync replies) with one query: returns the
+  predicate for those events.
+  """
+  def agent_filter(agent_id, events) do
+    convs =
+      for %{data: data} when is_map(data) <- events,
+          "grp:" <> _ = conv <- [conv_of(data)],
+          uniq: true,
+          do: conv
+
+    allowed = agent_conversations(agent_id, convs)
+
+    fn
+      %{kind: "chat_event"} ->
+        false
+
+      %{data: data} when is_map(data) ->
+        case conv_of(data) do
+          nil -> true
+          conv -> MapSet.member?(allowed, conv)
+        end
+
+      _ ->
+        true
+    end
+  end
+
+  defp agent_conversations(_agent_id, []), do: MapSet.new()
+
+  defp agent_conversations(agent_id, convs) do
+    Repo.all(
+      from g in Group,
+        join: m in RisiMe.Groups.Member,
+        on: m.group_id == g.id,
+        left_join: c in RisiMe.Groups.Chat,
+        on: c.chat_id == g.chat_id,
+        where:
+          g.id in ^convs and g.tab == "official" and m.user_id == ^agent_id and
+            m.state == "active" and (is_nil(c.chat_id) or c.official == "on"),
+        select: g.id
+    )
+    |> MapSet.new()
+  end
 end

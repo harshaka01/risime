@@ -11,8 +11,9 @@ defmodule RisiMeWeb.MeController do
   def update(conn, params) do
     user = conn.assigns.current_user
 
-    with {:ok, user} <- update_tz(user, params),
-         {:ok, user} <- update_name(user, params) do
+    # Every field is validated before anything is written (one update).
+    with :ok <- check_tz(params),
+         {:ok, user} <- Accounts.update_me(user, Map.take(params, ["tz", "display_name"])) do
       json(conn, %{user: user_json(conn, user)})
     else
       {:error, :bad_tz} -> ApiError.send_error(conn, 422, :bad_request)
@@ -20,17 +21,8 @@ defmodule RisiMeWeb.MeController do
     end
   end
 
-  defp update_tz(user, %{"tz" => tz}) do
-    if Accounts.valid_tz?(tz), do: Accounts.set_tz(user, tz), else: {:error, :bad_tz}
-  end
-
-  defp update_tz(user, _params), do: {:ok, user}
-
-  defp update_name(user, %{"tz" => _} = params) when not is_map_key(params, "display_name"),
-    do: {:ok, user}
-
-  defp update_name(user, params),
-    do: Accounts.update_profile(user, Map.take(params, ["display_name"]))
+  defp check_tz(%{"tz" => tz}), do: if(Accounts.valid_tz?(tz), do: :ok, else: {:error, :bad_tz})
+  defp check_tz(_params), do: :ok
 
   @doc "`POST /me/phone/verify/request` (contract v1.4 §7.1)."
   def phone_request(conn, _params) do

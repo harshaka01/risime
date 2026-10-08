@@ -17,9 +17,9 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
 ## v1.24 two tabs (§24, decision 065) — S1–S4 READY (S5–S8, the Risi agent tree, not started)
-- **Gate:** 700 tests, 0 failures (3 skipped: crypto's agent NIF tests; 2 `:livekit` excluded);
-  flaky and unrelated: `fanout_cost_test` (random phone collisions among 256 fast users) and
-  `auth_log_test` (shared auth log path across concurrent runs).
+- **Gate:** 709 tests, 0 failures (3 skipped: crypto's agent NIF tests; 2 `:livekit` excluded).
+  The former flakes (`fanout_cost_test`, `auth_log_test`, `open_signup_test`) passed 5× each
+  while another partition ran the full suite (see review fix 6).
 - **Env:** `TABS` (default off; `/auth/config` `tabs: "on"` only while on, absent = off),
   `RISI` (default off), `RISI_USER_ID` / `RISI_DEVICE_ID` (defaults `9e1f0000-…-0001` / `-0002`),
   `RISI_DEFAULT_TZ`. `Release.migrate/0` seeds the agent user (`kind: "agent"`, "Risi") and its
@@ -67,6 +67,26 @@ LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.1
   8. Open for the agent tree (S5+): after off the agent is `pending_remove`, so it can no longer
      *send* the §24.4 farewell line; and an agent's live `mls_welcome` published inside the commit
      transaction may be filtered until commit (it arrives on the next sync).
+- **Privacy review fixes (S1–S4; `chats_review_test.exs`, each test failed before its fix):**
+  1. A `creating` Official is one of the chat's tabs (`chat_tabs/1`): adds/removes/leaves/roles
+     during creation edit its member rows directly (no MLS group, no op). Its epoch-0 commit
+     re-syncs its human members to the Private group's (active + pending_add; the re-sync is kept
+     even though the commit is refused) and refuses an epoch 0 whose human users differ:
+     **`409 members_changed`** (a missing agent device stays `400 bad_request`).
+     **For root:** `members_changed` is a new code, not yet in PROTOCOL §24.2/§24.8; Android must
+     treat it as "refetch the Official group, re-claim, rebuild epoch 0" (today an unknown code is a
+     permanent failure, §2.2).
+  2. An agent is never removed by `DELETE …/members/{agent}` on either tab: `409 risi_required`
+     while the chat's Official is on (the Private id included), `422 invalid_member` when off.
+  3. Official group rings push only to `tabs` devices, never to agents (live `call_signal` already
+     went through the tabs socket filter, live and replay).
+  4. `POST /groups/{official}/rejoin` from a non-`tabs` device: `403 invalid_device`.
+  5. `PATCH /me` validates `tz` and `display_name` before one update (a bad name no longer leaves
+     the tz written); `GET /api/v1/chats` runs a fixed number of queries for any number of chats;
+     an agent socket's join/sync page is filtered with one §24.5 query (`Tabs.agent_filter/2`;
+     live events keep one query each, no cache to invalidate).
+  6. Test isolation: `unique_phone/0` and `unique_ip/0` = a per-VM random base + a monotonic
+     counter; the auth log and blob dir are per VM (`tmp/risime-test-<os pid>/`).
 
 ## P0 push watchdog (dead-but-joined sockets) — READY (no wire change, no proposal)
 - **Problem:** a phone that loses its network without a close stays joined (presence "online")

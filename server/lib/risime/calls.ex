@@ -356,9 +356,19 @@ defmodule RisiMe.Calls do
   # a live inbox channel; no 3-s fallback in groups.
   # A "live" device's socket is probed (`Push.Dispatcher.watch_call/2`): no pong within 4 s
   # (a half-open socket) → its call push after all.
+  # v1.24 §24.5/§24.7: an Official call rings only `tabs` devices (an old app never learns of an
+  # Official conversation), and agents are never rung.
   defp group_ring(req, others) do
+    official? = RisiMe.Groups.Tabs.official?(req.conv)
+    others = others -- RisiMe.Risi.agents(others)
+
+    allowed? = fn u, d -> not official? or d in Devices.tabs_device_ids(u) end
+
     targets =
-      for u <- others, {d, tok} <- Devices.calls_push_targets(u, "group_calls"), do: {u, d, tok}
+      for u <- others,
+          {d, tok} <- Devices.calls_push_targets(u, "group_calls"),
+          allowed?.(u, d),
+          do: {u, d, tok}
 
     {live, offline} = Enum.split_with(targets, fn {_, d, _} -> Presence.device_online?(d) end)
 

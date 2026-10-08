@@ -823,9 +823,21 @@ defmodule RisiMe.Accounts do
 
   def valid_tz?(_), do: false
 
-  @doc "Sets the user's timezone (already validated)."
-  def set_tz(%User{} = user, tz),
-    do: user |> Ecto.Changeset.change(tz: tz) |> Repo.update()
+  @doc """
+  `PATCH /me` (v1.24 §24.11): `tz` (already validated) and/or `display_name` in one update; a
+  request without `tz` is a profile update as before.
+  """
+  def update_me(%User{} = user, attrs) do
+    cs =
+      if Map.has_key?(attrs, "tz") and not Map.has_key?(attrs, "display_name"),
+        do: Ecto.Changeset.change(user),
+        else: User.profile_changeset(user, Map.take(attrs, ["display_name"]))
+
+    cs =
+      if Map.has_key?(attrs, "tz"), do: Ecto.Changeset.put_change(cs, :tz, attrs["tz"]), else: cs
+
+    Repo.update(cs)
+  end
 
   def update_profile(%User{} = user, attrs) do
     user

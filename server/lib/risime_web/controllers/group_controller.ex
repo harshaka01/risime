@@ -81,6 +81,10 @@ defmodule RisiMeWeb.GroupController do
   def error(conn, {:error, :private_tab}), do: ApiError.send_error(conn, 403, :private_tab)
   def error(conn, {:error, :risi_required}), do: ApiError.send_error(conn, 409, :risi_required)
   def error(conn, {:error, :official_off}), do: ApiError.send_error(conn, 409, :official_off)
+
+  def error(conn, {:error, :members_changed}),
+    do: ApiError.send_error(conn, 409, :members_changed)
+
   def error(conn, {:error, :not_e2ee}), do: ApiError.send_error(conn, 409, :not_e2ee)
   def error(conn, {:error, :dm_chat}), do: ApiError.send_error(conn, 422, :dm_chat)
   def error(conn, {:error, :invalid_member}), do: ApiError.send_error(conn, 422, :invalid_member)

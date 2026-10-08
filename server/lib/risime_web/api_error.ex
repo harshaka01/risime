@@ -57,7 +57,8 @@ defmodule RisiMeWeb.ApiError do
     dm_chat: "A 1:1 chat's members can't be changed",
     invalid_member: "An agent can't be added this way",
     agent_unavailable: "Risi isn't available right now",
-    official_off: "Official is turned off for this chat"
+    official_off: "Official is turned off for this chat",
+    members_changed: "The chat's members changed; refresh the group and try again"
   }
 
   @doc """

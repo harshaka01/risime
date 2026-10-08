@@ -316,7 +316,12 @@ defmodule RisiMeWeb.InboxChannel do
              limit,
              socket.assigns[:calls] == true or socket.assigns[:group_calls] == true
            ) do
-      case Enum.filter(events, &visible?(socket, &1)) do
+      # An agent socket: one §24.5 query for the whole page.
+      agent_ok =
+        if socket.assigns[:agent] == true,
+          do: RisiMe.Groups.Tabs.agent_filter(socket.assigns.user_id, events)
+
+      case Enum.filter(events, &visible?(socket, &1, agent_ok)) do
         [] when has_more -> filtered_page(socket, List.last(events).event_id, limit)
         kept -> {:ok, kept, has_more}
       end
@@ -325,11 +330,18 @@ defmodule RisiMeWeb.InboxChannel do
 
   # v1.24 §24.7: Official events and `chat_event`s only for a `tabs` socket, before every other
   # rule.
-  defp visible?(socket, event) do
+  defp visible?(socket, event, agent_ok \\ nil) do
     (socket.assigns[:tabs] == true or not RisiMe.Groups.Tabs.tabs_only?(event)) and
-      (socket.assigns[:agent] != true or
-         RisiMe.Groups.Tabs.agent_may_see?(socket.assigns.user_id, event)) and
+      agent_visible?(socket, event, agent_ok) and
       visible_v123?(socket, event)
+  end
+
+  defp agent_visible?(socket, event, agent_ok) do
+    cond do
+      socket.assigns[:agent] != true -> true
+      agent_ok -> agent_ok.(event)
+      true -> RisiMe.Groups.Tabs.agent_may_see?(socket.assigns.user_id, event)
+    end
   end
 
   # v1.13 §16.1: `call_signal` events only for a `calls` socket; v1.18 §19.2: a `video` one only
