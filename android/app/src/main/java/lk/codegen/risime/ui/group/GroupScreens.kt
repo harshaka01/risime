@@ -151,10 +151,11 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 },
                 emphasis = typingLabel != null,
                 onBack = onBack,
-                avatar = { Box(Modifier.clickable(onClickLabel = "Group info", onClick = onInfo)) { InitialsAvatar(name, size = Sizes.avatarSmall) } },
+                avatar = { InitialsAvatar(name, size = Sizes.avatarSmall + 4.dp) },
+                onTitleClick = onInfo,
+                titleClickLabel = "Group info",
                 actions = {
                     lk.codegen.risime.ui.chat.E2eeHeaderLock(encrypted == true, onInfo)
-                    IconButton(onClick = onInfo) { Icon(Icons.Default.Info, "Group info") }
                     lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true })
                 },
             )

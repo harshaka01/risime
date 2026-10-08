@@ -123,7 +123,9 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 },
                 emphasis = typing,
                 onBack = onBack,
-                avatar = { InitialsAvatar(name, size = Sizes.avatarSmall, online = presence?.online == true) },
+                avatar = { InitialsAvatar(name, size = Sizes.avatarSmall + 4.dp, online = presence?.online == true) },
+                onTitleClick = { showInfo = true },
+                titleClickLabel = "Chat info",
                 actions = {
                     val callsReady by vm.calls.callsReady.collectAsStateWithLifecycle()
                     CallHeaderButton(
@@ -132,7 +134,6 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                         onCall = vm::startCall,
                     )
                     E2eeHeaderLock(encrypted) { showInfo = true }
-                    IconButton(onClick = { showInfo = true }) { Icon(Icons.Default.Info, "Chat info") }
                     ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true })
                 },
             )

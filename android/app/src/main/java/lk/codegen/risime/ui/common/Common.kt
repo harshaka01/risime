@@ -130,13 +130,23 @@ fun RisiTopBar(
     actions: @Composable RowScope.() -> Unit = {},
     /** The app's home bar: the brand title (larger, in the primary colour). */
     brand: Boolean = false,
+    /** Tapping the avatar + title opens chat/group info (WhatsApp-style), announced with [titleClickLabel]. */
+    onTitleClick: (() -> Unit)? = null,
+    titleClickLabel: String? = null,
 ) {
     TopAppBar(
         navigationIcon = {
             if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
         },
         title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.then(
+                    if (onTitleClick != null) {
+                        Modifier.clip(RisiShapes.pill).clickable(onClickLabel = titleClickLabel, onClick = onTitleClick)
+                    } else Modifier,
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 avatar?.let {
                     it()
                     Spacer(Modifier.width(if (onBack != null) Spacing.sm + Spacing.xxs else Spacing.md))

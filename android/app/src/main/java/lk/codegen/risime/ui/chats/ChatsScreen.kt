@@ -17,6 +17,7 @@ import lk.codegen.risime.ui.friends.FriendsViewModel
 import lk.codegen.risime.ui.friends.RequestsTab
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.LazyColumn
@@ -142,7 +143,7 @@ fun ChatsScreen(
             )
         },
         floatingActionButton = {
-            Column(horizontalAlignment = androidx.compose.ui.Alignment.End, verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.md)) {
+            Column(Modifier.navigationBarsPadding(), horizontalAlignment = androidx.compose.ui.Alignment.End, verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.md)) {
                 if (groupsAvailable && tab == 0) {
                     ExtendedFloatingActionButton(
                         onClick = onNewGroup,

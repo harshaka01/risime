@@ -116,20 +116,24 @@ private fun CallBackdrop(video: (@Composable () -> Unit)? = null, content: @Comp
     }
 }
 
+/** True on a short screen (under 700 dp of height): a smaller avatar and tighter gaps, so nothing scrolls. */
+private val LocalCompactCall = androidx.compose.runtime.staticCompositionLocalOf { false }
+
 /** A large initials avatar with a soft ring; [pulse] animates the ring while ringing. */
 @Composable
 private fun CallAvatar(name: String?, pulse: Boolean) {
+    val k = if (LocalCompactCall.current) 0.72f else 1f
     val ring = if (pulse) {
         val t = rememberInfiniteTransition(label = "ring")
         t.animateFloat(1f, 1.18f, infiniteRepeatable(tween(1100), RepeatMode.Reverse), label = "ring").value
     } else 1f
-    Box(Modifier.size(168.dp), contentAlignment = Alignment.Center) {
-        Box(Modifier.size(150.dp).scale(ring).clip(CircleShape).background(Color.White.copy(alpha = 0.10f)))
-        Box(Modifier.size(132.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.16f)))
+    Box(Modifier.size(168.dp * k), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(150.dp * k).scale(ring).clip(CircleShape).background(Color.White.copy(alpha = 0.10f)))
+        Box(Modifier.size(132.dp * k).clip(CircleShape).background(Color.White.copy(alpha = 0.16f)))
         if (name != null) {
-            InitialsAvatar(name, size = 116.dp)
+            InitialsAvatar(name, size = 116.dp * k)
         } else {
-            Image(painterResource(lk.codegen.risime.R.drawable.brand_mark), null, Modifier.size(116.dp))
+            Image(painterResource(lk.codegen.risime.R.drawable.brand_mark), null, Modifier.size(116.dp * k))
         }
     }
 }
@@ -176,12 +180,14 @@ private fun CallHeader(title: String, status: String, encrypted: Boolean) {
 @Composable
 private fun CallColumn(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
+        CompositionLocalProvider(LocalCompactCall provides (maxHeight < 700.dp)) {
         Column(
             Modifier.fillMaxWidth().heightIn(min = maxHeight).verticalScroll(rememberScrollState()).padding(horizontal = Spacing.xl, vertical = Spacing.lg),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween,
             content = content,
         )
+        }
     }
 }
 
@@ -196,7 +202,7 @@ fun IncomingCallScreen(name: String?, onAnswer: () -> Unit, onDecline: () -> Uni
             CallColumn {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CallHeader(name ?: "Incoming RisiMe call", if (name == null) "Unlock RisiMe to see who's calling" else "RisiMe voice call", encrypted = false)
-                    Spacer(Modifier.height(Spacing.xxl))
+                    Spacer(Modifier.height(if (LocalCompactCall.current) Spacing.lg else Spacing.xxl))
                     CallAvatar(name, pulse = true)
                 }
                 Row(Modifier.fillMaxWidth().padding(vertical = Spacing.xl), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -273,18 +279,18 @@ fun InCallScreen(
             CallColumn {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CallHeader(ui.name, ui.status, encrypted = ui.verified)
-                    Spacer(Modifier.height(Spacing.xxl))
+                    Spacer(Modifier.height(if (LocalCompactCall.current) Spacing.lg else Spacing.xxl))
                     if (video == null) CallAvatar(ui.name, pulse = false)
                 }
                 if (!ui.ended) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = Spacing.xl)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = Spacing.lg)) {
                         Surface(
                             shape = RoundedCornerShape(32.dp),
                             color = Color.Black.copy(alpha = 0.18f),
                             contentColor = Color.White,
                         ) {
                             Row(
-                                Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.lg),
+                                Modifier.padding(horizontal = Spacing.sm, vertical = if (LocalCompactCall.current) Spacing.md else Spacing.lg),
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.Top,
                             ) {
@@ -299,7 +305,7 @@ fun InCallScreen(
                                 )
                             }
                         }
-                        Spacer(Modifier.height(Spacing.xl))
+                        Spacer(Modifier.height(if (LocalCompactCall.current) Spacing.lg else Spacing.xl))
                         RoundAction("End call", RisiIcons.CallEnd, Red, onEnd)
                     }
                 } else {
