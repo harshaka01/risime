@@ -6,6 +6,7 @@ defmodule RisiMe.AgentTreeTest do
   (with the test-only NIFs) isn't built (`scripts/build-mls-nif`).
   """
   use RisiMeWeb.ChannelCase, async: false
+  use Oban.Testing, repo: RisiMe.Repo
 
   import Ecto.Query
   import ExUnit.CaptureLog
@@ -13,6 +14,7 @@ defmodule RisiMe.AgentTreeTest do
   import RisiMe.MLSHelpers, only: [with_attestation_key: 1]
   import RisiMe.GroupHelpers
   import RisiMe.TabsHelpers, only: [tabs_device!: 1]
+  import RisiMe.RisiHelpers, only: [fake_llm!: 1, llm_requests: 0, ref_of: 2]
 
   alias RisiMe.Agent.{ConversationSup, Inbox, KeyPackages, Mls, Transcript}
   alias RisiMe.Agent.Mls.Nif
@@ -38,7 +40,8 @@ defmodule RisiMe.AgentTreeTest do
       risi_mls_kek: Base.encode64(:crypto.strong_rand_bytes(32)),
       risi_data_key: Base.encode64(:crypto.strong_rand_bytes(32)),
       risi_hold_ms: 300,
-      risi_retry_ms: 50
+      risi_retry_ms: 50,
+      risi_sender: RisiMe.Agent.Send
     ]
 
     old = for {k, _} <- env, do: {k, Application.fetch_env(:risime, k)}
@@ -368,6 +371,7 @@ defmodule RisiMe.AgentTreeTest do
   test "Private never reaches the agent (canary), even when an event is forced into its inbox",
        ctx do
     canary = "CANARY-" <> Ecto.UUID.generate()
+    fake_llm!(fn _, _ -> %{"commitments" => []} end)
     {og, _gid} = start_official!(ctx)
 
     log =
@@ -462,6 +466,104 @@ defmodule RisiMe.AgentTreeTest do
     refute log =~ canary
     # Nothing of the Private chat reached the Official buffer either.
     refute Enum.any?(Transcript.list(og), &String.contains?(&1.plaintext, canary))
+
+    # S6/S7: no Risi job names the Private conversation, and whatever jobs exist run without the
+    # canary ever reaching the model or a Risi table.
+    jobs = all_enqueued(worker: RisiMe.Workers.Risi)
+    refute Enum.any?(jobs, &(&1.args["conv"] == ctx.private))
+    for j <- jobs, do: perform_job(RisiMe.Workers.Risi, j.args)
+    refute inspect(llm_requests()) =~ canary
+
+    for t <- ~w(risi_commitments risi_facts risi_chat_state oban_jobs) do
+      %{rows: rows} = Repo.query!("SELECT * FROM #{t}")
+      refute inspect(rows) =~ canary
+    end
+  end
+
+  test "S6/S7 end to end: a promise becomes a Risi card the members decrypt; ✓ over MLS confirms it",
+       ctx do
+    {og, gid} = start_official!(ctx)
+    risi = ctx.risi
+    line = "I'll send the revised quote to Kamal by Friday 5pm"
+
+    fake_llm!(fn "commitments", body ->
+      %{
+        "commitments" => [
+          %{
+            "text" => "Send the revised quote",
+            "owner" => ref_of(body, "Harsha"),
+            "counterparts" => [ref_of(body, "Kamal")],
+            "due_local" => "#{Date.add(Date.utc_today(), 3)}T17:00",
+            "due_text" => "by Friday 5pm",
+            "source" => [ref_of(body, line)],
+            "confidence" => 0.92
+          }
+        ]
+      }
+    end)
+
+    {m1, _} = send_human!(ctx, og, gid, line)
+
+    eventually(fn ->
+      match?([%{args: %{"kind" => "extract"}}], all_enqueued(worker: RisiMe.Workers.Risi))
+    end)
+
+    [job] = all_enqueued(worker: RisiMe.Workers.Risi)
+    assert job.args == %{"kind" => "extract", "conv" => og}
+    assert :ok = perform_job(RisiMe.Workers.Risi, job.args)
+
+    # The card arrives as an ordinary MLS message from Risi's device.
+    card_ev = ctx.a.user.id |> risi_messages(risi) |> List.last()
+    assert card_ev["data"]["from_device"] == ctx.risi_dev
+    assert %{"type" => "text", "body" => body, "risi" => card} = decrypt!(ctx.a_h, gid, card_ev)
+    assert body =~ "Harsha will: Send the revised quote"
+    assert card["kind"] == "commitment" and card["state"] == "proposed"
+    assert card["owner"] == ctx.a.user.id and card["counterpart"] == [ctx.b.user.id]
+    assert card["source_message_ids"] == [m1]
+    assert is_binary(card["call_ref"])
+
+    # ✓ from the owner, as an MLS application message (risi_action) in Official.
+    action =
+      Jason.encode!(%{
+        v: 1,
+        type: "risi_action",
+        target: card["commitment_id"],
+        action: "confirm",
+        edit: nil
+      })
+
+    {:ok, ct, _} = Nif.encrypt(ctx.a_h, gid, action)
+
+    {:ok, %{message_id: am}} =
+      Messaging.send(
+        ctx.a.user.id,
+        %{
+          "conversation_id" => og,
+          "client_msg_id" => Ecto.UUID.generate(),
+          "ciphertext" => Base.encode64(ct),
+          "generation" => 1,
+          "epoch" => Groups.epoch(og)
+        },
+        device_id: ctx.a_dev
+      )
+
+    args = %{"kind" => "action", "conv" => og, "message_id" => am, "user_id" => ctx.a.user.id}
+    eventually(fn -> all_enqueued(worker: RisiMe.Workers.Risi, args: args) != [] end)
+    assert :ok = perform_job(RisiMe.Workers.Risi, args)
+
+    up_ev = ctx.a.user.id |> risi_messages(risi) |> List.last()
+    assert %{"risi" => up} = decrypt!(ctx.a_h, gid, up_ev)
+    assert up["kind"] == "commitment_update" and up["state"] == "confirmed"
+    assert up["by"] == ctx.a.user.id
+    assert %{state: "confirmed"} = Repo.get(RisiMe.Agent.Commitment, card["commitment_id"])
+
+    # Official off: everything Risi derived from the chat is gone at once.
+    {200, _} =
+      api(:patch, "/api/v1/chats/#{ctx.private}", ctx.a.token, %{"official" => "off"}, ctx.a_dev)
+
+    assert Repo.get(RisiMe.Agent.Commitment, card["commitment_id"]) == nil
+    assert Repo.all(from f in RisiMe.Agent.Fact, where: f.conversation_id == ^og) == []
+    assert Transcript.list(og) == []
   end
 
   test "a Welcome into another conversation's MLS group is purged at once (logged)", ctx do

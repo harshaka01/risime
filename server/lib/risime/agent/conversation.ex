@@ -9,7 +9,8 @@ defmodule RisiMe.Agent.Conversation do
   * **Commits** (`mls_commit`): applied in epoch order; a gap is filled from the server's commit
     log (§12.8 catch-up, `RisiMe.MLS.commits_since/4`); a commit that removes Risi purges.
   * **Application messages** (`message`): `process_detailed`; the plaintext of an active human
-    member's message goes **only** to `RisiMe.Agent.Transcript` (the sealed 24-h buffer).
+    member's message goes **only** to `RisiMe.Agent.Transcript` (the sealed 24-h buffer); then
+    `RisiMe.Agent.Secretary.on_message/2` enqueues id-only jobs (extraction, requests, actions).
   * **Removal:** `purge_group` and the conversation's buffer, then the process stops.
   * **§12.8 rejoin fallback:** when the log can't bridge the gap (or the state is unusable) the
     local group is purged and `RisiMe.Groups.rejoin/3` asks the members for a re-add (at most
@@ -213,13 +214,10 @@ defmodule RisiMe.Agent.Conversation do
     member = Groups.member(state.conv, u)
 
     if u == data["from"] and member != nil and member.state == "active" and member.kind == "user" do
-      :ok =
-        Transcript.put(state.conv, %{
-          message_id: data["message_id"],
-          sender_id: u,
-          sender_device: d,
-          plaintext: pt
-        })
+      m = %{message_id: data["message_id"], sender_id: u, sender_device: d, plaintext: pt}
+      :ok = Transcript.put(state.conv, m)
+      # S6/S7: the secretary only enqueues id-only jobs here; no model call, no send.
+      RisiMe.Agent.Secretary.on_message(state.conv, m)
     end
 
     {:ok, state}
@@ -308,8 +306,9 @@ defmodule RisiMe.Agent.Conversation do
     for g <- Enum.uniq([gen, max(gen - 1, 1)]),
         do: Mls.call(&Nif.purge_group(&1, gid(state, g)))
 
-    Transcript.purge(state.conv)
-    Logger.info("Risi left #{state.conv} (#{why}): MLS state and buffer purged")
+    # The buffer and everything derived from it (§24.4, §24.12).
+    RisiMe.Agent.Secretary.forget(state.conv)
+    Logger.info("Risi left #{state.conv} (#{why}): MLS state, buffer and derived data purged")
     :ok
   end
 

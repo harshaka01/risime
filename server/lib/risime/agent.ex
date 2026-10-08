@@ -1,7 +1,8 @@
 defmodule RisiMe.Agent do
   @moduledoc """
   The Risi agent tree: Risi's MLS member client inside the server (contract v1.24 §24.11,
-  decisions 065, 066, 067; server S5). No model calls yet (S6).
+  decisions 065, 066, 067; server S5), and its stage-1 secretary (S6/S7:
+  `RisiMe.Agent.Secretary`, `RisiMe.Agent.LLM`, `RisiMe.Agent.LearningLog`).
 
   ## When it runs
   `RisiMe.Agent.Supervisor` is started by the application only when **all** of these hold
@@ -132,11 +133,20 @@ defmodule RisiMe.Agent do
   end
 
   @doc """
-  After Official was turned off (§24.4): delete what Risi holds for the conversation now (its
-  buffer rows; facts and jobs from S6 on). Its MLS state goes when the removal commit lands.
+  After Official was turned off (§24.4): delete what Risi holds for the conversation now: its
+  buffer rows, commitments, facts (with their embeddings) and pending jobs
+  (`RisiMe.Agent.Secretary.forget/1`), and run it once more 10 minutes later in case a job that
+  was already running wrote something (§24.4: within 1 hour). Its MLS state goes when the removal
+  commit lands.
   """
   def forget(conv) do
-    RisiMe.Agent.Transcript.purge(conv)
+    :ok = RisiMe.Agent.Secretary.forget(conv)
+
+    %{"kind" => "forget", "conv" => conv}
+    |> RisiMe.Workers.Risi.new(queue: :risi_timers, schedule_in: 600)
+    |> Oban.insert()
+
+    :ok
   rescue
     e -> Logger.warning("Risi forget failed: #{Exception.message(e)}")
   end

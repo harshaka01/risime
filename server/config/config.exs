@@ -56,7 +56,18 @@ config :risime, :push_sender, nil
 config :risime, Oban,
   engine: Oban.Engines.Basic,
   repo: RisiMe.Repo,
-  queues: [maintenance: 1, groups: 5, messaging: 5, history: 5],
+  # v1.24 S6/S7 (§24.11–§24.13): Risi's model work (`risi`: extraction, `risi_requests`: @Risi
+  # requests) and its timers/actions (`risi_timers`); the global 16-in-flight cap is
+  # RisiMe.Agent.LLM's.
+  queues: [
+    maintenance: 1,
+    groups: 5,
+    messaging: 5,
+    history: 5,
+    risi: 2,
+    risi_requests: 2,
+    risi_timers: 2
+  ],
   plugins: [
     # Completed/cancelled/discarded jobs are deleted after 7 days.
     {Oban.Plugins.Pruner, max_age: 7 * 24 * 60 * 60},
@@ -70,7 +81,9 @@ config :risime, Oban,
        # v1.15 §17.11: history requests are kept 8 days after creation.
        {"29 3 * * *", RisiMe.Workers.HistoryTimer, args: %{"kind" => "prune"}},
        # v1.21 §12.12.6: hourly stale-leaf sweep (cleanup ops).
-       {"23 * * * *", RisiMe.Workers.StaleLeaves}
+       {"23 * * * *", RisiMe.Workers.StaleLeaves},
+       # v1.24 §24.11: Risi's 09:00-local digests (every 15 min covers :30 and :45 zones).
+       {"*/15 * * * *", RisiMe.Workers.Risi, args: %{"kind" => "digest_sweep"}}
      ]}
   ]
 

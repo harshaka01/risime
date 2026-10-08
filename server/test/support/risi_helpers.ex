@@ -1,9 +1,42 @@
+defmodule RisiMe.Agent.TestSender do
+  @moduledoc """
+  Test stand-in for `RisiMe.Agent.Send` (`config :risime, :risi_sender`): applies the same
+  §24.5 checks, then records the post and sends `{:risi_post, conv, body, risi}` to the pid in
+  `:risi_test_pid` (if any). Each post gets a fresh TimeUUID message id.
+  """
+  def text(conv, body, risi) do
+    cond do
+      not RisiMe.Agent.official?(conv) ->
+        {:error, :private_tab}
+
+      not RisiMe.Agent.may_act?(conv) ->
+        {:error, :not_member}
+
+      true ->
+        if pid = Application.get_env(:risime, :risi_test_pid),
+          do: send(pid, {:risi_post, conv, body, risi})
+
+        {:ok,
+         %{
+           message_id: RisiMe.TimeUUID.generate(),
+           conversation_id: conv,
+           server_ts: DateTime.utc_now()
+         }}
+    end
+  end
+end
+
 defmodule RisiMe.RisiHelpers do
   @moduledoc """
   v1.24 S6/S7 test helpers: a fake `risi-l1` (a `Req.Test` stub that answers with scripted,
   schema-valid JSON and records every request body), an Official chat with Risi in it, and
   buffered member messages.
   """
+  import ExUnit.Callbacks, only: [on_exit: 1]
+
+  alias RisiMe.Agent.Transcript
+  alias RisiMe.TimeUUID
+
   @doc """
   Installs the fake model for the calling test process (`Oban.Testing.perform_job/2` runs jobs
   in it). `reply` is a function `(task_schema_name, body) -> map | {:status, n} | :timeout`.
@@ -73,5 +106,54 @@ defmodule RisiMe.RisiHelpers do
       nil -> []
       rec -> rec |> Agent.get(& &1) |> Enum.reverse()
     end
+  end
+
+  @doc """
+  RISI on (seeded, faked device), a data key, posts to the test process; returns the Official
+  group `og` (Risi an active agent member) with the given human `users` (first = admin).
+  """
+  def risi_chat!(users, opts \\ []) do
+    keys = [:risi, :risi_data_key, :risi_test_pid, :risi_extract_delay_s]
+    old = for k <- keys, do: {k, Application.fetch_env(:risime, k)}
+
+    on_exit(fn ->
+      for {k, prev} <- old do
+        case prev do
+          {:ok, v} -> Application.put_env(:risime, k, v)
+          :error -> Application.delete_env(:risime, k)
+        end
+      end
+    end)
+
+    %{user_id: risi} = RisiMe.TabsHelpers.risi_on!(0)
+    Application.put_env(:risime, :risi_data_key, Base.encode64(:crypto.strong_rand_bytes(32)))
+    Application.put_env(:risime, :risi_test_pid, self())
+
+    members =
+      users
+      |> Enum.with_index()
+      |> Enum.map(fn {u, i} -> {u.id, if(i == 0, do: "admin", else: "member")} end)
+
+    chat_id = Keyword.get(opts, :chat_id, "grp:" <> Ecto.UUID.generate())
+    RisiMe.TabsHelpers.official_group!(chat_id, members, agents: [risi])
+  end
+
+  @doc "Buffers a `text` message from `user` (as `Agent.Conversation` would) and returns its id."
+  def say!(conv, user, text, at \\ nil) do
+    id = if at, do: TimeUUID.at(at), else: TimeUUID.generate()
+    pt = Jason.encode!(%{"v" => 1, "type" => "text", "body" => text})
+    m = %{message_id: id, sender_id: user.id, sender_device: nil, plaintext: pt}
+    :ok = Transcript.put(conv, m)
+    RisiMe.Agent.Secretary.on_message(conv, m)
+    id
+  end
+
+  @doc "Buffers any envelope from `user` and hands it to the secretary; returns its id."
+  def envelope!(conv, user, env) do
+    id = TimeUUID.generate()
+    m = %{message_id: id, sender_id: user.id, sender_device: nil, plaintext: Jason.encode!(env)}
+    :ok = Transcript.put(conv, m)
+    RisiMe.Agent.Secretary.on_message(conv, m)
+    id
   end
 end

@@ -104,8 +104,13 @@ config :risime, :blob_guard, media_total_cache_ms: 0
 # tree; the agent tree tests (test/risime/agent/) turn this check on.
 config :risime, :risi_agent_check, false
 
-# v1.24 S6: Risi's model only ever through a Req.Test stub (RisiMe.RisiHelpers).
+# v1.24 S6/S7: Risi's model only ever through a Req.Test stub (RisiMe.RisiHelpers), Risi's
+# posts captured by RisiMe.Agent.TestSender (the agent tree tests switch back to Agent.Send).
 config :risime, :risi_llm,
   url: "http://127.0.0.1:8100/v1",
   req_options: [plug: {Req.Test, RisiMe.Agent.LLM.Local}],
   fallback: false
+
+config :risime, :risi_sender, RisiMe.Agent.TestSender
+# Risi's own post limit is global (15 per 10 s); tests post faster than that.
+config :risime, :risi_send_limit, 10_000

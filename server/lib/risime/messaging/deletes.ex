@@ -532,9 +532,12 @@ defmodule RisiMe.Messaging.Deletes do
   end
 
   # v1.24 §24.12: a delete for everyone in an Official conversation removes Risi's buffer rows
-  # of the targets (idempotent; S6 adds the facts derived only from them).
+  # of the targets and every fact and commitment derived only from them (idempotent).
   defp drop_buffered(%{"kind" => "grp", "conversation_id" => conv}, [_ | _] = deleted) do
-    if RisiMe.Groups.Tabs.official?(conv), do: RisiMe.Agent.Transcript.delete(conv, deleted)
+    if RisiMe.Groups.Tabs.official?(conv) do
+      RisiMe.Agent.Transcript.delete(conv, deleted)
+      RisiMe.Agent.Secretary.message_deleted(conv, deleted)
+    end
   end
 
   defp drop_buffered(_plan, _deleted), do: :ok
