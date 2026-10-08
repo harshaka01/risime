@@ -47,6 +47,18 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## Run in progress (2026-10-08, orchestrator)
+Harsha said "GO UX". The plan, released one at a time through the full gate (no-regression, interop,
+upgrade with message counts; each gate step now times out after 30 min):
+1. **UX:** logo, icon and theme; WhatsApp-style layout; + attachment sheet; several photos with
+   captions; in-call screen; the dark screen after Back from a call. Then profile and group photos
+   (contract v1.17).
+2. **1:1 video calls** (contract v1.18).
+3. **Group voice, then video,** on LiveKit (contract v1.19). LiveKit media uses UDP 49500–49999 and
+   coturn shrinks to 49152–49499.
+
+Agents running: android UX, the contract proposals (v1.17–v1.19), and infra (coturn shrink, LiveKit).
+
 ## Current state (2026-10-08)
 - **Pilot:** v0.2.0-nightly.26 (versionCode 20026), live and healthy, contract v1.16. The TURN relay
   has been live since 2026-10-07 06:34 UTC (`TURN_URLS`; 3478/tcp reachable from outside).
