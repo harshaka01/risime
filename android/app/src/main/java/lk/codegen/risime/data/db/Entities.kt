@@ -624,3 +624,38 @@ data class ProfilePhotoConvEntity(
     val dirty: Boolean,
     val leaves: String,
 )
+
+/**
+ * v11 (contract v1.24 §24.9): which chat (`chat_id`) and tab each conversation belongs to. The
+ * migration fills one Private row per existing conversation (`chat_id = conversation_id`); later rows
+ * come only from the conversation's MLS `group_meta` (never from server JSON). A conversation without
+ * a row is Private with `chat_id = conversation_id`.
+ */
+@Entity(tableName = "chat_tabs", indices = [Index("chat_id")])
+data class ChatTabEntity(
+    @PrimaryKey @ColumnInfo(name = "conversation_id") val conversationId: String,
+    @ColumnInfo(name = "chat_id") val chatId: String,
+    /** "private" | "official" */
+    val tab: String,
+    /** "dm" | "group" */
+    @ColumnInfo(name = "chat_kind") val chatKind: String,
+) {
+    val official: Boolean get() = tab == TAB_OFFICIAL
+
+    companion object {
+        const val TAB_PRIVATE = "private"
+        const val TAB_OFFICIAL = "official"
+        const val KIND_DM = "dm"
+        const val KIND_GROUP = "group"
+    }
+}
+
+/** v11 (§24.9): per chat, the tab last used and the Official state last heard (`chat_event`, `GET /chats`). */
+@Entity(tableName = "chat_prefs")
+data class ChatPrefEntity(
+    @PrimaryKey @ColumnInfo(name = "chat_id") val chatId: String,
+    /** "private" | "official"; null = never chosen (the default-tab rule applies). */
+    @ColumnInfo(name = "last_tab") val lastTab: String?,
+    /** "on" | "off" | "none"; null = not known yet. */
+    @ColumnInfo(name = "official_state") val officialState: String?,
+)

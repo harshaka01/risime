@@ -26,6 +26,8 @@ class FakeMessageDao : MessageDao {
 
     override suspend fun countAll(): Int = rows.size
 
+    override suspend fun countIn(conversationId: String): Int = rows.values.count { it.conversationId == conversationId }
+
     override suspend fun insert(m: MessageEntity): Long {
         if (rows.containsKey(m.clientMsgId)) return -1
         if (m.messageId != null && rows.values.any { it.messageId == m.messageId }) return -1

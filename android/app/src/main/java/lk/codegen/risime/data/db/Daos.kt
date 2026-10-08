@@ -16,6 +16,10 @@ interface MessageDao {
     @Query("SELECT COUNT(*) FROM messages")
     suspend fun countAll(): Int
 
+    /** Rows of one conversation (the §24.14 per-conversation and per-chat upgrade counts). */
+    @Query("SELECT COUNT(*) FROM messages WHERE conversation_id = :conversationId")
+    suspend fun countIn(conversationId: String): Int
+
     /** §13.3 marker lines: move a local system row forward only (never earlier). */
     @Query(
         "UPDATE messages SET server_ts = :serverTs, local_ts = :localTs " +
@@ -176,6 +180,8 @@ interface WipeDao {
         historyProvides()
         profilePhotos()
         profilePhotoConvs()
+        chatTabs()
+        chatPrefs()
     }
 
     @Query("DELETE FROM messages")
@@ -241,6 +247,12 @@ interface WipeDao {
 
     @Query("DELETE FROM profile_photo_convs")
     suspend fun profilePhotoConvs()
+
+    @Query("DELETE FROM chat_tabs")
+    suspend fun chatTabs()
+
+    @Query("DELETE FROM chat_prefs")
+    suspend fun chatPrefs()
 }
 
 /** v7 (§15): tombstones, hidden tombstones, the delete outbox and Clear/Delete chat state. */
@@ -753,4 +765,46 @@ interface ProfilePhotoDao {
 
     @Query("DELETE FROM profile_photo_convs WHERE conversation_id = :conv")
     suspend fun deleteConv(conv: String)
+}
+
+/** v11 (§24): chat ids, tabs and per-chat tab preferences. */
+@Dao
+interface ChatTabDao {
+    @Query("SELECT * FROM chat_tabs")
+    fun all(): Flow<List<ChatTabEntity>>
+
+    @Query("SELECT * FROM chat_tabs")
+    suspend fun allNow(): List<ChatTabEntity>
+
+    @Query("SELECT * FROM chat_tabs WHERE conversation_id = :conversationId")
+    suspend fun get(conversationId: String): ChatTabEntity?
+
+    @Query("SELECT * FROM chat_tabs WHERE chat_id = :chatId")
+    suspend fun byChat(chatId: String): List<ChatTabEntity>
+
+    /** Only from the conversation's MLS `group_meta` (§24.1: tab and chat id never change after epoch 0). */
+    @Upsert
+    suspend fun upsert(t: ChatTabEntity)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfMissing(t: ChatTabEntity): Long
+
+    @Query("SELECT * FROM chat_prefs")
+    fun prefs(): Flow<List<ChatPrefEntity>>
+
+    @Query("SELECT * FROM chat_prefs WHERE chat_id = :chatId")
+    suspend fun pref(chatId: String): ChatPrefEntity?
+
+    @Upsert
+    suspend fun upsertPref(p: ChatPrefEntity)
+
+    @androidx.room.Transaction
+    suspend fun setLastTab(chatId: String, tab: String) {
+        upsertPref((pref(chatId) ?: ChatPrefEntity(chatId, null, null)).copy(lastTab = tab))
+    }
+
+    @androidx.room.Transaction
+    suspend fun setOfficialState(chatId: String, state: String) {
+        upsertPref((pref(chatId) ?: ChatPrefEntity(chatId, null, null)).copy(officialState = state))
+    }
 }

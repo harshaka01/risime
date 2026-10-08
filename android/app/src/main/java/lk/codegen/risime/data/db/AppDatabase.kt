@@ -33,6 +33,8 @@ import androidx.sqlite.execSQL
         HistoryProvideEntity::class,
         ProfilePhotoEntity::class,
         ProfilePhotoConvEntity::class,
+        ChatTabEntity::class,
+        ChatPrefEntity::class,
     ],
     version = AppDatabase.VERSION,
     exportSchema = true,
@@ -53,16 +55,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun history(): HistoryDao
     abstract fun profilePhotos(): ProfilePhotoDao
     abstract fun backup(): BackupDao
+    abstract fun chatTabs(): ChatTabDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 10
+        const val VERSION = 11
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
@@ -263,6 +266,27 @@ object Migration9To10 : Migration(9, 10) {
         "ALTER TABLE `groups` ADD COLUMN `announced_name` TEXT",
         "CREATE TABLE IF NOT EXISTS `profile_photos` (`user_id` TEXT NOT NULL, `ver` INTEGER NOT NULL, `blob_id` TEXT, `size` INTEGER NOT NULL, `sha256` TEXT, `key_sealed` BLOB, `plain_size` INTEGER NOT NULL, `w` INTEGER NOT NULL, `h` INTEGER NOT NULL, `fetched` INTEGER NOT NULL, `mime` TEXT NOT NULL DEFAULT 'image/jpeg', `checked_at` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`user_id`))",
         "CREATE TABLE IF NOT EXISTS `profile_photo_convs` (`conversation_id` TEXT NOT NULL, `pending_ver` INTEGER, `due_at` INTEGER NOT NULL, `dirty` INTEGER NOT NULL, `leaves` TEXT NOT NULL, PRIMARY KEY(`conversation_id`))",
+    )
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/**
+ * v10 → v11 (contract v1.24 §24.9, hard rule 9): the chat-tab tables. Only inserts: every existing
+ * conversation (messages, groups, Clear/Delete chat state) becomes its chat's Private tab with
+ * `chat_id = conversation_id`. No existing row is changed or removed.
+ */
+object Migration10To11 : Migration(10, 11) {
+    val SQL = listOf(
+        "CREATE TABLE IF NOT EXISTS `chat_tabs` (`conversation_id` TEXT NOT NULL, `chat_id` TEXT NOT NULL, `tab` TEXT NOT NULL, `chat_kind` TEXT NOT NULL, PRIMARY KEY(`conversation_id`))",
+        "CREATE INDEX IF NOT EXISTS `index_chat_tabs_chat_id` ON `chat_tabs` (`chat_id`)",
+        "CREATE TABLE IF NOT EXISTS `chat_prefs` (`chat_id` TEXT NOT NULL, `last_tab` TEXT, `official_state` TEXT, PRIMARY KEY(`chat_id`))",
+        "INSERT OR IGNORE INTO `chat_tabs` (`conversation_id`, `chat_id`, `tab`, `chat_kind`) " +
+            "SELECT c, c, 'private', CASE WHEN c LIKE 'grp:%' THEN 'group' ELSE 'dm' END FROM (" +
+            "SELECT `conversation_id` AS c FROM `messages` UNION SELECT `conversation_id` FROM `groups` UNION SELECT `conversation_id` FROM `chat_state`" +
+            ") WHERE c IS NOT NULL AND c != ''",
     )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
