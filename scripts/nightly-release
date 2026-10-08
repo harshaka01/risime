@@ -22,6 +22,9 @@ if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then
 fi
 git diff --quiet && git diff --cached --quiet || { echo "working tree not clean"; exit 1; }
 git pull -q --rebase origin main
+# Every gate step has a hard timeout (default 30 min, GATE_STEP_TIMEOUT seconds); a hung step fails the release.
+STEP_T="${GATE_STEP_TIMEOUT:-1800}"
+step() { timeout -k 60 "$STEP_T" "$@" || { rc=$?; [ "$rc" -ge 124 ] && echo "GATE STEP TIMED OUT after ${STEP_T}s: $*"; return "$rc"; }; }
 
 REQ=(); EXPLICIT=""; PUBLISH=1
 while [ $# -gt 0 ]; do case "$1" in
@@ -48,7 +51,7 @@ trap '[ "$RELEASED" = 1 ] || git checkout -q -- VERSION 2>/dev/null || true' EXI
 echo "==> server gate"
 # Own test DB and keyspace (risime_test_release): other sessions' concurrent `mix test` runs can't
 # truncate or collide with the gate's data.
-(cd server && $M mix format --check-formatted && $M mix compile --warnings-as-errors && MIX_TEST_PARTITION=_release $M mix test)
+step bash -c "cd server && $M mix format --check-formatted && $M mix compile --warnings-as-errors && MIX_TEST_PARTITION=_release $M mix test"
 # Firebase config (decision 026): Harsha's file lives outside git; copy it in when present.
 if [ -f "$HOME/risime-keys/google-services.json" ]; then
   install -m 600 "$HOME/risime-keys/google-services.json" android/app/google-services.json
@@ -61,12 +64,12 @@ echo "==> android gate + release build"
 # E2EE: pin the pilot attestation public key (decision 032; public by design, committed).
 PIN_FILE=infra/pilot/attestation-public.jwk
 PIN_ARGS=(); [ -f "$PIN_FILE" ] && PIN_ARGS=("-Prisime.mlsPinnedKeys=$(tr -d '\n' < "$PIN_FILE")")
-(cd android && $M ./gradlew --no-configuration-cache "${PIN_ARGS[@]}" assembleDebug testDebugUnitTest assembleRelease)
+(cd android && step $M ./gradlew --no-configuration-cache "${PIN_ARGS[@]}" assembleDebug testDebugUnitTest assembleRelease)
 
 echo "==> live interop (scripts/interop: real Android clients vs a temp server from this checkout)"
 # Own interop instance (ports 4200/4899, DB/keyspace risime_interop_rel): other sessions may be
 # running scripts/interop on the default ports at the same time.
-INTEROP_INSTANCE=_rel INTEROP_PORT=4200 INTEROP_JWKS_PORT=4899 RISIME_GRADLE_ARGS="${PIN_ARGS[*]}" scripts/interop
+INTEROP_INSTANCE=_rel INTEROP_PORT=4200 INTEROP_JWKS_PORT=4899 RISIME_GRADLE_ARGS="${PIN_ARGS[*]}" step scripts/interop
 
 APK=android/app/build/outputs/apk/release/app-release.apk
 BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
@@ -118,7 +121,7 @@ fi
 if [ "$REUSED" = 0 ] && [ -z "${UPGRADE_GATE_OVERRIDE:-}" ] && [ -z "${UPGRADE_TEST_RESULT:-}" ]; then
   # spark2 runs it unattended in redroid (decision 045): upgrade-test starts and removes the container.
   if UT_WHY="$(scripts/android-target check 2>&1)"; then
-    UPGRADE_INSTANCE=_rel UPGRADE_PORT=4120 scripts/upgrade-test --target redroid --new "$APK" --version "$next" --commit "$UT_COMMIT" || { echo "UPGRADE TEST FAILED: not releasing"; exit 1; }
+    UPGRADE_INSTANCE=_rel UPGRADE_PORT=4120 step scripts/upgrade-test --target redroid --new "$APK" --version "$next" --commit "$UT_COMMIT" || { echo "UPGRADE TEST FAILED: not releasing"; exit 1; }
   else
     echo "==> no redroid here: $UT_WHY"
   fi
