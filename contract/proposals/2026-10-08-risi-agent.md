@@ -1,7 +1,7 @@
 # Proposal: §24 The Risi agent (v1.24): Risi v1, stage 0.5
 
 Status: **proposed, waiting for Harsha** (golden rule 1). Root writes PROTOCOL §24 after approval.
-Plan by the orchestrator (2026-10-08). Server placement goes into decision 064 once approved (063 is the push watchdog).
+Plan by the orchestrator (2026-10-08). Server placement goes into decision 065 once approved (063 push watchdog, 064 token storage).
 
 ## Goal
 "Risi, summarise" in a group: Risi joins as a **visible, encrypted MLS member** and posts a summary
@@ -68,7 +68,7 @@ No chat text leaves spark2. Every model call goes into the Cassandra learning lo
 - `envelope_risi_summary.json`
 - agent cases in `group_policy_cases.json`
 
-## Server (decision 064 draft)
+## Server (decision 065 draft)
 **Placement**
 - The agent runs in the same release, in an isolated `RisiMe.Agent` supervision tree.
 - It talks to the delivery service only through the context functions a channel uses.
