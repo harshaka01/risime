@@ -119,6 +119,10 @@ fn exporter_output_never_crosses_the_ffi() {
     let section = &src[src
         .find("// Group call frame keys (contract v1.19")
         .unwrap()..];
+    // Up to the next section (encrypted backups, v1.22, checked in tests/backup.rs).
+    let section = &section[..section
+        .find("// Encrypted backups (contract v1.22")
+        .unwrap_or(section.len())];
     let mut exported: Vec<&str> = section
         .lines()
         .filter_map(|l| {

@@ -18,6 +18,9 @@
 #  7. Call 9, video (§19): CAMERA granted, "Video call", B's "Incoming video call" answered in the
 #     call screen, VP8 frames rising both ways, B's camera off/on and Home (A shows B's avatar), hang
 #     up → "Video call · m:ss" on both; call 10 voice right after; call 11 video relay-only (TURN=1).
+#     P0-3: every video call checks audio alone (audio_ok: the debug stats' audio_sent/audio_recv, kind
+#     audio, growing on both phones) and Telecom's route line (`calls: route`, the speaker on redroid);
+#     call 12 is a video call B → A answered in the call screen, call 13 one answered from the notification.
 # Prints "CALLTEST PASS|FAIL <step>" lines and "CALLTEST OK" at the end. Never touches :4000.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -276,15 +279,48 @@ call_once() {  # $1 label
   [ -n "$m" ] || fail "$1: media never connected directly (host/prflx pair) with DTLS-SRTP on both"
   pass "$1: answered via the Answer intent; media on the expected path, DTLS connected, SRTP on both (${m##*call stats: })"
   # Audio must flow BOTH ways (nightly.21: only the caller was heard): outbound-rtp bytesSent and
-  # inbound-rtp bytesReceived grow on both phones while the call is up.
+  # inbound-rtp bytesReceived of kind audio (P0-3: not summed with video) grow on both phones.
   sleep 6
-  local d line sent recv
+  local d sent recv
   for d in A B; do
-    DEV=$d; line="$(A logcat -d 2>/dev/null | grep -E 'call stats: .*sent=[0-9]+ recv=[0-9]+' | tail -1 || true)"
-    sent="$(sed -nE 's/.*sent=([0-9]+).*/\1/p' <<<"$line")"; recv="$(sed -nE 's/.*recv=([0-9]+).*/\1/p' <<<"$line")"
-    [ "${sent:-0}" -gt 0 ] && [ "${recv:-0}" -gt 0 ] || fail "$1: one-way audio: $d sent=${sent:-?} recv=${recv:-?} bytes"
+    DEV=$d; sent="$(audio_of sent)"; recv="$(audio_of recv)"
+    [ "${sent:-0}" -gt 0 ] && [ "${recv:-0}" -gt 0 ] || fail "$1: one-way audio: $d audio_sent=${sent:-?} audio_recv=${recv:-?} bytes"
   done
-  pass "$1: audio flows both ways (bytesSent and bytesReceived > 0 on caller and callee)"
+  pass "$1: audio flows both ways (audio bytesSent and bytesReceived > 0 on caller and callee)"
+}
+# P0-3: the latest audio-only counter (kind == audio) from the debug stats line on $DEV; $1 sent|recv.
+audio_of() { A logcat -d 2>/dev/null | grep -E 'call stats: .*audio_sent=[0-9]+ audio_recv=[0-9]+' | tail -1 | sed -nE "s/.*audio_$1=([0-9]+).*/\1/p"; }
+# audio_ok <label>: on BOTH phones audio_sent and audio_recv are > 0 and grow over ~5 s (two stats lines).
+audio_ok() {
+  local d s1A s1B r1A r1B s1 r1 s2 r2
+  DEV=A; s1A="$(audio_of sent)"; r1A="$(audio_of recv)"; DEV=B; s1B="$(audio_of sent)"; r1B="$(audio_of recv)"
+  sleep 5
+  for d in A B; do
+    DEV=$d; s2="$(audio_of sent)"; r2="$(audio_of recv)"
+    if [ "$d" = A ]; then s1="$s1A"; r1="$r1A"; else s1="$s1B"; r1="$r1B"; fi
+    [ "${s1:-0}" -gt 0 ] && [ "${r1:-0}" -gt 0 ] && [ "${s2:-0}" -gt "${s1:-0}" ] && [ "${r2:-0}" -gt "${r1:-0}" ] \
+      || fail "$1: no audio on $d (audio_sent ${s1:-none}→${s2:-none}, audio_recv ${r1:-none}→${r2:-none})"
+    echo "    [$d] audio_sent $s1→$s2 audio_recv $r1→$r2"
+  done
+  pass "$1: audio_ok: audio_sent and audio_recv > 0 and growing on both phones"
+}
+# route_ok <label>: Telecom's route line (`calls: route current=<T> available=<T,…>`) on both phones lists
+# routes, and a video call without a headset is on the speaker (redroid lists only SPEAKER).
+route_ok() {
+  local d line cur av
+  for d in A B; do
+    DEV=$d; line=""; cur=""; av=""
+    for _ in $(seq 1 10); do
+      line="$(A logcat -d 2>/dev/null | grep -E 'calls: route current=' | tail -1 || true)"
+      av="$(sed -nE 's/.*available=([A-Z_,]*).*/\1/p' <<<"$line")"; cur="$(sed -nE 's/.*current=([A-Z_]+).*/\1/p' <<<"$line")"
+      [ -n "$av" ] && { [[ "$av" == *BLUETOOTH* || "$av" == *WIRED* || "$cur" == SPEAKER ]]; } && break
+      sleep 1
+    done
+    [ -n "$av" ] || fail "$1: $d has no Telecom route list (${line:-no route line})"
+    [[ "$av" == *BLUETOOTH* || "$av" == *WIRED* || "$cur" == SPEAKER ]] || fail "$1: $d's video call is not on the speaker (current=$cur available=$av)"
+    echo "    [$d] route current=$cur available=$av"
+  done
+  pass "$1: Telecom lists the routes and the video call is on the speaker on both phones"
 }
 # Decision 054: no call left behind: no RisiMe call in Telecom (a ghost self-managed call held
 # MODE_IN_COMMUNICATION in nightly.16 and made every later call "busy") and no communication mode.
@@ -331,8 +367,8 @@ sleep 3
 # foreground service (microphone type) with its ongoing notification and audio both ways; the
 # notification reopens the call screen; "Hang up" from the shade ends it everywhere and releases
 # the microphone.
-bytes_of() {  # $1 sent|recv: the latest debug stats value on $DEV
-  A logcat -d 2>/dev/null | grep -E 'call stats: .*sent=[0-9]+ recv=[0-9]+' | tail -1 | sed -nE "s/.*$1=([0-9]+).*/\1/p"
+bytes_of() {  # $1 sent|recv: the latest debug stats AUDIO value on $DEV (P0-3: video not counted)
+  audio_of "$1"
 }
 uid_of() { A shell pm list packages -U "$PKG" 2>/dev/null | sed -nE "s/.*package:$PKG uid:([0-9]+).*/\1/p" | head -1; }
 DEV=B; open_chat "ZZ Call A" || fail "B: DM"; DEV=A; open_chat "ZZ Call B" || fail "A: DM"
@@ -459,6 +495,8 @@ video_call() {  # $1 label
   DEV=A; has "End call" || fail "$1: A has no call screen"
   peer_avatar && fail "$1: A shows B's avatar although B's video flows"
   pass "$1: answered in the call screen with the camera on; VP8 frames decoded and rising on both phones (${m##*call stats: })"
+  audio_ok "$1"
+  route_ok "$1"
   if [ "${VIDEO_RATE:-0}" = 1 ]; then  # relay-only: the video bitrate each way through TURN
     local s1 s2
     for d in A B; do DEV=$d; s1="$(vsent)"; sleep 5; s2="$(vsent)"
@@ -486,6 +524,7 @@ video_call() {  # $1 label
   DEV=A; wait_for "camera is off" 10 || fail "$1: A doesn't show B's avatar after B went Home"
   frames_stop "$1 (B at Home)"
   pass "$1: B pressed Home: B's camera stopped (no video sent, audio goes on), A shows B's avatar"
+  audio_ok "$1 (B at Home)"
   DEV=B; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2
   tap "Call in progress — tap to return" || fail "$1: B has no return-to-call bar"
   wait_for "End call" 10 || fail "$1: B's call screen didn't reopen"
@@ -498,6 +537,43 @@ video_call() {  # $1 label
 }
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
 video_call "call 9 (video)"
+# P0-3: video calls the other way round and answered from the notification (Harsha's phones: no sound,
+# the speaker button inactive). video_simple <label> <caller> <callee> <screen|notification>.
+video_simple() {
+  local label="$1" caller="$2" callee="$3" how="$4" ok="" m="" d
+  logcat_ok "before $label"
+  for DEV in A B; do A shell pm grant "$PKG" android.permission.CAMERA 2>/dev/null || true; A logcat -c; done
+  DEV=$caller; for _ in $(seq 1 20); do tap "Video call" && { ok=1; break; }; sleep 2; done
+  [ -n "$ok" ] || fail "$label: $caller's Video call button never became enabled"
+  sleep 1
+  has "already in a call" && fail "$label: $caller says \"You're already in a call\""
+  DEV=$callee; wait_ring 30 || fail "$label: $callee never rang"
+  if [ "$how" = screen ]; then
+    tap "Incoming call — tap to answer" || fail "$label: $callee has no incoming-call bar"
+    wait_for "Incoming video call" 10 || fail "$label: $callee's call screen doesn't say \"Incoming video call\""
+    tap "Answer" || fail "$label: no in-screen Answer"
+  else
+    answer_intent || fail "$label: no Answer action on the incoming-call notification"
+  fi
+  for _ in $(seq 1 30); do DEV=A; m="$(media_ok)"; [ -n "$m" ] && { DEV=B; [ -n "$(media_ok)" ] && break; }; m=""; sleep 1; done
+  [ -n "$m" ] || fail "$label: media never connected ($MEDIA_PAIR) with DTLS-SRTP on both"
+  # The notification's Answer answers with the camera off (android A3): only the callee decodes video.
+  local watch="$caller $callee"; [ "$how" = screen ] || watch="$callee"
+  for d in $watch; do for _ in $(seq 1 15); do DEV=$d; [ "$(vdecoded)" -gt 0 ] 2>/dev/null && break; sleep 1; done; frames_rise "$label" "$d"; done
+  pass "$label: answered ($how); VP8 frames decoded and rising on $watch"
+  audio_ok "$label"
+  route_ok "$label"
+  DEV=$caller; tap "End call" || fail "$label: $caller has no End call button"
+  DEV=$callee; for _ in $(seq 1 20); do has "End call" || break; sleep 1; done
+  has "End call" && fail "$label: $callee still in the call after $caller hung up"
+  DEV=$caller; sleep 4; has "End call" && fail "$label: $caller still shows the call"
+  pass "$label: $caller hung up; both ended"
+  no_leftovers "$label"
+}
+DEV=B; open_chat "ZZ Call A" || fail "B: DM"; DEV=A; open_chat "ZZ Call B" || fail "A: DM"
+video_simple "call 12 (video, B calls A, answered in the call screen)" B A screen
+DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
+video_simple "call 13 (video, answered from the notification)" A B notification
 # Call 10: a voice call right after the video call still works (no camera or video state left).
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
 call_once "call 10 (voice after video)"; hang_up_a "call 10"

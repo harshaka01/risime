@@ -479,7 +479,11 @@ class WebRtcCallMedia(
                 // Debug overlay data only; release builds never log candidates or IPs (§16.9).
                 val received = all.filter { it.type == "inbound-rtp" }.mapNotNull { (it.members["bytesReceived"] as? Number)?.toLong() }.takeIf { it.isNotEmpty() }?.sum()
                 val sent = all.filter { it.type == "outbound-rtp" }.mapNotNull { (it.members["bytesSent"] as? Number)?.toLong() }.takeIf { it.isNotEmpty() }?.sum()
-                if (debug) Log.d("RisiMe", "call stats: pair=$local/$remote rtt=${pair?.members?.get("currentRoundTripTime")} dtls=${transport?.members?.get("dtlsState")} srtp=${transport?.members?.get("srtpCipher")} sent=${sent ?: 0} recv=${received ?: 0}")
+                // P0-3: audio alone (kind == audio). The sums above include video, so a video call with
+                // no audio looked healthy; the device test and the stall watchdog read these.
+                val audioRecv = all.filter { it.type == "inbound-rtp" && (it.members["kind"] ?: it.members["mediaType"]) == "audio" }.mapNotNull { (it.members["bytesReceived"] as? Number)?.toLong() }.takeIf { it.isNotEmpty() }?.sum()
+                val audioSent = all.filter { it.type == "outbound-rtp" && (it.members["kind"] ?: it.members["mediaType"]) == "audio" }.mapNotNull { (it.members["bytesSent"] as? Number)?.toLong() }.takeIf { it.isNotEmpty() }?.sum()
+                if (debug) Log.d("RisiMe", "call stats: pair=$local/$remote rtt=${pair?.members?.get("currentRoundTripTime")} dtls=${transport?.members?.get("dtlsState")} srtp=${transport?.members?.get("srtpCipher")} sent=${sent ?: 0} recv=${received ?: 0} audio_sent=${audioSent ?: 0} audio_recv=${audioRecv ?: 0}")
                 // §19.9 the debug overlay: video codec, resolution, frame rate and bitrate (no addresses).
                 if (video) {
                     val inV = all.firstOrNull { it.type == "inbound-rtp" && it.members["kind"] == "video" }
@@ -489,7 +493,7 @@ class WebRtcCallMedia(
                         "decoded=${inV?.members?.get("framesDecoded")} out ${outV?.members?.get("frameWidth")}x${outV?.members?.get("frameHeight")}@${outV?.members?.get("framesPerSecond")} sent=${outV?.members?.get("bytesSent")}"
                     if (debug) Log.d("RisiMe", "call $lastVideoStats")
                 }
-                val st = DtlsStats(transport?.members?.get("dtlsState") as? String, transport?.members?.get("srtpCipher") as? String, fp, local, remote, received)
+                val st = DtlsStats(transport?.members?.get("dtlsState") as? String, transport?.members?.get("srtpCipher") as? String, fp, local, remote, audioRecv)
                 onStats(st)
                 cont.resume(st)
             }

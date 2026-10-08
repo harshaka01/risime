@@ -969,7 +969,9 @@ defmodule RisiMeWeb.BlobsV111Test do
                  "limit" => 512 * @mib,
                  "uploads_last_hour" => 0,
                  "hourly_limit" => 40
-               }
+               },
+               # v1.22 §22.3.
+               "backup" => %{"used" => 0, "limit" => 1536 * @mib}
              }
     end
 

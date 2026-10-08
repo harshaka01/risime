@@ -5,7 +5,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -21,6 +26,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.ParameterizedRobolectricTestRunner
 import org.robolectric.annotation.Config
+
+private fun SemanticsNodeInteraction.assertStateDescription(v: String) = assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, v))
 
 /** §16 incoming and in-call screens on a small phone, in light and dark (decision 040). */
 @RunWith(ParameterizedRobolectricTestRunner::class)
@@ -84,6 +91,38 @@ class CallScreensTest(private val dark: Boolean) {
         rule.onNodeWithContentDescription("Audio output").performScrollTo().performClick()
         rule.onNodeWithText("Speaker").performClick()
         assertEquals(listOf("route=Speaker"), events)
+    }
+
+    /** P0-3: Telecom hasn't listed any route yet in an active call: the button still works (never stuck greyed out). */
+    @Test fun emptyRoutesWhileActiveKeepTheRouteButtonEnabled() {
+        var ui by mutableStateOf(InCallUi("Kamal", "0:05", endpoints = emptyList(), active = true))
+        rule.setContent { RisiMeTheme(dark = dark) { InCallScreen(ui, {}, { e -> events += "route=${e.kind}" }, {}) } }
+        rule.onNodeWithContentDescription("Audio output").performScrollTo().assertIsEnabled().performClick()
+        rule.onNodeWithContentDescription("Audio output").assertStateDescription("On")
+        rule.onNodeWithContentDescription("Audio output").performClick()
+        rule.onNodeWithContentDescription("Audio output").assertStateDescription("Off")
+        assertEquals(listOf("route=SPEAKER", "route=EARPIECE"), events)
+        // Not active yet (connecting) with no routes: nothing to toggle.
+        ui = ui.copy(active = false, status = "Connecting…")
+        rule.onNodeWithContentDescription("Audio output").assertIsNotEnabled()
+        assertTrue(routeButtonEnabled(InCallUi("K", "", endpoints = emptyList(), active = true)))
+        assertTrue(!routeButtonEnabled(InCallUi("K", "", endpoints = listOf(EndpointUi("1", "Phone", EndpointUi.Kind.EARPIECE)), active = true)))
+    }
+
+    /** P0-3: with [earpiece, speaker] the label and the On/Off state follow Telecom's current route. */
+    @Test fun earpieceAndSpeakerLabelAndState() {
+        val earpiece = EndpointUi("1", "Phone", EndpointUi.Kind.EARPIECE)
+        val speaker = EndpointUi("2", "Speaker", EndpointUi.Kind.SPEAKER)
+        var ui by mutableStateOf(InCallUi("Kamal", "0:05", endpoints = listOf(earpiece, speaker), current = earpiece, active = true))
+        rule.setContent { RisiMeTheme(dark = dark) { InCallScreen(ui, {}, { e -> events += "route=${e.name}"; ui = ui.copy(current = e) }, {}) } }
+        rule.onNodeWithContentDescription("Audio output").performScrollTo().assertIsEnabled().assertStateDescription("Off")
+        rule.onNodeWithText("Speaker").assertIsDisplayed()
+        // Telecom moved the video call to the speaker: the button shows it on.
+        ui = ui.copy(current = speaker)
+        rule.onNodeWithContentDescription("Audio output").assertStateDescription("On")
+        rule.onNodeWithContentDescription("Audio output").performClick()
+        assertEquals(listOf("route=Phone"), events)
+        rule.onNodeWithContentDescription("Audio output").assertStateDescription("Off")
     }
 
     @Test fun oneRouteDisablesThePickerAndAnEndedCallHasNoControls() {

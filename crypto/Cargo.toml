@@ -6,3 +6,9 @@ members = ["risime-mls", "risime-mls-ffi"]
 edition = "2024"
 license = "UNLICENSED"
 publish = false
+
+# Argon2id (64 MiB, t = 3) is unusably slow without optimisation; keep test builds fast.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

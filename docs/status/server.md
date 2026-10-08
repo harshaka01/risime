@@ -9,12 +9,53 @@ reinstall, §13, decision 043), **v1.11** (encrypted images, §14, decision 042)
 (deleting messages and chats, §15, decision 047), **v1.13** (1:1 voice calls, §16, decisions
 046 and 051), **v1.14** (members restore an existing member's devices, §12.4a) and **v1.15**
 (history sharing between devices, §17, decision 049), **v1.17** (profile photos, §18), **v1.18**
-(1:1 video calls, §19), **v1.19** (group calls with LiveKit, §20, decision 056) and **v1.21**
-(reinstalls without reset, stale leaves, §12.12, decision 060) are done, plus the
-group-readiness hotfix and the two §14 fixes root decided.
+(1:1 video calls, §19), **v1.19** (group calls with LiveKit, §20, decision 056), **v1.21**
+(reinstalls without reset, stale leaves, §12.12, decision 060) and **v1.22** (encrypted backups,
+§22, decision 059) are done, plus the group-readiness hotfix and the two §14 fixes root decided.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(582 tests, 1 excluded: the optional `:livekit` integration test, green against the local
+(599 tests, 1 excluded: the optional `:livekit` integration test, green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
+
+## v1.22 encrypted backups (§22) — READY
+- **Migration** `20261009110000_create_backups`: `backups` (PK `backup_id`, FK `user_id` →
+  users on delete cascade, `device_id`, `device_name` (snapshot of the device's token name at
+  commit), times, `size`, `sha256`, `schema`, `app_version`, `bk_id`, `parts jsonb[]`, `current`,
+  `expires_at`; index `(user_id, uploaded_at)`), `backup_keys` (PK/FK `user_id`, `v`, `bk_id`,
+  `record`, `updated_at`), `blobs.backup_id` (partial index). Additive; no Cassandra.
+- **Pilot env:** `BACKUPS` (optional; default on; `BACKUPS=off` stops the writes only).
+  `auth/config` reports `"backup": "on" | "off"`.
+- **Blob purpose `backup`** (`RisiMe.Blobs`): no `conversation_id` (`400`), `backup_id` and
+  `client_blob_id` required (UUIDs), rights = the switch (`503 backup_unavailable`) then
+  `X-Device-Id` (`403 invalid_device`); part cap 33 562 624 B; 60/h and 200/day from the rows; the
+  upload slots shared; quota 1.5 GiB (`:backup_quota`) = unreferenced parts + parts of current
+  backups (replaced ones don't count); counted with `media` in the disk guard; owner-only reads;
+  `expires_at` = upload + 24 h until a commit (then null; replaced: + 7 days). Idempotent replay
+  also compares `backup_id`. `GET /blobs/usage` gains `backup: {used, limit}`.
+- **`RisiMe.Backups`** / `BackupController`: `POST /backups` in the §22.3 order (switch →
+  device → body → replay of a committed `backup_id` (`200`, before everything else that follows)
+  → key (`409 no_backup_key` / `backup_key_conflict {bk_id}`) → backup device (`409
+  backup_device_mismatch {device_id, device_name}` unless `replace_device` or that device can't
+  receive: gone, superseded or unseen 30 days) → parts (`400`: own live `backup` blobs of this
+  `backup_id`, server size and hash, no duplicates, sizes add up) → caps (`413`: > 16 parts or
+  > 512 MiB) → rate (6 per 24 h from `backups` rows, `429` + `Retry-After`)), all after the body
+  inside one transaction under the per-owner blob lock, with the retention (newest 2 current;
+  older → replaced, `expires_at` + 7 d on the row and its parts; > 5 replaced → the oldest
+  deleted with its files). `GET /backups` (unexpired, newest first, `key`, `quota`). `DELETE
+  /backups` (every backup, every `backup` blob file, the key record; idempotent; works with the
+  switch off; **interpretation:** no `X-Device-Id` required, so "Reset backup key" can never be
+  stranded). `PUT /backup_key` (switch → device → shape: `v` 1, 8-byte `bk_id`, 1–2 wraps, one
+  per kind, exactly one `recovery_key`, argon2id with positive m/t/p, salt 16 / nonce 12 /
+  wrapped 48 / check 16 → `409 backup_key_conflict` only while unexpired backups exist → 10 per
+  day); `GET /backup_key` (30 per hour, `404 no_backup_key`).
+- **Interpretation (no proposal):** "replaced backups … are pruned oldest first before a quota
+  refusal" — since replaced backups never count against the quota, pruning them can't avoid a
+  refusal; the server keeps them (the 7-day safety net) and never prunes on a refusal.
+- **Sweep:** `Blobs.cleanup/1` (hourly `BlobCleanup`) also deletes expired `backups` rows; their
+  part blobs expire with them. A deleted user's backups and key go by FK cascade (files by the
+  weekly orphan pass, as for every blob).
+- Tests: `test/risime_web/controllers/backups_v122_test.exs` (13), the v1.22 describe in
+  `test/contract/examples_test.exs` (4, all 19 examples; the file/bundle formats against the
+  §22.4/§22.5 shapes, the header's key record through the server's `BackupKey` check).
 
 ## v1.21 reinstalls without reset, stale leaves (§12.12) — READY
 - **Migration** `20261009100000_ops_strikes`: `strikes jsonb not null default '{}'` on

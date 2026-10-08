@@ -148,6 +148,9 @@ end
 # Invite link in v1.6 invites (decision 030).
 if link = System.get_env("INVITE_LINK"), do: config(:risime, :invite_link, link)
 
+# v1.22 §22.1: server backups (default on); BACKUPS=off stops the writes only.
+if backups = System.get_env("BACKUPS"), do: config(:risime, :backups, backups != "off")
+
 # v1.21 §12.12.6: a superseded leaf unseen this long is removed by a cleanup op (default 24).
 if hours = System.get_env("STALE_LEAF_HOURS"),
   do: config(:risime, :stale_leaf_hours, String.to_integer(hours))

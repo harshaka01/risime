@@ -20,6 +20,8 @@ defmodule RisiMeWeb.AuthController do
       body
       |> Map.put(:phone_verification, phone)
       |> Map.put(:signup, if(Accounts.open_signup?(), do: "open", else: "invite"))
+      # v1.22 §22.1.
+      |> Map.put(:backup, RisiMe.Backups.switch())
 
     json(conn, body)
   end

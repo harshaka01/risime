@@ -163,12 +163,21 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
      */
     private class TelecomCall(val callId: String, val job: Job) {
         @Volatile var scope: CallControlScope? = null
+
+        /** P0-3: this call's routes, copied by its [EndpointTracker] (the only reader of Telecom's flows). */
+        val endpoints = MutableStateFlow<List<CallEndpointCompat>>(emptyList())
+        val current = MutableStateFlow<CallEndpointCompat?>(null)
+
+        /** The user chose a route (the button): the video-speaker rule never overrides it. */
+        @Volatile var userPicked = false
+        val speakerBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+        @Volatile var lastRouteLine: String? = null
     }
     private val telecomCalls = java.util.concurrent.ConcurrentHashMap<String, TelecomCall>()
     private val telecomScope: CallControlScope? get() = state.value?.callId?.let { telecomCalls[it]?.scope }
 
     private val callsManager: CallsManager? by lazy {
-        runCatching { CallsManager(context).also { it.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE) } }
+        runCatching { CallsManager(context).also { it.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE or CallsManager.CAPABILITY_SUPPORTS_VIDEO_CALLING) } }
             .onFailure { Log.w("RisiMe", "core-telecom registration failed: ${it.message}") }.getOrNull()
     }
 
@@ -513,7 +522,33 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     }
 
     fun selectEndpoint(e: CallEndpointCompat) {
-        scope.launch { telecomScope?.requestEndpointChange(e) }
+        val id = state.value?.callId ?: return
+        telecomCalls[id]?.userPicked = true
+        scope.launch {
+            val r = runCatching { telecomScope?.requestEndpointChange(e) }
+            log("route picked ${endpointTypeName(e.type)}: ${r.getOrNull() ?: r.exceptionOrNull()?.message}")
+        }
+    }
+
+    /**
+     * P0-3: the route button never stays greyed out. If Telecom hasn't listed any route yet (an
+     * active call with an empty list), the button still toggles the speaker through AudioManager.
+     */
+    fun selectFallbackRoute(speaker: Boolean) {
+        val id = state.value?.callId ?: return
+        telecomCalls[id]?.userPicked = true
+        val am = context.getSystemService(AudioManager::class.java) ?: return
+        val r = runCatching {
+            if (Build.VERSION.SDK_INT >= 31) {
+                val want = if (speaker) android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+                am.availableCommunicationDevices.firstOrNull { it.type == want }?.let(am::setCommunicationDevice) ?: false
+            } else {
+                @Suppress("DEPRECATION")
+                am.isSpeakerphoneOn = speaker
+                true
+            }
+        }
+        log("route fallback speaker=$speaker (no Telecom routes): ${r.getOrNull() ?: r.exceptionOrNull()?.message}")
     }
 
     // ---------------------------------------------------------------- push (§16.8)
@@ -596,6 +631,8 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                 blindRing.value = null
             }
             ensureTelecom(s)
+            // P0-3: the call on screen shows its own Telecom routes (copied from its handle).
+            telecomCalls[s.callId]?.let { h -> publishRoutes(h) }
             if (s.phase == CallPhase.RINGING_IN && lastRingingId != s.callId) {
                 lastRingingId = s.callId
                 if (!notifications.canUseFullScreenIntent()) fullScreenDenied.value = true
@@ -605,7 +642,10 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                 }
             }
             if (s.phase == CallPhase.ANSWERING) telecomAnswer()
-            if (s.phase == CallPhase.CONNECTING || s.phase == CallPhase.ACTIVE) telecomActive(s)
+            if (s.phase == CallPhase.CONNECTING || s.phase == CallPhase.ACTIVE) {
+                telecomActive(s)
+                checkVideoSpeaker(s.callId, s.phase.name)
+            }
         } else {
             releaseWake()
         }
@@ -696,7 +736,6 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             // §19.6 (android A6): a video call is a Telecom video call.
             if (s.video) CallAttributesCompat.CALL_TYPE_VIDEO_CALL else CallAttributesCompat.CALL_TYPE_AUDIO_CALL, 0,
         )
-        val video = s.video
         lateinit var handle: TelecomCall
         val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             runCatching {
@@ -712,21 +751,13 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                     onSetInactive = { _machine.value?.onSystemDisconnect(callId); _group.value?.hangUp(callId) },
                 ) {
                     handle.scope = this
-                    if (state.value?.callId == callId) {
-                        launch { availableEndpoints.collect { if (state.value?.callId == callId) endpoints.value = it } }
-                        launch {
-                            currentCallEndpoint.collect {
-                                if (state.value?.callId == callId) currentEndpoint.value = it
-                                updateProximity()
-                            }
-                        }
-                        // §19.6 (android A6): a video call starts on the speaker unless a headset is connected.
-                        if (video) launch {
-                            val list = availableEndpoints.first { it.isNotEmpty() }
-                            val headset = list.any { it.type == CallEndpointCompat.TYPE_BLUETOOTH || it.type == CallEndpointCompat.TYPE_WIRED_HEADSET }
-                            val speaker = list.firstOrNull { it.type == CallEndpointCompat.TYPE_SPEAKER }
-                            if (!headset && speaker != null && currentCallEndpoint.first().type == CallEndpointCompat.TYPE_EARPIECE) requestEndpointChange(speaker)
-                        }
+                    // P0-3: availableEndpoints and currentCallEndpoint are Channel.receiveAsFlow() in
+                    // core-telecom 1.0.1 (each value reaches ONE collector). The tracker is their only
+                    // reader, started for every call; the UI and the video-speaker rule read its copies.
+                    EndpointTracker(availableEndpoints, currentCallEndpoint, handle.endpoints, handle.current).start(this) {
+                        publishRoutes(handle)
+                        // §19.6 (android A6): a video call moves to the speaker unless a headset is connected.
+                        checkVideoSpeaker(callId, "route change")
                     }
                 }
             }.onFailure { Log.w("RisiMe", "telecom addCall: ${it.message}") }
@@ -744,13 +775,66 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         if (answeredOn == id) return
         answeredOn = id
         val type = if (state.value?.video == true) CallAttributesCompat.CALL_TYPE_VIDEO_CALL else CallAttributesCompat.CALL_TYPE_AUDIO_CALL
-        scope.launch { waitScope(id)?.answer(type) }
+        scope.launch {
+            val r = runCatching { waitScope(id)?.answer(type) }
+            log("telecom answer: ${r.getOrNull() ?: r.exceptionOrNull()?.message}")
+            checkVideoSpeaker(id, "answer")
+        }
     }
 
     private fun telecomActive(s: CallSnapshot) {
         if (activeOn == s.callId) return
         activeOn = s.callId
-        if (s.outgoing) scope.launch { waitScope(s.callId)?.setActive() }
+        if (s.outgoing) scope.launch {
+            val r = runCatching { waitScope(s.callId)?.setActive() }
+            log("telecom setActive: ${r.getOrNull() ?: r.exceptionOrNull()?.message}")
+            checkVideoSpeaker(s.callId, "setActive")
+        }
+    }
+
+    /** P0-3: copies [h]'s routes into the UI's flows while its call is the current one; logs every change. */
+    private fun publishRoutes(h: TelecomCall) {
+        if (state.value?.callId != h.callId || telecomCalls[h.callId] !== h) return
+        val list = h.endpoints.value
+        val cur = h.current.value
+        endpoints.value = list
+        currentEndpoint.value = cur
+        val line = routeLine(cur?.type, list.map { it.type })
+        if (line != h.lastRouteLine) {
+            h.lastRouteLine = line
+            log("route $line")
+        }
+        updateProximity()
+    }
+
+    /**
+     * P0-3: applies [videoSpeakerTarget] to [callId]'s Telecom call, on every route change and after
+     * answer/setActive (core-telecom's own video-speaker logic runs once, when the call is added,
+     * while the callee is still ringing). The result is logged; an error is retried once after 500 ms.
+     */
+    private fun checkVideoSpeaker(callId: String, why: String) {
+        val h = telecomCalls[callId] ?: return
+        fun target(): CallEndpointCompat? {
+            val s = state.value?.takeIf { it.callId == callId } ?: return null
+            return videoSpeakerTarget(s.video, s.phase, h.endpoints.value, h.current.value, h.userPicked) { it.type }
+        }
+        target() ?: return
+        if (!h.speakerBusy.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                val sc = waitScope(callId) ?: return@launch
+                for (attempt in 1..2) {
+                    val t = target() ?: return@launch
+                    val r = runCatching { sc.requestEndpointChange(t) }
+                    val res = r.getOrNull()
+                    log("video speaker ($why, try $attempt): ${res ?: r.exceptionOrNull()?.message}")
+                    if (res is androidx.core.telecom.CallControlResult.Success) return@launch
+                    if (attempt == 1) delay(500)
+                }
+            } finally {
+                h.speakerBusy.set(false)
+            }
+        }
     }
 
     private suspend fun waitScope(callId: String): CallControlScope? = withTimeoutOrNull(3_000) {
@@ -826,7 +910,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val name = callTitle(s)
         return when (s.phase) {
             CallPhase.RINGING_IN -> notifications.incoming(name, video = s.video, group = s.group) to false
-            else -> notifications.ongoing(name, CallTexts.status(s.phase, s.connectedAtMs) ?: if (s.video) "Video call" else "Voice call", s.connectedAtMs) to hasMicPermission()
+            else -> notifications.ongoing(name, CallTexts.status(s.phase, s.connectedAtMs, video = s.video) ?: if (s.video) "Video call" else "Voice call", s.connectedAtMs) to hasMicPermission()
         }
     }
 

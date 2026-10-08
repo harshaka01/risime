@@ -130,12 +130,16 @@ class CallActivity : ComponentActivity() {
                                 verified = snap.verified,
                                 ended = snap.phase == CallPhase.ENDED,
                                 photoKey = if (snap.group) snap.conversationId else snap.peerUserId,
+                                active = snap.phase == CallPhase.ACTIVE,
                             ),
                             center = if (snap.group && snap.members.isNotEmpty() && !(snap.video && snap.phase != CallPhase.ENDED)) ({
                                 GroupParticipantList(snap.members.map { m -> groupMemberUi(m, memberNames[m.userId] ?: "…") })
                             }) else null,
                             onMute = calls::setMuted,
-                            onEndpoint = { e -> endpoints.firstOrNull { it.identifier.toString() == e.id }?.let(calls::selectEndpoint) },
+                            onEndpoint = { e ->
+                                val match = endpoints.firstOrNull { it.identifier.toString() == e.id }
+                                if (match != null) calls.selectEndpoint(match) else calls.selectFallbackRoute(e.kind == EndpointUi.Kind.SPEAKER)
+                            },
                             onEnd = calls::hangUp,
                             video = if (snap.group) {
                                 calls.groupSession()?.takeIf { snap.video && snap.phase != CallPhase.ENDED }?.let { sess -> { GroupVideoGrid(sess, snap, memberNames) } }

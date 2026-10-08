@@ -131,8 +131,10 @@ defmodule RisiMe.ContractExamplesTest do
                     group_rejoin_reply_v121.json mls_commit_request_dm_op.json
                     mls_dm_rejoin_reply.json mls_dm_rejoin_reply_v121.json)
 
-  # v1.22 (encrypted backups, §22): parse-only placeholders until the server implements it.
-  @pending_v1_22 ~w(auth_config_v122.json backup_bundle_header.json backup_create_reply.json
+  # v1.22 (encrypted backups, §22): checked in the "v1.22" describe below; the behaviour in
+  # test/risime_web/controllers/backups_v122_test.exs. The file and bundle formats are the
+  # clients' (the server never sees them): checked against the §22.4/§22.5 shapes instead.
+  @checked_v1_22 ~w(auth_config_v122.json backup_bundle_header.json backup_create_reply.json
                     backup_create_request.json backup_entry_contact.json
                     backup_entry_conversation.json backup_entry_group_event.json
                     backup_entry_message.json backup_entry_tombstone.json backup_file_header.json
@@ -194,7 +196,7 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_19 ++
         @checked_v1_20 ++
         @checked_v1_21 ++
-        @pending_v1_22
+        @checked_v1_22
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -414,7 +416,9 @@ defmodule RisiMe.ContractExamplesTest do
   test "auth_config.json is what GET /auth/config returns with both modes" do
     # The v1.3 example predates `phone_verification` (v1.4), which clients may ignore.
     {200, ours} = get_json("/api/v1/auth/config")
-    assert Map.drop(ours, ["phone_verification", "signup"]) == example("auth_config.json")
+    # v1.22 added `backup` (absent = off): checked in auth_config_v122.json.
+    assert Map.drop(ours, ["phone_verification", "signup", "backup"]) ==
+             example("auth_config.json")
   end
 
   test "error_invalid_token.json, error_not_allowlisted.json, error_identity_conflict.json" do
@@ -492,7 +496,7 @@ defmodule RisiMe.ContractExamplesTest do
       Application.put_env(:risime, :dev_local_auth, false)
       {200, ours} = get_json("/api/v1/auth/config")
       # v1.20 added `signup` (absent = invite): checked in auth_config_v120.json.
-      assert Map.delete(ours, "signup") == example("auth_config_v14.json")
+      assert Map.drop(ours, ["signup", "backup"]) == example("auth_config_v14.json")
     end
 
     test "me_reply_unverified.json and error_phone_unverified.json", %{token: t} do
@@ -1567,7 +1571,8 @@ defmodule RisiMe.ContractExamplesTest do
       # blob_usage_reply.json
       {200, usage} = v_api(:get, "/api/v1/blobs/usage", a.token)
       # v1.15 §17.9 adds `history` (blob_usage_reply_history.json, checked in "v1.15").
-      assert_same_shape(Map.delete(usage, "history"), example("blob_usage_reply.json"))
+      # v1.22 §22.3 adds `backup` (blob_usage_reply_backup.json, checked in "v1.22").
+      assert_same_shape(Map.drop(usage, ["history", "backup"]), example("blob_usage_reply.json"))
       ex_usage = example("blob_usage_reply.json")
       assert usage["media"]["limit"] == ex_usage["media"]["limit"]
       assert usage["media"]["hourly_limit"] == ex_usage["media"]["hourly_limit"]
@@ -2198,7 +2203,8 @@ defmodule RisiMe.ContractExamplesTest do
       assert conn.status == 201
       assert_same_shape(Jason.decode!(conn.resp_body), example("blob_upload_history_reply.json"))
       {200, usage} = RisiMe.GroupHelpers.api(:get, "/api/v1/blobs/usage", b.token)
-      assert_same_shape(usage, example("blob_usage_reply_history.json"))
+      # v1.22 adds `backup` (blob_usage_reply_backup.json, checked in "v1.22").
+      assert_same_shape(Map.delete(usage, "backup"), example("blob_usage_reply_history.json"))
       assert_same_shape(usage["history"], example("blob_usage_reply_history.json")["history"])
 
       # history_deliver.json → event_history_share.json.
@@ -2934,7 +2940,9 @@ defmodule RisiMe.ContractExamplesTest do
     test "auth_config_v120.json" do
       Application.put_env(:risime, :dev_local_auth, false)
       on_exit(fn -> Application.put_env(:risime, :dev_local_auth, true) end)
-      assert get_json("/api/v1/auth/config") == {200, example("auth_config_v120.json")}
+      # v1.22 added `backup` (checked in auth_config_v122.json).
+      {200, ours} = get_json("/api/v1/auth/config")
+      assert Map.delete(ours, "backup") == example("auth_config_v120.json")
     end
 
     test "signup_request.json, signup_reply.json, error_signup_required.json" do
@@ -3038,7 +3046,7 @@ defmodule RisiMe.ContractExamplesTest do
       {:ok, _, _} = subscribe_and_join(sock, InboxChannel, "inbox:" <> user.user.id, %{})
     end
 
-    defp v121_api(method, path, token, body \\ nil, device \\ nil),
+    defp v121_api(method, path, token, body, device),
       do: RisiMe.GroupHelpers.api(method, path, token, body, device)
 
     defp v121_ref(u, d), do: %{"user_id" => u, "device_id" => d}
@@ -3173,6 +3181,295 @@ defmodule RisiMe.ContractExamplesTest do
 
       assert {200, %{"epoch" => 2}} =
                v121_api(:post, "/api/v1/mls/groups/#{conv}/commit", b.token, body, b1)
+    end
+  end
+
+  ## v1.22 (§22)
+
+  describe "v1.22" do
+    setup :with_attestation_key
+
+    setup do
+      dir = Path.join(System.tmp_dir!(), "risime-ex-v122-#{System.unique_integer([:positive])}")
+      prev = Application.get_env(:risime, :blob_dir)
+      Application.put_env(:risime, :blob_dir, dir)
+
+      on_exit(fn ->
+        Application.put_env(:risime, :blob_dir, prev)
+        Application.delete_env(:risime, :backups)
+        File.rm_rf(dir)
+      end)
+    end
+
+    defp bk_api(method, path, token, body \\ nil, device \\ nil),
+      do: RisiMe.GroupHelpers.api(method, path, token, body, device)
+
+    defp bk_upload(token, device, params, bytes) do
+      conn =
+        http()
+        |> Plug.Conn.put_req_header("authorization", "Bearer " <> token)
+        |> Plug.Conn.put_req_header("x-device-id", device)
+        |> Plug.Conn.put_req_header("content-type", "application/octet-stream")
+        |> Plug.Conn.put_req_header("content-length", Integer.to_string(byte_size(bytes)))
+        |> Phoenix.ConnTest.dispatch(
+          RisiMeWeb.Endpoint,
+          :post,
+          "/api/v1/blobs?" <> URI.encode_query(params),
+          bytes
+        )
+
+      {conn.status, Jason.decode!(conn.resp_body)}
+    end
+
+    defp bk_err(name, dynamic \\ []) do
+      ex = example(name)
+
+      fn {_status, ours} ->
+        assert_same_shape(ours, ex)
+        assert Map.drop(ours["error"], dynamic) == Map.drop(ex["error"], dynamic)
+      end
+    end
+
+    test "auth_config_v122.json and error_backup_unavailable.json", %{a: a} do
+      # error_backup_unavailable.json: the switch off stops the writes.
+      Application.put_env(:risime, :backups, false)
+      dev = mls_device!(a)
+
+      {503, _} =
+        err = bk_api(:put, "/api/v1/backup_key", a.token, example("backup_key_put.json"), dev)
+
+      bk_err("error_backup_unavailable.json").(err)
+      {200, off} = get_json("/api/v1/auth/config")
+      assert off["backup"] == "off"
+      Application.delete_env(:risime, :backups)
+
+      Application.put_env(:risime, :dev_local_auth, false)
+      Application.put_env(:risime, :signup, open: true)
+      RisiMe.Auth.clear_cache()
+
+      on_exit(fn ->
+        Application.put_env(:risime, :dev_local_auth, true)
+        Application.delete_env(:risime, :signup)
+      end)
+
+      assert get_json("/api/v1/auth/config") == {200, example("auth_config_v122.json")}
+    end
+
+    # A device signed in with a named token (the Backup's `device_name`).
+    defp named_device!(user, name) do
+      dev = mls_device!(user)
+
+      token =
+        Repo.insert!(%RisiMe.Accounts.UserToken{
+          user_id: user.user.id,
+          token_hash: :crypto.strong_rand_bytes(32),
+          device_name: name
+        })
+
+      Repo.update_all(from(d in RisiMe.Devices.Device, where: d.device_id == ^dev),
+        set: [user_token_id: token.id]
+      )
+
+      dev
+    end
+
+    test "every §22.3 REST example against the server's real payloads", %{a: a} do
+      dev = named_device!(a, "Pixel 8")
+
+      # error_no_backup_key.json (GET 404; a commit before a key 409).
+      {404, _} = err = bk_api(:get, "/api/v1/backup_key", a.token)
+      bk_err("error_no_backup_key.json").(err)
+
+      # backup_key_put.json → backup_key_reply.json
+      put = example("backup_key_put.json")
+      {200, ours} = bk_api(:put, "/api/v1/backup_key", a.token, put, dev)
+      ex = example("backup_key_reply.json")
+      assert_same_shape(ours, ex)
+
+      assert Map.delete(ours["backup_key"], "updated_at") ==
+               Map.delete(ex["backup_key"], "updated_at")
+
+      assert {200, ^ours} = bk_api(:get, "/api/v1/backup_key", a.token)
+
+      # blob_upload_backup_reply.json: two parts of one backup.
+      req = example("backup_create_request.json")
+      bid = Ecto.UUID.generate()
+
+      parts =
+        for n <- [300, 120] do
+          params = %{
+            "purpose" => "backup",
+            "backup_id" => bid,
+            "client_blob_id" => Ecto.UUID.generate()
+          }
+
+          {201, up} = bk_upload(a.token, dev, params, :crypto.strong_rand_bytes(n))
+          assert_same_shape(up, example("blob_upload_backup_reply.json"))
+          Map.take(up, ~w(blob_id size sha256))
+        end
+
+      # backup_create_request.json → backup_create_reply.json (and the replay).
+      body = %{req | "backup_id" => bid, "parts" => parts, "size" => 420}
+      {201, created} = bk_api(:post, "/api/v1/backups", a.token, body, dev)
+      ex = example("backup_create_reply.json")
+      assert_same_shape(created, ex)
+      assert keys(created["backup"]) == keys(ex["backup"])
+      for p <- created["backup"]["parts"], do: assert_same_shape(p, hd(ex["backup"]["parts"]))
+
+      assert Map.take(created["backup"], ~w(created_at schema app_version bk_id current)) ==
+               Map.take(ex["backup"], ~w(created_at schema app_version bk_id current))
+
+      assert {200, ^created} = bk_api(:post, "/api/v1/backups", a.token, body, dev)
+
+      # backups_reply.json: two more make one replaced.
+      for _ <- 1..2 do
+        nbid = Ecto.UUID.generate()
+
+        params = %{
+          "purpose" => "backup",
+          "backup_id" => nbid,
+          "client_blob_id" => Ecto.UUID.generate()
+        }
+
+        {201, up} = bk_upload(a.token, dev, params, :crypto.strong_rand_bytes(10))
+        part = Map.take(up, ~w(blob_id size sha256))
+        b = %{req | "backup_id" => nbid, "parts" => [part], "size" => 10}
+        {201, _} = bk_api(:post, "/api/v1/backups", a.token, b, dev)
+      end
+
+      {200, list} = bk_api(:get, "/api/v1/backups", a.token)
+      ex = example("backups_reply.json")
+      assert keys(list) == keys(ex)
+      assert_same_shape(list["quota"], ex["quota"])
+      assert list["quota"]["limit"] == ex["quota"]["limit"] and list["key"] == true
+
+      assert Enum.map(list["backups"], & &1["current"]) ==
+               Enum.map(ex["backups"], & &1["current"])
+
+      for {o, e} <- Enum.zip(list["backups"], ex["backups"]) do
+        assert keys(o) == keys(e)
+        assert_same_shape(Map.delete(o, "parts"), Map.delete(e, "parts"))
+      end
+
+      # blob_usage_reply_backup.json
+      {200, usage} = bk_api(:get, "/api/v1/blobs/usage", a.token)
+      ex = example("blob_usage_reply_backup.json")
+      assert_same_shape(usage, ex)
+      assert usage["backup"] == %{"used" => 20, "limit" => ex["backup"]["limit"]}
+
+      # error_backup_key_conflict.json: another BK while backups exist.
+      other = %{put | "bk_id" => Base.encode64(:crypto.strong_rand_bytes(8))}
+      err = bk_api(:put, "/api/v1/backup_key", a.token, other, dev)
+      assert {409, _} = err
+      bk_err("error_backup_key_conflict.json").(err)
+
+      # error_backup_device_mismatch.json: a second, live phone without replace_device.
+      dev2 = named_device!(a, "Galaxy A54")
+      :ok = RisiMe.MLS.record_instance(a.user.id, dev, nil, "0.3.0")
+      nbid = Ecto.UUID.generate()
+
+      params = %{
+        "purpose" => "backup",
+        "backup_id" => nbid,
+        "client_blob_id" => Ecto.UUID.generate()
+      }
+
+      {201, up} = bk_upload(a.token, dev2, params, "abc")
+
+      b = %{
+        req
+        | "backup_id" => nbid,
+          "parts" => [Map.take(up, ~w(blob_id size sha256))],
+          "size" => 3
+      }
+
+      err = bk_api(:post, "/api/v1/backups", a.token, b, dev2)
+      assert {409, _} = err
+      bk_err("error_backup_device_mismatch.json", ~w(device_id device_name)).(err)
+      assert elem(err, 1)["error"]["device_id"] == dev
+    end
+
+    test "backup_file_header.json (§22.4)" do
+      h = example("backup_file_header.json")
+
+      assert keys(h) ==
+               Enum.sort(
+                 ~w(v schema backup_id user_id created_at app_version bk_id dek stream key)
+               )
+
+      assert h["v"] == 1 and h["schema"] == 1
+      assert h["backup_id"] =~ @uuid and h["user_id"] =~ @uuid and h["created_at"] =~ @ts
+      assert b64_len(h["bk_id"], 8)
+      assert h["dek"]["alg"] == "A256GCM"
+      assert b64_len(h["dek"]["nonce"], 12) and b64_len(h["dek"]["wrapped"], 48)
+
+      assert h["stream"] == %{
+               "alg" => "A256GCM-STREAM64K",
+               "compression" => "deflate",
+               "pad" => "padme"
+             }
+
+      # The key record at backup time passes the server's BackupKey checks, for the same BK.
+      assert RisiMe.Backups.valid_key?(h["key"]) and h["key"]["bk_id"] == h["bk_id"]
+      assert h["key"]["updated_at"] =~ @ts
+      refute Map.has_key?(h["key"], "device_id")
+      assert byte_size(Jason.encode!(h)) <= 65_536
+    end
+
+    test "the bundle lines (§22.5)" do
+      h = example("backup_bundle_header.json")
+
+      assert keys(h) ==
+               Enum.sort(~w(v type origin schema backup_id user_id created_at app_version counts))
+
+      assert {h["v"], h["type"], h["origin"], h["schema"]} == {1, "backup", "backup", 1}
+      assert keys(h["counts"]) == Enum.sort(~w(conversations messages tombstones contacts))
+
+      c = example("backup_entry_conversation.json")
+
+      assert keys(c) == Enum.sort(~w(type conversation_id kind e2ee peer group chat))
+      assert c["type"] == "conversation" and c["kind"] in ["dm", "group"]
+      assert keys(c["group"]) == Enum.sort(~w(name icon admins created_by state))
+      assert c["group"]["state"] in ~w(active left removed)
+
+      assert keys(c["chat"]) ==
+               Enum.sort(~w(cleared_upto hidden muted_until pinned archived last_read))
+
+      m = example("backup_entry_message.json")
+
+      assert keys(m) ==
+               Enum.sort(
+                 ~w(type conversation_id message_id client_msg_id from from_device server_ts payload origin shared_by status)
+               )
+
+      assert m["message_id"] =~ @timeuuid and m["server_ts"] =~ @ts
+      assert m["origin"] in [nil, "shared", "own_device", "backup"]
+      assert m["status"] in ["sent", "delivered", "read", nil]
+
+      t = example("backup_entry_tombstone.json")
+
+      assert keys(t) ==
+               Enum.sort(~w(type conversation_id message_id from server_ts scope hidden))
+
+      assert t["scope"] in ["everyone", "me"] and is_boolean(t["hidden"])
+
+      g = example("backup_entry_group_event.json")
+
+      assert keys(g) ==
+               Enum.sort(
+                 ~w(type conversation_id event_id generation action actor targets role server_ts)
+               )
+
+      assert g["event_id"] =~ @timeuuid and is_list(g["targets"])
+
+      k = example("backup_entry_contact.json")
+      assert keys(k) == Enum.sort(~w(type user_id display_name phone))
+      assert k["type"] == "contact" and k["user_id"] =~ @uuid
+
+      # Never in a backup: no MLS state, device id, cursor or tokens on any line.
+      for line <- [h, c, m, t, g, k], key <- Map.keys(line) do
+        refute key in ~w(device_id cursor mls_state token push_token bk)
+      end
     end
   end
 end

@@ -1495,3 +1495,458 @@ pub fn exporter_labels() -> Vec<String> {
 pub fn call_vectors_check(vectors_json: String) -> Result<u32> {
     Ok(risime_mls::call::check_vectors(&vectors_json)?)
 }
+
+// ---------------------------------------------------------------------------------------------
+// Encrypted backups (contract v1.22 §22, decision 059; crypto review C1–C9)
+// ---------------------------------------------------------------------------------------------
+// `BK`, `KEK` and `DEK` never cross the FFI: no export returns or takes them. `R` crosses only as
+// its display string. The bundle crosses as DEFLATE bytes (`write` / `read`), never as a
+// plaintext file. Argon2id (≈ 64 MiB, up to a second) runs in `backupSetup`,
+// `backupAddPassphrase`, `backupUnlock` and `backupRotateRecoveryKey`: call them off the main
+// thread (they hold this client's lock meanwhile).
+
+/// Backup failures. Kotlin: `RisiBackupException`.
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+#[uniffi(flat_error)]
+pub enum RisiBackupError {
+    /// The recovery key's checksum doesn't match: "Check the recovery key for a typo".
+    #[error("that recovery key has a typo")]
+    Typo,
+    /// "That recovery key or passphrase doesn't match".
+    #[error("that recovery key or passphrase doesn't match")]
+    WrongKey,
+    /// Tampered, truncated, reordered, from another backup, or a mismatching listing.
+    #[error("backup integrity check failed: {0}")]
+    Integrity(String),
+    /// Not a valid backup file.
+    #[error("malformed backup file: {0}")]
+    Format(String),
+    /// Bad input (ids, lengths, record shape, KDF parameters, a recovery key that isn't 28
+    /// characters, read before verify, a finished writer).
+    #[error("malformed backup input: {0}")]
+    Malformed(String),
+    /// "Update RisiMe to restore this backup".
+    #[error("unsupported backup: {0}")]
+    Unsupported(String),
+    /// "This backup belongs to another account".
+    #[error("this backup belongs to another account")]
+    WrongAccount,
+    /// No local key for this `bk_id` (base64): unlock the server's record or the file's
+    /// `keyRecord` first.
+    #[error("no backup key {0} on this device")]
+    NoKey(String),
+    /// Below the passphrase floor.
+    #[error("passphrase too weak: {0}")]
+    WeakPassphrase(String),
+    #[error("backup io: {0}")]
+    Io(String),
+    #[error("storage: {0}")]
+    Storage(String),
+}
+
+impl From<risime_mls::backup::BackupError> for RisiBackupError {
+    fn from(e: risime_mls::backup::BackupError) -> Self {
+        use risime_mls::backup::BackupError as E;
+        match e {
+            E::Typo => Self::Typo,
+            E::WrongKey => Self::WrongKey,
+            E::Integrity(s) => Self::Integrity(s),
+            E::Format(s) => Self::Format(s),
+            E::Malformed(s) => Self::Malformed(s),
+            E::Unsupported(s) => Self::Unsupported(s),
+            E::WrongAccount => Self::WrongAccount,
+            E::NoKey(s) => Self::NoKey(s),
+            E::WeakPassphrase(s) => Self::WeakPassphrase(s),
+            E::Io(s) => Self::Io(s),
+            E::Storage(s) => Self::Storage(s),
+        }
+    }
+}
+
+type BResult<T> = std::result::Result<T, RisiBackupError>;
+
+/// The secret a key record is unlocked with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BackupSecretKind {
+    RecoveryKey,
+    Passphrase,
+}
+
+impl From<BackupSecretKind> for risime_mls::backup::SecretKind {
+    fn from(k: BackupSecretKind) -> Self {
+        match k {
+            BackupSecretKind::RecoveryKey => Self::RecoveryKey,
+            BackupSecretKind::Passphrase => Self::Passphrase,
+        }
+    }
+}
+
+/// `backupSetup` / `backupRotateRecoveryKey`: the recovery key to show (never log it) and the
+/// `BackupKey` JSON for `PUT /backup_key`.
+#[derive(Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BackupSetup {
+    pub recovery_key: String,
+    pub key_record: String,
+}
+
+impl std::fmt::Debug for BackupSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "BackupSetup {{ recovery_key: ***, key_record: {:?} }}",
+            self.key_record
+        )
+    }
+}
+
+impl From<risime_mls::backup::BackupSetup> for BackupSetup {
+    fn from(s: risime_mls::backup::BackupSetup) -> Self {
+        Self {
+            recovery_key: s.recovery_key.to_string(),
+            key_record: s.key_record,
+        }
+    }
+}
+
+/// The local backup keys by `bk_id` (base64).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BackupKeyIds {
+    /// The account key new backups use.
+    pub current: Option<String>,
+    /// Older keys kept for local files (drop each with `backupDropKey` once no file needs it).
+    pub old: Vec<String>,
+}
+
+/// A backup file's header. Unauthenticated until `verify` succeeded.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BackupFileInfo {
+    pub backup_id: String,
+    pub user_id: String,
+    pub created_at: String,
+    pub app_version: String,
+    /// base64 (8 bytes).
+    pub bk_id: String,
+    pub schema: u64,
+    /// The `BackupKey` JSON at backup time (unlock it to restore a file), or null.
+    pub key_record: Option<String>,
+}
+
+impl From<risime_mls::backup::BackupFileInfo> for BackupFileInfo {
+    fn from(i: risime_mls::backup::BackupFileInfo) -> Self {
+        Self {
+            backup_id: i.backup_id,
+            user_id: i.user_id,
+            created_at: i.created_at,
+            app_version: i.app_version,
+            bk_id: i.bk_id,
+            schema: i.schema,
+            key_record: i.key_record,
+        }
+    }
+}
+
+/// What a finished backup file is, for `POST /backups` (`size`, `sha256` of the whole file,
+/// `bk_id`).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BackupWritten {
+    pub backup_id: String,
+    pub bk_id: String,
+    pub size: u64,
+    pub sha256: Vec<u8>,
+    /// The DEFLATE bytes written.
+    pub data_size: u64,
+}
+
+/// The verify pass's result.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BackupVerified {
+    /// The total bytes `read` will return (the DEFLATE stream).
+    pub data_size: u64,
+    pub padded_size: u64,
+    pub chunks: u64,
+}
+
+/// The core's part of the passphrase floor (§22.2). The app also checks its bundled list of the
+/// 10 000 most common passwords (case-insensitive).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BackupPassphraseFloor {
+    Ok,
+    /// Fewer than 14 characters and fewer than 4 words of 3+ characters.
+    TooShort,
+    /// Contains 6 or more consecutive digits of the user's phone number.
+    PhoneNumber,
+}
+
+/// Backup constants (§22.2, §22.4).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BackupLimits {
+    pub magic: String,
+    pub format_version: u32,
+    pub stream_alg: String,
+    pub chunk_size: u64,
+    pub max_header_len: u64,
+    pub schema: u64,
+    pub argon2_m_kib: u32,
+    pub argon2_t: u32,
+    pub argon2_p: u32,
+    pub recovery_key_chars: u32,
+    pub passphrase_min_chars: u32,
+    pub passphrase_min_words: u32,
+}
+
+#[uniffi::export]
+pub fn backup_limits() -> BackupLimits {
+    use risime_mls::backup::{keys as k, stream as s};
+    BackupLimits {
+        magic: String::from_utf8_lossy(s::MAGIC).into(),
+        format_version: s::FORMAT_VERSION.into(),
+        stream_alg: s::STREAM_ALG.into(),
+        chunk_size: s::CHUNK,
+        max_header_len: s::MAX_HEADER_LEN,
+        schema: s::BUNDLE_SCHEMA,
+        argon2_m_kib: k::ARGON2_M,
+        argon2_t: k::ARGON2_T,
+        argon2_p: k::ARGON2_P,
+        recovery_key_chars: k::RECOVERY_CHARS as u32,
+        passphrase_min_chars: k::FLOOR_CHARS as u32,
+        passphrase_min_words: k::FLOOR_WORDS as u32,
+    }
+}
+
+/// A file's header without any key (for the restore screen and its `keyRecord`). `Format` /
+/// `Unsupported` / `Io`.
+#[uniffi::export]
+pub fn backup_file_info(path: String) -> BResult<BackupFileInfo> {
+    Ok(risime_mls::backup::file_info(path.as_ref())?.into())
+}
+
+/// The display form of a typed recovery key (`Typo` / `Malformed` otherwise): the input field's
+/// live check. No key derivation.
+#[uniffi::export]
+pub fn backup_normalize_recovery_key(input: String) -> BResult<String> {
+    Ok(risime_mls::backup::normalize_recovery_key(&input)?)
+}
+
+/// The core's passphrase floor checks; `phone` is the user's own number (any format).
+#[uniffi::export]
+pub fn backup_passphrase_floor(passphrase: String, phone: Option<String>) -> BackupPassphraseFloor {
+    use risime_mls::backup::PassphraseFloor as F;
+    match risime_mls::backup::passphrase_floor(&passphrase, phone.as_deref()) {
+        F::Ok => BackupPassphraseFloor::Ok,
+        F::TooShort => BackupPassphraseFloor::TooShort,
+        F::PhoneNumber => BackupPassphraseFloor::PhoneNumber,
+    }
+}
+
+/// **Test support:** verifies every case of `contract/v1/backup_vectors.json` (passed as its JSON
+/// text); returns the number of cases checked (44), or throws `Malformed` naming the first
+/// failing case. Returns nothing secret. Runs Argon2id 3 times.
+#[uniffi::export]
+pub fn backup_vectors_check(vectors_json: String) -> BResult<u32> {
+    Ok(risime_mls::backup::check_vectors(&vectors_json)?)
+}
+
+/// Streams the app's DEFLATE output (`Deflater(nowrap = true)`) into a backup file. Discard it on
+/// any error and start a new backup (new `backup_id`); never resume.
+#[derive(uniffi::Object)]
+pub struct BackupWriter {
+    inner: Mutex<risime_mls::backup::BackupWriter>,
+}
+
+#[uniffi::export]
+impl BackupWriter {
+    /// Appends DEFLATE bytes (any split).
+    pub fn write(&self, data: Vec<u8>) -> BResult<()> {
+        self.lock()?.write(&data).map_err(Into::into)
+    }
+
+    /// Pads, writes the final chunk, fsyncs and renames the file into place.
+    pub fn finish(&self) -> BResult<BackupWritten> {
+        let w = self.lock()?.finish()?;
+        Ok(BackupWritten {
+            backup_id: w.backup_id,
+            bk_id: w.bk_id,
+            size: w.size,
+            sha256: w.sha256.to_vec(),
+            data_size: w.data_size,
+        })
+    }
+}
+
+impl BackupWriter {
+    fn lock(&self) -> BResult<std::sync::MutexGuard<'_, risime_mls::backup::BackupWriter>> {
+        self.inner
+            .lock()
+            .map_err(|_| RisiBackupError::Malformed("poisoned".into()))
+    }
+}
+
+/// Opens a backup file: `verify` (the whole verify pass) first, then `read` until it returns an
+/// empty array. Copy a picked file into app-private storage before opening it.
+#[derive(uniffi::Object)]
+pub struct BackupReader {
+    inner: Mutex<risime_mls::backup::BackupReader>,
+}
+
+#[uniffi::export]
+impl BackupReader {
+    /// The header (authenticated once `verify` succeeded).
+    pub fn info(&self) -> BResult<BackupFileInfo> {
+        Ok(self.lock()?.info().into())
+    }
+
+    /// Every chunk, the final flag, the DEFLATE end and the zero padding. Nothing may be imported
+    /// before this succeeded. Blocking: about the time of one read of the file.
+    pub fn verify(&self) -> BResult<BackupVerified> {
+        let v = self.lock()?.verify()?;
+        Ok(BackupVerified {
+            data_size: v.data_size,
+            padded_size: v.padded_size,
+            chunks: v.chunks,
+        })
+    }
+
+    /// The next piece of the DEFLATE stream (≤ 64 KiB), in order; empty at the end. Throws
+    /// `Malformed` before a successful `verify`, `Integrity` if the file changed since.
+    pub fn read(&self) -> BResult<Vec<u8>> {
+        Ok(self.lock()?.read()?.to_vec())
+    }
+}
+
+impl BackupReader {
+    fn lock(&self) -> BResult<std::sync::MutexGuard<'_, risime_mls::backup::BackupReader>> {
+        self.inner
+            .lock()
+            .map_err(|_| RisiBackupError::Malformed("poisoned".into()))
+    }
+}
+
+impl MlsClient {
+    fn with_backup<T>(
+        &self,
+        f: impl FnOnce(&mut Client) -> risime_mls::backup::BackupResult<T>,
+    ) -> BResult<T> {
+        let mut c = self
+            .inner
+            .lock()
+            .map_err(|_| RisiBackupError::Storage("poisoned".into()))?;
+        f(&mut c).map_err(Into::into)
+    }
+}
+
+#[uniffi::export]
+impl MlsClient {
+    /// Turns backups on, or makes the silent local pair (§22.7): `BK` and `R` made here, or the
+    /// stored pair reused; returns the recovery key and the record with its `recovery_key` wrap.
+    /// Stored in the caller's transaction. When a server record exists, `backupUnlock` instead.
+    pub fn backup_setup(&self, user_id: String) -> BResult<BackupSetup> {
+        self.with_backup(|c| c.backup_setup(&user_id))
+            .map(Into::into)
+    }
+
+    /// Adds or replaces the passphrase wrap; returns the record to `PUT` (same `bk_id`). Check
+    /// `backupPassphraseFloor` and the common-password list first (`WeakPassphrase` here).
+    pub fn backup_add_passphrase(&self, user_id: String, passphrase: String) -> BResult<String> {
+        self.with_backup(|c| c.backup_add_passphrase(&user_id, &passphrase))
+    }
+
+    /// Unlocks a key record (server or file header) and stores its `BK`; `makeCurrent` for the
+    /// account key (turn-on with an existing record, server restore), false for a file with
+    /// another `bk_id`. Returns the `bk_id`. `Typo` / `Malformed` / `WrongKey` / `Integrity`.
+    pub fn backup_unlock(
+        &self,
+        user_id: String,
+        key_record: String,
+        secret: String,
+        kind: BackupSecretKind,
+        make_current: bool,
+    ) -> BResult<String> {
+        self.with_backup(|c| {
+            c.backup_unlock(&user_id, &key_record, &secret, kind.into(), make_current)
+        })
+    }
+
+    /// The stored recovery key (show it behind the device credential), or null.
+    pub fn backup_recovery_key(&self) -> BResult<Option<String>> {
+        self.with_backup(|c| c.backup_recovery_key())
+            .map(|r| r.map(|s| s.to_string()))
+    }
+
+    /// "Change recovery key": a new `R` for the same `BK`; `PUT` the returned record.
+    pub fn backup_rotate_recovery_key(&self, user_id: String) -> BResult<BackupSetup> {
+        self.with_backup(|c| c.backup_rotate_recovery_key(&user_id))
+            .map(Into::into)
+    }
+
+    /// Deletes every backup key of this device (confirmed wipe, "Reset backup key").
+    pub fn backup_forget(&self) -> BResult<()> {
+        self.with_backup(|c| c.backup_forget())
+    }
+
+    /// The stored key record JSON, or null.
+    pub fn backup_key_record(&self) -> BResult<Option<String>> {
+        self.with_backup(|c| c.backup_key_record())
+    }
+
+    /// The local keys' `bk_id`s.
+    pub fn backup_key_ids(&self) -> BResult<BackupKeyIds> {
+        self.with_backup(|c| c.backup_key_ids())
+            .map(|k| BackupKeyIds {
+                current: k.current,
+                old: k.old,
+            })
+    }
+
+    /// Drops an older local key once no local file uses it.
+    pub fn backup_drop_key(&self, bk_id: String) -> BResult<()> {
+        self.with_backup(|c| c.backup_drop_key(&bk_id))
+    }
+
+    /// Starts a backup file at `out_path` (created only by `finish`). `key_record`: the record
+    /// for the header (normally `GET /backup_key`); null uses the stored one.
+    pub fn backup_writer(
+        &self,
+        user_id: String,
+        backup_id: String,
+        created_at: String,
+        app_version: String,
+        key_record: Option<String>,
+        out_path: String,
+    ) -> BResult<Arc<BackupWriter>> {
+        let w = self.with_backup(|c| {
+            c.backup_writer(
+                &user_id,
+                &backup_id,
+                &created_at,
+                &app_version,
+                key_record.as_deref(),
+                out_path.as_ref(),
+            )
+        })?;
+        Ok(Arc::new(BackupWriter {
+            inner: Mutex::new(w),
+        }))
+    }
+
+    /// Opens a backup file for restore. For a server backup pass the listing's `backup_id` and
+    /// `bk_id` (`Integrity` on a mismatch). `NoKey`: unlock first.
+    pub fn backup_reader(
+        &self,
+        user_id: String,
+        in_path: String,
+        expected_backup_id: Option<String>,
+        expected_bk_id: Option<String>,
+    ) -> BResult<Arc<BackupReader>> {
+        let r = self.with_backup(|c| {
+            c.backup_reader(
+                &user_id,
+                in_path.as_ref(),
+                expected_backup_id.as_deref(),
+                expected_bk_id.as_deref(),
+            )
+        })?;
+        Ok(Arc::new(BackupReader {
+            inner: Mutex::new(r),
+        }))
+    }
+}
