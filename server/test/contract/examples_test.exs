@@ -143,6 +143,19 @@ defmodule RisiMe.ContractExamplesTest do
                     error_backup_device_mismatch.json error_backup_key_conflict.json
                     error_backup_unavailable.json error_no_backup_key.json)
 
+  # v1.23 (voice/video switching and screen sharing, §23): parse-only placeholders until the
+  # server implements it.
+  @pending_v1_23 ~w(call_answer_features_payload.json call_answer_renegotiate_payload.json
+                    call_media_group_payload.json call_media_screen_payload.json
+                    call_offer_features_payload.json call_offer_renegotiate_payload.json
+                    call_offer_renegotiate_payload_bad.json call_switch_accept_payload.json
+                    call_switch_group_payload.json call_switch_request_payload.json
+                    call_switch_voice_payload.json calls_room_status_reply_v123.json
+                    calls_room_upgrade_reply.json calls_room_upgrade_request.json
+                    device_put_call_switch.json error_not_in_call.json
+                    error_too_many_for_video.json livekit_token_claims_v123.json
+                    livekit_update_participant.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -196,7 +209,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_19 ++
         @checked_v1_20 ++
         @checked_v1_21 ++
-        @checked_v1_22
+        @checked_v1_22 ++
+        @pending_v1_23
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end

@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.22 (Release 0.3)
+# RisiMe Wire Protocol — v1.23 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -2747,7 +2747,8 @@ candidates, each a `candidate:` line of at most 512 bytes; `to_device`/`device_i
   line and no history marker (§13.3). It is logged only. This applies to every control kind.
 - **Binding** (crypto R3), before any action, or drop and log:
   - `envelope.call_id == event.call_id`;
-  - `event.ring == (envelope.type == "call_offer" && !envelope.restart)`;
+  - `event.ring == (envelope.type == "call_offer" && !envelope.restart)` (v1.23: `&&
+    !envelope.renegotiate`, §23.3);
   - `event.from`/`from_device` == the core's authenticated sender (§10.3).
 - **Freshness.** The client keeps `offset = server_time − device_now` from every join and sync
   reply (§15.7; a push wake-up always gets a fresh one before the page's events). A device rings
@@ -3933,7 +3934,8 @@ No MLS core change, no server call table.
 - **The media type is fixed when the call starts.** A video call negotiates one `m=audio` and one
   `m=video` for its whole life. **Camera on/off never renegotiates** (§19.5). A voice call stays a
   voice call: no upgrade to video in v1.18 (it would need renegotiation, with its glare and old-app
-  peers; a later version may add it).
+  peers; a later version may add it). **(v1.23: lifted; mid-call switching and screen sharing in
+  §23.)**
 - **VP8 only** (§19.4): a software codec in every libwebrtc build, so it behaves the same on every
   phone; Android H264 hardware encoders are the main source of device-specific failures, and VP9
   costs more CPU on low-end phones. No simulcast (one peer, nothing to choose between).
@@ -3981,7 +3983,8 @@ No MLS core change, no server call table.
   30-per-pair-per-10-s bound). Sender pinning (§16.3) applies: only from the selected peer device.
   Strict validation: `call_id`/`to_device` UUIDs, `camera` a boolean; else drop and log.
 - **`call_end`** carries the offer's media (`call_end_video_payload.json`): a video call stays
-  `"video"` even if both cameras were off.
+  `"video"` even if both cameras were off. (v1.23: `"video"` also if a voice call ever switched to
+  video, §23.8.)
 - **History lines** (extends §16.6):
 
   | reason | Caller sees | Callee sees |
@@ -4168,6 +4171,8 @@ that is in the group's MLS device list; otherwise `403 invalid_device`). Body
   ```
 - **`action: "status"`** → `200 {"active": bool, "participants": n, "max_participants": n}`
   (`calls_room_status_reply.json`), no token: for the chat line's Join (§20.4).
+- **(v1.23)** `action: "upgrade"` (a voice room becomes a video room), the metadata `m` as the
+  current media, `join` from a present identity as a refresh, and `media` in the replies: §23.6.
 - **Room name** (server S2): `base64url(HMAC-SHA256(K_room, "risime-room-v1" ‖ conversation_id ‖
   call_id ‖ media))`, the first 22 characters, without padding; `K_room = HKDF-SHA256(salt = empty,
   IKM = LIVEKIT_API_SECRET, info = "risime-livekit-room-v1", L = 32)`. Deterministic (no table),
@@ -4249,7 +4254,8 @@ that is in the group's MLS device list; otherwise `403 invalid_device`). Body
 {"v": 1, "type": "group_call", "call_id": "…", "media": "audio", "state": "ended",
  "reason": "hangup", "connected_at": "…", "duration_s": 723}
 ```
-(`group_call_started_payload.json`, `group_call_ended_payload.json`.) `reason` is `hangup` or
+(`group_call_started_payload.json`, `group_call_ended_payload.json`; v1.23: `ended.media` is
+`"video"` if the room was ever a video room, §23.8.) `reason` is `hangup` or
 `timeout`; `connected_at` (the first time the sender saw two participants) and `duration_s` are
 null for `timeout`. They are the sender's claims, display only. Strict validation: `state` one of
 the two, `media` as above, `reason` one of the two for `ended`; else drop and log.
@@ -4940,7 +4946,441 @@ v1.22 offer backups once `auth/config` says `on`. Local backups work against any
   `backup_entry_conversation.json`, `backup_entry_message.json`, `backup_entry_tombstone.json`,
   `backup_entry_group_event.json`, `backup_entry_contact.json`.
 
+## 23. Switching voice and video mid-call, and screen sharing (v1.23)
+Proposal `2026-10-08-call-switch-screen-v1.23.md`, reviewed by server, android and crypto
+(`proposals/reviews/2026-10-08-call-switch-screen-v1.23-*.md`); decision 062. Extends §16, §19 and
+§20 and overrides them where they differ (§19.0's "no upgrade to video in v1.18" is lifted).
+Additive: the device capabilities `call_switch` and `screen_share`; `features` on `call_offer` and
+`call_answer`; the ephemeral envelope `call_switch`; `call_offer` `renegotiate: true`; `video` on
+`call_media` (1:1 and, new, groups); `POST /calls/rooms` `action: "upgrade"` with the errors
+`too_many_for_video` and `not_in_call`; `media` in the rooms replies; a new rule for `media` in
+`call_end` and `group_call` `ended`. No MLS core change, no new exporter label, no server storage.
+**No server change for 1:1 calls** beyond keeping the two capabilities.
+
+### 23.0 Principles
+- **Audio never stops.** A switch, a renegotiation, a screen share or a failure of any of them
+  never touches the audio m-section, its track or the transport; on failure the call stays (or
+  goes back to) a voice call.
+- **Consent to receive video.** In a 1:1 voice call, video (camera or screen) reaches the other
+  phone only after its user accepts. In a group call, joining is the consent to receive what members
+  publish (as in every group-call product), but a participant's video is rendered only while that
+  participant says so in MLS (§23.6). **Nobody's camera is ever turned on unasked** (§19 rules hold).
+- **One video at a time per sender:** the camera **or** the screen, never both. The simplest model
+  that covers the use: one video sender whose source switches.
+- **Old peers are never broken.** v1.13–v1.22 apps get nothing new: no re-offer, no switch request,
+  no screen; their calls work exactly as before (§23.10).
+- **No new trust in the server or the SFU.** 1:1 media stays DTLS-SRTP bound to MLS (§16.10); group
+  media stays under MLS-derived frame keys (§20.6), screen tracks included.
+- No model calls; nothing for the learning log. Calls and screens are never recorded.
+
+### 23.1 Capabilities and per-call features
+- A v1.23 app advertises **`"call_switch"`** in `mls.capabilities` together with `calls` and
+  `video` (and `group_calls` where it has it), and **`"screen_share"`** together with
+  `call_switch`, once it can capture the screen (MediaProjection available and the screencast
+  source loads) (`device_put_call_switch.json`). The server keeps both (they join
+  `@known_capabilities`); they are used only by the group path (§23.6) and UI hints. No readiness
+  fields are added.
+- **1:1: per call, inside MLS.** `call_offer` (the first offer, not restarts) and `call_answer`
+  gain **`"features": ["switch", "screen"]`** (`call_offer_features_payload.json`,
+  `call_answer_features_payload.json`): what the sending device can do in this call. An array of at
+  most 8 strings of at most 32 bytes; unknown values ignored; absent = `[]`. A v1.23 app sends
+  `switch` when it advertises `call_switch` and `screen` when it advertises `screen_share`.
+- The caller learns the selected callee device's features from its `call_answer`; the callee
+  learns the caller's from the offer. **The Video request and Share screen buttons appear only when
+  both selected devices listed `switch` (resp. `screen`).** Old apps send no `features` and ignore
+  the field (§16.2), so with them the call UI is the v1.18 one.
+
+### 23.2 1:1 call modes and the `call_switch` envelope
+**Modes.** A 1:1 call is in **voice** or **video** mode. A call offered with `media: "video"`
+starts in video mode; one offered with `media: "audio"` in voice mode. In video mode each side has a
+**video state** `off | camera | screen`; in voice mode both are `off` and nothing is rendered.
+
+**`call_switch`** (new, ephemeral: `call:signal`, `ring: false`, the call's cleartext `media`,
+`to_device` = the selected peer device; sender pinning of §16.3 applies):
+```json
+{"v": 1, "type": "call_switch", "call_id": "…", "to_device": "<peer device_id>", "seq": 1,
+ "action": "request", "source": "camera"}
+```
+(`call_switch_request_payload.json`, `call_switch_accept_payload.json`,
+`call_switch_voice_payload.json`.)
+- **`seq`** (crypto C6): an integer per sender per call, starting at 1 and increasing by 1 for each
+  `request` and `voice` the device sends. `accept`, `decline` and `cancel` carry the **peer's**
+  request `seq` they answer. A receiver ignores a `request`/`voice` whose `seq` isn't greater than
+  the last it saw from that device in this call, and an answer naming a `seq` that isn't the
+  sender's current pending request.
+- **`action`**:
+  - `request` (voice mode only), with **`source`** `"camera"` or `"screen"`: "I want to send video
+    from this source". At most one pending request per side.
+  - `accept` / `decline`: the peer's answer to `request` `seq`.
+  - `cancel`: the requester withdraws its pending `seq` (the user tapped Cancel, or 20 s passed).
+  - `voice`: back to voice mode, sent by either side at any time in video mode. Both sides stop
+    sending video at once.
+- Strict validation: `call_id`/`to_device` UUIDs; `seq` an integer 1–65 535; `action` one of the
+  five; `source` present exactly for `request` and one of the two; else drop and log.
+
+**Switching to video (from voice mode):**
+1. A taps **Video** (or **Share screen**): A sends `request` (`source` `camera` or `screen`) and
+   shows "Asking <name> to switch to video…" with Cancel. Nothing is sent on the video path yet.
+2. B shows the prompt in the call screen: for `camera`, "<name> wants to switch to video" with
+   **Switch** (B's camera on; `CAMERA` asked if needed, denied = camera off), **Without my camera**
+   and **Not now**; for `screen`, "<name> wants to share their screen" with **Watch** and **Not
+   now**. If the call screen isn't visible, the ongoing-call notification says so with **Open**
+   (never accept from the notification: the camera needs the visible screen, §19.5).
+3. B's choice → `accept` or `decline`. **20 s** without an answer: A sends `cancel` and shows "No
+   answer"; B removes the prompt on `cancel`. After a `decline` ("<name> declined video") A's
+   Video button waits 10 s.
+4. **Crossing requests:** a device with its own pending request that receives the peer's `request`
+   accepts it without a prompt (both asked) and treats its own as accepted; both send `accept`.
+5. After the accept (sent or received): if the session has no `m=video`, **the original caller
+   device renegotiates** (§23.3); otherwise nothing changes in SDP. The call is then in video mode;
+   each side starts its source (the requester its requested source; B its camera if it chose
+   Switch) and sends `call_media` (§23.4).
+6. A renegotiation that fails (timeout, a rejected answer, an `m=video` answered with port 0) rolls
+   back, keeps audio, shows "Couldn't switch to video", and the side that noticed sends `voice`
+   to put both back in voice mode.
+
+**Switching back to voice:** either side taps **Voice** → `voice`; both stop sending video
+(`setTrack(null)`), stop any screen share and show the voice UI. A later switch to video needs a
+new request, but no renegotiation (the `m=video` stays negotiated for the rest of the call). With an
+old peer (no `switch`) in a call started as video, there is no Voice button: only the v1.18 camera
+on/off.
+
+**Rendering rule** (crypto C3): remote video is rendered only in video mode and only while the
+peer's last `call_media` says `camera` or `screen` (plus §19.5's 3-s frozen-frame fallback). Frames
+that arrive in voice mode are not rendered.
+
+### 23.3 Renegotiation: `call_offer` with `renegotiate: true` (crypto C1, C2; android A1)
+`call_offer_renegotiate_payload.json`, answered by `call_answer` (`call_answer_renegotiate_payload.json`):
+```json
+{"v": 1, "type": "call_offer", "call_id": "…", "media": "audio", "sdp": "v=0\r\n…",
+ "restart": false, "renegotiate": true, "to_device": "<selected callee device_id>", "sent_at": "…"}
+```
+- **When:** only to add `m=video` to a session that has none, **at most once per call**, and only
+  after a `call_switch` `accept` in this call (step 5 above). Never in a call started as video.
+- **Who:** only the **original caller device** sends `renegotiate` offers. A callee's ICE restart
+  (§16.2 `restart: true`) may still happen: a callee with its own restart outstanding that receives
+  the caller's re-offer **rolls back** its offer (`SessionDescription.Type.ROLLBACK`), answers the
+  re-offer, then repeats its restart; the caller ignores a callee offer that arrives while its own
+  is outstanding. `renegotiate` and `restart` are never true together.
+- **Sent** with `ring: false`, the call's cleartext `media` (the start media, §23.8), a fresh
+  `sent_at`, and `to_device`. **Binding** (extends §16.3): `event.ring == (envelope.type ==
+  "call_offer" && !envelope.restart && !envelope.renegotiate)`; `event.media` equals the call's
+  start media as before (§19.2).
+- **Applied only with consent** (crypto C2): the callee applies a `renegotiate` offer only if its
+  user accepted (or itself asked for) a switch in this call and no renegotiation happened yet;
+  otherwise it drops and logs it and the call goes on as voice. A v1.13–v1.22 callee never receives
+  one (no `switch` feature); if it did, the binding rule above (its `ring` check) drops it.
+- **SDP rules:** the re-offer and its answer follow §19.4 (exactly `m=audio` then `m=video`,
+  BUNDLE, VP8 and its `rtx` in the answer, no simulcast, `b=AS` ≤ 1500, the stripped header
+  extensions), and additionally:
+  - every `a=fingerprint` equals that device's first SDP of the call (§16.10 d; a different one
+    ends the call `failed`: `call_offer_renegotiate_payload_bad.json` carries a fingerprint other
+    than `call_offer_payload.json`'s, same `call_id`);
+  - `a=group:BUNDLE 0 1` with mid `0` first, the audio m-section keeps mid `0`, the video mid is
+    `1`;
+  - the **same `a=ice-ufrag`/`a=ice-pwd`** as the current session (not an ICE restart);
+  - `a=setup:actpass` in the re-offer; in the answer **the same `a=setup` value as that device's
+    first answer** (no DTLS role change, so no new handshake);
+  - `a=sendrecv` on the video m-line in both.
+- **After the answer is applied**, the §16.10 (e) check runs again (same transport, same
+  fingerprint); a failure ends the call `failed` (`dtls_fingerprint_mismatch`).
+- **Bounds:** the re-offer gets its `call_answer` within **10 s** or the caller rolls back (§23.2
+  step 6). Every WebRTC operation keeps decision 054's 10-s bound. A v1.23 app uses
+  `BundlePolicy.MAX_BUNDLE` and `RtcpMuxPolicy.REQUIRE` for every call, voice included.
+- Later restarts (`restart: true`) in a renegotiated call carry both m-lines and follow §19.4.
+
+### 23.4 `call_media` v1.23 (1:1)
+- Gains **`"video": "off" | "camera" | "screen"`** (`call_media_screen_payload.json`):
+  ```json
+  {"v": 1, "type": "call_media", "call_id": "…", "to_device": "…", "camera": false, "video": "screen"}
+  ```
+  `camera` stays and equals `video == "camera"` (v1.18 receivers read only `camera`; they never get
+  `screen`, §23.1). When both are present and disagree: drop and log. Absent `video` = derived from
+  `camera`.
+- Sent in video mode on every change of the sender's own video state (camera ↔ screen ↔ off) and
+  once after entering video mode; at most one per second, the last state wins (§19.3). No SDP
+  change: the source swap is `RtpSender.setTrack` (§23.5).
+- The receiver shows "<name> is sharing their screen" while the peer's state is `screen` (the label
+  comes only from this MLS envelope).
+
+### 23.5 Screen sharing
+**Source model (android A3).** One video sender per call (1:1) or one published video track
+(groups). The camera and the screen are two tracks from two sources: the camera source of §19 and
+a **screencast source** (`PeerConnectionFactory.createVideoSource(isScreencast = true)` with
+`ScreenCapturerAndroid`; LiveKit's screen-share track in groups). Switching is `setTrack` (1:1)
+or unpublish camera → publish screen (groups), with new encoding parameters. Starting a share turns
+the camera off; stopping it returns to the camera only if the camera was on before and the call
+screen is visible, else to `off`.
+
+**Starting** (the only ways):
+- 1:1 voice mode: a `call_switch` `request` with `source: "screen"`, then (after `accept`) the share.
+- 1:1 video mode: **Share screen** directly (the peer already accepted video), if the peer listed
+  `screen`.
+- Group: **Share screen** → `upgrade` if the room is voice (§23.6) → publish.
+- Every share asks the **system MediaProjection consent** (Android 14+ tokens are single-use; never
+  cache a consent `Intent`). On Android 14 QPR2+ the system dialog offers "A single app" or "Entire
+  screen"; the app doesn't restrict the choice. Before the system dialog on Android ≤ 14 the app
+  says once per share: "Notifications from other apps may be visible while you share. Turn on Do Not
+  Disturb to hide them." (with a link to the DND settings; no DND permission is requested).
+
+**Encoding guidance** (normative maxima; android tunes below them):
+| | 1:1 | group, high layer | group, low layer |
+|---|---|---|---|
+| Resolution | long side ≤ 1600 px, aspect kept | long side ≤ 1600 px | long side ≤ 800 px |
+| Frame rate | ≤ 15 fps (5 is fine for static content) | ≤ 15 fps | ≤ 5 fps |
+| Max bitrate | 1 200 000 on Wi-Fi, 600 000 on mobile data or relayed | 1 200 000 | 250 000 |
+- **Content hint "detail":** the screencast source (`isScreencast`) and
+  `degradationPreference = MAINTAIN_RESOLUTION` (text stays sharp; congestion lowers the frame rate,
+  not the resolution); the camera keeps §19.7's BALANCED. Bitrate adapts below the cap through
+  congestion control; on thermal status ≥ SEVERE the frame rate cap drops to 5 fps.
+- VP8 only (§19.4); in groups simulcast with the two layers above (the SFU sends the low layer to
+  constrained receivers). The virtual display follows rotation (resize on configuration change).
+- **No device audio:** no `AudioPlaybackCapture`; the microphone stays the call's audio.
+- coturn's `max-bps` (§19.8) covers 1.2 Mbit/s.
+
+**Privacy rules (normative; crypto C4, android A2):**
+- **Only while the user explicitly started it**: a tap on Share screen plus the system consent, every
+  time. Never automatic, never resumed after a stop without both again.
+- **A persistent banner and Stop:** the call screen shows "You're sharing your screen" with **Stop**;
+  the foreground-service notification (one notification, `ongoing`) says "Sharing your screen" with a
+  **Stop** action; Android 15+ adds its own status-bar indicator. Stop ends the share within 1 s and
+  sends `call_media` (`off` or `camera`).
+- **The share stops** on Stop, on the platform's `MediaProjection.Callback.onStop`, when the screen
+  turns off or locks (`SCREEN_OFF`), on `voice` (1:1), on call end, when the device is removed from
+  the group or the call (§20.2), and on process death (the next start finds no projection: decision
+  054's recovery sends nothing new).
+- **Notifications while sharing:** RisiMe's own message notifications are posted without sender or
+  content ("New message"), silently, until the share stops. Android 15+ hides other apps' sensitive
+  notifications during a projection itself; on older versions the warning above applies.
+- **RisiMe's own windows are `FLAG_SECURE` while sharing** (chats and the call screen show black to
+  viewers: no mirror loop, other chats never leak). Other apps' `FLAG_SECURE` windows (banking,
+  passwords) appear black: the platform does it.
+- **Foreground service:** the call service is started or upgraded to
+  `phoneCall|microphone|mediaProjection` **before** `getMediaProjection` (Android 14 rule);
+  `FOREGROUND_SERVICE_MEDIA_PROJECTION` is declared. Sharing continues while RisiMe is in the
+  background (that is its purpose); the camera keeps §19.5's visible-only rule.
+- **The viewer:** a screen tile is **fitted, never cropped**; **pinch-zoom and pan** (double tap
+  resets), local only; the label "<name> is sharing their screen" from MLS (§23.4, §23.6).
+
+### 23.6 Group calls (LiveKit)
+**Room modes.** A room started with `media: "video"` is a video room (§20). A room started with
+`media: "audio"` is a voice room until a participant **upgrades** it; then it is a video room for
+the rest of its life (the 8 cap holds from then on). Each member can still go back to voice for
+themselves at any time: **"Voice only"** stops their own camera or screen and unsubscribes from all
+remote video (`setSubscribed(false)`), local only.
+
+**`POST /api/v1/calls/rooms` `action: "upgrade"`** (`calls_room_upgrade_request.json`;
+`X-Device-Id` as §20.2, and the device must advertise **`call_switch`**, else `403
+invalid_device`). `media` in every rooms request is the call's **start media** (it names the room,
+§20.2), not the current one.
+- Order (server S4): a per-room lock (in memory; `upgrade` and `join` of one room are serialised) →
+  `ListRooms` (missing → `404 call_ended`) → the requester's identity is in `ListParticipants`, else
+  **`409 not_in_call`** (`error_not_in_call.json`) → **the cap**: the union of present identities
+  and identities the server minted a `start`/`join` token for in the last 600 s that aren't present
+  yet (in memory per room; lost on a restart, accepted) must be **≤ 8**, else **`409
+  too_many_for_video`** (`error_too_many_for_video.json`) → `UpdateRoomMetadata` with
+  `{"c": "<conversation_id>", "m": "video"}` → `UpdateParticipant` for the requester, then for every
+  other present identity (one retry each; a failure for the requester → `503 calls_unavailable`,
+  for others → logged), with the permission of `livekit_update_participant.json`:
+  `can_subscribe`, `can_publish`, `can_publish_sources` = microphone, camera, plus screen share if
+  that identity's device advertises `screen_share`; `can_publish_data` false.
+- **Reply** `200` (`calls_room_upgrade_reply.json`): the §20.2 reply with a fresh token (the claims
+  of `livekit_token_claims_v123.json`), `max_participants: 8` and **`"media": "video"`**.
+  Idempotent: a room already video answers the same and changes nothing.
+- Rate limit: `upgrade` 10 per user per hour (own bucket), `429` with `Retry-After`.
+
+**Changes to `start`, `join` and `status`** (server S2, S3, S5):
+- The metadata `m` is the room's **current** media. `join` takes the cap from it (8 for video, 32
+  for voice; LiveKit's own `max_participants` stays as created), and mints video grants
+  (microphone, camera, and screen share for `screen_share` devices) in a video room.
+  `start` with `media: "video"` also adds screen share for `screen_share` devices.
+- **`join` from an identity already in the room is a refresh:** never refused with `call_full`,
+  not counted twice, and in a video room it re-applies `UpdateParticipant` for that identity.
+- The `start`/`join` replies and **`status`** gain **`"media": "audio" | "video"`** (current;
+  `calls_room_status_reply_v123.json`), and `status`'s `max_participants` follows the mode.
+- Token TTL, claims otherwise and the removal hook: unchanged (§20.2).
+
+**Client flow (group):**
+1. A taps **Video** or **Share screen** in a voice room: `upgrade` → on `200`, keep the new token
+   for reconnects, send the group **`call_switch`** (below), then publish the camera or the screen.
+   `too_many_for_video` → "Video is available with 8 people or fewer"; nothing changes.
+2. Other v1.23 participants, on the `call_switch` `video`: show "<name> turned on video" (or "…is
+   sharing their screen"), enable their camera and share buttons (**never** their camera), and call
+   `join` once for a fresh token (a refresh) for later reconnects. A participant whose camera publish
+   is refused by LiveKit calls `join` (which re-grants) and retries once.
+3. **Rendering** (crypto C2, C5): a v1.23 participant's video is rendered only while that
+   identity's last MLS `call_media` for this call says `camera` or `screen` (the server can widen
+   grants and the SFU can forward tracks; neither makes us render). Exception for compatibility: in
+   a room started as video, a participant that never sent `call_media` (v1.19–v1.22) is rendered
+   per §20 as before. Always through the §20.6 fail-closed rules (screen tracks use the same
+   per-identity frame key). The screen label comes from the sender's MLS `call_media`, never from
+   LiveKit's track source (used for layout only: a screen tile is large and fitted).
+
+**Group envelopes** (group `call:signal`, `conversation_id`, `ring: false`, the call's start
+`media`; sender = the authenticated leaf, any member may send for itself):
+- **`call_switch`** (`call_switch_group_payload.json`):
+  `{"v":1,"type":"call_switch","call_id":"…","seq":1,"action":"video","source":"camera" | "screen"}`.
+  No `to_device`; `action` is only `video` in groups (no accept, no `voice`: "Voice only" is
+  local). Sent once, by the participant whose `upgrade` turned the room to video (an idempotent
+  `upgrade` of a room that was already video sends nothing). It is a notice for the UI; the
+  rendering permission is `call_media` (below).
+- **`call_media`** (`call_media_group_payload.json`):
+  `{"v":1,"type":"call_media","call_id":"…","video":"off" | "camera" | "screen"}`. No `to_device`, no
+  `camera`. Sent on every change of the sender's own video state, and **re-sent (if not `off`)
+  within 2 s when a new participant connects**, so late joiners learn it; at most one per second.
+- Strict validation: `call_id` UUID, `seq` 1–65 535, `action` `video`, `source` one of two,
+  `video` one of three, no `to_device`; else drop and log. ≤ v1.22 apps drop both (their group
+  validation knows neither type: an unknown type is ignored, §10.3).
+- Old participants (v1.19–v1.22) in an upgraded room keep audio, count toward the cap, may not show
+  video, and receive the camera grant harmlessly (their voice UI can't turn a camera on).
+
+### 23.7 Media, Telecom and the call screen (android, normative where it says "must")
+- **Routing on a switch** (android A4): core-telecom 1.0.1 can't change the call type. On a switch
+  to video, if the endpoint is the earpiece, request the speaker; on a switch back to voice, return
+  to the earpiece only if the speaker was chosen by the switch, not by the user. The proximity wake
+  lock only in voice mode on the earpiece.
+- The camera keeps §19.5 (only while the call screen is visible; never unasked) and §19.7. A
+  `CAMERA` denial during a switch leaves the camera off; video mode still applies (the user sees the
+  peer).
+- Buttons: **Video** (voice mode, peer has `switch`), **Voice** (video mode, peer has `switch`),
+  camera on/off and switch camera (video mode), **Share screen** / **Stop sharing** (peer has
+  `screen`, or a group).
+- The debug stats line adds the sender's video source (`src=camera|screen|none`), the call mode, and
+  the bytes of §23.9.
+- Permissions: adds `FOREGROUND_SERVICE_MEDIA_PROJECTION`. Not `SYSTEM_ALERT_WINDOW`, not
+  `CAPTURE_AUDIO_OUTPUT`. Decisions for the MediaProjection service wiring (LiveKit's
+  `ScreenCaptureService` with our notification, or our call service) go into an android decision.
+
+### 23.8 History lines and `media` (extends §16.6, §19.3, §20.4)
+- The cleartext `media` on `call:signal` (and in rooms requests) stays the **start media** of the
+  call for its whole life, so the §19.2 filters and binding are unchanged.
+- **`call_end.media`** is **`"video"` if the call was ever in video mode** (started as video, or a
+  switch was accepted, for camera or screen), else `"audio"`. A declined or cancelled request doesn't
+  count. Old apps (v1.18+) render it as "Video call · m:ss"; ≤ v1.17 as §19.11.
+- **`group_call` `ended.media`** is `"video"` if the room was ever a video room (started as video
+  or upgraded); `started.media` stays the start media. The running-call line "<name> started a voice
+  call" doesn't change on an upgrade; the ended line says "Video call · m:ss".
+- So the line reads "Video call" if video was ever on. Whether a screen was shared is local only
+  (§23.9).
+
+### 23.9 The call-info screen (client; nothing new on the wire)
+A per-contact call-info screen (from a call line, the contact page, or a Calls tab) lists that
+contact's calls, newest first: **direction** (outgoing, incoming, missed, declined), **date and
+time**, **media** (voice, video, screen shared), **duration** and **data used**. Group call lines
+appear in the group's info screen the same way.
+- **From the wire (already there):** `call_end` (media per §23.8, `reason`, `connected_at`,
+  `duration_s`), the line's sender and `server_ts`, `group_call` `started`/`ended`.
+- **Local only (never on the wire, never in `call_end`)**, kept in the call row on the device that
+  handled the call: `bytes_sent` and `bytes_received` (the sum of `getStats()` `transport`
+  `bytesSent`/`bytesReceived` over the call's connections, LiveKit's publisher and subscriber
+  included, sampled every 2 s and at the end so a crash keeps the last sample; shown as "about"),
+  `screen_shared` (this device or the peer), `relayed` (a relay candidate pair was used),
+  `handled_here`. A line handled on another device, received after a reinstall or restored from a
+  backup shows data used as "—". Purged with the line (Delete for me, `chat:clear`). Not in the
+  §22 bundle schema 1. The on-device behaviour log may record the same numbers (§16.13 rules).
+- **Why not on the wire** (crypto, server): the numbers are per device; the peer has its own; in
+  `call_end` they would add usage metadata to the other side's history with no use.
+
+### 23.10 Rollout and old apps
+- **Order:** server (capabilities, `upgrade`, metadata `m`, `join` refresh and caps, `media` in
+  replies) → a nightly that advertises `call_switch` and `screen_share`, sends `features`, and
+  shows the buttons (decision 053's single-step rollout: the features are per call, so a v1.23
+  device never asks an old one) → announce. A normal (optional) update.
+- **v1.13–v1.22 peers (1:1):** no `features` → no Video request, no Share screen, no re-offer; in a
+  call started as video the v1.18 camera on/off only. A v1.23 caller's voice offer is unchanged
+  (`features` is an extra field), so old sibling devices keep ringing.
+- **v1.19–v1.22 group participants:** §23.6. `call_switch`/`call_media` group envelopes are ignored
+  by them; `group_call` `ended.media: "video"` renders as "Video call".
+- **The server before this version** answers `upgrade` with `400 bad_request` (unknown action): the
+  app shows "Video isn't available in this call yet" and stays voice.
+
+### 23.11 Privacy and security
+- **1:1:** the server learns nothing new (the cleartext `media` stays the start media; the new
+  envelopes are ordinary `ring: false` signals). coturn and on-path observers see the bitrate jump
+  at a switch and a screencast's traffic shape (bursts on change, near-silence on a static screen),
+  so "video started" and "probably a screen" are visible, never content (crypto C7). The header
+  extensions of §19.4 stay stripped.
+- **Groups:** the server and LiveKit learn who upgraded a room and when, each participant's track
+  sources (camera or screen) and their publish times, and the bitrates; never content.
+- **Screen content** is the most sensitive media RisiMe carries: §23.5's rules are normative and in
+  the Android gate. It goes only over the call's E2EE path; never uploaded, recorded or shown to any
+  model.
+- Goes into the app's privacy note with the calls metadata.
+
+### 23.12 Test coverage (all gates)
+- **Server:** `call_switch`/`screen_share` kept in `mls.capabilities`; `upgrade`: the order of
+  checks (`call_ended`, `not_in_call`, `too_many_for_video` counting present identities plus tokens
+  minted in 600 s, `invalid_device` without `call_switch`), `UpdateRoomMetadata` with `m: "video"`,
+  `UpdateParticipant` per identity with screen share only for `screen_share` devices (against the
+  fake LiveKit API), the reply claims exactly, idempotency, the requester failure → `503`, the rate
+  limit; `join` after an upgrade: cap 8 from the metadata, video grants, a present identity never
+  `call_full` and re-granted; `status`/`start`/`join` `media`; 1:1 `call:signal` unchanged (a
+  `ring: false` signal with the start media passes the v1.18 filter); every new example.
+- **Android (JVM):** encode/decode of every new example; `features` gating (no buttons without the
+  peer's feature); the `call_switch` machine (request, accept, decline, 20-s timeout and `cancel`,
+  crossing requests, `voice`, `seq` replay and stale answers, the 10-s cooldown); renegotiation
+  (only the caller offers; applied only with consent; the §23.3 SDP rules incl.
+  `call_offer_renegotiate_payload_bad.json` against `call_offer_payload.json` → `failed`, a changed
+  `a=setup` role, changed ICE credentials, mid order; rollback on failure keeps audio; the callee
+  restart conflict; the second (e) check); binding with `renegotiate`; `call_media` `video` and its
+  consistency with `camera`; the rendering rule in voice mode; the source swap via `setTrack`; the
+  screen-share privacy rules (consent each time, `FLAG_SECURE` on own windows while sharing, own
+  notifications without content, stop on `SCREEN_OFF`/`onStop`/`voice`/call end); Telecom routing on
+  a switch; the `call_end`/`group_call` `media` rule and history lines; the local stats columns;
+  group: `upgrade` flow and errors, the group `call_switch`/`call_media` (incl. the re-send for a
+  new participant), rendering only per the sender's MLS `call_media` (and the v1.19–v1.22
+  exception), the label from MLS not from the track source, "Voice only".
+- **Device test (gate; `scripts/call-device-test`, two redroid containers, debug test pattern as the
+  camera, `appops set <pkg> PROJECT_MEDIA allow` or the system dialog through uiautomator):**
+  - **1:1:** A calls B (voice), answered; A taps Video → B "Switch" → VP8 frames decoded both ways;
+    A taps Voice → no new frames decoded on either side within 3 s and the voice UI; B taps Video →
+    A "Not now" → still voice; B taps Video → A "Without my camera" → B's frames decoded on A, none
+    on B; A starts Share screen → B shows "<A> is sharing their screen" and decodes frames with
+    `src=screen` on A; A stops → the label goes; Voice; hang up → "Video call · m:ss" on both.
+    Exactly one `renegotiate` offer in the call, from A (the caller).
+  - **Group:** a two-member group voice call (A starts, B joins); A taps Video → `upgrade` 200,
+    B sees "<A> turned on video" and decodes A's frames; B shares the screen → A shows the label;
+    B stops; B "Voice only" → B's received video bytes stop growing; A leaves → "Video call · m:ss".
+  - **Audio throughout:** at every phase boundary above (at least 8 samples per call), the audio
+    outbound `bytesSent` and inbound `bytesReceived` (kind audio only, P0-3) **grow on both devices**
+    compared with the previous sample.
+  - **Old peer** (when a v1.22 APK is in `~/risime-releases`): v1.23 A ↔ v1.22 B voice call: no
+    Video or Share button on A, the call connects and audio flows both ways.
+- **Live interop:** switch and share on two real phones on Wi-Fi and on mobile data (relay-only once
+  decision 046's ports are open); Android 14, 15 and 16 consent dialogs and the single-app choice;
+  a banking app shows black to the viewer.
+- **Examples:** `device_put_call_switch.json`, `call_offer_features_payload.json`,
+  `call_answer_features_payload.json`, `call_switch_request_payload.json`,
+  `call_switch_accept_payload.json`, `call_switch_voice_payload.json`,
+  `call_offer_renegotiate_payload.json`, `call_offer_renegotiate_payload_bad.json`,
+  `call_answer_renegotiate_payload.json`, `call_media_screen_payload.json`,
+  `call_switch_group_payload.json`, `call_media_group_payload.json`,
+  `calls_room_upgrade_request.json`, `calls_room_upgrade_reply.json`,
+  `calls_room_status_reply_v123.json`, `livekit_token_claims_v123.json`,
+  `livekit_update_participant.json`, `error_too_many_for_video.json`, `error_not_in_call.json`.
+
 ## Changelog
+- **v1.23** (2026-10-08): switching voice and video mid-call, and screen sharing (§23, decision
+  062), reviewed by server, android and crypto. Capabilities `call_switch` and `screen_share`;
+  per-call `features` (`switch`, `screen`) on `call_offer`/`call_answer` (inside MLS) gate every new
+  button, so v1.13–v1.22 peers see nothing new; 1:1 voice and video modes with the ephemeral
+  `call_switch` (`request` camera/screen, `accept`, `decline`, `cancel`, `voice`; `seq` per sender,
+  20-s timeout, crossing requests accept each other); one renegotiation per call at most, only by the
+  original caller, `call_offer` `renegotiate: true` (applied only after a local accept; same
+  fingerprint, DTLS role, ICE credentials and mid 0 transport; the (e) check again; rollback keeps
+  audio; binding `ring == offer && !restart && !renegotiate`); `call_media` `video`
+  (`off`/`camera`/`screen`); screen sharing as one video sender whose source switches (camera or
+  screen, never both), screencast source with `MAINTAIN_RESOLUTION`, ≤ 1600 px, ≤ 15 fps,
+  ≤ 1.2 Mbit/s (groups: plus a ≤ 800 px, 5 fps, 250 kbit/s layer), no device audio, normative
+  privacy rules (consent every time, banner and Stop, stop on lock, own notifications without
+  content, own windows `FLAG_SECURE`, fitted pinch-zoom viewer); groups: `POST /calls/rooms` `upgrade`
+  (cap 8 over present identities plus tokens minted in 600 s, `409 too_many_for_video`,
+  `409 not_in_call`, `UpdateRoomMetadata` `m: "video"`, `UpdateParticipant` grants, screen share only
+  for `screen_share` devices), `join` from a present identity is a refresh, `media` in the rooms
+  replies, group `call_switch` `video` and `call_media`, rendering only per the sender's MLS
+  `call_media`, local "Voice only"; `call_end.media` and `group_call` `ended.media` are `video` if
+  video was ever on; the call-info screen's data used is local only. No server change for 1:1, no MLS
+  core change. Additive.
 - **v1.22** (2026-10-08): encrypted backups (§22, decision 059), reviewed by crypto, server and
   android. `GET /auth/config` `backup: "on" | "off"` (server `BACKUPS`; off stops writes only,
   `503 backup_unavailable`); a per-account backup key `BK` (local copy in `mls_kv`, recovery copy

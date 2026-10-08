@@ -26,6 +26,26 @@ class ContractExamplesTest {
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
         "auth_verify_reply.json" to { s -> ProtocolJson.decodeFromString<AuthVerifyReply>(s) },
+        // v1.23 (§23 voice/video switching and screen sharing): parse-only placeholders until the app implements it.
+        "call_answer_features_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_answer_renegotiate_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_media_group_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_media_screen_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_offer_features_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_offer_renegotiate_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_offer_renegotiate_payload_bad.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_switch_accept_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_switch_group_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_switch_request_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_switch_voice_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "calls_room_status_reply_v123.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "calls_room_upgrade_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "calls_room_upgrade_request.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "device_put_call_switch.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_not_in_call.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_too_many_for_video.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "livekit_token_claims_v123.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "livekit_update_participant.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         // v1.22 (§22 encrypted backups): typed models; client-sent bodies re-encode exactly (backupExamplesReEncode).
         "auth_config_v122.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.backupOn) } },
         "backup_bundle_header.json" to { s ->
