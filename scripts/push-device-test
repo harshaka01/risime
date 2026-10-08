@@ -21,7 +21,16 @@
 #  3. 1 and 2 again after B's task is removed from Recents (the process dies; not force-stop, which
 #     blocks FCM by design).
 #  4. For every scenario: the server really decided to push (the recorder got B's push, the call ring
-#     says live=0) and never logged a skip for B as online.
+#     says live=0; a `push: watchdog` line counts as a push) and never logged a skip for B as online.
+#  5. A message immediately followed by a call (deep idle): the call still rings within 10 s (the inbox
+#     push's sync must never hold up the call push behind it on FCM's single thread).
+#  6. B in the `restricted` standby bucket (am set-standby-bucket): the message within 10 s.
+#  7. Exactly one notification per message (the "notification posted" passes on B, across socket,
+#     push and worker): no duplicates in scenarios 1, 3a and 6.
+#  8. Cold start (process dead) while every device-registration PUT fails (503 from a filtering proxy
+#     in front of the server for B only): 3 messages still arrive, none lost (sent texts vs B's Room rows).
+#     The proxy (127.0.0.1:$PUSHTEST_PROXY_PORT, default PORT+100) passes everything else through,
+#     websockets included; `adb reverse` points B's server port at it.
 # Prints "PUSHTEST PASS|FAIL <step>" and "PUSHTEST OK" at the end; logs in ~/risime-logs/pushtest$SUF/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -42,14 +51,16 @@ LOGS="$HOME/risime-logs/pushtest$SUF"; mkdir -p "$LOGS"; rm -f "$LOGS"/*.txt "$L
 export RISIME_DEV_DB="risime_pushtest$SUF" RISIME_DEV_KEYSPACE="risime_pushtest$SUF" ERL_EPMD_ADDRESS=127.0.0.1
 export MIX_BUILD_PATH="$REPO/server/_build/pushtest$SUF" RISIME_CODE_RELOADER=false
 PUSHES="$WORK/pushes.log"; : > "$PUSHES"
-DELIVER_PID=""
+PROXY_PORT="${PUSHTEST_PROXY_PORT:-$((PORT + 100))}"
+FAILPUT="$WORK/fail-device-put"
+DELIVER_PID=""; PROXY_PID=""
 FAILED=0
 now_ms() { date +%s%3N; }
 pass() { echo "PUSHTEST PASS $*"; }
 fail() { echo "PUSHTEST FAIL $*"; FAILED=1; diag; exit 1; }
 diag() {
   for d in A B; do
-    local s; s="$(ser $d)"
+    local s; s="$(ser $d)"; [ -n "$s" ] || continue
     adb -s "$s" exec-out screencap -p > "$LOGS/$d-screen.png" 2>/dev/null || true
     adb -s "$s" logcat -d > "$LOGS/$d-logcat.txt" 2>/dev/null || true
     adb -s "$s" shell dumpsys notification --noredact > "$LOGS/$d-notifications.txt" 2>/dev/null || true
@@ -58,10 +69,12 @@ diag() {
 }
 cleanup() {
   [ -n "$DELIVER_PID" ] && kill "$DELIVER_PID" 2>/dev/null || true
+  [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true
+  cp "$WORK/proxy.log" "$LOGS/proxy.log" 2>/dev/null || true
   cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
   cp "$PUSHES" "$LOGS/pushes.log" 2>/dev/null || true
   cp "$WORK/deliver.log" "$LOGS/deliver.log" 2>/dev/null || true
-  for d in A B; do adb -s "$(ser $d)" logcat -d -s RisiMe:* > "$LOGS/$d-risime.txt" 2>/dev/null || true; done
+  for d in A B; do [ -n "$(ser $d)" ] && timeout 30 adb -s "$(ser $d)" logcat -d -s RisiMe:* > "$LOGS/$d-risime.txt" 2>/dev/null || true; done
   tmux kill-session -t "risime-pushtest$SUF" 2>/dev/null || true
   if [ "$KEEP" = 0 ]; then
     REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
@@ -142,6 +155,54 @@ curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't s
 for _ in $(seq 1 20); do grep -q "pushtest: recorder installed" "$WORK/server.log" && break; sleep 1; done
 grep -q "pushtest: recorder installed" "$WORK/server.log" || { echo "the push recorder hook didn't load"; tail -20 "$WORK/server.log"; exit 1; }
 fx setup
+# ---- B's filtering proxy: PUT …/me/devices/<id> → 503 while $FAILPUT exists; everything else passes
+# (each plain request on its own upstream connection with Connection: close; websockets piped as-is).
+ss -ltnH "sport = :$PROXY_PORT" | grep -q . && { echo "proxy port $PROXY_PORT busy"; exit 1; }
+cat > "$WORK/proxy.py" <<'PY'
+import asyncio, os, re, sys, time
+listen, upstream, flag, log = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3], sys.argv[4]
+def note(s):
+    with open(log, "a") as f: f.write(f"{int(time.time()*1000)} {s}\n")
+async def pipe(r, w):
+    try:
+        while (b := await r.read(65536)): w.write(b); await w.drain()
+    except Exception: pass
+    finally:
+        try: w.close()
+        except Exception: pass
+async def handle(cr, cw):
+    try:
+        while True:
+            try: head = await cr.readuntil(b"\r\n\r\n")
+            except Exception: return
+            lines = head.decode("latin-1").split("\r\n")
+            method, path = lines[0].split(" ")[:2]
+            hdrs = {l.split(":", 1)[0].strip().lower(): l.split(":", 1)[1].strip() for l in lines[1:] if ":" in l}
+            body = await cr.readexactly(int(hdrs.get("content-length", "0") or 0))
+            if method == "PUT" and re.search(r"/me/devices/[^/?]+$", path.split("?")[0]) and os.path.exists(flag):
+                note(f"503 {method} {path}")
+                msg = b'{"error":"pushtest_unavailable"}'
+                cw.write(b"HTTP/1.1 503 Service Unavailable\r\ncontent-type: application/json\r\ncontent-length: %d\r\n\r\n%s" % (len(msg), msg))
+                await cw.drain(); continue
+            ur, uw = await asyncio.open_connection("127.0.0.1", upstream)
+            if hdrs.get("upgrade", "").lower() == "websocket":
+                note(f"ws {path.split('?')[0]}")
+                uw.write(head + body); await uw.drain()
+                await asyncio.gather(pipe(cr, uw), pipe(ur, cw)); return
+            out = [l for l in lines[1:] if l and not l.lower().startswith("connection:")]
+            uw.write(("\r\n".join([lines[0]] + out + ["Connection: close", "", ""])).encode("latin-1") + body); await uw.drain()
+            await pipe(ur, cw); return  # the response closes both (the client opens a new connection)
+    finally:
+        try: cw.close()
+        except Exception: pass
+async def main():
+    s = await asyncio.start_server(handle, "127.0.0.1", listen)
+    note("proxy up"); await s.serve_forever()
+asyncio.run(main())
+PY
+python3 -I "$WORK/proxy.py" "$PROXY_PORT" "$PORT" "$FAILPUT" "$WORK/proxy.log" & PROXY_PID=$!
+for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$PROXY_PORT/health" && break; sleep 0.5; done
+curl -sf -o /dev/null "http://127.0.0.1:$PROXY_PORT/health" || { echo "the proxy didn't start"; exit 1; }
 otp() { grep -a "\[DEV OTP\] $1:" "$WORK/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true; }
 
 # ---------------------------------------------------------------- devices
@@ -161,7 +222,8 @@ for DEV in A B; do
   # The fake FCM token (debug builds only), read at registration.
   A shell "run-as $PKG mkdir -p files && run-as $PKG sh -c 'echo pushtest-$DEV > files/debug_push_token'" \
     || { echo "could not write the debug push token on $DEV"; exit 1; }
-  A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+  if [ "$DEV" = B ]; then A reverse "tcp:$PORT" "tcp:$PROXY_PORT" >/dev/null; else A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null; fi
+  A logcat -G 16M >/dev/null 2>&1 || true
   A logcat -c || true
 done
 
@@ -293,6 +355,18 @@ b_sleep() {  # $1 = home|recents
     A shell dumpsys package "$PKG" | grep -q "stopped=true" && fail "B: the app is in the stopped state (would block FCM)"
     echo "    [B] task $tid removed from Recents; process gone (not stopped)"
   fi
+  if [ -n "${B_BUCKET:-}" ]; then
+    A shell am set-standby-bucket "$PKG" "$B_BUCKET" >/dev/null 2>&1 || true
+    local bucket; bucket="$(A shell am get-standby-bucket "$PKG" 2>/dev/null | tr -d '\r')"
+    echo "    [B] standby bucket: $bucket (asked $B_BUCKET)"
+    if [ "$B_BUCKET" = restricted ] && [ "$bucket" != 45 ]; then
+      # Redroid runs with app standby off (mAppIdleEnabled=false: every app EXEMPT, the bucket can't be
+      # set). The user-facing "Restricted" battery setting is the same restriction via AppOps: no jobs
+      # (the expedited worker never runs), no background starts. The direct sync has to carry it.
+      A shell cmd appops set "$PKG" RUN_ANY_IN_BACKGROUND ignore >/dev/null 2>&1 || true
+      echo "    [B] app standby is off on redroid: RUN_ANY_IN_BACKGROUND=$(A shell cmd appops get "$PKG" RUN_ANY_IN_BACKGROUND 2>/dev/null | tr -d '\r') (background-restricted instead)"
+    fi
+  fi
   A shell settings put global stay_on_while_plugged_in 0 >/dev/null 2>&1 || true
   A shell dumpsys battery unplug >/dev/null 2>&1 || true
   A shell input keyevent KEYCODE_SLEEP; sleep 1
@@ -337,6 +411,7 @@ server_skipped_online() {  # since line $1 of the server log (the server's push 
 scenario_message() {  # $1 label
   local label="$1" t0 sl ts txt="ptmsg$RANDOM$RANDOM" d
   DEV=B; A logcat -d -s RisiMe:* 2>/dev/null | grep -a "RisiMe push: socket" | tail -2 | sed 's/^/    [B] /' || true
+  local p0; p0="$(posted_count)"
   sl="$(wc -l < "$WORK/server.log")"; t0="$(now_ms)"
   DEV=A; send_text "$txt" || fail "$label: A can't send"
   ts=""; for _ in $(seq 1 30); do ts="$(first_push_ts "$t0" inbox)"; [ -n "$ts" ] && break; sleep 0.5; done
@@ -349,6 +424,91 @@ scenario_message() {  # $1 label
   server_skipped_online "$sl" && fail "$label: the server logged a skip for B as online"
   pass "$label: B shows the message notification (messages_v2, the text in it) ${d} ms after the push"
   echo "$label message_ms=$d" >> "$LOGS/timings.txt"
+  # One message → exactly one alerting notification pass (socket, direct sync and worker together).
+  sleep 8
+  local n; n=$(( $(posted_count) - p0 ))
+  [ "$n" -eq 1 ] || fail "$label: $n notification passes for one message (duplicates or none)"
+  pass "$label: exactly one notification for the message (no duplicate from socket/push/worker)"
+}
+posted_count() { DEV=B; A logcat -d -s RisiMe:* 2>/dev/null | grep -ac "RisiMe push: notification posted" || true; }
+# A message, then at once a call (5): both pushes arrive back to back; the call must still ring in 10 s.
+scenario_message_then_call() {  # $1 label
+  local label="$1" t0 sl tsm tsc txt="ptmc$RANDOM$RANDOM" d ring gotm="" gotc=""
+  sl="$(wc -l < "$WORK/server.log")"; t0="$(now_ms)"
+  DEV=A; send_text "$txt" || fail "$label: A can't send"
+  local ok=""; for _ in $(seq 1 15); do tap "Voice call" && { ok=1; break; }; sleep 1; done
+  [ -n "$ok" ] || fail "$label: A has no call button"
+  tsm=""; tsc=""
+  for _ in $(seq 1 40); do
+    tsm="$(first_push_ts "$t0" inbox)"; tsc="$(first_push_ts "$t0" call)"
+    [ -n "$tsm" ] && [ -n "$tsc" ] && break; sleep 0.5
+  done
+  [ -n "$tsm" ] || fail "$label: the server never pushed the message to B"
+  [ -n "$tsc" ] || fail "$label: the server never sent B a call push"
+  echo "    call push $((tsc - tsm)) ms after the message push"
+  ring="$(tail -n +"$sl" "$WORK/server.log" | grep -a "call ring:" | grep -a "to=$B_ID" | tail -1 || true)"
+  [[ "$ring" == *"live=0"* ]] || fail "$label: the server rang B as live (${ring:-no ring line})"
+  DEV=B
+  while [ $(( $(now_ms) - tsc )) -lt "$LIMIT_MS" ]; do
+    [ -z "$gotc" ] && notif_has calls "" && gotc="$(now_ms)"
+    [ -z "$gotm" ] && notif_has messages_v2 "$txt" && gotm="$(now_ms)"
+    [ -n "$gotc" ] && [ -n "$gotm" ] && break
+    sleep 0.3
+  done
+  [ -n "$gotc" ] || fail "$label: B didn't ring within $((LIMIT_MS / 1000)) s of the call push (behind the message push?)"
+  [ -n "$gotm" ] || fail "$label: no message notification within $((LIMIT_MS / 1000)) s of the call push"
+  server_skipped_online "$sl" && fail "$label: the server logged a skip for B as online"
+  pass "$label: B rings $((gotc - tsc)) ms after the call push, message notification $((gotm - tsm)) ms after its push"
+  echo "$label ring_ms=$((gotc - tsc)) message_ms=$((gotm - tsm))" >> "$LOGS/timings.txt"
+  DEV=A; tap "End call" || tap "Cancel" || fail "$label: A can't cancel the call"
+  DEV=B; for _ in $(seq 1 20); do notif_has calls "" || break; sleep 1; done
+  notif_has calls "" && fail "$label: B still rings after A cancelled"
+  pass "$label: A cancelled; B stopped ringing"
+}
+# B's Room rows with these bodies (the sqlite file copied out; plain SQLite, debug build).
+b_rows_with() {  # $@ texts → count of distinct texts present
+  DEV=B; local f
+  for f in risime.db risime.db-wal risime.db-shm; do
+    A exec-out run-as "$PKG" cat "databases/$f" > "$WORK/b-$f" 2>/dev/null || rm -f "$WORK/b-$f"
+  done
+  python3 -I - "$WORK/b-risime.db" "$@" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+print(sum(1 for t in sys.argv[2:] if db.execute("select count(*) from messages where body = ? and outgoing = 0", (t,)).fetchone()[0] > 0))
+PY
+}
+# (8) Cold start by push while B's device registration keeps failing: nothing may be lost or stall.
+scenario_registration_fails() {  # $1 label
+  local label="$1" t0 sl i txts=() ts got="" p0 n rows
+  touch "$FAILPUT"
+  b_sleep recents
+  p0="$(posted_count)"
+  sl="$(wc -l < "$WORK/server.log")"; t0="$(now_ms)"
+  # Each message shows within 10 s of the push sent for it (A types slowly: a push per message).
+  local tl tsl
+  for i in 1 2 3; do
+    txts+=("ptreg$i$RANDOM"); tl="$(now_ms)"
+    DEV=A; send_text "${txts[-1]}" || fail "$label: A can't send"
+    tsl=""; for _ in $(seq 1 20); do tsl="$(first_push_ts "$tl" inbox)"; [ -n "$tsl" ] && break; sleep 0.5; done
+    [ -n "$tsl" ] || { [ "$i" = 1 ] && fail "$label: the server never pushed message 1 to B"; tsl="$tl"; echo "    message $i: no push (B online over the socket): timed from the send"; }
+    [ "$i" = 1 ] && ts="$tsl"
+    DEV=B; got=""
+    while [ $(( $(now_ms) - tsl )) -lt "$LIMIT_MS" ]; do notif_has messages_v2 "${txts[-1]}" && { got="$(now_ms)"; break; }; sleep 0.3; done
+    [ -n "$got" ] || fail "$label: message $i didn't show within $((LIMIT_MS / 1000)) s of its push"
+    echo "    message $i shown $((got - tsl)) ms after its push"
+    [ "$i" = 1 ] && echo "$label first_shown_ms=$((got - tsl))" >> "$LOGS/timings.txt"
+  done
+  grep -q "503 PUT" "$WORK/proxy.log" || fail "$label: B's registration PUT never hit the failing proxy (not a cold start?)"
+  server_skipped_online "$sl" && fail "$label: the server logged a skip for B as online"
+  pass "$label: every message shown within $((LIMIT_MS / 1000)) s of its push while every registration PUT got 503 ($(grep -c '503 PUT' "$WORK/proxy.log") refused)"
+  sleep 6
+  rows="$(b_rows_with "${txts[@]}")"
+  [ "$rows" = 3 ] || fail "$label: sent 3, B's Room has $rows of them (lost messages)"
+  n=$(( $(posted_count) - p0 ))
+  [ "$n" -ge 1 ] && [ "$n" -le 3 ] || fail "$label: $n notification passes for 3 messages"
+  pass "$label: sent 3 = 3 rows in B's Room; $n notification pass(es), no duplicates"
+  echo "$label rows=$rows passes=$n" >> "$LOGS/timings.txt"
+  rm -f "$FAILPUT"
 }
 scenario_call() {  # $1 label
   local label="$1" t0 sl ts d ring
@@ -386,8 +546,15 @@ b_sleep recents
 scenario_message "scenario 3a (removed from Recents, screen off, deep idle)"
 b_wake; b_sleep recents
 scenario_call "scenario 3b (removed from Recents, screen off, deep idle)"
+b_wake; b_sleep home
+scenario_message_then_call "scenario 5 (message then call at once, Home, screen off, deep idle)"
+b_wake; B_BUCKET=restricted b_sleep home
+scenario_message "scenario 6 (restricted, Home, screen off, deep idle)"
+DEV=B; A shell am set-standby-bucket "$PKG" active >/dev/null 2>&1 || true; A shell cmd appops set "$PKG" RUN_ANY_IN_BACKGROUND allow >/dev/null 2>&1 || true
+b_wake; sleep 3
+scenario_registration_fails "scenario 8 (cold start by push, every registration PUT fails)"
 b_wake
-DEV=B; A logcat -d -s RisiMe:* 2>/dev/null | grep -a "RisiMe push:" | tail -40 > "$LOGS/B-push-lines.txt" || true
+DEV=B; A logcat -d -s RisiMe:* 2>/dev/null | grep -a "RisiMe push:" > "$LOGS/B-push-lines.txt" || true
 grep -q "RisiMe push: received kind=inbox" "$LOGS/B-push-lines.txt" || fail "B never logged a received inbox push (onMessageReceived not reached?)"
 grep -q "RisiMe push: received kind=call" "$LOGS/B-push-lines.txt" || fail "B never logged a received call push"
 grep -q "RisiMe push: notification posted" "$LOGS/B-push-lines.txt" || fail "B never logged a posted notification"
