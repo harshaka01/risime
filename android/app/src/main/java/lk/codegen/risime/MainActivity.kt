@@ -34,7 +34,9 @@ class MainActivity : FragmentActivity() {
         }
         // Decision 064: no Recents thumbnail of the chats while the fingerprint lock is on.
         lifecycleScope.launch {
-            container.appLock.settings.collect { s -> lk.codegen.risime.ui.lock.LockPrivacy.apply(this@MainActivity, s?.enabled == true) }
+            // §23.5: and FLAG_SECURE while a screen share runs (other chats never reach the viewer).
+            kotlinx.coroutines.flow.combine(container.appLock.settings, lk.codegen.risime.calls.ScreenSharing.flow) { s, sharing -> (s?.enabled == true) to sharing }
+                .collect { (lock, sharing) -> lk.codegen.risime.ui.lock.LockPrivacy.apply(this@MainActivity, lock, sharing = sharing) }
         }
         // The installer's confirmation (when Android doesn't allow a silent self-update).
         lifecycleScope.launch {

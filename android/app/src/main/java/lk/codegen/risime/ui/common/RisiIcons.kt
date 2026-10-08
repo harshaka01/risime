@@ -64,6 +64,16 @@ object RisiIcons {
     val VideocamOff by lazy {
         icon("VideocamOff", "M21,6.5l-4,4V7c0,-0.55 -0.45,-1 -1,-1H9.82L21,17.18V6.5zM3.27,2L2,3.27 4.73,6H4c-0.55,0 -1,0.45 -1,1v10c0,0.55 0.45,1 1,1h12c0.21,0 0.39,-0.08 0.54,-0.18L19.73,21 21,19.73 3.27,2z")
     }
+    /** §23.5 Share screen. */
+    val ScreenShare by lazy {
+        icon("ScreenShare", "M20,18c1.1,0 1.99,-0.9 1.99,-2L22,6c0,-1.11 -0.9,-2 -2,-2H4c-1.11,0 -2,0.89 -2,2v10c0,1.1 0.89,2 2,2H0v2h24v-2h-4zM13,14.47V12.3c-2.78,0 -4.61,0.85 -6,2.72 0.56,-2.67 2.11,-5.33 6,-5.87V7l4,3.73 -4,3.74z")
+    }
+
+    /** The call screen's add-participant button. */
+    val PersonAdd by lazy {
+        icon("PersonAdd", "M15,12c2.21,0 4,-1.79 4,-4s-1.79,-4 -4,-4 -4,1.79 -4,4 1.79,4 4,4zM6,10V7H4v3H1v2h3v3h2v-3h3v-2H6zM15,14c-2.67,0 -8,1.34 -8,4v2h16v-2c0,-2.66 -5.33,-4 -8,-4z")
+    }
+
     /** §19.7 front/back camera. */
     val CameraSwitch by lazy {
         icon(

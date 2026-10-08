@@ -47,7 +47,9 @@ class LockPrivacyTest {
     @Test fun theCallScreenIsNeverMadeSecure() {
         // Only MainActivity applies the lock privacy; CallActivity must stay visible/answerable.
         val src = java.io.File("src/main/java/lk/codegen/risime/calls/CallActivity.kt").readText()
-        assertFalse(src.contains("FLAG_SECURE") || src.contains("LockPrivacy"))
+        assertFalse(src.contains("LockPrivacy"))
+        // §23.5: the only FLAG_SECURE on the call screen is the screen-share rule (viewers see black while this phone shares).
+        assertTrue(!src.contains("FLAG_SECURE") || src.contains("ScreenSharing.flow.collect"))
         assertTrue(java.io.File("src/main/java/lk/codegen/risime/MainActivity.kt").readText().contains("LockPrivacy.apply"))
     }
 }

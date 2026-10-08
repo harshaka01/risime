@@ -47,8 +47,8 @@ class CallScreensTest(private val dark: Boolean) {
         rule.setContent { RisiMeTheme(dark = dark) { IncomingCallScreen("Kamal Perera", onAnswer = { events += "answer" }, onDecline = { events += "decline" }) } }
         rule.onNodeWithText("Kamal Perera").assertIsDisplayed()
         rule.onNodeWithText("RisiMe voice call").assertIsDisplayed()
-        rule.onNodeWithContentDescription("Answer").performScrollTo().performClick()
-        rule.onNodeWithContentDescription("Decline").performScrollTo().performClick()
+        rule.onNodeWithContentDescription("Answer").performClick()
+        rule.onNodeWithContentDescription("Decline").performClick()
         assertEquals(listOf("answer", "decline"), events)
     }
 
@@ -56,7 +56,7 @@ class CallScreensTest(private val dark: Boolean) {
         rule.setContent { RisiMeTheme(dark = dark) { IncomingCallScreen(null, onAnswer = { events += "answer" }, onDecline = {}) } }
         rule.onNodeWithText("Incoming RisiMe call").assertIsDisplayed()
         rule.onNodeWithText("Unlock RisiMe to see who's calling").assertIsDisplayed()
-        rule.onNodeWithContentDescription("Answer").performScrollTo().performClick()
+        rule.onNodeWithContentDescription("Answer").performClick()
         assertEquals(listOf("answer"), events)
     }
 
@@ -71,15 +71,15 @@ class CallScreensTest(private val dark: Boolean) {
         }
         rule.onNodeWithText("Connecting…").assertIsDisplayed()
         assertTrue(runCatching { rule.onNodeWithText("End-to-end encrypted").assertIsDisplayed() }.isFailure)
-        rule.onNodeWithContentDescription("Mute").performScrollTo().performClick()
+        rule.onNodeWithContentDescription("Mute").performClick()
         rule.onNodeWithText("Muted").assertIsDisplayed()
         // Earpiece + speaker only: one tap switches to the speaker (no list).
-        rule.onNodeWithContentDescription("Audio output").performScrollTo().performClick()
-        rule.onNodeWithContentDescription("End call").performScrollTo().performClick()
+        rule.onNodeWithContentDescription("Audio output").performClick()
+        rule.onNodeWithContentDescription("End call").performClick()
         assertEquals(listOf("mute=true", "route=Speaker", "end"), events)
         ui = ui.copy(status = "3:12", verified = true)
-        rule.onNodeWithText("End-to-end encrypted").performScrollTo().assertIsDisplayed()
-        rule.onNodeWithText("3:12").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("End-to-end encrypted").assertIsDisplayed()
+        rule.onNodeWithText("3:12").assertIsDisplayed()
     }
 
     @Test fun bluetoothOpensTheRouteList() {
@@ -90,7 +90,7 @@ class CallScreensTest(private val dark: Boolean) {
         rule.setContent { RisiMeTheme(dark = dark) { InCallScreen(ui, {}, { e -> events += "route=${e.name}"; ui = ui.copy(current = e) }, {}) } }
         // The button shows the real route: Bluetooth.
         rule.onNodeWithText("Bluetooth").assertExists()
-        rule.onNodeWithContentDescription("Audio output").performScrollTo().performClick()
+        rule.onNodeWithContentDescription("Audio output").performClick()
         // The picker: the device's name, Phone and Speaker; the current one checked.
         rule.onNodeWithText("Pixel Buds").assertExists()
         rule.onNodeWithText("Phone").assertExists()
@@ -104,12 +104,12 @@ class CallScreensTest(private val dark: Boolean) {
     @Test fun noOrOneTelecomRouteKeepsTheRouteButtonWorking() {
         var ui by mutableStateOf(InCallUi("Kamal", "Calling…", endpoints = emptyList()))
         rule.setContent { RisiMeTheme(dark = dark) { InCallScreen(ui, {}, { e -> events += "route=${e.kind}:${e.id}"; ui = ui.copy(current = e) }, {}) } }
-        rule.onNodeWithContentDescription("Audio output").performScrollTo().assertIsEnabled().performClick()
+        rule.onNodeWithContentDescription("Audio output").assertIsEnabled().performClick()
         rule.onNodeWithContentDescription("Audio output").assertStateDescription("On")
         rule.onNodeWithText("Speaker").assertExists()
         rule.onNodeWithContentDescription("Audio output").performClick()
         rule.onNodeWithContentDescription("Audio output").assertStateDescription("Off")
-        rule.onNodeWithText("Phone").assertExists()
+        rule.onNodeWithText("Speaker").assertExists() // WhatsApp: the button says "Speaker" (off) on the earpiece
         assertEquals(listOf("route=SPEAKER:am:SPEAKER", "route=EARPIECE:am:EARPIECE"), events)
         // Telecom lists only the earpiece (Harsha's phones): the tap still asks for the speaker.
         events.clear()
@@ -135,9 +135,9 @@ class CallScreensTest(private val dark: Boolean) {
         val speaker = EndpointUi("2", "Speaker", EndpointUi.Kind.SPEAKER)
         var ui by mutableStateOf(InCallUi("Kamal", "0:05", endpoints = listOf(earpiece, speaker), current = earpiece, active = true))
         rule.setContent { RisiMeTheme(dark = dark) { InCallScreen(ui, {}, { e -> events += "route=${e.name}"; ui = ui.copy(current = e) }, {}) } }
-        rule.onNodeWithContentDescription("Audio output").performScrollTo().assertIsEnabled().assertStateDescription("Off")
-        // The label is the real route: the earpiece ("Phone").
-        rule.onNodeWithText("Phone").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Audio output").assertIsEnabled().assertStateDescription("Off")
+        // WhatsApp: the button says "Speaker", not highlighted, on the earpiece.
+        rule.onNodeWithText("Speaker").assertIsDisplayed()
         // Telecom moved the video call to the speaker: the button shows it on.
         ui = ui.copy(current = speaker)
         rule.onNodeWithContentDescription("Audio output").assertStateDescription("On")

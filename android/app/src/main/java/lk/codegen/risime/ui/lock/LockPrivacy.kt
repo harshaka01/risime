@@ -17,8 +17,9 @@ object LockPrivacy {
     fun plan(lockOn: Boolean, sdk: Int): Plan =
         if (sdk >= 33) Plan(recentsScreenshot = !lockOn, flagSecure = false) else Plan(recentsScreenshot = null, flagSecure = lockOn)
 
-    fun apply(activity: Activity, lockOn: Boolean, sdk: Int = Build.VERSION.SDK_INT) {
-        val p = plan(lockOn, sdk)
+    /** [sharing] (§23.5): while this phone shares its screen RisiMe's own windows are FLAG_SECURE (viewers see black). */
+    fun apply(activity: Activity, lockOn: Boolean, sdk: Int = Build.VERSION.SDK_INT, sharing: Boolean = false) {
+        val p = plan(lockOn, sdk).let { if (sharing) it.copy(flagSecure = true) else it }
         if (p.recentsScreenshot != null && Build.VERSION.SDK_INT >= 33) {
             runCatching { activity.setRecentsScreenshotEnabled(p.recentsScreenshot) }
         }

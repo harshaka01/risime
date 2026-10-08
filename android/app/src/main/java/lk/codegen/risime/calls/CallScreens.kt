@@ -101,111 +101,29 @@ data class InCallUi(
 fun routeButtonEnabled(ui: InCallUi): Boolean = !ui.ended
 
 private val Green = Color(0xFF1E9E4A)
-private val Red = Color(0xFFD93025)
-
-/**
- * The call background: the theme's brand gradient (decision 048 colours stay legible: white text,
- * checked ≥ 4.5:1 in DesignTokensTest) with a soft glow behind the avatar. [video] is where a 1:1
- * video surface will go (full-bleed under the controls); null for voice.
- */
-@Composable
-private fun CallBackdrop(video: (@Composable () -> Unit)? = null, content: @Composable () -> Unit) {
-    val c = RisiTheme.colors
-    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(c.callTop, c.callBottom)))) {
-        Box(
-            Modifier.fillMaxSize().drawBehind {
-                drawRect(
-                    Brush.radialGradient(
-                        listOf(BrandCyan.copy(alpha = 0.24f), Color.Transparent),
-                        center = androidx.compose.ui.geometry.Offset(size.width / 2, size.height * 0.36f),
-                        radius = size.width * 0.75f,
-                    ),
-                )
-            },
-        )
-        video?.invoke()
-        CompositionLocalProvider(LocalContentColor provides Color.White) { content() }
-    }
-}
-
-/** True on a short screen (under 700 dp of height): a smaller avatar and tighter gaps, so nothing scrolls. */
-private val LocalCompactCall = androidx.compose.runtime.staticCompositionLocalOf { false }
 
 /** A large initials avatar with a soft ring; [pulse] animates the ring while ringing. */
 @Composable
-private fun CallAvatar(name: String?, pulse: Boolean, photoKey: String? = null) {
-    val k = if (LocalCompactCall.current) 0.72f else 1f
+internal fun CallAvatar(name: String?, pulse: Boolean, photoKey: String? = null, scale: Float = 1f) {
+    val k = scale
     val ring = if (pulse) {
         val t = rememberInfiniteTransition(label = "ring")
         t.animateFloat(1f, 1.18f, infiniteRepeatable(tween(1100), RepeatMode.Reverse), label = "ring").value
     } else 1f
-    Box(Modifier.size(168.dp * k), contentAlignment = Alignment.Center) {
-        Box(Modifier.size(150.dp * k).scale(ring).clip(CircleShape).background(Color.White.copy(alpha = 0.10f)))
-        Box(Modifier.size(132.dp * k).clip(CircleShape).background(Color.White.copy(alpha = 0.16f)))
+    Box(Modifier.size(200.dp * k), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(180.dp * k).scale(ring).clip(CircleShape).background(Color.White.copy(alpha = 0.10f)))
+        Box(Modifier.size(160.dp * k).clip(CircleShape).background(Color.White.copy(alpha = 0.16f)))
         if (name != null) {
-            InitialsAvatar(name, size = 116.dp * k, photoKey = photoKey)
+            InitialsAvatar(name, size = 140.dp * k, photoKey = photoKey)
         } else {
-            Image(painterResource(lk.codegen.risime.R.drawable.brand_mark), null, Modifier.size(116.dp * k))
-        }
-    }
-}
-
-@Composable
-private fun EncryptedLine(visible: Boolean) {
-    // Reserved space keeps the layout still when verification arrives.
-    Row(Modifier.height(24.dp).padding(top = Spacing.xs), verticalAlignment = Alignment.CenterVertically) {
-        if (visible) {
-            Icon(Icons.Default.Lock, null, Modifier.size(14.dp), tint = Color.White.copy(alpha = 0.85f))
-            Spacer(Modifier.size(Spacing.xs))
-            Text("End-to-end encrypted", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.85f))
-        }
-    }
-}
-
-/** Name and status over the gradient. */
-@Composable
-private fun CallHeader(title: String, status: String, encrypted: Boolean) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        EncryptedLine(encrypted)
-        Spacer(Modifier.height(Spacing.lg))
-        Text(
-            title,
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.semantics { heading() },
-        )
-        Spacer(Modifier.height(Spacing.xs))
-        Text(
-            status,
-            style = MaterialTheme.typography.titleMedium,
-            color = Color.White.copy(alpha = 0.85f),
-            textAlign = TextAlign.Center,
-            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-        )
-    }
-}
-
-/** A column that fills the screen and scrolls on a tiny one (font scaling, 320 × 480). */
-@Composable
-private fun CallColumn(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
-    BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
-        CompositionLocalProvider(LocalCompactCall provides (maxHeight < 700.dp)) {
-        Column(
-            Modifier.fillMaxWidth().heightIn(min = maxHeight).verticalScroll(rememberScrollState()).padding(horizontal = Spacing.xl, vertical = Spacing.lg),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween,
-            content = content,
-        )
+            Image(painterResource(lk.codegen.risime.R.drawable.brand_mark), null, Modifier.size(140.dp * k))
         }
     }
 }
 
 /**
- * The incoming call. [name] null = the locked ring of decision 051: "Incoming RisiMe call", no
- * caller, Answer asks for the fingerprint first.
+ * The incoming call (the one call screen, [CallScreen], in its incoming stage). [name] null = the
+ * locked ring of decision 051: "Incoming RisiMe call", no caller, Answer asks for the fingerprint first.
  */
 @Composable
 fun IncomingCallScreen(
@@ -220,39 +138,25 @@ fun IncomingCallScreen(
     subtitle: String? = null,
 ) {
     val video = onAnswerWithoutVideo != null && name != null
-    Box(modifier) {
-        CallBackdrop {
-            CallColumn {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CallHeader(
-                        name ?: "Incoming RisiMe call",
-                        when {
-                            name == null -> "Unlock RisiMe to see who's calling"
-                            subtitle != null -> subtitle
-                            video -> "Incoming video call"
-                            else -> "RisiMe voice call"
-                        },
-                        encrypted = false,
-                    )
-                    Spacer(Modifier.height(if (LocalCompactCall.current) Spacing.lg else Spacing.xxl))
-                    CallAvatar(name, pulse = true, photoKey = photoKey.takeIf { name != null })
-                }
-                Row(Modifier.fillMaxWidth().padding(vertical = Spacing.xl), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    RoundAction("Decline", RisiIcons.CallEnd, Red, onDecline)
-                    if (video) {
-                        RoundAction("Answer without video", RisiIcons.VideocamOff, Green, onAnswerWithoutVideo!!)
-                        RoundAction("Answer", RisiIcons.Videocam, Green, onAnswer)
-                    } else {
-                        RoundAction("Answer", Icons.Default.Call, Green, onAnswer)
-                    }
-                }
-            }
-        }
-    }
+    CallScreen(
+        CallScreenUi(
+            name = name,
+            status = when {
+                subtitle != null -> subtitle
+                video -> "Incoming video call"
+                else -> "RisiMe voice call"
+            },
+            stage = CallStage.INCOMING,
+            photoKey = photoKey.takeIf { name != null },
+            incomingVideo = video,
+        ),
+        CallScreenActions(onAnswer = onAnswer, onDecline = onDecline, onAnswerWithoutVideo = { onAnswerWithoutVideo?.invoke() }),
+        modifier,
+    )
 }
 
 @Composable
-private fun RoundAction(label: String, icon: ImageVector, color: Color, onClick: () -> Unit) {
+internal fun RoundAction(label: String, icon: ImageVector, color: Color, onClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.widthIn(max = 104.dp)) {
         FilledIconButton(
             onClick = onClick,
@@ -266,30 +170,24 @@ private fun RoundAction(label: String, icon: ImageVector, color: Color, onClick:
 }
 
 /**
- * §19.5 the GO UX video slot: the peer full-screen (or their avatar on `camera: false` and after
- * 3 s without a frame), my camera as a small picture-in-picture while it runs.
+ * §19.5 the video stage: the peer full-screen (or their avatar on `camera: false` and after 3 s
+ * without a frame). My camera is drawn by [CallScreen]'s draggable corner.
  */
 @Composable
 fun VideoCallStage(
     showPeer: Boolean,
-    showLocal: Boolean,
     name: String,
     photoKey: String?,
     remote: @Composable (Modifier) -> Unit,
-    local: @Composable (Modifier) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Box(Modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize().background(Color.Black)) {
         remote(Modifier.fillMaxSize())
         if (!showPeer) {
             Box(Modifier.fillMaxSize().semantics { contentDescription = "$name's camera is off" }, contentAlignment = Alignment.Center) {
+                CallDoodleBackground()
                 CallAvatar(name, pulse = false, photoKey = photoKey)
             }
-        }
-        if (showLocal) {
-            local(
-                Modifier.align(Alignment.TopEnd).safeDrawingPadding().padding(Spacing.md)
-                    .size(width = 104.dp, height = 148.dp).clip(RoundedCornerShape(16.dp)),
-            )
         }
     }
 }
@@ -321,14 +219,13 @@ internal fun CallControl(
             ),
         ) { Icon(icon, null, Modifier.size(26.dp)) }
         Spacer(Modifier.height(Spacing.xs + Spacing.xxs))
-        Text(label, style = MaterialTheme.typography.labelMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(label, style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = if (enabled) 1f else 0.6f), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 /**
- * Outgoing, connecting and connected: route (speaker / Bluetooth), mute, hang up, the timer.
- * Built for the coming 1:1 video: [video] is drawn full-bleed under the controls, and
- * [extraControls] (the camera toggle) slot into the same control row.
+ * Outgoing, connecting, connected and ended (voice): the one call screen ([CallScreen]) with its
+ * Speaker | Video | Mute / More | Share | End panel. Kept for the voice-only callers and tests.
  */
 @Composable
 fun InCallScreen(
@@ -337,71 +234,54 @@ fun InCallScreen(
     onEndpoint: (EndpointUi) -> Unit,
     onEnd: () -> Unit,
     modifier: Modifier = Modifier,
-    video: (@Composable () -> Unit)? = null,
-    extraControls: @Composable RowScope.() -> Unit = {},
     /** §20.5 a group call's participant list (voice) shown instead of the avatar. */
     center: (@Composable () -> Unit)? = null,
 ) {
-    Box(modifier) {
-        CallBackdrop(video) {
-            CallColumn {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = if (center != null) Modifier.weight(1f, fill = false) else Modifier) {
-                    CallHeader(ui.name, ui.status, encrypted = ui.verified)
-                    Spacer(Modifier.height(if (LocalCompactCall.current) Spacing.lg else Spacing.xxl))
-                    if (center != null) center() else if (video == null) CallAvatar(ui.name, pulse = false, photoKey = ui.photoKey)
-                }
-                if (!ui.ended) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = Spacing.lg)) {
-                        Surface(
-                            shape = RoundedCornerShape(32.dp),
-                            color = Color.Black.copy(alpha = 0.18f),
-                            contentColor = Color.White,
-                        ) {
-                            Row(
-                                Modifier.padding(horizontal = Spacing.sm, vertical = if (LocalCompactCall.current) Spacing.md else Spacing.lg),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.Top,
-                            ) {
-                                RouteControl(ui, onEndpoint)
-                                extraControls()
-                                CallControl(
-                                    label = if (ui.muted) "Muted" else "Mute",
-                                    description = if (ui.muted) "Unmute" else "Mute",
-                                    icon = if (ui.muted) RisiIcons.MicOff else RisiIcons.Mic,
-                                    on = ui.muted,
-                                    onClick = { onMute(!ui.muted) },
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(if (LocalCompactCall.current) Spacing.lg else Spacing.xl))
-                        RoundAction("End call", RisiIcons.CallEnd, Red, onEnd)
-                    }
-                } else {
-                    Spacer(Modifier.height(Spacing.xl))
-                }
-            }
-        }
-    }
+    CallScreen(
+        CallScreenUi(
+            name = ui.name,
+            status = ui.status,
+            stage = when {
+                ui.ended -> CallStage.ENDED
+                ui.active -> CallStage.ACTIVE
+                else -> CallStage.OUTGOING
+            },
+            photoKey = ui.photoKey,
+            encrypted = ui.verified,
+            muted = ui.muted,
+            endpoints = ui.endpoints,
+            current = ui.current,
+        ),
+        CallScreenActions(onMute = onMute, onEndpoint = onEndpoint, onEnd = onEnd),
+        modifier,
+        center = center,
+    )
 }
 
 /**
- * P0 audio routing: the button always shows the real current route (icon and label) and is always
- * enabled in a call. With only the earpiece and the speaker a tap switches between them; with a
- * Bluetooth device or a headset it opens the picker (Bluetooth / Headset / Phone / Speaker, the
- * current one checked). A route nobody listed is still asked for (id "am:<KIND>": AudioManager).
+ * P0 audio routing: the button always shows the real current route (icon) and is always enabled
+ * in a call; "Speaker" is highlighted while the speaker (or a headset) plays. With only the
+ * earpiece and the speaker a tap switches between them; with a Bluetooth device or a headset it
+ * opens the picker (Bluetooth / Headset / Phone / Speaker, the current one checked). A route
+ * nobody listed is still asked for (id "am:<KIND>": AudioManager). [speakerLabel]: the label says
+ * "Speaker" on the earpiece and the speaker (WhatsApp), else the route's name.
  */
 @Composable
-private fun RouteControl(ui: InCallUi, onEndpoint: (EndpointUi) -> Unit) {
+internal fun RouteControl(ui: InCallUi, onEndpoint: (EndpointUi) -> Unit, speakerLabel: Boolean = false) {
     var open by remember { mutableStateOf(false) }
     val current = ui.current?.kind
     Box {
         CallControl(
-            label = current?.let(::routeKindLabel) ?: "Audio",
+            label = when {
+                current == EndpointUi.Kind.BLUETOOTH || current == EndpointUi.Kind.WIRED -> routeKindLabel(current)
+                speakerLabel -> "Speaker"
+                else -> current?.let(::routeKindLabel) ?: "Audio"
+            },
             description = "Audio output",
             icon = when (current) {
                 EndpointUi.Kind.BLUETOOTH -> RisiIcons.Bluetooth
                 EndpointUi.Kind.WIRED -> RisiIcons.Headset
-                EndpointUi.Kind.EARPIECE -> RisiIcons.Phone
+                EndpointUi.Kind.EARPIECE -> if (speakerLabel) RisiIcons.Speaker else RisiIcons.Phone
                 else -> RisiIcons.Speaker
             },
             on = current == EndpointUi.Kind.SPEAKER || current == EndpointUi.Kind.BLUETOOTH || current == EndpointUi.Kind.WIRED,
