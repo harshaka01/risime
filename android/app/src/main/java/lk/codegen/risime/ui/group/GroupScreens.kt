@@ -498,6 +498,12 @@ fun GroupInfoContent(
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    if (ui.callsNeedUpdate.isNotEmpty()) {
+                        Text(
+                            "Need to update for group calls: " + ui.callsNeedUpdate.joinToString(", "),
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     if (ui.iAmAdmin) TextButton(onClick = { renaming = true }) { Text("Rename") }
                 }
             }

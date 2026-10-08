@@ -117,6 +117,8 @@ data class GroupInfoUi(
     val busy: Boolean = false,
     /** §14.1 `missing_images`: members whose app can't show photos yet. */
     val photosNeedUpdate: List<String> = emptyList(),
+    /** §20.1: members (or my other phone) who need to update to join group calls. */
+    val callsNeedUpdate: List<String> = emptyList(),
     /** §18.7 the group photo's key (the conversation id) and whether one is set. */
     val conversationId: String? = null,
     val hasPhoto: Boolean = false,
@@ -155,6 +157,7 @@ private data class PhotoState(val error: String?, val missing: List<String>, val
 class GroupInfoViewModel(private val c: AppContainer, private val meId: String, val conversationId: String) : ViewModel() {
     private val error = MutableStateFlow<String?>(null)
     private val missingImages = MutableStateFlow<List<String>>(emptyList())
+    private val missingGroupCalls = MutableStateFlow<List<String>>(emptyList())
     private val newPhones = MutableStateFlow<Set<String>>(emptySet())
     private val photoBusy = MutableStateFlow<String?>(null)
     private val hasPhoto = c.db.profilePhotos().observeAll().map { l -> l.any { it.userId == conversationId.lowercase() && it.blobId != null } }
@@ -163,13 +166,18 @@ class GroupInfoViewModel(private val c: AppContainer, private val meId: String, 
         c.db.groups().observe(conversationId),
         c.db.groups().observeMembers(conversationId),
         c.contacts.contacts,
-        combine(error, missingImages, newPhones, combine(hasPhoto, photoBusy, ::Pair)) { e, m, n, p -> PhotoState(e, m, n, p.first, p.second) },
-    ) { g, members, contacts, (err, missing, phones, photo, busyText) ->
+        combine(error, missingImages, newPhones, combine(hasPhoto, photoBusy, ::Pair), missingGroupCalls) { e, m, n, p, gc -> PhotoState(e, m, n, p.first, p.second) to gc },
+    ) { g, members, contacts, (photoState, missingCalls) ->
+        val (err, missing, phones, photo, busyText) = photoState
         val names = missing.distinctBy { it.lowercase() }.map { id ->
             if (id.equals(meId, true)) "Your other phone" else members.firstOrNull { it.userId.equals(id, true) }?.displayName ?: "Someone"
         }
         val base = groupInfoUi(meId, g, members, contacts)
+        val callNames = missingCalls.distinctBy { it.lowercase() }.map { id ->
+            if (id.equals(meId, true)) "Your other phone" else members.firstOrNull { it.userId.equals(id, true) }?.displayName ?: "Someone"
+        }
         base.copy(
+            callsNeedUpdate = callNames.takeIf { lk.codegen.risime.BuildConfig.GROUP_CALLS_ENABLED }.orEmpty(),
             error = err, photosNeedUpdate = names, conversationId = conversationId, hasPhoto = photo, photoBusy = busyText,
             members = base.members.map { m -> if (m.userId.lowercase() in phones && m.state == GroupMember.STATE_ACTIVE) m.copy(newPhone = true) else m },
         )
@@ -186,7 +194,10 @@ class GroupInfoViewModel(private val c: AppContainer, private val meId: String, 
             }
         }
         if (c.mediaCrypto != null) viewModelScope.launch {
-            (c.api.mlsGroup(conversationId) as? ApiResult.Ok)?.let { r -> missingImages.value = r.value.missingImages.map { it.userId } }
+            (c.api.mlsGroup(conversationId) as? ApiResult.Ok)?.let { r ->
+                missingGroupCalls.value = r.value.missingGroupCalls.map { it.userId }
+                missingImages.value = r.value.missingImages.map { it.userId }
+            }
         }
     }
 

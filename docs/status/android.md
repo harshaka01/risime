@@ -1,5 +1,80 @@
 # Android status — 0.2 nightlies
 
+## v1.19 group calls with LiveKit, voice and video (§20) — READY
+**READY.** Commits `f885238` (receive side: group `call:signal`, `group_call` lines, rooms API models), `8200e58`
+(livekit-android 2.29.0, `callFrameKeys`, FrameKeyRing, GroupCallMachine), `52d6dbf` (LiveKit SFU, CallManager/Telecom
+integration, UI, video grid; plus the v1.18 ring-text fix), and this note (group info "needs to update" list).
+- **Gates:** `./gradlew assembleDebug testDebugUnitTest` green: **699** JVM tests, 0 failed (8 skipped). New: GroupCallEnvelopeTest,
+  GroupCallMachineTest (13), FrameKeyRingTest, GroupCallUiTest, CallVectorsTest (real core: all **29** `call_vectors.json`
+  cases, an independent HKDF-Expand of every frame key, the base64 key text, a real 3-device group agreeing and rekeying on add and
+  remove; a removed device gets UnknownGroup/RemovedFromGroup). ContractExamplesTest types every v1.19 example (no
+  `@pending_v1_19` left). One libwebrtc copy (`checkDebugSingleWebRtc`); no Room schema change (lines reuse `kind = 'call'`).
+- **SDK (decision 057, text in the handoff report):** `io.livekit:livekit-android` **2.29.0**, whose pom pins
+  `io.github.webrtc-sdk:android-prefixed` **144.7559.14** = our §16.9 pin (verified). JitPack is allowed only for
+  `com.github.davidliu` (LiveKit's audioswitch fork, pinned to a commit); `protobuf-javalite` 3.25.9 compile-only (LiveKit's
+  track info types); `liblivekit_uniffi.so` packaged for 64-bit ABIs only. LiveKit 2.29 uses `ConnectOptions.iceServers` only
+  with an `rtcConfig`, so the app passes an `RTCConfiguration` with our coturn servers (LiveKit's own list only when we have none).
+- **E2EE (§20.6):** `E2EEOptions` + `BaseKeyProvider(sharedKey off, ratchetWindowSize 0, keyRingSize 16,
+  discardFrameWhenCryptorNotReady, salt "risime-call-v1")`. Keys only from `callFrameKeys` after a commit catch-up, installed
+  as their base64 text at `epoch mod 16` before anything is published; rekey on every merged commit (ObservedMlsEngine hook +
+  a 500-ms epoch poll), own sender cryptors switched at once (E2EEManager keeps them private in 2.29: reflection, no R8 in
+  release), previous index overwritten after 10 s, wipe at the end (keys never logged or persisted). Fail closed: no
+  E2EEManager → no call; a non-leaf identity is unsubscribed ("Not a member"); a track whose info says unencrypted is silent and
+  never rendered; a track whose cryptor isn't OK (or never reports OK within 5 s) is "Can't verify · not played" and makes the
+  device catch up commits; the badge shows only while every rendered participant decrypts.
+- **Calls:** start (TURN → catch-up → `rooms start` → connect → keys → mic → durable silent `group_call started` → `call_offer`
+  `mode: "sfu"`), ring (only `group_calls` devices; "Kamal · Pilot team", "Group voice/video call", Answer / Answer without video
+  / Decline), `call_member` joined/declined (my other devices stop), sender-pinned `call_cancel`, busy both ways with 1:1 calls (no
+  `call_busy` in groups), Join on a running line (status on chat open; an empty or gone room turns the line "… ended"), the
+  starter's 45-s timeout (`call_cancel` + `ended timeout`), the last one out sends `ended hangup` with `connected_at`/duration,
+  alone 10 s → leave, SFU disconnect / 20-s reconnect → leave without claiming the end, 4 h max, one Telecom call per call id,
+  the foreground service, wake lock, notification and return-to-call bar as for 1:1 (decision 054). Video: grid up to 8 tiles,
+  VP8 simulcast 320×180 + 640×360 with adaptive stream and dynacast, camera only while the call screen is visible, 3-s frozen
+  tile → avatar, the v1.18 debug test pattern on redroid.
+- **Capability:** `group_calls` only with `groups`, `calls`, `video`, `callKeysSupported` and LiveKit loaded; build switch
+  `GROUP_CALLS_ENABLED` (`-Prisime.groupCalls=false` builds the §20.10 receive-only step: lines render, nothing advertised).
+- **Fix (v1.18):** the incoming-call notification said "Incoming voice call" for a video call; it now says "Incoming video call"
+  ("Incoming group voice/video call" for groups).
+- **Redroid verification (3 phones, real local LiveKit 1.13.9 at ws://127.0.0.1:7880 via `adb reverse`, media through
+  203.115.26.139 hairpin; a temp server with LIVEKIT_* from .env; script in my scratchpad, modelled on call-device-test):**
+  - A, B, C sign in, A creates "Call group", messages flow; A's header shows enabled Voice/Video call buttons (`group_calls_ready`).
+  - Voice: A starts; B and C ring ("ZZ Call A started a voice call" line with Join); both answer from the notification. All
+    three show "End-to-end encrypted" and the other two by name. Debug stats every 5 s on each phone, for each remote:
+    `cryptor=OK`, audio packets and `jitterBufferEmittedCount` rising (e.g. A ← B `audio_packets=111 jb_emitted=…`, A ← C 85, B ←
+    A 108, C ← A 80 …; energy 0 because redroid's mic is silent). C leaves, B leaves, A alone leaves after 10 s → all three
+    lines "Voice call · 1:02"; no Telecom call left.
+  - **Fail closed:** C with `files/debug_wrong_call_keys` (XOR-ed keys). A and B: C's stream `jb_emitted=0` (no frame
+    decrypts, nothing played) while A↔B `jb_emitted` 114 240/132 480; C: both others `jb_emitted=0`. UI: "ZZ Call C, Can't
+    verify · not played" on A and B, both others "Can't verify" on C, and the badge withdrawn on all three.
+  - **Removal mid-call:** A removes C in group info during a call. C is cut by the SFU (server `RemoveParticipant`, "disconnected
+    by the SFU"), A and B install epoch 2 keys (index 1 wiped 10 s later) and keep decrypting each other (`cryptor=OK`,
+    `jb_emitted` rising 688 320 → 757 440). C re-added afterwards rejoins normally.
+  - **Video:** A starts a video call; B and C "Group video call" → in-activity Answer. Every phone decodes both others
+    (`video_frames` 174–185 per remote in 20 s, the adaptive-stream low layer for the small tiles), grid screenshots right;
+    B pressed Home → its camera stopped, A's tile froze → avatar after 3 s (rule added after this run).
+  - Decline on B while C rings; nobody answers → A "Voice call · No answer", B and C "Missed voice call" (no notification).
+  - 1:1 regression: `scripts/call-device-test` (main 46b43b2, the `52d6dbf` APK, isolated `CALLTEST_INSTANCE=_and`, port 4420,
+    redroid `-an1/-an2` on 5750/5751): **CALLTEST OK**, 59 PASS lines, incl. call 9 (video, "Video call · 1:10" on both) and
+    call 10 (voice after video).
+- **What root's device test should check for group calls:** 3 redroid phones in one group, a temp server with LIVEKIT_URL
+  `ws://127.0.0.1:7880` (+ API URL/key/secret) and `adb reverse tcp:7880 tcp:7880`. (1) A taps "Voice call" in the group header;
+  B and C ring (calls channel notification) and show "<A> started a voice call" with Join; answer from the notification. (2)
+  Within ~15 s every phone shows "End-to-end encrypted", and for every remote identity the debug line `calls: group stats
+  <identity> cryptor=OK audio_packets=N … jb_emitted=M` with N and M rising between two lines. (3) Fail closed: `run-as
+  lk.codegen.risime.debug touch files/debug_wrong_call_keys` on C before a call → on A and B, C's line shows `jb_emitted=0`
+  and the UI "Can't verify · not played", no badge; on C both others `jb_emitted=0`. (4) Removal: A removes C in Group info →
+  C's call ends within seconds; A and B log `frame keys: epoch …` for the new epoch and keep `cryptor=OK` with rising
+  `jb_emitted`. (5) Everyone leaves → each phone shows "Voice call · m:ss" (or "Voice call ended" after reopening the chat when
+  two left at once); `dumpsys telecom` has no RisiMe call. (6) Video: CAMERA granted; A taps "Video call"; B and C open the call
+  screen and tap Answer; `video_frames` rises for every remote on every phone. (7) Nobody answers → A "Voice call · No answer",
+  B/C "Missed voice call" after 45 s. UI dumps can fail while video tiles render: tap End call by coordinates or screenshot.
+- **Known limits:** sibling stop (`call_member` from my own other device) is covered by JVM tests only (redroid has one device
+  per user). Relay-only through coturn and public-network reachability need decision 056's ports and the Caddy `/livekit` route
+  (the pilot answers 503 for rooms until then). Real camera, Flip and Bluetooth routing need a real phone. If two people leave
+  within ~1 s, neither may see the room empty, so no `ended` is sent; the line reads "… ended" after the next status check. The
+  call screen's four-control row is slightly too wide for a 360-dp screen (shared with v1.18 video; Mute clips). Redroid's mic is
+  silent, so audio *energy* can't prove sound; `jitterBufferEmittedCount` (frames past the cryptor) is the evidence instead.
+
 ## v1.17 profile photos + group photos (§18) and v1.18 1:1 video calls (§19) — READY
 **READY.** Commits `f89f5c7` (v1.17 profile + group photos, Room v10), `b54ffcf` (v1.18 1:1 video calls), plus this note.
 - **Gates:** `./gradlew assembleDebug testDebugUnitTest` green: **673** JVM tests, 0 failed (8 skipped).
