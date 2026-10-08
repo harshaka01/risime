@@ -64,6 +64,9 @@ were needed after nightly.11.
    info). The android agent (top model) is on it.
 4. ⏳ **Call records** (chat rows, Calls tab, missed notification) and **locked chats**: android
    agents (Sonnet), running.
+   - **Gate to-do (root):** from nightly.37 on, `scripts/upgrade-test` sets a redroid PIN
+     (`locksettings set-pin`) and locks a chat through the real DEVICE_CREDENTIAL prompt on the old
+     app (n36+). After the update the chat must still be hidden, and its counts kept.
 5. ⏳ **Risi.** Harsha answered the §24 proposal `bf1a215`: **proceed**, with a new model, **two tabs
    in every chat: 🔒 Private | ● Official.**
    - Each tab is its own MLS group.
