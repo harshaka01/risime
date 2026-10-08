@@ -55,7 +55,7 @@ class CallSwitchTest {
         // §23.3 the bad re-offer carries another fingerprint than the call's first offer.
         val first = CallEnvelope.decode(read("call_offer_payload.json").toByteArray()) as CallEnvelope.Offer
         val bad = CallEnvelope.decode(read("call_offer_renegotiate_payload_bad.json").toByteArray()) as? CallEnvelope.Offer
-        if (bad != null) assertNotNull(SdpRules.renegotiationProblem(first.sdp, bad.sdp, SdpRules.Role.OFFER))
+        if (bad != null) assertNotNull(SdpRules.renegotiationProblem(first.sdp, first.sdp, bad.sdp, SdpRules.Role.OFFER))
     }
 
     private fun sw(extra: String) = """{"v":1,"type":"call_switch","call_id":"4b7e1c1e-3c0e-4b55-9f43-0b8f8a1f2d10","to_device":"c0a80101-0000-4000-8000-000000000001",$extra}""".toByteArray()
@@ -82,15 +82,20 @@ class CallSwitchTest {
         val fp = fingerprintOf(3)
         val first = fakeSdp(true, fp, "uf3")
         val re = SdpRules.prepareLocal(fakeVideoSdp(true, fp, "uf3"))
-        assertNull(SdpRules.renegotiationProblem(first, re, SdpRules.Role.OFFER))
-        assertEquals("fingerprint changed", SdpRules.renegotiationProblem(first, SdpRules.prepareLocal(fakeVideoSdp(true, fingerprintOf(4), "uf3")), SdpRules.Role.OFFER))
-        assertEquals("ICE credentials changed", SdpRules.renegotiationProblem(first, SdpRules.prepareLocal(fakeVideoSdp(true, fp, "other")), SdpRules.Role.OFFER))
+        assertNull(SdpRules.renegotiationProblem(first, first, re, SdpRules.Role.OFFER))
+        assertEquals("fingerprint changed", SdpRules.renegotiationProblem(first, first, SdpRules.prepareLocal(fakeVideoSdp(true, fingerprintOf(4), "uf3")), SdpRules.Role.OFFER))
+        assertEquals("ICE credentials changed", SdpRules.renegotiationProblem(first, first, SdpRules.prepareLocal(fakeVideoSdp(true, fp, "other")), SdpRules.Role.OFFER))
+        // §23.3 after an ICE restart: the ICE credentials of the current session, the fingerprint of the first SDP.
+        val restarted = fakeSdp(true, fp, "uf3r1")
+        assertNull(SdpRules.renegotiationProblem(first, restarted, SdpRules.prepareLocal(fakeVideoSdp(true, fp, "uf3r1")), SdpRules.Role.OFFER))
+        assertEquals("ICE credentials changed", SdpRules.renegotiationProblem(first, restarted, re, SdpRules.Role.OFFER))
+        assertEquals("fingerprint changed", SdpRules.renegotiationProblem(first, fakeSdp(true, fingerprintOf(4), "uf3r1"), SdpRules.prepareLocal(fakeVideoSdp(true, fingerprintOf(4), "uf3r1")), SdpRules.Role.OFFER))
         val firstAnswer = fakeSdp(false, fp, "uf3")
         val reAnswer = SdpRules.prepareLocal(fakeVideoSdp(false, fp, "uf3"))
-        assertNull(SdpRules.renegotiationProblem(firstAnswer, reAnswer, SdpRules.Role.ANSWER))
-        assertNotNull("a changed DTLS role", SdpRules.renegotiationProblem(firstAnswer, reAnswer.replace("a=setup:active", "a=setup:passive"), SdpRules.Role.ANSWER))
-        assertNotNull("mid order", SdpRules.renegotiationProblem(first, re.replace("a=mid:1", "a=mid:2").replace("BUNDLE 0 1", "BUNDLE 0 2"), SdpRules.Role.OFFER))
-        assertNotNull("video rejected", SdpRules.renegotiationProblem(firstAnswer, SdpRules.prepareLocal(fakeVideoSdp(false, fp, "uf3", rejectVideo = true)), SdpRules.Role.ANSWER))
+        assertNull(SdpRules.renegotiationProblem(firstAnswer, firstAnswer, reAnswer, SdpRules.Role.ANSWER))
+        assertNotNull("a changed DTLS role", SdpRules.renegotiationProblem(firstAnswer, firstAnswer, reAnswer.replace("a=setup:active", "a=setup:passive"), SdpRules.Role.ANSWER))
+        assertNotNull("mid order", SdpRules.renegotiationProblem(first, first, re.replace("a=mid:1", "a=mid:2").replace("BUNDLE 0 1", "BUNDLE 0 2"), SdpRules.Role.OFFER))
+        assertNotNull("video rejected", SdpRules.renegotiationProblem(firstAnswer, firstAnswer, SdpRules.prepareLocal(fakeVideoSdp(false, fp, "uf3", rejectVideo = true)), SdpRules.Role.ANSWER))
     }
 
     @Test
@@ -101,7 +106,10 @@ class CallSwitchTest {
 
     // ---------------------------------------------------------------- the machine
 
-    private fun TestScope.world(featA: List<String> = v123, featB: List<String> = v123): Pair<CallNet, Map<String, CallNet.Dev>> {
+    /** Every machine's log line, "[A1] …" (the review-fix tests read the media watch's lines). */
+    private val logs = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+    private fun TestScope.world(featA: List<String> = v123, featB: List<String> = v123, strict: Boolean = false): Pair<CallNet, Map<String, CallNet.Dev>> {
         val clock = { testScheduler.currentTime + t0 }
         val net = CallNet(backgroundScope, clock)
         val devs = linkedMapOf(
@@ -112,8 +120,9 @@ class CallSwitchTest {
             val f = if (name == "A1") featA else featB
             d.machine = CallStateMachine(
                 d.user, d.device, backgroundScope, d.media, d.signals, d.marks, d.environment,
-                now = clock, serverNow = clock, log = { println("  [$name] $it") }, features = { f },
+                now = clock, serverNow = clock, log = { println("  [$name] $it"); logs += "[$name] $it" }, features = { f },
             )
+            d.media.strict = strict
             net.devices += d
         }
         return net to devs
@@ -301,7 +310,11 @@ class CallSwitchTest {
         settle(net)
         assertEquals(1, a1.reOffers().size)
         assertTrue(a1.snap().video)
+        // The server took the re-offer (B may still apply it): no rollback at 10 s, only after the reconnect bound too.
         advanceTimeBy(10_500)
+        settle(net)
+        assertEquals(0, a1.session().rollbacks)
+        advanceTimeBy(CallStateMachine.RENEGOTIATE_DELIVERED_MS)
         settle(net)
         assertFalse(a1.snap().video)
         assertEquals(1, a1.session().rollbacks)
@@ -368,5 +381,204 @@ class CallSwitchTest {
         settle(net)
         assertFalse(a1.session().screenOn)
         assertTrue(a1.session().closed)
+    }
+
+    // ---------------------------------------------------------------- §23 review fixes
+
+    private fun CallNet.Dev.restartOffers() = sent.map { it.env }.filterIsInstance<CallEnvelope.Offer>().filter { it.restart }
+
+    private fun CallNet.Dev.phase() = machine.state.value?.phase
+
+    /** A's ICE drops and comes back through a restart (§16.2): new ICE credentials on both sides. */
+    private suspend fun TestScope.dropAndRestart(net: CallNet, a1: CallNet.Dev) {
+        val before = a1.restartOffers().size
+        a1.session().listener.onIceState(IceState.DISCONNECTED)
+        settle(net)
+        assertEquals("one restart offer", before + 1, a1.restartOffers().size)
+        a1.session().listener.onIceState(IceState.CONNECTED)
+        settle(net)
+    }
+
+    @Test
+    fun aSwitchAfterAnIceRestartComparesTheCurrentCredentials() = runTest {
+        val (net, d) = world(strict = true)
+        val (a1, b1) = d["A1"]!! to d["B1"]!!
+        voiceCall(net, a1, b1)
+        val ufA = a1.session().ufrag
+        val ufB = b1.session().ufrag
+        dropAndRestart(net, a1)
+        assertTrue("the restart changed both sides' ICE credentials", a1.session().ufrag != ufA && b1.session().ufrag != ufB)
+        assertEquals(CallPhase.ACTIVE, a1.phase())
+        assertTrue(a1.machine.requestVideo(CallEnvelope.SOURCE_CAMERA))
+        settle(net)
+        b1.machine.answerVideoRequest(accept = true, camera = true)
+        settle(net)
+        assertNull(a1.snap().switchNotice)
+        assertTrue(a1.snap().video && b1.snap().video)
+        assertEquals(1, a1.reOffers().size)
+        assertEquals(2, a1.session().held)
+        assertEquals(2, b1.session().held)
+        assertEquals(0, a1.session().rollbacks)
+        // A later restart in the renegotiated call carries both m-lines.
+        dropAndRestart(net, a1)
+        assertEquals(CallPhase.ACTIVE, a1.phase())
+        assertEquals(CallPhase.ACTIVE, b1.phase())
+    }
+
+    @Test
+    fun aLateReAnswerIsStillAppliedAndTheNextRestartKeepsTheCall() = runTest {
+        val (net, d) = world(strict = true)
+        val (a1, b1) = d["A1"]!! to d["B1"]!!
+        voiceCall(net, a1, b1)
+        a1.machine.requestVideo(CallEnvelope.SOURCE_CAMERA)
+        settle(net)
+        net.holdIf = { it.env is CallEnvelope.Answer && it.fromDevice == b1.device }
+        b1.machine.answerVideoRequest(accept = true, camera = true)
+        settle(net)
+        assertEquals("B applied the re-offer", 2, b1.session().held)
+        assertEquals(1, net.held.size)
+        // The answer is 12 s late: past the 10-s bound, but the re-offer was delivered.
+        advanceTimeBy(12_000)
+        settle(net)
+        assertEquals(0, a1.session().rollbacks)
+        net.release()
+        settle(net)
+        assertEquals("A applied the late answer: both sessions carry m=video", 2, a1.session().held)
+        assertNull(a1.snap().switchNotice)
+        dropAndRestart(net, a1)
+        assertEquals(CallPhase.ACTIVE, a1.phase())
+        assertEquals(CallPhase.ACTIVE, b1.phase())
+        assertTrue(a1.ends.isEmpty() && b1.ends.isEmpty())
+    }
+
+    @Test
+    fun theCalleeNeverAppliesAReOfferOlderThanTheBoundSoBothStayVoice() = runTest {
+        val (net, d) = world(strict = true)
+        val (a1, b1) = d["A1"]!! to d["B1"]!!
+        voiceCall(net, a1, b1)
+        a1.machine.requestVideo(CallEnvelope.SOURCE_CAMERA)
+        settle(net)
+        net.holdIf = { (it.env as? CallEnvelope.Offer)?.renegotiate == true }
+        b1.machine.answerVideoRequest(accept = true, camera = true)
+        settle(net)
+        assertEquals(1, net.held.size)
+        advanceTimeBy(11_000)
+        net.release()
+        settle(net)
+        assertEquals("the stale re-offer isn't applied", 1, b1.session().held)
+        assertTrue(logs.any { it.startsWith("[B1] couldn't switch to video: re-offer ") && it.contains("ms old") })
+        // A gives up after the delivered bound; both sessions are voice, the next restart works.
+        advanceTimeBy(CallStateMachine.RENEGOTIATE_DELIVERED_MS)
+        settle(net)
+        assertEquals(1, a1.session().rollbacks)
+        assertFalse(a1.session().cameraOn)
+        dropAndRestart(net, a1)
+        assertEquals(CallPhase.ACTIVE, a1.phase())
+        assertEquals(CallPhase.ACTIVE, b1.phase())
+    }
+
+    @Test
+    fun anUndeliveredReOfferRollsBackAtOnce() = runTest {
+        val (net, d) = world(strict = true)
+        val (a1, b1) = d["A1"]!! to d["B1"]!!
+        voiceCall(net, a1, b1)
+        a1.machine.requestVideo(CallEnvelope.SOURCE_CAMERA)
+        settle(net)
+        net.holdIf = { (it.env as? CallEnvelope.Switch)?.action == CallEnvelope.SW_ACCEPT }
+        b1.machine.answerVideoRequest(accept = true, camera = true)
+        settle(net)
+        a1.refuse = SignalOutcome.Unavailable // the re-offer can't be sent
+        net.release()
+        settle(net)
+        assertEquals(1, a1.session().rollbacks)
+        assertFalse(a1.snap().video)
+        assertFalse("the camera stopped with the rollback", a1.session().cameraOn)
+        assertEquals(SwitchNotice.FAILED, a1.snap().switchNotice)
+    }
+
+    @Test
+    fun aDropWhileTheReOfferIsOutRestartsAsSoonAsItResolves() = runTest {
+        val (net, d) = world(strict = true)
+        val (a1, b1) = d["A1"]!! to d["B1"]!!
+        voiceCall(net, a1, b1)
+        a1.machine.requestVideo(CallEnvelope.SOURCE_CAMERA)
+        settle(net)
+        net.holdIf = { it.env is CallEnvelope.Answer && it.fromDevice == b1.device }
+        b1.machine.answerVideoRequest(accept = true, camera = true)
+        settle(net)
+        // B goes back to voice while A's re-offer is still out: A enters voice mode.
+        b1.machine.backToVoice()
+        settle(net)
+        assertFalse(a1.snap().video)
+        assertFalse(a1.session().cameraOn)
+        val before = a1.restartOffers().size
+        a1.session().listener.onIceState(IceState.DISCONNECTED)
+        settle(net)
+        assertEquals(CallPhase.RECONNECTING, a1.phase())
+        assertEquals("one offer at a time", before, a1.restartOffers().size)
+        net.release()
+        settle(net)
+        assertEquals("the restart ran once the re-offer resolved", before + 1, a1.restartOffers().size)
+        assertEquals(2, a1.session().held)
+        a1.session().listener.onIceState(IceState.CONNECTED)
+        settle(net)
+        assertEquals(CallPhase.ACTIVE, a1.phase())
+        assertEquals(CallPhase.ACTIVE, b1.phase())
+    }
+
+    @Test
+    fun theMediaWatchLogsStalledAudioAndSilentStats() = runTest {
+        val (net, d) = world()
+        val (a1, b1) = d["A1"]!! to d["B1"]!!
+        voiceCall(net, a1, b1)
+        a1.session().bytes = 1_000
+        advanceTimeBy(9_000)
+        settle(net)
+        assertTrue(logs.any { it.startsWith("[A1] media watch: audio_recv stopped advancing at 1000") })
+        assertEquals(CallPhase.ACTIVE, a1.phase())
+        a1.session().bytes = 2_000
+        advanceTimeBy(2_100)
+        settle(net)
+        assertTrue(logs.any { it.startsWith("[A1] media watch: audio_recv advancing again") })
+        a1.session().statsHang = true
+        advanceTimeBy(CallStateMachine.STATS_TIMEOUT_MS + 2_500)
+        settle(net)
+        assertTrue("a getStats that never calls back is logged, the watch goes on", logs.any { it.startsWith("[A1] media watch: getStats gave no result") })
+        b1.machine.hangUp()
+        settle(net)
+    }
+
+    @Test
+    fun theCameraIsOffAfterEveryExitFromVideo() = runTest {
+        val (net, d) = world(strict = true)
+        val (a1, b1) = d["A1"]!! to d["B1"]!!
+        voiceCall(net, a1, b1)
+        // Decline: the camera never starts.
+        a1.machine.requestVideo(CallEnvelope.SOURCE_CAMERA)
+        settle(net)
+        b1.machine.answerVideoRequest(accept = false)
+        settle(net)
+        assertFalse(a1.session().cameraOn)
+        advanceTimeBy(10_500)
+        settle(net)
+        // Accept, then voice: off on both.
+        a1.machine.requestVideo(CallEnvelope.SOURCE_CAMERA)
+        settle(net)
+        b1.machine.answerVideoRequest(accept = true, camera = true)
+        settle(net)
+        assertTrue(a1.session().cameraOn && b1.session().cameraOn)
+        a1.machine.backToVoice()
+        settle(net)
+        assertFalse(a1.session().cameraOn || b1.session().cameraOn)
+        // Video again, then the end: the session closes (the real one stops the capturer in close()).
+        advanceTimeBy(1_000)
+        a1.machine.requestVideo(CallEnvelope.SOURCE_CAMERA)
+        settle(net)
+        b1.machine.answerVideoRequest(accept = true, camera = true)
+        settle(net)
+        assertTrue(a1.session().cameraOn)
+        a1.machine.hangUp()
+        settle(net)
+        assertTrue(a1.session().closed && b1.session().closed)
     }
 }

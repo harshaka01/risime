@@ -47,6 +47,8 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
     private var counter = 0
     /** New sessions answer video with m=video port 0 (a future app that rejects video). */
     var rejectVideo = false
+    /** New sessions behave like libwebrtc's JSEP (no answer without an offer out, m-lines never removed): see [FakeSession.strict]. */
+    var strict = false
     val sessions = CopyOnWriteArrayList<FakeSession>()
 
     /** Every session ever created on any FakeCallMedia (the "network" DTLS sees real certificates). */
@@ -63,6 +65,7 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
         counter++
         return FakeSession(callId, n, iceServers, listener, video).also {
             it.rejectVideo = rejectVideo
+            it.strict = strict
             sessions += it
             registry[it.ufrag] = it
         }
@@ -76,10 +79,21 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
         /** The peer answers with m=video port 0 (a future app that rejects video). */
         var rejectVideo = false
 
+        /** Like the real session: on needs a video session; off is always honoured (privacy). */
         override fun setCamera(on: Boolean) {
-            check(videoOn) { "setCamera on a voice session" }
+            if (on) check(videoOn) { "setCamera on a voice session" }
             camera += on
         }
+
+        /** JSEP-like checks: an answer needs a local offer out with the same m-lines; an offer never removes m-lines. */
+        var strict = false
+        /** The m-lines of the negotiated (stable) session, a local offer out, a remote offer applied. */
+        var held = 0
+        var pendingLocal: Int? = null
+        var pendingRemote: Int? = null
+        /** getStats never calls back (a stuck WebRTC thread). */
+        var statsHang = false
+        private var restarts = 0
 
         /** §23.3: the session may carry video now (renegotiation); offers and answers get m=video. */
         @Volatile var videoOn = video
@@ -97,6 +111,9 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
 
         override suspend fun rollback() {
             rollbacks++
+            pendingLocal = null
+            // The video transceiver that never got a mid is stopped: the session is voice again.
+            if (held < 2) videoOn = false
         }
 
         override fun startScreen(grant: Any, onStopped: () -> Unit): Boolean {
@@ -121,7 +138,18 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
 
         val cameraOn: Boolean get() = camera.lastOrNull() == true
         val fp = fingerprintOf(n)
-        val ufrag = "uf$n"
+        private val base = "uf$n"
+        /** The current ICE ufrag (an ICE restart, offered or answered, makes a new one). */
+        var ufrag = base
+            private set
+
+        private fun newUfrag() {
+            restarts++
+            ufrag = "${base}r$restarts"
+            registry[ufrag] = this
+        }
+
+        private fun remoteUfrag(sdp: String?) = sdp?.let { r -> SdpRules.lines(r).firstOrNull { it.startsWith("a=ice-ufrag:") }?.removePrefix("a=ice-ufrag:") }
         var remote: String? = null
         var localOffers = 0
         val remoteCandidates = CopyOnWriteArrayList<CallEnvelope.Candidate>()
@@ -134,13 +162,34 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
 
         override suspend fun createOffer(iceRestart: Boolean): String {
             localOffers++
+            if (iceRestart) newUfrag()
+            pendingLocal = if (videoOn) 2 else 1
             return SdpRules.prepareLocal(if (videoOn) fakeVideoSdp(true, fp, ufrag) else fakeSdp(true, fp, ufrag, audioLevel = true))
         }
 
-        override suspend fun createAnswer(): String =
-            SdpRules.prepareLocal(if (videoOn) fakeVideoSdp(false, fp, ufrag, rejectVideo = rejectVideo) else fakeSdp(false, fp, ufrag, audioLevel = true))
+        private var answerRestart = false
+
+        override suspend fun createAnswer(): String {
+            if (answerRestart) newUfrag()
+            answerRestart = false
+            held = pendingRemote ?: held
+            pendingRemote = null
+            return SdpRules.prepareLocal(if (videoOn) fakeVideoSdp(false, fp, ufrag, rejectVideo = rejectVideo) else fakeSdp(false, fp, ufrag, audioLevel = true))
+        }
 
         override suspend fun setRemote(sdp: String, isOffer: Boolean) {
+            val m = SdpRules.mLineCount(sdp)
+            if (isOffer) {
+                if (strict && m < held) throw IllegalStateException("the offer removes m-lines ($m < $held)")
+                answerRestart = remote != null && remoteUfrag(remote) != remoteUfrag(sdp)
+                pendingRemote = m
+            } else {
+                val out = pendingLocal
+                if (strict && out == null) throw IllegalStateException("an answer without a local offer")
+                if (strict && out != m) throw IllegalStateException("the answer has $m m-lines, the offer $out")
+                held = m
+                pendingLocal = null
+            }
             remote = sdp
         }
 
@@ -150,6 +199,7 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
 
         /** DTLS sees the certificate of the session that really produced the remote SDP (by its ufrag). */
         override suspend fun stats(): DtlsStats {
+            if (statsHang) kotlinx.coroutines.awaitCancellation()
             val ufrag = remote?.let { r -> SdpRules.lines(r).firstOrNull { it.startsWith("a=ice-ufrag:") }?.removePrefix("a=ice-ufrag:") }
             val peer = ufrag?.let { registry[it] }
             // The DTLS handshake checks the peer certificate against the fingerprint in the remote SDP.
@@ -185,7 +235,7 @@ class FakeMarks : CallMarks {
  * sender's other devices (sender copy), in send order; `call_end` likewise. [flush] delivers.
  */
 class CallNet(private val scope: CoroutineScope, private val serverNow: () -> Long) {
-    data class Sent(val fromUser: String, val fromDevice: String, val conv: String, val env: CallEnvelope.Env, val durable: Boolean, val media: String = CallEnvelope.MEDIA_AUDIO)
+    data class Sent(val fromUser: String, val fromDevice: String, val conv: String, val env: CallEnvelope.Env, val durable: Boolean, val media: String = CallEnvelope.MEDIA_AUDIO, val at: Long = 0)
 
     inner class Dev(val user: String, val device: String) {
         lateinit var machine: CallStateMachine
@@ -234,12 +284,28 @@ class CallNet(private val scope: CoroutineScope, private val serverNow: () -> Lo
     val devices = mutableListOf<Dev>()
     val queue = CopyOnWriteArrayList<Sent>()
     val delivered = CopyOnWriteArrayList<Pair<Dev, Sent>>()
+    /** Signals [holdIf] matches wait in [held] (the server took them; the recipient gets them on [release]). */
+    var holdIf: ((Sent) -> Boolean)? = null
+    val held = CopyOnWriteArrayList<Sent>()
+
+    /** Stops holding and delivers the held signals (with the server time they were taken at), then everything queued. */
+    suspend fun release() {
+        holdIf = null
+        val h = held.toList()
+        held.clear()
+        queue.addAll(0, h)
+        flush()
+    }
 
     /** Delivers everything queued (including what the deliveries send), in order. */
     suspend fun flush(max: Int = 1000) {
         var n = 0
         while (queue.isNotEmpty() && n++ < max) {
             val s = queue.removeAt(0)
+            if (holdIf?.invoke(s) == true) {
+                held += s.copy(at = serverNow())
+                continue
+            }
             val users = devices.map { it.user }.toSet()
             val other = users.firstOrNull { !it.equals(s.fromUser, true) && dmConversationId(it, s.fromUser) == s.conv } ?: continue
             for (d in devices) {
@@ -249,7 +315,7 @@ class CallNet(private val scope: CoroutineScope, private val serverNow: () -> Lo
                 if (s.durable) {
                     d.machine.onCallEnd(s.conv, s.fromUser, s.fromDevice, s.env as CallEnvelope.End)
                 } else {
-                    d.machine.onSignal(InboundCall(s.conv, s.fromUser, s.fromDevice, serverNow(), s.env, media = s.media))
+                    d.machine.onSignal(InboundCall(s.conv, s.fromUser, s.fromDevice, if (s.at > 0) s.at else serverNow(), s.env, media = s.media))
                 }
             }
         }

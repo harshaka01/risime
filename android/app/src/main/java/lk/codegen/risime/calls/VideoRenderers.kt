@@ -75,7 +75,8 @@ fun LiveLocalVideo(media: WebRtcCallMedia, modifier: Modifier = Modifier) {
 /**
  * The camera paths keep v1.18's SurfaceViewRenderer (proven on every call in the device gate); only
  * a shared screen uses a TextureViewRenderer, because pinch-zoom and pan need a view that scales
- * (a SurfaceView ignores view transforms). The two are swapped by key when the peer starts or stops sharing.
+ * (a SurfaceView ignores view transforms). The two are swapped by key when the peer starts or stops sharing:
+ * the new view's factory attaches it before the old one's onDispose runs, so the detach is owner-checked.
  */
 @Composable
 private fun Renderer(media: WebRtcCallMedia, remote: Boolean, visible: Boolean, mirror: Boolean, fit: Boolean, zoom: Float, pan: Offset, modifier: Modifier) {
@@ -89,7 +90,8 @@ private fun SurfaceRenderer(media: WebRtcCallMedia, remote: Boolean, visible: Bo
     val view = remember { arrayOfNulls<livekit.org.webrtc.SurfaceViewRenderer>(1) }
     DisposableEffect(remote) {
         onDispose {
-            if (remote) media.attachRemote(null) else media.attachLocal(null)
+            // Owner-checked (the swap's new renderer attached itself before this runs): never clears the successor.
+            view[0]?.let { if (remote) media.detachRemote(it) else media.detachLocal(it) }
             view[0]?.release()
             view[0] = null
         }
@@ -118,7 +120,8 @@ private fun TextureRenderer(media: WebRtcCallMedia, remote: Boolean, visible: Bo
     val view = remember { arrayOfNulls<TextureViewRenderer>(1) }
     DisposableEffect(remote) {
         onDispose {
-            if (remote) media.attachRemote(null) else media.attachLocal(null)
+            // Owner-checked (the swap's new renderer attached itself before this runs): never clears the successor.
+            view[0]?.let { if (remote) media.detachRemote(it) else media.detachLocal(it) }
             view[0]?.release()
             view[0] = null
         }

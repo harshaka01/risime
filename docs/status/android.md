@@ -54,7 +54,38 @@
   (`files/debug_keep_call_controls`).
 - **Seen once, not reproduced since (watch):** with LiveKit's TextureViewRenderer for every video a phone's WebRTC
   stopped (no stats, no audio sent) mid video call twice; the camera paths went back to v1.18's SurfaceViewRenderer
-  (TextureView only for a shared screen, for zoom/pan) and the next full + switch runs were clean.
+  (TextureView only for a shared screen, for zoom/pan) and the next full + switch runs were clean. No cause found
+  in the code; the decision-054 media watch now bounds `getStats` (10 s; an unbounded one parked the stall loop for
+  good) and logs `media watch: getStats gave no result (stats silent for N ms)` and `media watch: audio_recv stopped
+  advancing at X for N ms (dtls=… pair=…)` (after 6 s, before the 20-s end), so the next stall is diagnosable.
+- **Review fixes (e589c38…69e857b review), each with a JVM test that failed before:**
+  1. *Remote video black on share start/stop:* the renderer swap's new view attached before the old view's
+     `onDispose` detached unconditionally. Now `SinkSlot` (owner-checked `detachRemote/detachLocal(view)`); debug stats
+     add `view=surface|texture rendered=N` (frames handed to the attached renderer). Call 14 checks B's **texture**
+     renderer draws during the share and, after Stop + A "Turn camera on", B's **surface** renderer draws A's camera.
+  2. *Camera stayed on after a failed switch:* `rollback()` cleared `video`, then `setCamera(false)` returned early.
+     `CameraCapture`: on needs a video session, off always stops a running capturer; rollback stops it too.
+  3. *Switch failed after any ICE restart:* `renegotiationProblem(first, current, next, role)`: fingerprint and the
+     answer's `a=setup` against the first SDPs, ICE ufrag/pwd against each side's **current** SDP (updated on every
+     restart offer/answer and after the renegotiation).
+  4. *Late re-answer → out of step → CANT_CONNECT on the next restart:* libwebrtc can't re-add mid 1 after a rollback
+     (a new re-offer would get mid 2), so the robust option is not to roll back a re-offer the callee may still
+     apply: **the caller rolls back at 10 s only if the re-offer wasn't delivered** (`call:signal` not ok); once
+     delivered it waits `RENEGOTIATE_DELIVERED_MS` (= the 15-s reconnect bound) more, and **the callee drops a re-offer
+     older than 10 s** (event `server_ts`), so a re-offer the caller gave up on is never applied. A re-answer that
+     still comes after the whole bound is logged ("the sessions are out of step"). This stretches §23.3's "10 s or
+     roll back" for a delivered re-offer: root may want to record it in the contract (android can't edit it).
+  5. *`restart()` returned early during an outstanding re-offer (also after going back to voice) and never ran:*
+     deliberately **not** done by clearing `renegotiating` in `enterVoice` (that would route the re-answer around the
+     §23.3 checks or roll back a delivered re-offer, i.e. item 4); instead a restart that comes due is kept
+     (`restartPending`) and runs as soon as the re-offer resolves (answer applied or rollback).
+  6. `recheck()`/`maybeVerify()`/stall watch `getStats` bounded; when a share starts the message notifications already
+     in the shade are reposted redacted (`ScreenSharing.watch` → `refreshPostedNotifications`; restored after).
+  Tests: `CallSwitchTest` +7 (restart then switch, late answer then restart, stale re-offer, undelivered re-offer,
+  drop during the re-offer, media watch logs, camera off on every exit; JSEP-strict fakes: no answer without an offer,
+  m-lines never removed, new ufrag per restart), `VideoSinksTest` (3), `ScreenSharingTest` (1). Device gate: full
+  run (`_fx4`, redroid -fx41/-fx42, :4571), calls 1–14 + records: **CALLTEST OK** (99 PASS); B texture renderer
+  rendered 16→20 during the share, surface renderer 48→88 on A's camera after it.
 - **Real phone (redroid can't):** (1) voice → Video → Accept on two phones (Wi-Fi and mobile data), audio moves to the
   speaker, Video off → earpiece again unless you picked the speaker; Bluetooth stays Bluetooth. (2) Share on Android
   14/15/16: the system dialog ("A single app"/"Entire screen"), the red bar, "Sharing your screen" notification with

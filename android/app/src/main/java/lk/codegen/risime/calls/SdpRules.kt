@@ -146,17 +146,20 @@ object SdpRules {
 
     /**
      * §23.3 (crypto C1) a re-offer ([Role.OFFER]) or its answer ([Role.ANSWER]) against the same
-     * device's first SDP of the call: the same fingerprint, the same ICE credentials (not a
-     * restart), `BUNDLE 0 1` with audio at mid 0 and video at mid 1, `a=setup:actpass` in the
-     * re-offer and the first answer's `a=setup` in the answer (no DTLS role change), video sendrecv.
-     * null = fine; otherwise why it is refused. [next] must already pass [validate] with video.
+     * device's SDPs of the call: the fingerprint of its [first] SDP, the ICE credentials of the
+     * [current] session (its last applied SDP: an ICE restart before the switch changes them, the
+     * re-offer itself is not a restart), `BUNDLE 0 1` with audio at mid 0 and video at mid 1,
+     * `a=setup:actpass` in the re-offer and the first answer's `a=setup` in the answer (no DTLS role
+     * change), video sendrecv. null = fine; otherwise why it is refused. [next] must already pass
+     * [validate] with video.
      */
-    fun renegotiationProblem(first: String, next: String, role: Role): String? {
+    fun renegotiationProblem(first: String, current: String, next: String, role: Role): String? {
         if (!sameFingerprint(fingerprint(first), fingerprint(next))) return "fingerprint changed"
         val fl = lines(first)
+        val cl = lines(current)
         val nl = lines(next)
         fun attr(ls: List<String>, k: String) = ls.firstOrNull { it.startsWith(k) }?.removePrefix(k)
-        if (attr(fl, "a=ice-ufrag:") != attr(nl, "a=ice-ufrag:") || attr(fl, "a=ice-pwd:") != attr(nl, "a=ice-pwd:")) return "ICE credentials changed"
+        if (attr(cl, "a=ice-ufrag:") != attr(nl, "a=ice-ufrag:") || attr(cl, "a=ice-pwd:") != attr(nl, "a=ice-pwd:")) return "ICE credentials changed"
         val (session, secs) = sections(nl)
         val bundle = session.firstOrNull { it.startsWith("a=group:BUNDLE") }?.removePrefix("a=group:BUNDLE")?.trim()?.split(' ')?.filter { it.isNotEmpty() }
         if (bundle != listOf("0", "1")) return "BUNDLE ${bundle?.joinToString(" ")} (want 0 1)"

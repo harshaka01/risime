@@ -128,17 +128,29 @@ class WebRtcCallMedia(
 
     @Volatile private var current: Session? = null
 
-    /** The call screen's renderers (null detaches); frames go to whatever is attached now. */
-    fun attachRemote(sink: VideoSink?) {
-        remoteTarget = sink
-    }
+    /** The call screen's renderers; frames go to whatever is attached now. */
+    fun attachRemote(sink: VideoSink) = remoteSlot.attach(sink)
 
-    fun attachLocal(sink: VideoSink?) {
-        localTarget = sink
-    }
+    fun attachLocal(sink: VideoSink) = localSlot.attach(sink)
 
-    @Volatile private var remoteTarget: VideoSink? = null
-    @Volatile private var localTarget: VideoSink? = null
+    /** Owner-checked: a renderer that was already replaced (the screen/camera swap) doesn't clear its successor. */
+    fun detachRemote(sink: VideoSink) = remoteSlot.detach(sink)
+
+    fun detachLocal(sink: VideoSink) = localSlot.detach(sink)
+
+    private val remoteSlot = SinkSlot<VideoSink>()
+    private val localSlot = SinkSlot<VideoSink>()
+
+    /** Debug stats: which remote renderer is attached and how many frames it was handed since. */
+    private fun renderInfo(): String {
+        val view = when (remoteSlot.current?.javaClass?.simpleName) {
+            null -> "none"
+            "SurfaceViewRenderer" -> "surface"
+            "TextureViewRenderer" -> "texture"
+            else -> "other"
+        }
+        return "view=$view rendered=${remoteSlot.frames}"
+    }
 
     /** §19.5 the frozen-frame rule's input: when the current call's last remote frame was decoded. */
     fun lastRemoteFrameAt(): Long = current?.lastRemoteFrameAt() ?: 0
@@ -181,7 +193,7 @@ class WebRtcCallMedia(
 
         override fun onFrame(frame: VideoFrame) {
             if (remote) lastFrameAt = System.currentTimeMillis()
-            (if (remote) remoteTarget else localTarget)?.onFrame(frame)
+            (if (remote) remoteSlot else localSlot).deliver { it.onFrame(frame) }
         }
     }
 
@@ -248,8 +260,16 @@ class WebRtcCallMedia(
         private var helper: SurfaceTextureHelper? = null
         private var videoSource: VideoSource? = null
         private var videoTrack: VideoTrack? = null
-        private var cameraOn = false
-        private var capturing = false
+        private val camera = CameraCapture(
+            ensure = ::ensureCapturer,
+            start = {
+                val (w, h, fps) = WebRtcConfig.captureFormat(metered() || relay, thermalSevere(context))
+                capturer?.startCapture(w, h, fps)
+            },
+            stop = { capturer?.stopCapture() },
+            log = { Log.w("RisiMe", it) },
+        )
+        private val cameraOn: Boolean get() = camera.on
         @Volatile var front = true
         private var remoteAttached = false
 
@@ -351,23 +371,10 @@ class WebRtcCallMedia(
             return true
         }
 
+        /** On only while the session may carry video; off always stops a running capturer (a rollback cleared [video] first). */
         override fun setCamera(on: Boolean) {
-            if (!video) return
-            if (on) {
-                if (!ensureCapturer()) {
-                    Log.w("RisiMe", "no camera on this phone: camera stays off")
-                    return
-                }
-                if (!capturing) {
-                    val (w, h, fps) = WebRtcConfig.captureFormat(metered() || relay, thermalSevere(context))
-                    capturer?.startCapture(w, h, fps)
-                    capturing = true
-                }
-            } else if (capturing) {
-                runCatching { capturer?.stopCapture() }
-                capturing = false
-            }
-            cameraOn = on
+            camera.set(on, allowed = video)
+            if (on && !camera.on) return // not allowed or no camera: nothing changed
             applySender()
         }
 
@@ -398,6 +405,8 @@ class WebRtcCallMedia(
                 runCatching { t.stopStandard() }
                 videoTransceiver = null
                 video = false
+                // Privacy: the camera may have started for the switch; with no video section it must stop now.
+                camera.set(false, allowed = false)
             }
         }
 
@@ -489,8 +498,7 @@ class WebRtcCallMedia(
         }
 
         private fun closeVideo() {
-            runCatching { if (capturing) capturer?.stopCapture() }
-            capturing = false
+            camera.set(false, allowed = false)
             runCatching { capturer?.dispose() }
             runCatching { videoTrack?.removeSink(localProxy) }
             runCatching { videoSource?.dispose() }
@@ -625,7 +633,7 @@ class WebRtcCallMedia(
                     val outV = all.firstOrNull { it.type == "outbound-rtp" && it.members["kind"] == "video" }
                     val codec = (inV ?: outV)?.members?.get("codecId")?.let { id -> all.firstOrNull { it.id == id }?.members?.get("mimeType") }
                     lastVideoStats = "video $codec in ${inV?.members?.get("frameWidth")}x${inV?.members?.get("frameHeight")}@${inV?.members?.get("framesPerSecond")} " +
-                        "decoded=${inV?.members?.get("framesDecoded")} out ${outV?.members?.get("frameWidth")}x${outV?.members?.get("frameHeight")}@${outV?.members?.get("framesPerSecond")} sent=${outV?.members?.get("bytesSent")} src=${src()}"
+                        "decoded=${inV?.members?.get("framesDecoded")} out ${outV?.members?.get("frameWidth")}x${outV?.members?.get("frameHeight")}@${outV?.members?.get("framesPerSecond")} sent=${outV?.members?.get("bytesSent")} src=${src()} ${renderInfo()}"
                     if (debug) Log.d("RisiMe", "call $lastVideoStats")
                 }
                 val st = DtlsStats(transport?.members?.get("dtlsState") as? String, transport?.members?.get("srtpCipher") as? String, fp, local, remote, audioRecv)

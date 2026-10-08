@@ -1894,6 +1894,11 @@ class AppContainer(
     /** Chat data only; the local behaviour log stays on the device. */
     private fun clearFriendsMemory() = contacts.clearMemory()
 
+    init {
+        // §23.5: a share that starts redacts the message notifications already in the shade (and restores them after).
+        lk.codegen.risime.calls.ScreenSharing.watch(scope) { refreshPostedNotifications() }
+    }
+
     private suspend fun wipeDb(reason: WipeReason) = withContext(Dispatchers.IO) {
         Log.w("RisiMe", "wiping local chats: $reason")
         db.wipe().allChatData()

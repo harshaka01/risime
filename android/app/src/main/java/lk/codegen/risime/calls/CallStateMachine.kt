@@ -233,6 +233,12 @@ class CallStateMachine(
         const val SWITCH_COOLDOWN_MS = 10_000L
         /** §23.3: the re-offer gets its answer within this, or the caller rolls back. */
         const val RENEGOTIATE_MS = 10_000L
+        /** §23.3 a re-offer the server took: the caller waits this much longer (the reconnect bound) before rolling back. */
+        const val RENEGOTIATE_DELIVERED_MS = RECONNECT_MS
+        /** A `getStats` gets this long (decision 054's operation bound). */
+        const val STATS_TIMEOUT_MS = MEDIA_OP_MS
+        /** The media watch logs (once) when received audio stopped advancing this long (debug aid, before the 20-s end). */
+        const val STALL_LOG_MS = 6_000L
         /** The callee's wait for the caller's re-offer after an accept (the caller's 10 s plus delivery). */
         const val RENEGOTIATE_WAIT_MS = 15_000L
         /** How long a switch notice line stays. */
@@ -321,9 +327,16 @@ class CallStateMachine(
         var screenOn = false
         var cameraBeforeShare = false
         var peerScreen = false
-        /** §23.3 each side's first SDP of the call (the renegotiation is checked against it). */
+        /** §23.3 each side's first SDP of the call (the renegotiation's fingerprint and `a=setup` are checked against it). */
         var myFirstSdp: String? = null
         var peerFirstSdp: String? = null
+        /** §23.3 each side's last applied SDP (an ICE restart updates it): the re-offer keeps the current ICE credentials. */
+        var myCurrentSdp: String? = null
+        var peerCurrentSdp: String? = null
+        /** §23.3 the re-offer reached the server (`call:signal` ok): from then on the callee may apply it, so the caller doesn't roll back at 10 s. */
+        var reofferDelivered = false
+        /** An ICE restart was due while the re-offer was out (one offer at a time): it runs as soon as the re-offer resolves. */
+        var restartPending = false
         /** §23.3 at most one renegotiation per call: after a failed one the call stays voice. */
         var renegotiationFailed = false
         /** The switch, `call_media` and re-offer envelopes go out in the order they were decided. */
@@ -394,6 +407,7 @@ class CallStateMachine(
                 return true
             }
             call.myFirstSdp = sdp
+            call.myCurrentSdp = sdp
             CallEnvelope.Offer(call.id, sdp, iso(serverNow()), media = call.media, features = call.myFeatures.toList())
         }
         val r = sig(call.conv, call.peer, offer, call.media)
@@ -464,6 +478,7 @@ class CallStateMachine(
                 return
             }
             call.myFirstSdp = sdp
+            call.myCurrentSdp = sdp
             CallEnvelope.Answer(call.id, call.offerDevice!!, sdp, call.myFeatures.toList())
         }
         val r = sig(call.conv, call.peer, answer, call.media)
@@ -780,6 +795,7 @@ class CallStateMachine(
         call.peerFeatures = env.features.toSet()
         call.myFeatures = runCatching { features().toSet() }.getOrDefault(emptySet())
         call.peerFirstSdp = env.sdp
+        call.peerCurrentSdp = env.sdp
         current = call
         return call
     }
@@ -824,7 +840,14 @@ class CallStateMachine(
                 finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
                 return
             }
-            runCatching { c.session?.setRemote(env.sdp, isOffer = false) }.onFailure { log("restart answer: ${it.message}") }
+            if (SdpRules.mLineCount(env.sdp) == 2 && !c.videoSection) {
+                // A re-answer after the rollback (it took longer than the whole bound): the peer holds m=video, this
+                // session doesn't, and libwebrtc can't take an answer without an offer out. Logged for the gate.
+                log("call_answer with m=video after the re-offer was rolled back: the sessions are out of step")
+                return
+            }
+            val ok = runCatching { mediaOp { c.session?.setRemote(env.sdp, isOffer = false) } }.onFailure { log("restart answer: ${it.message}") }.isSuccess
+            if (ok) c.peerCurrentSdp = env.sdp
             return
         }
         val session = c.session ?: return
@@ -841,6 +864,7 @@ class CallStateMachine(
         }
         c.peerFeatures = env.features.toSet()
         c.peerFirstSdp = env.sdp
+        c.peerCurrentSdp = env.sdp
         val fp = SdpRules.fingerprint(env.sdp)
         val remote = if (tamperRemoteFingerprint()) SdpRules.tamperFingerprint(env.sdp) else env.sdp
         c.selected = s.fromDevice.lowercase()
@@ -978,9 +1002,13 @@ class CallStateMachine(
             mediaOp { session.setRemote(env.sdp, isOffer = true) }
             mediaOp { session.createAnswer() }
         }.getOrElse {
+            log("restart offer not applied (${SdpRules.mLineCount(env.sdp)} m-lines): ${it.message}")
             finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
             return
         }
+        // §23.3: the current session's ICE credentials (a later re-offer keeps these).
+        c.peerCurrentSdp = env.sdp
+        c.myCurrentSdp = answer
         scope.launch { sig(c.conv, c.peer, CallEnvelope.Answer(c.id, s.fromDevice.lowercase(), answer), c.media) }
     }
 
@@ -1192,6 +1220,9 @@ class CallStateMachine(
         log("voice mode")
         c.timers.remove("switch_ask")?.cancel()
         c.timers.remove("reneg_wait")?.cancel()
+        // A re-offer still out (the caller) stays out: the callee may apply it, so dropping it here would leave
+        // the sessions out of step. Its answer adds m=video (unused in voice mode) or its bound rolls it back;
+        // either way an ICE restart that came due meanwhile runs right after (restartPending), never lost.
         c.asking = null
         c.prompt = null
         c.screenGrant = null
@@ -1231,6 +1262,17 @@ class CallStateMachine(
         }
         enterVoice(c)
         notice(c, SwitchNotice.FAILED)
+        runPendingRestart(c)
+    }
+
+    /** The ICE restart that waited for the re-offer (one offer at a time) runs now, if the call still needs it. */
+    private fun runPendingRestart(c: Call) {
+        if (!c.restartPending) return
+        c.restartPending = false
+        if (c.outgoing && c.phase == CallPhase.RECONNECTING && !c.ended) {
+            log("the restart that waited for the re-offer runs now")
+            scope.launch { restart(c) }
+        }
     }
 
     /** §23.3 the original caller's one re-offer that adds `m=video` (after an accept). */
@@ -1244,13 +1286,32 @@ class CallStateMachine(
                 s.enableVideo()
                 mediaOp { s.createOffer() }
             }.getOrElse { return failSwitch(c, "re-offer: ${it.message}") }
-            (SdpRules.validate(sdp, SdpRules.Role.OFFER, video = true) ?: SdpRules.renegotiationProblem(first, sdp, SdpRules.Role.OFFER))?.let {
+            (SdpRules.validate(sdp, SdpRules.Role.OFFER, video = true) ?: SdpRules.renegotiationProblem(first, c.myCurrentSdp ?: first, sdp, SdpRules.Role.OFFER))?.let {
                 return failSwitch(c, "own re-offer: $it")
             }
-            timer(c, "reneg", RENEGOTIATE_MS) { x -> if (x.renegotiating) failSwitch(x, "no answer to the re-offer in $RENEGOTIATE_MS ms") }
+            c.reofferDelivered = false
+            // §23.3 the 10-s bound. A re-offer the server took may still be applied by the callee (who then holds
+            // m=video): rolling back then would leave the sessions out of step and the next ICE restart would end the
+            // call. So after a delivery the caller waits [RENEGOTIATE_DELIVERED_MS] more for the answer (and the callee
+            // never applies a re-offer older than [RENEGOTIATE_MS]); only an undelivered re-offer rolls back at 10 s.
+            timer(c, "reneg", RENEGOTIATE_MS) { x ->
+                if (!x.renegotiating) return@timer
+                if (!x.reofferDelivered) return@timer failSwitch(x, "no answer to the re-offer in $RENEGOTIATE_MS ms")
+                log("renegotiate: the re-offer was delivered, no answer yet: waiting up to $RENEGOTIATE_DELIVERED_MS ms more")
+                x.timers.remove("reneg") // this job: replaced below, not cancelled under itself
+                timer(x, "reneg", RENEGOTIATE_DELIVERED_MS) { y ->
+                    if (y.renegotiating) failSwitch(y, "no answer to the delivered re-offer in ${RENEGOTIATE_MS + RENEGOTIATE_DELIVERED_MS} ms")
+                }
+            }
             log("renegotiate: re-offer out")
             send(c, CallEnvelope.Offer(c.id, sdp, iso(serverNow()), toDevice = c.selected, media = c.media, renegotiate = true)) { r ->
-                if (r != SignalOutcome.Ok) lock.withLock { if (c.renegotiating && current === c && !c.ended) failSwitch(c, "re-offer not sent: $r") }
+                lock.withLock {
+                    if (r == SignalOutcome.Ok) {
+                        c.reofferDelivered = true
+                    } else if (c.renegotiating && current === c && !c.ended) {
+                        failSwitch(c, "re-offer not sent: $r")
+                    }
+                }
             }
         }
     }
@@ -1265,17 +1326,19 @@ class CallStateMachine(
             finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
             return
         }
-        SdpRules.renegotiationProblem(first, env.sdp, SdpRules.Role.ANSWER)?.let { return failSwitch(c, "answer: $it") }
+        SdpRules.renegotiationProblem(first, c.peerCurrentSdp ?: first, env.sdp, SdpRules.Role.ANSWER)?.let { return failSwitch(c, "answer: $it") }
         val ok = runCatching { mediaOp { session.setRemote(env.sdp, isOffer = false) } }.onFailure { log("setRemote(re-answer): ${it.message}") }.isSuccess
         if (!ok) return failSwitch(c, "answer not applied")
         c.timers.remove("reneg")?.cancel()
         c.renegotiating = false
         c.renegotiated = true
         c.videoSection = true
+        c.peerCurrentSdp = env.sdp
         log("renegotiated: m=video added")
         recheck(c)
         applyCamera(c)
         publish(c)
+        runPendingRestart(c)
     }
 
     /** §23.3 the callee: the caller's re-offer, applied only with this user's consent (crypto C2) and only once. */
@@ -1285,13 +1348,19 @@ class CallStateMachine(
         if (!s.fromUser.equals(c.peer, true) || !s.fromDevice.equals(c.offerDevice, true) || !env.toDevice.equals(myDevice, true)) return
         if (env.media != c.media || s.media != c.media) return log("re-offer for ${c.id} with media ${env.media}: dropped")
         if (!c.consented || c.renegotiated || c.videoSection) return log("re-offer for ${c.id} without consent (or a second one): dropped")
+        // §23.3: the caller gives up on an undelivered re-offer at 10 s and on a delivered one later; a re-offer older
+        // than the 10-s bound is never applied, so the callee can't take m=video after the caller rolled back.
+        val age = serverNow() - s.serverTsMs
+        if (s.serverTsMs > 0 && age > RENEGOTIATE_MS) {
+            return failSwitch(c, "re-offer $age ms old (the caller's bound is $RENEGOTIATE_MS ms)")
+        }
         if (!SdpRules.sameFingerprint(SdpRules.fingerprint(env.sdp), c.pinned)) {
             log("dtls_fingerprint_mismatch: re-offer with a different fingerprint")
             finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
             return
         }
         val first = c.peerFirstSdp ?: return
-        SdpRules.renegotiationProblem(first, env.sdp, SdpRules.Role.OFFER)?.let { return failSwitch(c, "re-offer: $it") }
+        SdpRules.renegotiationProblem(first, c.peerCurrentSdp ?: first, env.sdp, SdpRules.Role.OFFER)?.let { return failSwitch(c, "re-offer: $it") }
         val session = c.session ?: return
         c.renegotiating = true
         val answer = runCatching {
@@ -1299,12 +1368,14 @@ class CallStateMachine(
             mediaOp { session.setRemote(env.sdp, isOffer = true) }
             mediaOp { session.createAnswer() }
         }.getOrElse { return failSwitch(c, "answer to the re-offer: ${it.message}") }
-        (SdpRules.validate(answer, SdpRules.Role.ANSWER, video = true) ?: c.myFirstSdp?.let { SdpRules.renegotiationProblem(it, answer, SdpRules.Role.ANSWER) })?.let {
+        (SdpRules.validate(answer, SdpRules.Role.ANSWER, video = true) ?: c.myFirstSdp?.let { SdpRules.renegotiationProblem(it, c.myCurrentSdp ?: it, answer, SdpRules.Role.ANSWER) })?.let {
             return failSwitch(c, "own re-answer: $it")
         }
         c.renegotiating = false
         c.renegotiated = true
         c.videoSection = true
+        c.peerCurrentSdp = env.sdp
+        c.myCurrentSdp = answer
         c.timers.remove("reneg_wait")?.cancel()
         log("renegotiated: m=video added (callee)")
         send(c, CallEnvelope.Answer(c.id, c.offerDevice!!, answer))
@@ -1317,7 +1388,8 @@ class CallStateMachine(
     private fun recheck(c: Call) {
         scope.launch {
             delay(STATS_POLL_MS)
-            val st = lock.withLock { if (c.ended || current !== c) null else c.session }?.let { runCatching { it.stats() }.getOrNull() } ?: return@launch
+            // Bounded like every WebRTC operation (decision 054): a getStats that never calls back can't hang the check.
+            val st = lock.withLock { if (c.ended || current !== c) null else c.session }?.let { boundedStats(it) } ?: return@launch
             lock.withLock {
                 if (c.ended || current !== c) return@launch
                 if ((st.remoteFingerprint != null && !SdpRules.sameFingerprint(st.remoteFingerprint, c.pinned)) || st.dtlsState == "failed") {
@@ -1462,10 +1534,16 @@ class CallStateMachine(
     private suspend fun restart(c: Call) {
         val offer = lock.withLock {
             if (c.ended || current !== c) return
-            // §23.3 (android A1): one offer at a time; the re-offer's own 10-s bound runs first.
-            if (c.renegotiating) return
+            // §23.3 (android A1): one offer at a time; the restart runs as soon as the re-offer resolves (answered or
+            // rolled back), so a drop during a switch (also after the call went back to voice) is still repaired.
+            if (c.renegotiating) {
+                c.restartPending = true
+                log("restart waits for the outstanding re-offer")
+                return
+            }
             val s = c.session ?: return
             val sdp = runCatching { mediaOp { s.createOffer(iceRestart = true) } }.getOrNull() ?: return
+            c.myCurrentSdp = sdp
             CallEnvelope.Offer(c.id, sdp, iso(serverNow()), restart = true, toDevice = c.selected, media = c.media)
         }
         sig(c.conv, c.peer, offer, c.media)
@@ -1483,7 +1561,7 @@ class CallStateMachine(
                 val stats = lock.withLock {
                     if (c.ended || current !== c || c.phase != CallPhase.CONNECTING) return@launch
                     c.session
-                }?.let { runCatching { it.stats() }.getOrNull() } ?: DtlsStats(null, null, null)
+                }?.let { boundedStats(it) } ?: DtlsStats(null, null, null)
                 val done = lock.withLock {
                     if (c.ended || current !== c || c.phase != CallPhase.CONNECTING) return@launch
                     when {
@@ -1623,6 +1701,10 @@ class CallStateMachine(
     private suspend fun sig(conv: String, peer: String, env: CallEnvelope.Env, media: String): SignalOutcome =
         withTimeoutOrNull(SIGNAL_TIMEOUT_MS) { signals.signal(conv, peer, env, media) } ?: SignalOutcome.Unavailable.also { log("${env.type} timed out") }
 
+    /** `getStats` bounded (decision 054); null = no result in time (or it failed). */
+    private suspend fun boundedStats(s: MediaSession): DtlsStats? =
+        withTimeoutOrNull(STATS_TIMEOUT_MS) { runCatching { s.stats() }.getOrNull() }
+
     /** One WebRTC operation under the machine lock, bounded (decision 054): a stuck callback can't hold every input. */
     private suspend fun <T> mediaOp(block: suspend () -> T): T =
         withTimeoutOrNull(MEDIA_OP_MS) { block() } ?: throw IllegalStateException("media operation timed out")
@@ -1639,14 +1721,30 @@ class CallStateMachine(
         c.timers["stall"] = scope.launch {
             var last = -1L
             var lastChange = now()
+            var told = false
+            var statsAt = now()
             while (true) {
                 delay(MEDIA_STALL_POLL_MS)
                 val session = lock.withLock { if (c.ended || current !== c) return@launch else c.session } ?: return@launch
-                val bytes = runCatching { session.stats().bytesReceived }.getOrNull() ?: continue
+                // The "WebRTC stall" watch item: a getStats that never called back parked this loop for good (no stall
+                // could be judged after it). Bounded now, and the watch logs when the stats or the audio stop advancing.
+                val st = boundedStats(session)
+                if (st == null) {
+                    log("media watch: getStats gave no result (stats silent for ${now() - statsAt} ms)")
+                    continue
+                }
+                statsAt = now()
+                val bytes = st.bytesReceived ?: continue
                 if (bytes != last) {
+                    if (told) log("media watch: audio_recv advancing again ($last→$bytes)")
+                    told = false
                     last = bytes
                     lastChange = now()
-                } else if (bytes > 0 && now() - lastChange >= MEDIA_STALL_MS) {
+                } else if (bytes > 0 && !told && now() - lastChange >= STALL_LOG_MS) {
+                    told = true
+                    log("media watch: audio_recv stopped advancing at $bytes for ${now() - lastChange} ms (dtls=${st.dtlsState} pair=${st.localCandidateType}/${st.remoteCandidateType})")
+                }
+                if (bytes > 0 && bytes == last && now() - lastChange >= MEDIA_STALL_MS) {
                     lock.withLock {
                         if (!c.ended && current === c) {
                             log("no audio received for ${now() - lastChange} ms: ending ${c.id}")

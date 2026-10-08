@@ -25,8 +25,9 @@
 #     "Switch to video call?" → Accept → VP8 frames both ways, exactly one renegotiate re-offer (from A,
 #     the caller), audio both ways, the speaker; "Switch to voice call" → no new frames on either side,
 #     the voice UI, audio; A shares the screen (MediaProjection consent through the PROJECT_MEDIA appop
-#     or the system dialog) → B "Watch" → "… is sharing their screen" and frames on B, src=screen on A;
-#     Stop → the label goes; back to voice from B's More; hang up → "Video call · m:ss" on both.
+#     or the system dialog) → B "Watch" → "… is sharing their screen" and frames on B, src=screen on A,
+#     B's texture renderer drawing them (debug stats `view=… rendered=…`); Stop → the label goes; A's
+#     camera on → B's camera renderer draws it; back to voice from B's More; hang up → "Video call · m:ss".
 #     CALLTEST_SWITCH_ONLY=1 runs only call 14 (iteration). Debug builds keep the call controls on
 #     screen for uiautomator (files/debug_keep_call_controls; the auto-hide is unit-tested).
 # Prints "CALLTEST PASS|FAIL <step>" lines and "CALLTEST OK" at the end. Never touches :4000.
@@ -686,6 +687,21 @@ fi
 # Call 14 on the one call screen. Exactly one renegotiation per call, from the caller; audio at every
 # phase boundary (audio_ok: audio_sent and audio_recv growing on both phones).
 vsrc() { vline | sed -nE 's/.* src=([a-z]+).*/\1/p'; }
+# The debug stats name the attached remote renderer and the frames handed to it since it attached
+# ("view=texture rendered=123"): decoded frames alone don't show a renderer that went black (the
+# screen/camera renderer swap once left the new one detached).
+vview() { vline | sed -nE 's/.* view=([a-z]+).*/\1/p'; }
+vrendered() { vline | sed -nE 's/.* rendered=([0-9]+).*/\1/p'; }
+# renders <label> <A|B> <surface|texture>: that renderer is attached and its frame count grows over 5 s.
+renders() {
+  local r1 r2 v; DEV=$2
+  for _ in $(seq 1 10); do [ "$(vview)" = "$3" ] && break; sleep 1; done
+  v="$(vview)"; [ "$v" = "$3" ] || fail "$1: $2's remote renderer is ${v:-unknown}, want $3 ($(vline | sed 's/.*call video //'))"
+  r1="$(vrendered)"; sleep 5; r2="$(vrendered)"
+  [ "$(vview)" = "$3" ] || fail "$1: $2's remote renderer changed during the check ($(vline | sed 's/.*call video //'))"
+  [ "${r2:-0}" -gt "${r1:-0}" ] || fail "$1: $2's $3 renderer draws no frames (rendered ${r1:-none}→${r2:-none}; $(vline | sed 's/.*call video //'))"
+  echo "    [$2] $3 renderer: rendered ${r1:-0}→$r2"
+}
 renegs() { A logcat -d 2>/dev/null | grep -c "calls: renegotiate: re-offer out" || true; }
 # frames_still <label> <A|B>: no new decoded frames over 5 s (after 3 s to drain).
 frames_still() {
@@ -734,16 +750,22 @@ switch_call() {
   DEV=B; wait_for "is sharing their screen" 20 || fail "$l: B shows no \"is sharing their screen\""
   for _ in $(seq 1 20); do DEV=B; [ "$(vdecoded)" -gt 0 ] 2>/dev/null && break; sleep 1; done
   frames_rise "$l (screen)" B
+  renders "$l (screen)" B texture
   DEV=A; has "sharing your screen" || fail "$l: A has no \"You're sharing your screen\" bar"
   [ "$(vsrc)" = screen ] || fail "$l: A's sender isn't the screen ($(vline | sed 's/.*call video //'))"
   DEV=A; n="$(renegs)"; [ "$n" = 1 ] || fail "$l: the share renegotiated again ($n re-offers)"
   audio_ok "$l (sharing)"
-  pass "$l: A shares its screen: B shows the label and decodes frames, src=screen on A, still one re-offer"
+  pass "$l: A shares its screen: B shows the label, decodes frames and its texture renderer draws them, src=screen on A, still one re-offer"
   DEV=A; tap "Stop" || fail "$l: no Stop on A's bar"
   DEV=B; for _ in $(seq 1 15); do has "is sharing their screen" || break; sleep 1; done
   has "is sharing their screen" && fail "$l: B still shows the screen label after Stop"
   DEV=A; A logcat -d 2>/dev/null | grep -q "screen share off" || fail "$l: A's share didn't stop"
   pass "$l: Stop ended the share; B's label went"
+  # After the share B is back on the camera renderer (the swap back): A's camera must be drawn on it.
+  DEV=A; tap "Turn camera on" || fail "$l: A has no \"Turn camera on\" after the share"
+  frames_rise "$l (A's camera after the share)" B
+  renders "$l (A's camera after the share)" B surface
+  pass "$l: after the share B's camera renderer draws A's camera (the renderer swap keeps the new view attached)"
   DEV=B; { tap "More options" && sleep 1 && tap "Switch to voice call"; } || fail "$l: B has no \"Switch to voice call\" in More"
   DEV=A; wait_for "Switch to video" 10 || fail "$l: A shows no voice UI after B's switch back"
   audio_ok "$l (voice again)"
