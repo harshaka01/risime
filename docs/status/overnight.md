@@ -47,6 +47,23 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.39 (live 2026-10-08 ~20:50 UTC, not required): one call screen, §23 1:1 switching and screen share; Risi gate
+- **What's in:**
+  - the WhatsApp-style single call screen;
+  - voice↔video mid-call (1:1) and screen sharing;
+  - the review fixes (renderer detach, camera off after a failed switch, ICE compared with the
+    current SDP, late re-answer bounds, notifications redacted while sharing);
+  - S8 `/risi/*` REST;
+  - X-Device-Id on group GETs;
+  - the deflakes.
+- **Gate:** all PASS, the new steps included:
+  - **Risi canary:** `RISI CANARY OK`. No Private canary in model input, Risi tables, the decrypted
+    buffer, the learning log, server logs or pushes; egress loopback only.
+  - **Upgrade test:** per-chat counts, and a locked chat kept across the update.
+  - **Call test (run separately):** call-device-test CALLTEST OK, 99 checks.
+- **Risi/tabs are still OFF on the pilot.** Turning them on was blocked by the permission system
+  (production feature flag) and needs Harsha (see Needs Harsha #R).
+
 ## v0.2.0-nightly.38 (live 2026-10-08 ~18:30 UTC, not required): Risi stage 1 in the release, still OFF
 - **What's in, all hidden (TABS=off, RISI=off):**
   - S5 (Risi's agent tree);
@@ -310,6 +327,15 @@ were needed after nightly.11.
   `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
 - **Agents:** none running.
 - **Needs Harsha:**
+R. **Turn on two tabs and Risi for the pilot** (all gates green in nightly.39). It's reversible
+   (set both to `off`, then restart). Run on spark2:
+   ```
+   cd ~/development/risime && install -m 600 .env ~/risime-backups/env-before-risi-$(date -u +%Y%m%dT%H%M%SZ)
+   printf 'RISI_MLS_KEK=%s\nRISI_DATA_KEY=%s\n' "$(openssl rand -base64 32)" "$(openssl rand -base64 32)" >> .env
+   printf '\nTABS=on\nRISI=on\n' >> infra/pilot/pilot.env
+   scripts/run-server v0.2.0-nightly.39   # backup, migrate (seeds Risi), restart
+   ```
+   Or tell the orchestrator "turn Risi on" and allow it.
    - **Risi (decisions 065/066), nothing blocks; defaults are in place:**
      - **(a)** The commercial-model fallback stays **off** until a zero-retention agreement with
        the provider exists. Which provider, and is there an agreement?
