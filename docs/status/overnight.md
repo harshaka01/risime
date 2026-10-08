@@ -74,6 +74,45 @@ were needed after nightly.11.
   - phone squatting by open sign-ups (an admin disables the squatter until SMS claims exist);
   - the country box defaults to +94.
 
+## P0 run (2026-10-08): updater, chat safety, video audio
+- **v0.2.0-nightly.31 (live ~08:50 UTC): P0-1 in-app updater fixed.**
+  - **Root causes:**
+    - the download ran inside the screen, so leaving the app cancelled it;
+    - checks ran only every 6 h, with no manual check;
+    - a silent update gave no feedback;
+    - errors were dropped.
+    The signing key never changed: one certificate for n1–n30, and versionCodes always went up.
+  - **Fix:**
+    - a WorkManager job with a progress notification, a resumable download and every check on
+      every open (at most every 15 min);
+    - Settings → About → Check for updates;
+    - "RisiMe updated" afterwards, real errors with "Download from website", and "never uninstall"
+      everywhere.
+  - **Gate:** the release gate now updates through the in-app updater on Redroid (a local HTTPS
+    mirror with a throwaway CA). From nightly.32 on, the "Back during the download" step is
+    mandatory (`UPDATER_BACK_SAFE_FROM=20031`).
+- **v1.21 (in nightly.31): reinstalls rejoin without reset.**
+  - No only-admin group reset.
+  - DM resets happen only when no device can ever re-add.
+  - The server refuses a reset with `409 rejoin_pending`.
+  - Stale leaves are cleaned up hourly. The one-off run after deploy queued 19 cleanup ops for 45
+    stale leaves.
+- **P0-2 cause:**
+  - testers uninstalled because the updater failed, and nothing survives an uninstall;
+  - recovery then mostly failed (7 of 29 history requests succeeded);
+  - only-admin reinstalls reset groups.
+  No silent wipe path was found.
+- **Backups (v1.22 §22, decision 059):**
+  - done: the server and the crypto core (44 vectors, cross-checked in Python);
+  - in progress: the Android app (local daily and before every update, export to Downloads,
+    server backup with a recovery key, a restore screen on a fresh install).
+- **P0-3 (fix on main, ships in nightly.32):**
+  - **Root causes:** two Telecom readers raced on one-shot queues, which left the button dead or
+    the audio on the earpiece; and calls were registered without video capability.
+  - **Tests:** a fan-out regression test (the old code failed 200 of 200 runs), and
+    call-device-test calls 9, 12 and 13 assert audio both ways in video calls.
+  - **Needs Harsha:** a real-phone check (speaker by default and a working button).
+
 ## Sign-in incident and open sign-up (2026-10-08 ~05:00 UTC)
 - **What blocked dhammikajayanath775@:** Harsha's invite at 04:35 UTC was correct (pending,
   lowercase, phone set). His Keycloak token was valid and email-verified, but `/me` answered
