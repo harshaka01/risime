@@ -29,13 +29,13 @@
   on tap only), full-screen calls (34+ `canUseFullScreenIntent` → `ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT`),
   push registered (token hash vs the last token the server accepted; Retry). OEM block by `Build.MANUFACTURER`
   (Xiaomi/Huawei/Samsung/Oppo/Realme/Vivo/OnePlus component intents, app-details fallback).
-- **Tests:** 818 JVM tests, 0 failed (8 skipped): `BackgroundDeliveryTest` (grace, screen-off, socket policy,
+- **Tests:** 846 JVM tests on main + this work, 0 failed (8 skipped): `BackgroundDeliveryTest` (grace, screen-off, socket policy,
   socket-notify rule, log line, channel carry-over), `NotificationHealthTest` (every row from its inputs, once per
   version, OEM detection), `MlsPipelineTest` (batch before the core opens: refused, then applied on the rejoin; the
   old path lost it), `CallPushTest` (the cleanup never stops a push-started service).
 - **Gate `scripts/push-device-test`: PUSHTEST OK** (run under `timeout 1800`, ~6 min). B in the background, screen
-  off, `force-idle`: message notification **390 ms** after the server's push, ring (CallStyle on `calls` with a
-  fullScreenIntent) **491 ms**; after removal from Recents (process dead, not stopped): **1145 ms** / **1333 ms**.
+  off, `force-idle`: message notification **436 ms** after the server's push, ring (CallStyle on `calls` with a
+  fullScreenIntent) **333 ms**; after removal from Recents (process dead, not stopped): **1106 ms** / **1003 ms**.
   Every push came from the server's offline decision (`call ring … push_now=1 live=0`). Redroid has no Play
   services: the hook records pushes and the script delivers them as GMS would (temp allowlist + c2dm broadcast
   as root; a uid-2000 shell broadcast is dropped silently by the SEND permission).

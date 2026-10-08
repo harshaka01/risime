@@ -96,7 +96,9 @@ case mode do
     IO.puts("pushtest: e2ee=#{RisiMe.MLS.group(conv) != nil}")
   "tokens" ->
     b = Repo.get_by!(User, phone: b_phone)
-    IO.puts("pushtest: b_tokens=#{Enum.join(RisiMe.Devices.push_tokens(b.id), ",")} b_id=#{b.id}")
+    Code.ensure_loaded(RisiMe.Push.Dispatcher)
+    hash = if function_exported?(RisiMe.Push.Dispatcher, :user_hash, 1), do: RisiMe.Push.Dispatcher.user_hash(b.id), else: "none"
+    IO.puts("pushtest: b_tokens=#{Enum.join(RisiMe.Devices.push_tokens(b.id), ",")} b_id=#{b.id} b_hash=#{hash}")
 end
 EXS
 # PUSHTEST HOOK: a RisiMe.Push sender that records instead of calling FCM. Loaded after the app
@@ -259,6 +261,7 @@ for _ in $(seq 1 60); do [ "$(fx e2ee)" = "pushtest: e2ee=true" ] && break; slee
 TOK="$(fx tokens)"; echo "    server: $TOK"
 [[ "$TOK" == *"b_tokens=pushtest-B"* ]] || fail "B's push token isn't registered with the server ($TOK)"
 B_ID="$(sed -nE 's/.*b_id=([0-9a-f-]+).*/\1/p' <<<"$TOK")"
+B_HASH="$(sed -nE 's/.*b_hash=([^ ]+).*/\1/p' <<<"$TOK")"
 DEV=A; send_text "pt-warmup-a" || fail "A can't type"
 DEV=B; wait_for "pt-warmup-a" 45 || fail "B never received A's first encrypted message (foreground)"
 pass "e2ee DM up, B's push token registered (pushtest-B)"
@@ -327,8 +330,8 @@ pushes_for_b_since() {  # $1 ms, $2 type → count
 first_push_ts() {  # $1 ms, $2 type
   awk -v t="$1" -v ty="$2" '$1 >= t && $2 == "pushtest-B" && $3 == ty {print $1; exit}' "$PUSHES"
 }
-server_skipped_online() {  # since line $1 of the server log
-  tail -n +"$1" "$WORK/server.log" | grep -E "push.*(skip|skipped).*online" | grep -q "${B_ID:-none}"
+server_skipped_online() {  # since line $1 of the server log (the server's push audit line, nightly.33+)
+  tail -n +"$1" "$WORK/server.log" | grep -aqE "push: skipped kind=inbox user=(${B_HASH:-none}|${B_ID:-none}) reason=online"
 }
 
 scenario_message() {  # $1 label
