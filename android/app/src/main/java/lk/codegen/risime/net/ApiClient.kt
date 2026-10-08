@@ -43,7 +43,11 @@ class ApiClient(
     private val token: suspend () -> String?,
     /** A 401 on an authenticated call: try to refresh; true = retry the call once (§6.1). */
     private val onUnauthorized: suspend () -> Boolean = { false },
+    /** This install's device id: sent as X-Device-Id on group reads (§24.7: Official groups are visible only to a `tabs` device). */
+    private val deviceId: suspend () -> String? = { null },
 ) {
+    private suspend fun deviceHeaders(): Map<String, String> = deviceId()?.let { mapOf(DEVICE_HEADER to it) }.orEmpty()
+
     suspend fun requestCode(phone: String, email: String): ApiResult<AuthRequestReply> =
         call("POST", "auth/request", AuthRequest(phone, email), auth = false)
 
@@ -83,7 +87,7 @@ class ApiClient(
     suspend fun claimKeyPackages(userIds: List<String>, deviceId: String? = null, conversationId: String? = null): ApiResult<KeyPackagesClaimReply> =
         call("POST", "mls/key_packages/claim", KeyPackagesClaim(userIds, conversationId), headers = deviceId?.let { mapOf(DEVICE_HEADER to it) }.orEmpty())
 
-    suspend fun mlsGroup(conversationId: String): ApiResult<MlsGroup> = call<Unit, MlsGroup>("GET", "mls/groups/$conversationId", null)
+    suspend fun mlsGroup(conversationId: String): ApiResult<MlsGroup> = call<Unit, MlsGroup>("GET", "mls/groups/$conversationId", null, headers = deviceHeaders())
 
     /** §10.2: X-Device-Id is required here (it names from_device). */
     suspend fun mlsCommit(conversationId: String, body: MlsCommitRequest, deviceId: String): ApiResult<MlsCommitReply> =
@@ -94,7 +98,7 @@ class ApiClient(
         call<Unit, DmRejoinReply>("POST", "mls/groups/$conversationId/rejoin", null, headers = mapOf(DEVICE_HEADER to deviceId))
 
     suspend fun mlsCommits(conversationId: String, sinceEpoch: Long, limit: Int? = null): ApiResult<MlsCommitsReply> =
-        call<Unit, MlsCommitsReply>("GET", "mls/groups/$conversationId/commits?since_epoch=$sinceEpoch" + (limit?.let { "&limit=$it" } ?: ""), null)
+        call<Unit, MlsCommitsReply>("GET", "mls/groups/$conversationId/commits?since_epoch=$sinceEpoch" + (limit?.let { "&limit=$it" } ?: ""), null, headers = deviceHeaders())
 
     // ---- §12 groups (mutating calls carry X-Device-Id) ----
     /** §16.7 TURN REST credentials (503 calls_unavailable while the server has none: STUN only). Never persisted. */
@@ -122,9 +126,9 @@ class ApiClient(
     suspend fun patchChat(chatId: String, official: String, deviceId: String): ApiResult<ChatReply> =
         call("PATCH", "chats/$chatId", ChatPatch(official), headers = mapOf(DEVICE_HEADER to deviceId))
 
-    suspend fun groups(): ApiResult<GroupsReply> = call<Unit, GroupsReply>("GET", "groups", null)
+    suspend fun groups(): ApiResult<GroupsReply> = call<Unit, GroupsReply>("GET", "groups", null, headers = deviceHeaders())
 
-    suspend fun group(id: String): ApiResult<GroupReply> = call<Unit, GroupReply>("GET", "groups/$id", null)
+    suspend fun group(id: String): ApiResult<GroupReply> = call<Unit, GroupReply>("GET", "groups/$id", null, headers = deviceHeaders())
 
     suspend fun createGroup(body: GroupCreate, deviceId: String): ApiResult<GroupReply> =
         call("POST", "groups", body, headers = mapOf(DEVICE_HEADER to deviceId))

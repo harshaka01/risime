@@ -176,6 +176,7 @@ class AppContainer(
         { sessionStore.currentServerUrl() },
         { bearer() },
         onUnauthorized = { auth.hasSession() && auth.bearer(forceRefresh = true) != null },
+        deviceId = { sessionStore.deviceId() },
     )
 
     /** An OIDC session is in memory (restored at process start without any prompt, decision 064). */
@@ -595,7 +596,11 @@ class AppContainer(
         val listed = r.value.groups.map { it.id }.toSet()
         db.withTransaction {
             r.value.groups.forEach { groupStore.applyServerGroup(it, me) }
-            db.groups().allNow().filter { it.conversationId !in listed && !it.readOnly }.forEach { groupStore.markGone(it.conversationId) }
+            db.groups().allNow().filter { it.conversationId !in listed && !it.readOnly }.forEach {
+                // §24.7: a list that omits an Official group is not a removal; only a group_event says so.
+                if (chatTabs.private(it.conversationId)) groupStore.markGone(it.conversationId)
+                else Log.w("RisiMe", "GET /groups omits Official group ${it.conversationId}: kept (no group_event removal)")
+            }
         }
         // §12.8: groups this device holds no MLS state for (a sign-in after a logout keeps the device
         // id but starts a new MLS state): rejoin them, in the background, idempotently.
@@ -628,7 +633,12 @@ class AppContainer(
         val me = sessionStore.current()?.user?.id ?: return null
         return when (val r = api.group(conversationId)) {
             is ApiResult.Ok -> r.value.group.also { db.withTransaction { groupStore.applyServerGroup(it, me) } }
-            is ApiResult.Error -> null.also { if (r.httpStatus == 404) db.withTransaction { groupStore.markGone(conversationId) } }
+            is ApiResult.Error -> null.also {
+                if (r.httpStatus == 404) {
+                    if (chatTabs.private(conversationId)) db.withTransaction { groupStore.markGone(conversationId) }
+                    else Log.w("RisiMe", "GET /groups/$conversationId 404 on an Official group: kept, will retry (no group_event removal)")
+                }
+            }
             is ApiResult.NetworkError -> null
         }
     }

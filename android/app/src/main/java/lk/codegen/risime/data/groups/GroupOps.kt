@@ -500,7 +500,10 @@ class GroupOpsExecutor(
         val mls = engine() ?: return OpOutcome.Retry("no MLS core", 60_000)
         val g = when (val r = api.group(conv)) {
             is ApiResult.Ok -> r.value
-            is ApiResult.Error -> return if (r.httpStatus == 404) OpOutcome.Done else errorOutcome(r)
+            is ApiResult.Error -> return if (r.httpStatus == 404) {
+                // §24.7: a 404 on an Official group is not "gone" (only a group_event removes us): retry.
+                if (officialTab(conv) != null) OpOutcome.Retry("official group 404", 30_000) else OpOutcome.Done
+            } else errorOutcome(r)
             is ApiResult.NetworkError -> return OpOutcome.Retry("network", 5_000)
         }
         tx.run { store.applyServerGroup(g, myId) }

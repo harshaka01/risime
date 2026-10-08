@@ -40,6 +40,7 @@ class GroupOpsExecutorTest {
     private val groupDao = FakeGroupDao()
     private val store = GroupStore(groupDao, opsDao, FakeMessageDao(), { "dev-me" }, { mls.groupMeta(it) }, { now })
     private var now = 1_000L
+    private var isOfficialConv = false
     private val catchUps = mutableListOf<String>()
 
     private val api = FakeGroupApi()
@@ -48,6 +49,7 @@ class GroupOpsExecutorTest {
         { mls }, api, opsDao, groupDao, store,
         object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
         me = { me }, deviceId = { "dev-me" }, catchUp = { catchUps += it }, clock = { now }, maxAttempts = 3,
+        officialTab = { if (isOfficialConv) "chat-1" else null },
     )
 
     private fun member(id: String, role: String = "member", state: String = "active") = GroupMember(id, id.removePrefix("u-"), null, role, "user", state, null)
@@ -57,6 +59,7 @@ class GroupOpsExecutorTest {
     inner class FakeGroupApi : GroupApi {
         var group: Group = Group(conv, "creating", me, null, 1, null, "admin", listOf(member(me, "admin"), member(kamal)))
         var createReply: ApiResult<Group>? = null
+        var groupReply: ApiResult<Group>? = null
         val commits = mutableListOf<GroupCommitRequest>()
         var commitReplies = ArrayDeque<ApiResult<Long>>()
         val claims = mutableListOf<Pair<List<String>, String?>>()
@@ -65,7 +68,7 @@ class GroupOpsExecutorTest {
         val calls = mutableListOf<String>()
 
         override suspend fun create(clientGroupId: String, memberIds: List<String>) = createReply ?: ApiResult.Ok(group).also { calls += "create:$clientGroupId" }
-        override suspend fun group(id: String): ApiResult<Group> = ApiResult.Ok(group)
+        override suspend fun group(id: String): ApiResult<Group> = groupReply ?: ApiResult.Ok(group)
         override suspend fun addMembers(id: String, userIds: List<String>): ApiResult<Group> {
             calls += "add:$userIds"
             group = group.copy(
@@ -351,6 +354,20 @@ class GroupOpsExecutorTest {
         exec.runDue()
         assertTrue(api.commits.isEmpty())
         assertEquals(GroupOpType.DONE, opsDao.rows.values.single().state)
+    }
+
+    @Test fun a404OnAPrivateGroupEndsTheOpButOnAnOfficialGroupItRetries() = runTest {
+        activeGroup()
+        api.groupReply = ApiResult.Error(404, "not_found", "")
+        store.queueCommit(conv, PendingOp("op-x", PendingOp.REMOVE, me, listOf(kamal), committer = MlsDeviceRef(me, "dev-me")))
+        exec.runDue()
+        assertEquals(GroupOpType.DONE, opsDao.rows.values.single().state)
+        opsDao.rows.clear()
+        isOfficialConv = true // §24.7: a 404 on an Official group is a missing X-Device-Id / filter, not a removal
+        store.queueCommit(conv, PendingOp("op-y", PendingOp.REMOVE, me, listOf(kamal), committer = MlsDeviceRef(me, "dev-me")))
+        exec.runDue()
+        assertTrue(opsDao.rows.values.single().state != GroupOpType.DONE)
+        assertTrue(api.commits.isEmpty())
     }
 
     @Test fun epochConflictDropsOurCommitCatchesUpAndRebuildsFromServerState() = runTest {

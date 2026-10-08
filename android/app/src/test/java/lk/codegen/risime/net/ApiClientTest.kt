@@ -58,4 +58,25 @@ class ApiClientTest {
         assertEquals(ApiResult.Ok(Unit), api.logout())
         assertEquals("/api/v1/auth/logout", server.takeRequest().path)
     }
+
+    @Test
+    fun groupReadsCarryTheDeviceHeaderWhenTheClientKnowsOne() = runBlocking {
+        val withDev = ApiClient(OkHttpClient(), { server.url("/").toString() }, { "tok" }, deviceId = { "dev-1" })
+        repeat(4) { server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":{"code":"not_found","message":""}}""")) }
+        withDev.groups()
+        withDev.group("grp:x")
+        withDev.mlsGroup("grp:x")
+        withDev.mlsCommits("grp:x", 0)
+        repeat(4) {
+            val req = server.takeRequest()
+            assertEquals(req.path, "dev-1", req.getHeader("X-Device-Id"))
+        }
+    }
+
+    @Test
+    fun groupReadsSendNoDeviceHeaderWithoutADeviceId() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":{"code":"not_found","message":""}}"""))
+        api.group("grp:x")
+        assertNull(server.takeRequest().getHeader("X-Device-Id"))
+    }
 }

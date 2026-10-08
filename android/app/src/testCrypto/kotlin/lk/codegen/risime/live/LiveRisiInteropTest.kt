@@ -122,7 +122,7 @@ class LiveRisiInteropTest {
         private val pool = Executors.newSingleThreadExecutor { r -> Thread(r, "dev-$name").apply { isDaemon = true } }
         val dispatcher = pool.asCoroutineDispatcher()
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
-        val api = ApiClient(http, { url }, { token })
+        val api = ApiClient(http, { url }, { token }, deviceId = { deviceId })
         val mls = RealMls.device(userId, deviceId, trusted, attest = false)
         val messages = FakeMessageDao()
         val groupDao = FakeGroupDao()
@@ -165,7 +165,7 @@ class LiveRisiInteropTest {
         val groupApi = object : GroupApi {
             override suspend fun create(clientGroupId: String, memberIds: List<String>) =
                 api.createGroup(GroupCreate(clientGroupId, memberIds), deviceId).map { it.group }
-            override suspend fun group(id: String) = groupAsTabsDevice(id)
+            override suspend fun group(id: String) = api.group(id).map { it.group }
             override suspend fun addMembers(id: String, userIds: List<String>) = api.addGroupMembers(id, userIds, deviceId).map { it.group }
             override suspend fun removeMember(id: String, userId: String) = api.removeGroupMember(id, userId, deviceId)
             override suspend fun leave(id: String) = api.leaveGroup(id, deviceId)
@@ -229,28 +229,11 @@ class LiveRisiInteropTest {
             }
         }
 
-        /**
-         * `GET /groups/{id}` WITH this device's `X-Device-Id` (§24.5: without it the server can't tell a
-         * `tabs` device and answers 404 for an Official group). NOTE: the app's `ApiClient.group()` /
-         * `groups()` send no `X-Device-Id` (open android item: on a 404 the app marks its Official group
-         * gone and then never commits Risi's removal after Official off); this test asks as a tabs app must.
-         */
-        suspend fun groupAsTabsDevice(id: String): ApiResult<Group> = withContext(Dispatchers.IO) {
-            val req = Request.Builder().url("${url.trimEnd('/')}/api/v1/groups/$id")
-                .header("Authorization", "Bearer $token").header(ApiClient.DEVICE_HEADER, deviceId).build()
-            runCatching {
-                http.newCall(req).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    if (resp.isSuccessful) ApiResult.Ok(ProtocolJson.decodeFromString(GroupReply.serializer(), body).group)
-                    else ApiResult.Error(resp.code, "http_${resp.code}", body.take(200))
-                }
-            }.getOrElse { ApiResult.NetworkError(it as? java.io.IOException ?: java.io.IOException(it)) }
-        }
-
+        /** As the app's refreshGroup: the app's own `ApiClient.group()` (carries X-Device-Id); a 404 on an Official group is not "gone". */
         suspend fun refreshGroup(conv: String) {
-            when (val r = groupAsTabsDevice(conv)) {
-                is ApiResult.Ok -> store.applyServerGroup(r.value, userId)
-                is ApiResult.Error -> if (r.httpStatus == 404) store.markGone(conv)
+            when (val r = api.group(conv)) {
+                is ApiResult.Ok -> store.applyServerGroup(r.value.group, userId)
+                is ApiResult.Error -> if (r.httpStatus == 404 && mls.engine.groupMeta(conv)?.official != true) store.markGone(conv)
                 is ApiResult.NetworkError -> Unit
             }
         }
@@ -370,9 +353,9 @@ class LiveRisiInteropTest {
         check("Official 1:1 and Official group: Risi joins at epoch 0 as an attested agent") {
             dmOff = startOfficial(a, dm)
             grpOff = startOfficial(a, grp)
-            // Diagnostic only (open android item): the app's own ApiClient.group() carries no X-Device-Id.
             val appGet = a.api.group(dmOff)
-            if (appGet !is ApiResult.Ok) println("NOTE risi: the app's ApiClient.group($dmOff) without X-Device-Id → ${(appGet as? ApiResult.Error)?.let { "${it.httpStatus} ${it.code}" } ?: appGet} (a tabs app must send it)")
+            ensure(appGet is ApiResult.Ok) { "the app's own ApiClient.group($dmOff) -> $appGet (must carry X-Device-Id)" }
+            ensure((a.api.groups() as? ApiResult.Ok)?.value?.groups?.any { it.id == dmOff } == true) { "the app's own ApiClient.groups() omits the Official group $dmOff" }
             "dm→$dmOff grp→$grpOff agents=${a.mls.engine.agentUsers(dmOff)}"
         }
 
@@ -422,6 +405,10 @@ class LiveRisiInteropTest {
             val p = a.api.patchChat(dm, "off", a.deviceId)
             ensure(p is ApiResult.Ok && p.value.chat.official.state == "off") { "PATCH /chats/$dm off: $p" }
             for (x in listOf(a, b)) x.await(60_000, "Risi removed from $dmOff") { x.mls.engine.agentUsers(dmOff).takeIf { it.isEmpty() } }
+            // The app's own device committed Risi's removal: the server no longer lists Risi (read with the app's own call).
+            a.await(60_000, "Risi no longer a member of $dmOff on the server") {
+                (a.api.group(dmOff) as? ApiResult.Ok)?.value?.group?.members?.takeIf { m -> m.none { it.kind == "agent" } }
+            }
             a.on { a.chat.sendText(dmOff, canary.getValue("dm_official_off")) }
             a.on { a.chat.flushOutbox() }
             delay(5_000)
