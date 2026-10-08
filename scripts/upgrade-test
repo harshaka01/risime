@@ -623,6 +623,7 @@ update_via_updater() {
   wait_for "RisiMe $NEW_VN is available" 60 || { echo "    (update server log: $(tail -3 "$UPD/http.log" 2>/dev/null | tr '\n' ' '))"; fail "the old app shows no \"RisiMe $NEW_VN is available\" banner"; }
   grep -q 'GET /app/risime/version.json' "$UPD/http.log" || fail "the banner didn't come from the local update server"
   echo "    banner: \"RisiMe $NEW_VN is available\"; tapping Update"
+  # Only here, before the download starts: "^" = the text equals "Update" (never "Updating to X").
   tap "^Update" || fail "no Update button on the banner"
   if [ "$BACK_STEP" = yes ]; then
     sleep 0.5; A shell input keyevent KEYCODE_BACK
@@ -633,7 +634,7 @@ update_via_updater() {
     vn="$(installed_vn)"; [ "$vn" = "$NEW_VN" ] && break
     dump
     confirm_installer || true
-    err="$(grep -oE 'Update interrupted[^"]*|Install failed[^"]*|Install cancelled[^"]*|failed its security check[^"]*|Couldn.t download the update[^"]*|Update failed[^"]*' "$WORK/ui.xml" | sed -n 1p || true)"
+    err="$(grep -oE 'Update interrupted[^"]*|Install failed[^"]*|Install cancelled[^"]*|failed its security check[^"]*|Couldn.t download the update[^"]*|Update failed[^"]*|App not installed[^"]*|wasn.t installed[^"]*' "$WORK/ui.xml" | sed -n 1p || true)"
     [ -z "$err" ] || fail "the in-app update failed: $err"
     sleep 2
   done
@@ -643,7 +644,7 @@ update_via_updater() {
   local lc; lc="$(A logcat -d -T "$t0" 2>/dev/null || true)"
   grep -qE "Update package $PKG code path .*Retain data and using new" <<<"$lc" || fail "logcat: no \"Update package $PKG ... Retain data and using new\" (not an in-place update?)"
   grep -qE "Marking session [0-9]+ as applied" <<<"$lc" || fail "logcat: the install session was not applied"
-  if grep -qE "RisiMe *: update failed|Update interrupted" <<<"$lc"; then fail "logcat: the updater reported a failure"; fi
+  if grep -qE "RisiMe *: update failed|Update interrupted|RisiMe update: status=[1-9]" <<<"$lc"; then fail "logcat: the updater reported a failure"; fi
   echo "    installed $NEW_VN through the in-app updater: logcat \"$(grep -oE 'Retain data and using new' <<<"$lc" | sed -n 1p)\", \"$(grep -oE 'Marking session [0-9]+ as applied' <<<"$lc" | sed -n 1p)\""
   CHECKS+=" in_app_updater"; [ "$BACK_STEP" = yes ] && CHECKS+=" updater_back"
   return 0
