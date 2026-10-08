@@ -140,6 +140,12 @@ were needed after nightly.11.
     times`, `ToneGenerator.release` from `CallManager.updateRingback` on two threads). A real
     crash for anyone hanging up quickly.
   - **The fix:** an android agent is on it. Nothing was published.
+   - **Queue (android, after the call screen):**
+     - **Route race:** CallManager's route decide-and-request isn't atomic. A "speaker" decision made
+       before the user's earpiece pick can land after it (seen via the TelecomEndpointFanOutTest
+       deflake `0e24934`). Fix in production under one lock, like the test.
+     - **Locked-chats unlock:** move its gate onto `LockPrompter` (the same dead-prompt pattern as the
+       app lock, though only tap-started).
 5. ⏳ **Risi.** Harsha answered the §24 proposal `bf1a215`: **proceed**, with a new model, **two tabs
    in every chat: 🔒 Private | ● Official.**
    - Each tab is its own MLS group.
