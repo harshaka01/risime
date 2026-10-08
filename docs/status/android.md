@@ -1,5 +1,53 @@
 # Android status — 0.2 nightlies
 
+## P0 background delivery (nightly.31: messages and calls only after opening the app) — READY (real phone to confirm)
+- **Root causes found (each reproduced on redroid by `scripts/push-device-test`, then fixed):**
+  1. **Every call push crashed the app.** `onCallPush` launched the stale-call cleanup, which stopped the
+     `CallService` the push had just started, before its `startForeground` → `ForegroundServiceDidNotStartInTimeException`
+     (logcat: "Bringing down service while still waiting for start foreground"), process dead, no ring. Fixed:
+     start and stop ordered under a lock; the cleanup leaves the service alone while a wake-up/blind ring runs.
+  2. **Dead socket kept "online" on the server.** The app closed the socket at `onStop`, but by then (or soon after)
+     Doze/OEM savers cut its network, so the close frame never left the phone: the server's presence row stayed for
+     the websocket timeout (60 s) and **no push** went out for anything sent meanwhile (run 5: server presence
+     still `count=1` for B long after the app logged "socket closed"). Fixed: screen-off closes at once; a 5-s grace
+     only for app switches with the screen on (below the 10-s cached-app freezer).
+  3. **MLS events lost when a push-started process synced before the MLS core opened**: `MlsPipeline` returned
+     `Ignored`, the event was marked seen and the cursor moved past it (message or call invite gone on this phone).
+     Fixed: `ChatEngine` refuses such a batch untouched (`MlsNotReady`, waits ≤ 15 s for the core) and the
+     socket rejoins from the unchanged cursor.
+  4. The inbox sync ran only in an expedited worker (deferred in restricted buckets / out of quota) with `KEEP`, so
+     a deferred request swallowed every later wake-up. Now `onMessageReceived` syncs **directly** (≤ 9 s, notifies as
+     soon as the join's catch-up is applied); the worker finishes the rest and is `REPLACE`d when merely queued.
+- **Also:** messages over the socket while not in the foreground notify like a push; `messages_v2` channel (high,
+  `VISIBILITY_PRIVATE`, public version = sender only; a user's "off" carried over; old `messages` deleted);
+  the current push token is re-registered on every foreground start (a registration before Play services
+  had a token left the device unpushable); `RisiMe push:` log lines (received kind/delay/priority, sync start/live/end,
+  notification posted, socket up/closed, health).
+- **Settings → Notifications health** (and once per versionCode after an update when a row is ✗; never in debug
+  builds or on a fresh install): notifications allowed, Messages channel, Calls channel, battery unrestricted
+  (`isIgnoringBatteryOptimizations` + `isBackgroundRestricted`; Fix → `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+  on tap only), full-screen calls (34+ `canUseFullScreenIntent` → `ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT`),
+  push registered (token hash vs the last token the server accepted; Retry). OEM block by `Build.MANUFACTURER`
+  (Xiaomi/Huawei/Samsung/Oppo/Realme/Vivo/OnePlus component intents, app-details fallback).
+- **Tests:** 846 JVM tests on main + this work, 0 failed (8 skipped): `BackgroundDeliveryTest` (grace, screen-off, socket policy,
+  socket-notify rule, log line, channel carry-over), `NotificationHealthTest` (every row from its inputs, once per
+  version, OEM detection), `MlsPipelineTest` (batch before the core opens: refused, then applied on the rejoin; the
+  old path lost it), `CallPushTest` (the cleanup never stops a push-started service).
+- **Gate `scripts/push-device-test`: PUSHTEST OK** (run under `timeout 1800`, ~6 min). B in the background, screen
+  off, `force-idle`: message notification **436 ms** after the server's push, ring (CallStyle on `calls` with a
+  fullScreenIntent) **333 ms**; after removal from Recents (process dead, not stopped): **1106 ms** / **1003 ms**.
+  Every push came from the server's offline decision (`call ring … push_now=1 live=0`). Redroid has no Play
+  services: the hook records pushes and the script delivers them as GMS would (temp allowlist + c2dm broadcast
+  as root; a uid-2000 shell broadcast is dropped silently by the SEND permission).
+- **Real phone to check:** the full-screen call screen on a locked phone (redroid's SystemUI doesn't launch
+  full-screen intents with the display off: the notification carries it, the activity didn't open there); real
+  FCM delivery in Doze; OEM autostart pages; the health screen after the update.
+- **For server (request, not done):** a dead socket still hides pushes until Phoenix's websocket timeout (60 s) when
+  the phone loses network without closing (tunnel, network switch). Suggest: (a) an inbox-delivery watchdog: if a
+  live channel hasn't acked a pushed-eligible event within ~10 s, send the push anyway; or (b) a websocket
+  `timeout` ≈ 2 × the client heartbeat (30 s → 65 s isn't better; with (a) it doesn't matter). The script fails on the
+  server's `push: skipped kind=inbox user=<hash> reason=online` audit line (nightly.33) for B.
+
 ## P0: call audio routing (route button greyed out, calls stuck on the earpiece) — READY
 - **Cause:** `routeButtonEnabled` needed Telecom to list > 1 endpoint (or an empty list while ACTIVE); real phones
   report empty, late or one-entry lists (only the earpiece), so the button stayed grey and the call on the earpiece.

@@ -104,7 +104,17 @@ class ChatEngine(
     private val history: lk.codegen.risime.data.history.HistoryHooks? = null,
     /** §18 profile photos (null = an app without them: `profile_photo` envelopes are ignored). */
     private val profilePhotos: lk.codegen.risime.data.profile.ProfilePhotoHooks? = null,
+    /**
+     * P0 background delivery: true once the MLS core is open (or MLS doesn't apply to this app or
+     * server); may wait a little. A process started by a push joins the inbox while the core is still
+     * opening: an MLS event applied then was "Ignored", marked seen and the cursor moved past it, so
+     * the message (or the call invite) was lost on this device. Now such a batch is refused before
+     * anything is applied ([MlsNotReady]) and the socket rejoins from the unchanged cursor.
+     */
+    private val mlsReady: suspend () -> Boolean = { true },
 ) : RealtimeListener, lk.codegen.risime.data.history.SendLanes {
+    /** A batch with MLS events arrived before the MLS core was open: nothing applied, the cursor is unchanged. */
+    class MlsNotReady : IllegalStateException("MLS core not open yet: batch not applied")
     /** §15.4–§15.6 applied inside each event's transaction. */
     private val applier = deletes?.let { lk.codegen.risime.data.deletes.DeleteApplier(it, messages, images, clock, log) }
 
@@ -156,6 +166,10 @@ class ChatEngine(
     private suspend fun onEventsImpl(events: List<Event>) {
         if (events.isEmpty()) return
         val me = meId() ?: return
+        if (mls != null && events.any { requiresMls(it) } && !mlsReady()) {
+            log("mls: core not open yet: ${events.size} event(s) left for the rejoin")
+            throw MlsNotReady()
+        }
         var newIncoming = false
         for (e0 in events) {
             // §12.6: a referenced blob is fetched first, outside the ordered transaction. A transient
@@ -303,6 +317,15 @@ class ChatEngine(
             BlobFetch.Gone -> e
             BlobFetch.Transient -> null
         }
+    }
+
+    /** Events whose handling goes through the MLS pipeline ([applyMls]). */
+    private fun requiresMls(e: Event): Boolean = when (e.kind) {
+        Event.KIND_MESSAGE -> runCatching { e.messageData() }.getOrNull()?.encrypted == true
+        Event.KIND_DELETE -> runCatching { e.deleteData() }.getOrNull()?.encrypted == true
+        Event.KIND_MLS_COMMIT, Event.KIND_MLS_WELCOME, Event.KIND_MLS_MEMBERSHIP, Event.KIND_MLS_DM_OP,
+        Event.KIND_CALL_SIGNAL, Event.KIND_HISTORY_REQUEST, Event.KIND_HISTORY_SHARE -> true
+        else -> false
     }
 
     private fun isGroupEvent(e: Event): Boolean {

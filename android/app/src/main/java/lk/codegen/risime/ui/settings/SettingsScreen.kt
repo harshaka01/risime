@@ -45,7 +45,7 @@ import lk.codegen.risime.ui.theme.Sizes
 import lk.codegen.risime.ui.theme.Spacing
 
 @Composable
-fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> Unit = {}) {
+fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> Unit = {}, onNotificationHealth: () -> Unit = {}) {
     val s by vm.state.collectAsStateWithLifecycle()
     Scaffold(
         topBar = { RisiTopBar(title = "Settings", onBack = onBack) },
@@ -72,6 +72,13 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
             FilledTonalButton(onClick = onBackups, modifier = Modifier.fillMaxWidth()) { Text(lk.codegen.risime.ui.backup.MANAGE_BACKUPS) }
             HorizontalDivider()
             lk.codegen.risime.calls.CallsSettingsSection()
+            HorizontalDivider()
+            SectionHeader("Notifications")
+            Text(
+                "Check what could stop messages and calls from reaching you while RisiMe is closed.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FilledTonalButton(onClick = onNotificationHealth, modifier = Modifier.fillMaxWidth()) { Text(NOTIFICATION_HEALTH_TITLE) }
             HorizontalDivider()
             if (BuildConfig.HISTORY_SHARE_ENABLED) {
                 lk.codegen.risime.ui.history.HistoryPrivacySection()

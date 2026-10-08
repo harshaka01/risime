@@ -1,0 +1,398 @@
+#!/usr/bin/env bash
+# Background delivery gate (P0, nightly.31: "messages don't show and calls don't ring until the app is
+# opened"), with the REAL app on spark2 in two redroid containers (native arm64 Android 14, decision 045):
+#   scripts/push-device-test [--apk app-debug.apk] [--keep]          (run it under `timeout 1800`)
+#
+# Redroid has no Google Play services, so FCM is emulated faithfully:
+#  * the temp server (this checkout, 127.0.0.1:$PUSHTEST_PORT, default 4460) runs with a PUSHTEST HOOK
+#    instead of FCM: `PushTest.Recorder` (a RisiMe.Push sender, defined below and loaded with
+#    `mix run -r`, no server change) appends "<ms> <token> <type>" to a file. The server's real
+#    decision path runs: RisiMe.Push.Dispatcher pushes only when the user has no live inbox channel;
+#  * each phone registers the token "pushtest-<A|B>" (debug builds read files/debug_push_token);
+#  * this script delivers each recorded push as GMS does for a high-priority FCM message:
+#    `cmd deviceidle tempwhitelist -d 10000 <pkg>` and the c2dm RECEIVE broadcast as root (FLAG_RECEIVER_FOREGROUND)
+#    to FirebaseInstanceIdReceiver with the data extras → FirebaseMessagingService.onMessageReceived.
+#
+# Scenarios (each with a hard timeout; the clock starts when the server SENT the push):
+#  1. B in the background (Home), screen off, deep idle (force-idle) → A sends a message → B shows a
+#     message notification (messages_v2 channel, the text in it) within 10 s.
+#  2. Same state → A calls B → B rings: a CallStyle notification on the `calls` channel with a
+#     fullScreenIntent, within 10 s; A cancels.
+#  3. 1 and 2 again after B's task is removed from Recents (the process dies; not force-stop, which
+#     blocks FCM by design).
+#  4. For every scenario: the server really decided to push (the recorder got B's push, the call ring
+#     says live=0) and never logged a skip for B as online.
+# Prints "PUSHTEST PASS|FAIL <step>" and "PUSHTEST OK" at the end; logs in ~/risime-logs/pushtest$SUF/.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+PKG=lk.codegen.risime.debug
+CLS=lk.codegen.risime
+SUF="${PUSHTEST_INSTANCE:-}"; PORT="${PUSHTEST_PORT:-4460}"
+LIMIT_MS="${PUSHTEST_LIMIT_MS:-10000}"
+APK=""; KEEP=0
+while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
+[ -f "$APK" ] || { echo "no APK at $APK (cd android && ./gradlew assembleDebug)"; exit 2; }
+PATH="$("$REPO/scripts/android-target" adb):$PATH"
+I1="${PUSHTEST_REDROID_A:--pt1}"; P1="${PUSHTEST_REDROID_A_PORT:-5761}"
+I2="${PUSHTEST_REDROID_B:--pt2}"; P2="${PUSHTEST_REDROID_B_PORT:-5762}"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-pushtest.XXXXXX")"
+LOGS="$HOME/risime-logs/pushtest$SUF"; mkdir -p "$LOGS"; rm -f "$LOGS"/*.txt "$LOGS"/*.log "$LOGS"/*.png 2>/dev/null || true
+export RISIME_DEV_DB="risime_pushtest$SUF" RISIME_DEV_KEYSPACE="risime_pushtest$SUF" ERL_EPMD_ADDRESS=127.0.0.1
+export MIX_BUILD_PATH="$REPO/server/_build/pushtest$SUF" RISIME_CODE_RELOADER=false
+PUSHES="$WORK/pushes.log"; : > "$PUSHES"
+DELIVER_PID=""
+FAILED=0
+now_ms() { date +%s%3N; }
+pass() { echo "PUSHTEST PASS $*"; }
+fail() { echo "PUSHTEST FAIL $*"; FAILED=1; diag; exit 1; }
+diag() {
+  for d in A B; do
+    local s; s="$(ser $d)"
+    adb -s "$s" exec-out screencap -p > "$LOGS/$d-screen.png" 2>/dev/null || true
+    adb -s "$s" logcat -d > "$LOGS/$d-logcat.txt" 2>/dev/null || true
+    adb -s "$s" shell dumpsys notification --noredact > "$LOGS/$d-notifications.txt" 2>/dev/null || true
+  done
+  echo "    diagnostics in $LOGS"
+}
+cleanup() {
+  [ -n "$DELIVER_PID" ] && kill "$DELIVER_PID" 2>/dev/null || true
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  cp "$PUSHES" "$LOGS/pushes.log" 2>/dev/null || true
+  cp "$WORK/deliver.log" "$LOGS/deliver.log" 2>/dev/null || true
+  for d in A B; do adb -s "$(ser $d)" logcat -d -s RisiMe:* > "$LOGS/$d-risime.txt" 2>/dev/null || true; done
+  tmux kill-session -t "risime-pushtest$SUF" 2>/dev/null || true
+  if [ "$KEEP" = 0 ]; then
+    REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+    REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "${WORK:?}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+SA=""; SB=""
+ser() { if [ "$1" = A ]; then echo "$SA"; else echo "$SB"; fi; }
+
+# ---------------------------------------------------------------- server (+ the PUSHTEST HOOK)
+ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT busy"; exit 1; }
+cat > "$WORK/fixtures.exs" <<'EXS'
+alias RisiMe.{Accounts, Repo}
+alias RisiMe.Accounts.User
+[mode | _] = System.argv()
+a_phone = "+94770000981"; b_phone = "+94770000982"
+case mode do
+  "setup" ->
+    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "pushtest81@example.com", display_name: "ZZ Push A", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "pushtest82@example.com", display_name: "ZZ Push B", company: "CodeGen"})
+    IO.puts("pushtest: setup ok")
+  "friends" ->
+    a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
+    RisiMe.Social.make_friends!(a.id, b.id)
+    IO.puts("pushtest: friends ok")
+  "e2ee" ->
+    a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
+    conv = RisiMe.Messaging.conversation_id(a.id, b.id)
+    IO.puts("pushtest: e2ee=#{RisiMe.MLS.group(conv) != nil}")
+  "tokens" ->
+    b = Repo.get_by!(User, phone: b_phone)
+    Code.ensure_loaded(RisiMe.Push.Dispatcher)
+    hash = if function_exported?(RisiMe.Push.Dispatcher, :user_hash, 1), do: RisiMe.Push.Dispatcher.user_hash(b.id), else: "none"
+    IO.puts("pushtest: b_tokens=#{Enum.join(RisiMe.Devices.push_tokens(b.id), ",")} b_id=#{b.id} b_hash=#{hash}")
+end
+EXS
+# PUSHTEST HOOK: a RisiMe.Push sender that records instead of calling FCM. Loaded after the app
+# started (mix run -r), it replaces the configured sender (FCM_ENABLED=false → nil).
+cat > "$WORK/hook.exs" <<'EXS'
+defmodule PushTest.Recorder do
+  @behaviour RisiMe.Push
+  require Logger
+  @impl true
+  def deliver(token, payload) do
+    type = payload["type"] || "unknown"
+    File.write!(System.fetch_env!("PUSHTEST_FILE"), "#{System.system_time(:millisecond)} #{token} #{type}\n", [:append])
+    Logger.info("pushtest: push recorded type=#{type} token=#{token}")
+    :ok
+  end
+end
+Application.put_env(:risime, :push_sender, PushTest.Recorder)
+IO.puts("pushtest: recorder installed")
+# Online users as the server sees them (for the diagnostics): one line per change.
+spawn(fn ->
+  Stream.repeatedly(fn -> Process.sleep(500) end)
+  |> Enum.reduce(nil, fn _, last ->
+    now = :ets.tab2list(RisiMe.Presence) |> Enum.filter(fn r -> is_binary(elem(r, 0)) end) |> Enum.map(fn {u, c, g} -> {u, c, g != nil} end) |> Enum.sort()
+    if now != last, do: IO.puts("pushtest: presence #{inspect(now)} sender=#{inspect(RisiMe.Push.sender())}")
+    now
+  end)
+end)
+EXS
+fx() { (cd server && $M mix run "$WORK/fixtures.exs" "$@" 2>/dev/null | grep '^pushtest:' || true); }
+echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB, E2EE on, push → recorder)"
+(cd server && { $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true; } && $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
+  || { echo "could not create/migrate the pushtest store"; exit 1; }
+(cd server && $M mix risime.attestation.gen "$WORK/attest.jwk" >/dev/null 2>&1) || true
+[ -f "$WORK/attest.jwk" ] || { echo "no attestation key"; exit 1; }
+(cd server && $M mix compile >/dev/null 2>&1) || { echo "server compile failed"; exit 1; }
+tmux new -d -s "risime-pushtest$SUF" "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
+  PORT=$PORT PHX_SERVER=true DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
+  PUSHTEST_FILE='$PUSHES' ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix run --no-halt -r '$WORK/hook.exs' > '$WORK/server.log' 2>&1"
+for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't start"; tail -20 "$WORK/server.log"; exit 1; }
+for _ in $(seq 1 20); do grep -q "pushtest: recorder installed" "$WORK/server.log" && break; sleep 1; done
+grep -q "pushtest: recorder installed" "$WORK/server.log" || { echo "the push recorder hook didn't load"; tail -20 "$WORK/server.log"; exit 1; }
+fx setup
+otp() { grep -a "\[DEV OTP\] $1:" "$WORK/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true; }
+
+# ---------------------------------------------------------------- devices
+echo "==> two redroid containers ($I1:$P1, $I2:$P2)"
+SA="$(REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" start)"
+SB="$(REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" start)"
+DEV=""
+A() { adb -s "$(ser "$DEV")" "$@"; }
+for DEV in A B; do
+  A uninstall "$PKG" >/dev/null 2>&1 || true
+  A install "$APK" >/dev/null
+  A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  A shell pm grant "$PKG" android.permission.RECORD_AUDIO 2>/dev/null || true
+  A shell appops set "$PKG" USE_FULL_SCREEN_INTENT allow 2>/dev/null || true
+  # Redroid's IME can hang system_server while binding (see docs/status/android.md); `input text` still types.
+  A shell pm disable-user com.android.inputmethod.latin >/dev/null 2>&1 || true
+  # The fake FCM token (debug builds only), read at registration.
+  A shell "run-as $PKG mkdir -p files && run-as $PKG sh -c 'echo pushtest-$DEV > files/debug_push_token'" \
+    || { echo "could not write the debug push token on $DEV"; exit 1; }
+  A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+  A logcat -c || true
+done
+
+# ---- the FCM emulator: every push the server sends to "pushtest-<X>" is delivered to phone X like GMS would.
+deliver() {  # $1 serial, $2 type, $3 sent ms
+  # As root (su 0): the receiver requires com.google.android.c2dm.permission.SEND, which only GMS
+  # holds; a uid-2000 shell broadcast is dropped silently (result=0).
+  adb -s "$1" shell "su 0 cmd deviceidle tempwhitelist -d 10000 $PKG" >> "$WORK/deliver.log" 2>&1 || true
+  adb -s "$1" shell "su 0 am broadcast -f 0x10000000 -a com.google.android.c2dm.intent.RECEIVE \
+    -n $PKG/com.google.firebase.iid.FirebaseInstanceIdReceiver \
+    --es type $2 --es v 1 --es from 000000000000 --es google.message_id 0:pushtest-$3-$RANDOM \
+    --es google.sent_time $3 --es google.delivered_priority high --es google.original_priority high \
+    --es google.ttl 3600" >> "$WORK/deliver.log" 2>&1 || true
+  echo "$(now_ms) delivered type=$2 sent=$3 to $1" >> "$WORK/deliver.log"
+}
+deliver_loop() {
+  local seen=0 total line ts tok typ s
+  while true; do
+    total="$(wc -l < "$PUSHES")"
+    while [ "$seen" -lt "$total" ]; do
+      seen=$((seen + 1))
+      line="$(sed -n "${seen}p" "$PUSHES")"
+      read -r ts tok typ <<<"$line"
+      case "$tok" in pushtest-A) s="$SA";; pushtest-B) s="$SB";; *) continue;; esac
+      deliver "$s" "$typ" "$ts" &
+    done
+    sleep 0.2
+  done
+}
+deliver_loop & DELIVER_PID=$!
+
+# ---- UI helpers (as in scripts/call-device-test: uiautomator dump + taps by text or content-desc)
+dump() { A shell rm -f /sdcard/ui.xml >/dev/null 2>&1; A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui-$DEV.xml" 2>/dev/null || : > "$WORK/ui-$DEV.xml"; }
+has() { dump; grep -qF -- "$1" "$WORK/ui-$DEV.xml"; }
+wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "    [$DEV] timeout waiting for: $1"; return 1; }
+tap() {
+  dump
+  local b; b="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+want = sys.argv[2]
+for n in ET.parse(sys.argv[1]).iter('node'):
+    if n.get('text') == want or n.get('content-desc') == want or (want.endswith('*') and (n.get('text') or '').startswith(want[:-1])):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+)"
+  [ -n "$b" ] || { echo "    [$DEV] no UI node: $1"; return 1; }
+  A shell input tap $b
+}
+clear_field() { A shell "for i in \$(seq 1 80); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true; }
+hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; [[ "$st" == *"mInputShown=true"* ]] && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
+type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
+dismiss_prompts() { has "Not now" && { tap "Not now" || true; }; has "Later" && { tap "Later" || true; }; true; }
+sign_in() {  # $1 phone, $2 email
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null
+  wait_for "Server:" 40 || return 1
+  tap "Server:*" || return 1; sleep 1
+  tap "Server URL" || tap "http://*" || tap "https://*" || return 1; sleep 0.5
+  clear_field; A shell input text "http://127.0.0.1:$PORT"; sleep 0.5; hide_keyboard
+  if ! tap "Use this server"; then tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; fi
+  sleep 2
+  wait_for "Phone number" 30 || return 1
+  type_into "Phone number" "$1"; type_into "Work email" "$2"; hide_keyboard; tap "Send code" || return 1
+  wait_for "6-digit code" 30 || return 1
+  local code=""; for _ in $(seq 1 20); do code="$(otp "$1")"; [ -n "$code" ] && break; sleep 1; done
+  [ -n "$code" ] || return 1
+  type_into "6-digit code" "$code"; sleep 1; has "Verify" && tap "Verify" || true
+  wait_for "Add friend" 40 || return 1
+  dismiss_prompts
+}
+on_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui-$DEV.xml"; }
+open_chat() {
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1; dismiss_prompts
+  for _ in 1 2 3; do on_list && break; A shell input keyevent KEYCODE_BACK; sleep 1; done
+  on_list || { A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2; dismiss_prompts; }
+  wait_for "$1" 40 || return 1; tap "$1"; sleep 2
+}
+send_text() { { type_into "Encrypted message" "$1" || type_into "Message" "$1"; } && tap "Send"; }
+logcat_ok() {  # $1 label
+  local d out
+  for d in A B; do
+    DEV=$d; out="$(A logcat -d 2>/dev/null || true)"
+    printf '%s\n' "$out" | "$REPO/scripts/logcat-gate" "$1 $d" || fail "$1: $d crashed or touched the database on the main thread"
+  done
+}
+
+for DEV in A B; do
+  if [ "$DEV" = A ]; then sign_in "+94770000981" "pushtest81@example.com" || fail "sign-in A"; else sign_in "+94770000982" "pushtest82@example.com" || fail "sign-in B"; fi
+done
+pass "both signed in through the real login UI"
+[ "$(fx friends)" = "pushtest: friends ok" ] || fail "fixture: friends"
+for DEV in A B; do A shell am force-stop "$PKG"; done
+DEV=B; open_chat "ZZ Push A" || fail "B: chat with A not listed"
+DEV=A; open_chat "ZZ Push B" || fail "A: chat with B not listed"
+for _ in $(seq 1 60); do [ "$(fx e2ee)" = "pushtest: e2ee=true" ] && break; sleep 2; done
+[ "$(fx e2ee)" = "pushtest: e2ee=true" ] || fail "the DM never became e2ee"
+TOK="$(fx tokens)"; echo "    server: $TOK"
+[[ "$TOK" == *"b_tokens=pushtest-B"* ]] || fail "B's push token isn't registered with the server ($TOK)"
+B_ID="$(sed -nE 's/.*b_id=([0-9a-f-]+).*/\1/p' <<<"$TOK")"
+B_HASH="$(sed -nE 's/.*b_hash=([^ ]+).*/\1/p' <<<"$TOK")"
+DEV=A; send_text "pt-warmup-a" || fail "A can't type"
+DEV=B; wait_for "pt-warmup-a" 45 || fail "B never received A's first encrypted message (foreground)"
+pass "e2ee DM up, B's push token registered (pushtest-B)"
+
+# ---- B's state: background (Home or removed from Recents), screen off, deep idle; then offline on the server.
+b_wake() {
+  DEV=B
+  A shell dumpsys deviceidle unforce >/dev/null 2>&1 || true
+  A shell dumpsys battery reset >/dev/null 2>&1 || true
+  A shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+  A shell wm dismiss-keyguard >/dev/null 2>&1 || true
+  A shell settings put global stay_on_while_plugged_in 7 >/dev/null 2>&1 || true
+}
+b_sleep() {  # $1 = home|recents
+  DEV=B
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2
+  A shell input keyevent KEYCODE_HOME; sleep 1
+  if [ "$1" = recents ]; then
+    # Recents' swipe: remove the app's task (the process dies with it; FCM stays allowed, unlike force-stop).
+    local tid; tid="$(A shell dumpsys activity recents 2>/dev/null | grep -E "Recent #[0-9]+: Task\{[0-9a-f]+ #[0-9]+ .*A=[0-9]+:$CLS|Recent #[0-9]+: Task\{[0-9a-f]+ #[0-9]+ .*$PKG" | head -1 | sed -nE 's/.*Task\{[0-9a-f]+ #([0-9]+).*/\1/p')"
+    [ -n "$tid" ] || fail "B: no Recents task for the app"
+    A shell cmd activity stack remove "$tid" >/dev/null 2>&1 || A shell am stack remove "$tid" >/dev/null 2>&1 || true
+    for _ in $(seq 1 10); do [ -z "$(A shell pidof "$PKG" 2>/dev/null | tr -d '\r')" ] && break; sleep 1; done
+    if [ -n "$(A shell pidof "$PKG" 2>/dev/null | tr -d '\r')" ]; then
+      # The task is gone but the process lingers as cached: kill it the way the system does (not force-stop).
+      A shell am kill "$PKG" >/dev/null 2>&1 || true; sleep 1
+    fi
+    [ -z "$(A shell pidof "$PKG" 2>/dev/null | tr -d '\r')" ] || fail "B: the process survived the Recents removal"
+    A shell dumpsys package "$PKG" | grep -q "stopped=true" && fail "B: the app is in the stopped state (would block FCM)"
+    echo "    [B] task $tid removed from Recents; process gone (not stopped)"
+  fi
+  A shell settings put global stay_on_while_plugged_in 0 >/dev/null 2>&1 || true
+  A shell dumpsys battery unplug >/dev/null 2>&1 || true
+  A shell input keyevent KEYCODE_SLEEP; sleep 1
+  A shell dumpsys deviceidle enable >/dev/null 2>&1 || true
+  local idle; idle="$(A shell dumpsys deviceidle force-idle 2>&1 | tr -d '\r')"
+  echo "    [B] screen off, deviceidle: $idle"
+  # The app closes its socket 5 s after leaving the foreground; the server's offline grace is 5 s.
+  sleep 14
+}
+# The notification shade dump; $1 = channel; true when a notification of ours on it contains $2.
+notif_has() {  # $1 channel, $2 text (or "" for any)
+  A shell dumpsys notification --noredact > "$WORK/notif-$DEV.txt" 2>/dev/null || true
+  python3 -I - "$WORK/notif-$DEV.txt" "$PKG" "$1" "$2" <<'PY' 2>/dev/null
+import sys
+path, pkg, ch, want = sys.argv[1:5]
+blocks = open(path, errors="replace").read().split("NotificationRecord(")
+# The system's autogroup summary (tag=ranker_group) borrows a channel: never ours.
+ok = any(f"pkg={pkg} " in b and "tag=ranker_group" not in b and f"channel={ch} " in b and (not want or want in b) for b in blocks[1:])
+sys.exit(0 if ok else 1)
+PY
+}
+fsi_on_calls() {
+  A shell dumpsys notification --noredact > "$WORK/notif-$DEV.txt" 2>/dev/null || true
+  python3 -I - "$WORK/notif-$DEV.txt" "$PKG" <<'PY' 2>/dev/null
+import sys, re
+path, pkg = sys.argv[1:3]
+blocks = open(path, errors="replace").read().split("NotificationRecord(")
+ok = any(f"pkg={pkg} " in b and "tag=ranker_group" not in b and "channel=calls " in b and re.search(r"fullscreenIntent=PendingIntent", b, re.I) for b in blocks[1:])
+sys.exit(0 if ok else 1)
+PY
+}
+pushes_for_b_since() {  # $1 ms, $2 type → count
+  awk -v t="$1" -v ty="$2" '$1 >= t && $2 == "pushtest-B" && $3 == ty' "$PUSHES" | wc -l
+}
+first_push_ts() {  # $1 ms, $2 type
+  awk -v t="$1" -v ty="$2" '$1 >= t && $2 == "pushtest-B" && $3 == ty {print $1; exit}' "$PUSHES"
+}
+server_skipped_online() {  # since line $1 of the server log (the server's push audit line, nightly.33+)
+  tail -n +"$1" "$WORK/server.log" | grep -aqE "push: skipped kind=inbox user=(${B_HASH:-none}|${B_ID:-none}) reason=online"
+}
+
+scenario_message() {  # $1 label
+  local label="$1" t0 sl ts txt="ptmsg$RANDOM$RANDOM" d
+  DEV=B; A logcat -d -s RisiMe:* 2>/dev/null | grep -a "RisiMe push: socket" | tail -2 | sed 's/^/    [B] /' || true
+  sl="$(wc -l < "$WORK/server.log")"; t0="$(now_ms)"
+  DEV=A; send_text "$txt" || fail "$label: A can't send"
+  ts=""; for _ in $(seq 1 30); do ts="$(first_push_ts "$t0" inbox)"; [ -n "$ts" ] && break; sleep 0.5; done
+  [ -n "$ts" ] || { server_skipped_online "$sl" && fail "$label: the server skipped B's push as online"; fail "$label: the server never pushed to B (still online?)"; }
+  pass "$label: the server pushed to B (inbox wake-up, B offline)"
+  DEV=B; local got=""
+  while [ $(( $(now_ms) - ts )) -lt "$LIMIT_MS" ]; do notif_has messages_v2 "$txt" && { got="$(now_ms)"; break; }; sleep 0.3; done
+  [ -n "$got" ] || fail "$label: no message notification on B within $((LIMIT_MS / 1000)) s of the push"
+  d=$((got - ts))
+  server_skipped_online "$sl" && fail "$label: the server logged a skip for B as online"
+  pass "$label: B shows the message notification (messages_v2, the text in it) ${d} ms after the push"
+  echo "$label message_ms=$d" >> "$LOGS/timings.txt"
+}
+scenario_call() {  # $1 label
+  local label="$1" t0 sl ts d ring
+  sl="$(wc -l < "$WORK/server.log")"; t0="$(now_ms)"
+  DEV=A; local ok=""; for _ in $(seq 1 15); do tap "Voice call" && { ok=1; break; }; sleep 2; done
+  [ -n "$ok" ] || fail "$label: A has no call button"
+  ts=""; for _ in $(seq 1 30); do ts="$(first_push_ts "$t0" call)"; [ -n "$ts" ] && break; sleep 0.5; done
+  [ -n "$ts" ] || fail "$label: the server never sent B a call push"
+  ring="$(tail -n +"$sl" "$WORK/server.log" | grep -a "call ring:" | grep -a "to=$B_ID" | tail -1 || true)"
+  [[ "$ring" == *"live=0"* ]] || fail "$label: the server rang B as live (${ring:-no ring line})"
+  pass "$label: the server rang B through a push (${ring##*call ring: })"
+  DEV=B; local got=""
+  while [ $(( $(now_ms) - ts )) -lt "$LIMIT_MS" ]; do notif_has calls "" && { got="$(now_ms)"; break; }; sleep 0.3; done
+  [ -n "$got" ] || fail "$label: B didn't ring within $((LIMIT_MS / 1000)) s of the push"
+  d=$((got - ts))
+  fsi_on_calls || fail "$label: B's call notification has no fullScreenIntent"
+  local act=""; for _ in $(seq 1 6); do A shell dumpsys activity activities 2>/dev/null | grep -E "topResumedActivity|mResumedActivity|ResumedActivity" | grep -q "CallActivity" && { act=1; break; }; sleep 0.5; done
+  local scr="not resumed"; [ -n "$act" ] && scr="launched (full-screen intent)"
+  pass "$label: B rings ${d} ms after the push: CallStyle on 'calls' with a fullScreenIntent; call screen $scr"
+  echo "$label ring_ms=$d call_activity=${act:-0}" >> "$LOGS/timings.txt"
+  DEV=A; tap "End call" || tap "Cancel" || fail "$label: A can't cancel the call"
+  DEV=B; for _ in $(seq 1 20); do notif_has calls "" || break; sleep 1; done
+  notif_has calls "" && fail "$label: B still rings after A cancelled"
+  pass "$label: A cancelled; B stopped ringing"
+}
+
+: > "$LOGS/timings.txt"
+DEV=B; A logcat -c || true
+b_sleep home
+scenario_message "scenario 1 (Home, screen off, deep idle)"
+b_wake; b_sleep home
+scenario_call "scenario 2 (Home, screen off, deep idle)"
+b_wake; sleep 3
+b_sleep recents
+scenario_message "scenario 3a (removed from Recents, screen off, deep idle)"
+b_wake; b_sleep recents
+scenario_call "scenario 3b (removed from Recents, screen off, deep idle)"
+b_wake
+DEV=B; A logcat -d -s RisiMe:* 2>/dev/null | grep -a "RisiMe push:" | tail -40 > "$LOGS/B-push-lines.txt" || true
+grep -q "RisiMe push: received kind=inbox" "$LOGS/B-push-lines.txt" || fail "B never logged a received inbox push (onMessageReceived not reached?)"
+grep -q "RisiMe push: received kind=call" "$LOGS/B-push-lines.txt" || fail "B never logged a received call push"
+grep -q "RisiMe push: notification posted" "$LOGS/B-push-lines.txt" || fail "B never logged a posted notification"
+pass "scenario 4: every push went through the server's offline decision, the FCM receiver and onMessageReceived"
+logcat_ok "after all scenarios"
+pass "no crash and no main-thread database work on either phone"
+echo "    timings: $(tr '\n' ';' < "$LOGS/timings.txt")"
+echo "PUSHTEST OK"

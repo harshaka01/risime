@@ -126,6 +126,7 @@ private fun MainNav(c: AppContainer, meId: String) {
         }
     }
     NotificationPermissionPrompt(c)
+    lk.codegen.risime.ui.settings.NotificationHealthAfterUpdate(c) { runCatching { nav.navigate("notif_health") { launchSingleTop = true } } }
     lk.codegen.risime.ui.history.HistoryPromptHost(c)
     // §22.7: a fresh install with a server backup offers "Restore your chats" first.
     lk.codegen.risime.ui.backup.RestoreGateHost(c) {
@@ -187,7 +188,11 @@ private fun MainNav(c: AppContainer, meId: String) {
             SettingsScreen(
                 viewModel { SettingsViewModel(AppSettingsBackend(c)) }, onBack = { nav.popBackStack() },
                 onBackups = { nav.navigate("backups") { launchSingleTop = true } },
+                onNotificationHealth = { nav.navigate("notif_health") { launchSingleTop = true } },
             )
+        }
+        composable("notif_health") {
+            lk.codegen.risime.ui.settings.NotificationHealthScreen(c, onBack = { nav.popBackStack() })
         }
         composable("backups") {
             lk.codegen.risime.ui.backup.BackupsScreen(c, onBack = { nav.popBackStack() })

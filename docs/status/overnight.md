@@ -47,6 +47,15 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+### HOLD (2026-10-08 ~13:30 UTC): don't release main past `d27c07c` until the background-delivery review fixes land
+- **The blocker:** the review of `55e0a3a`/`c49647d` found that MLS events can still be lost, or the
+  whole inbox can stall, when the device registration fails on a push-started cold start. That code
+  is on main.
+- **Also being fixed:** a 9-s block in `onMessageReceived` that delays call pushes, the channel
+  migration losing a Silent setting, and the health screen nagging after every update.
+- **The fix:** an agent is on it.
+- **nightly.34 is unaffected:** it is released from `d27c07c` (audio routing only).
+
 ## Queue (set 2026-10-08 ~12:30 UTC)
 1. **P0 background delivery** (agent running).
 2. **P0 call audio routing** (`1a40df7` is on main; the review fixes are being made).
