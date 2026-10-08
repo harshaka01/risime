@@ -905,5 +905,632 @@
    "meta": null,
    "expect": "reject"
   }
+ ],
+ "tab_about": "Contract v1.24 §24.1 (the core's tab rules) on top of the §12.4/§12.4a rules of `cases`. Extra fields: conversation = 'grp' | 'dm'; tab = the base epoch's group_meta.tab ('private' also for dm:); agents = the base epoch's group_meta.agents; agent_users = the users whose leaf attestation says kind: 'agent' (a leaf of such a user is an agent leaf); meta may also carry tab (the new value, or null if unchanged), chat_id_changed and agents (the new list, or null if unchanged). Rules: tab and chat_id never change after epoch 0; a dm: or Private group has agents == [] and never gains an agent leaf; in Official an agent leaf may be added only by an admin and only for a user in agents (base or new), agents never names an admin; any member may remove every leaf of an agent (never a part of them) in a commit that otherwise touches only the committer's own leaves and changes no group_meta. Every other commit follows the rules of `cases`. The `cases` above carry no tab: they are Official groups (they list an agent) and keep their expectations under v1.24.",
+ "tab_cases": [
+  {
+   "name": "Private: admin adds an agent leaf",
+   "conversation": "grp",
+   "tab": "private",
+   "admins": [
+    "A"
+   ],
+   "agents": [],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "R/r1"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "Private: admin lists an agent in group_meta.agents",
+   "conversation": "grp",
+   "tab": "private",
+   "admins": [
+    "A"
+   ],
+   "agents": [],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": null,
+    "name_changed": false,
+    "tab": null,
+    "chat_id_changed": false,
+    "agents": [
+     "R"
+    ]
+   },
+   "expect": "reject"
+  },
+  {
+   "name": "Private: member self-update (the tab rules block nothing else)",
+   "conversation": "grp",
+   "tab": "private",
+   "admins": [
+    "A"
+   ],
+   "agents": [],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "Private: admin adds a new user (no agent)",
+   "conversation": "grp",
+   "tab": "private",
+   "admins": [
+    "A"
+   ],
+   "agents": [],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "D/d1"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "dm: an agent leaf is added",
+   "conversation": "dm",
+   "tab": "private",
+   "admins": [],
+   "agents": [],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "R/r1"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "dm: a user re-adds their own device (no agent)",
+   "conversation": "dm",
+   "tab": "private",
+   "admins": [],
+   "agents": [],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "A/a1"
+   ],
+   "removes": [
+    "A/a1"
+   ],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "Official: admin changes tab after epoch 0",
+   "conversation": "grp",
+   "tab": "official",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": null,
+    "name_changed": false,
+    "tab": "private",
+    "chat_id_changed": false,
+    "agents": null
+   },
+   "expect": "reject"
+  },
+  {
+   "name": "Private: admin changes tab to official after epoch 0",
+   "conversation": "grp",
+   "tab": "private",
+   "admins": [
+    "A"
+   ],
+   "agents": [],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": null,
+    "name_changed": false,
+    "tab": "official",
+    "chat_id_changed": false,
+    "agents": null
+   },
+   "expect": "reject"
+  },
+  {
+   "name": "Official: admin changes chat_id after epoch 0",
+   "conversation": "grp",
+   "tab": "official",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": null,
+    "name_changed": false,
+    "tab": null,
+    "chat_id_changed": true,
+    "agents": null
+   },
+   "expect": "reject"
+  },
+  {
+   "name": "Official: admin makes the agent an admin",
+   "conversation": "grp",
+   "tab": "official",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": [
+     "A",
+     "R"
+    ],
+    "name_changed": false,
+    "tab": null,
+    "chat_id_changed": false,
+    "agents": null
+   },
+   "expect": "reject"
+  },
+  {
+   "name": "Official: member removes the agent (Official turned off)",
+   "conversation": "grp",
+   "tab": "official",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [
+    "R/r1"
+   ],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "Official: member removes the agent and adds own new device",
+   "conversation": "grp",
+   "tab": "official",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "B/b3"
+   ],
+   "removes": [
+    "R/r1"
+   ],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "Official: member removes only one of an agent's leaves",
+   "conversation": "grp",
+   "tab": "official",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1"
+    ],
+    "R": [
+     "r1",
+     "r2"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [
+    "R/r1"
+   ],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "Official: member removes the agent together with another user's leaf",
+   "conversation": "grp",
+   "tab": "official",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [
+    "R/r1",
+    "C/c1"
+   ],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "Official: member removes the agent and changes group_meta",
+   "conversation": "grp",
+   "tab": "official",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [
+    "R/r1"
+   ],
+   "meta": {
+    "admins": null,
+    "name_changed": false,
+    "tab": null,
+    "chat_id_changed": false,
+    "agents": []
+   },
+   "expect": "reject"
+  },
+  {
+   "name": "Official: admin adds the agent listed in agents (Official on again)",
+   "conversation": "grp",
+   "tab": "official",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "R/r1"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "Official: admin adds an agent not listed in agents",
+   "conversation": "grp",
+   "tab": "official",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R",
+    "S"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "S/s1"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "Official: member adds the agent",
+   "conversation": "grp",
+   "tab": "official",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [
+    "R/r1"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "reject"
+  }
  ]
 }

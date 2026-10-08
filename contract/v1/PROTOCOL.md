@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.23 (Release 0.3)
+# RisiMe Wire Protocol — v1.24 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -188,6 +188,8 @@ Decisions 013 and 014. This section overrides §1.1, §1.2 and §1.5 where they 
   - Release clients show the dev login **only while `modes` lacks `"oidc"`** (the interim before
     the Keycloak client exists). Debug clients may always offer it when it is listed.
   - `issuer` and `client_id` are present when `"oidc"` is listed.
+  - Later versions add fields, each absent on older servers: `phone_verification` (§7.1),
+    `signup` (§21.1), `backup` (§22.1) and `tabs` (v1.24, §24.15, `auth_config_v124.json`).
 - Every authenticated endpoint accepts `Authorization: Bearer <token>` (as in §0). New errors:
   - `401 invalid_token`: a missing, bad, expired or foreign token. Also returned for opaque
     tokens when `DEV_LOCAL_AUTH` is off.
@@ -306,6 +308,9 @@ Decision 026. Data-only FCM wake-ups; the content is always fetched over the cha
 ### 8.2 Push payload (FCM data message, high priority)
 `{"type": "inbox", "v": "1"}`, and nothing else. Clients ignore unknown `type`s.
 FCM `collapse_key` is `inbox`, and the TTL is 1 h.
+(v1.24) Unchanged for Official conversations: still content-free, and sent for Official events only
+to devices that advertise `tabs` (§24.7). Agent devices never receive pushes. The tab label is
+added locally (§24.9).
 
 ### 8.3 Server housekeeping
 - An FCM `UNREGISTERED` or `INVALID_ARGUMENT` response for a token deletes that device.
@@ -427,7 +432,8 @@ Decisions 012, 032 and 033.
   be re-created, so stale events from an earlier generation are dropped.
 - **Attestation:** the server signs each device's binding.
   - The JWS is EdDSA. Header: `typ` = `risime-attest+jwt`, plus `kid`. Claims:
-    `{"aud":"risime-mls","user_id","device_id","signature_key","iat","v":1}`.
+    `{"aud":"risime-mls","user_id","device_id","signature_key","iat","v":1}`. (v1.24) An agent
+    device's claims add `"kind": "agent"`; absent means `"user"` (§24.11).
   - The JWS travels **inside each leaf** (the RFC 9420 `application_id` extension, set in the key
     package), so every member verifies every leaf **offline, in the MLS core**, against attestation
     keys pinned in the app.
@@ -519,6 +525,9 @@ device must belong to the authenticated user; otherwise the call gets `403`.
 - **`GET /api/v1/mls/groups/{conversation_id}/commits?since_epoch=e`** → `{"commits": [{"epoch", "commit", "from_device"}]}`.
   This is for recovery after a 409 or a missed event. The server keeps the last 1000 epochs or
   30 days.
+- **(v1.24) No agent in a DM, ever.** A `dm:` group holds only the two users' devices: a claim,
+  commit or Welcome involving an agent device is refused by the server (`403 private_tab`) and
+  rejected by the core (§24.1). A 1:1's Official tab is a separate `grp:` (§24.1).
 
 ### 10.3 Events and messages (realtime)
 - **`msg:send` for an e2ee conversation:**
@@ -842,8 +851,11 @@ where they differ for them. DMs are unchanged. Apps before v1.9 never see group 
   `contract/v1/group_policy_cases.json`, that both test suites run.
 - **Caps:** at most **256 member users** (the creator included) and **768 devices (leaves)** per
   group.
-- **Risi-ready:** a member has `"kind": "user"` now, and `"agent"` from 0.5. An agent is always
-  visible in the member list, can never be an admin, and its keys never live on the chat server.
+- **Risi-ready:** a member has `"kind": "user"`, or (v1.24) `"agent"`. An agent is always
+  visible in the member list and can never be an admin. **(v1.24, amended):** agent keys are never
+  readable by the delivery-service store (they are sealed under `RISI_MLS_KEK` in the isolated
+  `RisiMe.Agent` tree, §24.11), and **agents are allowed only in Official groups** (`tab:
+  "official"`), never in a Private group or a DM (§24.1, §24.5).
 
 ### 12.1 Identity, capability and readiness
 - `conversation_id` = `"grp:<uuid>"` (lowercase). The MLS group id is `"grp:<uuid>#<generation>"`
@@ -887,6 +899,7 @@ where they differ for them. DMs are unchanged. Apps before v1.9 never see group 
   (`message`, `mls_*`, `group_*`) or `grp:` typing signals to a socket whose `device_id` lacks
   `groups` (or that sent no `device_id`): they are left out of live pushes and of join/sync
   replies for that socket. Such a device is never a leaf, so it has nothing to decrypt.
+  (v1.24) Official groups and `chat_event`s are filtered the same way on `tabs` (§24.7).
 
 ### 12.2 Objects
 - `Group = {"id": "grp:…", "state": "creating" | "active", "created_by", "created_at", "generation", "epoch" | null, "my_role": "admin" | "member", "members": [Member], "pending": [PendingOp]}`
@@ -959,6 +972,9 @@ caller isn't a member of is always `404 not_found`, so membership is never revea
 - **Errors:** `403 not_admin`, `403 invalid_device`, `404 not_found`, `409 not_ready`,
   `409 last_admin`, `422 too_many_members`, `422 too_many_devices`, `422 invalid_role`,
   `not_friends` (as in §9), `429 rate_limited`.
+- **(v1.24)** These calls apply to the whole chat, both tabs (§24.3). An agent in `member_ids` or
+  `user_ids` is `422 invalid_member`; member, leave and role calls on a 1:1 Official are
+  `422 dm_chat`; removing Risi from an Official that stays on is `409 risi_required` (§24.4).
 
 ### 12.4 Pending operations, committers and commit authorisation
 - **Every membership or role change is a pending op** that some device must commit:
@@ -986,7 +1002,10 @@ caller isn't a member of is always `404 not_found`, so membership is never revea
   - `add`, `remove`, `role`, `rebuild`: any admin device (including the same admin's other
     devices);
   - `devices`: the affected user's own in-group device, or any admin device, or (v1.14) any
-    active member's in-group device under §12.4a.
+    active member's in-group device under §12.4a;
+  - (v1.24) a `remove` op whose only target is an **agent** (Official turned off, §24.4): **any
+    active member's** in-group device, which the server may also name. It must remove exactly all
+    of the agent's leaves and carry the `op_id`.
 - **Expiry:** `add` and `role` ops expire **24 h** after creation (`expires_at`). An expired add
   drops its `pending_add` members and emits `add_expired`; an expired role op is dropped silently.
   `remove`, `devices` and `rebuild` ops never expire: they're renamed until done. (v1.21: a
@@ -1014,6 +1033,8 @@ caller isn't a member of is always `404 not_found`, so membership is never revea
     removes), `rebuild`, and `meta_changed`;
   - plus the §10.2 checks: the caller is a member device, each added device is current, the
     Welcome is present exactly when `added` isn't empty, the caps, and the rate limit.
+  - (v1.24) **any active member:** completing a `remove` op whose only target is an agent in an
+    Official group (exactly all of its in-group devices, with the `op_id`; §24.4);
   - Anything else is `403 not_admin` (another user's change by a non-admin) or `bad_request`
     (lists that don't match the op).
 - **The MLS core applies the same rule** from `group_meta.admins`: a commit by a non-admin may
@@ -1036,7 +1057,8 @@ within these limits (normative; replaces the `devices` parts of §12.4 where the
 - **Never by a non-admin:** adding a user with no leaf, removing a user's last leaf, any
   `add`/`remove`/`role`/`rebuild` op, any `group_meta` change.
 - **Agents:** a non-admin never adds or removes an agent's leaves, and an agent device is never
-  named for another user's op.
+  named for another user's op. (v1.24 exception: in an Official group any member may remove
+  **all** of an agent's leaves, §24.1 rule 5 and §24.4.)
 - An op is **member-committable** when it is a `devices` op, every added device's user is an
   active member (not an agent) with a leaf in the group, and every removed device is also in
   `added` (a same-device re-add).
@@ -1068,6 +1090,9 @@ within these limits (normative; replaces the `devices` parts of §12.4 where the
   credential and attestation are verified first (§10.1), on the committer too. The agent list is
   empty until agents ship (0.5); until then the agent rules are server-enforced. The fixture
   `group_policy_cases.json` (`"v": 2`, with `leaves` = the base epoch's leaves) runs on both sides.
+  (v1.24) Agents ship in Official groups: the core also applies the tab rules of §24.1 (agents
+  from `group_meta.agents` and the leaves' attested `kind`), and both sides run the fixture's
+  `tab_cases` as well.
 - **Wake-up when nobody can commit.** While a `devices` op has no online candidate (`committer`
   null), the server sends the §8.2 push `{"type": "inbox", "v": "1"}` (data-only, no content) to
   the **device's own push token** of each of the first **10** candidates in the order above
@@ -1086,6 +1111,10 @@ within these limits (normative; replaces the `devices` parts of §12.4 where the
 - With it, the caller must be an **active member** of that group, and each id must be an active
   or `pending_add` member of it (or the caller's own user). Otherwise **`not_member`**, all or
   nothing, and nothing is consumed. The rate limit is unchanged; one call may name up to 255 users.
+- **(v1.24) Agents:** an agent user may be named only when `conversation_id` is an **Official**
+  group, for its epoch 0 (§24.2) or while it has a pending `add` op for that agent (§24.4). Any
+  other claim naming an agent (no `conversation_id`, a `dm:`, a Private group) is
+  **`403 private_tab`**, all or nothing.
 
 ### 12.6 Blobs (generic, v1.9)
 A minimal store of **opaque, client-encrypted bytes**. v1.9 uses it for large commits and
@@ -2548,6 +2577,9 @@ in §16.14.
   each other directly** (same LAN, or a NAT pair that allows it), and the app must fail fast with
   "Can't connect the call", never hang (§16.11).
 - **No model calls,** so nothing for the learning log (§16.13).
+- **(v1.24) A call belongs to one conversation.** A 1:1 call on the `dm:` is the chat's **Private**
+  call (§16/§19, never transcribed); a call in a 1:1's **Official** tab is a §20 group call on its
+  `grp:` (§24.5). Agents are never rung and never join.
 
 ### 16.1 Capability and readiness
 - A v1.13 app advertises **`"calls"`** with its MLS device:
@@ -3319,6 +3351,8 @@ and epoch as `msg:send` (`stale_epoch` otherwise, §10.3), at most 24 KiB (`too_
   generation with `history_share`. **The §12.1 superseded filter does not apply:** a superseded
   device is usually the old phone the user is about to open; it is *dormant* and named when its
   inbox joins.
+- **(v1.24) Agent devices** are never providers or requesters: a `history:request` from one is
+  `bad_request`, and they are never named.
 - **Member candidates** (`sources: "any"` only): devices of other active members (never agents)
   in the group at the current generation, with `history_share`, not superseded, whose user's
   intervals overlap the requester's intervals.
@@ -4123,7 +4157,10 @@ nothing new.
   sender's phone (LiveKit's frame encryption, `FrameCryptor`, AES-GCM) under a **per-sender key
   derived from the group's MLS state** (§20.6). LiveKit and coturn forward ciphertext frames;
   LiveKit terminates only the hop-by-hop DTLS-SRTP.
-- **Group (`grp:`) conversations only.** DMs keep the P2P path of §16 and §19.
+- **Group (`grp:`) conversations only.** DMs keep the P2P path of §16 and §19. (v1.24) This
+  includes Official groups, also a 1:1's Official tab (§24.5); a `call_id` belongs to one
+  conversation. Agent devices are never rung, never count for `group_calls_ready` and get no room
+  token (`403 invalid_device`); no transcription in stage 1.
 - **Voice and video in one version.** `media: "audio" | "video"` as in §19; both ship behind one
   capability. Caps: **32 participants** in a voice call, **8** in a video call (§20.9).
 - **No call table on the server.** LiveKit's in-memory room list is the only call state
@@ -4755,6 +4792,11 @@ change bumps it).
   "removed"} | null, "chat": {"cleared_upto": ts | null, "hidden": bool, "muted_until": ts | null,
   "pinned": bool, "archived": bool, "last_read": ts | null}}`. `icon` is the §14.4 group-icon
   object (blob reference with its key); `hidden` is a chat removed by Delete chat (§15.7).
+  (v1.24) It gains `"chat_id"`, `"tab": "private" | "official"` and `"chat_kind": "dm" | "group"`
+  (absent = Private, `chat_id = conversation_id`, `chat_kind = kind`;
+  `backup_entry_conversation_v124.json`). **A bundle with any Official conversation is `schema: 2`**
+  in both the header and the file header (`backup_bundle_header_v124.json`), so older apps refuse it
+  (§22.4); a bundle with Private conversations only stays `schema: 1` (§24.10).
 - **`message`** (`backup_entry_message.json`): the §17.7 entry plus `type`, `conversation_id` and
   local state: `{"type": "message", "conversation_id", "message_id", "client_msg_id", "from",
   "from_device", "server_ts", "payload": {…}, "origin": null | "shared" | "own_device" | "backup",
@@ -5359,7 +5401,495 @@ appear in the group's info screen the same way.
   `calls_room_status_reply_v123.json`, `livekit_token_claims_v123.json`,
   `livekit_update_participant.json`, `error_too_many_for_video.json`, `error_not_in_call.json`.
 
+## 24. Two tabs per chat (Private | Official) and Risi stage 1 (v1.24)
+Proposal `2026-10-08-two-tabs-risi.md` (approved by Harsha; it replaces `2026-10-08-risi-agent.md`),
+decisions 065 (two tabs) and 066 (Risi stage 1). Extends §10, §12, §15–§17, §20 and §22 and
+overrides them where they differ, as stated in each of those sections. Additive: one device
+capability `tabs`, one server switch in `/auth/config`, the `Chat` object and
+`GET`/`PATCH /api/v1/chats…`, `POST /api/v1/chats/{chat_id}/official`, the stored event kind
+`chat_event`, new `Group` and `group_meta` fields, `Member.kind: "agent"`, the agent attestation
+claim, the Risi envelopes, `/api/v1/risi/*`, `PATCH /me` `tz`, and the errors of §24.8. **Apps
+without `tabs` never see an Official conversation** and see exactly what they saw in v1.23
+(§24.7). A chat's existing conversation keeps its id and becomes that chat's Private tab: nothing
+is migrated, renamed or moved (hard rule 9).
+
+### 24.0 Principles
+- **A chat is a set of people with two conversations,** Private and Official. Each is its own MLS
+  group (§10.0, §12.0). They share one `chat_id` and always have the same human members.
+- **Private is absolutely private.**
+  - It never holds an agent leaf. The server (§24.5), the MLS core (§24.1) and the client UI each
+    enforce it independently.
+  - It is never transcribed and never an input to any model, to the learning log or to any Risi
+    table (§24.12).
+- **Official always contains Risi while Official is on.**
+  - Risi is a visible member, `kind: "agent"`, never an admin (§12.0).
+  - Risi only ever sees Official: it is a leaf of Official groups only, and the server delivers it
+    nothing else (§24.5).
+- **Old apps never see Official** [decision 065]. A label an old app doesn't render can't be relied
+  on, so Official is delivered, listed and pushed only to `tabs` devices (§24.7).
+- **Hard rule 9:** v1.24 only adds data. Nothing moves to Official automatically, and turning
+  Official off never deletes a message on any device (§24.4).
+- **Visible agents** (CLAUDE.md): Risi is in the member list, the header shows "Risi is listening"
+  in Official, and every Risi message is an ordinary, attributed MLS message.
+
+### 24.1 Ids and objects
+- **`chat_id`** is opaque: clients never parse it. It **equals the chat's anchor conversation id**:
+  `dm:<a>_<b>` (§2.4) for a 1:1, or the Private group's `grp:` id for a group. Every existing
+  conversation is therefore already its chat's Private tab, with `chat_id = conversation_id`.
+- **The Official conversation is always a `grp:<uuid>`, also for a 1:1** (§10.2 allows no third
+  member in a `dm:` group; the §12 machinery of ops, committers, `agents` in the policy and the
+  §12.5 claim already fits an agent member).
+- **A 1:1 Official** is a `grp:` with `chat_kind: "dm"`:
+  - its members are the two users, **both `admin`**, plus Risi (`member`, `kind: "agent"`);
+  - its `group_meta.name` is `null`; clients show the peer's name;
+  - `POST …/members`, `DELETE …/members/…`, `POST …/leave` and `PATCH …/members/…` on it return
+    **`422 dm_chat`**; its membership follows the DM (the friendship) only;
+  - while either user blocks the other, or they are no longer friends, sends to it get
+    `not_friends` (as for the DM, §9.3), and Official can't be created or turned on.
+- **`Group` (§12.2) gains** (`group_reply_v124.json`):
+  - `"chat_id"`: the chat's id (for a Private group, its own id);
+  - `"tab": "private" | "official"`; **absent means `"private"`** (pre-v1.24 servers);
+  - `"chat_kind": "dm" | "group"`; absent means `"group"`;
+  - `"agents": [uuid]`: the agent users of this group (empty for Private); absent means `[]`.
+- **`Member.kind`** (§12.2) is `"user"` or **`"agent"`**. An agent member is always `role:
+  "member"`, `phone: null`, and is listed like any member.
+- **`Chat`** (`chat_reply.json`, `chats_reply.json`):
+  ```
+  {"chat_id", "kind": "dm" | "group",
+   "private": {"conversation_id"},
+   "official": {"state": "on" | "off" | "none", "conversation_id": "grp:…" | null,
+                "changed_by": uuid | null, "changed_at": ts | null},
+   "official_ready": bool,
+   "missing": [{"user_id": uuid | null, "device_id": uuid | null,
+                "reason": "no_mls" | "legacy_app" | "agent_unavailable"}],
+   "can_toggle": bool}
+  ```
+  - `private.conversation_id` equals `chat_id`.
+  - `official.state`: `on` (the Official conversation exists and Risi is in it, or joining);
+    `off` (turned off; `conversation_id` is the read-only conversation, or null if it was never
+    created); **`none`** (on by setting, but the Official conversation isn't created yet).
+  - `official_ready`: `POST …/official` would succeed now: every member is tabs-ready (§24.7) and
+    the agent is available. `missing` says why not: members as in §12.1 (`no_mls`, `legacy_app`),
+    and `{"user_id": null, "device_id": null, "reason": "agent_unavailable"}` while Risi is off
+    or down.
+  - `can_toggle`: the caller may `PATCH` the chat (§24.4).
+- **`group_meta`** (§12.2, the `risime.group_meta` extension `0xFA01`) gains, for v1.24 groups:
+  `"tab": "private" | "official"`, `"chat_id"` and `"agents": [uuid]`
+  (`{"v": 1, "name", "icon", "admins", "tab", "chat_id", "agents"}`). A `group_meta` without `tab`
+  (every pre-v1.24 group) is Private with `chat_id` = the group's own conversation id and
+  `agents: []`.
+- **The MLS core enforces** (normative; on the epoch-0 group it creates, on a Welcome it joins, on
+  every staged peer commit and on its own commits; fixture `group_policy_cases.json` `tab_cases`):
+  1. `tab` and `chat_id` are **immutable after epoch 0**: a `group_meta` change that alters either
+     is rejected, from anyone.
+  2. **Private** (or absent `tab`) requires `agents == []`, and **rejects any leaf whose
+     attestation says `kind: "agent"`** (§24.11), in a Welcome's tree or added by a commit.
+  3. **`dm:` groups** reject every agent leaf, always.
+  4. **Official:** an agent leaf is accepted only if its user is in `agents` and the committer is
+     an admin; `agents` never names an admin (§12.0); only an admin may change `agents`.
+  5. **Agent removal (widens §12.4/§12.4a):** in Official, any member's device may commit a
+     removal of **every** leaf of an agent user (a partial removal stays admin-only); such a
+     commit may otherwise contain only the committer's own-user changes, and no `group_meta`
+     change.
+- **The client takes Private-ness from MLS state** (`group_meta.tab` and the leaves' attested
+  kinds), never from server JSON: a conversation whose MLS state is Private is shown as Private,
+  and its plaintext is never handed to any agent code path, whatever the server says.
+
+### 24.2 Creation [decision 065]
+Lazy for 1:1s and migrated chats; immediate for new groups.
+- **`POST /api/v1/chats/{chat_id}/official`** (auth, **`X-Device-Id`** naming a `tabs` device of
+  the caller, else `403 invalid_device`), body `{}` (`chat_official_create.json`) →
+  **`201 {"group": Group}`** with the new Official group in `state: "creating"`, or **`200`** with
+  the same group if it already exists (`chat_official_create_reply.json`). A unique index on
+  `(chat_id, tab)` resolves races: the loser gets the winner's group with `200`.
+  - **Who may call:** any active human member of the chat (a participant of the DM), while the
+    chat's Official is `on`/`none`. Otherwise `404 not_found` (not a member) or
+    **`409 official_off`** (turned off; `error_official_off.json` is the send form).
+  - **Readiness:** every human member must be tabs-ready (§24.7), else
+    `409 not_ready {"missing", "tab": "official"}` (`error_not_ready_groups.json` plus `tab`).
+  - **Risi missing:** Risi is off (`RISI=off`, §24.15), has no key package, or its tree is down →
+    **`503 agent_unavailable`**.
+  - **A DM chat** must be e2ee (§10) and the two users friends with no block (`409 not_e2ee`,
+    `not_friends`).
+- **Epoch 0** is made by the caller's device, as for a new group (§12.3): it claims key packages
+  through §12.5 with `conversation_id` = the Official id (the claim of Risi's device is allowed only
+  for this Official id, §24.5), and commits adding **every `tabs` device of every human member plus
+  Risi's device**, with `group_meta` `{"tab": "official", "chat_id", "agents": [risi], "admins":
+  <the Private group's admins, or both users for a 1:1>, "name": <the Private name, or null for a
+  1:1>, "icon": …}`. Only then does the group become `active`, and the server writes the
+  `group_event` `created` (`event_group_created_official.json`) and the `chat_event`
+  `official_created` (`event_chat_official_created.json`).
+  - A `creating` Official group not completed within 10 minutes is deleted (§12.3); the chat goes
+    back to `none`.
+- **When it is created (client):**
+  - **New 1:1:** opens on Private; Official is created on the first tap of the Official tab.
+  - **New group:** `POST /groups` (Private, §12.3), then `POST …/official` straight away once the
+    Private group is `active`; the app opens on Official. On `409 not_ready` the app shows
+    "Official needs everyone on the latest app" and stays on Private.
+  - **Migrated chats** (every chat that existed before v1.24): the Official tab shows an intro card,
+    "Risi listens in Official and helps with follow-ups. Use Private for anything Risi shouldn't
+    see.", with **[Start Official]**, which calls `POST …/official`. Nothing is created until a
+    member taps it.
+
+### 24.3 Membership is per chat
+- **Add, remove, leave and role calls** (§12.3) may target either tab's `grp:` id. The server
+  applies them **to the chat**: one §12.4 op per existing tab, with roles mirrored, in one
+  transaction. The response is the targeted tab's `Group`.
+- **While Official is on** (and the Official group exists), a user being added must be tabs-ready
+  [decision 065] (`409 not_ready {"missing", "tab": "official"}`); `group_ready` alone is not
+  enough.
+- **Removes and leaves** act on both tabs in one transaction; the last-admin rule (§12.3) is
+  checked once, on the chat.
+- **`devices` ops** (§12.4, §12.4a) in an Official group add only `tabs` devices. A member's device
+  without `tabs` is never an Official leaf: it sees the Private tab only.
+- **Risi is never a valid `user_ids`/`member_ids` entry:** `422 invalid_member`. Its membership
+  changes only through §24.2 and §24.4. No agent is ever a member of a Private group or a DM.
+- **Group renames and icons:** clients show the chat's name and icon from the **Private** group's
+  `group_meta`. An admin renaming a group chat commits the change to both tabs (best effort; the
+  Private one is authoritative).
+
+### 24.4 Official off and on
+- **`PATCH /api/v1/chats/{chat_id}`** `{"official": "off" | "on"}` (`chat_patch_official.json`;
+  auth, `X-Device-Id` of a `tabs` device) → **`200 {"chat": Chat}`**. Idempotent: the current
+  state returns `200` with no change.
+- **Who may toggle** [decision 065]: in a 1:1, either person; in a group, admins only
+  (`403 not_admin`). At most 6 toggles per chat per day (`429 rate_limited`, §24.13).
+- **There is no "remove Risi but keep Official":** any request that would remove the agent while
+  Official stays on is **`409 risi_required`** (`DELETE …/members/{risi}` on Official included).
+- **Off**, in one per-chat critical section:
+  1. `chats.official = off`, `changed_by`, `changed_at`;
+  2. Risi's membership becomes `pending_remove`, and **the server stops delivering anything of
+     that chat to Risi at once** (live pushes and replays);
+  3. a `remove` op for Risi is created (§12.4). **Any active member's in-group device may commit
+     it** (an agent target only; §12.4 and the core rule 5 of §24.1); the toggler's device is the
+     first candidate;
+  4. sends to the Official conversation are refused with **`official_off`**
+     (`error_official_off.json`);
+  5. a `chat_event` `official_off` (`event_chat_official_off.json`) goes to every member.
+
+  When the remove commit lands, the `group_event` `removed` with `targets: [risi]` follows
+  (`event_group_agent_removed.json`).
+- **After off,** Risi posts one final line in Official before its removal lands (an ordinary Risi
+  `text`, §24.11): "Official was turned off by <name>. I've deleted what I learned in this chat."
+  **Within 1 hour** it deletes that chat's derived facts, commitments, buffer rows and embeddings,
+  and cancels its jobs [decision 066]. The learning log keeps only what §24.12 allows.
+- **The Official conversation stays, read-only** (hard rule 9): clients keep every message and show
+  it as "Official history (read-only)" in chat info. The tab bar shows Private only while off.
+- **On again** (`{"official": "on"}`): the **same** Official conversation gets an `add` op for Risi
+  (completed by an admin device, §12.4; in a 1:1 both users are admins), `chats.official = on`, the
+  `chat_event` `official_on` (`event_chat_official_on.json`), and the `group_event` `added`
+  (`event_group_agent_added.json`) when the commit lands. **There is one Official conversation per
+  chat, ever** [decision 065]. If Official was never created, `on` only sets the state (`none`).
+  `503 agent_unavailable` when Risi can't join now.
+
+### 24.5 Server rules (normative)
+- **No agent in Private:** **`403 private_tab`** (`error_private_tab.json`) for any attempt to put
+  an agent into a `dm:` or a Private `grp:`: REST adds, a §12.5 claim of an agent's key package
+  against a `dm:` or Private id, a commit whose `added` names an agent device, and a `group_create`
+  naming an agent.
+- **Risi's key packages** may be claimed only with `conversation_id` = an Official group, either for
+  its epoch 0 (§24.2) or while that group has a pending `add` op for Risi (§24.4).
+- **The Risi tree** (`RisiMe.Agent`) subscribes only to conversations returned by a server query on
+  `groups.tab = 'official'` whose chat has `official = on`; **never on a client claim**. Delivery to
+  agent devices is filtered by the same query, so a Private message can't reach it even by a bug in
+  the client or in the op machinery.
+- **Calls:** a `call_id` and its room belong to exactly one conversation. A Private 1:1 call is a
+  §16/§19 call on the `dm:`; an Official call is a §20 call on its `grp:`. Agent devices are never
+  rung, never counted for `group_calls_ready`, and `POST /calls/rooms` refuses them
+  (`403 invalid_device`); no transcription in stage 1.
+- **History sharing:** agent devices are never §17 providers or requesters (§17.4).
+- **Agent devices never** receive pushes (§8), never own blobs other than through their own
+  messages, never send `profile_photo` (§18), and never commit anything but self-updates of their
+  own leaf.
+
+### 24.6 Server storage
+- Postgres:
+  - `groups` gains `chat_id` (not null, backfilled `= id`), `tab` (not null, default `'private'`)
+    and `chat_kind` (default `'group'`), with a unique index on `(chat_id, tab)`;
+  - new **`chats(chat_id PK, kind, official, official_conversation_id, changed_by, changed_at)`**;
+    a missing row means `official = on` and no Official conversation yet (`none`);
+  - **`users.kind`** (`'user'` default, `'agent'`); Risi is seeded as a user of kind `agent`;
+  - the Risi tables of §24.12.
+- No Cassandra change for messages: Official is an ordinary `grp:` conversation in the store.
+
+### 24.7 Capability, delivery filter and old apps
+- A v1.24 app advertises **`"tabs"`** in `mls.capabilities` (`device_put_tabs.json`), together with
+  `groups`, once it can show both tabs, create and toggle Official and parse `chat_event`.
+  Risi's own device advertises exactly `["groups", "tabs"]`.
+- **Tabs-ready user:** the §12.1 group-ready rule with `tabs` in place of `groups` (at least one
+  current MLS device with `tabs`, and every install that can still receive has it). `missing[]`
+  reasons as in §12.1.
+- **Delivery filter (server):**
+  - events of Official conversations (`message`, `mls_*`, `group_*`, `delete`, receipts, typing)
+    and every `chat_event` go **only to sockets whose device advertises `tabs`**, as the §12.1
+    `groups` filter, in live pushes and in join/sync replies;
+  - **`GET /groups`** omits Official groups for a non-`tabs` device, and **`GET /groups/{id}`**
+    answers `404 not_found` for one;
+  - **push wake-ups** (§8.2) for Official events go only to `tabs` devices.
+- **Result:** an old app never sees an Official group, an agent member or a `chat_event`, and its
+  Private chats behave exactly as in v1.23.
+- **The `mls.capabilities` strings as of v1.24:** `groups` (§12.1), `member_devices` (§12.1),
+  `images` (§14.1), `deletes` (§15.1), `calls` (§16.1), `history_share` (§17.1), `video` (§19.1),
+  `group_calls` (§20.1), `call_switch` and `screen_share` (§23.1), **`tabs`** (§24.7).
+
+### 24.8 Events, REST and errors
+- **The event kind `chat_event`** (stored, cursor-ordered, to every human member user of the chat;
+  `tabs` sockets only):
+  `{"chat_id", "action": "official_created" | "official_off" | "official_on", "actor": uuid,
+  "official_conversation_id": "grp:…" | null, "server_ts"}`
+  (`event_chat_official_created.json`, `event_chat_official_off.json`,
+  `event_chat_official_on.json`). Clients update `chat_prefs.official_state` and the tab bar;
+  `official_off`/`official_on` add a system line in both tabs ("Kamal turned Official off").
+- **`group_event`** (§12.7) of an Official group: `created` and `added` carry `members` (for
+  `added`: the added Members) with `kind`, and every `group_event` of a v1.24 group carries
+  `"chat_id"`, `"tab"` and `"chat_kind"` (absent = Private, own id, `group`)
+  (`event_group_created_official.json`, `event_group_agent_added.json`,
+  `event_group_agent_removed.json`).
+- **`GET /api/v1/chats`** → `{"chats": [Chat]}` (`chats_reply.json`): every chat of the caller
+  (one per DM with a friend that has messages or an e2ee group, and one per group chat).
+  **`GET /api/v1/chats/{chat_id}`** → `{"chat": Chat}` (`chat_reply.json`); `404 not_found` for a
+  non-member. `tabs` devices only (others: `404`).
+- **`POST /api/v1/chats/{chat_id}/official`** (§24.2), **`PATCH /api/v1/chats/{chat_id}`**
+  (§24.4), **`/api/v1/risi/*`** (§24.11).
+- **`msg:send`** (§10.3, §12.9) to an Official conversation that is off: error **`official_off`**,
+  checked after `not_member` and before the e2ee checks.
+- **Errors (new in v1.24):**
+
+  | Code | HTTP | When |
+  |---|---|---|
+  | **`private_tab`** | 403 | an agent targeted at a `dm:` or Private conversation (§24.5) |
+  | **`risi_required`** | 409 | removing Risi while Official stays on (§24.4) |
+  | **`dm_chat`** | 422 | member, leave or role calls on a 1:1 Official (§24.1) |
+  | **`invalid_member`** | 422 | an agent in `user_ids`/`member_ids` (§24.3) |
+  | **`agent_unavailable`** | 503 | Risi is off, down or has no key package (§24.2, §24.4) |
+  | **`official_off`** | 409 / send reason | creating Official, or sending to it, while it is off (§24.2, §24.8) |
+
+  Reused: `403 not_admin` (toggle in a group), `409 not_ready` (with `"tab": "official"`),
+  `403 invalid_device`, `404 not_found`, `409 not_e2ee`, `not_friends`, `429 rate_limited`
+  (§24.13). Clients treat an unknown code as a permanent failure (§2.2).
+
+### 24.9 Client rules (Android, normative where it says "must")
+- **Header tabs:** "🔒 Private" | "● Official", each with its own unread badge, shown only while
+  `/auth/config` says `"tabs": "on"` (§24.15) and this device advertises `tabs`.
+  - The default tab is the last one used (`chat_prefs.last_tab`). A new 1:1 opens on Private; a new
+    group opens on Official.
+  - Official uses a subtly different accent, a banner, and "Risi is listening" in the composer. The
+    per-chat Official switch is in chat info (§24.4).
+  - **Private must never offer** any Risi affordance: no @Risi chip, no card, no "ask Risi".
+- **Chat list:** one row per `chat_id`, showing the newest message of either tab with its tab icon;
+  unread is the sum of both tabs.
+- **Per tab:** search, media, calls and call records are per conversation. Chat info shows both
+  tabs' media in separate sections.
+- **Notifications:** titled "Kamal · Official" or "Kamal · 🔒 Private". The push stays content-free
+  (§8.2). A Risi message notifies only the users in its `risi.notify` (§24.11); for everyone else it
+  is silent (no sound, no heads-up; the unread badge still counts it).
+- **Calls:** a Private 1:1 call is §16/§19 on the `dm:`; an Official call (1:1 or group) is §20
+  LiveKit on its `grp:`. No transcription in Private, ever, and none in stage 1.
+- **Encryption state** (decision 048) is per tab: each tab shows its own lock or "Not end-to-end
+  encrypted yet: <reason>". Official is always e2ee (it is a `grp:`).
+- **Room (additive migration; hard rule 9):** `chat_tabs(conversation_id PK, chat_id, tab,
+  chat_kind)`, filled for **every** existing conversation as `tab = 'private'` with
+  `chat_id = conversation_id`; and `chat_prefs(chat_id PK, last_tab, official_state)`. The
+  migration only inserts rows; the upgrade gate (§24.14) counts per conversation and per chat.
+
+### 24.10 History sharing and backups
+- **§17** is unchanged and per conversation: an Official conversation is shared like any `grp:`;
+  agent devices are never providers or requesters (§24.5).
+- **Backups (§22.5):** the `conversation` line gains `"chat_id"`, `"tab"` and `"chat_kind"`
+  (`backup_entry_conversation_v124.json`; absent = Private, `chat_id = conversation_id`, `kind`).
+  Every other line stays keyed by `conversation_id`. A bundle containing **any Official
+  conversation is written as `schema: 2`** (`backup_bundle_header_v124.json`), so a pre-v1.24 app
+  answers "Update RisiMe to restore this backup" (§22.4) instead of importing an Official
+  conversation as a plain chat. A bundle with Private conversations only stays `schema: 1`.
+- **Risi data is never in a backup:** no fact, commitment, feedback or Risi setting. Risi's
+  messages in Official are ordinary `text` rows and are backed up with their `risi` field.
+
+### 24.11 Risi stage 1 (MLS application messages in Official)
+**Identity.**
+- Risi is a user with `kind: "agent"` and a **fixed UUID** (server config, seeded at deploy; clients
+  recognise it by `Member.kind` and the attested kind, never by a hard-coded id), with one device
+  named `risi-1` (its `device_id` is a fixed UUID like every device id, §8.1).
+- **Attestation** (§10.0): an agent device's JWS gains the claim **`"kind": "agent"`**; absent
+  means `"user"`. The core reads it from the leaf and applies §24.1.
+- **§12.0 is amended:** agent keys are never readable by the delivery-service store. Risi's MLS
+  state is sealed with `RISI_MLS_KEK` in `risi_mls_kv`, inside the isolated `RisiMe.Agent` tree
+  (decision 065); a separate process is a later hardening step.
+
+**Risi → chat.** An ordinary §10.3 `type: "text"` envelope whose `body` is the human-readable line
+(so any client can show it) plus a structured **`risi`** object:
+`{"v": 1, "type": "text", "body", "risi": {"v": 1, "kind", …, "call_ref": uuid | null, "notify": [uuid]}}`.
+`call_ref` names the learning-log entry (§24.12) of the model call behind the message (null for
+reminders, escalations and digests); `notify` lists the users this message notifies (§24.9).
+
+| `kind` | fields | example |
+|---|---|---|
+| `commitment` | `commitment_id, state: "proposed", text, owner, counterpart: [uuid], due: ts \| null, due_text, source_message_ids: [timeuuid], confidence` | `envelope_risi_commitment.json` |
+| `commitment_update` | `commitment_id, state: "confirmed" \| "edited" \| "declined" \| "done" \| "cancelled", by, text, due` | `envelope_risi_commitment_update.json` |
+| `reminder` | `commitment_id, due` (`notify: [owner]`) | `envelope_risi_reminder.json` |
+| `escalation` | `commitment_id, overdue_by` (seconds; `notify`: the counterparts) | `envelope_risi_escalation.json` |
+| `digest` | `date, items: [{commitment_id, text, owner, due, state}]` | `envelope_risi_digest.json` |
+| `answer` | `request_id, answer, refs: [timeuuid], confidence` | `envelope_risi_answer.json` |
+| `summary` | `request_id, summary, decisions: [str], action_items: [str], open_questions: [str], partial: bool` | `envelope_risi_summary.json` |
+| `report` | `request_id, title, period: {from, to}, sections: [{heading, body}]` | `envelope_risi_report.json` |
+| `offer` (stage 2, defined now) | `offer_id, topic, question, buttons: ["yes", "not_now"]` | `envelope_risi_offer.json` |
+| `error` | `request_id, code: "model_unavailable" \| "rate_limited" \| "nothing_to_summarise" \| "out_of_window"` | `envelope_risi_error.json` |
+
+Clients render a known `kind` as a card and fall back to `body` for an unknown one. A `risi`
+object is honoured **only from a leaf whose attested kind is `agent`** and only in Official;
+anywhere else it is ignored and the message is plain text.
+
+**Members → Risi** (MLS application messages in Official; clients show them as small system
+lines; Risi ignores them unless the sender is an active human member):
+- **`risi_request`** (`envelope_risi_request.json`): `{"v": 1, "type": "risi_request",
+  "request_id": uuid-v4, "action": "ask" | "summarise" | "report", "text": str | null,
+  "scope": {"since": ts}}`. "@Risi" in the composer is a chip that builds this envelope; **free
+  text is never parsed for intent** [decision 066]. `text` is 1–1000 grapheme clusters for `ask`,
+  optional otherwise; `scope.since` is at most 24 h back (else the `error` `out_of_window`).
+- **`risi_action`** (`envelope_risi_action.json`): `{"v": 1, "type": "risi_action", "target":
+  uuid, "action": "confirm" | "decline" | "edit" | "done" | "offer_yes" | "offer_not_now",
+  "edit": {"text", "due"} | null}`. `target` is a `commitment_id` or an `offer_id`. Only the
+  commitment's owner or a counterpart may act on a commitment, and only the offer's addressees on
+  an offer [decision 066]; others are ignored. **Nothing is tracked without ✓:** a `proposed` card
+  that gets no `confirm` within **48 h** expires (clients grey it out 48 h after its `server_ts`).
+  Risi answers each accepted action with a `commitment_update`.
+
+**Feedback** [decision 066] (private REST, not a visible reaction):
+`POST /api/v1/risi/feedback` `{"call_ref": uuid, "rating": "up" | "down", "reason": str | null}`
+(`risi_feedback.json`) → `204`. Only active members of the conversation holding `call_ref` may
+send it (`404 not_found` otherwise); `reason` at most 500 characters; repeating it replaces the
+caller's earlier rating.
+
+**What Risi knows about me** (each caller sees only facts whose subject is the caller):
+- `GET /api/v1/risi/facts` → `{"facts": [{"fact_id", "kind": "commitment" | "date" | "person" |
+  "preference" | "topic", "text", "chat_id", "created_at"}]}` (`risi_facts_reply.json`).
+- `DELETE /api/v1/risi/facts/{fact_id}` → `204`: a hard delete, embedding included (`404` for
+  someone else's fact).
+- `DELETE /api/v1/risi/facts` → `204`: deletes every fact about the caller.
+- `GET /api/v1/risi/commitments?state=open|all` → `{"commitments": [{"commitment_id", "chat_id",
+  "official_conversation_id", "state", "text", "owner", "counterpart", "due", "due_text",
+  "created_at", "updated_at"}]}` (`risi_commitments_reply.json`), the caller's commitments as owner
+  or counterpart; `open` = `confirmed` or `edited` and not `done`. It backs "My promises".
+
+**Timezone.** `PATCH /me` accepts `{"tz": "<IANA zone>"}` (`422 bad_request` for an unknown zone),
+and `User` gains `"tz"` (absent or null: the server default `RISI_DEFAULT_TZ`, `Asia/Colombo`).
+Clients send it at sign-in and when the phone's zone changes.
+
+**Timing** [decision 066]:
+- **Reminder:** at `due − 1 h` in the owner's timezone; at 09:00 local on the due date when only a
+  date is known.
+- **Escalation:** 24 h after `due` while not `done`, at most 2, 24 h apart, in the same Official
+  conversation, notifying the counterparts.
+- **Digest:** 09:00 local, only when the chat has open items, at most once per chat per day.
+
+**Offers** (binding now; Harsha's rules, decision 066):
+- only as an `offer` with [Yes] / [Not now]; at most 1 per chat per day;
+- two "Not now"s on a topic mute that topic in that chat for **90 days**;
+- nothing happens without Yes; no product or partner is named before a Yes; **no advertising,
+  ever**. Stage 1 sends no offers; the envelope is defined so clients can render it.
+
+### 24.12 Data: learn and delete; the learning log [decision 066]
+- **Raw buffer:** Official plaintext is held only in **`risi_buffer`** (Cassandra, sealed with
+  `RISI_DATA_KEY`, TWCS, **TTL 24 h**), for windowed summaries and answers.
+  - A row is deleted as soon as extraction has run and it falls outside the answer window.
+  - A §15 delete (for everyone) removes the buffer row and every fact derived only from it.
+  - Summaries and answers cover at most 24 h; older scopes get `out_of_window`.
+- **Derived facts** go to Postgres: `risi_commitments`, `risi_facts(subject_user_id, chat_id,
+  source_message_ids, …)` and `risi_fact_embeddings` (pgvector over the fact text only).
+- **Learning log** (CLAUDE.md): Cassandra `risi_llm_calls_by_day` and `risi_llm_calls_by_chat`
+  (TTL 90 days) with `call_ref`, task, model alias, real model, provider, latency, tokens, cost,
+  confidence, output (the derived JSON) and feedback. **The input is stored as
+  `source_message_ids` plus a SHA-256 of the prompt, never the raw text.**
+- **Cascade:** `risi-l1` on loopback first. A commercial fallback runs only when confidence is below
+  the threshold **and** `RISI_FALLBACK=on`, which defaults to **off** until a zero-retention
+  agreement exists. While it is on, the intro card adds "Hard cases may use a commercial AI
+  service".
+- **Private never reaches any of this:** no Private ciphertext or plaintext is delivered to the
+  agent (§24.5), so none can be buffered, extracted, logged or embedded (the canary of §24.14
+  proves it).
+
+### 24.13 Rate limits
+| Limit | Value |
+|---|---|
+| `risi_request` | 10 per user per hour; 1 per chat per minute; 20 per chat per day |
+| Commitment cards | 10 per chat per day |
+| Offers | 1 per chat per day |
+| Global Risi queue | 16 in flight; the rest wait or get `rate_limited` |
+| Official toggles | 6 per chat per day |
+
+Over a limit, Risi answers a `risi_request` with the `error` envelope `rate_limited`; REST answers
+`429 rate_limited` with `Retry-After` (§7.1).
+
+### 24.14 Test coverage (all gates)
+- **Upgrade gate (hard rule 9, root):** counts per `conversation_id` (both tabs) and per
+  `chat_id`, before and after the update and after a re-sign-in. After migration every old
+  conversation is Private with `chat_id = conversation_id`, and no count drops.
+- **Server:** `403 private_tab` on every §24.5 path; the delivery, `GET /groups` and push filters
+  for non-`tabs` devices; membership fan-out to both tabs; toggle rights (1:1 either, group admins)
+  and the immediate stop of delivery to Risi; `official_off` on send; `risi_required`, `dm_chat`,
+  `invalid_member`, `agent_unavailable`; the Risi claim rule; the `chat_event`s; every new example.
+- **Crypto:** every `group_policy_cases.json` `tab_cases` case (an agent in Private, an agent in a
+  `dm:`, a `tab` or `chat_id` change, an agent as admin, a member removing an agent, an agent add in
+  Official); the attested `kind` read from the leaf; the Welcome check of §24.1.
+- **Canary** (`scripts/interop` with `RISI=1` and `scripts/fake-llm`): `CANARY-<uuid>` sent in
+  Private (1:1 and group), in Official before Risi joined, and after Official was turned off must
+  appear in none of: fake-llm inputs, the decrypted `risi_*` tables, the learning log, server logs,
+  FCM payloads. An egress check confirms agent HTTP goes to loopback only.
+- **Android (JVM):** the Room migration (rows only added), tab mapping, per-tab unread, the
+  chat-list merge, the default tab, notification labels and the `notify` filter, the `risi` object
+  honoured only from an agent leaf in Official, schema-2 backups, and parsing every example.
+- **Examples:** `group_reply_v124.json`, `chat_reply.json`, `chats_reply.json`,
+  `chat_official_create.json`, `chat_official_create_reply.json`, `chat_patch_official.json`,
+  `device_put_tabs.json`, `auth_config_v124.json`, `event_chat_official_created.json`,
+  `event_chat_official_off.json`, `event_chat_official_on.json`,
+  `event_group_created_official.json`, `event_group_agent_added.json`,
+  `event_group_agent_removed.json`, `error_private_tab.json`, `error_official_off.json`,
+  `envelope_risi_commitment.json`, `envelope_risi_commitment_update.json`,
+  `envelope_risi_reminder.json`, `envelope_risi_escalation.json`, `envelope_risi_digest.json`,
+  `envelope_risi_answer.json`, `envelope_risi_summary.json`, `envelope_risi_report.json`,
+  `envelope_risi_offer.json`, `envelope_risi_error.json`, `envelope_risi_request.json`,
+  `envelope_risi_action.json`, `risi_feedback.json`, `risi_facts_reply.json`,
+  `risi_commitments_reply.json`, `backup_entry_conversation_v124.json`,
+  `backup_bundle_header_v124.json`, `group_meta_official.json`.
+
+### 24.15 Rollout and old apps
+- **Additive.** Order: server (storage, `tabs` filters, the endpoints, `private_tab`) with
+  **`RISI=off`** (every chat reports `official_ready: false` with the `agent_unavailable` reason, and
+  `POST …/official` answers `503 agent_unavailable`) → crypto (the §24.1 core rules, the agent NIF)
+  → an app that advertises `tabs` → `RISI=on` after the canary passes.
+- **`GET /auth/config`** gains **`"tabs": "on" | "off"`** (`auth_config_v124.json`), from the server
+  config `TABS` (default `off` until the app ships). Absent (pre-v1.24 servers) means `off`. Apps
+  show the tab bar only while it is `on`; while `off` they behave as v1.23 (Official conversations
+  they already hold stay readable in chat info).
+- **Old apps** (no `tabs`): never see Official, agent members, `chat_event`s or Risi messages;
+  backups with Official are refused by them as schema 2; nothing else changes.
+- **Work breakdown** (informative): root R1 (this section), R2 (upgrade-test per tab and per chat,
+  fake-llm, canary interop); crypto C1–C3; server S1–S8; android A1–A6, as in the proposal.
+
 ## Changelog
+- **v1.24** (2026-10-08): two tabs per chat (Private | Official) and Risi stage 1 (§24, decisions
+  065 and 066; proposal `2026-10-08-two-tabs-risi.md`, approved by Harsha). A chat is two MLS
+  conversations sharing a `chat_id` (= the existing anchor id, so every existing conversation is
+  its chat's Private tab); Official is always a `grp:` (also for 1:1s, `chat_kind: "dm"`, both users
+  admin, `422 dm_chat`) and holds Risi (`Member.kind: "agent"`, attestation claim `kind: "agent"`,
+  never admin) while on; Private never holds an agent (`403 private_tab` on every server path; the
+  core rejects agent leaves in Private and `dm:` groups and `tab`/`chat_id` changes after epoch 0;
+  `group_meta` gains `tab`, `chat_id`, `agents`); `Group` gains `chat_id`, `tab`, `chat_kind`,
+  `agents`; the `Chat` object, `GET /api/v1/chats[/{chat_id}]`, `POST …/official` (lazy for 1:1s
+  and migrated chats, immediate for new groups; `409 not_ready` with `tab`, `503
+  agent_unavailable`), `PATCH /api/v1/chats/{chat_id}` `official: off | on` (1:1 either person,
+  group admins; off stops delivery to Risi at once, any member may commit the agent `remove`,
+  `official_off` on send, Risi deletes the chat's facts within 1 h, the conversation stays
+  read-only; one Official conversation per chat, ever; `409 risi_required`); membership per chat
+  (one op per tab, `422 invalid_member` for agents, tabs-ready adds while Official is on); the
+  stored event `chat_event`; the `tabs` capability with delivery, `GET /groups` and push filters so
+  old apps never see Official; `/auth/config` `tabs: on | off`; backups' `conversation` line gains
+  `chat_id`/`tab`/`chat_kind` and a bundle with Official is schema 2; Risi stage 1 envelopes
+  (`text` with a `risi` object: commitment, commitment_update, reminder, escalation, digest,
+  answer, summary, report, offer, error; members' `risi_request` and `risi_action`), private
+  feedback, "What Risi knows about me" and "My promises" REST, `PATCH /me` `tz`, timing, offer
+  rules, learn-and-delete storage (24-h sealed buffer, derived facts, a learning log without raw
+  input), the model cascade with the commercial fallback off, rate limits; policy `tab_cases` in
+  `group_policy_cases.json`. Additive.
 - **v1.23** (2026-10-08): switching voice and video mid-call, and screen sharing (§23, decision
   062), reviewed by server, android and crypto. Capabilities `call_switch` and `screen_share`;
   per-call `features` (`switch`, `screen`) on `call_offer`/`call_answer` (inside MLS) gate every new
