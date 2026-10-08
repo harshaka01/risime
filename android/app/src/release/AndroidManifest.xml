@@ -10,5 +10,13 @@
         <receiver
             android:name="lk.codegen.risime.update.InstallResultReceiver"
             android:exported="false" />
+        <!-- P0-1: after a (silent) self-update, "RisiMe updated to X — tap to open". -->
+        <receiver
+            android:name="lk.codegen.risime.update.PackageReplacedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

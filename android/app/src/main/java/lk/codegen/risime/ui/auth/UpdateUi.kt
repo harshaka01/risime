@@ -16,6 +16,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -40,17 +41,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import lk.codegen.risime.AppContainer
+import lk.codegen.risime.update.DOWNLOAD_FROM_WEBSITE
 import lk.codegen.risime.update.DOWNLOAD_PAGE_URL
+import lk.codegen.risime.update.NEVER_UNINSTALL_TEXT
 import lk.codegen.risime.update.UpdateInfo
 import lk.codegen.risime.update.UpdateState
 import lk.codegen.risime.update.displayNotes
+import lk.codegen.risime.update.infoOrNull
 import lk.codegen.risime.update.updateBanner
 import lk.codegen.risime.ui.theme.Sizes
 import lk.codegen.risime.ui.theme.Spacing
 
 const val UPDATE_GATE_NOTES_TAG = "update_gate_notes"
 const val UPDATE_GATE_ACTIONS_TAG = "update_gate_actions"
-const val OPEN_DOWNLOAD_PAGE = "Open download page"
+
+/** The fallback on every update surface (P0-1): opens https://risicloud.ai/app/risime/. */
+const val OPEN_DOWNLOAD_PAGE = DOWNLOAD_FROM_WEBSITE
 
 private fun UpdateState.status(): String? = when (this) {
     is UpdateState.Working -> step
@@ -59,20 +65,15 @@ private fun UpdateState.status(): String? = when (this) {
     else -> null
 }
 
-private fun UpdateState.info(): UpdateInfo? = when (this) {
-    UpdateState.Idle -> null
-    is UpdateState.Available -> info
-    is UpdateState.Working -> info
-    is UpdateState.NeedsPermission -> info
-    is UpdateState.Failed -> info
-}
-
-/** Optional update: a banner under the dev banner with the release notes and one "Update" tap. */
+/**
+ * Optional update: a banner above every screen with the release notes and one "Update" tap. It only
+ * starts or observes the update; the download and install run in UpdateWorker (P0-1), so leaving
+ * the app doesn't stop them.
+ */
 @Composable
 fun UpdateBar(state: UpdateState, c: AppContainer) {
     val banner = updateBanner(state) ?: return
-    val info = state.info() ?: return
-    val scope = rememberCoroutineScope()
+    val info = state.infoOrNull() ?: return
     val uri = LocalUriHandler.current
     var expanded by rememberSaveable { mutableStateOf(false) }
     val fg = MaterialTheme.colorScheme.onSecondaryContainer
@@ -84,12 +85,18 @@ fun UpdateBar(state: UpdateState, c: AppContainer) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(banner.title, style = MaterialTheme.typography.titleSmall, color = fg)
-                banner.status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = fg) }
+                banner.status?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = if (banner.error) MaterialTheme.colorScheme.error else fg)
+                }
             }
-            if (banner.busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            banner.action?.let { TextButton(onClick = { scope.launch { c.updater.update(info) } }) { Text(it) } }
+            if (banner.busy && banner.percent == null) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            banner.action?.let { TextButton(onClick = { c.updater.start(info) }) { Text(it) } }
             if (banner.canDismiss) TextButton(onClick = c.updater::dismiss) { Text("Later") }
         }
+        banner.percent?.let { p ->
+            LinearProgressIndicator(progress = { p / 100f }, modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs))
+        }
+        Text(NEVER_UNINSTALL_TEXT, style = MaterialTheme.typography.bodySmall, color = fg)
         Row(verticalAlignment = Alignment.CenterVertically) {
             banner.notes?.let { TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide what's new" else "What's new") } }
             TextButton(onClick = { runCatching { uri.openUri(DOWNLOAD_PAGE_URL) } }) { Text(OPEN_DOWNLOAD_PAGE) }
@@ -126,7 +133,7 @@ fun RequiredUpdateScreen(state: UpdateState, info: UpdateInfo, c: AppContainer) 
     RequiredUpdateContent(
         state = state,
         info = info,
-        onUpdate = { scope.launch { c.updater.update(info) } },
+        onUpdate = { c.updater.start(info) },
         onOpenDownloadPage = { runCatching { uri.openUri(DOWNLOAD_PAGE_URL) } },
         onSignOut = { scope.launch { c.signOutKeepChats() } },
     )
@@ -134,7 +141,7 @@ fun RequiredUpdateScreen(state: UpdateState, info: UpdateInfo, c: AppContainer) 
 
 /**
  * The gate itself (stateless, UI-tested). The notes scroll in the space left; the actions are a
- * bottom bar that is always on screen: Update/Retry, Open download page, Sign out. Never a dead end.
+ * bottom bar that is always on screen: Update/Retry, Download from website, Sign out. Never a dead end.
  */
 @Composable
 fun RequiredUpdateContent(
@@ -158,6 +165,9 @@ fun RequiredUpdateContent(
                 Text("Update required", style = MaterialTheme.typography.titleLarge, color = colors.title,
                     modifier = Modifier.semantics { heading() })
                 Text("RisiMe ${info.versionName} is needed to keep chatting.", style = MaterialTheme.typography.bodyLarge, color = colors.body)
+                Text(NEVER_UNINSTALL_TEXT, style = MaterialTheme.typography.bodyMedium, color = colors.body)
+                // The whole error (the bar below may shorten it on a small screen).
+                if (state is UpdateState.Failed) Text(state.message, style = MaterialTheme.typography.bodyMedium, color = colors.error)
                 info.displayNotes()?.let {
                     Text("What's new", style = MaterialTheme.typography.titleSmall, color = colors.title)
                     Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.notes)
@@ -179,6 +189,9 @@ fun RequiredUpdateContent(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
                     )
+                }
+                (state as? UpdateState.Working)?.percent?.let { p ->
+                    LinearProgressIndicator(progress = { p / 100f }, modifier = Modifier.fillMaxWidth())
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     if (working) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)

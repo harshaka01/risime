@@ -54,15 +54,25 @@ class UpdateLogicTest {
         assertTrue(downloadFailureMessage(java.net.UnknownHostException("x")).contains("no connection"))
         assertTrue(downloadFailureMessage(java.net.SocketTimeoutException()).contains("no connection"))
         assertTrue(downloadFailureMessage(javax.net.ssl.SSLHandshakeException("bad cert")).contains("certificate"))
-        assertTrue(downloadFailureMessage(java.io.IOException("reset")).contains("network error"))
+        assertEquals("Couldn't download the update (network error: reset).", downloadFailureMessage(java.io.IOException("reset")))
         assertTrue(downloadFailureMessage(IllegalStateException("HTTP 404")).contains("HTTP 404"))
-        assertTrue(verifyFailureMessage("checksum mismatch").contains("checksum mismatch"))
-        assertTrue(verifyFailureMessage("checksum mismatch").contains("nothing was installed"))
+        // The HTTP code, in plain words.
+        assertEquals("Couldn't download the update: the update server answered HTTP 503.", downloadFailureMessage(UpdateHttpException(503)))
+        assertTrue(downloadFailureMessage(UpdateHttpException(404)).startsWith("Couldn't download the update: the update server answered HTTP 404 ("))
+        // sha / certificate mismatch.
+        assertEquals("The downloaded update failed its security check (checksum mismatch), so nothing was installed.",
+            verifyFailureMessage("checksum mismatch"))
+        assertTrue(verifyFailureMessage("APK is signed by another key").contains("signed by another key"))
+        // The installer's own message (EXTRA_STATUS_MESSAGE) is shown as is.
         assertEquals("Install cancelled. Tap Retry to install the update.", installFailureMessage(3, null))
-        assertEquals("Install failed: the installer reported a failure (INSTALL_FAILED_X). Retry, or use the download page.",
+        assertEquals("App not installed: the installer reported a failure (status 1): INSTALL_FAILED_X.",
             installFailureMessage(1, "INSTALL_FAILED_X"))
-        assertTrue(installFailureMessage(6, " ").contains("storage"))
+        assertEquals("App not installed: it conflicts with the installed app: INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match.",
+            installFailureMessage(5, "INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match"))
+        assertEquals("App not installed: not enough storage.", installFailureMessage(6, " "))
         assertEquals("https://risicloud.ai/app/risime/", DOWNLOAD_PAGE_URL)
+        assertEquals("Download from website", DOWNLOAD_FROM_WEBSITE)
+        assertEquals("Install over the old app — never uninstall: uninstalling deletes your chats.", NEVER_UNINSTALL_TEXT)
     }
 
     @Test fun urlAllowlist() {
@@ -76,6 +86,13 @@ class UpdateLogicTest {
         assertFalse(urlAllowed("https://risicloud.ai:8443/app/risime/x.apk", base))
         assertFalse(urlAllowed("https://user:pw@risicloud.ai/app/risime/x.apk", base))
         assertFalse(urlAllowed("garbage", base))
+        // Test-build mirror (-Prisime.updateBaseUrl): plain http only from a loopback base, same port/path.
+        val mirror = "http://127.0.0.1:8480/app/risime/"
+        assertTrue(urlAllowed("http://127.0.0.1:8480/app/risime/risime-1.apk", mirror))
+        assertFalse(urlAllowed("http://127.0.0.1:9999/app/risime/risime-1.apk", mirror))
+        assertFalse(urlAllowed("https://127.0.0.1:8480/app/risime/risime-1.apk", mirror)) // scheme must match the base
+        assertFalse(urlAllowed("http://evil.example/app/risime/x.apk", "http://evil.example/app/risime/")) // http only for loopback
+        assertFalse(urlAllowed("http://127.0.0.1/app/risime/x.apk", base)) // the release base never takes http
     }
 
     @Test fun decisionAndRequiredGating() {
@@ -116,9 +133,13 @@ class UpdateLogicTest {
     }
 
     @Test fun checkInterval() {
+        // P0-1 B: every foreground, at most every 15 min (was 6 h per process).
+        assertEquals(15 * 60_000L, UPDATE_CHECK_INTERVAL_MS)
         assertTrue(shouldCheck(null, 0))
-        assertFalse(shouldCheck(0, 6 * 3_600_000L - 1))
-        assertTrue(shouldCheck(0, 6 * 3_600_000L))
+        assertFalse(shouldCheck(1_000, 1_000 + 15 * 60_000L - 1))
+        assertTrue(shouldCheck(1_000, 1_000 + 15 * 60_000L))
+        assertTrue(shouldCheck(1_000, 2_000, force = true)) // "Check for updates"
+        assertTrue(shouldCheck(50_000, 1_000)) // clock went back (new boot): check
     }
 
     @Test fun bannerStates() {
@@ -136,6 +157,11 @@ class UpdateLogicTest {
         assertEquals("Downloading…", working.status)
         val failed = updateBanner(UpdateState.Failed(info, "Update rejected: checksum mismatch"))!!
         assertEquals("Retry", failed.action)
+        assertTrue(failed.error)
+        assertEquals("RisiMe 0.2.0-nightly.2 wasn't installed", failed.title)
+        val progress = updateBanner(UpdateState.Working(info, downloadStep(42), 42))!!
+        assertEquals(42, progress.percent)
+        assertEquals("Downloading… 42%", progress.status)
         assertEquals("Update rejected: checksum mismatch", failed.status)
         assertTrue(updateBanner(UpdateState.NeedsPermission(info))!!.status!!.contains("Allow"))
         assertNull(updateBanner(UpdateState.Available(info.copy(notes = "  ")))!!.notes)

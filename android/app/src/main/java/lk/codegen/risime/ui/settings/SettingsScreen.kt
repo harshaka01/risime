@@ -184,6 +184,7 @@ const val ABOUT_E2EE_TEXT =
 internal fun AboutSection() {
     SectionHeader("About")
     InfoRow("App version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+    UpdateCheckSection()
     InfoRow("Build", if (BuildConfig.DEBUG) "Debug" else "Release")
     InfoRow("Protocol", "v$PROTOCOL_VERSION")
     if (BuildConfig.DEBUG) CryptoSelfTest()

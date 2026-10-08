@@ -17,6 +17,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 const val PINNED_CERT_SHA256 = "da7b982415e5d11dd90aee893716c7a04ed0841e21890ffcc8e075f416c99e2e"
 
 /** One published release, as advertised by `version.json`. */
+@kotlinx.serialization.Serializable
 data class UpdateInfo(
     val versionCode: Long,
     val versionName: String,
@@ -83,12 +84,18 @@ fun normalizeHex(s: String): String = s.trim().replace(":", "").lowercase()
 fun urlAllowed(url: String, baseUrl: String): Boolean {
     val u = url.toHttpUrlOrNull() ?: return false
     val b = baseUrl.toHttpUrlOrNull() ?: return false
-    if (!u.isHttps || u.host != b.host || u.port != b.port) return false
+    // Release: the base is https, so only https is ever accepted. Only a test build whose base was
+    // set (-Prisime.updateBaseUrl) to a plain-http loopback mirror accepts http, and only from there.
+    if (u.scheme != b.scheme || (!u.isHttps && !isLoopbackMirror(b))) return false
+    if (u.host != b.host || u.port != b.port) return false
     if (u.username.isNotEmpty() || u.password.isNotEmpty()) return false
     val prefix = b.encodedPath.let { if (it.endsWith("/")) it else "$it/" }
     val path = u.encodedPath
     return path.startsWith(prefix) && path.length > prefix.length && !path.contains("/../") && !path.contains("%2e%2e", ignoreCase = true)
 }
+
+/** A local test mirror (adb reverse / emulator host): the only place plain http is ever allowed. */
+private fun isLoopbackMirror(b: okhttp3.HttpUrl): Boolean = b.host == "127.0.0.1" || b.host == "10.0.2.2"
 
 sealed interface UpdateDecision {
     data object UpToDate : UpdateDecision
@@ -145,9 +152,11 @@ fun verifyApk(
     }
 }
 
-/** At start, then at most every [intervalMs] while in the foreground. */
-fun shouldCheck(lastCheckElapsedMs: Long?, nowElapsedMs: Long, intervalMs: Long = 6 * 60 * 60 * 1000L): Boolean =
-    lastCheckElapsedMs == null || nowElapsedMs - lastCheckElapsedMs >= intervalMs
+/** Checks run on every foreground, at most every 15 min (P0-1); "Check for updates" forces one. */
+const val UPDATE_CHECK_INTERVAL_MS = 15 * 60 * 1000L
+
+fun shouldCheck(lastCheckElapsedMs: Long?, nowElapsedMs: Long, intervalMs: Long = UPDATE_CHECK_INTERVAL_MS, force: Boolean = false): Boolean =
+    force || lastCheckElapsedMs == null || nowElapsedMs < lastCheckElapsedMs || nowElapsedMs - lastCheckElapsedMs >= intervalMs
 
 /**
  * Android 12+ silent self-update (decision 027): user action can be skipped only when the APK
@@ -178,6 +187,10 @@ data class UpdateBanner(
     val action: String?,
     val canDismiss: Boolean,
     val busy: Boolean,
+    /** Download progress (0..100) while known. */
+    val percent: Int? = null,
+    /** [status] is an error (shown in the error colour). */
+    val error: Boolean = false,
 )
 
 fun updateBanner(state: UpdateState): UpdateBanner? {
@@ -185,29 +198,57 @@ fun updateBanner(state: UpdateState): UpdateBanner? {
     return when (state) {
         UpdateState.Idle -> null
         is UpdateState.Available -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.displayNotes(), null, "Update", canDismiss = true, busy = false)
-        is UpdateState.Working -> UpdateBanner("Updating to ${state.info.versionName}", state.info.displayNotes(), state.step, null, canDismiss = false, busy = true)
+        is UpdateState.Working -> UpdateBanner(
+            "Updating to ${state.info.versionName}", state.info.displayNotes(), state.step, null,
+            canDismiss = false, busy = true, percent = state.percent,
+        )
         is UpdateState.NeedsPermission -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.displayNotes(),
             "Allow RisiMe to install updates; the update continues when you come back.", "Update", canDismiss = true, busy = false)
-        is UpdateState.Failed -> UpdateBanner("RisiMe ${state.info.versionName} is available", state.info.displayNotes(), state.message, "Retry", canDismiss = true, busy = false)
+        is UpdateState.Failed -> UpdateBanner(
+            "RisiMe ${state.info.versionName} wasn't installed", state.info.displayNotes(), state.message, "Retry",
+            canDismiss = true, busy = false, error = true,
+        )
     }
 }
 
-/** A download/verify failure as the user should read it (the gate then offers Retry + download page). */
+/**
+ * P0-1 (E): testers uninstalled to update and lost their chats. Every update surface (banner, gate,
+ * failure, About) says this.
+ */
+const val NEVER_UNINSTALL_TEXT = "Install over the old app — never uninstall: uninstalling deletes your chats."
+
+/** The fallback on every update surface: opens [DOWNLOAD_PAGE_URL]. */
+const val DOWNLOAD_FROM_WEBSITE = "Download from website"
+
+/** "Downloading… 42%" (no percentage while the size is unknown). */
+fun downloadStep(percent: Int?): String = if (percent == null) "Downloading…" else "Downloading… $percent%"
+
+/** 0..100, or null while the total is unknown. */
+fun downloadPercent(done: Long, total: Long?): Int? =
+    if (total == null || total <= 0) null else ((done.coerceIn(0, total) * 100) / total).toInt()
+
+/** A non-2xx answer from the update server; the message keeps the code ("HTTP 404"). */
+class UpdateHttpException(val code: Int) : java.io.IOException("HTTP $code")
+
+/** A download/verify failure as the user should read it: the real cause, in plain words. */
 fun downloadFailureMessage(e: Throwable): String = when (e) {
+    is UpdateHttpException -> "Couldn't download the update: the update server answered HTTP ${e.code}" +
+        (if (e.code == 404) " (the file isn't there any more; check for updates again)." else ".")
     is java.net.UnknownHostException, is java.net.ConnectException, is java.net.SocketTimeoutException,
     is java.io.InterruptedIOException,
     -> "Couldn't download the update: no connection to the update server. Check your internet and retry."
     is javax.net.ssl.SSLException -> "Couldn't download the update: secure connection failed (certificate problem)."
-    is java.io.IOException -> "Couldn't download the update (network error). Retry, or use the download page."
-    else -> "Update failed (${e.message ?: e.javaClass.simpleName}). Retry, or use the download page."
+    is java.io.IOException -> "Couldn't download the update (network error: ${e.message ?: e.javaClass.simpleName})."
+    else -> "Update failed (${e.message ?: e.javaClass.simpleName})."
 }
 
 /** A rejected download (checksum, signing certificate, package or version mismatch). Nothing was installed. */
 fun verifyFailureMessage(reason: String): String =
-    "The downloaded update failed its security check ($reason), so nothing was installed. Retry, or use the download page."
+    "The downloaded update failed its security check ($reason), so nothing was installed."
 
 /**
- * PackageInstaller status → message. Codes are PackageInstaller.STATUS_* (literal so this stays JVM-pure):
+ * PackageInstaller status → "App not installed: …" with the installer's own message
+ * (EXTRA_STATUS_MESSAGE). Codes are PackageInstaller.STATUS_* (literal so this stays JVM-pure):
  * 1 FAILURE, 2 BLOCKED, 3 ABORTED, 4 INVALID, 5 CONFLICT, 6 STORAGE, 7 INCOMPATIBLE, 8 TIMEOUT.
  */
 fun installFailureMessage(status: Int, detail: String?): String {
@@ -219,8 +260,8 @@ fun installFailureMessage(status: Int, detail: String?): String {
         6 -> "not enough storage"
         7 -> "it isn't compatible with this device"
         8 -> "the install timed out"
-        else -> "the installer reported a failure"
+        else -> "the installer reported a failure (status $status)"
     }
-    val extra = detail?.trim()?.takeIf { it.isNotEmpty() }?.let { " ($it)" } ?: ""
-    return "Install failed: $what$extra. Retry, or use the download page."
+    val extra = detail?.trim()?.takeIf { it.isNotEmpty() }?.let { ": $it" } ?: ""
+    return "App not installed: $what$extra."
 }

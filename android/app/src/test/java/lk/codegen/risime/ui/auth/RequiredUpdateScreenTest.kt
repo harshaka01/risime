@@ -129,7 +129,9 @@ class RequiredUpdateScreenTest {
     @Test fun failedStateShowsErrorRetryAndDownloadPage() {
         val msg = "Couldn't download the update: no connection to the update server. Check your internet and retry."
         gate(UpdateState.Failed(info, msg), dark = true)
-        rule.onNodeWithText(msg).assertIsDisplayed()
+        // The real error, in the bottom bar (and in full in the scroll area); the never-uninstall line too.
+        rule.onAllNodes(hasText(msg))[0].assertIsDisplayed()
+        rule.onNodeWithText(lk.codegen.risime.update.NEVER_UNINSTALL_TEXT).assertExists()
         assertActionsReachable("Retry")
         rule.onNodeWithText("Retry").performClick()
         assertEquals(1, updates)

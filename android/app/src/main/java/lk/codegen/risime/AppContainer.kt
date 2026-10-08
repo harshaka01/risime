@@ -607,7 +607,7 @@ class AppContainer(
     val openChatRequest = MutableStateFlow<String?>(null)
 
     /** Release-only self-updater (decision 016); disabled in debug builds. */
-    val updater = Updater(context, http)
+    val updater = Updater(context, http, scope)
 
     /** The conversation on screen (`dm:`/`grp:`), if any: its notifications are suppressed, a DM peer is watched. */
     val openConversation = MutableStateFlow<String?>(null)
@@ -890,11 +890,11 @@ class AppContainer(
                 runCatching { profilePhotos.startup(db.profilePhotos().observeAll().first()) }
             }
         }
-        // Updater: launch check happens in onStart; then at most every 6 h while in the foreground.
+        // Updater (P0-1): a check on every foreground (onStart, 15 min throttle), and every 15 min while there.
         scope.launch {
             foreground.collectLatest { fg ->
                 while (fg) {
-                    delay(6 * 60 * 60 * 1000L)
+                    delay(lk.codegen.risime.update.UPDATE_CHECK_INTERVAL_MS)
                     updater.maybeCheck(SystemClock.elapsedRealtime())
                 }
             }

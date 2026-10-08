@@ -53,6 +53,20 @@ val risiVersionName: String = providers
     .fileContents(rootProject.layout.projectDirectory.file("../VERSION")).asText.get().trim()
 val risiVersionCodeValue: Int = risiVersionCode(risiVersionName)
 
+// ---- Update server (decision 016; P0-1 test hook) ----
+// Test builds only: -Prisime.updateBaseUrl=https://… (or http://127.0.0.1:PORT/… / http://10.0.2.2:PORT/…
+// for a local mirror) points the updater at a test mirror. Every check (host, path, sha256, pinned
+// signing certificate, package, versionCode) stays on; About shows the server in red. Published
+// releases (scripts/nightly-release) never pass it.
+val DEFAULT_UPDATE_BASE_URL = "https://risicloud.ai/app/risime/"
+val updateBaseUrl: String = providers.gradleProperty("risime.updateBaseUrl").orNull?.trim()?.takeIf { it.isNotEmpty() }?.let { u ->
+    if (!Regex("""^(https://[A-Za-z0-9.-]+(:\d+)?|http://(127\.0\.0\.1|10\.0\.2\.2)(:\d+)?)/([A-Za-z0-9._~/-]*/)?$""").matches(u)) {
+        throw GradleException("risime.updateBaseUrl '$u' must be https://host/path/ or http://127.0.0.1:PORT/path/ (ending in /)")
+    }
+    logger.warn("risime: TEST BUILD - updater base URL overridden to $u (never publish this APK)")
+    u
+} ?: DEFAULT_UPDATE_BASE_URL
+
 // ---- Release signing (decision 003) ----
 // Read from $HOME/risime-keys/keystore.properties when it exists (spark2); otherwise the release
 // build is unsigned (e.g. on the laptop). Machine paths and secrets never live in the repo.
@@ -84,7 +98,8 @@ android {
         buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"ai.risicloud.risime://logout\"")
         // In-app updater (decision 016): release only.
         buildConfigField("boolean", "UPDATER_ENABLED", "true")
-        buildConfigField("String", "UPDATE_BASE_URL", "\"https://risicloud.ai/app/risime/\"")
+        buildConfigField("String", "UPDATE_BASE_URL", "\"$updateBaseUrl\"")
+        buildConfigField("boolean", "UPDATE_BASE_URL_OVERRIDDEN", (updateBaseUrl != DEFAULT_UPDATE_BASE_URL).toString())
         buildConfigField("boolean", "PUSH_CONFIGURED", pushConfigured.toString())
         // Native MLS core packaged (decision 037: release carries it ahead of the E2EE rollout; it is
         // only loaded once the server offers attestation keys).
