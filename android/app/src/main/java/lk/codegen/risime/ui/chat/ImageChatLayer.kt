@@ -108,10 +108,11 @@ fun rememberImageLayer(imgs: ImageActions, messages: List<MessageEntity>, groupN
 
     if (sheet) {
         AttachOptionsSheet(
-            options = listOfNotNull(AttachOption.GALLERY, AttachOption.CAMERA.takeIf { canCamera }),
+            options = AttachOption.visible(canCamera),
             onPick = { o ->
                 sheet = false
                 when (o) {
+                    AttachOption.DOCUMENT, AttachOption.LOCATION, AttachOption.CONTACT -> imgs.toast.value = ATTACH_COMING_SOON
                     AttachOption.GALLERY -> picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     AttachOption.CAMERA -> if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
                         capture()

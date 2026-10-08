@@ -80,10 +80,27 @@ import lk.codegen.risime.ui.common.RisiIcons
 import lk.codegen.risime.ui.theme.Spacing
 import java.io.File
 
-/** What the "+" sheet offers today: only what works (photos from the gallery; the camera when a camera app exists). */
-enum class AttachOption(val label: String) { GALLERY("Gallery"), CAMERA("Camera") }
+/**
+ * What the "+" sheet offers (WhatsApp order). Gallery and Camera work; the rest answer "Coming soon".
+ * Photos only go in end-to-end encrypted chats (the button that opens the sheet is gated like before).
+ */
+enum class AttachOption(val label: String, val wired: Boolean) {
+    GALLERY("Gallery", true),
+    CAMERA("Camera", true),
+    DOCUMENT("Document", false),
+    LOCATION("Location", false),
+    CONTACT("Contact", false),
+    ;
 
-/** The "+" attachment sheet (WhatsApp-style round tiles). */
+    companion object {
+        /** The tiles shown: all five; Camera only where a camera app exists. */
+        fun visible(canCamera: Boolean): List<AttachOption> = entries.filter { it != CAMERA || canCamera }
+    }
+}
+
+const val ATTACH_COMING_SOON = "Coming soon"
+
+/** The "+" attachment sheet (WhatsApp-style round tiles in a grid). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AttachOptionsSheet(options: List<AttachOption>, onPick: (AttachOption) -> Unit, onDismiss: () -> Unit) {
@@ -92,28 +109,38 @@ fun AttachOptionsSheet(options: List<AttachOption>, onPick: (AttachOption) -> Un
 
 @Composable
 fun AttachOptionsContent(options: List<AttachOption>, onPick: (AttachOption) -> Unit) {
-    Row(
+    Column(
         Modifier.fillMaxWidth().navigationBarsPadding().padding(start = Spacing.xl, end = Spacing.xl, bottom = Spacing.xl),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.xl),
+        verticalArrangement = Arrangement.spacedBy(Spacing.lg),
     ) {
-        options.forEach { o ->
-            val (icon, tint) = when (o) {
-                AttachOption.GALLERY -> RisiIcons.Photo to Color(0xFF6D4AE0)
-                AttachOption.CAMERA -> RisiIcons.Camera to Color(0xFFD6336C)
+        options.chunked(3).forEach { row ->
+            Row(Modifier.fillMaxWidth()) {
+                row.forEach { o ->
+                    val (icon, tint) = when (o) {
+                        AttachOption.GALLERY -> RisiIcons.Photo to Color(0xFF6D4AE0)
+                        AttachOption.CAMERA -> RisiIcons.Camera to Color(0xFFD6336C)
+                        AttachOption.DOCUMENT -> RisiIcons.Document to Color(0xFF3F6FD9)
+                        AttachOption.LOCATION -> RisiIcons.Location to Color(0xFF1E9E6A)
+                        AttachOption.CONTACT -> RisiIcons.Contact to Color(0xFF1C8FB5)
+                    }
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        AttachTile(o.label, icon, tint, dimmed = !o.wired) { onPick(o) }
+                    }
+                }
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             }
-            AttachTile(o.label, icon, tint) { onPick(o) }
         }
     }
 }
 
 @Composable
-private fun AttachTile(label: String, icon: ImageVector, tint: Color, onClick: () -> Unit) {
+private fun AttachTile(label: String, icon: ImageVector, tint: Color, dimmed: Boolean = false, onClick: () -> Unit) {
     Column(
         Modifier.clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick).semantics(mergeDescendants = true) { role = Role.Button }
             .padding(Spacing.xs),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(Modifier.size(56.dp).clip(CircleShape).background(tint), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(56.dp).clip(CircleShape).background(if (dimmed) tint.copy(alpha = 0.55f) else tint), contentAlignment = Alignment.Center) {
             Icon(icon, null, Modifier.size(28.dp), tint = Color.White)
         }
         Spacer(Modifier.size(Spacing.xs + Spacing.xxs))

@@ -78,10 +78,15 @@ fun EmojiPickerSheet(
 
 /** emoji2's EmojiPickerView: its listener is set once, in the factory. */
 @Composable
-internal fun EmojiPickerAndroidView(onPick: (String) -> Unit) {
+internal fun EmojiPickerAndroidView(onPick: (String) -> Unit, modifier: Modifier = Modifier.fillMaxWidth().height(380.dp)) {
     AndroidView(
-        factory = { ctx -> EmojiPickerView(ContextThemeWrapper(ctx, androidx.appcompat.R.style.Theme_AppCompat_DayNight)).apply { setOnEmojiPickedListener { onPick(it.emoji) } } },
-        modifier = Modifier.fillMaxWidth().height(380.dp),
+        factory = { ctx ->
+            EmojiPickerView(ContextThemeWrapper(ctx, androidx.appcompat.R.style.Theme_AppCompat_DayNight)).apply {
+                setRecentEmojiProvider(EmojiRecentStore.of(ctx))
+                setOnEmojiPickedListener { onPick(it.emoji) }
+            }
+        },
+        modifier = modifier,
     )
 }
 

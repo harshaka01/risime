@@ -1,5 +1,12 @@
 # Android status — 0.2 nightlies
 
+## v1.23: WhatsApp-style emoji panel and attachment sheet — READY
+- **Emoji panel:** the smiley in the composer (DM and group chats) now toggles between the keyboard and an inline panel in the keyboard's place (height = the tallest keyboard seen, minus the nav bar; 280dp before one is known). It reuses the emoji2 `EmojiPickerView` (category tabs Recent/Smileys/People/Animals/Food/Activities/Travel/Objects/Symbols/Flags, scrollable grid, skin tones; no new dependency), plus a bottom row: "ABC" (back to keyboard) and backspace (a whole grapheme via `deleteBeforeCursor`). Picks insert at the cursor and the panel stays open; Back closes it; tapping the field brings the keyboard back. Recents are now DataStore-backed (`risime_emoji`, max 32, most recent first) via `RecentEmojiProvider`, shared with the reaction picker. Code: `ui/chat/EmojiPanel.kt`, `Composer` in `ChatScreen.kt`. The old modal emoji sheet in the composer is gone (the reaction "+" still uses `EmojiPickerSheet`).
+- **Attachment sheet:** a 3-column grid of round coloured tiles: Gallery, Camera (both as before: Photo Picker / `TakePicture` into the cache FileProvider, then the encrypted photo path), Document, Location, Contact (dimmed; tap shows the "Coming soon" notice bar). The "+" button gating is unchanged (images only in e2ee chats; metadata stripping unchanged). `AttachOption.visible(canCamera)`.
+- **Tests:** `EmojiPanelLogicTest` (recents order/cap/encode, panel height, sheet items and which are wired); existing `ComposerEmojiTest` (Robolectric) and `ComposerEditTest` (grapheme backspace) cover the panel flow. Gate: 797 unit tests, 0 failures.
+- **Not verified on a device** (no emulator on spark2): keyboard/panel switching feel and the panel height on a real IME.
+- **For root:** no new library, no decision note needed.
+
 ## Fix: a member never commits a reinstalled admin's group re-add ("a commit is already pending") — READY
 - **Cause (reinstall gate, nightly.30/31, C's evidence):** the group-op runner is `groupOpsRun.collectLatest { runDue() }`, and
   every `syncGroups()` kicks it (C syncs twice on start: on Live and again after MLS registration). A kick **cancels** a running
