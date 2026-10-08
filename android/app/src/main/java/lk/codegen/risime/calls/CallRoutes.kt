@@ -1,6 +1,8 @@
 package lk.codegen.risime.calls
 
 import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
 import androidx.core.telecom.CallEndpointCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -188,12 +190,22 @@ fun routeTarget(
  * (Bluetooth connected/disconnected, voice→video) seen since. An event stays pending until the route
  * matches it (or the user picks); the same move for the same routes is asked at most [MAX_TRIES]
  * times, so a route the platform refuses is never requested in a loop.
+ *
+ * Review fix (external picks): the route can also be moved outside RisiMe (the car display, a
+ * headset button, the system output switcher). When the current route changes while no request of
+ * RisiMe's is pending ([requested]) and the devices stayed the same, the new route is the user's
+ * pick; the Bluetooth-priority and video-speaker rules never move it back. A Bluetooth device newly
+ * connecting still takes the route.
  */
-class RoutePolicyState {
+class RoutePolicyState(private val now: () -> Long = System::currentTimeMillis) {
     /** The kind the user picked last (null: no pick, or an event after it cleared it). */
     @Volatile var userPick: EndpointUi.Kind? = null
         private set
     private var lastAvailable: Set<EndpointUi.Kind>? = null
+    private var lastCurrent: EndpointUi.Kind? = null
+    private var settled = false
+    private var request: EndpointUi.Kind? = null
+    private var requestAt = 0L
     private var btConnected = false
     private var btDisconnected = false
     private var videoTurnedOn = false
@@ -207,6 +219,26 @@ class RoutePolicyState {
         videoTurnedOn = false
     }
 
+    /** RisiMe asks the platform for [kind] now (the policy's move or the user's pick in the app). */
+    @Synchronized fun requested(kind: EndpointUi.Kind) {
+        request = kind
+        requestAt = now()
+    }
+
+    /**
+     * RisiMe itself moved the route away (another call's AudioManager route was given back): the
+     * next change is not someone else's pick.
+     */
+    @Synchronized fun routeReset() {
+        lastCurrent = null
+        settled = false
+    }
+
+    /** RisiMe's last request failed (refused, or the route didn't take): nothing is pending. */
+    @Synchronized fun requestFailed() {
+        request = null
+    }
+
     /** The call's video flag changed: turning it ON (the voice→video switch) moves to the speaker. */
     @Synchronized fun videoChanged(video: Boolean) {
         if (!video) return
@@ -217,7 +249,17 @@ class RoutePolicyState {
 
     @Synchronized fun decide(video: Boolean, phase: CallPhase?, available: Set<EndpointUi.Kind>, current: EndpointUi.Kind?): RouteDecision {
         val prev = lastAvailable
+        val prevCurrent = lastCurrent
         val bt = EndpointUi.Kind.BLUETOOTH
+        // A change to the route RisiMe asked for is RisiMe's own; a request older than PENDING_MS is over.
+        val req = request
+        val ours = req != null && current == req
+        val pending = req != null && !ours && now() - requestAt <= PENDING_MS
+        if (req != null && !pending) request = null
+        val external = routePhase(phase) && !ours && !pending && settled && prev == available &&
+            prevCurrent != null && current != null && current != prevCurrent && current != EndpointUi.Kind.OTHER
+        if (external && current != null) userPicked(current)
+        lastCurrent = current
         if (prev != null && bt in available && bt !in prev) {
             btConnected = true
             btDisconnected = false
@@ -226,10 +268,13 @@ class RoutePolicyState {
         if (prev != null && bt !in available && bt in prev) {
             btDisconnected = true
             btConnected = false
-            if (userPick == bt) userPick = null
         }
+        // A picked device that went away (Bluetooth off, the headset unplugged) is no pick any more.
+        userPick?.let { if (it !in available) userPick = null }
         lastAvailable = available
-        val d = routeTarget(video, phase, available, current, userPick != null, btConnected, btDisconnected, videoTurnedOn)
+        val d0 = routeTarget(video, phase, available, current, userPick != null, btConnected, btDisconnected, videoTurnedOn)
+        val d = if (external && d0.target == null) d0.copy(reason = "${d0.reason}: ${routeKindName(current)}, changed outside RisiMe") else d0
+        settled = d.target == null
         if (d.target == null) {
             if (routePhase(phase)) {
                 btConnected = false
@@ -241,12 +286,42 @@ class RoutePolicyState {
         val ask = Triple(d, available, current)
         tries = if (lastAsk == ask) tries + 1 else 1
         lastAsk = ask
-        if (tries > MAX_TRIES) return RouteDecision(null, "gave up on ${routeKindName(d.target)} after $MAX_TRIES tries (${d.reason})")
+        if (tries > MAX_TRIES) {
+            settled = true
+            return RouteDecision(null, "gave up on ${routeKindName(d.target)} after $MAX_TRIES tries (${d.reason})")
+        }
         return d
     }
 
     companion object {
         const val MAX_TRIES = 3
+
+        /** How long a request of RisiMe's may take before a different route counts as someone else's. */
+        const val PENDING_MS = 3_000L
+    }
+}
+
+/** `requested=SPEAKER actual=EARPIECE`: the AudioManager route RisiMe asked for and the one it read back. */
+fun audioRouteResult(requested: EndpointUi.Kind, actual: EndpointUi.Kind?): String =
+    "requested=${routeKindName(requested)} actual=${routeKindName(actual)}"
+
+/**
+ * Review fix (SCO leak): gives back the communication route RisiMe set through AudioManager: the
+ * communication device on API 31+, else the speakerphone and Bluetooth SCO (a started SCO link stays
+ * open after the call unless it is stopped). [sdk] is a parameter for the tests.
+ */
+@Suppress("DEPRECATION")
+fun clearAudioManagerRoute(am: AudioManager, sdk: Int = Build.VERSION.SDK_INT) {
+    if (sdk >= 31) {
+        runCatching { am.clearCommunicationDevice() }
+        return
+    }
+    runCatching { if (am.isSpeakerphoneOn) am.isSpeakerphoneOn = false }
+    runCatching {
+        if (am.isBluetoothScoOn) {
+            am.stopBluetoothSco()
+            am.isBluetoothScoOn = false
+        }
     }
 }
 

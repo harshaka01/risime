@@ -130,6 +130,19 @@ class CallManagerCleanupTest {
         assertNull(m.state.value?.takeIf { it.phase != CallPhase.ENDED })
     }
 
+    /** Review fix (no Telecom): every call gets a route handle, so the button has routes with or without core-telecom. */
+    @Test fun aCallAlwaysHasRoutesAndTheEndClearsThem() = runBlocking {
+        val m = CallManager(app, port) { FakeCallMedia() }
+        until("machine") { m.machine }
+        delay(200)
+        offer(m)
+        until("rings") { m.state.value?.takeIf { it.phase == CallPhase.RINGING_IN } }
+        val r = until("routes published") { m.routes.value.takeIf { it.available.isNotEmpty() } }
+        assertTrue(r.available.any { it.kind == EndpointUi.Kind.SPEAKER })
+        m.hangUp()
+        until("routes cleared") { if (m.routes.value.available.isEmpty()) Unit else null }
+    }
+
     @Test fun swipingTheAppAwayEndsTheCallAndGivesTheAudioBack() = runBlocking {
         val m = CallManager(app, port) { FakeCallMedia() }
         until("machine") { m.machine }

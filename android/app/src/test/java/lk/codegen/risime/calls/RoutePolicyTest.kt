@@ -180,6 +180,91 @@ class RoutePolicyTest {
         assertEquals(SPEAKER, p.decide(true, CallPhase.ACTIVE, both + EndpointUi.Kind.OTHER, EARPIECE).target)
     }
 
+    // ---- external picks (review fix): the car display, a headset button, the system switcher ----
+
+    private class Clock(var t: Long = 0L) : () -> Long {
+        override fun invoke() = t
+    }
+
+    @Test fun aMoveAwayFromAConnectedBluetoothOutsideTheAppSticks() {
+        val p = RoutePolicyState()
+        val bt = both + BLUETOOTH
+        assertNull(p.decide(false, CallPhase.ACTIVE, bt, BLUETOOTH).target)
+        // The system output switcher moves the call to the phone: kept, never moved back to Bluetooth.
+        val d = p.decide(false, CallPhase.ACTIVE, bt, EARPIECE)
+        assertNull(d.target)
+        assertTrue(d.reason, d.reason.contains("changed outside RisiMe"))
+        assertEquals(EARPIECE, p.userPick)
+        assertNull(p.decide(false, CallPhase.ACTIVE, bt, EARPIECE).target)
+        assertNull(p.decide(true, CallPhase.ACTIVE, bt, EARPIECE).target)
+    }
+
+    @Test fun aVideoCallMovedToTheEarpieceOutsideTheAppStaysThere() {
+        val p = RoutePolicyState()
+        assertEquals(SPEAKER, p.decide(true, CallPhase.ACTIVE, both, EARPIECE).target)
+        p.requested(SPEAKER)
+        assertNull(p.decide(true, CallPhase.ACTIVE, both, SPEAKER).target)
+        assertNull(p.decide(true, CallPhase.ACTIVE, both, EARPIECE).target)
+        assertEquals(EARPIECE, p.userPick)
+    }
+
+    @Test fun bluetoothNewlyConnectingStillWinsOverAnExternalPick() {
+        val p = RoutePolicyState()
+        assertNull(p.decide(false, CallPhase.ACTIVE, both, EARPIECE).target)
+        assertNull(p.decide(false, CallPhase.ACTIVE, both, SPEAKER).target) // external pick: speaker
+        assertEquals(SPEAKER, p.userPick)
+        assertEquals(BLUETOOTH, p.decide(false, CallPhase.ACTIVE, both + BLUETOOTH, SPEAKER).target)
+    }
+
+    @Test fun theAppsOwnPendingRequestIsNoExternalPick() {
+        val clock = Clock()
+        val p = RoutePolicyState(clock)
+        val bt = both + BLUETOOTH
+        assertNull(p.decide(true, CallPhase.ACTIVE, bt, BLUETOOTH).target)
+        // The app asks for the speaker (the user's pick in the app); the platform passes the earpiece on the way.
+        p.userPicked(SPEAKER)
+        p.requested(SPEAKER)
+        assertNull(p.decide(true, CallPhase.ACTIVE, bt, EARPIECE).target)
+        assertEquals(SPEAKER, p.userPick)
+        assertNull(p.decide(true, CallPhase.ACTIVE, bt, SPEAKER).target)
+        assertEquals(SPEAKER, p.userPick)
+        // A request that never lands is over after PENDING_MS: a later change is someone else's again.
+        p.requested(EARPIECE)
+        clock.t += RoutePolicyState.PENDING_MS + 1
+        assertNull(p.decide(true, CallPhase.ACTIVE, bt, BLUETOOTH).target)
+        assertEquals(BLUETOOTH, p.userPick)
+    }
+
+    @Test fun aDeviceChangeIsNoExternalPick() {
+        val p = RoutePolicyState()
+        assertNull(p.decide(true, CallPhase.ACTIVE, both + WIRED, WIRED).target)
+        // The headset is unplugged and the platform falls back to the earpiece: the video rule applies.
+        assertEquals(SPEAKER, p.decide(true, CallPhase.ACTIVE, both, EARPIECE).target)
+        assertNull(p.userPick)
+    }
+
+    @Test fun anAppResetIsNoExternalPick() {
+        val p = RoutePolicyState()
+        assertNull(p.decide(true, CallPhase.ACTIVE, both, SPEAKER).target)
+        p.routeReset() // the previous call's AudioManager route was given back
+        assertEquals(SPEAKER, p.decide(true, CallPhase.ACTIVE, both, EARPIECE).target)
+    }
+
+    @Test fun aFailedRequestCountsTowardsTheTries() {
+        val p = RoutePolicyState()
+        repeat(RoutePolicyState.MAX_TRIES) {
+            assertEquals(SPEAKER, p.decide(true, CallPhase.ACTIVE, both, EARPIECE).target)
+            p.requested(SPEAKER)
+            p.requestFailed() // read back: still the earpiece
+        }
+        assertNull(p.decide(true, CallPhase.ACTIVE, both, EARPIECE).target)
+    }
+
+    @Test fun theAudioRouteResultLine() {
+        assertEquals("requested=SPEAKER actual=EARPIECE", audioRouteResult(SPEAKER, EARPIECE))
+        assertEquals("requested=BLUETOOTH actual=NONE", audioRouteResult(BLUETOOTH, null))
+    }
+
     // ---- mergeRoutes (Telecom + AudioManager) ----
 
     private val tEar = EndpointUi("t1", "Earpiece", EARPIECE)

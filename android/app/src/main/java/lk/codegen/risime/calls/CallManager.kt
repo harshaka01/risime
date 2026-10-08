@@ -160,7 +160,12 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
      * a ghost self-managed call that held MODE_IN_COMMUNICATION (every later call "busy" / "You're
      * already in a call") and whose Telecom callbacks hung up whatever call was current.
      */
-    private class TelecomCall(val callId: String, val job: Job) {
+    /**
+     * One call's routes and its platform call. [telecom] false: core-telecom is missing on this phone,
+     * [job] does nothing and the routes go through AudioManager only (the label, the picker and the
+     * video-speaker default still work).
+     */
+    private class TelecomCall(val callId: String, val job: Job, val telecom: Boolean = true) {
         @Volatile var scope: CallControlScope? = null
 
         /** P0-3: this call's routes, copied by its [EndpointTracker] (the only reader of Telecom's flows). */
@@ -183,6 +188,21 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         @Volatile var lastDecision: String? = null
     }
     private val telecomCalls = java.util.concurrent.ConcurrentHashMap<String, TelecomCall>()
+
+    /**
+     * Review fix (threading): every route recompute and decision runs on this one-at-a-time lane
+     * (Telecom's endpoint changes, AudioManager's device callbacks, phase changes, the user's picks),
+     * never on the main thread next to a pass on another thread.
+     */
+    private val routeLane: kotlinx.coroutines.CoroutineDispatcher by lazy {
+        val d = scope.coroutineContext[kotlin.coroutines.ContinuationInterceptor] as? kotlinx.coroutines.CoroutineDispatcher
+        // Dispatchers.Unconfined (tests) has no limited view: the default dispatcher's then.
+        runCatching { d?.limitedParallelism(1) }.getOrNull() ?: kotlinx.coroutines.Dispatchers.Default.limitedParallelism(1)
+    }
+
+    private fun onRouteLane(block: suspend () -> Unit) {
+        scope.launch(routeLane) { block() }
+    }
 
     private val callsManager: CallsManager? by lazy {
         runCatching { CallsManager(context).also { it.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE or CallsManager.CAPABILITY_SUPPORTS_VIDEO_CALLING) } }
@@ -285,6 +305,9 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         private val SETUP_PHASES = setOf(CallPhase.CALLING, CallPhase.RINGING_OUT, CallPhase.ANSWERING, CallPhase.CONNECTING)
         private const val PREFS = "risime_calls"
         private const val KEY_ACTIVE = "active_call"
+
+        /** How long an AudioManager route may take to show up in the read-back. */
+        private const val AUDIO_VERIFY_MS = 600L
     }
 
     // ---------------------------------------------------------------- process death (decision 054)
@@ -488,11 +511,12 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val h = telecomCalls[id]
         h?.policy?.userPicked(e.kind)
         log("route decision (user): → ${routeKindName(e.kind)}: the user's pick")
-        scope.launch {
+        onRouteLane {
             if (h != null) {
                 applyRoute(h, e.kind, "user pick", e.id)
             } else {
-                log("route set ${routeKindName(e.kind)} (user pick) via audio: ${runCatching { audioSetRoute(e.kind) }.let { it.getOrNull() ?: it.exceptionOrNull()?.message }}")
+                val r = runCatching { audioSetRoute(e.kind) }
+                log("route set ${routeKindName(e.kind)} (user pick) via audio: ${r.getOrNull()?.let { audioRouteResult(e.kind, it) } ?: r.exceptionOrNull()?.message}")
             }
         }
     }
@@ -592,7 +616,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             ensureTelecom(s)
             // P0-3: the call on screen shows its own routes (copied from its handle).
             telecomCalls[s.callId]?.let { h ->
-                publishRoutes(h)
+                onRouteLane { publishRoutes(h) }
                 val was = h.lastVideo
                 h.lastVideo = s.video
                 if (was != null && was != s.video) onCallVideoChanged(s.callId, s.video)
@@ -692,9 +716,21 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     // ---- core-telecom (self-managed; audio focus, mode and routing belong to Telecom) ----
 
     private suspend fun ensureTelecom(s: CallSnapshot) {
-        val cm = callsManager ?: return
+        // Re-registered on every call after releaseAudio unregistered it (no-op while registered).
+        watchAudioDevices()
         if (telecomCalls.containsKey(s.callId)) return
         val callId = s.callId
+        val cm = callsManager
+        if (cm == null) {
+            // Review fix (no Telecom): a handle with a no-op job, so the AudioManager routes, the
+            // button's label and the video-speaker default work without core-telecom.
+            val h = TelecomCall(callId, Job().also { it.complete() }, telecom = false)
+            h.lastVideo = s.video
+            telecomCalls[callId] = h
+            log("route: no Telecom, AudioManager routes only")
+            onRouteLane { publishRoutes(h) }
+            return
+        }
         val name = callTitle(s)
         val attrs = CallAttributesCompat(
             name, Uri.fromParts("risime", if (s.group) s.conversationId else s.peerUserId, null),
@@ -721,8 +757,10 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                     // core-telecom 1.0.1 (each value reaches ONE collector). The tracker is their only
                     // reader, started for every call; the UI and the route policy read its copies.
                     EndpointTracker(availableEndpoints, currentCallEndpoint, handle.endpoints, handle.current).start(this) {
-                        publishRoutes(handle)
-                        checkRoute(callId, "telecom route change")
+                        onRouteLane {
+                            publishRoutes(handle)
+                            checkRoute(callId, "telecom route change")
+                        }
                     }
                 }
             }.onFailure { Log.w("RisiMe", "telecom addCall: ${it.message}") }
@@ -730,10 +768,9 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         handle = TelecomCall(callId, job)
         handle.lastVideo = s.video
         telecomCalls[callId] = handle
-        watchAudioDevices()
         job.start()
         // AudioManager's routes count from the start (Telecom's lists can be empty or late).
-        publishRoutes(handle)
+        onRouteLane { publishRoutes(handle) }
     }
 
     private var answeredOn: String? = null
@@ -799,7 +836,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             h.routeDirty = true
             return
         }
-        scope.launch {
+        scope.launch(routeLane) {
             try {
                 do {
                     h.routeDirty = false
@@ -813,7 +850,9 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                         h.lastDecision = text
                         log("route decision ($why): $text")
                     }
-                    if (d.target != null) applyRoute(h, d.target, d.reason, null)
+                    // A failed attempt (refused, or the route didn't take) is asked again: the policy
+                    // counts the same ask and gives up after MAX_TRIES.
+                    if (d.target != null && !applyRoute(h, d.target, d.reason, null)) h.routeDirty = true
                 } while (h.routeDirty)
             } finally {
                 h.routeBusy.set(false)
@@ -826,29 +865,50 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
      * Moves [h]'s route to [kind]: Telecom's endpoint ([id] first, else the first of that kind) when
      * Telecom lists one and accepts the change; else AudioManager (setCommunicationDevice on API 31+,
      * the speakerphone/SCO switches below). Logged as `calls: route set <KIND> (<reason>) via …`.
+     *
+     * Review fix: the AudioManager route counts only when it is read back ([audioSetRoute] returns
+     * the actual route; a mismatch is a failed attempt). When it didn't take and the call has a
+     * Telecom endpoint of that kind that wasn't tried yet, Telecom is asked after all. Returns
+     * whether the route moved.
      */
-    private suspend fun applyRoute(h: TelecomCall, kind: EndpointUi.Kind, reason: String, id: String?) {
-        val ep = h.endpoints.value.let { l -> l.firstOrNull { it.identifier.toString() == id } ?: l.firstOrNull { telecomKind(it.type) == kind } }
-        if (ep != null) {
-            val sc = h.scope ?: if (h.job.isActive) waitScope(h.callId) else null
-            if (sc != null) {
-                // An earlier AudioManager route would outlive Telecom's change: give it back first.
-                if (h.viaAudio) runCatching { audioClearRoute() }
-                val r = runCatching { sc.requestEndpointChange(ep) }
-                val ok = r.getOrNull() is androidx.core.telecom.CallControlResult.Success
-                log("route set ${routeKindName(kind)} ($reason) via telecom: ${r.getOrNull() ?: r.exceptionOrNull()?.message}")
-                if (ok) {
-                    h.viaAudio = false
-                    publishRoutes(h)
-                    return
-                }
+    private suspend fun applyRoute(h: TelecomCall, kind: EndpointUi.Kind, reason: String, id: String?): Boolean {
+        h.policy.requested(kind)
+        fun endpoint() = h.endpoints.value.let { l -> l.firstOrNull { it.identifier.toString() == id } ?: l.firstOrNull { telecomKind(it.type) == kind } }
+        var telecomTried = false
+        suspend fun viaTelecom(ep: CallEndpointCompat): Boolean {
+            val sc = h.scope ?: if (h.telecom && h.job.isActive) waitScope(h.callId) else null
+            sc ?: return false
+            telecomTried = true
+            // An earlier AudioManager route would outlive Telecom's change: give it back first.
+            if (h.viaAudio) runCatching { audioClearRoute() }
+            val r = runCatching { sc.requestEndpointChange(ep) }
+            val ok = r.getOrNull() is androidx.core.telecom.CallControlResult.Success
+            log("route set ${routeKindName(kind)} ($reason) via telecom: ${r.getOrNull() ?: r.exceptionOrNull()?.message}")
+            if (ok) {
+                h.viaAudio = false
+                publishRoutes(h)
             }
+            return ok
         }
+        val ep = endpoint()
+        if (ep != null && viaTelecom(ep)) return true
         val r = runCatching { audioSetRoute(kind) }
-        val ok = r.getOrNull() == true
+        val actual = r.getOrNull()
+        val ok = actual == kind
         if (ok) h.viaAudio = true
-        log("route set ${routeKindName(kind)} ($reason) via audio${if (ep == null) " (Telecom lists no ${routeKindName(kind)})" else ""}: ${r.getOrNull() ?: r.exceptionOrNull()?.message}")
+        if (ok && telecomCalls[h.callId] !== h) {
+            // The call ended while its route was being set: give the route back at once.
+            h.viaAudio = false
+            audioClearRoute()
+        }
+        log("route set ${routeKindName(kind)} ($reason) via audio${if (ep == null) " (Telecom lists no ${routeKindName(kind)})" else ""}: ${if (r.isSuccess) audioRouteResult(kind, actual) else r.exceptionOrNull()?.message}")
+        if (!ok && !telecomTried && h.telecom) {
+            // The AudioManager route didn't take: Telecom's endpoint, when the call has one now.
+            endpoint()?.let { e -> if (viaTelecom(e)) return true }
+        }
+        if (!ok) h.policy.requestFailed()
         publishRoutes(h)
+        return ok
     }
 
     // ---- AudioManager (P0 audio routing: the fallback when Telecom's routes are missing) ----
@@ -873,8 +933,25 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         }
     }
 
+    /**
+     * Sets the AudioManager route to [kind] and reads it back (waiting ≤ [AUDIO_VERIFY_MS] for the
+     * communication-device change to land): returns the route actually in place afterwards (null:
+     * none), so the caller can tell a route that didn't take from one that did.
+     */
+    private suspend fun audioSetRoute(kind: EndpointUi.Kind): EndpointUi.Kind? {
+        if (!audioSetRouteNow(kind)) return audioRoutes().second
+        return withTimeoutOrNull(AUDIO_VERIFY_MS) {
+            var actual = audioRoutes().second
+            while (actual != kind) {
+                delay(50)
+                actual = audioRoutes().second
+            }
+            actual
+        } ?: audioRoutes().second
+    }
+
     @Suppress("DEPRECATION")
-    private fun audioSetRoute(kind: EndpointUi.Kind): Boolean {
+    private fun audioSetRouteNow(kind: EndpointUi.Kind): Boolean {
         val am = context.getSystemService(AudioManager::class.java) ?: return false
         if (Build.VERSION.SDK_INT >= 31) {
             val dev = am.availableCommunicationDevices.firstOrNull { audioDeviceKind(it.type) == kind } ?: return false
@@ -899,35 +976,59 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         return true
     }
 
-    @Suppress("DEPRECATION")
+    /** Gives back the AudioManager route (the communication device; below API 31 the speakerphone and SCO). */
     private fun audioClearRoute() {
         val am = context.getSystemService(AudioManager::class.java) ?: return
-        if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice() else am.isSpeakerphoneOn = false
+        clearAudioManagerRoute(am)
     }
 
-    @Volatile private var watchingAudio = false
+    private val watchingAudio = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var audioDeviceCallback: android.media.AudioDeviceCallback? = null
 
-    /** AudioManager device and communication-device changes re-run the routes of the current call. */
+    /** The API 31+ communication-device listener (typed Any: the interface is missing below API 31). */
+    private var commDeviceListener: Any? = null
+
+    /**
+     * AudioManager device and communication-device changes re-run the routes of the current call, on
+     * the route lane (the callbacks come on the main thread). Registered for a call, unregistered by
+     * [releaseAudio] once no call is left.
+     */
     private fun watchAudioDevices() {
-        if (watchingAudio) return
         val am = context.getSystemService(AudioManager::class.java) ?: return
-        watchingAudio = true
+        if (!watchingAudio.compareAndSet(false, true)) return
         val onChange = {
-            state.value?.callId?.let { id -> telecomCalls[id]?.let { h -> publishRoutes(h); checkRoute(id, "audio devices") } }
-            Unit
+            onRouteLane { state.value?.callId?.let { id -> telecomCalls[id]?.let { h -> publishRoutes(h); checkRoute(id, "audio devices") } } }
         }
         runCatching {
-            am.registerAudioDeviceCallback(object : android.media.AudioDeviceCallback() {
+            val cb = object : android.media.AudioDeviceCallback() {
                 override fun onAudioDevicesAdded(added: Array<out android.media.AudioDeviceInfo>?) = onChange()
                 override fun onAudioDevicesRemoved(removed: Array<out android.media.AudioDeviceInfo>?) = onChange()
-            }, android.os.Handler(android.os.Looper.getMainLooper()))
-            if (Build.VERSION.SDK_INT >= 31) am.addOnCommunicationDeviceChangedListener(ContextCompat.getMainExecutor(context)) { onChange() }
+            }
+            am.registerAudioDeviceCallback(cb, android.os.Handler(android.os.Looper.getMainLooper()))
+            audioDeviceCallback = cb
+            if (Build.VERSION.SDK_INT >= 31) {
+                val l = AudioManager.OnCommunicationDeviceChangedListener { onChange() }
+                am.addOnCommunicationDeviceChangedListener(ContextCompat.getMainExecutor(context), l)
+                commDeviceListener = l
+            }
         }.onFailure { Log.w("RisiMe", "audio device callback: ${it.message}") }
+    }
+
+    private fun unwatchAudioDevices() {
+        val am = context.getSystemService(AudioManager::class.java) ?: return
+        if (!watchingAudio.compareAndSet(true, false)) return
+        audioDeviceCallback?.let { cb -> runCatching { am.unregisterAudioDeviceCallback(cb) } }
+        audioDeviceCallback = null
+        if (Build.VERSION.SDK_INT >= 31) {
+            (commDeviceListener as? AudioManager.OnCommunicationDeviceChangedListener)?.let { l -> runCatching { am.removeOnCommunicationDeviceChangedListener(l) } }
+        }
+        commDeviceListener = null
     }
 
     private suspend fun waitScope(callId: String): CallControlScope? = withTimeoutOrNull(3_000) {
         var sc = telecomCalls[callId]?.scope
-        while (sc == null && telecomCalls.containsKey(callId)) {
+        // A call without Telecom never gets a scope: don't wait for one.
+        while (sc == null && telecomCalls[callId]?.telecom == true) {
             delay(50)
             sc = telecomCalls[callId]?.scope
         }
@@ -938,6 +1039,22 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     private fun endTelecom(callId: String, notice: CallNotice?) {
         val h = telecomCalls.remove(callId) ?: return
         if (state.value?.callId == callId || state.value == null) routes.value = CallRoutes()
+        // Review fix (per-call route leak): the AudioManager route this call set (the communication
+        // device, SCO) is given back now, whether or not another call is still there; a call that
+        // is still there re-reads its route and asks again.
+        if (h.viaAudio) onRouteLane {
+            h.viaAudio = false
+            audioClearRoute()
+            log("route: cleared the AudioManager route of the ended call")
+            state.value?.callId?.let { id ->
+                telecomCalls[id]?.let { other ->
+                    other.viaAudio = false
+                    other.policy.routeReset()
+                    publishRoutes(other)
+                    checkRoute(id, "the previous call's route cleared")
+                }
+            }
+        }
         val cause = telecomDisconnectCause(notice)
         scope.launch {
             val sc = h.scope ?: withTimeoutOrNull(3_000) {
@@ -968,7 +1085,10 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
      */
     fun releaseAudio() {
         val am = context.getSystemService(AudioManager::class.java) ?: return
-        runCatching { if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice() }
+        // No device callbacks without a call (re-registered by the next call's ensureTelecom).
+        if (telecomCalls.isEmpty()) unwatchAudioDevices()
+        // The communication device; below API 31 the speakerphone and a started Bluetooth SCO link.
+        clearAudioManagerRoute(am)
         @Suppress("DEPRECATION")
         runCatching { if (am.isSpeakerphoneOn) am.isSpeakerphoneOn = false }
         runCatching { if (am.mode != AudioManager.MODE_NORMAL && am.mode != AudioManager.MODE_IN_CALL) am.mode = AudioManager.MODE_NORMAL }

@@ -28,6 +28,14 @@
   phone.
 - **Needs a real-phone check:** voice call → tap → speaker and back; video call starts on the speaker; BT buds
   connect mid-call → BT, disconnect → speaker/earpiece; group voice/video the same.
+- **Review fixes (READY):** SCO stopped on clear/release below API 31 (`clearAudioManagerRoute`); an ending call
+  gives its AudioManager route back at once (the still-running call re-reads and re-asks); a route change made
+  outside RisiMe (car, headset button, system switcher) with no request of ours pending and the same devices is
+  the user's pick (BT newly connecting still wins); AudioManager routes are read back
+  (`route set <K> (…) via audio: requested=<K> actual=<K>`, mismatch = failed try, then Telecom's endpoint if
+  untried); no core-telecom → an AudioManager-only handle; all route work on one serial lane, device callbacks
+  unregistered when no call is left. Tests: `RoutePolicyTest` (32), `AudioRouteReleaseTest`, `CallManagerCleanupTest`.
+  Real phone: also check "move from BT buds to Phone in the system output switcher → stays on the phone".
 
 ## v1.23: WhatsApp-style emoji panel and attachment sheet — READY
 - **Emoji panel:** the smiley in the composer (DM and group chats) now toggles between the keyboard and an inline panel in the keyboard's place (height = the tallest keyboard seen, minus the nav bar; 280dp before one is known). It reuses the emoji2 `EmojiPickerView` (category tabs Recent/Smileys/People/Animals/Food/Activities/Travel/Objects/Symbols/Flags, scrollable grid, skin tones; no new dependency), plus a bottom row: "ABC" (back to keyboard) and backspace (a whole grapheme via `deleteBeforeCursor`). Picks insert at the cursor and the panel stays open; Back closes it; tapping the field brings the keyboard back. Recents are now DataStore-backed (`risime_emoji`, max 32, most recent first) via `RecentEmojiProvider`, shared with the reaction picker. Code: `ui/chat/EmojiPanel.kt`, `Composer` in `ChatScreen.kt`. The old modal emoji sheet in the composer is gone (the reaction "+" still uses `EmojiPickerSheet`).
