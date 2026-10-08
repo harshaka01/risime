@@ -8,15 +8,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
-import androidx.biometric.BiometricPrompt
-import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import androidx.lifecycle.withResumed
 import lk.codegen.risime.AppContainer
 import lk.codegen.risime.BuildConfig
 import lk.codegen.risime.EndSession
@@ -33,7 +35,6 @@ import net.openid.appauth.AuthorizationService
 import net.openid.appauth.EndSessionRequest
 import net.openid.appauth.ResponseTypeValues
 import javax.crypto.Cipher
-import kotlin.coroutines.resume
 
 /**
  * Activity-side auth actions (decision 014): AppAuth browser sign-in (PKCE S256, Custom Tabs),
@@ -126,84 +127,170 @@ class AuthUi(private val activity: FragmentActivity, private val c: AppContainer
         }
     }
 
+    // ---- Fingerprint / screen-lock prompts (decision 064; the nightly.35 lock-out hotfix) ----
+
+    /** One BiometricPrompt for the activity (made in onCreate), shared by the lock, its turn-on and the migration. */
+    private val authenticator = lk.codegen.risime.ui.lock.BiometricLockAuthenticator(activity)
+
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private fun prompter(title: String, onSuccess: () -> Unit, onNoWay: () -> Unit) = lk.codegen.risime.ui.lock.LockPrompter(
+        auth = authenticator,
+        onUnlocked = onSuccess,
+        onNoWayToUnlock = onNoWay,
+        schedule = { ms, f -> mainHandler.postDelayed(f, ms) },
+        now = android.os.SystemClock::elapsedRealtime,
+        log = { Log.i("RisiMe", it) },
+        title = title,
+    )
+
+    /** The lock screen's attempts: prompt only when resumed, every tap retries, PIN fallback, errors shown. */
+    val lock = prompter(
+        "Unlock RisiMe",
+        onSuccess = { c.appLock.unlocked() },
+        // Neither a fingerprint nor a screen lock: the lock turns itself off and the app opens.
+        onNoWay = { activity.lifecycleScope.launch { c.appLock.offIfNoWayToUnlockNow() } },
+    )
+
+    /** Settings → Privacy → Fingerprint lock: turning it on asks once (fingerprint, or the screen lock). */
+    val lockTurnOn = prompter(
+        "Turn on fingerprint lock",
+        onSuccess = { activity.lifecycleScope.launch { c.appLock.setEnabled(true) } },
+        onNoWay = {},
+    )
+
+    init {
+        activity.lifecycle.addObserver(object : androidx.lifecycle.DefaultLifecycleObserver {
+            override fun onResume(owner: androidx.lifecycle.LifecycleOwner) {
+                lock.onResumed()
+                lockTurnOn.onResumed()
+            }
+
+            override fun onStop(owner: androidx.lifecycle.LifecycleOwner) {
+                lock.onStopped()
+            }
+        })
+        // The lock engaged again (after an unlock in this activity): the next resume prompts by itself.
+        activity.lifecycleScope.launch {
+            var was: Boolean? = null
+            c.appLock.locked.collect { now ->
+                if (now == true && was == false) lock.onLocked()
+                was = now
+            }
+        }
+    }
+
+    /** The lock screen became visible/resumed: prompt (deferred until RESUMED; at most once per return). */
+    fun autoUnlockApp() = lock.autoPrompt()
+
+    /** "Unlock with fingerprint": never ignored (a stale attempt is dropped and a new prompt starts). */
+    fun unlockApp() = lock.tap()
+
+    /** "Use phone PIN/pattern". */
+    fun unlockAppWithPin() = lock.usePin()
+
+    /** Settings: turn the lock on after one confirmation. */
+    fun turnOnLock() = lockTurnOn.tap()
+
     private fun authenticators(): Int =
         if (Build.VERSION.SDK_INT >= 30) BIOMETRIC_STRONG or DEVICE_CREDENTIAL else BIOMETRIC_STRONG
 
-    /** Fingerprint (or device PIN on API 30+) → the authenticated Cipher, or null if cancelled/unavailable. */
+    /**
+     * Fingerprint (or device PIN on API 30+) → the authenticated Cipher, or null if cancelled /
+     * unavailable / refused. Starts only when the activity is RESUMED, never waits without bound
+     * (a prompt that never appeared is given up after [LockPrompter.WATCHDOG_MS]) and logs every callback.
+     */
     private suspend fun prompt(title: String, cipher: Cipher): Cipher? {
         if (BiometricManager.from(activity).canAuthenticate(authenticators()) != BiometricManager.BIOMETRIC_SUCCESS) return null
-        val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(title)
-            .setSubtitle("RisiCloud account")
-            .setAllowedAuthenticators(authenticators())
-            .apply { if (Build.VERSION.SDK_INT < 30) setNegativeButtonText("Cancel") }
-            .build()
-        return suspendCancellableCoroutine { cont ->
-            val p = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    if (cont.isActive) cont.resume(result.cryptoObject?.cipher)
+        activity.lifecycle.withResumed { }
+        val result = CompletableDeferred<lk.codegen.risime.ui.lock.LockOutcome>()
+        val req = lk.codegen.risime.ui.lock.LockPromptRequest(
+            title, "RisiCloud account",
+            allowCredential = Build.VERSION.SDK_INT >= 30,
+            negativeText = if (Build.VERSION.SDK_INT < 30) "Cancel" else null,
+            cipher = cipher,
+        )
+        val refused = authenticator.showBiometric(req) { o ->
+            when (o) {
+                is lk.codegen.risime.ui.lock.LockOutcome.Succeeded -> Log.i("RisiMe", "RisiMe auth: migration prompt: auth succeeded")
+                lk.codegen.risime.ui.lock.LockOutcome.Failed -> Log.i("RisiMe", "RisiMe auth: migration prompt: auth failed (no match)")
+                is lk.codegen.risime.ui.lock.LockOutcome.Error -> Log.i("RisiMe", "RisiMe auth: migration prompt: auth error code=${o.code} msg=${o.message}")
+            }
+            if (o !is lk.codegen.risime.ui.lock.LockOutcome.Failed) result.complete(o)
+        }
+        if (refused != null) {
+            Log.w("RisiMe", "RisiMe auth: migration prompt: authenticate() refused: $refused")
+            _notice.value = lk.codegen.risime.ui.lock.LOCK_NOT_SHOWN
+            return null
+        }
+        return try {
+            coroutineScope {
+                val watchdog = launch {
+                    delay(lk.codegen.risime.ui.lock.LockPrompter.WATCHDOG_MS)
+                    if (!result.isCompleted && !authenticator.promptShowing()) {
+                        Log.w("RisiMe", "RisiMe auth: migration prompt: authenticate() refused: no prompt on screen")
+                        result.complete(lk.codegen.risime.ui.lock.LockOutcome.Error(-1, "no prompt on screen"))
+                    }
                 }
-
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    if (cont.isActive) cont.resume(null)
+                val o = result.await()
+                watchdog.cancel()
+                when (o) {
+                    is lk.codegen.risime.ui.lock.LockOutcome.Succeeded -> {
+                        _notice.value = null
+                        o.cipher
+                    }
+                    is lk.codegen.risime.ui.lock.LockOutcome.Error -> {
+                        _notice.value = if (o.code == -1) lk.codegen.risime.ui.lock.LOCK_NOT_SHOWN else lk.codegen.risime.ui.lock.lockErrorText(o.code).replace("tap Unlock", "tap Continue")
+                        null
+                    }
+                    lk.codegen.risime.ui.lock.LockOutcome.Failed -> null
                 }
-            })
-            p.authenticate(info, BiometricPrompt.CryptoObject(cipher))
-            cont.invokeOnCancellation { p.cancelAuthentication() }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            authenticator.cancel()
+            throw e
         }
     }
+
+    private var migrationJob: Job? = null
 
     /**
      * Decision 064: the one migration prompt for a pre-064 vault. Cancel/failure keeps the old vault
      * (asked again at the next open) and never signs out; an invalidated key (new enrolment) or a
-     * phone without biometrics now: sign in again, chats kept (as before).
+     * phone without biometrics now: sign in again, chats kept (as before). A tap while an earlier
+     * attempt has no prompt on screen drops it and starts again (never ignored).
      */
     fun finishMigration() {
-        if (_busy.value) return
-        activity.lifecycleScope.launch {
-            val cipher = c.auth.migrationCipher()
-            val bio = runCatching { BiometricStatus.of(BiometricManager.from(activity).canAuthenticate(authenticators())) }.getOrDefault(BiometricStatus.UNAVAILABLE_NOW)
-            when (migrationStep(cipherAvailable = cipher != null, bio)) {
-                MigrationStep.SIGN_IN_AGAIN -> {
-                    c.auth.revokeStored(null)
-                    c.signOutKeepData("Sign in again — your chats are kept.", lk.codegen.risime.data.auth.SignOutTrigger.KEY_INVALIDATED)
-                    return@launch
-                }
-                // The sensor is busy (or needs an update) now: keep the old vault, ask again.
-                MigrationStep.TRY_AGAIN -> {
-                    Log.i("RisiMe", "RisiMe auth: migration: fingerprint unavailable now: old vault kept")
-                    _notice.value = lk.codegen.risime.ui.lock.FINGERPRINT_UNAVAILABLE
-                    return@launch
-                }
-                MigrationStep.PROMPT -> _notice.value = null
-            }
-            val oldCipher = cipher ?: return@launch
-            _busy.value = true
-            val authed = prompt(lk.codegen.risime.ui.auth.MIGRATION_TITLE, oldCipher)
-            if (authed != null) {
-                if (c.auth.migrate(authed) == lk.codegen.risime.data.auth.MigrationResult.Unreadable) {
-                    c.signOutKeepData("Sign in again — your chats are kept.", lk.codegen.risime.data.auth.SignOutTrigger.VAULT_UNREADABLE)
-                }
-            }
-            _busy.value = false
+        if (migrationJob?.isActive == true) {
+            if (authenticator.promptShowing()) return // the prompt is up, or waiting for the app to resume
+            Log.i("RisiMe", "RisiMe auth: migration prompt: the previous attempt has no prompt on screen: starting again")
+            migrationJob?.cancel()
         }
-    }
-
-    /** The optional fingerprint lock (decision 064): one BIOMETRIC_STRONG match unlocks the UI. */
-    fun unlockApp() {
-        if (_busy.value) return
-        activity.lifecycleScope.launch {
+        migrationJob = activity.lifecycleScope.launch {
             _busy.value = true
             try {
-                when (lk.codegen.risime.ui.lock.strongBiometricStatus(activity)) {
-                    BiometricStatus.AVAILABLE -> {
-                        _notice.value = null
-                        if (lk.codegen.risime.ui.lock.confirmFingerprint(activity, "Unlock RisiMe")) c.appLock.unlocked()
+                val cipher = c.auth.migrationCipher()
+                val bio = runCatching { BiometricStatus.of(BiometricManager.from(activity).canAuthenticate(authenticators())) }.getOrDefault(BiometricStatus.UNAVAILABLE_NOW)
+                when (migrationStep(cipherAvailable = cipher != null, bio)) {
+                    MigrationStep.SIGN_IN_AGAIN -> {
+                        c.auth.revokeStored(null)
+                        c.signOutKeepData("Sign in again — your chats are kept.", lk.codegen.risime.data.auth.SignOutTrigger.KEY_INVALIDATED)
+                        return@launch
                     }
-                    // No fingerprint left (removed, no sensor): the lock turns itself off.
-                    BiometricStatus.GONE -> c.appLock.onForeground()
-                    // Busy sensor, security update pending: the lock stays on; the user taps again.
-                    BiometricStatus.UNAVAILABLE_NOW -> _notice.value = lk.codegen.risime.ui.lock.FINGERPRINT_UNAVAILABLE
+                    // The sensor is busy (or needs an update) now: keep the old vault, ask again.
+                    MigrationStep.TRY_AGAIN -> {
+                        Log.i("RisiMe", "RisiMe auth: migration: fingerprint unavailable now: old vault kept")
+                        _notice.value = lk.codegen.risime.ui.lock.FINGERPRINT_UNAVAILABLE
+                        return@launch
+                    }
+                    MigrationStep.PROMPT -> _notice.value = null
+                }
+                val oldCipher = cipher ?: return@launch
+                val authed = prompt(lk.codegen.risime.ui.auth.MIGRATION_TITLE, oldCipher)
+                if (authed != null) {
+                    if (c.auth.migrate(authed) == lk.codegen.risime.data.auth.MigrationResult.Unreadable) {
+                        c.signOutKeepData("Sign in again — your chats are kept.", lk.codegen.risime.data.auth.SignOutTrigger.VAULT_UNREADABLE)
+                    }
                 }
             } finally {
                 _busy.value = false
@@ -213,6 +300,7 @@ class AuthUi(private val activity: FragmentActivity, private val c: AppContainer
 
     /** Migration screen → Sign out (keeps your chats): revoke if the prompt opens the old set, forget the tokens either way. */
     fun signOutLocked() {
+        migrationJob?.cancel()
         activity.lifecycleScope.launch {
             val cipher = c.auth.migrationCipher()
             val authed = cipher?.let { prompt("Sign out of RisiMe", it) }
@@ -220,6 +308,7 @@ class AuthUi(private val activity: FragmentActivity, private val c: AppContainer
             c.signOutKeepChats()
         }
     }
+
 
     fun dispose() {
         service.dispose()

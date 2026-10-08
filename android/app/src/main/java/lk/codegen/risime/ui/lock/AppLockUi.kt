@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
-import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,7 +21,8 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,10 +38,8 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import lk.codegen.risime.AppContainer
 import lk.codegen.risime.R
 import lk.codegen.risime.data.lock.AppLockSettings
@@ -50,7 +48,6 @@ import lk.codegen.risime.data.lock.AutoLock
 import lk.codegen.risime.ui.common.SectionHeader
 import lk.codegen.risime.ui.theme.Spacing
 import lk.codegen.risime.ui.theme.WordmarkStyle
-import kotlin.coroutines.resume
 
 const val FINGERPRINT_LOCK = "Fingerprint lock"
 const val UNLOCK_WITH_FINGERPRINT = "Unlock with fingerprint"
@@ -72,37 +69,27 @@ tailrec fun Context.findFragmentActivity(): FragmentActivity? = when (this) {
     else -> null
 }
 
-/** One BIOMETRIC_STRONG prompt with no CryptoObject (the lock gates UI, not keys). True when it matched. */
-suspend fun confirmFingerprint(activity: FragmentActivity, title: String, subtitle: String? = null): Boolean {
-    if (!strongBiometricAvailable(activity)) return false
-    val info = BiometricPrompt.PromptInfo.Builder()
-        .setTitle(title)
-        .apply { subtitle?.let { setSubtitle(it) } }
-        .setAllowedAuthenticators(BIOMETRIC_STRONG)
-        .setNegativeButtonText("Cancel")
-        .build()
-    return suspendCancellableCoroutine { cont ->
-        val p = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                if (cont.isActive) cont.resume(true)
-            }
-
-            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                if (cont.isActive) cont.resume(false)
-            }
-        })
-        runCatching { p.authenticate(info) }.onFailure { if (cont.isActive) cont.resume(false) }
-        cont.invokeOnCancellation { runCatching { p.cancelAuthentication() } }
-    }
-}
-
 /**
- * The locked screen (decision 064): the RisiMe logo and "Unlock with fingerprint"; prompts once on
- * show. [message]: e.g. [FINGERPRINT_UNAVAILABLE] while the sensor is busy (the lock stays on).
+ * The locked screen (decision 064): the RisiMe logo and "Unlock with fingerprint". It prompts by
+ * itself every time it is RESUMED ([onAutoPrompt]; never while the activity is stopped: the
+ * nightly.35 lock-out), and on every tap. [message]: the last error; [showPin]: the
+ * [USE_PHONE_PIN] button (after any error), so the user always has a way in.
  */
 @Composable
-fun AppLockScreen(onUnlock: () -> Unit, autoPrompt: Boolean = true, message: String? = null) {
-    LaunchedEffect(Unit) { if (autoPrompt) onUnlock() }
+fun AppLockScreen(
+    onUnlock: () -> Unit,
+    autoPrompt: Boolean = true,
+    message: String? = null,
+    onAutoPrompt: () -> Unit = onUnlock,
+    showPin: Boolean = false,
+    onUsePin: () -> Unit = {},
+) {
+    if (autoPrompt) {
+        LifecycleResumeEffect(Unit) {
+            onAutoPrompt()
+            onPauseOrDispose { }
+        }
+    }
     Column(
         Modifier.fillMaxSize().padding(horizontal = Spacing.xl, vertical = Spacing.xxl),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -113,6 +100,9 @@ fun AppLockScreen(onUnlock: () -> Unit, autoPrompt: Boolean = true, message: Str
         Text("RisiMe is locked", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         message?.let { Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) }
         Button(onClick = onUnlock, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(UNLOCK_WITH_FINGERPRINT) }
+        if (showPin) {
+            OutlinedButton(onClick = onUsePin, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(USE_PHONE_PIN) }
+        }
     }
 }
 
@@ -167,33 +157,31 @@ fun rememberLockAvailable(): Boolean {
     return remember { strongBiometricAvailable(ctx) }
 }
 
-/** The host: wires [FingerprintLockContent] to [AppContainer.appLock]; turning it on asks for one fingerprint. */
+/**
+ * The host: wires [FingerprintLockContent] to [AppContainer.appLock]; turning it on asks once
+ * (the same prompt rules as the lock screen: a fingerprint, or the phone's screen lock).
+ */
 @Composable
 fun FingerprintLockSection(c: AppContainer, available: Boolean, showHeader: Boolean = true) {
     if (!available) return
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val s by c.appLock.settings.collectAsState()
-    var busy by remember { mutableStateOf(false) }
+    val authUi = remember(ctx) { (ctx.findFragmentActivity() as? lk.codegen.risime.MainActivity)?.authUi }
+    val turnOnMessage = authUi?.lockTurnOn?.message?.collectAsState()
     if (showHeader) SectionHeader("Privacy")
     FingerprintLockContent(
         available = true,
         settings = s ?: AppLockSettings(),
         onToggle = { on ->
-            if (busy) return@FingerprintLockContent
-            scope.launch {
-                if (!on) {
-                    c.appLock.setEnabled(false)
-                    return@launch
-                }
-                val act = ctx.findFragmentActivity() ?: return@launch
-                busy = true
-                val ok = confirmFingerprint(act, "Turn on fingerprint lock", "Confirm your fingerprint")
-                busy = false
-                if (ok) c.appLock.setEnabled(true)
+            if (!on) {
+                scope.launch { c.appLock.setEnabled(false) }
+            } else {
+                authUi?.turnOnLock()
             }
         },
         onAutoLock = { a -> scope.launch { c.appLock.setAutoLock(a) } },
         onShowContent = { v -> scope.launch { c.appLock.setShowContent(v) } },
     )
+    turnOnMessage?.value?.takeIf { s?.enabled != true }?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
 }

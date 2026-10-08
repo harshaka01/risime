@@ -124,6 +124,11 @@ class AppLock(
     private val biometric: () -> BiometricStatus,
     private val elapsed: () -> Long,
     private val log: (String) -> Unit = {},
+    /**
+     * The lock can be unlocked on this phone now: a strong biometric or the phone's screen lock
+     * (PIN/pattern/password). False → the lock turns itself off (never a dead end).
+     */
+    private val canUnlock: () -> Boolean = { biometric() != BiometricStatus.GONE },
 ) {
     private val mutex = Mutex()
 
@@ -148,7 +153,7 @@ class AppLock(
             log("RisiMe lock: settings unreadable: ${e.message}")
             AppLockSettings()
         }
-        val s = offIfNoBiometrics(read)
+        val s = offIfNoWayToUnlock(read)
         _settings.value = s
         _locked.value = AppLockPolicy.lockedAtStart(s, stamp.get(), elapsed())
     }
@@ -171,7 +176,7 @@ class AppLock(
         checkOnReturn()
         load()
         mutex.withLock {
-            val s = offIfNoBiometrics(_settings.value ?: return@withLock)
+            val s = offIfNoWayToUnlock(_settings.value ?: return@withLock)
             _settings.value = s
             if (_locked.value != true && AppLockPolicy.lockedOnReturn(s, stamp.get(), elapsed())) _locked.value = true
             if (_locked.value != true) stamp.set(null)
@@ -184,9 +189,27 @@ class AppLock(
         stamp.set(null)
     }
 
-    /** Turned on after one fingerprint confirmation (the caller ran the prompt); off at once. */
+    /**
+     * Turned on after one confirmation (the caller ran the prompt; the Settings row exists only with
+     * a fingerprint enrolled); off at once. The only way the lock is ever turned on (besides the
+     * debug-build device-test hook [debugSet]); nothing else (updates, migration) enables it.
+     */
     suspend fun setEnabled(on: Boolean) = update { it.copy(enabled = on && biometric() == BiometricStatus.AVAILABLE) }.also {
-        if (!on) unlocked()
+        // A stamp from the confirmation (e.g. the screen-lock activity) must not lock right after turning on.
+        if (on) stamp.set(null) else unlocked()
+    }
+
+    /** Debug builds only (scripts/applock-device-test): set the lock without the fingerprint check (Redroid has no sensor). */
+    suspend fun debugSet(enabled: Boolean, autoLock: AutoLock) {
+        update { it.copy(enabled = enabled, autoLock = autoLock) }
+        stamp.set(null)
+        if (!enabled) unlocked()
+    }
+
+    /** The lock screen found neither a fingerprint nor a screen lock: turn the lock off now and open the app. */
+    suspend fun offIfNoWayToUnlockNow() {
+        load()
+        mutex.withLock { _settings.value = offIfNoWayToUnlock(_settings.value ?: return@withLock) }
     }
 
     suspend fun setAutoLock(a: AutoLock) = update { it.copy(autoLock = a) }
@@ -219,17 +242,17 @@ class AppLock(
         }
     }
 
-    /** Only a removed fingerprint (none enrolled) or no sensor at all turns the lock off; a sensor busy now keeps it on. */
-    private suspend fun offIfNoBiometrics(s: AppLockSettings): AppLockSettings {
+    /**
+     * The lock stays on while it can be unlocked: a fingerprint, or the phone's screen lock (a busy
+     * sensor too). Only when neither exists is it turned off (never a dead end, never a sign-out).
+     */
+    private suspend fun offIfNoWayToUnlock(s: AppLockSettings): AppLockSettings {
         if (!s.enabled) return s
-        when (val b = biometric()) {
-            BiometricStatus.AVAILABLE -> return s
-            BiometricStatus.UNAVAILABLE_NOW -> {
-                log("RisiMe lock: fingerprint unavailable now: the lock stays on")
-                return s
-            }
-            BiometricStatus.GONE -> log("RisiMe lock: fingerprint no longer available ($b): the app lock is turned off")
+        if (runCatching { canUnlock() }.getOrDefault(true)) {
+            if (runCatching { biometric() }.getOrNull() == BiometricStatus.UNAVAILABLE_NOW) log("RisiMe lock: fingerprint unavailable now: the lock stays on")
+            return s
         }
+        log("RisiMe lock: no fingerprint and no screen lock: the app lock is turned off")
         val off = s.copy(enabled = false)
         runCatching { store.save(off) }
         _locked.value = false

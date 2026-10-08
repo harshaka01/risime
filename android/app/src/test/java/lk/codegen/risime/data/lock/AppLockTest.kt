@@ -1,5 +1,7 @@
 package lk.codegen.risime.data.lock
 
+import androidx.datastore.preferences.core.edit
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.runTest
 import lk.codegen.risime.data.auth.MigrationStep
 import lk.codegen.risime.data.auth.migrationStep
@@ -230,5 +232,96 @@ class AppLockTest {
         assertFalse(AppLockPolicy.hideNotificationContent(AppLockSettings(enabled = false, showContent = false)))
         assertTrue(AppLockPolicy.hideNotificationContent(AppLockSettings(enabled = true, showContent = false)))
         assertFalse(AppLockPolicy.hideNotificationContent(null))
+    }
+
+    // ---- The nightly.35 lock-out hotfix: never a dead end ----
+
+    @Test fun aScreenLockKeepsTheLockUsableWhenTheFingerprintIsGone() = runTest {
+        val store = Store(AppLockSettings(enabled = true))
+        bio = BiometricStatus.GONE
+        val l = AppLock(store, Stamp(), { bio }, { now }, { logs += it }, canUnlock = { true })
+        l.load()
+        assertEquals(true, l.locked.value) // the phone's PIN/pattern unlocks it
+        assertTrue(store.s.enabled)
+    }
+
+    @Test fun noFingerprintAndNoScreenLockTurnsTheLockOffAndOpensTheApp() = runTest {
+        val store = Store(AppLockSettings(enabled = true))
+        var unlockable = true
+        val l = AppLock(store, Stamp(), { bio }, { now }, { logs += it }, canUnlock = { unlockable })
+        l.load()
+        assertEquals(true, l.locked.value)
+        unlockable = false // the screen lock was removed while RisiMe was locked
+        l.offIfNoWayToUnlockNow()
+        assertEquals(false, l.locked.value)
+        assertFalse(store.s.enabled)
+        assertTrue(logs.any { it.contains("no fingerprint and no screen lock") })
+    }
+
+    @Test fun turningOnClearsTheBackgroundStamp() = runTest {
+        val stamp = Stamp(now - 5_000) // e.g. the screen-lock activity covered RisiMe while confirming
+        val l = lock(Store(), stamp)
+        l.load()
+        l.setEnabled(true)
+        assertNull(stamp.v)
+        l.checkOnReturn()
+        assertEquals(false, l.locked.value) // not locked right after turning it on
+    }
+
+    /** Settings written by 0.2.0-nightly.35 (same DataStore keys) with the lock on: locked at start, and an unlock lets the user in. */
+    @Test fun nightly35SettingsWithTheLockOnLoadAndUnlock() = runTest {
+        val dir = java.nio.file.Files.createTempDirectory("applock").toFile()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+        try {
+            val prefs = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(scope = scope) { java.io.File(dir, "risime.preferences_pb") }
+            prefs.edit {
+                it[androidx.datastore.preferences.core.booleanPreferencesKey("app_lock_enabled")] = true
+                it[androidx.datastore.preferences.core.longPreferencesKey("app_lock_after_ms")] = 0L
+                it[androidx.datastore.preferences.core.booleanPreferencesKey("app_lock_show_content")] = true
+            }
+            val l = AppLock(DataStoreAppLockStore(prefs), Stamp(), { bio }, { now }, { logs += it }, canUnlock = { true })
+            l.load()
+            assertEquals(AppLockSettings(true, AutoLock.IMMEDIATELY, true), l.settings.value)
+            assertEquals(true, l.locked.value)
+            l.unlocked() // what the prompt's success does
+            assertEquals(false, l.locked.value)
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    /** The lock exists only if the user turned it on: an empty store (fresh install, update, migration) is off. */
+    @Test fun neverEnabledByDefault() = runTest {
+        val dir = java.nio.file.Files.createTempDirectory("applock").toFile()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+        try {
+            val prefs = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(scope = scope) { java.io.File(dir, "risime.preferences_pb") }
+            val l = AppLock(DataStoreAppLockStore(prefs), Stamp(), { bio }, { now }, { logs += it })
+            l.load()
+            assertFalse(l.settings.value!!.enabled)
+            assertEquals(false, l.locked.value)
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * No code path turns the lock on except the Settings toggle (AppLock.setEnabled after the prompt)
+     * and the debug-build device-test receiver: not the migration, sign-in, updates or a restore.
+     */
+    @Test fun onlyTheSettingsToggleEnablesTheLock() {
+        val root = listOf(java.io.File("src/main/java"), java.io.File("app/src/main/java")).first { it.isDirectory }
+        val enabling = Regex("""setEnabled\(\s*true|debugSet\(|enabled\s*=\s*true|\[ENABLED]\s*=\s*true""")
+        val hits = root.walkTopDown().filter { it.isFile && it.extension == "kt" && it.path.contains("/lock/") || it.isFile && it.name in setOf("AppContainer.kt", "AuthUi.kt") }
+            .flatMap { f -> f.readLines().mapIndexedNotNull { i, line -> if (enabling.containsMatchIn(line) && !line.trimStart().startsWith("*") && !line.trimStart().startsWith("//")) "${f.name}:${i + 1}" else null } }
+            .map { it.substringBefore(":") }.toSet()
+        // AppLock.kt: setEnabled/debugSet themselves; AuthUi: the turn-on prompt's success; AppContainer: the debug receiver (BuildConfig.DEBUG only).
+        assertEquals(setOf("AppLock.kt", "AuthUi.kt", "AppContainer.kt"), hits)
+        val container = java.io.File(root, "lk/codegen/risime/AppContainer.kt").readText()
+        assertTrue(container.contains("if (BuildConfig.DEBUG) registerDebugAppLock(context)"))
+        val migration = java.io.File(root, "lk/codegen/risime/data/auth").walkTopDown().filter { it.isFile }.joinToString("\n") { it.readText() }
+        assertFalse(Regex("""appLock\.(set|debug)""").containsMatchIn(migration))
     }
 }

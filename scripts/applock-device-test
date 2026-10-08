@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# App lock never traps the user (P0, 0.2.0-nightly.35: "RisiMe is locked" and "Unlock with fingerprint"
+# did nothing). The REAL debug app on spark2 in one redroid container (native arm64 Android 14,
+# decision 045), signed in through the login UI (dev OTP) against a temp server:
+#   scripts/applock-device-test [--apk app-debug.apk] [--keep]        (run it under `timeout 900`)
+#
+#  1. A screen-lock PIN (`locksettings set-pin 1234`; Redroid has no fingerprint sensor) and the lock on
+#     with "Automatically lock: Immediately" (the debug build's shell-only APP_LOCK broadcast: the
+#     Settings row needs a fingerprint).
+#  2. Home, 2 s (the lock engages while the activity is STOPPED: the nightly.35 case), reopen → the lock
+#     screen and the system credential prompt appear by themselves; the PIN → the chats.
+#  3. Again, then Back on the prompt (cancel) → "Unlock with fingerprint" → the prompt appears again; PIN → chats.
+#  4. `locksettings clear` (no fingerprint, no screen lock) → reopen → no lock at all, the chats.
+#  Never a sign-out, never a crash. Prints "APPLOCK PASS|FAIL <step>" and "APPLOCK OK" at the end;
+#  logs in ~/risime-logs/applock$SUF/.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+PKG=lk.codegen.risime.debug
+CLS=lk.codegen.risime
+SUF="${APPLOCK_INSTANCE:-}"; PORT="${APPLOCK_PORT:-4541}"
+APK=""; KEEP=0
+while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
+[ -f "$APK" ] || { echo "no APK at $APK (cd android && ./gradlew assembleDebug)"; exit 2; }
+PATH="$("$REPO/scripts/android-target" adb):$PATH"
+RI="${APPLOCK_REDROID:--al1}"; RP="${APPLOCK_REDROID_PORT:-5841}"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-applock.XXXXXX")"
+LOGS="$HOME/risime-logs/applock$SUF"; mkdir -p "$LOGS"; rm -f "$LOGS"/*.txt "$LOGS"/*.log "$LOGS"/*.png "$LOGS"/*.xml 2>/dev/null || true
+export RISIME_DEV_DB="risime_applock$SUF" RISIME_DEV_KEYSPACE="risime_applock$SUF" ERL_EPMD_ADDRESS=127.0.0.1
+export MIX_BUILD_PATH="$REPO/server/_build/applock$SUF" RISIME_CODE_RELOADER=false
+PIN=1234
+S=""
+pass() { echo "APPLOCK PASS $*"; }
+fail() { echo "APPLOCK FAIL $*"; diag; exit 1; }
+diag() {
+  [ -n "$S" ] || return 0
+  A exec-out screencap -p > "$LOGS/screen.png" 2>/dev/null || true
+  A logcat -d > "$LOGS/logcat.txt" 2>/dev/null || true
+  cp "$WORK/ui.xml" "$LOGS/ui.xml" 2>/dev/null || true
+  echo "    diagnostics in $LOGS"
+}
+cleanup() {
+  [ -n "$S" ] && timeout 30 adb -s "$S" logcat -d -s RisiMe:* > "$LOGS/risime.txt" 2>/dev/null || true
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  tmux kill-session -t "risime-applock$SUF" 2>/dev/null || true
+  [ "$KEEP" = 0 ] && { REDROID_INSTANCE="$RI" REDROID_PORT="$RP" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true; }
+  rm -rf -- "${WORK:?}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+A() { adb -s "$S" "$@"; }
+
+# ---------------------------------------------------------------- server
+ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT busy"; exit 1; }
+cat > "$WORK/fixtures.exs" <<'EXS'
+{:ok, _} = RisiMe.Accounts.allow(%{phone: "+94770000991", email: "applock91@example.com", display_name: "ZZ Lock A", company: "CodeGen"})
+IO.puts("applock: setup ok")
+EXS
+echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB)"
+(cd server && { $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true; } && $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
+  || { echo "could not create/migrate the applock store"; exit 1; }
+(cd server && $M mix risime.attestation.gen "$WORK/attest.jwk" >/dev/null 2>&1) || true
+[ -f "$WORK/attest.jwk" ] || { echo "no attestation key"; exit 1; }
+tmux new -d -s "risime-applock$SUF" "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
+  PORT=$PORT PHX_SERVER=true DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
+  ATTESTATION_KEY_FILE='$WORK/attest.jwk' $M mix run --no-halt > '$WORK/server.log' 2>&1"
+for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't start"; tail -20 "$WORK/server.log"; exit 1; }
+[ "$(cd server && $M mix run "$WORK/fixtures.exs" 2>/dev/null | grep '^applock:' || true)" = "applock: setup ok" ] || { echo "fixture: setup"; exit 1; }
+otp() { grep -a "\[DEV OTP\] $1:" "$WORK/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true; }
+
+# ---------------------------------------------------------------- device
+echo "==> redroid $RI:$RP"
+S="$(REDROID_INSTANCE="$RI" REDROID_PORT="$RP" "$REPO/scripts/android-target" start)"
+A uninstall "$PKG" >/dev/null 2>&1 || true
+A install "$APK" >/dev/null
+A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+# Redroid's IME can hang system_server while binding (see docs/status/android.md); `input text` still types.
+A shell pm disable-user com.android.inputmethod.latin >/dev/null 2>&1 || true
+A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+A logcat -G 16M >/dev/null 2>&1 || true
+A logcat -c || true
+
+# ---- UI helpers (as in scripts/push-device-test)
+dump() { A shell rm -f /sdcard/ui.xml >/dev/null 2>&1; A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui.xml" 2>/dev/null || : > "$WORK/ui.xml"; }
+has() { dump; grep -qF -- "$1" "$WORK/ui.xml"; }
+wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "    timeout waiting for: $1"; return 1; }
+tap() {
+  dump
+  local b; b="$(python3 -I - "$WORK/ui.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+want = sys.argv[2]
+for n in ET.parse(sys.argv[1]).iter('node'):
+    if n.get('text') == want or n.get('content-desc') == want or (want.endswith('*') and (n.get('text') or '').startswith(want[:-1])):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+)"
+  [ -n "$b" ] || { echo "    no UI node: $1"; return 1; }
+  A shell input tap $b
+}
+clear_field() { A shell "for i in \$(seq 1 80); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true; }
+hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; [[ "$st" == *"mInputShown=true"* ]] && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
+type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
+dismiss_prompts() { has "Not now" && { tap "Not now" || true; }; has "Later" && { tap "Later" || true; }; true; }
+rl() { A logcat -d -s RisiMe:* 2>/dev/null | grep -a "$1" || true; }
+count() { rl "$1" | wc -l; }
+on_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui.xml"; }
+wait_list() { for _ in $(seq 1 "${1:-30}"); do on_list && return 0; sleep 1; done; return 1; }
+open_app() { A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; }
+# The system prompt (BiometricPrompt in SystemUI) asking for the PIN: our title is on it.
+wait_prompt() {  # $1 = how many "prompt shown" lines to expect at least
+  for _ in $(seq 1 20); do
+    if [ "$(count 'RisiMe lock: prompt shown')" -ge "$1" ] && has "Unlock RisiMe"; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+enter_pin() { A shell input text "$PIN"; sleep 0.3; A shell input keyevent KEYCODE_ENTER; }
+no_signout() { [ -z "$(rl 'RisiMe auth: sign-out trigger=')" ] || fail "signed out: $(rl 'RisiMe auth: sign-out trigger=')"; }
+background() { A shell input keyevent KEYCODE_HOME; sleep 2; }
+
+# ---------------------------------------------------------------- sign in (dev OTP)
+open_app
+wait_for "Server:" 40 || fail "no login screen"
+tap "Server:*" || fail "server picker"; sleep 1
+tap "Server URL" || tap "http://*" || tap "https://*" || fail "server URL field"; sleep 0.5
+clear_field; A shell input text "http://127.0.0.1:$PORT"; sleep 0.5; hide_keyboard
+if ! tap "Use this server"; then tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; fi
+sleep 2
+for _ in $(seq 1 30); do has "Phone number" && break; has "Developer sign-in (OTP)" && tap "Developer sign-in (OTP)"; sleep 1; done
+wait_for "Phone number" 5 || fail "no OTP form"
+type_into "Phone number" "+94770000991"; type_into "Work email" "applock91@example.com"; hide_keyboard; tap "Send code" || fail "Send code"
+wait_for "6-digit code" 30 || fail "no code screen"
+CODE=""; for _ in $(seq 1 20); do CODE="$(otp "+94770000991")"; [ -n "$CODE" ] && break; sleep 1; done
+[ -n "$CODE" ] || fail "no dev OTP"
+type_into "6-digit code" "$CODE"; sleep 1; has "Verify" && tap "Verify" || true
+wait_list 40 || fail "no chat list after sign-in"
+dismiss_prompts
+for t in "Unlock with fingerprint" "RisiMe is locked"; do has "$t" && fail "'$t' before the lock was turned on (it is off by default)"; done
+pass "signed in through the login UI; no lock by default"
+
+# ---------------------------------------------------------------- 1. PIN + lock on (Immediately)
+A shell locksettings set-pin "$PIN" >/dev/null || fail "locksettings set-pin"
+A shell "am broadcast -a lk.codegen.risime.debug.APP_LOCK -p $PKG --ez enabled true --el auto_lock_ms 0" >/dev/null
+for _ in $(seq 1 10); do [ -n "$(rl 'RisiMe debug: app lock enabled=true')" ] && break; sleep 1; done
+[ -n "$(rl 'RisiMe debug: app lock enabled=true')" ] || fail "the debug APP_LOCK broadcast wasn't handled"
+pass "screen-lock PIN set; app lock on, Immediately"
+
+# ---------------------------------------------------------------- 2. background → reopen → prompt by itself → PIN
+background
+open_app
+wait_prompt 1 || fail "reopen: no system prompt appeared by itself (the nightly.35 lock-out)"
+pass "reopen: the lock engaged while stopped; the credential prompt appeared by itself once resumed"
+enter_pin
+wait_list 30 || fail "PIN entered: no chat list"
+[ -n "$(rl 'RisiMe lock: auth succeeded')" ] || fail "no 'auth succeeded' log"
+pass "PIN → chats"
+
+# ---------------------------------------------------------------- 3. cancel → tap → prompt again → PIN
+background
+open_app
+n="$(count 'RisiMe lock: prompt shown')"
+wait_prompt "$((n > 1 ? n : 2))" || fail "second reopen: no prompt by itself"
+A shell input keyevent KEYCODE_BACK
+wait_for "Unlock with fingerprint" 15 || fail "cancel: the lock screen didn't come back"
+for _ in $(seq 1 10); do [ -n "$(rl 'RisiMe lock: auth error code=')" ] && break; sleep 1; done
+[ -n "$(rl 'RisiMe lock: auth error code=')" ] || fail "cancel: no 'auth error' log"
+has "Unlock cancelled" || fail "cancel: no message under the button"
+has "Use phone PIN/pattern" || fail "cancel: no 'Use phone PIN/pattern' button"
+m="$(count 'RisiMe lock: prompt shown')"
+tap "Unlock with fingerprint" || fail "tap Unlock"
+wait_prompt "$((m + 1))" || fail "tap after cancel: no prompt (the tap was ignored)"
+pass "cancel → message + PIN button; the tap prompts again"
+enter_pin
+wait_list 30 || fail "PIN after the retry: no chat list"
+pass "PIN → chats"
+
+# ---------------------------------------------------------------- 4. no screen lock at all → no lock
+A shell locksettings clear --old "$PIN" >/dev/null || fail "locksettings clear"
+background
+open_app
+sleep 2
+wait_list 30 || fail "no screen lock: the app didn't open (dead end)"
+has "RisiMe is locked" && fail "no screen lock: still locked"
+[ -n "$(rl 'no fingerprint and no screen lock')" ] || fail "no 'turned off' log"
+pass "no fingerprint and no screen lock → the lock turned itself off; chats"
+
+# ---------------------------------------------------------------- never a sign-out or a crash
+no_signout
+A logcat -d 2>/dev/null | "$REPO/scripts/logcat-gate" "applock" || fail "crashed or touched the database on the main thread"
+pass "no sign-out, no crash"
+echo "APPLOCK OK"
