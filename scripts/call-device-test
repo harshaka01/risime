@@ -165,7 +165,15 @@ sign_in() {  # $1 phone, $2 email
   wait_for "Add friend" 40 || return 1
   dismiss_prompts
 }
-open_chat() { A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1; dismiss_prompts; wait_for "$1" 40 || return 1; tap "$1"; sleep 2; }
+# The chat list shows its top bar's "Refresh friends" icon. Since GO UX (nightly.27) tapping the
+# name inside an open chat opens Chat info, so press Back to the list first (at most 3 times).
+on_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui-$DEV.xml"; }
+open_chat() {
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1; dismiss_prompts
+  for _ in 1 2 3; do on_list && break; A shell input keyevent KEYCODE_BACK; sleep 1; done
+  on_list || { A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2; dismiss_prompts; }
+  wait_for "$1" 40 || return 1; tap "$1"; sleep 2
+}
 # The real answer path: open the notification shade and tap the CallStyle notification's Answer
 # action (its PendingIntent starts CallActivity with ACTION_ANSWER; the activity isn't exported).
 answer_intent() {
