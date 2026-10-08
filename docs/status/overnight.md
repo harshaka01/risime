@@ -47,6 +47,18 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.38 (live 2026-10-08 ~18:30 UTC, not required): Risi stage 1 in the release, still OFF
+- **What's in, all hidden (TABS=off, RISI=off):**
+  - S5 (Risi's agent tree);
+  - S6/S7 (the risi-l1 router, learning log, commitments ✓, reminders, escalation, digest, @Risi
+    ask/summarise/report, learn and delete);
+  - A6 (Risi cards, @Risi chip, "What Risi knows about me", My promises, tz, backup schema 2);
+  - crypto backup schema 2.
+  The release builds Risi's NIF (`--prod`).
+- **Gate:** all PASS.
+- **Next:** nightly.39 with S8 (`/risi/*` REST) and the R2 canary gate. Then the pilot env gets the
+  keys and `TABS=on RISI=on`, only after `RISI CANARY OK`.
+
 ## v0.2.0-nightly.37 (live 2026-10-08 ~17:25 UTC, not required): call records, locked chats, two-tab groundwork (off)
 - **Call records:**
   - chat rows for every outcome;
