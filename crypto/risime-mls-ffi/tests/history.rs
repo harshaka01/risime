@@ -179,6 +179,10 @@ fn contract_vectors_pass_through_the_ffi() {
 fn rsk_and_k_are_not_reachable_from_the_ffi() {
     let src = include_str!("../src/lib.rs");
     let section = &src[src.find("// History sharing (contract v1.15").unwrap()..];
+    // Up to the next section (group call keys, v1.19, checked in tests/calls.rs).
+    let section = &section[..section
+        .find("// Group call frame keys")
+        .unwrap_or(section.len())];
     let mut exported: Vec<&str> = section
         .lines()
         .filter_map(|l| {

@@ -31,6 +31,7 @@
 pub mod aad;
 mod admins;
 pub mod attestation;
+pub mod call;
 pub mod group;
 pub mod history;
 pub mod media;
@@ -50,6 +51,7 @@ pub use aad::{
     decode_history_aad, encode_delete_aad, encode_history_aad, is_history_aad,
 };
 pub use attestation::{CredentialValidator, DeviceId, TestAttestor, TrustAnchors};
+pub use call::{CALL_EXPORTER_LABEL, CallFrameKey, CallFrameKeys, EXPORTER_LABELS};
 pub use group::{
     CatchUp, GroupCommit, MAX_COMMIT_BYTES, MAX_GROUP_LEAVES, MAX_GROUP_USERS, MAX_INLINE_BYTES,
     MAX_WELCOME_BYTES, key_package_supports_groups,

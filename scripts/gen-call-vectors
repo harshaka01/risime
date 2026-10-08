@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""Writes the group-call frame-key test vectors (PROTOCOL §20.6, v1.19) to stdout, or checks them.
+
+An independent Python reference for contract/v1/call_vectors.json, written from PROTOCOL §20.6 and
+RFC 9420 §5.1.3/§8/§8.5 only (not from the Rust core). The crypto core's generator (`cargo test -p
+risime-mls call_vectors_write -- --ignored`) uses the same case list and seeded inputs, so both must
+produce the same JSON value; `--check` also compares the committed file byte for byte.
+
+- MLS-Exporter(Label, Context, Length) = ExpandWithLabel(DeriveSecret(exporter_secret, Label),
+  "exported", Hash(Context), Length) for ciphersuite 0x0001 (SHA-256), with ExpandWithLabel's
+  KDFLabel = uint16 length || opaque label<V> ("MLS 1.0 " + Label) || opaque context<V> and <V>
+  the RFC 9000 variable-length integer prefix (RFC 9420 §2.1.2).
+- call_secret = MLS-Exporter("risime-call-v1", call_id as its 16 raw bytes, 32).
+- frame_key(identity) = HKDF-Expand-SHA256(call_secret, "risime-call-v1 frame" || 0x00 ||
+  identity UTF-8, 32); key_index = epoch mod 16.
+
+The exporter cases use the fixed RFC 9420 test group: the cipher_suite 1 entry of the MLS working
+group's key-schedule test vectors (github.com/mlswg/mls-implementations, test-vectors/
+key-schedule.json, file SHA-256 05aa9a68…6d97a7). Each epoch's own RFC exporter vector is checked
+first, so the exporter here is known-good before it derives a call_secret.
+
+Needs python3-cryptography (the system package on spark2).
+
+Usage: scripts/gen-call-vectors > contract/v1/call_vectors.json
+       scripts/gen-call-vectors --check     # verify every case and compare with the committed file
+"""
+import base64
+import hashlib
+import json
+import os
+import sys
+import uuid
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
+
+LABEL = "risime-call-v1"
+REGISTERED_LABELS = [LABEL]
+EXPORTER_LENGTH = 32
+FRAME_INFO_PREFIX = b"risime-call-v1 frame"
+KEY_RING = 16
+
+# RFC 9420 key-schedule test vectors, cipher_suite 1: per epoch the exporter_secret and the
+# epoch's own exporter check. As in the upstream file (and OpenMLS's KAT runner), the exporter
+# `label` is used as text (its ASCII bytes) and `context` is hex-decoded.
+RFC_GROUP_ID = "a897b53575b4dd35fed4466e4e714bfa949eaa72e616a9c68a47b39cb7a60d2e"
+RFC_EPOCHS = [
+    ("5a097e149f2a375d0b9e1d1f4dc3a9c6c1788df888e5441f41a8791f4dc56cea",
+     "9ba13d54ecdec7cbefcb47b4268d7b1990fabc6d6e67681e167959389d84e4e4",
+     "884f1af892ab002f5be4c5d5081ade9e0e6418c6ea7a9a92e90534f19dcef785",
+     "dbce4e25e59ab4dfa6f6200f113ed08393cf6e7286d024811141c6a4dd11c0cb"),
+    ("047d983048b132b79ea4e2e578afd02a0f4717d166cefe46e43e2e965b5c9f4e",
+     "ed66d7f1da52171ac9448f0f902edcfefa4ebbda843a43bd3d173cb7c5b4331e",
+     "02dc18fc5bc4d9093cf41fa0053521653775b123784d40ac7d46cc5a72ef4d46",
+     "a702c3e70a89c06eae51aec3675918a4ee7698ae88c596dfb7abd1ed3a9ecf5e"),
+    ("69cb23d2ff46b36c466ad48911fd56ee108ab8d4ec1c91028622e9a93c067710",
+     "06f549e9bf966d7b7135b6ef6d4e3032a1c720adf0281c3ef1c0beac0da88621",
+     "b0fa7e3f0f2199278a55267d551d43946bbfc6d847632867dd86abd1217982a5",
+     "07dd60ff9acb0278f80cae4c6f4ee69c745481f5bf967b21d237c18e48d78b4b"),
+    ("9f2a260a99b352c9c9c90f081050380c9e8b5f400b41461f4e40690a2f111b03",
+     "b76193af29eadc6e16c66493e2a4ef8219aad79986b6d4911493741ec1e666cc",
+     "941db06073e76050679d33cf1f0ec33de3e5a2cd00cb738b54c0dd90de251cdd",
+     "d379ee776bbaadb55b2bf74ffb4e53b96307611a115b6a67f165192b6c481bce"),
+    ("7e6f8cedec75018d137c1d08444c8695e52fe73efe0650f928007dcbcfa48b2b",
+     "cc9c4b25b0bd69250b6e4f9908d1b170bf62fe8cc11ad36d33e602324ac0662a",
+     "a0f762fc82d5e421d8fdf8a317b2fd463008c625bf19db7fbfa4ac778b5106a2",
+     "f4698636cc032717011a186a14a42cc49e95aeeb4d9bc8ab82295fc1543735ac"),
+]
+
+CALL_A = "4b7e1c1e-3c0e-4b55-9f43-0b8f8a1f2d10"
+CALL_B = "9a3f6c2d-7e1b-4c58-a0d4-3b2e1f0c9d87"
+U1 = "7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3/c0a80101-0000-4000-8000-000000000001"
+U2 = "0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e/c0a80101-0000-4000-8000-000000000002"
+U3 = "0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e/c0a80101-0000-4000-8000-000000000003"
+U4 = "5d2c8f1e-4a6b-4c3d-9e8f-7a6b5c4d3e2f/c0a80101-0000-4000-8000-000000000004"
+
+
+# ---------------------------------------------------------------- primitives
+
+def hkdf_expand(prk, info, n):
+    return HKDFExpand(algorithm=hashes.SHA256(), length=n, info=info).derive(prk)
+
+
+def varint(n):
+    """RFC 9000 §16 variable-length integer, as RFC 9420 §2.1.2 uses for <V> vector lengths."""
+    if n < 1 << 6:
+        return bytes([n])
+    if n < 1 << 14:
+        return (n | 0x4000).to_bytes(2, "big")
+    if n < 1 << 30:
+        return (n | 0x80000000).to_bytes(4, "big")
+    raise ValueError("too long")
+
+
+def expand_with_label(secret, label, context, n):
+    full = b"MLS 1.0 " + label
+    kdf_label = n.to_bytes(2, "big") + varint(len(full)) + full + varint(len(context)) + context
+    return hkdf_expand(secret, kdf_label, n)
+
+
+def mls_exporter(exporter_secret, label, context, n):
+    derived = expand_with_label(exporter_secret, label, b"", 32)  # DeriveSecret(S, L), Nh = 32
+    return expand_with_label(derived, b"exported", hashlib.sha256(context).digest(), n)
+
+
+def export_allowed(label, length):
+    """The core's exporter registry (§10.3, §20.6): registered labels only, length 32 only."""
+    return label in REGISTERED_LABELS and length == EXPORTER_LENGTH
+
+
+def call_id_bytes(call_id):
+    u = uuid.UUID(call_id)
+    assert str(u) == call_id.lower()
+    return u.bytes
+
+
+def call_secret(exporter_secret, call_id):
+    assert export_allowed(LABEL, EXPORTER_LENGTH)
+    return mls_exporter(exporter_secret, LABEL.encode(), call_id_bytes(call_id), EXPORTER_LENGTH)
+
+
+def frame_info(identity):
+    return FRAME_INFO_PREFIX + b"\x00" + identity.encode("utf-8")
+
+
+def frame_key(secret, identity):
+    return hkdf_expand(secret, frame_info(identity), 32)
+
+
+def seeded(label, n):
+    """SHA-256 in counter mode over a label (test-only deterministic bytes)."""
+    out, ctr = b"", 0
+    while len(out) < n:
+        out += hashlib.sha256(label.encode() + ctr.to_bytes(8, "big")).digest()
+        ctr += 1
+    return out[:n]
+
+
+# ---------------------------------------------------------------- cases
+
+def keys_json(secret, identities):
+    out = []
+    for ident in identities:
+        k = frame_key(secret, ident)
+        out.append({"identity": ident, "info": frame_info(ident).hex(), "frame_key": k.hex(),
+                    "frame_key_base64": base64.b64encode(k).decode()})
+    return out
+
+
+def frame_case(name, call_id, epoch, identities):
+    s = seeded(f"risime-call-vector call_secret {name}", 32)
+    return {"name": name, "call_id": call_id, "epoch": epoch, "key_index": epoch % KEY_RING,
+            "call_secret": s.hex(), "keys": keys_json(s, identities)}
+
+
+def exporter_case(epoch, call_id, identities):
+    es, rlabel, rctx, rsecret = RFC_EPOCHS[epoch]
+    es = bytes.fromhex(es)
+    got = mls_exporter(es, rlabel.encode(), bytes.fromhex(rctx), 32)
+    assert got.hex() == rsecret, f"RFC 9420 exporter vector, epoch {epoch}"
+    s = call_secret(es, call_id)
+    return {"name": f"rfc9420_epoch_{epoch}" + ("" if call_id == CALL_A else "_other_call"),
+            "epoch": epoch, "key_index": epoch % KEY_RING, "exporter_secret": es.hex(),
+            "rfc_exporter": {"label": rlabel, "context": rctx, "length": 32, "secret": rsecret},
+            "call_id": call_id, "context": call_id_bytes(call_id).hex(), "call_secret": s.hex(),
+            "keys": keys_json(s, identities)}
+
+
+def mismatch(name, why, secret, identity, info):
+    good = frame_key(secret, identity)
+    bad = hkdf_expand(secret, info, 32)
+    assert bad != good and info != frame_info(identity)
+    return {"name": name, "why": why, "kind": "frame_key", "call_secret": secret.hex(),
+            "identity": identity, "info": info.hex(), "key": bad.hex(), "correct_key": good.hex(),
+            "expect": "mismatch"}
+
+
+def build():
+    frames = [
+        frame_case("voice_three_members", CALL_A, 1, [U1, U2, U3]),
+        frame_case("single_member", CALL_A, 2, [U1]),
+        frame_case("epoch_15", CALL_A, 15, [U1, U2]),
+        frame_case("epoch_16_wraps_to_0", CALL_A, 16, [U1, U2]),
+        frame_case("epoch_17", CALL_B, 17, [U1, U2]),
+        frame_case("large_epoch", CALL_B, 4_294_967_311, [U1, U4]),
+        frame_case("non_ascii_identity", CALL_B, 3, ["usér-ü/dévice-ß", U2]),
+        frame_case("video_eight_members", CALL_B, 40, [
+            U1, U2, U3, U4,
+            "5d2c8f1e-4a6b-4c3d-9e8f-7a6b5c4d3e2f/c0a80101-0000-4000-8000-000000000005",
+            "6e3d9a2f-5b7c-4d4e-af90-8b7c6d5e4f30/c0a80101-0000-4000-8000-000000000006",
+            "7f4eab30-6c8d-4e5f-b0a1-9c8d7e6f5041/c0a80101-0000-4000-8000-000000000007",
+            "8a5fbc41-7d9e-4f60-81b2-ad9e8f706152/c0a80101-0000-4000-8000-000000000008"]),
+    ]
+    exporter = [exporter_case(e, CALL_A, [U1, U2]) for e in range(len(RFC_EPOCHS))]
+    exporter.append(exporter_case(4, CALL_B, [U1, U2]))
+
+    base = bytes.fromhex(frames[0]["call_secret"])
+    negative = [
+        {"name": "unregistered_label", "why": "a label outside the registry", "kind": "export",
+         "label": "risime-call-v2", "length": 32, "expect": "refused"},
+        {"name": "empty_label", "why": "the empty label", "kind": "export", "label": "",
+         "length": 32, "expect": "refused"},
+        {"name": "label_case", "why": "labels compare byte for byte", "kind": "export",
+         "label": "RISIME-CALL-V1", "length": 32, "expect": "refused"},
+        {"name": "label_with_frame_suffix", "why": "the frame-key info prefix is not an exporter label",
+         "kind": "export", "label": "risime-call-v1 frame", "length": 32, "expect": "refused"},
+        {"name": "length_16", "why": "length != 32", "kind": "export", "label": LABEL,
+         "length": 16, "expect": "refused"},
+        {"name": "length_64", "why": "length != 32", "kind": "export", "label": LABEL,
+         "length": 64, "expect": "refused"},
+        {"name": "length_0", "why": "length != 32", "kind": "export", "label": LABEL,
+         "length": 0, "expect": "refused"},
+        {"name": "registered", "why": "the one accepted export (control case)", "kind": "export",
+         "label": LABEL, "length": 32, "expect": "ok"},
+        mismatch("identity_utf16le", "identity encoded as UTF-16LE instead of UTF-8", base, U1,
+                 FRAME_INFO_PREFIX + b"\x00" + U1.encode("utf-16-le")),
+        mismatch("no_separator", "the 0x00 between prefix and identity left out", base, U1,
+                 FRAME_INFO_PREFIX + U1.encode()),
+        mismatch("nul_terminated_identity", "identity followed by a trailing 0x00", base, U1,
+                 frame_info(U1) + b"\x00"),
+        mismatch("identity_uppercase", "identity case changed (identities compare byte for byte)",
+                 base, U1, frame_info(U1.upper())),
+        mismatch("user_id_only", "only the user_id half of the identity", base, U1,
+                 frame_info(U1.split("/")[0])),
+    ]
+    es0 = bytes.fromhex(RFC_EPOCHS[0][0])
+    good = call_secret(es0, CALL_A)
+    for nm, why, ctx in [
+            ("call_id_as_text", "context = the call_id's UTF-8 text instead of its 16 raw bytes",
+             CALL_A.encode()),
+            ("call_id_empty_context", "an empty exporter context", b"")]:
+        bad = mls_exporter(es0, LABEL.encode(), ctx, 32)
+        assert bad != good
+        negative.append({"name": nm, "why": why, "kind": "call_secret", "exporter_secret": es0.hex(),
+                         "call_id": CALL_A, "context": ctx.hex(), "call_secret": bad.hex(),
+                         "correct_call_secret": good.hex(), "expect": "mismatch"})
+
+    return {
+        "v": 1,
+        "comment": "Group call frame keys (contract v1.19 §20.6, crypto review K1/K2). Generated by "
+                   "`cargo test -p risime-mls call_vectors_write -- --ignored` and, independently, by "
+                   "scripts/gen-call-vectors; the two are byte-identical. All binary fields are "
+                   "lowercase hex. frame_keys: call_secret -> per-identity frame_key and key_index. "
+                   "exporter_cases: the RFC 9420 key-schedule test group (cipher_suite 1): check "
+                   "rfc_exporter first, then exporter_secret + call_id -> call_secret -> keys. "
+                   "negative: kind export = the label registry (refused/ok); kind frame_key / "
+                   "call_secret = a wrong encoding whose result (key / call_secret) must differ "
+                   "from the correct one.",
+        "label": LABEL,
+        "registered_labels": REGISTERED_LABELS,
+        "exporter_length": EXPORTER_LENGTH,
+        "exporter": "MLS-Exporter(label, call_id as 16 raw bytes, 32) = ExpandWithLabel("
+                    "DeriveSecret(exporter_secret, label), \"exported\", SHA-256(context), 32) "
+                    "(RFC 9420 §8.5, ciphersuite 0x0001)",
+        "frame_key": "HKDF-Expand-SHA256(call_secret, info, 32), info = frame_key_info_prefix || "
+                     "0x00 || identity (UTF-8, \"<user_id>/<device_id>\")",
+        "frame_key_info_prefix": FRAME_INFO_PREFIX.decode(),
+        "key_index": "epoch mod 16",
+        "frame_keys": frames,
+        "exporter_cases": {
+            "source": "RFC 9420 key-schedule test vectors (mlswg/mls-implementations "
+                      "test-vectors/key-schedule.json), cipher_suite 1; rfc_exporter.label is "
+                      "used as text (its ASCII bytes), rfc_exporter.context is hex",
+            "cipher_suite": 1,
+            "group_id": RFC_GROUP_ID,
+            "cases": exporter,
+        },
+        "negative": negative,
+    }
+
+
+def render(doc):
+    return json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+# ---------------------------------------------------------------- verifier (for --check)
+
+def verify(doc):
+    n = 0
+    assert doc["v"] == 1 and doc["label"] == LABEL and doc["exporter_length"] == 32
+    for c in doc["frame_keys"]:
+        s = bytes.fromhex(c["call_secret"])
+        assert c["key_index"] == c["epoch"] % 16, c["name"]
+        for k in c["keys"]:
+            fk = frame_key(s, k["identity"])
+            assert fk.hex() == k["frame_key"], (c["name"], k["identity"])
+            assert base64.b64decode(k["frame_key_base64"]) == fk
+            assert bytes.fromhex(k["info"]) == frame_info(k["identity"])
+        n += 1
+    for c in doc["exporter_cases"]["cases"]:
+        es = bytes.fromhex(c["exporter_secret"])
+        r = c["rfc_exporter"]
+        assert mls_exporter(es, r["label"].encode(), bytes.fromhex(r["context"]),
+                            r["length"]).hex() == r["secret"], c["name"]
+        assert bytes.fromhex(c["context"]) == call_id_bytes(c["call_id"])
+        s = call_secret(es, c["call_id"])
+        assert s.hex() == c["call_secret"], c["name"]
+        assert c["key_index"] == c["epoch"] % 16
+        for k in c["keys"]:
+            assert frame_key(s, k["identity"]).hex() == k["frame_key"], (c["name"], k["identity"])
+        n += 1
+    for c in doc["negative"]:
+        if c["kind"] == "export":
+            assert export_allowed(c["label"], c["length"]) == (c["expect"] == "ok"), c["name"]
+        elif c["kind"] == "frame_key":
+            s = bytes.fromhex(c["call_secret"])
+            assert hkdf_expand(s, bytes.fromhex(c["info"]), 32).hex() == c["key"], c["name"]
+            assert frame_key(s, c["identity"]).hex() == c["correct_key"] != c["key"], c["name"]
+        elif c["kind"] == "call_secret":
+            es = bytes.fromhex(c["exporter_secret"])
+            assert mls_exporter(es, LABEL.encode(), bytes.fromhex(c["context"]), 32).hex() == c["call_secret"]
+            assert call_secret(es, c["call_id"]).hex() == c["correct_call_secret"] != c["call_secret"]
+        else:
+            raise AssertionError(f"unknown kind {c['kind']}")
+        n += 1
+    return n
+
+
+def main():
+    text = render(build())
+    if sys.argv[1:] == ["--check"]:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "contract", "v1",
+                            "call_vectors.json")
+        with open(path, encoding="utf-8") as f:
+            committed = f.read()
+        n = verify(json.loads(committed))
+        if committed != text:
+            sys.exit("contract/v1/call_vectors.json differs from scripts/gen-call-vectors output")
+        print(f"ok: {n} cases verified, file byte-identical")
+        return
+    if sys.argv[1:]:
+        sys.exit("usage: gen-call-vectors [--check]")
+    verify(json.loads(text))
+    sys.stdout.write(text)
+
+
+if __name__ == "__main__":
+    main()

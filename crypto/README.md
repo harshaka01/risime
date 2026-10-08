@@ -283,6 +283,34 @@ cross-check. `history_vectors_match_the_contract` fails if the contract file dif
 generator's output. Root's independent reference script (as `scripts/gen-media-vectors`) is still
 to be written.
 
+## Group call keys (contract v1.19 §20.6, §10.3; crypto review K1, K2, K10): `risime_mls::call`
+All additive. The MLS exporter output (`call_secret`) never crosses the FFI; only frame keys do.
+
+| Core call (Kotlin name) | What it does |
+|---|---|
+| `Client::export_secret(group, label, context, length)` (crate-internal, **not** exported) | OpenMLS `export_secret` at the current epoch, behind the **label registry** `EXPORTER_LABELS` = `["risime-call-v1"]` and `length = 32`; anything else is `Malformed` |
+| `Client::call_frame_keys(gid, call_id)` (`callFrameKeys(groupId, callId): CallFrameKeys`) | `call_secret = MLS-Exporter("risime-call-v1", call_id's 16 bytes, 32)`, then for every leaf `HKDF-Expand-SHA256(call_secret, "risime-call-v1 frame" ‖ 0x00 ‖ identity, 32)`. Returns `{epoch, keyIndex = epoch mod 16, keys: [{identity, key}]}` in leaf order (own leaf included). `grp:` groups only (`Malformed` for a DM or a non-UUID `call_id`, either case accepted), `UnknownGroup`, `RemovedFromGroup`. Read-only; `call_secret` and the core's copies of the keys are wiped (`zeroize`) |
+| `exporter_labels()` (`exporterLabels()`) | The registry |
+| `call::check_vectors(json)` (`callVectorsCheck(json): UInt`) | **Test support:** verifies every case of `contract/v1/call_vectors.json`, returns the count (29) |
+
+- **App use (§20.6):** catch up commits, then `callFrameKeys`; `setKey(identity, base64(key),
+  keyIndex)` for each entry and `setKeyIndex(keyIndex)`; call again after **every** merged commit
+  (keep the old index 10 s). The `groupId` is the conversation's local MLS group id
+  (`grp:<uuid>#<generation>`), the same bytes as for `encrypt`. Keys stay in memory, never logged.
+- **Vectors:** `contract/v1/call_vectors.json` (8 `frame_keys` cases from seeded `call_secret`s,
+  incl. epochs 15/16/17/2^32+15, a non-ASCII identity and 8 members; 6 `exporter_cases` from the
+  **RFC 9420 key-schedule test group**, cipher_suite 1, whose own exporter check runs first;
+  15 `negative`: the label registry, and wrong identity / `call_id` encodings that must give other
+  keys). Written by `cargo test -p risime-mls call_vectors_write -- --ignored`; root's independent
+  Python reference `scripts/gen-call-vectors` produces the same bytes (`--check` verifies every
+  case and compares the file). `call_vectors_match_the_contract` fails on any difference.
+- **Tests:** unit (`call`): registry, `export_secret` on a real group refuses other labels and
+  lengths, key index wrap, vectors and altered vectors; `tests/calls_v119.rs`: members agree, the
+  keys equal a by-hand RFC 9420 §8.5 derivation from OpenMLS's stored exporter secret, rekey after
+  add / self-update / remove (removed device gets none), wrap after 16 epochs, other `call_id`,
+  bad input, no state change; `risime-mls-ffi/tests/calls`: the flow across the FFI, the vectors,
+  and that no exporter output is exported.
+
 ## Tests (`cargo test`: 108 core + 2 ignored generators, 10 FFI)
 - **`groups`** (v1.9): create/join with PrivateMessage handshakes and meta; DM and group APIs
   don't mix; 0xFA01 key packages (a legacy key package is refused); admin adds/removes users and

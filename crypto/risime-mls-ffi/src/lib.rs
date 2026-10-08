@@ -1406,3 +1406,92 @@ impl MlsClient {
             })
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Group call frame keys (contract v1.19 §20.6; crypto review K1, K2, K10)
+// ---------------------------------------------------------------------------------------------
+// The MLS exporter output (`call_secret`) never crosses the FFI: only the per-leaf frame keys do,
+// for LiveKit's `FrameCryptor`. There is no exported `export_secret`.
+
+/// One leaf's frame key: `setKey(identity, base64(key), key_index)` (§20.6 "Install").
+#[derive(Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CallFrameKey {
+    /// The leaf identity `"<user_id>/<device_id>"` (= the LiveKit participant identity).
+    pub identity: String,
+    /// 32 bytes. Memory only: never persist or log; wipe on leaving and at call end (K10).
+    pub key: Vec<u8>,
+}
+
+impl std::fmt::Debug for CallFrameKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CallFrameKey {{ identity: {:?}, key: *** }}",
+            self.identity
+        )
+    }
+}
+
+/// Every leaf's frame key for one call at the group's current epoch.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CallFrameKeys {
+    /// The epoch the keys were derived at (the group's current epoch).
+    pub epoch: u64,
+    /// `epoch mod 16`: the key ring index for `setKey` and the device's own `setKeyIndex`.
+    pub key_index: u32,
+    /// One per leaf, in leaf order, this device included.
+    pub keys: Vec<CallFrameKey>,
+}
+
+impl From<risime_mls::CallFrameKeys> for CallFrameKeys {
+    fn from(mut k: risime_mls::CallFrameKeys) -> Self {
+        Self {
+            epoch: k.epoch,
+            key_index: u32::from(k.key_index),
+            // The core's keys are wiped when `k` drops; these copies belong to the caller.
+            keys: k
+                .keys
+                .iter_mut()
+                .map(|x| CallFrameKey {
+                    identity: x.identity.clone(),
+                    key: std::mem::take(&mut x.key),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[uniffi::export]
+impl MlsClient {
+    /// Every leaf's frame key for the group call `call_id` at the group's **current** epoch
+    /// (§20.6): `call_secret = MLS-Exporter("risime-call-v1", call_id's 16 bytes, 32)` and
+    /// `HKDF-Expand-SHA256(call_secret, "risime-call-v1 frame" ‖ 0x00 ‖ identity, 32)` per leaf,
+    /// all inside the core. `group_id` is the local MLS group id of the `grp:` conversation (the
+    /// same bytes as for `encrypt`); `call_id` comes from the MLS-authenticated `call_offer` (or
+    /// this device's own), never from the server.
+    ///
+    /// Catch up the group's commits first (K4) and call again after every merged commit (K3).
+    /// Errors: `Malformed` (a DM group, or `call_id` not a UUID), `UnknownGroup` (no local state),
+    /// `RemovedFromGroup`, `Storage`. Read-only: no state changes.
+    pub fn call_frame_keys(&self, group_id: Vec<u8>, call_id: String) -> Result<CallFrameKeys> {
+        self.with(|c| c.call_frame_keys(&group_id, &call_id))
+            .map(Into::into)
+    }
+}
+
+/// The exporter label registry (§10.3): the only labels the core exports with (`risime-call-v1`).
+#[uniffi::export]
+pub fn exporter_labels() -> Vec<String> {
+    risime_mls::EXPORTER_LABELS
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// **Test support:** verifies every case of `contract/v1/call_vectors.json` (passed as its JSON
+/// text) with this core; returns the number of cases checked, or throws `Malformed` naming the
+/// first failing case. Returns nothing secret.
+#[uniffi::export]
+pub fn call_vectors_check(vectors_json: String) -> Result<u32> {
+    Ok(risime_mls::call::check_vectors(&vectors_json)?)
+}
