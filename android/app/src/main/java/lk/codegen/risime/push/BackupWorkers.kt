@@ -23,13 +23,14 @@ import java.util.concurrent.TimeUnit
  * §22.7 the daily backup (WorkManager, while charging and the battery isn't low): a local backup,
  * then the upload when server backup is on and the network allows it (unmetered, or mobile data if
  * the user allowed it); otherwise the upload waits in [BackupUploadWorker] for an unmetered network.
- * It needs the unlocked app's encryption core (a locked OIDC session has none in the background):
- * then the catch-up on the next app open makes it ([lk.codegen.risime.AppContainer]).
+ * It needs the encryption core: since decision 064 a WorkManager-started process restores the session
+ * and opens it without UI (waited for up to 15 s); otherwise the catch-up on the next app open makes
+ * it ([lk.codegen.risime.AppContainer]).
  */
 class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         val c = (applicationContext as RisiMeApp).container
-        if (c.sessionStore.current() == null || c.mlsEngine?.backupKeys == null) return Result.success()
+        if (c.sessionStore.current() == null || c.awaitMlsCore()?.backupKeys == null) return Result.success()
         runCatching { setForeground(getForegroundInfo()) }
         val b = c.backups
         val net = currentNetKind(applicationContext)
@@ -64,7 +65,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 class BackupUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         val c = (applicationContext as RisiMeApp).container
-        if (c.sessionStore.current() == null || c.mlsEngine?.backupKeys == null) return Result.success()
+        if (c.sessionStore.current() == null || c.awaitMlsCore()?.backupKeys == null) return Result.success()
         val f = c.backups.localFiles().firstOrNull() ?: return Result.success()
         return when (c.backups.upload(f)) {
             is lk.codegen.risime.data.backup.UploadOutcome.Failed -> if (runAttemptCount < 5) Result.retry() else Result.success()

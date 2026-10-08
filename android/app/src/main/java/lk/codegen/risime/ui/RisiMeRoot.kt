@@ -32,7 +32,7 @@ import lk.codegen.risime.ui.phone.PhoneVerifyViewModel
 import lk.codegen.risime.data.Session
 import lk.codegen.risime.ui.auth.AuthUi
 import lk.codegen.risime.ui.auth.BlockedScreen
-import lk.codegen.risime.ui.auth.LockedScreen
+import lk.codegen.risime.ui.auth.MigrationScreen
 import lk.codegen.risime.ui.auth.RequiredUpdateScreen
 import lk.codegen.risime.ui.auth.UpdateBar
 import lk.codegen.risime.update.blocking
@@ -53,18 +53,19 @@ import lk.codegen.risime.ui.settings.SettingsViewModel
 @Composable
 fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
     val session by c.sessionStore.session.collectAsState(initial = Unit)
-    val unlocked by c.auth.unlocked.collectAsState()
+    val oidc by c.auth.state.collectAsState()
+    val appLocked by c.appLock.locked.collectAsState()
     val blocked by c.blocked.collectAsState()
     val notice by c.signInNotice.collectAsState()
     val update by c.updater.state.collectAsState()
     val current = session as? Session
     val required = update.blocking()
-    val gate = appGate(session != Unit, current, unlocked, blocked, required != null)
+    val gate = appGate(session != Unit, current, oidc, blocked, required != null, appLocked)
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
         if (required == null) UpdateBar(update, c)
         if (gate == AppGate.CHATS) ReturnToCallBar(c)
         Box(Modifier.weight(1f)) {
-            // Order: update required → blocked → locked → confirm phone → chats (contract §7).
+            // Order: update required → blocked → signed out → migration → app lock → confirm phone → chats (contract §7, decision 064).
             when (gate) {
                 AppGate.UPDATE_REQUIRED -> RequiredUpdateScreen(update, required!!, c)
                 AppGate.BLOCKED -> if (blocked!!.kind == lk.codegen.risime.data.auth.BlockKind.SIGNUP_REQUIRED) {
@@ -74,7 +75,8 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
                 }
                 AppGate.LOADING -> Unit
                 AppGate.SIGNED_OUT -> LoginFlow(viewModel(key = "login") { LoginViewModel(c) }, authUi, notice)
-                AppGate.LOCKED -> LockedScreen(authUi)
+                AppGate.MIGRATE -> MigrationScreen(authUi)
+                AppGate.APP_LOCKED -> lk.codegen.risime.ui.lock.AppLockScreen(onUnlock = authUi::unlockApp)
                 AppGate.CONFIRM_PHONE -> PhoneVerifyScreen(
                     viewModel(key = "phone:${current!!.user.id}") { PhoneVerifyViewModel(AppPhoneBackend(c), current.user.phone) },
                 )

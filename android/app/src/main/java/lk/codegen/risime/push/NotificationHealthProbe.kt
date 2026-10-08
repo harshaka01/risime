@@ -39,6 +39,10 @@ class NotificationHealthProbe(private val context: Context, private val c: AppCo
             currentTokenHash = tokenHash(token),
             registeredTokenHash = c.push.registeredTokenHash(),
             pushSettled = pushSettled,
+            account = c.sessionStore.current()?.takeIf { it.kind == lk.codegen.risime.data.AuthKind.OIDC }?.let {
+                val d = c.authDiagnostics.current()
+                AccountInputs(d.tokenType, d.lastSignOut)
+            },
         )
     }
 

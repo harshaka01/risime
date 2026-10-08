@@ -134,10 +134,16 @@ class AppContainer(
     val localAccount = LocalAccount(sessionStore, { reason -> wipeDb(reason) }, { Log.w("RisiMe", it) })
     // ---- Auth (contract v1.3, decision 014) ----
     val oidc = AppAuthGateway(context, http)
+    /** Sign-in/sign-out facts for the log and the health screen (decision 064). */
+    val authDiagnostics = lk.codegen.risime.data.auth.AuthDiagnosticsStore(context)
     val auth = AuthManager(
         gateway = oidc,
-        vault = TokenVault(File(context.noBackupFilesDir, "tokens.bin"), KeystoreWrappingKey()),
+        // Decision 064: hardware AES key, no user authentication: a push-started process has a bearer.
+        vault = lk.codegen.risime.data.auth.SessionVault(File(context.noBackupFilesDir, "session.bin"), lk.codegen.risime.data.auth.KeystoreVaultKey()),
+        // The pre-064 fingerprint-bound vault: read once more to migrate, then deleted.
+        legacy = TokenVault(File(context.noBackupFilesDir, "tokens.bin"), KeystoreWrappingKey()),
         elapsed = SystemClock::elapsedRealtime,
+        diagnostics = authDiagnostics,
         onNewAccessToken = { t ->
             scope.launch {
                 val r = realtime.refreshAuth(t)
@@ -156,16 +162,19 @@ class AppContainer(
     /** Keycloak end_session requests for the activity to open in the browser. */
     val endSessionRequests = MutableSharedFlow<EndSession>(extraBufferCapacity = 1)
 
-    /** The bearer for REST and the socket: the in-memory OIDC token, else the stored dev token. */
+    /** The bearer for REST and the socket: the OIDC token (restored from the vault, no UI), else the stored dev token. */
     suspend fun bearer(forceRefresh: Boolean = false): String? =
-        if (auth.unlocked.value) auth.bearer(forceRefresh) else sessionStore.current()?.takeIf { it.kind == AuthKind.DEV }?.token
+        if (auth.hasSession()) auth.bearer(forceRefresh) else sessionStore.current()?.takeIf { it.kind == AuthKind.DEV }?.token
 
     val api = ApiClient(
         http,
         { sessionStore.currentServerUrl() },
         { bearer() },
-        onUnauthorized = { auth.unlocked.value && auth.bearer(forceRefresh = true) != null },
+        onUnauthorized = { auth.hasSession() && auth.bearer(forceRefresh = true) != null },
     )
+
+    /** An OIDC session is in memory (restored at process start without any prompt, decision 064). */
+    private fun oidcReady(): kotlinx.coroutines.flow.Flow<Boolean> = auth.state.map { it == lk.codegen.risime.data.auth.SessionState.READY }
     val phone = PhoneNormalizer(PhoneNumberUtil.createInstance(context))
     val behaviour = BehaviourLog(db.behaviour(), { sessionStore.installSalt() })
     val contacts = ContactsRepository(api, db.contacts())
@@ -183,8 +192,21 @@ class AppContainer(
         onKeyPackagesLow = { scope.launch { deviceRegistrar.topUp() } },
     )
 
+    // ---- The optional fingerprint lock (decision 064): a UI gate only ----
+    val appLock = lk.codegen.risime.data.lock.AppLock(
+        store = lk.codegen.risime.data.lock.DataStoreAppLockStore(prefs),
+        stamp = object : lk.codegen.risime.data.lock.LockStamp {
+            private val p = context.getSharedPreferences("risime_lock", Context.MODE_PRIVATE)
+            override fun get(): Long? = p.getLong("bg_elapsed", -1L).takeIf { it >= 0 }
+            override fun set(v: Long?) = p.edit().putLong("bg_elapsed", v ?: -1L).apply()
+        },
+        biometricAvailable = { lk.codegen.risime.ui.lock.strongBiometricAvailable(context) },
+        elapsed = SystemClock::elapsedRealtime,
+        log = { Log.w("RisiMe", it) },
+    )
+
     // ---- Push (contract v1.5, decision 026) ----
-    val notifier = Notifier(context)
+    val notifier = Notifier(context, hideContent = { appLock.hideNotificationContent() })
     // ---- E2EE (contract v1.7, decisions 035, 037). The engine loads only once the server offers
     // attestation keys; until then (pilot: mls_unavailable) the app behaves exactly like v1.6.
     /** Core open vs registered, tracked apart (P0 background delivery, rule 9). */
@@ -633,17 +655,21 @@ class AppContainer(
         PushManager(context, api, sessionStore, deviceRegistrar, { mlsEngine != null }, canAuthenticate = { canAuthenticate() })
     }
 
-    /** A bearer exists: a dev token, or an unlocked OIDC session (a locked one sends no token → 401). */
+    /** A bearer exists: a dev token, or an OIDC session in memory (only an unmigrated pre-064 vault has none). */
     private suspend fun canAuthenticate(): Boolean =
-        sessionStore.current()?.let { it.kind == AuthKind.DEV || auth.unlocked.value } ?: false
+        sessionStore.current()?.let { it.kind == AuthKind.DEV || auth.hasSession() } ?: false
 
     init {
-        // E2EE: try once per signed-in, verified session that can authenticate. An OIDC session is
-        // locked (no bearer) until the fingerprint unlock, so registering before it got 401 and left
-        // E2EE and groups off for the whole process (P0 nightly.10 finding): wait for the unlock.
+        // Decision 064: read the token vault at process start, with no UI (a push-started process too).
+        scope.launch(Dispatchers.IO) { runCatching { auth.restore() }.onFailure { Log.w("RisiMe", "RisiMe auth: restore failed: ${it.message}") } }
+        scope.launch(Dispatchers.IO) { runCatching { appLock.load() }.onFailure { Log.w("RisiMe", "RisiMe lock: settings: ${it.message}") } }
+        if (BuildConfig.DEBUG) registerDebugOidcSignIn(context)
+        // E2EE: try once per signed-in, verified session that can authenticate. An OIDC session has
+        // a bearer once restored (an unmigrated pre-064 vault only after its one migration prompt):
+        // registering before that got 401 and left E2EE off for the process (P0 nightly.10).
         scope.launch {
-            combine(sessionStore.session, auth.unlocked) { s, unlocked ->
-                s?.takeIf { it.user.phoneVerified && (it.kind == AuthKind.DEV || unlocked) }?.user?.id
+            combine(sessionStore.session, oidcReady()) { s, ready ->
+                s?.takeIf { it.user.phoneVerified && (it.kind == AuthKind.DEV || ready) }?.user?.id
             }.distinctUntilChanged().collectLatest { id ->
                 mlsCore.notApplicable = false
                 if (id == null) {
@@ -729,7 +755,8 @@ class AppContainer(
         override val callMarkDao get() = db.callMarks()
         override suspend fun me() = sessionStore.current()?.user?.id
         override suspend fun deviceId() = sessionStore.deviceId()
-        override suspend fun sessionLocked(): Boolean = !auth.unlocked.value && sessionStore.current()?.kind == AuthKind.OIDC
+        // Decision 064: a bearer is restored without UI; only an unmigrated pre-064 vault (or no vault) has none.
+        override suspend fun sessionLocked(): Boolean = sessionStore.current()?.kind == AuthKind.OIDC && !auth.hasSession()
         override fun serverNow() = serverClock.serverNow()
         override suspend fun displayName(userId: String) =
             contacts.contacts.first().firstOrNull { it.userId.equals(userId, true) }?.displayName
@@ -783,12 +810,13 @@ class AppContainer(
     /** The export worker holds the realtime connection (like a push wake) while it runs. */
     private val historyConnection = MutableStateFlow(0)
 
-    /** Only while unlocked with a verified session (a locked app has no bearer, §17.8). */
+    /** Only with a bearer and a verified session (§17.8; since decision 064 also in the background). */
     suspend fun canExportHistory(): Boolean =
-        BuildConfig.HISTORY_SHARE_ENABLED && sessionStore.current()?.user?.phoneVerified == true && canAuthenticateNow()
+        BuildConfig.HISTORY_SHARE_ENABLED && sessionStore.current()?.user?.phoneVerified == true && canAuthenticate()
 
-    private suspend fun canAuthenticateNow(): Boolean =
-        sessionStore.current()?.let { it.kind == AuthKind.DEV || auth.unlocked.value } ?: false
+    /** The MLS core for a background job (a push- or WorkManager-started process opens it after the restore). */
+    suspend fun awaitMlsCore(timeoutMs: Long = 15_000): MlsEngine? =
+        mlsEngine ?: if (!canAuthenticate()) null else withTimeoutOrNull(timeoutMs) { mlsCore.engine.filterNotNull().first() }
 
     suspend fun <T> withHistoryConnection(block: suspend () -> T): T {
         historyConnection.value++
@@ -953,6 +981,8 @@ class AppContainer(
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 foreground.value = true
+                appLock.checkOnReturn()
+                scope.launch { appLock.onForeground() }
                 refreshCapabilities()
                 scope.launch {
                     updater.onForeground()
@@ -963,11 +993,12 @@ class AppContainer(
 
             override fun onStop(owner: LifecycleOwner) {
                 foreground.value = false
+                appLock.onBackground()
                 // Everything that arrived while the app was open has been seen in the app.
                 scope.launch { sessionStore.setNotifiedUpTo(System.currentTimeMillis()) }
             }
         })
-        // Connected only while in the foreground (+ a 5-s grace), signed in and unlocked. In the
+        // Connected only while in the foreground (+ a 5-s grace) and signed in with a bearer. In the
         // background the socket is closed so the server pushes (P0 background delivery).
         scope.launch {
             // android R6: a ringing, connecting or active call keeps the socket up regardless of foreground.
@@ -978,9 +1009,9 @@ class AppContainer(
                 ) { f, b, c, h ->
                     lk.codegen.risime.push.socketWanted(f, b > 0, c, h > 0)
                 },
-                sessionStore.session, auth.unlocked, blocked,
-            ) { fg, s, unlocked, b ->
-                if (shouldConnect(fg, s, unlocked, b)) s!!.serverUrl to s.user.id else null
+                sessionStore.session, oidcReady(), blocked,
+            ) { fg, s, ready, b ->
+                if (shouldConnect(fg, s, ready, b)) s!!.serverUrl to s.user.id else null
             }
                 .distinctUntilChanged()
                 .collect { s ->
@@ -1069,7 +1100,7 @@ class AppContainer(
         }
         // §6.2: refresh about 60 s before expiry (from expires_in); the new token is pushed as auth:refresh.
         scope.launch {
-            combine(foreground, auth.unlocked) { fg, u -> fg && u }.distinctUntilChanged().collectLatest { active ->
+            combine(foreground, oidcReady()) { fg, u -> fg && u }.distinctUntilChanged().collectLatest { active ->
                 while (active) {
                     delay(auth.refreshDueInMs() ?: break)
                     auth.bearer(forceRefresh = true)
@@ -1080,6 +1111,7 @@ class AppContainer(
         scope.launch {
             auth.signInNeeded.collect { needed ->
                 if (needed) {
+                    authDiagnostics.signedOut(lk.codegen.risime.data.auth.SignOutTrigger.INVALID_GRANT)
                     realtime.stop()
                     localAccount.signOutKeepData()
                     signInNotice.value = "Your RisiCloud session ended. Sign in again — your chats are kept."
@@ -1087,10 +1119,13 @@ class AppContainer(
                 }
             }
         }
-        // An OIDC session from a previous process with nothing to unlock (memory-only device).
+        // An OIDC session from a previous process with no token set to restore (a pre-064 memory-only
+        // install, or an unreadable vault): sign in once more, chats kept; from then on it stays.
         scope.launch {
+            val st = auth.restore()
             val s = sessionStore.current()
-            if (s?.kind == AuthKind.OIDC && !auth.canUnlock() && !auth.unlocked.value) {
+            if (s?.kind == AuthKind.OIDC && st == lk.codegen.risime.data.auth.SessionState.NONE) {
+                authDiagnostics.signedOut(auth.restoreProblem ?: lk.codegen.risime.data.auth.SignOutTrigger.NO_STORED_SESSION)
                 localAccount.signOutKeepData()
                 signInNotice.value = "Sign in again — your chats are kept."
             }
@@ -1178,6 +1213,39 @@ class AppContainer(
     }
 
     /**
+     * Debug builds only (the device gate, decision 064): Redroid has no browser for the RisiCloud
+     * sign-in, so `adb shell am broadcast -a lk.codegen.risime.debug.OIDC_SIGN_IN` hands the app a
+     * token set from the gate's stand-in issuer; from there it is the real path ([completeOidcSignIn]:
+     * the vault, GET /me, the session). Only the shell (android.permission.DUMP) can send it.
+     */
+    private fun registerDebugOidcSignIn(context: Context) {
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: Context, i: android.content.Intent) {
+                val issuer = i.getStringExtra("issuer") ?: return
+                val access = i.getStringExtra("access_token") ?: return
+                val refresh = i.getStringExtra("refresh_token") ?: return
+                val clientId = i.getStringExtra("client_id") ?: "risime"
+                val expires = i.getStringExtra("expires_in")?.toLongOrNull() ?: 300L
+                val pending = goAsync()
+                scope.launch {
+                    try {
+                        val err = completeOidcSignIn(issuer, clientId, OidcTokens(access, expires, refresh, null))
+                        Log.i("RisiMe", "RisiMe debug: oidc sign-in ${err ?: "ok"}")
+                    } finally {
+                        pending.finish()
+                    }
+                }
+            }
+        }
+        runCatching {
+            androidx.core.content.ContextCompat.registerReceiver(
+                context, r, android.content.IntentFilter("lk.codegen.risime.debug.OIDC_SIGN_IN"),
+                android.Manifest.permission.DUMP, null, androidx.core.content.ContextCompat.RECEIVER_EXPORTED,
+            )
+        }.onFailure { Log.w("RisiMe", "RisiMe debug: oidc receiver: ${it.message}") }
+    }
+
+    /**
      * Browser sign-in finished (code exchanged): verify with GET /me, then keep the tokens.
      * Returns an error message for the sign-in screen, or null on success / a blocking screen.
      */
@@ -1189,6 +1257,7 @@ class AppContainer(
                 // Signed in; the gate shows "Confirm your phone" before anything connects.
                 val user = o.user ?: (api.me() as? ApiResult.Ok)?.value?.user?.copy(phoneVerified = false)
                 if (user == null) {
+                    authDiagnostics.signedOut(lk.codegen.risime.data.auth.SignOutTrigger.SIGN_IN_FAILED)
                     auth.signOut()
                     "Can't reach the RisiMe server. Try again."
                 } else if (adoptOidcUser(user)) {
@@ -1202,10 +1271,12 @@ class AppContainer(
                 null
             }
             MeOutcome.Unauthorized -> {
+                authDiagnostics.signedOut(lk.codegen.risime.data.auth.SignOutTrigger.SIGN_IN_FAILED)
                 auth.signOut()
                 "The RisiMe server didn't accept this RisiCloud sign-in."
             }
             is MeOutcome.Transient -> {
+                authDiagnostics.signedOut(lk.codegen.risime.data.auth.SignOutTrigger.SIGN_IN_FAILED)
                 auth.signOut()
                 "Can't reach the RisiMe server. Try again."
             }
@@ -1247,6 +1318,7 @@ class AppContainer(
     /** False when the user kept another account's chats: this sign-in is dropped. */
     private suspend fun adoptOidcUser(user: User): Boolean {
         if (localAccount.beforeSignIn(user, ::askAccountSwitch) == lk.codegen.risime.data.SignInDecision.CANCELLED) {
+            authDiagnostics.signedOut(lk.codegen.risime.data.auth.SignOutTrigger.ANOTHER_ACCOUNT)
             withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { auth.signOut() } }
             runCatching { auth.forgetLocally() }
             return false
@@ -1277,6 +1349,7 @@ class AppContainer(
 
     /** Blocked screen → "Use another account": drop this account's tokens; the UI starts a fresh sign-in. */
     suspend fun abandonAccount() {
+        authDiagnostics.signedOut(lk.codegen.risime.data.auth.SignOutTrigger.ANOTHER_ACCOUNT)
         auth.signOut()
         blocked.value = null
     }
@@ -1289,6 +1362,7 @@ class AppContainer(
      * the server (it leaves its groups) and wipes local chat data.
      */
     suspend fun logout(confirmed: lk.codegen.risime.data.UserConfirmation) {
+        authDiagnostics.signedOut(if (confirmed.deleteChats) lk.codegen.risime.data.auth.SignOutTrigger.USER_LOGOUT_DELETE else lk.codegen.risime.data.auth.SignOutTrigger.USER_LOGOUT)
         notifier.cancelAll()
         val end = auth.issuerAndClient()?.let { (issuer, _) -> auth.idToken()?.let { EndSession(issuer, it) } }
         try {
@@ -1327,7 +1401,11 @@ class AppContainer(
      * Every escape-screen "Sign out" (blocked, identity conflict, locked, required update, confirm
      * phone): tokens and session go, the chats stay. Only Settings / the chats menu "Log out" wipes.
      */
-    suspend fun signOutKeepChats(notice: String? = "Signed out — your chats are kept.") {
+    suspend fun signOutKeepChats(
+        notice: String? = "Signed out — your chats are kept.",
+        trigger: lk.codegen.risime.data.auth.SignOutTrigger = lk.codegen.risime.data.auth.SignOutTrigger.ESCAPE_SCREEN,
+    ) {
+        authDiagnostics.signedOut(trigger)
         realtime.stop()
         withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { auth.signOut() } }
         runCatching { auth.forgetLocally() }
@@ -1337,9 +1415,20 @@ class AppContainer(
     }
 
     /** §6: token rejected (refresh already tried): back to sign-in, keeping local chats. */
-    suspend fun signOutKeepData(notice: String) {
+    suspend fun signOutKeepData(
+        notice: String,
+        trigger: lk.codegen.risime.data.auth.SignOutTrigger = lk.codegen.risime.data.auth.SignOutTrigger.UNAUTHORIZED,
+    ) {
+        // Decision 064: Keycloak unreachable (refresh failing, not refused) is no reason to end an
+        // offline session; the next refresh recovers it. Only invalid_grant or a server refusal with
+        // a fresh token signs out.
+        if (trigger == lk.codegen.risime.data.auth.SignOutTrigger.UNAUTHORIZED && auth.refreshFailingTransiently()) {
+            Log.w("RisiMe", "RisiMe auth: 401 while the token refresh is failing: session kept")
+            return
+        }
+        authDiagnostics.signedOut(trigger)
         realtime.stop()
-        if (auth.unlocked.value) auth.signOut()
+        if (auth.hasSession()) auth.signOut()
         localAccount.signOutKeepData()
         signInNotice.value = notice
     }
@@ -1352,7 +1441,10 @@ class AppContainer(
             markPhoneUnverified(o.user)
             false
         }
-        MeOutcome.Unauthorized -> {
+        // Keycloak unreachable (refresh failing): retry later, never sign out for it (decision 064).
+        MeOutcome.Unauthorized -> if (auth.refreshFailingTransiently()) {
+            true
+        } else {
             signOutKeepData("Sign in again — your chats are kept.")
             false
         }
@@ -1371,6 +1463,7 @@ class AppContainer(
         // §22.7: a backup (to the current server) before the confirmed switch wipes this phone.
         withTimeoutOrNull(PRE_WIPE_BACKUP_MS) { runCatching { backups.beforeWipe() } }
         if (sessionStore.current()?.kind == AuthKind.DEV) api.logout()
+        authDiagnostics.signedOut(lk.codegen.risime.data.auth.SignOutTrigger.SWITCH_SERVER)
         auth.signOut()
         blocked.value = null
         realtime.stop()
@@ -1413,8 +1506,10 @@ class AppContainer(
     suspend fun syncAndNotify(quick: Boolean = false, workerEnqueuedAt: Long = 0L) {
         val s = sessionStore.current() ?: return
         if (!s.user.phoneVerified) return
-        if (s.kind == AuthKind.OIDC && !auth.unlocked.value) {
-            Log.i("RisiMe", "RisiMe push: sync skipped (locked): content-free notice")
+        // Decision 064: the session is restored from the vault with no UI. Only a pre-064 vault that
+        // still waits for its one migration prompt has no bearer here: a content-free notice.
+        if (s.kind == AuthKind.OIDC && !auth.hasSession()) {
+            Log.i("RisiMe", "RisiMe push: sync skipped (no session: ${auth.state.value}): content-free notice")
             notifier.postLocked()
             return
         }

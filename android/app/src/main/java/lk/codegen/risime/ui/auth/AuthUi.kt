@@ -145,29 +145,48 @@ class AuthUi(private val activity: FragmentActivity, private val c: AppContainer
         }
     }
 
-    /** Locked screen: one prompt per process start. */
-    fun unlock() {
+    /**
+     * Decision 064: the one migration prompt for a pre-064 vault. Cancel/failure keeps the old vault
+     * (asked again at the next open) and never signs out; an invalidated key (new enrolment) or a
+     * phone without biometrics now: sign in again, chats kept (as before).
+     */
+    fun finishMigration() {
         if (_busy.value) return
         activity.lifecycleScope.launch {
-            val cipher = c.auth.unlockCipher()
+            val cipher = c.auth.migrationCipher()
             if (cipher == null || BiometricManager.from(activity).canAuthenticate(authenticators()) != BiometricManager.BIOMETRIC_SUCCESS) {
-                // Key invalidated (new enrolment) or no biometrics: browser sign-in, chats kept.
                 c.auth.revokeStored(null)
-                c.signOutKeepData("Sign in again — your chats are kept.")
+                c.signOutKeepData("Sign in again — your chats are kept.", lk.codegen.risime.data.auth.SignOutTrigger.KEY_INVALIDATED)
                 return@launch
             }
             _busy.value = true
-            val authed = prompt("Unlock RisiMe", cipher)
-            if (authed != null) c.auth.unlock(authed)
+            val authed = prompt(lk.codegen.risime.ui.auth.MIGRATION_TITLE, cipher)
+            if (authed != null) {
+                if (c.auth.migrate(authed) == lk.codegen.risime.data.auth.MigrationResult.Unreadable) {
+                    c.signOutKeepData("Sign in again — your chats are kept.", lk.codegen.risime.data.auth.SignOutTrigger.VAULT_UNREADABLE)
+                }
+            }
             _busy.value = false
         }
     }
 
-    /** Locked screen → Sign out: unlock once to revoke; a cancel deletes the key anyway. */
-    /** Locked screen → Sign out (keeps your chats): revoke if the prompt unlocks, forget the tokens either way. */
+    /** The optional fingerprint lock (decision 064): one BIOMETRIC_STRONG match unlocks the UI. */
+    fun unlockApp() {
+        if (_busy.value) return
+        activity.lifecycleScope.launch {
+            _busy.value = true
+            try {
+                if (lk.codegen.risime.ui.lock.confirmFingerprint(activity, "Unlock RisiMe")) c.appLock.unlocked()
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
+    /** Migration screen → Sign out (keeps your chats): revoke if the prompt opens the old set, forget the tokens either way. */
     fun signOutLocked() {
         activity.lifecycleScope.launch {
-            val cipher = c.auth.unlockCipher()
+            val cipher = c.auth.migrationCipher()
             val authed = cipher?.let { prompt("Sign out of RisiMe", it) }
             c.auth.revokeStored(authed)
             c.signOutKeepChats()

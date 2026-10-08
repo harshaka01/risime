@@ -67,20 +67,26 @@ const val SIGN_IN_ANOTHER_ACCOUNT = "Sign in with another account"
 const val NOT_ALLOWLISTED_TEXT =
     "This RisiCloud account isn't on the RisiMe pilot list. Sign in with the account you were invited with."
 
-/** "RisiMe is locked — Unlock": one fingerprint per process start (decision 014). */
+const val MIGRATION_TITLE = "Confirm to finish updating RisiMe"
+
+/**
+ * Decision 064 migration: a session stored by an older version (behind the fingerprint) is moved
+ * to the new storage with one last fingerprint; afterwards RisiMe never asks again (unless the
+ * optional fingerprint lock is turned on). Cancel keeps everything and asks at the next open.
+ */
 @Composable
-fun LockedScreen(authUi: AuthUi) {
+fun MigrationScreen(authUi: AuthUi) {
     val busy by authUi.busy.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { authUi.unlock() }
+    LaunchedEffect(Unit) { authUi.finishMigration() }
     CenteredColumn {
         Text("RisiMe", style = WordmarkStyle, color = MaterialTheme.colorScheme.primary, modifier = Modifier.semantics { heading() })
-        Text("RisiMe is locked", style = MaterialTheme.typography.titleMedium)
+        Text(MIGRATION_TITLE, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
         Text(
-            "Unlock with your fingerprint to continue.",
+            "Use your fingerprint once more. After this update RisiMe stays signed in without asking.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
-        Button(onClick = authUi::unlock, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Unlock") }
+        Button(onClick = authUi::finishMigration, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Continue") }
         TextButton(onClick = authUi::signOutLocked, enabled = !busy) { Text(SIGN_OUT_KEEPS_CHATS) }
     }
 }

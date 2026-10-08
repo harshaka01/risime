@@ -31,6 +31,20 @@ data class ChatNotification(
 
 data class NotifLine(val sender: String, val text: String, val ts: Long)
 
+/** The text of a content-free notification (decision 064: the lock is on, "Show content" off). */
+const val LOCKED_CONTENT_TEXT = "New message"
+
+/**
+ * Decision 064, "Show content in notifications" off with the fingerprint lock on: the chat's
+ * notification keeps its id, count and tap target, but shows no sender, group name or text.
+ */
+fun redactForLock(n: ChatNotification): ChatNotification = n.copy(
+    title = "RisiMe",
+    lines = listOf(if (n.count > 1) "${n.count} new messages" else LOCKED_CONTENT_TEXT),
+    group = false,
+    messages = emptyList(),
+)
+
 const val MAX_LINES = 5
 const val PREVIEW_CHARS = 120
 

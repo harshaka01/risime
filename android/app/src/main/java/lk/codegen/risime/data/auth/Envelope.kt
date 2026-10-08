@@ -109,9 +109,15 @@ interface WrappingKey {
     fun delete()
 }
 
-/** Sealed token storage in one app-private file. */
+/**
+ * The pre-064 token storage (decision 014), in one app-private file. Since decision 064 it is only
+ * read once more, behind one fingerprint, to migrate it to [SessionVault]; then it is deleted.
+ */
 class TokenVault(private val file: File, private val key: WrappingKey) {
     fun hasTokens(): Boolean = file.isFile && key.exists()
+
+    /** A blob whose key is gone (deleted after an invalidation): nothing can open it. */
+    fun hasOrphanBlob(): Boolean = file.isFile && !key.exists()
 
     /** Seals and stores [tokens]. False when the device can't hold an auth-bound key. */
     fun store(tokens: StoredTokens): Boolean {

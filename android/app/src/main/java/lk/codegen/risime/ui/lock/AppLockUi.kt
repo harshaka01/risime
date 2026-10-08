@@ -1,0 +1,189 @@
+package lk.codegen.risime.ui.lock
+
+import android.content.Context
+import android.content.ContextWrapper
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
+import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import lk.codegen.risime.AppContainer
+import lk.codegen.risime.R
+import lk.codegen.risime.data.lock.AppLockSettings
+import lk.codegen.risime.data.lock.AutoLock
+import lk.codegen.risime.ui.common.SectionHeader
+import lk.codegen.risime.ui.theme.Spacing
+import lk.codegen.risime.ui.theme.WordmarkStyle
+import kotlin.coroutines.resume
+
+const val FINGERPRINT_LOCK = "Fingerprint lock"
+const val UNLOCK_WITH_FINGERPRINT = "Unlock with fingerprint"
+const val AUTO_LOCK_TITLE = "Automatically lock"
+const val SHOW_CONTENT_TITLE = "Show content in notifications"
+
+/** Decision 064: the lock is offered only when a strong biometric is enrolled and usable. */
+fun strongBiometricAvailable(context: Context): Boolean =
+    runCatching { BiometricManager.from(context).canAuthenticate(BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS }.getOrDefault(false)
+
+tailrec fun Context.findFragmentActivity(): FragmentActivity? = when (this) {
+    is FragmentActivity -> this
+    is ContextWrapper -> baseContext.findFragmentActivity()
+    else -> null
+}
+
+/** One BIOMETRIC_STRONG prompt with no CryptoObject (the lock gates UI, not keys). True when it matched. */
+suspend fun confirmFingerprint(activity: FragmentActivity, title: String, subtitle: String? = null): Boolean {
+    if (!strongBiometricAvailable(activity)) return false
+    val info = BiometricPrompt.PromptInfo.Builder()
+        .setTitle(title)
+        .apply { subtitle?.let { setSubtitle(it) } }
+        .setAllowedAuthenticators(BIOMETRIC_STRONG)
+        .setNegativeButtonText("Cancel")
+        .build()
+    return suspendCancellableCoroutine { cont ->
+        val p = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                if (cont.isActive) cont.resume(true)
+            }
+
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                if (cont.isActive) cont.resume(false)
+            }
+        })
+        runCatching { p.authenticate(info) }.onFailure { if (cont.isActive) cont.resume(false) }
+        cont.invokeOnCancellation { runCatching { p.cancelAuthentication() } }
+    }
+}
+
+/** The locked screen (decision 064): the RisiMe logo and "Unlock with fingerprint"; prompts once on show. */
+@Composable
+fun AppLockScreen(onUnlock: () -> Unit, autoPrompt: Boolean = true) {
+    LaunchedEffect(Unit) { if (autoPrompt) onUnlock() }
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = Spacing.xl, vertical = Spacing.xxl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Spacing.md, Alignment.CenterVertically),
+    ) {
+        Image(painterResource(R.drawable.brand_mark), "RisiMe logo", Modifier.size(112.dp))
+        Text("RisiMe", style = WordmarkStyle, color = MaterialTheme.colorScheme.primary, modifier = Modifier.semantics { heading() })
+        Text("RisiMe is locked", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        Button(onClick = onUnlock, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(UNLOCK_WITH_FINGERPRINT) }
+    }
+}
+
+/** Settings → Privacy rows. Nothing at all when the phone has no usable strong biometric. */
+@Composable
+fun FingerprintLockContent(
+    available: Boolean,
+    settings: AppLockSettings,
+    onToggle: (Boolean) -> Unit,
+    onAutoLock: (AutoLock) -> Unit,
+    onShowContent: (Boolean) -> Unit,
+) {
+    if (!available) return
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(FINGERPRINT_LOCK, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "When on, your fingerprint is needed to open RisiMe. You can still answer calls.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = settings.enabled, onCheckedChange = onToggle)
+    }
+    if (settings.enabled) {
+        Text(AUTO_LOCK_TITLE, style = MaterialTheme.typography.titleSmall)
+        AutoLock.entries.forEach { a ->
+            Row(
+                Modifier.fillMaxWidth().selectable(selected = settings.autoLock == a, role = Role.RadioButton, onClick = { onAutoLock(a) }),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = settings.autoLock == a, onClick = null)
+                Text(a.label, Modifier.padding(start = Spacing.sm), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        Row(Modifier.fillMaxWidth().clickable { onShowContent(!settings.showContent) }, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(SHOW_CONTENT_TITLE, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Off: notifications say \"New message\" without the name or text.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = settings.showContent, onCheckedChange = onShowContent)
+        }
+    }
+}
+
+/** True when this phone offers the lock now (checked when the screen opens). */
+@Composable
+fun rememberLockAvailable(): Boolean {
+    val ctx = LocalContext.current
+    return remember { strongBiometricAvailable(ctx) }
+}
+
+/** The host: wires [FingerprintLockContent] to [AppContainer.appLock]; turning it on asks for one fingerprint. */
+@Composable
+fun FingerprintLockSection(c: AppContainer, available: Boolean, showHeader: Boolean = true) {
+    if (!available) return
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val s by c.appLock.settings.collectAsState()
+    var busy by remember { mutableStateOf(false) }
+    if (showHeader) SectionHeader("Privacy")
+    FingerprintLockContent(
+        available = true,
+        settings = s ?: AppLockSettings(),
+        onToggle = { on ->
+            if (busy) return@FingerprintLockContent
+            scope.launch {
+                if (!on) {
+                    c.appLock.setEnabled(false)
+                    return@launch
+                }
+                val act = ctx.findFragmentActivity() ?: return@launch
+                busy = true
+                val ok = confirmFingerprint(act, "Turn on fingerprint lock", "Confirm your fingerprint")
+                busy = false
+                if (ok) c.appLock.setEnabled(true)
+            }
+        },
+        onAutoLock = { a -> scope.launch { c.appLock.setAutoLock(a) } },
+        onShowContent = { v -> scope.launch { c.appLock.setShowContent(v) } },
+    )
+}

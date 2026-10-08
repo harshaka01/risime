@@ -5,12 +5,17 @@ import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import net.openid.appauth.AppAuthConfiguration
 import net.openid.appauth.AuthorizationException
 import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
 import net.openid.appauth.GrantTypeValues
 import net.openid.appauth.TokenRequest
 import net.openid.appauth.TokenResponse
+import net.openid.appauth.connectivity.ConnectionBuilder
+import net.openid.appauth.connectivity.DefaultConnectionBuilder
+import java.net.HttpURLConnection
+import java.net.URL
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -22,13 +27,14 @@ const val OIDC_SCOPES = "openid email profile offline_access"
 
 /** AppAuth-backed Keycloak calls: discovery (cached per issuer), refresh, RFC 7009 revocation. */
 class AppAuthGateway(context: Context, private val http: OkHttpClient) : OidcGateway {
-    private val service = AuthorizationService(context.applicationContext)
+    private val connections: ConnectionBuilder = if (lk.codegen.risime.BuildConfig.DEBUG) LoopbackDebugConnections else DefaultConnectionBuilder.INSTANCE
+    private val service = AuthorizationService(context.applicationContext, AppAuthConfiguration.Builder().setConnectionBuilder(connections).build())
     private val configs = ConcurrentHashMap<String, AuthorizationServiceConfiguration>()
 
     suspend fun configuration(issuer: String): AuthorizationServiceConfiguration? {
         configs[issuer]?.let { return it }
         val cfg = suspendCancellableCoroutine<AuthorizationServiceConfiguration?> { cont ->
-            AuthorizationServiceConfiguration.fetchFromIssuer(Uri.parse(issuer)) { c, _ -> cont.resume(c) }
+            AuthorizationServiceConfiguration.fetchFromIssuer(Uri.parse(issuer), { c, _ -> cont.resume(c) }, connections)
         } ?: return null
         configs[issuer] = cfg
         return cfg
@@ -56,6 +62,23 @@ class AppAuthGateway(context: Context, private val http: OkHttpClient) : OidcGat
             .build()
         withContext(Dispatchers.IO) {
             runCatching { http.newCall(Request.Builder().url(endpoint).post(body).build()).execute().close() }
+        }
+    }
+
+    /**
+     * Debug builds only: AppAuth's default builder refuses http. The device gates (scripts/push-device-test)
+     * run a stand-in issuer on adb-reverse loopback; release builds keep https-only.
+     */
+    private object LoopbackDebugConnections : ConnectionBuilder {
+        private val loopback = setOf("127.0.0.1", "10.0.2.2", "localhost")
+
+        override fun openConnection(uri: Uri): HttpURLConnection {
+            require(uri.scheme == "https" || (uri.scheme == "http" && uri.host in loopback)) { "only https (or http on loopback in debug)" }
+            return (URL(uri.toString()).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15_000
+                readTimeout = 10_000
+                instanceFollowRedirects = false
+            }
         }
     }
 

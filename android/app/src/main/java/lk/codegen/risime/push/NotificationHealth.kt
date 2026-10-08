@@ -31,9 +31,14 @@ data class HealthInputs(
     val registeredTokenHash: String?,
     /** The registration attempt finished (ensureRegistered returned): only then is "not registered" a failure worth opening the screen for. */
     val pushSettled: Boolean = true,
+    /** Decision 064: the RisiCloud session (null: a dev-token session, no Account row). */
+    val account: AccountInputs? = null,
 )
 
-enum class HealthRow { NOTIFICATIONS, MESSAGES_CHANNEL, CALLS_CHANNEL, BATTERY, FULL_SCREEN, PUSH }
+/** The refresh token's `typ` at sign-in ("Offline"/"Refresh"; null: not recorded) and the last sign-out trigger. */
+data class AccountInputs(val tokenType: String?, val lastSignOut: String?)
+
+enum class HealthRow { NOTIFICATIONS, MESSAGES_CHANNEL, CALLS_CHANNEL, BATTERY, FULL_SCREEN, PUSH, ACCOUNT }
 
 /** The settings page (or action) each ✗ row links to. */
 enum class HealthFix { APP_NOTIFICATIONS, MESSAGES_CHANNEL, CALLS_CHANNEL, BATTERY, FULL_SCREEN, RETRY_PUSH }
@@ -137,6 +142,27 @@ fun healthChecks(i: HealthInputs): List<HealthCheck> {
             // Only once the registration has settled, and only when this build can push at all.
             autoOpen = !pushOk && i.pushConfigured && i.pushSettled,
         ),
+    ) + listOfNotNull(i.account?.let(::accountCheck))
+}
+
+/**
+ * Decision 064: an offline session stays signed in until Log out; a plain refresh token ("Refresh")
+ * means Keycloak's client lacks offline_access and the session ends after its idle timeout. Shown,
+ * never opens the screen by itself (only an admin can fix it).
+ */
+fun accountCheck(a: AccountInputs): HealthCheck {
+    val short = a.tokenType.equals("Refresh", ignoreCase = true)
+    val last = a.lastSignOut?.let { " Last sign-out: $it." } ?: ""
+    return HealthCheck(
+        HealthRow.ACCOUNT, !short,
+        if (short) "Short session — ask the admin" else "Stays signed in (offline session)",
+        when {
+            short -> "RisiCloud gave this phone a short session: you'll be asked to sign in again.$last"
+            a.tokenType == null -> "Signed in with RisiCloud.$last"
+            else -> "Signed in with RisiCloud until you log out.$last"
+        },
+        null,
+        state = if (short) "short" else "ok",
     )
 }
 

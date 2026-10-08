@@ -82,16 +82,40 @@ class AuthLogicTest {
     private val blocked = Blocked(BlockKind.NOT_ALLOWLISTED, "x")
 
     @Test fun gateOrder() {
-        // update required beats everything, then blocked, then locked, then phone.
-        assertEquals(AppGate.UPDATE_REQUIRED, appGate(true, unverifiedS, false, blocked, true))
-        assertEquals(AppGate.BLOCKED, appGate(true, unverifiedS, false, blocked, false))
-        assertEquals(AppGate.BLOCKED, appGate(true, null, false, blocked, false))
-        assertEquals(AppGate.LOADING, appGate(false, null, false, null, false))
-        assertEquals(AppGate.SIGNED_OUT, appGate(true, null, false, null, false))
-        assertEquals(AppGate.LOCKED, appGate(true, unverifiedS, false, null, false))
-        assertEquals(AppGate.CONFIRM_PHONE, appGate(true, unverifiedS, true, null, false))
-        assertEquals(AppGate.CHATS, appGate(true, verified, true, null, false))
-        assertEquals(AppGate.CHATS, appGate(true, dev, false, null, false)) // dev sessions never lock
+        val ready = SessionState.READY
+        val none = SessionState.NONE
+        // update required beats everything, then blocked, then the migration, then the app lock, then phone.
+        assertEquals(AppGate.UPDATE_REQUIRED, appGate(true, unverifiedS, none, blocked, true))
+        assertEquals(AppGate.BLOCKED, appGate(true, unverifiedS, none, blocked, false))
+        assertEquals(AppGate.BLOCKED, appGate(true, null, none, blocked, false))
+        assertEquals(AppGate.LOADING, appGate(false, null, none, null, false))
+        assertEquals(AppGate.SIGNED_OUT, appGate(true, null, none, null, false))
+        assertEquals(AppGate.MIGRATE, appGate(true, unverifiedS, SessionState.NEEDS_MIGRATION, null, false))
+        assertEquals(AppGate.LOADING, appGate(true, verified, SessionState.RESTORING, null, false))
+        assertEquals(AppGate.SIGNED_OUT, appGate(true, verified, none, null, false)) // never stuck: sign in (chats kept)
+        assertEquals(AppGate.CONFIRM_PHONE, appGate(true, unverifiedS, ready, null, false))
+        assertEquals(AppGate.CHATS, appGate(true, verified, ready, null, false))
+        assertEquals(AppGate.CHATS, appGate(true, dev, none, null, false)) // dev sessions have no vault
+        // Decision 064: the optional app lock is a UI gate for every session kind; unknown → wait.
+        assertEquals(AppGate.APP_LOCKED, appGate(true, verified, ready, null, false, appLocked = true))
+        assertEquals(AppGate.APP_LOCKED, appGate(true, dev, none, null, false, appLocked = true))
+        assertEquals(AppGate.LOADING, appGate(true, verified, ready, null, false, appLocked = null))
+        assertEquals(AppGate.SIGNED_OUT, appGate(true, null, none, null, false, appLocked = true))
+        // Default off: after an update the app opens straight to the chats.
+        assertEquals(AppGate.CHATS, appGate(true, verified, ready, null, false, appLocked = false))
+    }
+
+    @Test fun refreshTokenTypeAndExpiryAreDecodedWithoutTheToken() {
+        fun jwt(payload: String) = "eyJhbGciOiJIUzI1NiJ9." +
+            java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray()) + ".sig"
+        val off = refreshTokenInfo(jwt("""{"typ":"Offline","exp":0,"sub":"x"}"""))!!
+        assertTrue(off.offline)
+        assertEquals("typ=Offline exp=none", off.toString())
+        val short = refreshTokenInfo(jwt("""{"typ":"Refresh","exp":1760000000}"""))!!
+        assertFalse(short.offline)
+        assertEquals("typ=Refresh exp=2025-10-09T08:53:20Z", short.toString())
+        assertEquals(null, refreshTokenInfo("opaque-token"))
+        assertEquals(null, refreshTokenInfo(null))
     }
 
     @Test fun socketOnlyWhenVerified() {

@@ -15,9 +15,15 @@ import lk.codegen.risime.MainActivity
 import lk.codegen.risime.R
 import lk.codegen.risime.net.FriendRequest
 
-/** Local notifications (decision 026): built from the local DB, grouped by chat, tap → that chat. */
-class Notifier(private val context: Context) {
+/**
+ * Local notifications (decision 026): built from the local DB, grouped by chat, tap → that chat.
+ * [hideContent]: the fingerprint lock is on with "Show content in notifications" off (decision 064):
+ * "New message" with no name or text.
+ */
+class Notifier(private val context: Context, private val hideContent: () -> Boolean = { false }) {
     private val nm = NotificationManagerCompat.from(context)
+
+    private fun shown(plan: List<ChatNotification>): List<ChatNotification> = if (hideContent()) plan.map(::redactForLock) else plan
 
     fun ensureChannels() {
         if (Build.VERSION.SDK_INT < 26) return
@@ -74,7 +80,7 @@ class Notifier(private val context: Context) {
     fun postChats(plan: List<ChatNotification>): Boolean {
         if (plan.isEmpty() || !allowed()) return false
         ensureChannels()
-        plan.forEach { n -> nm.notify(chatId(n.conversationId), chatBuilder(n, silent = false).build()) }
+        shown(plan).forEach { n -> nm.notify(chatId(n.conversationId), chatBuilder(n, silent = false).build()) }
         postSummary(silent = false)
         return true
     }
@@ -94,7 +100,7 @@ class Notifier(private val context: Context) {
     fun refreshChats(plan: List<ChatNotification>) {
         val active = activeChatIds()
         if (active.isEmpty()) return
-        val r = planNotificationRefresh(active, plan.associateBy { chatId(it.conversationId) })
+        val r = planNotificationRefresh(active, shown(plan).associateBy { chatId(it.conversationId) })
         r.cancel.forEach { nm.cancel(it) }
         if (r.repost.isNotEmpty() && allowed()) {
             r.repost.forEach { n -> nm.notify(chatId(n.conversationId), chatBuilder(n, silent = true).build()) }
@@ -173,8 +179,8 @@ class Notifier(private val context: Context) {
             chatId(conversationId),
             NotificationCompat.Builder(context, CH_MESSAGES)
                 .setSmallIcon(R.drawable.ic_stat_risime)
-                .setContentTitle("Added to a group")
-                .setContentText(text)
+                .setContentTitle(if (hideContent()) "RisiMe" else "Added to a group")
+                .setContentText(if (hideContent()) LOCKED_CONTENT_TEXT else text)
                 .setCategory(NotificationCompat.CATEGORY_SOCIAL)
                 .setGroup(GROUP_MESSAGES)
                 .setAutoCancel(true)
@@ -202,7 +208,7 @@ class Notifier(private val context: Context) {
 
     @Suppress("MissingPermission")
     fun postRequests(fresh: List<FriendRequest>) {
-        val (title, text) = requestNotificationText(fresh) ?: return
+        val (title, text) = requestNotificationText(fresh)?.let { if (hideContent()) "RisiMe" to "New notification" else it } ?: return
         if (!allowed()) return
         ensureChannels()
         nm.notify(

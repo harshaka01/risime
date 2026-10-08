@@ -50,12 +50,13 @@ class MainActivity : FragmentActivity() {
 
     /** Notification tap → that chat (after any gate: unlock, phone, update). */
     private fun handleOpenChat(intent: Intent?) {
-        // §16.8 (decision 051): Answer on the nameless ring → the fingerprint unlock, then the sync decides.
+        // §16.8 (decision 051): Answer on the nameless ring (only a pre-064 vault waiting for its
+        // migration has no session) → the migration fingerprint, then the sync decides.
         if (intent?.getBooleanExtra(EXTRA_BLIND_ANSWER, false) == true) {
             intent.removeExtra(EXTRA_BLIND_ANSWER)
             val c = (application as RisiMeApp).container
             lifecycleScope.launch {
-                c.auth.unlocked.first { it }
+                c.auth.state.first { it == lk.codegen.risime.data.auth.SessionState.READY }
                 c.calls.onUnlockedAfterBlindAnswer { text -> android.widget.Toast.makeText(this@MainActivity, text, android.widget.Toast.LENGTH_LONG).show() }
             }
         }

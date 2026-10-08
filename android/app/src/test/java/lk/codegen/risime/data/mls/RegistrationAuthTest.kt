@@ -2,12 +2,11 @@ package lk.codegen.risime.data.mls
 
 import kotlinx.coroutines.runBlocking
 import lk.codegen.risime.data.auth.AuthManager
-import lk.codegen.risime.data.auth.Envelope
 import lk.codegen.risime.data.auth.OidcGateway
 import lk.codegen.risime.data.auth.OidcTokens
 import lk.codegen.risime.data.auth.RefreshResult
-import lk.codegen.risime.data.auth.TokenVault
-import lk.codegen.risime.data.auth.WrappingKey
+import lk.codegen.risime.data.auth.SessionVault
+import lk.codegen.risime.data.auth.VaultKey
 import lk.codegen.risime.net.ApiClient
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
@@ -20,32 +19,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 import java.io.File
-import java.security.KeyPair
-import java.security.KeyPairGenerator
-import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
 
 /**
  * P0 nightly.10: `PUT /me/devices` got 401 for most testers. Wired exactly like AppContainer
  * (bearer = the unlocked OIDC token, a 401 refreshes and retries once), against a server that
  * accepts only the current access token and records registered devices.
  */
+@RunWith(RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34], application = android.app.Application::class)
 class RegistrationAuthTest {
     @get:Rule val tmp = TemporaryFolder()
 
-    private class Key : WrappingKey {
-        var pair: KeyPair? = null
-        override fun ensure(): Boolean {
-            if (pair == null) pair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
-            return true
-        }
-        override fun exists() = pair != null
-        override fun wrap(dataKey: ByteArray): ByteArray = Cipher.getInstance(Envelope.RSA_TRANSFORMATION)
-            .run { init(Cipher.ENCRYPT_MODE, pair!!.public, Envelope.OAEP_SPEC); doFinal(dataKey) }
-        override fun unwrapCipher(): Cipher? = pair?.let {
-            Cipher.getInstance(Envelope.RSA_TRANSFORMATION).apply { init(Cipher.DECRYPT_MODE, it.private, Envelope.OAEP_SPEC) }
-        }
-        override fun delete() { pair = null }
+    private class Key : VaultKey {
+        override val alias = "test"
+        var key: SecretKey? = null
+        override fun get() = key
+        override fun getOrCreate(): SecretKey? = key ?: KeyGenerator.getInstance("AES").apply { init(256) }.generateKey().also { key = it }
+        override fun delete() { key = null }
     }
 
     private val refreshedWith = mutableListOf<String>()
@@ -78,12 +73,12 @@ class RegistrationAuthTest {
 
     @After fun stop() = server.shutdown()
 
-    private val auth by lazy { AuthManager(gateway, TokenVault(File(tmp.root, "t.bin"), Key()), { 0L }) }
+    private val auth by lazy { AuthManager(gateway, SessionVault(File(tmp.root, "t.bin"), Key()), null, { 0L }) }
     private val api by lazy {
         ApiClient(
             OkHttpClient(), { server.url("/").toString() },
-            { if (auth.unlocked.value) auth.bearer() else null },
-            onUnauthorized = { auth.unlocked.value && auth.bearer(forceRefresh = true) != null },
+            { if (auth.hasSession()) auth.bearer() else null },
+            onUnauthorized = { auth.hasSession() && auth.bearer(forceRefresh = true) != null },
         )
     }
     private val registrar by lazy { DeviceRegistrar(api, { "dev-1" }, "0.2.0-nightly.11", { null }) }
@@ -98,7 +93,7 @@ class RegistrationAuthTest {
     }
 
     @Test fun lockedSessionSendsNoTokenSoTheLoopWaitsForTheUnlockThenRegisters() = runBlocking {
-        // nightly.10: a locked OIDC session has no bearer → the PUT went out without one → 401, no retry.
+        // nightly.10: a session with no bearer (since 064 only an unmigrated pre-064 vault) → the PUT went out without one → 401, no retry.
         assertEquals(Registration.Failed("invalid_token"), registrar.register("fcm-token"))
         assertEquals(listOf<String?>(null), auths)
         // The fix: the loop retries with backoff; after the unlock the same attempt succeeds.
@@ -107,7 +102,7 @@ class RegistrationAuthTest {
         val n = RegistrationRetry.untilDone(sleep = { sleeps += it }) {
             attempt++
             if (attempt == 3) auth.adopt("iss", "risime", OidcTokens("a2", 300, "r2", "id")) // unlocked
-            auth.unlocked.value && registrar.register("fcm-token").settled()
+            auth.hasSession() && registrar.register("fcm-token").settled()
         }
         assertEquals(3, n)
         assertEquals(listOf(5_000L, 10_000L), sleeps)

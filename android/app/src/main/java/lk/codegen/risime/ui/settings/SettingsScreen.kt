@@ -80,8 +80,13 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
             )
             FilledTonalButton(onClick = onNotificationHealth, modifier = Modifier.fillMaxWidth()) { Text(NOTIFICATION_HEALTH_TITLE) }
             HorizontalDivider()
-            if (BuildConfig.HISTORY_SHARE_ENABLED) {
-                lk.codegen.risime.ui.history.HistoryPrivacySection()
+            // Privacy: the optional fingerprint lock (decision 064; only with a usable strong biometric) and history sharing.
+            val lockAvailable = lk.codegen.risime.ui.lock.rememberLockAvailable()
+            val container = (androidx.compose.ui.platform.LocalContext.current.applicationContext as? lk.codegen.risime.RisiMeApp)?.container
+            if ((lockAvailable && container != null) || BuildConfig.HISTORY_SHARE_ENABLED) {
+                SectionHeader("Privacy")
+                if (container != null) lk.codegen.risime.ui.lock.FingerprintLockSection(container, lockAvailable, showHeader = false)
+                if (BuildConfig.HISTORY_SHARE_ENABLED) lk.codegen.risime.ui.history.HistoryPrivacySection(showHeader = false)
                 HorizontalDivider()
             }
             AboutSection()

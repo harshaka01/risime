@@ -134,32 +134,44 @@ object RefreshTiming {
 }
 
 /** Top-level screen, in priority order (decision 020 / contract §7). */
-enum class AppGate { LOADING, UPDATE_REQUIRED, BLOCKED, SIGNED_OUT, LOCKED, CONFIRM_PHONE, CHATS }
+enum class AppGate { LOADING, UPDATE_REQUIRED, BLOCKED, SIGNED_OUT, MIGRATE, APP_LOCKED, CONFIRM_PHONE, CHATS }
 
 /**
- * update required → blocked (403/409) → locked (fingerprint) → confirm phone → chats.
+ * update required → blocked (403/409) → signed out → finish the pre-064 vault migration (one
+ * fingerprint) → the optional app lock → confirm phone → chats.
  * [session] is null when signed out; [sessionLoaded] false while DataStore hasn't answered yet.
+ * [oidc] is the token vault's state; [appLocked] null while the lock settings are still loading.
  */
 fun appGate(
     sessionLoaded: Boolean,
     session: lk.codegen.risime.data.Session?,
-    unlocked: Boolean,
+    oidc: SessionState,
     blocked: Blocked?,
     updateRequired: Boolean,
+    appLocked: Boolean? = false,
 ): AppGate = when {
     updateRequired -> AppGate.UPDATE_REQUIRED
     blocked != null -> AppGate.BLOCKED
     !sessionLoaded -> AppGate.LOADING
     session == null -> AppGate.SIGNED_OUT
-    session.kind == lk.codegen.risime.data.AuthKind.OIDC && !unlocked -> AppGate.LOCKED
+    session.kind == lk.codegen.risime.data.AuthKind.OIDC && oidc == SessionState.NEEDS_MIGRATION -> AppGate.MIGRATE
+    // RESTORING: a few ms at process start. NONE: no token set behind this session (never a dead
+    // end: the sign-in screen; the start-up check also clears the stale session, chats kept).
+    session.kind == lk.codegen.risime.data.AuthKind.OIDC && oidc == SessionState.RESTORING -> AppGate.LOADING
+    session.kind == lk.codegen.risime.data.AuthKind.OIDC && oidc == SessionState.NONE -> AppGate.SIGNED_OUT
+    appLocked == null -> AppGate.LOADING
+    appLocked -> AppGate.APP_LOCKED
     !session.user.phoneVerified -> AppGate.CONFIRM_PHONE
     else -> AppGate.CHATS
 }
 
-/** The socket runs only for a signed-in, unlocked, verified, unblocked session in the foreground. */
-fun shouldConnect(foreground: Boolean, session: lk.codegen.risime.data.Session?, unlocked: Boolean, blocked: Blocked?): Boolean =
+/**
+ * The socket runs only for a signed-in session with a bearer ([oidcReady] for OIDC), verified and
+ * unblocked, while wanted ([foreground]: the app, a call, a push sync). The app lock is UI only.
+ */
+fun shouldConnect(foreground: Boolean, session: lk.codegen.risime.data.Session?, oidcReady: Boolean, blocked: Blocked?): Boolean =
     foreground && blocked == null && session != null && session.user.phoneVerified &&
-        (session.kind == lk.codegen.risime.data.AuthKind.DEV || unlocked)
+        (session.kind == lk.codegen.risime.data.AuthKind.DEV || oidcReady)
 
 // ---- §21 open sign-up (v1.20) ----
 
@@ -235,3 +247,50 @@ fun nameClaim(jwt: String?): String? = runCatching {
     val obj: JsonObject = ClaimsJson.parseToJsonElement(String(bytes, Charsets.UTF_8)).jsonObject
     (obj["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.take(64)?.takeIf { it.isNotEmpty() }
 }.getOrNull()
+
+/** The refresh token's `typ` (Keycloak: "Offline" for offline_access, "Refresh" for a short session) and `exp` (epoch s; 0/absent = none). */
+data class RefreshTokenInfo(val typ: String?, val exp: Long?) {
+    /** An offline session stays signed in until an explicit logout (decision 064). */
+    val offline: Boolean get() = typ.equals("Offline", ignoreCase = true)
+
+    override fun toString() =
+        "typ=${typ ?: "?"} exp=${exp?.takeIf { it > 0 }?.let { java.time.Instant.ofEpochSecond(it).toString() } ?: "none"}"
+}
+
+/** Decodes only the payload's `typ` and `exp` (the token is never logged or kept). Null for an opaque token. */
+fun refreshTokenInfo(jwt: String?): RefreshTokenInfo? = runCatching {
+    val payload = jwt!!.split('.')[1]
+    val bytes = java.util.Base64.getUrlDecoder().decode(payload.trimEnd('='))
+    val obj: JsonObject = ClaimsJson.parseToJsonElement(String(bytes, Charsets.UTF_8)).jsonObject
+    val typ = (obj["typ"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    val exp = (obj["exp"] as? JsonPrimitive)?.content?.toLongOrNull()
+    RefreshTokenInfo(typ, exp)
+}.getOrNull()
+
+/** Why a session ended (decision 064): logged as `RisiMe auth: sign-out trigger=<value>`, shown on the health screen. */
+enum class SignOutTrigger(val value: String) {
+    INVALID_GRANT("invalid_grant"),
+    KEY_INVALIDATED("key_invalidated"),
+    VAULT_UNREADABLE("vault_unreadable"),
+    NO_STORED_SESSION("no_stored_session"),
+    UNAUTHORIZED("unauthorized"),
+    USER_LOGOUT("user_logout"),
+    USER_LOGOUT_DELETE("user_logout_delete"),
+    ESCAPE_SCREEN("escape_screen"),
+    SWITCH_SERVER("switch_server"),
+    ANOTHER_ACCOUNT("another_account"),
+    SIGN_IN_FAILED("sign_in_failed"),
+}
+
+/** Where sign-in/sign-out facts go (log lines + the health screen). Never receives a token. */
+interface AuthDiagnostics {
+    fun signedIn(info: RefreshTokenInfo?)
+
+    fun signedOut(trigger: SignOutTrigger)
+
+    object None : AuthDiagnostics {
+        override fun signedIn(info: RefreshTokenInfo?) = Unit
+
+        override fun signedOut(trigger: SignOutTrigger) = Unit
+    }
+}

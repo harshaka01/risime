@@ -21,8 +21,8 @@ import java.util.concurrent.TimeUnit
  * §17.16 (android R7) the provider's export: a long-running worker in the foreground (service type
  * `dataSync`, an ongoing "Sharing chat history…" notification) that holds the realtime connection
  * for `history:respond`/`history:deliver` and resumes per part after a kill. Only after an explicit
- * Share or an option-A approval, and only while unlocked (a locked app has no bearer: it stops and
- * the start-up sweep resumes it after the unlock).
+ * Share or an option-A approval, and only with a bearer (since decision 064 also in a background
+ * process; only a pre-064 vault waiting for its migration has none: the start-up sweep resumes it).
  */
 class HistoryExportWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {

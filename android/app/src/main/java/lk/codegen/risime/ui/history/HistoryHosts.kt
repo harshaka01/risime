@@ -44,8 +44,9 @@ fun HistoryPrivacyContent(
     onMembers: (Boolean) -> Unit,
     onOwn: (Boolean) -> Unit,
     onRemove: (String) -> Unit,
+    showHeader: Boolean = true,
 ) {
-    SectionHeader("Privacy")
+    if (showHeader) SectionHeader("Privacy")
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text("Share chat history with other members' new devices", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Switch(checked = members, onCheckedChange = onMembers)
@@ -69,7 +70,7 @@ fun HistoryPrivacyContent(
 }
 
 @Composable
-fun HistoryPrivacySection() {
+fun HistoryPrivacySection(showHeader: Boolean = true) {
     if (!BuildConfig.HISTORY_SHARE_ENABLED) return
     val c = (LocalContext.current.applicationContext as? RisiMeApp)?.container ?: return
     val members by c.sessionStore.historyMembers.collectAsState(true)
@@ -81,5 +82,6 @@ fun HistoryPrivacySection() {
         onMembers = { v -> c.scope.launch { c.sessionStore.setHistoryMembers(v) } },
         onOwn = { v -> c.scope.launch { c.sessionStore.setHistoryOwn(v) } },
         onRemove = { id -> c.scope.launch(kotlinx.coroutines.Dispatchers.IO) { c.history.approvals.remove(id) } },
+        showHeader = showHeader,
     )
 }

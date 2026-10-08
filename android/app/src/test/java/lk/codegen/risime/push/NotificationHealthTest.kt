@@ -18,7 +18,7 @@ class NotificationHealthTest {
     private fun row(i: HealthInputs, r: HealthRow) = healthChecks(i).single { it.row == r }
 
     @Test fun allGood() {
-        val rows = healthChecks(good)
+        val rows = healthChecks(good.copy(account = AccountInputs("Offline", null)))
         assertEquals(HealthRow.values().toList(), rows.map { it.row })
         assertTrue(rows.all { it.ok && it.fix == null })
     }
@@ -106,6 +106,21 @@ class NotificationHealthTest {
         assertTrue(shouldShowHealthAfterUpdate(callsOff, d2))
         // A not-yet-settled push failure is never remembered (it may show once it has settled).
         assertTrue(healthDismissals(healthChecks(good.copy(registeredTokenHash = null, pushSettled = false)), emptySet()).isEmpty())
+    }
+
+    @Test fun accountRowShowsTheSessionTypeAndTheLastSignOut() {
+        assertTrue(healthChecks(good).none { it.row == HealthRow.ACCOUNT }) // dev session: no row
+        val offline = healthChecks(good.copy(account = AccountInputs("Offline", null))).single { it.row == HealthRow.ACCOUNT }
+        assertTrue(offline.ok)
+        assertEquals("Stays signed in (offline session)", offline.title)
+        assertFalse(offline.autoOpen)
+        val short = healthChecks(good.copy(account = AccountInputs("Refresh", "invalid_grant"))).single { it.row == HealthRow.ACCOUNT }
+        assertFalse(short.ok)
+        assertEquals("Short session — ask the admin", short.title)
+        assertTrue(short.detail.contains("Last sign-out: invalid_grant"))
+        assertFalse(short.autoOpen) // only an admin can fix it: never pushed at the user
+        assertEquals(null, short.fix)
+        assertFalse(shouldShowHealthAfterUpdate(healthChecks(good.copy(account = AccountInputs("Refresh", null))), emptySet()))
     }
 
     @Test fun oemDetection() {
