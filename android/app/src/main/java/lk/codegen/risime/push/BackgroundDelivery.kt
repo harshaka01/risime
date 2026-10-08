@@ -30,6 +30,16 @@ const val DIRECT_PUSH_SYNC_MS = 9_000L
 /** Debounce for notifications from live socket events (the inserting transaction has committed by then). */
 const val SOCKET_NOTIFY_DEBOUNCE_MS = 600L
 
+/**
+ * The foreground part of [socketWanted]: in the foreground, or in the grace after it while the
+ * screen is on. Screen off closes at once (push-device-test, nightly.31 finding): Doze and OEM
+ * savers cut the app's network right after screen-off, so a close sent 5 s later never left the
+ * phone and the server kept a dead socket "online" until its 60-s timeout: no push for anything
+ * sent in that minute, and nothing showed until the app was opened.
+ */
+fun foregroundHold(foregroundOrGrace: Boolean, foreground: Boolean, screenOn: Boolean): Boolean =
+    foreground || (foregroundOrGrace && screenOn)
+
 /** Should the realtime socket be up? (Signed in / unlocked / not blocked are checked by `shouldConnect`.) */
 fun socketWanted(foregroundOrGrace: Boolean, pushSync: Boolean, callActive: Boolean, historyExport: Boolean): Boolean =
     foregroundOrGrace || pushSync || callActive || historyExport

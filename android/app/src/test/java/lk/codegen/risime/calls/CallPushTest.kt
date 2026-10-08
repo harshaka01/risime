@@ -60,6 +60,20 @@ class CallPushTest {
 
     private fun startedService(): Boolean = Shadows.shadowOf(app).nextStartedService?.component?.className == CallService::class.java.name
 
+    /**
+     * P0 (push-device-test): the stale-call cleanup that onCallPush launches stopped the service the
+     * push had just started, before its startForeground: ForegroundServiceDidNotStartInTimeException,
+     * the app died on every call push and nothing rang.
+     */
+    @Test fun theStartUpCleanupNeverStopsTheServiceAPushStarted() = runBlocking {
+        locked = false
+        val m = manager()
+        m.onCallPush()
+        assertTrue("the phoneCall service starts at once", startedService())
+        m.cleanupAfterProcessStart()
+        assertNull("not stopped while the push wake-up runs", Shadows.shadowOf(app).nextStoppedService)
+    }
+
     @Test fun lockedSessionRingsBlindWithoutANameAndKeepsTheSocketRequest() = runBlocking {
         val m = manager()
         m.onCallPush()

@@ -144,6 +144,9 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     /** A push woke the app: the socket stays up while it syncs (unlocked). */
     private val waking = MutableStateFlow(false)
 
+    /** Orders a push wake-up's service start against the start-up cleanup's stop. */
+    private val serviceLock = Any()
+
     /** Answer as soon as the unlocked sync finds the call (the user tapped Answer on the blind ring). */
     @Volatile var pendingBlindAnswer = false
 
@@ -328,8 +331,12 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
      */
     internal suspend fun cleanupAfterProcessStart() {
         if (state.value != null) return
-        runCatching { context.stopService(Intent(context, CallService::class.java)) }
-        runCatching { androidx.core.app.NotificationManagerCompat.from(context).cancel(CallNotifications.CALL_ID) }
+        // Never stop a service a push wake-up (or a blind ring) has just started.
+        val stopped = synchronized(serviceLock) {
+            if (waking.value || blindRing.value != null) false
+            else { runCatching { context.stopService(Intent(context, CallService::class.java)) }; true }
+        }
+        if (stopped) runCatching { androidx.core.app.NotificationManagerCompat.from(context).cancel(CallNotifications.CALL_ID) }
         // This process's own audio requests (Android 12+ keeps one per process); a cellular call is untouched.
         releaseAudio()
         val rec = runCatching { prefs.getString(KEY_ACTIVE, null)?.let(ActiveCallRecord::decode) }.getOrNull()
@@ -539,11 +546,21 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     /** `{"type":"call"}`: start the phoneCall service at once, then sync (unlocked) or ring blind (locked). */
     fun onCallPush() {
         // Decision 054: a wake-up with no call here first clears anything a crash left behind.
-        if (state.value == null) scope.launch { runCatching { cleanupAfterProcessStart() } }
-        if (port.connection.value == ConnectionState.Live) return // the live socket already brings it
+        val cleanup = state.value == null
+        if (port.connection.value == ConnectionState.Live) { // the live socket already brings it
+            if (cleanup) scope.launch { runCatching { cleanupAfterProcessStart() } }
+            return
+        }
         // Start the phoneCall service inside the high-priority FCM window, before anything else.
-        waking.value = true
-        startService()
+        // P0 (push-device-test): under the lock, so the stale-call cleanup above can't stop the
+        // service between startForegroundService and its startForeground (that crashed the app with
+        // ForegroundServiceDidNotStartInTimeException on every call push: no ring).
+        synchronized(serviceLock) {
+            waking.value = true
+            startService()
+        }
+        // Then the stale-call cleanup (it leaves the service alone while waking).
+        if (cleanup) scope.launch { runCatching { cleanupAfterProcessStart() } }
         scope.launch {
             if (port.sessionLocked()) {
                 startBlindRing()

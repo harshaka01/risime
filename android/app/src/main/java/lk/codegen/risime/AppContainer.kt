@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
@@ -954,7 +955,10 @@ class AppContainer(
         scope.launch {
             // android R6: a ringing, connecting or active call keeps the socket up regardless of foreground.
             combine(
-                combine(foreground.withBackgroundGrace(), backgroundSync, calls.keepConnected, historyConnection) { f, b, c, h ->
+                combine(
+                    combine(foreground.withBackgroundGrace(), foreground, screenInteractive()) { g, f, on -> lk.codegen.risime.push.foregroundHold(g, f, on) },
+                    backgroundSync, calls.keepConnected, historyConnection,
+                ) { f, b, c, h ->
                     lk.codegen.risime.push.socketWanted(f, b > 0, c, h > 0)
                 },
                 sessionStore.session, auth.unlocked, blocked,
@@ -963,6 +967,7 @@ class AppContainer(
             }
                 .distinctUntilChanged()
                 .collect { s ->
+                    Log.i("RisiMe", "RisiMe push: socket ${if (s != null) "up" else "closed"} (foreground=${foreground.value} sync=${backgroundSync.value} call=${calls.keepConnected.value})")
                     realtime.stop()
                     if (s != null) {
                         // History recovery before the join reads the cursor (P0 nightly.10).
@@ -1411,6 +1416,23 @@ class AppContainer(
         notifyFromLocal()
         Log.i("RisiMe", "RisiMe push: sync end after ${SystemClock.elapsedRealtime() - t0} ms")
     }
+
+    /** Screen on/off (SCREEN_ON/SCREEN_OFF broadcasts; the initial value from PowerManager). */
+    private fun screenInteractive(): kotlinx.coroutines.flow.Flow<Boolean> = kotlinx.coroutines.flow.callbackFlow {
+        val pm = appContext.getSystemService(android.os.PowerManager::class.java)
+        trySend(pm?.isInteractive ?: true)
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context?, i: android.content.Intent?) {
+                trySend(i?.action == android.content.Intent.ACTION_SCREEN_ON)
+            }
+        }
+        val f = android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_SCREEN_ON)
+            addAction(android.content.Intent.ACTION_SCREEN_OFF)
+        }
+        androidx.core.content.ContextCompat.registerReceiver(appContext, r, f, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        awaitClose { runCatching { appContext.unregisterReceiver(r) } }
+    }.distinctUntilChanged()
 
     private val notifyLock = kotlinx.coroutines.sync.Mutex()
 

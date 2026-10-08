@@ -51,6 +51,14 @@ class BackgroundDeliveryTest {
         job.cancel()
     }
 
+    /** Screen off: the socket closes at once (no grace), while the phone still has network. */
+    @Test fun screenOffClosesWithoutTheGrace() {
+        assertTrue(foregroundHold(foregroundOrGrace = true, foreground = true, screenOn = true))
+        assertTrue("app switch, screen on: the grace", foregroundHold(foregroundOrGrace = true, foreground = false, screenOn = true))
+        assertFalse("screen off inside the grace: closed now", foregroundHold(foregroundOrGrace = true, foreground = false, screenOn = false))
+        assertFalse(foregroundHold(foregroundOrGrace = false, foreground = false, screenOn = true))
+    }
+
     @Test fun whatKeepsTheSocketUp() {
         assertTrue(socketWanted(foregroundOrGrace = true, pushSync = false, callActive = false, historyExport = false))
         assertTrue(socketWanted(false, pushSync = true, callActive = false, historyExport = false))
