@@ -148,6 +148,7 @@ defmodule RisiMeWeb.CallsV113Test do
                  "from_device" => a_dev,
                  "call_id" => p["call_id"],
                  "ring" => true,
+                 "media" => "audio",
                  "ciphertext" => p["ciphertext"],
                  "generation" => 1,
                  "epoch" => 1,

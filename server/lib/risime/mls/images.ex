@@ -40,15 +40,20 @@ defmodule RisiMe.MLS.Images do
     |> put_calls(conversation_id, members)
   end
 
-  # v1.13 §16.1 (DMs only; groups get calls in v1.14): `calls_ready` when the DM is e2ee and each
-  # of the two users has at least one instance seen in the last 30 days that advertises `calls`
-  # (a device without it just doesn't ring); `missing_calls` lists the other instances.
+  # v1.13 §16.1 (DMs only): `calls_ready` when the DM is e2ee and each of the two users has at
+  # least one instance seen in the last 30 days that advertises `calls` (a device without it
+  # just doesn't ring); `missing_calls` lists the other instances. v1.18 §19.1: `video_ready` /
+  # `missing_video` computed the same way for `video`.
   defp put_calls(%{e2ee: e2ee} = view, "dm:" <> _, members) do
     ready = ready_users(members, "calls")
+    video = ready_users(members, "video", skip_superseded: true)
+    all? = fn set -> e2ee and members != [] and Enum.all?(members, &MapSet.member?(set, &1)) end
 
     Map.merge(view, %{
-      calls_ready: e2ee and members != [] and Enum.all?(members, &MapSet.member?(ready, &1)),
-      missing_calls: missing(members, "calls")
+      calls_ready: all?.(ready),
+      missing_calls: missing(members, "calls"),
+      video_ready: all?.(video),
+      missing_video: missing(members, "video")
     })
   end
 
@@ -56,10 +61,16 @@ defmodule RisiMe.MLS.Images do
 
   @doc """
   The users among `user_ids` with at least one census instance seen in the last 30 days on a
-  registered MLS device that advertises `capability`.
+  registered MLS device that advertises `capability` (`skip_superseded: true`: not counting
+  superseded devices).
   """
-  def ready_users(user_ids, capability) do
+  def ready_users(user_ids, capability, opts \\ []) do
     since = DateTime.add(DateTime.utc_now(), -@census_days, :day)
+
+    # v1.18 §19.1, v1.19 §20.1: superseded devices (a reinstall's old id) never count (§12.1).
+    # `calls_ready` (v1.13) keeps its original rule.
+    superseded =
+      if opts[:skip_superseded], do: MLS.superseded_devices(user_ids), else: MapSet.new()
 
     Repo.all(
       from i in "app_instances",
@@ -69,9 +80,10 @@ defmodule RisiMe.MLS.Images do
           i.user_id in type(^user_ids, {:array, :binary_id}) and i.last_seen_at > ^since and
             not is_nil(d.mls_signature_key) and ^capability in d.capabilities,
         distinct: true,
-        select: d.user_id
+        select: {d.user_id, d.device_id}
     )
-    |> MapSet.new()
+    |> Enum.reject(&MapSet.member?(superseded, &1))
+    |> MapSet.new(&elem(&1, 0))
   end
 
   defp member_ids("grp:" <> _ = conv), do: Groups.active_member_ids(conv)

@@ -99,8 +99,10 @@ defmodule RisiMe.ContractExamplesTest do
                     profile_photo_payload.json profile_photo_payload_bad.json
                     profile_photo_payload_removed.json)
 
-  # v1.18 (1:1 video calls, §19): parse-only placeholders until the server implements it.
-  @pending_v1_18 ~w(call_end_video_payload.json call_media_payload.json
+  # v1.18 (1:1 video calls, §19): checked in the "v1.18" describe below; the behaviour in
+  # test/risime_web/channels/calls_v118_test.exs. The envelopes travel inside MLS: they are
+  # checked against the §19.3/§19.4 rules instead.
+  @checked_v1_18 ~w(call_end_video_payload.json call_media_payload.json
                     call_offer_video_payload.json call_offer_video_payload_bad.json
                     call_signal_event_video.json call_signal_push_video.json device_put_video.json
                     error_video_not_ready.json mls_group_video_ready.json)
@@ -154,7 +156,7 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_14 ++
         @checked_v1_15 ++
         @checked_v1_17 ++
-        @pending_v1_18 ++
+        @checked_v1_18 ++
         @pending_v1_19
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
@@ -700,7 +702,7 @@ defmodule RisiMe.ContractExamplesTest do
       assert keys(
                Map.drop(
                  view,
-                 ~w(images_ready missing_images deletes_ready missing_deletes calls_ready missing_calls)
+                 ~w(images_ready missing_images deletes_ready missing_deletes calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
                )
              ) ==
                keys(ex)
@@ -1487,13 +1489,18 @@ defmodule RisiMe.ContractExamplesTest do
       ex = example("mls_group_images_ready.json")
       {200, view} = v_api(:get, "/api/v1/mls/groups/#{conv}", a.token)
 
-      assert keys(Map.drop(view, ~w(deletes_ready missing_deletes calls_ready missing_calls))) ==
+      assert keys(
+               Map.drop(
+                 view,
+                 ~w(deletes_ready missing_deletes calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+               )
+             ) ==
                keys(ex)
 
       assert_same_shape(
         Map.drop(
           view,
-          ~w(missing devices missing_images deletes_ready missing_deletes calls_ready missing_calls)
+          ~w(missing devices missing_images deletes_ready missing_deletes calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
         ),
         Map.drop(ex, ~w(missing devices missing_images))
       )
@@ -1874,10 +1881,19 @@ defmodule RisiMe.ContractExamplesTest do
 
       ex = example("mls_group_deletes_ready.json")
       {200, view} = v_api(:get, "/api/v1/mls/groups/#{conv}", a.token)
-      assert keys(Map.drop(view, ~w(calls_ready missing_calls))) == keys(ex)
+
+      assert keys(
+               Map.drop(
+                 view,
+                 ~w(calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+               )
+             ) == keys(ex)
 
       assert_same_shape(
-        Map.drop(view, ~w(missing devices calls_ready missing_calls)),
+        Map.drop(
+          view,
+          ~w(missing devices calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+        ),
         Map.drop(ex, ~w(missing devices))
       )
 
@@ -2322,7 +2338,14 @@ defmodule RisiMe.ContractExamplesTest do
         payload: %{kind: "call_signal"} = event
       }
 
-      assert_same_shape(wire(event), example("call_signal_event.json"))
+      # v1.18 §19.2: the event now always carries `media` (call_signal_event_video.json).
+      assert event.data["media"] == "audio"
+
+      assert_same_shape(
+        update_in(wire(event)["data"], &Map.delete(&1, "media")),
+        example("call_signal_event.json")
+      )
+
       assert event.data["call_id"] == ex["call_id"] and event.data["ring"] == true
 
       # A friend in an e2ee DM without any calls device: ring refused.
@@ -2360,8 +2383,14 @@ defmodule RisiMe.ContractExamplesTest do
 
       {200, view} = RisiMe.GroupHelpers.api(:get, "/api/v1/mls/groups/#{conv}", a.token)
       ex = example("mls_group_calls_ready.json")
-      assert keys(view) == keys(ex)
-      assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
+      # v1.18 adds video_ready / missing_video (mls_group_video_ready.json).
+      assert keys(Map.drop(view, ~w(video_ready missing_video))) == keys(ex)
+
+      assert_same_shape(
+        Map.drop(view, ~w(missing devices video_ready missing_video)),
+        Map.drop(ex, ~w(missing devices))
+      )
+
       assert view["calls_ready"] == true
       assert view["missing_calls"] == [%{"user_id" => b.user.id, "device_id" => tablet}]
       assert_same_shape(hd(view["missing_calls"]), hd(ex["missing_calls"]))
@@ -2490,6 +2519,144 @@ defmodule RisiMe.ContractExamplesTest do
 
       assert [replayed] = Enum.filter(events, &(&1.event_id == mid))
       assert_same_shape(wire(replayed)["data"], ev["data"])
+    end
+  end
+
+  describe "v1.18" do
+    setup :with_attestation_key
+
+    defp v_dev(user, caps) do
+      dev = Ecto.UUID.generate()
+
+      {:ok, _} =
+        RisiMe.Devices.register(user.user.id, dev, %{
+          "platform" => "android",
+          "mls" => %{"signature_key" => b64(), "capabilities" => caps}
+        })
+
+      :ok = RisiMe.MLS.record_instance(user.user.id, dev, nil, "0.3.0")
+      dev
+    end
+
+    # The §19.4 checks a receiver applies to a video offer (a subset: m-lines, BUNDLE,
+    # fingerprints, codecs, simulcast, b=AS, denylisted extensions).
+    defp video_sdp_ok?(sdp) do
+      lines = String.split(sdp, "\r\n", trim: true)
+      mlines = Enum.filter(lines, &String.starts_with?(&1, "m="))
+      fps = for l <- lines, String.starts_with?(l, "a=fingerprint:"), do: l
+
+      deny =
+        ~w(urn:ietf:params:rtp-hdrext:ssrc-audio-level urn:ietf:params:rtp-hdrext:csrc-audio-level
+                http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time urn:3gpp:video-orientation)
+
+      byte_size(sdp) <= 16_384 and
+        match?(["m=audio " <> _, "m=video " <> _], mlines) and
+        Enum.all?(mlines, &String.contains?(&1, "UDP/TLS/RTP/SAVPF")) and
+        Enum.any?(lines, &String.starts_with?(&1, "a=group:BUNDLE ")) and
+        Enum.count(lines, &(&1 == "a=rtcp-mux")) == 2 and fps != [] and
+        length(Enum.uniq(fps)) == 1 and
+        hd(fps) =~ ~r/^a=fingerprint:sha-256 ([0-9A-F]{2}:){31}[0-9A-F]{2}$/ and
+        String.contains?(sdp, "VP8/90000") and
+        not Enum.any?(
+          lines,
+          &(String.starts_with?(&1, "a=simulcast") or String.starts_with?(&1, "a=rid"))
+        ) and
+        not Enum.any?(lines, fn l -> Enum.any?(deny, &String.contains?(l, &1)) end) and
+        Enum.all?(for("b=AS:" <> n <- lines, do: String.to_integer(n)), &(&1 <= 1500))
+    end
+
+    test "the video envelopes follow §19.3/§19.4; the simulcast offer is dropped" do
+      offer = example("call_offer_video_payload.json")
+      assert offer["type"] == "call_offer" and offer["media"] == "video"
+      assert offer["call_id"] =~ @uuid and offer["sent_at"] =~ @ts and offer["restart"] == false
+      assert video_sdp_ok?(offer["sdp"])
+
+      bad = example("call_offer_video_payload_bad.json")
+      assert bad["media"] == "video"
+      refute video_sdp_ok?(bad["sdp"])
+      assert bad["sdp"] =~ "a=simulcast"
+
+      m = example("call_media_payload.json")
+      assert m["v"] == 1 and m["type"] == "call_media" and is_boolean(m["camera"])
+      assert m["call_id"] =~ @uuid and m["to_device"] =~ @uuid
+
+      e = example("call_end_video_payload.json")
+      assert e["type"] == "call_end" and e["media"] == "video" and e["call_id"] =~ @uuid
+      assert e["reason"] in ~w(hangup cancelled timeout declined busy failed)
+      assert e["connected_at"] =~ @ts and is_integer(e["duration_s"])
+    end
+
+    test "call_signal_push_video.json → call_signal_event_video.json; error_video_not_ready.json",
+         %{a: a, b: b} do
+      caps = ~w(groups images deletes calls video)
+      a_dev = v_dev(a, caps)
+      _ = v_dev(b, caps)
+      e2ee_group!(a, b)
+      {:ok, sock} = connect(UserSocket, %{"token" => a.token, "device_id" => a_dev})
+      {:ok, _, chan} = subscribe_and_join(sock, InboxChannel, "inbox:" <> a.user.id, %{})
+
+      ex = example("call_signal_push_video.json")
+      assert ex["media"] == "video"
+      ref = push(chan, "call:signal", %{ex | "to" => b.user.id})
+      assert_reply ref, :ok, reply
+      assert keys(wire(reply)) == keys(example("call_signal_reply.json"))
+
+      topic = "inbox:" <> a.user.id
+
+      assert_receive %Phoenix.Socket.Message{
+        topic: ^topic,
+        event: "event",
+        payload: %{kind: "call_signal"} = event
+      }
+
+      ev = example("call_signal_event_video.json")
+      assert keys(wire(event)) == keys(ev)
+      assert keys(wire(event)["data"]) == keys(ev["data"])
+      assert_same_shape(wire(event), ev)
+      assert event.data["media"] == "video"
+
+      c = logged_in_user()
+      befriend!(a, c)
+      _ = v_dev(c, ~w(groups images deletes calls))
+      e2ee_group!(a, c)
+
+      ref =
+        push(chan, "call:signal", %{ex | "to" => c.user.id, "client_msg_id" => Uniq.UUID.uuid4()})
+
+      assert_reply ref, :error, err
+      assert wire(err) == example("error_video_not_ready.json")
+    end
+
+    test "device_put_video.json and mls_group_video_ready.json", %{a: a, b: b} do
+      a_dev = Ecto.UUID.generate()
+
+      {200, %{"attestation" => _}} =
+        RisiMe.GroupHelpers.api(
+          :put,
+          "/api/v1/me/devices/#{a_dev}",
+          a.token,
+          example("device_put_video.json")
+        )
+
+      :ok = RisiMe.MLS.record_instance(a.user.id, a_dev, nil, "0.3.0")
+
+      assert %{capabilities: ["groups", "images", "deletes", "calls", "video"]} =
+               Repo.get_by(RisiMe.Devices.Device, device_id: a_dev)
+
+      b_phone = v_dev(b, ~w(groups images deletes calls video))
+      tablet = v_dev(b, ~w(groups images deletes))
+      # The phone is still in use (seen after the tablet registered).
+      :ok = RisiMe.MLS.record_instance(b.user.id, b_phone, nil, "0.3.0")
+      RisiMe.GroupHelpers.clear_legacy!()
+      conv = e2ee_group!(a, b)
+
+      {200, view} = RisiMe.GroupHelpers.api(:get, "/api/v1/mls/groups/#{conv}", a.token)
+      ex = example("mls_group_video_ready.json")
+      assert keys(view) == keys(ex)
+      assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
+      assert view["video_ready"] == true and view["calls_ready"] == true
+      assert view["missing_video"] == [%{"user_id" => b.user.id, "device_id" => tablet}]
+      assert_same_shape(hd(view["missing_video"]), hd(ex["missing_video"]))
     end
   end
 

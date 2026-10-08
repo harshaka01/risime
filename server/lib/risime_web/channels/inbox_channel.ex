@@ -22,11 +22,15 @@ defmodule RisiMeWeb.InboxChannel do
       # v1.9 §12.1: only a groups-capable device gets `grp:` traffic; v1.13 §16.1: only a
       # calls-capable one gets `call_signal` events.
       device = device(user_id, socket.assigns[:device_id])
+      # v1.18 §19.2 / v1.19 §20.3: `video` and `group_calls` narrow `call_signal` delivery.
+      call_caps = RisiMe.Devices.call_caps(device)
 
       socket =
         socket
         |> assign(:groups, RisiMe.Devices.groups?(device))
-        |> assign(:calls, RisiMe.Devices.calls?(device))
+        |> assign(:calls, call_caps.calls)
+        |> assign(:video, call_caps.video)
+        |> assign(:group_calls, call_caps.group_calls)
         |> assign(:history, RisiMe.Devices.history?(device))
 
       case page(socket, payload) do
@@ -208,10 +212,11 @@ defmodule RisiMeWeb.InboxChannel do
     end
   end
 
-  # The device registered (or lost) the `calls` capability while connected (§16.1).
-  def handle_info({:device_calls, device_id, calls?}, socket) do
+  # The device registered (or lost) `calls`, `video` or `group_calls` while connected (§16.1,
+  # §19.2, §20.3).
+  def handle_info({:device_calls, device_id, caps}, socket) do
     if device_id == socket.assigns[:device_id],
-      do: {:noreply, assign(socket, :calls, calls?)},
+      do: {:noreply, assign(socket, Map.take(caps, [:calls, :video, :group_calls]))},
       else: {:noreply, socket}
   end
 
@@ -290,7 +295,7 @@ defmodule RisiMeWeb.InboxChannel do
              socket.assigns.user_id,
              since,
              limit,
-             socket.assigns[:calls] == true
+             socket.assigns[:calls] == true or socket.assigns[:group_calls] == true
            ) do
       case Enum.filter(events, &visible?(socket, &1)) do
         [] when has_more -> filtered_page(socket, List.last(events).event_id, limit)
@@ -299,8 +304,19 @@ defmodule RisiMeWeb.InboxChannel do
     end
   end
 
-  # v1.13 §16.1: `call_signal` events only for a `calls` socket (DMs only, so no groups rule).
-  defp visible?(socket, %{kind: "call_signal"}), do: socket.assigns[:calls] == true
+  # v1.13 §16.1: `call_signal` events only for a `calls` socket; v1.18 §19.2: a `video` one only
+  # for a `video` socket; v1.19 §20.3: a group one only for a `group_calls` socket.
+  defp visible?(socket, %{kind: "call_signal", data: data}) do
+    a = socket.assigns
+
+    cond do
+      group_conv?(data) -> a[:group_calls] == true
+      a[:calls] != true -> false
+      media(data) == "video" -> a[:video] == true
+      true -> true
+    end
+  end
+
   # v1.15 §17.5: `history_*` events only for a `history_share` device.
   defp visible?(%{assigns: %{history: false}}, %{kind: "history_" <> _}), do: false
   defp visible?(%{assigns: %{groups: true}}, _event), do: true
@@ -311,6 +327,12 @@ defmodule RisiMeWeb.InboxChannel do
   end
 
   defp visible?(_socket, _), do: true
+
+  defp group_conv?(%{"conversation_id" => "grp:" <> _}), do: true
+  defp group_conv?(_), do: false
+
+  defp media(%{"media" => m}), do: m
+  defp media(_), do: "audio"
 
   defp device(_user_id, nil), do: nil
 

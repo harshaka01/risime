@@ -69,7 +69,7 @@ defmodule RisiMe.Devices do
         calls_changed(
           user_id,
           device_id,
-          if(mls_key, do: "calls" in caps, else: calls?(existing))
+          if(mls_key, do: call_caps(caps), else: call_caps(existing))
         )
 
         # v1.10 §13.2: a removal (here a changed key, or an eviction) resets first_seen_at.
@@ -127,7 +127,9 @@ defmodule RisiMe.Devices do
   # (unknown ones are ignored).
   # v1.13 §16.1: `calls`.
   # v1.15 §17.1: `history_share`.
-  @known_capabilities ~w(groups images deletes calls member_devices history_share)
+  # v1.18 §19.1: `video`. v1.19 §20.1: `group_calls`.
+  @known_capabilities ~w(groups images deletes calls member_devices history_share video
+                         group_calls)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1),
@@ -148,39 +150,72 @@ defmodule RisiMe.Devices do
     )
   end
 
-  # v1.13 §16.1: live sockets of this device start or stop receiving `call_signal` events.
-  defp calls_changed(user_id, device_id, calls?) do
+  # v1.13 §16.1, v1.18 §19.2, v1.19 §20.3: live sockets of this device start or stop receiving
+  # `call_signal` events (any, video, group).
+  defp calls_changed(user_id, device_id, caps) do
     Phoenix.PubSub.broadcast(
       RisiMe.PubSub,
       RisiMe.Messaging.topic(user_id),
-      {:device_calls, device_id, calls?}
+      {:device_calls, device_id, caps}
     )
   end
 
-  @doc "True if the device is a current MLS device with the `calls` capability (§16.1)."
-  def calls?(%Device{mls_signature_key: k, capabilities: caps}) when is_binary(k),
-    do: "calls" in (caps || [])
+  @doc """
+  The call capabilities of a device (or a capability list) as
+  `%{calls: bool, video: bool, group_calls: bool}`; all false for a device without an MLS key.
+  """
+  def call_caps(caps) when is_list(caps),
+    do: %{calls: "calls" in caps, video: "video" in caps, group_calls: "group_calls" in caps}
 
-  def calls?(_), do: false
+  def call_caps(%Device{mls_signature_key: k, capabilities: caps}) when is_binary(k),
+    do: call_caps(caps || [])
+
+  def call_caps(_), do: %{calls: false, video: false, group_calls: false}
+
+  @doc "True if the device is a current MLS device with the `calls` capability (§16.1)."
+  def calls?(device), do: call_caps(device).calls
 
   @doc "v1.13 §16.1 (server S6): true if the user has a device with `calls` and a signature key."
-  def calls_device?(user_id) do
+  def calls_device?(user_id), do: capable_device?(user_id, "calls")
+
+  @doc "v1.18 §19.2: true if the user has a device with `video` and a signature key."
+  def video_device?(user_id), do: capable_device?(user_id, "video")
+
+  @doc "v1.19 §20.3: the users among `user_ids` with a `group_calls` device that has a key."
+  def group_calls_users([]), do: []
+
+  def group_calls_users(user_ids) do
+    Repo.all(
+      from d in Device,
+        where:
+          d.user_id in ^user_ids and not is_nil(d.mls_signature_key) and
+            "group_calls" in d.capabilities,
+        distinct: true,
+        select: d.user_id
+    )
+  end
+
+  defp capable_device?(user_id, cap) do
     Repo.exists?(
       from d in Device,
         where:
           d.user_id == ^user_id and not is_nil(d.mls_signature_key) and
-            "calls" in d.capabilities
+            ^cap in d.capabilities
     )
   end
 
-  @doc "v1.13 §16.8: `{device_id, push_token}` of the user's `calls` devices that have a token."
-  def calls_push_targets(user_id) do
+  @doc """
+  v1.13 §16.8: `{device_id, push_token}` of the user's `calls` devices that have a token; for a
+  video call (v1.18 §19.2) only `video` devices, for a group call (v1.19 §20.3) only
+  `group_calls` devices.
+  """
+  def calls_push_targets(user_id, cap \\ "calls") do
     Repo.all(
       from d in Device,
         where:
           d.user_id == ^user_id and not is_nil(d.mls_signature_key) and
             not is_nil(d.push_token) and
-            "calls" in d.capabilities,
+            "calls" in d.capabilities and ^cap in d.capabilities,
         select: {d.device_id, d.push_token}
     )
   end
@@ -440,7 +475,7 @@ defmodule RisiMe.Devices do
 
     for d <- rows do
       caps_changed(d.user_id, d.device_id, false)
-      calls_changed(d.user_id, d.device_id, false)
+      calls_changed(d.user_id, d.device_id, call_caps(nil))
       # v1.15 §17.4: a removed device is un-named and its requests are cancelled.
       if d.mls_signature_key, do: RisiMe.History.device_gone(d.user_id, d.device_id)
     end

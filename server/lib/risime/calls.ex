@@ -39,6 +39,7 @@ defmodule RisiMe.Calls do
           | :not_e2ee
           | :stale_epoch
           | :calls_not_ready
+          | :video_not_ready
           | :too_long
           | :bad_request
 
@@ -47,8 +48,11 @@ defmodule RisiMe.Calls do
   device). Returns `{:ok, %{message_id, server_ts}}` or `{:error, reason}`.
 
   Order of checks: total rate limit → parse → idempotent resend → `not_friends` /
-  `unknown_recipient` → e2ee (`not_e2ee`, `stale_epoch`) → `calls_not_ready` (ring only) → the
-  ring and per-pair limits → store.
+  `unknown_recipient` → e2ee (`not_e2ee`, `stale_epoch`) → `calls_not_ready` (ring only) →
+  `video_not_ready` (a video ring, v1.18 §19.2) → the ring and per-pair limits → store.
+
+  v1.18 §19.2: the cleartext `media` (`"audio"` when absent) is copied onto the event; a
+  `video` signal reaches only `video` sockets and its ring push only `video` devices.
   """
   @spec signal(String.t(), map, keyword) :: {:ok, map} | {:error, error}
   def signal(sender_id, params, opts \\ []) do
@@ -110,6 +114,9 @@ defmodule RisiMe.Calls do
       not (is_integer(p["generation"]) and is_integer(p["epoch"])) ->
         {:error, :bad_request}
 
+      media(p) == :error ->
+        {:error, :bad_request}
+
       true ->
         with :ok <- Messaging.validate_ciphertext(p["ciphertext"]) do
           {:ok,
@@ -118,6 +125,7 @@ defmodule RisiMe.Calls do
              to: to,
              call_id: call_id,
              ring: p["ring"],
+             media: media(p),
              ciphertext: p["ciphertext"],
              generation: p["generation"],
              epoch: p["epoch"]
@@ -127,6 +135,15 @@ defmodule RisiMe.Calls do
   end
 
   defp parse(_), do: {:error, :bad_request}
+
+  # v1.18 §19.2: `media` is "audio" (also when absent) or "video".
+  defp media(p) do
+    case Map.fetch(p, "media") do
+      :error -> "audio"
+      {:ok, m} when m in ["audio", "video"] -> m
+      {:ok, _} -> :error
+    end
+  end
 
   defp signal_new(sender_id, req) do
     with :ok <- check_recipient(sender_id, req.to),
@@ -147,6 +164,7 @@ defmodule RisiMe.Calls do
           "from_device" => req.from_device,
           "call_id" => req.call_id,
           "ring" => req.ring,
+          "media" => req.media,
           "ciphertext" => req.ciphertext,
           "generation" => req.generation,
           "epoch" => req.epoch,
@@ -164,7 +182,7 @@ defmodule RisiMe.Calls do
 
       # Any signal of this call from the callee's user answers the ring: no fallback push.
       State.answered(sender_id, req.call_id)
-      if req.ring, do: ring(req.to, req.call_id)
+      if req.ring, do: ring(req.to, req.call_id, req.media)
 
       :telemetry.execute([:risime, :call, :signal], %{count: 1}, %{ring: req.ring})
       {:ok, reply}
@@ -194,8 +212,13 @@ defmodule RisiMe.Calls do
   # Server S6: a ring needs a callee device that advertises `calls` and has a signature key.
   defp check_ready(%{ring: false}), do: :ok
 
-  defp check_ready(%{ring: true, to: to}) do
-    if Devices.calls_device?(to), do: :ok, else: {:error, :calls_not_ready}
+  defp check_ready(%{ring: true, to: to} = req) do
+    cond do
+      not Devices.calls_device?(to) -> {:error, :calls_not_ready}
+      # v1.18 §19.2: a video ring needs a `video` device of the callee (with a key).
+      req.media == "video" and not Devices.video_device?(to) -> {:error, :video_not_ready}
+      true -> :ok
+    end
   end
 
   # A refused ring doesn't count against the ring buckets (a retrying client doesn't extend its
@@ -224,8 +247,11 @@ defmodule RisiMe.Calls do
   # 1. At once to every `calls` device of the callee without a live inbox channel;
   # 2. after the fallback delay, unless the callee's user sent a signal of this call, to the
   #    remaining `calls` devices (half-open sockets look live for about 60 s).
-  defp ring(callee_id, call_id) do
-    targets = Devices.calls_push_targets(callee_id)
+  defp ring(callee_id, call_id, media) do
+    # v1.18 §19.2: a video call wakes only `video` devices (first push and fallback).
+    targets =
+      Devices.calls_push_targets(callee_id, if(media == "video", do: "video", else: "calls"))
+
     {offline, live} = Enum.split_with(targets, fn {d, _} -> not Presence.device_online?(d) end)
 
     Logger.info(
