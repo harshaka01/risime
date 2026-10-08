@@ -1,5 +1,34 @@
 # Android status — 0.2 nightlies
 
+## P0: call audio routing (route button greyed out, calls stuck on the earpiece) — READY
+- **Cause:** `routeButtonEnabled` needed Telecom to list > 1 endpoint (or an empty list while ACTIVE); real phones
+  report empty, late or one-entry lists (only the earpiece), so the button stayed grey and the call on the earpiece.
+- **Fix (`CallRoutes.kt`, `CallManager.kt`, `CallScreens.kt`):** routes = Telecom's endpoints merged with
+  AudioManager's devices (`mergeRoutes`; the speaker is always offered); a route Telecom doesn't list (or refuses)
+  goes through AudioManager (`setCommunicationDevice` on API 31+, speakerphone/SCO below), and its current route is
+  then AudioManager's. The button is enabled in every in-call phase, its icon/label is the real route
+  (Phone/Speaker/Bluetooth/Headset); a tap toggles earpiece↔speaker, or opens the picker (Bluetooth / Headset /
+  Phone / Speaker, current checked) when a BT device or headset is there.
+- **Policy (`routeTarget` + per-call `RoutePolicyState`, pure):** video defaults to the speaker (unless BT/headset);
+  BT takes the route at start and whenever it connects (even over an earlier pick); a BT disconnect falls back to
+  the speaker (video) / earpiece (voice); the user's pick is never overridden otherwise; a refused move is asked at
+  most 3 times. `CallManager.onCallVideoChanged(callId, video)` is the v1.23 voice→video hook (→ speaker; called
+  from `onState` when a snapshot's video flag changes). Group calls use the same path (LiveKit has
+  `NoAudioHandler`; routing is Telecom/AudioManager for both).
+- **Logs:** `calls: route current=<K> available=<K,…> via=telecom|audio` (call-device-test's parse unchanged),
+  `calls: route decision (<why>): → <K>|keep: <reason> [...]`, `calls: route set <K> (<reason>) via telecom|audio: …`.
+- **Tests:** `RoutePolicyTest` (24), `CallScreensTest` (route button enabled in every in-call phase with 0 or 1
+  Telecom route; picker; real-route label), `TelecomEndpointFanOutTest` on the new policy.
+- **NOTE for root (call-device-test):** `android/scripts/calltest-route.sh` holds the new steps; run with
+  `CALLTEST_EXTRA=android/scripts/calltest-route.sh scripts/call-device-test` or source it from the script:
+  call R1 voice → tap "Audio output" until `current=SPEAKER` (user decision logged) → `audio_ok`; call R2 video
+  B→A starts on SPEAKER (`route_ok`) with `audio_ok`. Run on spark2 (`CALLTEST_FAST=1`, own redroids): **CALLTEST
+  OK** (calls 9/12/13/R2 on SPEAKER, audio both ways everywhere). Redroid lists only the speaker
+  (`available=SPEAKER`; R1 already starts on it, so the tap stays SPEAKER), so the toggle and BT paths need a real
+  phone.
+- **Needs a real-phone check:** voice call → tap → speaker and back; video call starts on the speaker; BT buds
+  connect mid-call → BT, disconnect → speaker/earpiece; group voice/video the same.
+
 ## v1.23: WhatsApp-style emoji panel and attachment sheet — READY
 - **Emoji panel:** the smiley in the composer (DM and group chats) now toggles between the keyboard and an inline panel in the keyboard's place (height = the tallest keyboard seen, minus the nav bar; 280dp before one is known). It reuses the emoji2 `EmojiPickerView` (category tabs Recent/Smileys/People/Animals/Food/Activities/Travel/Objects/Symbols/Flags, scrollable grid, skin tones; no new dependency), plus a bottom row: "ABC" (back to keyboard) and backspace (a whole grapheme via `deleteBeforeCursor`). Picks insert at the cursor and the panel stays open; Back closes it; tapping the field brings the keyboard back. Recents are now DataStore-backed (`risime_emoji`, max 32, most recent first) via `RecentEmojiProvider`, shared with the reaction picker. Code: `ui/chat/EmojiPanel.kt`, `Composer` in `ChatScreen.kt`. The old modal emoji sheet in the composer is gone (the reaction "+" still uses `EmojiPickerSheet`).
 - **Attachment sheet:** a 3-column grid of round coloured tiles: Gallery, Camera (both as before: Photo Picker / `TakePicture` into the cache FileProvider, then the encrypted photo path), Document, Location, Contact (dimmed; tap shows the "Coming soon" notice bar). The "+" button gating is unchanged (images only in e2ee chats; metadata stripping unchanged). `AttachOption.visible(canCamera)`.
