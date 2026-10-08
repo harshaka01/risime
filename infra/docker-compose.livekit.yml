@@ -1,0 +1,32 @@
+# LiveKit SFU for RisiMe group calls on spark2 (PROTOCOL §16.15, v1.14).
+# Host networking (no docker-proxy for 500 UDP ports, no Docker publishing that bypasses ufw).
+# Binds: 127.0.0.1:7880/tcp (signalling, behind Caddy at wss://risime.risicloud.ai/livekit) and
+# UDP 49500-49999 on 10.20.20.15 only (media; public via the 1:1 NAT). See infra/livekit/livekit.yaml.
+#   docker compose --env-file .env -f infra/docker-compose.livekit.yml up -d
+# Needs in .env: LIVEKIT_API_KEY, LIVEKIT_API_SECRET (the server mints tokens with them) and
+# TURN_SECRET (coturn's, so LiveKit hands clients coturn credentials).
+# Smoke test on loopback: scripts/livekit-smoke
+name: risime-livekit
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.9
+    restart: unless-stopped
+    network_mode: host
+    user: "65534:65534"
+    environment:
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set in .env}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set in .env}
+      TURN_SECRET: ${TURN_SECRET:?set in .env}
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit/livekit.yaml:ro
+      - ./livekit/entrypoint.sh:/risime-entrypoint.sh:ro
+    entrypoint: ["/risime-entrypoint.sh"]
+    read_only: true
+    tmpfs: ["/tmp:size=4m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ulimits:
+      nofile: 65536
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}

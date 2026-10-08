@@ -1,0 +1,80 @@
+# LiveKit SFU for RisiMe group calls on spark2 (PROTOCOL §16.15, v1.14; port plan 2026-10-08).
+# This file has NO secret. infra/livekit/entrypoint.sh writes the API key file and the TURN
+# secret file from .env (LIVEKIT_API_KEY, LIVEKIT_API_SECRET, TURN_SECRET) into the container's
+# private tmpfs at start, so no secret is in the repo, on a command line or in a log.
+#
+# Exposure (host networking, see infra/docker-compose.livekit.yml):
+#   127.0.0.1:7880/tcp       signalling + HTTP API; public only through Caddy at
+#                            wss://risime.risicloud.ai/livekit (infra/caddy/Caddyfile)
+#   10.20.20.15:49500-49999/udp  WebRTC media (NATed 1:1 from 203.115.26.139). coturn's relay
+#                            range is 49152-49499 (infra/coturn/turnserver.conf); never overlap.
+# Nothing else: no ICE-TCP (7881), no embedded TURN, no Prometheus, no debug port.
+
+port: 7880
+bind_addresses:
+  - 127.0.0.1
+
+rtc:
+  # One UDP socket per peer connection, from this range, on 10.20.20.15 only.
+  port_range_start: 49500
+  port_range_end: 49999
+  # ICE-TCP off: 7881 is not open at the edge. Clients that can't do UDP use coturn (TCP 3478).
+  tcp_port: 0
+  # The public address is set explicitly (1:1 NAT 203.115.26.139 -> 10.20.20.15); no STUN
+  # discovery. Host candidates on 10.20.20.15 are rewritten to it (NAT1To1).
+  use_external_ip: false
+  node_ip: 203.115.26.139
+  # Gather and bind on spark2's LAN address only (not loopback, Docker bridges, Tailscale, IPv6).
+  ips:
+    includes:
+      - 10.20.20.15/32
+  enable_loopback_candidate: false
+  # Our coturn, handed to clients in the join response. Credentials are TURN REST
+  # (HMAC-SHA1 over "<expiry>:<id>") from the same TURN_SECRET coturn uses (decision 046);
+  # ttl 5 h like the 1:1 credentials, longer than the 4-h maximum call.
+  turn_servers:
+    - host: 203.115.26.139
+      port: 3478
+      protocol: udp
+      secret_file: /tmp/livekit/turn-secret
+      ttl: 18000
+    - host: 203.115.26.139
+      port: 3478
+      protocol: tcp
+      secret_file: /tmp/livekit/turn-secret
+      ttl: 18000
+    # TURN/TLS on 5349 once coturn has the certificate (decision 046):
+    # - host: risime.risicloud.ai
+    #   port: 5349
+    #   protocol: tls
+    #   secret_file: /tmp/livekit/turn-secret
+    #   ttl: 18000
+
+# Embedded TURN off: coturn serves 1:1 and group calls.
+turn:
+  enabled: false
+
+# API key/secret (JWT signing), written by the entrypoint; mode 600.
+key_file: /tmp/livekit/keys.yaml
+
+room:
+  # Rooms are created on the first join (the server mints the token, PROTOCOL §16.15).
+  auto_create: true
+  # A room nobody joined closes after 60 s; after the last one leaves, after 20 s.
+  empty_timeout: 60
+  departure_timeout: 20
+  max_participants: 32
+
+logging:
+  json: true
+  level: info
+  pion_level: error
+
+# prometheus: off (no port). debug_handler_port: off.
+
+# Webhook to Phoenix (room/participant events): not used yet. When the server has a handler,
+# it must verify the JWT in the Authorization header (signed with this api key):
+# webhook:
+#   api_key: <LIVEKIT_API_KEY, written by the entrypoint>
+#   urls:
+#     - http://127.0.0.1:4000/api/v1/calls/livekit-webhook

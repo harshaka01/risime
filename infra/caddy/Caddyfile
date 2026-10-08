@@ -19,6 +19,21 @@ risime.risicloud.ai {
 		respond 404
 	}
 
+	# LiveKit SFU signalling for group calls (PROTOCOL §16.15; infra/livekit). Clients use the URL
+	# wss://risime.risicloud.ai/livekit (no trailing slash); the SDKs append /rtc (Android),
+	# /rtc/v1 (newer SDKs) and, after a failed connect, /rtc/validate or /rtc/v1/validate.
+	# handle_path strips /livekit, and only those paths reach LiveKit on 127.0.0.1:7880: its
+	# server API (/twirp/*) stays loopback-only, for Phoenix. WebSocket upgrades pass through.
+	handle_path /livekit/* {
+		@rtc path /rtc /rtc/*
+		handle @rtc {
+			reverse_proxy 127.0.0.1:7880
+		}
+		handle {
+			respond "Not found" 404
+		}
+	}
+
 	# Only the app's paths are proxied; everything else is 404 at the edge.
 	@app path /api/* /socket/* /health
 	handle @app {
@@ -49,9 +64,11 @@ risime.risicloud.ai {
 		format filter {
 			wrap json
 			fields {
-				# Tokens travel in Authorization (never logged by Caddy); strip legacy ?token=.
+				# Tokens travel in Authorization (never logged by Caddy); strip legacy ?token=,
+				# and LiveKit's ?access_token= (its SDKs put the join token in the URL).
 				request>uri query {
 					delete token
+					delete access_token
 				}
 			}
 		}
