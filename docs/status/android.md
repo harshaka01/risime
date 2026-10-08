@@ -29,6 +29,45 @@
 - Manual: from a real phone call yourself and hang up before it is answered; check the rows, the
   Calls tab, the notification actions; with the lock on and "Show content" off check no name shows.
 
+## Locked chats (WhatsApp "Lock chat") — READY (device gate: see below; real phone to confirm the prompts)
+- **Lock:** chat list long-press → **Lock chat**, or the chat's ⋮ menu → Lock chat / Unlock chat (1:1 and groups).
+  Confirmation first (`ui/lock/LockedChatsAuth.kt`): `BIOMETRIC_STRONG | DEVICE_CREDENTIAL` on API 30+ (a phone with no
+  fingerprint uses its PIN/pattern; `canAuthenticate` of that combination decides); none enrolled → "Set a screen lock
+  first". Android 8–10 can't combine them in one prompt, so there only a strong biometric works (same limit as WhatsApp's).
+- **Folder:** the chat leaves the main list and search (people and messages) and sits in **Locked chats**. Pull down at the
+  top of the chat list → a "Locked chats" row (lock icon + count) → confirmation → the folder (open, long-press → Unlock chat,
+  ⋮ → Locked chats settings). Leaving the folder, or the app going to the background, closes it (the stack under it is
+  popped to the chat list). A locked chat reached any other way (call record, notification action, link) shows "This chat is
+  locked" + Unlock (confirmation) instead of opening.
+- **Secret code** (folder ⋮ → Locked chats settings, ≥ 4 characters, typed twice): the pull-down row is hidden; typing the exact code in
+  the chat-list search shows the Locked chats row (still followed by the confirmation). Stored only as PBKDF2-HMAC-SHA256
+  (120 000 iterations, 16-byte random salt) inside the sealed file; compared in constant time, off the main thread.
+  **Forgot it:** Settings → Locked chats → "Unlock all chats and remove the secret code" (confirmation first; nothing deleted).
+- **Notifications:** a locked chat's notification is "RisiMe" / "New message": no sender, text, avatar, MessagingStyle or
+  count; the tap opens the app, never the chat; same id, so clearing the chat removes it; also when the locked list can't be
+  read yet (every chat is then redacted). Locking cancels the chat's current notification. **Calls are unchanged** — as in
+  WhatsApp, a call from a locked chat's contact still rings with the caller, and call records stay in the Calls tab.
+- **Storage:** `noBackupFilesDir/locked_chats.bin`, AES-256-GCM under the Keystore key `risime_locked_chats_aes` (no user
+  authentication, so a push-started process can read it; the protection is the UI gate), atomic fsynced writes, never sent to
+  the server. No Room change (no schema bump, nothing to migrate); the file format is pinned by a golden-blob test. An
+  unreadable Keystore is "unknown" (nothing listed, everything redacted, nothing overwritten); a lost key starts empty.
+  Only "Log out and delete chats" / a confirmed account or server switch wipes it (`wipeDb`); updates, re-sign-in, re-key
+  and reconnect keep it. Locking never touches messages (rule 9).
+- **Excluded from:** main list, search, notification content. There are no share targets, direct-share shortcuts or widgets
+  in the app yet; when they are added they must read `AppContainer.lockedChats`. Independent of the Fingerprint lock (064).
+- **Tests (JVM, 0 failed):** `LockedChatsTest` (persist across restart, no plaintext, golden blob from a fixed key, hash/
+  salt/exact match, busy Keystore, lost key, reset/wipe), `LockedChatsUiTest` (list split, authenticators, prompt
+  success/cancel/no-screen-lock, pull-down reveal and hide, entry tap, code dialog), `LockedChatNotificationTest` (bare
+  notification, no style, tap without chat, unlocked chat unchanged, refresh), `LockedSearchTest`.
+- **Device gate (`scripts/push-device-test` scenario 10, root-delegated):** a debug-only shell broadcast
+  `lk.codegen.risime.debug.LOCK_CHAT` (runtime-registered under `BuildConfig.DEBUG`, `android.permission.DUMP`, like
+  `OIDC_SIGN_IN`) locks B's DM (redroid has no fingerprint or screen lock). Covers: locked state survives process death
+  (Recents removal), a push-started process posts the bare "RisiMe" / "New message", the chat is out of the list after a cold
+  start, unlocking brings it back with its message in Room. **Not covered (real phone):** the BiometricPrompt itself, the
+  pull-down feel, the secret-code flow end to end, backgrounding the folder. **`scripts/upgrade-test`:** unchanged — the
+  previous published app has no locking, so the gate cannot seed a locked chat before the update; "survives an update" is
+  covered by the file/golden-blob unit tests (nothing is stored in Room or DataStore keys that an update could migrate).
+
 ## Decision 064 review fixes — READY (895 unit tests, 0 failed)
 - A Keystore error while reading the vault (keystore2/StrongBox busy after boot) is `Load.Transient`: blob and key
   kept, `RESTORING` retried with backoff 1 s → 60 s (log `vault not readable now … retry #n`). Only a failed GCM

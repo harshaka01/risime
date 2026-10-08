@@ -39,6 +39,9 @@
 #     push scenario runs on that session, and the Recents-removed (process dead) push wake-up must
 #     refresh the token with no UI. B must never log `RisiMe auth: sign-out trigger=`.
 #     PUSHTEST_B_AUTH=dev signs B in with the dev OTP as before.
+# 10. (root-delegated) A locked chat (debug-only LOCK_CHAT broadcast; no fingerprint on redroid): a push-started
+#     process posts a bare "RisiMe" / "New message", the chat stays out of the list across process death,
+#     and unlocking brings it back with its messages.
 # Prints "PUSHTEST PASS|FAIL <step>" and "PUSHTEST OK" at the end; logs in ~/risime-logs/pushtest$SUF/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -633,6 +636,51 @@ scenario_registration_fails() {  # $1 label
   echo "$label rows=$rows passes=$n" >> "$LOGS/timings.txt"
   rm -f "$FAILPUT"
 }
+# (10) Locked chat (WhatsApp "Lock chat", root-delegated script addition). Redroid has no fingerprint or
+# screen lock to confirm with, so a debug-build-only shell broadcast (LOCK_CHAT, guarded like OIDC_SIGN_IN)
+# marks B's DM locked; the confirmation prompts, the folder and the secret code are covered by the unit
+# tests and need a real phone. Covered here: the locked state survives process death (Recents removal), a
+# push-started process posts a bare "RisiMe" / "New message" (no name, no text), the chat is not in the
+# list after a cold start, and unlocking brings it back with the messages intact.
+notif_locked_bare() {  # true when messages_v2 has a "RisiMe" / "New message" notification of ours
+  A shell dumpsys notification --noredact > "$WORK/notif-$DEV.txt" 2>/dev/null || true
+  python3 -I - "$WORK/notif-$DEV.txt" "$PKG" <<'PY' 2>/dev/null
+import sys, re
+path, pkg = sys.argv[1:3]
+blocks = open(path, errors="replace").read().split("NotificationRecord(")
+ok = any(f"pkg={pkg} " in b and "tag=ranker_group" not in b and "channel=messages_v2 " in b
+         and re.search(r"android\.title=\S+ \(RisiMe\)", b) and re.search(r"android\.text=\S+ \(New message\)", b) for b in blocks[1:])
+sys.exit(0 if ok else 1)
+PY
+}
+scenario_locked_chat() {  # $1 label
+  local label="$1" ts t0 txt="ptlock$RANDOM$RANDOM" got=""
+  DEV=B; open_chat "ZZ Push A" || fail "$label: B can't open the chat to clear its notifications"
+  A shell "am broadcast -a lk.codegen.risime.debug.LOCK_CHAT -p $PKG --ez first_dm true" >/dev/null
+  for _ in $(seq 1 10); do A logcat -d -s RisiMe:* 2>/dev/null | grep -aq "RisiMe debug: lock chat ok" && break; sleep 1; done
+  A logcat -d -s RisiMe:* 2>/dev/null | grep -aq "RisiMe debug: lock chat ok" || fail "$label: the debug LOCK_CHAT broadcast did not lock the chat"
+  b_sleep recents
+  t0="$(now_ms)"
+  DEV=A; send_text "$txt" || fail "$label: A can't send"
+  ts=""; for _ in $(seq 1 30); do ts="$(first_push_ts "$t0" inbox)"; [ -n "$ts" ] && break; sleep 0.5; done
+  [ -n "$ts" ] || fail "$label: the server never pushed to B"
+  DEV=B
+  while [ $(( $(now_ms) - ts )) -lt "$LIMIT_MS" ]; do notif_locked_bare && { got="$(now_ms)"; break; }; sleep 0.3; done
+  [ -n "$got" ] || fail "$label: no bare 'RisiMe' / 'New message' notification on B within $((LIMIT_MS / 1000)) s of the push"
+  notif_has messages_v2 "$txt" && fail "$label: the locked chat's notification shows the message text"
+  notif_has messages_v2 "ZZ Push A" && fail "$label: the locked chat's notification shows the sender"
+  pass "$label: a push-started B (process dead) posts a bare 'RisiMe' / 'New message' $((got - ts)) ms after the push: no sender, no text"
+  b_wake; sleep 2
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 3; dismiss_prompts
+  for _ in $(seq 1 20); do on_list && break; sleep 1; done
+  on_list || fail "$label: no chat list after the cold start"
+  has "ZZ Push A" && fail "$label: the locked chat is in B's chat list after a cold start"
+  pass "$label: after the process death the locked chat is still out of B's chat list"
+  A shell "am broadcast -a lk.codegen.risime.debug.LOCK_CHAT -p $PKG --ez unlock_all true" >/dev/null
+  wait_for "ZZ Push A" 20 || fail "$label: unlocking did not bring the chat back"
+  [ "$(b_rows_with "$txt")" = 1 ] || fail "$label: the message is not in B's Room after lock/unlock"
+  pass "$label: unlocking brings the chat back; the message is in Room (locking never touches messages)"
+}
 scenario_call() {  # $1 label
   local label="$1" t0 sl ts d ring
   sl="$(wc -l < "$WORK/server.log")"; t0="$(now_ms)"
@@ -681,6 +729,8 @@ scenario_message "scenario 6 (restricted, Home, screen off, deep idle)"
 DEV=B; A shell am set-standby-bucket "$PKG" active >/dev/null 2>&1 || true; A shell cmd appops set "$PKG" RUN_ANY_IN_BACKGROUND allow >/dev/null 2>&1 || true
 b_wake; sleep 3
 scenario_registration_fails "scenario 8 (cold start by push, every registration PUT fails)"
+b_wake
+scenario_locked_chat "scenario 10 (locked chat)"
 b_wake
 DEV=B; A logcat -d -s RisiMe:* 2>/dev/null | grep -a "RisiMe push:" > "$LOGS/B-push-lines.txt" || true
 grep -q "RisiMe push: received kind=inbox" "$LOGS/B-push-lines.txt" || fail "B never logged a received inbox push (onMessageReceived not reached?)"

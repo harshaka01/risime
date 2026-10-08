@@ -696,6 +696,7 @@ class AppContainer(
             }
         }
         if (BuildConfig.DEBUG) registerDebugOidcSignIn(context)
+        if (BuildConfig.DEBUG) registerDebugLockChat(context)
         // E2EE: try once per signed-in, verified session that can authenticate. An OIDC session has
         // a bearer once restored (an unmigrated pre-064 vault only after its one migration prompt):
         // registering before that got 401 and left E2EE off for the process (P0 nightly.10).
@@ -1282,6 +1283,42 @@ class AppContainer(
                 android.Manifest.permission.DUMP, null, androidx.core.content.ContextCompat.RECEIVER_EXPORTED,
             )
         }.onFailure { Log.w("RisiMe", "RisiMe debug: oidc receiver: ${it.message}") }
+    }
+
+    /**
+     * Debug builds only, guarded exactly like the OIDC receiver (runtime-registered, shell-only through
+     * android.permission.DUMP): the device gates (redroid has no fingerprint or screen lock) lock or
+     * unlock a chat. Extras: `conversation_id`, or `first_dm` (the most recent 1:1 chat), or `unlock_all`.
+     */
+    private fun registerDebugLockChat(context: Context) {
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: Context, i: android.content.Intent) {
+                val pending = goAsync()
+                scope.launch {
+                    try {
+                        val ok = when {
+                            i.getBooleanExtra("unlock_all", false) -> lockedChats.resetAll()
+                            else -> {
+                                val conv = i.getStringExtra("conversation_id")
+                                    ?: if (i.getBooleanExtra("first_dm", false)) {
+                                        db.messages().lastMessages().first().filter { it.conversationId.startsWith("dm:") }.maxByOrNull { it.localTs }?.conversationId
+                                    } else null
+                                conv != null && lockedChats.lock(conv)
+                            }
+                        }
+                        Log.i("RisiMe", "RisiMe debug: lock chat ${if (ok) "ok" else "failed"}")
+                    } finally {
+                        pending.finish()
+                    }
+                }
+            }
+        }
+        runCatching {
+            androidx.core.content.ContextCompat.registerReceiver(
+                context, r, android.content.IntentFilter("lk.codegen.risime.debug.LOCK_CHAT"),
+                android.Manifest.permission.DUMP, null, androidx.core.content.ContextCompat.RECEIVER_EXPORTED,
+            )
+        }.onFailure { Log.w("RisiMe", "RisiMe debug: lock receiver: ${it.message}") }
     }
 
     /**
