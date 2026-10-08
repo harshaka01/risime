@@ -59,7 +59,7 @@ class BackupUiTest {
         rule.onNodeWithText(RESTORE_FROM_FILE).performClick()
         rule.onNodeWithText("Last backup: ${recordText(s.lastLocal, "")}").assertIsDisplayed()
         rule.onNodeWithText("3.0 MB", substring = true).assertIsDisplayed()
-        rule.onNodeWithTag("server_switch").performScrollTo().performClick()
+        rule.onNodeWithText(SERVER_BACKUP_LABEL).performScrollTo().performClick()
         rule.onNodeWithText(USE_MOBILE_DATA).performScrollTo().assertIsDisplayed()
         rule.onNodeWithText(RESET_BACKUP_KEY).performScrollTo().performClick()
         assertEquals(listOf("now", "export", "file", "server:false", "reset"), clicks)

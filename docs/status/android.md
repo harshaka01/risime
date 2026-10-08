@@ -19,6 +19,88 @@
   cancellation between build and submit; on the old code both fail (`claims=2 lastError=build: a commit is already pending for
   this group`). Plus a stale-commit start-up sweep and `retriesKeepTheFirstErrorAndReuseTheClaimedKeyPackages`.
 
+## v1.22 encrypted backups (§22, decision 059, P0-2) — READY
+**READY.** Commits `264984e` (core: bundle, manager, hooks, workers), `b0279bc` (UI), and the status/label commit after it.
+- **Bundle (§22.5):** `BundleExporter` writes JSON Lines per conversation in 500-row pages (header first with exact
+  counts from a counting pass; `conversation` line, rows oldest first, then confirmed reactions and hidden tombstones;
+  `contact` lines last: contacts with a user id plus group members). Text, image (by reference with `enc` and the
+  thumbnail, reconstructed and §14.4-validated), `call_end`/`group_call` lines (always; local lines without a
+  message id go with `message_id: null`), visible tombstones (and rows being deleted), §12.7 group lines
+  (`sys:<event_id>`), `cleared_upto` at 100-ns precision, `hidden`. Never: MLS state/`mls_kv`, cursor, device id,
+  tokens, gap rows, §13.3/§17.12 markers, outbox rows (pending/failed), media files, avatars, settings, behaviour log.
+- **Restore (§22.6):** `BundleImporter`: insert-only (hard rule 9): skips an existing `message_id` or `client_msg_id`,
+  a (hidden) tombstone (deletes win), anything at/before the local Clear chat watermark, malformed payloads (live
+  validation); rows are `origin: "backup"` (or the line's), read, never acked/notified, outgoing keep their status;
+  images re-sealed in the media row (downloadable while the blob lives); tombstone lines add the placed tombstone +
+  a hidden one; conversation lines create chat_state (watermark = the later one) and a display-cache group row;
+  matching gap rows are deleted and the §13.3 marker refreshed (no "history shared" line). 1 000 lines per
+  transaction, progress (`backup_id`, line) persisted; a killed restore resumes, a repeat changes nothing.
+  §13.3 extension in `ChatEngine`: a pre-install event whose message ids are all held adds no marker.
+- **Crypto:** `BackupKeys` over `MlsClient` (inside the engine's Room transaction + lock), `BackupTools` (free
+  functions) found by name. Streams: `Deflater(nowrap)` → `writer.write`; `reader.verify()` before any `read()`, then
+  `Inflater(nowrap)`. A picked file is copied into app-private storage first. `NoKey` → unlock the server's record
+  (when its `bk_id` is the file's) or the file header's record; `makeCurrent` only for the account key.
+- **Local backups:** `noBackupFilesDir/backups/<ms>-<reason>.risimebk`, newest 2 + the latest pre-update one;
+  older local keys no file needs are dropped. Daily `BackupWorker` (charging, battery not low, foreground
+  `dataSync`) + an on-open catch-up 60 s after the socket is live when the last one is > 24 h old (a locked OIDC app
+  has no core in the background). The silent local `BK`/`R` pair is made on the first backup.
+- **Pre-update (P0-1 seam):** `Updater.beforeInstall` → `backups.beforeUpdate()`: a local backup, plus the upload
+  (≤ 2 min) with server backup on; a failure posts "Backup failed — don't uninstall" (channel "Backups") and the
+  update still installs. A failed install shows "Don't uninstall RisiMe: your chats are only safe if they're backed
+  up." with **Back up now** in the update banner.
+- **Pre-wipe:** "Log out and delete chats" and the server switch make a backup first (uploaded when server backup
+  is on, ≤ 150 s); both confirmations say so and offer **Save a backup file**. The wipe then deletes the
+  app-private backups and the backup settings (`BK`/`R` go with `mls_kv`).
+- **Server (§22.3):** parts of 33 562 624 B with `purpose=backup&backup_id`, sizes/digests checked against the
+  replies, then `POST /backups` (409 `backup_device_mismatch` → "Back up this phone instead of <device>?" →
+  `replace_device`; after a server restore this phone may take over and server backup stays on).
+  `PUT /backup_key` when the server has none; another `bk_id` → unlock with the recovery key/passphrase (never a
+  silent new key). Reset backup key = `DELETE /backups` + forget the local keys. `GET /blobs/usage` `backup` parsed.
+- **First-sign-in gate:** a sign-in with no local messages marks the install fresh; `GET /backups` with entries
+  shows **Restore your chats** (newest current backup: device name, date, size) in front of the chat list with
+  Restore / Restore from file / Skip (confirmed). Until restored or skipped: no server backup; the §17 history
+  auto-request waits too. Empty list, 404/403 (pre-v1.22) open the gate; offline keeps it closed.
+- **UI:** Settings → **Manage backups** → Backups: last local/server backup (time, size), Back up now, Export backup
+  file (MediaStore Downloads on 29+, `ACTION_CREATE_DOCUMENT` on 26–28), Restore from file (`ACTION_OPEN_DOCUMENT`),
+  Back up to the RisiMe server (+ Use mobile data), Show recovery key (behind the device credential when the phone
+  has one), Change recovery key, Reset backup key. Recovery key shown once with Copy (clip marked sensitive),
+  confirmed by typing groups 2 and 7; optional passphrase with the floor (core rules + the bundled list of the
+  10 000 most common passwords, `assets/common-passwords-10k.txt`, SecLists, MIT). Live "Check the recovery key
+  for a typo" while typing.
+- **Tests:** gate green: **786** JVM tests, 0 failed (8 skipped). New: BundleRoundTripTest (Room: every line type,
+  nothing from the never list, fresh-phone round trip with equal per-conversation counts, merge into a non-empty
+  phone, deletes win, Clear chat watermark, idempotent re-import, killed restore resumes, gap rows/marker, another
+  account rejected, unknown types skipped), BackupManagerTest (MockWebServer §22.3 server: retention, export →
+  new phone → recovery key, wrong key, tampered file, parts + commit, the gate blocks uploads until restore, server
+  restore, device rule + replace, no silent key change, pre-update hook incl. switch off, pre-wipe, reset key),
+  BackupCoreTest (real core: 44 vectors, recovery-key input + floor, a file from one phone on a reinstalled one,
+  NoKey/WrongKey/WrongAccount, read before verify, tampered → Integrity, rotate, forget), BackupUiTest (Robolectric:
+  Backups screen, key show-once + two groups, secret entry key/passphrase, gate + skip confirmation, floor),
+  ContractExamplesTest types all 19 v1.22 examples (placeholders gone) and re-encodes the commit body and every
+  bundle line byte for byte.
+- **Redroid proof (Android 14, instance `-bk1`, temp server from main `b0279bc` incl. server v1.22, port 4171):**
+  1. A signs in, sends 3 DMs; Back up now; Export backup file → `Download/risime-backup-2026-10-08.risimebk` (a real
+     `RISIMEBK` v1 file); recovery key shown, two groups typed back.
+  2. `adb uninstall` → install → sign in: the inbox replay alone brought 12 rows; Restore from file (system picker)
+     with a mistyped key ("Check the recovery key for a typo"), then the key in lowercase with spaces → "Restored 0
+     messages" (merge: all held). Export again (12 rows).
+  3. `adb uninstall`, **A's inbox purged on the server** (nothing can come from the replay), install, sign in: 0
+     rows → Restore from file + recovery key → **"Restored 12 messages", counts {dm: [12,0,0,0]} = before**.
+  4. Server backup on: key shown, groups typed back, a 5-letter passphrase refused by the floor, "orange tiger river
+     cloud" accepted → "Backed up", last server backup shown. `adb uninstall`, inbox purged again, install, sign in →
+     **"Restore your chats · redroid14_arm64_only · 8 Oct 2026, 09:45 · 2 KB"** → Restore → passphrase → chat list,
+     **counts {dm: [12,0,0,0]} = before**. Then `install -r` of a newer build: counts unchanged.
+  Redroid note: showing the soft keyboard hung system_server twice (blocked writing to lmkd while binding the IME;
+  watchdog restart). Disabling the IME (`pm disable-user com.android.inputmethod.latin`) fixed it; `input text`
+  still types into Compose fields.
+- **For root's upgrade gate (`reinstall_restore_hook`):** see the report; the texts above are stable constants in
+  `ui/backup/BackupUi.kt`.
+- **Known limits:** no "Back up your chats" card on the chat list and no post-update prompt yet (Settings → Manage
+  backups only); a switch to a *different account* can't back up the previous account's chats first (its keys are
+  closed after its sign-out; the dialog's wipe still happens only on the user's confirm); group icons travel as
+  `icon: null` (the name, admins and state do); pin/mute/archive/last_read don't exist locally (exported as
+  false/null); the daily job needs the unlocked core, so a never-opened phone backs up on its next open.
+
 ## P0-3 video calls: no sound / speaker button greyed out — READY (real phones to confirm)
 **READY.** Commits `eb25ada` (calls/) and `2c225cd` (root script `call-device-test`, changed for this task).
 - **Cause:** core-telecom 1.0.1's `availableEndpoints`/`currentCallEndpoint` are `Channel.receiveAsFlow()` (each value reaches

@@ -69,7 +69,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
                 "Your chats, encrypted on this phone: daily and before every update. Export a file or back up to the server.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            FilledTonalButton(onClick = onBackups, modifier = Modifier.fillMaxWidth()) { Text(lk.codegen.risime.ui.backup.BACKUPS_TITLE) }
+            FilledTonalButton(onClick = onBackups, modifier = Modifier.fillMaxWidth()) { Text(lk.codegen.risime.ui.backup.MANAGE_BACKUPS) }
             HorizontalDivider()
             lk.codegen.risime.calls.CallsSettingsSection()
             HorizontalDivider()

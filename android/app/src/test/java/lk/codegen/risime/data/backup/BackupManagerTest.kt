@@ -133,7 +133,8 @@ class BackupManagerTest {
         val expected = a.phone.counts().toMutableMap()
         expected[DM] = expected[DM]!!.let { listOf(it[0] - 1, it[1], it[2], it[3]) }
         assertEquals(expected, b.phone.counts())
-        // After restoring here, this phone may take over as the backup device.
+        // After restoring here, server backup stays on and this phone may take over as the backup device.
+        assertTrue(b.manager.serverOn)
         val next = b.manager.backupNow()
         assertTrue("$next", next is UploadOutcome.Done)
         assertEquals("dev-b", api.backupDevice)

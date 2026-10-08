@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -46,6 +47,9 @@ import lk.codegen.risime.ui.theme.Spacing
 // ---- texts (root's upgrade gate drives these; keep them stable) ----
 
 const val BACKUPS_TITLE = "Backups"
+
+/** The Settings button that opens Settings → Backups (unique text for the upgrade gate). */
+const val MANAGE_BACKUPS = "Manage backups"
 const val BACK_UP_NOW = "Back up now"
 const val EXPORT_BACKUP = "Export backup file"
 const val RESTORE_FROM_FILE = "Restore from file"
@@ -155,15 +159,18 @@ fun BackupsContent(
         if (!serverAvailable) {
             Text("This server doesn't offer backups.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.fillMaxWidth().toggleable(value = s.serverOn, enabled = s.available && !busy, role = androidx.compose.ui.semantics.Role.Switch, onValueChange = onServer),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(SERVER_BACKUP_LABEL, Modifier.weight(1f))
-                Switch(checked = s.serverOn, onCheckedChange = onServer, enabled = s.available && !busy, modifier = Modifier.testTag("server_switch"))
+                Switch(checked = s.serverOn, onCheckedChange = null, enabled = s.available && !busy, modifier = Modifier.testTag("server_switch"))
             }
             Text("Last server backup: ${recordText(s.lastServer, if (s.serverOn) "none yet" else "off")}", style = MaterialTheme.typography.bodyMedium)
             if (s.serverOn) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().toggleable(value = s.mobileData, role = androidx.compose.ui.semantics.Role.Switch, onValueChange = onMobileData), verticalAlignment = Alignment.CenterVertically) {
                     Text(USE_MOBILE_DATA, Modifier.weight(1f))
-                    Switch(checked = s.mobileData, onCheckedChange = onMobileData)
+                    Switch(checked = s.mobileData, onCheckedChange = null)
                 }
             }
         }

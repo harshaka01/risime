@@ -611,6 +611,11 @@ class BackupManager(
                     val result = importer(user, progressStore()).import(bundleLines(PiecesInputStream { reader.read() }), afterBatch)
                     if (source is RestoreSource.Server) {
                         prefs.set(K_REPLACE_OK, "1") // "after restoring on this phone" (§22.3)
+                        // The account's key is this phone's now: server backup stays on, as it was on the old phone.
+                        if (k.keyIds().current == source.backup.bkId) {
+                            prefs.set(K_SERVER_ON, "1")
+                            prefs.set(K_KEY_SHOWN, "1")
+                        }
                         file.delete()
                     } else if (file.parentFile == work) {
                         file.delete()
