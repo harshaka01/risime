@@ -673,19 +673,19 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     // ---- ringback (the caller hears it while the callee's phone rings) ----
 
-    private var ringback: android.media.ToneGenerator? = null
+    // Thread-safe owner: onState can run on several threads (hang-up, state collector); see RingbackTone.
+    private val ringback = RingbackTone {
+        val g = android.media.ToneGenerator(AudioManager.STREAM_VOICE_CALL, 70)
+        g.startTone(android.media.ToneGenerator.TONE_SUP_RINGTONE)
+        object : RingTone {
+            override fun stop() = g.stopTone()
+            override fun release() = g.release()
+        }
+    }
 
     /** The ringback tone on the voice-call stream while calling/ringing out; stopped on any other phase. */
     private fun updateRingback(s: CallSnapshot?) {
-        val want = s != null && s.outgoing && (s.phase == CallPhase.CALLING || s.phase == CallPhase.RINGING_OUT)
-        if (want && ringback == null) {
-            ringback = runCatching {
-                android.media.ToneGenerator(AudioManager.STREAM_VOICE_CALL, 70).also { it.startTone(android.media.ToneGenerator.TONE_SUP_RINGTONE) }
-            }.onFailure { Log.w("RisiMe", "ringback: ${it.message}") }.getOrNull()
-        } else if (!want) {
-            ringback?.let { t -> runCatching { t.stopTone() }; runCatching { t.release() } }
-            ringback = null
-        }
+        ringback.update(s != null && s.outgoing && (s.phase == CallPhase.CALLING || s.phase == CallPhase.RINGING_OUT))
     }
 
     @SuppressLint("WakelockTimeout")
