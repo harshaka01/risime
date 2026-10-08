@@ -231,6 +231,21 @@ class AppContainer(
         persistBannerSeen = { s -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putStringSet("banner_seen", HashSet(s)).apply() },
     ).also { chatTabsOrNull = it }
 
+    /** §24.11 the private Risi REST calls (feedback, facts, commitments). */
+    val risiRest: lk.codegen.risime.net.RisiRest = lk.codegen.risime.net.RisiRestApi(api)
+
+    /** §24.11 `PATCH /me {"tz"}` at sign-in and when the phone's zone changes (tabs on only). */
+    val timezoneSync = lk.codegen.risime.data.tabs.TimezoneSync(
+        zone = { java.util.TimeZone.getDefault().id },
+        lastSent = { u -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("tz_sent_" + u.lowercase(), null) },
+        remember = { u, tz -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putString("tz_sent_" + u.lowercase(), tz).apply() },
+        patch = { tz -> api.patchTimezone(tz) },
+    )
+
+    suspend fun syncTimezone() {
+        if (chatTabs.serverOn.value) timezoneSync.sync(sessionStore.current()?.user?.id)
+    }
+
     /** §24.15: read `/auth/config` `tabs`; a change re-advertises the capabilities. */
     suspend fun refreshTabsSwitch() {
         val cfg = (api.authConfig() as? ApiResult.Ok)?.value ?: return
@@ -1305,6 +1320,20 @@ class AppContainer(
         // §24.15: the server's `tabs` switch, read on every (re)join (a change re-advertises `tabs`).
         scope.launch {
             realtime.state.collect { if (it == ConnectionState.Live) runCatching { refreshTabsSwitch() } }
+        }
+        // §24.11: the phone's timezone to the server on every (re)join (a no-op when unchanged) and when it changes.
+        scope.launch {
+            realtime.state.collect { if (it == ConnectionState.Live) runCatching { syncTimezone() } }
+        }
+        run {
+            val r = object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: android.content.Context?, i: android.content.Intent?) {
+                    scope.launch { runCatching { syncTimezone() } }
+                }
+            }
+            androidx.core.content.ContextCompat.registerReceiver(
+                appContext, r, android.content.IntentFilter(android.content.Intent.ACTION_TIMEZONE_CHANGED), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
         }
         // The group-op outbox: one runner; a queued retry re-arms the timer.
         scope.launch {

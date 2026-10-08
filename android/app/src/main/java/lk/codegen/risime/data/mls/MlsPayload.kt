@@ -45,6 +45,9 @@ object MlsPayload {
         /** §20.4 a strictly validated durable `group_call` (valid only in a group `message` event). */
         data class GroupCall(val env: lk.codegen.risime.calls.GroupCallEnvelope) : Decoded
 
+        /** §24.11 a validated `risi_request` / `risi_action` (shown as a small system line, only in Official). */
+        data class RisiControl(val obj: JsonObject) : Decoded
+
         /** A type this app doesn't know yet: store nothing visible. */
         data class Ignored(val type: String) : Decoded
     }
@@ -134,6 +137,9 @@ object MlsPayload {
         }
         if (type == lk.codegen.risime.data.profile.ProfilePhotoEnvelope.TYPE) {
             return lk.codegen.risime.data.profile.ProfilePhotoEnvelope.validate(obj)?.let { Decoded.ProfilePhoto(it) } ?: Decoded.Ignored("$type (malformed)")
+        }
+        if (type == lk.codegen.risime.data.tabs.RisiControl.TYPE_REQUEST || type == lk.codegen.risime.data.tabs.RisiControl.TYPE_ACTION) {
+            return if (lk.codegen.risime.data.tabs.RisiControl.valid(obj)) Decoded.RisiControl(obj) else Decoded.Ignored("$type (malformed)")
         }
         if (type != TYPE_TEXT) return Decoded.Ignored(type)
         val body = (obj["body"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: return Decoded.Ignored("text without body")

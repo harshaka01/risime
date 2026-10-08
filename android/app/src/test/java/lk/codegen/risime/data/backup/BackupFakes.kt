@@ -115,12 +115,14 @@ class FakeBackupKeys(private val rng: java.util.Random = java.util.Random(7)) : 
         known.remove(bkId)
     }
 
-    override fun writer(userId: String, backupId: String, createdAt: String, appVersion: String, keyRecord: String?, out: File): BackupCipherWriter {
+    override fun writer(userId: String, backupId: String, createdAt: String, appVersion: String, keyRecord: String?, out: File, schema: Int): BackupCipherWriter {
+        if (schema !in 1..2) throw BackupException(BackupException.Kind.Malformed, "backup schema $schema (1 or 2)")
         val bk = keyRecord?.let { (ProtocolJson.parseToJsonElement(it) as JsonObject).str("bk_id") } ?: current ?: throw BackupException(BackupException.Kind.NoKey)
         if (bk !in known) throw BackupException(BackupException.Kind.NoKey, bk)
         val header = buildJsonObject {
             put("backup_id", backupId); put("user_id", userId); put("created_at", createdAt); put("app_version", appVersion); put("bk_id", bk)
             put("key", keyRecord ?: keyRecord() ?: "")
+            put("schema", schema)
         }.toString().toByteArray()
         val data = ByteArrayOutputStream()
         return object : BackupCipherWriter {
@@ -139,6 +141,7 @@ class FakeBackupKeys(private val rng: java.util.Random = java.util.Random(7)) : 
 
     override fun reader(userId: String, file: File, expectedBackupId: String?, expectedBkId: String?): BackupCipherReader {
         val meta = FakeBackupTools.parse(file)
+        if (meta.schema > 2) throw BackupException(BackupException.Kind.UnsupportedSchema, "backup schema ${meta.schema}")
         if (!meta.userId.equals(userId, true)) throw BackupException(BackupException.Kind.WrongAccount)
         if (expectedBackupId != null && expectedBackupId != meta.backupId) throw BackupException(BackupException.Kind.Integrity, "backup_id")
         if (expectedBkId != null && expectedBkId != meta.bkId) throw BackupException(BackupException.Kind.Integrity, "bk_id")
@@ -181,7 +184,7 @@ object FakeBackupTools : BackupTools {
         if (all.size < 12 || !all.copyOf(8).contentEquals(FakeBackupKeys.MAGIC)) throw BackupException(BackupException.Kind.Format)
         val hl = DataInputStream(all.inputStream(8, 4)).readInt()
         val h = ProtocolJson.parseToJsonElement(String(all, 12, hl)) as JsonObject
-        return BackupFileMeta(h.str("backup_id")!!, h.str("user_id")!!, h.str("created_at")!!, h.str("app_version")!!, h.str("bk_id")!!, 1, h.str("key")?.takeIf { it.isNotEmpty() })
+        return BackupFileMeta(h.str("backup_id")!!, h.str("user_id")!!, h.str("created_at")!!, h.str("app_version")!!, h.str("bk_id")!!, (h["schema"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 1L, h.str("key")?.takeIf { it.isNotEmpty() })
     }
 
     override fun fileInfo(file: File): BackupFileMeta = parse(file)

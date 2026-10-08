@@ -1,5 +1,32 @@
 # Android status — 0.2 nightlies
 
+## §24 A6 Risi cards, @Risi chip, feedback, "What Risi knows about me", tz, schema-2 backup wiring — READY (1111 JVM tests, 0 failed)
+- **Cards** (Official tab only, `ui/tabs/RisiCardsUi.kt`; M3, Official accent): `commitment` (text, owner chip, due, state; Confirm / Decline / Edit only for
+  the owner or a counterpart, "Done" once confirmed; greyed "Expired" 48 h after its `server_ts`; buttons off ~2 min after my own tap),
+  `commitment_update` (a small line; the original card's state changes in place via `RisiCards.states`), `reminder`, `escalation`, `digest`,
+  `answer` (ref chips scroll to the message), `summary` (decisions, action items with an owner chip when the item starts "Name:", open
+  questions), `report`, `offer` (Yes / Not now for the users in `notify`), `error`. An unknown kind shows `body`. Cards are drawn only for rows
+  whose `risi` object was honoured (agent leaf, Official: `RisiMessages.honoured`); the Private screens get no `RisiHost`, so no card, chip or menu.
+- **Actions** = `risi_action` envelopes sent as MLS application messages through the outbox (row kind `risi_ctl`, no Room change), shown as small
+  lines ("Kamal confirmed", "You asked Risi to summarise"); received ones are stored read, silent, Official only (`MlsPayload.Decoded.RisiControl`,
+  `ChatEngine.applyRisiControl`). Edit dialog: text, date and time pickers (owner shown, not changeable: the contract's `edit` is `{text, due}`).
+- **@Risi chip** above the Official composer (`RisiChipRow`); with it a send is a structured `risi_request` `ask`; the Official chat menu has
+  Summarise / Report (`since` = now - 23 h 55 m). `sendFromComposer`: free text is never parsed. `RisiRequests` refuses unless the conversation is Official.
+- **Feedback** 👍/👎 on a card with `call_ref` -> `POST /risi/feedback` (👎 opens an optional reason sheet), no visible reaction.
+- **Settings -> Privacy** (tabs on only): "What Risi knows about me" (grouped by kind, per-item delete, "Delete everything" with confirm) and "My promises"
+  (`GET /risi/commitments?state=open`). `RisiRest` interface (fake in tests), `ApiClient.risi*`.
+- **Timezone:** `PATCH /me {"tz"}` on every (re)join and on `ACTION_TIMEZONE_CHANGED` while tabs are on; remembered per user (`TimezoneSync`).
+- **Backups schema 2 (crypto 8863158):** `BackupKeys.writer(..., schema)` = 2 when the bundle holds any Official conversation, else 1; the core's
+  `RisiBackupException.UnsupportedSchema` -> `BackupException.Kind.UnsupportedSchema` -> "Update RisiMe to restore this backup"; `BackupFileMeta.schema`
+  is the file header's. (The `crypto` source set only builds with the Rust toolchain: `UniffiBackup.kt` is not compiled on spark2.)
+- Tests: `RisiCardsTest` (each kind from the contract examples, buttons by role, expiry, edit, feedback), `RisiOfficialOnlyTest` (honoured only from an
+  agent leaf in Official, spoofed/Private = plain, chip), `RisiLogicTest` (envelopes = contract shape, Private sends nothing, tz), `RisiControlEngineTest`,
+  `RisiDataTest` (facts/promises with a fake API), `BackupManagerTest` (file schema 1/2, restore, schema 3 refused).
+- **Open:** (1) changing a commitment's **owner** in the edit dialog needs `owner` in the contract's `risi_action.edit` (proposal needed). (2) The
+  `crypto` source-set change (`UniffiBackup.kt`) and `testCrypto` golden for schema 2 are unbuilt here (needs the Rust toolchain on the laptop/CI).
+  (3) Cards have no select/delete/react menu yet. (4) `OfficialChatInfoTest.theSwitchConfirmsOffWithTheContractText` failed once in a full run and
+  passed alone and on re-run (dialog timing flake, not touched by A6).
+
 ## §24 A5 notifications, Risi notify, per-tab search/media/calls, schema-2 backups — READY (1065 JVM tests, 0 failed)
 - **Notifications** (tabs on): "Kamal · Official", "Kamal · 🔒 Private", "Team · Official" (a 1:1 Official is named by
   its peer, a group's Official by the Private group's name). Decision-064 "Show content" off and locked chats stay the

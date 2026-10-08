@@ -225,3 +225,23 @@ object ChatEventActions {
 
 /** Capability string a v1.24 client advertises in the MLS device capabilities. */
 const val CAPABILITY_TABS = "tabs"
+
+/** `PATCH /me {"tz": "<IANA zone>"}` (§24.11); a separate body so a rename never carries it and vice versa. */
+@Serializable
+data class PatchTz(val tz: String)
+
+/**
+ * §24.11 the private Risi REST calls (feedback, "What Risi knows about me", "My promises").
+ * [ApiClient] in the app; a fake in tests.
+ */
+interface RisiRest {
+    suspend fun feedback(callRef: String, rating: String, reason: String?): ApiResult<Unit>
+
+    suspend fun facts(): ApiResult<RisiFactsReply>
+
+    suspend fun deleteFact(factId: String): ApiResult<Unit>
+
+    suspend fun deleteAllFacts(): ApiResult<Unit>
+
+    suspend fun commitments(state: String): ApiResult<RisiCommitmentsReply>
+}

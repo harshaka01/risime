@@ -32,8 +32,8 @@ interface BackupKeys {
 
     fun dropKey(bkId: String)
 
-    /** A fresh `DEK`; [keyRecord] null = the stored record. The file appears at [out] only on [BackupCipherWriter.finish]. */
-    fun writer(userId: String, backupId: String, createdAt: String, appVersion: String, keyRecord: String?, out: File): BackupCipherWriter
+    /** A fresh `DEK`; [schema] = the file header's schema, 1, or 2 when the bundle holds an Official conversation (§24.10); [keyRecord] null = the stored record. The file appears at [out] only on [BackupCipherWriter.finish]. */
+    fun writer(userId: String, backupId: String, createdAt: String, appVersion: String, keyRecord: String?, out: File, schema: Int = 1): BackupCipherWriter
 
     /** §22.4 opening order; a server backup passes the listing's ids. [BackupException.Kind.NoKey]: unlock first. */
     fun reader(userId: String, file: File, expectedBackupId: String?, expectedBkId: String?): BackupCipherReader
@@ -101,5 +101,9 @@ interface BackupCipherReader {
 
 /** A §22 core failure. */
 class BackupException(val kind: Kind, message: String? = null) : Exception(message ?: kind.name) {
-    enum class Kind { Typo, WrongKey, Integrity, Format, Malformed, Unsupported, WrongAccount, NoKey, WeakPassphrase, Io, Storage }
+    enum class Kind { Typo, WrongKey, Integrity, Format, Malformed, Unsupported, WrongAccount, NoKey, WeakPassphrase, Io, Storage,
+
+        /** §24.10 the file header's schema is above what this app reads: "Update RisiMe to restore this backup". */
+        UnsupportedSchema,
+    }
 }

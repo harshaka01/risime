@@ -385,6 +385,8 @@ internal fun Composer(
     attach: (@Composable () -> Unit)? = null,
     /** The picker view inside the emoji sheet (a fake in tests). */
     emojiPicker: (@Composable (onPick: (String) -> Unit) -> Unit)? = null,
+    /** §24.9 above the field: the Official composer's @Risi chip (null: nothing; Private never passes one). */
+    topSlot: (@Composable () -> Unit)? = null,
 ) {
     // The emoji panel takes the keyboard's place (WhatsApp-style): same height as the last keyboard.
     var panel by remember { mutableStateOf(false) }
@@ -420,6 +422,7 @@ internal fun Composer(
                     modifier = Modifier.align(Alignment.End).padding(end = Spacing.sm),
                 )
             }
+            topSlot?.invoke()
             Row(verticalAlignment = Alignment.Bottom) {
                 Surface(
                     shape = RisiShapes.input,

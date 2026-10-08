@@ -217,7 +217,7 @@ class BackupManager(
         val counts = ex.write { } // pass 1: the header's counts (nothing kept)
         // §24.10 the bundle schema (2 with any Official conversation) is in the file name too, for POST /backups.
         val out = File(dir, "$now-${reason.tag}${if (ex.schema >= BUNDLE_SCHEMA_TABS) SCHEMA2_TAG else ""}$EXT")
-        val w = k.writer(user, backupId, createdAt, appVersion, keyRecord, out)
+        val w = k.writer(user, backupId, createdAt, appVersion, keyRecord, out, schema = if (ex.schema >= BUNDLE_SCHEMA_TABS) 2 else 1)
         val sink = DeflatingSink { w.write(it) }
         try {
             sink.write(encodeLine(BackupBundleHeader.serializer(), BackupBundleHeader(schema = ex.schema, backupId = backupId, userId = user.lowercase(), createdAt = createdAt, appVersion = appVersion, counts = counts)))
@@ -687,7 +687,7 @@ class BackupManager(
             BackupException.Kind.WrongKey -> "That recovery key or passphrase doesn't match"
             BackupException.Kind.Malformed -> "That isn't a recovery key (28 letters and digits)"
             BackupException.Kind.WrongAccount -> "This backup belongs to another account"
-            BackupException.Kind.Unsupported -> UPDATE_TO_RESTORE_TEXT
+            BackupException.Kind.Unsupported, BackupException.Kind.UnsupportedSchema -> UPDATE_TO_RESTORE_TEXT
             BackupException.Kind.Integrity, BackupException.Kind.Format -> "This backup file is damaged or was changed"
             BackupException.Kind.WeakPassphrase -> "That passphrase is too weak"
             BackupException.Kind.NoKey -> "This backup's key isn't on this phone"

@@ -41,7 +41,7 @@ import lk.codegen.risime.ui.common.UnreadBadge
 import lk.codegen.risime.ui.theme.Spacing
 
 /** Official's subtly different accent (§24.9). */
-private val OfficialAccent = Color(0xFF2E7D6B)
+internal val OfficialAccent = Color(0xFF2E7D6B)
 
 /** One chat's tabs in the app: the controller over the app's tab store and REST. */
 class ChatTabsViewModel(c: AppContainer, meId: String, chatId: String, initial: Tab?) : ViewModel() {

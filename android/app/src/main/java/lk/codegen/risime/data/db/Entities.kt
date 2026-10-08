@@ -60,6 +60,7 @@ data class MessageEntity(
     val system: Boolean get() = kind == KIND_SYSTEM
     val image: Boolean get() = kind == KIND_IMAGE
     val call: Boolean get() = kind == KIND_CALL
+    val risiCtl: Boolean get() = kind == KIND_RISI_CTL
 
     /** §15.6 a tombstone row, or a row being deleted for everyone (rendered as the tombstone meanwhile). */
     val deleted: Boolean get() = kind == KIND_DELETED
@@ -74,6 +75,9 @@ data class MessageEntity(
 
         /** v8 (§16.6): a call-history line ("Missed voice call"); [body] = the line from this user's perspective. */
         const val KIND_CALL = "call"
+
+        /** §24.11 a member's `risi_request` / `risi_action` (a small system line; [systemJson] = the envelope). No Room change: `kind` is text. */
+        const val KIND_RISI_CTL = "risi_ctl"
 
         /** v7 (§15.6): a tombstone ("This message was deleted"); body is "". */
         const val KIND_DELETED = "deleted"

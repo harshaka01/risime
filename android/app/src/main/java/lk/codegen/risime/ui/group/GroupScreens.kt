@@ -120,6 +120,8 @@ fun GroupChatScreen(
     readOnlyReason: String? = null,
     /** §24.9: "Risi is listening" in Official. */
     composerHint: String? = null,
+    /** §24.9/§24.11 Official only: Risi cards, the @Risi chip and the Summarise/Report menu items. Private passes null. */
+    risi: lk.codegen.risime.ui.tabs.RisiHost? = null,
 ) {
     val group by vm.group.collectAsStateWithLifecycle()
     val members by vm.members.collectAsStateWithLifecycle()
@@ -155,6 +157,14 @@ fun GroupChatScreen(
     val name = titleOverride ?: groupDisplayName(group?.name)
     val readOnly = group?.readOnly == true || readOnlyReason != null
     val names = members.associate { it.userId.lowercase() to it.displayName }
+    var risiChip by rememberSaveable { mutableStateOf(false) }
+    val risiScope = rememberCoroutineScope()
+    val risiCtx = if (risi == null) null else lk.codegen.risime.ui.tabs.risiCardContext(
+        risi, messages, vm::nameOf, System.currentTimeMillis(),
+        onRef = { id -> risiScope.launch { lk.codegen.risime.ui.tabs.scrollToMessage(scroll, messages, id) } },
+        knownNames = members.filter { it.current }.map { it.displayName },
+        readOnly = readOnly,
+    )
     val typingLabel = groupTypingLabel(typing)
     val count = members.count { it.current && it.state != GroupMember.STATE_PENDING_ADD }
     Scaffold(
@@ -179,7 +189,10 @@ fun GroupChatScreen(
                         lk.codegen.risime.ui.chat.CallHeaderButton(vm.groupCallBlockedText(encrypted == true, ready, video = false), toastOf) { vm.startGroupCall(video = false, camera = false) }
                     }
                     lk.codegen.risime.ui.chat.E2eeHeaderLock(encrypted == true, onInfo)
-                    lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock)
+                    lk.codegen.risime.ui.chat.ChatOverflowMenu(
+                        onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock,
+                        extra = risi?.let { h -> { close -> lk.codegen.risime.ui.tabs.RisiMenuItems(h, enabled = !readOnly, close = close) } },
+                    )
                 },
             )
         },
@@ -224,6 +237,7 @@ fun GroupChatScreen(
                 onJoinCall = if (lk.codegen.risime.BuildConfig.GROUP_CALLS_ENABLED && runCatching { vm.groupCallBlockedText(true, true, false) == null }.getOrDefault(false)) ({ env, starter ->
                     joinAsk = env to starter
                 }) else null,
+                risi = risiCtx,
             )
             joinAsk?.let { (env, starter) ->
                 JoinCallPermissions(env.video, onDenied = { vm.imgs.toast.value = it; joinAsk = null }) { cam ->
@@ -249,15 +263,17 @@ fun GroupChatScreen(
                             pickPhoto()
                         }
                     }),
-                    placeholder = composerHint ?: if (encrypted == true) "Encrypted message" else "Message",
+                    placeholder = if (risi != null && risiChip) lk.codegen.risime.ui.tabs.RISI_ASK_PLACEHOLDER else composerHint ?: if (encrypted == true) "Encrypted message" else "Message",
                     value = draft,
                     onValue = { draft = it; vm.onDraftChanged(it.text) },
                     onSend = {
                         if (draft.text.isNotBlank()) {
-                            vm.send(draft.text)
+                            // §24.11: with the @Risi chip the message is a structured `risi_request`; else an ordinary message.
+                            if (lk.codegen.risime.ui.tabs.sendFromComposer(risi, risiChip, draft.text, vm::send)) risiChip = false
                             draft = TextFieldValue("")
                         }
                     },
+                    topSlot = if (risi != null) ({ lk.codegen.risime.ui.tabs.RisiChipRow(risiChip) { risiChip = it } }) else null,
                 )
             }
             reactionsFor?.let { target -> ReactionsSheet(reactions[target].orEmpty(), vm::nameOf) { reactionsFor = null } }
@@ -295,6 +311,8 @@ internal fun GroupMessageList(
     historyMarker: (@Composable (MessageEntity) -> Unit)? = null,
     /** §20.4 Join on a running group call's line (null: this phone can't join group calls). */
     onJoinCall: ((lk.codegen.risime.calls.GroupCallEnvelope, String) -> Unit)? = null,
+    /** §24.11 Official only: draws Risi's messages as cards (null: every message is a bubble; Private never has one). */
+    risi: lk.codegen.risime.ui.tabs.RisiCardContext? = null,
 ) {
     ChatMessageList(
         messages = messages,
@@ -307,6 +325,9 @@ internal fun GroupMessageList(
             is ChatItem.Day -> DaySeparator(item.label)
             is ChatItem.Msg -> if (item.m.system && historyMarker != null && item.m.clientMsgId == lk.codegen.risime.data.HistoryMarkers.historyId(item.m.conversationId)) {
                 historyMarker(item.m)
+            } else if (item.m.risiCtl) {
+                // §24.11 a member's request/action to Risi: a small system line ("Kamal confirmed").
+                SystemLineText(lk.codegen.risime.data.tabs.RisiControl.line(item.m.systemJson, nameOf(item.m.from)) ?: item.m.body)
             } else if (item.m.system) {
                 val line = item.m.systemLine()
                 // §17.12 local history lines keep their stored text (it changes with imports).
@@ -336,6 +357,9 @@ internal fun GroupMessageList(
                     onMenu = s?.let { x -> { if (x.selecting) x.onToggle() else x.onDelete() } }, onTap = s?.takeIf { it.selecting }?.onToggle,
                     tail = startsRun(items, i),
                 )
+            } else if (risi != null && lk.codegen.risime.data.tabs.RisiMessages.meta(item.m) != null) {
+                // §24.11: stored only when it came from an attested agent leaf in Official (RisiMessages.honoured).
+                lk.codegen.risime.ui.tabs.RisiCardRow(item.m, lk.codegen.risime.data.tabs.RisiMessages.meta(item.m)!!, risi)
             } else {
                 val bubble: @Composable () -> Unit = { GroupBubble(
                     item.m,

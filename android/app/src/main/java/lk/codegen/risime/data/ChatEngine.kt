@@ -435,6 +435,7 @@ class ChatEngine(
             if (r is MlsResult.CallSignal) queueCall(r)
             if (r is MlsResult.CallEnd) incoming = applyCallEnd(me, r.message, r.env) || incoming
             if (r is MlsResult.GroupCall) applyGroupCall(me, r.message, r.env)
+            if (r is MlsResult.RisiControl) applyRisiControl(me, r.message, r.obj)
             // §18.2: applied in the event's transaction; never a row, unread count, ack or notification.
             if (r is MlsResult.ProfilePhoto) profilePhotos?.let { pp ->
                 pp.applyInTx(r.subject, r.message.conversationId, r.env, me)
@@ -540,6 +541,46 @@ class ChatEngine(
             callId = env.callId, fromDevice = m.fromDevice?.lowercase(),
         )
         if (messages.insert(row) != -1L) deletes?.unhide(conv)
+    }
+
+    /**
+     * §24.11 a member's `risi_request` / `risi_action` in Official: a small system line (kind `risi_ctl`),
+     * read at once (no unread, ack or notification). My own copy is the outbox row already.
+     */
+    private suspend fun applyRisiControl(me: String, m: MessageData, obj: kotlinx.serialization.json.JsonObject) {
+        val a = applier
+        if (a != null && a.cleared(m.conversationId, lk.codegen.risime.data.deletes.TimeUuid.ticks(m.messageId))) return
+        if (messages.byMessageId(m.messageId) != null || messages.byClientMsgId(m.clientMsgId) != null) return
+        val mine = m.from.equals(me, true)
+        val row = MessageEntity(
+            clientMsgId = m.clientMsgId, messageId = m.messageId, conversationId = m.conversationId, from = m.from,
+            to = m.conversationId, body = lk.codegen.risime.data.tabs.RisiControl.body(obj), serverTs = m.serverTs,
+            localTs = historicalLocalTs(m.serverTs) ?: clock(),
+            status = if (mine) MessageStatus.SENT.name else MessageStatus.READ.name,
+            outgoing = mine, ackedStatus = MessageStatus.READ.name, kind = MessageEntity.KIND_RISI_CTL,
+            systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), obj),
+            fromDevice = m.fromDevice?.lowercase(),
+        )
+        messages.insert(row)
+    }
+
+    /**
+     * §24.11 my `risi_request` / `risi_action`: an outgoing outbox row (kind `risi_ctl`) that is also the
+     * small line in the chat; encrypted at send time like any application message (Official is a `grp:`).
+     */
+    suspend fun sendRisiControl(conv: String, obj: kotlinx.serialization.json.JsonObject): String? {
+        val me = meId() ?: return null
+        val id = newClientMsgId()
+        messages.insert(
+            MessageEntity(
+                clientMsgId = id, messageId = null, conversationId = conv, from = me, to = conv,
+                body = lk.codegen.risime.data.tabs.RisiControl.body(obj), serverTs = null, localTs = clock(),
+                status = MessageStatus.PENDING.name, outgoing = true, kind = MessageEntity.KIND_RISI_CTL,
+                systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), obj),
+            ),
+        )
+        scope.launch { flushOutbox() }
+        return id
     }
 
     /** The stored body of a group call line (the chat list preview; the chat renders names from the JSON). */
@@ -950,6 +991,11 @@ class ChatEngine(
             val groupCall = lk.codegen.risime.calls.GroupCallEnvelope.decode(json)
             val payload = groupCall?.encode() ?: lk.codegen.risime.calls.CallRecords.strip(json).toByteArray(Charsets.UTF_8)
             return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { payload }, silent = groupCall != null) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
+        }
+        if (m.risiCtl) {
+            // §24.11: the stored envelope, encrypted at send time; Official only (a group), never plaintext.
+            val json = m.systemJson ?: return PushResult.Rejected(AuthErrors.BAD_REQUEST)
+            return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { json.toByteArray(Charsets.UTF_8) }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
         }
         if (m.image) {
             // §14.7 Sending 6: the stored envelope, encrypted at send time; never in plaintext.

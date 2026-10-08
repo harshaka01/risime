@@ -123,7 +123,7 @@ object HistoryExport {
         val out = mutableListOf<ExportUnit>()
         for (m in dao.exportCandidates(conv)) {
             val id = m.messageId?.lowercase() ?: continue
-            if (m.deleted || m.system || m.deleteState != null || m.deleteUnverified) continue
+            if (m.deleted || m.system || m.risiCtl || m.deleteState != null || m.deleteUnverified) continue
             if (m.status == MessageStatus.PENDING.name || m.status == MessageStatus.FAILED.name) continue
             if (m.call && !req.own) continue // android R3: a call line is from one user's perspective
             val ticks = TimeUuid.ticks(id)

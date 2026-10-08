@@ -21,6 +21,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.platform.testTag
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -45,7 +46,7 @@ import lk.codegen.risime.ui.theme.Sizes
 import lk.codegen.risime.ui.theme.Spacing
 
 @Composable
-fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> Unit = {}, onNotificationHealth: () -> Unit = {}) {
+fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> Unit = {}, onNotificationHealth: () -> Unit = {}, onRisiKnows: () -> Unit = {}, onMyPromises: () -> Unit = {}) {
     val s by vm.state.collectAsStateWithLifecycle()
     Scaffold(
         topBar = { RisiTopBar(title = "Settings", onBack = onBack) },
@@ -84,10 +85,16 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
             val container = (androidx.compose.ui.platform.LocalContext.current.applicationContext as? lk.codegen.risime.RisiMeApp)?.container
             // A lock that is on stays reachable while the sensor is busy (it only turns itself off when no fingerprint is left).
             val lockAvailable = lk.codegen.risime.ui.lock.rememberLockAvailable() || container?.appLock?.settings?.value?.enabled == true
-            if ((lockAvailable && container != null) || BuildConfig.HISTORY_SHARE_ENABLED) {
+            // §24.11 "What Risi knows about me" and "My promises": only while the two tabs are on.
+            val tabsOn = container?.chatTabs?.uiOn?.collectAsStateWithLifecycle()?.value == true
+            if ((lockAvailable && container != null) || BuildConfig.HISTORY_SHARE_ENABLED || tabsOn) {
                 SectionHeader("Privacy")
                 if (container != null) lk.codegen.risime.ui.lock.FingerprintLockSection(container, lockAvailable, showHeader = false)
                 if (BuildConfig.HISTORY_SHARE_ENABLED) lk.codegen.risime.ui.history.HistoryPrivacySection(showHeader = false)
+                if (tabsOn) {
+                    OutlinedButton(onClick = onRisiKnows, modifier = Modifier.fillMaxWidth().testTag("settings_risi_knows")) { Text(RISI_KNOWS_TITLE) }
+                    OutlinedButton(onClick = onMyPromises, modifier = Modifier.fillMaxWidth().testTag("settings_my_promises")) { Text(MY_PROMISES_TITLE) }
+                }
                 HorizontalDivider()
             }
             if (container != null) {

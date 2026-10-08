@@ -219,4 +219,52 @@ class BackupManagerTest {
         assertNull(a.keys.current)
         assertFalse(a.manager.serverOn)
     }
+
+    // ---- §24.10 backup file schema 2 ----
+
+    private suspend fun addOfficial(d: Device) {
+        val official = "grp:4e5f6a7b-8c9d-4e0f-9a1b-2c3d4e5f6a7b"
+        d.phone.db.groups().upsert(lk.codegen.risime.data.db.GroupEntity(official, "Site team", "admin", lk.codegen.risime.data.db.GroupEntity.STATE_ACTIVE, ME, null, 1, 2, null, null, 2))
+        d.phone.db.chatTabs().upsert(lk.codegen.risime.data.db.ChatTabEntity(official, BackupData.GRP, lk.codegen.risime.data.db.ChatTabEntity.TAB_OFFICIAL, lk.codegen.risime.data.db.ChatTabEntity.KIND_GROUP))
+        d.phone.db.messages().insert(BackupData.msg(official, ME, 50))
+    }
+
+    @Test fun aPrivateOnlyBundleIsWrittenAsFileSchema1AndAnOfficialOneAsSchema2() = runBlocking {
+        val d = Device("dev-a")
+        BackupData.fill(d.phone)
+        val f1 = d.manager.writeLocal(BackupReason.MANUAL)
+        assertEquals(1L, FakeBackupTools.fileInfo(f1).schema)
+        addOfficial(d)
+        val f2 = d.manager.writeLocal(BackupReason.DAILY)
+        assertEquals(2L, FakeBackupTools.fileInfo(f2).schema)
+        assertTrue(f2.name.endsWith("-s2.risimebk"))
+    }
+
+    @Test fun aSchema2FileRestoresWithItsOfficialTabOnANewPhone() = runBlocking {
+        val a = Device("dev-a")
+        BackupData.fill(a.phone)
+        addOfficial(a)
+        val out = ByteArrayOutputStream()
+        assertTrue(a.manager.export(out))
+        val b = Device("dev-b")
+        val done = b.manager.restore(RestoreSource.LocalFile(b.manager.stageFile(out.toByteArray().inputStream())), a.manager.recoveryKey())
+        assertTrue("$done", done is RestoreOutcome.Done)
+        assertTrue(b.phone.db.chatTabs().allNow().any { it.official })
+    }
+
+    @Test fun aFileSchemaAboveTwoSaysUpdateRisiMeToRestoreThisBackup() = runBlocking {
+        val a = Device("dev-a")
+        BackupData.fill(a.phone)
+        addOfficial(a)
+        val f = a.manager.writeLocal(BackupReason.MANUAL)
+        // The same file with the header's schema 2 -> 3 (equal length), checksum recomputed.
+        val text = String(f.readBytes(), Charsets.ISO_8859_1)
+        assertTrue(text.contains("\"schema\":2"))
+        val body = text.replace("\"schema\":2", "\"schema\":3").toByteArray(Charsets.ISO_8859_1).let { it.copyOf(it.size - 32) }
+        val patched = body + java.security.MessageDigest.getInstance("SHA-256").digest(body)
+        assertEquals(3L, FakeBackupTools.parse(File(tmp.newFolder(), "x").also { it.writeBytes(patched) }).schema)
+        val r = a.manager.restore(RestoreSource.LocalFile(a.manager.stageFile(patched.inputStream())), a.manager.recoveryKey())
+        assertEquals(RestoreOutcome.Failed("Update RisiMe to restore this backup"), r)
+        assertEquals("Update RisiMe to restore this backup", a.manager.describe(BackupException(BackupException.Kind.UnsupportedSchema)))
+    }
 }

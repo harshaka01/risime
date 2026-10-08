@@ -21,6 +21,7 @@ internal fun RisiBackupException.toApp(): BackupException = BackupException(
         is RisiBackupException.Format -> BackupException.Kind.Format
         is RisiBackupException.Malformed -> BackupException.Kind.Malformed
         is RisiBackupException.Unsupported -> BackupException.Kind.Unsupported
+        is RisiBackupException.UnsupportedSchema -> BackupException.Kind.UnsupportedSchema
         is RisiBackupException.WrongAccount -> BackupException.Kind.WrongAccount
         is RisiBackupException.NoKey -> BackupException.Kind.NoKey
         is RisiBackupException.WeakPassphrase -> BackupException.Kind.WeakPassphrase
@@ -67,8 +68,8 @@ class UniffiBackupKeys(private val client: MlsClient, private val tx: (() -> Any
 
     override fun dropKey(bkId: String) = inTx { client.backupDropKey(bkId) }
 
-    override fun writer(userId: String, backupId: String, createdAt: String, appVersion: String, keyRecord: String?, out: File): BackupCipherWriter {
-        val w = inTx { client.backupWriter(userId, backupId, createdAt, appVersion, keyRecord, out.absolutePath) }
+    override fun writer(userId: String, backupId: String, createdAt: String, appVersion: String, keyRecord: String?, out: File, schema: Int): BackupCipherWriter {
+        val w = inTx { client.backupWriter(userId, backupId, createdAt, appVersion, keyRecord, out.absolutePath, schema.toULong()) }
         return object : BackupCipherWriter {
             override fun write(bytes: ByteArray) = bk { w.write(bytes) }
 

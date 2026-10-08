@@ -261,8 +261,10 @@ private fun MainNav(c: AppContainer, meId: String) {
                 officialScreen = { official, readOnly, tabBar ->
                     val dmChat = !lk.codegen.risime.net.isGroupConversation(conv)
                     val peerName = if (dmChat) viewModel<lk.codegen.risime.ui.tabs.ChatTabsViewModel>(key = "tabs:$conv").title.collectAsState().value else null
+                    val officialVm = viewModel(key = official) { lk.codegen.risime.ui.group.GroupChatViewModel(c, meId, official) }
                     lk.codegen.risime.ui.group.GroupChatScreen(
-                        viewModel(key = official) { lk.codegen.risime.ui.group.GroupChatViewModel(c, meId, official) }, meId,
+                        officialVm, meId,
+                        risi = officialVm.risi, // §24.9: only the Official tab has Risi (cards, @Risi chip, Summarise/Report)
                         onBack = { nav.popBackStack() },
                         // Chat info is the chat's (the Private group's); a 1:1 Official has no member management (§24.1 dm_chat).
                         onInfo = if (dmChat) chatInfo else groupInfo,
@@ -353,6 +355,19 @@ private fun MainNav(c: AppContainer, meId: String) {
                 viewModel { SettingsViewModel(AppSettingsBackend(c)) }, onBack = { nav.popBackStack() },
                 onBackups = { nav.navigate("backups") { launchSingleTop = true } },
                 onNotificationHealth = { nav.navigate("notif_health") { launchSingleTop = true } },
+                onRisiKnows = { nav.navigate("risi_facts") { launchSingleTop = true } },
+                onMyPromises = { nav.navigate("risi_promises") { launchSingleTop = true } },
+            )
+        }
+        composable("risi_facts") {
+            lk.codegen.risime.ui.settings.RisiFactsScreen(viewModel { lk.codegen.risime.ui.settings.RisiFactsViewModel(c.risiRest) }.model, onBack = { nav.popBackStack() })
+        }
+        composable("risi_promises") {
+            val contacts by c.contacts.contacts.collectAsState(emptyList())
+            lk.codegen.risime.ui.settings.RisiPromisesScreen(
+                viewModel { lk.codegen.risime.ui.settings.RisiPromisesViewModel(c.risiRest) }.model, meId,
+                nameOf = { id -> contacts.firstOrNull { it.userId.equals(id, true) }?.displayName ?: "Someone" },
+                onBack = { nav.popBackStack() },
             )
         }
         composable("notif_health") {

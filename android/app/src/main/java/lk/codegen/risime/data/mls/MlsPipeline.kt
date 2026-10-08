@@ -80,6 +80,9 @@ sealed interface MlsResult {
     /** §20.4 a durable `group_call` (`started`/`ended`) in a group: the group call's history line (silent, never unread). */
     data class GroupCall(val message: MessageData, val env: lk.codegen.risime.calls.GroupCallEnvelope) : MlsResult
 
+    /** §24.11 a member's `risi_request` / `risi_action` in Official: a small system line (read, never notified). */
+    data class RisiControl(val message: MessageData, val obj: kotlinx.serialization.json.JsonObject) : MlsResult
+
     /** Ahead of the local epoch/generation, or no group yet: kept in mls_pending. */
     data object Pending : MlsResult
 
@@ -350,6 +353,11 @@ class MlsPipeline(
                     // §20.4: group calls are `grp:` only; a DM `group_call` is dropped and logged.
                     is MlsPayload.Decoded.GroupCall -> if (lk.codegen.risime.net.isGroupConversation(msg.conversationId)) MlsResult.GroupCall(msg, p.env) else {
                         log("group_call in a DM ${msg.messageId}: dropped")
+                        MlsResult.Ignored
+                    }
+                    // §24.11: a member's request/action to Risi is a small system line, only in an Official conversation.
+                    is MlsPayload.Decoded.RisiControl -> if (mls.groupMeta(conv)?.official == true) MlsResult.RisiControl(msg, p.obj) else {
+                        log("risi control outside Official ${msg.messageId}: dropped")
                         MlsResult.Ignored
                     }
                     is MlsPayload.Decoded.Ignored -> {

@@ -504,6 +504,33 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         if (group.value?.readOnly != true) typingSender.onInput(text)
     }
 
+    /**
+     * §24.11 Risi in this conversation: requests/actions go out only while it is an Official conversation
+     * (checked at the source, so a Private chat can't send one); feedback is private REST.
+     */
+    val risi: lk.codegen.risime.ui.tabs.RisiHost = object : lk.codegen.risime.ui.tabs.RisiHost {
+        private val requests = lk.codegen.risime.data.tabs.RisiRequests(
+            isOfficial = { c.db.chatTabs().get(conversationId)?.official == true },
+            send = { c.engine.sendRisiControl(conversationId, it) },
+        )
+
+        override val me: String get() = meId
+
+        override fun ask(text: String) { viewModelScope.launch { requests.ask(text) } }
+
+        override fun summarise() { viewModelScope.launch { requests.summarise() } }
+
+        override fun report() { viewModelScope.launch { requests.report() } }
+
+        override fun act(target: String, action: String, editText: String?, editDue: String?) {
+            viewModelScope.launch { requests.act(target, action, editText, editDue) }
+        }
+
+        override fun feedback(callRef: String, rating: String, reason: String?) {
+            c.scope.launch { runCatching { c.risiRest.feedback(callRef, rating, reason) } }
+        }
+    }
+
     fun send(text: String) {
         typingSender.stop()
         viewModelScope.launch { c.engine.sendText(conversationId, text) }

@@ -307,6 +307,20 @@ class ApiClient(
 
     suspend fun updateDisplayName(name: String): ApiResult<MeReply> = call("PATCH", "me", PatchMe(name))
 
+    /** §24.11 `PATCH /me {"tz"}`: the phone's IANA zone (Risi's reminders and digest run in it). */
+    suspend fun patchTimezone(tz: String): ApiResult<MeReply> = call("PATCH", "me", PatchTz(tz))
+
+    // ---- §24.11 Risi (private REST) ----
+    suspend fun risiFeedback(body: RisiFeedback): ApiResult<Unit> = call("POST", "risi/feedback", body)
+
+    suspend fun risiFacts(): ApiResult<RisiFactsReply> = call<Unit, RisiFactsReply>("GET", "risi/facts", null)
+
+    suspend fun deleteRisiFact(factId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/facts/$factId", null)
+
+    suspend fun deleteRisiFacts(): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/facts", null)
+
+    suspend fun risiCommitments(state: String): ApiResult<RisiCommitmentsReply> = call<Unit, RisiCommitmentsReply>("GET", "risi/commitments?state=$state", null)
+
     suspend fun contacts(): ApiResult<ContactsReply> = call<Unit, ContactsReply>("GET", "contacts", null)
 
     suspend fun logout(): ApiResult<Unit> = call<Unit, Unit>("POST", "auth/logout", null)
