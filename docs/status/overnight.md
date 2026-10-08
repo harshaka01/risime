@@ -67,6 +67,11 @@ were needed after nightly.11.
    - **Gate to-do (root):** from nightly.37 on, `scripts/upgrade-test` sets a redroid PIN
      (`locksettings set-pin`) and locks a chat through the real DEVICE_CREDENTIAL prompt on the old
      app (n36+). After the update the chat must still be hidden, and its counts kept.
+- **nightly.36 attempt 1 (from `8f8d7b6`): stopped by push-device-test scenario 5.**
+  - **The crash:** the caller's app crashed natively at hang-up (`decStrong() called … too many
+    times`, `ToneGenerator.release` from `CallManager.updateRingback` on two threads). A real
+    crash for anyone hanging up quickly.
+  - **The fix:** an android agent is on it. Nothing was published.
 5. ⏳ **Risi.** Harsha answered the §24 proposal `bf1a215`: **proceed**, with a new model, **two tabs
    in every chat: 🔒 Private | ● Official.**
    - Each tab is its own MLS group.
