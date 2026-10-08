@@ -1,7 +1,7 @@
 # Android status — 0.2 nightlies
 
 ## P0-3 video calls: no sound / speaker button greyed out — READY (real phones to confirm)
-**READY.** Commits `2f23394` (calls/) and `29b360d` (root script `call-device-test`, changed for this task).
+**READY.** Commits `eb25ada` (calls/) and `2c225cd` (root script `call-device-test`, changed for this task).
 - **Cause:** core-telecom 1.0.1's `availableEndpoints`/`currentCallEndpoint` are `Channel.receiveAsFlow()` (each value reaches
   ONE collector). Video calls ran a second reader (the speaker coroutine) beside the UI readers, so the UI's route list could
   stay `[]` (button disabled all call), the UI could miss SPEAKER, and the speaker logic could miss the earpiece value (audio left
