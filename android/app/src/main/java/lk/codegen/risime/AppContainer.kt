@@ -144,6 +144,11 @@ class AppContainer(
         legacy = TokenVault(File(context.noBackupFilesDir, "tokens.bin"), KeystoreWrappingKey()),
         elapsed = SystemClock::elapsedRealtime,
         diagnostics = authDiagnostics,
+        transientStarts = object : lk.codegen.risime.data.auth.TransientStartCounter {
+            private val p = context.getSharedPreferences("risime_auth_vault", Context.MODE_PRIVATE)
+            override fun get() = p.getInt("transient_starts", 0)
+            override fun set(n: Int) = p.edit().putInt("transient_starts", n).apply()
+        },
         onNewAccessToken = { t ->
             scope.launch {
                 val r = realtime.refreshAuth(t)
@@ -1129,7 +1134,9 @@ class AppContainer(
         scope.launch {
             val st = auth.state.first { it != lk.codegen.risime.data.auth.SessionState.RESTORING }
             val s = sessionStore.current()
-            if (s?.kind == AuthKind.OIDC && st == lk.codegen.risime.data.auth.SessionState.NONE) {
+            // The user's own "Sign in again" on the stuck screen signs out itself (giveUpSavedSignIn).
+            val userChose = auth.restoreProblem == lk.codegen.risime.data.auth.SignOutTrigger.VAULT_UNREADABLE_USER
+            if (s?.kind == AuthKind.OIDC && st == lk.codegen.risime.data.auth.SessionState.NONE && !userChose) {
                 authDiagnostics.signedOut(auth.restoreProblem ?: lk.codegen.risime.data.auth.SignOutTrigger.NO_STORED_SESSION)
                 localAccount.signOutKeepData()
                 signInNotice.value = "Sign in again — your chats are kept."
@@ -1417,6 +1424,15 @@ class AppContainer(
         blocked.value = null
         localAccount.signOutKeepData()
         signInNotice.value = notice
+    }
+
+    /**
+     * The loading screen's way out when the Keystore won't open the saved sign-in ([AuthManager.vaultStuck]):
+     * forget only the token vault and go to the sign-in, keeping every chat (rule 9).
+     */
+    suspend fun giveUpSavedSignIn() {
+        auth.giveUpVault()
+        signOutKeepData("Sign in again — your chats are kept.", lk.codegen.risime.data.auth.SignOutTrigger.VAULT_UNREADABLE_USER)
     }
 
     /** §6: token rejected (refresh already tried): back to sign-in, keeping local chats. */

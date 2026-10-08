@@ -91,6 +91,8 @@ class AuthManager(
     /** Called with every new access token (pushes `auth:refresh` on the socket). */
     private val onNewAccessToken: suspend (String) -> Unit = {},
     private val diagnostics: AuthDiagnostics = AuthDiagnostics.None,
+    /** Consecutive process starts whose vault read was Transient (persisted; reset by a good read). */
+    private val transientStarts: TransientStartCounter = TransientStartCounter.InMemory(),
 ) {
     private val lock = Mutex()
     private var live: Live? = null
@@ -98,6 +100,17 @@ class AuthManager(
 
     /** Transient vault reads in a row (Keystore busy): the next read waits [restoreBackoffMs]. */
     private var restoreFailures = 0
+
+    /** elapsed() of this process's first Transient read (null: none yet). */
+    private var transientSince: Long? = null
+
+    private val _vaultStuck = MutableStateFlow(false)
+
+    /**
+     * The vault has stayed unreadable for a Keystore reason long enough ([VaultStuckRule]): the
+     * loading screen offers "Sign in again — your chats are kept" and "Try again". Retries go on.
+     */
+    val vaultStuck: StateFlow<Boolean> = _vaultStuck.asStateFlow()
 
     @Volatile private var nextRestoreAt = Long.MIN_VALUE
 
@@ -127,6 +140,34 @@ class AuthManager(
         return lock.withLock { restoreLocked() }
     }
 
+    /** "Try again" on the stuck screen: read the vault now (the backoff starts over; the stuck clock doesn't). */
+    suspend fun retryRestoreNow(): SessionState {
+        lock.withLock {
+            restoreFailures = 0
+            nextRestoreAt = Long.MIN_VALUE
+        }
+        return restore()
+    }
+
+    /**
+     * "Sign in again — your chats are kept" on the stuck screen: forget only the token vault (blob +
+     * key) and the session in memory ([SessionState.NONE]); the caller signs out keeping data
+     * (trigger [SignOutTrigger.VAULT_UNREADABLE_USER]). Never touches chats.
+     */
+    suspend fun giveUpVault() {
+        lock.withLock {
+            withContext(Dispatchers.IO) { vault.clear() }
+            live = null
+            unsaved = null
+            transientSince = null
+            transientStarts.set(0)
+            _vaultStuck.value = false
+            restoreProblem = SignOutTrigger.VAULT_UNREADABLE_USER
+            _state.value = SessionState.NONE
+        }
+        Log.w("RisiMe", "RisiMe auth: the saved sign-in couldn't be opened: cleared at the user's request (chats kept)")
+    }
+
     /** Ms until a retried vault read is allowed (0: now, or no retry pending). */
     fun restoreRetryInMs(): Long = (nextRestoreAt - elapsed()).coerceAtLeast(0)
 
@@ -136,6 +177,15 @@ class AuthManager(
         val next = withContext(Dispatchers.IO) {
             when (val l = vault.load()) {
                 is SessionVault.Load.Transient -> {
+                    val now = elapsed()
+                    val since = transientSince ?: now.also {
+                        transientSince = it
+                        transientStarts.set(transientStarts.get() + 1) // once per process
+                    }
+                    if (VaultStuckRule.stuck(now - since, transientStarts.get()) && !_vaultStuck.value) {
+                        Log.w("RisiMe", "RisiMe auth: vault unreadable for ${now - since}ms (process start #${transientStarts.get()} in a row): offering sign-in again")
+                        _vaultStuck.value = true
+                    }
                     restoreFailures++
                     val wait = restoreBackoffMs(restoreFailures)
                     nextRestoreAt = elapsed() + wait
@@ -171,6 +221,9 @@ class AuthManager(
         }
         if (next == SessionState.RESTORING) return next
         restoreFailures = 0
+        transientSince = null
+        _vaultStuck.value = false
+        if (transientStarts.get() != 0) transientStarts.set(0)
         Log.i("RisiMe", "RisiMe auth: session restored state=$next")
         _state.value = next
         return next
@@ -356,5 +409,32 @@ class AuthManager(
 
         /** 1 s, 2 s, 4 s … capped at a minute: a Keystore busy after boot answers within seconds. */
         fun restoreBackoffMs(failures: Int): Long = (1_000L shl (failures - 1).coerceIn(0, 6)).coerceAtMost(60_000L)
+    }
+}
+
+/** When the loading screen offers a way out of a vault the Keystore won't open. */
+object VaultStuckRule {
+    /** ~60 s of Transient reads in this process. */
+    const val STUCK_AFTER_MS = 60_000L
+
+    /** The 3rd process start in a row whose read was Transient. */
+    const val STUCK_AFTER_STARTS = 3
+
+    fun stuck(transientForMs: Long, consecutiveStarts: Int): Boolean =
+        transientForMs >= STUCK_AFTER_MS || consecutiveStarts >= STUCK_AFTER_STARTS
+}
+
+/** Consecutive process starts whose vault read was Transient (SharedPreferences in the app). */
+interface TransientStartCounter {
+    fun get(): Int
+
+    fun set(n: Int)
+
+    class InMemory(private var n: Int = 0) : TransientStartCounter {
+        override fun get() = n
+
+        override fun set(n: Int) {
+            this.n = n
+        }
     }
 }

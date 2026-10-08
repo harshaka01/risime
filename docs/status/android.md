@@ -13,6 +13,10 @@
   only, never CallActivity; undone when the lock is off.
 - Calls: `refreshService()` decides and stops under `serviceLock` (wake-ups counted), so no stop lands between a
   push's start and its `startForeground`. `CallPushTest.theStartUpCleanup…` now asserts ordering (10/10 green).
+- Way out of a vault that stays Transient: after ~60 s in one process, or on the 3rd process start in a row
+  (counter in `risime_auth_vault` prefs, reset on any good read), the loading screen shows "RisiMe can't open
+  your saved sign-in on this phone." with **Sign in again — your chats are kept** (clears only the token
+  vault/key, then `signOutKeepData`; trigger `vault_unreadable_user`) and **Try again**. Retries continue meanwhile.
 
 ## Decision 064: no mandatory lock, tokens readable in the background, optional fingerprint lock — READY (real phone to confirm)
 - **Token vault** (`data/auth/SessionVault.kt`): the token set (refresh + ID token) is sealed with AES-256-GCM

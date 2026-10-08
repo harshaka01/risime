@@ -272,6 +272,9 @@ enum class SignOutTrigger(val value: String) {
     INVALID_GRANT("invalid_grant"),
     KEY_INVALIDATED("key_invalidated"),
     VAULT_UNREADABLE("vault_unreadable"),
+
+    /** The user chose "Sign in again" on a saved sign-in the Keystore wouldn't open (chats kept). */
+    VAULT_UNREADABLE_USER("vault_unreadable_user"),
     NO_STORED_SESSION("no_stored_session"),
     UNAUTHORIZED("unauthorized"),
     USER_LOGOUT("user_logout"),

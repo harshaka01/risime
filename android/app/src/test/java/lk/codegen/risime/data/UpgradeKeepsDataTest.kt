@@ -195,6 +195,24 @@ class UpgradeKeepsDataTest : ReleasedInstallFixture() {
         c.db.close()
     }
 
+    /** Decision 064 follow-up: "Sign in again" on a saved sign-in the Keystore won't open keeps every chat. */
+    @Test fun signInAgainFromTheStuckVaultScreenKeepsChats() {
+        writeReleasedDb(4)
+        writeReleasedPrefs(me, signedIn = true)
+        val c = container()
+        val before = c.counts()
+        val device = runBlocking { c.sessionStore.deviceId() }
+        runBlocking { c.giveUpSavedSignIn() }
+        assertEquals("nothing wiped", before, c.counts())
+        assertEquals(device, runBlocking { c.sessionStore.deviceId() })
+        assertEquals(me, runBlocking { c.sessionStore.lastUserId() })
+        assertNull("signed out: the sign-in screen shows", runBlocking { c.sessionStore.current() })
+        assertEquals("vault_unreadable_user", c.authDiagnostics.current().lastSignOut)
+        assertEquals(lk.codegen.risime.data.auth.SessionState.NONE, c.auth.state.value)
+        assertEquals("Sign in again — your chats are kept.", c.signInNotice.value)
+        c.db.close()
+    }
+
     @Test fun confirmedLogoutAndDeleteWipesLocallyEvenWithTheServerUnreachable() {
         writeReleasedDb(4)
         writeReleasedPrefs(me, signedIn = true) // server_url points at a closed port

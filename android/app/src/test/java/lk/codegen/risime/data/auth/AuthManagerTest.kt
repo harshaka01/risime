@@ -147,6 +147,77 @@ class AuthManagerTest {
         assertFalse(m.signInNeeded.value)
     }
 
+    @Test fun theStuckRule() {
+        assertFalse(VaultStuckRule.stuck(59_999, 2))
+        assertTrue(VaultStuckRule.stuck(60_000, 0))
+        assertTrue(VaultStuckRule.stuck(0, 3))
+        assertFalse(VaultStuckRule.stuck(0, 1))
+    }
+
+    /** Follow-up: ~60 s of Transient reads in one process offers the way out; retries go on until then and after. */
+    @Test fun aVaultStuckForAMinuteOffersSignInAgainAndKeepsRetrying() = runTest {
+        manager().adopt("iss", "risime", OidcTokens("a1", 300, "r1", null))
+        newKey.failure = java.security.ProviderException("Keystore busy")
+        val starts = TransientStartCounter.InMemory()
+        val m = AuthManager(gw, vault, legacy, { now }, {}, diag, starts)
+        m.restore()
+        assertEquals(1, starts.get())
+        while (now < 59_000) {
+            assertFalse("not before ~60 s (t=$now)", m.vaultStuck.value)
+            now += m.restoreRetryInMs().coerceAtLeast(1)
+            m.restore()
+        }
+        while (!m.vaultStuck.value && now < 130_000) {
+            now += m.restoreRetryInMs().coerceAtLeast(1)
+            m.restore()
+        }
+        assertTrue(m.vaultStuck.value)
+        assertTrue(now in 60_000..125_000)
+        assertEquals("one count per process start", 1, starts.get())
+        assertEquals(SessionState.RESTORING, m.state.value)
+        assertTrue(vault.exists()) // nothing deleted by itself
+        // "Try again" works once the Keystore answers: signed in, the screen goes, the counter resets.
+        newKey.failure = null
+        assertEquals(SessionState.READY, m.retryRestoreNow())
+        assertFalse(m.vaultStuck.value)
+        assertEquals(0, starts.get())
+    }
+
+    /** Follow-up: the 3rd process start in a row that can't read the vault offers the way out at once. */
+    @Test fun theThirdStuckStartInARowOffersSignInAgainAtOnce() = runTest {
+        manager().adopt("iss", "risime", OidcTokens("a1", 300, "r1", null))
+        newKey.failure = java.security.ProviderException("Keystore busy")
+        val starts = TransientStartCounter.InMemory()
+        val first = AuthManager(gw, vault, legacy, { now }, {}, diag, starts)
+        first.restore()
+        assertFalse(first.vaultStuck.value)
+        val second = AuthManager(gw, vault, legacy, { now }, {}, diag, starts)
+        second.restore()
+        assertFalse(second.vaultStuck.value)
+        val third = AuthManager(gw, vault, legacy, { now }, {}, diag, starts)
+        assertEquals(SessionState.RESTORING, third.restore())
+        assertTrue(third.vaultStuck.value)
+        assertEquals(3, starts.get())
+        // A good read in between resets the run.
+        newKey.failure = null
+        assertEquals(SessionState.READY, AuthManager(gw, vault, legacy, { now }, {}, diag, starts).restore())
+        assertEquals(0, starts.get())
+        // "Sign in again": only the token vault goes; the caller signs out keeping chats.
+        newKey.failure = java.security.ProviderException("Keystore busy")
+        repeat(3) { AuthManager(gw, vault, legacy, { now }, {}, diag, starts).restore() }
+        val stuck = AuthManager(gw, vault, legacy, { now }, {}, diag, starts)
+        stuck.restore()
+        assertTrue(stuck.vaultStuck.value)
+        stuck.giveUpVault()
+        assertEquals(SessionState.NONE, stuck.state.value)
+        assertEquals(SignOutTrigger.VAULT_UNREADABLE_USER, stuck.restoreProblem)
+        assertEquals("vault_unreadable_user", SignOutTrigger.VAULT_UNREADABLE_USER.value)
+        assertFalse(vault.exists())
+        assertNull(newKey.key)
+        assertFalse(stuck.vaultStuck.value)
+        assertEquals(0, starts.get())
+    }
+
     @Test fun onlyAPermanentFailureMakesTheVaultUnreadable() {
         assertTrue(SessionVault.classify(javax.crypto.AEADBadTagException()) is SessionVault.Load.Unreadable)
         assertTrue(SessionVault.classify(android.security.keystore.KeyPermanentlyInvalidatedException()) is SessionVault.Load.Unreadable)

@@ -73,7 +73,7 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
                 } else {
                     BlockedScreen(blocked!!, c, authUi)
                 }
-                AppGate.LOADING -> Unit
+                AppGate.LOADING -> lk.codegen.risime.ui.auth.VaultStuckGate(c)
                 AppGate.SIGNED_OUT -> LoginFlow(viewModel(key = "login") { LoginViewModel(c) }, authUi, notice)
                 AppGate.MIGRATE -> MigrationScreen(authUi)
                 AppGate.APP_LOCKED -> {

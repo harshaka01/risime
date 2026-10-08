@@ -93,6 +93,33 @@ fun MigrationScreen(authUi: AuthUi) {
     }
 }
 
+const val VAULT_STUCK_TEXT = "RisiMe can't open your saved sign-in on this phone."
+const val VAULT_STUCK_SIGN_IN = "Sign in again — your chats are kept"
+const val VAULT_STUCK_RETRY = "Try again"
+
+/** The loading gate: blank while the saved sign-in opens; a way out once the Keystore stays stuck. */
+@Composable
+fun VaultStuckGate(c: AppContainer) {
+    val stuck by c.auth.vaultStuck.collectAsStateWithLifecycle()
+    if (!stuck) return
+    val scope = rememberCoroutineScope()
+    VaultStuckScreen(
+        onSignInAgain = { scope.launch { c.giveUpSavedSignIn() } },
+        onRetry = { scope.launch { c.auth.retryRestoreNow() } },
+    )
+}
+
+/** Shown when the saved sign-in can't be opened for ~60 s (or the 3rd start in a row). Never wipes chats. */
+@Composable
+fun VaultStuckScreen(onSignInAgain: () -> Unit, onRetry: () -> Unit) {
+    CenteredColumn {
+        Text("RisiMe", style = WordmarkStyle, color = MaterialTheme.colorScheme.primary, modifier = Modifier.semantics { heading() })
+        Text(VAULT_STUCK_TEXT, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        Button(onClick = onSignInAgain, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(VAULT_STUCK_SIGN_IN) }
+        TextButton(onClick = onRetry) { Text(VAULT_STUCK_RETRY) }
+    }
+}
+
 /** 403 not_allowlisted / 409 identity_conflict: the server's message, verbatim (§6.1). */
 @Composable
 fun BlockedScreen(blocked: Blocked, c: AppContainer, authUi: AuthUi) {
