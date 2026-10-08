@@ -75,6 +75,19 @@ echo "==> live interop (scripts/interop: real Android clients vs a temp server f
 # running scripts/interop on the default ports at the same time.
 INTEROP_INSTANCE=_rel INTEROP_PORT=4200 INTEROP_JWKS_PORT=4899 RISIME_GRADLE_ARGS="${PIN_ARGS[*]}" step scripts/interop
 
+# Background delivery gate (P0 2026-10-08): scripts/push-device-test with this build's debug APK on its
+# own redroids (screen off + force-idle, and after removal from Recents: message and call within 10 s).
+# PUSHTEST_SKIP=1 skips it (emergency only; say so in the release notes).
+if [ -n "${PUSHTEST_SKIP:-}" ]; then echo "==> push-device-test SKIPPED (PUSHTEST_SKIP)"
+elif scripts/android-target check >/dev/null 2>&1; then
+  echo "==> push-device-test (background delivery, redroid)"
+  PUSHTEST_INSTANCE=_rel PUSHTEST_PORT=4470 PUSHTEST_REDROID_A=-relpt1 PUSHTEST_REDROID_A_PORT=5771 \
+    PUSHTEST_REDROID_B=-relpt2 PUSHTEST_REDROID_B_PORT=5772 \
+    step scripts/push-device-test --apk android/app/build/outputs/apk/debug/app-debug.apk
+else
+  echo "==> push-device-test: no redroid here (run it on spark2)"
+fi
+
 APK=android/app/build/outputs/apk/release/app-release.apk
 BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
 if [ -f "$PIN_FILE" ]; then
