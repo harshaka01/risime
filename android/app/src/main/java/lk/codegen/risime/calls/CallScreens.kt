@@ -89,12 +89,15 @@ data class InCallUi(
     val ended: Boolean = false,
     /** §18.6: the peer's user id for their photo (initials without one). */
     val photoKey: String? = null,
-    /** The call is ACTIVE (P0-3: the route button is never greyed out then, even before Telecom lists routes). */
+    /** The call is ACTIVE. */
     val active: Boolean = false,
 )
 
-/** P0-3: the route button works with two or more routes, and in an active call whose route list is still empty. */
-fun routeButtonEnabled(ui: InCallUi): Boolean = ui.endpoints.size > 1 || (ui.endpoints.isEmpty() && ui.active)
+/**
+ * P0 audio routing: the route button is enabled in every in-call phase (calling, ringing out,
+ * connecting, active), whatever Telecom lists: an empty or one-entry list falls back to AudioManager.
+ */
+fun routeButtonEnabled(ui: InCallUi): Boolean = !ui.ended
 
 private val Green = Color(0xFF1E9E4A)
 private val Red = Color(0xFFD93025)
@@ -381,43 +384,31 @@ fun InCallScreen(
 }
 
 /**
- * The audio route: with only the earpiece and the speaker it toggles the speaker (WhatsApp-style);
- * with Bluetooth or a headset it opens the list.
+ * P0 audio routing: the button always shows the real current route (icon and label) and is always
+ * enabled in a call. With only the earpiece and the speaker a tap switches between them; with a
+ * Bluetooth device or a headset it opens the picker (Bluetooth / Headset / Phone / Speaker, the
+ * current one checked). A route nobody listed is still asked for (id "am:<KIND>": AudioManager).
  */
 @Composable
 private fun RouteControl(ui: InCallUi, onEndpoint: (EndpointUi) -> Unit) {
     var open by remember { mutableStateOf(false) }
-    // No route listed yet (an active call): the button toggles the speaker on its own (P0-3).
-    var fallbackSpeaker by remember { mutableStateOf(false) }
-    val fallback = ui.endpoints.isEmpty()
-    val kinds = ui.endpoints.map { it.kind }.toSet()
-    val simple = fallback || (ui.endpoints.size == 2 && kinds == setOf(EndpointUi.Kind.EARPIECE, EndpointUi.Kind.SPEAKER))
-    val current = if (fallback) (if (fallbackSpeaker) EndpointUi.Kind.SPEAKER else EndpointUi.Kind.EARPIECE) else ui.current?.kind
+    val current = ui.current?.kind
     Box {
         CallControl(
-            label = when (current) {
-                EndpointUi.Kind.SPEAKER -> "Speaker"
-                EndpointUi.Kind.EARPIECE, null -> if (simple) "Speaker" else "Phone"
-                else -> ui.current?.name ?: "Audio"
-            },
+            label = current?.let(::routeKindLabel) ?: "Audio",
             description = "Audio output",
             icon = when (current) {
                 EndpointUi.Kind.BLUETOOTH -> RisiIcons.Bluetooth
                 EndpointUi.Kind.WIRED -> RisiIcons.Headset
-                EndpointUi.Kind.EARPIECE -> if (simple) RisiIcons.Speaker else RisiIcons.Phone
+                EndpointUi.Kind.EARPIECE -> RisiIcons.Phone
                 else -> RisiIcons.Speaker
             },
             on = current == EndpointUi.Kind.SPEAKER || current == EndpointUi.Kind.BLUETOOTH || current == EndpointUi.Kind.WIRED,
             enabled = routeButtonEnabled(ui),
             onClick = {
-                if (fallback) {
-                    fallbackSpeaker = !fallbackSpeaker
-                    onEndpoint(EndpointUi("", if (fallbackSpeaker) "Speaker" else "Phone", if (fallbackSpeaker) EndpointUi.Kind.SPEAKER else EndpointUi.Kind.EARPIECE))
-                } else if (simple) {
-                    val target = if (current == EndpointUi.Kind.SPEAKER) EndpointUi.Kind.EARPIECE else EndpointUi.Kind.SPEAKER
-                    ui.endpoints.firstOrNull { it.kind == target }?.let(onEndpoint)
-                } else {
-                    open = true
+                when (val tap = routeTap(ui.endpoints, current)) {
+                    RouteTap.Picker -> open = true
+                    is RouteTap.Switch -> onEndpoint(ui.endpoints.firstOrNull { it.kind == tap.to } ?: EndpointUi("am:${tap.to.name}", routeKindLabel(tap.to), tap.to))
                 }
             },
         )
@@ -435,7 +426,7 @@ private fun RouteControl(ui: InCallUi, onEndpoint: (EndpointUi) -> Unit) {
                             null,
                         )
                     },
-                    text = { Text(e.name) },
+                    text = { Text(if (e.kind == EndpointUi.Kind.BLUETOOTH || e.kind == EndpointUi.Kind.OTHER) e.name.ifBlank { routeKindLabel(e.kind) } else routeKindLabel(e.kind)) },
                     trailingIcon = { if (e.id == ui.current?.id) Icon(Icons.Default.Check, "Selected") },
                     onClick = { open = false; onEndpoint(e) },
                 )

@@ -6,7 +6,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
@@ -87,26 +86,45 @@ class CallScreensTest(private val dark: Boolean) {
         val bt = EndpointUi("3", "Pixel Buds", EndpointUi.Kind.BLUETOOTH)
         var ui by mutableStateOf(InCallUi("Kamal", "0:12", endpoints = listOf(earpiece, speaker, bt), current = bt, verified = true))
         rule.setContent { RisiMeTheme(dark = dark) { InCallScreen(ui, {}, { e -> events += "route=${e.name}"; ui = ui.copy(current = e) }, {}) } }
-        rule.onNodeWithText("Pixel Buds").assertExists()
+        // The button shows the real route: Bluetooth.
+        rule.onNodeWithText("Bluetooth").assertExists()
         rule.onNodeWithContentDescription("Audio output").performScrollTo().performClick()
+        // The picker: the device's name, Phone and Speaker; the current one checked.
+        rule.onNodeWithText("Pixel Buds").assertExists()
+        rule.onNodeWithText("Phone").assertExists()
+        rule.onNodeWithContentDescription("Selected").assertExists()
         rule.onNodeWithText("Speaker").performClick()
         assertEquals(listOf("route=Speaker"), events)
+        rule.onNodeWithText("Speaker").assertExists()
     }
 
-    /** P0-3: Telecom hasn't listed any route yet in an active call: the button still works (never stuck greyed out). */
-    @Test fun emptyRoutesWhileActiveKeepTheRouteButtonEnabled() {
-        var ui by mutableStateOf(InCallUi("Kamal", "0:05", endpoints = emptyList(), active = true))
-        rule.setContent { RisiMeTheme(dark = dark) { InCallScreen(ui, {}, { e -> events += "route=${e.kind}" }, {}) } }
+    /** P0 audio routing: Telecom lists no route (or one): the button is still enabled in every in-call phase and still switches. */
+    @Test fun noOrOneTelecomRouteKeepsTheRouteButtonWorking() {
+        var ui by mutableStateOf(InCallUi("Kamal", "Calling…", endpoints = emptyList()))
+        rule.setContent { RisiMeTheme(dark = dark) { InCallScreen(ui, {}, { e -> events += "route=${e.kind}:${e.id}"; ui = ui.copy(current = e) }, {}) } }
         rule.onNodeWithContentDescription("Audio output").performScrollTo().assertIsEnabled().performClick()
         rule.onNodeWithContentDescription("Audio output").assertStateDescription("On")
+        rule.onNodeWithText("Speaker").assertExists()
         rule.onNodeWithContentDescription("Audio output").performClick()
         rule.onNodeWithContentDescription("Audio output").assertStateDescription("Off")
-        assertEquals(listOf("route=SPEAKER", "route=EARPIECE"), events)
-        // Not active yet (connecting) with no routes: nothing to toggle.
-        ui = ui.copy(active = false, status = "Connecting…")
-        rule.onNodeWithContentDescription("Audio output").assertIsNotEnabled()
-        assertTrue(routeButtonEnabled(InCallUi("K", "", endpoints = emptyList(), active = true)))
-        assertTrue(!routeButtonEnabled(InCallUi("K", "", endpoints = listOf(EndpointUi("1", "Phone", EndpointUi.Kind.EARPIECE)), active = true)))
+        rule.onNodeWithText("Phone").assertExists()
+        assertEquals(listOf("route=SPEAKER:am:SPEAKER", "route=EARPIECE:am:EARPIECE"), events)
+        // Telecom lists only the earpiece (Harsha's phones): the tap still asks for the speaker.
+        events.clear()
+        val earpiece = EndpointUi("1", "Phone", EndpointUi.Kind.EARPIECE)
+        ui = ui.copy(status = "0:05", active = true, endpoints = listOf(earpiece), current = earpiece)
+        rule.onNodeWithContentDescription("Audio output").assertIsEnabled().performClick()
+        assertEquals(listOf("route=SPEAKER:am:SPEAKER"), events)
+    }
+
+    @Test fun theRouteButtonIsEnabledInEveryInCallPhase() {
+        val earpiece = EndpointUi("1", "Phone", EndpointUi.Kind.EARPIECE)
+        for (endpoints in listOf(emptyList(), listOf(earpiece))) {
+            for (active in listOf(false, true)) {
+                assertTrue(routeButtonEnabled(InCallUi("K", "", endpoints = endpoints, active = active)))
+            }
+        }
+        assertTrue(!routeButtonEnabled(InCallUi("K", "", ended = true)))
     }
 
     /** P0-3: with [earpiece, speaker] the label and the On/Off state follow Telecom's current route. */
@@ -116,7 +134,8 @@ class CallScreensTest(private val dark: Boolean) {
         var ui by mutableStateOf(InCallUi("Kamal", "0:05", endpoints = listOf(earpiece, speaker), current = earpiece, active = true))
         rule.setContent { RisiMeTheme(dark = dark) { InCallScreen(ui, {}, { e -> events += "route=${e.name}"; ui = ui.copy(current = e) }, {}) } }
         rule.onNodeWithContentDescription("Audio output").performScrollTo().assertIsEnabled().assertStateDescription("Off")
-        rule.onNodeWithText("Speaker").assertIsDisplayed()
+        // The label is the real route: the earpiece ("Phone").
+        rule.onNodeWithText("Phone").assertIsDisplayed()
         // Telecom moved the video call to the speaker: the button shows it on.
         ui = ui.copy(current = speaker)
         rule.onNodeWithContentDescription("Audio output").assertStateDescription("On")
