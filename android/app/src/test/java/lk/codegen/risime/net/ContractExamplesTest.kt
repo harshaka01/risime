@@ -26,6 +26,13 @@ class ContractExamplesTest {
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
         "auth_verify_reply.json" to { s -> ProtocolJson.decodeFromString<AuthVerifyReply>(s) },
+        // v1.17 (§18 profile photos): parse-only placeholders until the app implements it.
+        "blob_upload_avatar_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_message_silent.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "msg_send_silent.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "profile_photo_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "profile_photo_payload_bad.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "profile_photo_payload_removed.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         // v1.15 (§17 history sharing): typed models, the envelopes through the strict validators.
         "blob_upload_history_reply.json" to { s -> ProtocolJson.decodeFromString<BlobUploadReply>(s).also { requireNotNull(it.expiresAt) } },
         "blob_usage_reply_history.json" to { s -> ProtocolJson.decodeFromString<BlobUsageReply>(s).also { require(it.history!!.used < it.history!!.limit && it.history!!.hourlyLimit == 40) } },

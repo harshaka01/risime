@@ -92,6 +92,11 @@ defmodule RisiMe.ContractExamplesTest do
                     history_request_reply.json history_respond.json
                     history_respond_stale.json history_share_payload.json)
 
+  # v1.17 (profile photos, §18): parse-only placeholders until the server implements it.
+  @pending_v1_17 ~w(blob_upload_avatar_reply.json event_message_silent.json msg_send_silent.json
+                    profile_photo_payload.json profile_photo_payload_bad.json
+                    profile_photo_payload_removed.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -131,7 +136,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_12 ++
         @checked_v1_13 ++
         @checked_v1_14 ++
-        @checked_v1_15
+        @checked_v1_15 ++
+        @pending_v1_17
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end

@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.16 (Release 0.3)
+# RisiMe Wire Protocol — v1.17 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -1297,6 +1297,7 @@ from this device (`from_device` = mine) is still skipped first, as in §10.3.
 - **Rule 1 only on events first seen from the inbox**, never on events replayed from the client's
   pending store (`mls_pending`). Those were parked by an earlier run and stay recoverable.
 - **Null `history_before` means rule 2 only.**
+- **(v1.17)** A pre-install event with `silent: true` adds no marker and no gap row (§18.4).
 - **Rule 2 is applied when the Welcome's parked events are replayed:** every parked message with
   the Welcome's generation and a lower epoch is pre-install. Parked messages of an older generation
   that the client discards when it joins a newer one also count as pre-install (one marker per
@@ -1458,6 +1459,7 @@ the raw bytes as the body, `Content-Type: application/octet-stream`, **`Content-
     is `400 bad_request`.
   - `mls`: unchanged (§12.6).
   - `history` (v1.15): only the accepted provider device of an open request (§17.9).
+  - `avatar` (v1.17): any signed-in user, without a `conversation_id` (§18.3).
 - **Checked before the body is read**, in this order, each answered with `Connection: close` and
   without draining the body: purpose and conversation (`400`), rights (`404`/`403`/`409`),
   `Content-Type` (**`415 bad_media_type`**, `error_bad_media_type.json`), `Content-Length` (missing
@@ -1608,7 +1610,8 @@ avatar.
 | Concurrent uploads | shared | **3 per user** (all purposes) | shared |
 | Quota (live bytes per user) | 256 MiB (§13.4) | **2 GiB** | not counted |
 
-(v1.15 adds the purpose **`history`**: 16 MiB, 48 h, 40 / h, 512 MiB live; §17.9.)
+(v1.15 adds the purpose **`history`**: 16 MiB, 48 h, 40 / h, 512 MiB live; §17.9. v1.17 adds
+**`avatar`**: no conversation, 512 KiB, 3 / h and 10 / day, current until replaced + 24 h; §18.3.)
 
 - **Quota:** an upload that would take `used` over the purpose's limit gets
   `413 quota_exceeded {"used", "limit"}` (`error_quota_exceeded.json`, v1.10), checked from
@@ -3550,7 +3553,199 @@ sharing; shared plaintext stays on the two devices.
   member share, a refusal, a refresh after epoch drift, a delete racing an import, Clear chat during
   a request.
 
+## 18. Profile photos (v1.17)
+Proposal `2026-10-08-profile-photos-v1.17.md`, reviewed by server, android and crypto
+(`proposals/reviews/2026-10-08-profile-photos-v1.17-*.md`). Additive to v1.16: one envelope type
+`profile_photo`, one blob purpose `avatar`, one optional field `silent` on the e2ee `msg:send` and
+the `message` event. No new event kinds, no capability, no MLS core change. Apps before v1.17
+ignore the envelope type (§10.3) and the field (§0), and show initials.
+
+### 18.0 Principles
+- **The server never sees a photo or its key.** A photo is an `A256GCM-S64K` blob (§14.3, label
+  `risime-media-v1`) under a fresh key; the key and the blob reference travel only inside MLS, in
+  the `profile_photo` envelope, into the user's **e2ee** DMs and groups.
+- **One photo per user on each device**: the highest `ver` wins (§18.2), whichever conversation
+  it came from. The subject is the **MLS sender's user** (the verified leaf, §10.3), never a JSON
+  field: a member can't set another member's photo and the server can't set anyone's.
+- **Plaintext DMs carry no photo.** A receiver shows a user's photo wherever it shows that user
+  (chat list, headers, member lists, group bubbles), plaintext DMs included, only if it already
+  has it from an e2ee conversation; otherwise initials on a colour derived from the user id.
+- **Audience** (crypto K6): whoever receives one envelope keeps that photo. In practice: the
+  user's friends and the people in their groups. The server's reader rule (§18.3) is housekeeping,
+  not cryptography. The UI says "Your photo is visible to your friends and people in your groups."
+- **Group photos** stay as they are (§12.2, §14.4: `group_meta.icon`, admins only); §18.7 adds UI
+  rules only.
+
+### 18.1 The `profile_photo` envelope (MLS application message)
+`profile_photo_payload.json`:
+```json
+{"v": 1, "type": "profile_photo", "ver": 1791292530123,
+ "photo": {"blob": {"blob_id": "…", "size": 61456, "sha256": "<b64 SHA-256 of the ciphertext>"},
+           "enc": {"alg": "A256GCM-S64K", "key": "<b64 32 bytes>", "plain_size": 61000},
+           "mime": "image/jpeg", "w": 512, "h": 512}}
+```
+- **`photo`** is the §14.4 icon object (blob reference, `enc`, `mime`, `w`, `h`), or **`null`**
+  for "no photo" (`profile_photo_payload_removed.json`).
+- **`ver`**: milliseconds of the sender's **server-corrected** time (`device_now + offset`, §16.3)
+  at the change, and strictly greater than any `ver` this device has sent or seen for its own user.
+  A re-send of the same photo keeps its `ver`, blob and key.
+- **One encryption per photo** (crypto K4): every new photo, even the same picture again, is a new
+  encrypt call with a fresh key generated inside the core (§14.3). Re-sends reuse that one blob and
+  key; nothing derives a key from the image or the user.
+- Sent with an **empty** `authenticated_data` (§15.3) and with **`silent: true`** (§18.4), through
+  the normal e2ee `msg:send` (§10.3 DMs, §12.9 groups) and the conversation's serial lane (§16.4).
+  The UTF-8 JSON is under 1 KiB.
+- **Strict validation** (or drop and log, as an unknown type, §10.3): `ver` an integer with
+  `1 ≤ ver ≤ receiver's server-corrected now + 24 h` (crypto K2); `photo` null, or: `alg` exactly
+  `A256GCM-S64K`, `key` exactly 32 bytes, `sha256` exactly 32 bytes, `plain_size ≥ 1` with its
+  §14.3 `cipher_size` equal to `blob.size`, `blob.size` ≤ the `avatar` cap (§18.3), `mime` exactly
+  `image/jpeg`, `w == h` and `64 ≤ w ≤ 512`; a non-empty `authenticated_data` is dropped.
+  `profile_photo_payload_bad.json` (`w`/`h` 1024) must be dropped. Unknown fields are ignored; a
+  `user_id` or similar field never changes the subject (crypto K3).
+- **Which one wins** (crypto K1), per subject user, on every device: the higher `ver`; on an equal
+  `ver`, a `null` photo; otherwise the greater `blob.sha256` compared as base64 strings. A losing
+  envelope is ignored (nothing is fetched for it).
+
+### 18.2 Receiving (client)
+- **Not a message** (android A4): no row, no unread count, no notification, no chat-list preview,
+  no search hit, no ack (neither `delivered` nor `read`), never a reaction or delete target, never
+  in a history bundle (§17.7). It is applied in the ordered transaction with the cursor, like any
+  e2ee event, and leaves no trace when it can't be decrypted (§16.3 "no visible traces").
+- **Applying a winner:** store `ver`, the blob reference and the metadata; the key **sealed** like
+  an image key (§14.7 Receiving 2). In the same transaction delete the previous photo's key and
+  cached ciphertext (android A5). `photo: null` leaves initials.
+- **Download** outside the transaction, at once on any network (≤ 512 KiB) except with Data Saver
+  or roaming (then when the photo is first shown). Verify as §14.7 Receiving 3: size → SHA-256 →
+  every segment and the final flag → padding. **Decode** (crypto K8): JPEG only, sniffed from the
+  bytes; header dimensions equal to `w`/`h` and ≤ 512 before any pixel allocation; software decode
+  off the main thread with a timeout, to the display size. Decoded bitmaps live **in memory only**;
+  the ciphertext is the disk cache and is never evicted while it is the current photo.
+- `404` → initials (retried once a day while it is the current photo). A digest, AEAD, padding or
+  decode failure → initials, logged without bytes; never a visible error.
+- **Blocked users** show initials on this device (android A9).
+- **Notifications** (android A6): the photo may appear (a `Person` icon, CallStyle) only where the
+  notification already shows the name; never in the content-free notifications of a locked
+  session (decision 014, §16.8).
+
+### 18.3 The `avatar` blob purpose (extends §14.2, §14.5)
+**Upload.** `POST /api/v1/blobs?purpose=avatar&client_blob_id=<uuid-v4>`, **no `conversation_id`**
+(present → `400 bad_request`) → `201 {"blob_id", "size", "sha256", "expires_at": null}`
+(`blob_upload_avatar_reply.json`). The §14.2 rules apply (`Content-Length` required, streamed,
+checked before the body in the §14.2 order, idempotent by `client_blob_id`, retries).
+- Any signed-in user may upload. Cap **512 KiB** ciphertext (`413 too_large`); **3 per hour and 10
+  per day** per user (`429` with `Retry-After`; idempotent replays don't count); concurrency shares
+  the 3-per-user upload slots; not counted in a quota and not in `GET /blobs/usage`; keeps working
+  down to the lower free-space guard, like `icon`.
+- **One current avatar per user** (server S3). The upload whose row commits last is current:
+  in its commit transaction, under the per-owner lock (§14.5), the new row gets `expires_at` null
+  and the previous current row `expires_at` = now + **24 h**. An idempotent `200` replay of an
+  older `client_blob_id` never makes that blob current again. `DELETE /blobs/{id}` (owner) removes
+  it at once (used by "Remove photo"); then nothing is current.
+- **Readers** (server S4), on `GET`/`HEAD`: the **owner**; a user with an **accepted friendship
+  with the owner and no block either way**; a user who shares a group with the owner in which
+  **both are `active` or `pending_add`**. Every other case, including expiry and deletion, is
+  `404 not_found`. Checked on every read, so a user who is unfriended and shares no group loses
+  access at once.
+- **Storage** (server S2): `blobs.conversation_id` becomes nullable (null only for `avatar`); the
+  existing `(owner, purpose)` index finds the current avatar. Expired replaced avatars go through
+  the existing sweep; a deleted user's blobs go with the user. The server keeps no photo version.
+
+### 18.4 `silent` on the e2ee `msg:send` (server S1)
+- **`msg:send`** for an e2ee DM or a group takes an optional **`"silent": true`**
+  (`msg_send_silent.json`). The server stores and delivers the event exactly as usual (both users
+  or all members, sender copy, `message_index`, idempotency, the §4 rate) but sends **no §8 push**
+  for it to anyone: not at once, not through the 10-s coalescer.
+- The **`message` event** carries **`"silent": true`** (`event_message_silent.json`); absent means
+  false. Join and sync replay it.
+- `silent` that isn't a boolean, or `silent: true` with `body` or `reaction` (plaintext) →
+  `bad_request`. `silent: false` is the same as absent.
+- Clients set it **only on `profile_photo`** in v1.17 (crypto K7): never on anything that should
+  notify. It tells the server that a message is a control message (not which one); the server
+  already sees sizes and timing.
+- **Pre-install** (android A3, extends §13.3): an event with `silent: true` that is pre-install
+  adds **no marker and no gap row** (§17.2), and is not counted in a history request.
+
+### 18.5 When a device sends `profile_photo`
+Only into **e2ee** conversations in which its user is an active member: for a change, always; for
+2 and 3, only while a photo is set (a user without one sends nothing).
+1. **Change** (set or remove) → every such conversation, DMs and groups, **paced**: at most one
+   `profile_photo` per second in all, user messages first. A newer change replaces the queued
+   sends of an older one.
+2. **A new conversation for this device:** its epoch-0 commit accepted, or a Welcome applied
+   (created, added, re-added or rejoined).
+3. **A new leaf in a conversation** (any added device, the own user's included), seen in an
+   accepted commit.
+
+For 2 and 3: **DMs** send after the wait below; **groups** mark the conversation **dirty** and send
+before this device's next message there, or when the user opens that chat (android A2). A dirty
+flag is cleared by any own-user `profile_photo` with the current `ver` seen there.
+
+**One sender per user** (android A1): before a 2/3 send, a device waits a random **5–30 s** and
+sends only if no `profile_photo` from its own user with a `ver` ≥ its own has arrived in that
+conversation since the trigger (its siblings' sends arrive through the sender copy, §10.3).
+
+**Limits:** at most **3 changes per hour** per user (the app says "Try again later"); the
+server's 3 uploads per hour bound photo sets anyway. "Remove photo" sends `photo: null` with a new
+`ver`, then deletes the current blob once every queued send has gone (android A5). A change leaves
+the old blob to its 24-h expiry, so late receivers can still fetch it.
+
+### 18.6 Client UI (android, normative where it says "must")
+- **Settings → Profile:** photo (Set / Change / Remove), name. Pick with the system Photo Picker,
+  then a **square crop the user sees**, then §14.7 Sending 2 (software sRGB bitmap, orientation
+  applied, **no metadata segments**) at **512×512**, or the crop's side if smaller; a crop under
+  64 px: "Choose a larger photo". JPEG q85, stepped down (q75, q65) until the ciphertext fits
+  512 KiB. The small print says who sees it (§18.0).
+- **Fresh install** (android A8): without another own device the app doesn't know its own photo;
+  Settings shows none and peers keep the old one until the next change. With another own device,
+  §18.5 (3) brings it back through the sender copy. Not data loss (decision 055 counts messages).
+- **Where photos show:** chat list, chat headers, group member lists and group info, beside
+  incoming group bubbles (first of a run), friend lists, the call screen. A user with no photo, an
+  unfetched one, or a failed one shows initials.
+- **Storage:** one table `profile_photos(user_id PK, ver, blob_id, size, sha256, key_sealed,
+  plain_size, w, h, fetched)`, an additive migration.
+
+### 18.7 Group photos (clarifications; no wire change)
+- **Set, change, remove:** admins only, from group info (tap the photo). Upload `purpose=icon`
+  (§14.2), then the `meta_changed` commit with the new `group_meta.icon` (§12.4, §14.4); remove =
+  `icon: null`. A fresh key per version. Non-admins see the photo without an edit control.
+- **System lines:** on a `group_event` `metadata_changed`, once the client's MLS state reaches its
+  epoch, it compares the previous and new `group_meta` and writes local lines (never sent, never
+  unread or notified): "<actor> changed the group photo", "<actor> removed the group photo",
+  "<actor> changed the group name to "<name>"" (both if both changed).
+- **Display:** the icon in the chat list, header and group info; initials of the group name on a
+  colour derived from the group id when there is none or it can't be fetched (`404`, never
+  unrecoverable, §14.4). Receiving and decoding as §18.2 (JPEG/PNG/WebP per §14.4, ≤ 512 px).
+
+### 18.8 Privacy and the learning log
+- **The server learns:** that a user uploaded an avatar (when, padded size), who downloads it
+  (roughly, who looked at whose photo), and the timing and number of `silent` messages. Not the
+  photo, its key, or which conversations got which envelope beyond ciphertext timing.
+- No model sees a photo; the on-device behaviour log records "profile photo changed", nothing else.
+
+### 18.9 Test coverage (all gates)
+- **Server:** `avatar` upload (no `conversation_id`, `400` with one), cap, 3/h and 10/day, replays
+  free; the current switch under concurrency (last commit wins, the previous gets 24 h, an old
+  replay never becomes current); the reader rule (owner, friend, blocked friend `404`, co-member
+  active/pending_add, ex-co-member `404`, stranger `404`); `DELETE`; `silent` stored, replayed and
+  never pushed (immediate and coalesced), `bad_request` cases; every new example.
+- **Android (JVM):** encode/decode of the new examples and the drop of
+  `profile_photo_payload_bad.json`; the `ver` window; the winner rule incl. ties; subject from the
+  MLS sender only; not a message (no row, unread, ack, notification); pre-install `silent` adds no
+  marker; triggers, pacing, the 5–30 s sibling wait and dirty groups; key and cache deletion; the
+  crop/re-encode metadata checks; blocked users show initials.
+- **Live interop:** A sets a photo; B sees it in the DM and a shared group; A changes and removes
+  it; B reinstalls and gets it back after A's device re-sends.
+
 ## Changelog
+- **v1.17** (2026-10-08): profile photos (§18), reviewed by server, android and crypto. The MLS
+  envelope `profile_photo` (`ver` in server-corrected ms, the §14.4 icon object or `null`, the
+  subject from the MLS sender only, a deterministic winner rule, strict validation, JPEG 64–512 px
+  square); the blob purpose `avatar` (no conversation, 512 KiB, 3/h and 10/day, one current per
+  user, the previous expires after 24 h, readers = owner, friends without a block, group
+  co-members); the optional `silent: true` on the e2ee `msg:send` and the `message` event (no push;
+  a pre-install silent event adds no marker or gap row); send triggers (change, new conversation,
+  new leaf) with pacing, a 5–30 s sibling wait and lazy groups; group photo UI rules and local
+  system lines (§18.7). Plaintext DMs carry no photo. Additive.
 - **v1.16** (2026-10-07): §10.6 DM device ops: a reinstalled phone is re-added to its DMs (committer: an in-group device of either participant with `member_devices`; superseded leaves of the same user removed under server authorisation; a DM `reset` fallback; the `mls_dm_op` event; the optional `op_id` on DM commits; the recovery task `dm_device_ops`). Additive.
 - **v1.15** (2026-10-07): history sharing between devices (§17, decision 049, consent option A),
   reviewed by crypto, server and android. The `history_share` capability; a content-free client
