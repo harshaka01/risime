@@ -2,12 +2,19 @@ package lk.codegen.risime.data.auth
 
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Log
 import lk.codegen.risime.net.ProtocolJson
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.security.KeyStore
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -29,40 +36,71 @@ class SessionVault(private val file: File, private val key: VaultKey) {
         /** Nothing stored (never signed in under 064, or signed out). */
         data object Empty : Load
 
-        /** A blob that can't be opened (key gone, corrupt): treated as signed out, chats kept. */
+        /** A blob that can never be opened (key gone, corrupt, invalidated): signed out, chats kept. */
         data class Unreadable(val reason: String) : Load
+
+        /**
+         * The Keystore or the file system failed this time (keystore2/StrongBox busy right after
+         * boot, a push-started process): nothing is deleted; read again later.
+         */
+        data class Transient(val reason: String) : Load
     }
 
     fun exists(): Boolean = file.isFile
 
-    /** Seals and stores [tokens] (no prompt). False when the phone can't create the key at all. */
-    fun store(tokens: StoredTokens): Boolean {
-        val k = key.getOrCreate() ?: return false
-        return try {
+    /**
+     * Seals and stores [tokens] (no prompt). True only once the blob is durable: written, fsynced,
+     * atomically renamed over the old one (and the directory synced). False when the key can't be
+     * read or created now, or the write failed; the previous blob is then untouched.
+     */
+    fun store(tokens: StoredTokens): Boolean = try {
+        val k = key.getOrCreate()
+        if (k == null) {
+            false
+        } else {
             val plain = ProtocolJson.encodeToString(StoredTokens.serializer(), tokens).toByteArray()
             val blob = seal(plain, k, key.alias)
             plain.fill(0)
-            val tmp = File(file.parentFile, file.name + ".tmp")
-            tmp.writeBytes(blob)
-            if (!tmp.renameTo(file)) {
-                file.delete()
-                tmp.renameTo(file)
-            }
+            writeDurably(blob)
             true
-        } catch (e: Exception) {
-            Log.w("RisiMe", "RisiMe auth: vault store failed: ${e.javaClass.simpleName}")
-            false
         }
+    } catch (e: Exception) {
+        Log.w("RisiMe", "RisiMe auth: vault store failed: ${e.javaClass.simpleName}")
+        false
+    }
+
+    private fun writeDurably(blob: ByteArray) {
+        val dir = file.absoluteFile.parentFile
+        val tmp = File(dir, file.name + ".tmp")
+        FileOutputStream(tmp).use { out ->
+            out.write(blob)
+            out.flush()
+            out.fd.sync()
+        }
+        // rename(2): an atomic replace on the same file system; there is never a moment without a blob.
+        Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        // The rename is durable once the directory entry is synced (best effort: not every FS allows it).
+        runCatching { FileChannel.open(dir.toPath(), StandardOpenOption.READ).use { it.force(true) } }
     }
 
     fun load(): Load {
         if (!file.isFile) return Load.Empty
-        val k = key.get() ?: return Load.Unreadable("key missing")
+        val k = try {
+            key.get()
+        } catch (e: Exception) {
+            // Not "key missing": the Keystore didn't answer this time. Never cleared for this.
+            return Load.Transient("key: ${e.javaClass.simpleName}")
+        } ?: return Load.Unreadable("key missing")
+        val bytes = try {
+            file.readBytes()
+        } catch (e: java.io.IOException) {
+            return Load.Transient("read: ${e.javaClass.simpleName}")
+        }
         return try {
-            val plain = open(file.readBytes(), k, key.alias)
+            val plain = open(bytes, k, key.alias)
             Load.Tokens(ProtocolJson.decodeFromString(StoredTokens.serializer(), plain.decodeToString()))
         } catch (e: Exception) {
-            Load.Unreadable(e.javaClass.simpleName)
+            classify(e)
         }
     }
 
@@ -76,6 +114,19 @@ class SessionVault(private val file: File, private val key: VaultKey) {
         private const val IV_LEN = 12
         private const val TAG_BITS = 128
         const val TRANSFORMATION = "AES/GCM/NoPadding"
+
+        /**
+         * Only a blob that can never open again is [Load.Unreadable]: a failed tag (corrupt, or sealed
+         * under another key), an invalidated key, an unknown format or broken contents. Anything
+         * else (a Keystore/provider error, I/O) is [Load.Transient]: kept and read again later.
+         */
+        fun classify(e: Exception): Load = when (e) {
+            is AEADBadTagException,
+            is KeyPermanentlyInvalidatedException,
+            is IllegalArgumentException, // too short / another format; kotlinx SerializationException
+            -> Load.Unreadable(e.javaClass.simpleName)
+            else -> Load.Transient(e.javaClass.simpleName)
+        }
 
         fun aad(alias: String): ByteArray = "$alias|v2".toByteArray()
 
@@ -106,8 +157,10 @@ class SessionVault(private val file: File, private val key: VaultKey) {
 interface VaultKey {
     val alias: String
 
+    /** Null only when no key exists under [alias]; throws when the Keystore can't answer now. */
     fun get(): SecretKey?
 
+    /** The key, created when none exists. Throws (never replaces it) when one exists but can't be read now. */
     fun getOrCreate(): SecretKey?
 
     fun delete()
@@ -120,7 +173,13 @@ interface VaultKey {
 class KeystoreVaultKey(override val alias: String = "risime_session_aes") : VaultKey {
     private val ks: KeyStore get() = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
 
-    override fun get(): SecretKey? = runCatching { ks.getKey(alias, null) as? SecretKey }.getOrNull()
+    override fun get(): SecretKey? {
+        val store = ks // a KeyStoreException / IOException here: the Keystore isn't answering (thrown on)
+        if (!store.containsAlias(alias)) return null
+        // A key that exists but can't be loaded now (keystore2 busy, UnrecoverableKeyException) throws:
+        // the caller keeps the blob and retries. It is never reported as missing.
+        return store.getKey(alias, null) as? SecretKey ?: throw java.security.KeyStoreException("not a secret key")
+    }
 
     override fun getOrCreate(): SecretKey? {
         get()?.let { return it }

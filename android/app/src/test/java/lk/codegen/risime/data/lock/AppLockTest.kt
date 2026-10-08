@@ -1,6 +1,8 @@
 package lk.codegen.risime.data.lock
 
 import kotlinx.coroutines.test.runTest
+import lk.codegen.risime.data.auth.MigrationStep
+import lk.codegen.risime.data.auth.migrationStep
 import lk.codegen.risime.push.ChatNotification
 import lk.codegen.risime.push.LOCKED_CONTENT_TEXT
 import lk.codegen.risime.push.NotifLine
@@ -28,7 +30,7 @@ class AppLockTest {
     }
 
     private var now = 1_000_000L
-    private var bio = true
+    private var bio = BiometricStatus.AVAILABLE
     private val logs = mutableListOf<String>()
 
     private fun lock(store: Store, stamp: Stamp = Stamp()) = AppLock(store, stamp, { bio }, { now }, { logs += it })
@@ -96,24 +98,80 @@ class AppLockTest {
 
     @Test fun biometricRemovedTurnsTheLockOffSilently() = runTest {
         val store = Store(AppLockSettings(enabled = true))
-        bio = false
+        bio = BiometricStatus.GONE
         val l = lock(store)
         l.load()
         assertEquals(false, l.locked.value)
         assertFalse(store.s.enabled)
         assertTrue(logs.single().contains("turned off"))
         // On resume too.
-        bio = true
+        bio = BiometricStatus.AVAILABLE
         val store2 = Store(AppLockSettings(enabled = true, autoLock = AutoLock.ONE_MINUTE))
         val l2 = lock(store2)
         l2.load()
         l2.unlocked()
-        bio = false
+        bio = BiometricStatus.GONE
         l2.onBackground()
         now += 120_000
         l2.onForeground()
         assertEquals(false, l2.locked.value)
         assertFalse(store2.s.enabled)
+    }
+
+    /** Review of 064: a busy sensor / pending security update / unsupported state never turns the lock off. */
+    @Test fun aTransientBiometricStateKeepsTheLockOn() = runTest {
+        val store = Store(AppLockSettings(enabled = true, autoLock = AutoLock.ONE_MINUTE))
+        bio = BiometricStatus.UNAVAILABLE_NOW
+        val l = lock(store)
+        l.load()
+        assertEquals(true, l.locked.value) // still locked at start
+        assertTrue(store.s.enabled)
+        l.onForeground()
+        assertEquals(true, l.locked.value)
+        assertTrue(store.s.enabled)
+        assertTrue(logs.any { it.contains("stays on") })
+        // Turning it on still needs a usable fingerprint now.
+        val off = Store()
+        lock(off).setEnabled(true)
+        assertFalse(off.s.enabled)
+    }
+
+    @Test fun onlyNoneEnrolledOrNoHardwareCountAsGone() {
+        assertEquals(BiometricStatus.AVAILABLE, BiometricStatus.of(androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS))
+        assertEquals(BiometricStatus.GONE, BiometricStatus.of(androidx.biometric.BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED))
+        assertEquals(BiometricStatus.GONE, BiometricStatus.of(androidx.biometric.BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE))
+        listOf(
+            androidx.biometric.BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE,
+            androidx.biometric.BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED,
+            androidx.biometric.BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED,
+            androidx.biometric.BiometricManager.BIOMETRIC_STATUS_UNKNOWN,
+        ).forEach { assertEquals("code $it", BiometricStatus.UNAVAILABLE_NOW, BiometricStatus.of(it)) }
+    }
+
+    /** Review of 064: the migration deletes the old vault only when it can never open again. */
+    @Test fun migrationKeepsTheOldVaultOnATransientBiometricError() {
+        assertEquals(MigrationStep.PROMPT, migrationStep(cipherAvailable = true, BiometricStatus.AVAILABLE))
+        assertEquals(MigrationStep.TRY_AGAIN, migrationStep(cipherAvailable = true, BiometricStatus.UNAVAILABLE_NOW))
+        assertEquals(MigrationStep.SIGN_IN_AGAIN, migrationStep(cipherAvailable = true, BiometricStatus.GONE))
+        assertEquals(MigrationStep.SIGN_IN_AGAIN, migrationStep(cipherAvailable = false, BiometricStatus.AVAILABLE))
+    }
+
+    /** Review of 064: a push-started process posts before the async load: the settings are read first. */
+    @Test fun hiddenContentHoldsBeforeTheSettingsAreLoaded() = runTest {
+        val l = lock(Store(AppLockSettings(enabled = true, showContent = false)))
+        assertNull(l.settings.value) // nothing loaded yet
+        assertTrue(l.hideNotificationContent())
+        val blocking = lock(Store(AppLockSettings(enabled = true, showContent = false)))
+        assertTrue(blocking.hideNotificationContentBlocking())
+        // Off by default: shown, also before the load.
+        assertFalse(lock(Store()).hideNotificationContentBlocking())
+        // Settings that can't be read at all: hidden (never shown against the user's choice).
+        val broken = object : AppLockStore {
+            override suspend fun load(): AppLockSettings = kotlinx.coroutines.awaitCancellation()
+            override suspend fun save(s: AppLockSettings) = Unit
+        }
+        val stuck = AppLock(broken, Stamp(), { BiometricStatus.AVAILABLE }, { now })
+        assertTrue(stuck.hideNotificationContent())
     }
 
     @Test fun enablingNeedsBiometricsAndDisablingUnlocks() = runTest {
@@ -129,7 +187,7 @@ class AppLockTest {
         l.setEnabled(false)
         assertEquals(false, l.locked.value)
         assertFalse(l.hideNotificationContent()) // the content rule applies only with the lock on
-        bio = false
+        bio = BiometricStatus.GONE
         l.setEnabled(true)
         assertFalse(store.s.enabled)
     }
@@ -139,7 +197,7 @@ class AppLockTest {
             override suspend fun load(): AppLockSettings = throw java.io.IOException("corrupt")
             override suspend fun save(s: AppLockSettings) = Unit
         }
-        val l = AppLock(broken, Stamp(), { true }, { now })
+        val l = AppLock(broken, Stamp(), { BiometricStatus.AVAILABLE }, { now })
         l.load()
         assertEquals(false, l.locked.value)
     }

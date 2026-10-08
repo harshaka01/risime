@@ -144,8 +144,20 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     /** A push woke the app: the socket stays up while it syncs (unlocked). */
     private val waking = MutableStateFlow(false)
 
-    /** Orders a push wake-up's service start against the start-up cleanup's stop. */
+    /**
+     * Orders every service start/stop decision: a push wake-up's start, the start-up cleanup's stop
+     * and [refreshService]. The decision (reading [waking], the call, the blind ring) and the
+     * stop happen under it, so no stop can land between a push's start and its startForeground.
+     */
     private val serviceLock = Any()
+
+    /** Push wake-ups in progress (under [serviceLock]); [waking] = wakers > 0. */
+    private var wakers = 0
+
+    private fun endWake() = synchronized(serviceLock) {
+        wakers = (wakers - 1).coerceAtLeast(0)
+        waking.value = wakers > 0
+    }
 
     /** Answer as soon as the unlocked sync finds the call (the user tapped Answer on the blind ring). */
     @Volatile var pendingBlindAnswer = false
@@ -556,6 +568,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         // service between startForegroundService and its startForeground (that crashed the app with
         // ForegroundServiceDidNotStartInTimeException on every call push: no ring).
         synchronized(serviceLock) {
+            wakers++
             waking.value = true
             startService()
         }
@@ -564,12 +577,12 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         scope.launch {
             if (port.sessionLocked()) {
                 startBlindRing()
-                waking.value = false
+                endWake()
                 return@launch
             }
             // The sync runs on the kept-up socket; the machine rings after the page (§16.3).
             withTimeoutOrNull(20_000) { state.first { it != null } }
-            waking.value = false
+            endWake()
             refreshService()
         }
     }
@@ -1141,9 +1154,11 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             .onFailure { Log.w("RisiMe", "call service: ${it.message}") }
     }
 
-    private fun refreshService() {
+    /** Start or stop the service for what is going on now; decided and done under [serviceLock] (no suspension). */
+    private fun refreshService() = synchronized(serviceLock) {
         val active = state.value?.let { it.phase != CallPhase.ENDED } == true || blindRing.value != null || waking.value
-        if (active) startService() else context.stopService(Intent(context, CallService::class.java))
+        if (active) startService() else runCatching { context.stopService(Intent(context, CallService::class.java)) }
+        Unit
     }
 
     /** Test hook: whether the proximity wake lock is held now. */

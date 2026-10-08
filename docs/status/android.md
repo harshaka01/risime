@@ -1,5 +1,19 @@
 # Android status — 0.2 nightlies
 
+## Decision 064 review fixes — READY (895 unit tests, 0 failed)
+- A Keystore error while reading the vault (keystore2/StrongBox busy after boot) is `Load.Transient`: blob and key
+  kept, `RESTORING` retried with backoff 1 s → 60 s (log `vault not readable now … retry #n`). Only a failed GCM
+  tag, `KeyPermanentlyInvalidatedException`, an unknown format or a genuinely absent key (`!containsAlias`) clears.
+- Vault writes: fsync + atomic rename (+ directory fsync); a failed write at sign-in or on rotation is kept and
+  written again on the next refresh (≤ every 30 s, every forced refresh).
+- "Show content" off holds before the lock settings load (a push-started process reads them first; unreadable in
+  3 s → hidden). The lock turns itself off only for NONE_ENROLLED / NO_HARDWARE; a busy sensor keeps it on and
+  shows "Fingerprint unavailable — try again" (lock and migration screens; the old vault is kept).
+- Lock on: no Recents thumbnail (`setRecentsScreenshotEnabled(false)` on 33+, FLAG_SECURE below) on MainActivity
+  only, never CallActivity; undone when the lock is off.
+- Calls: `refreshService()` decides and stops under `serviceLock` (wake-ups counted), so no stop lands between a
+  push's start and its `startForeground`. `CallPushTest.theStartUpCleanup…` now asserts ordering (10/10 green).
+
 ## Decision 064: no mandatory lock, tokens readable in the background, optional fingerprint lock — READY (real phone to confirm)
 - **Token vault** (`data/auth/SessionVault.kt`): the token set (refresh + ID token) is sealed with AES-256-GCM
   under the Keystore key `risime_session_aes` (StrongBox, falling back to the TEE on `StrongBoxUnavailableException`;

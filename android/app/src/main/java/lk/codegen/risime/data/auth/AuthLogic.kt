@@ -294,3 +294,18 @@ interface AuthDiagnostics {
         override fun signedOut(trigger: SignOutTrigger) = Unit
     }
 }
+
+/** What the decision-064 migration screen does next. */
+enum class MigrationStep { PROMPT, TRY_AGAIN, SIGN_IN_AGAIN }
+
+/**
+ * The old fingerprint-bound vault is deleted (sign in again, chats kept) only when it can never
+ * open: its key is gone/invalidated, or the phone has no fingerprint or sensor any more. A sensor
+ * that is busy or needs a security update now keeps it: "try again".
+ */
+fun migrationStep(cipherAvailable: Boolean, biometric: lk.codegen.risime.data.lock.BiometricStatus): MigrationStep = when {
+    !cipherAvailable -> MigrationStep.SIGN_IN_AGAIN
+    biometric == lk.codegen.risime.data.lock.BiometricStatus.GONE -> MigrationStep.SIGN_IN_AGAIN
+    biometric == lk.codegen.risime.data.lock.BiometricStatus.UNAVAILABLE_NOW -> MigrationStep.TRY_AGAIN
+    else -> MigrationStep.PROMPT
+}

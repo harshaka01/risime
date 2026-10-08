@@ -2,6 +2,7 @@ package lk.codegen.risime.ui.auth
 
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
@@ -20,7 +21,10 @@ import lk.codegen.risime.AppContainer
 import lk.codegen.risime.BuildConfig
 import lk.codegen.risime.EndSession
 import lk.codegen.risime.data.auth.AppAuthGateway
+import lk.codegen.risime.data.auth.MigrationStep
 import lk.codegen.risime.data.auth.OIDC_SCOPES
+import lk.codegen.risime.data.auth.migrationStep
+import lk.codegen.risime.data.lock.BiometricStatus
 import lk.codegen.risime.net.AuthConfig
 import net.openid.appauth.AuthorizationException
 import net.openid.appauth.AuthorizationRequest
@@ -43,6 +47,10 @@ class AuthUi(private val activity: FragmentActivity, private val c: AppContainer
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+
+    /** A retryable fingerprint problem on the lock / migration screen ([lk.codegen.risime.ui.lock.FINGERPRINT_UNAVAILABLE]). */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
 
     private val signInLauncher =
         activity.registerForActivityResult(ActivityResultContracts.StartActivityForResult(), ::onSignInResult)
@@ -154,13 +162,24 @@ class AuthUi(private val activity: FragmentActivity, private val c: AppContainer
         if (_busy.value) return
         activity.lifecycleScope.launch {
             val cipher = c.auth.migrationCipher()
-            if (cipher == null || BiometricManager.from(activity).canAuthenticate(authenticators()) != BiometricManager.BIOMETRIC_SUCCESS) {
-                c.auth.revokeStored(null)
-                c.signOutKeepData("Sign in again — your chats are kept.", lk.codegen.risime.data.auth.SignOutTrigger.KEY_INVALIDATED)
-                return@launch
+            val bio = runCatching { BiometricStatus.of(BiometricManager.from(activity).canAuthenticate(authenticators())) }.getOrDefault(BiometricStatus.UNAVAILABLE_NOW)
+            when (migrationStep(cipherAvailable = cipher != null, bio)) {
+                MigrationStep.SIGN_IN_AGAIN -> {
+                    c.auth.revokeStored(null)
+                    c.signOutKeepData("Sign in again — your chats are kept.", lk.codegen.risime.data.auth.SignOutTrigger.KEY_INVALIDATED)
+                    return@launch
+                }
+                // The sensor is busy (or needs an update) now: keep the old vault, ask again.
+                MigrationStep.TRY_AGAIN -> {
+                    Log.i("RisiMe", "RisiMe auth: migration: fingerprint unavailable now: old vault kept")
+                    _notice.value = lk.codegen.risime.ui.lock.FINGERPRINT_UNAVAILABLE
+                    return@launch
+                }
+                MigrationStep.PROMPT -> _notice.value = null
             }
+            val oldCipher = cipher ?: return@launch
             _busy.value = true
-            val authed = prompt(lk.codegen.risime.ui.auth.MIGRATION_TITLE, cipher)
+            val authed = prompt(lk.codegen.risime.ui.auth.MIGRATION_TITLE, oldCipher)
             if (authed != null) {
                 if (c.auth.migrate(authed) == lk.codegen.risime.data.auth.MigrationResult.Unreadable) {
                     c.signOutKeepData("Sign in again — your chats are kept.", lk.codegen.risime.data.auth.SignOutTrigger.VAULT_UNREADABLE)
@@ -176,7 +195,16 @@ class AuthUi(private val activity: FragmentActivity, private val c: AppContainer
         activity.lifecycleScope.launch {
             _busy.value = true
             try {
-                if (lk.codegen.risime.ui.lock.confirmFingerprint(activity, "Unlock RisiMe")) c.appLock.unlocked()
+                when (lk.codegen.risime.ui.lock.strongBiometricStatus(activity)) {
+                    BiometricStatus.AVAILABLE -> {
+                        _notice.value = null
+                        if (lk.codegen.risime.ui.lock.confirmFingerprint(activity, "Unlock RisiMe")) c.appLock.unlocked()
+                    }
+                    // No fingerprint left (removed, no sensor): the lock turns itself off.
+                    BiometricStatus.GONE -> c.appLock.onForeground()
+                    // Busy sensor, security update pending: the lock stays on; the user taps again.
+                    BiometricStatus.UNAVAILABLE_NOW -> _notice.value = lk.codegen.risime.ui.lock.FINGERPRINT_UNAVAILABLE
+                }
             } finally {
                 _busy.value = false
             }

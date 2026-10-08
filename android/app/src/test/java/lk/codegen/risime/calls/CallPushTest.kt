@@ -67,11 +67,23 @@ class CallPushTest {
      */
     @Test fun theStartUpCleanupNeverStopsTheServiceAPushStarted() = runBlocking {
         locked = false
-        val m = manager()
+        // Every start/stop in the order the manager made them. The init's own cleanup and onState(null)
+        // may stop the service *before* the push's start (nothing to keep then); never after it while
+        // the wake-up runs. (The old assertion "no stop at all" raced the init collectors: flaky.)
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val ctx = object : android.content.ContextWrapper(app) {
+            override fun startForegroundService(service: android.content.Intent) = super.startForegroundService(service).also { events += "start" }
+            override fun startService(service: android.content.Intent) = super.startService(service).also { events += "start" }
+            override fun stopService(name: android.content.Intent) = super.stopService(name).also { events += "stop" }
+        }
+        val m = CallManager(ctx, port) { FakeCallMedia() }
         m.onCallPush()
-        assertTrue("the phoneCall service starts at once", startedService())
+        val pushStart = synchronized(events) { events.lastIndexOf("start") }
+        assertTrue("the phoneCall service starts at once", pushStart >= 0)
         m.cleanupAfterProcessStart()
-        assertNull("not stopped while the push wake-up runs", Shadows.shadowOf(app).nextStoppedService)
+        delay(500) // let the init collectors (cleanup, onState(null) → refreshService) run
+        val after = synchronized(events) { events.drop(pushStart + 1) }
+        assertFalse("not stopped after the push's start while the wake-up runs: $events", "stop" in after)
     }
 
     @Test fun lockedSessionRingsBlindWithoutANameAndKeepsTheSocketRequest() = runBlocking {

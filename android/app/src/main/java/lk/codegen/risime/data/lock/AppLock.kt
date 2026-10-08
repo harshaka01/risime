@@ -5,12 +5,15 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.biometric.BiometricManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** "Automatically lock" (decision 064): time since RisiMe went to the background. */
 enum class AutoLock(val ms: Long, val label: String) {
@@ -55,6 +58,27 @@ object AppLockPolicy {
     fun hideNotificationContent(s: AppLockSettings?): Boolean = s != null && s.enabled && !s.showContent
 }
 
+/** `BiometricManager.canAuthenticate(BIOMETRIC_STRONG)`, reduced to what the lock decides on. */
+enum class BiometricStatus {
+    /** BIOMETRIC_SUCCESS: a strong biometric is enrolled and usable now. */
+    AVAILABLE,
+
+    /** BIOMETRIC_ERROR_NONE_ENROLLED / BIOMETRIC_ERROR_NO_HARDWARE: the only reasons the lock turns itself off. */
+    GONE,
+
+    /** Anything else (HW_UNAVAILABLE, SECURITY_UPDATE_REQUIRED, UNSUPPORTED, a thrown error): the lock stays on; try again. */
+    UNAVAILABLE_NOW,
+    ;
+
+    companion object {
+        fun of(canAuthenticate: Int): BiometricStatus = when (canAuthenticate) {
+            BiometricManager.BIOMETRIC_SUCCESS -> AVAILABLE
+            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED, BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> GONE
+            else -> UNAVAILABLE_NOW
+        }
+    }
+}
+
 interface AppLockStore {
     suspend fun load(): AppLockSettings
 
@@ -96,8 +120,8 @@ class DataStoreAppLockStore(private val prefs: DataStore<Preferences>) : AppLock
 class AppLock(
     private val store: AppLockStore,
     private val stamp: LockStamp,
-    /** `BiometricManager.canAuthenticate(BIOMETRIC_STRONG) == BIOMETRIC_SUCCESS`. */
-    private val biometricAvailable: () -> Boolean,
+    /** `BiometricManager.canAuthenticate(BIOMETRIC_STRONG)` as a [BiometricStatus]. */
+    private val biometric: () -> BiometricStatus,
     private val elapsed: () -> Long,
     private val log: (String) -> Unit = {},
 ) {
@@ -116,7 +140,15 @@ class AppLock(
     suspend fun load() = mutex.withLock {
         if (_settings.value != null) return@withLock
         // An unreadable settings file never keeps the user out (the lock is a convenience gate).
-        val s = offIfNoBiometrics(runCatching { store.load() }.getOrElse { log("RisiMe lock: settings unreadable: ${it.message}"); AppLockSettings() })
+        val read = try {
+            store.load()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // a timed-out read is "not loaded", never "off"
+        } catch (e: Exception) {
+            log("RisiMe lock: settings unreadable: ${e.message}")
+            AppLockSettings()
+        }
+        val s = offIfNoBiometrics(read)
         _settings.value = s
         _locked.value = AppLockPolicy.lockedAtStart(s, stamp.get(), elapsed())
     }
@@ -153,7 +185,7 @@ class AppLock(
     }
 
     /** Turned on after one fingerprint confirmation (the caller ran the prompt); off at once. */
-    suspend fun setEnabled(on: Boolean) = update { it.copy(enabled = on && biometricAvailable()) }.also {
+    suspend fun setEnabled(on: Boolean) = update { it.copy(enabled = on && biometric() == BiometricStatus.AVAILABLE) }.also {
         if (!on) unlocked()
     }
 
@@ -161,7 +193,22 @@ class AppLock(
 
     suspend fun setShowContent(show: Boolean) = update { it.copy(showContent = show) }
 
-    fun hideNotificationContent(): Boolean = AppLockPolicy.hideNotificationContent(_settings.value)
+    /**
+     * Whether a notification posted now must hide the name and text. A process started by a push
+     * may post before the async [load] finished: the settings are read first (bounded wait), and
+     * when they still can't be read the content is hidden (never shown against the user's choice).
+     */
+    suspend fun hideNotificationContent(): Boolean {
+        if (_settings.value == null) {
+            withTimeoutOrNull(SETTINGS_WAIT_MS) { runCatching { load() } }
+        }
+        val s = _settings.value ?: return true
+        return AppLockPolicy.hideNotificationContent(s)
+    }
+
+    /** For non-suspend callers (the Notifier): [hideNotificationContent], blocking only until the settings are loaded once. */
+    fun hideNotificationContentBlocking(): Boolean =
+        _settings.value?.let(AppLockPolicy::hideNotificationContent) ?: runBlocking { hideNotificationContent() }
 
     private suspend fun update(f: (AppLockSettings) -> AppLockSettings) {
         load()
@@ -172,12 +219,24 @@ class AppLock(
         }
     }
 
+    /** Only a removed fingerprint (none enrolled) or no sensor at all turns the lock off; a sensor busy now keeps it on. */
     private suspend fun offIfNoBiometrics(s: AppLockSettings): AppLockSettings {
-        if (!s.enabled || biometricAvailable()) return s
-        log("RisiMe lock: fingerprint no longer available: the app lock is turned off")
+        if (!s.enabled) return s
+        when (val b = biometric()) {
+            BiometricStatus.AVAILABLE -> return s
+            BiometricStatus.UNAVAILABLE_NOW -> {
+                log("RisiMe lock: fingerprint unavailable now: the lock stays on")
+                return s
+            }
+            BiometricStatus.GONE -> log("RisiMe lock: fingerprint no longer available ($b): the app lock is turned off")
+        }
         val off = s.copy(enabled = false)
         runCatching { store.save(off) }
         _locked.value = false
         return off
+    }
+
+    private companion object {
+        const val SETTINGS_WAIT_MS = 3_000L
     }
 }

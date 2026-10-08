@@ -50,8 +50,17 @@ class AuthManagerTest {
         override val alias = "risime_session_aes"
         var key: SecretKey? = null
         var canCreate = true
-        override fun get() = key
+
+        /** A Keystore that doesn't answer now (keystore2/StrongBox busy after boot). */
+        var failure: Exception? = null
+        var reads = 0
+        override fun get(): SecretKey? {
+            reads++
+            failure?.let { throw it }
+            return key
+        }
         override fun getOrCreate(): SecretKey? {
+            get()
             if (key == null && canCreate) key = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
             return key
         }
@@ -111,6 +120,83 @@ class AuthManagerTest {
         vault.clear()
         assertEquals(SessionVault.Load.Empty, vault.load())
         assertNull(newKey.key)
+    }
+
+    /** Review of 064: a Keystore error is not a missing key: nothing is deleted, the read is retried with backoff. */
+    @Test fun aTransientKeystoreErrorKeepsTheSessionAndRetries() = runTest {
+        assertTrue(manager().adopt("iss", "risime", OidcTokens("a1", 300, "r1", null)))
+        val keyBefore = newKey.key
+        newKey.failure = java.security.ProviderException("Keystore busy") // a push-started process right after boot
+        val m = manager()
+        assertEquals(SessionState.RESTORING, m.restore())
+        assertTrue(vault.exists()) // blob kept
+        assertEquals(keyBefore, newKey.key) // key kept
+        assertNull(m.restoreProblem)
+        assertEquals(1_000L, m.restoreRetryInMs())
+        val reads = newKey.reads
+        assertNull(m.bearer()) // no session yet, and no Keystore hammering inside the backoff
+        assertEquals(SessionState.RESTORING, m.restore())
+        assertEquals(reads, newKey.reads)
+        now += 1_000
+        assertEquals(SessionState.RESTORING, m.restore()) // still busy: the next wait doubles
+        assertEquals(2_000L, m.restoreRetryInMs())
+        newKey.failure = null
+        now += 2_000
+        assertEquals("a2", m.bearer()) // the next bearer reads it again: signed in, no sign-out
+        assertEquals(SessionState.READY, m.state.value)
+        assertFalse(m.signInNeeded.value)
+    }
+
+    @Test fun onlyAPermanentFailureMakesTheVaultUnreadable() {
+        assertTrue(SessionVault.classify(javax.crypto.AEADBadTagException()) is SessionVault.Load.Unreadable)
+        assertTrue(SessionVault.classify(android.security.keystore.KeyPermanentlyInvalidatedException()) is SessionVault.Load.Unreadable)
+        assertTrue(SessionVault.classify(IllegalArgumentException("unknown blob format")) is SessionVault.Load.Unreadable)
+        assertTrue(SessionVault.classify(java.io.IOException("EIO")) is SessionVault.Load.Transient)
+        assertTrue(SessionVault.classify(java.security.ProviderException("keystore2")) is SessionVault.Load.Transient)
+        assertTrue(SessionVault.classify(java.security.UnrecoverableKeyException()) is SessionVault.Load.Transient)
+        assertTrue(SessionVault.classify(java.security.InvalidKeyException()) is SessionVault.Load.Transient)
+        // A blob whose key is really gone: unreadable, cleared, sign in again (chats kept).
+        assertTrue(vault.store(StoredTokens("r1", null, "iss", "risime")))
+        newKey.key = null
+        assertEquals(SessionVault.Load.Unreadable("key missing"), vault.load())
+        assertEquals(listOf(1_000L, 2_000L, 4_000L, 32_000L, 60_000L, 60_000L), listOf(1, 2, 3, 6, 7, 30).map(AuthManager::restoreBackoffMs))
+    }
+
+    /** Review of 064: a rotated refresh token whose vault write failed is written again later. */
+    @Test fun aFailedVaultWriteOnRotationIsRetried() = runTest {
+        val m = manager()
+        m.adopt("iss", "risime", OidcTokens("a1", 300, "r1", null))
+        newKey.failure = java.security.ProviderException("busy")
+        assertEquals("a2", m.bearer(forceRefresh = true)) // r1 → r2 at Keycloak
+        assertTrue(m.hasUnsavedTokens())
+        newKey.failure = null
+        assertEquals("r1", (vault.load() as SessionVault.Load.Tokens).tokens.refreshToken) // the old blob is intact
+        assertEquals("a2", m.bearer()) // within the retry interval: not tried yet
+        assertTrue(m.hasUnsavedTokens())
+        now += AuthManager.SAVE_RETRY_MS
+        assertEquals("a2", m.bearer())
+        assertFalse(m.hasUnsavedTokens())
+        assertEquals("r2", (vault.load() as SessionVault.Load.Tokens).tokens.refreshToken)
+        // A failed write at sign-in is retried too.
+        val m2 = manager()
+        newKey.failure = java.security.ProviderException("busy")
+        assertFalse(m2.adopt("iss", "risime", OidcTokens("b1", 300, "s1", null)))
+        newKey.failure = null
+        gw.next = RefreshResult.Ok(OidcTokens("b2", 300, null, null)) // no rotation this time
+        assertEquals("b2", m2.bearer(forceRefresh = true))
+        assertEquals("s1", (vault.load() as SessionVault.Load.Tokens).tokens.refreshToken)
+    }
+
+    @Test fun vaultWritesAreAtomicAndLeaveNoTempFile() {
+        assertTrue(vault.store(StoredTokens("r1", null, "iss", "risime")))
+        assertTrue(vault.store(StoredTokens("r2", null, "iss", "risime")))
+        assertFalse(File(tmp.root, "session.bin.tmp").exists())
+        assertEquals("r2", (vault.load() as SessionVault.Load.Tokens).tokens.refreshToken)
+        // A write that fails before the rename leaves the previous blob as it was.
+        newKey.failure = java.security.ProviderException("busy")
+        assertFalse(vault.store(StoredTokens("r3", null, "iss", "risime")))
+        newKey.failure = null
+        assertEquals("r2", (vault.load() as SessionVault.Load.Tokens).tokens.refreshToken)
     }
 
     @Test fun aSessionSurvivesProcessDeathWithNoPromptAndRefreshesInTheBackground() = runTest {

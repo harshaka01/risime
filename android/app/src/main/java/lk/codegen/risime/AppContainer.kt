@@ -200,13 +200,13 @@ class AppContainer(
             override fun get(): Long? = p.getLong("bg_elapsed", -1L).takeIf { it >= 0 }
             override fun set(v: Long?) = p.edit().putLong("bg_elapsed", v ?: -1L).apply()
         },
-        biometricAvailable = { lk.codegen.risime.ui.lock.strongBiometricAvailable(context) },
+        biometric = { lk.codegen.risime.ui.lock.strongBiometricStatus(context) },
         elapsed = SystemClock::elapsedRealtime,
         log = { Log.w("RisiMe", it) },
     )
 
     // ---- Push (contract v1.5, decision 026) ----
-    val notifier = Notifier(context, hideContent = { appLock.hideNotificationContent() })
+    val notifier = Notifier(context, hideContent = { appLock.hideNotificationContentBlocking() })
     // ---- E2EE (contract v1.7, decisions 035, 037). The engine loads only once the server offers
     // attestation keys; until then (pilot: mls_unavailable) the app behaves exactly like v1.6.
     /** Core open vs registered, tracked apart (P0 background delivery, rule 9). */
@@ -661,7 +661,12 @@ class AppContainer(
 
     init {
         // Decision 064: read the token vault at process start, with no UI (a push-started process too).
-        scope.launch(Dispatchers.IO) { runCatching { auth.restore() }.onFailure { Log.w("RisiMe", "RisiMe auth: restore failed: ${it.message}") } }
+        // A Keystore that doesn't answer yet (busy after boot) keeps RESTORING: read again with backoff.
+        scope.launch(Dispatchers.IO) {
+            while (runCatching { auth.restore() }.onFailure { Log.w("RisiMe", "RisiMe auth: restore failed: ${it.message}") }.getOrNull() == lk.codegen.risime.data.auth.SessionState.RESTORING) {
+                kotlinx.coroutines.delay(auth.restoreRetryInMs().coerceAtLeast(500))
+            }
+        }
         scope.launch(Dispatchers.IO) { runCatching { appLock.load() }.onFailure { Log.w("RisiMe", "RisiMe lock: settings: ${it.message}") } }
         if (BuildConfig.DEBUG) registerDebugOidcSignIn(context)
         // E2EE: try once per signed-in, verified session that can authenticate. An OIDC session has
@@ -1122,7 +1127,7 @@ class AppContainer(
         // An OIDC session from a previous process with no token set to restore (a pre-064 memory-only
         // install, or an unreadable vault): sign in once more, chats kept; from then on it stays.
         scope.launch {
-            val st = auth.restore()
+            val st = auth.state.first { it != lk.codegen.risime.data.auth.SessionState.RESTORING }
             val s = sessionStore.current()
             if (s?.kind == AuthKind.OIDC && st == lk.codegen.risime.data.auth.SessionState.NONE) {
                 authDiagnostics.signedOut(auth.restoreProblem ?: lk.codegen.risime.data.auth.SignOutTrigger.NO_STORED_SESSION)

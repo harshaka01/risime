@@ -81,8 +81,9 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
             FilledTonalButton(onClick = onNotificationHealth, modifier = Modifier.fillMaxWidth()) { Text(NOTIFICATION_HEALTH_TITLE) }
             HorizontalDivider()
             // Privacy: the optional fingerprint lock (decision 064; only with a usable strong biometric) and history sharing.
-            val lockAvailable = lk.codegen.risime.ui.lock.rememberLockAvailable()
             val container = (androidx.compose.ui.platform.LocalContext.current.applicationContext as? lk.codegen.risime.RisiMeApp)?.container
+            // A lock that is on stays reachable while the sensor is busy (it only turns itself off when no fingerprint is left).
+            val lockAvailable = lk.codegen.risime.ui.lock.rememberLockAvailable() || container?.appLock?.settings?.value?.enabled == true
             if ((lockAvailable && container != null) || BuildConfig.HISTORY_SHARE_ENABLED) {
                 SectionHeader("Privacy")
                 if (container != null) lk.codegen.risime.ui.lock.FingerprintLockSection(container, lockAvailable, showHeader = false)

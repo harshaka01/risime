@@ -76,7 +76,10 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
                 AppGate.LOADING -> Unit
                 AppGate.SIGNED_OUT -> LoginFlow(viewModel(key = "login") { LoginViewModel(c) }, authUi, notice)
                 AppGate.MIGRATE -> MigrationScreen(authUi)
-                AppGate.APP_LOCKED -> lk.codegen.risime.ui.lock.AppLockScreen(onUnlock = authUi::unlockApp)
+                AppGate.APP_LOCKED -> {
+                    val lockMessage by authUi.notice.collectAsState()
+                    lk.codegen.risime.ui.lock.AppLockScreen(onUnlock = authUi::unlockApp, message = lockMessage)
+                }
                 AppGate.CONFIRM_PHONE -> PhoneVerifyScreen(
                     viewModel(key = "phone:${current!!.user.id}") { PhoneVerifyViewModel(AppPhoneBackend(c), current.user.phone) },
                 )

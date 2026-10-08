@@ -77,6 +77,7 @@ const val MIGRATION_TITLE = "Confirm to finish updating RisiMe"
 @Composable
 fun MigrationScreen(authUi: AuthUi) {
     val busy by authUi.busy.collectAsStateWithLifecycle()
+    val notice by authUi.notice.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { authUi.finishMigration() }
     CenteredColumn {
         Text("RisiMe", style = WordmarkStyle, color = MaterialTheme.colorScheme.primary, modifier = Modifier.semantics { heading() })
@@ -86,6 +87,7 @@ fun MigrationScreen(authUi: AuthUi) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
+        notice?.let { Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) }
         Button(onClick = authUi::finishMigration, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Continue") }
         TextButton(onClick = authUi::signOutLocked, enabled = !busy) { Text(SIGN_OUT_KEEPS_CHATS) }
     }

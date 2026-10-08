@@ -32,6 +32,10 @@ class MainActivity : FragmentActivity() {
                 androidx.compose.runtime.CompositionLocalProvider(lk.codegen.risime.ui.common.LocalAvatars provides avatars) { RisiMeRoot(container, authUi) }
             }
         }
+        // Decision 064: no Recents thumbnail of the chats while the fingerprint lock is on.
+        lifecycleScope.launch {
+            container.appLock.settings.collect { s -> lk.codegen.risime.ui.lock.LockPrivacy.apply(this@MainActivity, s?.enabled == true) }
+        }
         // The installer's confirmation (when Android doesn't allow a silent self-update).
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {

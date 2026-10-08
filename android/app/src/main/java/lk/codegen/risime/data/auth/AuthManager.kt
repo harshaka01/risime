@@ -96,6 +96,15 @@ class AuthManager(
     private var live: Live? = null
     private var transientFailure = false
 
+    /** Transient vault reads in a row (Keystore busy): the next read waits [restoreBackoffMs]. */
+    private var restoreFailures = 0
+
+    @Volatile private var nextRestoreAt = Long.MIN_VALUE
+
+    /** A token set not yet sealed (the vault write failed): written again on the next bearer/refresh. */
+    private var unsaved: StoredTokens? = null
+    private var nextSaveAt = Long.MIN_VALUE
+
     private val _state = MutableStateFlow(SessionState.RESTORING)
     val state: StateFlow<SessionState> = _state.asStateFlow()
 
@@ -107,23 +116,39 @@ class AuthManager(
     @Volatile var restoreProblem: SignOutTrigger? = null
         private set
 
-    /** Reads the vault once per process (no UI, no prompt). Idempotent. */
+    /**
+     * Reads the vault once per process (no UI, no prompt). Idempotent. A transient Keystore/I/O
+     * failure keeps [SessionState.RESTORING] (nothing deleted): the next call after the backoff
+     * ([restoreRetryInMs]) reads again.
+     */
     suspend fun restore(): SessionState {
         if (_state.value != SessionState.RESTORING) return _state.value
+        if (elapsed() < nextRestoreAt) return SessionState.RESTORING
         return lock.withLock { restoreLocked() }
     }
 
+    /** Ms until a retried vault read is allowed (0: now, or no retry pending). */
+    fun restoreRetryInMs(): Long = (nextRestoreAt - elapsed()).coerceAtLeast(0)
+
     private suspend fun restoreLocked(): SessionState {
         if (_state.value != SessionState.RESTORING) return _state.value
+        if (elapsed() < nextRestoreAt) return SessionState.RESTORING
         val next = withContext(Dispatchers.IO) {
             when (val l = vault.load()) {
+                is SessionVault.Load.Transient -> {
+                    restoreFailures++
+                    val wait = restoreBackoffMs(restoreFailures)
+                    nextRestoreAt = elapsed() + wait
+                    Log.w("RisiMe", "RisiMe auth: vault not readable now (${l.reason}): session kept, retry #$restoreFailures in ${wait}ms")
+                    SessionState.RESTORING
+                }
                 is SessionVault.Load.Tokens -> {
                     val t = l.tokens
                     live = Live(t.issuer, t.clientId, null, 0, t.refreshToken, t.idToken)
                     SessionState.READY
                 }
                 is SessionVault.Load.Unreadable -> {
-                    Log.w("RisiMe", "RisiMe auth: vault unreadable (${l.reason})")
+                    Log.w("RisiMe", "RisiMe auth: vault unreadable for good (${l.reason}): cleared")
                     vault.clear()
                     if (legacy?.hasTokens() == true) {
                         SessionState.NEEDS_MIGRATION
@@ -144,6 +169,8 @@ class AuthManager(
                 }
             }
         }
+        if (next == SessionState.RESTORING) return next
+        restoreFailures = 0
         Log.i("RisiMe", "RisiMe auth: session restored state=$next")
         _state.value = next
         return next
@@ -173,12 +200,19 @@ class AuthManager(
         _signInNeeded.value = false
         _state.value = SessionState.READY
         restoreProblem = null
+        val set = StoredTokens(rt, t.idToken, issuer, clientId)
         val stored = withContext(Dispatchers.IO) {
             legacy?.clear()
-            vault.store(StoredTokens(rt, t.idToken, issuer, clientId))
+            vault.store(set)
         }
         diagnostics.signedIn(refreshTokenInfo(rt))
-        if (!stored) Log.w("RisiMe", "RisiMe auth: no vault key on this phone: the session lasts until the process ends")
+        if (stored) {
+            unsaved = null
+        } else {
+            unsaved = set
+            nextSaveAt = elapsed() + SAVE_RETRY_MS
+            Log.w("RisiMe", "RisiMe auth: vault write failed: the session is in memory; written again on the next refresh")
+        }
         stored
     }
 
@@ -212,6 +246,7 @@ class AuthManager(
         var pushed: String? = null
         val token = lock.withLock {
             val l = live ?: return@withLock null
+            retryUnsavedLocked(force = forceRefresh)
             val fresh = l.accessToken != null && !RefreshTiming.needsRefresh(l.expiresAtElapsed, elapsed())
             if (fresh && !forceRefresh) return@withLock l.accessToken
             when (val r = gateway.refresh(l.issuer, l.clientId, l.refreshToken)) {
@@ -231,6 +266,7 @@ class AuthManager(
                 RefreshResult.InvalidGrant -> {
                     Log.w("RisiMe", "RisiMe auth: refresh refused (invalid_grant)")
                     live = null
+                    unsaved = null
                     withContext(Dispatchers.IO) {
                         vault.clear()
                         legacy?.clear()
@@ -251,14 +287,38 @@ class AuthManager(
         return token
     }
 
-    /** A rotated refresh token: the new vault (no prompt); while unmigrated with no new key, the old one (public-key wrap). */
-    private suspend fun persist(t: StoredTokens) = withContext(Dispatchers.IO) {
-        if (!vault.store(t) && legacy?.hasTokens() == true) legacy.store(t)
+    /**
+     * A rotated refresh token: the new vault (no prompt); while unmigrated with no new key, the old
+     * one (public-key wrap). When neither write lands, the set is kept as [unsaved] and written again
+     * on a later bearer/refresh: the next process must not wake up with an already-rotated token.
+     */
+    private suspend fun persist(t: StoredTokens) {
+        val ok = withContext(Dispatchers.IO) {
+            vault.store(t) || (legacy?.hasTokens() == true && legacy.store(t))
+        }
+        if (ok) {
+            if (unsaved != null) Log.i("RisiMe", "RisiMe auth: the pending token set is sealed now")
+            unsaved = null
+        } else {
+            unsaved = t
+            nextSaveAt = elapsed() + SAVE_RETRY_MS
+            Log.w("RisiMe", "RisiMe auth: rotated token set not saved (vault write failed): retried on the next refresh")
+        }
     }
+
+    /** Under [lock]: writes a pending set again (on every forced refresh, else at most every [SAVE_RETRY_MS]). */
+    private suspend fun retryUnsavedLocked(force: Boolean) {
+        val t = unsaved ?: return
+        if (!force && elapsed() < nextSaveAt) return
+        persist(t)
+    }
+
+    /** True while a token set waits to be written to the vault (tests, diagnostics). */
+    fun hasUnsavedTokens(): Boolean = unsaved != null
 
     /** Logout: revoke the offline token (if in memory), forget memory, delete both vaults. */
     suspend fun signOut() {
-        val l = lock.withLock { live.also { live = null } }
+        val l = lock.withLock { live.also { live = null; unsaved = null } }
         _state.value = SessionState.NONE
         l?.let { runCatching { gateway.revoke(it.issuer, it.clientId, it.refreshToken) } }
         clearVaults()
@@ -266,7 +326,7 @@ class AuthManager(
 
     /** Local half of a logout, no network: forget memory and the sealed sets (idempotent). */
     suspend fun forgetLocally() {
-        lock.withLock { live = null }
+        lock.withLock { live = null; unsaved = null }
         _state.value = SessionState.NONE
         clearVaults()
     }
@@ -276,7 +336,7 @@ class AuthManager(
         authenticated?.let { c ->
             withContext(Dispatchers.IO) { legacy?.open(c) }?.let { runCatching { gateway.revoke(it.issuer, it.clientId, it.refreshToken) } }
         }
-        lock.withLock { live = null }
+        lock.withLock { live = null; unsaved = null }
         _state.value = SessionState.NONE
         clearVaults()
     }
@@ -288,5 +348,13 @@ class AuthManager(
 
     fun acknowledgeSignInNeeded() {
         _signInNeeded.value = false
+    }
+
+    companion object {
+        /** A failed vault write is tried again at most this often (a forced refresh always tries). */
+        const val SAVE_RETRY_MS = 30_000L
+
+        /** 1 s, 2 s, 4 s … capped at a minute: a Keystore busy after boot answers within seconds. */
+        fun restoreBackoffMs(failures: Int): Long = (1_000L shl (failures - 1).coerceIn(0, 6)).coerceAtMost(60_000L)
     }
 }
