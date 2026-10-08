@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Release-candidate boot gate (P0 2026-10-08: nightly.39 crash-looped at boot with RISI=on).
+# Builds the PROD release of this checkout (with Risi's --prod NIF, as scripts/run-server does) and boots
+# it twice with the REAL .env + infra/pilot/pilot.env, once with TABS/RISI on and once off, each against a
+# THROWAWAY Postgres DB, Cassandra keyspace, blob dir, auth log and port (never the pilot's data; FCM off).
+# Each boot: migrate, start, /health ok within 60 s, still up and ok 20 s later, no Risi start error,
+# no crash. With RISI=on and a release that has RisiMe.Release.risi_preflight/0, the preflight also runs
+# READ-ONLY against the pilot's real database (catches a RISI_MLS_KEK that doesn't match the sealed store).
+#   scripts/boot-check            (run under a timeout; ~3–6 min, most of it the prod build)
+# Env: BOOTCHECK_PORT (4590), BOOTCHECK_INSTANCE (suffix for DB/keyspace/node), BOOTCHECK_MODES ("off on").
+# Prints "BOOT CHECK OK" at the end; exits non-zero on the first failure.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+ENVF="${BOOTCHECK_ENV:-$HOME/development/risime/.env}"; PILOT="$REPO/infra/pilot/pilot.env"
+SUF="${BOOTCHECK_INSTANCE:-}"; BC_PORT="${BOOTCHECK_PORT:-4590}"; MODES="${BOOTCHECK_MODES:-off on on-reopen on-wrongkey}"
+BC_DB="risime_bootcheck$SUF"; BC_KS="risime_bootcheck$SUF"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-bootcheck.XXXXXX")"; LOGS="$HOME/risime-logs/bootcheck$SUF"
+mkdir -p "$LOGS"; rm -f "$LOGS"/*.log 2>/dev/null || true
+PG="docker exec -i risime-dev-postgres-1 psql -U risime -d postgres -Atq"
+CQL="docker exec -i risime-dev-cassandra-1 cqlsh"
+[ -f "$ENVF" ] || { echo "BOOT CHECK FAIL: no $ENVF"; exit 1; }
+PID=""
+cleanup() {
+  [ -n "$PID" ] && kill "$PID" 2>/dev/null && sleep 2; [ -n "$PID" ] && kill -9 "$PID" 2>/dev/null || true
+  $PG -c "DROP DATABASE IF EXISTS $BC_DB WITH (FORCE)" >/dev/null 2>&1 || true
+  $CQL -e "DROP KEYSPACE IF EXISTS $BC_KS" >/dev/null 2>&1 || true
+  rm -rf "$WORK"; rm -f "$REPO/erl_crash.dump" "$REPO/server/erl_crash.dump"
+}
+trap cleanup EXIT
+fail() { echo "BOOT CHECK FAIL $*"; [ -f "$LOGS/boot-$MODE.log" ] && tail -40 "$LOGS/boot-$MODE.log" | cut -c1-300; exit 1; }
+ss -ltnH "sport = :$BC_PORT" | grep -q . && { echo "BOOT CHECK FAIL: port $BC_PORT busy"; exit 1; }
+
+echo "==> prod build of $(git log -1 --format='%h %s' | cut -c1-70)"
+if [ -x scripts/build-mls-nif ]; then
+  CARGO_TARGET_DIR="$REPO/crypto/target-nif-prod" timeout 1800 scripts/build-mls-nif --prod >"$LOGS/nif.log" 2>&1 \
+    || echo "    warn: NIF build failed (the release would run without Risi): $(tail -1 "$LOGS/nif.log")"
+fi
+BUILD="$WORK/build"
+(cd server && MIX_ENV=prod MIX_BUILD_PATH="$BUILD" $M mix deps.get --only prod >/dev/null \
+  && MIX_ENV=prod MIX_BUILD_PATH="$BUILD" $M mix release --overwrite --quiet --path "$WORK/rel") >"$LOGS/build.log" 2>&1 \
+  || { tail -30 "$LOGS/build.log"; echo "BOOT CHECK FAIL: prod release build"; exit 1; }
+BIN="$WORK/rel/bin/risime"; [ -x "$BIN" ] || { echo "BOOT CHECK FAIL: no $BIN"; exit 1; }
+
+# The real env files, then the throwaway overrides (never the pilot's DB, keyspace, blobs or pushes).
+run_env() {  # $1 = off|on|on-reopen|on-wrongkey; exports for the child
+  set -a; . "$ENVF"; . "$PILOT"; set +a
+  local f="${1%%-*}"
+  # on-wrongkey: tonight's P0 class (a RISI_MLS_KEK that doesn't match the sealed store): the server
+  # must still boot and stay healthy (Risi unavailable), never crash-loop.
+  [ "$1" = on-wrongkey ] && export RISI_MLS_KEK="$(openssl rand -base64 32)" RISI_DATA_KEY="$(openssl rand -base64 32)"
+  export TABS="$f" RISI="$f" POSTGRES_DB="$BC_DB" CASSANDRA_KEYSPACE="$BC_KS" PORT="$BC_PORT" PHX_SERVER=true \
+    BLOB_DIR="$WORK/blobs" RISIME_AUTH_LOG="$WORK/auth.log" FCM_ENABLED=false RELEASE_DISTRIBUTION=none \
+    ERL_EPMD_ADDRESS=127.0.0.1
+  unset DATABASE_URL
+  mkdir -p "$WORK/blobs"
+}
+
+for MODE in $MODES; do
+  echo "==> boot $MODE (real .env + pilot.env, throwaway stores, port $BC_PORT)"
+  # on-reopen / on-wrongkey reuse the "on" boot's stores (sealed Risi rows exist); the others start fresh.
+  case "$MODE" in on-*) ;; *)
+    $PG -c "DROP DATABASE IF EXISTS $BC_DB WITH (FORCE)" >/dev/null; $PG -c "CREATE DATABASE $BC_DB" >/dev/null
+    $CQL -e "DROP KEYSPACE IF EXISTS $BC_KS" >/dev/null 2>&1 || true;;
+  esac
+  ( run_env "$MODE"; timeout 600 "$BIN" eval "RisiMe.Release.migrate()" ) >"$LOGS/migrate-$MODE.log" 2>&1 \
+    || fail "($MODE): migrate"
+  ( run_env "$MODE"; cd "$WORK" && exec "$BIN" start ) >"$LOGS/boot-$MODE.log" 2>&1 &
+  PID=$!
+  ok=""
+  for _ in $(seq 1 30); do
+    sleep 2
+    kill -0 "$PID" 2>/dev/null || fail "($MODE): the release exited during boot (exit $(wait "$PID"; echo $?))"
+    curl -sf -m 3 "http://127.0.0.1:$BC_PORT/health" | grep -q '"status":"ok"' && { ok=1; break; }
+  done
+  [ -n "$ok" ] || fail "($MODE): /health not ok within 60 s"
+  sleep 20
+  kill -0 "$PID" 2>/dev/null || fail "($MODE): the release died after boot"
+  h="$(curl -sf -m 3 "http://127.0.0.1:$BC_PORT/health" || true)"
+  grep -q '"status":"ok"' <<<"$h" || fail "($MODE): /health not ok 20 s after boot: $h"
+  grep -qE "Application risime exited|\*\* \(EXIT|Kernel pid terminated" "$LOGS/boot-$MODE.log" \
+    && fail "($MODE): crash in the boot log"
+  if [ "$MODE" != on-wrongkey ]; then grep -q "Risi MLS open failed" "$LOGS/boot-$MODE.log" && fail "($MODE): Risi failed to open its store"; fi
+  cfg="$(curl -sf -m 3 "http://127.0.0.1:$BC_PORT/api/v1/auth/config" || true)"
+  if [ "${MODE%%-*}" = on ]; then grep -q '"tabs":"on"' <<<"$cfg" || fail "(on): /auth/config doesn't say tabs on"; fi
+  echo "    healthy and up 20 s: $(grep -oE '"risi":"[^"]*"' <<<"$h" || echo 'risi: (not reported by this release)')"
+  kill "$PID"; wait "$PID" 2>/dev/null || true; PID=""
+done
+
+# Read-only preflight against the PILOT database (the sealed store vs RISI_MLS_KEK), when the release has it.
+if grep -qw on <<<"$MODES" && grep -qE "^RISI=on" "$PILOT"; then
+  if ( set -a; . "$ENVF"; . "$PILOT"; set +a; export RELEASE_DISTRIBUTION=none PORT=0 
+       timeout 120 "$BIN" eval 'IO.puts(Code.ensure_loaded?(RisiMe.Release) and function_exported?(RisiMe.Release, :risi_preflight, 0))' ) 2>/dev/null | grep -q true; then
+    echo "==> Risi preflight against the pilot database (read-only)"
+    ( set -a; . "$ENVF"; . "$PILOT"; set +a; export RELEASE_DISTRIBUTION=none PORT=0
+      timeout 300 "$BIN" eval "RisiMe.Release.risi_preflight()" ) >"$LOGS/preflight.log" 2>&1 || { tail -5 "$LOGS/preflight.log"; echo "BOOT CHECK FAIL: Risi preflight"; exit 1; }
+    grep -E "RISI PREFLIGHT" "$LOGS/preflight.log" | tail -1
+  else
+    echo "    note: this release has no RisiMe.Release.risi_preflight/0 (pilot store check skipped)"
+  fi
+fi
+echo "BOOT CHECK OK"

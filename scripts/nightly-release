@@ -98,6 +98,13 @@ else
     STEP_T="${RISI_CANARY_TIMEOUT:-1500}" step scripts/risi-canary
 fi
 
+# Boot gate (P0 2026-10-08: nightly.39 crash-looped at boot with RISI=on): the PROD release of this
+# candidate boots with the REAL .env + pilot.env (throwaway DB/keyspace/port), with TABS/RISI off, on,
+# on again over its sealed store, and on with a wrong RISI_MLS_KEK (must still boot healthy); plus the
+# read-only Risi preflight against the pilot DB when the release has it. No skip switch.
+echo "==> boot check (scripts/boot-check: prod release, real env, Risi off/on/reopen/wrong key)"
+BOOTCHECK_INSTANCE=_rel BOOTCHECK_PORT=4591 BOOTCHECK_ENV="$HOME/development/risime/.env" step scripts/boot-check
+
 # Background delivery gate (P0 2026-10-08): scripts/push-device-test with this build's debug APK on its
 # own redroids (screen off + force-idle, and after removal from Recents: message and call within 10 s).
 # PUSHTEST_SKIP=1 skips it (emergency only; say so in the release notes).
