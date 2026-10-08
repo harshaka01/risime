@@ -47,6 +47,29 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.37 (live 2026-10-08 ~17:25 UTC, not required): call records, locked chats, two-tab groundwork (off)
+- **Call records:**
+  - chat rows for every outcome;
+  - the Calls tab with grouping and call info;
+  - the missed-call notification with Call back / Message.
+- **Locked chats:**
+  - a pull-down folder, unlocked with fingerprint or the phone PIN;
+  - a secret code;
+  - "New message" notifications.
+- **Fixes:** the ringback crash; the app lock never traps the user (as in n36).
+- **Hidden (TABS=off, RISI=off on the pilot):**
+  - contract v1.24 §24;
+  - the crypto tab and agent rules;
+  - Risi's MLS NIF;
+  - the server's two tabs (S1–S4 plus the privacy review fixes);
+  - the app's tabs A1–A5.
+- **Gate:** all PASS (push test, upgrade test with counts/restore/reinstall).
+- **On main after n37, coming in nightly.38:**
+  - S5 (Risi's agent tree);
+  - S6/S7 (the secretary: risi-l1 router, learning log, commitments, reminders, digest, @Risi);
+  - A6 (Risi cards, chip, "What Risi knows", My promises, tz, backup schema 2 wiring);
+  - crypto backup schema 2.
+
 ## v0.2.0-nightly.36 (HOTFIX, live 2026-10-08 ~17:00 UTC): the app lock never traps the user, ringback crash
 - **What's in:** branch `hotfix/applock` = v0.2.0-nightly.35 + `433b8c3` (the lock fix) + the
   ringback double-release fix + the HOTFIX release mode.
