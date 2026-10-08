@@ -1,5 +1,68 @@
 # Android status — 0.2 nightlies
 
+## v1.17 profile photos + group photos (§18) and v1.18 1:1 video calls (§19) — READY
+**READY.** Commits `f89f5c7` (v1.17 profile + group photos, Room v10), `b54ffcf` (v1.18 1:1 video calls), plus this note.
+- **Gates:** `./gradlew assembleDebug testDebugUnitTest` green: **673** JVM tests, 0 failed (8 skipped).
+  ContractExamplesTest now parses and validates every v1.17 and v1.18 example (no `@pending_v1_17/18` placeholders left;
+  v1.19 group-call examples stay parse-only). Redroid (`CALLTEST_INSTANCE=_vid`, 4471, `-vid1/-vid2` on 5732/5733):
+  **CALLTEST OK** on all 8 voice calls (incl. kill mid-call, background answer, Home + screen off, Back), then a
+  video call on the same phones (debug pattern capturer, CAMERA granted): B showed "Incoming video call" with Answer /
+  Answer without video / Decline; after the in-activity Answer the debug stats showed VP8 640×480 decoded frames growing
+  on both phones (A decoded 197→305, B 140→461, ~14 fps each way); B's camera off → A showed B's avatar; on → frames
+  resumed; B pressed Home → B's sender stopped and A fell back to the avatar after 3 s; screenshots looked right. No crash.
+- **Room v10 (additive, hard rule 9):** new tables `profile_photos(user_id PK, ver, blob_id, size, sha256, key_sealed, plain_size,
+  w, h, fetched, mime, checked_at)` and `profile_photo_convs(conversation_id PK, pending_ver, due_at, dirty, leaves)`;
+  `groups` gains `icon_sha`, `announced_name`. Migration9To10Test: a v9 DB with messages, an image row and a group migrates
+  to exactly the fresh v10 schema and keeps every row. Wiped only by the confirmed "Log out and delete chats".
+- **v1.17 receive:** `profile_photo` strictly validated (JPEG, 64–512 square, ≤ 512 KiB, `ver` ≤ server-now + 24 h), subject =
+  the MLS sender only, the K1 winner rule (ver, then null, then greater sha256), key sealed (AAD `avatar`‖subject‖blob),
+  the old key and cached ciphertext dropped with the winner. Never a row, unread, ack, notification, search hit or bundle
+  entry. A `silent` event that is pre-install or undecryptable leaves no marker and no gap row. Downloads after the commit
+  (any network except Data Saver/roaming; then on first show), size → SHA-256 → AEAD; decode JPEG-sniffed, header = w/h ≤ 512,
+  off-main with a timeout; bitmaps in memory only. 404 → initials, retried daily; blocked users → initials.
+- **v1.17 send:** Settings → Profile: Set/Change/Remove photo (Photo Picker, a visible square crop with pinch/drag and a
+  circle guide, 512 px JPEG without metadata at q85→q65 under 512 KiB, "Choose a larger photo" under 64 px), `avatar` upload,
+  3 changes/hour ("Try again later"), the small print. A change goes to every e2ee DM and group, paced 1/s, `silent: true`.
+  Triggers 2/3 come from the MLS leaves (a debounced check after every commit/Welcome): DMs after the 5–30 s sibling wait
+  (settled by a sibling's send with ver ≥ mine), groups dirty until the next own message or the chat opens. Remove sends
+  `photo: null`, then deletes the blob once nothing is queued.
+- **Where photos show:** chat list (DMs and groups), DM and group headers, chat/group info, group member lists, beside
+  incoming group bubbles (first of a run), the add-members picker, search, Settings and the call screens (incoming and in-call).
+- **Group photos (§18.7):** admins tap the photo in group info → Change/Remove (same picker and crop), `purpose=icon` upload,
+  then a `meta_changed` commit through a new `icon` op (the icon object sealed with the DB key while queued). Local lines
+  "<actor> changed/removed the group photo" (and the name line only when the name really changed).
+- **v1.18:** `video` advertised only with `calls` and when the software VP8 encoder/decoder load. DM header: a video button
+  next to the call button, disabled until `video_ready` ("<name> needs to update the app for video calls"). `media: "video"`
+  on every `call:signal` of a video call, bound to the offer (K6); `video_not_ready` shown. SDP: §19.4 strict checks
+  (exactly m=audio then m=video, BUNDLE + rtcp-mux, one fingerprint value, VP8 + its rtx only in answers, no simulcast/rid,
+  at most one FID group, `b=AS` ≤ 1500, directions, the four denied header extensions); every SDP the app produces strips
+  them (voice too). One sendrecv video transceiver (caller adds it before the offer; callee uses the one the offer
+  created), codec preferences VP8 + rtx. Camera on/off = `setTrack(video|null)` + `call_media` (≤ 1/s, last state wins,
+  pinned to the selected peer device); the peer's avatar on `camera: false` and after 3 s without a frame. The camera runs
+  only while the call screen is resumed and the phone unlocked (Back/home/screen off stop it and send `camera: false`;
+  return restarts it). Incoming: "Incoming video call" with Answer / Answer without video / Decline; the camera never
+  starts while ringing, from the notification's Answer or Telecom. Glare across media per A4; an answer with m=video port 0
+  makes it an audio call. Telecom `CALL_TYPE_VIDEO_CALL`, speaker by default unless a headset, no proximity lock. Front
+  camera by default, Flip button; 1280×720@30 (640×480@24 on mobile data or relay-only, 640×480@15 when thermal ≥ SEVERE),
+  1.5/0.8 Mbit/s, BALANCED. History: "Video call · m:ss", "Video call · No answer", "Missed video call" (+ "Missed video
+  call from <name>"), "Declined video call"; "Call back" on a video line offers video or voice.
+- **CAMERA:** now in the manifest (asked only for a video call with the camera on, or the camera button). Because a declared
+  CAMERA permission is enforced for `ACTION_IMAGE_CAPTURE` too, the + sheet's Camera now asks for it first.
+- **Debug fake camera:** debug builds only, when the phone has no camera (redroid) or `files/debug_fake_camera` exists: a
+  generated moving test pattern feeds the capturer so frames flow end to end; never in release builds.
+- **Known limits:** photos are not yet used as notification `Person` icons (§18.2 A6 allows it; initials-free notifications
+  unchanged). The video PiP can't be dragged. Redroid has no camera sensor: real-camera capture, Flip and the speaker
+  default need a real phone. `scripts/call-device-test`'s `open_chat` taps the peer's name even when that chat is already
+  open; since GO UX the header title opens Chat info there (the run reported "A: could not type"). Verified with a local copy
+  that first leaves the chat — root should adopt that in the script.
+- **What root's device test should add for video:** grant CAMERA on both; A taps "Video call"; B rings and shows "Incoming
+  video call" with "Answer without video"; B taps the in-activity "Answer" (not the notification Answer, which answers with
+  the camera off); within ~10 s the debug log line `call video VP8 in WxH@fps decoded=N` shows decoded > 0 on both phones
+  (frames both ways); B taps "Turn camera off" → A's screen shows B's avatar (no frozen frame) and `call_media` arrives;
+  "Turn camera on" → decoded frames grow again on A; B presses Home → A gets `camera: false` and B's camera stops; back →
+  resumes; hang up → both lines "Video call · m:ss", no Telecom call / communication mode left; plus a voice call after it
+  (unchanged). With CALLTEST_TURN=1 the relay-only video call should show ~1–2 Mbit/s each way.
+
 ## GO UX (brand, WhatsApp-style layout, + sheet, multi-photo captions, call screens, dark screen) — READY
 **READY.** Commits `023362f` (brand, theme, chat layout, + sheet, multi-photo), `3cf0b5e` (call screens,
 dark-screen fix), `5cb01ed` (polish from Redroid screenshots). No wire change, no Room change, no new library.
