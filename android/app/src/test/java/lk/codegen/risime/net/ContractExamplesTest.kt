@@ -26,6 +26,21 @@ class ContractExamplesTest {
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
         "auth_verify_reply.json" to { s -> ProtocolJson.decodeFromString<AuthVerifyReply>(s) },
+        // v1.20 (§21 open sign-up).
+        "auth_config_v120.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.signupOpen) } },
+        "signup_request.json" to { s -> ProtocolJson.decodeFromString<SignupRequest>(s) },
+        "signup_reply.json" to { s -> ProtocolJson.decodeFromString<MeReply>(s).also { require(!it.user.phoneConfirmed && it.user.phoneVerified) } },
+        "error_signup_required.json" to { s -> apiError(s, AuthErrors.SIGNUP_REQUIRED) },
+        "error_signup_closed.json" to { s -> apiError(s, AuthErrors.SIGNUP_CLOSED) },
+        "error_phone_taken.json" to { s -> apiError(s, AuthErrors.PHONE_TAKEN) },
+        "error_signup_rate_limited.json" to { s -> apiError(s, AuthErrors.RATE_LIMITED) },
+        "error_bad_request.json" to { s -> apiError(s, AuthErrors.BAD_REQUEST) },
+        "friends_reply_v120.json" to { s ->
+            ProtocolJson.decodeFromString<FriendsReply>(s).also { require(it.friends.single().phoneConfirmed && !it.incoming.single().phoneConfirmed) }
+        },
+        "signal_friend_v120.json" to { s ->
+            ProtocolJson.decodeFromString<Signal>(s).also { require(it.kind == Signal.KIND_FRIEND) }
+        },
         // v1.19 (§20 group calls with LiveKit): typed models, the envelopes through the strict validators.
         "call_member_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Member).also { require(it.state == "joined") } },
         "call_offer_sfu_payload.json" to { s ->
@@ -520,6 +535,27 @@ class ContractExamplesTest {
         // A config with only "dev" has no issuer/client_id.
         val dev = ProtocolJson.decodeFromString<AuthConfig>("""{"modes":["dev"]}""")
         assertEquals(null, dev.issuer)
+    }
+
+    @Test
+    fun openSignupV120Examples() {
+        assertTrue(ProtocolJson.decodeFromString<AuthConfig>(read("auth_config_v120.json")).signupOpen)
+        assertFalse(ProtocolJson.decodeFromString<AuthConfig>(read("auth_config.json")).signupOpen) // absent = invite
+        val req = ProtocolJson.parseToJsonElement(read("signup_request.json")) as JsonObject
+        assertEquals(req, ProtocolJson.encodeToJsonElement(SignupRequest("+94770000009", "Test User N")))
+        val user = ProtocolJson.decodeFromString<MeReply>(read("signup_reply.json")).user
+        assertFalse(user.phoneConfirmed)
+        assertEquals("", user.company)
+        // Absent phone_confirmed means true.
+        assertTrue(ProtocolJson.decodeFromString<AuthVerifyReply>(read("auth_verify_reply.json")).user.phoneConfirmed)
+        assertTrue(ProtocolJson.decodeFromString<FriendsReply>(read("friends_reply_v19.json")).friends.single().phoneConfirmed)
+        val sig = ProtocolJson.decodeFromString<Signal>(read("signal_friend_v120.json"))
+        val friend = ProtocolJson.decodeFromJsonElement<FriendSignal>(sig.data)
+        assertFalse(friend.user.phoneConfirmed)
+        assertTrue(ProtocolJson.decodeFromJsonElement<FriendSignal>(ProtocolJson.decodeFromString<Signal>(read("signal_friend.json")).data).user.phoneConfirmed)
+        val r = ApiResult.Error(403, AuthErrors.SIGNUP_REQUIRED, ProtocolJson.decodeFromString<ApiErrorEnvelope>(read("error_signup_required.json")).error.message)
+        val o = lk.codegen.risime.data.auth.meOutcome(r) as lk.codegen.risime.data.auth.MeOutcome.Refused
+        assertEquals(lk.codegen.risime.data.auth.BlockKind.SIGNUP_REQUIRED, o.blocked.kind)
     }
 
     @Test

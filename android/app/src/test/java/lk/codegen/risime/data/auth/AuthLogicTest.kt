@@ -103,4 +103,70 @@ class AuthLogicTest {
         assertTrue(shouldConnect(true, dev, false, null))
         assertFalse(shouldConnect(true, null, true, null))
     }
+
+    // ---- §21 open sign-up (v1.20) ----
+
+    @Test fun signupRequiredIsItsOwnRefusal() {
+        val o = meOutcome(ApiResult.Error(403, "signup_required", "")) as MeOutcome.Refused
+        assertEquals(BlockKind.SIGNUP_REQUIRED, o.blocked.kind)
+        assertTrue(o.blocked.message.isNotBlank())
+        // not_allowlisted is unchanged.
+        assertEquals(BlockKind.NOT_ALLOWLISTED, (meOutcome(ApiResult.Error(403, "not_allowlisted", "x")) as MeOutcome.Refused).blocked.kind)
+    }
+
+    @Test fun normalisesSignupPhones() {
+        assertEquals("+94771234567", normalisePhone("+94", "077 123 4567"))
+        assertEquals("+94771234567", normalisePhone("+94", "771234567"))
+        assertEquals("+94771234567", normalisePhone("94", "(077) 123-4567"))
+        assertEquals("+447700900123", normalisePhone("+94", "+44 7700 900123"))
+        assertEquals("+447700900123", normalisePhone("+94", "0044 7700 900123"))
+        assertEquals(null, normalisePhone("+94", ""))
+        assertEquals(null, normalisePhone("+94", "12"))
+        assertEquals(null, normalisePhone("", "0771234567"))
+        assertEquals(null, normalisePhone("+94", "07712abc67"))
+        assertEquals(null, normalisePhone("+94", "+0771234567"))
+    }
+
+    @Test fun signupFormChecks() {
+        assertEquals(null, signupFormError("Kamal", "+94771234567"))
+        assertTrue(signupFormError("  ", "+94771234567")!!.contains("name"))
+        assertTrue(signupFormError("x".repeat(65), "+94771234567") != null)
+        assertTrue(signupFormError("Kamal", null)!!.contains("number"))
+    }
+
+    @Test fun signupOutcomes() {
+        val u = User("u", "+94771234567", "Kamal", "", phoneConfirmed = false)
+        assertEquals(SignupOutcome.Created(u), signupOutcome(ApiResult.Ok(MeReply(u))))
+        assertTrue((signupOutcome(ApiResult.Error(409, "phone_taken", "m")) as SignupOutcome.FieldError).onPhone)
+        assertFalse((signupOutcome(ApiResult.Error(400, "bad_request", "m")) as SignupOutcome.FieldError).onPhone)
+        assertTrue((signupOutcome(ApiResult.Error(429, "rate_limited", "", retryAfterSec = 1800)) as SignupOutcome.Failed).message.contains("30 min"))
+        assertTrue((signupOutcome(ApiResult.Error(429, "rate_limited", "")) as SignupOutcome.Failed).message.contains("1 min"))
+        assertEquals(SignupOutcome.Closed("closed"), signupOutcome(ApiResult.Error(403, "signup_closed", "closed")))
+        assertEquals(SignupOutcome.Unauthorized, signupOutcome(ApiResult.Error(401, "invalid_token", "")))
+        assertEquals(SignupOutcome.Unauthorized, signupOutcome(ApiResult.Error(409, "identity_conflict", "")))
+        assertTrue(signupOutcome(ApiResult.NetworkError(IOException("x"))) is SignupOutcome.Failed)
+    }
+
+    @Test fun waitLabels() {
+        assertEquals("45 s", waitLabel(45))
+        assertEquals("2 min", waitLabel(61))
+        assertEquals("3 h", waitLabel(3 * 3600))
+    }
+
+    private fun jwt(payload: String): String {
+        val enc = java.util.Base64.getUrlEncoder().withoutPadding()
+        return enc.encodeToString("{\"alg\":\"RS256\"}".toByteArray()) + "." + enc.encodeToString(payload.toByteArray()) + ".sig"
+    }
+
+    @Test fun nameClaimPrefill() {
+        assertEquals("Kamal Perera", nameClaim(jwt("{\"name\":\" Kamal Perera \",\"email\":\"k@example.com\"}")))
+        assertEquals("ශ්‍රී ලංකා", nameClaim(jwt("{\"name\":\"ශ්‍රී ලංකා\"}")))
+        assertEquals(64, nameClaim(jwt("{\"name\":\"${"n".repeat(100)}\"}"))!!.length)
+        assertEquals(null, nameClaim(jwt("{\"email\":\"k@example.com\"}")))
+        assertEquals(null, nameClaim(jwt("{\"name\":42}")))
+        assertEquals(null, nameClaim(jwt("{\"name\":\"  \"}")))
+        assertEquals(null, nameClaim(null))
+        assertEquals(null, nameClaim("garbage"))
+        assertEquals(null, nameClaim("a.%%%.c"))
+    }
 }

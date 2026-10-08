@@ -1041,6 +1041,38 @@ class AppContainer(
         }
     }
 
+    /** §21.8: the display name to prefill on "Create your RisiMe account" (the token's `name`). */
+    fun signupNamePrefill(): String? = lk.codegen.risime.data.auth.nameClaim(auth.idToken())
+
+    /**
+     * §21.3 `POST /auth/signup` for the signed-in (blocked: signup_required) identity. On success the
+     * new user is adopted like any OIDC sign-in. A new account: nothing local is touched (rule 9).
+     */
+    suspend fun signUp(phoneE164: String, displayName: String): lk.codegen.risime.data.auth.SignupOutcome {
+        val o = lk.codegen.risime.data.auth.signupOutcome(api.signup(lk.codegen.risime.net.SignupRequest(phoneE164, displayName.trim())))
+        return when (o) {
+            is lk.codegen.risime.data.auth.SignupOutcome.Created ->
+                if (adoptOidcUser(o.user)) o else lk.codegen.risime.data.auth.SignupOutcome.Failed(SWITCH_CANCELLED)
+            is lk.codegen.risime.data.auth.SignupOutcome.Closed -> {
+                blocked.value = lk.codegen.risime.data.auth.Blocked(lk.codegen.risime.data.auth.BlockKind.NOT_ALLOWLISTED, o.message)
+                o
+            }
+            lk.codegen.risime.data.auth.SignupOutcome.Unauthorized -> when (val m = meOutcome(api.me())) {
+                is MeOutcome.Ok -> if (adoptOidcUser(m.user)) lk.codegen.risime.data.auth.SignupOutcome.Created(m.user) else lk.codegen.risime.data.auth.SignupOutcome.Failed(SWITCH_CANCELLED)
+                is MeOutcome.NeedsPhone -> m.user?.let { u ->
+                    if (adoptOidcUser(u)) lk.codegen.risime.data.auth.SignupOutcome.Created(u) else lk.codegen.risime.data.auth.SignupOutcome.Failed(SWITCH_CANCELLED)
+                } ?: lk.codegen.risime.data.auth.SignupOutcome.Failed("Can't reach the RisiMe server. Try again.")
+                is MeOutcome.Refused -> {
+                    blocked.value = m.blocked
+                    o
+                }
+                MeOutcome.Unauthorized -> lk.codegen.risime.data.auth.SignupOutcome.Failed("Your RisiCloud sign-in expired. Use \"Sign in with another account\" to sign in again.")
+                is MeOutcome.Transient -> lk.codegen.risime.data.auth.SignupOutcome.Failed("Can't reach the RisiMe server. Try again.")
+            }
+            else -> o
+        }
+    }
+
     /** False when the user kept another account's chats: this sign-in is dropped. */
     private suspend fun adoptOidcUser(user: User): Boolean {
         if (localAccount.beforeSignIn(user, ::askAccountSwitch) == lk.codegen.risime.data.SignInDecision.CANCELLED) {

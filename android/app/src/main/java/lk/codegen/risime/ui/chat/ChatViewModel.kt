@@ -49,6 +49,11 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
     val peer: StateFlow<ContactEntity?> = c.contacts.contact(peerId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** §21.4 (v1.20): the peer's phone is self-asserted and not SMS-verified. */
+    val peerPhoneUnconfirmed: StateFlow<Boolean> = c.contacts.friendsState
+        .map { peerId.lowercase() in it.unconfirmed }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     val connection: StateFlow<ConnectionState> = c.realtime.state
 
     val peerPresence: StateFlow<Presence?> = c.presence.presence.map { it[peerId.lowercase()] }

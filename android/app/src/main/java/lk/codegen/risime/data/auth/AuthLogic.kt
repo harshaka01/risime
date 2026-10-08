@@ -5,6 +5,10 @@ import lk.codegen.risime.net.AuthConfig
 import lk.codegen.risime.net.AuthErrors
 import lk.codegen.risime.net.MeReply
 import lk.codegen.risime.net.User
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 
 /** Pure sign-in rules from contract v1.3 §6 and decision 014 (JVM-tested). */
 
@@ -54,7 +58,13 @@ fun signInChoice(result: ApiResult<AuthConfig>, debug: Boolean, override: AuthOv
 }
 
 /** Why the server refused this account (§6.1); the message may be shown verbatim. */
-enum class BlockKind { NOT_ALLOWLISTED, IDENTITY_CONFLICT }
+enum class BlockKind {
+    NOT_ALLOWLISTED,
+    IDENTITY_CONFLICT,
+
+    /** §21 (v1.20): open sign-up is on and nothing maps: show "Create your RisiMe account". */
+    SIGNUP_REQUIRED,
+}
 
 data class Blocked(val kind: BlockKind, val message: String, val email: String? = null)
 
@@ -83,6 +93,8 @@ fun meOutcome(r: ApiResult<MeReply>): MeOutcome = when (r) {
     is ApiResult.Error -> when {
         r.httpStatus == 401 -> MeOutcome.Unauthorized
         r.httpStatus == 403 && r.code == AuthErrors.PHONE_UNVERIFIED -> MeOutcome.NeedsPhone(null)
+        r.httpStatus == 403 && r.code == AuthErrors.SIGNUP_REQUIRED ->
+            MeOutcome.Refused(Blocked(BlockKind.SIGNUP_REQUIRED, r.message.ifBlank { "Create your RisiMe account to continue" }))
         r.httpStatus == 403 && r.code == AuthErrors.NOT_ALLOWLISTED ->
             MeOutcome.Refused(Blocked(BlockKind.NOT_ALLOWLISTED, r.message.ifBlank { "This email is not on the RisiMe allowlist" }))
         r.httpStatus == 409 && r.code == AuthErrors.IDENTITY_CONFLICT ->
@@ -148,3 +160,78 @@ fun appGate(
 fun shouldConnect(foreground: Boolean, session: lk.codegen.risime.data.Session?, unlocked: Boolean, blocked: Blocked?): Boolean =
     foreground && blocked == null && session != null && session.user.phoneVerified &&
         (session.kind == lk.codegen.risime.data.AuthKind.DEV || unlocked)
+
+// ---- §21 open sign-up (v1.20) ----
+
+private val E164 = Regex("^\\+[1-9]\\d{6,14}$")
+
+/**
+ * The sign-up phone as E.164, or null. [number] may already be international (`+…` or `00…`);
+ * otherwise it is national: spaces, dashes, dots and brackets are dropped, then one trunk `0`,
+ * and [countryCode] (`+94`, `94`) goes in front.
+ */
+fun normalisePhone(countryCode: String, number: String): String? {
+    val digits = number.trim().replace(Regex("[\\s().-]"), "")
+    if (digits.isEmpty()) return null
+    val e164 = when {
+        digits.startsWith("+") -> digits
+        digits.startsWith("00") -> "+" + digits.drop(2)
+        else -> {
+            val cc = countryCode.trim().replace(Regex("[\\s().-]"), "").removePrefix("+")
+            if (cc.isEmpty() || !cc.all(Char::isDigit)) return null
+            "+" + cc + digits.removePrefix("0")
+        }
+    }
+    return e164.takeIf { E164.matches(it) }
+}
+
+/** Local checks before `POST /auth/signup`; the server validates again. Null = OK. */
+fun signupFormError(displayName: String, phoneE164: String?): String? = when {
+    displayName.trim().isEmpty() || displayName.trim().length > 64 -> "Enter your name (1–64 characters)"
+    phoneE164 == null -> "Enter a valid mobile number"
+    else -> null
+}
+
+/** What the sign-up screen does with an answer (§21.3, §21.8). */
+sealed interface SignupOutcome {
+    data class Created(val user: User) : SignupOutcome
+    data class FieldError(val message: String, val onPhone: Boolean) : SignupOutcome
+    data class Failed(val message: String) : SignupOutcome
+
+    /** 403 signup_closed: switch to the not-allowlisted screen. */
+    data class Closed(val message: String) : SignupOutcome
+
+    /** Another 403/409 from mapping, or 401: show it as a blocked account / sign in again. */
+    data object Unauthorized : SignupOutcome
+}
+
+fun signupOutcome(r: ApiResult<MeReply>): SignupOutcome = when (r) {
+    is ApiResult.Ok -> SignupOutcome.Created(r.value.user)
+    is ApiResult.NetworkError -> SignupOutcome.Failed("Can't reach the RisiMe server. Try again.")
+    is ApiResult.Error -> when {
+        r.code == AuthErrors.PHONE_TAKEN ->
+            SignupOutcome.FieldError("This phone number can't be used for a new account. If it's yours, ask the person who invited you or an admin.", onPhone = true)
+        r.code == AuthErrors.BAD_REQUEST -> SignupOutcome.FieldError("Check your name and phone number", onPhone = false)
+        r.httpStatus == 429 -> SignupOutcome.Failed("Too many sign-up attempts. Try again in ${waitLabel(r.retryAfterSec ?: 60L)}.")
+        r.code == AuthErrors.SIGNUP_CLOSED -> SignupOutcome.Closed(r.message.ifBlank { "RisiMe sign-up is by invitation only right now" })
+        r.httpStatus == 401 || r.httpStatus == 403 || r.httpStatus == 409 -> SignupOutcome.Unauthorized
+        else -> SignupOutcome.Failed("Something went wrong (${r.code}). Try again.")
+    }
+}
+
+/** "45 s", "12 min", "3 h" (a Retry-After). */
+fun waitLabel(seconds: Long): String = when {
+    seconds < 60 -> "${seconds.coerceAtLeast(1)} s"
+    seconds < 3600 -> "${(seconds + 59) / 60} min"
+    else -> "${(seconds + 3599) / 3600} h"
+}
+
+private val ClaimsJson = Json { ignoreUnknownKeys = true }
+
+/** The `name` claim of a JWT (ID or access token), to prefill the display name. Null when absent or unreadable. */
+fun nameClaim(jwt: String?): String? = runCatching {
+    val payload = jwt!!.split('.')[1]
+    val bytes = java.util.Base64.getUrlDecoder().decode(payload.trimEnd('='))
+    val obj: JsonObject = ClaimsJson.parseToJsonElement(String(bytes, Charsets.UTF_8)).jsonObject
+    (obj["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.take(64)?.takeIf { it.isNotEmpty() }
+}.getOrNull()
