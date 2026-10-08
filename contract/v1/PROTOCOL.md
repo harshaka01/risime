@@ -5128,8 +5128,13 @@ that arrive in voice mode are not rendered.
   - `a=sendrecv` on the video m-line in both.
 - **After the answer is applied**, the §16.10 (e) check runs again (same transport, same
   fingerprint); a failure ends the call `failed` (`dtls_fingerprint_mismatch`).
-- **Bounds:** the re-offer gets its `call_answer` within **10 s** or the caller rolls back (§23.2
-  step 6). Every WebRTC operation keeps decision 054's 10-s bound. A v1.23 app uses
+- **Bounds:** a re-offer that could not be delivered (send failure) is rolled back at once (§23.2
+  step 6). Once delivered, the caller waits for its `call_answer` up to **10 s + 15 s** (the
+  reconnect bound) before rolling back, so a slow answer never leaves the two sessions with
+  different m-lines. The callee drops a re-offer whose `server_ts` is more than **10 s** old
+  instead of applying it. A re-answer that arrives after the caller rolled back is ignored and
+  logged. ICE credentials are compared with each side's **current** SDP (updated on every restart);
+  the DTLS fingerprint and `a=setup` stay pinned to the first SDPs. Every WebRTC operation keeps decision 054's 10-s bound. A v1.23 app uses
   `BundlePolicy.MAX_BUNDLE` and `RtcpMuxPolicy.REQUIRE` for every call, voice included.
 - Later restarts (`restart: true`) in a renegotiated call carry both m-lines and follow §19.4.
 
