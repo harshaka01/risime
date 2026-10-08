@@ -531,4 +531,23 @@ class GroupOpsExecutorTest {
         exec.runDue()
         assertEquals(listOf("rejoin", "rejoin", "rejoin"), api.calls)
     }
+
+    /** Retries keep the first error (the cause) and reuse the op's claimed key packages; exhaustion reports first and last. */
+    @Test fun retriesKeepTheFirstErrorAndReuseTheClaimedKeyPackages() = runTest {
+        memberGroup()
+        store.queueCommit(conv, namedDevicesOp("op-dev", listOf(MlsDeviceRef(nimal, "dev-nimal"))))
+        api.commitReplies.add(ApiResult.Error(503, "unavailable", ""))
+        api.commitReplies.add(ApiResult.NetworkError(IOException("down")))
+        api.commitReplies.add(ApiResult.Error(502, "bad_gateway", ""))
+        repeat(3) {
+            exec.runDue()
+            now = opsDao.rows.values.single().nextAt
+        }
+        val op = opsDao.rows.values.single()
+        assertEquals(GroupOpType.FAILED, op.state)
+        assertEquals("unavailable (last: bad_gateway)", op.lastError)
+        assertEquals(1, api.claims.size) // one claim for three builds
+        assertEquals(3, api.commits.size)
+        assertFalse(mls.hasPending)
+    }
 }

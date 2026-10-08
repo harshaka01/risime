@@ -161,6 +161,8 @@ class MlsUpgrader(
     private val welcomeWaitMs: Long = WELCOME_WAIT_MS,
     private val rejoinEveryMs: Long = REJOIN_EVERY_MS,
     private val kickMinMs: Long = RejoinRules.KICK_MIN_MS,
+    /** One own commit per conversation at a time, shared with the membership executor. */
+    private val gate: MlsCommitGate = MlsCommitGate(),
 ) {
     private val b64 = Base64.getEncoder()
     private val dec = Base64.getDecoder()
@@ -286,6 +288,10 @@ class MlsUpgrader(
             claimed
         }
         val members = usable.map { ClaimedKeyPackage(DeviceRef(it.userId, it.deviceId!!), dec.decode(it.keyPackage)) }
+        return gate.withCommit(conversationId, mls) { commitCreate(mls, conversationId, generation, members) }
+    }
+
+    private suspend fun commitCreate(mls: MlsEngine, conversationId: String, generation: Long, members: List<ClaimedKeyPackage>): E2eeState {
         val pc = mls.createGroup(conversationId, generation, members)
         val req = MlsCommitRequest(
             generation = pc.generation, epoch = pc.epoch, commit = b64.encodeToString(pc.commit),

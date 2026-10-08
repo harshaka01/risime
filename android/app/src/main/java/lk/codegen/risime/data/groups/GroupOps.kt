@@ -11,6 +11,7 @@ import lk.codegen.risime.data.db.GroupOpDao
 import lk.codegen.risime.data.db.GroupOpEntity
 import lk.codegen.risime.data.mls.ClaimedKeyPackage
 import lk.codegen.risime.data.mls.DeviceRef
+import lk.codegen.risime.data.mls.MlsCommitGate
 import lk.codegen.risime.data.mls.MlsEngine
 import lk.codegen.risime.data.mls.MlsPolicyException
 import lk.codegen.risime.data.mls.PendingCommit
@@ -111,8 +112,17 @@ class GroupOpsExecutor(
     private val inlineMaxBytes: Int = INLINE_MAX_BYTES,
     /** §18.7: opens an [IconPayload]'s sealed icon object (null = can't: the op fails). */
     private val openIcon: (conversationId: String, sealed: ByteArray) -> kotlinx.serialization.json.JsonElement? = { _, _ -> null },
+    /** One own commit per conversation at a time, shared with the DM executors (no staged commit outlives its attempt). */
+    private val gate: MlsCommitGate = MlsCommitGate(log),
 ) {
     private val lock = Mutex()
+
+    /**
+     * Key packages claimed for a server op whose commit hasn't landed yet, by op id: a retry reuses
+     * them instead of claiming (consuming) more of the target's (memory only; dropped when the op
+     * ends or the core refuses to build with them).
+     */
+    private val claimed = java.util.concurrent.ConcurrentHashMap<String, List<ClaimedDevice>>()
     private val enc = Base64.getEncoder()
     private val dec = Base64.getDecoder()
 
@@ -122,28 +132,43 @@ class GroupOpsExecutor(
      */
     suspend fun runDue(): Long? = lock.withLock {
         for (op in ops.due(clock())) {
-            val outcome = runCatching { execute(op) }.getOrElse { t ->
-                log("group op ${op.type} threw: ${t.javaClass.simpleName}: ${t.message}")
-                OpOutcome.Retry(t.javaClass.simpleName, 30_000)
+            val outcome = try {
+                execute(op)
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c // the gate has dropped any staged commit; the op stays due
+            } catch (t: Exception) {
+                OpOutcome.Retry("${t.javaClass.simpleName}: ${t.message}", 30_000)
             }
             val fresh = ops.get(op.id) ?: op
+            val attempt = fresh.attempts + 1
+            when (outcome) {
+                OpOutcome.Done -> if (fresh.attempts > 0) log("group op ${op.type} ${tag(op)} done on attempt $attempt")
+                is OpOutcome.Failed -> log("group op ${op.type} ${tag(op)} attempt $attempt failed: ${outcome.reason}")
+                is OpOutcome.Retry -> log("group op ${op.type} ${tag(op)} attempt $attempt/$maxAttempts: ${outcome.reason}")
+            }
+            // A retried op keeps its first error (the cause; later ones are often its consequence).
+            val firstError = fresh.lastError
             val next = when (outcome) {
                 OpOutcome.Done -> fresh.copy(state = GroupOpType.DONE, lastError = null)
                 is OpOutcome.Failed -> fresh.copy(state = GroupOpType.FAILED, lastError = outcome.reason)
                 is OpOutcome.Retry -> {
-                    val attempts = fresh.attempts + 1
+                    val attempts = attempt
                     if (attempts >= maxAttempts) {
-                        fresh.copy(state = GroupOpType.FAILED, attempts = attempts, lastError = outcome.reason)
+                        val last = if (firstError == null || firstError == outcome.reason) outcome.reason else "$firstError (last: ${outcome.reason})"
+                        fresh.copy(state = GroupOpType.FAILED, attempts = attempts, lastError = last)
                     } else {
-                        fresh.copy(attempts = attempts, nextAt = clock() + outcome.afterMs * (1L shl (attempts - 1).coerceAtMost(6)), lastError = outcome.reason)
+                        fresh.copy(attempts = attempts, nextAt = clock() + outcome.afterMs * (1L shl (attempts - 1).coerceAtMost(6)), lastError = firstError ?: outcome.reason)
                     }
                 }
             }
+            if (next.state != GroupOpType.QUEUED) op.opId?.let { claimed.remove(it) }
             ops.update(next)
             if (next.state == GroupOpType.FAILED) onFailed(next)
         }
         ops.queued().minOfOrNull { it.nextAt }
     }
+
+    private fun tag(op: GroupOpEntity) = op.opId?.take(8) ?: "#${op.id}"
 
     /** A failed local action is rolled back where the UI already showed it (leave is immediate locally). */
     private suspend fun onFailed(op: GroupOpEntity) {
@@ -188,14 +213,20 @@ class GroupOpsExecutor(
                 val p = ProtocolJson.decodeFromString(RolePayload.serializer(), op.payloadJson)
                 net(api.setRole(op.conversationId!!, p.userId, p.role)) { g -> afterReply(g, myId) }
             }
-            GroupOpType.RENAME -> rename(op, myId)
-            GroupOpType.ICON -> icon(op, myId)
-            GroupOpType.COMMIT -> commitServerOp(op, myId)
+            GroupOpType.RENAME -> committing(op) { rename(op, myId) }
+            GroupOpType.ICON -> committing(op) { icon(op, myId) }
+            GroupOpType.COMMIT -> committing(op) { commitServerOp(op, myId) }
             GroupOpType.REJOIN -> rejoin(op, myId)
             // v1.21: an automatic reset queued by an older app version (the only admin's) is a rejoin now.
             GroupOpType.RESET -> if (automatic(op)) rejoin(op, myId) else manualReset(op)
             else -> OpOutcome.Failed("unknown op type ${op.type}")
         }
+    }
+
+    /** An op that builds a commit for its conversation: under the conversation's commit gate. */
+    private suspend fun committing(op: GroupOpEntity, block: suspend () -> OpOutcome): OpOutcome {
+        val mls = engine() ?: return OpOutcome.Retry("no MLS core", 60_000)
+        return gate.withCommit(op.conversationId!!, mls, block)
     }
 
     /**
@@ -312,21 +343,40 @@ class GroupOpsExecutor(
             if (mls.group(conv) == null) store.queueLocal(conv, GroupOpType.REJOIN)
             return OpOutcome.Done
         }
-        val claimed = when (val r = api.claim((p.memberIds + myId).distinct(), null)) {
-            is ApiResult.Ok -> r.value
-            is ApiResult.Error -> return errorOutcome(r)
-            is ApiResult.NetworkError -> return OpOutcome.Retry("network", 5_000)
+        return gate.withCommit(conv, mls) {
+            val claimed = when (val r = api.claim((p.memberIds + myId).distinct(), null)) {
+                is ApiResult.Ok -> r.value
+                is ApiResult.Error -> return@withCommit errorOutcome(r)
+                is ApiResult.NetworkError -> return@withCommit OpOutcome.Retry("network", 5_000)
+            }
+            val kps = keyPackages(claimed) ?: return@withCommit OpOutcome.Retry("no_key_package", 30_000)
+            val meta = GroupMeta(name = p.name, admins = listOf(myId))
+            val pc = tx.run {
+                if (mls.group(conv) != null) mls.deleteGroup(conv) // a stale local epoch 0 from a crashed attempt
+                mls.createGroupWithMeta(conv, group.generation, kps, meta)
+            }
+            submit(conv, pc, opId = null, metaChanged = false, myId = myId, onConflict = {
+                // epoch 0 taken: an earlier attempt of ours landed. Re-read; rejoin if we lost the state.
+                OpOutcome.Retry(AuthErrors.EPOCH_CONFLICT, 1_000)
+            })
         }
-        val kps = keyPackages(claimed) ?: return OpOutcome.Retry("no_key_package", 30_000)
-        val meta = GroupMeta(name = p.name, admins = listOf(myId))
-        val pc = tx.run {
-            if (mls.group(conv) != null) mls.deleteGroup(conv) // a stale local epoch 0 from a crashed attempt
-            mls.createGroupWithMeta(conv, group.generation, kps, meta)
-        }
-        return submit(conv, pc, opId = null, metaChanged = false, myId = myId, onConflict = {
-            // epoch 0 taken: an earlier attempt of ours landed. Re-read; rejoin if we lost the state.
-            OpOutcome.Retry(AuthErrors.EPOCH_CONFLICT, 1_000)
-        })
+    }
+
+    /**
+     * §12.5 claim for a server op, reusing what an earlier attempt of the same op claimed (its
+     * commit never landed, so those key packages are unused) when it covers [userIds].
+     */
+    private suspend fun claimFor(opId: String, userIds: List<String>, conv: String): ApiResult<List<ClaimedDevice>> {
+        claimed[opId]?.let { c -> if (userIds.all { u -> c.any { it.userId.equals(u, true) } }) return ApiResult.Ok(c) }
+        val r = api.claim(userIds, conv)
+        if (r is ApiResult.Ok) claimed[opId] = r.value
+        return r
+    }
+
+    /** A device came back without a key package: claim afresh on the retry (it may have uploaded some). */
+    private fun noKeyPackage(opId: String): OpOutcome {
+        claimed.remove(opId)
+        return OpOutcome.Retry("no_key_package", 30_000)
     }
 
     /** Claimed devices → key packages; null if any device came back without one (try later). */
@@ -378,13 +428,13 @@ class GroupOpsExecutor(
         val pc: PendingCommit = try {
             when (pending.type) {
                 PendingOp.ADD -> {
-                    val claimed = when (val r = api.claim(pending.userIds, conv)) {
+                    val claimed = when (val r = claimFor(pending.opId, pending.userIds, conv)) {
                         is ApiResult.Ok -> r.value
                         is ApiResult.Error -> return errorOutcome(r)
                         is ApiResult.NetworkError -> return OpOutcome.Retry("network", 5_000)
                     }
                     val have = mls.members(conv).map { it.deviceId.lowercase() }.toSet()
-                    val kps = keyPackages(claimed.filter { it.deviceId?.lowercase() !in have }) ?: return OpOutcome.Retry("no_key_package", 30_000)
+                    val kps = keyPackages(claimed.filter { it.deviceId?.lowercase() !in have }) ?: return noKeyPackage(pending.opId)
                     if (kps.isEmpty()) return OpOutcome.Retry("nothing to add yet", 30_000)
                     tx.run { mls.changeGroupMembers(conv, kps, emptyList()) }
                 }
@@ -411,15 +461,15 @@ class GroupOpsExecutor(
                         }
                     }
                     val addUsers = pending.added.map { it.userId }.distinct()
-                    val claimed = if (addUsers.isEmpty()) emptyList() else when (val r = api.claim(addUsers, conv)) {
+                    val claimed = if (addUsers.isEmpty()) emptyList() else when (val r = claimFor(pending.opId, addUsers, conv)) {
                         is ApiResult.Ok -> r.value
                         is ApiResult.Error -> return errorOutcome(r)
                         is ApiResult.NetworkError -> return OpOutcome.Retry("network", 5_000)
                     }
                     val wanted = pending.added.map { it.deviceId.lowercase() }.toSet()
-                    val kps = keyPackages(claimed.filter { it.deviceId?.lowercase() in wanted }) ?: return OpOutcome.Retry("no_key_package", 30_000)
+                    val kps = keyPackages(claimed.filter { it.deviceId?.lowercase() in wanted }) ?: return noKeyPackage(pending.opId)
                     // §12.4a: the member path must match the op's `added` exactly (the server rejects a subset).
-                    if (memberPath && kps.map { it.device.deviceId.lowercase() }.toSet() != wanted) return OpOutcome.Retry("no_key_package", 30_000)
+                    if (memberPath && kps.map { it.device.deviceId.lowercase() }.toSet() != wanted) return noKeyPackage(pending.opId)
                     val present = leaves.map { it.deviceId.lowercase() }.toSet()
                     val remove = pending.removed.filter { it.deviceId.lowercase() in present }.map { DeviceRef(it.userId, it.deviceId) }
                     if (kps.isEmpty() && remove.isEmpty()) return OpOutcome.Done
@@ -427,7 +477,7 @@ class GroupOpsExecutor(
                 }
                 PendingOp.REBUILD -> {
                     val members = g.members.filter { it.state == GroupMember.STATE_ACTIVE }.map { it.userId }
-                    val claimed = when (val r = api.claim((members + myId).distinct(), conv)) {
+                    val claimed = when (val r = claimFor(pending.opId, (members + myId).distinct(), conv)) {
                         is ApiResult.Ok -> r.value
                         is ApiResult.Error -> return errorOutcome(r)
                         is ApiResult.NetworkError -> return OpOutcome.Retry("network", 5_000)
@@ -444,6 +494,8 @@ class GroupOpsExecutor(
                 }
                 else -> return OpOutcome.Failed("unknown op ${pending.type}")
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: UnsupportedOperationException) {
             return OpOutcome.Failed("unsupported")
         } catch (e: MlsPolicyException) {
@@ -452,7 +504,9 @@ class GroupOpsExecutor(
             log("group op ${pending.opId} refused by the core: ${e.message}")
             return OpOutcome.Failed("policy: ${e.message}")
         } catch (e: Exception) {
-            // The core refused to build it (policy, unknown member …): a peer or the server is out of step.
+            // The core refused to build it (policy, unknown member, a bad key package …): a peer or the
+            // server is out of step. Claim afresh next time.
+            claimed.remove(pending.opId)
             return OpOutcome.Retry("build: ${e.message}", 30_000)
         }
         return submit(conv, pc, opId = pending.opId, metaChanged = pc.metaChanged, myId = myId)

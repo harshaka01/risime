@@ -1,5 +1,24 @@
 # Android status — 0.2 nightlies
 
+## Fix: a member never commits a reinstalled admin's group re-add ("a commit is already pending") — READY
+- **Cause (reinstall gate, nightly.30/31, C's evidence):** the group-op runner is `groupOpsRun.collectLatest { runDue() }`, and
+  every `syncGroups()` kicks it (C syncs twice on start: on Live and again after MLS registration). A kick **cancels** a running
+  pass. C's first attempt claimed A's key package, built the commit (staged in the core, persisted by Room's transaction), and was
+  cancelled before the POST: no reject on that path, so the staged commit stayed. Every later attempt claimed (burned) another of
+  A's key packages and failed `build: a commit is already pending for this group`; a staged commit also blocks `encrypt` in that
+  group. `runDue`'s `runCatching` swallowed the cancellation and only the last error was kept. The DM re-add is a separate MLS
+  group (no shared state; the core serialises its calls); its traffic only made the cancelling kick likely.
+- **Fix:** `MlsCommitGate` (per conversation, shared by the group outbox, the DM membership/op executor and the DM upgrade): one
+  own commit at a time from build to the server's answer; a staged commit left when the attempt ends (exception, cancellation) is
+  dropped (`commitRejected`, in `NonCancellable`); one found on entry is stale and dropped; a start-up sweep over DMs and groups
+  drops leftovers from older builds. `MlsEngine.hasPendingCommit` (FFI's existing `has_pending_commit`; no crypto change). The
+  runner no longer cancels a running pass (only its wait); `runDue` rethrows cancellation. A server op's retries reuse its claimed
+  key packages (memory, by op id; dropped on build refusal/no key package/op end). Every attempt is logged
+  (`group op commit <op> attempt n/8: <reason>`); `last_error` keeps the first error (`first (last: …)` on exhaustion).
+- **Tests:** `ConcurrentReAddTest` (real core): DM re-add and group re-add of the same user at once, with an exception and with a
+  cancellation between build and submit; on the old code both fail (`claims=2 lastError=build: a commit is already pending for
+  this group`). Plus a stale-commit start-up sweep and `retriesKeepTheFirstErrorAndReuseTheClaimedKeyPackages`.
+
 ## P0-3 video calls: no sound / speaker button greyed out — READY (real phones to confirm)
 **READY.** Commits `eb25ada` (calls/) and `2c225cd` (root script `call-device-test`, changed for this task).
 - **Cause:** core-telecom 1.0.1's `availableEndpoints`/`currentCallEndpoint` are `Channel.receiveAsFlow()` (each value reaches

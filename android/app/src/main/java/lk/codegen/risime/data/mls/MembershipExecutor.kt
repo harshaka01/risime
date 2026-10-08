@@ -24,6 +24,8 @@ sealed interface MembershipOutcome {
 class MembershipExecutor(
     private val engine: () -> MlsEngine?,
     private val api: MlsApi,
+    /** One own commit per conversation at a time, shared with the group outbox and the DM upgrade. */
+    private val gate: MlsCommitGate = MlsCommitGate(),
     private val catchUp: suspend (String) -> Unit,
 ) {
     private val enc = Base64.getEncoder()
@@ -31,6 +33,16 @@ class MembershipExecutor(
 
     suspend fun execute(a: MembershipAction, retried: Boolean = false): MembershipOutcome {
         val mls = engine() ?: return MembershipOutcome.NotNeeded
+        val conv = a.event.conversationId
+        val r = gate.withCommit(conv, mls) { executeOnce(mls, a) }
+        if (r is MembershipOutcome.Failed && r.reason == AuthErrors.EPOCH_CONFLICT && !retried) {
+            catchUp(conv) // someone else's commit may already have done it
+            return execute(a, retried = true)
+        }
+        return r
+    }
+
+    private suspend fun executeOnce(mls: MlsEngine, a: MembershipAction): MembershipOutcome {
         val e = a.event
         val conv = e.conversationId
         mls.group(conv) ?: return MembershipOutcome.NotNeeded
@@ -62,12 +74,7 @@ class MembershipExecutor(
             }
             is ApiResult.Error -> {
                 mls.commitRejected(conv)
-                if (r.code == AuthErrors.EPOCH_CONFLICT && !retried) {
-                    catchUp(conv) // someone else's commit may already have done it
-                    execute(a, retried = true)
-                } else {
-                    MembershipOutcome.Failed(r.code)
-                }
+                MembershipOutcome.Failed(r.code)
             }
             is ApiResult.NetworkError -> {
                 mls.commitRejected(conv)
@@ -84,6 +91,15 @@ class MembershipExecutor(
      */
     suspend fun executeOp(e: MlsDmOpEvent, retried: Boolean = false): MembershipOutcome {
         val mls = engine() ?: return MembershipOutcome.NotNeeded
+        val r = gate.withCommit(e.conversationId, mls) { executeOpOnce(mls, e) }
+        if (r is MembershipOutcome.Failed && r.reason == AuthErrors.EPOCH_CONFLICT && !retried) {
+            catchUp(e.conversationId) // someone else's commit may already have done part of it
+            return executeOp(e, retried = true)
+        }
+        return r
+    }
+
+    private suspend fun executeOpOnce(mls: MlsEngine, e: MlsDmOpEvent): MembershipOutcome {
         val op = e.op
         val conv = e.conversationId
         val committer = op.committer ?: return MembershipOutcome.NotNeeded
@@ -100,7 +116,7 @@ class MembershipExecutor(
             val gone = readd.filter { r -> present.any { same(r, it) } }.map { it.ref() }
             if (gone.isNotEmpty()) {
                 val pc = runCatching { mls.changeMembers(conv, emptyList(), gone) }.getOrElse { return MembershipOutcome.Failed("remove: ${it.message}") }
-                when (val o = submit(conv, pc, op.opId)) { null -> did = true; else -> return retryOr(e, retried, o) }
+                when (val o = submit(conv, pc, op.opId)) { null -> did = true; else -> return MembershipOutcome.Failed(o) }
             }
         }
         // (b) the adds (new devices, and re-adds whose old leaf is gone now).
@@ -116,7 +132,7 @@ class MembershipExecutor(
                     ClaimedKeyPackage(m.ref(), dec.decode(c.keyPackage))
                 }
                 val pc = runCatching { mls.changeMembers(conv, kps, emptyList()) }.getOrElse { return MembershipOutcome.Failed("add: ${it.message}") }
-                when (val o = submit(conv, pc, op.opId)) { null -> did = true; else -> return retryOr(e, retried, o) }
+                when (val o = submit(conv, pc, op.opId)) { null -> did = true; else -> return MembershipOutcome.Failed(o) }
             }
         }
         // (c) the user's superseded leaves.
@@ -125,7 +141,7 @@ class MembershipExecutor(
             val stale = op.removed.filter { r -> readd.none { it == r } && present.any { same(r, it) } }.map { it.ref() }
             if (stale.isNotEmpty()) {
                 val pc = runCatching { mls.changeMembers(conv, emptyList(), stale) }.getOrElse { return MembershipOutcome.Failed("remove: ${it.message}") }
-                when (val o = submit(conv, pc, op.opId)) { null -> did = true; else -> return retryOr(e, retried, o) }
+                when (val o = submit(conv, pc, op.opId)) { null -> did = true; else -> return MembershipOutcome.Failed(o) }
             }
         }
         return if (did) MembershipOutcome.Done else MembershipOutcome.NotNeeded
@@ -146,12 +162,4 @@ class MembershipExecutor(
     }
 
     private fun mls(@Suppress("UNUSED_PARAMETER") conv: String) = engine()
-
-    private suspend fun retryOr(e: MlsDmOpEvent, retried: Boolean, code: String): MembershipOutcome =
-        if (code == AuthErrors.EPOCH_CONFLICT && !retried) {
-            catchUp(e.conversationId) // someone else's commit may already have done part of it
-            executeOp(e, retried = true)
-        } else {
-            MembershipOutcome.Failed(code)
-        }
 }

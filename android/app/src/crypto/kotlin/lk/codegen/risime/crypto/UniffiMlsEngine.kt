@@ -132,6 +132,11 @@ class UniffiMlsEngine(
         if (!client.hasGroup(g)) setGeneration(conversationId, null)
     }
 
+    override fun hasPendingCommit(conversationId: String): Boolean = tx {
+        val (_, g) = current(conversationId) ?: return@tx false
+        client.hasPendingCommit(g)
+    }
+
     override fun processCommit(conversationId: String, generation: Long, commit: ByteArray): CommitOutcome = tx {
         val g = gid(conversationId, generation)
         try {

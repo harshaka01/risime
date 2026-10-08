@@ -43,6 +43,8 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
 
     val hasPending: Boolean get() = pendingCommits.isNotEmpty()
 
+    override fun hasPendingCommit(conversationId: String): Boolean = conversationId in pendingCommits
+
     override fun processCommit(conversationId: String, generation: Long, commit: ByteArray): CommitOutcome {
         val note = commit.decodeToString().substringAfter('|')
         processed += note

@@ -206,7 +206,9 @@ class AppContainer(
     }
     /** §10.3 `mls_membership` seen (any conversation): open chats that aren't E2EE re-check readiness (P0-1). */
     val mlsMembershipSeen = kotlinx.coroutines.flow.MutableSharedFlow<lk.codegen.risime.net.MlsMembershipEvent>(extraBufferCapacity = 16)
-    val membershipExecutor by lazy { MembershipExecutor({ mlsEngine }, mlsApi) { conv -> catchUpCommits(conv) } }
+    /** One own MLS commit per conversation at a time across the group outbox and the DM executors (no staged commit outlives its attempt). */
+    private val commitGate = lk.codegen.risime.data.mls.MlsCommitGate { Log.w("RisiMe", it) }
+    val membershipExecutor by lazy { MembershipExecutor({ mlsEngine }, mlsApi, commitGate) { conv -> catchUpCommits(conv) } }
     val mlsPipeline by lazy {
         MlsPipeline(
             { mlsEngine }, db.mlsPending(),
@@ -234,7 +236,7 @@ class AppContainer(
             onParkedAhead = { conv -> scope.launch { catchUpCommits(conv) } },
         )
     }
-    val mlsUpgrader by lazy { MlsUpgrader({ mlsEngine }, mlsApi) }
+    val mlsUpgrader by lazy { MlsUpgrader({ mlsEngine }, mlsApi, gate = commitGate) }
 
     /** v1.16: DM repairs in flight (one per conversation; later kicks while it runs are dropped). */
     private val dmRepairs = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -418,6 +420,7 @@ class AppContainer(
             catchUp = { conv -> catchUpCommits(conv) },
             log = { Log.i("RisiMe", it) },
             openIcon = { conv, sealed -> openGroupIcon(conv, sealed) },
+            gate = commitGate,
         )
     }
 
@@ -533,6 +536,14 @@ class AppContainer(
             runCatching { calls.onGroupChanged(conv) }
         }
         mlsChanged.tryEmit(Unit)
+        // Recovery: a commit staged by an earlier run that never reached the server blocks every
+        // later commit (and sends) in that chat; nothing of ours is in flight yet.
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val dropped = commitGate.sweep(engine, photoConversations())
+                if (dropped.isNotEmpty()) Log.w("RisiMe", "mls: dropped ${dropped.size} stale staged commit(s) at start-up")
+            }.onFailure { Log.w("RisiMe", "mls: start-up staged-commit check failed: ${it.javaClass.simpleName}") }
+        }
         return when (val r = deviceRegistrar.register(runCatching { push.currentToken() }.getOrNull())) {
             is Registration.Mls -> {
                 Log.i("RisiMe", "MLS device registered, ${r.keyPackages} key packages")
@@ -1046,10 +1057,12 @@ class AppContainer(
         // The group-op outbox: one runner; a queued retry re-arms the timer.
         scope.launch {
             groupOpsRun.collectLatest {
-                var nextAt = runCatching { groupOps.runDue() }.getOrNull()
+                // A new kick cancels only the wait: a pass that is building or submitting a commit runs to
+                // its end (cancelling it there used to leave a staged commit behind).
+                var nextAt = withContext(NonCancellable) { runCatching { groupOps.runDue() }.getOrNull() }
                 while (nextAt != null) {
                     delay((nextAt - System.currentTimeMillis()).coerceAtLeast(250))
-                    nextAt = runCatching { groupOps.runDue() }.getOrNull()
+                    nextAt = withContext(NonCancellable) { runCatching { groupOps.runDue() }.getOrNull() }
                 }
             }
         }

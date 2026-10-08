@@ -39,6 +39,9 @@ interface MlsEngine {
     /** 409 or any failure: drop the pending commit (and, at epoch 0, the local group). */
     fun commitRejected(conversationId: String)
 
+    /** True while an own commit is built but neither accepted nor rejected (it blocks building another, and encrypting). */
+    fun hasPendingCommit(conversationId: String): Boolean = false
+
     /** Apply someone else's commit (PublicMessage) at the group's current epoch. */
     fun processCommit(conversationId: String, generation: Long, commit: ByteArray): CommitOutcome
 
