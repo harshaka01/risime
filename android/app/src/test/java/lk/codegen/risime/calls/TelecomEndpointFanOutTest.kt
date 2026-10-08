@@ -27,6 +27,11 @@ class TelecomEndpointFanOutTest {
     private val earpiece = Ep(CallEndpointCompat.TYPE_EARPIECE)
     private val speaker = Ep(CallEndpointCompat.TYPE_SPEAKER)
 
+    /** The route policy (a video call, active) on the tracker's copies; the endpoint to request, or null. */
+    private fun target(available: List<Ep>, current: Ep?, userPicked: Boolean): Ep? =
+        routeTarget(true, CallPhase.ACTIVE, available.map { telecomKind(it.type) }.toSet(), current?.let { telecomKind(it.type) }, userPicked)
+            .target?.let { k -> available.firstOrNull { telecomKind(it.type) == k } }
+
     /** Telecom's side: unlimited channels read as flows, as core-telecom 1.0.1 does. */
     private class FakeTelecom {
         val availableCh = Channel<List<Ep>>(Channel.UNLIMITED)
@@ -46,7 +51,7 @@ class TelecomEndpointFanOutTest {
                 scope.launch { telecom.currentCh.send(earpiece) }
                 val tracker = EndpointTracker(telecom.available, telecom.current)
                 tracker.start(scope) {
-                    videoSpeakerTarget(true, CallPhase.ACTIVE, tracker.endpoints.value, tracker.current.value, userPicked = false) { it.type }
+                    target(tracker.endpoints.value, tracker.current.value, userPicked = false)
                         ?.let(telecom::requestEndpointChange)
                 }
                 val ok = withTimeoutOrNull(2_000) {
@@ -69,7 +74,7 @@ class TelecomEndpointFanOutTest {
             try {
                 val tracker = EndpointTracker(telecom.available, telecom.current)
                 tracker.start(scope) {
-                    videoSpeakerTarget(true, CallPhase.ACTIVE, tracker.endpoints.value, tracker.current.value, userPicked.value) { it.type }
+                    target(tracker.endpoints.value, tracker.current.value, userPicked.value)
                         ?.let(telecom::requestEndpointChange)
                 }
                 telecom.availableCh.send(listOf(earpiece, speaker))

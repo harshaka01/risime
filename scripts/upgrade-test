@@ -1058,6 +1058,16 @@ PY
     if [ "$RESTORE_FILE" = 0 ]; then
       tap "^Restore" || fail "restore: no Restore button on the gate"
       enter_key_and_restore || fail "restore: the recovery key dialog"
+    elif has 'text="Restore from file"'; then
+      # n32+: the gate offers "Restore from file" itself.
+      tap "Restore from file" || fail "restore: the gate's \"Restore from file\""
+      pick_backup_file || fail "restore: picking $BK_FILE"
+      enter_key_and_restore || fail "restore: the recovery key dialog (file)"
+      # From the gate the app may go straight to the chat list (the logcat check below still applies).
+      for _ in $(seq 1 90); do dump; grep -q 'Restored [0-9]* messages' "$WORK/ui.xml" && break; on_chat_list && break; sleep 2; done
+      if grep -q 'Restored [0-9]* messages' "$WORK/ui.xml"; then
+        echo "    \"$(grep -oE 'Restored [0-9]+ messages\.' "$WORK/ui.xml" | sed -n 1p)\""; tap "!OK" || true; sleep 1
+      fi
     else
       tap "^Skip" && wait_for 'text="Skip restore?"' 10 && tap "!Skip" || fail "restore: could not skip the gate"
       open_backups || fail "restore: Settings → Manage backups after skipping the gate"

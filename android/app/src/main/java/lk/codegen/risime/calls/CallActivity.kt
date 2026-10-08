@@ -18,7 +18,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
-import androidx.core.telecom.CallEndpointCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import lk.codegen.risime.MainActivity
@@ -84,8 +83,7 @@ class CallActivity : ComponentActivity() {
             RisiMeTheme { androidx.compose.runtime.CompositionLocalProvider(lk.codegen.risime.ui.common.LocalAvatars provides avatars()) {
                 val s by calls.state.collectAsStateWithLifecycle()
                 val blind by calls.blindRing.collectAsStateWithLifecycle()
-                val endpoints by calls.endpoints.collectAsStateWithLifecycle()
-                val current by calls.currentEndpoint.collectAsStateWithLifecycle()
+                val routes by calls.routes.collectAsStateWithLifecycle()
                 var name by remember { mutableStateOf("") }
                 var tick by remember { mutableLongStateOf(0L) }
                 // The peer (1:1), "Kamal · Pilot team" while a group call rings, else the group's name (§20.4).
@@ -125,8 +123,8 @@ class CallActivity : ComponentActivity() {
                                 name = name,
                                 status = snap.notice?.let { CallTexts.notice(it, name) } ?: CallTexts.status(snap.phase, snap.connectedAtMs, video = snap.video).orEmpty(),
                                 muted = snap.muted,
-                                endpoints = endpoints.map(::ui),
-                                current = current?.let(::ui),
+                                endpoints = routes.available,
+                                current = routes.current,
                                 verified = snap.verified,
                                 ended = snap.phase == CallPhase.ENDED,
                                 photoKey = if (snap.group) snap.conversationId else snap.peerUserId,
@@ -136,10 +134,7 @@ class CallActivity : ComponentActivity() {
                                 GroupParticipantList(snap.members.map { m -> groupMemberUi(m, memberNames[m.userId] ?: "…") })
                             }) else null,
                             onMute = calls::setMuted,
-                            onEndpoint = { e ->
-                                val match = endpoints.firstOrNull { it.identifier.toString() == e.id }
-                                if (match != null) calls.selectEndpoint(match) else calls.selectFallbackRoute(e.kind == EndpointUi.Kind.SPEAKER)
-                            },
+                            onEndpoint = calls::selectRoute,
                             onEnd = calls::hangUp,
                             video = if (snap.group) {
                                 calls.groupSession()?.takeIf { snap.video && snap.phase != CallPhase.ENDED }?.let { sess -> { GroupVideoGrid(sess, snap, memberNames) } }
@@ -269,15 +264,4 @@ class CallActivity : ComponentActivity() {
         startActivity(Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_BLIND_ANSWER, true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
         finish()
     }
-
-    private fun ui(e: CallEndpointCompat) = EndpointUi(
-        e.identifier.toString(), e.name.toString(),
-        when (e.type) {
-            CallEndpointCompat.TYPE_EARPIECE -> EndpointUi.Kind.EARPIECE
-            CallEndpointCompat.TYPE_SPEAKER -> EndpointUi.Kind.SPEAKER
-            CallEndpointCompat.TYPE_WIRED_HEADSET -> EndpointUi.Kind.WIRED
-            CallEndpointCompat.TYPE_BLUETOOTH -> EndpointUi.Kind.BLUETOOTH
-            else -> EndpointUi.Kind.OTHER
-        },
-    )
 }
