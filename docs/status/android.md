@@ -1,5 +1,38 @@
 # Android status — 0.2 nightlies
 
+## v1.21 reinstalls without reset, and stale leaves (§12.12, decision 060) — READY
+**READY.** P0-2 (a reinstalled only admin reset its groups; DMs reset 2 minutes after a reinstall).
+- **Groups:** `rejoinPlan` lost its `RESET` branch: every device without state for the current generation rejoins,
+  the only admin included. The reset decision now comes from the rejoin reply (`GroupRejoinReply`: `op`, `candidates`,
+  `exhausted`) via `RejoinRules.group`: admin devices only, when `exhausted`, or `candidates: 0` for 24 h after the op's
+  `created_at`; non-admins never; a reply without `candidates` (pre-v1.21 server) never. An automatic `reset` row queued
+  by an older app before the update runs as a rejoin. `409 rejoin_pending` on the last-resort reset = keep waiting (op
+  done, not failed). Rejoin again on sync/reconnect, on chat open and every 15 min while the waiting chat is open.
+- **DMs:** the 120-s `RESET_AFTER_MS` timer is gone. `RejoinRules.dm`: reset only for `candidates: 0` or `exhausted`
+  (absent = false); otherwise wait with no timeout. Rejoin on a kick (open/resume/reconnect, ≥ 20 s apart) and at most
+  every 15 min otherwise. `409 rejoin_pending` keeps waiting; `generation_conflict` re-checks.
+- **Texts:** "Setting up encryption on this phone…", plus "Waiting for <name> to open RisiMe" (DM, new state
+  `E2eeState.RepairWaiting`) / "Waiting for a group member to open RisiMe" (group strip) once the reply has a candidate and
+  no committer is online, or after a minute. The group composer stays on while rejoining (it used to be disabled): sends
+  stay pending in the outbox and go out after the Welcome, never failed.
+- **Cleanup ops (§12.12.6):** the executor commits a `devices` op with `added: []` named to this device: its own old
+  leaves (any role) or, for admins, another user's; no claim, no Welcome. A member never commits another user's cleanup
+  op (H1, reported as policy); a cleanup op listing this very device is never committed.
+- **Manual reset:** group info "Reset encryption" (admins) with the §12.12.3 confirmation text; disabled while this phone
+  waits to be re-added; a `409 rejoin_pending` shows "This phone is still being re-added to the group. Try again later."
+  and queues a rejoin.
+- **Hard rule 9:** no path deletes messages; the reset path is the unchanged `onReset` (MLS group + parked events only).
+  No Room schema change (the waiting state is in memory; a restart asks the server again).
+- **Gates:** `./gradlew assembleDebug testDebugUnitTest` green: **730** JVM tests, 0 failed (8 skipped). New tests cover
+  every decision branch (`DmRepairTest`, `GroupOpsExecutorTest`, `GroupStoreTest`, `GroupLogicTest`), and
+  ContractExamplesTest now types all seven v1.21/v1.16 DM-op examples (no placeholders left for v1.21).
+- **For root's upgrade gate:** (1) the only admin of a 3-member group reinstalls with one member online → the new phone
+  shows "Setting up encryption…", is re-added by the member, **no generation change** (`GET /mls/groups/{grp}` generation
+  unchanged, no "Encryption was reset" line on any phone), both directions work; (2) a DM whose peer stays offline ≥ 10 min
+  after the other side reinstalls → no reset, the strip says "Waiting for <name> to open RisiMe", the queued message is
+  pending (clock) and arrives once the peer opens the app; (3) per-conversation message counts unchanged (hard rule 9);
+  (4) with `STALE_LEAF_HOURS` lowered, the old leaf is removed by the user's own new phone (or an admin).
+
 ## v1.19 group calls with LiveKit, voice and video (§20) — READY
 **READY.** Commits `f885238` (receive side: group `call:signal`, `group_call` lines, rooms API models), `8200e58`
 (livekit-android 2.29.0, `callFrameKeys`, FrameKeyRing, GroupCallMachine), `52d6dbf` (LiveKit SFU, CallManager/Telecom

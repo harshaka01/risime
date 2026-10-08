@@ -125,8 +125,8 @@ class ApiClient(
     suspend fun setGroupRole(id: String, userId: String, role: String, deviceId: String): ApiResult<GroupReply> =
         call("PATCH", "groups/$id/members/$userId", GroupRolePatch(role), headers = mapOf(DEVICE_HEADER to deviceId))
 
-    suspend fun rejoinGroup(id: String, deviceId: String): ApiResult<GroupReply> =
-        call<Unit, GroupReply>("POST", "groups/$id/rejoin", null, headers = mapOf(DEVICE_HEADER to deviceId))
+    suspend fun rejoinGroup(id: String, deviceId: String): ApiResult<GroupRejoinReply> =
+        call<Unit, GroupRejoinReply>("POST", "groups/$id/rejoin", null, headers = mapOf(DEVICE_HEADER to deviceId))
 
     suspend fun resetGroup(id: String, generation: Long, deviceId: String): ApiResult<GroupResetReply> =
         call("POST", "mls/groups/$id/reset", GroupReset(generation), headers = mapOf(DEVICE_HEADER to deviceId))

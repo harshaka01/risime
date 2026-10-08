@@ -10,12 +10,14 @@ import lk.codegen.risime.data.mls.DeviceRef
 import lk.codegen.risime.data.mls.FakeMlsEngine
 import lk.codegen.risime.data.mls.GroupRef
 import lk.codegen.risime.net.ApiResult
+import lk.codegen.risime.net.AuthErrors
 import lk.codegen.risime.net.BlobRef
 import lk.codegen.risime.net.ClaimedDevice
 import lk.codegen.risime.net.Group
 import lk.codegen.risime.net.GroupCommitRequest
 import lk.codegen.risime.net.GroupMember
 import lk.codegen.risime.net.GroupMeta
+import lk.codegen.risime.net.GroupRejoinReply
 import lk.codegen.risime.net.MlsDeviceRef
 import lk.codegen.risime.net.MlsMissing
 import lk.codegen.risime.net.PendingOp
@@ -78,8 +80,16 @@ class GroupOpsExecutorTest {
             group = group.copy(pending = listOf(PendingOp("op-role", PendingOp.ROLE, me, listOf(userId), role = role, committer = MlsDeviceRef(me, "dev-me"))))
             return ApiResult.Ok(group)
         }
-        override suspend fun rejoin(id: String): ApiResult<Group> { calls += "rejoin"; return ApiResult.Ok(group) }
-        override suspend fun reset(id: String, generation: Long): ApiResult<Long> { calls += "reset:$generation"; return ApiResult.Ok(generation + 1) }
+        /** §12.12.2 the rejoin reply's numbers (v1.21); null candidates = a pre-v1.21 server. */
+        var rejoinCandidates: Int? = 1
+        var rejoinExhausted = false
+        var rejoinOp: PendingOp? = PendingOp("op-rj", PendingOp.DEVICES, me, added = listOf(MlsDeviceRef(me, "dev-me")), committer = MlsDeviceRef(kamal, "dev-kamal"), createdAt = "1970-01-01T00:00:01Z")
+        var resetReply: ApiResult<Long>? = null
+        override suspend fun rejoin(id: String): ApiResult<GroupRejoinReply> {
+            calls += "rejoin"
+            return ApiResult.Ok(GroupRejoinReply(group, rejoinOp, rejoinCandidates, rejoinExhausted))
+        }
+        override suspend fun reset(id: String, generation: Long): ApiResult<Long> { calls += "reset:$generation"; return resetReply ?: ApiResult.Ok(generation + 1) }
         override suspend fun claim(userIds: List<String>, conversationId: String?): ApiResult<List<ClaimedDevice>> {
             claims += userIds to conversationId
             return ApiResult.Ok(userIds.filter { it != me }.map { device(it, "dev-${it.removePrefix("u-")}") } + device(me, "dev-me2"))
@@ -325,17 +335,182 @@ class GroupOpsExecutorTest {
         assertEquals(2L, mls.group(conv)!!.generation)
     }
 
-    @Test fun rejoinAndResetCallTheServer() = runTest {
+    @Test fun rejoinAndAManualResetCallTheServer() = runTest {
         groupDao.upsert(GroupEntity(conv, "x", "admin", "active", null, null, 3, null, null, null, 1))
+        api.group = api.group.copy(state = "active", generation = 3, epoch = 2)
         queue(GroupOpType.REJOIN)
         queue(GroupOpType.RESET)
         exec.runDue()
         assertEquals(listOf("rejoin", "reset:3"), api.calls)
     }
 
+    // ---- v1.21 §12.12.3: a rejoin waits; only an admin resets, and only as the last resort ----
+
+    private val day = lk.codegen.risime.data.mls.RejoinRules.NO_CANDIDATE_RESET_MS
+    private val auto = ProtocolJson.encodeToString(RejoinPayload.serializer(), RejoinPayload(ifMissing = true))
+
+    /** I'm the only admin of an active group and this device holds no state for it (a reinstall). */
+    private suspend fun reinstalledOnlyAdmin() {
+        api.group = api.group.copy(state = "active", epoch = 9, myRole = GroupMember.ROLE_ADMIN, members = listOf(member(me, "admin"), member(kamal)))
+        groupDao.upsert(GroupEntity(conv, "Pilot team", "admin", "active", null, null, 1, null, null, null, 1))
+    }
+
+    @Test fun theReinstalledOnlyAdminRejoinsAndWaitsWhileAMemberCanReAddIt() = runTest {
+        reinstalledOnlyAdmin()
+        val id = queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertEquals(listOf("rejoin"), api.calls) // no reset, no generation change
+        assertEquals(GroupOpType.DONE, opsDao.rows[id]!!.state)
+        val w = store.rejoinWaits.value[conv]!!
+        assertEquals(1, w.candidates)
+        assertTrue(w.committerNamed)
+        assertFalse(w.waitingForOthers(now)) // a committer is named: "Setting up encryption on this phone…"
+        assertTrue(w.waitingForOthers(now + 60_000)) // nothing landed for a minute: "Waiting for a group member…"
+    }
+
+    @Test fun anOldAutomaticResetRowIsARejoinNow() = runTest {
+        reinstalledOnlyAdmin()
+        val id = queue(GroupOpType.RESET, auto) // queued by a pre-v1.21 app before the update
+        exec.runDue()
+        assertEquals(listOf("rejoin"), api.calls)
+        assertEquals(GroupOpType.DONE, opsDao.rows[id]!!.state)
+    }
+
+    @Test fun anAdminResetsWhenTheOpIsExhausted() = runTest {
+        reinstalledOnlyAdmin()
+        api.rejoinExhausted = true
+        api.rejoinOp = api.rejoinOp!!.copy(committer = null)
+        queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertEquals(listOf("rejoin", "reset:1"), api.calls)
+        assertNull(store.rejoinWaits.value[conv])
+    }
+
+    @Test fun anAdminWithNoCandidateResetsOnlyAfter24Hours() = runTest {
+        reinstalledOnlyAdmin()
+        api.rejoinCandidates = 0
+        api.rejoinOp = api.rejoinOp!!.copy(committer = null) // created at t = 1 s
+        queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertEquals(listOf("rejoin"), api.calls)
+        assertFalse(store.rejoinWaits.value[conv]!!.waitingForOthers(now + day)) // nobody to wait for: just "Setting up…"
+        now = 1_000 + day
+        queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertEquals(listOf("rejoin", "rejoin", "reset:1"), api.calls)
+    }
+
+    @Test fun aNonAdminNeverResets() = runTest {
+        reinstalledOnlyAdmin()
+        api.group = api.group.copy(myRole = GroupMember.ROLE_MEMBER, members = listOf(member(me), member(kamal, "admin")))
+        api.rejoinExhausted = true
+        queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        api.rejoinExhausted = false
+        api.rejoinCandidates = 0
+        now = 10 * day
+        queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertEquals(listOf("rejoin", "rejoin"), api.calls)
+    }
+
+    @Test fun aPreV121ReplyWithoutCandidatesNeverResets() = runTest {
+        reinstalledOnlyAdmin()
+        api.rejoinCandidates = null
+        api.rejoinOp = null
+        now = 10 * day
+        queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertEquals(listOf("rejoin"), api.calls)
+    }
+
+    @Test fun rejoinPendingOnTheLastResortResetKeepsWaiting() = runTest {
+        reinstalledOnlyAdmin()
+        api.rejoinExhausted = true
+        api.resetReply = ApiResult.Error(409, AuthErrors.REJOIN_PENDING, "")
+        val id = queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertEquals(listOf("rejoin", "reset:1"), api.calls)
+        assertEquals(GroupOpType.DONE, opsDao.rows[id]!!.state) // not failed, not retried
+        assertTrue(conv in store.rejoinWaits.value)
+        assertTrue(opsDao.queued().isEmpty())
+    }
+
+    @Test fun aManualResetRefusedWithRejoinPendingFailsWithTheReasonAndQueuesARejoin() = runTest {
+        reinstalledOnlyAdmin()
+        api.resetReply = ApiResult.Error(409, AuthErrors.REJOIN_PENDING, "")
+        val id = queue(GroupOpType.RESET)
+        exec.runDue()
+        assertEquals(GroupOpType.FAILED, opsDao.rows[id]!!.state)
+        assertEquals(AuthErrors.REJOIN_PENDING, opsDao.rows[id]!!.lastError)
+        assertEquals(GroupOpType.RESET_REJOIN_PENDING_TEXT, groupOpErrorText(opsDao.rows[id]!!.lastError))
+        exec.runDue() // the queued rejoin
+        assertEquals(listOf("reset:1", "rejoin"), api.calls)
+    }
+
+    @Test fun theWaitClearsWhenTheWelcomeIsApplied() = runTest {
+        reinstalledOnlyAdmin()
+        queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertTrue(conv in store.rejoinWaits.value)
+        store.onGroupStateChanged(conv, removedSelf = false)
+        assertNull(store.rejoinWaits.value[conv])
+    }
+
+    // ---- v1.21 §12.12.6: a cleanup op (`added: []`) named to this device ----
+
+    @Test fun aCleanupOpRemovesMyOwnOldLeafWithoutAWelcome() = runTest {
+        activeGroup()
+        api.group = api.group.copy(myRole = GroupMember.ROLE_MEMBER, members = listOf(member(me), member(kamal, "admin")))
+        mls.memberLists[conv]!!.add(DeviceRef(me, "dev-me-old"))
+        val op = PendingOp("op-clean", PendingOp.DEVICES, me, added = emptyList(), removed = listOf(MlsDeviceRef(me, "dev-me-old")), committer = MlsDeviceRef(me, "dev-me"))
+        api.group = api.group.copy(pending = listOf(op))
+        store.queueCommit(conv, op)
+        exec.runDue()
+        val c = api.commits.single()
+        assertEquals("op-clean", c.opId)
+        assertTrue(c.added.isEmpty())
+        assertEquals(listOf("dev-me-old"), c.removed.map { it.deviceId })
+        assertNull(c.welcome)
+        assertNull(c.welcomeRef)
+        assertTrue(api.claims.isEmpty()) // nothing to add: nothing claimed
+        assertFalse(DeviceRef(me, "dev-me-old") in mls.members(conv))
+    }
+
+    @Test fun anAdminCommitsAnotherUsersCleanupOp() = runTest {
+        activeGroup() // I'm admin
+        mls.memberLists[conv]!!.add(DeviceRef(kamal, "dev-kamal-old"))
+        val op = PendingOp("op-clean", PendingOp.DEVICES, kamal, added = emptyList(), removed = listOf(MlsDeviceRef(kamal, "dev-kamal-old")), committer = MlsDeviceRef(me, "dev-me"))
+        api.group = api.group.copy(pending = listOf(op))
+        store.queueCommit(conv, op)
+        exec.runDue()
+        assertEquals(listOf("dev-kamal-old"), api.commits.single().removed.map { it.deviceId })
+    }
+
+    @Test fun aMemberNeverCommitsAnotherUsersCleanupOp() = runTest {
+        activeGroup()
+        api.group = api.group.copy(myRole = GroupMember.ROLE_MEMBER, members = listOf(member(me), member(kamal, "admin")))
+        mls.memberLists[conv]!!.add(DeviceRef(kamal, "dev-kamal-old"))
+        val op = PendingOp("op-clean", PendingOp.DEVICES, kamal, added = emptyList(), removed = listOf(MlsDeviceRef(kamal, "dev-kamal-old")), committer = MlsDeviceRef(me, "dev-me"))
+        api.group = api.group.copy(pending = listOf(op))
+        store.queueCommit(conv, op)
+        exec.runDue()
+        assertTrue(api.commits.isEmpty()) // H1: a member can't remove another user's different device
+        assertTrue(opsDao.rows.values.single { it.opId == "op-clean" }.lastError!!.startsWith("policy"))
+    }
+
+    @Test fun aCleanupOpNeverRemovesThisDevice() = runTest {
+        activeGroup()
+        val op = PendingOp("op-clean", PendingOp.DEVICES, me, added = emptyList(), removed = listOf(MlsDeviceRef(me, "dev-me")), committer = MlsDeviceRef(me, "dev-me"))
+        api.group = api.group.copy(pending = listOf(op))
+        store.queueCommit(conv, op)
+        exec.runDue()
+        assertTrue(api.commits.isEmpty())
+    }
+
     @Test fun anAutomaticRejoinSkipsItselfWhenTheWelcomeArrivedMeanwhile() = runTest {
         groupDao.upsert(GroupEntity(conv, null, "member", "active", null, null, 2, null, null, null, 1))
-        val auto = ProtocolJson.encodeToString(RejoinPayload.serializer(), RejoinPayload(ifMissing = true))
+        api.group = api.group.copy(state = "active", generation = 2, epoch = 5, myRole = GroupMember.ROLE_MEMBER)
         // Still no state: the server is asked.
         val first = queue(GroupOpType.REJOIN, auto)
         exec.runDue()

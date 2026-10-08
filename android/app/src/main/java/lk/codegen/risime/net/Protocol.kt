@@ -89,6 +89,9 @@ data class ApiErrorBody(
     /** §13.4: blob quota numbers on 413 quota_exceeded. */
     val used: Long? = null,
     val limit: Long? = null,
+    /** §12.12.3 (v1.21): the waiting `devices` op and its candidates on 409 rejoin_pending. */
+    @SerialName("op_id") val opId: String? = null,
+    val candidates: Int? = null,
 )
 
 @Serializable
@@ -384,6 +387,9 @@ object AuthErrors {
     const val INVALID_ROLE = "invalid_role"
     const val LOG_EXPIRED = "log_expired"
     const val GENERATION_CONFLICT = "generation_conflict"
+
+    /** §12.12.3 (v1.21): a reset refused while this device waits to be re-added: keep waiting. */
+    const val REJOIN_PENDING = "rejoin_pending"
     const val TOO_LARGE = "too_large"
 
     // §14.6 (v1.11)
@@ -715,9 +721,12 @@ data class MlsCommitReply(val epoch: Long)
 @Serializable
 data class MlsDmOpEvent(@SerialName("conversation_id") val conversationId: String, val generation: Long, val op: PendingOp)
 
-/** v1.16 `POST /mls/groups/{dm}/rejoin` → 202. `candidates` 0 = nobody can re-add this device (reset). */
+/**
+ * v1.16 `POST /mls/groups/{dm}/rejoin` → 202. `candidates` 0 = nobody can re-add this device (reset).
+ * v1.21 (§12.12.2): `exhausted` = every candidate was asked and none committed (absent = false).
+ */
 @Serializable
-data class DmRejoinReply(val op: PendingOp? = null, val candidates: Int = 0)
+data class DmRejoinReply(val op: PendingOp? = null, val candidates: Int = 0, val exhausted: Boolean = false)
 
 @Serializable
 data class MlsLoggedCommit(
@@ -919,6 +928,18 @@ data class GroupReset(val generation: Long)
 
 @Serializable
 data class GroupResetReply(val generation: Long)
+
+/**
+ * §12.12.2 (v1.21) `POST /groups/{id}/rejoin` → 202. [op] adds the calling device (null while the
+ * group awaits a rebuild); [candidates] null = a pre-v1.21 server ("unknown": never reset automatically).
+ */
+@Serializable
+data class GroupRejoinReply(
+    val group: Group,
+    val op: PendingOp? = null,
+    val candidates: Int? = null,
+    val exhausted: Boolean = false,
+)
 
 /** §12.2 the encrypted GroupContext extension `risime.group_meta` (0xFA01), UTF-8 JSON. */
 @Serializable

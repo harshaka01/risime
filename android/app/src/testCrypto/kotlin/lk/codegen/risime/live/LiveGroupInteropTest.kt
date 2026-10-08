@@ -43,7 +43,7 @@ import lk.codegen.risime.data.groups.UsersPayload
 import lk.codegen.risime.data.groups.GROUP_NAME_PENDING
 import lk.codegen.risime.data.groups.blobMatches
 import lk.codegen.risime.data.groups.groupDisplayName
-import lk.codegen.risime.ui.group.COMPOSER_REJOINING
+import lk.codegen.risime.ui.group.groupE2eeStrip
 import lk.codegen.risime.ui.group.GroupComposer
 import lk.codegen.risime.ui.group.groupComposer
 import lk.codegen.risime.data.mls.DeviceRegistrar
@@ -258,7 +258,7 @@ class LiveGroupInteropTest {
             override suspend fun removeMember(id: String, userId: String) = api.removeGroupMember(id, userId, deviceId)
             override suspend fun leave(id: String) = api.leaveGroup(id, deviceId)
             override suspend fun setRole(id: String, userId: String, role: String) = api.setGroupRole(id, userId, role, deviceId).map { it.group }
-            override suspend fun rejoin(id: String) = api.rejoinGroup(id, deviceId).map { it.group }
+            override suspend fun rejoin(id: String) = api.rejoinGroup(id, deviceId)
             override suspend fun reset(id: String, generation: Long) = api.resetGroup(id, generation, deviceId).map { it.generation }
             override suspend fun claim(userIds: List<String>, conversationId: String?) =
                 api.claimKeyPackages(userIds, deviceId, conversationId).map { it.devices }
@@ -869,7 +869,7 @@ class LiveGroupInteropTest {
             null
         }
 
-        check("12c. B logs in again (same device id, new MLS state): the group shows its pending name, the composer says rejoining") {
+        check("12c. B logs in again (same device id, new MLS state): the group shows its pending name, the strip says setting up (v1.21: composer on, sends pending)") {
             val nb = Dev(url, bId, bTok, "B2", trusted, deviceId = b.deviceId)
             b2 = nb
             ensure(nb.on { nb.registrar.register(pushToken = null) } is Registration.Mls) { "B2 registration" }
@@ -880,7 +880,8 @@ class LiveGroupInteropTest {
             val row = nb.await(10_000, "B2's group row") { nb.groupDao.groups[conv2] }
             ensure(nb.mls.engine.group(conv2) == null) { "B2 has the group before the rejoin" }
             ensure(groupDisplayName(row.name) == GROUP_NAME_PENDING) { "B2 shows \"${groupDisplayName(row.name)}\"" }
-            ensure(groupComposer(row, encrypted = false) == GroupComposer.Disabled(COMPOSER_REJOINING)) { "composer: ${groupComposer(row, false)}" }
+            ensure(groupComposer(row, encrypted = false) == GroupComposer.Enabled) { "composer: ${groupComposer(row, false)}" }
+            ensure(groupE2eeStrip(row, false, null, 0) == lk.codegen.risime.data.mls.REPAIRING_TEXT) { "strip: ${groupE2eeStrip(row, false, null, 0)}" }
             val rejoin = nb.await(15_000, "B2's rejoin op done") { nb.opDao.rows.values.firstOrNull { it.conversationId == conv2 && it.type == GroupOpType.REJOIN && it.state != GroupOpType.QUEUED } }
             ensure(rejoin.state == GroupOpType.DONE) { "rejoin: ${rejoin.lastError}" }
             // The server holds one op that removes and re-adds B2's device, waiting for an admin device.

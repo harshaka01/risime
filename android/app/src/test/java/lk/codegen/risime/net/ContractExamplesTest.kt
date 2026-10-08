@@ -46,14 +46,50 @@ class ContractExamplesTest {
         "error_backup_key_conflict.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "error_backup_unavailable.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "error_no_backup_key.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        // v1.21 (§12.12 reinstalls without reset; plus the v1.16 DM-op examples): parse-only placeholders until the app implements it.
-        "error_rejoin_pending.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_group_op_cleanup.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_mls_dm_op.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "group_rejoin_reply_v121.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_commit_request_dm_op.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_dm_rejoin_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_dm_rejoin_reply_v121.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.21 (§12.12 reinstalls without reset) and the v1.16 DM-op examples (§10.6): typed models and the decisions they drive.
+        "error_rejoin_pending.json" to { s ->
+            apiError(s, AuthErrors.REJOIN_PENDING).also { require(it.error.opId != null && it.error.candidates == 2) }
+        },
+        "event_group_op_cleanup.json" to { s ->
+            ProtocolJson.decodeFromString<Event>(s).groupOp()!!.also { e ->
+                // A cleanup op: removes only its own user's old leaf, adds nothing, named to that user's live device.
+                require(e.op.type == PendingOp.DEVICES && e.op.added.isEmpty() && e.op.removed.single().userId == e.op.actor)
+                require(e.op.committer!!.userId == e.op.actor && e.op.committer!!.deviceId != e.op.removed.single().deviceId)
+            }
+        },
+        "event_mls_dm_op.json" to { s ->
+            ProtocolJson.decodeFromString<Event>(s).mlsDmOp()!!.also { e ->
+                require(e.conversationId.startsWith("dm:") && e.op.type == PendingOp.DEVICES && e.op.committer != null && e.op.added.size == 1 && e.op.removed.size == 1)
+            }
+        },
+        "group_rejoin_reply_v121.json" to { s ->
+            ProtocolJson.decodeFromString<GroupRejoinReply>(s).also { r ->
+                require(r.candidates == 2 && !r.exhausted && r.op!!.opId == r.group.pending.single().opId)
+                // The only admin's new device waits for a member's re-add: no reset.
+                val now = lk.codegen.risime.data.mls.RejoinRules.epochMs(r.op!!.createdAt)!! + 25L * 3600_000
+                require(r.group.myRole == GroupMember.ROLE_ADMIN && r.group.members.count { it.admin } == 1)
+                require(lk.codegen.risime.data.mls.RejoinRules.group(true, r.candidates, r.exhausted, lk.codegen.risime.data.mls.RejoinRules.epochMs(r.op!!.createdAt), now) == lk.codegen.risime.data.mls.RejoinDecision.WAIT)
+            }
+        },
+        "mls_commit_request_dm_op.json" to { s ->
+            ProtocolJson.decodeFromString<MlsCommitRequest>(s).also { r ->
+                require(r.opId != null && r.welcome != null && r.added.size == 1 && r.removed.isEmpty())
+                require(ProtocolJson.encodeToJsonElement(r) == ProtocolJson.parseToJsonElement(s)) // re-encodes exactly
+            }
+        },
+        "mls_dm_rejoin_reply.json" to { s ->
+            // v1.16 shape: no `exhausted` (= false).
+            ProtocolJson.decodeFromString<DmRejoinReply>(s).also { r ->
+                require(r.candidates == 1 && !r.exhausted && r.op!!.committer == null)
+                require(lk.codegen.risime.data.mls.RejoinRules.dm(r.candidates, r.exhausted) == lk.codegen.risime.data.mls.RejoinDecision.WAIT)
+            }
+        },
+        "mls_dm_rejoin_reply_v121.json" to { s ->
+            ProtocolJson.decodeFromString<DmRejoinReply>(s).also { r ->
+                require(r.candidates == 1 && !r.exhausted && r.op!!.opId == "5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e")
+                require(lk.codegen.risime.data.mls.RejoinRules.dm(r.candidates, r.exhausted) == lk.codegen.risime.data.mls.RejoinDecision.WAIT)
+            }
+        },
         // v1.20 (§21 open sign-up).
         "auth_config_v120.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.signupOpen) } },
         "signup_request.json" to { s -> ProtocolJson.decodeFromString<SignupRequest>(s) },

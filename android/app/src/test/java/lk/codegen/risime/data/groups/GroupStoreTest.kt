@@ -211,9 +211,30 @@ class GroupStoreTest {
         assertNull(rejoinPlan(serverGroup().copy(members = emptyList()), me, null))
     }
 
-    @Test fun theOnlyAdminResetsInsteadBecauseNobodyElseMayReAddItsDevice() {
-        assertEquals(GroupOpType.RESET, rejoinPlan(serverGroup(myRole = GroupMember.ROLE_ADMIN, otherAdmin = false), me, null))
+    @Test fun theOnlyAdminRejoinsAndNeverResetsHere() {
+        // v1.21 §12.12.1 (decision 060): admin is a user role; any member re-adds the only admin's new device.
+        assertEquals(GroupOpType.REJOIN, rejoinPlan(serverGroup(myRole = GroupMember.ROLE_ADMIN, otherAdmin = false), me, null))
         assertEquals(GroupOpType.REJOIN, rejoinPlan(serverGroup(myRole = GroupMember.ROLE_ADMIN, otherAdmin = true), me, null))
+        assertEquals(GroupOpType.REJOIN, rejoinPlan(serverGroup(myRole = GroupMember.ROLE_ADMIN, otherAdmin = false, gen = 3), me, 2))
+    }
+
+    @Test fun requestRejoinQueuesOneAutomaticRejoinDueNow() = runTest {
+        var kicks = 0
+        val s = GroupStore(dao, ops, messages, { "dev-me" }, { meta }, { now }, onOpQueued = { kicks++ })
+        assertTrue(s.requestRejoin(conv))
+        val row = ops.rows.values.single()
+        assertEquals(GroupOpType.REJOIN, row.type)
+        assertEquals(now, row.nextAt)
+        assertTrue(ProtocolJson.decodeFromString(RejoinPayload.serializer(), row.payloadJson).ifMissing)
+        assertFalse(s.requestRejoin(conv)) // already queued
+        assertEquals(1, kicks)
+    }
+
+    @Test fun aResetEventClearsTheRejoinWait() = runTest {
+        store.noteRejoinWait(conv, lk.codegen.risime.net.GroupRejoinReply(serverGroup(), null, 2, false))
+        assertEquals(2, store.rejoinWaits.value[conv]!!.candidates)
+        store.applyEvent("e-reset", GroupEvent(conv, 2, null, GroupEvent.RESET, kamal, emptyList(), null, null, null, null), me)
+        assertNull(store.rejoinWaits.value[conv])
     }
 
     @Test fun queueRejoinsQueuesOnceAfterTheGracePeriodAndSkipsHeldGroups() = runTest {

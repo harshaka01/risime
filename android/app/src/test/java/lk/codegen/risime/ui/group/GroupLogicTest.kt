@@ -98,11 +98,24 @@ class GroupLogicTest {
         assertEquals("You left this group", left.stateLine)
     }
 
-    @Test fun composerSaysRejoiningUntilThisPhoneIsBackInTheGroup() {
+    @Test fun whileRejoiningTheComposerStaysOnAndTheStripSaysWhy() {
         val g = GroupEntity(conv, "Pilot team", "member", GroupEntity.STATE_ACTIVE, null, null, 1, null, null, null, 10)
-        // Rejoining (no MLS state yet): disabled with the reason, never a silent failure.
-        assertEquals(GroupComposer.Disabled(COMPOSER_REJOINING), groupComposer(g, encrypted = false))
-        assertEquals("Rejoining… you can send once this phone is back in the group", COMPOSER_REJOINING)
+        // v1.21 §12.12.3: rejoining (no MLS state yet): sends stay pending in the outbox; the strip says why.
+        assertEquals(GroupComposer.Enabled, groupComposer(g, encrypted = false))
+        assertEquals("Setting up encryption on this phone…", groupE2eeStrip(g, false, null, 0))
+        val named = lk.codegen.risime.data.groups.RejoinWait(2, false, committerNamed = true, opCreatedAtMs = 0, since = 0)
+        assertEquals("Setting up encryption on this phone…", groupE2eeStrip(g, false, named, 1_000))
+        assertEquals("Setting up encryption on this phone… Waiting for a group member to open RisiMe", groupE2eeStrip(g, false, named, 60_000))
+        val offline = named.copy(committerNamed = false)
+        assertEquals("Setting up encryption on this phone… Waiting for a group member to open RisiMe", groupE2eeStrip(g, false, offline, 0))
+        // No candidate yet: nobody to name.
+        assertEquals("Setting up encryption on this phone…", groupE2eeStrip(g, false, offline.copy(candidates = 0), 10_000_000))
+        // Encrypted, unchecked or read-only: no strip; a group being created keeps its own line.
+        assertNull(groupE2eeStrip(g, true, offline, 0))
+        assertNull(groupE2eeStrip(g, null, offline, 0))
+        assertNull(groupE2eeStrip(g.copy(state = GroupEntity.STATE_LEFT), false, offline, 0))
+        assertEquals("Not end-to-end encrypted yet: setting up end-to-end encryption…", groupE2eeStrip(g.copy(state = GroupEntity.STATE_CREATING), false, null, 0))
+        assertEquals("Members who haven't opened RisiMe recently may lose messages they haven't received yet. Reset?", lk.codegen.risime.data.mls.RESET_CONFIRM_TEXT)
         // Joined: works at once. Not checked yet: no flicker.
         assertEquals(GroupComposer.Enabled, groupComposer(g, encrypted = true))
         assertEquals(GroupComposer.Enabled, groupComposer(g, encrypted = null))

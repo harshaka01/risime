@@ -279,7 +279,7 @@ class AppContainer(
         override suspend fun removeMember(id: String, userId: String) = api.removeGroupMember(id, userId, dev())
         override suspend fun leave(id: String) = api.leaveGroup(id, dev())
         override suspend fun setRole(id: String, userId: String, role: String) = api.setGroupRole(id, userId, role, dev()).map { it.group }
-        override suspend fun rejoin(id: String) = api.rejoinGroup(id, dev()).map { it.group }
+        override suspend fun rejoin(id: String) = api.rejoinGroup(id, dev())
         override suspend fun reset(id: String, generation: Long) = api.resetGroup(id, generation, dev()).map { it.generation }
         override suspend fun claim(userIds: List<String>, conversationId: String?) =
             api.claimKeyPackages(userIds, dev(), conversationId).map { it.devices }

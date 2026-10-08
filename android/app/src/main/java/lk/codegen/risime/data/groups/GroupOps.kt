@@ -36,7 +36,8 @@ interface GroupApi {
     suspend fun removeMember(id: String, userId: String): ApiResult<Unit>
     suspend fun leave(id: String): ApiResult<Unit>
     suspend fun setRole(id: String, userId: String, role: String): ApiResult<Group>
-    suspend fun rejoin(id: String): ApiResult<Group>
+    /** §12.12.2 (v1.21): the reply carries the op re-adding this device, its candidates and `exhausted`. */
+    suspend fun rejoin(id: String): ApiResult<lk.codegen.risime.net.GroupRejoinReply>
     suspend fun reset(id: String, generation: Long): ApiResult<Long>
 
     /** §12.5: [conversationId] null = friends and yourself (§10.2), else co-members of that group. */
@@ -81,6 +82,7 @@ fun groupOpErrorText(reason: String?): String = when (reason) {
     AuthErrors.TOO_MANY_DEVICES -> "Too many devices for one group."
     AuthErrors.NOT_FRIENDS -> "You can only add your friends."
     AuthErrors.INVALID_ROLE -> "That member can't be an admin."
+    AuthErrors.REJOIN_PENDING -> GroupOpType.RESET_REJOIN_PENDING_TEXT
     null -> "Something went wrong."
     else -> "Couldn't do that ($reason)."
 }
@@ -189,21 +191,82 @@ class GroupOpsExecutor(
             GroupOpType.RENAME -> rename(op, myId)
             GroupOpType.ICON -> icon(op, myId)
             GroupOpType.COMMIT -> commitServerOp(op, myId)
-            GroupOpType.REJOIN -> {
-                if (alreadyJoined(op)) return OpOutcome.Done
-                net(api.rejoin(op.conversationId!!)) { OpOutcome.Done }
-            }
-            GroupOpType.RESET -> {
-                if (alreadyJoined(op)) return OpOutcome.Done
-                val g = groups.get(op.conversationId!!) ?: return OpOutcome.Done
-                when (val r = api.reset(op.conversationId, g.generation)) {
-                    is ApiResult.Error -> if (r.code == AuthErrors.GENERATION_CONFLICT) OpOutcome.Done else errorOutcome(r)
-                    else -> net(r) { OpOutcome.Done } // the rebuild op reaches us as group_op
-                }
-            }
+            GroupOpType.REJOIN -> rejoin(op, myId)
+            // v1.21: an automatic reset queued by an older app version (the only admin's) is a rejoin now.
+            GroupOpType.RESET -> if (automatic(op)) rejoin(op, myId) else manualReset(op)
             else -> OpOutcome.Failed("unknown op type ${op.type}")
         }
     }
+
+    /**
+     * §12.8/§12.12: ask to be re-added, then decide from the reply. Waiting is the normal outcome
+     * (the op row is done; the next rejoin comes from a sync, the open chat or its 15-minute
+     * refresh). Only an admin device resets, and only as the last resort ([RejoinRules.group]).
+     */
+    private suspend fun rejoin(op: GroupOpEntity, myId: String): OpOutcome {
+        val conv = op.conversationId!!
+        if (alreadyJoined(op)) {
+            store.clearRejoinWait(conv)
+            return OpOutcome.Done
+        }
+        val reply = when (val r = api.rejoin(conv)) {
+            is ApiResult.Ok -> r.value
+            is ApiResult.Error -> return errorOutcome(r)
+            is ApiResult.NetworkError -> return OpOutcome.Retry("network", 5_000)
+        }
+        tx.run { store.applyServerGroup(reply.group, myId) }
+        // An automatic rejoin whose Welcome landed while we asked.
+        if (alreadyJoined(op)) {
+            store.clearRejoinWait(conv)
+            return OpOutcome.Done
+        }
+        store.noteRejoinWait(conv, reply)
+        val admin = reply.group.myRole == GroupMember.ROLE_ADMIN
+        val decision = lk.codegen.risime.data.mls.RejoinRules.group(
+            admin, reply.candidates, reply.exhausted, lk.codegen.risime.data.mls.RejoinRules.epochMs(reply.op?.createdAt), clock(),
+        )
+        if (decision == lk.codegen.risime.data.mls.RejoinDecision.WAIT) return OpOutcome.Done
+        log("group $conv: nobody can re-add this device (candidates ${reply.candidates}, exhausted ${reply.exhausted}): last-resort reset")
+        return when (val r = api.reset(conv, reply.group.generation)) {
+            is ApiResult.Ok -> {
+                store.clearRejoinWait(conv)
+                OpOutcome.Done // the rebuild op reaches us as group_op
+            }
+            is ApiResult.Error -> when (r.code) {
+                AuthErrors.GENERATION_CONFLICT -> OpOutcome.Done // someone else reset
+                AuthErrors.REJOIN_PENDING -> OpOutcome.Done // §12.12.3: the server still sees a viable re-add: keep waiting
+                else -> errorOutcome(r)
+            }
+            is ApiResult.NetworkError -> OpOutcome.Retry("network", 5_000)
+        }
+    }
+
+    /**
+     * §12.12.3 an admin's confirmed "Reset encryption". `409 rejoin_pending`: this device is still
+     * being re-added, so it isn't retried; a rejoin is queued instead and the user is told.
+     */
+    private suspend fun manualReset(op: GroupOpEntity): OpOutcome {
+        val conv = op.conversationId!!
+        val g = groups.get(conv) ?: return OpOutcome.Done
+        return when (val r = api.reset(conv, g.generation)) {
+            is ApiResult.Ok -> {
+                store.clearRejoinWait(conv)
+                OpOutcome.Done // the rebuild op reaches us as group_op
+            }
+            is ApiResult.Error -> when (r.code) {
+                AuthErrors.GENERATION_CONFLICT -> OpOutcome.Done
+                AuthErrors.REJOIN_PENDING -> {
+                    store.requestRejoin(conv, except = op.id)
+                    OpOutcome.Failed(AuthErrors.REJOIN_PENDING)
+                }
+                else -> errorOutcome(r)
+            }
+            is ApiResult.NetworkError -> OpOutcome.Retry("network", 5_000)
+        }
+    }
+
+    private fun automatic(op: GroupOpEntity): Boolean =
+        runCatching { ProtocolJson.decodeFromString(RejoinPayload.serializer(), op.payloadJson) }.getOrNull()?.ifMissing == true
 
     /**
      * An automatic rejoin/reset ([RejoinPayload.ifMissing]) that's no longer needed: this device
@@ -332,6 +395,12 @@ class GroupOpsExecutor(
                 }
                 PendingOp.DEVICES -> {
                     val leaves = mls.members(conv)
+                    // §12.12.6 a cleanup op (`added: []`) never removes this device's own leaf.
+                    val myDevice = deviceId()
+                    if (pending.added.isEmpty() && pending.removed.any { it.userId.equals(myId, true) && it.deviceId.equals(myDevice, true) }) {
+                        log("group op ${pending.opId}: a cleanup op lists this device; not committing")
+                        return OpOutcome.Failed("policy: removes this device")
+                    }
                     // v1.14 §12.4a: a non-admin named for another user's devices op (the member path).
                     val memberPath = g.myRole != GroupMember.ROLE_ADMIN &&
                         (pending.added + pending.removed).any { !it.userId.equals(myId, true) }

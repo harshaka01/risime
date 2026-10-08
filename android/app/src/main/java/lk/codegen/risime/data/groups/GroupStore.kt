@@ -1,5 +1,6 @@
 package lk.codegen.risime.data.groups
 
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
 import lk.codegen.risime.data.MessageStatus
 import lk.codegen.risime.data.db.GroupDao
@@ -98,10 +99,12 @@ data class RejoinPayload(@kotlinx.serialization.SerialName("if_missing") val ifM
 
 /**
  * §12.8 for a group the server lists: what this device must do when it holds no MLS state for the
- * group's current generation (a sign-in after a logout keeps the device id but starts a new MLS
- * state). [GroupOpType.REJOIN]: an admin's device (named by the server) removes and re-adds this
- * device, and it joins from the Welcome. Only admins may re-add another user's device (§12.4), so
- * the only admin can't be re-added: it resets the group instead ([GroupOpType.RESET], §12.8).
+ * group's current generation (a reinstall, or a sign-in after a logout that starts a new MLS state):
+ * always [GroupOpType.REJOIN]. The named committer (the user's other device, an admin, or under
+ * §12.4a any member) re-adds this device, and it joins from the Welcome.
+ * v1.21 (§12.12.1, decision 060): admin is a user role, so a reinstalled admin, the only admin
+ * included, is re-added like anyone else; it never resets here. A reset is decided only after the
+ * rejoin reply ([lk.codegen.risime.data.mls.RejoinRules.group]).
  * Null when nothing is owed: the device holds the generation, the group is still creating or
  * waiting for a rebuild (epoch null), or I'm not an active member.
  */
@@ -110,8 +113,23 @@ fun rejoinPlan(g: Group, me: String, localGeneration: Long?): String? {
     val mine = g.members.firstOrNull { it.userId.equals(me, true) } ?: return null
     if (mine.state != GroupMember.STATE_ACTIVE) return null
     if (localGeneration != null && localGeneration >= g.generation) return null
-    val otherAdmin = g.members.any { it.admin && it.state == GroupMember.STATE_ACTIVE && !it.userId.equals(me, true) }
-    return if (mine.admin && !otherAdmin) GroupOpType.RESET else GroupOpType.REJOIN
+    return GroupOpType.REJOIN
+}
+
+/**
+ * §12.12.3 what this device knows of its own pending re-add (from the last rejoin reply), for the
+ * waiting strip and to hold back the manual reset. In memory only: a restart asks again.
+ */
+data class RejoinWait(
+    val candidates: Int?,
+    val exhausted: Boolean,
+    val committerNamed: Boolean,
+    val opCreatedAtMs: Long?,
+    /** When this device first got a reply while waiting. */
+    val since: Long,
+) {
+    fun waitingForOthers(now: Long): Boolean =
+        lk.codegen.risime.data.mls.RejoinRules.waitingForOthers(candidates, committerNamed, now - since)
 }
 
 /** The kinds of group-op outbox rows (GroupOpEntity.type). */
@@ -130,6 +148,9 @@ object GroupOpType {
     const val COMMIT = "commit"
     const val REJOIN = "rejoin"
     const val RESET = "reset"
+
+    /** A manual reset the server refused (§12.12.3 `409 rejoin_pending`): this phone is still being re-added. */
+    const val RESET_REJOIN_PENDING_TEXT = "This phone is still being re-added to the group. Try again later."
 
     /** §12.8 [rejoinPlan]: wait this long before calling rejoin, so a Welcome already on its way can land first. */
     const val REJOIN_GRACE_MS = 8_000L
@@ -168,9 +189,28 @@ class GroupStore(
     /** Bumped when this device's MLS state of a group changed (Welcome joined, commit applied, removed). */
     val stateChanges: kotlinx.coroutines.flow.StateFlow<Long> = _stateChanges
 
+    private val _rejoinWaits = kotlinx.coroutines.flow.MutableStateFlow<Map<String, RejoinWait>>(emptyMap())
+
+    /** §12.12.3 groups this device is waiting to be re-added to (from the last rejoin reply). */
+    val rejoinWaits: kotlinx.coroutines.flow.StateFlow<Map<String, RejoinWait>> = _rejoinWaits
+
+    /** A rejoin reply for [conv]: this device waits for its re-add (the first reply's time is kept). */
+    fun noteRejoinWait(conv: String, r: lk.codegen.risime.net.GroupRejoinReply) {
+        _rejoinWaits.update { m ->
+            m + (conv to RejoinWait(
+                r.candidates, r.exhausted, r.op?.committer != null,
+                lk.codegen.risime.data.mls.RejoinRules.epochMs(r.op?.createdAt), m[conv]?.since ?: clock(),
+            ))
+        }
+    }
+
+    fun clearRejoinWait(conv: String) {
+        if (conv in _rejoinWaits.value) _rejoinWaits.update { it - conv }
+    }
+
     /**
      * §12.8 automatic rejoin (after sign-in, on every sync): for each listed group this device holds
-     * no state for, queue a rejoin (or the only admin's reset) once, after [delayMs]. The op skips
+     * no state for, queue a rejoin once, after [delayMs] (v1.21: never a reset). The op skips
      * itself if the Welcome arrived meanwhile; the server's rejoin is idempotent. Never blocks.
      * @return the conversations queued now.
      */
@@ -186,6 +226,19 @@ class GroupStore(
         }
         if (queued.isNotEmpty()) onOpQueued()
         return queued
+    }
+
+    /**
+     * §12.12.2 refresh a waiting group's rejoin reply (chat open, and every 15 min while it's open):
+     * one automatic rejoin, unless one is already queued ([except]: the op asking, still queued). @return true if queued now.
+     */
+    suspend fun requestRejoin(conv: String, except: Long? = null): Boolean {
+        if (ops.queued().any { it.id != except && it.conversationId == conv && (it.type == GroupOpType.REJOIN || it.type == GroupOpType.RESET) }) return false
+        val payload = ProtocolJson.encodeToString(RejoinPayload.serializer(), RejoinPayload(ifMissing = true))
+        val now = clock()
+        ops.insert(GroupOpEntity(conversationId = conv, type = GroupOpType.REJOIN, payloadJson = payload, state = GroupOpType.QUEUED, createdAt = now, nextAt = now))
+        onOpQueued()
+        return true
     }
 
     /** @return true if the event changed anything visible. */
@@ -255,6 +308,7 @@ class GroupStore(
                 e.members?.let { upsertMembers(conv, it) }
                 val myRole = e.members?.firstOrNull { it.userId.equals(me, true) }?.role ?: g.myRole
                 g = g.copy(generation = e.generation, epochSeen = null, myRole = myRole)
+                clearRejoinWait(conv) // the rebuild's Welcome replaces the re-add
                 onReset(conv, e.generation)
                 // The `rebuild` op reaches its rebuilder as group_op (and via GET /groups after a restart).
                 needsRefresh(conv)
@@ -314,6 +368,7 @@ class GroupStore(
 
     /** A Welcome joined or a commit changed the group: make sure the row exists and the name is current. */
     suspend fun onGroupStateChanged(conv: String, removedSelf: Boolean) {
+        if (!removedSelf) clearRejoinWait(conv)
         _stateChanges.value += 1
         val existing = groups.get(conv)
         val meta = metaOf(conv)

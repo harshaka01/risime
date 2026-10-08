@@ -124,6 +124,8 @@ data class GroupInfoUi(
     val hasPhoto: Boolean = false,
     /** §18.7 "Setting the group photo…" while it is encoded and uploaded. */
     val photoBusy: String? = null,
+    /** §12.12.3 (A6): this phone waits to be re-added, so the manual reset is held back (the server would say 409). */
+    val resetBlocked: Boolean = false,
 ) {
     val memberCount: Int get() = members.count { it.state != GroupMember.STATE_PENDING_ADD }
 
@@ -163,6 +165,12 @@ class GroupInfoViewModel(private val c: AppContainer, private val meId: String, 
     private val hasPhoto = c.db.profilePhotos().observeAll().map { l -> l.any { it.userId == conversationId.lowercase() && it.blobId != null } }
 
     val ui: StateFlow<GroupInfoUi> = combine(
+        uiBase(),
+        c.groupStore.rejoinWaits,
+    ) { u, waits -> u.copy(resetBlocked = conversationId in waits) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GroupInfoUi())
+
+    private fun uiBase() = combine(
         c.db.groups().observe(conversationId),
         c.db.groups().observeMembers(conversationId),
         c.contacts.contacts,
@@ -181,7 +189,7 @@ class GroupInfoViewModel(private val c: AppContainer, private val meId: String, 
             error = err, photosNeedUpdate = names, conversationId = conversationId, hasPhoto = photo, photoBusy = busyText,
             members = base.members.map { m -> if (m.userId.lowercase() in phones && m.state == GroupMember.STATE_ACTIVE) m.copy(newPhone = true) else m },
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GroupInfoUi())
+    }
 
     init {
         // §12.4a: device-only commits emit no group_event, so re-read while a new phone is waiting.
@@ -273,8 +281,17 @@ class GroupInfoViewModel(private val c: AppContainer, private val meId: String, 
         }
     }
 
-    /** §12.8 admin reset: rebuilds the whole group's encryption (when commits keep failing). */
-    fun reset() = queue(GroupOpType.RESET)
+    /**
+     * §12.8/§12.12.3 an admin's confirmed "Reset encryption": rebuilds the whole group's encryption.
+     * Refused (`409 rejoin_pending`) while this phone is still being re-added.
+     */
+    fun reset() {
+        if (ui.value.resetBlocked) {
+            error.value = GroupOpType.RESET_REJOIN_PENDING_TEXT
+            return
+        }
+        queue(GroupOpType.RESET)
+    }
 
     fun dismissError() {
         error.value = null
@@ -288,18 +305,29 @@ sealed interface GroupComposer {
     data class Disabled(val reason: String) : GroupComposer
 }
 
-const val COMPOSER_REJOINING = "Rejoining… you can send once this phone is back in the group"
-
 /**
- * [encrypted] = this device holds the group's MLS state (null = not checked yet). An active group
- * without it is waiting for its rejoin Welcome (§12.8): sends would only queue, so the composer
- * says so. A group still being created keeps the composer (its sends wait for the epoch-0 commit).
+ * [encrypted] = this device holds the group's MLS state (null = not checked yet). v1.21 §12.12.3:
+ * an active group without it is waiting for its rejoin Welcome; the composer stays on and sends
+ * stay pending in the outbox until the Welcome is applied ([groupE2eeStrip] says why). A group
+ * still being created keeps the composer too (its sends wait for the epoch-0 commit).
  */
-fun groupComposer(g: GroupEntity?, encrypted: Boolean?): GroupComposer = when {
+fun groupComposer(g: GroupEntity?, @Suppress("UNUSED_PARAMETER") encrypted: Boolean?): GroupComposer = when {
     g == null -> GroupComposer.Enabled
     g.readOnly -> GroupComposer.Disabled(if (g.state == GroupEntity.STATE_LEFT) "You left this group." else "You were removed from this group.")
-    g.state == GroupEntity.STATE_ACTIVE && encrypted == false -> GroupComposer.Disabled(COMPOSER_REJOINING)
     else -> GroupComposer.Enabled
+}
+
+/**
+ * The strip under a group chat's header while this device has no MLS state for it (null otherwise):
+ * a group being created is "Not end-to-end encrypted yet: setting up…"; an active group this phone
+ * is being re-added to says "Setting up encryption on this phone…", and names the wait once the
+ * rejoin reply has a candidate that hasn't committed (§12.12.3). Never a failure, never a reset.
+ */
+fun groupE2eeStrip(g: GroupEntity?, encrypted: Boolean?, wait: lk.codegen.risime.data.groups.RejoinWait?, now: Long): String? = when {
+    g == null || g.readOnly || encrypted != false -> null
+    g.state == GroupEntity.STATE_CREATING -> "${lk.codegen.risime.data.mls.NOT_E2EE_PREFIX}: setting up end-to-end encryption…"
+    wait?.waitingForOthers(now) == true -> lk.codegen.risime.data.mls.GROUP_WAITING_TEXT
+    else -> lk.codegen.risime.data.mls.REPAIRING_TEXT
 }
 
 class GroupChatViewModel(private val c: AppContainer, private val meId: String, val conversationId: String) : ViewModel() {
@@ -406,9 +434,17 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
     private val _encrypted = MutableStateFlow<Boolean?>(null)
     val encrypted: StateFlow<Boolean?> = _encrypted
 
-    /** The composer, or why it's off (left/removed, or rejoining after a sign-in, §12.8). */
+    /** The composer, or why it's off (left/removed). */
     val composer: StateFlow<GroupComposer> = combine(group, _encrypted) { g, e -> groupComposer(g, e) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GroupComposer.Enabled)
+
+    /** Re-evaluates the strip's time-based wording while waiting. */
+    private val tick = MutableStateFlow(0L)
+
+    /** §12.12.3 the waiting strip ([groupE2eeStrip]). */
+    val e2eeStrip: StateFlow<String?> = combine(group, _encrypted, c.groupStore.rejoinWaits, tick) { g, e, w, _ ->
+        groupE2eeStrip(g, e, w[conversationId], System.currentTimeMillis())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private val typingSender = TypingSender(viewModelScope, System::currentTimeMillis, { typing ->
         c.scope.launch { c.realtime.typing(conversationId, typing) }
@@ -430,6 +466,26 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
             // Re-checked on new rows, on group row changes and whenever a Welcome/commit changed the MLS state.
             combine(messages, group, c.groupStore.stateChanges) { _, _, _ -> }.collect {
                 _encrypted.value = withContext(Dispatchers.IO) { c.mlsEngine?.group(conversationId) != null }
+            }
+        }
+        viewModelScope.launch {
+            // §12.12.2: while this phone waits to be re-added, rejoin on open and every 15 minutes while
+            // the chat is open (sync rejoins on reconnect); the reply decides the strip's wording.
+            _encrypted.filterNotNull().first()
+            var lastAsk: Long? = null
+            while (true) {
+                val g = c.db.groups().get(conversationId)
+                val now = System.currentTimeMillis()
+                if (_encrypted.value == false && g?.state == GroupEntity.STATE_ACTIVE) {
+                    if (lastAsk == null || now - lastAsk >= lk.codegen.risime.data.mls.RejoinRules.REFRESH_MS) {
+                        lastAsk = now
+                        c.groupStore.requestRejoin(conversationId)
+                    }
+                } else {
+                    lastAsk = null
+                }
+                tick.value += 1
+                kotlinx.coroutines.delay(30_000)
             }
         }
     }

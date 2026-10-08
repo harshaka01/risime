@@ -106,19 +106,22 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
     private suspend fun e2eeLoop() {
         val backoff = E2eeRetryBackoff()
         myDeviceId = runCatching { c.sessionStore.deviceId() }.getOrNull()
+        // v1.21 §12.12.2: a kick (open, resume, reconnect) refreshes the rejoin reply of a waiting DM.
+        var kickedNow = true
         while (true) {
             if (c.mlsEngine == null) {
                 _e2ee.value = E2eeState.Unavailable
             } else if (peer.value?.friend != false) {
                 val was = _e2ee.value
                 // Engine calls are synchronous Room transactions: never on the main thread.
-                val now = withContext(Dispatchers.IO) { c.mlsUpgrader.ensure(conversationId, meId, peerId, verify = true) }
+                val now = withContext(Dispatchers.IO) { c.mlsUpgrader.ensure(conversationId, meId, peerId, verify = true, kicked = kickedNow) }
                 _e2ee.value = now
                 if (now is E2eeState.Encrypted && was !is E2eeState.Encrypted) withContext(Dispatchers.IO) { c.engine.flushOutbox() }
             }
             val wait = backoff.delayAfter(_e2ee.value)
             val kicked = if (wait == null) e2eeKick.receive() else withTimeoutOrNull(wait) { e2eeKick.receive() }
             if (kicked != null) backoff.reset()
+            kickedNow = kicked != null
         }
     }
 

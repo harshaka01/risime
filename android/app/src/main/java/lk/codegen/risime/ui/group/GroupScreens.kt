@@ -114,6 +114,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
     val typing by vm.typingNames.collectAsStateWithLifecycle()
     val encrypted by vm.encrypted.collectAsStateWithLifecycle()
     val composer by vm.composer.collectAsStateWithLifecycle()
+    val e2eeStrip by vm.e2eeStrip.collectAsStateWithLifecycle()
     val reactions by vm.reactions.collectAsStateWithLifecycle()
     val readBy by vm.readBy.collectAsStateWithLifecycle()
     val selection by vm.del.selected.collectAsStateWithLifecycle()
@@ -173,9 +174,9 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
             lk.codegen.risime.ui.chat.SelectionBarFor(vm.del, messages, selection)
             lk.codegen.risime.ui.chat.DeleteHost(vm.del, clearAsk, onClearAskDone = { clearAsk = null }, onDeletedChat = onBack)
-            if (encrypted == false && !readOnly && composer == GroupComposer.Enabled) {
+            e2eeStrip?.let { strip ->
                 Text(
-                    "${lk.codegen.risime.data.mls.NOT_E2EE_PREFIX}: setting up end-to-end encryption…",
+                    strip,
                     Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = Spacing.lg, vertical = Spacing.xs),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -534,7 +535,8 @@ fun GroupInfoContent(
             }
             if (ui.iAmAdmin) {
                 item {
-                    TextButton(onClick = { confirmReset = true }, modifier = Modifier.padding(horizontal = Spacing.sm).heightIn(min = Sizes.minTouch)) {
+                    // §12.12.3 (A6): held back while this phone is still being re-added (the server would refuse).
+                    TextButton(onClick = { confirmReset = true }, enabled = !ui.resetBlocked, modifier = Modifier.padding(horizontal = Spacing.sm).heightIn(min = Sizes.minTouch)) {
                         Text("Reset encryption")
                     }
                 }
@@ -546,7 +548,7 @@ fun GroupInfoContent(
     }
     if (confirmReset) {
         ConfirmDialog(
-            "Reset encryption?", "Use this only if messages in this group keep failing. Everyone's phone sets up the group's encryption again; some messages may be missing.",
+            "Reset encryption?", lk.codegen.risime.data.mls.RESET_CONFIRM_TEXT,
             "Reset", onReset,
         ) { confirmReset = false }
     }

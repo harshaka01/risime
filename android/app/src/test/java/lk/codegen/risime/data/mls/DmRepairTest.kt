@@ -3,6 +3,7 @@ package lk.codegen.risime.data.mls
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import lk.codegen.risime.net.ApiResult
+import lk.codegen.risime.net.AuthErrors
 import lk.codegen.risime.net.ClaimedDevice
 import lk.codegen.risime.net.DmRejoinReply
 import lk.codegen.risime.net.Event
@@ -37,7 +38,7 @@ class DmRepairTest {
             ),
         )
         var commit: ApiResult<MlsCommitReply> = ApiResult.Ok(MlsCommitReply(1))
-        var rejoinReply: ApiResult<DmRejoinReply> = ApiResult.Ok(DmRejoinReply(null, 1))
+        var rejoinReply: ApiResult<DmRejoinReply> = ApiResult.Ok(DmRejoinReply(PendingOp("op-1", "devices", "a", committer = MlsDeviceRef("b", "d-b")), 1))
         var resetReply: ApiResult<Long> = ApiResult.Ok(2)
         val commits = mutableListOf<MlsCommitRequest>()
         val claims = mutableListOf<List<String>>()
@@ -62,23 +63,52 @@ class DmRepairTest {
         val u = upgrader(mls, api)
         assertEquals(E2eeState.Repairing, u.ensure(conv, "a", "b", verify = true))
         assertEquals(1, api.rejoins)
-        // Throttled: no second request within 20 s.
-        now += 5_000
-        assertEquals(E2eeState.Repairing, u.ensure(conv, "a", "b", verify = true))
-        assertEquals(1, api.rejoins)
-        now += 20_000
+        // v1.21 §12.12.2: no second request before 15 minutes while nothing kicks it …
+        now += 5 * 60_000
         u.ensure(conv, "a", "b", verify = true)
+        assertEquals(1, api.rejoins)
+        // … a kick (open, resume, reconnect) refreshes it, but not twice within 20 s.
+        u.ensure(conv, "a", "b", verify = true, kicked = true)
         assertEquals(2, api.rejoins)
+        now += 5_000
+        u.ensure(conv, "a", "b", verify = true, kicked = true)
+        assertEquals(2, api.rejoins)
+        now += RejoinRules.REFRESH_MS
+        u.ensure(conv, "a", "b", verify = true)
+        assertEquals(3, api.rejoins)
         assertTrue(api.resets.isEmpty())
         assertEquals("Setting up encryption on this phone…", e2eeStripText(E2eeState.Repairing, { it }))
     }
 
-    @Test fun afterTwoMinutesItResetsAndRebuildsSkippingDevicesWithoutKeyPackages() = runTest {
+    @Test fun neverResetsBecauseThePeerIsOffline() = runTest {
+        // P0-2: the v1.16 app reset 2 minutes after a reinstall whenever the peer was offline.
         val mls = FakeMlsEngine("a", "d-a")
-        val api = Api()
+        val api = Api().apply { rejoinReply = ApiResult.Ok(DmRejoinReply(op(added = listOf(me), removed = emptyList(), committer = null), 1)) }
+        val u = upgrader(mls, api)
+        // No committer online: the strip names the peer at once.
+        assertEquals(E2eeState.RepairWaiting("b"), u.ensure(conv, "a", "b", verify = true))
+        assertEquals("Setting up encryption on this phone… Waiting for Kamal to open RisiMe", e2eeStripText(E2eeState.RepairWaiting("b"), { "Kamal" }))
+        repeat(20) {
+            now += 10 * 60_000 // over three hours in all
+            assertEquals(E2eeState.RepairWaiting("b"), u.ensure(conv, "a", "b", verify = true, kicked = true))
+        }
+        assertTrue(api.resets.isEmpty())
+        assertTrue(api.rejoins >= 20)
+    }
+
+    @Test fun aNamedCommitterShowsSettingUpThenTheWaitAfterAMinute() = runTest {
+        val mls = FakeMlsEngine("a", "d-a")
+        val api = Api().apply { rejoinReply = ApiResult.Ok(DmRejoinReply(op(added = listOf(me), removed = emptyList()), 1)) }
         val u = upgrader(mls, api)
         assertEquals(E2eeState.Repairing, u.ensure(conv, "a", "b", verify = true))
-        now += MlsUpgrader.RESET_AFTER_MS
+        now += RejoinRules.WAITING_TEXT_AFTER_MS
+        assertEquals(E2eeState.RepairWaiting("b"), u.ensure(conv, "a", "b", verify = true))
+    }
+
+    @Test fun exhaustedResetsAndRebuildsSkippingDevicesWithoutKeyPackages() = runTest {
+        val mls = FakeMlsEngine("a", "d-a")
+        val api = Api().apply { rejoinReply = ApiResult.Ok(DmRejoinReply(op(added = listOf(me), removed = emptyList(), committer = null), 1, exhausted = true)) }
+        val u = upgrader(mls, api)
         api.groups += MlsGroup(e2ee = true, generation = 1, epoch = 5, ready = true)
         api.groups += MlsGroup(e2ee = true, generation = 2, epoch = null, ready = true)
         val s = u.ensure(conv, "a", "b", verify = true)
@@ -99,6 +129,43 @@ class DmRepairTest {
         assertEquals(E2eeState.Encrypted(1), upgrader(mls, api).ensure(conv, "a", "b", verify = true))
         assertEquals(listOf(3L), api.resets)
         assertEquals(4L, api.commits.single().generation)
+    }
+
+    @Test fun rejoinPendingOnTheResetKeepsWaiting() = runTest {
+        val mls = FakeMlsEngine("a", "d-a")
+        val api = Api().apply {
+            rejoinReply = ApiResult.Ok(DmRejoinReply(op(), 1, exhausted = true))
+            resetReply = ApiResult.Error(409, AuthErrors.REJOIN_PENDING, "")
+        }
+        val u = upgrader(mls, api)
+        assertEquals(E2eeState.Repairing, u.ensure(conv, "a", "b", verify = true))
+        assertEquals(listOf(1L), api.resets)
+        assertTrue(api.commits.isEmpty()) // no rebuild
+        // Still waiting on the next (throttled) check: no second reset.
+        now += 60_000
+        u.ensure(conv, "a", "b", verify = true)
+        assertEquals(listOf(1L), api.resets)
+    }
+
+    @Test fun theDecisionTable() {
+        // DM: reset only for candidates 0 or exhausted.
+        assertEquals(RejoinDecision.RESET, RejoinRules.dm(0, false))
+        assertEquals(RejoinDecision.RESET, RejoinRules.dm(2, true))
+        assertEquals(RejoinDecision.WAIT, RejoinRules.dm(1, false))
+        val day = RejoinRules.NO_CANDIDATE_RESET_MS
+        // Group, admin: exhausted, or no candidate for 24 h after the op's created_at.
+        assertEquals(RejoinDecision.RESET, RejoinRules.group(true, 2, true, 0, 1))
+        assertEquals(RejoinDecision.WAIT, RejoinRules.group(true, 0, false, 0, day - 1))
+        assertEquals(RejoinDecision.RESET, RejoinRules.group(true, 0, false, 0, day))
+        assertEquals(RejoinDecision.WAIT, RejoinRules.group(true, 0, false, null, 10 * day)) // no op time: never
+        assertEquals(RejoinDecision.WAIT, RejoinRules.group(true, 1, false, 0, 10 * day)) // a candidate: wait, however long
+        assertEquals(RejoinDecision.WAIT, RejoinRules.group(true, null, true, 0, 10 * day)) // pre-v1.21 reply: unknown
+        // Group, non-admin: never.
+        assertEquals(RejoinDecision.WAIT, RejoinRules.group(false, 2, true, 0, 1))
+        assertEquals(RejoinDecision.WAIT, RejoinRules.group(false, 0, false, 0, 10 * day))
+        assertEquals(1_000L, RejoinRules.epochMs("1970-01-01T00:00:01Z"))
+        assertNull(RejoinRules.epochMs("not a time"))
+        assertEquals("Setting up encryption on this phone… Waiting for a group member to open RisiMe", GROUP_WAITING_TEXT)
     }
 
     @Test fun generationConflictMeansSomeoneElseResetAndTheRaceLoserWaits() = runTest {
@@ -134,7 +201,7 @@ class DmRepairTest {
         assertEquals(E2eeState.WaitingForWelcome, u.ensure(conv, "a", "b", verify = true))
         assertEquals(0, api.rejoins)
         now += MlsUpgrader.WELCOME_WAIT_MS
-        assertEquals(E2eeState.Repairing, u.ensure(conv, "a", "b", verify = true))
+        assertEquals(E2eeState.RepairWaiting("b"), u.ensure(conv, "a", "b", verify = true))
         assertEquals(1, api.rejoins)
     }
 
