@@ -26,6 +26,16 @@ class ContractExamplesTest {
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
         "auth_verify_reply.json" to { s -> ProtocolJson.decodeFromString<AuthVerifyReply>(s) },
+        // v1.18 (§19 1:1 video calls): parse-only placeholders until the app implements it.
+        "call_end_video_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_media_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_offer_video_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_offer_video_payload_bad.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_signal_event_video.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_signal_push_video.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "device_put_video.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_video_not_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_group_video_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         // v1.17 (§18 profile photos): parse-only placeholders until the app implements it.
         "blob_upload_avatar_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "event_message_silent.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },

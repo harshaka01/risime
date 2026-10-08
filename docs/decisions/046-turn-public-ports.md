@@ -8,6 +8,12 @@ started publicly**. It goes live after the port check below passes and the serve
 LiveKit ports; 443 open), so until they open calls connect only directly (same LAN, or a NAT pair
 that allows it) and the app fails fast with "Can't connect the call" (§16.11).
 
+**Amended 2026-10-08 (contract v1.18/v1.19, decision 056):** `max-bps` is **300000** bytes/s per
+session (2.4 Mbit/s, input and output counted separately) for 1:1 video (PROTOCOL §19.8). The
+relay range shrinks to **49152–49499/udp**; **49500–49999/udp** is LiveKit's RTC media; LiveKit's
+reserved 7881/tcp and 50000–60000/udp below are **dropped** (decision 056). The ufw lines below
+are superseded by decision 056's.
+
 ## Context
 1:1 voice calls (proposal v1.13) are WebRTC peer-to-peer with Opus. About 10–20 % of mobile
 calls can't connect directly (symmetric NAT, carrier-grade NAT, UDP-blocking Wi-Fi) and need a

@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.17 (Release 0.3)
+# RisiMe Wire Protocol — v1.18 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -2399,7 +2399,7 @@ other devices, which note it for §16.5 and don't ring) — `call_offer_payload.
  "media": "audio", "sdp": "v=0\r\no=- 46117317 2 IN IP4 127.0.0.1\r\n…", "restart": false,
  "sent_at": "2026-10-06T08:15:30.123Z"}
 ```
-- `media` is `"audio"` in v1.13 (`"video"` reserved).
+- `media` is `"audio"` in v1.13 (`"video"` reserved; v1.18 video calls, §19).
 - `sdp` is the full offer SDP (§16.10 rules). **The offer is sent as soon as it is created**
   (android S-a), with whatever candidates are already gathered; the rest follow as `call_ice`
   (full trickle). The callee needs the caller's candidates only after a human taps Answer.
@@ -2492,6 +2492,8 @@ candidates, each a `candidate:` line of at most 512 bytes; `to_device`/`device_i
 - **Order of checks** (server suggestion; cheap first): total rate limit (60 per user per 10 s) →
   idempotent resend → `not_friends`/`unknown_recipient` → e2ee (`not_e2ee`, `stale_epoch`) →
   `calls_not_ready` (only for `ring: true`) → the ring and per-pair limits → store.
+- **(v1.18)** A cleartext `media` (`audio` | `video`), the delivery and push filter for `video`, and
+  `video_not_ready` right after `calls_not_ready`: §19.2.
 - **Idempotency is best effort, in memory** (server R4): the same `client_msg_id` from the same
   sender within 5 min returns the original reply, **lost on a server restart**. A duplicate after
   a restart gets a new `event_id`; the receiver's second decrypt of a consumed generation fails and
@@ -2796,7 +2798,7 @@ Auth required (`Authorization: Bearer`), no body → `200` (`calls_turn_reply.js
 - **Permissions:** `RECORD_AUDIO` (runtime), `MANAGE_OWN_CALLS`, `FOREGROUND_SERVICE`,
   `FOREGROUND_SERVICE_PHONE_CALL`, `FOREGROUND_SERVICE_MICROPHONE`, `USE_FULL_SCREEN_INTENT`,
   `WAKE_LOCK`, `MODIFY_AUDIO_SETTINGS`, `ACCESS_NETWORK_STATE`; `POST_NOTIFICATIONS` (33+).
-  **Not** `READ_PHONE_STATE`, `BLUETOOTH_CONNECT` or `CAMERA`. `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+  **Not** `READ_PHONE_STATE`, `BLUETOOTH_CONNECT` or `CAMERA` (v1.18: `CAMERA` for video calls, §19.9). `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
   only if the pilot shows missed rings.
 - **Settings → "Calls"** row explains what is missing (notifications, full-screen permission,
   battery optimisation, OEM toggles such as Xiaomi's "Show on lock screen") with deep links.
@@ -2806,6 +2808,7 @@ Auth required (`Authorization: Bearer`), no body → `200` (`calls_turn_reply.js
   suite). Release builds never log IPs or candidates.
 
 ### 16.10 Media security: DTLS-SRTP bound to MLS (normative; crypto R4–R6)
+(v1.18: §19.4 extends these rules for `media: "video"` and widens the header-extension strip.)
 - **(a) One SDP source.** The remote SDP comes **only** from a decrypted MLS envelope whose sender
   passed §16.3's binding and pinning. There is no other `setRemoteDescription` source: no debug
   intent, no server field, no deep link.
@@ -3736,7 +3739,203 @@ the old blob to its 24-h expiry, so late receivers can still fetch it.
 - **Live interop:** A sets a photo; B sees it in the DM and a shared group; A changes and removes
   it; B reinstalls and gets it back after A's device re-sends.
 
+## 19. Video calls, 1:1 (v1.18)
+Proposal `2026-10-08-video-calls-v1.18.md`, reviewed by server, android and crypto
+(`proposals/reviews/2026-10-08-video-calls-v1.18-*.md`). Extends §16 and overrides it where they
+differ for `media: "video"`; voice calls are unchanged. Additive: one device capability `video`,
+`video_ready`/`missing_video`, the error `video_not_ready`, a cleartext `media` on `call:signal`
+and the `call_signal` event, one ephemeral envelope type `call_media`, and the SDP rules of §19.4.
+No MLS core change, no server call table.
+
+### 19.0 Principles
+- **The same path as voice** (§16): MLS signalling in the DM, P2P WebRTC with coturn as the relay,
+  DTLS-SRTP bound to MLS with every §16.10 rule (a fresh certificate per call, the fingerprint
+  pinned and checked after connect). No frame encryption is needed: media is end to end between
+  the two phones, also when relayed.
+- **The media type is fixed when the call starts.** A video call negotiates one `m=audio` and one
+  `m=video` for its whole life. **Camera on/off never renegotiates** (§19.5). A voice call stays a
+  voice call: no upgrade to video in v1.18 (it would need renegotiation, with its glare and old-app
+  peers; a later version may add it).
+- **VP8 only** (§19.4): a software codec in every libwebrtc build, so it behaves the same on every
+  phone; Android H264 hardware encoders are the main source of device-specific failures, and VP9
+  costs more CPU on low-end phones. No simulcast (one peer, nothing to choose between).
+- **The camera is never turned on unasked** (android A3), and runs only while the call screen is
+  visible (android A1).
+
+### 19.1 Capability and readiness
+- A v1.18 app advertises **`"video"`** in `mls.capabilities` (`device_put_video.json`), only
+  together with `calls` (same conditions, §16.1) and only when the VP8 encoder and decoder load
+  (android A9). A phone without a camera still advertises it (it receives video).
+- **`GET /api/v1/mls/groups/{dm}`** gains **`"video_ready": bool`** (absent = false) and
+  **`"missing_video": [{"user_id", "device_id" | null}]`** (`mls_group_video_ready.json`),
+  computed exactly like `calls_ready`/`missing_calls` (§16.1): ready when the DM is e2ee and each
+  user has at least one instance seen in 30 days that advertises `video`; superseded devices never
+  count (§12.1).
+- **UI:** the DM header shows a video button next to the call button, disabled until
+  `video_ready` ("<name> needs to update the app for video calls"). `missing_video` is information
+  ("Your tablet won't ring for video calls until it updates").
+
+### 19.2 Cleartext `media` on `call:signal` (server S1)
+- `call:signal` gains **`"media": "audio" | "video"`** (absent = `"audio"`), sent on **every**
+  signal of a call with the offer's media (`call_signal_push_video.json`). Any other value →
+  `bad_request`.
+- **Delivery filter:** a `media: "video"` `call_signal` is delivered (live and join/sync) only to
+  sockets whose device advertises `video`, and the `call` push (§16.8, both the first push and the
+  3-s fallback) goes only to `video` devices. So an old device neither rings blind (§16.8 locked
+  ring) nor wakes for a call it would drop.
+- **`video_not_ready`** (`error_video_not_ready.json`): `ring: true` with `media: "video"` to a
+  user with no `video` device that has a signature key. Checked right after `calls_not_ready`
+  (§16.3 order of checks).
+- The **`call_signal` event** carries `media` (`call_signal_event_video.json`; absent = `audio`).
+- **Binding** (crypto K6, extends §16.3): for a `call_offer`, `event.media == envelope.media`; for
+  every later signal of that `call_id`, `event.media` equals the offer's; otherwise drop and log.
+- The server learns voice versus video per call (coturn learns it from the bitrate anyway).
+
+### 19.3 Envelopes
+- **`call_offer`** with **`"media": "video"`** (`call_offer_video_payload.json`): the SDP follows
+  §19.4. Restarts (`restart: true`) keep the media and the same m-lines.
+- **`call_media`** (new, ephemeral, `call:signal` with `ring: false`; `call_media_payload.json`):
+  ```json
+  {"v": 1, "type": "call_media", "call_id": "…", "to_device": "<peer device_id>", "camera": false}
+  ```
+  The sender's camera turned on or off. Sent only in a connected video call, to the selected peer
+  device; at most one per second per call, the last state wins (server S2: within the existing
+  30-per-pair-per-10-s bound). Sender pinning (§16.3) applies: only from the selected peer device.
+  Strict validation: `call_id`/`to_device` UUIDs, `camera` a boolean; else drop and log.
+- **`call_end`** carries the offer's media (`call_end_video_payload.json`): a video call stays
+  `"video"` even if both cameras were off.
+- **History lines** (extends §16.6):
+
+  | reason | Caller sees | Callee sees |
+  |---|---|---|
+  | `hangup` | "Video call · 3:12" | "Video call · 3:12" |
+  | `cancelled`, `timeout`, `busy` | "Video call · No answer" | **"Missed video call"** + "Missed video call from <name>" |
+  | `declined` | "Video call · Declined" | "Declined video call" |
+  | `failed` | "Video call · Couldn't connect" | as §16.6, with "video" |
+
+  "Call back" on a video line offers a video call (or voice).
+- **Strict validation** (extends §16.2): `media` is `audio` or `video`; for `video` the SDP rules
+  of §19.4.
+
+### 19.4 SDP rules for `media: "video"` (extends §16.10; crypto K1–K5)
+Every §16.10 rule holds, except where this list replaces one; drop and log on any failure (before
+ringing for an offer, before applying an answer or restart). `call_offer_video_payload_bad.json`
+(an `a=simulcast` line) must be dropped.
+- At most 16 KiB. **Exactly two m-lines: `m=audio` first, `m=video` second**, both
+  `UDP/TLS/RTP/SAVPF`. In an answer the `m=video` port may be 0 (video rejected: an audio call;
+  v1.18 apps never reject, they answer with the camera off).
+- **BUNDLE required** (K2): `a=group:BUNDLE` naming both mids, `a=rtcp-mux` in each m-section, so
+  there is one DTLS transport, the one §16.10 (e) checks. An unbundled answer is rejected.
+- **Fingerprints** (K1, replaces "exactly one `a=fingerprint`"): at least one; every
+  `a=fingerprint` line (session level or per m-section) is `sha-256` with 32 colon-separated hex
+  bytes and **all carry the same value**. §16.10 (d) and (e) apply to that value.
+- **Codecs:** the audio m-line as §16.10 (Opus). The video m-line **offers `VP8/90000`**; an offer
+  may list others (forward compatibility), but **an answer's video m-line lists only VP8 and its
+  `rtx` (`apt` = a VP8 payload type)**: no other codec, no `red`, `ulpfec` or `flexfec` (K4).
+  v1.18 apps set codec preferences VP8 then its `rtx` on the video transceiver (android A8), so
+  their offers carry only those too.
+- **No simulcast** (K5): no `a=simulcast`, no `a=rid`, no `a=ssrc-group` other than at most one
+  `FID` (the video SSRC and its RTX).
+- **Directions:** `a=sendrecv` on both m-lines in an offer; an answer may also use `recvonly`,
+  `sendonly` or `inactive` (future apps). v1.18 apps always answer `sendrecv`.
+- **Bandwidth:** `b=AS` on the video m-line, if present, at most 1500.
+- **Header extensions** (K3, extends the §16.10 strip rule): a v1.18 app strips these from every
+  SDP it produces (voice too), and rejects a video SDP that carries any of them (a voice SDP is
+  still rejected only for `ssrc-audio-level`, so v1.13–v1.17 peers keep working): `urn:ietf:params:rtp-hdrext:ssrc-audio-level`,
+  `urn:ietf:params:rtp-hdrext:csrc-audio-level`,
+  `http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time` and `urn:3gpp:video-orientation`
+  (without it libwebrtc rotates frames before encoding). `sdes:mid`, transport-cc and
+  abs-send-time stay (congestion control; no content).
+- No `a=crypto`; `a=setup`, `a=ice-ufrag`/`a=ice-pwd` as §16.10.
+
+### 19.5 Camera on and off (no renegotiation)
+- Both phones negotiate the video m-line `sendrecv` for the whole call. **Camera off** =
+  `RtpSender.setTrack(null)` (no video RTP is sent) and `call_media` `camera: false`; **camera on**
+  = the reverse with `camera: true`. No SDP changes, so no new fingerprint question and no glare.
+- **Frozen frames** (android A5): a receiver shows the peer's avatar on `camera: false`, and also
+  after **3 s** without a decoded frame; it switches back on the next frame.
+- **Visible only** (android A1): the camera runs only while the in-call activity is visible and the
+  phone unlocked. Leaving it (home, screen off, another app) stops the camera and sends `camera:
+  false`; returning restarts it if the user had it on. Audio continues as in §16. No `camera`
+  foreground-service type in v1.18; picture-in-picture is a later step.
+
+### 19.6 Call flow differences (extends §16.4, §16.5)
+- **Caller:** "Video call" in the DM header → `CAMERA` permission if needed (denied: the call goes
+  on with the camera off, android A2) → a local preview → the §16.4 flow with `media: "video"`.
+- **Callee:** the ringing UI says "Incoming video call" (the locked ring of §16.8 stays nameless
+  and media-less). **Answer** (camera on), **Answer without video** (camera off; can be turned on
+  later) or **Decline**. The camera starts only after a human taps Answer in the in-call activity:
+  never while ringing, never for the locked ring before unlocking, never by an automatic answer
+  (android A3).
+- **Glare** (android A4): the lower `call_id` wins whatever its media; the automatic answer uses
+  the camera only if the device's own losing call was a video call.
+- **Busy, decline, timeouts, restarts:** as §16.4/§16.5.
+- **Telecom** (android A6): `addCall` with `CALL_TYPE_VIDEO_CALL`; the default endpoint is the
+  speaker unless a wired or Bluetooth headset is connected; no proximity wake lock.
+
+### 19.7 Media parameters (android A7)
+- Front camera by default; switching cameras is local (no signal).
+- Capture at most 1280×720 at 30 fps; on mobile data or a relayed path start at 640×480 at 24 fps.
+- Sender `maxBitrateBps` at most **1 500 000** on Wi-Fi and **800 000** on mobile data;
+  `degradationPreference` BALANCED. On thermal status ≥ SEVERE: 640×480 at 15 fps.
+- Audio as §16.9 (Opus, CBR, FEC).
+
+### 19.8 TURN bandwidth (server S3; infra)
+Decision 046's `max-bps=64000` bytes/s per session (512 kbit/s) is too low for video. coturn now
+runs **`max-bps=300000`** (300 KB/s = 2.4 Mbit/s per session, input and output counted
+separately): 1.5 Mbit/s of video plus Opus, RTX and overhead fit with margin. No server-wide
+`bps-capacity` for the pilot; spark2's uplink is the real bound, and the release check measures
+one relayed video call (expect 1–2 Mbit/s each way). Recorded in decision 056 (with the port
+split of §20) and as an amendment to decision 046.
+
+### 19.9 Android client (normative where it says "must"; extends §16.9)
+- **`CAMERA`** (runtime) leaves §16.9's "never" list; asked only when starting or answering a video
+  call with the camera on. No `FOREGROUND_SERVICE_CAMERA` (§19.5).
+- The camera is behind `CallMedia` (a fake in JVM tests).
+- The debug stats overlay adds the video codec, resolution, frame rate and bitrate.
+- No new native library: VP8 is in the same libwebrtc (§16.9).
+
+### 19.10 Privacy and security
+- **The server learns** voice versus video per call (§19.2). Nothing else new.
+- **coturn and on-path observers** (relayed or not) see the video bitrate, keyframes and frame
+  timing (VBR), hence roughly motion and camera on/off; never content (crypto K7). The leaking
+  header extensions are stripped (§19.4).
+- **Decoders only after a human answer** (crypto K4): the remote description, and so any video
+  decoder, exists only after Answer; answers carry only VP8.
+- Video is never recorded and never goes to any model; no learning-log entries. The behaviour log
+  records "video call", direction and duration only.
+
+### 19.11 Rollout and old apps
+- **Order:** server (capability, readiness, `media`, the filter) → coturn `max-bps` → a nightly
+  that advertises `video` and shows the button → announce. A normal (optional) update.
+- **A ≤ v1.17 app** gets no `media: "video"` signals and no push for them (§19.2), so it never
+  rings for a video call; its user's newer device does. A `call_end` with `media: "video"` may be
+  dropped by its strict validation or shown as "Voice call"; accepted.
+- An old caller's signals have no `media` (= audio): unchanged.
+
+### 19.12 Test coverage (all gates)
+- **Server:** `media` validation, default and copy onto the event; the delivery filter (live and
+  join/sync) and the push filter (first push and 3-s fallback) for `video`; `video_not_ready`
+  after `calls_not_ready`; `video_ready`/`missing_video`; every new example.
+- **Android (JVM):** encode/decode of the new examples; the §19.4 drops (`call_offer_video_payload_bad.json`,
+  an unbundled answer, two different fingerprints, an answer with H264/`red`/`ulpfec`, `a=rid`,
+  each denylisted extension); `media` binding; `call_media` pinning and the 3-s frozen-frame
+  rule; answer options and "never camera unasked"; glare across media; the history lines; the
+  camera stopping when the activity is hidden.
+- **Live interop:** a video call both ways on the same LAN; camera off/on both sides; answer
+  without video; a relay-only video call through coturn (once decision 046's ports open) with the
+  post-connect check; the negative fingerprint test with video.
+
 ## Changelog
+- **v1.18** (2026-10-08): 1:1 video calls (§19), reviewed by server, android and crypto. The
+  `video` capability with `video_ready`/`missing_video`; a cleartext `media` on `call:signal` and
+  the `call_signal` event (delivery and push only to `video` devices, `video_not_ready`, bound to
+  the envelope); `call_offer` `media: "video"` with one `m=audio` and one `m=video`; SDP rules
+  (BUNDLE required, one fingerprint value across m-sections, VP8 only in answers, no simulcast,
+  `b=AS` ≤ 1500, more header extensions stripped); camera on/off without renegotiation
+  (`setTrack(null)` plus the ephemeral `call_media` envelope and a 3-s frozen-frame fallback); the
+  camera only while the call screen is visible and never unasked; video history lines; coturn
+  `max-bps` 300 000 bytes/s. No voice-to-video upgrade. Additive.
 - **v1.17** (2026-10-08): profile photos (§18), reviewed by server, android and crypto. The MLS
   envelope `profile_photo` (`ver` in server-corrected ms, the §14.4 icon object or `null`, the
   subject from the MLS sender only, a deterministic winner rule, strict validation, JPEG 64–512 px
