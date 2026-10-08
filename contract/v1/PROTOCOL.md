@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.20 (Release 0.3)
+# RisiMe Wire Protocol — v1.21 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -642,7 +642,9 @@ user's own devices first, then the peer's; each tier most recently seen first, t
 - 60 s per naming (`committer_until`), then the next untried candidate; when all were tried, the
   first again, for at most 6 namings in all. After that, or with no candidate online, the op waits
   (`committer` null) and the first candidate whose inbox joins is named. A widened op (§2) may
-  name every candidate again.
+  name every candidate again. **(v1.21: the "6 namings" cap is replaced by the per-device naming
+  budget and the `exhausted` state of §12.12.4; ops whose added devices can no longer receive are
+  pruned at every naming, §12.12.5; DMs also get wake pushes, §12.12.4.)**
 - Pre-v1.16 apps that advertise `member_devices` don't know `mls_dm_op` (they ignore unknown
   kinds); their naming simply times out. Their §10.3 `mls_membership` path still adds the new
   device as before; the op then only removes the superseded leaves.
@@ -704,6 +706,8 @@ caller) → `202 {"op": PendingOp | null, "candidates": n}` (`mls_dm_rejoin_repl
   group (its state was lost), it is removed and re-added. Idempotent.
 - `candidates` counts the op's candidates (§2.1), **online or not**. `0` means nobody can re-add
   this device: the client resets (§3) at once.
+- **(v1.21)** The reply gains **`"exhausted": bool`** (`mls_dm_rejoin_reply_v121.json`; absent =
+  false): every candidate was asked and none committed (§12.12.4).
 - `op: null, candidates: 0` while the DM awaits a rebuild (`epoch` null).
 - Errors: `404 not_found` (not a participant, or not e2ee), `400 bad_request` (`X-Device-Id`
   isn't a current MLS device of the caller), `not_friends`, `429 rate_limited` (10 per user per
@@ -719,8 +723,13 @@ caller) → `202 {"op": PendingOp | null, "candidates": n}` (`mls_dm_rejoin_repl
     `POST …/rejoin`, show **"Setting up encryption on this phone…"** (not a failed send; messages
     stay pending and go out when the Welcome is applied). If this device *is* in `devices` but has
     no local group, it first waits 60 s for a Welcome already on its way;
-  - `candidates: 0`, or still not set up **2 minutes** after it first saw the problem → reset (§3),
-    then rebuild. A `generation_conflict` means someone else reset: check again.
+  - **Reset (v1.21; replaces "`candidates: 0`, or still not set up 2 minutes after it first saw
+    the problem")**: reset (§3) only when the rejoin reply says
+    `candidates: 0` or `exhausted: true` (§12.12.3); otherwise wait with no timeout (the peer is
+    merely offline; the server wakes it, §12.12.4) and call `rejoin` again on chat open, resume,
+    reconnect and at most every 15 minutes while the chat is open. A `409 rejoin_pending` on reset
+    means: keep waiting. Then rebuild. A `generation_conflict` means someone else reset: check
+    again.
 - The **named committer** runs `mls_dm_op` once its earlier events are applied: claims the added
   devices (§10.2), commits in the §2.2 order with `op_id`, merges only on `200`; `epoch_conflict`
   → catch up and re-derive; a device without a key package → leave it (the server re-names).
@@ -940,7 +949,8 @@ caller isn't a member of is always `404 not_found`, so membership is never revea
     (`409 last_admin`). An agent can't be made admin (`422 invalid_role`).
 - **`POST /api/v1/groups/{id}/rejoin`** → `202 {"group": Group}`. For a device whose own group
   state is lost or broken (§12.8): it creates a `devices` op that removes and re-adds the calling
-  device.
+  device. (v1.21: the reply gains `op`, `candidates` and `exhausted`, and every device rejoins,
+  including the only admin; §12.12.2.)
 - **Idempotency:** repeating a leave, a removal or a role change that's already pending or done
   returns the same success (`204`/`200`).
 - **While `pending_remove`** (removed or left), the user's devices get no more `grp:` events of
@@ -979,7 +989,9 @@ caller isn't a member of is always `404 not_found`, so membership is never revea
     active member's in-group device under §12.4a.
 - **Expiry:** `add` and `role` ops expire **24 h** after creation (`expires_at`). An expired add
   drops its `pending_add` members and emits `add_expired`; an expired role op is dropped silently.
-  `remove`, `devices` and `rebuild` ops never expire: they're renamed until done.
+  `remove`, `devices` and `rebuild` ops never expire: they're renamed until done. (v1.21: a
+  `devices` op is renamed within the per-device naming budget of §12.12.4, and pruned of devices
+  that can no longer receive, §12.12.5.)
 - **A failed commit is never replayed blindly.** After `409 epoch_conflict` the client catches up
   and re-derives the op from `GET /groups/{id}`.
 - **Commit request for `grp:`** (extends §10.2, `mls_commit_request_group.json`):
@@ -1159,12 +1171,15 @@ per-purpose readers (§14.2).
   referenced blob is gone, or `410 log_expired`. Never a transient error. Then:
   - a **non-admin** calls `POST /groups/{id}/rejoin`; the named committer removes and re-adds the
     device, and it joins from the new Welcome;
-  - an **admin** may instead reset the whole group when more than its own device is broken (for
-    example every commit is rejected).
+  - **(v1.21; replaces "an admin may instead reset the whole group")** every device rejoins, the
+    only admin included; an admin resets only as the last resort of §12.12.3 (the rejoin was `exhausted`, or
+    had no candidate for 24 h) or by an explicit, confirmed "Reset encryption".
 - **`POST /api/v1/mls/groups/{grp:…}/reset`** `{"generation": n}` (**admins only**, `X-Device-Id`)
   → `200 {"generation": n + 1}` (`group_reset.json`, `group_reset_reply.json`).
   - `409 generation_conflict {"generation": current}` if it already moved; `403 not_admin`;
-    `429 rate_limited` at more than 1 reset per group per hour.
+    `429 rate_limited` at more than 1 reset per group per hour. (v1.21) **`409 rejoin_pending`**
+    while the calling device is waiting to be re-added (§12.12.3); it applies to the DM reset
+    (§10.6.3) too.
   - In one critical section, the server bumps `generation`, sets `epoch` to null, drops `add` and
     `role` ops (their `pending_add` members are dropped), finishes `remove` ops (those users are
     out), drops `devices` ops, creates a `rebuild` op with the caller's device as committer, and
@@ -1222,6 +1237,175 @@ Not a wire change; recorded so the release is reproducible.
   (the gate may just have opened).
 - Verify read-only: `select count(*) filter (where committer_device is null), count(*) from
   group_ops where type = 'devices'` before and after (waiting → 0 as members open the app).
+
+### 12.12 Reinstalls without reset, and stale leaves (v1.21)
+Proposal `2026-10-08-rejoin-without-reset-v1.21.md`, decision 060, reviewed by server, android and
+crypto (`proposals/reviews/2026-10-08-rejoin-without-reset-v1.21-*.md`). It covers `grp:` and DMs
+(§10.6) and replaces the parts of §10.6.2.1, §10.6.4, §10.6.5, §12.4 and §12.8 that point here.
+**No MLS core change:** the §12.4a core rules and H1 are unchanged. Additive on the wire (two reply
+fields, one error code); the behaviour changes are server and client rules.
+
+Why: on the pilot a reinstalled **only admin** reset its group at every reinstall (the client
+assumed that only admins may re-add another user's device, which §12.4a lifted in v1.14), and a
+DM was reset 2 minutes after a reinstall whenever the peer was offline. A reset costs every member
+(a new Welcome per device, closed history requests, parked old-generation events dropped, the
+"Encryption was reset" line); a rejoin costs only the new device. Meanwhile `devices` ops whose
+added device had itself been reinstalled again were renamed hundreds of times, and superseded
+leaves were never removed from groups.
+
+#### 12.12.1 Admin is a user role (clarification)
+- Roles belong to **users**: `group_members.role` on the server and the user ids in
+  `group_meta.admins` in the core. Every in-group leaf of an admin user is an **admin device**, on
+  the server (§12.4) and in the core (the leaf credential's `user_id` is in `admins`). A
+  reinstalled admin's new device is an admin device as soon as its leaf is added; no `role` op is
+  needed and no device "owns" the role.
+- A reinstalled user's new device is re-added through the §12.4a member path (the user still holds
+  a leaf: the old, superseded one) or by another admin, **whether or not the user is an admin**.
+  The only admin is no exception.
+- A user whose last leaf was removed can be re-added only by an admin (§12.4a, unchanged). For the
+  **only** admin this doesn't arise from device removals: removing another user's leaf needs an
+  admin or that user's own device, so the only admin's last leaf stays in the group until one of
+  that admin's own devices removes it. The remaining corner cases go to the last resort of
+  §12.12.3.
+
+#### 12.12.2 Rejoin replies (groups and DMs)
+- **`POST /api/v1/groups/{id}/rejoin`** → `202 {"group": Group, "op": PendingOp | null,
+  "candidates": n, "exhausted": bool}` (`group_rejoin_reply_v121.json`).
+- **`POST /api/v1/mls/groups/{dm}/rejoin`** → `202 {"op": PendingOp | null, "candidates": n,
+  "exhausted": bool}` (`mls_dm_rejoin_reply_v121.json`; v1.16 shape: `mls_dm_rejoin_reply.json`).
+- `op` is the `devices` op that adds the calling device; `null` while the conversation awaits a
+  rebuild (`epoch` null).
+- `candidates` counts the devices that may be named for that op, **online or not** and whatever
+  their budget: groups by the §12.4a naming order (tier 3 only while the op is member-committable
+  and the gate is open), DMs by §10.6.2.1.
+- `exhausted` is true when `candidates ≥ 1` and every candidate is out of its naming budget
+  (§12.12.4): every device that could re-add this one was asked and none did.
+- Both stay idempotent. Clients call `rejoin` again to refresh the numbers (on chat open, resume,
+  reconnect, and at most every 15 minutes while a chat that is waiting is open). The group rejoin
+  gets the DM limit: `429 rate_limited` at more than 10 per user per minute.
+- From a pre-v1.21 server: a group reply without `candidates` means "unknown" (never reset
+  automatically); a DM reply without `exhausted` means `false`.
+
+#### 12.12.3 When a device may reset (clients and the server guard)
+- **Every device** whose group state is missing or unrecoverable for the current generation
+  (§12.8) calls `rejoin`: admin or not, only admin or not, peer online or not. It never resets
+  because its user is the only admin, and never because the others are offline.
+- **While waiting** the chat shows "Setting up encryption on this phone…" and, when the rejoin
+  reply has a candidate but none has committed, "Waiting for <name> to open RisiMe" (DM) or
+  "Waiting for a group member to open RisiMe" (group). Sends stay pending in the outbox and go out
+  after the Welcome is applied (§10.6.5): never a failed send, never a reset line.
+- **Automatic reset, the last resort only:**
+  - **DM:** the rejoin reply has `candidates: 0` (nobody can ever re-add this device, e.g. both
+    users reinstalled), or `exhausted: true` (the peer's devices were asked and couldn't commit).
+  - **Group, admin devices only:** `exhausted: true`, or `candidates: 0` for **24 h** after the
+    op's `created_at` (members may still update and open the §12.4a gate). Non-admins never reset
+    (unchanged); they wait and keep calling `rejoin`.
+- **Manual reset:** an admin may pick "Reset encryption" in group info after a confirmation
+  ("Members who haven't opened RisiMe recently may lose messages they haven't received yet.
+  Reset?"). The server guard below still applies.
+- **The server guard.** `POST /api/v1/mls/groups/{id}/reset` (groups, §12.8, and DMs, §10.6.3)
+  answers **`409 rejoin_pending`** `{"op_id", "candidates"}` (`error_rejoin_pending.json`) when a
+  pending `devices` op adds the **calling device** (whether or not an old leaf of it is still in the
+  group) and that op is not exhausted and either has `candidates ≥ 1` or, for a group, was created
+  less than 24 h ago. Checked after the existing `404`/`403`/`400` checks and before
+  `generation_conflict` and the rate limit. A device that isn't waiting to be added (its own leaf
+  is fine) is not guarded. This also protects against apps up to v1.20, which reset the only
+  admin's groups and DMs after 2 minutes: they get the `409` and are re-added by the op the server
+  already created when they uploaded key packages (§12.4, §10.6.2).
+- **Hard rule 9:** neither a rejoin nor a reset deletes a local message. A reset drops MLS state and
+  parked events of the old generation only (§12.8), and those become gap rows (§17.2).
+
+#### 12.12.4 Naming budget, exhaustion and wake-ups (`devices` ops, groups and DMs)
+- Per op and device the server counts **strikes**: a naming whose 60 s (`committer_until`) ran out
+  without an accepted commit completing the op. A device with **3 strikes** on an op is **out of
+  budget**: it isn't named for that op again (not by rotation, not by the inbox-join rule, not by
+  the wake push) until one of:
+  - the op is widened (a new device in `added`), which clears every strike of that op;
+  - the device re-advertises its capabilities or connects with a different `app_version` (it may
+    have updated), which clears that device's strikes on every op;
+  - **24 h** passed since its last strike on that op.
+- Otherwise the rotation is unchanged: 60 s per naming, the next online candidate not yet tried,
+  the inbox-join rule, the §12.4a wake pushes. This replaces the §10.6.2.1 "at most 6 namings in
+  all" for DMs, and the unbounded renaming of `devices` ops in §12.4.
+- **Exhausted:** at least one candidate and every candidate out of budget. An exhausted op has
+  `committer` null and gets no namings and no wake pushes. It stays pending (it is never deleted
+  for being exhausted), so a cleared strike or a new candidate names again.
+- **DM wake-ups (new for DMs):** while a DM op has no online candidate, the §12.4a wake push
+  (content-free `{"type": "inbox", "v": "1"}` to the candidates' own tokens, every 6 h, at most 4
+  per device per day across ops) applies to DM ops too.
+- `add`, `remove`, `role` and `rebuild` ops keep §12.4's renaming (admins only).
+- Logs carry counts only (`devices_op_named`, `devices_op_exhausted`).
+
+#### 12.12.5 Ops whose targets are gone (groups; DMs as §10.6.2)
+At every naming, wake, inbox-join naming and accepted commit, under the conversation lock, the
+server prunes each pending `devices` op:
+- `added` loses every device that can no longer receive (§12.1: its row is gone, it wasn't seen
+  for 30 days, or it is superseded). A superseded device that is also in `removed` (a rejoin of a
+  phone that was reinstalled again) leaves both lists.
+- `removed` loses every device that is no longer in the group, and (cleanup ops, §12.12.6) every
+  device that is no longer stale.
+- An op whose affected user is no longer an active member is dropped.
+- An op left with nothing to do is **done**: deleted, no event. (Before v1.21 only a §10.1 device
+  removal pruned `added`, so the op of a phone that was reinstalled again was renamed forever.)
+
+#### 12.12.6 Removing stale leaves (groups and DMs)
+A leaf is **stale** when its device is superseded (§12.1), hasn't been seen (census or `PUT`) for
+**24 h** (server config `STALE_LEAF_HOURS`, default 24), and its user keeps **at least one
+non-superseded leaf** in the group. The 24 h keep a second phone that was briefly offline across
+the new registration from churning.
+- **Groups:** the server keeps at most one **cleanup op** per (group, user): a `devices` op with
+  `added: []` and `removed` = that user's stale leaves (`event_group_op_cleanup.json`). Committer
+  candidates, online only, most recently seen first: (1) the user's own non-superseded in-group
+  devices, (2) admin devices. **Never the §12.4a member tier:** a non-admin still can't remove
+  another user's different device (H1); the commit is authorised by the existing §12.4 rules (own
+  user's devices; admins). Cleanup ops get **no wake pushes**; they are named when a candidate is
+  online or its inbox joins.
+- **DMs:** the stale leaves join the `removed` list of the one op per (DM, user) (§10.6.2, which
+  already removes superseded leaves once the new device is in); the affected user's own device
+  may remove them without an `op_id` (§10.2), the peer's device with the `op_id` (§10.6.2.2).
+- **When:** an hourly server sweep (Oban cron, `RisiMe.Workers.StaleLeaves`) finds in-group
+  leaves that are stale and creates or widens the cleanup ops, then names. A Postgres query over
+  `mls_group_devices`, `devices` and `app_instances`; no Cassandra.
+- A listed device that is **seen again** stops being superseded and is pruned from the op
+  (§12.12.5). A superseded phone that comes back **after** its leaf was removed is current and not
+  in the group: it gets `removed_self`, rejoins through the ordinary op (§12.4, §10.6.2), and its
+  missing messages are the §13.3 gap that §17 history sharing fills. Its local messages are kept
+  (hard rule 9).
+- Effect on §17: a removed old phone isn't an own history candidate until it is opened again and
+  re-added.
+
+#### 12.12.7 Pilot recovery (server release task, one-off)
+`RisiMe.Release.stale_device_ops/1`, **dry run by default**: for every pending `devices` op
+(groups and DMs) it applies §12.12.5, clears all strikes, creates the §12.12.6 cleanup ops, and in
+a real run (`dry_run: false`) names. Idempotent. Logs and returns counts only: `ops`,
+`pruned_devices`, `done_ops`, `cleanup_ops`, `stale_leaves`, `named`, `waiting`, `exhausted`.
+
+    bin/risime eval "RisiMe.Release.stale_device_ops()"                # dry run
+    bin/risime eval "RisiMe.Release.stale_device_ops(dry_run: false)"  # prunes, creates, names
+
+#### 12.12.8 Tests
+- **Server:** the rejoin replies (`op`, `candidates` online or not, tier 3 only with the gate open,
+  `exhausted`); strikes per device and op, out of budget at 3, cleared by a widened op, a new
+  capability set or `app_version`, and after 24 h; the inbox-join rule and wake pushes skip
+  out-of-budget devices; DM wake pushes; the reset guard (`409 rejoin_pending` for the only admin's
+  new device with a member candidate; allowed when exhausted, for a group with no candidate after
+  24 h, for a DM with `candidates: 0`, and for a device not waiting to be added); pruning (a
+  superseded `added` device dropped, the op deleted when empty, no more namings); the sweep (24 h
+  floor, only while the user keeps a non-superseded leaf, tiers 1–2 only, never members, a device
+  seen again pruned); the recovery task (a dry run changes nothing); every new example.
+- **Policy fixture** (`group_policy_cases.json`, still `"v": 2`, both suites): two v1.21 cases,
+  the only admin's new device removing its own old leaf (accept) and a member removing it
+  (reject). "member adds an admin's new device" already covers the only-admin re-add.
+- **Android (JVM):** `rejoinPlan` never answers reset for the only admin; the decision table (DM:
+  reset only for `candidates: 0` or `exhausted`; group admin: `exhausted`, or `candidates: 0` for
+  24 h; non-admin: never); `409 rejoin_pending` keeps waiting; the waiting strip texts; sends stay
+  pending and go out after the Welcome; a cleanup op named to this device commits the removal of
+  its own user's old leaves; the manual reset's confirmation; parsing every new example.
+- **Live interop (gate):** the only admin of a three-member group reinstalls while one member is
+  online: re-added by that member, no reset, both directions work; the old leaf is removed after
+  the stale threshold (`STALE_LEAF_HOURS` lowered on the dev server). A DM whose peer stays
+  offline for 10 minutes after the other side reinstalls: no reset; queued messages arrive once
+  the peer opens the app.
 
 ## 13. History after a reinstall (v1.10)
 Decision 043. Reviewed by server and android (`proposals/reviews/2026-10-06-history-v1.10-*.md`).
@@ -4328,6 +4512,20 @@ While a user's `phone_confirmed` is `false`, that phone **isn't matched to them*
   `signal_friend_v120.json`.
 
 ## Changelog
+- **v1.21** (2026-10-08): reinstalls without reset, and stale leaves (§12.12, decision 060),
+  reviewed by server, android and crypto. Admin is a user role (a reinstalled admin's new device is
+  re-added by the §12.4a member path like anyone's; the only admin is no exception); every device
+  rejoins and resets only as a last resort (DM: `candidates: 0` or `exhausted`; group admin:
+  `exhausted`, or no candidate for 24 h; replaces the DM 2-minute rule and §12.8's admin reset); the
+  rejoin replies gain `op`/`candidates`/`exhausted` (groups) and `exhausted` (DMs); the reset guard
+  `409 rejoin_pending` (groups and DMs); a per-device naming budget (3 strikes, cleared by a widened
+  op, an update or 24 h) with the `exhausted` state, replacing the DM 6-naming cap and the unbounded
+  group renaming; DM wake pushes; `devices` ops pruned of devices that can no longer receive; stale
+  leaves (superseded, unseen 24 h, the user keeps a live leaf) removed by the user's own device or
+  an admin through cleanup ops from an hourly sweep (never by members); the recovery task
+  `stale_device_ops`; two cleanup cases in `group_policy_cases.json`. Adds the v1.16 examples that
+  were missing (`event_mls_dm_op.json`, `mls_commit_request_dm_op.json`,
+  `mls_dm_rejoin_reply.json`). No MLS core change. Additive on the wire.
 - **v1.20** (2026-10-08): open sign-up behind the server switch `OPEN_SIGNUP` (§21, decision 058).
   `GET /auth/config` `signup: "open" | "invite"`; `403 signup_required` when nothing maps and the
   switch is on (else `not_allowlisted`); `POST /auth/signup` `{"phone", "display_name"}` →

@@ -124,6 +124,12 @@ defmodule RisiMe.ContractExamplesTest do
                     error_signup_rate_limited.json error_bad_request.json friends_reply_v120.json
                     signal_friend_v120.json)
 
+  # v1.21 (reinstalls without reset, §12.12; plus the v1.16 DM-op examples that were missing):
+  # parse-only placeholders until the server implements it.
+  @pending_v1_21 ~w(error_rejoin_pending.json event_group_op_cleanup.json event_mls_dm_op.json
+                    group_rejoin_reply_v121.json mls_commit_request_dm_op.json
+                    mls_dm_rejoin_reply.json mls_dm_rejoin_reply_v121.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -175,7 +181,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_17 ++
         @checked_v1_18 ++
         @checked_v1_19 ++
-        @checked_v1_20
+        @checked_v1_20 ++
+        @pending_v1_21
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end

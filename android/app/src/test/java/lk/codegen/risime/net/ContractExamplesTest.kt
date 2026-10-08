@@ -26,6 +26,14 @@ class ContractExamplesTest {
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
         "auth_verify_reply.json" to { s -> ProtocolJson.decodeFromString<AuthVerifyReply>(s) },
+        // v1.21 (§12.12 reinstalls without reset; plus the v1.16 DM-op examples): parse-only placeholders until the app implements it.
+        "error_rejoin_pending.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_group_op_cleanup.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "event_mls_dm_op.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "group_rejoin_reply_v121.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_commit_request_dm_op.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_dm_rejoin_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_dm_rejoin_reply_v121.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         // v1.20 (§21 open sign-up).
         "auth_config_v120.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.signupOpen) } },
         "signup_request.json" to { s -> ProtocolJson.decodeFromString<SignupRequest>(s) },

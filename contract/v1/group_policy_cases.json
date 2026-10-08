@@ -840,6 +840,70 @@
     "name_changed": false
    },
    "expect": "reject"
+  },
+  {
+   "name": "reinstalled only admin's new device removes its own old leaf (v1.21 cleanup)",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1",
+     "a2"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a2",
+   "adds": [],
+   "removes": [
+    "A/a1"
+   ],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "member removes the only admin's old leaf (v1.21 cleanup is never a member's)",
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1",
+     "a2"
+    ],
+    "B": [
+     "b1",
+     "b2"
+    ],
+    "C": [
+     "c1"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "B/b1",
+   "adds": [],
+   "removes": [
+    "A/a1"
+   ],
+   "meta": null,
+   "expect": "reject"
   }
  ]
 }
