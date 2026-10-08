@@ -4,7 +4,20 @@
 # survive and the app must not ask to sign in again.
 #
 #   scripts/upgrade-test --new <apk> [--version X] [--commit SHA] [--old <apk|vX.Y.Z...>] [--serial S] [--serial-b S2]
-#                        [--target auto|redroid|emulator|device] [--no-group]
+#                        [--target auto|redroid|emulator|device] [--no-group] [--via-updater]
+#     --via-updater (the release gate, scripts/nightly-release): the update goes through the app's own
+#       in-app updater, as on a tester's phone, not `adb install -r`. A throwaway CA + a cert for
+#       risicloud.ai; an HTTPS static server on 127.0.0.1 (random port) serving app/risime/version.json
+#       (written by `scripts/publish-release --stage`, exactly as published) and the candidate APK; on
+#       device A (root: redroid) the CA goes into the system and conscrypt-APEX cacerts, risicloud.ai ->
+#       127.0.0.1 in /system/etc/hosts, and `adb reverse tcp:443` reaches the host server. The old app
+#       then sees "RisiMe <new> is available", the script taps Update (and a package-installer confirm,
+#       if one shows), waits for the new versionName and checks logcat ("Retain data and using new",
+#       "Marking session N as applied"). Without the flag: `adb install -r` (emergency path).
+#     UPDATER_BACK_SAFE_FROM=<versionCode>: when the OLD app's versionCode is at least this, the update
+#       is started, Back is pressed within 1 s (download throttled so it is still running), the app is
+#       reopened and the update must still complete. Unset (default) or an older OLD: skipped (logged);
+#       nightly.30 and older cancel the update when the app is left (bug A).
 #     auto (default): an attached adb device if there is one, else redroid on spark2.
 #     redroid: spark2 starts throwaway Android containers (scripts/android-target) and removes them after:
 #       A's, and C's (REDROID_INSTANCE + "-b", REDROID_PORT + 1) for the group checks. --no-group runs
@@ -30,7 +43,7 @@
 #     app there, and A creates the group "Upgrade group" with C (MLS) and sends one message.
 #  3. Snapshot: the messages A sees (UI dump; plus Room rows when `adb root` works, i.e. a
 #     google_apis emulator image).
-#  4. `adb install -r NEW`, start it, then verify: no sign-in screen, the chat list shows B (and the
+#  4. `adb install -r NEW` (or, --via-updater, the in-app updater installs it), start it, then verify: no sign-in screen, the chat list shows B (and the
 #     group), every seeded message is still in the chat, and (with root) the Room row counts and
 #     the session/owner keys in the DataStore are unchanged. With root, also after the upgrade:
 #     a new message is delivered; a reaction to a seeded message is stored and confirmed (Room
@@ -142,7 +155,7 @@ EXS
 fi
 
 # ---------------------------------------------------------------- driver half ------------------
-NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0; MANUAL=0; DEV=""; TARGET=auto; GROUP=1
+NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0; MANUAL=0; DEV=""; TARGET=auto; GROUP=1; VIA=adb
 while [ $# -gt 0 ]; do case "$1" in
   --new) NEW="$2"; shift 2;; --old) OLD="$2"; shift 2;; --version) VERSION="$2"; shift 2;;
   --commit) COMMIT="$2"; shift 2;; --serial) SERIAL="$2"; shift 2;; --serial-b) SERIAL_B="$2"; shift 2;;
@@ -150,13 +163,15 @@ while [ $# -gt 0 ]; do case "$1" in
   --target) TARGET="$2"; shift 2;;
   --manual-signin) MANUAL=1; shift;;
   --no-group) GROUP=0; shift;;
+  --via-updater) VIA=updater; shift;;
+  --via-adb) VIA=adb; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 
 case "$TARGET" in auto|redroid|emulator|device) ;; *) echo "--target auto|redroid|emulator|device"; exit 2;; esac
 # spark2's SDK adb is x86-64: use the arm64 adb (user space, scripts/android-target adb).
 if [ "$(uname -m)" = aarch64 ]; then PATH="$("$REPO/scripts/android-target" adb):$PATH"; fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-upgrade.XXXXXX")"
-TUNNEL_PID=""; STARTED_TARGET=""; STARTED_B=""; CHECKS=""
+TUNNEL_PID=""; STARTED_TARGET=""; STARTED_B=""; CHECKS=""; UPD_PID=""; UPD_PORT=""; BACK_STEP=no
 STEP="start"; RESULT=FAIL; REASON=""; RESULT_WRITTEN=0; VERSION_FOR_RESULT=""
 step() { STEP="$*"; echo "==> $*"; }
 fail() { REASON="$1"; echo "UPGRADE TEST FAILED: $1"; write_result; exit 1; }
@@ -166,7 +181,7 @@ write_result() {
   RESULT_WRITTEN=1
   { echo "result=$RESULT"; echo "version=$VERSION"; echo "commit=$COMMIT"; echo "old=${OLD_VN:-}"; echo "new=${NEW_VN:-}"
     echo "new_sha256=$(sha256sum "$NEW" | cut -d' ' -f1)"; echo "host=$(hostname)"; echo "device=$(adb -s "$SERIAL" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
-    echo "group=${SERIAL_B:+yes}"; echo "checks=${CHECKS# }"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
+    echo "group=${SERIAL_B:+yes}"; echo "via=$VIA"; echo "back_step=$BACK_STEP"; echo "checks=${CHECKS# }"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
   echo "==> result: $f"
   local diag=""
   [ "$RESULT" = PASS ] || diag="$(save_diagnostics || true)"
@@ -204,6 +219,7 @@ cleanup() {
   [ -n "$STARTED_TARGET" ] && "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
   [ -n "$STARTED_B" ] && redroid_b stop >/dev/null 2>&1 || true
   [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
+  [ -n "$UPD_PID" ] && kill "$UPD_PID" 2>/dev/null || true
   rm -rf -- "${WORK:?}"
 }
 trap cleanup EXIT
@@ -399,7 +415,11 @@ sign_in() {  # $1 phone, $2 email
   local code=""; for _ in $(seq 1 20); do code="$(srv otp "$1")"; [ -n "$code" ] && break; sleep 1; done
   [ -n "$code" ] || { echo "    the temp server never issued a code for the test user"; return 1; }
   echo "    enter the code"
-  type_into "6-digit code" "$code"; sleep 1; has "Verify" && tap "Verify" || true
+  type_into "6-digit code" "$code"; sleep 1
+  # The keyboard plus an "update available" banner (it can come back after the server change) hide
+  # Verify: close both first.
+  hide_keyboard; has "Later" && { tap "Later" || true; sleep 1; }
+  has "Verify" && tap "Verify" || true
   wait_chat_list 40 || return 1
   dismiss_prompts
 }
@@ -421,11 +441,16 @@ manual_sign_in() {
   echo "    timed out after 10 minutes waiting for the chat list"; return 1
 }
 
+# adb reverse: the temp server, and (--via-updater, device A) device 443 -> the local update server.
+reverses() {
+  A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+  if [ -n "$UPD_PORT" ] && [ "$DEV" = "$SERIAL" ]; then A reverse tcp:443 "tcp:$UPD_PORT" >/dev/null; fi
+}
 install_old() {
   A uninstall "$PKG" >/dev/null 2>&1 || true
   A install "$OLD" >/dev/null
   A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
-  A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+  reverses
 }
 
 open_chat() { A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/.MainActivity" >/dev/null; wait_for "$1" 40; dismiss_prompts; tap "$1"; sleep 2; }
@@ -440,7 +465,7 @@ db_snapshot() {
     A root >/dev/null 2>&1 || true; sleep 2
     case "$DEV" in *:*) adb connect "$DEV" >/dev/null 2>&1 || true;; esac   # adbd restarted: a TCP device reconnects
     A wait-for-device >/dev/null 2>&1 || true
-    A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null 2>&1 || true            # the restart drops adb reverse
+    reverses 2>/dev/null || true                                           # the restart drops adb reverse
     who="$(A shell id 2>/dev/null || true)"
   fi
   has_text "$who" "uid=0" || { echo "no-root"; return 0; }
@@ -503,6 +528,135 @@ await_field() {
   return 1
 }
 
+# ---- --via-updater: a local https://risicloud.ai/app/risime/ for device A (decision 016's updater, unmodified)
+UPD="$WORK/updater"
+# Root adbd on A (adb reverse to device port 443 and writes under /system need it). Redroid allows it.
+root_a() {
+  local who; who="$(A shell id 2>/dev/null || true)"
+  if ! has_text "$who" "uid=0"; then
+    A root >/dev/null 2>&1 || true; sleep 2
+    case "$DEV" in *:*) adb connect "$DEV" >/dev/null 2>&1 || true;; esac
+    A wait-for-device >/dev/null 2>&1 || true
+    who="$(A shell id 2>/dev/null || true)"
+  fi
+  has_text "$who" "uid=0"
+}
+updater_setup() {
+  mkdir -p "$UPD/www/app/risime"
+  # 1. A throwaway CA (2 days, key only in $WORK) and a server cert for risicloud.ai signed by it.
+  ( cd "$UPD" && openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -days 2 \
+      -subj "/CN=RisiMe upgrade-test throwaway CA $(date -u +%Y%m%dT%H%M%S)" \
+      -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    && openssl req -newkey rsa:2048 -nodes -keyout srv.key -out srv.csr -subj "/CN=risicloud.ai" \
+    && printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:risicloud.ai\n' > srv.ext \
+    && openssl x509 -req -in srv.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out srv.pem -days 2 -extfile srv.ext \
+    && cat srv.pem ca.pem > chain.pem ) >/dev/null 2>&1 || { echo "    openssl: could not make the throwaway CA/cert"; return 1; }
+  # 2. version.json + the APK exactly as a publish writes them (same code: publish-release --stage).
+  "$REPO/scripts/publish-release" --stage "$NEW" "$UPD/www/app/risime" > "$UPD/stage.log" 2>&1 \
+    || { cat "$UPD/stage.log"; echo "    publish-release --stage failed"; return 1; }
+  echo "    version.json: $(python3 -I -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["versionName"], d["versionCode"], d["url"], "sha256", d["sha256"][:12], "cert", d["certSha256"][:12])' "$UPD/www/app/risime/version.json")"
+  # 3. HTTPS static server, 127.0.0.1 only (CLAUDE.md rule 6), a free port. UPD_RATE (bytes/s, 0 = full
+  #    speed) throttles APK downloads so "Back during the download" really lands during it.
+  cat > "$UPD/serve.py" <<'PY'
+import functools, http.server, os, ssl, sys, time
+root, cert, key, portfile, logfile = sys.argv[1:6]
+rate = int(os.environ.get("UPD_RATE", "0") or 0)
+log = open(logfile, "a", buffering=1)
+class H(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, fmt, *a):
+        log.write("%s %s\n" % (self.log_date_time_string(), fmt % a))
+    def copyfile(self, src, dst):
+        if not rate or not self.path.endswith(".apk"):
+            return super().copyfile(src, dst)
+        chunk = max(rate // 10, 16384)
+        while True:
+            b = src.read(chunk)
+            if not b:
+                break
+            dst.write(b); time.sleep(len(b) / rate)
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(H, directory=root))
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(cert, key)
+srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+open(portfile + ".tmp", "w").write(str(srv.server_address[1])); os.rename(portfile + ".tmp", portfile)
+srv.serve_forever()
+PY
+  UPD_RATE="${UPD_RATE:-0}" python3 -I "$UPD/serve.py" "$UPD/www" "$UPD/chain.pem" "$UPD/srv.key" "$UPD/port" "$UPD/http.log" 2>> "$UPD/serve.err" &
+  UPD_PID=$!
+  for _ in $(seq 1 50); do [ -s "$UPD/port" ] && break; sleep 0.2; done
+  UPD_PORT="$(cat "$UPD/port" 2>/dev/null || true)"
+  [ -n "$UPD_PORT" ] || { cat "$UPD/serve.err" 2>/dev/null; echo "    the local update server didn't start"; return 1; }
+  curl -sf --cacert "$UPD/ca.pem" --resolve "risicloud.ai:$UPD_PORT:127.0.0.1" -o /dev/null "https://risicloud.ai:$UPD_PORT/app/risime/version.json" \
+    || { echo "    the local update server doesn't answer over TLS"; return 1; }
+  echo "    update server: https://127.0.0.1:$UPD_PORT (pid $UPD_PID)"
+  # 4. Device A: root, trust the CA, risicloud.ai -> 127.0.0.1, device :443 -> the host server.
+  root_a || { echo "    --via-updater needs a rooted device (adb root): redroid, or a userdebug emulator"; return 1; }
+  local h; h="$(openssl x509 -in "$UPD/ca.pem" -noout -subject_hash_old)"
+  A push "$UPD/ca.pem" "/data/local/tmp/$h.0" >/dev/null
+  # Android 14 reads CAs from the conscrypt APEX (/apex/com.android.conscrypt/cacerts); redroid's
+  # APEXes are flattened, so /apex/com.android.conscrypt is a bind mount of
+  # /system/apex/com.android.conscrypt on the container's writable overlay root: a file written there
+  # shows up in every mount namespace (zygote and apps included), no per-process bind mounts needed.
+  # /system/etc/security/cacerts too, for anything still reading the legacy store.
+  A shell "for d in /system/apex/com.android.conscrypt/cacerts /system/etc/security/cacerts; do cp /data/local/tmp/$h.0 \$d/$h.0 && chmod 644 \$d/$h.0 || exit 1; done
+           grep -q ' risicloud.ai\$' /system/etc/hosts || echo '127.0.0.1 risicloud.ai' >> /system/etc/hosts" \
+    || { echo "    could not write the CA / hosts entry under /system (read-only system? use redroid)"; return 1; }
+  local seen; seen="$(A shell "ls /apex/com.android.conscrypt/cacerts/$h.0; ping -c1 -W1 risicloud.ai" 2>&1 || true)"
+  has_text "$seen" "cacerts/$h.0" || { echo "    the CA is not visible under /apex/com.android.conscrypt/cacerts: $seen"; return 1; }
+  has_text "$seen" "(127.0.0.1)" || { echo "    risicloud.ai does not resolve to 127.0.0.1 on the device: $seen"; return 1; }
+  reverses
+  echo "    device: CA $h.0 trusted (conscrypt APEX + system), risicloud.ai -> 127.0.0.1, adb reverse tcp:443 -> :$UPD_PORT"
+}
+# The installed versionName of the app on A ("" if none).
+installed_vn() { local out; out="$(A shell dumpsys package "$PKG" 2>/dev/null || true)"; [[ "$out" =~ versionName=([^[:space:]]+) ]] && echo "${BASH_REMATCH[1]}" || echo ""; }
+# A package-installer confirmation on screen: tap its positive button.
+confirm_installer() {
+  grep -qE 'package="com\.(google\.)?android\.packageinstaller"' "$WORK/ui.xml" || return 1
+  echo "    package installer asks to confirm: tapping it"
+  local b; for b in "UPDATE ANYWAY" "Update anyway" "^Update" "^UPDATE" "^Install" "^INSTALL"; do tap "$b" >/dev/null 2>&1 && return 0; done
+  return 0
+}
+update_via_updater() {
+  local t0 vn="" err=""
+  A shell appops set "$PKG" REQUEST_INSTALL_PACKAGES allow
+  t0="$(A shell date +%s | tr -d '\r').000"   # logcat -T epoch form: no spaces through adb shell
+  A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/.MainActivity" >/dev/null
+  wait_for "RisiMe $NEW_VN is available" 60 || { echo "    (update server log: $(tail -3 "$UPD/http.log" 2>/dev/null | tr '\n' ' '))"; fail "the old app shows no \"RisiMe $NEW_VN is available\" banner"; }
+  grep -q 'GET /app/risime/version.json' "$UPD/http.log" || fail "the banner didn't come from the local update server"
+  echo "    banner: \"RisiMe $NEW_VN is available\"; tapping Update"
+  tap "^Update" || fail "no Update button on the banner"
+  if [ "$BACK_STEP" = yes ]; then
+    sleep 0.5; A shell input keyevent KEYCODE_BACK
+    echo "    Back pressed during the download; reopening the app in 1 s"
+    sleep 1; A shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1 || true
+  fi
+  for _ in $(seq 1 90); do
+    vn="$(installed_vn)"; [ "$vn" = "$NEW_VN" ] && break
+    dump
+    confirm_installer || true
+    err="$(grep -oE 'Update interrupted[^"]*|Install failed[^"]*|Install cancelled[^"]*|failed its security check[^"]*|Couldn.t download the update[^"]*|Update failed[^"]*' "$WORK/ui.xml" | sed -n 1p || true)"
+    [ -z "$err" ] || fail "the in-app update failed: $err"
+    sleep 2
+  done
+  [ "$vn" = "$NEW_VN" ] || fail "the in-app update didn't install within 3 min (installed: ${vn:-?}; $(dump; grep -oE 'text="(Updating|Confirm|Downloading|Verifying|Installing)[^"]*"' "$WORK/ui.xml" | tr '\n' ' '))"
+  grep -q "GET /app/risime/risime-$NEW_VN.apk HTTP/1.1\" 200" "$UPD/http.log" || fail "the APK was not downloaded from the local update server"
+  sleep 2
+  local lc; lc="$(A logcat -d -T "$t0" 2>/dev/null || true)"
+  grep -qE "Update package $PKG code path .*Retain data and using new" <<<"$lc" || fail "logcat: no \"Update package $PKG ... Retain data and using new\" (not an in-place update?)"
+  grep -qE "Marking session [0-9]+ as applied" <<<"$lc" || fail "logcat: the install session was not applied"
+  if grep -qE "RisiMe *: update failed|Update interrupted" <<<"$lc"; then fail "logcat: the updater reported a failure"; fi
+  echo "    installed $NEW_VN through the in-app updater: logcat \"$(grep -oE 'Retain data and using new' <<<"$lc" | sed -n 1p)\", \"$(grep -oE 'Marking session [0-9]+ as applied' <<<"$lc" | sed -n 1p)\""
+  CHECKS+=" in_app_updater"; [ "$BACK_STEP" = yes ] && CHECKS+=" updater_back"
+  return 0
+}
+
+if [ "$VIA" = updater ]; then
+  if [ -n "${UPDATER_BACK_SAFE_FROM:-}" ] && [ "$OLD_VC" -ge "$UPDATER_BACK_SAFE_FROM" ] 2>/dev/null; then BACK_STEP=yes
+  else BACK_STEP=skipped; echo "==> Back-during-download step skipped: old app $OLD_VN ($OLD_VC) is below UPDATER_BACK_SAFE_FROM=${UPDATER_BACK_SAFE_FROM:-unset} (bug A: leaving cancels the update)"; fi
+  # Throttle the APK (about 10 s for 40 MB) only for the Back step, so Back lands mid-download.
+  [ "$BACK_STEP" = yes ] && export UPD_RATE="${UPD_RATE:-4000000}"
+  step "local update server for the in-app updater (https://risicloud.ai/app/risime/ -> 127.0.0.1, device A)"
+  DEV="$SERIAL"; updater_setup || fail "in-app updater setup"
+fi
 # ---- 1. old app, signed in, with chats
 step "install the old app ($OLD_VN) on $SERIAL${SERIAL_B:+ and $SERIAL_B}"
 DEV="$SERIAL"; install_old
@@ -540,8 +694,13 @@ DB_BEFORE="$(db_snapshot)"; echo "    before (Room): $DB_BEFORE"
 cp "$WORK/counts-last.json" "$WORK/counts-before.json" 2>/dev/null || true
 
 # ---- 2. upgrade in place
-step "adb install -r the candidate ($NEW_VN)"
-A install -r "$NEW" >/dev/null || fail "adb install -r rejected the new APK"
+if [ "$VIA" = updater ]; then
+  step "update in place through the in-app updater: $OLD_VN -> $NEW_VN$([ "$BACK_STEP" = yes ] && echo " (Back during the download)")"
+  DEV="$SERIAL"; update_via_updater
+else
+  step "adb install -r the candidate ($NEW_VN)"
+  A install -r "$NEW" >/dev/null || fail "adb install -r rejected the new APK"
+fi
 A shell am start -W -n "$PKG/.MainActivity" >/dev/null; sleep 6; dismiss_prompts
 
 # ---- 3. verify

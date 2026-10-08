@@ -4,20 +4,31 @@
 # ~/risime-releases/publish/ and rsyncs it to `spark1:` (rrsync root ~/accounts/releases/risime/,
 # upload-only key). Only APKs, version.json and index.html ever cross the link (decision 015).
 #   scripts/publish-release v0.2.0-nightly.2 [--required] [--no-upload]
+#   scripts/publish-release --stage <apk> <dir>   # write version.json + index.html + the APK into <dir>
+#     exactly as a publish would (version from the APK), nothing uploaded, no pruning: the
+#     upgrade gate's local update server (scripts/upgrade-test --via-updater) serves <dir>.
 # Test hooks: RISIME_PUBLISH_DEST (default spark1:), RISIME_PUBLISH_RSH (rsync -e program).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REL="$HOME/risime-releases"; MIRROR="$REL/publish"; KEEP=5
 BASE_URL="${RISIME_PUBLISH_BASE_URL:-https://risicloud.ai/app/risime/}"
 DEST="${RISIME_PUBLISH_DEST:-spark1:}"
-TAG=""; REQUIRED=false; UPLOAD=1
-for a in "$@"; do case "$a" in
-  --required) REQUIRED=true;; --no-upload) UPLOAD=0;;
-  v*) TAG="$a";; *) echo "usage: $0 v<version> [--required] [--no-upload]"; exit 2;; esac; done
-[ -n "$TAG" ] || { echo "usage: $0 v<version> [--required] [--no-upload]"; exit 2; }
-ver="${TAG#v}"; src="$REL/$TAG"; apk="$src/risime-$ver.apk"
-[ -f "$apk" ] || { echo "no $apk (run scripts/nightly-release first)"; exit 1; }
-(cd "$src" && sha256sum -c --quiet SHA256SUMS) || { echo "checksum mismatch in $src"; exit 1; }
+TAG=""; REQUIRED=false; UPLOAD=1; STAGE=""
+while [ $# -gt 0 ]; do case "$1" in
+  --required) REQUIRED=true; shift;; --no-upload) UPLOAD=0; shift;;
+  --stage) STAGE_APK="${2:?--stage <apk> <dir>}"; STAGE="${3:?--stage <apk> <dir>}"; shift 3;;
+  v*) TAG="$1"; shift;; *) echo "usage: $0 v<version> [--required] [--no-upload] | --stage <apk> <dir>"; exit 2;; esac; done
+if [ -n "$STAGE" ]; then
+  case "$STAGE_APK" in /*) ;; *) STAGE_APK="$OLDPWD/$STAGE_APK";; esac   # relative to the caller (we cd'd)
+  case "$STAGE" in /*) ;; *) STAGE="$OLDPWD/$STAGE";; esac
+  apk="$STAGE_APK"; [ -f "$apk" ] || { echo "no $apk"; exit 1; }
+  src="$STAGE"; MIRROR="$STAGE"; UPLOAD=0
+else
+  [ -n "$TAG" ] || { echo "usage: $0 v<version> [--required] [--no-upload]"; exit 2; }
+  ver="${TAG#v}"; src="$REL/$TAG"; apk="$src/risime-$ver.apk"
+  [ -f "$apk" ] || { echo "no $apk (run scripts/nightly-release first)"; exit 1; }
+  (cd "$src" && sha256sum -c --quiet SHA256SUMS) || { echo "checksum mismatch in $src"; exit 1; }
+fi
 
 BT="$(printf '%s\n' "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
 certs="$("$BT/apksigner" verify --print-certs "$apk")"
@@ -26,11 +37,14 @@ cert="$(sed -n 's/.*certificate SHA-256 digest: //p' <<<"$certs" | sed -n 1p)"
 badging="$("$BT/aapt2" dump badging "$apk" | sed -n 1p)"   # not head: SIGPIPE under pipefail
 code="$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" <<<"$badging")"
 pkg="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")"
+[ -z "$STAGE" ] || ver="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$badging")"
 [ "$pkg" = lk.codegen.risime ] || { echo "unexpected package $pkg"; exit 1; }
 sha="$(sha256sum "$apk" | cut -d' ' -f1)"
 notes_md="$src/RELEASE-NOTES.md"
+[ -z "$STAGE" ] || notes_md="$REL/v$ver/RELEASE-NOTES.md"   # a candidate's notes, when already written
 
 mkdir -p "$MIRROR"
+if [ -n "$STAGE" ]; then cp "$apk" "$MIRROR/risime-$ver.apk"; else
 cp "$apk" "$MIRROR/"
 # Keep the newest $KEEP APKs by real versionCode (sort -V misorders 0.2.0 vs 0.2.0-nightly.N).
 mapfile -t apks < <(for f in "$MIRROR"/risime-*.apk; do
@@ -38,6 +52,7 @@ mapfile -t apks < <(for f in "$MIRROR"/risime-*.apk; do
 done | sort -n | cut -d' ' -f2-)
 if [ "${#apks[@]}" -gt "$KEEP" ]; then
   for old in "${apks[@]:0:${#apks[@]}-KEEP}"; do rm -f "$old"; done
+fi
 fi
 
 python3 - "$MIRROR" "$ver" "$code" "$sha" "$cert" "$REQUIRED" "$BASE_URL" "$notes_md" <<'PY'
@@ -81,6 +96,7 @@ code{{word-break:break-all;font-size:.8rem}} pre{{white-space:pre-wrap;backgroun
 <h1>RisiMe</h1><p>Talk. Connect. Act.</p>
 <p><a class="btn" href="{e(apk)}">Download RisiMe {e(ver)} for Android</a></p>
 <p>After installing, RisiMe keeps itself up to date.</p>
+<p><strong>Install over the old app &mdash; never uninstall: uninstalling deletes your chats. If Android says 'App not installed', don't uninstall &mdash; contact Harsha.</strong></p>
 <h2>What's new</h2><pre>{e(short)}</pre>
 <h2>Install</h2><ol><li>Open the downloaded file and allow "install unknown apps" for your browser when asked.</li>
 <li>Sign in with your work email; you'll get a code by email.</li></ol>
