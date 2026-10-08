@@ -1,5 +1,64 @@
 # Android status — 0.2 nightlies
 
+## P0-1 in-app updates that testers can finish (no more uninstalling) — READY
+**READY.** Commits `d5e0acf` (worker, resume, checks, feedback, failures, copy, hook, test hook) and `1cd0cc1` (Retry takes
+the server's current offer; offline checks don't use up the throttle; MY_PACKAGE_REPLACED keeps a newer offer).
+- **A, leaving the app:** download → verify → install run in `UpdateWorker` (expedited WorkManager job, foreground `dataSync`,
+  "Updating RisiMe to X · Downloading… 42%" with Cancel), not in `rememberCoroutineScope()`. The UI only calls
+  `Updater.start(info)` and observes `Updater.state`. The download (`ResumableDownload`) cancels the OkHttp call the moment the
+  job is cancelled, keeps `files/updates/risime-<code>.apk.part` and continues it with `Range: bytes=N-` (206 append, 200
+  restart, 416 complete, other bytes → whole file again); the sha256, pinned cert, package and versionCode are checked on the
+  finished file every time (all decision 016 checks unchanged). A killed process: WorkManager runs the job again and it resumes.
+  Retry re-reads `version.json` (a republished file or a newer nightly replaces the tapped one).
+- **B, checking:** on every foreground with a 15 min throttle (was 6 h per process) and every 15 min while in the foreground,
+  `If-None-Match`/ETag (304 reuses the body). A failed check doesn't start the throttle. Settings → About: app version, "Last
+  checked: <time> — <result>", **Check for updates** (forced), the never-uninstall line and "Download from website".
+- **C, silent update feedback:** right before `commit`, "Installing RisiMe X — the app will restart"; the release-only
+  `PackageReplacedReceiver` (ACTION_MY_PACKAGE_REPLACED) posts "RisiMe updated to X — tap to open · Your chats are kept." and
+  tries to reopen the app if it was in the foreground at commit (Android may block that; the notification stays).
+- **D, failures:** installer statuses are handled in every state (`stateAfterInstallStatus`: Idle/Available/Failed after a
+  restart or a dismissed banner use the persisted release; a stale session's late status is ignored). The last attempt
+  (versionCode, step, status, EXTRA_STATUS_MESSAGE, error text, session) is kept in a separate DataStore (`risime_update`); a
+  failure for a still-newer release shows again after a restart. On screen, in red, the real error: "App not installed: <what>:
+  <installer message>.", "Couldn't download the update: the update server answered HTTP 503.", "… failed its security check
+  (checksum mismatch / APK is signed by another key …), so nothing was installed." Every surface (banner, gate, failure
+  notification, About) offers **Download from website** (https://risicloud.ai/app/risime/). Log: `RisiMe update: status=…
+  msg=…` (plus `committed session=…`, `replaced, now …`). A failure while the app is in the background posts a notification.
+- **E, copy:** banner, required gate, notifications and About: "Install over the old app — never uninstall: uninstalling deletes
+  your chats."
+- **P0-2 seam:** `Updater.beforeInstall: BeforeUpdateInstall` (`suspend fun onBeforeUpdateInstall(target)`, default no-op) runs
+  after every check passed and before the PackageInstaller session; the install waits for it. A throwing hook is logged and the
+  install continues (an in-place update keeps chats by itself; a broken backup must not block updates). P0-2 sets it in
+  AppContainer.
+- **Test hook (decision 016 unchanged for releases):** `-Prisime.updateBaseUrl=<url>` (Gradle validates: `https://host/path/`, or
+  plain `http://` only for `127.0.0.1`/`10.0.2.2`; logged as TEST BUILD). `urlAllowed` takes plain http only when the base itself
+  is such a loopback mirror, so the release base (https://risicloud.ai/app/risime/) never accepts http. About shows an overridden
+  server in red. Not used by any script.
+- **Not done (needs a contract change):** reporting update failures to the server. Proposal-worthy later; for now the failure
+  is in logcat and on screen.
+- **Gates:** `./gradlew assembleDebug testDebugUnitTest` green after rebasing on `a91a01b`: **744** JVM tests, 0 failed (8 skipped). New: UpdateFlowTest (10:
+  check vs running/failed update, late and stale installer statuses, cold-start restore, Retry target, attempt JSON, Range
+  answers, progress text), ResumableDownloadTest (4, MockWebServer: Range resume, server ignoring Range, HTTP 503 keeps the
+  partial, cancel stops < 1 s and the next run resumes), UpdateLogicTest (15 min throttle + force, loopback mirror URL rule,
+  error texts), RequiredUpdateScreenTest (real error + never-uninstall line on the gate).
+- **Redroid (Android 14, own instance `-p01fix`, removed after):** release builds signed with the real key (local only, never
+  published) with `-Prisime.updateBaseUrl=http://127.0.0.1:8480/app/risime/` as 0.2.0-nightly.30 ("old") and nightly.31
+  ("new"), a throttled local mirror (Range + ETag) via `adb reverse`:
+  1. Old shows "RisiMe 0.2.0-nightly.31 is available"; Update → "Downloading… 25%"; **Back** to the launcher; the notification
+     went on to 92 %, 93 %…; installed silently (`committed session=… silent=true`), then "RisiMe updated to 0.2.0-nightly.31 —
+     tap to open" in the shade and `status=0 msg=INSTALL_SUCCEEDED`. firstInstallTime unchanged, DataStore + DB kept.
+  2. `kill -9` of the app at 10.0 MB: the job came back by itself and the mirror saw `Range: bytes=10000000-` (206); installed.
+  3. version.json with a wrong sha256: banner "RisiMe 0.2.0-nightly.31 wasn't installed" + in red "The downloaded update
+     failed its security check (checksum mismatch), so nothing was installed." + Retry, Download from website, never-uninstall
+     line; still shown after force-stop + relaunch offline (persisted). Republished with the right sha → Retry fetched the new
+     version.json and installed.
+  4. Cancel in the progress notification at 11 %: stopped in the same second, 8.8 MB partial kept, banner back to "Update";
+     Update → `version.json` 304, `Range: bytes=8800000-` (206) → installed.
+- **For root's gate (`scripts/upgrade-test --via-updater`):** set `UPDATER_BACK_SAFE_FROM` to the first versionCode carrying
+  this (nightly.31 = 20031 if that's the next tag). The error grep should add `App not installed[^"]*` and `wasn't installed`
+  (the installer failure text is now "App not installed: …"; "Install failed"/"Update interrupted" no longer exist), and the
+  logcat check can add `RisiMe update: status=[1-9]`. "RisiMe X is available", "Update" and "Later" are unchanged.
+
 ## v1.21 reinstalls without reset, and stale leaves (§12.12, decision 060) — READY
 **READY.** P0-2 (a reinstalled only admin reset its groups; DMs reset 2 minutes after a reinstall).
 - **Groups:** `rejoinPlan` lost its `RESET` branch: every device without state for the current generation rejoins,
