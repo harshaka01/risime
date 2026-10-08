@@ -84,6 +84,8 @@ fun systemText(line: SystemLine, me: String, nameOf: (String) -> String): String
         GroupEvent.METADATA_CHANGED -> if (line.name != null) "$actor changed the group name to “${line.name}”" else "$actor changed the group name"
         GroupEvent.ADD_EXPIRED -> "Couldn't add ${list(line.targets)}"
         GroupEvent.RESET -> "Encryption was reset; some messages may be missing"
+        lk.codegen.risime.net.ChatEventActions.OFFICIAL_OFF -> "$actor turned Official off"
+        lk.codegen.risime.net.ChatEventActions.OFFICIAL_ON -> "$actor turned Official on"
         SystemLine.HISTORY_GAP -> SystemLine.HISTORY_GAP_TEXT
         SystemLine.UNDECRYPTABLE -> SystemLine.UNDECRYPTABLE_TEXT
         else -> "The group changed"
@@ -135,6 +137,9 @@ data class RejoinWait(
 /** The kinds of group-op outbox rows (GroupOpEntity.type). */
 object GroupOpType {
     const val CREATE = "create"
+
+    /** §24.2 create (or finish) a chat's Official conversation. */
+    const val CREATE_OFFICIAL = "create_official"
     const val ADD = "add"
     const val REMOVE = "remove"
     const val LEAVE = "leave"
@@ -181,6 +186,10 @@ class GroupStore(
     private val onOpQueued: () -> Unit = {},
     /** §12.8 reset: drop the old-generation MLS group (and parked events). */
     private val onReset: suspend (conversationId: String, generation: Long) -> Unit = { _, _ -> },
+    /** §24.1: the group's MLS `group_meta` was read (null = not known yet): record its chat and tab. */
+    private val onMlsMeta: suspend (conversationId: String, meta: GroupMeta?) -> Unit = { _, _ -> },
+    /** §24.1: the server's word on the tab (a hint only, never trusted for Private-ness). */
+    private val onServerTab: (conversationId: String, tab: String?, chatId: String?) -> Unit = { _, _, _ -> },
 ) {
     fun observeGroups() = groups.all()
 
@@ -247,6 +256,8 @@ class GroupStore(
         val now = clock()
         val existing = groups.get(conv)
         val meta = metaOf(conv)
+        onServerTab(conv, e.tab, e.chatId)
+        onMlsMeta(conv, meta)
         val mine = e.targets.any { it.equals(me, true) }
         var line: SystemLine? = SystemLine(e.action, e.actor, e.targets, e.role)
         var photoLine: SystemLine? = null
@@ -372,6 +383,7 @@ class GroupStore(
         _stateChanges.value += 1
         val existing = groups.get(conv)
         val meta = metaOf(conv)
+        if (!removedSelf) onMlsMeta(conv, meta)
         if (existing == null) {
             if (removedSelf) return
             groups.upsert(GroupEntity(conv, meta?.name, GroupMember.ROLE_MEMBER, GroupEntity.STATE_ACTIVE, null, null, 1, null, null, null, clock()))
@@ -396,6 +408,8 @@ class GroupStore(
         val conv = group.id
         val existing = groups.get(conv)
         val meta = metaOf(conv)
+        onServerTab(conv, group.tab, group.chatId)
+        onMlsMeta(conv, meta)
         val state = when {
             group.state == Group.STATE_CREATING -> GroupEntity.STATE_CREATING
             existing?.state == GroupEntity.STATE_LEFT -> GroupEntity.STATE_LEFT // leave is immediate locally

@@ -40,6 +40,10 @@ data class ChatRow(
     val lastSender: String? = null,
     /** Group state line instead of the last message: "Creating…", "You left", "You were removed". */
     val stateLine: String? = null,
+    /** §24.9: the tab of the shown last message (its small icon), set only while tabs are on and the chat has an Official conversation. */
+    val lastTab: lk.codegen.risime.data.tabs.Tab? = null,
+    /** §24: the chat's Official conversation merged into this row (null: none on this device). */
+    val officialConversationId: String? = null,
 ) {
     /** Open the chat: friends, and former friends with history (read-only); every group. */
     val openable: Boolean get() = group || (userId != null && (friend || last != null))
@@ -84,6 +88,48 @@ fun splitLocked(rows: List<ChatRow>, locked: Set<String>?, meId: String): Locked
     if (locked.isEmpty()) return LockedSplit(rows)
     val (l, v) = rows.partition { it.conversationOf(meId)?.lowercase() in locked }
     return LockedSplit(v, l)
+}
+
+/** The chats list order: friends first, then the most recent activity, then the name. */
+val chatRowOrder: Comparator<ChatRow> = compareByDescending<ChatRow> { it.friend }
+    .thenByDescending { it.last?.localTs ?: 0L }
+    .thenBy { it.name.lowercase() }
+
+/**
+ * §24.9 one row per `chat_id`: an Official conversation (MLS says `tab: official`, or the server lists it
+ * as Official and this device can't read it yet) is never a row of its own. It merges into its chat's
+ * row: the newer last message of the two tabs (with its tab icon when [showTabIcon]) and the unread sum.
+ * An Official conversation whose chat has no row here stays hidden.
+ */
+fun mergeTabRows(
+    rows: List<ChatRow>,
+    tabs: Map<String, lk.codegen.risime.data.db.ChatTabEntity>?,
+    pendingOfficial: Map<String, String>,
+    meId: String,
+    showTabIcon: Boolean,
+): List<ChatRow> {
+    fun officialChat(r: ChatRow): String? {
+        val conv = r.conversationId?.lowercase()?.takeIf { r.group } ?: return null
+        val t = tabs?.get(conv)
+        return if (t != null) t.chatId.lowercase().takeIf { t.official } else pendingOfficial[conv]?.lowercase()
+    }
+    val official = rows.mapNotNull { r -> officialChat(r)?.let { it to r } }
+    if (official.isEmpty()) return rows
+    val byChat = official.groupBy({ it.first }, { it.second })
+    val officialKeys = official.map { it.second.key }.toSet()
+    return rows.filter { it.key !in officialKeys }.map { r ->
+        val off = byChat[r.conversationOf(meId)?.lowercase()]?.firstOrNull() ?: return@map r
+        val offLast = off.last?.takeIf { it.from.isNotEmpty() } // a group row with no message carries a placeholder
+        val offNewer = offLast != null && offLast.localTs > (r.last?.localTs ?: Long.MIN_VALUE)
+        r.copy(
+            last = if (offNewer) offLast else r.last,
+            lastSender = if (offNewer) off.lastSender else r.lastSender,
+            unread = r.unread + off.unread,
+            lastTab = if (!showTabIcon) null else if (offNewer) lk.codegen.risime.data.tabs.Tab.OFFICIAL else lk.codegen.risime.data.tabs.Tab.PRIVATE,
+            officialConversationId = off.conversationId,
+            typingLabel = r.typingLabel ?: off.typingLabel,
+        )
+    }.sortedWith(chatRowOrder)
 }
 
 /** One row per group, ordered with the DMs by last activity (a new group by when it appeared). */
@@ -153,11 +199,7 @@ fun buildChatRows(
             friend = ct.friend,
             vouchedBy = ct.vouchedByName,
         )
-    }.plus(groupRows).sortedWith(
-        compareByDescending<ChatRow> { it.friend }
-            .thenByDescending { it.last?.localTs ?: 0L }
-            .thenBy { it.name.lowercase() },
-    )
+    }.plus(groupRows).sortedWith(chatRowOrder)
 }
 
 class ChatsViewModel(private val c: AppContainer, private val meId: String) : ViewModel() {
@@ -186,7 +228,10 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
             buildChatRows(meId, contacts, lasts, unread, presence, typing, groups)
         },
         c.db.deletes().observeChatStates(),
-    ) { rows, states -> hideDeletedChats(rows, states, meId) }
+        c.chatTabs.rows,
+        c.chatTabs.pendingOfficial,
+        c.chatTabs.uiOn,
+    ) { rows, states, tabs, pending, tabsOn -> mergeTabRows(hideDeletedChats(rows, states, meId), tabs, pending, meId, tabsOn) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** The Calls tab: 1:1 call records grouped like WhatsApp ("Name (3)"), newest first. */

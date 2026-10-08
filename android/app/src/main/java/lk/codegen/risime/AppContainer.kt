@@ -216,6 +216,58 @@ class AppContainer(
         log = { Log.w("RisiMe", it) },
     )
 
+    // ---- Two tabs per chat (contract v1.24 §24): tab of each conversation from MLS, the server switch ----
+    val chatTabs = lk.codegen.risime.data.tabs.ChatTabs(
+        db.chatTabs(), scope,
+        persistedServerOn = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getBoolean("server_on", false),
+        persistServerOn = { on -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putBoolean("server_on", on).apply() },
+        log = { Log.i("RisiMe", it) },
+    )
+
+    /** §24.15: read `/auth/config` `tabs`; a change re-advertises the capabilities. */
+    suspend fun refreshTabsSwitch() {
+        val cfg = (api.authConfig() as? ApiResult.Ok)?.value ?: return
+        val before = chatTabs.serverOn.value
+        chatTabs.setServerOn(cfg.tabsOn)
+        if (before != cfg.tabsOn) refreshCapabilities()
+    }
+
+    /**
+     * §24.2 [Start Official] / a new group's Official: `POST /chats/{chat_id}/official` now (its refusal is
+     * the user's answer), then the epoch-0 commit through the group-op outbox (survives process death).
+     */
+    suspend fun startOfficial(chatId: String): ApiResult<lk.codegen.risime.net.Group> {
+        val r = api.createOfficial(chatId, sessionStore.deviceId())
+        if (r is ApiResult.Ok) {
+            chatTabs.setOfficialState(chatId, lk.codegen.risime.data.tabs.OfficialState.ON)
+            groupStore.queueLocal(r.value.group.id, lk.codegen.risime.data.groups.GroupOpType.CREATE_OFFICIAL,
+                lk.codegen.risime.net.ProtocolJson.encodeToString(lk.codegen.risime.data.groups.OfficialPayload.serializer(), lk.codegen.risime.data.groups.OfficialPayload(chatId)))
+        }
+        return when (r) {
+            is ApiResult.Ok -> ApiResult.Ok(r.value.group)
+            is ApiResult.Error -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    /** §24.4 `PATCH /chats/{chat_id}` `official: on | off`. */
+    suspend fun setOfficial(chatId: String, on: Boolean): ApiResult<lk.codegen.risime.net.Chat> {
+        val r = api.patchChat(chatId, if (on) "on" else "off", sessionStore.deviceId())
+        if (r is ApiResult.Ok) chatTabs.setOfficialState(chatId, r.value.chat.official.state)
+        return when (r) {
+            is ApiResult.Ok -> ApiResult.Ok(r.value.chat)
+            is ApiResult.Error -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    /** §24.8 `GET /chats/{chat_id}`: the server's Official state for the tab bar (tabs devices only). */
+    suspend fun refreshChat(chatId: String): lk.codegen.risime.net.Chat? {
+        val chat = (api.chat(chatId, sessionStore.deviceId()) as? ApiResult.Ok)?.value?.chat ?: return null
+        chatTabs.setOfficialState(chatId, chat.official.state)
+        return chat
+    }
+
     // ---- Push (contract v1.5, decision 026) ----
     // §23.5: while the screen is shared, RisiMe's own notifications carry no sender or content and make no sound.
     val notifier = Notifier(
@@ -324,6 +376,8 @@ class AppContainer(
                 mlsEngine?.let { e -> e.group(conv)?.takeIf { it.generation < generation }?.let { e.deleteGroup(conv) } }
                 db.mlsPending().dropOlderGenerations(conv, generation)
             },
+            onMlsMeta = { conv, meta -> chatTabs.recordMls(conv, meta) },
+            onServerTab = { conv, tab, chatId -> chatTabs.noteServerTab(conv, tab, chatId) },
         )
     }
 
@@ -342,6 +396,7 @@ class AppContainer(
             api.claimKeyPackages(userIds, dev(), conversationId).map { it.devices }
         override suspend fun commit(id: String, body: lk.codegen.risime.net.GroupCommitRequest) = api.groupCommit(id, body, dev()).map { it.epoch }
         override suspend fun uploadBlob(conversationId: String, bytes: ByteArray) = api.uploadBlob(conversationId, bytes).map { it.ref() }
+        override suspend fun createOfficial(chatId: String) = api.createOfficial(chatId, dev()).map { it.group }
     }
 
     private val dbTx: TransactionRunner = transactions?.invoke(db) ?: object : TransactionRunner {
@@ -473,6 +528,7 @@ class AppContainer(
             log = { Log.i("RisiMe", it) },
             openIcon = { conv, sealed -> openGroupIcon(conv, sealed) },
             gate = commitGate,
+            officialTab = { conv -> db.chatTabs().get(conv)?.takeIf { it.official }?.chatId },
         )
     }
 
@@ -512,8 +568,16 @@ class AppContainer(
     }
 
     /** §12.7 S4: "Kamal added you to <name>" (the name from the Welcome's group_meta), unless that chat is open. */
+    /** A user's display name for a local line: a contact, else any group member row, else "Someone". */
+    private suspend fun chatMemberName(userId: String): String =
+        contacts.contacts.first().firstOrNull { it.userId.equals(userId, true) }?.displayName
+            ?: db.groups().observeAllMembers().first().firstOrNull { it.userId.equals(userId, true) }?.displayName
+            ?: "Someone"
+
     private suspend fun notifyAddedToGroup(conversationId: String, actor: String) {
         if (foreground.value) return
+        // §24: an Official conversation is a tab of an existing chat, never a new group to announce.
+        if (!chatTabs.private(conversationId) || conversationId.lowercase() in chatTabs.pendingOfficial.value) return
         val name = db.groups().get(conversationId)?.name ?: mlsEngine?.groupMeta(conversationId)?.name
         val who = db.groups().members(conversationId).firstOrNull { it.userId.equals(actor, true) }?.displayName
             ?: contacts.contacts.first().firstOrNull { it.userId.equals(actor, true) }?.displayName ?: "Someone"
@@ -559,6 +623,8 @@ class AppContainer(
                 lk.codegen.risime.push.PushRegistrationStore(appContext).markRegistered(t)
                 Log.i("RisiMe", "RisiMe push: device registered, push token ${if (t == null) "none" else "sent"}")
             },
+            tabsSupported = { chatTabs.serverOn.value },
+            onAdvertised = { caps -> chatTabs.setAdvertised(lk.codegen.risime.net.DeviceMls.CAP_TABS in caps) },
         )
     }
 
@@ -976,6 +1042,9 @@ class AppContainer(
         reactionsDao = db.reactions(),
         groupsEnabled = { mlsEngine?.groupsSupported == true },
         groups = groupStore,
+        chatEvents = { eventId, e, me ->
+            chatTabs.applyChatEvent(eventId, e, me, nameOf = { id -> chatMemberName(id) }, insert = { db.messages().insert(it) }, now = System.currentTimeMillis())
+        },
         blobs = { ref -> fetchBlob(ref) },
         onUnrecoverable = { conv -> onGroupUnrecoverable(conv) },
         onDmNeedsRepair = { conv -> repairDm(conv) },
@@ -1201,6 +1270,10 @@ class AppContainer(
         // §12: group state and owed ops after every (re)join.
         scope.launch {
             realtime.state.collect { if (it == ConnectionState.Live) runCatching { syncGroups() } }
+        }
+        // §24.15: the server's `tabs` switch, read on every (re)join (a change re-advertises `tabs`).
+        scope.launch {
+            realtime.state.collect { if (it == ConnectionState.Live) runCatching { refreshTabsSwitch() } }
         }
         // The group-op outbox: one runner; a queued retry re-arms the timer.
         scope.launch {

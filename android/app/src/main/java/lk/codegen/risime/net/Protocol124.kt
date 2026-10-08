@@ -206,6 +206,18 @@ data class ReasonBody(val reason: String)
 /** §24 error codes. */
 object TabsErrors {
     const val PRIVATE_TAB = "private_tab"
+    const val OFFICIAL_OFF = "official_off"
+    const val AGENT_UNAVAILABLE = "agent_unavailable"
+    const val RISI_REQUIRED = "risi_required"
+    const val DM_CHAT = "dm_chat"
+    const val INVALID_MEMBER = "invalid_member"
+}
+
+/** `chat_event` actions. */
+object ChatEventActions {
+    const val OFFICIAL_CREATED = "official_created"
+    const val OFFICIAL_OFF = "official_off"
+    const val OFFICIAL_ON = "official_on"
 }
 
 /** Capability string a v1.24 client advertises in the MLS device capabilities. */

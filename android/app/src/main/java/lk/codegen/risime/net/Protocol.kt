@@ -192,6 +192,9 @@ data class Event(
 
     fun historyShare(): HistoryShareEvent? = if (kind == KIND_HISTORY_SHARE) ProtocolJson.decodeFromJsonElement<HistoryShareEvent>(data) else null
 
+    /** §24.8 (v1.24) a `chat_event` (Official created / off / on). */
+    fun chatEvent(): ChatEventData? = if (kind == KIND_CHAT_EVENT) ProtocolJson.decodeFromJsonElement<ChatEventData>(data) else null
+
     companion object {
         const val KIND_MESSAGE = "message"
         const val KIND_STATUS = "status"
@@ -209,6 +212,7 @@ data class Event(
         const val KIND_HISTORY_REQUEST_CLOSED = "history_request_closed"
         const val KIND_HISTORY_STATUS = "history_status"
         const val KIND_HISTORY_SHARE = "history_share"
+        const val KIND_CHAT_EVENT = "chat_event"
     }
 }
 
@@ -614,6 +618,9 @@ data class DeviceMls(
 
         /** v1.23 §23.1: screen sharing (with `call_switch`, once MediaProjection and the screencast source load). */
         const val CAP_SCREEN_SHARE = "screen_share"
+
+        /** v1.24 §24.7: two tabs, only while `/auth/config` says `tabs: on` and the core enforces §24.1. */
+        const val CAP_TABS = CAPABILITY_TABS
     }
 }
 
@@ -979,11 +986,29 @@ data class GroupMeta(
     /** §14.4 group icon (a blob reference with its key), kept verbatim; v1.11 apps still show the default avatar. */
     val icon: kotlinx.serialization.json.JsonElement? = null,
     val admins: List<String> = emptyList(),
+    /** §24.1 (v1.24): "private" | "official"; absent (every pre-v1.24 group) = Private. Immutable after epoch 0. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val tab: String? = null,
+    /** §24.1: the chat this group belongs to; absent = the group's own conversation id. Immutable after epoch 0. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("chat_id") val chatId: String? = null,
+    /** §24.1: the agent users of an Official group; absent = []. A Private group never has one. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val agents: List<String>? = null,
 ) {
+    /** §24.1: Official only when the MLS state says so; absent or anything else is Private. */
+    val official: Boolean get() = tab == TAB_OFFICIAL
+
     fun encode(): ByteArray = ProtocolJson.encodeToString(serializer(), this).toByteArray(Charsets.UTF_8)
 
     companion object {
         fun decode(bytes: ByteArray): GroupMeta? = runCatching { ProtocolJson.decodeFromString(serializer(), bytes.toString(Charsets.UTF_8)) }.getOrNull()
+
+        const val TAB_PRIVATE = "private"
+        const val TAB_OFFICIAL = "official"
     }
 }
 
@@ -1015,6 +1040,10 @@ data class GroupEvent(
     val members: List<GroupMember>? = null,
     val rebuilder: MlsDeviceRef? = null,
     @SerialName("server_ts") val serverTs: String? = null,
+    /** §24.8 (v1.24): every group_event of a v1.24 group; absent = Private, own id, `group`. Server JSON: a hint only (§24.1). */
+    @SerialName("chat_id") val chatId: String? = null,
+    val tab: String? = null,
+    @SerialName("chat_kind") val chatKind: String? = null,
 ) {
     companion object {
         const val CREATED = "created"

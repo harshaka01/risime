@@ -45,6 +45,33 @@ interface GroupApi {
     suspend fun claim(userIds: List<String>, conversationId: String?): ApiResult<List<ClaimedDevice>>
     suspend fun commit(id: String, body: GroupCommitRequest): ApiResult<Long>
     suspend fun uploadBlob(conversationId: String, bytes: ByteArray): ApiResult<BlobRef>
+
+    /** §24.2 `POST /chats/{chat_id}/official`: the chat's Official group (`creating` when new; idempotent). */
+    suspend fun createOfficial(chatId: String): ApiResult<Group> = ApiResult.Error(404, AuthErrors.NOT_FOUND, "")
+}
+
+/** §24.2 the Official conversation of [chatId] (lazy for 1:1s and migrated chats; right after a new group). */
+@Serializable
+data class OfficialPayload(@SerialName("chat_id") val chatId: String)
+
+/**
+ * §24.2 epoch 0 of an Official group: `group_meta` `{"tab": "official", "chat_id", "agents", "admins": the
+ * Private group's admins (both users for a 1:1), "name": the Private name (none for a 1:1, "" over the FFI)}`.
+ * [privateMeta] is the Private group's MLS meta (null for a 1:1); never the server's word.
+ */
+fun officialEpoch0Meta(chatId: String, group: Group, privateMeta: GroupMeta?, privateName: String?): GroupMeta {
+    val dm = chatId.startsWith("dm:")
+    val humans = group.members.filter { it.kind != GroupMember.KIND_AGENT }.map { it.userId }
+    val agents = (group.agents + group.members.filter { it.kind == GroupMember.KIND_AGENT }.map { it.userId }).distinct()
+    val admins = if (dm) humans else privateMeta?.admins?.takeIf { it.isNotEmpty() } ?: group.members.filter { it.admin && it.kind != GroupMember.KIND_AGENT }.map { it.userId }
+    return GroupMeta(
+        name = if (dm) "" else (privateMeta?.name ?: privateName ?: ""),
+        icon = if (dm) null else privateMeta?.icon,
+        admins = admins.filterNot { a -> agents.any { it.equals(a, true) } },
+        tab = GroupMeta.TAB_OFFICIAL,
+        chatId = chatId,
+        agents = agents,
+    )
 }
 
 @Serializable
@@ -114,6 +141,8 @@ class GroupOpsExecutor(
     private val openIcon: (conversationId: String, sealed: ByteArray) -> kotlinx.serialization.json.JsonElement? = { _, _ -> null },
     /** One own commit per conversation at a time, shared with the DM executors (no staged commit outlives its attempt). */
     private val gate: MlsCommitGate = MlsCommitGate(log),
+    /** §24.1: the chat id of [conversationId] when this device recorded it as Official from MLS (null = Private or unknown). */
+    private val officialTab: suspend (conversationId: String) -> String? = { null },
 ) {
     private val lock = Mutex()
 
@@ -197,6 +226,7 @@ class GroupOpsExecutor(
         val myId = me() ?: return OpOutcome.Retry("signed out", 60_000)
         return when (op.type) {
             GroupOpType.CREATE -> create(op, myId)
+            GroupOpType.CREATE_OFFICIAL -> createOfficial(op, myId)
             GroupOpType.ADD -> {
                 val p = ProtocolJson.decodeFromString(UsersPayload.serializer(), op.payloadJson)
                 net(api.addMembers(op.conversationId!!, p.userIds)) { g -> afterReply(g, myId) }
@@ -363,6 +393,48 @@ class GroupOpsExecutor(
     }
 
     /**
+     * §24.2: `POST /chats/{chat_id}/official` (idempotent: a retry gets the same group), then the epoch-0
+     * commit adding every device the claim returns (the members' `tabs` devices and Risi's) with the
+     * Official `group_meta`. An Official group that is already active is done (rejoined if this device
+     * has no state for it).
+     */
+    private suspend fun createOfficial(op: GroupOpEntity, myId: String): OpOutcome {
+        val mls = engine() ?: return OpOutcome.Retry("no MLS core", 60_000)
+        val p = ProtocolJson.decodeFromString(OfficialPayload.serializer(), op.payloadJson)
+        val group = when (val r = api.createOfficial(p.chatId)) {
+            is ApiResult.Ok -> r.value
+            is ApiResult.Error -> return errorOutcome(r)
+            is ApiResult.NetworkError -> return OpOutcome.Retry("network", 5_000)
+        }
+        val conv = group.id
+        if (op.conversationId != conv) ops.update((ops.get(op.id) ?: op).copy(conversationId = conv))
+        tx.run { store.applyServerGroup(group, myId) }
+        if (group.state != Group.STATE_CREATING) {
+            if (mls.group(conv) == null) store.queueLocal(conv, GroupOpType.REJOIN)
+            return OpOutcome.Done
+        }
+        return gate.withCommit(conv, mls) {
+            val claimed = when (val r = api.claim((group.members.map { it.userId } + myId).distinct(), conv)) {
+                is ApiResult.Ok -> r.value
+                is ApiResult.Error -> return@withCommit errorOutcome(r)
+                is ApiResult.NetworkError -> return@withCommit OpOutcome.Retry("network", 5_000)
+            }
+            val kps = keyPackages(claimed) ?: return@withCommit OpOutcome.Retry("no_key_package", 30_000)
+            val privateMeta = if (p.chatId.startsWith("dm:")) null else tx.run { mls.groupMeta(p.chatId) }
+            val meta = officialEpoch0Meta(p.chatId, group, privateMeta, groups.get(p.chatId)?.name)
+            val pc = try {
+                tx.run {
+                    if (mls.group(conv) != null) mls.deleteGroup(conv)
+                    mls.createGroupWithMeta(conv, group.generation, kps, meta)
+                }
+            } catch (e: MlsPolicyException) {
+                return@withCommit OpOutcome.Failed("policy: ${e.message}")
+            }
+            submit(conv, pc, opId = null, metaChanged = false, myId = myId, onConflict = { OpOutcome.Retry(AuthErrors.EPOCH_CONFLICT, 1_000) })
+        }
+    }
+
+    /**
      * §12.5 claim for a server op, reusing what an earlier attempt of the same op claimed (its
      * commit never landed, so those key packages are unused) when it covers [userIds].
      */
@@ -488,8 +560,16 @@ class GroupOpsExecutor(
                     val name = groups.get(conv)?.name ?: "Group"
                     val admins = g.members.filter { it.admin }.map { it.userId }
                     tx.run {
+                        // §24.1: a rebuilt Official group stays Official of the same chat (from this device's MLS state, never the server's word).
+                        val old = mls.groupMeta(conv)?.takeIf { it.official } ?: officialTab(conv)?.let { GroupMeta(name = name, tab = GroupMeta.TAB_OFFICIAL, chatId = it) }
                         mls.group(conv)?.takeIf { it.generation < g.generation }?.let { mls.deleteGroup(conv) }
-                        mls.createGroupWithMeta(conv, g.generation, kps, GroupMeta(name = name, admins = admins))
+                        val meta = if (old == null) {
+                            GroupMeta(name = name, admins = admins)
+                        } else {
+                            val agents = (g.agents + g.members.filter { it.kind == GroupMember.KIND_AGENT }.map { it.userId }).distinct()
+                            GroupMeta(name = if ((old.chatId ?: conv).startsWith("dm:")) "" else old.name, icon = old.icon, admins = admins.filterNot { a -> agents.any { it.equals(a, true) } }, tab = GroupMeta.TAB_OFFICIAL, chatId = old.chatId ?: conv, agents = agents)
+                        }
+                        mls.createGroupWithMeta(conv, g.generation, kps, meta)
                     }
                 }
                 else -> return OpOutcome.Failed("unknown op ${pending.type}")

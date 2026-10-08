@@ -100,8 +100,16 @@ interface MlsEngine {
     /** A GroupContextExtensions commit: rename, or a `role` op's admin list. */
     fun updateGroupMeta(conversationId: String, meta: GroupMeta): PendingCommit = unsupported()
 
-    /** The group's current `group_meta`, or null (no group, or a DM). */
+    /** The group's current `group_meta`, or null (no group, or a DM). v1.24: with `tab`, `chat_id` and `agents`. */
     fun groupMeta(conversationId: String): GroupMeta? = null
+
+    // ---- §24 two tabs (v1.24). Defaults = a core without the §24.1 rules: `tabs` is never advertised. ----
+
+    /** True once the bundled core enforces §24.1 (tab/chat_id immutable, no agent in Private or a DM, admin-only agent adds). */
+    val tabsSupported: Boolean get() = false
+
+    /** §24.1/§24.11: the users holding a leaf whose attestation says `kind: "agent"` (from MLS, never server JSON). */
+    fun agentUsers(conversationId: String): Set<String> = emptySet()
 
     // ---- §17 history sharing (v1.15). Defaults = a core without the §17.3 functions: the app then
     // never advertises `history_share`. `rsk` and `K` never cross this interface (crypto R7). ----

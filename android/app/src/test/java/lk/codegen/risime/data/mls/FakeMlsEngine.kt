@@ -115,6 +115,12 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
     var coreCaps: Set<String> = emptySet()
     override val coreCapabilities: Set<String> get() = coreCaps
 
+    // ---- §24 tabs (stand-in for the v1.24 core) ----
+    var tabsOn = false
+    override val tabsSupported: Boolean get() = tabsOn
+    val agents = mutableMapOf<String, Set<String>>()
+    override fun agentUsers(conversationId: String): Set<String> = agents[conversationId].orEmpty()
+
     /** When set, the core refuses group-member commits under the policy (§12.4a). */
     var policyRefusal: String? = null
     val metas = mutableMapOf<String, lk.codegen.risime.net.GroupMeta>()

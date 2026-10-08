@@ -68,6 +68,8 @@ class ChatEngine(
     private val groupsEnabled: () -> Boolean = { false },
     /** §12.7 group_event / group_op / group_receipt (null = no groups). */
     private val groups: lk.codegen.risime.data.groups.GroupStore? = null,
+    /** §24.8 `chat_event` (null = no tabs: the event is skipped, the cursor still advances). Runs in the event's transaction. */
+    private val chatEvents: (suspend (eventId: String, e: lk.codegen.risime.net.ChatEventData, me: String) -> Unit)? = null,
     /** §12.6: fetches a referenced commit/Welcome before the event's transaction. */
     private val blobs: (suspend (lk.codegen.risime.net.BlobRef) -> BlobFetch)? = null,
     /** §12.8: this device can't follow the group any more (rejoin). */
@@ -237,6 +239,10 @@ class ChatEngine(
                     // §16.3: ordered with the DM's other events, through the MLS pipeline; never a message.
                     Event.KIND_CALL_SIGNAL -> {
                         if (calls != null) runCatching { applyMls(me, e) }.onFailure { if (it is MlsNotReady) throw it; log("call_signal: ${it.message}") }
+                        false
+                    }
+                    Event.KIND_CHAT_EVENT -> {
+                        chatEvents?.let { apply -> runCatching { e.chatEvent() }.getOrNull()?.let { apply(e.eventId, it, me) } }
                         false
                     }
                     Event.KIND_GROUP_RECEIPT -> {

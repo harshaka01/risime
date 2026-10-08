@@ -102,6 +102,8 @@ class GroupOpsExecutorTest {
             uploads += bytes.size
             return ApiResult.Ok(BlobRef("blob-${uploads.size}", bytes.size.toLong(), "sha"))
         }
+        var officialReply: ApiResult<Group>? = null
+        override suspend fun createOfficial(chatId: String): ApiResult<Group> = (officialReply ?: ApiResult.Ok(group)).also { calls += "official:$chatId" }
     }
 
     private suspend fun queue(type: String, payload: String = "{}", clientGroupId: String? = null, c: String? = conv) = store.queueLocal(c, type, payload, clientGroupId)
@@ -125,6 +127,66 @@ class GroupOpsExecutorTest {
         val g = groupDao.groups[conv]!!
         assertEquals(GroupEntity.STATE_ACTIVE, g.state)
         assertEquals("Pilot team", g.name)
+    }
+
+    // ---- §24.2 Official creation ----
+
+    private val risi = "u-risi"
+    private val official = "grp:4e5f6a7b-8c9d-4e0f-9a1b-2c3d4e5f6a7b"
+
+    private fun officialGroup(chatId: String, chatKind: String, admins: List<String>) = Group(
+        official, "creating", me, null, 1, null, "admin",
+        listOf(me, kamal).map { member(it, if (it in admins) "admin" else "member") } + GroupMember(risi, "Risi", null, "member", "agent", "active", null),
+        chatId = chatId, tab = "official", chatKind = chatKind, agents = listOf(risi),
+    )
+
+    @Test fun startOfficialInA1to1CommitsEpochZeroWithBothUsersAdminAndRisiAsAgent() = runTest {
+        val dm = "dm:${kamal}_$me"
+        api.group = officialGroup(dm, "dm", listOf(me, kamal))
+        val id = queue(GroupOpType.CREATE_OFFICIAL, ProtocolJson.encodeToString(OfficialPayload.serializer(), OfficialPayload(dm)), c = official)
+        assertNull(exec.runDue())
+        assertEquals(GroupOpType.DONE, opsDao.rows[id]!!.state)
+        assertEquals(listOf("official:$dm"), api.calls)
+        assertEquals(listOf(listOf(me, kamal, risi) to official), api.claims) // §12.5 with the Official id: Risi's claim is allowed only here
+        val c = api.commits.single()
+        assertEquals(0L, c.epoch)
+        assertEquals(setOf("dev-kamal", "dev-risi", "dev-me2"), c.added.map { it.deviceId }.toSet())
+        assertEquals(
+            GroupMeta(name = "", admins = listOf(me, kamal), tab = "official", chatId = dm, agents = listOf(risi)),
+            mls.groupMeta(official),
+        )
+    }
+
+    @Test fun startOfficialInAGroupTakesNameAndAdminsFromThePrivateMlsState() = runTest {
+        mls.metas[conv] = GroupMeta(name = "Site team", admins = listOf(kamal)) // the Private group's MLS meta, not the server's roles
+        api.group = officialGroup(conv, "group", listOf(me))
+        queue(GroupOpType.CREATE_OFFICIAL, ProtocolJson.encodeToString(OfficialPayload.serializer(), OfficialPayload(conv)), c = official)
+        exec.runDue()
+        assertEquals(GroupMeta(name = "Site team", admins = listOf(kamal), tab = "official", chatId = conv, agents = listOf(risi)), mls.groupMeta(official))
+    }
+
+    @Test fun startOfficialRefusalsAreFinalAndAnActiveOfficialIsDone() = runTest {
+        api.officialReply = ApiResult.Error(409, AuthErrors.NOT_READY, "")
+        val id = queue(GroupOpType.CREATE_OFFICIAL, ProtocolJson.encodeToString(OfficialPayload.serializer(), OfficialPayload(conv)), c = null)
+        exec.runDue()
+        assertEquals(GroupOpType.FAILED, opsDao.rows[id]!!.state)
+        assertEquals(AuthErrors.NOT_READY, opsDao.rows[id]!!.lastError)
+        assertTrue(api.commits.isEmpty())
+        // 200 with the group already active (another member created it) and held here: nothing to commit.
+        api.officialReply = null
+        api.group = officialGroup(conv, "group", listOf(me)).copy(state = "active", epoch = 3)
+        mls.groups[official] = GroupRef(official, 1, 3)
+        val id2 = queue(GroupOpType.CREATE_OFFICIAL, ProtocolJson.encodeToString(OfficialPayload.serializer(), OfficialPayload(conv)), c = null)
+        exec.runDue()
+        assertEquals(GroupOpType.DONE, opsDao.rows[id2]!!.state)
+        assertTrue(api.commits.isEmpty())
+    }
+
+    @Test fun officialEpoch0MetaNeverNamesAnAgentAdmin() {
+        val g = officialGroup(conv, "group", listOf(me)).copy(members = listOf(member(me, "admin"), GroupMember(risi, "Risi", null, "admin", "agent", "active", null)))
+        val m = officialEpoch0Meta(conv, g, GroupMeta(name = "Site", admins = listOf(me, risi)), null)
+        assertEquals(listOf(me), m.admins)
+        assertEquals(listOf(risi), m.agents)
     }
 
     @Test fun createNotReadyFailsWithTheReasonAndRemovesTheCreatingRow() = runTest {

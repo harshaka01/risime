@@ -53,6 +53,10 @@ class DeviceRegistrar(
     private val screenShareSupported: () -> Boolean = { false },
     /** The server accepted a `PUT` carrying this push token (null: none was sent). Health screen. */
     private val onPushTokenRegistered: (String?) -> Unit = {},
+    /** §24.7: `/auth/config` says `tabs: on` (the app shows both tabs, creates and toggles Official, parses `chat_event`). */
+    private val tabsSupported: () -> Boolean = { false },
+    /** The capabilities a successful MLS `PUT` advertised. */
+    private val onAdvertised: (List<String>) -> Unit = {},
 ) {
     private val b64 = Base64.getEncoder()
 
@@ -80,6 +84,8 @@ class DeviceRegistrar(
             DeviceMls.CAP_MEMBER_DEVICES.takeIf { DeviceMls.CAP_MEMBER_DEVICES in mls.coreCapabilities },
             // v1.15 §17.1: the core's §17.3 functions present and the feature on.
             DeviceMls.CAP_HISTORY_SHARE.takeIf { mls.historySupported && historySupported() },
+            // v1.24 §24.7: only while the server switch is on and the bundled core enforces §24.1.
+            DeviceMls.CAP_TABS.takeIf { mls.tabsSupported && tabsSupported() },
         )
         else -> null
     }
@@ -116,6 +122,7 @@ class DeviceRegistrar(
             is ApiResult.Ok -> {
                 mls.setAttestation(r.value.attestation)
                 advertised = caps.orEmpty()
+                onAdvertised(caps.orEmpty())
                 onPushTokenRegistered(pushToken?.takeIf { it.isNotBlank() })
                 if (caps != null && groupsReplacedFor() != sigKey) replaceForGroups(id, mls, sigKey) else topUp(id, mls)
             }

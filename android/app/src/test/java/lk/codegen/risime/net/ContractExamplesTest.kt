@@ -49,13 +49,13 @@ class ContractExamplesTest {
         "envelope_risi_request.json" to { s -> ProtocolJson.decodeFromString<RisiRequestEnvelope>(s).also { require(it.type == "risi_request") } },
         "error_official_off.json" to { s -> ProtocolJson.decodeFromString<ReasonBody>(s).also { require(it.reason == "official_off") } },
         "error_private_tab.json" to { s -> apiError(s, TabsErrors.PRIVATE_TAB) },
-        "event_chat_official_created.json" to { s -> ProtocolJson.decodeFromString<ChatEvent>(s).also { require(it.kind == "chat_event" && it.data.action == "official_created") } },
+        "event_chat_official_created.json" to { s -> ProtocolJson.decodeFromString<ChatEvent>(s).also { require(it.kind == "chat_event" && it.data.action == "official_created" && ProtocolJson.decodeFromString<Event>(s).chatEvent()!!.officialConversationId != null) } },
         "event_chat_official_off.json" to { s -> ProtocolJson.decodeFromString<ChatEvent>(s).also { require(it.kind == "chat_event" && it.data.action == "official_off") } },
         "event_chat_official_on.json" to { s -> ProtocolJson.decodeFromString<ChatEvent>(s).also { require(it.kind == "chat_event" && it.data.action == "official_on") } },
         "event_group_agent_added.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { require(it.kind == "group_event") } },
         "event_group_agent_removed.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { require(it.kind == "group_event") } },
-        "event_group_created_official.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { require(it.kind == "group_event") } },
-        "group_meta_official.json" to { s -> ProtocolJson.parseToJsonElement(s).jsonObject.also { require(it["tab"]!!.jsonPrimitive.content == "official" && it["agents"]!!.jsonArray.size == 1) } },
+        "event_group_created_official.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { require(it.kind == "group_event" && it.groupEvent()!!.tab == "official" && it.groupEvent()!!.chatId != null && it.groupEvent()!!.members!!.any { m -> m.kind == "agent" }) } },
+        "group_meta_official.json" to { s -> GroupMeta.decode(s.toByteArray())!!.also { require(it.official && it.chatId!!.startsWith("grp:") && it.agents!!.size == 1 && it.admins.none { a -> a in it.agents!! }) } },
         "group_reply_v124.json" to { s -> ProtocolJson.decodeFromString<GroupReply>(s).also { require(it.group.tab == "official" && it.group.agents.size == 1 && it.group.members.any { m -> m.kind == "agent" }) } },
         "risi_commitments_reply.json" to { s -> ProtocolJson.decodeFromString<RisiCommitmentsReply>(s).also { require(it.commitments.single().state == "confirmed") } },
         "risi_facts_reply.json" to { s -> ProtocolJson.decodeFromString<RisiFactsReply>(s).also { require(it.facts.size == 2) } },
@@ -551,6 +551,8 @@ class ContractExamplesTest {
         check("key_packages_upload_replace.json", KeyPackagesUpload.serializer())
         check("key_packages_claim_group.json", KeyPackagesClaim.serializer())
         check("group_meta.json", GroupMeta.serializer())
+        // v1.24 (§24.1): the Official meta the app writes at epoch 0 (and a pre-v1.24 meta stays without the new keys).
+        check("group_meta_official.json", GroupMeta.serializer())
         // v1.22 (§22): the commit body and every bundle line the app writes.
         check("backup_create_request.json", BackupCreateRequest.serializer())
         check("backup_bundle_header.json", lk.codegen.risime.data.backup.BackupBundleHeader.serializer())

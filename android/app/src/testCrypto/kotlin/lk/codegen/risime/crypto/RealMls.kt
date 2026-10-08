@@ -46,7 +46,7 @@ object RealMls {
     }
 
     /** [attest] = sign the attestation with the test attestor (false: the live server attests). */
-    fun device(userId: String, deviceId: String, trusted: List<String> = listOf(attestor.publicJwk()), attest: Boolean = true): Device {
+    fun device(userId: String, deviceId: String, trusted: List<String> = listOf(attestor.publicJwk()), attest: Boolean = true, agent: Boolean = false): Device {
         val conn = BundledSQLiteDriver().open(":memory:")
         conn.execSQL(Migration2To3.SQL.first()) // mls_kv
         val sql = object : KvSql {
@@ -87,7 +87,9 @@ object RealMls {
             }
         }
         val engine = UniffiMlsEngineFactory().open(sql, KvSealer(ByteArray(32) { 9 }), runInTx, userId, deviceId, trusted)
-        if (attest) engine.setAttestation(attestor.attest(userId, deviceId, engine.signatureKey(), (System.currentTimeMillis() / 1000).toULong()))
+        val iat = (System.currentTimeMillis() / 1000).toULong()
+        // v1.24 §24.11: an agent device's attestation carries `kind: "agent"`.
+        if (attest) engine.setAttestation(if (agent) attestor.attestAgent(userId, deviceId, engine.signatureKey(), iat) else attestor.attest(userId, deviceId, engine.signatureKey(), iat))
         return Device(DeviceRef(userId, deviceId), conn, engine, connLock)
     }
 }

@@ -108,6 +108,20 @@ class ApiClient(
     suspend fun callsRoomStatus(conversationId: String, callId: String, media: String, deviceId: String): ApiResult<CallsRoomStatusReply> =
         call("POST", "calls/rooms", CallsRoomRequest(conversationId, callId, media, CallsRoomRequest.STATUS), headers = mapOf(DEVICE_HEADER to deviceId))
 
+    // ---- §24 (v1.24) chats and their tabs (tabs devices only) ----
+
+    suspend fun chats(deviceId: String): ApiResult<ChatsReply> = call<Unit, ChatsReply>("GET", "chats", null, headers = mapOf(DEVICE_HEADER to deviceId))
+
+    suspend fun chat(chatId: String, deviceId: String): ApiResult<ChatReply> = call<Unit, ChatReply>("GET", "chats/$chatId", null, headers = mapOf(DEVICE_HEADER to deviceId))
+
+    /** `201` (created, `state: creating`) or `200` (it already exists): both carry the Official group. */
+    suspend fun createOfficial(chatId: String, deviceId: String): ApiResult<GroupReply> =
+        call("POST", "chats/$chatId/official", JsonObject(emptyMap()), headers = mapOf(DEVICE_HEADER to deviceId))
+
+    /** `official`: "on" | "off". */
+    suspend fun patchChat(chatId: String, official: String, deviceId: String): ApiResult<ChatReply> =
+        call("PATCH", "chats/$chatId", ChatPatch(official), headers = mapOf(DEVICE_HEADER to deviceId))
+
     suspend fun groups(): ApiResult<GroupsReply> = call<Unit, GroupsReply>("GET", "groups", null)
 
     suspend fun group(id: String): ApiResult<GroupReply> = call<Unit, GroupReply>("GET", "groups/$id", null)

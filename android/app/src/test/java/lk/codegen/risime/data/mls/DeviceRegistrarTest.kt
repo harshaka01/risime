@@ -150,6 +150,36 @@ class DeviceRegistrarTest {
         assertEquals("[\"groups\",\"images\",\"deletes\",\"calls\"]", again["mls"]!!.jsonObject["capabilities"].toString())
     }
 
+/** v1.24 §24.7: `tabs` only while the server switch is on AND the bundled core enforces §24.1; re-advertised when the switch flips. */
+    @Test fun tabsAreAdvertisedOnlyWithTheServerSwitchAndATabsCore() = runBlocking {
+        var serverOn = false
+        var seen: List<String>? = null
+        val reg = DeviceRegistrar(api, { "dev-1" }, "0.3.0", { mls }, groupsReplacedFor = { "x" }, tabsSupported = { serverOn }, onAdvertised = { seen = it })
+        fun caps() = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject["mls"]!!.jsonObject["capabilities"].toString()
+
+        mls.tabsOn = true // the core enforces §24.1, the server says off
+        server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+        server.enqueue(json(200, """{"count":30}"""))
+        reg.register(null)
+        assertEquals("[\"groups\"]", caps())
+        server.takeRequest()
+        assertEquals(listOf("groups"), seen)
+
+        serverOn = true // the switch flips on: re-advertised with `tabs`
+        server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+        server.enqueue(json(200, """{"count":30}"""))
+        assertTrue(reg.refreshCapabilities(null) != null)
+        assertEquals("[\"groups\",\"tabs\"]", caps())
+        server.takeRequest()
+        assertEquals(listOf("groups", "tabs"), seen)
+
+        mls.tabsOn = false // a core without the §24.1 rules: never `tabs`, whatever the server says
+        server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+        server.enqueue(json(200, """{"count":30}"""))
+        reg.register(null)
+        assertEquals("[\"groups\"]", caps())
+    }
+
     @Test fun coreWithoutGroupsKeepsTheV17Registration() = runBlocking {
         mls.groupsOn = false
         server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
