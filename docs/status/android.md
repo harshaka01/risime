@@ -1,5 +1,33 @@
 # Android status — 0.2 nightlies
 
+## GO UX (brand, WhatsApp-style layout, + sheet, multi-photo captions, call screens, dark screen) — READY
+**READY.** Commits `023362f` (brand, theme, chat layout, + sheet, multi-photo), `3cf0b5e` (call screens,
+dark-screen fix), `5cb01ed` (polish from Redroid screenshots). No wire change, no Room change, no new library.
+- **Gates:** `./gradlew assembleDebug testDebugUnitTest` green: **639** JVM tests, 0 failed (8 skipped).
+  `scripts/call-device-test` (`CALLTEST_INSTANCE=_ux`, 4470, redroid `-ux1/-ux2` on 5730/5731, now stopped):
+  **CALLTEST OK**, all 8 calls incl. call 8 (Back during/after a call). Then, on the same two phones, by hand:
+  3 photos picked in the system picker, captions on 2, sent, received on B in DM; dark mode chat, list,
+  outgoing/incoming/active call, Back → chat with "Call in progress" bar. Screenshots looked right in both themes.
+- **Brand:** adaptive icon from `design/brand/risime-logo.png` (gradient background with the wordmark
+  removed, robot foreground in the safe zone, PNG mipmaps), Android 13 monochrome + notification icon
+  (`ic_stat_risime`, one vector glyph), Android 12+ splash via platform theme attributes (values-v31).
+- **Theme:** M3 light/dark from the logo (seed #1565E8 → primary #0056D3 / #B0C6FF; cyan accent for read
+  ticks; violet in the call gradient). All surface-container roles set. DesignTokensTest checks every pair.
+- **Layout:** chat wallpaper, bubbles ≤ 80 % width with a tail on the first of a run, time + ticks inline
+  when they fit; input bar = rounded field (emoji, text, +) + round Send; coloured initials avatars; round
+  unread badge; brand mark in the chats bar; tapping the chat title opens info. The 048 lock / strip stay.
+- **+ sheet:** Gallery (Photo Picker, up to 10) and Camera (only when a camera app resolves; FileProvider
+  cache file, no CAMERA permission, deleted after encrypting). Preview: pager, thumbnails, caption per photo,
+  remove, Send; each photo = its own §14 image message through the existing pipeline.
+- **Dark screen after Back:** the proximity screen-off wake lock was held for any active earpiece call,
+  even after Back put the call behind the chats → the chat went black whenever the sensor read "near".
+  Now held only while CallActivity is resumed (`wantsProximity`, ProximityRuleTest). Also: the call activity
+  never draws an empty window while closing, and the window background is the theme surface.
+- **Known limits:** redroid has no proximity sensor, so the root cause is verified by unit test + code, not
+  on a device (check on a real phone: call on earpiece, Back, cover the sensor → screen stays on). A batch of
+  photos can arrive on the receiver in upload-completion order (each photo uploads independently; the sender
+  shows them in pick order). Camera capture not exercised end to end (redroid camera has no sensor).
+
 ## v1.15 history sharing (§17) — READY (behind `HISTORY_SHARE_ENABLED`, off by default)
 **READY** for contract v1.15 §17 (decision 049, consent option A), in the chunk order of
 `contract/proposals/reviews/2026-10-06-history-share-android.md`. Commits `51f4071` (gap index, Room v9), `8e3e117`
