@@ -1,0 +1,66 @@
+# Self-hosted LLM for the Risi agent on spark2 (decision 059). vLLM, OpenAI-compatible API.
+# Binds 127.0.0.1:8100 only (rule 6); nothing in front of it, no Caddy route. The app server is
+# the only client. No chat text leaves spark2: weights are local, the hub is offline, telemetry off.
+#   docker compose --env-file .env -f infra/docker-compose.llm.yml up -d
+# Needs in .env: LLM_API_KEY (Bearer token for every request).
+# Weights: ~/risime-models/<dir> (outside the repo), see docs/decisions/059-self-hosted-llm.md.
+# Swap the model: download it into ~/risime-models, set LLM_MODEL_DIR in .env, `up -d`. Clients
+# always ask for the alias `risi-l1`, so the app server doesn't change.
+# Smoke test: scripts/llm-smoke
+name: risime-llm
+services:
+  vllm:
+    image: nvcr.io/nvidia/vllm:26.09-py3
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8100:8000"
+    gpus: all
+    shm_size: 8g
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    environment:
+      VLLM_API_KEY: ${LLM_API_KEY:?set in .env}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_NO_USAGE_STATS: "1"
+      DO_NOT_TRACK: "1"
+    volumes:
+      - ${HOME}/risime-models:/models:ro
+      - risime-llm-cache:/root/.cache
+    # Memory budget (GB10, 121 GB unified, shared with the pilot): 0.34 x 121.6 GB ~ 41 GB for
+    # weights (~35 GB FP8) + KV/state cache + activations. Keeps >= 24 GB RAM headroom for
+    # Phoenix, Postgres, Cassandra, coturn, LiveKit. Re-measure with `free -g` before raising it.
+    command:
+      - vllm
+      - serve
+      - /models/${LLM_MODEL_DIR:-Qwen3.6-35B-A3B-FP8}
+      - --served-model-name
+      - risi-l1
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --max-model-len
+      - "32768"
+      - --gpu-memory-utilization
+      - ${LLM_GPU_MEM_UTIL:-0.34}
+      - --max-num-seqs
+      - "8"
+      - --language-model-only
+      - --reasoning-parser
+      - qwen3
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
+      - --disable-uvicorn-access-log
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 600s
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+volumes:
+  risime-llm-cache:

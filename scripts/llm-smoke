@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# Smoke test of the self-hosted LLM (infra/docker-compose.llm.yml, decision 059).
+# Checks, against the running risime-llm container:
+#   - port 8100 is bound to 127.0.0.1 only;
+#   - /health is OK, a request without the API key is refused (401), /v1/models lists `risi-l1`;
+#   - a short synthetic chat: "summarise; decisions and action items with owners" as JSON; the
+#     JSON must parse and have the expected keys;
+#   - a ~4k-token synthetic chat summary: time to first token, decode tokens/s, total latency.
+# Synthetic text only; the key comes from .env and is never printed.
+#   scripts/llm-smoke [--url http://127.0.0.1:8100]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+url=http://127.0.0.1:8100
+[[ "${1:-}" == --url ]] && url=$2
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+LLM_API_KEY="$(grep -E '^LLM_API_KEY=' .env | tail -1 | cut -d= -f2-)"
+[[ -n "$LLM_API_KEY" ]] || fail "LLM_API_KEY missing from .env"
+export LLM_API_KEY LLM_URL="$url"
+
+# 1. Binding: every listener on :8100 is 127.0.0.1.
+binds="$(ss -ltnH 'sport = :8100' | awk '{print $4}' | sort -u)"
+[[ -n "$binds" ]] || fail "nothing listens on :8100"
+while read -r b; do
+  [[ "$b" == 127.0.0.1:8100 ]] || fail "port 8100 bound to $b (must be 127.0.0.1 only)"
+done <<<"$binds"
+echo "ok   bind: $(echo "$binds" | tr '\n' ' ')"
+
+# 2. Health and auth.
+[[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url/health")" == 200 ]] || fail "/health"
+echo "ok   /health 200"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url/v1/models")"
+[[ "$code" == 401 ]] || fail "/v1/models without key returned $code, want 401"
+echo "ok   no key -> 401"
+
+# 3-4. Models, JSON extraction, throughput (stdlib Python, isolated mode).
+python3 -I - <<'PY'
+import json, os, sys, time, urllib.request
+
+URL, KEY = os.environ["LLM_URL"], os.environ["LLM_API_KEY"]
+H = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
+
+def fail(msg):
+    print(f"FAIL: {msg}", file=sys.stderr); sys.exit(1)
+
+def get(path):
+    req = urllib.request.Request(URL + path, headers=H)
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.load(r)
+
+ids = [m["id"] for m in get("/v1/models")["data"]]
+if "risi-l1" not in ids: fail(f"risi-l1 not served: {ids}")
+print(f"ok   /v1/models: {ids}")
+
+def stream(messages, max_tokens, **extra):
+    """Streams a chat completion; returns (text, usage, ttft_s, total_s)."""
+    body = {"model": "risi-l1", "messages": messages, "max_tokens": max_tokens,
+            "temperature": 0.2, "top_p": 0.8, "stream": True,
+            "stream_options": {"include_usage": True}, **extra}
+    req = urllib.request.Request(URL + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                 headers=H, method="POST")
+    t0 = time.monotonic(); ttft = None; parts = []; usage = None
+    with urllib.request.urlopen(req, timeout=600) as r:
+        for raw in r:
+            line = raw.decode().strip()
+            if not line.startswith("data: ") or line == "data: [DONE]": continue
+            ev = json.loads(line[6:])
+            if ev.get("usage"): usage = ev["usage"]
+            for ch in ev.get("choices", []):
+                piece = ch.get("delta", {}).get("content")
+                if piece:
+                    if ttft is None: ttft = time.monotonic() - t0
+                    parts.append(piece)
+    return "".join(parts), usage, ttft or 0.0, time.monotonic() - t0
+
+SYSTEM = ("You are Risi, an assistant inside a team chat. Reply with JSON only, no prose, no code "
+          "fences, matching: {\"summary\": string, \"decisions\": [string], "
+          "\"action_items\": [{\"owner\": string, \"task\": string, \"due\": string|null}]}")
+
+SHORT = """[09:02] Nimal: Morning all. We need to fix the login bug before Friday's demo.
+[09:03] Priya: I can take the login bug, should be done by Thursday.
+[09:05] Kasun: Ok. Also, are we moving the demo to the big meeting room?
+[09:06] Nimal: Yes, decided: demo is in the big room, 3pm Friday.
+[09:07] Priya: hari, mama Thursday wenakota iwara karannam.
+[09:08] Kasun: I'll book the room and send the invite today.
+[09:10] Nimal: Great. Let's also drop the dark-mode feature from this release, not enough time.
+[09:11] Priya: Agreed, dark mode moves to next sprint.
+[09:12] Arun: Seri, naan release notes ezhudhuren by Thursday evening."""
+
+def check_json(text):
+    t = text.strip()
+    if t.startswith("```"): t = t.strip("`").split("\n", 1)[1].rsplit("```", 1)[0]
+    try: obj = json.loads(t)
+    except Exception as e: fail(f"reply is not JSON ({e}): {text[:300]!r}")
+    for k in ("summary", "decisions", "action_items"):
+        if k not in obj: fail(f"JSON lacks {k!r}: {obj}")
+    if not all(isinstance(a, dict) and a.get("owner") and a.get("task") for a in obj["action_items"]):
+        fail(f"action items need owner and task: {obj['action_items']}")
+    return obj
+
+text, usage, ttft, total = stream(
+    [{"role": "system", "content": SYSTEM},
+     {"role": "user", "content": "Summarise this chat; list decisions and action items with owners.\n\n" + SHORT}],
+    600, response_format={"type": "json_object"})
+obj = check_json(text)
+owners = sorted({a["owner"] for a in obj["action_items"]})
+print(f"ok   JSON extraction: {len(obj['decisions'])} decisions, {len(obj['action_items'])} "
+      f"action items, owners {owners}; {total:.2f}s")
+print("     " + json.dumps(obj, ensure_ascii=False)[:600])
+
+# ~4k-token synthetic chat: a sprint thread with varied topics and a few decisions.
+people = ["Nimal", "Priya", "Kasun", "Arun", "Dilani", "Ravi"]
+topics = ["the payments API timeout", "the Android crash on Samsung A14", "Cassandra compaction",
+          "the onboarding copy", "the TURN server bill", "the group-call echo", "push notification delays",
+          "the Tamil translation review", "the pilot sign-up numbers", "the backup restore drill"]
+lines = []
+for i in range(150):
+    p, t = people[i % 6], topics[(i * 7) % 10]
+    h, m = 9 + i // 30, (i * 2) % 60
+    lines.append(f"[{h:02d}:{m:02d}] {p}: Update on {t}: checked item {i}, "
+                 + ["still investigating, will report back.", "looks fixed on staging.",
+                    "need a second pair of eyes here.", "blocked until the vendor replies.",
+                    "I'll own this one and finish by Wednesday."][i % 5])
+lines.insert(60, "[10:45] Nimal: Decision: we ship the payments fix in nightly.31, not a hotfix.")
+lines.insert(120, "[12:10] Dilani: Decision: Tamil translations get a native reviewer before release.")
+long_chat = "\n".join(lines)
+
+text, usage, ttft, total = stream(
+    [{"role": "system", "content": SYSTEM},
+     {"role": "user", "content": "Summarise this chat; list decisions and action items with owners.\n\n" + long_chat}],
+    1024, response_format={"type": "json_object"})
+check_json(text)
+pt, ct = usage["prompt_tokens"], usage["completion_tokens"]
+decode = ct / max(total - ttft, 1e-6)
+print(f"ok   long summary: prompt {pt} tok, completion {ct} tok, TTFT {ttft:.2f}s "
+      f"(prefill ~{pt / max(ttft, 1e-6):.0f} tok/s), decode {decode:.1f} tok/s, total {total:.2f}s")
+PY
+echo "PASS llm-smoke"
