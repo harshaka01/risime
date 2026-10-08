@@ -58,7 +58,11 @@ defmodule RisiMe.Push.FCM do
       )
 
     case result do
-      {:ok, %Req.Response{status: 200}} ->
+      {:ok, %Req.Response{status: 200, body: body}} ->
+        # Audit only: the dispatcher logs the last path segment of FCM's message name.
+        with %{"name" => name} when is_binary(name) <- body,
+             do: Process.put(:push_fcm_message, name |> String.split("/") |> List.last())
+
         :ok
 
       {:ok, %Req.Response{status: 401}} ->

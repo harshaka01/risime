@@ -970,3 +970,10 @@ Codes are never logged unless `OTP_DEV_LOG=true`.
 - Oban job args are stored in plain text in Postgres: never put secrets, OTPs or message bodies
   in them.
 - The `inbox_events` partition grows per user. Monthly bucketing is in the backlog (0.4).
+
+## Push audit log lines (P0 background-delivery diagnosis)
+Greppable in `~/risime-logs/server.log` (info level; tokens, phone and email are never logged):
+- `push: kind=inbox|call user=<sha256(user_id)[0,8]> device=<device_id[0,8]> result=ok|unregistered|failed|<reason> ms=<n>` (+ ` msg=<FCM message id>` on success), one per delivery attempt (retry included in `ms`).
+- `push: skipped kind=inbox user=<hash8> reason=online devices_online=<n>`; `reason=coalesced` at debug level.
+- `push: none kind=inbox user=<hash8> reason=no_token`.
+Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/push_audit_test.exs`.

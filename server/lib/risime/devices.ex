@@ -485,6 +485,30 @@ defmodule RisiMe.Devices do
     )
   end
 
+  @doc "`{device_id, push_token}` pairs of a user's devices that have a token (push audit log)."
+  def push_targets(user_id) do
+    Repo.all(
+      from d in Device,
+        where: d.user_id == ^user_id and not is_nil(d.push_token),
+        select: {d.device_id, d.push_token}
+    )
+  end
+
+  @doc "All device ids of a user (push audit log: how many are online)."
+  def device_ids(user_id) do
+    Repo.all(from d in Device, where: d.user_id == ^user_id, select: d.device_id)
+  end
+
+  @doc "`%{token => {user_id, device_id}}` for these push tokens (push audit log)."
+  def token_owners(tokens) do
+    Repo.all(
+      from d in Device,
+        where: d.push_token in ^tokens,
+        select: {d.push_token, {d.user_id, d.device_id}}
+    )
+    |> Map.new()
+  end
+
   @doc "Deletes devices not seen (no PUT) for #{@unseen_days} days. Returns the count."
   def prune(now \\ DateTime.utc_now()) do
     cutoff = DateTime.add(now, -@unseen_days, :day)
