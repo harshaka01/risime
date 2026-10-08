@@ -2,7 +2,8 @@
 # uses fresh random user ids, so partitions never overlap between tests.
 RisiMe.Messaging.Store.Cassandra.truncate!()
 
-ExUnit.start()
+# `:livekit` talks to the real local LiveKit (v1.19 §20.2): `mix test --only livekit`.
+ExUnit.start(exclude: [:livekit])
 
 # Push.Test routes each push to the test that registered its token (see RisiMe.Fixtures.push_token/1).
 {:ok, _} = Registry.start_link(keys: :unique, name: RisiMe.Push.Test.registry())

@@ -8,10 +8,76 @@
 reinstall, §13, decision 043), **v1.11** (encrypted images, §14, decision 042) and **v1.12**
 (deleting messages and chats, §15, decision 047), **v1.13** (1:1 voice calls, §16, decisions
 046 and 051), **v1.14** (members restore an existing member's devices, §12.4a) and **v1.15**
-(history sharing between devices, §17, decision 049) are done, plus the group-readiness hotfix
-and the two §14 fixes root decided.
+(history sharing between devices, §17, decision 049), **v1.17** (profile photos, §18), **v1.18**
+(1:1 video calls, §19) and **v1.19** (group calls with LiveKit, §20, decision 056) are done, plus
+the group-readiness hotfix and the two §14 fixes root decided.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(482 tests, partition `_hs`); `scripts/interop` (instance `_hs`) green after v1.15 (INTEROP OK).
+(539 tests, 1 excluded: the optional `:livekit` integration test, green against the local
+LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
+
+## v1.19 group calls with LiveKit (§20) — READY
+- **Pilot env** (root adds them to the pilot environment): `LIVEKIT_URL`
+  (`wss://risime.risicloud.ai/livekit`), `LIVEKIT_API_URL` (optional, default
+  `http://127.0.0.1:7880`), `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (the same pair LiveKit runs
+  with). Any missing → `POST /calls/rooms` answers `503 calls_unavailable` and the removal hook
+  does nothing. `.env.example` lacks `LIVEKIT_URL` and `LIVEKIT_API_URL` (root's file).
+- **No migration.** No call table; LiveKit's room list is the only state.
+- **`RisiMe.Calls.LiveKit`**: config, the HMAC room name (HKDF-SHA256 with an empty salt), the
+  hand-rolled HS256 tokens (no new dependency): participant tokens exactly as
+  `livekit_token_claims.json` (600 s, microphone, + camera for video), API tokens 60 s with only
+  `roomCreate` / `roomList` / `roomAdmin`+room. **`RisiMe.Calls.LiveKit.API`** is a behaviour;
+  `RisiMe.Calls.LiveKit.Twirp` (Req, loopback, 5-s timeouts) is the real client
+  (`config :risime, :livekit_api`), `test/support/fake_livekit.ex` the fake.
+- **`RisiMe.Calls.Rooms`** / `POST /api/v1/calls/rooms`: order config (`503`) → body (`400`) →
+  active member of an active group (`404 not_found`) → `X-Device-Id` is a `group_calls` device of
+  the user in `mls_group_devices` (`403 invalid_device`) → rate (`start` 10/h, `join`+`status`
+  60/min per user, one shared bucket, `429` + `Retry-After`, refused requests don't count) →
+  LiveKit (`404 call_ended`, `409 call_full` from `num_participants ≥ max_participants`, `503`
+  when unreachable). `start` = idempotent `CreateRoom` (32/8, `empty_timeout` 60,
+  `departure_timeout` 20, metadata `{"c","m"}`).
+- **Removal** (`RemoveParticipant`, async under `RisiMe.Calls.TaskSupervisor`, inline in tests via
+  `:livekit_sync`): `Groups.mark_removing` (leave/remove → that user's identities in the group's
+  rooms, by metadata), `Groups.delete_member`, device removal/eviction/key change (that identity
+  in every `grp:` room), and `Commit.do_reset` — **interpretation:** a reset removes *every*
+  participant of the group's rooms (the old generation's call keys can't be rotated by a commit
+  any more; members rejoin with `join`).
+- **Group `call:signal`** (`conversation_id` instead of `to`; both or neither → `bad_request`):
+  total limit → parse → idempotent resend → `not_member` → `stale_epoch` / `too_long` → ring:
+  `calls_not_ready` when no other active member has a keyed `group_calls` device → limits (ring
+  1 per group per 30 s and 10/h per user, refused rings don't count; `ring: false` 30 per group per
+  10 s) → one `call_signals` row per active member user (sender included), broadcast; delivered
+  (live and join/sync) only to `group_calls` sockets; ring push at once to the other members'
+  `group_calls` devices without a live channel, no fallback.
+- **Readiness**: `group_calls_ready` / `missing_group_calls` on `grp:` views (caller + one other
+  member with a non-superseded `group_calls` device seen in 30 days).
+- Tests: `test/risime_web/controllers/group_calls_v119_test.exs` (17), the v1.19 describe in
+  `test/contract/examples_test.exs` (5), `test/integration/livekit_integration_test.exs`
+  (`@moduletag :livekit`, excluded by default; `mix test --only livekit`).
+- Contract note: `calls_room_reply.json`'s `expires_at` (10:10) doesn't match its token's `exp`
+  (09:30); the server's `expires_at` is always the token's `exp`. Cosmetic, no proposal.
+
+## v1.18 1:1 video calls (§19) — READY
+- No migration. `video` and `group_calls` join the stored capabilities.
+- `call:signal` `media` (`audio` default, `video`, else `bad_request`), always copied onto the
+  `call_signal` event (also for audio, so the v1.13 example now has one more field on the wire).
+  `video_not_ready` right after `calls_not_ready`. The socket keeps `:video` / `:group_calls`
+  assigns, updated live by the `{:device_calls, device_id, caps}` broadcast; a video signal is
+  delivered only to `video` sockets; the ring push and the 3-s fallback only to `video` devices.
+- `video_ready` / `missing_video` on DM views (non-superseded devices only; `calls_ready` keeps its
+  v1.13 rule).
+- Tests: `test/risime_web/channels/calls_v118_test.exs` (6), the v1.18 describe (3).
+
+## v1.17 profile photos (§18) — READY
+- **Migration** `20261008100000_blobs_avatar`: `blobs.conversation_id` nullable (Postgres only).
+- `avatar` blobs: no `conversation_id` (`400` with one), `client_blob_id` required, 512 KiB,
+  3/h and 10/day, no quota, not in usage, the lower (20 GiB) disk guard. One current per user:
+  in the insert transaction under the owner lock, the previous current row gets now + 24 h.
+  Readers: owner; friends with no block either way; a shared group with both `active` or
+  `pending_add`. Expired ones go through the existing sweep.
+- `silent: true` on e2ee DM and group `msg:send`: stored, on the event (`"silent": true`, absent
+  otherwise), replayed, never pushed (neither at once nor coalesced); `bad_request` for a
+  non-boolean or with `body`/`reaction`.
+- Tests: `test/risime_web/controllers/profile_photos_v117_test.exs` (12), the v1.17 describe (3).
 
 ## v1.15 history sharing between devices (§17) — READY
 - **Migration** `20261007100000_create_history_sharing`: `history_requests` (PK `request_id`;

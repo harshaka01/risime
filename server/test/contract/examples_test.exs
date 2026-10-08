@@ -107,8 +107,10 @@ defmodule RisiMe.ContractExamplesTest do
                     call_signal_event_video.json call_signal_push_video.json device_put_video.json
                     error_video_not_ready.json mls_group_video_ready.json)
 
-  # v1.19 (group calls, §20): parse-only placeholders until the server implements it.
-  @pending_v1_19 ~w(call_member_payload.json call_offer_sfu_payload.json
+  # v1.19 (group calls, §20): checked in the "v1.19" describe below; the behaviour in
+  # test/risime_web/controllers/group_calls_v119_test.exs. The envelopes travel inside MLS: they
+  # are checked against the §20.3/§20.4 rules instead.
+  @checked_v1_19 ~w(call_member_payload.json call_offer_sfu_payload.json
                     call_signal_event_group.json call_signal_push_group.json calls_room_reply.json
                     calls_room_request.json calls_room_status_reply.json
                     device_put_group_calls.json error_call_ended.json error_call_full.json
@@ -157,7 +159,7 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_15 ++
         @checked_v1_17 ++
         @checked_v1_18 ++
-        @pending_v1_19
+        @checked_v1_19
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -2657,6 +2659,197 @@ defmodule RisiMe.ContractExamplesTest do
       assert view["video_ready"] == true and view["calls_ready"] == true
       assert view["missing_video"] == [%{"user_id" => b.user.id, "device_id" => tablet}]
       assert_same_shape(hd(view["missing_video"]), hd(ex["missing_video"]))
+    end
+  end
+
+  describe "v1.19" do
+    setup :with_attestation_key
+    setup :fake_livekit
+
+    defp fake_livekit(ctx), do: RisiMe.FakeLiveKit.setup(ctx)
+
+    defp gc_dev(user, caps \\ ~w(groups images deletes calls video group_calls)) do
+      dev = Ecto.UUID.generate()
+
+      {:ok, _} =
+        RisiMe.Devices.register(user.user.id, dev, %{
+          "platform" => "android",
+          "mls" => %{"signature_key" => b64(), "capabilities" => caps}
+        })
+
+      :ok = RisiMe.MLS.record_instance(user.user.id, dev, nil, "0.3.0")
+      dev
+    end
+
+    defp gc_group(a, a_dev, others) do
+      alias RisiMe.GroupHelpers, as: G
+
+      body = %{
+        "client_group_id" => Ecto.UUID.generate(),
+        "member_ids" => Enum.map(others, & &1.user.id)
+      }
+
+      {201, %{"group" => %{"id" => id}}} = G.api(:post, "/api/v1/groups", a.token, body, a_dev)
+
+      {200, _} =
+        G.api(
+          :post,
+          "/api/v1/mls/groups/#{id}/commit",
+          a.token,
+          G.create_commit([a.user.id | Enum.map(others, & &1.user.id)], {a.user.id, a_dev}),
+          a_dev
+        )
+
+      id
+    end
+
+    test "the group-call envelopes follow §20.3/§20.4 (they travel inside MLS)" do
+      offer = example("call_offer_sfu_payload.json")
+      assert offer["v"] == 1 and offer["type"] == "call_offer" and offer["mode"] == "sfu"
+      assert offer["media"] in ~w(audio video) and offer["call_id"] =~ @uuid
+      assert offer["sent_at"] =~ @ts
+      refute Map.has_key?(offer, "sdp") or Map.has_key?(offer, "restart")
+
+      m = example("call_member_payload.json")
+      assert m["v"] == 1 and m["type"] == "call_member" and m["call_id"] =~ @uuid
+      assert m["state"] in ~w(joined declined)
+
+      started = example("group_call_started_payload.json")
+      assert started["type"] == "group_call" and started["state"] == "started"
+      assert started["media"] in ~w(audio video) and started["call_id"] =~ @uuid
+
+      ended = example("group_call_ended_payload.json")
+      assert ended["type"] == "group_call" and ended["state"] == "ended"
+      assert ended["reason"] in ~w(hangup timeout) and ended["connected_at"] =~ @ts
+      assert is_integer(ended["duration_s"])
+      assert ended["call_id"] == started["call_id"]
+    end
+
+    test "livekit_token_claims.json is exactly what the server mints; calls_room_reply.json carries it" do
+      ex = example("livekit_token_claims.json")
+
+      ours =
+        RisiMe.Calls.LiveKit.participant_claims(
+          ex["iss"],
+          ex["sub"],
+          ex["video"]["room"],
+          "audio",
+          ex["nbf"]
+        )
+
+      assert ours == ex
+      assert ex["exp"] - ex["nbf"] == 600
+
+      reply = example("calls_room_reply.json")
+      [_, payload, _] = String.split(reply["token"], ".")
+      assert payload |> Base.url_decode64!(padding: false) |> Jason.decode!() == ex
+      assert reply["room"] == ex["video"]["room"] and byte_size(reply["room"]) == 22
+      assert reply["identity"] == ex["sub"]
+      # (The example's `expires_at` isn't the token's `exp`; the server's always is: see
+      # group_calls_v119_test.exs.)
+      assert reply["expires_at"] =~ @ts
+    end
+
+    test "calls_room_request.json → calls_room_reply.json; status, call_ended, call_full", %{
+      a: a,
+      b: b
+    } do
+      alias RisiMe.GroupHelpers, as: G
+      a_dev = gc_dev(a)
+      b_dev = gc_dev(b)
+      id = gc_group(a, a_dev, [b])
+
+      ex = example("calls_room_request.json")
+      body = %{ex | "conversation_id" => id}
+      {200, reply} = G.api(:post, "/api/v1/calls/rooms", a.token, body, a_dev)
+      rex = example("calls_room_reply.json")
+      assert keys(reply) == keys(rex)
+      assert_same_shape(Map.drop(reply, ["identity"]), Map.drop(rex, ["identity"]))
+      assert reply["url"] == RisiMe.FakeLiveKit.config()[:url]
+      assert reply["max_participants"] == rex["max_participants"]
+
+      {200, st} =
+        G.api(:post, "/api/v1/calls/rooms", b.token, %{body | "action" => "status"}, b_dev)
+
+      sex = example("calls_room_status_reply.json")
+      assert keys(st) == keys(sex)
+      assert_same_shape(st, sex)
+
+      assert {404, example("error_call_ended.json")} ==
+               G.api(
+                 :post,
+                 "/api/v1/calls/rooms",
+                 b.token,
+                 %{body | "action" => "join", "call_id" => Ecto.UUID.generate()},
+                 b_dev
+               )
+
+      for n <- 1..32, do: RisiMe.FakeLiveKit.join(reply["room"], "u/#{n}")
+
+      assert {409, example("error_call_full.json")} ==
+               G.api(:post, "/api/v1/calls/rooms", b.token, %{body | "action" => "join"}, b_dev)
+    end
+
+    test "call_signal_push_group.json → call_signal_event_group.json", %{a: a, b: b} do
+      a_dev = gc_dev(a)
+      _ = gc_dev(b)
+      id = gc_group(a, a_dev, [b])
+      {:ok, sock} = connect(UserSocket, %{"token" => a.token, "device_id" => a_dev})
+      {:ok, _, chan} = subscribe_and_join(sock, InboxChannel, "inbox:" <> a.user.id, %{})
+
+      ex = example("call_signal_push_group.json")
+      refute Map.has_key?(ex, "to")
+      ref = push(chan, "call:signal", %{ex | "conversation_id" => id, "epoch" => 1})
+      assert_reply ref, :ok, reply
+      assert keys(wire(reply)) == keys(example("call_signal_reply.json"))
+
+      topic = "inbox:" <> a.user.id
+
+      assert_receive %Phoenix.Socket.Message{
+        topic: ^topic,
+        event: "event",
+        payload: %{kind: "call_signal"} = event
+      }
+
+      ev = example("call_signal_event_group.json")
+      assert keys(wire(event)) == keys(ev)
+      assert keys(wire(event)["data"]) == keys(ev["data"])
+      assert_same_shape(wire(event), ev)
+      assert event.data["conversation_id"] == id
+    end
+
+    test "device_put_group_calls.json and mls_group_group_calls_ready.json", %{a: a, b: b} do
+      alias RisiMe.GroupHelpers, as: G
+      a_dev = Ecto.UUID.generate()
+
+      {200, %{"attestation" => _}} =
+        G.api(
+          :put,
+          "/api/v1/me/devices/#{a_dev}",
+          a.token,
+          example("device_put_group_calls.json")
+        )
+
+      :ok = RisiMe.MLS.record_instance(a.user.id, a_dev, nil, "0.3.0")
+
+      assert %{capabilities: ~w(groups images deletes calls video group_calls)} =
+               Repo.get_by(RisiMe.Devices.Device, device_id: a_dev)
+
+      b_phone = gc_dev(b)
+      tablet = gc_dev(b, ~w(groups images deletes calls video))
+      :ok = RisiMe.MLS.record_instance(b.user.id, b_phone, nil, "0.3.0")
+      G.clear_legacy!()
+      id = gc_group(a, a_dev, [b])
+
+      {200, view} = G.api(:get, "/api/v1/mls/groups/#{id}", a.token)
+      ex = example("mls_group_group_calls_ready.json")
+      # The deletes readiness (v1.12) is in every view; the example leaves it out.
+      view = Map.drop(view, ~w(deletes_ready missing_deletes))
+      assert keys(view) == keys(ex)
+      assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
+      assert view["group_calls_ready"] == true
+      assert view["missing_group_calls"] == [%{"user_id" => b.user.id, "device_id" => tablet}]
+      assert_same_shape(hd(view["missing_group_calls"]), hd(ex["missing_group_calls"]))
     end
   end
 

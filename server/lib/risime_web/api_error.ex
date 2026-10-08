@@ -38,7 +38,9 @@ defmodule RisiMeWeb.ApiError do
     bad_media_type: "Blobs must be application/octet-stream",
     not_e2ee: "This chat isn't end-to-end encrypted yet",
     storage_full: "The server is low on storage; try again later",
-    calls_unavailable: "Calls aren't available on this server yet"
+    calls_unavailable: "Calls aren't available on this server yet",
+    call_ended: "This call has ended",
+    call_full: "This call is full"
   }
 
   @doc """

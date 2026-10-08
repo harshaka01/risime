@@ -25,7 +25,7 @@ defmodule RisiMe.MLS.Images do
   Adds `images_ready`/`missing_images` (§14.1) and `deletes_ready`/`missing_deletes` (§15.1) to
   a `GET /mls/groups/{id}` view.
   """
-  def put_readiness(%{e2ee: e2ee} = view, conversation_id) do
+  def put_readiness(%{e2ee: e2ee} = view, conversation_id, caller \\ nil) do
     members = member_ids(conversation_id)
     missing = missing(members, "images")
     missing_deletes = missing(members, "deletes")
@@ -38,7 +38,24 @@ defmodule RisiMe.MLS.Images do
       missing_deletes: missing_deletes
     })
     |> put_calls(conversation_id, members)
+    |> put_group_calls(conversation_id, members, caller)
   end
+
+  # v1.19 §20.1: `group_calls_ready` when the caller's user and at least one other active member
+  # have a `group_calls` device that can still receive (superseded devices never count);
+  # `missing_group_calls` lists the members' instances without it (information only).
+  defp put_group_calls(view, "grp:" <> _, members, caller) do
+    ready = ready_users(members, "group_calls", skip_superseded: true)
+
+    Map.merge(view, %{
+      group_calls_ready:
+        caller != nil and MapSet.member?(ready, caller) and
+          Enum.any?(members, &(&1 != caller and MapSet.member?(ready, &1))),
+      missing_group_calls: missing(members, "group_calls")
+    })
+  end
+
+  defp put_group_calls(view, _conv, _members, _caller), do: view
 
   # v1.13 §16.1 (DMs only): `calls_ready` when the DM is e2ee and each of the two users has at
   # least one instance seen in the last 30 days that advertises `calls` (a device without it

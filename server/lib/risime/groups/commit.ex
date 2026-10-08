@@ -607,6 +607,8 @@ defmodule RisiMe.Groups.Commit do
     Blobs.expire_conversation(g.id)
     # v1.15 §17.4: the old generation's history requests can't be authenticated any more.
     RisiMe.History.conversation_reset(g.id)
+    # v1.19 §20.2: the old generation's call keys can't be rotated; everyone leaves its calls.
+    RisiMe.Calls.Rooms.group_reset(g.id)
 
     Repo.delete_all(from o in Op, where: o.group_id == ^g.id)
 

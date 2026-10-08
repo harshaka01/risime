@@ -574,12 +574,15 @@ defmodule RisiMe.Groups do
     Ops.drop_user(g, user_id)
     # v1.15 §17.4: their history requests close and their devices are un-named.
     RisiMe.History.member_gone(g.id, user_id)
+    # v1.19 §20.2 (server S3): out of a running group call at once.
+    RisiMe.Calls.Rooms.member_removed(g.id, user_id)
   end
 
   @doc false
   def delete_member(group_id, user_id) do
     Membership.close(group_id, [user_id])
     RisiMe.History.member_gone(group_id, user_id)
+    RisiMe.Calls.Rooms.member_removed(group_id, user_id)
     Repo.delete_all(from m in Member, where: m.group_id == ^group_id and m.user_id == ^user_id)
   end
 

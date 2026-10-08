@@ -31,10 +31,16 @@ defmodule RisiMe.Calls do
   @ring_pair_window :timer.hours(1)
   @signal_pair_limit 30
   @signal_pair_window :timer.seconds(10)
+  # v1.19 §20.3 (server S5), per user inside the total.
+  @group_ring_window :timer.seconds(30)
+  @group_ring_hour_limit 10
+  @group_signal_limit 30
+  @group_signal_window :timer.seconds(10)
 
   @type error ::
           :rate_limited
           | :not_friends
+          | :not_member
           | :unknown_recipient
           | :not_e2ee
           | :stale_epoch
@@ -63,6 +69,7 @@ defmodule RisiMe.Calls do
 
         case State.reply(sender_id, req.client_msg_id) do
           {:ok, reply} -> {:ok, reply}
+          :not_found when is_map_key(req, :conv) -> group_signal_new(sender_id, req)
           :not_found -> signal_new(sender_id, req)
         end
       end
@@ -81,12 +88,62 @@ defmodule RisiMe.Calls do
       end
 
     call_id = if is_map(params) and is_binary(params["call_id"]), do: params["call_id"], else: "-"
-    to = if is_map(params) and is_binary(params["to"]), do: params["to"], else: "-"
+
+    to =
+      cond do
+        is_map(params) and is_binary(params["to"]) -> params["to"]
+        is_map(params) and is_binary(params["conversation_id"]) -> params["conversation_id"]
+        true -> "-"
+      end
+
     ring = if is_map(params), do: params["ring"] == true, else: false
 
     Logger.info(
       "call:signal call=#{call_id} from=#{sender_id} dev=#{device_id || "-"} to=#{to} ring=#{ring} #{outcome}"
     )
+  end
+
+  # v1.19 §20.3: a group signal names `conversation_id` (a `grp:` id) instead of `to`. Its
+  # ciphertext is checked after `not_member` (the e2ee checks of the group order).
+  defp parse(%{"client_msg_id" => cmid, "conversation_id" => conv, "call_id" => call_id} = p)
+       when is_binary(cmid) and is_binary(call_id) do
+    cmid = String.downcase(cmid)
+
+    cond do
+      Map.has_key?(p, "to") ->
+        {:error, :bad_request}
+
+      not (is_binary(conv) and RisiMe.Groups.group_id?(conv)) ->
+        {:error, :bad_request}
+
+      not uuid?(cmid) ->
+        {:error, :bad_request}
+
+      not uuid?(call_id) ->
+        {:error, :bad_request}
+
+      not is_boolean(p["ring"]) ->
+        {:error, :bad_request}
+
+      not (is_integer(p["generation"]) and is_integer(p["epoch"])) ->
+        {:error, :bad_request}
+
+      media(p) == :error ->
+        {:error, :bad_request}
+
+      true ->
+        {:ok,
+         %{
+           client_msg_id: cmid,
+           conv: conv,
+           call_id: call_id,
+           ring: p["ring"],
+           media: media(p),
+           ciphertext: p["ciphertext"],
+           generation: p["generation"],
+           epoch: p["epoch"]
+         }}
+    end
   end
 
   defp parse(%{"client_msg_id" => cmid, "to" => to, "call_id" => call_id} = p)
@@ -95,7 +152,7 @@ defmodule RisiMe.Calls do
     to = String.downcase(to)
 
     cond do
-      Map.has_key?(p, "conversation_id") or String.starts_with?(to, "grp:") ->
+      String.starts_with?(to, "grp:") ->
         {:error, :bad_request}
 
       not uuid?(cmid) ->
@@ -187,6 +244,129 @@ defmodule RisiMe.Calls do
       :telemetry.execute([:risime, :call, :signal], %{count: 1}, %{ring: req.ring})
       {:ok, reply}
     end
+  end
+
+  ## Group signals (v1.19 §20.3)
+
+  # Order: (total rate limit → idempotent resend, in signal/3) → not_member → e2ee (stale_epoch,
+  # too_long) → for a ring, calls_not_ready when no other active member has a `group_calls`
+  # device → the group limits → store one row per active member user (the sender's included).
+  defp group_signal_new(sender_id, req) do
+    alias RisiMe.Groups
+
+    with true <- Groups.active_member?(req.conv, sender_id) || {:error, :not_member},
+         :ok <- check_group_e2ee(req),
+         members = Groups.active_member_ids(req.conv),
+         :ok <- check_group_ready(sender_id, req, members),
+         :ok <- check_group_limits(sender_id, req) do
+      server_ts = DateTime.utc_now() |> DateTime.truncate(:millisecond)
+      event_id = TimeUUID.generate()
+
+      event = %{
+        event_id: event_id,
+        kind: "call_signal",
+        data: %{
+          "message_id" => event_id,
+          "conversation_id" => req.conv,
+          "from" => sender_id,
+          "from_device" => req.from_device,
+          "call_id" => req.call_id,
+          "ring" => req.ring,
+          "media" => req.media,
+          "ciphertext" => req.ciphertext,
+          "generation" => req.generation,
+          "epoch" => req.epoch,
+          "server_ts" => Messaging.iso(server_ts)
+        }
+      }
+
+      :ok = Store.impl().append_call_signal(members, event)
+      for u <- members, do: Messaging.broadcast(u, event)
+
+      reply = %{message_id: event_id, server_ts: Messaging.iso(server_ts)}
+      State.put_reply(sender_id, req.client_msg_id, reply)
+      if req.ring, do: group_ring(req, members -- [sender_id])
+
+      :telemetry.execute([:risime, :call, :signal], %{count: 1}, %{ring: req.ring})
+      {:ok, reply}
+    end
+  end
+
+  defp check_group_e2ee(req) do
+    g = RisiMe.Groups.get_group(req.conv)
+
+    cond do
+      req.from_device == nil ->
+        {:error, :bad_request}
+
+      g == nil ->
+        {:error, :not_member}
+
+      req.generation != g.generation or req.epoch != RisiMe.Groups.epoch(g.id) ->
+        {:error, :stale_epoch}
+
+      true ->
+        Messaging.validate_ciphertext(req.ciphertext)
+    end
+  end
+
+  defp check_group_ready(_sender_id, %{ring: false}, _members), do: :ok
+
+  defp check_group_ready(sender_id, _req, members) do
+    if Devices.group_calls_users(members -- [sender_id]) == [],
+      do: {:error, :calls_not_ready},
+      else: :ok
+  end
+
+  # Server S5: ring 1 per group per 30 s and 10 per hour; ring: false 30 per group per 10 s.
+  # A refused ring doesn't count against the ring buckets.
+  defp check_group_limits(sender_id, %{ring: true, conv: conv}) do
+    result =
+      with :ok <-
+             RateLimiter.hit_if_allowed(
+               :call_group_ring,
+               {sender_id, conv},
+               1,
+               @group_ring_window
+             ) do
+        RateLimiter.hit_if_allowed(
+          :call_group_ring_hour,
+          sender_id,
+          @group_ring_hour_limit,
+          :timer.hours(1)
+        )
+      end
+
+    if result != :ok,
+      do: Logger.warning("call ring refused: rate_limited from=#{sender_id} conv=#{conv}")
+
+    result
+  end
+
+  defp check_group_limits(sender_id, %{ring: false, conv: conv}) do
+    RateLimiter.hit(
+      :call_group_signal,
+      {sender_id, conv},
+      @group_signal_limit,
+      @group_signal_window
+    )
+  end
+
+  # Server S6: the call push at once to every `group_calls` device of the other members without
+  # a live inbox channel; no 3-s fallback in groups.
+  defp group_ring(req, others) do
+    tokens =
+      for u <- others,
+          {d, tok} <- Devices.calls_push_targets(u, "group_calls"),
+          not Presence.device_online?(d),
+          do: tok
+
+    Logger.info(
+      "call ring: call=#{req.call_id} conv=#{req.conv} members=#{length(others)} push_now=#{length(tokens)}"
+    )
+
+    RisiMe.Push.Dispatcher.push_call(tokens)
+    :ok
   end
 
   # As msg:send (§9.3): yourself is `unknown_recipient`; every other non-friend is `not_friends`.

@@ -132,6 +132,19 @@ if config_env() != :test do
     ttl: String.to_integer(System.get_env("TURN_TTL") || "18000")
 end
 
+# v1.19 §20.2 (decision 056): LiveKit for group calls. LIVEKIT_URL is the public wss URL clients
+# connect to (wss://risime.risicloud.ai/livekit), LIVEKIT_API_URL LiveKit's loopback server API
+# (default http://127.0.0.1:7880), LIVEKIT_API_KEY / LIVEKIT_API_SECRET the key pair LiveKit is
+# configured with. Any missing → POST /calls/rooms answers 503 calls_unavailable. Never logged.
+# Tests configure their own (and a fake API client).
+if config_env() != :test do
+  config :risime, :livekit,
+    url: System.get_env("LIVEKIT_URL"),
+    api_url: System.get_env("LIVEKIT_API_URL", "http://127.0.0.1:7880"),
+    api_key: System.get_env("LIVEKIT_API_KEY"),
+    api_secret: System.get_env("LIVEKIT_API_SECRET")
+end
+
 # Invite link in v1.6 invites (decision 030).
 if link = System.get_env("INVITE_LINK"), do: config(:risime, :invite_link, link)
 

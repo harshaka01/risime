@@ -90,7 +90,11 @@ defmodule RisiMe.Devices do
             :ok
         end
 
+        # v1.19 §20.2: a removed (or re-keyed) device leaves every group call at once.
+        if key_changed?, do: RisiMe.Calls.Rooms.device_removed(user_id, device_id)
+
         for d <- evicted, d.mls_signature_key do
+          RisiMe.Calls.Rooms.device_removed(d.user_id, d.device_id)
           RisiMe.History.device_gone(d.user_id, d.device_id)
           MLS.device_changed(d.user_id, d.device_id, :removed)
           if groups?(d), do: Groups.device_changed(d.user_id, d.device_id, :removed)
@@ -481,6 +485,7 @@ defmodule RisiMe.Devices do
     end
 
     for d <- rows, d.mls_signature_key do
+      RisiMe.Calls.Rooms.device_removed(d.user_id, d.device_id)
       MLS.device_changed(d.user_id, d.device_id, :removed)
       if groups?(d), do: Groups.device_changed(d.user_id, d.device_id, :removed)
     end
