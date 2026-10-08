@@ -4,7 +4,9 @@ RisiMe.Messaging.Store.Cassandra.truncate!()
 
 # `:livekit` talks to the real local LiveKit (v1.19 §20.2): `mix test --only livekit`.
 # `:llm_live` calls the real self-hosted risi-l1 (decision 061): `mix test --only llm_live`.
-ExUnit.start(exclude: [:livekit, :llm_live])
+# assert_receive/assert_reply wait 1 s (default 100 ms): the release gate runs while spark2 also runs
+# redroids and Gradle, and a channel reply under load can take >100 ms (nightly.39 gate, §17 tests).
+ExUnit.start(exclude: [:livekit, :llm_live], assert_receive_timeout: 1_000)
 
 # Push.Test routes each push to the test that registered its token (see RisiMe.Fixtures.push_token/1).
 {:ok, _} = Registry.start_link(keys: :unique, name: RisiMe.Push.Test.registry())
