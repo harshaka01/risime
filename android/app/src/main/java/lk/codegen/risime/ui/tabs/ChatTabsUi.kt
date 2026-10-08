@@ -98,6 +98,18 @@ fun ChatTabBar(state: TabBarState, onSelect: (Tab) -> Unit, onHistory: () -> Uni
     }
 }
 
+/** §24.9 the Official banner (first open of the Official tab). */
+@Composable
+fun OfficialBanner(onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(OfficialAccent.copy(alpha = 0.08f)).padding(start = Spacing.lg, end = Spacing.xs).testTag("official_banner"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(OFFICIAL_BANNER_TEXT, Modifier.weight(1f).padding(vertical = Spacing.sm), style = MaterialTheme.typography.bodyMedium)
+        TextButton(onClick = onDismiss, modifier = Modifier.testTag("official_banner_ok")) { Text("OK") }
+    }
+}
+
 @Composable
 private fun TabLabel(text: String, unread: Int) {
     Row(Modifier.padding(vertical = Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
@@ -158,8 +170,10 @@ fun TabbedChatContent(
     val content by controller.content.collectAsStateWithLifecycle()
     val bar by controller.bar.collectAsStateWithLifecycle()
     val notice by controller.notice.collectAsStateWithLifecycle()
+    val banner by controller.banner.collectAsStateWithLifecycle()
     val tabBar: @Composable () -> Unit = {
         ChatTabBar(bar, controller::select, controller::openHistory)
+        if (banner && bar.selected == Tab.OFFICIAL) OfficialBanner(controller::dismissBanner)
         notice?.let { n ->
             Text(
                 n,

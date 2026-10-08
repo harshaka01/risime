@@ -1,5 +1,21 @@
 # Android status — 0.2 nightlies
 
+## §24 A4 chat info: the Official switch — READY (tabs on only)
+- **Chat info** (group: Group info; 1:1: a new "Chat info" screen from the header, Private or Official, only while tabs
+  are on — off keeps the v1.23 dialog): **Official** switch → `PATCH /chats/{id}`. 1:1: either person; group: admins
+  only, others see it disabled with "Only admins can turn Official off" (server `can_toggle` wins once `GET /chats/{id}`
+  answered). Turning off asks "Risi will leave and delete what it learned in this chat. The Official history stays
+  read-only."; on doesn't ask. Refusals shown (`not_admin`, `rate_limited`, `agent_unavailable`, offline). Off deletes
+  nothing locally (rule 9): **Official history (read-only)** entry opens the Official conversation read-only.
+- **Official members** section: the Official group's members, Risi last with an **AI agent** badge (server `kind:
+  "agent"` or the attested agent leaf), never clickable. The Private member list filters out any agent (§24.0).
+- **Media**: "🔒 Private media" and "● Official media" sections (sealed thumbnails, newest first; Official only once
+  it exists).
+- **Banner** "Risi listens in Official and helps with follow-ups." on the first open of a chat's writable Official tab
+  (seen set in `risime_tabs` prefs; OK dismisses).
+- Tests: `OfficialChatInfoTest` (toggle rights, confirm/cancel/PATCH, history, errors, Risi badge without actions,
+  Private list without agents, media sections, banner once, no "Risi" text anywhere in the Private tab).
+
 ## §24 two tabs (Private | Official), chunks A1–A3 — READY (tabs off by default; server S-chunks + RISI needed to see them)
 - **A1 Room v11 (rule 9):** `chat_tabs(conversation_id PK, chat_id, tab, chat_kind)` + `chat_prefs(chat_id PK, last_tab,
   official_state)`. `Migration10To11` only inserts: every conversation in messages ∪ groups ∪ chat_state becomes

@@ -130,6 +130,8 @@ class FakeMessageDao : MessageDao {
         rows.values.filter { !it.outgoing && it.status != "READ" }.sortedBy { it.localTs }
 
     override fun search(pattern: String, limit: Int): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override fun searchIn(conversationId: String, pattern: String, limit: Int): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override fun imagesIn(conversationId: String, limit: Int): Flow<List<MessageEntity>> = flowOf(emptyList())
 }
 
 class FakeSyncDao : SyncDao {

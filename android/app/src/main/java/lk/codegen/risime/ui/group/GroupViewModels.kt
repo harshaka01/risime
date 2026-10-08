@@ -139,7 +139,8 @@ data class GroupInfoUi(
 }
 
 fun groupInfoUi(meId: String, g: GroupEntity?, members: List<GroupMemberEntity>, contacts: List<ContactEntity>): GroupInfoUi {
-    val current = members.filter { it.current }
+    // §24.0: the chat's (Private) member list never shows an agent; Risi is listed only under Official members.
+    val current = members.filter { it.current && it.kind != GroupMember.KIND_AGENT }
     val ms = current.map { MemberUi(it.userId, it.displayName, it.role == GroupMember.ROLE_ADMIN, it.state, it.userId.equals(meId, true), it.joinedAt) }
         .sortedWith(compareByDescending<MemberUi> { it.me }.thenByDescending { it.admin }.thenBy { it.name.lowercase() })
     val readOnly = g?.readOnly == true

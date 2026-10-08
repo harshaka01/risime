@@ -108,6 +108,9 @@ class ChatTabs(
     private val persistedServerOn: Boolean = false,
     private val persistServerOn: (Boolean) -> Unit = {},
     private val log: (String) -> Unit = {},
+    /** Chats whose Official banner was already shown (§24.9 "a banner" on the first open), kept across restarts. */
+    persistedBannerSeen: Set<String> = emptySet(),
+    private val persistBannerSeen: (Set<String>) -> Unit = {},
 ) {
     private val _rows = MutableStateFlow<Map<String, ChatTabEntity>?>(null)
 
@@ -158,6 +161,18 @@ class ChatTabs(
 
     fun clearNotice() {
         _notice.value = null
+    }
+
+    private val _bannerSeen = MutableStateFlow(persistedBannerSeen.map { it.lowercase() }.toSet())
+
+    /** §24.9: chats whose Official banner was shown once already (it shows on the first open of Official only). */
+    val bannerSeen: StateFlow<Set<String>> = _bannerSeen.asStateFlow()
+
+    fun markBannerSeen(chatId: String) {
+        val key = chatId.lowercase()
+        if (key in _bannerSeen.value) return
+        _bannerSeen.update { it + key }
+        persistBannerSeen(_bannerSeen.value)
     }
 
     init {

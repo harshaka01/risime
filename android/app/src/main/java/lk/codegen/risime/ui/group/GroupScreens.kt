@@ -449,13 +449,14 @@ private fun GroupBubble(
 // ---- Group info ----
 
 @Composable
-fun GroupInfoScreen(vm: GroupInfoViewModel, onBack: () -> Unit) {
+fun GroupInfoScreen(vm: GroupInfoViewModel, onBack: () -> Unit, tabsItems: (androidx.compose.foundation.lazy.LazyListScope.() -> Unit)? = null) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val pick = lk.codegen.risime.ui.common.rememberPhotoCropper("Move and scale", onCropped = vm::setPhoto, onError = vm::photoError)
     GroupInfoContent(
         ui, onBack = onBack, onAdd = vm::add, onRemove = vm::remove, onSetAdmin = vm::setRole, onRename = vm::rename,
         onLeave = vm::leave, onReset = vm::reset, onDismissError = vm::dismissError,
         onSetPhoto = pick.takeIf { c -> ui.iAmAdmin && !ui.readOnly }, onRemovePhoto = vm::removePhoto,
+        tabsItems = tabsItems,
     )
 }
 
@@ -477,6 +478,8 @@ fun GroupInfoContent(
     /** §18.7 admins only: tap the photo → set/change (picker and crop); null = no edit control. */
     onSetPhoto: (() -> Unit)? = null,
     onRemovePhoto: () -> Unit = {},
+    /** §24.4/§24.9 (tabs on): the Official switch, its history, the Official members and both tabs' media. */
+    tabsItems: (androidx.compose.foundation.lazy.LazyListScope.() -> Unit)? = null,
 ) {
     var photoMenu by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
@@ -541,6 +544,10 @@ fun GroupInfoContent(
             }
             items(ui.members, key = { it.userId }) { m -> MemberRow(m, ui.iAmAdmin, onRemove, onSetAdmin) }
             item { HorizontalDivider(Modifier.padding(vertical = Spacing.sm)) }
+            tabsItems?.let { extra ->
+                extra()
+                item { HorizontalDivider(Modifier.padding(vertical = Spacing.sm)) }
+            }
             if (!ui.readOnly) {
                 item {
                     TextButton(onClick = { confirmLeave = true }, modifier = Modifier.padding(horizontal = Spacing.sm).heightIn(min = Sizes.minTouch)) {

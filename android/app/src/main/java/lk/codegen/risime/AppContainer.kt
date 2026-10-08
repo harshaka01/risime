@@ -227,6 +227,8 @@ class AppContainer(
         persistedServerOn = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getBoolean("server_on", false),
         persistServerOn = { on -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putBoolean("server_on", on).apply() },
         log = { Log.i("RisiMe", it) },
+        persistedBannerSeen = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getStringSet("banner_seen", null).orEmpty(),
+        persistBannerSeen = { s -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putStringSet("banner_seen", HashSet(s)).apply() },
     ).also { chatTabsOrNull = it }
 
     /** §24.15: read `/auth/config` `tabs`; a change re-advertises the capabilities. */

@@ -32,6 +32,9 @@ const val OFFICIAL_STARTING_TEXT = "Starting Official…"
 const val PRIVATE_TAB_LABEL = "🔒 Private"
 const val OFFICIAL_TAB_LABEL = "● Official"
 
+/** §24.9 the Official banner, shown on the first open of a chat's Official tab. */
+const val OFFICIAL_BANNER_TEXT = "Risi listens in Official and helps with follow-ups."
+
 /** The user-facing text for a refused `POST …/official` (null code: offline). */
 fun officialErrorText(code: String?): String = when (code) {
     AuthErrors.NOT_READY -> OFFICIAL_NOT_READY_TEXT
@@ -121,6 +124,32 @@ class ChatTabsController(
             historyAvailable = state == OfficialState.OFF && off != null,
         )
     }.stateIn(scope, SharingStarted.Eagerly, TabBarState(tab.value, true, TabUnread(0, 0), false))
+
+    private val bannerShown = MutableStateFlow(false)
+    private val bannerDismissed = MutableStateFlow(false)
+
+    /**
+     * §24.9 the Official banner: on the first open of this chat's (writable) Official tab on this
+     * phone. It is recorded as seen at once, so it stays for this visit only (or until dismissed).
+     */
+    val banner: StateFlow<Boolean> = combine(content, bannerShown, bannerDismissed) { c, shown, dismissed ->
+        c is TabContent.Official && !c.readOnly && shown && !dismissed
+    }.stateIn(scope, SharingStarted.Eagerly, false)
+
+    fun dismissBanner() {
+        bannerDismissed.value = true
+    }
+
+    init {
+        scope.launch {
+            content.collect { c ->
+                if (c is TabContent.Official && !c.readOnly && key !in tabs.bannerSeen.value) {
+                    bannerShown.value = true
+                    tabs.markBannerSeen(key)
+                }
+            }
+        }
+    }
 
     /** A one-off line for this chat (e.g. a new group's Official refused). */
     val notice: StateFlow<String?> = tabs.notice.map { it?.takeIf { (c, _) -> c == key }?.second }

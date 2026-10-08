@@ -136,6 +136,17 @@ interface MessageDao {
         "SELECT * FROM messages WHERE kind IN ('text', 'image') AND delete_state IS NULL AND body LIKE :pattern ESCAPE '\\' ORDER BY local_ts DESC LIMIT :limit",
     )
     fun search(pattern: String, limit: Int): Flow<List<MessageEntity>>
+
+    /** §24.9 search inside one chat's current tab: one conversation only (the same rules as [search]). */
+    @Query(
+        "SELECT * FROM messages WHERE conversation_id = :conversationId AND kind IN ('text', 'image') AND delete_state IS NULL " +
+            "AND body LIKE :pattern ESCAPE '\\' ORDER BY local_ts DESC LIMIT :limit",
+    )
+    fun searchIn(conversationId: String, pattern: String, limit: Int): Flow<List<MessageEntity>>
+
+    /** §24.9 chat info media, per tab (one conversation): photos newest first. */
+    @Query("SELECT * FROM messages WHERE conversation_id = :conversationId AND kind = 'image' AND delete_state IS NULL ORDER BY local_ts DESC LIMIT :limit")
+    fun imagesIn(conversationId: String, limit: Int): Flow<List<MessageEntity>>
 }
 
 @Dao

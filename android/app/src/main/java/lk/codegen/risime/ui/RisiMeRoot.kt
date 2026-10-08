@@ -48,6 +48,8 @@ import lk.codegen.risime.ui.search.SearchViewModel
 import lk.codegen.risime.ui.settings.AppSettingsBackend
 import lk.codegen.risime.ui.settings.SettingsScreen
 import lk.codegen.risime.ui.settings.SettingsViewModel
+import lk.codegen.risime.ui.tabs.officialInfoItems
+import lk.codegen.risime.ui.tabs.tabMediaItems
 
 
 /** App root: the dev encryption banner sits above every screen, always. */
@@ -229,6 +231,7 @@ private fun MainNav(c: AppContainer, meId: String) {
             }
             lk.codegen.risime.ui.lock.LockGateDialog(gate)
             val groupInfo = { nav.navigate("group_info/${android.net.Uri.encode(conv)}") { launchSingleTop = true }; Unit }
+            val chatInfo = { nav.navigate("chat_info/${android.net.Uri.encode(conv)}") { launchSingleTop = true }; Unit }
             // §24.9: with tabs off (server switch or capability) this is exactly the v1.23 screen.
             lk.codegen.risime.ui.tabs.TabbedChat(
                 tabsOn = tabsOn,
@@ -246,7 +249,11 @@ private fun MainNav(c: AppContainer, meId: String) {
                         )
                     } else {
                         lk.codegen.risime.net.dmPeer(conv, meId)?.let { peer ->
-                            ChatScreen(viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() }, lock = lockControl, tabBar = tabBar)
+                            ChatScreen(
+                                viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() }, lock = lockControl, tabBar = tabBar,
+                                // §24.4: with tabs on, a 1:1 has chat info too (the Official switch, both tabs' media).
+                                onInfo = if (tabBar != null) chatInfo else null,
+                            )
                         }
                     }
                 },
@@ -257,7 +264,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                         viewModel(key = official) { lk.codegen.risime.ui.group.GroupChatViewModel(c, meId, official) }, meId,
                         onBack = { nav.popBackStack() },
                         // Chat info is the chat's (the Private group's); a 1:1 Official has no member management (§24.1 dm_chat).
-                        onInfo = if (dmChat) ({}) else groupInfo,
+                        onInfo = if (dmChat) chatInfo else groupInfo,
                         lock = lockControl, tabBar = tabBar,
                         titleOverride = peerName,
                         readOnlyReason = if (readOnly) lk.codegen.risime.ui.tabs.OFFICIAL_HISTORY_LABEL else null,
@@ -275,9 +282,40 @@ private fun MainNav(c: AppContainer, meId: String) {
         }
         composable("group_info/{conv}") { entry ->
             val conv = entry.arguments?.getString("conv") ?: return@composable
+            val tabsOn by c.chatTabs.uiOn.collectAsState()
+            // §24.4/§24.9: with tabs on, the Official switch, its history, Official members and both tabs' media.
+            val tabsVm = if (tabsOn) viewModel(key = "chatinfo:$conv") { lk.codegen.risime.ui.tabs.ChatInfoTabsViewModel(c, meId, conv) } else null
+            val official = tabsVm?.official?.ui?.collectAsState()?.value
+            val media = tabsVm?.media?.collectAsState()?.value
             lk.codegen.risime.ui.group.GroupInfoScreen(
                 viewModel(key = "info:$conv") { lk.codegen.risime.ui.group.GroupInfoViewModel(c, meId, conv) },
                 onBack = { nav.popBackStack() },
+                tabsItems = if (tabsVm != null && official != null && media != null) ({
+                    officialInfoItems(
+                        official, tabsVm.official::request,
+                        onHistory = { official.officialConversation?.let { nav.navigate("chat/${android.net.Uri.encode(it)}") { popUpTo("chats") } } },
+                        onDismissError = tabsVm.official::dismissError,
+                    )
+                    tabMediaItems(media, showOfficial = official.officialConversation != null) { m ->
+                        lk.codegen.risime.ui.tabs.MediaThumb(c, m) { nav.navigate("chat/${android.net.Uri.encode(m.conversationId)}") { popUpTo("chats") } }
+                    }
+                }) else null,
+            )
+            if (tabsVm != null && official != null) lk.codegen.risime.ui.tabs.OfficialOffDialog(official, tabsVm.official::confirmOff, tabsVm.official::cancelOff)
+        }
+        composable("chat_info/{chat}") { entry ->
+            val chat = entry.arguments?.getString("chat") ?: return@composable
+            val vm = viewModel(key = "chatinfo:$chat") { lk.codegen.risime.ui.tabs.ChatInfoTabsViewModel(c, meId, chat) }
+            val official by vm.official.ui.collectAsState()
+            val media by vm.media.collectAsState()
+            val title by vm.title.collectAsState()
+            lk.codegen.risime.ui.tabs.DmChatInfoContent(
+                title, lk.codegen.risime.net.dmPeer(chat, meId), vm.encrypted, null, official, media,
+                onBack = { nav.popBackStack() },
+                onToggle = vm.official::request, onConfirmOff = vm.official::confirmOff, onCancelOff = vm.official::cancelOff,
+                onHistory = { official.officialConversation?.let { nav.navigate("chat/${android.net.Uri.encode(it)}") { popUpTo("chats") } } },
+                onDismissError = vm.official::dismissError,
+                thumb = { m -> lk.codegen.risime.ui.tabs.MediaThumb(c, m) { nav.navigate("chat/${android.net.Uri.encode(m.conversationId)}") { popUpTo("chats") } } },
             )
         }
         composable("add_friend") {

@@ -73,6 +73,8 @@ fun ChatScreen(
     lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
     /** §24.9: the Private | Official tab bar, directly under the header (null: tabs off, the screen as before). */
     tabBar: (@Composable () -> Unit)? = null,
+    /** §24.4 (tabs on): the chat info screen (the Official switch); null: the info dialog as before. */
+    onInfo: (() -> Unit)? = null,
 ) {
     val messages by vm.messages.collectAsStateWithLifecycle()
     val peer by vm.peer.collectAsStateWithLifecycle()
@@ -135,7 +137,7 @@ fun ChatScreen(
                 emphasis = typing,
                 onBack = onBack,
                 avatar = { InitialsAvatar(name, size = Sizes.avatarSmall + 4.dp, online = presence?.online == true, photoKey = vm.peerId) },
-                onTitleClick = { showInfo = true },
+                onTitleClick = { if (onInfo != null) onInfo() else showInfo = true },
                 titleClickLabel = "Chat info",
                 actions = {
                     val callsReady by vm.calls.callsReady.collectAsStateWithLifecycle()
