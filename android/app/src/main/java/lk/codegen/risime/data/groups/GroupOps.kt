@@ -430,7 +430,16 @@ class GroupOpsExecutor(
             } catch (e: MlsPolicyException) {
                 return@withCommit OpOutcome.Failed("policy: ${e.message}")
             }
-            submit(conv, pc, opId = null, metaChanged = false, myId = myId, onConflict = { OpOutcome.Retry(AuthErrors.EPOCH_CONFLICT, 1_000) })
+            submit(
+                conv, pc, opId = null, metaChanged = false, myId = myId, onConflict = { OpOutcome.Retry(AuthErrors.EPOCH_CONFLICT, 1_000) },
+                // §24.2: a member was added/removed while Official was `creating` (the server re-synced its rows):
+                // refetch the group now; the retry claims key packages again and rebuilds epoch 0 (bounded by the op's attempts).
+                onMembersChanged = {
+                    (api.group(conv) as? ApiResult.Ok)?.value?.let { g -> tx.run { store.applyServerGroup(g, myId) } }
+                    log("official $conv: members changed while creating: rebuilding epoch 0")
+                    OpOutcome.Retry(lk.codegen.risime.net.TabsErrors.MEMBERS_CHANGED, 1_000)
+                },
+            )
         }
     }
 
@@ -629,6 +638,8 @@ class GroupOpsExecutor(
         metaChanged: Boolean,
         myId: String,
         onConflict: (suspend () -> OpOutcome)? = null,
+        /** §24.2 `409 members_changed` (an Official epoch 0 only); null: a permanent failure like any other 409. */
+        onMembersChanged: (suspend () -> OpOutcome)? = null,
     ): OpOutcome {
         val mls = engine() ?: return OpOutcome.Retry("no MLS core", 60_000)
         suspend fun reject(o: OpOutcome): OpOutcome {
@@ -674,6 +685,9 @@ class GroupOpsExecutor(
                 reject(OpOutcome.Done) // drop our pending commit first
                 catchUp(conv)
                 onConflict?.invoke() ?: OpOutcome.Retry(AuthErrors.EPOCH_CONFLICT, 500)
+            } else if (r.code == lk.codegen.risime.net.TabsErrors.MEMBERS_CHANGED && onMembersChanged != null) {
+                reject(OpOutcome.Done) // drop the stale epoch 0 first
+                onMembersChanged()
             } else {
                 reject(errorOutcome(r))
             }

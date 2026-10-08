@@ -211,6 +211,9 @@ object TabsErrors {
     const val RISI_REQUIRED = "risi_required"
     const val DM_CHAT = "dm_chat"
     const val INVALID_MEMBER = "invalid_member"
+
+    /** §24.2/§24.8: an Official epoch 0 built for a stale human member set: refetch, claim again, rebuild (not permanent). */
+    const val MEMBERS_CHANGED = "members_changed"
 }
 
 /** `chat_event` actions. */

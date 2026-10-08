@@ -182,6 +182,43 @@ class GroupOpsExecutorTest {
         assertTrue(api.commits.isEmpty())
     }
 
+    @Test fun membersChangedRebuildsOfficialEpochZeroForTheNewMemberSet() = runTest {
+        api.group = officialGroup(conv, "group", listOf(me))
+        api.commitReplies.add(ApiResult.Error(409, lk.codegen.risime.net.TabsErrors.MEMBERS_CHANGED, ""))
+        val id = queue(GroupOpType.CREATE_OFFICIAL, ProtocolJson.encodeToString(OfficialPayload.serializer(), OfficialPayload(conv)), c = official)
+        exec.runDue()
+        // Not permanent: queued again, the stale epoch 0 dropped (nothing merged).
+        assertEquals(GroupOpType.QUEUED, opsDao.rows[id]!!.state)
+        assertEquals(lk.codegen.risime.net.TabsErrors.MEMBERS_CHANGED, opsDao.rows[id]!!.lastError)
+        assertFalse(mls.hasPending)
+        assertNull(mls.group(official))
+        // Nimal joined the chat meanwhile: the server re-synced the Official members.
+        val nimal = "u-nimal"
+        api.group = api.group.copy(members = api.group.members + member(nimal))
+        now += 60_000
+        exec.runDue()
+        assertEquals(GroupOpType.DONE, opsDao.rows[id]!!.state)
+        assertEquals(2, api.commits.size)
+        assertEquals(2, api.claims.size) // key packages claimed again
+        assertTrue(nimal in api.claims.last().first)
+        assertTrue("dev-nimal" in api.commits.last().added.map { it.deviceId })
+        assertEquals(0L, api.commits.last().epoch)
+        assertEquals(1L, mls.group(official)!!.epoch)
+    }
+
+    @Test fun membersChangedIsBoundedByTheOpsAttempts() = runTest {
+        api.group = officialGroup(conv, "group", listOf(me))
+        repeat(3) { api.commitReplies.add(ApiResult.Error(409, lk.codegen.risime.net.TabsErrors.MEMBERS_CHANGED, "")) }
+        val id = queue(GroupOpType.CREATE_OFFICIAL, ProtocolJson.encodeToString(OfficialPayload.serializer(), OfficialPayload(conv)), c = official)
+        repeat(3) {
+            exec.runDue()
+            now += 600_000
+        }
+        assertEquals(GroupOpType.FAILED, opsDao.rows[id]!!.state) // maxAttempts = 3 here
+        assertEquals(3, api.commits.size)
+        assertFalse(mls.hasPending)
+    }
+
     @Test fun officialEpoch0MetaNeverNamesAnAgentAdmin() {
         val g = officialGroup(conv, "group", listOf(me)).copy(members = listOf(member(me, "admin"), GroupMember(risi, "Risi", null, "admin", "agent", "active", null)))
         val m = officialEpoch0Meta(conv, g, GroupMeta(name = "Site", admins = listOf(me, risi)), null)
