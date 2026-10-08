@@ -21,6 +21,14 @@
 #     P0-3: every video call checks audio alone (audio_ok: the debug stats' audio_sent/audio_recv, kind
 #     audio, growing on both phones) and Telecom's route line (`calls: route`, the speaker on redroid);
 #     call 12 is a video call B → A answered in the call screen, call 13 one answered from the notification.
+#  8. Call 14 (v1.23 §23, the one call screen): a voice call; A taps Video ("Switch to video") → B sees
+#     "Switch to video call?" → Accept → VP8 frames both ways, exactly one renegotiate re-offer (from A,
+#     the caller), audio both ways, the speaker; "Switch to voice call" → no new frames on either side,
+#     the voice UI, audio; A shares the screen (MediaProjection consent through the PROJECT_MEDIA appop
+#     or the system dialog) → B "Watch" → "… is sharing their screen" and frames on B, src=screen on A;
+#     Stop → the label goes; back to voice from B's More; hang up → "Video call · m:ss" on both.
+#     CALLTEST_SWITCH_ONLY=1 runs only call 14 (iteration). Debug builds keep the call controls on
+#     screen for uiautomator (files/debug_keep_call_controls; the auto-hide is unit-tested).
 # Prints "CALLTEST PASS|FAIL <step>" lines and "CALLTEST OK" at the end. Never touches :4000.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -126,6 +134,7 @@ for DEV in A B; do
   A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
   A shell pm grant "$PKG" android.permission.RECORD_AUDIO 2>/dev/null || true
   A shell appops set "$PKG" USE_FULL_SCREEN_INTENT allow 2>/dev/null || true
+  A shell appops set "$PKG" PROJECT_MEDIA allow 2>/dev/null || true
   A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
   A logcat -c || true
 done
@@ -210,6 +219,8 @@ for DEV in A B; do
   if [ "$DEV" = A ]; then sign_in "+94770000971" "calltest71@example.com" || fail "sign-in A"; else sign_in "+94770000972" "calltest72@example.com" || fail "sign-in B"; fi
 done
 pass "both signed in through the real login UI"
+# Debug builds: keep the call controls on screen for uiautomator (the app data dir exists now).
+for DEV in A B; do A shell run-as "$PKG" touch files/debug_keep_call_controls || fail "$DEV: debug_keep_call_controls"; done
 [ "$(fx friends)" = "calltest: friends ok" ] || fail "fixture: friends"
 # The friend list is fetched at start: restart both apps.
 for DEV in A B; do A shell am force-stop "$PKG"; done
@@ -421,6 +432,7 @@ hang_up_a() {  # $1 label
   no_leftovers "$1"
 }
 
+if [ "${CALLTEST_SWITCH_ONLY:-0}" != 1 ]; then
 [ "${CALLTEST_FAST:-0}" = 1 ] || { call_once "call 1"; hang_up_a "call 1"; }
 [ "${CALLTEST_FAST:-0}" = 1 ] || { call_once "call 2 (right after)"; hang_up_a "call 2"; }
 [ "${CALLTEST_FAST:-0}" = 1 ] || { call_once "call 3"; }
@@ -436,6 +448,7 @@ sleep 3
 # Answering from the background: B goes to the home screen while it rings and answers from the
 # notification shade (redroid has no FCM, so a fully backgrounded app can't be woken here).
 [ "${CALLTEST_FAST:-0}" = 1 ] || { CALL_BG=1 call_once "call 5 (answered from the background)"; hang_up_a "call 5"; }
+fi
 # Call 7 (the nightly.23 report: the call screen vanished after Home and the mic stayed held): A
 # calls, then goes Home and switches the screen off for a minute. The call must live on in the
 # foreground service (microphone type) with its ongoing notification and audio both ways; the
@@ -445,6 +458,7 @@ bytes_of() {  # $1 sent|recv: the latest debug stats AUDIO value on $DEV (P0-3: 
   audio_of "$1"
 }
 uid_of() { A shell pm list packages -U "$PKG" 2>/dev/null | sed -nE "s/.*package:$PKG uid:([0-9]+).*/\1/p" | head -1; }
+if [ "${CALLTEST_SWITCH_ONLY:-0}" != 1 ]; then
 DEV=B; open_chat "ZZ Call A" || fail "B: DM"; DEV=A; open_chat "ZZ Call B" || fail "A: DM"
 call_once "call 7 (Home, screen off for a minute)"
 DEV=A; A shell input keyevent KEYCODE_HOME; sleep 1; A shell input keyevent KEYCODE_SLEEP
@@ -477,6 +491,7 @@ for _ in $(seq 1 10); do rec="$(A shell dumpsys audio 2>/dev/null | sed -n '/Rec
 nt="$(A shell dumpsys notification --noredact 2>/dev/null || true)"
 grep -q "pkg=$PKG .*channel=call_ongoing" <<<"$nt" && fail "call 7: the ongoing notification stayed after hang-up"
 pass "call 7: Hang up from the notification ended the call on both phones, released the microphone, removed the notification"
+fi
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"
 # Call 8 (the nightly.24 report: Back twice after a call left a dark screen): Back from the call
 # screen goes to the chat while the call goes on; when the call ends no call screen, task or Recents
@@ -488,6 +503,7 @@ no_call_screen() {  # $1 label
   grep -q "lk.codegen.risime.calls" <<<"$rec" && fail "$1: $DEV's Recents still list the call task"
   return 0
 }
+if [ "${CALLTEST_SWITCH_ONLY:-0}" != 1 ]; then
 DEV=B; open_chat "ZZ Call A" || fail "B: DM"; DEV=A; open_chat "ZZ Call B" || fail "A: DM"
 call_once "call 8 (Back from the call screen)"
 DEV=A; A shell input keyevent KEYCODE_BACK; sleep 2
@@ -504,6 +520,7 @@ DEV=B; no_call_screen "call 8 (B hung up)"
 [[ "$(top_act)" == *MainActivity* ]] || fail "call 8: B's hang-up didn't return to the chat ($(top_act))"
 pass "call 8: hanging up on the call screen returns to the chat"
 no_leftovers "call 8"
+fi
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
 # (A call to a phone whose screen is off can't be tested here: redroid has no FCM, and a backgrounded
 # app has no socket. The locked-phone full-screen ring stays on the real-phone manual test.)
@@ -580,7 +597,8 @@ video_call() {  # $1 label
     pass "$1: video flows through the relay"
   fi
   # Camera off on B: A shows B's avatar and decodes nothing; on again: frames resume.
-  DEV=B; tap "Turn camera off" || fail "$1: B has no \"Turn camera off\""
+  # v1.23: with a v1.23 peer the Video button goes back to voice; the camera alone goes off from More.
+  DEV=B; { tap "More options" && sleep 1 && tap "Turn camera off"; } || fail "$1: B has no \"Turn camera off\" in More"
   DEV=A; wait_for "camera is off" 10 || fail "$1: A doesn't show B's avatar after B turned the camera off"
   frames_stop "$1 (B's camera off)"
   pass "$1: B turned the camera off: A shows B's avatar, no frames decoded"
@@ -610,7 +628,7 @@ video_call() {  # $1 label
   pass "$1: \"Video call · m:ss\" in the chat on both phones"
 }
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
-video_call "call 9 (video)"
+[ "${CALLTEST_SWITCH_ONLY:-0}" = 1 ] || video_call "call 9 (video)"
 # P0-3: video calls the other way round and answered from the notification (Harsha's phones: no sound,
 # the speaker button inactive). video_simple <label> <caller> <callee> <screen|notification>.
 video_simple() {
@@ -644,6 +662,7 @@ video_simple() {
   pass "$label: $caller hung up; both ended"
   no_leftovers "$label"
 }
+if [ "${CALLTEST_SWITCH_ONLY:-0}" != 1 ]; then
 DEV=B; open_chat "ZZ Call A" || fail "B: DM"; DEV=A; open_chat "ZZ Call B" || fail "A: DM"
 video_simple "call 12 (video, B calls A, answered in the call screen)" B A screen
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
@@ -651,6 +670,7 @@ video_simple "call 13 (video, answered from the notification)" A B notification
 # Call 10: a voice call right after the video call still works (no camera or video state left).
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
 call_once "call 10 (voice after video)"; hang_up_a "call 10"
+fi
 if [ "${CALLTEST_TURN:-0}" = 1 ]; then
   # Call 11: video relay-only through the live TURN server (~1–2 Mbit/s each way, §19.8).
   for DEV in A B; do A shell run-as "$PKG" touch files/debug_relay_only || fail "debug relay switch"; done
@@ -660,8 +680,81 @@ if [ "${CALLTEST_TURN:-0}" = 1 ]; then
   for DEV in A B; do A shell run-as "$PKG" rm -f files/debug_relay_only; done
   MEDIA_PAIR="(host|prflx)/(host|prflx)"
 fi
-logcat_ok "the end"
+
+# ---------------------------------------------------------------- v1.23 §23: switching and screen sharing
+# Call 14 on the one call screen. Exactly one renegotiation per call, from the caller; audio at every
+# phase boundary (audio_ok: audio_sent and audio_recv growing on both phones).
+vsrc() { vline | sed -nE 's/.* src=([a-z]+).*/\1/p'; }
+renegs() { A logcat -d 2>/dev/null | grep -c "calls: renegotiate: re-offer out" || true; }
+# frames_still <label> <A|B>: no new decoded frames over 5 s (after 3 s to drain).
+frames_still() {
+  local d1 d2; DEV=$2; sleep 3; d1="$(vdecoded)"; sleep 5; d2="$(vdecoded)"
+  [ "${d2:-0}" = "${d1:-0}" ] || fail "$1: $2 still decodes video in voice mode (decoded $d1→$d2)"
+  echo "    [$2] decoded stays at ${d2:-0}"
+}
+# A's share: the Android ≤ 14 notifications warning, then the system consent (skipped by the appop).
+consent() {
+  wait_for "Share your screen?" 10 && { tap "Continue" || fail "$1: no Continue on the share warning"; }
+  # The PROJECT_MEDIA appop grants at once; otherwise the system dialog is in front: "Start now".
+  local i; for i in $(seq 1 8); do
+    sleep 1
+    [[ "$(top_act)" == *MediaProjectionPermissionActivity* ]] || break
+    tap "Start now" || tap "START NOW" || true
+  done
+  return 0
+}
+switch_call() {
+  local l="call 14 (§23 switch and share)" n d
+  logcat_ok "before $l"
+  for DEV in A B; do A shell pm grant "$PKG" android.permission.CAMERA 2>/dev/null || true; A logcat -c; done
+  call_once "$l: voice"
+  DEV=A; wait_for "Switch to video" 15 || fail "$l: A has no Video (switch) button: $(grep -o 'content-desc="Switch to video[^"]*"' "$WORK/ui-$DEV.xml" | head -1)"
+  tap "Switch to video" || fail "$l: A can't tap Video"
+  DEV=B; wait_for "Switch to video call?" 15 || fail "$l: B has no \"Switch to video call?\" prompt"
+  pass "$l: A asked to switch; B shows \"Switch to video call?\""
+  tap "Accept" || fail "$l: no Accept on B's prompt"
+  for d in A B; do for _ in $(seq 1 20); do DEV=$d; [ "$(vdecoded)" -gt 0 ] 2>/dev/null && break; sleep 1; done; frames_rise "$l (video)" "$d"; done
+  DEV=A; n="$(renegs)"; [ "$n" = 1 ] || fail "$l: A sent $n re-offers (want exactly 1)"
+  DEV=B; [ "$(renegs)" = 0 ] || fail "$l: B (the callee) sent a re-offer"
+  A logcat -d 2>/dev/null | grep -q "renegotiated: m=video added (callee)" || fail "$l: B never applied the re-offer"
+  pass "$l: both in video: VP8 frames decoded and rising on both phones; exactly one re-offer, from A (the caller)"
+  audio_ok "$l (video)"
+  route_ok "$l (video)"
+  DEV=A; tap "Switch to voice call" || fail "$l: A has no \"Switch to voice call\""
+  frames_still "$l (back to voice)" A; frames_still "$l (back to voice)" B
+  DEV=B; wait_for "Switch to video" 10 || fail "$l: B shows no voice UI after the switch back"
+  audio_ok "$l (back to voice)"
+  pass "$l: back to voice: no new frames on either phone, the voice UI, audio both ways"
+  DEV=A; tap "Share screen" || fail "$l: A has no Share button"
+  consent "$l"
+  DEV=B; sleep 3; A exec-out screencap -p > "$LOGS/B-screen-prompt.png" 2>/dev/null || true
+  wait_for "Watch ZZ Call A" 20 || fail "$l: B has no screen prompt"
+  tap "Watch" || fail "$l: no Watch"
+  DEV=B; wait_for "is sharing their screen" 20 || fail "$l: B shows no \"is sharing their screen\""
+  for _ in $(seq 1 20); do DEV=B; [ "$(vdecoded)" -gt 0 ] 2>/dev/null && break; sleep 1; done
+  frames_rise "$l (screen)" B
+  DEV=A; has "sharing your screen" || fail "$l: A has no \"You're sharing your screen\" bar"
+  [ "$(vsrc)" = screen ] || fail "$l: A's sender isn't the screen ($(vline | sed 's/.*call video //'))"
+  DEV=A; n="$(renegs)"; [ "$n" = 1 ] || fail "$l: the share renegotiated again ($n re-offers)"
+  audio_ok "$l (sharing)"
+  pass "$l: A shares its screen: B shows the label and decodes frames, src=screen on A, still one re-offer"
+  DEV=A; tap "Stop" || fail "$l: no Stop on A's bar"
+  DEV=B; for _ in $(seq 1 15); do has "is sharing their screen" || break; sleep 1; done
+  has "is sharing their screen" && fail "$l: B still shows the screen label after Stop"
+  DEV=A; A logcat -d 2>/dev/null | grep -q "screen share off" || fail "$l: A's share didn't stop"
+  pass "$l: Stop ended the share; B's label went"
+  DEV=B; { tap "More options" && sleep 1 && tap "Switch to voice call"; } || fail "$l: B has no \"Switch to voice call\" in More"
+  DEV=A; wait_for "Switch to video" 10 || fail "$l: A shows no voice UI after B's switch back"
+  audio_ok "$l (voice again)"
+  hang_up_a "$l"
+  for d in A B; do DEV=$d; wait_for "Video call · " 15 || fail "$l: $d has no \"Video call · m:ss\" line"; done
+  pass "$l: \"Video call · m:ss\" in the chat on both phones (the call was in video mode)"
+}
+# The call records (the call-records step) count the calls before call 14, so call 14 runs after them.
 call_records
+DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
+switch_call
+logcat_ok "the end"
 # CALLTEST_EXTRA=<file>: more steps sourced here with every helper available (debugging scenarios).
 if [ -n "${CALLTEST_EXTRA:-}" ]; then source "$CALLTEST_EXTRA"; fi
 echo "CALLTEST OK"

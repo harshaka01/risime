@@ -574,6 +574,8 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                 }
                 val ok = if (s.video) m.startShare(data) else m.requestVideo(CallEnvelope.SOURCE_SCREEN, data)
                 if (!ok) log("screen share: not started (video=${s.video})")
+                // Keep the type until the call state shows the share (or the request) itself.
+                else withTimeoutOrNull(2_000) { state.first { it?.sharing == true || it?.asking == CallEnvelope.SOURCE_SCREEN } }
             } finally {
                 projectionArming = false
                 projectionReady = null
@@ -794,6 +796,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         updateProximity()
         updateRingback(s)
         refreshService()
+        if (BuildConfig.DEBUG && s != null) log("state ${s.phase} video=${s.video} prompt=${s.prompt} asking=${s.asking} sharing=${s.sharing}: applied")
     }
 
     // ---- ringback (the caller hears it while the callee's phone rings) ----

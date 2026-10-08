@@ -577,7 +577,9 @@ class CallStateMachine(
         val on = c.video && c.wantCamera && screenVisible && session != null
         if (on != c.cameraOn) {
             c.cameraOn = on
+            log("camera ${if (on) "on" else "off"}")
             runCatching { session?.setCamera(on) }.onFailure { log("camera: ${it.message}") }
+            log("camera ${if (on) "on" else "off"}: done")
             publish(c)
         }
         if (c.phase == CallPhase.ACTIVE || c.phase == CallPhase.RECONNECTING) scheduleCameraSignal(c)
@@ -1001,6 +1003,7 @@ class CallStateMachine(
             scope.launch {
                 for ((e, cb) in ch) {
                     val r = sig(c.conv, c.peer, e, c.media)
+                    if (e is CallEnvelope.Switch) log("call_switch ${e.action} ${e.seq} sent: $r")
                     cb?.invoke(r)
                 }
             }
@@ -1328,7 +1331,8 @@ class CallStateMachine(
     /** §23.2 an inbound `call_switch` from the selected peer device to this one (sender pinning, `seq` rules). */
     private suspend fun onSwitch(s: InboundCall, env: CallEnvelope.Switch, own: Boolean) {
         if (own) return
-        val c = current?.takeIf { !it.ended && it.id == env.callId && it.peer.equals(s.fromUser, true) } ?: return
+        val c = current?.takeIf { !it.ended && it.id == env.callId && it.peer.equals(s.fromUser, true) } ?: return log("call_switch ${env.action} ${env.seq}: no such call")
+        log("call_switch ${env.action} ${env.seq} received")
         val peerDev = peerDevice(c)
         if (peerDev == null || !s.fromDevice.equals(peerDev, true) || !env.toDevice.equals(myDevice, true)) {
             return log("call_switch for ${c.id} from ${s.fromDevice}: not the selected device: dropped")
