@@ -305,7 +305,8 @@ on_chat_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Ad
 wait_chat_list() { for _ in $(seq 1 "${1:-40}"); do on_chat_list && return 0; sleep 1; done; echo "timeout waiting for the chat list"; return 1; }
 # The centre of the node whose text or content-desc equals $1 ("x*": text starts with x; "~x":
 # text or content-desc contains x, e.g. a message bubble's merged description; "^x": text equals x,
-# never a content-desc, e.g. a sheet's "Send" button rather than the composer's Send icon).
+# never a content-desc, e.g. a sheet's "Send" button rather than the composer's Send icon; "@x":
+# content-desc equals x, never a text, e.g. the photo preview's round Send button, not its title).
 node_xy() {
   dump
   python3 -I - "$WORK/ui.xml" "$1" <<'PY'
@@ -317,6 +318,8 @@ def hit(n):
         return want[1:] in t or want[1:] in d
     if want.startswith('^'):
         return t == want[1:]
+    if want.startswith('@'):
+        return d == want[1:]
     return t == want or d == want or (want.endswith('*') and t.startswith(want[:-1]))
 for n in ET.parse(sys.argv[1]).iter('node'):
     if hit(n):
@@ -622,7 +625,8 @@ PY
     tap "~Photo taken on" || fail "could not pick the photo"
     if ! wait_for "Send photo" 5; then dump; tap "~Add" >/dev/null || tap "Done" >/dev/null || true; fi
     wait_for "Send photo" 20 || fail "the attach sheet didn't open"
-    for _ in $(seq 1 10); do tap "^Send" >/dev/null || true; sleep 2; has "Send photo" || break; done
+    # GO UX preview (nightly.27+): the round button's content-desc "Send photo" (the title has the same text).
+    for _ in $(seq 1 10); do tap "@Send photo" >/dev/null || tap "^Send" >/dev/null || true; sleep 2; has "Send photo" || break; done
     has "Send photo" && fail "the attach sheet's Send didn't go through"
     blobs_after=""
     for _ in $(seq 1 24); do blobs_after="$(field "$(srv blobs)" blobs)"; [ "${blobs_after:-0}" -gt "${blobs_before:-0}" ] && break; sleep 5; done
