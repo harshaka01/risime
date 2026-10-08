@@ -25,6 +25,7 @@ class Notifier(private val context: Context) {
         m.createNotificationChannel(NotificationChannel(CH_MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH))
         m.createNotificationChannel(NotificationChannel(CH_REQUESTS, "Friend requests", NotificationManager.IMPORTANCE_DEFAULT))
         m.createNotificationChannel(NotificationChannel(CH_SYNC, "Background sync", NotificationManager.IMPORTANCE_MIN))
+        m.createNotificationChannel(NotificationChannel(CH_BACKUP, "Backups", NotificationManager.IMPORTANCE_DEFAULT))
         if (lk.codegen.risime.BuildConfig.HISTORY_SHARE_ENABLED) {
             m.createNotificationChannel(NotificationChannel(CH_HISTORY, "History requests", NotificationManager.IMPORTANCE_DEFAULT))
         }
@@ -215,6 +216,32 @@ class Notifier(private val context: Context) {
         )
     }
 
+    /** §22.7 the pre-update backup failed: the update still goes ahead; uninstalling would lose the chats. */
+    @Suppress("MissingPermission")
+    fun postBackupFailed() {
+        if (!allowed()) return
+        ensureChannels()
+        nm.notify(
+            BACKUP_ID,
+            NotificationCompat.Builder(context, CH_BACKUP)
+                .setSmallIcon(R.drawable.ic_stat_risime)
+                .setContentTitle(BACKUP_FAILED_TITLE)
+                .setContentText(BACKUP_FAILED_TEXT)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(BACKUP_FAILED_TEXT))
+                .setContentIntent(openIntent(null, BACKUP_ID))
+                .setAutoCancel(true)
+                .build(),
+        )
+    }
+
+    /** §22.7 the backup worker's ongoing notification. */
+    fun backupNotification() = NotificationCompat.Builder(context, CH_SYNC)
+        .setSmallIcon(R.drawable.ic_stat_risime)
+        .setContentTitle("Backing up your chats…")
+        .setOngoing(true)
+        .setPriority(NotificationCompat.PRIORITY_LOW)
+        .build().also { ensureChannels() }
+
     /** §17.16 the export worker's ongoing notification. */
     fun historyExportNotification() = NotificationCompat.Builder(context, CH_SYNC)
         .setSmallIcon(R.drawable.ic_stat_risime)
@@ -252,6 +279,11 @@ class Notifier(private val context: Context) {
         const val HISTORY_ID = 5
         const val HISTORY_EXPORT_ID = 6
         const val HISTORY_DONE_ID = 7
+        const val CH_BACKUP = "backup"
+        const val BACKUP_ID = 8
+        const val BACKUP_WORK_ID = 9
+        const val BACKUP_FAILED_TITLE = "Backup failed — don't uninstall"
+        const val BACKUP_FAILED_TEXT = "Don't uninstall RisiMe: your chats are only safe if they're backed up. Open RisiMe → Settings → Backups → Back up now."
 
         fun chatId(conversationId: String) = 1000 + (conversationId.hashCode() and 0x7fffffff) % 1_000_000
     }

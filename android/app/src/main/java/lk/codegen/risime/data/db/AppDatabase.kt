@@ -52,6 +52,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun callMarks(): CallMarkDao
     abstract fun history(): HistoryDao
     abstract fun profilePhotos(): ProfilePhotoDao
+    abstract fun backup(): BackupDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */

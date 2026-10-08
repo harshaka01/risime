@@ -26,26 +26,41 @@ class ContractExamplesTest {
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
         "auth_verify_reply.json" to { s -> ProtocolJson.decodeFromString<AuthVerifyReply>(s) },
-        // v1.22 (§22 encrypted backups): parse-only placeholders until the app implements it.
-        "auth_config_v122.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backup_bundle_header.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backup_create_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backup_create_request.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backup_entry_contact.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backup_entry_conversation.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backup_entry_group_event.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backup_entry_message.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backup_entry_tombstone.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backup_file_header.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backup_key_put.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backup_key_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "backups_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "blob_upload_backup_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "blob_usage_reply_backup.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_backup_device_mismatch.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_backup_key_conflict.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_backup_unavailable.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_no_backup_key.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.22 (§22 encrypted backups): typed models; client-sent bodies re-encode exactly (backupExamplesReEncode).
+        "auth_config_v122.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.backupOn) } },
+        "backup_bundle_header.json" to { s ->
+            ProtocolJson.decodeFromString<lk.codegen.risime.data.backup.BackupBundleHeader>(s).also { require(it.type == "backup" && it.origin == "backup" && it.schema == 1 && it.counts.messages > 0) }
+        },
+        "backup_create_reply.json" to { s -> ProtocolJson.decodeFromString<BackupCreateReply>(s).also { require(it.backup.current && it.backup.parts.size == 2 && it.backup.expiresAt == null) } },
+        "backup_create_request.json" to { s ->
+            ProtocolJson.decodeFromString<BackupCreateRequest>(s).also { require(it.parts.sumOf { p -> p.size } == it.size && !it.replaceDevice) }
+        },
+        "backup_entry_contact.json" to { s -> ProtocolJson.decodeFromString<lk.codegen.risime.data.backup.BackupContactLine>(s).also { require(it.phone!!.startsWith("+")) } },
+        "backup_entry_conversation.json" to { s ->
+            ProtocolJson.decodeFromString<lk.codegen.risime.data.backup.BackupConversationLine>(s).also { require(it.kind == "group" && it.group!!.admins.isNotEmpty() && it.chat.pinned) }
+        },
+        "backup_entry_group_event.json" to { s -> ProtocolJson.decodeFromString<lk.codegen.risime.data.backup.BackupGroupEventLine>(s).also { require(it.action == "added" && it.targets.size == 1) } },
+        "backup_entry_message.json" to { s ->
+            ProtocolJson.decodeFromString<lk.codegen.risime.data.backup.BackupMessageLine>(s).also {
+                require(it.status == "read" && it.origin == null)
+                require(lk.codegen.risime.data.mls.MlsPayload.decode(it.payload.toString().toByteArray()) == lk.codegen.risime.data.mls.MlsPayload.Decoded.Text("See you at 10"))
+            }
+        },
+        "backup_entry_tombstone.json" to { s -> ProtocolJson.decodeFromString<lk.codegen.risime.data.backup.BackupTombstoneLine>(s).also { require(it.scope == "everyone" && !it.hidden) } },
+        "backup_file_header.json" to { s -> ProtocolJson.decodeFromString<BackupFileHeader>(s).also { require(it.v == 1 && it.key!!["bk_id"]!!.jsonPrimitive.content == it.bkId) } },
+        "backup_key_put.json" to { s -> ProtocolJson.decodeFromString<JsonObject>(s).also { require(it["wraps"]!!.jsonArray.size == 2 && it["updated_at"] == null) } },
+        "backup_key_reply.json" to { s -> ProtocolJson.decodeFromString<BackupKeyReply>(s).also { require(it.bkId == "en20cm7Cc5c=") } },
+        "backups_reply.json" to { s ->
+            ProtocolJson.decodeFromString<BackupsReply>(s).also {
+                require(it.key && it.backups.size == 3 && it.newest()!!.backupId == it.backups.first().backupId && !it.backups.last().current)
+            }
+        },
+        "blob_upload_backup_reply.json" to { s -> ProtocolJson.decodeFromString<BlobUploadReply>(s).also { require(it.size == 33_562_624L && it.expiresAt != null) } },
+        "blob_usage_reply_backup.json" to { s -> ProtocolJson.decodeFromString<BlobUsageReply>(s).also { require(it.backup!!.limit == 1_610_612_736L) } },
+        "error_backup_device_mismatch.json" to { s -> apiError(s, BackupErrors.DEVICE_MISMATCH).also { require(it.error.deviceName == "Galaxy A54" && it.error.deviceId != null) } },
+        "error_backup_key_conflict.json" to { s -> apiError(s, BackupErrors.KEY_CONFLICT).also { require(it.error.bkId == "en20cm7Cc5c=") } },
+        "error_backup_unavailable.json" to { s -> apiError(s, BackupErrors.UNAVAILABLE) },
+        "error_no_backup_key.json" to { s -> apiError(s, BackupErrors.NO_KEY) },
         // v1.21 (§12.12 reinstalls without reset) and the v1.16 DM-op examples (§10.6): typed models and the decisions they drive.
         "error_rejoin_pending.json" to { s ->
             apiError(s, AuthErrors.REJOIN_PENDING).also { require(it.error.opId != null && it.error.candidates == 2) }
@@ -481,6 +496,14 @@ class ContractExamplesTest {
         check("key_packages_upload_replace.json", KeyPackagesUpload.serializer())
         check("key_packages_claim_group.json", KeyPackagesClaim.serializer())
         check("group_meta.json", GroupMeta.serializer())
+        // v1.22 (§22): the commit body and every bundle line the app writes.
+        check("backup_create_request.json", BackupCreateRequest.serializer())
+        check("backup_bundle_header.json", lk.codegen.risime.data.backup.BackupBundleHeader.serializer())
+        check("backup_entry_conversation.json", lk.codegen.risime.data.backup.BackupConversationLine.serializer())
+        check("backup_entry_message.json", lk.codegen.risime.data.backup.BackupMessageLine.serializer())
+        check("backup_entry_tombstone.json", lk.codegen.risime.data.backup.BackupTombstoneLine.serializer())
+        check("backup_entry_group_event.json", lk.codegen.risime.data.backup.BackupGroupEventLine.serializer())
+        check("backup_entry_contact.json", lk.codegen.risime.data.backup.BackupContactLine.serializer())
         // The v1.7 shapes stay exactly as they were (no new fields when unused).
         check("device_put_mls.json", DevicePut.serializer())
         check("key_packages_upload.json", KeyPackagesUpload.serializer())

@@ -359,7 +359,9 @@ class ChatEngine(
             val r = results[i++]
             // §13.3: lost history is always visible (one deduplicated line per chat), never silent.
             if (r is MlsResult.BeforeInstall) {
-                upsertMarker(r.conversationId, SystemLine.HISTORY_GAP, r.serverTs)
+                // §22.6 (§13.3 extended): a pre-install message already held (restored from a backup) adds no marker and no gap row.
+                val held = r.gaps.isNotEmpty() && r.gaps.all { messages.byMessageId(it.messageId) != null }
+                if (!held) upsertMarker(r.conversationId, SystemLine.HISTORY_GAP, r.serverTs)
                 recordGaps(r.gaps)
             }
             if (r is MlsResult.Dropped) {

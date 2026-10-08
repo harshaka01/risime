@@ -318,6 +318,11 @@ class UniffiMlsEngine(
         }
     }
 
+    // §22 backups: the same transaction + lock as every other core call (BK lives in mls_kv).
+    override val backupKeys: lk.codegen.risime.data.backup.BackupKeys by lazy {
+        UniffiBackupKeys(client) { block -> tx { block() } }
+    }
+
     override fun appStateGet(key: String): ByteArray? = tx { kv.get(APP, "state/$key".toByteArray()) }
 
     override fun appStatePut(key: String, value: ByteArray?) = tx {

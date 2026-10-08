@@ -92,6 +92,11 @@ data class ApiErrorBody(
     /** §12.12.3 (v1.21): the waiting `devices` op and its candidates on 409 rejoin_pending. */
     @SerialName("op_id") val opId: String? = null,
     val candidates: Int? = null,
+    /** §22.3 (v1.22): the live backup device on 409 backup_device_mismatch. */
+    @SerialName("device_id") val deviceId: String? = null,
+    @SerialName("device_name") val deviceName: String? = null,
+    /** §22.3 (v1.22): the stored key's id on 409 backup_key_conflict. */
+    @SerialName("bk_id") val bkId: String? = null,
 )
 
 @Serializable
@@ -326,9 +331,14 @@ data class AuthConfig(
     @SerialName("phone_verification") val phoneVerification: String? = null,
     /** §21.1 (v1.20): "open" | "invite"; absent = invite. */
     val signup: String? = null,
+    /** §22.1 (v1.22): "on" | "off"; absent (pre-v1.22 servers) = off. */
+    val backup: String? = null,
 ) {
     val phoneVerificationRequired: Boolean get() = phoneVerification == PHONE_REQUIRED
     val signupOpen: Boolean get() = signup == SIGNUP_OPEN
+
+    /** §22.1: server backups may be written (local backups and files work regardless). */
+    val backupOn: Boolean get() = backup == "on"
 
     companion object {
         const val MODE_OIDC = "oidc"
@@ -685,7 +695,13 @@ data class MissingImages(@SerialName("user_id") val userId: String, @SerialName(
 
 /** §14.2 `GET /blobs/usage`. */
 @Serializable
-data class BlobUsageReply(val media: MediaUsage, val mls: MlsUsage? = null, val history: HistoryUsage? = null)
+data class BlobUsageReply(
+    val media: MediaUsage,
+    val mls: MlsUsage? = null,
+    val history: HistoryUsage? = null,
+    /** §22.3 (v1.22) `backup` quota. */
+    val backup: MlsUsage? = null,
+)
 
 @Serializable
 data class MediaUsage(

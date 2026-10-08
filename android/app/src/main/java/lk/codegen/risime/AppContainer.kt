@@ -88,6 +88,9 @@ import java.util.concurrent.TimeUnit
 /** Bound on each best-effort server call at logout (the local logout never waits longer). */
 private const val LOGOUT_NETWORK_MS = 5_000L
 
+/** §22.7: the backup before a confirmed wipe (local file, then the upload when server backup is on). */
+private const val PRE_WIPE_BACKUP_MS = 150_000L
+
 private const val SWITCH_CANCELLED = "Sign-in cancelled — the chats on this phone are kept."
 
 /** A Keycloak end_session to open in the browser (id_token_hint + post-logout redirect). */
@@ -777,6 +780,54 @@ class AppContainer(
         )
     }
 
+    // ---- §22 encrypted backups (v1.22, decision 059) ----
+
+    /** The §22.3 calls over ApiClient (writing calls carry X-Device-Id). */
+    val backupServer: lk.codegen.risime.data.backup.BackupServer = lk.codegen.risime.data.backup.ApiBackupServer(api) { sessionStore.deviceId() }
+
+    private val backupPrefs by lazy { appContext.getSharedPreferences("risime_backup", Context.MODE_PRIVATE) }
+
+    val backups: lk.codegen.risime.data.backup.BackupManager by lazy {
+        lk.codegen.risime.data.backup.BackupManager(
+            dir = File(appContext.noBackupFilesDir, "backups"),
+            work = File(appContext.noBackupFilesDir, "backup-restore"),
+            prefs = object : lk.codegen.risime.data.backup.BackupPrefs {
+                override fun get(key: String): String? = backupPrefs.getString(key, null)
+                override fun set(key: String, value: String?) = backupPrefs.edit().apply { if (value == null) remove(key) else putString(key, value) }.apply()
+                override fun clear() = backupPrefs.edit().clear().apply()
+            },
+            keys = { mlsEngine?.backupKeys },
+            tools = { backupTools() },
+            exporter = { me ->
+                lk.codegen.risime.data.backup.BundleExporter(
+                    db.backup(), db.groups(), db.deletes(), db.media(), mediaSealer, me,
+                    dmE2ee = { conv -> runCatching { mlsEngine?.group(conv) != null }.getOrDefault(false) },
+                )
+            },
+            importer = { me, progress ->
+                lk.codegen.risime.data.backup.BundleImporter(
+                    db.messages(), db.deletes(), db.groups(), db.contacts(), db.backup(), db.history(),
+                    lk.codegen.risime.data.ReactionStore(db.reactions()), images.takeIf { BuildConfig.CRYPTO_AVAILABLE }, dbTx, progress, me,
+                    log = { Log.i("RisiMe", it) },
+                )
+            },
+            server = backupServer,
+            me = { sessionStore.current()?.user?.id },
+            appVersion = BuildConfig.VERSION_NAME,
+            localMessages = { db.messages().countAll() },
+            log = { Log.i("RisiMe", it) },
+        ).also { it.refresh() }
+    }
+
+    private val backupToolsImpl: lk.codegen.risime.data.backup.BackupTools? by lazy { lk.codegen.risime.data.backup.BackupTools.get() }
+
+    /** §22.2 the bundled list of the 10 000 most common passwords (case-insensitive), for the passphrase floor. */
+    val commonPasswords: Set<String> by lazy {
+        runCatching { appContext.assets.open("common-passwords-10k.txt").bufferedReader().useLines { l -> l.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet() } }.getOrDefault(emptySet())
+    }
+
+    fun backupTools(): lk.codegen.risime.data.backup.BackupTools? = if (BuildConfig.CRYPTO_AVAILABLE) backupToolsImpl else null
+
     /** A display name for history prompts and labels (contacts, then group members). */
     suspend fun historyName(userId: String): String =
         contacts.contacts.first().firstOrNull { it.userId.equals(userId, true) }?.displayName
@@ -826,6 +877,8 @@ class AppContainer(
         realtime.state.collectLatest { st ->
             if (st == lk.codegen.risime.realtime.ConnectionState.Live) {
                 kotlinx.coroutines.delay(20_000) // groups joined and gaps recorded first
+                // §22.7: a fresh install's restore (or skip) comes first; restored rows need no history request.
+                backups.gate.first { it == lk.codegen.risime.data.backup.RestoreGate.Open }
                 runCatching { history.autoRequestAll() }.onFailure { Log.w("RisiMe", "history auto-request: ${it.message}") }
             }
         }
@@ -888,6 +941,37 @@ class AppContainer(
             scope.launch { openConversation.filterNotNull().collect { conv -> runCatching { profilePhotos.onChatOpened(conv) } } }
             scope.launch {
                 runCatching { profilePhotos.startup(db.profilePhotos().observeAll().first()) }
+            }
+        }
+        // §22.7 (P0-2): a local backup (and the upload, ≤ 2 min) before every in-app update; a failure
+        // says "don't uninstall" and the update still goes ahead.
+        updater.beforeInstall = lk.codegen.risime.update.BeforeUpdateInstall {
+            try {
+                backups.beforeUpdate()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("RisiMe", "pre-update backup failed: ${e.message}")
+                notifier.postBackupFailed()
+            }
+        }
+        // §22.7 the daily backup job (local always; the upload when server backup is on).
+        scope.launch {
+            sessionStore.session.map { it != null }.distinctUntilChanged().collect { signedIn ->
+                if (signedIn) runCatching { lk.codegen.risime.push.BackupWorker.schedule(appContext) }
+            }
+        }
+        // §22.7 catch-up: the daily backup when the job couldn't run (a locked app has no core in the background).
+        scope.launch {
+            realtime.state.collectLatest { st ->
+                if (st != ConnectionState.Live) return@collectLatest
+                delay(60_000)
+                val b = backups
+                val last = b.status.value.lastLocal?.at ?: 0L
+                if (mlsEngine?.backupKeys == null || System.currentTimeMillis() - last < 24 * 3_600_000L) return@collectLatest
+                val net = lk.codegen.risime.push.currentNetKind(appContext)
+                val upload = b.serverOn && (net == lk.codegen.risime.data.media.NetKind.UNMETERED || (b.mobileData && net == lk.codegen.risime.data.media.NetKind.METERED))
+                runCatching { b.backupNow(lk.codegen.risime.data.backup.BackupReason.DAILY, upload = upload) }
             }
         }
         // Updater (P0-1): a check on every foreground (onStart, 15 min throttle), and every 15 min while there.
@@ -1002,6 +1086,7 @@ class AppContainer(
             return false
         }
         signInNotice.value = null
+        runCatching { backups.onSignIn() }
         sessionStore.saveLogin(token, user)
         return true
     }
@@ -1082,6 +1167,7 @@ class AppContainer(
         }
         blocked.value = null
         signInNotice.value = null
+        runCatching { backups.onSignIn() }
         sessionStore.saveOidcLogin(user)
         return true
     }
@@ -1124,6 +1210,8 @@ class AppContainer(
             // blocks or reverts the local logout.
             // §15.7 (android S-f): deletes and clears done just before logout reach the server (best effort, bounded).
             withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { engine.flushDeletes() } }
+            // §22.7: a backup before the confirmed wipe (uploaded when server backup is on).
+            if (confirmed.deleteChats) withTimeoutOrNull(PRE_WIPE_BACKUP_MS) { runCatching { backups.beforeWipe() } }
             withTimeoutOrNull(LOGOUT_NETWORK_MS) {
                 // While the token still works: DELETE /me/devices (leave the groups) or push only.
                 runCatching { if (confirmed.deleteChats) push.unregister() else push.unregisterPushOnly() }
@@ -1194,6 +1282,8 @@ class AppContainer(
      * it and the local chat data, and switch to [url].
      */
     suspend fun switchServer(url: String) {
+        // §22.7: a backup (to the current server) before the confirmed switch wipes this phone.
+        withTimeoutOrNull(PRE_WIPE_BACKUP_MS) { runCatching { backups.beforeWipe() } }
         if (sessionStore.current()?.kind == AuthKind.DEV) api.logout()
         auth.signOut()
         blocked.value = null
@@ -1316,6 +1406,7 @@ class AppContainer(
     private suspend fun wipeDb(reason: WipeReason) = withContext(Dispatchers.IO) {
         Log.w("RisiMe", "wiping local chats: $reason")
         db.wipe().allChatData()
+        runCatching { backups.wipeLocal() } // §22.7: the app-private backups go too (BK went with mls_kv)
         runCatching { androidx.work.WorkManager.getInstance(appContext).cancelAllWork() }
         mediaFiles.wipe()
         File(appContext.noBackupFilesDir, "avatars").deleteRecursively()

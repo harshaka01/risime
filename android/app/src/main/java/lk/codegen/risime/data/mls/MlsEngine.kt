@@ -140,6 +140,9 @@ interface MlsEngine {
      */
     fun callFrameKeys(conversationId: String, callId: String): CallKeys = throw CallKeysException(CallKeysException.Kind.Unsupported, "call keys not supported by this MLS core")
 
+    /** §22 the core's backup keys and file streams for this device (null: a core without the backup API). */
+    val backupKeys: lk.codegen.risime.data.backup.BackupKeys? get() = null
+
     fun appStateGet(key: String): ByteArray? = null
 
     fun appStatePut(key: String, value: ByteArray?) = Unit

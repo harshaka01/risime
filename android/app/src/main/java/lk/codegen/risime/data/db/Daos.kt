@@ -642,6 +642,72 @@ interface HistoryDao {
     suspend fun allRequests(): List<HistoryRequestEntity>
 }
 
+/** §22 (v1.22) backup export reads (paged, oldest first) and the restore's per-conversation counts. No schema change. */
+@Dao
+interface BackupDao {
+    @Query(
+        "SELECT conversation_id FROM messages UNION SELECT conversation_id FROM `groups` UNION SELECT conversation_id FROM chat_state " +
+            "ORDER BY conversation_id",
+    )
+    suspend fun conversationIds(): List<String>
+
+    /** One page of a conversation's rows, oldest first (keyset on local_ts, client_msg_id). */
+    @Query(
+        "SELECT * FROM messages WHERE conversation_id = :conv AND (local_ts > :afterTs OR (local_ts = :afterTs AND client_msg_id > :afterId)) " +
+            "ORDER BY local_ts ASC, client_msg_id ASC LIMIT :limit",
+    )
+    suspend fun page(conv: String, afterTs: Long, afterId: String, limit: Int): List<MessageEntity>
+
+    @Query("SELECT * FROM reactions WHERE conversation_id = :conv AND confirmed_message_id IS NOT NULL AND confirmed_op = 'add' ORDER BY confirmed_ts ASC")
+    suspend fun confirmedAdds(conv: String): List<ReactionEntity>
+
+    @Query("SELECT * FROM deleted_ids WHERE conversation_id = :conv ORDER BY message_id")
+    suspend fun deletedIds(conv: String): List<DeletedIdEntity>
+
+    @Query("SELECT * FROM contacts")
+    suspend fun contacts(): List<ContactEntity>
+
+    @Query("SELECT * FROM group_members")
+    suspend fun allMembers(): List<GroupMemberEntity>
+
+    @Query("SELECT * FROM contacts WHERE phone = :phone")
+    suspend fun contactByPhone(phone: String): ContactEntity?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertContact(c: ContactEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertGroup(g: GroupEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertMember(m: GroupMemberEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertDeletedId(d: DeletedIdEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertChatState(s: ChatStateEntity): Long
+
+    /** The upgrade gate's per-conversation counts (hard rule 9): 1:1/group messages, photos, call lines. */
+    @Query(
+        "SELECT conversation_id, " +
+            "SUM(CASE WHEN kind = 'text' THEN 1 ELSE 0 END) AS texts, " +
+            "SUM(CASE WHEN kind = 'image' THEN 1 ELSE 0 END) AS images, " +
+            "SUM(CASE WHEN kind = 'call' THEN 1 ELSE 0 END) AS calls, " +
+            "SUM(CASE WHEN kind = 'deleted' THEN 1 ELSE 0 END) AS tombstones " +
+            "FROM messages GROUP BY conversation_id ORDER BY conversation_id",
+    )
+    suspend fun counts(): List<ConversationCounts>
+}
+
+data class ConversationCounts(
+    @androidx.room.ColumnInfo(name = "conversation_id") val conversationId: String,
+    val texts: Int,
+    val images: Int,
+    val calls: Int,
+    val tombstones: Int,
+)
+
 /** v10 (§18): profile photos / group icons, and the per-conversation send state. */
 @Dao
 interface ProfilePhotoDao {

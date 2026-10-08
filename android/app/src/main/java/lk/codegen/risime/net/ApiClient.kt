@@ -30,6 +30,8 @@ sealed interface ApiResult<out T> {
         /** §13.4/§14.5 413 quota_exceeded numbers. */
         val used: Long? = null,
         val limit: Long? = null,
+        /** The whole error body (e.g. §22.3 `device_name`, `bk_id`). */
+        val detail: ApiErrorBody? = null,
     ) : ApiResult<Nothing>
     data class NetworkError(val cause: IOException) : ApiResult<Nothing>
 }
@@ -179,6 +181,33 @@ class ApiClient(
      */
     suspend fun uploadAvatarBlob(clientBlobId: String, file: java.io.File): ApiResult<BlobUploadReply> =
         execute("POST", "blobs?purpose=avatar&client_blob_id=$clientBlobId", file.asRequestBody(OCTET), true, serializer<BlobUploadReply>())
+
+    // ---- §22 encrypted backups (v1.22): writing calls carry X-Device-Id ----
+
+    /**
+     * §22.3 one part of a backup file: bytes [offset, offset+length) of [file], streamed with its
+     * Content-Length; idempotent by [clientBlobId] (a retry of the same part reuses it).
+     */
+    suspend fun uploadBackupPart(backupId: String, clientBlobId: String, file: java.io.File, offset: Long, length: Long, deviceId: String): ApiResult<BlobUploadReply> =
+        execute(
+            "POST", "blobs?purpose=backup&backup_id=$backupId&client_blob_id=$clientBlobId",
+            FileRangeBody(file, offset, length, OCTET), true, serializer<BlobUploadReply>(), mapOf(DEVICE_HEADER to deviceId),
+        )
+
+    suspend fun createBackup(body: BackupCreateRequest, deviceId: String): ApiResult<BackupCreateReply> =
+        call("POST", "backups", body, headers = mapOf(DEVICE_HEADER to deviceId))
+
+    suspend fun backups(): ApiResult<BackupsReply> = call<Unit, BackupsReply>("GET", "backups", null)
+
+    /** Deletes every backup and the key record (idempotent 204). */
+    suspend fun deleteBackups(deviceId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "backups", null, headers = mapOf(DEVICE_HEADER to deviceId))
+
+    /** [recordJson] is the core's `BackupKey` JSON as is. */
+    suspend fun putBackupKey(recordJson: String, deviceId: String): ApiResult<BackupKeyReply> =
+        execute("PUT", "backup_key", recordJson.toRequestBody(JSON), true, serializer<BackupKeyReply>(), mapOf(DEVICE_HEADER to deviceId))
+
+    /** 404 no_backup_key without a record. */
+    suspend fun backupKey(): ApiResult<BackupKeyReply> = call<Unit, BackupKeyReply>("GET", "backup_key", null)
 
     /** Owner only, idempotent 204 (a cancelled send after the upload). */
     suspend fun deleteBlob(blobId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "blobs/$blobId", null)
@@ -332,6 +361,7 @@ class ApiClient(
                             missing = err?.missing,
                             used = err?.used,
                             limit = err?.limit,
+                            detail = err,
                         )
                     }
                 }
@@ -361,6 +391,32 @@ fun parseRetryAfter(value: String?, nowMs: Long): Long? {
         val at = java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
         ((at - nowMs + 999) / 1000).coerceAtLeast(0)
     }.getOrNull()
+}
+
+/** A byte range of a file as a request body (a §22.3 backup part); never buffered in memory. */
+internal class FileRangeBody(
+    private val file: java.io.File,
+    private val offset: Long,
+    private val length: Long,
+    private val type: okhttp3.MediaType,
+) : RequestBody() {
+    override fun contentType() = type
+
+    override fun contentLength() = length
+
+    override fun writeTo(sink: okio.BufferedSink) {
+        java.io.RandomAccessFile(file, "r").use { raf ->
+            raf.seek(offset)
+            val buf = ByteArray(64 * 1024)
+            var left = length
+            while (left > 0) {
+                val n = raf.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                if (n < 0) throw IOException("backup file shorter than expected")
+                sink.write(buf, 0, n)
+                left -= n
+            }
+        }
+    }
 }
 
 /** A file body that reports the bytes written (the upload's determinate progress); Content-Length stays the file's size. */
