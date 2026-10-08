@@ -192,6 +192,7 @@ class CallActivity : ComponentActivity() {
                                 onEnd = calls::hangUp,
                                 onFlip = calls::switchCamera,
                                 onCameraOff = { calls.setCameraWanted(false) },
+                                onBackToVoice = calls::backToVoice,
                                 onCallInfo = { info = true },
                                 onCancelAsk = calls::cancelVideoRequest,
                                 onPrompt = ::answerPrompt,
@@ -203,6 +204,7 @@ class CallActivity : ComponentActivity() {
                                 wm?.takeIf { snap.video && snap.phase != CallPhase.ENDED }?.let { m -> { mod -> LiveRemoteVideo(m, snap, title, mod) } }
                             },
                             local = if (snap.group) null else wm?.let { m -> { mod -> LiveLocalVideo(m, mod) } },
+                            allowAutoHide = !keepControls,
                             center = if (snap.group && snap.members.isNotEmpty() && !(snap.video && snap.phase != CallPhase.ENDED)) ({
                                 GroupParticipantList(snap.members.map { m -> groupMemberUi(m, memberNames[m.userId] ?: "…") })
                             }) else null,
@@ -218,6 +220,9 @@ class CallActivity : ComponentActivity() {
             } }
         }
     }
+
+    /** Debug builds only: the device test (uiautomator) keeps the call controls on screen. */
+    private val keepControls by lazy { lk.codegen.risime.BuildConfig.DEBUG && java.io.File(filesDir, "debug_keep_call_controls").exists() }
 
     private fun avatars(): lk.codegen.risime.ui.common.AvatarSource? =
         if (lk.codegen.risime.BuildConfig.CRYPTO_AVAILABLE) (application as RisiMeApp).container.avatarLoader else null
