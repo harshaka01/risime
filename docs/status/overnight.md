@@ -47,6 +47,27 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## Current state (2026-10-08)
+- **Pilot:** v0.2.0-nightly.26 (versionCode 20026), live and healthy, contract v1.16. The TURN relay
+  has been live since 2026-10-07 06:34 UTC (`TURN_URLS`; 3478/tcp reachable from outside).
+- **Releases on 2026-10-07:** nightly.17–26 (details below). Every one went through both gates,
+  isolated live interop, and the two-phone Redroid upgrade gate (device id, groups, photos,
+  reactions and delete; since nightly.26 also per-conversation message counts after the update and
+  after a re-sign-in), then a backup, then publish and deploy.
+- **Agents:** none running. No Redroid containers. Only the release worktree remains.
+- **Brand:** `design/brand/risime-logo.png` (Harsha's logo, 1254×1254) is committed. It isn't used
+  in the app yet.
+- **Needs Harsha:**
+  1. The calls check on real phones (`docs/status/calls-manual-test.md`, one phone on mobile data,
+     plus a locked phone ringing full screen).
+  2. "go UX" or the exact UX list (logo-based adaptive icon and theme, WhatsApp-style layout,
+     attachment sheet, in-call redesign; profile and group photos after a short proposal).
+  3. Optional: `INVITE_ADMINS` in `.env`; his invite counter drains by itself.
+  4. Still waiting: the Notify.lk sender ID, and RisiWork's `version.json`.
+- **Queue after that:** voice notes, multi-photo selection, call quality, 1:1 video, group calls
+  (LiveKit). `docs/NIGHTLY.md`'s queue (the RisiCloud sign-in phase) has nothing unblocked; the
+  nightly cron only runs the preflight.
+
 ## v0.2.0-nightly.26 (live 2026-10-07, not required): lost history comes back by itself
 - **"nightly.25 wiped my chats":** not the update. Android removed the app's data on Harsha's
   phone (a new device id at 10:40 UTC: an uninstall + reinstall or Clear storage). The update kept
