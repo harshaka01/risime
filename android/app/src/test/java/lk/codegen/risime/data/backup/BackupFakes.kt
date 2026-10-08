@@ -220,10 +220,11 @@ class BackupPhone(val me: String = HistoryFixtures.ME, dir: File) {
         override fun clear() { saved = null }
     }
 
-    fun exporter() = BundleExporter(db.backup(), db.groups(), db.deletes(), db.media(), sealer, me)
+    fun exporter() = BundleExporter(db.backup(), db.groups(), db.deletes(), db.media(), sealer, me, tabOf = { db.chatTabs().get(it) })
 
     fun importer(batch: Int = 1_000, progress: RestoreProgress = this.progress) = BundleImporter(
         db.messages(), db.deletes(), db.groups(), db.contacts(), db.backup(), db.history(), ReactionStore(db.reactions()), images, tx, progress, me, batch = batch,
+        restoreTab = { db.chatTabs().insertIfMissing(it) },
     )
 
     /** The upgrade gate's view: per conversation (texts, images, calls, tombstones). */
@@ -234,9 +235,10 @@ class BackupPhone(val me: String = HistoryFixtures.ME, dir: File) {
 
 /** The bundle as plain lines (header first), the way the manager writes it. */
 suspend fun bundleOf(phone: BackupPhone, backupId: String = UUID.randomUUID().toString()): List<String> {
-    val counts = phone.exporter().write { }
+    val ex = phone.exporter()
+    val counts = ex.write { }
     val out = ByteArrayOutputStream()
-    out.write(encodeLine(BackupBundleHeader.serializer(), BackupBundleHeader(backupId = backupId, userId = phone.me, createdAt = "2026-10-08T02:00:00.000Z", appVersion = "test", counts = counts)))
+    out.write(encodeLine(BackupBundleHeader.serializer(), BackupBundleHeader(schema = ex.schema, backupId = backupId, userId = phone.me, createdAt = "2026-10-08T02:00:00.000Z", appVersion = "test", counts = counts)))
     phone.exporter().write { out.write(it) }
     return out.toString(Charsets.UTF_8).lines().filter { it.isNotBlank() }
 }

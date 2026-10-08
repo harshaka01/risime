@@ -35,15 +35,27 @@ class BundleExporter(
     /** A DM with an MLS group on this device (the conversation line's `e2ee`); groups always are. */
     private val dmE2ee: (String) -> Boolean = { false },
     private val pageSize: Int = 500,
+    /** §24.10 a conversation's MLS-derived tab row (null: Private, its own chat). */
+    private val tabOf: suspend (String) -> lk.codegen.risime.data.db.ChatTabEntity? = { null },
 ) {
+    /**
+     * §24.10 the bundle schema of the last [write]: [BUNDLE_SCHEMA_TABS] when any Official
+     * conversation went in, else [BUNDLE_SCHEMA_PRIVATE] (what every older app reads).
+     */
+    var schema: Int = BUNDLE_SCHEMA_PRIVATE
+        private set
+
     /** The lines in order, through [out] (one call per line). Returns the counts written. */
     suspend fun write(out: (ByteArray) -> Unit): BackupCounts {
         var conversations = 0
         var messages = 0
         var tombstones = 0
+        var official = false
         for (conv in dao.conversationIds()) {
             conversations++
-            out(encodeLine(BackupConversationLine.serializer(), conversationLine(conv)))
+            val line = conversationLine(conv)
+            if (line.official) official = true
+            out(encodeLine(BackupConversationLine.serializer(), line))
             var afterTs = Long.MIN_VALUE
             var afterId = ""
             while (true) {
@@ -86,6 +98,7 @@ class BundleExporter(
         }
         val contacts = contactLines()
         contacts.forEach { out(encodeLine(BackupContactLine.serializer(), it)) }
+        schema = if (official) BUNDLE_SCHEMA_TABS else BUNDLE_SCHEMA_PRIVATE
         return BackupCounts(conversations, messages, tombstones, contacts.size)
     }
 
@@ -106,11 +119,14 @@ class BundleExporter(
                 },
             )
         }
+        // §24.10: an Official conversation carries its chat, tab and chat kind; a Private line stays as in schema 1.
+        val tab = tabOf(conv)?.takeIf { it.official }
         return BackupConversationLine(
             conversationId = conv, kind = if (group) "group" else "dm", e2ee = group || dmE2ee(conv),
             peer = if (group) null else dmPeer(conv, me)?.lowercase(),
             group = info ?: if (group) BackupGroupInfo() else null,
             chat = BackupChatInfo(clearedUpto = state?.clearedUpto?.let(BackupTime::ticksToIso), hidden = state?.hidden == true),
+            chatId = tab?.chatId?.lowercase(), tab = tab?.tab, chatKind = tab?.chatKind,
         )
     }
 
@@ -134,7 +150,11 @@ class BundleExporter(
         // Outbox rows (never accepted by the server) are not in a backup.
         if (m.status == MessageStatus.PENDING.name || m.status == MessageStatus.FAILED.name) return null
         val payload: JsonObject = when (m.kind) {
-            MessageEntity.KIND_TEXT -> json(MlsPayload.text(m.body))
+            // §24.10: a Risi message keeps its `risi` object.
+            MessageEntity.KIND_TEXT -> json(MlsPayload.text(m.body)).let { t ->
+                val risi = if (lk.codegen.risime.data.tabs.RisiMessages.meta(m) != null) runCatching { ProtocolJson.parseToJsonElement(m.systemJson!!) as JsonObject }.getOrNull() else null
+                if (risi == null) t else JsonObject(t + ("risi" to risi))
+            }
             MessageEntity.KIND_IMAGE -> imagePayload(m) ?: return null
             MessageEntity.KIND_CALL -> callPayload(m) ?: return null
             else -> return null

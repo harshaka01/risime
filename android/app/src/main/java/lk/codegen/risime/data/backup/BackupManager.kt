@@ -215,11 +215,12 @@ class BackupManager(
         val createdAt = BackupTime.iso(now)
         val ex = exporter(user)
         val counts = ex.write { } // pass 1: the header's counts (nothing kept)
-        val out = File(dir, "$now-${reason.tag}$EXT")
+        // §24.10 the bundle schema (2 with any Official conversation) is in the file name too, for POST /backups.
+        val out = File(dir, "$now-${reason.tag}${if (ex.schema >= BUNDLE_SCHEMA_TABS) SCHEMA2_TAG else ""}$EXT")
         val w = k.writer(user, backupId, createdAt, appVersion, keyRecord, out)
         val sink = DeflatingSink { w.write(it) }
         try {
-            sink.write(encodeLine(BackupBundleHeader.serializer(), BackupBundleHeader(backupId = backupId, userId = user.lowercase(), createdAt = createdAt, appVersion = appVersion, counts = counts)))
+            sink.write(encodeLine(BackupBundleHeader.serializer(), BackupBundleHeader(schema = ex.schema, backupId = backupId, userId = user.lowercase(), createdAt = createdAt, appVersion = appVersion, counts = counts)))
             ex.write { sink.write(it) }
             sink.finish()
             val info = w.finish()
@@ -384,7 +385,7 @@ class BackupManager(
                 off += len
             }
             val body = BackupCreateRequest(
-                backupId = info.backupId, createdAt = info.createdAt, size = size, sha256 = b64(sha256(file, 0, size)), schema = BUNDLE_SCHEMA,
+                backupId = info.backupId, createdAt = info.createdAt, size = size, sha256 = b64(sha256(file, 0, size)), schema = bundleSchemaOf(file),
                 appVersion = info.appVersion, bkId = info.bkId, parts = parts,
                 replaceDevice = replaceDevice || prefs.get(K_REPLACE_OK) == "1",
             )
@@ -627,7 +628,13 @@ class BackupManager(
                     log("restore failed: ${e.kind} ${e.message}")
                     RestoreOutcome.Failed(describe(e))
                 } catch (e: BundleRejected) {
-                    RestoreOutcome.Failed(if (e.reason == "another account") "This backup belongs to another account" else "This backup file can't be read (${e.reason})")
+                    RestoreOutcome.Failed(
+                        when (e.reason) {
+                            "another account" -> "This backup belongs to another account"
+                            BundleImporter.REJECT_SCHEMA -> UPDATE_TO_RESTORE_TEXT
+                            else -> "This backup file can't be read (${e.reason})"
+                        },
+                    )
                 } catch (e: java.util.zip.ZipException) {
                     RestoreOutcome.Failed("This backup file is damaged")
                 }
@@ -680,7 +687,7 @@ class BackupManager(
             BackupException.Kind.WrongKey -> "That recovery key or passphrase doesn't match"
             BackupException.Kind.Malformed -> "That isn't a recovery key (28 letters and digits)"
             BackupException.Kind.WrongAccount -> "This backup belongs to another account"
-            BackupException.Kind.Unsupported -> "Update RisiMe to restore this backup"
+            BackupException.Kind.Unsupported -> UPDATE_TO_RESTORE_TEXT
             BackupException.Kind.Integrity, BackupException.Kind.Format -> "This backup file is damaged or was changed"
             BackupException.Kind.WeakPassphrase -> "That passphrase is too weak"
             BackupException.Kind.NoKey -> "This backup's key isn't on this phone"
@@ -692,6 +699,15 @@ class BackupManager(
 
     companion object {
         const val EXT = ".risimebk"
+
+        /** §24.10 a local backup whose bundle is schema 2 (it holds an Official conversation). */
+        const val SCHEMA2_TAG = "-s2"
+
+        /** §22.4/§24.10 a backup made by a newer app. */
+        const val UPDATE_TO_RESTORE_TEXT = "Update RisiMe to restore this backup"
+
+        /** The bundle schema of a local backup file (from its name; files from before v1.24 are schema 1). */
+        fun bundleSchemaOf(file: File): Int = if (file.name.endsWith("$SCHEMA2_TAG$EXT")) BUNDLE_SCHEMA_TABS else BUNDLE_SCHEMA_PRIVATE
 
         /** §22.3: clients use 33 562 624-byte parts (512 chunks). */
         const val PART_SIZE = 33_562_624L

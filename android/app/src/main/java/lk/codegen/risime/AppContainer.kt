@@ -870,6 +870,7 @@ class AppContainer(
                 groupNames = db.groups().allNow().associate { it.conversationId to lk.codegen.risime.data.groups.groupDisplayName(it.name) },
                 memberNames = db.groups().observeAllMembers().first().groupBy { it.conversationId }
                     .mapValues { (_, ms) -> ms.associate { it.userId.lowercase() to it.displayName } },
+                me = me, tabsOn = chatTabs.uiOn.value, tabRows = chatTabs.rows.value,
             ),
             reactionAdds, { targets[it] }, { id -> names[id.lowercase()] ?: "Someone" }, me, open,
         )
@@ -1018,6 +1019,7 @@ class AppContainer(
                 lk.codegen.risime.data.backup.BundleExporter(
                     db.backup(), db.groups(), db.deletes(), db.media(), mediaSealer, me,
                     dmE2ee = { conv -> runCatching { mlsEngine?.group(conv) != null }.getOrDefault(false) },
+                    tabOf = { conv -> db.chatTabs().get(conv) },
                 )
             },
             importer = { me, progress ->
@@ -1025,6 +1027,8 @@ class AppContainer(
                     db.messages(), db.deletes(), db.groups(), db.contacts(), db.backup(), db.history(),
                     lk.codegen.risime.data.ReactionStore(db.reactions()), images.takeIf { BuildConfig.CRYPTO_AVAILABLE }, dbTx, progress, me,
                     log = { Log.i("RisiMe", it) },
+                    // §24.10: a restored Official conversation keeps its tab (never over a row this phone already has).
+                    restoreTab = { t -> if (db.chatTabs().insertIfMissing(t) != -1L) Log.i("RisiMe", "restore: ${t.conversationId} is Official of ${t.chatId}") },
                 )
             },
             server = backupServer,
@@ -1798,6 +1802,7 @@ class AppContainer(
                 groupNames = db.groups().allNow().associate { it.conversationId to lk.codegen.risime.data.groups.groupDisplayName(it.name) },
                 memberNames = db.groups().observeAllMembers().first().groupBy { it.conversationId }
                     .mapValues { (_, ms) -> ms.associate { it.userId.lowercase() to it.displayName } },
+                me = me, tabsOn = chatTabs.uiOn.value, tabRows = chatTabs.rows.value,
             ),
             reactionAdds, { targets[it] }, { id -> names[id.lowercase()] ?: "Someone" }, me, open,
         )

@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.filled.Search
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -67,20 +68,25 @@ class ChatTabsViewModel(c: AppContainer, meId: String, chatId: String, initial: 
  * While Official is off only Private shows (plus a link to Official's read-only history if this device has it).
  */
 @Composable
-fun ChatTabBar(state: TabBarState, onSelect: (Tab) -> Unit, onHistory: () -> Unit) {
+fun ChatTabBar(state: TabBarState, onSelect: (Tab) -> Unit, onHistory: () -> Unit, onSearch: (() -> Unit)? = null) {
     Column(Modifier.fillMaxWidth().testTag("chat_tabs")) {
         if (state.showOfficial) {
             val official = state.selected == Tab.OFFICIAL
-            TabRow(
-                selectedTabIndex = if (official) 1 else 0,
-                contentColor = if (official) OfficialAccent else MaterialTheme.colorScheme.primary,
-            ) {
-                M3Tab(selected = !official, onClick = { onSelect(Tab.PRIVATE) }, modifier = Modifier.testTag("tab_private")) {
-                    TabLabel(PRIVATE_TAB_LABEL, state.unread.private)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TabRow(
+                    selectedTabIndex = if (official) 1 else 0,
+                    contentColor = if (official) OfficialAccent else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    M3Tab(selected = !official, onClick = { onSelect(Tab.PRIVATE) }, modifier = Modifier.testTag("tab_private")) {
+                        TabLabel(PRIVATE_TAB_LABEL, state.unread.private)
+                    }
+                    M3Tab(selected = official, onClick = { onSelect(Tab.OFFICIAL) }, modifier = Modifier.testTag("tab_official")) {
+                        TabLabel(OFFICIAL_TAB_LABEL, state.unread.official)
+                    }
                 }
-                M3Tab(selected = official, onClick = { onSelect(Tab.OFFICIAL) }, modifier = Modifier.testTag("tab_official")) {
-                    TabLabel(OFFICIAL_TAB_LABEL, state.unread.official)
-                }
+                // §24.9: search inside a chat searches the tab on screen.
+                onSearch?.let { s -> TabSearchButton(state.selected, s) }
             }
             if (official) {
                 Text(
@@ -93,8 +99,16 @@ fun ChatTabBar(state: TabBarState, onSelect: (Tab) -> Unit, onHistory: () -> Uni
             Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.md), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f).padding(vertical = Spacing.sm)) { TabLabel(PRIVATE_TAB_LABEL, state.unread.private) }
                 if (state.historyAvailable) TextButton(onClick = onHistory) { Text(OFFICIAL_HISTORY_LABEL) }
+                onSearch?.let { s -> TabSearchButton(Tab.PRIVATE, s) }
             }
         }
+    }
+}
+
+@Composable
+private fun TabSearchButton(tab: Tab, onSearch: () -> Unit) {
+    androidx.compose.material3.IconButton(onClick = onSearch, modifier = Modifier.testTag("tab_search")) {
+        androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Search, tabSearchPlaceholder(tab))
     }
 }
 
@@ -152,11 +166,13 @@ fun TabbedChat(
     onBack: () -> Unit,
     privateScreen: @Composable (tabBar: (@Composable () -> Unit)?) -> Unit,
     officialScreen: @Composable (conversationId: String, readOnly: Boolean, tabBar: @Composable () -> Unit) -> Unit,
+    /** §24.9 search in the tab on screen (its conversation, its tab). */
+    onSearch: ((conversationId: String, tab: Tab) -> Unit)? = null,
 ) {
     if (!tabsOn) return privateScreen(null)
     val model = vm()
     val title by model.title.collectAsStateWithLifecycle()
-    TabbedChatContent(model.controller, title, onBack, privateScreen, officialScreen)
+    TabbedChatContent(model.controller, title, onBack, privateScreen, officialScreen, onSearch)
 }
 
 @Composable
@@ -166,13 +182,15 @@ fun TabbedChatContent(
     onBack: () -> Unit,
     privateScreen: @Composable (tabBar: (@Composable () -> Unit)?) -> Unit,
     officialScreen: @Composable (conversationId: String, readOnly: Boolean, tabBar: @Composable () -> Unit) -> Unit,
+    onSearch: ((conversationId: String, tab: Tab) -> Unit)? = null,
 ) {
     val content by controller.content.collectAsStateWithLifecycle()
     val bar by controller.bar.collectAsStateWithLifecycle()
     val notice by controller.notice.collectAsStateWithLifecycle()
     val banner by controller.banner.collectAsStateWithLifecycle()
     val tabBar: @Composable () -> Unit = {
-        ChatTabBar(bar, controller::select, controller::openHistory)
+        val scope = searchScopeOf(controller.chatId, content)
+        ChatTabBar(bar, controller::select, controller::openHistory, onSearch?.let { s -> scope?.let { conv -> { s(conv, if (content is TabContent.Official) Tab.OFFICIAL else Tab.PRIVATE) } } })
         if (banner && bar.selected == Tab.OFFICIAL) OfficialBanner(controller::dismissBanner)
         notice?.let { n ->
             Text(

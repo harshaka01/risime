@@ -62,6 +62,27 @@ fun redactLockedChat(n: ChatNotification): ChatNotification = n.copy(
 )
 
 const val MAX_LINES = 5
+
+/** §24.9 the tab part of a notification title ("Kamal · Official", "Kamal · 🔒 Private"). */
+const val NOTIF_OFFICIAL_SUFFIX = " · Official"
+const val NOTIF_PRIVATE_SUFFIX = " · 🔒 Private"
+
+/**
+ * §24.9 the title of a chat's notification while tabs are on: the chat's name (the peer for a 1:1,
+ * also for its Official, whose group name is empty; else the Private group's name) and the tab.
+ * [row] is the conversation's MLS-derived tab row (null: Private, its own chat).
+ */
+fun tabTitle(conv: String, row: lk.codegen.risime.data.db.ChatTabEntity?, me: String?, names: Map<String, String>, groupNames: Map<String, String>, fallbackPeer: String?): String {
+    val official = row?.official == true
+    val chat = if (official) row!!.chatId else conv
+    val base = if (lk.codegen.risime.net.isGroupConversation(chat)) {
+        groupNames[chat] ?: groupNames[chat.lowercase()] ?: lk.codegen.risime.data.groups.GROUP_NAME_PENDING
+    } else {
+        val peer = me?.let { lk.codegen.risime.net.dmPeer(chat, it) } ?: fallbackPeer
+        peer?.let { names[it.lowercase()] } ?: "New message"
+    }
+    return base + if (official) NOTIF_OFFICIAL_SUFFIX else NOTIF_PRIVATE_SUFFIX
+}
 const val PREVIEW_CHARS = 120
 
 /**
@@ -77,11 +98,20 @@ fun planChatNotifications(
     groupNames: Map<String, String> = emptyMap(),
     /** §12: member display names per `grp:` conversation (non-friends included). */
     memberNames: Map<String, Map<String, String>> = emptyMap(),
+    /** §24.11: this user (a Risi message notifies only the users in its `notify`). */
+    me: String? = null,
+    /** §24.9: the tab titles ("Kamal · Official") while tabs are on; [tabRows] = the MLS-derived tab rows. */
+    tabsOn: Boolean = false,
+    tabRows: Map<String, lk.codegen.risime.data.db.ChatTabEntity>? = null,
 ): List<ChatNotification> {
     val names = contacts.filter { it.userId != null }.associate { it.userId!!.lowercase() to it.displayName }
+    fun titled(n: ChatNotification): ChatNotification =
+        if (!tabsOn) n else n.copy(title = tabTitle(n.conversationId, tabRows?.get(n.conversationId.lowercase()), me, names, groupNames, n.peerId))
     return unreadIncoming
         // §16.6: a missed call has its own notification ("Missed call from <name>").
         .filter { !it.outgoing && it.status != "READ" && it.kind != lk.codegen.risime.data.db.MessageEntity.KIND_CALL }
+        // §24.9/§24.11: a Risi message for someone else is silent (still unread, never notified).
+        .filter { lk.codegen.risime.data.tabs.RisiMessages.notifies(it, me) }
         .groupBy { it.conversationId }
         .filter { (conv, msgs) -> conv != suppressConversation && msgs.any { it.localTs > notifiedUpTo } }
         .mapNotNull { (conv, msgs) ->
@@ -99,7 +129,7 @@ fun planChatNotifications(
                     newestTs = sorted.last().localTs,
                     group = true,
                     messages = shown.map { NotifLine(who(it.from), preview(bodyPreview(it.kind, it.body)), it.localTs) },
-                )
+                ).let(::titled)
             }
             ChatNotification(
                 conversationId = conv,
@@ -108,7 +138,7 @@ fun planChatNotifications(
                 lines = sorted.takeLast(MAX_LINES).map { preview(bodyPreview(it.kind, it.body)) },
                 count = sorted.size,
                 newestTs = sorted.last().localTs,
-            )
+            ).let(::titled)
         }
         .sortedByDescending { it.newestTs }
 }

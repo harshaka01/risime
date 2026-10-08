@@ -157,6 +157,9 @@ class ChatTabsController(
 
     fun clearNotice() = tabs.clearNotice()
 
+    /** §24.5/§24.9 the call this chat places from the tab on screen (Official: §20 on its `grp:`, 1:1 too; null: none yet). */
+    fun callTarget(): lk.codegen.risime.data.tabs.CallTarget? = lk.codegen.risime.data.tabs.callTargetFor(chatId, tab.value, official.value)
+
     fun select(t: Tab) {
         selected.value = t
         scope.launch { tabs.setLastTab(chatId, t) }

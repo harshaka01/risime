@@ -73,7 +73,12 @@ class BundleImporter(
     private val clock: () -> Long = System::currentTimeMillis,
     private val log: (String) -> Unit = {},
     private val batch: Int = 1_000,
+    /** §24.10 a schema-2 `conversation` line's tab (Official only; the app inserts it if this phone has no row yet). */
+    private val restoreTab: suspend (lk.codegen.risime.data.db.ChatTabEntity) -> Unit = {},
 ) {
+    /** §24.10 Official conversations seen in this bundle (their Risi messages keep the `risi` object). */
+    private val officialConvs = mutableSetOf<String>()
+
     private var imported = 0
     private var tombstones = 0
     private var groupEvents = 0
@@ -96,7 +101,9 @@ class BundleImporter(
         val header = runCatching { ProtocolJson.decodeFromString(BackupBundleHeader.serializer(), headerText) }.getOrNull()
             ?: throw BundleRejected("bad header")
         if (header.v != 1 || header.type != BackupBundleHeader.TYPE) throw BundleRejected("not a backup bundle")
-        if (header.schema > BUNDLE_SCHEMA) throw BundleRejected("schema ${header.schema}")
+        // §22.4/§24.10: only a schema this app doesn't know is refused ("Update RisiMe to restore this backup");
+        // schema 1 imports as all-Private, schema 2 restores the tabs.
+        if (header.schema > BUNDLE_SCHEMA || header.schema < 1) throw BundleRejected(REJECT_SCHEMA)
         if (!header.userId.equals(me, true)) throw BundleRejected("another account")
         val start = progress.done(header.backupId)
         var n = 0
@@ -160,6 +167,17 @@ class BundleImporter(
         val conv = c.conversationId
         if (!validConv(conv)) return skip("malformed")
         conversations++
+        // §24.10: an Official conversation restores its tab (a missing tab = Private, its own chat).
+        if (c.official) {
+            val chatId = c.chatId?.takeIf { it.startsWith("dm:") || it.startsWith("grp:") } ?: return skip("malformed")
+            officialConvs += conv.lowercase()
+            restoreTab(
+                lk.codegen.risime.data.db.ChatTabEntity(
+                    conv, chatId, lk.codegen.risime.data.db.ChatTabEntity.TAB_OFFICIAL,
+                    c.chatKind ?: if (chatId.startsWith("dm:")) lk.codegen.risime.data.db.ChatTabEntity.KIND_DM else lk.codegen.risime.data.db.ChatTabEntity.KIND_GROUP,
+                ),
+            )
+        }
         val backupCleared = BackupTime.isoToTicks(c.chat.clearedUpto)
         val local = deletes.chatState(conv)
         if (local == null) {
@@ -214,7 +232,11 @@ class BundleImporter(
         var callId: String? = null
         var image: lk.codegen.risime.data.media.ImageEnvelope? = null
         when (payload) {
-            is MlsPayload.Decoded.Text -> body = payload.body
+            is MlsPayload.Decoded.Text -> {
+                body = payload.body
+                // §24.10: a Risi message in an Official conversation keeps its `risi` object (plain text anywhere else).
+                if (payload.risi != null && conv.lowercase() in officialConvs) systemJson = lk.codegen.risime.data.tabs.RisiMessages.encode(payload.risi)
+            }
             is MlsPayload.Decoded.Image -> {
                 if (images == null) return skip("images_unavailable")
                 kind = MessageEntity.KIND_IMAGE
@@ -322,5 +344,8 @@ class BundleImporter(
     companion object {
         /** §22.6: the `origin` of a restored row whose backup line had none. */
         const val ORIGIN_BACKUP = "backup"
+
+        /** A bundle schema this app doesn't know (§22.4: "Update RisiMe to restore this backup"). */
+        const val REJECT_SCHEMA = "schema"
     }
 }

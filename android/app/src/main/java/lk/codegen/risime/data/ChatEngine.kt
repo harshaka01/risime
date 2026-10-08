@@ -414,7 +414,7 @@ class ChatEngine(
                 r.conversationId?.let { upsertMarker(it, SystemLine.UNDECRYPTABLE, r.serverTs) }
                 recordGaps(r.gaps)
             }
-            if (r is MlsResult.Plaintext) incoming = applyMessage(me, r.message, r.body) || incoming
+            if (r is MlsResult.Plaintext) incoming = applyMessage(me, r.message, r.body, systemJson = r.risi) || incoming
             if (r is MlsResult.Image) {
                 val hooks = images
                 if (hooks != null) {
@@ -817,6 +817,8 @@ class ChatEngine(
         body: String,
         kind: String = MessageEntity.KIND_TEXT,
         blobId: String? = null,
+        /** §24.11 a text row's honoured `risi` object (null: an ordinary message). */
+        systemJson: String? = null,
         /** In the same transaction, right after the new row (§14.7: the image's media row). */
         onInserted: suspend (MessageEntity) -> Unit = {},
     ): Boolean {
@@ -876,6 +878,7 @@ class ChatEngine(
             kind = kind,
             blobId = blobId,
             fromDevice = m.fromDevice?.lowercase(),
+            systemJson = systemJson,
         )
         if (messages.insert(row) == -1L) return false
         deletes?.unhide(row.conversationId) // §15.7 Delete chat: a new message brings the chat back

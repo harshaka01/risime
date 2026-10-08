@@ -11,7 +11,14 @@ import java.time.Instant
 // ---- §22.5 the bundle (plaintext, schema 1): JSON Lines, header first, then per conversation its
 // `conversation` line and its rows oldest first; `contact` lines last. ----
 
-const val BUNDLE_SCHEMA = 1
+/** The newest bundle schema this app reads (§24.10: 2 = with Official conversations). */
+const val BUNDLE_SCHEMA = 2
+
+/** §22.5 a bundle with Private conversations only (what every pre-v1.24 app reads). */
+const val BUNDLE_SCHEMA_PRIVATE = 1
+
+/** §24.10 a bundle with any Official conversation: older apps refuse it ("Update RisiMe to restore this backup"). */
+const val BUNDLE_SCHEMA_TABS = 2
 
 /** §22.5 the header (`backup_bundle_header.json`). */
 @Serializable
@@ -19,7 +26,7 @@ data class BackupBundleHeader(
     val v: Int = 1,
     val type: String = TYPE,
     val origin: String = ORIGIN,
-    val schema: Int = BUNDLE_SCHEMA,
+    val schema: Int = BUNDLE_SCHEMA_PRIVATE,
     @SerialName("backup_id") val backupId: String,
     @SerialName("user_id") val userId: String,
     @SerialName("created_at") val createdAt: String,
@@ -46,7 +53,21 @@ data class BackupConversationLine(
     val peer: String? = null,
     val group: BackupGroupInfo? = null,
     val chat: BackupChatInfo = BackupChatInfo(),
+    /** §24.10 (v1.24): the chat; absent = Private with `chat_id = conversation_id` (written for Official lines only). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("chat_id") val chatId: String? = null,
+    /** "private" | "official"; absent = Private. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val tab: String? = null,
+    /** "dm" | "group"; absent = [kind]. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("chat_kind") val chatKind: String? = null,
 ) {
+    val official: Boolean get() = tab == lk.codegen.risime.data.db.ChatTabEntity.TAB_OFFICIAL
+
     companion object {
         const val TYPE = "conversation"
     }

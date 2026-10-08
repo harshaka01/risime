@@ -465,7 +465,8 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     /** The call button (RECORD_AUDIO already granted by the UI); [video] with [camera] = CAMERA granted (§19.6). */
     fun placeCall(conversationId: String, video: Boolean = false, camera: Boolean = video) {
-        if (lk.codegen.risime.net.isGroupConversation(conversationId)) {
+        // §24.5: per tab — an Official conversation (1:1 included) is a grp: and always takes the §20 path.
+        if (lk.codegen.risime.data.tabs.callPathOf(conversationId) == lk.codegen.risime.data.tabs.CallPath.SFU) {
             scope.launch { _group.value?.start(conversationId, video, camera) }
             return
         }

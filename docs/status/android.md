@@ -1,5 +1,36 @@
 # Android status — 0.2 nightlies
 
+## §24 A5 notifications, Risi notify, per-tab search/media/calls, schema-2 backups — READY (1065 JVM tests, 0 failed)
+- **Notifications** (tabs on): "Kamal · Official", "Kamal · 🔒 Private", "Team · Official" (a 1:1 Official is named by
+  its peer, a group's Official by the Private group's name). Decision-064 "Show content" off and locked chats stay the
+  generic "RisiMe" / "New message" (redaction replaces the title). Tabs off: titles as before.
+- **Risi `notify`:** a `risi` object is honoured only from an attested agent leaf (`MlsEngine.agentUsers`) in a
+  conversation whose MLS meta is Official (`RisiMessages.honoured` in `MlsPipeline`); it is kept in the text row's
+  `system_json` (no Room change). A Risi row notifies only users in `risi.notify`; for others it is left out of the
+  plan (no sound, no heads-up) and still counts unread. Anywhere else a `risi` object is plain text.
+- **Search:** in a chat, the search icon in the tab bar searches the tab on screen only (`MessageDao.searchIn`,
+  route `chat_search/{conv}/{tab}`); global search shows "🔒 " / "● " per hit (tabs on), names a 1:1 Official hit by
+  the peer and opens its chat on the Official tab; locked chats hide both tabs' hits (by chat id).
+- **Media** per tab in chat info (A4). **Calls:** decision point `data/tabs/TabCalls.kt` — `callTargetFor(chat, tab,
+  official)`: Private 1:1 = §16/§19 on the `dm:`, Private group = §20 on its `grp:`, Official (1:1 too) = §20 on the
+  Official `grp:`; `CallManager.placeCall` routes by `callPathOf` (only touch in `calls/`); `ChatTabsController.callTarget()`
+  for the call-screen work. Call records are rows of the conversation they were placed in, so each tab has its own.
+- **Backups §24.10:** Official `conversation` lines carry `chat_id`/`tab`/`chat_kind` (Private lines unchanged, no
+  new keys); any Official → bundle header `schema: 2` (file named `…-s2.risimebk`, `POST /backups` `schema: 2`). Import:
+  schema 2 restores the tabs (`chat_tabs.insertIfMissing`, never over an existing row) and Risi rows keep `risi` only in
+  Official; schema 1 imports as all-Private; only schema > 2 is refused with "Update RisiMe to restore this backup".
+- **`409 members_changed`** (server a6520c3): the `create_official` op drops the stale epoch 0, refetches the group and
+  retries (claims again, rebuilds epoch 0), bounded by the op's attempts.
+- Tests: `TabNotificationsTest`, `RisiHonourTest`, `TabSearchCallsTest`, `BackupTabsTest` (golden files = the
+  contract examples for both schemas, round trip with per-conversation counts and tabs, schema-1 all-Private, refusal),
+  `GroupOpsExecutorTest` (members_changed rebuild, bounded).
+- **Open:** (1) **crypto**: the core writes the *file* header `schema: 1` and refuses a file header > 1, so the file
+  header can't say 2 yet — only the bundle header does. An older app still refuses such a bundle (its importer rejects
+  bundle schema 2, but with "This backup file can't be read (schema 2)" rather than the update text). Needs a writer
+  `schema` parameter + reader accepting 2 in `risime-mls` backup. (2) In-chat search lists hits but doesn't scroll to the
+  message. (3) Risi cards/`@Risi` chip, `PATCH /me tz` remain A6. (4) The call screen's title for a 1:1 Official
+  (empty group name) is the call-screen agent's.
+
 ## §24 A4 chat info: the Official switch — READY (tabs on only)
 - **Chat info** (group: Group info; 1:1: a new "Chat info" screen from the header, Private or Official, only while tabs
   are on — off keeps the v1.23 dialog): **Official** switch → `PATCH /chats/{id}`. 1:1: either person; group: admins

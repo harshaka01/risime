@@ -257,6 +257,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                         }
                     }
                 },
+                onSearch = { searchConv, tab -> nav.navigate("chat_search/${android.net.Uri.encode(searchConv)}/${tab.wire}") { launchSingleTop = true } },
                 officialScreen = { official, readOnly, tabBar ->
                     val dmChat = !lk.codegen.risime.net.isGroupConversation(conv)
                     val peerName = if (dmChat) viewModel<lk.codegen.risime.ui.tabs.ChatTabsViewModel>(key = "tabs:$conv").title.collectAsState().value else null
@@ -302,6 +303,21 @@ private fun MainNav(c: AppContainer, meId: String) {
                 }) else null,
             )
             if (tabsVm != null && official != null) lk.codegen.risime.ui.tabs.OfficialOffDialog(official, tabsVm.official::confirmOff, tabsVm.official::cancelOff)
+        }
+        // §24.9 search inside one tab of a chat (that conversation only).
+        composable("chat_search/{conv}/{tab}") { entry ->
+            val conv = entry.arguments?.getString("conv") ?: return@composable
+            val tab = lk.codegen.risime.data.tabs.Tab.of(entry.arguments?.getString("tab")) ?: lk.codegen.risime.data.tabs.Tab.PRIVATE
+            val members by c.db.groups().observeAllMembers().collectAsState(emptyList())
+            val contacts by c.contacts.contacts.collectAsState(emptyList())
+            lk.codegen.risime.ui.tabs.ChatSearchScreen(
+                viewModel(key = "search:$conv") { lk.codegen.risime.ui.tabs.ChatSearchViewModel(conv, tab) { id, p, n -> c.db.messages().searchIn(id, p, n) } },
+                senderName = { m ->
+                    contacts.firstOrNull { it.userId.equals(m.from, true) }?.displayName
+                        ?: members.firstOrNull { it.userId.equals(m.from, true) }?.displayName ?: "Someone"
+                },
+                onBack = { nav.popBackStack() },
+            )
         }
         composable("chat_info/{chat}") { entry ->
             val chat = entry.arguments?.getString("chat") ?: return@composable

@@ -27,10 +27,32 @@ data class SearchResults(
     val messages: List<MessageHit> = emptyList(),
 )
 
-data class MessageHit(val message: MessageEntity, val peerId: String, val peerName: String)
+/**
+ * A message found by search. [tab] (§24.9, tabs on only): the tab the message is in, shown as a tab
+ * icon; [openTarget] = what a tap opens (the DM peer as before; an Official message opens its chat
+ * on the Official tab).
+ */
+data class MessageHit(
+    val message: MessageEntity,
+    val peerId: String,
+    val peerName: String,
+    val tab: lk.codegen.risime.data.tabs.Tab? = null,
+    val openTarget: String = peerId,
+)
 
-/** Contacts whose name or company match, and messages whose body matches (newest first). */
-fun searchResults(query: String, contacts: List<ContactEntity>, messages: List<MessageEntity>): SearchResults {
+/**
+ * Contacts whose name or company match, and messages whose body matches (newest first). With tabs on
+ * ([tabsOn]), every hit carries its tab ([tabOf]: the MLS-derived tab row of a conversation); an
+ * Official message is named by its chat's peer (a 1:1) and opens that chat's Official tab.
+ */
+fun searchResults(
+    query: String,
+    contacts: List<ContactEntity>,
+    messages: List<MessageEntity>,
+    me: String = "",
+    tabsOn: Boolean = false,
+    tabOf: (String) -> lk.codegen.risime.data.db.ChatTabEntity? = { null },
+): SearchResults {
     val q = query.trim()
     if (q.isEmpty()) return SearchResults(q)
     val byId = contacts.filter { it.userId != null }.associateBy { it.userId!!.lowercase() }
@@ -39,21 +61,33 @@ fun searchResults(query: String, contacts: List<ContactEntity>, messages: List<M
             (it.displayName.contains(q, ignoreCase = true) || it.company.contains(q, ignoreCase = true))
     }
     val hits = messages.mapNotNull { m ->
-        val peer = (if (m.outgoing) m.to else m.from).lowercase()
+        val row = tabOf(m.conversationId.lowercase())
+        val official = row?.official == true
+        val peer = (if (official) lk.codegen.risime.net.dmPeer(row!!.chatId, me) ?: (if (m.outgoing) null else m.from) else if (m.outgoing) m.to else m.from)
+            ?.lowercase() ?: return@mapNotNull null
         val c = byId[peer] ?: return@mapNotNull null
-        MessageHit(m, c.userId!!, c.displayName)
+        val tab = when {
+            !tabsOn -> null
+            official -> lk.codegen.risime.data.tabs.Tab.OFFICIAL
+            else -> lk.codegen.risime.data.tabs.Tab.PRIVATE
+        }
+        MessageHit(m, c.userId!!, c.displayName, tab, if (official) m.conversationId else c.userId)
     }
     return SearchResults(q, people, hits)
 }
 
-/** Locked chats never show up in search (WhatsApp): their people and messages are dropped. Unknown locked list: nothing. */
-fun withoutLocked(r: SearchResults, locked: Set<String>?, meId: String): SearchResults {
+/**
+ * Locked chats never show up in search (WhatsApp): their people and messages are dropped. Unknown
+ * locked list: nothing. [chatOf]: a conversation's chat (§24: an Official message of a locked chat
+ * is hidden too).
+ */
+fun withoutLocked(r: SearchResults, locked: Set<String>?, meId: String, chatOf: (String) -> String = { it }): SearchResults {
     if (locked == null) return SearchResults(r.query)
     if (locked.isEmpty()) return r
     fun hidden(peer: String) = dmConversationId(meId, peer) in locked
     return r.copy(
         contacts = r.contacts.filterNot { it.userId != null && hidden(it.userId) },
-        messages = r.messages.filterNot { hidden(it.peerId) },
+        messages = r.messages.filterNot { hidden(it.peerId) || chatOf(it.message.conversationId).lowercase() in locked },
     )
 }
 
@@ -66,13 +100,13 @@ class SearchViewModel(private val c: AppContainer, private val meId: String = ""
             if (q.isBlank()) {
                 flowOf(SearchResults(q))
             } else {
-                combine(c.contacts.contacts, c.db.messages().search(likePattern(q), LIMIT)) { contacts, msgs ->
-                    searchResults(q, contacts, msgs)
+                combine(c.contacts.contacts, c.db.messages().search(likePattern(q), LIMIT), c.chatTabs.rows, c.chatTabs.uiOn) { contacts, msgs, rows, tabsOn ->
+                    searchResults(q, contacts, msgs, meId, tabsOn) { conv -> rows?.get(conv) }
                 }
             }
         },
         c.lockedChats.ids,
-    ) { r, locked -> withoutLocked(r, locked, meId) }
+    ) { r, locked -> withoutLocked(r, locked, meId) { conv -> c.chatTabs.chatId(conv) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SearchResults())
 
     /**

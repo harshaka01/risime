@@ -18,7 +18,8 @@ object MlsPayload {
     const val TYPE_REACTION = "reaction"
 
     sealed interface Decoded {
-        data class Text(val body: String) : Decoded
+        /** [risi]: the §24.11 `risi` object, if any (honoured only from an agent leaf in Official). */
+        data class Text(val body: String, val risi: JsonObject? = null) : Decoded
 
         /** §11.2: an encrypted reaction (op "add" sets, "remove" clears). */
         data class Reaction(val target: String, val emoji: String, val op: String) : Decoded
@@ -136,6 +137,6 @@ object MlsPayload {
         }
         if (type != TYPE_TEXT) return Decoded.Ignored(type)
         val body = (obj["body"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: return Decoded.Ignored("text without body")
-        return Decoded.Text(body)
+        return Decoded.Text(body, obj["risi"] as? JsonObject)
     }
 }

@@ -17,7 +17,7 @@ class MlsNotReady : IllegalStateException("MLS core not open yet: event not appl
 /** What one inbox event meant for MLS (contract §10.3, decision 033). */
 sealed interface MlsResult {
     /** A decrypted e2ee message: insert it like a plaintext one (same transaction). */
-    data class Plaintext(val message: MessageData, val body: String) : MlsResult
+    data class Plaintext(val message: MessageData, val body: String, val risi: String? = null) : MlsResult
 
     /** §14.4: a decrypted, validated image envelope (stored with its thumbnail in the same transaction). */
     data class Image(val message: MessageData, val envelope: lk.codegen.risime.data.media.ImageEnvelope) : MlsResult
@@ -323,7 +323,12 @@ class MlsPipeline(
                 undecryptable("unexpected authenticated_data")
             } else {
                 when (val p = MlsPayload.decode(d.plaintext)) {
-                    is MlsPayload.Decoded.Text -> MlsResult.Plaintext(msg, p.body)
+                    // §24.11: a `risi` object counts only from an attested agent leaf in Official (else plain text).
+                    is MlsPayload.Decoded.Text -> MlsResult.Plaintext(
+                        msg, p.body,
+                        lk.codegen.risime.data.tabs.RisiMessages.honoured(p.risi, if (p.risi != null) mls.groupMeta(conv) else null, d.sender.userId, if (p.risi != null) mls.agentUsers(conv) else emptySet())
+                            ?.let(lk.codegen.risime.data.tabs.RisiMessages::encode),
+                    )
                     is MlsPayload.Decoded.Reaction -> MlsResult.Reaction(msg, p.target, p.emoji, p.op)
                     is MlsPayload.Decoded.Image -> MlsResult.Image(msg, p.envelope)
                     // §15.3: a delete envelope is only valid in a `delete` event; in a `message` event it is dropped and logged.
