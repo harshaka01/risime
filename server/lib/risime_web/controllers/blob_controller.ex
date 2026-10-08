@@ -24,7 +24,7 @@ defmodule RisiMeWeb.BlobController do
     me = me(conn)
 
     # v1.15 §17.9: a `history` upload names the provider device by `X-Device-Id` (never a
-    # query parameter).
+    # query parameter); so does a v1.22 `backup` part (the writing device).
     params = Map.put(params, "_device_id", List.first(get_req_header(conn, "x-device-id")))
 
     case Blobs.begin_upload(me, params, content_type(conn), content_length(conn)) do
@@ -251,6 +251,9 @@ defmodule RisiMeWeb.BlobController do
   defp error(conn, {:error, :bad_media_type}), do: ApiError.send_error(conn, 415, :bad_media_type)
   defp error(conn, {:error, :not_e2ee}), do: ApiError.send_error(conn, 409, :not_e2ee)
   defp error(conn, {:error, :storage_full}), do: ApiError.send_error(conn, 507, :storage_full)
+
+  defp error(conn, {:error, :backup_unavailable}),
+    do: ApiError.send_error(conn, 503, :backup_unavailable)
 
   defp error(conn, {:error, {:rate_limited, s}}),
     do: ApiError.send_error(conn, 429, :rate_limited, retry_after: s)

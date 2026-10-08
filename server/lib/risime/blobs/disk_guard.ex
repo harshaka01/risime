@@ -61,7 +61,7 @@ defmodule RisiMe.Blobs.DiskGuard do
           left = free - Slots.inflight_bytes() - size
 
           min =
-            if purpose in ["media", "history"],
+            if purpose in ["media", "history", "backup"],
               do: max(c[:media_min_free], trunc(total * c[:media_min_free_ratio])),
               else: c[:min_free]
 
@@ -72,7 +72,7 @@ defmodule RisiMe.Blobs.DiskGuard do
       not free_ok ->
         {:error, :storage_full}
 
-      purpose in ["media", "history"] and media_total(c) + size > c[:media_max] ->
+      purpose in ["media", "history", "backup"] and media_total(c) + size > c[:media_max] ->
         {:error, :storage_full}
 
       true ->
@@ -94,8 +94,8 @@ defmodule RisiMe.Blobs.DiskGuard do
           Repo.one(
             from b in "blobs",
               where:
-                b.purpose in ["media", "history"] and is_nil(b.deleted_at) and
-                  b.expires_at > ^DateTime.utc_now(),
+                b.purpose in ["media", "history", "backup"] and is_nil(b.deleted_at) and
+                  (is_nil(b.expires_at) or b.expires_at > ^DateTime.utc_now()),
               select: coalesce(sum(b.size), 0)
           )
           |> then(fn

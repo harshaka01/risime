@@ -83,6 +83,11 @@ defmodule RisiMeWeb.Router do
     post "/groups/:id/rejoin", GroupController, :rejoin
     get "/groups/:id/messages/:message_id/receipts", GroupController, :receipts
     post "/blobs", BlobController, :create
+    post "/backups", BackupController, :create
+    get "/backups", BackupController, :index
+    delete "/backups", BackupController, :delete
+    put "/backup_key", BackupController, :put_key
+    get "/backup_key", BackupController, :get_key
     get "/blobs/usage", BlobController, :usage
     delete "/blobs/:id", BlobController, :delete
     put "/me/devices/:device_id", DeviceController, :put

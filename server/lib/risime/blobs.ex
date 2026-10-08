@@ -17,6 +17,11 @@ defmodule RisiMe.Blobs do
   | `icon` | `grp:` | 512 KiB | none while current, 7 d after replaced | 3/h | none |
   | `history` | `dm:` (e2ee), `grp:` | 16 MiB | 48 h (earlier after the ack) | 40/h | 512 MiB |
   | `avatar` | none | 512 KiB | none while current, 24 h after replaced | 3/h, 10/day | none |
+  | `backup` | none | 33 562 624 B | 24 h unreferenced, none current, 7 d replaced | 60/h, 200/day | 1.5 GiB |
+
+  A `backup` part (v1.22 §22.3) has no conversation and carries its `backup_id`; only the owner
+  reads it. Its quota counts current backups plus unreferenced parts (`backup_used/1`), not
+  replaced backups. `RisiMe.Backups` sets the expiry when a backup commits or is replaced.
 
   An `avatar` (v1.17 §18.3) has no conversation (`conversation_id` null): one current avatar
   per user (the upload whose row commits last); readers are the owner, friends with no block
@@ -50,11 +55,14 @@ defmodule RisiMe.Blobs do
     "media" => %{max: 16 * @mib, ttl_days: 30, hourly: 120, daily: 1000},
     "icon" => %{max: 512 * 1024, ttl_days: nil, hourly: 3, daily: nil},
     "history" => %{max: 16 * @mib, ttl_days: 2, hourly: 40, daily: nil},
-    "avatar" => %{max: 512 * 1024, ttl_days: nil, hourly: 3, daily: 10}
+    "avatar" => %{max: 512 * 1024, ttl_days: nil, hourly: 3, daily: 10},
+    # v1.22 §22.3: parts of a backup file; 24 h until a committed backup references them.
+    "backup" => %{max: 33_562_624, ttl_days: nil, hourly: 60, daily: 200}
   }
   @purposes Map.keys(@limits)
   @icon_grace_days 7
   @avatar_grace_hours 24
+  @backup_part_ttl_hours 24
   @deleted_keep_days 7
   @upload_slots 3
   @download_slots 8
@@ -91,6 +99,7 @@ defmodule RisiMe.Blobs do
   defp quota("media"), do: media_quota()
   defp quota("icon"), do: nil
   defp quota("avatar"), do: nil
+  defp quota("backup"), do: RisiMe.Backups.quota()
 
   ## Upload (§14.2)
 
@@ -145,6 +154,27 @@ defmodule RisiMe.Blobs do
     end
   end
 
+  # v1.22 §22.3: a `backup` part names no conversation (one present is `400`) and its
+  # `backup_id`; `client_blob_id` is required.
+  defp parse(%{"purpose" => "backup"} = params) do
+    with false <- Map.has_key?(params, "conversation_id"),
+         {:ok, bid} <- request_id("history", params["backup_id"]),
+         {:ok, cbid} when cbid != nil <- client_blob_id("backup", params["client_blob_id"]) do
+      {:ok,
+       %{
+         purpose: "backup",
+         conv: nil,
+         kind: :none,
+         client_blob_id: cbid,
+         request_id: nil,
+         backup_id: bid,
+         device_id: params["_device_id"]
+       }}
+    else
+      _ -> {:error, :bad_request}
+    end
+  end
+
   defp parse(%{"purpose" => purpose, "conversation_id" => conv} = params)
        when purpose in @purposes and is_binary(conv) do
     with {:ok, kind} <- conversation_kind(purpose, conv),
@@ -182,8 +212,9 @@ defmodule RisiMe.Blobs do
     if Groups.group_id?(conv), do: {:ok, :grp}, else: {:error, :bad_request}
   end
 
-  defp client_blob_id(purpose, nil) when purpose in ["media", "icon", "history", "avatar"],
-    do: {:error, :bad_request}
+  defp client_blob_id(purpose, nil)
+       when purpose in ["media", "icon", "history", "avatar", "backup"],
+       do: {:error, :bad_request}
 
   defp client_blob_id(_purpose, nil), do: {:ok, nil}
 
@@ -198,6 +229,10 @@ defmodule RisiMe.Blobs do
 
   # §14.2 "Who may upload". v1.17 §18.3: any signed-in user may upload an avatar.
   defp authorize(_me, %{purpose: "avatar"}), do: :ok
+
+  # v1.22 §22.3: the switch (`503 backup_unavailable`), then `X-Device-Id` (`403`).
+  defp authorize(me, %{purpose: "backup", device_id: dev}),
+    do: RisiMe.Backups.upload_allowed(me, dev)
 
   defp authorize(me, %{purpose: "media", kind: :dm, conv: conv}) do
     {:ok, members} = MLS.members(conv)
@@ -264,7 +299,7 @@ defmodule RisiMe.Blobs do
         :ok
 
       limit ->
-        used = used_bytes(me, purpose)
+        used = if purpose == "backup", do: backup_used(me), else: used_bytes(me, purpose)
         if used + size > limit, do: {:error, {:quota_exceeded, used, limit}}, else: :ok
     end
   end
@@ -341,7 +376,8 @@ defmodule RisiMe.Blobs do
 
   defp replay(row, up, size) do
     cond do
-      row.purpose != up.purpose or row.conversation_id != up.conv or row.size != size ->
+      row.purpose != up.purpose or row.conversation_id != up.conv or row.size != size or
+          row.backup_id != up[:backup_id] ->
         {:error, :bad_request}
 
       not live?(row) ->
@@ -415,7 +451,13 @@ defmodule RisiMe.Blobs do
       Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", ["blobs:" <> me])
       now = DateTime.utc_now()
       ttl = limits(up.purpose).ttl_days
-      expires_at = ttl && DateTime.add(now, ttl, :day)
+
+      expires_at =
+        cond do
+          up.purpose == "backup" -> DateTime.add(now, @backup_part_ttl_hours, :hour)
+          ttl -> DateTime.add(now, ttl, :day)
+          true -> nil
+        end
 
       with nil <- up.client_blob_id && by_client_id(me, up.client_blob_id),
            :ok <- check_quota(me, up.purpose, size) do
@@ -427,6 +469,7 @@ defmodule RisiMe.Blobs do
             conversation_id: up.conv,
             client_blob_id: up.client_blob_id && Ecto.UUID.dump!(up.client_blob_id),
             request_id: up[:request_id] && Ecto.UUID.dump!(up.request_id),
+            backup_id: up[:backup_id] && Ecto.UUID.dump!(up.backup_id),
             size: size,
             sha256: sha,
             expires_at: expires_at,
@@ -485,6 +528,7 @@ defmodule RisiMe.Blobs do
       purpose: b.purpose,
       conversation_id: b.conversation_id,
       request_id: type(b.request_id, :binary_id),
+      backup_id: type(b.backup_id, :binary_id),
       size: b.size,
       sha256: b.sha256,
       expires_at: type(b.expires_at, :utc_datetime_usec),
@@ -565,6 +609,9 @@ defmodule RisiMe.Blobs do
       share_group?(me, owner)
   end
 
+  # `backup` (v1.22 §22.3): the owner only.
+  defp readable?(me, %{purpose: "backup", owner: owner}), do: owner == me
+
   # `icon`: current `active` and `pending_add` members only (a removed member loses it at once).
   defp readable?(me, %{purpose: "icon"} = b), do: current_member?(b.conversation_id, me)
 
@@ -614,8 +661,70 @@ defmodule RisiMe.Blobs do
         limit: history_quota(),
         uploads_last_hour: uploads_since(me, "history", DateTime.add(now, -3600, :second)),
         hourly_limit: limits("history").hourly
-      }
+      },
+      backup: %{used: backup_used(me), limit: RisiMe.Backups.quota()}
     }
+  end
+
+  ## Backup parts (v1.22 §22.3)
+
+  @doc """
+  Live backup bytes of `owner` that count against the quota: unreferenced parts and parts of
+  current backups (replaced backups don't count).
+  """
+  def backup_used(owner) do
+    now = DateTime.utc_now()
+
+    Repo.one(
+      from b in "blobs",
+        left_join: k in "backups",
+        on: k.backup_id == b.backup_id,
+        where:
+          b.owner == type(^owner, :binary_id) and b.purpose == "backup" and is_nil(b.deleted_at) and
+            (is_nil(b.expires_at) or b.expires_at > ^now) and
+            (is_nil(k.backup_id) or k.current == true),
+        select: coalesce(sum(b.size), 0)
+    )
+    |> to_int()
+  end
+
+  @doc "The live `backup` blobs among `ids` that `owner` uploaded for `backup_id`."
+  def backup_parts(owner, backup_id, ids) do
+    now = DateTime.utc_now()
+
+    Repo.all(
+      from(b in "blobs",
+        where:
+          b.id in type(^ids, {:array, :binary_id}) and b.owner == type(^owner, :binary_id) and
+            b.purpose == "backup" and b.backup_id == type(^backup_id, :binary_id) and
+            is_nil(b.deleted_at) and (is_nil(b.expires_at) or b.expires_at > ^now)
+      )
+      |> select_row()
+    )
+  end
+
+  @doc "Sets `expires_at` of the given blobs (a backup committed: nil; replaced: + 7 days)."
+  def set_expiry([], _at), do: :ok
+
+  def set_expiry(ids, at) do
+    Repo.update_all(
+      from(b in "blobs",
+        where: b.id in type(^ids, {:array, :binary_id}) and is_nil(b.deleted_at)
+      ),
+      set: [expires_at: at]
+    )
+
+    :ok
+  end
+
+  @doc "Every undeleted `backup` blob of the owner (`DELETE /backups`)."
+  def backup_blob_ids(owner) do
+    Repo.all(
+      from b in "blobs",
+        where:
+          b.owner == type(^owner, :binary_id) and b.purpose == "backup" and is_nil(b.deleted_at),
+        select: type(b.id, :binary_id)
+    )
   end
 
   ## Deletion and expiry
@@ -742,6 +851,8 @@ defmodule RisiMe.Blobs do
   """
   def cleanup(now \\ DateTime.utc_now()) do
     n = sweep(now, 0)
+    # v1.22 §22.8: replaced backups whose 7 days passed (their parts expire with them).
+    RisiMe.Backups.sweep(now)
     sweep_tmp(@tmp_max_age_s)
     if n > 0, do: Logger.info("BlobCleanup: deleted #{n} expired blob(s)")
     n
