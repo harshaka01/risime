@@ -51,7 +51,9 @@ pub use aad::{
     DELETE_AAD_PREFIX, HISTORY_AAD_LEN, HISTORY_AAD_PREFIX, MAX_DELETE_TARGETS, decode_delete_aad,
     decode_history_aad, encode_delete_aad, encode_history_aad, is_history_aad,
 };
-pub use attestation::{CredentialValidator, DeviceId, TestAttestor, TrustAnchors};
+pub use attestation::{
+    CredentialValidator, DeviceId, LeafKind, TestAttestor, TrustAnchors, attested_kind,
+};
 pub use call::{CALL_EXPORTER_LABEL, CallFrameKey, CallFrameKeys, EXPORTER_LABELS};
 pub use group::{
     CatchUp, GroupCommit, MAX_COMMIT_BYTES, MAX_GROUP_LEAVES, MAX_GROUP_USERS, MAX_INLINE_BYTES,
@@ -167,6 +169,8 @@ pub struct MemberInfo {
     pub device_id: String,
     pub leaf_index: u32,
     pub signature_key: Vec<u8>,
+    /// The leaf's attested kind (v1.24 §10.0): `"kind": "agent"` in its attestation, else user.
+    pub kind: LeafKind,
 }
 
 impl MemberInfo {
@@ -480,6 +484,29 @@ impl Client {
         Ok(device)
     }
 
+    /// A leaf's attested kind (v1.24). Only for leaves [`Client::check_leaf`] accepted.
+    pub(crate) fn leaf_kind(leaf: &LeafNode) -> LeafKind {
+        attested_kind(leaf.extensions().application_id().map(|a| a.as_slice()))
+    }
+
+    /// The kind of this device's own leaf, from its attestation.
+    pub(crate) fn own_kind(&self) -> LeafKind {
+        attested_kind(self.attestation.as_deref().map(str::as_bytes))
+    }
+
+    /// §24.1 rule 3: a `dm:` group never holds an agent leaf.
+    fn reject_agent_key_packages(kps: &[(KeyPackage, DeviceId)]) -> Result<()> {
+        match kps
+            .iter()
+            .find(|(k, _)| Self::leaf_kind(k.leaf_node()).is_agent())
+        {
+            Some((_, d)) => Err(MlsError::PolicyViolation(format!(
+                "a dm: group never gains an agent leaf ({d})"
+            ))),
+            None => Ok(()),
+        }
+    }
+
     fn validate_key_packages(
         &self,
         key_packages: &[Vec<u8>],
@@ -600,14 +627,28 @@ impl Client {
             .members()
             .map(|m| {
                 let d = DeviceId::parse(m.credential.serialized_content())?;
+                let kind = group
+                    .public_group()
+                    .leaf(m.index)
+                    .map(Self::leaf_kind)
+                    .unwrap_or_default();
                 Ok(MemberInfo {
                     user_id: d.user_id,
                     device_id: d.device_id,
                     leaf_index: m.index.u32(),
                     signature_key: m.signature_key,
+                    kind,
                 })
             })
             .collect()
+    }
+
+    fn kind_at(group: &MlsGroup, index: LeafNodeIndex) -> LeafKind {
+        group
+            .public_group()
+            .leaf(index)
+            .map(Self::leaf_kind)
+            .unwrap_or_default()
     }
 
     fn device_at(group: &MlsGroup, index: LeafNodeIndex) -> Result<DeviceId> {
@@ -659,6 +700,7 @@ impl Client {
         self.tx(|c| {
             let ext = c.leaf_extensions()?;
             let kps = c.validate_key_packages(key_packages)?;
+            Self::reject_agent_key_packages(&kps)?;
             let gid = GroupId::from_slice(group_id);
             if let Some(mut old) = MlsGroup::load(c.provider.storage(), &gid).map_err(storage)? {
                 if old.epoch().as_u64() != 0 {
@@ -692,6 +734,7 @@ impl Client {
             let mut group = c.load(group_id)?;
             c.check_can_commit(&group)?;
             let kps = c.validate_key_packages(key_packages)?;
+            Self::reject_agent_key_packages(&kps)?;
             c.stage_add(&mut group, kps)
         })
     }
@@ -822,10 +865,6 @@ impl Client {
             let mut group = staged
                 .into_group(&c.provider)
                 .map_err(|e| MlsError::Welcome(e.to_string()))?;
-            if group::is_group_id(gid.as_slice()) {
-                c.finish_group_join(&mut group)?;
-                c.record_admins(&group)?;
-            }
             for m in group.members() {
                 let leaf = group
                     .public_group()
@@ -833,10 +872,21 @@ impl Client {
                     .ok_or_else(|| MlsError::Other("missing leaf".into()))?;
                 c.check_leaf(leaf)?;
             }
+            let members = Self::member_infos(&group)?;
+            if group::is_group_id(gid.as_slice()) {
+                c.finish_group_join(&mut group)?;
+                c.record_admins(&group)?;
+            } else if let Some(m) = members.iter().find(|m| m.kind.is_agent()) {
+                // §24.1 rule 3.
+                return Err(MlsError::Welcome(format!(
+                    "a dm: group never holds an agent leaf ({})",
+                    m.device()
+                )));
+            }
             Ok(JoinedGroup {
                 group_id: gid.as_slice().to_vec(),
                 epoch: new_epoch,
-                members: Self::member_infos(&group)?,
+                members,
             })
         })
     }
@@ -966,8 +1016,14 @@ impl Client {
                 };
                 let committer = Self::device_at(&group, committer_index)?;
                 let mut added = Vec::new();
+                let mut added_agents = Vec::new();
                 for add in staged.add_proposals() {
-                    added.push(self.check_leaf(add.add_proposal().key_package().leaf_node())?);
+                    let leaf = add.add_proposal().key_package().leaf_node();
+                    let d = self.check_leaf(leaf)?;
+                    if Self::leaf_kind(leaf).is_agent() {
+                        added_agents.push(d.user_id.clone());
+                    }
+                    added.push(d);
                 }
                 for q in staged.queued_proposals() {
                     if let Proposal::Update(update) = q.proposal() {
@@ -977,18 +1033,21 @@ impl Client {
                             ));
                         };
                         let new = self.check_leaf(update.leaf_node())?;
-                        if new != Self::device_at(&group, *i)? {
+                        if new != Self::device_at(&group, *i)?
+                            || Self::leaf_kind(update.leaf_node()) != Self::kind_at(&group, *i)
+                        {
                             return Err(MlsError::UntrustedCredential(
-                                "update changes a leaf's identity".into(),
+                                "update changes a leaf's identity or kind".into(),
                             ));
                         }
                     }
                 }
                 if let Some(leaf) = staged.update_path_leaf_node()
-                    && self.check_leaf(leaf)? != committer
+                    && (self.check_leaf(leaf)? != committer
+                        || Self::leaf_kind(leaf) != Self::kind_at(&group, committer_index))
                 {
                     return Err(MlsError::UntrustedCredential(
-                        "commit changes the committer's identity".into(),
+                        "commit changes the committer's identity or kind".into(),
                     ));
                 }
                 let removed = staged
@@ -996,8 +1055,21 @@ impl Client {
                     .map(|r| Self::device_at(&group, r.remove_proposal().removed()))
                     .collect::<Result<Vec<_>>>()?;
                 let meta_changed = if group::is_group_id(group_id) {
-                    self.check_staged_policy(&group, &staged, &committer, &added, &removed)?
+                    self.check_staged_policy(
+                        &group,
+                        &staged,
+                        &committer,
+                        &added,
+                        &added_agents,
+                        &removed,
+                    )?
                 } else {
+                    if let Some(a) = added_agents.first() {
+                        // §24.1 rule 3.
+                        return Err(MlsError::PolicyViolation(format!(
+                            "a dm: group never gains an agent leaf ({a})"
+                        )));
+                    }
                     false
                 };
                 let removed_self = staged.self_removed();

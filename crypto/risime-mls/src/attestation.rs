@@ -5,6 +5,8 @@
 //!   EdDSA JWS (`typ` = `risime-attest+jwt`, `kid` = RFC 7638 thumbprint). The JWS travels in the
 //!   leaf's RFC 9420 `application_id` extension and is verified here, offline, against keys pinned
 //!   in the app ([`TrustAnchors`]). Kotlin never decides trust.
+//! * (v1.24 §10.0, §24.11) An agent device's claims add `"kind": "agent"`; absent means `"user"`.
+//!   [`TrustAnchors`] rejects any other value, and [`attested_kind`] reads it from a leaf.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE_NO_PAD};
@@ -60,6 +62,50 @@ impl DeviceId {
 impl std::fmt::Display for DeviceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.identity())
+    }
+}
+
+/// What a leaf's attestation says it is (contract v1.24 §10.0, §24.11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum LeafKind {
+    /// No `kind` claim, or `"user"`.
+    #[default]
+    User,
+    /// `"kind": "agent"` (Risi).
+    Agent,
+}
+
+impl LeafKind {
+    /// `"user"` or `"agent"`, as in the claim and in `Member.kind`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LeafKind::User => "user",
+            LeafKind::Agent => "agent",
+        }
+    }
+
+    pub fn is_agent(self) -> bool {
+        self == LeafKind::Agent
+    }
+}
+
+/// The `kind` claim of a leaf's attestation (its raw `application_id`). It does **not** verify the
+/// JWS: call it only on leaves the [`CredentialValidator`] has accepted (every leaf of a group,
+/// every key package and every added leaf is checked first). No attestation, an undecodable one
+/// or no `kind` claim is [`LeafKind::User`]; any `kind` other than `"user"` is
+/// [`LeafKind::Agent`] (fail closed: [`TrustAnchors`] rejects unknown values anyway).
+pub fn attested_kind(attestation: Option<&[u8]>) -> LeafKind {
+    let Some(claims) = attestation
+        .and_then(|a| std::str::from_utf8(a).ok())
+        .and_then(|jws| jws.split('.').nth(1))
+        .and_then(decode_json)
+    else {
+        return LeafKind::User;
+    };
+    match &claims["kind"] {
+        serde_json::Value::Null => LeafKind::User,
+        serde_json::Value::String(k) if k == "user" => LeafKind::User,
+        _ => LeafKind::Agent,
     }
 }
 
@@ -166,6 +212,11 @@ impl TrustAnchors {
         if claims["aud"] != "risime-mls" || claims["v"] != 1 || !claims["iat"].is_number() {
             return Err(untrusted("wrong aud/v/iat"));
         }
+        match &claims["kind"] {
+            serde_json::Value::Null => {}
+            serde_json::Value::String(k) if k == "user" || k == "agent" => {}
+            _ => return Err(untrusted("unknown kind claim")),
+        }
         if claims["user_id"] != device.user_id.as_str()
             || claims["device_id"] != device.device_id.as_str()
         {
@@ -257,6 +308,22 @@ impl TestAttestor {
 
     /// Sign a device binding (`signature_key` = raw 32-byte Ed25519 public key).
     pub fn attest(&self, device: &DeviceId, signature_key: &[u8], iat: u64) -> String {
+        self.attest_kind(device, signature_key, iat, None)
+    }
+
+    /// [`TestAttestor::attest`] for an agent device: the claims carry `"kind": "agent"` (v1.24).
+    pub fn attest_agent(&self, device: &DeviceId, signature_key: &[u8], iat: u64) -> String {
+        self.attest_kind(device, signature_key, iat, Some("agent"))
+    }
+
+    /// [`TestAttestor::attest`] with an explicit `kind` claim (`None` = no claim).
+    pub fn attest_kind(
+        &self,
+        device: &DeviceId,
+        signature_key: &[u8],
+        iat: u64,
+        kind: Option<&str>,
+    ) -> String {
         let header =
             serde_json::json!({"alg": "EdDSA", "kid": self.kid(), "typ": "risime-attest+jwt"});
         let claims = serde_json::json!({
@@ -267,6 +334,10 @@ impl TestAttestor {
             "iat": iat,
             "v": 1,
         });
+        let mut claims = claims;
+        if let Some(k) = kind {
+            claims["kind"] = serde_json::Value::String(k.to_string());
+        }
         let input = format!(
             "{}.{}",
             URL_SAFE_NO_PAD.encode(header.to_string()),

@@ -221,6 +221,10 @@ pub struct MemberInfo {
     pub device_id: String,
     pub leaf_index: u32,
     pub signature_key: Vec<u8>,
+    /// v1.24: the leaf's attested kind, `"user"` or `"agent"` (the attestation's `kind` claim).
+    /// Take an agent member from this, never from server JSON (§24.1, §24.11).
+    #[uniffi(default = "user")]
+    pub kind: String,
 }
 
 impl From<risime_mls::MemberInfo> for MemberInfo {
@@ -230,6 +234,7 @@ impl From<risime_mls::MemberInfo> for MemberInfo {
             device_id: m.device_id,
             leaf_index: m.leaf_index,
             signature_key: m.signature_key,
+            kind: m.kind.as_str().to_string(),
         }
     }
 }
@@ -376,11 +381,24 @@ pub fn delete_aad_decode(aad: Vec<u8>) -> Result<Vec<String>> {
 /// `group_meta` (GroupContext extension 0xFA01). `icon_json` is the raw JSON of `icon` (null
 /// until the images slice defines it). Fields unknown to this version are kept by the core when
 /// it rewrites the meta.
+///
+/// v1.24 (§24.1): `tab` (`"private"` | `"official"`), `chat_id` and `agents`, each null when the
+/// meta doesn't carry it: a null `tab` is Private, a null `chat_id` is the group's own
+/// conversation id, null `agents` is `[]`. Passed to `update_group_meta`, a null field keeps the
+/// group's current value (tab and chat_id never change after epoch 0). A 1:1 Official has no
+/// name: `name` is `""` (show the peer's name). Take Private-ness from here and from
+/// `MemberInfo.kind`, never from server JSON.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct GroupMeta {
     pub name: String,
     pub icon_json: Option<String>,
     pub admins: Vec<String>,
+    #[uniffi(default = None)]
+    pub tab: Option<String>,
+    #[uniffi(default = None)]
+    pub chat_id: Option<String>,
+    #[uniffi(default = None)]
+    pub agents: Option<Vec<String>>,
 }
 
 impl From<risime_mls::GroupMeta> for GroupMeta {
@@ -389,6 +407,9 @@ impl From<risime_mls::GroupMeta> for GroupMeta {
             name: m.name,
             icon_json: m.icon.map(|v| v.to_string()),
             admins: m.admins,
+            tab: m.tab,
+            chat_id: m.chat_id,
+            agents: m.agents,
         }
     }
 }
@@ -397,6 +418,9 @@ impl TryFrom<GroupMeta> for risime_mls::GroupMeta {
     type Error = RisiMlsError;
     fn try_from(m: GroupMeta) -> Result<Self> {
         let mut meta = risime_mls::GroupMeta::new(m.name, m.admins);
+        meta.tab = m.tab;
+        meta.chat_id = m.chat_id;
+        meta.agents = m.agents;
         meta.icon = match m.icon_json {
             None => None,
             Some(j) => match serde_json::from_str::<serde_json::Value>(&j)
@@ -828,6 +852,18 @@ impl TestAttestor {
         let d = risime_mls::DeviceId::new(user_id, device_id)?;
         Ok(self.inner.attest(&d, &signature_key, iat))
     }
+
+    /// [`TestAttestor::attest`] for an agent device: the claims carry `"kind": "agent"` (v1.24).
+    pub fn attest_agent(
+        &self,
+        user_id: String,
+        device_id: String,
+        signature_key: Vec<u8>,
+        iat: u64,
+    ) -> Result<String> {
+        let d = risime_mls::DeviceId::new(user_id, device_id)?;
+        Ok(self.inner.attest_agent(&d, &signature_key, iat))
+    }
 }
 
 /// Ciphersuite name and crate version, for Settings → About and bug reports.
@@ -941,6 +977,9 @@ pub fn self_test() -> Result<String> {
         name: "Self-test".into(),
         icon_json: None,
         admins: vec!["alice".into()],
+        tab: None,
+        chat_id: None,
+        agents: None,
     };
     let gc = alice.create_group_with_meta(gg.clone(), bob.generate_key_packages(1)?, meta)?;
     alice.commit_accepted(gg.clone())?;
@@ -955,6 +994,9 @@ pub fn self_test() -> Result<String> {
             name: "Renamed".into(),
             icon_json: None,
             admins: vec!["alice".into()],
+            tab: None,
+            chat_id: None,
+            agents: None,
         },
     )?;
     alice.commit_accepted(gg.clone())?;

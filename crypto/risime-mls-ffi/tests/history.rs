@@ -73,6 +73,9 @@ fn history_round_trip_crosses_the_ffi() {
                 name: "h".into(),
                 icon_json: None,
                 admins: vec!["alice".into()],
+                tab: None,
+                chat_id: None,
+                agents: None,
             },
         )
         .unwrap();

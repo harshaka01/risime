@@ -5,7 +5,8 @@
 //!   [`GROUP_ID_PREFIX`], on creation and on join);
 //! - its GroupContext carries [`GroupMeta`] (extension 0xFA01), named in `required_capabilities`,
 //!   so every leaf must be groups-capable;
-//! - every staged commit, ours or a peer's, passes the admin policy ([`crate::policy`]);
+//! - every staged commit, ours or a peer's, passes the admin policy and the v1.24 tab rules
+//!   ([`crate::policy`]), as does the tree of a Welcome we join;
 //! - commits and Welcomes are sized for the blob-reference path ([`GroupCommit`]).
 //!
 //! Own commits stay pending until the server's verdict ([`Client::commit_accepted`] /
@@ -16,7 +17,7 @@ use openmls::prelude::*;
 use sha2::{Digest, Sha256};
 
 use crate::meta::{GROUP_META_EXTENSION, GroupMeta};
-use crate::policy::{CommitSummary, MetaChange, check_commit_policy};
+use crate::policy::{CommitSummary, MetaChange, Tab, TabContext, check_tab_policy};
 use crate::{Client, DeviceId, Incoming, MemberInfo, MlsError, Result, other, storage};
 
 /// Conversation ids of groups start with this; the MLS group id is `"grp:<uuid>#<generation>"`.
@@ -184,6 +185,57 @@ fn summary<'a>(
     }
 }
 
+/// The conversation id of a group id `"<conversation_id>#<generation>"`.
+fn conversation_id(group_id: &[u8]) -> String {
+    let s = String::from_utf8_lossy(group_id);
+    s.split_once('#').map_or(&*s, |(c, _)| c).to_string()
+}
+
+/// The v1.24 context of a commit in a `grp:` group (§24.1).
+fn tab_context<'a>(
+    meta: &'a GroupMeta,
+    leaves: &'a [MemberInfo],
+    added_agents: &'a [String],
+) -> TabContext<'a> {
+    let mut agent_users: Vec<&str> = leaves
+        .iter()
+        .filter(|m| m.kind.is_agent())
+        .map(|m| m.user_id.as_str())
+        .chain(added_agents.iter().map(String::as_str))
+        .collect();
+    agent_users.sort_unstable();
+    agent_users.dedup();
+    TabContext {
+        dm: false,
+        tab: meta.tab(),
+        agents: meta.agents(),
+        agent_users,
+        leaves: leaves
+            .iter()
+            .map(|m| (m.user_id.as_str(), m.device_id.as_str()))
+            .collect(),
+    }
+}
+
+/// The `group_meta` change from `current` to `new` (`own` = the group's conversation id).
+fn meta_change(current: &GroupMeta, new: &GroupMeta, own: &str) -> MetaChange {
+    MetaChange {
+        admins: (!current.same_admins(new)).then(|| new.admins.clone()),
+        name_changed: current.name != new.name || current.icon != new.icon,
+        tab: (current.tab() != new.tab()).then(|| new.tab()),
+        chat_id_changed: current.chat_id_or(own) != new.chat_id_or(own),
+        agents: (current.agents() != new.agents()).then(|| new.agents().to_vec()),
+    }
+}
+
+fn meta_unchanged(m: &MetaChange) -> bool {
+    m.admins.is_none()
+        && !m.name_changed
+        && m.tab.is_none()
+        && !m.chat_id_changed
+        && m.agents.is_none()
+}
+
 fn parse_ids(ids: &[String]) -> Result<Vec<DeviceId>> {
     ids.iter()
         .map(|s| DeviceId::parse(s.as_bytes()).map_err(|e| MlsError::Storage(e.to_string())))
@@ -339,11 +391,13 @@ impl Client {
         Ok(())
     }
 
-    /// Run the admin policy for a commit of ours before building it.
+    /// Run the admin policy and the tab rules for a commit of ours before building it.
+    /// `added_agents`: the users of added leaves attested as agents.
     fn check_own_policy(
         &self,
         group: &MlsGroup,
         added: &[DeviceId],
+        added_agents: &[String],
         removed: &[DeviceId],
         meta: Option<MetaChange>,
     ) -> Result<()> {
@@ -351,11 +405,19 @@ impl Client {
             .ok_or_else(|| MlsError::PolicyViolation("group has no group_meta".into()))?;
         let leaves = Self::member_infos(group)?;
         let summary = summary(&self.device.user_id, added, removed, &leaves, meta);
-        // The core has no agent list until agents ship (0.5): the agent rules are server-side.
-        check_commit_policy(&current.admins, &[], &summary).map_err(MlsError::PolicyViolation)
+        let ctx = tab_context(&current, &leaves, added_agents);
+        check_tab_policy(&current.admins, &ctx, &summary).map_err(MlsError::PolicyViolation)
     }
 
-    /// The admin policy for a peer's staged commit in a `grp:` group (§12.4), before it is merged.
+    fn agent_users_of(kps: &[(KeyPackage, DeviceId)]) -> Vec<String> {
+        kps.iter()
+            .filter(|(k, _)| Self::leaf_kind(k.leaf_node()).is_agent())
+            .map(|(_, d)| d.user_id.clone())
+            .collect()
+    }
+
+    /// The admin policy and the tab rules (§12.4, §24.1) for a peer's staged commit in a `grp:`
+    /// group, before it is merged. `added_agents`: the users of added leaves attested as agents.
     /// Returns whether the commit changes `group_meta`.
     pub(crate) fn check_staged_policy(
         &self,
@@ -363,6 +425,7 @@ impl Client {
         staged: &StagedCommit,
         committer: &DeviceId,
         added: &[DeviceId],
+        added_agents: &[String],
         removed: &[DeviceId],
     ) -> Result<bool> {
         let mut gce = false;
@@ -388,17 +451,19 @@ impl Client {
             }
             let new = meta_of(new_ext)?
                 .ok_or_else(|| MlsError::PolicyViolation("commit drops group_meta".into()))?;
-            Some(MetaChange {
-                admins: (!current.same_admins(&new)).then(|| new.admins.clone()),
-                name_changed: current.name != new.name || current.icon != new.icon,
-            })
+            Some(meta_change(
+                &current,
+                &new,
+                &conversation_id(group.group_id().as_slice()),
+            ))
         } else {
             None
         };
         // `group` is still at the base epoch: its leaves are the ones the rule is about.
         let leaves = Self::member_infos(group)?;
         let summary = summary(&committer.user_id, added, removed, &leaves, meta);
-        check_commit_policy(&current.admins, &[], &summary).map_err(MlsError::PolicyViolation)?;
+        let ctx = tab_context(&current, &leaves, added_agents);
+        check_tab_policy(&current.admins, &ctx, &summary).map_err(MlsError::PolicyViolation)?;
         Ok(gce)
     }
 
@@ -410,11 +475,36 @@ impl Client {
                 &Self::join_config(group.group_id().as_slice()),
             )
             .map_err(storage)?;
-        if !requires_meta(group.extensions()) || meta_of(group.extensions())?.is_none() {
-            return Err(MlsError::Welcome("group has no group_meta".into()));
-        }
+        let meta = match meta_of(group.extensions())? {
+            Some(m) if requires_meta(group.extensions()) => m,
+            _ => return Err(MlsError::Welcome("group has no group_meta".into())),
+        };
         if group.members().count() > MAX_GROUP_LEAVES {
             return Err(MlsError::Welcome("too many devices".into()));
+        }
+        Self::check_tree_tabs(&meta, &Self::member_infos(group)?).map_err(MlsError::Welcome)
+    }
+
+    /// §24.1 on a whole tree (a Welcome we join): a Private group has no agent leaf (and no
+    /// agents, checked by [`GroupMeta::validate`]); in Official every agent leaf's user is in
+    /// `agents` (which never names an admin).
+    fn check_tree_tabs(
+        meta: &GroupMeta,
+        members: &[MemberInfo],
+    ) -> std::result::Result<(), String> {
+        for m in members.iter().filter(|m| m.kind.is_agent()) {
+            match meta.tab() {
+                Tab::Private => {
+                    return Err(format!(
+                        "a Private group never holds an agent leaf ({})",
+                        m.device()
+                    ));
+                }
+                Tab::Official if !meta.is_agent(&m.user_id) => {
+                    return Err(format!("agent leaf {} is not in agents", m.device()));
+                }
+                Tab::Official => {}
+            }
         }
         Ok(())
     }
@@ -456,8 +546,15 @@ impl Client {
                 device_id: c.device.device_id.clone(),
                 leaf_index: 0,
                 signature_key: vec![],
+                kind: c.own_kind(),
             };
-            Self::check_caps(&[me], &added, &[])?;
+            Self::check_caps(std::slice::from_ref(&me), &added, &[])?;
+            // §24.1 on the epoch-0 group: the tab rules as if `meta` were the base epoch's.
+            let added_agents = Self::agent_users_of(&kps);
+            let leaves = [me];
+            let ctx = tab_context(meta, &leaves, &added_agents);
+            let s = summary(&c.device.user_id, &added, &[], &leaves, None);
+            check_tab_policy(&meta.admins, &ctx, &s).map_err(MlsError::PolicyViolation)?;
             let gid = GroupId::from_slice(group_id);
             if let Some(mut old) = MlsGroup::load(c.provider.storage(), &gid).map_err(storage)? {
                 if old.epoch().as_u64() != 0 {
@@ -551,7 +648,7 @@ impl Client {
             }
             let added: Vec<DeviceId> = kps.iter().map(|(_, d)| d.clone()).collect();
             Self::check_caps(&members, &added, &removed)?;
-            c.check_own_policy(&group, &added, &removed, None)?;
+            c.check_own_policy(&group, &added, &Self::agent_users_of(&kps), &removed, None)?;
             let epoch = group.epoch().as_u64();
             let kps = kps.into_iter().map(|(k, _)| k).collect();
             let (commit, welcome) = c.build_commit(&mut group, kps, indices, None, false)?;
@@ -596,14 +693,22 @@ impl Client {
             for (k, v) in &current.extra {
                 new.extra.entry(k.clone()).or_insert_with(|| v.clone());
             }
-            let change = MetaChange {
-                admins: (!current.same_admins(&new)).then(|| new.admins.clone()),
-                name_changed: current.name != new.name || current.icon != new.icon,
-            };
-            if change.admins.is_none() && !change.name_changed && current.extra == new.extra {
+            // v1.24 fields the caller left out (an older app's rename) are carried over.
+            if new.tab.is_none() {
+                new.tab.clone_from(&current.tab);
+            }
+            if new.chat_id.is_none() {
+                new.chat_id.clone_from(&current.chat_id);
+            }
+            if new.agents.is_none() {
+                new.agents.clone_from(&current.agents);
+            }
+            new.validate()?;
+            let change = meta_change(&current, &new, &conversation_id(group_id));
+            if meta_unchanged(&change) && current.extra == new.extra {
                 return Err(MlsError::Malformed("group_meta unchanged".into()));
             }
-            c.check_own_policy(&group, &[], &[], Some(change))?;
+            c.check_own_policy(&group, &[], &[], &[], Some(change))?;
             let mut ext = group.extensions().clone();
             ext.add_or_replace(meta_extension(&new)?).map_err(other)?;
             let epoch = group.epoch().as_u64();

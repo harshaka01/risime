@@ -76,7 +76,7 @@ meta_changed}` and stays **pending** until `commit_accepted` / `commit_rejected`
 | `remove_users(gid, user_ids)` (`removeUsers`) | Removes every leaf of those users (a removal or a member's leave, committed by an admin) |
 | `update_group_meta(gid, meta)` (`updateGroupMeta`) | A GroupContextExtensions commit: rename, or a `role` op's admin list. `meta_changed` = true. Unknown meta fields are carried over |
 | `self_update(gid)` (`selfUpdate`) | Empty commit with a fresh path (key rotation); anyone may send it |
-| `group_meta(gid)` (`groupMeta`) | The current `GroupMeta {name, icon, admins}` (`icon_json` over the FFI); `None` for DMs |
+| `group_meta(gid)` (`groupMeta`) | The current `GroupMeta {name, icon, admins, tab, chat_id, agents}` (`icon_json` over the FFI; the v1.24 fields are null when absent); `None` for DMs |
 | `process_commits(gid, commits)` (`processCommits`) | Catch-up from `GET …/commits`, all or nothing: skips commits below our epoch, `WrongEpoch` on a gap, **merges our own pending commit** found in the log (restart between `200` and `commit_accepted`), stops after `removed_self`. Returns `CatchUp {epoch, applied, skipped, removed_self}` |
 | `key_package_supports_groups(kp)` (free fn) | Validates a key package and reports whether it carries 0xFA01 |
 | `group_limits()` (FFI free fn) | 64 KiB inline, 1 MiB commit, 2 MiB Welcome, 256 users, 768 leaves, 0xFA01 |
@@ -91,9 +91,24 @@ meta_changed}` and stays **pending** until `commit_accepted` / `commit_rejected`
 - **Admin policy** (`policy::check_commit_policy`, run on every staged `grp:` commit before merge
   and on our own commits before they are built): a non-admin may add/remove only its own user's
   leaves and may not touch `group_meta`; a new admin list must be non-empty and agent-free.
-  Admins come from `group_meta.admins` of the commit's epoch. The core has no agent list yet
-  (agents arrive in 0.5), so it passes none. A violating peer commit fails with
+  Admins come from `group_meta.admins` of the commit's epoch. A violating peer commit fails with
   `PolicyViolation` and nothing is merged: the state is unrecoverable for that commit (§12.8).
+- **Tabs and agents (v1.24 §24.1, `policy::check_tab_policy`)**, which wraps the admin policy for
+  every `grp:` commit (ours and peers'), the epoch-0 group, and the tree of a Welcome we join:
+  - `group_meta` gains `tab` (`private` | `official`, absent = Private), `chat_id` (absent = the
+    group's own conversation id) and `agents` (absent = `[]`). A 1:1 Official's `name` is `null`
+    (`""` in Rust and over the FFI).
+  - `tab` and `chat_id` never change after epoch 0; a Private group has `agents == []` and never
+    holds an agent leaf; a `dm:` group never holds one either (create, add, peer commit, Welcome);
+    in Official an agent leaf is added only by an admin and only for a user in `agents`, and
+    `agents` never names an admin.
+  - Any member may remove **every** leaf of an agent (Official off), with only its own-user
+    changes alongside and no meta change; a partial removal stays admin-only.
+  - Agents are the users in `agents` plus every user with a leaf whose attestation carries
+    `"kind": "agent"` (`attested_kind`, `MemberInfo.kind`; FFI `MemberInfo.kind` = `"user"` |
+    `"agent"`). `TrustAnchors` refuses any other `kind`. An Update or path leaf can't change a
+    leaf's kind.
+  - `update_group_meta` carries `tab`/`chat_id`/`agents` over when the caller leaves them null.
 - **Caps** (256 users, 768 leaves) are checked before building; a commit over 1 MiB or a Welcome
   over 2 MiB is refused (`PolicyViolation`) and rolled back. `GroupCommit::commit_needs_ref` /
   `welcome_needs_ref` (FFI `commitNeedsRef` / `welcomeNeedsRef`, plus `commitSize` /
@@ -372,7 +387,12 @@ Rejected: `scrypt`/PBKDF2 (the contract fixes Argon2id), the C `libargon2` (C in
   empty admin list) with state unchanged; rename and promotion; pending until accepted, 409, a
   foreign commit discards ours, creation race; rejoin by re-add; reset to a new generation;
   catch-up (skip, gap, removal stops); own accepted commit merged after a restart.
-- **`group_policy`:** every case of `contract/v1/group_policy_cases.json`.
+- **`group_policy`:** every case of `contract/v1/group_policy_cases.json` (`cases` through the
+  admin policy and, as Official groups, through the tab rules; `tab_cases` through the tab rules).
+- **`tabs_v124`:** the attested `kind` read from the leaf; Official with Risi (member removal of
+  every agent leaf, admin-only re-add, partial removal admin-only); Private/`dm:`/unlisted agents
+  refused on creation and own commits; a modified client's agent add refused by peers and by the
+  Welcome check; `tab`/`chat_id` immutable; the unnamed 1:1 Official.
 - **`group_scale`:** 256 users (timings and sizes above).
 - **`group_lifecycle`:**
   - **(a) creation:** `a_create_group`.

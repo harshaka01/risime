@@ -166,6 +166,9 @@ fn group_api_crosses_the_ffi() {
         name: name.into(),
         icon_json: None,
         admins: admins.iter().map(|s| s.to_string()).collect(),
+        tab: None,
+        chat_id: None,
+        agents: None,
     };
     let gc = alice
         .create_group_with_meta(g.clone(), kp, meta("FFI", &["alice"]))
@@ -256,6 +259,9 @@ fn delete_controls_cross_the_ffi() {
         name: "FFI".into(),
         icon_json: None,
         admins: vec!["alice".into()],
+        tab: None,
+        chat_id: None,
+        agents: None,
     };
     let gc = alice
         .create_group_with_meta(g.clone(), bob.generate_key_packages(1).unwrap(), meta)

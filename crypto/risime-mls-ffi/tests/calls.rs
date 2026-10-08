@@ -49,6 +49,9 @@ fn call_frame_keys_cross_the_ffi() {
                 name: "call".into(),
                 icon_json: None,
                 admins: vec!["alice".into()],
+                tab: None,
+                chat_id: None,
+                agents: None,
             },
         )
         .unwrap();
