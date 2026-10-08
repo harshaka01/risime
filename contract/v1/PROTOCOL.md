@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.18 (Release 0.3)
+# RisiMe Wire Protocol — v1.19 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -566,6 +566,9 @@ message is UTF-8 JSON `{"v": 1, "type": "<type>", …}`.
 - `type: "text"` carries `"body"`, with the same limits as plaintext messages (§4).
 - Receivers **ignore** unknown types: they store nothing visible and never show the raw JSON.
 - Plaintext that isn't a JSON object with a string `type` is treated as legacy text.
+
+**MLS exporter labels (registry, v1.19).** The only exporter label in use is `risime-call-v1`
+(group call frame keys, §20.6). A new label needs a contract change.
 
 Later versions add types (reactions, group events, images) without breaking older v1.7 apps.
 
@@ -2322,11 +2325,11 @@ in §16.14.
 
 ### 16.0 Principles
 - **1:1 voice first.** WebRTC with Opus, **direct peer-to-peer**, with a **TURN relay on spark2**
-  (coturn, decision 046) as the fallback. Group voice comes later through a self-hosted LiveKit
-  (§16.15, v1.14).
+  (coturn, decision 046) as the fallback. Group calls (voice and video) run through a self-hosted
+  LiveKit from v1.19 (§20).
 - **E2EE DMs only.** A call is offered only in a DM that is e2ee (§10). Plaintext DMs refuse it
   (`not_e2ee`), as images do (§14.0). There is no plaintext signalling path. No group calls in
-  v1.13 (`bad_request` for a `grp:` target).
+  v1.13 (`bad_request` for a `grp:` target; v1.19 adds group calls, §20).
 - **Signalling is MLS.** Every call message is an MLS application message in the DM's group,
   carried in the §10.3 envelope `{"v":1,"type":"call_…",…}`. The server sees ciphertext, a
   cleartext `call_id` and a `ring` flag (§16.3), which receivers check against the envelope
@@ -2351,7 +2354,7 @@ in §16.14.
   014) stays absolute.
 - **Reachability depends on decision 046's public ports**, which are **still blocked from outside
   as of 2026-10-06 19:00 UTC** (all TURN ports 3478/udp+tcp, 5349/tcp, 49152–49999/udp, and the
-  reserved LiveKit ports; 443/tcp open). Until they open, calls connect **only where the peers reach
+  reserved LiveKit ports; 443/tcp open). (v1.19: the port plan is decision 056.) Until they open, calls connect **only where the peers reach
   each other directly** (same LAN, or a NAT pair that allows it), and the app must fail fast with
   "Can't connect the call", never hang (§16.11).
 - **No model calls,** so nothing for the learning log (§16.13).
@@ -2382,7 +2385,7 @@ in §16.14.
 - **UI:** the call button in a DM header is disabled until `calls_ready`: "<name> needs to update
   the app to receive calls"; on a device that doesn't advertise `calls` itself: "Update RisiMe on
   this phone to make calls" (or "Calls aren't supported on this phone", §16.9). A plaintext DM: "Calls need an end-to-end encrypted chat." In groups the button
-  is absent until v1.14. Refetched on chat open and on `mls_membership` for that DM.
+  is absent until v1.19 (§20.1). Refetched on chat open and on `mls_membership` for that DM.
 
 ### 16.2 The call envelopes (MLS application messages)
 All are UTF-8 JSON in the §10.3 envelope, serialised without escaping non-ASCII. Receivers ignore
@@ -2905,24 +2908,9 @@ Auth required (`Authorization: Bearer`), no body → `200` (`calls_turn_reply.js
   stored invisibly (§10.3). Its user sees nothing until they update. The skipped generations are
   within the forward distance (§16.12).
 
-### 16.15 Group calls with LiveKit — outline for v1.14 (not normative)
-- **SFU:** self-hosted LiveKit (`livekit/livekit-server`, multi-arch) on spark2. Signalling
-  (7880) on 127.0.0.1 behind Caddy at `wss://risime.risicloud.ai/livekit`; media **7881/tcp** and
-  **50000–60000/udp** (decision 046, reserved). LiveKit's embedded TURN off; coturn serves both.
-  The Android client adds `io.livekit:livekit-android` on the same native library (§16.9).
-- **E2EE** (crypto review, v1.14 comments): LiveKit's frame encryption (`FrameCryptor`) with
-  **per-sender keys** derived from the MLS exporter, `call_epoch_secret =
-  MLS-Exporter("risime-call-v1", call_id as 16 raw bytes, 32)` and
-  `sender_base_key[i] = HKDF-Expand(call_epoch_secret, "risime-call-v1 sender" || uint32_be(leaf i), 32)`
-  (SFrame-like nonce separation; members can still forge each other's audio, a stated limit);
-  key index = `epoch mod 16` with a ≤ 10-s keyring across epoch changes; the core exports at
-  merge time (a new FFI `export_secret`); removal also revokes the LiveKit access at once (short
-  token TTLs); the roster comes from MLS, not from LiveKit; fail closed (never play undecrypted
-  frames); a registry of exporter labels in §10.
-- **Rooms:** `POST /api/v1/calls/rooms {"conversation_id": "grp:…"}` → a short-TTL LiveKit token
-  (identity `<user_id>/<device_id>`, a random room name), for active members only; invitation
-  through the same MLS envelopes (`call_offer` with `"mode": "sfu"`, `ring: true` to the group).
-- **Limits:** up to 32 participants audio-only at first; video later.
+### 16.15 Group calls with LiveKit
+Replaced in v1.19 by the normative §20 (the outline that stood here is superseded: ports per
+decision 056, not 7881/tcp and 50000–60000/udp).
 
 ### 16.16 Test coverage (all gates)
 - **Crypto:** `out_of_order_tolerance` 32 for new and migrated stored groups; 2 000 skipped
@@ -3926,7 +3914,311 @@ split of §20) and as an amendment to decision 046.
   without video; a relay-only video call through coturn (once decision 046's ports open) with the
   post-connect check; the negative fingerprint test with video.
 
+## 20. Group calls with LiveKit, voice and video (v1.19)
+Proposal `2026-10-08-group-calls-v1.19.md`, reviewed by server, android and crypto
+(`proposals/reviews/2026-10-08-group-calls-v1.19-*.md`); decision 056 (ports, LiveKit
+configuration, the Caddy route). Replaces the §16.15 outline. Additive: one device capability
+`group_calls`, `group_calls_ready`/`missing_group_calls`, `POST /api/v1/calls/rooms`, group
+`call:signal` (`conversation_id`), the envelope types `call_member` (ephemeral) and `group_call`
+(durable), `call_offer` with `"mode": "sfu"`, the errors `call_ended` and `call_full`, and one MLS
+core change (the exporter, §20.6). Apps without `group_calls` never ring for a group call and see
+nothing new.
+
+### 20.0 Principles
+- **An SFU with no keys.** Group calls run through a self-hosted **LiveKit** SFU on spark2
+  (`livekit/livekit-server` v1.13.9, decision 056). Every audio and video frame is encrypted on the
+  sender's phone (LiveKit's frame encryption, `FrameCryptor`, AES-GCM) under a **per-sender key
+  derived from the group's MLS state** (§20.6). LiveKit and coturn forward ciphertext frames;
+  LiveKit terminates only the hop-by-hop DTLS-SRTP.
+- **Group (`grp:`) conversations only.** DMs keep the P2P path of §16 and §19.
+- **Voice and video in one version.** `media: "audio" | "video"` as in §19; both ship behind one
+  capability. Caps: **32 participants** in a voice call, **8** in a video call (§20.9).
+- **No call table on the server.** LiveKit's in-memory room list is the only call state
+  (created by `start`, gone when the room empties, §20.2). The server persists nothing about a
+  group call; the history lives in the group as durable MLS messages (§20.4).
+- **Ringing through MLS,** like 1:1 calls: `call_offer` with `"mode": "sfu"` through `call:signal`
+  to the group (§20.3).
+- **Fail closed.** A frame that doesn't decrypt with an MLS-derived key is never played; a
+  participant who isn't a leaf of the group is never played (§20.6).
+- **Reachability** depends on decision 056's public ports (UDP 49500–49999 for LiveKit, coturn's
+  3478 and 49152–49499). Until they open from outside, group calls connect only from spark2's LAN,
+  and the app fails fast with "Can't connect the call" (§16.11).
+- No model calls; nothing for the learning log.
+
+### 20.1 Capability and readiness
+- A v1.19 app advertises **`"group_calls"`** in `mls.capabilities` (`device_put_group_calls.json`),
+  only together with `groups`, `calls` and `video`, and only once the LiveKit SDK and its frame
+  encryption load and the core exports call keys (§20.6).
+- **`GET /api/v1/mls/groups/{grp}`** gains **`"group_calls_ready": bool`** (absent = false: the
+  caller's user and at least one other active member have a `group_calls` device that can still
+  receive, §12.1) and **`"missing_group_calls": [{"user_id", "device_id" | null}]`** (members'
+  instances seen in 30 days without it; information only) (`mls_group_group_calls_ready.json`).
+- **UI:** the group header shows call and video-call buttons, disabled until `group_calls_ready`
+  ("Nobody else in this group can join calls yet"); on a device without `group_calls`: "Update
+  RisiMe on this phone to make calls". Group info lists who needs to update.
+
+### 20.2 Rooms and tokens: `POST /api/v1/calls/rooms`
+Auth required, with **`X-Device-Id`** (server S4: a `group_calls` device of an **active** member
+that is in the group's MLS device list; otherwise `403 invalid_device`). Body
+(`calls_room_request.json`):
+```json
+{"conversation_id": "grp:…", "call_id": "<uuid-v4>", "media": "audio", "action": "start"}
+```
+- **`action: "start"`** (the starter): the server creates the LiveKit room (`CreateRoom`,
+  idempotent) with `max_participants` 32 (`audio`) or 8 (`video`), `empty_timeout` 60 s,
+  `departure_timeout` 20 s and the room metadata `{"c": "<conversation_id>", "m": "<media>"}`, then
+  answers with a token.
+- **`action: "join"`**: the room must exist (`ListRooms`): missing → **`404 call_ended`**
+  (`error_call_ended.json`); `num_participants ≥ max_participants` → **`409 call_full`**
+  (`error_call_full.json`). Otherwise a token.
+- Both answer `200` (`calls_room_reply.json`):
+  ```json
+  {"url": "wss://risime.risicloud.ai/livekit", "room": "<22 chars>", "identity": "<user_id>/<device_id>",
+   "token": "<LiveKit JWT>", "expires_at": "…", "max_participants": 32}
+  ```
+- **`action: "status"`** → `200 {"active": bool, "participants": n, "max_participants": n}`
+  (`calls_room_status_reply.json`), no token: for the chat line's Join (§20.4).
+- **Room name** (server S2): `base64url(HMAC-SHA256(K_room, "risime-room-v1" ‖ conversation_id ‖
+  call_id ‖ media))`, the first 22 characters, without padding; `K_room = HKDF-SHA256(salt = empty,
+  IKM = LIVEKIT_API_SECRET, info = "risime-livekit-room-v1", L = 32)`. Deterministic (no table),
+  unguessable without the secret; the group id is only in the room metadata.
+- **The token** (`livekit_token_claims.json` shows the claims): a LiveKit access token (JWT HS256,
+  `iss` = the API key) with `sub` = the identity `"<user_id>/<device_id>"`, `name` empty, no
+  metadata, `nbf` now, **`exp` now + 600 s**, and the grant `video`: `room`, `roomJoin: true`,
+  `canSubscribe: true`, `canPublish: true`, `canPublishSources: ["microphone"]` (plus `"camera"`
+  for `video`), `canPublishData: false`, `canUpdateOwnMetadata: false`; never `roomCreate`,
+  `roomList`, `roomAdmin`, `roomRecord`, `hidden` or `recorder`.
+- **LiveKit configuration** (decision 056): `room.auto_create: false` (only `start` makes rooms,
+  so an old `call_id` can't open an empty room).
+- **Errors:** `400 bad_request` (not a `grp:` id, `call_id` not a UUID, unknown `media` or
+  `action`), `403 invalid_device`, `404 not_found` (not an active member), `404 call_ended`,
+  `409 call_full`, `429 rate_limited` with `Retry-After` (`start` 10 per user per hour; `join` and
+  `status` 60 per user per minute), **`503 calls_unavailable`** (`LIVEKIT_URL`,
+  `LIVEKIT_API_URL`, `LIVEKIT_API_KEY` or `LIVEKIT_API_SECRET` unset, or LiveKit unreachable).
+- **Removal cuts access at once** (server S3, crypto K5): when a member turns `pending_remove`
+  (removed or left), when one of their devices is removed (§10.1), and on a group reset (§12.8),
+  the server lists the group's rooms by metadata and calls `RemoveParticipant` for the affected
+  identities. The MLS removal commit then rotates the keys (§20.6).
+- The server's calls to LiveKit's API (`LIVEKIT_API_URL`, loopback only) use per-request JWTs of
+  60 s with only the grants that call needs. **Nothing is persisted**; no webhook; logs carry ids
+  and counts only.
+
+### 20.3 Ringing: group `call:signal`
+- **`call:signal`** takes **`"conversation_id": "grp:…"`** instead of `to` (exactly one of the two,
+  else `bad_request`) (`call_signal_push_group.json`), with `media` (§19.2). Order of checks: the
+  total rate limit → idempotent resend → **`not_member`** (not an active member) → the e2ee checks
+  (`stale_epoch`, `too_long`) → for `ring: true`, **`calls_not_ready`** when no other active member
+  has a `group_calls` device → the limits below → store.
+- **Fan-out:** a `call_signal` event per active member user (the sender's user included, so its
+  other devices see it), delivered live and on join/sync only to sockets whose device advertises
+  `group_calls` (`call_signal_event_group.json`: `conversation_id` is the group, no `to`).
+- **Push** (server S6): for `ring: true`, the `call` push (§16.8) at once to every `group_calls`
+  device of the other members that has no live inbox channel. No 3-s fallback in groups.
+- **Limits** (server S5), per user, inside the 60 per 10 s total: `ring: true` at most **1 per group
+  per 30 s** and **10 per hour**; `ring: false` at most **30 per group per 10 s**.
+- **Envelopes** (MLS application messages in the group, §16.2 rules for `call_id` and `sent_at`):
+  - **`call_offer`** with **`"mode": "sfu"`**, `ring: true` (`call_offer_sfu_payload.json`):
+    ```json
+    {"v": 1, "type": "call_offer", "call_id": "…", "mode": "sfu", "media": "audio", "sent_at": "…"}
+    ```
+    No `sdp`, no `restart`. Sent by the starter after it has connected to the room.
+  - **`call_member`** (new, `ring: false`, android A2; `call_member_payload.json`):
+    `{"v":1,"type":"call_member","call_id":"…","state":"joined" | "declined"}`. A device stops
+    ringing for its own user's `joined`/`declined`; other members may show "<name> joined".
+  - **`call_cancel`** `reason: "ended"`: the starter left before anyone joined; devices stop
+    ringing.
+  - `call_ringing`, `call_answer`, `call_accepted`, `call_ice` and `call_busy` are never used in
+    groups (dropped and logged if seen).
+- **Client processing** as §16.3: strict per-group order, binding (`call_id`, `ring`, and `media`
+  per §19.2; `mode: "sfu"` required for a `grp:` offer), freshness (45 s), the 24-h dedupe, no
+  visible traces. Sender pinning: `call_cancel` only from the offer's sender device; `call_member`
+  from any member (it names only its sender).
+- Strict validation: `mode` exactly `"sfu"`, `media` `audio` or `video`, `call_member.state` one
+  of the two; else drop and log.
+
+### 20.4 Call flow and history (client)
+1. **Start** (call or video button): fetch TURN credentials (§16.7), catch up the group's commits,
+   `POST /calls/rooms` `start`, connect (§20.5), derive and install keys (§20.6), publish the
+   microphone (and the camera for video, §19 camera rules), send the durable **`group_call`
+   `started`** (below), then the `call_offer` ring.
+2. **Members' devices** with `group_calls` ring (live socket or the `call` push; the locked ring of
+   §16.8 is unchanged): "Kamal · Pilot team", **Answer** (camera on for video), **Answer without
+   video** (video calls), **Decline**. Answer → catch up commits → `join` → connect → keys →
+   publish → `call_member` `joined`. Decline → `call_member` `declined` (siblings stop); nothing
+   else is sent. A device already in a call doesn't ring (android A4, §16.5); no `call_busy`.
+3. **In the call:** LiveKit handles reconnects and ICE restarts; a full disconnect of more than
+   20 s leaves the call ("Lost connection"). Max length 4 h. Leave = disconnect.
+4. **End:** a device that leaves and sees **no other participant** in the room sends the durable
+   **`group_call` `ended`**. The starter, if nobody joined within 45 s, sends `call_cancel`
+   (`ended`) and `group_call` `ended` with `reason: "timeout"`, then leaves.
+
+**The durable `group_call` envelope** (normal group `msg:send` with `silent: true`, §18.4; stored
+30 days, sender copy, replayed after a reinstall like any message):
+```json
+{"v": 1, "type": "group_call", "call_id": "…", "media": "audio", "state": "started"}
+{"v": 1, "type": "group_call", "call_id": "…", "media": "audio", "state": "ended",
+ "reason": "hangup", "connected_at": "…", "duration_s": 723}
+```
+(`group_call_started_payload.json`, `group_call_ended_payload.json`.) `reason` is `hangup` or
+`timeout`; `connected_at` (the first time the sender saw two participants) and `duration_s` are
+null for `timeout`. They are the sender's claims, display only. Strict validation: `state` one of
+the two, `media` as above, `reason` one of the two for `ended`; else drop and log.
+
+**History line** (one row per `call_id`, `kind = 'call'`, created by `started`, updated by the first
+`ended`; later duplicates ignored):
+
+| state | line |
+|---|---|
+| started, call running | "Kamal started a voice call" / "…a video call", with **Join** |
+| ended `hangup` | "Voice call · 12:03" / "Video call · 12:03" |
+| ended `timeout` | "Voice call · No answer" (starter) / "Missed voice call" (others) |
+| started, no `ended`, not running | "Voice call ended" |
+
+"Running" is checked with `status` (§20.2) when the chat opens (only for lines under 4 h old with
+no `ended`) and when Join is tapped; a missing room → "This call has ended" and the line turns
+"ended". No notification for these lines (the ring was the notification); they don't count as
+unread. The chat list may show "📞 Voice call in progress".
+
+### 20.5 Client: LiveKit connection (android, normative where it says "must")
+- **SDK** (android A1): `io.livekit:livekit-android` exactly **2.29.0**, the version whose libwebrtc
+  build §16.9 pins (144.7559.14); upgraded only together with that pin. Recorded in an android
+  decision (rule 8); the duplicate-`.so` check stays.
+- **Connect:** `Room.connect(url, token, ConnectOptions(iceServers = <GET /calls/turn ice_servers>,
+  autoSubscribe = true))` (android A5): our coturn with the 5-h REST credentials, as for 1:1 calls;
+  LiveKit's own TURN list is only a fallback. A debug-only relay-only switch must work.
+- **Options:** `adaptiveStream` and `dynacast` on; video **simulcast with two layers** (about
+  320×180 at 150 kbit/s and 640×360 at 500 kbit/s), VP8 (android A6); audio Opus with DTX and FEC
+  (CBR not required in groups). No data channel use, no LiveKit chat or metadata (android A7).
+  Participant names and photos come from the app's own database by identity.
+- **E2EE options** (crypto K6): `E2EEOptions` with `BaseKeyProvider(sharedKey = false,
+  ratchetWindowSize = 0, keyRingSize = 16, discardFrameWhenCryptorNotReady = true)`, ratchet salt
+  `"risime-call-v1"`, AES-GCM. Keys are set per participant identity and key index (§20.6).
+- **Telecom, foreground service, socket, wake lock:** as §16.9 (a self-managed call; video calls
+  per §19.6), and the camera rules of §19.5 and §19.9.
+- **UI:** a participant list (voice) or grid (video), speaking indicator (from decrypted audio
+  levels or LiveKit's), mute, camera, switch camera, speaker, leave; the badge rule of §20.6.
+
+### 20.6 E2EE: frame keys from MLS (normative; crypto K1–K10)
+- **Exporter labels (registry, extends §10).** `risime-call-v1` is the only MLS exporter label in
+  use. A new label needs a contract change.
+- **Derivation**, at the device's current epoch `e` of the group:
+  - `call_secret = MLS-Exporter("risime-call-v1", context = call_id as its 16 raw bytes, 32)`
+    (RFC 9420 §8.5); `call_id` from the MLS-authenticated `call_offer` (or the device's own),
+    never from the server;
+  - for every leaf of the group at epoch `e`: `frame_key(identity) = HKDF-Expand-SHA256(call_secret,
+    "risime-call-v1 frame" ‖ 0x00 ‖ identity, 32)`, `identity` = the leaf credential identity
+    `"<user_id>/<device_id>"` in UTF-8 (the LiveKit participant identity);
+  - **`key_index = e mod 16`**.
+- **Core FFI** (the one MLS core change): an internal `export_secret(group, label, context,
+  length)` that accepts only registered labels and `length = 32`, and the exported function
+  **`call_frame_keys(conversation_id, call_id) → {epoch, key_index, keys: [{identity, key}]}`**,
+  which derives every key inside Rust. The exporter output never crosses the FFI; frame keys do
+  (they go to `FrameCryptor`). Returns an error for a group without local state.
+- **Install:** each `frame_key(identity)` with `setKey(identity, key, key_index)` (on livekit-android
+  2.29 the key's standard base64 text is the key material, the SDK taking a string), and
+  `setKeyIndex(key_index)` for the device's own sending.
+- **Join only at the newest epoch** (K4): the device catches up the group's commits before
+  deriving, and never derives from an epoch older than the newest it knows.
+- **Rekey on every epoch** (K3): every merged commit while in a call (adds, removals, self-updates)
+  derives the new epoch's keys at once (OpenMLS exports only the current epoch), installs them at
+  the new index and switches its own sending to it. Receivers keep the previous epoch's keys for
+  **10 s**, then wipe them. A frame whose key index has no key is dropped (LiveKit does) and makes
+  the device catch up commits.
+- **Removal** (K5): a removed member gets no key for the new epoch. Until the removal commit lands
+  it still holds the current keys; the server's `RemoveParticipant` (§20.2) stops the SFU path at
+  once. Both are required.
+- **Fail closed** (K6): `discardFrameWhenCryptorNotReady`; no auto-ratchet (it would derive keys
+  outside MLS); a track whose LiveKit track info says it isn't encrypted is never rendered; a
+  participant whose frame cryptor state isn't OK is shown "Can't verify" and never played.
+- **Roster from MLS** (K7): a LiveKit participant gets a name only if its identity is a leaf of the
+  group at the current epoch; any other is shown "Not a member" and never played (the SFU or the
+  server can add ghosts, but ghosts have no keys).
+- **The badge** (K9): "End-to-end encrypted" shows while every rendered participant decrypts with an
+  MLS-derived key, and is withdrawn while any fails.
+- **Key hygiene** (K10): frame keys and `call_secret` live in memory only, are wiped on leaving and
+  at call end, never persisted, never logged.
+- **Test vectors:** `contract/v1/call_vectors.json`, produced by the crypto core and, byte for
+  byte, by an independent reference script (`scripts/gen-call-vectors`): each case gives
+  `call_secret` (hex), `call_id`, `epoch`, identities and the expected `frame_key`s and
+  `key_index`, plus exporter cases from a fixed RFC 9420 test group (`epoch`, exporter secret,
+  `call_id` → `call_secret`), and negative cases (an unregistered label, length ≠ 32, a wrong
+  identity encoding). The crypto and Android tests run every vector.
+- **Stated limits** (K8): every member derives every member's frame key, so **a member can forge
+  another member's media** in a call (no per-frame signatures; as SFrame with group keys).
+  LiveKit leaves codec headers in the clear (the Opus TOC byte; the VP8 payload header, which in a
+  keyframe carries the frame size) and sees packet sizes and timing. The RTP **audio-level** header
+  extension is **not** stripped in group calls (unlike §16.10): LiveKit needs it for speaker
+  detection and stream allocation; the SFU is our own server and DTX already shows who speaks.
+
+### 20.7 Server storage
+None new. LiveKit holds rooms and participants in memory only (gone when a room closes). The
+`call_signals` store (§16.3) gets group rows per member user. No webhook, no call table.
+
+### 20.8 Privacy and security
+- **The server and LiveKit (both on spark2) learn:** who starts and joins which group call
+  (identities, tokens, `status`), participants' IP addresses, join and leave times, per-participant
+  traffic volume and timing, audio levels (§20.6), video on/off and simulcast layers. Not content.
+- **coturn** learns the same for relayed participants as in §16.13.
+- **Members** see each other's presence in the call; a removed member is cut from the room at once
+  and loses the keys with the removal commit.
+- LiveKit's logs (JSON to stdout, rotated by Docker) carry identities and room names, no content;
+  they are not shipped anywhere. Calls are never recorded (no egress service); no model sees
+  call media.
+
+### 20.9 Limits (justified)
+- **32 participants in a voice call:** Opus at about 32–40 kbit/s with DTX; with 3–4 people
+  talking at once a phone receives well under 200 kbit/s, and LiveKit's egress for 32 people stays
+  in the low tens of Mbit/s in the worst case.
+- **8 participants in a video call:** with simulcast and adaptive stream a phone receives about one
+  large (500 kbit/s) and six small (150 kbit/s) tiles, about 1.4 Mbit/s, and decodes 7 VP8 streams,
+  the practical limit for mid-range phones; LiveKit's egress about 11 Mbit/s for a full room.
+  spark2's uplink is the real bound: the release check measures a full 8-person video room.
+- **4 h** maximum, as §16.4.
+
+### 20.10 Rollout and old apps
+- **Order:** LiveKit up (decision 056) with `auto_create: false` → server (`/calls/rooms`, group
+  `call:signal`, readiness, removal hook) → core (`call_frame_keys`, vectors) → a nightly that
+  receives and renders `group_call` lines (no capability yet) → a nightly that advertises
+  `group_calls` and shows the buttons → announce. A normal (optional) update.
+- **Apps without `group_calls`** never get group `call_signal`s or call pushes for them; the
+  durable `group_call` messages are an unknown envelope type to ≤ v1.18 apps (stored invisibly,
+  §10.3; `silent`, so no push); their users see nothing until they update.
+
+### 20.11 Test coverage (all gates)
+- **Crypto:** every vector in `call_vectors.json`; `export_secret` refuses other labels and
+  lengths; `call_frame_keys` at a new epoch after add, remove and self-update; the exporter output
+  never crosses the FFI.
+- **Server:** `/calls/rooms` (`start` creates with the right `max_participants` and metadata;
+  `join` → `call_ended`/`call_full`; `status`; the device must be a `group_calls` leaf of an active
+  member; the room-name HMAC; the token claims and TTL exactly; `503` without config); removal,
+  device removal and reset call `RemoveParticipant` (against a fake LiveKit API); group
+  `call:signal` (exactly one of `to`/`conversation_id`, `not_member`, `calls_not_ready`, the limits,
+  fan-out per member user, the `group_calls` delivery filter, the push without fallback);
+  `group_calls_ready`; every new example.
+- **Android (JVM):** encode/decode of every new example; the strict drops; ringing, sibling stop on
+  `call_member`, decline, busy; the history-line table and `status`; key installation and rotation
+  (index, the 10-s overlap, catch-up on an unknown index) against a fake key provider; fail-closed
+  rendering and "Not a member"; the badge rule.
+- **Live interop** (manual until unattended): 3 phones voice, then video, on the LAN; a member
+  removed mid-call loses audio at once; a relay-only participant through coturn (once the ports are
+  open); a full 8-person video room with egress measured on spark2.
+
 ## Changelog
+- **v1.19** (2026-10-08): group calls with LiveKit, voice and video (§20, decision 056), reviewed
+  by server, android and crypto; replaces the §16.15 outline. The `group_calls` capability with
+  `group_calls_ready`/`missing_group_calls`; `POST /api/v1/calls/rooms` (`start` creates the LiveKit
+  room with 32/8 participants and metadata, `join` → `404 call_ended`/`409 call_full`, `status`;
+  HMAC room names; 10-minute LiveKit tokens for a `<user_id>/<device_id>` identity with publish
+  microphone (camera for video) and subscribe only; `503 calls_unavailable`; `RemoveParticipant` on
+  removal, device removal and reset; no call table); group `call:signal` by `conversation_id` with
+  fan-out to `group_calls` devices, a push without fallback and group ring limits; `call_offer`
+  `mode: "sfu"`, the ephemeral `call_member` and `call_cancel` `ended`; the durable silent
+  `group_call` `started`/`ended` and its history lines; frame E2EE from the MLS exporter
+  (`risime-call-v1`, per-identity HKDF frame keys, key index `epoch mod 16`, rekey on every epoch
+  with a 10-s overlap, fail closed, roster from MLS, no auto-ratchet), the core FFI
+  `call_frame_keys` over a label-restricted `export_secret`, `contract/v1/call_vectors.json`; the
+  exporter label registry (§10.3); stated limits (insider forgery, clear codec headers, audio
+  level kept for the SFU); LiveKit UDP 49500–49999, coturn relay 49152–49499, no ICE-TCP. Additive.
 - **v1.18** (2026-10-08): 1:1 video calls (§19), reviewed by server, android and crypto. The
   `video` capability with `video_ready`/`missing_video`; a cleartext `media` on `call:signal` and
   the `call_signal` event (delivery and push only to `video` devices, `video_not_ready`, bound to

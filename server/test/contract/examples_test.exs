@@ -103,6 +103,14 @@ defmodule RisiMe.ContractExamplesTest do
                     call_signal_event_video.json call_signal_push_video.json device_put_video.json
                     error_video_not_ready.json mls_group_video_ready.json)
 
+  # v1.19 (group calls, §20): parse-only placeholders until the server implements it.
+  @pending_v1_19 ~w(call_member_payload.json call_offer_sfu_payload.json
+                    call_signal_event_group.json call_signal_push_group.json calls_room_reply.json
+                    calls_room_request.json calls_room_status_reply.json
+                    device_put_group_calls.json error_call_ended.json error_call_full.json
+                    group_call_ended_payload.json group_call_started_payload.json
+                    livekit_token_claims.json mls_group_group_calls_ready.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -144,7 +152,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_14 ++
         @checked_v1_15 ++
         @pending_v1_17 ++
-        @pending_v1_18
+        @pending_v1_18 ++
+        @pending_v1_19
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end

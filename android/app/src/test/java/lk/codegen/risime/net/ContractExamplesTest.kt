@@ -26,6 +26,21 @@ class ContractExamplesTest {
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
         "auth_verify_reply.json" to { s -> ProtocolJson.decodeFromString<AuthVerifyReply>(s) },
+        // v1.19 (§20 group calls with LiveKit): parse-only placeholders until the app implements it.
+        "call_member_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_offer_sfu_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_signal_event_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "call_signal_push_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "calls_room_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "calls_room_request.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "calls_room_status_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "device_put_group_calls.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_call_ended.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "error_call_full.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "group_call_ended_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "group_call_started_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "livekit_token_claims.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        "mls_group_group_calls_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         // v1.18 (§19 1:1 video calls): parse-only placeholders until the app implements it.
         "call_end_video_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "call_media_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
