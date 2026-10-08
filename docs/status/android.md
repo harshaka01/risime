@@ -1,5 +1,71 @@
 # Android status — 0.2 nightlies
 
+## v1.23 §23 (1:1) switching and screen sharing + ONE WhatsApp-style call screen — READY for the 1:1 path (group §23 open)
+- **Wire (§23.1–§23.4):** `features` (`switch`, `screen`) on the first `call_offer` and on `call_answer`; the
+  `call_switch` envelope (request/accept/decline/cancel/voice, `seq` 1–65 535, `source` only on request); `call_offer`
+  `renegotiate: true` (never rings; validated with the two-m-line rules); `call_media` `video` (must agree with
+  `camera`). Capabilities `call_switch` (with `calls`+`video`) and `screen_share` (Android 10+, MediaProjection).
+- **Machine (`CallStateMachine`):** per-call features gate the buttons (an old peer gets the v1.18 UI); one pending
+  request per side, 20-s no-answer → `cancel` + "No answer", decline → "<name> declined video" and a 10-s wait,
+  crossing requests accept each other, `voice` from either side, replayed/stale `seq` dropped, sender pinning. The
+  **original caller** renegotiates once (re-offer after the accept, 10-s bound, rollback + `voice` + "Couldn't switch
+  to video" on failure, at most one per call); the callee applies a re-offer only after its own accept/request
+  (crypto C2) and checks fingerprint, ICE credentials, `a=setup`, mids and BUNDLE (`SdpRules.renegotiationProblem`);
+  §16.10 (e) runs again after. Switch, `call_media` and re-offer envelopes go out through one ordered queue per call.
+  `call_end.media` = video if the call was ever in video mode. Rendering only in video mode (C3).
+- **Media (`WebRtcCallMedia`):** VP8 factories for every video-capable call; `enableVideo`/`rollback`; the screen is
+  `ScreenCapturerAndroid` (screencast source) on the one video sender via `setTrack` (MAINTAIN_RESOLUTION, 1.2 Mbit/s
+  Wi-Fi / 600 kbit/s mobile or relay, ≤ 15 fps, 5 when hot, long side ≤ 1600, follows rotation); `src=` in the debug
+  video line.
+- **Screen sharing (§23.5):** system consent on every share (Android ≤ 14: the notifications/DND warning first); the
+  call service is restarted with `phoneCall|microphone|mediaProjection` **before** the projection starts
+  (`FOREGROUND_SERVICE_MEDIA_PROJECTION`); one notification ("Sharing your screen" + Stop sharing); stops on Stop,
+  `onStop`, SCREEN_OFF, `voice`, call end; RisiMe's own windows FLAG_SECURE while sharing (MainActivity + CallActivity);
+  message notifications silent and content-free while sharing. MediaProjection wiring = our call service (not
+  LiveKit's ScreenCaptureService) — to record as an android decision (docs/decisions is root's).
+- **Routing (§23.7):** to video → speaker (unless a headset); back to voice → earpiece only if the speaker came from
+  the switch, not from the user (`RoutePolicyState`).
+- **The one call screen (`CallScreen.kt`):** incoming / outgoing ("Calling…", "Ringing…") / connecting / connected
+  (timer) / ended on one layout. Top: minimise (Back to the chat, call continues), name + status, "🔒 End-to-end
+  encrypted" only after §16.10 (e), add participant (shown disabled: no 1:1→group upgrade in §20/§23). Voice: large
+  avatar on a doodle brand background. Video: remote full screen, own preview in a draggable corner that snaps to
+  the corners, a tap toggles the controls, auto-hide after 4 s (never with TalkBack). Bottom: **Speaker | Video |
+  Mute / More | Share | End**. Video = ask to switch (voice), back to voice (video, camera on), camera on (video,
+  camera off), v1.18 camera toggle with an old peer. More: Flip camera, Turn camera off, Switch to voice call,
+  Audio output list, Call info. Prompt dialog: "Switch to video call?" Accept / Without my camera / Decline;
+  "Watch <name>'s screen?" Watch / Decline. Red "You're sharing your screen" bar with Stop; "<name> is sharing
+  their screen"; a shared screen is fitted, pinch-zoom/pan, double-tap reset. Lock-screen incoming uses the same
+  screen (CallActivity, unchanged entry).
+- **Tests:** `CallSwitchTest` (13: examples, strict decode, renegotiation SDP rules, rendering rule, features gating,
+  request→accept→one caller re-offer→voice→no new re-offer, callee asks, decline/cooldown/20-s cancel, crossing,
+  replay/stale/unconsented re-offer, failed renegotiation rollback, screen share consent-once/stop/onStop/voice/call
+  end), `CallScreenTest` (12: panel per state, Speaker always enabled + highlighted, prompt flow, banners, auto-hide,
+  minimise, E2EE label, button rules, snapshot mapping), `RoutePolicyTest` (back to earpiece rule).
+- **Device gate (`scripts/call-device-test`, root-delegated, own instances `cs`, redroid -cs1/-cs2, :4521):** new
+  **call 14**: voice → A taps Video → B "Switch to video call?" → Accept → VP8 decoded rising on both (320×240),
+  exactly one `renegotiate` re-offer, from A; audio both ways; SPEAKER on both → "Switch to voice call" → no new frames
+  on either side, voice UI, audio → A Share (≤ 14 warning → Continue; the `PROJECT_MEDIA` appop grants the consent on
+  redroid) → B "Watch" → "ZZ Call A is sharing their screen", B decodes the screen (720×1184), `src=screen` on A,
+  still one re-offer, audio → Stop → label gone → B More → Switch to voice call → hang up → "Video call · m:ss" on
+  both. **Runs:** `CALLTEST_SWITCH_ONLY=1` (sign-in, records, call 14): **CALLTEST OK**; full run: calls 1–13 and 10
+  all PASS (79 PASS lines) with the new screen; the call-records step's A check expected "(2)" but A's calls 10/13
+  join that group in a full run ("(4)"), relaxed to "ZZ Call B (". Call 9's camera-off moved into More (the Video
+  button now means back to voice with a v1.23 peer). Debug builds keep the call controls up for uiautomator
+  (`files/debug_keep_call_controls`).
+- **Seen once, not reproduced since (watch):** with LiveKit's TextureViewRenderer for every video a phone's WebRTC
+  stopped (no stats, no audio sent) mid video call twice; the camera paths went back to v1.18's SurfaceViewRenderer
+  (TextureView only for a shared screen, for zoom/pan) and the next full + switch runs were clean.
+- **Real phone (redroid can't):** (1) voice → Video → Accept on two phones (Wi-Fi and mobile data), audio moves to the
+  speaker, Video off → earpiece again unless you picked the speaker; Bluetooth stays Bluetooth. (2) Share on Android
+  14/15/16: the system dialog ("A single app"/"Entire screen"), the red bar, "Sharing your screen" notification with
+  Stop sharing, lock the phone → the share stops; a banking app shows black to the viewer; RisiMe's chats show black.
+  (3) A message arriving while sharing: "New message", no sound. (4) Rotate while sharing (the viewer follows).
+  (5) Lock-screen incoming lands on the new screen; minimise → the ongoing pill; drag the preview to each corner.
+- **Open:** group §23 (`upgrade`, group `call_switch`/`call_media`, LiveKit screen share, "Voice only") not built —
+  group calls keep v1.19 (video rooms: camera toggle; voice rooms: Video/Share disabled with why). Add participant
+  (1:1 → group) has no protocol (§20/§23): shown disabled. §23.9 data-used columns not stored. An android decision
+  for the MediaProjection wiring (our call service, not LiveKit's ScreenCaptureService) is for root to record.
+
 ## §24 A6 Risi cards, @Risi chip, feedback, "What Risi knows about me", tz, schema-2 backup wiring — READY (1111 JVM tests, 0 failed)
 - **Cards** (Official tab only, `ui/tabs/RisiCardsUi.kt`; M3, Official accent): `commitment` (text, owner chip, due, state; Confirm / Decline / Edit only for
   the owner or a counterpart, "Done" once confirmed; greyed "Expired" 48 h after its `server_ts`; buttons off ~2 min after my own tap),

@@ -72,8 +72,49 @@ fun LiveLocalVideo(media: WebRtcCallMedia, modifier: Modifier = Modifier) {
     Renderer(media, remote = false, visible = true, mirror = media.frontCamera, fit = false, zoom = 1f, pan = Offset.Zero, modifier = modifier)
 }
 
+/**
+ * The camera paths keep v1.18's SurfaceViewRenderer (proven on every call in the device gate); only
+ * a shared screen uses a TextureViewRenderer, because pinch-zoom and pan need a view that scales
+ * (a SurfaceView ignores view transforms). The two are swapped by key when the peer starts or stops sharing.
+ */
 @Composable
 private fun Renderer(media: WebRtcCallMedia, remote: Boolean, visible: Boolean, mirror: Boolean, fit: Boolean, zoom: Float, pan: Offset, modifier: Modifier) {
+    androidx.compose.runtime.key(fit) {
+        if (fit) TextureRenderer(media, remote, visible, zoom, pan, modifier) else SurfaceRenderer(media, remote, visible, mirror, modifier)
+    }
+}
+
+@Composable
+private fun SurfaceRenderer(media: WebRtcCallMedia, remote: Boolean, visible: Boolean, mirror: Boolean, modifier: Modifier) {
+    val view = remember { arrayOfNulls<livekit.org.webrtc.SurfaceViewRenderer>(1) }
+    DisposableEffect(remote) {
+        onDispose {
+            if (remote) media.attachRemote(null) else media.attachLocal(null)
+            view[0]?.release()
+            view[0] = null
+        }
+    }
+    AndroidView(
+        factory = { ctx ->
+            livekit.org.webrtc.SurfaceViewRenderer(ctx).apply {
+                init(media.egl.eglBaseContext, null)
+                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+                setEnableHardwareScaler(true)
+                if (!remote) setZOrderMediaOverlay(true)
+                view[0] = this
+                if (remote) media.attachRemote(this) else media.attachLocal(this)
+            }
+        },
+        update = {
+            it.setMirror(mirror)
+            it.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+        },
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun TextureRenderer(media: WebRtcCallMedia, remote: Boolean, visible: Boolean, zoom: Float, pan: Offset, modifier: Modifier) {
     val view = remember { arrayOfNulls<TextureViewRenderer>(1) }
     DisposableEffect(remote) {
         onDispose {
@@ -86,14 +127,13 @@ private fun Renderer(media: WebRtcCallMedia, remote: Boolean, visible: Boolean, 
         factory = { ctx ->
             TextureViewRenderer(ctx).apply {
                 init(media.egl.eglBaseContext, null)
+                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
                 setEnableHardwareScaler(true)
                 view[0] = this
                 if (remote) media.attachRemote(this) else media.attachLocal(this)
             }
         },
         update = {
-            it.setMirror(mirror)
-            it.setScalingType(if (fit) RendererCommon.ScalingType.SCALE_ASPECT_FIT else RendererCommon.ScalingType.SCALE_ASPECT_FILL)
             it.scaleX = zoom
             it.scaleY = zoom
             it.translationX = pan.x

@@ -288,7 +288,8 @@ call_records() {
   pass "records: B's Calls tab shows \"ZZ Call A (2)\" with ↙ Today"
   DEV=A; back_to_list || fail "records: A can't reach the chat list"
   tap "Calls" || fail "records: A has no Calls tab"; sleep 2
-  wait_for "ZZ Call B (2)" 15 || fail "records: A's Calls tab has no grouped \"ZZ Call B (2)\" row"
+  # In the full run A's earlier outgoing calls (10, 13) join the same group: "(2)" alone, "(4)" after calls 1–13.
+  wait_for "ZZ Call B (" 15 || fail "records: A's Calls tab has no grouped \"ZZ Call B (n)\" row"
   has "↗ Today" || fail "records: A's outgoing row has no ↗ Today stamp"
   pass "records: A's Calls tab shows \"ZZ Call B (2)\" with ↗ Today"
   # Tap the row: call info lists both calls.
