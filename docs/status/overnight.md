@@ -159,7 +159,11 @@ were needed after nightly.11.
   `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
 - **Agents:** none running.
 - **Needs Harsha:**
-0. **Keycloak, for the RisiCloud lead (realm `aoa`, client `risime`):**
+0. **Keycloak, for the RisiCloud lead (realm `aoa`, client `risime`).**
+   - **Update (decision 064):** the main cause of the forced email sign-ins is the app's own token
+     storage. On phones without biometrics the tokens were kept in memory only, and every process
+     restart needed a sign-in. That is being fixed in the app.
+   - Still worth checking, so sessions last until Log out:
    - Clients → `risime` → Client scopes: `offline_access` assigned (**Default** or Optional).
    - Realm settings → Sessions:
      - **Offline Session Idle** ≥ 90 days (default 30);
