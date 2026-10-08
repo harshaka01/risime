@@ -47,7 +47,16 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
-## P0 HOTFIX in progress (2026-10-08 ~17:00 UTC): the app lock traps the user (nightly.35)
+## v0.2.0-nightly.36 (HOTFIX, live 2026-10-08 ~17:00 UTC): the app lock never traps the user, ringback crash
+- **What's in:** branch `hotfix/applock` = v0.2.0-nightly.35 + `433b8c3` (the lock fix) + the
+  ringback double-release fix + the HOTFIX release mode.
+- **Gate:** all PASS, upgrade test included (counts, restore, reinstall); `scripts/applock-device-test`
+  APPLOCK OK.
+- **Main:** merged in by hand (`95b1c4c`): main already had the code; VERSION and the notes were
+  taken.
+- **Harsha:** install n36 over the top from risicloud.ai/app/risime/.
+
+### (Earlier) P0 HOTFIX: the app lock traps the user (nightly.35)
 - **Report (Harsha, real phone, n35):** "RisiMe is locked" shows, and "Unlock with fingerprint"
   does nothing.
 - **Root cause (root's code analysis; the agent confirms it on a device):**
