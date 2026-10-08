@@ -28,6 +28,12 @@ RUN="$RUNROOT/$TAG"
 ln -sfn "$REPO/.env" "$RUN/.env"
 ENVLOAD="set -a; . '$REPO/.env'; . '$REPO/infra/pilot/pilot.env'; set +a"
 echo "==> building prod release in $RUN ($(git -C "$RUN" log -1 --format='%h %s'))"
+# Risi's MLS NIF (decision 067): prod build (no test NIFs) into server/priv/native before the release,
+# so the release ships it. Optional: without it the server runs and Risi stays unavailable.
+if [ -x "$RUN/scripts/build-mls-nif" ]; then
+  (cd "$RUN" && CARGO_TARGET_DIR="$REPO/crypto/target-nif-prod" timeout 1800 scripts/build-mls-nif --prod) \
+    || echo "warn: Risi MLS NIF build failed: the release runs without it (Risi unavailable)"
+fi
 (cd "$RUN/server" && MIX_ENV=prod $M mix deps.get --only prod >/dev/null && MIX_ENV=prod $M mix release --overwrite --quiet)
 REL="$RUN/server/_build/prod/rel/risime"
 

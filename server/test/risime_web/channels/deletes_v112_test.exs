@@ -83,6 +83,14 @@ defmodule RisiMeWeb.DeletesV112Test do
     defdelegate delete_group_receipts(m), to: Cassandra
     @impl true
     defdelegate clear_conversation(u, c, t, k), to: Cassandra
+    @impl true
+    defdelegate put_agent_message(c, m), to: Cassandra
+    @impl true
+    defdelegate list_agent_messages(c, s, l), to: Cassandra
+    @impl true
+    defdelegate purge_agent_conversation(c, n), to: Cassandra
+    @impl true
+    defdelegate delete_agent_messages(c, ids), to: Cassandra
   end
 
   setup :with_attestation_key

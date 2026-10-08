@@ -167,6 +167,38 @@ defmodule RisiMe.Messaging.Store do
               opts :: keyword
             ) :: {:ok, backfill_counts}
 
+  ## v1.24 Risi buffer (§24.12, `risi_buffer`)
+
+  @typedoc """
+  A row of Risi's raw buffer. `body` is already sealed by `RisiMe.Agent.Transcript` (the store
+  never sees plaintext); the row lives 24 h.
+  """
+  @type agent_message :: %{
+          message_id: uuid,
+          sender_id: uuid,
+          sender_device: uuid | nil,
+          body: binary
+        }
+
+  @doc "Q11: buffers one Official message (idempotent per message id)."
+  @callback put_agent_message(conversation_id :: String.t(), agent_message) :: :ok
+
+  @doc """
+  Q12: the buffered messages of a conversation after `since` (a TimeUUID, exclusive; nil = the
+  whole 24-h window), oldest first, at most `limit`.
+  """
+  @callback list_agent_messages(
+              conversation_id :: String.t(),
+              since :: uuid | nil,
+              limit :: pos_integer
+            ) :: [agent_message]
+
+  @doc "Q13: deletes every buffered message of a conversation (Official off, Risi removed)."
+  @callback purge_agent_conversation(conversation_id :: String.t(), now :: DateTime.t()) :: :ok
+
+  @doc "Q14: deletes buffered messages by id (a §15 delete for everyone)."
+  @callback delete_agent_messages(conversation_id :: String.t(), message_ids :: [uuid]) :: :ok
+
   @doc "Cheap liveness check of the backing store (used by `GET /health`)."
   @callback health() :: :ok | {:error, term}
 

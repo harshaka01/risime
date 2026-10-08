@@ -67,6 +67,10 @@ pub enum BackupError {
     /// A newer file or record (`v`, `schema`, algorithms): "Update RisiMe to restore this backup".
     #[error("unsupported backup: {0}")]
     Unsupported(String),
+    /// The file header's `schema` is newer than this core reads (`unsupported_schema`):
+    /// "Update RisiMe to restore this backup".
+    #[error("unsupported backup schema {0}")]
+    UnsupportedSchema(u64),
     /// The file's `user_id` isn't the signed-in user: "This backup belongs to another account".
     #[error("this backup belongs to another account")]
     WrongAccount,
@@ -711,6 +715,33 @@ impl Client {
         key_record: Option<&str>,
         out_path: &Path,
     ) -> BackupResult<BackupWriter> {
+        self.backup_writer_schema(
+            user_id,
+            backup_id,
+            created_at,
+            app_version,
+            key_record,
+            out_path,
+            stream::BUNDLE_SCHEMA,
+        )
+    }
+
+    /// [`backup_writer`](Self::backup_writer) with the file header's `schema` (1, or 2 for a
+    /// bundle holding an Official conversation, §24.10; anything else is `Malformed`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn backup_writer_schema(
+        &self,
+        user_id: &str,
+        backup_id: &str,
+        created_at: &str,
+        app_version: &str,
+        key_record: Option<&str>,
+        out_path: &Path,
+        schema: u64,
+    ) -> BackupResult<BackupWriter> {
+        if !(stream::BUNDLE_SCHEMA..=stream::MAX_BUNDLE_SCHEMA).contains(&schema) {
+            return Err(malformed(format!("backup schema {schema} (1 or 2)")));
+        }
         let u = self.backup_user(user_id)?;
         let (bid, bid_raw) = canonical_uuid(backup_id, "backup_id")?;
         check_text(created_at, "created_at")?;
@@ -740,7 +771,7 @@ impl Client {
         let wrapped = keys::seal_dek(&bk, &bid_raw, &u, &dek, &nonce)?;
         let header = FileHeader {
             v: stream::HEADER_V,
-            schema: stream::BUNDLE_SCHEMA,
+            schema,
             backup_id: bid.clone(),
             user_id: u,
             created_at: created_at.into(),
@@ -763,7 +794,7 @@ impl Client {
     }
 
     /// Opens a backup file (§22.4 "Opening a file"): magic, version and header length
-    /// (`Format`); `v`/`schema` (`Unsupported`); `user_id` = this user (`WrongAccount`, nothing
+    /// (`Format`); `v` (`Unsupported`), `schema` above 2 (`UnsupportedSchema`); `user_id` = this user (`WrongAccount`, nothing
     /// more is read); for a server backup the listed `backup_id`/`bk_id` (`Integrity`); the
     /// local `BK` for its `bk_id` (`NoKey`: unlock the server's record or the header's `key`
     /// from [`file_info`] first); the `DEK` (`Integrity`). Then call

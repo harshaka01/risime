@@ -19,9 +19,13 @@ defmodule RisiMe.MLS.Attestation do
   @doc "True when an attestation key is loaded (E2EE can be used)."
   def available?, do: GenServer.call(__MODULE__, :available?)
 
-  @doc "Signs a device binding; `{:ok, jws}` or `{:error, :mls_unavailable}`."
-  def sign(user_id, device_id, signature_key_b64) do
-    GenServer.call(__MODULE__, {:sign, user_id, device_id, signature_key_b64})
+  @doc """
+  Signs a device binding; `{:ok, jws}` or `{:error, :mls_unavailable}`. `kind: "agent"` adds the
+  v1.24 §24.11 claim `"kind": "agent"` (absent means `"user"`); only the server's own Risi device
+  (`RisiMe.Agent.Mls`) is ever attested as an agent.
+  """
+  def sign(user_id, device_id, signature_key_b64, opts \\ []) do
+    GenServer.call(__MODULE__, {:sign, user_id, device_id, signature_key_b64, opts[:kind]})
   end
 
   @doc "Public JWKs: the active key plus still-trusted previous keys."
@@ -72,10 +76,10 @@ defmodule RisiMe.MLS.Attestation do
     {:reply, active ++ state.previous, state}
   end
 
-  def handle_call({:sign, _u, _d, _k}, _from, %{key: nil} = state),
+  def handle_call({:sign, _u, _d, _k, _kind}, _from, %{key: nil} = state),
     do: {:reply, {:error, :mls_unavailable}, state}
 
-  def handle_call({:sign, user_id, device_id, sig_key}, _from, %{key: key} = state) do
+  def handle_call({:sign, user_id, device_id, sig_key, kind}, _from, %{key: key} = state) do
     claims = %{
       "aud" => "risime-mls",
       "user_id" => user_id,
@@ -84,6 +88,8 @@ defmodule RisiMe.MLS.Attestation do
       "iat" => System.os_time(:second),
       "v" => 1
     }
+
+    claims = if kind == "agent", do: Map.put(claims, "kind", "agent"), else: claims
 
     header = %{"alg" => "EdDSA", "kid" => key.kid, "typ" => "risime-attest+jwt"}
     {_, jws} = key.jwk |> JOSE.JWT.sign(header, claims) |> JOSE.JWS.compact()

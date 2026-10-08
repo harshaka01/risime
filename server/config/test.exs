@@ -99,3 +99,7 @@ config :phoenix,
 # no caching of the global live `media` sum.
 config :risime, :blob_disk, {1024 ** 4, 2 * 1024 ** 4}
 config :risime, :blob_guard, media_total_cache_ms: 0
+
+# v1.24 S5: the REST tests of §24 fake Risi's device (TabsHelpers.risi_on!/1) without its agent
+# tree; the agent tree tests (test/risime/agent/) turn this check on.
+config :risime, :risi_agent_check, false

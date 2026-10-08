@@ -62,6 +62,7 @@ fn backup_round_trip_crosses_the_ffi() {
             "0.3.0".into(),
             Some(rec.clone()),
             path.clone(),
+            2,
         )
         .unwrap();
     let d = stored(b"{\"v\":1,\"type\":\"backup\"}\n");
@@ -77,6 +78,7 @@ fn backup_round_trip_crosses_the_ffi() {
 
     let info = backup_file_info(path.clone()).unwrap();
     assert_eq!(info.bk_id, out.bk_id);
+    assert_eq!(info.schema, 2);
     assert_eq!(info.key_record.as_deref(), Some(rec.as_str()));
 
     let fresh = client("d2");

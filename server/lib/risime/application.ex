@@ -54,12 +54,12 @@ defmodule RisiMe.Application do
       # v1.23 §23.6: per-room locks and the tokens minted in the last 600 s.
       RisiMe.Calls.RoomMemory,
       # v1.19 §20.2: LiveKit RemoveParticipant calls off the group-lock path.
-      {Task.Supervisor, name: RisiMe.Calls.TaskSupervisor},
-      # Start a worker by calling: RisiMe.Worker.start_link(arg)
-      # {RisiMe.Worker, arg},
-      # Start to serve requests, typically the last entry
-      RisiMeWeb.Endpoint
+      {Task.Supervisor, name: RisiMe.Calls.TaskSupervisor}
     ]
+
+    # v1.24 S5: the Risi agent tree, only with RISI=on, the MLS NIF and its keys (a temporary
+    # child: it can stop, the server never does because of it).
+    children = children ++ RisiMe.Agent.children() ++ [RisiMeWeb.Endpoint]
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options

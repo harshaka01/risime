@@ -527,8 +527,17 @@ defmodule RisiMe.Messaging.Deletes do
     end
 
     cleanup(plan, deleted, server_ts)
+    drop_buffered(plan, deleted)
     :ok
   end
+
+  # v1.24 §24.12: a delete for everyone in an Official conversation removes Risi's buffer rows
+  # of the targets (idempotent; S6 adds the facts derived only from them).
+  defp drop_buffered(%{"kind" => "grp", "conversation_id" => conv}, [_ | _] = deleted) do
+    if RisiMe.Groups.Tabs.official?(conv), do: RisiMe.Agent.Transcript.delete(conv, deleted)
+  end
+
+  defp drop_buffered(_plan, _deleted), do: :ok
 
   # Step 3 (Q3d): the content-free index tombstone with the row's remaining TTL (server R6).
   defp tombstone(rows, deleter, server_ts) do
