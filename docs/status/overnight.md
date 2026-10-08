@@ -71,6 +71,34 @@ Progress:
   - install the Caddyfile with the `/livekit` route: `sudo cp infra/caddy/Caddyfile /etc/caddy/Caddyfile && sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl reload caddy`;
   - a by-hand check from outside that UDP 49500 and 49999 are reachable (decision 056).
 
+## Sign-in incident and open sign-up (2026-10-08 ~05:00 UTC)
+- **What blocked dhammikajayanath775@:** Harsha's invite at 04:35 UTC was correct (pending,
+  lowercase, phone set). His Keycloak token was valid and email-verified, but `/me` answered
+  `not_allowlisted` at 04:41 and 04:46. So the email on his RisiCloud account differs from the
+  invited one. Keycloak itself allows self-registration (realm aoa offers Register), so nothing is
+  needed from the RisiCloud lead.
+- **Open sign-up (contract v1.20 §21, decision 058):** `OPEN_SIGNUP=true` is set in
+  `infra/pilot/pilot.env` and takes effect with the nightly.30 deploy.
+  - **How it works:** a verified email with no invite gets "Create your RisiMe account" (name and
+    phone). Phones stay unconfirmed (`phone_confirmed: false`) and are never matched by phone.
+    Messaging still needs an accepted friend request.
+  - **Limits:** 5 per IP per hour, 3 per `sub` per day, 200 per day in total.
+  - **Logging:** refused sign-ins log the email's domain and a hash.
+  - **To close it:** set `false` and restart; no release needed.
+  - **Harsha:** install the fail2ban `risime-signup` jail (the sudo line is in decision 058).
+
+## v0.2.0-nightly.29 (live 2026-10-08, not required): group voice and video calls (v1.19)
+- **What's in:** LiveKit SFU with frame encryption, using keys from the MLS exporter. Voice for up
+  to 32 people, video for up to 8.
+- **Proof on 3 Redroid phones:**
+  - the frame cryptor was OK on every stream;
+  - a phone with wrong keys got nothing (fail closed);
+  - removing a member mid-call cut them off, and the others switched keys;
+  - the 1:1 call test passed (CALLTEST OK).
+- **Not reachable for real users yet:** the pilot answers 503 for rooms until Harsha installs the
+  Caddy `/livekit` route. Then root sets `LIVEKIT_URL` in pilot.env and restarts. The by-hand UDP
+  49500–49999 check is also still to do.
+
 ## v0.2.0-nightly.28 (live 2026-10-08, not required): profile photos, group photos, 1:1 video calls
 - **Profile photos (v1.17):** Settings → Set photo. The photo is encrypted and goes to each e2ee
   chat silently. It shows in the list, headers, info screens, member lists, next to group bubbles
