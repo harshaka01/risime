@@ -12,3 +12,18 @@ findtime  = 10m
 bantime   = 1h
 # Never ban loopback or the LAN.
 ignoreip  = 127.0.0.1/8 ::1 10.20.20.0/26
+
+# Open sign-up abuse (decision 058): 6 refused or rate-limited sign-ups in 1 hour → banned 24 h.
+# Probing phones through 409 phone_taken or flooding POST /auth/signup trips this long before
+# the general jail's 10-in-10-minutes.
+[risime-signup]
+enabled   = true
+filter    = risime-signup
+logpath   = /home/harsha/risime-logs/auth.log
+backend   = polling
+port      = http,https
+banaction = ufw
+maxretry  = 6
+findtime  = 1h
+bantime   = 24h
+ignoreip  = 127.0.0.1/8 ::1 10.20.20.0/26
