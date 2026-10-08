@@ -27,6 +27,8 @@
 #       same (server), nobody gets an "Encryption was reset" line, A->C and C->A go through (A's send
 #       while waiting stays pending and arrives), and C's per-conversation counts don't drop.
 #       Unset (default) or an older NEW: skipped (logged). scripts/nightly-release sets it.
+#       Before that phase C is updated in place to the NEW app (`adb install -r`, its counts must not
+#       drop), so the re-add runs on the app being released; UPGRADE_C_STAYS_OLD=1 keeps C old.
 #       RESTORE_CHECK_FROM=<versionCode> (§22, decision 059; v1.22+): before the uninstall, A turns on
 #       server backup in Settings → Manage backups (recovery key read from the screen, groups 2 and 7
 #       typed back, no passphrase), waits for "Backed up" + "Last server backup: <date> · <size>",
@@ -1105,6 +1107,26 @@ PY
     DEV="$d"
     python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print("; ".join(f"{r[0]} {r[1]} attempts={r[2]} err={r[3]}" for r in c.execute("SELECT type, state, attempts, last_error FROM group_ops")) or "empty")' "$WORK/cops.db" 2>/dev/null || echo "?"
   }
+
+  # C updates too before A's reinstall (as testers do): the re-add then runs on the NEW app, not on
+  # the old one's known bugs (nightly.31's stuck staged commit, fixed in 943993a). C's counts must
+  # survive its own in-place update. UPGRADE_C_STAYS_OLD=1 keeps C on the old app (old behaviour).
+  if [ "${UPGRADE_C_STAYS_OLD:-0}" != 1 ]; then
+    step "reinstall: C updates in place to $NEW_VN (adb install -r) before A's reinstall"
+    CU0="$(c_snapshot "$WORK/c-counts-preupdate.json")"; echo "    C before its update (Room): $CU0"
+    DEV="$SERIAL_B"
+    A install -r "$NEW" >/dev/null || fail "reinstall: adb install -r of the new APK on C failed"
+    [ "$(installed_vn)" = "$NEW_VN" ] || fail "reinstall: C runs $(installed_vn), not $NEW_VN, after its update"
+    A shell am start -W -n "$PKG/.MainActivity" >/dev/null; sleep 6; dismiss_prompts
+    open_chat "Upgrade group" || { sleep 3; open_chat "Upgrade group"; } || fail "reinstall: C can't open the group after its update"
+    DEV="$SERIAL"
+    CU1="$(c_snapshot "$WORK/c-counts-postupdate.json")"; echo "    C after its update (Room): $CU1"
+    lost="$(counts_lost "$WORK/c-counts-preupdate.json" "$WORK/c-counts-postupdate.json")"
+    [ -z "$lost" ] || fail "reinstall: C lost messages in its own update: $lost"
+    CHECKS+=" c_updated"
+  else
+    echo "==> UPGRADE_C_STAYS_OLD=1: C stays on $OLD_VN for the reinstall phase"
+  fi
 
   step "reinstall: A (only admin) before the reinstall: server state and C's counts"
   DEV="$SERIAL"

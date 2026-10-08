@@ -101,6 +101,8 @@ fi
 # broken on redroid) runs/accepts the `adb install -r` gate instead; say so in the release notes.
 # UPDATER_BACK_SAFE_FROM=<versionCode> (env, passed through): from that OLD version on, the gate also
 # presses Back during the download and requires the update to finish (see scripts/upgrade-test).
+# Default 20031 (0.2.0-nightly.31, the first app whose update survives leaving it).
+export UPDATER_BACK_SAFE_FROM="${UPDATER_BACK_SAFE_FROM:-20031}"
 # Reinstall phase (§12.12, decision 060): from REINSTALL_CHECK_FROM (default 20031 = 0.2.0-nightly.31,
 # the first v1.21 app) the gate also reinstalls A and requires a rejoin without reset.
 # UPGRADE_NO_REINSTALL=1 skips it (emergency only; say so in the release notes).
@@ -109,8 +111,9 @@ export REINSTALL_CHECK_FROM="${REINSTALL_CHECK_FROM:-20031}"
 # 0.2.0-nightly.32, the first app with v1.22 backups) A backs up to the server and exports a file
 # before the uninstall, its inbox replay is purged on the temp server, and the reinstalled app must
 # restore every conversation through "Restore your chats" + the recovery key.
-# Off by default until a full upgrade-test PASS with it (then: default 20032 = 0.2.0-nightly.32).
-export RESTORE_CHECK_FROM="${RESTORE_CHECK_FROM:-}"
+# On by default from nightly.32 (decision 059). C is updated to the new app before the reinstall
+# (scripts/upgrade-test; UPGRADE_C_STAYS_OLD=1 keeps it on the old one).
+export RESTORE_CHECK_FROM="${RESTORE_CHECK_FROM:-20032}"
 echo "==> upgrade test (previous published APK -> v$next)"
 UT_COMMIT="$(git rev-parse HEAD)"
 CAND="$REL/candidate"; mkdir -p "$CAND" "$HOME/risime-logs/upgrade-test"
