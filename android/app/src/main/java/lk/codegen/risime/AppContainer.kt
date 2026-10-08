@@ -76,7 +76,6 @@ import lk.codegen.risime.push.PushManager
 import lk.codegen.risime.push.newRequests
 import lk.codegen.risime.push.DIRECT_PUSH_SYNC_MS
 import lk.codegen.risime.push.SOCKET_NOTIFY_DEBOUNCE_MS
-import lk.codegen.risime.push.withBackgroundGrace
 import kotlinx.coroutines.flow.update
 import lk.codegen.risime.push.planChatNotifications
 import kotlinx.coroutines.flow.first
@@ -188,10 +187,17 @@ class AppContainer(
     val notifier = Notifier(context)
     // ---- E2EE (contract v1.7, decisions 035, 037). The engine loads only once the server offers
     // attestation keys; until then (pilot: mls_unavailable) the app behaves exactly like v1.6.
-    val mlsEngineState = MutableStateFlow<MlsEngine?>(null)
-    var mlsEngine: MlsEngine?
-        get() = mlsEngineState.value
-        set(v) { mlsEngineState.value = v }
+    /** Core open vs registered, tracked apart (P0 background delivery, rule 9). */
+    private val mlsCore = lk.codegen.risime.data.mls.MlsCoreState(BuildConfig.CRYPTO_AVAILABLE, object : lk.codegen.risime.data.mls.MlsCoreState.Persist {
+        private fun p(): android.content.SharedPreferences = context.getSharedPreferences("risime_mls", android.content.Context.MODE_PRIVATE)
+        override fun openedBefore() = p().getBoolean("core_opened", false)
+        override fun setOpenedBefore(v: Boolean) = p().edit().putBoolean("core_opened", v).apply()
+        override fun cachedKeys(): List<String> = p().getString("attestation_keys", null)?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
+        override fun setCachedKeys(keys: List<String>) = p().edit().putString("attestation_keys", keys.joinToString("\n")).apply()
+    })
+    val mlsEngineState: MutableStateFlow<MlsEngine?> get() = mlsCore.engine
+    val mlsEngine: MlsEngine?
+        get() = mlsCore.engine.value
 
     /** §12: groups UI only with a groups-capable core (the same condition as the `groups` capability). */
     val groupsAvailable = mlsEngineState.map { it?.groupsSupported == true }
@@ -217,6 +223,8 @@ class AppContainer(
     val mlsPipeline by lazy {
         MlsPipeline(
             { mlsEngine }, db.mlsPending(),
+            coreExpected = { mlsCore.coreExpected() },
+            deviceId = { runCatching { sessionStore.deviceId() }.getOrNull() },
             onMembership = { a ->
                 mlsMembershipSeen.tryEmit(a.event)
                 // §17.8: a device that left my device set loses its history approval.
@@ -517,57 +525,66 @@ class AppContainer(
      * Load the MLS core if this build has it and the server offers attestation keys (E2EE on), then
      * register with the MLS key (→ attestation → key packages). Returns null when MLS doesn't apply
      * (no core, E2EE off: register for push instead), else whether the device is registered.
+     *
+     * P0 background delivery: a failed registration keeps the core open (decrypting the inbox doesn't
+     * need it; the registration retries on its own). Without the network, a core opened before on this
+     * install opens with the last attestation keys served.
      */
     suspend fun activateMls(): Boolean? {
-        if (mlsEngine != null) return true
+        if (mlsEngine != null && mlsCore.registered) return true
         if (!BuildConfig.CRYPTO_AVAILABLE) return null
         val session = sessionStore.current()?.takeIf { it.user.phoneVerified } ?: return false
-        val factory = MlsEngineFactory.get() ?: return null
-        val keys = api.attestationKeys()
-        if (keys !is ApiResult.Ok) return if (keys is ApiResult.Error && keys.httpStatus in 400..499) null else false
-        val served = keys.value.keys
-        if (served.isEmpty()) return null // mls_unavailable / no key: E2EE is off
-        val pinned = BuildConfig.MLS_PINNED_KEYS.split(';').map { it.trim() }.filter { it.isNotEmpty() }
-        val trusted = pinned + served.map { it.toString() }
-        val engine = runCatching {
-            factory.open(
-                SupportKvSql(db.openHelper.writableDatabase), KvSealer(mlsDbKey.get()),
-                { block -> if (db.inTransaction()) block() else db.runInTransaction(java.util.concurrent.Callable { block() }) },
-                session.user.id, sessionStore.deviceId(), trusted,
+        if (mlsEngine == null) {
+            val factory = MlsEngineFactory.get() ?: return null
+            val served: List<String>? = when (val keys = api.attestationKeys()) {
+                // mls_unavailable / no key: E2EE is off
+                is ApiResult.Ok -> keys.value.keys.map { it.toString() }.also { if (it.isEmpty()) return null }
+                is ApiResult.Error -> if (keys.httpStatus in 400..499) return null else null
+                is ApiResult.NetworkError -> null
+            }
+            val trustedServed = served ?: mlsCore.offlineKeys() ?: return false
+            if (served == null) Log.i("RisiMe", "mls: attestation keys not fetched: opening the core with the last served keys")
+            val pinned = BuildConfig.MLS_PINNED_KEYS.split(';').map { it.trim() }.filter { it.isNotEmpty() }
+            val trusted = pinned + trustedServed
+            val engine = runCatching {
+                factory.open(
+                    SupportKvSql(db.openHelper.writableDatabase), KvSealer(mlsDbKey.get()),
+                    { block -> if (db.inTransaction()) block() else db.runInTransaction(java.util.concurrent.Callable { block() }) },
+                    session.user.id, sessionStore.deviceId(), trusted,
+                )
+            }.getOrElse {
+                Log.w("RisiMe", "MLS core unavailable: ${it.javaClass.simpleName}: ${it.message}")
+                return null
+            }
+            mlsCore.opened(
+                lk.codegen.risime.data.mls.ObservedMlsEngine(engine) { conv ->
+                    mlsChanged.tryEmit(Unit)
+                    // §20.6 K3: a merged commit rekeys a running group call at once.
+                    runCatching { calls.onGroupChanged(conv) }
+                },
+                served,
             )
-        }.getOrElse {
-            Log.w("RisiMe", "MLS core unavailable: ${it.javaClass.simpleName}: ${it.message}")
-            return null
-        }
-        mlsEngine = lk.codegen.risime.data.mls.ObservedMlsEngine(engine) { conv ->
+            Log.i("RisiMe", "mls: core open")
             mlsChanged.tryEmit(Unit)
-            // §20.6 K3: a merged commit rekeys a running group call at once.
-            runCatching { calls.onGroupChanged(conv) }
-        }
-        mlsChanged.tryEmit(Unit)
-        // Recovery: a commit staged by an earlier run that never reached the server blocks every
-        // later commit (and sends) in that chat; nothing of ours is in flight yet.
-        scope.launch(Dispatchers.IO) {
-            runCatching {
-                val dropped = commitGate.sweep(engine, photoConversations())
-                if (dropped.isNotEmpty()) Log.w("RisiMe", "mls: dropped ${dropped.size} stale staged commit(s) at start-up")
-            }.onFailure { Log.w("RisiMe", "mls: start-up staged-commit check failed: ${it.javaClass.simpleName}") }
-        }
-        return when (val r = deviceRegistrar.register(runCatching { push.currentToken() }.getOrNull())) {
-            is Registration.Mls -> {
-                Log.i("RisiMe", "MLS device registered, ${r.keyPackages} key packages")
-                // Key packages are up with `groups`: now the server can re-add this device (§12.8).
-                scope.launch { runCatching { syncGroups() } }
-                true
+            // Recovery: a commit staged by an earlier run that never reached the server blocks every
+            // later commit (and sends) in that chat; nothing of ours is in flight yet.
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    val dropped = commitGate.sweep(engine, photoConversations())
+                    if (dropped.isNotEmpty()) Log.w("RisiMe", "mls: dropped ${dropped.size} stale staged commit(s) at start-up")
+                }.onFailure { Log.w("RisiMe", "mls: start-up staged-commit check failed: ${it.javaClass.simpleName}") }
             }
-            Registration.MlsUnavailable -> {
-                mlsEngine = null // the server turned it down: stay a v1.6 client (pushed-only registration done)
-                null
-            }
-            else -> {
-                Log.i("RisiMe", "MLS registration failed, will retry: $r")
-                mlsEngine = null
-                false
+        }
+        val r = deviceRegistrar.register(runCatching { push.currentToken() }.getOrNull())
+        return mlsCore.registration(r).also { ok ->
+            when (ok) {
+                true -> {
+                    Log.i("RisiMe", "MLS device registered, ${(r as Registration.Mls).keyPackages} key packages")
+                    // Key packages are up with `groups`: now the server can re-add this device (§12.8).
+                    scope.launch { runCatching { syncGroups() } }
+                }
+                null -> Log.i("RisiMe", "MLS turned down by the server: push-only registration")
+                false -> Log.i("RisiMe", "MLS registration failed, will retry (the core stays open): $r")
             }
         }
     }
@@ -581,12 +598,12 @@ class AppContainer(
     fun refreshCapabilities() {
         scope.launch {
             runCatching {
-                if (mlsEngine == null) return@runCatching
+                if (mlsEngine == null || !mlsCore.registered) return@runCatching
                 val r = deviceRegistrar.refreshCapabilities(runCatching { push.currentToken() }.getOrNull()) ?: return@runCatching
                 Log.i("RisiMe", "capabilities changed: re-registered ($r)")
             }
             // P0 background delivery: the server must hold this phone's current push token.
-            runCatching { if (mlsEngine != null && canAuthenticate()) push.ensureRegistered() }
+            runCatching { if ((mlsCore.registered || mlsCore.notApplicable) && canAuthenticate()) push.ensureRegistered() }
         }
     }
 
@@ -595,19 +612,19 @@ class AppContainer(
         true -> true
         false -> false
         null -> {
-            mlsNotApplicable = true
+            mlsCore.notApplicable = true
             push.register().settled()
         }
     }
 
-    /** activateMls() said MLS doesn't apply (no core, E2EE off): MLS events are handled as before. */
-    @Volatile private var mlsNotApplicable = false
-
-    /** [ChatEngine]'s gate: the MLS core is open, or MLS doesn't apply; waits up to 15 s for the start-up registration. */
+    /**
+     * [ChatEngine]'s gate: the MLS core is open, or MLS doesn't apply; waits up to 15 s for it to open
+     * (a push-started process). Opening no longer waits for the registration.
+     */
     private suspend fun mlsReadyForEvents(): Boolean {
-        if (!BuildConfig.CRYPTO_AVAILABLE) return true
+        if (!mlsCore.coreExpected()) return true
         return withTimeoutOrNull(15_000) {
-            while (mlsEngine == null && !mlsNotApplicable) delay(100)
+            while (mlsCore.coreExpected()) delay(100)
             true
         } ?: false
     }
@@ -628,9 +645,9 @@ class AppContainer(
             combine(sessionStore.session, auth.unlocked) { s, unlocked ->
                 s?.takeIf { it.user.phoneVerified && (it.kind == AuthKind.DEV || unlocked) }?.user?.id
             }.distinctUntilChanged().collectLatest { id ->
-                mlsNotApplicable = false
+                mlsCore.notApplicable = false
                 if (id == null) {
-                    mlsEngine = null
+                    mlsCore.closed()
                     return@collectLatest
                 }
                 // Device registration (MLS, else push) until it succeeds, with backoff; again after
@@ -956,7 +973,7 @@ class AppContainer(
             // android R6: a ringing, connecting or active call keeps the socket up regardless of foreground.
             combine(
                 combine(
-                    combine(foreground.withBackgroundGrace(), foreground, screenInteractive()) { g, f, on -> lk.codegen.risime.push.foregroundHold(g, f, on) },
+                    lk.codegen.risime.push.foregroundHoldFlow(foreground, screenInteractive()),
                     backgroundSync, calls.keepConnected, historyConnection,
                 ) { f, b, c, h ->
                     lk.codegen.risime.push.socketWanted(f, b > 0, c, h > 0)
@@ -1386,7 +1403,14 @@ class AppContainer(
      * Push wake-up (background): join + sync over the normal channel, refetch friends, then post
      * local notifications. A fingerprint-locked session can't sync: a content-free notice instead.
      */
-    suspend fun syncAndNotify(quick: Boolean = false) {
+    /** Inbox wake-ups vs direct syncs (the worker skips its socket session when a direct sync covered it). */
+    val pushWakes = lk.codegen.risime.push.PushWakeTracker()
+
+    /**
+     * [quick] = the direct sync of a push wake-up (bounded by the caller). [workerEnqueuedAt] = the
+     * worker's wake-up stamp: when a direct sync already went live since, the worker skips the socket.
+     */
+    suspend fun syncAndNotify(quick: Boolean = false, workerEnqueuedAt: Long = 0L) {
         val s = sessionStore.current() ?: return
         if (!s.user.phoneVerified) return
         if (s.kind == AuthKind.OIDC && !auth.unlocked.value) {
@@ -1395,6 +1419,14 @@ class AppContainer(
             return
         }
         val t0 = SystemClock.elapsedRealtime()
+        if (!quick && !foreground.value && pushWakes.workerCanSkipSocket(workerEnqueuedAt)) {
+            Log.i("RisiMe", "RisiMe push: sync start (worker, socket skipped: the direct sync covered this wake-up)")
+            runCatching { contacts.refresh() }
+            withTimeoutOrNull(20_000) { runCatching { groupOps.runDue() } }
+            notifyFromLocal()
+            Log.i("RisiMe", "RisiMe push: sync end after ${SystemClock.elapsedRealtime() - t0} ms")
+            return
+        }
         Log.i("RisiMe", "RisiMe push: sync start (${if (quick) "direct" else "worker"}, foreground=${foreground.value}, socket=${realtime.state.value})")
         if (!foreground.value) {
             backgroundSync.update { it + 1 }
@@ -1402,7 +1434,10 @@ class AppContainer(
                 // Live = the join's catch-up pages are applied: notify at once (P0: within FCM's ~10-s window).
                 val live = withTimeoutOrNull(if (quick) DIRECT_PUSH_SYNC_MS - 1_000 else 25_000) { realtime.state.first { it == ConnectionState.Live } } != null
                 Log.i("RisiMe", "RisiMe push: sync ${if (live) "live" else "not live"} after ${SystemClock.elapsedRealtime() - t0} ms")
-                if (live) notifyFromLocal()
+                if (live) {
+                    notifyFromLocal()
+                    if (quick) pushWakes.directLive()
+                }
                 if (!quick) {
                     delay(1_500) // let live events and the friends refetch land
                     contacts.refresh()
@@ -1513,7 +1548,7 @@ class AppContainer(
         mediaFiles.wipe()
         File(appContext.noBackupFilesDir, "avatars").deleteRecursively()
         photoPrefs.edit().clear().apply()
-        mlsEngine = null
+        mlsCore.wiped()
         mlsDbKey.destroy()
     }
 }

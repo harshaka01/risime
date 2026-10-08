@@ -43,6 +43,7 @@ import lk.codegen.risime.push.HealthFix
 import lk.codegen.risime.push.NotificationHealthProbe
 import lk.codegen.risime.push.oemBrand
 import lk.codegen.risime.push.oemGuidance
+import lk.codegen.risime.push.healthDismissals
 import lk.codegen.risime.push.shouldShowHealthAfterUpdate
 import lk.codegen.risime.ui.common.RisiTopBar
 import lk.codegen.risime.ui.common.SectionHeader
@@ -99,8 +100,8 @@ fun NotificationHealthScreen(c: AppContainer, onBack: () -> Unit) {
 private fun HealthRowView(r: HealthCheck, retrying: Boolean, onFix: () -> Unit) {
     Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
         Text(
-            if (r.ok) "✓" else "✗",
-            color = if (r.ok) Color(0xFF1B8A3E) else MaterialTheme.colorScheme.error,
+            when { r.ok -> "✓"; r.hint -> "!"; else -> "✗" },
+            color = when { r.ok -> Color(0xFF1B8A3E); r.hint -> Color(0xFFB26A00); else -> MaterialTheme.colorScheme.error },
             style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
             modifier = Modifier.width(28.dp),
         )
@@ -119,8 +120,10 @@ private fun HealthRowView(r: HealthCheck, retrying: Boolean, onFix: () -> Unit) 
 private fun healthPrefs(context: Context) = context.getSharedPreferences("risime_push", Context.MODE_PRIVATE)
 
 /**
- * Once after an update (per versionCode): when a row is ✗, open the health screen. Recorded either
- * way, so it never shows twice for the same version and never loops.
+ * After an update (checked once per versionCode): open the health screen only for a failure that
+ * stops messages or calls outright ([HealthCheck.autoOpen]) and that the user hasn't been shown yet
+ * (remembered per row and failing state, across versions). The push row counts only after this
+ * start's registration attempt has settled (its result, not a timer). Battery never opens it.
  */
 @Composable
 fun NotificationHealthAfterUpdate(c: AppContainer, open: () -> Unit) {
@@ -128,19 +131,32 @@ fun NotificationHealthAfterUpdate(c: AppContainer, open: () -> Unit) {
     LaunchedEffect(Unit) {
         val prefs = healthPrefs(context)
         val version = NotificationHealthProbe.versionCode
-        val last = prefs.getInt("health_shown_for", -1).takeIf { it >= 0 }
-        if (last == version) return@LaunchedEffect
+        if (prefs.getInt("health_checked_for", -1) == version) return@LaunchedEffect
         // A fresh install isn't an update (the notification prompt comes first); debug builds never
         // auto-open it, so the device-test scripts' screens stay predictable (Settings has it).
         val pi = runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
         if (lk.codegen.risime.BuildConfig.DEBUG || pi == null || pi.firstInstallTime == pi.lastUpdateTime) {
-            prefs.edit().putInt("health_shown_for", version).apply()
+            prefs.edit().putInt("health_checked_for", version).apply()
             return@LaunchedEffect
         }
-        kotlinx.coroutines.delay(3_000) // after the sign-in prompts settle
-        val checks = runCatching { NotificationHealthProbe(context.applicationContext, c).checks() }.getOrNull() ?: return@LaunchedEffect
-        val show = shouldShowHealthAfterUpdate(version, last, checks)
-        prefs.edit().putInt("health_shown_for", version).apply()
+        // Wait for the registration to settle (bounded): a push row that is merely "not yet" isn't a failure.
+        // Settled = registered, or no push token at all (a real failure); a transient refusal (network,
+        // a locked session) is retried, and still unsettled after a minute it never opens the screen.
+        val settled = kotlinx.coroutines.withTimeoutOrNull(60_000) {
+            while (true) {
+                if (runCatching { c.push.ensureRegistered() }.getOrDefault(false)) break
+                if (runCatching { c.push.currentToken() }.getOrNull() == null) break
+                kotlinx.coroutines.delay(5_000)
+            }
+            true
+        } ?: false
+        val checks = runCatching { NotificationHealthProbe(context.applicationContext, c).checks(pushSettled = settled) }.getOrNull() ?: return@LaunchedEffect
+        val dismissed = prefs.getStringSet("health_dismissed", emptySet()).orEmpty()
+        val show = shouldShowHealthAfterUpdate(checks, dismissed)
+        prefs.edit()
+            .putInt("health_checked_for", version)
+            .putStringSet("health_dismissed", healthDismissals(checks, dismissed))
+            .apply()
         if (show) open()
     }
 }

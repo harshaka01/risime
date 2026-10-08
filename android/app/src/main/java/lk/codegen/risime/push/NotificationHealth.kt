@@ -29,6 +29,8 @@ data class HealthInputs(
     val currentTokenHash: String?,
     /** Hash of the token the server last accepted for this device (null: never). */
     val registeredTokenHash: String?,
+    /** The registration attempt finished (ensureRegistered returned): only then is "not registered" a failure worth opening the screen for. */
+    val pushSettled: Boolean = true,
 )
 
 enum class HealthRow { NOTIFICATIONS, MESSAGES_CHANNEL, CALLS_CHANNEL, BATTERY, FULL_SCREEN, PUSH }
@@ -36,7 +38,25 @@ enum class HealthRow { NOTIFICATIONS, MESSAGES_CHANNEL, CALLS_CHANNEL, BATTERY, 
 /** The settings page (or action) each ✗ row links to. */
 enum class HealthFix { APP_NOTIFICATIONS, MESSAGES_CHANNEL, CALLS_CHANNEL, BATTERY, FULL_SCREEN, RETRY_PUSH }
 
-data class HealthCheck(val row: HealthRow, val ok: Boolean, val title: String, val detail: String, val fix: HealthFix?)
+/**
+ * [state]: which failure this is (e.g. "off" vs "silent"), so a dismissal is remembered per row and
+ * failing state. [autoOpen]: this failure opens the screen by itself after an update (it stops
+ * messages or calls outright); other ✗ rows are shown, never pushed at the user. [hint]: a choice the
+ * user may have made on purpose (a Silent channel): shown as "!", not ✗.
+ */
+data class HealthCheck(
+    val row: HealthRow,
+    val ok: Boolean,
+    val title: String,
+    val detail: String,
+    val fix: HealthFix?,
+    val state: String = if (ok) "ok" else "fail",
+    val autoOpen: Boolean = false,
+    val hint: Boolean = false,
+) {
+    /** The dismissal key: row + failing state. */
+    val key: String get() = "${row.name}:$state"
+}
 
 const val IMPORTANCE_NONE = 0
 const val IMPORTANCE_HIGH = 4
@@ -54,6 +74,7 @@ fun healthChecks(i: HealthInputs): List<HealthCheck> {
             HealthRow.NOTIFICATIONS, notif, "Notifications allowed",
             if (notif) "RisiMe may show notifications." else "Notifications are off for RisiMe: no messages or calls will show.",
             HealthFix.APP_NOTIFICATIONS.takeIf { !notif },
+            state = if (notif) "ok" else "off", autoOpen = !notif,
         ),
         HealthCheck(
             HealthRow.MESSAGES_CHANNEL, msgOk, "Message notifications",
@@ -64,6 +85,8 @@ fun healthChecks(i: HealthInputs): List<HealthCheck> {
                 else -> "The Messages category won't pop on screen. Set it to \"Alert\" / high."
             },
             (if (!notif) HealthFix.APP_NOTIFICATIONS else HealthFix.MESSAGES_CHANNEL).takeIf { !msgOk },
+            state = channelState(notif, msg), autoOpen = notif && msg?.importance == IMPORTANCE_NONE,
+            hint = notif && msg != null && msg.importance in (IMPORTANCE_NONE + 1) until IMPORTANCE_HIGH,
         ),
         HealthCheck(
             HealthRow.CALLS_CHANNEL, callsOk, "Call notifications",
@@ -74,6 +97,8 @@ fun healthChecks(i: HealthInputs): List<HealthCheck> {
                 else -> "The Calls category won't ring on screen. Set it to \"Alert\" / high."
             },
             (if (!notif) HealthFix.APP_NOTIFICATIONS else HealthFix.CALLS_CHANNEL).takeIf { !callsOk },
+            state = channelState(notif, i.callsChannel), autoOpen = notif && i.callsChannel?.importance == IMPORTANCE_NONE,
+            hint = notif && i.callsChannel != null && i.callsChannel.importance in (IMPORTANCE_NONE + 1) until IMPORTANCE_HIGH,
         ),
         HealthCheck(
             HealthRow.BATTERY, battery, "Battery: unrestricted",
@@ -83,12 +108,15 @@ fun healthChecks(i: HealthInputs): List<HealthCheck> {
                 else -> "RisiMe may run in the background."
             },
             HealthFix.BATTERY.takeIf { !battery },
+            // Shown, never opens the screen by itself (most phones are fine optimised; FCM high priority wakes them).
+            state = when { i.backgroundRestricted -> "restricted"; !i.ignoringBatteryOptimizations -> "optimised"; else -> "ok" },
         ),
         HealthCheck(
             HealthRow.FULL_SCREEN, i.canUseFullScreenIntent, "Full-screen calls",
             if (i.canUseFullScreenIntent) "Incoming calls show full screen on a locked phone."
             else "Incoming calls can't show full screen on a locked phone.",
             HealthFix.FULL_SCREEN.takeIf { !i.canUseFullScreenIntent },
+            state = if (i.canUseFullScreenIntent) "ok" else "denied", autoOpen = !i.canUseFullScreenIntent,
         ),
         HealthCheck(
             HealthRow.PUSH, pushOk, "Push registered",
@@ -100,13 +128,42 @@ fun healthChecks(i: HealthInputs): List<HealthCheck> {
                 else -> "The server can wake this phone."
             },
             HealthFix.RETRY_PUSH.takeIf { !pushOk && i.pushConfigured },
+            state = when {
+                pushOk -> "ok"
+                !i.pushConfigured -> "unconfigured"
+                i.currentTokenHash == null -> "no_token"
+                else -> "unregistered"
+            },
+            // Only once the registration has settled, and only when this build can push at all.
+            autoOpen = !pushOk && i.pushConfigured && i.pushSettled,
         ),
     )
 }
 
-/** After an update: show the health screen once for this version, and only when something is wrong. */
-fun shouldShowHealthAfterUpdate(versionCode: Int, lastShownFor: Int?, checks: List<HealthCheck>): Boolean =
-    lastShownFor != versionCode && checks.any { !it.ok }
+private fun channelState(notif: Boolean, c: ChannelState?): String = when {
+    !notif -> "notifications_off"
+    c == null || c.importance >= IMPORTANCE_HIGH -> "ok"
+    c.importance == IMPORTANCE_NONE -> "off"
+    else -> "silent"
+}
+
+/**
+ * After an update: open the health screen when a failure that stops messages or calls outright
+ * ([HealthCheck.autoOpen]) is there that the user hasn't already been shown ([dismissed] keys, per row
+ * and failing state, across versions). Battery and a Silent channel never open it.
+ */
+fun shouldShowHealthAfterUpdate(checks: List<HealthCheck>, dismissed: Set<String>): Boolean =
+    checks.any { !it.ok && it.autoOpen && it.key !in dismissed }
+
+/**
+ * The dismissal set after a check (and the screen opened if [shouldShowHealthAfterUpdate] said so):
+ * every auto-open failure is remembered (the user has seen it), rows that are fine again are
+ * forgotten (a later failure of that row shows again).
+ */
+fun healthDismissals(checks: List<HealthCheck>, dismissed: Set<String>): Set<String> {
+    val okRows = checks.filter { it.ok }.map { "${it.row.name}:" }
+    return (dismissed.filter { k -> okRows.none { k.startsWith(it) } } + checks.filter { !it.ok && it.autoOpen }.map { it.key }).toSet()
+}
 
 /** Short, stable hash of a push token (the token itself is never stored twice or logged). */
 fun tokenHash(token: String?): String? = token?.takeIf { it.isNotBlank() }?.let {

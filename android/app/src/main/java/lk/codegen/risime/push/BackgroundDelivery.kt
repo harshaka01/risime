@@ -3,6 +3,7 @@ package lk.codegen.risime.push
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
@@ -61,6 +62,63 @@ fun Flow<Boolean>.withBackgroundGrace(graceMs: Long = BACKGROUND_SOCKET_GRACE_MS
         },
     )
 }.distinctUntilChanged()
+
+/**
+ * The foreground hold as one flow: in the foreground, or in the [graceMs] after leaving it while the
+ * screen stays on. A screen-off inside the grace ends it for good (the socket closes at once): a
+ * screen-on afterwards (Home → screen off → on within the grace) doesn't reopen it until the app is
+ * in the foreground again (no close/reopen churn, no second session the server sees).
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+fun foregroundHoldFlow(
+    foreground: Flow<Boolean>,
+    screenOn: Flow<Boolean>,
+    graceMs: Long = BACKGROUND_SOCKET_GRACE_MS,
+    now: () -> Long = { System.nanoTime() / 1_000_000 },
+): Flow<Boolean> = flow {
+    var graceEnd = Long.MIN_VALUE // no grace open (a process started in the background holds nothing)
+    var wasForeground = false
+    emitAll(
+        combine(foreground, screenOn) { f, on -> f to on }.transformLatest { (fg, on) ->
+            when {
+                fg -> { wasForeground = true; graceEnd = Long.MIN_VALUE; emit(true) }
+                !on -> { graceEnd = Long.MIN_VALUE; wasForeground = false; emit(false) }
+                wasForeground || graceEnd != Long.MIN_VALUE -> {
+                    // Just left the foreground: the grace starts now, once (a repeated value keeps its end).
+                    if (graceEnd == Long.MIN_VALUE) graceEnd = now() + graceMs
+                    wasForeground = false
+                    val left = graceEnd - now()
+                    if (left > 0) { emit(true); delay(left) }
+                    graceEnd = Long.MIN_VALUE
+                    emit(false)
+                }
+                else -> emit(false)
+            }
+        },
+    )
+}.distinctUntilChanged()
+
+/**
+ * Inbox wake-ups vs the direct sync (P0 background delivery): the expedited worker is enqueued first
+ * (so a wake-up is never lost), then the direct sync runs. A worker that starts after a direct sync
+ * went live (a full catch-up) since its enqueue skips its own socket session (no second session for
+ * the same wake-up); its REST follow-ups (friends, owed group ops) still run.
+ */
+class PushWakeTracker(private val clock: () -> Long = System::currentTimeMillis) {
+    @Volatile private var lastDirectLive = Long.MIN_VALUE
+
+    /** The time a wake-up's worker is enqueued (stored in its input data). */
+    fun stamp(): Long = clock()
+
+    /** A direct sync's join reached Live (its catch-up applied). */
+    fun directLive() {
+        val t = clock()
+        synchronized(this) { if (t > lastDirectLive) lastDirectLive = t }
+    }
+
+    /** The worker enqueued at [enqueuedAt] may skip the socket. */
+    fun workerCanSkipSocket(enqueuedAt: Long): Boolean = enqueuedAt > 0 && lastDirectLive >= enqueuedAt
+}
 
 /**
  * A message (or reaction) arrived over the socket: post notifications when the app isn't in the

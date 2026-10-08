@@ -8,6 +8,12 @@ import lk.codegen.risime.net.MlsMembershipEvent
 import lk.codegen.risime.net.ProtocolJson
 import java.util.Base64
 
+/**
+ * An MLS event arrived while the MLS core isn't open (but MLS applies): nothing of it is applied, it
+ * isn't marked seen and the cursor doesn't move; the sync stops there and the rejoin redelivers it.
+ */
+class MlsNotReady : IllegalStateException("MLS core not open yet: event not applied")
+
 /** What one inbox event meant for MLS (contract §10.3, decision 033). */
 sealed interface MlsResult {
     /** A decrypted e2ee message: insert it like a plaintext one (same transaction). */
@@ -143,6 +149,15 @@ class MlsPipeline(
     private val onParkedAhead: (conversationId: String) -> Unit = {},
     /** v1.16 `mls_dm_op` naming this device: run it after the transaction (MembershipExecutor.executeOp). */
     private val onDmOp: (lk.codegen.risime.net.MlsDmOpEvent) -> Unit = {},
+    /**
+     * P0 background delivery (rule 9): true while MLS applies to this app (crypto in the build, E2EE on,
+     * the core opened before on this install) but [engine] isn't open yet (a push-started process, a
+     * slow start-up). Then an MLS event is refused with [MlsNotReady] — never `Ignored` (that marked it
+     * seen and moved the cursor past it: the message or call invite was lost on this phone).
+     */
+    private val coreExpected: () -> Boolean = { false },
+    /** This device's id (known without the core): events that name other devices are still ignored while it is closed. */
+    private val deviceId: suspend () -> String? = { null },
 ) {
     private val b64 = Base64.getDecoder()
 
@@ -152,6 +167,22 @@ class MlsPipeline(
         val g = engine()?.group(conv)
         if (g != null && g.generation == generation && epoch > g.epoch) onParkedAhead(conv)
         return MlsResult.Pending
+    }
+
+    /**
+     * No open core. MLS doesn't apply (no core in the build, E2EE off, never opened here): behave like a
+     * v1.6 app ([MlsResult.Ignored]). Otherwise only what provably isn't for this device is ignored
+     * (a Welcome to other devices, our own echo); everything else is refused untouched ([MlsNotReady]).
+     */
+    private suspend fun withoutCore(e: Event): MlsResult {
+        if (!coreExpected()) return MlsResult.Ignored
+        val me = deviceId()
+        if (me != null) {
+            runCatching { e.mlsWelcome() }.getOrNull()?.let { w -> if (w.toDevices.none { it.equals(me, true) }) return MlsResult.Ignored }
+            runCatching { e.messageData() }.getOrNull()?.takeIf { it.encrypted }?.let { m -> if (m.fromDevice.equals(me, true)) return MlsResult.Ignored }
+        }
+        log("core not open yet: ${e.kind} ${e.eventId} refused (kept for the rejoin)")
+        throw MlsNotReady()
     }
 
     /** The time of a version-1 (TimeUUID) event id; null for anything else. */
@@ -181,7 +212,7 @@ class MlsPipeline(
     }
 
     private suspend fun applyInner(e: Event, historyBefore: java.time.Instant?, joined: GroupRef?): MlsResult {
-        val mls = engine() ?: return MlsResult.Ignored // no MLS core: behave like a v1.6 app
+        val mls = engine() ?: return withoutCore(e)
         e.mlsWelcome()?.let { w ->
             if (w.toDevices.none { it.equals(mls.deviceId, true) }) return MlsResult.Ignored
             val current = mls.group(w.conversationId)

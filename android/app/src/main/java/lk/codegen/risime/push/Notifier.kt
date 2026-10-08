@@ -23,15 +23,29 @@ class Notifier(private val context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
         val m = context.getSystemService(NotificationManager::class.java)
         // P0 background delivery: "messages_v2" fixes the lock-screen visibility (private: the sender
-        // only on a secure lock screen), which can't be changed on the old channel. A user who had
-        // turned Messages off keeps it off.
+        // only on a secure lock screen), which can't be changed on the old channel. Everything else the
+        // user chose on the old channel (importance, sound, vibration, lights, Do Not Disturb) is
+        // carried over; a fresh install gets high importance.
         if (m.getNotificationChannel(CH_MESSAGES) == null) {
             val old = m.getNotificationChannel(CH_MESSAGES_OLD)
+            val spec = messagesChannelSpec(
+                old?.let {
+                    ChannelSpec(
+                        it.importance, it.sound, it.audioAttributes, it.shouldVibrate(), it.vibrationPattern,
+                        it.shouldShowLights(), it.lightColor, it.canBypassDnd(),
+                    )
+                },
+            )
             m.createNotificationChannel(
-                NotificationChannel(CH_MESSAGES, "Messages", messagesImportance(old?.importance)).apply {
+                NotificationChannel(CH_MESSAGES, "Messages", spec.importance).apply {
                     description = "New messages and reactions"
                     lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
-                    enableVibration(true)
+                    if (spec.copied) setSound(spec.sound, spec.audioAttributes)
+                    enableVibration(spec.vibration)
+                    spec.vibrationPattern?.let { vibrationPattern = it }
+                    enableLights(spec.lights)
+                    if (spec.copied) lightColor = spec.lightColor
+                    setBypassDnd(spec.bypassDnd)
                 },
             )
             if (old != null) runCatching { m.deleteNotificationChannel(CH_MESSAGES_OLD) }
@@ -295,9 +309,14 @@ class Notifier(private val context: Context) {
         /** Until nightly.31: no explicit lock-screen visibility (deleted once v2 exists). */
         const val CH_MESSAGES_OLD = "messages"
 
-        /** The new channel is high importance unless the user had turned the old one off. */
+        /** The new channel keeps the old one's importance (the user's choice, off included); a fresh install gets high. */
         fun messagesImportance(oldImportance: Int?): Int =
-            if (oldImportance == NotificationManager.IMPORTANCE_NONE) NotificationManager.IMPORTANCE_NONE else NotificationManager.IMPORTANCE_HIGH
+            oldImportance?.takeIf { it != NotificationManager.IMPORTANCE_UNSPECIFIED } ?: NotificationManager.IMPORTANCE_HIGH
+
+        /** `messages_v2` from the old `messages` channel's settings ([old] null: a fresh install). Only the lock-screen visibility changes. */
+        fun <S, A> messagesChannelSpec(old: ChannelSpec<S, A>?): ChannelSpec<S, A> =
+            old?.copy(importance = messagesImportance(old.importance))
+                ?: ChannelSpec(NotificationManager.IMPORTANCE_HIGH, null, null, vibration = true, vibrationPattern = null, lights = false, lightColor = 0, bypassDnd = false, copied = false)
         const val CH_REQUESTS = "requests"
         const val CH_SYNC = "sync"
         const val GROUP_MESSAGES = "lk.codegen.risime.MESSAGES"
@@ -318,3 +337,19 @@ class Notifier(private val context: Context) {
         fun chatId(conversationId: String) = 1000 + (conversationId.hashCode() and 0x7fffffff) % 1_000_000
     }
 }
+
+/**
+ * A notification channel's user-visible settings ([S] the sound Uri, [A] its AudioAttributes: opaque
+ * here, so the carry-over is testable on the JVM). [copied]: taken from an existing channel.
+ */
+data class ChannelSpec<S, A>(
+    val importance: Int,
+    val sound: S?,
+    val audioAttributes: A?,
+    val vibration: Boolean,
+    val vibrationPattern: LongArray?,
+    val lights: Boolean,
+    val lightColor: Int,
+    val bypassDnd: Boolean,
+    val copied: Boolean = true,
+)

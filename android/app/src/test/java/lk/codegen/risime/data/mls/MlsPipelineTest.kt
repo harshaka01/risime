@@ -101,12 +101,90 @@ class MlsPipelineTest {
         mls.groups[conv] = GroupRef(conv, 1, 1)
         val m = msg(1, "sent while the phone slept")
         val failed = runCatching { e.onEvents(listOf(m)) }.exceptionOrNull()
-        assertTrue(failed is ChatEngine.MlsNotReady)
+        assertTrue(failed is MlsNotReady)
         assertNull("the cursor didn't move", sync.last)
         assertTrue(bodies().isEmpty())
         core = mls
         e.onEvents(listOf(m)) // the rejoin redelivers from the unchanged cursor
         assertEquals(listOf("sent while the phone slept"), bodies())
+        assertEquals(m.eventId, sync.last)
+    }
+
+    private fun plain(text: String) = ev("message", buildJsonObject {
+        put("message_id", "m${evN + 1}"); put("client_msg_id", "cm${evN + 1}"); put("conversation_id", conv)
+        put("from", peer); put("to", me); put("body", text); put("server_ts", "2026-10-06T08:00:00.000Z")
+    })
+
+    /** A ChatEngine whose pipeline sees [core] and refuses while [expected] (MLS applies, core closed). */
+    private fun TestScope.closedCoreEngine(core: () -> FakeMlsEngine?, expected: () -> Boolean, ready: suspend () -> Boolean = { true }) = ChatEngine(
+        messages = messages, sync = sync,
+        tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
+        scope = this, realtime = { realtime }, meId = { me },
+        clock = { 1_000L + seq }, newClientMsgId = { "c${++ids}" },
+        behaviour = BehaviourLog(FakeBehaviourDao(), { "salt" }, { 0L }),
+        mls = MlsPipeline({ core() }, pending, { ++seq }, { memberships += it }, { 7_000 }, coreExpected = expected, deviceId = { myDev }),
+        mlsEngine = { core() },
+        mlsReady = ready,
+    )
+
+    /**
+     * Review finding (HIGH): the batch gate passed, then the core closed (a failed registration nulled
+     * it): the pipeline itself said Ignored, the event was marked seen and the cursor moved (lost).
+     * Now the pipeline refuses: not seen, cursor unchanged, applied on the rejoin.
+     */
+    @Test fun thePipelineRefusesWhenTheCoreIsClosedAfterTheGate() = runTest {
+        var core: FakeMlsEngine? = null
+        val e = closedCoreEngine({ core }, { core == null }, ready = { true }) // the gate already said yes
+        mls.groups[conv] = GroupRef(conv, 1, 1)
+        val m = msg(1, "never lost")
+        assertTrue(runCatching { e.onEvents(listOf(m)) }.exceptionOrNull() is MlsNotReady)
+        assertNull(sync.last)
+        assertFalse(m.eventId in sync.seen)
+        core = mls
+        e.onEvents(listOf(m))
+        assertEquals(listOf("never lost"), bodies())
+    }
+
+    /** Commits, call signals and history envelopes went through a runCatching that swallowed the refusal. */
+    @Test fun aCommitOrCallSignalIsRefusedTooNotSwallowed() = runTest {
+        val e = closedCoreEngine({ null }, { true })
+        val c = commit(2)
+        assertTrue(runCatching { e.onEvents(listOf(c)) }.exceptionOrNull() is MlsNotReady)
+        assertNull(sync.last)
+        assertFalse(c.eventId in sync.seen)
+    }
+
+    /** Review finding: plaintext events ahead of the MLS event are applied (and notify); only the rest waits. */
+    @Test fun plaintextBeforeTheMlsEventIsAppliedTheRestWaits() = runTest {
+        var core: FakeMlsEngine? = null
+        val e = closedCoreEngine({ core }, { core == null }, ready = { core != null })
+        mls.groups[conv] = GroupRef(conv, 1, 1)
+        val p1 = plain("plain first")
+        val m = msg(1, "encrypted")
+        val p2 = plain("plain after")
+        assertTrue(runCatching { e.onEvents(listOf(p1, m, p2)) }.exceptionOrNull() is MlsNotReady)
+        assertEquals(listOf("plain first"), bodies())
+        assertEquals("the cursor stops before the MLS event", p1.eventId, sync.last)
+        core = mls
+        e.onEvents(listOf(m, p2)) // the rejoin from p1
+        assertEquals(listOf("plain first", "encrypted", "plain after"), bodies())
+        assertEquals(p2.eventId, sync.last)
+    }
+
+    /** Bounded: what provably isn't for this device doesn't stall the inbox while the core is closed. */
+    @Test fun eventsNotForThisDeviceDoNotStallWhileTheCoreIsClosed() = runTest {
+        val e = closedCoreEngine({ null }, { true })
+        val w = welcome(1, listOf("someone-else"))
+        val own = msg(1, "my own echo", fromDev = myDev, from = me)
+        e.onEvents(listOf(w, own))
+        assertEquals(own.eventId, sync.last)
+    }
+
+    /** MLS doesn't apply (E2EE off, never opened here): MLS events are ignored as before (a v1.6 app). */
+    @Test fun withoutMlsTheEventIsIgnoredAsBefore() = runTest {
+        val e = closedCoreEngine({ null }, { false })
+        val m = msg(1, "x")
+        e.onEvents(listOf(m))
         assertEquals(m.eventId, sync.last)
     }
 

@@ -69,12 +69,43 @@ class NotificationHealthTest {
         assertNull(tokenHash("")); assertNull(tokenHash(null))
     }
 
-    @Test fun shownOncePerVersionAndOnlyWhenSomethingIsWrong() {
-        val bad = healthChecks(good.copy(ignoringBatteryOptimizations = false))
-        assertTrue(shouldShowHealthAfterUpdate(2_000_032, 2_000_031, bad))
-        assertTrue(shouldShowHealthAfterUpdate(2_000_032, null, bad))
-        assertFalse("already shown for this version", shouldShowHealthAfterUpdate(2_000_032, 2_000_032, bad))
-        assertFalse("all ✓", shouldShowHealthAfterUpdate(2_000_032, 2_000_031, healthChecks(good)))
+    @Test fun autoOpensOnlyForFailuresThatStopMessagesOrCalls() {
+        val none = emptySet<String>()
+        assertFalse("all ✓", shouldShowHealthAfterUpdate(healthChecks(good), none))
+        assertFalse("battery never opens it", shouldShowHealthAfterUpdate(healthChecks(good.copy(ignoringBatteryOptimizations = false)), none))
+        assertFalse("battery Restricted is shown, not pushed", shouldShowHealthAfterUpdate(healthChecks(good.copy(backgroundRestricted = true)), none))
+        assertFalse("a Silent Messages channel is a hint", shouldShowHealthAfterUpdate(healthChecks(good.copy(messagesChannel = ChannelState(2))), none))
+        assertFalse("a Silent Calls channel is a hint", shouldShowHealthAfterUpdate(healthChecks(good.copy(callsChannel = ChannelState(3))), none))
+        assertTrue(shouldShowHealthAfterUpdate(healthChecks(good.copy(notificationsEnabled = false)), none))
+        assertTrue(shouldShowHealthAfterUpdate(healthChecks(good.copy(messagesChannel = ChannelState(0))), none))
+        assertTrue(shouldShowHealthAfterUpdate(healthChecks(good.copy(callsChannel = ChannelState(0))), none))
+        assertTrue(shouldShowHealthAfterUpdate(healthChecks(good.copy(canUseFullScreenIntent = false)), none))
+        assertTrue(shouldShowHealthAfterUpdate(healthChecks(good.copy(registeredTokenHash = null)), none))
+        assertFalse("push before the registration settled", shouldShowHealthAfterUpdate(healthChecks(good.copy(registeredTokenHash = null, pushSettled = false)), none))
+        assertFalse("no Firebase in this build", shouldShowHealthAfterUpdate(healthChecks(good.copy(pushConfigured = false)), none))
+    }
+
+    @Test fun silentChannelIsAHintNotAFailure() {
+        val r = row(good.copy(messagesChannel = ChannelState(2)), HealthRow.MESSAGES_CHANNEL)
+        assertFalse(r.ok); assertTrue(r.hint); assertFalse(r.autoOpen); assertEquals("MESSAGES_CHANNEL:silent", r.key)
+        val off = row(good.copy(messagesChannel = ChannelState(0)), HealthRow.MESSAGES_CHANNEL)
+        assertFalse(off.hint); assertTrue(off.autoOpen); assertEquals("MESSAGES_CHANNEL:off", off.key)
+    }
+
+    @Test fun dismissalsAreRememberedPerRowAndState() {
+        val callsOff = healthChecks(good.copy(callsChannel = ChannelState(0)))
+        assertTrue(shouldShowHealthAfterUpdate(callsOff, emptySet()))
+        val d1 = healthDismissals(callsOff, emptySet())
+        assertEquals(setOf("CALLS_CHANNEL:off"), d1)
+        assertFalse("the same failure after the next update: not again", shouldShowHealthAfterUpdate(callsOff, d1))
+        val alsoFullScreen = healthChecks(good.copy(callsChannel = ChannelState(0), canUseFullScreenIntent = false))
+        assertTrue("a new failure shows", shouldShowHealthAfterUpdate(alsoFullScreen, d1))
+        // Fixed, then broken again later: shown again.
+        val d2 = healthDismissals(healthChecks(good), d1)
+        assertTrue(d2.isEmpty())
+        assertTrue(shouldShowHealthAfterUpdate(callsOff, d2))
+        // A not-yet-settled push failure is never remembered (it may show once it has settled).
+        assertTrue(healthDismissals(healthChecks(good.copy(registeredTokenHash = null, pushSettled = false)), emptySet()).isEmpty())
     }
 
     @Test fun oemDetection() {

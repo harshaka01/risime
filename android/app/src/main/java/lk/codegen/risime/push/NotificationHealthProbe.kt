@@ -18,7 +18,7 @@ import lk.codegen.risime.calls.CallNotifications
 
 /** Reads the device state for [healthChecks] and opens the page that fixes each row. */
 class NotificationHealthProbe(private val context: Context, private val c: AppContainer) {
-    suspend fun inputs(): HealthInputs {
+    suspend fun inputs(pushSettled: Boolean = true): HealthInputs {
         c.notifier.ensureChannels()
         runCatching { c.calls.notifications.ensureChannels() }
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -38,10 +38,11 @@ class NotificationHealthProbe(private val context: Context, private val c: AppCo
             pushConfigured = c.push.available,
             currentTokenHash = tokenHash(token),
             registeredTokenHash = c.push.registeredTokenHash(),
+            pushSettled = pushSettled,
         )
     }
 
-    suspend fun checks(): List<HealthCheck> = healthChecks(inputs()).also { rows ->
+    suspend fun checks(pushSettled: Boolean = true): List<HealthCheck> = healthChecks(inputs(pushSettled)).also { rows ->
         Log.i("RisiMe", "RisiMe push: health " + rows.joinToString(" ") { "${it.row}=${if (it.ok) "ok" else "FAIL"}" })
     }
 

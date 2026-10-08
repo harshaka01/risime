@@ -13,7 +13,6 @@ import androidx.work.WorkerParameters
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import lk.codegen.risime.RisiMeApp
 
@@ -22,7 +21,8 @@ import lk.codegen.risime.RisiMeApp
  * payload is shown.
  *
  * P0 background delivery: a high-priority push gives the app a short window (~10 s, Doze temp
- * allowlist: network and starts allowed). The inbox sync runs **directly** here, inside that window,
+ * allowlist: network and starts allowed). The inbox sync runs **directly** (app scope, wake lock, ≤ 9 s;
+ * `onMessageReceived` returns at once so a following call push is never queued behind it),
  * and notifies as soon as the join's catch-up is applied; the expedited worker only finishes the
  * rest (friends, owed group ops). Before, the sync ran only in the worker, which a restricted
  * standby bucket or an exhausted expedited quota defers (and `KEEP` then dropped every later
@@ -38,13 +38,25 @@ class RisiMeMessagingService : FirebaseMessagingService() {
             return
         }
         if (!isInboxWakeUp(message.data)) return
-        // onMessageReceived runs on FCM's own background thread: blocking here keeps the service
-        // (and the process) alive for the sync.
-        val done = runBlocking {
-            withTimeoutOrNull(DIRECT_PUSH_SYNC_MS) { runCatching { c.syncAndNotify(quick = true) }; true } ?: false
+        // FCM delivers on one thread: never block it (a call push right behind this one must start its
+        // service inside its own high-priority window). The worker is enqueued first (the wake-up is
+        // never lost), then the direct sync runs on the app scope under a bounded partial wake lock.
+        val stamp = c.pushWakes.stamp()
+        runCatching { InboxSyncWorker.enqueue(applicationContext, stamp) }
+            .onFailure { Log.w("RisiMe", "RisiMe push: worker enqueue failed: ${it.javaClass.simpleName}") }
+        val wl = runCatching {
+            getSystemService(android.os.PowerManager::class.java)
+                ?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "RisiMe:push-sync")
+                ?.apply { setReferenceCounted(false); acquire(DIRECT_PUSH_SYNC_MS) }
+        }.getOrNull()
+        c.scope.launch {
+            try {
+                val done = withTimeoutOrNull(DIRECT_PUSH_SYNC_MS) { runCatching { c.syncAndNotify(quick = true) }; true } ?: false
+                if (!done) Log.i("RisiMe", "RisiMe push: direct sync didn't finish in ${DIRECT_PUSH_SYNC_MS} ms; the worker continues")
+            } finally {
+                runCatching { if (wl?.isHeld == true) wl.release() }
+            }
         }
-        if (!done) Log.i("RisiMe", "RisiMe push: direct sync didn't finish in ${DIRECT_PUSH_SYNC_MS} ms; the worker continues")
-        InboxSyncWorker.enqueue(applicationContext)
     }
 
     override fun onNewToken(token: String) {
@@ -57,7 +69,7 @@ class RisiMeMessagingService : FirebaseMessagingService() {
 class InboxSyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         val c = (applicationContext as RisiMeApp).container
-        c.syncAndNotify()
+        c.syncAndNotify(workerEnqueuedAt = inputData.getLong(KEY_STAMP, 0L))
         return Result.success()
     }
 
@@ -70,10 +82,13 @@ class InboxSyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
 
     companion object {
         private const val NAME = "inbox-sync"
+        private const val KEY_STAMP = "wake_stamp"
 
-        fun enqueue(context: Context) {
+        /** [stamp]: the wake-up's [PushWakeTracker.stamp] (0: none, the worker always syncs over the socket). */
+        fun enqueue(context: Context, stamp: Long = 0L) {
             val req = OneTimeWorkRequestBuilder<InboxSyncWorker>()
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setInputData(androidx.work.workDataOf(KEY_STAMP to stamp))
                 .build()
             val wm = WorkManager.getInstance(context)
             // Coalesce bursts: a sync already RUNNING covers the new wake-up. One that is only queued

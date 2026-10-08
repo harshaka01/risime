@@ -14,6 +14,7 @@ import lk.codegen.risime.data.db.SyncStateEntity
 import lk.codegen.risime.net.Event
 import lk.codegen.risime.net.MessageData
 import lk.codegen.risime.data.mls.MlsEngine
+import lk.codegen.risime.data.mls.MlsNotReady
 import lk.codegen.risime.data.mls.MlsPipeline
 import lk.codegen.risime.data.mls.MlsResult
 import lk.codegen.risime.data.groups.SystemLine
@@ -106,15 +107,14 @@ class ChatEngine(
     private val profilePhotos: lk.codegen.risime.data.profile.ProfilePhotoHooks? = null,
     /**
      * P0 background delivery: true once the MLS core is open (or MLS doesn't apply to this app or
-     * server); may wait a little. A process started by a push joins the inbox while the core is still
-     * opening: an MLS event applied then was "Ignored", marked seen and the cursor moved past it, so
-     * the message (or the call invite) was lost on this device. Now such a batch is refused before
-     * anything is applied ([MlsNotReady]) and the socket rejoins from the unchanged cursor.
+     * server); may wait a little (bounded). A process started by a push joins the inbox while the core
+     * is still opening: an MLS event applied then was "Ignored", marked seen and the cursor moved past
+     * it, so the message (or the call invite) was lost on this device. Now the batch is applied up to
+     * the first MLS event and stops there ([MlsNotReady]); the socket rejoins from that cursor. The
+     * pipeline refuses on its own too (the core can close between this check and the event).
      */
     private val mlsReady: suspend () -> Boolean = { true },
 ) : RealtimeListener, lk.codegen.risime.data.history.SendLanes {
-    /** A batch with MLS events arrived before the MLS core was open: nothing applied, the cursor is unchanged. */
-    class MlsNotReady : IllegalStateException("MLS core not open yet: batch not applied")
     /** §15.4–§15.6 applied inside each event's transaction. */
     private val applier = deletes?.let { lk.codegen.risime.data.deletes.DeleteApplier(it, messages, images, clock, log) }
 
@@ -166,12 +166,25 @@ class ChatEngine(
     private suspend fun onEventsImpl(events: List<Event>) {
         if (events.isEmpty()) return
         val me = meId() ?: return
-        if (mls != null && events.any { requiresMls(it) } && !mlsReady()) {
-            log("mls: core not open yet: ${events.size} event(s) left for the rejoin")
-            throw MlsNotReady()
-        }
         var newIncoming = false
-        for (e0 in events) {
+        try {
+            applyBatch(me, events) { newIncoming = it || newIncoming }
+        } catch (e: MlsNotReady) {
+            // Plaintext events before it are applied (and notify); the MLS event and everything after it
+            // wait for the rejoin from the unchanged cursor (rule 9: never marked seen, never skipped).
+            callQueue.clear() // anything queued by the refused (rolled-back) event
+            finishBatch(newIncoming)
+            throw e
+        }
+        finishBatch(newIncoming)
+    }
+
+    private suspend fun applyBatch(me: String, events: List<Event>, onApplied: (Boolean) -> Unit) {
+        for ((index, e0) in events.withIndex()) {
+            if (mls != null && requiresMls(e0) && !mlsReady()) {
+                log("mls: core not open yet: ${events.size - index} event(s) left for the rejoin")
+                throw MlsNotReady()
+            }
             // §12.6: a referenced blob is fetched first, outside the ordered transaction. A transient
             // failure stops here without moving the cursor (the next sync redelivers from it).
             val e = when (val r = resolveBlobRefs(e0, me)) {
@@ -197,7 +210,7 @@ class ChatEngine(
                         false
                     }
                     Event.KIND_MLS_COMMIT, Event.KIND_MLS_WELCOME, Event.KIND_MLS_MEMBERSHIP, Event.KIND_MLS_DM_OP ->
-                        runCatching { applyMls(me, e) }.getOrDefault(false)
+                        runCatching { applyMls(me, e) }.getOrElse { if (it is MlsNotReady) throw it else false }
                     Event.KIND_STATUS -> {
                         runCatching { e.statusData() }.getOrNull()?.let { applyStatus(it) }
                         false
@@ -223,7 +236,7 @@ class ChatEngine(
                     }
                     // §16.3: ordered with the DM's other events, through the MLS pipeline; never a message.
                     Event.KIND_CALL_SIGNAL -> {
-                        if (calls != null) runCatching { applyMls(me, e) }.onFailure { log("call_signal: ${it.message}") }
+                        if (calls != null) runCatching { applyMls(me, e) }.onFailure { if (it is MlsNotReady) throw it; log("call_signal: ${it.message}") }
                         false
                     }
                     Event.KIND_GROUP_RECEIPT -> {
@@ -232,7 +245,7 @@ class ChatEngine(
                     }
                     // §17.5/§17.6: the MLS history envelopes in event order; the plaintext status events directly.
                     Event.KIND_HISTORY_REQUEST, Event.KIND_HISTORY_SHARE -> {
-                        if (history != null) runCatching { applyMls(me, e) }.onFailure { log("history: ${it.message}") }
+                        if (history != null) runCatching { applyMls(me, e) }.onFailure { if (it is MlsNotReady) throw it; log("history: ${it.message}") }
                         false
                     }
                     Event.KIND_HISTORY_STATUS -> {
@@ -249,13 +262,17 @@ class ChatEngine(
                 sync.setState(SyncStateEntity(0, e.eventId))
                 incoming
             }
-            newIncoming = newIncoming || applied
+            onApplied(applied)
             dispatchCalls()
             if (historyTouched) {
                 historyTouched = false
                 history?.afterCommit()
             }
         }
+    }
+
+    /** After the applied part of a batch (all of it, or up to an event left for the rejoin). */
+    private suspend fun finishBatch(newIncoming: Boolean) {
         calls?.let { runCatching { it.onPageEnd() }.onFailure { e -> log("calls page end: ${e.message}") } }
         if (newIncoming) flushAcks()
         afterPhotos()
