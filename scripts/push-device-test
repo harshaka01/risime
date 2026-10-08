@@ -31,6 +31,14 @@
 #     in front of the server for B only): 3 messages still arrive, none lost (sent texts vs B's Room rows).
 #     The proxy (127.0.0.1:$PUSHTEST_PROXY_PORT, default PORT+100) passes everything else through,
 #     websockets included; `adb reverse` points B's server port at it.
+#  9. (decision 064, PUSHTEST_B_AUTH=oidc, the default) B signs in with a RisiCloud-style OIDC session:
+#     a stand-in issuer (127.0.0.1:$PUSHTEST_OIDC_PORT, default PORT+200: discovery, JWKS, a token
+#     endpoint for refresh grants) and the server with OIDC_ENABLED=true. Redroid has no browser, so the
+#     debug build's shell-only broadcast hands the app the issuer's token set; from there the app's real
+#     path runs (vault, GET /me, session). Then: force-stop + restart → chats, no lock, no sign-in; every
+#     push scenario runs on that session, and the Recents-removed (process dead) push wake-up must
+#     refresh the token with no UI. B must never log `RisiMe auth: sign-out trigger=`.
+#     PUSHTEST_B_AUTH=dev signs B in with the dev OTP as before.
 # Prints "PUSHTEST PASS|FAIL <step>" and "PUSHTEST OK" at the end; logs in ~/risime-logs/pushtest$SUF/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -38,6 +46,8 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
 CLS=lk.codegen.risime
 SUF="${PUSHTEST_INSTANCE:-}"; PORT="${PUSHTEST_PORT:-4460}"
+B_AUTH="${PUSHTEST_B_AUTH:-oidc}"; OIDC_PORT="${PUSHTEST_OIDC_PORT:-$((PORT + 200))}"
+ISS="http://127.0.0.1:$OIDC_PORT/realms/pushtest"; ISSUER_PID=""
 LIMIT_MS="${PUSHTEST_LIMIT_MS:-10000}"
 APK=""; KEEP=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
@@ -70,6 +80,8 @@ diag() {
 cleanup() {
   [ -n "$DELIVER_PID" ] && kill "$DELIVER_PID" 2>/dev/null || true
   [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true
+  [ -n "$ISSUER_PID" ] && kill "$ISSUER_PID" 2>/dev/null || true
+  cp "$WORK/issuer.log" "$LOGS/issuer.log" 2>/dev/null || true
   cp "$WORK/proxy.log" "$LOGS/proxy.log" 2>/dev/null || true
   cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
   cp "$PUSHES" "$LOGS/pushes.log" 2>/dev/null || true
@@ -92,9 +104,44 @@ ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT busy"; exit 1; }
 cat > "$WORK/fixtures.exs" <<'EXS'
 alias RisiMe.{Accounts, Repo}
 alias RisiMe.Accounts.User
-[mode | _] = System.argv()
+[mode | args] = System.argv()
 a_phone = "+94770000981"; b_phone = "+94770000982"
 case mode do
+  "oidc_keys" ->
+    # Decision 064: a stand-in RisiCloud issuer (key, JWKS, discovery) for B's OIDC session.
+    [dir, iss] = args
+    jwk = JOSE.JWK.generate_key({:rsa, 2048}) |> JOSE.JWK.merge(%{"kid" => "pushtest-1", "use" => "sig", "alg" => "RS256"})
+    {_, pub} = jwk |> JOSE.JWK.to_public() |> JOSE.JWK.to_map()
+    {_, priv} = JOSE.JWK.to_map(jwk)
+    base = Path.join(dir, "www/realms/pushtest")
+    File.mkdir_p!(Path.join(base, "protocol/openid-connect"))
+    File.mkdir_p!(Path.join(base, ".well-known"))
+    File.write!(Path.join(base, "protocol/openid-connect/certs"), Jason.encode!(%{"keys" => [pub]}))
+    File.write!(Path.join(base, ".well-known/openid-configuration"), Jason.encode!(%{
+      "issuer" => iss,
+      "authorization_endpoint" => iss <> "/protocol/openid-connect/auth",
+      "token_endpoint" => iss <> "/protocol/openid-connect/token",
+      "jwks_uri" => iss <> "/protocol/openid-connect/certs",
+      "end_session_endpoint" => iss <> "/protocol/openid-connect/logout",
+      "response_types_supported" => ["code"], "subject_types_supported" => ["public"],
+      "id_token_signing_alg_values_supported" => ["RS256"], "grant_types_supported" => ["authorization_code", "refresh_token"]
+    }))
+    File.write!(Path.join(dir, "oidc-key.json"), Jason.encode!(priv))
+    IO.puts("pushtest: oidc keys ok")
+  "oidc_tokens" ->
+    # Keycloak-shaped: an access token (4 h) and an offline refresh token (typ Offline) for B's email.
+    [dir, iss] = args
+    jwk = dir |> Path.join("oidc-key.json") |> File.read!() |> Jason.decode!() |> JOSE.JWK.from_map()
+    now = System.system_time(:second)
+    sign = fn claims -> JOSE.JWT.sign(jwk, %{"alg" => "RS256", "kid" => "pushtest-1", "typ" => "JWT"}, claims) |> JOSE.JWS.compact() |> elem(1) end
+    access = sign.(%{"iss" => iss, "sub" => "sub-pushtest-b", "azp" => "risime", "aud" => "account", "typ" => "Bearer",
+                     "email" => "pushtest82@example.com", "email_verified" => true, "iat" => now, "exp" => now + 4 * 3600,
+                     "scope" => "openid email profile offline_access"})
+    refresh = sign.(%{"iss" => iss, "sub" => "sub-pushtest-b", "azp" => "risime", "typ" => "Offline", "iat" => now,
+                      "scope" => "openid offline_access", "jti" => "pt-#{now}"})
+    File.write!(Path.join(dir, "oidc-access.jwt"), access)
+    File.write!(Path.join(dir, "oidc-refresh.jwt"), refresh)
+    IO.puts("pushtest: oidc tokens ok")
   "setup" ->
     {:ok, _} = Accounts.allow(%{phone: a_phone, email: "pushtest81@example.com", display_name: "ZZ Push A", company: "CodeGen"})
     {:ok, _} = Accounts.allow(%{phone: b_phone, email: "pushtest82@example.com", display_name: "ZZ Push B", company: "CodeGen"})
@@ -147,8 +194,46 @@ echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB, E2EE on, push → reco
 (cd server && $M mix risime.attestation.gen "$WORK/attest.jwk" >/dev/null 2>&1) || true
 [ -f "$WORK/attest.jwk" ] || { echo "no attestation key"; exit 1; }
 (cd server && $M mix compile >/dev/null 2>&1) || { echo "server compile failed"; exit 1; }
+OIDC_ENV="OIDC_ENABLED=false"
+if [ "$B_AUTH" = oidc ]; then
+  # ---- the stand-in RisiCloud issuer (started before the server: it fetches the JWKS at boot)
+  ss -ltnH "sport = :$OIDC_PORT" | grep -q . && { echo "issuer port $OIDC_PORT busy"; exit 1; }
+  [ "$(fx oidc_keys "$WORK" "$ISS")" = "pushtest: oidc keys ok" ] || { echo "could not create the stand-in issuer keys"; exit 1; }
+  [ "$(fx oidc_tokens "$WORK" "$ISS")" = "pushtest: oidc tokens ok" ] || { echo "could not mint the stand-in tokens"; exit 1; }
+  cat > "$WORK/issuer.py" <<'PY'
+import http.server, json, os, sys, time, urllib.parse
+root, port, work = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+def note(s):
+    with open(os.path.join(work, "issuer.log"), "a") as f: f.write(f"{int(time.time()*1000)} {s}\n")
+class H(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *a, **k): super().__init__(*a, directory=root, **k)
+    def guess_type(self, path): return "application/json"
+    def log_message(self, *a): pass
+    def do_GET(self):
+        note(f"GET {self.path}"); super().do_GET()
+    def do_POST(self):
+        n = int(self.headers.get("content-length", "0") or 0)
+        form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+        want = open(os.path.join(work, "oidc-refresh.jwt")).read().strip()
+        if self.path.endswith("/protocol/openid-connect/token") and form.get("grant_type") == ["refresh_token"] and form.get("refresh_token") == [want]:
+            body = json.dumps({"access_token": open(os.path.join(work, "oidc-access.jwt")).read().strip(), "token_type": "Bearer",
+                               "expires_in": 3600, "refresh_token": want, "scope": "openid email profile offline_access"}).encode()
+            note("refresh ok"); code = 200
+        else:
+            body = json.dumps({"error": "invalid_grant"}).encode(); note(f"refresh refused {self.path} {sorted(form)}"); code = 400
+        self.send_response(code); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
+http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+PY
+  : > "$WORK/issuer.log"
+  python3 -I "$WORK/issuer.py" "$WORK/www" "$OIDC_PORT" "$WORK" & ISSUER_PID=$!
+  for _ in $(seq 1 20); do curl -sf -o /dev/null "$ISS/.well-known/openid-configuration" && break; sleep 0.5; done
+  curl -sf -o /dev/null "$ISS/protocol/openid-connect/certs" || { echo "the stand-in issuer didn't start"; exit 1; }
+  OIDC_ENV="OIDC_ENABLED=true OIDC_ISSUER=$ISS OIDC_JWKS_URL=$ISS/protocol/openid-connect/certs"
+  echo "==> stand-in RisiCloud issuer on $ISS (B signs in with an OIDC session, decision 064)"
+fi
+refreshes() { grep -c "refresh ok" "$WORK/issuer.log" 2>/dev/null || true; }
 tmux new -d -s "risime-pushtest$SUF" "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
-  PORT=$PORT PHX_SERVER=true DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
+  PORT=$PORT PHX_SERVER=true DEV_LOCAL_AUTH=true $OIDC_ENV OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
   PUSHTEST_FILE='$PUSHES' ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix run --no-halt -r '$WORK/hook.exs' > '$WORK/server.log' 2>&1"
 for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
 curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't start"; tail -20 "$WORK/server.log"; exit 1; }
@@ -223,6 +308,7 @@ for DEV in A B; do
   A shell "run-as $PKG mkdir -p files && run-as $PKG sh -c 'echo pushtest-$DEV > files/debug_push_token'" \
     || { echo "could not write the debug push token on $DEV"; exit 1; }
   if [ "$DEV" = B ]; then A reverse "tcp:$PORT" "tcp:$PROXY_PORT" >/dev/null; else A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null; fi
+  [ "$B_AUTH" = oidc ] && { A reverse "tcp:$OIDC_PORT" "tcp:$OIDC_PORT" >/dev/null || { echo "adb reverse for the issuer failed"; exit 1; }; }
   A logcat -G 16M >/dev/null 2>&1 || true
   A logcat -c || true
 done
@@ -285,7 +371,9 @@ sign_in() {  # $1 phone, $2 email
   clear_field; A shell input text "http://127.0.0.1:$PORT"; sleep 0.5; hide_keyboard
   if ! tap "Use this server"; then tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; fi
   sleep 2
-  wait_for "Phone number" 30 || return 1
+  # With OIDC on (decision 064 gate) the debug build hides the OTP form behind "Developer sign-in (OTP)".
+  for _ in $(seq 1 30); do has "Phone number" && break; has "Developer sign-in (OTP)" && tap "Developer sign-in (OTP)"; sleep 1; done
+  wait_for "Phone number" 5 || return 1
   type_into "Phone number" "$1"; type_into "Work email" "$2"; hide_keyboard; tap "Send code" || return 1
   wait_for "6-digit code" 30 || return 1
   local code=""; for _ in $(seq 1 20); do code="$(otp "$1")"; [ -n "$code" ] && break; sleep 1; done
@@ -294,6 +382,23 @@ sign_in() {  # $1 phone, $2 email
   wait_for "Add friend" 40 || return 1
   dismiss_prompts
 }
+# Decision 064: B's RisiCloud-style session. Redroid has no browser: the debug build's shell-only
+# broadcast hands over the stand-in issuer's tokens; the app then runs its real sign-in path.
+sign_in_oidc() {
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null
+  wait_for "Server:" 40 || return 1
+  tap "Server:*" || return 1; sleep 1
+  tap "Server URL" || tap "http://*" || tap "https://*" || return 1; sleep 0.5
+  clear_field; A shell input text "http://127.0.0.1:$PORT"; sleep 0.5; hide_keyboard
+  if ! tap "Use this server"; then tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; fi
+  sleep 2
+  wait_for "Sign in with RisiCloud" 30 || { echo "    [$DEV] the server offers no RisiCloud sign-in"; return 1; }
+  A shell "am broadcast -a lk.codegen.risime.debug.OIDC_SIGN_IN -p $PKG --es issuer '$ISS' --es client_id risime \
+    --es access_token '$(cat "$WORK/oidc-access.jwt")' --es refresh_token '$(cat "$WORK/oidc-refresh.jwt")' --es expires_in 3600" >/dev/null
+  wait_for "Add friend" 40 || { A logcat -d -s RisiMe:* | grep -a "RisiMe debug: oidc\|RisiMe auth" | tail -5 | sed 's/^/    /'; return 1; }
+  dismiss_prompts
+}
+signout_lines() { DEV=B; A logcat -d -s RisiMe:* 2>/dev/null | grep -a "RisiMe auth: sign-out trigger=" || true; }
 on_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui-$DEV.xml"; }
 open_chat() {
   A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1; dismiss_prompts
@@ -311,9 +416,27 @@ logcat_ok() {  # $1 label
 }
 
 for DEV in A B; do
-  if [ "$DEV" = A ]; then sign_in "+94770000981" "pushtest81@example.com" || fail "sign-in A"; else sign_in "+94770000982" "pushtest82@example.com" || fail "sign-in B"; fi
+  if [ "$DEV" = A ]; then sign_in "+94770000981" "pushtest81@example.com" || fail "sign-in A"
+  elif [ "$B_AUTH" = oidc ]; then sign_in_oidc || fail "OIDC sign-in B"
+  else sign_in "+94770000982" "pushtest82@example.com" || fail "sign-in B"; fi
 done
-pass "both signed in through the real login UI"
+if [ "$B_AUTH" = oidc ]; then
+  pass "A signed in through the login UI (dev OTP); B with a RisiCloud-style OIDC session"
+  DEV=B; A logcat -d -s RisiMe:* 2>/dev/null | grep -a "RisiMe auth: signed in, refresh token typ=Offline" >/dev/null \
+    || fail "B: no 'signed in, refresh token typ=Offline' line (sign-in diagnostics)"
+  # Process death, then a normal open: the session comes back from the vault with no UI.
+  r0="$(refreshes)"
+  A shell am force-stop "$PKG"; sleep 1
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 3
+  for _ in $(seq 1 30); do on_list && break; sleep 1; done
+  on_list || { has "Sign in with RisiCloud" && fail "B: signed out after a restart (OIDC session lost)"; fail "B: no chat list after a restart"; }
+  for t in "Unlock with fingerprint" "RisiMe is locked" "Confirm to finish updating" "Sign in with RisiCloud"; do has "$t" && fail "B: '$t' after a restart (decision 064: no lock by default)"; done
+  [ "$(refreshes)" -gt "$r0" ] || fail "B: the restarted process never refreshed its OIDC token"
+  [ -z "$(signout_lines)" ] || fail "B: signed out: $(signout_lines)"
+  pass "B: restart after process death → chat list, no lock screen, no sign-in; token refreshed from the vault ($(refreshes) refreshes so far)"
+else
+  pass "both signed in through the real login UI"
+fi
 [ "$(fx friends)" = "pushtest: friends ok" ] || fail "fixture: friends"
 for DEV in A B; do A shell am force-stop "$PKG"; done
 DEV=B; open_chat "ZZ Push A" || fail "B: chat with A not listed"
@@ -543,7 +666,12 @@ b_wake; b_sleep home
 scenario_call "scenario 2 (Home, screen off, deep idle)"
 b_wake; sleep 3
 b_sleep recents
+R3="$(refreshes)"
 scenario_message "scenario 3a (removed from Recents, screen off, deep idle)"
+if [ "$B_AUTH" = oidc ]; then
+  [ "$(refreshes)" -gt "$R3" ] || fail "scenario 3a: the push-started process (no UI) never refreshed B's OIDC token"
+  pass "scenario 3a: the push-started process restored B's OIDC session from the vault and refreshed it with no UI"
+fi
 b_wake; b_sleep recents
 scenario_call "scenario 3b (removed from Recents, screen off, deep idle)"
 b_wake; b_sleep home
@@ -561,5 +689,9 @@ grep -q "RisiMe push: notification posted" "$LOGS/B-push-lines.txt" || fail "B n
 pass "scenario 4: every push went through the server's offline decision, the FCM receiver and onMessageReceived"
 logcat_ok "after all scenarios"
 pass "no crash and no main-thread database work on either phone"
+if [ "$B_AUTH" = oidc ]; then
+  [ -z "$(signout_lines)" ] || fail "B was signed out during the run: $(signout_lines)"
+  pass "scenario 9: B's OIDC session survived every process death and push wake-up ($(refreshes) silent refreshes, no sign-out)"
+fi
 echo "    timings: $(tr '\n' ';' < "$LOGS/timings.txt")"
 echo "PUSHTEST OK"

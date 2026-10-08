@@ -807,12 +807,21 @@ dump
 for t in "Phone number" "Send code" "Sign in with RisiCloud" "RisiMe is locked"; do
   grep -qF "$t" "$WORK/ui.xml" && fail "the new app asks to sign in again ($t)"
 done
+# Decision 064: the fingerprint lock is optional and off by default: an update opens straight to the
+# chats (no lock screen, no migration prompt for a dev session).
+for t in "Unlock with fingerprint" "Confirm to finish updating"; do
+  grep -qF "$t" "$WORK/ui.xml" && fail "the new app opens to a lock after the update ($t; decision 064: off by default)"
+done
 # The post-update health screen can open up to ~60 s after start (it waits for the push registration
 # to settle): keep dismissing it while waiting for the chat list.
 ok_b=""
 for _ in $(seq 1 45); do dismiss_prompts; has "ZZ Upgrade B" && { ok_b=1; break; }; sleep 2; done
 [ -n "$ok_b" ] || fail "chat with B missing after the upgrade"
 sleep 5; dismiss_prompts
+for t in "Unlock with fingerprint" "Confirm to finish updating"; do
+  grep -qF "$t" "$WORK/ui.xml" && fail "the new app shows a lock after the update ($t; decision 064: off by default)"
+done
+echo "    no lock screen and no sign-in after the update (decision 064)"
 [ -n "$SERIAL_B" ] && { has "Upgrade group" || fail "group missing after the upgrade"; }
 open_chat "ZZ Upgrade B" || fail "cannot open the chat after the upgrade"
 AFTER="$(visible_msgs || true)"
