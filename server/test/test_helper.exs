@@ -3,7 +3,8 @@
 RisiMe.Messaging.Store.Cassandra.truncate!()
 
 # `:livekit` talks to the real local LiveKit (v1.19 §20.2): `mix test --only livekit`.
-ExUnit.start(exclude: [:livekit])
+# `:llm_live` calls the real self-hosted risi-l1 (decision 061): `mix test --only llm_live`.
+ExUnit.start(exclude: [:livekit, :llm_live])
 
 # Push.Test routes each push to the test that registered its token (see RisiMe.Fixtures.push_token/1).
 {:ok, _} = Registry.start_link(keys: :unique, name: RisiMe.Push.Test.registry())

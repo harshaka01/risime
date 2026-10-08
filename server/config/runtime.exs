@@ -165,6 +165,23 @@ if tz = System.get_env("RISI_DEFAULT_TZ"), do: config(:risime, :risi_default_tz,
 # (base64, 32 bytes: seals the risi_buffer bodies). Both live in .env only; never logged.
 if kek = System.get_env("RISI_MLS_KEK"), do: config(:risime, :risi_mls_kek, kek)
 if key = System.get_env("RISI_DATA_KEY"), do: config(:risime, :risi_data_key, key)
+# v1.24 S6 (decisions 061, 066): Risi's model router. RISI_LLM_URL must be loopback (anything
+# else is refused by RisiMe.Agent.LLM.Local); LLM_API_KEY (.env only, never logged) is the
+# vLLM bearer. RISI_FALLBACK=on (default off) lets a low-confidence answer go to the commercial
+# fallback, which is a stub until a provider with zero retention is agreed (Needs Harsha).
+# Tests keep their own stubbed settings.
+if config_env() != :test do
+  llm =
+    [url: System.get_env("RISI_LLM_URL", "http://127.0.0.1:8100/v1")] ++
+      if(key = System.get_env("LLM_API_KEY"), do: [api_key: key], else: []) ++
+      [fallback: on?.(System.get_env("RISI_FALLBACK", "off"))] ++
+      if(t = System.get_env("RISI_FALLBACK_THRESHOLD"),
+        do: [fallback_threshold: String.to_float(t)],
+        else: []
+      )
+
+  config :risime, :risi_llm, llm
+end
 
 # v1.21 §12.12.6: a superseded leaf unseen this long is removed by a cleanup op (default 24).
 if hours = System.get_env("STALE_LEAF_HOURS"),
