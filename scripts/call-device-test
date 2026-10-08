@@ -14,6 +14,10 @@
 #  4. A second call at once (no stuck state), answered, connected, hung up.
 #  5. A third call: the caller's process is killed mid-call (am force-stop); B ends by itself; the
 #     restarted app places the next call without "You're already in a call", and B rings.
+#  6. Calls 5, 7, 8 (background answer, Home + screen off, Back); call 6 relay-only with CALLTEST_TURN=1.
+#  7. Call 9, video (§19): CAMERA granted, "Video call", B's "Incoming video call" answered in the
+#     call screen, VP8 frames rising both ways, B's camera off/on and Home (A shows B's avatar), hang
+#     up → "Video call · m:ss" on both; call 10 voice right after; call 11 video relay-only (TURN=1).
 # Prints "CALLTEST PASS|FAIL <step>" lines and "CALLTEST OK" at the end. Never touches :4000.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -401,6 +405,110 @@ if [ "${CALLTEST_TURN:-0}" = 1 ]; then
   MEDIA_PAIR="relay/relay"
   call_once "call 6 (relay only, through the live TURN server)"; hang_up_a "call 6"
   for DEV in A B; do A shell run-as "$PKG" rm -f files/debug_relay_only; done
+  MEDIA_PAIR="(host|prflx)/(host|prflx)"
+fi
+
+# ---------------------------------------------------------------- video (§19, v1.18)
+# Call 9: a 1:1 video call. Redroid has no camera sensor, so debug builds feed a moving test pattern
+# (never in release builds). Frames are counted from the debug stats line (every 2 s)
+#   "call video video/VP8 in 640x480@14.0 decoded=305 out 640x480@15.0 sent=123456".
+# The receiver shows "<name>'s camera is off" (the avatar) on `camera: false` and after 3 s without
+# a frame (§19.5).
+vline() { A logcat -d 2>/dev/null | grep -E 'call video .*VP8 in .* decoded=' | tail -1 || true; }
+vdecoded() { vline | sed -nE 's/.* decoded=([0-9]+) .*/\1/p'; }
+vsent() { vline | sed -nE 's/.* out .* sent=([0-9]+).*/\1/p'; }
+# frames_rise <label> <A|B>: the decoded count on that phone grows over 5 s.
+frames_rise() {
+  local d1 d2; DEV=$2; d1="$(vdecoded)"; sleep 5; d2="$(vdecoded)"
+  [ "${d2:-0}" -gt "${d1:-0}" ] || fail "$1: no video frames decoded on $2 (decoded ${d1:-none}→${d2:-none}; $(vline | sed 's/.*call video //'))"
+  echo "    [$2] decoded ${d1:-0}→$d2 ($(vline | sed -E 's/.*call video ([^ ]+ in [^ ]+).*/\1/'))"
+}
+# frames_stop <label>: A decodes nothing new over 5 s (B's camera off), after 3 s to drain.
+frames_stop() {
+  local d1 d2; DEV=A; sleep 3; d1="$(vdecoded)"; sleep 5; d2="$(vdecoded)"
+  [ "${d2:-0}" = "${d1:-0}" ] || fail "$1: A still decodes B's video (decoded $d1→$d2)"
+  echo "    [A] decoded stays at ${d2:-0}"
+}
+peer_avatar() { grep -qF "camera is off" "$WORK/ui-$DEV.xml"; }   # after a dump (has/wait_for)
+video_call() {  # $1 label
+  logcat_ok "before $1"
+  for DEV in A B; do
+    A shell pm grant "$PKG" android.permission.CAMERA 2>/dev/null || true
+    A shell dumpsys package "$PKG" 2>/dev/null | grep -q "android.permission.CAMERA: granted=true" || fail "$1: CAMERA not granted on $DEV"
+    A logcat -c
+  done
+  DEV=A; local ok=""; for _ in $(seq 1 20); do tap "Video call" && { ok=1; break; }; sleep 2; done
+  if [ -z "$ok" ]; then
+    tap "Video call (unavailable)" && sleep 0.5 && dump && grep -o 'text="[^"]*"' "$WORK/ui-$DEV.xml" | grep -v 'text="m-\|text=""' | head -8 | sed 's/^/    A shows: /'
+    fail "$1: the Video call button never became enabled (video_ready)"
+  fi
+  sleep 1
+  has "already in a call" && fail "$1: A says \"You're already in a call\""
+  DEV=B; wait_ring 30 || fail "$1: B never rang"
+  # The in-app answer path (not the notification's Answer, which answers with the camera off):
+  # B is in the chat, so the green "Incoming call — tap to answer" bar opens the incoming screen.
+  tap "Incoming call — tap to answer" || fail "$1: B has no incoming-call bar"
+  wait_for "Incoming video call" 10 || fail "$1: B's call screen doesn't say \"Incoming video call\""
+  has "Answer without video" || fail "$1: B's incoming screen has no \"Answer without video\""
+  pass "$1: B rings and shows \"Incoming video call\" with \"Answer without video\""
+  tap "Answer" || fail "$1: no in-screen Answer"
+  local m=""; for _ in $(seq 1 30); do DEV=A; m="$(media_ok)"; [ -n "$m" ] && { DEV=B; [ -n "$(media_ok)" ] && break; }; m=""; sleep 1; done
+  [ -n "$m" ] || fail "$1: media never connected ($MEDIA_PAIR) with DTLS-SRTP on both"
+  local d; for _ in $(seq 1 15); do DEV=A; d="$(vdecoded)"; [ "${d:-0}" -gt 0 ] && { DEV=B; d="$(vdecoded)"; [ "${d:-0}" -gt 0 ] && break; }; sleep 1; done
+  frames_rise "$1" A; frames_rise "$1" B
+  DEV=A; has "End call" || fail "$1: A has no call screen"
+  peer_avatar && fail "$1: A shows B's avatar although B's video flows"
+  pass "$1: answered in the call screen with the camera on; VP8 frames decoded and rising on both phones (${m##*call stats: })"
+  if [ "${VIDEO_RATE:-0}" = 1 ]; then  # relay-only: the video bitrate each way through TURN
+    local s1 s2
+    for d in A B; do DEV=$d; s1="$(vsent)"; sleep 5; s2="$(vsent)"
+      local kbps=$(( (${s2:-0} - ${s1:-0}) * 8 / 5000 ))
+      [ "$kbps" -gt 100 ] || fail "$1: $d sends only $kbps kbit/s of video"
+      echo "    [$d] video out ~$kbps kbit/s"; done
+    pass "$1: video flows through the relay"
+  fi
+  # Camera off on B: A shows B's avatar and decodes nothing; on again: frames resume.
+  DEV=B; tap "Turn camera off" || fail "$1: B has no \"Turn camera off\""
+  DEV=A; wait_for "camera is off" 10 || fail "$1: A doesn't show B's avatar after B turned the camera off"
+  frames_stop "$1 (B's camera off)"
+  pass "$1: B turned the camera off: A shows B's avatar, no frames decoded"
+  DEV=B; wait_for "Turn camera on" 5 && tap "Turn camera on" || fail "$1: B has no \"Turn camera on\""
+  frames_rise "$1 (B's camera on again)" A
+  DEV=A; for _ in $(seq 1 10); do has "End call" && ! peer_avatar && break; sleep 1; done
+  peer_avatar && fail "$1: A still shows B's avatar after B turned the camera on"
+  pass "$1: B turned the camera on: frames resume on A, the avatar is gone"
+  # Home on B (§19.5, android A1): B's camera stops (no video sent), A falls back to the avatar; the
+  # call and audio go on. Back on the call screen, the camera restarts.
+  DEV=B; A shell input keyevent KEYCODE_HOME; sleep 4
+  local o1 o2 a1 a2; o1="$(vsent)"; a1="$(bytes_of sent)"; sleep 5; o2="$(vsent)"; a2="$(bytes_of sent)"
+  [ "${o2:-0}" = "${o1:-0}" ] || fail "$1: B still sends video after Home (video bytes $o1→$o2)"
+  [ "${a2:-0}" -gt "${a1:-0}" ] || fail "$1: B's audio stopped after Home (sent $a1→$a2)"
+  DEV=A; wait_for "camera is off" 10 || fail "$1: A doesn't show B's avatar after B went Home"
+  frames_stop "$1 (B at Home)"
+  pass "$1: B pressed Home: B's camera stopped (no video sent, audio goes on), A shows B's avatar"
+  DEV=B; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2
+  tap "Call in progress — tap to return" || fail "$1: B has no return-to-call bar"
+  wait_for "End call" 10 || fail "$1: B's call screen didn't reopen"
+  frames_rise "$1 (B back on the call screen)" A
+  pass "$1: B back on the call screen: its camera restarted, frames resume on A"
+  hang_up_a "$1"
+  for d in A B; do DEV=$d; wait_for "Video call · " 15 || fail "$1: $d has no \"Video call · m:ss\" line"
+    echo "    [$d] $(grep -oE 'Video call · [0-9:]+' "$WORK/ui-$DEV.xml" | tail -1)"; done
+  pass "$1: \"Video call · m:ss\" in the chat on both phones"
+}
+DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
+video_call "call 9 (video)"
+# Call 10: a voice call right after the video call still works (no camera or video state left).
+DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
+call_once "call 10 (voice after video)"; hang_up_a "call 10"
+if [ "${CALLTEST_TURN:-0}" = 1 ]; then
+  # Call 11: video relay-only through the live TURN server (~1–2 Mbit/s each way, §19.8).
+  for DEV in A B; do A shell run-as "$PKG" touch files/debug_relay_only || fail "debug relay switch"; done
+  DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
+  MEDIA_PAIR="relay/relay"
+  VIDEO_RATE=1 video_call "call 11 (video, relay only)"
+  for DEV in A B; do A shell run-as "$PKG" rm -f files/debug_relay_only; done
+  MEDIA_PAIR="(host|prflx)/(host|prflx)"
 fi
 logcat_ok "the end"
 # CALLTEST_EXTRA=<file>: more steps sourced here with every helper available (debugging scenarios).
