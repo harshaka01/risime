@@ -12,6 +12,7 @@ import androidx.room.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -65,7 +66,9 @@ class ChatTabsControllerTest {
     }
 
     @After fun tearDown() {
-        scope.cancel()
+        // Cancel AND join every collector before closing: a Room flow still collecting on a closed
+        // connection throws "connection is closed".
+        runBlocking { scope.coroutineContext[Job]!!.let { it.cancel(); it.join() } }
         db.close()
     }
 

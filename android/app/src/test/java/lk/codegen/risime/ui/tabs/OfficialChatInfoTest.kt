@@ -22,6 +22,7 @@ import androidx.room.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -89,7 +90,7 @@ class OfficialChatInfoTest {
     private val toggler = OfficialToggler { id, on -> patches += id to on; reply(id, on) }
 
     @After fun tearDown() {
-        scope.cancel()
+        runBlocking { scope.coroutineContext[Job]!!.let { it.cancel(); it.join() } }
         db.close()
     }
 
@@ -219,10 +220,12 @@ class OfficialChatInfoTest {
         }
         rule.onNodeWithTag("official_switch_row").assertIsOn()
         rule.onNodeWithTag("official_switch_row").performClick()
+        // request() flips the state on the controller's IO scope; wait for the dialog to compose.
+        rule.waitUntil(5_000) { rule.onAllNodes(hasText(OFFICIAL_OFF_CONFIRM_TEXT)).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText(OFFICIAL_OFF_CONFIRM_TEXT).assertIsDisplayed()
         rule.onNodeWithText(OFFICIAL_OFF_CONFIRM_BUTTON).performClick()
-        rule.waitUntil(5_000) { patches.isNotEmpty() && !s.ui.value.busy }
-        rule.waitForIdle()
+        rule.waitUntil(5_000) { patches.isNotEmpty() && !s.ui.value.busy && !s.ui.value.on }
+        rule.waitUntil(5_000) { runCatching { rule.onNodeWithTag("official_switch_row").assertIsOff() }.isSuccess }
         rule.onNodeWithTag("official_switch_row").assertIsOff()
         rule.onNodeWithText(OFFICIAL_HISTORY_LABEL).performClick()
         assertEquals(1, history)

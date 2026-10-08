@@ -71,18 +71,26 @@ class TelecomEndpointFanOutTest {
             val telecom = FakeTelecom()
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             val userPicked = MutableStateFlow(false)
+            // The route policy decides-and-requests atomically, and the user's pick sets its flag and
+            // requests under the same lock (as selectEndpoint does): a decision taken before the pick
+            // can then never land after it (a stale "speaker" request would flake the earpiece check).
+            val lock = Any()
             try {
                 val tracker = EndpointTracker(telecom.available, telecom.current)
                 tracker.start(scope) {
-                    target(tracker.endpoints.value, tracker.current.value, userPicked.value)
-                        ?.let(telecom::requestEndpointChange)
+                    synchronized(lock) {
+                        target(tracker.endpoints.value, tracker.current.value, userPicked.value)
+                            ?.let(telecom::requestEndpointChange)
+                    }
                 }
                 telecom.availableCh.send(listOf(earpiece, speaker))
                 telecom.currentCh.send(earpiece)
                 withTimeoutOrNull(2_000) { tracker.current.first { it == speaker } } ?: error("repetition $rep: never on the speaker")
                 // The user taps back to the earpiece (selectEndpoint sets userPicked first).
-                userPicked.value = true
-                telecom.requestEndpointChange(earpiece)
+                synchronized(lock) {
+                    userPicked.value = true
+                    telecom.requestEndpointChange(earpiece)
+                }
                 withTimeoutOrNull(2_000) { tracker.current.first { it == earpiece } } ?: error("repetition $rep: never back on the earpiece")
                 // More endpoint updates (a route list refresh) never move it back.
                 telecom.availableCh.send(listOf(earpiece, speaker))
