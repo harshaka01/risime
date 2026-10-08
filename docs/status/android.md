@@ -1,7 +1,7 @@
 # Android status — 0.2 nightlies
 
 ## P0-1 in-app updates that testers can finish (no more uninstalling) — READY
-**READY.** Commits `d5e0acf` (worker, resume, checks, feedback, failures, copy, hook, test hook) and `1cd0cc1` (Retry takes
+**READY.** Commits `2c2be21` (worker, resume, checks, feedback, failures, copy, hook, test hook) and `9bd7a93` (Retry takes
 the server's current offer; offline checks don't use up the throttle; MY_PACKAGE_REPLACED keeps a newer offer).
 - **A, leaving the app:** download → verify → install run in `UpdateWorker` (expedited WorkManager job, foreground `dataSync`,
   "Updating RisiMe to X · Downloading… 42%" with Cancel), not in `rememberCoroutineScope()`. The UI only calls
