@@ -33,8 +33,21 @@ object CallEnvelope {
     /** §19.3 the camera turned on or off in a connected video call (ephemeral). */
     const val MEDIA = "call_media"
 
+    /** §20.3 (android A2) a member's device joined or declined a group call (ephemeral, `ring: false`). */
+    const val MEMBER = "call_member"
+
     /** Every call envelope type (the `call_` namespace). */
-    val TYPES = setOf(OFFER, RINGING, ANSWER, ACCEPTED, ICE, BUSY, CANCEL, END, MEDIA)
+    val TYPES = setOf(OFFER, RINGING, ANSWER, ACCEPTED, ICE, BUSY, CANCEL, END, MEDIA, MEMBER)
+
+    /** §20.3 `call_offer` `mode` of a group call through the SFU (the only mode value). */
+    const val MODE_SFU = "sfu"
+
+    /** §20.3 `call_member` states. */
+    const val MEMBER_JOINED = "joined"
+    const val MEMBER_DECLINED = "declined"
+
+    /** §20.4 the starter left before anyone joined: devices stop ringing. */
+    const val CANCEL_ENDED = "ended"
 
     const val MEDIA_AUDIO = "audio"
     const val MEDIA_VIDEO = "video"
@@ -77,6 +90,16 @@ object CallEnvelope {
         override val type get() = OFFER
     }
 
+    /** §20.3 a group call's ring: no SDP (the media goes through LiveKit), sent by the starter once it is in the room. */
+    data class SfuOffer(override val callId: String, val media: String, val sentAt: String) : Env {
+        override val type get() = OFFER
+    }
+
+    /** §20.3 `call_member`: the sender's device joined or declined (it names only its sender). */
+    data class Member(override val callId: String, val state: String) : Env {
+        override val type get() = MEMBER
+    }
+
     data class Ringing(override val callId: String) : Env {
         override val type get() = RINGING
     }
@@ -117,7 +140,7 @@ object CallEnvelope {
     }
 
     /** §16.3 binding: the cleartext `ring` flag the server must carry for this envelope. */
-    fun ringFor(env: Env): Boolean = env is Offer && !env.restart
+    fun ringFor(env: Env): Boolean = (env is Offer && !env.restart) || env is SfuOffer
 
     // ---- encode (UTF-8 JSON, non-ASCII unescaped, §10.3 envelope) ----
 
@@ -135,6 +158,12 @@ object CallEnvelope {
                 if (env.restart) put("to_device", env.toDevice)
                 put("sent_at", env.sentAt)
             }
+            is SfuOffer -> {
+                put("mode", MODE_SFU)
+                put("media", env.media)
+                put("sent_at", env.sentAt)
+            }
+            is Member -> put("state", env.state)
             is Ringing, is Busy -> Unit
             is Answer -> {
                 put("to_device", env.toDevice)
@@ -208,6 +237,16 @@ object CallEnvelope {
                 if (media !in MEDIAS) return drop("media")
                 val sentAt = str("sent_at") ?: return drop("sent_at")
                 if (runCatching { Instant.parse(sentAt) }.isFailure) return drop("sent_at")
+                // §20.3: `mode` absent = a 1:1 offer; present it must be exactly "sfu" (no sdp, no restart).
+                when (val m = obj["mode"]) {
+                    null -> Unit
+                    else -> {
+                        if (str("mode") != MODE_SFU) return drop("mode ${(m as? JsonPrimitive)?.contentOrNull}")
+                        if (obj["sdp"] != null) return drop("sdp in an sfu offer")
+                        if (obj["restart"].let { it != null && it != JsonNull && bool("restart") != false }) return drop("restart in an sfu offer")
+                        return SfuOffer(callId, media!!, sentAt)
+                    }
+                }
                 val restart = when (val r = obj["restart"]) {
                     null, JsonNull -> false
                     else -> bool("restart") ?: return drop("restart")
@@ -260,6 +299,11 @@ object CallEnvelope {
                 if (!isLowerUuid(to)) return drop("to_device")
                 val camera = bool("camera") ?: return drop("camera")
                 Media(callId, to!!, camera)
+            }
+            MEMBER -> {
+                val state = str("state")
+                if (state != MEMBER_JOINED && state != MEMBER_DECLINED) return drop("state")
+                Member(callId, state)
             }
             CANCEL -> Cancel(callId, str("reason") ?: CANCEL_GLARE)
             END -> {

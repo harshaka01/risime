@@ -454,6 +454,34 @@ fun CallLineRow(text: String, missed: Boolean, onCallBack: (() -> Unit)?, onDele
     }
 }
 
+/** §20.4 a group call's history line: centred; Join while the call runs; "Delete for me" in its menu. */
+@Composable
+fun GroupCallLineRow(text: String, video: Boolean, missed: Boolean, onJoin: (() -> Unit)?, onDeleteForMe: (() -> Unit)?) {
+    var menu by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Surface(
+            onClick = { menu = true },
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+            modifier = Modifier.padding(vertical = Spacing.xxs),
+        ) {
+            androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    (if (video) "📹 " else "📞 ") + text,
+                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (missed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                onJoin?.let { TextButton(onClick = it) { Text("Join") } }
+            }
+        }
+        DropdownMenu(menu, onDismissRequest = { menu = false }) {
+            onJoin?.let { DropdownMenuItem(text = { Text("Join") }, onClick = { menu = false; it() }) }
+            onDeleteForMe?.let { DropdownMenuItem(text = { Text("Delete for me") }, onClick = { menu = false; it() }) }
+        }
+    }
+}
+
 /** A small banner for the in-app "full-screen calls are off" card (§16.9 A3). */
 @Composable
 fun FullScreenIntentCard(onOpenSettings: () -> Unit, onDismiss: () -> Unit) {

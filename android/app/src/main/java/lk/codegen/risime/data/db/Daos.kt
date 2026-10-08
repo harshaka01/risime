@@ -39,6 +39,10 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversation_id = :conversationId AND call_id = :callId LIMIT 1")
     suspend fun callLine(conversationId: String, callId: String): MessageEntity?
 
+    /** §20.4: a group call's line changes with `ended` (or a `status` that says the room is gone). */
+    @Query("UPDATE messages SET body = :body, system_json = :systemJson WHERE client_msg_id = :clientMsgId")
+    suspend fun updateCallLine(clientMsgId: String, body: String, systemJson: String): Int
+
     /**
      * §14.7 (android R5): an image row is sent only once its blob reference is stored; until then
      * (uploading, or after a failed upload) it is skipped and never blocks the rows behind it.

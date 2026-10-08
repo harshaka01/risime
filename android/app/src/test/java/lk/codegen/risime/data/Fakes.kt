@@ -42,6 +42,11 @@ class FakeMessageDao : MessageDao {
     override suspend fun byClientMsgId(clientMsgId: String) = rows[clientMsgId]
     override suspend fun byMessageId(messageId: String) = rows.values.firstOrNull { it.messageId == messageId }
     override suspend fun callLine(conversationId: String, callId: String) = rows.values.firstOrNull { it.conversationId == conversationId && it.callId == callId }
+    override suspend fun updateCallLine(clientMsgId: String, body: String, systemJson: String): Int {
+        val r = rows[clientMsgId] ?: return 0
+        rows[clientMsgId] = r.copy(body = body, systemJson = systemJson)
+        return 1
+    }
     /** v6: the media state of an image row (the Room query joins `media`). */
     var mediaState: (String) -> String? = { null }
 

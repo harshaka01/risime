@@ -41,6 +41,9 @@ object MlsPayload {
         /** §18.1 a structurally valid `profile_photo` (valid only in a `message` event; never a row). */
         data class ProfilePhoto(val env: lk.codegen.risime.data.profile.ProfilePhotoEnvelope) : Decoded
 
+        /** §20.4 a strictly validated durable `group_call` (valid only in a group `message` event). */
+        data class GroupCall(val env: lk.codegen.risime.calls.GroupCallEnvelope) : Decoded
+
         /** A type this app doesn't know yet: store nothing visible. */
         data class Ignored(val type: String) : Decoded
     }
@@ -123,6 +126,10 @@ object MlsPayload {
         }
         if (type == lk.codegen.risime.data.history.HistoryShareEnvelope.TYPE) {
             return lk.codegen.risime.data.history.HistoryShareEnvelope.validate(obj)?.let { Decoded.HistoryShare(it) } ?: Decoded.Ignored("$type (malformed)")
+        }
+        if (type == lk.codegen.risime.calls.GroupCallEnvelope.TYPE) {
+            var why = ""
+            return lk.codegen.risime.calls.GroupCallEnvelope.validate(obj) { why = it }?.let { Decoded.GroupCall(it) } ?: Decoded.Ignored("$type (malformed: $why)")
         }
         if (type == lk.codegen.risime.data.profile.ProfilePhotoEnvelope.TYPE) {
             return lk.codegen.risime.data.profile.ProfilePhotoEnvelope.validate(obj)?.let { Decoded.ProfilePhoto(it) } ?: Decoded.Ignored("$type (malformed)")

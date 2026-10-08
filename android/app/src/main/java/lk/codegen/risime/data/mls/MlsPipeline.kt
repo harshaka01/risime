@@ -71,6 +71,9 @@ sealed interface MlsResult {
      */
     data class ProfilePhoto(val message: MessageData, val subject: String, val env: lk.codegen.risime.data.profile.ProfilePhotoEnvelope) : MlsResult
 
+    /** §20.4 a durable `group_call` (`started`/`ended`) in a group: the group call's history line (silent, never unread). */
+    data class GroupCall(val message: MessageData, val env: lk.codegen.risime.calls.GroupCallEnvelope) : MlsResult
+
     /** Ahead of the local epoch/generation, or no group yet: kept in mls_pending. */
     data object Pending : MlsResult
 
@@ -308,6 +311,11 @@ class MlsPipeline(
                         MlsResult.Ignored
                     }
                     is MlsPayload.Decoded.ProfilePhoto -> MlsResult.ProfilePhoto(msg, d.sender.userId, p.env)
+                    // §20.4: group calls are `grp:` only; a DM `group_call` is dropped and logged.
+                    is MlsPayload.Decoded.GroupCall -> if (lk.codegen.risime.net.isGroupConversation(msg.conversationId)) MlsResult.GroupCall(msg, p.env) else {
+                        log("group_call in a DM ${msg.messageId}: dropped")
+                        MlsResult.Ignored
+                    }
                     is MlsPayload.Decoded.Ignored -> {
                         log("ignored payload type ${p.type} in ${msg.messageId}")
                         MlsResult.Ignored
@@ -370,7 +378,9 @@ class MlsPipeline(
     private suspend fun applyCallSignal(mls: MlsEngine, e: Event, c: lk.codegen.risime.net.CallSignalEvent, historyBefore: java.time.Instant?, joined: GroupRef?): MlsResult {
         if (c.fromDevice.equals(mls.deviceId, true)) return MlsResult.Ignored // my own copy
         val conv = c.conversationId
-        if (lk.codegen.risime.net.isGroupConversation(conv)) return MlsResult.ControlDropped("call_signal in a group")
+        val group = lk.codegen.risime.net.isGroupConversation(conv)
+        // §20.3: a group signal has no `to`; a DM signal must have one.
+        if (group != (c.to == null)) return MlsResult.ControlDropped("call_signal: to/conversation_id")
         fun dropped(reason: String): MlsResult {
             log("call_signal ${c.messageId} dropped: $reason")
             return MlsResult.ControlDropped(reason)
@@ -394,6 +404,10 @@ class MlsPipeline(
         if (dec.authenticatedData.isNotEmpty()) return dropped("unexpected authenticated_data")
         val env = (MlsPayload.decode(dec.plaintext) as? MlsPayload.Decoded.Call)?.env ?: return dropped("not a valid call envelope")
         if (env is lk.codegen.risime.calls.CallEnvelope.End) return dropped("call_end in a call_signal")
+        // §20.3: groups take only the sfu offer, call_member and call_cancel; DMs never take those two.
+        val sfuOnly = env is lk.codegen.risime.calls.CallEnvelope.SfuOffer || env is lk.codegen.risime.calls.CallEnvelope.Member
+        if (group && !sfuOnly && env !is lk.codegen.risime.calls.CallEnvelope.Cancel) return dropped("${env.type} in a group")
+        if (!group && sfuOnly) return dropped("${env.type} in a DM")
         // crypto R3 binding.
         if (env.callId != c.callId) return dropped("call_id mismatch")
         if (c.ring != lk.codegen.risime.calls.CallEnvelope.ringFor(env)) return dropped("ring flag mismatch")
@@ -401,6 +415,7 @@ class MlsPipeline(
         val media = c.media ?: lk.codegen.risime.calls.CallEnvelope.MEDIA_AUDIO
         if (media !in lk.codegen.risime.calls.CallEnvelope.MEDIAS) return dropped("media ${c.media}")
         if (env is lk.codegen.risime.calls.CallEnvelope.Offer && env.media != media) return dropped("media mismatch")
+        if (env is lk.codegen.risime.calls.CallEnvelope.SfuOffer && env.media != media) return dropped("media mismatch")
         return MlsResult.CallSignal(c, env)
     }
 
