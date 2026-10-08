@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test of the self-hosted LLM (infra/docker-compose.llm.yml, decision 059).
+# Smoke test of the self-hosted LLM (infra/docker-compose.llm.yml, decision 061).
 # Checks, against the running risime-llm container:
 #   - port 8100 is bound to 127.0.0.1 only;
 #   - /health is OK, a request without the API key is refused (401), /v1/models lists `risi-l1`;

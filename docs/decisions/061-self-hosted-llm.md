@@ -1,4 +1,4 @@
-# 059 — Self-hosted LLM for the Risi agent (vLLM + Qwen3.6-35B-A3B-FP8 as `risi-l1`)
+# 061 — Self-hosted LLM for the Risi agent (vLLM + Qwen3.6-35B-A3B-FP8 as `risi-l1`)
 **Status:** accepted 2026-10-08 (root). Stage 0.5 of the agent: summarise a chat, extract decisions
 and action items with owners; later commitment detection (the Commitment Ledger).
 

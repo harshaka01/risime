@@ -1,9 +1,9 @@
-# Self-hosted LLM for the Risi agent on spark2 (decision 059). vLLM, OpenAI-compatible API.
+# Self-hosted LLM for the Risi agent on spark2 (decision 061). vLLM, OpenAI-compatible API.
 # Binds 127.0.0.1:8100 only (rule 6); nothing in front of it, no Caddy route. The app server is
 # the only client. No chat text leaves spark2: weights are local, the hub is offline, telemetry off.
 #   docker compose --env-file .env -f infra/docker-compose.llm.yml up -d
 # Needs in .env: LLM_API_KEY (Bearer token for every request).
-# Weights: ~/risime-models/<dir> (outside the repo), see docs/decisions/059-self-hosted-llm.md.
+# Weights: ~/risime-models/<dir> (outside the repo), see docs/decisions/061-self-hosted-llm.md.
 # Swap the model: download it into ~/risime-models, set LLM_MODEL_DIR in .env, `up -d`. Clients
 # always ask for the alias `risi-l1`, so the app server doesn't change.
 # Smoke test: scripts/llm-smoke
