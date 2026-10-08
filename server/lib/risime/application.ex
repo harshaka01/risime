@@ -24,6 +24,8 @@ defmodule RisiMe.Application do
     RisiMe.Calls.Turn.boot_check()
 
     RisiMe.TimeUUID.init()
+    # v1.24 §24.7: the Official-conversation cache of the `tabs` filter.
+    RisiMe.Groups.Tabs.init()
     # v1.11 §14.8: temp files of uploads killed with the previous run.
     RisiMe.Blobs.sweep_tmp()
 

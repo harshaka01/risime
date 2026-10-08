@@ -54,15 +54,20 @@ defmodule RisiMe.Groups do
 
   ## Readiness (§12.1)
 
-  @doc "Current MLS devices with the `groups` capability of the given users."
-  def groups_devices([]), do: []
+  @doc """
+  Current MLS devices with the `groups` capability (or, v1.24 §24.7, `cap` = `"tabs"`: both
+  `groups` and `tabs`) of the given users.
+  """
+  def groups_devices(user_ids, cap \\ "groups")
+  def groups_devices([], _cap), do: []
 
-  def groups_devices(user_ids) do
+  def groups_devices(user_ids, cap) do
     Repo.all(
       from d in Device,
         where:
           d.user_id in ^user_ids and not is_nil(d.mls_signature_key) and
-            fragment("'groups' = ANY(?)", d.capabilities),
+            fragment("'groups' = ANY(?)", d.capabilities) and
+            fragment("? = ANY(?)", ^cap, d.capabilities),
         order_by: [asc: d.inserted_at],
         select: %{
           user_id: d.user_id,
@@ -73,9 +78,9 @@ defmodule RisiMe.Groups do
     )
   end
 
-  @doc "`{user_id, device_id}` refs of the users' current groups-capable devices."
-  def device_refs(user_ids),
-    do: user_ids |> groups_devices() |> MapSet.new(&{&1.user_id, &1.device_id})
+  @doc "`{user_id, device_id}` refs of the users' current groups-capable (or `cap`) devices."
+  def device_refs(user_ids, cap \\ "groups"),
+    do: user_ids |> groups_devices(cap) |> MapSet.new(&{&1.user_id, &1.device_id})
 
   @doc """
   Group readiness (§12.1). Returns `{ready_user_ids, missing}`: a user is ready with at least one
@@ -88,7 +93,7 @@ defmodule RisiMe.Groups do
   superseded and never blocks. A blocking device-less instance is listed as `legacy_app` with
   `device_id: nil`.
   """
-  def readiness(user_ids) do
+  def readiness(user_ids, cap \\ "groups") do
     user_ids = Enum.uniq(user_ids)
     since = DateTime.add(DateTime.utc_now(), -@census_days, :day)
 
@@ -116,7 +121,7 @@ defmodule RisiMe.Groups do
         Map.update(acc, u, t, &if(DateTime.compare(t, &1) == :gt, do: t, else: &1))
       end)
 
-    gdevs = groups_devices(user_ids)
+    gdevs = groups_devices(user_ids, cap)
     g_ids = MapSet.new(gdevs, & &1.device_id)
     mls = MLS.current_mls_devices(user_ids)
 
@@ -152,6 +157,9 @@ defmodule RisiMe.Groups do
 
   defp superseded?(_seen, nil), do: false
   defp superseded?(seen, registered_at), do: DateTime.compare(seen, registered_at) == :lt
+
+  @doc "v1.24 §24.7: tabs readiness (§12.1 with `tabs` in place of `groups`)."
+  def tabs_readiness(user_ids), do: readiness(user_ids, "tabs")
 
   @doc "The subset of `user_ids` that is group-ready (`Friend.group_ready`)."
   def ready_set(user_ids) do
@@ -248,23 +256,29 @@ defmodule RisiMe.Groups do
 
   ## Views (§12.2)
 
-  @doc "`GET /groups`: my visible groups."
-  def list(me) do
+  @doc """
+  `GET /groups`: my visible groups. v1.24 §24.7: Official groups only for a `tabs` device
+  (`tabs?`).
+  """
+  def list(me, tabs? \\ false) do
     Repo.all(
       from g in Group,
         join: m in Member,
         on: m.group_id == g.id,
         where:
           m.user_id == ^me and m.state == "active" and
-            (g.state == "active" or g.created_by == ^me),
+            (g.state == "active" or g.created_by == ^me) and
+            (^tabs? or g.tab != "official"),
         order_by: [asc: g.created_at]
     )
     |> Enum.map(&group_json(&1, me))
   end
 
-  @doc "`GET /groups/{id}`."
-  def show(me, id) do
-    with {:ok, g, _m} <- visible(me, id), do: {:ok, group_json(g, me)}
+  @doc "`GET /groups/{id}`; v1.24 §24.7: an Official group is `404` for a non-`tabs` device."
+  def show(me, id, tabs? \\ false) do
+    with {:ok, g, _m} <- visible(me, id),
+         true <- (tabs? or g.tab != "official") || {:error, :not_found},
+         do: {:ok, group_json(g, me)}
   end
 
   @doc "The `Group` object as seen by `viewer`."
@@ -286,6 +300,25 @@ defmodule RisiMe.Groups do
       members: members_json(members, users, pairs, viewer),
       pending: g.id |> Ops.list() |> Enum.map(&Ops.json/1)
     }
+    |> Map.merge(tab_fields(g))
+    |> then(fn json ->
+      if official?(g),
+        do: Map.put(json, :agents, for(m <- members, m.kind == "agent", do: m.user_id)),
+        else: json
+    end)
+  end
+
+  @doc "v1.24: true for an Official group."
+  def official?(%Group{tab: tab}), do: tab == "official"
+
+  @doc """
+  v1.24 §24.1: `chat_id`, `tab`, `chat_kind` of an Official group. A Private group leaves them out
+  (absent = Private, its own id, `group`; §24.1, §24.8), so its JSON stays exactly v1.23.
+  """
+  def tab_fields(%Group{} = g) do
+    if official?(g),
+      do: %{chat_id: g.chat_id, tab: g.tab, chat_kind: g.chat_kind},
+      else: %{}
   end
 
   @doc false
@@ -298,7 +331,8 @@ defmodule RisiMe.Groups do
       %{
         user_id: m.user_id,
         display_name: u.display_name,
-        phone: if(phone_visible?(pairs, viewer, m.user_id), do: u.phone),
+        # v1.24 §24.1: an agent member never shows a phone.
+        phone: if(m.kind != "agent" and phone_visible?(pairs, viewer, m.user_id), do: u.phone),
         role: m.role,
         kind: m.kind,
         state: m.state,
@@ -396,6 +430,8 @@ defmodule RisiMe.Groups do
           )
 
         if n == 1 do
+          RisiMe.Groups.Tabs.put(id, "private")
+
           rows =
             [member_row(id, me, "admin", "active", now, now)] ++
               for(u <- others, do: member_row(id, u, "member", "pending_add", nil, now))
@@ -757,6 +793,9 @@ defmodule RisiMe.Groups do
         end,
       "server_ts" => Messaging.iso(DateTime.utc_now())
     }
+
+    # v1.24 §24.8: every group_event carries the group's chat_id, tab and chat_kind.
+    base = Map.merge(base, Map.new(tab_fields(g), fn {k, v} -> {Atom.to_string(k), v} end))
 
     members_for =
       if Keyword.get(opts, :members) do

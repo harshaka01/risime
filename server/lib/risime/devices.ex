@@ -66,6 +66,7 @@ defmodule RisiMe.Devices do
         groups_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
         member_devices_changed(user_id, existing, mls_key, caps)
         history_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
+        tabs_changed(user_id, device_id, existing, mls_key, caps)
 
         calls_changed(
           user_id,
@@ -132,9 +133,9 @@ defmodule RisiMe.Devices do
   # (unknown ones are ignored).
   # v1.13 §16.1: `calls`.
   # v1.15 §17.1: `history_share`.
-  # v1.18 §19.1: `video`. v1.19 §20.1: `group_calls`.
+  # v1.18 §19.1: `video`. v1.19 §20.1: `group_calls`. v1.24 §24.7: `tabs`.
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
-                         group_calls call_switch screen_share)
+                         group_calls call_switch screen_share tabs)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1),
@@ -253,6 +254,52 @@ defmodule RisiMe.Devices do
     end
 
     if was and (not now or key_changed?), do: RisiMe.History.device_gone(user_id, device_id)
+    :ok
+  end
+
+  @doc """
+  v1.24 §24.7: true if the device is a current MLS device with `groups` and `tabs` (it may see
+  Official conversations and `chat_event`s).
+  """
+  def tabs?(%Device{mls_signature_key: k, capabilities: caps}) when is_binary(k),
+    do: "tabs" in (caps || []) and "groups" in (caps || [])
+
+  def tabs?(_), do: false
+
+  @doc "v1.24: true if `device_id` (may be nil) names a `tabs` device of the user."
+  def tabs_device?(_user_id, nil), do: false
+
+  def tabs_device?(user_id, device_id) do
+    case Ecto.UUID.cast(device_id) do
+      {:ok, d} -> tabs?(Repo.get_by(Device, user_id: user_id, device_id: d))
+      :error -> false
+    end
+  end
+
+  @doc "v1.24 §24.7: the device ids of the user's `tabs` devices."
+  def tabs_device_ids(user_id) do
+    Repo.all(
+      from d in Device,
+        where:
+          d.user_id == ^user_id and not is_nil(d.mls_signature_key) and
+            "tabs" in d.capabilities and "groups" in d.capabilities,
+        select: d.device_id
+    )
+  end
+
+  # v1.24 §24.7: live sockets of the device start or stop getting Official traffic.
+  defp tabs_changed(user_id, device_id, existing, mls_key, caps) do
+    was = tabs?(existing)
+    now = if mls_key, do: "tabs" in caps and "groups" in caps, else: was
+
+    if was != now,
+      do:
+        Phoenix.PubSub.broadcast(
+          RisiMe.PubSub,
+          RisiMe.Messaging.topic(user_id),
+          {:device_tabs, device_id, now}
+        )
+
     :ok
   end
 

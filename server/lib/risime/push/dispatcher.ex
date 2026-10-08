@@ -35,13 +35,17 @@ defmodule RisiMe.Push.Dispatcher do
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
-  @doc "An inbox event was stored for `user_id`."
-  def notify(user_id) do
+  @doc """
+  An inbox event was stored for `user_id`. v1.24 §24.7: `scope` `:tabs` (an Official event or a
+  `chat_event`) counts only the user's `tabs` devices: only their sockets hold the push, and
+  only their tokens get it.
+  """
+  def notify(user_id, scope \\ :all) do
     if Push.sender() != nil do
-      case Presence.connections(user_id) do
+      case connections(user_id, scope) do
         # §8.0 "no live inbox channel": the presence grace period alone doesn't hold a push.
         [] ->
-          GenServer.cast(__MODULE__, {:notify, user_id})
+          GenServer.cast(__MODULE__, {:notify, user_id, scope})
 
         conns ->
           case watchdog_ms() do
@@ -52,6 +56,19 @@ defmodule RisiMe.Push.Dispatcher do
     end
 
     :ok
+  end
+
+  defp connections(user_id, :all), do: Presence.connections(user_id)
+
+  defp connections(user_id, :tabs) do
+    case Presence.connections(user_id) do
+      [] ->
+        []
+
+      conns ->
+        tabs = MapSet.new(Devices.tabs_device_ids(user_id))
+        Enum.filter(conns, fn {_, d, _} -> MapSet.member?(tabs, d) end)
+    end
   end
 
   @doc """
@@ -101,20 +118,33 @@ defmodule RisiMe.Push.Dispatcher do
 
   defp device_tag(device_id), do: device_id |> to_string() |> String.slice(0, 8)
 
-  @doc "Sends the wake-up to every device of `user_id` now (used by the debounce)."
-  def push_now(user_id) do
+  @doc """
+  Sends the wake-up to every device of `user_id` now (used by the debounce); `scope` `:tabs`:
+  only to `tabs` devices (v1.24 §24.7).
+  """
+  def push_now(user_id, scope \\ :all) do
     case Push.sender() do
       nil -> :ok
-      sender -> push_user(sender, user_id)
+      sender -> push_user(sender, user_id, scope)
     end
 
     :ok
   end
 
-  defp push_user(sender, user_id) do
+  defp push_user(sender, user_id, scope) do
     hash = user_hash(user_id)
 
-    case Devices.push_targets(user_id) do
+    targets =
+      case scope do
+        :all ->
+          Devices.push_targets(user_id)
+
+        :tabs ->
+          tabs = MapSet.new(Devices.tabs_device_ids(user_id))
+          for {d, _} = t <- Devices.push_targets(user_id), MapSet.member?(tabs, d), do: t
+      end
+
+    case targets do
       [] ->
         Logger.info("push: none kind=inbox user=#{hash} reason=no_token")
 
@@ -227,7 +257,7 @@ defmodule RisiMe.Push.Dispatcher do
   defp call_watchdog_ms, do: Application.get_env(:risime, :push_call_watchdog_ms, 4_000)
 
   ## Server
-  # ETS row: {user_id, last_sent_ms, trailing_timer | nil}
+  # ETS row: {user_id, last_sent_ms, trailing_timer | nil, trailing_scope}
   # State: probes %{{channel_pid, kind} => probe}, ids %{ping data => probe key}.
 
   @impl true
@@ -282,23 +312,26 @@ defmodule RisiMe.Push.Dispatcher do
   end
 
   @impl true
-  def handle_cast({:notify, user_id}, state) do
+  def handle_cast({:notify, user_id, scope}, state) do
     now = System.monotonic_time(:millisecond)
     window = coalesce_ms()
 
     case :ets.lookup(@table, user_id) do
-      [{_, last, timer}] when now - last < window ->
-        # Within the window: make sure exactly one trailing push is scheduled.
+      [{_, last, timer, pending}] when now - last < window ->
+        # Within the window: make sure exactly one trailing push is scheduled; it covers every
+        # coalesced event (any `:all` event widens a `:tabs` one).
         Logger.debug("push: skipped kind=inbox user=#{user_hash(user_id)} reason=coalesced")
 
-        if timer == nil do
-          t = Process.send_after(self(), {:trailing, user_id}, last + window - now)
-          :ets.insert(@table, {user_id, last, t})
-        end
+        scope = if timer == nil, do: scope, else: merge(pending, scope)
+
+        t =
+          timer || Process.send_after(self(), {:trailing, user_id}, last + window - now)
+
+        :ets.insert(@table, {user_id, last, t, scope})
 
       _ ->
-        send_async(user_id)
-        :ets.insert(@table, {user_id, now, nil})
+        send_async(user_id, scope)
+        :ets.insert(@table, {user_id, now, nil, nil})
     end
 
     {:noreply, state}
@@ -306,11 +339,17 @@ defmodule RisiMe.Push.Dispatcher do
 
   @impl true
   def handle_info({:trailing, user_id}, state) do
-    :ets.insert(@table, {user_id, System.monotonic_time(:millisecond), nil})
+    scope =
+      case :ets.lookup(@table, user_id) do
+        [{_, _, _, s}] when s != nil -> s
+        _ -> :all
+      end
 
-    case {Presence.connections(user_id), watchdog_ms()} do
+    :ets.insert(@table, {user_id, System.monotonic_time(:millisecond), nil, nil})
+
+    case {connections(user_id, scope), watchdog_ms()} do
       {[], _} ->
-        send_async(user_id)
+        send_async(user_id, scope)
         {:noreply, state}
 
       {_conns, nil} ->
@@ -370,13 +409,13 @@ defmodule RisiMe.Push.Dispatcher do
 
   # The watchdog push counts for the 10-s window, so the offline path doesn't push again at once.
   defp mark_sent(user_id) do
-    timer =
+    {timer, scope} =
       case :ets.lookup(@table, user_id) do
-        [{_, _, t}] -> t
-        [] -> nil
+        [{_, _, t, s}] -> {t, s}
+        [] -> {nil, nil}
       end
 
-    :ets.insert(@table, {user_id, System.monotonic_time(:millisecond), timer})
+    :ets.insert(@table, {user_id, System.monotonic_time(:millisecond), timer, scope})
   end
 
   defp watchdog_push(:call, %{token: token}) when is_binary(token), do: push_call([token])
@@ -398,7 +437,11 @@ defmodule RisiMe.Push.Dispatcher do
 
   defp disconnect, do: %Phoenix.Socket.Broadcast{topic: nil, event: "disconnect", payload: %{}}
 
-  defp send_async(user_id) do
-    Task.Supervisor.start_child(RisiMe.Push.TaskSupervisor, fn -> push_now(user_id) end)
+  defp send_async(user_id, scope) do
+    Task.Supervisor.start_child(RisiMe.Push.TaskSupervisor, fn -> push_now(user_id, scope) end)
   end
+
+  defp merge(:all, _), do: :all
+  defp merge(_, :all), do: :all
+  defp merge(_, scope), do: scope
 end

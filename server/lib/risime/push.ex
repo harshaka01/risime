@@ -28,6 +28,9 @@ defmodule RisiMe.Push do
   @doc "The configured sender module, or nil when push is off."
   def sender, do: Application.get_env(:risime, :push_sender)
 
-  @doc "Called for every stored inbox event of `user_id` (see `RisiMe.Push.Dispatcher`)."
-  defdelegate notify(user_id), to: RisiMe.Push.Dispatcher
+  @doc """
+  Called for every stored inbox event of `user_id` (see `RisiMe.Push.Dispatcher`). `scope`
+  `:tabs` (v1.24 §24.7: an Official event or a `chat_event`) wakes only `tabs` devices.
+  """
+  defdelegate notify(user_id, scope \\ :all), to: RisiMe.Push.Dispatcher
 end

@@ -723,8 +723,13 @@ defmodule RisiMe.Messaging do
     :ok = store().append_event(user_id, event)
     broadcast(user_id, event)
     # Contract v1.5: a data-only wake-up if the user has no live inbox channel.
-    if Keyword.get(opts, :push, true), do: RisiMe.Push.notify(user_id)
+    if Keyword.get(opts, :push, true),
+      do: RisiMe.Push.notify(user_id, Keyword.get_lazy(opts, :scope, fn -> push_scope(event) end))
   end
+
+  # v1.24 §24.7: an Official event or a `chat_event` wakes only `tabs` devices.
+  defp push_scope(event),
+    do: if(RisiMe.Groups.Tabs.tabs_only?(event), do: :tabs, else: :all)
 
   @doc false
   def broadcast(user_id, event),
@@ -735,6 +740,16 @@ defmodule RisiMe.Messaging do
   fan-out, §12.7). `opts` as for a single publish (`push:`).
   """
   def publish_batch(items) do
+    # v1.24 §24.7: the push scope is decided here, in the caller (inside the group transaction,
+    # where a group created by it is visible), never in the fan-out tasks.
+    scopes =
+      items
+      |> Enum.map(fn {_, event, _} -> event end)
+      |> Enum.uniq_by(&scope_key/1)
+      |> Map.new(&{scope_key(&1), push_scope(&1)})
+
+    items = for {u, e, o} <- items, do: {u, e, Keyword.put_new(o, :scope, scopes[scope_key(e)])}
+
     case Enum.group_by(items, &elem(&1, 0)) do
       by_user when map_size(by_user) <= 1 ->
         for {u, event, opts} <- items, do: publish(u, event, opts)
@@ -753,6 +768,10 @@ defmodule RisiMe.Messaging do
     :ok
   end
 
+  defp scope_key(%{kind: "chat_event"}), do: :chat_event
+  defp scope_key(%{data: data}) when is_map(data), do: data["conversation_id"] || data["group_id"]
+  defp scope_key(_), do: nil
+
   @doc "Stores and pushes an MLS inbox event (`mls_commit`, `mls_welcome`, `mls_membership`); never a push (§10.3)."
   def publish_mls(user_id, kind, data) do
     publish(user_id, %{event_id: TimeUUID.generate(), kind: kind, data: data}, push: false)
@@ -769,7 +788,7 @@ defmodule RisiMe.Messaging do
     event = %{event_id: TimeUUID.generate(), kind: kind, data: data}
     :ok = store().append_event(user_id, event, ttl: @history_ttl_s)
     broadcast(user_id, event)
-    RisiMe.Push.notify(user_id)
+    RisiMe.Push.notify(user_id, push_scope(event))
     :ok
   end
 

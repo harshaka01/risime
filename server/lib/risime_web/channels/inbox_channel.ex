@@ -32,6 +32,8 @@ defmodule RisiMeWeb.InboxChannel do
         |> assign(:video, call_caps.video)
         |> assign(:group_calls, call_caps.group_calls)
         |> assign(:history, RisiMe.Devices.history?(device))
+        # v1.24 §24.7: only a `tabs` device gets Official traffic and `chat_event`s.
+        |> assign(:tabs, RisiMe.Devices.tabs?(device))
 
       case page(socket, payload) do
         {:ok, reply} ->
@@ -228,6 +230,13 @@ defmodule RisiMeWeb.InboxChannel do
       else: {:noreply, socket}
   end
 
+  # v1.24 §24.7: the device registered (or lost) `tabs` while connected.
+  def handle_info({:device_tabs, device_id, tabs?}, socket) do
+    if device_id == socket.assigns[:device_id],
+      do: {:noreply, assign(socket, :tabs, tabs?)},
+      else: {:noreply, socket}
+  end
+
   # v1.15 §17.1: the device registered (or lost) `history_share` while connected.
   def handle_info({:device_history, device_id, history?}, socket) do
     if device_id == socket.assigns[:device_id] and history? != socket.assigns[:history] do
@@ -312,9 +321,16 @@ defmodule RisiMeWeb.InboxChannel do
     end
   end
 
+  # v1.24 §24.7: Official events and `chat_event`s only for a `tabs` socket, before every other
+  # rule.
+  defp visible?(socket, event) do
+    (socket.assigns[:tabs] == true or not RisiMe.Groups.Tabs.tabs_only?(event)) and
+      visible_v123?(socket, event)
+  end
+
   # v1.13 §16.1: `call_signal` events only for a `calls` socket; v1.18 §19.2: a `video` one only
   # for a `video` socket; v1.19 §20.3: a group one only for a `group_calls` socket.
-  defp visible?(socket, %{kind: "call_signal", data: data}) do
+  defp visible_v123?(socket, %{kind: "call_signal", data: data}) do
     a = socket.assigns
 
     cond do
@@ -326,15 +342,15 @@ defmodule RisiMeWeb.InboxChannel do
   end
 
   # v1.15 §17.5: `history_*` events only for a `history_share` device.
-  defp visible?(%{assigns: %{history: false}}, %{kind: "history_" <> _}), do: false
-  defp visible?(%{assigns: %{groups: true}}, _event), do: true
+  defp visible_v123?(%{assigns: %{history: false}}, %{kind: "history_" <> _}), do: false
+  defp visible_v123?(%{assigns: %{groups: true}}, _event), do: true
 
-  defp visible?(_socket, %{data: data}) when is_map(data) do
+  defp visible_v123?(_socket, %{data: data}) when is_map(data) do
     conv = data["conversation_id"] || data["group_id"]
     not (is_binary(conv) and String.starts_with?(conv, "grp:"))
   end
 
-  defp visible?(_socket, _), do: true
+  defp visible_v123?(_socket, _), do: true
 
   defp group_conv?(%{"conversation_id" => "grp:" <> _}), do: true
   defp group_conv?(_), do: false

@@ -46,9 +46,8 @@ defmodule RisiMe.Groups.PolicyTest do
     end
   end
 
-  # v1.24 §24.1 tab rules: the server's Policy does not enforce tab/agent rules yet (group_meta
-  # is opaque to the server; the MLS core enforces them). The cases are loaded and tagged
-  # :pending_v124, excluded by default (`mix test --only pending_v124` shows the gap).
+  # v1.24 §24.1 tab rules: the same Policy with `tab`, `conversation`, `agent_users`, the full
+  # base-epoch leaf list and the extended meta (tab, chat_id_changed, agents).
   @tab_cases Map.fetch!(@fixture_json, "tab_cases")
 
   test "the fixture has tab_cases (v1.24 §24.1)" do
@@ -58,19 +57,31 @@ defmodule RisiMe.Groups.PolicyTest do
 
   for c <- @tab_cases do
     @case c
-    @tag :pending_v124
     test "tab case: #{c["name"]}" do
       c = @case
-      meta = c["meta"] && %{admins: c["meta"]["admins"], name_changed: c["meta"]["name_changed"]}
+
+      meta =
+        c["meta"] &&
+          %{
+            admins: c["meta"]["admins"],
+            name_changed: c["meta"]["name_changed"],
+            tab: c["meta"]["tab"],
+            chat_id_changed: c["meta"]["chat_id_changed"],
+            agents: c["meta"]["agents"]
+          }
 
       result =
         Policy.check(%{
           admins: c["admins"],
-          agents: c["agents"] ++ c["agent_users"],
+          agents: c["agents"],
+          agent_users: c["agent_users"],
+          tab: c["tab"],
+          conversation: c["conversation"],
           committer: user(c["committer"]),
           adds: Enum.map(c["adds"], &leaf/1),
           removes: Enum.map(c["removes"], &leaf/1),
           leaf_users: for({u, [_ | _]} <- c["leaves"], do: u),
+          leaves: for({u, ds} <- c["leaves"], d <- ds, do: {u, d}),
           meta: meta
         })
 
@@ -79,5 +90,43 @@ defmodule RisiMe.Groups.PolicyTest do
         "reject" -> assert {:error, _} = result
       end
     end
+  end
+
+  test "an agent leaf in Private or a dm: is private_tab" do
+    base = %{
+      admins: ["A"],
+      agents: [],
+      agent_users: ["R"],
+      committer: "A",
+      adds: [{"R", "r1"}],
+      removes: [],
+      leaf_users: ["A"],
+      leaves: [{"A", "a1"}],
+      meta: nil
+    }
+
+    assert Policy.check(Map.put(base, :tab, "private")) == {:error, :private_tab}
+
+    assert Policy.check(Map.merge(base, %{tab: "official", conversation: "dm", agents: ["R"]})) ==
+             {:error, :private_tab}
+
+    assert Policy.check(Map.merge(base, %{tab: "official", agents: ["R"]})) == :ok
+  end
+
+  test "a member's agent removal may not add another user's device" do
+    c = %{
+      admins: ["A"],
+      agents: ["R"],
+      tab: "official",
+      committer: "B",
+      adds: [{"C", "c2"}],
+      removes: [{"R", "r1"}],
+      leaf_users: ["A", "B", "C", "R"],
+      leaves: [{"A", "a1"}, {"B", "b1"}, {"C", "c1"}, {"R", "r1"}],
+      meta: nil
+    }
+
+    assert {:error, _} = Policy.check(c)
+    assert Policy.check(%{c | adds: []}) == :ok
   end
 end
