@@ -58,6 +58,21 @@ object WebRtcConfig {
     const val WIFI_BPS = 1_500_000
     const val MOBILE_BPS = 800_000
 
+    /** §23.5 screen: 1:1 at most 1.2 Mbit/s on Wi-Fi, 600 kbit/s on mobile data or relayed; ≤ 15 fps (5 when hot). */
+    const val SCREEN_WIFI_BPS = 1_200_000
+    const val SCREEN_MOBILE_BPS = 600_000
+    const val SCREEN_FPS = 15
+    const val SCREEN_HOT_FPS = 5
+    const val SCREEN_MAX_SIDE = 1600
+
+    /** §23.5: the screen's capture size: the display's, aspect kept, long side ≤ [SCREEN_MAX_SIDE] (even numbers). */
+    fun screenSize(w: Int, h: Int): Pair<Int, Int> {
+        val long = maxOf(w, h)
+        if (long <= SCREEN_MAX_SIDE) return (w and 1.inv()) to (h and 1.inv())
+        val k = SCREEN_MAX_SIDE.toDouble() / long
+        return ((w * k).toInt() and 1.inv()) to ((h * k).toInt() and 1.inv())
+    }
+
     /** §19.7 capture: ≤ 1280×720 at 30 fps; mobile data or a relayed path 640×480 at 24; thermal ≥ SEVERE 640×480 at 15. */
     fun captureFormat(constrained: Boolean, hot: Boolean): Triple<Int, Int, Int> = when {
         hot -> Triple(640, 480, 15)
@@ -176,7 +191,8 @@ class WebRtcCallMedia(
         private val relay: Boolean,
         private val listener: CallMedia.Listener,
         private val debug: Boolean,
-        private val video: Boolean,
+        /** §19 a video call, or (§23.3) a voice call whose switch was accepted ([enableVideo]). */
+        @Volatile private var video: Boolean,
         private val onStats: (DtlsStats) -> Unit,
     ) : MediaSession {
         private val adm = JavaAudioDeviceModule.builder(context)
@@ -196,7 +212,8 @@ class WebRtcCallMedia(
             .setAudioDeviceModule(adm)
             .apply {
                 // §19.0: VP8 in software on every phone (no hardware H264 surprises); codec preferences narrow it to VP8 + rtx.
-                if (video) {
+                // §23.3: a voice call may switch to video later, so every call that can do video gets the codecs.
+                if (video || videoAvailable) {
                     setVideoEncoderFactory(SoftwareVideoEncoderFactory())
                     setVideoDecoderFactory(SoftwareVideoDecoderFactory())
                 }
@@ -276,10 +293,25 @@ class WebRtcCallMedia(
             }
         }
 
-        /** setTrack(video) when the camera is on, setTrack(null) when off (§19.5: no renegotiation). */
+        /**
+         * setTrack(video) when the camera is on, setTrack(null) when off (§19.5: no renegotiation).
+         * §23.5 (android A3): one sender; the screen wins over the camera, with its own parameters
+         * (MAINTAIN_RESOLUTION: text stays sharp, congestion lowers the frame rate).
+         */
         private fun applySender() {
             val sender = videoTransceiver?.sender ?: return
-            if (cameraOn) {
+            if (screenOn && screenTrack != null) {
+                sender.setTrack(screenTrack, false)
+                runCatching {
+                    val p = sender.parameters
+                    p.degradationPreference = livekit.org.webrtc.RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+                    p.encodings.firstOrNull()?.let { e ->
+                        e.maxBitrateBps = if (metered() || relay) WebRtcConfig.SCREEN_MOBILE_BPS else WebRtcConfig.SCREEN_WIFI_BPS
+                        e.maxFramerate = if (thermalSevere(context)) WebRtcConfig.SCREEN_HOT_FPS else WebRtcConfig.SCREEN_FPS
+                    }
+                    sender.parameters = p
+                }.onFailure { Log.w("RisiMe", "screen sender parameters: ${it.message}") }
+            } else if (cameraOn) {
                 val track = videoTrack ?: return
                 sender.setTrack(track, false)
                 runCatching {
@@ -352,6 +384,109 @@ class WebRtcCallMedia(
         }
 
         override fun lastRemoteFrameAt(): Long = remoteProxy.lastFrameAt
+
+        // ---- §23.3 renegotiation and §23.5 the screen ----
+
+        override fun enableVideo() {
+            video = true
+        }
+
+        /** §23.3 rollback of an outstanding local re-offer; a video transceiver that never got a mid is stopped (audio untouched). */
+        override suspend fun rollback() {
+            runCatching { set(true, SessionDescription(SessionDescription.Type.ROLLBACK, "")) }.onFailure { Log.w("RisiMe", "rollback: ${it.message}") }
+            videoTransceiver?.takeIf { it.mid == null }?.let { t ->
+                runCatching { t.stopStandard() }
+                videoTransceiver = null
+                video = false
+            }
+        }
+
+        private var screenCapturer: livekit.org.webrtc.ScreenCapturerAndroid? = null
+        private var screenHelper: SurfaceTextureHelper? = null
+        private var screenSource: VideoSource? = null
+        private var screenTrack: VideoTrack? = null
+        @Volatile private var screenOn = false
+        private var rotation: android.content.ComponentCallbacks? = null
+
+        private fun displaySize(): Pair<Int, Int> {
+            val m = context.resources.displayMetrics
+            return WebRtcConfig.screenSize(m.widthPixels, m.heightPixels)
+        }
+
+        override fun startScreen(grant: Any, onStopped: () -> Unit): Boolean {
+            val data = grant as? android.content.Intent ?: return false
+            if (screenOn) return true
+            return runCatching {
+                val cap = livekit.org.webrtc.ScreenCapturerAndroid(
+                    data,
+                    object : android.media.projection.MediaProjection.Callback() {
+                        override fun onStop() {
+                            Log.i("RisiMe", "calls: MediaProjection onStop")
+                            onStopped()
+                        }
+                    },
+                )
+                val src = factory.createVideoSource(true)
+                val h = SurfaceTextureHelper.create("risime-screen", egl.eglBaseContext)
+                cap.initialize(h, context, src.capturerObserver)
+                val (w, ht) = displaySize()
+                cap.startCapture(w, ht, if (thermalSevere(context)) WebRtcConfig.SCREEN_HOT_FPS else WebRtcConfig.SCREEN_FPS)
+                val t = factory.createVideoTrack("risime-screen", src)
+                screenCapturer = cap
+                screenHelper = h
+                screenSource = src
+                screenTrack = t
+                screenOn = true
+                // §23.5: the virtual display follows rotation.
+                val cb = object : android.content.ComponentCallbacks {
+                    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+                        val (nw, nh) = displaySize()
+                        runCatching { screenCapturer?.changeCaptureFormat(nw, nh, WebRtcConfig.SCREEN_FPS) }
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun onLowMemory() = Unit
+                }
+                context.registerComponentCallbacks(cb)
+                rotation = cb
+                applySender()
+                Log.i("RisiMe", "calls: screen capture ${w}x$ht")
+                true
+            }.getOrElse {
+                Log.w("RisiMe", "screen capture failed: ${it.javaClass.simpleName}: ${it.message}")
+                closeScreen()
+                false
+            }
+        }
+
+        override fun stopScreen() {
+            if (!screenOn && screenCapturer == null) return
+            screenOn = false
+            applySender()
+            closeScreen()
+        }
+
+        private fun closeScreen() {
+            screenOn = false
+            rotation?.let { runCatching { context.unregisterComponentCallbacks(it) } }
+            rotation = null
+            runCatching { screenCapturer?.stopCapture() }
+            runCatching { screenCapturer?.dispose() }
+            runCatching { screenTrack?.dispose() }
+            runCatching { screenSource?.dispose() }
+            runCatching { screenHelper?.dispose() }
+            screenCapturer = null
+            screenTrack = null
+            screenSource = null
+            screenHelper = null
+        }
+
+        /** §23.7 the debug stats' video source. */
+        private fun src(): String = when {
+            screenOn -> "screen"
+            cameraOn -> "camera"
+            else -> "none"
+        }
 
         private fun closeVideo() {
             runCatching { if (capturing) capturer?.stopCapture() }
@@ -490,7 +625,7 @@ class WebRtcCallMedia(
                     val outV = all.firstOrNull { it.type == "outbound-rtp" && it.members["kind"] == "video" }
                     val codec = (inV ?: outV)?.members?.get("codecId")?.let { id -> all.firstOrNull { it.id == id }?.members?.get("mimeType") }
                     lastVideoStats = "video $codec in ${inV?.members?.get("frameWidth")}x${inV?.members?.get("frameHeight")}@${inV?.members?.get("framesPerSecond")} " +
-                        "decoded=${inV?.members?.get("framesDecoded")} out ${outV?.members?.get("frameWidth")}x${outV?.members?.get("frameHeight")}@${outV?.members?.get("framesPerSecond")} sent=${outV?.members?.get("bytesSent")}"
+                        "decoded=${inV?.members?.get("framesDecoded")} out ${outV?.members?.get("frameWidth")}x${outV?.members?.get("frameHeight")}@${outV?.members?.get("framesPerSecond")} sent=${outV?.members?.get("bytesSent")} src=${src()}"
                     if (debug) Log.d("RisiMe", "call $lastVideoStats")
                 }
                 val st = DtlsStats(transport?.members?.get("dtlsState") as? String, transport?.members?.get("srtpCipher") as? String, fp, local, remote, audioRecv)
@@ -506,6 +641,7 @@ class WebRtcCallMedia(
 
         override fun close() {
             if (current === this) current = null
+            closeScreen()
             closeVideo()
             runCatching { pc.close() }
             runCatching { pc.dispose() }

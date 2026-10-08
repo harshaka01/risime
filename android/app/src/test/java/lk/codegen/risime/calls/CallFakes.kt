@@ -77,8 +77,40 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
         var rejectVideo = false
 
         override fun setCamera(on: Boolean) {
-            check(video) { "setCamera on a voice call" }
+            check(videoOn) { "setCamera on a voice session" }
             camera += on
+        }
+
+        /** §23.3: the session may carry video now (renegotiation); offers and answers get m=video. */
+        @Volatile var videoOn = video
+        var rollbacks = 0
+        /** §23.5 the screen shares started (the grants) and stopped; [screenFails] = the next start fails. */
+        val screens = CopyOnWriteArrayList<Any>()
+        var screenStops = 0
+        var screenFails = false
+        var screenOn = false
+        var onScreenStopped: (() -> Unit)? = null
+
+        override fun enableVideo() {
+            videoOn = true
+        }
+
+        override suspend fun rollback() {
+            rollbacks++
+        }
+
+        override fun startScreen(grant: Any, onStopped: () -> Unit): Boolean {
+            if (screenFails) return false
+            check(videoOn) { "screen on a voice session" }
+            screens += grant
+            screenOn = true
+            onScreenStopped = onStopped
+            return true
+        }
+
+        override fun stopScreen() {
+            screenStops++
+            screenOn = false
         }
 
         override fun switchCamera() {
@@ -102,11 +134,11 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
 
         override suspend fun createOffer(iceRestart: Boolean): String {
             localOffers++
-            return SdpRules.prepareLocal(if (video) fakeVideoSdp(true, fp, ufrag) else fakeSdp(true, fp, ufrag, audioLevel = true))
+            return SdpRules.prepareLocal(if (videoOn) fakeVideoSdp(true, fp, ufrag) else fakeSdp(true, fp, ufrag, audioLevel = true))
         }
 
         override suspend fun createAnswer(): String =
-            SdpRules.prepareLocal(if (video) fakeVideoSdp(false, fp, ufrag, rejectVideo = rejectVideo) else fakeSdp(false, fp, ufrag, audioLevel = true))
+            SdpRules.prepareLocal(if (videoOn) fakeVideoSdp(false, fp, ufrag, rejectVideo = rejectVideo) else fakeSdp(false, fp, ufrag, audioLevel = true))
 
         override suspend fun setRemote(sdp: String, isOffer: Boolean) {
             remote = sdp

@@ -25,6 +25,8 @@ class Notifier(
     private val hideContent: () -> Boolean = { false },
     /** Locked chats (also true for every chat while the locked list can't be read). */
     private val isLockedChat: (String) -> Boolean = { false },
+    /** §23.5: while the screen is shared, new message notifications are posted silently (and without content, via [hideContent]). */
+    private val quiet: () -> Boolean = { false },
 ) {
     private val nm = NotificationManagerCompat.from(context)
 
@@ -88,8 +90,9 @@ class Notifier(
     fun postChats(plan: List<ChatNotification>): Boolean {
         if (plan.isEmpty() || !allowed()) return false
         ensureChannels()
-        shown(plan).forEach { n -> nm.notify(chatId(n.conversationId), chatBuilder(n, silent = false).build()) }
-        postSummary(silent = false)
+        val silent = quiet()
+        shown(plan).forEach { n -> nm.notify(chatId(n.conversationId), chatBuilder(n, silent = silent).build()) }
+        postSummary(silent = silent)
         return true
     }
 

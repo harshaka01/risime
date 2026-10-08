@@ -47,6 +47,9 @@ class CallNotifications(private val context: Context, private val hideContent: (
         /** MainActivity extra on the missed-call "Call back" action: "voice" or "video" (with EXTRA_OPEN_CHAT). */
         const val EXTRA_CALL_BACK = "lk.codegen.risime.CALL_BACK"
 
+        /** §23.5 Stop sharing from the ongoing notification. */
+        const val ACTION_STOP_SHARE = "lk.codegen.risime.calls.STOP_SHARE"
+
         val VIBRATION = longArrayOf(0, 800, 600, 800, 600)
     }
 
@@ -124,7 +127,7 @@ class CallNotifications(private val context: Context, private val hideContent: (
     }
 
     /** Outgoing / connecting / active: CallStyle.forOngoingCall, the foreground-service notification. */
-    fun ongoing(name: String, status: String, connectedAtMs: Long?): Notification {
+    fun ongoing(name: String, status: String, connectedAtMs: Long?, sharing: Boolean = false): Notification {
         ensureChannels()
         val person = Person.Builder().setName(name).build()
         return NotificationCompat.Builder(context, CH_CALL_STATUS)
@@ -139,6 +142,8 @@ class CallNotifications(private val context: Context, private val hideContent: (
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setSilent(true)
             .apply { if (connectedAtMs != null) setWhen(connectedAtMs).setUsesChronometer(true) }
+            // §23.5: one notification while sharing, "Sharing your screen" with Stop.
+            .apply { if (sharing) addAction(NotificationCompat.Action.Builder(null, "Stop sharing", broadcast(ACTION_STOP_SHARE, 5)).build()) }
             .build()
     }
 

@@ -605,6 +605,12 @@ data class DeviceMls(
          * SDK and its frame encryption load and the core exports call keys (§20.6).
          */
         const val CAP_GROUP_CALLS = "group_calls"
+
+        /** v1.23 §23.1: mid-call voice↔video switching (with `calls` and `video`). */
+        const val CAP_CALL_SWITCH = "call_switch"
+
+        /** v1.23 §23.1: screen sharing (with `call_switch`, once MediaProjection and the screencast source load). */
+        const val CAP_SCREEN_SHARE = "screen_share"
     }
 }
 

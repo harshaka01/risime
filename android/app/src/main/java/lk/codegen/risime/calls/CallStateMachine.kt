@@ -146,7 +146,28 @@ data class CallSnapshot(
     val group: Boolean = false,
     /** §20.5 the room's participants (this device first), named by the UI. */
     val members: List<GroupMember> = emptyList(),
+    /** §23.1: both selected devices listed `switch`: the Video (voice mode) and Voice (video mode) buttons work. */
+    val canSwitch: Boolean = false,
+    /** §23.1: both listed `screen`: Share screen works. */
+    val canShare: Boolean = false,
+    /** §23.2 my pending request's source ("Asking … to switch to video…" with Cancel), null = none. */
+    val asking: String? = null,
+    /** §23.2 the peer's pending request's source (the prompt), null = none. */
+    val prompt: String? = null,
+    /** §23.2 the short line after a switch attempt ("No answer", "… declined video", "Couldn't switch to video"). */
+    val switchNotice: SwitchNotice? = null,
+    /** §23.2 step 3: after a decline the Video button waits until this device time (ms). */
+    val videoBlockedUntilMs: Long = 0,
+    /** §23.5 this device shares its screen now. */
+    val sharing: Boolean = false,
+    /** §23.4 the peer's last `call_media` says `screen` ("<name> is sharing their screen"). */
+    val peerSharing: Boolean = false,
+    /** §23.8 the call was in video mode at some point (its `call_end.media` is "video"). */
+    val everVideo: Boolean = false,
 )
+
+/** §23.2 what a switch attempt ended with (the UI names the peer). */
+enum class SwitchNotice { NO_ANSWER, DECLINED, FAILED, SHARE_FAILED }
 
 /**
  * The 1:1 call state machine (§16.3–§16.5, android R2–R4, R9; crypto R3–R6). Pure Kotlin: media,
@@ -172,6 +193,8 @@ class CallStateMachine(
     private val lingerMs: Long = 2_500,
     /** The ring timeout (caller) and ring validity (callee), §16.4; shorter only in live tests. */
     private val ringMs: Long = RING_MS,
+    /** §23.1 what this device can do in a call (`switch`, `screen`), sent in `features`. */
+    private val features: () -> List<String> = { emptyList() },
 ) {
     companion object {
         const val RING_MS = 45_000L
@@ -203,6 +226,17 @@ class CallStateMachine(
         /** Decision 054: audio that flowed and then stopped this long ends an active call ("Can't connect the call"). */
         const val MEDIA_STALL_MS = 20_000L
         const val MEDIA_STALL_POLL_MS = 2_000L
+
+        /** §23.2 step 3: a request without an answer is cancelled after this. */
+        const val SWITCH_ASK_MS = 20_000L
+        /** §23.2 step 3: after a decline the Video button waits this long. */
+        const val SWITCH_COOLDOWN_MS = 10_000L
+        /** §23.3: the re-offer gets its answer within this, or the caller rolls back. */
+        const val RENEGOTIATE_MS = 10_000L
+        /** The callee's wait for the caller's re-offer after an accept (the caller's 10 s plus delivery). */
+        const val RENEGOTIATE_WAIT_MS = 15_000L
+        /** How long a switch notice line stays. */
+        const val SWITCH_NOTICE_MS = 4_000L
 
         private val ISO = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
 
@@ -258,10 +292,42 @@ class CallStateMachine(
         var cameraOn = false
         var peerCamera = true
         var peerCameraAt = 0L
-        /** §19.3 `call_media`: the last state sent and when (at most one per second, the last state wins). */
-        var cameraSent: Boolean? = null
+        /** §19.3/§23.4 `call_media`: the last video state sent and when (at most one per second, the last state wins). */
+        var cameraSent: String? = null
         var cameraSentAt = 0L
         var cameraJob: Job? = null
+
+        // ---- §23 switching and screen sharing ----
+        /** §23.1 the selected peer device's `features` (from its offer or answer), and mine (fixed per call). */
+        var peerFeatures: Set<String> = emptySet()
+        var myFeatures: Set<String> = emptySet()
+        /** The session carries an `m=video` (started as video and accepted, or renegotiated). */
+        var videoSection = false
+        var renegotiating = false
+        var renegotiated = false
+        /** Crypto C2: this device's user accepted (or itself asked for) a switch in this call. */
+        var consented = false
+        var everVideo = false
+        /** §23.2 my last `seq` (request/voice) and the last one seen from the peer. */
+        var mySeq = 0
+        var peerSeq = 0
+        /** My pending request (seq, source) and the peer's (the prompt). */
+        var asking: Pair<Int, String>? = null
+        var prompt: Pair<Int, String>? = null
+        var blockedUntil = 0L
+        var switchNotice: SwitchNotice? = null
+        /** §23.5 the one-use consent held until the share starts (never kept for a later share). */
+        var screenGrant: Any? = null
+        var screenOn = false
+        var cameraBeforeShare = false
+        var peerScreen = false
+        /** §23.3 each side's first SDP of the call (the renegotiation is checked against it). */
+        var myFirstSdp: String? = null
+        var peerFirstSdp: String? = null
+        /** §23.3 at most one renegotiation per call: after a failed one the call stays voice. */
+        var renegotiationFailed = false
+        /** The switch, `call_media` and re-offer envelopes go out in the order they were decided. */
+        var ordered: kotlinx.coroutines.channels.Channel<Pair<CallEnvelope.Env, (suspend (SignalOutcome) -> Unit)?>>? = null
     }
 
     /** §19.5 (android A1): the in-call activity is visible and unlocked (the camera runs only then). */
@@ -292,8 +358,11 @@ class CallStateMachine(
                 if (video) {
                     it.media = CallEnvelope.MEDIA_VIDEO
                     it.video = true
+                    it.videoSection = true
+                    it.everVideo = true
                     it.wantCamera = camera
                 }
+                it.myFeatures = runCatching { features().toSet() }.getOrDefault(emptySet())
                 current = it
                 publish(it)
                 // §16.4 ring timeout, armed at once (decision 054): a stuck TURN fetch or signal can't
@@ -324,7 +393,8 @@ class CallStateMachine(
                 finish(call, CallNotice.CANT_CONNECT, sendEnd = null)
                 return true
             }
-            CallEnvelope.Offer(call.id, sdp, iso(serverNow()), media = call.media)
+            call.myFirstSdp = sdp
+            CallEnvelope.Offer(call.id, sdp, iso(serverNow()), media = call.media, features = call.myFeatures.toList())
         }
         val r = sig(call.conv, call.peer, offer, call.media)
         lock.withLock {
@@ -393,7 +463,8 @@ class CallStateMachine(
                 finish(call, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
                 return
             }
-            CallEnvelope.Answer(call.id, call.offerDevice!!, sdp)
+            call.myFirstSdp = sdp
+            CallEnvelope.Answer(call.id, call.offerDevice!!, sdp, call.myFeatures.toList())
         }
         val r = sig(call.conv, call.peer, answer, call.media)
         lock.withLock {
@@ -512,24 +583,38 @@ class CallStateMachine(
         if (c.phase == CallPhase.ACTIVE || c.phase == CallPhase.RECONNECTING) scheduleCameraSignal(c)
     }
 
-    /** §19.3 `call_media` to the selected peer device: at most one per second per call, the last state wins. */
+    /** §23.4 what this device sends now: the screen, the camera or nothing. */
+    private fun videoState(c: Call): String = when {
+        c.screenOn -> CallEnvelope.VIDEO_SCREEN
+        c.cameraOn -> CallEnvelope.VIDEO_CAMERA
+        else -> CallEnvelope.VIDEO_OFF
+    }
+
+    /** §23.1 the peer listed `switch` (and so do I): `video` goes into `call_media`, the switch buttons work. */
+    private fun peerSwitches(c: Call) = CallEnvelope.FEATURE_SWITCH in c.peerFeatures && CallEnvelope.FEATURE_SWITCH in c.myFeatures
+
+    /**
+     * §19.3/§23.4 `call_media` to the selected peer device, in video mode only: at most one per
+     * second per call, the last state wins; `video` only to a peer that listed `switch`.
+     */
     private fun scheduleCameraSignal(c: Call) {
         if (!c.video || c.ended) return
         if (c.cameraJob?.isActive == true) return
-        if (c.cameraSent == c.cameraOn) return
+        if (c.cameraSent == videoState(c)) return
         c.cameraJob = scope.launch {
             val wait = c.cameraSentAt + CAMERA_SIGNAL_MS - now()
             if (c.cameraSentAt > 0 && wait > 0) delay(wait)
             val env = lock.withLock {
-                if (c.ended || current !== c || c.cameraSent == c.cameraOn) return@launch
+                val st = videoState(c)
+                if (c.ended || current !== c || !c.video || c.cameraSent == st) return@launch
                 val to = (if (c.outgoing) c.selected else c.offerDevice) ?: return@launch
-                c.cameraSent = c.cameraOn
+                c.cameraSent = st
                 c.cameraSentAt = now()
-                CallEnvelope.Media(c.id, to, c.cameraOn)
+                CallEnvelope.Media(c.id, to, st == CallEnvelope.VIDEO_CAMERA, st.takeIf { peerSwitches(c) })
             }
             sig(c.conv, c.peer, env, c.media)
             // A change while this one was going out: send the latest (still at most one per second).
-            lock.withLock { if (!c.ended && current === c && c.cameraSent != c.cameraOn) scope.launch { lock.withLock { scheduleCameraSignal(c) } } }
+            lock.withLock { if (!c.ended && current === c && c.video && c.cameraSent != videoState(c)) scope.launch { lock.withLock { scheduleCameraSignal(c) } } }
         }
     }
 
@@ -559,7 +644,12 @@ class CallStateMachine(
                 return
             }
             when (env) {
-                is CallEnvelope.Offer -> if (env.restart) onRestartOffer(s, env) else onOffer(s, env, own, markedEnded)
+                is CallEnvelope.Offer -> when {
+                    env.renegotiate -> if (!own) onRenegotiateOffer(s, env)
+                    env.restart -> onRestartOffer(s, env)
+                    else -> onOffer(s, env, own, markedEnded)
+                }
+                is CallEnvelope.Switch -> onSwitch(s, env, own)
                 is CallEnvelope.Ringing -> onRinging(s, own)
                 is CallEnvelope.Answer -> onAnswer(s, env, own)
                 is CallEnvelope.Accepted -> onAccepted(s, env, own)
@@ -683,6 +773,11 @@ class CallStateMachine(
         call.pinned = SdpRules.fingerprint(env.sdp)
         call.media = env.media
         call.video = env.media == CallEnvelope.MEDIA_VIDEO
+        call.videoSection = call.video
+        call.everVideo = call.video
+        call.peerFeatures = env.features.toSet()
+        call.myFeatures = runCatching { features().toSet() }.getOrDefault(emptySet())
+        call.peerFirstSdp = env.sdp
         current = call
         return call
     }
@@ -718,6 +813,8 @@ class CallStateMachine(
         if (!c.outgoing || !c.peer.equals(s.fromUser, true) || !env.toDevice.equals(myDevice, true)) return
         if (c.selected != null) {
             if (!c.selected.equals(s.fromDevice, true)) return // a later answer: the first one won
+            // §23.3 the answer to my re-offer (one at a time: a restart never runs while it is out).
+            if (c.renegotiating) return onRenegotiateAnswer(c, env)
             // The answer to an ICE restart (§16.2): the same fingerprint as the first SDP (§16.10 d).
             if (c.phase != CallPhase.RECONNECTING && c.phase != CallPhase.ACTIVE) return
             if (!SdpRules.sameFingerprint(SdpRules.fingerprint(env.sdp), c.pinned)) {
@@ -737,8 +834,11 @@ class CallStateMachine(
         if (c.video && SdpRules.videoRejected(env.sdp)) {
             log("call_answer for ${c.id}: video rejected, an audio call")
             c.video = false
+            c.videoSection = false
             applyCamera(c)
         }
+        c.peerFeatures = env.features.toSet()
+        c.peerFirstSdp = env.sdp
         val fp = SdpRules.fingerprint(env.sdp)
         val remote = if (tamperRemoteFingerprint()) SdpRules.tamperFingerprint(env.sdp) else env.sdp
         c.selected = s.fromDevice.lowercase()
@@ -823,8 +923,12 @@ class CallStateMachine(
             log("call_media for ${c.id} from ${s.fromDevice}: not the selected device: dropped")
             return
         }
-        if (c.peerCamera != env.camera) {
-            c.peerCamera = env.camera
+        // §23.4: `video` (absent = derived from `camera`); the screen label comes only from here.
+        val camera = env.state != CallEnvelope.VIDEO_OFF
+        val screen = env.state == CallEnvelope.VIDEO_SCREEN
+        if (c.peerCamera != camera || c.peerScreen != screen) {
+            c.peerCamera = camera
+            c.peerScreen = screen
             c.peerCameraAt = now()
             publish(c)
         }
@@ -876,6 +980,411 @@ class CallStateMachine(
             return
         }
         scope.launch { sig(c.conv, c.peer, CallEnvelope.Answer(c.id, s.fromDevice.lowercase(), answer), c.media) }
+    }
+
+    // ---------------------------------------------------------------- §23 switching and screen sharing
+
+    private fun peerDevice(c: Call): String? = if (c.outgoing) c.selected else c.offerDevice
+
+    private fun live(c: Call) = c.phase == CallPhase.ACTIVE || c.phase == CallPhase.RECONNECTING
+
+    /** §23.1/§23.3: both listed `switch`, and the session has `m=video` or may get it (a voice call, never renegotiated yet). */
+    private fun canSwitch(c: Call): Boolean = peerSwitches(c) &&
+        (c.videoSection || (c.media == CallEnvelope.MEDIA_AUDIO && !c.renegotiationFailed))
+
+    private fun canShare(c: Call): Boolean = canSwitch(c) && CallEnvelope.FEATURE_SCREEN in c.peerFeatures && CallEnvelope.FEATURE_SCREEN in c.myFeatures
+
+    /** Under the lock: queues [env] behind every earlier switch/media/re-offer envelope of [c]. */
+    private fun send(c: Call, env: CallEnvelope.Env, after: (suspend (SignalOutcome) -> Unit)? = null) {
+        val q = c.ordered ?: kotlinx.coroutines.channels.Channel<Pair<CallEnvelope.Env, (suspend (SignalOutcome) -> Unit)?>>(kotlinx.coroutines.channels.Channel.UNLIMITED).also { ch ->
+            c.ordered = ch
+            scope.launch {
+                for ((e, cb) in ch) {
+                    val r = sig(c.conv, c.peer, e, c.media)
+                    cb?.invoke(r)
+                }
+            }
+        }
+        q.trySend(env to after)
+    }
+
+    /**
+     * §23.2 step 1: the Video ([CallEnvelope.SOURCE_CAMERA]; CAMERA already asked) or Share screen
+     * ([CallEnvelope.SOURCE_SCREEN] with [grant], the consent of this tap) button in voice mode.
+     * When the peer is asking already, the tap is the answer (both asked). False = not now.
+     */
+    suspend fun requestVideo(source: String, grant: Any? = null): Boolean {
+        lock.withLock {
+            val c = current?.takeIf { !it.ended && live(it) && !it.video } ?: return false
+            if (!canSwitch(c) || source !in CallEnvelope.SOURCES) return false
+            if (source == CallEnvelope.SOURCE_SCREEN && (!canShare(c) || grant == null)) return false
+            if (c.asking != null || now() < c.blockedUntil) return false
+            val to = peerDevice(c) ?: return false
+            c.prompt?.let { (seq, _) ->
+                answerPromptLocked(c, seq, to, mine = source, grant = grant)
+                return true
+            }
+            c.mySeq++
+            val seq = c.mySeq
+            c.asking = seq to source
+            c.screenGrant = grant
+            c.consented = true // crypto C2: this user asked
+            c.switchNotice = null
+            publish(c)
+            timer(c, "switch_ask", SWITCH_ASK_MS) { x ->
+                if (x.asking?.first == seq) {
+                    log("switch request $seq: no answer in $SWITCH_ASK_MS ms: cancel")
+                    x.asking = null
+                    x.screenGrant = null
+                    send(x, CallEnvelope.Switch(x.id, to, seq, CallEnvelope.SW_CANCEL))
+                    notice(x, SwitchNotice.NO_ANSWER)
+                }
+            }
+            send(c, CallEnvelope.Switch(c.id, to, seq, CallEnvelope.SW_REQUEST, source))
+            log("switch request $seq ($source)")
+        }
+        return true
+    }
+
+    /** §23.2 Cancel on "Asking … to switch to video…". */
+    suspend fun cancelVideoRequest() {
+        lock.withLock {
+            val c = current?.takeIf { !it.ended } ?: return
+            val (seq, _) = c.asking ?: return
+            val to = peerDevice(c) ?: return
+            c.asking = null
+            c.screenGrant = null
+            c.timers.remove("switch_ask")?.cancel()
+            publish(c)
+            send(c, CallEnvelope.Switch(c.id, to, seq, CallEnvelope.SW_CANCEL))
+        }
+    }
+
+    /**
+     * §23.2 steps 2–3, the prompt: [accept] with [camera] (Accept: my camera on, CAMERA already
+     * asked; Without my camera / Watch: off) or Decline ("Not now").
+     */
+    suspend fun answerVideoRequest(accept: Boolean, camera: Boolean = false) {
+        lock.withLock {
+            val c = current?.takeIf { !it.ended && live(it) } ?: return
+            val (seq, _) = c.prompt ?: return
+            val to = peerDevice(c) ?: return
+            if (!accept) {
+                c.prompt = null
+                c.timers.remove("prompt")?.cancel()
+                publish(c)
+                send(c, CallEnvelope.Switch(c.id, to, seq, CallEnvelope.SW_DECLINE))
+                log("switch request $seq declined")
+                return
+            }
+            answerPromptLocked(c, seq, to, mine = if (camera) CallEnvelope.SOURCE_CAMERA else null, grant = null)
+        }
+    }
+
+    private fun answerPromptLocked(c: Call, seq: Int, to: String, mine: String?, grant: Any?) {
+        c.prompt = null
+        c.timers.remove("prompt")?.cancel()
+        if (grant != null) c.screenGrant = grant
+        send(c, CallEnvelope.Switch(c.id, to, seq, CallEnvelope.SW_ACCEPT))
+        log("switch request $seq accepted")
+        enterVideo(c, mine)
+    }
+
+    /** §23.2 Voice in video mode: both stop sending video; a later switch needs a new request (no new renegotiation). */
+    suspend fun backToVoice() {
+        lock.withLock {
+            val c = current?.takeIf { !it.ended && it.video && live(it) } ?: return
+            if (!peerSwitches(c)) return
+            val to = peerDevice(c) ?: return
+            c.mySeq++
+            send(c, CallEnvelope.Switch(c.id, to, c.mySeq, CallEnvelope.SW_VOICE))
+            enterVoice(c)
+        }
+    }
+
+    /** §23.5 Share screen in video mode ([grant]: the consent of this tap, used once). */
+    suspend fun startShare(grant: Any): Boolean {
+        lock.withLock {
+            val c = current?.takeIf { !it.ended && it.video && live(it) && !it.screenOn } ?: return false
+            if (!canShare(c)) return false
+            c.screenGrant = grant
+            startScreenLocked(c)
+            return c.screenOn
+        }
+    }
+
+    /** §23.5 Stop: the banner, the notification's Stop, SCREEN_OFF, the platform's onStop. */
+    suspend fun stopShare(why: String = "stop") {
+        lock.withLock { current?.takeIf { !it.ended }?.let { stopScreenLocked(it, why) } }
+    }
+
+    private fun startScreenLocked(c: Call) {
+        val grant = c.screenGrant ?: return
+        c.screenGrant = null // one-use: never kept for a later share (§23.5)
+        val s = c.session ?: return
+        c.cameraBeforeShare = c.wantCamera
+        c.wantCamera = false
+        applyCamera(c)
+        val ok = runCatching {
+            s.startScreen(grant) { scope.launch { lock.withLock { if (current === c) stopScreenLocked(c, "the platform stopped the projection") } } }
+        }.onFailure { log("screen share: ${it.message}") }.getOrDefault(false)
+        if (ok) {
+            c.screenOn = true
+            log("screen share on")
+        } else {
+            c.wantCamera = c.cameraBeforeShare
+            applyCamera(c)
+            notice(c, SwitchNotice.SHARE_FAILED)
+        }
+        publish(c)
+        scheduleCameraSignal(c)
+    }
+
+    private fun stopScreenLocked(c: Call, why: String) {
+        if (!c.screenOn) return
+        log("screen share off ($why)")
+        runCatching { c.session?.stopScreen() }
+        c.screenOn = false
+        // §23.5: back to the camera only if it was on before and the call screen is visible.
+        if (c.video && c.cameraBeforeShare && screenVisible) c.wantCamera = true
+        c.cameraBeforeShare = false
+        applyCamera(c)
+        publish(c)
+        scheduleCameraSignal(c)
+    }
+
+    /** §23.2 step 5: video mode; [mine] = what this device starts (camera, screen, or nothing). */
+    private fun enterVideo(c: Call, mine: String?) {
+        c.timers.remove("switch_ask")?.cancel()
+        c.asking = null
+        c.prompt = null
+        c.switchNotice = null
+        c.video = true
+        c.everVideo = true
+        c.consented = true
+        c.peerCamera = false
+        c.peerScreen = false
+        c.peerCameraAt = now()
+        c.cameraSent = null // one `call_media` after entering video mode
+        log("video mode (mine=${mine ?: "off"}, m=video ${if (c.videoSection) "negotiated" else "to add"})")
+        if (!c.videoSection) {
+            c.session?.enableVideo()
+            if (c.outgoing) {
+                scope.launch { renegotiate(c) }
+            } else {
+                timer(c, "reneg_wait", RENEGOTIATE_WAIT_MS) { x -> if (!x.videoSection && x.video) failSwitch(x, "no re-offer from the caller") }
+            }
+        }
+        when (mine) {
+            CallEnvelope.SOURCE_CAMERA -> c.wantCamera = true
+            CallEnvelope.SOURCE_SCREEN -> startScreenLocked(c)
+        }
+        applyCamera(c)
+        publish(c)
+        scheduleCameraSignal(c)
+    }
+
+    /** §23.2 back to voice mode: no video sent (setTrack(null)), no share, nothing rendered. */
+    private fun enterVoice(c: Call) {
+        log("voice mode")
+        c.timers.remove("switch_ask")?.cancel()
+        c.timers.remove("reneg_wait")?.cancel()
+        c.asking = null
+        c.prompt = null
+        c.screenGrant = null
+        c.video = false
+        stopScreenLocked(c, "voice")
+        c.wantCamera = false
+        c.peerScreen = false
+        applyCamera(c)
+        publish(c)
+    }
+
+    private fun notice(c: Call, n: SwitchNotice) {
+        c.switchNotice = n
+        publish(c)
+        timer(c, "switch_notice", SWITCH_NOTICE_MS) { x ->
+            if (x.switchNotice == n) {
+                x.switchNotice = null
+                publish(x)
+            }
+        }
+    }
+
+    /** §23.2 step 6: a renegotiation that failed rolls back, keeps audio, and puts both sides back in voice mode. */
+    private suspend fun failSwitch(c: Call, why: String) {
+        log("couldn't switch to video: $why")
+        c.timers.remove("reneg")?.cancel()
+        c.timers.remove("reneg_wait")?.cancel()
+        if (c.renegotiating) {
+            c.renegotiating = false
+            runCatching { mediaOp { c.session?.rollback() } }.onFailure { log("rollback: ${it.message}") }
+        }
+        if (!c.videoSection) c.renegotiationFailed = true
+        val to = peerDevice(c)
+        if (c.video && to != null) {
+            c.mySeq++
+            send(c, CallEnvelope.Switch(c.id, to, c.mySeq, CallEnvelope.SW_VOICE))
+        }
+        enterVoice(c)
+        notice(c, SwitchNotice.FAILED)
+    }
+
+    /** §23.3 the original caller's one re-offer that adds `m=video` (after an accept). */
+    private suspend fun renegotiate(c: Call) {
+        lock.withLock {
+            if (c.ended || current !== c || c.videoSection || c.renegotiating || c.renegotiationFailed || !c.outgoing) return
+            val s = c.session ?: return
+            val first = c.myFirstSdp ?: return failSwitch(c, "no first offer")
+            c.renegotiating = true
+            val sdp = runCatching {
+                s.enableVideo()
+                mediaOp { s.createOffer() }
+            }.getOrElse { return failSwitch(c, "re-offer: ${it.message}") }
+            (SdpRules.validate(sdp, SdpRules.Role.OFFER, video = true) ?: SdpRules.renegotiationProblem(first, sdp, SdpRules.Role.OFFER))?.let {
+                return failSwitch(c, "own re-offer: $it")
+            }
+            timer(c, "reneg", RENEGOTIATE_MS) { x -> if (x.renegotiating) failSwitch(x, "no answer to the re-offer in $RENEGOTIATE_MS ms") }
+            log("renegotiate: re-offer out")
+            send(c, CallEnvelope.Offer(c.id, sdp, iso(serverNow()), toDevice = c.selected, media = c.media, renegotiate = true)) { r ->
+                if (r != SignalOutcome.Ok) lock.withLock { if (c.renegotiating && current === c && !c.ended) failSwitch(c, "re-offer not sent: $r") }
+            }
+        }
+    }
+
+    /** §23.3 the caller: the answer to the re-offer (fingerprint, ICE credentials, setup, mids), then (e) again. */
+    private suspend fun onRenegotiateAnswer(c: Call, env: CallEnvelope.Answer) {
+        val session = c.session ?: return
+        val first = c.peerFirstSdp ?: return failSwitch(c, "no first answer")
+        if (SdpRules.mLineCount(env.sdp) != 2) return failSwitch(c, "answer without m=video")
+        if (!SdpRules.sameFingerprint(SdpRules.fingerprint(env.sdp), c.pinned)) {
+            log("dtls_fingerprint_mismatch: the re-offer's answer has a different fingerprint")
+            finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
+            return
+        }
+        SdpRules.renegotiationProblem(first, env.sdp, SdpRules.Role.ANSWER)?.let { return failSwitch(c, "answer: $it") }
+        val ok = runCatching { mediaOp { session.setRemote(env.sdp, isOffer = false) } }.onFailure { log("setRemote(re-answer): ${it.message}") }.isSuccess
+        if (!ok) return failSwitch(c, "answer not applied")
+        c.timers.remove("reneg")?.cancel()
+        c.renegotiating = false
+        c.renegotiated = true
+        c.videoSection = true
+        log("renegotiated: m=video added")
+        recheck(c)
+        applyCamera(c)
+        publish(c)
+    }
+
+    /** §23.3 the callee: the caller's re-offer, applied only with this user's consent (crypto C2) and only once. */
+    private suspend fun onRenegotiateOffer(s: InboundCall, env: CallEnvelope.Offer) {
+        val c = current?.takeIf { !it.ended && it.id == env.callId } ?: return
+        if (c.outgoing) return log("re-offer for ${c.id} to the caller: dropped (only the original caller re-offers)")
+        if (!s.fromUser.equals(c.peer, true) || !s.fromDevice.equals(c.offerDevice, true) || !env.toDevice.equals(myDevice, true)) return
+        if (env.media != c.media || s.media != c.media) return log("re-offer for ${c.id} with media ${env.media}: dropped")
+        if (!c.consented || c.renegotiated || c.videoSection) return log("re-offer for ${c.id} without consent (or a second one): dropped")
+        if (!SdpRules.sameFingerprint(SdpRules.fingerprint(env.sdp), c.pinned)) {
+            log("dtls_fingerprint_mismatch: re-offer with a different fingerprint")
+            finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
+            return
+        }
+        val first = c.peerFirstSdp ?: return
+        SdpRules.renegotiationProblem(first, env.sdp, SdpRules.Role.OFFER)?.let { return failSwitch(c, "re-offer: $it") }
+        val session = c.session ?: return
+        c.renegotiating = true
+        val answer = runCatching {
+            session.enableVideo()
+            mediaOp { session.setRemote(env.sdp, isOffer = true) }
+            mediaOp { session.createAnswer() }
+        }.getOrElse { return failSwitch(c, "answer to the re-offer: ${it.message}") }
+        (SdpRules.validate(answer, SdpRules.Role.ANSWER, video = true) ?: c.myFirstSdp?.let { SdpRules.renegotiationProblem(it, answer, SdpRules.Role.ANSWER) })?.let {
+            return failSwitch(c, "own re-answer: $it")
+        }
+        c.renegotiating = false
+        c.renegotiated = true
+        c.videoSection = true
+        c.timers.remove("reneg_wait")?.cancel()
+        log("renegotiated: m=video added (callee)")
+        send(c, CallEnvelope.Answer(c.id, c.offerDevice!!, answer))
+        recheck(c)
+        applyCamera(c)
+        publish(c)
+    }
+
+    /** §23.3: after the renegotiation the §16.10 (e) check runs again (same transport, same fingerprint). */
+    private fun recheck(c: Call) {
+        scope.launch {
+            delay(STATS_POLL_MS)
+            val st = lock.withLock { if (c.ended || current !== c) null else c.session }?.let { runCatching { it.stats() }.getOrNull() } ?: return@launch
+            lock.withLock {
+                if (c.ended || current !== c) return@launch
+                if ((st.remoteFingerprint != null && !SdpRules.sameFingerprint(st.remoteFingerprint, c.pinned)) || st.dtlsState == "failed") {
+                    log("dtls_fingerprint_mismatch after the renegotiation")
+                    finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
+                }
+            }
+        }
+    }
+
+    /** §23.2 an inbound `call_switch` from the selected peer device to this one (sender pinning, `seq` rules). */
+    private suspend fun onSwitch(s: InboundCall, env: CallEnvelope.Switch, own: Boolean) {
+        if (own) return
+        val c = current?.takeIf { !it.ended && it.id == env.callId && it.peer.equals(s.fromUser, true) } ?: return
+        val peerDev = peerDevice(c)
+        if (peerDev == null || !s.fromDevice.equals(peerDev, true) || !env.toDevice.equals(myDevice, true)) {
+            return log("call_switch for ${c.id} from ${s.fromDevice}: not the selected device: dropped")
+        }
+        if (CallEnvelope.FEATURE_SWITCH !in c.myFeatures) return log("call_switch: this device doesn't switch: dropped")
+        if (!live(c)) return log("call_switch ${env.action} before the call connected: dropped")
+        when (env.action) {
+            CallEnvelope.SW_REQUEST -> {
+                if (env.seq <= c.peerSeq) return log("call_switch request ${env.seq}: replayed (last ${c.peerSeq}): dropped")
+                c.peerSeq = env.seq
+                if (c.video) return log("call_switch request in video mode: dropped")
+                if (!canSwitch(c)) {
+                    send(c, CallEnvelope.Switch(c.id, peerDev, env.seq, CallEnvelope.SW_DECLINE))
+                    return
+                }
+                c.asking?.let { (_, mine) ->
+                    // §23.2 step 4: crossing requests: both asked, no prompt; both send accept.
+                    log("crossing switch requests: accepted without a prompt")
+                    answerPromptLocked(c, env.seq, peerDev, mine, grant = null)
+                    return
+                }
+                c.prompt = env.seq to env.source!!
+                // The requester cancels after 20 s; a lost cancel still removes the prompt.
+                timer(c, "prompt", SWITCH_ASK_MS + 5_000) { x ->
+                    if (x.prompt?.first == env.seq) {
+                        x.prompt = null
+                        publish(x)
+                    }
+                }
+                publish(c)
+            }
+            CallEnvelope.SW_ACCEPT -> {
+                val a = c.asking
+                if (a == null || a.first != env.seq) return log("call_switch accept ${env.seq}: not my pending request: dropped")
+                enterVideo(c, a.second)
+            }
+            CallEnvelope.SW_DECLINE -> {
+                if (c.asking?.first != env.seq) return log("call_switch decline ${env.seq}: not my pending request: dropped")
+                c.asking = null
+                c.screenGrant = null
+                c.timers.remove("switch_ask")?.cancel()
+                c.blockedUntil = now() + SWITCH_COOLDOWN_MS
+                notice(c, SwitchNotice.DECLINED)
+            }
+            CallEnvelope.SW_CANCEL -> {
+                if (c.prompt?.first != env.seq) return log("call_switch cancel ${env.seq}: no such prompt: dropped")
+                c.prompt = null
+                c.timers.remove("prompt")?.cancel()
+                publish(c)
+            }
+            CallEnvelope.SW_VOICE -> {
+                if (env.seq <= c.peerSeq) return log("call_switch voice ${env.seq}: replayed (last ${c.peerSeq}): dropped")
+                c.peerSeq = env.seq
+                if (c.video) enterVoice(c)
+            }
+        }
     }
 
     // ---------------------------------------------------------------- media callbacks
@@ -949,6 +1458,8 @@ class CallStateMachine(
     private suspend fun restart(c: Call) {
         val offer = lock.withLock {
             if (c.ended || current !== c) return
+            // §23.3 (android A1): one offer at a time; the re-offer's own 10-s bound runs first.
+            if (c.renegotiating) return
             val s = c.session ?: return
             val sdp = runCatching { mediaOp { s.createOffer(iceRestart = true) } }.getOrNull() ?: return
             CallEnvelope.Offer(c.id, sdp, iso(serverNow()), restart = true, toDevice = c.selected, media = c.media)
@@ -1041,6 +1552,11 @@ class CallStateMachine(
         c.checking?.cancel()
         c.cameraJob?.cancel()
         c.cameraOn = false
+        // §23.5: the share stops on call end (before the session goes).
+        if (c.screenOn) runCatching { c.session?.stopScreen() }
+        c.screenOn = false
+        c.screenGrant = null
+        c.ordered?.close()
         runCatching { c.session?.close() }
         c.session = null
         if (current === c) current = null
@@ -1061,7 +1577,8 @@ class CallStateMachine(
                 c.id, sendEnd,
                 connectedAt = connectedAtServer?.takeIf { sendEnd == CallEnvelope.R_HANGUP || sendEnd == CallEnvelope.R_FAILED }?.let(::iso),
                 durationS = duration?.takeIf { connectedAtServer != null },
-                media = c.media, // §19.3: a video call stays "video" even if both cameras were off
+                // §19.3/§23.8: "video" if the call was ever in video mode (even if both cameras were off).
+                media = if (c.everVideo || c.media == CallEnvelope.MEDIA_VIDEO) CallEnvelope.MEDIA_VIDEO else CallEnvelope.MEDIA_AUDIO,
                 outgoing = c.outgoing,
             )
             scope.launch { signals.end(c.conv, c.peer, end) }
@@ -1070,7 +1587,7 @@ class CallStateMachine(
             if (_state.value?.callId == c.id) _state.value = null
             return
         }
-        _state.value = CallSnapshot(c.id, c.conv, c.peer, c.outgoing, CallPhase.ENDED, c.muted, c.connectedAt, c.verified, notice, video = c.video)
+        _state.value = CallSnapshot(c.id, c.conv, c.peer, c.outgoing, CallPhase.ENDED, c.muted, c.connectedAt, c.verified, notice, video = c.video, everVideo = c.everVideo)
         scope.launch {
             delay(lingerMs)
             if (_state.value?.callId == c.id && _state.value?.phase == CallPhase.ENDED) _state.value = null
@@ -1092,6 +1609,9 @@ class CallStateMachine(
         _state.value = CallSnapshot(
             c.id, c.conv, c.peer, c.outgoing, c.phase, c.muted, c.connectedAt, c.verified, null,
             video = c.video, cameraOn = c.cameraOn, wantCamera = c.wantCamera, peerCamera = c.peerCamera, peerCameraAtMs = c.peerCameraAt,
+            canSwitch = canSwitch(c), canShare = canShare(c), asking = c.asking?.second, prompt = c.prompt?.second,
+            switchNotice = c.switchNotice, videoBlockedUntilMs = c.blockedUntil, sharing = c.screenOn, peerSharing = c.video && c.peerScreen,
+            everVideo = c.everVideo,
         )
     }
 

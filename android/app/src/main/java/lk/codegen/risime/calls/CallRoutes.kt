@@ -144,7 +144,9 @@ data class RouteDecision(val target: EndpointUi.Kind?, val reason: String)
  * 3. The user's pick ([userPicked]) is never overridden ([RoutePolicyState] clears it only on a
  *    Bluetooth connect and on a voice→video switch, the events that come after it).
  * 4. Bluetooth just disconnected: a wired headset, else the speaker (video) or the earpiece (voice).
- * 5. The call just turned to video ([videoTurnedOn]): the speaker, unless a headset is there.
+ * 5. The call just turned to video ([videoTurnedOn]): the speaker, unless a headset is there; it
+ *    just turned back to voice ([voiceTurnedOn], set only when that speaker came from the switch and
+ *    not from the user, §23.7): the earpiece.
  * 6. Default: a Bluetooth device, else a wired headset, when available and no headset is current;
  *    else a video call on the earpiece moves to the speaker (an unknown route: wait for one); a voice
  *    call stays.
@@ -158,6 +160,7 @@ fun routeTarget(
     btConnected: Boolean = false,
     btDisconnected: Boolean = false,
     videoTurnedOn: Boolean = false,
+    voiceTurnedOn: Boolean = false,
 ): RouteDecision {
     fun move(k: EndpointUi.Kind, why: String) = when {
         current == k -> RouteDecision(null, "already ${routeKindName(k)} ($why)")
@@ -178,6 +181,7 @@ fun routeTarget(
         }
     }
     if (videoTurnedOn && !bt && !wired) return move(EndpointUi.Kind.SPEAKER, "switched to video")
+    if (voiceTurnedOn && !video && current == EndpointUi.Kind.SPEAKER) return move(EndpointUi.Kind.EARPIECE, "switched back to voice")
     if (bt && !headsetOn) return move(EndpointUi.Kind.BLUETOOTH, "bluetooth available")
     if (wired && !headsetOn) return move(EndpointUi.Kind.WIRED, "headset available")
     if (headsetOn) return RouteDecision(null, "on a headset")
@@ -209,6 +213,9 @@ class RoutePolicyState(private val now: () -> Long = System::currentTimeMillis) 
     private var btConnected = false
     private var btDisconnected = false
     private var videoTurnedOn = false
+    private var voiceTurnedOn = false
+    /** §23.7 the speaker came from a voice→video switch (or the video default), not from the user. */
+    private var speakerBySwitch = false
     private var lastAsk: Any? = null
     private var tries = 0
 
@@ -217,6 +224,8 @@ class RoutePolicyState(private val now: () -> Long = System::currentTimeMillis) 
         btConnected = false
         btDisconnected = false
         videoTurnedOn = false
+        voiceTurnedOn = false
+        speakerBySwitch = false
     }
 
     /** RisiMe asks the platform for [kind] now (the policy's move or the user's pick in the app). */
@@ -239,10 +248,20 @@ class RoutePolicyState(private val now: () -> Long = System::currentTimeMillis) 
         request = null
     }
 
-    /** The call's video flag changed: turning it ON (the voice→video switch) moves to the speaker. */
+    /**
+     * The call's video flag changed: turning it ON (the voice→video switch) moves to the speaker;
+     * turning it OFF goes back to the earpiece only if that speaker came from the switch, not from
+     * the user (§23.7, android A4).
+     */
     @Synchronized fun videoChanged(video: Boolean) {
-        if (!video) return
+        if (!video) {
+            videoTurnedOn = false
+            voiceTurnedOn = speakerBySwitch && userPick == null
+            speakerBySwitch = false
+            return
+        }
         videoTurnedOn = true
+        voiceTurnedOn = false
         btDisconnected = false
         userPick = null
     }
@@ -272,7 +291,7 @@ class RoutePolicyState(private val now: () -> Long = System::currentTimeMillis) 
         // A picked device that went away (Bluetooth off, the headset unplugged) is no pick any more.
         userPick?.let { if (it !in available) userPick = null }
         lastAvailable = available
-        val d0 = routeTarget(video, phase, available, current, userPick != null, btConnected, btDisconnected, videoTurnedOn)
+        val d0 = routeTarget(video, phase, available, current, userPick != null, btConnected, btDisconnected, videoTurnedOn, voiceTurnedOn)
         val d = if (external && d0.target == null) d0.copy(reason = "${d0.reason}: ${routeKindName(current)}, changed outside RisiMe") else d0
         settled = d.target == null
         if (d.target == null) {
@@ -280,9 +299,11 @@ class RoutePolicyState(private val now: () -> Long = System::currentTimeMillis) 
                 btConnected = false
                 btDisconnected = false
                 videoTurnedOn = false
+                voiceTurnedOn = false
             }
             return d
         }
+        if (d.target == EndpointUi.Kind.SPEAKER && video) speakerBySwitch = true
         val ask = Triple(d, available, current)
         tries = if (lastAsk == ask) tries + 1 else 1
         lastAsk = ask

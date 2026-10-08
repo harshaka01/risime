@@ -144,6 +144,36 @@ object SdpRules {
         return null
     }
 
+    /**
+     * §23.3 (crypto C1) a re-offer ([Role.OFFER]) or its answer ([Role.ANSWER]) against the same
+     * device's first SDP of the call: the same fingerprint, the same ICE credentials (not a
+     * restart), `BUNDLE 0 1` with audio at mid 0 and video at mid 1, `a=setup:actpass` in the
+     * re-offer and the first answer's `a=setup` in the answer (no DTLS role change), video sendrecv.
+     * null = fine; otherwise why it is refused. [next] must already pass [validate] with video.
+     */
+    fun renegotiationProblem(first: String, next: String, role: Role): String? {
+        if (!sameFingerprint(fingerprint(first), fingerprint(next))) return "fingerprint changed"
+        val fl = lines(first)
+        val nl = lines(next)
+        fun attr(ls: List<String>, k: String) = ls.firstOrNull { it.startsWith(k) }?.removePrefix(k)
+        if (attr(fl, "a=ice-ufrag:") != attr(nl, "a=ice-ufrag:") || attr(fl, "a=ice-pwd:") != attr(nl, "a=ice-pwd:")) return "ICE credentials changed"
+        val (session, secs) = sections(nl)
+        val bundle = session.firstOrNull { it.startsWith("a=group:BUNDLE") }?.removePrefix("a=group:BUNDLE")?.trim()?.split(' ')?.filter { it.isNotEmpty() }
+        if (bundle != listOf("0", "1")) return "BUNDLE ${bundle?.joinToString(" ")} (want 0 1)"
+        if (secs.size != 2 || secs[0].kind != "audio" || secs[0].mid != "0" || secs[1].kind != "video" || secs[1].mid != "1") return "mid order"
+        if (secs[1].port == "0") return "video rejected"
+        val setups = nl.filter { it.startsWith("a=setup:") }.map { it.removePrefix("a=setup:") }.toSet()
+        when (role) {
+            Role.OFFER -> if (setups != setOf("actpass")) return "a=setup:${setups.joinToString(",")} in a re-offer"
+            Role.ANSWER -> {
+                val was = attr(fl, "a=setup:")
+                if (setups != setOf(was)) return "a=setup changed (${setups.joinToString(",")} after $was)"
+            }
+        }
+        if (secs[1].lines.none { it == "a=sendrecv" }) return "video not sendrecv"
+        return null
+    }
+
     /** null = valid; otherwise why it is dropped. */
     fun validate(sdp: String, role: Role): String? {
         if (sdp.toByteArray(Charsets.UTF_8).size > MAX_BYTES) return "over 16 KiB"

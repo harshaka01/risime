@@ -29,22 +29,28 @@ class CallService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startFg(notification, mic)
+        // §23.5 (android A2): `mediaProjection` joins the types BEFORE getMediaProjection (Android 14 rule).
+        val projection = calls.projectionWanted() && Build.VERSION.SDK_INT >= 29
+        val ok = startFg(notification, mic, projection)
+        calls.onServiceForeground(projection && ok)
         return START_NOT_STICKY
     }
 
-    private fun startFg(n: android.app.Notification, mic: Boolean) {
+    private fun startFg(n: android.app.Notification, mic: Boolean, projection: Boolean = false): Boolean {
         val type = if (Build.VERSION.SDK_INT >= 30) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or (if (mic) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or (if (mic) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0) or
+                (if (projection) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0)
+        } else if (projection && Build.VERSION.SDK_INT >= 29) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         } else {
             0
         }
-        runCatching { ServiceCompat.startForeground(this, CallNotifications.CALL_ID, n, type) }
+        return runCatching { ServiceCompat.startForeground(this, CallNotifications.CALL_ID, n, type) }
             .onFailure {
                 Log.w("RisiMe", "call service startForeground($type): ${it.message}")
                 // Never crash the ring: fall back to phoneCall only.
-                if (mic) runCatching { ServiceCompat.startForeground(this, CallNotifications.CALL_ID, n, if (Build.VERSION.SDK_INT >= 30) ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL else 0) }
-            }
+                if (mic || projection) runCatching { ServiceCompat.startForeground(this, CallNotifications.CALL_ID, n, if (Build.VERSION.SDK_INT >= 30) ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL else 0) }
+            }.isSuccess
     }
 
     /** Decision 054: the app was swiped away during a call: end it and give the audio back. */

@@ -47,6 +47,10 @@ class DeviceRegistrar(
     private val videoSupported: () -> Boolean = { false },
     /** §20.1: advertise `group_calls` only with `groups`, `calls` and `video`, LiveKit loaded and call keys in the core. */
     private val groupCallsSupported: () -> Boolean = { false },
+    /** §23.1: advertise `call_switch` with `calls` and `video` (this app switches voice↔video mid-call). */
+    private val callSwitchSupported: () -> Boolean = { false },
+    /** §23.1: advertise `screen_share` with `call_switch` once the screen can be captured. */
+    private val screenShareSupported: () -> Boolean = { false },
     /** The server accepted a `PUT` carrying this push token (null: none was sent). Health screen. */
     private val onPushTokenRegistered: (String?) -> Unit = {},
 ) {
@@ -70,6 +74,8 @@ class DeviceRegistrar(
             DeviceMls.CAP_GROUP_CALLS.takeIf {
                 mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && mls.callKeysSupported && groupCallsSupported()
             },
+            DeviceMls.CAP_CALL_SWITCH.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && callSwitchSupported() },
+            DeviceMls.CAP_SCREEN_SHARE.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && callSwitchSupported() && screenShareSupported() },
             // v1.14 §12.4a: only when the bundled core enforces the member rule (never on the app's own say).
             DeviceMls.CAP_MEMBER_DEVICES.takeIf { DeviceMls.CAP_MEMBER_DEVICES in mls.coreCapabilities },
             // v1.15 §17.1: the core's §17.3 functions present and the feature on.

@@ -116,6 +116,28 @@ class RoutePolicyTest {
         assertNull(p.decide(false, CallPhase.ACTIVE, both, EARPIECE).target)
     }
 
+    /** §23.7 (android A4): back to voice returns to the earpiece only when the speaker came from the switch. */
+    @Test fun stateVideoOffReturnsToTheEarpieceOnlyIfTheSwitchChoseTheSpeaker() {
+        val p = RoutePolicyState()
+        assertNull(p.decide(false, CallPhase.ACTIVE, both, EARPIECE).target)
+        p.videoChanged(true)
+        assertEquals(SPEAKER, p.decide(true, CallPhase.ACTIVE, both, EARPIECE).target)
+        p.requested(SPEAKER)
+        assertNull(p.decide(true, CallPhase.ACTIVE, both, SPEAKER).target)
+        p.videoChanged(false)
+        val d = p.decide(false, CallPhase.ACTIVE, both, SPEAKER)
+        assertEquals(EARPIECE, d.target)
+        assertEquals("switched back to voice", d.reason)
+        // The user had picked the speaker during the video call: it stays.
+        val q = RoutePolicyState()
+        assertNull(q.decide(false, CallPhase.ACTIVE, both, EARPIECE).target)
+        q.videoChanged(true)
+        assertEquals(SPEAKER, q.decide(true, CallPhase.ACTIVE, both, EARPIECE).target)
+        q.userPicked(SPEAKER)
+        q.videoChanged(false)
+        assertNull(q.decide(false, CallPhase.ACTIVE, both, SPEAKER).target)
+    }
+
     @Test fun stateVoiceToVideoWithBluetoothStaysOnBluetooth() {
         val p = RoutePolicyState()
         val bt = both + BLUETOOTH

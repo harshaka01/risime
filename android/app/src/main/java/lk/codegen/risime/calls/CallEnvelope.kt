@@ -36,8 +36,35 @@ object CallEnvelope {
     /** §20.3 (android A2) a member's device joined or declined a group call (ephemeral, `ring: false`). */
     const val MEMBER = "call_member"
 
+    /** §23.2 a 1:1 voice↔video switch (ephemeral, `ring: false`). */
+    const val SWITCH = "call_switch"
+
     /** Every call envelope type (the `call_` namespace). */
-    val TYPES = setOf(OFFER, RINGING, ANSWER, ACCEPTED, ICE, BUSY, CANCEL, END, MEDIA, MEMBER)
+    val TYPES = setOf(OFFER, RINGING, ANSWER, ACCEPTED, ICE, BUSY, CANCEL, END, MEDIA, MEMBER, SWITCH)
+
+    /** §23.1 per-call `features` on `call_offer`/`call_answer`. */
+    const val FEATURE_SWITCH = "switch"
+    const val FEATURE_SCREEN = "screen"
+    const val MAX_FEATURES = 8
+    const val MAX_FEATURE_BYTES = 32
+
+    /** §23.2 `call_switch` actions and request sources. */
+    const val SW_REQUEST = "request"
+    const val SW_ACCEPT = "accept"
+    const val SW_DECLINE = "decline"
+    const val SW_CANCEL = "cancel"
+    const val SW_VOICE = "voice"
+    val SWITCH_ACTIONS = setOf(SW_REQUEST, SW_ACCEPT, SW_DECLINE, SW_CANCEL, SW_VOICE)
+    const val SOURCE_CAMERA = "camera"
+    const val SOURCE_SCREEN = "screen"
+    val SOURCES = setOf(SOURCE_CAMERA, SOURCE_SCREEN)
+    const val MAX_SEQ = 65_535
+
+    /** §23.4 `call_media` `video`: what the sender sends now. */
+    const val VIDEO_OFF = "off"
+    const val VIDEO_CAMERA = "camera"
+    const val VIDEO_SCREEN = "screen"
+    val VIDEO_STATES = setOf(VIDEO_OFF, VIDEO_CAMERA, VIDEO_SCREEN)
 
     /** §20.3 `call_offer` `mode` of a group call through the SFU (the only mode value). */
     const val MODE_SFU = "sfu"
@@ -83,9 +110,13 @@ object CallEnvelope {
         val sdp: String,
         val sentAt: String,
         val restart: Boolean = false,
-        /** Only on a restart: the selected peer device. */
+        /** Only on a restart or a renegotiation: the selected peer device. */
         val toDevice: String? = null,
         val media: String = MEDIA_AUDIO,
+        /** §23.1 what the sending device can do in this call (first offer only). */
+        val features: List<String> = emptyList(),
+        /** §23.3 the caller's one re-offer that adds `m=video` to a voice session. */
+        val renegotiate: Boolean = false,
     ) : Env {
         override val type get() = OFFER
     }
@@ -104,7 +135,7 @@ object CallEnvelope {
         override val type get() = RINGING
     }
 
-    data class Answer(override val callId: String, val toDevice: String, val sdp: String) : Env {
+    data class Answer(override val callId: String, val toDevice: String, val sdp: String, val features: List<String> = emptyList()) : Env {
         override val type get() = ANSWER
     }
 
@@ -116,9 +147,20 @@ object CallEnvelope {
         override val type get() = ICE
     }
 
-    /** §19.3 `call_media`: the sender's camera is on or off (sent only in a connected video call, to the selected peer device). */
-    data class Media(override val callId: String, val toDevice: String, val camera: Boolean) : Env {
+    /**
+     * §19.3 `call_media`: the sender's camera is on or off (sent only in a connected video call, to
+     * the selected peer device). §23.4 [video] `off|camera|screen` (null = absent: derived from [camera]).
+     */
+    data class Media(override val callId: String, val toDevice: String, val camera: Boolean, val video: String? = null) : Env {
         override val type get() = MEDIA
+
+        /** The sender's video state (§23.4: absent `video` = derived from `camera`). */
+        val state: String get() = video ?: if (camera) VIDEO_CAMERA else VIDEO_OFF
+    }
+
+    /** §23.2 `call_switch` (1:1): request / accept / decline / cancel / voice, with the sender's [seq]. */
+    data class Switch(override val callId: String, val toDevice: String, val seq: Int, val action: String, val source: String? = null) : Env {
+        override val type get() = SWITCH
     }
 
     data class Busy(override val callId: String) : Env {
@@ -142,7 +184,7 @@ object CallEnvelope {
     }
 
     /** §16.3 binding: the cleartext `ring` flag the server must carry for this envelope. */
-    fun ringFor(env: Env): Boolean = (env is Offer && !env.restart) || env is SfuOffer
+    fun ringFor(env: Env): Boolean = (env is Offer && !env.restart && !env.renegotiate) || env is SfuOffer
 
     // ---- encode (UTF-8 JSON, non-ASCII unescaped, §10.3 envelope) ----
 
@@ -157,7 +199,9 @@ object CallEnvelope {
                 put("media", env.media)
                 put("sdp", env.sdp)
                 put("restart", env.restart)
-                if (env.restart) put("to_device", env.toDevice)
+                if (env.renegotiate) put("renegotiate", true)
+                if (env.restart || env.renegotiate) put("to_device", env.toDevice)
+                if (env.features.isNotEmpty() && !env.restart && !env.renegotiate) put("features", buildJsonArray { env.features.forEach { add(JsonPrimitive(it)) } })
                 put("sent_at", env.sentAt)
             }
             is SfuOffer -> {
@@ -170,6 +214,7 @@ object CallEnvelope {
             is Answer -> {
                 put("to_device", env.toDevice)
                 put("sdp", env.sdp)
+                if (env.features.isNotEmpty()) put("features", buildJsonArray { env.features.forEach { add(JsonPrimitive(it)) } })
             }
             is Accepted -> put("device_id", env.deviceId)
             is Ice -> {
@@ -194,6 +239,13 @@ object CallEnvelope {
             is Media -> {
                 put("to_device", env.toDevice)
                 put("camera", env.camera)
+                env.video?.let { put("video", it) }
+            }
+            is Switch -> {
+                put("to_device", env.toDevice)
+                put("seq", env.seq)
+                put("action", env.action)
+                env.source?.let { put("source", it) }
             }
             is End -> {
                 put("media", env.media)
@@ -230,6 +282,16 @@ object CallEnvelope {
         fun str(k: String): String? = (obj[k] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
         fun bool(k: String): Boolean? = (obj[k] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
         val type = str("type") ?: return drop("type")
+        // §23.1: at most 8 strings of at most 32 bytes; absent = []; unknown values are kept (and ignored by the machine).
+        fun features(): List<String>? = when (val f = obj["features"]) {
+            null, JsonNull -> emptyList()
+            is JsonArray -> if (f.size > MAX_FEATURES) null else f.map { el ->
+                val v = (el as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: return null
+                if (v.toByteArray(Charsets.UTF_8).size > MAX_FEATURE_BYTES) return null
+                v
+            }
+            else -> null
+        }
         val callId = str("call_id")
         if (!isLowerUuid(callId)) return drop("call_id")
         callId!!
@@ -253,11 +315,21 @@ object CallEnvelope {
                     null, JsonNull -> false
                     else -> bool("restart") ?: return drop("restart")
                 }
+                // §23.3: `renegotiate` and `restart` are never true together; both name the selected device.
+                val renegotiate = when (obj["renegotiate"]) {
+                    null, JsonNull -> false
+                    else -> bool("renegotiate") ?: return drop("renegotiate")
+                }
+                if (restart && renegotiate) return drop("restart and renegotiate")
                 val to = str("to_device")
-                if (restart && !isLowerUuid(to)) return drop("to_device")
+                if ((restart || renegotiate) && !isLowerUuid(to)) return drop("to_device")
                 val sdp = str("sdp") ?: return drop("sdp")
-                SdpRules.validate(sdp, SdpRules.Role.OFFER, video = media == MEDIA_VIDEO)?.let { return drop("sdp: $it") }
-                Offer(callId, sdp, sentAt, restart, if (restart) to else null, media!!)
+                // A re-offer (and a restart in a renegotiated call) carries m=audio + m=video under the §19.4 rules.
+                if (renegotiate && SdpRules.mLineCount(sdp) != 2) return drop("renegotiate without m=video")
+                val twoLines = media == MEDIA_VIDEO || renegotiate || (restart && SdpRules.mLineCount(sdp) == 2)
+                SdpRules.validate(sdp, SdpRules.Role.OFFER, video = twoLines)?.let { return drop("sdp: $it") }
+                val feats = features() ?: return drop("features")
+                Offer(callId, sdp, sentAt, restart, if (restart || renegotiate) to else null, media!!, feats, renegotiate)
             }
             RINGING -> Ringing(callId)
             ANSWER -> {
@@ -266,7 +338,8 @@ object CallEnvelope {
                 val sdp = str("sdp") ?: return drop("sdp")
                 // §19.4: a two-m-line answer is judged by the video rules; the call machine checks it matches the offer's media.
                 SdpRules.validate(sdp, SdpRules.Role.ANSWER, video = SdpRules.mLineCount(sdp) == 2)?.let { return drop("sdp: $it") }
-                Answer(callId, to!!, sdp)
+                val feats = features() ?: return drop("features")
+                Answer(callId, to!!, sdp, feats)
             }
             ACCEPTED -> {
                 val d = str("device_id")
@@ -300,7 +373,28 @@ object CallEnvelope {
                 val to = str("to_device")
                 if (!isLowerUuid(to)) return drop("to_device")
                 val camera = bool("camera") ?: return drop("camera")
-                Media(callId, to!!, camera)
+                // §23.4: `video` optional; when present it must agree with `camera`.
+                val video = when (obj["video"]) {
+                    null, JsonNull -> null
+                    else -> str("video")?.takeIf { it in VIDEO_STATES } ?: return drop("video")
+                }
+                if (video != null && camera != (video == VIDEO_CAMERA)) return drop("video $video disagrees with camera $camera")
+                Media(callId, to!!, camera, video)
+            }
+            SWITCH -> {
+                val to = str("to_device")
+                if (!isLowerUuid(to)) return drop("to_device")
+                val seq = (obj["seq"] as? JsonPrimitive)?.takeIf { !it.isString }?.contentOrNull?.toIntOrNull()
+                if (seq == null || seq < 1 || seq > MAX_SEQ) return drop("seq")
+                val action = str("action")
+                if (action !in SWITCH_ACTIONS) return drop("action")
+                val source = when (obj["source"]) {
+                    null, JsonNull -> null
+                    else -> str("source") ?: return drop("source")
+                }
+                if ((action == SW_REQUEST) != (source != null)) return drop("source with action $action")
+                if (source != null && source !in SOURCES) return drop("source $source")
+                Switch(callId, to!!, seq, action!!, source)
             }
             MEMBER -> {
                 val state = str("state")

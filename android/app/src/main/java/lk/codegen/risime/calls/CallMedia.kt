@@ -72,6 +72,26 @@ interface MediaSession {
     /** Device ms of the last decoded remote video frame (0 = none yet): the 3-s frozen-frame rule (§19.5). */
     fun lastRemoteFrameAt(): Long = 0
 
+    /**
+     * §23.3: this voice session may now carry video (the switch was accepted): the next local offer
+     * (the caller's re-offer) adds one sendrecv VP8 transceiver after the audio one; a callee's
+     * answer to the re-offer takes the transceiver the remote `m=video` created. Audio is untouched.
+     */
+    fun enableVideo() = Unit
+
+    /** §23.3 rollback (decision 054 bound): drop an outstanding local offer; audio goes on as before. */
+    suspend fun rollback() = Unit
+
+    /**
+     * §23.5 the screen instead of the camera on the one video sender (`setTrack`, screencast source,
+     * MAINTAIN_RESOLUTION). [grant] is the platform's one-use consent (the MediaProjection result
+     * Intent); [onStopped] runs when the platform stops the projection. False = it couldn't start.
+     */
+    fun startScreen(grant: Any, onStopped: () -> Unit): Boolean = false
+
+    /** §23.5 stop the screen share (within 1 s); the sender goes back to whatever the camera says. */
+    fun stopScreen() = Unit
+
     fun close()
 }
 
@@ -87,4 +107,11 @@ object VideoRules {
         if (lastFrameAtMs <= 0 || nowMs - lastFrameAtMs >= FROZEN_MS) return false
         return peerCamera || lastFrameAtMs > cameraChangedAtMs + 1_000
     }
+
+    /**
+     * §23.2 rendering rule (crypto C3): nothing is rendered in voice mode, whatever arrives; in video
+     * mode [showPeerVideo] decides.
+     */
+    fun render(videoMode: Boolean, peerCamera: Boolean, cameraChangedAtMs: Long, lastFrameAtMs: Long, nowMs: Long): Boolean =
+        videoMode && showPeerVideo(peerCamera, cameraChangedAtMs, lastFrameAtMs, nowMs)
 }

@@ -239,6 +239,22 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
      */
     fun canAdvertiseGroupCalls(): Boolean = BuildConfig.GROUP_CALLS_ENABLED && canAdvertiseVideo() && port.callKeysSupported && runCatching { sfu.available }.getOrDefault(false)
 
+    /** §23.1 `call_switch`: with `calls` and `video` (this app switches voice↔video mid-call). */
+    fun canAdvertiseSwitch(): Boolean = canAdvertiseVideo()
+
+    /**
+     * §23.1 `screen_share`: with `call_switch`, once the screen can be captured (MediaProjection and the
+     * `mediaProjection` foreground-service type: Android 10+).
+     */
+    fun canAdvertiseScreenShare(): Boolean = canAdvertiseSwitch() && Build.VERSION.SDK_INT >= 29 &&
+        context.getSystemService(android.media.projection.MediaProjectionManager::class.java) != null
+
+    /** §23.1 this device's per-call `features`. */
+    private fun callFeatures(): List<String> = listOfNotNull(
+        CallEnvelope.FEATURE_SWITCH.takeIf { canAdvertiseSwitch() },
+        CallEnvelope.FEATURE_SCREEN.takeIf { canAdvertiseScreenShare() },
+    )
+
     /** Why this phone can't make or take calls (the Settings "Calls" row), null when it can. */
     fun unsupportedReason(): String? = when {
         !BuildConfig.CALLS_ENABLED -> lk.codegen.risime.ui.chat.CALLS_OFF_IN_BUILD
@@ -437,6 +453,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         me, device, scope, media, signals, marks, environment,
         serverNow = { port.serverNow() }, log = log,
         tamperRemoteFingerprint = { BuildConfig.DEBUG && debugTamperFingerprint },
+        features = { callFeatures() },
     )
 
     /** §16.10 (f) debug-only negative test switch. */
@@ -497,6 +514,109 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     /** §19.7 front/back. */
     fun switchCamera() {
         scope.launch { if (state.value?.group == true) _group.value?.switchCamera() else _machine.value?.switchCamera() }
+    }
+
+    // ---- §23 switching voice↔video and screen sharing (1:1) ----
+
+    /** §23.2 Video in a voice call: ask the peer (CAMERA already granted by the screen). */
+    fun requestVideo() {
+        scope.launch { _machine.value?.takeIf { state.value?.group != true }?.requestVideo(CallEnvelope.SOURCE_CAMERA) }
+    }
+
+    fun cancelVideoRequest() {
+        scope.launch { _machine.value?.cancelVideoRequest() }
+    }
+
+    /** §23.2 the prompt: Accept ([camera] on), Without my camera / Watch, or Decline. */
+    fun answerVideoRequest(accept: Boolean, camera: Boolean) {
+        scope.launch { _machine.value?.answerVideoRequest(accept, camera) }
+    }
+
+    /** §23.2 Voice: both sides stop sending video. */
+    fun backToVoice() {
+        scope.launch { _machine.value?.backToVoice() }
+    }
+
+    /** §23.5 projection: the call service carries `mediaProjection` while a share runs or is asked for. */
+    @Volatile private var projectionArmed = false
+    @Volatile private var projectionArming = false
+    @Volatile private var projectionReady: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+
+    /** The service asks: start (or keep) the `mediaProjection` type now. */
+    fun projectionWanted(): Boolean = projectionArmed
+
+    /** The service is in the foreground; [projection]: with the `mediaProjection` type (§23.5: before getMediaProjection). */
+    fun onServiceForeground(projection: Boolean) {
+        if (projection) projectionReady?.complete(true)
+    }
+
+    /**
+     * §23.5 the system's MediaProjection consent came back ([data], used once, never kept for a
+     * later share): the call service takes the `mediaProjection` type first (Android 14 rule), then
+     * the share starts (video mode) or the screen request goes out (voice mode).
+     */
+    fun onScreenConsent(data: Intent) {
+        scope.launch {
+            val m = _machine.value ?: return@launch
+            val s = state.value?.takeIf { !it.group && (it.phase == CallPhase.ACTIVE || it.phase == CallPhase.RECONNECTING) } ?: return@launch
+            projectionArming = true
+            try {
+                val d = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                projectionReady = d
+                projectionArmed = true
+                startService()
+                if (withTimeoutOrNull(3_000) { d.await() } != true) {
+                    log("screen share: the call service didn't take the mediaProjection type")
+                    projectionArmed = false
+                    refreshService()
+                    return@launch
+                }
+                val ok = if (s.video) m.startShare(data) else m.requestVideo(CallEnvelope.SOURCE_SCREEN, data)
+                if (!ok) log("screen share: not started (video=${s.video})")
+            } finally {
+                projectionArming = false
+                projectionReady = null
+                checkProjection(state.value)
+            }
+        }
+    }
+
+    /** §23.5 Stop (the banner, the notification). */
+    fun stopShare(why: String = "stop") {
+        scope.launch { _machine.value?.stopShare(why) }
+    }
+
+    /** Drops the `mediaProjection` type once nothing shares or asks to (and starts/stops the SCREEN_OFF watch). */
+    private fun checkProjection(s: CallSnapshot?) {
+        val sharing = s?.sharing == true && s.phase != CallPhase.ENDED
+        if (ScreenSharing.active != sharing) {
+            ScreenSharing.set(sharing)
+            if (sharing) watchScreenOff() else unwatchScreenOff()
+        }
+        val wanted = sharing || (s?.asking == CallEnvelope.SOURCE_SCREEN && s.phase != CallPhase.ENDED)
+        if (projectionArmed && !wanted && !projectionArming) {
+            projectionArmed = false
+            log("screen share: mediaProjection type released")
+        }
+    }
+
+    private var screenOffReceiver: android.content.BroadcastReceiver? = null
+
+    /** §23.5: the share stops when the screen turns off or locks. */
+    private fun watchScreenOff() {
+        if (screenOffReceiver != null) return
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: Intent?) {
+                if (i?.action == Intent.ACTION_SCREEN_OFF) stopShare("screen off")
+            }
+        }
+        runCatching { ContextCompat.registerReceiver(context, r, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED) }
+            .onSuccess { screenOffReceiver = r }
+    }
+
+    private fun unwatchScreenOff() {
+        screenOffReceiver?.let { r -> runCatching { context.unregisterReceiver(r) } }
+        screenOffReceiver = null
     }
 
     fun hangUp() {
@@ -637,6 +757,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     private suspend fun onState(s: CallSnapshot?) {
         state.value = s
         persistActive(s)
+        checkProjection(s)
         // Decision 054: a Telecom call of any other call id is over (StateFlow conflation, glare).
         telecomCalls.keys.filter { s == null || it != s.callId || s.phase == CallPhase.ENDED }.forEach { endTelecom(it, s?.takeIf { x -> x.callId == it }?.notice) }
         if ((s == null || s.phase == CallPhase.ENDED) && telecomCalls.isEmpty()) releaseAudio()
@@ -1148,7 +1269,16 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val name = callTitle(s)
         return when (s.phase) {
             CallPhase.RINGING_IN -> notifications.incoming(name, video = s.video, group = s.group) to false
-            else -> notifications.ongoing(name, CallTexts.status(s.phase, s.connectedAtMs, video = s.video) ?: if (s.video) "Video call" else "Voice call", s.connectedAtMs) to hasMicPermission()
+            else -> {
+                val status = when {
+                    // §23.5: one notification, "Sharing your screen" with Stop.
+                    s.sharing -> "Sharing your screen"
+                    // §23.2 step 2 (android A9): the prompt is answered only on the call screen; the notification says so.
+                    s.prompt != null && !callScreenVisible.value -> CallTexts.promptLine(s.prompt, name) + " · Open"
+                    else -> CallTexts.status(s.phase, s.connectedAtMs, video = s.video) ?: if (s.video) "Video call" else "Voice call"
+                }
+                notifications.ongoing(name, status, s.connectedAtMs, sharing = s.sharing) to hasMicPermission()
+            }
         }
     }
 
@@ -1335,6 +1465,25 @@ object CallTexts {
 
     /** §19.1: the disabled video button and the `video_not_ready` refusal. */
     fun videoNotReadyText(name: String) = "$name needs to update the app for video calls"
+
+    /** §23.2 the prompt's line (the call screen and the ongoing notification). */
+    fun promptLine(source: String, name: String) = if (source == CallEnvelope.SOURCE_SCREEN) "$name wants to share their screen" else "$name wants to switch to video"
+
+    /** §23.2 the requester's line while waiting. */
+    fun askingLine(source: String, name: String) = if (source == CallEnvelope.SOURCE_SCREEN) "Asking $name to watch your screen…" else "Asking $name to switch to video…"
+
+    fun switchNotice(n: SwitchNotice, name: String) = when (n) {
+        SwitchNotice.NO_ANSWER -> "No answer"
+        SwitchNotice.DECLINED -> "$name declined video"
+        SwitchNotice.FAILED -> "Couldn't switch to video"
+        SwitchNotice.SHARE_FAILED -> "Couldn't share your screen"
+    }
+
+    /** §23.1: why the Video button can't ask (an old app on the other side). */
+    fun switchUnavailableText(name: String) = "$name needs to update RisiMe to switch to video"
+
+    /** §23.1: why Share is off. */
+    fun shareUnavailableText(name: String) = "$name needs to update RisiMe to see your screen"
 }
 
 /**

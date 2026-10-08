@@ -217,7 +217,13 @@ class AppContainer(
     )
 
     // ---- Push (contract v1.5, decision 026) ----
-    val notifier = Notifier(context, hideContent = { appLock.hideNotificationContentBlocking() }, isLockedChat = { lockedChats.redactBlocking(it) })
+    // §23.5: while the screen is shared, RisiMe's own notifications carry no sender or content and make no sound.
+    val notifier = Notifier(
+        context,
+        hideContent = { lk.codegen.risime.calls.ScreenSharing.active || appLock.hideNotificationContentBlocking() },
+        isLockedChat = { lockedChats.redactBlocking(it) },
+        quiet = { lk.codegen.risime.calls.ScreenSharing.active },
+    )
     // ---- E2EE (contract v1.7, decisions 035, 037). The engine loads only once the server offers
     // attestation keys; until then (pilot: mls_unavailable) the app behaves exactly like v1.6.
     /** Core open vs registered, tracked apart (P0 background delivery, rule 9). */
@@ -545,6 +551,8 @@ class AppContainer(
             callsSupported = { runCatching { calls.canAdvertise() }.getOrDefault(false) },
             videoSupported = { runCatching { calls.canAdvertiseVideo() }.getOrDefault(false) },
             groupCallsSupported = { runCatching { calls.canAdvertiseGroupCalls() }.getOrDefault(false) },
+            callSwitchSupported = { runCatching { calls.canAdvertiseSwitch() }.getOrDefault(false) },
+            screenShareSupported = { runCatching { calls.canAdvertiseScreenShare() }.getOrDefault(false) },
             groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
             setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },
             onPushTokenRegistered = { t ->

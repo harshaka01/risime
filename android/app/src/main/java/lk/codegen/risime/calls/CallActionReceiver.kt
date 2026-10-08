@@ -11,6 +11,7 @@ class CallActionReceiver : BroadcastReceiver() {
         val calls = (context.applicationContext as RisiMeApp).container.calls
         when (intent.action) {
             CallNotifications.ACTION_DECLINE, CallNotifications.ACTION_HANGUP -> calls.hangUp()
+            CallNotifications.ACTION_STOP_SHARE -> calls.stopShare("notification")
         }
     }
 }
