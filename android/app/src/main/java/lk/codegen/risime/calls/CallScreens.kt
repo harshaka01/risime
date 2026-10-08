@@ -89,7 +89,12 @@ data class InCallUi(
     val ended: Boolean = false,
     /** §18.6: the peer's user id for their photo (initials without one). */
     val photoKey: String? = null,
+    /** The call is ACTIVE (P0-3: the route button is never greyed out then, even before Telecom lists routes). */
+    val active: Boolean = false,
 )
+
+/** P0-3: the route button works with two or more routes, and in an active call whose route list is still empty. */
+fun routeButtonEnabled(ui: InCallUi): Boolean = ui.endpoints.size > 1 || (ui.endpoints.isEmpty() && ui.active)
 
 private val Green = Color(0xFF1E9E4A)
 private val Red = Color(0xFFD93025)
@@ -382,9 +387,12 @@ fun InCallScreen(
 @Composable
 private fun RouteControl(ui: InCallUi, onEndpoint: (EndpointUi) -> Unit) {
     var open by remember { mutableStateOf(false) }
+    // No route listed yet (an active call): the button toggles the speaker on its own (P0-3).
+    var fallbackSpeaker by remember { mutableStateOf(false) }
+    val fallback = ui.endpoints.isEmpty()
     val kinds = ui.endpoints.map { it.kind }.toSet()
-    val simple = ui.endpoints.size == 2 && kinds == setOf(EndpointUi.Kind.EARPIECE, EndpointUi.Kind.SPEAKER)
-    val current = ui.current?.kind
+    val simple = fallback || (ui.endpoints.size == 2 && kinds == setOf(EndpointUi.Kind.EARPIECE, EndpointUi.Kind.SPEAKER))
+    val current = if (fallback) (if (fallbackSpeaker) EndpointUi.Kind.SPEAKER else EndpointUi.Kind.EARPIECE) else ui.current?.kind
     Box {
         CallControl(
             label = when (current) {
@@ -400,9 +408,12 @@ private fun RouteControl(ui: InCallUi, onEndpoint: (EndpointUi) -> Unit) {
                 else -> RisiIcons.Speaker
             },
             on = current == EndpointUi.Kind.SPEAKER || current == EndpointUi.Kind.BLUETOOTH || current == EndpointUi.Kind.WIRED,
-            enabled = ui.endpoints.size > 1,
+            enabled = routeButtonEnabled(ui),
             onClick = {
-                if (simple) {
+                if (fallback) {
+                    fallbackSpeaker = !fallbackSpeaker
+                    onEndpoint(EndpointUi("", if (fallbackSpeaker) "Speaker" else "Phone", if (fallbackSpeaker) EndpointUi.Kind.SPEAKER else EndpointUi.Kind.EARPIECE))
+                } else if (simple) {
                     val target = if (current == EndpointUi.Kind.SPEAKER) EndpointUi.Kind.EARPIECE else EndpointUi.Kind.SPEAKER
                     ui.endpoints.firstOrNull { it.kind == target }?.let(onEndpoint)
                 } else {
