@@ -2864,7 +2864,8 @@ and the callee's own perspective:
 | reason | Caller sees | Callee sees |
 |---|---|---|
 | `hangup` | "Voice call · 3:12" | "Voice call · 3:12" |
-| `cancelled`, `timeout`, `busy` | "Voice call · No answer" | **"Missed voice call"** + a notification "Missed call from <name>" |
+| `cancelled` | "Cancelled voice call" | **"Missed voice call"** + a notification "Missed call from <name>" |
+| `timeout`, `busy` | "Voice call · No answer" | **"Missed voice call"** + a notification "Missed call from <name>" |
 | `declined` | "Voice call · Declined" | "Declined voice call" |
 | `failed` | "Voice call · Couldn't connect" | "Voice call · Couldn't connect" (if it never connected and this device rang without answering: "Missed voice call") |
 
@@ -4024,7 +4025,8 @@ No MLS core change, no server call table.
   | reason | Caller sees | Callee sees |
   |---|---|---|
   | `hangup` | "Video call · 3:12" | "Video call · 3:12" |
-  | `cancelled`, `timeout`, `busy` | "Video call · No answer" | **"Missed video call"** + "Missed video call from <name>" |
+  | `cancelled` | "Cancelled video call" | **"Missed video call"** + "Missed video call from <name>" |
+| `timeout`, `busy` | "Video call · No answer" | **"Missed video call"** + "Missed video call from <name>" |
   | `declined` | "Video call · Declined" | "Declined video call" |
   | `failed` | "Video call · Couldn't connect" | as §16.6, with "video" |
 
