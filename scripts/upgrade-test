@@ -18,6 +18,20 @@
 #       is started, Back is pressed within 1 s (download throttled so it is still running), the app is
 #       reopened and the update must still complete. Unset (default) or an older OLD: skipped (logged);
 #       nightly.30 and older cancel the update when the app is left (bug A).
+#     Reinstall phase (§12.12, decision 060; after every other check, needs C's device and root):
+#       REINSTALL_CHECK_FROM=<versionCode>: when the NEW app's versionCode is at least this (v1.21+:
+#       reinstalls rejoin without reset), A (the group's only admin) is uninstalled (`adb uninstall`,
+#       its data gone, as a tester's reinstall), the NEW APK installed with adb and A signed in again
+#       through the login UI while C's app is stopped. A's group must show "Setting up encryption on
+#       this phone…", C (started again) re-adds A's new device, the group's MLS generation stays the
+#       same (server), nobody gets an "Encryption was reset" line, A->C and C->A go through (A's send
+#       while waiting stays pending and arrives), and C's per-conversation counts don't drop.
+#       Unset (default) or an older NEW: skipped (logged). scripts/nightly-release sets it.
+#     --no-reinstall: skip that phase (emergency only; the result says reinstall=off).
+#     --reinstall-dm-offline: also a DM A-C (set up first): C stays stopped REINSTALL_DM_WAIT s (180)
+#       after A's sign-in; A's DM shows "Waiting for ZZ Upgrade C to open RisiMe", the DM's generation
+#       is unchanged (no reset, which apps up to v1.20 did after 2 min), and A's pending DM arrives once
+#       C opens the app. About 3 min longer.
 #     auto (default): an attached adb device if there is one, else redroid on spark2.
 #     redroid: spark2 starts throwaway Android containers (scripts/android-target) and removes them after:
 #       A's, and C's (REDROID_INSTANCE + "-b", REDROID_PORT + 1) for the group checks. --no-group runs
@@ -126,6 +140,26 @@ case mode do
         end
     end
     IO.puts("upgrade: sent #{ok}")
+  "mls" ->
+    # The reinstall phase: A's group (creator, admins), its MLS generation/epoch, A's leaves and the
+    # pending ops; the DM A-C likewise. "null" = no row (or a reset DM awaiting its rebuild).
+    a = user!.(a_phone); c = user!.(c_phone); au = Ecto.UUID.dump!(a.id)
+    one = fn sql, args -> case Repo.query!(sql, args).rows do [[v | _] | _] -> v; _ -> nil end end
+    s = fn nil -> "null"; v -> to_string(v) end
+    grp = one.("SELECT g.id FROM groups g JOIN group_members m ON m.group_id = g.id WHERE m.user_id = $1 ORDER BY g.created_at LIMIT 1", [au])
+    dm = RisiMe.Messaging.conversation_id(a.id, c.id)
+    g = grp && RisiMe.MLS.group(grp)
+    d = RisiMe.MLS.group(dm)
+    q = fn sql -> grp && one.(sql, [grp]) end
+    qa = fn sql -> grp && one.(sql, [grp, au]) end
+    IO.puts("upgrade: grp=#{s.(grp)} creatora=#{s.(qa.("SELECT (created_by = $2)::int FROM groups WHERE id = $1"))}" <>
+      " admins=#{s.(q.("SELECT count(*) FROM group_members WHERE group_id = $1 AND role = 'admin' AND state = 'active'"))}" <>
+      " aadmin=#{s.(qa.("SELECT count(*) FROM group_members WHERE group_id = $1 AND user_id = $2 AND role = 'admin'"))}" <>
+      " grpgen=#{s.(g && g.generation)} grpepoch=#{s.(g && g.epoch)}" <>
+      " aleaves=#{s.(qa.("SELECT count(*) FROM mls_group_devices WHERE conversation_id = $1 AND user_id = $2"))}" <>
+      " grpops=#{s.(q.("SELECT count(*) FROM group_ops WHERE group_id = $1"))}" <>
+      " dmgen=#{s.(d && d.generation)} dmepoch=#{s.(d && d.epoch)}" <>
+      " dmops=#{s.(one.("SELECT count(*) FROM mls_dm_ops WHERE conversation_id = $1", [dm]))}")
 end
 EXS
       (cd "$SRV" && $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true
@@ -145,6 +179,7 @@ EXS
     friends) fx friends ;;
     friends_c) fx friends_c ;;
     blobs) fx blobs ;;
+    mls) fx mls ;;
     send) fx send "${2:?count}" ;;
     # The newest dev OTP for a phone (the code is printed to the caller only, never logged here).
     otp) grep -a "\[DEV OTP\] ${2:?phone}:" "$RUN/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true ;;
@@ -155,7 +190,7 @@ EXS
 fi
 
 # ---------------------------------------------------------------- driver half ------------------
-NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0; MANUAL=0; DEV=""; TARGET=auto; GROUP=1; VIA=adb
+NEW=""; OLD=""; VERSION=""; COMMIT=""; SERIAL="${ANDROID_SERIAL:-}"; SERIAL_B=""; FETCH=0; MANUAL=0; DEV=""; TARGET=auto; GROUP=1; VIA=adb; REINSTALL=1; DM_OFFLINE=0
 while [ $# -gt 0 ]; do case "$1" in
   --new) NEW="$2"; shift 2;; --old) OLD="$2"; shift 2;; --version) VERSION="$2"; shift 2;;
   --commit) COMMIT="$2"; shift 2;; --serial) SERIAL="$2"; shift 2;; --serial-b) SERIAL_B="$2"; shift 2;;
@@ -165,13 +200,15 @@ while [ $# -gt 0 ]; do case "$1" in
   --no-group) GROUP=0; shift;;
   --via-updater) VIA=updater; shift;;
   --via-adb) VIA=adb; shift;;
+  --no-reinstall) REINSTALL=0; shift;;
+  --reinstall-dm-offline) DM_OFFLINE=1; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 
 case "$TARGET" in auto|redroid|emulator|device) ;; *) echo "--target auto|redroid|emulator|device"; exit 2;; esac
 # spark2's SDK adb is x86-64: use the arm64 adb (user space, scripts/android-target adb).
 if [ "$(uname -m)" = aarch64 ]; then PATH="$("$REPO/scripts/android-target" adb):$PATH"; fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-upgrade.XXXXXX")"
-TUNNEL_PID=""; STARTED_TARGET=""; STARTED_B=""; CHECKS=""; UPD_PID=""; UPD_PORT=""; BACK_STEP=no
+TUNNEL_PID=""; STARTED_TARGET=""; STARTED_B=""; CHECKS=""; UPD_PID=""; UPD_PORT=""; BACK_STEP=no; RI_STEP=no
 STEP="start"; RESULT=FAIL; REASON=""; RESULT_WRITTEN=0; VERSION_FOR_RESULT=""
 step() { STEP="$*"; echo "==> $*"; }
 fail() { REASON="$1"; echo "UPGRADE TEST FAILED: $1"; write_result; exit 1; }
@@ -181,7 +218,7 @@ write_result() {
   RESULT_WRITTEN=1
   { echo "result=$RESULT"; echo "version=$VERSION"; echo "commit=$COMMIT"; echo "old=${OLD_VN:-}"; echo "new=${NEW_VN:-}"
     echo "new_sha256=$(sha256sum "$NEW" | cut -d' ' -f1)"; echo "host=$(hostname)"; echo "device=$(adb -s "$SERIAL" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
-    echo "group=${SERIAL_B:+yes}"; echo "via=$VIA"; echo "back_step=$BACK_STEP"; echo "checks=${CHECKS# }"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
+    echo "group=${SERIAL_B:+yes}"; echo "via=$VIA"; echo "back_step=$BACK_STEP"; echo "reinstall=$RI_STEP"; echo "checks=${CHECKS# }"; echo "reason=$REASON"; echo "time=$(date -u +%s)"; echo "date=$(date -u -Iseconds)"; } > "$f"
   echo "==> result: $f"
   local diag=""
   [ "$RESULT" = PASS ] || diag="$(save_diagnostics || true)"
@@ -491,6 +528,7 @@ extra = {
     "reactions": n("SELECT COUNT(*) FROM reactions WHERE op = 'add' AND pending = 0"),
     "deleted": n("SELECT COUNT(*) FROM messages WHERE kind = 'deleted'"),
     "images_sent": n("SELECT COUNT(*) FROM messages WHERE kind = 'image' AND outgoing = 1 AND message_id IS NOT NULL"),
+    "resets": n("SELECT COUNT(*) FROM messages WHERE kind = 'system' AND body LIKE 'Encryption was reset%'"),
 }
 print(f"messages={q('SELECT COUNT(*) FROM messages')} contacts={q('SELECT COUNT(*) FROM contacts')} groups={groups} cursor={'set' if q('SELECT COUNT(*) FROM sync_state') else 'none'} "
       + " ".join(f"{k}={v}" for k, v in extra.items()))
@@ -844,6 +882,160 @@ PY
 )"
   [ -z "$lost" ] || fail "messages lost after re-sign-in: $lost"
   echo "    re-sign-in kept every conversation"
+fi
+# ---- 4. reinstall without reset (§12.12, decision 060): A, the group's only admin, loses its app data
+# and signs in again as a new device; C re-adds it, the group keeps its generation, C loses nothing.
+if [ "$REINSTALL" = 0 ]; then RI_STEP=off; echo "==> reinstall phase OFF (--no-reinstall)"
+elif [ -z "${REINSTALL_CHECK_FROM:-}" ] || ! [ "$NEW_VC" -ge "$REINSTALL_CHECK_FROM" ] 2>/dev/null; then
+  RI_STEP=skipped; echo "==> reinstall phase skipped: new app $NEW_VN ($NEW_VC) is below REINSTALL_CHECK_FROM=${REINSTALL_CHECK_FROM:-unset} (apps up to v1.20 reset on reinstall)"
+elif [ -z "$SERIAL_B" ] || [ "$DB_BEFORE" = no-root ] || [ "$MANUAL" = 1 ]; then
+  RI_STEP=skipped; echo "==> reinstall phase skipped: it needs C's device (no --no-group), root (Room) and the scripted sign-in"
+else
+  RI_STEP=yes
+fi
+if [ "$RI_STEP" = yes ]; then
+  # Server view: "upgrade: grp=… creatora=1 admins=1 aadmin=1 grpgen=G grpepoch=E aleaves=N grpops=K dmgen=… dmepoch=… dmops=…"
+  mls_state() { local out; out="$(srv mls)"; echo "${out#upgrade: }"; }
+  # C's Room snapshot (and its per-conversation counts into $1).
+  c_snapshot() { local d="$DEV" r; DEV="$SERIAL_B"; r="$(db_snapshot)"; DEV="$d"; cp "$WORK/counts-last.json" "$1" 2>/dev/null || true; echo "$r"; }
+  counts_lost() { python3 -I - "$1" "$2" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1])); a = json.load(open(sys.argv[2]))
+print(" ".join(f"{k}:{v}->{a.get(k, 0)}" for k, v in b.items() if a.get(k, 0) < v))
+PY
+  }
+  # Type $1 into whichever composer the chat shows ("Encrypted message" once e2ee, else "Message").
+  send_any() {
+    local ph=""; hide_keyboard
+    if [ -n "$(node_xy "$ENC")" ]; then ph="$ENC"; elif [ -n "$(node_xy Message)" ]; then ph=Message; fi
+    [ -n "$ph" ] || { echo "    no composer on screen"; return 1; }
+    send_ui "$1" "$ph"
+  }
+  # A's group row: "Upgrade group", or "Rejoining group…" until the Welcome names it.
+  open_group_a() {
+    A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/.MainActivity" >/dev/null
+    local n
+    for _ in $(seq 1 40); do
+      dump
+      for n in "Upgrade group" "Rejoining group…"; do grep -qF "text=\"$n\"" "$WORK/ui.xml" && { dismiss_prompts; tap "$n"; sleep 2; return 0; }; done
+      sleep 1
+    done
+    echo "    A's chat list shows no group row"; return 1
+  }
+  # The chat screen's e2ee strip / composer state, from a fresh dump.
+  strip_now() { dump; grep -oE 'Setting up encryption on this phone[^"]*' "$WORK/ui.xml" | sed -n 1p || true; }
+  # Hook: the §22 encrypted-backup restore (decision 059) goes here, right after A's sign-in on the
+  # reinstalled app and before the rejoin checks. Off until the backup gate is added.
+  reinstall_restore_hook() { :; }
+  # C's local group-op outbox (state, attempts, last error): why C didn't commit a re-add.
+  c_ops() {
+    local d="$DEV"; DEV="$SERIAL_B"; rm -f "$WORK"/cops.db*
+    for f in risime.db risime.db-wal risime.db-shm; do A exec-out cat "/data/data/$PKG/databases/$f" > "$WORK/cops.${f#risime.}" 2>/dev/null || true; done
+    DEV="$d"
+    python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print("; ".join(f"{r[0]} {r[1]} attempts={r[2]} err={r[3]}" for r in c.execute("SELECT type, state, attempts, last_error FROM group_ops")) or "empty")' "$WORK/cops.db" 2>/dev/null || echo "?"
+  }
+
+  step "reinstall: A (only admin) before the reinstall: server state and C's counts"
+  DEV="$SERIAL"
+  if [ "$DM_OFFLINE" = 1 ]; then
+    # The DM A-C must be an MLS DM before A's reinstall: A opens it and sends; C receives.
+    open_chat "ZZ Upgrade C" || fail "reinstall: A has no chat with C in the list"
+    wait_for "$ENC" 120 || fail "reinstall: the DM A-C didn't become end-to-end encrypted"
+    send_ui "upgrade-test A30" "$ENC"
+    DEV="$SERIAL_B"; open_chat "ZZ Upgrade A" || fail "reinstall: C has no chat with A"
+    wait_for "upgrade-test A30" 60 || fail "reinstall: C didn't receive A's DM"
+    DEV="$SERIAL"
+  fi
+  MLS0="$(mls_state)"; echo "    server: $MLS0"
+  [ "$(field "$MLS0" creatora)" = 1 ] && [ "$(field "$MLS0" admins)" = 1 ] && [ "$(field "$MLS0" aadmin)" = 1 ] \
+    || fail "reinstall: A must be the creator and the only admin of the group ($MLS0)"
+  GEN0="$(field "$MLS0" grpgen)"; EP0="$(field "$MLS0" grpepoch)"
+  [ -n "$GEN0" ] && [ -n "$EP0" ] || fail "reinstall: the group has no MLS state on the server ($MLS0)"
+  DMGEN0="$(field "$MLS0" dmgen)"
+  if [ "$DM_OFFLINE" = 1 ]; then [ -n "$DMGEN0" ] && [ -n "$(field "$MLS0" dmepoch)" ] || fail "reinstall: the DM A-C has no MLS state ($MLS0)"; fi
+  C0="$(c_snapshot "$WORK/c-counts-before.json")"; echo "    C before (Room): $C0"
+
+  step "reinstall: stop C's app; uninstall A (data gone), install $NEW_VN with adb, sign in as A"
+  DEV="$SERIAL_B"; A shell am force-stop "$PKG"
+  DEV="$SERIAL"
+  A uninstall "$PKG" >/dev/null || fail "reinstall: adb uninstall failed"
+  A install "$NEW" >/dev/null || fail "reinstall: adb install of the new APK failed"
+  A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  reverses
+  sign_in "+94770000961" "upgrade61@example.com" || fail "reinstall: sign-in on the reinstalled app (A)"
+  T_SIGNIN="$(date +%s)"
+  reinstall_restore_hook
+  echo "    A signed in again (new device; C offline)"
+
+  if [ "$DM_OFFLINE" = 1 ]; then
+    step "reinstall: A's DM with C (C offline): waiting strip, a pending send, no reset"
+    open_chat "ZZ Upgrade C" || fail "reinstall: A's DM with C isn't listed after the reinstall"
+    wait_for "Setting up encryption on this phone" 60 || fail "reinstall: A's DM shows no \"Setting up encryption on this phone…\""
+    wait_for "Waiting for ZZ Upgrade C to open RisiMe" 120 || fail "reinstall: A's DM shows no \"Waiting for ZZ Upgrade C to open RisiMe\" (strip: $(strip_now))"
+    echo "    DM strip: $(strip_now)"
+    send_any "upgrade-test A31" || fail "reinstall: A can't send in the waiting DM"
+  fi
+
+  step "reinstall: A's group (C offline): \"Setting up encryption on this phone…\", a pending send"
+  open_group_a || fail "reinstall: the group isn't in A's list after the reinstall"
+  wait_for "Setting up encryption on this phone" 60 || fail "reinstall: A's group shows no \"Setting up encryption on this phone…\" (reset instead of rejoin?)"
+  wait_for "Waiting for a group member to open RisiMe" 100 || echo "    note: no \"Waiting for a group member…\" yet (strip: $(strip_now))"
+  echo "    group strip: $(strip_now)"
+  send_any "upgrade-test A21" || fail "reinstall: the group composer is off while A waits (v1.21 keeps it on)"
+  MLS1="$(mls_state)"; echo "    server while waiting: $MLS1"
+  [ "$(field "$MLS1" grpgen)" = "$GEN0" ] || fail "reinstall: the group was RESET while A waited (generation $GEN0 -> $(field "$MLS1" grpgen))"
+  [ "$(field "$MLS1" grpops)" -ge 1 ] 2>/dev/null || echo "    note: no pending group op while A waits ($MLS1)"
+
+  if [ "$DM_OFFLINE" = 1 ]; then
+    left=$(( T_SIGNIN + ${REINSTALL_DM_WAIT:-180} - $(date +%s) ))
+    if [ "$left" -gt 0 ]; then echo "    C stays offline another ${left}s (${REINSTALL_DM_WAIT:-180}s after A's sign-in)"; sleep "$left"; fi
+    MLS2="$(mls_state)"; echo "    server after $(( $(date +%s) - T_SIGNIN ))s offline: $MLS2"
+    [ "$(field "$MLS2" dmgen)" = "$DMGEN0" ] && [ -n "$(field "$MLS2" dmepoch)" ] || fail "reinstall: the DM A-C was RESET while C was offline (generation $DMGEN0 -> $(field "$MLS2" dmgen), epoch $(field "$MLS2" dmepoch))"
+    [ "$(field "$MLS2" grpgen)" = "$GEN0" ] || fail "reinstall: the group was RESET while C was offline (generation $GEN0 -> $(field "$MLS2" grpgen))"
+    open_chat "ZZ Upgrade C" || true
+    wait_for "Waiting for ZZ Upgrade C to open RisiMe" 30 || fail "reinstall: after ${REINSTALL_DM_WAIT:-180}s A's DM no longer says it waits for C (strip: $(strip_now))"
+    has "Not end-to-end encrypted" && fail "reinstall: A's DM fell back to plaintext while waiting"
+    CHECKS+=" reinstall_dm_offline"
+  fi
+
+  step "reinstall: C opens RisiMe again and re-adds A's new device"
+  DEV="$SERIAL_B"; open_chat "Upgrade group" || { sleep 3; open_chat "Upgrade group"; } || fail "reinstall: C can't open the group"
+  c_sees "upgrade-test A21" || fail "reinstall: A's send while waiting never reached C (A not re-added? server: $(mls_state); C's op outbox: $(c_ops))"
+  DEV="$SERIAL"; open_group_a || fail "reinstall: A can't open the group"
+  ok=""
+  for i in $(seq 1 60); do
+    st="$(strip_now)"
+    [ -z "$st" ] && [ -n "$(node_xy "$ENC")" ] && { ok=1; break; }
+    [ "$i" = 30 ] && { open_group_a || true; }
+    sleep 2
+  done
+  [ -n "$ok" ] || fail "reinstall: A's group never became usable (strip: ${st:-none}; server: $(mls_state))"
+  send_ui "upgrade-test A22" "$ENC"
+  c_sees "upgrade-test A22" || fail "reinstall: C didn't receive A's group message after the re-add"
+  DEV="$SERIAL_B"; send_ui "upgrade-test C1" "$ENC"; DEV="$SERIAL"
+  wait_for "upgrade-test C1" 45 || { open_group_a >/dev/null || true; wait_for "upgrade-test C1" 45; } || fail "reinstall: A didn't receive C's group message after the re-add"
+  if [ "$DM_OFFLINE" = 1 ]; then
+    DEV="$SERIAL_B"; open_chat "ZZ Upgrade A" || fail "reinstall: C can't open the DM"
+    wait_for "upgrade-test A31" 90 || { open_chat "ZZ Upgrade A" >/dev/null || true; wait_for "upgrade-test A31" 60; } \
+      || fail "reinstall: A's pending DM never reached C after C opened RisiMe (server: $(mls_state))"
+    DEV="$SERIAL"
+  fi
+
+  step "reinstall: no reset anywhere, C kept every message"
+  MLS3="$(mls_state)"; echo "    server after: $MLS3"
+  [ "$(field "$MLS3" grpgen)" = "$GEN0" ] || fail "reinstall: the group's generation changed ($GEN0 -> $(field "$MLS3" grpgen)): it was reset, not rejoined"
+  [ "$(field "$MLS3" grpepoch)" -gt "$EP0" ] 2>/dev/null || fail "reinstall: no commit added A's new device (epoch $EP0 -> $(field "$MLS3" grpepoch))"
+  if [ "$DM_OFFLINE" = 1 ]; then [ "$(field "$MLS3" dmgen)" = "$DMGEN0" ] || fail "reinstall: the DM's generation changed ($DMGEN0 -> $(field "$MLS3" dmgen))"; fi
+  C1="$(c_snapshot "$WORK/c-counts-after.json")"; echo "    C after (Room): $C1"
+  [ "$(field "$C1" resets)" = "$(field "$C0" resets)" ] || fail "reinstall: C got an \"Encryption was reset\" line ($(field "$C0" resets) -> $(field "$C1" resets))"
+  lost="$(counts_lost "$WORK/c-counts-before.json" "$WORK/c-counts-after.json")"
+  [ -z "$lost" ] || fail "reinstall: C lost messages per conversation/kind: $lost"
+  DEV="$SERIAL_B"; open_chat "Upgrade group" >/dev/null || true
+  has "Encryption was reset" && fail "reinstall: C's group shows \"Encryption was reset\""
+  DEV="$SERIAL"; A1="$(db_snapshot)"; echo "    A after (Room): $A1"
+  [ "$(field "$A1" resets)" = 0 ] || fail "reinstall: A's group has an \"Encryption was reset\" line"
+  echo "    reinstall: generation $GEN0 kept (epoch $EP0 -> $(field "$MLS3" grpepoch)), A re-added by C, both directions work, C's $(python3 -I -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$WORK/c-counts-before.json") conversation/kind counts kept"
+  CHECKS+=" reinstall_rejoin"
 fi
 # No crash of the app during the whole test, and (debug builds log StrictMode) no Room/MLS work on
 # the main thread (the nightly.17 DM crash class): scripts/logcat-gate.
