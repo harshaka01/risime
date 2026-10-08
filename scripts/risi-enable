@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Guarded switch of the pilot's two tabs + Risi (P0 2026-10-08):
+#   scripts/risi-enable on|off
+# Backs up .env and pilot.env; creates RISI_MLS_KEK / RISI_DATA_KEY ONLY when absent (never a second
+# pair: a new key can't open the store sealed with the first); drops later duplicate key lines (keeps the
+# first); writes exactly one TABS/RISI pair; restarts; watches /health and the Risi start for 60 s and
+# rolls back to off automatically on failure. Key values are never printed.
+set -euo pipefail
+WANT="${1:-}"; case "$WANT" in on|off) ;; *) echo "usage: scripts/risi-enable on|off"; exit 2;; esac
+R=/home/harsha/development/risime
+ENV="$R/.env"; PE="$R/infra/pilot/pilot.env"; B="$HOME/risime-backups"; TS=$(date -u +%Y%m%dT%H%M%SZ)
+install -m 600 "$ENV" "$B/env-before-risi-on2-$TS"; install -m 600 "$PE" "$B/pilot.env-before-risi-on2-$TS"
+echo "backups: $B/env-before-risi-on2-$TS, $B/pilot.env-before-risi-on2-$TS"
+
+# Keep the first RISI_MLS_KEK / RISI_DATA_KEY lines, drop later duplicates (values never printed).
+python3 - "$ENV" <<'PY'
+import sys
+p = sys.argv[1]; seen = set(); out = []; dropped = 0
+for line in open(p):
+    k = line.split("=", 1)[0].strip()
+    if k in ("RISI_MLS_KEK", "RISI_DATA_KEY"):
+        if k in seen:
+            dropped += 1; continue
+        seen.add(k)
+    out.append(line)
+open(p, "w").writelines(out)
+print(f".env: kept first RISI_MLS_KEK/RISI_DATA_KEY, dropped {dropped} later duplicate line(s)")
+PY
+for k in RISI_MLS_KEK RISI_DATA_KEY; do
+  grep -qE "^$k=" "$ENV" || { printf '%s=%s\n' "$k" "$(openssl rand -base64 32)" >> "$ENV"; echo ".env: created $k (was absent)"; }
+done
+chmod 600 "$ENV"
+
+set_flags() {  # $1 = on|off: exactly one TABS and one RISI line
+  python3 - "$PE" "$1" <<'PY'
+import sys
+p, v = sys.argv[1], sys.argv[2]
+lines = [l for l in open(p) if l.split("=", 1)[0].strip() not in ("TABS", "RISI")]
+while lines and lines[-1].strip() == "": lines.pop()
+lines.append(f"\nTABS={v}\nRISI={v}\n")
+open(p, "w").writelines(lines)
+PY
+  grep -E "^(TABS|RISI)=" "$PE" | tr '\n' ' '; echo
+}
+
+healthy() {  # $1 = log line offset, $2 = "risi" to also require Risi up: 60 s budget
+  local from="$1" t
+  for t in $(seq 1 30); do
+    sleep 2
+    if tail -n +"$from" "$HOME/risime-logs/server.log" | grep -qE "Risi MLS open failed|Risi agent (not started|unavailable)"; then
+      echo "Risi failed to start (see server.log)"; return 1
+    fi
+    if curl -sf -m 3 http://127.0.0.1:4000/health | grep -q '"status":"ok"'; then
+      [ "${2:-}" != risi ] && return 0
+      [ "$t" -ge 10 ] && return 0   # with Risi on: stay healthy for at least 20 s
+    fi
+  done
+  return 1
+}
+
+if [ "$WANT" = off ]; then set_flags off; systemctl --user restart risime.service; sleep 5; curl -sf http://127.0.0.1:4000/health >/dev/null && { echo "RISI OFF: healthy"; exit 0; } || { echo "unhealthy after off: check journalctl"; exit 1; }; fi
+echo "==> flags on"; set_flags on
+START=$(( $(wc -l < "$HOME/risime-logs/server.log") + 1 ))
+systemctl --user restart risime.service
+if healthy "$START" risi; then
+  echo "RISI ON: healthy"
+  curl -s http://127.0.0.1:4000/api/v1/auth/config | python3 -c 'import json,sys; print("tabs:", json.load(sys.stdin).get("tabs"))'
+  exit 0
+fi
+echo "==> NOT healthy with Risi on: rolling back to off"
+set_flags off
+systemctl --user reset-failed risime.service 2>/dev/null || true
+systemctl --user restart risime.service
+if healthy "$(( $(wc -l < "$HOME/risime-logs/server.log") + 1 ))"; then echo "ROLLED BACK: healthy with Risi off"; else echo "ROLLBACK UNHEALTHY: check journalctl --user -u risime"; fi
+exit 1
