@@ -1,4 +1,4 @@
-# LiveKit SFU for RisiMe group calls on spark2 (PROTOCOL §16.15, v1.14; port plan 2026-10-08).
+# LiveKit SFU for RisiMe group calls on spark2 (PROTOCOL §20, v1.19; port plan 2026-10-08).
 # This file has NO secret. infra/livekit/entrypoint.sh writes the API key file and the TURN
 # secret file from .env (LIVEKIT_API_KEY, LIVEKIT_API_SECRET, TURN_SECRET) into the container's
 # private tmpfs at start, so no secret is in the repo, on a command line or in a log.
@@ -58,8 +58,8 @@ turn:
 key_file: /tmp/livekit/keys.yaml
 
 room:
-  # Rooms are created on the first join (the server mints the token, PROTOCOL §16.15).
-  auto_create: true
+  # Rooms are created only by the Phoenix server (POST /calls/rooms, PROTOCOL §20.2); a token alone never creates one.
+  auto_create: false
   # A room nobody joined closes after 60 s; after the last one leaves, after 20 s.
   empty_timeout: 60
   departure_timeout: 20

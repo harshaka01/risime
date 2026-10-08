@@ -1,4 +1,4 @@
-# LiveKit SFU for RisiMe group calls on spark2 (PROTOCOL §16.15, v1.14).
+# LiveKit SFU for RisiMe group calls on spark2 (PROTOCOL §20, v1.19).
 # Host networking (no docker-proxy for 500 UDP ports, no Docker publishing that bypasses ufw).
 # Binds: 127.0.0.1:7880/tcp (signalling, behind Caddy at wss://risime.risicloud.ai/livekit) and
 # UDP 49500-49999 on 10.20.20.15 only (media; public via the 1:1 NAT). See infra/livekit/livekit.yaml.

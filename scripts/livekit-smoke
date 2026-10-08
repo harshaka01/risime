@@ -36,6 +36,11 @@ validate() {  # $1 base url, $2 path, $3 token -> HTTP status
 
 check_tokens() {  # $1 base url
   local tok bad code
+  # auto_create is off (PROTOCOL §20.2): a token for a room that doesn't exist gets 404.
+  code="$(validate "$1" /rtc/validate "$(lk token create --join --room "smoke-none-$RANDOM" --identity smoke-a --valid-for 2m --token-only 2>/dev/null)")"
+  [ "$code" = 404 ] || fail "token for a missing room: /rtc/validate -> $code (want 404, auto_create off)"
+  echo "ok: no room is created by a token alone (404)"
+  lk room create --url "$1" smoke-validate >/dev/null 2>&1 || fail "lk room create smoke-validate failed"
   tok="$(lk token create --join --room smoke-validate --identity smoke-a --valid-for 2m --token-only 2>/dev/null)"
   [ -n "$tok" ] || fail "lk token create gave no token"
   code="$(validate "$1" /rtc/validate "$tok")"; [ "$code" = 200 ] || fail "valid token: /rtc/validate -> $code"
@@ -50,8 +55,10 @@ check_tokens() {  # $1 base url
 }
 
 load_test() {  # $1 ws url, $2 seconds
-  local out
-  out="$(lk load-test --url "$1" --room "smoke-$RANDOM" --audio-publishers 1 --video-publishers 1 \
+  local out room="smoke-$RANDOM"
+  # auto_create is off (PROTOCOL §20.2): create the room through the server API first, as Phoenix does.
+  lk room create --url "$1" "$room" >/dev/null 2>&1 || fail "lk room create $room failed"
+  out="$(lk load-test --url "$1" --room "$room" --audio-publishers 1 --video-publishers 1 \
     --subscribers 2 --video-resolution low --duration "${2}s" 2>&1 || true)"
   echo "$out" | grep -E '│ Total|subscribed to track' | tail -6 || true
   # Pass = both subscribers subscribed to the audio and the video track, and the summary's Total
