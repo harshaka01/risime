@@ -67,7 +67,7 @@ import lk.codegen.risime.ui.theme.Sizes
 import lk.codegen.risime.ui.theme.Spacing
 
 @Composable
-fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
+fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit, lock: lk.codegen.risime.ui.lock.ChatLockControl? = null) {
     val messages by vm.messages.collectAsStateWithLifecycle()
     val peer by vm.peer.collectAsStateWithLifecycle()
     val conn by vm.connection.collectAsStateWithLifecycle()
@@ -145,7 +145,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                         onCall = vm::startCall,
                     )
                     E2eeHeaderLock(encrypted) { showInfo = true }
-                    ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true })
+                    ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock)
                 },
             )
         },

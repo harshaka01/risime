@@ -27,6 +27,8 @@ data class ChatNotification(
     val group: Boolean = false,
     /** Group: the lines with their senders, newest last (at most [MAX_LINES]). */
     val messages: List<NotifLine> = emptyList(),
+    /** A locked chat: shown as a bare "RisiMe" / "New message" that opens the app, not the chat. */
+    val locked: Boolean = false,
 )
 
 data class NotifLine(val sender: String, val text: String, val ts: Long)
@@ -43,6 +45,20 @@ fun redactForLock(n: ChatNotification): ChatNotification = n.copy(
     lines = listOf(if (n.count > 1) "${n.count} new messages" else LOCKED_CONTENT_TEXT),
     group = false,
     messages = emptyList(),
+)
+
+/**
+ * Locked chat (WhatsApp "Lock chat"): "RisiMe" / "New message", no sender or group name, no text, no
+ * avatar, no MessagingStyle; the id stays so opening the chat or clearing it removes it; the tap
+ * opens the app, never the chat.
+ */
+fun redactLockedChat(n: ChatNotification): ChatNotification = n.copy(
+    title = "RisiMe",
+    lines = listOf(LOCKED_CONTENT_TEXT),
+    count = 1,
+    group = false,
+    messages = emptyList(),
+    locked = true,
 )
 
 const val MAX_LINES = 5

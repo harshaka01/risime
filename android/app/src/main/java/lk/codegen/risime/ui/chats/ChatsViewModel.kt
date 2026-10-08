@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import lk.codegen.risime.AppContainer
@@ -73,6 +74,16 @@ fun hideDeletedChats(rows: List<ChatRow>, states: List<lk.codegen.risime.data.db
     val hidden = states.filter { it.hidden }.map { it.conversationId }.toSet()
     if (hidden.isEmpty()) return rows
     return rows.filter { it.conversationOf(meId) !in hidden }
+}
+
+/** The list split for the Locked chats folder. [locked] null = not read yet: nothing is shown (never a locked chat by mistake). */
+data class LockedSplit(val visible: List<ChatRow> = emptyList(), val locked: List<ChatRow> = emptyList())
+
+fun splitLocked(rows: List<ChatRow>, locked: Set<String>?, meId: String): LockedSplit {
+    if (locked == null) return LockedSplit()
+    if (locked.isEmpty()) return LockedSplit(rows)
+    val (l, v) = rows.partition { it.conversationOf(meId)?.lowercase() in locked }
+    return LockedSplit(v, l)
 }
 
 /** One row per group, ordered with the DMs by last activity (a new group by when it appeared). */
@@ -164,7 +175,7 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
         c.presence.groupTyping,
     ) { groups, members, lasts, unread, typing -> buildGroupRows(meId, groups, members, lasts, unread, typing) }
 
-    val rows: StateFlow<List<ChatRow>> = combine(
+    private val allRows: StateFlow<List<ChatRow>> = combine(
         combine(
             c.contacts.contacts,
             c.db.messages().lastMessages(),
@@ -194,6 +205,33 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
     }
 
     fun hasCamera(): Boolean = c.calls.hasCameraPermission()
+
+    private val split = combine(allRows, c.lockedChats.ids) { rows, locked -> splitLocked(rows, locked, meId) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LockedSplit())
+
+    /** The main list: locked chats are not in it (nothing at all until the locked list is known). */
+    val rows: StateFlow<List<ChatRow>> = split.map { it.visible }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The Locked chats folder's rows. */
+    val lockedRows: StateFlow<List<ChatRow>> = split.map { it.locked }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** A secret code is set: the pull-down entry stays hidden. */
+    val lockedHasCode: StateFlow<Boolean> = c.lockedChats.hasCode
+
+    fun openLockedFolder() = c.lockedChats.openFolder()
+
+    fun unlockChat(row: ChatRow) {
+        val conv = row.conversationOf(meId) ?: return
+        c.scope.launch { c.lockedChats.unlock(conv) }
+    }
+
+    fun lockChat(row: ChatRow) {
+        val conv = row.conversationOf(meId) ?: return
+        c.notifier.cancelChat(conv) // the shade must not keep showing the chat's name or text
+        c.scope.launch { c.lockedChats.lock(conv) }
+    }
 
     /** §15.7 chat-list long-press: Clear chat (row stays) / Delete chat (hidden until a new message). */
     fun clearChat(row: ChatRow, hide: Boolean) {

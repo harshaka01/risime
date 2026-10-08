@@ -90,6 +90,10 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
                 if (BuildConfig.HISTORY_SHARE_ENABLED) lk.codegen.risime.ui.history.HistoryPrivacySection(showHeader = false)
                 HorizontalDivider()
             }
+            if (container != null) {
+                lk.codegen.risime.ui.chats.LockedChatsResetSection(container)
+                HorizontalDivider()
+            }
             AboutSection()
             HorizontalDivider()
             OutlinedButton(

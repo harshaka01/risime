@@ -210,8 +210,14 @@ class AppContainer(
         log = { Log.w("RisiMe", it) },
     )
 
+    // ---- Locked chats (WhatsApp "Lock chat"): per device, local, never sent anywhere ----
+    val lockedChats = lk.codegen.risime.data.lock.LockedChats(
+        lk.codegen.risime.data.lock.FileLockedChatsStore(File(context.noBackupFilesDir, "locked_chats.bin"), lk.codegen.risime.data.auth.KeystoreVaultKey("risime_locked_chats_aes")),
+        log = { Log.w("RisiMe", it) },
+    )
+
     // ---- Push (contract v1.5, decision 026) ----
-    val notifier = Notifier(context, hideContent = { appLock.hideNotificationContentBlocking() })
+    val notifier = Notifier(context, hideContent = { appLock.hideNotificationContentBlocking() }, isLockedChat = { lockedChats.redactBlocking(it) })
     // ---- E2EE (contract v1.7, decisions 035, 037). The engine loads only once the server offers
     // attestation keys; until then (pilot: mls_unavailable) the app behaves exactly like v1.6.
     /** Core open vs registered, tracked apart (P0 background delivery, rule 9). */
@@ -673,6 +679,14 @@ class AppContainer(
             }
         }
         scope.launch(Dispatchers.IO) { runCatching { appLock.load() }.onFailure { Log.w("RisiMe", "RisiMe lock: settings: ${it.message}") } }
+        // Locked chats: read at process start so the list and the notifications know them; a busy Keystore is retried.
+        scope.launch(Dispatchers.IO) {
+            var wait = 500L
+            while (!runCatching { lockedChats.load() }.getOrDefault(false)) {
+                kotlinx.coroutines.delay(wait)
+                wait = (wait * 2).coerceAtMost(30_000L)
+            }
+        }
         if (BuildConfig.DEBUG) registerDebugOidcSignIn(context)
         // E2EE: try once per signed-in, verified session that can authenticate. An OIDC session has
         // a bearer once restored (an unmigrated pre-064 vault only after its one migration prompt):
@@ -1008,6 +1022,7 @@ class AppContainer(
             override fun onStop(owner: LifecycleOwner) {
                 foreground.value = false
                 appLock.onBackground()
+                lockedChats.closeFolder() // leaving the app re-locks the Locked chats folder
                 // Everything that arrived while the app was open has been seen in the app.
                 scope.launch { sessionStore.setNotifiedUpTo(System.currentTimeMillis()) }
             }
@@ -1668,6 +1683,7 @@ class AppContainer(
         mediaFiles.wipe()
         File(appContext.noBackupFilesDir, "avatars").deleteRecursively()
         photoPrefs.edit().clear().apply()
+        runCatching { lockedChats.wipe() } // only "delete chats from this phone": the locked list goes with them
         mlsCore.wiped()
         mlsDbKey.destroy()
     }

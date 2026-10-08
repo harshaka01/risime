@@ -34,9 +34,13 @@ import lk.codegen.risime.ui.common.shortStamp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SearchScreen(vm: SearchViewModel, onOpen: (String) -> Unit, onBack: () -> Unit) {
+fun SearchScreen(vm: SearchViewModel, onOpen: (String) -> Unit, onBack: () -> Unit, onLockedFolder: () -> Unit = {}) {
     val q by vm.query.collectAsStateWithLifecycle()
     val r by vm.results.collectAsStateWithLifecycle()
+    val codeEntry by vm.codeEntry.collectAsStateWithLifecycle()
+    val lockedCount by vm.lockedCount.collectAsStateWithLifecycle()
+    val lockGate = lk.codegen.risime.ui.lock.rememberLockGate()
+    lk.codegen.risime.ui.lock.LockGateDialog(lockGate)
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     Scaffold(
@@ -61,7 +65,16 @@ fun SearchScreen(vm: SearchViewModel, onOpen: (String) -> Unit, onBack: () -> Un
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         LazyColumn(Modifier.fillMaxSize().padding(pad)) {
-            if (r.query.isEmpty()) {
+            if (codeEntry) {
+                item(key = "locked-folder") {
+                    lk.codegen.risime.ui.chats.LockedFolderEntry(lockedCount) {
+                        lockGate.run(lk.codegen.risime.ui.lock.LOCKED_CHATS_TITLE) {
+                            vm.openLockedFolder()
+                            onLockedFolder()
+                        }
+                    }
+                }
+            } else if (r.query.isEmpty()) {
                 item { EmptyState("Search your contacts and the messages on this device.") }
             } else if (r.contacts.isEmpty() && r.messages.isEmpty()) {
                 item { EmptyState("No results for “${r.query}”") }

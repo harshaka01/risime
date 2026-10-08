@@ -106,7 +106,7 @@ fun showSenderAt(items: List<ChatItem>, index: Int): Boolean {
 }
 
 @Composable
-fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, onInfo: () -> Unit) {
+fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, onInfo: () -> Unit, lock: lk.codegen.risime.ui.lock.ChatLockControl? = null) {
     val group by vm.group.collectAsStateWithLifecycle()
     val members by vm.members.collectAsStateWithLifecycle()
     val messages by vm.messages.collectAsStateWithLifecycle()
@@ -165,7 +165,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                         lk.codegen.risime.ui.chat.CallHeaderButton(vm.groupCallBlockedText(encrypted == true, ready, video = false), toastOf) { vm.startGroupCall(video = false, camera = false) }
                     }
                     lk.codegen.risime.ui.chat.E2eeHeaderLock(encrypted == true, onInfo)
-                    lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true })
+                    lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock)
                 },
             )
         },

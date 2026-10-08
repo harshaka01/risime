@@ -20,10 +20,18 @@ import lk.codegen.risime.net.FriendRequest
  * [hideContent]: the fingerprint lock is on with "Show content in notifications" off (decision 064):
  * "New message" with no name or text.
  */
-class Notifier(private val context: Context, private val hideContent: () -> Boolean = { false }) {
+class Notifier(
+    private val context: Context,
+    private val hideContent: () -> Boolean = { false },
+    /** Locked chats (also true for every chat while the locked list can't be read). */
+    private val isLockedChat: (String) -> Boolean = { false },
+) {
     private val nm = NotificationManagerCompat.from(context)
 
-    private fun shown(plan: List<ChatNotification>): List<ChatNotification> = if (hideContent()) plan.map(::redactForLock) else plan
+    private fun shown(plan: List<ChatNotification>): List<ChatNotification> {
+        val hide = hideContent()
+        return plan.map { n -> if (isLockedChat(n.conversationId)) redactLockedChat(n) else if (hide) redactForLock(n) else n }
+    }
 
     fun ensureChannels() {
         if (Build.VERSION.SDK_INT < 26) return
@@ -128,6 +136,7 @@ class Notifier(private val context: Context, private val hideContent: () -> Bool
     }
 
     private fun chatBuilder(n: ChatNotification, silent: Boolean): NotificationCompat.Builder {
+        if (n.locked) return lockedBuilder(n, silent)
         run {
             val style: NotificationCompat.Style = if (n.group) {
                 // §12: one notification per group conversation, a sender Person per line.
@@ -169,6 +178,30 @@ class Notifier(private val context: Context, private val hideContent: () -> Bool
             return b
         }
     }
+
+    /** A locked chat: no style, no number, no person, no sender; the tap opens the app only. */
+    private fun lockedBuilder(n: ChatNotification, silent: Boolean) = NotificationCompat.Builder(context, CH_MESSAGES)
+        .setSmallIcon(R.drawable.ic_stat_risime)
+        .setContentTitle(n.title)
+        .setContentText(LOCKED_CONTENT_TEXT)
+        .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setGroup(GROUP_MESSAGES)
+        .setAutoCancel(true)
+        .setWhen(n.newestTs)
+        .setContentIntent(openIntent(null, chatId(n.conversationId)))
+        .setOnlyAlertOnce(silent)
+        .setSilent(silent)
+        .addExtras(android.os.Bundle().apply { putString(EXTRA_KIND, KIND_CHAT) })
+        .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+        .setPublicVersion(
+            NotificationCompat.Builder(context, CH_MESSAGES)
+                .setSmallIcon(R.drawable.ic_stat_risime)
+                .setContentTitle("RisiMe")
+                .setContentText(LOCKED_CONTENT_TEXT)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .build(),
+        )
 
     /** §12.7 S4: "Kamal added you to Pilot team" (opens the group). */
     @Suppress("MissingPermission")

@@ -51,6 +51,7 @@ import lk.codegen.risime.ui.common.UnreadBadge
 import lk.codegen.risime.ui.common.presenceLabel
 import lk.codegen.risime.ui.common.shortStamp
 import lk.codegen.risime.ui.theme.Spacing
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 
 @Composable
 fun ChatsScreen(
@@ -62,8 +63,14 @@ fun ChatsScreen(
     onAddFriend: () -> Unit,
     onInvites: () -> Unit,
     onNewGroup: () -> Unit = {},
+    onLockedFolder: () -> Unit = {},
 ) {
     val rows by vm.rows.collectAsStateWithLifecycle()
+    val lockedRows by vm.lockedRows.collectAsStateWithLifecycle()
+    val lockedHasCode by vm.lockedHasCode.collectAsStateWithLifecycle()
+    val lockGate = lk.codegen.risime.ui.lock.rememberLockGate()
+    lk.codegen.risime.ui.lock.LockGateDialog(lockGate)
+    val pull = remember { PullToRevealState() }
     val groupsAvailable by vm.groupsAvailable.collectAsStateWithLifecycle()
     val conn by vm.connection.collectAsStateWithLifecycle()
     val err by vm.refreshError.collectAsStateWithLifecycle()
@@ -83,6 +90,12 @@ fun ChatsScreen(
                 androidx.compose.foundation.layout.Column {
                     androidx.compose.material3.TextButton(onClick = { chatMenuFor = null; clearAsk = r to false }) { Text("Clear chat") }
                     androidx.compose.material3.TextButton(onClick = { chatMenuFor = null; clearAsk = r to true }) { Text("Delete chat") }
+                    if (r.conversationId != null || r.userId != null) {
+                        androidx.compose.material3.TextButton(onClick = {
+                            chatMenuFor = null
+                            lockGate.run(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL, r.name) { vm.lockChat(r) }
+                        }) { Text(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL) }
+                    }
                 }
             },
             confirmButton = { androidx.compose.material3.TextButton(onClick = { chatMenuFor = null }) { Text("Cancel") } },
@@ -185,7 +198,18 @@ fun ChatsScreen(
             } else if (tab == 2) {
                 RequestsTab(friendsVm, onAddFriend)
             } else {
-                LazyColumn(Modifier.fillMaxSize()) {
+                LazyColumn(Modifier.fillMaxSize().nestedScroll(pull.connection)) {
+                    if (pull.revealed && lockedRows.isNotEmpty() && !lockedHasCode) {
+                        item(key = "locked-folder") {
+                            LockedFolderEntry(lockedRows.size) {
+                                lockGate.run(lk.codegen.risime.ui.lock.LOCKED_CHATS_TITLE) {
+                                    vm.openLockedFolder()
+                                    pull.reset()
+                                    onLockedFolder()
+                                }
+                            }
+                        }
+                    }
                     err?.let { e -> item { ErrorState(e, onRetry = vm::refresh) } }
                     if (rows.isEmpty()) {
                         item { EmptyState("No friends yet. Add a friend by phone number.", actionLabel = "Add friend", onAction = onAddFriend) }
@@ -217,7 +241,7 @@ fun connectionLabel(s: ConnectionState): String? = when (s) {
 }
 
 @Composable
-private fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> Unit)? = null) {
+internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> Unit)? = null) {
     val presence = presenceLabel(row.presence, System.currentTimeMillis())
     if (row.group) return GroupRowItem(row, onClick, onLongClick)
     val sub = when {

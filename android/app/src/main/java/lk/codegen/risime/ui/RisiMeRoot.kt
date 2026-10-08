@@ -20,6 +20,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import lk.codegen.risime.AppContainer
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.launch
 import lk.codegen.risime.ui.common.NotificationPermissionPrompt
 import lk.codegen.risime.data.auth.AppGate
 import lk.codegen.risime.data.auth.appGate
@@ -140,6 +141,17 @@ private fun MainNav(c: AppContainer, meId: String) {
             }
         }
     }
+    // Locked chats: leaving to the chat list, or the folder closing (background), re-locks everything under it.
+    val lockedFolderOpen by c.lockedChats.folderOpen.collectAsState()
+    LaunchedEffect(nav) {
+        nav.currentBackStackEntryFlow.collect { e -> if (e.destination.route == "chats") c.lockedChats.closeFolder() }
+    }
+    LaunchedEffect(lockedFolderOpen) {
+        if (!lockedFolderOpen && nav.currentBackStackEntry?.destination?.route.let { it == "locked" || it == "locked_settings" || it == "chat/{target}" }) {
+            val under = runCatching { nav.getBackStackEntry("locked") }.isSuccess
+            if (under) nav.popBackStack("chats", false)
+        }
+    }
     NotificationPermissionPrompt(c)
     lk.codegen.risime.ui.settings.NotificationHealthAfterUpdate(c) { runCatching { nav.navigate("notif_health") { launchSingleTop = true } } }
     lk.codegen.risime.ui.history.HistoryPromptHost(c)
@@ -156,21 +168,64 @@ private fun MainNav(c: AppContainer, meId: String) {
                 onSearch = { nav.navigate("search") { launchSingleTop = true } },
                 onAddFriend = { nav.navigate("add_friend") { launchSingleTop = true } },
                 onInvites = { nav.navigate("invites") { launchSingleTop = true } },
+                onLockedFolder = { nav.navigate("locked") { launchSingleTop = true } },
             )
+        }
+        // Locked chats: the folder is reachable only after the confirmation (folderOpen) and closes when
+        // the user leaves it or the app goes to the background.
+        composable("locked") {
+            val open by c.lockedChats.folderOpen.collectAsState()
+            if (open) {
+                lk.codegen.risime.ui.chats.LockedChatsScreen(
+                    viewModel(key = "locked") { ChatsViewModel(c, meId) },
+                    onOpen = { nav.navigate("chat/${android.net.Uri.encode(it)}") },
+                    onSettings = { nav.navigate("locked_settings") { launchSingleTop = true } },
+                    onBack = { nav.popBackStack("chats", false) },
+                )
+            }
+        }
+        composable("locked_settings") {
+            val open by c.lockedChats.folderOpen.collectAsState()
+            if (open) lk.codegen.risime.ui.chats.LockedChatsSettingsScreen(c, onBack = { nav.popBackStack() })
         }
         // A conversation id (dm:/grp:) or a DM peer's user id (older notification intents, search).
         composable("chat/{target}") { entry ->
             val conv = lk.codegen.risime.net.conversationFor(meId, entry.arguments?.getString("target") ?: return@composable)
+            val lockedIds by c.lockedChats.ids.collectAsState()
+            val folderOpen by c.lockedChats.folderOpen.collectAsState()
+            val isLocked = lockedIds?.contains(conv.lowercase()) ?: true
+            val gate = lk.codegen.risime.ui.lock.rememberLockGate()
+            // A locked chat opens only after the confirmation, whichever screen sent the user here
+            // (the folder has already confirmed; a notification, call record or deep link has not).
+            if (isLocked && !folderOpen) {
+                lk.codegen.risime.ui.lock.LockedChatGate(
+                    gate, onUnlock = { c.lockedChats.openFolder() }, onBack = { nav.popBackStack() },
+                    loading = lockedIds == null,
+                )
+                return@composable
+            }
+            val lockControl = lk.codegen.risime.ui.lock.ChatLockControl(isLocked) {
+                if (isLocked) {
+                    gate.run(lk.codegen.risime.ui.lock.UNLOCK_CHAT_LABEL) { c.scope.launch { c.lockedChats.unlock(conv) } }
+                } else {
+                    gate.run(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL) {
+                        nav.popBackStack("chats", false)
+                        c.scope.launch { c.lockedChats.lock(conv) }
+                    }
+                }
+            }
+            lk.codegen.risime.ui.lock.LockGateDialog(gate)
             if (lk.codegen.risime.net.isGroupConversation(conv)) {
                 lk.codegen.risime.ui.group.GroupChatScreen(
                     viewModel(key = conv) { lk.codegen.risime.ui.group.GroupChatViewModel(c, meId, conv) }, meId,
                     onBack = { nav.popBackStack() },
                     onInfo = { nav.navigate("group_info/${android.net.Uri.encode(conv)}") { launchSingleTop = true } },
+                    lock = lockControl,
                 )
                 return@composable
             }
             val peer = lk.codegen.risime.net.dmPeer(conv, meId) ?: return@composable
-            ChatScreen(viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() })
+            ChatScreen(viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() }, lock = lockControl)
         }
         composable("group_new") {
             lk.codegen.risime.ui.group.CreateGroupScreen(
@@ -194,9 +249,10 @@ private fun MainNav(c: AppContainer, meId: String) {
         }
         composable("search") {
             SearchScreen(
-                viewModel { SearchViewModel(c) },
+                viewModel { SearchViewModel(c, meId) },
                 onOpen = { peer -> nav.navigate("chat/${android.net.Uri.encode(peer)}") { popUpTo("chats") } },
                 onBack = { nav.popBackStack() },
+                onLockedFolder = { nav.navigate("locked") { popUpTo("chats") } },
             )
         }
         composable("settings") {
