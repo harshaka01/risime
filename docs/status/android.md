@@ -1,5 +1,28 @@
 # Android status — 0.2 nightlies
 
+## P0-3 video calls: no sound / speaker button greyed out — READY (real phones to confirm)
+**READY.** Commits `2f23394` (calls/) and `29b360d` (root script `call-device-test`, changed for this task).
+- **Cause:** core-telecom 1.0.1's `availableEndpoints`/`currentCallEndpoint` are `Channel.receiveAsFlow()` (each value reaches
+  ONE collector). Video calls ran a second reader (the speaker coroutine) beside the UI readers, so the UI's route list could
+  stay `[]` (button disabled all call), the UI could miss SPEAKER, and the speaker logic could miss the earpiece value (audio left
+  on the earpiece). Telecom also saw the app as audio-only (`CAPABILITY_BASELINE`), and nothing re-applied the speaker after answer.
+- **Fix:** `EndpointTracker` (CallRoutes.kt) is the only reader, started for every Telecom call, copying into per-call
+  StateFlows; the UI flows copy the current call's handle. `registerAppWithTelecom(BASELINE or SUPPORTS_VIDEO_CALLING)`. Pure rule
+  `videoSpeakerTarget` (video, CONNECTING/ACTIVE, no BT/wired, on the earpiece, user hasn't picked) checked on every route change
+  and after answer/setActive; CallControlResult logged, one retry after 500 ms; `selectEndpoint` sets `userPicked`. The route
+  button is enabled with >1 routes or an empty list while ACTIVE (AudioManager fallback toggle). Log line
+  `calls: route current=<T> available=<T,…>` on every change. Debug stats add `audio_sent=`/`audio_recv=` (kind audio);
+  `DtlsStats.bytesReceived` is audio-only, so the decision-054 stall watchdog now sees a silent video call.
+  The v1.18 ring-text bug was already fixed (v1.19); the ongoing notification's status now also gets `video`.
+- **Tests:** VideoSpeakerRuleTest (9), TelecomEndpointFanOutTest (200 reps on Dispatchers.Default; the old wiring on the same
+  fake lost the endpoints or the speaker in **200/200** reps), CallScreensTest (empty routes while ACTIVE → enabled; label/state
+  with [earpiece, speaker]), `userPicked` never overridden. Gate `assembleDebug testDebugUnitTest` green.
+- **Redroid (`CALLTEST_INSTANCE=_p03fix`, port 4474, redroid 5761/5762): CALLTEST OK.** audio_ok on call 9, call 9 after B's Home,
+  call 12 (B → A, in-screen) and call 13 (answered from the notification); `route current=SPEAKER available=SPEAKER` on both phones.
+- **Real phones must confirm:** a 1:1 and a group video call start on the speaker after answering (both directions, in-screen and
+  from the notification, and "Answer without video"); the speaker button is enabled, its label follows taps, and a tap to the
+  earpiece sticks; a Bluetooth/wired headset keeps audio on the headset; `dumpsys telecom` shows the call as video.
+
 ## P0-1 in-app updates that testers can finish (no more uninstalling) — READY
 **READY.** Commits `2c2be21` (worker, resume, checks, feedback, failures, copy, hook, test hook) and `9bd7a93` (Retry takes
 the server's current offer; offline checks don't use up the throttle; MY_PACKAGE_REPLACED keeps a newer offer).
