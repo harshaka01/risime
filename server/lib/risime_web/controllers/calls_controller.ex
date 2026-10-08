@@ -1,7 +1,8 @@
 defmodule RisiMeWeb.CallsController do
   @moduledoc """
   `GET /api/v1/calls/turn` (contract v1.13 §16.7): TURN REST credentials.
-  `POST /api/v1/calls/rooms` (v1.19 §20.2): LiveKit rooms and tokens for group calls.
+  `POST /api/v1/calls/rooms` (v1.19 §20.2, v1.23 §23.6 `upgrade`): LiveKit rooms and tokens for
+  group calls.
   """
   use RisiMeWeb, :controller
 
@@ -63,6 +64,12 @@ defmodule RisiMeWeb.CallsController do
 
       {:error, :call_full} ->
         ApiError.send_error(conn, 409, :call_full)
+
+      {:error, :not_in_call} ->
+        ApiError.send_error(conn, 409, :not_in_call)
+
+      {:error, :too_many_for_video} ->
+        ApiError.send_error(conn, 409, :too_many_for_video)
     end
   end
 end

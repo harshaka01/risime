@@ -1,6 +1,6 @@
 defmodule RisiMe.Calls.LiveKit.API do
   @moduledoc """
-  LiveKit's server API (`RoomService`), as much as v1.19 §20.2 needs. The real client is
+  LiveKit's server API (`RoomService`), as much as v1.19 §20.2 and v1.23 §23.6 need. The real client is
   `RisiMe.Calls.LiveKit.Twirp` (loopback HTTP, per-request 60-s JWTs); tests use a fake.
 
   A room is `%{name, metadata, num_participants, max_participants}`; a participant is
@@ -31,4 +31,19 @@ defmodule RisiMe.Calls.LiveKit.API do
   @doc "`RemoveParticipant` (a participant already gone is `:ok`)."
   @callback remove_participant(config, room :: String.t(), identity :: String.t()) ::
               :ok | {:error, :unavailable}
+
+  @doc "`UpdateRoomMetadata` (v1.23 §23.6): replaces the room's metadata. A missing room is `:not_found`."
+  @callback update_room_metadata(config, room :: String.t(), metadata :: String.t()) ::
+              :ok | {:error, :not_found | :unavailable}
+
+  @doc """
+  `UpdateParticipant` with a `ParticipantPermission` (v1.23 §23.6, `permission` as
+  `RisiMe.Calls.LiveKit.video_permission/1`). A participant that isn't there is `:not_found`.
+  """
+  @callback update_participant(
+              config,
+              room :: String.t(),
+              identity :: String.t(),
+              permission :: map
+            ) :: :ok | {:error, :not_found | :unavailable}
 end

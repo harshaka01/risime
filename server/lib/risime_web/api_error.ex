@@ -46,6 +46,8 @@ defmodule RisiMeWeb.ApiError do
     calls_unavailable: "Calls aren't available on this server yet",
     call_ended: "This call has ended",
     call_full: "This call is full",
+    not_in_call: "You're not in this call",
+    too_many_for_video: "Video is available with 8 people or fewer",
     signup_required: "Create your RisiMe account to continue",
     signup_closed: "RisiMe sign-up is by invitation only right now",
     phone_taken: "This phone number can't be used for a new RisiMe account"

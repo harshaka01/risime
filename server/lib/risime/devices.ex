@@ -134,7 +134,7 @@ defmodule RisiMe.Devices do
   # v1.15 §17.1: `history_share`.
   # v1.18 §19.1: `video`. v1.19 §20.1: `group_calls`.
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
-                         group_calls)
+                         group_calls call_switch screen_share)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1),
@@ -167,15 +167,22 @@ defmodule RisiMe.Devices do
 
   @doc """
   The call capabilities of a device (or a capability list) as
-  `%{calls: bool, video: bool, group_calls: bool}`; all false for a device without an MLS key.
+  `%{calls, video, group_calls, call_switch, screen_share}` (booleans; v1.23 §23.1 added the
+  last two); all false for a device without an MLS key.
   """
   def call_caps(caps) when is_list(caps),
-    do: %{calls: "calls" in caps, video: "video" in caps, group_calls: "group_calls" in caps}
+    do: %{
+      calls: "calls" in caps,
+      video: "video" in caps,
+      group_calls: "group_calls" in caps,
+      call_switch: "call_switch" in caps,
+      screen_share: "screen_share" in caps
+    }
 
   def call_caps(%Device{mls_signature_key: k, capabilities: caps}) when is_binary(k),
     do: call_caps(caps || [])
 
-  def call_caps(_), do: %{calls: false, video: false, group_calls: false}
+  def call_caps(_), do: call_caps([])
 
   @doc "True if the device is a current MLS device with the `calls` capability (§16.1)."
   def calls?(device), do: call_caps(device).calls

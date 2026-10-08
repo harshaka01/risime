@@ -253,7 +253,9 @@ defmodule RisiMeWeb.GroupCallsV119Test do
       assert {200, %{"active" => true, "participants" => 3, "max_participants" => 32} = r} =
                rooms(a, a_dev, body)
 
-      assert Map.keys(r) |> Enum.sort() == ~w(active max_participants participants)
+      # v1.23 §23.6 added `media` (the room's current media).
+      assert Map.keys(r) |> Enum.sort() == ~w(active max_participants media participants)
+      assert r["media"] == "audio"
     end
   end
 

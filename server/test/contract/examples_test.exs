@@ -143,9 +143,10 @@ defmodule RisiMe.ContractExamplesTest do
                     error_backup_device_mismatch.json error_backup_key_conflict.json
                     error_backup_unavailable.json error_no_backup_key.json)
 
-  # v1.23 (voice/video switching and screen sharing, §23): parse-only placeholders until the
-  # server implements it.
-  @pending_v1_23 ~w(call_answer_features_payload.json call_answer_renegotiate_payload.json
+  # v1.23 (voice/video switching and screen sharing, §23): checked in the "v1.23" describe below;
+  # the behaviour in test/risime_web/controllers/call_switch_v123_test.exs. The 1:1 envelopes
+  # travel inside MLS (the server never sees them): checked against the §23.2–§23.4 shapes.
+  @checked_v1_23 ~w(call_answer_features_payload.json call_answer_renegotiate_payload.json
                     call_media_group_payload.json call_media_screen_payload.json
                     call_offer_features_payload.json call_offer_renegotiate_payload.json
                     call_offer_renegotiate_payload_bad.json call_switch_accept_payload.json
@@ -210,7 +211,7 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_20 ++
         @checked_v1_21 ++
         @checked_v1_22 ++
-        @pending_v1_23
+        @checked_v1_23
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -2827,6 +2828,9 @@ defmodule RisiMe.ContractExamplesTest do
       body = %{ex | "conversation_id" => id}
       {200, reply} = G.api(:post, "/api/v1/calls/rooms", a.token, body, a_dev)
       rex = example("calls_room_reply.json")
+      # v1.23 §23.6 added `media` (checked in the "v1.23" describe).
+      assert reply["media"] == "audio"
+      reply = Map.delete(reply, "media")
       assert keys(reply) == keys(rex)
       assert_same_shape(Map.drop(reply, ["identity"]), Map.drop(rex, ["identity"]))
       assert reply["url"] == RisiMe.FakeLiveKit.config()[:url]
@@ -2836,6 +2840,7 @@ defmodule RisiMe.ContractExamplesTest do
         G.api(:post, "/api/v1/calls/rooms", b.token, %{body | "action" => "status"}, b_dev)
 
       sex = example("calls_room_status_reply.json")
+      st = Map.delete(st, "media")
       assert keys(st) == keys(sex)
       assert_same_shape(st, sex)
 
@@ -3484,6 +3489,193 @@ defmodule RisiMe.ContractExamplesTest do
       for line <- [h, c, m, t, g, k], key <- Map.keys(line) do
         refute key in ~w(device_id cursor mls_state token push_token bk)
       end
+    end
+  end
+
+  describe "v1.23" do
+    setup :with_attestation_key
+    setup :fake_livekit
+
+    defp sdp_lines(env), do: String.split(env["sdp"], "\r\n", trim: true)
+
+    defp sdp_values(env, prefix),
+      do: for(l <- sdp_lines(env), String.starts_with?(l, prefix), do: l)
+
+    # §23.2 strict validation of a 1:1 `call_switch`.
+    defp switch_ok?(%{"v" => 1, "type" => "call_switch"} = e) do
+      Map.keys(e) -- ~w(v type call_id to_device seq action source) == [] and
+        is_binary(e["call_id"]) and e["call_id"] =~ @uuid and
+        is_binary(e["to_device"]) and e["to_device"] =~ @uuid and
+        is_integer(e["seq"]) and e["seq"] in 1..65_535 and
+        e["action"] in ~w(request accept decline cancel voice) and
+        if(e["action"] == "request",
+          do: e["source"] in ~w(camera screen),
+          else: not Map.has_key?(e, "source")
+        )
+    end
+
+    defp switch_ok?(_), do: false
+
+    test "1:1 envelopes: features, call_switch, renegotiate offer/answer, call_media video" do
+      for name <- ~w(call_offer_features_payload.json call_answer_features_payload.json) do
+        f = example(name)["features"]
+        assert is_list(f) and length(f) <= 8
+        assert Enum.all?(f, &(is_binary(&1) and byte_size(&1) <= 32))
+        assert f == ~w(switch screen)
+      end
+
+      offer = example("call_offer_features_payload.json")
+      assert offer["restart"] == false and offer["media"] == "audio"
+      refute Map.has_key?(offer, "renegotiate")
+
+      req = example("call_switch_request_payload.json")
+      acc = example("call_switch_accept_payload.json")
+      voice = example("call_switch_voice_payload.json")
+      assert Enum.all?([req, acc, voice], &switch_ok?/1)
+      assert req["action"] == "request" and req["source"] == "camera" and req["seq"] == 1
+      assert acc["action"] == "accept" and acc["seq"] == req["seq"]
+      assert voice["action"] == "voice" and voice["seq"] == 2
+      refute switch_ok?(Map.delete(req, "source"))
+      refute switch_ok?(Map.put(acc, "source", "camera"))
+      refute switch_ok?(%{req | "seq" => 0})
+      refute switch_ok?(%{req | "action" => "video"})
+
+      # The re-offer (§23.3): renegotiate, never restart; same fingerprint, ICE credentials and
+      # setup as the call's first SDPs; BUNDLE 0 1, audio mid 0 first, video mid 1, sendrecv.
+      re = example("call_offer_renegotiate_payload.json")
+      first = example("call_offer_payload.json")
+      assert re["renegotiate"] == true and re["restart"] == false and re["media"] == "audio"
+      assert re["call_id"] == first["call_id"] and re["to_device"] =~ @uuid
+      assert re["sent_at"] =~ @ts
+
+      ans = example("call_answer_renegotiate_payload.json")
+      first_ans = example("call_answer_features_payload.json")
+
+      for {r, f, setup} <- [{re, first, "a=setup:actpass"}, {ans, first_ans, "a=setup:active"}] do
+        assert sdp_values(r, "a=group:BUNDLE") == ["a=group:BUNDLE 0 1"]
+
+        assert [{"m=audio " <> _, 0}, {"m=video " <> _, 1}] =
+                 r |> sdp_values("m=") |> Enum.with_index()
+
+        assert sdp_values(r, "a=mid:") == ["a=mid:0", "a=mid:1"]
+        assert Enum.uniq(sdp_values(r, "a=fingerprint:")) == sdp_values(f, "a=fingerprint:")
+        assert Enum.uniq(sdp_values(r, "a=ice-ufrag:")) == sdp_values(f, "a=ice-ufrag:")
+        assert Enum.uniq(sdp_values(r, "a=ice-pwd:")) == sdp_values(f, "a=ice-pwd:")
+        assert Enum.uniq(sdp_values(r, "a=setup:")) == [setup]
+        assert sdp_values(r, "a=sendrecv") == ["a=sendrecv", "a=sendrecv"]
+        refute r["sdp"] =~ "a=simulcast" or r["sdp"] =~ "ssrc-audio-level"
+      end
+
+      # The bad re-offer carries another fingerprint than the call's first offer → `failed`.
+      bad = example("call_offer_renegotiate_payload_bad.json")
+      assert bad["call_id"] == first["call_id"] and bad["renegotiate"] == true
+
+      assert sdp_values(bad, "a=fingerprint:") |> Enum.uniq() !=
+               sdp_values(first, "a=fingerprint:")
+
+      m = example("call_media_screen_payload.json")
+      assert m["video"] in ~w(off camera screen) and m["camera"] == (m["video"] == "camera")
+      assert m["call_id"] =~ @uuid and m["to_device"] =~ @uuid
+    end
+
+    test "group envelopes: call_switch and call_media (no to_device)" do
+      s = example("call_switch_group_payload.json")
+      assert keys(s) == Enum.sort(~w(v type call_id seq action source))
+      assert s["call_id"] =~ @uuid and s["seq"] in 1..65_535
+      assert s["action"] == "video" and s["source"] in ~w(camera screen)
+
+      m = example("call_media_group_payload.json")
+      assert keys(m) == Enum.sort(~w(v type call_id video))
+      assert m["call_id"] =~ @uuid and m["video"] in ~w(off camera screen)
+    end
+
+    test "device_put_call_switch.json keeps call_switch and screen_share", %{a: a} do
+      alias RisiMe.GroupHelpers, as: G
+      dev = Ecto.UUID.generate()
+      ex = example("device_put_call_switch.json")
+
+      {200, %{"attestation" => _}} = G.api(:put, "/api/v1/me/devices/#{dev}", a.token, ex)
+
+      d = Repo.get_by(RisiMe.Devices.Device, device_id: dev)
+      assert d.capabilities == ex["mls"]["capabilities"]
+      assert %{call_switch: true, screen_share: true} = RisiMe.Devices.call_caps(d)
+    end
+
+    test "livekit_token_claims_v123.json and livekit_update_participant.json are what the server makes" do
+      ex = example("livekit_token_claims_v123.json")
+
+      assert RisiMe.Calls.LiveKit.participant_claims(
+               ex["iss"],
+               ex["sub"],
+               ex["video"]["room"],
+               "video",
+               ex["nbf"],
+               true
+             ) == ex
+
+      reply = example("calls_room_upgrade_reply.json")
+      [_, payload, _] = String.split(reply["token"], ".")
+      assert payload |> Base.url_decode64!(padding: false) |> Jason.decode!() == ex
+      assert reply["identity"] == ex["sub"] and reply["room"] == ex["video"]["room"]
+      assert reply["media"] == "video" and reply["max_participants"] == 8
+
+      up = example("livekit_update_participant.json")
+      assert RisiMe.Calls.LiveKit.video_permission(true) == up["permission"]
+      assert byte_size(up["room"]) == 22
+      assert [_, _] = String.split(up["identity"], "/")
+    end
+
+    test "calls_room_upgrade_request.json → calls_room_upgrade_reply.json; status; the errors", %{
+      a: a,
+      b: b
+    } do
+      alias RisiMe.GroupHelpers, as: G
+      alias RisiMe.FakeLiveKit
+      caps = ~w(groups images deletes calls video group_calls call_switch screen_share)
+      a_dev = gc_dev(a, caps)
+      b_dev = gc_dev(b, caps)
+      id = gc_group(a, a_dev, [b])
+      rooms = fn user, dev, body -> G.api(:post, "/api/v1/calls/rooms", user.token, body, dev) end
+
+      ex = example("calls_room_upgrade_request.json")
+      body = %{ex | "conversation_id" => id}
+      {200, %{"room" => room}} = rooms.(a, a_dev, %{body | "action" => "start"})
+      FakeLiveKit.join(room, "#{a.user.id}/#{a_dev}")
+
+      # b holds no seat: not_in_call.
+      assert {409, example("error_not_in_call.json")} == rooms.(b, b_dev, body)
+
+      # Too many: 7 more present.
+      for n <- 1..8, do: FakeLiveKit.join(room, "u/#{n}")
+      assert {409, example("error_too_many_for_video.json")} == rooms.(a, a_dev, body)
+      for n <- 1..8, do: :ok = FakeLiveKit.remove_participant(nil, room, "u/#{n}")
+
+      {200, reply} = rooms.(a, a_dev, body)
+      rex = example("calls_room_upgrade_reply.json")
+      assert keys(reply) == keys(rex)
+      assert_same_shape(Map.drop(reply, ["identity"]), Map.drop(rex, ["identity"]))
+      assert reply["media"] == "video" and reply["max_participants"] == 8
+
+      {:ok, claims} =
+        RisiMe.Calls.LiveKit.verify(reply["token"], FakeLiveKit.config()[:api_secret])
+
+      assert keys(claims) == keys(example("livekit_token_claims_v123.json"))
+      assert claims["video"]["canPublishSources"] == ~w(microphone camera screen_share)
+
+      assert [{:update_participant, [^room, _, perm]}] =
+               for(
+                 {:update_participant, _} = c <- FakeLiveKit.calls(),
+                 do: c
+               )
+               |> Enum.take(-1)
+
+      assert perm == example("livekit_update_participant.json")["permission"]
+
+      {200, st} = rooms.(b, b_dev, %{body | "action" => "status"})
+      sex = example("calls_room_status_reply_v123.json")
+      assert keys(st) == keys(sex)
+      assert_same_shape(st, sex)
+      assert st["media"] == "video" and st["max_participants"] == 8
     end
   end
 end

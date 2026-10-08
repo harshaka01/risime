@@ -49,6 +49,8 @@ defmodule RisiMe.Application do
       RisiMe.Push.FCM,
       RisiMe.Push.Dispatcher,
       RisiMe.Calls.State,
+      # v1.23 §23.6: per-room locks and the tokens minted in the last 600 s.
+      RisiMe.Calls.RoomMemory,
       # v1.19 §20.2: LiveKit RemoveParticipant calls off the group-lock path.
       {Task.Supervisor, name: RisiMe.Calls.TaskSupervisor},
       # Start a worker by calling: RisiMe.Worker.start_link(arg)

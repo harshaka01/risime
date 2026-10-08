@@ -2,8 +2,8 @@ defmodule RisiMe.Calls.LiveKit.Twirp do
   @moduledoc """
   LiveKit's `RoomService` over Twirp/JSON at `LIVEKIT_API_URL` (loopback only, decision 056).
   Every request carries its own 60-s JWT with only the grant it needs (§20.2): `roomCreate` for
-  `CreateRoom`, `roomList` for `ListRooms`, `roomAdmin` on that room for `ListParticipants` and
-  `RemoveParticipant`. Logs carry room names and counts only, never a token.
+  `CreateRoom`, `roomList` for `ListRooms`, `roomAdmin` on that room for `ListParticipants`,
+  `RemoveParticipant`, `UpdateRoomMetadata` and `UpdateParticipant`. Logs carry room names and counts only, never a token.
   """
   @behaviour RisiMe.Calls.LiveKit.API
 
@@ -58,6 +58,27 @@ defmodule RisiMe.Calls.LiveKit.Twirp do
     case call(config, "RemoveParticipant", %{"room" => room, "identity" => identity}, grant) do
       {:ok, _} -> :ok
       {:error, :not_found} -> :ok
+      error -> error
+    end
+  end
+
+  @impl true
+  def update_room_metadata(config, room, metadata) do
+    grant = %{"roomAdmin" => true, "room" => room}
+
+    case call(config, "UpdateRoomMetadata", %{"room" => room, "metadata" => metadata}, grant) do
+      {:ok, _} -> :ok
+      error -> error
+    end
+  end
+
+  @impl true
+  def update_participant(config, room, identity, permission) do
+    grant = %{"roomAdmin" => true, "room" => room}
+    body = %{"room" => room, "identity" => identity, "permission" => permission}
+
+    case call(config, "UpdateParticipant", body, grant) do
+      {:ok, _} -> :ok
       error -> error
     end
   end

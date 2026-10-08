@@ -42,7 +42,8 @@ defmodule RisiMe.FakeLiveKit do
 
   def start_link(_), do: Agent.start_link(fn -> initial() end, name: __MODULE__)
 
-  defp initial, do: %{rooms: %{}, participants: %{}, log: [], down: false}
+  defp initial,
+    do: %{rooms: %{}, participants: %{}, log: [], down: false, fail: %{}, permissions: %{}}
 
   @doc "Every API call so far, oldest first, as `{function, args}`."
   def calls, do: Agent.get(__MODULE__, &Enum.reverse(&1.log))
@@ -59,6 +60,17 @@ defmodule RisiMe.FakeLiveKit do
     end)
   end
 
+  @doc """
+  Makes the next `n` calls of `fun` (e.g. `:update_participant`) fail with `{:error, :unavailable}`;
+  with `match`, only calls whose args contain it (e.g. one identity).
+  """
+  def fail(fun, n, match \\ nil),
+    do: Agent.update(__MODULE__, &put_in(&1, [:fail, {fun, match}], n))
+
+  @doc "The permission last set for `identity` in `room` by `UpdateParticipant` (nil if none)."
+  def permission(room, identity),
+    do: Agent.get(__MODULE__, &get_in(&1, [:permissions, {room, identity}]))
+
   def participants(room), do: Agent.get(__MODULE__, &Map.get(&1.participants, room, []))
   def room(name), do: Agent.get(__MODULE__, &Map.get(&1.rooms, name))
 
@@ -72,7 +84,19 @@ defmodule RisiMe.FakeLiveKit do
   defp logged(fun, args, f) do
     Agent.get_and_update(__MODULE__, fn s ->
       s = %{s | log: [{fun, args} | s.log]}
-      if s.down, do: {{:error, :unavailable}, s}, else: f.(s)
+
+      case failing(s, fun, args) do
+        _ when s.down -> {{:error, :unavailable}, s}
+        nil -> f.(s)
+        key -> {{:error, :unavailable}, %{s | fail: Map.update!(s.fail, key, &(&1 - 1))}}
+      end
+    end)
+  end
+
+  defp failing(s, fun, args) do
+    Enum.find_value(s.fail, fn
+      {{^fun, match} = key, n} when n > 0 -> if match == nil or match in args, do: key
+      _ -> nil
     end)
   end
 
@@ -118,6 +142,28 @@ defmodule RisiMe.FakeLiveKit do
     logged(:remove_participant, [room, identity], fn s ->
       ps = Map.get(s.participants, room, []) -- [identity]
       {:ok, %{s | participants: Map.put(s.participants, room, ps)}}
+    end)
+  end
+
+  @impl true
+  def update_room_metadata(_config, room, metadata) do
+    logged(:update_room_metadata, [room, metadata], fn s ->
+      case s.rooms do
+        %{^room => r} -> {:ok, %{s | rooms: Map.put(s.rooms, room, %{r | metadata: metadata})}}
+        _ -> {{:error, :not_found}, s}
+      end
+    end)
+  end
+
+  @impl true
+  def update_participant(_config, room, identity, permission) do
+    logged(:update_participant, [room, identity, permission], fn s ->
+      if identity in Map.get(s.participants, room, []) do
+        perms = Map.put(Map.get(s, :permissions, %{}), {room, identity}, permission)
+        {:ok, Map.put(s, :permissions, perms)}
+      else
+        {{:error, :not_found}, s}
+      end
     end)
   end
 end

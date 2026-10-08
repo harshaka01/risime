@@ -16,7 +16,7 @@ defmodule RisiMe.Calls.LiveKit do
 
   Tokens are HS256 JWTs (LiveKit's access-token format), hand-rolled here (no dependency): a
   participant token lives 600 s and grants exactly join + subscribe + publish (microphone, and
-  camera for video); the server's API tokens live 60 s with only the grant the call needs.
+  camera for video, plus screen share for a `screen_share` device in video, v1.23 §23.6); the server's API tokens live 60 s with only the grant the call needs.
   """
 
   @token_ttl_s 600
@@ -68,11 +68,20 @@ defmodule RisiMe.Calls.LiveKit do
   def identity(user_id, device_id), do: user_id <> "/" <> device_id
 
   @doc """
-  The claims of a participant token (`livekit_token_claims.json`): `iss` the API key, `sub` the
-  identity, `name` empty, no metadata, `nbf` now, `exp` now + 600 s, and the `video` grant.
+  The publish sources for `media` (§20.2, §23.6): microphone; camera in video; screen share in
+  video only when `screen?` (the identity's device advertises `screen_share`).
   """
-  def participant_claims(api_key, identity, room, media, now) do
-    sources = if media == "video", do: ["microphone", "camera"], else: ["microphone"]
+  def sources("video", true), do: ["microphone", "camera", "screen_share"]
+  def sources("video", _screen?), do: ["microphone", "camera"]
+  def sources(_audio, _screen?), do: ["microphone"]
+
+  @doc """
+  The claims of a participant token (`livekit_token_claims.json`, `livekit_token_claims_v123.json`):
+  `iss` the API key, `sub` the identity, `name` empty, no metadata, `nbf` now, `exp` now + 600 s,
+  and the `video` grant (sources per `sources/2`).
+  """
+  def participant_claims(api_key, identity, room, media, now, screen? \\ false) do
+    sources = sources(media, screen?)
 
     %{
       "iss" => api_key,
@@ -93,9 +102,32 @@ defmodule RisiMe.Calls.LiveKit do
   end
 
   @doc "A signed participant token. Returns `{token, exp_unix}`."
-  def participant_token(%{api_key: key, api_secret: secret}, identity, room, media, now) do
-    claims = participant_claims(key, identity, room, media, now)
+  def participant_token(
+        %{api_key: key, api_secret: secret},
+        identity,
+        room,
+        media,
+        now,
+        screen? \\ false
+      ) do
+    claims = participant_claims(key, identity, room, media, now, screen?)
     {sign(claims, secret), claims["exp"]}
+  end
+
+  @doc """
+  The `ParticipantPermission` of a video grant for `UpdateParticipant` (§23.6,
+  `livekit_update_participant.json`): subscribe, publish microphone and camera (and screen share
+  when `screen?`), no data, no metadata updates, not hidden.
+  """
+  def video_permission(screen?) do
+    %{
+      "can_subscribe" => true,
+      "can_publish" => true,
+      "can_publish_data" => false,
+      "can_publish_sources" => Enum.map(sources("video", screen?), &String.upcase/1),
+      "can_update_metadata" => false,
+      "hidden" => false
+    }
   end
 
   @doc """

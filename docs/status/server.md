@@ -10,11 +10,43 @@ reinstall, §13, decision 043), **v1.11** (encrypted images, §14, decision 042)
 046 and 051), **v1.14** (members restore an existing member's devices, §12.4a) and **v1.15**
 (history sharing between devices, §17, decision 049), **v1.17** (profile photos, §18), **v1.18**
 (1:1 video calls, §19), **v1.19** (group calls with LiveKit, §20, decision 056), **v1.21**
-(reinstalls without reset, stale leaves, §12.12, decision 060) and **v1.22** (encrypted backups,
-§22, decision 059) are done, plus the group-readiness hotfix and the two §14 fixes root decided.
+(reinstalls without reset, stale leaves, §12.12, decision 060), **v1.22** (encrypted backups,
+§22, decision 059) and **v1.23** (mid-call switching and screen sharing, §23, decision 062) are done, plus the group-readiness hotfix and the two §14 fixes root decided.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(599 tests, 1 excluded: the optional `:livekit` integration test, green against the local
+(616 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
+
+## v1.23 mid-call switching and screen sharing (§23) — READY
+- **No migration, no env, no storage.** 1:1 needs nothing beyond the capabilities (server S1):
+  `call_switch` and `screen_share` join `@known_capabilities`; `Devices.call_caps/1` reports them.
+- **`POST /calls/rooms` `action: "upgrade"`** (`RisiMe.Calls.Rooms`): device check needs
+  `call_switch` (`403 invalid_device`) → rate `upgrade` 10 per user per hour (own bucket, `429` +
+  `Retry-After`) → under the per-room lock: `ListRooms` (`404 call_ended`) → requester in
+  `ListParticipants` (`409 not_in_call`) → already video: `200` with a token, nothing changed →
+  the cap: present identities ∪ identities with a `start`/`join`/`upgrade` token minted in the last
+  600 s, ≤ 8 (`409 too_many_for_video`) → `UpdateRoomMetadata` `{"c","m":"video"}` →
+  `UpdateParticipant` for the requester (one retry; failure → `503 calls_unavailable`, metadata left
+  video) → for every other present identity (one retry each; failures logged) with
+  `LiveKit.video_permission/1` (screen share only for `screen_share` devices). A metadata failure
+  (after one retry) is `503` too. Logs: room, counts, outcome; never tokens or identities lists.
+- **`RisiMe.Calls.RoomMemory`** (new, supervised): the per-room lock (`:global.trans` on this
+  node) for `start`/`join`/`upgrade`, and the minted-token memory (ETS, swept each minute, lost
+  on restart as accepted).
+- **`join`:** cap from the metadata `m` (8 video, 32 voice; LiveKit's `max_participants` stays as
+  created); an identity already present is a refresh (never `call_full`; in a video room
+  `UpdateParticipant` re-applied, failures logged, token still given); grants follow the current
+  media. **`start`** with video adds screen share for `screen_share` devices; an idempotent
+  `start` of an upgraded room answers the current media (LiveKit's `CreateRoom` keeps the
+  metadata, checked against the real server). `start`/`join`/`upgrade`/`status` replies carry
+  `media` (current); `status`'s `max_participants` follows it.
+- **LiveKit API behaviour** gains `update_room_metadata/3` and `update_participant/4` (Twirp
+  `UpdateRoomMetadata`, `UpdateParticipant`, `roomAdmin` grant; 404 → `:not_found`); the fake can
+  fail calls selectively and records permissions.
+- Tests: `test/risime_web/controllers/call_switch_v123_test.exs` (12), the v1.23 describe in
+  `test/contract/examples_test.exs` (5, all 19 examples; the `@pending_v1_23` placeholders are
+  gone), the second `:livekit` integration test (a participant connected over LiveKit's signalling
+  WebSocket: metadata, idempotent `CreateRoom`, `UpdateParticipant`, `not_found`, a screen-share
+  token through `/rtc/validate`).
 
 ## v1.22 encrypted backups (§22) — READY
 - **Migration** `20261009110000_create_backups`: `backups` (PK `backup_id`, FK `user_id` →
