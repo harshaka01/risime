@@ -55,7 +55,7 @@
   and reconnect keep it. Locking never touches messages (rule 9).
 - **Excluded from:** main list, search, notification content. There are no share targets, direct-share shortcuts or widgets
   in the app yet; when they are added they must read `AppContainer.lockedChats`. Independent of the Fingerprint lock (064).
-- **Tests (JVM, 0 failed):** `LockedChatsTest` (persist across restart, no plaintext, golden blob from a fixed key, hash/
+- **Tests (953 JVM in the gate, 0 failed):** `LockedChatsTest` (persist across restart, no plaintext, golden blob from a fixed key, hash/
   salt/exact match, busy Keystore, lost key, reset/wipe), `LockedChatsUiTest` (list split, authenticators, prompt
   success/cancel/no-screen-lock, pull-down reveal and hide, entry tap, code dialog), `LockedChatNotificationTest` (bare
   notification, no style, tap without chat, unlocked chat unchanged, refresh), `LockedSearchTest`.
