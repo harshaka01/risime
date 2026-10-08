@@ -69,6 +69,16 @@ defmodule RisiMe.Agent.TranscriptTest do
     assert :error = Transcript.open(:crypto.strong_rand_bytes(32), og, r1.message_id, r1.body)
   end
 
+  test "rows sealed under another RISI_DATA_KEY are skipped and dropped (P0 2026-10-08)", ctx do
+    %{user: user, official: og} = ctx
+    :ok = Transcript.put(og, msg(user, "old key"))
+    Application.put_env(:risime, :risi_data_key, Base.encode64(:crypto.strong_rand_bytes(32)))
+    :ok = Transcript.put(og, msg(user, "new key"))
+
+    assert [%{plaintext: "new key"}] = Transcript.list(og)
+    assert length(Store.impl().list_agent_messages(og, nil, 10)) == 1
+  end
+
   test "§15 delete removes one row; purge removes the conversation's rows", ctx do
     %{user: user, official: og} = ctx
     [m1, m2, m3] = for t <- ~w(a b c), do: msg(user, t)
@@ -114,7 +124,7 @@ defmodule RisiMe.Agent.TranscriptTest do
     assert Agent.startable?() == RisiMe.Agent.Mls.Nif.loaded?()
     Application.put_env(:risime, :risi, false)
     refute Agent.startable?()
-    assert Agent.children() == []
+    assert :risi_off in Agent.problems()
 
     # RISI=on but the tree not running: never available (§24.15 agent_unavailable).
     Application.put_env(:risime, :risi, true)

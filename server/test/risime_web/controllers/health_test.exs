@@ -17,7 +17,8 @@ defmodule RisiMeWeb.HealthTest do
                "postgres" => "ok",
                "cassandra" => "ok",
                "sms" => "log",
-               "blob_storage" => "ok"
+               "blob_storage" => "ok",
+               "risi" => "off"
              }
            }
   end
@@ -31,7 +32,7 @@ defmodule RisiMeWeb.HealthTest do
         body = conn |> get("/health") |> json_response(503)
         assert body["status"] == "error"
 
-        assert Map.delete(body["checks"], "blob_storage") ==
+        assert Map.drop(body["checks"], ["blob_storage", "risi"]) ==
                  %{"postgres" => "ok", "cassandra" => "error", "sms" => "log"}
       end)
 

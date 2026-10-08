@@ -21,6 +21,8 @@ defmodule RisiMeWeb.HealthController do
     checks = Map.put(checks, "sms", RisiMe.Accounts.SmsStatus.check())
     # Blob disk space (v1.11, decision 042): "low" under the warning level; never a 503.
     checks = Map.put(checks, "blob_storage", RisiMe.Blobs.DiskGuard.health())
+    # Risi (P0 2026-10-08): "off" | "ok" | "unavailable: <reason>"; never a 503, never a secret.
+    checks = Map.put(checks, "risi", risi())
 
     conn
     |> put_status(if healthy, do: 200, else: 503)
@@ -29,6 +31,12 @@ defmodule RisiMeWeb.HealthController do
       version: RisiMe.Application.version(),
       checks: checks
     })
+  end
+
+  defp risi do
+    RisiMe.Agent.health()
+  rescue
+    _ -> "unavailable: error"
   end
 
   defp postgres do

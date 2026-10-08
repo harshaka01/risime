@@ -11,6 +11,7 @@ defmodule RisiMe.Release do
       bin/risime eval "RisiMe.Release.name_pending_device_ops()"  # v1.14, dry run by default
       bin/risime eval "RisiMe.Release.dm_device_ops()"            # v1.16, dry run by default
       bin/risime eval "RisiMe.Release.stale_device_ops()"         # v1.21, dry run by default
+      bin/risime eval "RisiMe.Release.risi_preflight()"           # read-only Risi key/NIF check
 
   `migrate_cql/1` applies `priv/cql/*.cql` exactly like `mix risime.cql.migrate`: it creates the
   keyspace if needed, applies each file once in name order and records it in the keyspace's
@@ -239,6 +240,61 @@ defmodule RisiMe.Release do
     Logger.info(line)
     IO.puts(line)
     {:ok, result}
+  end
+
+  @doc """
+  P0 2026-10-08: the **read-only** Risi preflight, run before `RISI=on` or after changing a Risi
+  key:
+
+      bin/risime eval "RisiMe.Release.risi_preflight()"
+
+  Checks `RISI_MLS_KEK`/`RISI_DATA_KEY` (present, base64 of 32 bytes), that the MLS NIF loads,
+  the key check of the sealed store in `risi_mls_kv` against `RISI_MLS_KEK`, and that the open of
+  Risi's rows would succeed (in memory: nothing is written, seeded or registered). A
+  `RISI_DATA_KEY` that differs from the buffer's key is a note, not a failure (those rows are
+  dropped). Prints `RISI PREFLIGHT OK` or `RISI PREFLIGHT FAIL <reason>` and halts with status 1
+  on failure (`halt: false` returns `{:error, reason}` instead). Never prints key material.
+  """
+  def risi_preflight(opts \\ []) do
+    result =
+      try do
+        if Process.whereis(RisiMe.Repo) != nil,
+          do: with_attestation(&RisiMe.Agent.preflight/0),
+          else: with_repo(fn -> with_attestation(&RisiMe.Agent.preflight/0) end)
+      rescue
+        e -> {:error, RisiMe.Agent.exception_reason(e)}
+      catch
+        :exit, _ -> {:error, :db_error}
+      end
+
+    case result do
+      {:ok, notes} ->
+        for n <- notes, do: IO.puts("  " <> n)
+        IO.puts("RISI PREFLIGHT OK")
+        :ok
+
+      {:error, reason} ->
+        IO.puts("RISI PREFLIGHT FAIL " <> RisiMe.Agent.describe(reason))
+        if Keyword.get(opts, :halt, true), do: System.halt(1)
+        {:error, reason}
+    end
+  end
+
+  # The trust anchors come from RisiMe.MLS.Attestation (not running under `eval`).
+  defp with_attestation(fun) do
+    case Process.whereis(RisiMe.MLS.Attestation) do
+      nil ->
+        {:ok, pid} = GenServer.start(RisiMe.MLS.Attestation, :ok, name: RisiMe.MLS.Attestation)
+
+        try do
+          fun.()
+        after
+          GenServer.stop(pid)
+        end
+
+      _ ->
+        fun.()
+    end
   end
 
   defp with_repo(fun) do

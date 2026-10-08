@@ -59,9 +59,11 @@ defmodule RisiMe.Application do
       {Task.Supervisor, name: RisiMe.Calls.TaskSupervisor}
     ]
 
-    # v1.24 S5: the Risi agent tree, only with RISI=on, the MLS NIF and its keys (a temporary
-    # child: it can stop, the server never does because of it).
-    children = children ++ RisiMe.Agent.children() ++ [RisiMeWeb.Endpoint]
+    # v1.24 S5: the Risi agent tree, only with RISI=on, the MLS NIF and its keys. Started after
+    # the endpoint by RisiMe.Agent.Starter, which can't fail: a tree that fails to start or
+    # keeps crashing only makes Risi unavailable (/health checks.risi), never stops the boot or
+    # the server (P0 2026-10-08).
+    children = children ++ [RisiMeWeb.Endpoint] ++ RisiMe.Agent.children()
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options

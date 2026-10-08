@@ -22,6 +22,7 @@ defmodule RisiMe.Agent.Mls do
 
   require Logger
 
+  alias RisiMe.Agent.{KeyCheck, Status}
   alias RisiMe.Agent.Mls.Nif
   alias RisiMe.Devices.Device
   alias RisiMe.MLS.Attestation
@@ -45,18 +46,26 @@ defmodule RisiMe.Agent.Mls do
 
   @impl true
   def init(_opts) do
-    {:ok, kek} = RisiMe.Agent.kek()
-    state = %{handle: nil, user_id: Risi.user_id(), device_id: Risi.device_id(), kek: kek}
-
     # Opened in init: the children after this one (rest_for_one) start with a registered,
-    # attested device.
-    case open(state) do
+    # attested device. A failure is recorded (`Agent.Status`) and stops only the tree:
+    # `Agent.Starter` logs it once and reports it in /health (P0 2026-10-08).
+    result =
+      case RisiMe.Agent.kek() do
+        {:ok, kek} ->
+          open(%{handle: nil, user_id: Risi.user_id(), device_id: Risi.device_id(), kek: kek})
+
+        :error ->
+          {:error, :missing_mls_kek}
+      end
+
+    case result do
       {:ok, state} ->
+        Status.clear_failure()
         {:ok, state}
 
       {:error, reason} ->
-        Logger.error("Risi MLS open failed: #{inspect(reason)}")
-        {:stop, {:shutdown, :open_failed}}
+        Status.failure(reason)
+        {:stop, {:shutdown, {:open_failed, reason}}}
     end
   end
 
@@ -110,28 +119,73 @@ defmodule RisiMe.Agent.Mls do
 
       {:error, reason} ->
         # Stop: the supervisor restarts the tree after us from the rows.
+        Status.failure({:reopen_failed, reason})
         exit({:shutdown, {:reopen_failed, reason}})
     end
   end
 
   ## Open
 
+  # The key check (`Agent.KeyCheck`) comes first: a KEK that doesn't match the one that sealed
+  # the rows is `:kek_mismatch` without an open. With no check yet (rows written before it
+  # existed) a `:tampered`/`:bad_kek` open of existing rows is reported as `:kek_mismatch` too
+  # (the P0 cause); the check is written after the first successful open. An empty store may
+  # take a new KEK (nothing sealed to lose).
   defp open(state) do
     %{user_id: user, device_id: dev, kek: kek} = state
     _ = Risi.seed()
     rows = load_rows(dev)
+    check = KeyCheck.compare(KeyCheck.mls_name(dev), kek)
 
-    with {:anchors, [_ | _] = anchors} <- {:anchors, trust_anchors()},
-         {:ok, h, j} <- Nif.open(user, dev, anchors, kek, rows),
+    with :ok <- kek_ok(check, rows),
+         {:anchors, [_ | _] = anchors} <- {:anchors, trust_anchors()},
+         {:ok, h, j} <- open_rows(user, dev, anchors, kek, rows, check),
          :ok <- persist(dev, j),
          {:ok, pk, j} <- Nif.signature_public_key(h),
          :ok <- persist(dev, j),
          :ok <- register(h, user, dev, pk, rows == []) do
+      if check != :ok, do: KeyCheck.record(KeyCheck.mls_name(dev), kek)
       {:ok, %{state | handle: h}}
     else
       {:anchors, []} -> {:error, :mls_unavailable}
-      {:error, {kind, _msg}} -> {:error, kind}
+      {:error, {kind, _msg}} when is_atom(kind) -> {:error, kind}
       {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e -> {:error, RisiMe.Agent.exception_reason(e)}
+  end
+
+  @doc """
+  The read-only check behind `RisiMe.Agent.preflight/0`: the key check and an `open` of the
+  device's rows **in memory** (no seed, no journal, no registration). `{:ok, info}` (one line,
+  no key material) or `{:error, reason}`.
+  """
+  def verify(kek) do
+    {user, dev} = {Risi.user_id(), Risi.device_id()}
+    rows = load_rows(dev)
+    check = KeyCheck.compare(KeyCheck.mls_name(dev), kek)
+
+    with :ok <- kek_ok(check, rows),
+         {:anchors, [_ | _] = anchors} <- {:anchors, trust_anchors()},
+         {:ok, _h, _j} <- open_rows(user, dev, anchors, kek, rows, check) do
+      {:ok, "risi_mls_kv: #{length(rows)} row(s) open; key check #{check}"}
+    else
+      {:anchors, []} -> {:error, :mls_unavailable}
+      {:error, {kind, _msg}} when is_atom(kind) -> {:error, kind}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp kek_ok(:mismatch, [_ | _]), do: {:error, :kek_mismatch}
+  defp kek_ok(_check, _rows), do: :ok
+
+  defp open_rows(user, dev, anchors, kek, rows, check) do
+    case Nif.open(user, dev, anchors, kek, rows) do
+      {:error, {kind, _}} when kind in [:tampered, :bad_kek] and check != :ok and rows != [] ->
+        {:error, :kek_mismatch}
+
+      other ->
+        other
     end
   end
 

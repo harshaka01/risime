@@ -38,15 +38,30 @@ defmodule RisiMe.Agent.Transcript do
 
   @doc """
   The buffered messages of a conversation after `since` (nil = the whole window), oldest first:
-  `[%{message_id, sender_id, sender_device, plaintext}]`. Rows that fail to open are skipped.
+  `[%{message_id, sender_id, sender_device, plaintext}]`. Rows that fail to open (sealed under
+  another `RISI_DATA_KEY`, P0 2026-10-08) are skipped and deleted.
   """
   def list(conv, since \\ nil, limit \\ 500) do
     {:ok, key} = RisiMe.Agent.data_key()
 
-    for row <- Store.impl().list_agent_messages(conv, since, limit),
-        {:ok, pt} <- [open(key, conv, row.message_id, row.body)] do
-      row |> Map.delete(:body) |> Map.put(:plaintext, pt)
-    end
+    {rows, bad} =
+      Store.impl().list_agent_messages(conv, since, limit)
+      |> Enum.reduce({[], []}, fn row, {ok, bad} ->
+        case open(key, conv, row.message_id, row.body) do
+          {:ok, pt} -> {[row |> Map.delete(:body) |> Map.put(:plaintext, pt) | ok], bad}
+          :error -> {ok, [row.message_id | bad]}
+        end
+      end)
+
+    if bad != [], do: drop_unreadable(conv, bad)
+    Enum.reverse(rows)
+  end
+
+  # Best effort: the 24-h TTL removes them anyway.
+  defp drop_unreadable(conv, ids) do
+    delete(conv, ids)
+  rescue
+    e -> Logger.warning("Risi buffer: unreadable rows not dropped: #{inspect(e.__struct__)}")
   end
 
   @doc "Deletes every buffered message of the conversation."

@@ -16,6 +16,42 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
+## P0 2026-10-08: Risi can never stop the server — READY (no wire change)
+- **Incident:** nightly.39 with `RISI=on` crash-looped at boot: `RISI_MLS_KEK` had been
+  replaced after Risi sealed its `risi_mls_kv` rows, `Agent.Mls.init/1` failed with `:tampered`,
+  and a child failing during the *initial* application start fails the whole boot.
+- **Boot isolation:** the application now starts `RisiMe.Agent.TreeSup` (empty
+  DynamicSupervisor) and `RisiMe.Agent.Starter` **after** the endpoint
+  (`RisiMe.Agent.children/1`). The starter's `init` only schedules; in `handle_continue` it checks
+  RISI/NIF/keys, the key checks, then starts `RisiMe.Agent.Supervisor` as a `:temporary` child of
+  TreeSup and monitors it. Any failure (missing keys, no NIF, `kek_mismatch`, `:tampered`, a
+  raising NIF, a DB error, the tree's own restart limit later) only sets `RisiMe.Agent.Status`
+  and logs **one** `Risi agent unavailable: <reason>` error; nothing is retried (fix and restart).
+  `Agent.Mls.init` never raises (returns `{:stop, {:shutdown, …}}` with the reason recorded).
+- **`/health`:** `checks.risi` = `"off"` | `"ok"` | `"unavailable: <reason>"` (names only; never
+  a 503). E.g. `unavailable: kek_mismatch (RISI_MLS_KEK does not match the sealed store)`.
+- **Key checks** (migration `20261013100000_risi_key_checks`, `RisiMe.Agent.KeyCheck`):
+  `risi_key_checks(name, mac)` with `HMAC-SHA256(key, "risi-kek-check-v1" ‖ name)` for
+  `mls_kek:<device_id>` and `data_key`. Compared before the open (mismatch with rows →
+  `kek_mismatch`, no open; an empty store accepts a new KEK); written after the first good open.
+  Rows sealed before the check existed: a `:tampered`/`:bad_kek` open is reported as
+  `kek_mismatch` and the right KEK writes the check. `RISI_DATA_KEY` mismatch: one warning, new
+  key recorded, Risi keeps running; `Transcript.list/3` drops rows it can't open.
+- **Preflight (read-only):** `bin/risime eval "RisiMe.Release.risi_preflight()"` — env
+  presence/format, NIF load, the key checks, and an in-memory open of Risi's rows (no seed,
+  journal or registration). Prints `RISI PREFLIGHT OK` or `RISI PREFLIGHT FAIL <reason>` (exit
+  1); never key material.
+- **Tests:** `test/risime/agent/boot_isolation_test.exs` (the application's Risi children under a
+  stand-in app supervisor with a sibling that must survive): missing keys, missing NIF, RISI off,
+  a raising NIF open (no-NIF run only), wrong KEK (kek_mismatch, /health ok, preflight FAIL then
+  OK and read-only), pre-check rows (`:tampered` → kek_mismatch), a crash loop after start
+  (tree stops, server up, `crashed after start: kek_mismatch …`), a fresh store, a changed data
+  key; plus transcript drop and `/health` `risi`. Gate: 757 tests, 0 failures (1 skipped) with
+  the NIF; 757, 0 failures, 14 skipped without it; 3 excluded (`:livekit`, `:llm_live`).
+- **For root (pilot):** restore the `RISI_MLS_KEK` that sealed the rows (or, to start Risi
+  afresh, delete Risi's `risi_mls_kv` rows and its `mls_kek:` check: Risi gets a new MLS
+  identity and loses its current Official groups), run the preflight, then restart.
+
 ## v1.24 Risi stage 1 secretary (§24.11–§24.13, decisions 061, 066) — S6 + S7 + S8 READY
 Harsha's rules are enforced in code: **no product pushing** (no prompt asks for suggestions or
 offers; stage 1 sends no `offer`), **nothing tracked without ✓**, **Risi only sees Official**,

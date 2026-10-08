@@ -5,17 +5,19 @@ defmodule RisiMe.Agent do
   `RisiMe.Agent.Secretary`, `RisiMe.Agent.LLM`, `RisiMe.Agent.LearningLog`).
 
   ## When it runs
-  `RisiMe.Agent.Supervisor` is started by the application only when **all** of these hold
-  (`startable?/0`); otherwise it is not started and `RisiMe.Risi.available?/0` is false, so every
-  chat reports `agent_unavailable` (§24.15):
+  `RisiMe.Agent.Starter` (after the endpoint, see `children/1`) starts `RisiMe.Agent.Supervisor`
+  only when **all** of these hold (`startable?/0`) and the key checks pass
+  (`RisiMe.Agent.KeyCheck`); otherwise it is not started, `RisiMe.Risi.available?/0` is false,
+  so every chat reports `agent_unavailable` (§24.15), and `/health` says why (`health/0`):
 
     * `RISI=on`;
     * the MLS NIF is loaded (`RisiMe.Agent.Mls.Nif.loaded?/0`, `scripts/build-mls-nif`);
     * `RISI_MLS_KEK`: base64 of 32 bytes (seals Risi's MLS state in `risi_mls_kv`);
     * `RISI_DATA_KEY`: base64 of 32 bytes (seals the `risi_buffer` bodies).
 
-  It is a `:temporary` child: a tree that keeps crashing stops (Risi becomes unavailable) and
-  never takes the server down.
+  It is a `:temporary` child of `RisiMe.Agent.TreeSup`: a tree that fails to start or keeps
+  crashing stops (Risi becomes unavailable, one error is logged) and never stops the boot or the
+  server (P0 2026-10-08).
 
   ## The tree (`rest_for_one`)
   `Registry` → `Agent.Mls` (the NIF handle, one serial lane) → `Agent.KeyPackages` →
@@ -36,19 +38,30 @@ defmodule RisiMe.Agent do
   alias RisiMe.{Repo, Risi}
 
   @doc "True when the tree may start: RISI on, the NIF loaded, both keys present and valid."
-  def startable?, do: missing() == []
+  def startable?, do: problems() == []
 
-  @doc "Why the tree can't start (names only, never values)."
-  def missing do
+  @doc """
+  Why the tree can't start, as reasons (`:risi_off`, `:nif_not_loaded`, `:missing_mls_kek`,
+  `:missing_data_key`); `[]` when it can.
+  """
+  def problems do
     [
-      {Risi.enabled?(), "RISI=on"},
-      {Nif.loaded?(), "the MLS NIF (scripts/build-mls-nif)"},
-      {match?({:ok, _}, kek()), "RISI_MLS_KEK (base64, 32 bytes)"},
-      {match?({:ok, _}, data_key()), "RISI_DATA_KEY (base64, 32 bytes)"}
+      {Risi.enabled?(), :risi_off},
+      {Nif.loaded?(), :nif_not_loaded},
+      {match?({:ok, _}, kek()), :missing_mls_kek},
+      {match?({:ok, _}, data_key()), :missing_data_key}
     ]
     |> Enum.reject(&elem(&1, 0))
     |> Enum.map(&elem(&1, 1))
   end
+
+  @doc "Why the tree can't start (names only, never values)."
+  def missing, do: Enum.map(problems(), &problem_text/1)
+
+  defp problem_text(:risi_off), do: "RISI=on"
+  defp problem_text(:nif_not_loaded), do: "the MLS NIF (scripts/build-mls-nif)"
+  defp problem_text(:missing_mls_kek), do: "RISI_MLS_KEK (base64, 32 bytes)"
+  defp problem_text(:missing_data_key), do: "RISI_DATA_KEY (base64, 32 bytes)"
 
   @doc false
   def kek, do: key(:risi_mls_kek)
@@ -65,19 +78,106 @@ defmodule RisiMe.Agent do
     end
   end
 
-  @doc "The application's children for the tree: `[]` unless `startable?/0`."
-  def children do
-    case {Risi.enabled?(), missing()} do
-      {_, []} ->
-        [Supervisor.child_spec(RisiMe.Agent.Supervisor, restart: :temporary)]
+  @doc """
+  The application's children for Risi, started **after** the endpoint (P0 2026-10-08): an empty
+  `DynamicSupervisor` (`RisiMe.Agent.TreeSup`) and `RisiMe.Agent.Starter`, which checks the
+  start conditions and the key checks, then starts `RisiMe.Agent.Supervisor` under it as a
+  `:temporary` child. Neither can fail: whatever goes wrong (RISI off, no NIF, missing or wrong
+  keys, `:tampered`, a DB error, a crash loop later) only makes Risi unavailable (`health/0`),
+  never the boot or the server. Options (tests): `:sup`, `:name`.
+  """
+  def children(opts \\ []) do
+    sup = Keyword.get(opts, :sup, RisiMe.Agent.TreeSup)
+    starter = Keyword.get(opts, :name, RisiMe.Agent.Starter)
 
-      {true, missing} ->
-        Logger.warning("Risi agent not started: missing #{Enum.join(missing, ", ")}")
-        []
+    [
+      Supervisor.child_spec({DynamicSupervisor, name: sup, strategy: :one_for_one}, id: sup),
+      Supervisor.child_spec({RisiMe.Agent.Starter, sup: sup, name: starter},
+        id: starter,
+        restart: :temporary
+      )
+    ]
+  end
 
-      {false, _} ->
-        []
+  @doc """
+  `/health` `checks.risi`: `"off"` (RISI off), `"ok"` (the tree is running) or
+  `"unavailable: <reason>"` (names only, never key material).
+  """
+  def health do
+    cond do
+      not Risi.enabled?() -> "off"
+      running?() -> "ok"
+      true -> "unavailable: " <> describe(RisiMe.Agent.Status.get() || :not_started)
     end
+  end
+
+  @doc "A reason as one line for logs, `/health` and the preflight (never key material)."
+  def describe(:kek_mismatch),
+    do: "kek_mismatch (RISI_MLS_KEK does not match the sealed store)"
+
+  def describe({:not_startable, problems}),
+    do: Enum.map_join(problems, ", ", &not_startable_text/1)
+
+  def describe({:crashed, why}), do: "crashed after start: " <> describe(why)
+  def describe({:reopen_failed, why}), do: "reopen failed: " <> describe(why)
+  def describe(:starting), do: "starting"
+  def describe(:off), do: "not_started (RISI was off at boot)"
+  def describe(:mls_unavailable), do: "mls_unavailable (no attestation key)"
+  def describe(:db_error), do: "db_error (Postgres)"
+  def describe(:restart_limit), do: "restart_limit (the tree kept crashing)"
+  def describe({:child_failed, child}) when is_atom(child), do: "start_failed (#{inspect(child)})"
+  def describe({:exception, mod}) when is_atom(mod), do: "exception (#{inspect(mod)})"
+  def describe(reason) when is_atom(reason), do: Atom.to_string(reason)
+  def describe(_reason), do: "error"
+
+  defp not_startable_text(:risi_off), do: "risi_off"
+  defp not_startable_text(:nif_not_loaded), do: "nif_not_loaded (scripts/build-mls-nif)"
+  defp not_startable_text(:missing_mls_kek), do: "missing_key RISI_MLS_KEK (base64, 32 bytes)"
+  defp not_startable_text(:missing_data_key), do: "missing_key RISI_DATA_KEY (base64, 32 bytes)"
+
+  @doc false
+  # An exception as a reason without its message (a message could quote a value).
+  def exception_reason(%DBConnection.ConnectionError{}), do: :db_error
+  def exception_reason(%Postgrex.Error{}), do: :db_error
+  def exception_reason(e), do: {:exception, e.__struct__}
+
+  @doc """
+  The read-only Risi preflight (`RisiMe.Release.risi_preflight/1`): env presence and format, the
+  NIF, the key checks against the database, and an `open` of Risi's sealed rows in memory
+  (nothing is persisted, seeded or registered). `{:ok, notes}` or `{:error, reason}`
+  (`describe/1`). Needs the Repo and `RisiMe.MLS.Attestation` running.
+  """
+  def preflight do
+    case problems() -- [:risi_off] do
+      [] ->
+        {:ok, kek} = kek()
+        {:ok, dk} = data_key()
+
+        notes =
+          if Risi.enabled?(), do: [], else: ["RISI is off: the tree starts only with RISI=on"]
+
+        notes =
+          if RisiMe.Agent.KeyCheck.compare(RisiMe.Agent.KeyCheck.data_name(), dk) == :mismatch,
+            do:
+              notes ++
+                [
+                  "RISI_DATA_KEY differs from the key of the risi_buffer rows: they become " <>
+                    "unreadable and are dropped (24-h buffer; not fatal)"
+                ],
+            else: notes
+
+        case RisiMe.Agent.Mls.verify(kek) do
+          {:ok, info} -> {:ok, notes ++ [info]}
+          {:error, reason} -> {:error, reason}
+        end
+
+      problems ->
+        {:error, {:not_startable, problems}}
+    end
+  rescue
+    e -> {:error, exception_reason(e)}
+  catch
+    :exit, _ -> {:error, :exit}
   end
 
   @doc "True while the whole tree is up (its last child, the inbox, is running)."
