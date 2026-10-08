@@ -222,6 +222,80 @@ DEV=A; sleep 3; has "ZZ Call B" || fail "A: the DM with B closed (crash?) while 
 logcat_ok "A opens the DM with B while it is activated to MLS"
 pass "A opened the DM with B while it was activated to MLS: no crash"
 
+# ---------------------------------------------------------------- call records (WhatsApp style)
+# Root-delegated script addition (android role): a voice call and a video call that the caller
+# cancels while B rings. Both phones must show the right rows in the chat (A "Cancelled voice call" /
+# "Cancelled video call", B "Missed voice call" / "Missed video call") and in the Calls tab (B: "ZZ Call
+# A (2)" with a red ↙, A: "ZZ Call B (2)" with ↗); B has a missed-call notification of the right type
+# with "Call back"/"Message"; "Call back" from B's Calls tab rings A with the same (video) type.
+#   CALLTEST_RECORDS_ONLY=1 runs only this section (after the DM is e2ee) and exits.
+notif_dump() { A shell dumpsys notification --noredact 2>/dev/null || true; }
+missed_notification() {  # $1 voice|video: B's missed_calls notification of that type, named, with both actions
+  local out; out="$(notif_dump)"
+  grep -q "channel=missed_calls" <<<"$out" || return 1
+  grep -qF "Missed $1 call" <<<"$out" || return 1
+  grep -qF "ZZ Call A" <<<"$out" || return 1
+  grep -qF "Call back" <<<"$out" && grep -qF "Message" <<<"$out"
+}
+back_to_list() { for _ in 1 2 3 4; do on_list && return 0; A shell input keyevent KEYCODE_BACK; sleep 1; done; on_list; }
+call_records() {
+  for DEV in A B; do
+    A shell pm grant "$PKG" android.permission.CAMERA 2>/dev/null || true
+    A shell cmd notification cancel_all >/dev/null 2>&1 || true
+    A logcat -c
+  done
+  local kind btn
+  for kind in voice video; do
+    if [ "$kind" = voice ]; then btn="Voice call"; else btn="Video call"; fi
+    DEV=B; open_chat "ZZ Call A" || fail "records ($kind): B can't open the DM"
+    DEV=A; open_chat "ZZ Call B" || fail "records ($kind): A can't open the DM"
+    local ok=""; for _ in $(seq 1 20); do tap "$btn" && { ok=1; break; }; sleep 2; done
+    [ -n "$ok" ] || fail "records ($kind): A has no \"$btn\" button"
+    DEV=B; back_to_list || fail "records ($kind): B can't reach the chat list"
+    wait_ring 30 || fail "records ($kind): B never rang"
+    sleep 2
+    DEV=A; tap "End call" || fail "records ($kind): A can't cancel while B rings"
+    # (dumpsys also lists archived notifications, so "still ringing" can't be read from it: the missed-call
+    # notification below only appears once the ring is over.)
+    DEV=B
+    local got=""; for _ in $(seq 1 20); do missed_notification "$kind" && { got=1; break; }; sleep 1; done
+    [ -n "$got" ] || { notif_dump | grep -i "missed\|channel=" | head -10; fail "records ($kind): B has no \"Missed $kind call\" notification from ZZ Call A with Call back + Message"; }
+    pass "records ($kind): B has a \"Missed $kind call\" notification naming ZZ Call A with Call back and Message"
+    DEV=B; A shell cmd statusbar collapse >/dev/null 2>&1 || true
+    open_chat "ZZ Call A" || fail "records ($kind): B can't open the DM"
+    wait_for "Missed $kind call" 20 || fail "records ($kind): B's chat has no \"Missed $kind call\" row"
+    pass "records ($kind): B's chat shows \"Missed $kind call\""
+    DEV=A; sleep 2
+    wait_for "Cancelled $kind call" 20 || fail "records ($kind): A's chat has no \"Cancelled $kind call\" row"
+    pass "records ($kind): A's chat shows \"Cancelled $kind call\""
+  done
+  # The Calls tab: both missed calls from A are one row on B, both cancelled calls one row on A.
+  DEV=B; back_to_list || fail "records: B can't reach the chat list"
+  tap "Calls" || fail "records: B has no Calls tab"; sleep 2
+  wait_for "ZZ Call A (2)" 15 || fail "records: B's Calls tab has no grouped \"ZZ Call A (2)\" row"
+  has "↙ Today" || fail "records: B's missed row has no ↙ Today stamp"
+  pass "records: B's Calls tab shows \"ZZ Call A (2)\" with ↙ Today"
+  DEV=A; back_to_list || fail "records: A can't reach the chat list"
+  tap "Calls" || fail "records: A has no Calls tab"; sleep 2
+  wait_for "ZZ Call B (2)" 15 || fail "records: A's Calls tab has no grouped \"ZZ Call B (2)\" row"
+  has "↗ Today" || fail "records: A's outgoing row has no ↗ Today stamp"
+  pass "records: A's Calls tab shows \"ZZ Call B (2)\" with ↗ Today"
+  # Tap the row: call info lists both calls.
+  DEV=B; tap "ZZ Call A (2)" || fail "records: B can't open call info"
+  wait_for "Incoming voice call" 10 && has "Incoming video call" || fail "records: B's call info doesn't list the voice and the video call"
+  pass "records: B's call info lists both calls"
+  tap "Close" || true; sleep 1
+  # Call back from the row's icon: the newest call was video, so A rings with an incoming VIDEO call.
+  tap "Video call ZZ Call A" || fail "records: B's row has no video call-back icon"
+  DEV=A; wait_ring 30 || fail "records: A never rang for B's call back"
+  A shell dumpsys notification --noredact 2>/dev/null | grep -qF "Incoming video call" || fail "records: B's call back from a video row was not a video call"
+  pass "records: call back from the Calls tab rings the other phone with the same (video) type"
+  DEV=B; tap "End call" || fail "records: B can't end the call back"
+  sleep 3
+  DEV=A; logcat_ok "call records"
+}
+if [ "${CALLTEST_RECORDS_ONLY:-0}" = 1 ]; then call_records; echo "CALLTEST OK"; exit 0; fi
+
 # Encrypted messages flow both ways, also after each phone updates in place (UPGRADE_APK, e.g. the
 # next nightly; nightly.19 left senders "pending" after an update).
 msg_check() {  # $1 label
@@ -587,6 +661,7 @@ if [ "${CALLTEST_TURN:-0}" = 1 ]; then
   MEDIA_PAIR="(host|prflx)/(host|prflx)"
 fi
 logcat_ok "the end"
+call_records
 # CALLTEST_EXTRA=<file>: more steps sourced here with every helper available (debugging scenarios).
 if [ -n "${CALLTEST_EXTRA:-}" ]; then source "$CALLTEST_EXTRA"; fi
 echo "CALLTEST OK"

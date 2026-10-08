@@ -1,5 +1,34 @@
 # Android status — 0.2 nightlies
 
+## Call records like WhatsApp (voice and video) — READY (real phones to confirm)
+
+- **Chat:** every 1:1 call is a centred row: voice/video icon (red when missed), label, time (HH:mm).
+  Labels: "Missed voice/video call", "Voice/Video call · 3 min" / "· 12 s", "Declined voice call"
+  (I declined) / "Voice call · Declined" (they declined), "Voice call · No answer", "Cancelled
+  voice/video call" (caller cancelled; the callee sees "Missed ..."), "· Couldn't connect". Tap the row
+  = call back with the same type; long-press = Voice/Video call back, Delete for me. Group call lines
+  are unchanged (Join).
+- **Calls tab** (Chats | Calls | Requests): avatar, name, "↙ Today 14:05" (green incoming, ↗ outgoing
+  green, ↙ missed red), "Yesterday 09:12", else "8 October, 14:05" (device locale); consecutive calls
+  with one person, one direction class and one day are "Name (3)". Tap the row = call info (every call
+  with time and duration, Voice call / Video call / Message); the row's icon = call back with the same
+  type (asks mic/camera the first time). Empty state: "No calls yet...".
+- **Missed-call notification:** "Missed voice call" / "Missed video call", "<name> · 14:05", actions
+  "Call back" (same type, calls at once if the mic is already allowed, else the chat opens) and
+  "Message". Lock on + "Show content in notifications" off: no name ("Open RisiMe · 14:05").
+- **Both phones agree:** one row per call id on each phone from the `call_end` reason (caller's
+  cancelled/timeout/busy -> caller "Cancelled"/"No answer", callee "Missed"; declined -> both
+  "Declined"). The call's direction is kept locally as `x_dir` inside the stored `call_end` JSON (no
+  Room change; stripped before sending and exporting; old rows are inferred from the reason).
+  Presentation only: the caller's "Cancelled voice call" replaces "Voice call · No answer" for a
+  cancelled call (the contract's §16.6 table says "No answer": root may want to update the wording).
+- Tests: `CallRecordsTest`, `CallsTabTest`, `MissedCallNotificationTest`, `CallScreensTest`, `ChatEngineTest`.
+  Device: `CALLTEST_RECORDS_ONLY=1 scripts/call-device-test` (also runs at the end of a full run): a missed
+  voice and a missed video call (caller cancels), rows on both phones, Calls tab grouping "(2)", call
+  info, call back with video, missed notification with actions. PASS on redroid.
+- Manual: from a real phone call yourself and hang up before it is answered; check the rows, the
+  Calls tab, the notification actions; with the lock on and "Show content" off check no name shows.
+
 ## Decision 064 review fixes — READY (895 unit tests, 0 failed)
 - A Keystore error while reading the vault (keystore2/StrongBox busy after boot) is `Load.Transient`: blob and key
   kept, `RESTORING` retried with backoff 1 s → 60 s (log `vault not readable now … retry #n`). Only a failed GCM
