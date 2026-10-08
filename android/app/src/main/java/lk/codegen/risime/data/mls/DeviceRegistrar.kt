@@ -43,6 +43,8 @@ class DeviceRegistrar(
     private val setGroupsReplacedFor: suspend (String) -> Unit = {},
     /** §17.1: advertise `history_share` only when the app can both provide and receive bundles. */
     private val historySupported: () -> Boolean = { false },
+    /** §19.1: advertise `video` only together with `calls` and when the VP8 encoder and decoder load. */
+    private val videoSupported: () -> Boolean = { false },
 ) {
     private val b64 = Base64.getEncoder()
 
@@ -60,6 +62,7 @@ class DeviceRegistrar(
             DeviceMls.CAP_IMAGES.takeIf { imagesSupported() },
             DeviceMls.CAP_DELETES.takeIf { mls.deletesSupported },
             DeviceMls.CAP_CALLS.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() },
+            DeviceMls.CAP_VIDEO.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() },
             // v1.14 §12.4a: only when the bundled core enforces the member rule (never on the app's own say).
             DeviceMls.CAP_MEMBER_DEVICES.takeIf { DeviceMls.CAP_MEMBER_DEVICES in mls.coreCapabilities },
             // v1.15 §17.1: the core's §17.3 functions present and the feature on.

@@ -154,8 +154,8 @@ class CallCleanupTest {
         val a = d("A1")
         val stuck = object : CallMedia {
             override val available = true
-            override fun open(callId: String, iceServers: List<IceServer>, listener: CallMedia.Listener): MediaSession {
-                val inner = a.media.open(callId, iceServers, listener)
+            override fun open(callId: String, iceServers: List<IceServer>, listener: CallMedia.Listener, video: Boolean): MediaSession {
+                val inner = a.media.open(callId, iceServers, listener, video)
                 return object : MediaSession by inner {
                     override suspend fun createOffer(iceRestart: Boolean): String = awaitCancellation()
                 }

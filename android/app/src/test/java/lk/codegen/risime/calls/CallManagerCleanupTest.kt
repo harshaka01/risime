@@ -53,7 +53,7 @@ class CallManagerCleanupTest {
         override suspend fun sessionLocked() = false
         override fun serverNow() = System.currentTimeMillis()
         override suspend fun displayName(userId: String) = "Kamal"
-        override suspend fun sendSignal(conv: String, peer: String, env: CallEnvelope.Env): PushResult<*> {
+        override suspend fun sendSignal(conv: String, peer: String, env: CallEnvelope.Env, media: String): PushResult<*> {
             sent += env
             return PushResult.Ok(Unit)
         }

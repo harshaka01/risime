@@ -491,6 +491,7 @@ class AppContainer(
             imagesSupported = { imagesSupported() },
             historySupported = { BuildConfig.HISTORY_SHARE_ENABLED && history.supported() },
             callsSupported = { runCatching { calls.canAdvertise() }.getOrDefault(false) },
+            videoSupported = { runCatching { calls.canAdvertiseVideo() }.getOrDefault(false) },
             groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
             setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },
         )
@@ -666,8 +667,8 @@ class AppContainer(
         override fun serverNow() = serverClock.serverNow()
         override suspend fun displayName(userId: String) =
             contacts.contacts.first().firstOrNull { it.userId.equals(userId, true) }?.displayName ?: "Someone"
-        override suspend fun sendSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env) = engine.sendCallSignal(conv, peer, env)
-        override suspend fun localMissedCall(conv: String, peer: String, callId: String) = engine.insertLocalMissedCall(conv, peer, callId)
+        override suspend fun sendSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env, media: String) = engine.sendCallSignal(conv, peer, env, media)
+        override suspend fun localMissedCall(conv: String, peer: String, callId: String, video: Boolean) = engine.insertLocalMissedCall(conv, peer, callId, video)
         override suspend fun queueCallEnd(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.End, rangUnanswered: Boolean) {
             engine.queueCallEnd(conv, peer, env, rangUnanswered)
         }
@@ -685,7 +686,7 @@ class AppContainer(
         override suspend fun onCallEnd(conversationId: String, fromUser: String, fromDevice: String?, end: lk.codegen.risime.calls.CallEnvelope.End) =
             calls.hooks.onCallEnd(conversationId, fromUser, fromDevice, end)
         override suspend fun onPageEnd() = calls.hooks.onPageEnd()
-        override fun onMissedCall(conversationId: String, from: String) = calls.hooks.onMissedCall(conversationId, from)
+        override fun onMissedCall(conversationId: String, from: String, video: Boolean) = calls.hooks.onMissedCall(conversationId, from, video)
     }
 
     // ---- History sharing (contract v1.15 §17). Behind BuildConfig.HISTORY_SHARE_ENABLED until green. ----

@@ -18,11 +18,35 @@ fun fakeSdp(offer: Boolean, fp: String, ufrag: String, audioLevel: Boolean = fal
     append("a=sendrecv\r\na=rtcp-mux\r\na=rtpmap:111 opus/48000/2\r\na=rtcp-fb:111 transport-cc\r\na=fmtp:111 minptime=10;useinbandfec=1\r\na=rtpmap:0 PCMU/8000\r\n")
 }
 
+/**
+ * A libwebrtc-shaped §19 video SDP: m=audio then m=video, BUNDLE, one fingerprint repeated per
+ * section, VP8 + rtx (and, as libwebrtc offers them, the denied extensions the app must strip).
+ */
+fun fakeVideoSdp(offer: Boolean, fp: String, ufrag: String, leaky: Boolean = true, rejectVideo: Boolean = false): String = buildString {
+    append("v=0\r\no=- 4611731 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0${if (rejectVideo) "" else " 1"}\r\na=msid-semantic: WMS\r\n")
+    append("m=audio 9 UDP/TLS/RTP/SAVPF 111\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\n")
+    append("a=ice-ufrag:$ufrag\r\na=ice-pwd:u2Vt9pLm4KcR8sWnE1yHaZ0d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 $fp\r\n")
+    append(if (offer) "a=setup:actpass\r\n" else "a=setup:active\r\n")
+    append("a=mid:0\r\n")
+    if (leaky) append("a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level\r\n")
+    append("a=sendrecv\r\na=rtcp-mux\r\na=rtpmap:111 opus/48000/2\r\na=fmtp:111 minptime=10;useinbandfec=1\r\n")
+    append("m=video ${if (rejectVideo) 0 else 9} UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\n")
+    append("a=ice-ufrag:$ufrag\r\na=ice-pwd:u2Vt9pLm4KcR8sWnE1yHaZ0d\r\na=fingerprint:sha-256 $fp\r\n")
+    append(if (offer) "a=setup:actpass\r\n" else "a=setup:active\r\n")
+    append("a=mid:1\r\n")
+    if (leaky) append("a=extmap:13 urn:3gpp:video-orientation\r\na=extmap:14 http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time\r\n")
+    append("a=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\n")
+    append("a=sendrecv\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 nack\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\n")
+    append("a=ssrc-group:FID 1001 1002\r\na=ssrc:1001 cname:x\r\na=ssrc:1002 cname:x\r\n")
+}
+
 fun fingerprintOf(n: Int): String = (0 until 32).joinToString(":") { "%02X".format((n * 7 + it) and 0xff) }
 
 /** Fake WebRTC: one session per call attempt, a fresh "certificate" each, DTLS that sees the real peer certificate. */
 class FakeCallMedia(override val available: Boolean = true) : CallMedia {
     private var counter = 0
+    /** New sessions answer video with m=video port 0 (a future app that rejects video). */
+    var rejectVideo = false
     val sessions = CopyOnWriteArrayList<FakeSession>()
 
     /** Every session ever created on any FakeCallMedia (the "network" DTLS sees real certificates). */
@@ -32,16 +56,38 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
         fun nextId() = synchronized(this) { ++global }
     }
 
-    override fun open(callId: String, iceServers: List<IceServer>, listener: CallMedia.Listener): MediaSession {
+    override val videoAvailable: Boolean = true
+
+    override fun open(callId: String, iceServers: List<IceServer>, listener: CallMedia.Listener, video: Boolean): MediaSession {
         val n = nextId()
         counter++
-        return FakeSession(callId, n, iceServers, listener).also {
+        return FakeSession(callId, n, iceServers, listener, video).also {
+            it.rejectVideo = rejectVideo
             sessions += it
             registry[it.ufrag] = it
         }
     }
 
-    class FakeSession(val callId: String, n: Int, val iceServers: List<IceServer>, val listener: CallMedia.Listener) : MediaSession {
+    class FakeSession(val callId: String, n: Int, val iceServers: List<IceServer>, val listener: CallMedia.Listener, val video: Boolean = false) : MediaSession {
+        /** §19.5 every camera change the machine made (true = on). */
+        val camera = CopyOnWriteArrayList<Boolean>()
+        var switches = 0
+        var lastFrame = 0L
+        /** The peer answers with m=video port 0 (a future app that rejects video). */
+        var rejectVideo = false
+
+        override fun setCamera(on: Boolean) {
+            check(video) { "setCamera on a voice call" }
+            camera += on
+        }
+
+        override fun switchCamera() {
+            switches++
+        }
+
+        override fun lastRemoteFrameAt() = lastFrame
+
+        val cameraOn: Boolean get() = camera.lastOrNull() == true
         val fp = fingerprintOf(n)
         val ufrag = "uf$n"
         var remote: String? = null
@@ -56,10 +102,11 @@ class FakeCallMedia(override val available: Boolean = true) : CallMedia {
 
         override suspend fun createOffer(iceRestart: Boolean): String {
             localOffers++
-            return SdpRules.prepareLocal(fakeSdp(true, fp, ufrag, audioLevel = true))
+            return SdpRules.prepareLocal(if (video) fakeVideoSdp(true, fp, ufrag) else fakeSdp(true, fp, ufrag, audioLevel = true))
         }
 
-        override suspend fun createAnswer(): String = SdpRules.prepareLocal(fakeSdp(false, fp, ufrag, audioLevel = true))
+        override suspend fun createAnswer(): String =
+            SdpRules.prepareLocal(if (video) fakeVideoSdp(false, fp, ufrag, rejectVideo = rejectVideo) else fakeSdp(false, fp, ufrag, audioLevel = true))
 
         override suspend fun setRemote(sdp: String, isOffer: Boolean) {
             remote = sdp
@@ -106,7 +153,7 @@ class FakeMarks : CallMarks {
  * sender's other devices (sender copy), in send order; `call_end` likewise. [flush] delivers.
  */
 class CallNet(private val scope: CoroutineScope, private val serverNow: () -> Long) {
-    data class Sent(val fromUser: String, val fromDevice: String, val conv: String, val env: CallEnvelope.Env, val durable: Boolean)
+    data class Sent(val fromUser: String, val fromDevice: String, val conv: String, val env: CallEnvelope.Env, val durable: Boolean, val media: String = CallEnvelope.MEDIA_AUDIO)
 
     inner class Dev(val user: String, val device: String) {
         lateinit var machine: CallStateMachine
@@ -124,11 +171,11 @@ class CallNet(private val scope: CoroutineScope, private val serverNow: () -> Lo
         val missedCalls = CopyOnWriteArrayList<String>()
 
         val signals = object : CallSignals {
-            override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env): SignalOutcome {
+            override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env, media: String): SignalOutcome {
                 if (hang) kotlinx.coroutines.awaitCancellation()
                 if (dead) return SignalOutcome.Unavailable
                 refuse?.let { return it }
-                val s = Sent(user, device, conversationId, env, durable = false)
+                val s = Sent(user, device, conversationId, env, durable = false, media = media)
                 sent += s
                 queue += s
                 return SignalOutcome.Ok
@@ -142,7 +189,7 @@ class CallNet(private val scope: CoroutineScope, private val serverNow: () -> Lo
                 queue += s
             }
 
-            override suspend fun missed(conversationId: String, peer: String, callId: String) {
+            override suspend fun missed(conversationId: String, peer: String, callId: String, video: Boolean) {
                 missedCalls += callId
             }
         }
@@ -170,7 +217,7 @@ class CallNet(private val scope: CoroutineScope, private val serverNow: () -> Lo
                 if (s.durable) {
                     d.machine.onCallEnd(s.conv, s.fromUser, s.fromDevice, s.env as CallEnvelope.End)
                 } else {
-                    d.machine.onSignal(InboundCall(s.conv, s.fromUser, s.fromDevice, serverNow(), s.env))
+                    d.machine.onSignal(InboundCall(s.conv, s.fromUser, s.fromDevice, serverNow(), s.env, media = s.media))
                 }
             }
         }

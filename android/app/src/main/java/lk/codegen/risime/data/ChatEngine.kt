@@ -417,7 +417,7 @@ class ChatEngine(
     private fun queueCall(r: MlsResult.CallSignal) {
         val ev = r.event
         val ts = HistoryMarkers.epochMs(ev.serverTs) ?: return
-        val inbound = lk.codegen.risime.calls.InboundCall(ev.conversationId, ev.from, ev.fromDevice, ts, r.env, inPage = true)
+        val inbound = lk.codegen.risime.calls.InboundCall(ev.conversationId, ev.from, ev.fromDevice, ts, r.env, inPage = true, media = ev.media ?: lk.codegen.risime.calls.CallEnvelope.MEDIA_AUDIO)
         callQueue.add { h -> h.onSignal(inbound) }
     }
 
@@ -436,7 +436,7 @@ class ChatEngine(
         if (messages.byMessageId(m.messageId) != null || messages.byClientMsgId(m.clientMsgId) != null) return false
         if (messages.callLine(conv, env.callId) != null) return false
         val outgoing = m.from.equals(me, true)
-        val line = lk.codegen.risime.calls.CallLines.line(env.reason, outgoing, env.durationS, !outgoing && hooks.rangUnanswered(env.callId))
+        val line = lk.codegen.risime.calls.CallLines.line(env.reason, outgoing, env.durationS, !outgoing && hooks.rangUnanswered(env.callId), env.media == lk.codegen.risime.calls.CallEnvelope.MEDIA_VIDEO)
         val restored = historicalLocalTs(m.serverTs)
         val preInstall = !outgoing && historyBefore?.let { hb -> HistoryMarkers.epochMs(m.serverTs)?.let { it < hb.toEpochMilli() } } == true
         val unread = !outgoing && line.missed && !preInstall
@@ -459,7 +459,7 @@ class ChatEngine(
         deletes?.unhide(conv)
         if (outgoing || preInstall) return false
         // A live missed call notifies (replays and restored history never do, §16.6).
-        if (unread && !replayingFresh && restored == null) callQueue.add { h -> h.onMissedCall(conv, m.from) }
+        if (unread && !replayingFresh && restored == null) callQueue.add { h -> h.onMissedCall(conv, m.from, env.media == lk.codegen.risime.calls.CallEnvelope.MEDIA_VIDEO) }
         return true
     }
 
@@ -469,10 +469,10 @@ class ChatEngine(
      * One ephemeral `call:signal` through the conversation's lane (encrypt and push together);
      * stale_epoch → catch up and re-encrypt with the same client_msg_id.
      */
-    suspend fun sendCallSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env): PushResult<lk.codegen.risime.net.CallSignalReply> =
-        withContext(io) { sendCallSignalImpl(conv, peer, env) }
+    suspend fun sendCallSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env, media: String = lk.codegen.risime.calls.CallEnvelope.MEDIA_AUDIO): PushResult<lk.codegen.risime.net.CallSignalReply> =
+        withContext(io) { sendCallSignalImpl(conv, peer, env, media) }
 
-    private suspend fun sendCallSignalImpl(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env): PushResult<lk.codegen.risime.net.CallSignalReply> {
+    private suspend fun sendCallSignalImpl(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env, media: String): PushResult<lk.codegen.risime.net.CallSignalReply> {
         val clientMsgId = newClientMsgId()
         val plaintext = lk.codegen.risime.calls.CallEnvelope.encode(env)
         var attempt = 0
@@ -485,6 +485,8 @@ class ChatEngine(
                     lk.codegen.risime.net.CallSignalPush(
                         clientMsgId, peer, env.callId, lk.codegen.risime.calls.CallEnvelope.ringFor(env),
                         java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(clock()),
+                        // §19.2: the call's media on every signal (voice calls keep the v1.13 shape).
+                        media.takeIf { it == lk.codegen.risime.calls.CallEnvelope.MEDIA_VIDEO },
                     ),
                 )
             }
@@ -503,7 +505,7 @@ class ChatEngine(
         val me = meId() ?: return null
         if (messages.callLine(conv, env.callId) != null) return null
         val id = newClientMsgId()
-        val line = lk.codegen.risime.calls.CallLines.line(env.reason, true, env.durationS, rangUnanswered)
+        val line = lk.codegen.risime.calls.CallLines.line(env.reason, true, env.durationS, rangUnanswered, env.media == lk.codegen.risime.calls.CallEnvelope.MEDIA_VIDEO)
         messages.insert(
             MessageEntity(
                 clientMsgId = id, messageId = null, conversationId = conv, from = me, to = peer, body = line.text,
@@ -524,14 +526,15 @@ class ChatEngine(
      * against it (and this is a no-op when that line came first). Unread, never acked (no message id).
      * @return true if the line was inserted.
      */
-    suspend fun insertLocalMissedCall(conv: String, peer: String, callId: String): Boolean {
+    suspend fun insertLocalMissedCall(conv: String, peer: String, callId: String, video: Boolean = false): Boolean {
         val me = meId() ?: return false
         if (messages.callLine(conv, callId) != null) return false
         val now = clock()
-        val env = lk.codegen.risime.calls.CallEnvelope.End(callId, lk.codegen.risime.calls.CallEnvelope.R_TIMEOUT)
+        val media = if (video) lk.codegen.risime.calls.CallEnvelope.MEDIA_VIDEO else lk.codegen.risime.calls.CallEnvelope.MEDIA_AUDIO
+        val env = lk.codegen.risime.calls.CallEnvelope.End(callId, lk.codegen.risime.calls.CallEnvelope.R_TIMEOUT, media = media)
         val row = MessageEntity(
             clientMsgId = "local-missed:$callId", messageId = null, conversationId = conv, from = peer, to = me,
-            body = lk.codegen.risime.calls.CallLines.MISSED, serverTs = isoMillis(now), localTs = now,
+            body = if (video) lk.codegen.risime.calls.CallLines.MISSED_VIDEO else lk.codegen.risime.calls.CallLines.MISSED, serverTs = isoMillis(now), localTs = now,
             status = MessageStatus.DELIVERED.name, outgoing = false, ackedStatus = MessageStatus.READ.name,
             kind = MessageEntity.KIND_CALL,
             systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), lk.codegen.risime.calls.CallEnvelope.toJson(env)),

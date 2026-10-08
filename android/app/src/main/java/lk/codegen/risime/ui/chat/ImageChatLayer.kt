@@ -48,6 +48,17 @@ fun rememberImageLayer(imgs: ImageActions, messages: List<MessageEntity>, groupN
             if (ok) imgs.onPicked(listOf(uri), temp = true) else runCatching { context.contentResolver.delete(uri, null, null) }
         }
     }
+    fun capture() {
+        runCatching {
+            val uri = CameraCapture.newUri(context)
+            cameraUri = uri.toString()
+            camera.launch(uri)
+        }.onFailure { imgs.toast.value = "Couldn't open the camera" }
+    }
+    // v1.18 declares CAMERA (video calls): Android then requires it for the camera app intent too.
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) capture() else imgs.toast.value = "Allow the camera to take photos"
+    }
     val saveDialog = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/jpeg")) { uri ->
         val bytes = pendingSave
         pendingSave = null
@@ -102,11 +113,11 @@ fun rememberImageLayer(imgs: ImageActions, messages: List<MessageEntity>, groupN
                 sheet = false
                 when (o) {
                     AttachOption.GALLERY -> picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                    AttachOption.CAMERA -> runCatching {
-                        val uri = CameraCapture.newUri(context)
-                        cameraUri = uri.toString()
-                        camera.launch(uri)
-                    }.onFailure { imgs.toast.value = "Couldn't open the camera" }
+                    AttachOption.CAMERA -> if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        capture()
+                    } else {
+                        cameraPermission.launch(android.Manifest.permission.CAMERA)
+                    }
                 }
             },
             onDismiss = { sheet = false },

@@ -397,6 +397,10 @@ class MlsPipeline(
         // crypto R3 binding.
         if (env.callId != c.callId) return dropped("call_id mismatch")
         if (c.ring != lk.codegen.risime.calls.CallEnvelope.ringFor(env)) return dropped("ring flag mismatch")
+        // §19.2 (crypto K6): the cleartext media is bound to the offer's; later signals are checked by the call machine.
+        val media = c.media ?: lk.codegen.risime.calls.CallEnvelope.MEDIA_AUDIO
+        if (media !in lk.codegen.risime.calls.CallEnvelope.MEDIAS) return dropped("media ${c.media}")
+        if (env is lk.codegen.risime.calls.CallEnvelope.Offer && env.media != media) return dropped("media mismatch")
         return MlsResult.CallSignal(c, env)
     }
 

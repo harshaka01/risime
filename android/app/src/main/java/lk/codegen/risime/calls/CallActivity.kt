@@ -36,11 +36,28 @@ class CallActivity : ComponentActivity() {
 
     private val mic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
-            calls.answer()
+            calls.answer(camera = false)
         } else {
             Toast.makeText(this, "RisiMe needs the microphone to answer calls", Toast.LENGTH_LONG).show()
         }
     }
+
+    /** §19.6 Answer on a video call: the microphone and the camera (a denied camera answers with it off, android A2). */
+    private val micAndCamera = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        val micOk = r[Manifest.permission.RECORD_AUDIO] ?: granted(Manifest.permission.RECORD_AUDIO)
+        if (micOk) {
+            calls.answer(camera = r[Manifest.permission.CAMERA] ?: granted(Manifest.permission.CAMERA))
+        } else {
+            Toast.makeText(this, "RisiMe needs the microphone to answer calls", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** The camera button when CAMERA isn't granted yet (android A2: asked only when the user turns it on). */
+    private val cameraOnly = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) calls.setCameraWanted(true) else Toast.makeText(this, "Allow the camera in Settings to turn it on", Toast.LENGTH_LONG).show()
+    }
+
+    private fun granted(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,13 +107,16 @@ class CallActivity : ComponentActivity() {
                     snap == null && blind != null -> IncomingCallScreen(null, onAnswer = ::answerBlind, onDecline = calls::stopBlindRing)
                     // Never an empty (black) window while the screen closes: the ended card, no controls.
                     snap == null -> InCallScreen(InCallUi(name = name, status = "Call ended", ended = true), {}, {}, {})
-                    snap.phase == CallPhase.RINGING_IN -> IncomingCallScreen(name.ifEmpty { "RisiMe" }, onAnswer = ::answer, onDecline = calls::hangUp, photoKey = snap.peerUserId)
+                    snap.phase == CallPhase.RINGING_IN -> IncomingCallScreen(
+                        name.ifEmpty { "RisiMe" }, onAnswer = { answer(camera = snap.video) }, onDecline = calls::hangUp, photoKey = snap.peerUserId,
+                        onAnswerWithoutVideo = if (snap.video) ({ answer(camera = false) }) else null,
+                    )
                     else -> {
                         @Suppress("UNUSED_EXPRESSION") tick
                         InCallScreen(
                             InCallUi(
                                 name = name,
-                                status = snap.notice?.let { CallTexts.notice(it, name) } ?: CallTexts.status(snap.phase, snap.connectedAtMs).orEmpty(),
+                                status = snap.notice?.let { CallTexts.notice(it, name) } ?: CallTexts.status(snap.phase, snap.connectedAtMs, video = snap.video).orEmpty(),
                                 muted = snap.muted,
                                 endpoints = endpoints.map(::ui),
                                 current = current?.let(::ui),
@@ -107,6 +127,21 @@ class CallActivity : ComponentActivity() {
                             onMute = calls::setMuted,
                             onEndpoint = { e -> endpoints.firstOrNull { it.identifier.toString() == e.id }?.let(calls::selectEndpoint) },
                             onEnd = calls::hangUp,
+                            video = (calls.media as? WebRtcCallMedia)?.takeIf { snap.video && snap.phase != CallPhase.ENDED }?.let { m -> { LiveVideoStage(m, snap, name) } },
+                            extraControls = {
+                                if (snap.video && snap.phase != CallPhase.ENDED) {
+                                    CallControl(
+                                        label = if (snap.wantCamera) "Camera" else "Camera off",
+                                        description = if (snap.wantCamera) "Turn camera off" else "Turn camera on",
+                                        icon = if (snap.wantCamera) lk.codegen.risime.ui.common.RisiIcons.Videocam else lk.codegen.risime.ui.common.RisiIcons.VideocamOff,
+                                        on = !snap.wantCamera,
+                                        onClick = { toggleCamera(!snap.wantCamera) },
+                                    )
+                                    if (snap.cameraOn) {
+                                        CallControl(label = "Flip", description = "Switch camera", icon = lk.codegen.risime.ui.common.RisiIcons.CameraSwitch, on = false, onClick = calls::switchCamera)
+                                    }
+                                }
+                            },
                         )
                     }
                 }
@@ -125,13 +160,35 @@ class CallActivity : ComponentActivity() {
         super.onResume()
         calls.state.value?.conversationId?.let { lastConversation = it }
         if (!hasCall()) return leaveToChat()
-        // The proximity sensor may blank the screen only while this screen is in front.
-        calls.onCallScreenVisible(true)
+        // The proximity sensor may blank the screen only while this screen is in front; §19.5 the
+        // camera runs only while it is visible and the phone unlocked (a locked call screen waits).
+        resumed = true
+        calls.onCallScreenVisible(!keyguardLocked())
+        runCatching { registerReceiver(unlocked, android.content.IntentFilter(Intent.ACTION_USER_PRESENT)) }
     }
 
     override fun onPause() {
+        resumed = false
+        runCatching { unregisterReceiver(unlocked) }
         calls.onCallScreenVisible(false)
         super.onPause()
+    }
+
+    private var resumed = false
+
+    /** Unlocked while the call screen is in front: now the camera may run. */
+    private val unlocked = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: Intent?) {
+            if (resumed) calls.onCallScreenVisible(true)
+        }
+    }
+
+    private fun keyguardLocked(): Boolean = getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true
+
+    /** §19.5 the camera button; CAMERA is asked the first time it is turned on (android A2). */
+    private fun toggleCamera(on: Boolean) {
+        if (on && !granted(Manifest.permission.CAMERA)) return cameraOnly.launch(Manifest.permission.CAMERA)
+        calls.setCameraWanted(on)
     }
 
     /** Finishes this screen and its task (never an empty activity behind it) and shows the chat. */
@@ -160,12 +217,15 @@ class CallActivity : ComponentActivity() {
 
     private fun handle(intent: Intent?) {
         when (intent?.action) {
-            CallNotifications.ACTION_ANSWER -> if (calls.state.value?.phase == CallPhase.RINGING_IN) answer() else if (calls.blindRing.value != null) answerBlind()
+            // The notification's Answer is a human tap too; a video call answered from there starts with the camera off.
+            CallNotifications.ACTION_ANSWER -> if (calls.state.value?.phase == CallPhase.RINGING_IN) answer(camera = false) else if (calls.blindRing.value != null) answerBlind()
         }
     }
 
-    private fun answer() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return calls.answer()
+    /** A human tapped Answer here ([camera]: "Answer" on a video call; never by itself, android A3). */
+    private fun answer(camera: Boolean = false) {
+        if (granted(Manifest.permission.RECORD_AUDIO) && (!camera || granted(Manifest.permission.CAMERA))) return calls.answer(camera)
+        if (camera && granted(Manifest.permission.RECORD_AUDIO)) return micAndCamera.launch(arrayOf(Manifest.permission.CAMERA))
         // Decision 054: the permission dialog can't show over the keyguard (the answer looked dead on a
         // locked phone): ask to dismiss the keyguard first, then ask for the microphone.
         val km = getSystemService(android.app.KeyguardManager::class.java)
@@ -173,11 +233,13 @@ class CallActivity : ComponentActivity() {
             km.requestDismissKeyguard(
                 this,
                 object : android.app.KeyguardManager.KeyguardDismissCallback() {
-                    override fun onDismissSucceeded() = mic.launch(Manifest.permission.RECORD_AUDIO)
+                    override fun onDismissSucceeded() = if (camera) micAndCamera.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)) else mic.launch(Manifest.permission.RECORD_AUDIO)
                     override fun onDismissCancelled() = Toast.makeText(this@CallActivity, "Unlock the phone to allow the microphone, then answer", Toast.LENGTH_LONG).show()
-                    override fun onDismissError() = mic.launch(Manifest.permission.RECORD_AUDIO)
+                    override fun onDismissError() = if (camera) micAndCamera.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)) else mic.launch(Manifest.permission.RECORD_AUDIO)
                 },
             )
+        } else if (camera) {
+            micAndCamera.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA))
         } else {
             mic.launch(Manifest.permission.RECORD_AUDIO)
         }

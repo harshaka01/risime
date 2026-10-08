@@ -125,6 +125,9 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
 
     fun startCall() = calls.start()
 
+    /** §19.6 the DM header's video button (or "Video call back" on a video line). */
+    fun startVideoCall(camera: Boolean) = calls.startVideo(camera)
+
     /** §16.6 "Delete for me" on a call line. */
     fun deleteCallLine(clientMsgId: String) {
         c.scope.launch { c.engine.deleteForMe(conversationId, listOf(clientMsgId)) }

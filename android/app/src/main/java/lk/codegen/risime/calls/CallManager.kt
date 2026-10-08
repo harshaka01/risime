@@ -54,11 +54,11 @@ interface CallAppPort {
     suspend fun sessionLocked(): Boolean
     fun serverNow(): Long
     suspend fun displayName(userId: String): String
-    suspend fun sendSignal(conv: String, peer: String, env: CallEnvelope.Env): PushResult<*>
+    suspend fun sendSignal(conv: String, peer: String, env: CallEnvelope.Env, media: String = CallEnvelope.MEDIA_AUDIO): PushResult<*>
     suspend fun queueCallEnd(conv: String, peer: String, env: CallEnvelope.End, rangUnanswered: Boolean)
 
     /** Decision 054: a local "Missed voice call" line (no durable `call_end` came); false if the call already has a line. */
-    suspend fun localMissedCall(conv: String, peer: String, callId: String): Boolean = false
+    suspend fun localMissedCall(conv: String, peer: String, callId: String, video: Boolean = false): Boolean = false
     fun foreground(): Boolean
 }
 
@@ -75,6 +75,15 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         // (the redroid relay test, §16.10 f); release builds never read it.
         relayOnly = { BuildConfig.DEBUG && java.io.File(context.filesDir, "debug_relay_only").exists() },
         debug = BuildConfig.DEBUG,
+        // Debug builds only: `touch files/debug_fake_camera` (or no camera at all, as on redroid) sends a test pattern.
+        fakeCamera = {
+            BuildConfig.DEBUG && (java.io.File(context.filesDir, "debug_fake_camera").exists() ||
+                runCatching { livekit.org.webrtc.Camera2Enumerator(context).deviceNames.isEmpty() }.getOrDefault(true))
+        },
+        metered = {
+            val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+            cm?.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false
+        },
     )
 }) {
     private val log: (String) -> Unit = { Log.i("RisiMe", "calls: $it") }
@@ -126,6 +135,9 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     /** §16.1 (S-f): advertise `calls` only when this phone can ring, answer and play a call. */
     fun canAdvertise(): Boolean = BuildConfig.CALLS_ENABLED && media.available && callsManager != null && notifications.notificationsAllowed()
 
+    /** §19.1 (android A9): `video` only together with `calls`, and only when the VP8 encoder and decoder load. */
+    fun canAdvertiseVideo(): Boolean = canAdvertise() && media.videoAvailable
+
     /** Why this phone can't make or take calls (the Settings "Calls" row), null when it can. */
     fun unsupportedReason(): String? = when {
         !BuildConfig.CALLS_ENABLED -> lk.codegen.risime.ui.chat.CALLS_OFF_IN_BUILD
@@ -144,10 +156,10 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     }
 
     /** The hooks the chat pipeline calls (after each commit). */
-    val hooks: CallHooks = MachineCallHooks({ _machine.value }, marks) { conv, from ->
+    val hooks: CallHooks = MachineCallHooks({ _machine.value }, marks) { conv, from, video ->
         scope.launch {
             if (port.foreground() && openConversation?.invoke() == conv) return@launch
-            notifications.postMissed(conv, port.displayName(from))
+            notifications.postMissed(conv, port.displayName(from), video)
         }
     }
 
@@ -159,9 +171,9 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     private val prefs by lazy { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
 
     private val signals = object : CallSignals {
-        override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env): SignalOutcome {
+        override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env, media: String): SignalOutcome {
             repeat(3) { attempt ->
-                when (val r = port.sendSignal(conversationId, peer, env)) {
+                when (val r = port.sendSignal(conversationId, peer, env, media)) {
                     is PushResult.Ok -> return SignalOutcome.Ok
                     is PushResult.Rejected -> if (r.reason == "rate_limited" && env !is CallEnvelope.Offer && attempt < 2) delay(1_000) else return SignalOutcome.Refused(r.reason)
                     PushResult.Unavailable -> withTimeoutOrNull(5_000) { port.connection.first { it == ConnectionState.Live } }
@@ -174,10 +186,10 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             port.queueCallEnd(conversationId, peer, env, marks.get(env.callId)?.let { it.rang && !it.answered } == true)
         }
 
-        override suspend fun missed(conversationId: String, peer: String, callId: String) {
-            if (!port.localMissedCall(conversationId, peer, callId)) return
+        override suspend fun missed(conversationId: String, peer: String, callId: String, video: Boolean) {
+            if (!port.localMissedCall(conversationId, peer, callId, video)) return
             if (port.foreground() && openConversation?.invoke() == conversationId) return
-            notifications.postMissed(conversationId, port.displayName(peer))
+            notifications.postMissed(conversationId, port.displayName(peer), video)
         }
     }
 
@@ -287,13 +299,26 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     fun hasMicPermission(): Boolean = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-    /** The call button (RECORD_AUDIO already granted by the UI). */
-    fun placeCall(conversationId: String) {
-        scope.launch { _machine.value?.placeCall(conversationId) }
+    /** The call button (RECORD_AUDIO already granted by the UI); [video] with [camera] = CAMERA granted (§19.6). */
+    fun placeCall(conversationId: String, video: Boolean = false, camera: Boolean = video) {
+        scope.launch { _machine.value?.placeCall(conversationId, video, camera) }
     }
 
-    fun answer() {
-        scope.launch { _machine.value?.answer() }
+    /** A human tapped Answer in the call screen: [camera] for "Answer" on a video call, false for "Answer without video" (§19.6). */
+    fun answer(camera: Boolean = false) {
+        scope.launch { _machine.value?.answer(camera = camera) }
+    }
+
+    fun hasCameraPermission(): Boolean = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+    /** §19.5 the camera button. */
+    fun setCameraWanted(on: Boolean) {
+        scope.launch { _machine.value?.setCameraWanted(on) }
+    }
+
+    /** §19.7 front/back. */
+    fun switchCamera() {
+        scope.launch { _machine.value?.switchCamera() }
     }
 
     fun hangUp() {
@@ -460,13 +485,16 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         if (callScreenVisible.value == visible) return
         callScreenVisible.value = visible
         updateProximity()
+        // §19.5 (android A1): the camera runs only while the call screen is visible and the phone unlocked.
+        scope.launch { _machine.value?.setScreenVisible(visible) }
     }
 
     /** §16.9 (S-d): the proximity wake lock only while the endpoint is the earpiece, the call is active and its screen is in front. */
     @Synchronized
     private fun updateProximity() {
         val s = state.value
-        val want = wantsProximity(s?.phase, currentEndpoint.value?.type, callScreenVisible.value)
+        // §19.6 (android A6): no proximity wake lock in a video call.
+        val want = s?.video != true && wantsProximity(s?.phase, currentEndpoint.value?.type, callScreenVisible.value)
         val pm = context.getSystemService(PowerManager::class.java) ?: return
         if (want && proximity?.isHeld != true && pm.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
             proximity = pm.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "RisiMe:proximity").apply {
@@ -489,8 +517,10 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val attrs = CallAttributesCompat(
             name, Uri.fromParts("risime", s.peerUserId, null),
             if (s.outgoing) CallAttributesCompat.DIRECTION_OUTGOING else CallAttributesCompat.DIRECTION_INCOMING,
-            CallAttributesCompat.CALL_TYPE_AUDIO_CALL, 0,
+            // §19.6 (android A6): a video call is a Telecom video call.
+            if (s.video) CallAttributesCompat.CALL_TYPE_VIDEO_CALL else CallAttributesCompat.CALL_TYPE_AUDIO_CALL, 0,
         )
+        val video = s.video
         lateinit var handle: TelecomCall
         val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             runCatching {
@@ -498,7 +528,8 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                 // never answers, declines or hangs up a newer one.
                 cm.addCall(
                     attrs,
-                    onAnswer = { _ -> _machine.value?.answer(callId) },
+                    // A Telecom answer (a watch, the car) never turns the camera on (android A3).
+                    onAnswer = { _ -> _machine.value?.answer(callId, camera = false) },
                     onDisconnect = { _ -> _machine.value?.onSystemDisconnect(callId) },
                     onSetActive = {},
                     // A cellular call took over (android R9): no hold in v1.13, so the call ends.
@@ -512,6 +543,13 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                                 if (state.value?.callId == callId) currentEndpoint.value = it
                                 updateProximity()
                             }
+                        }
+                        // §19.6 (android A6): a video call starts on the speaker unless a headset is connected.
+                        if (video) launch {
+                            val list = availableEndpoints.first { it.isNotEmpty() }
+                            val headset = list.any { it.type == CallEndpointCompat.TYPE_BLUETOOTH || it.type == CallEndpointCompat.TYPE_WIRED_HEADSET }
+                            val speaker = list.firstOrNull { it.type == CallEndpointCompat.TYPE_SPEAKER }
+                            if (!headset && speaker != null && currentCallEndpoint.first().type == CallEndpointCompat.TYPE_EARPIECE) requestEndpointChange(speaker)
                         }
                     }
                 }
@@ -529,7 +567,8 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val id = state.value?.callId ?: return
         if (answeredOn == id) return
         answeredOn = id
-        scope.launch { waitScope(id)?.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL) }
+        val type = if (state.value?.video == true) CallAttributesCompat.CALL_TYPE_VIDEO_CALL else CallAttributesCompat.CALL_TYPE_AUDIO_CALL
+        scope.launch { waitScope(id)?.answer(type) }
     }
 
     private fun telecomActive(s: CallSnapshot) {
@@ -610,7 +649,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val name = port.displayName(s.peerUserId)
         return when (s.phase) {
             CallPhase.RINGING_IN -> notifications.incoming(name) to false
-            else -> notifications.ongoing(name, CallTexts.status(s.phase, s.connectedAtMs) ?: "Voice call", s.connectedAtMs) to hasMicPermission()
+            else -> notifications.ongoing(name, CallTexts.status(s.phase, s.connectedAtMs) ?: if (s.video) "Video call" else "Voice call", s.connectedAtMs) to hasMicPermission()
         }
     }
 
@@ -682,10 +721,10 @@ data class ActiveCallRecord(val callId: String, val conversationId: String, val 
 
 /** UI texts (§16.4–§16.6, §16.11). */
 object CallTexts {
-    fun status(phase: CallPhase, connectedAtMs: Long?, now: Long = System.currentTimeMillis()): String? = when (phase) {
+    fun status(phase: CallPhase, connectedAtMs: Long?, now: Long = System.currentTimeMillis(), video: Boolean = false): String? = when (phase) {
         CallPhase.CALLING -> "Calling…"
         CallPhase.RINGING_OUT -> "Ringing…"
-        CallPhase.RINGING_IN -> "Incoming voice call"
+        CallPhase.RINGING_IN -> if (video) "Incoming video call" else "Incoming voice call"
         CallPhase.ANSWERING, CallPhase.CONNECTING -> "Connecting…"
         CallPhase.ACTIVE -> connectedAtMs?.let { CallLines.duration(((now - it) / 1000).coerceAtLeast(0)) }
         CallPhase.RECONNECTING -> "Reconnecting…"
@@ -704,7 +743,11 @@ object CallTexts {
         CallNotice.RATE_LIMITED -> "Too many calls. Try again in a minute."
         CallNotice.NOT_FRIENDS -> "You can only call friends"
         CallNotice.IN_ANOTHER_CALL -> "You're already in a call"
+        CallNotice.VIDEO_NOT_READY -> videoNotReadyText(name)
     }
+
+    /** §19.1: the disabled video button and the `video_not_ready` refusal. */
+    fun videoNotReadyText(name: String) = "$name needs to update the app for video calls"
 }
 
 /**

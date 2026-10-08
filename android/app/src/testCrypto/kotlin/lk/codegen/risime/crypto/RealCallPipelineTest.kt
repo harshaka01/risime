@@ -65,7 +65,7 @@ class RealCallPipelineTest {
         override suspend fun onSignal(s: InboundCall) { signals += s; log += "signal:${s.env.type}" }
         override suspend fun onCallEnd(conversationId: String, fromUser: String, fromDevice: String?, end: CallEnvelope.End) { log += "end:${end.reason}" }
         override suspend fun onPageEnd() { log += "page" }
-        override fun onMissedCall(conversationId: String, from: String) { missed += from }
+        override fun onMissedCall(conversationId: String, from: String, video: Boolean) { missed += from }
     }
 
     private inner class App(val dev: RealMls.Device, scope: TestScope, val hooks: Hooks = Hooks()) {

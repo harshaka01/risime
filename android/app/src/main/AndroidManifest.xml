@@ -5,8 +5,13 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Android 13+: local notifications for push wake-ups (decision 026); asked once, after sign-in. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- v1.13 1:1 voice calls (§16.9). Never READ_PHONE_STATE, BLUETOOTH_CONNECT or CAMERA. -->
+    <!-- v1.13 1:1 voice calls (§16.9). Never READ_PHONE_STATE or BLUETOOTH_CONNECT. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- v1.18 §19.9: CAMERA, asked only when starting or answering a video call with the camera on
+         (no FOREGROUND_SERVICE_CAMERA: the camera runs only while the call screen is visible). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />

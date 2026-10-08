@@ -47,7 +47,7 @@ class CallPushTest {
         override suspend fun sessionLocked() = locked
         override fun serverNow() = System.currentTimeMillis()
         override suspend fun displayName(userId: String) = "Kamal"
-        override suspend fun sendSignal(conv: String, peer: String, env: CallEnvelope.Env): PushResult<*> = PushResult.Unavailable
+        override suspend fun sendSignal(conv: String, peer: String, env: CallEnvelope.Env, media: String): PushResult<*> = PushResult.Unavailable
         override suspend fun queueCallEnd(conv: String, peer: String, env: CallEnvelope.End, rangUnanswered: Boolean) = Unit
         override fun foreground() = false
     }

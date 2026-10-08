@@ -41,16 +41,18 @@ class ContractExamplesTest {
         "group_call_started_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "livekit_token_claims.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "mls_group_group_calls_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        // v1.18 (§19 1:1 video calls): parse-only placeholders until the app implements it.
-        "call_end_video_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_media_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_offer_video_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_offer_video_payload_bad.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_signal_event_video.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_signal_push_video.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "device_put_video.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_video_not_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_group_video_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.18 (§19 1:1 video calls): typed models, the envelopes through the strict validators (§19.4 SDP rules).
+        "call_end_video_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.End).also { require(it.media == "video" && it.durationS == 312L) } },
+        "call_media_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Media).also { require(!it.camera && it.toDevice.isNotEmpty()) } },
+        "call_offer_video_payload.json" to { s ->
+            (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Offer).also { require(it.media == "video" && !it.restart && lk.codegen.risime.calls.SdpRules.mLineCount(it.sdp) == 2) }
+        },
+        "call_offer_video_payload_bad.json" to { s -> require(lk.codegen.risime.calls.CallEnvelope.decode(s.toByteArray()) == null) { "the simulcast offer must be dropped" }; s },
+        "call_signal_event_video.json" to { s -> ProtocolJson.decodeFromString<Event>(s).callSignal()!!.also { require(it.ring && it.media == "video") } },
+        "call_signal_push_video.json" to { s -> ProtocolJson.decodeFromString<CallSignalPush>(s).also { require(it.ring && it.media == "video") } },
+        "device_put_video.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(DeviceMls.CAP_VIDEO in it.mls!!.capabilities!! && DeviceMls.CAP_CALLS in it.mls!!.capabilities!!) } },
+        "error_video_not_ready.json" to { s -> ProtocolJson.decodeFromString<ErrorReason>(s).also { require(it.reason == CallErrors.VIDEO_NOT_READY) } },
+        "mls_group_video_ready.json" to { s -> ProtocolJson.decodeFromString<MlsGroup>(s).also { require(it.videoReady && it.callsReady && it.missingVideo.single().deviceId != null) } },
         // v1.17 (§18 profile photos): typed models, the envelopes through the strict validators.
         "blob_upload_avatar_reply.json" to { s -> ProtocolJson.decodeFromString<BlobUploadReply>(s).also { require(it.expiresAt == null && it.size == 61456L) } },
         "event_message_silent.json" to { s -> ProtocolJson.decodeFromString<Event>(s).messageData()!!.also { require(it.silent && it.encrypted) } },
@@ -361,6 +363,9 @@ class ContractExamplesTest {
         // v1.14 (§12.1).
         check("device_put_member_devices.json", DevicePut.serializer())
         check("call_signal_push.json", CallSignalPush.serializer())
+        // v1.18 (§19.2): `media` on every signal of a video call; the voice shape above stays without it.
+        check("call_signal_push_video.json", CallSignalPush.serializer())
+        check("device_put_video.json", DevicePut.serializer())
         check("key_packages_upload_replace.json", KeyPackagesUpload.serializer())
         check("key_packages_claim_group.json", KeyPackagesClaim.serializer())
         check("group_meta.json", GroupMeta.serializer())

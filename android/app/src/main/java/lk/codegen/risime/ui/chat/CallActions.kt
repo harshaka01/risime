@@ -23,13 +23,34 @@ import lk.codegen.risime.net.ApiResult
 class CallActions(private val c: AppContainer, private val scope: CoroutineScope, private val conversationId: String) {
     private val _ready = MutableStateFlow(false)
     val callsReady: StateFlow<Boolean> = _ready
+    private val _video = MutableStateFlow(false)
+
+    /** §19.1 `video_ready` (each user has a recent `video` device). */
+    val videoReady: StateFlow<Boolean> = _video
 
     fun refresh() {
         scope.launch {
             val r = c.api.mlsGroup(conversationId)
-            if (r is ApiResult.Ok) _ready.value = r.value.e2ee && r.value.callsReady
+            if (r is ApiResult.Ok) {
+                _ready.value = r.value.e2ee && r.value.callsReady
+                _video.value = r.value.e2ee && r.value.videoReady
+            }
         }
     }
+
+    /** Null = the video button works; otherwise what a tap explains (§19.1 UI). */
+    fun videoBlockedText(encrypted: Boolean, ready: Boolean, videoReady: Boolean, peerName: String): String? =
+        blockedText(encrypted, ready, peerName) ?: videoBlockedText(
+            thisPhone = runCatching { c.calls.canAdvertiseVideo() }.getOrDefault(false), videoReady = videoReady, peerName = peerName,
+        )
+
+    /** §19.6: a video call; [camera] = CAMERA granted (denied: the call goes on with the camera off, android A2). */
+    fun startVideo(camera: Boolean) {
+        c.calls.placeCall(conversationId, video = true, camera = camera)
+        c.calls.openCallScreen()
+    }
+
+    fun hasCamera(): Boolean = c.calls.hasCameraPermission()
 
     /** Null = the button works; otherwise what a tap explains (§16.1 UI). */
     fun blockedText(encrypted: Boolean, ready: Boolean, peerName: String): String? = callBlockedText(
@@ -57,6 +78,13 @@ fun callBlockedText(thisPhone: String?, encrypted: Boolean, ready: Boolean, peer
     else -> null
 }
 
+/** §19.1: after the voice rules, this phone's VP8, then the peer's `video_ready`. */
+fun videoBlockedText(thisPhone: Boolean, videoReady: Boolean, peerName: String): String? = when {
+    !thisPhone -> "Video calls aren't supported on this phone"
+    !videoReady -> lk.codegen.risime.calls.CallTexts.videoNotReadyText(peerName)
+    else -> null
+}
+
 /** CallManager.unsupportedReason() for a build without calls (§16.14 receive-only). */
 const val CALLS_OFF_IN_BUILD = "calls are off in this build"
 
@@ -78,5 +106,28 @@ fun CallHeaderButton(blocked: String?, onBlocked: (String) -> Unit, onCall: () -
         }
     }) {
         Icon(Icons.Default.Call, if (blocked == null) "Voice call" else "Voice call (unavailable)", tint = if (blocked == null) androidx.compose.material3.LocalContentColor.current else Color.Gray)
+    }
+}
+
+/**
+ * §19.1/§19.6 the DM header's video button next to the call button: disabled until `video_ready`
+ * (a tap explains); asks RECORD_AUDIO and CAMERA; a denied camera still calls, camera off (android A2).
+ */
+@Composable
+fun VideoHeaderButton(blocked: String?, onBlocked: (String) -> Unit, onVideoCall: (camera: Boolean) -> Unit) {
+    val ctx = LocalContext.current
+    fun granted(p: String) = ContextCompat.checkSelfPermission(ctx, p) == PackageManager.PERMISSION_GRANTED
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        val mic = r[Manifest.permission.RECORD_AUDIO] ?: granted(Manifest.permission.RECORD_AUDIO)
+        if (!mic) onBlocked("RisiMe needs the microphone for calls") else onVideoCall(r[Manifest.permission.CAMERA] ?: granted(Manifest.permission.CAMERA))
+    }
+    IconButton(onClick = {
+        when {
+            blocked != null -> onBlocked(blocked)
+            granted(Manifest.permission.RECORD_AUDIO) && granted(Manifest.permission.CAMERA) -> onVideoCall(true)
+            else -> ask.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA))
+        }
+    }) {
+        Icon(lk.codegen.risime.ui.common.RisiIcons.Videocam, if (blocked == null) "Video call" else "Video call (unavailable)", tint = if (blocked == null) androidx.compose.material3.LocalContentColor.current else Color.Gray)
     }
 }

@@ -127,11 +127,11 @@ class LiveCalls(private val http: OkHttpClient, private val scope: CoroutineScop
             behaviour = BehaviourLog(FakeBehaviourDao(), { "s" }, { 0L }),
             mls = MlsPipeline({ mls.engine }, FakeMlsPendingDao(), log = { logs += "mls: $it"; println("  [$name] mls: $it") }), mlsEngine = { mls.engine },
             catchUp = { catchUp(it) }, serverClock = clock,
-            calls = MachineCallHooks({ machine }, marks) { _, from -> missed += from },
+            calls = MachineCallHooks({ machine }, marks) { _, from, _ -> missed += from },
         )
         private val signals = object : CallSignals {
-            override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env): SignalOutcome =
-                when (val r = chat.sendCallSignal(conversationId, peer, env)) {
+            override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env, media: String): SignalOutcome =
+                when (val r = chat.sendCallSignal(conversationId, peer, env, media)) {
                     is PushResult.Ok -> SignalOutcome.Ok
                     is PushResult.Rejected -> SignalOutcome.Refused(r.reason).also { refused += "${env.type}:${r.reason}" }
                     PushResult.Unavailable -> SignalOutcome.Unavailable
@@ -141,8 +141,8 @@ class LiveCalls(private val http: OkHttpClient, private val scope: CoroutineScop
                 chat.queueCallEnd(conversationId, peer, env, marks.get(env.callId)?.let { it.rang && !it.answered } == true)
             }
 
-            override suspend fun missed(conversationId: String, peer: String, callId: String) {
-                if (chat.insertLocalMissedCall(conversationId, peer, callId)) missed += peer
+            override suspend fun missed(conversationId: String, peer: String, callId: String, video: Boolean) {
+                if (chat.insertLocalMissedCall(conversationId, peer, callId, video)) missed += peer
             }
         }
 

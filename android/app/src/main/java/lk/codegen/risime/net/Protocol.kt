@@ -559,6 +559,9 @@ data class DeviceMls(
 
         /** v1.15 §17.1: advertised only when the app can both provide and receive history bundles (the core's §17.3 functions). */
         const val CAP_HISTORY_SHARE = "history_share"
+
+        /** v1.18 §19.1: advertised only together with `calls` and when the VP8 encoder and decoder load. */
+        const val CAP_VIDEO = "video"
     }
 }
 
@@ -634,6 +637,9 @@ data class MlsGroup(
     /** §16.1 (DMs): each of the two users has at least one recent instance that advertises `calls` (absent = false). */
     @SerialName("calls_ready") val callsReady: Boolean = false,
     @SerialName("missing_calls") val missingCalls: List<MissingImages> = emptyList(),
+    /** §19.1 (DMs): each user has a recent instance that advertises `video` (absent = false). */
+    @SerialName("video_ready") val videoReady: Boolean = false,
+    @SerialName("missing_video") val missingVideo: List<MissingImages> = emptyList(),
 )
 
 /** §14.1 an app instance that doesn't advertise `images` (`device_id` null: an old app without one). */
@@ -1077,6 +1083,10 @@ data class CallSignalPush(
     val generation: Long,
     val epoch: Long,
     @SerialName("client_ts") val clientTs: String,
+    /** §19.2 the call's media on every signal (absent = audio; omitted for voice calls). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val media: String? = null,
 )
 
 /** §16.3 reply ok. */
@@ -1100,6 +1110,8 @@ data class CallSignalEvent(
     val generation: Long,
     val epoch: Long,
     @SerialName("server_ts") val serverTs: String,
+    /** §19.2 `audio` or `video` (absent = audio), bound to the envelope (crypto K6). */
+    val media: String? = null,
 )
 
 /** §16.7 one ICE server of `GET /calls/turn`. */
@@ -1122,4 +1134,7 @@ data class CallsTurnReply(
 object CallErrors {
     const val CALLS_NOT_READY = "calls_not_ready"
     const val CALLS_UNAVAILABLE = "calls_unavailable"
+
+    /** §19.2: `ring: true` with `media: "video"` to a user with no `video` device. */
+    const val VIDEO_NOT_READY = "video_not_ready"
 }

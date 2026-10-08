@@ -27,8 +27,8 @@ sealed interface SignalOutcome {
 
 /** Outgoing call traffic (the app sends it through the conversation's encrypt-and-push lane). */
 interface CallSignals {
-    /** An ephemeral envelope with `call:signal` (`ring` = [CallEnvelope.ringFor]). */
-    suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env): SignalOutcome
+    /** An ephemeral envelope with `call:signal` (`ring` = [CallEnvelope.ringFor]); [media] = the call's (§19.2). */
+    suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env, media: String = CallEnvelope.MEDIA_AUDIO): SignalOutcome
 
     /** The durable `call_end` (§16.2): an outbox row that is also this device's call-history line. */
     suspend fun end(conversationId: String, peer: String, env: CallEnvelope.End)
@@ -39,7 +39,7 @@ interface CallSignals {
      * killed mid-ring): record "Missed voice call" locally (one line per call id; a later durable
      * `call_end` is deduplicated against it) and notify.
      */
-    suspend fun missed(conversationId: String, peer: String, callId: String) = Unit
+    suspend fun missed(conversationId: String, peer: String, callId: String, video: Boolean = false) = Unit
 }
 
 /** Per-device memory of call ids (§16.3 dedupe, 24 h, persisted) and how this device took part. */
@@ -74,6 +74,8 @@ data class InboundCall(
     val env: CallEnvelope.Env,
     /** Part of a join/sync page: an offer rings only after the whole page is applied (§16.3, android R3). */
     val inPage: Boolean = false,
+    /** §19.2 the event's cleartext media (absent = audio), bound to the call's (crypto K6). */
+    val media: String = CallEnvelope.MEDIA_AUDIO,
 )
 
 enum class CallPhase { CALLING, RINGING_OUT, RINGING_IN, ANSWERING, CONNECTING, ACTIVE, RECONNECTING, ENDED }
@@ -81,6 +83,8 @@ enum class CallPhase { CALLING, RINGING_OUT, RINGING_IN, ANSWERING, CONNECTING, 
 /** Why a call ended, for the short line the UI shows (names are filled in by the UI). */
 enum class CallNotice {
     CALL_ENDED, DECLINED, BUSY, NO_ANSWER, ANSWERED_ELSEWHERE, CANT_CONNECT, NOT_READY, NOT_E2EE, RATE_LIMITED, NOT_FRIENDS, IN_ANOTHER_CALL,
+    /** §19.2 `video_not_ready`: the peer has no device that takes video calls. */
+    VIDEO_NOT_READY,
 }
 
 data class CallSnapshot(
@@ -95,6 +99,15 @@ data class CallSnapshot(
     /** §16.10 (e) passed: the UI may say "End-to-end encrypted". */
     val verified: Boolean = false,
     val notice: CallNotice? = null,
+    /** §19: a video call (fixed when it starts; false again if the peer answered audio-only). */
+    val video: Boolean = false,
+    /** §19.5 the local camera is running now (wanted, the call screen visible, a session). */
+    val cameraOn: Boolean = false,
+    /** The user's camera choice (Answer / Answer without video / the camera button). */
+    val wantCamera: Boolean = false,
+    /** The peer's last `call_media` (true until one says otherwise), and when it changed (device ms). */
+    val peerCamera: Boolean = true,
+    val peerCameraAtMs: Long = 0,
 )
 
 /**
@@ -133,6 +146,9 @@ class CallStateMachine(
         const val DEDUPE_MS = 24 * 3_600_000L
         const val SIBLING_MS = 45_000L
         const val STATS_POLL_MS = 250L
+
+        /** §19.3: at most one `call_media` per second per call. */
+        const val CAMERA_SIGNAL_MS = 1_000L
 
         /** Decision 054: a call that has no verified media this long after it started is torn down (never stuck). */
         const val MEDIA_WATCHDOG_MS = 80_000L
@@ -197,7 +213,21 @@ class CallStateMachine(
         var ended = false
         /** Published to the UI at least once (a call that never showed ends without a notice). */
         var shown = false
+        /** §19: the call's media (fixed by the offer); [video] goes false if the answer rejected video. */
+        var media: String = CallEnvelope.MEDIA_AUDIO
+        var video = false
+        var wantCamera = false
+        var cameraOn = false
+        var peerCamera = true
+        var peerCameraAt = 0L
+        /** §19.3 `call_media`: the last state sent and when (at most one per second, the last state wins). */
+        var cameraSent: Boolean? = null
+        var cameraSentAt = 0L
+        var cameraJob: Job? = null
     }
+
+    /** §19.5 (android A1): the in-call activity is visible and unlocked (the camera runs only then). */
+    @Volatile private var screenVisible = false
 
     private var current: Call? = null
 
@@ -206,8 +236,11 @@ class CallStateMachine(
 
     // ---------------------------------------------------------------- public inputs
 
-    /** The call button (the UI checked `calls_ready`, e2ee and RECORD_AUDIO). False = busy already. */
-    suspend fun placeCall(conversationId: String): Boolean {
+    /**
+     * The call button (the UI checked `calls_ready`, e2ee and RECORD_AUDIO). False = busy already.
+     * [video] (§19.6): a video call; [camera] = CAMERA granted (denied: the call goes on with the camera off).
+     */
+    suspend fun placeCall(conversationId: String, video: Boolean = false, camera: Boolean = video): Boolean {
         val peer = dmPeer(conversationId, me) ?: return false
         // Calling someone who is ringing this device right now: both want the call, so answer it (as glare would).
         val ringingFromPeer = lock.withLock { current?.takeIf { !it.ended && !it.outgoing && it.phase == CallPhase.RINGING_IN && it.peer.equals(peer, true) }?.id }
@@ -218,6 +251,11 @@ class CallStateMachine(
                 return false
             }
             Call(newCallId(), conversationId, peer, outgoing = true, phase = CallPhase.CALLING).also {
+                if (video) {
+                    it.media = CallEnvelope.MEDIA_VIDEO
+                    it.video = true
+                    it.wantCamera = camera
+                }
                 current = it
                 publish(it)
                 // §16.4 ring timeout, armed at once (decision 054): a stuck TURN fetch or signal can't
@@ -243,14 +281,14 @@ class CallStateMachine(
                 finish(call, CallNotice.CANT_CONNECT, sendEnd = null)
                 return true
             }
-            SdpRules.validate(sdp, SdpRules.Role.OFFER)?.let {
+            SdpRules.validate(sdp, SdpRules.Role.OFFER, call.video)?.let {
                 log("own offer invalid: $it")
                 finish(call, CallNotice.CANT_CONNECT, sendEnd = null)
                 return true
             }
-            CallEnvelope.Offer(call.id, sdp, iso(serverNow()))
+            CallEnvelope.Offer(call.id, sdp, iso(serverNow()), media = call.media)
         }
-        val r = sig(call.conv, call.peer, offer)
+        val r = sig(call.conv, call.peer, offer, call.media)
         lock.withLock {
             if (current !== call || call.ended) return true
             when (r) {
@@ -263,6 +301,7 @@ class CallStateMachine(
                     call,
                     when (r.reason) {
                         lk.codegen.risime.net.CallErrors.CALLS_NOT_READY -> CallNotice.NOT_READY
+                        lk.codegen.risime.net.CallErrors.VIDEO_NOT_READY -> CallNotice.VIDEO_NOT_READY
                         lk.codegen.risime.net.AuthErrors.NOT_E2EE -> CallNotice.NOT_E2EE
                         lk.codegen.risime.net.AuthErrors.RATE_LIMITED -> CallNotice.RATE_LIMITED
                         lk.codegen.risime.net.AuthErrors.NOT_FRIENDS -> CallNotice.NOT_FRIENDS
@@ -276,10 +315,15 @@ class CallStateMachine(
         return true
     }
 
-    /** Answer (an activity, after RECORD_AUDIO): only for a call ringing on this device. */
-    suspend fun answer(callId: String? = null): Boolean {
+    /**
+     * Answer (an activity, after RECORD_AUDIO): only for a call ringing on this device. [camera]
+     * (§19.6, android A3): a human tapped Answer (camera on) or Answer without video; the camera
+     * never starts while ringing or by itself. Telecom's answer callback passes false.
+     */
+    suspend fun answer(callId: String? = null, camera: Boolean = false): Boolean {
         val call = lock.withLock {
             val c = current?.takeIf { !it.ended && it.phase == CallPhase.RINGING_IN && (callId == null || it.id == callId) } ?: return false
+            c.wantCamera = c.video && camera
             c.phase = CallPhase.ANSWERING
             c.timers.remove("ring")?.cancel()
             publish(c)
@@ -306,14 +350,14 @@ class CallStateMachine(
                 finish(call, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
                 return
             }
-            SdpRules.validate(sdp, SdpRules.Role.ANSWER)?.let {
+            SdpRules.validate(sdp, SdpRules.Role.ANSWER, call.video)?.let {
                 log("own answer invalid: $it")
                 finish(call, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
                 return
             }
             CallEnvelope.Answer(call.id, call.offerDevice!!, sdp)
         }
-        val r = sig(call.conv, call.peer, answer)
+        val r = sig(call.conv, call.peer, answer, call.media)
         lock.withLock {
             if (current !== call || call.ended) return
             if (r != SignalOutcome.Ok) {
@@ -392,6 +436,65 @@ class CallStateMachine(
         }
     }
 
+    /** §19.5 the camera button: the user's choice (it runs only while the call screen is visible). */
+    suspend fun setCameraWanted(on: Boolean) {
+        lock.withLock {
+            val c = current?.takeIf { !it.ended && it.video } ?: return
+            c.wantCamera = on
+            applyCamera(c)
+        }
+    }
+
+    /** §19.7 front/back: local only. */
+    suspend fun switchCamera() {
+        lock.withLock { current?.takeIf { !it.ended && it.cameraOn }?.session?.switchCamera() }
+    }
+
+    /**
+     * §19.5 (android A1): the in-call activity became visible (resumed, unlocked) or hidden (home,
+     * screen off, another app, Back to chats). Hidden stops the camera and sends `camera: false`;
+     * visible restarts it if the user had it on. Audio goes on either way.
+     */
+    suspend fun setScreenVisible(visible: Boolean) {
+        lock.withLock {
+            screenVisible = visible
+            current?.takeIf { !it.ended && it.video }?.let(::applyCamera)
+        }
+    }
+
+    /** Under the lock: the camera follows (wanted ∧ visible ∧ a session); a connected call tells the peer. */
+    private fun applyCamera(c: Call) {
+        val session = c.session
+        val on = c.video && c.wantCamera && screenVisible && session != null
+        if (on != c.cameraOn) {
+            c.cameraOn = on
+            runCatching { session?.setCamera(on) }.onFailure { log("camera: ${it.message}") }
+            publish(c)
+        }
+        if (c.phase == CallPhase.ACTIVE || c.phase == CallPhase.RECONNECTING) scheduleCameraSignal(c)
+    }
+
+    /** §19.3 `call_media` to the selected peer device: at most one per second per call, the last state wins. */
+    private fun scheduleCameraSignal(c: Call) {
+        if (!c.video || c.ended) return
+        if (c.cameraJob?.isActive == true) return
+        if (c.cameraSent == c.cameraOn) return
+        c.cameraJob = scope.launch {
+            val wait = c.cameraSentAt + CAMERA_SIGNAL_MS - now()
+            if (c.cameraSentAt > 0 && wait > 0) delay(wait)
+            val env = lock.withLock {
+                if (c.ended || current !== c || c.cameraSent == c.cameraOn) return@launch
+                val to = (if (c.outgoing) c.selected else c.offerDevice) ?: return@launch
+                c.cameraSent = c.cameraOn
+                c.cameraSentAt = now()
+                CallEnvelope.Media(c.id, to, c.cameraOn)
+            }
+            sig(c.conv, c.peer, env, c.media)
+            // A change while this one was going out: send the latest (still at most one per second).
+            lock.withLock { if (!c.ended && current === c && c.cameraSent != c.cameraOn) scope.launch { lock.withLock { scheduleCameraSignal(c) } } }
+        }
+    }
+
     /** Telecom/the OS ended the call (a cellular call took over, the user ended it from the system UI). */
     suspend fun onSystemDisconnect(callId: String? = null) = hangUp(callId)
 
@@ -411,6 +514,12 @@ class CallStateMachine(
             pruneSiblings()
             val own = s.fromUser.equals(me, true)
             if (own && s.fromDevice.equals(myDevice, true)) return // my own copy
+            // §19.2 (crypto K6): every later signal of a call carries the offer's media.
+            val known = current?.takeIf { it.id == env.callId }
+            if (known != null && env !is CallEnvelope.Offer && s.media != known.media) {
+                log("${env.type} for ${env.callId}: media ${s.media} != ${known.media}: dropped")
+                return
+            }
             when (env) {
                 is CallEnvelope.Offer -> if (env.restart) onRestartOffer(s, env) else onOffer(s, env, own, markedEnded)
                 is CallEnvelope.Ringing -> onRinging(s, own)
@@ -419,6 +528,7 @@ class CallStateMachine(
                 is CallEnvelope.Ice -> onIce(s, env, own)
                 is CallEnvelope.Busy -> onBusy(s, own)
                 is CallEnvelope.Cancel -> onCancel(s, own)
+                is CallEnvelope.Media -> onMedia(s, env, own)
                 is CallEnvelope.End -> log("call_end in a call_signal event: dropped")
             }
         }
@@ -478,8 +588,10 @@ class CallStateMachine(
             val loser = cur
             dropQuietly(loser)
             marks.put(CallMark(loser.id, ended = true, at = now()))
-            scope.launch { sig(loser.conv, loser.peer, CallEnvelope.Cancel(loser.id)) }
+            scope.launch { sig(loser.conv, loser.peer, CallEnvelope.Cancel(loser.id), loser.media) }
             val call = incoming(s, env)
+            // §19.6 (android A4): the automatic answer uses the camera only if my losing call was a video call.
+            call.wantCamera = call.video && loser.media == CallEnvelope.MEDIA_VIDEO && loser.wantCamera
             call.phase = CallPhase.ANSWERING
             marks.put(CallMark(env.callId, rang = false, answered = true, at = now()))
             publish(call)
@@ -499,7 +611,7 @@ class CallStateMachine(
         if (cur != null || platform.audioBusy()) {
             log("offer ${env.callId}: busy")
             marks.put(CallMark(env.callId, ended = true, at = now()))
-            scope.launch { sig(s.conversationId, peer, CallEnvelope.Busy(env.callId)) }
+            scope.launch { sig(s.conversationId, peer, CallEnvelope.Busy(env.callId), env.media) }
             return
         }
         val call = incoming(s, env)
@@ -512,7 +624,7 @@ class CallStateMachine(
             // Decision 054: a caller that crashed mid-ring sends no call_end; the missed call shows anyway.
             scope.launch {
                 delay(MISSED_GRACE_MS)
-                if (marks.get(c.id)?.let { it.rang && !it.answered } == true) runCatching { signals.missed(c.conv, c.peer, c.id) }
+                if (marks.get(c.id)?.let { it.rang && !it.answered } == true) runCatching { signals.missed(c.conv, c.peer, c.id, c.video) }
             }
         }
         watchdog(call)
@@ -529,6 +641,8 @@ class CallStateMachine(
         call.offerSdp = env.sdp
         call.offerServerTsMs = s.serverTsMs
         call.pinned = SdpRules.fingerprint(env.sdp)
+        call.media = env.media
+        call.video = env.media == CallEnvelope.MEDIA_VIDEO
         current = call
         return call
     }
@@ -539,7 +653,7 @@ class CallStateMachine(
             publish(call)
         }
         marks.put((marks.get(call.id) ?: CallMark(call.id)).copy(rang = true, at = now()))
-        sig(call.conv, call.peer, CallEnvelope.Ringing(call.id))
+        sig(call.conv, call.peer, CallEnvelope.Ringing(call.id), call.media)
     }
 
     private fun onRinging(s: InboundCall, own: Boolean) {
@@ -575,6 +689,16 @@ class CallStateMachine(
             return
         }
         val session = c.session ?: return
+        // §19.4: the answer's shape must match the offer's media; a rejected m=video makes it an audio call.
+        if ((SdpRules.mLineCount(env.sdp) == 2) != (c.media == CallEnvelope.MEDIA_VIDEO)) {
+            log("call_answer for ${c.id}: m-lines don't match the ${c.media} offer: dropped")
+            return
+        }
+        if (c.video && SdpRules.videoRejected(env.sdp)) {
+            log("call_answer for ${c.id}: video rejected, an audio call")
+            c.video = false
+            applyCamera(c)
+        }
         val fp = SdpRules.fingerprint(env.sdp)
         val remote = if (tamperRemoteFingerprint()) SdpRules.tamperFingerprint(env.sdp) else env.sdp
         c.selected = s.fromDevice.lowercase()
@@ -590,7 +714,7 @@ class CallStateMachine(
         c.remoteSet = true
         c.remoteBuffer.forEach(session::addRemoteCandidate)
         c.remoteBuffer.clear()
-        scope.launch { sig(c.conv, c.peer, CallEnvelope.Accepted(c.id, c.selected!!)) }
+        scope.launch { sig(c.conv, c.peer, CallEnvelope.Accepted(c.id, c.selected!!), c.media) }
         // §16.4: 20 s to connect after call_accepted (10 s without a relay, decision 054).
         timer(c, "connect", connectMs(c)) { x -> finish(x, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED) }
         // From now on my candidates go to the selected device.
@@ -650,6 +774,22 @@ class CallStateMachine(
         }
     }
 
+    /** §19.3 `call_media` (android A5): only from the selected peer device (sender pinning), to this device, in a video call. */
+    private fun onMedia(s: InboundCall, env: CallEnvelope.Media, own: Boolean) {
+        if (own) return
+        val c = current?.takeIf { !it.ended && it.id == env.callId && it.video && it.peer.equals(s.fromUser, true) } ?: return
+        val peerDevice = if (c.outgoing) c.selected else c.offerDevice
+        if (peerDevice == null || !s.fromDevice.equals(peerDevice, true) || !env.toDevice.equals(myDevice, true)) {
+            log("call_media for ${c.id} from ${s.fromDevice}: not the selected device: dropped")
+            return
+        }
+        if (c.peerCamera != env.camera) {
+            c.peerCamera = env.camera
+            c.peerCameraAt = now()
+            publish(c)
+        }
+    }
+
     private fun onCancel(s: InboundCall, own: Boolean) {
         val id = s.env.callId
         if (own) {
@@ -677,6 +817,11 @@ class CallStateMachine(
         val c = current?.takeIf { !it.ended && it.id == env.callId } ?: return
         val peerDevice = if (c.outgoing) c.selected else c.offerDevice
         if (!s.fromUser.equals(c.peer, true) || !s.fromDevice.equals(peerDevice, true) || !env.toDevice.equals(myDevice, true)) return
+        // §19.3: restarts keep the media and the same m-lines.
+        if (env.media != c.media || s.media != c.media) {
+            log("restart offer for ${c.id} with media ${env.media}: dropped")
+            return
+        }
         if (!SdpRules.sameFingerprint(SdpRules.fingerprint(env.sdp), c.pinned)) {
             log("dtls_fingerprint_mismatch: restart offer with a different fingerprint")
             finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
@@ -690,7 +835,7 @@ class CallStateMachine(
             finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)
             return
         }
-        scope.launch { sig(c.conv, c.peer, CallEnvelope.Answer(c.id, s.fromDevice.lowercase(), answer)) }
+        scope.launch { sig(c.conv, c.peer, CallEnvelope.Answer(c.id, s.fromDevice.lowercase(), answer), c.media) }
     }
 
     // ---------------------------------------------------------------- media callbacks
@@ -723,10 +868,13 @@ class CallStateMachine(
                     scope.launch { lock.withLock { onIce(call, state) } }
                 }
             },
+            video = call.media == CallEnvelope.MEDIA_VIDEO,
         )
         call.session = s
         call.relay = servers.any { srv -> srv.urls.any { it.startsWith("turn:") || it.startsWith("turns:") } }
         s.setMuted(call.muted)
+        // §19.6: the caller's local preview from the start; the callee's only after a human Answer.
+        if (call.video) applyCamera(call)
         return s
     }
 
@@ -763,9 +911,9 @@ class CallStateMachine(
             if (c.ended || current !== c) return
             val s = c.session ?: return
             val sdp = runCatching { mediaOp { s.createOffer(iceRestart = true) } }.getOrNull() ?: return
-            CallEnvelope.Offer(c.id, sdp, iso(serverNow()), restart = true, toDevice = c.selected)
+            CallEnvelope.Offer(c.id, sdp, iso(serverNow()), restart = true, toDevice = c.selected, media = c.media)
         }
-        sig(c.conv, c.peer, offer)
+        sig(c.conv, c.peer, offer, c.media)
     }
 
     /** §16.10 (e) after ICE connected (and, for the callee, after call_accepted named it). */
@@ -803,6 +951,8 @@ class CallStateMachine(
                             timer(c, "max", MAX_CALL_MS) { x -> finish(x, CallNotice.CALL_ENDED, sendEnd = CallEnvelope.R_HANGUP) }
                             publish(c)
                             stallWatch(c)
+                            // §19.3: a call that connects with my camera off tells the peer (their avatar at once).
+                            if (c.video && !c.cameraOn) scheduleCameraSignal(c)
                             true
                         }
                         else -> false
@@ -834,7 +984,7 @@ class CallStateMachine(
                     val to = if (c.outgoing) c.selected else c.offerDevice
                     CallEnvelope.Ice(c.id, to, take, done)
                 }
-                sig(c.conv, c.peer, batch)
+                sig(c.conv, c.peer, batch, c.media)
                 delay(ICE_BATCH_MS)
             }
         }
@@ -849,6 +999,8 @@ class CallStateMachine(
         c.timers.clear()
         c.iceJob?.cancel()
         c.checking?.cancel()
+        c.cameraJob?.cancel()
+        c.cameraOn = false
         runCatching { c.session?.close() }
         c.session = null
         if (current === c) current = null
@@ -869,6 +1021,7 @@ class CallStateMachine(
                 c.id, sendEnd,
                 connectedAt = connectedAtServer?.takeIf { sendEnd == CallEnvelope.R_HANGUP || sendEnd == CallEnvelope.R_FAILED }?.let(::iso),
                 durationS = duration?.takeIf { connectedAtServer != null },
+                media = c.media, // §19.3: a video call stays "video" even if both cameras were off
             )
             scope.launch { signals.end(c.conv, c.peer, end) }
         }
@@ -876,7 +1029,7 @@ class CallStateMachine(
             if (_state.value?.callId == c.id) _state.value = null
             return
         }
-        _state.value = CallSnapshot(c.id, c.conv, c.peer, c.outgoing, CallPhase.ENDED, c.muted, c.connectedAt, c.verified, notice)
+        _state.value = CallSnapshot(c.id, c.conv, c.peer, c.outgoing, CallPhase.ENDED, c.muted, c.connectedAt, c.verified, notice, video = c.video)
         scope.launch {
             delay(lingerMs)
             if (_state.value?.callId == c.id && _state.value?.phase == CallPhase.ENDED) _state.value = null
@@ -895,12 +1048,15 @@ class CallStateMachine(
     private fun publish(c: Call) {
         if (c.ended) return
         c.shown = true
-        _state.value = CallSnapshot(c.id, c.conv, c.peer, c.outgoing, c.phase, c.muted, c.connectedAt, c.verified, null)
+        _state.value = CallSnapshot(
+            c.id, c.conv, c.peer, c.outgoing, c.phase, c.muted, c.connectedAt, c.verified, null,
+            video = c.video, cameraOn = c.cameraOn, wantCamera = c.wantCamera, peerCamera = c.peerCamera, peerCameraAtMs = c.peerCameraAt,
+        )
     }
 
-    /** A `call:signal` that never hangs the call (decision 054). */
-    private suspend fun sig(conv: String, peer: String, env: CallEnvelope.Env): SignalOutcome =
-        withTimeoutOrNull(SIGNAL_TIMEOUT_MS) { signals.signal(conv, peer, env) } ?: SignalOutcome.Unavailable.also { log("${env.type} timed out") }
+    /** A `call:signal` that never hangs the call (decision 054); [media] = the call's (§19.2). */
+    private suspend fun sig(conv: String, peer: String, env: CallEnvelope.Env, media: String): SignalOutcome =
+        withTimeoutOrNull(SIGNAL_TIMEOUT_MS) { signals.signal(conv, peer, env, media) } ?: SignalOutcome.Unavailable.also { log("${env.type} timed out") }
 
     /** One WebRTC operation under the machine lock, bounded (decision 054): a stuck callback can't hold every input. */
     private suspend fun <T> mediaOp(block: suspend () -> T): T =

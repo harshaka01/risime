@@ -30,10 +30,15 @@ object CallEnvelope {
     const val CANCEL = "call_cancel"
     const val END = "call_end"
 
+    /** §19.3 the camera turned on or off in a connected video call (ephemeral). */
+    const val MEDIA = "call_media"
+
     /** Every call envelope type (the `call_` namespace). */
-    val TYPES = setOf(OFFER, RINGING, ANSWER, ACCEPTED, ICE, BUSY, CANCEL, END)
+    val TYPES = setOf(OFFER, RINGING, ANSWER, ACCEPTED, ICE, BUSY, CANCEL, END, MEDIA)
 
     const val MEDIA_AUDIO = "audio"
+    const val MEDIA_VIDEO = "video"
+    val MEDIAS = setOf(MEDIA_AUDIO, MEDIA_VIDEO)
 
     /** §16.2: every call envelope is at most 20 480 bytes. */
     const val MAX_BYTES = 20_480
@@ -86,6 +91,11 @@ object CallEnvelope {
 
     data class Ice(override val callId: String, val toDevice: String?, val candidates: List<Candidate>, val done: Boolean) : Env {
         override val type get() = ICE
+    }
+
+    /** §19.3 `call_media`: the sender's camera is on or off (sent only in a connected video call, to the selected peer device). */
+    data class Media(override val callId: String, val toDevice: String, val camera: Boolean) : Env {
+        override val type get() = MEDIA
     }
 
     data class Busy(override val callId: String) : Env {
@@ -150,6 +160,10 @@ object CallEnvelope {
                 put("done", env.done)
             }
             is Cancel -> put("reason", env.reason)
+            is Media -> {
+                put("to_device", env.toDevice)
+                put("camera", env.camera)
+            }
             is End -> {
                 put("media", env.media)
                 put("reason", env.reason)
@@ -190,7 +204,8 @@ object CallEnvelope {
         callId!!
         return when (type) {
             OFFER -> {
-                if (str("media") != MEDIA_AUDIO) return drop("media")
+                val media = str("media")
+                if (media !in MEDIAS) return drop("media")
                 val sentAt = str("sent_at") ?: return drop("sent_at")
                 if (runCatching { Instant.parse(sentAt) }.isFailure) return drop("sent_at")
                 val restart = when (val r = obj["restart"]) {
@@ -200,15 +215,16 @@ object CallEnvelope {
                 val to = str("to_device")
                 if (restart && !isLowerUuid(to)) return drop("to_device")
                 val sdp = str("sdp") ?: return drop("sdp")
-                SdpRules.validate(sdp, SdpRules.Role.OFFER)?.let { return drop("sdp: $it") }
-                Offer(callId, sdp, sentAt, restart, if (restart) to else null)
+                SdpRules.validate(sdp, SdpRules.Role.OFFER, video = media == MEDIA_VIDEO)?.let { return drop("sdp: $it") }
+                Offer(callId, sdp, sentAt, restart, if (restart) to else null, media!!)
             }
             RINGING -> Ringing(callId)
             ANSWER -> {
                 val to = str("to_device")
                 if (!isLowerUuid(to)) return drop("to_device")
                 val sdp = str("sdp") ?: return drop("sdp")
-                SdpRules.validate(sdp, SdpRules.Role.ANSWER)?.let { return drop("sdp: $it") }
+                // §19.4: a two-m-line answer is judged by the video rules; the call machine checks it matches the offer's media.
+                SdpRules.validate(sdp, SdpRules.Role.ANSWER, video = SdpRules.mLineCount(sdp) == 2)?.let { return drop("sdp: $it") }
                 Answer(callId, to!!, sdp)
             }
             ACCEPTED -> {
@@ -239,12 +255,23 @@ object CallEnvelope {
                 Ice(callId, to, cands, done)
             }
             BUSY -> Busy(callId)
+            MEDIA -> {
+                val to = str("to_device")
+                if (!isLowerUuid(to)) return drop("to_device")
+                val camera = bool("camera") ?: return drop("camera")
+                Media(callId, to!!, camera)
+            }
             CANCEL -> Cancel(callId, str("reason") ?: CANCEL_GLARE)
             END -> {
                 val reason = str("reason") ?: return drop("reason")
                 val connectedAt = str("connected_at")?.takeIf { runCatching { Instant.parse(it) }.isSuccess }
                 val dur = (obj["duration_s"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.takeIf { it >= 0 }
-                End(callId, reason, connectedAt, dur)
+                // §19.3: a video call stays "video" in its call_end; absent (a v1.13 shape) = audio.
+                val media = when (obj["media"]) {
+                    null, JsonNull -> MEDIA_AUDIO
+                    else -> str("media")?.takeIf { it in MEDIAS } ?: return drop("media")
+                }
+                End(callId, reason, connectedAt, dur, media)
             }
             else -> drop("unknown call type $type")
         }

@@ -287,7 +287,7 @@ internal fun GroupMessageList(
                     tail = startsRun(items, i),
                 )
             } else {
-                GroupBubble(
+                val bubble: @Composable () -> Unit = { GroupBubble(
                     item.m,
                     sender = if (showSenderAt(items, i)) nameOf(item.m.from) else null,
                     canAct = !readOnly,
@@ -302,7 +302,21 @@ internal fun GroupMessageList(
                     upload = uploads[item.m.clientMsgId],
                     sharedBy = lk.codegen.risime.ui.history.sharedByLabel(item.m, nameOf),
                     tail = startsRun(items, i),
-                )
+                ) }
+                // §18.6: the sender's photo (or initials) beside incoming group bubbles, on the first of a run.
+                if (!item.m.outgoing) {
+                    Row(verticalAlignment = Alignment.Top) {
+                        if (startsRun(items, i)) {
+                            InitialsAvatar(nameOf(item.m.from), size = 28.dp, photoKey = item.m.from)
+                        } else {
+                            Spacer(Modifier.width(28.dp))
+                        }
+                        Spacer(Modifier.width(Spacing.xs))
+                        Box(Modifier.weight(1f)) { bubble() }
+                    }
+                } else {
+                    bubble()
+                }
             }
         }
     }

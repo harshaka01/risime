@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -198,18 +199,40 @@ private fun CallColumn(content: @Composable androidx.compose.foundation.layout.C
  * caller, Answer asks for the fingerprint first.
  */
 @Composable
-fun IncomingCallScreen(name: String?, onAnswer: () -> Unit, onDecline: () -> Unit, modifier: Modifier = Modifier, photoKey: String? = null) {
+fun IncomingCallScreen(
+    name: String?,
+    onAnswer: () -> Unit,
+    onDecline: () -> Unit,
+    modifier: Modifier = Modifier,
+    photoKey: String? = null,
+    /** §19.6: "Incoming video call" with Answer (camera on), Answer without video and Decline. Null = a voice call. */
+    onAnswerWithoutVideo: (() -> Unit)? = null,
+) {
+    val video = onAnswerWithoutVideo != null && name != null
     Box(modifier) {
         CallBackdrop {
             CallColumn {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CallHeader(name ?: "Incoming RisiMe call", if (name == null) "Unlock RisiMe to see who's calling" else "RisiMe voice call", encrypted = false)
+                    CallHeader(
+                        name ?: "Incoming RisiMe call",
+                        when {
+                            name == null -> "Unlock RisiMe to see who's calling"
+                            video -> "Incoming video call"
+                            else -> "RisiMe voice call"
+                        },
+                        encrypted = false,
+                    )
                     Spacer(Modifier.height(if (LocalCompactCall.current) Spacing.lg else Spacing.xxl))
                     CallAvatar(name, pulse = true, photoKey = photoKey.takeIf { name != null })
                 }
                 Row(Modifier.fillMaxWidth().padding(vertical = Spacing.xl), horizontalArrangement = Arrangement.SpaceEvenly) {
                     RoundAction("Decline", RisiIcons.CallEnd, Red, onDecline)
-                    RoundAction("Answer", Icons.Default.Call, Green, onAnswer)
+                    if (video) {
+                        RoundAction("Answer without video", RisiIcons.VideocamOff, Green, onAnswerWithoutVideo!!)
+                        RoundAction("Answer", RisiIcons.Videocam, Green, onAnswer)
+                    } else {
+                        RoundAction("Answer", Icons.Default.Call, Green, onAnswer)
+                    }
                 }
             }
         }
@@ -218,7 +241,7 @@ fun IncomingCallScreen(name: String?, onAnswer: () -> Unit, onDecline: () -> Uni
 
 @Composable
 private fun RoundAction(label: String, icon: ImageVector, color: Color, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.widthIn(max = 104.dp)) {
         FilledIconButton(
             onClick = onClick,
             modifier = Modifier.size(72.dp).semantics { contentDescription = label },
@@ -226,13 +249,42 @@ private fun RoundAction(label: String, icon: ImageVector, color: Color, onClick:
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = color, contentColor = Color.White),
         ) { Icon(icon, null, Modifier.size(32.dp)) }
         Spacer(Modifier.height(Spacing.sm))
-        Text(label, style = MaterialTheme.typography.labelLarge, color = Color.White)
+        Text(label, style = MaterialTheme.typography.labelLarge, color = Color.White, textAlign = TextAlign.Center)
+    }
+}
+
+/**
+ * §19.5 the GO UX video slot: the peer full-screen (or their avatar on `camera: false` and after
+ * 3 s without a frame), my camera as a small picture-in-picture while it runs.
+ */
+@Composable
+fun VideoCallStage(
+    showPeer: Boolean,
+    showLocal: Boolean,
+    name: String,
+    photoKey: String?,
+    remote: @Composable (Modifier) -> Unit,
+    local: @Composable (Modifier) -> Unit,
+) {
+    Box(Modifier.fillMaxSize()) {
+        remote(Modifier.fillMaxSize())
+        if (!showPeer) {
+            Box(Modifier.fillMaxSize().semantics { contentDescription = "$name's camera is off" }, contentAlignment = Alignment.Center) {
+                CallAvatar(name, pulse = false, photoKey = photoKey)
+            }
+        }
+        if (showLocal) {
+            local(
+                Modifier.align(Alignment.TopEnd).safeDrawingPadding().padding(Spacing.md)
+                    .size(width = 104.dp, height = 148.dp).clip(RoundedCornerShape(16.dp)),
+            )
+        }
     }
 }
 
 /** A round call control: frosted when off, white when on (speaker, muted). */
 @Composable
-private fun CallControl(
+internal fun CallControl(
     label: String,
     description: String,
     icon: ImageVector,
@@ -378,7 +430,7 @@ private fun RouteControl(ui: InCallUi, onEndpoint: (EndpointUi) -> Unit) {
 
 /** A §16.6 call-history line in a DM: centred, muted; tap → "Call back", long-press menu "Delete for me". */
 @Composable
-fun CallLineRow(text: String, missed: Boolean, onCallBack: (() -> Unit)?, onDeleteForMe: (() -> Unit)?) {
+fun CallLineRow(text: String, missed: Boolean, onCallBack: (() -> Unit)?, onDeleteForMe: (() -> Unit)?, onVideoCallBack: (() -> Unit)? = null) {
     var menu by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Surface(
@@ -388,14 +440,15 @@ fun CallLineRow(text: String, missed: Boolean, onCallBack: (() -> Unit)?, onDele
             modifier = Modifier.padding(vertical = Spacing.xxs),
         ) {
             Text(
-                "📞 $text",
+                (if (lk.codegen.risime.calls.CallLines.isVideo(text)) "📹 " else "📞 ") + text,
                 modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs),
                 style = MaterialTheme.typography.labelLarge,
                 color = if (missed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         DropdownMenu(menu, onDismissRequest = { menu = false }) {
-            onCallBack?.let { DropdownMenuItem(text = { Text("Call back") }, onClick = { menu = false; it() }) }
+            onVideoCallBack?.let { DropdownMenuItem(text = { Text("Video call back") }, onClick = { menu = false; it() }) }
+            onCallBack?.let { DropdownMenuItem(text = { Text(if (onVideoCallBack != null) "Voice call back" else "Call back") }, onClick = { menu = false; it() }) }
             onDeleteForMe?.let { DropdownMenuItem(text = { Text("Delete for me") }, onClick = { menu = false; it() }) }
         }
     }

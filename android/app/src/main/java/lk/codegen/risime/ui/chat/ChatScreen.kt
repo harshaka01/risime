@@ -128,6 +128,12 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 titleClickLabel = "Chat info",
                 actions = {
                     val callsReady by vm.calls.callsReady.collectAsStateWithLifecycle()
+                    val videoReady by vm.calls.videoReady.collectAsStateWithLifecycle()
+                    VideoHeaderButton(
+                        blocked = vm.calls.videoBlockedText(encrypted, callsReady, videoReady, name),
+                        onBlocked = { t -> vm.imgs.toast.value = t; vm.calls.refresh() },
+                        onVideoCall = vm::startVideoCall,
+                    )
                     CallHeaderButton(
                         blocked = vm.calls.blockedText(encrypted, callsReady, name),
                         onBlocked = { t -> vm.imgs.toast.value = t; vm.calls.refresh() },
@@ -155,6 +161,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                     is ChatItem.Day -> DaySeparator(item.label)
                     is ChatItem.Msg -> DmMessageRow(
                         item.m, onCallBack = vm::startCall.takeIf { isFriend }, onDeleteForMe = vm::deleteCallLine,
+                        onVideoCallBack = { vm.startVideoCall(vm.calls.hasCamera()) }.takeIf { isFriend },
                         historyMarker = if (lk.codegen.risime.BuildConfig.HISTORY_SHARE_ENABLED) ({ m ->
                             lk.codegen.risime.ui.history.HistoryMarkerRow(m.body, historyMarker, vm.conversationId, vm.me, name, vm::requestHistory, vm::escalateHistory)
                         }) else null,
@@ -226,6 +233,8 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
 internal fun DmMessageRow(
     m: MessageEntity,
     onCallBack: (() -> Unit)? = null,
+    /** §19.3: "Call back" on a video line offers a video call (or voice). */
+    onVideoCallBack: (() -> Unit)? = null,
     onDeleteForMe: ((String) -> Unit)? = null,
     /** §17.12: the gap marker carries "Request history" (null: a plain line). */
     historyMarker: (@Composable (MessageEntity) -> Unit)? = null,
@@ -236,8 +245,9 @@ internal fun DmMessageRow(
         m.system -> lk.codegen.risime.ui.common.SystemLineText(m.body)
         // §16.6 a call-history line: centred, "Call back", only "Delete for me", no reactions.
         m.call -> lk.codegen.risime.calls.CallLineRow(
-            m.body, missed = !m.outgoing && m.body == lk.codegen.risime.calls.CallLines.MISSED,
+            m.body, missed = !m.outgoing && lk.codegen.risime.calls.CallLines.isMissed(m.body),
             onCallBack = onCallBack, onDeleteForMe = onDeleteForMe?.let { f -> { f(m.clientMsgId) } },
+            onVideoCallBack = onVideoCallBack.takeIf { lk.codegen.risime.calls.CallLines.isVideo(m.body) },
         )
         else -> bubble()
     }

@@ -152,7 +152,7 @@ class CallNotifications(private val context: Context) {
     }
 
     @Suppress("MissingPermission")
-    fun postMissed(conversationId: String, name: String) {
+    fun postMissed(conversationId: String, name: String, video: Boolean = false) {
         if (!notificationsAllowed()) return
         ensureChannels()
         val open = Intent(context, MainActivity::class.java)
@@ -163,8 +163,8 @@ class CallNotifications(private val context: Context) {
             code,
             NotificationCompat.Builder(context, CH_MISSED)
                 .setSmallIcon(R.drawable.ic_stat_risime)
-                .setContentTitle("Missed call from $name")
-                .setContentText("Voice call")
+                .setContentTitle(if (video) "Missed video call from $name" else "Missed call from $name")
+                .setContentText(if (video) "Video call" else "Voice call")
                 .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
                 .setAutoCancel(true)
                 .setContentIntent(PendingIntent.getActivity(context, code, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))

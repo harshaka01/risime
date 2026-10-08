@@ -138,7 +138,7 @@ class HistoryImporter(
                     if (end == null || !c.own) { skip("malformed"); continue }
                     if (messages.callLine(conv, end.callId) != null) { skip("existing_row"); done += id; continue }
                     kind = MessageEntity.KIND_CALL
-                    body = lk.codegen.risime.calls.CallLines.line(end.reason, outgoing, end.durationS, false).text
+                    body = lk.codegen.risime.calls.CallLines.line(end.reason, outgoing, end.durationS, false, end.media == lk.codegen.risime.calls.CallEnvelope.MEDIA_VIDEO).text
                     systemJson = ProtocolJson.encodeToString(JsonObject.serializer(), e.payload)
                     callId = end.callId
                 }

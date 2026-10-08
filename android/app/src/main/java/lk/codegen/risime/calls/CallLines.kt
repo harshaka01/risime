@@ -8,15 +8,30 @@ object CallLines {
     const val MISSED = "Missed voice call"
     const val VOICE_CALL = "Voice call"
 
+    /** §19.3 the video lines. */
+    const val MISSED_VIDEO = "Missed video call"
+    const val VIDEO_CALL = "Video call"
+
     data class Line(val text: String, val missed: Boolean)
 
-    fun line(reason: String, senderIsMe: Boolean, durationS: Long?, rangUnanswered: Boolean): Line = when (reason) {
-        CallEnvelope.R_HANGUP -> Line(durationS?.let { "$VOICE_CALL · ${duration(it)}" } ?: VOICE_CALL, false)
-        CallEnvelope.R_CANCELLED, CallEnvelope.R_TIMEOUT, CallEnvelope.R_BUSY ->
-            if (senderIsMe) Line("$VOICE_CALL · No answer", false) else Line(MISSED, true)
-        CallEnvelope.R_DECLINED -> if (senderIsMe) Line("Declined voice call", false) else Line("$VOICE_CALL · Declined", false)
-        CallEnvelope.R_FAILED -> if (rangUnanswered) Line(MISSED, true) else Line("$VOICE_CALL · Couldn't connect", false)
-        else -> Line(VOICE_CALL, false)
+    /** Is this stored line a missed call (voice or video)? */
+    fun isMissed(body: String): Boolean = body == MISSED || body == MISSED_VIDEO
+
+    /** Is this stored line a video call's (so "Call back" offers video)? */
+    fun isVideo(body: String): Boolean = body.startsWith(VIDEO_CALL) || body == MISSED_VIDEO || body == "Declined video call"
+
+    fun line(reason: String, senderIsMe: Boolean, durationS: Long?, rangUnanswered: Boolean, video: Boolean = false): Line {
+        val call = if (video) VIDEO_CALL else VOICE_CALL
+        val missed = if (video) MISSED_VIDEO else MISSED
+        val kind = if (video) "video" else "voice"
+        return when (reason) {
+            CallEnvelope.R_HANGUP -> Line(durationS?.let { "$call · ${duration(it)}" } ?: call, false)
+            CallEnvelope.R_CANCELLED, CallEnvelope.R_TIMEOUT, CallEnvelope.R_BUSY ->
+                if (senderIsMe) Line("$call · No answer", false) else Line(missed, true)
+            CallEnvelope.R_DECLINED -> if (senderIsMe) Line("Declined $kind call", false) else Line("$call · Declined", false)
+            CallEnvelope.R_FAILED -> if (rangUnanswered) Line(missed, true) else Line("$call · Couldn't connect", false)
+            else -> Line(call, false)
+        }
     }
 
     /** "0:07", "3:12", "1:02:03". */
@@ -40,15 +55,15 @@ interface CallHooks {
     /** The batch (join/sync page or live burst) is applied: ring for offers still incoming. */
     suspend fun onPageEnd()
 
-    /** A new "Missed voice call" line arrived live (not a replay): notify "Missed call from <name>". */
-    fun onMissedCall(conversationId: String, from: String) = Unit
+    /** A new "Missed voice call" line arrived live (not a replay): notify "Missed call from <name>" ("Missed video call from <name>"). */
+    fun onMissedCall(conversationId: String, from: String, video: Boolean = false) = Unit
 }
 
 /** The app's [CallHooks]: the state machine plus the persisted marks. */
 class MachineCallHooks(
     private val machine: () -> CallStateMachine?,
     private val marks: CallMarks,
-    private val missed: (conversationId: String, from: String) -> Unit = { _, _ -> },
+    private val missed: (conversationId: String, from: String, video: Boolean) -> Unit = { _, _, _ -> },
 ) : CallHooks {
     override suspend fun rangUnanswered(callId: String): Boolean = marks.get(callId)?.let { it.rang && !it.answered } == true
 
@@ -65,5 +80,5 @@ class MachineCallHooks(
         machine()?.onPageEnd()
     }
 
-    override fun onMissedCall(conversationId: String, from: String) = missed(conversationId, from)
+    override fun onMissedCall(conversationId: String, from: String, video: Boolean) = missed(conversationId, from, video)
 }
