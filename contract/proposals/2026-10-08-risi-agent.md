@@ -1,6 +1,6 @@
 # Proposal: §24 The Risi agent (v1.24): Risi v1, stage 0.5
 
-Status: **proposed, waiting for Harsha** (golden rule 1). Root writes PROTOCOL §24 after approval.
+Status: **superseded** by `2026-10-08-two-tabs-risi.md` (Harsha chose the two-tab model). (golden rule 1). Root writes PROTOCOL §24 after approval.
 Plan by the orchestrator (2026-10-08). Server placement goes into decision 065 once approved (063 push watchdog, 064 token storage).
 
 ## Goal
