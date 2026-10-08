@@ -311,7 +311,60 @@ All additive. The MLS exporter output (`call_secret`) never crosses the FFI; onl
   bad input, no state change; `risime-mls-ffi/tests/calls`: the flow across the FFI, the vectors,
   and that no exporter output is exported.
 
-## Tests (`cargo test`: 108 core + 2 ignored generators, 10 FFI)
+## Backup API (contract v1.22 §22, decision 059; crypto review C1–C9): `risime_mls::backup`
+All additive. `BK`, `KEK` and `DEK` never cross the FFI (no call returns or takes them); `R` crosses
+only as its display string; all randomness (`BK`, `R`, `DEK`, salts, nonces) comes from the OS
+CSPRNG inside the core. Argon2id (64 MiB, t 3, p 1; ≈ 85 ms on spark2, 0.5–1 s on a phone) runs in
+`backupSetup` (unless the stored record already matches), `backupAddPassphrase`, `backupUnlock` and
+`backupRotateRecoveryKey`: call them off the main thread (they hold the client's lock).
+
+| Core call (Kotlin name) | What it does |
+|---|---|
+| `backup_setup(user_id)` (`backupSetup`) | Makes `BK` + `R`, or reuses the stored pair (also a silent one made for local backups): returns `{recoveryKey, keyRecord}` (record = `recovery_key` wrap, plus a stored passphrase wrap of the same `BK`). Stored in `mls_kv` in the caller's transaction. A stored `BK` without `R` (a passphrase unlock) gets a new `R` |
+| `backup_add_passphrase(user_id, passphrase)` (`backupAddPassphrase`) | Adds/replaces the passphrase wrap; returns the record for `PUT` (same `bk_id`). Enforces 14 code points or 4 words of 3+ (`WeakPassphrase`) |
+| `backup_unlock(user_id, key_record, secret, kind, make_current)` (`backupUnlock`) | Parses the record (`Malformed`: shape, lengths, KDF ≠ argon2id/65536/3/1; `Unsupported`: `v` ≠ 1), the secret (`Typo`/`Malformed`), Argon2id, key check (`WrongKey`), AEAD (`Integrity`), `bk_id` (`Integrity`). `make_current`: `BK` becomes the account key (the previous one is kept as an older key), the record is stored, and `R` for a recovery key (a passphrase unlock keeps a stored `R` only when the record's recovery wrap is the stored one). Without it the key is only kept as an older key (a file with another `bk_id`). Returns `bk_id` (base64) |
+| `backup_recovery_key()` (`backupRecoveryKey`) | The stored `R`'s display form, or null |
+| `backup_rotate_recovery_key(user_id)` (`backupRotateRecoveryKey`) | New `R`, same `BK`, passphrase wrap kept |
+| `backup_forget()` (`backupForget`) | Deletes `BK`, older `BK`s, `R`, the record. Idempotent |
+| `backup_key_record()` / `backup_key_ids()` / `backup_drop_key(bk_id)` | The stored record; `{current, old}` `bk_id`s; drop an older key once no local file needs it (the current one: `Malformed`) |
+| `backup_writer(user_id, backup_id, created_at, app_version, key_record?, out_path)` (`backupWriter` → `BackupWriter.write(bytes)` / `finish()`) | A fresh `DEK`; the header carries `key_record` (null: the stored record, or `key: null` without one), whose `bk_id` picks the local `BK` (`NoKey`). `write` takes the app's DEFLATE output in any split; `finish` pads (Padmé), seals the final chunk, fsyncs and renames: `{backupId, bkId, size, sha256, dataSize}` for `POST /backups`. A failed writer is dead (start a new `backup_id`); an unfinished one leaves no file |
+| `backup_reader(user_id, in_path, expected_backup_id?, expected_bk_id?)` (`backupReader` → `BackupReader.info()` / `verify()` / `read()`) | §22.4 opening order: magic/version/`header_len` (`Format`), `v`/`schema`/algs (`Unsupported`), `user_id` (`WrongAccount`, nothing more read), the listing's ids (`Integrity`), the local `BK` (`NoKey`: unlock first), the `DEK` (`Integrity`). `verify` = the whole pass (every chunk and flag: `Integrity`; DEFLATE end found with miniz_oxide, zero padding and `|P| = Padmé(|D|)`: `Format`). `read` (only after `verify`) returns **`D`** (the DEFLATE stream, padding stripped) in ≤ 64 KiB pieces, re-authenticating each chunk; a file changed since `verify` is `Integrity` |
+| `file_info(path)` (`backupFileInfo`) | The header without a key (restore screen; `keyRecord` to unlock a file). Unauthenticated |
+| `normalize_recovery_key(input)` / `passphrase_floor(p, phone?)` (`backupNormalizeRecoveryKey` / `backupPassphraseFloor`) | Live input checks: display form or `Typo`/`Malformed`; `Ok`/`TooShort`/`PhoneNumber` (6+ consecutive digits of the phone number). The app adds the common-password list |
+| `check_vectors(json)` (`backupVectorsCheck`) | **Test support:** every case of `contract/v1/backup_vectors.json` (44) |
+
+- **Format** exactly §22.2/§22.4: `RISIMEBK` ‖ 0x01 ‖ u32 `header_len` ‖ compact JSON header ‖
+  chunks of 64 KiB of `P` under `Ks = HKDF(DEK, "risime-backup-v1 stream")`, nonce `0×7 ‖ u32 i ‖
+  flag`, AAD `"risime-backup-v1" ‖ header_hash ‖ u32 i ‖ flag`. Keys in `mls_kv`:
+  `risime/backup/{bk,recovery,record}`, older keys `risime/backup/old/<bk_id hex>` + index
+  `risime/backup/old-index`.
+- **Recovery key:** 7 groups of 4 Crockford characters; input case-insensitive, white space and
+  `-` ignored, `O`→0, `I`/`L`→1. **Passphrase bytes:** NFKC, then Unicode `White_Space` trimmed.
+- **Errors** (`BackupError`, Kotlin `RisiBackupException`): `Typo`, `WrongKey`, `Integrity`,
+  `Format`, `Malformed`, `Unsupported`, `WrongAccount`, `NoKey`, `WeakPassphrase`, `Io`, `Storage`.
+- **Vectors:** `contract/v1/backup_vectors.json` (4 recovery-key, 3 Argon2id, 2 wrap, 1 DEK, 4
+  stream, 30 negative) is written by `cargo test -p risime-mls backup_vectors_write -- --ignored`
+  and, independently, by `scripts/gen-backup-vectors` (Python `cryptography` + `argon2-cffi`;
+  `--check` verifies every case and compares the file byte for byte). `backup_vectors_match_the_contract`
+  fails on any difference. The §22.9 stream sizes 1/65 536/65 537/200 000 are `|D|` (`|P|` = 1,
+  65 536, 67 584, 200 704: 65 537 and 200 000 aren't Padmé values).
+
+### Decision note: new core dependencies (for root, decision 059)
+Contract v1.22 §22 adds three pure-Rust crates to `risime-mls` (no C code, no `build.rs`
+toolchain needs, all already maintained by large ecosystems):
+- **`argon2` 0.5.3** (RustCrypto; with `blake2` 0.10, `base64ct`), `default-features = false`,
+  features `alloc` + `zeroize`: Argon2id v0x13 for the `KEK`. Cross-checked against argon2-cffi
+  (the C reference implementation) by the vectors. The workspace builds `argon2`/`blake2` at
+  `opt-level = 3` in dev profiles so debug tests stay fast.
+- **`miniz_oxide` 0.8** (with `adler2`): raw DEFLATE inflate in the verify pass, only to find the
+  end of `D` and check the zero padding (output discarded, constant memory). Tests also use it to
+  deflate. The app keeps `java.util.zip.Deflater/Inflater` for the bundle itself.
+- **`unicode-normalization` 0.1.25** (with `tinyvec`): NFKC of passphrases inside the core, so
+  every platform derives the same `KEK`.
+Rejected: `scrypt`/PBKDF2 (the contract fixes Argon2id), the C `libargon2` (C in the tree), `flate2`
+(a wrapper over the same `miniz_oxide`).
+
+## Tests (`cargo test`: 136 core + 4 ignored generators, 16 FFI)
 - **`groups`** (v1.9): create/join with PrivateMessage handshakes and meta; DM and group APIs
   don't mix; 0xFA01 key packages (a legacy key package is refused); admin adds/removes users and
   removed devices are locked out; members manage only their own devices; **peers reject
@@ -406,6 +459,24 @@ All additive. The MLS exporter output (`call_secret`) never crosses the FFI; onl
   - `risime-mls-ffi/tests/history`: the flow across the FFI, the contract vectors through
     `historyVectorsCheck`, and a check that no exported history function or record carries `rsk`
     or `K`.
+
+- **`backup`** (v1.22):
+  - unit (`backup`): the contract vectors equal the generator's and all 44 cases pass, altered
+    vectors are rejected, recovery-key format (every single-character substitution is a `Typo`,
+    confusables, lengths), NFKC + trim and the floor, key-record shapes (the contract examples
+    parse; KDF/kind/length/count violations), writer/reader round trips at chunk edges with real
+    DEFLATE (0 B … 1.1 MB, odd write sizes), an empty bundle and a failed or dropped writer leave
+    no file, **every tamper case** (header byte, swapped/dropped chunks, truncation at a boundary
+    and mid-chunk, appended bytes, wrong magic, last flag stripped, final flag early or on chunk 0,
+    a wrong `user_id` in the DEK AAD, another account's header, nonzero padding, non-DEFLATE,
+    over-padding), `read` before `verify` and a file changed after it, listing checks and
+    `NoKey`, **a caller rollback leaves no `BK`**, older keys by `bk_id` and `make_current`;
+  - `tests/backup_v122.rs`: setup reuse, passphrase add (floor) and restore on a new device
+    (`WrongKey`, `Typo`, `Malformed`), restore from the file header's record alone, a record of
+    another user (`Integrity`), rotation (same `bk_id`, passphrase wrap kept, old record still
+    opens old files), `R` kept or dropped on a passphrase unlock, Argon2id timing;
+  - `risime-mls-ffi/tests/backup`: the flow across the FFI, the contract vectors through
+    `backupVectorsCheck`, and the export list (no `BK`/`KEK`/`DEK` field or function).
 
 ## Contract fixtures
 ```sh

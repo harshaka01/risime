@@ -31,6 +31,7 @@
 pub mod aad;
 mod admins;
 pub mod attestation;
+pub mod backup;
 pub mod call;
 pub mod group;
 pub mod history;
