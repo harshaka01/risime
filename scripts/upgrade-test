@@ -613,9 +613,14 @@ PY
     step "send a photo in the group after the upgrade"
     push_photo
     blobs_before="$(field "$(srv blobs)" blobs)"
-    hide_keyboard; tap "Attach photo" || fail "no Attach photo button in the group"
+    # nightly.27+: the "+" button ("Attach") opens the attach sheet, then "Gallery" opens the
+    # multi-select Photo Picker (its "Add" button confirms). An old app had one "Attach photo".
+    hide_keyboard
+    if has "Attach photo"; then tap "Attach photo"
+    else tap "Attach" || fail "no Attach button in the group"; wait_for "Gallery" 10 && tap "Gallery" || fail "the attach sheet has no Gallery"; fi
     wait_for "Photo taken on" 20 || fail "the Photo Picker didn't show the pushed photo"
     tap "~Photo taken on" || fail "could not pick the photo"
+    if ! wait_for "Send photo" 5; then dump; tap "~Add" >/dev/null || tap "Done" >/dev/null || true; fi
     wait_for "Send photo" 20 || fail "the attach sheet didn't open"
     for _ in $(seq 1 10); do tap "^Send" >/dev/null || true; sleep 2; has "Send photo" || break; done
     has "Send photo" && fail "the attach sheet's Send didn't go through"
