@@ -110,4 +110,83 @@ defmodule RisiMeWeb.SocketE2ETest do
     assert {:error, 403} =
              upgrade(port, [{"authorization", "Bearer " <> access_token("x@example.com")}])
   end
+
+  # Next ping or close frame (the push watchdog's probe), skipping text frames.
+  defp recv_control(s) do
+    receive do
+      msg ->
+        {:ok, conn, responses} = Mint.WebSocket.stream(s.conn, msg)
+        s = %{s | conn: conn}
+
+        frames =
+          for {:data, _, data} <- responses, reduce: [] do
+            acc ->
+              {:ok, _ws, fs} = Mint.WebSocket.decode(s.ws, data)
+              acc ++ fs
+          end
+
+        case Enum.find(frames, &(elem(&1, 0) in [:ping, :close])) do
+          nil -> recv_control(s)
+          {:ping, data} -> {s, {:ping, data}}
+          _close -> {s, :close}
+        end
+    after
+      5_000 -> flunk("no control frame")
+    end
+  end
+
+  defp send_control(s, frame) do
+    {:ok, ws, data} = Mint.WebSocket.encode(s.ws, frame)
+    {:ok, conn} = Mint.WebSocket.stream_request_body(s.conn, s.ref, data)
+    %{s | ws: ws, conn: conn}
+  end
+
+  describe "push watchdog over a real socket" do
+    setup do
+      test_push!()
+      Application.put_env(:risime, :push_watchdog_ms, 300)
+      on_exit(fn -> Application.put_env(:risime, :push_watchdog_ms, nil) end)
+
+      entry = allowlist_entry()
+      token = access_token(entry.email)
+      {:ok, %{user: user}} = RisiMe.Auth.authenticate(token)
+      device_id = Ecto.UUID.generate()
+      push = push_token("tok-e2e")
+
+      {:ok, nil} =
+        RisiMe.Devices.register(user.id, device_id, %{
+          "platform" => "android",
+          "push_token" => push
+        })
+
+      %{token: token, user: user, device_id: device_id, push: push}
+    end
+
+    defp join(ctx) do
+      path = "/socket/websocket?vsn=2.0.0&device_id=" <> ctx.device_id
+      {:ok, s} = upgrade(ctx.port, [{"authorization", "Bearer " <> ctx.token}], path)
+      s = send_frame(s, ["1", "1", "inbox:" <> ctx.user.id, "phx_join", %{}])
+      {s, ["1", "1", _, "phx_reply", %{"status" => "ok"}]} = recv_frame(s)
+      s
+    end
+
+    test "the pong (the client's WebSocket layer answers it) holds the push", ctx do
+      s = join(ctx)
+      RisiMe.Push.notify(ctx.user.id)
+      {s, {:ping, data}} = recv_control(s)
+      assert byte_size(data) == 8
+      _s = send_control(s, {:pong, data})
+      push = ctx.push
+      refute_receive {:push, ^push, _}, 700
+    end
+
+    test "no pong: the push goes out and the dead socket is closed", ctx do
+      s = join(ctx)
+      RisiMe.Push.notify(ctx.user.id)
+      {s, {:ping, _data}} = recv_control(s)
+      push = ctx.push
+      assert_receive {:push, ^push, %{"type" => "inbox"}}, 1_000
+      assert {_s, :close} = recv_control(s)
+    end
+  end
 end

@@ -25,10 +25,24 @@ defmodule RisiMe.Presence do
 
   @doc """
   Registers the calling inbox channel process as `user_id` being online, and (v1.9) its
-  `device_id` as connected, for committer naming (§12.4).
+  `device_id` as connected, for committer naming (§12.4). `transport_pid` (the websocket
+  process) lets the push watchdog probe the connection (`RisiMe.Push.Dispatcher`).
   """
-  def track(user_id, device_id \\ nil),
-    do: GenServer.call(__MODULE__, {:track, user_id, device_id, self()})
+  def track(user_id, device_id \\ nil, transport_pid \\ nil),
+    do: GenServer.call(__MODULE__, {:track, user_id, device_id, self(), transport_pid})
+
+  @doc """
+  The user's joined inbox channels on this node as `{channel_pid, device_id, transport_pid}`.
+  No grace period: `[]` while only the offline grace keeps the user "online".
+  """
+  def connections(user_id) do
+    case :ets.lookup(@table, {:conns, user_id}) do
+      [{_, conns}] -> conns
+      [] -> []
+    end
+  rescue
+    ArgumentError -> []
+  end
 
   @doc "True while the device has a joined inbox channel on this node (no grace period)."
   def device_online?(nil), do: false
@@ -89,8 +103,10 @@ defmodule RisiMe.Presence do
   end
 
   @impl true
-  def handle_call({:track, user_id, device_id, pid}, _from, monitors) do
+  def handle_call({:track, user_id, device_id, pid, transport_pid}, _from, monitors) do
     ref = Process.monitor(pid)
+    conns = [{pid, device_id, transport_pid} | connections(user_id)]
+    :ets.insert(@table, {{:conns, user_id}, conns})
 
     if device_id,
       do: :ets.update_counter(@table, {:device, device_id}, {2, 1}, {{:device, device_id}, 0})
@@ -113,8 +129,9 @@ defmodule RisiMe.Presence do
   end
 
   @impl true
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, monitors) do
+  def handle_info({:DOWN, ref, :process, pid, _reason}, monitors) do
     {{user_id, device_id}, monitors} = Map.pop(monitors, ref, {nil, nil})
+    if user_id, do: drop_connection(user_id, pid)
 
     if device_id do
       key = {:device, device_id}
@@ -148,6 +165,13 @@ defmodule RisiMe.Presence do
     end
 
     {:noreply, monitors}
+  end
+
+  defp drop_connection(user_id, pid) do
+    case Enum.reject(connections(user_id), &(elem(&1, 0) == pid)) do
+      [] -> :ets.delete(@table, {:conns, user_id})
+      conns -> :ets.insert(@table, {{:conns, user_id}, conns})
+    end
   end
 
   defp publish(user_id, presence) do

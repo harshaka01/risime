@@ -60,6 +60,10 @@ config :risime, :push_coalesce_ms, 300
 # v1.13 §16.8: the 3-s call fallback push, shortened for tests.
 config :risime, :call_fallback_ms, 200
 config :risime, :push_retry_ms, 10
+# Push watchdog (ping/pong probe of joined sockets): off unless a test turns it on (a
+# ChannelTest "transport" is the test process and never answers a ping).
+config :risime, :push_watchdog_ms, nil
+config :risime, :push_call_watchdog_ms, nil
 config :risime, :fcm, req_options: [plug: {Req.Test, RisiMe.FCM}]
 
 # E2EE: off unless a test installs a temp attestation key (RisiMe.MLSHelpers).

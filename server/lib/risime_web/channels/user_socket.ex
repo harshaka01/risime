@@ -82,4 +82,17 @@ defmodule RisiMeWeb.UserSocket do
 
   @impl true
   def id(socket), do: socket.assigns.socket_id
+
+  @doc """
+  WebSock control frames (Bandit calls this when it is exported; it answers pings itself).
+  A pong answers a push-watchdog ping (`RisiMe.Push.Dispatcher`): the client has read every
+  frame sent before it.
+  """
+  @impl true
+  def handle_control({data, opcode: :pong}, state) do
+    RisiMe.Push.Dispatcher.pong(data)
+    {:ok, state}
+  end
+
+  def handle_control(_frame, state), do: {:ok, state}
 end

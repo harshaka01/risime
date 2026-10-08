@@ -354,18 +354,23 @@ defmodule RisiMe.Calls do
 
   # Server S6: the call push at once to every `group_calls` device of the other members without
   # a live inbox channel; no 3-s fallback in groups.
+  # A "live" device's socket is probed (`Push.Dispatcher.watch_call/2`): no pong within 4 s
+  # (a half-open socket) → its call push after all.
   defp group_ring(req, others) do
-    tokens =
-      for u <- others,
-          {d, tok} <- Devices.calls_push_targets(u, "group_calls"),
-          not Presence.device_online?(d),
-          do: tok
+    targets =
+      for u <- others, {d, tok} <- Devices.calls_push_targets(u, "group_calls"), do: {u, d, tok}
+
+    {live, offline} = Enum.split_with(targets, fn {_, d, _} -> Presence.device_online?(d) end)
 
     Logger.info(
-      "call ring: call=#{req.call_id} conv=#{req.conv} members=#{length(others)} push_now=#{length(tokens)}"
+      "call ring: call=#{req.call_id} conv=#{req.conv} members=#{length(others)} push_now=#{length(offline)} live=#{length(live)}"
     )
 
-    RisiMe.Push.Dispatcher.push_call(tokens)
+    RisiMe.Push.Dispatcher.push_call(for {_, _, tok} <- offline, do: tok)
+
+    for {u, list} <- Enum.group_by(live, &elem(&1, 0), &{elem(&1, 1), elem(&1, 2)}),
+        do: RisiMe.Push.Dispatcher.watch_call(u, list)
+
     :ok
   end
 

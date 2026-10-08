@@ -13,8 +13,40 @@ reinstall, §13, decision 043), **v1.11** (encrypted images, §14, decision 042)
 (reinstalls without reset, stale leaves, §12.12, decision 060), **v1.22** (encrypted backups,
 §22, decision 059) and **v1.23** (mid-call switching and screen sharing, §23, decision 062) are done, plus the group-readiness hotfix and the two §14 fixes root decided.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(616 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
+(634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
+
+## P0 push watchdog (dead-but-joined sockets) — READY (no wire change, no proposal)
+- **Problem:** a phone that loses its network without a close stays joined (presence "online")
+  until the websocket timeout (60 s); `Push.Dispatcher.notify/1` skipped every push meanwhile.
+- **Ack signal checked:** `msg:ack` is per user (not per device), only for messages, and sent by
+  the app after storing; no per-device cursor reaches the server. So the probe is the **WebSocket
+  ping** (RFC 6455 control frame; OkHttp and browsers answer it themselves, so no client change).
+- **Mechanism (`RisiMe.Push.Dispatcher`):** for a user with joined inbox channels
+  (`Presence.connections/1`: `{channel, device_id, transport}`), each channel is asked to send a
+  ping (8 random bytes) after the events it pushed (sent from the channel process, so it follows
+  them on the wire). The pong (`RisiMeWeb.UserSocket.handle_control/2`, called by Bandit) clears
+  it and logs the old `push: skipped kind=inbox … reason=online` line. No pong within
+  `:push_watchdog_ms` (8 s) → `push: watchdog kind=inbox user=<hash8> device=<id8> waited_ms=…`,
+  the push to **that device's** token (a legacy socket without device id: all the user's tokens),
+  the watchdog push counts for the user's 10-s coalescing window, and the dead socket is closed
+  (`disconnect`), so presence drops and later events take the offline path at once (a live but
+  slow client just reconnects). One ping per connection at a time; an event meanwhile re-pings on
+  its pong, so the last event is always covered and a burst costs one ping and at most one push.
+- **§8.0 "no live inbox channel":** the 5-s presence grace alone no longer holds a push (before,
+  an event in the 5 s after the app closed its socket was never pushed).
+- **Calls:** 1:1 rings already have the §16.8 3-s fallback for live devices (unchanged). Group
+  rings (no fallback) now probe each live callee device: no pong within `:push_call_watchdog_ms`
+  (4 s) → that device's call push (`push: watchdog kind=call …`). Ring log gains `live=N`.
+- **Websocket timeout:** left at Phoenix's 60 s. The Android heartbeat is 30 s, and anything
+  below ~2× would drop healthy sockets on one late heartbeat; the watchdog makes the timeout
+  irrelevant for pushes.
+- Both settings `nil` in `config/test.exs` (a ChannelTest transport is the test process); tests
+  turn them on. Tests: `push_watchdog_test.exs` (dead socket → push after the watchdog + close,
+  pong → no push, burst → one ping and one push, event during an answered ping → re-ping,
+  unknown/late pong, grace → immediate push, off, call watchdog) and two real-socket tests in
+  `socket_e2e_test.exs` (Bandit + Mint: the ping frame arrives, a pong holds the push, no pong →
+  push + close frame).
 
 ## v1.23 mid-call switching and screen sharing (§23) — READY
 - **No migration, no env, no storage.** 1:1 needs nothing beyond the capabilities (server S1):

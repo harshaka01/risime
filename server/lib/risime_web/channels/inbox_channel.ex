@@ -36,7 +36,7 @@ defmodule RisiMeWeb.InboxChannel do
       case page(socket, payload) do
         {:ok, reply} ->
           :telemetry.execute([:risime, :inbox, :join], %{count: 1}, %{result: :ok})
-          :ok = Presence.track(user_id, socket.assigns[:device_id])
+          :ok = Presence.track(user_id, socket.assigns[:device_id], socket.transport_pid)
           if socket.assigns.groups, do: name_committer(user_id, socket.assigns.device_id)
           if socket.assigns[:device_id], do: name_dm_committer(user_id, socket.assigns.device_id)
           if socket.assigns.history, do: name_history(user_id, socket.assigns.device_id)
@@ -199,6 +199,14 @@ defmodule RisiMeWeb.InboxChannel do
   @impl true
   def handle_info({:inbox_event, event}, socket) do
     if visible?(socket, event), do: push(socket, "event", event)
+    {:noreply, socket}
+  end
+
+  # Push watchdog (`RisiMe.Push.Dispatcher`): a WebSocket ping after the events this channel has pushed
+  # (sent from here, so it follows them on the wire); its pong reaches the dispatcher through
+  # `RisiMeWeb.UserSocket.handle_control/2`.
+  def handle_info({:push_watchdog_ping, data}, socket) do
+    send(socket.transport_pid, {:socket_push, :ping, data})
     {:noreply, socket}
   end
 
