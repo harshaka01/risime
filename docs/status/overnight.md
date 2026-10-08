@@ -47,6 +47,37 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## Queue (set 2026-10-08 ~12:30 UTC)
+1. **P0 background delivery** (agent running).
+2. **P0 call audio routing** (`1a40df7` is on main; the review fixes are being made).
+3. **WhatsApp parity** (Harsha, 2026-10-08), app-only unless a wire change shows up:
+   - **call records:** chat rows, a Calls tab, call back, a missed-call notification with the time;
+   - **app lock:** BiometricPrompt STRONG|DEVICE_CREDENTIAL; Immediately / 1 min / 30 min; hide
+     content; never signs out or wipes; calls can be answered while locked;
+   - **locked chats:** a Locked chats folder, pull-down reveal, a secret code, "New message"
+     notifications, local and encrypted only.
+   A Redroid gate for each; each released through the full gate.
+   - **Call records need no wire change.** §16 already stores one `kind='call'` row per `call_id`
+     on both phones.
+4. **v1.23 calls:** voice↔video, screen share, call info. Then **Risi v1** (proposal `bf1a215`,
+   waiting for Harsha), then the Commitment Ledger.
+
+### Testers forced back to the email sign-in: findings so far
+- **The app is already set up for long sessions:**
+  - it asks for `openid email profile offline_access` (AppAuthGateway.kt);
+  - refresh is single-flight (a Mutex in AuthManager);
+  - it signs out to the sign-in screen (keeping chats) only on `invalid_grant` or when a Keystore
+    key has been invalidated.
+- **The realm (`aoa`) supports `offline_access`.** We can't see whether the `risime` client is
+  allowed it, or the realm's offline-session timeouts. If the scope isn't assigned, Keycloak
+  silently issues a normal refresh token. That token dies with the SSO session (Keycloak's defaults:
+  30 min idle, 10 h max), which matches "forced back to sign-in".
+- **Next (app-lock work):**
+  - log the refresh token's `typ` (`Offline` vs `Refresh`) and its `exp` at sign-in, never the
+    token itself;
+  - show it on the Notifications/Account health screen;
+  - log *which* trigger caused each sign-out (`invalid_grant` vs key invalidated).
+
 ## v0.2.0-nightly.33 (live 2026-10-08 ~12:25 UTC, not required): push audit log, emoji panel, attachment sheet
 - **What's in:**
   - **Server push audit lines** (`edb1e9b`):
@@ -101,6 +132,19 @@ were needed after nightly.11.
   `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
 - **Agents:** none running.
 - **Needs Harsha:**
+0. **Keycloak, for the RisiCloud lead (realm `aoa`, client `risime`):**
+   - Clients → `risime` → Client scopes: `offline_access` assigned (**Default** or Optional).
+   - Realm settings → Sessions:
+     - **Offline Session Idle** ≥ 90 days (default 30);
+     - **Offline Session Max Limited** = **Off**.
+   - Clients → `risime` → Advanced: no client-level override with shorter "Client Offline Session
+     Idle/Max" (leave them empty).
+   - Realm settings → Tokens:
+     - **Revoke Refresh Token = Off**, or Refresh Token Max Reuse ≥ 1, so a refresh lost on a bad
+       network doesn't end the session;
+     - Access Token Lifespan of 5–15 min is fine.
+   - Users → the tester → Consents/Sessions shows an **Offline** session for `risime` once it works.
+   - Please send back the current values of these settings, so we know which one was the cause.
   1. Caddy `/livekit` route:
      `sudo cp infra/caddy/Caddyfile /etc/caddy/Caddyfile && sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl reload caddy`.
      Then root sets `LIVEKIT_URL` in pilot.env and restarts, and group calls work for testers.
