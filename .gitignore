@@ -18,3 +18,4 @@ android/captures/
 # Rust (crypto/)
 crypto/**/target/
 __pycache__/
+crypto/target-nif-prod/
