@@ -47,6 +47,35 @@
   live channel hasn't acked a pushed-eligible event within ~10 s, send the push anyway; or (b) a websocket
   `timeout` ≈ 2 × the client heartbeat (30 s → 65 s isn't better; with (a) it doesn't matter). The script fails on the
   server's `push: skipped kind=inbox user=<hash> reason=online` audit line (nightly.33) for B.
+- **Review fixes (55e0a3a/c49647d review) — READY:**
+  1. *(HIGH, rule 9)* "core open" and "registered" are tracked apart (`MlsCoreState`): a failed device
+     registration keeps the MLS core open (decrypting needs no registration; registration retries on its
+     own); offline the core opens with the last served attestation keys. `MlsPipeline` itself throws
+     `MlsNotReady` (never `Ignored`) when MLS applies and the core is closed, so an event is never marked
+     seen or skipped; commit/call-signal/history `runCatching`s rethrow it. `ChatEngine` applies plaintext
+     events ahead of the first MLS event and stops there (no whole-batch 15-s stall). Bounded: a Welcome to
+     other devices and our own echoes are still ignored; an install whose core never opened expects nothing.
+  2. `onMessageReceived` no longer blocks FCM's thread: the worker is enqueued first, then the direct sync
+     runs on the app scope under a ≤ 9-s partial wake lock; a call push right behind an inbox push rings at once.
+     The worker skips its own socket session when a direct sync went live since its enqueue (`PushWakeTracker`).
+  3. `messages_v2` copies importance, sound, vibration (pattern), lights and DND from `messages`; only the
+     lock-screen visibility changes; fresh installs HIGH.
+  4. Health auto-open after an update only for: notifications off, Messages/Calls channel off, full-screen
+     denied, push unregistered *after* the registration settled (its result, not a 3-s timer). A Silent
+     channel is a "!" hint; battery is shown but never opens it. Dismissals per row + failing state.
+  5. Home → screen off → on inside the 5-s grace no longer reopens the socket (`foregroundHoldFlow`).
+  - `scripts/push-device-test` (root-delegated) adds: message then call at once in deep idle; restricted
+    (redroid has app standby off — every app EXEMPT — so `RUN_ANY_IN_BACKGROUND ignore`, the user-facing
+    "Restricted", stands in); exactly one notification pass per message; a cold start by push while a
+    filtering proxy answers 503 to every device-registration PUT (sent texts vs B's Room rows).
+  - **Tests:** 863 JVM tests, 0 failed (8 skipped): `MlsCoreStateTest` (5), `MlsPipelineTest` (+5: refusal
+    after the gate, commit not swallowed, plaintext ahead applied, not-for-this-device bounded, no-MLS
+    ignored), `BackgroundDeliveryTest` (+5: channel carry-over, hold flow, wake tracker),
+    `NotificationHealthTest` (auto-open rules, hints, dismissals per row/state).
+  - **PUSHTEST OK** (spark2, ~7 min, on server eae4dcf with the push watchdog): message 437 ms / ring 659 ms
+    (Home, deep idle); after Recents removal 1068 / 1383 ms; message+call at once: ring 696 ms after the
+    call push (message 2473 ms); restricted: 468 ms; registration failing (3 × 503): messages 1120 / 631 /
+    647 ms after their pushes, 3 sent = 3 Room rows; one notification pass per message everywhere.
 
 ## P0: call audio routing (route button greyed out, calls stuck on the earpiece) — READY
 - **Cause:** `routeButtonEnabled` needed Telecom to list > 1 endpoint (or an empty list while ACTIVE); real phones
