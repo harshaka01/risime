@@ -157,6 +157,43 @@ defmodule RisiMe.ContractExamplesTest do
                     error_too_many_for_video.json livekit_token_claims_v123.json
                     livekit_update_participant.json)
 
+  # v1.24 (two tabs and Risi stage 1, §24): checked in the "v1.24" describe below. Chat/Group
+  # shapes are server-produced; the envelopes travel inside MLS (client-produced): structure only.
+  @checked_v1_24 ~w(auth_config_v124.json
+                    backup_bundle_header_v124.json
+                    backup_entry_conversation_v124.json
+                    chat_official_create.json
+                    chat_official_create_reply.json
+                    chat_patch_official.json
+                    chat_reply.json
+                    chats_reply.json
+                    device_put_tabs.json
+                    envelope_risi_action.json
+                    envelope_risi_answer.json
+                    envelope_risi_commitment.json
+                    envelope_risi_commitment_update.json
+                    envelope_risi_digest.json
+                    envelope_risi_error.json
+                    envelope_risi_escalation.json
+                    envelope_risi_offer.json
+                    envelope_risi_reminder.json
+                    envelope_risi_report.json
+                    envelope_risi_request.json
+                    envelope_risi_summary.json
+                    error_official_off.json
+                    error_private_tab.json
+                    event_chat_official_created.json
+                    event_chat_official_off.json
+                    event_chat_official_on.json
+                    event_group_agent_added.json
+                    event_group_agent_removed.json
+                    event_group_created_official.json
+                    group_meta_official.json
+                    group_reply_v124.json
+                    risi_commitments_reply.json
+                    risi_facts_reply.json
+                    risi_feedback.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -211,7 +248,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_20 ++
         @checked_v1_21 ++
         @checked_v1_22 ++
-        @checked_v1_23
+        @checked_v1_23 ++
+        @checked_v1_24
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -3676,6 +3714,188 @@ defmodule RisiMe.ContractExamplesTest do
       assert keys(st) == keys(sex)
       assert_same_shape(st, sex)
       assert st["media"] == "video" and st["max_participants"] == 8
+    end
+  end
+
+  describe "v1.24" do
+    @t24_id ~r/^(grp|dm):/
+
+    defp ts24?(v), do: is_binary(v) and v =~ @ts
+
+    defp chat24_ok?(c) do
+      assert c["chat_id"] =~ @t24_id
+      assert c["kind"] in ~w(dm group)
+      assert is_binary(c["private"]["conversation_id"])
+      o = c["official"]
+      assert o["state"] in ~w(none on off)
+      assert is_nil(o["conversation_id"]) or o["conversation_id"] =~ ~r/^grp:/
+      assert is_nil(o["changed_by"]) or o["changed_by"] =~ @uuid
+      assert is_nil(o["changed_at"]) or ts24?(o["changed_at"])
+      assert is_boolean(c["official_ready"]) and is_list(c["missing"])
+      assert is_boolean(c["can_toggle"])
+    end
+
+    defp member24_ok?(m) do
+      assert m["user_id"] =~ @uuid and is_binary(m["display_name"])
+      assert m["role"] in ~w(admin member) and m["kind"] in ~w(user agent)
+      assert is_binary(m["state"])
+      assert is_nil(m["phone"]) or is_binary(m["phone"])
+      if m["kind"] == "agent", do: assert(m["phone"] == nil)
+    end
+
+    defp group24_ok?(g) do
+      assert g["id"] =~ ~r/^grp:/ and is_binary(g["state"])
+      assert is_integer(g["generation"]) and g["my_role"] in ~w(admin member)
+      Enum.each(g["members"], &member24_ok?/1)
+      g
+    end
+
+    test "auth_config_v124.json: tabs flag" do
+      ex = example("auth_config_v124.json")
+      assert ex["tabs"] in ~w(on off)
+      assert ex["modes"] == ["oidc"] and is_binary(ex["issuer"])
+      assert ex["signup"] in ~w(open closed) and ex["backup"] in ~w(on off)
+    end
+
+    test "chat_reply.json and chats_reply.json: Chat shape" do
+      chat24_ok?(example("chat_reply.json")["chat"])
+      chats = example("chats_reply.json")["chats"]
+      assert chats != []
+      Enum.each(chats, &chat24_ok?/1)
+      assert Enum.any?(chats, &(&1["official"]["state"] == "off"))
+    end
+
+    test "group_reply_v124.json and chat_official_create_reply.json: Group v124 shape" do
+      g = group24_ok?(example("group_reply_v124.json")["group"])
+      assert g["tab"] in ~w(private official) and g["chat_kind"] in ~w(dm group)
+      assert g["chat_id"] =~ @t24_id and is_list(g["agents"])
+      agents = for m <- g["members"], m["kind"] == "agent", do: m["user_id"]
+      assert Enum.sort(g["agents"]) == Enum.sort(agents)
+      refute Enum.any?(g["members"], &(&1["kind"] == "agent" and &1["role"] == "admin"))
+
+      c = group24_ok?(example("chat_official_create_reply.json")["group"])
+      assert is_binary(c["state"])
+    end
+
+    test "chat_official_create.json and chat_patch_official.json: requests" do
+      assert example("chat_official_create.json") == %{}
+      assert example("chat_patch_official.json") == %{"official" => "off"}
+    end
+
+    test "errors: official_off and private_tab" do
+      assert example("error_official_off.json") == %{"reason" => "official_off"}
+      e = example("error_private_tab.json")["error"]
+      assert e["code"] == "private_tab" and is_binary(e["message"])
+    end
+
+    test "chat_event examples" do
+      for {n, action} <- [
+            {"event_chat_official_created.json", "official_created"},
+            {"event_chat_official_off.json", "official_off"},
+            {"event_chat_official_on.json", "official_on"}
+          ] do
+        ex = example(n)
+        assert ex["event_id"] =~ @timeuuid and ex["kind"] == "chat_event"
+        d = ex["data"]
+        assert keys(d) == ~w(action actor chat_id official_conversation_id server_ts)
+        assert d["action"] == action and d["actor"] =~ @uuid
+        assert d["chat_id"] =~ @t24_id and d["official_conversation_id"] =~ ~r/^grp:/
+        assert ts24?(d["server_ts"])
+      end
+    end
+
+    test "group_event examples carry chat_id, tab, chat_kind" do
+      for {n, action} <- [
+            {"event_group_agent_added.json", "added"},
+            {"event_group_agent_removed.json", "removed"},
+            {"event_group_created_official.json", "created"}
+          ] do
+        ex = example(n)
+        assert ex["event_id"] =~ @timeuuid and ex["kind"] == "group_event"
+        d = ex["data"]
+        assert d["action"] == action and d["group_id"] =~ ~r/^grp:/
+        assert d["tab"] == "official" and d["chat_kind"] in ~w(dm group)
+        assert d["chat_id"] =~ @t24_id
+        assert is_integer(d["epoch"]) and ts24?(d["server_ts"])
+        assert is_list(d["targets"]) and Enum.all?(d["targets"], &(&1 =~ @uuid))
+        if is_list(d["members"]), do: Enum.each(d["members"], &member24_ok?/1)
+      end
+    end
+
+    test "device_put_tabs.json: tabs capability" do
+      ex = example("device_put_tabs.json")
+      assert "tabs" in ex["mls"]["capabilities"]
+      assert is_binary(ex["mls"]["signature_key"]) and ex["platform"] == "android"
+    end
+
+    test "group_meta_official.json, backup header and conversation entry (client formats)" do
+      m = example("group_meta_official.json")
+      assert m["v"] == 1 and m["tab"] == "official" and m["chat_id"] =~ @t24_id
+      assert is_list(m["admins"]) and is_list(m["agents"])
+      assert m["agents"] -- m["admins"] == m["agents"]
+
+      h = example("backup_bundle_header_v124.json")
+      assert h["type"] == "backup" and h["schema"] == 2 and h["backup_id"] =~ @uuid
+
+      assert Enum.all?(
+               ~w(conversations messages tombstones contacts),
+               &is_integer(h["counts"][&1])
+             )
+
+      e = example("backup_entry_conversation_v124.json")
+      assert e["type"] == "conversation" and e["tab"] in ~w(private official)
+      assert e["chat_id"] =~ @t24_id and e["chat_kind"] in ~w(dm group)
+    end
+
+    test "Risi REST replies and feedback" do
+      [c] = example("risi_commitments_reply.json")["commitments"]
+      assert c["commitment_id"] =~ @uuid and c["chat_id"] =~ @t24_id
+      assert is_binary(c["state"]) and c["owner"] =~ @uuid and is_list(c["counterpart"])
+      assert ts24?(c["created_at"]) and ts24?(c["updated_at"])
+
+      facts = example("risi_facts_reply.json")["facts"]
+      assert facts != []
+
+      for f <- facts,
+          do: assert(f["fact_id"] =~ @uuid and is_binary(f["kind"]) and is_binary(f["text"]))
+
+      fb = example("risi_feedback.json")
+      assert fb["call_ref"] =~ @uuid and fb["rating"] in ~w(up down) and is_binary(fb["reason"])
+    end
+
+    test "Risi envelopes (inside MLS): structure" do
+      names = for n <- @files, String.starts_with?(n, "envelope_risi_"), do: n
+
+      kinds =
+        for n <- names do
+          e = example(n)
+          assert e["v"] == 1
+
+          case e["type"] do
+            "text" ->
+              assert is_binary(e["body"])
+              r = e["risi"]
+              assert r["v"] == 1 and is_binary(r["kind"])
+
+              if Map.has_key?(r, "call_ref"),
+                do: assert(is_nil(r["call_ref"]) or r["call_ref"] =~ @uuid)
+
+              if Map.has_key?(r, "notify"), do: assert(Enum.all?(r["notify"], &(&1 =~ @uuid)))
+              r["kind"]
+
+            "risi_request" ->
+              assert e["request_id"] =~ @uuid and is_binary(e["action"])
+              nil
+
+            "risi_action" ->
+              assert e["target"] =~ @uuid and is_binary(e["action"])
+              nil
+          end
+        end
+
+      assert Enum.sort(Enum.reject(kinds, &is_nil/1)) ==
+               Enum.sort(~w(answer commitment commitment_update digest error escalation offer
+                            reminder report summary))
     end
   end
 end

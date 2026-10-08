@@ -1009,3 +1009,5 @@ Greppable in `~/risime-logs/server.log` (info level; tokens, phone and email are
 - `push: skipped kind=inbox user=<hash8> reason=online devices_online=<n>`; `reason=coalesced` at debug level.
 - `push: none kind=inbox user=<hash8> reason=no_token`.
 Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/push_audit_test.exs`.
+
+- v1.24 (§24): the 34 examples are covered (@checked_v1_24 in examples_test.exs). Policy `tab_cases` are loaded in policy_test.exs but tagged :pending_v124 (excluded by default): server Policy does not enforce §24.1 tab/agent rules yet (group_meta is opaque to the server; the MLS core enforces them).

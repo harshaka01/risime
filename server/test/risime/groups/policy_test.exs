@@ -45,4 +45,39 @@ defmodule RisiMe.Groups.PolicyTest do
       end
     end
   end
+
+  # v1.24 §24.1 tab rules: the server's Policy does not enforce tab/agent rules yet (group_meta
+  # is opaque to the server; the MLS core enforces them). The cases are loaded and tagged
+  # :pending_v124, excluded by default (`mix test --only pending_v124` shows the gap).
+  @tab_cases Map.fetch!(@fixture_json, "tab_cases")
+
+  test "the fixture has tab_cases (v1.24 §24.1)" do
+    assert length(@tab_cases) >= 18
+    assert Enum.all?(@tab_cases, &(&1["expect"] in ~w(accept reject)))
+  end
+
+  for c <- @tab_cases do
+    @case c
+    @tag :pending_v124
+    test "tab case: #{c["name"]}" do
+      c = @case
+      meta = c["meta"] && %{admins: c["meta"]["admins"], name_changed: c["meta"]["name_changed"]}
+
+      result =
+        Policy.check(%{
+          admins: c["admins"],
+          agents: c["agents"] ++ c["agent_users"],
+          committer: user(c["committer"]),
+          adds: Enum.map(c["adds"], &leaf/1),
+          removes: Enum.map(c["removes"], &leaf/1),
+          leaf_users: for({u, [_ | _]} <- c["leaves"], do: u),
+          meta: meta
+        })
+
+      case c["expect"] do
+        "accept" -> assert result == :ok, inspect(result)
+        "reject" -> assert {:error, _} = result
+      end
+    end
+  end
 end
