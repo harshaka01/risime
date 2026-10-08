@@ -112,6 +112,8 @@ data class CallScreenUi(
     val canFlip: Boolean = false,
     /** "Turn camera off" in More (video mode, my camera on, the Video button means "back to voice"). */
     val canCameraOff: Boolean = false,
+    /** "Switch to voice call" in More (video mode with a v1.23 peer, whatever my camera does). */
+    val canBackToVoice: Boolean = false,
     /** "You're sharing your screen" with Stop. */
     val sharing: Boolean = false,
     /** "<name> is sharing their screen". */
@@ -139,6 +141,7 @@ data class CallScreenActions(
     val onEnd: () -> Unit = {},
     val onFlip: () -> Unit = {},
     val onCameraOff: () -> Unit = {},
+    val onBackToVoice: () -> Unit = {},
     val onCallInfo: () -> Unit = {},
     val onCancelAsk: () -> Unit = {},
     /** The switch prompt: (accept, my camera on). */
@@ -208,13 +211,15 @@ fun CallScreen(
     local: (@Composable (Modifier) -> Unit)? = null,
     /** §20.5 a group voice call's participant list instead of the avatar. */
     center: (@Composable () -> Unit)? = null,
+    /** Debug builds' device test keeps the controls up (`files/debug_keep_call_controls`). */
+    allowAutoHide: Boolean = true,
 ) {
     var controls by remember { mutableStateOf(true) }
     var touch by remember { mutableIntStateOf(0) }
     // TalkBack users keep the controls (a hidden button can't be found by touch exploration).
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val talkBack = remember { ctx.getSystemService(android.view.accessibility.AccessibilityManager::class.java)?.isTouchExplorationEnabled == true }
-    val autoHide = controlsAutoHide(ui) && !talkBack
+    val autoHide = controlsAutoHide(ui) && !talkBack && allowAutoHide
     if (!autoHide && !controls) controls = true
     LaunchedEffect(autoHide, controls, touch) {
         if (autoHide && controls) {
@@ -445,6 +450,7 @@ private fun MoreControl(ui: CallScreenUi, a: CallScreenActions, onTouch: () -> U
         DropdownMenu(open, onDismissRequest = { open = false }) {
             if (ui.canFlip) DropdownMenuItem(leadingIcon = { Icon(RisiIcons.CameraSwitch, null) }, text = { Text("Flip camera") }, onClick = { open = false; a.onFlip() })
             if (ui.canCameraOff) DropdownMenuItem(leadingIcon = { Icon(RisiIcons.VideocamOff, null) }, text = { Text("Turn camera off") }, onClick = { open = false; a.onCameraOff() })
+            if (ui.canBackToVoice) DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Call, null) }, text = { Text("Switch to voice call") }, onClick = { open = false; a.onBackToVoice() })
             DropdownMenuItem(leadingIcon = { Icon(RisiIcons.Speaker, null) }, text = { Text("Audio output") }, onClick = { open = false; routes = true })
             DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Lock, null) }, text = { Text("Call info") }, onClick = { open = false; a.onCallInfo() })
         }
@@ -625,6 +631,7 @@ fun callScreenUi(s: CallSnapshot, name: String, status: String, routes: CallRout
     showLocal = s.cameraOn,
     canFlip = s.cameraOn,
     canCameraOff = s.video && s.wantCamera && videoAction(s, nowMs) == VideoAction.BACK_TO_VOICE,
+    canBackToVoice = s.video && s.canSwitch && !s.group && live(s),
     sharing = s.sharing,
     peerSharing = s.peerSharing,
     asking = s.asking?.let { CallTexts.askingLine(it, name) },

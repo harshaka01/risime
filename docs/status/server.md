@@ -16,7 +16,7 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
-## v1.24 Risi stage 1 secretary (§24.11–§24.13, decisions 061, 066) — S6 + S7 READY (S8 open)
+## v1.24 Risi stage 1 secretary (§24.11–§24.13, decisions 061, 066) — S6 + S7 + S8 READY
 Harsha's rules are enforced in code: **no product pushing** (no prompt asks for suggestions or
 offers; stage 1 sends no `offer`), **nothing tracked without ✓**, **Risi only sees Official**,
 **learn and delete**.
@@ -150,6 +150,8 @@ offers; stage 1 sends no `offer`), **nothing tracked without ✓**, **Risi only 
   4. The commercial fallback: Needs Harsha (provider + zero-retention agreement).
   5. The migration runs `CREATE EXTENSION IF NOT EXISTS vector` (prod compose: the pgvector
      image, `POSTGRES_USER=risime` is its superuser, so this works).
+
+**S8 (REST):** `POST /risi/feedback` (204; active members of the call's conversation, else 404; 60/min/user), `GET /risi/facts`, `DELETE /risi/facts[/{id}]` (hard delete, embedding cascades), `GET /risi/commitments?state=open|all`. All need a `tabs` device (`X-Device-Id`): 404 on reads, 403 `invalid_device` on writes; empty lists with RISI off. Code: `RisiMe.Agent.Rest`, `RisiMeWeb.RisiController`; tests `risi_rest_s8_test.exs`.
 
 ## v1.24 Risi agent tree (§24.11–§24.12, decisions 066, 067) — S5 READY (S6–S7 above; S8 open)
 - **Gate:** 718 tests, 0 failures with the NIF built (`scripts/build-mls-nif`); without it

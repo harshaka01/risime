@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# Risi canary gate (contract v1.24 §24.14 "Canary", decisions 065-067; a release gate step after
+# scripts/interop). Proves that Private text never reaches Risi's model, tables, buffer, learning
+# log, the server log or a push, and that the agent only talks to loopback.
+#  * A temp server from THIS checkout on 127.0.0.1:$CANARY_PORT (default 4140), its own fresh store
+#    (DB + keyspace risime_canary$CANARY_INSTANCE, dropped afterwards), with TABS=on RISI=on, the MLS
+#    NIF built --prod into the run dir (RISI_MLS_NIF), throwaway RISI_MLS_KEK / RISI_DATA_KEY and a
+#    temp attestation key, push → a recorder (every payload kept), and scripts/fake-llm on
+#    127.0.0.1:$CANARY_LLM_PORT (default 8198) as RISI_LLM_URL, recording every request.
+#  * The Android LiveRisiInteropTest (two real JVM apps with the real MLS core, advertising tabs):
+#    CANARY-<uuid> texts in the Private 1:1 and the Private group (before and after Official exists),
+#    Official 1:1 + group with Risi at epoch 0, a commitment → card both decrypt → ✓ → update, a
+#    summarise → summary card, Official off → a CANARY-off send refused. (Risi joins at epoch 0, so
+#    there is no "Official before Risi joined" window to test.)
+#  * Then: no canary in fake-llm's recorded requests, the server log, the recorded push payloads,
+#    any risi_* Postgres table or oban_jobs, the decrypted risi_buffer, the learning log; positive
+#    controls (the Official marker IS in the model input and the decrypted buffer, model calls are
+#    logged, pushes were recorded); every TCP/UDP peer of the server's BEAM was loopback (sampled
+#    every 0.5 s for the whole run).
+# Ends "RISI CANARY OK". Always cleans up (tmux sessions, sampler, store). Never touches :4000.
+#   scripts/risi-canary
+#   CANARY_INSTANCE=_rel CANARY_PORT=4240 CANARY_LLM_PORT=8298 scripts/risi-canary   # nightly-release
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+SUF="${CANARY_INSTANCE:-}"; PORT="${CANARY_PORT:-4140}"; LLM_PORT="${CANARY_LLM_PORT:-8198}"
+case "$SUF" in ""|_[a-z0-9_]*) ;; *) echo "CANARY_INSTANCE must look like _name"; exit 1;; esac
+export CANARY_PORT="$PORT"
+export RISIME_DEV_DB="risime_canary$SUF" RISIME_DEV_KEYSPACE="risime_canary$SUF"
+# Own build dir and no code reloading: other sessions compiling server/ can't stall the temp server.
+export MIX_BUILD_PATH="$REPO/server/_build/canary$SUF" RISIME_CODE_RELOADER=false
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-canary.XXXXXX")"; chmod 700 "$WORK"
+LOGS="$HOME/risime-logs/risi-canary$SUF"; mkdir -p "$LOGS"
+SESSION="risime-canary$SUF"; LLM_SESSION="risime-canary-llm$SUF"
+SAMPLER=""
+T0=$(date +%s)
+fx() { (cd "$REPO/server" && $M mix run "$@"); }
+cleanup() {
+  [ -n "$SAMPLER" ] && kill "$SAMPLER" 2>/dev/null || true
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  tmux kill-session -t "$LLM_SESSION" 2>/dev/null || true
+  for f in gradle.log server.log pushes.jsonl egress.txt fake-llm.jsonl check.log; do
+    [ -f "$WORK/$f" ] && cp "$WORK/$f" "$LOGS/$f" 2>/dev/null || true
+  done
+  # The store holds only this run's throwaway data (sealed under keys that die with $WORK).
+  (cd "$REPO/server" && $M mix ecto.drop --quiet --force >/dev/null 2>&1) || true
+  (fx --no-start "$REPO/scripts/risi-canary.exs" drop 2>/dev/null | grep 'canary drop' || true)
+  rm -rf -- "${WORK:?}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+fail() { echo "RISI CANARY FAILED: $*"; exit 1; }
+for p in $PORT $LLM_PORT; do ss -ltnH "sport = :$p" | grep -q . && fail "port $p busy"; done
+
+echo "==> MLS NIF (--prod) for the temp server"
+MLS_NIF_OUT="$WORK/librisime_mls_nif.so" timeout 1200 scripts/build-mls-nif --prod >/dev/null || fail "scripts/build-mls-nif --prod"
+
+echo "==> canary store: $RISIME_DEV_DB / $RISIME_DEV_KEYSPACE (fresh)"
+(cd server && { $M mix ecto.drop --quiet --force || true; } \
+  && $M mix compile \
+  && { $M mix run --no-start "$REPO/scripts/risi-canary.exs" drop || true; } \
+  && $M mix ecto.create --quiet && $M mix ecto.migrate --quiet && $M mix risime.cql.migrate --quiet) > "$WORK/store.log" 2>&1 \
+  || { tail -15 "$WORK/store.log"; fail "could not create/migrate the canary store (server deps fetched? mix deps.get)"; }
+(cd server && $M mix risime.attestation.gen "$WORK/attest.jwk" >/dev/null 2>&1) || true
+[ -f "$WORK/attest.jwk" ] || fail "no temp attestation key"
+# Users, friendship, the Risi agent user/device (seeded as Release.migrate does while RISI is on).
+# No keys in this node's env: its agent tree can't start (only the server's runs).
+RISI=on RISI_MLS_NIF=/nonexistent fx "$REPO/scripts/risi-canary.exs" setup "$WORK" 2>/dev/null | grep '^canary setup' || fail "fixtures"
+
+# Throwaway Risi keys (32 random bytes each), only in a 0600 env file of this run.
+umask 077
+{ echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"
+  echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; } > "$WORK/keys.env"
+umask 022
+
+echo "==> fake-llm on 127.0.0.1:$LLM_PORT (records every request)"
+: > "$WORK/fake-llm.jsonl"
+tmux new -d -s "$LLM_SESSION" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT --record '$WORK/fake-llm.jsonl' > '$WORK/fake-llm.out' 2>&1"
+for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && break; sleep 0.5; done
+curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" || fail "fake-llm didn't start"
+
+# Push → recorder: every payload the server would hand to FCM, as JSON lines.
+cat > "$WORK/hook.exs" <<'EXS'
+defmodule RisiCanary.PushRecorder do
+  @behaviour RisiMe.Push
+  @impl true
+  def deliver(token, payload) do
+    File.write!(System.fetch_env!("CANARY_PUSH_FILE"), Jason.encode!(%{"token" => token, "payload" => payload}) <> "\n", [:append])
+    :ok
+  end
+end
+Application.put_env(:risime, :push_sender, RisiCanary.PushRecorder)
+IO.puts("canary: push recorder installed")
+EXS
+: > "$WORK/pushes.jsonl"
+echo "==> temp server on 127.0.0.1:$PORT (TABS=on RISI=on, E2EE on with a temp key, fake model, push recorder)"
+tmux new -d -s "$SESSION" "cd '$REPO/server' && set -a && . '$WORK/keys.env' && set +a && \
+  MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE \
+  ERL_EPMD_ADDRESS=127.0.0.1 PORT=$PORT PHX_SERVER=true DEV_LOCAL_AUTH=true OIDC_ENABLED=false PHONE_VERIFICATION=off \
+  FCM_ENABLED=false LOG_FORMAT=text TABS=on RISI=on RISI_MLS_NIF='$WORK/librisime_mls_nif' \
+  RISI_LLM_URL=http://127.0.0.1:$LLM_PORT/v1 RISI_FALLBACK=off CANARY_PUSH_FILE='$WORK/pushes.jsonl' \
+  ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' \
+  $M mix run --no-halt -r '$WORK/hook.exs' > '$WORK/server.log' 2>&1"
+for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { tail -20 "$WORK/server.log"; fail "server didn't start"; }
+for _ in $(seq 1 20); do grep -q "canary: push recorder installed" "$WORK/server.log" && break; sleep 1; done
+grep -q "canary: push recorder installed" "$WORK/server.log" || fail "the push recorder hook didn't load"
+BEAM="$(ss -ltnpH "sport = :$PORT" | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)"
+[ -n "$BEAM" ] || fail "can't find the server's BEAM pid"
+
+# Egress sampler: every non-listening TCP/UDP socket of the server's BEAM, peer address only.
+( while kill -0 "$BEAM" 2>/dev/null; do
+    ss -tunapH 2>/dev/null | grep -F "pid=$BEAM," | awk '$2 != "LISTEN" && $2 != "UNCONN" {print $1, $2, $6}'
+    sleep 0.5
+  done ) > "$WORK/egress.raw" 2>/dev/null &
+SAMPLER=$!
+
+# Compile the test before the run (a cold compile can take minutes).
+read -r -a EXTRA_GRADLE <<< "${RISIME_GRADLE_ARGS:-}"
+(cd android && timeout 2400 $M ./gradlew --no-configuration-cache "${EXTRA_GRADLE[@]}" testDebugUnitTest --tests 'lk.codegen.risime.live.LiveRisiInteropTest' -q > "$WORK/precompile.log" 2>&1) \
+  || { tail -20 "$WORK/precompile.log"; fail "test compile failed"; }
+
+echo "==> LiveRisiInteropTest against 127.0.0.1:$PORT"
+set +e
+(cd android && RISIME_INTEROP_CONFIG="$WORK/canary.json" timeout 1200 $M ./gradlew --no-configuration-cache "${EXTRA_GRADLE[@]}" \
+  testDebugUnitTest --tests 'lk.codegen.risime.live.LiveRisiInteropTest' -i 2>&1) > "$WORK/gradle.log"
+rc=$?
+set -e
+grep -E 'INTEROP (PASS|FAIL) risi|^ *NOTE risi' "$WORK/gradle.log" | sed 's/^ *//'
+grep -q "LiveRisiInteropTest > .* SKIPPED" "$WORK/gradle.log" && fail "the test SKIPPED (config or host core not picked up)"
+[ "$rc" = 0 ] || { grep -E "AssertionError|timed out" "$WORK/gradle.log" | head -5; fail "LiveRisiInteropTest (rc $rc)"; }
+grep -q "RISI INTEROP DONE" "$WORK/gradle.log" || fail "LiveRisiInteropTest didn't reach its end"
+
+# Let late Risi work run (the 20-s extraction debounce, digests): it must stay canary-free too.
+sleep 30
+kill "$SAMPLER" 2>/dev/null || true; wait "$SAMPLER" 2>/dev/null || true; SAMPLER=""
+tmux kill-session -t "$SESSION" 2>/dev/null || true
+for _ in $(seq 1 20); do kill -0 "$BEAM" 2>/dev/null || break; sleep 0.5; done
+
+echo "==> checks"
+C="$WORK/canaries.txt"; MARK="$(cat "$WORK/marker.txt")"
+[ "$(wc -l < "$C")" -ge 5 ] || fail "canary list incomplete"
+# 1. The model's inputs (fake-llm's record: the only LLM traffic there is).
+calls=$(wc -l < "$WORK/fake-llm.jsonl")
+[ "$calls" -gt 0 ] || fail "fake-llm recorded no request (Risi never called the model)"
+grep -qF -- "$MARK" "$WORK/fake-llm.jsonl" || fail "positive control: the Official marker is not in the model input"
+grep -qF -f "$C" "$WORK/fake-llm.jsonl" && fail "a CANARY reached the model (fake-llm record)"
+echo "    model inputs: $calls requests, Official marker present, no canary"
+# 2. The server log (dev level: debug, so every query and event is in it).
+[ -s "$WORK/server.log" ] || fail "empty server log"
+grep -qF -f "$C" "$WORK/server.log" && fail "a CANARY is in the server log"
+echo "    server log: $(wc -l < "$WORK/server.log") lines, no canary"
+# 3. Push payloads.
+pushes=$(wc -l < "$WORK/pushes.jsonl")
+[ "$pushes" -gt 0 ] || fail "positive control: no push was recorded (B was offline for the first canaries)"
+grep -qF -f "$C" "$WORK/pushes.jsonl" && fail "a CANARY is in a push payload"
+echo "    push payloads: $pushes recorded, no canary"
+# 4. Stores: risi_* tables, oban_jobs, the decrypted risi_buffer, the learning log.
+( cd server && set -a && . "$WORK/keys.env" && set +a && $M mix run --no-start "$REPO/scripts/risi-canary.exs" check "$WORK" ) > "$WORK/check.log" 2>&1 || true
+grep '^canary check' "$WORK/check.log" | sed 's/^/    /'
+grep -q '^canary check: OK$' "$WORK/check.log" || { tail -5 "$WORK/check.log"; fail "store check"; }
+# 5. Egress: every peer of the server's BEAM was loopback.
+awk '{print $3}' "$WORK/egress.raw" | sed -E 's/:[0-9*]+$//' | sort -u > "$WORK/egress.txt"
+[ -s "$WORK/egress.txt" ] || fail "the egress sampler saw no socket"
+bad="$(grep -vE '^(127\.[0-9.]+|\[::1\]|\[::ffff:127\.[0-9.]+\]|\*)$' "$WORK/egress.txt" || true)"
+[ -z "$bad" ] || fail "the server talked to non-loopback peers: $(echo $bad)"
+echo "    egress: $(wc -l < "$WORK/egress.raw") socket samples, peers: $(echo $(cat "$WORK/egress.txt"))"
+echo "    ($(( $(date +%s) - T0 )) s)"
+echo "RISI CANARY OK"
