@@ -135,6 +135,8 @@ object CallEnvelope {
         val connectedAt: String? = null,
         val durationS: Long? = null,
         val media: String = MEDIA_AUDIO,
+        /** Local only, never encoded: did THIS device place the call (null = not known here). Stored in the history line as [CallRecords.DIR]. */
+        val outgoing: Boolean? = null,
     ) : Env {
         override val type get() = END
     }

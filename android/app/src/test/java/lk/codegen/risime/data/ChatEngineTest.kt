@@ -68,6 +68,26 @@ class ChatEngineTest {
     }
 
     @Test
+    fun callEndLinesRememberTheCallsDirectionLocallyAndTheWireStaysClean() = runTest {
+        val e = engine()
+        val id = "00000000-0000-4000-8000-0000000000aa"
+        e.queueCallEnd(conv, peer, lk.codegen.risime.calls.CallEnvelope.End(id, "hangup", durationS = 5, outgoing = false))
+        val row = messages.callLine(conv, id)!!
+        val rec = lk.codegen.risime.calls.CallRecords.of(row)!!
+        assertTrue(!rec.outgoing) // I answered, then hung up: the direction is "incoming" though I sent the call_end
+        assertEquals("Voice call · 5 s", rec.label)
+        assertTrue(row.systemJson!!.contains(lk.codegen.risime.calls.CallRecords.DIR))
+        assertTrue(!lk.codegen.risime.calls.CallRecords.strip(row.systemJson!!).contains(lk.codegen.risime.calls.CallRecords.DIR))
+        // The caller cancelling: "Cancelled" for them (a dir is inferred when the machine gave none).
+        val id2 = "00000000-0000-4000-8000-0000000000ab"
+        e.queueCallEnd(conv, peer, lk.codegen.risime.calls.CallEnvelope.End(id2, "cancelled"))
+        assertEquals("Cancelled voice call", lk.codegen.risime.calls.CallRecords.of(messages.callLine(conv, id2)!!)!!.label)
+        // The local fallback line is the callee's "Missed".
+        e.insertLocalMissedCall(conv, peer, "00000000-0000-4000-8000-0000000000ac", video = true)
+        assertEquals("Missed video call", lk.codegen.risime.calls.CallRecords.of(messages.callLine(conv, "00000000-0000-4000-8000-0000000000ac")!!)!!.label)
+    }
+
+    @Test
     fun oneChatThatMustWaitNeverBlocksTheOthersAndFailsVisiblyAfter30s() = runTest {
         // nightly.19 P0: one DM whose sends could only be retried later kept every chat "pending".
         val other = "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"

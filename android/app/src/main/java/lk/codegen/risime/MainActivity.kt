@@ -64,7 +64,13 @@ class MainActivity : FragmentActivity() {
                 c.calls.onUnlockedAfterBlindAnswer { text -> android.widget.Toast.makeText(this@MainActivity, text, android.widget.Toast.LENGTH_LONG).show() }
             }
         }
-        intent?.getStringExtra(Notifier.EXTRA_OPEN_CHAT)?.let { (application as RisiMeApp).container.openChatRequest.value = it }
+        val callBack = intent?.getStringExtra(lk.codegen.risime.calls.CallNotifications.EXTRA_CALL_BACK)
+        intent?.getStringExtra(Notifier.EXTRA_OPEN_CHAT)?.let { conv ->
+            val c = (application as RisiMeApp).container
+            if (callBack != null) c.callBackRequest.value = conv to (callBack == "video")
+            c.openChatRequest.value = conv
+        }
+        intent?.removeExtra(lk.codegen.risime.calls.CallNotifications.EXTRA_CALL_BACK)
     }
 
     companion object {

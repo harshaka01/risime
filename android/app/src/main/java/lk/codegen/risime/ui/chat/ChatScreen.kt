@@ -249,11 +249,17 @@ internal fun DmMessageRow(
         m.system && historyMarker != null && m.clientMsgId == lk.codegen.risime.data.HistoryMarkers.historyId(m.conversationId) -> historyMarker(m)
         m.system -> lk.codegen.risime.ui.common.SystemLineText(m.body)
         // §16.6 a call-history line: centred, "Call back", only "Delete for me", no reactions.
-        m.call -> lk.codegen.risime.calls.CallLineRow(
-            m.body, missed = !m.outgoing && lk.codegen.risime.calls.CallLines.isMissed(m.body),
-            onCallBack = onCallBack, onDeleteForMe = onDeleteForMe?.let { f -> { f(m.clientMsgId) } },
-            onVideoCallBack = onVideoCallBack.takeIf { lk.codegen.risime.calls.CallLines.isVideo(m.body) },
-        )
+        m.call -> {
+            val rec = lk.codegen.risime.calls.CallRecords.of(m)
+            val text = rec?.label ?: m.body
+            val video = rec?.video ?: lk.codegen.risime.calls.CallLines.isVideo(m.body)
+            lk.codegen.risime.calls.CallLineRow(
+                text, missed = rec?.missed ?: (!m.outgoing && lk.codegen.risime.calls.CallLines.isMissed(m.body)),
+                onCallBack = onCallBack, onDeleteForMe = onDeleteForMe?.let { f -> { f(m.clientMsgId) } },
+                onVideoCallBack = onVideoCallBack.takeIf { video },
+                video = video, time = lk.codegen.risime.ui.common.timeOf(m.localTs),
+            )
+        }
         else -> bubble()
     }
 }

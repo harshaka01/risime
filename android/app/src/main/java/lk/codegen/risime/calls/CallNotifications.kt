@@ -25,7 +25,7 @@ import lk.codegen.risime.push.Notifier
  * insistent CallStyle for incoming calls (always with a full-screen intent), CallStyle ongoing as
  * the foreground-service notification, and "Missed call from <name>".
  */
-class CallNotifications(private val context: Context) {
+class CallNotifications(private val context: Context, private val hideContent: () -> Boolean = { false }) {
     companion object {
         const val CH_CALLS = "calls"
         /**
@@ -43,6 +43,9 @@ class CallNotifications(private val context: Context) {
         const val ACTION_DECLINE = "lk.codegen.risime.calls.DECLINE"
         const val ACTION_HANGUP = "lk.codegen.risime.calls.HANGUP"
         const val ACTION_SHOW = "lk.codegen.risime.calls.SHOW"
+
+        /** MainActivity extra on the missed-call "Call back" action: "voice" or "video" (with EXTRA_OPEN_CHAT). */
+        const val EXTRA_CALL_BACK = "lk.codegen.risime.CALL_BACK"
 
         val VIBRATION = longArrayOf(0, 800, 600, 800, 600)
     }
@@ -151,25 +154,41 @@ class CallNotifications(private val context: Context) {
             .build()
     }
 
-    @Suppress("MissingPermission")
-    fun postMissed(conversationId: String, name: String, video: Boolean = false) {
-        if (!notificationsAllowed()) return
+    /**
+     * "Missed voice call" / "Missed video call" with the caller's name and the time, and the actions
+     * "Call back" (same type) and "Message". Decision 064: with the app lock on and "Show content in
+     * notifications" off, no name (the type and time stay).
+     */
+    fun missed(conversationId: String, name: String, video: Boolean = false, atMs: Long = System.currentTimeMillis()): Notification {
         ensureChannels()
-        val open = Intent(context, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            .putExtra(Notifier.EXTRA_OPEN_CHAT, conversationId)
         val code = MISSED_BASE + (conversationId.hashCode() and 0xffff)
-        nm.notify(
-            code,
-            NotificationCompat.Builder(context, CH_MISSED)
-                .setSmallIcon(R.drawable.ic_stat_risime)
-                .setContentTitle(if (video) "Missed video call from $name" else "Missed call from $name")
-                .setContentText(if (video) "Video call" else "Voice call")
-                .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
-                .setAutoCancel(true)
-                .setContentIntent(PendingIntent.getActivity(context, code, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
-                .build(),
-        )
+        fun intent(request: Int, callBack: Boolean): PendingIntent {
+            val i = Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(Notifier.EXTRA_OPEN_CHAT, conversationId)
+                .apply { if (callBack) putExtra(EXTRA_CALL_BACK, if (video) "video" else "voice") }
+            return PendingIntent.getActivity(context, request, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        }
+        val time = lk.codegen.risime.ui.common.timeOf(atMs)
+        val hidden = hideContent()
+        return NotificationCompat.Builder(context, CH_MISSED)
+            .setSmallIcon(R.drawable.ic_stat_risime)
+            .setContentTitle(if (video) "Missed video call" else "Missed voice call")
+            .setContentText(if (hidden) "Open RisiMe · $time" else "$name · $time")
+            .setWhen(atMs)
+            .setShowWhen(true)
+            .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+            .setAutoCancel(true)
+            .setContentIntent(intent(code, callBack = false))
+            .addAction(0, "Call back", intent(code + 0x10000, callBack = true))
+            .addAction(0, "Message", intent(code + 0x20000, callBack = false))
+            .build()
+    }
+
+    @Suppress("MissingPermission")
+    fun postMissed(conversationId: String, name: String, video: Boolean = false, atMs: Long = System.currentTimeMillis()) {
+        if (!notificationsAllowed()) return
+        nm.notify(MISSED_BASE + (conversationId.hashCode() and 0xffff), missed(conversationId, name, video, atMs))
     }
 
     fun cancelMissed(conversationId: String) = nm.cancel(MISSED_BASE + (conversationId.hashCode() and 0xffff))

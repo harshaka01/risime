@@ -124,10 +124,20 @@ private fun MainNav(c: AppContainer, meId: String) {
     val nav = rememberNavController()
     // Notification tap → that chat (once signed in, unlocked and verified).
     val openChat by c.openChatRequest.collectAsState()
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(openChat) {
         openChat?.let { target ->
             c.openChatRequest.value = null
             nav.navigate("chat/${android.net.Uri.encode(target)}") { popUpTo("chats") }
+            // Missed-call notification "Call back": call at once when the permissions are already granted, else the chat is open for the tap.
+            c.callBackRequest.value?.let { (conv, video) ->
+                c.callBackRequest.value = null
+                fun granted(p: String) = androidx.core.content.ContextCompat.checkSelfPermission(ctx, p) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                if (conv == target && c.calls.unsupportedReason() == null && granted(android.Manifest.permission.RECORD_AUDIO)) {
+                    c.calls.placeCall(conv, video, camera = video && granted(android.Manifest.permission.CAMERA))
+                    c.calls.openCallScreen()
+                }
+            }
         }
     }
     NotificationPermissionPrompt(c)

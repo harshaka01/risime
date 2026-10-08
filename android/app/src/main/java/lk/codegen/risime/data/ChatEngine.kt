@@ -494,7 +494,7 @@ class ChatEngine(
             outgoing = outgoing,
             ackedStatus = if (preInstall) MessageStatus.READ.name else null,
             kind = MessageEntity.KIND_CALL,
-            systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), lk.codegen.risime.calls.CallEnvelope.toJson(env)),
+            systemJson = lk.codegen.risime.calls.CallRecords.withDir(lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), lk.codegen.risime.calls.CallEnvelope.toJson(env)), lk.codegen.risime.calls.CallRecords.inferOutgoing(env.reason, outgoing) ?: hooks.wasOutgoing(env.callId)),
             callId = env.callId,
             fromDevice = m.fromDevice?.lowercase(),
         )
@@ -671,7 +671,7 @@ class ChatEngine(
                 clientMsgId = id, messageId = null, conversationId = conv, from = me, to = peer, body = line.text,
                 serverTs = null, localTs = clock(), status = MessageStatus.PENDING.name, outgoing = true,
                 kind = MessageEntity.KIND_CALL,
-                systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), lk.codegen.risime.calls.CallEnvelope.toJson(env)),
+                systemJson = lk.codegen.risime.calls.CallRecords.withDir(lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), lk.codegen.risime.calls.CallEnvelope.toJson(env)), env.outgoing ?: lk.codegen.risime.calls.CallRecords.inferOutgoing(env.reason, true)),
                 callId = env.callId,
             ),
         )
@@ -697,7 +697,7 @@ class ChatEngine(
             body = if (video) lk.codegen.risime.calls.CallLines.MISSED_VIDEO else lk.codegen.risime.calls.CallLines.MISSED, serverTs = isoMillis(now), localTs = now,
             status = MessageStatus.DELIVERED.name, outgoing = false, ackedStatus = MessageStatus.READ.name,
             kind = MessageEntity.KIND_CALL,
-            systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), lk.codegen.risime.calls.CallEnvelope.toJson(env)),
+            systemJson = lk.codegen.risime.calls.CallRecords.withDir(lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), lk.codegen.risime.calls.CallEnvelope.toJson(env)), false),
             callId = callId,
         )
         if (messages.insert(row) == -1L) return false
@@ -939,7 +939,7 @@ class ChatEngine(
             val json = m.systemJson ?: return PushResult.Rejected(AuthErrors.BAD_REQUEST)
             // §20.4: a group call's `group_call` goes `silent` (no push), and only its envelope fields (no local flags).
             val groupCall = lk.codegen.risime.calls.GroupCallEnvelope.decode(json)
-            val payload = groupCall?.encode() ?: json.toByteArray(Charsets.UTF_8)
+            val payload = groupCall?.encode() ?: lk.codegen.risime.calls.CallRecords.strip(json).toByteArray(Charsets.UTF_8)
             return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { payload }, silent = groupCall != null) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
         }
         if (m.image) {

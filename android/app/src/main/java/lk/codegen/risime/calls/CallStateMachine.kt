@@ -633,7 +633,7 @@ class CallStateMachine(
             // §19.6 (android A4): the automatic answer uses the camera only if my losing call was a video call.
             call.wantCamera = call.video && loser.media == CallEnvelope.MEDIA_VIDEO && loser.wantCamera
             call.phase = CallPhase.ANSWERING
-            marks.put(CallMark(env.callId, rang = false, answered = true, at = now()))
+            marks.put(CallMark(env.callId, rang = true, answered = true, at = now())) // rang: this device is the callee (its call_end line says "incoming")
             publish(call)
             watchdog(call)
             scope.launch {
@@ -1062,6 +1062,7 @@ class CallStateMachine(
                 connectedAt = connectedAtServer?.takeIf { sendEnd == CallEnvelope.R_HANGUP || sendEnd == CallEnvelope.R_FAILED }?.let(::iso),
                 durationS = duration?.takeIf { connectedAtServer != null },
                 media = c.media, // §19.3: a video call stays "video" even if both cameras were off
+                outgoing = c.outgoing,
             )
             scope.launch { signals.end(c.conv, c.peer, end) }
         }

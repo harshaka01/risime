@@ -703,6 +703,9 @@ class AppContainer(
     /** Notification tap → open this chat (MainActivity sets it, MainNav consumes it). */
     val openChatRequest = MutableStateFlow<String?>(null)
 
+    /** Missed-call notification "Call back" → (conversation id, video), consumed by MainNav once the chat is open. */
+    val callBackRequest = MutableStateFlow<Pair<String, Boolean>?>(null)
+
     /** Release-only self-updater (decision 016); disabled in debug builds. */
     val updater = Updater(context, http, scope)
 
@@ -774,6 +777,7 @@ class AppContainer(
                 ?: runCatching { db.groups().observeAllMembers().first().firstOrNull { it.userId.equals(userId, true) }?.displayName }.getOrNull()?.takeIf { it.isNotBlank() }
                 ?: "Someone"
         override suspend fun sendSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env, media: String) = engine.sendCallSignal(conv, peer, env, media)
+        override fun hideNotificationContent() = appLock.hideNotificationContentBlocking()
         override suspend fun localMissedCall(conv: String, peer: String, callId: String, video: Boolean) = engine.insertLocalMissedCall(conv, peer, callId, video)
         override suspend fun queueCallEnd(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.End, rangUnanswered: Boolean) {
             engine.queueCallEnd(conv, peer, env, rangUnanswered)

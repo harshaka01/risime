@@ -39,6 +39,10 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversation_id = :conversationId AND call_id = :callId LIMIT 1")
     suspend fun callLine(conversationId: String, callId: String): MessageEntity?
 
+    /** The Calls tab: every 1:1 call-history line, newest first (group lines are skipped by the reader). */
+    @Query("SELECT * FROM messages WHERE kind = 'call' AND conversation_id NOT LIKE 'grp:%' ORDER BY local_ts DESC LIMIT 500")
+    fun observeCallLines(): kotlinx.coroutines.flow.Flow<List<MessageEntity>>
+
     /** §20.4: a group call's line changes with `ended` (or a `status` that says the room is gone). */
     @Query("UPDATE messages SET body = :body, system_json = :systemJson WHERE client_msg_id = :clientMsgId")
     suspend fun updateCallLine(clientMsgId: String, body: String, systemJson: String): Int

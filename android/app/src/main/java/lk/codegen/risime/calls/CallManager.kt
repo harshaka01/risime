@@ -58,6 +58,9 @@ interface CallAppPort {
     suspend fun sendSignal(conv: String, peer: String, env: CallEnvelope.Env, media: String = CallEnvelope.MEDIA_AUDIO): PushResult<*>
     suspend fun queueCallEnd(conv: String, peer: String, env: CallEnvelope.End, rangUnanswered: Boolean)
 
+    /** Decision 064: the app lock is on with "Show content in notifications" off (no names in call notifications). */
+    fun hideNotificationContent(): Boolean = false
+
     /** Decision 054: a local "Missed voice call" line (no durable `call_end` came); false if the call already has a line. */
     suspend fun localMissedCall(conv: String, peer: String, callId: String, video: Boolean = false): Boolean = false
     fun foreground(): Boolean
@@ -120,7 +123,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     )
 }) {
     private val log: (String) -> Unit = { Log.i("RisiMe", "calls: $it") }
-    val notifications = CallNotifications(context)
+    val notifications = CallNotifications(context) { port.hideNotificationContent() }
     val media: CallMedia by lazy { mediaFactory() }
     private val scope get() = port.scope
 
@@ -358,7 +361,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val mark = marks.get(rec.callId)
         marks.put((mark ?: CallMark(rec.callId)).copy(ended = true, at = System.currentTimeMillis()))
         if (mark?.ended == true) return
-        ActiveCallRecord.endReason(rec)?.let { reason -> port.queueCallEnd(rec.conversationId, rec.peerUserId, CallEnvelope.End(rec.callId, reason), false) }
+        ActiveCallRecord.endReason(rec)?.let { reason -> port.queueCallEnd(rec.conversationId, rec.peerUserId, CallEnvelope.End(rec.callId, reason, outgoing = rec.outgoing), false) }
     }
 
     /** The group call's SFU session (debug stats, the video renderers). */

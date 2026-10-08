@@ -169,7 +169,7 @@ class BundleExporter(
     /** `call_end` or `group_call` as stored (the local `x_over` flag stays on the device). */
     private fun callPayload(m: MessageEntity): JsonObject? {
         val obj = runCatching { ProtocolJson.parseToJsonElement(m.systemJson ?: "") as? JsonObject }.getOrNull() ?: return null
-        val clean = JsonObject(obj - lk.codegen.risime.calls.GroupCallLines.LOCAL_OVER)
+        val clean = lk.codegen.risime.calls.CallRecords.strip(JsonObject(obj - lk.codegen.risime.calls.GroupCallLines.LOCAL_OVER))
         return when (MlsPayload.decode(ProtocolJson.encodeToString(JsonObject.serializer(), clean).toByteArray())) {
             is MlsPayload.Decoded.Call, is MlsPayload.Decoded.GroupCall -> clean
             else -> null

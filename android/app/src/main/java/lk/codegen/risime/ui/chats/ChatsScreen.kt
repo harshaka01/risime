@@ -165,9 +165,10 @@ fun ChatsScreen(
         Column(Modifier.fillMaxSize().padding(pad)) {
             TabRow(selectedTabIndex = tab) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Chats") })
+                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Calls") })
                 Tab(
-                    selected = tab == 1,
-                    onClick = { tab = 1 },
+                    selected = tab == 2,
+                    onClick = { tab = 2 },
                     text = {
                         BadgedBox(badge = {
                             if (friends.incoming.isNotEmpty()) Badge { Text(friends.incoming.size.toString()) }
@@ -180,6 +181,8 @@ fun ChatsScreen(
             }
             lk.codegen.risime.calls.FullScreenIntentPrompt()
             if (tab == 1) {
+                CallsTab(vm, onOpenChat = onOpen)
+            } else if (tab == 2) {
                 RequestsTab(friendsVm, onAddFriend)
             } else {
                 LazyColumn(Modifier.fillMaxSize()) {

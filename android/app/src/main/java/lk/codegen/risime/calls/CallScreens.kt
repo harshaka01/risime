@@ -7,6 +7,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.heightIn
@@ -435,23 +436,44 @@ private fun RouteControl(ui: InCallUi, onEndpoint: (EndpointUi) -> Unit) {
     }
 }
 
-/** A §16.6 call-history line in a DM: centred, muted; tap → "Call back", long-press menu "Delete for me". */
+/**
+ * A §16.6 call-history line in a DM, like WhatsApp's: centred, a voice or video icon (red when
+ * missed), the label and the time. Tap -> call back with the same type; long-press -> the menu
+ * ("Voice call back" / "Video call back" / "Delete for me").
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun CallLineRow(text: String, missed: Boolean, onCallBack: (() -> Unit)?, onDeleteForMe: (() -> Unit)?, onVideoCallBack: (() -> Unit)? = null) {
+fun CallLineRow(
+    text: String,
+    missed: Boolean,
+    onCallBack: (() -> Unit)?,
+    onDeleteForMe: (() -> Unit)?,
+    onVideoCallBack: (() -> Unit)? = null,
+    video: Boolean = lk.codegen.risime.calls.CallLines.isVideo(text),
+    time: String? = null,
+) {
     var menu by remember { mutableStateOf(false) }
+    val tint = if (missed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+    val tap = if (video) (onVideoCallBack ?: onCallBack) else onCallBack
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Surface(
-            onClick = { menu = true },
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-            modifier = Modifier.padding(vertical = Spacing.xxs),
+            modifier = Modifier
+                .padding(vertical = Spacing.xxs)
+                .clip(MaterialTheme.shapes.large)
+                .semantics { contentDescription = listOfNotNull(text, time).joinToString(", ") }
+                .combinedClickable(onClick = { if (tap != null) tap() else menu = true }, onLongClick = { menu = true }),
         ) {
-            Text(
-                (if (lk.codegen.risime.calls.CallLines.isVideo(text)) "📹 " else "📞 ") + text,
-                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs),
-                style = MaterialTheme.typography.labelLarge,
-                color = if (missed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs), verticalAlignment = Alignment.CenterVertically) {
+                Icon(if (video) RisiIcons.Videocam else Icons.Default.Call, null, Modifier.size(16.dp), tint = tint)
+                Spacer(Modifier.width(Spacing.xs))
+                Text(text, style = MaterialTheme.typography.labelLarge, color = tint)
+                time?.let {
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
         DropdownMenu(menu, onDismissRequest = { menu = false }) {
             onVideoCallBack?.let { DropdownMenuItem(text = { Text("Video call back") }, onClick = { menu = false; it() }) }

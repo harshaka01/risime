@@ -144,7 +144,7 @@ object HistoryExport {
                     obj
                 }
                 m.call -> {
-                    val obj = runCatching { ProtocolJson.parseToJsonElement(m.systemJson ?: "") as JsonObject }.getOrNull() ?: continue
+                    val obj = runCatching { lk.codegen.risime.calls.CallRecords.strip(ProtocolJson.parseToJsonElement(m.systemJson ?: "") as JsonObject) }.getOrNull() ?: continue
                     if (lk.codegen.risime.calls.CallEnvelope.decode(obj.toString().toByteArray()) !is lk.codegen.risime.calls.CallEnvelope.End) continue
                     obj
                 }

@@ -48,6 +48,9 @@ interface CallHooks {
     /** Read inside the transaction: did this device ring for [callId] without answering? */
     suspend fun rangUnanswered(callId: String): Boolean
 
+    /** Did this device place [callId] (true), receive it (false), or is that not known (null)? For lines from a peer's `hangup`/`failed`. */
+    suspend fun wasOutgoing(callId: String): Boolean? = null
+
     suspend fun onSignal(s: InboundCall)
 
     suspend fun onCallEnd(conversationId: String, fromUser: String, fromDevice: String?, end: CallEnvelope.End)
@@ -70,6 +73,8 @@ class MachineCallHooks(
     private val missed: (conversationId: String, from: String, video: Boolean) -> Unit = { _, _, _ -> },
 ) : CallHooks {
     override suspend fun rangUnanswered(callId: String): Boolean = marks.get(callId)?.let { it.rang && !it.answered } == true
+
+    override suspend fun wasOutgoing(callId: String): Boolean? = marks.get(callId)?.let { !it.rang }
 
     override suspend fun onSignal(s: InboundCall) {
         // §20.3: group signals go to the group call machine.

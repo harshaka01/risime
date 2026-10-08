@@ -178,6 +178,23 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
     ) { rows, states -> hideDeletedChats(rows, states, meId) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** The Calls tab: 1:1 call records grouped like WhatsApp ("Name (3)"), newest first. */
+    val calls: StateFlow<List<CallRow>> = combine(c.db.messages().observeCallLines(), c.contacts.contacts) { lines, contacts ->
+        val byConv = contacts.filter { it.userId != null }.associateBy { dmConversationId(meId, it.userId!!) }
+        buildCallRows(lines.mapNotNull { lk.codegen.risime.calls.CallRecords.of(it) }, byConv)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Why a call can't start from here (null = it can). */
+    fun callBlocked(): String? = runCatching { c.calls.unsupportedReason() }.getOrNull()
+
+    /** Call back from the Calls tab with the same type as the record. */
+    fun callBack(conversationId: String, video: Boolean, camera: Boolean) {
+        c.calls.placeCall(conversationId, video = video, camera = camera)
+        c.calls.openCallScreen()
+    }
+
+    fun hasCamera(): Boolean = c.calls.hasCameraPermission()
+
     /** §15.7 chat-list long-press: Clear chat (row stays) / Delete chat (hidden until a new message). */
     fun clearChat(row: ChatRow, hide: Boolean) {
         val conv = row.conversationOf(meId) ?: return
@@ -208,3 +225,15 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
         viewModelScope.launch { c.logout(confirmed) }
     }
 }
+
+/** A Calls-tab row: the person, the grouped records, and whether a tap can open the chat. */
+data class CallRow(val group: lk.codegen.risime.calls.CallGroup, val name: String, val userId: String?) {
+    val key: String get() = group.latest.clientMsgId
+    val title: String get() = if (group.count > 1) "$name (${group.count})" else name
+}
+
+fun buildCallRows(records: List<lk.codegen.risime.calls.CallRecord>, contactsByConv: Map<String, ContactEntity>): List<CallRow> =
+    lk.codegen.risime.calls.groupCalls(records).map { g ->
+        val ct = contactsByConv[g.conversationId]
+        CallRow(g, ct?.displayName ?: "Unknown", ct?.userId)
+    }

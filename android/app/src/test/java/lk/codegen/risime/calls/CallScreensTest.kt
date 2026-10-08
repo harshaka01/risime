@@ -15,6 +15,8 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.longClick
 import lk.codegen.risime.ui.chat.callBlockedText
 import lk.codegen.risime.ui.theme.RisiMeTheme
 import org.junit.Assert.assertEquals
@@ -154,13 +156,21 @@ class CallScreensTest(private val dark: Boolean) {
         assertTrue(runCatching { rule.onNodeWithContentDescription("End call").assertIsDisplayed() }.isFailure)
     }
 
-    @Test fun callLineOffersCallBackAndDeleteForMe() {
-        rule.setContent { RisiMeTheme(dark = dark) { CallLineRow("Missed voice call", missed = true, onCallBack = { events += "back" }, onDeleteForMe = { events += "del" }) } }
-        rule.onNodeWithText("📞 Missed voice call").performClick()
-        rule.onNodeWithText("Call back").performClick()
-        rule.onNodeWithText("📞 Missed voice call").performClick()
+    @Test fun callLineTapCallsBackWithTheSameTypeAndLongPressOffersDelete() {
+        rule.setContent {
+            RisiMeTheme(dark = dark) {
+                androidx.compose.foundation.layout.Column {
+                    CallLineRow("Missed voice call", missed = true, onCallBack = { events += "voice" }, onDeleteForMe = { events += "del" }, onVideoCallBack = { events += "video" }, video = false, time = "14:05")
+                    CallLineRow("Missed video call", missed = true, onCallBack = { events += "voice" }, onDeleteForMe = null, onVideoCallBack = { events += "video" }, video = true, time = "14:06")
+                }
+            }
+        }
+        rule.onNodeWithText("Missed voice call").performClick()
+        rule.onNodeWithText("Missed video call").performClick()
+        rule.onNodeWithText("14:05").assertIsDisplayed()
+        rule.onNodeWithText("Missed voice call").performTouchInput { longClick() }
         rule.onNodeWithText("Delete for me").performClick()
-        assertEquals(listOf("back", "del"), events)
+        assertEquals(listOf("voice", "video", "del"), events)
     }
 
     @Test fun buttonRulesAndTexts() {
