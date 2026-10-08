@@ -11,7 +11,8 @@ defmodule RisiMe.AuthLog do
   require Logger
 
   @kinds ~w(invalid_code too_many_attempts rate_limited invalid_token not_allowlisted
-            identity_conflict socket_refused phone_code_invalid)a
+            identity_conflict socket_refused phone_code_invalid signup_refused
+            signup_rate_limited)a
 
   def kinds, do: @kinds
 

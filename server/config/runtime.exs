@@ -273,6 +273,13 @@ int_env = fn name, default ->
   end
 end
 
+# Open sign-up (contract v1.20 §21, decision 058): OPEN_SIGNUP=true turns it on (env + restart).
+config :risime, :signup,
+  open: System.get_env("OPEN_SIGNUP") == "true",
+  per_ip_hour: int_env.("SIGNUP_PER_IP_HOUR", 5),
+  per_sub_day: int_env.("SIGNUP_PER_SUB_DAY", 3),
+  global_per_day: int_env.("SIGNUP_GLOBAL_PER_DAY", 200)
+
 config :risime, :social,
   requests_per_day: int_env.("FRIEND_REQUESTS_PER_DAY", 50),
   invites_per_user_per_day: int_env.("INVITES_PER_USER_PER_DAY", 20),

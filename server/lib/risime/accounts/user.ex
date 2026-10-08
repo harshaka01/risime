@@ -13,6 +13,8 @@ defmodule RisiMe.Accounts.User do
     field :phone_verified_for, :string
     field :invited_by_id, :binary_id
     field :disabled_at, :utc_datetime_usec
+    # v1.20 §21: "open" for open sign-up (a self-asserted phone); nil for allowlist/invite users.
+    field :signup_source, :string
 
     timestamps(type: :utc_datetime_usec)
   end

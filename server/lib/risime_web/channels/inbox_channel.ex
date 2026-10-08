@@ -177,7 +177,7 @@ defmodule RisiMeWeb.InboxChannel do
       {:ok, %{kind: :jwt}} ->
         {:reply, {:error, %{reason: "identity_mismatch"}}, socket}
 
-      {:error, :identity_conflict} ->
+      {:error, reason} when reason in [:identity_conflict, :signup_required] ->
         {:reply, {:error, %{reason: "identity_mismatch"}}, socket}
 
       {:error, :not_allowlisted} ->

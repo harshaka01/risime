@@ -27,7 +27,7 @@ defmodule RisiMe.Auth do
           exp: integer | nil,
           token_record: struct | nil
         }
-  @type error :: :invalid_token | :not_allowlisted | :identity_conflict
+  @type error :: :invalid_token | :not_allowlisted | :identity_conflict | :signup_required
 
   @spec authenticate(term) :: {:ok, auth} | {:error, error}
   def authenticate(token) when is_binary(token) and token != "" do

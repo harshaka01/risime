@@ -57,7 +57,7 @@ defmodule RisiMe.Accounts do
   Once bound, `sub` wins over later email changes. Re-binding is admin-only (`rebind/1`).
   """
   @spec map_identity(%{sub: String.t(), email: String.t()}) ::
-          {:ok, %User{}} | {:error, :not_allowlisted | :identity_conflict}
+          {:ok, %User{}} | {:error, :not_allowlisted | :identity_conflict | :signup_required}
   def map_identity(%{sub: sub, email: email} = identity) do
     case Repo.get_by(User, keycloak_sub: sub) do
       %User{} = user ->
@@ -66,6 +66,7 @@ defmodule RisiMe.Accounts do
           RisiMe.Social.accept_invites(user, RisiMe.Social.pending_invites(email))
           {:ok, user}
         else
+          log_refused(:not_allowlisted, email)
           {:error, :not_allowlisted}
         end
 
@@ -87,7 +88,10 @@ defmodule RisiMe.Accounts do
   defp redeem_invites(%{sub: sub, email: email} = identity) do
     case RisiMe.Social.pending_invites(email) do
       [] ->
-        {:error, :not_allowlisted}
+        # v1.20 §21.2: nothing matched; with open sign-up on, the app offers "Create account".
+        reason = if open_signup?(), do: :signup_required, else: :not_allowlisted
+        log_refused(reason, email)
+        {:error, reason}
 
       invites ->
         case RisiMe.Social.redeem(invites, identity) do
@@ -110,6 +114,8 @@ defmodule RisiMe.Accounts do
   """
   def member?(%User{disabled_at: %DateTime{}}), do: false
   def member?(%User{invited_by_id: id}) when is_binary(id), do: true
+  # v1.20 §21.2: open sign-ups stay members (until disabled) even if the switch goes off.
+  def member?(%User{signup_source: "open"}), do: true
 
   def member?(%User{phone: phone}),
     do: Repo.exists?(from a in AllowlistEntry, where: a.phone == ^phone)
@@ -122,6 +128,177 @@ defmodule RisiMe.Accounts do
       {1, _} -> :ok
       _ -> if Repo.get_by(User, phone: phone), do: :ok, else: {:error, :not_found}
     end
+  end
+
+  ## Open sign-up (contract v1.20 §21, decision 058)
+
+  @signup_defaults [open: false, per_ip_hour: 5, per_sub_day: 3, global_per_day: 200]
+
+  defp signup_cfg(key),
+    do: Keyword.get(Application.get_env(:risime, :signup, []), key, @signup_defaults[key])
+
+  @doc "True while `OPEN_SIGNUP=true` (read at runtime from config)."
+  def open_signup?, do: signup_cfg(:open) == true
+
+  @doc """
+  `phone_confirmed` (§21.4): false only while the user joined by open sign-up and their current
+  phone isn't SMS-verified. Such a phone is never matched to them (§21.5).
+  """
+  def phone_confirmed?(%User{signup_source: "open"} = user), do: phone_verified?(user)
+  def phone_confirmed?(%User{}), do: true
+
+  @type signup_error ::
+          :not_allowlisted
+          | :identity_conflict
+          | :bad_request
+          | :phone_taken
+          | {:rate_limited, pos_integer}
+
+  @doc """
+  `POST /auth/signup` after the switch and token checks (§21.3): an identity that already maps
+  returns its user (idempotent, nothing counted); otherwise limits, validation, then a new user
+  bound to `sub` with a self-asserted phone.
+  """
+  @spec signup(%{sub: String.t(), email: String.t()}, map, String.t()) ::
+          {:ok, %User{}} | {:error, signup_error}
+  def signup(%{sub: _, email: _} = identity, params, ip) do
+    case map_identity(identity) do
+      {:ok, user} ->
+        {:ok, user}
+
+      {:error, :signup_required} ->
+        with :ok <- signup_limits(identity.sub, ip),
+             {:ok, phone, name} <- signup_params(params) do
+          create_open_user(identity, phone, name)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp signup_limits(sub, ip) do
+    day_ago = DateTime.add(DateTime.utc_now(), -1, :day)
+
+    {global, oldest} =
+      Repo.one(
+        from u in User,
+          where: u.signup_source == "open" and u.inserted_at > ^day_ago,
+          select: {count(u.id), min(u.inserted_at)}
+      )
+
+    hour = :timer.hours(1)
+    day = :timer.hours(24)
+
+    cond do
+      global >= signup_cfg(:global_per_day) ->
+        if RateLimiter.hit(:signup_global_warning, :global, 1, hour) == :ok,
+          do: Logger.warning("open sign-up: global cap reached (#{global}/24 h)")
+
+        retry = DateTime.diff(DateTime.add(oldest, 1, :day), DateTime.utc_now())
+        {:error, {:rate_limited, max(retry, 1)}}
+
+      RateLimiter.hit_if_allowed(:signup_ip, ip, signup_cfg(:per_ip_hour), hour) != :ok ->
+        {:error, {:rate_limited, RateLimiter.retry_after_s(hour)}}
+
+      RateLimiter.hit_if_allowed(:signup_sub, sub, signup_cfg(:per_sub_day), day) != :ok ->
+        {:error, {:rate_limited, RateLimiter.retry_after_s(day)}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp signup_params(%{"phone" => phone, "display_name" => name})
+       when is_binary(phone) and is_binary(name) do
+    name = String.trim(name)
+
+    if Validate.phone?(phone) and String.length(name) in 1..64,
+      do: {:ok, phone, name},
+      else: {:error, :bad_request}
+  end
+
+  defp signup_params(_), do: {:error, :bad_request}
+
+  defp create_open_user(%{sub: sub, email: email}, phone, name) do
+    Repo.transaction(fn ->
+      Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", ["risime_signup:" <> phone])
+
+      cond do
+        user = Repo.get_by(User, keycloak_sub: sub) ->
+          user
+
+        phone_taken?(phone) ->
+          Repo.rollback(:phone_taken)
+
+        true ->
+          Repo.insert!(%User{
+            phone: phone,
+            email: email,
+            display_name: name,
+            company: "",
+            keycloak_sub: sub,
+            signup_source: "open"
+          })
+      end
+    end)
+  rescue
+    # A concurrent request for the same `sub` (or phone) won the insert.
+    Ecto.ConstraintError ->
+      case Repo.get_by(User, keycloak_sub: sub) do
+        %User{} = user -> {:ok, user}
+        nil -> {:error, :phone_taken}
+      end
+  end
+
+  # §21.3: held by any user, allowlisted, or named by a pending, unexpired invite.
+  defp phone_taken?(phone) do
+    now = DateTime.utc_now()
+
+    Repo.exists?(from u in User, where: u.phone == ^phone) or
+      Repo.exists?(from a in AllowlistEntry, where: a.phone == ^phone) or
+      Repo.exists?(
+        from i in RisiMe.Social.Invite,
+          where: i.phone == ^phone and i.status == "pending" and i.expires_at > ^now
+      )
+  end
+
+  @doc """
+  The email's privacy-safe tag for logs (§21.7): the first 12 hex digits of
+  HMAC-SHA256(secret_key_base, lowercased email). Admins compute it for a complaint with
+  `bin/risime rpc 'IO.puts RisiMe.Accounts.email_hash("name@example.com")'`.
+  """
+  def email_hash(email) when is_binary(email) do
+    secret = Application.fetch_env!(:risime, RisiMeWeb.Endpoint)[:secret_key_base]
+
+    :crypto.mac(:hmac, :sha256, secret, Validate.normalize_email(email))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 12)
+  end
+
+  @doc false
+  def email_domain(email) when is_binary(email) do
+    case String.split(email, "@") do
+      [_ | _] = parts when length(parts) > 1 ->
+        parts |> List.last() |> String.downcase() |> String.replace(~r/[^a-z0-9.-]/, "")
+
+      _ ->
+        "-"
+    end
+    |> String.slice(0, 100)
+  end
+
+  # §21.7: never the plain email; at most once per email per 10 minutes.
+  defp log_refused(reason, email) do
+    hash = email_hash(email)
+
+    if RateLimiter.hit(:refused_signin_log, hash, 1, :timer.minutes(10)) == :ok,
+      do:
+        Logger.info(
+          "sign-in refused: reason=#{reason} email_domain=#{email_domain(email)} email_hash=#{hash}"
+        )
+
+    :ok
   end
 
   defp bind(entry, sub) do

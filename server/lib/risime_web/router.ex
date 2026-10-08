@@ -29,6 +29,8 @@ defmodule RisiMeWeb.Router do
     pipe_through :api
 
     get "/auth/config", AuthController, :config
+    # v1.20 §21.3: authenticates the Keycloak token itself (the identity maps to no user yet).
+    post "/auth/signup", AuthController, :signup
     get "/mls/attestation_keys", MLSController, :attestation_keys
   end
 
