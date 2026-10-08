@@ -47,6 +47,43 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## P0 (2026-10-08 23:24 UTC): pilot crash-looped with RISI=on; Risi is ON again since 23:33 UTC
+- **What happened:**
+  1. The orchestrator turned Risi on at 23:23 (keys pair #1 in .env; healthy; Risi sealed 33
+     `risi_mls_kv` rows with key #1).
+  2. Harsha then ran the same enable commands, which appended key pair #2. systemd uses the last
+     value, so `RisiMe.Agent.Mls.init` got `Risi MLS open failed: :tampered`.
+  3. The failure happened during the initial application start, so the whole app exited and
+     systemd restart-looped.
+  4. Harsha set the flags off: healthy again.
+- **Two causes:**
+  - **(a) operational:** a duplicate key pair (my enable appended without checking; my report didn't
+    make clear it was already done);
+  - **(b) server bug:** a Risi failure at boot takes the server down (the `:temporary` child only
+    protects after start).
+- **Done:**
+  - **Guarded enable (Harsha approved):**
+    - backups `~/risime-backups/{env,pilot.env}-before-risi-on2-20261008T233312Z`;
+    - kept the FIRST key pair (it sealed the store), dropped the duplicate;
+    - one TABS/RISI pair; restart;
+    - 60 s health and Risi watch with automatic rollback to off.
+    - **Result:** healthy, `tabs: on`, NRestarts=0, no errors, store intact (33 rows, 31 key
+      packages).
+  - **Gate:** `scripts/boot-check` (`96746fd`) in nightly-release, before publish. The prod release
+    boots with the real .env + pilot.env against throwaway stores:
+    - Risi off, on, and on again over its sealed store;
+    - **on with a wrong RISI_MLS_KEK (must still boot healthy)**;
+    - plus a read-only Risi preflight against the pilot DB.
+    It reproduces tonight's crash on the current code (on-wrongkey FAIL), so **no release passes
+    until the server fix lands**.
+- **In progress (server agent):**
+  - Risi can never stop the server (boot isolation);
+  - a KEK check value with a `kek_mismatch` reason;
+  - `RisiMe.Release.risi_preflight/0`;
+  - `/health` gains a `risi` field.
+- **To-do:** make the enable command idempotent (never append a second key) — use the script in the
+  orchestrator's notes or `scripts/risi-enable` (root, next).
+
 ## v0.2.0-nightly.39 (live 2026-10-08 ~20:50 UTC, not required): one call screen, §23 1:1 switching and screen share; Risi gate
 - **What's in:**
   - the WhatsApp-style single call screen;
