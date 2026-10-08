@@ -47,6 +47,20 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.33 (live 2026-10-08 ~12:25 UTC, not required): push audit log, emoji panel, attachment sheet
+- **What's in:**
+  - **Server push audit lines** (`edb1e9b`):
+    - `push: kind=inbox|call user=<hash8> device=<id8> result=… ms=… msg=…`
+    - `push: skipped kind=inbox user=<hash8> reason=online devices_online=N`
+    - `push: none … reason=no_token`
+  - **Android v1.23 UI:** the inline emoji panel (DataStore recents) and the 5-tile attachment sheet
+    (`49282f2`).
+- **Gate:** all PASS, with the restore phase on by default.
+- **Harsha's evidence:** his user hash is **`0b1f9c32`** and his device is `ad92ca09`. After a background or
+  locked test: `grep 'push: .*user=0b1f9c32' ~/risime-logs/server.log | tail`.
+- **Not in it:** the P0 audio routing (`1a40df7`, on main) plus its review fixes (in progress), and
+  the P0 background delivery (in progress).
+
 ## v0.2.0-nightly.32 (live 2026-10-08 ~11:50 UTC, not required): backups, video-call audio, fixes
 - **What's in:**
   - v1.22 encrypted backups (local, export, server backup with a recovery key, restore on first
