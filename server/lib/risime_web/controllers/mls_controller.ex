@@ -89,8 +89,13 @@ defmodule RisiMeWeb.MLSController do
   @doc "`POST /mls/groups/{dm}/rejoin` (v1.16, proposal 2026-10-07-dm-device-readd §4)."
   def rejoin(conn, %{"conversation_id" => conv}) do
     case MLS.rejoin_dm(me(conn), caller_device(conn), conv) do
-      {:ok, op, candidates} -> conn |> put_status(202) |> json(%{op: op, candidates: candidates})
-      error -> error(conn, error)
+      {:ok, op, candidates, exhausted} ->
+        conn
+        |> put_status(202)
+        |> json(%{op: op, candidates: candidates, exhausted: exhausted})
+
+      error ->
+        error(conn, error)
     end
   end
 
@@ -134,6 +139,9 @@ defmodule RisiMeWeb.MLSController do
 
   defp error(conn, {:error, {:not_ready, missing}}),
     do: ApiError.send_error(conn, 409, :not_ready, extra: [missing: missing])
+
+  defp error(conn, {:error, {:rejoin_pending, op_id, n}}),
+    do: ApiError.send_error(conn, 409, :rejoin_pending, extra: [op_id: op_id, candidates: n])
 
   defp error(conn, {:error, {:generation_conflict, g}}),
     do: ApiError.send_error(conn, 409, :generation_conflict, extra: [generation: g])

@@ -10,6 +10,7 @@ defmodule RisiMe.Release do
       bin/risime eval "RisiMe.Release.backfill_sender_copies()"   # v1.10, dry run by default
       bin/risime eval "RisiMe.Release.name_pending_device_ops()"  # v1.14, dry run by default
       bin/risime eval "RisiMe.Release.dm_device_ops()"            # v1.16, dry run by default
+      bin/risime eval "RisiMe.Release.stale_device_ops()"         # v1.21, dry run by default
 
   `migrate_cql/1` applies `priv/cql/*.cql` exactly like `mix risime.cql.migrate`: it creates the
   keyspace if needed, applies each file once in name order and records it in the keyspace's
@@ -186,6 +187,43 @@ defmodule RisiMe.Release do
       end
 
     line = "dm device ops (dry_run=#{dry_run}): #{inspect(result)}"
+    Logger.info(line)
+    IO.puts(line)
+    {:ok, result}
+  end
+
+  @doc """
+  v1.21 §12.12.7 one-off pilot recovery: for every pending `devices` op (groups and DMs) applies
+  the §12.12.5 pruning, clears all strikes, creates the §12.12.6 cleanup ops, and in a real run
+  names committers. **Dry run by default** (everything is rolled back; nothing changes).
+  Idempotent. Logs and prints counts only: `ops`, `pruned_devices`, `done_ops`, `cleanup_ops`,
+  `stale_leaves`, `named`, `waiting`, `exhausted`. Returns `{:ok, counts}`.
+
+      bin/risime eval "RisiMe.Release.stale_device_ops()"                # dry run
+      bin/risime eval "RisiMe.Release.stale_device_ops(dry_run: false)"  # prunes, creates, names
+
+  Like `dm_device_ops/1`, the real run from `eval` queues a one-off `GroupTimer`
+  `stale_device_ops` job that the running server executes (naming needs presence and push).
+  """
+  def stale_device_ops(opts \\ []) do
+    dry_run = Keyword.get(opts, :dry_run, true)
+
+    result =
+      cond do
+        Process.whereis(RisiMe.Repo) != nil ->
+          RisiMe.Workers.StaleLeaves.recover(dry_run: dry_run)
+
+        dry_run ->
+          with_repo(fn -> RisiMe.Workers.StaleLeaves.recover(dry_run: true) end)
+
+        true ->
+          with_repo(fn ->
+            RisiMe.Repo.insert!(RisiMe.Workers.GroupTimer.new(%{"kind" => "stale_device_ops"}))
+            :queued_for_the_running_server
+          end)
+      end
+
+    line = "stale device ops (dry_run=#{dry_run}): #{inspect(result)}"
     Logger.info(line)
     IO.puts(line)
     {:ok, result}

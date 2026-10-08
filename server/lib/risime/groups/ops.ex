@@ -24,7 +24,7 @@ defmodule RisiMe.Groups.Ops do
 
   alias RisiMe.{Devices, Groups, Messaging, MLS, Presence, RateLimiter, Repo, TimeUUID}
   alias RisiMe.Devices.Device
-  alias RisiMe.Groups.{Group, Member, Op}
+  alias RisiMe.Groups.{Group, Member, Op, Strikes}
   alias RisiMe.Workers.GroupTimer
 
   @committer_s 60
@@ -180,7 +180,18 @@ defmodule RisiMe.Groups.Ops do
     end
   end
 
-  @doc "Names the next candidate (or waits for one to come online)."
+  @doc """
+  Names the next candidate (or waits for one to come online). A `devices` op is pruned first
+  (§12.12.5; nil when that finished it) and only devices within their naming budget are named
+  (§12.12.4); an exhausted op waits with no committer and no wake pushes.
+  """
+  def name_next(%Group{} = g, %Op{type: "devices"} = op) do
+    case prune(g, op) do
+      nil -> nil
+      op -> name_budgeted(g, op)
+    end
+  end
+
   def name_next(%Group{} = g, %Op{} = op) do
     cands = online_candidates(g, op)
 
@@ -196,7 +207,33 @@ defmodule RisiMe.Groups.Ops do
     end
   end
 
-  defp assign(_g, op, nil, _mode) do
+  defp name_budgeted(g, op) do
+    all = candidates(g, op)
+    budget = Strikes.in_budget(op.strikes, all)
+    online = Enum.filter(budget, fn {_u, d} -> Presence.device_online?(d) end)
+
+    case Enum.reject(online, fn {_u, d} -> d in op.tried end) do
+      [ref | _] ->
+        assign(g, op, ref, :append)
+
+      [] ->
+        case online do
+          [ref | _] ->
+            assign(g, op, ref, :reset)
+
+          [] ->
+            if all != [] and budget == [] do
+              Logger.info("devices_op_exhausted: candidates=#{length(all)}")
+              waiting(op, Strikes.next_expiry(op.strikes, all))
+            else
+              waiting(op, if(cleanup?(op), do: nil, else: DateTime.utc_now()))
+            end
+        end
+    end
+  end
+
+  # No committer. `wake_at`: when the §12.4a wake job runs (nil: no wake job, e.g. a cleanup op).
+  defp waiting(op, wake_at) do
     op =
       op
       |> Ecto.Changeset.change(
@@ -207,9 +244,19 @@ defmodule RisiMe.Groups.Ops do
       )
       |> Repo.update!()
 
-    # §12.4a: nobody online can commit it; wake the candidates (one wake job per op at a time).
-    if op.type == "devices", do: schedule_wake(op.op_id, DateTime.utc_now())
+    if wake_at, do: schedule_wake(op.op_id, wake_at)
     op
+  end
+
+  defp assign(_g, op, nil, _mode) do
+    op
+    |> Ecto.Changeset.change(
+      committer_user: nil,
+      committer_device: nil,
+      committer_until: nil,
+      naming: op.naming + 1
+    )
+    |> Repo.update!()
   end
 
   defp assign(g, op, {u, d}, mode) do
@@ -235,6 +282,7 @@ defmodule RisiMe.Groups.Ops do
         )
       )
 
+    if op.type == "devices", do: Logger.info("devices_op_named: naming=#{op.naming}")
     publish_op(g, op)
     op
   end
@@ -298,7 +346,24 @@ defmodule RisiMe.Groups.Ops do
     (by_recency(own) ++ by_recency(admin_devices(g)) ++ by_recency(member_devices(g, op)))
     |> Enum.uniq()
     |> Enum.reject(fn {u, _d} = ref -> u in leaving or MapSet.member?(changing, ref) end)
+    |> drop_dormant(op)
   end
+
+  # v1.21: a superseded device (§12.1) that isn't online can't be named and is no candidate for
+  # a `devices` op (it would count towards `candidates` forever). Once seen again it is current.
+  defp drop_dormant(refs, %Op{type: "devices"}) do
+    superseded = refs |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> MLS.superseded_devices()
+
+    Enum.reject(refs, fn {_u, d} = ref ->
+      MapSet.member?(superseded, ref) and not Presence.device_online?(d)
+    end)
+  end
+
+  defp drop_dormant(refs, _op), do: refs
+
+  @doc "§12.12.6: a cleanup op (removes stale leaves; tiers 1–2 only, no wake pushes)."
+  def cleanup?(%Op{type: "devices", payload: p}), do: p["cleanup"] == true
+  def cleanup?(_), do: false
 
   # §12.4a tier 3: the other active members' in-group devices (never agents, never superseded),
   # only while the member path is open. Sorted by device id first, so recency ties are stable.
@@ -462,7 +527,9 @@ defmodule RisiMe.Groups.Ops do
       Groups.locked(group_id, fn ->
         with %Group{} = g <- Groups.get_group(group_id),
              %Op{committer_device: nil} = op <- get(group_id, op_id),
-             true <- authorised?(g, op, {user_id, device_id}) do
+             %Op{} = op <- prune_if_devices(g, op),
+             true <- authorised?(g, op, {user_id, device_id}),
+             false <- op.type == "devices" and Strikes.out?(op.strikes, device_id) do
           assign(g, op, {user_id, device_id}, :append)
         end
 
@@ -472,6 +539,9 @@ defmodule RisiMe.Groups.Ops do
 
     :ok
   end
+
+  defp prune_if_devices(g, %Op{type: "devices"} = op), do: prune(g, op)
+  defp prune_if_devices(_g, op), do: op
 
   ## Wake-ups (§12.4a)
 
@@ -493,38 +563,61 @@ defmodule RisiMe.Groups.Ops do
 
   @doc """
   A `devices` op still waits with no committer: sends the §8.2 inbox push to the own token of
-  each of the first #{@wake_max} candidates (skipping online devices and devices without a token,
-  at most #{@wake_per_device_day} per device per day), then checks again in #{@wake_every_h} h.
-  Runs outside the group lock (reads only). Logs counts only.
+  each of the first #{@wake_max} candidates within their naming budget (skipping online devices
+  and devices without a token, at most #{@wake_per_device_day} per device per day), then checks
+  again in #{@wake_every_h} h. v1.21: the op is pruned first (under the group lock); cleanup ops
+  get no wake pushes; an exhausted op gets none either and is checked again when the first
+  budget comes back. Logs counts only.
   """
   def wake(op_id) do
     with %Op{type: "devices", committer_device: nil} = op <- Repo.get(Op, op_id),
-         %Group{} = g <- Groups.get_group(op.group_id) do
-      targets =
-        g
-        |> candidates(op)
-        |> Enum.take(@wake_max)
-        |> Enum.reject(fn {_u, d} -> Presence.device_online?(d) end)
+         false <- cleanup?(op),
+         {:ok, {%Group{} = g, %Op{committer_device: nil} = op}} <-
+           Groups.locked(op.group_id, fn ->
+             with %Group{} = g <- Groups.get_group(op.group_id),
+                  %Op{} = op <- Repo.get(Op, op_id),
+                  %Op{} = op <- prune(g, op) do
+               {:ok, {g, op}}
+             else
+               _ -> {:ok, nil}
+             end
+           end) do
+      all = candidates(g, op)
 
-      tokens =
-        for {_u, d} <- targets,
-            token = Devices.device_push_token(d),
-            token != nil,
-            RateLimiter.hit_if_allowed(
-              :group_wake,
-              d,
-              @wake_per_device_day,
-              :timer.hours(24)
-            ) == :ok,
-            do: token
+      if Strikes.exhausted?(op.strikes, all) do
+        Logger.info("devices_op_exhausted: candidates=#{length(all)}")
 
-      RisiMe.Push.Dispatcher.push_inbox(tokens)
-      Logger.info("group_op_wake: candidates=#{length(targets)} pushed=#{length(tokens)}")
-      schedule_wake(op.op_id, DateTime.add(DateTime.utc_now(), @wake_every_h, :hour))
+        case Strikes.next_expiry(op.strikes, all) do
+          nil -> :ok
+          at -> schedule_wake(op.op_id, at)
+        end
+      else
+        targets =
+          op.strikes
+          |> Strikes.in_budget(all)
+          |> Enum.take(@wake_max)
+          |> Enum.reject(fn {_u, d} -> Presence.device_online?(d) end)
+
+        tokens = wake_tokens(targets)
+        RisiMe.Push.Dispatcher.push_inbox(tokens)
+        Logger.info("group_op_wake: candidates=#{length(targets)} pushed=#{length(tokens)}")
+        schedule_wake(op.op_id, DateTime.add(DateTime.utc_now(), @wake_every_h, :hour))
+      end
     end
 
     :ok
   end
+
+  @doc false
+  def wake_tokens(targets) do
+    for {_u, d} <- targets,
+        token = Devices.device_push_token(d),
+        token != nil,
+        RateLimiter.hit_if_allowed(:group_wake, d, @wake_per_device_day, :timer.hours(24)) == :ok,
+        do: token
+  end
+
+  def wake_every_h, do: @wake_every_h
 
   ## Re-naming waiting ops (§12.11)
 
@@ -595,7 +688,7 @@ defmodule RisiMe.Groups.Ops do
       Groups.locked(gid, fn ->
         with %Group{} = g <- Groups.get_group(gid),
              %Op{committer_device: nil} = op <- get(gid, oid) do
-          {:ok, name_next(g, op).committer_device != nil}
+          {:ok, match?(%Op{committer_device: d} when d != nil, name_next(g, op))}
         else
           _ -> {:ok, false}
         end
@@ -615,7 +708,7 @@ defmodule RisiMe.Groups.Ops do
       Groups.locked(op.group_id, fn ->
         with %Op{naming: ^naming} = op <- Repo.get(Op, op_id),
              %Group{} = g <- Groups.get_group(op.group_id) do
-          name_next(g, op)
+          g |> strike(op) |> then(&name_next(g, &1))
         end
 
         {:ok, nil}
@@ -624,6 +717,15 @@ defmodule RisiMe.Groups.Ops do
 
     :ok
   end
+
+  # §12.12.4: the named device's 60 s ran out without an accepted commit completing the op.
+  defp strike(_g, %Op{type: "devices", committer_device: d} = op) when is_binary(d) do
+    op
+    |> Ecto.Changeset.change(strikes: Strikes.add(op.strikes, d))
+    |> Repo.update!()
+  end
+
+  defp strike(_g, op), do: op
 
   @doc "24 h passed: an `add` drops its `pending_add` members (`add_expired`); a `role` op is dropped."
   def expire(op_id) do
@@ -713,6 +815,260 @@ defmodule RisiMe.Groups.Ops do
     end
 
     :ok
+  end
+
+  ## v1.21 §12.12.5: ops whose targets are gone
+
+  @doc """
+  Prunes a `devices` op (§12.12.5), under the group lock: `added` loses devices that can no longer
+  receive (§12.1: row gone, unseen for 30 days, or superseded; such a device also leaves
+  `removed`), `removed` loses devices no longer in the group (and, for a cleanup op, devices no
+  longer stale). An op whose affected user isn't an active member is dropped; one with nothing
+  left to do is done (deleted, no event). Returns the op, or nil when it was deleted.
+  """
+  def prune(%Group{} = g, %Op{type: "devices"} = op) do
+    case prune_plan(g, op) do
+      {:keep, ^op, 0} ->
+        op
+
+      {:keep, new, _n} ->
+        op |> Ecto.Changeset.change(payload: new.payload) |> Repo.update!()
+
+      {_gone, _, _n} ->
+        Repo.delete!(op)
+        nil
+    end
+  end
+
+  def prune(_g, op), do: op
+
+  @doc """
+  The effect of `prune/2` without writing: `{:keep, op_with_new_payload, pruned_devices}`,
+  `{:done, op, pruned_devices}` or `{:dropped, op, pruned_devices}`.
+  """
+  def prune_plan(%Group{} = g, %Op{type: "devices"} = op) do
+    u = affected_user(op)
+    in_group = Groups.in_group(g.id)
+    added = refs(op, "added")
+    removed = refs(op, "removed")
+
+    cond do
+      not match?(%Member{state: "active"}, Groups.member(g.id, u)) ->
+        {:dropped, op, 0}
+
+      Groups.epoch(g.id) == nil ->
+        {:keep, op, 0}
+
+      true ->
+        users = Enum.uniq([u | for({uu, _} <- added ++ removed, do: uu)])
+        receiving = RisiMe.MLS.DmOps.addable(users)
+        {added2, gone} = Enum.split_with(added, &MapSet.member?(receiving, &1))
+        stale = if cleanup?(op), do: stale_leaves(g.id, users), else: nil
+
+        removed2 =
+          Enum.filter(removed, fn ref ->
+            MapSet.member?(in_group, ref) and ref not in gone and
+              (stale == nil or MapSet.member?(stale, ref))
+          end)
+
+        n = length(added) - length(added2) + length(removed) - length(removed2)
+        new = %{op | payload: put_refs(op.payload, added2, removed2)}
+
+        if Enum.all?(added2, &MapSet.member?(in_group, &1)) and removed2 == [],
+          do: {:done, op, n},
+          else: {:keep, if(n == 0, do: op, else: new), n}
+    end
+  end
+
+  defp put_refs(payload, added, removed),
+    do:
+      Map.merge(payload, %{
+        "added" => Enum.map(added, &ref_json/1),
+        "removed" => Enum.map(removed, &ref_json/1)
+      })
+
+  @doc "Prunes every `devices` op of the group (after an accepted commit)."
+  def prune_all(%Group{} = g) do
+    for %Op{type: "devices"} = op <- list(g.id), do: prune(g, op)
+    :ok
+  end
+
+  ## v1.21 §12.12.2–3: rejoin replies and the reset guard
+
+  @doc "The pending `devices` op that adds the device, if any."
+  def adding_op(group_id, ref) do
+    json = ref_json(ref)
+
+    group_id
+    |> list()
+    |> Enum.find(&(&1.type == "devices" and json in (&1.payload["added"] || [])))
+  end
+
+  @doc "`{candidates, exhausted}` of an op (§12.12.2), online or not."
+  def rejoin_status(%Group{} = g, %Op{} = op) do
+    all = candidates(g, op)
+    {length(all), Strikes.exhausted?(op.strikes, all)}
+  end
+
+  @doc """
+  §12.12.3 server guard: `{:error, {:rejoin_pending, op_id, candidates}}` while a pending
+  `devices` op adds the calling device, is not exhausted, and has a candidate or was created less
+  than 24 h ago. Under the group lock.
+  """
+  def rejoin_guard(%Group{} = g, ref) do
+    case adding_op(g.id, ref) do
+      nil ->
+        :ok
+
+      op ->
+        {n, exhausted?} = rejoin_status(g, op)
+        young? = DateTime.diff(DateTime.utc_now(), op.created_at) < 24 * 3600
+
+        if not exhausted? and (n > 0 or young?),
+          do: {:error, {:rejoin_pending, op.op_id, n}},
+          else: :ok
+    end
+  end
+
+  ## v1.21 §12.12.6: stale leaves
+
+  @doc """
+  The stale leaves of the given users in a conversation (groups and DMs): in the group, the
+  device superseded (§12.1) and unseen (census or `PUT`) for `STALE_LEAF_HOURS`, and its user
+  keeps at least one non-superseded leaf there.
+  """
+  def stale_leaves(conv, user_ids) do
+    leaves =
+      Repo.all(
+        from gd in "mls_group_devices",
+          where:
+            gd.conversation_id == ^conv and gd.user_id in type(^user_ids, {:array, :binary_id}),
+          select: {type(gd.user_id, :binary_id), type(gd.device_id, :binary_id)}
+      )
+
+    stale_among(leaves)
+  end
+
+  @doc false
+  def stale_among([]), do: MapSet.new()
+
+  def stale_among(leaves) do
+    users = leaves |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+    superseded = MLS.superseded_devices(users)
+    cutoff = DateTime.add(DateTime.utc_now(), -stale_hours(), :hour)
+    seen = last_seen(Enum.map(leaves, &elem(&1, 1)))
+
+    live_users =
+      for {u, _} = ref <- leaves, not MapSet.member?(superseded, ref), into: MapSet.new(), do: u
+
+    for {u, d} = ref <- leaves,
+        MapSet.member?(superseded, ref),
+        MapSet.member?(live_users, u),
+        unseen_since?(seen[d], cutoff),
+        into: MapSet.new(),
+        do: ref
+  end
+
+  defp unseen_since?(nil, _cutoff), do: true
+  defp unseen_since?(t, cutoff), do: DateTime.compare(t, cutoff) == :lt
+
+  @doc "`STALE_LEAF_HOURS` (default 24)."
+  def stale_hours, do: Application.get_env(:risime, :stale_leaf_hours, 24)
+
+  # The later of the census and the `PUT` last-seen times, per device id.
+  defp last_seen(device_ids) do
+    keys = for d <- device_ids, do: "device:" <> d
+
+    census =
+      Repo.all(
+        from i in "app_instances",
+          where: i.instance_key in ^keys,
+          select: {i.instance_key, type(i.last_seen_at, :utc_datetime_usec)}
+      )
+      |> Map.new()
+
+    put =
+      Repo.all(
+        from d in Device, where: d.device_id in ^device_ids, select: {d.device_id, d.last_seen_at}
+      )
+      |> Map.new()
+
+    Map.new(device_ids, fn d ->
+      {d, latest(census["device:" <> d], put[d])}
+    end)
+  end
+
+  defp latest(nil, b), do: b
+  defp latest(a, nil), do: a
+  defp latest(a, b), do: if(DateTime.compare(a, b) == :gt, do: a, else: b)
+
+  @doc """
+  §12.12.6: makes sure a cleanup op removes `stale` (a user's stale leaves not yet removed by
+  another pending op) in the group; at most one cleanup op per (group, user). Creates or widens
+  it; `name: true` names a committer when it has none. Under the group lock. Returns
+  `{:created | :widened | :unchanged, op}` or `{:none, nil}`.
+  """
+  def ensure_cleanup(%Group{} = g, user_id, stale, opts \\ []) do
+    name? = Keyword.get(opts, :name, true)
+    ops = list(g.id)
+
+    taken =
+      for %Op{type: "devices"} = op <- ops,
+          not cleanup?(op),
+          ref <- refs(op, "removed"),
+          into: MapSet.new(),
+          do: ref
+
+    stale = stale |> Enum.reject(&MapSet.member?(taken, &1)) |> Enum.sort()
+    existing = Enum.find(ops, &(cleanup?(&1) and affected_user(&1) == user_id))
+
+    cond do
+      stale == [] ->
+        {if(existing, do: :unchanged, else: :none), existing}
+
+      existing ->
+        removed = Enum.uniq(refs(existing, "removed") ++ stale)
+
+        if removed == refs(existing, "removed") do
+          op =
+            if name? and existing.committer_device == nil,
+              do: name_next(g, existing),
+              else: existing
+
+          {:unchanged, op}
+        else
+          op =
+            existing
+            |> Ecto.Changeset.change(payload: put_refs(existing.payload, [], removed))
+            |> Repo.update!()
+
+          {:widened, if(name? and op.committer_device == nil, do: name_next(g, op), else: op)}
+        end
+
+      true ->
+        now = DateTime.utc_now()
+
+        op =
+          Repo.insert!(%Op{
+            op_id: Ecto.UUID.generate(),
+            group_id: g.id,
+            type: "devices",
+            actor: user_id,
+            payload: %{
+              "user_ids" => [],
+              "role" => nil,
+              "added" => [],
+              "removed" => Enum.map(stale, &ref_json/1),
+              "cleanup" => true
+            },
+            created_at: now,
+            naming: 0,
+            tried: [],
+            strikes: %{}
+          })
+
+        {:created, if(name?, do: name_next(g, op), else: op)}
+    end
   end
 
   @doc "After a commit: `devices` ops whose changes have all landed are done."

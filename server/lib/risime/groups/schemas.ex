@@ -47,6 +47,7 @@ defmodule RisiMe.Groups.Op do
     field :committer_until, :utc_datetime_usec
     field :naming, :integer, default: 0
     field :tried, {:array, :binary_id}, default: []
+    field :strikes, :map, default: %{}
     field :expires_at, :utc_datetime_usec
     field :created_at, :utc_datetime_usec
   end

@@ -189,12 +189,9 @@ defmodule RisiMeWeb.GroupsMemberDevicesTest do
       c2 = reinstall_c!(ctx)
       op = waiting_op(id)
 
-      # c's old (superseded, offline) phone is tier 1; a admin; b member.
-      assert Ops.candidates(g, op) == [
-               {c.user.id, ctx.c_dev},
-               {a.user.id, a_dev},
-               {b.user.id, b_dev}
-             ]
+      # c's old (superseded, offline) phone is no candidate (v1.21: it can't be named); a admin;
+      # b member.
+      assert Ops.candidates(g, op) == [{a.user.id, a_dev}, {b.user.id, b_dev}]
 
       # Online admin wins over an online member.
       join!(b, b_dev)
@@ -213,7 +210,7 @@ defmodule RisiMeWeb.GroupsMemberDevicesTest do
         set: [kind: "agent"]
       )
 
-      assert Ops.candidates(g, op) == [{c.user.id, ctx.c_dev}, {a.user.id, a_dev}]
+      assert Ops.candidates(g, op) == [{a.user.id, a_dev}]
       refute Ops.authorised?(g, op, {b.user.id, b_dev})
     end
 
@@ -305,7 +302,22 @@ defmodule RisiMeWeb.GroupsMemberDevicesTest do
       befriend!(a, d)
       d_dev = device!(d, [@cap])
 
-      op = Ops.create(g, "devices", d.user.id, %{added: [{d.user.id, d_dev}]}, nil)
+      # (v1.21 §12.12.5 drops such an op at its first naming: insert it as it stood.)
+      op =
+        Repo.insert!(%Op{
+          op_id: Ecto.UUID.generate(),
+          group_id: id,
+          type: "devices",
+          actor: d.user.id,
+          payload: %{
+            "user_ids" => [],
+            "role" => nil,
+            "added" => [ref(d.user.id, d_dev)],
+            "removed" => []
+          },
+          created_at: DateTime.utc_now()
+        })
+
       refute Ops.member_committable?(g, op)
 
       assert {403, _} =
@@ -343,7 +355,8 @@ defmodule RisiMeWeb.GroupsMemberDevicesTest do
 
       assert_receive {:push, ^ta, %{"type" => "inbox", "v" => "1"}}, 1_000
       assert_receive {:push, ^tb, %{"type" => "inbox", "v" => "1"}}, 1_000
-      assert log =~ "group_op_wake: candidates=3 pushed=2"
+      # (v1.21: c's superseded, offline old phone is no candidate.)
+      assert log =~ "group_op_wake: candidates=2 pushed=2"
       refute log =~ c.user.id
 
       # The next check is queued 6 h out (one per op).
@@ -359,8 +372,8 @@ defmodule RisiMeWeb.GroupsMemberDevicesTest do
           for _ <- 1..4, do: perform_job(GroupTimer, %{"kind" => "wake", "op_id" => op.op_id})
         end)
 
-      assert length(String.split(log, "candidates=3 pushed=2")) - 1 == 3
-      assert log =~ "candidates=3 pushed=0"
+      assert length(String.split(log, "candidates=2 pushed=2")) - 1 == 3
+      assert log =~ "candidates=2 pushed=0"
 
       # An online candidate is skipped (and the op gets named on its join).
       join!(b, b_dev)
@@ -371,13 +384,13 @@ defmodule RisiMeWeb.GroupsMemberDevicesTest do
 
       refute log =~ "group_op_wake"
 
-      # Waiting again while b stays online: b is skipped (a and c's old phone remain).
+      # Waiting again while b stays online: b is skipped (a remains).
       unname!(Repo.get(Op, op.op_id))
 
       log =
         capture_log(fn -> perform_job(GroupTimer, %{"kind" => "wake", "op_id" => op.op_id}) end)
 
-      assert log =~ "group_op_wake: candidates=2 pushed=0"
+      assert log =~ "group_op_wake: candidates=1 pushed=0"
     end
   end
 

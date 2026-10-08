@@ -13,7 +13,10 @@ defmodule RisiMe.Workers.GroupTimer do
 
     * `dm_committer` (v1.16): a DM `devices` op's named committer's 60 s ran out;
     * `dm_ops` (v1.16): the one-off DM recovery queued by
-      `RisiMe.Release.dm_device_ops(dry_run: false)`.
+      `RisiMe.Release.dm_device_ops(dry_run: false)`;
+    * `dm_wake` (v1.21 §12.12.4): a DM `devices` op waits with no online candidate (unique per op);
+    * `stale_device_ops` (v1.21 §12.12.7): the one-off recovery queued by
+      `RisiMe.Release.stale_device_ops(dry_run: false)`.
 
   Args hold only ids and counters (never content).
   """
@@ -32,6 +35,15 @@ defmodule RisiMe.Workers.GroupTimer do
 
   def perform(%Oban.Job{args: %{"kind" => "dm_committer", "op_id" => op_id, "naming" => n}}),
     do: RisiMe.MLS.DmOps.committer_timeout(op_id, n)
+
+  def perform(%Oban.Job{args: %{"kind" => "dm_wake", "op_id" => op_id}}),
+    do: RisiMe.MLS.DmOps.wake(op_id)
+
+  def perform(%Oban.Job{args: %{"kind" => "stale_device_ops"}}) do
+    counts = RisiMe.Workers.StaleLeaves.recover(dry_run: false)
+    Logger.info("stale device ops (dry_run=false): #{inspect(counts)}")
+    :ok
+  end
 
   def perform(%Oban.Job{args: %{"kind" => "dm_ops"}}) do
     counts = RisiMe.MLS.DmOps.recover(dry_run: false)

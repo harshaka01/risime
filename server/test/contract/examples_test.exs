@@ -125,8 +125,9 @@ defmodule RisiMe.ContractExamplesTest do
                     signal_friend_v120.json)
 
   # v1.21 (reinstalls without reset, §12.12; plus the v1.16 DM-op examples that were missing):
-  # parse-only placeholders until the server implements it.
-  @pending_v1_21 ~w(error_rejoin_pending.json event_group_op_cleanup.json event_mls_dm_op.json
+  # checked in the "v1.21" describe below; the behaviour in
+  # test/risime_web/controllers/rejoin_v121_test.exs.
+  @checked_v1_21 ~w(error_rejoin_pending.json event_group_op_cleanup.json event_mls_dm_op.json
                     group_rejoin_reply_v121.json mls_commit_request_dm_op.json
                     mls_dm_rejoin_reply.json mls_dm_rejoin_reply_v121.json)
 
@@ -192,7 +193,7 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_18 ++
         @checked_v1_19 ++
         @checked_v1_20 ++
-        @pending_v1_21 ++
+        @checked_v1_21 ++
         @pending_v1_22
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
@@ -2995,6 +2996,183 @@ defmodule RisiMe.ContractExamplesTest do
       assert_same_shape(incoming, hd(ex["incoming"]))
       assert incoming["phone_confirmed"] == false
       assert Enum.all?(ours["friends"], &(&1["phone_confirmed"] == true))
+    end
+  end
+
+  ## v1.21 (§12.12)
+
+  describe "v1.21" do
+    setup :with_attestation_key
+
+    defp v121_device!(user, caps \\ ["groups", "member_devices"]) do
+      dev = Ecto.UUID.generate()
+
+      {:ok, _} =
+        RisiMe.Devices.register(user.user.id, dev, %{
+          "platform" => "android",
+          "mls" => %{
+            "signature_key" => Base.encode64(:crypto.strong_rand_bytes(32)),
+            "capabilities" => caps
+          }
+        })
+
+      :ok = RisiMe.MLS.record_instance(user.user.id, dev, nil, "0.3.0")
+      dev
+    end
+
+    # The device was last seen `hours` ago, before its user's newer device (§12.1).
+    defp v121_supersede!(dev, hours) do
+      past = DateTime.add(DateTime.utc_now(), -hours * 3600, :second)
+
+      Repo.update_all(from(d in RisiMe.Devices.Device, where: d.device_id == ^dev),
+        set: [last_seen_at: past, inserted_at: DateTime.add(past, -60, :second)]
+      )
+
+      Repo.update_all(from(i in "app_instances", where: i.instance_key == ^("device:" <> dev)),
+        set: [last_seen_at: past]
+      )
+    end
+
+    defp v121_join!(user, dev) do
+      {:ok, sock} = connect(UserSocket, %{"token" => user.token, "device_id" => dev})
+      {:ok, _, _} = subscribe_and_join(sock, InboxChannel, "inbox:" <> user.user.id, %{})
+    end
+
+    defp v121_api(method, path, token, body \\ nil, device \\ nil),
+      do: RisiMe.GroupHelpers.api(method, path, token, body, device)
+
+    defp v121_ref(u, d), do: %{"user_id" => u, "device_id" => d}
+
+    test "group_rejoin_reply_v121.json, error_rejoin_pending.json, event_group_op_cleanup.json",
+         %{a: a, b: b} do
+      import RisiMe.GroupHelpers, only: [create_commit: 2, clear_legacy!: 0]
+      clear_legacy!()
+      a1 = v121_device!(a)
+      b1 = v121_device!(b)
+
+      {201, %{"group" => %{"id" => id}}} =
+        v121_api(
+          :post,
+          "/api/v1/groups",
+          a.token,
+          %{"client_group_id" => Ecto.UUID.generate(), "member_ids" => [b.user.id]},
+          a1
+        )
+
+      {200, _} =
+        v121_api(
+          :post,
+          "/api/v1/mls/groups/#{id}/commit",
+          a.token,
+          create_commit([a.user.id, b.user.id], {a.user.id, a1}),
+          a1
+        )
+
+      # The only admin reinstalls; b (a member) is online and is named.
+      v121_join!(b, b1)
+      a2 = v121_device!(a)
+      v121_supersede!(a1, 1)
+
+      {202, ours} = v121_api(:post, "/api/v1/groups/#{id}/rejoin", a.token, nil, a2)
+      ex = example("group_rejoin_reply_v121.json")
+      assert keys(ours) == keys(ex)
+      assert_group(ours["group"], ex["group"])
+      assert_same_shape(ours["op"], ex["op"])
+      # Two members here (the example has three): b is the one candidate.
+      assert ours["candidates"] == 1 and ours["exhausted"] == false
+
+      # error_rejoin_pending.json: the only admin's new device can't reset.
+      {409, err} =
+        v121_api(:post, "/api/v1/mls/groups/#{id}/reset", a.token, %{"generation" => 1}, a2)
+
+      assert_error(err, "error_rejoin_pending.json", ~w(op_id candidates))
+      assert err["error"]["op_id"] == ours["op"]["op_id"] and err["error"]["candidates"] == 1
+
+      # b re-adds a2; a's old phone becomes a stale leaf; a2 is named for the cleanup op.
+      {200, _} =
+        v121_api(
+          :post,
+          "/api/v1/mls/groups/#{id}/commit",
+          b.token,
+          %{
+            "generation" => 1,
+            "epoch" => RisiMe.Groups.epoch(id),
+            "commit" => b64(),
+            "welcome" => b64(),
+            "added" => [v121_ref(a.user.id, a2)],
+            "removed" => [],
+            "op_id" => ours["op"]["op_id"],
+            "meta_changed" => false
+          },
+          b1
+        )
+
+      v121_supersede!(a1, 25)
+      v121_join!(a, a2)
+      %{cleanup_ops: 1} = RisiMe.Workers.StaleLeaves.sweep()
+      ev = RisiMe.GroupHelpers.last_event(a.user.id, "group_op")
+      assert_same_shape(ev, example("event_group_op_cleanup.json"))
+      assert ev["data"]["op"]["added"] == [] and ev["data"]["op"]["type"] == "devices"
+      assert ev["data"]["op"]["removed"] == [v121_ref(a.user.id, a1)]
+      assert ev["data"]["op"]["committer"] == v121_ref(a.user.id, a2)
+    end
+
+    test "mls_dm_rejoin_reply.json, mls_dm_rejoin_reply_v121.json, event_mls_dm_op.json, mls_commit_request_dm_op.json",
+         %{a: a, b: b} do
+      import RisiMe.GroupHelpers, only: [clear_legacy!: 0]
+      clear_legacy!()
+      a1 = v121_device!(a)
+      b1 = v121_device!(b)
+      conv = Messaging.conversation_id(a.user.id, b.user.id)
+
+      {200, _} =
+        v121_api(
+          :post,
+          "/api/v1/mls/groups/#{conv}/commit",
+          a.token,
+          %{
+            "generation" => 1,
+            "epoch" => 0,
+            "commit" => b64(),
+            "welcome" => b64(),
+            "added" => [v121_ref(b.user.id, b1)]
+          },
+          a1
+        )
+
+      a2 = v121_device!(a)
+      v121_supersede!(a1, 1)
+
+      # The peer is offline: the op waits (committer null).
+      {202, ours} = v121_api(:post, "/api/v1/mls/groups/#{conv}/rejoin", a.token, nil, a2)
+      v121 = example("mls_dm_rejoin_reply_v121.json")
+      v116 = example("mls_dm_rejoin_reply.json")
+      assert keys(ours) == keys(v121)
+      assert keys(Map.delete(ours, "exhausted")) == keys(v116)
+      assert_same_shape(ours, v121)
+      assert_same_shape(Map.delete(ours, "exhausted"), v116)
+      assert ours["candidates"] == 1 and ours["exhausted"] == false
+      assert ours["op"]["added"] == [v121_ref(a.user.id, a2)]
+      assert ours["op"]["removed"] == [v121_ref(a.user.id, a1)]
+
+      # b opens the app: named; the mls_dm_op event.
+      v121_join!(b, b1)
+      ev = RisiMe.GroupHelpers.last_event(b.user.id, "mls_dm_op")
+      assert_same_shape(ev, example("event_mls_dm_op.json"))
+      assert ev["data"]["op"]["committer"] == v121_ref(b.user.id, b1)
+
+      # mls_commit_request_dm_op.json is accepted: b adds a2 with the op id.
+      body = example("mls_commit_request_dm_op.json")
+
+      body = %{
+        body
+        | "epoch" => 1,
+          "added" => [v121_ref(a.user.id, a2)],
+          "op_id" => ours["op"]["op_id"]
+      }
+
+      assert {200, %{"epoch" => 2}} =
+               v121_api(:post, "/api/v1/mls/groups/#{conv}/commit", b.token, body, b1)
     end
   end
 end

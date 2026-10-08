@@ -60,7 +60,7 @@ defmodule RisiMeWeb.GroupController do
 
   def rejoin(conn, %{"id" => id}) do
     case Groups.rejoin(me(conn), device(conn), id) do
-      {:ok, group} -> conn |> put_status(202) |> json(%{group: group})
+      {:ok, reply} -> conn |> put_status(202) |> json(reply)
       error -> error(conn, error)
     end
   end
@@ -102,6 +102,10 @@ defmodule RisiMeWeb.GroupController do
 
   def error(conn, {:error, {:epoch_conflict, epoch}}),
     do: ApiError.send_error(conn, 409, :epoch_conflict, extra: [epoch: epoch])
+
+  # v1.21 §12.12.3.
+  def error(conn, {:error, {:rejoin_pending, op_id, n}}),
+    do: ApiError.send_error(conn, 409, :rejoin_pending, extra: [op_id: op_id, candidates: n])
 
   def error(conn, {:error, {:generation_conflict, g}}),
     do: ApiError.send_error(conn, 409, :generation_conflict, extra: [generation: g])

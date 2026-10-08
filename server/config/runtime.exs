@@ -148,6 +148,10 @@ end
 # Invite link in v1.6 invites (decision 030).
 if link = System.get_env("INVITE_LINK"), do: config(:risime, :invite_link, link)
 
+# v1.21 §12.12.6: a superseded leaf unseen this long is removed by a cleanup op (default 24).
+if hours = System.get_env("STALE_LEAF_HOURS"),
+  do: config(:risime, :stale_leaf_hours, String.to_integer(hours))
+
 # fail2ban auth log (decision 024); default ~/risime-logs/auth.log.
 if config_env() != :test do
   if path = System.get_env("RISIME_AUTH_LOG"), do: config(:risime, :auth_log_path, path)

@@ -630,24 +630,43 @@ defmodule RisiMe.Groups do
     end
   end
 
-  @doc "`POST /groups/{id}/rejoin`: a `devices` op that removes and re-adds the calling device."
+  @doc """
+  `POST /groups/{id}/rejoin`: a `devices` op that removes and re-adds the calling device.
+  v1.21 §12.12.2: `{:ok, %{group, op, candidates, exhausted}}`; 10 per user per minute.
+  """
   def rejoin(me, device_id, id) do
-    with {:ok, dev} <- caller_device(me, device_id) do
+    with {:ok, dev} <- caller_device(me, device_id),
+         :ok <- rejoin_limit(me) do
       locked(id, fn ->
         with {:ok, g, _m} <- visible_active(me, id) do
           ref = {me, dev}
 
-          cond do
-            epoch(id) == nil ->
-              :ok
-
-            true ->
+          {op, n, exhausted?} =
+            if epoch(id) == nil do
+              {nil, 0, false}
+            else
               Ops.ensure_rejoin(g, ref)
-          end
 
-          {:ok, group_json(g, me)}
+              case Ops.adding_op(id, ref) do
+                nil ->
+                  {nil, 0, false}
+
+                op ->
+                  {n, exhausted?} = Ops.rejoin_status(g, op)
+                  {Ops.json(op), n, exhausted?}
+              end
+            end
+
+          {:ok, %{group: group_json(g, me), op: op, candidates: n, exhausted: exhausted?}}
         end
       end)
+    end
+  end
+
+  defp rejoin_limit(me) do
+    case RisiMe.RateLimiter.hit(:group_rejoin, me, 10, :timer.minutes(1)) do
+      :ok -> :ok
+      _ -> {:error, :rate_limited}
     end
   end
 

@@ -371,6 +371,8 @@ defmodule RisiMe.Groups.Commit do
     group_events = complete(g, me, op, req, new_epoch, removed_users)
     if op, do: Repo.delete!(op)
     Ops.settle_devices(g)
+    # v1.21 §12.12.5: every accepted commit prunes the remaining `devices` ops.
+    Ops.prune_all(g)
 
     Messaging.publish_batch(route_events ++ group_events)
     {:ok, new_epoch}
@@ -567,6 +569,7 @@ defmodule RisiMe.Groups.Commit do
         with {:ok, g, m} <- Groups.visible(me, conv),
              true <- g.state == "active" || {:error, :not_found},
              true <- m.role == "admin" || {:error, :not_admin},
+             :ok <- Ops.rejoin_guard(g, {me, dev}),
              true <- gen == g.generation || {:error, {:generation_conflict, g.generation}},
              :ok <- reset_limit(conv) do
           do_reset(me, dev, g)

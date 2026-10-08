@@ -62,6 +62,7 @@ defmodule RisiMe.Devices do
             existing
           )
 
+        strikes_changed(device_id, existing, mls_key, caps)
         groups_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
         member_devices_changed(user_id, existing, mls_key, caps)
         history_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
@@ -268,6 +269,18 @@ defmodule RisiMe.Devices do
       true -> :ok
     end
   end
+
+  # v1.21 §12.12.4: a device that re-advertises different capabilities may have updated: its
+  # naming strikes on every op are cleared.
+  defp strikes_changed(device_id, %Device{capabilities: old}, mls_key, caps)
+       when is_binary(mls_key) do
+    if Enum.sort(old || []) != Enum.sort(caps),
+      do: RisiMe.Groups.Strikes.clear_device(device_id)
+
+    :ok
+  end
+
+  defp strikes_changed(_device_id, _existing, _mls_key, _caps), do: :ok
 
   # v1.14 §12.11: a device that newly advertises `member_devices` may open the §12.4a gate in
   # its user's groups: name committers for their waiting `devices` ops again.

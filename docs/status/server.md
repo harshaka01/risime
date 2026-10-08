@@ -9,11 +9,54 @@ reinstall, §13, decision 043), **v1.11** (encrypted images, §14, decision 042)
 (deleting messages and chats, §15, decision 047), **v1.13** (1:1 voice calls, §16, decisions
 046 and 051), **v1.14** (members restore an existing member's devices, §12.4a) and **v1.15**
 (history sharing between devices, §17, decision 049), **v1.17** (profile photos, §18), **v1.18**
-(1:1 video calls, §19) and **v1.19** (group calls with LiveKit, §20, decision 056) are done, plus
-the group-readiness hotfix and the two §14 fixes root decided.
+(1:1 video calls, §19), **v1.19** (group calls with LiveKit, §20, decision 056) and **v1.21**
+(reinstalls without reset, stale leaves, §12.12, decision 060) are done, plus the
+group-readiness hotfix and the two §14 fixes root decided.
 Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as-errors && mix test`
-(539 tests, 1 excluded: the optional `:livekit` integration test, green against the local
+(582 tests, 1 excluded: the optional `:livekit` integration test, green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
+
+## v1.21 reinstalls without reset, stale leaves (§12.12) — READY
+- **Migration** `20261009100000_ops_strikes`: `strikes jsonb not null default '{}'` on
+  `group_ops` and `mls_dm_ops` (`{device_id => [count, last_at]}`). Additive.
+- **Pilot env:** `STALE_LEAF_HOURS` (optional, default 24; lower it on the dev server for the
+  interop gate).
+- **Post-deploy (root):** `bin/risime eval "RisiMe.Release.stale_device_ops()"` (dry run: counts
+  only, everything rolled back), then `…stale_device_ops(dry_run: false)` (queues a one-off
+  `GroupTimer` `stale_device_ops` job the running server executes; its log shows the counts:
+  `ops pruned_devices done_ops cleanup_ops stale_leaves named waiting exhausted`).
+- **Rejoin replies:** group `202 {group, op, candidates, exhausted}`, DM
+  `202 {op, candidates, exhausted}`; group rejoin `429` at > 10 per user per minute.
+- **Strikes** (`RisiMe.Groups.Strikes`): a committer timer that fires for the current naming of a
+  `devices` op adds a strike to the named device; 3 = out of budget (not named by rotation, the
+  inbox-join rule or wakes); cleared by a widened DM op (new `added`), a `PUT` with a different
+  capability set or a connect with a different `app_version` (both clear the device's strikes on
+  every op), or 24 h after the last strike. Exhausted = ≥ 1 candidate and all out of budget:
+  `committer` null, no namings, no wakes, the op stays; the wake job is re-queued for when the
+  first budget comes back. The DM "6 namings" cap is gone. Logs `devices_op_named`,
+  `devices_op_exhausted` (counts only).
+- **Reset guard:** `409 rejoin_pending {op_id, candidates}` inside the lock, after
+  `404`/`403 not_admin`/`400`, before `generation_conflict` and the rate limit, for groups
+  (`Ops.rejoin_guard`) and DMs (`DmOps.rejoin_guard`).
+- **DM wake pushes:** `GroupTimer` kind `dm_wake` (unique per op), the §12.4a rule (first 10
+  in-budget candidates, offline, own token, 6 h, the shared 4/day/device `:group_wake` bucket).
+- **Pruning** (`Ops.prune/2`, `DmOps.prune/1`, at every naming, wake, inbox-join naming and
+  accepted commit): `added` keeps devices that can still receive (`DmOps.addable/1`; a dropped
+  device leaves `removed` too); `removed` keeps in-group leaves (cleanup ops: still stale; DMs:
+  re-added or still superseded); group ops of users no longer active are dropped; an op with
+  nothing to do is deleted, no event.
+- **Interpretation (no proposal):** a **superseded device that is offline is not a candidate** of
+  a `devices` op (own and admin tiers too, not only the member tier). Otherwise a reinstalled
+  user's old phone counted as `candidates ≥ 1` forever without ever collecting strikes (it is
+  never online), so the guard would block the last-resort reset indefinitely. Online it is
+  current again anyway. Two v1.14 tests were updated for this (candidate lists, wake counts).
+- **Stale leaves:** hourly cron `RisiMe.Workers.StaleLeaves` (`:23`), Postgres only. Groups: one
+  cleanup op per (group, user) (`payload.cleanup = true`, `added: []`, leaves already in another
+  op's `removed` skipped), named from tiers 1–2 only (never members; `member_committable?` is
+  false without adds), no wake pushes. DMs: the stale leaves join the user's op (`added: []` if
+  new); the peer commits with `op_id` (existing §10.6.2.2 rule).
+- Tests: `test/risime_web/controllers/rejoin_v121_test.exs` (17), the v1.21 describe in
+  `test/contract/examples_test.exs` (2, all 7 examples).
 
 ## v1.19 group calls with LiveKit (§20) — READY
 - **Pilot env** (root adds them to the pilot environment): `LIVEKIT_URL`

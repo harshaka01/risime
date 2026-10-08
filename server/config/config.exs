@@ -68,7 +68,9 @@ config :risime, Oban,
        # v1.11 §14.8: the weekly orphan pass (files without a row).
        {"53 4 * * 0", RisiMe.Workers.BlobCleanup, args: %{"pass" => "orphans"}},
        # v1.15 §17.11: history requests are kept 8 days after creation.
-       {"29 3 * * *", RisiMe.Workers.HistoryTimer, args: %{"kind" => "prune"}}
+       {"29 3 * * *", RisiMe.Workers.HistoryTimer, args: %{"kind" => "prune"}},
+       # v1.21 §12.12.6: hourly stale-leaf sweep (cleanup ops).
+       {"23 * * * *", RisiMe.Workers.StaleLeaves}
      ]}
   ]
 

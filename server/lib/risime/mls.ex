@@ -79,6 +79,7 @@ defmodule RisiMe.MLS do
 
     # The app clock, the same clock as `server_ts`.
     now = DateTime.utc_now()
+    if device_id && version, do: version_changed(user_id, key, device_id, version)
 
     {1, [%{first_seen_at: first_seen}]} =
       Repo.insert_all(
@@ -114,6 +115,20 @@ defmodule RisiMe.MLS do
       )
 
     if device_id && first_seen, do: to_utc(first_seen)
+  end
+
+  # v1.21 §12.12.4: a device that connects with a different `app_version` may have updated: its
+  # naming strikes on every op are cleared.
+  defp version_changed(user_id, key, device_id, version) do
+    old =
+      Repo.one(
+        from i in "app_instances",
+          where: i.user_id == type(^user_id, :binary_id) and i.instance_key == ^key,
+          select: i.app_version
+      )
+
+    if old != version, do: RisiMe.Groups.Strikes.clear_device(device_id)
+    :ok
   end
 
   defp to_utc(%DateTime{} = dt), do: dt
@@ -832,8 +847,8 @@ defmodule RisiMe.MLS do
 
   @doc """
   `POST /mls/groups/{dm}/rejoin`: creates or widens the caller's DM `devices` op so that the
-  calling device is (re-)added. `{:ok, op_json | nil, candidates}`; `nil, 0` while the DM awaits
-  its rebuild.
+  calling device is (re-)added. `{:ok, op_json | nil, candidates, exhausted}` (v1.21 §12.12.2);
+  `nil, 0, false` while the DM awaits its rebuild.
   """
   def rejoin_dm(me, device_id, conv) do
     with {:ok, _members, device} <- dm_caller(me, device_id, conv),
@@ -846,17 +861,21 @@ defmodule RisiMe.MLS do
             {:error, :not_found}
 
           %{epoch: nil} ->
-            {:ok, nil, 0}
+            {:ok, nil, 0, false}
 
           _ ->
             case DmOps.ensure(conv, me, rejoin: device.device_id) do
-              nil -> {:ok, nil, 0}
-              op -> {:ok, DmOps.json(op), length(DmOps.candidates(op))}
+              nil ->
+                {:ok, nil, 0, false}
+
+              op ->
+                {n, exhausted?} = DmOps.status(op)
+                {:ok, DmOps.json(op), n, exhausted?}
             end
         end
       end)
       |> case do
-        {:ok, {:ok, _, _} = ok} -> ok
+        {:ok, {:ok, _, _, _} = ok} -> ok
         {:ok, {:error, _} = e} -> e
         {:error, _} = e -> e
       end
@@ -869,28 +888,17 @@ defmodule RisiMe.MLS do
   epoch 0. `{:ok, n + 1}`.
   """
   def reset_dm(me, device_id, conv, params) do
-    with {:ok, _members, _device} <- dm_caller(me, device_id, conv),
+    with {:ok, _members, device} <- dm_caller(me, device_id, conv),
          %{"generation" => gen} when is_integer(gen) <- params || {:error, :bad_request} do
       RisiMe.MLS.DmOps.locked(conv, fn ->
         case group(conv) do
           nil ->
             {:error, :not_found}
 
-          %{generation: ^gen} ->
-            with :ok <- dm_limit(:mls_dm_reset, conv, 3, :timer.hours(1)) do
-              Repo.update_all(
-                from(g in "mls_groups", where: g.conversation_id == ^conv),
-                set: [generation: gen + 1, epoch: nil, updated_at: DateTime.utc_now()]
-              )
-
-              Repo.delete_all(from gd in "mls_group_devices", where: gd.conversation_id == ^conv)
-              RisiMe.MLS.DmOps.drop(conv)
-              RisiMe.History.conversation_reset(conv)
-              {:ok, gen + 1}
-            end
-
-          %{generation: current} ->
-            {:error, {:generation_conflict, current}}
+          %{} = grp ->
+            # v1.21 §12.12.3: the guard runs before generation_conflict and the rate limit.
+            with :ok <- RisiMe.MLS.DmOps.rejoin_guard(conv, {me, device.device_id}),
+                 do: reset_dm_locked(conv, grp, gen)
         end
       end)
       |> case do
@@ -901,6 +909,26 @@ defmodule RisiMe.MLS do
     else
       {:error, _} = e -> e
       _ -> {:error, :bad_request}
+    end
+  end
+
+  defp reset_dm_locked(conv, grp, gen) do
+    case grp do
+      %{generation: ^gen} ->
+        with :ok <- dm_limit(:mls_dm_reset, conv, 3, :timer.hours(1)) do
+          Repo.update_all(
+            from(g in "mls_groups", where: g.conversation_id == ^conv),
+            set: [generation: gen + 1, epoch: nil, updated_at: DateTime.utc_now()]
+          )
+
+          Repo.delete_all(from gd in "mls_group_devices", where: gd.conversation_id == ^conv)
+          RisiMe.MLS.DmOps.drop(conv)
+          RisiMe.History.conversation_reset(conv)
+          {:ok, gen + 1}
+        end
+
+      %{generation: current} ->
+        {:error, {:generation_conflict, current}}
     end
   end
 

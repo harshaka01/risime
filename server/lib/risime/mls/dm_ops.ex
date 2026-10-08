@@ -12,6 +12,7 @@ defmodule RisiMe.MLS.DmOp do
     field :committer_until, :utc_datetime_usec
     field :naming, :integer, default: 0
     field :tried, {:array, :binary_id}, default: []
+    field :strikes, :map, default: %{}
     field :created_at, :utc_datetime_usec
   end
 end
@@ -28,8 +29,10 @@ defmodule RisiMe.MLS.DmOps do
   The committer is named like §12.4a: in-group devices of either participant that are not
   superseded and advertise `member_devices`, the affected user's own first, each tier most
   recently seen first, online only, 60 s each (`GroupTimer` kind `dm_committer`), then the next.
-  After 6 namings without success the op waits (`committer` null) until a candidate's inbox
-  joins. Each naming sends `mls_dm_op` (stored, push wake) to the named device's user.
+  v1.21 §12.12.4: 3 timed-out namings per device per op (strikes) put a device out of budget;
+  with every candidate out of budget the op is exhausted and waits (`committer` null). A waiting
+  op names the first in-budget candidate whose inbox joins, and wakes candidates by push. Each
+  naming sends `mls_dm_op` (stored, push wake) to the named device's user.
 
   Everything that reads and writes an op runs under the DM's critical section
   (`pg_advisory_xact_lock(hashtext("mls:" <> conv))`, the §10.2 commit lock).
@@ -39,12 +42,12 @@ defmodule RisiMe.MLS.DmOps do
   require Logger
 
   alias RisiMe.{Messaging, MLS, Presence, Repo, TimeUUID}
+  alias RisiMe.Groups.Strikes
   alias RisiMe.Devices.Device
   alias RisiMe.MLS.DmOp
   alias RisiMe.Workers.GroupTimer
 
   @committer_s 60
-  @max_namings 6
   @cap "member_devices"
   @receive_days 30
 
@@ -116,9 +119,6 @@ defmodule RisiMe.MLS.DmOps do
         into: MapSet.new(),
         do: ref
   end
-
-  defp current_refs(user_ids),
-    do: MapSet.new(MLS.current_mls_devices(user_ids), &{&1.user_id, &1.device_id})
 
   ## JSON
 
@@ -200,7 +200,16 @@ defmodule RisiMe.MLS.DmOps do
               do: existing,
               else:
                 existing
-                |> Ecto.Changeset.change(payload: payload, tried: [])
+                |> Ecto.Changeset.change(
+                  payload: payload,
+                  tried: [],
+                  # v1.21 §12.12.4: a new device in `added` clears every strike of the op.
+                  strikes:
+                    if(payload["added"] == existing.payload["added"],
+                      do: existing.strikes,
+                      else: %{}
+                    )
+                )
                 |> Repo.update!()
 
           if name? and op.committer_device == nil, do: name_next(op), else: op
@@ -247,37 +256,57 @@ defmodule RisiMe.MLS.DmOps do
   ## Settle (§2: kept current, done)
 
   @doc """
-  After an accepted commit (in the critical section): drops `added` devices that are no longer
-  current MLS devices and `removed` devices that left the group; deletes ops that are done.
+  After an accepted commit (in the critical section): prunes every op of the DM (`prune/1`).
   """
   def settle(conv) do
-    in_group = in_group(conv)
-
-    for op <- list(conv) do
-      current = current_refs([op.user_id])
-      added = Enum.filter(refs(op, "added"), &MapSet.member?(current, &1))
-      removed = Enum.filter(refs(op, "removed"), &MapSet.member?(in_group, &1))
-
-      # `removed` keeps only leaves still in the group: a rejoining device leaves `removed` once
-      # its old leaf is gone, and is done once it is back.
-      done? = removed == [] and Enum.all?(added, &MapSet.member?(in_group, &1))
-
-      cond do
-        done? or added == [] ->
-          Repo.delete!(op)
-
-        true ->
-          payload = %{
-            "added" => Enum.map(added, &ref_json/1),
-            "removed" => Enum.map(removed, &ref_json/1)
-          }
-
-          if payload != op.payload,
-            do: op |> Ecto.Changeset.change(payload: payload) |> Repo.update!()
-      end
-    end
-
+    for op <- list(conv), do: prune(op)
     :ok
+  end
+
+  @doc """
+  v1.21 §12.12.5 (in the critical section): `added` keeps the devices that can still receive
+  (§12.1; a dropped device also leaves `removed`), `removed` keeps the leaves still in the group
+  that are re-added by the op or still superseded. An op left with nothing to do is done (deleted,
+  no event). Returns the op, or nil when it was deleted.
+  """
+  def prune(%DmOp{} = op) do
+    case prune_plan(op) do
+      {:keep, ^op, 0} -> op
+      {:keep, new, _} -> op |> Ecto.Changeset.change(payload: new.payload) |> Repo.update!()
+      {:done, _, _} -> Repo.delete!(op) && nil
+    end
+  end
+
+  @doc "The effect of `prune/1` without writing: `{:keep | :done, op, pruned_devices}`."
+  def prune_plan(%DmOp{} = op) do
+    in_group = in_group(op.conversation_id)
+    added = refs(op, "added")
+    removed = refs(op, "removed")
+    receiving = addable([op.user_id])
+    superseded = MLS.superseded_devices([op.user_id])
+    {added2, gone} = Enum.split_with(added, &MapSet.member?(receiving, &1))
+
+    removed2 =
+      Enum.filter(removed, fn ref ->
+        MapSet.member?(in_group, ref) and ref not in gone and
+          (ref in added2 or MapSet.member?(superseded, ref))
+      end)
+
+    n = length(added) - length(added2) + length(removed) - length(removed2)
+
+    new = %{
+      op
+      | payload: %{
+          "added" => Enum.map(added2, &ref_json/1),
+          "removed" => Enum.map(removed2, &ref_json/1)
+        }
+    }
+
+    # `removed` keeps only leaves still in the group: a rejoining device leaves `removed` once
+    # its old leaf is gone, and is done once it is back.
+    if removed2 == [] and Enum.all?(added2, &MapSet.member?(in_group, &1)),
+      do: {:done, op, n},
+      else: {:keep, if(n == 0, do: op, else: new), n}
   end
 
   @doc "A DM reset (§3): its ops go."
@@ -343,9 +372,22 @@ defmodule RisiMe.MLS.DmOps do
     RisiMe.Groups.Ops.by_recency(own) ++ RisiMe.Groups.Ops.by_recency(peer)
   end
 
-  @doc "Names the next online candidate (or waits). In the critical section."
+  @doc """
+  Prunes the op (§12.12.5), then names the next online candidate within its naming budget
+  (§12.12.4), or waits: with a wake job (§12.12.4 DM wake-ups) unless the op is exhausted or
+  only removes stale leaves. In the critical section. Returns the op, or nil when it was done.
+  """
   def name_next(%DmOp{} = op) do
-    online = Enum.filter(candidates(op), fn {_u, d} -> Presence.device_online?(d) end)
+    case prune(op) do
+      nil -> nil
+      op -> name_budgeted(op)
+    end
+  end
+
+  defp name_budgeted(op) do
+    all = candidates(op)
+    budget = Strikes.in_budget(op.strikes, all)
+    online = Enum.filter(budget, fn {_u, d} -> Presence.device_online?(d) end)
 
     case Enum.reject(online, fn {_u, d} -> d in op.tried end) do
       [ref | _] ->
@@ -353,9 +395,164 @@ defmodule RisiMe.MLS.DmOps do
 
       [] ->
         case online do
-          [ref | _] when op.naming < @max_namings -> assign(op, ref, :reset)
-          _ -> assign(op, nil, :append)
+          [ref | _] ->
+            assign(op, ref, :reset)
+
+          [] ->
+            if all != [] and budget == [] do
+              Logger.info("devices_op_exhausted: candidates=#{length(all)}")
+              waiting(op, Strikes.next_expiry(op.strikes, all))
+            else
+              waiting(op, if(refs(op, "added") == [], do: nil, else: DateTime.utc_now()))
+            end
         end
+    end
+  end
+
+  defp waiting(op, wake_at) do
+    op =
+      op
+      |> Ecto.Changeset.change(
+        committer_user: nil,
+        committer_device: nil,
+        committer_until: nil,
+        naming: op.naming + 1
+      )
+      |> Repo.update!()
+
+    if wake_at, do: schedule_wake(op.op_id, wake_at)
+    op
+  end
+
+  defp schedule_wake(op_id, at) do
+    {:ok, _} =
+      Oban.insert(
+        GroupTimer.new(%{"kind" => "dm_wake", "op_id" => op_id},
+          scheduled_at: at,
+          unique: [
+            period: :infinity,
+            keys: [:kind, :op_id],
+            states: [:available, :scheduled, :retryable]
+          ]
+        )
+      )
+
+    :ok
+  end
+
+  @doc """
+  v1.21 §12.12.4 DM wake-ups: while the op waits with no committer, the §12.4a inbox push to the
+  own tokens of the first 10 in-budget candidates (offline, with a token, at most 4 per device per
+  day across ops), again every 6 h. None for an exhausted op (checked again when the first budget
+  comes back) or one that only removes stale leaves. Logs counts only.
+  """
+  def wake(op_id) do
+    with %DmOp{committer_device: nil, conversation_id: conv} <- Repo.get(DmOp, op_id),
+         {:ok, %DmOp{committer_device: nil} = op} <-
+           locked(conv, fn ->
+             with %DmOp{} = op <- Repo.get(DmOp, op_id), do: prune(op)
+           end),
+         true <- refs(op, "added") != [] do
+      all = candidates(op)
+
+      if Strikes.exhausted?(op.strikes, all) do
+        Logger.info("devices_op_exhausted: candidates=#{length(all)}")
+
+        case Strikes.next_expiry(op.strikes, all) do
+          nil -> :ok
+          at -> schedule_wake(op.op_id, at)
+        end
+      else
+        targets =
+          op.strikes
+          |> Strikes.in_budget(all)
+          |> Enum.take(10)
+          |> Enum.reject(fn {_u, d} -> Presence.device_online?(d) end)
+
+        tokens = RisiMe.Groups.Ops.wake_tokens(targets)
+        RisiMe.Push.Dispatcher.push_inbox(tokens)
+        Logger.info("dm_op_wake: candidates=#{length(targets)} pushed=#{length(tokens)}")
+
+        schedule_wake(
+          op.op_id,
+          DateTime.add(DateTime.utc_now(), RisiMe.Groups.Ops.wake_every_h(), :hour)
+        )
+      end
+    end
+
+    :ok
+  end
+
+  @doc "`{candidates, exhausted}` of an op (§12.12.2), online or not."
+  def status(%DmOp{} = op) do
+    all = candidates(op)
+    {length(all), Strikes.exhausted?(op.strikes, all)}
+  end
+
+  @doc """
+  §12.12.3 server guard for the DM reset: `{:error, {:rejoin_pending, op_id, candidates}}` while
+  the user's op adds the calling device, is not exhausted and has a candidate. In the critical
+  section.
+  """
+  def rejoin_guard(conv, {u, _d} = ref) do
+    case for_user(conv, u) do
+      %DmOp{} = op ->
+        {n, exhausted?} = if ref in refs(op, "added"), do: status(op), else: {0, false}
+
+        if n > 0 and not exhausted?,
+          do: {:error, {:rejoin_pending, op.op_id, n}},
+          else: :ok
+
+      nil ->
+        :ok
+    end
+  end
+
+  @doc """
+  §12.12.6 for DMs: the stale leaves of `user_id` join the `removed` list of the user's op (one
+  is created with `added: []` when there is none). In the critical section. Returns
+  `{:created | :widened | :unchanged, op}` or `{:none, nil}`.
+  """
+  def ensure_cleanup(conv, user_id, stale, opts \\ []) do
+    name? = Keyword.get(opts, :name, true)
+    existing = for_user(conv, user_id)
+    stale = Enum.sort(stale)
+
+    cond do
+      stale == [] ->
+        {if(existing, do: :unchanged, else: :none), existing}
+
+      existing ->
+        removed = Enum.uniq(refs(existing, "removed") ++ stale)
+
+        if removed == refs(existing, "removed") do
+          {:unchanged,
+           if(name? and existing.committer_device == nil, do: name_next(existing), else: existing)}
+        else
+          op =
+            existing
+            |> Ecto.Changeset.change(
+              payload: %{existing.payload | "removed" => Enum.map(removed, &ref_json/1)}
+            )
+            |> Repo.update!()
+
+          {:widened, if(name? and op.committer_device == nil, do: name_next(op), else: op)}
+        end
+
+      true ->
+        op =
+          Repo.insert!(%DmOp{
+            op_id: Ecto.UUID.generate(),
+            conversation_id: conv,
+            user_id: user_id,
+            payload: %{"added" => [], "removed" => Enum.map(stale, &ref_json/1)},
+            created_at: DateTime.utc_now(),
+            naming: 0,
+            tried: [],
+            strikes: %{}
+          })
+
+        {:created, if(name?, do: name_next(op), else: op)}
     end
   end
 
@@ -393,6 +590,7 @@ defmodule RisiMe.MLS.DmOps do
         )
       )
 
+    Logger.info("devices_op_named: naming=#{op.naming}")
     publish(op)
     op
   end
@@ -417,15 +615,23 @@ defmodule RisiMe.MLS.DmOps do
   def committer_timeout(op_id, naming) do
     with %DmOp{conversation_id: conv} <- Repo.get(DmOp, op_id) do
       locked(conv, fn ->
-        settle(conv)
+        with %DmOp{naming: ^naming} = op <- Repo.get(DmOp, op_id) do
+          op = strike(op)
+          settle(conv)
 
-        with %DmOp{naming: ^naming} = op <- Repo.get(DmOp, op_id),
-             do: name_next(op)
+          with %DmOp{} = op <- Repo.get(DmOp, op.op_id), do: name_next(op)
+        end
       end)
     end
 
     :ok
   end
+
+  # §12.12.4: the named device's 60 s ran out without an accepted commit completing the op.
+  defp strike(%DmOp{committer_device: d} = op) when is_binary(d),
+    do: op |> Ecto.Changeset.change(strikes: Strikes.add(op.strikes, d)) |> Repo.update!()
+
+  defp strike(op), do: op
 
   @doc """
   A device's inbox joined: ops for its own DMs that lack it (`device_ready/2`), then it is named
@@ -444,7 +650,9 @@ defmodule RisiMe.MLS.DmOps do
     for {conv, op_id} <- waiting do
       locked(conv, fn ->
         with %DmOp{committer_device: nil} = op <- Repo.get(DmOp, op_id),
-             true <- {user_id, device_id} in candidates(op) do
+             %DmOp{} = op <- prune(op),
+             true <- {user_id, device_id} in candidates(op),
+             false <- Strikes.out?(op.strikes, device_id) do
           assign(op, {user_id, device_id}, :append)
         end
       end)
