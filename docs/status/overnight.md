@@ -71,6 +71,29 @@ Progress:
   - install the Caddyfile with the `/livekit` route: `sudo cp infra/caddy/Caddyfile /etc/caddy/Caddyfile && sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl reload caddy`;
   - a by-hand check from outside that UDP 49500 and 49999 are reachable (decision 056).
 
+## v0.2.0-nightly.27 (live 2026-10-08 ~03:40 UTC, not required): GO UX
+- **Look:**
+  - icon, splash and theme from Harsha's logo, in light and dark;
+  - WhatsApp-style chat: bubbles at most 80% wide, the time and ticks inside the bubble, a
+    full-width rounded input bar;
+  - "+" sheet with Gallery, and Camera when a camera app exists: up to 10 photos, a caption on
+    each, each one sent as its own encrypted photo;
+  - a new call screen, with a slot already in place for video.
+- **Dark screen after Back from a call:**
+  - cause: the proximity-sensor screen-off lock stayed held after Back;
+  - fix: it's held only while the call screen is in front (unit test; Redroid call 8 OK);
+  - still to do: a check on a real phone (earpiece call, Back, cover the sensor; the screen stays
+    on).
+- **Server (dormant until the apps ship):**
+  - v1.17: avatar blobs and `silent` sends;
+  - v1.18: video signalling;
+  - v1.19: `/calls/rooms`, which answers 503 until `LIVEKIT_URL` is set.
+- **Gate:**
+  - **Upgrade test:** passed for 26 → 27, with per-conversation counts kept. The two earlier
+    failures were in the test script (the new "+" sheet and the Send button on the photo
+    preview), now fixed.
+  - **Known limit:** a batch of photos can arrive in a different order.
+
 ## Current state (2026-10-08)
 - **Pilot:** v0.2.0-nightly.26 (versionCode 20026), live and healthy, contract v1.16. The TURN relay
   has been live since 2026-10-07 06:34 UTC (`TURN_URLS`; 3478/tcp reachable from outside).
