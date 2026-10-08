@@ -190,8 +190,9 @@ class Updater(
     suspend fun maybeCheck(nowElapsedMs: Long, force: Boolean = false): CheckStatus? {
         if (!enabled) return CheckStatus(System.currentTimeMillis(), "In-app updates are off in debug builds.")
         if (!shouldCheck(lastCheckElapsed, nowElapsedMs, force = force)) return null
-        lastCheckElapsed = nowElapsedMs
         val result = runCatching { fetchVersionJson() }
+        // Only an answer counts for the throttle: offline, the next foreground tries again.
+        if (result.isSuccess) lastCheckElapsed = nowElapsedMs
         val status = result.fold(
             onSuccess = { text ->
                 val d = decide(VersionJson.parse(text), installedVersionCode(), baseUrl)
@@ -310,7 +311,17 @@ class Updater(
      */
     suspend fun runUpdate(onProgress: (UpdateInfo, String, Int?) -> Unit) {
         if (!enabled) return
-        val info = store.pending() ?: return
+        val stored = store.pending() ?: return
+        // Retry after a republish (or a newer nightly): take what the server offers now.
+        val fresh = runCatching { decide(VersionJson.parse(fetchVersionJson()), installedVersionCode(), baseUrl) }
+            .onFailure { if (it is CancellationException) throw it }.getOrNull()
+        val info = refreshTarget(stored, fresh)
+        if (info != stored) {
+            store.setPending(info)
+            if (info.versionCode == stored.versionCode && (info.sha256 != stored.sha256 || info.url != stored.url)) {
+                apkFiles(info).toList().forEach { it.delete() } // a different file now: don't resume the old bytes
+            }
+        }
         if (info.versionCode <= installedVersionCode()) {
             store.setPending(null)
             clearDownloads(keep = null)
@@ -410,7 +421,8 @@ class Updater(
             store.setPending(null)
         }
         clearDownloads(keep = null)
-        _state.value = UpdateState.Idle
+        // A check may already have offered a newer release in this process: keep that.
+        if ((_state.value.infoOrNull()?.versionCode ?: 0) <= installedVersionCode()) _state.value = UpdateState.Idle
         notifications.updated(BuildConfig.VERSION_NAME)
         // The user was in the app when it closed for the update: try to bring it back (Android may
         // block a start from the background; the notification stays either way).

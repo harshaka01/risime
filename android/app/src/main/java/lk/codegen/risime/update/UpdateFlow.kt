@@ -71,6 +71,19 @@ fun stateAfterCheck(current: UpdateState, decision: UpdateDecision): UpdateState
     }
 }
 
+/**
+ * The release a (re)started download should fetch: the server's current offer when it is the same
+ * release (republished: new hash/URL) or a newer one, else the one the user tapped.
+ */
+fun refreshTarget(pending: UpdateInfo, fresh: UpdateDecision?): UpdateInfo {
+    val offered = when (fresh) {
+        is UpdateDecision.Available -> fresh.info
+        is UpdateDecision.Required -> fresh.info
+        else -> return pending
+    }
+    return if (offered.versionCode >= pending.versionCode) offered else pending
+}
+
 /** An installer status, and whether it was ignored (a stale session's late answer). */
 data class InstallStatusOutcome(val state: UpdateState, val ignored: Boolean = false)
 

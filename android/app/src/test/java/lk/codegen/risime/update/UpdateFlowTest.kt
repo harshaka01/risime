@@ -34,6 +34,17 @@ class UpdateFlowTest {
         assertEquals(failed, stateAfterCheck(failed, UpdateDecision.Rejected("x")))
     }
 
+    @Test fun retryTakesTheServersCurrentOffer() {
+        val republished = n31.copy(sha256 = "cd".repeat(32))
+        assertEquals(republished, refreshTarget(n31, UpdateDecision.Available(republished)))
+        assertEquals(n32, refreshTarget(n31, UpdateDecision.Available(n32)))
+        assertEquals(n32, refreshTarget(n31, UpdateDecision.Required(n32)))
+        assertEquals(n32, refreshTarget(n32, UpdateDecision.Available(n31))) // never back to an older one
+        assertEquals(n31, refreshTarget(n31, null)) // offline: what the user tapped
+        assertEquals(n31, refreshTarget(n31, UpdateDecision.Rejected("x")))
+        assertEquals(n31, refreshTarget(n31, UpdateDecision.UpToDate)) // then the installed check ends it
+    }
+
     @Test fun installFailureWhileWorkingShowsTheInstallersMessage() {
         val out = stateAfterInstallStatus(UpdateState.Working(n31, "Installing…"), n31, 7, 7, 4, "INSTALL_PARSE_FAILED_NOT_APK")
         assertFalse(out.ignored)
