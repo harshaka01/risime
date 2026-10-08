@@ -119,7 +119,7 @@ fun FriendPicker(
                         .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    InitialsAvatar(f.name, enabled = f.ready)
+                    InitialsAvatar(f.name, enabled = f.ready, photoKey = f.userId)
                     Spacer(Modifier.width(Spacing.md))
                     Column(Modifier.weight(1f)) {
                         Text(f.name, color = if (f.ready) MaterialTheme.colorScheme.onSurface else RisiTheme.colors.textMuted)

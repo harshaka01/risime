@@ -162,6 +162,13 @@ class ApiClient(
             file.asRequestBody(OCTET), true, serializer<BlobUploadReply>(), mapOf(DEVICE_HEADER to deviceId),
         )
 
+    /**
+     * §18.3 an `avatar` blob (no conversation), idempotent by [clientBlobId]; the reply's
+     * `expires_at` is null (the current avatar).
+     */
+    suspend fun uploadAvatarBlob(clientBlobId: String, file: java.io.File): ApiResult<BlobUploadReply> =
+        execute("POST", "blobs?purpose=avatar&client_blob_id=$clientBlobId", file.asRequestBody(OCTET), true, serializer<BlobUploadReply>())
+
     /** Owner only, idempotent 204 (a cancelled send after the upload). */
     suspend fun deleteBlob(blobId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "blobs/$blobId", null)
 

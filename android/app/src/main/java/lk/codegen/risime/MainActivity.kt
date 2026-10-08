@@ -26,7 +26,12 @@ class MainActivity : FragmentActivity() {
         val container = (application as RisiMeApp).container
         authUi = AuthUi(this, container)
         handleOpenChat(intent)
-        setContent { RisiMeTheme { RisiMeRoot(container, authUi) } }
+        val avatars = if (BuildConfig.CRYPTO_AVAILABLE) container.avatarLoader else null
+        setContent {
+            RisiMeTheme {
+                androidx.compose.runtime.CompositionLocalProvider(lk.codegen.risime.ui.common.LocalAvatars provides avatars) { RisiMeRoot(container, authUi) }
+            }
+        }
         // The installer's confirmation (when Android doesn't allow a silent self-update).
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {

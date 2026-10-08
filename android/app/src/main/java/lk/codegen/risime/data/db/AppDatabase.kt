@@ -31,6 +31,8 @@ import androidx.sqlite.execSQL
         HistoryRequestEntity::class,
         HistoryPartEntity::class,
         HistoryProvideEntity::class,
+        ProfilePhotoEntity::class,
+        ProfilePhotoConvEntity::class,
     ],
     version = AppDatabase.VERSION,
     exportSchema = true,
@@ -49,16 +51,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun deletes(): DeleteDao
     abstract fun callMarks(): CallMarkDao
     abstract fun history(): HistoryDao
+    abstract fun profilePhotos(): ProfilePhotoDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 9
+        const val VERSION = 10
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
@@ -242,6 +245,23 @@ object Migration8To9 : Migration(8, 9) {
         "CREATE TABLE IF NOT EXISTS `history_provides` (`request_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `requester_user` TEXT NOT NULL, `requester_device` TEXT NOT NULL, `requester_sig_key` BLOB NOT NULL, `own` INTEGER NOT NULL, `rpk` BLOB NOT NULL, `range_from` TEXT NOT NULL, `range_to` TEXT NOT NULL, `intervals_json` TEXT NOT NULL, `gap_count` INTEGER NOT NULL, `expires_at` TEXT, `state` TEXT NOT NULL, `parts` INTEGER NOT NULL, `progress_json` TEXT, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`request_id`))",
         "CREATE INDEX IF NOT EXISTS `index_history_provides_conversation_id` ON `history_provides` (`conversation_id`)",
         "CREATE INDEX IF NOT EXISTS `index_history_provides_state` ON `history_provides` (`state`)",
+    )
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/**
+ * v9 → v10 (contract v1.17 profile photos, §18.6/§18.7): the current photo per user (and group
+ * icon), the per-conversation send state, and the group's icon/name at its last line. Additive only.
+ */
+object Migration9To10 : Migration(9, 10) {
+    val SQL = listOf(
+        "ALTER TABLE `groups` ADD COLUMN `icon_sha` TEXT",
+        "ALTER TABLE `groups` ADD COLUMN `announced_name` TEXT",
+        "CREATE TABLE IF NOT EXISTS `profile_photos` (`user_id` TEXT NOT NULL, `ver` INTEGER NOT NULL, `blob_id` TEXT, `size` INTEGER NOT NULL, `sha256` TEXT, `key_sealed` BLOB, `plain_size` INTEGER NOT NULL, `w` INTEGER NOT NULL, `h` INTEGER NOT NULL, `fetched` INTEGER NOT NULL, `mime` TEXT NOT NULL DEFAULT 'image/jpeg', `checked_at` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`user_id`))",
+        "CREATE TABLE IF NOT EXISTS `profile_photo_convs` (`conversation_id` TEXT NOT NULL, `pending_ver` INTEGER, `due_at` INTEGER NOT NULL, `dirty` INTEGER NOT NULL, `leaves` TEXT NOT NULL, PRIMARY KEY(`conversation_id`))",
     )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)

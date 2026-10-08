@@ -75,6 +75,13 @@ class AwtBitmapOps(private val leakMetadata: Boolean = true) : BitmapOps<Buffere
         return out
     }
 
+    override fun cropSquare(b: BufferedImage, x: Int, y: Int, side: Int): BufferedImage {
+        calls += "crop $x $y $side"
+        val out = BufferedImage(side, side, BufferedImage.TYPE_INT_ARGB)
+        out.createGraphics().apply { drawImage(b.getSubimage(x, y, side, side), 0, 0, null); dispose() }
+        return out
+    }
+
     override fun encodeJpeg(b: BufferedImage, quality: Int): ByteArray {
         calls += "jpeg ${b.width}x${b.height} q$quality"
         val rgb = BufferedImage(b.width, b.height, BufferedImage.TYPE_INT_RGB)

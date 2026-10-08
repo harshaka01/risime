@@ -38,6 +38,9 @@ object MlsPayload {
         /** §17.6 a strictly validated `history_share` (valid only in a `history_share` event). */
         data class HistoryShare(val env: lk.codegen.risime.data.history.HistoryShareEnvelope) : Decoded
 
+        /** §18.1 a structurally valid `profile_photo` (valid only in a `message` event; never a row). */
+        data class ProfilePhoto(val env: lk.codegen.risime.data.profile.ProfilePhotoEnvelope) : Decoded
+
         /** A type this app doesn't know yet: store nothing visible. */
         data class Ignored(val type: String) : Decoded
     }
@@ -120,6 +123,9 @@ object MlsPayload {
         }
         if (type == lk.codegen.risime.data.history.HistoryShareEnvelope.TYPE) {
             return lk.codegen.risime.data.history.HistoryShareEnvelope.validate(obj)?.let { Decoded.HistoryShare(it) } ?: Decoded.Ignored("$type (malformed)")
+        }
+        if (type == lk.codegen.risime.data.profile.ProfilePhotoEnvelope.TYPE) {
+            return lk.codegen.risime.data.profile.ProfilePhotoEnvelope.validate(obj)?.let { Decoded.ProfilePhoto(it) } ?: Decoded.Ignored("$type (malformed)")
         }
         if (type != TYPE_TEXT) return Decoded.Ignored(type)
         val body = (obj["body"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: return Decoded.Ignored("text without body")

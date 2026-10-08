@@ -57,6 +57,10 @@ data class RolePayload(@SerialName("user_id") val userId: String, val role: Stri
 @Serializable
 data class RenamePayload(val name: String)
 
+/** §18.7 a group photo change: the §14.4 icon object sealed with the database key (base64), or null to remove. */
+@Serializable
+data class IconPayload(val sealed: String? = null)
+
 /** What one attempt at an op came to. */
 sealed interface OpOutcome {
     data object Done : OpOutcome
@@ -103,6 +107,8 @@ class GroupOpsExecutor(
     private val log: (String) -> Unit = {},
     /** Commits/Welcomes larger than this go by blob reference (§12.6); live interop lowers it. */
     private val inlineMaxBytes: Int = INLINE_MAX_BYTES,
+    /** §18.7: opens an [IconPayload]'s sealed icon object (null = can't: the op fails). */
+    private val openIcon: (conversationId: String, sealed: ByteArray) -> kotlinx.serialization.json.JsonElement? = { _, _ -> null },
 ) {
     private val lock = Mutex()
     private val enc = Base64.getEncoder()
@@ -181,6 +187,7 @@ class GroupOpsExecutor(
                 net(api.setRole(op.conversationId!!, p.userId, p.role)) { g -> afterReply(g, myId) }
             }
             GroupOpType.RENAME -> rename(op, myId)
+            GroupOpType.ICON -> icon(op, myId)
             GroupOpType.COMMIT -> commitServerOp(op, myId)
             GroupOpType.REJOIN -> {
                 if (alreadyJoined(op)) return OpOutcome.Done
@@ -275,6 +282,19 @@ class GroupOpsExecutor(
         val current = tx.run { mls.groupMeta(conv) } ?: return OpOutcome.Retry("no group yet", 10_000)
         if (current.name == p.name) return OpOutcome.Done
         val pc = runCatching { tx.run { mls.updateGroupMeta(conv, current.copy(name = p.name)) } }
+            .getOrElse { return OpOutcome.Failed("policy: ${it.message}") }
+        return submit(conv, pc, opId = null, metaChanged = true, myId = myId)
+    }
+
+    /** §18.7 set/change/remove the group photo: the same `meta_changed` commit with the new `group_meta.icon`. */
+    private suspend fun icon(op: GroupOpEntity, myId: String): OpOutcome {
+        val conv = op.conversationId!!
+        val mls = engine() ?: return OpOutcome.Retry("no MLS core", 60_000)
+        val p = ProtocolJson.decodeFromString(IconPayload.serializer(), op.payloadJson)
+        val icon = p.sealed?.let { s -> openIcon(conv, dec.decode(s)) ?: return OpOutcome.Failed("icon: can't open") }
+        val current = tx.run { mls.groupMeta(conv) } ?: return OpOutcome.Retry("no group yet", 10_000)
+        if (current.icon == icon || (icon == null && current.icon is kotlinx.serialization.json.JsonNull)) return OpOutcome.Done
+        val pc = runCatching { tx.run { mls.updateGroupMeta(conv, current.copy(icon = icon)) } }
             .getOrElse { return OpOutcome.Failed("policy: ${it.message}") }
         return submit(conv, pc, opId = null, metaChanged = true, myId = myId)
     }

@@ -267,4 +267,25 @@ class GroupStoreTest {
 
     @Suppress("unused")
     private fun eventOf(s: String) = ProtocolJson.decodeFromString<Event>(s)
+
+    /** §18.7: a metadata_changed is compared with the previous group_meta: photo lines, name lines, or both. */
+    @Test fun groupPhotoChangesWriteLocalLines() = runTest {
+        store.applyEvent("e1", ev(GroupEvent.CREATED, kamal, listOf(me), members = listOf(member(kamal, "Kamal", "admin"), member(me, "Me"))), me)
+        val icon = (ProtocolJson.parseToJsonElement(javaClass.classLoader!!.getResource("contract/v1/examples/group_meta_icon.json")!!.readText()) as kotlinx.serialization.json.JsonObject)["icon"]
+        meta = meta!!.copy(icon = icon)
+        store.applyEvent("e2", ev(GroupEvent.METADATA_CHANGED, kamal, epoch = 2), me)
+        meta = meta!!.copy(name = "Rise core")
+        store.applyEvent("e3", ev(GroupEvent.METADATA_CHANGED, kamal, epoch = 3), me)
+        meta = meta!!.copy(name = "Rise", icon = null)
+        store.applyEvent("e4", ev(GroupEvent.METADATA_CHANGED, me, epoch = 4), me)
+        assertEquals(
+            listOf(
+                "Kamal created the group “Pilot team”", "Kamal changed the group photo", "Kamal changed the group name to “Rise core”",
+                "You changed the group name to “Rise”", "You removed the group photo",
+            ),
+            systemLines().map { it.body },
+        )
+        // Local lines: never unread, never acked or sent.
+        assertTrue(systemLines().all { it.status == "READ" && it.messageId == null })
+    }
 }

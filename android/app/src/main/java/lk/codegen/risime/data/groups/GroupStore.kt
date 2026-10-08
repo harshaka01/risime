@@ -44,6 +44,10 @@ data class SystemLine(
 
         fun historySharedText(name: String) = "History shared by $name"
 
+        /** §18.7 local lines (never sent, never unread or notified). */
+        const val PHOTO_CHANGED = "photo_changed"
+        const val PHOTO_REMOVED = "photo_removed"
+
         /** Local lines whose stored text is authoritative (never re-rendered from the line). */
         val LOCAL_ACTIONS = setOf(HISTORY_GAP, UNDECRYPTABLE, HISTORY_SHARED)
 
@@ -74,6 +78,8 @@ fun systemText(line: SystemLine, me: String, nameOf: (String) -> String): String
         } else {
             "$actor dismissed ${list(line.targets)} as admin"
         }
+        SystemLine.PHOTO_CHANGED -> "$actor changed the group photo"
+        SystemLine.PHOTO_REMOVED -> "$actor removed the group photo"
         GroupEvent.METADATA_CHANGED -> if (line.name != null) "$actor changed the group name to “${line.name}”" else "$actor changed the group name"
         GroupEvent.ADD_EXPIRED -> "Couldn't add ${list(line.targets)}"
         GroupEvent.RESET -> "Encryption was reset; some messages may be missing"
@@ -82,6 +88,9 @@ fun systemText(line: SystemLine, me: String, nameOf: (String) -> String): String
         else -> "The group changed"
     }
 }
+
+/** §18.7 the identity of a group's icon for its lines: the blob's SHA-256, "" for none. */
+fun iconSha(meta: GroupMeta?): String = lk.codegen.risime.data.profile.PhotoRef.groupIcon(meta?.icon)?.blob?.sha256 ?: ""
 
 /** A `rejoin`/`reset` outbox row's payload: [ifMissing] = skip it if this device has the group by then. */
 @Serializable
@@ -113,6 +122,9 @@ object GroupOpType {
     const val LEAVE = "leave"
     const val ROLE = "role"
     const val RENAME = "rename"
+
+    /** §18.7 the group photo (an admin's `meta_changed` commit). */
+    const val ICON = "icon"
 
     /** A server PendingOp naming this device as committer (group_op, or found by GET /groups/{id}). */
     const val COMMIT = "commit"
@@ -184,6 +196,7 @@ class GroupStore(
         val meta = metaOf(conv)
         val mine = e.targets.any { it.equals(me, true) }
         var line: SystemLine? = SystemLine(e.action, e.actor, e.targets, e.role)
+        var photoLine: SystemLine? = null
         val base = existing ?: GroupEntity(
             conv, meta?.name, GroupMember.ROLE_MEMBER, GroupEntity.STATE_ACTIVE, null, null, e.generation,
             null, null, null, now,
@@ -196,6 +209,7 @@ class GroupStore(
                 val myRole = members.firstOrNull { it.userId.equals(me, true) }?.role ?: g.myRole
                 g = g.copy(state = GroupEntity.STATE_ACTIVE, myRole = myRole, createdBy = e.actor, generation = e.generation)
                 line = line?.copy(name = meta?.name)
+                if (meta != null) g = g.copy(iconSha = iconSha(meta), announcedName = meta.name)
                 if (!e.actor.equals(me, true) && existing == null) onAddedMe(conv, e.actor)
             }
             GroupEvent.ADDED -> {
@@ -218,8 +232,19 @@ class GroupStore(
                 if (mine) g = g.copy(myRole = role)
             }
             GroupEvent.METADATA_CHANGED -> {
-                line = line?.copy(name = meta?.name)
-                g = g.copy(metaUpdatedAt = now)
+                // §18.7: compare the previous and new group_meta: a rename, a photo change, or both.
+                val newIcon = iconSha(meta)
+                val photoChanged = meta != null && newIcon != (existing?.iconSha ?: "")
+                val renamed = when {
+                    meta == null -> true
+                    existing?.announcedName != null -> meta.name != existing.announcedName
+                    else -> !photoChanged // before v10 nothing was recorded: a rename unless the photo changed
+                }
+                line = if (renamed) line?.copy(name = meta?.name) else null
+                if (photoChanged) {
+                    photoLine = SystemLine(if (newIcon.isEmpty()) SystemLine.PHOTO_REMOVED else SystemLine.PHOTO_CHANGED, e.actor)
+                }
+                g = g.copy(metaUpdatedAt = now, iconSha = if (meta != null) newIcon else g.iconSha, announcedName = meta?.name ?: g.announcedName)
             }
             GroupEvent.ADD_EXPIRED -> {
                 val pending = groups.members(conv).filter { m -> e.targets.any { it.equals(m.userId, true) } && m.state == GroupMember.STATE_PENDING_ADD }
@@ -240,6 +265,7 @@ class GroupStore(
         // §13.3 R5: a replayed line sits at its server time, not under "Today".
         // §15.7: no line at or before a Clear chat watermark ([suppressLine]); the state above still applies.
         if (!suppressLine) line?.let { insertSystemLine(eventId, conv, it, me, restoredLocalTs ?: now) }
+        if (!suppressLine) photoLine?.let { insertSystemLine("$eventId:photo", conv, it, me, restoredLocalTs ?: now) }
         return true
     }
 

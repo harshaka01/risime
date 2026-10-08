@@ -123,7 +123,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 },
                 emphasis = typing,
                 onBack = onBack,
-                avatar = { InitialsAvatar(name, size = Sizes.avatarSmall + 4.dp, online = presence?.online == true) },
+                avatar = { InitialsAvatar(name, size = Sizes.avatarSmall + 4.dp, online = presence?.online == true, photoKey = vm.peerId) },
                 onTitleClick = { showInfo = true },
                 titleClickLabel = "Chat info",
                 actions = {

@@ -102,6 +102,8 @@ class ChatEngine(
     private val historyDao: lk.codegen.risime.data.db.HistoryDao? = null,
     /** §17 history sharing (null = an app without it: history events are skipped, they still advance the cursor). */
     private val history: lk.codegen.risime.data.history.HistoryHooks? = null,
+    /** §18 profile photos (null = an app without them: `profile_photo` envelopes are ignored). */
+    private val profilePhotos: lk.codegen.risime.data.profile.ProfilePhotoHooks? = null,
 ) : RealtimeListener, lk.codegen.risime.data.history.SendLanes {
     /** §15.4–§15.6 applied inside each event's transaction. */
     private val applier = deletes?.let { lk.codegen.risime.data.deletes.DeleteApplier(it, messages, images, clock, log) }
@@ -242,6 +244,7 @@ class ChatEngine(
         }
         calls?.let { runCatching { it.onPageEnd() }.onFailure { e -> log("calls page end: ${e.message}") } }
         if (newIncoming) flushAcks()
+        afterPhotos()
         if (imagesStored) {
             imagesStored = false
             images?.received()
@@ -264,6 +267,15 @@ class ChatEngine(
         deletesApplied = false
         applier?.takePurged()?.forEach { p -> runCatching { images?.afterPurge(p.clientMsgId, p.files) } }
         onDeletesApplied()
+    }
+
+    /** §18: set inside a transaction that applied a profile photo; downloads are scheduled after the commit. */
+    @Volatile private var photosTouched = false
+
+    private fun afterPhotos() {
+        if (!photosTouched) return
+        photosTouched = false
+        profilePhotos?.afterCommit()
     }
 
     /** §17: set inside a transaction that changed history state; the manager acts after the commit. */
@@ -311,6 +323,7 @@ class ChatEngine(
         }
         calls?.let { runCatching { it.onPageEnd() } }
         if (newIncoming) flushAcks()
+        afterPhotos()
         afterDeletes()
         if (historyTouched) {
             historyTouched = false
@@ -373,6 +386,11 @@ class ChatEngine(
             if (r is MlsResult.Unrecoverable) onUnrecoverable(r.conversationId)
             if (r is MlsResult.CallSignal) queueCall(r)
             if (r is MlsResult.CallEnd) incoming = applyCallEnd(me, r.message, r.env) || incoming
+            // §18.2: applied in the event's transaction; never a row, unread count, ack or notification.
+            if (r is MlsResult.ProfilePhoto) profilePhotos?.let { pp ->
+                pp.applyInTx(r.subject, r.message.conversationId, r.env, me)
+                photosTouched = true
+            }
             history?.let { h ->
                 when (r) {
                     is MlsResult.HistoryRequest -> { h.onRequestInTx(r); historyTouched = true }
@@ -775,6 +793,7 @@ class ChatEngine(
         clientMsgId: String,
         localTs: Long,
         envelope: () -> ByteArray,
+        silent: Boolean = false,
         plain: suspend () -> PushResult<lk.codegen.risime.net.MsgSendReply>,
     ): PushResult<lk.codegen.risime.net.MsgSendReply> {
         var attempt = 0
@@ -788,12 +807,12 @@ class ChatEngine(
                 if (engine == null || group == null) return PushResult.Rejected(WAITING_FOR_GROUP)
                 val ct = tx.run { engine.encrypt(conv, envelope()) }
                 realtime().sendGroup(
-                    lk.codegen.risime.net.MsgSendGroup(clientMsgId, conv, java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(localTs)),
+                    lk.codegen.risime.net.MsgSendGroup(clientMsgId, conv, java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(localTs), silent.takeIf { it }),
                 )
             } else if (engine != null && group != null) {
                 val ct = tx.run { engine.encrypt(conv, envelope()) }
                 realtime().sendEncrypted(
-                    MsgSendE2ee(clientMsgId, to, java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(localTs)),
+                    MsgSendE2ee(clientMsgId, to, java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(localTs), silent.takeIf { it }),
                 )
             } else {
                 plain()
@@ -815,6 +834,16 @@ class ChatEngine(
             }
             if (isGroupConversation(conv) && mlsEngine()?.group(conv) == null) return PushResult.Rejected(WAITING_FOR_GROUP)
         }
+    }
+
+    /**
+     * §18.1/§18.4 a silent control (only `profile_photo`): encrypted at send time through the
+     * conversation's lane with an empty `authenticated_data` and `silent: true`; e2ee only, never
+     * plaintext, never a row. stale_epoch → catch up and re-encrypt with the same client_msg_id.
+     */
+    suspend fun sendSilent(conv: String, plaintext: ByteArray): PushResult<lk.codegen.risime.net.MsgSendReply> = withContext(io) {
+        val me = meId() ?: return@withContext PushResult.Unavailable
+        sendPayload(conv, conversationPeer(conv, me), newClientMsgId(), clock(), { plaintext }, silent = true) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
     }
 
     // ---- Reactions (§11.2) ----
@@ -1160,6 +1189,8 @@ class ChatEngine(
         var retry = false
         for (m in messages.pendingOutbox()) {
             if (m.conversationId in waiting) continue
+            // §18.5 (android A2): a dirty group gets this device's photo before its next own message.
+            if (isGroupConversation(m.conversationId)) profilePhotos?.let { runCatching { it.beforeOwnMessage(m.conversationId) } }
             deletes?.countAttempt(m.clientMsgId) // android R2: from now on it may be on the server
             when (val r = send(m)) {
                 is PushResult.Ok -> {

@@ -228,7 +228,7 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> U
     ListRow(
         title = row.name,
         subtitle = sub,
-        leading = { InitialsAvatar(row.name, enabled = row.registered, online = row.presence?.online == true) },
+        leading = { InitialsAvatar(row.name, enabled = row.registered, online = row.presence?.online == true, photoKey = row.userId) },
         meta = row.last?.let { shortStamp(it.localTs) },
         strong = row.unread > 0,
         enabled = row.openable,
@@ -265,7 +265,7 @@ private fun GroupRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> 
     ListRow(
         title = row.name,
         subtitle = sub,
-        leading = { InitialsAvatar(row.name) },
+        leading = { InitialsAvatar(row.name, photoKey = row.conversationId) },
         meta = last?.takeIf { lastText.isNotEmpty() }?.let { shortStamp(it.localTs) },
         strong = row.unread > 0,
         subtitleColor = when {

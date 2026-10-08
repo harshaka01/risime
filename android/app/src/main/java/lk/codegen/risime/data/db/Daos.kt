@@ -166,6 +166,8 @@ interface WipeDao {
         historyRequests()
         historyParts()
         historyProvides()
+        profilePhotos()
+        profilePhotoConvs()
     }
 
     @Query("DELETE FROM messages")
@@ -225,6 +227,12 @@ interface WipeDao {
 
     @Query("DELETE FROM history_provides")
     suspend fun historyProvides()
+
+    @Query("DELETE FROM profile_photos")
+    suspend fun profilePhotos()
+
+    @Query("DELETE FROM profile_photo_convs")
+    suspend fun profilePhotoConvs()
 }
 
 /** v7 (§15): tombstones, hidden tombstones, the delete outbox and Clear/Delete chat state. */
@@ -628,4 +636,47 @@ interface HistoryDao {
 
     @Query("SELECT * FROM history_requests")
     suspend fun allRequests(): List<HistoryRequestEntity>
+}
+
+/** v10 (§18): profile photos / group icons, and the per-conversation send state. */
+@Dao
+interface ProfilePhotoDao {
+    @Query("SELECT * FROM profile_photos WHERE user_id = :id")
+    suspend fun get(id: String): ProfilePhotoEntity?
+
+    @Query("SELECT * FROM profile_photos")
+    fun observeAll(): kotlinx.coroutines.flow.Flow<List<ProfilePhotoEntity>>
+
+    @Query("SELECT * FROM profile_photos WHERE blob_id IS NOT NULL AND fetched = 0")
+    suspend fun unfetched(): List<ProfilePhotoEntity>
+
+    @Query("SELECT * FROM profile_photos WHERE blob_id IS NOT NULL AND fetched = 2 AND checked_at < :before")
+    suspend fun goneBefore(before: Long): List<ProfilePhotoEntity>
+
+    @Upsert
+    suspend fun put(p: ProfilePhotoEntity)
+
+    @Query("UPDATE profile_photos SET fetched = :fetched, checked_at = :at WHERE user_id = :id AND blob_id = :blobId")
+    suspend fun setFetched(id: String, blobId: String, fetched: Int, at: Long): Int
+
+    @Query("DELETE FROM profile_photos WHERE user_id = :id")
+    suspend fun delete(id: String)
+
+    @Query("SELECT * FROM profile_photo_convs WHERE conversation_id = :conv")
+    suspend fun conv(conv: String): ProfilePhotoConvEntity?
+
+    @Query("SELECT * FROM profile_photo_convs")
+    suspend fun convs(): List<ProfilePhotoConvEntity>
+
+    @Query("SELECT * FROM profile_photo_convs WHERE pending_ver IS NOT NULL ORDER BY due_at ASC")
+    suspend fun pendingSends(): List<ProfilePhotoConvEntity>
+
+    @Upsert
+    suspend fun putConv(c: ProfilePhotoConvEntity)
+
+    @Query("UPDATE profile_photo_convs SET pending_ver = NULL, dirty = 0 WHERE conversation_id = :conv AND (pending_ver IS NULL OR pending_ver <= :ver)")
+    suspend fun clearSent(conv: String, ver: Long): Int
+
+    @Query("DELETE FROM profile_photo_convs WHERE conversation_id = :conv")
+    suspend fun deleteConv(conv: String)
 }

@@ -65,6 +65,12 @@ sealed interface MlsResult {
     /** §17.6 a decrypted, verified `history_share` (one part) for this device. */
     data class HistoryShare(val event: lk.codegen.risime.net.HistoryShareEvent, val env: lk.codegen.risime.data.history.HistoryShareEnvelope, val sender: DeviceRef) : MlsResult
 
+    /**
+     * §18.1/§18.2 a decrypted, validated `profile_photo`: [subject] is the MLS sender's user (the
+     * verified leaf), never a JSON field. Not a message: no row, unread, ack or notification.
+     */
+    data class ProfilePhoto(val message: MessageData, val subject: String, val env: lk.codegen.risime.data.profile.ProfilePhotoEnvelope) : MlsResult
+
     /** Ahead of the local epoch/generation, or no group yet: kept in mls_pending. */
     data object Pending : MlsResult
 
@@ -253,10 +259,13 @@ class MlsPipeline(
         val msg = e.messageData()?.takeIf { it.encrypted } ?: return MlsResult.Ignored
         if (msg.fromDevice.equals(mls.deviceId, true)) return MlsResult.Ignored // our own send (already in the outbox row)
         val conv = msg.conversationId
-        fun undecryptable(reason: String) = MlsResult.Dropped(reason, conv, msg.serverTs)
+        // §18.4 (android A3): a `silent` control (a profile photo) that is pre-install or can't be
+        // decrypted leaves no trace: no marker, no gap row, not counted in a history request.
+        fun undecryptable(reason: String): MlsResult =
+            if (msg.silent) MlsResult.ControlDropped("silent: $reason") else MlsResult.Dropped(reason, conv, msg.serverTs)
         // §17.2: every pre-install message gets a content-free gap row (the request range, the import's match keys).
         val gap = listOf(GapInfo.of(msg))
-        val beforeInstall = MlsResult.BeforeInstall(conv, msg.serverTs, gap)
+        val beforeInstall: MlsResult = if (msg.silent) MlsResult.ControlDropped("silent: pre-install") else MlsResult.BeforeInstall(conv, msg.serverTs, gap)
         // Rule 1 (§13.3): only where the message would otherwise be parked or dropped; never on replayed rows (null there).
         val rule1 = beforeHistory(msg.serverTs, historyBefore)
         val gen = msg.generation ?: return undecryptable("no generation")
@@ -265,7 +274,7 @@ class MlsPipeline(
         if (joined != null && gen == joined.generation && epoch < joined.epoch) return beforeInstall
         val g = mls.group(conv) ?: return if (rule1) beforeInstall else park(e, conv, gen, epoch)
         // §17.2/§12.8: an older generation's message (lost to a reset or rejoin) is a gap too.
-        if (gen < g.generation) return if (rule1) beforeInstall else MlsResult.Dropped("stale generation", conv, msg.serverTs, gap)
+        if (gen < g.generation) return if (rule1 || msg.silent) beforeInstall else MlsResult.Dropped("stale generation", conv, msg.serverTs, gap)
         if (gen > g.generation) return if (rule1) beforeInstall else park(e, conv, gen, epoch)
         if (epoch > g.epoch) return park(e, conv, gen, epoch)
         return try {
@@ -298,6 +307,7 @@ class MlsPipeline(
                         log("history envelope in a message event ${msg.messageId}: dropped")
                         MlsResult.Ignored
                     }
+                    is MlsPayload.Decoded.ProfilePhoto -> MlsResult.ProfilePhoto(msg, d.sender.userId, p.env)
                     is MlsPayload.Decoded.Ignored -> {
                         log("ignored payload type ${p.type} in ${msg.messageId}")
                         MlsResult.Ignored

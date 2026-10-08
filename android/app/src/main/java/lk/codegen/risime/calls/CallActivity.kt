@@ -64,7 +64,7 @@ class CallActivity : ComponentActivity() {
         })
         handle(intent)
         setContent {
-            RisiMeTheme {
+            RisiMeTheme { androidx.compose.runtime.CompositionLocalProvider(lk.codegen.risime.ui.common.LocalAvatars provides avatars()) {
                 val s by calls.state.collectAsStateWithLifecycle()
                 val blind by calls.blindRing.collectAsStateWithLifecycle()
                 val endpoints by calls.endpoints.collectAsStateWithLifecycle()
@@ -90,7 +90,7 @@ class CallActivity : ComponentActivity() {
                     snap == null && blind != null -> IncomingCallScreen(null, onAnswer = ::answerBlind, onDecline = calls::stopBlindRing)
                     // Never an empty (black) window while the screen closes: the ended card, no controls.
                     snap == null -> InCallScreen(InCallUi(name = name, status = "Call ended", ended = true), {}, {}, {})
-                    snap.phase == CallPhase.RINGING_IN -> IncomingCallScreen(name.ifEmpty { "RisiMe" }, onAnswer = ::answer, onDecline = calls::hangUp)
+                    snap.phase == CallPhase.RINGING_IN -> IncomingCallScreen(name.ifEmpty { "RisiMe" }, onAnswer = ::answer, onDecline = calls::hangUp, photoKey = snap.peerUserId)
                     else -> {
                         @Suppress("UNUSED_EXPRESSION") tick
                         InCallScreen(
@@ -102,6 +102,7 @@ class CallActivity : ComponentActivity() {
                                 current = current?.let(::ui),
                                 verified = snap.verified,
                                 ended = snap.phase == CallPhase.ENDED,
+                                photoKey = snap.peerUserId,
                             ),
                             onMute = calls::setMuted,
                             onEndpoint = { e -> endpoints.firstOrNull { it.identifier.toString() == e.id }?.let(calls::selectEndpoint) },
@@ -109,9 +110,12 @@ class CallActivity : ComponentActivity() {
                         )
                     }
                 }
-            }
+            } }
         }
     }
+
+    private fun avatars(): lk.codegen.risime.ui.common.AvatarSource? =
+        if (lk.codegen.risime.BuildConfig.CRYPTO_AVAILABLE) (application as RisiMeApp).container.avatarLoader else null
 
     private var lastConversation: String? = null
 

@@ -151,7 +151,7 @@ fun GroupChatScreen(vm: GroupChatViewModel, meId: String, onBack: () -> Unit, on
                 },
                 emphasis = typingLabel != null,
                 onBack = onBack,
-                avatar = { InitialsAvatar(name, size = Sizes.avatarSmall + 4.dp) },
+                avatar = { InitialsAvatar(name, size = Sizes.avatarSmall + 4.dp, photoKey = vm.conversationId) },
                 onTitleClick = onInfo,
                 titleClickLabel = "Group info",
                 actions = {
@@ -387,9 +387,11 @@ private fun GroupBubble(
 @Composable
 fun GroupInfoScreen(vm: GroupInfoViewModel, onBack: () -> Unit) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val pick = lk.codegen.risime.ui.common.rememberPhotoCropper("Move and scale", onCropped = vm::setPhoto, onError = vm::photoError)
     GroupInfoContent(
         ui, onBack = onBack, onAdd = vm::add, onRemove = vm::remove, onSetAdmin = vm::setRole, onRename = vm::rename,
         onLeave = vm::leave, onReset = vm::reset, onDismissError = vm::dismissError,
+        onSetPhoto = pick.takeIf { c -> ui.iAmAdmin && !ui.readOnly }, onRemovePhoto = vm::removePhoto,
     )
 }
 
@@ -408,7 +410,11 @@ fun GroupInfoContent(
     onLeave: () -> Unit,
     onReset: () -> Unit,
     onDismissError: () -> Unit,
+    /** §18.7 admins only: tap the photo → set/change (picker and crop); null = no edit control. */
+    onSetPhoto: (() -> Unit)? = null,
+    onRemovePhoto: () -> Unit = {},
 ) {
+    var photoMenu by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
@@ -420,7 +426,16 @@ fun GroupInfoContent(
         LazyColumn(Modifier.fillMaxSize().padding(pad), contentPadding = PaddingValues(bottom = Spacing.xxl)) {
             item {
                 Column(Modifier.fillMaxWidth().padding(Spacing.lg), horizontalAlignment = Alignment.CenterHorizontally) {
-                    InitialsAvatar(ui.name, size = Sizes.avatarLarge)
+                    Box {
+                        Box(
+                            if (onSetPhoto != null) Modifier.clickable(onClickLabel = "Change group photo") { if (ui.hasPhoto) photoMenu = true else onSetPhoto() } else Modifier,
+                        ) { InitialsAvatar(ui.name, size = Sizes.avatarLarge, photoKey = ui.conversationId) }
+                        androidx.compose.material3.DropdownMenu(photoMenu, onDismissRequest = { photoMenu = false }) {
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("Change photo") }, onClick = { photoMenu = false; onSetPhoto?.invoke() })
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("Remove photo") }, onClick = { photoMenu = false; onRemovePhoto() })
+                        }
+                    }
+                    ui.photoBusy?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     Spacer(Modifier.heightIn(min = Spacing.sm))
                     Text(ui.name, style = MaterialTheme.typography.headlineSmall)
                     Text(
@@ -496,7 +511,7 @@ private fun MemberRow(m: MemberUi, iAmAdmin: Boolean, onRemove: (String) -> Unit
                 .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            InitialsAvatar(m.name)
+            InitialsAvatar(m.name, photoKey = m.userId)
             Spacer(Modifier.width(Spacing.md))
             Column(Modifier.weight(1f)) {
                 Text(if (m.me) "${m.name} (you)" else m.name, maxLines = 1)

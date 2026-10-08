@@ -214,6 +214,8 @@ data class MessageData(
     val ciphertext: String? = null,
     val generation: Long? = null,
     val epoch: Long? = null,
+    /** §18.4 a control message the server didn't push (a profile photo); absent = false. */
+    val silent: Boolean = false,
 ) {
     val encrypted: Boolean get() = ciphertext != null
 }
@@ -705,6 +707,10 @@ data class MsgSendE2ee(
     val generation: Long,
     val epoch: Long,
     @SerialName("client_ts") val clientTs: String,
+    /** §18.4 only on a `profile_photo` (crypto K7): no push; omitted when false. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val silent: Boolean? = null,
 )
 
 @Serializable
@@ -971,6 +977,10 @@ data class MsgSendGroup(
     val generation: Long,
     val epoch: Long,
     @SerialName("client_ts") val clientTs: String,
+    /** §18.4 only on a `profile_photo` (crypto K7): no push; omitted when false. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val silent: Boolean? = null,
 )
 
 /** §12.9 typing in a group. */

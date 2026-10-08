@@ -51,13 +51,30 @@ class ContractExamplesTest {
         "device_put_video.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "error_video_not_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
         "mls_group_video_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        // v1.17 (§18 profile photos): parse-only placeholders until the app implements it.
-        "blob_upload_avatar_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "event_message_silent.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "msg_send_silent.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "profile_photo_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "profile_photo_payload_bad.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "profile_photo_payload_removed.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.17 (§18 profile photos): typed models, the envelopes through the strict validators.
+        "blob_upload_avatar_reply.json" to { s -> ProtocolJson.decodeFromString<BlobUploadReply>(s).also { require(it.expiresAt == null && it.size == 61456L) } },
+        "event_message_silent.json" to { s -> ProtocolJson.decodeFromString<Event>(s).messageData()!!.also { require(it.silent && it.encrypted) } },
+        "msg_send_silent.json" to { s ->
+            ProtocolJson.decodeFromString<MsgSendE2ee>(s).also {
+                require(it.silent == true)
+                // Round trip: `silent` is sent exactly as the example has it, and omitted when unset.
+                require(ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s))
+                require("silent" !in ProtocolJson.encodeToJsonElement(it.copy(silent = null)).jsonObject)
+            }
+        },
+        "profile_photo_payload.json" to { s ->
+            (lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) as lk.codegen.risime.data.mls.MlsPayload.Decoded.ProfilePhoto).env.also {
+                require(it.ver == 1791450724000L && it.photo!!.w == 512 && it.photo!!.enc.key.size == 32 && it.photo!!.blob.size == 61456L)
+                // Re-encoding gives the same envelope (what a device re-sends).
+                require(lk.codegen.risime.data.profile.ProfilePhotoEnvelope.validate(ProtocolJson.parseToJsonElement(String(it.encode())) as JsonObject) == it)
+            }
+        },
+        "profile_photo_payload_bad.json" to { s ->
+            (lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) as lk.codegen.risime.data.mls.MlsPayload.Decoded.Ignored).also { require(it.type.startsWith("profile_photo")) }
+        },
+        "profile_photo_payload_removed.json" to { s ->
+            (lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) as lk.codegen.risime.data.mls.MlsPayload.Decoded.ProfilePhoto).env.also { require(it.photo == null && it.ver == 1791454324000L) }
+        },
         // v1.15 (§17 history sharing): typed models, the envelopes through the strict validators.
         "blob_upload_history_reply.json" to { s -> ProtocolJson.decodeFromString<BlobUploadReply>(s).also { requireNotNull(it.expiresAt) } },
         "blob_usage_reply_history.json" to { s -> ProtocolJson.decodeFromString<BlobUsageReply>(s).also { require(it.history!!.used < it.history!!.limit && it.history!!.hourlyLimit == 40) } },
@@ -226,7 +243,7 @@ class ContractExamplesTest {
         "image_payload_bad_key.json" to { s ->
             require(lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) is lk.codegen.risime.data.mls.MlsPayload.Decoded.Ignored)
         },
-        "group_meta_icon.json" to { s -> GroupMeta.decode(s.toByteArray())!!.also { require(it.icon is JsonObject && it.name.isNotEmpty()) } },
+        "group_meta_icon.json" to { s -> GroupMeta.decode(s.toByteArray())!!.also { require(it.icon is JsonObject && it.name.isNotEmpty() && lk.codegen.risime.data.profile.PhotoRef.groupIcon(it.icon)!!.w == 512) } },
         "blob_upload_media_reply.json" to { s -> ProtocolJson.decodeFromString<BlobUploadReply>(s).also { requireNotNull(it.expiresAt) } },
         "blob_usage_reply.json" to { s -> ProtocolJson.decodeFromString<BlobUsageReply>(s).also { require(it.media.used < it.media.limit && it.mls != null) } },
         "device_put_images.json" to { s ->

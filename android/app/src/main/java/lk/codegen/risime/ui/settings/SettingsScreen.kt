@@ -120,13 +120,14 @@ private fun ProfileSection(s: SettingsUiState, vm: SettingsViewModel) {
     SectionHeader("Profile")
     val user = s.user ?: return
     Row(verticalAlignment = Alignment.CenterVertically) {
-        InitialsAvatar(user.displayName, size = Sizes.avatarLarge)
+        InitialsAvatar(user.displayName, size = Sizes.avatarLarge, photoKey = user.id)
         Spacer(Modifier.width(16.dp))
         Column {
             Text(user.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(user.company, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+    ProfilePhotoControls(user.id)
     OutlinedTextField(
         value = s.nameDraft,
         onValueChange = vm::onNameDraft,

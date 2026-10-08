@@ -117,6 +117,11 @@ data class GroupInfoUi(
     val busy: Boolean = false,
     /** §14.1 `missing_images`: members whose app can't show photos yet. */
     val photosNeedUpdate: List<String> = emptyList(),
+    /** §18.7 the group photo's key (the conversation id) and whether one is set. */
+    val conversationId: String? = null,
+    val hasPhoto: Boolean = false,
+    /** §18.7 "Setting the group photo…" while it is encoded and uploaded. */
+    val photoBusy: String? = null,
 ) {
     val memberCount: Int get() = members.count { it.state != GroupMember.STATE_PENDING_ADD }
 
@@ -145,23 +150,27 @@ fun groupInfoUi(meId: String, g: GroupEntity?, members: List<GroupMemberEntity>,
     )
 }
 
+private data class PhotoState(val error: String?, val missing: List<String>, val phones: Set<String>, val photo: Boolean, val busy: String?)
+
 class GroupInfoViewModel(private val c: AppContainer, private val meId: String, val conversationId: String) : ViewModel() {
     private val error = MutableStateFlow<String?>(null)
     private val missingImages = MutableStateFlow<List<String>>(emptyList())
     private val newPhones = MutableStateFlow<Set<String>>(emptySet())
+    private val photoBusy = MutableStateFlow<String?>(null)
+    private val hasPhoto = c.db.profilePhotos().observeAll().map { l -> l.any { it.userId == conversationId.lowercase() && it.blobId != null } }
 
     val ui: StateFlow<GroupInfoUi> = combine(
         c.db.groups().observe(conversationId),
         c.db.groups().observeMembers(conversationId),
         c.contacts.contacts,
-        combine(error, missingImages, newPhones, ::Triple),
-    ) { g, members, contacts, (err, missing, phones) ->
+        combine(error, missingImages, newPhones, combine(hasPhoto, photoBusy, ::Pair)) { e, m, n, p -> PhotoState(e, m, n, p.first, p.second) },
+    ) { g, members, contacts, (err, missing, phones, photo, busyText) ->
         val names = missing.distinctBy { it.lowercase() }.map { id ->
             if (id.equals(meId, true)) "Your other phone" else members.firstOrNull { it.userId.equals(id, true) }?.displayName ?: "Someone"
         }
         val base = groupInfoUi(meId, g, members, contacts)
         base.copy(
-            error = err, photosNeedUpdate = names,
+            error = err, photosNeedUpdate = names, conversationId = conversationId, hasPhoto = photo, photoBusy = busyText,
             members = base.members.map { m -> if (m.userId.lowercase() in phones && m.state == GroupMember.STATE_ACTIVE) m.copy(newPhone = true) else m },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GroupInfoUi())
@@ -208,6 +217,41 @@ class GroupInfoViewModel(private val c: AppContainer, private val meId: String, 
     fun rename(name: String) {
         groupNameError(name, IcuGraphemes)?.let { error.value = it; return }
         queue(GroupOpType.RENAME, ProtocolJson.encodeToString(RenamePayload.serializer(), RenamePayload(name.trim())))
+    }
+
+    /**
+     * §18.7 an admin sets or changes the group photo: re-encode the crop (JPEG, no metadata, ≤ 512 px),
+     * encrypt under a fresh key, upload as `purpose=icon`, then the `meta_changed` commit (an op).
+     */
+    fun setPhoto(source: ByteArray, crop: lk.codegen.risime.data.profile.CropSquare) {
+        error.value = null
+        photoBusy.value = "Setting the group photo…"
+        viewModelScope.launch {
+            try {
+                val (ref, why) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    try {
+                        val jpeg = lk.codegen.risime.data.profile.AvatarEncoder(lk.codegen.risime.data.media.AndroidBitmapOps).encode(source, crop)
+                        c.profilePhotos.prepareGroupIcon(conversationId, jpeg.bytes, jpeg.side)
+                    } catch (e: lk.codegen.risime.data.media.ImageRejected) {
+                        null to (e.message ?: "Couldn't use this photo")
+                    }
+                }
+                if (ref == null) {
+                    error.value = why
+                    return@launch
+                }
+                queue(GroupOpType.ICON, ProtocolJson.encodeToString(lk.codegen.risime.data.groups.IconPayload.serializer(), lk.codegen.risime.data.groups.IconPayload(c.sealGroupIcon(conversationId, ref.toJson()))))
+            } finally {
+                photoBusy.value = null
+            }
+        }
+    }
+
+    /** §18.7 remove = `icon: null` in the same commit. */
+    fun removePhoto() = queue(GroupOpType.ICON, ProtocolJson.encodeToString(lk.codegen.risime.data.groups.IconPayload.serializer(), lk.codegen.risime.data.groups.IconPayload(null)))
+
+    fun photoError(text: String) {
+        error.value = text
     }
 
     /** Leaving is immediate locally (read-only chat); undone if the server says last_admin. */

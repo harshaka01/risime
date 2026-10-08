@@ -75,6 +75,8 @@ import lk.codegen.risime.push.PushManager
 import lk.codegen.risime.push.newRequests
 import lk.codegen.risime.push.planChatNotifications
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.NonCancellable
@@ -310,6 +312,51 @@ class AppContainer(
     val imageDownloader = lk.codegen.risime.data.media.ImageDownloader(api, db.media(), mediaFiles, mediaSealer, { mediaCrypto })
     val imageLoader by lazy { lk.codegen.risime.ui.chat.ImageLoader(images) }
 
+    // ---- §18 profile photos and group icons (v1.17) ----
+
+    private val photoPrefs by lazy { appContext.getSharedPreferences("profile_photos", Context.MODE_PRIVATE) }
+    private val avatarApi = object : lk.codegen.risime.data.profile.AvatarApi {
+        override suspend fun uploadAvatar(clientBlobId: String, file: File) = api.uploadAvatarBlob(clientBlobId, file)
+        override suspend fun uploadIcon(conversationId: String, clientBlobId: String, file: File) =
+            api.uploadMediaBlob(conversationId, clientBlobId, file, purpose = "icon")
+        override suspend fun download(blobId: String, into: File, etagHex: String) = api.downloadBlobTo(blobId, into, 0, etagHex)
+        override suspend fun delete(blobId: String) = api.deleteBlob(blobId)
+    }
+    val profilePhotos: lk.codegen.risime.data.profile.ProfilePhotos by lazy {
+        lk.codegen.risime.data.profile.ProfilePhotos(
+            db.profilePhotos(), dbTx, { KvSealer(mlsDbKey.get()) },
+            lk.codegen.risime.data.profile.AvatarFiles(File(context.noBackupFilesDir, "avatars")), { mediaCrypto }, avatarApi,
+            sendSilent = { conv, plaintext -> engine.sendSilent(conv, plaintext) },
+            mls = { mlsEngine },
+            conversations = { photoConversations() },
+            me = { sessionStore.current()?.user?.id },
+            serverNow = { serverClock.serverNow() },
+            scope = scope,
+            kv = object : lk.codegen.risime.data.profile.PhotoKv {
+                override fun get(key: String) = photoPrefs.getString(key, null)
+                override fun set(key: String, value: String?) = photoPrefs.edit().apply { if (value == null) remove(key) else putString(key, value) }.apply()
+            },
+            blocked = { id -> contacts.friendsState.value.blocked.any { it.userId.equals(id, true) } },
+            autoDownload = {
+                val n = lk.codegen.risime.push.currentNetKind(appContext)
+                n == lk.codegen.risime.data.media.NetKind.UNMETERED || n == lk.codegen.risime.data.media.NetKind.METERED
+            },
+            log = { Log.w("RisiMe", "photos: $it") },
+        )
+    }
+    val avatarLoader by lazy { lk.codegen.risime.ui.common.AvatarLoader(profilePhotos) }
+
+    /** §18.5: the conversations a photo may go to (friends' DMs and groups); the photo code keeps those with an MLS group. */
+    private suspend fun photoConversations(): List<String> {
+        val me = sessionStore.current()?.user?.id ?: return emptyList()
+        val dms = db.contacts().all().first().filter { it.friend && it.userId != null }.map { lk.codegen.risime.net.dmConversationId(me, it.userId!!) }
+        val groups = db.groups().allNow().filter { !it.readOnly }.map { it.conversationId }
+        return dms + groups
+    }
+
+    /** MLS state changed (a commit, a Welcome): the §18.5 triggers and the group icons, after a debounce. */
+    private val mlsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
     /** §14.1: advertise `images` only with a groups-capable core whose media API is present (receive and render work). */
     fun imagesSupported(): Boolean = mlsEngine?.groupsSupported == true && mediaCrypto != null
 
@@ -367,8 +414,19 @@ class AppContainer(
             me = { sessionStore.current()?.user?.id }, deviceId = { sessionStore.deviceId() },
             catchUp = { conv -> catchUpCommits(conv) },
             log = { Log.i("RisiMe", it) },
+            openIcon = { conv, sealed -> openGroupIcon(conv, sealed) },
         )
     }
+
+    /** §18.7: a pending group-photo op's icon object (its key inside) is sealed with the database key until it is committed. */
+    fun sealGroupIcon(conversationId: String, icon: kotlinx.serialization.json.JsonElement): String =
+        java.util.Base64.getEncoder().encodeToString(
+            KvSealer(mlsDbKey.get()).seal("group-icon-op", conversationId.lowercase().toByteArray(), lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonElement.serializer(), icon).toByteArray()),
+        )
+
+    private fun openGroupIcon(conversationId: String, sealed: ByteArray): kotlinx.serialization.json.JsonElement? = runCatching {
+        lk.codegen.risime.net.ProtocolJson.parseToJsonElement(KvSealer(mlsDbKey.get()).open("group-icon-op", conversationId.lowercase().toByteArray(), sealed).toString(Charsets.UTF_8))
+    }.getOrNull()
 
     private val groupOpsRun = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
@@ -464,7 +522,8 @@ class AppContainer(
             Log.w("RisiMe", "MLS core unavailable: ${it.javaClass.simpleName}: ${it.message}")
             return null
         }
-        mlsEngine = engine
+        mlsEngine = lk.codegen.risime.data.mls.ObservedMlsEngine(engine) { mlsChanged.tryEmit(Unit) }
+        mlsChanged.tryEmit(Unit)
         return when (val r = deviceRegistrar.register(runCatching { push.currentToken() }.getOrNull())) {
             is Registration.Mls -> {
                 Log.i("RisiMe", "MLS device registered, ${r.keyPackages} key packages")
@@ -728,6 +787,7 @@ class AppContainer(
         calls = callHooks,
         historyDao = db.history(),
         history = history.takeIf { BuildConfig.HISTORY_SHARE_ENABLED },
+        profilePhotos = profilePhotos.takeIf { BuildConfig.CRYPTO_AVAILABLE },
     )
 
 
@@ -784,6 +844,25 @@ class AppContainer(
                         )
                     }
                 }
+        }
+        // §18.5: the photo triggers after MLS changes (debounced: the change's transaction has committed by then).
+        if (BuildConfig.CRYPTO_AVAILABLE) {
+            scope.launch {
+                @OptIn(kotlinx.coroutines.FlowPreview::class)
+                mlsChanged.debounce(1_500).collect { runCatching { profilePhotos.reconcile() }.onFailure { Log.w("RisiMe", "photos: ${it.message}") } }
+            }
+            scope.launch {
+                realtime.state.collect { st ->
+                    if (st == ConnectionState.Live) {
+                        mlsChanged.tryEmit(Unit)
+                        runCatching { profilePhotos.downloadAll() }
+                    }
+                }
+            }
+            scope.launch { openConversation.filterNotNull().collect { conv -> runCatching { profilePhotos.onChatOpened(conv) } } }
+            scope.launch {
+                runCatching { profilePhotos.startup(db.profilePhotos().observeAll().first()) }
+            }
         }
         // Updater: launch check happens in onStart; then at most every 6 h while in the foreground.
         scope.launch {
@@ -1181,6 +1260,8 @@ class AppContainer(
         db.wipe().allChatData()
         runCatching { androidx.work.WorkManager.getInstance(appContext).cancelAllWork() }
         mediaFiles.wipe()
+        File(appContext.noBackupFilesDir, "avatars").deleteRecursively()
+        photoPrefs.edit().clear().apply()
         mlsEngine = null
         mlsDbKey.destroy()
     }

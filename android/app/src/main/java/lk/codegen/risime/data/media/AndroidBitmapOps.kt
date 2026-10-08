@@ -102,6 +102,12 @@ object AndroidBitmapOps : BitmapOps<Bitmap> {
     override fun encodeJpeg(b: Bitmap, quality: Int): ByteArray =
         ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.JPEG, quality, it) }.toByteArray()
 
+    override fun cropSquare(b: Bitmap, x: Int, y: Int, side: Int): Bitmap {
+        val out = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888, false, srgb)
+        Canvas(out).drawBitmap(b, android.graphics.Rect(x, y, x + side, y + side), android.graphics.Rect(0, 0, side, side), Paint(Paint.FILTER_BITMAP_FLAG))
+        return out
+    }
+
     override fun encodePng(b: Bitmap): ByteArray =
         ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
 

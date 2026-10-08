@@ -26,6 +26,9 @@ interface BitmapOps<B> {
 
     fun encodeJpeg(b: B, quality: Int): ByteArray
 
+    /** §18.6: the [side]×[side] square at ([x], [y]) of [b], into a fresh sRGB ARGB_8888 software bitmap. */
+    fun cropSquare(b: B, x: Int, y: Int, side: Int): B
+
     fun encodePng(b: B): ByteArray
 
     fun recycle(b: B)

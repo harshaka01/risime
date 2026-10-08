@@ -222,6 +222,10 @@ data class GroupEntity(
     @ColumnInfo(name = "last_refreshed_at") val lastRefreshedAt: Long?,
     /** When this row appeared locally (orders a group with no messages yet in the chats list). */
     @ColumnInfo(name = "local_ts") val localTs: Long,
+    /** v10 (§18.7): the `group_meta.icon` blob SHA-256 at the last group line ("" = no icon; null = not known yet). */
+    @ColumnInfo(name = "icon_sha") val iconSha: String? = null,
+    /** v10 (§18.7): the name at the last group line, to tell a rename from a photo change. */
+    @ColumnInfo(name = "announced_name") val announcedName: String? = null,
 ) {
     val readOnly: Boolean get() = state == STATE_LEFT || state == STATE_REMOVED
 
@@ -568,3 +572,55 @@ class HistoryProvideEntity(
         const val UNABLE = "unable"
     }
 }
+
+/**
+ * v10 (§18.6): one current photo per subject, the §18.1 winner. Subjects are user ids (profile
+ * photos) and `grp:` conversation ids (group icons, §18.7; [ver] = 0 there). [blobId] null = a
+ * stored "no photo" (`photo: null`, it still beats older envelopes). The content key is sealed like
+ * an image key (AAD `avatar` ‖ subject). [fetched]: [FETCH_NONE], [FETCH_CACHED] (the ciphertext is
+ * in the avatar cache: the disk cache, never evicted while current), [FETCH_GONE] (404, retried
+ * daily), [FETCH_FAILED] (digest/AEAD/padding/decode: initials).
+ */
+@Entity(tableName = "profile_photos")
+data class ProfilePhotoEntity(
+    @PrimaryKey @ColumnInfo(name = "user_id") val userId: String,
+    val ver: Long,
+    @ColumnInfo(name = "blob_id") val blobId: String?,
+    val size: Long,
+    val sha256: String?,
+    @ColumnInfo(name = "key_sealed") val keySealed: ByteArray?,
+    @ColumnInfo(name = "plain_size") val plainSize: Long,
+    val w: Int,
+    val h: Int,
+    val fetched: Int,
+    @ColumnInfo(name = "mime", defaultValue = "'image/jpeg'") val mime: String = "image/jpeg",
+    @ColumnInfo(name = "checked_at", defaultValue = "0") val checkedAt: Long = 0,
+) {
+    override fun equals(other: Any?) = other is ProfilePhotoEntity && userId == other.userId && ver == other.ver && blobId == other.blobId &&
+        sha256 == other.sha256 && fetched == other.fetched && checkedAt == other.checkedAt && mime == other.mime
+
+    override fun hashCode() = userId.hashCode() * 31 + ver.hashCode()
+
+    companion object {
+        const val FETCH_NONE = 0
+        const val FETCH_CACHED = 1
+        const val FETCH_GONE = 2
+        const val FETCH_FAILED = 3
+    }
+}
+
+/**
+ * v10 (§18.5): per e2ee conversation, what this device still owes of its own user's photo.
+ * [pendingVer]: send the current own envelope (with this `ver`) once [dueAt] has passed (the 5–30 s
+ * sibling wait for triggers 2/3; 0 for a change); cleared by any own-user envelope with a `ver` ≥
+ * it seen there. [dirty]: a group to send to before the next own message or when the chat opens.
+ * [leaves]: the MLS leaves last seen (sorted "user/device" lines) to find new leaves (trigger 3).
+ */
+@Entity(tableName = "profile_photo_convs")
+data class ProfilePhotoConvEntity(
+    @PrimaryKey @ColumnInfo(name = "conversation_id") val conversationId: String,
+    @ColumnInfo(name = "pending_ver") val pendingVer: Long?,
+    @ColumnInfo(name = "due_at") val dueAt: Long,
+    val dirty: Boolean,
+    val leaves: String,
+)

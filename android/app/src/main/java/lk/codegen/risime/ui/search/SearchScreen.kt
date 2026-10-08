@@ -71,7 +71,7 @@ fun SearchScreen(vm: SearchViewModel, onOpen: (String) -> Unit, onBack: () -> Un
                 ListRow(
                     title = c.displayName,
                     subtitle = c.company,
-                    leading = { InitialsAvatar(c.displayName) },
+                    leading = { InitialsAvatar(c.displayName, photoKey = c.userId) },
                     onClick = { c.userId?.let(onOpen) },
                 )
             }
@@ -80,7 +80,7 @@ fun SearchScreen(vm: SearchViewModel, onOpen: (String) -> Unit, onBack: () -> Un
                 ListRow(
                     title = h.peerName,
                     subtitle = (if (h.message.outgoing) "You: " else "") + lk.codegen.risime.push.bodyPreview(h.message.kind, h.message.body),
-                    leading = { InitialsAvatar(h.peerName) },
+                    leading = { InitialsAvatar(h.peerName, photoKey = h.peerId) },
                     meta = shortStamp(h.message.localTs),
                     onClick = { onOpen(h.peerId) },
                 )

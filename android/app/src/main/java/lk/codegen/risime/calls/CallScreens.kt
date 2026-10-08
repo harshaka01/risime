@@ -86,6 +86,8 @@ data class InCallUi(
     /** §16.10 (e) passed: only then "End-to-end encrypted". */
     val verified: Boolean = false,
     val ended: Boolean = false,
+    /** §18.6: the peer's user id for their photo (initials without one). */
+    val photoKey: String? = null,
 )
 
 private val Green = Color(0xFF1E9E4A)
@@ -121,7 +123,7 @@ private val LocalCompactCall = androidx.compose.runtime.staticCompositionLocalOf
 
 /** A large initials avatar with a soft ring; [pulse] animates the ring while ringing. */
 @Composable
-private fun CallAvatar(name: String?, pulse: Boolean) {
+private fun CallAvatar(name: String?, pulse: Boolean, photoKey: String? = null) {
     val k = if (LocalCompactCall.current) 0.72f else 1f
     val ring = if (pulse) {
         val t = rememberInfiniteTransition(label = "ring")
@@ -131,7 +133,7 @@ private fun CallAvatar(name: String?, pulse: Boolean) {
         Box(Modifier.size(150.dp * k).scale(ring).clip(CircleShape).background(Color.White.copy(alpha = 0.10f)))
         Box(Modifier.size(132.dp * k).clip(CircleShape).background(Color.White.copy(alpha = 0.16f)))
         if (name != null) {
-            InitialsAvatar(name, size = 116.dp * k)
+            InitialsAvatar(name, size = 116.dp * k, photoKey = photoKey)
         } else {
             Image(painterResource(lk.codegen.risime.R.drawable.brand_mark), null, Modifier.size(116.dp * k))
         }
@@ -196,14 +198,14 @@ private fun CallColumn(content: @Composable androidx.compose.foundation.layout.C
  * caller, Answer asks for the fingerprint first.
  */
 @Composable
-fun IncomingCallScreen(name: String?, onAnswer: () -> Unit, onDecline: () -> Unit, modifier: Modifier = Modifier) {
+fun IncomingCallScreen(name: String?, onAnswer: () -> Unit, onDecline: () -> Unit, modifier: Modifier = Modifier, photoKey: String? = null) {
     Box(modifier) {
         CallBackdrop {
             CallColumn {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CallHeader(name ?: "Incoming RisiMe call", if (name == null) "Unlock RisiMe to see who's calling" else "RisiMe voice call", encrypted = false)
                     Spacer(Modifier.height(if (LocalCompactCall.current) Spacing.lg else Spacing.xxl))
-                    CallAvatar(name, pulse = true)
+                    CallAvatar(name, pulse = true, photoKey = photoKey.takeIf { name != null })
                 }
                 Row(Modifier.fillMaxWidth().padding(vertical = Spacing.xl), horizontalArrangement = Arrangement.SpaceEvenly) {
                     RoundAction("Decline", RisiIcons.CallEnd, Red, onDecline)
@@ -280,7 +282,7 @@ fun InCallScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CallHeader(ui.name, ui.status, encrypted = ui.verified)
                     Spacer(Modifier.height(if (LocalCompactCall.current) Spacing.lg else Spacing.xxl))
-                    if (video == null) CallAvatar(ui.name, pulse = false)
+                    if (video == null) CallAvatar(ui.name, pulse = false, photoKey = ui.photoKey)
                 }
                 if (!ui.ended) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = Spacing.lg)) {

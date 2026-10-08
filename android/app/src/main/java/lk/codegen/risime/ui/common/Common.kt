@@ -35,6 +35,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -68,18 +71,54 @@ import lk.codegen.risime.ui.theme.Spacing
 
 // ---- Avatar and presence ----
 
-/** Initials avatar, with a presence dot when [online]. Decorative for TalkBack except the dot. */
+/**
+ * §18 photos for avatars: a user id (profile photo) or a `grp:` id (group icon) → a decoded,
+ * display-sized bitmap held in memory only; null = initials. [revision] changes when any photo did.
+ */
+interface AvatarSource {
+    val revision: kotlinx.coroutines.flow.StateFlow<Long>
+
+    fun cached(key: String, sizePx: Int): androidx.compose.ui.graphics.ImageBitmap?
+
+    suspend fun load(key: String, sizePx: Int): androidx.compose.ui.graphics.ImageBitmap?
+}
+
+/** Provided by the activities; null (tests, previews) = initials everywhere. */
+val LocalAvatars = androidx.compose.runtime.staticCompositionLocalOf<AvatarSource?> { null }
+
+/**
+ * Initials avatar, with a presence dot when [online]. Decorative for TalkBack except the dot.
+ * [photoKey] (a user id or a `grp:` id): the photo when this device has one (§18.2/§18.7), else initials.
+ */
 @Composable
-fun InitialsAvatar(name: String, enabled: Boolean = true, size: Dp = Sizes.avatar, online: Boolean = false) {
+fun InitialsAvatar(name: String, enabled: Boolean = true, size: Dp = Sizes.avatar, online: Boolean = false, photoKey: String? = null) {
     Box {
+        val src = LocalAvatars.current
+        val px = with(androidx.compose.ui.platform.LocalDensity.current) { size.roundToPx() }
+        var photo by androidx.compose.runtime.remember(photoKey, px) {
+            androidx.compose.runtime.mutableStateOf(if (photoKey != null && enabled) src?.cached(photoKey, px) else null)
+        }
+        if (src != null && photoKey != null && enabled) {
+            val rev by src.revision.collectAsState()
+            androidx.compose.runtime.LaunchedEffect(photoKey, px, rev) { photo = src.load(photoKey, px) }
+        }
         val initials = name.split(' ', '-', '.').filter { it.isNotBlank() }.take(2)
             .joinToString("") { it.first().uppercase() }.ifEmpty { "?" }
         val (bg, fg) = if (enabled) avatarColors(name) else MaterialTheme.colorScheme.surfaceVariant to RisiTheme.colors.textMuted
-        Box(
-            Modifier.size(size).clip(CircleShape).background(bg).clearAndSetSemantics { },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(initials, color = fg, fontWeight = FontWeight.SemiBold, fontSize = (size.value * 0.38f).sp)
+        val p = photo
+        if (p != null) {
+            androidx.compose.foundation.Image(
+                p, null,
+                Modifier.size(size).clip(CircleShape).background(bg).clearAndSetSemantics { },
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            )
+        } else {
+            Box(
+                Modifier.size(size).clip(CircleShape).background(bg).clearAndSetSemantics { },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(initials, color = fg, fontWeight = FontWeight.SemiBold, fontSize = (size.value * 0.38f).sp)
+            }
         }
         if (online) PresenceDot(Modifier.align(Alignment.BottomEnd), size)
     }
