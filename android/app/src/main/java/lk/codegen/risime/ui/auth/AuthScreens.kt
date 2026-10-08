@@ -29,7 +29,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -76,9 +75,12 @@ const val MIGRATION_TITLE = "Confirm to finish updating RisiMe"
  */
 @Composable
 fun MigrationScreen(authUi: AuthUi) {
-    val busy by authUi.busy.collectAsStateWithLifecycle()
     val notice by authUi.notice.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { authUi.finishMigration() }
+    // Every time the screen is resumed (never while the activity is stopped: BiometricPrompt drops it).
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+        authUi.finishMigration()
+        onPauseOrDispose { }
+    }
     CenteredColumn {
         Text("RisiMe", style = WordmarkStyle, color = MaterialTheme.colorScheme.primary, modifier = Modifier.semantics { heading() })
         Text(MIGRATION_TITLE, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
@@ -88,8 +90,8 @@ fun MigrationScreen(authUi: AuthUi) {
             textAlign = TextAlign.Center,
         )
         notice?.let { Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) }
-        Button(onClick = authUi::finishMigration, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Continue") }
-        TextButton(onClick = authUi::signOutLocked, enabled = !busy) { Text(SIGN_OUT_KEEPS_CHATS) }
+        Button(onClick = authUi::finishMigration, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Continue") }
+        TextButton(onClick = authUi::signOutLocked) { Text(SIGN_OUT_KEEPS_CHATS) }
     }
 }
 

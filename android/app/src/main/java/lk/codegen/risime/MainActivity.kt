@@ -18,7 +18,8 @@ import lk.codegen.risime.ui.theme.RisiMeTheme
 
 /** A FragmentActivity because BiometricPrompt needs one (decision 014). */
 class MainActivity : FragmentActivity() {
-    private lateinit var authUi: AuthUi
+    lateinit var authUi: AuthUi
+        private set
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

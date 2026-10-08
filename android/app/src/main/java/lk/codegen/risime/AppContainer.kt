@@ -206,6 +206,7 @@ class AppContainer(
             override fun set(v: Long?) = p.edit().putLong("bg_elapsed", v ?: -1L).apply()
         },
         biometric = { lk.codegen.risime.ui.lock.strongBiometricStatus(context) },
+        canUnlock = { lk.codegen.risime.ui.lock.lockUnlockable(context) },
         elapsed = SystemClock::elapsedRealtime,
         log = { Log.w("RisiMe", it) },
     )
@@ -674,6 +675,7 @@ class AppContainer(
         }
         scope.launch(Dispatchers.IO) { runCatching { appLock.load() }.onFailure { Log.w("RisiMe", "RisiMe lock: settings: ${it.message}") } }
         if (BuildConfig.DEBUG) registerDebugOidcSignIn(context)
+        if (BuildConfig.DEBUG) registerDebugAppLock(context)
         // E2EE: try once per signed-in, verified session that can authenticate. An OIDC session has
         // a bearer once restored (an unmigrated pre-064 vault only after its one migration prompt):
         // registering before that got 401 and left E2EE off for the process (P0 nightly.10).
@@ -1255,6 +1257,36 @@ class AppContainer(
                 android.Manifest.permission.DUMP, null, androidx.core.content.ContextCompat.RECEIVER_EXPORTED,
             )
         }.onFailure { Log.w("RisiMe", "RisiMe debug: oidc receiver: ${it.message}") }
+    }
+
+    /**
+     * Debug builds only (scripts/applock-device-test): Redroid has no fingerprint sensor, so the
+     * Settings row never shows there; `adb shell am broadcast -a lk.codegen.risime.debug.APP_LOCK
+     * --ez enabled true --el auto_lock_ms 0` sets the lock directly. Only the shell
+     * (android.permission.DUMP) can send it.
+     */
+    private fun registerDebugAppLock(context: Context) {
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: Context, i: android.content.Intent) {
+                val enabled = i.getBooleanExtra("enabled", false)
+                val auto = lk.codegen.risime.data.lock.AutoLock.ofMs(i.getLongExtra("auto_lock_ms", 0L))
+                val pending = goAsync()
+                scope.launch {
+                    try {
+                        appLock.debugSet(enabled, auto)
+                        Log.i("RisiMe", "RisiMe debug: app lock enabled=$enabled auto=$auto")
+                    } finally {
+                        pending.finish()
+                    }
+                }
+            }
+        }
+        runCatching {
+            androidx.core.content.ContextCompat.registerReceiver(
+                context, r, android.content.IntentFilter("lk.codegen.risime.debug.APP_LOCK"),
+                android.Manifest.permission.DUMP, null, androidx.core.content.ContextCompat.RECEIVER_EXPORTED,
+            )
+        }.onFailure { Log.w("RisiMe", "RisiMe debug: app lock receiver: ${it.message}") }
     }
 
     /**
