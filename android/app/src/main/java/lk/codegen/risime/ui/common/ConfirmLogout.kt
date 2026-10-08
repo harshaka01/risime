@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 
 const val LOGOUT_CONFIRM_TITLE = "Log out?"
 const val LOGOUT_CONFIRM_TEXT =
@@ -19,6 +20,38 @@ const val LOGOUT_DELETE_TITLE = "Log out and delete chats?"
 const val LOGOUT_DELETE_TEXT =
     "This deletes all chats, photos and encryption keys on this phone. Signing in again starts with " +
         "no earlier messages on this phone. This can't be undone."
+
+/** §22.7: a backup is made before the wipe; the user can keep a file of their own. */
+const val LOGOUT_DELETE_BACKUP_TEXT =
+    "A backup is made first and uploaded if server backup is on. To keep a copy yourself, save a backup file before you continue."
+const val SAVE_BACKUP_FILE = "Save a backup file"
+
+/** "Save a backup file" (export to Downloads; the system picker on Android 8–9). */
+@Composable
+fun SaveBackupFileButton() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val c = (context.applicationContext as? lk.codegen.risime.RisiMeApp)?.container ?: return
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var state by remember { mutableStateOf<String?>(null) }
+    val create = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { context.contentResolver.openOutputStream(uri)?.let { c.backups.export(it) } ?: false }
+            state = if (ok) "Backup file saved" else "Couldn't save the backup file"
+        }
+    }
+    TextButton(
+        enabled = state == null || state == "Couldn't save the backup file",
+        onClick = {
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                state = "Saving…"
+                scope.launch { state = if (lk.codegen.risime.ui.backup.exportToDownloads(context, c)) "Saved to Downloads" else "Couldn't save the backup file" }
+            } else {
+                create.launch(lk.codegen.risime.data.backup.BackupManager.exportName(System.currentTimeMillis()))
+            }
+        },
+    ) { Text(state ?: SAVE_BACKUP_FILE) }
+}
 
 /**
  * The confirmation itself (stateless); logging out is never one tap. [deleteChats] picks the
@@ -33,7 +66,17 @@ fun LogoutConfirmDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (deleteChats) LOGOUT_DELETE_TITLE else LOGOUT_CONFIRM_TITLE) },
-        text = { Text(if (deleteChats) LOGOUT_DELETE_TEXT else LOGOUT_CONFIRM_TEXT) },
+        text = {
+            if (!deleteChats) {
+                Text(LOGOUT_CONFIRM_TEXT)
+            } else {
+                androidx.compose.foundation.layout.Column {
+                    Text(LOGOUT_DELETE_TEXT)
+                    Text(LOGOUT_DELETE_BACKUP_TEXT, style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+                    SaveBackupFileButton()
+                }
+            }
+        },
         confirmButton = {
             TextButton(onClick = { onConfirm(lk.codegen.risime.data.UserConfirmation.fromConfirmDialog(deleteChats)) }) {
                 Text(if (deleteChats) "Delete chats and log out" else "Log out")

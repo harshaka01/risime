@@ -97,6 +97,14 @@ fun UpdateBar(state: UpdateState, c: AppContainer) {
             LinearProgressIndicator(progress = { p / 100f }, modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs))
         }
         Text(NEVER_UNINSTALL_TEXT, style = MaterialTheme.typography.bodySmall, color = fg)
+        if (state is lk.codegen.risime.update.UpdateState.Failed) {
+            // §22.7: the installer failed: say it plainly and offer a backup now.
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(lk.codegen.risime.ui.backup.DONT_UNINSTALL_BACKUP_TEXT, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                TextButton(onClick = { scope.launch { c.backups.backupNow() } }) { Text(lk.codegen.risime.ui.backup.BACK_UP_NOW) }
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             banner.notes?.let { TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide what's new" else "What's new") } }
             TextButton(onClick = { runCatching { uri.openUri(DOWNLOAD_PAGE_URL) } }) { Text(OPEN_DOWNLOAD_PAGE) }

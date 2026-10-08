@@ -127,6 +127,8 @@ private fun MainNav(c: AppContainer, meId: String) {
     }
     NotificationPermissionPrompt(c)
     lk.codegen.risime.ui.history.HistoryPromptHost(c)
+    // §22.7: a fresh install with a server backup offers "Restore your chats" first.
+    lk.codegen.risime.ui.backup.RestoreGateHost(c) {
     NavHost(nav, startDestination = "chats") {
         composable("chats") {
             ChatsScreen(
@@ -182,7 +184,14 @@ private fun MainNav(c: AppContainer, meId: String) {
             )
         }
         composable("settings") {
-            SettingsScreen(viewModel { SettingsViewModel(AppSettingsBackend(c)) }, onBack = { nav.popBackStack() })
+            SettingsScreen(
+                viewModel { SettingsViewModel(AppSettingsBackend(c)) }, onBack = { nav.popBackStack() },
+                onBackups = { nav.navigate("backups") { launchSingleTop = true } },
+            )
         }
+        composable("backups") {
+            lk.codegen.risime.ui.backup.BackupsScreen(c, onBack = { nav.popBackStack() })
+        }
+    }
     }
 }

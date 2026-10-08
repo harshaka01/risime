@@ -45,7 +45,7 @@ import lk.codegen.risime.ui.theme.Sizes
 import lk.codegen.risime.ui.theme.Spacing
 
 @Composable
-fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
+fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> Unit = {}) {
     val s by vm.state.collectAsStateWithLifecycle()
     Scaffold(
         topBar = { RisiTopBar(title = "Settings", onBack = onBack) },
@@ -64,6 +64,13 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
                 DebugAuthSection(s.authOverride, vm::setAuthOverride)
                 HorizontalDivider()
             }
+            SectionHeader(lk.codegen.risime.ui.backup.BACKUPS_TITLE)
+            Text(
+                "Your chats, encrypted on this phone: daily and before every update. Export a file or back up to the server.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FilledTonalButton(onClick = onBackups, modifier = Modifier.fillMaxWidth()) { Text(lk.codegen.risime.ui.backup.BACKUPS_TITLE) }
+            HorizontalDivider()
             lk.codegen.risime.calls.CallsSettingsSection()
             HorizontalDivider()
             if (BuildConfig.HISTORY_SHARE_ENABLED) {
@@ -93,8 +100,12 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
             onDismissRequest = vm::cancelServerChange,
             title = { Text("Switch server?") },
             text = {
-                Text("You'll be logged out, because your login belongs to the current server. " +
-                    "Chats on this device are removed. New server: $url")
+                Column {
+                    Text("You'll be logged out, because your login belongs to the current server. " +
+                        "Chats on this device are removed. New server: $url")
+                    Text(lk.codegen.risime.ui.common.LOGOUT_DELETE_BACKUP_TEXT, style = MaterialTheme.typography.bodySmall)
+                    lk.codegen.risime.ui.common.SaveBackupFileButton()
+                }
             },
             confirmButton = { TextButton(onClick = vm::confirmServerChange) { Text("Log out and switch") } },
             dismissButton = { TextButton(onClick = vm::cancelServerChange) { Text("Cancel") } },
