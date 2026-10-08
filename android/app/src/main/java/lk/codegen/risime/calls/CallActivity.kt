@@ -88,7 +88,8 @@ class CallActivity : ComponentActivity() {
                 val snap = s
                 when {
                     snap == null && blind != null -> IncomingCallScreen(null, onAnswer = ::answerBlind, onDecline = calls::stopBlindRing)
-                    snap == null -> Unit
+                    // Never an empty (black) window while the screen closes: the ended card, no controls.
+                    snap == null -> InCallScreen(InCallUi(name = name, status = "Call ended", ended = true), {}, {}, {})
                     snap.phase == CallPhase.RINGING_IN -> IncomingCallScreen(name.ifEmpty { "RisiMe" }, onAnswer = ::answer, onDecline = calls::hangUp)
                     else -> {
                         @Suppress("UNUSED_EXPRESSION") tick
@@ -119,7 +120,14 @@ class CallActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         calls.state.value?.conversationId?.let { lastConversation = it }
-        if (!hasCall()) leaveToChat()
+        if (!hasCall()) return leaveToChat()
+        // The proximity sensor may blank the screen only while this screen is in front.
+        calls.onCallScreenVisible(true)
+    }
+
+    override fun onPause() {
+        calls.onCallScreenVisible(false)
+        super.onPause()
     }
 
     /** Finishes this screen and its task (never an empty activity behind it) and shows the chat. */

@@ -65,13 +65,25 @@ class CallScreensTest(private val dark: Boolean) {
         assertTrue(runCatching { rule.onNodeWithText("End-to-end encrypted").assertIsDisplayed() }.isFailure)
         rule.onNodeWithContentDescription("Mute").performScrollTo().performClick()
         rule.onNodeWithText("Muted").assertIsDisplayed()
+        // Earpiece + speaker only: one tap switches to the speaker (no list).
         rule.onNodeWithContentDescription("Audio output").performScrollTo().performClick()
-        rule.onNodeWithText("Speaker").performClick()
         rule.onNodeWithContentDescription("End call").performScrollTo().performClick()
         assertEquals(listOf("mute=true", "route=Speaker", "end"), events)
         ui = ui.copy(status = "3:12", verified = true)
-        rule.onNodeWithText("End-to-end encrypted").assertIsDisplayed()
-        rule.onNodeWithText("3:12").assertIsDisplayed()
+        rule.onNodeWithText("End-to-end encrypted").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("3:12").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun bluetoothOpensTheRouteList() {
+        val earpiece = EndpointUi("1", "Phone", EndpointUi.Kind.EARPIECE)
+        val speaker = EndpointUi("2", "Speaker", EndpointUi.Kind.SPEAKER)
+        val bt = EndpointUi("3", "Pixel Buds", EndpointUi.Kind.BLUETOOTH)
+        var ui by mutableStateOf(InCallUi("Kamal", "0:12", endpoints = listOf(earpiece, speaker, bt), current = bt, verified = true))
+        rule.setContent { RisiMeTheme(dark = dark) { InCallScreen(ui, {}, { e -> events += "route=${e.name}"; ui = ui.copy(current = e) }, {}) } }
+        rule.onNodeWithText("Pixel Buds").assertExists()
+        rule.onNodeWithContentDescription("Audio output").performScrollTo().performClick()
+        rule.onNodeWithText("Speaker").performClick()
+        assertEquals(listOf("route=Speaker"), events)
     }
 
     @Test fun oneRouteDisablesThePickerAndAnEndedCallHasNoControls() {

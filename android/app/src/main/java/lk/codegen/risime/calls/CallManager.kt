@@ -448,10 +448,25 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         wakeLock = null
     }
 
-    /** §16.9 (S-d): the proximity wake lock only while the endpoint is the earpiece and the call is active. */
+    /**
+     * The call screen is in front (CallActivity resumed). The proximity sensor may blank the screen
+     * only then: after Back the call goes on behind the chats, and a held proximity lock turned the
+     * chat screen black whenever the sensor read "near" (a hand, a case, a flaky sensor) — the
+     * "dark screen after Back from a call" (GO UX).
+     */
+    val callScreenVisible = MutableStateFlow(false)
+
+    fun onCallScreenVisible(visible: Boolean) {
+        if (callScreenVisible.value == visible) return
+        callScreenVisible.value = visible
+        updateProximity()
+    }
+
+    /** §16.9 (S-d): the proximity wake lock only while the endpoint is the earpiece, the call is active and its screen is in front. */
+    @Synchronized
     private fun updateProximity() {
         val s = state.value
-        val want = s?.phase == CallPhase.ACTIVE && currentEndpoint.value?.type.let { it == null || it == CallEndpointCompat.TYPE_EARPIECE }
+        val want = wantsProximity(s?.phase, currentEndpoint.value?.type, callScreenVisible.value)
         val pm = context.getSystemService(PowerManager::class.java) ?: return
         if (want && proximity?.isHeld != true && pm.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
             proximity = pm.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "RisiMe:proximity").apply {
@@ -609,6 +624,9 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         if (active) startService() else context.stopService(Intent(context, CallService::class.java))
     }
 
+    /** Test hook: whether the proximity wake lock is held now. */
+    internal fun proximityHeld(): Boolean = proximity?.isHeld == true
+
     fun openCallScreen(action: String = CallNotifications.ACTION_SHOW) {
         runCatching {
             context.startActivity(Intent(context, CallActivity::class.java).setAction(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
@@ -688,3 +706,10 @@ object CallTexts {
         CallNotice.IN_ANOTHER_CALL -> "You're already in a call"
     }
 }
+
+/**
+ * The proximity screen-off lock is wanted only for an active call on the earpiece (or an unknown
+ * route) whose call screen is in front; never behind the chats or on speaker/Bluetooth/headset.
+ */
+fun wantsProximity(phase: CallPhase?, endpointType: Int?, screenVisible: Boolean): Boolean =
+    screenVisible && phase == CallPhase.ACTIVE && (endpointType == null || endpointType == CallEndpointCompat.TYPE_EARPIECE)

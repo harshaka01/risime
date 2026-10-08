@@ -1,6 +1,34 @@
 package lk.codegen.risime.calls
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
+import lk.codegen.risime.ui.common.RisiIcons
+import lk.codegen.risime.ui.theme.BrandCyan
+import lk.codegen.risime.ui.theme.RisiTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,12 +45,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -43,7 +69,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import lk.codegen.risime.ui.common.InitialsAvatar
-import lk.codegen.risime.ui.theme.Sizes
 import lk.codegen.risime.ui.theme.Spacing
 
 /** One audio route for the picker (Telecom's CallEndpointCompat, flattened for the UI and tests). */
@@ -63,8 +88,102 @@ data class InCallUi(
     val ended: Boolean = false,
 )
 
-private val Green = Color(0xFF1B8A3A)
-private val Red = Color(0xFFC62828)
+private val Green = Color(0xFF1E9E4A)
+private val Red = Color(0xFFD93025)
+
+/**
+ * The call background: the theme's brand gradient (decision 048 colours stay legible: white text,
+ * checked ≥ 4.5:1 in DesignTokensTest) with a soft glow behind the avatar. [video] is where a 1:1
+ * video surface will go (full-bleed under the controls); null for voice.
+ */
+@Composable
+private fun CallBackdrop(video: (@Composable () -> Unit)? = null, content: @Composable () -> Unit) {
+    val c = RisiTheme.colors
+    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(c.callTop, c.callBottom)))) {
+        Box(
+            Modifier.fillMaxSize().drawBehind {
+                drawRect(
+                    Brush.radialGradient(
+                        listOf(BrandCyan.copy(alpha = 0.24f), Color.Transparent),
+                        center = androidx.compose.ui.geometry.Offset(size.width / 2, size.height * 0.36f),
+                        radius = size.width * 0.75f,
+                    ),
+                )
+            },
+        )
+        video?.invoke()
+        CompositionLocalProvider(LocalContentColor provides Color.White) { content() }
+    }
+}
+
+/** A large initials avatar with a soft ring; [pulse] animates the ring while ringing. */
+@Composable
+private fun CallAvatar(name: String?, pulse: Boolean) {
+    val ring = if (pulse) {
+        val t = rememberInfiniteTransition(label = "ring")
+        t.animateFloat(1f, 1.18f, infiniteRepeatable(tween(1100), RepeatMode.Reverse), label = "ring").value
+    } else 1f
+    Box(Modifier.size(168.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(150.dp).scale(ring).clip(CircleShape).background(Color.White.copy(alpha = 0.10f)))
+        Box(Modifier.size(132.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.16f)))
+        if (name != null) {
+            InitialsAvatar(name, size = 116.dp)
+        } else {
+            Image(painterResource(lk.codegen.risime.R.drawable.brand_mark), null, Modifier.size(116.dp))
+        }
+    }
+}
+
+@Composable
+private fun EncryptedLine(visible: Boolean) {
+    // Reserved space keeps the layout still when verification arrives.
+    Row(Modifier.height(24.dp).padding(top = Spacing.xs), verticalAlignment = Alignment.CenterVertically) {
+        if (visible) {
+            Icon(Icons.Default.Lock, null, Modifier.size(14.dp), tint = Color.White.copy(alpha = 0.85f))
+            Spacer(Modifier.size(Spacing.xs))
+            Text("End-to-end encrypted", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.85f))
+        }
+    }
+}
+
+/** Name and status over the gradient. */
+@Composable
+private fun CallHeader(title: String, status: String, encrypted: Boolean) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        EncryptedLine(encrypted)
+        Spacer(Modifier.height(Spacing.lg))
+        Text(
+            title,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.semantics { heading() },
+        )
+        Spacer(Modifier.height(Spacing.xs))
+        Text(
+            status,
+            style = MaterialTheme.typography.titleMedium,
+            color = Color.White.copy(alpha = 0.85f),
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+    }
+}
+
+/** A column that fills the screen and scrolls on a tiny one (font scaling, 320 × 480). */
+@Composable
+private fun CallColumn(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
+        Column(
+            Modifier.fillMaxWidth().heightIn(min = maxHeight).verticalScroll(rememberScrollState()).padding(horizontal = Spacing.xl, vertical = Spacing.lg),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween,
+            content = content,
+        )
+    }
+}
 
 /**
  * The incoming call. [name] null = the locked ring of decision 051: "Incoming RisiMe call", no
@@ -72,40 +191,25 @@ private val Red = Color(0xFFC62828)
  */
 @Composable
 fun IncomingCallScreen(name: String?, onAnswer: () -> Unit, onDecline: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-        Column(
-            Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(Spacing.xl),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Spacer(Modifier.height(Spacing.xxl))
-            if (name != null) InitialsAvatar(name, size = 96.dp)
-            Spacer(Modifier.height(Spacing.lg))
-            Text(
-                name ?: "Incoming RisiMe call",
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(Spacing.xs))
-            Text(
-                if (name == null) "Unlock RisiMe to see who's calling" else "RisiMe voice call",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.weight(1f).height(Spacing.xxl))
-            Row(Modifier.fillMaxWidth().padding(vertical = Spacing.xl), horizontalArrangement = Arrangement.SpaceEvenly) {
-                RoundAction("Decline", Icons.Default.Close, Red, onDecline)
-                RoundAction("Answer", Icons.Default.Call, Green, onAnswer)
+    Box(modifier) {
+        CallBackdrop {
+            CallColumn {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CallHeader(name ?: "Incoming RisiMe call", if (name == null) "Unlock RisiMe to see who's calling" else "RisiMe voice call", encrypted = false)
+                    Spacer(Modifier.height(Spacing.xxl))
+                    CallAvatar(name, pulse = true)
+                }
+                Row(Modifier.fillMaxWidth().padding(vertical = Spacing.xl), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    RoundAction("Decline", RisiIcons.CallEnd, Red, onDecline)
+                    RoundAction("Answer", Icons.Default.Call, Green, onAnswer)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun RoundAction(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, color: Color, onClick: () -> Unit) {
+private fun RoundAction(label: String, icon: ImageVector, color: Color, onClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         FilledIconButton(
             onClick = onClick,
@@ -113,71 +217,152 @@ private fun RoundAction(label: String, icon: androidx.compose.ui.graphics.vector
             shape = CircleShape,
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = color, contentColor = Color.White),
         ) { Icon(icon, null, Modifier.size(32.dp)) }
-        Spacer(Modifier.height(Spacing.xs))
-        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+        Spacer(Modifier.height(Spacing.sm))
+        Text(label, style = MaterialTheme.typography.labelLarge, color = Color.White)
     }
 }
 
-/** Outgoing, connecting and connected: mute, the audio route picker, end, the timer. */
+/** A round call control: frosted when off, white when on (speaker, muted). */
 @Composable
-fun InCallScreen(ui: InCallUi, onMute: (Boolean) -> Unit, onEndpoint: (EndpointUi) -> Unit, onEnd: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-        Column(
-            Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(Spacing.xl),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Spacer(Modifier.height(Spacing.xxl))
-            InitialsAvatar(ui.name, size = 96.dp)
-            Spacer(Modifier.height(Spacing.lg))
-            Text(ui.name, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(Spacing.xs))
-            Text(ui.status, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-            if (ui.verified) {
-                Row(Modifier.padding(top = Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Lock, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.size(Spacing.xs))
-                    Text("End-to-end encrypted", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun CallControl(
+    label: String,
+    description: String,
+    icon: ImageVector,
+    on: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(88.dp)) {
+        FilledIconButton(
+            onClick = onClick,
+            enabled = enabled,
+            shape = CircleShape,
+            modifier = Modifier.size(60.dp).semantics {
+                contentDescription = description
+                stateDescription = if (on) "On" else "Off"
+            },
+            colors = IconButtonDefaults.filledIconButtonColors(
+                containerColor = if (on) Color.White else Color.White.copy(alpha = 0.16f),
+                contentColor = if (on) RisiTheme.colors.callBottom else Color.White,
+                disabledContainerColor = Color.White.copy(alpha = 0.08f),
+                disabledContentColor = Color.White.copy(alpha = 0.5f),
+            ),
+        ) { Icon(icon, null, Modifier.size(26.dp)) }
+        Spacer(Modifier.height(Spacing.xs + Spacing.xxs))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * Outgoing, connecting and connected: route (speaker / Bluetooth), mute, hang up, the timer.
+ * Built for the coming 1:1 video: [video] is drawn full-bleed under the controls, and
+ * [extraControls] (the camera toggle) slot into the same control row.
+ */
+@Composable
+fun InCallScreen(
+    ui: InCallUi,
+    onMute: (Boolean) -> Unit,
+    onEndpoint: (EndpointUi) -> Unit,
+    onEnd: () -> Unit,
+    modifier: Modifier = Modifier,
+    video: (@Composable () -> Unit)? = null,
+    extraControls: @Composable RowScope.() -> Unit = {},
+) {
+    Box(modifier) {
+        CallBackdrop(video) {
+            CallColumn {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CallHeader(ui.name, ui.status, encrypted = ui.verified)
+                    Spacer(Modifier.height(Spacing.xxl))
+                    if (video == null) CallAvatar(ui.name, pulse = false)
                 }
-            }
-            Spacer(Modifier.weight(1f).height(Spacing.xxl))
-            if (!ui.ended) {
-                Row(Modifier.fillMaxWidth().padding(vertical = Spacing.lg), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        FilledTonalIconToggleButton(
-                            checked = ui.muted, onCheckedChange = onMute,
-                            modifier = Modifier.size(Sizes.minTouch + 8.dp).semantics { contentDescription = if (ui.muted) "Unmute" else "Mute" },
-                        ) { Text(if (ui.muted) "🔇" else "🎤") }
-                        Text(if (ui.muted) "Muted" else "Mute", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                if (!ui.ended) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = Spacing.xl)) {
+                        Surface(
+                            shape = RoundedCornerShape(32.dp),
+                            color = Color.Black.copy(alpha = 0.18f),
+                            contentColor = Color.White,
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.lg),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                RouteControl(ui, onEndpoint)
+                                extraControls()
+                                CallControl(
+                                    label = if (ui.muted) "Muted" else "Mute",
+                                    description = if (ui.muted) "Unmute" else "Mute",
+                                    icon = if (ui.muted) RisiIcons.MicOff else RisiIcons.Mic,
+                                    on = ui.muted,
+                                    onClick = { onMute(!ui.muted) },
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(Spacing.xl))
+                        RoundAction("End call", RisiIcons.CallEnd, Red, onEnd)
                     }
-                    EndpointPicker(ui, onEndpoint)
+                } else {
+                    Spacer(Modifier.height(Spacing.xl))
                 }
-                RoundAction("End call", Icons.Default.Close, Red, onEnd)
             }
         }
     }
 }
 
+/**
+ * The audio route: with only the earpiece and the speaker it toggles the speaker (WhatsApp-style);
+ * with Bluetooth or a headset it opens the list.
+ */
 @Composable
-private fun EndpointPicker(ui: InCallUi, onEndpoint: (EndpointUi) -> Unit) {
+private fun RouteControl(ui: InCallUi, onEndpoint: (EndpointUi) -> Unit) {
     var open by remember { mutableStateOf(false) }
+    val kinds = ui.endpoints.map { it.kind }.toSet()
+    val simple = ui.endpoints.size == 2 && kinds == setOf(EndpointUi.Kind.EARPIECE, EndpointUi.Kind.SPEAKER)
+    val current = ui.current?.kind
     Box {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            TextButton(onClick = { open = true }, enabled = ui.endpoints.size > 1, modifier = Modifier.semantics { contentDescription = "Audio output" }) {
-                Text(
-                    when (ui.current?.kind) {
-                        EndpointUi.Kind.SPEAKER -> "🔊"
-                        EndpointUi.Kind.BLUETOOTH -> "🎧"
-                        EndpointUi.Kind.WIRED -> "🎧"
-                        else -> "📱"
-                    },
-                    style = MaterialTheme.typography.titleLarge,
-                )
-            }
-            Text(ui.current?.name ?: "Phone", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
+        CallControl(
+            label = when (current) {
+                EndpointUi.Kind.SPEAKER -> "Speaker"
+                EndpointUi.Kind.EARPIECE, null -> if (simple) "Speaker" else "Phone"
+                else -> ui.current?.name ?: "Audio"
+            },
+            description = "Audio output",
+            icon = when (current) {
+                EndpointUi.Kind.BLUETOOTH -> RisiIcons.Bluetooth
+                EndpointUi.Kind.WIRED -> RisiIcons.Headset
+                EndpointUi.Kind.EARPIECE -> if (simple) RisiIcons.Speaker else RisiIcons.Phone
+                else -> RisiIcons.Speaker
+            },
+            on = current == EndpointUi.Kind.SPEAKER || current == EndpointUi.Kind.BLUETOOTH || current == EndpointUi.Kind.WIRED,
+            enabled = ui.endpoints.size > 1,
+            onClick = {
+                if (simple) {
+                    val target = if (current == EndpointUi.Kind.SPEAKER) EndpointUi.Kind.EARPIECE else EndpointUi.Kind.SPEAKER
+                    ui.endpoints.firstOrNull { it.kind == target }?.let(onEndpoint)
+                } else {
+                    open = true
+                }
+            },
+        )
         DropdownMenu(open, onDismissRequest = { open = false }) {
             ui.endpoints.forEach { e ->
-                DropdownMenuItem(text = { Text(e.name + if (e.id == ui.current?.id) "  ✓" else "") }, onClick = { open = false; onEndpoint(e) })
+                DropdownMenuItem(
+                    leadingIcon = {
+                        Icon(
+                            when (e.kind) {
+                                EndpointUi.Kind.SPEAKER -> RisiIcons.Speaker
+                                EndpointUi.Kind.BLUETOOTH -> RisiIcons.Bluetooth
+                                EndpointUi.Kind.WIRED -> RisiIcons.Headset
+                                else -> RisiIcons.Phone
+                            },
+                            null,
+                        )
+                    },
+                    text = { Text(e.name) },
+                    trailingIcon = { if (e.id == ui.current?.id) Icon(Icons.Default.Check, "Selected") },
+                    onClick = { open = false; onEndpoint(e) },
+                )
             }
         }
     }
