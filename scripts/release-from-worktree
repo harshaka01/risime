@@ -6,9 +6,10 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"; M="$HOME/.local/bin/mise exec --"
 WT="${RELEASE_WORKTREE:-$HOME/risime-release-wt}"
+REF="origin/main"; [ -n "${HOTFIX:-}" ] && { git -C "$REPO" fetch -q origin "$HOTFIX"; REF="origin/$HOTFIX"; }
 git -C "$REPO" fetch -q origin main
-if [ -e "$WT/.git" ]; then git -C "$WT" checkout -q --force --detach origin/main; git -C "$WT" clean -qfd -e server/deps -e server/_build -e crypto/target
-else git -C "$REPO" worktree add -q --detach "$WT" origin/main; fi
+if [ -e "$WT/.git" ]; then git -C "$WT" checkout -q --force --detach "$REF"; git -C "$WT" clean -qfd -e server/deps -e server/_build -e crypto/target
+else git -C "$REPO" worktree add -q --detach "$WT" "$REF"; fi
 ln -sfn "$REPO/.env" "$WT/.env"
 echo "==> release worktree $WT at $(git -C "$WT" log -1 --format='%h %s' | cut -c1-80)"
 (cd "$WT/server" && $M mix deps.get >/dev/null)
