@@ -28,3 +28,9 @@
 ## Consequences
 - **Upgrade gate:** counts per conversation (both tabs) and per chat.
 - **Canary interop:** proves Private text never reaches a model, a table, a log or a push.
+
+## Operational rule (privacy review, 2026-10-08)
+After `RISI` has ever been on in an environment, never roll the server back past v1.24 (or the
+two_tabs migration) without first deleting the Official groups and their rows. Older code treats
+Official groups as plain groups and would deliver them to every app. `scripts/rollback` must refuse
+to cross v1.24 while `groups.tab = 'official'` rows exist (root to-do).
