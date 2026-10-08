@@ -47,6 +47,8 @@ class DeviceRegistrar(
     private val videoSupported: () -> Boolean = { false },
     /** §20.1: advertise `group_calls` only with `groups`, `calls` and `video`, LiveKit loaded and call keys in the core. */
     private val groupCallsSupported: () -> Boolean = { false },
+    /** The server accepted a `PUT` carrying this push token (null: none was sent). Health screen. */
+    private val onPushTokenRegistered: (String?) -> Unit = {},
 ) {
     private val b64 = Base64.getEncoder()
 
@@ -94,7 +96,7 @@ class DeviceRegistrar(
         if (mls == null) {
             if (pushToken.isNullOrBlank()) return Registration.Skipped
             return when (val r = api.putDevice(id, DevicePut(DevicePut.PLATFORM_ANDROID, pushToken, appVersion))) {
-                is ApiResult.Ok -> Registration.PushOnly
+                is ApiResult.Ok -> Registration.PushOnly.also { onPushTokenRegistered(pushToken) }
                 is ApiResult.Error -> Registration.Failed(r.code)
                 is ApiResult.NetworkError -> Registration.Failed("network")
             }
@@ -108,12 +110,15 @@ class DeviceRegistrar(
             is ApiResult.Ok -> {
                 mls.setAttestation(r.value.attestation)
                 advertised = caps.orEmpty()
+                onPushTokenRegistered(pushToken?.takeIf { it.isNotBlank() })
                 if (caps != null && groupsReplacedFor() != sigKey) replaceForGroups(id, mls, sigKey) else topUp(id, mls)
             }
             is ApiResult.Error -> when {
                 r.code == AuthErrors.MLS_UNAVAILABLE -> {
                     // E2EE is off on the server: register for push only, as a v1.6 app would.
-                    if (!pushToken.isNullOrBlank()) api.putDevice(id, DevicePut(DevicePut.PLATFORM_ANDROID, pushToken, appVersion))
+                    if (!pushToken.isNullOrBlank() && api.putDevice(id, DevicePut(DevicePut.PLATFORM_ANDROID, pushToken, appVersion)) is ApiResult.Ok) {
+                        onPushTokenRegistered(pushToken)
+                    }
                     Registration.MlsUnavailable
                 }
                 else -> Registration.Failed(r.code)

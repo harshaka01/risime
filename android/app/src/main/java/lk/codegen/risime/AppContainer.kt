@@ -73,6 +73,10 @@ import lk.codegen.risime.update.Updater
 import lk.codegen.risime.push.Notifier
 import lk.codegen.risime.push.PushManager
 import lk.codegen.risime.push.newRequests
+import lk.codegen.risime.push.DIRECT_PUSH_SYNC_MS
+import lk.codegen.risime.push.SOCKET_NOTIFY_DEBOUNCE_MS
+import lk.codegen.risime.push.withBackgroundGrace
+import kotlinx.coroutines.flow.update
 import lk.codegen.risime.push.planChatNotifications
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.debounce
@@ -404,12 +408,12 @@ class AppContainer(
         }
         if (foreground.value) return // connecting: onLive flushes the outbox
         if (sessionStore.current() == null) return
-        backgroundSync.value = true
+        backgroundSync.update { it + 1 }
         try {
             withTimeoutOrNull(25_000) { realtime.state.first { it == ConnectionState.Live } }
             delay(2_000) // onLive flushes the outbox
         } finally {
-            backgroundSync.value = false
+            backgroundSync.update { it - 1 }
         }
     }
 
@@ -501,6 +505,10 @@ class AppContainer(
             groupCallsSupported = { runCatching { calls.canAdvertiseGroupCalls() }.getOrDefault(false) },
             groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
             setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },
+            onPushTokenRegistered = { t ->
+                lk.codegen.risime.push.PushRegistrationStore(appContext).markRegistered(t)
+                Log.i("RisiMe", "RisiMe push: device registered, push token ${if (t == null) "none" else "sent"}")
+            },
         )
     }
 
@@ -576,6 +584,8 @@ class AppContainer(
                 val r = deviceRegistrar.refreshCapabilities(runCatching { push.currentToken() }.getOrNull()) ?: return@runCatching
                 Log.i("RisiMe", "capabilities changed: re-registered ($r)")
             }
+            // P0 background delivery: the server must hold this phone's current push token.
+            runCatching { if (mlsEngine != null && canAuthenticate()) push.ensureRegistered() }
         }
     }
 
@@ -583,7 +593,22 @@ class AppContainer(
     private suspend fun registerDeviceOnce(): Boolean = when (activateMls()) {
         true -> true
         false -> false
-        null -> push.register().settled()
+        null -> {
+            mlsNotApplicable = true
+            push.register().settled()
+        }
+    }
+
+    /** activateMls() said MLS doesn't apply (no core, E2EE off): MLS events are handled as before. */
+    @Volatile private var mlsNotApplicable = false
+
+    /** [ChatEngine]'s gate: the MLS core is open, or MLS doesn't apply; waits up to 15 s for the start-up registration. */
+    private suspend fun mlsReadyForEvents(): Boolean {
+        if (!BuildConfig.CRYPTO_AVAILABLE) return true
+        return withTimeoutOrNull(15_000) {
+            while (mlsEngine == null && !mlsNotApplicable) delay(100)
+            true
+        } ?: false
     }
 
     val push by lazy {
@@ -602,6 +627,7 @@ class AppContainer(
             combine(sessionStore.session, auth.unlocked) { s, unlocked ->
                 s?.takeIf { it.user.phoneVerified && (it.kind == AuthKind.DEV || unlocked) }?.user?.id
             }.distinctUntilChanged().collectLatest { id ->
+                mlsNotApplicable = false
                 if (id == null) {
                     mlsEngine = null
                     return@collectLatest
@@ -615,7 +641,10 @@ class AppContainer(
     }
 
     /** A short background connection for a push wake-up (the socket is otherwise foreground-only). */
-    private val backgroundSync = MutableStateFlow(false)
+    private val backgroundSync = MutableStateFlow(0)
+
+    /** Live socket events while not in the foreground → notifications (debounced). */
+    private val socketIncoming = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
 
     /** Notification tap → open this chat (MainActivity sets it, MainNav consumes it). */
     val openChatRequest = MutableStateFlow<String?>(null)
@@ -853,7 +882,11 @@ class AppContainer(
         realtime = { realtime },
         meId = { sessionStore.current()?.user?.id },
         behaviour = behaviour,
-        onIncomingFrom = presence::onMessageFrom,
+        onIncomingFrom = { from ->
+            presence.onMessageFrom(from)
+            // P0 background delivery: a message over the socket while not in the foreground notifies like a push.
+            if (!foreground.value) socketIncoming.tryEmit(Unit)
+        },
         mls = mlsPipeline,
         mlsEngine = { mlsEngine },
         catchUp = { conv -> catchUpCommits(conv) },
@@ -871,6 +904,7 @@ class AppContainer(
         deletes = db.deletes(),
         onDeletesApplied = { onDeletesApplied() },
         serverClock = serverClock,
+        mlsReady = { mlsReadyForEvents() },
         log = { Log.w("RisiMe", "deletes: $it") },
         calls = callHooks,
         historyDao = db.history(),
@@ -915,10 +949,16 @@ class AppContainer(
                 scope.launch { sessionStore.setNotifiedUpTo(System.currentTimeMillis()) }
             }
         })
-        // Connected only while in the foreground, signed in and unlocked (no background connection).
+        // Connected only while in the foreground (+ a 5-s grace), signed in and unlocked. In the
+        // background the socket is closed so the server pushes (P0 background delivery).
         scope.launch {
             // android R6: a ringing, connecting or active call keeps the socket up regardless of foreground.
-            combine(combine(foreground, backgroundSync, calls.keepConnected, historyConnection) { f, b, c, h -> f || b || c || h > 0 }, sessionStore.session, auth.unlocked, blocked) { fg, s, unlocked, b ->
+            combine(
+                combine(foreground.withBackgroundGrace(), backgroundSync, calls.keepConnected, historyConnection) { f, b, c, h ->
+                    lk.codegen.risime.push.socketWanted(f, b > 0, c, h > 0)
+                },
+                sessionStore.session, auth.unlocked, blocked,
+            ) { fg, s, unlocked, b ->
                 if (shouldConnect(fg, s, unlocked, b)) s!!.serverUrl to s.user.id else null
             }
                 .distinctUntilChanged()
@@ -934,6 +974,17 @@ class AppContainer(
                         )
                     }
                 }
+        }
+        // P0 background delivery: socket events while not in the foreground (grace, a call, a push
+        // sync, a history export) → the same local notifications as a push-woken sync.
+        scope.launch {
+            @OptIn(kotlinx.coroutines.FlowPreview::class)
+            socketIncoming.debounce(SOCKET_NOTIFY_DEBOUNCE_MS).collect {
+                if (lk.codegen.risime.push.shouldNotifyFromSocket(foreground.value, engine.replayingFresh)) {
+                    Log.i("RisiMe", "RisiMe push: socket message while in the background")
+                    runCatching { notifyFromLocal() }.onFailure { Log.w("RisiMe", "socket notify: ${it.message}") }
+                }
+            }
         }
         // §18.5: the photo triggers after MLS changes (debounced: the change's transaction has committed by then).
         if (BuildConfig.CRYPTO_AVAILABLE) {
@@ -1330,29 +1381,42 @@ class AppContainer(
      * Push wake-up (background): join + sync over the normal channel, refetch friends, then post
      * local notifications. A fingerprint-locked session can't sync: a content-free notice instead.
      */
-    suspend fun syncAndNotify() {
+    suspend fun syncAndNotify(quick: Boolean = false) {
         val s = sessionStore.current() ?: return
         if (!s.user.phoneVerified) return
         if (s.kind == AuthKind.OIDC && !auth.unlocked.value) {
+            Log.i("RisiMe", "RisiMe push: sync skipped (locked): content-free notice")
             notifier.postLocked()
             return
         }
+        val t0 = SystemClock.elapsedRealtime()
+        Log.i("RisiMe", "RisiMe push: sync start (${if (quick) "direct" else "worker"}, foreground=${foreground.value}, socket=${realtime.state.value})")
         if (!foreground.value) {
-            backgroundSync.value = true
+            backgroundSync.update { it + 1 }
             try {
-                withTimeoutOrNull(25_000) { realtime.state.first { it == ConnectionState.Live } }
-                delay(1_500) // let live events and the friends refetch land
-                contacts.refresh()
-                // §12.4a wake push: a group op naming this device is committed before the worker ends.
-                withTimeoutOrNull(20_000) { runCatching { groupOps.runDue() } }
+                // Live = the join's catch-up pages are applied: notify at once (P0: within FCM's ~10-s window).
+                val live = withTimeoutOrNull(if (quick) DIRECT_PUSH_SYNC_MS - 1_000 else 25_000) { realtime.state.first { it == ConnectionState.Live } } != null
+                Log.i("RisiMe", "RisiMe push: sync ${if (live) "live" else "not live"} after ${SystemClock.elapsedRealtime() - t0} ms")
+                if (live) notifyFromLocal()
+                if (!quick) {
+                    delay(1_500) // let live events and the friends refetch land
+                    contacts.refresh()
+                    // §12.4a wake push: a group op naming this device is committed before the worker ends.
+                    withTimeoutOrNull(20_000) { runCatching { groupOps.runDue() } }
+                }
             } finally {
-                backgroundSync.value = false
+                backgroundSync.update { it - 1 }
             }
         }
         notifyFromLocal()
+        Log.i("RisiMe", "RisiMe push: sync end after ${SystemClock.elapsedRealtime() - t0} ms")
     }
 
-    private suspend fun notifyFromLocal() {
+    private val notifyLock = kotlinx.coroutines.sync.Mutex()
+
+    private suspend fun notifyFromLocal() = notifyLock.withLock { notifyFromLocalLocked() }
+
+    private suspend fun notifyFromLocalLocked() {
         if (engine.replayingFresh) return // §13.3: the replay isn't live yet; onFreshReplayDone moves notifiedUpTo
         val open = openConversation.value.takeIf { foreground.value }
         val since = sessionStore.notifiedUpTo()
@@ -1370,7 +1434,10 @@ class AppContainer(
             ),
             reactionAdds, { targets[it] }, { id -> names[id.lowercase()] ?: "Someone" }, me, open,
         )
-        if (!foreground.value) notifier.postChats(plan)
+        if (!foreground.value && plan.isNotEmpty()) {
+            val posted = notifier.postChats(plan)
+            Log.i("RisiMe", "RisiMe push: notification ${if (posted) "posted" else "NOT posted (notifications off)"} chats=${plan.size}")
+        }
         plan.maxOfOrNull { it.newestTs }?.let { sessionStore.setNotifiedUpTo(maxOf(it, sessionStore.notifiedUpTo())) }
         val incoming = contacts.friendsState.value.incoming
         val fresh = newRequests(incoming, sessionStore.notifiedRequests())

@@ -81,6 +81,44 @@ class MlsPipelineTest {
     private val gap = "sys:history:$conv"
     private val undecryptable = "sys:undecryptable:$conv"
 
+    /**
+     * P0 background delivery: a push-started process joins while the MLS core is still opening. Before,
+     * the message was "Ignored", marked seen and the cursor moved past it (lost on this device; a call
+     * invite never rang). Now the batch is refused untouched and the rejoin applies it.
+     */
+    @Test fun aBatchBeforeTheCoreIsOpenIsRefusedUntouchedAndAppliesOnTheRejoin() = runTest {
+        var core: FakeMlsEngine? = null
+        val e = ChatEngine(
+            messages = messages, sync = sync,
+            tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
+            scope = this, realtime = { realtime }, meId = { me },
+            clock = { 1_000L + seq }, newClientMsgId = { "c${++ids}" },
+            behaviour = BehaviourLog(FakeBehaviourDao(), { "salt" }, { 0L }),
+            mls = MlsPipeline({ core }, pending, { ++seq }, { memberships += it }, { 7_000 }),
+            mlsEngine = { core },
+            mlsReady = { core != null },
+        )
+        mls.groups[conv] = GroupRef(conv, 1, 1)
+        val m = msg(1, "sent while the phone slept")
+        val failed = runCatching { e.onEvents(listOf(m)) }.exceptionOrNull()
+        assertTrue(failed is ChatEngine.MlsNotReady)
+        assertNull("the cursor didn't move", sync.last)
+        assertTrue(bodies().isEmpty())
+        core = mls
+        e.onEvents(listOf(m)) // the rejoin redelivers from the unchanged cursor
+        assertEquals(listOf("sent while the phone slept"), bodies())
+        assertEquals(m.eventId, sync.last)
+    }
+
+    @Test fun withoutTheGateTheEventWasLost() = runTest {
+        val e = engine(withMls = false)
+        mls.groups[conv] = GroupRef(conv, 1, 1)
+        val m = msg(1, "lost")
+        e.onEvents(listOf(m))
+        assertEquals("the old behaviour: cursor moved past it", m.eventId, sync.last)
+        assertTrue(bodies().isEmpty())
+    }
+
     @Test fun welcomeThenMessagesDecryptIntoTheSameTransactionAsTheCursor() = runTest {
         val e = engine()
         e.onEvents(listOf(welcome(1, listOf("someone-else")))) // not for this device

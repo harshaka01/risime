@@ -26,17 +26,46 @@ class PushManager(
     private val canAuthenticate: suspend () -> Boolean = { true },
 ) {
     val available: Boolean
-        get() = BuildConfig.PUSH_CONFIGURED && runCatching { FirebaseApp.getApps(context).isNotEmpty() }.getOrDefault(false)
+        get() = debugToken() != null ||
+            BuildConfig.PUSH_CONFIGURED && runCatching { FirebaseApp.getApps(context).isNotEmpty() }.getOrDefault(false)
 
     suspend fun currentToken(): String? = fcmToken()
 
+    /**
+     * Debug builds only (scripts/push-device-test): redroid has no Google Play services, so the test
+     * writes a fake token to `files/debug_push_token`; the test's push hook then delivers to it with
+     * the same c2dm broadcast GMS sends. Never read in release builds.
+     */
+    private fun debugToken(): String? = if (!BuildConfig.DEBUG) null else runCatching {
+        java.io.File(context.filesDir, "debug_push_token").takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotEmpty() }
+    }.getOrNull()
+
     private suspend fun fcmToken(): String? {
+        debugToken()?.let { return it }
         if (!available) return null
-        return suspendCancellableCoroutine { cont ->
-            FirebaseMessaging.getInstance().token.addOnCompleteListener { t ->
-                if (cont.isActive) cont.resume(if (t.isSuccessful) t.result else null)
+        // Bounded: without Play services the task may never complete.
+        return kotlinx.coroutines.withTimeoutOrNull(15_000) {
+            suspendCancellableCoroutine { cont ->
+                FirebaseMessaging.getInstance().token.addOnCompleteListener { t ->
+                    if (cont.isActive) cont.resume(if (t.isSuccessful) t.result else null)
+                }
             }
         }
+    }
+
+    /** Hash of the token the server last accepted for this device (health screen). */
+    fun registeredTokenHash(): String? = PushRegistrationStore(context).registeredHash()
+
+    /**
+     * On every start into the foreground: the server must hold the current token. A registration that
+     * ran before Play services produced a token (or missed a token refresh) left the device unpushable.
+     */
+    suspend fun ensureRegistered(): Boolean {
+        val t = fcmToken() ?: return false
+        if (tokenHash(t) == registeredTokenHash()) return true
+        Log.i("RisiMe", "RisiMe push: token not registered with the server; registering")
+        val r = register(t, store.current()?.user?.phoneVerified ?: false)
+        return r !is lk.codegen.risime.data.mls.Registration.Failed && r !is lk.codegen.risime.data.mls.Registration.Skipped
     }
 
     /** At sign-in (verified) and on every FCM token refresh. */
@@ -55,13 +84,32 @@ class PushManager(
 
     /** Plain logout (decision 050), while the token is still valid: push stops, the device stays. */
     suspend fun unregisterPushOnly() {
+        PushRegistrationStore(context).clear()
         if ((!available && !mlsAvailable()) || store.current() == null) return
         api.unregisterPush(store.deviceId())
     }
 
     /** "Log out and delete chats", while the token is still valid (idempotent on the server). */
     suspend fun unregister() {
+        PushRegistrationStore(context).clear()
         if ((!available && !mlsAvailable()) || store.current() == null) return
         api.deleteDevice(store.deviceId())
+    }
+}
+
+/** What the server last accepted for this device: a hash of the push token, never the token. */
+class PushRegistrationStore(context: Context) {
+    private val prefs = context.getSharedPreferences("risime_push", Context.MODE_PRIVATE)
+
+    fun registeredHash(): String? = prefs.getString(KEY, null)
+
+    fun markRegistered(pushToken: String?) {
+        prefs.edit().apply { tokenHash(pushToken)?.let { putString(KEY, it) } ?: remove(KEY) }.apply()
+    }
+
+    fun clear() = prefs.edit().remove(KEY).apply()
+
+    private companion object {
+        const val KEY = "registered_token_hash"
     }
 }

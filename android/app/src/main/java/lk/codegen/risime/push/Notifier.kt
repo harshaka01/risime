@@ -22,7 +22,20 @@ class Notifier(private val context: Context) {
     fun ensureChannels() {
         if (Build.VERSION.SDK_INT < 26) return
         val m = context.getSystemService(NotificationManager::class.java)
-        m.createNotificationChannel(NotificationChannel(CH_MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH))
+        // P0 background delivery: "messages_v2" fixes the lock-screen visibility (private: the sender
+        // only on a secure lock screen), which can't be changed on the old channel. A user who had
+        // turned Messages off keeps it off.
+        if (m.getNotificationChannel(CH_MESSAGES) == null) {
+            val old = m.getNotificationChannel(CH_MESSAGES_OLD)
+            m.createNotificationChannel(
+                NotificationChannel(CH_MESSAGES, "Messages", messagesImportance(old?.importance)).apply {
+                    description = "New messages and reactions"
+                    lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
+                    enableVibration(true)
+                },
+            )
+            if (old != null) runCatching { m.deleteNotificationChannel(CH_MESSAGES_OLD) }
+        }
         m.createNotificationChannel(NotificationChannel(CH_REQUESTS, "Friend requests", NotificationManager.IMPORTANCE_DEFAULT))
         m.createNotificationChannel(NotificationChannel(CH_SYNC, "Background sync", NotificationManager.IMPORTANCE_MIN))
         m.createNotificationChannel(NotificationChannel(CH_BACKUP, "Backups", NotificationManager.IMPORTANCE_DEFAULT))
@@ -44,11 +57,12 @@ class Notifier(private val context: Context) {
     }
 
     @Suppress("MissingPermission") // checked in allowed()
-    fun postChats(plan: List<ChatNotification>) {
-        if (plan.isEmpty() || !allowed()) return
+    fun postChats(plan: List<ChatNotification>): Boolean {
+        if (plan.isEmpty() || !allowed()) return false
         ensureChannels()
         plan.forEach { n -> nm.notify(chatId(n.conversationId), chatBuilder(n, silent = false).build()) }
         postSummary(silent = false)
+        return true
     }
 
     /** Ids of the chat notifications currently in the shade (not "added you", requests or the summary). */
@@ -122,6 +136,16 @@ class Notifier(private val context: Context) {
                 .setOnlyAlertOnce(silent)
                 .setSilent(silent)
                 .addExtras(android.os.Bundle().apply { putString(EXTRA_KIND, KIND_CHAT) })
+                // Secure lock screen: the sender (or group) only, never the text.
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(
+                    NotificationCompat.Builder(context, CH_MESSAGES)
+                        .setSmallIcon(R.drawable.ic_stat_risime)
+                        .setContentTitle(n.title)
+                        .setContentText(if (n.count > 1) "${n.count} new messages" else "New message")
+                        .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                        .build(),
+                )
             return b
         }
     }
@@ -267,7 +291,13 @@ class Notifier(private val context: Context) {
         const val EXTRA_OPEN_CHAT = "lk.codegen.risime.OPEN_CHAT"
         const val EXTRA_KIND = "lk.codegen.risime.KIND"
         const val KIND_CHAT = "chat"
-        const val CH_MESSAGES = "messages"
+        const val CH_MESSAGES = "messages_v2"
+        /** Until nightly.31: no explicit lock-screen visibility (deleted once v2 exists). */
+        const val CH_MESSAGES_OLD = "messages"
+
+        /** The new channel is high importance unless the user had turned the old one off. */
+        fun messagesImportance(oldImportance: Int?): Int =
+            if (oldImportance == NotificationManager.IMPORTANCE_NONE) NotificationManager.IMPORTANCE_NONE else NotificationManager.IMPORTANCE_HIGH
         const val CH_REQUESTS = "requests"
         const val CH_SYNC = "sync"
         const val GROUP_MESSAGES = "lk.codegen.risime.MESSAGES"
