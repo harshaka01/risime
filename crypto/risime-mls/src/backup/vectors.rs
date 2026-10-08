@@ -69,6 +69,7 @@ pub(crate) fn error_name(e: &BackupError) -> &'static str {
         BackupError::Format(_) => "Format",
         BackupError::Malformed(_) => "Malformed",
         BackupError::Unsupported(_) => "Unsupported",
+        BackupError::UnsupportedSchema(_) => "UnsupportedSchema",
         BackupError::WrongAccount => "WrongAccount",
         BackupError::NoKey(_) => "NoKey",
         BackupError::WeakPassphrase(_) => "WeakPassphrase",

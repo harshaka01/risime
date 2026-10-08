@@ -1179,3 +1179,49 @@ fn writer_uses_the_key_named_by_the_record() {
     );
     assert!(c.backup_key_record().unwrap().is_none());
 }
+
+#[test]
+fn file_schema_2_round_trips_and_schema_3_is_unsupported_schema() {
+    let dir = tmpdir("schema");
+    let c = client(USER, "d1");
+    c.backup_setup(USER).unwrap();
+    let bundle = seeded("schema bundle", 5_000);
+    let d = deflate(&bundle);
+    let bid = format_uuid(&arr(&seeded("bid schema", 16)));
+    for (name, schema) in [("s1", 1u64), ("s2", 2)] {
+        let path = dir.join(name);
+        let mut w = c
+            .backup_writer_schema(USER, &bid, CREATED, APP, None, &path, schema)
+            .unwrap();
+        w.write(&d).unwrap();
+        w.finish().unwrap();
+        assert_eq!(super::file_info(&path).unwrap().schema, schema);
+        assert_eq!(inflate(&read_all(&c, &path).unwrap()), bundle);
+    }
+    // The default writer stays schema 1.
+    let (def, _) = write_backup(&c, &dir, "default", &bundle);
+    assert_eq!(super::file_info(&def).unwrap().schema, 1);
+    // Out-of-range writer schemas are refused and leave no file.
+    for bad in [0u64, 3] {
+        let path = dir.join(format!("bad{bad}"));
+        let r = c.backup_writer_schema(USER, &bid, CREATED, APP, None, &path, bad);
+        assert!(matches!(r, Err(BackupError::Malformed(_))), "{bad}");
+        assert!(!path.exists());
+    }
+    // A header above 2 (rewritten in place, same length) is refused before anything else.
+    let mut bytes = fs::read(dir.join("s2")).unwrap();
+    let at = bytes
+        .windows(11)
+        .position(|w| w == b"\"schema\":2,")
+        .unwrap();
+    bytes[at + 9] = b'3';
+    let p3 = dir.join("s3");
+    fs::write(&p3, &bytes).unwrap();
+    let e = c.backup_reader(USER, &p3, None, None).unwrap_err();
+    assert_eq!(e, BackupError::UnsupportedSchema(3));
+    assert_eq!(super::vectors::error_name(&e), "UnsupportedSchema");
+    assert!(matches!(
+        super::file_info(&p3),
+        Err(BackupError::UnsupportedSchema(3))
+    ));
+}

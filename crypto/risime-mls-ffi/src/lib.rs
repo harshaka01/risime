@@ -1570,6 +1570,10 @@ pub enum RisiBackupError {
     /// "Update RisiMe to restore this backup".
     #[error("unsupported backup: {0}")]
     Unsupported(String),
+    /// The file header's `schema` is above 2 (kind `unsupported_schema`): "Update RisiMe to
+    /// restore this backup". Kotlin: `RisiBackupException.UnsupportedSchema`.
+    #[error("unsupported_schema: backup schema {0}")]
+    UnsupportedSchema(u64),
     /// "This backup belongs to another account".
     #[error("this backup belongs to another account")]
     WrongAccount,
@@ -1596,6 +1600,7 @@ impl From<risime_mls::backup::BackupError> for RisiBackupError {
             E::Format(s) => Self::Format(s),
             E::Malformed(s) => Self::Malformed(s),
             E::Unsupported(s) => Self::Unsupported(s),
+            E::UnsupportedSchema(n) => Self::UnsupportedSchema(n),
             E::WrongAccount => Self::WrongAccount,
             E::NoKey(s) => Self::NoKey(s),
             E::WeakPassphrase(s) => Self::WeakPassphrase(s),
@@ -1945,7 +1950,10 @@ impl MlsClient {
     }
 
     /// Starts a backup file at `out_path` (created only by `finish`). `key_record`: the record
-    /// for the header (normally `GET /backup_key`); null uses the stored one.
+    /// for the header (normally `GET /backup_key`); null uses the stored one. `schema`: the file
+    /// header's schema, 1 (default) or 2 (a bundle holding an Official conversation, §24.10).
+    #[uniffi::method(default(schema = 1))]
+    #[allow(clippy::too_many_arguments)]
     pub fn backup_writer(
         &self,
         user_id: String,
@@ -1954,15 +1962,17 @@ impl MlsClient {
         app_version: String,
         key_record: Option<String>,
         out_path: String,
+        schema: u64,
     ) -> BResult<Arc<BackupWriter>> {
         let w = self.with_backup(|c| {
-            c.backup_writer(
+            c.backup_writer_schema(
                 &user_id,
                 &backup_id,
                 &created_at,
                 &app_version,
                 key_record.as_deref(),
                 out_path.as_ref(),
+                schema,
             )
         })?;
         Ok(Arc::new(BackupWriter {

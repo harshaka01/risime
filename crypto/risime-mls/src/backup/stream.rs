@@ -46,6 +46,9 @@ pub const PAD: &str = "padme";
 /// The file format `v` and the bundle schema this core writes and reads.
 pub const HEADER_V: u64 = 1;
 pub const BUNDLE_SCHEMA: u64 = 1;
+/// The newest bundle schema this core reads and may write (§24.10: 2 when the bundle holds an
+/// Official conversation). A file header above this is `UnsupportedSchema`.
+pub const MAX_BUNDLE_SCHEMA: u64 = 2;
 
 fn io(e: std::io::Error) -> BackupError {
     BackupError::Io(e.to_string())
@@ -560,10 +563,13 @@ pub(crate) fn parse_header(bytes: &[u8]) -> BackupResult<FileHeader> {
         .get("schema")
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| format("header without schema"))?;
-    if ver != HEADER_V || schema > BUNDLE_SCHEMA {
+    if ver != HEADER_V {
         return Err(BackupError::Unsupported(format!(
             "header v {ver}, schema {schema}"
         )));
+    }
+    if schema > MAX_BUNDLE_SCHEMA {
+        return Err(BackupError::UnsupportedSchema(schema));
     }
     let h: FileHeader =
         serde_json::from_value(v).map_err(|e| format(format!("header fields: {e}")))?;
