@@ -73,4 +73,37 @@ defmodule RisiMe.Groups.Tabs do
   def tabs_only?(_), do: false
 
   defp conv_of(data), do: data["conversation_id"] || data["group_id"]
+
+  @doc """
+  §24.5: what an agent's sockets may receive. An event of a conversation only while that
+  conversation is an Official group whose chat is on and where the agent is an active member
+  (a server query, never a client claim); events without a conversation pass; `chat_event`s
+  never.
+  """
+  def agent_may_see?(_agent_id, %{kind: "chat_event"}), do: false
+
+  def agent_may_see?(agent_id, %{data: data}) when is_map(data) do
+    case conv_of(data) do
+      nil -> true
+      conv -> agent_conversation?(agent_id, conv)
+    end
+  end
+
+  def agent_may_see?(_agent_id, _event), do: true
+
+  @doc "The §24.5 query: an Official group with the chat on and the agent active in it."
+  def agent_conversation?(agent_id, "grp:" <> _ = conv) do
+    Repo.exists?(
+      from g in Group,
+        join: m in RisiMe.Groups.Member,
+        on: m.group_id == g.id,
+        left_join: c in RisiMe.Groups.Chat,
+        on: c.chat_id == g.chat_id,
+        where:
+          g.id == ^conv and g.tab == "official" and m.user_id == ^agent_id and
+            m.state == "active" and (is_nil(c.chat_id) or c.official == "on")
+    )
+  end
+
+  def agent_conversation?(_agent_id, _conv), do: false
 end

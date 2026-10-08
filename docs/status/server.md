@@ -16,6 +16,58 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
+## v1.24 two tabs (§24, decision 065) — S1–S4 READY (S5–S8, the Risi agent tree, not started)
+- **Gate:** 700 tests, 0 failures (3 skipped: crypto's agent NIF tests; 2 `:livekit` excluded);
+  flaky and unrelated: `fanout_cost_test` (random phone collisions among 256 fast users) and
+  `auth_log_test` (shared auth log path across concurrent runs).
+- **Env:** `TABS` (default off; `/auth/config` `tabs: "on"` only while on, absent = off),
+  `RISI` (default off), `RISI_USER_ID` / `RISI_DEVICE_ID` (defaults `9e1f0000-…-0001` / `-0002`),
+  `RISI_DEFAULT_TZ`. `Release.migrate/0` seeds the agent user (`kind: "agent"`, "Risi") and its
+  device (`["groups","tabs"]`, no MLS key yet: the agent tree registers it) only while RISI is on.
+- **S1 storage** (migration `20261010100000_two_tabs`, additive): `groups.chat_id` (backfilled
+  `= id`, not null; a trigger fills `id` for any insert without one), `tab` (`private`),
+  `chat_kind` (`group`), unique `(chat_id, tab)`; `chats(chat_id, kind, official,
+  official_conversation_id, changed_by, changed_at)`; `users.kind`, `users.tz`;
+  `PATCH /me {"tz"}` (checked against the host tz database; `User.tz` shown once set).
+- **S2 filters:** `tabs` capability; tabs readiness (§12.1 with `tabs`); Official events and every
+  `chat_event` only to `tabs` sockets (live, join/sync, signals) via `RisiMe.Groups.Tabs` (ETS
+  cache, the tab is fixed at insert); push scope decided in `publish_batch`'s caller (inside the
+  group transaction), `:tabs` wakes only tabs devices (a coalesced trailing push widens to all);
+  `GET /groups[/id]` hide Official from a non-tabs `X-Device-Id`.
+- **S3:** `POST /api/v1/chats/{chat_id}/official`, the §12.5 Risi claim rule, Official epoch 0
+  (every tabs device of every human member + Risi's device), `403 private_tab` on POST /groups,
+  REST adds to Private, claims for dm:/Private/none, DM and Private commits naming an agent
+  device; `Groups.Policy` implements §24.1 (the 18 `tab_cases` run); agents commit only
+  self-updates; Official leaves are tabs devices only (device ops, add/rebuild ops, tabs gain/loss).
+- **S4:** membership fan-out to both tabs in one transaction (`locked_chat/2`; last-admin and
+  creator rules once, on the Private group; `not_ready` with `tab` while Official is on);
+  `422 dm_chat`, `422 invalid_member`, `409 risi_required`; `PATCH /api/v1/chats/{chat_id}` (1:1
+  either person, group admins; 6 per chat per day): off = row off, agent `pending_remove` + a
+  member-committable `remove` op (toggler's device first), `chat_event`; on = cancel a pending
+  removal or an `add` op for the agent (admin device first); agent sockets get only Official
+  conversations whose chat is on and where the agent is active (§24.5 query, live and replay);
+  `msg:send` `official_off` (and `not_friends` for a 1:1 Official) before the e2ee checks;
+  `GET /api/v1/chats[/id]` (tabs devices only); Official `added` carries the added Members.
+- **Decisions taken (minimal; for root):**
+  1. A Private group's JSON and `group_event`s leave `chat_id`/`tab`/`chat_kind`/`agents` out
+     (absent = Private, own id, `group`, `[]` per §24.1), so pre-v1.24 shapes are unchanged; Official
+     groups carry all four. `/auth/config` likewise omits `tabs` while off.
+  2. An agent in `member_ids`/`user_ids` is `403 private_tab` when the target is Private (incl.
+     `POST /groups`, §24.5) and `422 invalid_member` when it is Official (§24.3).
+  3. `POST …/official` checks `official_off`, then the DM rules, then Risi availability (`503`)
+     before readiness (`409 not_ready`), so RISI=off always answers 503 (§24.15).
+  4. Official members are inserted `active` at creation (as `chat_official_create_reply.json`);
+     visibility of a `creating` group stays creator-only.
+  5. A Risi key-package claim on an Official group outside epoch 0 / a pending agent add is
+     `403 not_member` (no new code).
+  6. `GET /api/v1/chats` lists DMs with a friend that are e2ee or have an Official group (not
+     "has messages": that needs a Cassandra scan), plus every active Private group.
+  7. Adding a member while Official is off still mirrors to the read-only Official (one op per
+     existing tab, §24.3) without the tabs-ready check.
+  8. Open for the agent tree (S5+): after off the agent is `pending_remove`, so it can no longer
+     *send* the §24.4 farewell line; and an agent's live `mls_welcome` published inside the commit
+     transaction may be filtered until commit (it arrives on the next sync).
+
 ## P0 push watchdog (dead-but-joined sockets) — READY (no wire change, no proposal)
 - **Problem:** a phone that loses its network without a close stays joined (presence "online")
   until the websocket timeout (60 s); `Push.Dispatcher.notify/1` skipped every push meanwhile.

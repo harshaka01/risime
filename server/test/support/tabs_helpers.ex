@@ -60,6 +60,20 @@ defmodule RisiMe.TabsHelpers do
     %{user_id: RisiMe.Risi.user_id(), device_id: RisiMe.Risi.device_id()}
   end
 
+  @doc "A dev bearer token for the Risi agent user (its sockets, in tests)."
+  def risi_token! do
+    token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+    Repo.insert!(%RisiMe.Accounts.UserToken{
+      user_id: RisiMe.Risi.user_id(),
+      token_hash: :crypto.hash(:sha256, token),
+      device_name: "risi-1",
+      last_seen_at: DateTime.utc_now()
+    })
+
+    token
+  end
+
   @doc "`TABS=on` for the test."
   def tabs_on! do
     Application.put_env(:risime, :tabs, true)

@@ -385,7 +385,32 @@ defmodule RisiMe.Groups.Ops do
     end
   end
 
+  # v1.24 §24.4: an agent `remove` op (Official off) may be committed by any active human
+  # member's in-group device.
+  defp member_devices(g, %Op{type: "remove"} = op) do
+    if agent_remove?(g, op) do
+      users = MapSet.new(active_user_ids(g.id))
+
+      g.id
+      |> Groups.in_group()
+      |> Enum.filter(fn {u, _} -> MapSet.member?(users, u) end)
+      |> Enum.sort_by(&elem(&1, 1))
+    else
+      []
+    end
+  end
+
   defp member_devices(_g, _op), do: []
+
+  @doc "v1.24 §24.4: a `remove` op whose every target is an agent member."
+  def agent_remove?(%Group{} = g, %Op{type: "remove"} = op) do
+    users = op.payload["user_ids"] || []
+
+    users != [] and
+      Enum.all?(users, fn u -> match?(%Member{kind: "agent"}, Groups.member(g.id, u)) end)
+  end
+
+  def agent_remove?(_g, _op), do: false
 
   defp active_user_ids(group_id),
     do:
@@ -502,7 +527,8 @@ defmodule RisiMe.Groups.Ops do
         admin? and epoch == nil and MapSet.member?(Groups.device_refs([u]), ref)
 
       "remove" ->
-        admin? and in_group? and u not in op.payload["user_ids"]
+        (admin? or (agent_remove?(g, op) and u in active_user_ids(g.id))) and in_group? and
+          u not in op.payload["user_ids"]
 
       _ ->
         admin? and in_group?

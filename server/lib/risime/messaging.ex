@@ -458,6 +458,8 @@ defmodule RisiMe.Messaging do
     alias RisiMe.Groups
 
     with true <- Groups.active_member?(req.conversation_id, sender_id) || {:error, :not_member},
+         # v1.24 §24.8: official_off (and a 1:1 Official's not_friends) before the e2ee checks.
+         :ok <- RisiMe.Chats.send_check(req.conversation_id),
          :ok <- check_group_e2ee(req),
          :ok <- RateLimiter.hit(:msg_send, sender_id, @send_limit, @send_window) do
       sent = %{

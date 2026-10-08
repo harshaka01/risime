@@ -16,7 +16,7 @@ defmodule RisiMe.Chats do
   require Logger
 
   alias RisiMe.{Devices, Groups, Messaging, MLS, Repo, Risi, Social, TimeUUID}
-  alias RisiMe.Groups.{Chat, Group, Member}
+  alias RisiMe.Groups.{Chat, Group, Member, Ops}
 
   @creating_ttl_s 600
 
@@ -311,5 +311,176 @@ defmodule RisiMe.Chats do
 
     for u <- user_ids,
         do: {u, %{event_id: TimeUUID.generate(), kind: "chat_event", data: data}, [push: true]}
+  end
+
+  ## Official off and on (§24.4)
+
+  @toggles_per_day 6
+
+  @doc """
+  `PATCH /api/v1/chats/{chat_id}` `{"official": "off" | "on"}` → `{:ok, chat_json}`. Either
+  person of a 1:1, an admin of a group (`not_admin`); the current state is `200` with no change;
+  at most #{@toggles_per_day} changes per chat per day (`rate_limited`).
+  """
+  def toggle(me, device_id, chat_id, params) do
+    with true <- MLS.available?() || {:error, :mls_unavailable},
+         true <- Devices.tabs_device?(me, device_id) || {:error, :invalid_device},
+         {:ok, dev} <- Ecto.UUID.cast(device_id),
+         %{"official" => want} when want in ["on", "off"] <- params,
+         {:ok, chat} <- resolve(me, chat_id),
+         true <- (chat.kind == "dm" or me in chat.admins) || {:error, :not_admin} do
+      current = if off?(chat_id), do: "off", else: "on"
+
+      cond do
+        current == want ->
+          {:ok, chat_json(me, chat)}
+
+        want == "on" and official_group(chat_id) != nil and not Risi.available?() ->
+          {:error, :agent_unavailable}
+
+        RisiMe.RateLimiter.hit(:official_toggle, chat_id, @toggles_per_day, :timer.hours(24)) !=
+            :ok ->
+          {:error, :rate_limited}
+
+        true ->
+          with {:ok, events} <- locked_toggle(me, dev, chat, want) do
+            Messaging.publish_batch(events)
+            {:ok, chat_json(me, chat)}
+          end
+      end
+    else
+      :error -> {:error, :invalid_device}
+      {:error, _} = e -> e
+      _ -> {:error, :bad_request}
+    end
+  end
+
+  # One per-chat critical section: the chat's lock, and the Official group's lock (shared with
+  # its commits) when it exists.
+  defp locked_toggle(me, dev, chat, want) do
+    og = official_group(chat.chat_id)
+
+    Repo.transaction(fn ->
+      Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", ["chat:" <> chat.chat_id])
+
+      if og,
+        do: Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", ["mls:" <> og.id])
+
+      og = og && Repo.get(Group, og.id)
+      now = DateTime.utc_now()
+      upsert_row(chat.chat_id, chat.kind, %{official: want, changed_by: me, changed_at: now})
+
+      if og && og.state == "active" do
+        if want == "off", do: agent_out(og, me, dev), else: agent_in(og, me, dev)
+      end
+
+      chat_events(chat.chat_id, "official_" <> want, me, og && og.id, chat.humans)
+    end)
+  end
+
+  # Off: the agent's membership becomes `pending_remove` at once (no live push or replay of the
+  # chat reaches it from now on) and a member-committable `remove` op for it is created, the
+  # toggler's device first. A not-yet-committed `add` (Official turned on again) is cancelled.
+  defp agent_out(og, me, dev) do
+    for %Member{kind: "agent"} = m <- Groups.members(og.id) do
+      case m.state do
+        "active" ->
+          Groups.mark_removing(og, m.user_id)
+          Ops.create(og, "remove", me, %{user_ids: [m.user_id]}, first(og, me, dev))
+
+        "pending_add" ->
+          Ops.drop_user(og, m.user_id)
+          Groups.delete_member(og.id, m.user_id)
+
+        _ ->
+          :ok
+      end
+    end
+  end
+
+  # On again: the same Official conversation gets the agent back: a pending removal that hasn't
+  # landed is cancelled (it is still a leaf), otherwise an `add` op (completed by an admin
+  # device; in a 1:1 both users are admins).
+  defp agent_in(og, me, dev) do
+    risi = Risi.user_id()
+
+    case Groups.member(og.id, risi) do
+      %Member{state: "pending_remove"} ->
+        for %RisiMe.Groups.Op{type: "remove"} = op <- Ops.list(og.id),
+            risi in (op.payload["user_ids"] || []),
+            do: Repo.delete!(op)
+
+        if MapSet.new(Groups.in_group(og.id), &elem(&1, 0)) |> MapSet.member?(risi) do
+          Repo.update_all(
+            from(m in Member, where: m.group_id == ^og.id and m.user_id == ^risi),
+            set: [state: "active"]
+          )
+
+          RisiMe.Groups.Membership.open(og.id, [risi], DateTime.utc_now())
+        else
+          Groups.delete_member(og.id, risi)
+          add_agent(og, me, dev, risi)
+        end
+
+      nil ->
+        add_agent(og, me, dev, risi)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp add_agent(og, me, dev, risi) do
+    Repo.insert_all(Member, [
+      %{
+        group_id: og.id,
+        user_id: risi,
+        role: "member",
+        kind: "agent",
+        state: "pending_add",
+        joined_at: nil,
+        inserted_at: DateTime.utc_now()
+      }
+    ])
+
+    first = if me in Groups.admin_ids(og.id), do: first(og, me, dev), else: :auto
+    Ops.create(og, "add", me, %{user_ids: [risi]}, first)
+  end
+
+  defp first(og, me, dev),
+    do: if(MapSet.member?(Groups.in_group(og.id), {me, dev}), do: {me, dev}, else: :auto)
+
+  ## Sends (§24.1, §24.8)
+
+  @doc """
+  `msg:send` to an Official conversation: `official_off` while the chat is off; for a 1:1
+  Official, `not_friends` while the two aren't friends or one blocks the other. `:ok` otherwise
+  (and for every other conversation).
+  """
+  def send_check(conv) do
+    case Groups.get_group(conv) do
+      %Group{tab: "official"} = g ->
+        cond do
+          off?(g.chat_id) ->
+            {:error, :official_off}
+
+          g.chat_kind == "dm" ->
+            case MLS.members(g.chat_id) do
+              {:ok, [a, b]} ->
+                if Social.friends?(a, b) and not Social.blocked_between?(a, b),
+                  do: :ok,
+                  else: {:error, :not_friends}
+
+              _ ->
+                :ok
+            end
+
+          true ->
+            :ok
+        end
+
+      _ ->
+        :ok
+    end
   end
 end

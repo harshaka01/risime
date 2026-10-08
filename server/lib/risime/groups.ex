@@ -477,25 +477,91 @@ defmodule RisiMe.Groups do
       inserted_at: now
     }
 
-  @doc "`POST /groups/{id}/members` (admin)."
+  ## Membership per chat (v1.24 §24.3)
+
+  @doc """
+  The tabs of the chat a group belongs to, Private first: the Private group and the chat's
+  active Official group (when one exists). A `dm:` chat's Official is alone (its membership
+  follows the DM; member calls on it are `dm_chat`).
+  """
+  def chat_tabs(%Group{} = g) do
+    chat_id = g.chat_id || g.id
+
+    private =
+      if official?(g),
+        do: Repo.one(from x in Group, where: x.id == ^chat_id and x.tab == "private"),
+        else: g
+
+    official =
+      if official?(g),
+        do: g,
+        else:
+          Repo.one(
+            from x in Group,
+              where: x.chat_id == ^chat_id and x.tab == "official" and x.state == "active"
+          )
+
+    Enum.reject([private, official], &is_nil/1)
+  end
+
+  @doc """
+  Like `locked/2`, for every tab of the group's chat (locks taken in id order, one
+  transaction). `fun` gets the tabs (`chat_tabs/1`, read under the locks); a group that doesn't
+  exist gets `[]`.
+  """
+  def locked_chat(group_id, fun) do
+    ids =
+      case get_group(group_id) do
+        nil -> [group_id]
+        g -> g |> chat_tabs() |> Enum.map(& &1.id) |> Enum.concat([group_id]) |> Enum.uniq()
+      end
+
+    Repo.transaction(fn ->
+      for id <- Enum.sort(ids),
+          do: Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", ["mls:" <> id])
+
+      tabs = if g = get_group(group_id), do: chat_tabs(g), else: []
+
+      case fun.(tabs) do
+        {:ok, value} -> value
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # §24.1: member, leave and role calls on a 1:1 Official.
+  defp not_dm_chat(%Group{tab: "official", chat_kind: "dm"}), do: {:error, :dm_chat}
+  defp not_dm_chat(_g), do: :ok
+
+  # The first committer for a tab's op: the caller's device when it is a leaf there (the targeted
+  # tab keeps the v1.9 behaviour), else the candidate rules.
+  defp first_ref(tg, g, me, dev) do
+    if tg.id == g.id or MapSet.member?(in_group(tg.id), {me, dev}), do: {me, dev}, else: :auto
+  end
+
+  @doc """
+  `POST /groups/{id}/members` (admin). v1.24 §24.3: applied to every tab of the chat (one `add`
+  op per tab, one transaction); while Official is on, the new users must be tabs-ready.
+  """
   def add_members(me, device_id, id, params) do
     with {:ok, dev} <- caller_device(me, device_id),
          %{"user_ids" => ids} when is_list(ids) and ids != [] <- params,
          {:ok, ids} <- cast_ids(ids) do
-      locked(id, fn ->
+      locked_chat(id, fn tabs ->
         with {:ok, g, m} <- visible_active(me, id),
+             :ok <- not_dm_chat(g),
              :ok <- no_agents(g, ids),
              :ok <- require_admin(m),
-             {:ok, new} <- addable(g, me, Enum.uniq(ids) -- [me]) do
-          if new != [] do
-            now = DateTime.utc_now()
+             {:ok, plan} <- add_plan(tabs, me, Enum.uniq(ids) -- [me]) do
+          now = DateTime.utc_now()
 
+          for {tg, new} <- plan, new != [] do
             Repo.insert_all(
               Member,
-              for(u <- new, do: member_row(id, u, "member", "pending_add", nil, now))
+              for(u <- new, do: member_row(tg.id, u, "member", "pending_add", nil, now))
             )
 
-            Ops.create(g, "add", me, %{user_ids: new}, {me, dev})
+            Ops.create(tg, "add", me, %{user_ids: new}, first_ref(tg, g, me, dev))
           end
 
           {:ok, group_json(g, me)}
@@ -507,9 +573,19 @@ defmodule RisiMe.Groups do
     end
   end
 
+  defp add_plan(tabs, me, ids) do
+    Enum.reduce_while(tabs, {:ok, []}, fn tg, {:ok, acc} ->
+      case addable(tg, me, ids) do
+        {:ok, new} -> {:cont, {:ok, acc ++ [{tg, new}]}}
+        e -> {:halt, e}
+      end
+    end)
+  end
+
   defp addable(g, me, ids) do
     existing = g.id |> members() |> Map.new(&{&1.user_id, &1})
     new = Enum.reject(ids, &Map.has_key?(existing, &1))
+    cap = cap_for(g)
 
     cond do
       new == [] ->
@@ -522,68 +598,109 @@ defmodule RisiMe.Groups do
         {:error, :too_many_members}
 
       true ->
-        {ready, missing} = readiness(new)
+        # v1.24 §24.3: while Official is on, a user added to it must be tabs-ready (an Official
+        # that is off is read-only: its new members just get no leaf without `tabs`).
+        {ready, missing} =
+          if official?(g) and RisiMe.Chats.off?(g.chat_id),
+            do: {MapSet.new(new), []},
+            else: readiness(new, cap)
 
         pending =
           for {u, %{state: "pending_add"}} <- existing, do: u
 
         devices =
-          MapSet.size(in_group(g.id)) + length(groups_devices(pending)) +
-            length(groups_devices(new))
+          MapSet.size(in_group(g.id)) + length(groups_devices(pending, cap)) +
+            length(groups_devices(new, cap))
 
         cond do
-          MapSet.size(ready) != length(new) -> {:error, {:not_ready, missing}}
-          devices > @max_devices -> {:error, :too_many_devices}
-          true -> {:ok, new}
+          MapSet.size(ready) != length(new) and official?(g) ->
+            {:error, {:not_ready, missing, :official}}
+
+          MapSet.size(ready) != length(new) ->
+            {:error, {:not_ready, missing}}
+
+          devices > @max_devices ->
+            {:error, :too_many_devices}
+
+          true ->
+            {:ok, new}
         end
     end
   end
 
-  @doc "`DELETE /groups/{id}/members/{user_id}` (admin). Removing yourself is a leave."
+  @doc """
+  `DELETE /groups/{id}/members/{user_id}` (admin). Removing yourself is a leave. v1.24 §24.3:
+  applied to every tab of the chat; removing the agent while Official is on is `risi_required`.
+  """
   def remove_member(me, device_id, id, target) do
     with {:ok, dev} <- caller_device(me, device_id),
          {:ok, target} <- cast_uuid(target) do
       if target == me do
         leave(me, device_id, id)
       else
-        locked(id, fn -> do_remove(me, dev, id, target) end) |> ok_nil()
+        locked_chat(id, fn tabs ->
+          with {:ok, g, m} <- visible_active(me, id),
+               :ok <- not_dm_chat(g),
+               :ok <- require_admin(m),
+               :ok <- risi_required(g, target) do
+            # The creator rule is checked once, on the chat's Private group.
+            creator = hd(tabs).created_by
+
+            Enum.reduce_while(tabs, {:ok, nil}, fn tg, _ ->
+              case do_remove(me, first_ref(tg, g, me, dev), tg, target, creator) do
+                {:ok, _} -> {:cont, {:ok, nil}}
+                e -> {:halt, e}
+              end
+            end)
+          end
+        end)
+        |> ok_nil()
       end
     end
   end
 
-  defp do_remove(me, dev, id, target) do
-    with {:ok, g, m} <- visible_active(me, id),
-         :ok <- require_admin(m) do
-      case member(id, target) do
-        nil ->
-          {:ok, nil}
+  # §24.4: no "remove Risi but keep Official".
+  defp risi_required(g, target) do
+    if official?(g) and not RisiMe.Chats.off?(g.chat_id) and
+         match?(%Member{kind: "agent"}, member(g.id, target)),
+       do: {:error, :risi_required},
+       else: :ok
+  end
 
-        %Member{state: "pending_remove"} ->
-          {:ok, nil}
+  defp do_remove(me, first, g, target, creator) do
+    case member(g.id, target) do
+      nil ->
+        {:ok, nil}
 
-        %Member{state: "pending_add"} ->
-          # Cancels a not-yet-committed add for this user.
-          Ops.drop_user(g, target)
-          delete_member(id, target)
-          {:ok, nil}
+      %Member{state: "pending_remove"} ->
+        {:ok, nil}
 
-        %Member{role: "admin"} when g.created_by != me ->
-          {:error, :not_admin}
+      %Member{state: "pending_add"} ->
+        # Cancels a not-yet-committed add for this user.
+        Ops.drop_user(g, target)
+        delete_member(g.id, target)
+        {:ok, nil}
 
-        %Member{} ->
-          mark_removing(g, target)
-          Ops.create(g, "remove", me, %{user_ids: [target]}, {me, dev})
-          {:ok, nil}
-      end
+      %Member{role: "admin"} when creator != me ->
+        {:error, :not_admin}
+
+      %Member{} ->
+        mark_removing(g, target)
+        Ops.create(g, "remove", me, %{user_ids: [target]}, first)
+        {:ok, nil}
     end
   end
 
-  @doc "`POST /groups/{id}/leave`."
+  @doc """
+  `POST /groups/{id}/leave`. v1.24 §24.3: leaves every tab of the chat; the last-admin rule is
+  checked once, on the chat's Private group.
+  """
   def leave(me, device_id, id) do
     with {:ok, _dev} <- caller_device(me, device_id) do
-      locked(id, fn ->
+      locked_chat(id, fn tabs ->
         g = get_group(id)
         m = g && member(id, me)
+        private = List.first(tabs)
 
         cond do
           m == nil ->
@@ -595,12 +712,19 @@ defmodule RisiMe.Groups do
           m.state != "active" or g.state != "active" ->
             {:error, :not_found}
 
-          m.role == "admin" and admin_ids(id) == [me] ->
+          not_dm_chat(g) != :ok ->
+            not_dm_chat(g)
+
+          match?(%Member{role: "admin"}, member(private.id, me)) and
+              admin_ids(private.id) == [me] ->
             {:error, :last_admin}
 
           true ->
-            mark_removing(g, me)
-            Ops.create(g, "remove", me, %{user_ids: [me]}, nil)
+            for tg <- tabs, match?(%Member{state: "active"}, member(tg.id, me)) do
+              mark_removing(tg, me)
+              Ops.create(tg, "remove", me, %{user_ids: [me]}, nil)
+            end
+
             {:ok, nil}
         end
       end)
@@ -609,7 +733,8 @@ defmodule RisiMe.Groups do
   end
 
   # Removal is immediate on the server (§12.3): no more group events or sends.
-  defp mark_removing(g, user_id) do
+  @doc false
+  def mark_removing(g, user_id) do
     Repo.update_all(
       from(m in Member, where: m.group_id == ^g.id and m.user_id == ^user_id),
       set: [state: "pending_remove"]
@@ -632,38 +757,25 @@ defmodule RisiMe.Groups do
     Repo.delete_all(from m in Member, where: m.group_id == ^group_id and m.user_id == ^user_id)
   end
 
-  @doc "`PATCH /groups/{id}/members/{user_id}` (admin)."
+  @doc """
+  `PATCH /groups/{id}/members/{user_id}` (admin). v1.24 §24.3: the role is mirrored to every tab
+  of the chat where the user is an active member.
+  """
   def set_role(me, device_id, id, target, params) do
     with {:ok, dev} <- caller_device(me, device_id),
          {:ok, target} <- cast_uuid(target),
          %{"role" => role} when role in ["admin", "member"] <- params do
-      locked(id, fn ->
+      locked_chat(id, fn tabs ->
         with {:ok, g, m} <- visible_active(me, id),
+             :ok <- not_dm_chat(g),
              :ok <- require_admin(m),
-             %Member{state: "active"} = t <- member(id, target) || {:error, :not_found} do
-          pending = Ops.role_op(g.id, target)
+             %Member{state: "active"} = t <- member(id, target) || {:error, :not_found},
+             :ok <- role_allowed(g, me, target, t, role) do
+          for tg <- tabs,
+              %Member{state: "active"} = tm <- [member(tg.id, target)],
+              do: apply_role(tg, me, first_ref(tg, g, me, dev), target, tm, role)
 
-          cond do
-            t.kind == "agent" and role == "admin" ->
-              {:error, :invalid_role}
-
-            pending && pending.payload["role"] == role ->
-              {:ok, group_json(g, me)}
-
-            pending == nil and t.role == role ->
-              {:ok, group_json(g, me)}
-
-            role == "member" and target != me and g.created_by != me ->
-              {:error, :not_admin}
-
-            role == "member" and target == me and admin_ids(id) == [me] ->
-              {:error, :last_admin}
-
-            true ->
-              if pending, do: Repo.delete!(pending)
-              Ops.create(g, "role", me, %{user_ids: [target], role: role}, {me, dev})
-              {:ok, group_json(g, me)}
-          end
+          {:ok, group_json(g, me)}
         else
           %Member{} -> {:error, :not_found}
           e -> e
@@ -673,6 +785,35 @@ defmodule RisiMe.Groups do
       %{"role" => _} -> {:error, :invalid_role}
       {:error, _} = e -> e
       _ -> {:error, :bad_request}
+    end
+  end
+
+  defp role_allowed(g, me, target, t, role) do
+    pending = Ops.role_op(g.id, target)
+
+    cond do
+      t.kind == "agent" and role == "admin" -> {:error, :invalid_role}
+      pending && pending.payload["role"] == role -> :ok
+      pending == nil and t.role == role -> :ok
+      role == "member" and target != me and g.created_by != me -> {:error, :not_admin}
+      role == "member" and target == me and admin_ids(g.id) == [me] -> {:error, :last_admin}
+      true -> :ok
+    end
+  end
+
+  defp apply_role(tg, me, first, target, tm, role) do
+    pending = Ops.role_op(tg.id, target)
+
+    cond do
+      pending && pending.payload["role"] == role ->
+        :ok
+
+      pending == nil and tm.role == role ->
+        :ok
+
+      true ->
+        if pending, do: Repo.delete!(pending)
+        Ops.create(tg, "role", me, %{user_ids: [target], role: role}, first)
     end
   end
 
@@ -817,8 +958,13 @@ defmodule RisiMe.Groups do
     base = Map.merge(base, Map.new(tab_fields(g), fn {k, v} -> {Atom.to_string(k), v} end))
 
     members_for =
-      if Keyword.get(opts, :members) do
-        members = g.id |> members() |> Enum.filter(&(&1.state == "active"))
+      if m = Keyword.get(opts, :members) do
+        # `:targets` (v1.24 §24.8, Official `added`): the added members only.
+        members =
+          g.id
+          |> members()
+          |> Enum.filter(&(&1.state == "active" and (m != :targets or &1.user_id in targets)))
+
         ids = Enum.map(members, & &1.user_id)
         users = users(ids)
         pairs = friend_pairs(ids)

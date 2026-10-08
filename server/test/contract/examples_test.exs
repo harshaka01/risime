@@ -3750,6 +3750,215 @@ defmodule RisiMe.ContractExamplesTest do
       g
     end
 
+    # The server-produced §24 examples against real responses (server S1–S4).
+    test "every server-produced §24 example against the server's real payloads", %{a: a, b: b} do
+      alias RisiMe.TabsHelpers, as: T
+      import RisiMe.GroupHelpers, only: [api: 5, api: 4, ref: 2, last_event: 2]
+
+      with_attestation_key(%{})
+      T.tabs_on!()
+      risi = T.risi_on!(10)
+      post = fn path, token, body, dev -> api(:post, path, token, body, dev) end
+
+      # auth_config_v124.json
+      {200, cfg} = get_json("/api/v1/auth/config")
+
+      assert keys(cfg) -- ["modes", "issuer", "client_id"] ==
+               keys(example("auth_config_v124.json")) -- ["modes", "issuer", "client_id"]
+
+      assert cfg["tabs"] == "on"
+
+      # device_put_tabs.json, as it is.
+      a_dev = Ecto.UUID.generate()
+
+      {200, _} =
+        api(:put, "/api/v1/me/devices/#{a_dev}", a.token, example("device_put_tabs.json"))
+
+      assert "tabs" in Repo.get_by!(RisiMe.Devices.Device, device_id: a_dev).capabilities
+      :ok = RisiMe.MLS.record_instance(a.user.id, a_dev, nil, "0.3.0")
+      b_dev = T.tabs_device!(b)
+      RisiMe.GroupHelpers.clear_legacy!()
+
+      # error_private_tab.json: a new group naming the agent.
+      {403, e} =
+        post.(
+          "/api/v1/groups",
+          a.token,
+          %{"client_group_id" => Ecto.UUID.generate(), "member_ids" => [b.user.id, risi.user_id]},
+          a_dev
+        )
+
+      assert e == example("error_private_tab.json")
+
+      {201, %{"group" => %{"id" => private}}} =
+        post.(
+          "/api/v1/groups",
+          a.token,
+          %{"client_group_id" => Ecto.UUID.generate(), "member_ids" => [b.user.id]},
+          a_dev
+        )
+
+      {200, _} =
+        post.(
+          "/api/v1/mls/groups/#{private}/commit",
+          a.token,
+          RisiMe.GroupHelpers.create_commit([a.user.id, b.user.id], {a.user.id, a_dev}),
+          a_dev
+        )
+
+      group_shape = fn ours, ex ->
+        assert keys(ours) == keys(ex)
+        assert_same_shape(Map.drop(ours, ~w(members pending)), Map.drop(ex, ~w(members pending)))
+        for m <- ours["members"], do: assert(keys(m) == keys(hd(ex["members"])))
+      end
+
+      # chat_official_create.json → chat_official_create_reply.json
+      {201, %{"group" => g}} =
+        post.(
+          "/api/v1/chats/#{private}/official",
+          a.token,
+          example("chat_official_create.json"),
+          a_dev
+        )
+
+      group_shape.(g, example("chat_official_create_reply.json")["group"])
+      official = g["id"]
+
+      added =
+        for %{user_id: u, device_id: d} <-
+              RisiMe.Groups.groups_devices([a.user.id, b.user.id, risi.user_id], "tabs"),
+            d != a_dev,
+            do: ref(u, d)
+
+      {200, _} =
+        post.(
+          "/api/v1/mls/groups/#{official}/commit",
+          a.token,
+          RisiMe.GroupHelpers.create_commit([], {a.user.id, a_dev}, %{"added" => added}),
+          a_dev
+        )
+
+      # event_group_created_official.json, event_chat_official_created.json
+      ev = last_event(b.user.id, "group_event")
+      ex = example("event_group_created_official.json")
+
+      assert_same_shape(
+        Map.update!(ev, "data", &Map.drop(&1, ~w(members targets))),
+        Map.update!(ex, "data", &Map.drop(&1, ~w(members targets)))
+      )
+
+      assert_same_shape(
+        last_event(b.user.id, "chat_event"),
+        example("event_chat_official_created.json")
+      )
+
+      # group_reply_v124.json
+      {200, %{"group" => g}} = api(:get, "/api/v1/groups/#{official}", b.token, nil, b_dev)
+      group_shape.(g, example("group_reply_v124.json")["group"])
+
+      # chat_reply.json
+      {200, %{"chat" => chat}} = api(:get, "/api/v1/chats/#{private}", a.token, nil, a_dev)
+      assert_same_shape(chat, example("chat_reply.json")["chat"])
+
+      # chat_patch_official.json → event_chat_official_off.json; then error_official_off.json.
+      {200, %{"chat" => chat}} =
+        api(
+          :patch,
+          "/api/v1/chats/#{private}",
+          a.token,
+          example("chat_patch_official.json"),
+          a_dev
+        )
+
+      ex_off =
+        Enum.find(example("chats_reply.json")["chats"], &(&1["official"]["state"] == "off"))
+
+      assert_same_shape(chat, ex_off)
+
+      assert_same_shape(
+        last_event(b.user.id, "chat_event"),
+        example("event_chat_official_off.json")
+      )
+
+      assert {:error, :official_off} =
+               Messaging.send(
+                 a.user.id,
+                 %{
+                   "client_msg_id" => Ecto.UUID.generate(),
+                   "conversation_id" => official,
+                   "ciphertext" => b64(),
+                   "generation" => 1,
+                   "epoch" => 1
+                 },
+                 device_id: a_dev
+               )
+
+      assert %{"reason" => "official_off"} == example("error_official_off.json")
+
+      # chats_reply.json
+      {200, %{"chats" => [c]}} = api(:get, "/api/v1/chats", a.token, nil, a_dev)
+      assert_same_shape(c, ex_off)
+
+      # event_group_agent_removed.json: a member commits the agent removal.
+      [op] = Enum.filter(RisiMe.Groups.Ops.list(official), &(&1.type == "remove"))
+
+      {200, _} =
+        post.(
+          "/api/v1/mls/groups/#{official}/commit",
+          b.token,
+          %{
+            "generation" => 1,
+            "epoch" => 1,
+            "commit" => b64(),
+            "op_id" => op.op_id,
+            "added" => [],
+            "removed" => [ref(risi.user_id, risi.device_id)]
+          },
+          b_dev
+        )
+
+      assert_same_shape(
+        last_event(b.user.id, "group_event"),
+        example("event_group_agent_removed.json")
+      )
+
+      # On again → event_chat_official_on.json; the admin's add → event_group_agent_added.json.
+      {200, _} = api(:patch, "/api/v1/chats/#{private}", a.token, %{"official" => "on"}, a_dev)
+
+      assert_same_shape(
+        last_event(b.user.id, "chat_event"),
+        example("event_chat_official_on.json")
+      )
+
+      [add] = Enum.filter(RisiMe.Groups.Ops.list(official), &(&1.type == "add"))
+
+      {200, _} =
+        post.(
+          "/api/v1/mls/groups/#{official}/commit",
+          a.token,
+          %{
+            "generation" => 1,
+            "epoch" => 2,
+            "commit" => b64(),
+            "welcome" => b64(),
+            "op_id" => add.op_id,
+            "added" => [ref(risi.user_id, risi.device_id)],
+            "removed" => []
+          },
+          a_dev
+        )
+
+      ev = last_event(b.user.id, "group_event")
+      ex = example("event_group_agent_added.json")
+
+      assert_same_shape(
+        Map.update!(ev, "data", &Map.drop(&1, ["members"])),
+        Map.update!(ex, "data", &Map.drop(&1, ["members"]))
+      )
+
+      assert Enum.map(ev["data"]["members"], &keys/1) == Enum.map(ex["data"]["members"], &keys/1)
+    end
+
     test "auth_config_v124.json: tabs flag" do
       ex = example("auth_config_v124.json")
       assert ex["tabs"] in ~w(on off)

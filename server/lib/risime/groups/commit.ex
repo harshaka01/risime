@@ -157,6 +157,10 @@ defmodule RisiMe.Groups.Commit do
     agent_leaves? = Enum.all?(agents, fn a -> Enum.any?(devices, &(elem(&1, 0) == a)) end)
 
     cond do
+      # v1.24 §24.4: an Official turned off while it was being created never starts.
+      Groups.official?(g) and RisiMe.Chats.off?(g.chat_id) ->
+        {:error, :official_off}
+
       MapSet.size(ready) != length(others -- agents) ->
         {:error, not_ready(g, missing)}
 
@@ -460,7 +464,14 @@ defmodule RisiMe.Groups.Commit do
 
         Membership.open(g.id, joined, now)
 
-        Groups.group_events(g, "added", op.actor, joined, epoch: new_epoch, push_targets: true)
+        # v1.24 §24.8: an Official group's `added` carries the added Members (with kind).
+        members = if Groups.official?(g), do: :targets, else: nil
+
+        Groups.group_events(g, "added", op.actor, joined,
+          epoch: new_epoch,
+          push_targets: true,
+          members: members
+        )
 
       %Op{type: "remove"} ->
         users = op.payload["user_ids"]

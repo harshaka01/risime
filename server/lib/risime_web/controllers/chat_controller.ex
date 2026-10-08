@@ -26,6 +26,13 @@ defmodule RisiMeWeb.ChatController do
     end
   end
 
+  def update(conn, %{"chat_id" => chat_id} = params) do
+    case Chats.toggle(me(conn), device(conn), chat_id, Map.take(params, ["official"])) do
+      {:ok, chat} -> json(conn, %{chat: chat})
+      error -> GroupController.error(conn, error)
+    end
+  end
+
   def create_official(conn, %{"chat_id" => chat_id}) do
     case Chats.create_official(me(conn), device(conn), chat_id) do
       {:ok, :created, group} -> conn |> put_status(201) |> json(%{group: group})

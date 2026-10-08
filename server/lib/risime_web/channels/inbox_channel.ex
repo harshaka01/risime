@@ -34,6 +34,8 @@ defmodule RisiMeWeb.InboxChannel do
         |> assign(:history, RisiMe.Devices.history?(device))
         # v1.24 §24.7: only a `tabs` device gets Official traffic and `chat_event`s.
         |> assign(:tabs, RisiMe.Devices.tabs?(device))
+        # v1.24 §24.5: an agent's sockets get only its Official conversations while on.
+        |> assign(:agent, RisiMe.Risi.agent?(user_id))
 
       case page(socket, payload) do
         {:ok, reply} ->
@@ -325,6 +327,8 @@ defmodule RisiMeWeb.InboxChannel do
   # rule.
   defp visible?(socket, event) do
     (socket.assigns[:tabs] == true or not RisiMe.Groups.Tabs.tabs_only?(event)) and
+      (socket.assigns[:agent] != true or
+         RisiMe.Groups.Tabs.agent_may_see?(socket.assigns.user_id, event)) and
       visible_v123?(socket, event)
   end
 

@@ -85,6 +85,7 @@ defmodule RisiMeWeb.Router do
     # v1.24 §24.2, §24.4, §24.8.
     get "/chats", ChatController, :index
     get "/chats/:chat_id", ChatController, :show
+    patch "/chats/:chat_id", ChatController, :update
     post "/chats/:chat_id/official", ChatController, :create_official
     post "/blobs", BlobController, :create
     post "/backups", BackupController, :create
