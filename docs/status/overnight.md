@@ -57,7 +57,19 @@ upgrade with message counts; each gate step now times out after 30 min):
 3. **Group voice, then video,** on LiveKit (contract v1.19). LiveKit media uses UDP 49500–49999 and
    coturn shrinks to 49152–49499.
 
-Agents running: android UX, the contract proposals (v1.17–v1.19), and infra (coturn shrink, LiveKit).
+Progress:
+- **Contract:** v1.17 (profile photos §18), v1.18 (1:1 video §19) and v1.19 (group calls §20) are
+  merged, and decision 056 records the port split.
+- **coturn:** now relays on 49152–49499, with `max-bps` at 300000.
+- **LiveKit 1.13.9:** live. Signalling is on 127.0.0.1:7880 and media on 10.20.20.15:49500–49999/udp.
+  `auto_create` is off. Both the loopback and the live smoke pass, and the hairpin through
+  203.115.26.139 works.
+- **Android UX:** chunks 1–2 committed.
+- **Agents running:** android UX, server (v1.17–v1.19) and crypto (`call_frame_keys` and its
+  vectors).
+- **Needs Harsha:**
+  - install the Caddyfile with the `/livekit` route: `sudo cp infra/caddy/Caddyfile /etc/caddy/Caddyfile && sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl reload caddy`;
+  - a by-hand check from outside that UDP 49500 and 49999 are reachable (decision 056).
 
 ## Current state (2026-10-08)
 - **Pilot:** v0.2.0-nightly.26 (versionCode 20026), live and healthy, contract v1.16. The TURN relay
