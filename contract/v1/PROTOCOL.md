@@ -5513,6 +5513,9 @@ Lazy for 1:1s and migrated chats; immediate for new groups.
     **`503 agent_unavailable`**.
   - **A DM chat** must be e2ee (§10) and the two users friends with no block (`409 not_e2ee`,
     `not_friends`).
+- **Membership while `creating`:** member, role and leave calls on the chat also update a `creating`
+  Official's member rows (§24.3). If its epoch 0 then names a different human set than the Private
+  group's, the commit gets **`409 members_changed`** and the client rebuilds epoch 0.
 - **Epoch 0** is made by the caller's device, as for a new group (§12.3): it claims key packages
   through §12.5 with `conversation_id` = the Official id (the claim of Risi's device is allowed only
   for this Official id, §24.5), and commits adding **every `tabs` device of every human member plus
@@ -5665,6 +5668,7 @@ Lazy for 1:1s and migrated chats; immediate for new groups.
   | **`invalid_member`** | 422 | an agent in `user_ids`/`member_ids` (§24.3) |
   | **`agent_unavailable`** | 503 | Risi is off, down or has no key package (§24.2, §24.4) |
   | **`official_off`** | 409 / send reason | creating Official, or sending to it, while it is off (§24.2, §24.8) |
+  | **`members_changed`** | 409 | the Official epoch-0 commit adds a different human member set than the chat's Private group now has (a member was added/removed while Official was `creating`); the server has re-synced the Official member rows: refetch the group, claim key packages again and rebuild epoch 0 (§24.2) |
 
   Reused: `403 not_admin` (toggle in a group), `409 not_ready` (with `"tab": "official"`),
   `403 invalid_device`, `404 not_found`, `409 not_e2ee`, `not_friends`, `429 rate_limited`
