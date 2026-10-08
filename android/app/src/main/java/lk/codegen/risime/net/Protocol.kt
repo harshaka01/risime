@@ -562,6 +562,12 @@ data class DeviceMls(
 
         /** v1.18 §19.1: advertised only together with `calls` and when the VP8 encoder and decoder load. */
         const val CAP_VIDEO = "video"
+
+        /**
+         * v1.19 §20.1: advertised only together with `groups`, `calls` and `video`, once the LiveKit
+         * SDK and its frame encryption load and the core exports call keys (§20.6).
+         */
+        const val CAP_GROUP_CALLS = "group_calls"
     }
 }
 
@@ -640,6 +646,10 @@ data class MlsGroup(
     /** §19.1 (DMs): each user has a recent instance that advertises `video` (absent = false). */
     @SerialName("video_ready") val videoReady: Boolean = false,
     @SerialName("missing_video") val missingVideo: List<MissingImages> = emptyList(),
+    /** §20.1 (groups): my user and at least one other active member have a `group_calls` device (absent = false). */
+    @SerialName("group_calls_ready") val groupCallsReady: Boolean = false,
+    /** §20.1 members' instances seen in 30 days without `group_calls` (information only). */
+    @SerialName("missing_group_calls") val missingGroupCalls: List<MissingImages> = emptyList(),
 )
 
 /** §14.1 an app instance that doesn't advertise `images` (`device_id` null: an old app without one). */
@@ -1076,7 +1086,10 @@ data class ChatClear(@SerialName("conversation_id") val conversationId: String, 
 @Serializable
 data class CallSignalPush(
     @SerialName("client_msg_id") val clientMsgId: String,
-    val to: String,
+    /** §16.3 the DM peer; null for a group signal (§20.3: exactly one of `to` and `conversation_id`). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val to: String? = null,
     @SerialName("call_id") val callId: String,
     val ring: Boolean,
     val ciphertext: String,
@@ -1087,6 +1100,10 @@ data class CallSignalPush(
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     val media: String? = null,
+    /** §20.3 the group (`grp:`) of a group call signal, instead of `to`. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("conversation_id") val conversationId: String? = null,
 )
 
 /** §16.3 reply ok. */
@@ -1102,7 +1119,8 @@ data class CallSignalEvent(
     @SerialName("message_id") val messageId: String,
     @SerialName("conversation_id") val conversationId: String,
     val from: String,
-    val to: String,
+    /** §16.3 the DM peer; absent in a group signal (§20.3, `conversation_id` is the group). */
+    val to: String? = null,
     @SerialName("from_device") val fromDevice: String,
     @SerialName("call_id") val callId: String,
     val ring: Boolean,
@@ -1137,4 +1155,51 @@ object CallErrors {
 
     /** §19.2: `ring: true` with `media: "video"` to a user with no `video` device. */
     const val VIDEO_NOT_READY = "video_not_ready"
+
+    /** §20.2 `join` of a room that no longer exists (404). */
+    const val CALL_ENDED = "call_ended"
+
+    /** §20.2 `join` of a full room (409). */
+    const val CALL_FULL = "call_full"
+
+    /** §20.3 a group signal from someone who isn't an active member. */
+    const val NOT_MEMBER = "not_member"
 }
+
+// ---- Group calls with LiveKit (§20, v1.19) ----
+
+/** §20.2 `POST /api/v1/calls/rooms` (with `X-Device-Id`). */
+@Serializable
+data class CallsRoomRequest(
+    @SerialName("conversation_id") val conversationId: String,
+    @SerialName("call_id") val callId: String,
+    val media: String,
+    val action: String,
+) {
+    companion object {
+        const val START = "start"
+        const val JOIN = "join"
+        const val STATUS = "status"
+    }
+}
+
+/** §20.2 `start`/`join` → a LiveKit URL and a 10-minute token for `<user_id>/<device_id>` (never persisted or logged). */
+@Serializable
+data class CallsRoomReply(
+    val url: String,
+    val room: String,
+    val identity: String,
+    val token: String,
+    @SerialName("expires_at") val expiresAt: String,
+    @SerialName("max_participants") val maxParticipants: Int,
+) {
+    override fun toString() = "CallsRoomReply(room=$room, identity=$identity, max=$maxParticipants)" // never the token
+}
+
+/** §20.2 `status` (no token): for the chat line's Join (§20.4). */
+@Serializable
+data class CallsRoomStatusReply(
+    val active: Boolean,
+    val participants: Int = 0,
+    @SerialName("max_participants") val maxParticipants: Int = 0,
+)

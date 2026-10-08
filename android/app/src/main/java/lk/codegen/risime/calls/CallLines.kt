@@ -57,6 +57,9 @@ interface CallHooks {
 
     /** A new "Missed voice call" line arrived live (not a replay): notify "Missed call from <name>" ("Missed video call from <name>"). */
     fun onMissedCall(conversationId: String, from: String, video: Boolean = false) = Unit
+
+    /** §20.4 a durable `group_call` arrived (after its transaction): e.g. `ended` while ringing stops the ring. */
+    suspend fun onGroupCallLine(conversationId: String, from: String, env: GroupCallEnvelope) = Unit
 }
 
 /** The app's [CallHooks]: the state machine plus the persisted marks. */

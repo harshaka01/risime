@@ -386,6 +386,7 @@ class ChatEngine(
             if (r is MlsResult.Unrecoverable) onUnrecoverable(r.conversationId)
             if (r is MlsResult.CallSignal) queueCall(r)
             if (r is MlsResult.CallEnd) incoming = applyCallEnd(me, r.message, r.env) || incoming
+            if (r is MlsResult.GroupCall) applyGroupCall(me, r.message, r.env)
             // §18.2: applied in the event's transaction; never a row, unread count, ack or notification.
             if (r is MlsResult.ProfilePhoto) profilePhotos?.let { pp ->
                 pp.applyInTx(r.subject, r.message.conversationId, r.env, me)
@@ -463,6 +464,122 @@ class ChatEngine(
         return true
     }
 
+    /**
+     * §20.4 a durable `group_call`: one line per call id, created by `started`, updated by the first
+     * `ended` (later duplicates ignored). Silent: never unread, never acked, never a notification.
+     */
+    private suspend fun applyGroupCall(me: String, m: MessageData, env: lk.codegen.risime.calls.GroupCallEnvelope) {
+        val conv = m.conversationId
+        val hooks = calls
+        if (hooks != null) callQueue.add { h -> h.onGroupCallLine(conv, m.from, env) }
+        if (hooks == null) return // an app without calls stores nothing visible (§20.10)
+        val a = applier
+        if (a != null && a.cleared(conv, lk.codegen.risime.data.deletes.TimeUuid.ticks(m.messageId))) return
+        if (messages.byMessageId(m.messageId) != null || messages.byClientMsgId(m.clientMsgId) != null) return
+        val existing = messages.callLine(conv, env.callId)
+        if (existing != null) {
+            updateGroupCallLine(me, existing, env)
+            return
+        }
+        val starterIsMe = m.from.equals(me, true)
+        val row = MessageEntity(
+            clientMsgId = m.clientMsgId, messageId = m.messageId, conversationId = conv, from = m.from,
+            to = conv, body = groupCallBody(env, starterIsMe), serverTs = m.serverTs, localTs = historicalLocalTs(m.serverTs) ?: clock(),
+            status = if (starterIsMe) MessageStatus.SENT.name else MessageStatus.READ.name,
+            outgoing = starterIsMe, ackedStatus = MessageStatus.READ.name,
+            kind = MessageEntity.KIND_CALL,
+            systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), env.toJson()),
+            callId = env.callId, fromDevice = m.fromDevice?.lowercase(),
+        )
+        if (messages.insert(row) != -1L) deletes?.unhide(conv)
+    }
+
+    /** The stored body of a group call line (the chat list preview; the chat renders names from the JSON). */
+    private fun groupCallBody(env: lk.codegen.risime.calls.GroupCallEnvelope, starterIsMe: Boolean, running: Boolean = true): String =
+        if (env.state == lk.codegen.risime.calls.GroupCallEnvelope.STARTED && running) {
+            if (env.video) "Video call in progress" else "Voice call in progress"
+        } else {
+            lk.codegen.risime.calls.GroupCallLines.text(env, "", starterIsMe, running)
+        }
+
+    /** The first `ended` wins; a `started` never overwrites anything. */
+    private suspend fun updateGroupCallLine(me: String, row: MessageEntity, env: lk.codegen.risime.calls.GroupCallEnvelope) {
+        if (env.state != lk.codegen.risime.calls.GroupCallEnvelope.ENDED) return
+        val old = lk.codegen.risime.calls.GroupCallEnvelope.decode(row.systemJson)
+        if (old?.state == lk.codegen.risime.calls.GroupCallEnvelope.ENDED) return
+        messages.updateCallLine(row.clientMsgId, groupCallBody(env, row.from.equals(me, true)), lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), env.toJson()))
+    }
+
+    /**
+     * §20.4 my `group_call` `started`: an outgoing outbox row (kind call, sent `silent`) that is also
+     * my history line. Nothing is queued when the call already has a line.
+     */
+    suspend fun queueGroupCallStarted(conv: String, env: lk.codegen.risime.calls.GroupCallEnvelope): String? {
+        val me = meId() ?: return null
+        if (messages.callLine(conv, env.callId) != null) return null
+        val id = newClientMsgId()
+        messages.insert(
+            MessageEntity(
+                clientMsgId = id, messageId = null, conversationId = conv, from = me, to = conv, body = groupCallBody(env, true),
+                serverTs = null, localTs = clock(), status = MessageStatus.PENDING.name, outgoing = true,
+                kind = MessageEntity.KIND_CALL,
+                systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), env.toJson()),
+                callId = env.callId,
+            ),
+        )
+        deletes?.unhide(conv)
+        scope.launch { flushOutbox() }
+        return id
+    }
+
+    /**
+     * §20.4 my `group_call` `ended` (the last one out, or the starter's timeout): sent `silent` now
+     * (a few tries), and my own line updated. A line that never got an `ended` reads "Voice call
+     * ended" once `status` says the room is gone, so a lost send leaves nothing wrong behind.
+     */
+    suspend fun sendGroupCallEnded(conv: String, env: lk.codegen.risime.calls.GroupCallEnvelope): Boolean {
+        val me = meId() ?: return false
+        withContext(io) {
+            messages.callLine(conv, env.callId)?.let { updateGroupCallLine(me, it, env) } ?: messages.insert(
+                MessageEntity(
+                    clientMsgId = "local-group-call:${env.callId}", messageId = null, conversationId = conv, from = me, to = conv,
+                    body = groupCallBody(env, true), serverTs = isoMillis(clock()), localTs = clock(), status = MessageStatus.SENT.name, outgoing = true,
+                    kind = MessageEntity.KIND_CALL,
+                    systemJson = lk.codegen.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), env.toJson()),
+                    callId = env.callId,
+                ),
+            )
+        }
+        repeat(3) {
+            if (sendSilent(conv, env.encode()) is PushResult.Ok) return true
+            kotlinx.coroutines.delay(2_000)
+        }
+        return false
+    }
+
+    /** §20.4: `status` said the room is gone (or a Join found it ended): the `started` line turns "… ended". */
+    suspend fun markGroupCallOver(conv: String, callId: String) = withContext(io) {
+        val me = meId() ?: return@withContext
+        val row = messages.callLine(conv, callId) ?: return@withContext
+        val env = lk.codegen.risime.calls.GroupCallEnvelope.decode(row.systemJson) ?: return@withContext
+        if (env.state != lk.codegen.risime.calls.GroupCallEnvelope.STARTED) return@withContext
+        val json = lk.codegen.risime.net.ProtocolJson.encodeToString(
+            kotlinx.serialization.json.JsonObject.serializer(),
+            kotlinx.serialization.json.JsonObject(env.toJson() + (lk.codegen.risime.calls.GroupCallLines.LOCAL_OVER to kotlinx.serialization.json.JsonPrimitive(true))),
+        )
+        messages.updateCallLine(row.clientMsgId, groupCallBody(env, row.from.equals(me, true), running = false), json)
+    }
+
+    /**
+     * §20.3 one ephemeral group `call:signal` (`conversation_id`, no `to`) through the group's lane;
+     * stale_epoch → catch up and re-encrypt with the same client_msg_id.
+     */
+    suspend fun sendGroupCallSignal(conv: String, env: lk.codegen.risime.calls.CallEnvelope.Env, media: String): PushResult<lk.codegen.risime.net.CallSignalReply> =
+        withContext(io) { sendCallSignalImpl(conv, null, env, media) }
+
+    /** §20.6 K4: catch up the group's commits before deriving call keys (public for the call layer). */
+    suspend fun catchUpGroup(conv: String) = withContext(io) { runCatching { catchUp(conv) } }
+
     // ---- Calls: sending (§16.3, §16.4) ----
 
     /**
@@ -472,7 +589,7 @@ class ChatEngine(
     suspend fun sendCallSignal(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env, media: String = lk.codegen.risime.calls.CallEnvelope.MEDIA_AUDIO): PushResult<lk.codegen.risime.net.CallSignalReply> =
         withContext(io) { sendCallSignalImpl(conv, peer, env, media) }
 
-    private suspend fun sendCallSignalImpl(conv: String, peer: String, env: lk.codegen.risime.calls.CallEnvelope.Env, media: String): PushResult<lk.codegen.risime.net.CallSignalReply> {
+    private suspend fun sendCallSignalImpl(conv: String, peer: String?, env: lk.codegen.risime.calls.CallEnvelope.Env, media: String): PushResult<lk.codegen.risime.net.CallSignalReply> {
         val clientMsgId = newClientMsgId()
         val plaintext = lk.codegen.risime.calls.CallEnvelope.encode(env)
         var attempt = 0
@@ -485,8 +602,9 @@ class ChatEngine(
                     lk.codegen.risime.net.CallSignalPush(
                         clientMsgId, peer, env.callId, lk.codegen.risime.calls.CallEnvelope.ringFor(env),
                         java.util.Base64.getEncoder().encodeToString(ct), group.generation, group.epoch, isoMillis(clock()),
-                        // §19.2: the call's media on every signal (voice calls keep the v1.13 shape).
-                        media.takeIf { it == lk.codegen.risime.calls.CallEnvelope.MEDIA_VIDEO },
+                        // §19.2: the call's media on every signal (1:1 voice calls keep the v1.13 shape; §20.3 groups always carry it).
+                        media.takeIf { it == lk.codegen.risime.calls.CallEnvelope.MEDIA_VIDEO || peer == null },
+                        conversationId = conv.takeIf { peer == null },
                     ),
                 )
             }
@@ -777,7 +895,10 @@ class ChatEngine(
         if (m.call) {
             // §16.2: the stored call_end envelope, encrypted at send time; e2ee only (never plaintext).
             val json = m.systemJson ?: return PushResult.Rejected(AuthErrors.BAD_REQUEST)
-            return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { json.toByteArray(Charsets.UTF_8) }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
+            // §20.4: a group call's `group_call` goes `silent` (no push), and only its envelope fields (no local flags).
+            val groupCall = lk.codegen.risime.calls.GroupCallEnvelope.decode(json)
+            val payload = groupCall?.encode() ?: json.toByteArray(Charsets.UTF_8)
+            return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { payload }, silent = groupCall != null) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
         }
         if (m.image) {
             // §14.7 Sending 6: the stored envelope, encrypted at send time; never in plaintext.

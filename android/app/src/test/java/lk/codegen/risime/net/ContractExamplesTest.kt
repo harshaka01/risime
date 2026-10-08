@@ -26,21 +26,44 @@ class ContractExamplesTest {
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
         "auth_verify_reply.json" to { s -> ProtocolJson.decodeFromString<AuthVerifyReply>(s) },
-        // v1.19 (§20 group calls with LiveKit): parse-only placeholders until the app implements it.
-        "call_member_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_offer_sfu_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_signal_event_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "call_signal_push_group.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "calls_room_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "calls_room_request.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "calls_room_status_reply.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "device_put_group_calls.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_call_ended.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "error_call_full.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "group_call_ended_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "group_call_started_payload.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "livekit_token_claims.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
-        "mls_group_group_calls_ready.json" to { s -> ProtocolJson.parseToJsonElement(s) as JsonObject },
+        // v1.19 (§20 group calls with LiveKit): typed models, the envelopes through the strict validators.
+        "call_member_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Member).also { require(it.state == "joined") } },
+        "call_offer_sfu_payload.json" to { s ->
+            (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.SfuOffer).also {
+                require(it.media == "audio" && lk.codegen.risime.calls.CallEnvelope.ringFor(it))
+                require(lk.codegen.risime.calls.CallEnvelope.toJson(it) == ProtocolJson.parseToJsonElement(s)) // re-encodes exactly
+            }
+        },
+        "call_signal_event_group.json" to { s ->
+            ProtocolJson.decodeFromString<Event>(s).callSignal()!!.also { require(it.to == null && it.conversationId.startsWith("grp:") && it.ring && it.media == "audio") }
+        },
+        "call_signal_push_group.json" to { s -> ProtocolJson.decodeFromString<CallSignalPush>(s).also { require(it.to == null && it.conversationId!!.startsWith("grp:") && it.media == "audio") } },
+        "calls_room_reply.json" to { s ->
+            ProtocolJson.decodeFromString<CallsRoomReply>(s).also { require(it.maxParticipants == 32 && it.identity.contains('/') && !it.toString().contains(it.token)) }
+        },
+        "calls_room_request.json" to { s -> ProtocolJson.decodeFromString<CallsRoomRequest>(s).also { require(it.action == CallsRoomRequest.START && it.media == "audio") } },
+        "calls_room_status_reply.json" to { s -> ProtocolJson.decodeFromString<CallsRoomStatusReply>(s).also { require(it.active && it.participants == 3) } },
+        "device_put_group_calls.json" to { s ->
+            ProtocolJson.decodeFromString<DevicePut>(s).also { d ->
+                val caps = d.mls!!.capabilities!!
+                require(DeviceMls.CAP_GROUP_CALLS in caps && listOf(DeviceMls.CAP_GROUPS, DeviceMls.CAP_CALLS, DeviceMls.CAP_VIDEO).all { it in caps })
+            }
+        },
+        "error_call_ended.json" to { s -> apiError(s, CallErrors.CALL_ENDED) },
+        "error_call_full.json" to { s -> apiError(s, CallErrors.CALL_FULL) },
+        "group_call_ended_payload.json" to { s ->
+            groupCall(s).also { require(it.state == "ended" && it.reason == "hangup" && it.durationS == 723L && it.connectedAt != null) }
+        },
+        "group_call_started_payload.json" to { s -> groupCall(s).also { require(it.state == "started" && it.reason == null) } },
+        // Server-side claims (the app never decodes a LiveKit token): checked for the grants the app relies on.
+        "livekit_token_claims.json" to { s ->
+            (ProtocolJson.parseToJsonElement(s) as JsonObject).also { o ->
+                val v = o["video"]!!.jsonObject
+                require(v["canPublishData"]!!.jsonPrimitive.boolean.not() && v["canSubscribe"]!!.jsonPrimitive.boolean)
+                require(o["exp"]!!.jsonPrimitive.int - o["nbf"]!!.jsonPrimitive.int == 600)
+            }
+        },
+        "mls_group_group_calls_ready.json" to { s -> ProtocolJson.decodeFromString<MlsGroup>(s).also { require(it.groupCallsReady && it.missingGroupCalls.single().deviceId != null) } },
         // v1.18 (§19 1:1 video calls): typed models, the envelopes through the strict validators (§19.4 SDP rules).
         "call_end_video_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.End).also { require(it.media == "video" && it.durationS == 312L) } },
         "call_media_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Media).also { require(!it.camera && it.toDevice.isNotEmpty()) } },
@@ -324,6 +347,12 @@ class ContractExamplesTest {
         },
     )
 
+    /** §20.4 a `group_call` through the app's front door ([MlsPayload.decode]), re-encoded to exactly the example. */
+    private fun groupCall(s: String): lk.codegen.risime.calls.GroupCallEnvelope =
+        (lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray()) as lk.codegen.risime.data.mls.MlsPayload.Decoded.GroupCall).env.also {
+            require(it.toJson() == ProtocolJson.parseToJsonElement(s)) { "re-encode" }
+        }
+
     private fun callEnv(s: String): lk.codegen.risime.calls.CallEnvelope.Env =
         requireNotNull(lk.codegen.risime.calls.CallEnvelope.decode(s.toByteArray())) { "call envelope dropped" }
 
@@ -365,6 +394,10 @@ class ContractExamplesTest {
         check("call_signal_push.json", CallSignalPush.serializer())
         // v1.18 (§19.2): `media` on every signal of a video call; the voice shape above stays without it.
         check("call_signal_push_video.json", CallSignalPush.serializer())
+        // v1.19 (§20.2, §20.3): the group signal (`conversation_id`, no `to`), the room request, `group_calls`.
+        check("call_signal_push_group.json", CallSignalPush.serializer())
+        check("calls_room_request.json", CallsRoomRequest.serializer())
+        check("device_put_group_calls.json", DevicePut.serializer())
         check("device_put_video.json", DevicePut.serializer())
         check("key_packages_upload_replace.json", KeyPackagesUpload.serializer())
         check("key_packages_claim_group.json", KeyPackagesClaim.serializer())

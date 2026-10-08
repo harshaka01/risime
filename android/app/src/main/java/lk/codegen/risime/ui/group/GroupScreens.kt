@@ -260,6 +260,8 @@ internal fun GroupMessageList(
     uploads: Map<String, Float> = emptyMap(),
     /** §17.12 the gap marker with "Request history" (null: a plain line, the feature off). */
     historyMarker: (@Composable (MessageEntity) -> Unit)? = null,
+    /** §20.4 Join on a running group call's line (null: this phone can't join group calls). */
+    onJoinCall: ((lk.codegen.risime.calls.GroupCallEnvelope) -> Unit)? = null,
 ) {
     ChatMessageList(
         messages = messages,
@@ -276,6 +278,21 @@ internal fun GroupMessageList(
                 val line = item.m.systemLine()
                 // §17.12 local history lines keep their stored text (it changes with imports).
                 SystemLineText(line?.takeIf { it.action !in lk.codegen.risime.data.groups.SystemLine.LOCAL_ACTIONS }?.let { l -> systemText(l, meId) { memberName(it) ?: "Someone" } } ?: item.m.body)
+            } else if (item.m.call) {
+                // §20.4 a group call's line: centred, Join while the call runs, only "Delete for me".
+                val env = lk.codegen.risime.calls.GroupCallEnvelope.decode(item.m.systemJson)
+                if (env == null) {
+                    SystemLineText(item.m.body)
+                } else {
+                    val running = !lk.codegen.risime.calls.GroupCallLines.over(item.m.systemJson)
+                    lk.codegen.risime.calls.GroupCallLineRow(
+                        lk.codegen.risime.calls.GroupCallLines.text(env, nameOf(item.m.from), item.m.from.equals(meId, true), running),
+                        video = env.video,
+                        missed = !item.m.from.equals(meId, true) && env.reason == lk.codegen.risime.calls.GroupCallEnvelope.R_TIMEOUT,
+                        onJoin = onJoinCall?.takeIf { lk.codegen.risime.calls.GroupCallLines.joinable(env, running) }?.let { f -> { f(env) } },
+                        onDeleteForMe = del?.let { d -> { d.deleteForMe(listOf(item.m.clientMsgId)) } },
+                    )
+                }
             } else if (item.m.showsAsDeleted) {
                 // §15.5 crypto S2: a server-placed tombstone shows no sender unless the sender deleted it.
                 val placed = item.m.clientMsgId.startsWith(lk.codegen.risime.data.deletes.DeleteApplier.PLACEHOLDER)

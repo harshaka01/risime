@@ -95,6 +95,14 @@ class ApiClient(
     /** §16.7 TURN REST credentials (503 calls_unavailable while the server has none: STUN only). Never persisted. */
     suspend fun callsTurn(): ApiResult<CallsTurnReply> = call<Unit, CallsTurnReply>("GET", "calls/turn", null)
 
+    /** §20.2 `start`/`join` a group call's LiveKit room (X-Device-Id required). The token is never logged. */
+    suspend fun callsRoom(body: CallsRoomRequest, deviceId: String): ApiResult<CallsRoomReply> =
+        call("POST", "calls/rooms", body, headers = mapOf(DEVICE_HEADER to deviceId))
+
+    /** §20.2 `status`: is the group call's room still there (the chat line's Join). */
+    suspend fun callsRoomStatus(conversationId: String, callId: String, media: String, deviceId: String): ApiResult<CallsRoomStatusReply> =
+        call("POST", "calls/rooms", CallsRoomRequest(conversationId, callId, media, CallsRoomRequest.STATUS), headers = mapOf(DEVICE_HEADER to deviceId))
+
     suspend fun groups(): ApiResult<GroupsReply> = call<Unit, GroupsReply>("GET", "groups", null)
 
     suspend fun group(id: String): ApiResult<GroupReply> = call<Unit, GroupReply>("GET", "groups/$id", null)

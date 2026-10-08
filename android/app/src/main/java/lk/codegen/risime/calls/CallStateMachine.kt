@@ -60,6 +60,9 @@ interface CallEnvironment {
      */
     fun audioBusy(): Boolean = false
 
+    /** §20.4 (android A4): this device is in (or ringing for) a group call: a 1:1 offer is busy, a 1:1 call can't start. */
+    fun otherCallActive(): Boolean = false
+
     /** §16.7: TURN credentials, at most 3 s (then STUN only: an empty list or STUN-only servers). */
     suspend fun iceServers(): List<IceServer> = emptyList()
 }
@@ -246,7 +249,7 @@ class CallStateMachine(
         val ringingFromPeer = lock.withLock { current?.takeIf { !it.ended && !it.outgoing && it.phase == CallPhase.RINGING_IN && it.peer.equals(peer, true) }?.id }
         if (ringingFromPeer != null) return answer(ringingFromPeer)
         val call = lock.withLock {
-            if (current?.let { !it.ended } == true || platform.audioBusy()) {
+            if (current?.let { !it.ended } == true || platform.audioBusy() || platform.otherCallActive()) {
                 publishNotice(conversationId, peer, true, CallNotice.IN_ANOTHER_CALL)
                 return false
             }
@@ -530,6 +533,8 @@ class CallStateMachine(
                 is CallEnvelope.Cancel -> onCancel(s, own)
                 is CallEnvelope.Media -> onMedia(s, env, own)
                 is CallEnvelope.End -> log("call_end in a call_signal event: dropped")
+                // §20.3: group call envelopes go to the group call machine (the pipeline never routes them here).
+                is CallEnvelope.SfuOffer, is CallEnvelope.Member -> log("${env.type} in a DM: dropped")
             }
         }
     }
@@ -608,7 +613,7 @@ class CallStateMachine(
             return
         }
         // §16.5 busy (android R9): own call, or another app's call by the audio mode.
-        if (cur != null || platform.audioBusy()) {
+        if (cur != null || platform.audioBusy() || platform.otherCallActive()) {
             log("offer ${env.callId}: busy")
             marks.put(CallMark(env.callId, ended = true, at = now()))
             scope.launch { sig(s.conversationId, peer, CallEnvelope.Busy(env.callId), env.media) }
