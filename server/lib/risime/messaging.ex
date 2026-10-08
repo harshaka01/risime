@@ -66,8 +66,10 @@ defmodule RisiMe.Messaging do
 
   # v1.7 §10.3 order: idempotent resend → not_friends → e2ee checks → rate limit → store.
   defp do_send(sender_id, params, device_id) do
-    with {:ok, req} <- parse_send(params),
+    with {:ok, silent} <- parse_silent(params),
+         {:ok, req} <- parse_send(params),
          :ok <- validate_body(req) do
+      req = Map.put(req, :silent, silent)
       req = Map.put(req, :from_device, device_id)
 
       case store().get_sent(sender_id, req.client_msg_id) do
@@ -78,6 +80,21 @@ defmodule RisiMe.Messaging do
       end
     end
   end
+
+  # v1.17 §18.4: the optional `silent` (absent or `false` = not silent) is a boolean, and `true`
+  # only on an e2ee send (never with `body` or `reaction`).
+  defp parse_silent(p) when is_map(p) do
+    case Map.fetch(p, "silent") do
+      :error -> {:ok, false}
+      {:ok, false} -> {:ok, false}
+      {:ok, true} -> if plaintext_fields?(p), do: {:error, :bad_request}, else: {:ok, true}
+      {:ok, _} -> {:error, :bad_request}
+    end
+  end
+
+  defp parse_silent(_), do: {:error, :bad_request}
+
+  defp plaintext_fields?(p), do: Map.has_key?(p, "body") or Map.has_key?(p, "reaction")
 
   # PROTOCOL §10.3: 24 KiB decoded, enough for a max-size text in the envelope plus MLS framing.
   @max_ciphertext 24 * 1024
@@ -362,10 +379,13 @@ defmodule RisiMe.Messaging do
         })
       end
 
+    # v1.17 §18.4: a silent message is stored and delivered as usual but never pushed.
+    silent? = req[:silent] == true
+    data = if silent?, do: Map.put(data, "silent", true), else: data
     event = %{event_id: sent.message_id, kind: "message", data: data}
 
     # v1.10 §13.1: plaintext and e2ee alike go to both inboxes under the same event_id.
-    publish_dm(sender_id, req.to, event, true)
+    publish_dm(sender_id, req.to, event, not silent?)
   end
 
   # Both inbox rows are written in one store request, then the sender's copy is broadcast first
@@ -383,8 +403,9 @@ defmodule RisiMe.Messaging do
 
   # Order: idempotent resend → not_member → e2ee checks → rate limit → store.
   defp send_group(sender_id, p, device_id) do
-    with {:ok, req} <- parse_group_send(p) do
-      req = Map.put(req, :from_device, device_id)
+    with {:ok, silent} <- parse_silent(p),
+         {:ok, req} <- parse_group_send(p) do
+      req = req |> Map.put(:from_device, device_id) |> Map.put(:silent, silent)
 
       case store().get_sent(sender_id, req.client_msg_id) do
         {:ok, %{kind: k}} when k != nil ->
@@ -500,24 +521,25 @@ defmodule RisiMe.Messaging do
         status: "sent"
       })
 
-    event = %{
-      event_id: sent.message_id,
-      kind: "message",
-      data: %{
-        "message_id" => sent.message_id,
-        "client_msg_id" => req.client_msg_id,
-        "conversation_id" => req.conversation_id,
-        "from" => sender_id,
-        "from_device" => req.from_device,
-        "ciphertext" => req.ciphertext,
-        "generation" => req.generation,
-        "epoch" => req.epoch,
-        "server_ts" => iso(sent.server_ts)
-      }
+    data = %{
+      "message_id" => sent.message_id,
+      "client_msg_id" => req.client_msg_id,
+      "conversation_id" => req.conversation_id,
+      "from" => sender_id,
+      "from_device" => req.from_device,
+      "ciphertext" => req.ciphertext,
+      "generation" => req.generation,
+      "epoch" => req.epoch,
+      "server_ts" => iso(sent.server_ts)
     }
 
+    # v1.17 §18.4: a silent message reaches every member as usual, with no push to anyone.
+    silent? = req[:silent] == true
+    data = if silent?, do: Map.put(data, "silent", true), else: data
+    event = %{event_id: sent.message_id, kind: "message", data: data}
+
     publish_batch(
-      [{sender_id, event, [push: false]}] ++ for(u <- others, do: {u, event, [push: true]})
+      [{sender_id, event, [push: false]}] ++ for(u <- others, do: {u, event, [push: not silent?]})
     )
   end
 

@@ -7,7 +7,8 @@ defmodule RisiMe.Blobs.DiskGuard do
       **max(50 GiB, 10 % of the filesystem)** (`:media_min_free`, `:media_min_free_ratio`), or
       when the live `media` bytes of all users exceed **200 GiB** (`:media_max`, `BLOB_MEDIA_MAX`;
       the sum is cached for 60 s); v1.15 §17.9: `history` uploads are counted with `media`;
-    * `mls` and `icon` keep working down to **20 GiB** free (`:min_free`);
+    * `mls`, `icon` and `avatar` (v1.17 §18.3) keep working down to **20 GiB** free
+      (`:min_free`);
     * a warning log line (every poll) and a `/health` detail (`checks.blob_storage: "low"`)
       under **100 GiB** free (`:warn_free`).
 

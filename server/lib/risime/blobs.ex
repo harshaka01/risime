@@ -16,6 +16,12 @@ defmodule RisiMe.Blobs do
   | `media` | `dm:` (e2ee), `grp:` | 16 MiB | 30 d | 120/h, 1000/day | 2 GiB |
   | `icon` | `grp:` | 512 KiB | none while current, 7 d after replaced | 3/h | none |
   | `history` | `dm:` (e2ee), `grp:` | 16 MiB | 48 h (earlier after the ack) | 40/h | 512 MiB |
+  | `avatar` | none | 512 KiB | none while current, 24 h after replaced | 3/h, 10/day | none |
+
+  An `avatar` (v1.17 §18.3) has no conversation (`conversation_id` null): one current avatar
+  per user (the upload whose row commits last); readers are the owner, friends with no block
+  either way, and users sharing a group with the owner in which both are `active` or
+  `pending_add`.
 
   A `history` blob (v1.15 §17.9) carries its `request_id`: only the request's accepted provider
   device uploads (at most 20 per request), and the requester's user reads it while the request
@@ -43,10 +49,12 @@ defmodule RisiMe.Blobs do
     "mls" => %{max: 2 * @mib, ttl_days: 30, hourly: 60, daily: nil},
     "media" => %{max: 16 * @mib, ttl_days: 30, hourly: 120, daily: 1000},
     "icon" => %{max: 512 * 1024, ttl_days: nil, hourly: 3, daily: nil},
-    "history" => %{max: 16 * @mib, ttl_days: 2, hourly: 40, daily: nil}
+    "history" => %{max: 16 * @mib, ttl_days: 2, hourly: 40, daily: nil},
+    "avatar" => %{max: 512 * 1024, ttl_days: nil, hourly: 3, daily: 10}
   }
   @purposes Map.keys(@limits)
   @icon_grace_days 7
+  @avatar_grace_hours 24
   @deleted_keep_days 7
   @upload_slots 3
   @download_slots 8
@@ -82,6 +90,7 @@ defmodule RisiMe.Blobs do
   defp quota("mls"), do: mls_quota()
   defp quota("media"), do: media_quota()
   defp quota("icon"), do: nil
+  defp quota("avatar"), do: nil
 
   ## Upload (§14.2)
 
@@ -116,6 +125,25 @@ defmodule RisiMe.Blobs do
 
   @doc "Releases the caller's upload slot (also released when the request process dies)."
   def release_upload(me), do: Slots.release(:up, me)
+
+  # v1.17 §18.3: an `avatar` names no conversation (one present is `400`).
+  defp parse(%{"purpose" => "avatar"} = params) do
+    if Map.has_key?(params, "conversation_id") do
+      {:error, :bad_request}
+    else
+      with {:ok, cbid} when cbid != nil <- client_blob_id("avatar", params["client_blob_id"]) do
+        {:ok,
+         %{
+           purpose: "avatar",
+           conv: nil,
+           kind: :none,
+           client_blob_id: cbid,
+           request_id: nil,
+           device_id: params["_device_id"]
+         }}
+      end
+    end
+  end
 
   defp parse(%{"purpose" => purpose, "conversation_id" => conv} = params)
        when purpose in @purposes and is_binary(conv) do
@@ -154,7 +182,7 @@ defmodule RisiMe.Blobs do
     if Groups.group_id?(conv), do: {:ok, :grp}, else: {:error, :bad_request}
   end
 
-  defp client_blob_id(purpose, nil) when purpose in ["media", "icon", "history"],
+  defp client_blob_id(purpose, nil) when purpose in ["media", "icon", "history", "avatar"],
     do: {:error, :bad_request}
 
   defp client_blob_id(_purpose, nil), do: {:ok, nil}
@@ -168,7 +196,9 @@ defmodule RisiMe.Blobs do
 
   defp client_blob_id(_purpose, _), do: {:error, :bad_request}
 
-  # §14.2 "Who may upload".
+  # §14.2 "Who may upload". v1.17 §18.3: any signed-in user may upload an avatar.
+  defp authorize(_me, %{purpose: "avatar"}), do: :ok
+
   defp authorize(me, %{purpose: "media", kind: :dm, conv: conv}) do
     {:ok, members} = MLS.members(conv)
 
@@ -404,6 +434,20 @@ defmodule RisiMe.Blobs do
           }
         ])
 
+        # v1.17 §18.3 (server S3): one current avatar per user, switched in this transaction
+        # under the owner's lock, so the row that commits last is current; the previous one
+        # gets 24 h. An idempotent replay never comes here, so it never becomes current again.
+        if up.purpose == "avatar" do
+          Repo.update_all(
+            from(b in "blobs",
+              where:
+                b.owner == type(^me, :binary_id) and b.purpose == "avatar" and
+                  is_nil(b.expires_at) and is_nil(b.deleted_at) and b.id != type(^id, :binary_id)
+            ),
+            set: [expires_at: DateTime.add(now, @avatar_grace_hours, :hour)]
+          )
+        end
+
         # §14.5: one current icon per group; the previous one gets 7 days.
         if up.purpose == "icon" do
           Repo.update_all(
@@ -511,6 +555,16 @@ defmodule RisiMe.Blobs do
   defp readable?(me, %{purpose: "history"} = b),
     do: RisiMe.History.blob_reader?(me, b.request_id)
 
+  # `avatar` (v1.17 §18.3, server S4): the owner; a friend with no block either way; a user who
+  # shares a group with the owner in which both are `active` or `pending_add`. Checked on every
+  # read, so losing the friendship and the last shared group cuts access at once.
+  defp readable?(me, %{purpose: "avatar", owner: me}), do: true
+
+  defp readable?(me, %{purpose: "avatar", owner: owner}) do
+    (Social.friends?(me, owner) and not Social.blocked_between?(me, owner)) or
+      share_group?(me, owner)
+  end
+
   # `icon`: current `active` and `pending_add` members only (a removed member loses it at once).
   defp readable?(me, %{purpose: "icon"} = b), do: current_member?(b.conversation_id, me)
 
@@ -522,6 +576,17 @@ defmodule RisiMe.Blobs do
         from r in "blob_readers",
           where: r.blob_id == type(^b.id, :binary_id) and r.user_id == type(^me, :binary_id)
       )
+  end
+
+  defp share_group?(a, b) do
+    Repo.exists?(
+      from m1 in Member,
+        join: m2 in Member,
+        on: m2.group_id == m1.group_id,
+        where:
+          m1.user_id == type(^a, :binary_id) and m2.user_id == type(^b, :binary_id) and
+            m1.state in ["active", "pending_add"] and m2.state in ["active", "pending_add"]
+    )
   end
 
   defp current_member?(conv, me),

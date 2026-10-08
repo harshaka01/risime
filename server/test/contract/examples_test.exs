@@ -92,8 +92,10 @@ defmodule RisiMe.ContractExamplesTest do
                     history_request_reply.json history_respond.json
                     history_respond_stale.json history_share_payload.json)
 
-  # v1.17 (profile photos, §18): parse-only placeholders until the server implements it.
-  @pending_v1_17 ~w(blob_upload_avatar_reply.json event_message_silent.json msg_send_silent.json
+  # v1.17 (profile photos, §18): checked in the "v1.17" describe below; the behaviour in
+  # test/risime_web/controllers/profile_photos_v117_test.exs. The `profile_photo` envelopes
+  # travel inside MLS: they are checked against the §18.1 strict validation instead.
+  @checked_v1_17 ~w(blob_upload_avatar_reply.json event_message_silent.json msg_send_silent.json
                     profile_photo_payload.json profile_photo_payload_bad.json
                     profile_photo_payload_removed.json)
 
@@ -151,7 +153,7 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_13 ++
         @checked_v1_14 ++
         @checked_v1_15 ++
-        @pending_v1_17 ++
+        @checked_v1_17 ++
         @pending_v1_18 ++
         @pending_v1_19
 
@@ -2393,6 +2395,101 @@ defmodule RisiMe.ContractExamplesTest do
                Enum.map(ex["ice_servers"], & &1["urls"])
 
       assert hd(tl(reply["ice_servers"]))["username"] =~ ~r/^\d+:[0-9a-f]{16}$/
+    end
+  end
+
+  describe "v1.17" do
+    setup :with_attestation_key
+
+    # The §18.1 strict validation (what every client applies; the server never sees it).
+    defp valid_profile_photo?(%{"v" => 1, "type" => "profile_photo", "ver" => ver} = e)
+         when is_integer(ver) and ver >= 1 do
+      now_ms = System.os_time(:millisecond)
+
+      ver <= now_ms + 86_400_000 * 365 * 2 and
+        case e["photo"] do
+          nil ->
+            Map.has_key?(e, "photo")
+
+          %{} = p ->
+            valid_image_ref?(p) and p["blob"]["size"] <= 512 * 1024 and
+              p["mime"] == "image/jpeg" and p["w"] == p["h"] and p["w"] in 64..512
+
+          _ ->
+            false
+        end and byte_size(Jason.encode!(e)) < 1024
+    end
+
+    defp valid_profile_photo?(_), do: false
+
+    test "profile_photo envelopes follow §18.1; the bad one (1024 px) is dropped" do
+      assert valid_profile_photo?(example("profile_photo_payload.json"))
+      assert valid_profile_photo?(example("profile_photo_payload_removed.json"))
+      refute valid_profile_photo?(example("profile_photo_payload_bad.json"))
+    end
+
+    test "blob_upload_avatar_reply.json is what POST /blobs?purpose=avatar returns", %{a: a} do
+      dir = Path.join(System.tmp_dir!(), "risime-ex-v117-#{System.unique_integer([:positive])}")
+      prev = Application.get_env(:risime, :blob_dir)
+      Application.put_env(:risime, :blob_dir, dir)
+
+      on_exit(fn ->
+        Application.put_env(:risime, :blob_dir, prev)
+        File.rm_rf(dir)
+      end)
+
+      ex = example("blob_upload_avatar_reply.json")
+      bytes = :crypto.strong_rand_bytes(ex["size"])
+
+      {201, reply} =
+        RisiMe.GroupHelpers.api_raw(
+          "/api/v1/blobs?purpose=avatar&client_blob_id=#{Ecto.UUID.generate()}",
+          a.token,
+          bytes
+        )
+
+      assert keys(reply) == keys(ex)
+      assert_same_shape(reply, ex)
+      assert reply["expires_at"] == nil and ex["expires_at"] == nil
+      assert reply["size"] == ex["size"]
+    end
+
+    test "msg_send_silent.json is accepted; the event is event_message_silent.json", %{
+      a: a,
+      b: b
+    } do
+      a_dev = RisiMe.MLSHelpers.mls_device!(a)
+      _ = RisiMe.MLSHelpers.mls_device!(b)
+      e2ee_group!(a, b)
+      {:ok, sock} = connect(UserSocket, %{"token" => a.token, "device_id" => a_dev})
+      {:ok, _, chan} = subscribe_and_join(sock, InboxChannel, "inbox:" <> a.user.id, %{})
+
+      ex = example("msg_send_silent.json")
+      assert ex["silent"] == true
+      ref = push(chan, "msg:send", %{ex | "to" => b.user.id})
+      assert_reply ref, :ok, %{message_id: mid}
+
+      topic = "inbox:" <> a.user.id
+
+      assert_receive %Phoenix.Socket.Message{
+        topic: ^topic,
+        event: "event",
+        payload: %{kind: "message", event_id: ^mid} = event
+      }
+
+      ev = example("event_message_silent.json")
+      assert keys(wire(event)) == keys(ev)
+      assert_same_shape(wire(event)["data"], ev["data"])
+      assert event.data["silent"] == true
+
+      # Join replays it with the flag.
+      {:ok, sock_b} = connect(UserSocket, %{"token" => b.token})
+
+      {:ok, %{events: events}, _} =
+        subscribe_and_join(sock_b, InboxChannel, "inbox:" <> b.user.id, %{})
+
+      assert [replayed] = Enum.filter(events, &(&1.event_id == mid))
+      assert_same_shape(wire(replayed)["data"], ev["data"])
     end
   end
 
