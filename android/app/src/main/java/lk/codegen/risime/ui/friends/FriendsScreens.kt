@@ -108,7 +108,18 @@ fun RequestsTab(vm: FriendsViewModel, onAddFriend: () -> Unit) {
 private fun Header(t: String) = SectionHeader(t, Modifier.padding(start = Spacing.lg, top = Spacing.lg, bottom = Spacing.xs))
 
 @Composable
-private fun IncomingRow(r: FriendRequest, vm: FriendsViewModel, ask: (String, () -> Unit) -> Unit) {
+private fun IncomingRow(r: FriendRequest, vm: FriendsViewModel, ask: (String, () -> Unit) -> Unit) =
+    IncomingRowContent(r, onAccept = vm::accept, onDecline = vm::decline, onBlock = vm::block, ask = ask)
+
+/** An incoming request; §21.4 adds "Phone not verified" for a self-asserted phone. */
+@Composable
+internal fun IncomingRowContent(
+    r: FriendRequest,
+    onAccept: (String) -> Unit,
+    onDecline: (String) -> Unit,
+    onBlock: (String) -> Unit,
+    ask: (String, () -> Unit) -> Unit,
+) {
     val name = r.displayName ?: r.phone
     ListRow(
         title = name,
@@ -116,11 +127,12 @@ private fun IncomingRow(r: FriendRequest, vm: FriendsViewModel, ask: (String, ()
         leading = { InitialsAvatar(name) },
         meta = isoMs(r.insertedAt)?.let(::shortStamp),
     )
+    if (!r.phoneConfirmed) lk.codegen.risime.ui.auth.PhoneNotVerifiedNote(Modifier.padding(start = Spacing.lg))
     Row(Modifier.padding(start = Spacing.lg), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        Button(onClick = { vm.accept(r.id) }) { Text("Accept") }
-        OutlinedButton(onClick = { ask("Decline $name's request?") { vm.decline(r.id) } }) { Text("Decline") }
+        Button(onClick = { onAccept(r.id) }) { Text("Accept") }
+        OutlinedButton(onClick = { ask("Decline $name's request?") { onDecline(r.id) } }) { Text("Decline") }
         r.userId?.let { uid ->
-            TextButton(onClick = { ask("Block $name? You won't get messages or requests from them.") { vm.block(uid) } }) {
+            TextButton(onClick = { ask("Block $name? You won't get messages or requests from them.") { onBlock(uid) } }) {
                 Text("Block", color = MaterialTheme.colorScheme.error)
             }
         }

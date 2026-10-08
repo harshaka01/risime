@@ -117,6 +117,13 @@ defmodule RisiMe.ContractExamplesTest do
                     group_call_ended_payload.json group_call_started_payload.json
                     livekit_token_claims.json mls_group_group_calls_ready.json)
 
+  # v1.20 (open sign-up, §21): checked in the "v1.20" describe below; the behaviour in
+  # test/risime_web/controllers/open_signup_test.exs.
+  @checked_v1_20 ~w(auth_config_v120.json signup_request.json signup_reply.json
+                    error_signup_required.json error_signup_closed.json error_phone_taken.json
+                    error_signup_rate_limited.json error_bad_request.json friends_reply_v120.json
+                    signal_friend_v120.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -125,6 +132,14 @@ defmodule RisiMe.ContractExamplesTest do
   # What actually goes over the wire.
   defp wire(term), do: term |> Jason.encode!() |> Jason.decode!()
   defp keys(map), do: map |> Map.keys() |> Enum.sort()
+
+  # v1.20 added `phone_confirmed` (absent = true) to User, Friend, incoming Request and the
+  # friend signal: older examples are compared without it (checked in the "v1.20" describe).
+  defp pre120(map) when is_map(map),
+    do: map |> Map.delete("phone_confirmed") |> Map.new(fn {k, v} -> {k, pre120(v)} end)
+
+  defp pre120(list) when is_list(list), do: Enum.map(list, &pre120/1)
+  defp pre120(other), do: other
 
   # Same keys, and every value has the same "kind" (uuid / timeuuid / timestamp / type).
   defp assert_same_shape(ours, theirs) when is_map(ours) and is_map(theirs) do
@@ -159,7 +174,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_15 ++
         @checked_v1_17 ++
         @checked_v1_18 ++
-        @checked_v1_19
+        @checked_v1_19 ++
+        @checked_v1_20
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -179,8 +195,10 @@ defmodule RisiMe.ContractExamplesTest do
     ex = example("auth_verify_reply.json")
     assert is_binary(ex["token"])
     # v1.6 added `vouched_by`; examples written before it omit it (absent = null).
-    assert ApiJSON.user(atomize(ex["user"])) |> wire() |> Map.delete("vouched_by") == ex["user"]
-    ours = wire(%{token: a.token, user: ApiJSON.user(a.user)})
+    assert ApiJSON.user(atomize(ex["user"])) |> wire() |> pre120() |> Map.delete("vouched_by") ==
+             ex["user"]
+
+    ours = pre120(wire(%{token: a.token, user: ApiJSON.user(a.user)}))
     assert ours["user"]["vouched_by"] == nil
     assert_same_shape(update_in(ours["user"], &Map.delete(&1, "vouched_by")), ex)
   end
@@ -377,7 +395,7 @@ defmodule RisiMe.ContractExamplesTest do
   test "auth_config.json is what GET /auth/config returns with both modes" do
     # The v1.3 example predates `phone_verification` (v1.4), which clients may ignore.
     {200, ours} = get_json("/api/v1/auth/config")
-    assert Map.delete(ours, "phone_verification") == example("auth_config.json")
+    assert Map.drop(ours, ["phone_verification", "signup"]) == example("auth_config.json")
   end
 
   test "error_invalid_token.json, error_not_allowlisted.json, error_identity_conflict.json" do
@@ -453,14 +471,19 @@ defmodule RisiMe.ContractExamplesTest do
 
     test "auth_config_v14.json" do
       Application.put_env(:risime, :dev_local_auth, false)
-      assert get_json("/api/v1/auth/config") == {200, example("auth_config_v14.json")}
+      {200, ours} = get_json("/api/v1/auth/config")
+      # v1.20 added `signup` (absent = invite): checked in auth_config_v120.json.
+      assert Map.delete(ours, "signup") == example("auth_config_v14.json")
     end
 
     test "me_reply_unverified.json and error_phone_unverified.json", %{token: t} do
       ex = example("me_reply_unverified.json")
-      assert ApiJSON.user(atomize(ex["user"])) |> wire() |> Map.delete("vouched_by") == ex["user"]
+
+      assert ApiJSON.user(atomize(ex["user"])) |> wire() |> pre120() |> Map.delete("vouched_by") ==
+               ex["user"]
+
       {200, ours} = get_json("/api/v1/me", t)
-      assert_same_shape(update_in(ours["user"], &Map.delete(&1, "vouched_by")), ex)
+      assert_same_shape(update_in(pre120(ours)["user"], &Map.delete(&1, "vouched_by")), ex)
       assert ours["user"]["phone_verified"] == false
 
       assert get_json("/api/v1/contacts", t) == {403, example("error_phone_unverified.json")}
@@ -571,6 +594,7 @@ defmodule RisiMe.ContractExamplesTest do
                })
 
       {200, ours} = req_json(:get, "/api/v1/friends", a.token)
+      ours = pre120(ours)
       assert keys(ours) == keys(ex)
       # v1.9 added `group_ready` (absent = false in v1.6 examples): checked in friends_reply_v19.
       ours = update_in(ours["friends"], fn fs -> Enum.map(fs, &Map.delete(&1, "group_ready")) end)
@@ -580,7 +604,7 @@ defmodule RisiMe.ContractExamplesTest do
 
       [%{"id" => id}] = ours["incoming"]
       {200, accepted} = req_json(:post, "/api/v1/friends/requests/#{id}/accept", a.token)
-      assert_same_shape(accepted, example("friend_accept_reply.json"))
+      assert_same_shape(pre120(accepted), example("friend_accept_reply.json"))
     end
 
     test "signal_friend.json", %{a: a} do
@@ -588,7 +612,7 @@ defmodule RisiMe.ContractExamplesTest do
       Phoenix.PubSub.subscribe(RisiMe.PubSub, Messaging.topic(a.user.id))
       {202, _} = req_json(:post, "/api/v1/friends/requests", d.token, %{"phone" => a.user.phone})
       assert_receive {:signal, %{kind: "friend"} = signal}
-      assert_same_shape(wire(signal), example("signal_friend.json"))
+      assert_same_shape(pre120(wire(signal)), example("signal_friend.json"))
     end
 
     test "error_not_friends.json", %{chan_a: chan_a} do
@@ -620,7 +644,7 @@ defmodule RisiMe.ContractExamplesTest do
 
       ex = example("user_vouched.json")
       # The example predates nothing else but omits phone_verified (absent = true).
-      assert_same_shape(update_in(ours["user"], &Map.delete(&1, "phone_verified")), ex)
+      assert_same_shape(update_in(pre120(ours)["user"], &Map.delete(&1, "phone_verified")), ex)
       assert ours["user"]["company"] == ""
     end
   end
@@ -970,6 +994,7 @@ defmodule RisiMe.ContractExamplesTest do
 
       # friends_reply_v19.json
       {200, friends} = g_api(:get, "/api/v1/friends", a.token)
+      friends = pre120(friends)
       ex = example("friends_reply_v19.json")
       assert keys(friends) == keys(ex)
       for f <- friends["friends"], do: assert_same_shape(f, hd(ex["friends"]))
@@ -2854,4 +2879,104 @@ defmodule RisiMe.ContractExamplesTest do
   end
 
   defp atomize(map), do: Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)
+
+  ## v1.20 (§21): open sign-up.
+
+  describe "v1.20" do
+    setup do
+      previous = Application.get_env(:risime, :signup)
+
+      Application.put_env(:risime, :signup,
+        open: true,
+        per_ip_hour: 10_000,
+        per_sub_day: 10_000,
+        global_per_day: 10_000
+      )
+
+      RisiMe.Auth.clear_cache()
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:risime, :signup, previous),
+          else: Application.delete_env(:risime, :signup)
+      end)
+    end
+
+    defp signup_token,
+      do:
+        RisiMe.OIDCHelpers.access_token(
+          "v120-#{System.unique_integer([:positive])}@example.org",
+          %{
+            "sub" => Ecto.UUID.generate(),
+            "name" => "Test User N"
+          }
+        )
+
+    test "auth_config_v120.json" do
+      Application.put_env(:risime, :dev_local_auth, false)
+      on_exit(fn -> Application.put_env(:risime, :dev_local_auth, true) end)
+      assert get_json("/api/v1/auth/config") == {200, example("auth_config_v120.json")}
+    end
+
+    test "signup_request.json, signup_reply.json, error_signup_required.json" do
+      token = signup_token()
+      assert get_json("/api/v1/me", token) == {403, example("error_signup_required.json")}
+
+      body = %{example("signup_request.json") | "phone" => unique_phone()}
+      {200, ours} = req_json(:post, "/api/v1/auth/signup", token, body)
+      ex = example("signup_reply.json")
+      assert_same_shape(ours, ex)
+      assert ours["user"]["display_name"] == ex["user"]["display_name"]
+
+      assert Map.take(ours["user"], ~w(company phone_verified phone_confirmed vouched_by)) ==
+               Map.take(ex["user"], ~w(company phone_verified phone_confirmed vouched_by))
+    end
+
+    test "error_signup_closed.json, error_phone_taken.json, error_bad_request.json, error_signup_rate_limited.json",
+         %{a: a} do
+      body = example("signup_request.json")
+
+      assert req_json(:post, "/api/v1/auth/signup", signup_token(), %{
+               body
+               | "phone" => a.user.phone
+             }) ==
+               {409, example("error_phone_taken.json")}
+
+      assert req_json(:post, "/api/v1/auth/signup", signup_token(), %{body | "phone" => "x"}) ==
+               {400, example("error_bad_request.json")}
+
+      Application.put_env(:risime, :signup, open: true, per_sub_day: 0)
+
+      assert req_json(:post, "/api/v1/auth/signup", signup_token(), body) ==
+               {429, example("error_signup_rate_limited.json")}
+
+      Application.put_env(:risime, :signup, open: false)
+
+      assert req_json(:post, "/api/v1/auth/signup", signup_token(), body) ==
+               {403, example("error_signup_closed.json")}
+    end
+
+    test "friends_reply_v120.json and signal_friend_v120.json", %{a: a} do
+      token = signup_token()
+      body = %{example("signup_request.json") | "phone" => unique_phone()}
+      {200, %{"user" => n}} = req_json(:post, "/api/v1/auth/signup", token, body)
+
+      Phoenix.PubSub.subscribe(RisiMe.PubSub, Messaging.topic(a.user.id))
+      {202, _} = req_json(:post, "/api/v1/friends/requests", token, %{"phone" => a.user.phone})
+      assert_receive {:signal, %{kind: "friend"} = signal}
+      ex_signal = example("signal_friend_v120.json")
+      assert_same_shape(wire(signal), ex_signal)
+      assert wire(signal)["data"]["user"]["phone_confirmed"] == false
+      assert wire(signal)["data"]["user"]["user_id"] == n["id"]
+
+      {200, ours} = req_json(:get, "/api/v1/friends", a.token)
+      ex = example("friends_reply_v120.json")
+      assert keys(ours) == keys(ex)
+      for f <- ours["friends"], do: assert_same_shape(f, hd(ex["friends"]))
+      assert [incoming] = ours["incoming"]
+      assert_same_shape(incoming, hd(ex["incoming"]))
+      assert incoming["phone_confirmed"] == false
+      assert Enum.all?(ours["friends"], &(&1["phone_confirmed"] == true))
+    end
+  end
 end

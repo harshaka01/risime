@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.19 (Release 0.3)
+# RisiMe Wire Protocol — v1.20 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -192,7 +192,7 @@ Decisions 013 and 014. This section overrides §1.1, §1.2 and §1.5 where they 
   - `401 invalid_token`: a missing, bad, expired or foreign token. Also returned for opaque
     tokens when `DEV_LOCAL_AUTH` is off.
   - `403 not_allowlisted`: a valid token, but the email isn't on the allowlist, or the user's
-    phone was removed from it.
+    phone was removed from it. (v1.20: `403 signup_required` instead while open sign-up is on, §21.2.)
   - `409 identity_conflict`: the allowlisted phone is bound to another Keycloak account. An admin
     must re-bind it.
 - **Mapping** runs on **every** authenticated request and socket connect (cached per token until
@@ -315,7 +315,8 @@ FCM `collapse_key` is `inbox`, and the TTL is 1 h.
 Decision 029. This section overrides §1.4 (contacts) and the §6.1 step-1 membership check where they differ.
 
 ### 9.0 Principles
-- **Invite-only sign-up**, with the admin allowlist kept as a second path.
+- **Invite-only sign-up**, with the admin allowlist kept as a second path. (v1.20: optional open
+  sign-up behind a server switch, §21.)
 - **Privacy:** a user's friends, requests and blocks are visible only to them.
   - **No response reveals whether a phone number or email belongs to a member.** Invites and
     friend requests get identical replies and do the same work on every path; the per-user rate
@@ -4203,7 +4204,140 @@ None new. LiveKit holds rooms and participants in memory only (gone when a room 
   removed mid-call loses audio at once; a relay-only participant through coturn (once the ports are
   open); a full 8-person video room with egress measured on spark2.
 
+## 21. Open sign-up (v1.20)
+Decision 058. This section extends §6.1 (mapping), §7.1 (`phone_verified`) and §9 (membership and
+friends) where it says so; everything else there is unchanged.
+
+### 21.0 Principles
+- **A server switch.** `OPEN_SIGNUP=true` (server runtime config; default `false`) lets anyone
+  with a Keycloak account and a **verified email** (§6.0) create a RisiMe account. Turning it off
+  stops new sign-ups only: existing accounts keep working.
+- **Allowlist and invites are unchanged** and always take priority: an invite still binds its
+  phone and befriends the inviter (§9.1).
+- **A self-asserted phone is never trusted for matching.** Until the user verifies it by SMS
+  (§7), nobody reaches them by typing that number, and they don't receive what was sent to it.
+- **Messaging still needs an accepted friend request** (§9.0, §9.3).
+
+### 21.1 `GET /auth/config`
+Gains **`"signup": "open" | "invite"`**. `open` exactly while `OPEN_SIGNUP` is on. Absent (pre-v1.20
+servers) means `invite`. Clients only word their screens with it; the server enforces the switch.
+
+### 21.2 Mapping and membership (extends §6.1 and §9.1)
+- The mapping order is unchanged: bound `sub` → allowlist by email → pending invite by email.
+- When none matches: **`403 signup_required`** while the switch is on, `403 not_allowlisted`
+  while it is off. A bound user who isn't a member (disabled, or allowlist entry removed) still
+  gets `not_allowlisted`.
+- `signup_required` follows the §7.1 check order where `not_allowlisted` does (it is a `403` of
+  the mapping step), applies to the socket upgrade (refused like any `403`, §6.2) and isn't
+  cached.
+- **Membership** (§9.1) gains: the user joined by open sign-up and hasn't been disabled by an
+  admin.
+- `auth:refresh` (§6.2) with a token that maps to no user answers `identity_mismatch`.
+
+### 21.3 `POST /api/v1/auth/signup`
+- **Auth:** `Authorization: Bearer <Keycloak access token>`, checked by §6.0 (so `email` must be
+  present and `email_verified == true`). It isn't mapped first and isn't behind the phone gate.
+  Dev tokens are `401 invalid_token`.
+- **Request:** `{"phone": "+94771234567", "display_name": "Kamal Perera"}`
+  - `phone`: E.164 (§0); clients normalise first.
+  - `display_name`: trimmed, 1–64 characters. Clients prefill it from the token's `name`.
+- **`200 {"user": User}`**: a new user bound to the token's `sub`, with that `phone`, the token's
+  `email`, `display_name`, `company: ""`, `vouched_by: null`, **`phone_confirmed: false`**, and
+  `phone_verified` per §7.1 (`true` while `phone_verification` is `off`).
+- **Idempotent:** if the token already maps to a user (an earlier sign-up, the allowlist or an
+  invite), the reply is `200 {"user": User}` for that user, the body is ignored and no limit is
+  counted.
+- **Errors, in this order:**
+  1. `403 signup_closed`: the switch is off.
+  2. `401 invalid_token`: no token, a dev token, or one failing §6.0 (including an unverified
+     email).
+  3. `403 not_allowlisted` / `409 identity_conflict`: as from mapping (§6.1).
+  4. `429 rate_limited` with `Retry-After` (§21.5).
+  5. `400 bad_request`: `phone` isn't E.164, or `display_name` isn't 1–64 characters, or either
+     is missing or not a string.
+  6. `409 phone_taken`: the phone belongs to any user, is on the allowlist, or has a pending,
+     unexpired invite. The message doesn't say which.
+
+  The `signup_closed`, `phone_taken` and `rate_limited` messages may be shown verbatim.
+
+### 21.4 `phone_confirmed`
+- **New field `"phone_confirmed": true | false`** on `User`, `Friend` and incoming `Request`
+  (§9.2), and on the `user` object of the `friend` signal (§9.3). **Absent means `true`.**
+- It is `false` exactly while the user joined by open sign-up and their current phone isn't
+  SMS-verified (§7). Allowlisted and invited users' phones are vouched for and are `true`.
+- **`phone_verified` keeps its §7.1 meaning** (the phone gate). An open sign-up user has
+  `phone_verified: true` while `phone_verification` is `off`; once it is `required` they verify by
+  SMS like anyone else, which makes both fields `true`.
+- **Clients** show a "Phone not verified" note next to the phone wherever a person with
+  `phone_confirmed: false` is shown (incoming request, friend, profile, own Settings).
+
+### 21.5 Phone matching (extends §9.1 and §9.2)
+While a user's `phone_confirmed` is `false`, that phone **isn't matched to them**:
+- A friend request (or an invite to an existing member) addressed to the phone is stored against
+  the phone as for an unregistered number, with no signal. It reaches whoever later holds that
+  phone confirmed (including this user after SMS verification).
+- They don't see, accept or decline requests addressed to their phone (`GET /friends` `incoming`
+  leaves them out; accept and decline answer `404 not_found`).
+- **Crossing requests don't auto-accept** when the requester's phone is unconfirmed: their request
+  is stored and delivered as a normal incoming request, which the other side accepts or not.
+- Their own outgoing requests work as in §9.2; the recipient's incoming `Request` carries
+  `phone_confirmed: false`.
+- `Contact.registered` (§9.2) is unchanged: for an accepted friend it means "can be messaged".
+
+### 21.6 Limits
+- **Per client IP:** 5 sign-up attempts per hour.
+- **Per Keycloak `sub`:** 3 attempts per 24 h.
+- Both are counted on every request that reaches step 4 of §21.3, refused or not; a request
+  refused by a limit doesn't extend it.
+- **Global:** 200 successful open sign-ups per 24 h (server config `SIGNUP_GLOBAL_PER_DAY`, counted
+  in Postgres).
+- Every `429` carries `Retry-After`. Invite and friend-request limits (§9) are unchanged.
+
+### 21.7 Logs and privacy
+- The auth log (decision 024) gains the kinds `signup_refused` (`400`, `403 signup_closed`,
+  `409 phone_taken`) and `signup_rate_limited`. `signup_required` isn't an auth failure: it is
+  every new user's first answer.
+- When sign-in is refused with `not_allowlisted` or `signup_required`, the server log gets one
+  line with the **email's domain** and the first 12 hex digits of **HMAC-SHA256(server secret,
+  lowercased email)**, at most once per email per 10 minutes. The plain email never appears in a
+  log.
+
+### 21.8 Clients
+- **`403 signup_required`** after sign-in (`GET /me`, §6.1): show **"Create your RisiMe
+  account"** with the display name (prefilled from the token's `name`) and the phone (country
+  code, default `+94`, and number; normalised to E.164). Submit `POST /auth/signup`; on `200`
+  continue as after a normal sign-in with the returned user.
+  - Errors: `phone_taken` and `bad_request` under the field; `rate_limited` with the wait;
+    `signup_closed` → the not-allowlisted screen.
+  - The screen always offers "Sign in with another account" and "Sign out", as the blocked screen
+    does.
+- **Old apps** (≤ v1.19) don't know `signup_required` and show their generic refusal; they must
+  update to sign up. Their allowlist and invite sign-ins are unchanged.
+
+### 21.9 Test coverage (all gates)
+- Server: config `signup`; mapping with the switch on and off; sign-up success, idempotency,
+  every error, each limit, unverified email refused; `phone_confirmed` in `/me`, friends and the
+  signal; matching rules (no delivery, no crossing auto-accept, no incoming list); a friend
+  request from a new user accepted and then a message; the auth-log kinds; the privacy-safe
+  diagnostic; every new example.
+- Android: the new examples parse; the sign-up screen (long names, 2× font, dark mode); the
+  "Phone not verified" note; `signup_required` handling.
+- Examples: `auth_config_v120.json`, `signup_request.json`, `signup_reply.json`,
+  `error_signup_required.json`, `error_signup_closed.json`, `error_phone_taken.json`,
+  `error_signup_rate_limited.json`, `error_bad_request.json`, `friends_reply_v120.json`,
+  `signal_friend_v120.json`.
+
 ## Changelog
+- **v1.20** (2026-10-08): open sign-up behind the server switch `OPEN_SIGNUP` (§21, decision 058).
+  `GET /auth/config` `signup: "open" | "invite"`; `403 signup_required` when nothing maps and the
+  switch is on (else `not_allowlisted`); `POST /auth/signup` `{"phone", "display_name"}` →
+  `200 {"user"}`, idempotent, with `403 signup_closed`, `400 bad_request`, `409 phone_taken`
+  (user, allowlist or pending invite) and `429 rate_limited` (5/h per IP, 3/24 h per `sub`, 200/24 h
+  global); membership for open sign-ups; `phone_confirmed` on User, Friend, incoming Request and
+  the `friend` signal (absent = true); an unconfirmed phone is never matched (no delivery, no
+  incoming list, no crossing auto-accept); `phone_verified` keeps its §7.1 meaning; auth-log kinds
+  `signup_refused`/`signup_rate_limited`; the email domain plus a salted hash for refused
+  sign-ins. Additive; old apps show a generic refusal for `signup_required`.
 - **v1.19** (2026-10-08): group calls with LiveKit, voice and video (§20, decision 056), reviewed
   by server, android and crypto; replaces the §16.15 outline. The `group_calls` capability with
   `group_calls_ready`/`missing_group_calls`; `POST /api/v1/calls/rooms` (`start` creates the LiveKit

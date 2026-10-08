@@ -138,8 +138,12 @@ defmodule RisiMe.Social do
     {:ok, signals} =
       Repo.transaction(fn ->
         lock_pair(from.phone, phone)
-        target = Repo.get_by(User, phone: phone)
-        crossing = target && pending_request(target.id, from.phone)
+        # v1.20 §21.5: an unconfirmed (self-asserted) phone is never matched by phone, and an
+        # unconfirmed requester never auto-accepts a crossing request sent to their phone.
+        target = matched_user(phone)
+
+        crossing =
+          target && Accounts.phone_confirmed?(from) && pending_request(target.id, from.phone)
 
         cond do
           phone == from.phone ->
@@ -164,6 +168,14 @@ defmodule RisiMe.Social do
 
     for {user_id, sig} <- signals, do: Messaging.signal(user_id, sig)
     :ok
+  end
+
+  # The user who holds `phone` for matching: none while their phone is unconfirmed (§21.5).
+  defp matched_user(phone) do
+    case Repo.get_by(User, phone: phone) do
+      %User{} = user -> if Accounts.phone_confirmed?(user), do: user
+      nil -> nil
+    end
   end
 
   # A pending or declined request for the same pair is a silent no-op (partial unique index).
@@ -237,7 +249,8 @@ defmodule RisiMe.Social do
           "user_id" => other.id,
           "phone" => other.phone,
           "display_name" => other.display_name,
-          "company" => other.company
+          "company" => other.company,
+          "phone_confirmed" => Accounts.phone_confirmed?(other)
         }
       }
     }
@@ -270,20 +283,23 @@ defmodule RisiMe.Social do
     end
   end
 
+  # §21.5: requests addressed to an unconfirmed phone aren't the holder's.
   defp incoming_request(me, id) do
     now = DateTime.utc_now()
 
-    Repo.one(
-      from r in FriendRequest,
-        where:
-          r.id == ^id and r.to_phone == ^me.phone and r.status == "pending" and
-            r.expires_at > ^now
-    )
+    Accounts.phone_confirmed?(me) &&
+      Repo.one(
+        from r in FriendRequest,
+          where:
+            r.id == ^id and r.to_phone == ^me.phone and r.status == "pending" and
+              r.expires_at > ^now
+      )
   end
 
   @doc "`POST /friends/requests/{id}/decline`: silent to the requester."
   def decline(%User{} = me, id) do
-    with {:ok, id} <- Ecto.UUID.cast(id),
+    with true <- Accounts.phone_confirmed?(me),
+         {:ok, id} <- Ecto.UUID.cast(id),
          {1, _} <-
            Repo.update_all(
              from(r in FriendRequest,
@@ -414,20 +430,7 @@ defmodule RisiMe.Social do
       end)
 
     incoming =
-      Repo.all(
-        from r in FriendRequest,
-          join: u in User,
-          on: u.id == r.from_user_id,
-          left_join: bl in "blocks",
-          on:
-            (bl.blocker_id == type(^me.id, :binary_id) and bl.blocked_id == u.id) or
-              (bl.blocker_id == u.id and bl.blocked_id == type(^me.id, :binary_id)),
-          where:
-            r.to_phone == ^me.phone and r.status == "pending" and r.expires_at > ^now and
-              is_nil(bl.blocker_id),
-          order_by: [desc: r.inserted_at],
-          select: {r, u}
-      )
+      if(Accounts.phone_confirmed?(me), do: incoming_rows(me, now), else: [])
       |> Enum.map(fn {r, u} ->
         %{
           id: r.id,
@@ -435,7 +438,8 @@ defmodule RisiMe.Social do
           user_id: u.id,
           display_name: u.display_name,
           company: u.company,
-          inserted_at: Messaging.iso(r.inserted_at)
+          inserted_at: Messaging.iso(r.inserted_at),
+          phone_confirmed: Accounts.phone_confirmed?(u)
         }
       end)
 
@@ -472,6 +476,23 @@ defmodule RisiMe.Social do
     %{friends: friends, incoming: incoming, outgoing: outgoing, blocked: blocked}
   end
 
+  defp incoming_rows(me, now) do
+    Repo.all(
+      from r in FriendRequest,
+        join: u in User,
+        on: u.id == r.from_user_id,
+        left_join: bl in "blocks",
+        on:
+          (bl.blocker_id == type(^me.id, :binary_id) and bl.blocked_id == u.id) or
+            (bl.blocker_id == u.id and bl.blocked_id == type(^me.id, :binary_id)),
+        where:
+          r.to_phone == ^me.phone and r.status == "pending" and r.expires_at > ^now and
+            is_nil(bl.blocker_id),
+        order_by: [desc: r.inserted_at],
+        select: {r, u}
+    )
+  end
+
   @doc "`Friend` JSON."
   def friend_json(%User{} = u, since) do
     %{
@@ -480,7 +501,8 @@ defmodule RisiMe.Social do
       display_name: u.display_name,
       company: u.company,
       vouched_by: vouched_by(u),
-      since: Messaging.iso(since)
+      since: Messaging.iso(since),
+      phone_confirmed: Accounts.phone_confirmed?(u)
     }
   end
 

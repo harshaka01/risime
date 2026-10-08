@@ -40,7 +40,10 @@ defmodule RisiMeWeb.ApiError do
     storage_full: "The server is low on storage; try again later",
     calls_unavailable: "Calls aren't available on this server yet",
     call_ended: "This call has ended",
-    call_full: "This call is full"
+    call_full: "This call is full",
+    signup_required: "Create your RisiMe account to continue",
+    signup_closed: "RisiMe sign-up is by invitation only right now",
+    phone_taken: "This phone number can't be used for a new RisiMe account"
   }
 
   @doc """

@@ -20,7 +20,7 @@ defmodule RisiMeWeb.ApiTest do
     assert %{"token" => token, "user" => user} = json_response(conn2, 200)
 
     assert Map.keys(user) |> Enum.sort() ==
-             ~w(company display_name id phone phone_verified vouched_by)
+             ~w(company display_name id phone phone_confirmed phone_verified vouched_by)
 
     assert user["phone"] == entry.phone
 
@@ -70,7 +70,8 @@ defmodule RisiMeWeb.ApiTest do
              "display_name" => "Shenika Herath",
              "company" => "CodeGen",
              "phone_verified" => true,
-             "vouched_by" => nil
+             "vouched_by" => nil,
+             "phone_confirmed" => true
            }
 
     db_user = RisiMe.Repo.get_by!(RisiMe.Accounts.User, phone: entry.phone)

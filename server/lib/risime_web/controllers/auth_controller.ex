@@ -16,7 +16,10 @@ defmodule RisiMeWeb.AuthController do
         do: %{modes: modes, issuer: Config.oidc(:issuer), client_id: Config.oidc(:client_id)},
         else: %{modes: modes}
 
-    body = Map.put(body, :phone_verification, phone)
+    body =
+      body
+      |> Map.put(:phone_verification, phone)
+      |> Map.put(:signup, if(Accounts.open_signup?(), do: "open", else: "invite"))
 
     json(conn, body)
   end
@@ -83,6 +86,68 @@ defmodule RisiMeWeb.AuthController do
 
   defp failure(conn, kind),
     do: RisiMe.AuthLog.failure(RisiMeWeb.ClientIP.from_conn(conn), kind, conn.request_path)
+
+  @doc "`POST /auth/signup` (contract v1.20 §21.3)."
+  def signup(conn, params) do
+    alias RisiMe.Auth.{Config, JWT}
+
+    token =
+      case get_req_header(conn, "authorization") do
+        ["Bearer " <> token] -> String.trim(token)
+        _ -> nil
+      end
+
+    cond do
+      not Accounts.open_signup?() ->
+        failure(conn, :signup_refused)
+        ApiError.send_error(conn, 403, :signup_closed)
+
+      not (Config.oidc_enabled?() and JWT.jwt_shape?(token)) ->
+        failure(conn, :invalid_token)
+        ApiError.send_error(conn, 401, :invalid_token)
+
+      true ->
+        case JWT.verify(token) do
+          {:ok, identity} ->
+            signup_result(
+              conn,
+              Accounts.signup(identity, params, RisiMeWeb.ClientIP.from_conn(conn))
+            )
+
+          {:error, _} ->
+            failure(conn, :invalid_token)
+            ApiError.send_error(conn, 401, :invalid_token)
+        end
+    end
+  end
+
+  defp signup_result(conn, {:ok, user}),
+    do: json(conn, %{user: ApiJSON.user(user, Accounts.phone_verified?(user, :jwt))})
+
+  defp signup_result(conn, {:error, {:rate_limited, seconds}}) do
+    failure(conn, :signup_rate_limited)
+    ApiError.send_error(conn, 429, :rate_limited, retry_after: seconds)
+  end
+
+  defp signup_result(conn, {:error, :bad_request}) do
+    failure(conn, :signup_refused)
+    ApiError.send_error(conn, 400, :bad_request)
+  end
+
+  defp signup_result(conn, {:error, :phone_taken}) do
+    failure(conn, :signup_refused)
+    ApiError.send_error(conn, 409, :phone_taken)
+  end
+
+  defp signup_result(conn, {:error, :not_allowlisted}) do
+    failure(conn, :not_allowlisted)
+    ApiError.send_error(conn, 403, :not_allowlisted)
+  end
+
+  defp signup_result(conn, {:error, :identity_conflict}) do
+    failure(conn, :identity_conflict)
+    ApiError.send_error(conn, 409, :identity_conflict)
+  end
 
   # With a JWT this is a no-op: the client ends its Keycloak session itself (§6.1).
   def logout(conn, _params) do

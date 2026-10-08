@@ -51,6 +51,9 @@ class ApiClient(
     /** §6.1: which sign-in modes the server offers. A pre-v1.3 server answers 404. */
     suspend fun authConfig(): ApiResult<AuthConfig> = call<Unit, AuthConfig>("GET", "auth/config", null, auth = false)
 
+    /** §21.3 (v1.20): create an account for the signed-in Keycloak identity (bearer token, not mapped first). */
+    suspend fun signup(req: SignupRequest): ApiResult<MeReply> = call("POST", "auth/signup", req)
+
     /** §7.1: SMS a code to the user's allowlisted phone. */
     suspend fun requestPhoneCode(): ApiResult<PhoneVerifyRequestReply> =
         call("POST", "me/phone/verify/request", JsonObject(emptyMap()))

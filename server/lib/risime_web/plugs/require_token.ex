@@ -2,7 +2,8 @@ defmodule RisiMeWeb.Plugs.RequireToken do
   @moduledoc """
   Authenticates `Authorization: Bearer <token>` (contract v1.3 §6.1) and assigns
   `:current_user` and `:current_auth` (`RisiMe.Auth.auth()`).
-  Errors: 401 `invalid_token`, 403 `not_allowlisted`, 409 `identity_conflict`, then (unless
+  Errors: 401 `invalid_token`, 403 `not_allowlisted` / `signup_required` (v1.20),
+  409 `identity_conflict`, then (unless
   the route is exempt, `phone_gate: false`) 403 `phone_unverified` (contract v1.4).
   """
   import Plug.Conn
@@ -36,6 +37,10 @@ defmodule RisiMeWeb.Plugs.RequireToken do
       {:error, :not_allowlisted} ->
         failure(conn, :not_allowlisted)
         ApiError.send_error(conn, 403, :not_allowlisted)
+
+      # v1.20 §21.2: every new user's first answer while open sign-up is on; not an auth failure.
+      {:error, :signup_required} ->
+        ApiError.send_error(conn, 403, :signup_required)
 
       {:error, :identity_conflict} ->
         failure(conn, :identity_conflict)

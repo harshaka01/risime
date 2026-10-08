@@ -109,6 +109,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
     LaunchedEffect(resumed) { if (resumed && !encrypted) vm.refreshE2ee() }
     // Unknown while loading: assume friend (the server refuses non-friends anyway).
     val isFriend = peer?.friend != false
+    val phoneUnconfirmed by vm.peerPhoneUnconfirmed.collectAsStateWithLifecycle()
     Scaffold(
         topBar = {
             RisiTopBar(
@@ -116,6 +117,7 @@ fun ChatScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 subtitle = when {
                     typing -> TYPING_LABEL
                     else -> connectionLabel(conn)
+                        ?: (if (phoneUnconfirmed) lk.codegen.risime.ui.auth.PHONE_NOT_VERIFIED else null)
                         ?: if (encrypted) "🔒 End-to-end encrypted" else null
                         ?: presenceLabel(presence, System.currentTimeMillis())
                         ?: peer?.vouchedByName?.let { "vouched by $it" }

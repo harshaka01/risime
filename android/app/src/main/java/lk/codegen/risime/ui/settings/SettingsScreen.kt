@@ -150,6 +150,7 @@ private fun ProfileSection(s: SettingsUiState, vm: SettingsViewModel) {
         enabled = !s.busy && s.nameDraft.trim() != user.displayName,
     ) { Text("Save name") }
     InfoRow("Phone", user.phone)
+    if (!user.phoneConfirmed) lk.codegen.risime.ui.auth.PhoneNotVerifiedNote()
     InfoRow("Company", user.company)
 }
 

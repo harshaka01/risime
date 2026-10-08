@@ -13,9 +13,16 @@ defmodule RisiMeWeb.ApiJSON do
       company: user.company,
       phone_verified:
         if(is_nil(phone_verified), do: Map.get(user, :phone_verified, true), else: phone_verified),
-      vouched_by: vouched_by(user)
+      vouched_by: vouched_by(user),
+      phone_confirmed: phone_confirmed(user)
     }
   end
+
+  # v1.20 §21.4: false while an open sign-up's phone is self-asserted.
+  defp phone_confirmed(%RisiMe.Accounts.User{} = user),
+    do: RisiMe.Accounts.phone_confirmed?(user)
+
+  defp phone_confirmed(map), do: Map.get(map, :phone_confirmed, true)
 
   # v1.6 §9.1: the inviter while an invited user's phone isn't SMS-verified.
   defp vouched_by(%RisiMe.Accounts.User{} = user), do: RisiMe.Social.vouched_by(user)

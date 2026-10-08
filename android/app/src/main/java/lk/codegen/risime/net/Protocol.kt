@@ -9,7 +9,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Wire models for contract/v1/PROTOCOL.md. Field names match the contract exactly. */
 
 /** The PROTOCOL.md version this client implements (shown in Settings → About; checked by a test). */
-const val PROTOCOL_VERSION = "1.19"
+const val PROTOCOL_VERSION = "1.20"
 
 val ProtocolJson: Json = Json {
     ignoreUnknownKeys = true // §0: clients must ignore unknown fields
@@ -42,7 +42,13 @@ data class User(
     @SerialName("phone_verified") val phoneVerified: Boolean = true,
     /** §9.1: set while the user joined by invite and isn't SMS-verified. */
     @SerialName("vouched_by") val vouchedBy: VouchedBy? = null,
+    /** §21.4 (v1.20): false while the phone was self-asserted at open sign-up and isn't SMS-verified; absent = true. */
+    @SerialName("phone_confirmed") val phoneConfirmed: Boolean = true,
 )
+
+/** §21.3 (v1.20) `POST /auth/signup`. */
+@Serializable
+data class SignupRequest(val phone: String, @SerialName("display_name") val displayName: String)
 
 @Serializable
 data class VouchedBy(@SerialName("user_id") val userId: String, @SerialName("display_name") val displayName: String)
@@ -315,13 +321,17 @@ data class AuthConfig(
     @SerialName("client_id") val clientId: String? = null,
     /** §7.1 (v1.4): "required" | "off"; absent = off. */
     @SerialName("phone_verification") val phoneVerification: String? = null,
+    /** §21.1 (v1.20): "open" | "invite"; absent = invite. */
+    val signup: String? = null,
 ) {
     val phoneVerificationRequired: Boolean get() = phoneVerification == PHONE_REQUIRED
+    val signupOpen: Boolean get() = signup == SIGNUP_OPEN
 
     companion object {
         const val MODE_OIDC = "oidc"
         const val MODE_DEV = "dev"
         const val PHONE_REQUIRED = "required"
+        const val SIGNUP_OPEN = "open"
     }
 }
 
@@ -338,6 +348,11 @@ object AuthErrors {
     const val NOT_ALLOWLISTED = "not_allowlisted"
     const val IDENTITY_CONFLICT = "identity_conflict"
     const val IDENTITY_MISMATCH = "identity_mismatch"
+
+    // §21 (v1.20) open sign-up
+    const val SIGNUP_REQUIRED = "signup_required"
+    const val SIGNUP_CLOSED = "signup_closed"
+    const val PHONE_TAKEN = "phone_taken"
     const val PHONE_UNVERIFIED = "phone_unverified"
     const val ALREADY_VERIFIED = "already_verified"
     const val SMS_UNAVAILABLE = "sms_unavailable"
@@ -477,6 +492,8 @@ data class Friend(
     val since: String? = null,
     /** §12.1 (v1.9): can be added to a group now; absent = false ("needs to update"). */
     @SerialName("group_ready") val groupReady: Boolean = false,
+    /** §21.4 (v1.20): absent = true. */
+    @SerialName("phone_confirmed") val phoneConfirmed: Boolean = true,
 )
 
 /** Incoming: user_id/display_name/company set. Outgoing: only the phone you entered (never reveals registration). */
@@ -488,6 +505,8 @@ data class FriendRequest(
     @SerialName("display_name") val displayName: String? = null,
     val company: String? = null,
     @SerialName("inserted_at") val insertedAt: String? = null,
+    /** §21.4 (v1.20): incoming requests only; absent = true. */
+    @SerialName("phone_confirmed") val phoneConfirmed: Boolean = true,
 )
 
 @Serializable
@@ -517,6 +536,8 @@ data class FriendSignalUser(
     val phone: String,
     @SerialName("display_name") val displayName: String,
     val company: String = "",
+    /** §21.4 (v1.20): absent = true. */
+    @SerialName("phone_confirmed") val phoneConfirmed: Boolean = true,
 )
 
 /** §9.3 `signal` kind `friend`. */

@@ -67,7 +67,11 @@ fun RisiMeRoot(c: AppContainer, authUi: AuthUi) {
             // Order: update required → blocked → locked → confirm phone → chats (contract §7).
             when (gate) {
                 AppGate.UPDATE_REQUIRED -> RequiredUpdateScreen(update, required!!, c)
-                AppGate.BLOCKED -> BlockedScreen(blocked!!, c, authUi)
+                AppGate.BLOCKED -> if (blocked!!.kind == lk.codegen.risime.data.auth.BlockKind.SIGNUP_REQUIRED) {
+                    lk.codegen.risime.ui.auth.SignupScreen(c, authUi)
+                } else {
+                    BlockedScreen(blocked!!, c, authUi)
+                }
                 AppGate.LOADING -> Unit
                 AppGate.SIGNED_OUT -> LoginFlow(viewModel(key = "login") { LoginViewModel(c) }, authUi, notice)
                 AppGate.LOCKED -> LockedScreen(authUi)
