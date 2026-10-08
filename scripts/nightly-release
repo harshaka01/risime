@@ -20,11 +20,21 @@ REL="$HOME/risime-releases"
 [ -f "$KEYS" ] || { echo "missing $KEYS (dev release keystore)"; exit 1; }
 # On main, or (a clean release worktree) a detached HEAD that is exactly origin/main.
 git fetch -q origin main
-if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then
+# HOTFIX=hotfix/<name>: release a hotfix branch (cut from the last release tag) instead of main, when
+# main holds unreleased half-finished work. The same full gate runs; afterwards the release commit is
+# merged into main only if that merge is clean (else main is left alone and a warning printed).
+HOTFIX="${HOTFIX:-}"
+if [ -n "$HOTFIX" ]; then
+  case "$HOTFIX" in hotfix/*) ;; *) echo "HOTFIX must name a hotfix/<name> branch"; exit 1;; esac
+  git fetch -q origin "$HOTFIX"
+  [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$HOTFIX")" ] || { echo "HEAD is not origin/$HOTFIX"; exit 1; }
+  git merge-base --is-ancestor "$(git describe --tags --abbrev=0)" HEAD || { echo "$HOTFIX doesn't contain the last release tag"; exit 1; }
+  echo "==> HOTFIX release from $HOTFIX ($(git rev-parse --short HEAD))"
+elif [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then
   [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "not on main (and HEAD is not origin/main)"; exit 1; }
 fi
 git diff --quiet && git diff --cached --quiet || { echo "working tree not clean"; exit 1; }
-git pull -q --rebase origin main
+[ -n "$HOTFIX" ] || git pull -q --rebase origin main
 # Every gate step has a hard timeout (default 30 min, GATE_STEP_TIMEOUT seconds); a hung step fails the release.
 STEP_T="${GATE_STEP_TIMEOUT:-1800}"
 step() { timeout -k 60 "$STEP_T" "$@" || { rc=$?; [ "$rc" -ge 124 ] && echo "GATE STEP TIMED OUT after ${STEP_T}s: $*"; return "$rc"; }; }
@@ -209,7 +219,23 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git tag -a "v$next" -m "RisiMe v$next"
 # Push main first (HEAD:main also works from a clean worktree). Other sessions may have pushed
 # meanwhile: merge origin/main (never rebase: the tag must stay on the tested commit) and retry.
+if [ -n "$HOTFIX" ]; then
+  git push -q origin "HEAD:$HOTFIX"
+  rel_commit="$(git rev-parse HEAD)"
+  git fetch -q origin main
+  mwt="$(mktemp -d)"; git worktree add -q --detach "$mwt" origin/main
+  if git -C "$mwt" merge -q --no-edit -m "chore(root): merge hotfix v$next into main
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" "$rel_commit" && git -C "$mwt" push -q origin HEAD:main; then
+    echo "==> hotfix v$next merged into main"
+  else
+    git -C "$mwt" merge --abort 2>/dev/null || true
+    echo "warn: hotfix v$next NOT merged into main (conflict): merge $HOTFIX into main by hand"
+  fi
+  git worktree remove -f -f "$mwt"
+fi
 for attempt in 1 2 3; do
+  [ -n "$HOTFIX" ] && break
   git push -q origin HEAD:main && break
   [ "$attempt" = 3 ] && { echo "could not push main; the tag v$next is local only"; exit 1; }
   git fetch -q origin main
@@ -219,7 +245,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" origin/main
 done
 git push -q origin "v$next"
 RELEASED=1
-git push -q spark2-backup HEAD:main "v$next" 2>/dev/null || echo "warn: spark2-backup push failed"
+git push -q spark2-backup "HEAD:${HOTFIX:-main}" "v$next" 2>/dev/null || echo "warn: spark2-backup push failed"
 
 out="$REL/v$next"; mkdir -p "$out"
 cp "$APK" "$out/risime-$next.apk"
