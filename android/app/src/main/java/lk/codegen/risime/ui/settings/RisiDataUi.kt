@@ -238,7 +238,7 @@ class RisiPromisesModel(
         val all = (runCatching { rest.commitments("all") }.getOrNull() as? ApiResult.Ok)?.value?.commitments ?: return emptyList()
         val since = now() - REOPEN_WINDOW_MS
         return all.filter { c ->
-            c.state == lk.codegen.risime.net.RisiItemStates.DONE && canTick(c) &&
+            (c.state == lk.codegen.risime.net.RisiItemStates.DONE || c.status == lk.codegen.risime.net.RisiItemStates.DONE) && canTick(c) &&
                 (c.updatedAt?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() } ?: 0L) >= since
         }
     }

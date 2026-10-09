@@ -1,11 +1,75 @@
 # Android status — 0.2 nightlies
 
+## v1.29 §30 Risi Notes (proposal 2026-10-09-risi-calendar-notes §30, decision 073) — READY
+Coded against the proposal's JSON shapes; fixtures under `android/app/src/test/resources/fixtures/risi_notes/` (one per
+proposal example name, plus `auth_config_v129_notes.json`, `envelope_risi_item_update_done.json` and a future-shaped
+note card). Checked afterwards against server fecd471/8b2287e (`Notes.note_json`, `NotesOut.card/saved`,
+`Notes.summary`, `LedgerOut.item_update`, `Rest.commitments`, router): same routes and keys; `my_status` may be null;
+`open_items_count` = not done (the phone's offline count follows that); `item_update` after `item_reopen` carries the
+tracked state with `summary_id` = note id. `ContractExamplesTest` has decoders ready for all 7 §30 example names (checked
+against the fixtures until root adds the examples). `PROTOCOL_VERSION` unchanged until root folds §30.
+- **Switch/capability:** `/auth/config` `risi_notes` (absent = off) → `risi_notes` is advertised only with `risi_events`
+  (so with `risi_tools`, `risi_skills`, `risi_ledger`, `tabs`). Off: no Notes entries, no `/risi/notes` calls, My
+  promises exactly as before; a `discussion_summary`/`discussion_card` renders as before. `GET /risi/commitments` now
+  sends `X-Device-Id` (the server adds `note_id` only for a notes device).
+- **`note_card`** (Risi chat, "Risi · Notes"): title built per viewer from the phone's names ("Harsha × Shenika ·
+  interview planning · Fri 9 Oct"; > 3 people "Harsha × Shenika +2"; date of `ended_at` in the phone's zone/locale),
+  the first 3 key points, "Agreed" items, "Meetings", [Open note]; title/key points tap → the note screen. It is a §27
+  summary for the ledger code (same id): `item_update`s apply to it (no extra bubble), reminders' [Open chat] and
+  [Open Risi chat] focus find it.
+- **Items** (card and screen): my `proposed` item before `expires_at` → ✓ ✗ ✎ (`item_confirm`/`item_decline`/
+  `item_edit`); others' proposed → "waiting"; confirmed/edited → an empty tick-box, done → ticked (owner and
+  counterparts may tick; others read-only); declined/cancelled/expired → the word. Ticking sends §27.5 `done`,
+  un-ticking §30.5 `item_reopen` (`risi_action` in my Risi chat, `edit: null`); the box shows the new state at once and
+  stays off until Risi's `item_update` (or 2 min). A reopen after 7 days is refused by the server (the box flips back).
+- **Note screen** (`risi_note/{id}`): the local card at once, then `GET /risi/notes/{id}` (live); later `item_update`s
+  (rows not yet on the phone when it was fetched — no clock comparison) apply on top. Key points, Agreed (as above),
+  Meetings with [Accept] (my status proposed, calendar device; Risi Calendar `respond accept`, then the note reloads)
+  and [Open] (Calendar tab at the event), [Open chat] (the Official chat at `started_at`), Share, ⋮ Delete from my notes
+  (confirmed; items/promises/events/cards stay). 404 with no card → "This note was deleted or isn't available."
+- **`notes_saved`** (Official, "Risi · Notes saved"): the `summary` line; participants also see "N agreed · M meetings"
+  and, on a Notes phone, [Notes saved · open] → their note; others only the line.
+- **Notes list** (`risi_notes`; Risi chat ⋮ → Notes, Settings → Privacy → Risi Notes): info line (server, encrypted at
+  rest, not E2EE), search box → `GET /risi/notes?q=` 350 ms after typing stops (≤ 100 chars), pages of 30 with
+  `before` ([More]), rows "title / 2 agreed · 1 open · 1 meeting · chat", tap → note, row ⋮ Share / Delete, ⋮ Delete
+  all notes (confirmed). Offline: the phone's own note cards, searched locally (topic, key points, item texts, names).
+- **Share into a chat:** the note as text ("Notes: <title>", key points, "Agreed:" with ☐/☑ and owner · due,
+  "Meetings:", ending "— shared from Risi Notes", ≤ 3500 chars) → chat picker (chats on this phone by name, Risi chats
+  excluded) → `ChatEngine.sendText` as my own ordinary message. Risi is not involved.
+- **My promises (Notes phone):** also `state=all` for "Done (last 7 days)" with [Reopen]; [Done] on ledger items I own or
+  am a counterpart of (same action as the tick); "From note: <title>" opens the note.
+- **Tests:** `RisiNotesTest` (every fixture, unknown fields/objects, reopen action key for key, ledger sees note cards,
+  titles, controls matrix, optimistic ticks, card copy vs REST copy + later updates, share text/clip, share model,
+  list paging/search/delete/delete-all, offline local search, note screen model incl. 404/offline/expired),
+  `RisiNotesUiTest` (card, tick → done, untick → reopen, notes_saved on/off, list, screen, picker),
+  `RisiDataTest` (My promises Done/Reopen/From note; unchanged when off), `DeviceRegistrarTest` (capability gating),
+  `ContractExamplesTest` (§30 decoders).
+- **Suggested Redroid ui-entry-test (`--risi-notes`, root owns scripts/; fake-llm with the server status's
+  `discussion_summary` rule; `RISI_NOTES=on`, `RISI_EVENTS=on`, `RISI_QUIET_S=60`):**
+  1. Harsha ↔ Shenika 1:1 Official: send the scripted discussion (≥ 6 messages, both), wait 60 s → in Harsha's Risi
+     chat `risi_card_note_card` with `risi_note_title` "Harsha × Shenika · interview planning · …", `risi_note_item`
+     rows (owner + due in `risi_note_item_meta`) and a "Meetings" line; screenshot `note-card.png`. Same on Shenika's
+     phone (her name first). In Official: `risi_card_notes_saved`; screenshot `notes-saved-official.png`. Assert no
+     `risi_discussion_summary` node on either phone.
+  2. `risi_note_item_confirm` on Harsha's item → Settings → My promises shows it; back in the note
+     (`risi_notes_saved_open` or `risi_note_open`) tap `risi_note_item_tick` → My promises: "Done (last 7 days)"
+     (`risi_promises_section_done`); there `risi_promise_reopen` → the note shows `risi_note_item_tick` (unticked) again,
+     on both phones. Screenshot the screen: `note-screen.png`.
+  3. `@Risi summarise` (Official ⋮ Summarise → 24 h) → a new note card + `notes_saved`; a listened call's end → only
+     the server test for now (server status: no production call-end caller).
+  4. Risi chat ⋮ `risi_chat_menu_notes` → `risi_notes_list`; type a key-point word in `risi_notes_search` → one row;
+     screenshot `notes-list.png`; `risi_notes_row_menu` → `risi_notes_row_delete` → gone from the list, the card stays
+     in the Risi chat; `risi_notes_row_menu` → `risi_notes_row_share` → `risi_share_chat` (Kumu) → the chat has an
+     ordinary bubble ending "— shared from Risi Notes".
+  5. Switch off (`RISI_NOTES=off`, restart app): no `risi_chat_menu_notes`, no `settings_risi_notes`, no `/risi/notes`
+     in the server log.
+
 ## v1.29 §29 Risi Calendar (proposal 2026-10-09-risi-calendar-notes, decision 073) — READY
 Coded against the proposal's REST/JSON shapes (the server is built in parallel); fixtures under
 `android/app/src/test/resources/fixtures/risi_calendar/` (one per proposal example name, plus a page-1 feed, a cancelled
 update and an unknown kind). Checked afterwards against server 5ea7902/43627a5 (controller, `Calendar.view`, the cards
 in `calendar_cards.ex`): same routes and keys; `my_status`/`my_reminder_min` may be null and decode. `PROTOCOL_VERSION`
-stays 1.28 until root merges §29 into PROTOCOL.md. §30 Notes not started.
+stays 1.28 until root merges §29 into PROTOCOL.md. §30 Notes: see above.
 - **Switch/capability:** `/auth/config` `risi_events` (absent = off) → the app advertises `risi_events` only together with
   `risi_tools`, `risi_skills`, `risi_ledger` (and `tabs`). Off: no Calendar tab, no calendar REST, the v1.28 cards and
   flows exactly (the phone `calendar_add` card is untouched).
