@@ -34,6 +34,9 @@ data class CallRecord(
 
     /** The chat row's / info list's label: "Missed voice call", "Voice call · 3 min", "Cancelled video call", … */
     val label: String get() = CallRecords.label(this)
+
+    /** The key of the local "hidden from the call log" set: the call id, else the line's own id. */
+    val hideKey: String get() = callId.ifEmpty { clientMsgId }
 }
 
 object CallRecords {
@@ -148,3 +151,13 @@ fun groupCalls(records: List<CallRecord>, zone: ZoneId = ZoneId.systemDefault())
     }
     return out.map { CallGroup(it[0].conversationId, it) }
 }
+
+/**
+ * The Calls list minus what this phone hid ("Delete" / "Remove from call log" / "Clear call log"):
+ * a record is hidden when its [CallRecord.hideKey] is in [hidden] or it is at or before [clearedBefore].
+ * Local to the Calls list: the call row in the chat is a message and is never touched. Because the
+ * set is keyed by call id and lives in its own table, a history share or a restore that brings the
+ * same call back does not resurrect it.
+ */
+fun visibleCalls(records: List<CallRecord>, hidden: Set<String>, clearedBefore: Long?): List<CallRecord> =
+    records.filter { it.hideKey !in hidden && (clearedBefore == null || it.atMs > clearedBefore) }

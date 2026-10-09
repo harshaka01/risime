@@ -21,6 +21,10 @@
 #     "ZZ UI B · Risi" (never "N members"), its composer placeholder is "Message"; @Risi → ask →
 #     Risi's answer → the composer shows "Continuing with Risi ×". (Source quotes need an answer with
 #     refs to a real message: covered by RisiCardsTest, not here.)
+#  8b. (Calls tab like WhatsApp) A places a voice call to B and cancels: the Calls tab has the row, "New call" (not
+#     "Add friend") and the call-back button; the call info screen (Message / Voice call / Video call, ⋮ → Remove
+#     from call log); long-press → select → Delete → confirm removes the row from Calls but the chat keeps its call
+#     row; ⋮ → Clear call log → confirm → the empty state, the chat still keeps its call rows.
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -357,6 +361,107 @@ for bad in "Something went wrong" "reach the server" "The server had a problem" 
 done
 shot "11-what-risi-knows"
 pass "Settings → Privacy → 'What Risi knows about me' opens without an error"
+
+# ---------------------------------------------------------------- 8b. Calls tab like WhatsApp (android role, root-delegated)
+# A places a voice call to B and cancels while B rings (a call record on both phones). Then on A's Calls tab:
+# the "New call" button (not "Add friend"), the call info screen, long-press → select → Delete → confirm → the
+# row is gone but the chat still shows the call row; ⋮ → Clear call log → confirm → the empty state.
+tap_text() {  # exact visible text only (a content description of the same words, e.g. the top bar's Delete icon, doesn't count)
+  local b; b="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+for n in nodes:
+    if (n.get('text') or '') == sys.argv[2]:
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+)"
+  [ -n "$b" ] || { echo "    [$DEV] no text node: $1"; return 1; }; A shell input tap $b
+}
+calls_tab_section() {
+  DEV=A; A shell pm grant "$PKG" android.permission.RECORD_AUDIO 2>/dev/null || true
+  open_chat "ZZ UI B" || fail "calls: A can't open the DM"
+  local ok=""; for _ in $(seq 1 20); do tap "Voice call" && { ok=1; break; }; sleep 2; done
+  [ -n "$ok" ] || fail "calls: A has no \"Voice call\" button"
+  sleep 5
+  tap "End call" || fail "calls: A can't cancel while B rings"
+  sleep 2
+  back_to_list || true
+  open_chat "ZZ UI B" || fail "calls: A can't reopen the DM"
+  wait_for "Cancelled voice call" 30 || fail "calls: A's chat has no \"Cancelled voice call\" row"
+  pass "calls: A placed a voice call and cancelled it; the chat shows \"Cancelled voice call\""
+  back_to_list || fail "calls: back to the chat list"
+  tap "Calls" || fail "calls: no Calls tab"
+  wait_for "ZZ UI B" 15 || fail "calls: the Calls tab has no \"ZZ UI B\" row"
+  has "Voice call ZZ UI B" || fail "calls: the row has no voice call-back button"
+  # The floating button is "New call" here; "Add friend" stays on Chats and Requests.
+  has 'content-desc="New call"' || fail "calls: the Calls tab has no \"New call\" button"
+  has 'text="Add friend"' && fail "calls: the Calls tab still has \"Add friend\""
+  pass "calls: the Calls tab has the row, the voice call-back button and \"New call\" (no \"Add friend\")"
+  # New call: a full screen with the contacts and voice/video buttons.
+  tap "New call" || fail "calls: can't tap New call"
+  wait_for "Video call ZZ UI B" 10 || fail "calls: New call doesn't list ZZ UI B with a video button"
+  has "Voice call ZZ UI B" || fail "calls: New call has no voice button for ZZ UI B"
+  A shell input keyevent KEYCODE_BACK; sleep 1
+  wait_for "ZZ UI B" 10 || fail "calls: Back from New call didn't return to the Calls tab"
+  pass "calls: New call lists the friend with voice and video buttons; Back returns"
+  # Call info: a full screen, not a dialog.
+  tap "ZZ UI B" || fail "calls: can't tap the row"
+  wait_for "Call info" 10 || fail "calls: the row didn't open the call info screen"
+  has "Outgoing voice call" || fail "calls: call info has no \"Outgoing voice call\""
+  has 'text="Message"' && has 'text="Voice call"' && has 'text="Video call"' || fail "calls: call info lacks Message / Voice call / Video call"
+  tap "More options" || fail "calls: call info has no ⋮"
+  wait_for 'text="Remove from call log"' 10 || fail "calls: ⋮ has no \"Remove from call log\""
+  A shell input keyevent KEYCODE_BACK; sleep 1   # closes the menu
+  shot "22-call-info"
+  A shell input keyevent KEYCODE_BACK; sleep 1   # leaves call info
+  wait_gone "Call info" 10 || fail "calls: Back didn't leave call info"
+  pass "calls: call info is a screen with the call, Message / Voice call / Video call and ⋮ → Remove from call log"
+  # Long-press → select → Delete → confirm.
+  long_press "ZZ UI B" || fail "calls: can't long-press the row"
+  wait_for 'content-desc="Selected"' 10 || fail "calls: long-press didn't select the row"
+  has 'content-desc="Select all"' && has 'content-desc="Delete"' || fail "calls: the selection bar lacks Select all / Delete"
+  shot "20-calls-select"
+  tap "Delete" || fail "calls: can't tap Delete"
+  wait_for "Delete 1 call?" 10 || fail "calls: no \"Delete 1 call?\" confirmation"
+  shot "21-calls-delete-confirm"
+  tap_text "Delete" || fail "calls: can't confirm Delete"
+  wait_for "No calls yet" 15 || fail "calls: the row is still in the Calls list after Delete"
+  back_to_list || true
+  tap "Chats" || true
+  open_chat "ZZ UI B" || fail "calls: A can't reopen the DM after deleting the call record"
+  wait_for "Cancelled voice call" 15 || fail "calls: Delete removed the call row from the chat (it must stay)"
+  pass "calls: long-press → select → Delete → confirm removes the row from Calls; the chat keeps its call row"
+  # Clear call log: needs a record again (A calls and cancels once more).
+  local ok2=""; for _ in $(seq 1 20); do tap "Voice call" && { ok2=1; break; }; sleep 2; done
+  [ -n "$ok2" ] || fail "calls: A has no \"Voice call\" button (second call)"
+  sleep 5
+  tap "End call" || fail "calls: A can't cancel the second call"
+  sleep 2
+  back_to_list || true
+  tap "Calls" || fail "calls: no Calls tab (second)"
+  wait_for "ZZ UI B" 15 || fail "calls: the new call didn't reach the Calls tab"
+  tap "More options" || fail "calls: no ⋮ on the Calls tab"
+  wait_for 'text="Clear call log"' 10 || fail "calls: ⋮ has no \"Clear call log\""
+  tap_text "Clear call log" || fail "calls: can't tap Clear call log"
+  wait_for "Clear call log?" 10 || fail "calls: no confirmation for Clear call log"
+  tap_text "Clear" || fail "calls: can't confirm Clear"
+  wait_for "No calls yet" 15 || fail "calls: the Calls list isn't empty after Clear call log"
+  shot "23-calls-cleared"
+  back_to_list || true
+  tap "Chats" || true
+  open_chat "ZZ UI B" || fail "calls: A can't reopen the DM after Clear call log"
+  wait_for "Cancelled voice call" 15 || fail "calls: Clear call log removed the chat's call row"
+  pass "calls: ⋮ → Clear call log → confirm → empty Calls list; the chat keeps its call rows"
+  back_to_list || true
+  logcat_ok "calls tab"
+  DEV=B; A shell cmd notification cancel_all >/dev/null 2>&1 || true
+  DEV=A
+}
+calls_tab_section
 
 # ---------------------------------------------------------------- 9. (--risi) the 1:1 Official: header, placeholder, follow-up
 if [ "$RISI" = 1 ]; then

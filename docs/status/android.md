@@ -34,6 +34,21 @@
   UI and their actions, the progress bubble on screen, `answer.local_search` (Private, on the phone only), leaving the Risi
   chat / chat info, Risi-chat search filtering.
 
+## Calls tab like WhatsApp (nightly.39+ real phone) - READY (UI ENTRY OK, new JVM tests green)
+- **Select / delete:** long-press a row = selection (tick on the avatar, bar with count, "All" = Select all, Delete); tap toggles;
+  Back / arrow exits. Delete -> "Delete N calls?" [Cancel] [Delete]. Calls tab ⋮ -> "Clear call log" + confirm.
+  Local only: Room v12 (`Migration11To12`, additive) tables `hidden_calls` (call_id) and `call_log_marks` (cleared_before);
+  `visibleCalls()` filters the Calls list; the chat's call rows (messages) are never touched. Hard rule 9: restore / history
+  import never delete or resurrect (the set is its own table keyed by call id, not part of `messages`); `allChatData()` (confirmed
+  logout-and-delete) wipes it with the chats. **Not in the backup bundle:** its lines are strictly typed and contract-defined, so
+  a new phone restored from a bundle shows the restored calls again (documented limit; same-phone restores keep them hidden).
+- **Icons:** right button phone (voice) / camera (video), calls back with the same type; video rows also get a small camera
+  next to the time. **FAB** on Calls = "New call" (full page: friends with voice / video buttons); Add friend stays on Chats/Requests.
+- **Call info** is a full screen (replaces the list while open): name, date, each call (direction, voice/video, time, duration),
+  Message / Voice call / Video call, ⋮ -> Remove from call log.
+- **Tests:** `CallsTabTest` (selection, delete confirm, clear, call info, New call, icons), `HiddenCallsRestoreTest` (hidden calls
+  stay hidden after a bundle restore, chat rows kept, wipe), `Migration11To12Test`. `scripts/ui-entry-test` step 8b (screens 20-23).
+
 ## UI entry points (nightly.39 real-phone report) — READY (UI ENTRY OK on two redroids; 1154 JVM tests, 0 failed)
 Report (Kumu's 1:1, tabs on): no way to lock a chat, Chat info only "Official" + "Private media", "Checking encryption…"
 stuck, no tab row. The gates tested logic, not entry points; `scripts/ui-entry-test` now navigates like a user.

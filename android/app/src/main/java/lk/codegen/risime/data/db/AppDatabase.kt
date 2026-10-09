@@ -38,6 +38,8 @@ import androidx.sqlite.execSQL
         ScheduledMessageEntity::class,
         ScheduledSendEntity::class,
         RisiWriteEntity::class,
+        HiddenCallEntity::class,
+        CallLogMarkEntity::class,
     ],
     version = AppDatabase.VERSION,
     exportSchema = true,
@@ -60,16 +62,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun backup(): BackupDao
     abstract fun chatTabs(): ChatTabDao
     abstract fun scheduled(): ScheduledDao
+    abstract fun callLog(): CallLogDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 12
+        const val VERSION = 13
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11, Migration11To12)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11, Migration11To12, Migration12To13)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
@@ -309,6 +312,21 @@ object Migration11To12 : Migration(11, 12) {
         "CREATE TABLE IF NOT EXISTS `scheduled_sends` (`client_msg_id` TEXT NOT NULL, `schedule_id` TEXT NOT NULL, `occurrence_at` INTEGER NOT NULL, `queued_at` INTEGER NOT NULL, PRIMARY KEY(`client_msg_id`))",
         "CREATE INDEX IF NOT EXISTS `index_scheduled_sends_schedule_id` ON `scheduled_sends` (`schedule_id`)",
         "CREATE TABLE IF NOT EXISTS `risi_writes` (`write_id` TEXT NOT NULL, `tool` TEXT NOT NULL, `target` TEXT, `at` INTEGER NOT NULL, PRIMARY KEY(`write_id`))",
+    )
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/**
+ * v12 → v13 (Calls tab, hard rule 9): the local hidden-from-call-log tables. Only creates two empty
+ * tables; no existing row is changed or removed.
+ */
+object Migration12To13 : Migration(12, 13) {
+    val SQL = listOf(
+        "CREATE TABLE IF NOT EXISTS `hidden_calls` (`call_id` TEXT NOT NULL, `hidden_at` INTEGER NOT NULL, PRIMARY KEY(`call_id`))",
+        "CREATE TABLE IF NOT EXISTS `call_log_marks` (`id` INTEGER NOT NULL, `cleared_before` INTEGER NOT NULL, PRIMARY KEY(`id`))",
     )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)

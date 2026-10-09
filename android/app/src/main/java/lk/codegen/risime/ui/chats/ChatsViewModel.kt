@@ -262,10 +262,32 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** The Calls tab: 1:1 call records grouped like WhatsApp ("Name (3)"), newest first. */
-    val calls: StateFlow<List<CallRow>> = combine(c.db.messages().observeCallLines(), c.contacts.contacts) { lines, contacts ->
+    val calls: StateFlow<List<CallRow>> = combine(
+        c.db.messages().observeCallLines(), c.contacts.contacts, c.db.callLog().hiddenIds(), c.db.callLog().clearedBefore(),
+    ) { lines, contacts, hidden, cleared ->
         val byConv = contacts.filter { it.userId != null }.associateBy { dmConversationId(meId, it.userId!!) }
-        buildCallRows(lines.mapNotNull { lk.codegen.risime.calls.CallRecords.of(it) }, byConv)
+        buildCallRows(lk.codegen.risime.calls.visibleCalls(lines.mapNotNull { lk.codegen.risime.calls.CallRecords.of(it) }, hidden.toSet(), cleared), byConv)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** "New call": friends who can be called now (name, 1:1 conversation id), by name. */
+    val callContacts: StateFlow<List<Pair<String, String>>> = c.contacts.contacts.map { list ->
+        list.filter { it.userId != null && it.registered && it.friend }
+            .map { it.displayName to dmConversationId(meId, it.userId!!) }.sortedBy { it.first.lowercase() }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Hide these call records from the Calls list on this phone (the chat's call rows stay). */
+    fun hideCalls(records: List<lk.codegen.risime.calls.CallRecord>) {
+        viewModelScope.launch { hideCallRecords(c.db.callLog(), records, System.currentTimeMillis()) }
+    }
+
+    /** Calls tab ⋮ → "Clear call log": hides every call so far, and anything older that turns up later. */
+    fun clearCallLog() {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            hideCallRecords(c.db.callLog(), calls.value.flatMap { it.group.calls }, now)
+            c.db.callLog().setMark(lk.codegen.risime.data.db.CallLogMarkEntity(0, now))
+        }
+    }
 
     /** Why a call can't start from here (null = it can). */
     fun callBlocked(): String? = runCatching { c.calls.unsupportedReason() }.getOrNull()
@@ -347,3 +369,8 @@ fun buildCallRows(records: List<lk.codegen.risime.calls.CallRecord>, contactsByC
         val ct = contactsByConv[g.conversationId]
         CallRow(g, ct?.displayName ?: "Unknown", ct?.userId)
     }
+
+/** Adds [records] to the local hidden-call set (insert only; nothing in `messages` changes). */
+suspend fun hideCallRecords(dao: lk.codegen.risime.data.db.CallLogDao, records: List<lk.codegen.risime.calls.CallRecord>, nowMs: Long) {
+    if (records.isNotEmpty()) dao.hide(records.map { lk.codegen.risime.data.db.HiddenCallEntity(it.hideKey, nowMs) })
+}

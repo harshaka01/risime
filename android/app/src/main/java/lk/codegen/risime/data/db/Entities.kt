@@ -726,3 +726,21 @@ data class RisiWriteEntity(
     val target: String?,
     val at: Long,
 )
+
+/**
+ * v13 (Calls tab, hard rule 9): a call hidden from the Calls list on this phone only. The call row in
+ * the chat is untouched. Keyed by call id (the client message id when a line has none), so a history
+ * share or a restore that brings the same call back does not resurrect it.
+ */
+@Entity(tableName = "hidden_calls")
+data class HiddenCallEntity(
+    @PrimaryKey @ColumnInfo(name = "call_id") val callId: String,
+    @ColumnInfo(name = "hidden_at") val hiddenAt: Long,
+)
+
+/** v13: "Clear call log" marker (single row id 0): every call line at or before [clearedBefore] is hidden. */
+@Entity(tableName = "call_log_marks")
+data class CallLogMarkEntity(
+    @PrimaryKey val id: Int = 0,
+    @ColumnInfo(name = "cleared_before") val clearedBefore: Long,
+)

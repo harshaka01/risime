@@ -196,7 +196,15 @@ interface WipeDao {
         scheduledMessages()
         scheduledSends()
         risiWrites()
+        hiddenCalls()
+        callLogMarks()
     }
+
+    @Query("DELETE FROM hidden_calls")
+    suspend fun hiddenCalls()
+
+    @Query("DELETE FROM call_log_marks")
+    suspend fun callLogMarks()
 
     @Query("DELETE FROM messages")
     suspend fun messages()
@@ -861,4 +869,20 @@ interface ChatTabDao {
     suspend fun setOfficialState(chatId: String, state: String) {
         upsertPref((pref(chatId) ?: ChatPrefEntity(chatId, null, null)).copy(officialState = state))
     }
+}
+
+/** The Calls tab's local "hidden from the call log" set (v12). Never touches `messages`. */
+@Dao
+interface CallLogDao {
+    @Query("SELECT call_id FROM hidden_calls")
+    fun hiddenIds(): Flow<List<String>>
+
+    @Query("SELECT cleared_before FROM call_log_marks WHERE id = 0")
+    fun clearedBefore(): Flow<Long?>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun hide(rows: List<HiddenCallEntity>)
+
+    @Upsert
+    suspend fun setMark(m: CallLogMarkEntity)
 }

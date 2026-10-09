@@ -3,6 +3,7 @@ package lk.codegen.risime.ui.chats
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -82,6 +83,15 @@ fun ChatsScreen(
     var askLogout by remember { mutableStateOf(false) }
     var askLogoutDelete by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    val callsUi = remember { CallsUi() }
+    val callRows by vm.calls.collectAsStateWithLifecycle()
+    val callBack = rememberCallBack(vm)
+    var callsMenu by remember { mutableStateOf(false) }
+    // Back leaves call info / New call first, then the selection.
+    androidx.activity.compose.BackHandler(enabled = callsUi.selecting && tab == 1) { callsUi.selected = emptySet() }
+    // Leaving the Calls tab ends a selection.
+    androidx.compose.runtime.LaunchedEffect(tab) { if (tab != 1) callsUi.selected = emptySet() }
+    CallsDialogs(callsUi, callRows, onDelete = vm::hideCalls, onClear = vm::clearCallLog)
     // WhatsApp: a long-press selects the chat; the top bar becomes the selection bar (Delete, ⋮ → Lock chat / Clear chat).
     var selected by remember { mutableStateOf<ChatRow?>(null) }
     var clearAsk by remember { mutableStateOf<Pair<ChatRow, Boolean>?>(null) }
@@ -102,10 +112,19 @@ fun ChatsScreen(
             deleteChats = askLogoutDelete,
         )
     }
-    Scaffold(
+    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+    // Call info / New call are full pages: the list underneath is not composed (nor reachable by accessibility) meanwhile.
+    if (callsUi.info == null && !callsUi.newCall) Scaffold(
         topBar = {
             val sel = selected
-            if (sel != null) {
+            if (tab == 1 && callsUi.selecting) {
+                CallsSelectionBar(
+                    count = callsUi.selected.size,
+                    onClose = { callsUi.selected = emptySet() },
+                    onSelectAll = { callsUi.selected = callRows.map { it.key }.toSet() },
+                    onDelete = { callsUi.askDelete = true },
+                )
+            } else if (sel != null) {
                 ChatSelectionBar(
                     onClose = { selected = null },
                     onDelete = { selected = null; clearAsk = sel to true },
@@ -130,6 +149,12 @@ fun ChatsScreen(
                     IconButton(onClick = vm::refresh) { Icon(Icons.Default.Refresh, "Refresh friends") }
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More options") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        if (tab == 1 && callRows.isNotEmpty()) {
+                            DropdownMenuItem(text = { Text("Clear call log") }, onClick = {
+                                menu = false
+                                callsUi.askClear = true
+                            })
+                        }
                         DropdownMenuItem(text = { Text("Invites") }, onClick = {
                             menu = false
                             onInvites()
@@ -172,11 +197,22 @@ fun ChatsScreen(
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
                 }
-                ExtendedFloatingActionButton(
-                    onClick = onAddFriend,
-                    icon = { Icon(Icons.Default.Add, null) },
-                    text = { Text("Add friend") },
-                )
+                if (tab == 1) {
+                    if (!callsUi.selecting) {
+                        ExtendedFloatingActionButton(
+                            onClick = { callsUi.newCall = true },
+                            modifier = Modifier.semantics { contentDescription = "New call" },
+                            icon = { Icon(Icons.Default.Call, null) },
+                            text = { Text("New call") },
+                        )
+                    }
+                } else {
+                    ExtendedFloatingActionButton(
+                        onClick = onAddFriend,
+                        icon = { Icon(Icons.Default.Add, null) },
+                        text = { Text("Add friend") },
+                    )
+                }
             }
         },
         contentWindowInsets = WindowInsets(0),
@@ -200,7 +236,7 @@ fun ChatsScreen(
             }
             lk.codegen.risime.calls.FullScreenIntentPrompt()
             if (tab == 1) {
-                CallsTab(vm, onOpenChat = onOpen)
+                CallsTab(vm, callsUi)
             } else if (tab == 2) {
                 RequestsTab(friendsVm, onAddFriend)
             } else {
@@ -235,6 +271,33 @@ fun ChatsScreen(
                     }
                 }
             }
+        }
+    }
+    CallsOverlays(vm, callsUi, callRows, callBack, onOpen)
+    }
+}
+
+/** Full-screen Calls pages over the chat list: call info and New call. */
+@Composable
+private fun CallsOverlays(vm: ChatsViewModel, ui: CallsUi, rows: List<CallRow>, callBack: (String, Boolean) -> Unit, onOpen: (String) -> Unit) {
+    val shown = ui.info
+    // The row for the opened group, live (its oldest call id is stable while newer calls join the front).
+    val live = shown?.let { s -> rows.firstOrNull { r -> r.group.calls.last().clientMsgId == s.group.calls.last().clientMsgId } }
+    androidx.compose.runtime.LaunchedEffect(live == null && shown != null) { if (live == null && shown != null) ui.info = null }
+    androidx.activity.compose.BackHandler(enabled = shown != null) { ui.info = null }
+    androidx.activity.compose.BackHandler(enabled = ui.newCall) { ui.newCall = false }
+    if (live != null) {
+        androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            CallInfoScreen(
+                live, nowMs = System.currentTimeMillis(), onBack = { ui.info = null }, onCallBack = callBack,
+                onMessage = { ui.info = null; onOpen(live.group.conversationId) },
+                onRemove = { ui.info = null; vm.hideCalls(live.group.calls) },
+            )
+        }
+    } else if (ui.newCall) {
+        val contacts by vm.callContacts.collectAsStateWithLifecycle()
+        androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            NewCallScreen(contacts, onBack = { ui.newCall = false }, onCall = { conv, video -> ui.newCall = false; callBack(conv, video) })
         }
     }
 }
