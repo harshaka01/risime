@@ -1,5 +1,37 @@
 # Android status — 0.2 nightlies
 
+## Server items 8–10 (2026-10-09): offer cards, item_clarify, My promises split — READY
+For server 6cc393a/35a6b99/47156fe ("Android needs" in docs/status/server.md). All new fields optional; an older
+server's replies and cards render as before; unknown fields/kinds stay tolerated.
+- **Item 8, offer cards:** a `confirm` with `origin: "offer"` (+ `item_id`) is the P0 card: `calendar_add` → the
+  calendar action card ([Add] [Edit] [Cancel] → `confirm_write` / `confirm_write`+`edit` / `cancel_write`; success
+  [Open] [Undo]), `set_reminder` → the confirm card ([Add] [Cancel]; the server takes no edit for it). Header
+  "Risi · Add to calendar?" / "Risi · Remind me?". `request_id` with no request and `turn_ref: null` are fine: progress
+  bubbles only come from `risi_progress` (none for an offer), and the phone's executor accepts the add by the card
+  rule (card args + my own `confirm_write`), not the request rule.
+- **Item 10, `item_clarify`:** header "Risi · When is it due?", the `question`; for the owner (in `notify`) with
+  `new_date` in `buttons`: [New date] → date + time (or All day) → §27.5 `item_edit` (`target` = `item_id`, `edit:
+  {text: the card's text, due, all_day}`; all day = the day's local end) in the Risi chat; then "New date sent".
+  `buttons: []` → the question only.
+- **Item 9, My promises:** sections "I promised (n)" / "Promised to me (n)" / "Others (n)" (by `direction`; an older
+  server's items by `role` as before; an unknown direction → Others), counts = reply `totals` (else counted). Each row:
+  text, `owner_name` · due (`all_day` → "by Mon 12 Oct", else "due Fri 9 Oct, 17:00", no due → the said phrase),
+  status ("Needs a date" for `needs_clarification`, "Confirmed", "Waiting", …). Tap → `source_conversation_id` (else
+  `official_conversation_id`) opened at `source_message_id` (scrolls once the message is on the phone; null → the
+  chat's end; a chat not on this phone → "That chat isn't on this phone."). The personal digest groups the same way
+  with the digest `totals` when the server sends `direction`/`totals`.
+- **Tests:** `RisiItems810Test` (fixtures `android/app/src/test/resources/fixtures/risi_items_8_10/`: offer parse +
+  unknown fields, headers, no progress bubble, clarify rules, `item_edit` shape, due timed/all-day, reply parse, the
+  section split/counts/labels/target, old replies, digest, focus), `RisiItems810UiTest` (offer cards, clarify card and
+  picker, digest), `RisiDataTest` (sections + counts, tap opens the source message, chat not on the phone),
+  `RisiCalendarToolTest` (an offer's add runs on my confirm without a request). Gate: 1376 tests, 0 failures.
+- **Redroid ui-entry-test (root owns scripts/), suggested steps:** (a) seed a ledger item with a concrete future time
+  for the test user (or run `RisiMe.Release.risi_offers_backfill(dry_run: false)`) → the Risi chat shows
+  "Risi · Add to calendar?" → [Add] → event in CalendarContract, 0 model calls; (b) seed a vague item ("sometime next
+  week") → "Risi · When is it due?" → [New date] → pick → the server's calendar offer follows; (c) Settings → My
+  promises: section headers "I promised (n)" / "Promised to me (n)", a "Needs a date" row; tap a row → its Official
+  chat opens.
+
 ## P0 Risi calendar (Harsha's phone: "add my interview with Shenika on Monday 12 Oct at 2pm…" added nothing) — READY
 - **Cause (app side):** the phone's `calendar_check`/`calendar_add` were never implemented (answered `declined`); the
   confirm card had no real calendar action; chips could be confirm phrases/questions.
