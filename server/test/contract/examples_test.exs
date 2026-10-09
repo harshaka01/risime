@@ -291,6 +291,25 @@ defmodule RisiMe.ContractExamplesTest do
                     risi_skills_patch_calendar.json
                     risi_tool_result_calendar_add_v128.json)
 
+  # v1.29 (Risi Calendar, §29): every example is the server's real output, checked exactly in
+  # test/contract/examples_v129_test.exs (which also regenerates them).
+  @checked_v1_29 ~w(auth_config_v129.json device_put_risi_events.json
+                    envelope_risi_action_confirm_write_edit_risi_calendar.json
+                    envelope_risi_action_event_accept.json envelope_risi_action_event_suggest.json
+                    envelope_risi_answer_calendar_sources_risi.json
+                    envelope_risi_calendar_invite.json envelope_risi_calendar_reminder.json
+                    envelope_risi_calendar_suggestion.json
+                    envelope_risi_confirm_risi_calendar_add.json
+                    envelope_risi_digest_personal_v129.json envelope_risi_event_card_added.json
+                    envelope_risi_event_card_official.json envelope_risi_event_update.json
+                    error_cursor_expired.json error_not_invitable.json
+                    error_version_conflict.json event_risi_calendar_changed.json
+                    risi_calendar_changes_reply.json risi_calendar_event_create.json
+                    risi_calendar_event_create_reply.json risi_calendar_event_patch.json
+                    risi_calendar_events_reply.json risi_calendar_respond_accept.json
+                    risi_calendar_respond_suggest.json risi_calendar_settings.json
+                    risi_calendar_suggestion_resolve.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -350,7 +369,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_25 ++
         @checked_v1_26 ++
         @checked_v1_27 ++
-        @checked_v1_28
+        @checked_v1_28 ++
+        @checked_v1_29
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end

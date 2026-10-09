@@ -1,5 +1,13 @@
 # Proposal 2026-10-09: Google Calendar as Risi's primary calendar, honest calendar answers, the event card, the in-app Calendar (v1.29, §29)
 
+> **Folded (2026-10-09, root):** the honesty parts — §29.2 (`calendar_check` result `sources`,
+> `connected_sources`; names only there; the model sees counts only) and §29.3 (the honesty rule,
+> `answer.sources` `calendar_source`) — are in `contract/v1/PROTOCOL.md` **v1.29 §29.7** as shipped
+> (server 407606d, f063970; android 9c722e5, 339bb36): sent by every v1.29 phone (no
+> `risi_calendar: 2` switch), the phone-only line reads "I checked: …", and the no-read text of
+> §29.7 applies. The `skill_needed` `no_source` reason and the rest (§29.1, §29.4–§29.9) are **not**
+> folded: they wait for §31.
+
 > **Deferred (2026-10-09, Harsha; decision 073, `2026-10-09-risi-calendar-notes.md`).** RisiMe now has
 > its own calendar (v1.29 §29 Risi Calendar). This design becomes **§31 "Google Calendar, optional
 > sync (later)"**, not a dependency and not in nightly.47/48: first a **one-way mirror Risi Calendar
@@ -61,7 +69,7 @@ The server makes no Google call (§25.7 egress unchanged).
 - Disconnect: `revokeAccess` (or the `oauth2.googleapis.com/revoke` call), delete local choice, list
   and caches, PATCH `sources`. Added events stay (§26.5).
 
-## 29.2 `calendar_check` result v2 (amends §25.3)
+## 29.2 `calendar_check` result v2 (amends §25.3) — folded into PROTOCOL.md v1.29 §29.7
 Sent only when `/auth/config` `risi_calendar` is `2` (absent = 1). The server's schema stays strict.
 ```
 {"blocks": [CalendarBlock],
@@ -82,7 +90,7 @@ Sent only when `/auth/config` `risi_calendar` is `2` (absent = 1). The server's 
   Names only in the server-built "Checked:" line and `answer.sources`; never in `risi_turn_steps`, the
   learning log or logs.
 
-## 29.3 Honesty rule (server; amends §25.1, §25.4)
+## 29.3 Honesty rule (server; amends §25.1, §25.4) — folded into PROTOCOL.md v1.29 §29.7
 A *read* = a source with `read_ok: true` and ≥ 1 calendar.
 1. **No read** (all failed, none connected, `no_permission`/`timeout`/`error`, or a v1 `ok` with
    `blocks: []`): the model's final text is discarded; the server posts `answer` (`made_by.model:

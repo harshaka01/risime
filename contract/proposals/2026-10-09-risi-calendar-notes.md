@@ -1,5 +1,12 @@
 # Proposal 2026-10-09: Risi Calendar and Risi Notes (v1.29: §29 Risi Calendar, §30 Risi Notes, §31 Google Calendar as optional sync)
 
+> **Folded (2026-10-09, root):** §29 Risi Calendar is in `contract/v1/PROTOCOL.md` **v1.29 §29**, as
+> shipped (server 5ea7902..5497692, android 2ba351b, 94172af; examples written from the server's real
+> output). PROTOCOL.md wins where they differ (e.g. `version` counts only owner changes, the
+> suggestion "keep" is an `event_update` `status`, a Risi-chat card's source is the Risi chat, the
+> draft slot `with`, `risi_events` absent while off). **§30 Risi Notes is not folded yet** (it stays
+> here until built); §31 later.
+
 Requested by Harsha 2026-10-09 ("RisiMe gets its OWN calendar and notes. Google Calendar becomes an
 optional sync, not a dependency"). Root decided the design (decision 073). It replaces the plan of
 `2026-10-09-google-calendar.md` as §29: that proposal becomes **§31 "Google Calendar, optional sync
@@ -17,7 +24,7 @@ anything in §29.**
 
 ---
 
-## 29. Risi Calendar (v1.29)
+## 29. Risi Calendar (v1.29) — folded into PROTOCOL.md v1.29 §29
 
 ### 29.0 Principles
 - **RisiMe's own calendar.** Events live on the RisiMe server, per user, sealed with
@@ -506,7 +513,7 @@ example names move to `…_v131…` when it is scheduled. Needs Harsha G (OAuth 
 ---
 
 ## Examples (contract/v1/examples/, added with the build)
-**Calendar (§29):** `auth_config_v129.json`, `device_put_risi_events.json`,
+**Calendar (§29, written with the v1.29 fold):** `auth_config_v129.json`, `device_put_risi_events.json`,
 `risi_calendar_events_reply.json`, `risi_calendar_changes_reply.json` (a changed and a `removed`
 entry), `risi_calendar_event_create.json`, `risi_calendar_event_create_reply.json`,
 `risi_calendar_event_patch.json`, `risi_calendar_respond_accept.json`,

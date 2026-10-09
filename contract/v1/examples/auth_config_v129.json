@@ -1,0 +1,1 @@
+{"backup":"on","client_id":"risime","issuer":"https://risicloud.ai/realms/aoa","modes":["oidc"],"phone_verification":"off","risi_events":"on","risi_ledger":"on","risi_skills":"on","risi_tools":"on","signup":"open"}
