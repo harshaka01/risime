@@ -4,7 +4,9 @@
 # arm64 Android 14, decision 045) against a temp server with TABS=on (RISI off: the tab row, "Start
 # Official" and "What Risi knows about me" must work either way). Navigates like a user: taps and
 # long-presses by visible text / content description from `uiautomator dump`, no debug hooks.
-#   timeout 1800 scripts/ui-entry-test [--apk app-debug.apk] [--keep]
+#   timeout 1800 scripts/ui-entry-test [--apk app-debug.apk] [--keep] [--risi]
+#   --risi: the server also runs Risi (RISI=on, the MLS NIF built --prod, scripts/fake-llm on
+#   127.0.0.1:$UITEST_LLM_PORT, default 8197; throwaway keys) and step 9 runs.
 #
 #  1. A and B sign in through the login UI (dev OTP), become friends, both open the DM; it turns e2ee.
 #  2. A's chat: the "🔒 Private" | "● Official" row under the header; the Official tab's "Start Official".
@@ -15,6 +17,10 @@
 #  6. Long-press the chat → the selection bar's ⋮ → "Lock chat".
 #  7. Chat list ⋮ → "Chat lock settings" → PIN → "Hide locked chats" and "Secret code".
 #  8. Settings → Privacy → "What Risi knows about me" opens without an error.
+#  9. (--risi, Official hotfixes) A's DM → Official → Start Official: the 1:1 Official's header is
+#     "ZZ UI B · Risi" (never "N members"), its composer placeholder is "Message"; @Risi → ask →
+#     Risi's answer → the composer shows "Continuing with Risi ×". (Source quotes need an answer with
+#     refs to a real message: covered by RisiCardsTest, not here.)
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -24,8 +30,9 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
 CLS=lk.codegen.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0
-while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK=""; KEEP=0; RISI=0
+while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+LLM_PORT="${UITEST_LLM_PORT:-8197}"
 APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
 [ -f "$APK" ] || { echo "no APK at $APK (cd android && ./gradlew assembleDebug)"; exit 2; }
 PATH="$("$REPO/scripts/android-target" adb):$PATH"
@@ -56,6 +63,7 @@ diag() {
 cleanup() {
   cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
   tmux kill-session -t "risime-uientry$SUF" 2>/dev/null || true
+  tmux kill-session -t "risime-uientry-llm$SUF" 2>/dev/null || true
   if [ "$KEEP" = 0 ]; then
     REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
     REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
@@ -82,6 +90,9 @@ case mode do
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
     RisiMe.Social.make_friends!(a.id, b.id)
     IO.puts("uientry: friends ok")
+  "risi" ->
+    :ok = RisiMe.Risi.seed()
+    IO.puts("uientry: risi ok")
   "e2ee" ->
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
     conv = RisiMe.Messaging.conversation_id(a.id, b.id)
@@ -94,7 +105,21 @@ echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB, E2EE on, TABS=on)"
   || { echo "could not create/migrate the uientry store (server deps fetched? mix deps.get)"; exit 1; }
 (cd server && $M mix risime.attestation.gen "$WORK/attest.jwk" >/dev/null 2>&1) || true
 [ -f "$WORK/attest.jwk" ] || { echo "no attestation key"; exit 1; }
-tmux new -d -s "risime-uientry$SUF" "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
+: > "$WORK/risi.env"
+if [ "$RISI" = 1 ]; then
+  echo "==> Risi on: MLS NIF (--prod), throwaway keys, fake-llm on 127.0.0.1:$LLM_PORT"
+  ss -ltnH "sport = :$LLM_PORT" | grep -q . && { echo "port $LLM_PORT busy"; exit 1; }
+  MLS_NIF_OUT="$WORK/librisime_mls_nif.so" timeout 1200 scripts/build-mls-nif --prod >/dev/null || { echo "scripts/build-mls-nif --prod failed"; exit 1; }
+  umask 077
+  { echo "RISI=on"; echo "RISI_MLS_NIF=$WORK/librisime_mls_nif"; echo "RISI_LLM_URL=http://127.0.0.1:$LLM_PORT/v1"; echo "RISI_FALLBACK=off"
+    echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"; echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; } > "$WORK/risi.env"
+  umask 022
+  tmux new -d -s "risime-uientry-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT > '$WORK/fake-llm.out' 2>&1"
+  for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && break; sleep 0.5; done
+  curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" || { echo "fake-llm didn't start"; exit 1; }
+  [ "$(RISI=on RISI_MLS_NIF=/nonexistent fx risi)" = "uientry: risi ok" ] || { echo "fixture: risi seed"; exit 1; }
+fi
+tmux new -d -s "risime-uientry$SUF" "cd '$REPO/server' && set -a && . '$WORK/risi.env' && set +a && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
   PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text TABS=on \
   ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix phx.server > '$WORK/server.log' 2>&1"
 for _ in $(seq 1 180); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
@@ -332,6 +357,34 @@ for bad in "Something went wrong" "reach the server" "The server had a problem" 
 done
 shot "11-what-risi-knows"
 pass "Settings → Privacy → 'What Risi knows about me' opens without an error"
+
+# ---------------------------------------------------------------- 9. (--risi) the 1:1 Official: header, placeholder, follow-up
+if [ "$RISI" = 1 ]; then
+  back_to_list || fail "back to the chat list (Official)"
+  open_chat "ZZ UI B" || fail "open the DM for Official"
+  tap "● Official" || fail "tap the Official tab"
+  wait_for 'text="Start Official"' 20 || fail "no 'Start Official'"
+  tap "Start Official" || fail "tap Start Official"
+  wait_text "ZZ UI B · Risi" 90 || fail "the 1:1 Official's header isn't 'ZZ UI B · Risi'"
+  has ' members"' && fail "the 1:1 Official's header shows a member count"
+  wait_for 'text="Message"' 30 || fail "the Official composer's placeholder isn't 'Message'"
+  has 'text="Risi is listening"' || fail "the 'Risi is listening' strip is gone"
+  shot "12-official-dm-header"
+  pass "the 1:1 Official: header 'ZZ UI B · Risi', placeholder 'Message', 'Risi is listening' strip"
+  # Something to answer from (an empty Official gets the error "nothing to summarise", which opens no follow-up).
+  tap "Message" || true; sleep 0.5
+  A shell input text "We%sagreed%sthe%sbudget%sreview%son%sTuesday"; sleep 0.5
+  tap "Send" || fail "send a normal Official message"
+  sleep 3
+  tap "@Risi" || fail "tap the @Risi chip"
+  wait_for 'text="Ask Risi…"' 10 || fail "the @Risi chip didn't switch the composer"
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "what%sdid%swe%sagree"; sleep 0.5
+  tap "Send" || fail "send the ask"
+  wait_text "Continuing with Risi" 120 || fail "after Risi's answer: no 'Continuing with Risi' chip"
+  shot "13-risi-follow-up-chip"
+  pass "Risi answered; the composer shows 'Continuing with Risi ×'"
+fi
 
 logcat_ok "ui entry"
 DEV=B; logcat_ok "ui entry"

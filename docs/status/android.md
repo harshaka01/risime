@@ -1,5 +1,39 @@
 # Android status — 0.2 nightlies
 
+## §25 Risi with tools, A0 + A7 + A8, and Official hotfixes — READY (JVM gate green; risi_tools only while /auth/config says on)
+- **A0 (v1.25 wire):** `net/Protocol125.kt` (tool call, tool results, `risi_progress`, `RisiChatReply`, steps/sources/
+  `local_search`/`when`, error codes, `risi_tools`), optional v1.25 fields on `RisiMeta` (v1.24 envelopes unchanged),
+  `AuthConfig.risi_tools`, `Chat.private` nullable, `GroupMeta.chat_kind` (omitted when absent; `name: null` reads as "").
+  `PROTOCOL_VERSION` 1.25; `ContractExamplesTest` decodes all 17 new examples; `Protocol125Test`.
+- **A7:** `risi_tools` is advertised only with `tabs`, `/auth/config risi_tools: on` and a core that does Risi chats
+  (`UniffiMlsEngine` maps `chat_kind` through the FFI, crypto C4); remembered per device id. `risi_tool_call` → after its
+  event's transaction → `RisiToolCallHandler` (this device only, before `expires_at`, answered once, never stored or logged):
+  **stub** — `calendar_check`/`calendar_add` answer `declined`, others `error unknown_tool`. `risi_progress` → `RisiProgressStore`
+  (seq order, `done` ends) + step labels. `RisiToolCards`: confirm card rules (only `for`, expiry, forged confirms ignored),
+  reminder participants (Me too/Not me from humans), draft [Use] only if the target is on the phone. The four new
+  `risi_action`s are valid controls with lines. Facts kind `note`.
+- **A8 the Risi chat:** from MLS state only (`chat_kind: "risi"`, or Official with `chat_id` = own id when a core drops the
+  field) → `chat_tabs.chat_kind = "risi"` (a free string column: **no Room schema change, no migration**; rule 9 untouched).
+  Chat list: one "Risi" row pinned first (Risi avatar, Official accent), a "Risi" entry when none is usable; nothing without
+  `risi_tools`. First open: `POST /api/v1/risi/chat` → `CREATE_RISI_CHAT` outbox op (claim me + Risi on the chat id; meta
+  admins [me], tab official, chat_id own id, agents [risi], chat_kind risi). Screen: no tabs/toggle/calls/attachments/chip;
+  every message is a `risi_request` ask shown as my own bubble; an "unavailable" screen without `risi_tools`.
+- **Hotfixes (Kumu/Swan real phone):** answer sources are quotes of the actual message (sender + first 8 words, tap scrolls),
+  nothing when the message isn't on the phone (no "Message 1"); 1:1 Official header "Kumu · Risi" / "Official" (never
+  "3 members"); Official composer placeholder "Message"; follow-ups: within 3 min of Risi's answer to my request, "Continuing
+  with Risi ×" and the next message goes as an ask (× or anything I send ends it).
+- **UI gate:** `scripts/ui-entry-test --risi` (root-delegated: RISI=on, MLS NIF --prod, fake-llm) adds step 9: 1:1 Official
+  header "ZZ UI B · Risi" (no member count), placeholder "Message", "Risi is listening" strip, @Risi ask → answer →
+  "Continuing with Risi ×". **UI ENTRY OK** (all 9 steps); screenshots `docs/status/screens/12-official-dm-header.png`,
+  `13-risi-follow-up-chip.png`. The source quote needs an answer with refs to a real message (fake-llm returns none):
+  covered by `RisiCardsTest` only. Seen on screen: on a 360 dp phone the title ellipsizes ("ZZ UI…") next to the call
+  buttons, and a 1:1 Official shows "You created the group """ (empty name) — both pre-existing layout/text, to fix next.
+- **Tests:** `Protocol125Test`, `RisiToolsTest`, `RisiChatTest`, `RisiFollowUpTest`, `RisiCardsTest` (quotes, chip),
+  `DeviceRegistrarTest`, `TabsEventsTest`, `GroupOpsExecutorTest` (Risi epoch 0).
+- **Open for A9–A12:** the real tool executor (calendar free/busy, `calendar_add` acceptance rule), confirm/reminder/draft card
+  UI and their actions, the progress bubble on screen, `answer.local_search` (Private, on the phone only), leaving the Risi
+  chat / chat info, Risi-chat search filtering.
+
 ## UI entry points (nightly.39 real-phone report) — READY (UI ENTRY OK on two redroids; 1154 JVM tests, 0 failed)
 Report (Kumu's 1:1, tabs on): no way to lock a chat, Chat info only "Official" + "Private media", "Checking encryption…"
 stuck, no tab row. The gates tested logic, not entry points; `scripts/ui-entry-test` now navigates like a user.
