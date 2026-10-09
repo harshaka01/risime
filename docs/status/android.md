@@ -1,5 +1,48 @@
 # Android status — 0.2 nightlies
 
+## P0 Risi calendar (Harsha's phone: "add my interview with Shenika on Monday 12 Oct at 2pm…" added nothing) — READY
+- **Cause (app side):** the phone's `calendar_check`/`calendar_add` were never implemented (answered `declined`); the
+  confirm card had no real calendar action; chips could be confirm phrases/questions.
+- **Calendar tools (fee8d84):** `PhoneCalendar` + `AndroidCalendarBackend` (CalendarContract).
+  - `calendar_check`: merged free/busy blocks only (≤ 14 days, ≤ 200, cancelled/declined left out), `no_permission`
+    without READ_CALENDAR.
+  - `calendar_add`: only under the §25.3 card rule (v1.26 `args`, or v1.25 `text`/`when`; plus card args merged with
+    my own `confirm_write` `edit`) or the §26.3 Allowed rule. Goes to the remembered pick, else the account's own
+    **Google** calendar (`com.google`, visible, access ≥ CONTRIBUTOR); a local "Phone" calendar only by explicit pick
+    (offered only when no Google calendar exists); read-only calendars never. Read back (title, start, end, calendar
+    id); a mismatch deletes it. Result `{event_id, calendar: {name: "Google Calendar", account}}` (an older server's
+    422 gets `{event_id}`). Failures answer `no_permission` / `calendar_unavailable`; the exact reason (no permission /
+    no writable Google calendar / insert failed / verify mismatch) is in the local record the card shows; the
+    `write_id` is released so [Retry] works. v1.25 (no `risi_skills`) devices run check/add under the card rule.
+  - `calendar_remove` (undo): only an event this phone added (`risi_writes` write_id → event id).
+  - Local data: the pick and the add records in DataStore (`risi_calendar_id`, `risi_calendar_writes`); no Room change
+    (two DAO queries on the existing `risi_writes`).
+- **Action card:** title, date, start–end, calendar (remembered, or the server's `confirm.calendar` hint matched to a
+  calendar here, else "Choose calendar") with **[Add] [Edit] [Cancel]**. [Add] = `confirm_write` (no model turn); the
+  first use opens the picker ("account · Google"). [Edit] (title, date, time, duration, all day, calendar) → [Add]
+  sends `confirm_write` with `edit`. After the add: "✓ Added · Mon 12 Oct, 2–3 PM" on the card and the server's
+  "Added to your Google Calendar: … " line with **[Open] [Undo]** (without a skill_done the card itself is the success
+  card). Settings → Risi skills → Calendar → Details shows/changes the calendar; a pick is sent in the skills PATCH
+  (`calendar`). Proposal `2026-10-09-risi-action-loop.md` items 1–4 (9e4b43e).
+- **Chips:** only fill the composer; a question or confirm phrase ("What…?", "Confirm…", "Yes…", "Cancel") is hidden.
+  `skill_needed` for a never-on skill: "Turn on Calendar".
+- **Tests:** `PhoneCalendarTest` (selection, picker remembered, insert + verify, every failure, all-day, free/busy
+  merge, restart), `AndroidCalendarBackendTest` (Robolectric fake `com.android.calendar` provider), `RisiCalendarToolTest`
+  (card/allowed/edit acceptance, failures, undo, hint match, PATCH body, chips), `RisiCalendarCardUiTest` ([Add] sends
+  only `confirm_write`, first-use picker, hint without picker, [Edit] → `confirm_write` + edit, success card, failure,
+  chips never send, "Turn on Calendar"), `RisiToolsTest` (old-server fallback).
+- **UI gate:** `scripts/ui-entry-test --calendar` (root-delegated; step 12, `UITEST_CALENDAR_ONLY=1` for steps 1+12):
+  **UI ENTRY OK** (own instances: redroid -cal1/-cal2 5881/5882, server :4581, fake-llm :8281). Seeded `com.google`
+  calendar + read-only Google "Holidays" + local "Phone"; Calendar on via the real permission prompt (Allow);
+  Harsha's sentence → ONE action card in one turn (2 model calls); the chip only filled the composer (0 calls); [Add]
+  → picker listing only "uitest.risime@gmail.com · Google" → the event in CalendarContract (calendar id, 14:00, 1 h)
+  with 0 model calls; "Added to your Google Calendar: Interview with Shenika · Mon 12 Oct, 2–3 PM" [Open] [Undo];
+  Undo removed it; never "I don't see any event details". Screenshots `29-calendar-action-card.png`,
+  `30-calendar-added.png`, `31-calendar-picker.png`.
+- **Needs Harsha's phone:** the real Google account sync (redroid has no Google account: the gate seeds a `com.google`
+  calendar as the sync adapter, so the CalendarContract side is covered, not the upload to Google); [Open] into Google
+  Calendar (redroid's AOSP Calendar only); the permission prompt wording on his Android version.
+
 ## §27 made_by + the Commitment Ledger follow-ups, A19 + A13–A16 + 30-day summaries — READY (JVM gate green, UI ENTRY OK; risi_ledger only while /auth/config says on)
 - **A19 (v1.27 wire, d2ce50e):** `net/Protocol127.kt` (`RisiMadeBy`, items, item states/kinds/actions, `CallRisiState`,
   `call_risi` signal, `risi_stop`), `RisiMeta` gains `made_by` and every §27 kind's fields (`for` accepts a string or a

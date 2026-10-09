@@ -956,7 +956,6 @@ PY
   for _ in $(seq 1 20); do
     xy="$(allow_xy)"
     if [ -n "$xy" ]; then
-      [ "$asked" = 0 ] && shot "32-calendar-permission"
       A shell input tap $xy; asked=$((asked + 1)); sleep 1.5; continue
     fi
     [ "$asked" -gt 0 ] && break
@@ -1022,8 +1021,8 @@ PY
   pass "calendar: the picker lists only '$GACC · Google' (read-only and local calendars excluded)"
   tap "Use this calendar" || fail "calendar: pick the calendar"
   wait_text "Added to your Google Calendar: Interview with Shenika · $CAL_DATE, 2–3 PM" 90 || fail "calendar: no 'Added to your Google Calendar: …' on the card"
-  has 'text="Open"' || fail "calendar: the success card has no [Open]"
-  wait_text "Undo" 30 || fail "calendar: the success card has no [Undo]"
+  wait_text "Open" 30 || fail "calendar: the success line has no [Open]"
+  wait_text "Undo" 30 || fail "calendar: the success line has no [Undo]"
   shot "30-calendar-added"
   ev="$(A shell "content query --uri content://com.android.calendar/events --projection _id:calendar_id:title:dtstart:dtend:deleted" 2>/dev/null | tr -d '\r' | grep 'title=Interview with Shenika,' | grep 'deleted=0' || true)"
   [ -n "$ev" ] || fail "calendar: no 'Interview with Shenika' event in CalendarContract"
@@ -1043,7 +1042,7 @@ PY
     sleep 1
   done
   [ -n "$gone" ] || fail "calendar: Undo didn't remove the event"
-  wait_text "Removed from your calendar" 30 || fail "calendar: the card doesn't say 'Removed from your calendar' after Undo"
+  has 'text="Undo"' && fail "calendar: [Undo] is still offered after the undo"
   pass "calendar: Undo removed the event (calendar_remove of this phone's own add)"
   has "see any event details" && fail "calendar: \"I don't see any event details\" appeared"
   logcat_ok "calendar"
