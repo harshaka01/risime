@@ -120,6 +120,9 @@ defmodule RisiMe.Agent.Turn do
       in_risi_chat?: RisiMe.Groups.Tabs.risi_chat?(conv),
       # v1.26 §26.9: is the asker gated by skills (computed once a turn)?
       gated?: Skills.gated?(asker),
+      # v1.29 §29.7: Risi Calendar titles reach the model only on our own model.
+      own_model?: LLM.own_only?(),
+      calendar_user?: RisiMe.Agent.Calendar.calendar_user?(asker),
       deadline: started + b.turn_ms,
       bounds: b
     }
@@ -248,6 +251,9 @@ defmodule RisiMe.Agent.Turn do
     end
   end
 
+  @calendar_kinds ~w(calendar_invite event_card event_update calendar_suggestion
+                     calendar_reminder)
+
   defp history_line(row, ctx) do
     case Jason.decode(row.plaintext) do
       {:ok, %{"type" => "risi_request", "request_id" => rid} = e}
@@ -269,6 +275,13 @@ defmodule RisiMe.Agent.Turn do
           case e["kind"] do
             "confirm" ->
               "(action card) " <> String.replace_suffix(b, "? Update RisiMe to answer.", "")
+
+            # v1.29 §29.7: Risi Calendar titles reach only our own model.
+            k when k in @calendar_kinds ->
+              if ctx.own_model?, do: b, else: "(a Risi Calendar card)"
+
+            "digest" when ctx.calendar_user? and not ctx.own_model? ->
+              "(your morning digest)"
 
             _ ->
               b

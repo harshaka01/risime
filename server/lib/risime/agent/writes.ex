@@ -278,7 +278,7 @@ defmodule RisiMe.Agent.Writes do
 
   # v1.29 §29.8: the Risi Calendar card's [Edit] may also change `with` and `reminder_min`.
   defp edit_ok?(%Write{tool: "risi_calendar_add"}, %{} = e) do
-    Map.keys(e) -- (@edit_keys -- ~w(with reminder_min)) == [] and
+    Map.keys(e) -- (@edit_keys ++ ~w(with reminder_min)) == [] and
       Enum.all?(e, fn
         {"title", t} -> is_binary(t) and String.trim(t) != "" and String.length(t) <= 200
         {"all_day", b} -> is_boolean(b)
