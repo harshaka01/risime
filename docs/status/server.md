@@ -16,6 +16,103 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
+## v1.29 §29 Risi Calendar (proposal 2026-10-09-risi-calendar-notes, decision 073) — READY (not deployed; `RISI_EVENTS` off by default)
+Commits: 5ea7902 (core), 43627a5 (REST tests + fixes), f0ec285 (flow tests + [Edit] fix), 6455806 (channel,
+canary, phone+Risi check), plus this status. Gate (partition `_cal`): `mix format --check-formatted && mix compile
+--warnings-as-errors && MIX_TEST_PARTITION=_cal mix test` → 984 tests, 0 failures, 11 skipped, 3 excluded. New tests:
+`risi_calendar_rest_test.exs` (13), `risi_calendar_flow_test.exs` (15), `channels/risi_calendar_changed_test.exs` (1);
+`calendar_honesty_test.exs` updated to the §29.7 line. §30 Notes not started (nothing blocks it: `source_note_id`,
+`note_id` on cards and the event model are in place).
+- **Switch / capability:** `RISI_EVENTS=on` → `/auth/config` `"risi_events": "on"` (absent while off: v1.28 exactly).
+  Off: every `/risi/calendar…` is `503 agent_unavailable`, no calendar cards, offers stay §28.5. Device capability
+  `risi_events` is kept only with `risi_tools` + `risi_skills` + `risi_ledger` (else silently dropped). A calendar
+  user = switch on + any device with it. `RISI_SKILLS` is not needed for the calendar path (it is for §28.5 cards).
+- **Migration** `20261023100000_risi_calendar` (additive): `risi_events` (`title_sealed`/`notes_sealed` only, AAD
+  `risi_events:<id>:title|notes`; CHECKs time ≤ 14 d, created_by, state, sealed lengths), `risi_event_participants`
+  (+ `schedule_v`, `inserted_at`), `risi_event_suggestions`, `risi_calendar_log` (+ sequence), `risi_calendar_settings`,
+  `risi_calendar_invites_pending`, `risi_calendar_client_ids` (24 h idempotency). No FK from events to items/notes
+  (an item deleted with its chat never deletes a user's event).
+- **REST** exactly §29.3 (`RisiCalendarController`): `X-Device-Id` must be a `risi_events` device (`403 invalid_device`);
+  60 writes / 120 reads per user per minute (`429`, `Retry-After`). `409 version_conflict` carries `error.event` (the
+  caller's current view). Cursor = opaque `rc1.…`; older than 30 days → `410 cursor_expired`; malformed → `422`.
+  Changes are coalesced per event, `{"event_id", "removed": true}` for removed/purged/not-a-participant.
+- **`version`** counts the **owner's** changes (title, notes, time, zone, add/remove, cancel). A participant's
+  accept/decline/own reminder is not a new version, so answering the current version never 409s because someone else
+  answered. A respond with a stale version → 409 (the time may have moved).
+- **Cards** (all `made_by.model: null`; only to calendar users with an active Risi chat): `calendar_invite`,
+  `event_update` (`notify: []`, to every participant incl. the actor, also on cancel), `calendar_suggestion`,
+  `calendar_reminder`, `event_card` `added` / `official`, the `confirm` `tool: "risi_calendar_add"`. Key sets are the
+  proposal's (asserted in the tests). Bodies: "Invitation: Interview · Mon 12 Oct, 2–3 PM · with Harsha. Accept, decline
+  or suggest another time in RisiMe." ("New time for an invitation: …" for `time_changed`), "In 30 min: Interview
+  (2:00 PM) with Shenika.", "Shenika suggests Tue 13 Oct, 3–4 PM for 'Interview'.", "Added to your Risi Calendar: … ·
+  with Shenika." (+ " Couldn't invite X."), Official "Meeting: … Accept, decline or suggest another time in RisiMe."
+- **Suggestion `keep`:** the suggester gets an `event_update` (`change: "status"`, `by`: owner, `notify: [suggester]`)
+  with body "Harsha kept the original time for 'Interview'." (the proposal names no kind for it).
+- **Actions** (§29.11) from the actor's Risi chat or the event's Official conversation: `event_accept` (edit null, `{}`
+  or `{"reminder_min"}`), `event_decline`, `event_suggest` (`{"start","end","all_day"}`), `suggestion_use` /
+  `suggestion_keep`; anything else ignored. They apply to the current event (the envelope carries no card version).
+- **Action card (§29.8):** for a calendar user the draft's event card is `risi_calendar_add` (no skill, no phone
+  permission; `buttons: ["add","edit","cancel"]`, `skill_id`/`calendar`/`origin` null, `item_id` of a named promise).
+  `args.source` = the promise's Official chat, else the conversation asked in (the Risi chat). `with` = the promise's
+  people (minus the asker) ∪ names from the new optional draft slot `with` (resolved among friends and co-members;
+  non-invitable dropped). [Add] creates at once (no tool call, no model) → `event_card` added + invites. [Edit] takes
+  `title,start,end,all_day,with,reminder_min`. The phone `calendar_add` stays (model may still call it on request).
+  The phone `calendar_check` tool is **not offered** to a calendar user: `risi_calendar_check` runs it in the same step
+  when the Calendar skill/permission allow.
+- **Honesty (§29.7)** on top of f063970: a check with a `risi_calendar` source appends "Checked: Risi Calendar · Phone
+  calendar (Work). Not checked: Google Calendar (not connected)." (Google is always named here, per §29.7; the P0
+  phone-only line of f063970 is unchanged). No read (e.g. no `RISI_DATA_KEY`) → "I couldn't check your calendar, so I
+  can't tell whether you're free." + one line per source, `made_by` rule. `answer.sources` gets the `calendar_source`
+  items. Proposed events count as busy blocks ("tentative" for the model). **Titles reach the model only when
+  `LLM.own_only?/0`** (local `risi_l1`, fallback off and unconfigured); with a commercial route the Risi-chat history
+  shows calendar cards as "(a Risi Calendar card)" and a calendar user's digest as "(your morning digest)".
+- **Offers → invites (§29.12):** `Offers.consider/1` routes calendar recipients to `CalendarOffers` (one proposed event
+  per item, owner = item owner, participants = owner ∪ counterparts, 1 h, neutral title "Shenika: interview with
+  Harsha" → "Interview", claims `risi_event` / `risi_invite` / `event_card` in `risi_item_offers`); others keep §28.5.
+  Owner invite at extraction, counterparts once tracked; the Official `event_card` only when every participant is a
+  calendar user (and, for a ledger item, once tracked). 3 Risi-made events per chat per day, 1 per (title, start).
+  Only Official conversations (never Private, never a Risi chat). The server has no §26.7 meeting detector, so the
+  Official card comes from this item path only.
+- **Held invites:** a participant who isn't a calendar user / has no Risi chat is held in
+  `risi_calendar_invites_pending` until a `risi_events` device registers (job `calendar_pending`) or the Risi chat
+  activates (`pending_copies`), dropped at the event's start.
+- **Reminders (§29.10):** Oban `calendar_reminder` (args `event_id,user_id,v,kind` only), accepted participants,
+  default from settings (30), all-day 09:00 rules; rescheduled on every time/reminder change, cancelled on
+  decline/remove/cancel. Not gated by the Reminders skill; a gated user's Reminders activity log gets
+  `action: "calendar_reminder"`, `via: "risi_calendar"`.
+- **Digest (§28.8 amended):** `events: {today, tomorrow, pending}` (EventRef keys exactly §29.12) when `digest_events`;
+  posted for items or events; body adds "Today: Interview (Mon 12 Oct, 2–3 PM, tentative)." `items`/`totals` unchanged.
+- **Official off (§29.4):** Risi-made events of that chat nobody accepted are cancelled (`Secretary.forget`).
+- **Backfill:** `bin/risime eval "RisiMe.Release.risi_calendar_backfill()"` (dry run: counts),
+  `(dry_run: false)` queues one `calendar_backfill` job (6 min). `Release.migrate/0` queues it on every deploy; it does
+  nothing while `RISI_EVENTS` is off (counts only), so **run it (or redeploy) after turning `RISI_EVENTS=on`**. Gate case
+  tested: "Shenika: interview with Harsha, Mon 12 Oct 14:00" → "Interview" 14:00–15:00 Asia/Colombo, both proposed,
+  invites in both Risi chats, Official card; both accept → accepted.
+- **Hourly prune:** cancelled events purged after 7 days, log 30 days, idempotency ids 24 h, held invites at start.
+- **Not done / open:** (1) "owner leaves RisiMe / account deleted" — the server has no account-deletion path to hook;
+  user rows cascade participants only. (2) An item's later due change doesn't move its Risi-made event (the owner
+  edits it). (3) Root: merge §29 into PROTOCOL.md + the examples; the server tests assert the proposal's key sets.
+- **fake-llm scripted replies the gate needs (root owns `scripts/fake-llm` / `risi_gate_script.json`):**
+  1. Gate 1 (`risi_next_action`, match "add my interview with Shenika"): step 0 either
+     `{"tool":"final","answer":"Sure.","sources":[],"next_steps":[],"draft":{"kind":"event","title":"Interview","date":"Monday 12 Oct","time":"2pm","with":["Shenika"]}}`
+     or `{"tool":"risi_calendar_add","args":{"title":"Interview","start":"Monday 12 Oct 14:00","end":null,"all_day":null,"with":["Shenika"],"reminder_min":null}}`
+     then `{"tool":"final","answer":"Tap Add on the card.","sources":[],"next_steps":[]}`.
+  2. Gate 4 (match "Am I free"): step 0 `{"tool":"risi_calendar_check","args":{"from":"Monday 12 Oct 13:00","to":"Monday 12 Oct 16:00"}}`,
+     step 1 `{"tool":"final","answer":"You're free then.","sources":[],"next_steps":[]}` (the server rewrites a free
+     claim against busy blocks and appends the Checked line; with no data key it discards it). A scripted
+     `calendar_check` step is **denied** for a calendar user (not in its schema).
+  3. Gate 7 (commercial route): run fake-llm as the fallback provider with `RISI_FALLBACK=on` to make
+     `own_only?` false; the request bodies must then contain no `CANARY-` title.
+
+### Android needs (exact, §29)
+- Send `X-Device-Id` (a `risi_events` device) on every `/risi/calendar…` call.
+- `my_status` / `my_reminder_min` may be null only for a non-participant view (never returned today).
+- `409 version_conflict`: `error.event` is the current event (no extra GET needed).
+- `event_update` is also sent to the actor and on cancel; `kept` arrives as `event_update` `status` with
+  `notify: [me]` and a body line.
+- The confirm card's `args.source` may be the Risi chat id.
+- `risi_calendar_changed` is never a push wake; sync on it, on app start and on the tab.
+
 ## Items 8–10 2026-10-09: proactive offers, My promises split, dedupe + vague items — READY (not deployed)
 Commits: 6cc393a (item 9 + migration), 35a6b99 (items 8 + 10 + backfill). Gate (partition
 `_ofr`): 935 tests, 0 failures, 15 skipped, 3 excluded. Tests: `offers_items_8_10_test.exs`
