@@ -24,7 +24,7 @@ defmodule RisiMe.Workers.Risi do
   use Oban.Worker, queue: :risi, max_attempts: 3
 
   alias RisiMe.Agent
-  alias RisiMe.Agent.{Commitments, Out, Requests, Secretary, Writes}
+  alias RisiMe.Agent.{Commitments, LedgerActions, Out, Requests, Secretary, Writes}
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"kind" => "forget", "conv" => conv}}) do
@@ -94,9 +94,23 @@ defmodule RisiMe.Workers.Risi do
          %{"type" => "risi_action", "__sender" => ^user} = env <- Secretary.envelope(conv, id) do
       case env["action"] do
         # v1.25 §25.4: confirm cards (the write runs here, without a model call).
-        a when a in ~w(confirm_write cancel_write) -> Writes.act(conv, user, env["__device"], env)
-        a when a in ~w(me_too not_me) -> RisiMe.Agent.Reminders.act(conv, user, env)
-        _ -> Commitments.act(conv, user, env)
+        a when a in ~w(confirm_write cancel_write) ->
+          Writes.act(conv, user, env["__device"], env)
+
+        a when a in ~w(me_too not_me) ->
+          RisiMe.Agent.Reminders.act(conv, user, env)
+
+        # v1.27 §27.5: item actions (and done) on ledger items, in the actor's Risi chat.
+        a when a in ~w(item_confirm item_decline item_edit) ->
+          LedgerActions.act(conv, user, env)
+
+        "done" ->
+          if risi_chat?(conv),
+            do: LedgerActions.act(conv, user, env),
+            else: Commitments.act(conv, user, env)
+
+        _ ->
+          Commitments.act(conv, user, env)
       end
     else
       _ -> :ok
@@ -114,4 +128,6 @@ defmodule RisiMe.Workers.Risi do
     do: Commitments.escalate(id, v, n)
 
   defp run(_args), do: :ok
+
+  defp risi_chat?(conv), do: RisiMe.Groups.Tabs.risi_chat?(conv)
 end

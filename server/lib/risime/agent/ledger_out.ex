@@ -198,6 +198,68 @@ defmodule RisiMe.Agent.LedgerOut do
     end
   end
 
+  ## item_update (§27.5)
+
+  @doc """
+  After an accepted action on an item of summary `d`: `item_update` (silent, no model) in the
+  Risi chat of every `risi_ledger` recipient of the summary, the actor's included. Oban result.
+  """
+  def item_update(%Commitment{} = c, %Discussion{} = d, state, by) do
+    names = names(d.conversation_id)
+    who = names[by] || "A member"
+    text = c.text
+
+    body =
+      case state do
+        "confirmed" -> "#{who} confirmed '#{text}'"
+        "edited" -> "#{who} changed it to '#{text}'"
+        "declined" -> "#{who} declined '#{text}'"
+        "cancelled" -> "#{who} cancelled '#{text}'"
+        "done" -> "#{who} marked '#{text}' done"
+      end
+
+    risi = %{
+      "kind" => "item_update",
+      "summary_id" => d.summary_id,
+      "item_id" => c.id,
+      "state" => state,
+      "by" => by,
+      "text" => text,
+      "due" => Clock.ts(c.due),
+      "all_day" => c.all_day == true,
+      "call_ref" => nil,
+      "notify" => []
+    }
+
+    result =
+      for u <- Devices.risi_ledger_users(d.recipients), rc = RisiChat.active_id(u) do
+        tz = Clock.user_tz(u)
+        item = item_json(c)
+        due = if state in ~w(confirmed edited), do: due_part(item, tz), else: ""
+
+        case Out.post(rc, body <> due <> ".", risi) do
+          {:ok, _} -> :ok
+          {:error, :rate_limited} -> {:snooze, 10}
+          {:error, _} -> :ok
+        end
+      end
+
+    Enum.find(result, :ok, &match?({:snooze, _}, &1))
+  end
+
+  @doc "v1.27 §27.3: an owner-fallback (v1.24) card changed state: the copies hear about it."
+  def legacy_update(%Commitment{summary_id: sid} = c, state, by) when is_binary(sid) do
+    case Repo.get(Discussion, sid) do
+      %Discussion{} = d when state in ~w(confirmed edited declined cancelled done) ->
+        item_update(c, d, state, by)
+
+      _ ->
+        :ok
+    end
+  end
+
+  def legacy_update(_c, _state, _by), do: :ok
+
   ## Copies: posted, or held for the recipient's Risi chat (24 h)
 
   defp deliver_or_hold(d, user, body, risi) do

@@ -471,7 +471,7 @@ defmodule RisiMe.Agent.Commitments do
     }
 
     case Out.post(c.conversation_id, body, risi) do
-      {:ok, _} -> :ok
+      {:ok, _} -> RisiMe.Agent.LedgerOut.legacy_update(c, state, by)
       {:error, :rate_limited} -> {:snooze, 10}
       {:error, reason} -> {:error, reason}
     end
@@ -484,7 +484,8 @@ defmodule RisiMe.Agent.Commitments do
 
   # Facts (§24.12) are written only for a tracked commitment: one for the owner and one for
   # each counterpart. Derived lines only; embeddings when a model is served.
-  defp learn(c) do
+  @doc false
+  def learn(c) do
     names = names(c.conversation_id)
     owner = names[c.owner_id] || "A member"
     now = DateTime.utc_now()

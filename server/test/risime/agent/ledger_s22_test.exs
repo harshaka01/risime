@@ -155,6 +155,31 @@ defmodule RisiMe.Agent.LedgerS22Test do
 
     [{_, card_body, _}] = for {_, _, r} = p <- out, r["kind"] == "discussion_card", do: p
     assert card_body =~ "(3 items)"
+
+    # Kamal confirms his v1.24 card in Official: the copies hear about it (item_update).
+    id =
+      envelope!(ctx.og, ctx.kamal, %{
+        "v" => 1,
+        "type" => "risi_action",
+        "target" => c["commitment_id"],
+        "action" => "confirm",
+        "edit" => nil
+      })
+
+    perform_job(Job, %{
+      "kind" => "action",
+      "conv" => ctx.og,
+      "message_id" => id,
+      "user_id" => ctx.kamal.id
+    })
+
+    out = posts()
+
+    assert [{_, _, %{"kind" => "commitment_update"}}] =
+             for({c, _, _} = p <- out, c == ctx.og, do: p)
+
+    updates = for {conv, _, %{"kind" => "item_update"} = u} <- out, do: {conv, u["state"]}
+    assert Enum.sort(updates) == Enum.sort([{ctx.rc_h, "confirmed"}, {rc_s, "confirmed"}])
   end
 
   test "no Risi chat yet: the copy is held sealed for 24 h and posted when the chat is active",

@@ -107,22 +107,43 @@ defmodule RisiMe.Agent.Rest do
 
     q = if state == :open, do: where(q, [c], c.state in ^Commitment.open_states()), else: q
 
+    # v1.27 §27.5: a ledger item is a promise only once its owner confirmed it; until then it
+    # is nobody's (counterparts hear about it only after the owner's ✓).
+    q = where(q, [c], is_nil(c.item_state) or c.item_state != "proposed")
+
     Repo.all(q)
     |> opened(&Commitment.open_all/1)
-    |> wire(fn c ->
-      %{
-        commitment_id: c.id,
-        chat_id: c.chat_id,
-        official_conversation_id: c.conversation_id,
-        state: c.state,
-        text: c.text,
-        owner: c.owner_id,
-        counterpart: c.counterpart_ids,
-        due: c.due && Messaging.iso(c.due),
-        due_text: c.due_text,
-        created_at: Messaging.iso(c.inserted_at),
-        updated_at: Messaging.iso(c.updated_at)
-      }
-    end)
+    |> wire(fn c -> commitment_json(c, user) end)
+  end
+
+  # v1.27 §27.9: ledger items gain summary_id, source, all_day and the caller's role.
+  defp commitment_json(c, user) do
+    base = commitment_json(c)
+
+    if Commitment.ledger?(c),
+      do:
+        Map.merge(base, %{
+          summary_id: c.summary_id,
+          source: c.source,
+          all_day: c.all_day == true,
+          role: if(c.owner_id == user, do: "owner", else: "counterpart")
+        }),
+      else: base
+  end
+
+  defp commitment_json(c) do
+    %{
+      commitment_id: c.id,
+      chat_id: c.chat_id,
+      official_conversation_id: c.conversation_id,
+      state: c.state,
+      text: c.text,
+      owner: c.owner_id,
+      counterpart: c.counterpart_ids,
+      due: c.due && Messaging.iso(c.due),
+      due_text: c.due_text,
+      created_at: Messaging.iso(c.inserted_at),
+      updated_at: Messaging.iso(c.updated_at)
+    }
   end
 end
