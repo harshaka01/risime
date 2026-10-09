@@ -5821,14 +5821,15 @@ Clients send it at sign-in and when the phone's zone changes.
 ### 24.13 Rate limits
 | Limit | Value |
 |---|---|
-| `risi_request` | 10 per user per hour; 1 per chat per minute; 20 per chat per day |
+| `risi_request` | 20 per user per minute (sliding); 200 per chat per day. Over it the request is **queued** and answered when the window frees (order kept per user), never refused |
 | Commitment cards | 10 per chat per day |
 | Offers | 1 per chat per day |
-| Global Risi queue | 16 in flight; the rest wait or get `rate_limited` |
+| Global Risi queue | 16 model calls in flight; the rest wait (queued) |
 | Official toggles | 6 per chat per day |
 
-Over a limit, Risi answers a `risi_request` with the `error` envelope `rate_limited`; REST answers
-`429 rate_limited` with `Retry-After` (§7.1).
+A queued `risi_request` is answered late, not refused. Only a user with more than 50 pending
+requests, or a request that waited over 10 min, gets the `error` envelope `rate_limited`. REST
+endpoints answer `429 rate_limited` with `Retry-After` (§7.1).
 
 ### 24.14 Test coverage (all gates)
 - **Upgrade gate (hard rule 9, root):** counts per `conversation_id` (both tabs) and per
