@@ -111,7 +111,7 @@ elif scripts/android-target check >/dev/null 2>&1; then
   echo "==> ui-entry-test (user-style entry points, redroid)"
   UITEST_INSTANCE=_rel UITEST_PORT=4552 UITEST_REDROID_A=-relui1 UITEST_REDROID_A_PORT=5861 \
     UITEST_REDROID_B=-relui2 UITEST_REDROID_B_PORT=5862 \
-    step scripts/ui-entry-test --apk android/app/build/outputs/apk/debug/app-debug.apk
+    step scripts/ui-entry-test --risi --apk android/app/build/outputs/apk/debug/app-debug.apk
 fi
 
 echo "==> boot check (scripts/boot-check: prod release, real env, Risi off/on/reopen/wrong key)"
