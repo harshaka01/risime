@@ -59,7 +59,35 @@ were needed after nightly.11.
 2. **§25 tools, wave 1** (running): S9–S12 (risi_tools, Risi chat, Turn loop, audience) and A7–A8
    (decoders, Risi chat row).
 3. **Reminders tool:** set_reminder plus confirm card, Me too, firing (S13–S14 / A10).
-4. **"Teach Risi"** (Harsha 2026-10-09):
+4. **"Risi Skills"** (Harsha 2026-10-09). Skills are the permission layer every tool runs under.
+   - **Settings → "Risi skills"** lists each skill with:
+     - what it can do and its exact permissions;
+     - a switch, off by default; turning it on asks for the Android/OAuth permission there and then;
+     - "Ask me each time" / "Allowed";
+     - an activity log, plus undo and Revoke.
+   - **Rules:**
+     - Risi acts only for the asker; others' messages never trigger a skill;
+     - every action is logged and undoable where possible;
+     - skills run from the Risi chat or @Risi in Official, never Private.
+   - **Order:**
+     - **(a) Alarm:** AlarmClock intent on the asker's phone, confirm first;
+     - **(b) Reminders** (item 3);
+     - **(c) Calendar:** a client tool. An agreed meeting in Official → "Add to calendar for: Harsha ✓
+       Kumu ☐", each person confirms on their own phone, optional reminder;
+     - **(d) Scheduled messages:** stored and sent by the asker's PHONE (exact alarm/WorkManager),
+       encrypted at send time, never by the server, with a clock icon, edit/cancel and "sent late",
+       and a list in chat ⋮; "every day" supported;
+     - **(e) Email** (later, pilot): Gmail via Google OAuth (test-users mode, ≤100 users) and Outlook
+       via Microsoft Graph, read-only first; sending only with a full-draft confirm card.
+   - **Partner agents** (Lia, eDrop) later appear as skills with their own permissions.
+   - **Tests:**
+     - "wake me up at 6" → a real alarm in Redroid's clock;
+     - "send Kumu good morning at 6am" → sent by the phone, arrives encrypted;
+     - a revoked skill → Risi says it has no access and how to turn it back on;
+     - another member's message can't trigger a skill.
+   - **Contract:** a §25 addendum (skill registry/state, the client tools `set_alarm` and
+     `schedule_message`, the meeting "add for" card).
+5. **"Teach Risi"** (Harsha 2026-10-09):
    - **Profile:** Settings → "My Risi profile" (bio, roles, people, preferences, interests).
    - **Ways to teach:**
      - paste text or upload PDF/DOCX → extracted fact cards to confirm/edit;
@@ -73,7 +101,7 @@ were needed after nightly.11.
    - Answers cite the profile.
    - Needs a §25 addendum (contract proposal: profile REST, extraction/confirm, document upload,
      visibility) when it starts.
-5. **The rest of §25:**
+6. **The rest of §25:**
    - calendar client tool (S15 / A9);
    - notes and memory (S16), merged into Teach Risi;
    - search / summarise / draft (S17);
@@ -415,6 +443,15 @@ were needed after nightly.11.
   `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
 - **Agents:** none running.
 - **Needs Harsha:**
+E. **Email skill (later, for the pilot), needs your accounts:**
+   - **Google:** a Google Cloud project with the Gmail API enabled, an OAuth consent screen in
+     "Testing" with up to 100 test users, an Android OAuth client (package `lk.codegen.risime`, our
+     release SHA-1) and the `gmail.readonly` scope.
+     - **Public launch:** a restricted scope, so Google verification plus a yearly CASA security
+       assessment.
+   - **Microsoft:** an Entra app registration (public client, redirect for Android) with
+     `Mail.Read` and `Calendars.Read` delegated permissions.
+     - **Public use:** publisher verification.
 T. **Risi tools (§25 proposal `contract/proposals/2026-10-09-risi-client-tools.md`, decision 068):**
    1. **The commercial model** for tool use and Sinhala/Tamil: which provider, an API key in `.env`,
       and a zero-retention agreement. Until then everything runs on risi-l1, and the gate shows what
