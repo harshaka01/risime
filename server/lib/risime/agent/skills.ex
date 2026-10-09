@@ -456,6 +456,9 @@ defmodule RisiMe.Agent.Skills do
             )
           )
 
+        # A cancel by request settles the schedule's own entry (nothing left to undo).
+        if w.tool == "cancel_scheduled" and args["entry_id"], do: settle(args["entry_id"])
+
         done_card(w, e)
         :ok
     end
@@ -714,6 +717,49 @@ defmodule RisiMe.Agent.Skills do
     cutoff = DateTime.add(now, -@keep_s, :second)
     Repo.delete_all(from e in Entry, where: e.at < ^cutoff)
     :ok
+  end
+
+  @doc """
+  The user's pending scheduled messages whose recipient matches `to` (any when `to` is
+  blank), newest first: `[%{entry_id, schedule_id, to_name, target_conversation_id, at,
+  summary_when}]` (from the sealed activity; never the text).
+  """
+  def scheduled(user_id, to) do
+    q = (to || "") |> String.trim() |> String.downcase()
+    now = DateTime.utc_now()
+
+    Repo.all(
+      from e in Entry,
+        where:
+          e.user_id == ^user_id and e.skill_id == "scheduled_messages" and
+            e.action == "message_scheduled" and e.undo_state in ["available", "failed"],
+        order_by: [desc: e.at]
+    )
+    |> Enum.filter(&(shown_state(&1, now) in ~w(available failed)))
+    |> Enum.flat_map(fn e ->
+      with {:ok, %{"data" => %{"schedule_id" => sid} = d, "summary" => summary}} <- open(e),
+           true <- q == "" or String.downcase(d["to_name"] || "a group") == q do
+        [
+          %{
+            entry_id: e.entry_id,
+            schedule_id: sid,
+            to_name: d["to_name"],
+            target_conversation_id: e.target_conversation_id,
+            at: e.undo_until || e.at,
+            summary_when: summary |> String.split(", ", parts: 2) |> List.last()
+          }
+        ]
+      else
+        _ -> []
+      end
+    end)
+  end
+
+  defp settle(entry_id) do
+    with %Entry{} = e <- Repo.get(Entry, entry_id),
+         {:ok, sealed} <- open(e) do
+      reseal!(e, Map.put(sealed, "token", nil), undo_state: "done")
+    end
   end
 
   ## Undo (§26.4)

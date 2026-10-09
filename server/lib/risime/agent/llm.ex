@@ -165,7 +165,7 @@ defmodule RisiMe.Agent.LLM do
             completion_tokens: resp.completion_tokens,
             confidence: conf,
             status: "ok",
-            output: Jason.encode!(output)
+            output: logged_output(req.task, output)
           })
         )
 
@@ -176,6 +176,18 @@ defmodule RisiMe.Agent.LLM do
         {:error, :model_unavailable}
     end
   end
+
+  # v1.26 §26.4/§26.6 (decision 068: steps are hashes only): a tool-loop action is logged as
+  # its tool and the SHA-256 of its args, never the args (a scheduled message's text, a
+  # reminder's text, an event title) or a final's answer.
+  defp logged_output("risi_next_action", %{"tool" => tool} = out) do
+    Jason.encode!(%{
+      "tool" => tool,
+      "args_sha256" => RisiMe.Agent.TurnSteps.args_hash(out["args"] || out["answer"] || %{})
+    })
+  end
+
+  defp logged_output(_task, output), do: Jason.encode!(output)
 
   @upstream [:timeout, :transport, :http_5xx, :busy]
 

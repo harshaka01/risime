@@ -16,7 +16,77 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
-## v1.25 Risi with tools (§25, decision 068) — S0, S9–S12 READY (+ pilot hotfix); S13–S19 open
+## v1.26 Risi skills (§26, decision 069) + §25 writes — S0, S13–S16 READY; offers, notes open
+- **Gate:** 858 tests, 0 failures, 1 skipped, 3 excluded (`:livekit`, `:llm_live`); partition
+  `_s13`, NIF built. Nothing deployed. New env: `RISI_SKILLS` (default off) and
+  `RISI_MEMORY_KEY` (base64, 32 bytes, `.env` only; optional at boot).
+- **S0** `@checked_v1_26`: all 26 v1.26 examples by structure; `auth_config_v126`,
+  `device_put_risi_skills` and `GET /risi/skills` against the server.
+- **S13 confirm/write flow + client-tool transport.** `risi_pending_writes` (migration
+  `20261015100000`): write_id, asker, request and card conversations, tool, skill, args sealed
+  with `RISI_DATA_KEY` (wiped when done/cancelled/void; rows deleted when the 24-h card expires,
+  hourly `prune` cron). `Agent.Writes`: a write tool's `run` returns `{:propose, card}` → confirm
+  card by the audience rule (personal → the asker's Risi chat, the turn's `final` carries the
+  pointer, so the group gets one line), `risi_progress` `waiting_confirm`; `confirm_write`/
+  `cancel_write` only from the asker, in the card's conversation, before `expires_at`; the write
+  runs once without a model call (`exec`); a failed/timed-out write may run again (Retry) while
+  the card lives. `Agent.ToolCalls`: `risi_tool_calls` rows (no args) + the per-device
+  `risi_tool_call` event (2-min TTL, deleted on the result or when the waiter gives up, 15-s
+  deadline in `expires_at`), the wake to that device's token only
+  (`Push.Dispatcher.push_device/2`); `POST /risi/tool_calls/{id}/result` with every §25.3 status
+  and exact per-tool result schemas. `calendar_check` (blocks → `c<n>` sources) and
+  `calendar_add` registered. `Agent.TimePhrase`: ISO or local phrases from the request's
+  `server_ts` (`__ts`, the request message's TimeUUID) in the asker's tz; a bare hour or a date
+  where a time is needed fails the step with a `reason` the model sees (the `final` asks).
+- **S14 skills.** `Agent.Skills` (registry, `GET`/`PATCH /risi/skills`, activity GET/DELETE,
+  undo), tables `risi_skills` (`ever_on` for `was_on`), `risi_skill_devices` (FK to
+  `devices.id`: deleted with the device), `risi_skill_activity` (summary, hint, undo token and
+  undo data sealed with `RISI_MEMORY_KEY`, 90 days; migration `20261016100000`). Gates in
+  `Tools.authorize/3`; `need_skill` in the schema (gated askers only) → `skill_needed` in the Risi
+  chat + pointer, a `denied` step; Allowed vs Ask exactly as §26.3; revoke voids open cards
+  (confirm → `skill_needed`) and ignores a late `ok` (nothing logged); `cancel_pending`;
+  `skill_done` with Undo replaces the v1.25 `answer` for gated askers. `risi_skills` capability
+  kept only with `risi_tools`. `/auth/config` `risi_skills` and `/health` `checks.risi_skills`
+  (`off` | `ok` | `unavailable: missing_key RISI_MEMORY_KEY …`, never a crash).
+- **S15 reminders.** `Agent.Reminders` (`set_reminder`, migration `20261017100000`
+  `risi_reminders`, text sealed with `RISI_DATA_KEY`, wiped on fire/cancel), Oban
+  `reminder_fire`, `reminder_set`, `me_too`/`not_me`, the `reminder` with `notify` =
+  participants, server undo until it fires, entries.
+- **S16 client tools.** `set_alarm`, `schedule_message`, `cancel_scheduled` registered (v1.26
+  tools only for gated askers on a `risi_skills` device); `calendar_remove` undo-only. Routing:
+  confirming device if it advertises the tool's capability, else the turn's; allowed → the
+  turn's; undo → the entry's. The learning log now stores a tool-loop action as `{tool,
+  args_sha256}` only (the canary test found the scheduled text in `output`).
+- **Tests:** `writes_s13_test.exs`, `skills_s14_test.exs`, `reminders_s15_test.exs`,
+  `client_tools_s16_test.exs` (incl. the safety checks: another member's message/confirm
+  triggers nothing; 409 `write_not_confirmed`; revoked skill → `skill_needed`; the canary text
+  in no table, job, step row, learning-log row or log after the tool call).
+- **Decisions taken (for root):**
+  1. Pending writes and reminder texts are sealed with `RISI_DATA_KEY` (Risi can't run without
+     it); only the activity log uses `RISI_MEMORY_KEY`. Skills are "on" only with both the switch
+     and the key (`/auth/config` omits `risi_skills` otherwise, as `risi_tools`).
+  2. A "remind me" card for an asker without a Risi chat goes to the conversation itself (it holds
+     only the asker's own words); with a Risi chat it is personal. A personal reminder fires in
+     the Risi chat (where its `reminder_set` is).
+  3. `set_reminder` is offered only on a `risi_tools` asking device (a card needs an app that can
+     answer it).
+  4. A one-off `set_alarm` must ring within 24 h (the phone sets the next occurrence of `time`);
+     further out the step fails and the model offers a reminder or a repeating alarm.
+  5. `schedule_message` recipients: a friend by display name (full or first name; ambiguous →
+     ask) → their 1:1 `dm:` id; "this chat" → the Official conversation asked in; never a Risi
+     chat. `cancel_scheduled` by request finds the schedule in the asker's activity (by name).
+  6. `client.reported_at` before any report is the device's `last_seen_at`; permission defaults
+     `not_needed` (no runtime permission) or `unknown`; skills without an Android permission
+     (email) have `client: null`.
+  7. A failed client undo gets `state: "failed"` **with** a fresh `undo_token` (§26.4 "may be
+     retried"), so the token is present for `available` and `failed`.
+  8. `risi_timers` concurrency 2 → 4 (a confirmed client write waits ≤ 15 s in that queue).
+- **Not done (open):** `calendar_offer` / `calendar_accept` / `calendar_decline` (§26.7,
+  `risi_calendar_offers`); notes (`remember`/`forget`, facts sealed with `RISI_MEMORY_KEY`); the
+  server-built `skill_needed` when the model can't be asked; the wake's FCM high priority/2-min
+  TTL (the standard inbox wake is sent).
+
+## v1.25 Risi with tools (§25, decision 068) — S0, S9–S12 READY (+ pilot hotfix); S13–S16 in v1.26 above
 - **Gate:** see the latest commit message; partition `_s9`, NIF built (`scripts/build-mls-nif`, with crypto C4).
 - **S0** `examples_test.exs` `@checked_v1_25`: all 17 v1.25 examples; real responses for
   `auth_config_v125`, `device_put_risi_tools` (examples test) and `chat_reply_risi`,

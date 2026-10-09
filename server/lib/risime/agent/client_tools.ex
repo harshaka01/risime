@@ -8,11 +8,24 @@ defmodule RisiMe.Agent.ClientTools do
   * `calendar_check` (read, personal): free/busy blocks; each block becomes a `c<n>` ref
     (a `calendar` Source). Never titles.
   * `calendar_add` (write, personal): a confirm card, then the phone adds the event.
+  * `set_alarm` (v1.26, write, skill `alarm`): the Clock app on the asker's phone; undo is
+    manual.
+  * `schedule_message` (v1.26, write, skill `scheduled_messages`, **always** confirmed): the
+    phone stores and sends it. The text passes the server once, in the tool call's args (a
+    2-minute row deleted on the result); the pending write's sealed copy is wiped when it is
+    done, and the activity entry names only the recipient and the time.
+  * `cancel_scheduled` (v1.26, by request: always confirmed; or an undo with
+    `undo_entry_id`, `RisiMe.Agent.Skills`).
+  * `calendar_remove` (v1.26) is undo-only: never offered to the model.
+
+  The v1.26 tools go only to `risi_skills` devices (`RisiMe.Agent.Skills.allows?/2`).
 
   **Device routing** (§25.4, §26.8): a confirmed write goes to the confirming device when it
   advertises the tool's capability (`risi_tools`; `risi_skills` for the v1.26 tools), else to
   the turn's device; an allowed write to the turn's device.
   """
+  import Ecto.Query, only: [from: 2]
+
   alias RisiMe.Agent.{Clock, TimePhrase, ToolCalls, Writes}
   alias RisiMe.Devices
 
@@ -162,6 +175,270 @@ defmodule RisiMe.Agent.ClientTools do
     end
   end
 
+  ## set_alarm (v1.26 §26.6)
+
+  def set_alarm do
+    %{
+      name: "set_alarm",
+      description:
+        "set an alarm in the Clock app of the asker's phone (time: \"06:00\" or \"6am\"; " <>
+          "label: a short name or \"\"; days: ISO weekdays 1=Monday..7 for a repeating " <>
+          "alarm, or null for the next occurrence)",
+      where: :client,
+      personal: true,
+      write: true,
+      finds: false,
+      skill: "alarm",
+      args:
+        obj(
+          %{
+            "time" => %{"type" => "string", "maxLength" => 20},
+            "label" => %{"type" => ["string", "null"], "maxLength" => 60},
+            "days" => %{
+              "type" => ["array", "null"],
+              "maxItems" => 7,
+              "items" => %{"type" => "integer", "minimum" => 1, "maximum" => 7}
+            }
+          },
+          ["time"]
+        ),
+      run: &run_alarm/2,
+      exec: &exec/3
+    }
+  end
+
+  @day_names ~w(Mon Tue Wed Thu Fri Sat Sun)
+
+  defp run_alarm(%{"time" => t} = a, ctx) do
+    label = String.trim(a["label"] || "")
+    days = a["days"]
+
+    with true <- String.length(label) <= 60 || {:error, "failed", "bad_label"},
+         true <-
+           (days == nil or (days != [] and Enum.uniq(days) == days)) ||
+             {:error, "failed", "bad_days"},
+         {:ok, next, :datetime} <- alarm_time(t, ctx, days) do
+      local = Clock.local(next, ctx.tz)
+      hhmm = Calendar.strftime(local, "%H:%M")
+      days = days && Enum.sort(days)
+      wire = %{"time" => hhmm, "label" => label, "days" => days}
+      named = if label == "", do: "", else: ", '#{label}'"
+
+      summary =
+        case days do
+          nil ->
+            day =
+              if NaiveDateTime.to_date(local) ==
+                   NaiveDateTime.to_date(Clock.local(ctx.now, ctx.tz)),
+                 do: "today",
+                 else: "tomorrow"
+
+            "Set an alarm on this phone for #{hhmm} #{day} (#{Calendar.strftime(local, "%a %-d %b")})#{named}"
+
+          ds ->
+            "Set a repeating alarm on this phone for #{hhmm} on " <>
+              Enum.map_join(ds, ", ", &Enum.at(@day_names, &1 - 1)) <> named
+        end
+
+      {:propose,
+       %{
+         args: %{"wire" => wire},
+         card_args: wire,
+         summary: summary,
+         when: %{"start" => Clock.ts(next), "end" => nil, "all_day" => false},
+         text: label,
+         personal: true,
+         skill_id: "alarm"
+       }}
+    else
+      {:ok, _, :date} -> {:error, "failed", "ambiguous_time: ask the person for the time"}
+      error -> error
+    end
+  end
+
+  defp run_alarm(_args, _ctx), do: {:error, "failed", "bad_args"}
+
+  # A wall-clock time ("06:00", "6am", "tomorrow 6am"): its next occurrence. A one-off alarm
+  # rings at the next occurrence of its time on the phone (§26.6), so it must be within 24 h.
+  defp alarm_time(t, ctx, days) do
+    case time(t, ctx) do
+      # A repeating alarm only takes the time of day.
+      {:ok, at, :datetime} when days != nil ->
+        {:ok, at, :datetime}
+
+      {:ok, at, :datetime} ->
+        cond do
+          DateTime.compare(at, ctx.now) != :gt ->
+            {:error, "failed", "in_the_past"}
+
+          DateTime.diff(at, ctx.now) > 86_400 ->
+            {:error, "failed",
+             "too_far_for_an_alarm: a one-off alarm rings within 24 hours; offer a reminder " <>
+               "or a repeating alarm"}
+
+          true ->
+            {:ok, at, :datetime}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  ## schedule_message (v1.26 §26.6)
+
+  def schedule_message do
+    %{
+      name: "schedule_message",
+      description:
+        "schedule a message the asker wrote, sent later by their phone (always confirmed): to " <>
+          "(a friend's name for a 1:1 chat, or \"this chat\" for this Official chat when the " <>
+          "asker says so), text (exactly the asker's words), at (ISO or a phrase like " <>
+          "\"tomorrow 6am\"), repeat: \"daily\" or null",
+      where: :client,
+      personal: true,
+      write: true,
+      finds: false,
+      skill: "scheduled_messages",
+      args:
+        obj(
+          %{
+            "to" => %{"type" => "string", "minLength" => 1, "maxLength" => 64},
+            "text" => %{"type" => "string", "minLength" => 1, "maxLength" => 4096},
+            "at" => @str,
+            "repeat" => %{"type" => ["string", "null"], "enum" => ["daily", nil]}
+          },
+          ["to", "text", "at"]
+        ),
+      run: &run_schedule/2,
+      exec: &exec/3
+    }
+  end
+
+  defp run_schedule(%{"to" => to, "text" => text, "at" => at} = a, ctx) do
+    repeat = a["repeat"]
+
+    with true <-
+           (String.trim(text) != "" and String.length(text) <= 4096) ||
+             {:error, "failed", "bad_text"},
+         true <- repeat in [nil, "daily"] || {:error, "failed", "bad_repeat"},
+         {:ok, conv, name} <- recipient(to, ctx),
+         {:ok, t, kind} <- time(at, ctx),
+         true <- kind == :datetime || {:error, "failed", "ambiguous_time: ask for the time"},
+         :ok <- future(t, ctx) do
+      local = Clock.local(t, ctx.tz)
+      hhmm = Calendar.strftime(local, "%H:%M")
+      day = Calendar.strftime(local, "%a %-d %b")
+      wire = %{"conversation_id" => conv, "text" => text, "at" => Clock.ts(t), "repeat" => repeat}
+      who = name || "this chat"
+
+      when_text =
+        if repeat == "daily", do: "every day at #{hhmm}", else: "on #{day} at #{hhmm}"
+
+      summary =
+        if repeat == "daily",
+          do: "Send \"#{text}\" to #{who} every day at #{hhmm}, starting #{day}, from your phone",
+          else: "Send \"#{text}\" to #{who} on #{day} at #{hhmm}, from your phone"
+
+      {:propose,
+       %{
+         args: %{"wire" => wire, "to_name" => name, "when_text" => when_text},
+         card_args: wire,
+         summary: summary,
+         when: %{"start" => wire["at"], "end" => nil, "all_day" => false},
+         text: text,
+         personal: true,
+         skill_id: "scheduled_messages"
+       }}
+    end
+  end
+
+  defp run_schedule(_args, _ctx), do: {:error, "failed", "bad_args"}
+
+  # §26.6: a conversation of a chat the asker is an active member of, never a Risi chat:
+  # a friend's 1:1 (Private is the default), or this Official chat only when asked.
+  defp recipient(to, ctx) do
+    q = to |> String.trim() |> String.downcase()
+
+    if q in ["this chat", "this group", "here"] do
+      if ctx.in_risi_chat?,
+        do: {:error, "failed", "unknown_recipient: ask who it is for"},
+        else: {:ok, ctx.conv, nil}
+    else
+      ids = RisiMe.Social.friend_ids(ctx.asker)
+
+      people =
+        RisiMe.Repo.all(
+          from u in RisiMe.Accounts.User,
+            where: u.id in ^ids and u.kind == "user",
+            select: {u.id, u.display_name}
+        )
+
+      exact = for {id, n} <- people, String.downcase(n || "") == q, do: {id, n}
+
+      first =
+        for {id, n} <- people,
+            (n || "") |> String.downcase() |> String.split() |> List.first() == q,
+            do: {id, n}
+
+      case if(exact != [], do: exact, else: first) do
+        [{id, n}] -> {:ok, RisiMe.Messaging.conversation_id(ctx.asker, id), n}
+        [] -> {:error, "failed", "unknown_recipient: ask who it is for (a friend's name)"}
+        _ -> {:error, "failed", "ambiguous_recipient: ask which person they mean"}
+      end
+    end
+  end
+
+  ## cancel_scheduled (v1.26 §26.6, by request)
+
+  def cancel_scheduled do
+    %{
+      name: "cancel_scheduled",
+      description:
+        "cancel a message the asker scheduled earlier (always confirmed): to (the recipient's " <>
+          "name as in the schedule, or \"\" when there is only one)",
+      where: :client,
+      personal: true,
+      write: true,
+      finds: false,
+      skill: "scheduled_messages",
+      args: obj(%{"to" => %{"type" => "string", "maxLength" => 64}}, ["to"]),
+      run: &run_cancel/2,
+      exec: &exec/3
+    }
+  end
+
+  defp run_cancel(%{"to" => to}, ctx) do
+    case RisiMe.Agent.Skills.scheduled(ctx.asker, to) do
+      [s] ->
+        who = s.to_name || "a group"
+
+        {:propose,
+         %{
+           args: %{
+             "wire" => %{"schedule_id" => s.schedule_id},
+             "to_name" => s.to_name,
+             "target_conversation_id" => s.target_conversation_id,
+             "entry_id" => s.entry_id
+           },
+           card_args: %{"schedule_id" => s.schedule_id},
+           summary: "Cancel the scheduled message to #{who} (#{s.summary_when})",
+           when: %{"start" => Clock.ts(s.at), "end" => nil, "all_day" => false},
+           text: "",
+           personal: true,
+           skill_id: "scheduled_messages"
+         }}
+
+      [] ->
+        {:error, "failed", "not_found: no pending scheduled message matches"}
+
+      _ ->
+        {:error, "failed", "ambiguous: ask which scheduled message"}
+    end
+  end
+
+  defp run_cancel(_args, _ctx), do: {:error, "failed", "bad_args"}
+
   ## Running a confirmed (or allowed) client write on the phone
 
   @doc """
@@ -208,6 +485,12 @@ defmodule RisiMe.Agent.ClientTools do
         else: Devices.risi_tools_device?(w.user_id, device)
 
     if device && cap?, do: device, else: w.device_id
+  end
+
+  # A cancel that found nothing to cancel (already sent, unknown): said so, nothing logged.
+  defp ok(%{tool: "cancel_scheduled"} = w, _args, _dev, %{"cancelled" => false}) do
+    answer(w, "ok", "That message was already sent or isn't scheduled any more.")
+    :ok
   end
 
   defp ok(w, args, dev, result) do
