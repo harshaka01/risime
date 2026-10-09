@@ -308,6 +308,8 @@ defmodule RisiMe.Agent.Secretary do
     RisiMe.Agent.DailySummaries.forget(conv)
     # v1.29 §29.4: Risi-made events of this chat that no one accepted are cancelled.
     RisiMe.Agent.Calendar.forget_conversation(conv)
+    # v1.29 §30.7: the chat's notes go too (the cards on phones stay, hard rule 9).
+    RisiMe.Agent.Notes.forget(conv)
 
     Repo.transaction(fn ->
       Repo.delete_all(from f in Fact, where: f.conversation_id == ^conv)

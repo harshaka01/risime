@@ -9,6 +9,7 @@ defmodule RisiMe.Agent.LedgerActions do
   | `item_edit` | the owner | `proposed` before `expires_at`, or `confirmed`/`edited` | `edited` |
   | `item_decline` | the owner | `proposed` → `declined`; `confirmed`/`edited` → `cancelled` | as stated |
   | `done` | the owner or a counterpart | `confirmed`/`edited` | `done` |
+  | `item_reopen` (v1.29 §30.5) | the owner or a counterpart | `done`, within 7 days | the state before `done` |
 
   Risi checks that the Risi chat is the actor's own (the worker already checked the attested
   sender) and that the item belongs to a summary the actor received. Repeats are idempotent
@@ -24,7 +25,8 @@ defmodule RisiMe.Agent.LedgerActions do
   alias RisiMe.Agent.{Clock, Commitment, Commitments, Discussion, Fact, Ledger, LedgerOut}
   alias RisiMe.{Repo, RisiChat}
 
-  @actions ~w(item_confirm item_edit item_decline done)
+  @actions ~w(item_confirm item_edit item_decline done item_reopen)
+  @reopen_s 7 * 86_400
 
   @doc "The actions handled here (from a Risi chat)."
   def actions, do: @actions
@@ -128,12 +130,43 @@ defmodule RisiMe.Agent.LedgerActions do
           state: "done",
           item_state: "done",
           by: user,
-          schedule_v: c.schedule_v + 1
+          schedule_v: c.schedule_v + 1,
+          # v1.29 §30.5: what `item_reopen` goes back to, within 7 days.
+          done_at: Clock.usec(Clock.now()),
+          reopen_state: state
         )
         |> Repo.update!()
 
       Commitments.cancel_timers(c.id)
       LedgerOut.item_update(c, d, "done", user)
+    else
+      :ok
+    end
+  end
+
+  # v1.29 §30.5: un-ticking a done item (a note, My promises or an `item_due` card).
+  defp do_act("item_reopen", %Commitment{item_state: "done"} = c, d, user, _edit) do
+    back = if c.reopen_state in ~w(confirmed edited), do: c.reopen_state, else: "confirmed"
+
+    recent? =
+      c.done_at != nil and DateTime.diff(Clock.now(), c.done_at) <= @reopen_s
+
+    if recent? and (user == c.owner_id or user in c.counterpart_ids) do
+      c =
+        c
+        |> Ecto.Changeset.change(
+          state: back,
+          item_state: back,
+          by: user,
+          schedule_v: c.schedule_v + 1,
+          done_at: nil,
+          reopen_state: nil
+        )
+        |> Repo.update!()
+
+      Commitments.cancel_timers(c.id)
+      RisiMe.Agent.LedgerReminders.schedule(c)
+      LedgerOut.item_update(c, d, "reopened", user)
     else
       :ok
     end

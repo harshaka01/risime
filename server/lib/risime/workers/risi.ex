@@ -52,6 +52,8 @@ defmodule RisiMe.Workers.Risi do
     RisiMe.Agent.DailySummaries.prune()
     # v1.29 §29.4–§29.6: purged cancelled events, the 30-day change log, held invites.
     RisiMe.Agent.Calendar.prune()
+    # v1.29 §30.7: notes after 365 days, and notes nobody keeps.
+    RisiMe.Agent.Notes.prune()
     :ok
   end
 
@@ -198,7 +200,7 @@ defmodule RisiMe.Workers.Risi do
           RisiMe.Agent.CalendarActions.act(conv, user, env)
 
         # v1.27 §27.5: item actions (and done) on ledger items, in the actor's Risi chat.
-        a when a in ~w(item_confirm item_decline item_edit) ->
+        a when a in ~w(item_confirm item_decline item_edit item_reopen) ->
           LedgerActions.act(conv, user, env)
 
         "done" ->

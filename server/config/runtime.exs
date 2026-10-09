@@ -176,6 +176,10 @@ if v = System.get_env("RISI_LEDGER"), do: config(:risime, :risi_ledger, on?.(v))
 # v1.29 §29.1: RISI_EVENTS=on turns on Risi Calendar (`/auth/config` `risi_events`, default off;
 # off: every `/risi/calendar…` call answers 503 agent_unavailable and Risi keeps the v1.28 flows).
 if v = System.get_env("RISI_EVENTS"), do: config(:risime, :risi_events, on?.(v))
+
+# v1.29 §30.1: RISI_NOTES=on turns on Risi Notes (`/auth/config` `risi_notes`, default off; only
+# with RISI_LEDGER on; off: every `/risi/notes…` call answers 503 and §27.3/§27.4 stay as they are).
+if v = System.get_env("RISI_NOTES"), do: config(:risime, :risi_notes, on?.(v))
 if v = System.get_env("RISI_TRANSCRIBE"), do: config(:risime, :risi_transcribe, on?.(v))
 
 # §27.2 quiet-rule thresholds (defaults 600 s, 6 messages, 2 people, 30 min, < 8 a day), so

@@ -36,7 +36,7 @@ defmodule RisiMe.Agent.LedgerOut do
   as stored). Returns the items that are kept (an owner-fallback card over the daily limit is
   dropped).
   """
-  def publish(%Discussion{} = d, rows) do
+  def publish(%Discussion{} = d, rows, note \\ nil) do
     ledger = MapSet.new(Devices.risi_ledger_users(d.recipients))
 
     kept =
@@ -53,14 +53,33 @@ defmodule RisiMe.Agent.LedgerOut do
     items = Enum.map(kept, &item_json/1)
     targets = Enum.filter(d.recipients, &MapSet.member?(ledger, &1))
 
-    for r <- targets do
-      {body, risi} = copy(d, items, r, names)
-      deliver_or_hold(d, r, body, risi)
+    # v1.29 §30.4: notes users get the `note_card` instead of the copy (never both), and the
+    # Official conversation `notes_saved` instead of the short card.
+    noted =
+      case note do
+        nil -> []
+        n -> RisiMe.Agent.NotesOut.cards(d, n, Enum.filter(targets, &(&1 in note_users(n))))
+      end
+
+    copies = targets -- noted
+
+    if items != [] do
+      for r <- copies do
+        {body, risi} = copy(d, items, r, names)
+        deliver_or_hold(d, r, body, risi)
+      end
     end
 
-    if targets != [] and items != [], do: card(d, length(items))
+    cond do
+      noted != [] -> RisiMe.Agent.NotesOut.saved(note, d.summary)
+      copies != [] and items != [] -> card(d, length(items))
+      true -> :ok
+    end
+
     kept
   end
+
+  defp note_users(note), do: RisiMe.Agent.Notes.recipients(note.note_id)
 
   # §27.3 owner fallback: the v1.24 card in Official. False when it isn't kept.
   defp legacy_card(d, row) do
@@ -142,6 +161,9 @@ defmodule RisiMe.Agent.LedgerOut do
 
   defp line(i, tz), do: "• #{i["text"]}#{due_part(i, tz)}"
 
+  @doc "An item's due as ` (<due>)` in `tz` (or empty)."
+  def due_suffix(item, tz), do: due_part(item, tz)
+
   defp due_part(%{"due_text" => t}, _tz) when is_binary(t) and t != "", do: " (#{t})"
   defp due_part(%{"due" => nil}, _tz), do: ""
 
@@ -216,7 +238,11 @@ defmodule RisiMe.Agent.LedgerOut do
         "declined" -> "#{who} declined '#{text}'"
         "cancelled" -> "#{who} cancelled '#{text}'"
         "done" -> "#{who} marked '#{text}' done"
+        "reopened" -> "#{who} reopened '#{text}'"
       end
+
+    # v1.29 §30.5: a reopened item is back in its tracked state (the wire `state`).
+    state = if state == "reopened", do: c.item_state, else: state
 
     risi = %{
       "kind" => "item_update",
@@ -262,7 +288,8 @@ defmodule RisiMe.Agent.LedgerOut do
 
   ## Copies: posted, or held for the recipient's Risi chat (24 h)
 
-  defp deliver_or_hold(d, user, body, risi) do
+  @doc "Posts a personal copy into `user`'s Risi chat, or holds it there for 24 h (sealed)."
+  def deliver_or_hold(d, user, body, risi) do
     case post_personal(user, body, risi) do
       :ok -> :ok
       :hold -> hold(d, user, body, risi)

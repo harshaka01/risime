@@ -118,6 +118,50 @@ defmodule RisiMe.Agent.Prompts do
       "additionalProperties" => false
     }
 
+  @doc """
+  v1.29 §30.2: the `discussion_summarise` schema for a chat with notes users: the §27.2 schema
+  plus `topic` (≤ 80 characters, the discussion's language), `language` (`en` | `si` | `ta`) and
+  `meetings` (concrete agreed times, ≤ 3) that become proposed Risi Calendar events.
+  """
+  def note_schema do
+    s = discussion_schema()
+    dt = %{"type" => "string", "pattern" => "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$"}
+
+    meeting = %{
+      "type" => "object",
+      "properties" => %{
+        "title" => %{"type" => "string", "maxLength" => 200},
+        "start_local" => dt,
+        "end_local" => %{"anyOf" => [dt, %{"type" => "null"}]},
+        "proposed_by" => %{"type" => "string", "pattern" => @member_ref},
+        "with" => %{
+          "type" => "array",
+          "maxItems" => 20,
+          "items" => %{"type" => "string", "pattern" => @member_ref}
+        },
+        "source" => %{
+          "type" => "array",
+          "maxItems" => 10,
+          "items" => %{"type" => "string", "pattern" => @message_ref}
+        },
+        "confidence" => %{"type" => "number", "minimum" => 0, "maximum" => 1}
+      },
+      "required" => ~w(title start_local end_local proposed_by with source confidence),
+      "additionalProperties" => false
+    }
+
+    %{
+      s
+      | "properties" =>
+          Map.merge(s["properties"], %{
+            "topic" => %{"type" => "string", "maxLength" => 80},
+            "language" => %{"enum" => ~w(en si ta)},
+            "meetings" => %{"type" => "array", "maxItems" => 3, "items" => meeting}
+          }),
+        "required" => s["required"] ++ ~w(topic language meetings)
+    }
+  end
+
   defp str_list(max_items, max_len),
     do: %{
       "type" => "array",
@@ -230,6 +274,23 @@ defmodule RisiMe.Agent.Prompts do
     done, vague intentions. When there is no item, return "items": []. Do not invent anything.
     #{@untrusted}
     """
+
+  @doc "v1.29 §30.2: the `discussion_summarise` system prompt for a note (topic and meetings too)."
+  def note_system,
+    do:
+      discussion_system() <>
+        """
+        Also write:
+        - topic: what the discussion was about in a few words (at most 80 characters), in the \
+        discussion's own language, without names, owners or dates.
+        - language: the discussion's main language: "en", "si" (Sinhala) or "ta" (Tamil).
+        - meetings: only meetings or appointments the members clearly agreed on with a concrete \
+        day and time. title: a short neutral title that reads right for every participant (never \
+        "with <name>"); start_local and end_local: "YYYY-MM-DDTHH:MM" in the local time of the \
+        member who proposed it (end_local null when not said); proposed_by: the member ref who \
+        proposed the agreed time; with: member refs of everyone taking part, the proposer \
+        included; source: message refs; confidence: 0 to 1. No agreed meeting: "meetings": [].
+        """
 
   def summary_system,
     do: """

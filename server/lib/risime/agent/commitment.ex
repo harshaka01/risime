@@ -49,6 +49,9 @@ defmodule RisiMe.Agent.Commitment do
     # Item 10 (2026-10-09): no usable due ("sometime", "soon", none): one clarification
     # question instead of a calendar offer (`RisiMe.Agent.Offers`); cleared when a due is set.
     field :needs_clarification, :boolean, default: false
+    # v1.29 §30.5: when it was marked done and the state it had before (`item_reopen`).
+    field :done_at, :utc_datetime_usec
+    field :reopen_state, :string
     timestamps()
   end
 

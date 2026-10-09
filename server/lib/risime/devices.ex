@@ -139,9 +139,10 @@ defmodule RisiMe.Devices do
   # v1.25 §25.8: `risi_tools`. v1.26 §26.9: `risi_skills`, kept only with `risi_tools`.
   # v1.27 §27.10: `risi_ledger`, kept only with `risi_tools`.
   # v1.29 §29.1: `risi_events`, kept only with `risi_tools`, `risi_skills` and `risi_ledger`.
+  # v1.29 §30.1: `risi_notes`, kept only with `risi_events`.
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
                          group_calls call_switch screen_share tabs risi_tools risi_skills
-                         risi_ledger risi_events)
+                         risi_ledger risi_events risi_notes)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do
@@ -153,6 +154,8 @@ defmodule RisiMe.Devices do
         if Enum.all?(~w(risi_tools risi_skills risi_ledger), &(&1 in caps)),
           do: caps,
           else: caps -- ["risi_events"]
+
+      caps = if "risi_events" in caps, do: caps, else: caps -- ["risi_notes"]
 
       {:ok, caps}
     else
@@ -440,6 +443,33 @@ defmodule RisiMe.Devices do
             "tabs" in d.capabilities and "groups" in d.capabilities and
             "risi_tools" in d.capabilities and "risi_skills" in d.capabilities and
             "risi_ledger" in d.capabilities and "risi_events" in d.capabilities,
+        distinct: true,
+        select: d.user_id
+    )
+  end
+
+  @doc "v1.29 §30.1: true if the device is a `risi_events` device that also advertises `risi_notes`."
+  def risi_notes?(%Device{capabilities: caps} = d),
+    do: risi_events?(d) and "risi_notes" in (caps || [])
+
+  def risi_notes?(_), do: false
+
+  @doc "v1.29 §30.6: true if `device_id` (may be nil) names a `risi_notes` device of the user."
+  def risi_notes_device?(_user_id, nil), do: false
+  def risi_notes_device?(user_id, device_id), do: risi_notes?(get(user_id, device_id))
+
+  @doc "v1.29 §30.1: the users among `user_ids` with a current `risi_notes` device."
+  def risi_notes_users([]), do: []
+
+  def risi_notes_users(user_ids) do
+    Repo.all(
+      from d in Device,
+        where:
+          d.user_id in ^user_ids and not is_nil(d.mls_signature_key) and
+            "tabs" in d.capabilities and "groups" in d.capabilities and
+            "risi_tools" in d.capabilities and "risi_skills" in d.capabilities and
+            "risi_ledger" in d.capabilities and "risi_events" in d.capabilities and
+            "risi_notes" in d.capabilities,
         distinct: true,
         select: d.user_id
     )

@@ -115,10 +115,26 @@ defmodule RisiMe.Agent.Rest do
   The caller's commitments (`:open` = confirmed or edited, or `:all`) as wire maps: `{:ok,
   list}` or `{:error, :agent_unavailable}` (like `facts/1`).
   """
-  def commitments(user, state) do
+  def commitments(user, state, opts \\ []) do
     with {:ok, rows} <- user |> query(state) |> Repo.all() |> opened(&Commitment.open_all/1) do
       names = owner_names(rows)
-      {:ok, Enum.map(rows, fn c -> commitment_json(c, user, names) end)}
+      list = Enum.map(rows, fn c -> commitment_json(c, user, names) end)
+
+      # v1.29 §30.5: `note_id` (a note the caller still keeps, else null) for a notes device.
+      if Keyword.get(opts, :notes, false) do
+        kept =
+          RisiMe.Agent.Notes.kept_ids(
+            user,
+            rows |> Enum.map(& &1.summary_id) |> Enum.reject(&is_nil/1)
+          )
+
+        {:ok,
+         Enum.zip_with(rows, list, fn c, j ->
+           Map.put(j, :note_id, if(MapSet.member?(kept, c.summary_id), do: c.summary_id))
+         end)}
+      else
+        {:ok, list}
+      end
     end
   end
 

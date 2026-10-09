@@ -58,14 +58,35 @@ defmodule RisiMe.Agent.Requests do
       {"summarise", {:ok, p}} ->
         RisiMe.Agent.PeriodSummary.run(conv, request_id, user, p, &complete/4)
 
-      _ ->
-        env = if is_map(env["scope"]), do: env, else: Map.delete(env, "scope")
-
-        case since(env, now) do
-          :out_of_window -> reply_error(conv, request_id, user, "out_of_window")
-          {:ok, since} -> run(action, conv, request_id, user, env, since, now)
+      # v1.29 §30.2 trigger 3: `summarise` without a period from a notes user → a note.
+      {"summarise", nil} ->
+        if note_request?(conv, user) do
+          case RisiMe.Agent.Ledger.request_note(conv, user) do
+            :no_note -> windowed(action, conv, request_id, user, env, now)
+            other -> other
+          end
+        else
+          windowed(action, conv, request_id, user, env, now)
         end
+
+      _ ->
+        windowed(action, conv, request_id, user, env, now)
     end
+  end
+
+  defp windowed(action, conv, request_id, user, env, now) do
+    env = if is_map(env["scope"]), do: env, else: Map.delete(env, "scope")
+
+    case since(env, now) do
+      :out_of_window -> reply_error(conv, request_id, user, "out_of_window")
+      {:ok, since} -> run(action, conv, request_id, user, env, since, now)
+    end
+  end
+
+  # Notes are made only in Official conversations (never Private, never a Risi chat).
+  defp note_request?(conv, user) do
+    RisiMe.Agent.Notes.user?(user) and RisiMe.Agent.official?(conv) and
+      not RisiMe.Groups.Tabs.risi_chat?(conv)
   end
 
   # `scope`: "today" | "7d" | "30d" (also as {"period": …}) or {"from": ts, "to": ts}.

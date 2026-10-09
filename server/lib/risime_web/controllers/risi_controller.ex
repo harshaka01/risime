@@ -107,7 +107,12 @@ defmodule RisiMeWeb.RisiController do
   def commitments(conn, params) do
     state = if params["state"] == "all", do: :all, else: :open
 
-    case Rest.commitments(me(conn), state) do
+    # v1.29 §30.5: items gain `note_id` for a `risi_notes` device (while RISI_NOTES is on).
+    notes? =
+      RisiMe.Agent.Notes.on?() and
+        RisiMe.Devices.risi_notes_device?(me(conn), RisiMeWeb.MLSController.caller_device(conn))
+
+    case Rest.commitments(me(conn), state, notes: notes?) do
       # Item 9: `totals` per direction (the personal digest carries the same `totals`).
       {:ok, commitments} ->
         totals = Enum.frequencies_by(commitments, & &1.direction)

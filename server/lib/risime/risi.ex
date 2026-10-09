@@ -40,6 +40,9 @@ defmodule RisiMe.Risi do
   @doc "v1.29 §29.1: true while `RISI_EVENTS=on` (`/auth/config` `risi_events`, default off)."
   def events_on?, do: Application.get_env(:risime, :risi_events, false) == true
 
+  @doc "v1.29 §30.1: true while `RISI_NOTES=on` and the ledger is on (`/auth/config` `risi_notes`)."
+  def notes_on?, do: Application.get_env(:risime, :risi_notes, false) == true and ledger_on?()
+
   @doc """
   v1.27 §27.10: true while `RISI_TRANSCRIBE=on`, the ledger is on and the speech model is
   healthy (`/auth/config` `risi_transcribe`, default off). Until the listener and the speech model

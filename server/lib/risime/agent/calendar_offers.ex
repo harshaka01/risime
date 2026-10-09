@@ -104,7 +104,8 @@ defmodule RisiMe.Agent.CalendarOffers do
         source: %{
           conversation_id: c.conversation_id,
           message_ids: uuids(c.source_message_ids),
-          item_id: c.id
+          item_id: c.id,
+          note_id: note_id(c)
         },
         created_by: "risi"
       }
@@ -115,6 +116,13 @@ defmodule RisiMe.Agent.CalendarOffers do
       end
     end
   end
+
+  # v1.29 §30.3: an item of a note links its event to the note too.
+  defp note_id(%Commitment{summary_id: sid}) when is_binary(sid) do
+    if Repo.exists?(from n in RisiMe.Agent.Notes.Note, where: n.note_id == ^sid), do: sid
+  end
+
+  defp note_id(_c), do: nil
 
   defp uuids(ids) do
     ids
@@ -128,8 +136,8 @@ defmodule RisiMe.Agent.CalendarOffers do
     |> Enum.take(20)
   end
 
-  # §29.12: 3 Risi-made events per Official chat per day; 1 per (title, start).
-  defp room?(conv, title, start) do
+  @doc "§29.12: 3 Risi-made events per Official chat per day; 1 per (title, start). `:ok` or an error."
+  def room?(conv, title, start) do
     since = DateTime.add(DateTime.utc_now(), -86_400, :second)
 
     today =

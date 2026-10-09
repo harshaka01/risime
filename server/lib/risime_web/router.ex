@@ -114,6 +114,11 @@ defmodule RisiMeWeb.Router do
     get "/risi/calendar/settings", RisiCalendarController, :settings
     patch "/risi/calendar/settings", RisiCalendarController, :update_settings
     delete "/risi/calendar", RisiCalendarController, :delete_all
+    # v1.29 §30.6 Risi Notes.
+    get "/risi/notes", RisiNotesController, :index
+    get "/risi/notes/:id", RisiNotesController, :show
+    delete "/risi/notes/:id", RisiNotesController, :delete
+    delete "/risi/notes", RisiNotesController, :delete_all
     post "/blobs", BlobController, :create
     post "/backups", BackupController, :create
     get "/backups", BackupController, :index
