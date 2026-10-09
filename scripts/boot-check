@@ -28,6 +28,7 @@ cleanup() {
   rm -rf "$WORK"; rm -f "$REPO/erl_crash.dump" "$REPO/server/erl_crash.dump"
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM   # a stopped gate still drops its throwaway stores
 fail() { echo "BOOT CHECK FAIL $*"; [ -f "$LOGS/boot-$MODE.log" ] && tail -40 "$LOGS/boot-$MODE.log" | cut -c1-300; exit 1; }
 ss -ltnH "sport = :$BC_PORT" | grep -q . && { echo "BOOT CHECK FAIL: port $BC_PORT busy"; exit 1; }
 
