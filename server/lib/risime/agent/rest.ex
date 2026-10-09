@@ -116,11 +116,37 @@ defmodule RisiMe.Agent.Rest do
   list}` or `{:error, :agent_unavailable}` (like `facts/1`).
   """
   def commitments(user, state) do
-    user
-    |> query(state)
-    |> Repo.all()
-    |> opened(&Commitment.open_all/1)
-    |> wire(fn c -> commitment_json(c, user) end)
+    with {:ok, rows} <- user |> query(state) |> Repo.all() |> opened(&Commitment.open_all/1) do
+      names = owner_names(rows)
+      {:ok, Enum.map(rows, fn c -> commitment_json(c, user, names) end)}
+    end
+  end
+
+  @doc """
+  Item 9 (2026-10-09): who promised whom, from `user`'s side: `"i_promised"` (the owner),
+  `"promised_to_me"` (a counterpart), `"others"` (neither).
+  """
+  def direction(%{owner_id: owner, counterpart_ids: cps}, user) do
+    cond do
+      owner == user -> "i_promised"
+      user in (cps || []) -> "promised_to_me"
+      true -> "others"
+    end
+  end
+
+  @doc "Totals per direction of `items` for `user`: `%{\"i_promised\" => n, …}` (all three keys)."
+  def totals(items, user) do
+    base = %{"i_promised" => 0, "promised_to_me" => 0, "others" => 0}
+    Enum.reduce(items, base, fn c, acc -> Map.update!(acc, direction(c, user), &(&1 + 1)) end)
+  end
+
+  defp owner_names([]), do: %{}
+
+  defp owner_names(rows) do
+    ids = rows |> Enum.map(& &1.owner_id) |> Enum.uniq()
+
+    Repo.all(from u in RisiMe.Accounts.User, where: u.id in ^ids, select: {u.id, u.display_name})
+    |> Map.new()
   end
 
   @doc """
@@ -148,8 +174,23 @@ defmodule RisiMe.Agent.Rest do
   end
 
   # v1.27 §27.9: ledger items gain summary_id, source, all_day and the caller's role.
-  defp commitment_json(c, user) do
-    base = commitment_json(c)
+  defp commitment_json(c, user, names) do
+    dir = direction(c, user)
+
+    base =
+      c
+      |> commitment_json()
+      |> Map.merge(%{
+        # Item 9 (2026-10-09): My promises split, owner label, status, tap-through.
+        direction: dir,
+        owner_name: if(dir == "i_promised", do: "You", else: names[c.owner_id] || "Member"),
+        status: status(c),
+        needs_clarification: c.needs_clarification == true,
+        all_day: c.all_day == true,
+        source_conversation_id: c.conversation_id,
+        source_message_id: List.first(c.source_message_ids || []),
+        source_message_ids: c.source_message_ids || []
+      })
 
     if Commitment.ledger?(c),
       do:
@@ -160,6 +201,15 @@ defmodule RisiMe.Agent.Rest do
           role: if(c.owner_id == user, do: "owner", else: "counterpart")
         }),
       else: base
+  end
+
+  # `needs_clarification` for a live item without a usable due, else the item's state.
+  defp status(c) do
+    s = c.item_state || c.state
+
+    if c.needs_clarification == true and s in ~w(proposed confirmed edited),
+      do: "needs_clarification",
+      else: s
   end
 
   defp commitment_json(c) do

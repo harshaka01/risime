@@ -128,7 +128,12 @@ defmodule RisiMeWeb.RisiRestS8Test do
 
       assert Enum.sort(Enum.map(cs, & &1["commitment_id"])) == Enum.sort([own.id, cp.id])
       ex = RisiMe.TabsHelpers.example("risi_commitments_reply.json")["commitments"]
-      for c <- cs, do: assert(keys(c) == keys(hd(ex)))
+      # Item 9 (2026-10-09) adds optional fields (server status "Contract asks").
+      item9 =
+        ~w(all_day direction owner_name status needs_clarification source_conversation_id
+           source_message_id source_message_ids)
+
+      for c <- cs, do: assert(keys(c) == Enum.sort(keys(hd(ex)) ++ item9))
 
       mine = Enum.find(cs, &(&1["commitment_id"] == own.id))
 

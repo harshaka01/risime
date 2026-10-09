@@ -274,7 +274,9 @@ defmodule RisiMe.Agent.LedgerS24Test do
     assert LedgerReminders.digest(ctx.harsha.id, nine) == :sent
     rc_h = ctx.rc[ctx.harsha.id]
     [{^rc_h, body, d}] = posts()
-    assert keys(d) == keys(example("envelope_risi_digest_personal.json"))
+    # Item 9 (2026-10-09) adds the optional `totals` (server status "Contract asks").
+    assert keys(d) == Enum.sort(keys(example("envelope_risi_digest_personal.json")) ++ ["totals"])
+    assert d["totals"] == %{"i_promised" => 1, "promised_to_me" => 1, "others" => 0}
 
     assert d["scope"] == "personal" and d["date"] == "2026-12-01" and
              d["notify"] == [ctx.harsha.id]

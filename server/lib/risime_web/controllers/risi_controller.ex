@@ -108,8 +108,17 @@ defmodule RisiMeWeb.RisiController do
     state = if params["state"] == "all", do: :all, else: :open
 
     case Rest.commitments(me(conn), state) do
-      {:ok, commitments} -> json(conn, %{commitments: commitments})
-      error -> GroupController.error(conn, error)
+      # Item 9: `totals` per direction (the personal digest carries the same `totals`).
+      {:ok, commitments} ->
+        totals = Enum.frequencies_by(commitments, & &1.direction)
+
+        json(conn, %{
+          commitments: commitments,
+          totals: Map.merge(%{"i_promised" => 0, "promised_to_me" => 0, "others" => 0}, totals)
+        })
+
+      error ->
+        GroupController.error(conn, error)
     end
   end
 end

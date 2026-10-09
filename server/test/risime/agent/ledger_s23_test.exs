@@ -235,7 +235,14 @@ defmodule RisiMe.Agent.LedgerS23Test do
     assert length(wire) == 2
 
     for c <- wire do
-      assert Enum.sort(Map.keys(c)) == Enum.sort(Map.keys(hd(ex)))
+      # Item 9 (2026-10-09) adds optional fields (server status "Contract asks").
+      assert Enum.sort(Map.keys(c)) ==
+               Enum.sort(
+                 Map.keys(hd(ex)) ++
+                   ~w(direction owner_name status needs_clarification source_conversation_id
+                      source_message_id source_message_ids)
+               )
+
       assert c["source"] == "chat" and is_binary(c["summary_id"])
     end
 

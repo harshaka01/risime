@@ -339,9 +339,13 @@ defmodule RisiMe.Agent.LedgerReminders do
             "text" => c.text,
             "owner" => c.owner_id,
             "due" => Clock.ts(c.due),
-            "state" => c.item_state || c.state
+            "state" => c.item_state || c.state,
+            # Item 9 (2026-10-09): the My promises split.
+            "direction" => RisiMe.Agent.Rest.direction(c, user)
           }
         end,
+      # Item 9: equal to `GET /risi/commitments` `totals` (the same query).
+      "totals" => RisiMe.Agent.Rest.totals(items, user),
       "notify" => [user]
     }
 

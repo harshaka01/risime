@@ -46,6 +46,9 @@ defmodule RisiMe.Agent.Commitment do
     field :item_state, :string
     field :overdue_sent_at, :utc_datetime_usec
     field :nudged_at, :utc_datetime_usec
+    # Item 10 (2026-10-09): no usable due ("sometime", "soon", none): one clarification
+    # question instead of a calendar offer (`RisiMe.Agent.Offers`); cleared when a due is set.
+    field :needs_clarification, :boolean, default: false
     timestamps()
   end
 
