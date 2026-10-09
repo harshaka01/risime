@@ -215,6 +215,34 @@ defmodule RisiMe.ContractExamplesTest do
                     risi_tool_result_calendar_check.json
                     signal_risi_progress.json)
 
+  # v1.26 (Risi skills, §26): checked in the "v1.26" describe below.
+  @checked_v1_26 ~w(auth_config_v126.json
+                    device_put_risi_skills.json
+                    envelope_risi_action_calendar_accept.json
+                    envelope_risi_action_calendar_decline.json
+                    envelope_risi_calendar_offer.json
+                    envelope_risi_confirm_schedule_message.json
+                    envelope_risi_confirm_set_alarm.json
+                    envelope_risi_skill_done.json
+                    envelope_risi_skill_needed.json
+                    error_skill_unavailable.json
+                    error_undo_unavailable.json
+                    event_risi_tool_call_calendar_remove.json
+                    event_risi_tool_call_cancel_scheduled.json
+                    event_risi_tool_call_schedule_message.json
+                    event_risi_tool_call_set_alarm.json
+                    risi_skill_activity_reply.json
+                    risi_skill_activity_scheduled_reply.json
+                    risi_skill_undo.json
+                    risi_skill_undo_reply.json
+                    risi_skills_patch.json
+                    risi_skills_patch_reply.json
+                    risi_skills_reply.json
+                    risi_tool_result_calendar_remove.json
+                    risi_tool_result_cancel_scheduled.json
+                    risi_tool_result_schedule_message.json
+                    risi_tool_result_set_alarm.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -271,7 +299,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_22 ++
         @checked_v1_23 ++
         @checked_v1_24 ++
-        @checked_v1_25
+        @checked_v1_25 ++
+        @checked_v1_26
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -4316,6 +4345,200 @@ defmodule RisiMe.ContractExamplesTest do
         assert e["type"] == "risi_action" and e["action"] == action
         assert e["target"] =~ @uuid and e["edit"] == nil
       end
+    end
+  end
+
+  describe "v1.26" do
+    @skill_ids ~w(alarm reminders calendar scheduled_messages email)
+    @client_perms ~w(granted denied not_asked not_needed unsupported unknown)
+    @undo_kinds ~w(server client manual none)
+    @undo_states [nil | ~w(available pending done failed expired)]
+    @entry_actions ~w(alarm_set reminder_set reminder_cancelled calendar_added calendar_removed
+                      message_scheduled scheduled_cancelled skill_on skill_off skill_ask
+                      skill_allowed)
+
+    defp ts26?(v), do: is_binary(v) and v =~ @ts
+
+    defp skill26_ok?(s) do
+      assert keys(s) ==
+               ~w(available can cannot client description id kind modes permissions state
+                  state_changed_at title tools undo where)
+
+      assert s["id"] in @skill_ids and s["kind"] in ~w(builtin partner)
+      assert s["where"] in ~w(phone server both)
+      assert s["modes"] in [~w(ask), ~w(ask allowed)]
+      assert s["undo"] in ~w(full until_fired until_sent manual none)
+      assert s["state"] in ~w(off ask allowed) and is_boolean(s["available"])
+      assert s["state_changed_at"] == nil or ts26?(s["state_changed_at"])
+      assert Enum.all?(s["can"] ++ s["cannot"] ++ s["tools"], &is_binary/1)
+
+      for p <- s["permissions"] do
+        assert keys(p) == ~w(label name runtime scope)
+        assert p["scope"] in ~w(android oauth risime) and is_boolean(p["runtime"])
+      end
+
+      case s["client"] do
+        nil ->
+          :ok
+
+        c ->
+          assert keys(c) == ~w(device_id permission reported_at)
+          assert c["device_id"] =~ @uuid and c["permission"] in @client_perms
+          assert ts26?(c["reported_at"])
+      end
+    end
+
+    defp entry26_ok?(e) do
+      assert keys(e) ==
+               ~w(action at conversation_id device_id entry_id skill_id summary
+                  target_conversation_id undo undo_token via)
+
+      assert e["entry_id"] =~ @uuid and e["skill_id"] in @skill_ids
+      assert e["action"] in @entry_actions and is_binary(e["summary"]) and ts26?(e["at"])
+      assert e["via"] in ~w(confirm allowed calendar_offer settings undo)
+      assert keys(e["undo"]) == ~w(hint kind state until)
+      assert e["undo"]["kind"] in @undo_kinds and e["undo"]["state"] in @undo_states
+      assert e["undo_token"] != nil == (e["undo"]["state"] == "available")
+    end
+
+    test "auth_config_v126.json and device_put_risi_skills.json" do
+      ex = example("auth_config_v126.json")
+      assert ex["risi_skills"] in ~w(on off)
+      assert keys(ex) -- ["risi_skills"] == keys(example("auth_config_v125.json"))
+      caps = example("device_put_risi_skills.json")["mls"]["capabilities"]
+      assert "risi_skills" in caps and "risi_tools" in caps
+    end
+
+    test "risi_skills_reply.json, risi_skills_patch*.json: the registry shape" do
+      skills = example("risi_skills_reply.json")["skills"]
+      assert Enum.map(skills, & &1["id"]) == @skill_ids
+      Enum.each(skills, &skill26_ok?/1)
+
+      %{"changes" => changes} = p = example("risi_skills_patch.json")
+      assert is_boolean(p["cancel_pending"]) and length(changes) in 1..10
+
+      for c <- changes do
+        assert c["id"] in @skill_ids
+        assert Map.has_key?(c, "state") or Map.has_key?(c, "client_permission")
+      end
+
+      Enum.each(example("risi_skills_patch_reply.json")["skills"], &skill26_ok?/1)
+    end
+
+    test "risi_skill_activity_*.json and risi_skill_undo*.json: entries" do
+      for n <- ~w(risi_skill_activity_reply.json risi_skill_activity_scheduled_reply.json) do
+        %{"entries" => es, "has_more" => more} = example(n)
+        assert is_boolean(more) and es != []
+        Enum.each(es, &entry26_ok?/1)
+      end
+
+      assert is_binary(example("risi_skill_undo.json")["undo_token"])
+      %{"entry" => e} = example("risi_skill_undo_reply.json")
+      entry26_ok?(e)
+      assert e["undo"]["state"] == "pending" and e["undo"]["kind"] == "client"
+    end
+
+    test "error_skill_unavailable.json and error_undo_unavailable.json" do
+      for {n, code} <- [
+            {"error_skill_unavailable.json", "skill_unavailable"},
+            {"error_undo_unavailable.json", "undo_unavailable"}
+          ] do
+        e = example(n)["error"]
+        assert e["code"] == code and is_binary(e["message"])
+      end
+    end
+
+    test "event_risi_tool_call_*.json (v1.26): the new client tools" do
+      for {n, tool, arg_keys, undo?} <- [
+            {"event_risi_tool_call_set_alarm.json", "set_alarm", ~w(days label time write_id),
+             false},
+            {"event_risi_tool_call_schedule_message.json", "schedule_message",
+             ~w(at conversation_id repeat text write_id), false},
+            {"event_risi_tool_call_cancel_scheduled.json", "cancel_scheduled",
+             ~w(schedule_id write_id), true},
+            {"event_risi_tool_call_calendar_remove.json", "calendar_remove", ~w(target_write_id),
+             true}
+          ] do
+        ex = example(n)
+        assert ex["event_id"] =~ @timeuuid and ex["kind"] == "risi_tool_call"
+        d = ex["data"]
+
+        assert keys(d) ==
+                 ~w(args conversation_id device_id expires_at request_id server_ts to_devices
+                    tool tool_call_id turn_id undo_entry_id)
+
+        assert d["tool"] == tool and keys(d["args"]) == arg_keys
+        assert d["to_devices"] == [d["device_id"]] and d["device_id"] =~ @uuid
+
+        if undo? do
+          assert d["undo_entry_id"] =~ @uuid
+          assert d["turn_id"] == nil and d["request_id"] == nil and d["conversation_id"] == nil
+        else
+          assert d["undo_entry_id"] == nil and d["conversation_id"] =~ ~r/^grp:/
+          for k <- ~w(turn_id request_id), do: assert(d[k] =~ @uuid)
+        end
+
+        {:ok, exp, _} = DateTime.from_iso8601(d["expires_at"])
+        {:ok, at, _} = DateTime.from_iso8601(d["server_ts"])
+        assert DateTime.diff(exp, at) in 1..120
+      end
+    end
+
+    test "risi_tool_result_*.json (v1.26)" do
+      assert %{"status" => "ok", "result" => %{"alarm_set" => true}} =
+               example("risi_tool_result_set_alarm.json")
+
+      %{"status" => "ok", "result" => %{"schedule_id" => sid}} =
+        example("risi_tool_result_schedule_message.json")
+
+      assert sid =~ @uuid
+
+      %{"status" => "ok", "result" => r} = example("risi_tool_result_cancel_scheduled.json")
+      assert keys(r) == ~w(cancelled reason) and is_boolean(r["cancelled"])
+
+      %{"status" => "ok", "result" => r} = example("risi_tool_result_calendar_remove.json")
+      assert keys(r) == ~w(reason removed) and is_boolean(r["removed"])
+    end
+
+    test "Risi v1.26 envelopes (inside MLS): structure" do
+      for n <-
+            ~w(envelope_risi_confirm_set_alarm.json envelope_risi_confirm_schedule_message.json) do
+        c = example(n)["risi"]
+        assert c["kind"] == "confirm" and c["write_id"] =~ @uuid
+        assert c["tool"] in ~w(set_alarm schedule_message cancel_scheduled)
+        assert c["skill_id"] in @skill_ids and is_map(c["args"])
+        refute Map.has_key?(c["args"], "write_id")
+        assert c["buttons"] == ~w(add cancel) and length(c["for"]) == 1
+        assert ts26?(c["expires_at"]) and is_binary(c["summary"])
+      end
+
+      o = example("envelope_risi_calendar_offer.json")["risi"]
+      assert o["kind"] == "calendar_offer" and o["offer_id"] =~ @uuid
+      assert o["buttons"] == ~w(add decline) and length(o["for"]) in 1..8
+      assert ts26?(o["start"]) and ts26?(o["end"]) and o["start"] < o["end"]
+      assert is_boolean(o["all_day"]) and ts26?(o["expires_at"])
+      assert Enum.all?(o["source_message_ids"], &(&1 =~ @timeuuid))
+      assert o["reminder_before_min"] == nil or is_integer(o["reminder_before_min"])
+
+      for {n, action, opts} <- [
+            {"envelope_risi_action_calendar_accept.json", "calendar_accept",
+             %{"reminder" => true}},
+            {"envelope_risi_action_calendar_decline.json", "calendar_decline", nil}
+          ] do
+        e = example(n)
+        assert e["type"] == "risi_action" and e["action"] == action
+        assert e["target"] =~ @uuid and e["edit"] == nil and e["options"] == opts
+      end
+
+      d = example("envelope_risi_skill_done.json")["risi"]
+      assert d["kind"] == "skill_done" and d["entry_id"] =~ @uuid
+      assert d["skill_id"] in @skill_ids and d["action"] in @entry_actions
+      assert d["undo"]["kind"] in @undo_kinds
+
+      n = example("envelope_risi_skill_needed.json")["risi"]
+      assert n["kind"] == "skill_needed" and n["skill_id"] in @skill_ids
+      assert n["reason"] in ~w(off no_permission unavailable) and is_boolean(n["was_on"])
+      assert n["buttons"] == ["open_skills"]
     end
   end
 end
