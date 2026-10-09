@@ -76,13 +76,27 @@ internal fun CalendarActionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCo
     var afterPick by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(port, chosenId) { chosen = port?.chosen() }
+    var pendingEdit by remember { mutableStateOf<kotlinx.serialization.json.JsonObject?>(null) }
+    val hint = r.calendarHint()
+    // The phone's remembered pick, else the server's hint (proposal 2026-10-09 §1) if it names a calendar here.
+    LaunchedEffect(port, chosenId) { chosen = port?.chosen() ?: port?.matchHint(hint) }
 
     val state = RisiToolCards.confirmState(r, ctx.messages, ctx.nowMs)
     val wid = r.writeId
     val rec = wid?.let { records[it.lowercase()] }
     val dim = if (state == RisiToolCards.ConfirmState.OPEN || state == RisiToolCards.ConfirmState.CONFIRMED) 1f else 0.55f
     val buttons = if (ctx.readOnly || wid == null) emptyList() else RisiToolCards.confirmButtons(ctx.host.me, r, state, ctx.awaiting)
+
+    /** confirm_write (with the [Edit] corrections, if any); a calendar matched from the hint is remembered first. */
+    fun confirmNow(c: PhoneCalendarInfo?) {
+        val w = wid ?: return
+        val edit = pendingEdit
+        scope.launch {
+            if (port != null && c != null && chosenId != c.id) port.choose(c.id)
+            if (edit != null) ctx.host.confirmEdited(w, edit) else ctx.host.act(w, "confirm_write")
+            pendingEdit = null
+        }
+    }
 
     fun openPicker(thenAdd: Boolean) {
         val port0 = port ?: return
@@ -111,6 +125,8 @@ internal fun CalendarActionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCo
                         val c = chosen
                         if (c != null) {
                             Text(CalendarSelection.label(c), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f, fill = false).testTag("risi_calendar_chosen"))
+                        } else if (hint != null && !port.hasPermission()) {
+                            Text(listOfNotNull(hint.account, hint.name).joinToString(" · "), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f, fill = false).testTag("risi_calendar_hint"))
                         }
                         if (state == RisiToolCards.ConfirmState.OPEN && buttons.isNotEmpty()) {
                             TextButton(onClick = { openPicker(false) }, modifier = Modifier.testTag("risi_calendar_choose")) { Text(if (c == null) "Choose calendar" else "Change") }
@@ -140,7 +156,8 @@ internal fun CalendarActionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCo
                 if ("add" in buttons) {
                     FilledTonalButton(onClick = {
                         // First use: the picker, then the add. Otherwise straight to confirm_write (the phone adds it).
-                        if (port != null && chosen == null) openPicker(true) else ctx.host.act(wid, "confirm_write")
+                        pendingEdit = null
+                        if (port != null && chosen == null) openPicker(true) else confirmNow(chosen)
                     }, modifier = Modifier.testTag("risi_confirm_add")) { Text("Add") }
                     OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_calendar_edit")) { Text("Edit") }
                 }
@@ -158,7 +175,7 @@ internal fun CalendarActionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCo
                 port?.choose(c.id)
                 chosen = c
                 note = null
-                if (afterPick && wid != null) ctx.host.act(wid, "confirm_write")
+                if (afterPick) confirmNow(c)
                 afterPick = false
             }
         }, onDismiss = { picker = null; afterPick = false })
@@ -166,10 +183,11 @@ internal fun CalendarActionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCo
     if (editing && wid != null) {
         CalendarEditDialog(p.title, p.start.atZone(zone).toLocalDate(), p.start.atZone(zone).toLocalTime(), ((p.end.epochSecond - p.start.epochSecond) / 60).toInt().coerceAtLeast(15), p.allDay,
             calendarLabel = chosen?.let(CalendarSelection::label), onChooseCalendar = if (port != null) ({ openPicker(false) }) else null,
-            onSend = { text ->
+            onSend = { edit ->
+                // Proposal 2026-10-09 §4: [Add] with the corrections (confirm_write + edit); no new model turn.
                 editing = false
-                ctx.host.act(wid, "cancel_write")
-                ctx.host.ask(text)
+                pendingEdit = edit
+                if (port != null && chosen == null) openPicker(true) else confirmNow(chosen)
             }, onDismiss = { editing = false })
     }
 }
@@ -242,11 +260,11 @@ fun CalendarPickerDialog(options: List<PhoneCalendarInfo>, selectedId: Long?, on
 private val DATE_IN = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 private val TIME_IN = DateTimeFormatter.ofPattern("HH:mm")
 
-/** [Edit]: title, date, time, duration and calendar; sends the exact event back to Risi as a new request. */
+/** [Edit]: title, date, time, duration and calendar; [Add] confirms the card with the corrected event. */
 @Composable
 private fun CalendarEditDialog(
     title0: String, date0: LocalDate, time0: LocalTime, duration0: Int, allDay0: Boolean,
-    calendarLabel: String?, onChooseCalendar: (() -> Unit)?, onSend: (String) -> Unit, onDismiss: () -> Unit,
+    calendarLabel: String?, onChooseCalendar: (() -> Unit)?, onSend: (kotlinx.serialization.json.JsonObject) -> Unit, onDismiss: () -> Unit,
 ) {
     var title by remember { mutableStateOf(title0) }
     var date by remember { mutableStateOf(DATE_IN.format(date0)) }
@@ -286,7 +304,7 @@ private fun CalendarEditDialog(
             }
         },
         confirmButton = {
-            TextButton(enabled = valid, onClick = { onSend(RisiCalendarCards.editRequest(title, d!!, t ?: LocalTime.MIDNIGHT, duration, allDay)) }, modifier = Modifier.testTag("risi_calendar_edit_send")) { Text("Send to Risi") }
+            TextButton(enabled = valid, onClick = { onSend(RisiCalendarCards.editArgs(title, d!!, t ?: LocalTime.MIDNIGHT, duration, allDay, ZoneId.systemDefault())) }, modifier = Modifier.testTag("risi_calendar_edit_send")) { Text("Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Back") } },
     )

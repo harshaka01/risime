@@ -108,6 +108,27 @@ object CalendarSelection {
     /** "harsha@example.com · Google" (account name + type), as the picker and Settings show it. */
     fun label(c: PhoneCalendarInfo): String = "${c.accountName.ifBlank { c.displayName }} · ${typeLabel(c.accountType)}"
 
+    /**
+     * Proposal 2026-10-09-risi-action-loop §2/§3: the calendar as the server keeps it. `name` is what the
+     * success line says ("Added to your Google Calendar: …"): "Google Calendar" for a Google account's
+     * calendar, else its own name; `account` the account name.
+     */
+    fun ref(c: PhoneCalendarInfo): lk.codegen.risime.net.RisiCalendarRef {
+        val name = if (isGoogle(c)) {
+            if (c.ownerAccount.equals(c.accountName, true) || c.isPrimary || c.displayName.isBlank() || c.displayName.equals(c.accountName, true)) "Google Calendar"
+            else "Google Calendar (${c.displayName})"
+        } else {
+            c.displayName.ifBlank { typeLabel(c.accountType) }
+        }
+        return lk.codegen.risime.net.RisiCalendarRef(name.take(100), c.accountName.takeIf { it.isNotBlank() }?.take(200))
+    }
+
+    /** The card's `confirm.calendar` hint, matched to a writable calendar on this phone (null: none matches). */
+    fun matchHint(all: List<PhoneCalendarInfo>, hint: lk.codegen.risime.net.RisiCalendarRef?): PhoneCalendarInfo? {
+        hint ?: return null
+        return all.filter(::writable).firstOrNull { ref(it).name == hint.name && it.accountName.equals(hint.account ?: "", true) }
+    }
+
     /** The calendar's own name under the label, when it says more than the account ("Work"). */
     fun subLabel(c: PhoneCalendarInfo): String? = c.displayName.takeIf { it.isNotBlank() && !it.equals(c.accountName, true) }
 }
@@ -244,6 +265,9 @@ class PhoneCalendar(
 
     /** The picker's list (empty without read permission). */
     fun options(): List<PhoneCalendarInfo> = if (backend.canRead()) runCatching { CalendarSelection.pickerOptions(backend.calendars()) }.getOrDefault(emptyList()) else emptyList()
+
+    /** Every calendar (empty without read permission). */
+    fun allCalendars(): List<PhoneCalendarInfo> = if (backend.canRead()) runCatching { backend.calendars() }.getOrDefault(emptyList()) else emptyList()
 
     /** The calendar an add goes to now (the remembered pick or the default Google one). */
     fun target(): PhoneCalendarInfo? = if (backend.canRead()) runCatching { CalendarSelection.target(backend.calendars(), choice.chosen.value) }.getOrNull() else null

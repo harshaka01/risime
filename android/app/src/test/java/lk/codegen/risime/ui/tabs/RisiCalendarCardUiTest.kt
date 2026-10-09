@@ -71,6 +71,7 @@ class RisiCalendarCardUiTest {
         override suspend fun options() = opts
         override suspend fun chosen() = opts.firstOrNull { it.id == chosenId.value }
         override suspend fun choose(id: Long) { chosenId.value = id }
+        override suspend fun matchHint(hint: lk.codegen.risime.net.RisiCalendarRef?) = opts.firstOrNull { hint != null && it.accountName == hint.account }
         override fun open(eventId: Long) { opened += eventId }
     }
 
@@ -82,6 +83,7 @@ class RisiCalendarCardUiTest {
         override fun act(target: String, action: String, editText: String?, editDue: String?) { calls += "act:$target:$action" }
         override fun feedback(callRef: String, rating: String, reason: String?) {}
         override fun undo(skillId: String, entryId: String, token: String) { calls += "undo:$skillId:$entryId:$token" }
+        override fun confirmEdited(writeId: String, edit: JsonObject) { calls += "edit:$writeId:$edit" }
     }
 
     private var n = 0
@@ -127,7 +129,7 @@ class RisiCalendarCardUiTest {
         rule.onNodeWithText("harsha@example.com · Google").assertIsDisplayed()
         rule.onNodeWithTag("risi_calendar_edit").assertIsDisplayed()
         rule.onNodeWithTag("risi_confirm_add").performClick()
-        rule.waitForIdle()
+        rule.waitUntil(3_000) { h.calls.isNotEmpty() }
         // [Add] is the confirm: the phone runs the tool; no new request (no model turn).
         assertEquals(listOf("act:$writeId:confirm_write"), h.calls)
     }
@@ -148,15 +150,17 @@ class RisiCalendarCardUiTest {
         assertEquals(listOf("act:$writeId:confirm_write"), h.calls)
     }
 
-    @Test fun editSendsTheExactEventAndCancelsTheCard() {
+    @Test fun editConfirmsWithTheCorrectedEvent() {
         val h = Host(asker, Port(listOf(google), chosen = google))
         show(h, listOf(calendarCard()))
         rule.onNodeWithTag("risi_calendar_edit").performClick()
         rule.onNodeWithTag("risi_calendar_edit_title").performTextReplacement("Dentist (check-up)")
         rule.onNodeWithTag("risi_calendar_edit_time").performTextReplacement("10:30")
         rule.onNodeWithTag("risi_calendar_edit_send").performClick()
+        rule.waitUntil(3_000) { h.calls.isNotEmpty() }
+        // One confirm_write with the edit (no cancel, no new request: no model turn).
         assertEquals(
-            listOf("act:$writeId:cancel_write", "ask:Add \"Dentist (check-up)\" to my calendar on Fri 16 Oct 2026 from 10:30 to 11:30"),
+            listOf("edit:$writeId:{\"title\":\"Dentist (check-up)\",\"start\":\"2026-10-16T05:00:00.000Z\",\"end\":\"2026-10-16T06:00:00.000Z\",\"all_day\":false}"),
             h.calls,
         )
     }
@@ -180,6 +184,21 @@ class RisiCalendarCardUiTest {
         assertEquals(1, rule.onAllNodes(hasTestTag("risi_undo")).fetchSemanticsNodes().size)
         rule.onNodeWithTag("risi_undo").performClick()
         assertEquals(listOf("undo:calendar:7c6b5a49-3827-4615-9403-f2a1b0c9d8e7:tok"), h.calls)
+    }
+
+    @Test fun theServersHintPicksTheCalendarWithoutThePicker() {
+        val port = Port(listOf(google))
+        val h = Host(asker, port)
+        show(h, listOf(row("envelope_risi_confirm.json") {
+            JsonObject(it + ("skill_id" to JsonPrimitive("calendar")) + ("calendar" to ProtocolJson.parseToJsonElement("""{"name":"Google Calendar","account":"harsha@example.com"}""")) +
+                ("args" to ProtocolJson.parseToJsonElement("""{"title":"Dentist","start":"2026-10-16T04:30:00.000Z","end":"2026-10-16T05:30:00.000Z","all_day":false}""")))
+        }))
+        rule.waitUntil(3_000) { exists("risi_calendar_chosen") }
+        rule.onNodeWithTag("risi_confirm_add").performClick()
+        rule.waitUntil(3_000) { h.calls.isNotEmpty() }
+        assertTrue(!exists("risi_calendar_picker"))
+        assertEquals(1L, port.chosenId.value)
+        assertEquals(listOf("act:$writeId:confirm_write"), h.calls)
     }
 
     @Test fun aFailedAddSaysWhy() {

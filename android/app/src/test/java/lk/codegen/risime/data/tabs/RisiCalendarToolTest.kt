@@ -80,7 +80,7 @@ class RisiCalendarToolTest {
         assertEquals(RisiToolResult.OK, r.status)
         val ev = be.events.values.single()
         // Exactly the contract's schema on the wire.
-        assertEquals("""{"event_id":"${ev.id}"}""", r.result.toString())
+        assertEquals("""{"event_id":"${ev.id}","calendar":{"name":"Google Calendar","account":"harsha@example.com"}}""", r.result.toString())
         assertEquals(1L, ev.calendarId)
         assertEquals("Dentist", ev.title)
         assertEquals(Instant.parse("2026-10-16T04:30:00Z").toEpochMilli(), ev.dtStart)
@@ -169,6 +169,55 @@ class RisiCalendarToolTest {
         assertEquals("""{"removed":false,"reason":"not_found"}""", ex.execute(undo).result.toString())
         // Without undo_entry_id: never.
         assertEquals(RisiToolResult.DECLINED, ex.execute(undo.copy(undoEntryId = null)).status)
+    }
+
+    private fun editedConfirm(from: String, edit: JsonObject) = ctl(from, RisiControl.action(add.writeId!!, "confirm_write", writeEdit = edit))
+
+    private val edit = JsonObject(mapOf("title" to JsonPrimitive("Dentist (check-up)"), "start" to JsonPrimitive("2026-10-16T05:00:00.000Z"), "end" to JsonPrimitive("2026-10-16T06:00:00.000Z")))
+
+    /** The call the server sends after an edited confirm: the card's args merged with the edit (timestamps may differ in format). */
+    private val editedCall get() = add.copy(args = JsonObject(add.args + mapOf("title" to JsonPrimitive("Dentist (check-up)"), "start" to JsonPrimitive("2026-10-16T05:00:00Z"), "end" to JsonPrimitive("2026-10-16T06:00:00Z"))))
+
+    @Test fun anEditedConfirmRunsTheMergedArgsOnlyFromMyOwnLeaf() = runBlocking {
+        v126Card()
+        // Someone else's "edit" is no confirm of mine: nothing.
+        editedConfirm(other, edit)
+        assertEquals(RisiToolResult.DECLINED, ex.execute(editedCall).status)
+        editedConfirm(me, edit)
+        // Args that are neither the card's nor card + my edit: nothing.
+        val forged = editedCall.copy(args = JsonObject(editedCall.args + ("title" to JsonPrimitive("Other"))))
+        assertEquals(RisiToolResult.DECLINED, ex.execute(forged).status)
+        assertEquals(RisiToolResult.OK, ex.execute(editedCall).status)
+        val ev = be.events.values.single()
+        assertEquals("Dentist (check-up)", ev.title)
+        assertEquals(Instant.parse("2026-10-16T05:00:00Z").toEpochMilli(), ev.dtStart)
+    }
+
+    @Test fun anEditMayNotAddKeys() = runBlocking {
+        v126Card()
+        editedConfirm(me, JsonObject(edit + ("location" to JsonPrimitive("x"))))
+        val c = editedCall.copy(args = JsonObject(editedCall.args + ("location" to JsonPrimitive("x"))))
+        assertEquals(RisiToolResult.DECLINED, ex.execute(c).status)
+    }
+
+    @Test fun theServersCalendarHintMatchesALocalCalendar() {
+        val g = be.cals.first { it.id == 1L }
+        val ref = CalendarSelection.ref(g)
+        assertEquals(lk.codegen.risime.net.RisiCalendarRef("Google Calendar", "harsha@example.com"), ref)
+        assertEquals(g, CalendarSelection.matchHint(be.cals, ref))
+        assertNull(CalendarSelection.matchHint(be.cals, lk.codegen.risime.net.RisiCalendarRef("Google Calendar", "someone@else.com")))
+        assertNull(CalendarSelection.matchHint(be.cals, null))
+        // A read-only calendar never matches.
+        assertNull(CalendarSelection.matchHint(be.cals, CalendarSelection.ref(be.cals.first { it.id == 3L })))
+    }
+
+    @Test fun thePickIsReportedInTheCalendarSkillPatch() = runBlocking {
+        var body = ""
+        val store = RisiSkillsStore(get = { error("no get") }, patch = { p -> body = ProtocolJson.encodeToString(lk.codegen.risime.net.RisiSkillsPatch.serializer(), p); lk.codegen.risime.net.ApiResult.Ok(lk.codegen.risime.net.RisiSkillsReply(emptyList())) })
+        assertTrue(store.reportCalendar(lk.codegen.risime.net.RisiCalendarRef("Google Calendar", "harsha@example.com")))
+        assertEquals("""{"changes":[{"id":"calendar","calendar":{"name":"Google Calendar","account":"harsha@example.com"}}],"cancel_pending":false}""", body)
+        // The other changes stay as before (no "calendar" key).
+        assertEquals("""{"id":"alarm","state":"ask"}""", ProtocolJson.encodeToString(lk.codegen.risime.net.RisiSkillChange.serializer(), lk.codegen.risime.net.RisiSkillChange("alarm", state = "ask")))
     }
 
     @Test fun chipsThatAreQuestionsOrConfirmPhrasesAreHidden() {

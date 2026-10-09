@@ -90,6 +90,19 @@ class RisiToolsTest {
         assertEquals(2, n)
     }
 
+    @Test fun anOlderServerRefusingTheCalendarFieldGetsTheV125Result() = runBlocking {
+        val c = call("event_risi_tool_call_calendar_add.json")
+        val sent = mutableListOf<String>()
+        val full = RisiToolResult(RisiToolResult.OK, ProtocolJson.parseToJsonElement("""{"event_id":"7","calendar":{"name":"Google Calendar","account":"a@b.c"}}""") as kotlinx.serialization.json.JsonObject)
+        val h = RisiToolCallHandler(
+            { dev },
+            { _, r, _ -> sent += r.result.toString(); if ("calendar" in r.result!!) ApiResult.Error(422, "bad_request", "") else ApiResult.Ok(Unit) },
+            { true }, { ms(c.serverTs!!) }, execute = { full },
+        )
+        h.handle(c)
+        assertEquals(listOf(full.result.toString(), """{"event_id":"7"}"""), sent)
+    }
+
     @Test fun progressDropsLowerSeqAndEndsOnDone() {
         val base = ProtocolJson.decodeFromString<Signal>(read("signal_risi_progress.json")).risiProgress()!!
         var now = 1_000L

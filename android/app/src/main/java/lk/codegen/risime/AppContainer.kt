@@ -325,7 +325,7 @@ class AppContainer(
         )
     }
 
-    val calendarPort: lk.codegen.risime.data.tabs.RisiCalendarPort by lazy { lk.codegen.risime.data.tabs.AndroidCalendarPort(appContext, phoneCalendar) }
+    val calendarPort: lk.codegen.risime.data.tabs.RisiCalendarPort by lazy { lk.codegen.risime.data.tabs.AndroidCalendarPort(appContext, phoneCalendar) { ref -> risiSkillsStore.reportCalendar(ref) } }
 
     /** §25.3/§26.3/§26.6 the phone's executor for Risi's client tools (only on a `risi_skills` device). */
     val risiToolExecutor: lk.codegen.risime.data.tabs.RisiToolExecutor by lazy {

@@ -66,6 +66,26 @@ class RisiToolExecutor(
         /** §26.3 the only writes the Allowed path may run without a card. */
         val ALLOWED_TOOLS = setOf(RisiToolCall.TOOL_SET_ALARM, RisiToolCall.TOOL_CALENDAR_ADD)
 
+        /** The keys a `calendar_add` `confirm_write` edit may change. */
+        val EDIT_KEYS = setOf("title", "start", "end", "all_day")
+
+        /** Same `calendar_add` args: equal keys, `title`/`all_day` exactly, `start`/`end` as instants. */
+        fun calendarArgsEqual(a: JsonObject, b: JsonObject): Boolean {
+            if (a.keys != b.keys) return false
+            for (k in a.keys) {
+                val x = a[k]
+                val y = b[k]
+                if (k == "start" || k == "end") {
+                    val tx = tsMs((x as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content) ?: return false
+                    val ty = tsMs((y as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content) ?: return false
+                    if (tx != ty) return false
+                } else if (x != y) {
+                    return false
+                }
+            }
+            return true
+        }
+
         private val TIME = Regex("^([01][0-9]|2[0-3]):([0-5][0-9])$")
 
         fun ok(result: JsonObject) = RisiToolResult(RisiToolResult.OK, result)
@@ -121,12 +141,6 @@ class RisiToolExecutor(
     suspend fun cardConfirmed(call: RisiToolCall): Boolean {
         val my = me() ?: return false
         val (card, rows) = cardRows(call) ?: return false
-        val args = card.args
-        if (args != null) {
-            if (args != argsWithoutWriteId(call)) return false
-        } else if (!v125CalendarCardMatches(card, call)) {
-            return false
-        }
         if (card.forUsers.none { it.equals(my, true) }) return false
         val exp = tsMs(card.expiresAt) ?: return false
         val confirm = rows.firstOrNull { m ->
@@ -135,6 +149,19 @@ class RisiToolExecutor(
                 RisiControl.actionOf(m.systemJson) in setOf(RisiActions126Local.CONFIRM, RisiActions126Local.CANCEL)
         } ?: return false
         if (RisiControl.actionOf(confirm.systemJson) != RisiActions126Local.CONFIRM) return false
+        val args = card.args
+        val callArgs = argsWithoutWriteId(call)
+        if (args != null) {
+            // Proposal 2026-10-09-risi-action-loop §4: a calendar_add may run the card's args merged with
+            // the `edit` that MY OWN `confirm_write` carried (timestamps compared as instants).
+            val edit = if (call.tool == RisiToolCall.TOOL_CALENDAR_ADD) RisiControl.editOf(confirm.systemJson) else null
+            val okArgs = args == callArgs ||
+                (call.tool == RisiToolCall.TOOL_CALENDAR_ADD && calendarArgsEqual(args, callArgs)) ||
+                (edit != null && edit.keys.all { it in EDIT_KEYS } && calendarArgsEqual(JsonObject(args + edit), callArgs))
+            if (!okArgs) return false
+        } else if (!v125CalendarCardMatches(card, call)) {
+            return false
+        }
         val at = HistoryMarkers.epochMs(confirm.serverTs) ?: confirm.localTs
         return at <= exp
     }
@@ -261,7 +288,7 @@ class RisiToolExecutor(
         return when (val r = runCatching { cal.add(a.writeId, call.requestId, a.title, start, end, a.allDay) }.getOrElse { CalendarAddOutcome.Failed(CalendarFailure.INSERT_FAILED) }) {
             is CalendarAddOutcome.Added -> {
                 dao.setWriteTarget(a.writeId, r.record.eventId.toString())
-                ok(CalendarAddResult.serializer(), CalendarAddResult(r.record.eventId.toString()))
+                ok(CalendarAddResult.serializer(), CalendarAddResult(r.record.eventId.toString(), CalendarSelection.ref(r.calendar)))
             }
             is CalendarAddOutcome.Failed -> {
                 dao.deleteWrite(a.writeId)

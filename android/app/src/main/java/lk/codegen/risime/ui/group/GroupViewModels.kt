@@ -569,6 +569,10 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override val calendar: lk.codegen.risime.data.tabs.RisiCalendarPort get() = c.calendarPort
 
+        override fun confirmEdited(writeId: String, edit: kotlinx.serialization.json.JsonObject) {
+            viewModelScope.launch { requests.confirmEdited(writeId, edit) }
+        }
+
         override fun actItem(itemId: String, action: String, text: String?, due: String?, allDay: Boolean) {
             viewModelScope.launch { requests.act(itemId, action, text, due, allDay) }
         }

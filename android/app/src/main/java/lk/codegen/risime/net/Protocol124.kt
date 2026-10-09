@@ -167,6 +167,8 @@ data class RisiMeta(
     val source: String? = null,
     @SerialName("call_id") val callId: String? = null,
     val media: String? = null,
+    /** Proposal 2026-10-09-risi-action-loop §1: a `calendar_add` card's calendar hint (`{name, account}` | null). Read with [calendarHint]. */
+    @SerialName("calendar") val calendarRaw: JsonElement? = null,
     @SerialName("duration_s") val durationS: Long? = null,
     @SerialName("key_points") val keyPoints: List<String> = emptyList(),
     @SerialName("items_count") val itemsCount: Int? = null,
@@ -181,6 +183,10 @@ data class RisiMeta(
     // proposal 2026-10-09-risi-30day-summaries: a period summary's stored days (`period` above gains `scope`)
     val days: List<RisiSummaryDay> = emptyList(),
 ) {
+    /** `confirm.calendar` (null if absent, null or malformed). */
+    fun calendarHint(): RisiCalendarRef? =
+        (calendarRaw as? JsonObject)?.let { runCatching { ProtocolJson.decodeFromJsonElement(RisiCalendarRef.serializer(), it) }.getOrNull() }
+
     /** `confirm.when` (null if absent or not an object). */
     fun confirmWhen(): RisiWhen? =
         (whenRaw as? JsonObject)?.let { runCatching { ProtocolJson.decodeFromJsonElement(RisiWhen.serializer(), it) }.getOrNull() }

@@ -100,7 +100,14 @@ class RisiToolCallHandler(
         if (!accepts(call, me, now())) return
         if (!answered.add(call.toolCallId.lowercase())) return
         val result = runCatching { execute(call) }.getOrElse { RisiToolResult.error(RisiToolErrorCodes.CALENDAR_UNAVAILABLE) }
-        when (val r = post(call.toolCallId, result, me!!)) {
+        var sent = post(call.toolCallId, result, me!!)
+        // An older server's strict schema refuses the optional `calendar` of a calendar_add result
+        // (proposal 2026-10-09-risi-action-loop §3): send the v1.25 `{event_id}` instead.
+        val res = result.result
+        if (sent is ApiResult.Error && sent.code == "bad_request" && res != null && "calendar" in res) {
+            sent = post(call.toolCallId, result.copy(result = kotlinx.serialization.json.JsonObject(res - "calendar")), me)
+        }
+        when (val r = sent) {
             is ApiResult.Ok -> log("risi tool ${call.tool}: ${result.status}")
             is ApiResult.Error -> log("risi tool ${call.tool}: result refused (${r.code})")
             is ApiResult.NetworkError -> {

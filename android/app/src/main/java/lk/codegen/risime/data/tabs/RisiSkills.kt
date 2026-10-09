@@ -141,6 +141,17 @@ class RisiSkillsStore(
         }
     }
 
+    /**
+     * Proposal 2026-10-09-risi-action-loop §2: tell the server which calendar the user picked (the next
+     * card's `confirm.calendar` hint). Best effort: an older server's 422 is only logged.
+     */
+    suspend fun reportCalendar(calendar: lk.codegen.risime.net.RisiCalendarRef?): Boolean = lock.withLock {
+        when (patch(RisiSkillsPatch(listOf(RisiSkillChange(lk.codegen.risime.net.RisiSkillIds.CALENDAR, calendar = calendar))))) {
+            is ApiResult.Ok -> true
+            else -> { log("risi skills: calendar choice not reported"); false }
+        }
+    }
+
     /** "Ask me each time" / "Allowed" (only where the skill's `modes` allow it). */
     suspend fun setMode(id: String, state: String): String? = lock.withLock {
         val skill = skill(id) ?: return@withLock skillsErrorText(null)

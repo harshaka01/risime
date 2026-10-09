@@ -162,7 +162,10 @@ internal fun SkillNeededCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardConte
 /** §25.4 answer v2: the steps under the answer and up to 3 next-step chips (they pre-fill the composer). */
 @Composable
 internal fun AnswerExtras(r: RisiMeta, ctx: RisiCardContext) {
-    val steps = RisiSkillCards.stepLines(r)
+    // A calendar_add step next to its action card is the proposal, not the add: the card says what happened.
+    val hasCard = r.steps.any { it.tool == lk.codegen.risime.net.RisiToolCall.TOOL_CALENDAR_ADD } &&
+        lk.codegen.risime.data.tabs.RisiCalendarCards.hasActionCard(r, ctx.messages)
+    val steps = RisiSkillCards.stepLines(if (hasCard) r.copy(steps = r.steps.filter { it.tool != lk.codegen.risime.net.RisiToolCall.TOOL_CALENDAR_ADD }) else r)
     if (steps.isNotEmpty()) {
         Column(Modifier.testTag("risi_steps")) {
             steps.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }

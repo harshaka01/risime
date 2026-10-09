@@ -65,6 +65,9 @@ interface RisiHost {
     /** This phone has a usable Risi chat with the Ledger on (the short card's button shows only then). */
     fun risiChatAvailable(): Boolean = false
 
+    /** [Add] after [Edit] on a calendar_add card: `confirm_write` with `edit` (the corrected title/start/end/all_day). */
+    fun confirmEdited(writeId: String, edit: kotlinx.serialization.json.JsonObject) {}
+
     /** P0 the phone's calendar for the calendar action card (picker, the local add record, Open). */
     val calendar: lk.codegen.risime.data.tabs.RisiCalendarPort? get() = null
 }

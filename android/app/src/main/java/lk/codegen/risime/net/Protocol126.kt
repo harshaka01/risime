@@ -83,7 +83,15 @@ data class RisiSkillChange(
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     @SerialName("client_permission") val clientPermission: String? = null,
+    /** Proposal 2026-10-09-risi-action-loop §2: the picked calendar (`id: "calendar"` only); omitted when absent. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val calendar: RisiCalendarRef? = null,
 )
+
+/** Proposal 2026-10-09-risi-action-loop: a calendar as the server keeps it (`name` 1–100, `account` ≤ 200 or null). */
+@Serializable
+data class RisiCalendarRef(val name: String, val account: String? = null)
 
 /** `PATCH /api/v1/risi/skills` body. */
 @Serializable

@@ -67,7 +67,7 @@ object RisiControl {
     /** A date range is at most 31 days back (else `out_of_window`). */
     const val RANGE_MAX_DAYS = 31L
 
-    fun action(target: String, action: String, editText: String? = null, editDue: String? = null, reminder: Boolean? = null, editAllDay: Boolean? = null): JsonObject = buildJsonObject {
+    fun action(target: String, action: String, editText: String? = null, editDue: String? = null, reminder: Boolean? = null, editAllDay: Boolean? = null, writeEdit: JsonObject? = null): JsonObject = buildJsonObject {
         put("v", 1)
         put("type", TYPE_ACTION)
         put("target", target)
@@ -80,6 +80,9 @@ object RisiControl {
                 put("text", editText ?: "")
                 if (editDue == null) put("due", JsonNull) else put("due", editDue)
             })
+        } else if (action == "confirm_write" && writeEdit != null) {
+            // Proposal 2026-10-09-risi-action-loop §4: [Edit] on a calendar_add card (title/start/end/all_day).
+            put("edit", writeEdit)
         } else {
             put("edit", JsonNull)
         }
@@ -173,6 +176,9 @@ object RisiControl {
     fun actionOf(json: String?): String? = parse(json)?.takeIf { str(it, "type") == TYPE_ACTION }?.let { str(it, "action") }
 
     /** The target of a stored `risi_action` row, or null. */
+    /** A `risi_action`'s `edit` object (null when absent or `null`). */
+    fun editOf(json: String?): JsonObject? = parse(json)?.takeIf { str(it, "type") == TYPE_ACTION }?.get("edit") as? JsonObject
+
     fun targetOf(json: String?): String? = parse(json)?.takeIf { str(it, "type") == TYPE_ACTION }?.let { str(it, "target") }
 }
 
@@ -218,6 +224,13 @@ class RisiRequests(
     suspend fun report(): Boolean {
         if (!isOfficial()) return false
         send(RisiControl.request(newId(), "report", null, now() - RisiControl.SUMMARY_WINDOW_MS))
+        return true
+    }
+
+    /** [Add] after [Edit] on a calendar_add card: `confirm_write` with the corrected args. */
+    suspend fun confirmEdited(writeId: String, edit: JsonObject): Boolean {
+        if (!isOfficial()) return false
+        send(RisiControl.action(writeId, "confirm_write", writeEdit = edit))
         return true
     }
 

@@ -177,7 +177,13 @@ data class CalendarBlock(val start: String, val end: String, val busy: Boolean, 
 data class CalendarCheckResult(val blocks: List<CalendarBlock>)
 
 @Serializable
-data class CalendarAddResult(@SerialName("event_id") val eventId: String)
+data class CalendarAddResult(
+    @SerialName("event_id") val eventId: String,
+    /** Proposal 2026-10-09-risi-action-loop §3: the calendar it went to (omitted when unknown). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val calendar: RisiCalendarRef? = null,
+)
 
 /** `POST /risi/tool_calls/{id}/result` body; `result` is the tool's result for `ok`, `{"code"}` for `error`, else null. */
 @Serializable

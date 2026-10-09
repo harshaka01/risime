@@ -39,7 +39,11 @@ interface RisiCalendarPort {
     /** The remembered pick while it still exists and is writable. */
     suspend fun chosen(): PhoneCalendarInfo?
 
+    /** Remembers the pick (and reports it to the server for the next card's hint). */
     suspend fun choose(id: Long)
+
+    /** The card's `confirm.calendar` hint as a writable calendar on this phone (null: none). */
+    suspend fun matchHint(hint: lk.codegen.risime.net.RisiCalendarRef?): PhoneCalendarInfo? = null
 
     /** The calendar app at that event. */
     fun open(eventId: Long)
@@ -125,8 +129,25 @@ object RisiCalendarCards {
     fun recordForRequest(requestId: String?, records: Map<String, CalendarAddRecord>): CalendarAddRecord? =
         requestId?.let { rid -> records.values.filter { it.requestId.equals(rid, true) && it.added }.maxByOrNull { it.at } }
 
+    private val WIRE_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ENGLISH).withZone(java.time.ZoneOffset.UTC)
+
     /**
-     * [Edit] sends a structured request (the contract's `confirm_write` has no edited args): the card is
+     * Proposal 2026-10-09-risi-action-loop §4: the `confirm_write` `edit` of [Edit] — the corrected
+     * `title`, `start`, `end`, `all_day` (wire timestamps; an all-day event spans the phone's day).
+     */
+    fun editArgs(title: String, date: LocalDate, start: LocalTime, durationMin: Int, allDay: Boolean, zone: ZoneId): kotlinx.serialization.json.JsonObject {
+        val s = if (allDay) date.atStartOfDay(zone) else date.atTime(start).atZone(zone)
+        val e = if (allDay) date.plusDays(1).atStartOfDay(zone) else s.plusMinutes(durationMin.toLong())
+        return kotlinx.serialization.json.buildJsonObject {
+            put("title", JsonPrimitive(title.trim()))
+            put("start", JsonPrimitive(WIRE_TS.format(s.toInstant())))
+            put("end", JsonPrimitive(WIRE_TS.format(e.toInstant())))
+            put("all_day", JsonPrimitive(allDay))
+        }
+    }
+
+    /**
+     * [Edit] as a new request (fallback before the `edit` field; kept for reference/tests) (the contract's `confirm_write` has no edited args): the card is
      * cancelled and Risi gets the exact event to propose again.
      */
     fun editRequest(title: String, date: LocalDate, start: LocalTime, durationMin: Int, allDay: Boolean): String {

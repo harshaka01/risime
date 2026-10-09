@@ -110,7 +110,12 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
 }
 
 /** [RisiCalendarPort] for the cards and Settings: provider reads off the main thread; [open] shows the event. */
-class AndroidCalendarPort(private val context: Context, private val cal: PhoneCalendar) : RisiCalendarPort {
+class AndroidCalendarPort(
+    private val context: Context,
+    private val cal: PhoneCalendar,
+    /** Proposal 2026-10-09-risi-action-loop §2: the Calendar skill PATCH with the picked calendar. */
+    private val report: suspend (lk.codegen.risime.net.RisiCalendarRef) -> Unit = {},
+) : RisiCalendarPort {
     override val records = cal.writes.records
     override val chosenId = cal.choice.chosen
 
@@ -120,7 +125,15 @@ class AndroidCalendarPort(private val context: Context, private val cal: PhoneCa
 
     override suspend fun chosen(): PhoneCalendarInfo? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { cal.chosen() }
 
-    override suspend fun choose(id: Long) = cal.choose(id)
+    override suspend fun choose(id: Long) {
+        cal.choose(id)
+        val c = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { cal.chosen() } ?: return
+        runCatching { report(CalendarSelection.ref(c)) }
+    }
+
+    override suspend fun matchHint(hint: lk.codegen.risime.net.RisiCalendarRef?): PhoneCalendarInfo? =
+        if (hint == null || !cal.canRead()) null
+        else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { CalendarSelection.matchHint(cal.allCalendars(), hint) }.getOrNull() }
 
     override fun open(eventId: Long) {
         val i = android.content.Intent(android.content.Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId))
