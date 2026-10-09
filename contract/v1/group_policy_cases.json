@@ -906,7 +906,7 @@
    "expect": "reject"
   }
  ],
- "tab_about": "Contract v1.24 §24.1 (the core's tab rules) on top of the §12.4/§12.4a rules of `cases`. Extra fields: conversation = 'grp' | 'dm'; tab = the base epoch's group_meta.tab ('private' also for dm:); agents = the base epoch's group_meta.agents; agent_users = the users whose leaf attestation says kind: 'agent' (a leaf of such a user is an agent leaf); meta may also carry tab (the new value, or null if unchanged), chat_id_changed and agents (the new list, or null if unchanged). Rules: tab and chat_id never change after epoch 0; a dm: or Private group has agents == [] and never gains an agent leaf; in Official an agent leaf may be added only by an admin and only for a user in agents (base or new), agents never names an admin; any member may remove every leaf of an agent (never a part of them) in a commit that otherwise touches only the committer's own leaves and changes no group_meta. Every other commit follows the rules of `cases`. The `cases` above carry no tab: they are Official groups (they list an agent) and keep their expectations under v1.24.",
+ "tab_about": "Contract v1.24 §24.1 (the core's tab rules) on top of the §12.4/§12.4a rules of `cases`. Extra fields: conversation = 'grp' | 'dm'; tab = the base epoch's group_meta.tab ('private' also for dm:); agents = the base epoch's group_meta.agents; agent_users = the users whose leaf attestation says kind: 'agent' (a leaf of such a user is an agent leaf); meta may also carry tab (the new value, or null if unchanged), chat_id_changed and agents (the new list, or null if unchanged). Rules: tab and chat_id never change after epoch 0; a dm: or Private group has agents == [] and never gains an agent leaf; in Official an agent leaf may be added only by an admin and only for a user in agents (base or new), agents never names an admin; any member may remove every leaf of an agent (never a part of them) in a commit that otherwise touches only the committer's own leaves and changes no group_meta. Every other commit follows the rules of `cases`. The `cases` above carry no tab: they are Official groups (they list an agent) and keep their expectations under v1.24. v1.25 (§25.2): a case may also carry chat_kind ('risi' for a user's Risi chat: an Official group whose chat_id is its own conversation id, chat_id_is_own = true). Runners that don't know these fields ignore them: a Risi chat follows the Official rules, so the Risi-chat cases here are accepted by the v1.24 rules too. The extra Risi-chat rules are in `risi_cases`.",
  "tab_cases": [
   {
    "name": "Private: admin adds an agent leaf",
@@ -1530,6 +1530,272 @@
    ],
    "removes": [],
    "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "Risi chat: the owner (admin) adds the agent listed in agents (chat_id = its own id)",
+   "conversation": "grp",
+   "tab": "official",
+   "chat_kind": "risi",
+   "chat_id_is_own": true,
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1",
+     "a2"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "R/r1"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "Risi chat: the owner adds own new device",
+   "conversation": "grp",
+   "tab": "official",
+   "chat_kind": "risi",
+   "chat_id_is_own": true,
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1",
+     "a2"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "A/a3"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  }
+ ],
+ "risi_about": "Contract v1.25 §25.2 (crypto C4): the core's extra rules for a Risi chat, on top of `tab_cases`. Fields as in tab_cases; chat_kind = the base epoch's group_meta.chat_kind ('risi'); chat_id_is_own = the base epoch's chat_id equals the group's own conversation id; meta may also carry chat_kind_changed. Rules: a group_meta with chat_kind 'risi' has tab 'official', chat_id equal to its own conversation id, exactly one human user (its only admin) and agents == [the agent]; chat_kind never changes after epoch 0 (absent counts as not 'risi'); no commit adds a leaf of a second human user. Everything else follows `tab_cases` and `cases`. Run by the core once C4 lands (the v1.24 runners don't read this list; the 'second human' and 'chat_kind change' cases would pass the v1.24 rules).",
+ "risi_cases": [
+  {
+   "name": "Risi chat: the owner adds the agent listed in agents",
+   "conversation": "grp",
+   "tab": "official",
+   "chat_kind": "risi",
+   "chat_id_is_own": true,
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1",
+     "a2"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "R/r1"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "Risi chat: the owner adds own new device",
+   "conversation": "grp",
+   "tab": "official",
+   "chat_kind": "risi",
+   "chat_id_is_own": true,
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1",
+     "a2"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "A/a3"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "Risi chat: the owner removes the agent (leaving the Risi chat)",
+   "conversation": "grp",
+   "tab": "official",
+   "chat_kind": "risi",
+   "chat_id_is_own": true,
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1",
+     "a2"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [
+    "R/r1"
+   ],
+   "meta": null,
+   "expect": "accept"
+  },
+  {
+   "name": "Risi chat: the owner adds a second human user",
+   "conversation": "grp",
+   "tab": "official",
+   "chat_kind": "risi",
+   "chat_id_is_own": true,
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1",
+     "a2"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [
+    "B/b1"
+   ],
+   "removes": [],
+   "meta": null,
+   "expect": "reject"
+  },
+  {
+   "name": "Risi chat: the owner changes chat_kind after epoch 0",
+   "conversation": "grp",
+   "tab": "official",
+   "chat_kind": "risi",
+   "chat_id_is_own": true,
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1",
+     "a2"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": null,
+    "name_changed": false,
+    "tab": null,
+    "chat_id_changed": false,
+    "agents": null,
+    "chat_kind_changed": true
+   },
+   "expect": "reject"
+  },
+  {
+   "name": "Risi chat: the owner makes a second user admin",
+   "conversation": "grp",
+   "tab": "official",
+   "chat_kind": "risi",
+   "chat_id_is_own": true,
+   "admins": [
+    "A"
+   ],
+   "agents": [
+    "R"
+   ],
+   "agent_users": [
+    "R"
+   ],
+   "leaves": {
+    "A": [
+     "a1",
+     "a2"
+    ],
+    "R": [
+     "r1"
+    ]
+   },
+   "committer": "A/a1",
+   "adds": [],
+   "removes": [],
+   "meta": {
+    "admins": [
+     "A",
+     "B"
+    ],
+    "name_changed": false,
+    "tab": null,
+    "chat_id_changed": false,
+    "agents": null,
+    "chat_kind_changed": false
+   },
    "expect": "reject"
   }
  ]

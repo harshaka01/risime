@@ -67,8 +67,8 @@ class RisiCardsTest {
         return m to RisiMessages.meta(m)!!
     }
 
-    private fun show(host: Host, rows: List<Pair<MessageEntity, RisiMeta>>, nowMs: Long = 1_760_000_000_000L, readOnly: Boolean = false) {
-        val messages = rows.map { it.first }
+    private fun show(host: Host, rows: List<Pair<MessageEntity, RisiMeta>>, nowMs: Long = 1_760_000_000_000L, readOnly: Boolean = false, extra: List<MessageEntity> = emptyList()) {
+        val messages = extra + rows.map { it.first }
         val ctx = risiCardContext(host, messages, { names[it.lowercase()] ?: "Someone" }, nowMs, onRef = { host.calls += "ref:$it" }, knownNames = names.values.toList(), readOnly = readOnly)
         rule.setContent { RisiMeTheme { Column { rows.forEach { (m, r) -> RisiCardRow(m, r, ctx) } } } }
     }
@@ -192,11 +192,50 @@ class RisiCardsTest {
         assertTrue(rule.onAllNodes(hasTestTag("risi_yes")).fetchSemanticsNodes().isEmpty())
     }
 
-    @Test fun answerRefsAreTappableAndScrollToTheMessage() {
+    private val refId = "c1a2b3f2-a4f0-11f1-8000-0242ac120002"
+
+    private fun said(from: String, body: String, id: String = refId) = MessageEntity(
+        clientMsgId = "m-$id", messageId = id, conversationId = official, from = from, to = official, body = body,
+        serverTs = "2026-10-08T09:10:00.000Z", localTs = 0L, status = MessageStatus.DELIVERED.name, outgoing = false,
+    )
+
+    @Test fun answerSourcesAreQuotesOfTheMessageThatScrollToIt() {
         val h = Host(harsha)
-        show(h, listOf(row("envelope_risi_answer.json")))
+        show(h, listOf(row("envelope_risi_answer.json")), extra = listOf(said(kamal, "The site visit moved to Thursday 10 am because the crane is late")))
+        rule.onNodeWithText("Kamal: “The site visit moved to Thursday 10 am…”").assertIsDisplayed()
+        assertTrue(rule.onAllNodes(androidx.compose.ui.test.hasText("Message 1")).fetchSemanticsNodes().isEmpty())
         rule.onNodeWithTag("risi_ref_0").performClick()
-        assertEquals(listOf("ref:c1a2b3f2-a4f0-11f1-8000-0242ac120002"), h.calls)
+        assertEquals(listOf("ref:$refId"), h.calls)
+    }
+
+    @Test fun aSourceNotOnThisPhoneShowsNothing() {
+        show(Host(harsha), listOf(row("envelope_risi_answer.json")))
+        rule.onNodeWithTag("risi_card_answer").assertExists()
+        assertTrue(rule.onAllNodes(hasTestTag("risi_ref_0")).fetchSemanticsNodes().isEmpty())
+        assertTrue(rule.onAllNodes(androidx.compose.ui.test.hasText("Message 1")).fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test fun sourceQuotesSkipDeletedAndOtherRowsAndShortTextIsWhole() {
+        val (_, r) = row("envelope_risi_answer.json")
+        val nameOf = { id: String -> names[id.lowercase()] ?: "Someone" }
+        assertEquals(listOf(lk.codegen.risime.data.tabs.SourceQuote(refId, "Kamal", "Thursday works")), RisiCards.sourceQuotes(r, listOf(said(kamal, "Thursday works")), nameOf))
+        assertEquals("You", RisiCards.sourceQuotes(r, listOf(said(harsha, "ok").copy(outgoing = true)), nameOf).single().sender)
+        assertTrue(RisiCards.sourceQuotes(r, listOf(said(kamal, "x").copy(kind = MessageEntity.KIND_DELETED)), nameOf).isEmpty())
+        assertTrue(RisiCards.sourceQuotes(r, listOf(said(kamal, "x", id = "other")), nameOf).isEmpty())
+    }
+
+    @Test fun followUpChipDismissesWithTheCross() {
+        var dismissed = 0
+        rule.setContent { RisiMeTheme { RisiFollowUpChip { dismissed++ } } }
+        rule.onNodeWithText(lk.codegen.risime.data.tabs.RisiFollowUp.CHIP_LABEL).assertIsDisplayed()
+        rule.onNodeWithTag("risi_follow_up").performClick()
+        assertEquals(1, dismissed)
+    }
+
+    @Test fun officialDmHeaderAndComposerTexts() {
+        assertEquals("Kumu · Risi", officialDmTitle("Kumu"))
+        assertEquals("Message", OFFICIAL_COMPOSER_HINT)
+        assertTrue(!OFFICIAL_DM_SUBTITLE.contains("member"))
     }
 
     @Test fun readOnlyOfficialShowsNoButtons() {

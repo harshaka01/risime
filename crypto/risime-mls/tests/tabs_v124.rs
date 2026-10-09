@@ -386,6 +386,73 @@ fn a_one_to_one_official_has_no_name() {
     assert_eq!(m.chat_id.as_deref(), Some("dm:alice_bob"));
 }
 
+/// Contract v1.25 §25.2: the Risi chat on real MLS state (crypto C4).
+#[test]
+fn a_risi_chat_holds_one_human_and_one_agent() {
+    const OWN: &str = "grp:7d1c0e52-4a8b-4f6e-9a3b-1c2d3e4f5a6b";
+    let risi_meta = |chat_id: &str, agents: &[&str]| {
+        GroupMeta::new("", vec!["alice".into()])
+            .with_tab(
+                Tab::Official,
+                chat_id,
+                agents.iter().map(|s| s.to_string()).collect(),
+            )
+            .with_chat_kind("risi")
+    };
+    let alice = client("alice", "a1");
+    let a2 = client("alice", "a2");
+    let bob = client("bob", "b1");
+    let risi = agent("risi", "r1");
+
+    // chat_id must be the group's own id; a second human at epoch 0 is refused.
+    assert!(matches!(
+        alice.create_group_with_meta(
+            GG,
+            &[kp(&a2), kp(&risi)],
+            &risi_meta(PRIVATE_CHAT, &["risi"])
+        ),
+        Err(MlsError::PolicyViolation(_))
+    ));
+    assert!(matches!(
+        alice.create_group_with_meta(GG, &[kp(&bob), kp(&risi)], &risi_meta(OWN, &["risi"])),
+        Err(MlsError::PolicyViolation(_))
+    ));
+    // Creation: the owner's two devices and Risi.
+    let gc = alice
+        .create_group_with_meta(GG, &[kp(&a2), kp(&risi)], &risi_meta(OWN, &["risi"]))
+        .unwrap();
+    alice.commit_accepted(GG).unwrap();
+    for c in [&a2, &risi] {
+        c.join_from_welcome(gc.welcome.as_ref().unwrap()).unwrap();
+    }
+    let m = a2.group_meta(GG).unwrap().unwrap();
+    assert!(m.is_risi());
+    assert_eq!(m.chat_kind.as_deref(), Some("risi"));
+
+    // A second human, a second agent, a chat_kind change and a second admin are refused.
+    assert!(matches!(
+        alice.change_members(GG, &[kp(&bob)], &[]),
+        Err(MlsError::PolicyViolation(_))
+    ));
+    assert!(matches!(
+        alice.change_members(GG, &[kp(&agent("risi2", "r2"))], &[]),
+        Err(MlsError::PolicyViolation(_))
+    ));
+    let mut changed = risi_meta(OWN, &["risi"]);
+    changed.chat_kind = Some("other".into());
+    assert!(alice.update_group_meta(GG, &changed).is_err());
+    let mut two = risi_meta(OWN, &["risi"]);
+    two.admins.push("bob".into());
+    assert!(alice.update_group_meta(GG, &two).is_err());
+
+    // The owner's own new device is fine.
+    let a3 = client("alice", "a3");
+    let gc = alice.change_members(GG, &[kp(&a3)], &[]).unwrap();
+    deliver(&alice, &gc, &[&a2, &risi]);
+    a3.join_from_welcome(gc.welcome.as_ref().unwrap()).unwrap();
+    same(&[&alice, &a2, &a3, &risi]);
+}
+
 fn same(clients: &[&Client]) {
     let first = clients[0].epoch_authenticator(GG).unwrap();
     for c in clients {

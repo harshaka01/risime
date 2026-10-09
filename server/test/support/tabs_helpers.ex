@@ -28,6 +28,17 @@ defmodule RisiMe.TabsHelpers do
     device_id
   end
 
+  @doc "v1.25: a `risi_tools` device (tabs + risi_tools). Returns its id."
+  def risi_tools_device!(user, opts \\ []),
+    do: tabs_device!(user, Keyword.put(opts, :caps, @tabs_caps ++ ["risi_tools"]))
+
+  @doc "`RISI_TOOLS=on` for the test."
+  def risi_tools_on! do
+    Application.put_env(:risime, :risi_tools, true)
+    on_exit(fn -> Application.delete_env(:risime, :risi_tools) end)
+    :ok
+  end
+
   @doc "A groups-only (pre-v1.24) device, optionally with a push token."
   def old_device!(user, opts \\ []),
     do: tabs_device!(user, Keyword.put(opts, :caps, ["groups", "member_devices"]))
@@ -111,7 +122,7 @@ defmodule RisiMe.TabsHelpers do
       chat_kind: Keyword.get(opts, :chat_kind, "group")
     })
 
-    RisiMe.Groups.Tabs.put(id, "official")
+    RisiMe.Groups.Tabs.put(id, "official", Keyword.get(opts, :chat_kind, "group"))
 
     rows =
       for({u, role} <- members, do: member(id, u, role, "user", now)) ++

@@ -26,6 +26,8 @@ defmodule RisiMeWeb.AuthController do
     # v1.24 §24.15: `tabs: "on"` while TABS=on; left out while off (absent = off), so the reply
     # stays exactly v1.23 until the switch.
     body = if RisiMe.Risi.tabs_on?(), do: Map.put(body, :tabs, "on"), else: body
+    # v1.25 §25.8: `risi_tools: "on"` while RISI_TOOLS=on; left out while off (absent = off).
+    body = if RisiMe.Risi.tools_on?(), do: Map.put(body, :risi_tools, "on"), else: body
 
     json(conn, body)
   end

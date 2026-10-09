@@ -116,6 +116,12 @@ defmodule RisiMe.Chats do
 
   @doc "`GET /api/v1/chats/{chat_id}` (`tabs` devices only)."
   def show(me, device_id, chat_id) do
+    if RisiMe.Groups.Tabs.risi_chat?(chat_id),
+      do: RisiMe.RisiChat.show(me, device_id, chat_id),
+      else: show_chat(me, device_id, chat_id)
+  end
+
+  defp show_chat(me, device_id, chat_id) do
     with true <- Devices.tabs_device?(me, device_id) || {:error, :not_found},
          {:ok, chat} <- resolve(me, chat_id),
          do: {:ok, chat_json(me, chat)}
@@ -127,7 +133,8 @@ defmodule RisiMe.Chats do
   """
   def list(me, device_id) do
     if Devices.tabs_device?(me, device_id) do
-      {:ok, list_chats(me)}
+      # v1.25 §25.2: the caller's Risi chat, only to a `risi_tools` device.
+      {:ok, list_chats(me) ++ RisiMe.RisiChat.list(me, device_id)}
     else
       {:error, :not_found}
     end
@@ -216,6 +223,7 @@ defmodule RisiMe.Chats do
   def create_official(me, device_id, chat_id) do
     with true <- MLS.available?() || {:error, :mls_unavailable},
          true <- Devices.tabs_device?(me, device_id) || {:error, :invalid_device},
+         :ok <- not_risi_chat(me, chat_id),
          {:ok, chat} <- resolve(me, chat_id) do
       og = official_group(chat_id)
 
@@ -234,6 +242,13 @@ defmodule RisiMe.Chats do
           end
       end
     end
+  end
+
+  # v1.25 §25.2: no toggle and no `…/official` on a Risi chat (`422 risi_chat` for its member).
+  defp not_risi_chat(me, chat_id) do
+    if RisiMe.Groups.Tabs.risi_chat?(chat_id) and Groups.member(chat_id, me) != nil,
+      do: {:error, :risi_chat},
+      else: :ok
   end
 
   # §24.2: a DM chat must be e2ee and the two users friends with no block.
@@ -285,7 +300,7 @@ defmodule RisiMe.Chats do
           )
 
         if n == 1 do
-          RisiMe.Groups.Tabs.put(id, "official")
+          RisiMe.Groups.Tabs.put(id, "official", chat.kind)
 
           # §24.1: a 1:1 Official has both users as admins; a group's mirrors the Private roles.
           humans =
@@ -389,6 +404,7 @@ defmodule RisiMe.Chats do
   def toggle(me, device_id, chat_id, params) do
     with true <- MLS.available?() || {:error, :mls_unavailable},
          true <- Devices.tabs_device?(me, device_id) || {:error, :invalid_device},
+         :ok <- not_risi_chat(me, chat_id),
          {:ok, dev} <- Ecto.UUID.cast(device_id),
          %{"official" => want} when want in ["on", "off"] <- params,
          {:ok, chat} <- resolve(me, chat_id),

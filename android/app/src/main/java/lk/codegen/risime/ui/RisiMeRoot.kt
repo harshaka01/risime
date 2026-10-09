@@ -173,7 +173,11 @@ private fun MainNav(c: AppContainer, meId: String) {
             ChatsScreen(
                 viewModel { ChatsViewModel(c, meId) },
                 viewModel(key = "friends") { FriendsViewModel(c) },
-                onOpen = { nav.navigate("chat/${android.net.Uri.encode(it)}") },
+                onOpen = {
+                    // §25.2 the "Risi" entry before the Risi chat exists: create it first.
+                    if (it == lk.codegen.risime.ui.chats.RISI_NEW_TARGET) nav.navigate("risi_open") { launchSingleTop = true }
+                    else nav.navigate("chat/${android.net.Uri.encode(it)}")
+                },
                 onNewGroup = { nav.navigate("group_new") { launchSingleTop = true } },
                 onSettings = { nav.navigate("settings") { launchSingleTop = true } },
                 onSearch = { nav.navigate("search") { launchSingleTop = true } },
@@ -200,6 +204,14 @@ private fun MainNav(c: AppContainer, meId: String) {
             val open by c.lockedChats.folderOpen.collectAsState()
             if (open) lk.codegen.risime.ui.chats.LockedChatsSettingsScreen(c, onBack = { nav.popBackStack() })
         }
+        // §25.2 the Risi chat's first open: POST /risi/chat (+ epoch 0), then the chat itself.
+        composable("risi_open") {
+            lk.codegen.risime.ui.tabs.RisiChatOpenScreen(
+                open = { c.openRisiChat() },
+                onReady = { conv -> nav.navigate("chat/${android.net.Uri.encode(conv)}") { popUpTo("chats") } },
+                onBack = { nav.popBackStack() },
+            )
+        }
         // A conversation id (dm:/grp:) or a DM peer's user id (older notification intents, search).
         composable("chat/{target}") { entry ->
             val target = lk.codegen.risime.net.conversationFor(meId, entry.arguments?.getString("target") ?: return@composable)
@@ -224,6 +236,27 @@ private fun MainNav(c: AppContainer, meId: String) {
             }
             val lockControl = chatLockControl(c, nav, conv, isLocked, gate)
             lk.codegen.risime.ui.lock.LockGateDialog(gate)
+            // §25.2 the Risi chat (MLS says chat_kind "risi"): one conversation, Official styling, no tabs or
+            // toggle; its composer only asks Risi. Not shown at all on a device without risi_tools.
+            if (lk.codegen.risime.data.tabs.isRisiChat(conv, tabRows)) {
+                val risiOn by c.risiTools.on.collectAsState()
+                if (!risiOn || !tabsOn) {
+                    lk.codegen.risime.ui.tabs.RisiChatUnavailable(onBack = { nav.popBackStack() })
+                    return@composable
+                }
+                val risiVm = viewModel(key = conv) { lk.codegen.risime.ui.group.GroupChatViewModel(c, meId, conv) }
+                lk.codegen.risime.ui.group.GroupChatScreen(
+                    risiVm, meId,
+                    onBack = { nav.popBackStack() },
+                    onInfo = {},
+                    lock = lockControl,
+                    tabBar = { lk.codegen.risime.ui.tabs.RisiChatStrip() },
+                    titleOverride = lk.codegen.risime.data.tabs.RISI_CHAT_NAME,
+                    risi = risiVm.risi,
+                    risiChat = true,
+                )
+                return@composable
+            }
             val groupInfo = { nav.navigate("group_info/${android.net.Uri.encode(conv)}") { launchSingleTop = true }; Unit }
             val chatInfo = { nav.navigate("chat_info/${android.net.Uri.encode(conv)}") { launchSingleTop = true }; Unit }
             // §24.9: with tabs off (server switch or capability) this is exactly the v1.23 screen.
@@ -265,9 +298,12 @@ private fun MainNav(c: AppContainer, meId: String) {
                         // Chat info is the chat's (the Private group's); a 1:1 Official has no member management (§24.1 dm_chat).
                         onInfo = if (dmChat) chatInfo else groupInfo,
                         lock = lockControl, tabBar = tabBar,
-                        titleOverride = peerName,
+                        // A 1:1 Official: "Kumu · Risi", never "3 members" (its members are the two of you and Risi).
+                        titleOverride = peerName?.let { lk.codegen.risime.ui.tabs.officialDmTitle(it) },
+                        subtitleOverride = if (dmChat) lk.codegen.risime.ui.tabs.OFFICIAL_DM_SUBTITLE else null,
                         readOnlyReason = if (readOnly) lk.codegen.risime.ui.tabs.OFFICIAL_HISTORY_LABEL else null,
-                        composerHint = lk.codegen.risime.ui.tabs.RISI_LISTENING,
+                        // The composer says "Message"; "Risi is listening" stays in the strip under the tabs.
+                        composerHint = lk.codegen.risime.ui.tabs.OFFICIAL_COMPOSER_HINT,
                     )
                 },
             )

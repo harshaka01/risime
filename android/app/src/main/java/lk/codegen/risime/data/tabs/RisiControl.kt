@@ -18,7 +18,10 @@ object RisiControl {
     const val TYPE_ACTION = "risi_action"
 
     val REQUEST_ACTIONS = setOf("ask", "summarise", "report")
-    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now")
+    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS
+
+    /** §25.4 (v1.25): on a confirm card (`write_id`) or a group reminder (`reminder_id`). */
+    val V125_ACTIONS: Set<String> get() = setOf("confirm_write", "cancel_write", "me_too", "not_me")
 
     /** `text` of an `ask`: 1-1000 grapheme clusters (§24.11). */
     const val MAX_ASK_GRAPHEMES = 1000
@@ -83,6 +86,10 @@ object RisiControl {
             "done" -> "Marked a commitment done"
             "offer_yes" -> "Said yes to Risi's offer"
             "offer_not_now" -> "Said not now to Risi's offer"
+            "confirm_write" -> "Tapped Add"
+            "cancel_write" -> "Cancelled"
+            "me_too" -> "Me too"
+            "not_me" -> "Not me"
             else -> "Risi"
         }
     }
@@ -106,10 +113,24 @@ object RisiControl {
                 "done" -> "$who marked a commitment done"
                 "offer_yes" -> "$who said yes to Risi's offer"
                 "offer_not_now" -> "$who said not now to Risi's offer"
+                "confirm_write" -> "$who tapped Add"
+                "cancel_write" -> "$who cancelled"
+                "me_too" -> "$who: me too"
+                "not_me" -> "$who: not me"
                 else -> null
             }
         }
     }
+
+    /** §25.2 the text of a stored `ask` (the Risi chat shows it as the user's own bubble), or null. */
+    fun askText(json: String?): String? =
+        parse(json)?.takeIf { str(it, "type") == TYPE_REQUEST && str(it, "action") == "ask" }?.let { str(it, "text") }
+
+    /** The `request_id` of a stored `risi_request` row, or null. */
+    fun requestIdOf(json: String?): String? = parse(json)?.takeIf { str(it, "type") == TYPE_REQUEST }?.let { str(it, "request_id") }
+
+    /** The action of a stored `risi_action` row, or null. */
+    fun actionOf(json: String?): String? = parse(json)?.takeIf { str(it, "type") == TYPE_ACTION }?.let { str(it, "action") }
 
     /** The target of a stored `risi_action` row, or null. */
     fun targetOf(json: String?): String? = parse(json)?.takeIf { str(it, "type") == TYPE_ACTION }?.let { str(it, "target") }

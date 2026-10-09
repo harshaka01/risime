@@ -55,6 +55,8 @@ class DeviceRegistrar(
     private val onPushTokenRegistered: (String?) -> Unit = {},
     /** §24.7: `/auth/config` says `tabs: on` (the app shows both tabs, creates and toggles Official, parses `chat_event`). */
     private val tabsSupported: () -> Boolean = { false },
+    /** §25.8: `/auth/config` says `risi_tools: on` and the app handles tool calls, progress, the Risi chat and the v1.25 kinds. */
+    private val risiToolsSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
 ) {
@@ -86,6 +88,8 @@ class DeviceRegistrar(
             DeviceMls.CAP_HISTORY_SHARE.takeIf { mls.historySupported && historySupported() },
             // v1.24 §24.7: only while the server switch is on and the bundled core enforces §24.1.
             DeviceMls.CAP_TABS.takeIf { mls.tabsSupported && tabsSupported() },
+            // v1.25 §25.8: only together with `tabs`, while the server switch is on and the core does Risi chats.
+            DeviceMls.CAP_RISI_TOOLS.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() },
         )
         else -> null
     }

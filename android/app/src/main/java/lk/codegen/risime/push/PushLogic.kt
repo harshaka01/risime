@@ -73,6 +73,8 @@ const val NOTIF_PRIVATE_SUFFIX = " · 🔒 Private"
  * [row] is the conversation's MLS-derived tab row (null: Private, its own chat).
  */
 fun tabTitle(conv: String, row: lk.codegen.risime.data.db.ChatTabEntity?, me: String?, names: Map<String, String>, groupNames: Map<String, String>, fallbackPeer: String?): String {
+    // §25.2 the Risi chat is "Risi" (no tabs).
+    if (row?.risi == true) return lk.codegen.risime.data.tabs.RISI_CHAT_NAME
     val official = row?.official == true
     val chat = if (official) row!!.chatId else conv
     val base = if (lk.codegen.risime.net.isGroupConversation(chat)) {

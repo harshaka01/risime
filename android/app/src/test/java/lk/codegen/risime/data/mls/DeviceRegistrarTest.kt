@@ -180,6 +180,30 @@ class DeviceRegistrarTest {
         assertEquals("[\"groups\"]", caps())
     }
 
+    /** v1.25 §25.8: `risi_tools` only with `tabs`, the `risi_tools` server switch and a core that does Risi chats. */
+    @Test fun risiToolsAdvertisedOnlyWithTabsTheSwitchAndARisiCore() = runBlocking {
+        var tabsOn = true
+        var risiOn = false
+        val reg = DeviceRegistrar(api, { "dev-1" }, "0.3.0", { mls }, groupsReplacedFor = { "x" }, tabsSupported = { tabsOn }, risiToolsSupported = { risiOn })
+        fun caps() = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject["mls"]!!.jsonObject["capabilities"].toString()
+        suspend fun advertise(): String {
+            server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+            server.enqueue(json(200, """{"count":30}"""))
+            reg.register(null)
+            return caps().also { server.takeRequest() }
+        }
+        mls.tabsOn = true
+        mls.risiChatOn = true
+        assertEquals("[\"groups\",\"tabs\"]", advertise()) // server switch off
+        risiOn = true
+        assertEquals("[\"groups\",\"tabs\",\"risi_tools\"]", advertise())
+        tabsOn = false // never without tabs
+        assertEquals("[\"groups\"]", advertise())
+        tabsOn = true
+        mls.risiChatOn = false // a core without the Risi-chat rules
+        assertEquals("[\"groups\",\"tabs\"]", advertise())
+    }
+
     @Test fun coreWithoutGroupsKeepsTheV17Registration() = runBlocking {
         mls.groupsOn = false
         server.enqueue(json(200, """{"attestation":"a.b.c"}"""))

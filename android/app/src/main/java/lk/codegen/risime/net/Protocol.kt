@@ -9,7 +9,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Wire models for contract/v1/PROTOCOL.md. Field names match the contract exactly. */
 
 /** The PROTOCOL.md version this client implements (shown in Settings → About; checked by a test). */
-const val PROTOCOL_VERSION = "1.24"
+const val PROTOCOL_VERSION = "1.25"
 
 val ProtocolJson: Json = Json {
     ignoreUnknownKeys = true // §0: clients must ignore unknown fields
@@ -195,6 +195,10 @@ data class Event(
     /** §24.8 (v1.24) a `chat_event` (Official created / off / on). */
     fun chatEvent(): ChatEventData? = if (kind == KIND_CHAT_EVENT) ProtocolJson.decodeFromJsonElement<ChatEventData>(data) else null
 
+    /** §25.3 (v1.25) a `risi_tool_call` for this device (null if malformed). */
+    fun risiToolCall(): RisiToolCall? =
+        if (kind == KIND_RISI_TOOL_CALL) runCatching { ProtocolJson.decodeFromJsonElement<RisiToolCall>(data) }.getOrNull() else null
+
     companion object {
         const val KIND_MESSAGE = "message"
         const val KIND_STATUS = "status"
@@ -213,6 +217,7 @@ data class Event(
         const val KIND_HISTORY_STATUS = "history_status"
         const val KIND_HISTORY_SHARE = "history_share"
         const val KIND_CHAT_EVENT = "chat_event"
+        const val KIND_RISI_TOOL_CALL = "risi_tool_call"
     }
 }
 
@@ -312,11 +317,16 @@ data class Signal(val kind: String, val data: JsonObject) {
     fun friend(): FriendSignal? =
         if (kind == KIND_FRIEND) runCatching { ProtocolJson.decodeFromJsonElement<FriendSignal>(data) }.getOrNull() else null
 
+    /** §25.4 (v1.25) Risi's progress on a request (ephemeral). */
+    fun risiProgress(): RisiProgress? =
+        if (kind == KIND_RISI_PROGRESS) runCatching { ProtocolJson.decodeFromJsonElement<RisiProgress>(data) }.getOrNull() else null
+
     companion object {
         const val KIND_PRESENCE = "presence"
         const val KIND_TYPING = "typing"
         const val KIND_FRIEND = "friend"
         const val KIND_MLS_KEY_PACKAGES_LOW = "mls_key_packages_low"
+        const val KIND_RISI_PROGRESS = "risi_progress"
     }
 }
 
@@ -339,8 +349,13 @@ data class AuthConfig(
     val backup: String? = null,
     /** §24 (v1.24): "on" | "off"; absent = off. */
     val tabs: String? = null,
+    /** §25.8 (v1.25): "on" | "off"; absent = off. */
+    @SerialName("risi_tools") val risiTools: String? = null,
 ) {
     val tabsOn: Boolean get() = tabs == "on"
+
+    /** §25.8: the server runs Risi's tool loop; only then does the app advertise `risi_tools`. */
+    val risiToolsOn: Boolean get() = risiTools == "on"
     val phoneVerificationRequired: Boolean get() = phoneVerification == PHONE_REQUIRED
     val signupOpen: Boolean get() = signup == SIGNUP_OPEN
 
@@ -621,6 +636,9 @@ data class DeviceMls(
 
         /** v1.24 §24.7: two tabs, only while `/auth/config` says `tabs: on` and the core enforces §24.1. */
         const val CAP_TABS = CAPABILITY_TABS
+
+        /** v1.25 §25.8: Risi's tools and the Risi chat, only while `/auth/config` says `risi_tools: on` (with `groups` and `tabs`). */
+        const val CAP_RISI_TOOLS = CAPABILITY_RISI_TOOLS
     }
 }
 
@@ -982,7 +1000,8 @@ data class GroupRejoinReply(
 @Serializable
 data class GroupMeta(
     val v: Int = 1,
-    val name: String,
+    /** `null` on the wire (a 1:1 Official, a Risi chat) reads as "". */
+    @Serializable(with = NullAsEmptyString::class) val name: String,
     /** §14.4 group icon (a blob reference with its key), kept verbatim; v1.11 apps still show the default avatar. */
     val icon: kotlinx.serialization.json.JsonElement? = null,
     val admins: List<String> = emptyList(),
@@ -998,9 +1017,21 @@ data class GroupMeta(
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     val agents: List<String>? = null,
+    /** §25.2 (v1.25): "risi" for a user's Risi chat; absent = not a Risi chat. Immutable after epoch 0. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("chat_kind") val chatKind: String? = null,
 ) {
     /** §24.1: Official only when the MLS state says so; absent or anything else is Private. */
     val official: Boolean get() = tab == TAB_OFFICIAL
+
+    /**
+     * §25.2: a Risi chat per the MLS state: `chat_kind: "risi"`, or (a core without the v1.25 field,
+     * which drops it) an Official group whose `chat_id` is its own conversation id: only a Risi chat
+     * has that shape (every other Official's chat_id is its Private tab's id or a `dm:`).
+     */
+    fun isRisiChat(conversationId: String): Boolean =
+        official && (chatKind == CHAT_KIND_RISI || (chatKind == null && chatId != null && chatId.equals(conversationId, ignoreCase = true)))
 
     fun encode(): ByteArray = ProtocolJson.encodeToString(serializer(), this).toByteArray(Charsets.UTF_8)
 
@@ -1009,6 +1040,7 @@ data class GroupMeta(
 
         const val TAB_PRIVATE = "private"
         const val TAB_OFFICIAL = "official"
+        const val CHAT_KIND_RISI = "risi"
     }
 }
 

@@ -42,6 +42,32 @@ class TabsEventsTest {
         assertEquals(events.last().eventId, sync.cursor())
     }
 
+    /** §25.3: `risi_tool_call` reaches the hook after its event (never as a message); without the hook it is skipped. */
+    @Test fun risiToolCallsReachTheHookAndAdvanceTheCursor() = runTest {
+        val calls = mutableListOf<lk.codegen.risime.net.RisiToolCall>()
+        val sync = FakeSyncDao()
+        val messages = FakeMessageDao()
+        val engine = ChatEngine(
+            messages = messages, sync = sync,
+            tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
+            scope = this, realtime = { FakeRealtime() }, meId = { me },
+            groupsEnabled = { true }, risiToolCalls = { calls += it },
+        )
+        val events = listOf("event_risi_tool_call_calendar_check.json", "event_risi_tool_call_calendar_add.json").map { ProtocolJson.decodeFromString<Event>(example(it)) }
+        engine.onEvents(events)
+        assertEquals(listOf("calendar_check", "calendar_add"), calls.map { it.tool })
+        assertEquals(events.last().eventId, sync.cursor())
+
+        val sync2 = FakeSyncDao()
+        val old = ChatEngine(
+            messages = FakeMessageDao(), sync = sync2,
+            tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
+            scope = this, realtime = { FakeRealtime() }, meId = { me },
+        )
+        old.onEvents(events)
+        assertEquals(events.last().eventId, sync2.cursor())
+    }
+
     @Test fun anAppWithoutTabsSkipsChatEventsButMovesOn() = runTest {
         val sync = FakeSyncDao()
         val engine = ChatEngine(

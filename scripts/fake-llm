@@ -19,7 +19,23 @@ and appends every request body, one JSON object per line, to the record file, so
 check that a canary never reached the model. If LLM_API_KEY is set in the environment, requests
 without `Authorization: Bearer <key>` get 401 (the key is never printed).
 
-  scripts/fake-llm [--port 8199] [--record /path/requests.jsonl]
+  scripts/fake-llm [--port 8199] [--record /path/requests.jsonl] [--script /path/script.json]
+
+--script (contract v1.25 §25.9, decision 068): scripted next actions for the Risi tool loop, so
+the gate runs without the real model. The file is {"v": 1, "rules": [Rule]} (or a bare list),
+e.g. contract/v1/risi_gate_script.json. Each request is matched against the rules in order; the
+first rule whose every given field matches wins:
+  "task":       regex, full match on response_format.json_schema.name (e.g. "risi_next_action");
+  "match":      regex, searched in the FIRST user message (the asker's request, §25.1);
+  "match_last": regex, searched in the LAST user message (e.g. a tool result);
+  "actions":    [action, ...]: JSON objects (sent as the completion content) or strings (sent
+                verbatim). The step index is the number of assistant messages in the request
+                (one per earlier step of the turn, §25.1), so concurrent turns don't interfere;
+                with "step": "cursor" a per-rule counter is used instead. Past the end, the last
+                action repeats (normally the "final").
+  "delay_ms":   optional sleep before answering (queue tests, §25.6).
+  "name":       optional label; GET /script/hits returns {name: count}.
+A request no rule matches gets the default behaviour below. The record file is written as before.
 
 Point the server at it with RISI_LLM_URL=http://127.0.0.1:8199/v1. Stdlib only; synthetic data.
 """
@@ -29,9 +45,63 @@ import os
 import re
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LOCK = threading.Lock()
+
+
+class Script:
+    """Scripted next actions (--script): ordered rules, each a list of actions."""
+
+    def __init__(self, path):
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        rules = doc.get("rules") if isinstance(doc, dict) else doc
+        if not isinstance(rules, list) or not rules:
+            raise SystemExit(f"--script {path}: no rules")
+        self.rules = []
+        for i, r in enumerate(rules):
+            if not isinstance(r, dict) or not isinstance(r.get("actions"), list) or not r["actions"]:
+                raise SystemExit(f"--script {path}: rule {i} needs a non-empty actions list")
+            self.rules.append({
+                "name": str(r.get("name", f"rule{i}")),
+                "task": re.compile(r["task"]) if r.get("task") else None,
+                "match": re.compile(r["match"]) if r.get("match") else None,
+                "match_last": re.compile(r["match_last"]) if r.get("match_last") else None,
+                "actions": r["actions"],
+                "cursor": r.get("step") == "cursor",
+                "delay": max(0, int(r.get("delay_ms", 0))) / 1000.0,
+            })
+        self.counters = {}
+        self.hits = {}
+        self.lock = threading.Lock()
+
+    def reply(self, body):
+        """(content string, delay seconds) for a request, or None when no rule matches."""
+        msgs = [m for m in body.get("messages", []) if isinstance(m, dict)]
+        users = [m.get("content") for m in msgs
+                 if m.get("role") == "user" and isinstance(m.get("content"), str)]
+        first = users[0] if users else ""
+        last = users[-1] if users else ""
+        task = ((body.get("response_format") or {}).get("json_schema") or {}).get("name") or ""
+        step = sum(1 for m in msgs if m.get("role") == "assistant")
+        for r in self.rules:
+            if r["task"] and not r["task"].fullmatch(task):
+                continue
+            if r["match"] and not r["match"].search(first):
+                continue
+            if r["match_last"] and not r["match_last"].search(last):
+                continue
+            with self.lock:
+                self.hits[r["name"]] = self.hits.get(r["name"], 0) + 1
+                if r["cursor"]:
+                    step = self.counters.get(r["name"], 0)
+                    self.counters[r["name"]] = step + 1
+            action = r["actions"][min(step, len(r["actions"]) - 1)]
+            content = action if isinstance(action, str) else json.dumps(action, ensure_ascii=False)
+            return content, r["delay"]
+        return None
 
 
 def instance(schema):
@@ -178,6 +248,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/v1/models":
             return self._json(200, {"object": "list", "data": [
                 {"id": "risi-l1", "object": "model", "root": "fake-llm"}]})
+        if self.path == "/script/hits" and self.server.script:
+            with self.server.script.lock:
+                return self._json(200, dict(self.server.script.hits))
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -193,12 +266,21 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             with open(self.server.record, "a", encoding="utf-8") as f:
                 f.write(json.dumps(body, ensure_ascii=False) + "\n")
+        scripted = self.server.script.reply(body) if self.server.script else None
+        if scripted is not None:
+            content, delay = scripted
+            if delay:
+                time.sleep(delay)
+            return self._completion(content)
         schema = (body.get("response_format") or {}).get("json_schema", {}).get("schema")
         user_text = "\n".join(
             m.get("content", "") for m in body.get("messages", [])
             if isinstance(m, dict) and m.get("role") == "user" and isinstance(m.get("content"), str))
         smart = answer_for(schema, user_text) if schema else None
         content = json.dumps(smart if smart is not None else (instance(schema) if schema else {"text": "fake"}))
+        return self._completion(content)
+
+    def _completion(self, content):
         return self._json(200, {
             "id": "fake", "object": "chat.completion", "model": "risi-l1",
             "choices": [{"index": 0, "finish_reason": "stop",
@@ -210,9 +292,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--port", type=int, default=8199)
     ap.add_argument("--record", default=os.path.join(os.getcwd(), "fake-llm-requests.jsonl"))
+    ap.add_argument("--script", default=None,
+                    help="scripted next actions (JSON rules; see the module docstring)")
     args = ap.parse_args()
+    script = Script(args.script) if args.script else None
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     srv.record = args.record
+    srv.script = script
+    if script:
+        print(f"fake-llm: {len(script.rules)} scripted rules from {args.script}", flush=True)
     print(f"fake-llm on http://127.0.0.1:{srv.server_address[1]}/v1, recording to {args.record}",
           flush=True)
     try:

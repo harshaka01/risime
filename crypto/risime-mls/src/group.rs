@@ -208,6 +208,7 @@ fn tab_context<'a>(
     TabContext {
         dm: false,
         tab: meta.tab(),
+        risi: meta.is_risi(),
         agents: meta.agents(),
         agent_users,
         leaves: leaves
@@ -225,6 +226,7 @@ fn meta_change(current: &GroupMeta, new: &GroupMeta, own: &str) -> MetaChange {
         tab: (current.tab() != new.tab()).then(|| new.tab()),
         chat_id_changed: current.chat_id_or(own) != new.chat_id_or(own),
         agents: (current.agents() != new.agents()).then(|| new.agents().to_vec()),
+        chat_kind_changed: current.chat_kind != new.chat_kind,
     }
 }
 
@@ -234,6 +236,7 @@ fn meta_unchanged(m: &MetaChange) -> bool {
         && m.tab.is_none()
         && !m.chat_id_changed
         && m.agents.is_none()
+        && !m.chat_kind_changed
 }
 
 fn parse_ids(ids: &[String]) -> Result<Vec<DeviceId>> {
@@ -482,6 +485,8 @@ impl Client {
         if group.members().count() > MAX_GROUP_LEAVES {
             return Err(MlsError::Welcome("too many devices".into()));
         }
+        meta.validate_chat_id(&conversation_id(group.group_id().as_slice()))
+            .map_err(|e| MlsError::Welcome(e.to_string()))?;
         Self::check_tree_tabs(&meta, &Self::member_infos(group)?).map_err(MlsError::Welcome)
     }
 
@@ -492,6 +497,13 @@ impl Client {
         meta: &GroupMeta,
         members: &[MemberInfo],
     ) -> std::result::Result<(), String> {
+        if meta.is_risi()
+            && let Some(m) = members
+                .iter()
+                .find(|m| !m.kind.is_agent() && !meta.is_admin(&m.user_id))
+        {
+            return Err(format!("a Risi chat has no second user ({})", m.device()));
+        }
         for m in members.iter().filter(|m| m.kind.is_agent()) {
             match meta.tab() {
                 Tab::Private => {
@@ -527,6 +539,7 @@ impl Client {
     ) -> Result<GroupCommit> {
         Self::require_group_id(group_id)?;
         meta.validate()?;
+        meta.validate_chat_id(&conversation_id(group_id))?;
         if !meta.is_admin(&self.device.user_id) {
             return Err(MlsError::PolicyViolation(
                 "the creator must be an admin".into(),
@@ -702,6 +715,9 @@ impl Client {
             }
             if new.agents.is_none() {
                 new.agents.clone_from(&current.agents);
+            }
+            if new.chat_kind.is_none() {
+                new.chat_kind.clone_from(&current.chat_kind);
             }
             new.validate()?;
             let change = meta_change(&current, &new, &conversation_id(group_id));

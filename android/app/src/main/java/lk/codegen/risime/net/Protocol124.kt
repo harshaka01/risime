@@ -2,7 +2,9 @@ package lk.codegen.risime.net
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /*
  * Contract v1.24 (§24): two tabs (Private | Official) and Risi stage 1. Wire models only; no behaviour yet.
@@ -37,7 +39,8 @@ data class ChatMissing(
 data class Chat(
     @SerialName("chat_id") val chatId: String,
     val kind: String,
-    @SerialName("private") val privateSide: ChatPrivate,
+    /** Null only for a Risi chat (§25.2), which has no Private tab. */
+    @SerialName("private") val privateSide: ChatPrivate?,
     val official: ChatOfficial = ChatOfficial(),
     @SerialName("official_ready") val officialReady: Boolean = false,
     val missing: List<ChatMissing> = emptyList(),
@@ -114,7 +117,34 @@ data class RisiMeta(
     @SerialName("action_items") val actionItems: List<String> = emptyList(),
     @SerialName("open_questions") val openQuestions: List<String> = emptyList(),
     val partial: Boolean = false,
-)
+    // v1.25 §25.4: answer v2 (all optional; absent in v1.24)
+    val steps: List<RisiStep> = emptyList(),
+    val sources: List<RisiSource> = emptyList(),
+    @SerialName("next_steps") val nextSteps: List<String> = emptyList(),
+    @SerialName("local_search") val localSearch: RisiLocalSearch? = null,
+    @SerialName("turn_ref") val turnRef: String? = null,
+    // v1.25 confirm
+    @SerialName("write_id") val writeId: String? = null,
+    val tool: String? = null,
+    /** `confirm`: a [RisiWhen] object; `reminder_set`: a timestamp. Read with [confirmWhen] / [reminderWhen]. */
+    @SerialName("when") val whenRaw: JsonElement? = null,
+    @SerialName("for") val forUsers: List<String> = emptyList(),
+    @SerialName("expires_at") val expiresAt: String? = null,
+    // v1.25 reminder_set (and reminder.reminder_id)
+    @SerialName("reminder_id") val reminderId: String? = null,
+    val participants: List<String> = emptyList(),
+    @SerialName("me_too") val meToo: Boolean = false,
+    // v1.25 draft
+    val language: String? = null,
+    @SerialName("target_conversation_id") val targetConversationId: String? = null,
+) {
+    /** `confirm.when` (null if absent or not an object). */
+    fun confirmWhen(): RisiWhen? =
+        (whenRaw as? JsonObject)?.let { runCatching { ProtocolJson.decodeFromJsonElement(RisiWhen.serializer(), it) }.getOrNull() }
+
+    /** `reminder_set.when` (null if absent or not a string). */
+    fun reminderWhen(): String? = (whenRaw as? JsonPrimitive)?.takeIf { it.isString }?.content
+}
 
 @Serializable
 data class RisiDigestItem(

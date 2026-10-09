@@ -25,6 +25,35 @@ class ContractExamplesTest {
 
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
+        // v1.25 (§25 Risi with tools): typed models in net/Protocol125.kt (and RisiMeta's optional fields).
+        "auth_config_v125.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiToolsOn && it.tabsOn) } },
+        "chat_reply_risi.json" to { s -> ProtocolJson.decodeFromString<ChatReply>(s).also { require(it.chat.kind == CHAT_KIND_RISI && it.chat.privateSide == null && !it.chat.canToggle && it.chat.official.conversationId == it.chat.chatId) } },
+        "device_put_risi_tools.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!! && CAPABILITY_TABS in it.mls!!.capabilities!!) } },
+        "envelope_risi_action_confirm_write.json" to { s -> ProtocolJson.decodeFromString<RisiActionEnvelope>(s).also { require(it.action == RisiActions.CONFIRM_WRITE && it.edit == null) } },
+        "envelope_risi_action_me_too.json" to { s -> ProtocolJson.decodeFromString<RisiActionEnvelope>(s).also { require(it.action == RisiActions.ME_TOO) } },
+        "envelope_risi_answer_v2.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == "answer" && it.steps.size == 2 && it.steps[0] == RisiStep("calendar_check", RisiStepStatus.OK))
+                require(it.sources.map { x -> x.type } == listOf("calendar", "message", "note", "link") && it.sources.all { x -> x.showable })
+                require(it.nextSteps.size == 1 && it.localSearch!!.text == "budget" && it.turnRef != null)
+            }
+        },
+        "envelope_risi_confirm.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == "confirm" && it.writeId != null && it.tool == "calendar_add" && it.forUsers.size == 1 && it.expiresAt != null)
+                require(it.confirmWhen()!!.end != null && it.buttons == listOf("add", "cancel") && it.text == "Dentist")
+            }
+        },
+        "envelope_risi_draft.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == "draft" && it.language == "ta" && it.targetConversationId!!.startsWith("grp:")) } },
+        "envelope_risi_reminder_set.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == "reminder_set" && it.reminderId != null && it.reminderWhen() != null && it.meToo && it.participants.size == 1) } },
+        "error_tool_call_expired.json" to { s -> apiError(s, RisiToolsErrors.TOOL_CALL_EXPIRED) },
+        "event_risi_tool_call_calendar_add.json" to { s -> ProtocolJson.decodeFromString<Event>(s).risiToolCall()!!.also { require(it.tool == RisiToolCall.TOOL_CALENDAR_ADD && it.calendarAddArgs()!!.title == "Dentist" && it.toDevices == listOf(it.deviceId)) } },
+        "event_risi_tool_call_calendar_check.json" to { s -> ProtocolJson.decodeFromString<Event>(s).risiToolCall()!!.also { require(it.tool == RisiToolCall.TOOL_CALENDAR_CHECK && it.calendarCheckArgs() != null) } },
+        "risi_chat_create_reply.json" to { s -> ProtocolJson.decodeFromString<RisiChatReply>(s).also { require(it.chat.official.state == "none" && it.group.state == Group.STATE_CREATING && it.group.chatKind == CHAT_KIND_RISI && it.group.chatId == it.group.id) } },
+        "risi_facts_reply_v125.json" to { s -> ProtocolJson.decodeFromString<RisiFactsReply>(s).also { require(it.facts.any { f -> f.kind == "note" }) } },
+        "risi_tool_result_calendar_add.json" to { s -> ProtocolJson.decodeFromString<RisiToolResult>(s).also { require(it.status == RisiToolResult.OK && ProtocolJson.decodeFromJsonElement(CalendarAddResult.serializer(), it.result!!).eventId == "4711") } },
+        "risi_tool_result_calendar_check.json" to { s -> ProtocolJson.decodeFromString<RisiToolResult>(s).also { require(ProtocolJson.decodeFromJsonElement(CalendarCheckResult.serializer(), it.result!!).blocks.size == 2) } },
+        "signal_risi_progress.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).risiProgress()!!.also { require(it.state == RisiProgress.STEP && it.step!!.n == 1 && it.seq == 3) } },
         // v1.24 (§24 two tabs and Risi stage 1): typed models in net/Protocol124.kt.
         "auth_config_v124.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.tabsOn && it.backupOn) } },
         "backup_bundle_header_v124.json" to { s -> ProtocolJson.decodeFromString<lk.codegen.risime.data.backup.BackupBundleHeader>(s).also { require(it.schema == 2) } },

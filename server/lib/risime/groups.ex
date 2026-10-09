@@ -61,6 +61,29 @@ defmodule RisiMe.Groups do
   def groups_devices(user_ids, cap \\ "groups")
   def groups_devices([], _cap), do: []
 
+  # v1.25 §25.2: a Risi chat's leaves are the owner's `risi_tools` devices (with `tabs`) and the
+  # agent's own device, which advertises exactly `groups` and `tabs`.
+  def groups_devices(user_ids, "risi_tools") do
+    {agents, humans} = Enum.split_with(user_ids, &(&1 == RisiMe.Risi.user_id()))
+
+    tools =
+      if humans == [],
+        do: MapSet.new(),
+        else:
+          MapSet.new(
+            Repo.all(
+              from d in Device,
+                where: d.user_id in ^humans and fragment("'risi_tools' = ANY(?)", d.capabilities),
+                select: d.id
+            )
+          )
+
+    humans
+    |> groups_devices("tabs")
+    |> Enum.filter(&MapSet.member?(tools, &1.id))
+    |> Kernel.++(groups_devices(agents, "tabs"))
+  end
+
   def groups_devices(user_ids, cap) do
     Repo.all(
       from d in Device,
@@ -161,6 +184,28 @@ defmodule RisiMe.Groups do
   @doc "v1.24 §24.7: tabs readiness (§12.1 with `tabs` in place of `groups`)."
   def tabs_readiness(user_ids), do: readiness(user_ids, "tabs")
 
+  @doc """
+  v1.25 §25.2: Risi-tools readiness, like tabs readiness with `risi_tools`: a user is ready with
+  at least one current MLS device with `groups`, `tabs` and `risi_tools`. Other installs never
+  block (a Risi chat is delivered only to `risi_tools` devices). `{ready, missing}` as
+  `readiness/2`.
+  """
+  def risi_tools_readiness(user_ids) do
+    user_ids = Enum.uniq(user_ids)
+    have = user_ids |> groups_devices("risi_tools") |> MapSet.new(& &1.user_id)
+    mls = MLS.current_mls_devices(user_ids)
+
+    missing =
+      for u <- user_ids, not MapSet.member?(have, u) do
+        case Enum.find(mls, &(&1.user_id == u)) do
+          nil -> %{user_id: u, device_id: nil, reason: "no_mls"}
+          d -> %{user_id: u, device_id: d.device_id, reason: "legacy_app"}
+        end
+      end
+
+    {MapSet.new(user_ids -- Enum.map(missing, & &1.user_id)), missing}
+  end
+
   @doc "The subset of `user_ids` that is group-ready (`Friend.group_ready`)."
   def ready_set(user_ids) do
     if MLS.available?(), do: user_ids |> readiness() |> elem(0), else: MapSet.new()
@@ -260,7 +305,7 @@ defmodule RisiMe.Groups do
   `GET /groups`: my visible groups. v1.24 §24.7: Official groups only for a `tabs` device
   (`tabs?`).
   """
-  def list(me, tabs? \\ false) do
+  def list(me, tabs? \\ false, risi_tools? \\ false) do
     Repo.all(
       from g in Group,
         join: m in Member,
@@ -268,16 +313,19 @@ defmodule RisiMe.Groups do
         where:
           m.user_id == ^me and m.state == "active" and
             (g.state == "active" or g.created_by == ^me) and
-            (^tabs? or g.tab != "official"),
+            (^tabs? or g.tab != "official") and
+            (^risi_tools? or g.chat_kind != "risi"),
         order_by: [asc: g.created_at]
     )
     |> Enum.map(&group_json(&1, me))
   end
 
   @doc "`GET /groups/{id}`; v1.24 §24.7: an Official group is `404` for a non-`tabs` device."
-  def show(me, id, tabs? \\ false) do
+  def show(me, id, tabs? \\ false, risi_tools? \\ false) do
     with {:ok, g, _m} <- visible(me, id),
          true <- (tabs? or g.tab != "official") || {:error, :not_found},
+         # v1.25 §25.2: a Risi chat is `404` for a non-`risi_tools` device.
+         true <- (risi_tools? or not risi_chat?(g)) || {:error, :not_found},
          do: {:ok, group_json(g, me)}
   end
 
@@ -313,9 +361,15 @@ defmodule RisiMe.Groups do
 
   @doc """
   v1.24 §24.3: the capability a device needs to be a leaf of this group: `tabs` for Official
-  (a member's device without `tabs` sees the Private tab only), `groups` otherwise.
+  (a member's device without `tabs` sees the Private tab only), `groups` otherwise; v1.25
+  §25.2: `risi_tools` for a Risi chat (the agent's device: `tabs`, see `groups_devices/2`).
   """
+  def cap_for(%Group{chat_kind: "risi"}), do: "risi_tools"
   def cap_for(%Group{} = g), do: if(official?(g), do: "tabs", else: "groups")
+
+  @doc "v1.25 §25.2: true for a Risi chat (an Official `grp:` with `chat_kind: \"risi\"`)."
+  def risi_chat?(%Group{tab: "official", chat_kind: "risi"}), do: true
+  def risi_chat?(_), do: false
 
   @doc """
   v1.24 §24.1: `chat_id`, `tab`, `chat_kind` of an Official group. A Private group leaves them out
@@ -438,7 +492,7 @@ defmodule RisiMe.Groups do
           )
 
         if n == 1 do
-          RisiMe.Groups.Tabs.put(id, "private")
+          RisiMe.Groups.Tabs.put(id, "private", "group")
 
           rows =
             [member_row(id, me, "admin", "active", now, now)] ++
@@ -552,7 +606,8 @@ defmodule RisiMe.Groups do
          %{"user_ids" => ids} when is_list(ids) and ids != [] <- params,
          {:ok, ids} <- cast_ids(ids) do
       locked_chat(id, fn tabs ->
-        with {:ok, g, m} <- visible_active(me, id),
+        with :ok <- not_risi_chat(me, id),
+             {:ok, g, m} <- visible_active(me, id),
              :ok <- not_dm_chat(g),
              :ok <- no_agents(g, ids),
              :ok <- require_admin(m),
@@ -652,7 +707,8 @@ defmodule RisiMe.Groups do
         leave(me, device_id, id)
       else
         locked_chat(id, fn tabs ->
-          with {:ok, g, m} <- visible_active(me, id),
+          with :ok <- not_risi_chat(me, id),
+               {:ok, g, m} <- visible_active(me, id),
                :ok <- not_dm_chat(g),
                :ok <- require_admin(m),
                :ok <- agent_target(g, target) do
@@ -737,6 +793,10 @@ defmodule RisiMe.Groups do
           m.state == "pending_remove" ->
             {:ok, nil}
 
+          # v1.25 §25.2: the owner's leave ends a Risi chat (also while `creating`).
+          risi_chat?(g) and m.state == "active" ->
+            RisiMe.RisiChat.leave(me, g)
+
           m.state != "active" or g.state != "active" ->
             {:error, :not_found}
 
@@ -760,8 +820,28 @@ defmodule RisiMe.Groups do
             {:ok, nil}
         end
       end)
-      |> ok_nil()
+      |> after_leave(id)
     end
+  end
+
+  defp after_leave({:ok, [_ | _] = events}, id) do
+    Messaging.publish_batch(events)
+    RisiMe.RisiChat.after_leave(id)
+    :ok
+  end
+
+  defp after_leave({:ok, []}, id) do
+    if RisiMe.Groups.Tabs.risi_chat?(id), do: RisiMe.RisiChat.after_leave(id)
+    :ok
+  end
+
+  defp after_leave(result, _id), do: ok_nil(result)
+
+  # v1.25 §25.2: member, role and invite calls on a Risi chat (for one of its members).
+  defp not_risi_chat(me, id) do
+    if RisiMe.Groups.Tabs.risi_chat?(id) and member(id, me) != nil,
+      do: {:error, :risi_chat},
+      else: :ok
   end
 
   # Removal is immediate on the server (§12.3): no more group events or sends.
@@ -798,7 +878,8 @@ defmodule RisiMe.Groups do
          {:ok, target} <- cast_uuid(target),
          %{"role" => role} when role in ["admin", "member"] <- params do
       locked_chat(id, fn tabs ->
-        with {:ok, g, m} <- visible_active(me, id),
+        with :ok <- not_risi_chat(me, id),
+             {:ok, g, m} <- visible_active(me, id),
              :ok <- not_dm_chat(g),
              :ok <- require_admin(m),
              %Member{state: "active"} = t <- member(id, target) || {:error, :not_found},
@@ -911,7 +992,9 @@ defmodule RisiMe.Groups do
   `devices` op in each active group of the user where the leaf set has to change.
   """
   def device_changed(user_id, device_id, change, opts \\ []) do
-    only_official? = Keyword.get(opts, :only) == :official
+    only = Keyword.get(opts, :only)
+    only_official? = only == :official
+    only_risi? = only == :risi
 
     group_ids =
       Repo.all(
@@ -920,12 +1003,15 @@ defmodule RisiMe.Groups do
           on: g.id == m.group_id,
           where:
             m.user_id == ^user_id and m.state == "active" and g.state == "active" and
-              (not (^only_official?) or g.tab == "official"),
+              (not (^only_official?) or g.tab == "official") and
+              (not (^only_risi?) or g.chat_kind == "risi"),
           select: g.id
       )
 
-    # v1.24 §24.3: only `tabs` devices become leaves of Official groups.
+    # v1.24 §24.3: only `tabs` devices become leaves of Official groups; v1.25 §25.2: only
+    # `risi_tools` devices of the owner become leaves of a Risi chat.
     tabs? = Devices.tabs_device?(user_id, device_id)
+    risi_tools? = Devices.risi_tools_device?(user_id, device_id)
 
     for id <- group_ids do
       locked(id, fn ->
@@ -938,6 +1024,9 @@ defmodule RisiMe.Groups do
             :ok
 
           official?(g) and change in [:added, :replaced] and not tabs? ->
+            :ok
+
+          risi_chat?(g) and change in [:added, :replaced] and not risi_tools? ->
             :ok
 
           change == :added and not in? ->

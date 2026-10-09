@@ -2,6 +2,7 @@ package lk.codegen.risime.ui.tabs
 
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -20,6 +21,15 @@ const val RISI_CHIP_LABEL = "@Risi"
 const val RISI_ASK_PLACEHOLDER = "Ask Risi…"
 const val SUMMARISE_LABEL = "Summarise"
 const val REPORT_LABEL = "Report"
+
+/** The Official composer's placeholder ("Risi is listening" is the strip under the tab bar, not the hint). */
+const val OFFICIAL_COMPOSER_HINT = "Message"
+
+/** A 1:1 Official's subtitle (never a member count). */
+const val OFFICIAL_DM_SUBTITLE = "Official"
+
+/** A 1:1 Official's title: "Kumu · Risi". */
+fun officialDmTitle(peerName: String): String = "$peerName · Risi"
 
 /**
  * §24.9 the Official composer's "@Risi" chip. Tapping it puts the chip into the message (selected, with
@@ -44,13 +54,39 @@ fun RisiChipRow(active: Boolean, onToggle: (Boolean) -> Unit) {
  * other case it is an ordinary message, whatever it says ("free text is never parsed for intent").
  * @return true when the chip was used (the caller clears it).
  */
-fun sendFromComposer(risi: RisiHost?, chip: Boolean, text: String, plain: (String) -> Unit): Boolean {
+fun sendFromComposer(risi: RisiHost?, chip: Boolean, text: String, plain: (String) -> Unit, risiChat: Boolean = false): Boolean {
+    // §25.2: in the Risi chat every message is a `risi_request` `ask`, never plain text.
+    if (risiChat) {
+        risi?.ask(text)
+        return false
+    }
     if (risi != null && chip) {
         risi.ask(text)
         return true
     }
     plain(text)
     return false
+}
+
+/** "Continuing with Risi ×" above the Official composer while a follow-up is open (× sends a normal message instead). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RisiFollowUpChip(onDismiss: () -> Unit) {
+    Row(Modifier.padding(bottom = Spacing.xs), verticalAlignment = Alignment.CenterVertically) {
+        androidx.compose.material3.InputChip(
+            selected = true,
+            onClick = onDismiss,
+            label = { Text(lk.codegen.risime.data.tabs.RisiFollowUp.CHIP_LABEL) },
+            trailingIcon = {
+                androidx.compose.material3.Icon(
+                    androidx.compose.material.icons.Icons.Filled.Clear,
+                    contentDescription = lk.codegen.risime.data.tabs.RisiFollowUp.CHIP_DISMISS,
+                    modifier = Modifier.testTag("risi_follow_up_dismiss"),
+                )
+            },
+            modifier = Modifier.testTag("risi_follow_up"),
+        )
+    }
 }
 
 /** The Official chat menu's two Risi items. */

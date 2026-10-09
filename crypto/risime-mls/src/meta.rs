@@ -46,6 +46,10 @@ pub struct GroupMeta {
     /// v1.24: the agent users of the group; `None` (absent) is `[]`. Use [`GroupMeta::agents`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agents: Option<Vec<String>>,
+    /// v1.25 (§25.2): `"risi"` marks the user's Risi chat; `None` (absent) is not a Risi chat.
+    /// Immutable after epoch 0. Use [`GroupMeta::is_risi`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_kind: Option<String>,
     /// Fields this version doesn't know, preserved on rewrite.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -62,6 +66,7 @@ impl GroupMeta {
             tab: None,
             chat_id: None,
             agents: None,
+            chat_kind: None,
             extra: Default::default(),
         }
     }
@@ -72,6 +77,16 @@ impl GroupMeta {
         self.chat_id = Some(chat_id.into());
         self.agents = Some(agents);
         self
+    }
+
+    /// The same meta marked with a `chat_kind` (`"risi"`, §25.2).
+    pub fn with_chat_kind(mut self, kind: impl Into<String>) -> Self {
+        self.chat_kind = Some(kind.into());
+        self
+    }
+
+    pub fn is_risi(&self) -> bool {
+        self.chat_kind.as_deref() == Some("risi")
     }
 
     /// The tab: absent (or anything [`GroupMeta::validate`] would reject) is Private.
@@ -163,6 +178,33 @@ impl GroupMeta {
                     "group_meta: agent {a} can't be an admin"
                 )));
             }
+        }
+        if let Some(k) = &self.chat_kind
+            && (k.is_empty() || k.len() > 32 || k.chars().any(char::is_control))
+        {
+            return Err(MlsError::Malformed("group_meta: bad chat_kind".into()));
+        }
+        if self.is_risi() {
+            if self.tab() != Tab::Official {
+                return Err(MlsError::PolicyViolation(
+                    "group_meta: a Risi chat is in the Official tab".into(),
+                ));
+            }
+            if self.admins.len() != 1 || agents.len() != 1 {
+                return Err(MlsError::PolicyViolation(
+                    "group_meta: a Risi chat has one admin (its user) and one agent".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// A Risi chat's `chat_id` is the group's own conversation id (§25.2); other metas pass.
+    pub fn validate_chat_id(&self, own_conversation_id: &str) -> Result<()> {
+        if self.is_risi() && self.chat_id_or(own_conversation_id) != own_conversation_id {
+            return Err(MlsError::PolicyViolation(
+                "group_meta: a Risi chat's chat_id is its own conversation id".into(),
+            ));
         }
         Ok(())
     }
@@ -299,5 +341,27 @@ mod tests {
         let out: serde_json::Value = serde_json::from_slice(&m.to_bytes().unwrap()).unwrap();
         assert!(out["name"].is_null());
         assert!(GroupMeta::from_bytes(br#"{"v":1,"name":null,"admins":["a"]}"#).is_err());
+    }
+
+    #[test]
+    fn v125_risi_rules() {
+        let risi = |tab, admins: &[&str], agents: &[&str]| {
+            GroupMeta::new("", admins.iter().map(|s| s.to_string()).collect())
+                .with_tab(tab, "grp:1", agents.iter().map(|s| s.to_string()).collect())
+                .with_chat_kind("risi")
+        };
+        let ok = risi(Tab::Official, &["a"], &["r"]);
+        ok.validate().unwrap();
+        ok.validate_chat_id("grp:1").unwrap();
+        assert!(ok.validate_chat_id("grp:2").is_err());
+        let again = GroupMeta::from_bytes(&ok.to_bytes().unwrap()).unwrap();
+        assert!(again.is_risi());
+        assert!(risi(Tab::Private, &["a"], &[]).validate().is_err());
+        assert!(risi(Tab::Official, &["a", "b"], &["r"]).validate().is_err());
+        assert!(risi(Tab::Official, &["a"], &["r", "s"]).validate().is_err());
+        assert!(risi(Tab::Official, &["a"], &[]).validate().is_err());
+        // Absent means not a Risi chat.
+        let m = GroupMeta::from_bytes(br#"{"v":1,"name":"x","admins":["a"]}"#).unwrap();
+        assert!(!m.is_risi());
     }
 }

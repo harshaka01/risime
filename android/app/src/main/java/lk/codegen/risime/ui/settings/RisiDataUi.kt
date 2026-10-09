@@ -58,7 +58,7 @@ fun risiErrorMessage(r: ApiResult<*>?): String = when {
 }
 
 /** §24.11 the order and titles of the fact kinds. */
-val FACT_KINDS = listOf("commitment" to "Commitments", "date" to "Dates", "person" to "People", "preference" to "Preferences", "topic" to "Topics")
+val FACT_KINDS = listOf("commitment" to "Commitments", "date" to "Dates", "person" to "People", "preference" to "Preferences", "topic" to "Topics", "note" to "Notes")
 
 data class FactsUi(
     val loading: Boolean = true,

@@ -76,6 +76,7 @@ fn history_round_trip_crosses_the_ffi() {
                 tab: None,
                 chat_id: None,
                 agents: None,
+                chat_kind: None,
             },
         )
         .unwrap();

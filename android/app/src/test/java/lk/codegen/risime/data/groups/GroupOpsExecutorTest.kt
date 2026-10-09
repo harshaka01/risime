@@ -107,6 +107,7 @@ class GroupOpsExecutorTest {
         }
         var officialReply: ApiResult<Group>? = null
         override suspend fun createOfficial(chatId: String): ApiResult<Group> = (officialReply ?: ApiResult.Ok(group)).also { calls += "official:$chatId" }
+        override suspend fun createRisiChat(): ApiResult<Group> = ApiResult.Ok(group).also { calls += "risi_chat" }
     }
 
     private suspend fun queue(type: String, payload: String = "{}", clientGroupId: String? = null, c: String? = conv) = store.queueLocal(c, type, payload, clientGroupId)
@@ -158,6 +159,25 @@ class GroupOpsExecutorTest {
             GroupMeta(name = "", admins = listOf(me, kamal), tab = "official", chatId = dm, agents = listOf(risi)),
             mls.groupMeta(official),
         )
+    }
+
+    /** §25.2 the Risi chat's epoch 0: me (only admin) and Risi, chat_id = its own id, chat_kind "risi". */
+    @Test fun risiChatCommitsEpochZeroWithItsOwnChatIdAndChatKind() = runTest {
+        api.group = Group(
+            official, "creating", me, null, 1, null, "admin",
+            listOf(member(me, "admin"), GroupMember(risi, "Risi", null, "member", "agent", "active", null)),
+            chatId = official, tab = "official", chatKind = "risi", agents = listOf(risi),
+        )
+        val id = queue(GroupOpType.CREATE_RISI_CHAT, c = official)
+        assertNull(exec.runDue())
+        assertEquals(GroupOpType.DONE, opsDao.rows[id]!!.state)
+        assertEquals(listOf("risi_chat"), api.calls)
+        assertEquals(listOf(listOf(me, risi) to official), api.claims)
+        assertEquals(0L, api.commits.single().epoch)
+        val meta = mls.groupMeta(official)!!
+        assertEquals(GroupMeta(name = "", admins = listOf(me), tab = "official", chatId = official, agents = listOf(risi), chatKind = "risi"), meta)
+        assertTrue(meta.isRisiChat(official))
+        assertTrue(String(meta.encode()).contains("\"chat_kind\":\"risi\""))
     }
 
     @Test fun startOfficialInAGroupTakesNameAndAdminsFromThePrivateMlsState() = runTest {

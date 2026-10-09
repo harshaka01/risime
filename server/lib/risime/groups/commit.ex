@@ -211,7 +211,12 @@ defmodule RisiMe.Groups.Commit do
               members: true,
               push_targets: true
             ) ++
-            if(Groups.official?(g), do: RisiMe.Chats.official_created(g, me), else: [])
+            cond do
+              # v1.25 §25.2: a Risi chat has no `chats` row and no `chat_event`.
+              Groups.risi_chat?(g) -> RisiMe.RisiChat.activated(g)
+              Groups.official?(g) -> RisiMe.Chats.official_created(g, me)
+              true -> []
+            end
 
         Messaging.publish_batch(events)
         {:ok, 1}
@@ -334,6 +339,9 @@ defmodule RisiMe.Groups.Commit do
       agents: agents,
       agent_users: Enum.uniq(agents ++ RisiMe.Risi.agents(changed_users)),
       tab: g.tab || "private",
+      # v1.25 §25.2: the Risi-chat rules (`chat_kind` and the group's own id are fixed at insert).
+      chat_kind: g.chat_kind,
+      chat_id_is_own: g.chat_id == g.id,
       conversation: "grp",
       committer: me,
       adds: req.added,

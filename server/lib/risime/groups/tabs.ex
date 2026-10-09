@@ -26,28 +26,34 @@ defmodule RisiMe.Groups.Tabs do
   end
 
   @doc "True if `conv` is an Official `grp:` conversation."
-  def official?("grp:" <> _ = conv) do
+  def official?("grp:" <> _ = conv), do: match?({"official", _}, info(conv))
+  def official?(_), do: false
+
+  @doc "v1.25 §25.2: true if `conv` is a Risi chat (Official, `chat_kind: \"risi\"`)."
+  def risi_chat?("grp:" <> _ = conv), do: info(conv) == {"official", "risi"}
+  def risi_chat?(_), do: false
+
+  # {tab, chat_kind} of an existing group (both fixed at insert), or nil.
+  defp info(conv) do
     case lookup(conv) do
-      {:ok, tab} ->
-        tab == "official"
+      {:ok, info} ->
+        info
 
       :miss ->
-        case Repo.one(from g in Group, where: g.id == ^conv, select: g.tab) do
+        case Repo.one(from g in Group, where: g.id == ^conv, select: {g.tab, g.chat_kind}) do
           nil ->
-            false
+            nil
 
-          tab ->
-            put(conv, tab)
-            tab == "official"
+          {tab, kind} = info ->
+            put(conv, tab, kind)
+            info
         end
     end
   end
 
-  def official?(_), do: false
-
-  @doc "Records a group's tab (at insert)."
-  def put(conv, tab) do
-    :ets.insert(@table, {conv, tab})
+  @doc "Records a group's tab and chat kind (at insert)."
+  def put(conv, tab, kind \\ nil) do
+    :ets.insert(@table, {conv, {tab, kind}})
     :ok
   rescue
     ArgumentError -> :ok
@@ -55,8 +61,8 @@ defmodule RisiMe.Groups.Tabs do
 
   defp lookup(conv) do
     case :ets.lookup(@table, conv) do
-      [{_, tab}] -> {:ok, tab}
-      [] -> :miss
+      [{_, {_, _} = info}] -> {:ok, info}
+      _ -> :miss
     end
   rescue
     ArgumentError -> :miss
@@ -73,6 +79,30 @@ defmodule RisiMe.Groups.Tabs do
   def tabs_only?(_), do: false
 
   defp conv_of(data), do: data["conversation_id"] || data["group_id"]
+
+  @risi_kinds ~w(risi_tool_call risi_progress)
+
+  @doc """
+  v1.25 §25.2, §25.10: true if the event (an inbox event or a signal) may reach only
+  `risi_tools` sockets and devices: `risi_tool_call`, `risi_progress` and anything of a Risi
+  chat (`chat_event`s naming it included).
+  """
+  def risi_only?(%{kind: k}) when k in @risi_kinds, do: true
+  def risi_only?(%{"kind" => k}) when k in @risi_kinds, do: true
+  def risi_only?(%{data: data}) when is_map(data), do: risi_chat?(risi_conv_of(data))
+  def risi_only?(%{"data" => data}) when is_map(data), do: risi_chat?(risi_conv_of(data))
+  def risi_only?(_), do: false
+
+  defp risi_conv_of(data), do: conv_of(data) || data["chat_id"]
+
+  @doc "The push scope of an event: `:risi_tools` (§25.2), `:tabs` (§24.7) or `:all`."
+  def scope(event) do
+    cond do
+      risi_only?(event) -> :risi_tools
+      tabs_only?(event) -> :tabs
+      true -> :all
+    end
+  end
 
   @doc """
   §24.5: what an agent's sockets may receive. An event of a conversation only while that

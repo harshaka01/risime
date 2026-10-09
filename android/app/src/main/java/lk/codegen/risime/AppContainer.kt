@@ -196,6 +196,27 @@ class AppContainer(
         scope,
         onFriendSignal = { requestFriendsRefresh() },
         onKeyPackagesLow = { scope.launch { deviceRegistrar.topUp() } },
+        onRisiProgress = { p -> if (risiTools.on.value) risiProgress.apply(p) },
+    )
+
+    // ---- §25 (v1.25) Risi with tools ----
+
+    /** §25.8 the `risi_tools` server switch (kept across restarts) and this device's advertisement. */
+    val risiTools = lk.codegen.risime.data.tabs.RisiToolsSwitch(
+        persistedServerOn = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getBoolean("risi_tools_on", false),
+        persistServerOn = { on -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putBoolean("risi_tools_on", on).apply() },
+        log = { Log.i("RisiMe", it) },
+    )
+
+    /** §25.4 Risi's progress bubbles (in memory). */
+    val risiProgress = lk.codegen.risime.data.tabs.RisiProgressStore()
+
+    /** §25.3 client tools: answered over TLS, never stored (A7: every known tool is declined until the executor lands). */
+    val risiToolCalls = lk.codegen.risime.data.tabs.RisiToolCallHandler(
+        deviceId = { runCatching { sessionStore.deviceId() }.getOrNull() },
+        post = { id, result, device -> api.postRisiToolResult(id, result, device) },
+        enabled = { risiTools.on.value },
+        log = { Log.i("RisiMe", it) },
     )
 
     // ---- The optional fingerprint lock (decision 064): a UI gate only ----
@@ -252,8 +273,24 @@ class AppContainer(
         val cfg = (api.authConfig() as? ApiResult.Ok)?.value ?: return
         val before = chatTabs.serverOn.value
         chatTabs.setServerOn(cfg.tabsOn)
-        if (before != cfg.tabsOn) refreshCapabilities()
+        val risiBefore = risiTools.serverOn.value
+        risiTools.setServerOn(cfg.risiToolsOn)
+        if (before != cfg.tabsOn || risiBefore != cfg.risiToolsOn) refreshCapabilities()
     }
+
+    /** §25.2 the Risi chat's first open (only on a `risi_tools` device). */
+    private val risiChatOpener by lazy {
+        lk.codegen.risime.data.tabs.RisiChatOpener(
+            enabled = { risiTools.on.value && chatTabs.uiOn.value },
+            create = { api.createRisiChat(sessionStore.deviceId()) },
+            applyGroup = { g -> sessionStore.current()?.user?.id?.let { me -> dbTx.run { groupStore.applyServerGroup(g, me) } } },
+            hasMlsGroup = { conv -> mlsEngine?.let { e -> dbTx.run { e.group(conv) } } != null },
+            queueEpoch0 = { conv -> groupStore.queueLocal(conv, lk.codegen.risime.data.groups.GroupOpType.CREATE_RISI_CHAT) },
+            log = { Log.i("RisiMe", it) },
+        )
+    }
+
+    suspend fun openRisiChat(): lk.codegen.risime.data.tabs.RisiChatOpen = risiChatOpener.open()
 
     /**
      * §24.2 [Start Official] / a new group's Official: `POST /chats/{chat_id}/official` now (its refusal is
@@ -436,6 +473,7 @@ class AppContainer(
         override suspend fun commit(id: String, body: lk.codegen.risime.net.GroupCommitRequest) = api.groupCommit(id, body, dev()).map { it.epoch }
         override suspend fun uploadBlob(conversationId: String, bytes: ByteArray) = api.uploadBlob(conversationId, bytes).map { it.ref() }
         override suspend fun createOfficial(chatId: String) = api.createOfficial(chatId, dev()).map { it.group }
+        override suspend fun createRisiChat() = api.createRisiChat(dev()).map { it.group }
     }
 
     private val dbTx: TransactionRunner = transactions?.invoke(db) ?: object : TransactionRunner {
@@ -672,14 +710,19 @@ class AppContainer(
                 Log.i("RisiMe", "RisiMe push: device registered, push token ${if (t == null) "none" else "sent"}")
             },
             tabsSupported = { chatTabs.serverOn.value },
+            risiToolsSupported = { risiTools.serverOn.value },
             onAdvertised = { caps ->
                 val tabs = lk.codegen.risime.net.DeviceMls.CAP_TABS in caps
                 chatTabs.setAdvertised(tabs)
+                val risi = lk.codegen.risime.net.DeviceMls.CAP_RISI_TOOLS in caps
+                risiTools.setAdvertised(risi)
+                if (!risi) risiProgress.clear()
                 // Remembered per device id: the next process start shows the tab bar at once (ChatTabs.restoreAdvertised).
                 scope.launch {
                     val id = runCatching { sessionStore.deviceId() }.getOrNull()
                     appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit()
-                        .putString("advertised_tabs_device", if (tabs) id else null).apply()
+                        .putString("advertised_tabs_device", if (tabs) id else null)
+                        .putString("advertised_risi_tools_device", if (risi) id else null).apply()
                 }
             },
         )
@@ -826,6 +869,8 @@ class AppContainer(
             val saved = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_tabs_device", null) ?: return@launch
             val id = runCatching { sessionStore.deviceId() }.getOrNull()
             if (id != null && saved.equals(id, true) && sessionStore.current() != null) chatTabs.restoreAdvertised(true)
+            val risi = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_risi_tools_device", null)
+            if (id != null && risi != null && risi.equals(id, true) && sessionStore.current() != null) risiTools.restoreAdvertised(true)
         }
         if (BuildConfig.DEBUG) registerDebugOidcSignIn(context)
         if (BuildConfig.DEBUG) registerDebugLockChat(context)
@@ -1133,6 +1178,8 @@ class AppContainer(
         historyDao = db.history(),
         history = history.takeIf { BuildConfig.HISTORY_SHARE_ENABLED },
         profilePhotos = profilePhotos.takeIf { BuildConfig.CRYPTO_AVAILABLE },
+        // §25.3: answered off the event path (a network call); ignored unless this device advertises risi_tools.
+        risiToolCalls = { call -> scope.launch { risiToolCalls.handle(call) } },
     )
 
 

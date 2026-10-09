@@ -253,7 +253,7 @@ class UniffiMlsEngine(
     )
 
     // v1.24 §24.1: tab/chat_id/agents pass through as given (null = carried over by the core on updates).
-    private fun lk.codegen.risime.net.GroupMeta.toFfi() = GroupMeta(name, icon?.toString(), admins, tab, chatId, agents)
+    private fun lk.codegen.risime.net.GroupMeta.toFfi() = GroupMeta(name, icon?.toString(), admins, tab, chatId, agents, chatKind)
 
     private fun currentOrThrow(conv: String) = current(conv) ?: throw IllegalStateException("no group for $conv")
 
@@ -285,11 +285,13 @@ class UniffiMlsEngine(
 
     override fun groupMeta(conversationId: String): lk.codegen.risime.net.GroupMeta? = tx {
         val (_, g) = current(conversationId) ?: return@tx null
-        client.groupMeta(g)?.let { lk.codegen.risime.net.GroupMeta(name = it.name, icon = null, admins = it.admins, tab = it.tab, chatId = it.chatId, agents = it.agents) }
+        client.groupMeta(g)?.let { lk.codegen.risime.net.GroupMeta(name = it.name, icon = null, admins = it.admins, tab = it.tab, chatId = it.chatId, agents = it.agents, chatKind = it.chatKind) }
     }
 
     // v1.24: this core (risime-mls with policy::check_tab_policy) enforces §24.1 itself.
     override val tabsSupported: Boolean get() = true
+
+    override val risiChatSupported: Boolean get() = true
 
     override fun agentUsers(conversationId: String): Set<String> = tx {
         val (_, g) = current(conversationId) ?: return@tx emptySet()

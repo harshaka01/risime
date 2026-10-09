@@ -92,6 +92,79 @@ defmodule RisiMe.Groups.PolicyTest do
     end
   end
 
+  # v1.25 §25.2 (crypto C4): the Risi-chat rules on top of the tab rules.
+  @risi_cases Map.fetch!(@fixture_json, "risi_cases")
+
+  test "the fixture has risi_cases (v1.25 §25.2)" do
+    assert length(@risi_cases) >= 6
+  end
+
+  for c <- @risi_cases do
+    @case c
+    test "risi case: #{c["name"]}" do
+      c = @case
+
+      meta =
+        c["meta"] &&
+          %{
+            admins: c["meta"]["admins"],
+            name_changed: c["meta"]["name_changed"],
+            tab: c["meta"]["tab"],
+            chat_id_changed: c["meta"]["chat_id_changed"],
+            agents: c["meta"]["agents"],
+            chat_kind_changed: c["meta"]["chat_kind_changed"]
+          }
+
+      result =
+        Policy.check(%{
+          admins: c["admins"],
+          agents: c["agents"],
+          agent_users: c["agent_users"],
+          tab: c["tab"],
+          chat_kind: c["chat_kind"],
+          chat_id_is_own: c["chat_id_is_own"],
+          conversation: c["conversation"],
+          committer: user(c["committer"]),
+          adds: Enum.map(c["adds"], &leaf/1),
+          removes: Enum.map(c["removes"], &leaf/1),
+          leaf_users: for({u, [_ | _]} <- c["leaves"], do: u),
+          leaves: for({u, ds} <- c["leaves"], d <- ds, do: {u, d}),
+          meta: meta
+        })
+
+      case c["expect"] do
+        "accept" -> assert result == :ok, inspect(result)
+        "reject" -> assert {:error, _} = result
+      end
+    end
+  end
+
+  test "a Risi chat's base meta must be valid (own id, one admin, one agent)" do
+    base = %{
+      admins: ["A"],
+      agents: ["R"],
+      agent_users: ["R"],
+      tab: "official",
+      chat_kind: "risi",
+      chat_id_is_own: true,
+      committer: "A",
+      adds: [],
+      removes: [],
+      leaf_users: ["A", "R"],
+      leaves: [{"A", "a1"}, {"R", "r1"}],
+      meta: nil
+    }
+
+    assert Policy.check(base) == :ok
+    assert {:error, _} = Policy.check(%{base | chat_id_is_own: false})
+    assert {:error, _} = Policy.check(%{base | admins: ["A", "B"]})
+    assert {:error, _} = Policy.check(%{base | agents: []})
+    assert {:error, _} = Policy.check(%{base | tab: "private"})
+    # chat_kind never changes, for any group.
+    assert {:error, _} =
+             Policy.check(%{base | chat_kind: "group", meta: %{chat_kind_changed: true}})
+  end
+
   test "an agent leaf in Private or a dm: is private_tab" do
     base = %{
       admins: ["A"],

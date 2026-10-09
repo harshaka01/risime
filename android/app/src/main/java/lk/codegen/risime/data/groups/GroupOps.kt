@@ -48,6 +48,26 @@ interface GroupApi {
 
     /** §24.2 `POST /chats/{chat_id}/official`: the chat's Official group (`creating` when new; idempotent). */
     suspend fun createOfficial(chatId: String): ApiResult<Group> = ApiResult.Error(404, AuthErrors.NOT_FOUND, "")
+
+    /** §25.2 `POST /risi/chat`: the user's Risi chat (`creating` when new; idempotent). */
+    suspend fun createRisiChat(): ApiResult<Group> = ApiResult.Error(404, AuthErrors.NOT_FOUND, "")
+}
+
+/**
+ * §25.2 epoch 0 of a Risi chat: `{"v": 1, "name": null, "icon": null, "admins": [me], "tab": "official",
+ * "chat_id": <its own id>, "agents": [risi], "chat_kind": "risi"}` ("" is `null` over the FFI).
+ */
+fun risiChatEpoch0Meta(conversationId: String, group: Group, myId: String): GroupMeta {
+    val agents = (group.agents + group.members.filter { it.kind == GroupMember.KIND_AGENT }.map { it.userId }).distinctBy { it.lowercase() }
+    return GroupMeta(
+        name = "",
+        icon = null,
+        admins = listOf(myId),
+        tab = GroupMeta.TAB_OFFICIAL,
+        chatId = conversationId,
+        agents = agents,
+        chatKind = GroupMeta.CHAT_KIND_RISI,
+    )
 }
 
 /** §24.2 the Official conversation of [chatId] (lazy for 1:1s and migrated chats; right after a new group). */
@@ -227,6 +247,7 @@ class GroupOpsExecutor(
         return when (op.type) {
             GroupOpType.CREATE -> create(op, myId)
             GroupOpType.CREATE_OFFICIAL -> createOfficial(op, myId)
+            GroupOpType.CREATE_RISI_CHAT -> createRisiChat(op, myId)
             GroupOpType.ADD -> {
                 val p = ProtocolJson.decodeFromString(UsersPayload.serializer(), op.payloadJson)
                 net(api.addMembers(op.conversationId!!, p.userIds)) { g -> afterReply(g, myId) }
@@ -444,6 +465,44 @@ class GroupOpsExecutor(
     }
 
     /**
+     * §25.2: `POST /risi/chat` (idempotent), then epoch 0 adding every device the claim returns for the
+     * Risi chat (the user's `risi_tools` devices and Risi's) with the Risi-chat `group_meta`.
+     */
+    private suspend fun createRisiChat(op: GroupOpEntity, myId: String): OpOutcome {
+        val mls = engine() ?: return OpOutcome.Retry("no MLS core", 60_000)
+        val group = when (val r = api.createRisiChat()) {
+            is ApiResult.Ok -> r.value
+            is ApiResult.Error -> return errorOutcome(r)
+            is ApiResult.NetworkError -> return OpOutcome.Retry("network", 5_000)
+        }
+        val conv = group.id
+        if (op.conversationId != conv) ops.update((ops.get(op.id) ?: op).copy(conversationId = conv))
+        tx.run { store.applyServerGroup(group, myId) }
+        if (group.state != Group.STATE_CREATING) {
+            if (mls.group(conv) == null) store.queueLocal(conv, GroupOpType.REJOIN)
+            return OpOutcome.Done
+        }
+        return gate.withCommit(conv, mls) {
+            val claimed = when (val r = api.claim((group.members.map { it.userId } + myId).distinct(), conv)) {
+                is ApiResult.Ok -> r.value
+                is ApiResult.Error -> return@withCommit errorOutcome(r)
+                is ApiResult.NetworkError -> return@withCommit OpOutcome.Retry("network", 5_000)
+            }
+            val kps = keyPackages(claimed) ?: return@withCommit OpOutcome.Retry("no_key_package", 30_000)
+            val meta = risiChatEpoch0Meta(conv, group, myId)
+            val pc = try {
+                tx.run {
+                    if (mls.group(conv) != null) mls.deleteGroup(conv)
+                    mls.createGroupWithMeta(conv, group.generation, kps, meta)
+                }
+            } catch (e: MlsPolicyException) {
+                return@withCommit OpOutcome.Failed("policy: ${e.message}")
+            }
+            submit(conv, pc, opId = null, metaChanged = false, myId = myId, onConflict = { OpOutcome.Retry(AuthErrors.EPOCH_CONFLICT, 1_000) })
+        }
+    }
+
+    /**
      * §12.5 claim for a server op, reusing what an earlier attempt of the same op claimed (its
      * commit never landed, so those key packages are unused) when it covers [userIds].
      */
@@ -579,7 +638,7 @@ class GroupOpsExecutor(
                             GroupMeta(name = name, admins = admins)
                         } else {
                             val agents = (g.agents + g.members.filter { it.kind == GroupMember.KIND_AGENT }.map { it.userId }).distinct()
-                            GroupMeta(name = if ((old.chatId ?: conv).startsWith("dm:")) "" else old.name, icon = old.icon, admins = admins.filterNot { a -> agents.any { it.equals(a, true) } }, tab = GroupMeta.TAB_OFFICIAL, chatId = old.chatId ?: conv, agents = agents)
+                            GroupMeta(name = if ((old.chatId ?: conv).startsWith("dm:")) "" else old.name, icon = old.icon, admins = admins.filterNot { a -> agents.any { it.equals(a, true) } }, tab = GroupMeta.TAB_OFFICIAL, chatId = old.chatId ?: conv, agents = agents, chatKind = old.chatKind)
                         }
                         mls.createGroupWithMeta(conv, g.generation, kps, meta)
                     }

@@ -641,16 +641,20 @@ data class ChatTabEntity(
     @ColumnInfo(name = "chat_id") val chatId: String,
     /** "private" | "official" */
     val tab: String,
-    /** "dm" | "group" */
+    /** "dm" | "group" | "risi" (v1.25 §25.2: the user's Risi chat; a free string column, no schema change) */
     @ColumnInfo(name = "chat_kind") val chatKind: String,
 ) {
     val official: Boolean get() = tab == TAB_OFFICIAL
+
+    /** §25.2 the user's Risi chat (MLS-derived: `group_meta.chat_kind`). */
+    val risi: Boolean get() = official && chatKind == KIND_RISI
 
     companion object {
         const val TAB_PRIVATE = "private"
         const val TAB_OFFICIAL = "official"
         const val KIND_DM = "dm"
         const val KIND_GROUP = "group"
+        const val KIND_RISI = "risi"
     }
 }
 

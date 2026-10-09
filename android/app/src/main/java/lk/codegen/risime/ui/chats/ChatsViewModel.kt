@@ -44,14 +44,38 @@ data class ChatRow(
     val lastTab: lk.codegen.risime.data.tabs.Tab? = null,
     /** §24: the chat's Official conversation merged into this row (null: none on this device). */
     val officialConversationId: String? = null,
+    /** §25.2 the user's Risi chat (its conversation, or the "Risi" entry before it exists: [conversationId] null). */
+    val risi: Boolean = false,
 ) {
-    /** Open the chat: friends, and former friends with history (read-only); every group. */
-    val openable: Boolean get() = group || (userId != null && (friend || last != null))
+    /** Open the chat: friends, and former friends with history (read-only); every group; the Risi chat. */
+    val openable: Boolean get() = group || risi || (userId != null && (friend || last != null))
 
-    /** What the chats list navigates to (a conversation id, or a DM peer). */
-    val target: String? get() = conversationId ?: userId
+    /** What the chats list navigates to (a conversation id, a DM peer, or [RISI_NEW_TARGET]). */
+    val target: String? get() = conversationId ?: userId ?: RISI_NEW_TARGET.takeIf { risi }
 
-    val key: String get() = conversationId ?: userId ?: name
+    val key: String get() = conversationId ?: userId ?: if (risi) RISI_NEW_TARGET else name
+}
+
+/** The chat list's "Risi" entry before the Risi chat exists: opening it creates the chat (§25.2). */
+const val RISI_NEW_TARGET = "risi:new"
+
+/**
+ * §25.2 the Risi chat in the chat list, only on a `risi_tools` device ([risiOn]): its conversation
+ * (MLS says `chat_kind: "risi"`) is one row named "Risi", pinned first; with none that is still usable
+ * (none, or only ones I left), a "Risi" entry that creates it on first open. Without `risi_tools` no
+ * Risi chat is listed at all (its history stays on the phone, hard rule 9).
+ */
+fun applyRisiRows(rows: List<ChatRow>, tabs: Map<String, lk.codegen.risime.data.db.ChatTabEntity>?, risiOn: Boolean): List<ChatRow> {
+    fun isRisi(r: ChatRow) = r.group && r.conversationId?.let { lk.codegen.risime.data.tabs.isRisiChat(it, tabs) } == true
+    val (risi, others) = rows.partition(::isRisi)
+    if (!risiOn) return others
+    val marked = risi.map { it.copy(name = lk.codegen.risime.data.tabs.RISI_CHAT_NAME, risi = true, lastTab = null, lastSender = null) }
+        .sortedByDescending { it.last?.localTs ?: 0L }
+    val usable = marked.any { it.stateLine == null || it.stateLine == "Creating…" }
+    val entry = if (usable || tabs == null) emptyList() else listOf(
+        ChatRow(userId = null, name = lk.codegen.risime.data.tabs.RISI_CHAT_NAME, company = "", registered = true, last = null, risi = true),
+    )
+    return entry + marked + others
 }
 
 /** "Kamal is typing…", "Kamal and Nimal are typing…", "3 people are typing…". */
@@ -111,7 +135,8 @@ fun mergeTabRows(
     fun officialChat(r: ChatRow): String? {
         val conv = r.conversationId?.lowercase()?.takeIf { r.group } ?: return null
         val t = tabs?.get(conv)
-        return if (t != null) t.chatId.lowercase().takeIf { t.official } else pendingOfficial[conv]?.lowercase()
+        // §25.2 a Risi chat is its own row (applyRisiRows), never merged into another chat.
+        return if (t != null) t.chatId.lowercase().takeIf { t.official && !t.risi } else pendingOfficial[conv]?.lowercase()
     }
     val official = rows.mapNotNull { r -> officialChat(r)?.let { it to r } }
     if (official.isEmpty()) return rows
@@ -230,8 +255,10 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
         c.db.deletes().observeChatStates(),
         c.chatTabs.rows,
         c.chatTabs.pendingOfficial,
-        c.chatTabs.uiOn,
-    ) { rows, states, tabs, pending, tabsOn -> mergeTabRows(hideDeletedChats(rows, states, meId), tabs, pending, meId, tabsOn) }
+        combine(c.chatTabs.uiOn, c.risiTools.on) { tabsOn, risiOn -> tabsOn to (tabsOn && risiOn) },
+    ) { rows, states, tabs, pending, (tabsOn, risiOn) ->
+        applyRisiRows(mergeTabRows(hideDeletedChats(rows, states, meId), tabs, pending, meId, tabsOn), tabs, risiOn)
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** The Calls tab: 1:1 call records grouped like WhatsApp ("Name (3)"), newest first. */

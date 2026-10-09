@@ -458,7 +458,14 @@ defmodule RisiMe.MLS do
          :ok <- agent_claim(me, conv, RisiMe.Risi.agents(ids)),
          true <- claimable?(me, conv, ids) || {:error, :not_member},
          :ok <- claim_limit(me) do
-      kind = if RisiMe.Groups.Tabs.official?(conv), do: :tabs, else: :groups
+      # v1.25 §25.2: a Risi chat's devices are the owner's `risi_tools` ones (and the agent's).
+      kind =
+        cond do
+          RisiMe.Groups.Tabs.risi_chat?(conv) -> :risi_tools
+          RisiMe.Groups.Tabs.official?(conv) -> :tabs
+          true -> :groups
+        end
+
       finish_claim(me, ids, caller_device_id, kind)
     else
       {:error, _} = e -> e
@@ -535,6 +542,7 @@ defmodule RisiMe.MLS do
       case kind do
         :groups -> RisiMe.Groups.groups_devices(ids)
         :tabs -> RisiMe.Groups.groups_devices(ids, "tabs")
+        :risi_tools -> RisiMe.Groups.groups_devices(ids, "risi_tools")
         :mls -> current_mls_devices(ids)
       end
 
@@ -558,7 +566,7 @@ defmodule RisiMe.MLS do
     mls_ids = MapSet.new(mls, & &1.device_id)
 
     others =
-      if(kind in [:groups, :tabs],
+      if(kind in [:groups, :tabs, :risi_tools],
         do: [],
         else:
           ids
