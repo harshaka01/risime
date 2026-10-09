@@ -4,11 +4,14 @@
 # arm64 Android 14, decision 045) against a temp server with TABS=on (RISI off: the tab row, "Start
 # Official" and "What Risi knows about me" must work either way). Navigates like a user: taps and
 # long-presses by visible text / content description from `uiautomator dump`, no debug hooks.
-#   timeout 1800 scripts/ui-entry-test [--apk app-debug.apk] [--keep] [--risi] [--skills]
+#   timeout 1800 scripts/ui-entry-test [--apk app-debug.apk] [--keep] [--risi] [--skills] [--ledger]
 #   --risi: the server also runs Risi (RISI=on, the MLS NIF built --prod, scripts/fake-llm on
 #   127.0.0.1:$UITEST_LLM_PORT, default 8197; throwaway keys) and step 9 runs.
 #   --skills (implies --risi): RISI_TOOLS=on RISI_SKILLS=on, fake-llm --script (contract/v1/
 #   risi_gate_script.json plus this run's skill scenarios, generated in the work dir) and step 10 runs.
+#   --ledger (implies --risi, contract v1.27 §27): RISI_TOOLS=on RISI_LEDGER=on, the quiet rule shortened
+#   for the test (RISI_QUIET_S=$UITEST_QUIET_S, default 20), fake-llm --script with a scripted
+#   `discussion_summarise` answer, and step 11 runs. UITEST_LEDGER_ONLY=1 runs only steps 1 and 11.
 #
 #  1. A and B sign in through the login UI (dev OTP), become friends, both open the DM; it turns e2ee.
 #  2. A's chat: the "🔒 Private" | "● Official" row under the header; the Official tab's "Start Official".
@@ -36,6 +39,11 @@
 #     "send ZZ UI B good morning at <in 2 min>" → the card with the text → Add → the clock-icon bubble
 #     in A's DM → sent BY THE PHONE at the time (encrypted, the normal send path) → B sees it; revoke
 #     Alarm → "wake me up at 7" → the skill_needed card with "Open Risi skills".
+# 11. (--ledger, contract v1.27 §27.12 tests 1-2) A and B start the 1:1 Official and discuss (6 messages,
+#     both of them); the quiet rule fires; each phone's Risi chat gets "Summary of your discussion with …"
+#     with "You agreed:" (✓ ✗ ✎ on their own item only) and "<Name> agreed:"; the ⓘ shows "Made by:
+#     RisiMe model (risi-l1) · hh:mm"; A confirms its item (✓) → "confirmed ✓" on A's card and on B's
+#     ("ZZ UI A agreed:"); the Official chat has the short card; Settings → My promises lists A's item.
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -45,8 +53,9 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
 CLS=lk.codegen.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0; RISI=0; SKILLS=0
-while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;; --skills) RISI=1; SKILLS=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK=""; KEEP=0; RISI=0; SKILLS=0; LEDGER=0
+while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;; --skills) RISI=1; SKILLS=1; shift;; --ledger) RISI=1; LEDGER=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+QUIET_S="${UITEST_QUIET_S:-20}"
 LLM_PORT="${UITEST_LLM_PORT:-8197}"
 APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
 [ -f "$APK" ] || { echo "no APK at $APK (cd android && ./gradlew assembleDebug)"; exit 2; }
@@ -109,6 +118,19 @@ rules = [
      "actions": [{"tool": "schedule_message", "args": {"to": "ZZ UI B", "text": "Good morning", "at": at, "repeat": None}},
                  final("Tap Add to send it from your phone at that time.")]},
 ]
+# Step 11 (--ledger): the quiet-rule extraction (§27.2, learning-log task discussion_summarise) over the
+# Official discussion: two key points and one item for each member ref (u1, u2: A and B in the server's
+# order), so each phone owns exactly one item whichever ref it got.
+rules += [
+    {"name": "ledger_discussion", "task": "discussion_summar(y|ise)",
+     "actions": [{"key_points": ["The quote needs the new transport cost.", "The site visit stays on Thursday."],
+                  "summary": "Chat about the revised quote and Thursday's site visit.",
+                  "items": [
+                      {"text": "Send the revised quote", "owner": "u1", "counterparts": ["u2"], "due_local": None,
+                       "due_text": None, "source": ["m1"], "confidence": 0.9},
+                      {"text": "Book the site visit transport", "owner": "u2", "counterparts": ["u1"], "due_local": None,
+                       "due_text": None, "source": ["m2"], "confidence": 0.9}]}]},
+]
 rules += base["rules"] if isinstance(base, dict) else base
 json.dump({"v": 1, "rules": rules}, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
 PY
@@ -117,7 +139,7 @@ start_llm() {
   tmux kill-session -t "risime-uientry-llm$SUF" 2>/dev/null || true
   for _ in $(seq 1 20); do ss -ltnH "sport = :$LLM_PORT" | grep -q . || break; sleep 0.5; done
   local extra=""
-  if [ "$SKILLS" = 1 ]; then [ -f "$WORK/llm-script.json" ] || write_script; extra="--script '$WORK/llm-script.json'"; fi
+  if [ "$SKILLS" = 1 ] || [ "$LEDGER" = 1 ]; then [ -f "$WORK/llm-script.json" ] || write_script; extra="--script '$WORK/llm-script.json'"; fi
   tmux new -d -s "risime-uientry-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT $extra >> '$WORK/fake-llm.out' 2>&1"
   for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && break; sleep 0.5; done
   curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" || { echo "fake-llm didn't start"; tail -5 "$WORK/fake-llm.out"; exit 1; }
@@ -165,7 +187,11 @@ if [ "$RISI" = 1 ]; then
   umask 077
   { echo "RISI=on"; echo "RISI_MLS_NIF=$WORK/librisime_mls_nif"; echo "RISI_LLM_URL=http://127.0.0.1:$LLM_PORT/v1"; echo "RISI_FALLBACK=off"
     echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"; echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"
-    if [ "$SKILLS" = 1 ]; then echo "RISI_TOOLS=on"; echo "RISI_SKILLS=on"; echo "RISI_MEMORY_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; fi; } > "$WORK/risi.env"
+    if [ "$SKILLS" = 1 ]; then echo "RISI_TOOLS=on"; echo "RISI_SKILLS=on"; fi
+    # The quiet rule shortened for this run: the env names of §27.2 and, until the server reads them, the app env.
+    if [ "$LEDGER" = 1 ]; then echo "RISI_TOOLS=on"; echo "RISI_LEDGER=on"; echo "RISI_QUIET_S=$QUIET_S"; echo "RISI_QUIET_MIN_MSGS=6"
+      echo "ELIXIR_ERL_OPTIONS=\"-risime risi_quiet_s $QUIET_S -risime risi_quiet_min_msgs 6\""; fi
+    if [ "$SKILLS" = 1 ] || [ "$LEDGER" = 1 ]; then echo "RISI_MEMORY_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; fi; } > "$WORK/risi.env"
   umask 022
   # Parallel runs (agents, the release gate) must not share the fake model: refuse a busy port.
   ss -ltnH "sport = :$LLM_PORT" | grep -q . && { echo "fake-llm port $LLM_PORT busy (another ui-entry-test?): set UITEST_LLM_PORT"; exit 1; }
@@ -181,6 +207,9 @@ curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't s
 curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"tabs":"on"' || { echo "the temp server's /auth/config doesn't say tabs: on"; exit 1; }
 if [ "$SKILLS" = 1 ]; then
   curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"risi_skills":"on"' || { echo "the temp server's /auth/config doesn't say risi_skills: on"; exit 1; }
+fi
+if [ "$LEDGER" = 1 ]; then
+  curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"risi_ledger":"on"' || { echo "the temp server's /auth/config doesn't say risi_ledger: on"; exit 1; }
 fi
 [ "$(fx setup)" = "uientry: setup ok" ] || { echo "fixture: setup"; exit 1; }
 otp() { grep -a "\[DEV OTP\] $1:" "$WORK/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true; }
@@ -223,6 +252,16 @@ for n in nodes:
     if t == want or d == want or (want.endswith('*') and t.startswith(want[:-1])):
         x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
         print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+}
+# How many nodes of the last dump have exactly the visible text $1 (XML-decoded).
+count_text() {
+  python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import sys, xml.etree.ElementTree as ET
+try:
+    print(sum(1 for n in ET.parse(sys.argv[1]).iter('node') if (n.get('text') or '') == sys.argv[2]))
+except ET.ParseError:
+    print(0)
 PY
 }
 tap() { local b; b="$(node_xy "$1")"; [ -n "$b" ] || { echo "    [$DEV] no UI node: $1"; return 1; }; A shell input tap $b; }
@@ -334,7 +373,8 @@ for _ in $(seq 1 60); do [ "$(fx e2ee)" = "uientry: e2ee=true" ] && break; sleep
 pass "both opened the DM; it is e2ee"
 
 # UITEST_SKILLS_ONLY=1 (with --skills): only steps 1 and 10 (a quicker run while working on step 10).
-if [ "${UITEST_SKILLS_ONLY:-0}" != 1 ]; then
+# UITEST_LEDGER_ONLY=1 (with --ledger): only steps 1 and 11.
+if [ "${UITEST_SKILLS_ONLY:-0}" != 1 ] && [ "${UITEST_LEDGER_ONLY:-0}" != 1 ]; then
 # ---------------------------------------------------------------- 2. the tab row under the header, Start Official
 DEV=A
 wait_text "🔒 Private" 30 || fail "tab row: no '🔒 Private' under the chat header (tabs on)"
@@ -607,7 +647,7 @@ fi
 fi  # UITEST_SKILLS_ONLY
 
 # ---------------------------------------------------------------- 10. (--skills) Risi skills: alarm, scheduled message, revoke
-if [ "$SKILLS" = 1 ]; then
+if [ "$SKILLS" = 1 ] && [ "${UITEST_LEDGER_ONLY:-0}" != 1 ]; then
   DEV=A
   size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
   conv="$(fx conv | sed -n 's/^uientry: conv=//p')"; [ -n "$conv" ] || fail "fixture: the DM's conversation id"
@@ -737,6 +777,89 @@ for i, l in enumerate(lines):
   tap "Open Risi skills" || fail "tap Open Risi skills"
   wait_for 'content-desc="Alarm skill"' 20 || fail "'Open Risi skills' didn't open Settings → Risi skills"
   pass "'Open Risi skills' opens Settings → Risi skills"
+fi
+
+# ---------------------------------------------------------------- 11. (--ledger) a discussion → each Risi chat's summary
+# The Official tab of the DM, with a usable composer ("Message"); starts Official the first time.
+official_tab() {
+  open_chat "ZZ UI ${1}" || return 1
+  tap "● Official" || return 1
+  for _ in $(seq 1 90); do
+    has 'text="Start Official"' && { tap "Start Official" || true; sleep 2; }
+    has 'text="Message"' && has 'Risi is listening' && return 0
+    sleep 1
+  done
+  return 1
+}
+say() { tap "Message" || return 1; sleep 0.5; A shell input text "$(printf '%s' "$1" | sed 's/ /%s/g')"; sleep 0.5; tap "Send"; sleep 2; }
+# The Risi chat from the chat list ("Risi", pinned first; created by the app at start on a risi_ledger phone).
+open_risi_chat() {
+  back_to_list || return 1
+  wait_text "Risi" 60 || return 1
+  tap "Risi" || return 1
+  wait_for 'text="Ask Risi…"' 60
+}
+if [ "$LEDGER" = 1 ]; then
+  DEV=A; official_tab B || fail "ledger: A can't open the DM's Official tab"
+  DEV=B; official_tab A || fail "ledger: B can't open the DM's Official tab"
+  pass "ledger: both phones are in the 1:1 Official ('Risi is listening')"
+  DEV=A; say "I will send the revised quote with the transport cost" || fail "ledger: A can't send in Official"
+  DEV=B; say "Thanks. I will book the site visit transport" || fail "ledger: B can't send in Official"
+  DEV=A; say "The site visit stays on Thursday" || fail "ledger: A message 3"
+  DEV=B; say "Agreed, Thursday it is" || fail "ledger: B message 4"
+  DEV=A; say "I will add the transport line to the quote" || fail "ledger: A message 5"
+  DEV=B; say "Great, talk on Thursday" || fail "ledger: B message 6"
+  pass "ledger: A and B discussed in Official (6 messages, both of them)"
+  # The quiet rule (RISI_QUIET_S=$QUIET_S for this run) → discussion_summarise → each recipient's Risi chat.
+  DEV=A; wait_text "Risi · Discussion summary" $(( QUIET_S + 120 )) || fail "ledger: no short discussion card in Official within $(( QUIET_S + 120 )) s (quiet rule)"
+  has "Details in your Risi chat" || fail "ledger: the short card lacks 'N items · Details in your Risi chat'"
+  pass "ledger: the Official chat has the short card ('… · Details in your Risi chat')"
+  wait_text "Open Risi chat" 30 && tap "Open Risi chat" || fail "ledger: the short card has no [Open Risi chat]"
+  wait_for "Summary of your discussion with ZZ UI B" 60 || fail "ledger: A's Risi chat has no 'Summary of your discussion with ZZ UI B'"
+  has 'text="You agreed:"' || fail "ledger: A's summary has no 'You agreed:'"
+  has 'text="ZZ UI B agreed:"' || fail "ledger: A's summary has no 'ZZ UI B agreed:'"
+  n_ok="$(count_text "✓")"
+  [ "$n_ok" = 1 ] || fail "ledger: A's summary shows $n_ok ✓ buttons (want exactly 1: only A's own item)"
+  shot "27-discussion-summary"
+  pass "ledger: A's Risi chat: 'Summary of your discussion with ZZ UI B', You agreed (✓ ✗ ✎ on A's item only), ZZ UI B agreed (read-only)"
+  # §27.1: ⓘ → Made by.
+  tap "ⓘ" || fail "ledger: no ⓘ on the summary card"
+  wait_for "Made by: RisiMe model (risi-l1)" 15 || fail "ledger: the ⓘ sheet doesn't say 'Made by: RisiMe model (risi-l1) · …'"
+  shot "26-made-by"
+  pass "ledger: ⓘ → 'Made by: RisiMe model (risi-l1) · hh:mm'"
+  A shell input keyevent KEYCODE_BACK; sleep 1
+  wait_text "You agreed:" 15 || fail "ledger: the summary card is gone after the Made by sheet"
+  mine="$(python3 -I - "$WORK/ui-A.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+texts = [n.get('text') for n in ET.parse(sys.argv[1]).iter('node') if n.get('text')]
+i = texts.index("You agreed:")
+print(texts[i + 1].lstrip("• ").strip())
+PY
+)"
+  [ -n "$mine" ] || fail "ledger: can't read A's own item"
+  tap "✓" || fail "ledger: tap ✓ on A's item"
+  wait_text "confirmed ✓" 60 || fail "ledger: A's item didn't become 'confirmed ✓' (item_update)"
+  pass "ledger: A confirmed '$mine' (✓) → 'confirmed ✓' after Risi's item_update"
+  DEV=B; open_risi_chat || fail "ledger: B can't open its Risi chat"
+  # (The summary card is taller on B once A confirmed: its header may be scrolled off; the items are what matter.)
+  wait_text "ZZ UI A agreed:" 90 || fail "ledger: B's Risi chat has no summary with 'ZZ UI A agreed:'"
+  has 'text="You agreed:"' || fail "ledger: B's summary has no 'You agreed:'"
+  wait_text "confirmed ✓" 60 || fail "ledger: B doesn't see A's item as 'confirmed ✓'"
+  n_ok="$(count_text "✓")"
+  [ "$n_ok" = 1 ] || fail "ledger: B's summary shows $n_ok ✓ buttons (want 1: B's own item)"
+  pass "ledger: B's Risi chat has the same summary; A's item shows 'confirmed ✓', B confirms only its own"
+  DEV=A
+  back_to_list || fail "ledger: back to the chat list (My promises)"
+  tap "More options" || fail "ledger: the chat list's ⋮ (Settings)"
+  wait_for 'text="Settings"' 10 || fail "ledger: no Settings item"
+  tap "Settings" || fail "ledger: tap Settings"
+  size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
+  for _ in 1 2 3 4 5 6; do has 'text="My promises"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
+  tap "My promises" || fail "ledger: Settings has no 'My promises'"
+  wait_for "$mine" 30 || fail "ledger: My promises doesn't list '$mine'"
+  shot "28-my-promises"
+  pass "ledger: Settings → My promises lists '$mine'"
+  back_to_list || true
 fi
 
 DEV=A; logcat_ok "ui entry"
