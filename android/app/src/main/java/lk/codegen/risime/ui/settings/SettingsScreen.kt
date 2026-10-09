@@ -46,7 +46,7 @@ import lk.codegen.risime.ui.theme.Sizes
 import lk.codegen.risime.ui.theme.Spacing
 
 @Composable
-fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> Unit = {}, onNotificationHealth: () -> Unit = {}, onRisiKnows: () -> Unit = {}, onMyPromises: () -> Unit = {}, onRisiSkills: () -> Unit = {}) {
+fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> Unit = {}, onNotificationHealth: () -> Unit = {}, onRisiKnows: () -> Unit = {}, onMyPromises: () -> Unit = {}, onRisiSkills: () -> Unit = {}, onRisiNotes: () -> Unit = {}) {
     val s by vm.state.collectAsStateWithLifecycle()
     Scaffold(
         topBar = { RisiTopBar(title = "Settings", onBack = onBack) },
@@ -98,6 +98,9 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
                     val skillsOn = container?.risiSkills?.on?.collectAsStateWithLifecycle()?.value == true &&
                         container.risiTools.on.collectAsStateWithLifecycle().value
                     if (skillsOn) OutlinedButton(onClick = onRisiSkills, modifier = Modifier.fillMaxWidth().testTag("settings_risi_skills")) { Text(RISI_SKILLS_TITLE) }
+                    // v1.29 §30.6 Settings → Risi → Notes (only on a Risi Notes device).
+                    val notesOn = container?.risiNotesActive?.collectAsStateWithLifecycle()?.value == true
+                    if (notesOn) OutlinedButton(onClick = onRisiNotes, modifier = Modifier.fillMaxWidth().testTag("settings_risi_notes")) { Text(lk.codegen.risime.data.notes.RisiNotes.NOTES_TITLE) }
                 }
                 HorizontalDivider()
             }

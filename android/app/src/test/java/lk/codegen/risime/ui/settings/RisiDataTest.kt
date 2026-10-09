@@ -3,6 +3,7 @@ package lk.codegen.risime.ui.settings
 import android.app.Application
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -137,6 +138,62 @@ class RisiDataTest {
         assertEquals(listOf("commitments:open"), rest.calls)
         rule.onNodeWithText("Send the revised quote").assertExists()
         rule.onNodeWithTag("risi_promise").assertExists()
+    }
+
+    /** v1.29 §30.5 a Notes device: "From note: <title>", [Done] = the note's tick, [Reopen] in "Done (last 7 days)". */
+    @Config(qualifiers = "w411dp-h1600dp")
+    @Test fun myPromisesOnANotesDeviceTicksLikeTheNote() {
+        val open = ProtocolJson.decodeFromString(RisiCommitmentsReply.serializer(), javaClass.classLoader!!.getResource("fixtures/risi_notes/risi_commitments_reply_v129.json")!!.readText())
+        val doneRecently = open.commitments[0].copy(commitmentId = "e5f6a7b8-c9d0-4e1f-8a2b-4c5d6e7f8a9b", text = "Share the CV", state = "done", status = "done", updatedAt = "2026-10-09T08:00:00.000Z")
+        val doneLongAgo = doneRecently.copy(commitmentId = "f6a7b8c9-d0e1-4f2a-9b3c-5d6e7f8a9b0c", text = "Old thing", updatedAt = "2026-09-01T08:00:00.000Z")
+        val rest = object : RisiRest by Fake(facts) {
+            val calls = mutableListOf<String>()
+            override suspend fun commitments(state: String): ApiResult<RisiCommitmentsReply> {
+                calls += state
+                return ApiResult.Ok(if (state == "all") RisiCommitmentsReply(open.commitments + doneRecently + doneLongAgo) else open)
+            }
+        }
+        val acts = mutableListOf<String>()
+        val opened = mutableListOf<String>()
+        val notes = object : RisiPromiseNotes {
+            override suspend fun title(noteId: String) = "Harsha × Shenika · interview planning · Fri 9 Oct"
+            override fun open(noteId: String) { opened += noteId }
+            override suspend fun act(itemId: String, action: String): Boolean { acts += "$action:$itemId"; return true }
+        }
+        val now = java.time.Instant.parse("2026-10-09T12:00:00Z").toEpochMilli()
+        val model = RisiPromisesModel(rest, scope, null, notes, now = { now })
+        model.load()
+        rule.setContent { RisiMeTheme { RisiPromisesScreen(model, me = "7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3", nameOf = { "Shenika" }, onBack = {}) } }
+        await { !model.state.value.loading && model.state.value.noteTitles.isNotEmpty() }
+        rule.waitForIdle()
+        assertEquals(listOf("open", "all"), rest.calls)
+        assertEquals(listOf("Share the CV"), model.state.value.done.map { it.text }) // within 7 days only
+        rule.onAllNodesWithText("From note: Harsha × Shenika · interview planning · Fri 9 Oct")[0].performClick()
+        assertEquals(listOf("a7b8c9d0-e1f2-4a3b-8c4d-5e6f7a8b9c0d"), opened)
+        // [Done] only on the note's ledger item (the legacy-shaped item without summary/note has none).
+        assertEquals(1, rule.onAllNodesWithTag("risi_promise_done").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("risi_promise_done").performClick()
+        await { model.state.value.done.size == 2 }
+        assertEquals(listOf("done:c3d4e5f6-a7b8-4c9d-8e0f-2a3b4c5d6e7f"), acts)
+        rule.waitForIdle()
+        rule.onAllNodesWithTag("risi_promise_reopen")[0].performClick()
+        await { acts.size == 2 }
+        assertEquals("item_reopen:c3d4e5f6-a7b8-4c9d-8e0f-2a3b4c5d6e7f", acts[1])
+        await { model.state.value.items.any { it.commitmentId == "c3d4e5f6-a7b8-4c9d-8e0f-2a3b4c5d6e7f" } }
+    }
+
+    /** Notes off: My promises is exactly as before (no `state=all`, no Done/Reopen, no "From note"). */
+    @Test fun myPromisesWithoutNotesIsUnchanged() {
+        val open = ProtocolJson.decodeFromString(RisiCommitmentsReply.serializer(), javaClass.classLoader!!.getResource("fixtures/risi_notes/risi_commitments_reply_v129.json")!!.readText())
+        val rest = Fake(facts, open)
+        val model = RisiPromisesModel(rest, scope)
+        model.load()
+        rule.setContent { RisiMeTheme { RisiPromisesScreen(model, me = "7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3", nameOf = { "Shenika" }, onBack = {}) } }
+        await { !model.state.value.loading }
+        rule.waitForIdle()
+        assertEquals(listOf("commitments:open"), rest.calls)
+        assertEquals(0, rule.onAllNodesWithTag("risi_promise_done").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithTag("risi_promise_from_note").fetchSemanticsNodes().size)
     }
 
     private fun fixture(name: String) = javaClass.classLoader!!.getResource("fixtures/risi_items_8_10/$name")!!.readText()

@@ -18,7 +18,7 @@ object RisiControl {
     const val TYPE_ACTION = "risi_action"
 
     val REQUEST_ACTIONS = setOf("ask", "summarise", "report")
-    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS + V127_ACTIONS + lk.codegen.risime.net.RisiActions129.ALL
+    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS + V127_ACTIONS + lk.codegen.risime.net.RisiActions129.ALL + lk.codegen.risime.net.RisiActions130.ALL
 
     /** §25.4 (v1.25): on a confirm card (`write_id`) or a group reminder (`reminder_id`). */
     val V125_ACTIONS: Set<String> get() = setOf("confirm_write", "cancel_write", "me_too", "not_me")
@@ -128,6 +128,7 @@ object RisiControl {
             "item_confirm" -> "Confirmed an item"
             "item_decline" -> "Declined an item"
             "item_edit" -> "Edited an item"
+            "item_reopen" -> "Reopened an item"
             "event_accept" -> "Accepted an invitation"
             "event_decline" -> "Declined an invitation"
             "event_suggest" -> "Suggested another time"
@@ -165,6 +166,7 @@ object RisiControl {
                 "item_confirm" -> "$who confirmed an item"
                 "item_decline" -> "$who declined an item"
                 "item_edit" -> "$who edited an item"
+                "item_reopen" -> "$who reopened an item"
                 "event_accept" -> "$who accepted"
                 "event_decline" -> "$who declined"
                 "event_suggest" -> "$who suggested another time"

@@ -349,7 +349,7 @@ class ApiClient(
 
     suspend fun deleteRisiFacts(): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/facts", null)
 
-    suspend fun risiCommitments(state: String): ApiResult<RisiCommitmentsReply> = call<Unit, RisiCommitmentsReply>("GET", "risi/commitments?state=$state", null)
+    suspend fun risiCommitments(state: String): ApiResult<RisiCommitmentsReply> = call<Unit, RisiCommitmentsReply>("GET", "risi/commitments?state=$state", null, headers = deviceHeaders()) // §30.5: `note_id` only for a risi_notes device
 
     // ---- §29.3 Risi Calendar (a `risi_events` device; else 403 invalid_device) ----
     private fun q(v: String) = java.net.URLEncoder.encode(v, "UTF-8")
@@ -385,6 +385,25 @@ class ApiClient(
         call("PATCH", "risi/calendar/settings", body, headers = deviceHeaders())
 
     suspend fun deleteRisiCalendar(): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/calendar", null, headers = deviceHeaders())
+
+    // ---- §30.6 Risi Notes (a `risi_notes` device; else 403 invalid_device) ----
+
+    suspend fun risiNotes(query: String?, before: String?, limit: Int): ApiResult<RisiNotesReply> {
+        val qs = buildList {
+            query?.trim()?.takeIf { it.isNotEmpty() }?.let { add("q=" + q(it.take(100))) }
+            before?.let { add("before=" + q(it)) }
+            add("limit=" + limit.coerceIn(1, 50))
+        }.joinToString("&")
+        return call<Unit, RisiNotesReply>("GET", "risi/notes?$qs", null, headers = deviceHeaders())
+    }
+
+    suspend fun risiNote(id: String): ApiResult<RisiNoteReply> =
+        call<Unit, RisiNoteReply>("GET", "risi/notes/${q(id)}", null, headers = deviceHeaders())
+
+    suspend fun deleteRisiNote(id: String): ApiResult<Unit> =
+        call<Unit, Unit>("DELETE", "risi/notes/${q(id)}", null, headers = deviceHeaders())
+
+    suspend fun deleteAllRisiNotes(): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/notes", null, headers = deviceHeaders())
 
     suspend fun contacts(): ApiResult<ContactsReply> = call<Unit, ContactsReply>("GET", "contacts", null)
 

@@ -258,6 +258,42 @@ class AppContainer(
             .stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
     }
 
+    // ---- §30 (v1.29) Risi Notes ----
+
+    /** §30.1 the `risi_notes` server switch (kept across restarts) and this device's advertisement. */
+    val risiNotes = lk.codegen.risime.data.tabs.RisiToolsSwitch(
+        persistedServerOn = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getBoolean("risi_notes_on", false),
+        persistServerOn = { on -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putBoolean("risi_notes_on", on).apply() },
+        log = { Log.i("RisiMe", it.replace("risi_tools", "risi_notes")) },
+    )
+
+    /** Risi Notes on this device: its switch and advertisement with everything `risi_events` needs. */
+    fun risiNotesOn(): Boolean = risiNotes.on.value && risiEventsOn()
+
+    /** The same as a flow (the Notes entries show only while it is true; v1.28/§29 exactly otherwise). */
+    val risiNotesActive: kotlinx.coroutines.flow.StateFlow<Boolean> by lazy {
+        kotlinx.coroutines.flow.combine(risiNotes.on, risiEventsActive) { a, b -> a && b }
+            .stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
+    }
+
+    /** §30.6 the Notes REST. */
+    val risiNotesRest: lk.codegen.risime.net.RisiNotesRest by lazy { lk.codegen.risime.net.RisiNotesApi(api) }
+
+    /** §30.6 share a note into a chat: an ordinary message of the user's own (Risi isn't involved). */
+    suspend fun shareText(conversationId: String, text: String): Boolean = engine.sendText(conversationId, text) != null
+
+    /** The user's Risi chat (null: none on this phone yet). */
+    fun risiChatConversation(): String? = chatTabs.rows.value?.values?.firstOrNull { it.risi }?.conversationId
+
+    /** §27.5/§30.5 an item action (`done`, `item_reopen`, …) from outside a chat screen: sent in the user's Risi chat. */
+    suspend fun sendItemAction(itemId: String, action: String, text: String? = null, due: String? = null, allDay: Boolean = false): Boolean {
+        val conv = risiChatConversation() ?: return false
+        return lk.codegen.risime.data.tabs.RisiRequests(
+            isOfficial = { db.chatTabs().get(conv)?.official == true },
+            send = { engine.sendRisiControl(conv, it) },
+        ).act(itemId, action, text, due, allDay)
+    }
+
     /** §29.3/§29.6 the calendar: REST, the Room cache and the cursor feed. */
     val risiCalendar: lk.codegen.risime.data.calendar.RisiCalendar by lazy {
         val prefs = context.getSharedPreferences("risime_calendar", Context.MODE_PRIVATE)
@@ -486,8 +522,10 @@ class AppContainer(
         val ledgerBefore = risiLedger.serverOn.value
         risiLedger.setServerOn(cfg.risiLedgerOn)
         val eventsBefore = risiEvents.serverOn.value
+        val notesBefore = risiNotes.serverOn.value
+        risiNotes.setServerOn(cfg.risiNotesOn)
         risiEvents.setServerOn(cfg.risiEventsOn)
-        if (before != cfg.tabsOn || risiBefore != cfg.risiToolsOn || skillsBefore != cfg.risiSkillsOn || ledgerBefore != cfg.risiLedgerOn || eventsBefore != cfg.risiEventsOn) refreshCapabilities()
+        if (before != cfg.tabsOn || risiBefore != cfg.risiToolsOn || skillsBefore != cfg.risiSkillsOn || ledgerBefore != cfg.risiLedgerOn || eventsBefore != cfg.risiEventsOn || notesBefore != cfg.risiNotesOn) refreshCapabilities()
     }
 
     /** §25.2 the Risi chat's first open (only on a `risi_tools` device). */
@@ -941,6 +979,7 @@ class AppContainer(
             risiSkillsSupported = { risiSkills.serverOn.value },
             risiLedgerSupported = { risiLedger.serverOn.value },
             risiEventsSupported = { risiEvents.serverOn.value },
+            risiNotesSupported = { risiNotes.serverOn.value },
             onAdvertised = { caps ->
                 val tabs = lk.codegen.risime.net.DeviceMls.CAP_TABS in caps
                 chatTabs.setAdvertised(tabs)
@@ -953,6 +992,7 @@ class AppContainer(
                 risiLedger.setAdvertised(ledger)
                 val events = lk.codegen.risime.net.DeviceMls.CAP_RISI_EVENTS in caps
                 risiEvents.setAdvertised(events)
+                risiNotes.setAdvertised(lk.codegen.risime.net.DeviceMls.CAP_RISI_NOTES in caps)
                 // §29.6: a calendar device syncs on start (lists when it has no cursor yet).
                 if (events) scope.launch { runCatching { risiCalendar.sync(); risiCalendar.loadSettings() } }
                 // §27.10: a risi_ledger app creates its Risi chat at start when it has none (follow-ups land there).
@@ -967,7 +1007,8 @@ class AppContainer(
                         .putString("advertised_risi_tools_device", if (risi) id else null)
                         .putString("advertised_risi_skills_device", if (skills) id else null)
                         .putString("advertised_risi_ledger_device", if (ledger) id else null)
-                        .putString("advertised_risi_events_device", if (events) id else null).apply()
+                        .putString("advertised_risi_events_device", if (events) id else null)
+                        .putString("advertised_risi_notes_device", if (lk.codegen.risime.net.DeviceMls.CAP_RISI_NOTES in caps) id else null).apply()
                 }
             },
         )
@@ -1122,6 +1163,8 @@ class AppContainer(
             if (id != null && ledger != null && ledger.equals(id, true) && sessionStore.current() != null) risiLedger.restoreAdvertised(true)
             val events = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_risi_events_device", null)
             if (id != null && events != null && events.equals(id, true) && sessionStore.current() != null) risiEvents.restoreAdvertised(true)
+            val notes = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_risi_notes_device", null)
+            if (id != null && notes != null && notes.equals(id, true) && sessionStore.current() != null) risiNotes.restoreAdvertised(true)
             // §26.6: every process start re-arms the pending schedules and sends what is overdue.
             if (sessionStore.current() != null) runCatching { scheduled.rearmAll() }.onFailure { Log.w("RisiMe", "scheduled message: re-arm failed: ${it.javaClass.simpleName}") }
         }

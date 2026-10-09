@@ -39,15 +39,15 @@ object RisiLedger {
         for (m in messages) {
             val r = RisiMessages.meta(m) ?: continue
             when (r.kind) {
-                RisiKinds127.DISCUSSION_SUMMARY -> for (i in r.items) {
+                RisiKinds127.DISCUSSION_SUMMARY, lk.codegen.risime.net.RisiKinds130.NOTE_CARD -> for (i in r.items) {
                     val id = i.id.lowercase().ifEmpty { continue }
-                    out.putIfAbsent(id, view(i, r.summaryId))
+                    out.putIfAbsent(id, view(i, r.summaryKey))
                 }
                 RisiKinds127.ITEM_UPDATE -> {
                     val id = r.itemId?.lowercase() ?: continue
                     val prev = out[id]
                     out[id] = LedgerItemView(
-                        itemId = r.itemId, summaryId = r.summaryId ?: prev?.summaryId, owner = prev?.owner ?: r.owner,
+                        itemId = r.itemId, summaryId = r.summaryKey ?: prev?.summaryId, owner = prev?.owner ?: r.owner,
                         counterpart = prev?.counterpart.orEmpty(), text = r.text ?: prev?.text.orEmpty(),
                         due = if (r.due != null || r.text != null) r.due else prev?.due,
                         allDay = r.allDay ?: prev?.allDay ?: false,
@@ -63,12 +63,15 @@ object RisiLedger {
     private fun view(i: RisiDigestItem, summaryId: String?) =
         LedgerItemView(i.id, summaryId, i.owner, i.counterpart, i.text, i.due, i.allDay, i.dueText, i.state ?: RisiItemStates.PROPOSED, null)
 
-    /** The `discussion_summary` rows on this phone by summary_id (lowercase). */
+    /** §27.3 `discussion_summary` or its §30.4 replacement `note_card` (same id, same items). */
+    fun isSummary(r: RisiMeta): Boolean = r.kind == RisiKinds127.DISCUSSION_SUMMARY || r.kind == lk.codegen.risime.net.RisiKinds130.NOTE_CARD
+
+    /** The `discussion_summary` / `note_card` rows on this phone by summary_id (= note_id, lowercase). */
     fun summaries(messages: List<MessageEntity>): Map<String, Pair<MessageEntity, RisiMeta>> {
         val out = HashMap<String, Pair<MessageEntity, RisiMeta>>()
         for (m in messages) {
             val r = RisiMessages.meta(m) ?: continue
-            if (r.kind == RisiKinds127.DISCUSSION_SUMMARY) r.summaryId?.lowercase()?.let { out.putIfAbsent(it, m to r) }
+            if (isSummary(r)) r.summaryKey?.lowercase()?.let { out.putIfAbsent(it, m to r) }
         }
         return out
     }
@@ -83,7 +86,7 @@ object RisiLedger {
             return messages.firstOrNull { it.messageId.equals(mid, true) }?.messageId
         }
         f.summaryId?.let { sid ->
-            return messages.firstOrNull { m -> m.messageId != null && RisiMessages.meta(m)?.let { it.kind == RisiKinds127.DISCUSSION_SUMMARY && it.summaryId.equals(sid, true) } == true }?.messageId
+            return messages.firstOrNull { m -> m.messageId != null && RisiMessages.meta(m)?.let { isSummary(it) && it.summaryKey.equals(sid, true) } == true }?.messageId
         }
         val at = f.at?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() } ?: return null
         return messages.firstOrNull { m -> m.messageId != null && (lk.codegen.risime.data.HistoryMarkers.epochMs(m.serverTs) ?: -1) >= at }?.messageId
@@ -91,8 +94,8 @@ object RisiLedger {
 
     /** §27.5 an `item_update` whose summary card is on this phone shows no bubble (the card changes instead). */
     fun updateHasCard(r: RisiMeta, messages: List<MessageEntity>): Boolean {
-        val sid = r.summaryId?.lowercase() ?: return false
-        return messages.any { m -> RisiMessages.meta(m)?.let { it.kind == RisiKinds127.DISCUSSION_SUMMARY && it.summaryId.equals(sid, true) } == true }
+        val sid = r.summaryKey?.lowercase() ?: return false
+        return messages.any { m -> RisiMessages.meta(m)?.let { isSummary(it) && it.summaryKey.equals(sid, true) } == true }
     }
 
     /** §27.3 a summary copy is past its `expires_at`: its `proposed` items show "Not tracked". */

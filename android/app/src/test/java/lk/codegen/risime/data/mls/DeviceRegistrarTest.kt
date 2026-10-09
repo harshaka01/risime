@@ -271,6 +271,31 @@ class DeviceRegistrarTest {
         assertEquals("[\"groups\",\"tabs\",\"risi_tools\",\"risi_ledger\"]", advertise())
     }
 
+    /** v1.29 §30.1: `risi_notes` only with `risi_events` (and so tools, skills, ledger), while its own switch is on. */
+    @Test fun risiNotesAdvertisedOnlyWithRisiEventsAndTheSwitch() = runBlocking {
+        var eventsOn = true
+        var notesOn = false
+        val reg = DeviceRegistrar(
+            api, { "dev-1" }, "0.3.0", { mls }, groupsReplacedFor = { "x" }, tabsSupported = { true }, risiToolsSupported = { true },
+            risiSkillsSupported = { true }, risiLedgerSupported = { true }, risiEventsSupported = { eventsOn }, risiNotesSupported = { notesOn },
+        )
+        fun caps() = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject["mls"]!!.jsonObject["capabilities"].toString()
+        suspend fun advertise(): String {
+            server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+            server.enqueue(json(200, """{"count":30}"""))
+            reg.register(null)
+            return caps().also { server.takeRequest() }
+        }
+        mls.tabsOn = true
+        mls.risiChatOn = true
+        // Switch off: exactly the §29 app.
+        assertEquals("[\"groups\",\"tabs\",\"risi_tools\",\"risi_skills\",\"risi_ledger\",\"risi_events\"]", advertise())
+        notesOn = true
+        assertEquals("[\"groups\",\"tabs\",\"risi_tools\",\"risi_skills\",\"risi_ledger\",\"risi_events\",\"risi_notes\"]", advertise())
+        eventsOn = false // never without risi_events
+        assertEquals("[\"groups\",\"tabs\",\"risi_tools\",\"risi_skills\",\"risi_ledger\"]", advertise())
+    }
+
     @Test fun coreWithoutGroupsKeepsTheV17Registration() = runBlocking {
         mls.groupsOn = false
         server.enqueue(json(200, """{"attestation":"a.b.c"}"""))

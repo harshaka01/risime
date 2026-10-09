@@ -73,6 +73,18 @@ interface RisiHost {
 
     /** §29 Risi Calendar for the event cards (null: not a calendar device; the cards render from their own data). */
     val risiCalendar: lk.codegen.risime.data.calendar.RisiCalendarCardsPort? get() = null
+
+    /** §30 this is a Risi Notes device (the switch, `risi_notes` advertised): [Open] on `notes_saved`, the Notes menu item. */
+    val notesOn: Boolean get() = false
+
+    /** The viewer's own display name (a note's title starts with it: "Harsha × Shenika · …"). */
+    val myName: String get() = "You"
+
+    /** §30.4 the note screen. */
+    fun openNote(noteId: String) {}
+
+    /** §30.6 the Notes list. */
+    fun openNotes() {}
 }
 
 /** Everything a card needs from its screen. */

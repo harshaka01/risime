@@ -117,6 +117,8 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     lk.codegen.risime.net.RisiKinds127.ITEM_DUE, lk.codegen.risime.net.RisiKinds127.ITEM_OVERDUE, lk.codegen.risime.net.RisiKinds127.ITEM_NUDGE -> ItemReminderCard(row, r, ctx)
                     lk.codegen.risime.net.RisiKinds127.ITEM_CLARIFY -> ItemClarifyCard(row, r, ctx)
                     in lk.codegen.risime.net.RisiKinds129.ALL -> RisiCalendarCardBody(row, r, ctx)
+                    lk.codegen.risime.net.RisiKinds130.NOTE_CARD -> lk.codegen.risime.ui.notes.NoteCardBody(row, r, ctx)
+                    lk.codegen.risime.net.RisiKinds130.NOTES_SAVED -> lk.codegen.risime.ui.notes.NotesSavedCardBody(row, r, ctx)
                     else -> Text(row.body)
                 }
                 FeedbackRow(r, ctx)
@@ -146,6 +148,8 @@ private fun headerOf(r: RisiMeta) = risiCalendarHeader(r) ?: when (r.kind) {
     lk.codegen.risime.net.RisiKinds127.ITEM_DUE, lk.codegen.risime.net.RisiKinds127.ITEM_OVERDUE, lk.codegen.risime.net.RisiKinds127.ITEM_NUDGE ->
         lk.codegen.risime.data.tabs.RisiLedger.reminderHeader(r)
     lk.codegen.risime.net.RisiKinds127.ITEM_CLARIFY -> "Risi · When is it due?"
+    lk.codegen.risime.net.RisiKinds130.NOTE_CARD -> "Risi · Notes"
+    lk.codegen.risime.net.RisiKinds130.NOTES_SAVED -> "Risi · Notes saved"
     else -> "Risi"
 }
 

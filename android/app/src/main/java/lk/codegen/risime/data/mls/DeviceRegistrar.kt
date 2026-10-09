@@ -63,6 +63,8 @@ class DeviceRegistrar(
     private val risiLedgerSupported: () -> Boolean = { false },
     /** §29.1: `/auth/config` says `risi_events: on` (advertised only with `risi_tools`, `risi_skills` and `risi_ledger`). */
     private val risiEventsSupported: () -> Boolean = { false },
+    /** §30.1: `/auth/config` says `risi_notes: on` (advertised only together with `risi_events`). */
+    private val risiNotesSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
 ) {
@@ -103,6 +105,11 @@ class DeviceRegistrar(
             // v1.29 §29.1: only with `risi_tools`, `risi_skills` and `risi_ledger`, while the server switch is on.
             DeviceMls.CAP_RISI_EVENTS.takeIf {
                 mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiSkillsSupported() && risiLedgerSupported() && risiEventsSupported()
+            },
+            // v1.29 §30.1: only with `risi_events` (so with tools, skills and ledger), while the server switch is on.
+            DeviceMls.CAP_RISI_NOTES.takeIf {
+                mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiSkillsSupported() && risiLedgerSupported() &&
+                    risiEventsSupported() && risiNotesSupported()
             },
         )
         else -> null

@@ -45,6 +45,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.input.TextFieldValue
@@ -161,6 +162,7 @@ fun GroupChatScreen(
     }
     val scroll = rememberChatScrollState()
     val risiChatReady by vm.risiChatReady.collectAsStateWithLifecycle()
+    val notesActive by vm.notesActive.collectAsStateWithLifecycle()
     // §27.3/§27.4 opened from a Risi card ([Open chat] / [Open Risi chat]): scroll there once the message is here.
     var focus by remember { mutableStateOf<lk.codegen.risime.data.tabs.RisiUiBus.Focus?>(null) }
     LaunchedEffect(Unit) { focus = vm.takeFocus() }
@@ -236,6 +238,13 @@ fun GroupChatScreen(
                         onClear = { clearAsk = false }, onDelete = { clearAsk = true },
                         extra = { close ->
                             risi?.takeIf { !risiChat }?.let { h -> lk.codegen.risime.ui.tabs.RisiMenuItems(h, enabled = !readOnly, close = close, onSummarise = { summariseAsk = true }) }
+                            // §30.6 Risi chat ⋮ → Notes (only on a Risi Notes device).
+                            if (risiChat && notesActive && risi != null) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Notes") }, onClick = { close(); risi.openNotes() },
+                                    modifier = Modifier.testTag("risi_chat_menu_notes"),
+                                )
+                            }
                             // §26.6 "Scheduled messages" (never in the Risi chat: nothing is scheduled into it).
                             if (!risiChat && (vm.scheduledMenu() || scheduledHere.isNotEmpty())) {
                                 androidx.compose.material3.DropdownMenuItem(text = { Text(lk.codegen.risime.ui.chat.SCHEDULED_MESSAGES_TITLE) }, onClick = { close(); scheduledSheet = true })

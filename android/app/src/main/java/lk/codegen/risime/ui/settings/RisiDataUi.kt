@@ -53,9 +53,12 @@ const val OWED_TO_ME_TITLE = "Owed to me"
 /** Row test tags per direction (the v1.27 tags kept for "I promised" and "Promised to me"). */
 private val PROMISE_TAGS = mapOf(RisiPromises.I_PROMISED to "risi_promise", RisiPromises.PROMISED_TO_ME to "risi_owed", RisiPromises.OTHERS to "risi_promise_other")
 
+/** §30.5 a row's Notes extras: "From note: …", [Done] / [Reopen]. */
+private class PromiseNoteBits(val title: String?, val onNote: (() -> Unit)?, val done: (() -> Unit)?, val reopen: (() -> Unit)?, val busy: Boolean)
+
 /** One item: text, owner · due (all-day aware) · status ("Needs a date"); a tap opens its source chat (server item 9). */
 @Composable
-private fun PromiseRow(c: RisiCommitment, me: String, nameOf: (String) -> String, tag: String, onOpen: ((RisiCommitment) -> Unit)?) {
+private fun PromiseRow(c: RisiCommitment, me: String, nameOf: (String) -> String, tag: String, onOpen: ((RisiCommitment) -> Unit)?, bits: PromiseNoteBits? = null) {
     val open = onOpen?.takeIf { RisiPromises.target(c) != null }
     Column(
         Modifier.fillMaxWidth().then(if (open != null) Modifier.clickable(onClickLabel = "Open chat") { open(c) } else Modifier)
@@ -71,6 +74,15 @@ private fun PromiseRow(c: RisiCommitment, me: String, nameOf: (String) -> String
             color = if (status == "Needs a date") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag("risi_promise_status"),
         )
+        if (bits != null) {
+            bits.onNote?.let { open ->
+                TextButton(onClick = open, modifier = Modifier.testTag("risi_promise_from_note")) { Text("From note: " + (bits.title ?: "open"), maxLines = 1) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                bits.done?.let { OutlinedButton(onClick = it, enabled = !bits.busy, modifier = Modifier.testTag("risi_promise_done")) { Text("Done") } }
+                bits.reopen?.let { OutlinedButton(onClick = it, enabled = !bits.busy, modifier = Modifier.testTag("risi_promise_reopen")) { Text("Reopen") } }
+            }
+        }
     }
     HorizontalDivider()
 }
@@ -153,6 +165,12 @@ data class PromisesUi(
     val totals: RisiTotals? = null,
     /** A tap could not open the chat ("That chat isn't on this phone."). */
     val note: String? = null,
+    /** v1.29 §30.5 (Notes device): items done in the last 7 days ([Reopen]). */
+    val done: List<RisiCommitment> = emptyList(),
+    /** note_id (lowercase) → its title for "From note: …". */
+    val noteTitles: Map<String, String> = emptyMap(),
+    /** Items with a `done`/`item_reopen` of mine on its way (their buttons are off). */
+    val acting: Set<String> = emptySet(),
 ) {
     /** "I promised" / "Promised to me" / "Others" with their counts. */
     val sections: List<RisiPromises.Section> get() = RisiPromises.sections(items, totals)
@@ -168,9 +186,34 @@ interface RisiPromiseOpener {
 }
 
 const val PROMISE_CHAT_MISSING = "That chat isn't on this phone."
+const val DONE_RECENTLY_TITLE = "Done (last 7 days)"
+const val PROMISE_ACTION_FAILED = "Couldn't send that. Open your Risi chat and try again."
 
-/** "My promises": `GET /risi/commitments?state=open`. */
-class RisiPromisesModel(private val rest: RisiRest, private val scope: CoroutineScope, private val opener: RisiPromiseOpener? = null) {
+/** §30.5 a done item may be reopened within 7 days of done. */
+const val REOPEN_WINDOW_MS = 7L * 86_400_000
+
+/**
+ * v1.29 §30.5 My promises on a Risi Notes device: [Done] / [Reopen] are the same actions as ticking in a note
+ * (`done` / `item_reopen` in the user's Risi chat), and "From note: <title>" opens the note.
+ */
+interface RisiPromiseNotes {
+    /** The note's title as this phone builds it (null: unknown here). */
+    suspend fun title(noteId: String): String?
+
+    fun open(noteId: String)
+
+    /** `done` / `item_reopen` on a ledger item (false: not sent). */
+    suspend fun act(itemId: String, action: String): Boolean
+}
+
+/** "My promises": `GET /risi/commitments?state=open` (and, on a Notes device, the last 7 days' done items from `state=all`). */
+class RisiPromisesModel(
+    private val rest: RisiRest,
+    private val scope: CoroutineScope,
+    private val opener: RisiPromiseOpener? = null,
+    private val notes: RisiPromiseNotes? = null,
+    private val now: () -> Long = System::currentTimeMillis,
+) {
     val state: StateFlow<PromisesUi> get() = _state
     private val _state = MutableStateFlow(PromisesUi())
 
@@ -181,11 +224,63 @@ class RisiPromisesModel(private val rest: RisiRest, private val scope: Coroutine
         _state.update { it.copy(loading = true, error = null) }
         scope.launch {
             when (val r = runCatching { rest.commitments("open") }.getOrNull()) {
-                is ApiResult.Ok -> _state.value = PromisesUi(false, r.value.commitments, totals = r.value.totals)
+                is ApiResult.Ok -> {
+                    val done = if (notes == null) emptyList() else recentlyDone()
+                    _state.value = PromisesUi(false, r.value.commitments, totals = r.value.totals, done = done)
+                    titles(r.value.commitments + done)
+                }
                 else -> _state.update { it.copy(loading = false, error = risiErrorMessage(r)) }
             }
         }
     }
+
+    private suspend fun recentlyDone(): List<RisiCommitment> {
+        val all = (runCatching { rest.commitments("all") }.getOrNull() as? ApiResult.Ok)?.value?.commitments ?: return emptyList()
+        val since = now() - REOPEN_WINDOW_MS
+        return all.filter { c ->
+            c.state == lk.codegen.risime.net.RisiItemStates.DONE && canTick(c) &&
+                (c.updatedAt?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() } ?: 0L) >= since
+        }
+    }
+
+    private suspend fun titles(items: List<RisiCommitment>) {
+        val n = notes ?: return
+        val ids = items.mapNotNull { it.noteId?.lowercase() }.distinct()
+        if (ids.isEmpty()) return
+        val out = HashMap<String, String>()
+        for (id in ids) runCatching { n.title(id) }.getOrNull()?.let { out[id] = it }
+        _state.update { it.copy(noteTitles = it.noteTitles + out) }
+    }
+
+    /** [Done] / [Reopen] show on a ledger item I own or am a counterpart of (Notes device only). */
+    fun canTick(c: RisiCommitment): Boolean =
+        notes != null && (c.summaryId != null || c.noteId != null) && RisiPromises.direction(c) != RisiPromises.OTHERS
+
+    /** [Done]: the item leaves the open list for "Done (last 7 days)" once the action is sent. */
+    fun markDone(c: RisiCommitment) = act(c, lk.codegen.risime.data.tabs.RisiLedger.DONE) { s ->
+        s.copy(items = s.items.filterNot { it.commitmentId == c.commitmentId }, done = listOf(c.copy(state = lk.codegen.risime.net.RisiItemStates.DONE, status = null)) + s.done)
+    }
+
+    /** [Reopen] (§30.5 `item_reopen`): back to the open list. */
+    fun reopen(c: RisiCommitment) = act(c, lk.codegen.risime.net.RisiActions130.ITEM_REOPEN) { s ->
+        s.copy(done = s.done.filterNot { it.commitmentId == c.commitmentId }, items = s.items + c.copy(state = lk.codegen.risime.net.RisiItemStates.CONFIRMED, status = null))
+    }
+
+    private fun act(c: RisiCommitment, action: String, apply: (PromisesUi) -> PromisesUi) {
+        val n = notes ?: return
+        val id = c.commitmentId.lowercase()
+        if (id in _state.value.acting) return
+        _state.update { it.copy(acting = it.acting + id) }
+        scope.launch {
+            val ok = runCatching { n.act(c.commitmentId, action) }.getOrDefault(false)
+            _state.update { s -> (if (ok) apply(s) else s.copy(note = PROMISE_ACTION_FAILED)).copy(acting = s.acting - id) }
+        }
+    }
+
+    fun openNote(noteId: String) = notes?.open(noteId)
+
+    /** A Risi Notes device (else My promises is exactly as before). */
+    val notesOn: Boolean get() = notes != null
 
     /** A tap: the item's source conversation at its source message; a chat not on this phone says so. */
     fun open(c: RisiCommitment) {
@@ -206,8 +301,8 @@ class RisiFactsViewModel(rest: RisiRest) : ViewModel() {
     val model = RisiFactsModel(rest, viewModelScope).also { it.load() }
 }
 
-class RisiPromisesViewModel(rest: RisiRest, opener: RisiPromiseOpener? = null) : ViewModel() {
-    val model = RisiPromisesModel(rest, viewModelScope, opener).also { it.load() }
+class RisiPromisesViewModel(rest: RisiRest, opener: RisiPromiseOpener? = null, notes: ((CoroutineScope) -> RisiPromiseNotes)? = null) : ViewModel() {
+    val model = RisiPromisesModel(rest, viewModelScope, opener, notes?.invoke(viewModelScope)).also { it.load() }
 }
 
 @Composable
@@ -264,10 +359,23 @@ fun RisiPromisesScreen(model: RisiPromisesModel, me: String, nameOf: (String) ->
             s.note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_promises_note")) }
             when {
                 s.loading -> CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
-                s.items.isEmpty() && s.error == null -> Text(PROMISES_EMPTY, modifier = Modifier.testTag("risi_promises_empty"))
+                s.items.isEmpty() && s.done.isEmpty() && s.error == null -> Text(PROMISES_EMPTY, modifier = Modifier.testTag("risi_promises_empty"))
                 else -> LazyColumn(Modifier.testTag("risi_promises_list")) {
                     // Server item 9: "I promised" / "Promised to me" / "Others" by `direction`, counts from `totals`.
                     val onOpen: ((RisiCommitment) -> Unit)? = if (model.canOpen) model::open else null
+                    // v1.29 §30.5: on a Notes device, [Done] / [Reopen] and "From note: …".
+                    fun bits(c: RisiCommitment, done: Boolean): PromiseNoteBits? {
+                        val tick = model.canTick(c)
+                        val noteId = c.noteId
+                        if (!model.notesOn || (!tick && noteId == null)) return null
+                        return PromiseNoteBits(
+                            title = noteId?.let { s.noteTitles[it.lowercase()] },
+                            onNote = noteId?.let { id -> { model.openNote(id) } },
+                            done = if (tick && !done) ({ model.markDone(c) }) else null,
+                            reopen = if (tick && done) ({ model.reopen(c) }) else null,
+                            busy = c.commitmentId.lowercase() in s.acting,
+                        )
+                    }
                     s.sections.forEach { sec ->
                         item(key = "h:" + sec.direction) {
                             Text(
@@ -275,7 +383,16 @@ fun RisiPromisesScreen(model: RisiPromisesModel, me: String, nameOf: (String) ->
                                 modifier = Modifier.padding(top = Spacing.md, bottom = Spacing.xs).testTag("risi_promises_section_" + sec.direction),
                             )
                         }
-                        items(sec.items, key = { sec.direction + ":" + it.commitmentId }) { c -> PromiseRow(c, me, nameOf, PROMISE_TAGS[sec.direction] ?: "risi_promise_other", onOpen) }
+                        items(sec.items, key = { sec.direction + ":" + it.commitmentId }) { c -> PromiseRow(c, me, nameOf, PROMISE_TAGS[sec.direction] ?: "risi_promise_other", onOpen, bits(c, false)) }
+                    }
+                    if (s.done.isNotEmpty()) {
+                        item(key = "h:done") {
+                            Text(
+                                "$DONE_RECENTLY_TITLE (${s.done.size})", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = Spacing.md, bottom = Spacing.xs).testTag("risi_promises_section_done"),
+                            )
+                        }
+                        items(s.done, key = { "done:" + it.commitmentId }) { c -> PromiseRow(c, me, nameOf, "risi_promise_done_row", onOpen, bits(c, true)) }
                     }
                 }
             }

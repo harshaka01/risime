@@ -590,8 +590,24 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override fun risiChatAvailable(): Boolean = c.risiLedgerOn() && risiChatId() != null
 
+        override val notesOn: Boolean get() = c.risiNotesOn()
+
+        override val myName: String get() = myDisplayName.value ?: "You"
+
+        override fun openNote(noteId: String) = c.risiUi.openNote(noteId)
+
+        override fun openNotes() = c.risiUi.openNotes()
+
         private fun risiChatId(): String? = c.chatTabs.rows.value?.values?.firstOrNull { it.risi }?.conversationId
     }
+
+    /** §30.3 my own display name for note titles (from the session). */
+    private val myDisplayName = MutableStateFlow<String?>(null).also { f ->
+        viewModelScope.launch { f.value = runCatching { c.sessionStore.current()?.user?.displayName }.getOrNull()?.takeIf { it.isNotBlank() } }
+    }
+
+    /** §30 the Notes entries (Risi chat ⋮ → Notes) follow the switch and the advertisement. */
+    val notesActive: StateFlow<Boolean> get() = c.risiNotesActive
 
     /** §27.4 a usable Risi chat with the Ledger on ([Open Risi chat] on the short card). */
     val risiChatReady: StateFlow<Boolean> = combine(c.chatTabs.rows, c.risiLedger.on, c.risiTools.on) { rows, ledger, tools ->

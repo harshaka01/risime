@@ -61,10 +61,34 @@ class ContractExamplesTest {
         )
     }
 
+    /** v1.29 §30 Risi Notes (net/Protocol130.kt): ready for the examples the build adds (proposal 2026-10-09-risi-calendar-notes §30). */
+    private val notesV129: Map<String, (String) -> Any> by lazy {
+        fun risi(s: String) = ProtocolJson.parseToJsonElement(s).jsonObject["risi"].toString()
+        mapOf(
+            "device_put_risi_notes.json" to { s ->
+                ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_NOTES in it.mls!!.capabilities!! && CAPABILITY_RISI_EVENTS in it.mls!!.capabilities!!) }
+            },
+            "envelope_risi_note_card.json" to { s ->
+                val m = ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!
+                require(m.kind == RisiKinds130.NOTE_CARD && m.summaryKey != null)
+                RisiNote.parse(risi(s))!!.also { require(it.noteId == m.noteId && it.topic.isNotEmpty() && it.keyPoints.isNotEmpty() && it.withUsers.isNotEmpty()) }
+            },
+            "envelope_risi_notes_saved.json" to { s ->
+                ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds130.NOTES_SAVED && it.noteId != null && it.itemsCount != null && it.notify.isEmpty()) }
+            },
+            "risi_notes_reply.json" to { s -> ProtocolJson.decodeFromString<RisiNotesReply>(s).also { require(it.notes.isNotEmpty()) } },
+            "risi_note_reply.json" to { s -> ProtocolJson.decodeFromString<RisiNoteReply>(s).also { require(it.note.noteId.isNotEmpty()) } },
+            "envelope_risi_action_item_reopen.json" to { s ->
+                ProtocolJson.parseToJsonElement(s).jsonObject.also { require(lk.codegen.risime.data.tabs.RisiControl.valid(it) && it["action"]!!.jsonPrimitive.content == RisiActions130.ITEM_REOPEN) }
+            },
+            "risi_commitments_reply_v129.json" to { s -> ProtocolJson.decodeFromString<RisiCommitmentsReply>(s).also { require(it.commitments.any { c -> c.noteId != null }) } },
+        )
+    }
+
     private val all: List<String> by lazy { read("index.txt").lines().filter { it.isNotBlank() } }
 
     /** Every example file must map to a model; a new file without a decoder fails this test. */
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + mapOf(
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV129 + mapOf(
         // v1.27 (§27 made_by, the Ledger follow-ups, call transcription): net/Protocol127.kt and RisiMeta's optional fields.
         "auth_config_v127.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiLedgerOn && it.risiTranscribeOn && it.risiSkillsOn && it.risiToolsOn) } },
         "device_put_risi_ledger.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_LEDGER in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) } },
@@ -825,6 +849,15 @@ class ContractExamplesTest {
             n++
         }
         assertEquals(calendarV129.size, n)
+    }
+
+    /** The §30 decoders hold for the Android fixtures of the same names (until the contract examples land). */
+    @Test
+    fun notesV129DecodersAcceptTheFixtures() {
+        for ((name, decode) in notesV129) {
+            val s = javaClass.classLoader!!.getResource("fixtures/risi_notes/$name")?.readText() ?: throw AssertionError("missing fixture $name")
+            assertNotNull(name, decode(s))
+        }
     }
 
     @Test

@@ -163,6 +163,7 @@ data class RisiMeta(
     @SerialName("summary_id") val summaryId: String? = null,
     @SerialName("chat_id") val chatId: String? = null,
     @SerialName("conversation_id") val conversationId: String? = null,
+    @Serializable(with = LenientIdListSerializer::class)
     @SerialName("with") val withUsers: List<String> = emptyList(),
     @SerialName("started_at") val startedAt: String? = null,
     @SerialName("ended_at") val endedAt: String? = null,
@@ -190,7 +191,13 @@ data class RisiMeta(
     val totals: RisiTotals? = null,
     // v1.29 §29.9 `event_card` "added" | "official" (the other calendar fields: RisiCalendarCard).
     val mode: String? = null,
+    // v1.29 §30.4 note_card / notes_saved (a note's id = its §27 summary_id; `item_update`s may carry either).
+    @SerialName("note_id") val noteId: String? = null,
+    @SerialName("events_count") val eventsCount: Int? = null,
 ) {
+    /** The §27 summary this row belongs to: `summary_id`, else a note's `note_id` (§30.3: the same id). */
+    val summaryKey: String? get() = summaryId ?: noteId
+
     /** `confirm.calendar` (null if absent, null or malformed). */
     fun calendarHint(): RisiCalendarRef? =
         (calendarRaw as? JsonObject)?.let { runCatching { ProtocolJson.decodeFromJsonElement(RisiCalendarRef.serializer(), it) }.getOrNull() }
@@ -295,6 +302,8 @@ data class RisiCommitment(
     @SerialName("source_conversation_id") val sourceConversationId: String? = null,
     @SerialName("source_message_id") val sourceMessageId: String? = null,
     @SerialName("source_message_ids") val sourceMessageIds: List<String> = emptyList(),
+    /** v1.29 §30.5 the note this item came from (null: none or an older server). */
+    @SerialName("note_id") val noteId: String? = null,
 )
 
 /** Server item 9: open items per direction (`GET /risi/commitments` and the personal digest; equal by construction). */

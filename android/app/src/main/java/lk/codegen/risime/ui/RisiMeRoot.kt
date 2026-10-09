@@ -172,6 +172,8 @@ private fun MainNav(c: AppContainer, meId: String) {
                     is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Chat -> nav.navigate("chat/${android.net.Uri.encode(req.conversationId)}")
                     is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Skills -> nav.navigate(RISI_SKILLS_ROUTE + (req.skillId?.let { "?skill=${android.net.Uri.encode(it)}" } ?: "")) { launchSingleTop = true }
                     is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Calendar -> nav.popBackStack("chats", false)
+                    is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Note -> nav.navigate("risi_note/${android.net.Uri.encode(req.noteId)}") { launchSingleTop = true }
+                    is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Notes -> nav.navigate("risi_notes") { launchSingleTop = true }
                 }
             }
         }
@@ -429,6 +431,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                 onRisiKnows = { nav.navigate("risi_facts") { launchSingleTop = true } },
                 onMyPromises = { nav.navigate("risi_promises") { launchSingleTop = true } },
                 onRisiSkills = { nav.navigate(RISI_SKILLS_ROUTE) { launchSingleTop = true } },
+                onRisiNotes = { nav.navigate("risi_notes") { launchSingleTop = true } },
             )
         }
         composable("$RISI_SKILLS_ROUTE?skill={skill}", arguments = listOf(androidx.navigation.navArgument("skill") { nullable = true; defaultValue = null })) { entry ->
@@ -446,11 +449,31 @@ private fun MainNav(c: AppContainer, meId: String) {
                         override suspend fun has(conversationId: String): Boolean = c.db.groups().get(conversationId) != null
                         override fun open(conversationId: String, messageId: String?) =
                             c.risiUi.openChat(conversationId, messageId?.let { lk.codegen.risime.data.tabs.RisiUiBus.Focus(messageId = it) })
+                    }, notes = if (!c.risiNotesOn()) null else { scope ->
+                        // v1.29 §30.5: [Done]/[Reopen] = the note's tick (in the Risi chat); "From note: …" opens the note.
+                        val env = lk.codegen.risime.ui.notes.NotesEnv(c, meId, scope)
+                        object : lk.codegen.risime.ui.settings.RisiPromiseNotes {
+                            override suspend fun title(noteId: String): String? = env.noteTitle(noteId)
+                            override fun open(noteId: String) = c.risiUi.openNote(noteId)
+                            override suspend fun act(itemId: String, action: String): Boolean = c.sendItemAction(itemId, action)
+                        }
                     })
                 }.model, meId,
                 nameOf = { id -> contacts.firstOrNull { it.userId.equals(id, true) }?.displayName ?: "Someone" },
                 onBack = { nav.popBackStack() },
             )
+        }
+        // v1.29 §30.6 Risi Notes: the list and one note.
+        composable("risi_notes") {
+            lk.codegen.risime.ui.notes.NotesListRoute(
+                viewModel { lk.codegen.risime.ui.notes.RisiNotesListViewModel(c, meId) },
+                onOpen = { id -> nav.navigate("risi_note/${android.net.Uri.encode(id)}") { launchSingleTop = true } },
+                onBack = { nav.popBackStack() },
+            )
+        }
+        composable("risi_note/{id}") { entry ->
+            val id = entry.arguments?.getString("id") ?: return@composable
+            lk.codegen.risime.ui.notes.NoteRoute(viewModel(key = "note:$id") { lk.codegen.risime.ui.notes.RisiNoteViewModel(c, meId, id) }, onBack = { nav.popBackStack() })
         }
         composable("notif_health") {
             lk.codegen.risime.ui.settings.NotificationHealthScreen(c, onBack = { nav.popBackStack() })

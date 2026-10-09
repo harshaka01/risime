@@ -21,6 +21,12 @@ class RisiUiBus {
 
         /** §29.9 [Open] on an event card: the chat list's Calendar tab (the event comes from RisiCalendar.focus). */
         data object Calendar : Nav
+
+        /** §30.4 a note card's tap / [Open] on `notes_saved` / "From note" in My promises: the note screen. */
+        data class Note(val noteId: String) : Nav
+
+        /** §30.6 the Notes list (Risi chat ⋮ → Notes). */
+        data object Notes : Nav
     }
 
     /**
@@ -54,6 +60,14 @@ class RisiUiBus {
 
     fun openCalendar() {
         _nav.tryEmit(Nav.Calendar)
+    }
+
+    fun openNote(noteId: String) {
+        _nav.tryEmit(Nav.Note(noteId))
+    }
+
+    fun openNotes() {
+        _nav.tryEmit(Nav.Notes)
     }
 
     fun openSkills(skillId: String?) {
