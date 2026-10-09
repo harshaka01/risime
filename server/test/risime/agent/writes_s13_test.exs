@@ -399,7 +399,7 @@ defmodule RisiMe.Agent.WritesS13Test do
     assert_receive {:risi_post, rc, text, a}
 
     assert text ==
-             "I couldn't read your Google Calendar on this phone (this version of the app " <>
+             "I couldn't read your calendar on this phone (this version of the app " <>
                "doesn't say which calendars it read; update RisiMe). Connect it in Settings → " <>
                "Risi skills → Calendar."
 
@@ -489,7 +489,7 @@ defmodule RisiMe.Agent.WritesS13Test do
         })
 
       assert text ==
-               "I couldn't read your Google Calendar on this phone (no calendars on this " <>
+               "I couldn't read your calendar on this phone (no calendars on this " <>
                  "phone). Connect it in Settings → Risi skills → Calendar."
 
       assert Enum.any?(a["sources"], &(&1["type"] == "calendar_source" and !&1["read_ok"]))
@@ -525,7 +525,7 @@ defmodule RisiMe.Agent.WritesS13Test do
       {text, _a, _} = check_turn(ctx, %{"status" => "no_permission"})
 
       assert text ==
-               "I couldn't read your Google Calendar on this phone (calendar permission is " <>
+               "I couldn't read your calendar on this phone (calendar permission is " <>
                  "off). Connect it in Settings → Risi skills → Calendar."
     end
 

@@ -847,7 +847,9 @@ defmodule RisiMe.Agent.Turn do
   defp finish(st, ctx, answer, source_refs, next_steps) do
     checks = Map.get(st, :calendar_checks, [])
     # P0 2026-10-09: never "clear" without a trustworthy read; always name what was checked.
-    answer = CalendarHonesty.enforce(answer, checks, ctx.tz)
+    {answer, rule?} = CalendarHonesty.enforce_made(answer, checks, ctx.tz)
+    # v1.29 §29.3: an answer the server rebuilt is made by the rule, not the model.
+    st = if rule?, do: %{st | rule_made: true}, else: st
 
     sources =
       (source_refs || [])

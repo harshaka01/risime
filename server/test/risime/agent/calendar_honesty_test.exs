@@ -47,7 +47,7 @@ defmodule RisiMe.Agent.CalendarHonestyTest do
           H.check("failed", nil, "calendar_unavailable")
         ] do
       out = H.enforce(@clear, [check], @tz)
-      assert out =~ ~r/^I couldn't read your Google Calendar on this phone \(.+\)\. /
+      assert out =~ ~r/^I couldn't read your calendar on this phone \(.+\)\. /
       assert String.ends_with?(out, @connect)
       refute out =~ ~r/\bclear\b|\bfree\b/i, out
     end
@@ -57,7 +57,7 @@ defmodule RisiMe.Agent.CalendarHonestyTest do
     out = H.enforce(@clear, [ok([], [@google_api, phone([], false, "no_calendars")])], @tz)
 
     assert out ==
-             "I couldn't read your Google Calendar on this phone (no calendars on this phone). #{@connect}"
+             "I couldn't read your calendar on this phone (no calendars on this phone). #{@connect}"
   end
 
   test "an old phone (no sources): never clear" do
@@ -90,12 +90,39 @@ defmodule RisiMe.Agent.CalendarHonestyTest do
                "\n\nI checked: Phone calendar — Work (Google) 1 event (Mon 12 Oct, 14:00–15:00)."
   end
 
-  test "a non-free answer after a failed read gets the reason added" do
+  test "a failed read discards the model text (v1.29 §29.3 rule 1)" do
     out = H.enforce("Here's what I found.", [H.check("no_permission", nil, nil)], @tz)
 
     assert out ==
-             "Here's what I found.\n\nI couldn't read your Google Calendar on this phone " <>
+             "I couldn't read your calendar on this phone " <>
                "(calendar permission is off). #{@connect}"
+  end
+
+  test "a v1 phone with blocks: never free, otherwise says it can't name the calendars" do
+    busy = %{"start" => "2026-10-12T08:30:00.000Z", "end" => "2026-10-12T09:30:00.000Z"}
+    v1 = H.check("ok", Map.put(@window, "blocks", [Map.merge(busy, %{"busy" => true})]), nil)
+
+    assert {text, true} = H.enforce_made("You're free.", [v1], @tz)
+    assert text =~ "update RisiMe"
+
+    assert H.enforce("You have a meeting then.", [v1], @tz) ==
+             "You have a meeting then.\n\nChecked: your phone's calendar (update RisiMe to see which calendars)."
+  end
+
+  test "source-agnostic: any source's read counts; a failed one is named as not checked" do
+    risi = %{
+      "source" => "risi_calendar",
+      "calendars" => [%{"name" => "Risi", "account_type" => "risime", "events" => 0}],
+      "read_ok" => true,
+      "reason" => nil
+    }
+
+    out = H.enforce(@clear, [ok([], [phone([], false, "no_permission"), risi])], @tz)
+
+    assert out ==
+             @clear <>
+               "\n\nI checked: Risi Calendar — Risi (Risime) 0 events (Mon 12 Oct, 14:00–15:00)." <>
+               " Not checked: Phone calendar (calendar permission is off)."
   end
 
   test "answer sources name what was read" do

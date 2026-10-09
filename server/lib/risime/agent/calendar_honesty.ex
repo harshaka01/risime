@@ -10,10 +10,13 @@ defmodule RisiMe.Agent.CalendarHonesty do
     or timed-out check, and `read_ok: false` are never trustworthy.
   * The answer may say "clear" / "free" / "nothing on" only after a trustworthy read whose
     busy blocks don't contradict it. Otherwise it is rewritten from the tool result:
-    "I couldn't read your Google Calendar on this phone (<reason>). Connect it in Settings →
+    "I couldn't read your calendar on this phone (<reason>). Connect it in Settings →
     Risi skills → Calendar."
   * Every answer after a check names what was checked: "I checked: Phone calendar — Work
     (Google) 0 events (Mon 12 Oct, 14:00–15:00)."
+
+  Source-agnostic: a check is a list of sources (`phone_provider` today, `google_api` and a
+  server-side `risi_calendar` later); any source with `read_ok` and a calendar is a read.
 
   The prompt says the same, but this module is what enforces it.
   """
@@ -30,13 +33,19 @@ defmodule RisiMe.Agent.CalendarHonesty do
   def check(status, result, reason), do: %{status: status, result: result, reason: reason}
 
   @doc "The final answer after the post-check (`checks` in the order they ran)."
-  def enforce(answer, checks, tz) when is_binary(answer) do
+  def enforce(answer, checks, tz), do: elem(enforce_made(answer, checks, tz), 0)
+
+  @doc """
+  `{answer, rule_made?}`: `rule_made?` when the model's text was discarded (the answer is then
+  built by the server, `made_by` rule, v1.29 §29.3).
+  """
+  def enforce_made(answer, checks, tz) when is_binary(answer) do
     cond do
       checks == [] and claims_calendar_free?(answer) ->
-        cant_read("I didn't check it for this answer")
+        {cant_read("I didn't check it for this answer"), true}
 
       checks == [] ->
-        answer
+        {answer, false}
 
       true ->
         last = List.last(checks)
@@ -44,27 +53,51 @@ defmodule RisiMe.Agent.CalendarHonesty do
         case trusted(last) do
           {:ok, sources} ->
             busy = busy_blocks(last.result)
+            rewrite? = claims_free?(answer) and busy != []
+            body = if rewrite?, do: busy_text(busy, tz), else: answer
+            line = checked_line(sources, last.result, tz) <> not_checked(last.result)
+            {add_line(body, line), rewrite?}
 
-            body =
-              if claims_free?(answer) and busy != [],
-                do: busy_text(busy, tz),
-                else: answer
+          # A v1 phone with blocks: something was read, but not which calendars.
+          {:v1, _} ->
+            if claims_free?(answer),
+              do: {cant_read(elem(trusted_v1_reason(), 1)), true},
+              else:
+                {add_line(
+                   answer,
+                   "Checked: your phone's calendar (update RisiMe to see which calendars)."
+                 ), false}
 
-            add_line(body, checked_line(sources, last.result, tz))
-
+          # v1.29 §29.3 rule 1: no read, the model's text is discarded.
           {:error, reason} ->
-            line = cant_read(reason)
-
-            cond do
-              claims_free?(answer) -> line
-              String.contains?(answer, "couldn't read your Google Calendar") -> answer
-              true -> add_line(answer, line)
-            end
+            {cant_read(reason), true}
         end
     end
   end
 
-  def enforce(answer, _checks, _tz), do: answer
+  def enforce_made(answer, _checks, _tz), do: {answer, false}
+
+  defp trusted_v1_reason,
+    do: {:error, "this version of the app doesn't say which calendars it read; update RisiMe"}
+
+  defp not_checked(%{"sources" => sources}) when is_list(sources) do
+    # An optional source that was never connected isn't news ("not_connected").
+    case for(s <- sources, s["read_ok"] != true, s["reason"] != "not_connected", do: s) do
+      [] ->
+        ""
+
+      miss ->
+        " Not checked: " <>
+          Enum.map_join(
+            miss,
+            ", ",
+            &"#{source_label(&1["source"])} (#{reason_text(&1["reason"])})"
+          ) <>
+          "."
+    end
+  end
+
+  defp not_checked(_), do: ""
 
   @doc "`{:ok, read sources}` for a trustworthy read, else `{:error, why}` (in words)."
   def trusted(%{status: "ok", result: %{"sources" => sources}}) when is_list(sources) do
@@ -83,8 +116,8 @@ defmodule RisiMe.Agent.CalendarHonesty do
     end
   end
 
-  def trusted(%{status: "ok"}),
-    do: {:error, "this version of the app doesn't say which calendars it read; update RisiMe"}
+  def trusted(%{status: "ok", result: %{"blocks" => [_ | _]}}), do: {:v1, :blocks}
+  def trusted(%{status: "ok"}), do: trusted_v1_reason()
 
   def trusted(%{status: "no_permission"}), do: {:error, "calendar permission is off"}
 
@@ -108,7 +141,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
     do: "your Google calendars are hidden on this phone"
 
   def reason_text("query_failed"), do: "the phone's calendar couldn't be read"
-  def reason_text("not_connected"), do: "it isn't connected yet"
+  def reason_text("not_connected"), do: "not connected yet"
   def reason_text("reauth_needed"), do: "you need to sign in to Google again"
   def reason_text("no_play_services"), do: "Google Play services aren't available"
   def reason_text("network"), do: "there was no network"
@@ -130,7 +163,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
   @doc "The sentence for an untrustworthy read."
   def cant_read(reason),
-    do: "I couldn't read your Google Calendar on this phone (#{reason}). #{@connect}"
+    do: "I couldn't read your calendar on this phone (#{reason}). #{@connect}"
 
   @doc "\"I checked: Phone calendar — Work (Google) 0 events (Mon 12 Oct, 14:00–15:00).\""
   def checked_line(sources, result, tz) do
@@ -153,6 +186,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
   end
 
   def source_label("google_api"), do: "Google Calendar"
+  def source_label("risi_calendar"), do: "Risi Calendar"
   def source_label(_), do: "Phone calendar"
 
   @doc """

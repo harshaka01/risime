@@ -253,7 +253,7 @@ defmodule RisiMe.Agent.ToolCalls do
 
   defp ts?(v), do: is_binary(v) and v =~ @ts
 
-  @calendar_sources ~w(phone_provider google_api)
+  @calendar_sources ~w(phone_provider google_api risi_calendar)
   @source_reasons [nil] ++
                     ~w(not_connected no_permission reauth_needed no_play_services network
                        timeout api_error no_calendars)
