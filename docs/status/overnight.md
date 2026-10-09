@@ -504,6 +504,15 @@ were needed after nightly.11.
   `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
 - **Agents:** none running.
 - **Needs Harsha:**
+L. **Follow-ups and call transcription (§27 on branch `contract/v127`, decision 070); defaults are
+   chosen, nothing blocks:**
+   1. **"Risi listens for follow-ups"** is ON by default when starting an Official call (anyone in
+      the call can tap Stop, and everyone sees "Risi is listening" from the start). Keep it on?
+   2. **The consent explainer and banner wording.** Does any customer need a spoken notice?
+   3. **Quiet rule:** summarise after 10 min of quiet, with at least 6 messages from at least
+      2 people since the last summary, at most every 30 min and 8 times a day. OK?
+   4. **Whisper's Sinhala and Tamil transcription quality is limited.** Expect weaker summaries of
+      calls in those languages.
 S. **Risi skills (§26, decision 069), open questions:**
    1. Should pending scheduled messages be included in backups? Default: no; they stay on the phone.
    2. Do you also want "Schedule send" in the normal composer, without Risi? It needs no wire change.
