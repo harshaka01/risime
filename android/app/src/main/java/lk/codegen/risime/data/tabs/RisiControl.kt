@@ -126,6 +126,9 @@ object RisiControl {
     fun askText(json: String?): String? =
         parse(json)?.takeIf { str(it, "type") == TYPE_REQUEST && str(it, "action") == "ask" }?.let { str(it, "text") }
 
+    /** The `request_id` of a stored `risi_request` row, or null. */
+    fun requestIdOf(json: String?): String? = parse(json)?.takeIf { str(it, "type") == TYPE_REQUEST }?.let { str(it, "request_id") }
+
     /** The action of a stored `risi_action` row, or null. */
     fun actionOf(json: String?): String? = parse(json)?.takeIf { str(it, "type") == TYPE_ACTION }?.let { str(it, "action") }
 

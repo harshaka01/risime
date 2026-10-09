@@ -116,6 +116,8 @@ fun GroupChatScreen(
     tabBar: (@Composable () -> Unit)? = null,
     /** §24.1: a 1:1 Official has no name: the peer's name is shown. */
     titleOverride: String? = null,
+    /** A 1:1 Official's subtitle instead of the member count. */
+    subtitleOverride: String? = null,
     /** §24.4: Official turned off: its history is read-only (the composer is replaced by this line). */
     readOnlyReason: String? = null,
     /** §24.9: "Risi is listening" in Official. */
@@ -160,6 +162,13 @@ fun GroupChatScreen(
     val readOnly = group?.readOnly == true || readOnlyReason != null
     val names = members.associate { it.userId.lowercase() to it.displayName }
     var risiChip by rememberSaveable { mutableStateOf(false) }
+    // Follow-ups: my next message within 3 min of Risi's answer to me continues with Risi (chip, × to opt out).
+    val followUpNow by androidx.compose.runtime.produceState(System.currentTimeMillis()) {
+        while (true) { kotlinx.coroutines.delay(10_000); value = System.currentTimeMillis() }
+    }
+    val followUp = if (risi == null || risiChat) null else remember(messages, followUpNow) { lk.codegen.risime.data.tabs.RisiFollowUp.active(messages, meId, followUpNow) }
+    var followUpDismissed by rememberSaveable { mutableStateOf<String?>(null) }
+    val continuing = followUp != null && followUp != followUpDismissed
     val risiScope = rememberCoroutineScope()
     val risiCtx = if (risi == null) null else lk.codegen.risime.ui.tabs.risiCardContext(
         risi, messages, vm::nameOf, System.currentTimeMillis(),
@@ -175,7 +184,7 @@ fun GroupChatScreen(
                 title = name,
                 subtitle = typingLabel ?: connectionLabel(conn) ?: buildString {
                     if (encrypted == true) append("🔒 ")
-                    append(if (risiChat) "Risi" else if (count == 1) "1 member" else "$count members")
+                    append(subtitleOverride ?: if (risiChat) "Risi" else if (count == 1) "1 member" else "$count members")
                 },
                 emphasis = typingLabel != null,
                 onBack = onBack,
@@ -266,17 +275,20 @@ fun GroupChatScreen(
                             pickPhoto()
                         }
                     }),
-                    placeholder = if (risiChat || (risi != null && risiChip)) lk.codegen.risime.ui.tabs.RISI_ASK_PLACEHOLDER else composerHint ?: if (encrypted == true) "Encrypted message" else "Message",
+                    placeholder = if (risiChat || continuing || (risi != null && risiChip)) lk.codegen.risime.ui.tabs.RISI_ASK_PLACEHOLDER else composerHint ?: if (encrypted == true) "Encrypted message" else "Message",
                     value = draft,
                     onValue = { draft = it; vm.onDraftChanged(it.text) },
                     onSend = {
                         if (draft.text.isNotBlank()) {
                             // §24.11: with the @Risi chip the message is a structured `risi_request`; else an ordinary message.
-                            if (lk.codegen.risime.ui.tabs.sendFromComposer(risi, risiChip, draft.text, vm::send, risiChat)) risiChip = false
+                            if (lk.codegen.risime.ui.tabs.sendFromComposer(risi, risiChip || continuing, draft.text, vm::send, risiChat)) risiChip = false
                             draft = TextFieldValue("")
                         }
                     },
-                    topSlot = if (risi != null && !risiChat) ({ lk.codegen.risime.ui.tabs.RisiChipRow(risiChip) { risiChip = it } }) else null,
+                    topSlot = if (risi != null && !risiChat) ({
+                        if (continuing) lk.codegen.risime.ui.tabs.RisiFollowUpChip { followUpDismissed = followUp }
+                        else lk.codegen.risime.ui.tabs.RisiChipRow(risiChip) { risiChip = it }
+                    }) else null,
                 )
             }
             reactionsFor?.let { target -> ReactionsSheet(reactions[target].orEmpty(), vm::nameOf) { reactionsFor = null } }

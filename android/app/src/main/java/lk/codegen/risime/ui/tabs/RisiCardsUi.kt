@@ -193,11 +193,19 @@ private fun DigestCard(r: RisiMeta, ctx: RisiCardContext) {
 private fun AnswerCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         Text(r.answer ?: row.body, style = MaterialTheme.typography.bodyLarge)
-        if (r.refs.isNotEmpty()) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                r.refs.forEachIndexed { i, ref ->
-                    SuggestionChip(onClick = { ctx.onRef(ref) }, label = { Text("Message ${i + 1}") }, modifier = Modifier.testTag("risi_ref_$i"))
-                }
+        // Sources: a tappable quote of each message (sender + first words) that scrolls to it; nothing for one not on this phone.
+        ctx.quotes(r).forEachIndexed { i, q ->
+            Surface(
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth().clickable { ctx.onRef(q.messageId) }.testTag("risi_ref_$i"),
+            ) {
+                Text(
+                    "${q.sender}: “${q.excerpt}”",
+                    Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                )
             }
         }
     }

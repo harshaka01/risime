@@ -24,6 +24,9 @@ object RisiKinds {
     const val DRAFT = "draft"
 }
 
+/** One answer source shown as a quote of the message (tapping scrolls to it). */
+data class SourceQuote(val messageId: String, val sender: String, val excerpt: String)
+
 /** A commitment's current state after the `commitment_update`s that followed its card. */
 data class CommitmentView(
     val state: String,
@@ -124,6 +127,28 @@ object RisiCards {
         "queue_overflow" -> "Risi has too many of your requests waiting. Try again in a few minutes."
         "tool_timeout" -> "I couldn't reach your phone to add it."
         else -> "Risi couldn't do that."
+    }
+
+    /** Words of a source quote ("Kamal: “we agreed the budget is 2 million…”"). */
+    const val QUOTE_WORDS = 8
+
+    /**
+     * An answer's sources as quotes of the actual messages (sender and first [QUOTE_WORDS] words), in
+     * order: `refs`, then v1.25 `sources` of type `message`. A message not on this phone (or deleted,
+     * or not text) shows nothing — never a "Message 1" placeholder.
+     */
+    fun sourceQuotes(r: RisiMeta, messages: List<MessageEntity>, nameOf: (String) -> String): List<SourceQuote> {
+        val ids = (r.refs + r.sources.filter { it.type == "message" }.mapNotNull { it.messageId }).distinctBy { it.lowercase() }
+        if (ids.isEmpty()) return emptyList()
+        val byId = messages.filter { it.messageId != null }.associateBy { it.messageId!!.lowercase() }
+        return ids.mapNotNull { id ->
+            val m = byId[id.lowercase()] ?: return@mapNotNull null
+            if (m.kind != MessageEntity.KIND_TEXT || m.showsAsDeleted || RisiMessages.meta(m) != null) return@mapNotNull null
+            val words = m.body.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+            if (words.isEmpty()) return@mapNotNull null
+            val excerpt = words.take(QUOTE_WORDS).joinToString(" ") + if (words.size > QUOTE_WORDS) "…" else ""
+            SourceQuote(m.messageId!!, if (m.outgoing) "You" else nameOf(m.from), excerpt)
+        }
     }
 
     /** Where a rendered message's card goes: a `risi` row in the list of messages, by server message id. */

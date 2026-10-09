@@ -298,9 +298,12 @@ private fun MainNav(c: AppContainer, meId: String) {
                         // Chat info is the chat's (the Private group's); a 1:1 Official has no member management (§24.1 dm_chat).
                         onInfo = if (dmChat) chatInfo else groupInfo,
                         lock = lockControl, tabBar = tabBar,
-                        titleOverride = peerName,
+                        // A 1:1 Official: "Kumu · Risi", never "3 members" (its members are the two of you and Risi).
+                        titleOverride = peerName?.let { lk.codegen.risime.ui.tabs.officialDmTitle(it) },
+                        subtitleOverride = if (dmChat) lk.codegen.risime.ui.tabs.OFFICIAL_DM_SUBTITLE else null,
                         readOnlyReason = if (readOnly) lk.codegen.risime.ui.tabs.OFFICIAL_HISTORY_LABEL else null,
-                        composerHint = lk.codegen.risime.ui.tabs.RISI_LISTENING,
+                        // The composer says "Message"; "Risi is listening" stays in the strip under the tabs.
+                        composerHint = lk.codegen.risime.ui.tabs.OFFICIAL_COMPOSER_HINT,
                     )
                 },
             )

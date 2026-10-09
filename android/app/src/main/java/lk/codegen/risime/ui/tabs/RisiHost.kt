@@ -42,8 +42,11 @@ class RisiCardContext(
     val knownNames: List<String> = emptyList(),
     /** Official is off (history only): no buttons. */
     val readOnly: Boolean = false,
+    /** An answer's sources as quotes of messages on this phone (none found: nothing shown). */
+    val quotes: (lk.codegen.risime.net.RisiMeta) -> List<lk.codegen.risime.data.tabs.SourceQuote> = { emptyList() },
 )
 
 /** Builds a [RisiCardContext] for the rows on screen. */
 fun risiCardContext(host: RisiHost, messages: List<MessageEntity>, nameOf: (String) -> String, nowMs: Long, onRef: (String) -> Unit, knownNames: List<String> = emptyList(), readOnly: Boolean = false) =
-    RisiCardContext(host, nameOf, RisiCards.states(messages), RisiCards.awaiting(messages, host.me, nowMs), nowMs, onRef, knownNames, readOnly)
+    RisiCardContext(host, nameOf, RisiCards.states(messages), RisiCards.awaiting(messages, host.me, nowMs), nowMs, onRef, knownNames, readOnly,
+        quotes = { r -> RisiCards.sourceQuotes(r, messages, nameOf) })
