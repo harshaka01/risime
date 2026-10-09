@@ -235,6 +235,22 @@ defmodule RisiMe.Agent.Commitments do
     end
   end
 
+  @doc """
+  v1.27 §27.3 owner fallback: a summary item of an owner without a `risi_ledger` device (its row
+  already stored, `item_state` nil) gets the v1.24 card in Official and the v1.24 rules. Over
+  the 10-a-day card limit the row is deleted. True when the card went out and the row is kept.
+  """
+  def legacy_card(conv, %Commitment{} = row, call_ref) do
+    if RateLimiter.hit_if_allowed(:risi_cards, conv, @cards_per_day, :timer.hours(24)) == :ok do
+      post_proposal(conv, row, call_ref, Secretary.members(conv))
+      Repo.get(Commitment, row.id) != nil
+    else
+      Logger.info("Risi card limit reached in #{conv}")
+      Repo.delete!(row)
+      false
+    end
+  end
+
   defp post_proposal(conv, row, call_ref, members) do
     names = Map.new(members, &{&1.user_id, &1.name})
 

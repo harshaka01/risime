@@ -18,15 +18,17 @@ defmodule RisiMe.Agent.LedgerS21Test do
   # The buffer is partitioned by the real UTC day (yesterday and today are read), so the
   # discussion is placed in the last hours of real time and Risi's clock is set from there.
   setup do
+    ledger_on!()
     t0 = DateTime.utc_now() |> DateTime.add(-5 * 3600) |> DateTime.truncate(:second)
     t0 = %{t0 | microsecond: {0, 6}}
     clock!(t0)
 
-    ledger_on!()
     harsha = RisiMe.GroupHelpers.fast_user!("Harsha")
     shenika = RisiMe.GroupHelpers.fast_user!("Shenika")
     kamal = RisiMe.GroupHelpers.fast_user!("Kamal")
     for u <- [harsha, shenika, kamal], do: tz!(u, "Asia/Colombo")
+    RisiMe.MLSHelpers.with_attestation_key(%{})
+    ledger_devices!([harsha, shenika, kamal])
     og = risi_chat!([harsha, shenika, kamal])
     %{harsha: harsha, shenika: shenika, kamal: kamal, og: og, t0: t0}
   end

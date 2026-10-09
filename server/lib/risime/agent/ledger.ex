@@ -458,11 +458,15 @@ defmodule RisiMe.Agent.Ledger do
   ## Publishing (§27.3–§27.4)
 
   @doc """
-  Publishes a stored discussion and its items. Each proposed item expires 48 h after the
-  summary (`item_expire`). Oban result.
+  Publishes a stored discussion and its items (`RisiMe.Agent.LedgerOut.publish/2`: the
+  per-person copies, the owner fallback, the short card). Each proposed ledger item expires 48 h
+  after the summary (`item_expire`). Oban result.
   """
   def publish(%Discussion{} = d, rows) do
-    for r <- rows, do: expire_timer(d.conversation_id, r.id)
+    for r <- RisiMe.Agent.LedgerOut.publish(d, rows),
+        Commitment.ledger?(r),
+        do: expire_timer(d.conversation_id, r.id)
+
     :ok
   end
 
@@ -484,6 +488,7 @@ defmodule RisiMe.Agent.Ledger do
   @doc "Deletes the conversation's discussions (§24.4 Official off, with its other Risi data)."
   def forget(conv) do
     Repo.delete_all(from d in Discussion, where: d.conversation_id == ^conv)
+    RisiMe.Agent.LedgerOut.forget(conv)
     :ok
   end
 end

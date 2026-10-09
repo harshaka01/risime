@@ -14,6 +14,18 @@ defmodule RisiMe.LedgerHelpers do
     :ok
   end
 
+  @doc """
+  A `risi_ledger` device (tabs + risi_tools + risi_ledger) for each user (needs
+  `RisiMe.MLSHelpers.with_attestation_key/1` in the test's setup).
+  """
+  def ledger_devices!(users) do
+    for u <- users,
+        do:
+          RisiMe.TabsHelpers.tabs_device!(u,
+            caps: ~w(groups member_devices tabs risi_tools risi_ledger)
+          )
+  end
+
   @doc "Sets Risi's clock (`RisiMe.Agent.Clock.now/0`)."
   def clock!(%DateTime{} = at), do: Application.put_env(:risime, :risi_now, at)
 

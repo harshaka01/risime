@@ -40,7 +40,18 @@ defmodule RisiMe.Workers.Risi do
     RisiMe.Agent.ToolCalls.prune()
     RisiMe.Agent.Skills.prune()
     RisiMe.Agent.Reminders.prune()
+    # v1.27 §27.3: held copies (expired ones go; ready ones are posted).
+    if Out.ready?(), do: RisiMe.Agent.LedgerOut.prune()
     :ok
+  end
+
+  # v1.27 §27.3: a Risi chat became active; its owner's held copies are posted.
+  def perform(%Oban.Job{args: %{"kind" => "pending_copies", "user_id" => user}}) do
+    cond do
+      not RisiMe.Risi.enabled?() -> {:cancel, :risi_off}
+      not Out.ready?() -> {:snooze, 60}
+      true -> RisiMe.Agent.LedgerOut.deliver_pending(user)
+    end
   end
 
   # v1.26 §26.4: a client undo whose phone didn't answer in 15 s.
