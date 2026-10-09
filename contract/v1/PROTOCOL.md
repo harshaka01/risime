@@ -5205,9 +5205,18 @@ screen is visible, else to `off`.
 - **Notifications while sharing:** RisiMe's own message notifications are posted without sender or
   content ("New message"), silently, until the share stops. Android 15+ hides other apps' sensitive
   notifications during a projection itself; on older versions the warning above applies.
-- **RisiMe's own windows are `FLAG_SECURE` while sharing** (chats and the call screen show black to
-  viewers: no mirror loop, other chats never leak). Other apps' `FLAG_SECURE` windows (banking,
-  passwords) appear black: the platform does it.
+- **RisiMe stays visible in a whole-screen share, as on WhatsApp** (amended 2026-10-09, Harsha's
+  real-phone check; it was "own windows `FLAG_SECURE` while sharing", which made an "Entire screen"
+  share black wherever RisiMe was showing):
+  - Normal RisiMe screens and the call screen are **never** `FLAG_SECURE`, during a share or not.
+  - Only the app-lock screen, the Locked chats folder and a locked chat while open (its Chat info
+    included) are `FLAG_SECURE`, always.
+  - Before every share, a dialog says "Your whole screen, including notifications, will be
+    visible" with [Start] [Cancel].
+  - Other apps' `FLAG_SECURE` windows (banking, passwords) appear black: the platform does it.
+- **Viewer:** a shared screen is shown aspect-fit at the sender's orientation and aspect ratio
+  (letterboxed, never cropped), with optional pinch-zoom. A still shared screen is never treated as
+  frozen video.
 - **Foreground service:** the call service is started or upgraded to
   `phoneCall|microphone|mediaProjection` **before** `getMediaProjection` (Android 14 rule);
   `FOREGROUND_SERVICE_MEDIA_PROJECTION` is declared. Sharing continues while RisiMe is in the
@@ -5377,7 +5386,7 @@ appear in the group's info screen the same way.
   `a=setup` role, changed ICE credentials, mid order; rollback on failure keeps audio; the callee
   restart conflict; the second (e) check); binding with `renegotiate`; `call_media` `video` and its
   consistency with `camera`; the rendering rule in voice mode; the source swap via `setTrack`; the
-  screen-share privacy rules (consent each time, `FLAG_SECURE` on own windows while sharing, own
+  screen-share privacy rules (consent each time, a pre-share warning, `FLAG_SECURE` only on lock screens, own
   notifications without content, stop on `SCREEN_OFF`/`onStop`/`voice`/call end); Telecom routing on
   a switch; the `call_end`/`group_call` `media` rule and history lines; the local stats columns;
   group: `upgrade` flow and errors, the group `call_switch`/`call_media` (incl. the re-send for a

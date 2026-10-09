@@ -44,3 +44,16 @@ video rooms. Old apps (v1.13–v1.22) must keep working.
   MediaProjection service wiring.
 - `scripts/call-device-test` grows 1:1 and group switch/share phases with audio checked in every
   phase.
+
+
+## Amendment (2026-10-09, Harsha's real-phone check)
+- **The rule changed:** RisiMe's own windows are no longer `FLAG_SECURE` while sharing. An "Entire
+  screen" share showed RisiMe black.
+- **Now, as on WhatsApp:**
+  - only the app-lock screen, the Locked chats folder and an open locked chat are `FLAG_SECURE`,
+    always;
+  - a pre-share dialog warns that the whole screen, notifications included, will be visible;
+  - notifications stay silent and content-free while sharing;
+  - viewers see the shared screen aspect-fit, never cropped.
+- **Code:** android `75991bf`, `1977973`. **Contract:** §23.5. **Proposal:**
+  `contract/proposals/2026-10-09-screen-share-flag-secure.md`.
