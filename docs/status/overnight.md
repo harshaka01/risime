@@ -47,6 +47,22 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.41 (live 2026-10-09 ~03:00 UTC, not required): Lock chat everywhere, tab row, encryption label, Risi queue
+- **What's in:**
+  - Lock chat in Chat info, long-press ⋮ and the chat ⋮;
+  - Chat lock settings (Hide locked chats, Secret code);
+  - the tab row restored after a cold start, with Start Official in the row;
+  - the Chat info encryption check that is never stuck;
+  - Risi requests queued at 20/min (no "Too many requests" on the 2nd question).
+- **Gate:** all PASS, including the new **ui-entry-test** (user-style taps; screenshots in
+  docs/status/screens/), the boot check, the Risi canary, the push test and the upgrade test.
+- **On main for n42:**
+  - the server Risi hotfix (system prompt now/coming, no "Message 1", limiter/upstream logs, backoff
+    and fallback);
+  - §25 S9–S12 (`RISI_TOOLS` off on the pilot);
+  - crypto C4;
+  - the app's A7/A8 and hotfix items 3–6 are in progress.
+
 ## Risi queue (set 2026-10-09)
 1. **Risi hotfix** (n42), from Harsha's real-phone screens:
    - our limiter → the queue (in n41) plus limiter and upstream logging, backoff and fallback;
