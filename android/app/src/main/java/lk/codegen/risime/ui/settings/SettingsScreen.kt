@@ -46,7 +46,7 @@ import lk.codegen.risime.ui.theme.Sizes
 import lk.codegen.risime.ui.theme.Spacing
 
 @Composable
-fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> Unit = {}, onNotificationHealth: () -> Unit = {}, onRisiKnows: () -> Unit = {}, onMyPromises: () -> Unit = {}) {
+fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> Unit = {}, onNotificationHealth: () -> Unit = {}, onRisiKnows: () -> Unit = {}, onMyPromises: () -> Unit = {}, onRisiSkills: () -> Unit = {}) {
     val s by vm.state.collectAsStateWithLifecycle()
     Scaffold(
         topBar = { RisiTopBar(title = "Settings", onBack = onBack) },
@@ -94,6 +94,10 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
                 if (tabsOn) {
                     OutlinedButton(onClick = onRisiKnows, modifier = Modifier.fillMaxWidth().testTag("settings_risi_knows")) { Text(RISI_KNOWS_TITLE) }
                     OutlinedButton(onClick = onMyPromises, modifier = Modifier.fillMaxWidth().testTag("settings_my_promises")) { Text(MY_PROMISES_TITLE) }
+                    // §26.9: Settings → Risi skills only while the server switch is on and this phone advertises risi_skills.
+                    val skillsOn = container?.risiSkills?.on?.collectAsStateWithLifecycle()?.value == true &&
+                        container.risiTools.on.collectAsStateWithLifecycle().value
+                    if (skillsOn) OutlinedButton(onClick = onRisiSkills, modifier = Modifier.fillMaxWidth().testTag("settings_risi_skills")) { Text(RISI_SKILLS_TITLE) }
                 }
                 HorizontalDivider()
             }

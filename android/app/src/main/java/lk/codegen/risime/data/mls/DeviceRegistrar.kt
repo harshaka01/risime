@@ -57,6 +57,8 @@ class DeviceRegistrar(
     private val tabsSupported: () -> Boolean = { false },
     /** §25.8: `/auth/config` says `risi_tools: on` and the app handles tool calls, progress, the Risi chat and the v1.25 kinds. */
     private val risiToolsSupported: () -> Boolean = { false },
+    /** §26.9: `/auth/config` says `risi_skills: on` (advertised only together with `risi_tools`). */
+    private val risiSkillsSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
 ) {
@@ -90,6 +92,8 @@ class DeviceRegistrar(
             DeviceMls.CAP_TABS.takeIf { mls.tabsSupported && tabsSupported() },
             // v1.25 §25.8: only together with `tabs`, while the server switch is on and the core does Risi chats.
             DeviceMls.CAP_RISI_TOOLS.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() },
+            // v1.26 §26.9: only with `risi_tools`, while the server switch is on.
+            DeviceMls.CAP_RISI_SKILLS.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiSkillsSupported() },
         )
         else -> null
     }

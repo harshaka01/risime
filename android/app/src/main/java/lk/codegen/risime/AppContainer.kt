@@ -214,6 +214,44 @@ class AppContainer(
     /** §25.4/§26.5 a draft's [Use] and "Open Risi skills" from a card. */
     val risiUi = lk.codegen.risime.data.tabs.RisiUiBus()
 
+    // ---- §26 (v1.26) Risi skills ----
+
+    /** §26.9 the `risi_skills` server switch (kept across restarts) and this device's advertisement. */
+    val risiSkills = lk.codegen.risime.data.tabs.RisiToolsSwitch(
+        persistedServerOn = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getBoolean("risi_skills_on", false),
+        persistServerOn = { on -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putBoolean("risi_skills_on", on).apply() },
+        log = { Log.i("RisiMe", it.replace("risi_tools", "risi_skills")) },
+    )
+
+    /** Skills on this device: the server switch, the advertisement, and `risi_tools`. */
+    fun risiSkillsOn(): Boolean = risiSkills.on.value && risiTools.on.value
+
+    /** §26.2 the skills, this user's state and the phone's own record of it (the allowed path trusts only that). */
+    val risiSkillsStore: lk.codegen.risime.data.tabs.RisiSkillsStore by lazy {
+        val p = context.getSharedPreferences("risime_skills", Context.MODE_PRIVATE)
+        lk.codegen.risime.data.tabs.RisiSkillsStore(
+            get = { api.risiSkills() },
+            patch = { api.patchRisiSkills(it) },
+            loadStates = { lk.codegen.risime.data.tabs.RisiSkillsStore.decodeStates(p.getString("states", null)) },
+            saveStates = { m -> p.edit().putString("states", lk.codegen.risime.data.tabs.RisiSkillsStore.encodeStates(m)).apply() },
+            cancelLocal = { id -> cancelLocalSkillItems(id) },
+            log = { Log.i("RisiMe", it) },
+        )
+    }
+
+    /** What Android says about each skill's permissions (no prompt: background reporting). */
+    val backgroundSkillPermissions by lazy { lk.codegen.risime.data.tabs.AndroidSkillPermissions(appContext, { null }, { null }) }
+
+    /** The Settings screen's permissions: the prompt goes through its launchers. */
+    fun skillPermissions(asker: lk.codegen.risime.ui.settings.ScreenPermissionAsker): lk.codegen.risime.data.tabs.SkillPermissions =
+        lk.codegen.risime.data.tabs.AndroidSkillPermissions(appContext, { asker.runtime }, { asker.exactAlarm })
+
+    /** "Also cancel N pending": this phone's own pending items of a skill (null: none kept on the phone). */
+    suspend fun pendingSkillItems(skillId: String): Int? = null
+
+    /** §26.5 revoke with "Also cancel N pending": the phone cancels its own items. */
+    suspend fun cancelLocalSkillItems(skillId: String) {}
+
     /** §25.3 client tools: answered over TLS, never stored (A7: every known tool is declined until the executor lands). */
     val risiToolCalls = lk.codegen.risime.data.tabs.RisiToolCallHandler(
         deviceId = { runCatching { sessionStore.deviceId() }.getOrNull() },
@@ -278,7 +316,9 @@ class AppContainer(
         chatTabs.setServerOn(cfg.tabsOn)
         val risiBefore = risiTools.serverOn.value
         risiTools.setServerOn(cfg.risiToolsOn)
-        if (before != cfg.tabsOn || risiBefore != cfg.risiToolsOn) refreshCapabilities()
+        val skillsBefore = risiSkills.serverOn.value
+        risiSkills.setServerOn(cfg.risiSkillsOn)
+        if (before != cfg.tabsOn || risiBefore != cfg.risiToolsOn || skillsBefore != cfg.risiSkillsOn) refreshCapabilities()
     }
 
     /** §25.2 the Risi chat's first open (only on a `risi_tools` device). */
@@ -714,18 +754,24 @@ class AppContainer(
             },
             tabsSupported = { chatTabs.serverOn.value },
             risiToolsSupported = { risiTools.serverOn.value },
+            risiSkillsSupported = { risiSkills.serverOn.value },
             onAdvertised = { caps ->
                 val tabs = lk.codegen.risime.net.DeviceMls.CAP_TABS in caps
                 chatTabs.setAdvertised(tabs)
                 val risi = lk.codegen.risime.net.DeviceMls.CAP_RISI_TOOLS in caps
                 risiTools.setAdvertised(risi)
                 if (!risi) risiProgress.clear()
+                val skills = lk.codegen.risime.net.DeviceMls.CAP_RISI_SKILLS in caps
+                risiSkills.setAdvertised(skills)
+                // §26.2: report the Android permission state on start (and the phone's record of each skill).
+                if (skills) scope.launch { runCatching { risiSkillsStore.refresh(backgroundSkillPermissions) } }
                 // Remembered per device id: the next process start shows the tab bar at once (ChatTabs.restoreAdvertised).
                 scope.launch {
                     val id = runCatching { sessionStore.deviceId() }.getOrNull()
                     appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit()
                         .putString("advertised_tabs_device", if (tabs) id else null)
-                        .putString("advertised_risi_tools_device", if (risi) id else null).apply()
+                        .putString("advertised_risi_tools_device", if (risi) id else null)
+                        .putString("advertised_risi_skills_device", if (skills) id else null).apply()
                 }
             },
         )
@@ -874,6 +920,8 @@ class AppContainer(
             if (id != null && saved.equals(id, true) && sessionStore.current() != null) chatTabs.restoreAdvertised(true)
             val risi = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_risi_tools_device", null)
             if (id != null && risi != null && risi.equals(id, true) && sessionStore.current() != null) risiTools.restoreAdvertised(true)
+            val skills = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_risi_skills_device", null)
+            if (id != null && skills != null && skills.equals(id, true) && sessionStore.current() != null) risiSkills.restoreAdvertised(true)
         }
         if (BuildConfig.DEBUG) registerDebugOidcSignIn(context)
         if (BuildConfig.DEBUG) registerDebugLockChat(context)

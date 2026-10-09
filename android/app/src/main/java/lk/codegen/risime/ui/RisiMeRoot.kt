@@ -423,6 +423,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                 onNotificationHealth = { nav.navigate("notif_health") { launchSingleTop = true } },
                 onRisiKnows = { nav.navigate("risi_facts") { launchSingleTop = true } },
                 onMyPromises = { nav.navigate("risi_promises") { launchSingleTop = true } },
+                onRisiSkills = { nav.navigate(RISI_SKILLS_ROUTE) { launchSingleTop = true } },
             )
         }
         composable("$RISI_SKILLS_ROUTE?skill={skill}", arguments = listOf(androidx.navigation.navArgument("skill") { nullable = true; defaultValue = null })) { entry ->
