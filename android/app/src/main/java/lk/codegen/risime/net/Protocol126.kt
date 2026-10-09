@@ -76,7 +76,12 @@ data class RisiSkillsReply(val skills: List<RisiSkill>)
 @Serializable
 data class RisiSkillChange(
     val id: String,
+    /** Optional on the wire: omitted (never `null`) when absent (§26.2). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     val state: String? = null,
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     @SerialName("client_permission") val clientPermission: String? = null,
 )
 

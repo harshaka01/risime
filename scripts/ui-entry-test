@@ -4,9 +4,11 @@
 # arm64 Android 14, decision 045) against a temp server with TABS=on (RISI off: the tab row, "Start
 # Official" and "What Risi knows about me" must work either way). Navigates like a user: taps and
 # long-presses by visible text / content description from `uiautomator dump`, no debug hooks.
-#   timeout 1800 scripts/ui-entry-test [--apk app-debug.apk] [--keep] [--risi]
+#   timeout 1800 scripts/ui-entry-test [--apk app-debug.apk] [--keep] [--risi] [--skills]
 #   --risi: the server also runs Risi (RISI=on, the MLS NIF built --prod, scripts/fake-llm on
 #   127.0.0.1:$UITEST_LLM_PORT, default 8197; throwaway keys) and step 9 runs.
+#   --skills (implies --risi): RISI_TOOLS=on RISI_SKILLS=on, fake-llm --script (contract/v1/
+#   risi_gate_script.json plus this run's skill scenarios, generated in the work dir) and step 10 runs.
 #
 #  1. A and B sign in through the login UI (dev OTP), become friends, both open the DM; it turns e2ee.
 #  2. A's chat: the "🔒 Private" | "● Official" row under the header; the Official tab's "Start Official".
@@ -25,6 +27,13 @@
 #     "Add friend") and the call-back button; the call info screen (Message / Voice call / Video call, ⋮ → Remove
 #     from call log); long-press → select → Delete → confirm removes the row from Calls but the chat keeps its call
 #     row; ⋮ → Clear call log → confirm → the empty state, the chat still keeps its call rows.
+# 10. (--skills, contract v1.26 §26.10) Settings → Risi skills: turn on Alarm and Scheduled messages
+#     (SCHEDULE_EXACT_ALARM granted with appops first, as Android's "Alarms & reminders" page would);
+#     the Risi chat: "wake me up at 6" → the confirm card with its exact args → Add → a real alarm in
+#     Redroid's Clock (`dumpsys alarm`: DeskClock's next alarm clock) and "skill_done" with Open Clock;
+#     "send ZZ UI B good morning at <in 2 min>" → the card with the text → Add → the clock-icon bubble
+#     in A's DM → sent BY THE PHONE at the time (encrypted, the normal send path) → B sees it; revoke
+#     Alarm → "wake me up at 7" → the skill_needed card with "Open Risi skills".
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -34,8 +43,8 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
 CLS=lk.codegen.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0; RISI=0
-while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK=""; KEEP=0; RISI=0; SKILLS=0
+while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;; --skills) RISI=1; SKILLS=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
 LLM_PORT="${UITEST_LLM_PORT:-8197}"
 APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
 [ -f "$APK" ] || { echo "no APK at $APK (cd android && ./gradlew assembleDebug)"; exit 2; }
@@ -78,6 +87,40 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
+# fake-llm (--risi). With --skills it runs `--script`: this run's skill scenarios first (step 10 sets
+# the scheduled time), then contract/v1/risi_gate_script.json. Restartable on the same port.
+write_script() {  # $1 = the scheduled message's "at" (ISO, UTC), $2 = the DM conversation id
+  python3 -I - "$REPO/contract/v1/risi_gate_script.json" "$WORK/llm-script.json" "${1:-2099-01-01T00:00:00.000Z}" "${2:-dm:none}" <<'PY'
+import json, sys
+base = json.load(open(sys.argv[1], encoding="utf-8"))
+at, conv = sys.argv[3], sys.argv[4]
+final = lambda a: {"tool": "final", "answer": a, "sources": [], "next_steps": []}
+rules = [
+    # Step 9 with RISI_TOOLS on: the ask goes through the tool loop (no v1.24 answer path).
+    {"name": "step9_ask", "task": "risi_next_action", "match": "(?i)what did we agree",
+     "actions": [final("You agreed the budget review on Tuesday.")]},
+    {"name": "skills_alarm_6", "task": "risi_next_action", "match": "(?i)wake me up at 6",
+     "actions": [{"tool": "set_alarm", "args": {"time": "06:00", "label": "Wake up", "days": None}}, final("Tap Add to set the alarm for 06:00.")]},
+    {"name": "skills_alarm_7_revoked", "task": "risi_next_action", "match": "(?i)wake me up at 7",
+     "actions": [{"tool": "need_skill", "args": {"skill_id": "alarm"}}]},
+    {"name": "skills_schedule", "task": "risi_next_action", "match": "(?i)good morning at",
+     "actions": [{"tool": "schedule_message", "args": {"to": "ZZ UI B", "text": "Good morning", "at": at, "repeat": None}},
+                 final("Tap Add to send it from your phone at that time.")]},
+]
+rules += base["rules"] if isinstance(base, dict) else base
+json.dump({"v": 1, "rules": rules}, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
+PY
+}
+start_llm() {
+  tmux kill-session -t "risime-uientry-llm$SUF" 2>/dev/null || true
+  for _ in $(seq 1 20); do ss -ltnH "sport = :$LLM_PORT" | grep -q . || break; sleep 0.5; done
+  local extra=""
+  if [ "$SKILLS" = 1 ]; then [ -f "$WORK/llm-script.json" ] || write_script; extra="--script '$WORK/llm-script.json'"; fi
+  tmux new -d -s "risime-uientry-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT $extra >> '$WORK/fake-llm.out' 2>&1"
+  for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && break; sleep 0.5; done
+  curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" || { echo "fake-llm didn't start"; tail -5 "$WORK/fake-llm.out"; exit 1; }
+}
+
 # ---------------------------------------------------------------- server (TABS=on, RISI off)
 ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT busy"; exit 1; }
 cat > "$WORK/fixtures.exs" <<'EXS'
@@ -101,6 +144,9 @@ case mode do
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
     conv = RisiMe.Messaging.conversation_id(a.id, b.id)
     IO.puts("uientry: e2ee=#{RisiMe.MLS.group(conv) != nil}")
+  "conv" ->
+    a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
+    IO.puts("uientry: conv=#{RisiMe.Messaging.conversation_id(a.id, b.id)}")
 end
 EXS
 fx() { (cd server && $M mix run "$WORK/fixtures.exs" "$@" 2>/dev/null | grep '^uientry:' || true); }
@@ -116,21 +162,24 @@ if [ "$RISI" = 1 ]; then
   MLS_NIF_OUT="$WORK/librisime_mls_nif.so" timeout 1200 scripts/build-mls-nif --prod >/dev/null || { echo "scripts/build-mls-nif --prod failed"; exit 1; }
   umask 077
   { echo "RISI=on"; echo "RISI_MLS_NIF=$WORK/librisime_mls_nif"; echo "RISI_LLM_URL=http://127.0.0.1:$LLM_PORT/v1"; echo "RISI_FALLBACK=off"
-    echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"; echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; } > "$WORK/risi.env"
+    echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"; echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"
+    if [ "$SKILLS" = 1 ]; then echo "RISI_TOOLS=on"; echo "RISI_SKILLS=on"; echo "RISI_MEMORY_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; fi; } > "$WORK/risi.env"
   umask 022
   # Parallel runs (agents, the release gate) must not share the fake model: refuse a busy port.
   ss -ltnH "sport = :$LLM_PORT" | grep -q . && { echo "fake-llm port $LLM_PORT busy (another ui-entry-test?): set UITEST_LLM_PORT"; exit 1; }
-  tmux new -d -s "risime-uientry-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT > '$WORK/fake-llm.out' 2>&1"
-  for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && break; sleep 0.5; done
-  curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" || { echo "fake-llm didn't start"; exit 1; }
+  start_llm
   [ "$(RISI=on RISI_MLS_NIF=/nonexistent fx risi)" = "uientry: risi ok" ] || { echo "fixture: risi seed"; exit 1; }
 fi
+
 tmux new -d -s "risime-uientry$SUF" "cd '$REPO/server' && set -a && . '$WORK/risi.env' && set +a && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
   PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text TABS=on \
   ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix phx.server > '$WORK/server.log' 2>&1"
 for _ in $(seq 1 180); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
 curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't start"; tail -20 "$WORK/server.log"; exit 1; }
 curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"tabs":"on"' || { echo "the temp server's /auth/config doesn't say tabs: on"; exit 1; }
+if [ "$SKILLS" = 1 ]; then
+  curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"risi_skills":"on"' || { echo "the temp server's /auth/config doesn't say risi_skills: on"; exit 1; }
+fi
 [ "$(fx setup)" = "uientry: setup ok" ] || { echo "fixture: setup"; exit 1; }
 otp() { grep -a "\[DEV OTP\] $1:" "$WORK/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true; }
 
@@ -238,6 +287,25 @@ open_chat() {
   back_to_list || { A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2; dismiss_prompts; }
   wait_for "$1" 40 || return 1; tap "$1"; sleep 2
 }
+# Settings → Risi skills: wait until the skill titled $1 shows the state label $2 ("Off" | "Ask me each time" |
+# "Allowed"), up to $3 s (the label under the title; Compose's switch state isn't in uiautomator's "checked").
+wait_skill() {
+  for _ in $(seq 1 "${3:-20}"); do
+    dump
+    python3 -I - "$WORK/ui-$DEV.xml" "$1" "$2" <<'PY' && return 0
+import sys, xml.etree.ElementTree as ET
+texts = [n.get('text') for n in ET.parse(sys.argv[1]).iter('node') if n.get('text')]
+states = {"Off", "Ask me each time", "Allowed", "Coming later"}
+for i, t in enumerate(texts):
+    if t == sys.argv[2]:
+        nxt = next((x for x in texts[i + 1:] if x in states), None)
+        sys.exit(0 if nxt == sys.argv[3] else 1)
+sys.exit(1)
+PY
+    sleep 1
+  done
+  return 1
+}
 logcat_ok() { local out; out="$(A logcat -d 2>/dev/null || true)"; printf '%s\n' "$out" | "$REPO/scripts/logcat-gate" "$1 $DEV" || fail "$1: $DEV crashed or touched the database on the main thread"; }
 
 # ---------------------------------------------------------------- 1. sign in, friends, e2ee DM
@@ -252,6 +320,8 @@ for _ in $(seq 1 60); do [ "$(fx e2ee)" = "uientry: e2ee=true" ] && break; sleep
 [ "$(fx e2ee)" = "uientry: e2ee=true" ] || fail "the DM never became e2ee"
 pass "both opened the DM; it is e2ee"
 
+# UITEST_SKILLS_ONLY=1 (with --skills): only steps 1 and 10 (a quicker run while working on step 10).
+if [ "${UITEST_SKILLS_ONLY:-0}" != 1 ]; then
 # ---------------------------------------------------------------- 2. the tab row under the header, Start Official
 DEV=A
 wait_text "🔒 Private" 30 || fail "tab row: no '🔒 Private' under the chat header (tabs on)"
@@ -501,6 +571,141 @@ if [ "$RISI" = 1 ]; then
   pass "Risi answered; the composer shows 'Continuing with Risi ×'"
 fi
 
-logcat_ok "ui entry"
+fi  # UITEST_SKILLS_ONLY
+
+# ---------------------------------------------------------------- 10. (--skills) Risi skills: alarm, scheduled message, revoke
+if [ "$SKILLS" = 1 ]; then
+  DEV=A
+  size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
+  conv="$(fx conv | sed -n 's/^uientry: conv=//p')"; [ -n "$conv" ] || fail "fixture: the DM's conversation id"
+  # Android's "Alarms & reminders" page, granted the way a user would (redroid has no Settings UI for it).
+  A shell appops set "$PKG" SCHEDULE_EXACT_ALARM allow >/dev/null 2>&1 || true
+  A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  back_to_list || fail "back to the chat list (skills)"
+  tap "More options" || fail "the chat list's ⋮ (Settings, skills)"
+  wait_for 'text="Settings"' 10 || fail "no Settings item (skills)"
+  tap "Settings" || fail "tap Settings (skills)"
+  found=0
+  for _ in 1 2 3 4 5 6; do
+    has 'text="Risi skills"' && { found=1; break; }
+    A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1
+  done
+  [ "$found" = 1 ] || fail "Settings: no 'Risi skills' (risi_skills on)"
+  tap "Risi skills" || fail "tap Risi skills"
+  wait_for 'content-desc="Alarm skill"' 30 || fail "Risi skills: no Alarm switch"
+  has 'Coming later' || true
+  tap "Alarm skill" || fail "turn on Alarm"
+  wait_skill "Alarm" "Ask me each time" 20 || fail "Alarm didn't turn on (Ask me each time)"
+  pass "Settings → Risi skills: Alarm on (Ask me each time)"
+  found=0
+  for _ in 1 2 3 4 5 6; do
+    has 'content-desc="Scheduled messages skill"' && { found=1; break; }
+    A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 35 / 100)) 400; sleep 1
+  done
+  [ "$found" = 1 ] || fail "Risi skills: no Scheduled messages switch"
+  tap "Scheduled messages skill" || fail "turn on Scheduled messages"
+  wait_skill "Scheduled messages" "Ask me each time" 20 || fail "Scheduled messages didn't turn on (exact alarms granted)"
+  A shell input swipe $((W / 2)) $((H * 30 / 100)) $((W / 2)) $((H * 80 / 100)) 300; sleep 1
+  A shell input swipe $((W / 2)) $((H * 30 / 100)) $((W / 2)) $((H * 80 / 100)) 300; sleep 1
+  shot "14-risi-skills"
+  pass "Settings → Risi skills: Scheduled messages on"
+
+  # -- "wake me up at 6" in the Risi chat → confirm card → Add → a real alarm in Clock
+  back_to_list || fail "back to the chat list (Risi chat)"
+  wait_text "Risi" 30 || fail "the chat list has no Risi entry"
+  tap "Risi" || fail "open the Risi chat"
+  wait_for 'text="Ask Risi…"' 60 || fail "the Risi chat didn't open"
+  for _ in $(seq 1 60); do has 'Only you and Risi' && break; sleep 1; done
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "wake%sme%sup%sat%s6"; sleep 0.5
+  tap "Send" || fail "send 'wake me up at 6'"
+  wait_text "Add" 120 || fail "no confirm card with Add for the alarm"
+  has '06:00' || fail "the alarm card doesn't show its time (args)"
+  shot "15-confirm-alarm"
+  pass "the alarm confirm card shows its exact args (06:00, Wake up) with Add / Cancel"
+  tap "Add" || fail "tap Add (alarm)"
+  # DeskClock's AlarmManager alarm-clock entry (an "Alarm clock:" alarm of com.android.deskclock) at 06:00 device time.
+  ok_a=""
+  for _ in $(seq 1 45); do
+    for w in $(A shell dumpsys alarm 2>/dev/null | python3 -I -c '
+import re, sys
+lines = sys.stdin.read().splitlines()
+for i, l in enumerate(lines):
+    m = re.search(r"origWhen (\d+) .*com\.android\.deskclock\}", l)
+    if m and any("Alarm clock:" in x for x in lines[i + 1:i + 7]):
+        print(int(m.group(1)) // 1000)'); do
+      [ "$(A shell date -d "@$w" +%H:%M 2>/dev/null | tr -d '\r')" = "06:00" ] && { ok_a=1; break; }
+    done
+    [ -n "$ok_a" ] && break
+    sleep 1
+  done
+  [ -n "$ok_a" ] || fail "no 06:00 alarm in Redroid's Clock after Add (dumpsys alarm)"
+  pass "a real 06:00 alarm is set in Redroid's Clock (DeskClock's alarm clock in dumpsys alarm)"
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2
+  wait_text "Open Clock" 60 || fail "no skill_done card with 'Open Clock' after the alarm"
+  pass "skill_done: 'Open Clock to remove it'"
+
+  # -- "send ZZ UI B good morning at <+2 min>" → card → Add → the phone sends it at the time
+  at_epoch=$(( $(date +%s) + 150 )); at_epoch=$(( at_epoch - at_epoch % 60 + 60 ))
+  at_iso="$(date -u -d "@$at_epoch" +%Y-%m-%dT%H:%M:00.000Z)"; at_hm="$(date -u -d "@$at_epoch" +%H%M)"
+  write_script "$at_iso" "$conv"; start_llm
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "send%sZZ%sUI%sB%sgood%smorning%sat%s$at_hm"; sleep 0.5
+  tap "Send" || fail "send the schedule request"
+  wait_for 'Good morning' 120 || fail "no schedule confirm card showing the text"
+  for _ in $(seq 1 10); do [ -n "$(node_xy "Add")" ] && break; sleep 1; done
+  tap "Add" || fail "tap Add (schedule)"
+  for _ in $(seq 1 30); do [ "$(count 'scheduled message .*: armed')" -gt 0 ] && break; sleep 1; done
+  [ "$(count 'scheduled message .*: armed')" -gt 0 ] || fail "the phone didn't store and arm the schedule"
+  rl 'scheduled message' | tail -2 | sed 's/^/    /'
+  pass "the phone stored the schedule and armed it (exact alarm)"
+  open_chat "ZZ UI B" || fail "open A's DM (scheduled bubble)"
+  tap "🔒 Private" || true
+  wait_for 'Scheduled for' 30 || fail "no clock-icon 'Scheduled for …' bubble in A's DM"
+  has 'content-desc="Scheduled"' || fail "the scheduled bubble has no clock icon"
+  shot "16-scheduled-bubble"
+  pass "A's DM shows the scheduled bubble with a clock icon"
+  # The phone sends it at the time (A's app in the background: the exact alarm → the worker).
+  A shell input keyevent KEYCODE_HOME
+  now=$(date +%s); wait_s=$(( at_epoch - now + 90 )); [ "$wait_s" -lt 30 ] && wait_s=30
+  for _ in $(seq 1 "$wait_s"); do [ "$(count 'scheduled message .*: queued')" -gt 0 ] && break; sleep 1; done
+  [ "$(count 'scheduled message .*: queued')" -gt 0 ] || fail "the phone didn't send the scheduled message at $at_iso"
+  pass "the phone queued the scheduled message at the time ($(rl 'scheduled message .*: queued' | tail -1 | grep -oE '\((on time|late)\)'))"
+  DEV=B; open_chat "ZZ UI A" || fail "B: open the DM"
+  tap "🔒 Private" || true
+  wait_for "Good morning" 120 || fail "B didn't receive the scheduled message"
+  pass "B received 'Good morning', sent by A's phone, as a normal message"
+  DEV=A
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1
+
+  # -- revoke Alarm → "wake me up at 7" → skill_needed
+  back_to_list || fail "back to the chat list (revoke)"
+  tap "More options" || fail "the chat list's ⋮ (revoke)"
+  wait_for 'text="Settings"' 10 || fail "no Settings item (revoke)"
+  tap "Settings" || fail "tap Settings (revoke)"
+  for _ in 1 2 3 4 5 6; do has 'text="Risi skills"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
+  tap "Risi skills" || fail "tap Risi skills (revoke)"
+  wait_for 'content-desc="Alarm skill"' 30 || fail "Risi skills: no Alarm switch (revoke)"
+  tap "Alarm skill" || fail "turn off Alarm"
+  wait_for 'text="Turn off"' 10 || fail "no revoke dialog"
+  tap "Turn off" || fail "confirm Turn off"
+  wait_skill "Alarm" "Off" 20 || fail "Alarm didn't turn off"
+  pass "Alarm revoked in Settings → Risi skills"
+  back_to_list || fail "back to the chat list (skill_needed)"
+  tap "Risi" || fail "open the Risi chat (skill_needed)"
+  wait_for 'text="Ask Risi…"' 60 || fail "the Risi chat didn't open (skill_needed)"
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "wake%sme%sup%sat%s7"; sleep 0.5
+  tap "Send" || fail "send 'wake me up at 7'"
+  wait_text "Open Risi skills" 120 || fail "no skill_needed card after the revoke"
+  has 'no longer have access to your alarms' || fail "the skill_needed card doesn't say Risi lost access"
+  shot "17-skill-needed"
+  pass "after the revoke Risi says it has no access, with 'Open Risi skills'"
+  tap "Open Risi skills" || fail "tap Open Risi skills"
+  wait_for 'content-desc="Alarm skill"' 20 || fail "'Open Risi skills' didn't open Settings → Risi skills"
+  pass "'Open Risi skills' opens Settings → Risi skills"
+fi
+
+DEV=A; logcat_ok "ui entry"
 DEV=B; logcat_ok "ui entry"
 echo "UI ENTRY OK"

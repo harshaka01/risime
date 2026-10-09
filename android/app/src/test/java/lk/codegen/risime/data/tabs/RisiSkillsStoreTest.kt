@@ -147,6 +147,15 @@ class RisiSkillsStoreTest {
         assertEquals(listOf(RisiSkillChange("calendar", clientPermission = ClientPermission.GRANTED)), server.patches.last().changes)
     }
 
+    /** The server refuses `"state": null`: an absent field is omitted, so the patch re-encodes exactly like the example. */
+    @Test fun patchEncodesLikeTheExample() {
+        val ex = read("risi_skills_patch.json")
+        val p = ProtocolJson.decodeFromString<RisiSkillsPatch>(ex)
+        assertEquals(ProtocolJson.parseToJsonElement(ex), ProtocolJson.encodeToJsonElement(RisiSkillsPatch.serializer(), p))
+        assertEquals("""{"changes":[{"id":"alarm","client_permission":"granted"}],"cancel_pending":false}""",
+            ProtocolJson.encodeToString(RisiSkillsPatch.serializer(), RisiSkillsPatch(listOf(RisiSkillChange("alarm", clientPermission = "granted")))))
+    }
+
     @Test fun statesRoundTrip() {
         val m = mapOf("alarm" to "allowed", "calendar" to "off")
         assertEquals(m, RisiSkillsStore.decodeStates(RisiSkillsStore.encodeStates(m)))

@@ -1,5 +1,67 @@
 # Android status — 0.2 nightlies
 
+## §26 Risi skills, A0 + A10 + A13 + A14 — READY (JVM gate green, UI ENTRY OK; risi_skills only while /auth/config says on)
+- **A0 (v1.26 wire, 866e542):** `net/Protocol126.kt` (skills REST, activity/undo, the four tools' args and results,
+  error codes, `risi_skills`), `RisiMeta` gains confirm `skill_id`/`args`, `skill_done`, `skill_needed` and
+  `calendar_offer` fields, `RisiToolCall.undo_entry_id` and a nullable `conversation_id` (undo calls),
+  `risi_action.options` (omitted when null, so older actions re-encode exactly), `AuthConfig.risi_skills`.
+  `PROTOCOL_VERSION` 1.26; `ContractExamplesTest` decodes all 26 new examples.
+- **A10 cards (b2d41eb):** confirm (exact `args` as labelled lines; Add/Cancel only for users in `for`;
+  Confirmed/Cancelled/Expired after `expires_at`; an unknown tool shows only its summary; "may be a few minutes
+  late" for a schedule without exact alarms), `skill_done` ([Undo] with its token for server/client undo; a manual
+  undo shows the hint and Open Clock), `skill_needed` (the §26.5 texts, "Open Risi skills" → Settings at that
+  skill), `reminder_set` (who is reminded, Me too / Not me), draft [Use] (opens the target with the composer
+  filled, never sends; only when the target is on the phone), answer v2 steps + up to 3 next-step chips (pre-fill
+  the composer), the progress bubble (`risi_progress`, step labels incl. the v1.26 tools, "Still working…" after
+  90 s, ended by the turn's message). `calendar_accept`/`calendar_decline` are valid controls with lines.
+- **A13 Settings → Risi skills (aa5a1a4):** every skill with can/cannot and the exact permissions; Email "Coming
+  later". The switch runs §26.2: the Android prompt right then from the screen (calendar; notifications on 33+;
+  the "Alarms & reminders" page for SCHEDULE_EXACT_ALARM; Alarm needs none but is `unsupported` without a Clock
+  app), then `PATCH state ask + client_permission`; a refused permission keeps it **off**, is reported, and the
+  row says why with Open settings. Ask me each time / Allowed only where `modes` allow. The phone keeps its own
+  record of each skill's state (persisted; the allowed path reads only that). Activity log with Undo, the Clock
+  hint, Clear activity. Revoke dialog with "Also cancel N pending" (`cancel_pending` + this phone's schedules).
+  Permission state reported on every advertisement and on opening the screen (only when changed).
+  `risi_skills` advertised only with `risi_tools` and while the server switch is on (remembered per device id).
+- **A14 phone tools (6f73d1e):** `RisiToolExecutor` (only on a `risi_skills` device; else `unknown_tool`; calendar
+  check/add stay `declined` until the calendar chunk): (a) the agent's confirm card (turn conversation or the
+  Risi chat) whose `args` equal the call's minus `write_id` exactly + the user's own first-answer `confirm_write`
+  before `expires_at`; or (b) `set_alarm`/`calendar_add` with the local record = Allowed and the user's own
+  `risi_request` for that `request_id` ≤ 10 min before `server_ts`; a `write_id` runs once (`risi_writes`); a
+  revoked skill voids cards; `schedule_message` and cancel-by-request never take path (b); undo only against the
+  local record. `set_alarm` = `ACTION_SET_ALARM` + skip UI (days ISO → Calendar). `schedule_message`: Room **v12**
+  (additive: `scheduled_messages`, `scheduled_sends`, `risi_writes`; `Migration11To12` + test, rule 9), ≤ 50
+  pending, `not_member`; exact alarm or WorkManager; re-armed on BOOT_COMPLETED, MY_PACKAGE_REPLACED and every
+  process start; at the time `ChatEngine.sendText` with a client_msg_id persisted per occurrence before the first
+  attempt (encrypted at send time, never duplicated); one-off > 12 h late → "Not sent: your phone was off" [Send
+  now] [Discard]; daily keeps the wall-clock time, skips missed days; "Sent late" (> 2 min) on the sender's bubble.
+  Chat: clock-icon bubbles ("Scheduled for Tue 06:00 (every day)") with Edit / Send now / Cancel, and "Scheduled
+  messages" in the chat ⋮.
+- **Tests:** `ContractExamplesTest`, `RisiSkillCardsTest`, `RisiSkillCardsUiTest`, `RisiSkillsStoreTest`,
+  `RisiSkillsUiTest`, `DeviceRegistrarTest` (risi_skills), `RisiToolExecutorTest`, `ScheduledMessagesTest`
+  (incl. DST), `ScheduledUiTest`, `Migration11To12Test`. Gate: `./gradlew assembleDebug testDebugUnitTest` green.
+- **UI gate:** **UI ENTRY OK** — `scripts/ui-entry-test --skills` (root-delegated; RISI=on, RISI_TOOLS=on, RISI_SKILLS=on,
+  fake-llm `--script` = this run's scenarios + `contract/v1/risi_gate_script.json`, generated in the work dir, the
+  contract file is unchanged): steps 1–9 + 8b and the new step 10 — Settings → Risi skills: Alarm and Scheduled
+  messages on (SCHEDULE_EXACT_ALARM via `appops`); Risi chat "wake me up at 6" → confirm card with the exact args →
+  Add → a real 06:00 alarm in Redroid's DeskClock (`dumpsys alarm`, alarm-clock entry) → skill_done "Open Clock";
+  "send ZZ UI B good morning at <+2 min>" → card → Add → the phone stored and armed it (exact) → the clock-icon
+  bubble in A's DM → queued by the phone at the time (on time) → B received "Good morning"; revoke Alarm → "wake
+  me up at 7" → skill_needed "I no longer have access to your alarms" → "Open Risi skills" opens Settings. 34 PASS
+  lines. Screenshots `docs/status/screens/14-risi-skills.png`, `15-confirm-alarm.png`, `16-scheduled-bubble.png`,
+  `17-skill-needed.png`. The run found a real bug, fixed: `PATCH /risi/skills` sent `"state": null` for a
+  permission-only change (server 422); absent fields are now omitted (`RisiSkillsStoreTest.patchEncodesLikeTheExample`).
+  `UITEST_SKILLS_ONLY=1` runs only steps 1 and 10. One earlier full run failed in step 8 (the app was sent Home by
+  `back_to_list` after step 7: a flaky pre-existing step, green on the rerun).
+- **Open:** (1) contract says SCHEDULE_EXACT_ALARM is *optional* (WorkManager fallback), but the server refuses a
+  phone tool when the reported permission is `denied`, and this chunk keeps Scheduled messages **off** when the
+  page is refused (as asked) — root to decide whether a refused exact alarm should be reported as `granted`-with-
+  fallback / `not_needed`. (2) `set_alarm` starts DeskClock's activity: fine while RisiMe is in front (the user
+  just tapped Add), but Android blocks background activity starts, so an Allowed alarm arriving while the app is
+  in the background may fail (`alarm_unavailable`); needs a notification trampoline or a full-screen intent.
+  (3) Calendar chunk: `calendar_check`/`calendar_add`/`calendar_remove` real, the `calendar_offer` card and rule
+  (c). (4) `answer.local_search` (Private search on the phone). (5) Step labels are English only.
+
 ## §25 Risi with tools, A0 + A7 + A8, and Official hotfixes — READY (JVM gate green; risi_tools only while /auth/config says on)
 - **A0 (v1.25 wire):** `net/Protocol125.kt` (tool call, tool results, `risi_progress`, `RisiChatReply`, steps/sources/
   `local_search`/`when`, error codes, `risi_tools`), optional v1.25 fields on `RisiMeta` (v1.24 envelopes unchanged),
