@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.25 (Release 0.3)
+# RisiMe Wire Protocol — v1.26 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -6344,7 +6344,562 @@ with the reason, and the `final` asks).
 - **Work breakdown** (informative): root R1 (this section, examples, fixtures, `fake-llm
   --script`); server S9–S19; android A7–A12; crypto C4.
 
+## 26. Risi skills (v1.26)
+Proposal `2026-10-09-risi-skills.md` (requirements: Harsha, "Risi Skills", 2026-10-09), decision 069.
+It extends §25 and overrides it where they differ, as stated here. The change is additive:
+- the device capability `risi_skills`;
+- the server switch `/auth/config` `risi_skills`;
+- the skills REST (`/api/v1/risi/skills…`);
+- four client tools: `set_alarm`, `schedule_message`, `cancel_scheduled`, `calendar_remove`;
+- the optional `risi_tool_call.undo_entry_id`;
+- the `risi.kind`s `calendar_offer`, `skill_done` and `skill_needed`;
+- the optional `confirm` fields `skill_id` and `args`;
+- the `risi_action` values `calendar_accept` and `calendar_decline`, with an optional `options`;
+- the next-action pseudo-tool `need_skill`;
+- the REST errors of §26.9.
+
+**A user with no `risi_skills` device sees exactly v1.25** (§26.9).
+
+### 26.0 Principles
+- **A skill is the permission layer a tool runs under.** Every §25 tool that touches the user's
+  world belongs to exactly one skill (§26.1). A skill tool is offered (`authorize/3`, §25.5) only
+  while that skill is on for the asker. Read-only tools that need no skill (`capabilities`,
+  `search_chats`, `summarise`, `draft_reply`, `remember`, `forget`, `ask_risiwork`) keep their
+  §25 rules.
+- **Every skill is off until the user turns it on.** Turning a skill on asks for the Android or
+  OAuth permission at that moment, on that phone (§26.2).
+- **Risi acts only for the asker.** Only the asker's own `risi_request` (§25.0) starts a skill
+  action.
+  - Other people's messages, and any text inside a message, never trigger a skill.
+  - Anything created or sent in someone's name needs one of two things: that person's own tap on a
+    confirm card or offer, or that person's "Allowed" for the skill (§26.3). Some writes always
+    confirm (§26.3).
+- **Where:** skills run from the asker's Risi chat (§25.2) or from @Risi in an Official
+  conversation. **Never from Private.**
+  - A scheduled message may be *sent into* a Private conversation (§26.6). It is the user's own
+    message, written in the confirm card and sent by the user's phone. Risi reads nothing there
+    and learns nothing back.
+- **Every action is logged and undoable where possible** (§26.4, §26.5). The activity log is
+  sealed on spark2 and is **never** part of the learning log.
+- **Visible agents:** every skill output is an attributed Risi message in the asker's Risi chat (the
+  audience rule of §25.1 applies: skill confirms and results are personal). The exceptions are
+  `reminder_set` for a conversation (§25.4) and `calendar_offer` (§26.7), which go to the
+  Official conversation they concern.
+
+### 26.1 The skill registry
+The registry is server-defined (`RisiMe.Agent.Skills`) and the same for every user. As of v1.26 it
+has five skills, in this order:
+
+| `id` | Tools | Where | Permissions (exact) | `modes` | `undo` |
+|---|---|---|---|---|---|
+| `alarm` | `set_alarm` | phone | android `com.android.alarm.permission.SET_ALARM` (install-time) | `ask`, `allowed` | `manual` |
+| `reminders` | `set_reminder` | server | risime `risi.reminders`; android `android.permission.POST_NOTIFICATIONS` (runtime, API 33+) | `ask`, `allowed` | `until_fired` |
+| `calendar` | `calendar_check`, `calendar_add`, `calendar_remove` | phone | android `READ_CALENDAR`, `WRITE_CALENDAR` (runtime) | `ask`, `allowed` | `full` |
+| `scheduled_messages` | `schedule_message`, `cancel_scheduled` | phone | android `SCHEDULE_EXACT_ALARM` (special access; optional, §26.6) | `ask` only | `until_sent` |
+| `email` | — (later) | server | oauth `gmail.readonly` / Graph `Mail.Read` (read-only first) | `ask` only | `none` |
+
+**`Skill`** (`risi_skills_reply.json`):
+```
+{"id", "kind": "builtin" | "partner", "title", "description",
+ "can": [str], "cannot": [str],
+ "permissions": [{"scope": "android" | "oauth" | "risime", "name": str, "label": str, "runtime": bool}],
+ "tools": [str], "where": "phone" | "server" | "both",
+ "modes": ["ask"] | ["ask", "allowed"],
+ "undo": "full" | "until_fired" | "until_sent" | "manual" | "none",
+ "available": bool,
+ "state": "off" | "ask" | "allowed", "state_changed_at": ts | null,
+ "client": {"device_id", "permission": ClientPermission, "reported_at": ts} | null}
+```
+- `title`, `description`, `can`, `cannot` and each permission's `label` are what Settings shows,
+  in English. The app may localise a known `id`.
+  - `permissions[].name` is the exact Android permission string, OAuth scope or RisiMe grant. It is
+    shown under "Permissions".
+  - `runtime: true` means the phone must ask the user for it.
+- `available: false` (Email until Harsha's OAuth set-up) shows the skill as "Coming later", with
+  the switch disabled.
+- `kind: "partner"` is reserved for partner agents (Lia, eDrop) as skills later, with their own
+  permissions. Clients show an unknown `kind` like `builtin`.
+- **`ClientPermission`** = `granted` | `denied` | `not_asked` | `not_needed` | `unsupported` |
+  `unknown`. It is the Android permission state **as the device last reported it** (§26.2), for
+  the device named by the request's `X-Device-Id`; `client` is `null` without that header.
+  - `not_needed`: no runtime permission (the alarm skill).
+  - `unsupported`: the phone can't do it, for example no Clock app handles `ACTION_SET_ALARM`.
+  - The server keeps it per device and uses it to choose `need_skill` (§26.8).
+
+### 26.2 Per-user skill state: `GET` / `PATCH /api/v1/risi/skills`
+- **`GET /api/v1/risi/skills`** (auth; `X-Device-Id` optional) → `200 {"skills": [Skill]}`, in
+  registry order. A user with no row has every skill `off`.
+- **`PATCH /api/v1/risi/skills`** (auth, `X-Device-Id` of a **`risi_skills`** device of the caller,
+  else `403 invalid_device`) (`risi_skills_patch.json`):
+  ```
+  {"changes": [{"id", "state"?: "off" | "ask" | "allowed", "client_permission"?: ClientPermission}],
+   "cancel_pending"?: bool}
+  ```
+  It returns `200 {"skills": [Skill]}`, the changed skills (`risi_skills_patch_reply.json`).
+  - `changes` has 1–10 entries with distinct `id`s, and each entry has at least one of `state` or
+    `client_permission`.
+  - `client_permission` is stored for the calling device. The app reports it on start, after every
+    permission prompt and whenever it sees that the permission changed in Android settings.
+  - Errors:
+    - `404 not_found`: an unknown `id`;
+    - `409 skill_unavailable`: `state` other than `off` for an `available: false` skill
+      (`error_skill_unavailable.json`);
+    - `422 bad_request`: `allowed` for a skill whose `modes` lack it, or a malformed body.
+  - All changes apply, or none does.
+- **Turning a skill on** (the app, normative):
+  1. The user flips the switch.
+  2. The app asks for every `runtime` permission **right then**, from that screen, never from the
+     background. For `SCHEDULE_EXACT_ALARM` it opens the system "Alarms & reminders" page.
+  3. The app sends the `PATCH` with `state: "ask"` and the result as `client_permission`.
+  - If a required permission was refused, the switch stays **off**, and the row says why and offers
+    "Open settings".
+  - An OAuth skill (later) completes its OAuth flow before the `PATCH`.
+  - **"Ask me each time"** (`ask`) is the default when a skill is turned on. **"Allowed"** is a
+    separate choice the user makes in the skill's page.
+- Every state change writes an activity entry (`skill_on`, `skill_off`, `skill_allowed`,
+  `skill_ask`, `via: "settings"`).
+
+### 26.3 "Ask me each time" and "Allowed"
+- **`ask`:** every write shows the §25.4 `confirm` card. The write runs only after the asker's
+  [Add] (`confirm_write`), exactly as in §25.
+- **`allowed`:** a write that **affects only the asker, on their own phone or account,** runs
+  without a card when the asker's own request asks for it. Risi then posts a `skill_done` (§26.5).
+  The §25.1 bound of at most 2 writes per turn still holds.
+- **Some writes always show a confirm card, even when the skill is Allowed** (recommendation
+  accepted, decision 069):
+  - anything **sent to other people** (`schedule_message`; email sending later, with a full-draft
+    card);
+  - anything **posted where others see it** (`set_reminder` with `audience: "conversation"`);
+  - a cancel by request (`cancel_scheduled` with a `write_id`).
+
+  `scheduled_messages` and `email` therefore have `modes: ["ask"]`.
+- **`calendar_offer` acceptance** (§26.7) is the person's own tap, in either mode.
+
+| Write | `ask` | `allowed` |
+|---|---|---|
+| `set_alarm` | card | no card, `skill_done` |
+| `set_reminder` `audience: "me"` | card | no card, `reminder_set` |
+| `set_reminder` `audience: "conversation"` | card | card |
+| `calendar_add` (asker's request) | card | no card, `skill_done` |
+| `calendar_add` from a `calendar_offer` | the person's [Add] tap | the same |
+| `schedule_message` | card (shows the full text) | — (always card) |
+| `cancel_scheduled` by request | card | — (always card) |
+| an undo (§26.4) | the undo tap | the same |
+
+- **The phone's own check for an allowed write** (it extends §25.3). The phone accepts a write
+  `risi_tool_call` without a confirm card only when **all** of these hold:
+  - the tool is `set_alarm` or `calendar_add`;
+  - the phone's **own** record of the skill state, from its last `GET` or `PATCH`, is `allowed`;
+  - this conversation's MLS history holds a `risi_request` with the call's `request_id`, sent
+    **from a leaf of the phone's own user** at most 10 minutes before the call's `server_ts`;
+  - the `write_id` is unused.
+
+  The server can't forge that request, so an allowed write always traces back to the user's own
+  ask. Otherwise the phone needs the §25.3 card rule (with `args`, §26.5), and if that fails it
+  answers `declined`.
+- The server checks the same: it **refuses an allowed write without the asker's request in this
+  turn**, and it never runs one for a turn started by anyone else.
+
+### 26.4 Activity log and undo
+**`GET /api/v1/risi/skills/{id}/activity?before=<entry_id>&limit=<1–100, default 50>`** returns
+`200 {"entries": [Entry], "has_more": bool}`, newest first (`risi_skill_activity_reply.json`,
+`risi_skill_activity_scheduled_reply.json`). Errors: `404 not_found` for an unknown skill.
+**`DELETE /api/v1/risi/skills/{id}/activity`** → `204` ("Clear activity"; nothing can be undone
+from it afterwards).
+```
+Entry = {"entry_id": uuid, "skill_id", "action", "summary": str, "at": ts,
+  "via": "confirm" | "allowed" | "calendar_offer" | "settings" | "undo",
+  "conversation_id": str | null,         where the request or offer was
+  "target_conversation_id": str | null,  a scheduled message's chat (the app shows its local name)
+  "device_id": uuid | null,              the phone that ran a client tool
+  "undo": {"kind": "server" | "client" | "manual" | "none",
+           "state": "available" | "pending" | "done" | "failed" | "expired" | null,
+           "until": ts | null, "hint": str | null},
+  "undo_token": str | null}
+```
+- **`action`** is one of:
+  - `alarm_set`;
+  - `reminder_set`, `reminder_cancelled`;
+  - `calendar_added`, `calendar_removed`;
+  - `message_scheduled`, `scheduled_cancelled`;
+  - `skill_on`, `skill_off`, `skill_ask`, `skill_allowed`.
+
+  Clients show an unknown `action` by its `summary`. The app shows `summary` and `at` like
+  "Added 'Board meeting' to calendar, Tue 10:02".
+- **What is written:** an entry is written when an action **succeeds**:
+  - the server write for a server tool;
+  - the `ok` result for a client tool;
+  - a state change.
+
+  Refused, cancelled or failed proposals are not logged (they stay in `risi_turn_steps` as
+  hashes, §25.1).
+- **The summary never holds a scheduled message's text, or anything from Private.** A scheduled
+  message's entry names only the recipient and the time ("Scheduled a message to Kumu, every day at
+  06:00"). For a group recipient the summary says "to a group", and the app renders the name from
+  `target_conversation_id`.
+- **Storage:**
+  - Postgres `risi_skill_activity`, with `summary` and the undo data **sealed with
+    `RISI_MEMORY_KEY`** (AES-256-GCM, as §25.5 notes).
+  - Kept 90 days, then hard-deleted. Also deleted with "Clear activity", with account deletion,
+    and with the Risi chat's data when the user leaves it (§25.2).
+  - **Never in the learning log, `risi_turn_steps`, server logs or a push.**
+- **`undo.kind`:**
+  - `server`: Risi undoes it itself (cancel a reminder that hasn't fired).
+  - `client`: the phone in `device_id` undoes it (`calendar_remove`, `cancel_scheduled`).
+  - `manual`: Android can't do it for us. The app shows `hint`, and for an alarm opens the Clock
+    app (`AlarmClock.ACTION_SHOW_ALARMS`), because **Android offers no way for an app to delete an
+    alarm it set**. Risi says so.
+  - `none`: state changes, and actions past their window.
+- **`undo.until`:** a reminder until it fires; a calendar event 30 days after it was added; a
+  scheduled message until its last send (`null` for a daily one, which can always be cancelled).
+- **`undo_token`** is opaque, single-use and present only while `undo.state` is `available`.
+
+**`POST /api/v1/risi/skills/{id}/activity/{entry_id}/undo`** (auth, `X-Device-Id`) takes
+`{"undo_token"}` (`risi_skill_undo.json`).
+- **`server`:** the undo runs at once. The reply is `200 {"entry"}` with `state: "done"`, and a new
+  entry (`reminder_cancelled`, `via: "undo"`) is written.
+- **`client`:** the server sends a `risi_tool_call` (§25.3) **to the entry's `device_id` only**,
+  with `undo_entry_id` = the entry, no `write_id` and `request_id`/`turn_id`/`conversation_id`
+  `null`. It replies `202 {"entry"}` with `state: "pending"` (`risi_skill_undo_reply.json`). On
+  the result:
+  - `ok` with the target removed or cancelled: `done`, plus a `calendar_removed` or
+    `scheduled_cancelled` entry;
+  - otherwise, or after 15 s: `failed`. A failed undo gets a new `undo_token` and may be retried.
+
+  The app re-reads the entry.
+- **Errors:**
+  - `404 not_found`: someone else's entry, or an unknown one;
+  - `409 undo_unavailable` (`error_undo_unavailable.json`): `manual`/`none`, past `until`, already
+    `done`/`pending`, a wrong or used token, or a `client` entry whose device was removed;
+  - `422 bad_request`.
+- **The phone's rule for an undo call:** a call with `undo_entry_id` needs no confirm card, because
+  it can only remove what RisiMe itself made on that phone. The phone accepts it only if the target
+  is in its **own local record** of things it created:
+  - for `calendar_remove`, an event it added for `target_write_id`, still present;
+  - for `cancel_scheduled`, a pending schedule with that `schedule_id`.
+
+  Otherwise it answers `ok` with `removed`/`cancelled: false` and a `reason`.
+
+### 26.5 Revoke, and cards for skills
+- **Revoke** = `PATCH` `state: "off"`. From that moment:
+  - `authorize/3` offers none of the skill's tools;
+  - every open `confirm` card for the skill is void (a later `confirm_write` gets `skill_needed`
+    instead of the write);
+  - a client tool call still in flight is answered as usual, but the server ignores an `ok` that
+    arrives after the revoke and logs nothing.
+- **Existing items on revoke:**
+  - Alarms and calendar events already made stay where they are; they are the user's.
+  - Pending **reminders** and pending **scheduled messages** stay unless the user ticks "Also
+    cancel N pending" in the revoke dialog. That sends `cancel_pending: true` (the server cancels
+    the reminders and writes entries) and makes the phone cancel its own schedules locally.
+  - The activity log stays.
+  - An OAuth skill (later) also deletes its stored tokens and revokes them at the provider.
+- **After a revoke, Risi says so.** The `risi_next_action` schema gains the pseudo-tool
+  **`need_skill`** `{"skill_id"}`. Its enum lists only skills that are `off`, unavailable, or
+  without the phone permission for this asker; it is normative for `scripts/fake-llm --script`.
+  Choosing it ends the turn with a **`skill_needed`** card in the asker's Risi chat
+  (`envelope_risi_skill_needed.json`). If the request came from a group, the group gets only the
+  §25.1 pointer line.
+  - `reason: "off"` with `was_on: true` gives "I no longer have access to your alarms. Turn it on
+    in Settings → Risi skills."
+  - `reason: "off"` with `was_on: false` gives "I don't have access to … yet".
+  - `reason: "no_permission"` gives "Calendar permission is off on this phone".
+  - `reason: "unavailable"` gives "Email is coming later".
+  - `buttons: ["open_skills"]` opens Settings → Risi skills at that skill.
+  - If the model can't be asked, the server builds the card itself whenever a skill tool would
+    have been needed.
+- **`confirm` (§25.4) gains:**
+  - `tool` values `set_alarm`, `schedule_message` and `cancel_scheduled`;
+  - the optional fields **`skill_id`** and **`args`**: the client tool's exact `args` without
+    `write_id`.
+
+  For a v1.26 card the phone's §25.3 check compares the tool call's `args` (minus `write_id`) to
+  the card's `args` **exactly**, instead of to `text`/`when`
+  (`envelope_risi_confirm_set_alarm.json`, `envelope_risi_confirm_schedule_message.json`).
+  `summary` must state every effect. For `schedule_message` it shows the full text, the recipient,
+  the time and the repeat.
+- **`skill_done`** (new `risi.kind`, in the asker's Risi chat, `envelope_risi_skill_done.json`):
+  `{request_id, skill_id, entry_id, action, summary, via, undo, undo_token, turn_ref}`. It is
+  posted after every successful client-tool write and every allowed write. [Undo] calls §26.4 with
+  `undo_token`; a `manual` undo shows `hint` with "Open Clock". It replaces the §25.4 `answer` with
+  `steps` after a confirmed `calendar_add` for `risi_skills` askers.
+
+### 26.6 New client tools (§25.3 transport, `risi_skills` devices only)
+The result codes, the 15-s timeout, the 16-KiB body, `no_permission` and `declined` all work as in
+§25.3. `risi_tool_call` gains the optional **`undo_entry_id`** (uuid | null; §26.4).
+
+**`set_alarm`** (write, skill `alarm`; `event_risi_tool_call_set_alarm.json`,
+`risi_tool_result_set_alarm.json`):
+- `args`: `{"write_id": uuid, "time": "HH:MM", "label": str, "days": [1–7] | null}`.
+  - `time` is the 24-h wall-clock time in the phone's zone.
+  - `label` is 0–60 grapheme clusters.
+  - `days` are ISO weekdays (1 = Monday) for a repeating alarm; `null` means the next occurrence
+    of `time`.
+- The phone fires `AlarmClock.ACTION_SET_ALARM` with `EXTRA_HOUR`, `EXTRA_MINUTES`,
+  `EXTRA_MESSAGE` = `label`, `EXTRA_DAYS` (mapped to `Calendar` constants) and `EXTRA_SKIP_UI` =
+  true. It sets the alarm on **the asker's phone only**: the asking device, or the device that
+  confirmed (§25.4).
+- `result`: `{"alarm_set": true}`.
+  - `error` `{"code": "alarm_unavailable"}` when no app handles the intent.
+  - `bad_args` for a bad `time` or `days`.
+- **Undo is `manual`:** Android can't delete an alarm another app holds. The `skill_done` and the
+  activity entry say "Open Clock to remove it".
+
+**`schedule_message`** (write, skill `scheduled_messages`, always confirmed;
+`event_risi_tool_call_schedule_message.json`, `risi_tool_result_schedule_message.json`):
+- `args`: `{"write_id": uuid, "conversation_id": str, "text": str, "at": ts, "repeat": "daily" |
+  null}`.
+  - `text` is 1–4096 grapheme clusters (the §11 limits).
+  - `at` is the first send, in the future, at most 1 year ahead.
+  - `daily` repeats at the same **local wall-clock time** in the phone's zone.
+- `conversation_id` is a conversation **of a chat the asker is an active member of**, Private or
+  Official tab, never a Risi chat. Private is the default for "send Kumu …"; Official is used only
+  when the asker says so.
+- **The phone stores and sends it; the server never does.**
+  - The phone keeps the schedule in its own database (Room) and arms an exact alarm
+    (`setExactAndAllowWhileIdle`) when `SCHEDULE_EXACT_ALARM` is granted. Without it, it uses
+    WorkManager, and the confirm card's app view says "may be a few minutes late".
+  - At the time it **composes and encrypts the message then** (the current MLS epoch, the normal
+    `msg:send` path of §2.2/§10/§12, a fresh `client_msg_id` persisted per occurrence before the
+    first attempt), exactly as if the user had typed it.
+  - **The recipient sees a normal message.** Nothing marks it as scheduled.
+- **The server never stores the text.** It passes once in the tool call's `args`, a row with a
+  2-minute TTL that is deleted when the result arrives. It is absent from the activity log, logs
+  and the learning log. Risi has the text only because it was in the asker's own request.
+- **In the chat** (the sender's phone):
+  - The pending message shows as an outgoing bubble with a **clock icon** and "Scheduled for Tue
+    06:00 (every day)". Tapping it offers Edit, Send now and Cancel; these are local and allowed
+    until it is sent.
+  - The chat ⋮ menu has **"Scheduled messages"**, the list for that chat.
+  - Other devices of the user see nothing until it is sent; then they get the normal sender copy
+    (§13).
+- **Phone off or offline at the time:** the phone sends as soon as it is able. After a reboot it
+  re-arms (`BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`) and sends what is overdue.
+  - A send delivered more than 2 minutes late shows **"Sent late"** on the sender's bubble only.
+  - A one-off more than 12 h late is not sent automatically. It shows "Not sent: your phone was
+    off" with [Send now] [Discard].
+  - For `daily`, missed earlier occurrences are skipped; only the latest is sent, and only if it
+    is under 12 h late.
+- **Limits:** at most 50 pending schedules per phone (`error` `{"code": "too_many_scheduled"}`).
+  - `error` `{"code": "not_member"}` when the phone doesn't hold that conversation or the user
+    isn't an active member.
+  - **An app update keeps pending schedules** (they are local data; hard rule 9 spirit). They are
+    not in backups in v1.26.
+- `result`: `{"schedule_id": uuid}` (phone-generated; the server keeps it in the activity entry
+  for undo).
+
+**`cancel_scheduled`** (skill `scheduled_messages`; `event_risi_tool_call_cancel_scheduled.json`,
+`risi_tool_result_cancel_scheduled.json`):
+- `args`: `{"write_id": uuid | null, "schedule_id": uuid}`.
+  - `write_id` is set for a cancel by request (after its confirm card).
+  - It is `null` for an undo (`undo_entry_id` set, §26.4).
+- `result`: `{"cancelled": bool, "reason": null | "already_sent" | "unknown"}`. A cancelled daily
+  schedule stops all future sends.
+
+**`calendar_remove`** (skill `calendar`; undo only; `event_risi_tool_call_calendar_remove.json`,
+`risi_tool_result_calendar_remove.json`):
+- `args`: `{"target_write_id": uuid}`, the `write_id` of the `calendar_add` to undo.
+- The phone keeps a local map from `write_id` to the provider event id for every event it added
+  (§25.3). It deletes only such an event. `result`: `{"removed": bool, "reason": null |
+  "not_found"}` (`not_found` when the user already deleted it).
+- `calendar_check` and `calendar_add` are unchanged, apart from the allowed path of §26.3.
+
+### 26.7 The meeting card: `calendar_offer`
+When a meeting is agreed in an Official conversation ("Tuesday 2pm works"), Risi offers to add it
+**to each person's own calendar**. The card is a suggestion, like a commitment card (§24.11). It
+is not an action: nothing is added until each person taps [Add] **on their own phone**.
+
+**`calendar_offer`** (new `risi.kind`, posted in that Official conversation;
+`envelope_risi_calendar_offer.json`):
+```
+{offer_id: uuid, title, start, end, all_day, for: [uuid], reminder_before_min: int | null,
+ buttons: ["add", "decline"], source_message_ids: [timeuuid], expires_at,
+ request_id: uuid | null, turn_ref: uuid | null}
+```
+- **When:**
+  - From Risi's Official extraction (§24.12): a concrete time proposed and agreed by at least two
+    human members, confidence ≥ 0.8.
+  - Or because a member asked ("@Risi add this meeting for us"). In that case `request_id` is set,
+    and the asker gets the same card, not a confirm.
+  - Never from Private, never in a Risi chat. At most 3 per chat per day, and one per (title,
+    start).
+- `for` lists the human members who took part in the agreement, at most 8; for a 1:1 Official,
+  both.
+  - Only people in `for` see [Add] / [Decline]; others see the summary.
+  - Clients show "Add to calendar for: Harsha ✓ Kumu ☐". The ✓ comes from each `calendar_accept`
+    seen from a human leaf of that user. A decline only hides the buttons for that person.
+- `title` is 1–200 grapheme clusters; `start < end`.
+- `expires_at` is the meeting's `start`, at most 14 days ahead. After it the card greys out.
+- `reminder_before_min` (15 by default; `null` when the meeting is under 30 min away) drives the
+  card's optional "Remind me 15 min before" tick.
+
+**`risi_action`** gains **`calendar_accept`** and **`calendar_decline`** (`target` = `offer_id`,
+`edit: null`), plus an optional **`options`**, `{"reminder": bool}` for an accept and `null`
+otherwise (`envelope_risi_action_calendar_accept.json`,
+`envelope_risi_action_calendar_decline.json`). Only a user in `for` may send them, from a human
+leaf, before `expires_at`; others are ignored. Repeats are idempotent.
+
+**On `calendar_accept` from user U:**
+1. **Skill check.** If U's `calendar` skill is `off`, the app first runs the §26.2 turn-on flow on
+   that phone, then sends the accept. If it is still off when Risi gets the accept, Risi posts
+   `skill_needed` to U's Risi chat. The tap is U's confirmation, in `ask` and `allowed` alike.
+2. Risi sends a `risi_tool_call` `calendar_add`, `args` `{write_id: new, title, start, end,
+   all_day}` with the card's values, **to the device of the leaf that sent the accept** (if it
+   advertises `risi_skills`; otherwise U's Risi chat says to update).
+3. **The phone accepts it** only if all of these hold:
+   - its conversation history holds the agent's `calendar_offer` with that `offer_id`, with its
+     own user in `for`;
+   - a `calendar_accept` for it came **from its own leaf**;
+   - `title`, `start`, `end` and `all_day` equal the card;
+   - no earlier add for that `offer_id` exists on the phone.
+
+   This is rule (c), next to §25.3 and §26.3.
+4. On `ok`, Risi writes U's activity entry (`via: "calendar_offer"`) and posts `skill_done` **to
+   U's Risi chat**, never to the group.
+5. If `options.reminder` is set and U's `reminders` skill is on, Risi also sets a reminder for U
+   alone, at `start − reminder_before_min`. It is logged under `reminders`. If that skill is off,
+   the `skill_done` says "Turn on Reminders to be reminded too".
+
+`calendar_decline` does nothing more. The offer is kept, sealed, until `expires_at` and is then
+deleted.
+
+### 26.8 Server: authorisation, routing, data
+- **`authorize/3`** (§25.5) adds the skill checks:
+  - a skill tool is offered only if the asker's skill state is `ask` or `allowed`;
+  - for a phone tool, only if the asking device advertises `risi_skills` and its reported
+    permission is not `denied` or `unsupported`.
+
+  Otherwise the skill goes into `need_skill`'s enum. Each check runs again when the tool runs
+  (§25.1).
+- **Device routing** follows §25.4: a write goes to the confirming device when it advertises
+  `risi_skills`, else to the turn's device. An offer accept goes to the accepting device; an undo
+  goes to the entry's device.
+- **Tables** (Postgres):
+  - `risi_skills(user_id, skill_id, state, changed_at)`;
+  - `risi_skill_devices(user_id, device_id, skill_id, permission, reported_at)`, deleted with the
+    device;
+  - `risi_skill_activity` (sealed, 90 days);
+  - `risi_calendar_offers` (sealed `title`, until `expires_at`).
+
+  `set_reminder` keeps its §25 storage.
+- **Learning log:** `risi_turn_steps` stays hashes-only. `need_skill` is a step with status
+  `denied`.
+
+### 26.9 Capability, switch, errors and old apps
+- **Capability:** a v1.26 app advertises **`"risi_skills"`** in `mls.capabilities`, together with
+  `risi_tools` (`device_put_risi_skills.json`), once it handles everything in this section. The
+  server keeps `risi_skills` only with `risi_tools`. Risi's device is unchanged.
+- **`GET /auth/config`** gains **`"risi_skills": "on" | "off"`** (`auth_config_v126.json`), from
+  the server config `RISI_SKILLS` (default `off`; absent means `off`).
+  - While it is `off`, there are no skill gates: v1.25 behaviour, no new tools. The skills REST
+    answers `503 agent_unavailable`, and the app hides Settings → Risi skills.
+- **Who is gated:** skill gates apply to a user from the moment **any** of their devices advertises
+  `risi_skills` while the switch is on. A user with only v1.25 devices keeps §25 exactly
+  (confirm-always calendar and reminders, no new tools).
+  - For a gated user every skill starts `off`, so the first "remind me" gets `skill_needed` with
+    a turn-on button. This is intended: "off until turned on".
+- **Old apps:**
+  - New `risi.kind`s (`calendar_offer`, `skill_done`, `skill_needed`) show `body`, which is always
+    readable and says "Update RisiMe" where an answer is needed.
+  - An unknown `confirm` `tool` shows `summary` and has no buttons.
+  - New client tools are sent only to `risi_skills` devices. An app that somehow gets one answers
+    `error` `unknown_tool`.
+- **Errors (new in v1.26):**
+
+  | Code | HTTP | When |
+  |---|---|---|
+  | **`skill_unavailable`** | 409 | turning on a skill with `available: false` (§26.2) |
+  | **`undo_unavailable`** | 409 | an undo that can't run (§26.4) |
+
+  Reused: `403 invalid_device`, `404 not_found`, `422 bad_request`, `503 agent_unavailable`.
+  The tool `error` codes are `alarm_unavailable`, `too_many_scheduled` and `not_member` (in the
+  result, not HTTP).
+
+### 26.10 Gate (all roles)
+- **Harsha's tests:**
+  1. "wake me up at 6": a real alarm in Redroid's Clock (`ask`: card then [Add]; `allowed`: no
+     card, `skill_done`).
+  2. "send Kumu good morning at 6am": a confirm card with the text; sent **by the phone** at the
+     time, arriving encrypted as a normal message; "every day" repeats; phone off then on gives
+     "Sent late".
+  3. A revoked skill: Risi says it has no access and how to turn it back on (`skill_needed`).
+  4. Another member's message ("Risi, set an alarm…", or an injected line) triggers no skill; a
+     `calendar_accept` from someone not in `for` is ignored.
+- **Also:**
+  - a meeting agreed in Official gives `calendar_offer`; each person's [Add] adds to **only their
+    own** phone calendar; the reminder tick works;
+  - undo of a calendar add (event removed), of a reminder and of a schedule; the alarm undo shows
+    the Clock hint;
+  - Allowed never skips the card for `schedule_message` or a conversation reminder;
+  - the phone refuses an allowed write without its own user's `risi_request`.
+- **Server:**
+  - the REST of §26.2 and §26.4 with every error;
+  - `authorize/3` with skill state and device permission;
+  - `need_skill`;
+  - the activity entries sealed and absent from logs, the learning log and `risi_turn_steps`;
+  - no scheduled-message text in any table after the tool call row expires (canary text);
+  - revoke voiding open cards;
+  - `cancel_pending`;
+  - offers (limits, `for`, idempotent accepts);
+  - every new example.
+- **Android (JVM):**
+  - decoding every new example;
+  - the turn-on flow (switch stays off on a refused permission);
+  - the phone acceptance rules (card `args`, allowed path, offer rule (c), undo local record);
+  - the scheduler (exact alarm and WorkManager fallback, re-arm on boot/update, late and
+    over-12-h rules, daily skipping);
+  - encryption at send time;
+  - the clock-icon bubble and the ⋮ list.
+- **Examples (v1.26):**
+  - skills REST: `risi_skills_reply.json`, `risi_skills_patch.json`,
+    `risi_skills_patch_reply.json`, `risi_skill_activity_reply.json`,
+    `risi_skill_activity_scheduled_reply.json`, `risi_skill_undo.json`,
+    `risi_skill_undo_reply.json`;
+  - tool calls and results: `event_risi_tool_call_set_alarm.json`,
+    `risi_tool_result_set_alarm.json`, `event_risi_tool_call_schedule_message.json`,
+    `risi_tool_result_schedule_message.json`, `event_risi_tool_call_cancel_scheduled.json`,
+    `risi_tool_result_cancel_scheduled.json`, `event_risi_tool_call_calendar_remove.json`,
+    `risi_tool_result_calendar_remove.json`;
+  - envelopes: `envelope_risi_confirm_set_alarm.json`,
+    `envelope_risi_confirm_schedule_message.json`, `envelope_risi_calendar_offer.json`,
+    `envelope_risi_action_calendar_accept.json`, `envelope_risi_action_calendar_decline.json`,
+    `envelope_risi_skill_done.json`, `envelope_risi_skill_needed.json`;
+  - config, device and errors: `auth_config_v126.json`, `device_put_risi_skills.json`,
+    `error_skill_unavailable.json`, `error_undo_unavailable.json`.
+- **Rollout:**
+  1. Server: the REST, gates and tools, with `RISI_SKILLS=off`.
+  2. An app that advertises `risi_skills`.
+  3. `RISI_SKILLS=on` after this gate passes with fake-llm.
+
+  Email waits for Harsha's OAuth set-up (Needs Harsha E) and its own proposal.
+
 ## Changelog
+- **v1.26** (2026-10-09): Risi skills (§26, decision 069; proposal `2026-10-09-risi-skills.md`,
+  requirements by Harsha). Skills are the permission layer every tool runs under:
+  - a server registry (`alarm`, `reminders`, `calendar`, `scheduled_messages`, and `email` not yet
+    available) with exact permissions, `modes` and undo kind;
+  - per-user state `off` (default) / `ask` / `allowed` and the per-device reported Android
+    permission (`GET`/`PATCH /api/v1/risi/skills`; turning on asks for the permission right then);
+  - "Allowed" skips the confirm card only for writes that affect the asker alone (alarm, own
+    reminder, own calendar add), and the phone checks its own user's `risi_request`; sends to
+    others, conversation reminders and cancels by request always confirm;
+  - an activity log sealed with `RISI_MEMORY_KEY`, kept 90 days, never in the learning log
+    (`GET`/`DELETE …/skills/{id}/activity`), and undo through `POST …/activity/{entry}/undo` with
+    a single-use `undo_token` (a server action, or a client tool call to the device that did it
+    with `undo_entry_id`; `manual` for alarms);
+  - revoke voids open cards and optionally cancels pending items;
+  - the pseudo-tool `need_skill` and the kind `skill_needed`;
+  - the client tools `set_alarm` (`AlarmClock.ACTION_SET_ALARM`), `schedule_message` (stored and
+    sent by the asker's phone, encrypted at send time, never stored by the server; daily repeat,
+    sent-late rules), `cancel_scheduled` and `calendar_remove`;
+  - `confirm` `skill_id`/`args` (an exact args match on the phone) and the kind `skill_done`;
+  - the meeting card `calendar_offer`, with per-person `risi_action` `calendar_accept`/
+    `calendar_decline` (`options.reminder`) leading to a `calendar_add` on that person's phone
+    only;
+  - the capability `risi_skills`, `/auth/config` `risi_skills`, and the errors
+    `skill_unavailable` and `undo_unavailable`.
+
+  Additive; users without a `risi_skills` device keep v1.25.
 - **v1.25** (2026-10-09): Risi with tools (§25, decision 068; proposal
   `2026-10-09-risi-client-tools.md`, approved by Harsha). A bounded server tool loop
   (`RisiMe.Agent.Turn`, the `risi_next_action` next-action protocol, tools offered only as
