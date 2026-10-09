@@ -24,6 +24,9 @@
 //! 5. Any member may remove **every** leaf of an agent user (never a part of them) in a commit that
 //!    otherwise touches only the committer's own leaves and changes no `group_meta`.
 //!
+//! **v1.25 (§25.2)**, when the base epoch's `chat_kind` is `"risi"`: `chat_kind`, `admins` and
+//! `agents` never change, and no commit adds a leaf of any user but the one admin and the agent.
+//!
 //! The fixture runs both: `cases` through [`check_commit_policy`], `tab_cases` through
 //! [`check_tab_policy`].
 
@@ -57,6 +60,8 @@ pub struct MetaChange {
     pub chat_id_changed: bool,
     /// v1.24: the new agent list, or `None` if unchanged (absent counts as `[]`).
     pub agents: Option<Vec<String>>,
+    /// v1.25: `chat_kind` changed (absent counts as not `"risi"`).
+    pub chat_kind_changed: bool,
 }
 
 impl MetaChange {
@@ -68,6 +73,7 @@ impl MetaChange {
             tab: None,
             chat_id_changed: false,
             agents: None,
+            chat_kind_changed: false,
         }
     }
 }
@@ -79,6 +85,8 @@ pub struct TabContext<'a> {
     pub dm: bool,
     /// The base epoch's `group_meta.tab` (Private for a `dm:` group).
     pub tab: Tab,
+    /// v1.25 (§25.2): the base epoch's `group_meta.chat_kind` is `"risi"`.
+    pub risi: bool,
     /// The base epoch's `group_meta.agents`.
     pub agents: &'a [String],
     /// The users with a leaf whose attestation says `kind: "agent"`, in the base epoch or among the
@@ -200,6 +208,33 @@ pub fn check_tab_policy(
         }
         if m.chat_id_changed {
             return Err("chat_id can't change after epoch 0".into());
+        }
+    }
+
+    // Risi chat (§25.2): the roster is fixed to its one human and its one agent.
+    if ctx.risi {
+        if ctx.dm || ctx.tab != Tab::Official {
+            return Err("a Risi chat is a grp: group in the Official tab".into());
+        }
+        if let Some(m) = &commit.meta {
+            if m.chat_kind_changed {
+                return Err("chat_kind can't change after epoch 0".into());
+            }
+            if m.admins.as_ref().is_some_and(|new| {
+                new.len() != admins.len() || !new.iter().all(|a| admins.contains(a))
+            }) {
+                return Err("a Risi chat's only admin is its user".into());
+            }
+            if m.agents.as_deref().is_some_and(|new| new != ctx.agents) {
+                return Err("a Risi chat's agents can't change".into());
+            }
+        }
+        for &(u, d) in &commit.adds {
+            if !admins.iter().any(|a| a == u) && !ctx.agents.iter().any(|a| a == u) {
+                return Err(format!(
+                    "a Risi chat has no second user: may not add {u}/{d}"
+                ));
+            }
         }
     }
 

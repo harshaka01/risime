@@ -169,6 +169,7 @@ fn group_api_crosses_the_ffi() {
         tab: None,
         chat_id: None,
         agents: None,
+        chat_kind: None,
     };
     let gc = alice
         .create_group_with_meta(g.clone(), kp, meta("FFI", &["alice"]))
@@ -262,6 +263,7 @@ fn delete_controls_cross_the_ffi() {
         tab: None,
         chat_id: None,
         agents: None,
+        chat_kind: None,
     };
     let gc = alice
         .create_group_with_meta(g.clone(), bob.generate_key_packages(1).unwrap(), meta)

@@ -52,6 +52,7 @@ fn call_frame_keys_cross_the_ffi() {
                 tab: None,
                 chat_id: None,
                 agents: None,
+                chat_kind: None,
             },
         )
         .unwrap();

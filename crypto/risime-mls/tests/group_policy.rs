@@ -13,6 +13,7 @@ struct Fixture {
     v: u32,
     cases: Vec<Case>,
     tab_cases: Vec<TabCase>,
+    risi_cases: Vec<RisiCase>,
 }
 
 #[derive(Deserialize)]
@@ -32,7 +33,17 @@ struct TabCase {
 }
 
 #[derive(Deserialize)]
+struct RisiCase {
+    #[serde(flatten)]
+    base: TabCase,
+    chat_kind: String,
+    chat_id_is_own: bool,
+}
+
+#[derive(Deserialize)]
 struct TabMeta {
+    #[serde(default)]
+    chat_kind_changed: bool,
     admins: Option<Vec<String>>,
     name_changed: bool,
     tab: Option<String>,
@@ -113,6 +124,7 @@ fn every_contract_policy_case() {
         let ctx = TabContext {
             dm: false,
             tab: Tab::Official,
+            risi: false,
             agents: &case.agents,
             agent_users: case.agents.iter().map(String::as_str).collect(),
             leaves: leaves
@@ -152,7 +164,16 @@ fn every_contract_tab_case() {
     let fixture: Fixture = serde_json::from_str(&text).expect("fixture parses");
     assert!(fixture.tab_cases.len() >= 18, "tab fixture shrank?");
     let mut failures = vec![];
-    for case in &fixture.tab_cases {
+    assert_eq!(fixture.risi_cases.len(), 6, "risi fixture changed?");
+    for rc in &fixture.risi_cases {
+        assert!(rc.chat_id_is_own && rc.chat_kind == "risi");
+    }
+    let all = fixture
+        .tab_cases
+        .iter()
+        .map(|c| (c, false))
+        .chain(fixture.risi_cases.iter().map(|c| (&c.base, true)));
+    for (case, is_risi) in all {
         let leaves: Vec<(&str, &str)> = case
             .leaves
             .iter()
@@ -174,6 +195,7 @@ fn every_contract_tab_case() {
                 tab: m.tab.as_deref().map(tab),
                 chat_id_changed: m.chat_id_changed,
                 agents: m.agents.clone(),
+                chat_kind_changed: m.chat_kind_changed,
             }),
         };
         let ctx = TabContext {
@@ -183,6 +205,7 @@ fn every_contract_tab_case() {
                 other => panic!("unknown conversation {other}"),
             },
             tab: tab(&case.tab),
+            risi: is_risi,
             agents: &case.agents,
             agent_users: case.agent_users.iter().map(String::as_str).collect(),
             leaves,

@@ -252,6 +252,7 @@ fn meta<'a>(env: Env<'a>, m: &Option<GroupMeta>) -> Term<'a> {
             ("tab", tab.encode(env)),
             ("chat_id", m.chat_id.encode(env)),
             ("agents", m.agents().to_vec().encode(env)),
+            ("chat_kind", m.chat_kind.encode(env)),
             ("json", json.encode(env)),
         ],
     )

@@ -399,6 +399,9 @@ pub struct GroupMeta {
     pub chat_id: Option<String>,
     #[uniffi(default = None)]
     pub agents: Option<Vec<String>>,
+    /// v1.25 (§25.2): `"risi"` for the user's Risi chat, null otherwise. Immutable after epoch 0.
+    #[uniffi(default = None)]
+    pub chat_kind: Option<String>,
 }
 
 impl From<risime_mls::GroupMeta> for GroupMeta {
@@ -410,6 +413,7 @@ impl From<risime_mls::GroupMeta> for GroupMeta {
             tab: m.tab,
             chat_id: m.chat_id,
             agents: m.agents,
+            chat_kind: m.chat_kind,
         }
     }
 }
@@ -421,6 +425,7 @@ impl TryFrom<GroupMeta> for risime_mls::GroupMeta {
         meta.tab = m.tab;
         meta.chat_id = m.chat_id;
         meta.agents = m.agents;
+        meta.chat_kind = m.chat_kind;
         meta.icon = match m.icon_json {
             None => None,
             Some(j) => match serde_json::from_str::<serde_json::Value>(&j)
@@ -980,6 +985,7 @@ pub fn self_test() -> Result<String> {
         tab: None,
         chat_id: None,
         agents: None,
+        chat_kind: None,
     };
     let gc = alice.create_group_with_meta(gg.clone(), bob.generate_key_packages(1)?, meta)?;
     alice.commit_accepted(gg.clone())?;
@@ -997,6 +1003,7 @@ pub fn self_test() -> Result<String> {
             tab: None,
             chat_id: None,
             agents: None,
+            chat_kind: None,
         },
     )?;
     alice.commit_accepted(gg.clone())?;
