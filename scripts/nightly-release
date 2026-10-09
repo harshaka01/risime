@@ -106,13 +106,17 @@ fi
 # two redroids driven like a user (tap/long-press by visible text only) must SEE every new feature's
 # entry point (Lock chat ×3, Locked chats row, tab row, Start Official, What Risi knows, E2EE label).
 # Screenshots land in ~/risime-logs/uientry_rel/. UI_ENTRY_SKIP=1: emergency only (say so in the notes).
-# Its own hard timeout (UIENTRY_STEP_TIMEOUT, default 3600 s): --skills --ledger --calendar --offers runs ~35-45 min.
+# Its own hard timeout (UIENTRY_STEP_TIMEOUT, default 5400 s): --skills --ledger --calendar --offers runs ~35-45 min;
+# --risi-calendar --risi-notes (v1.29 §29/§30, Harsha's GATE) add ~15-20 min. Only for those last steps (14-15) the
+# step's own temp server is restarted with RISI_EVENTS=on RISI_NOTES=on RISI_LEDGER=on (step 16 turns them off again
+# and checks the switch-off case); the pilot's switches are not touched.
 if [ -n "${UI_ENTRY_SKIP:-}" ]; then echo "==> ui-entry-test SKIPPED (UI_ENTRY_SKIP)"
 elif scripts/android-target check >/dev/null 2>&1; then
   echo "==> ui-entry-test (user-style entry points, redroid)"
   UITEST_INSTANCE=_rel UITEST_PORT=4552 UITEST_LLM_PORT=8396 UITEST_REDROID_A=-relui1 UITEST_REDROID_A_PORT=5861 \
     UITEST_REDROID_B=-relui2 UITEST_REDROID_B_PORT=5862 \
-    STEP_T="${UIENTRY_STEP_TIMEOUT:-3600}" step scripts/ui-entry-test --skills --ledger --calendar --offers --apk android/app/build/outputs/apk/debug/app-debug.apk
+    STEP_T="${UIENTRY_STEP_TIMEOUT:-5400}" step scripts/ui-entry-test --skills --ledger --calendar --offers --risi-calendar --risi-notes \
+      --apk android/app/build/outputs/apk/debug/app-debug.apk
 fi
 
 echo "==> boot check (scripts/boot-check: prod release, real env, Risi off/on/reopen/wrong key)"

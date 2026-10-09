@@ -15,6 +15,10 @@
 #   --calendar (implies --skills; P0 Harsha's phone): step 12 runs. UITEST_CALENDAR_ONLY=1 runs only steps 1 and 12.
 #   --offers (server items 8-10): the server runs RISI_TOOLS/SKILLS/LEDGER on with RISI_QUIET_SPACING_S=1 (two
 #   summaries in a row) and step 13 runs (steps 10/11 only with --skills/--ledger). UITEST_OFFERS_ONLY=1: steps 1 and 13.
+#   --risi-calendar (v1.29 §29, Harsha's GATE) and --risi-notes (v1.30 §30): like --offers (TOOLS/SKILLS/LEDGER on,
+#   spacing 1 s); steps 14-16 run. Everything before them runs with RISI_EVENTS/RISI_NOTES off (as the pilot does
+#   today); step 14 restarts the temp server with RISI_EVENTS=on RISI_NOTES=on RISI_LEDGER=on (and the apps), step 16
+#   restarts it with both off again. UITEST_RISI_ONLY=1: steps 1 and 14-16.
 #
 #  1. A and B sign in through the login UI (dev OTP), become friends, both open the DM; it turns e2ee.
 #  2. A's chat: the "🔒 Private" | "● Official" row under the header; the Official tab's "Start Official".
@@ -68,6 +72,27 @@
 #     the personal digest's totals (LedgerReminders.digest_items, the same query), a "Needs a date" row, a tap opens
 #     the source chat; (d) a second discussion repeats the timed promise in other words → merged: no new row, no
 #     new summary, one row in My promises.
+# 14. (--risi-calendar, before the switch) A and B discuss an "interview panel" in the 1:1 Official; the scripted
+#     extraction gives B (Shenika) "ZZ UI B: interview with ZZ UI A" tomorrow 14:00; B ✓ it (tracked). Then the server
+#     restarts with RISI_EVENTS/RISI_NOTES/RISI_LEDGER on and both apps restart: the "Calendar" tab appears.
+#     (--risi-calendar) A's phone calendar permission revoked; Harsha's request replayed in the Risi chat → ONE
+#     "Risi · Add to Risi Calendar" card within 2 model calls (no "Choose calendar"); [Add] → "Risi · Added to your
+#     Risi Calendar" with no model call; the event is in A's Risi Calendar (Calendar.list = GET /risi/calendar/events);
+#     the Calendar tab: Agenda, Day, Week, Month.
+# 15. (--risi-notes) A and B discuss the "interview room" in Official → after the quiet rule a note card ("… · interview
+#     planning · …", Agreed with A's item, Meetings) in BOTH Risi chats, no discussion summary below it, "Risi · Notes
+#     saved" in Official; A ✓ the item → My promises; tick it on the note screen → done; My promises "Done (last 7
+#     days)" → Reopen → unticked on A's note and B's card; Risi chat ⋮ → Notes: search a key-point word → one row;
+#     share it into the DM (an ordinary message "— shared from Risi Notes"); delete it (gone from the list, the card
+#     stays). (--risi-calendar) the Shenika backfill through the release task, run IN the test server (`elixir
+#     --rpc-eval … RisiMe.Release.risi_calendar_backfill(dry_run: false)`): a proposed "Interview" with an invite in
+#     BOTH Risi chats; both [Accept] → accepted for both (server) and on both cards; the Official "Risi · Meeting"
+#     card with the mini timeline and "Clashes with 1 event" (A's own replayed event at the same time).
+# 16. Switch off: the server restarts with RISI_EVENTS/RISI_NOTES off, the apps restart: no "Calendar" tab, no "Notes"
+#     in the Risi chat's ⋮, and no /risi/calendar or /risi/notes request reaches the server after the restart.
+#     Screens (docs/status/screens/, Harsha's GATE names): risi-calendar-action-card, calendar-agenda, calendar-day,
+#     calendar-week, calendar-month, calendar-invite-card, event-card-official, note-card, note-screen, notes-list,
+#     notes-saved-official.
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -77,13 +102,15 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
 CLS=lk.codegen.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0
+APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;;
   --skills) RISI=1; SKILLS=1; SKILLS_STEP=1; shift;; --ledger) RISI=1; LEDGER=1; shift;;
   --calendar) RISI=1; SKILLS=1; SKILLS_STEP=1; CALENDAR=1; shift;; --offers) RISI=1; SKILLS=1; OFFERS=1; shift;;
+  --risi-calendar) RISI=1; SKILLS=1; RCAL=1; shift;; --risi-notes) RISI=1; SKILLS=1; RNOTES=1; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
-# The ledger's server flags (the quiet rule, the extraction) for --ledger and --offers.
-LEDGER_ON=0; { [ "$LEDGER" = 1 ] || [ "$OFFERS" = 1 ]; } && LEDGER_ON=1
+# The ledger's server flags (the quiet rule, the extraction) for --ledger, --offers and steps 14-15.
+RISI2=0; { [ "$RCAL" = 1 ] || [ "$RNOTES" = 1 ]; } && RISI2=1
+LEDGER_ON=0; { [ "$LEDGER" = 1 ] || [ "$OFFERS" = 1 ] || [ "$RISI2" = 1 ]; } && LEDGER_ON=1
 QUIET_S="${UITEST_QUIET_S:-20}"
 LLM_PORT="${UITEST_LLM_PORT:-8197}"
 APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
@@ -115,6 +142,7 @@ diag() {
 }
 cleanup() {
   cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  [ "${SERVER_STARTED:-0}" = 1 ] && { stop_server >/dev/null 2>&1 || true; }
   tmux kill-session -t "risime-uientry$SUF" 2>/dev/null || true
   tmux kill-session -t "risime-uientry-llm$SUF" 2>/dev/null || true
   if [ "$KEEP" = 0 ]; then
@@ -163,12 +191,40 @@ rules = [
      "actions": [{"tool": "schedule_message", "args": {"to": "ZZ UI B", "text": "Good morning", "at": at, "repeat": None}},
                  final("Tap Add to send it from your phone at that time.")]},
 ]
+# Step 14 (--risi-calendar, RISI_EVENTS on: RC_LIVE=1): Harsha's request replayed for a calendar user → the server
+# tool risi_calendar_add (the Risi Calendar card; no phone calendar), then the final answer (2 model calls).
+if os.environ.get("RC_LIVE") == "1":
+    rules.insert(0, {"name": "rcal_replay", "task": "risi_next_action", "match": "(?i)interview with shenika",
+                     "actions": [{"tool": "risi_calendar_add", "args": {"title": "Interview", "start": os.environ["RC_START"], "end": None,
+                                                                       "all_day": None, "with": None, "reminder_min": None}},
+                                 final("Tap Add on the card.")]})
 # Step 13 (--offers): the extraction of two Official discussions (both before step 11's catch-all rule). The
 # owner refs follow the members' order (u1/u2), so each rule exists for A = u1 and A = u2, told apart by the
 # prompt's member line {"name":"ZZ UI A",…,"ref":"uN",…}. Discussion 1 ("cement delivery"): A's timed item, two
 # vague ones, B's all-day one. Discussion 2 ("just a reminder"): A's timed promise again in other words (merged).
 t_due, b_due, r_due = (os.environ.get(k, d) for k, d in
                        (("OFF_T_DUE", "2099-01-05T15:00"), ("OFF_B_DUE", "2099-01-05"), ("OFF_R_DUE", "2099-01-05T15:30")))
+# Steps 14-15 (--risi-calendar/--risi-notes), first: a later discussion's prompt can quote the earlier ones (the
+# offers rules' words), never the other way round. "interview room" (step 15, a notes user is in the chat: the note
+# schema with topic/language/meetings): A's item, a meeting B proposed. "interview panel" (step 14, before the
+# switch): Shenika's real case, B's "ZZ UI B: interview with ZZ UI A" with a concrete time (the backfill's item).
+seed_due, rn_due, rn_meet = (os.environ.get(k, d) for k, d in
+                             (("RC_SEED_DUE", "2099-01-05T14:00"), ("RN_ITEM_DUE", "2099-01-08T17:00"), ("RN_MEET", "2099-01-09T11:00")))
+for a, b in (("u1", "u2"), ("u2", "u1")):
+    who = '(?=[\\s\\S]*"name":"ZZ UI A"[^}]*"ref":"%s")' % a
+    rules += [
+        {"name": "rnotes_" + a, "task": "discussion_summar(y|ise)", "match": "(?i)^(?=[\\s\\S]*interview room)" + who,
+         "actions": [{"key_points": ["The interview needs a quiet room.", "ZZ UI B leads the room walkthrough.", "The panel meets on the day."],
+                      "summary": "Interview planning.", "topic": "interview planning", "language": "en",
+                      "items": [{"text": "Book the interview room", "owner": a, "counterparts": [b], "due_local": rn_due,
+                                 "due_text": None, "source": ["m1"], "confidence": 0.9}],
+                      "meetings": [{"title": "Room walkthrough", "start_local": rn_meet, "end_local": None, "proposed_by": b,
+                                    "with": [a, b], "source": ["m2"], "confidence": 0.9}]}]},
+        {"name": "rcal_seed_" + a, "task": "discussion_summar(y|ise)", "match": "(?i)^(?=[\\s\\S]*interview panel)" + who,
+         "actions": [{"key_points": ["The interview panel is set.", "ZZ UI B runs the interview."], "summary": "Planning the interview.",
+                      "items": [{"text": "ZZ UI B: interview with ZZ UI A", "owner": b, "counterparts": [a], "due_local": seed_due,
+                                 "due_text": None, "source": ["m2"], "confidence": 0.9}]}]},
+    ]
 for a, b in (("u1", "u2"), ("u2", "u1")):
     who = '(?=[\\s\\S]*"name":"ZZ UI A"[^}]*"ref":"%s")' % a
     item = lambda text, owner, due, due_text, src: {"text": text, "owner": owner, "counterparts": [b if owner == a else a],
@@ -259,7 +315,7 @@ if [ "$RISI" = 1 ]; then
     if [ "$LEDGER_ON" = 1 ]; then echo "RISI_TOOLS=on"; echo "RISI_LEDGER=on"; echo "RISI_QUIET_S=$QUIET_S"; echo "RISI_QUIET_MIN_MSGS=6"
       echo "ELIXIR_ERL_OPTIONS=\"-risime risi_quiet_s $QUIET_S -risime risi_quiet_min_msgs 6\""; fi
     # --offers: two summaries of the same Official in a row (the repeat of step 13 (d)), not 30 min apart.
-    if [ "$OFFERS" = 1 ]; then echo "RISI_QUIET_SPACING_S=1"; fi
+    if [ "$OFFERS" = 1 ] || [ "$RISI2" = 1 ]; then echo "RISI_QUIET_SPACING_S=1"; fi
     if [ "$SKILLS" = 1 ] || [ "$LEDGER_ON" = 1 ]; then echo "RISI_MEMORY_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; fi; } > "$WORK/risi.env"
   umask 022
   # Parallel runs (agents, the release gate) must not share the fake model: refuse a busy port.
@@ -268,11 +324,35 @@ if [ "$RISI" = 1 ]; then
   [ "$(RISI=on RISI_MLS_NIF=/nonexistent fx risi)" = "uientry: risi ok" ] || { echo "fixture: risi seed"; exit 1; }
 fi
 
-tmux new -d -s "risime-uientry$SUF" "cd '$REPO/server' && set -a && . '$WORK/risi.env' && set +a && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
-  PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text TABS=on \
-  ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix phx.server > '$WORK/server.log' 2>&1"
-for _ in $(seq 1 180); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
-curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't start"; tail -20 "$WORK/server.log"; exit 1; }
+# $WORK/phase.env: the switches of steps 14-16 (RISI_EVENTS/RISI_NOTES), empty before step 14. Steps 14-16 restart
+# this server (same store) with other switches, so with --risi-calendar it runs as a named node (loopback epmd, a
+# throwaway cookie): the release task `RisiMe.Release.risi_calendar_backfill/1` is run INSIDE it (--rpc-eval).
+: > "$WORK/phase.env"
+NODE=""; COOKIE=""
+if [ "$RCAL" = 1 ]; then NODE="risime_uientry${SUF}_$$"; COOKIE="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"; fi
+start_server() {
+  local run="$M mix phx.server"
+  [ -n "$NODE" ] && run="$M elixir --sname $NODE --cookie $COOKIE -S mix phx.server"
+  SERVER_STARTED=1
+  tmux new -d -s "risime-uientry$SUF" "cd '$REPO/server' && set -a && . '$WORK/risi.env' && . '$WORK/phase.env' && set +a && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
+    PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text TABS=on \
+    ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $run >> '$WORK/server.log' 2>&1"
+  for _ in $(seq 1 180); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+  curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't start"; tail -20 "$WORK/server.log"; exit 1; }
+}
+# Stops this run's server only: the PID listening on our own port (never a pattern kill).
+stop_server() {
+  local pid
+  pid="$(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)"
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null
+  for _ in $(seq 1 40); do ss -ltnH "sport = :$PORT" | grep -q . || break; sleep 1; done
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; sleep 2; fi
+  tmux kill-session -t "risime-uientry$SUF" 2>/dev/null || true
+  for _ in $(seq 1 20); do ss -ltnH "sport = :$PORT" | grep -q . || return 0; sleep 1; done
+  echo "port $PORT still busy after stopping the server"; return 1
+}
+: > "$WORK/server.log"
+start_server
 curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"tabs":"on"' || { echo "the temp server's /auth/config doesn't say tabs: on"; exit 1; }
 if [ "$SKILLS" = 1 ]; then
   curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"risi_skills":"on"' || { echo "the temp server's /auth/config doesn't say risi_skills: on"; exit 1; }
@@ -345,7 +425,8 @@ wait_list() { for _ in $(seq 1 "${1:-30}"); do on_list && return 0; sleep 1; don
 # Home: step 8's old flake); if the app still left, it is brought back to its list.
 back_to_list() {
   for _ in 1 2 3 4 5 6; do
-    on_list && return 0
+    # (With Risi Calendar on, the list screen may show the Calendar tab: back to Chats.)
+    on_list && { grep -qF 'content-desc="Calendar"' "$WORK/ui-$DEV.xml" && grep -qF 'text="Agenda"' "$WORK/ui-$DEV.xml" && { tap "Chats" || true; sleep 1; }; return 0; }
     [ -s "$WORK/ui-$DEV.xml" ] || { sleep 1; continue; }
     A shell input keyevent KEYCODE_BACK; sleep 1
   done
@@ -445,8 +526,9 @@ pass "both opened the DM; it is e2ee"
 # UITEST_LEDGER_ONLY=1 (with --ledger): only steps 1 and 11.
 # UITEST_CALENDAR_ONLY=1 (with --calendar): only steps 1 and 12.
 # UITEST_OFFERS_ONLY=1 (with --offers): only steps 1 and 13.
-ONLY="${UITEST_SKILLS_ONLY:-0}${UITEST_LEDGER_ONLY:-0}${UITEST_CALENDAR_ONLY:-0}${UITEST_OFFERS_ONLY:-0}"
-if [ "$ONLY" = 0000 ]; then
+# UITEST_RISI_ONLY=1 (with --risi-calendar/--risi-notes): only steps 1 and 14-16.
+ONLY="${UITEST_SKILLS_ONLY:-0}${UITEST_LEDGER_ONLY:-0}${UITEST_CALENDAR_ONLY:-0}${UITEST_OFFERS_ONLY:-0}${UITEST_RISI_ONLY:-0}"
+if [ "$ONLY" = 00000 ]; then
 # ---------------------------------------------------------------- 2. the tab row under the header, Start Official
 DEV=A
 wait_text "🔒 Private" 30 || fail "tab row: no '🔒 Private' under the chat header (tabs on)"
@@ -722,7 +804,7 @@ fi
 fi  # UITEST_SKILLS_ONLY
 
 # ---------------------------------------------------------------- 10. (--skills) Risi skills: alarm, scheduled message, revoke
-if [ "$SKILLS_STEP" = 1 ] && { [ "$ONLY" = 0000 ] || [ "${UITEST_SKILLS_ONLY:-0}" = 1 ]; }; then
+if [ "$SKILLS_STEP" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_SKILLS_ONLY:-0}" = 1 ]; }; then
   DEV=A
   size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
   conv="$(fx conv | sed -n 's/^uientry: conv=//p')"; [ -n "$conv" ] || fail "fixture: the DM's conversation id"
@@ -882,9 +964,27 @@ case System.argv() do
     items = LedgerReminders.digest_items(a.id)
     t = Rest.totals(items, a.id)
     IO.puts("uientry: totals=#{t["i_promised"]} #{t["promised_to_me"]} #{t["others"]} n=#{length(items)}")
+  ["caluser"] ->
+    # Steps 14-16: a calendar user = RISI_EVENTS on + a device advertising risi_events (§29.1).
+    b = Repo.get_by!(User, phone: "+94770000982")
+    IO.puts("uientry: caluser=#{RisiMe.Agent.Calendar.calendar_user?(a.id)} #{RisiMe.Agent.Calendar.calendar_user?(b.id)}")
+  ["advertised"] ->
+    # Step 16: how many of A's and B's devices still advertise risi_events / risi_notes.
+    n = Enum.count(Repo.all(RisiMe.Devices.Device), &Enum.any?(&1.capabilities || [], fn c -> c in ~w(risi_events risi_notes) end))
+    IO.puts("uientry: advertised=#{n}")
+  ["events", who] ->
+    # The caller's view of GET /risi/calendar/events (Calendar.list, the controller's call) from yesterday on.
+    u = if who == "B", do: Repo.get_by!(User, phone: "+94770000982"), else: a
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    {:ok, %{"events" => evs}} =
+      RisiMe.Agent.Calendar.list(u.id, DateTime.to_iso8601(DateTime.add(now, -86_400)), DateTime.to_iso8601(DateTime.add(now, 80 * 86_400)))
+    for e <- evs do
+      st = e["participants"] |> Enum.map(& &1["status"]) |> Enum.sort() |> Enum.join(",")
+      IO.puts("uientry: event #{e["title"]}|#{e["created_by"]}|#{e["my_status"]}|#{st}|#{e["state"]}|#{e["start"]}|#{e["event_id"]}")
+    end
 end
 EXS
-ofx() { (cd server && set -a && . "$WORK/risi.env" && set +a && $M mix run --no-start "$WORK/offers_fx.exs" "$@" 2>/dev/null | grep '^uientry:' || true); }
+ofx() { (cd server && set -a && . "$WORK/risi.env" && . "$WORK/phase.env" && set +a && $M mix run --no-start "$WORK/offers_fx.exs" "$@" 2>/dev/null | grep '^uientry:' || true); }
 # Taps the first node with the exact text $2 below the node $1 (exact text/content-desc, or "prefix*") and above
 # the next card or item ("Risi · …" header, "• …" item line). Scrolls the chat to find them: the anchor not
 # on screen → older; the target not yet on screen → a little newer.
@@ -976,7 +1076,7 @@ open_risi_chat() {
   tap "Risi" || return 1
   wait_for 'text="Ask Risi…"' 60
 }
-if [ "$LEDGER" = 1 ] && { [ "$ONLY" = 0000 ] || [ "${UITEST_LEDGER_ONLY:-0}" = 1 ]; }; then
+if [ "$LEDGER" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_LEDGER_ONLY:-0}" = 1 ]; }; then
   DEV=A; size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
   DEV=A; official_tab B || fail "ledger: A can't open the DM's Official tab"
   DEV=B; official_tab A || fail "ledger: B can't open the DM's Official tab"
@@ -1108,7 +1208,7 @@ PY
 reqs() { [ -f "$WORK/llm-requests.jsonl" ] && wc -l < "$WORK/llm-requests.jsonl" || echo 0; }
 
 # ---------------------------------------------------------------- 12. (--calendar, P0) Harsha's calendar conversation
-if [ "$CALENDAR" = 1 ] && { [ "$ONLY" = 0000 ] || [ "${UITEST_CALENDAR_ONLY:-0}" = 1 ]; }; then
+if [ "$CALENDAR" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_CALENDAR_ONLY:-0}" = 1 ]; }; then
   DEV=A
   calendar_setup calendar
   # Next Monday 14:00–15:00 on A's clock (Harsha's "Monday 12 Oct at 2pm"), and the card's expected texts.
@@ -1239,7 +1339,7 @@ PY
   opened=""
   for _ in 1 2 3; do
     tap "Risi skills" || fail "calendar: Settings has no 'Risi skills' (Details)"
-    wait_for 'text="Risi skills"' 3 >/dev/null; sleep 2
+    wait_for 'text="Risi skills"' 3 >/dev/null || true; sleep 2
     has 'content-desc="Alarm skill"' && { opened=1; break; }
     A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1
   done
@@ -1306,7 +1406,7 @@ PY
 }
 
 # ---------------------------------------------------------------- 13. (--offers, server items 8-10) offers, clarify, My promises, dedupe
-if [ "$OFFERS" = 1 ] && { [ "$ONLY" = 0000 ] || [ "${UITEST_OFFERS_ONLY:-0}" = 1 ]; }; then
+if [ "$OFFERS" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_OFFERS_ONLY:-0}" = 1 ]; }; then
   DEV=A
   calendar_setup offers
   size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
@@ -1482,7 +1582,453 @@ PY
   DEV=A
 fi
 
-if [ "$CALENDAR" = 1 ] && { [ "$ONLY" = 0000 ] || [ "${UITEST_CALENDAR_ONLY:-0}" = 1 ]; }; then calendar_revoke_check; fi
+if [ "$CALENDAR" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_CALENDAR_ONLY:-0}" = 1 ]; }; then calendar_revoke_check; fi
+
+# ---------------------------------------------------------------- 14-16. (--risi-calendar, --risi-notes) Risi Calendar and Notes
+# Taps the text/content-desc $2 nearest below a node with the exact text $1 (the lowest such anchor that has one within
+# 600 px: an item's title can also be an invite card's title). No scrolling.
+tap_near_below() {
+  local xy
+  dump
+  xy="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" "$2" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+def c(n):
+    x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); return (x1 + x2) // 2, (y1 + y2) // 2
+anchors = [c(n) for n in nodes if (n.get('text') or '') == sys.argv[2]]
+targets = [c(n) for n in nodes if sys.argv[3] in ((n.get('text') or ''), (n.get('content-desc') or ''))]
+for ax, ay in sorted(anchors, key=lambda p: -p[1]):
+    below = sorted((ty, tx) for tx, ty in targets if ay < ty < ay + 600)
+    if below:
+        print(below[0][1], below[0][0]); break
+PY
+)"
+  [ -n "$xy" ] || { echo "    [$DEV] no '$2' below '$1'"; return 1; }
+  A shell input tap $xy
+}
+# Exact visible text only (as step 8b's tap_text, which isn't defined with UITEST_*_ONLY); dumps first.
+tap_exact() {
+  local xy
+  dump
+  xy="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+for n in nodes:
+    if (n.get('text') or '') == sys.argv[2]:
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+)"
+  [ -n "$xy" ] || { echo "    [$DEV] no text node: $1"; return 1; }
+  A shell input tap $xy
+}
+# Runs "$@" until it succeeds, scrolling the chat a little older between tries (from the newest end), then newer.
+scroll_until() {
+  local i
+  for i in $(seq 1 24); do
+    "$@" >/dev/null 2>&1 && return 0
+    if [ "$i" -le 14 ]; then A shell input swipe $((W / 2)) $((H * 35 / 100)) $((W / 2)) $((H * 55 / 100)) 300
+    else A shell input swipe $((W / 2)) $((H * 55 / 100)) $((W / 2)) $((H * 35 / 100)) 300; fi
+    sleep 1
+  done
+  echo "    [$DEV] not found while scrolling: $*"; return 1
+}
+has_checkbox() { [ -n "$(checkbox_of "$1")" ]; }
+# The lowest node whose content-desc is $1 (a list row's ⋮ "More" below the top bar's).
+tap_last_desc() {
+  local xy
+  dump
+  xy="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+hits = []
+for n in nodes:
+    if (n.get('content-desc') or '') == sys.argv[2]:
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); hits.append(((y1 + y2) // 2, (x1 + x2) // 2))
+if hits:
+    y, x = max(hits); print(x, y)
+PY
+)"
+  [ -n "$xy" ] || { echo "    [$DEV] no node described '$1'"; return 1; }
+  A shell input tap $xy
+}
+# "x y true|false": the tick-box on the row of the item titled $1 (a note's Agreed item; the lowest such row).
+checkbox_of() {
+  dump
+  python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+b = lambda n: list(map(int, re.findall(r'\d+', n.get('bounds'))))
+texts = [b(n) for n in nodes if (n.get('text') or '') == sys.argv[2]]
+boxes = [(b(n), n.get('checked')) for n in nodes if n.get('class') == 'android.widget.CheckBox']
+for t in sorted(texts, key=lambda r: -r[1]):
+    ty = (t[1] + t[3]) // 2
+    near = [(abs((x[1] + x[3]) // 2 - ty), x, ch) for x, ch in boxes if x[2] <= t[0] + 10 and abs((x[1] + x[3]) // 2 - ty) < 110]
+    if near:
+        _, x, ch = min(near)
+        print((x[0] + x[2]) // 2, (x[1] + x[3]) // 2, ch); break
+PY
+}
+wait_checkbox() {  # $1 item title, $2 true|false, $3 s
+  local r
+  for _ in $(seq 1 "${3:-30}"); do r="$(checkbox_of "$1")"; [ "${r##* }" = "$2" ] && return 0; sleep 1; done
+  echo "    [$DEV] the tick-box of '$1' isn't checked=$2 (${r:-no tick-box})"; return 1
+}
+wait_item() {  # $1 = a fixed string of `ofx state`'s item line ("A|text|state|"), $2 s
+  local t0; t0=$(date +%s)
+  until ofx state | grep -qF "$1"; do [ $(( $(date +%s) - t0 )) -gt "${2:-60}" ] && return 1; sleep 3; done
+}
+# Steps 14-15's times, in A's zone on the server: Shenika's interview tomorrow 14:00 (the earliest timed item: the
+# backfill creates events by due, ≤ 3 Risi-made events per Official chat per day), the note's item +4 d 17:00 and
+# its meeting +5 d 11:00 (a meeting at an item's time would be skipped).
+rc_dates() {
+  [ -n "${RC_SEED_DUE:-}" ] && return 0
+  local stz; stz="$(ofx tz | sed -n 's/^uientry: tz=//p')"; [ -n "$stz" ] || fail "risi: fixture: A's zone"
+  read -r RC_SEED_DUE RN_ITEM_DUE RN_MEET <<<"$(python3 -I - "$stz" <<'PY'
+import sys, datetime as dt
+from zoneinfo import ZoneInfo
+d = dt.datetime.now(ZoneInfo(sys.argv[1])).date()
+f = lambda n, hm: (d + dt.timedelta(days=n)).isoformat() + "T" + hm
+print(f(1, "14:00"), f(4, "17:00"), f(5, "11:00"))
+PY
+)"
+  RC_START="$RC_SEED_DUE"
+  export RC_SEED_DUE RN_ITEM_DUE RN_MEET RC_START
+}
+SEED_TEXT="ZZ UI B: interview with ZZ UI A"; RN_TEXT="Book the interview room"
+NOTE_A="ZZ UI A × ZZ UI B · interview planning"; NOTE_B="ZZ UI B × ZZ UI A · interview planning"
+restart_apps() {
+  local d
+  for d in A B; do DEV=$d; A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || true; done
+  for d in A B; do DEV=$d; wait_list 60 || fail "$1: $d's app didn't come back to its chat list"; dismiss_prompts; done
+  DEV=A
+}
+# Restarts this run's temp server (same store) with the §29/§30 switches on or off.
+switch_server() {
+  stop_server || fail "risi: couldn't stop the temp server"
+  if [ "$1" = on ]; then printf 'RISI_EVENTS=on\nRISI_NOTES=on\nRISI_LEDGER=on\nRISI_TOOLS=on\nRISI_SKILLS=on\n' > "$WORK/phase.env"; else : > "$WORK/phase.env"; fi
+  LOGMARK="$(wc -l < "$WORK/server.log")"
+  start_server
+  local cfg; cfg="$(curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" || true)"
+  if [ "$1" = on ]; then
+    printf '%s' "$cfg" | grep -q '"risi_events":"on"' || fail "risi: /auth/config doesn't say risi_events: on ($cfg)"
+    printf '%s' "$cfg" | grep -q '"risi_notes":"on"' || fail "risi: /auth/config doesn't say risi_notes: on ($cfg)"
+  else
+    printf '%s' "$cfg" | grep -qE '"risi_(events|notes)":"on"' && fail "risi: /auth/config still has risi_events/risi_notes on ($cfg)"
+  fi
+  return 0
+}
+open_settings_row() {  # $1 = the row's text (Settings, scrolled into view)
+  back_to_list || return 1
+  tap "More options" || return 1
+  wait_for 'text="Settings"' 10 || return 1
+  tap "Settings" || return 1
+  for _ in 1 2 3 4 5 6; do has "text=\"$1\"" && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
+  A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 45 / 100)) 400; sleep 1
+  tap "$1"
+}
+
+# -- 14, before the switch: Shenika's real case, an item with a concrete time agreed in Official (B owns it, B ✓ it).
+if [ "$RCAL" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_RISI_ONLY:-0}" = 1 ]; }; then
+  DEV=A; size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
+  rc_dates
+  conv="$(fx conv | sed -n 's/^uientry: conv=//p')"
+  write_script "2099-01-01T00:00:00.000Z" "${conv:-dm:none}"; start_llm
+  DEV=A; official_tab B || fail "risi-calendar: A can't open the DM's Official tab"
+  DEV=B; official_tab A || fail "risi-calendar: B can't open the DM's Official tab"
+  DEV=A; say "ZZ UI B, can you sit on the interview panel with me tomorrow at 2pm" || fail "risi-calendar: A seed 1"
+  DEV=B; say "Yes, I will do the interview panel with you tomorrow at 2pm" || fail "risi-calendar: B seed 2"
+  DEV=A; say "Great, the interview panel starts at 2pm" || fail "risi-calendar: A seed 3"
+  DEV=B; say "I will bring the candidate notes" || fail "risi-calendar: B seed 4"
+  DEV=A; say "Thanks" || fail "risi-calendar: A seed 5"
+  DEV=B; say "See you tomorrow" || fail "risi-calendar: B seed 6"
+  wait_item "B|$SEED_TEXT|" $(( QUIET_S + 180 )) || { ofx state | sed 's/^/    /'; fail "risi-calendar: the seed discussion gave no '$SEED_TEXT' item (quiet rule)"; }
+  DEV=B; open_risi_chat || fail "risi-calendar: B can't open its Risi chat (seed)"
+  scroll_to "• $SEED_TEXT" || fail "risi-calendar: B's Risi chat doesn't list '$SEED_TEXT'"
+  tap_below "• $SEED_TEXT" "✓" || fail "risi-calendar: B's ✓ on '$SEED_TEXT'"
+  wait_item "B|$SEED_TEXT|confirmed|" 60 || { ofx state | sed 's/^/    /'; fail "risi-calendar: B's ✓ didn't confirm '$SEED_TEXT'"; }
+  pass "risi-calendar: before the switch, B (Shenika) agreed '$SEED_TEXT' at $RC_SEED_DUE in the 1:1 Official and confirmed it"
+  DEV=A
+fi
+
+if [ "$RISI2" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_RISI_ONLY:-0}" = 1 ]; }; then
+  DEV=A; size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
+  rc_dates
+  echo "==> the temp server again with RISI_EVENTS=on RISI_NOTES=on RISI_LEDGER=on (steps 14-15)"
+  switch_server on
+  restart_apps "risi on"
+  for DEV in A B; do wait_for 'content-desc="Calendar"' 60 || fail "risi on: $DEV's chat list has no Calendar tab"; done
+  DEV=A
+  cu=""; for _ in $(seq 1 30); do cu="$(ofx caluser)"; [ "$cu" = "uientry: caluser=true true" ] && break; sleep 2; done
+  [ "$cu" = "uientry: caluser=true true" ] || fail "risi on: A and B aren't calendar users (a device advertising risi_events): $cu"
+  pass "risi on: /auth/config says risi_events/risi_notes on; both phones show the Calendar tab and advertise risi_events"
+  [ "$RCAL" = 1 ] && export RC_LIVE=1
+  conv="$(fx conv | sed -n 's/^uientry: conv=//p')"
+  write_script "2099-01-01T00:00:00.000Z" "${conv:-dm:none}"; start_llm
+  RMARK="$(wc -l < "$WORK/server.log")"
+
+  # ---- 14. Harsha's replay → one Risi Calendar card → [Add] → the event; the Calendar tab's four views
+  if [ "$RCAL" = 1 ]; then
+    DEV=A
+    A shell pm revoke "$PKG" android.permission.READ_CALENDAR 2>/dev/null || true
+    A shell pm revoke "$PKG" android.permission.WRITE_CALENDAR 2>/dev/null || true
+    A shell dumpsys package "$PKG" 2>/dev/null | grep -q 'android.permission.READ_CALENDAR: granted=true' && fail "risi-calendar: couldn't revoke READ_CALENDAR"
+    open_risi_chat || fail "risi-calendar: A can't open its Risi chat"
+    r0="$(reqs)"
+    tap "Ask Risi…" || true; sleep 0.5
+    A shell input text "add%smy%sinterview%swith%sShenika%son%sMonday%s12%sOct%sat%s2pm%sto%smy%scalendar"; sleep 0.5
+    tap "Send" || fail "risi-calendar: send Harsha's request"
+    wait_text "Risi · Add to Risi Calendar" 120 || fail "risi-calendar: no 'Risi · Add to Risi Calendar' card"
+    for _ in $(seq 1 30); do [ $(( $(reqs) - r0 )) -ge 2 ] && break; sleep 1; done
+    sleep 3
+    turns=$(( $(reqs) - r0 ))
+    [ "$turns" -le 2 ] || fail "risi-calendar: the card took $turns model calls (want ≤ 2: one turn)"
+    dump
+    [ "$(count_text "Risi · Add to Risi Calendar")" = 1 ] || fail "risi-calendar: want exactly one action card ($(count_text "Risi · Add to Risi Calendar"))"
+    has 'text="Choose calendar"' && fail "risi-calendar: the card asks to choose a phone calendar (Risi Calendar needs no device calendar)"
+    has 'text="Interview"' || fail "risi-calendar: the card has no title 'Interview'"
+    shot "risi-calendar-action-card"
+    pass "risi-calendar: Harsha's request → ONE 'Risi · Add to Risi Calendar' card in $turns model calls, with the calendar permission revoked"
+    r2="$(reqs)"
+    tap_below "Risi · Add to Risi Calendar" "Add" || fail "risi-calendar: tap Add"
+    wait_text "Risi · Added to your Risi Calendar" 60 || fail "risi-calendar: no 'Risi · Added to your Risi Calendar' after [Add]"
+    sleep 3
+    [ "$(reqs)" = "$r2" ] || fail "risi-calendar: [Add] cost a model call ($(reqs) vs $r2)"
+    ev=""; for _ in $(seq 1 20); do ev="$(ofx events A | grep -F 'uientry: event Interview|' | grep -v '|risi|' || true)"; [ -n "$ev" ] && break; sleep 1; done
+    [ -n "$ev" ] || { ofx events A | sed 's/^/    /'; fail "risi-calendar: GET /risi/calendar/events (Calendar.list) has no 'Interview' for A"; }
+    echo "    $ev"
+    printf '%s\n' "$ev" | grep -q '|accepted|' || fail "risi-calendar: A's own event isn't accepted: $ev"
+    pass "risi-calendar: [Add] → 'Added to your Risi Calendar', 0 model calls; the event is in A's Risi Calendar (server)"
+    back_to_list || fail "risi-calendar: back to the chat list (Calendar tab)"
+    tap "Calendar" || fail "risi-calendar: no Calendar tab"
+    wait_text "Agenda" 20 || fail "risi-calendar: the Calendar tab has no Agenda"
+    wait_text "Interview" 30 || fail "risi-calendar: the Agenda doesn't show 'Interview'"
+    shot "calendar-agenda"
+    tap "Day" || fail "risi-calendar: no Day view"; sleep 1
+    tap "›" || fail "risi-calendar: Day: no ›"
+    wait_text "Interview" 20 || fail "risi-calendar: the Day view (tomorrow) doesn't show 'Interview'"
+    shot "calendar-day"
+    tap "Week" || fail "risi-calendar: no Week view"
+    wait_text "Interview" 20 || fail "risi-calendar: the Week view doesn't show 'Interview'"
+    # (Later in the week than the screen holds: bring the event's day into view for the screenshot.)
+    A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1
+    shot "calendar-week"
+    tap "Month" || fail "risi-calendar: no Month view"; sleep 2
+    shot "calendar-month"
+    tap "Agenda" || true
+    pass "risi-calendar: the Calendar tab shows the event in Agenda, Day and Week; Month renders"
+    back_to_list || true
+  fi
+
+  # ---- 15. a note after a test discussion
+  if [ "$RNOTES" = 1 ]; then
+    DEV=A; official_tab B || fail "risi-notes: A can't open the DM's Official tab"
+    DEV=B; official_tab A || fail "risi-notes: B can't open the DM's Official tab"
+    DEV=A; say "We need a quiet interview room for the panel day" || fail "risi-notes: A message 1"
+    DEV=B; say "I will lead the room walkthrough the day before" || fail "risi-notes: B message 2"
+    DEV=A; say "I will book the interview room by Tuesday 5pm" || fail "risi-notes: A message 3"
+    DEV=B; say "Good, let us walk through the room on Wednesday at 11" || fail "risi-notes: B message 4"
+    DEV=A; say "Agreed" || fail "risi-notes: A message 5"
+    DEV=B; say "Thanks, see you then" || fail "risi-notes: B message 6"
+    pass "risi-notes: A and B discussed the interview room in Official (6 messages)"
+    wait_item "A|$RN_TEXT|" $(( QUIET_S + 180 )) || { ofx state | sed 's/^/    /'; fail "risi-notes: no note item '$RN_TEXT' (quiet rule → note)"; }
+    DEV=A; open_risi_chat || fail "risi-notes: A can't open its Risi chat"
+    scroll_to "$NOTE_A*" || fail "risi-notes: A's Risi chat has no note card '$NOTE_A …'"
+    # No §27 discussion summary was posted for this discussion: none below the note card.
+    below="$(python3 -I - "$WORK/ui-A.xml" "$NOTE_A" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+nodes = [(int(re.findall(r'\d+', n.get('bounds'))[1]), n.get('text') or '') for n in ET.parse(sys.argv[1]).iter('node')]
+ty = max((y for y, t in nodes if t.startswith(sys.argv[2])), default=None)
+print(sum(1 for y, t in nodes if ty is not None and y > ty and t.startswith("Summary of your discussion")))
+PY
+)"
+    [ "$below" = 0 ] || fail "risi-notes: a 'Summary of your discussion' card was posted with the note (want the note only)"
+    for _ in 1 2 3; do has "text=\"$RN_TEXT\"" && has 'Room walkthrough' && break; A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 40 / 100)) 300; sleep 1; done
+    has 'text="Agreed"' || fail "risi-notes: A's note card has no 'Agreed'"
+    has "text=\"$RN_TEXT\"" || fail "risi-notes: A's note card doesn't list '$RN_TEXT'"
+    has 'text="Meetings"' || fail "risi-notes: A's note card has no 'Meetings'"
+    has '• Room walkthrough' || fail "risi-notes: A's note card has no meeting 'Room walkthrough'"
+    shot "note-card"
+    pass "risi-notes: A's Risi chat: the note card '$NOTE_A …' with Agreed ($RN_TEXT, owner + due) and Meetings (Room walkthrough); no discussion summary"
+    DEV=B; open_risi_chat || fail "risi-notes: B can't open its Risi chat"
+    scroll_to "$NOTE_B*" || fail "risi-notes: B's Risi chat has no note card '$NOTE_B …' (her name first)"
+    pass "risi-notes: B's Risi chat has the same note ('$NOTE_B …')"
+    DEV=A; official_tab B || fail "risi-notes: A can't reopen Official"
+    scroll_to "Risi · Notes saved" || fail "risi-notes: no 'Risi · Notes saved' card in Official"
+    for _ in 1 2 3; do has 'text="Notes saved · open"' && break; A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 45 / 100)) 300; sleep 1; done
+    has 'text="Notes saved · open"' || fail "risi-notes: the Official card has no [Notes saved · open]"
+    shot "notes-saved-official"
+    pass "risi-notes: Official has 'Risi · Notes saved' with [Notes saved · open]"
+    back_to_list || true
+  fi
+
+  # ---- 14. Shenika backfill: the release task inside the test server → invites in both Risi chats → both accept
+  if [ "$RCAL" = 1 ]; then
+    DEV=A
+    out="$(cd server && timeout 120 $M elixir --sname "uientry_rpc_$$" --cookie "$COOKIE" --rpc-eval "$NODE@$(hostname -s)" 'RisiMe.Release.risi_calendar_backfill(dry_run: false)' 2>&1 || true)"
+    printf '%s\n' "$out" | tail -2 | sed 's/^/    release task: /'
+    ev=""; for _ in $(seq 1 45); do ev="$(ofx events B | grep -F 'uientry: event Interview|risi|' || true)"; [ -n "$ev" ] && break; sleep 2; done
+    [ -n "$ev" ] || { grep -a 'calendar backfill' "$WORK/server.log" | tail -3 | sed 's/^/    /'; fail "risi-calendar: the backfill made no 'Interview' event for B (Shenika)"; }
+    echo "    $ev"
+    printf '%s\n' "$ev" | grep -q '|proposed|proposed,proposed|active|' || fail "risi-calendar: the backfilled event isn't proposed for both: $ev"
+    pass "risi-calendar: RisiMe.Release.risi_calendar_backfill(dry_run: false) in the test server → one proposed 'Interview' for A and B"
+    DEV=B; open_risi_chat || fail "risi-calendar: B can't open its Risi chat (invite)"
+    scroll_to "Risi · Invitation" || fail "risi-calendar: no 'Risi · Invitation' in B's Risi chat"
+    for _ in 1 2 3; do has 'text="Accept"' && break; A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 45 / 100)) 300; sleep 1; done
+    has 'text="Interview"' || fail "risi-calendar: B's invitation isn't for 'Interview'"
+    shot "calendar-invite-card"
+    tap_below "Risi · Invitation" "Accept" || fail "risi-calendar: B's [Accept]"
+    DEV=A; open_risi_chat || fail "risi-calendar: A can't open its Risi chat (invite)"
+    scroll_to "Risi · Invitation" || fail "risi-calendar: no 'Risi · Invitation' in A's Risi chat"
+    tap_below "Risi · Invitation" "Accept" || fail "risi-calendar: A's [Accept]"
+    ok=""; for _ in $(seq 1 30); do
+      ofx events A | grep -F 'uientry: event Interview|risi|' | grep -q '|accepted|accepted,accepted|active|' \
+        && ofx events B | grep -F 'uientry: event Interview|risi|' | grep -q '|accepted|accepted,accepted|active|' && { ok=1; break; }
+      sleep 2
+    done
+    [ -n "$ok" ] || { ofx events A | sed 's/^/    A /'; ofx events B | sed 's/^/    B /'; fail "risi-calendar: both [Accept] didn't make the event accepted in both calendars"; }
+    wait_text "Accepted" 30 || fail "risi-calendar: A's invite card doesn't show 'Accepted'"
+    pass "risi-calendar: both phones [Accept] the invite → accepted in both Risi Calendars"
+    # The Official chat's Meeting card: the mini timeline from A's own calendar, the replayed event clashing.
+    official_tab B || fail "risi-calendar: A can't open Official (event card)"
+    scroll_to "Risi · Meeting" || fail "risi-calendar: no 'Risi · Meeting' card in Official"
+    for _ in 1 2 3; do has 'Clashes with 1 event' && break; A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 45 / 100)) 300; sleep 1; done
+    has 'Your day' || fail "risi-calendar: the Official event card has no mini day timeline"
+    has 'Clashes with 1 event' || fail "risi-calendar: the Official event card doesn't show 'Clashes with 1 event' (A's own Interview at the same time)"
+    shot "event-card-official"
+    pass "risi-calendar: Official 'Risi · Meeting' card with the mini timeline and 'Clashes with 1 event'"
+    DEV=B; back_to_list || true; tap "Calendar" || fail "risi-calendar: B has no Calendar tab"
+    wait_text "Interview" 30 || fail "risi-calendar: B's Calendar tab doesn't show 'Interview'"
+    wait_text "Accepted" 15 || fail "risi-calendar: B's Calendar tab doesn't show it accepted"
+    pass "risi-calendar: B's Calendar tab shows 'Interview' accepted"
+    back_to_list || true; DEV=A
+  fi
+
+  # ---- 15. items ↔ My promises, tick ↔ done, the Notes list, share, delete
+  if [ "$RNOTES" = 1 ]; then
+    DEV=A; open_risi_chat || fail "risi-notes: A can't open its Risi chat (items)"
+    scroll_until tap_near_below "$RN_TEXT" "✓" || fail "risi-notes: no ✓ on A's note item"
+    wait_item "A|$RN_TEXT|confirmed|" 60 || { ofx state | sed 's/^/    /'; fail "risi-notes: ✓ didn't confirm '$RN_TEXT'"; }
+    open_settings_row "My promises" || fail "risi-notes: Settings has no 'My promises'"
+    wait_text "$RN_TEXT" 30 || fail "risi-notes: My promises doesn't list '$RN_TEXT'"
+    has 'From note:' || fail "risi-notes: My promises has no 'From note: …' on '$RN_TEXT'"
+    pass "risi-notes: A ✓ '$RN_TEXT' in the note → My promises lists it 'From note'"
+    open_risi_chat || fail "risi-notes: back to A's Risi chat"
+    scroll_to "Open note" || fail "risi-notes: the note card has no [Open note]"
+    tap "Open note" || fail "risi-notes: tap Open note"
+    wait_text "Key points" 30 || fail "risi-notes: [Open note] didn't open the note screen"
+    wait_checkbox "$RN_TEXT" false 20 || fail "risi-notes: the note screen has no empty tick-box for '$RN_TEXT'"
+    xy="$(checkbox_of "$RN_TEXT")"; A shell input tap ${xy% *}
+    wait_item "A|$RN_TEXT|done|" 60 || { ofx state | sed 's/^/    /'; fail "risi-notes: ticking didn't make '$RN_TEXT' done"; }
+    wait_checkbox "$RN_TEXT" true 30 || fail "risi-notes: the tick-box didn't stay ticked"
+    shot "note-screen"
+    pass "risi-notes: ticking '$RN_TEXT' on the note screen → done (server)"
+    DEV=B; open_risi_chat || fail "risi-notes: B can't open its Risi chat (tick)"
+    scroll_until has_checkbox "$RN_TEXT" || fail "risi-notes: no tick-box for '$RN_TEXT' on B's note card"
+    wait_checkbox "$RN_TEXT" true 60 || fail "risi-notes: B's note card doesn't show '$RN_TEXT' ticked"
+    pass "risi-notes: B's note card shows it ticked"
+    DEV=A; open_settings_row "My promises" || fail "risi-notes: Settings → My promises (reopen)"
+    found=0
+    for _ in 1 2 3 4 5 6; do has 'text="Done (last 7 days)' && has 'text="Reopen"' && { found=1; break; }; A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 300; sleep 1; done
+    [ "$found" = 1 ] || fail "risi-notes: My promises has no 'Done (last 7 days)' with [Reopen]"
+    # (Not behind the navigation bar: bring [Reopen] above the bottom fifth first.)
+    for _ in 1 2 3 4; do ry="$(node_xy "Reopen" | awk '{print $2}')"; [ -n "$ry" ] && [ "$ry" -lt $((H * 78 / 100)) ] && break; A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 45 / 100)) 400; sleep 1; done
+    tap_near_below "$RN_TEXT" "Reopen" || tap "Reopen" || fail "risi-notes: tap Reopen"
+    wait_item "A|$RN_TEXT|confirmed|" 60 || { ofx state | sed 's/^/    /'; fail "risi-notes: Reopen didn't reopen '$RN_TEXT'"; }
+    open_risi_chat || fail "risi-notes: A's Risi chat (reopened)"
+    scroll_until has_checkbox "$RN_TEXT" || fail "risi-notes: no tick-box for '$RN_TEXT' on A's card (reopened)"
+    wait_checkbox "$RN_TEXT" false 60 || fail "risi-notes: A's note card still shows '$RN_TEXT' ticked after Reopen"
+    DEV=B; open_risi_chat || fail "risi-notes: B's Risi chat (reopened)"
+    scroll_until has_checkbox "$RN_TEXT" || fail "risi-notes: no tick-box for '$RN_TEXT' on B's card (reopened)"
+    wait_checkbox "$RN_TEXT" false 60 || fail "risi-notes: B's note card still shows '$RN_TEXT' ticked after Reopen"
+    pass "risi-notes: My promises 'Done (last 7 days)' → Reopen → unticked on both phones' note cards"
+    # The Notes list: search a key-point word, share into the DM, delete (the card stays).
+    DEV=A; open_risi_chat || fail "risi-notes: A's Risi chat (Notes list)"
+    tap "More options" || fail "risi-notes: the Risi chat's ⋮"
+    wait_text "Notes" 10 || fail "risi-notes: the Risi chat's ⋮ has no 'Notes'"
+    tap_exact "Notes" || fail "risi-notes: tap Notes"
+    wait_text "Risi Notes" 20 || fail "risi-notes: ⋮ → Notes didn't open 'Risi Notes'"
+    type_into "Search notes" "quiet" || fail "risi-notes: no search box"
+    hide_keyboard; sleep 3
+    wait_text "$NOTE_A*" 20 || fail "risi-notes: searching 'quiet' doesn't find the note"
+    dump
+    n_rows="$(python3 -I - "$WORK/ui-A.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+print(sum(1 for n in ET.parse(sys.argv[1]).iter('node') if (n.get('text') or '').endswith('· interview planning') or '· interview planning ·' in (n.get('text') or '')))
+PY
+)"
+    [ "$n_rows" = 1 ] || fail "risi-notes: searching 'quiet' gives $n_rows rows (want 1)"
+    shot "notes-list"
+    pass "risi-notes: Risi chat ⋮ → Notes; search 'quiet' (a key-point word) → one row"
+    tap_last_desc "More" || fail "risi-notes: the row's ⋮"
+    wait_text "Share into a chat" 10 || fail "risi-notes: the row's ⋮ has no 'Share into a chat'"
+    tap_exact "Share into a chat" || fail "risi-notes: tap Share into a chat"
+    wait_text "It is sent as your own message." 10 || fail "risi-notes: no chat picker"
+    tap "ZZ UI B" || fail "risi-notes: the picker doesn't list ZZ UI B"
+    sleep 3
+    tap_last_desc "More" || fail "risi-notes: the row's ⋮ (delete)"
+    wait_text "Delete" 10 || fail "risi-notes: the row's ⋮ has no Delete"
+    tap_exact "Delete" || fail "risi-notes: tap Delete"
+    has 'text="Delete this note?"' && { tap_exact "Delete" || true; }
+    wait_gone "· interview planning" 20 || fail "risi-notes: the deleted note is still in the list"
+    pass "risi-notes: shared the note into a chat; deleted it from the list"
+    open_risi_chat || fail "risi-notes: A's Risi chat (after delete)"
+    scroll_to "$NOTE_A*" || fail "risi-notes: deleting from the list removed the card from the Risi chat"
+    DEV=B; open_chat "ZZ UI A" || fail "risi-notes: B can't open the DM"
+    got=""
+    for t in "🔒 Private" "● Official"; do tap "$t" || true; sleep 2; wait_for "shared from Risi Notes" 30 && { got="$t"; break; }; done
+    [ -n "$got" ] || fail "risi-notes: B didn't receive the shared note ('— shared from Risi Notes')"
+    pass "risi-notes: the card stays in A's Risi chat; B received the shared note as an ordinary message ($got)"
+    back_to_list || true; DEV=A
+  fi
+  if [ "$RCAL" = 1 ]; then
+    # (grep -c, not -q: -q ends the pipe early and pipefail turns tail's SIGPIPE into a failure.)
+    n_cal="$(tail -n +"$RMARK" "$WORK/server.log" | grep -ac '/api/v1/risi/calendar' || true)"
+    [ "${n_cal:-0}" -gt 0 ] || fail "risi on: the server log shows no /risi/calendar request (the switch-off check would be blind)"
+  fi
+  logcat_ok "risi calendar/notes"; DEV=B; logcat_ok "risi calendar/notes"; DEV=A
+
+  # ---- 16. switch off: no Calendar tab, no Notes, no calendar/notes calls
+  echo "==> the temp server again with RISI_EVENTS/RISI_NOTES off (step 16)"
+  switch_server off
+  restart_apps "risi off"
+  # The app starts with the switch it saw last (kept across restarts) until /auth/config answers: a first
+  # calendar sync may go out and get 503, then the app re-registers without risi_events. After that settles,
+  # nothing may reach /risi/calendar or /risi/notes.
+  sleep 15
+  early="$(tail -n +"$LOGMARK" "$WORK/server.log" | grep -acE '/api/v1/risi/(calendar|notes)' || true)"
+  echo "    requests while the apps read the switch at start: ${early:-0} (answered 503)"
+  LOGMARK="$(wc -l < "$WORK/server.log")"
+  for DEV in A B; do
+    back_to_list || fail "risi off: $DEV's chat list"
+    has 'content-desc="Calendar"' && fail "risi off: $DEV still shows the Calendar tab"
+  done
+  DEV=A
+  shot "42-risi-off-no-calendar-tab"
+  open_risi_chat || fail "risi off: A can't open its Risi chat"
+  tap "More options" || fail "risi off: the Risi chat's ⋮"
+  sleep 2; dump
+  [ "$(count_text "Notes")" = 0 ] || fail "risi off: the Risi chat's ⋮ still has 'Notes'"
+  A shell input keyevent KEYCODE_BACK; sleep 1
+  back_to_list || true
+  calls="$(tail -n +"$LOGMARK" "$WORK/server.log" | grep -acE '/api/v1/risi/(calendar|notes)' || true)"
+  [ "${calls:-0}" = 0 ] || { tail -n +"$LOGMARK" "$WORK/server.log" | grep -aE '/api/v1/risi/(calendar|notes)' | head -3 | sed 's/^/    /'; fail "risi off: $calls /risi/calendar or /risi/notes requests after the switch off"; }
+  adv="$(ofx advertised)"
+  [ "$adv" = "uientry: advertised=0" ] || fail "risi off: devices still advertise risi_events/risi_notes after the switch off ($adv)"
+  pass "risi off: no Calendar tab on either phone, no 'Notes' in the Risi chat's ⋮, no /risi/calendar|notes request, no device advertises risi_events/risi_notes"
+fi
 
 DEV=A; logcat_ok "ui entry"
 DEV=B; logcat_ok "ui entry"
