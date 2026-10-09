@@ -16,6 +16,78 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
+## Items 8–10 2026-10-09: proactive offers, My promises split, dedupe + vague items — READY (not deployed)
+Commits: 6cc393a (item 9 + migration), 35a6b99 (items 8 + 10 + backfill). Gate (partition
+`_ofr`): 935 tests, 0 failures, 15 skipped, 3 excluded. Tests: `offers_items_8_10_test.exs`
+(fixed clock, fake model) plus key checks updated in `ledger_s23`, `ledger_s24`, `risi_rest_s8`.
+- **Migration** `20261022100000_risi_item_offers` (additive): `risi_item_offers(item_id, user_id,
+  kind, state, write_id)` (ids/states only, no text; deleted with the item) and
+  `risi_commitments.needs_clarification` (bool, default false).
+- **Item 8, proactive offers (`Agent.Offers`):** an item (ledger or v1.24) with a concrete future
+  time (`due` set, not all-day) gets, in each involved user's **Risi chat**, the P0 action card:
+  a `confirm` with `tool: "calendar_add"` (title = item text, start = due, 1 h, `args` exact, the
+  `calendar` hint, buttons add/cancel; [Add]/[Edit]/[Cancel] work exactly as the P0 card) and,
+  if the Reminders skill is `ask`/`allowed` and the time is >1 min ahead, a second `confirm`
+  `tool: "set_reminder"` for 15 min before ("Remind you on Mon 12 Oct at 13:45: …"). Gates:
+  `RISI_SKILLS=on`, a `risi_skills` device, an active Risi chat, Calendar skill `ask`/`allowed`
+  (a proactive card is **always asked**, never auto-run under Allowed), still an active member.
+  Who: the owner; counterparts once the item is tracked (confirmed/edited), or for a v1.24 card.
+  When: on extraction (ledger publish, v1.24 proposal), on ✓/✎, after a merge gave a due.
+  **Once per (item, user, kind)**, whatever happens to the card. `§26.7 calendar_offer` was not
+  used: it is Official-only and "never in a Risi chat".
+- **Backfill:** `bin/risime eval "RisiMe.Release.risi_offers_backfill()"` (dry run: counts),
+  `(dry_run: false)` queues one `offers_backfill` Risi job in 5 min that the running server
+  runs. **`Release.migrate/0` queues it on every deploy** (idempotent), so the deploy of this
+  release offers Harsha's Shenika interview **if it is a live commitment/ledger item with that
+  due** (a P0 Risi-chat request alone is not an item; its own card was already shown).
+- **Item 9, My promises:** `GET /api/v1/risi/commitments` items gain `direction`
+  (`i_promised` | `promised_to_me` | `others`), `owner_name` ("You" for the caller, else the
+  display name), `status` (`item_state || state`, or `needs_clarification`),
+  `needs_clarification`, `all_day` (now on every item), `source_conversation_id` (= the
+  Official conversation), `source_message_id` (first source, or null) and `source_message_ids`;
+  the reply gains `"totals": {"i_promised", "promised_to_me", "others"}`. The personal digest's
+  items gain `direction` and the digest `totals` (same query as the API, so equal).
+- **Item 10:** before a ledger or v1.24 item is stored, a live one (proposed/confirmed/edited,
+  ≤30 days old) with the same owner, agreeing counterparts (equal or one ⊆ the other),
+  overlapping content words (Jaccard ≥ 0.5, or ≥2 shared words covering ≥60 % of the shorter)
+  and a due in the same 24-h window (or one missing) absorbs it: counterparts/sources unioned, a
+  missing due filled (reminders rescheduled, offers considered); no second row, no second card,
+  and a summary whose items were all repeats is not posted. **Vague items** (no due, or a
+  `due_text` like "sometime", "soon", "later", "asap", "at some point", "next few days") get
+  `needs_clarification: true`, **no calendar offer**, and one `item_clarify` card to the owner.
+
+### Android needs (exact)
+- **Offer cards are ordinary `confirm` cards** in the Risi chat: render and act on them exactly
+  like the P0 card (`confirm_write`/`cancel_write`, `edit` for [Edit]). Extra fields:
+  `"origin": "offer"`, `"item_id": uuid`. `request_id` is a fresh uuid with no request behind
+  it and `turn_ref` is null: **do not** show a progress bubble or expect a `risi_progress`.
+  `expires_at` is the event start (≥1 h, ≤14 d), not 24 h. Suggested header for
+  `origin == "offer"`: "Add to calendar?" / "Remind me?".
+- **New kind `item_clarify`** (Risi chat, `body` = the question, readable on old apps):
+  `{"kind": "item_clarify", "item_id", "summary_id" (uuid | null), "text", "due_text" (str |
+  null), "question", "buttons": ["new_date"] | [], "notify": [owner]}`. [New date] opens the
+  date/time picker and sends the §27.5 `risi_action` `item_edit` (`target` = `item_id`, `edit:
+  {"due": ts, "all_day": bool}`) in the user's Risi chat; that clears the flag and brings the
+  calendar offer. `buttons: []` (a v1.24 item): show the question only.
+- **My promises:** split by `direction` (tabs/sections "I promised" / "Promised to me"); label
+  with `owner_name`; show `status` (`needs_clarification` → "needs a date"); tap-through opens
+  `source_conversation_id` at `source_message_id` (when non-null). Header counts = `totals`.
+  The digest card can show `totals` and group its items by `direction`.
+
+### Contract asks (for root, all optional/additive; server implements them already)
+1. §25.4 `confirm`: optional `"origin": "offer"` and `"item_id": uuid` (a proactive offer of a
+   ledger item); for such a card `request_id` names no request, `turn_ref` is null and
+   `expires_at` is the event's start (min 1 h, max 14 d) instead of 24 h.
+2. New `risi.kind` `item_clarify` (shape above, posted in the owner's Risi chat, at most once
+   per item); [New date] = the existing §27.5 `item_edit`.
+3. §27.9 `GET /risi/commitments`: per item `direction`, `owner_name`, `status`,
+   `needs_clarification`, `all_day` (all items), `source_conversation_id`,
+   `source_message_id`, `source_message_ids`; reply `totals`. Example files
+   `risi_commitments_reply*.json` and `envelope_risi_digest_personal.json` (+ item
+   `direction`, `totals`) need the new keys (server tests now accept exactly the example keys
+   plus these).
+4. §27.6 personal digest: `totals` and item `direction` (equal to the API's by construction).
+
 ## P0 2026-10-09: the Risi action loop — READY (not deployed)
 Harsha (nightly.43, skills on, Risi chat): "add my interview with Shenika on Monday 12 Oct at 2pm
 to my calendar" → text chips only, 6 turns of questions, nothing added.
