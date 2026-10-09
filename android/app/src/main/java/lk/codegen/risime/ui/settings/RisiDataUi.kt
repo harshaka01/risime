@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -360,7 +362,9 @@ fun RisiPromisesScreen(model: RisiPromisesModel, me: String, nameOf: (String) ->
             when {
                 s.loading -> CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
                 s.items.isEmpty() && s.done.isEmpty() && s.error == null -> Text(PROMISES_EMPTY, modifier = Modifier.testTag("risi_promises_empty"))
-                else -> LazyColumn(Modifier.testTag("risi_promises_list")) {
+                // The last row stays above the navigation bar (contentWindowInsets is 0: edge to edge; the last
+                // [Reopen] was unreachable behind it, found by scripts/ui-entry-test --risi-notes).
+                else -> LazyColumn(Modifier.testTag("risi_promises_list"), contentPadding = WindowInsets.navigationBars.asPaddingValues()) {
                     // Server item 9: "I promised" / "Promised to me" / "Others" by `direction`, counts from `totals`.
                     val onOpen: ((RisiCommitment) -> Unit)? = if (model.canOpen) model::open else null
                     // v1.29 §30.5: on a Notes device, [Done] / [Reopen] and "From note: …".

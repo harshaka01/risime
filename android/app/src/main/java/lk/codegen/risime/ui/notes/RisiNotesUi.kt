@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -252,7 +254,7 @@ fun NoteScreen(
             when {
                 view == null && loading -> CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally).padding(Spacing.xl))
                 view == null -> Text(error ?: "", modifier = Modifier.padding(vertical = Spacing.lg).testTag("risi_note_error"))
-                else -> LazyColumn(Modifier.fillMaxSize().testTag("risi_note_screen"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                else -> LazyColumn(Modifier.fillMaxSize().testTag("risi_note_screen"), contentPadding = WindowInsets.navigationBars.asPaddingValues(), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     val n = view.note
                     item { Text(title ?: n.topic, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = Spacing.md).testTag("risi_note_screen_title")) }
                     item { Text(noteSourceLine(n), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -336,7 +338,7 @@ fun NotesListScreen(
             when {
                 s.loading && s.notes.isEmpty() -> CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
                 s.notes.isEmpty() && s.error == null -> Text(if (s.query.isBlank()) NOTES_EMPTY else NOTES_NO_MATCH, modifier = Modifier.testTag("risi_notes_empty"))
-                else -> LazyColumn(Modifier.weight(1f).testTag("risi_notes_list")) {
+                else -> LazyColumn(Modifier.weight(1f).testTag("risi_notes_list"), contentPadding = WindowInsets.navigationBars.asPaddingValues()) {
                     items(s.notes, key = { it.noteId }) { n -> NoteListRow(n, titleOf(n), onOpen, onShare, onDelete) }
                     if (s.hasMore) item { TextButton(onClick = onMore, enabled = !s.loading, modifier = Modifier.fillMaxWidth().testTag("risi_notes_more")) { Text("More") } }
                 }
