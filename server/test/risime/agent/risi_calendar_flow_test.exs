@@ -370,6 +370,46 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
            )
   end
 
+  test "canary: a title never reaches the server log, inbox events, job args or turn steps",
+       ctx do
+    canary = "CANARY-#{Ecto.UUID.generate()}"
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+        {:ok, e} =
+          Calendar.create(ctx.h, %{
+            title: canary,
+            notes: canary,
+            tz: "Asia/Colombo",
+            start: ~U[2026-10-12 08:30:00.000000Z],
+            stop: ~U[2026-10-12 09:30:00.000000Z],
+            all_day: false,
+            with: [ctx.s],
+            reminder_min: :default,
+            source: nil,
+            created_by: "user"
+          })
+
+        {:ok, _} =
+          Calendar.respond(ctx.s, e["event_id"], %{"response" => "accept", "version" => 1})
+
+        for j <- reminder_jobs(e["event_id"]), do: perform_job(Job, j.args)
+
+        {:ok, _} =
+          Calendar.patch(ctx.h, e["event_id"], %{"version" => 1, "title" => canary <> "!"})
+
+        :ok = Calendar.delete(ctx.h, e["event_id"])
+      end)
+
+    refute log =~ "CANARY"
+    refute Jason.encode!(events(ctx.h, nil) ++ events(ctx.s, nil)) =~ "CANARY"
+    refute Jason.encode!(Enum.map(all_enqueued(worker: Job), & &1.args)) =~ "CANARY"
+
+    refute Repo.query!("SELECT row_to_json(t)::text FROM risi_events t").rows
+           |> List.flatten()
+           |> Enum.any?(&(&1 =~ "CANARY"))
+  end
+
   test "all-day reminders: 09:00 the day before when ≥ 60 min, else 09:00 on the day", ctx do
     e = %Calendar.Event{all_day: true, start_at: ~U[2026-10-11 18:30:00.000000Z]}
 
@@ -550,6 +590,86 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
              "You're not free then: your calendar has 1 busy time (Mon 12 Oct, 14:00–15:00)."
 
     assert body =~ "Checked: Risi Calendar."
+  end
+
+  test "risi_calendar_check with the phone Calendar skill on: both sources in one step", ctx do
+    change = %{"id" => "calendar", "state" => "ask", "client_permission" => "granted"}
+
+    {200, _} =
+      RisiMe.GroupHelpers.api(
+        :patch,
+        "/api/v1/risi/skills",
+        ctx.harsha.token,
+        %{"changes" => [change]},
+        ctx.hd
+      )
+
+    check_llm!("Nothing on Monday at 2.")
+
+    rid = Ecto.UUID.generate()
+
+    envelope!(
+      ctx.hrc,
+      ctx.harsha.user,
+      %{
+        "v" => 1,
+        "type" => "risi_request",
+        "request_id" => rid,
+        "action" => "ask",
+        "text" => "Am I free Monday 2pm?"
+      },
+      ctx.hd
+    )
+
+    [job] = for j <- all_enqueued(worker: Job), j.args["request_id"] == rid, do: j
+    task = Task.async(fn -> perform_job(Job, job.args) end)
+    call = wait_call(ctx.h)
+    assert call["data"]["tool"] == "calendar_check" and call["data"]["to_devices"] == [ctx.hd]
+
+    result = %{
+      "blocks" => [],
+      "sources" => [
+        %{
+          "source" => "phone_provider",
+          "calendars" => [%{"name" => "Work", "account_type" => "com.google", "events" => 0}],
+          "read_ok" => true,
+          "reason" => nil
+        }
+      ],
+      "connected_sources" => ["phone_provider"]
+    }
+
+    {204, _} =
+      RisiMe.GroupHelpers.api(
+        :post,
+        "/api/v1/risi/tool_calls/#{call["data"]["tool_call_id"]}/result",
+        ctx.harsha.token,
+        %{"status" => "ok", "result" => result},
+        ctx.hd
+      )
+
+    assert :ok = Task.await(task)
+    {_, body, a} = answer_of(posts())
+
+    assert body ==
+             "Nothing on Monday at 2.\n\nChecked: Risi Calendar · Phone calendar (Work). " <>
+               "Not checked: Google Calendar (not connected)."
+
+    assert Enum.map(a["sources"], & &1["source"]) == ["risi_calendar", "phone_provider"]
+  end
+
+  defp wait_call(user_id, tries \\ 150) do
+    case events(user_id, "risi_tool_call") do
+      [call | _] ->
+        call
+
+      [] when tries > 0 ->
+        Process.sleep(20)
+        wait_call(user_id, tries - 1)
+
+      _ ->
+        flunk("no risi_tool_call event")
+    end
   end
 
   test "risi_calendar_check without RISI_DATA_KEY: no read, the model's text is discarded", ctx do
