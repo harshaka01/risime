@@ -672,7 +672,16 @@ class AppContainer(
                 Log.i("RisiMe", "RisiMe push: device registered, push token ${if (t == null) "none" else "sent"}")
             },
             tabsSupported = { chatTabs.serverOn.value },
-            onAdvertised = { caps -> chatTabs.setAdvertised(lk.codegen.risime.net.DeviceMls.CAP_TABS in caps) },
+            onAdvertised = { caps ->
+                val tabs = lk.codegen.risime.net.DeviceMls.CAP_TABS in caps
+                chatTabs.setAdvertised(tabs)
+                // Remembered per device id: the next process start shows the tab bar at once (ChatTabs.restoreAdvertised).
+                scope.launch {
+                    val id = runCatching { sessionStore.deviceId() }.getOrNull()
+                    appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit()
+                        .putString("advertised_tabs_device", if (tabs) id else null).apply()
+                }
+            },
         )
     }
 
@@ -811,6 +820,12 @@ class AppContainer(
             // v1.24: the stored set by chat id (a no-op for every pre-v1.24 id: chat_id = conversation_id).
             chatTabs.rows.first { it != null }
             runCatching { lockedChats.migrateToChatIds() }.onFailure { Log.w("RisiMe", "RisiMe lock: chat-id migration: ${it.message}") }
+        }
+        // §24.9: the last registration of this device id advertised `tabs` (and the server switch is on): tabs at once.
+        scope.launch(Dispatchers.IO) {
+            val saved = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_tabs_device", null) ?: return@launch
+            val id = runCatching { sessionStore.deviceId() }.getOrNull()
+            if (id != null && saved.equals(id, true) && sessionStore.current() != null) chatTabs.restoreAdvertised(true)
         }
         if (BuildConfig.DEBUG) registerDebugOidcSignIn(context)
         if (BuildConfig.DEBUG) registerDebugLockChat(context)

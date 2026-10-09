@@ -94,12 +94,23 @@ class LockPrompter(
     private val schedule: (Long, () -> Unit) -> Unit,
     private val now: () -> Long,
     private val log: (String) -> Unit,
-    private val title: String = "Unlock RisiMe",
+    /** The prompt's title; [PrompterChatLockAuth] sets it per confirmation ("Lock chat", "Locked chats"). */
+    var title: String = "Unlock RisiMe",
+    /** Every non-null message (an attempt ended without success): a chat-lock confirmation ends on it. */
+    private val onMessage: (String) -> Unit = {},
 ) {
     enum class Kind { AUTO, TAP, PIN }
 
+    /** The biometric prompt's subtitle (the chat's name for "Lock chat"). */
+    var subtitle: String? = null
+
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
+
+    private fun say(m: String) {
+        _message.value = m
+        onMessage(m)
+    }
 
     private val _showPin = MutableStateFlow(false)
     val showPin: StateFlow<Boolean> = _showPin.asStateFlow()
@@ -186,7 +197,7 @@ class LockPrompter(
                 auth.showCredential(title, cb)
             } else {
                 val api30 = auth.sdkInt >= 30
-                auth.showBiometric(LockPromptRequest(title, allowCredential = api30, negativeText = if (api30) null else USE_PIN_NEGATIVE), cb)
+                auth.showBiometric(LockPromptRequest(title, subtitle, allowCredential = api30, negativeText = if (api30) null else USE_PIN_NEGATIVE), cb)
             }
         }.getOrElse { "${it.javaClass.simpleName}: ${it.message}" }
         if (refused != null) {
@@ -195,7 +206,7 @@ class LockPrompter(
                 inFlight = false
                 credentialActivity = false
             }
-            _message.value = LOCK_NOT_SHOWN
+            say(LOCK_NOT_SHOWN)
             _showPin.value = secure && !useCredential
             return
         }
@@ -205,7 +216,7 @@ class LockPrompter(
                 log("RisiMe lock: authenticate() refused: no prompt on screen ${WATCHDOG_MS} ms after authenticate()")
                 inFlight = false
                 credentialActivity = false
-                _message.value = LOCK_NOT_SHOWN
+                say(LOCK_NOT_SHOWN)
                 _showPin.value = secure
             }
         }
@@ -243,7 +254,7 @@ class LockPrompter(
                         return
                     }
                 }
-                _message.value = lockErrorText(o.code)
+                say(lockErrorText(o.code))
                 _showPin.value = secure
             }
         }

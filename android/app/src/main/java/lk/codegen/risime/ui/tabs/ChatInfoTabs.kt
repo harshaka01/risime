@@ -1,6 +1,7 @@
 package lk.codegen.risime.ui.tabs
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -42,7 +43,38 @@ const val PRIVATE_MEDIA_HEADER = "🔒 Private media"
 const val OFFICIAL_MEDIA_HEADER = "● Official media"
 const val NO_MEDIA_TEXT = "No photos"
 
-/** `PATCH /chats/{chat_id}` (the app: [lk.codegen.risime.AppContainer.setOfficial]; a fake in tests). */
+/** Chat info media while tabs are off (one conversation, no tab icon). */
+const val MEDIA_HEADER = "Media"
+
+/** How long chat info waits for one encryption check before saying so (never a spinner for ever). */
+const val INFO_E2EE_TIMEOUT_MS = 10_000L
+
+/** Chat info re-checks a chat that isn't encrypted yet this often (it may finish while the screen is open). */
+const val INFO_E2EE_POLL_MS = 5_000L
+
+/**
+ * Chat info's encryption line (decision 048): [peek] (read only, off the main thread, in [scope] so a
+ * blocking call can't hold the timeout up), each check bounded by [timeoutMs] — a check that doesn't
+ * answer becomes `Failed(timeout)` ("couldn't check with the server, retrying"), never "Checking…"
+ * for ever. Repeats every [pollMs] until encrypted (or encryption isn't available at all).
+ */
+fun infoE2eeStates(
+    scope: CoroutineScope,
+    peek: suspend () -> lk.codegen.risime.data.mls.E2eeState,
+    timeoutMs: Long = INFO_E2EE_TIMEOUT_MS,
+    pollMs: Long = INFO_E2EE_POLL_MS,
+): Flow<lk.codegen.risime.data.mls.E2eeState> = kotlinx.coroutines.flow.flow {
+    while (true) {
+        val check = scope.async { runCatching { peek() }.getOrElse { e -> if (e is kotlinx.coroutines.CancellationException) throw e else lk.codegen.risime.data.mls.E2eeState.Failed("error") } }
+        val s = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) { check.await() }
+            ?: lk.codegen.risime.data.mls.E2eeState.Failed(lk.codegen.risime.data.mls.E2EE_CHECK_TIMEOUT)
+        emit(s)
+        if (s is lk.codegen.risime.data.mls.E2eeState.Encrypted || s == lk.codegen.risime.data.mls.E2eeState.Unavailable) break
+        kotlinx.coroutines.delay(pollMs)
+    }
+}
+
+/** `PATCH /chats/{chat_id}` (the app:[lk.codegen.risime.AppContainer.setOfficial]; a fake in tests). */
 fun interface OfficialToggler {
     suspend fun set(chatId: String, on: Boolean): ApiResult<lk.codegen.risime.net.Chat>
 }

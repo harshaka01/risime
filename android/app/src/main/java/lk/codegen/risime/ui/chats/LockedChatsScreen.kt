@@ -1,6 +1,7 @@
 package lk.codegen.risime.ui.chats
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,7 +18,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,7 +56,9 @@ import lk.codegen.risime.ui.lock.LockGateDialog
 import lk.codegen.risime.ui.lock.rememberLockGate
 import lk.codegen.risime.ui.theme.Spacing
 
-const val LOCKED_CHATS_SETTINGS = "Locked chats settings"
+const val LOCKED_CHATS_SETTINGS = CHAT_LOCK_SETTINGS
+const val HIDE_LOCKED_CHATS = "Hide locked chats"
+const val SECRET_CODE = "Secret code"
 const val SET_SECRET_CODE = "Set secret code"
 const val CHANGE_SECRET_CODE = "Change secret code"
 const val REMOVE_SECRET_CODE = "Remove secret code"
@@ -168,27 +170,53 @@ fun LockedChatsSettingsScreen(c: AppContainer, onBack: () -> Unit) {
             onDismiss = { editing = false },
         )
     }
+    LockedChatsSettingsContent(
+        hasCode = hasCode,
+        onBack = onBack,
+        onHide = { hide -> if (hide) editing = true else scope.launch { c.lockedChats.clearSecretCode() } },
+        onSecretCode = { editing = true },
+    )
+}
+
+/**
+ * WhatsApp's chat lock settings: "Hide locked chats" (the Locked chats row leaves the chat list; it then
+ * needs a secret code, typed in the chat-list search to find them) and "Secret code" (set or change).
+ * Turning "Hide locked chats" off removes the code (the row shows on pull-down again). Nothing is deleted.
+ */
+@Composable
+fun LockedChatsSettingsContent(hasCode: Boolean, onBack: () -> Unit, onHide: (Boolean) -> Unit, onSecretCode: () -> Unit) {
     Scaffold(
         topBar = { RisiTopBar(title = LOCKED_CHATS_SETTINGS, onBack = onBack) },
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
-            SectionHeader("Secret code")
-            Text(
-                if (hasCode) {
-                    "The Locked chats entry is hidden from your chat list. Type your secret code in the search box on the chat list to find it; " +
-                        "your fingerprint or screen lock is still asked after that."
-                } else {
-                    "Hide the Locked chats entry completely. Then it shows up only when you type your secret code in the search box on the chat list."
-                },
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            FilledTonalButton(onClick = { editing = true }, modifier = Modifier.fillMaxWidth()) {
-                Text(if (hasCode) CHANGE_SECRET_CODE else SET_SECRET_CODE)
+        Column(Modifier.fillMaxSize().padding(pad).padding(vertical = Spacing.sm)) {
+            Row(
+                Modifier.fillMaxWidth()
+                    .toggleable(value = hasCode, role = androidx.compose.ui.semantics.Role.Switch, onValueChange = onHide)
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(HIDE_LOCKED_CHATS, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (hasCode) "Locked chats are hidden from your chat list. Type your secret code in the search box on the chat list to find them; " +
+                            "your fingerprint or screen lock is still asked after that."
+                        else "Hide the Locked chats row from your chat list. You'll set a secret code to find them from the search box.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                androidx.compose.material3.Switch(checked = hasCode, onCheckedChange = null)
             }
-            if (hasCode) {
-                OutlinedButton(onClick = { scope.launch { c.lockedChats.clearSecretCode() } }, modifier = Modifier.fillMaxWidth()) {
-                    Text(REMOVE_SECRET_CODE)
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = onSecretCode).padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(SECRET_CODE, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (hasCode) CHANGE_SECRET_CODE else "Not set. $SET_SECRET_CODE to hide your locked chats.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

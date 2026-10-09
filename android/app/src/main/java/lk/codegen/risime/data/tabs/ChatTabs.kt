@@ -188,7 +188,23 @@ class ChatTabs(
         }
     }
 
+    /** A registration answered in this process (it wins over [restoreAdvertised]). */
+    @Volatile private var advertisedKnown = false
+
     fun setAdvertised(on: Boolean) {
+        advertisedKnown = true
+        _advertised.value = on
+    }
+
+    /**
+     * Process start: this device's last successful MLS registration (same device id) advertised `tabs`,
+     * and the server still holds it until the next `PUT`, so the tab bar shows at once instead of
+     * waiting for the new registration (which may be slow or fail: no tabs at all until it answered —
+     * the real-phone "no tab row" report). A registration in this process always wins.
+     */
+    fun restoreAdvertised(on: Boolean) {
+        if (advertisedKnown) return
+        if (on) log("tabs: restored the last advertisement (tabs)")
         _advertised.value = on
     }
 

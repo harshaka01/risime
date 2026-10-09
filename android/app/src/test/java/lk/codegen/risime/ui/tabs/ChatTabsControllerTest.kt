@@ -192,6 +192,72 @@ class ChatTabsControllerTest {
         rule.waitUntil(5_000) { rule.onAllNodesWithText("official $official").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText(RISI_LISTENING).assertIsDisplayed()
     }
+
+    // ---- nightly.39 real-phone report: entry points ----
+
+    private val patches = mutableListOf<Pair<String, Boolean>>()
+    private var patchReply: ApiResult<lk.codegen.risime.net.Chat> = ApiResult.Ok(
+        lk.codegen.risime.net.Chat(dm, "dm", lk.codegen.risime.net.ChatPrivate(dm), lk.codegen.risime.net.ChatOfficial(state = "on"), canToggle = true),
+    )
+    private val toggler = OfficialToggler { id, on -> patches += id to on; patchReply }
+
+    @Test fun startOfficialInTheTabRowTurnsOfficialOnThenCreatesIt() = runBlocking {
+        tabs.setOfficialState(dm, OfficialState.OFF)
+        val c = ChatTabsController(dm, tabs, starter, scope, null, unread, toggler = toggler)
+        val b = c.bar.await { !it.showOfficial }
+        assertTrue(b.canStartOfficial) // a 1:1: either person may
+        c.turnOfficialOn()
+        c.content.await { it == TabContent.Starting } // never created: §24.2 creation right after the PATCH
+        assertEquals(listOf(dm to true), patches)
+        assertEquals(listOf(dm), starts)
+        assertTrue(c.bar.value.showOfficial)
+    }
+
+    @Test fun startOfficialRefusedShowsTheReasonUnderTheTabRow() = runBlocking {
+        tabs.setOfficialState(grp, OfficialState.OFF)
+        patchReply = ApiResult.Error(403, "not_admin", "")
+        val c = ChatTabsController(grp, tabs, starter, scope, null, unread, toggler = toggler, canToggle = kotlinx.coroutines.flow.flowOf(true))
+        c.bar.await { !it.showOfficial }
+        c.turnOfficialOn()
+        assertEquals(ONLY_ADMINS_ON_TEXT, c.notice.await { it != null })
+        assertTrue(starts.isEmpty())
+        // A group member who isn't an admin: offered, but disabled.
+        val other = ChatTabsController(grp, tabs, starter, scope, null, unread, toggler = toggler, canToggle = kotlinx.coroutines.flow.flowOf(false))
+        assertFalse(other.bar.await { !it.showOfficial }.canStartOfficial)
+    }
+
+    @Test fun theIntroScreenHasTheChatMenuWithLockChat() {
+        val c = controller(dm, initial = Tab.OFFICIAL)
+        var locks = 0
+        rule.setContent {
+            RisiMeTheme {
+                TabbedChatContent(
+                    c, "Kumu", onBack = {},
+                    privateScreen = { Text("private screen") },
+                    officialScreen = { _, _, _ -> Text("official") },
+                    lock = lk.codegen.risime.ui.lock.ChatLockControl(false) { locks++ },
+                )
+            }
+        }
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("start_official").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText(START_OFFICIAL_LABEL).assertIsDisplayed()
+        rule.onNodeWithText(PRIVATE_TAB_LABEL).assertIsDisplayed()
+        rule.onNode(androidx.compose.ui.test.hasContentDescription("More options")).performClick()
+        rule.onNodeWithText(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL).performClick()
+        assertEquals(1, locks)
+    }
+
+    @Test fun theLastAdvertisementShowsTabsAtOnceUntilARegistrationAnswers() = runBlocking {
+        val t = ChatTabs(db.chatTabs(), scope, persistedServerOn = true)
+        assertFalse(t.uiOn.value)
+        t.restoreAdvertised(true)
+        t.uiOn.await { it }
+        // A registration in this process wins over the restored value (both ways).
+        t.setAdvertised(false)
+        t.uiOn.await { !it }
+        t.restoreAdvertised(true)
+        assertFalse(t.advertised.value)
+    }
 }
 
 private fun androidx.compose.ui.test.junit4.ComposeContentTestRule.onAllNodesWithText(text: String) =

@@ -324,7 +324,10 @@ class DeleteFlowUiTest {
         waitText("Kamal")
         waitText("keep the chat")
 
+        // WhatsApp: the long-press selects the chat; Clear chat is in the selection bar's ⋮.
         rule.onNodeWithText("Kamal").performTouchInput { longClick() }
+        rule.waitUntil(5_000) { rule.onAllNodes(androidx.compose.ui.test.hasContentDescription("Delete chat")).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithContentDescription("More options").performClick()
         waitText("Clear chat")
         rule.onNodeWithText("Clear chat").performClick()
         waitText("Clear this chat?")
@@ -342,8 +345,8 @@ class DeleteFlowUiTest {
         put(msg(dm, "second round", mine = false, agoMs = 1_000))
         waitText("second round")
         rule.onNodeWithText("Kamal").performTouchInput { longClick() }
-        waitText("Delete chat")
-        rule.onNodeWithText("Delete chat").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodes(androidx.compose.ui.test.hasContentDescription("Delete chat")).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithContentDescription("Delete chat").performClick()
         waitText("Delete this chat?")
         rule.onNodeWithText("Delete chat").performClick()
         rule.waitUntil(5_000) { runBlocking { c.db.deletes().chatState(dm) }?.hidden == true }

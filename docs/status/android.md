@@ -1,5 +1,43 @@
 # Android status — 0.2 nightlies
 
+## UI entry points (nightly.39 real-phone report) — READY (UI ENTRY OK on two redroids; 1154 JVM tests, 0 failed)
+Report (Kumu's 1:1, tabs on): no way to lock a chat, Chat info only "Official" + "Private media", "Checking encryption…"
+stuck, no tab row. The gates tested logic, not entry points; `scripts/ui-entry-test` now navigates like a user.
+- **Lock chat, all paths (1:1 and groups, tabs on and off):** cause: the A4 tabs Chat info replaced the old screen without a
+  lock row (and with tabs off a 1:1 had only a dialog); the Official intro screen's header had no ⋮; the long-press was a dialog,
+  not WhatsApp's selection bar. Fix: Chat info (1:1: always the full screen now; group info too) has a **Lock chat** switch under
+  the Official section (`chatLockItems`); the chat's ⋮ (Private, Official, and the intro screen) has Lock chat / Unlock chat;
+  long-press → selection bar (back, "1", Delete, ⋮ → Lock chat / Clear chat). Locking returns to the chat list.
+- **Prompt on `LockPrompter`:** the chat lock made a new BiometricPrompt per tap (`BiometricChatLockAuth`): authenticate() dropped
+  after onSaveInstanceState left the gate busy for ever (the nightly.35 pattern). Now `PrompterChatLockAuth` (AuthUi.chatLock,
+  the activity's one BiometricPrompt): prompts only when resumed, watchdog, PIN on every API, every confirmation ends; a prompt
+  that didn't open says so (`LockGateDialog`). Logs `RisiMe chat lock: …`.
+- **Locked chats folder:** pull-down row as built (verified on screen); chat list ⋮ → **Chat lock settings** (after the
+  confirmation) → **Hide locked chats** (on = set a secret code; off = remove it) + **Secret code** (set/change). The folder's ⋮
+  opens the same screen.
+- **Tab row:** on redroid the row was there; the real-phone gap is most likely `ChatTabs.uiOn` waiting for this process's MLS
+  `PUT` (`advertised` was in memory only, false at every cold start until the registration answered, and for the whole process
+  if it failed). Now the last successful advertisement is remembered per device id (`risime_tabs/advertised_tabs_device`,
+  `ChatTabs.restoreAdvertised`; a registration in the process always wins). Official off → "🔒 Private" + **Start Official** in
+  the row (1:1 either person, groups admins; others see it disabled with "Only admins can start Official"): `PATCH on`, then the
+  Official tab and, if it never existed, §24.2 creation; refusals under the row.
+- **"Checking encryption…" stuck:** cause: `ChatInfoTabsViewModel.encrypted` read `mlsEngine.group()` once, on the main thread,
+  while the view model was built (the engine's Room call throws there → false) and the route passed no reason → "Checking…"
+  for ever. Fix: `MlsUpgrader.peek` (read only: never claims/commits/re-adds) off the main thread, each check bounded to 10 s
+  (`infoE2eeStates`; no answer → "Not end-to-end encrypted yet: couldn't check with the server, retrying"), re-checked every
+  5 s until encrypted; the line shows decision-048 text (`e2eeStripText`).
+- **Tests:** `ChatEntryPointsTest` (chat info Lock chat tabs on/off and under Official, chat ⋮ lock/unlock, intro ⋮, selection
+  bar, Chat lock settings, tab row both tabs / Start Official / admins only), `PrompterChatLockAuthTest` (success, cancel,
+  never-shown prompt then a working retry, deferred until resumed, PIN-only phone, no screen lock), `ChatInfoE2eeTest` (peek is
+  read only with every reason, a hung check → timeout text, re-check until encrypted), `ChatTabsControllerTest` (+ Start Official
+  from the row, refusal notice, intro ⋮ Lock chat, restored advertisement), `DeleteFlowUiTest` (selection bar).
+- **UI gate (`scripts/ui-entry-test`, root-delegated; redroid -ui1/-ui2 :5851/:5852, server :4551, TABS=on, RISI off):** sign-in
+  ×2, e2ee DM, tab row under the header, Official → Start Official, Chat info "Messages are end-to-end encrypted" (2 s) + Lock
+  chat, chat ⋮ → Lock chat → system PIN prompt (`locksettings set-pin`) → chat leaves the list, pull-down → Locked chats → PIN →
+  folder → unlock, long-press ⋮ → Lock chat, ⋮ → Chat lock settings → PIN → Hide locked chats + Secret code, Settings → What Risi
+  knows about me (no error), logcat-gate on both. **UI ENTRY OK.** Screenshots `docs/status/screens/01…11` (05 dropped: the PIN
+  prompt is a secure window, screencap shows the screen behind it).
+
 ## v1.23 §23 (1:1) switching and screen sharing + ONE WhatsApp-style call screen — READY for the 1:1 path (group §23 open)
 - **Wire (§23.1–§23.4):** `features` (`switch`, `screen`) on the first `call_offer` and on `call_answer`; the
   `call_switch` envelope (request/accept/decline/cancel/voice, `seq` 1–65 535, `source` only on request); `call_offer`

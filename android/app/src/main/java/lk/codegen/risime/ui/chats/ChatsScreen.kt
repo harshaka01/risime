@@ -24,6 +24,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
@@ -64,6 +66,7 @@ fun ChatsScreen(
     onInvites: () -> Unit,
     onNewGroup: () -> Unit = {},
     onLockedFolder: () -> Unit = {},
+    onChatLockSettings: () -> Unit = {},
 ) {
     val rows by vm.rows.collectAsStateWithLifecycle()
     val lockedRows by vm.lockedRows.collectAsStateWithLifecycle()
@@ -79,28 +82,12 @@ fun ChatsScreen(
     var askLogout by remember { mutableStateOf(false) }
     var askLogoutDelete by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    // §15.7: chat-list long-press → Clear chat / Delete chat (always on: local + my own inbox).
-    var chatMenuFor by remember { mutableStateOf<ChatRow?>(null) }
+    // WhatsApp: a long-press selects the chat; the top bar becomes the selection bar (Delete, ⋮ → Lock chat / Clear chat).
+    var selected by remember { mutableStateOf<ChatRow?>(null) }
     var clearAsk by remember { mutableStateOf<Pair<ChatRow, Boolean>?>(null) }
-    chatMenuFor?.let { r ->
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { chatMenuFor = null },
-            title = { Text(r.name) },
-            text = {
-                androidx.compose.foundation.layout.Column {
-                    androidx.compose.material3.TextButton(onClick = { chatMenuFor = null; clearAsk = r to false }) { Text("Clear chat") }
-                    androidx.compose.material3.TextButton(onClick = { chatMenuFor = null; clearAsk = r to true }) { Text("Delete chat") }
-                    if (r.conversationId != null || r.userId != null) {
-                        androidx.compose.material3.TextButton(onClick = {
-                            chatMenuFor = null
-                            lockGate.run(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL, r.name) { vm.lockChat(r) }
-                        }) { Text(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL) }
-                    }
-                }
-            },
-            confirmButton = { androidx.compose.material3.TextButton(onClick = { chatMenuFor = null }) { Text("Cancel") } },
-        )
-    }
+    androidx.activity.compose.BackHandler(enabled = selected != null) { selected = null }
+    // A selected row that left the list (locked, deleted elsewhere) ends the selection.
+    androidx.compose.runtime.LaunchedEffect(rows, selected) { selected?.let { s -> if (rows.none { it.key == s.key }) selected = null } }
     clearAsk?.let { (r, hide) ->
         lk.codegen.risime.ui.chat.ClearChatDialog(hide, onConfirm = { clearAsk = null; vm.clearChat(r, hide) }, onDismiss = { clearAsk = null })
     }
@@ -117,7 +104,18 @@ fun ChatsScreen(
     }
     Scaffold(
         topBar = {
-            RisiTopBar(
+            val sel = selected
+            if (sel != null) {
+                ChatSelectionBar(
+                    onClose = { selected = null },
+                    onDelete = { selected = null; clearAsk = sel to true },
+                    onClear = { selected = null; clearAsk = sel to false },
+                    onLock = if (sel.conversationId != null || sel.userId != null) ({
+                        selected = null
+                        lockGate.run(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL, sel.name) { vm.lockChat(sel) }
+                    }) else null,
+                )
+            } else RisiTopBar(
                 title = "RisiMe",
                 subtitle = connectionLabel(conn),
                 brand = true,
@@ -139,6 +137,14 @@ fun ChatsScreen(
                         DropdownMenuItem(text = { Text("Settings") }, onClick = {
                             menu = false
                             onSettings()
+                        })
+                        // WhatsApp: ⋮ → Chat lock settings ("Hide locked chats", "Secret code"), after the confirmation.
+                        DropdownMenuItem(text = { Text(CHAT_LOCK_SETTINGS) }, onClick = {
+                            menu = false
+                            lockGate.run(lk.codegen.risime.ui.lock.LOCKED_CHATS_TITLE) {
+                                vm.openLockedFolder()
+                                onChatLockSettings()
+                            }
                         })
                         DropdownMenuItem(text = { Text("Log out") }, onClick = {
                             menu = false
@@ -215,12 +221,52 @@ fun ChatsScreen(
                         item { EmptyState("No friends yet. Add a friend by phone number.", actionLabel = "Add friend", onAction = onAddFriend) }
                     }
                     items(rows, key = { it.key }) { row ->
-                        ChatRowItem(row, onClick = { row.target?.takeIf { row.openable }?.let(onOpen) }, onLongClick = { chatMenuFor = row })
+                        val isSel = selected?.key == row.key
+                        androidx.compose.foundation.layout.Box(
+                            if (isSel) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)) else Modifier,
+                        ) {
+                            ChatRowItem(
+                                row,
+                                // While selecting, a tap selects that chat instead (one at a time); else it opens.
+                                onClick = { if (selected != null) selected = row else row.target?.takeIf { row.openable }?.let(onOpen) },
+                                onLongClick = { selected = row },
+                            )
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/** The chat list ⋮ entry for the Locked chats settings (WhatsApp's name). */
+const val CHAT_LOCK_SETTINGS = "Chat lock settings"
+
+/**
+ * WhatsApp's selection bar after a long-press on a chat: back (ends the selection), the count,
+ * Delete, and ⋮ with "Lock chat" and "Clear chat".
+ */
+@Composable
+fun ChatSelectionBar(onClose: () -> Unit, onDelete: () -> Unit, onClear: () -> Unit, onLock: (() -> Unit)?) {
+    var more by remember { mutableStateOf(false) }
+    RisiTopBar(
+        title = "1",
+        onBack = onClose,
+        actions = {
+            IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete chat") }
+            androidx.compose.foundation.layout.Box {
+                IconButton(onClick = { more = true }) {
+                    Icon(Icons.Default.MoreVert, "More options")
+                }
+                DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+                    onLock?.let { f ->
+                        DropdownMenuItem(text = { Text(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL) }, onClick = { more = false; f() })
+                    }
+                    DropdownMenuItem(text = { Text("Clear chat") }, onClick = { more = false; onClear() })
+                }
+            }
+        },
+    )
 }
 
 /** A DM row's preview: "You: …" for mine; a §13.3 marker or other system line as is (shown muted, no ticks). */

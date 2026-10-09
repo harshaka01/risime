@@ -59,6 +59,9 @@ sealed interface E2eeState {
     data class Failed(val reason: String) : E2eeState
 }
 
+/** [E2eeState.Failed] reason: chat info's read-only check took too long (it never shows "Checking…" for ever). */
+const val E2EE_CHECK_TIMEOUT = "timeout"
+
 /** Prefix of every "this chat is plaintext" strip (decision 048: a plaintext chat is always labelled). */
 const val NOT_E2EE_PREFIX = "Not end-to-end encrypted yet"
 
@@ -118,6 +121,7 @@ fun e2eeStripText(
     is E2eeState.RepairWaiting -> dmWaitingText(nameOf(state.userId))
     is E2eeState.Failed ->
         if (state.reason == "network") "$NOT_E2EE_PREFIX: can't reach the server, retrying"
+        else if (state.reason == E2EE_CHECK_TIMEOUT) "$NOT_E2EE_PREFIX: couldn't check with the server, retrying"
         else "$NOT_E2EE_PREFIX: encryption setup didn't finish, retrying"
     is E2eeState.NotReady ->
         notReadyReason(state.missing, nameOf, isMe, myDeviceId)?.let { "$NOT_E2EE_PREFIX: $it" } ?: NOT_E2EE_PREFIX
@@ -173,6 +177,27 @@ class MlsUpgrader(
 
     /** The last rejoin reply per conversation (drives the waiting text). */
     private val lastReply = java.util.concurrent.ConcurrentHashMap<String, lk.codegen.risime.net.DmRejoinReply>()
+
+    /**
+     * Chat info (decision 048): the DM's state, read only: never claims, commits, re-adds or resets
+     * (the chat screen's [ensure] loop does that). This phone holds the group → encrypted; else the
+     * server's view says why not (the readiness `missing`, the Welcome on its way, being re-added).
+     * Blocking engine calls: call it off the main thread.
+     */
+    suspend fun peek(conversationId: String): E2eeState {
+        val mls = engine() ?: return E2eeState.Unavailable
+        mls.group(conversationId)?.let { return E2eeState.Encrypted(it.epoch) }
+        val g = when (val r = api.group(conversationId)) {
+            is ApiResult.Ok -> r.value
+            is ApiResult.Error -> return if (r.code == AuthErrors.MLS_UNAVAILABLE) E2eeState.Unavailable else E2eeState.Failed(r.code)
+            is ApiResult.NetworkError -> return E2eeState.Failed("network")
+        }
+        return when {
+            g.e2ee -> E2eeState.Repairing
+            !g.ready -> E2eeState.NotReady(g.missing)
+            else -> E2eeState.WaitingForWelcome
+        }
+    }
 
     /**
      * [kicked] = the chat was just opened or resumed, or the connection came back: refresh the rejoin

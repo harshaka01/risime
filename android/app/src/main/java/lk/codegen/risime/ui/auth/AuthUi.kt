@@ -159,11 +159,20 @@ class AuthUi(private val activity: FragmentActivity, private val c: AppContainer
         onNoWay = {},
     )
 
+    /** Locked chats ("Lock chat", the folder, its settings): the same prompter rules as the app lock. */
+    val chatLock = lk.codegen.risime.ui.lock.PrompterChatLockAuth(
+        authenticator,
+        schedule = { ms, f -> mainHandler.postDelayed(f, ms) },
+        now = android.os.SystemClock::elapsedRealtime,
+        log = { Log.i("RisiMe", it.replace("RisiMe lock:", "RisiMe chat lock:")) },
+    )
+
     init {
         activity.lifecycle.addObserver(object : androidx.lifecycle.DefaultLifecycleObserver {
             override fun onResume(owner: androidx.lifecycle.LifecycleOwner) {
                 lock.onResumed()
                 lockTurnOn.onResumed()
+                chatLock.onResumed()
             }
 
             override fun onStop(owner: androidx.lifecycle.LifecycleOwner) {

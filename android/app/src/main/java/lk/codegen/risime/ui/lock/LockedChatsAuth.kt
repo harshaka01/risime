@@ -1,11 +1,8 @@
 package lk.codegen.risime.ui.lock
 
-import android.content.Context
-import android.os.Build
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
-import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
@@ -20,11 +17,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
 
 const val LOCK_CHAT_LABEL = "Lock chat"
 const val UNLOCK_CHAT_LABEL = "Unlock chat"
@@ -32,6 +27,7 @@ const val LOCKED_CHATS_TITLE = "Locked chats"
 const val SCREEN_LOCK_NEEDED_TITLE = "Set a screen lock first"
 const val SCREEN_LOCK_NEEDED_TEXT =
     "Locked chats are opened with your fingerprint, PIN, pattern or password. Set a screen lock in your phone's Settings, then try again."
+const val CHAT_LOCK_PROMPT_NOT_SHOWN = "The fingerprint or PIN prompt didn't open. Try again."
 
 /** What the phone can confirm with right now, for the Locked chats gate. */
 enum class ChatLockAuthStatus { READY, NEEDS_SCREEN_LOCK }
@@ -42,64 +38,122 @@ interface ChatLockAuth {
 
     /** True when the user confirmed; false on cancel or failure. */
     suspend fun confirm(title: String, subtitle: String? = null): Boolean
+
+    /** Why the last [confirm] ended without success, worth telling the user (null: the user cancelled). */
+    fun lastProblem(): String? = null
 }
 
 /**
  * The authenticators for the Locked chats gate: BIOMETRIC_STRONG | DEVICE_CREDENTIAL (API 30+, so a
  * phone with no fingerprint can use its PIN/pattern). Android 8-10 can't combine them in one
- * prompt, so there only a strong biometric works.
+ * prompt; there [LockPrompter] falls back to the Keyguard PIN confirmation.
  */
 fun lockAuthenticators(sdk: Int): Int = if (sdk >= 30) BIOMETRIC_STRONG or DEVICE_CREDENTIAL else BIOMETRIC_STRONG
 
 fun chatLockStatus(canAuthenticate: Int): ChatLockAuthStatus =
     if (canAuthenticate == BiometricManager.BIOMETRIC_SUCCESS) ChatLockAuthStatus.READY else ChatLockAuthStatus.NEEDS_SCREEN_LOCK
 
-class BiometricChatLockAuth(private val context: Context, private val sdk: Int = Build.VERSION.SDK_INT) : ChatLockAuth {
-    override fun status(): ChatLockAuthStatus =
-        runCatching { chatLockStatus(BiometricManager.from(context).canAuthenticate(lockAuthenticators(sdk))) }
-            .getOrDefault(ChatLockAuthStatus.NEEDS_SCREEN_LOCK)
+/** The user-facing text for a prompter message that ended a chat-lock confirmation (null: cancelled, say nothing). */
+fun chatLockProblemText(message: String): String? = when (message) {
+    LOCK_CANCELLED, LOCK_TIMED_OUT -> null
+    LOCK_NOT_SHOWN -> CHAT_LOCK_PROMPT_NOT_SHOWN
+    LOCK_TOO_MANY_ATTEMPTS -> "Too many attempts. Try again with your phone's PIN or pattern."
+    else -> message
+}
+
+/**
+ * The Locked chats confirmation on the app lock's [LockPrompter] (one per activity, over the
+ * BiometricPrompt made in onCreate): a prompt only while RESUMED (a request while stopped waits for
+ * [onResumed]), a watchdog for a prompt that never appeared, the phone's PIN on every API level. Every
+ * [confirm] ends: success, cancel, error or "didn't open" — never a coroutine that waits forever
+ * (the old per-call BiometricPrompt silently dropped authenticate() after onSaveInstanceState and
+ * left the gate busy, so every later tap was ignored). Main thread only.
+ */
+class PrompterChatLockAuth(
+    private val auth: LockAuthenticator,
+    schedule: (Long, () -> Unit) -> Unit,
+    now: () -> Long,
+    log: (String) -> Unit,
+) : ChatLockAuth {
+    private var waiter: CompletableDeferred<Boolean>? = null
+    private var problem: String? = null
+
+    private val prompter = LockPrompter(
+        auth = auth,
+        onUnlocked = { finish(true, null) },
+        onNoWayToUnlock = { finish(false, SCREEN_LOCK_NEEDED_TEXT) },
+        schedule = schedule,
+        now = now,
+        log = log,
+        title = LOCK_CHAT_LABEL,
+        onMessage = { m -> finish(false, chatLockProblemText(m)) },
+    )
+
+    private fun finish(ok: Boolean, why: String?) {
+        val w = waiter ?: return
+        waiter = null
+        problem = if (ok) null else why
+        w.complete(ok)
+    }
+
+    override fun status(): ChatLockAuthStatus {
+        val bio = runCatching { auth.strongBiometric() }.getOrDefault(BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE)
+        val secure = runCatching { auth.deviceSecure() }.getOrDefault(false)
+        return if (bio == BiometricManager.BIOMETRIC_SUCCESS || secure) ChatLockAuthStatus.READY else ChatLockAuthStatus.NEEDS_SCREEN_LOCK
+    }
 
     override suspend fun confirm(title: String, subtitle: String?): Boolean {
-        val activity = context.findFragmentActivity() ?: return false
-        if (status() != ChatLockAuthStatus.READY) return false
-        val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(title)
-            .apply { subtitle?.let { setSubtitle(it) } }
-            .setAllowedAuthenticators(lockAuthenticators(sdk))
-            .apply { if (sdk < 30) setNegativeButtonText("Cancel") } // not allowed together with DEVICE_CREDENTIAL
-            .build()
-        return suspendCancellableCoroutine { cont ->
-            val p = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    if (cont.isActive) cont.resume(true)
-                }
-
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    if (cont.isActive) cont.resume(false)
-                }
-            })
-            runCatching { p.authenticate(info) }.onFailure { if (cont.isActive) cont.resume(false) }
-            cont.invokeOnCancellation { runCatching { p.cancelAuthentication() } }
+        finish(false, null) // a confirmation still waiting is superseded (its prompt is reused or restarted)
+        val d = CompletableDeferred<Boolean>()
+        waiter = d
+        problem = null
+        prompter.title = title
+        prompter.subtitle = subtitle
+        prompter.tap()
+        return try {
+            d.await()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            if (waiter === d) {
+                waiter = null
+                runCatching { auth.cancel() }
+            }
+            throw e
         }
     }
+
+    override fun lastProblem(): String? = problem
+
+    /** Activity ON_RESUME: a confirmation asked for while not resumed prompts now. */
+    fun onResumed() = prompter.onResumed()
 }
 
 /** Tests (and previews) replace the real prompt through this. */
 val LocalChatLockAuth = compositionLocalOf<ChatLockAuth?> { null }
 
+/** No activity prompt to use (a preview, a test without a fake): nothing can be confirmed. */
+private object NoChatLockAuth : ChatLockAuth {
+    override fun status() = ChatLockAuthStatus.NEEDS_SCREEN_LOCK
+
+    override suspend fun confirm(title: String, subtitle: String?) = false
+}
+
 @Composable
 fun rememberChatLockAuth(): ChatLockAuth {
     val override = LocalChatLockAuth.current
     val ctx = LocalContext.current
-    return override ?: remember(ctx) { BiometricChatLockAuth(ctx) }
+    return override ?: remember(ctx) { (ctx.findFragmentActivity() as? lk.codegen.risime.MainActivity)?.authUi?.chatLock ?: NoChatLockAuth }
 }
 
 /**
- * Runs an action only after the confirmation; explains when the phone has no screen lock at all.
- * One per screen: [run] from a click, [LockGateDialog] once in the layout.
+ * Runs an action only after the confirmation; explains when the phone has no screen lock at all,
+ * or when the prompt couldn't be shown. One per screen: [run] from a click, [LockGateDialog] once in the layout.
  */
 class LockGate(private val scope: CoroutineScope, private val auth: ChatLockAuth) {
     var needsScreenLock by mutableStateOf(false)
+        internal set
+
+    /** Why the last confirmation failed (shown by [LockGateDialog]); null: nothing to say. */
+    var problem by mutableStateOf<String?>(null)
         internal set
     private var busy = false
 
@@ -112,7 +166,7 @@ class LockGate(private val scope: CoroutineScope, private val auth: ChatLockAuth
         busy = true
         scope.launch {
             try {
-                if (auth.confirm(title, subtitle)) onConfirmed()
+                if (auth.confirm(title, subtitle)) onConfirmed() else problem = auth.lastProblem()
             } finally {
                 busy = false
             }
@@ -129,12 +183,20 @@ fun rememberLockGate(): LockGate {
 
 @Composable
 fun LockGateDialog(gate: LockGate) {
-    if (!gate.needsScreenLock) return
+    if (gate.needsScreenLock) {
+        AlertDialog(
+            onDismissRequest = { gate.needsScreenLock = false },
+            title = { Text(SCREEN_LOCK_NEEDED_TITLE) },
+            text = { Text(SCREEN_LOCK_NEEDED_TEXT) },
+            confirmButton = { TextButton(onClick = { gate.needsScreenLock = false }) { Text("OK") } },
+        )
+        return
+    }
+    val p = gate.problem ?: return
     AlertDialog(
-        onDismissRequest = { gate.needsScreenLock = false },
-        title = { Text(SCREEN_LOCK_NEEDED_TITLE) },
-        text = { Text(SCREEN_LOCK_NEEDED_TEXT) },
-        confirmButton = { TextButton(onClick = { gate.needsScreenLock = false }) { Text("OK") } },
+        onDismissRequest = { gate.problem = null },
+        text = { Text(p) },
+        confirmButton = { TextButton(onClick = { gate.problem = null }) { Text("OK") } },
     )
 }
 

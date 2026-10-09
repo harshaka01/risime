@@ -227,8 +227,8 @@ fun SelectionTopBar(count: Int, onCopy: () -> Unit, onDelete: () -> Unit, onClos
 /** The chat overflow menu: Clear chat / Delete chat (always on: local + my own inbox). */
 @Composable
 fun ChatOverflowMenu(
-    onClear: () -> Unit,
-    onDelete: () -> Unit,
+    onClear: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
     lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
     /** More items first (the Official chat's "Summarise" and "Report"); `close` dismisses the menu. */
     extra: (@androidx.compose.runtime.Composable (close: () -> Unit) -> Unit)? = null,
@@ -238,8 +238,8 @@ fun ChatOverflowMenu(
         androidx.compose.material3.IconButton(onClick = { open = true }) { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.MoreVert, "More options") }
         androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             extra?.invoke { open = false }
-            androidx.compose.material3.DropdownMenuItem(text = { androidx.compose.material3.Text("Clear chat") }, onClick = { open = false; onClear() })
-            androidx.compose.material3.DropdownMenuItem(text = { androidx.compose.material3.Text("Delete chat") }, onClick = { open = false; onDelete() })
+            onClear?.let { f -> androidx.compose.material3.DropdownMenuItem(text = { androidx.compose.material3.Text("Clear chat") }, onClick = { open = false; f() }) }
+            onDelete?.let { f -> androidx.compose.material3.DropdownMenuItem(text = { androidx.compose.material3.Text("Delete chat") }, onClick = { open = false; f() }) }
             if (lock != null) {
                 androidx.compose.material3.DropdownMenuItem(
                     text = { androidx.compose.material3.Text(if (lock.locked) lk.codegen.risime.ui.lock.UNLOCK_CHAT_LABEL else lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL) },

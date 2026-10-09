@@ -69,7 +69,14 @@ data class TabBarState(
     val unread: TabUnread,
     /** Official is off and this device holds its read-only history. */
     val historyAvailable: Boolean,
+    /** "Start Official" in the tab row is offered (Official off): enabled for me (§24.4: 1:1 either person, group admins). */
+    val canStartOfficial: Boolean = false,
+    /** A "Start Official" request is under way. */
+    val starting: Boolean = false,
 )
+
+/** Under a disabled "Start Official" in a group where I'm not an admin. */
+const val START_OFFICIAL_ADMINS_ONLY = "Only admins can start Official"
 
 /** `POST …/official` (the app: [lk.codegen.risime.AppContainer.startOfficial]; a fake in tests). */
 fun interface OfficialStarter {
@@ -89,6 +96,10 @@ class ChatTabsController(
     initial: Tab? = null,
     /** Unread per conversation (MessageDao.unreadCounts in the app). */
     unreadByConversation: Flow<Map<String, Int>> = flowOf(emptyMap()),
+    /** `PATCH /chats/{id}` `on`: the tab row's "Start Official" while Official is off (null: not offered). */
+    private val toggler: OfficialToggler? = null,
+    /** §24.4 toggle rights: either person in a 1:1, admins in a group. */
+    canToggle: Flow<Boolean> = flowOf(chatId.startsWith("dm:")),
 ) {
     private val key = chatId.lowercase()
     private val selected = MutableStateFlow(initial)
@@ -116,12 +127,16 @@ class ChatTabsController(
         }
     }.stateIn(scope, SharingStarted.Eagerly, TabContent.Private)
 
-    val bar: StateFlow<TabBarState> = combine(tab, official, officialState, unreadByConversation) { t, off, state, unread ->
+    val bar: StateFlow<TabBarState> = combine(
+        combine(tab, official, officialState, ::Triple), unreadByConversation, canToggle, start,
+    ) { (t, off, state), unread, can, (busy, _) ->
         TabBarState(
             selected = t,
             showOfficial = state != OfficialState.OFF,
             unread = tabUnread(key, off?.lowercase(), unread),
             historyAvailable = state == OfficialState.OFF && off != null,
+            canStartOfficial = toggler != null && can,
+            starting = busy,
         )
     }.stateIn(scope, SharingStarted.Eagerly, TabBarState(tab.value, true, TabUnread(0, 0), false))
 
@@ -168,6 +183,30 @@ class ChatTabsController(
     /** §24.4: Official is off: open its read-only history (not remembered as the last tab). */
     fun openHistory() {
         selected.value = Tab.OFFICIAL
+    }
+
+    /**
+     * §24.4 "Start Official" in the tab row while Official is off: `PATCH … {"official": "on"}`, then
+     * the Official tab; with no Official conversation yet, its creation (§24.2) right after. A refusal
+     * is shown under the tab row.
+     */
+    fun turnOfficialOn() {
+        val t = toggler ?: return
+        if (start.value.first) return
+        start.value = true to null
+        scope.launch {
+            val r = runCatching { t.set(chatId, true) }.getOrNull()
+            start.value = false to null
+            when (r) {
+                is ApiResult.Ok -> {
+                    tabs.setOfficialState(chatId, r.value.official.state)
+                    select(Tab.OFFICIAL)
+                    if (official.value == null) startOfficial()
+                }
+                is ApiResult.Error -> tabs.setNotice(chatId, officialToggleErrorText(r.code, turningOn = true))
+                else -> tabs.setNotice(chatId, officialToggleErrorText(null, turningOn = true))
+            }
+        }
     }
 
     /** [Start Official] on the intro card (§24.2 lazy creation). */

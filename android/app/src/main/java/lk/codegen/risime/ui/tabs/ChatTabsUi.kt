@@ -48,6 +48,10 @@ class ChatTabsViewModel(c: AppContainer, meId: String, chatId: String, initial: 
     val controller = ChatTabsController(
         chatId, c.chatTabs, { id -> c.startOfficial(id) }, viewModelScope, initial,
         c.db.messages().unreadCounts().map { list -> list.associate { it.conversationId.lowercase() to it.unread } },
+        toggler = { id, on -> c.setOfficial(id, on) },
+        canToggle = c.db.groups().observe(chatId).map { g ->
+            canToggleOfficial(chatId, g?.myRole == lk.codegen.risime.net.GroupMember.ROLE_ADMIN && g.readOnly.not(), null)
+        },
     )
 
     /** The chat's name: the peer's for a 1:1 (also its Official, whose name is empty, §24.1), else the Private group's. */
@@ -68,7 +72,14 @@ class ChatTabsViewModel(c: AppContainer, meId: String, chatId: String, initial: 
  * While Official is off only Private shows (plus a link to Official's read-only history if this device has it).
  */
 @Composable
-fun ChatTabBar(state: TabBarState, onSelect: (Tab) -> Unit, onHistory: () -> Unit, onSearch: (() -> Unit)? = null) {
+fun ChatTabBar(
+    state: TabBarState,
+    onSelect: (Tab) -> Unit,
+    onHistory: () -> Unit,
+    onSearch: (() -> Unit)? = null,
+    /** §24.4 "Start Official" while Official is off (null: not offered). */
+    onStartOfficial: (() -> Unit)? = null,
+) {
     Column(Modifier.fillMaxWidth().testTag("chat_tabs")) {
         if (state.showOfficial) {
             val official = state.selected == Tab.OFFICIAL
@@ -96,10 +107,25 @@ fun ChatTabBar(state: TabBarState, onSelect: (Tab) -> Unit, onHistory: () -> Uni
                 )
             }
         } else {
+            // §24.4 Official is off: only the Private label, plus "Start Official" (toggle rights) and the read-only history.
             Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.md), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f).padding(vertical = Spacing.sm)) { TabLabel(PRIVATE_TAB_LABEL, state.unread.private) }
-                if (state.historyAvailable) TextButton(onClick = onHistory) { Text(OFFICIAL_HISTORY_LABEL) }
+                onStartOfficial?.let { start ->
+                    TextButton(onClick = start, enabled = state.canStartOfficial && !state.starting, modifier = Modifier.testTag("tab_start_official")) {
+                        Text(START_OFFICIAL_LABEL)
+                    }
+                }
                 onSearch?.let { s -> TabSearchButton(Tab.PRIVATE, s) }
+            }
+            if (onStartOfficial != null && !state.canStartOfficial) {
+                Text(
+                    START_OFFICIAL_ADMINS_ONLY,
+                    Modifier.fillMaxWidth().padding(horizontal = Spacing.lg),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (state.historyAvailable) {
+                TextButton(onClick = onHistory, modifier = Modifier.padding(horizontal = Spacing.sm)) { Text(OFFICIAL_HISTORY_LABEL) }
             }
         }
     }
@@ -168,11 +194,14 @@ fun TabbedChat(
     officialScreen: @Composable (conversationId: String, readOnly: Boolean, tabBar: @Composable () -> Unit) -> Unit,
     /** §24.9 search in the tab on screen (its conversation, its tab). */
     onSearch: ((conversationId: String, tab: Tab) -> Unit)? = null,
+    /** The intro screen's header: ⋮ → Lock chat / Unlock chat, and its title opens chat info. */
+    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
+    onInfo: (() -> Unit)? = null,
 ) {
     if (!tabsOn) return privateScreen(null)
     val model = vm()
     val title by model.title.collectAsStateWithLifecycle()
-    TabbedChatContent(model.controller, title, onBack, privateScreen, officialScreen, onSearch)
+    TabbedChatContent(model.controller, title, onBack, privateScreen, officialScreen, onSearch, lock, onInfo)
 }
 
 @Composable
@@ -183,6 +212,8 @@ fun TabbedChatContent(
     privateScreen: @Composable (tabBar: (@Composable () -> Unit)?) -> Unit,
     officialScreen: @Composable (conversationId: String, readOnly: Boolean, tabBar: @Composable () -> Unit) -> Unit,
     onSearch: ((conversationId: String, tab: Tab) -> Unit)? = null,
+    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
+    onInfo: (() -> Unit)? = null,
 ) {
     val content by controller.content.collectAsStateWithLifecycle()
     val bar by controller.bar.collectAsStateWithLifecycle()
@@ -190,7 +221,11 @@ fun TabbedChatContent(
     val banner by controller.banner.collectAsStateWithLifecycle()
     val tabBar: @Composable () -> Unit = {
         val scope = searchScopeOf(controller.chatId, content)
-        ChatTabBar(bar, controller::select, controller::openHistory, onSearch?.let { s -> scope?.let { conv -> { s(conv, if (content is TabContent.Official) Tab.OFFICIAL else Tab.PRIVATE) } } })
+        ChatTabBar(
+            bar, controller::select, controller::openHistory,
+            onSearch?.let { s -> scope?.let { conv -> { s(conv, if (content is TabContent.Official) Tab.OFFICIAL else Tab.PRIVATE) } } },
+            onStartOfficial = controller::turnOfficialOn,
+        )
         if (banner && bar.selected == Tab.OFFICIAL) OfficialBanner(controller::dismissBanner)
         notice?.let { n ->
             Text(
@@ -208,7 +243,13 @@ fun TabbedChatContent(
         TabContent.Private -> privateScreen(tabBar)
         is TabContent.Official -> officialScreen(c.conversationId, c.readOnly, tabBar)
         is TabContent.Intro, TabContent.Starting -> Scaffold(
-            topBar = { RisiTopBar(title = title, onBack = onBack) },
+            topBar = {
+                RisiTopBar(
+                    title = title, onBack = onBack,
+                    onTitleClick = onInfo, titleClickLabel = "Chat info",
+                    actions = { if (lock != null) lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = null, onDelete = null, lock = lock) },
+                )
+            },
             contentWindowInsets = WindowInsets(0),
         ) { pad ->
             Column(Modifier.fillMaxSize().padding(pad)) {

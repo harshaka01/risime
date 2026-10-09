@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -87,15 +88,55 @@ class ChatInfoTabsViewModel(c: AppContainer, meId: String, val chatId: String) :
         else lk.codegen.risime.data.groups.groupDisplayName(groups.firstOrNull { it.conversationId.equals(chatId, true) }?.name)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
-    /** A 1:1 is end-to-end encrypted once this phone holds its MLS group (Official always is, §24.9). */
-    val encrypted: Boolean = runCatching { c.mlsEngine?.group(chatId) != null }.getOrDefault(false)
+    /**
+     * A 1:1's encryption (decision 048): the read-only check off the main thread, bounded and
+     * repeated ([infoE2eeStates]). (It used to be read once, on the main thread, while the view model
+     * was built: the engine's Room call threw there, so it read "not encrypted" with no reason, and
+     * the screen said "Checking encryption…" for ever.)
+     */
+    val e2ee: StateFlow<lk.codegen.risime.data.mls.E2eeState> =
+        if (lk.codegen.risime.net.dmPeer(chatId, meId) == null) kotlinx.coroutines.flow.MutableStateFlow(lk.codegen.risime.data.mls.E2eeState.Checking)
+        else infoE2eeStates(kotlinx.coroutines.CoroutineScope(viewModelScope.coroutineContext + kotlinx.coroutines.Dispatchers.IO), { c.mlsUpgrader.peek(chatId) })
+            .stateIn(viewModelScope, SharingStarted.Eagerly, lk.codegen.risime.data.mls.E2eeState.Checking)
 
-    /** The tab bar is on (tabs UI): otherwise chat info looks as before. */
+    /** The tab bar is on (tabs UI): otherwise chat info looks as before (no Official part). */
     val tabsOn: StateFlow<Boolean> = c.chatTabs.uiOn
 
     init {
         // The server's Official state and who may toggle (tabs devices only).
-        viewModelScope.launch { runCatching { c.refreshChat(chatId) }.getOrNull()?.let { official.setServerCanToggle(it.canToggle) } }
+        if (c.chatTabs.uiOn.value) {
+            viewModelScope.launch { runCatching { c.refreshChat(chatId) }.getOrNull()?.let { official.setServerCanToggle(it.canToggle) } }
+        }
+    }
+}
+
+const val CHAT_LOCK_INFO_TEXT = "Lock and hide this chat on this device."
+const val CHAT_UNLOCK_INFO_TEXT = "This chat is locked. Turn off to move it back to your chat list."
+
+/**
+ * WhatsApp's chat-info "Chat lock": a switch under the Official section (1:1 and groups, tabs on or
+ * off). Its toggle runs the confirmation first ([lk.codegen.risime.ui.lock.ChatLockControl.onToggle]).
+ */
+fun LazyListScope.chatLockItems(lock: lk.codegen.risime.ui.lock.ChatLockControl) {
+    item(key = "chat_lock") {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = Sizes.listRowMin)
+                .toggleable(value = lock.locked, role = Role.Switch, onValueChange = { lock.onToggle() })
+                .padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+                .testTag("chat_lock_row"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Lock, null, Modifier.size(22.dp))
+            Spacer(Modifier.width(Spacing.md))
+            Column(Modifier.weight(1f)) {
+                Text(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    if (lock.locked) CHAT_UNLOCK_INFO_TEXT else CHAT_LOCK_INFO_TEXT,
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = lock.locked, onCheckedChange = null, modifier = Modifier.testTag("chat_lock_switch"))
+        }
     }
 }
 
@@ -182,7 +223,7 @@ private fun OfficialMemberRow(m: OfficialMemberUi) {
 }
 
 /** §24.9 chat info media: Private and Official in separate sections (Official only once it exists). */
-fun LazyListScope.tabMediaItems(media: TabMedia, showOfficial: Boolean, thumb: @Composable (MessageEntity) -> Unit) {
+fun LazyListScope.tabMediaItems(media: TabMedia, showOfficial: Boolean, privateTitle: String = PRIVATE_MEDIA_HEADER, thumb: @Composable (MessageEntity) -> Unit) {
     fun section(key: String, title: String, rows: List<MessageEntity>) {
         item(key = "${key}_header") { SectionHeader(title, Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) }
         item(key = "${key}_grid") {
@@ -195,7 +236,7 @@ fun LazyListScope.tabMediaItems(media: TabMedia, showOfficial: Boolean, thumb: @
             }
         }
     }
-    section("media_private", PRIVATE_MEDIA_HEADER, media.private)
+    section("media_private", privateTitle, media.private)
     if (showOfficial) section("media_official", OFFICIAL_MEDIA_HEADER, media.official)
 }
 
@@ -205,14 +246,17 @@ fun OfficialOffDialog(ui: OfficialInfoUi, onConfirm: () -> Unit, onCancel: () ->
     if (ui.confirmingOff) ConfirmDialog(OFFICIAL_OFF_CONFIRM_TITLE, OFFICIAL_OFF_CONFIRM_TEXT, OFFICIAL_OFF_CONFIRM_BUTTON, onConfirm, onCancel)
 }
 
-/** A 1:1's chat info while tabs are on: the person, encryption, the Official switch and both tabs' media. */
+/**
+ * A 1:1's chat info (tabs on or off): the person, the real encryption state, the Official switch
+ * (tabs on: [official] non-null), "Lock chat" ([lock]) and the media (both tabs' while tabs are on).
+ */
 @Composable
 fun DmChatInfoContent(
     name: String,
     peerId: String?,
     encrypted: Boolean,
     notEncryptedText: String?,
-    official: OfficialInfoUi,
+    official: OfficialInfoUi?,
     media: TabMedia,
     onBack: () -> Unit,
     onToggle: (Boolean) -> Unit,
@@ -221,9 +265,10 @@ fun DmChatInfoContent(
     onHistory: () -> Unit,
     onDismissError: () -> Unit,
     thumb: @Composable (MessageEntity) -> Unit,
+    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
 ) {
     Scaffold(topBar = { RisiTopBar(title = "Chat info", onBack = onBack) }, contentWindowInsets = WindowInsets(0)) { pad ->
-        LazyColumn(Modifier.fillMaxSize().padding(pad), contentPadding = PaddingValues(bottom = Spacing.xxl)) {
+        LazyColumn(Modifier.fillMaxSize().padding(pad).testTag("chat_info"), contentPadding = PaddingValues(bottom = Spacing.xxl)) {
             item(key = "head") {
                 Column(Modifier.fillMaxWidth().padding(Spacing.lg), horizontalAlignment = Alignment.CenterHorizontally) {
                     InitialsAvatar(name, size = Sizes.avatarLarge, photoKey = peerId)
@@ -232,10 +277,12 @@ fun DmChatInfoContent(
                     lk.codegen.risime.ui.chat.E2eeInfoLine(encrypted = encrypted, notEncryptedText = notEncryptedText)
                 }
             }
-            officialInfoItems(official, onToggle, onHistory, onDismissError)
+            official?.let { officialInfoItems(it, onToggle, onHistory, onDismissError) }
+            lock?.let { chatLockItems(it) }
             item(key = "div") { HorizontalDivider(Modifier.padding(vertical = Spacing.sm)) }
-            tabMediaItems(media, showOfficial = official.officialConversation != null, thumb)
+            if (official != null) tabMediaItems(media, showOfficial = official.officialConversation != null, thumb = thumb)
+            else tabMediaItems(media, showOfficial = false, privateTitle = MEDIA_HEADER, thumb = thumb)
         }
     }
-    OfficialOffDialog(official, onConfirmOff, onCancelOff)
+    official?.let { OfficialOffDialog(it, onConfirmOff, onCancelOff) }
 }

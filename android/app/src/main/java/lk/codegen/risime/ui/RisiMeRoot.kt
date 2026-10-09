@@ -50,6 +50,7 @@ import lk.codegen.risime.ui.settings.SettingsScreen
 import lk.codegen.risime.ui.settings.SettingsViewModel
 import lk.codegen.risime.ui.tabs.officialInfoItems
 import lk.codegen.risime.ui.tabs.tabMediaItems
+import lk.codegen.risime.ui.tabs.chatLockItems
 
 
 /** App root: the dev encryption banner sits above every screen, always. */
@@ -158,7 +159,8 @@ private fun MainNav(c: AppContainer, meId: String) {
     LaunchedEffect(lockedFolderOpen) {
         if (!lockedFolderOpen && nav.currentBackStackEntry?.destination?.route.let { it == "locked" || it == "locked_settings" || it == "chat/{target}" }) {
             val under = runCatching { nav.getBackStackEntry("locked") }.isSuccess
-            if (under) nav.popBackStack("chats", false)
+            // Chat lock settings opened from the chat list's ⋮ (no folder under it) close the same way.
+            if (under || nav.currentBackStackEntry?.destination?.route == "locked_settings") nav.popBackStack("chats", false)
         }
     }
     NotificationPermissionPrompt(c)
@@ -178,6 +180,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                 onAddFriend = { nav.navigate("add_friend") { launchSingleTop = true } },
                 onInvites = { nav.navigate("invites") { launchSingleTop = true } },
                 onLockedFolder = { nav.navigate("locked") { launchSingleTop = true } },
+                onChatLockSettings = { nav.navigate("locked_settings") { launchSingleTop = true } },
             )
         }
         // Locked chats: the folder is reachable only after the confirmation (folderOpen) and closes when
@@ -219,21 +222,14 @@ private fun MainNav(c: AppContainer, meId: String) {
                 )
                 return@composable
             }
-            val lockControl = lk.codegen.risime.ui.lock.ChatLockControl(isLocked) {
-                if (isLocked) {
-                    gate.run(lk.codegen.risime.ui.lock.UNLOCK_CHAT_LABEL) { c.scope.launch { c.lockedChats.unlock(conv) } }
-                } else {
-                    gate.run(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL) {
-                        nav.popBackStack("chats", false)
-                        c.scope.launch { c.lockedChats.lock(conv) }
-                    }
-                }
-            }
+            val lockControl = chatLockControl(c, nav, conv, isLocked, gate)
             lk.codegen.risime.ui.lock.LockGateDialog(gate)
             val groupInfo = { nav.navigate("group_info/${android.net.Uri.encode(conv)}") { launchSingleTop = true }; Unit }
             val chatInfo = { nav.navigate("chat_info/${android.net.Uri.encode(conv)}") { launchSingleTop = true }; Unit }
             // §24.9: with tabs off (server switch or capability) this is exactly the v1.23 screen.
             lk.codegen.risime.ui.tabs.TabbedChat(
+                lock = lockControl,
+                onInfo = if (lk.codegen.risime.net.isGroupConversation(conv)) groupInfo else chatInfo,
                 tabsOn = tabsOn,
                 vm = {
                     viewModel(key = "tabs:$conv") {
@@ -251,8 +247,8 @@ private fun MainNav(c: AppContainer, meId: String) {
                         lk.codegen.risime.net.dmPeer(conv, meId)?.let { peer ->
                             ChatScreen(
                                 viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() }, lock = lockControl, tabBar = tabBar,
-                                // §24.4: with tabs on, a 1:1 has chat info too (the Official switch, both tabs' media).
-                                onInfo = if (tabBar != null) chatInfo else null,
+                                // Chat info (WhatsApp): Lock chat, media; with tabs on also the Official switch (§24.4).
+                                onInfo = chatInfo,
                             )
                         }
                     }
@@ -290,19 +286,29 @@ private fun MainNav(c: AppContainer, meId: String) {
             val tabsVm = if (tabsOn) viewModel(key = "chatinfo:$conv") { lk.codegen.risime.ui.tabs.ChatInfoTabsViewModel(c, meId, conv) } else null
             val official = tabsVm?.official?.ui?.collectAsState()?.value
             val media = tabsVm?.media?.collectAsState()?.value
+            val lockGate = lk.codegen.risime.ui.lock.rememberLockGate()
+            lk.codegen.risime.ui.lock.LockGateDialog(lockGate)
+            val lockedIds by c.lockedChats.ids.collectAsState()
+            val lock = chatLockControl(c, nav, conv, lockedIds?.contains(c.chatTabs.chatId(conv).lowercase()) == true, lockGate)
             lk.codegen.risime.ui.group.GroupInfoScreen(
                 viewModel(key = "info:$conv") { lk.codegen.risime.ui.group.GroupInfoViewModel(c, meId, conv) },
                 onBack = { nav.popBackStack() },
-                tabsItems = if (tabsVm != null && official != null && media != null) ({
-                    officialInfoItems(
-                        official, tabsVm.official::request,
-                        onHistory = { official.officialConversation?.let { nav.navigate("chat/${android.net.Uri.encode(it)}") { popUpTo("chats") } } },
-                        onDismissError = tabsVm.official::dismissError,
-                    )
-                    tabMediaItems(media, showOfficial = official.officialConversation != null) { m ->
-                        lk.codegen.risime.ui.tabs.MediaThumb(c, m) { nav.navigate("chat/${android.net.Uri.encode(m.conversationId)}") { popUpTo("chats") } }
+                tabsItems = {
+                    // §24.4 the Official section (tabs on), then WhatsApp's "Lock chat" (always), then both tabs' media.
+                    if (tabsVm != null && official != null) {
+                        officialInfoItems(
+                            official, tabsVm.official::request,
+                            onHistory = { official.officialConversation?.let { nav.navigate("chat/${android.net.Uri.encode(it)}") { popUpTo("chats") } } },
+                            onDismissError = tabsVm.official::dismissError,
+                        )
                     }
-                }) else null,
+                    chatLockItems(lock)
+                    if (tabsVm != null && official != null && media != null) {
+                        tabMediaItems(media, showOfficial = official.officialConversation != null) { m ->
+                            lk.codegen.risime.ui.tabs.MediaThumb(c, m) { nav.navigate("chat/${android.net.Uri.encode(m.conversationId)}") { popUpTo("chats") } }
+                        }
+                    }
+                },
             )
             if (tabsVm != null && official != null) lk.codegen.risime.ui.tabs.OfficialOffDialog(official, tabsVm.official::confirmOff, tabsVm.official::cancelOff)
         }
@@ -327,8 +333,19 @@ private fun MainNav(c: AppContainer, meId: String) {
             val official by vm.official.ui.collectAsState()
             val media by vm.media.collectAsState()
             val title by vm.title.collectAsState()
+            val tabsOn by vm.tabsOn.collectAsState()
+            val e2ee by vm.e2ee.collectAsState()
+            val lockGate = lk.codegen.risime.ui.lock.rememberLockGate()
+            lk.codegen.risime.ui.lock.LockGateDialog(lockGate)
+            val lockedIds by c.lockedChats.ids.collectAsState()
+            val lock = chatLockControl(c, nav, chat, lockedIds?.contains(chat.lowercase()) == true, lockGate)
             lk.codegen.risime.ui.tabs.DmChatInfoContent(
-                title, lk.codegen.risime.net.dmPeer(chat, meId), vm.encrypted, null, official, media,
+                title, lk.codegen.risime.net.dmPeer(chat, meId),
+                encrypted = e2ee is lk.codegen.risime.data.mls.E2eeState.Encrypted,
+                // Decision 048: the real reason (or "Checking…" only until the first bounded check answers).
+                notEncryptedText = lk.codegen.risime.data.mls.e2eeStripText(e2ee, nameOf = { title.ifBlank { "Your contact" } }, isMe = { it.equals(meId, true) }),
+                official = if (tabsOn) official else null, media = media,
+                lock = lock,
                 onBack = { nav.popBackStack() },
                 onToggle = vm.official::request, onConfirmOff = vm.official::confirmOff, onCancelOff = vm.official::cancelOff,
                 onHistory = { official.officialConversation?.let { nav.navigate("chat/${android.net.Uri.encode(it)}") { popUpTo("chats") } } },
@@ -377,5 +394,27 @@ private fun MainNav(c: AppContainer, meId: String) {
             lk.codegen.risime.ui.backup.BackupsScreen(c, onBack = { nav.popBackStack() })
         }
     }
+    }
+}
+
+/**
+ * WhatsApp "Lock chat" / "Unlock chat" for chat [chat] (its Private id; both tabs lock together), from
+ * chat info or a chat's ⋮: the fingerprint/PIN confirmation first ([gate]); locking returns to the
+ * chat list, where the chat has left for the Locked chats folder.
+ */
+private fun chatLockControl(
+    c: AppContainer,
+    nav: androidx.navigation.NavController,
+    chat: String,
+    locked: Boolean,
+    gate: lk.codegen.risime.ui.lock.LockGate,
+) = lk.codegen.risime.ui.lock.ChatLockControl(locked) {
+    if (locked) {
+        gate.run(lk.codegen.risime.ui.lock.UNLOCK_CHAT_LABEL) { c.scope.launch { c.lockedChats.unlock(chat) } }
+    } else {
+        gate.run(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL) {
+            nav.popBackStack("chats", false)
+            c.scope.launch { c.lockedChats.lock(chat) }
+        }
     }
 }

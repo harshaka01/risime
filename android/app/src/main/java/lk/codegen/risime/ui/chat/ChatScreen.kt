@@ -73,7 +73,7 @@ fun ChatScreen(
     lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
     /** §24.9: the Private | Official tab bar, directly under the header (null: tabs off, the screen as before). */
     tabBar: (@Composable () -> Unit)? = null,
-    /** §24.4 (tabs on): the chat info screen (the Official switch); null: the info dialog as before. */
+    /** The chat info screen (Lock chat; tabs on: the Official switch); null: the info dialog (tests). */
     onInfo: (() -> Unit)? = null,
 ) {
     val messages by vm.messages.collectAsStateWithLifecycle()
@@ -152,7 +152,7 @@ fun ChatScreen(
                         onBlocked = { t -> vm.imgs.toast.value = t; vm.calls.refresh() },
                         onCall = vm::startCall,
                     )
-                    E2eeHeaderLock(encrypted) { showInfo = true }
+                    E2eeHeaderLock(encrypted) { if (onInfo != null) onInfo() else showInfo = true }
                     ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock)
                 },
             )
