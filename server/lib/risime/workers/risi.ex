@@ -47,9 +47,11 @@ defmodule RisiMe.Workers.Risi do
   defp run(%{"kind" => "extract", "conv" => conv}), do: Commitments.extract(conv)
 
   defp run(%{"kind" => "request", "conv" => conv, "user_id" => user} = a) do
-    if Secretary.active_human?(conv, user),
-      do: Requests.handle(conv, a["message_id"], a["request_id"], user, a["error"]),
-      else: :ok
+    cond do
+      not Secretary.active_human?(conv, user) -> :ok
+      a["error"] -> Requests.handle(conv, a["message_id"], a["request_id"], user, a["error"])
+      true -> Requests.handle(conv, a["message_id"], a["request_id"], user, nil, a["t0"])
+    end
   end
 
   defp run(%{"kind" => "action", "conv" => conv, "message_id" => id, "user_id" => user}) do

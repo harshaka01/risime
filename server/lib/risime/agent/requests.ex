@@ -2,8 +2,9 @@ defmodule RisiMe.Agent.Requests do
   @moduledoc """
   `risi_request` (§24.11): `ask`, `summarise` and `report` over the sealed buffer, which holds at
   most 24 h. `scope.since` further back than 24 h gets the `error` `out_of_window`; an empty
-  window gets `nothing_to_summarise`; a model that is down or fails gets `model_unavailable`; the
-  §24.13 limits and the global queue give `rate_limited`. Every reply notifies the requester only.
+  window gets `nothing_to_summarise`; a model that is down or fails gets `model_unavailable`; a
+  queue of 50+ pending requests (or 200 a day in a chat) gives `rate_limited`; the global queue and
+  the per-user limit make a request wait instead. Every reply notifies the requester only.
   """
   import Ecto.Query
 
@@ -11,6 +12,7 @@ defmodule RisiMe.Agent.Requests do
   alias RisiMe.Repo
 
   @window_s 24 * 3600
+  @max_wait_s 600
   # Clock skew between a phone and the server.
   @slack_s 300
 
@@ -21,6 +23,13 @@ defmodule RisiMe.Agent.Requests do
     do: reply_error(conv, request_id, user, code)
 
   def handle(conv, message_id, request_id, user, nil) do
+    handle(conv, message_id, request_id, user, nil, nil)
+  end
+
+  @doc false
+  def handle(conv, message_id, request_id, user, nil, t0) do
+    Process.put(:risi_req_t0, t0)
+
     case Secretary.envelope(conv, message_id) do
       %{"type" => "risi_request", "request_id" => ^request_id, "action" => action} = env ->
         now = DateTime.utc_now()
@@ -32,6 +41,13 @@ defmodule RisiMe.Agent.Requests do
 
       _ ->
         :ok
+    end
+  end
+
+  defp waited_s do
+    case Process.get(:risi_req_t0) do
+      t0 when is_integer(t0) -> System.system_time(:second) - t0
+      _ -> 0
     end
   end
 
@@ -204,8 +220,12 @@ defmodule RisiMe.Agent.Requests do
         {body, risi} = t.reply.(out, call_ref, conf)
         post(conv, body, Map.put(risi, "notify", [user]))
 
+      # The global in-flight queue is full: wait (the job snoozes), answer late rather than
+      # refuse; only after 10 minutes of waiting the polite error.
       {:error, :rate_limited} ->
-        reply_error(conv, rid, user, "rate_limited")
+        if waited_s() > @max_wait_s,
+          do: reply_error(conv, rid, user, "rate_limited"),
+          else: {:snooze, 10}
 
       {:error, _} ->
         reply_error(conv, rid, user, "model_unavailable")

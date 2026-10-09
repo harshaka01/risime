@@ -57,6 +57,7 @@ Harsha's rules are enforced in code: **no product pushing** (no prompt asks for 
 offers; stage 1 sends no `offer`), **nothing tracked without ✓**, **Risi only sees Official**,
 **learn and delete**.
 - **Gate:** 741 tests, 0 failures with the NIF built (`scripts/build-mls-nif`), 3 excluded (2 `:livekit`, 1 `:llm_live`); partition `_s6`.
+- **Risi requests queue, never rate-limit (fix):** `risi_request` = 20 per user per minute (sliding window), 200 per chat per day. Over the per-user limit the job is scheduled for when the window frees, 3 s apart per user (order kept; args `queued`, `t0`); the global in-flight queue (16) snoozes the job (10 s) instead of failing. A polite `rate_limited` error only with more than 50 pending requests of one user, the chat's daily cap, or more than 10 min of waiting on the global queue. Risi's own send limit snoozes. PROTOCOL.md §24.13 text is root's to update (10/h, 1/chat/min, 20/chat/day is superseded).
 - **Model router** (`RisiMe.Agent.LLM`, behaviour `chat/2` + `name/0`): provider `risi_l1`
   (`Agent.LLM.Local`) = vLLM OpenAI API at `RISI_LLM_URL` (default `http://127.0.0.1:8100/v1`);
   **any non-loopback host is refused before a socket opens** (`127.0.0.0/8`, `::1`, `localhost`

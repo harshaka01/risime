@@ -11,8 +11,8 @@ defmodule RisiMe.Agent.Secretary do
 
     * `text` → a debounced commitment extraction of the conversation (queue `risi`, one pending
       job per conversation);
-    * `risi_request` → after the §24.13 limits, a request job (queue `risi_requests`), or an
-      `error` `rate_limited` reply;
+    * `risi_request` → a request job (queue `risi_requests`, scheduled later when the user is over 20 a minute),
+      or (queue over 50 / chat over 200 a day) an `error` `rate_limited` reply;
     * `risi_action` → an action job (queue `risi_timers`);
     * anything else → nothing. Free text is never parsed for intent.
 
@@ -70,41 +70,80 @@ defmodule RisiMe.Agent.Secretary do
     :ok
   end
 
-  # §24.13: 10 per user per hour, 1 per chat per minute, 20 per chat per day.
+  # §24.13: 20 per user per minute (sliding window), 200 per chat per day. Over the per-user
+  # limit a request is never refused: its job is scheduled for when the window frees, one slot
+  # `@req_spacing_s` after the user's previous queued one (order kept). Only a queue of more than
+  # 50 pending requests (or the chat's daily cap) gets the `rate_limited` reply.
+  @req_per_min 20
+  @req_queue_max 50
+  @req_spacing_s 3
+  @pending_states ~w(available scheduled retryable)
+
   defp request(conv, id, user, env) do
     with rid when is_binary(rid) <- env["request_id"],
          {:ok, _} <- Ecto.UUID.cast(rid),
          true <- env["action"] in ~w(ask summarise report) do
-      limited =
-        RateLimiter.hit_if_allowed(:risi_req_user, user, 10, :timer.hours(1)) != :ok or
-          RateLimiter.hit_if_allowed(:risi_req_chat_min, conv, 1, :timer.minutes(1)) != :ok or
-          RateLimiter.hit_if_allowed(:risi_req_chat_day, conv, 20, :timer.hours(24)) != :ok
-
       args = %{
         "kind" => "request",
         "conv" => conv,
         "message_id" => id,
         "request_id" => rid,
-        "user_id" => user
+        "user_id" => user,
+        "t0" => System.system_time(:second)
       }
 
+      cap = Application.get_env(:risime, :risi_req_chat_day, 200)
+      per_min = Application.get_env(:risime, :risi_req_per_min, @req_per_min)
+      window = Application.get_env(:risime, :risi_req_window_ms, :timer.minutes(1))
+      {count, last} = pending_requests(user)
+
       cond do
-        not limited ->
+        RateLimiter.hit_if_allowed(:risi_req_chat_day, conv, cap, :timer.hours(24)) != :ok ->
+          limited_reply(args, user)
+
+        count == 0 and RateLimiter.hit_if_allowed(:risi_req_user, user, per_min, window) == :ok ->
           insert_unique(args, :risi_requests, [:kind, :request_id])
 
-        # One `rate_limited` reply per user per minute; further ones are dropped silently.
-        RateLimiter.hit_if_allowed(:risi_req_limited_reply, user, 1, :timer.minutes(1)) == :ok ->
-          insert_unique(Map.put(args, "error", "rate_limited"), :risi_requests, [
-            :kind,
-            :request_id
-          ])
+        count >= @req_queue_max ->
+          limited_reply(args, user)
 
         true ->
-          :ok
+          spacing = Application.get_env(:risime, :risi_req_spacing_s, @req_spacing_s)
+          first = DateTime.add(DateTime.utc_now(), RateLimiter.retry_after_s(window), :second)
+
+          at =
+            if last,
+              do: Enum.max([first, DateTime.add(last, spacing, :second)], DateTime),
+              else: first
+
+          insert_unique(Map.put(args, "queued", true), :risi_requests, [:kind, :request_id], at)
       end
     else
       _ -> :ok
     end
+  end
+
+  # One `rate_limited` reply per user per minute; further ones are dropped silently.
+  defp limited_reply(args, user) do
+    if RateLimiter.hit_if_allowed(:risi_req_limited_reply, user, 1, :timer.minutes(1)) == :ok,
+      do:
+        insert_unique(Map.put(args, "error", "rate_limited"), :risi_requests, [
+          :kind,
+          :request_id
+        ]),
+      else: :ok
+  end
+
+  # {pending queued requests of the user, scheduled_at of the latest one}
+  defp pending_requests(user) do
+    Repo.one(
+      from j in Oban.Job,
+        where:
+          j.queue == "risi_requests" and j.state in ^@pending_states and
+            fragment("?->>'user_id' = ?", j.args, ^user) and
+            fragment("?->>'queued' = 'true'", j.args),
+        select: {count(j.id), max(j.scheduled_at)}
+    )
   end
 
   defp action(conv, id, user),
@@ -115,9 +154,12 @@ defmodule RisiMe.Agent.Secretary do
         [:kind, :message_id]
       )
 
-  defp insert_unique(args, queue, keys) do
+  defp insert_unique(args, queue, keys, scheduled_at \\ nil) do
+    opts = [queue: queue, unique: [period: 86_400, keys: keys]]
+    opts = if scheduled_at, do: [{:scheduled_at, scheduled_at} | opts], else: opts
+
     args
-    |> Job.new(queue: queue, unique: [period: 86_400, keys: keys])
+    |> Job.new(opts)
     |> Oban.insert()
 
     :ok

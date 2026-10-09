@@ -87,6 +87,23 @@ defmodule RisiMe.Agent.SecretaryTest do
     perform_job(Job, args)
   end
 
+  defp enqueue_request!(ctx, user, action \\ "summarise") do
+    rid = Ecto.UUID.generate()
+
+    envelope!(ctx.og, user, %{
+      "v" => 1,
+      "type" => "risi_request",
+      "request_id" => rid,
+      "action" => action,
+      "scope" => %{"since" => nil}
+    })
+
+    rid
+  end
+
+  defp request_job(rid),
+    do: Enum.find(all_enqueued(worker: Job), &(&1.args["request_id"] == rid))
+
   defp request!(ctx, user, action, opts \\ []) do
     rid = Ecto.UUID.generate()
 
@@ -464,7 +481,7 @@ defmodule RisiMe.Agent.SecretaryTest do
     assert length(llm_requests()) == 2
   end
 
-  test "rate limits (§24.13): 1 request per chat per minute; the extra one gets rate_limited",
+  test "rate limits (§24.13): 20 a minute per user are all answered at once; the rest queue in order",
        ctx do
     say!(ctx.og, ctx.kamal, "something to summarise")
 
@@ -472,30 +489,70 @@ defmodule RisiMe.Agent.SecretaryTest do
       %{"summary" => "x", "decisions" => [], "action_items" => [], "open_questions" => []}
     end)
 
-    request!(ctx, ctx.harsha, "summarise")
-    assert_receive {:risi_post, _, _, %{"kind" => "summary"}}
+    # Requests 1..20 (the 3rd, the 10th, the 20th included) are answered, no gaps, no error.
+    rids = for _ <- 1..20, do: request!(ctx, ctx.harsha, "summarise")
 
-    rid = request!(ctx, ctx.kamal, "summarise")
+    for rid <- rids,
+        do: assert_receive({:risi_post, _, _, %{"kind" => "summary", "request_id" => ^rid}})
 
-    assert_receive {:risi_post, _, _,
-                    %{"kind" => "error", "code" => "rate_limited", "request_id" => ^rid}}
+    # The 21st and 22nd queue: scheduled in the future, one after the other.
+    r21 = enqueue_request!(ctx, ctx.harsha)
+    r22 = enqueue_request!(ctx, ctx.harsha)
+    j21 = request_job(r21)
+    j22 = request_job(r22)
+    assert j21.args["queued"] == true and j22.args["queued"] == true
+    assert DateTime.compare(j21.scheduled_at, DateTime.utc_now()) == :gt
+    assert DateTime.compare(j22.scheduled_at, j21.scheduled_at) == :gt
+    refute_receive {:risi_post, _, _, _}
 
-    assert length(llm_requests()) == 1
+    # Once the window has freed the jobs run, in order, and are answered.
+    assert :ok = perform_job(Job, j21.args)
+    assert :ok = perform_job(Job, j22.args)
+    assert_receive {:risi_post, _, _, %{"kind" => "summary", "request_id" => ^r21}}
+    assert_receive {:risi_post, _, _, %{"kind" => "summary", "request_id" => ^r22}}
+    refute_receive {:risi_post, _, _, %{"kind" => "error"}}
+    assert length(llm_requests()) == 22
+
+    # A new request while some are still pending also queues (order kept).
+    r23 = enqueue_request!(ctx, ctx.harsha)
+    assert request_job(r23).args["queued"] == true
+
+    # Other users are not slowed down by it.
+    assert request!(ctx, ctx.kamal, "summarise")
 
     # Job args never carry text, for any job.
     for j <- Repo.all(Oban.Job), do: refute(inspect(j.args) =~ "something to summarise")
   end
 
-  test "the global queue full: a request gets rate_limited without a model call", ctx do
+  test "more than 50 pending requests of one user get a polite rate_limited", ctx do
+    say!(ctx.og, ctx.kamal, "hello")
+    for _ <- 1..75, do: enqueue_request!(ctx, ctx.harsha)
+
+    queued = for j <- all_enqueued(worker: Job), j.args["queued"] == true, do: j
+    assert length(queued) == 50
+    errs = for j <- all_enqueued(worker: Job), j.args["error"] == "rate_limited", do: j
+    assert length(errs) == 1
+    assert perform_job(Job, hd(errs).args) == :ok
+    assert_receive {:risi_post, _, _, %{"kind" => "error", "code" => "rate_limited"}}
+  end
+
+  test "the global queue full: the request waits (snooze), no error, no model call", ctx do
     say!(ctx.og, ctx.kamal, "hello")
     fake_llm!(fn _, _ -> %{} end)
     old = Application.get_env(:risime, :risi_llm)
     Application.put_env(:risime, :risi_llm, Keyword.put(old, :max_in_flight, 0))
     on_exit(fn -> Application.put_env(:risime, :risi_llm, old) end)
 
-    request!(ctx, ctx.harsha, "summarise")
-    assert_receive {:risi_post, _, _, %{"kind" => "error", "code" => "rate_limited"}}
+    rid = enqueue_request!(ctx, ctx.harsha)
+    job = request_job(rid)
+    assert {:snooze, 10} = perform_job(Job, job.args)
+    refute_receive {:risi_post, _, _, _}
     assert llm_requests() == []
+
+    # Waited more than 10 minutes: the polite error.
+    stale = Map.put(job.args, "t0", System.system_time(:second) - 700)
+    assert :ok = perform_job(Job, stale)
+    assert_receive {:risi_post, _, _, %{"kind" => "error", "code" => "rate_limited"}}
   end
 
   ## Digest
