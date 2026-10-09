@@ -1,5 +1,12 @@
 # Proposal 2026-10-09: Google Calendar as Risi's primary calendar, honest calendar answers, the event card, the in-app Calendar (v1.29, §29)
 
+> **Deferred (2026-10-09, Harsha; decision 073, `2026-10-09-risi-calendar-notes.md`).** RisiMe now has
+> its own calendar (v1.29 §29 Risi Calendar). This design becomes **§31 "Google Calendar, optional
+> sync (later)"**, not a dependency and not in nightly.47/48: first a **one-way mirror Risi Calendar
+> → Google**, then **busy reads** as the `google_api` source. Token stays on the device; Testing mode.
+> The honesty rule below (§29.3) is kept now as v1.29 §29.7, which also covers the source
+> `risi_calendar`. Section numbers below (§29.x) read as §31.x.
+
 Requested by Harsha 2026-10-09 after a real-phone result on nightly.45: "Check my calendar for Monday
 2pm" → "Your calendar is clear", while his Google Calendar had events (the phone's CalendarContract
 returned none to RisiMe). Root decided the design (decision 072); PROTOCOL.md §29 after the build
