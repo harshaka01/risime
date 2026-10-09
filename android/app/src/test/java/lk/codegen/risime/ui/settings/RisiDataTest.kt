@@ -143,7 +143,7 @@ class RisiDataTest {
     /** v1.29 §30.5 a Notes device: "From note: <title>", [Done] = the note's tick, [Reopen] in "Done (last 7 days)". */
     @Config(qualifiers = "w411dp-h1600dp")
     @Test fun myPromisesOnANotesDeviceTicksLikeTheNote() {
-        val open = ProtocolJson.decodeFromString(RisiCommitmentsReply.serializer(), javaClass.classLoader!!.getResource("fixtures/risi_notes/risi_commitments_reply_v129.json")!!.readText())
+        val open = ProtocolJson.decodeFromString(RisiCommitmentsReply.serializer(), javaClass.classLoader!!.getResource("fixtures/risi_notes/risi_commitments_reply_v130.json")!!.readText())
         val doneRecently = open.commitments[0].copy(commitmentId = "e5f6a7b8-c9d0-4e1f-8a2b-4c5d6e7f8a9b", text = "Share the CV", state = "done", status = "done", updatedAt = "2026-10-09T08:00:00.000Z")
         val doneLongAgo = doneRecently.copy(commitmentId = "f6a7b8c9-d0e1-4f2a-9b3c-5d6e7f8a9b0c", text = "Old thing", updatedAt = "2026-09-01T08:00:00.000Z")
         val rest = object : RisiRest by Fake(facts) {
@@ -184,7 +184,7 @@ class RisiDataTest {
 
     /** Notes off: My promises is exactly as before (no `state=all`, no Done/Reopen, no "From note"). */
     @Test fun myPromisesWithoutNotesIsUnchanged() {
-        val open = ProtocolJson.decodeFromString(RisiCommitmentsReply.serializer(), javaClass.classLoader!!.getResource("fixtures/risi_notes/risi_commitments_reply_v129.json")!!.readText())
+        val open = ProtocolJson.decodeFromString(RisiCommitmentsReply.serializer(), javaClass.classLoader!!.getResource("fixtures/risi_notes/risi_commitments_reply_v130.json")!!.readText())
         val rest = Fake(facts, open)
         val model = RisiPromisesModel(rest, scope)
         model.load()

@@ -310,6 +310,13 @@ defmodule RisiMe.ContractExamplesTest do
                     risi_calendar_respond_suggest.json risi_calendar_settings.json
                     risi_calendar_suggestion_resolve.json)
 
+  # v1.30 (Risi Notes, §30): every example is the server's real output, checked exactly in
+  # test/contract/examples_v130_test.exs (which also regenerates them).
+  @checked_v1_30 ~w(device_put_risi_notes.json envelope_risi_action_item_reopen.json
+                    envelope_risi_note_card.json envelope_risi_notes_saved.json
+                    risi_commitments_reply_v130.json risi_note_reply.json
+                    risi_notes_reply.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -370,7 +377,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_26 ++
         @checked_v1_27 ++
         @checked_v1_28 ++
-        @checked_v1_29
+        @checked_v1_29 ++
+        @checked_v1_30
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end

@@ -61,8 +61,8 @@ class ContractExamplesTest {
         )
     }
 
-    /** v1.29 §30 Risi Notes (net/Protocol130.kt): ready for the examples the build adds (proposal 2026-10-09-risi-calendar-notes §30). */
-    private val notesV129: Map<String, (String) -> Any> by lazy {
+    /** v1.30 §30 Risi Notes (net/Protocol130.kt): the server's real examples (PROTOCOL.md v1.30 §30). */
+    private val notesV130: Map<String, (String) -> Any> by lazy {
         fun risi(s: String) = ProtocolJson.parseToJsonElement(s).jsonObject["risi"].toString()
         mapOf(
             "device_put_risi_notes.json" to { s ->
@@ -81,14 +81,14 @@ class ContractExamplesTest {
             "envelope_risi_action_item_reopen.json" to { s ->
                 ProtocolJson.parseToJsonElement(s).jsonObject.also { require(lk.codegen.risime.data.tabs.RisiControl.valid(it) && it["action"]!!.jsonPrimitive.content == RisiActions130.ITEM_REOPEN) }
             },
-            "risi_commitments_reply_v129.json" to { s -> ProtocolJson.decodeFromString<RisiCommitmentsReply>(s).also { require(it.commitments.any { c -> c.noteId != null }) } },
+            "risi_commitments_reply_v130.json" to { s -> ProtocolJson.decodeFromString<RisiCommitmentsReply>(s).also { require(it.commitments.any { c -> c.noteId != null }) } },
         )
     }
 
     private val all: List<String> by lazy { read("index.txt").lines().filter { it.isNotBlank() } }
 
     /** Every example file must map to a model; a new file without a decoder fails this test. */
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV129 + mapOf(
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + mapOf(
         // v1.27 (§27 made_by, the Ledger follow-ups, call transcription): net/Protocol127.kt and RisiMeta's optional fields.
         "auth_config_v127.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiLedgerOn && it.risiTranscribeOn && it.risiSkillsOn && it.risiToolsOn) } },
         "device_put_risi_ledger.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_LEDGER in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) } },
@@ -853,8 +853,8 @@ class ContractExamplesTest {
 
     /** The §30 decoders hold for the Android fixtures of the same names (until the contract examples land). */
     @Test
-    fun notesV129DecodersAcceptTheFixtures() {
-        for ((name, decode) in notesV129) {
+    fun notesV130DecodersAcceptTheFixtures() {
+        for ((name, decode) in notesV130) {
             val s = javaClass.classLoader!!.getResource("fixtures/risi_notes/$name")?.readText() ?: throw AssertionError("missing fixture $name")
             assertNotNull(name, decode(s))
         }

@@ -100,7 +100,7 @@ class RisiNotesTest {
         val n = ProtocolJson.decodeFromString(RisiNoteReply.serializer(), fixture("risi_note_reply.json")).note
         assertEquals(RisiItemStates.DONE, n.items[1].state)
         assertEquals("accepted", n.events.single().myStatus)
-        val c = ProtocolJson.decodeFromString(RisiCommitmentsReply.serializer(), fixture("risi_commitments_reply_v129.json"))
+        val c = ProtocolJson.decodeFromString(RisiCommitmentsReply.serializer(), fixture("risi_commitments_reply_v130.json"))
         assertEquals(noteId, c.commitments[0].noteId)
         assertNull(c.commitments[1].noteId)
     }

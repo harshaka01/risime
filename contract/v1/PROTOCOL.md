@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.29 (Release 0.3)
+# RisiMe Wire Protocol — v1.30 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -7673,7 +7673,7 @@ The digest card may show `totals` and group its items by `direction`.
 Folds §29 of proposal `2026-10-09-risi-calendar-notes.md` (decision 073; server 5ea7902, 43627a5,
 f0ec285, 6455806, 5497692; android 2ba351b, 94172af) and the calendar honesty rule of
 `2026-10-09-google-calendar.md` (its §29.2–§29.3; server 407606d, f063970; android 9c722e5, 339bb36).
-§30 Risi Notes is not folded yet (it stays in the proposal), and §31 Google Calendar (optional sync)
+§30 Risi Notes follows (v1.30), and §31 Google Calendar (optional sync)
 comes later. It amends §22, §24.11, §24.13, §25.1, §25.3–§25.5, §26.7, §27.6 and §28.2–§28.8 where
 stated (§29.13 lists every amendment). **Additive only:** one device capability (`risi_events`), one
 `/auth/config` switch, REST under `/api/v1/risi/calendar…`, one stored event kind
@@ -7739,7 +7739,7 @@ Event = {
   "source": {"conversation_id": "grp:…" | null,           an Official conversation or the caller's Risi chat
              "message_ids": [timeuuid],                   ≤ 20
              "item_id": uuid | null,                      §27/§28 item (commitment) it came from
-             "note_id": uuid | null},                     §30 note it came from (null until §30)
+             "note_id": uuid | null},                     §30 note it came from (else null)
   "created_by": "risi" | "user",
   "state": "active" | "cancelled",
   "created_at": ts, "updated_at": ts}
@@ -8155,7 +8155,214 @@ envelope carries no card version: an action applies to the current event.
   no-read answer without `RISI_DATA_KEY`; suggest/use/delete; reminders; canaries; the upgrade gate;
   screenshots).
 
+## 30. Risi Notes (v1.30)
+Folds §30 of proposal `2026-10-09-risi-calendar-notes.md` (decision 073; server fecd471, 8b2287e;
+android a0d6e26, f56bdbe) as shipped. It amends §22.5, §24.11, §27.2–§27.5 and §28.7 where stated
+(§30.10). **Additive only:** one device capability (`risi_notes`), one `/auth/config` switch, REST
+under `/api/v1/risi/notes…`, two `risi.kind`s (`note_card`, `notes_saved`), one `risi_action`
+(`item_reopen`), the extraction's extra fields, and `note_id` on My promises for notes devices. An
+app without `risi_notes` sees v1.29 exactly (it gets the §27.3 `discussion_summary`).
+
+### 30.0 Principles
+- A **Note** is the record of an Official discussion: a topic, key points, the agreed action items
+  (tick-boxes that *are* the §27 ledger items, i.e. My promises) and the meetings it produced
+  (proposed Risi Calendar events, §29), with a link back to the chat.
+- **Per person, in the Risi chat** (as §27.3). The Official conversation gets one short card
+  (`notes_saved`), never an `event_card` for the note's meetings.
+- **One discussion, one note:** for people with the feature a note replaces the §27.3/§27.4
+  quiet-rule summary (same id, same extraction); never both to the same person.
+- Never from Private, never from a Risi chat. **Sealed at rest on the server, not end-to-end
+  encrypted**; the Notes list says so in its info line (as §29.0; decision 048).
+
+### 30.1 Switch and capability
+- `/auth/config` **`"risi_notes": "on"`** while `RISI_NOTES=on` **and** `RISI_LEDGER=on`
+  (`RISI_NOTES` alone has no effect); the key is **absent** while off. Off: every `/risi/notes…`
+  is `503 agent_unavailable`; the extraction schema and every card are exactly v1.29.
+- Device capability **`"risi_notes"`** (`device_put_risi_notes.json`), kept **only together with
+  `risi_events`** (and so with `risi_tools`, `risi_skills`, `risi_ledger`); without `risi_events`
+  the server silently drops it. A **notes user** = switch on and at least one device advertising it.
+- A note's meetings become events only while `RISI_EVENTS=on` too (§29.1).
+
+### 30.2 Triggers
+1. **Quiet:** the §27.2 quiet rule (600 s, ≥ 6 counted messages, ≥ 2 people, spacing 30 min,
+   ≤ 8/day; the `RISI_QUIET_*` overrides of §28.9 apply).
+2. **Call end:** the server hook `call_ended(conversation, {call_id, media, duration_s,
+   transcript})`: a call Risi listened to (with a transcript, §27.7) → a note now,
+   `source: "call"`; any other Official call's end runs the quiet check at once (no 10-min wait)
+   over the typed messages. **Not wired in production yet:** the server cannot see a 1:1
+   `call_end` (it is end-to-end encrypted) and the call listener (§27.7) has no production caller,
+   so today notes come only from the quiet rule and `@Risi summarise`; the hook is covered by
+   server tests. Phones need nothing for it.
+3. **`@Risi summarise`:** a `risi_request` `summarise` **without** a period scope from a notes user
+   in an Official conversation makes a note now (`source: "request"`) over the window since the
+   cutoff (≤ 24 h); the asker is always a recipient. It replaces the §24.11 `summary` reply (the
+   Official conversation gets `notes_saved`). If a note of that conversation was made in the last
+   **10 min**, the server re-posts its `notes_saved` with `notify: [asker]` instead (this is also
+   the 1-per-10-min limit). An empty window or nothing note-worthy → the §24.11 `summary` reply as
+   before. A period scope (`today`/`7d`/`30d`, §27.13) is unchanged.
+- **Extraction (amends §27.2).** When any active member of the chat is a notes user, the
+  `discussion_summarise` task (schema name still `discussion_summary`) asks for the §27.2 keys plus
+  `topic` (≤ 80 chars, the discussion's own language), `language` (`en` | `si` | `ta`) and
+  `meetings` (≤ 3, each `title`, `start_local` `"YYYY-MM-DDTHH:MM"`, `end_local` | null,
+  `proposed_by` (a u-ref), `with` [u-refs], `source` [m-refs], `confidence`), all required. Without
+  a notes user the v1.27 schema and the "≥ 1 item" rule are unchanged.
+- **Threshold.** A note is made when the raw extraction has ≥ 1 item, or ≥ 1 kept meeting, or ≥ 3
+  key points; otherwise nothing is posted. Either way the §27.2 cutoff moves, so the quiet rule
+  never re-summarises a window a note covered.
+- **Meetings → events.** A meeting is kept with confidence ≥ 0.8, a future start and ≥ 1 other
+  member; it lasts 1 h unless `end_local` is given; its owner is `proposed_by`. Each kept meeting is
+  one proposed Risi-made event (§29.12 limits apply) with `source.note_id`, and a `calendar_invite`
+  carrying `note_id` goes to every participant (held for non-calendar users, §29.10). A meeting at
+  the same time as one of the note's items is **skipped** (the item's own §29.12 event covers it);
+  item events also carry `note_id` when their item belongs to a note. **No Official `event_card`**
+  is posted for a note's meetings (the Official chat gets only `notes_saved`).
+
+### 30.3 The note model
+```
+Note = {"note_id": uuid (= the §27 summary_id), "conversation_id": "grp:…", "chat_id",
+        "source": "chat" | "call" | "request", "call_id": uuid | null,
+        "media": "audio" | "video" | null, "duration_s": int | null,
+        "started_at", "ended_at", "with": [uuid] (all participants),
+        "topic": str (1–80), "language": "en" | "si" | "ta",
+        "key_points": [str] (1–8, ≤ 200 chars each),
+        "items": [Item],                 §27.3 Item, live state (incl. "done"); ≤ 10
+        "events": [{"event_id", "title", "start", "end", "all_day", "my_status"}],
+        "created_at", "call_ref", "made_by"}
+```
+- `items` are read live from `risi_commitments` (`summary_id = note_id`); declined, cancelled and
+  expired items are deleted rows, so they vanish. A note may have **0 items** (≥ 3 key points, or
+  only a meeting). `events` are the active events with that `note_id`; `my_status` is null when
+  the viewer is not a participant.
+- **Title** is rendered by the phone, per viewer: **"<viewer> × <others> · <topic> · <date>"**
+  ("Harsha × Shenika · interview planning · Fri 9 Oct"), names from the phone's data, more than 3
+  people as "Harsha × Shenika +2", the date of `ended_at` in the viewer's zone and locale. The
+  server's `body` (English, display names) is a fallback only.
+- **Items on the card and the note screen:** ✓ ✗ ✎ on the viewer's own `proposed` items until
+  `expires_at` (48 h, §27.3); others' proposed items read-only ("waiting"); `confirmed`/`edited`
+  items are an empty **tick-box**, `done` a ticked one (the owner and counterparts may tick; others
+  read-only). Each shows owner and due.
+
+### 30.4 Delivery
+- **`note_card`** in each notes recipient's own Risi chat (`envelope_risi_note_card.json`):
+  `risi = {…Note…, "v": 1, "kind": "note_card", "for": R, "expires_at" (created + 48 h),
+  "notify": [R]}`. `body`: "Notes: Harsha × Shenika · interview planning · Fri 9 Oct",
+  "• <key point>"…, "Agreed:" with "• You: Send the revised quote (by Fri 16 Oct)", "Meetings:"
+  with "• Interview · Wed 14 Oct, 2–3 PM", "Open in RisiMe". Tap → the note screen (§30.6).
+  Recipients as §27.2; held 24 h (`risi_followups_pending`) for a recipient without an active Risi
+  chat, then posted (§27.3 pending copies).
+- **`notes_saved`** in the Official conversation (`envelope_risi_notes_saved.json`): `risi = {"v":
+  1, "kind": "notes_saved", "note_id", "source", "with", "summary" (≤ 280, no items/owners/dues, as
+  §27.4), "items_count", "events_count", "made_by", "call_ref", "notify": []}`; body "Notes saved ·
+  open in your Risi chat". Posted when ≥ 1 `note_card` went out; it **replaces** `discussion_card`.
+  Participants see [Open] (→ `GET /risi/notes/{note_id}`; `404` for a non-recipient → the line
+  only); others see the line. A repeat `@Risi summarise` re-posts it with `notify: [asker]`.
+- **Mixed audiences:** a recipient without `risi_notes` gets the §27.3 `discussion_summary` from
+  the same extraction (same id; only with items, as before); the Official conversation gets only
+  `notes_saved` (its body reads fine on old apps). If no `note_card` went out, Official gets the
+  §27.4 `discussion_card` as before. Never a `discussion_summary` and a `note_card` to the same
+  person, never both Official cards.
+
+### 30.5 Ticking ↔ promises (both ways)
+- Ticking an item sends §27.5 `done` (`target` = `item_id`) in the actor's Risi chat. **`done` now
+  stores `done_at` and the state before it.** Un-ticking sends the new **`item_reopen`**
+  (`envelope_risi_action_item_reopen.json`: `{"v": 1, "type": "risi_action", "target": item_id,
+  "action": "item_reopen", "edit": null}`): accepted from the owner or a counterpart while the
+  item is `done` and at most **7 days** after `done_at`; the item goes back to its previous
+  `confirmed` / `edited` (`confirmed` when unknown) and its reminders are rescheduled. Anything else
+  is ignored without a reply (the phone's box flips back).
+- Marking done or reopening in My promises or on an `item_due` card is the same action. Every
+  accepted change posts §27.5 `item_update` to every recipient's Risi chat; after `item_reopen` it
+  carries `state: "confirmed" | "edited"` (no new state), `summary_id` = the note id and the body
+  "Harsha reopened '…'". Phones apply it to the note card, the note screen and My promises.
+  `GET /risi/notes/{id}` always returns live states.
+- **My promises (amends §28.7):** `GET /api/v1/risi/commitments` items gain `"note_id": uuid |
+  null` (the note while the caller still keeps it, else null) **only for a `risi_notes` device**
+  (`X-Device-Id`) while the switch is on; other apps get no key at all
+  (`risi_commitments_reply_v130.json`). My promises shows "From note: <title>" and opens it.
+
+### 30.6 Notes REST
+Auth; `X-Device-Id` of the caller's `risi_notes` device, else `403 invalid_device`; `503
+agent_unavailable` while off or when the notes can't be opened (no `RISI_DATA_KEY`); `429
+rate_limited` (+ `Retry-After`) over **60 reads / 30 deletes per user per minute**.
+
+| Method, path | Reply |
+|---|---|
+| `GET /api/v1/risi/notes?q=<1–100 chars>&before=<note_id>&limit=1–50` | `200 {"notes": [NoteSummary], "has_more"}` newest first (`risi_notes_reply.json`); `limit` default 20; a bad `q`/`before`/`limit` → `422 bad_request` |
+| `GET /api/v1/risi/notes/{id}` | `200 {"note": Note}` (`risi_note_reply.json`); `404 not_found` unless the caller keeps it |
+| `DELETE /api/v1/risi/notes/{id}` | `204`: removes it from the **caller's** list only (`404` if not kept); items, promises, events and the cards on phones are unaffected |
+| `DELETE /api/v1/risi/notes` | `204`: all of the caller's notes |
+
+- `NoteSummary = {"note_id", "conversation_id", "with", "topic", "ended_at", "source",
+  "items_count", "open_items_count" (not done), "events_count"}`. Paging: `before` = the last
+  `note_id` of the previous page.
+- **Search** (server): case-insensitive substring over topic, key points, item texts and the
+  participants' display names, over the caller's 500 most recent kept notes (opened in memory; no
+  plaintext index, no embedding). The phone may also search its local note cards (offline).
+- **Share into a chat** is phone-only: the phone sends an ordinary message of its own (the note as
+  text, ending "— shared from Risi Notes") through the normal send path. Risi is not involved.
+- Entry points: Risi chat ⋮ → Notes; Settings → Risi Notes.
+
+### 30.7 Storage (server, normative)
+```
+risi_notes(note_id uuid PK, conversation_id, chat_id, source, call_id NULL, media NULL,
+           duration_s NULL, started_at, ended_at, participants uuid[],
+           body_sealed bytea NOT NULL,          -- topic, language, key_points
+           made_by jsonb, call_ref NULL, created_at)
+  CHECK (source IN ('chat','call','request')), CHECK (octet_length(body_sealed) >= 29)
+risi_note_recipients(note_id FK ON DELETE CASCADE, user_id, deleted bool NOT NULL DEFAULT false,
+                     ended_at, PRIMARY KEY (note_id, user_id))
+risi_commitments + done_at, reopen_state       -- for item_reopen
+```
+- Sealed with `RISI_DATA_KEY`, AAD `risi_notes:<note_id>:body`; no plaintext text column. Items
+  stay in `risi_commitments` (`summary_id = note_id`), events in `risi_events`
+  (`source_note_id`); `risi_discussions` rows are still written (same id) for §27.
+- **Purge:** a note is deleted when no recipient keeps it, or after **365 days** (hourly prune);
+  Official off (§24.4) deletes the chat's notes on the server. The `note_card` messages already on
+  phones stay (hard rule 9) and are backed up as messages; notes themselves are server data, not in
+  backup bundles (as §29.13). Note text never reaches logs, job args, inbox events, push, metrics
+  or the learning log.
+
+### 30.8 Relation to §27.13 summaries
+Day/week summaries (§27.13) keep being built and stay internal. (The proposal's option that a
+period `summarise` may also read the period's notes is not used.) Notes do not change the 24-h
+raw-buffer rule.
+
+### 30.9 Wording
+As §29.13: the app localises "Notes", "Agreed", "Meetings", "Notes saved · open", status words and
+dates; topic and key points stay in the discussion's language (`language`); neutral forms only.
+
+### 30.10 Amendments, examples, gate
+- **§24.11:** `summarise` without a period from a notes user in Official → a note. **§27.2:** the
+  call-end hook and the note extraction/threshold. **§27.3/§27.4:** replaced by `note_card` /
+  `notes_saved` for notes users. **§27.5:** `done` remembers the previous state; `item_reopen`.
+  **§28.7:** `note_id`. **§22.5:** notes are server data, not in backups.
+- **Examples (v1.30),** all the server's real output (checked exactly by
+  `server/test/contract/examples_v130_test.exs`, decoded by Android): `device_put_risi_notes.json`,
+  `envelope_risi_note_card.json`, `envelope_risi_notes_saved.json`, `risi_notes_reply.json`,
+  `risi_note_reply.json`, `envelope_risi_action_item_reopen.json`,
+  `risi_commitments_reply_v130.json` (the proposal's `…_v129` name, renamed with the version).
+- **Gate (nightly.48, `scripts/ui-entry-test --risi-notes`, fake-llm with a scripted
+  `discussion_summary` rule, `RISI_NOTES=on`, `RISI_EVENTS=on`, `RISI_QUIET_S=60`):** the
+  proposal's gate 10–14, except that "a listened call's end → `source: "call"`" is checked only by
+  the server test until the call-end hook is wired.
+
 ## Changelog
+- **v1.30** (2026-10-09): Risi Notes (§30; decision 073; proposal
+  `2026-10-09-risi-calendar-notes.md` §30, server fecd471, 8b2287e; android a0d6e26, f56bdbe):
+  - the switch `/auth/config` `risi_notes` (`RISI_NOTES`, only with `RISI_LEDGER`), the capability
+    `risi_notes` (only with `risi_events`); triggers: the quiet rule, `@Risi summarise` without a
+    period (a repeat within 10 min re-posts `notes_saved` to the asker), the call-end hook (not
+    wired in production yet); the extraction's `topic`, `language`, `meetings`; the threshold
+    (≥ 1 item, a meeting or ≥ 3 key points);
+  - `note_card` per notes recipient in the Risi chat, `notes_saved` in Official (replaces
+    `discussion_card`; no Official `event_card` for a note's meetings), `discussion_summary` only
+    to people without notes; meetings → proposed Risi Calendar events with `note_id` (one at an
+    item's time is skipped);
+  - `done` stores the previous state and the new `risi_action` `item_reopen` (owner or
+    counterpart, within 7 days); My promises' `note_id` for notes devices only;
+  - REST `/api/v1/risi/notes…` (list with search and paging, get, delete one, delete all; 60 reads /
+    30 deletes per minute); sealed storage, purge when nobody keeps a note or after 365 days, and
+    with the chat's Risi data when Official is turned off.
 - **v1.29** (2026-10-09): Risi Calendar (§29; decision 073; proposal
   `2026-10-09-risi-calendar-notes.md` §29, server 5ea7902, 43627a5, f0ec285, 6455806, 5497692;
   android 2ba351b, 94172af) and calendar honesty (`2026-10-09-google-calendar.md` §29.2–§29.3;
@@ -8181,7 +8388,7 @@ envelope carries no card version: an action applies to the current event.
     calendar (Work). Not checked: Google Calendar (not connected)." or the phone-only "I checked:"
     line; `answer.sources` `calendar_source`;
   - errors `403 not_owner`, `409 version_conflict`, `410 cursor_expired`, `422 not_invitable`.
-    §30 Risi Notes and §31 Google Calendar sync are not part of v1.29 yet.
+    §30 Risi Notes (v1.30) and §31 Google Calendar sync were not part of v1.29.
 - **v1.28** (2026-10-09): the Risi action loop, proactive offers and My promises (§28; proposal
   `2026-10-09-risi-action-loop.md`, server 2b448cc, 6cc393a, 35a6b99; android fee8d84..08603a6):
   - the Risi chat's turn context (last 20 Risi-chat messages, Risi's posts buffered as `risi_post`,

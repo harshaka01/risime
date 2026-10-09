@@ -4,8 +4,13 @@
 > shipped (server 5ea7902..5497692, android 2ba351b, 94172af; examples written from the server's real
 > output). PROTOCOL.md wins where they differ (e.g. `version` counts only owner changes, the
 > suggestion "keep" is an `event_update` `status`, a Risi-chat card's source is the Risi chat, the
-> draft slot `with`, `risi_events` absent while off). **§30 Risi Notes is not folded yet** (it stays
-> here until built); §31 later.
+> draft slot `with`, `risi_events` absent while off). §31 later.
+>
+> **Folded (2026-10-09, root):** §30 Risi Notes is in `contract/v1/PROTOCOL.md` **v1.30 §30**, as
+> shipped (server fecd471, 8b2287e; android a0d6e26, f56bdbe; examples written from the server's
+> real output). PROTOCOL.md wins where they differ (e.g. `risi_notes` only with `RISI_LEDGER`; the
+> call-end hook not wired in production yet; no Official `event_card` for a note's meetings; a
+> meeting at an item's time skipped; `risi_commitments_reply_v130.json` instead of `…_v129`).
 
 Requested by Harsha 2026-10-09 ("RisiMe gets its OWN calendar and notes. Google Calendar becomes an
 optional sync, not a dependency"). Root decided the design (decision 073). It replaces the plan of
@@ -373,7 +378,7 @@ the card, else Risi posts the current invite again.
 
 ---
 
-## 30. Risi Notes (v1.29)
+## 30. Risi Notes (v1.29) — folded into PROTOCOL.md v1.30 §30
 
 ### 30.0 Principles
 - A **Note** is the record of an Official discussion: a title, key points, the agreed action items
