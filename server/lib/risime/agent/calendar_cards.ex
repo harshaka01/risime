@@ -128,7 +128,24 @@ defmodule RisiMe.Agent.CalendarCards do
 
   @doc "A device started advertising `risi_events`: the user's held invites go out (a job)."
   def became_calendar_user(user) do
-    if Calendar.on?(), do: retry_pending(user, 0)
+    if Calendar.on?() do
+      retry_pending(user, 0)
+      schedule_backfill(user)
+    end
+
+    :ok
+  end
+
+  # The §29.12 backfill ran at deploy before any device had `risi_events`: run it for this user.
+  defp schedule_backfill(user) do
+    %{"kind" => "calendar_backfill", "user_id" => user}
+    |> RisiMe.Workers.Risi.new(
+      queue: :risi_timers,
+      schedule_in: 30,
+      unique: [period: 120, keys: [:kind, :user_id], states: [:available, :scheduled]]
+    )
+    |> Oban.insert()
+
     :ok
   end
 

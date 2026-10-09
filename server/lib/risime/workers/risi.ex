@@ -104,7 +104,7 @@ defmodule RisiMe.Workers.Risi do
   end
 
   # v1.29 §29.12: the one-shot calendar backfill (`RisiMe.Release.risi_calendar_backfill/1`).
-  def perform(%Oban.Job{args: %{"kind" => "calendar_backfill"}}) do
+  def perform(%Oban.Job{args: %{"kind" => "calendar_backfill"} = args}) do
     cond do
       not RisiMe.Risi.enabled?() ->
         {:cancel, :risi_off}
@@ -114,7 +114,8 @@ defmodule RisiMe.Workers.Risi do
 
       true ->
         require Logger
-        counts = RisiMe.Agent.CalendarOffers.backfill()
+        opts = if u = args["user_id"], do: [user_id: u], else: []
+        counts = RisiMe.Agent.CalendarOffers.backfill(opts)
         Logger.info("risi calendar backfill: #{inspect(counts)}")
         :ok
     end

@@ -269,6 +269,60 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
     assert CalendarCards.pending(kamal.user.id) == []
   end
 
+  test "a device that gains risi_events after the item exists gets its invite (backfill per user),
+        once",
+       ctx do
+    kamal = RisiMe.Fixtures.logged_in_user(display_name: "Kamal")
+
+    og =
+      RisiMe.TabsHelpers.official_group!(
+        "grp:" <> Ecto.UUID.generate(),
+        [{ctx.h, "admin"}, {kamal.user.id, "member"}],
+        agents: [RisiMe.Risi.user_id()]
+      )
+
+    _kd = skills_device!(kamal.user)
+    krc = own_risi_chat!(kamal.user)
+
+    item!(ctx,
+      conversation_id: og,
+      chat_id: og,
+      owner_id: ctx.h,
+      counterpart_ids: [kamal.user.id],
+      text: "Budget review with Kamal"
+    )
+
+    refute Enum.any?(
+             all_enqueued(worker: Job),
+             &(&1.args["kind"] == "calendar_backfill" and &1.args["user_id"] == kamal.user.id)
+           )
+
+    calendar_device!(kamal.user)
+
+    assert [job] =
+             for(
+               j <- all_enqueued(worker: Job),
+               j.args["kind"] == "calendar_backfill" and j.args["user_id"] == kamal.user.id,
+               do: j
+             )
+
+    assert :ok = perform_job(Job, job.args)
+    assert length(for {^krc, _, %{"kind" => "calendar_invite"}} <- posts(), do: :invite) == 1
+
+    # A second registration (already risi_events) queues nothing new and sends no second card.
+    calendar_device!(kamal.user)
+
+    assert [_] =
+             for(
+               j <- all_enqueued(worker: Job),
+               j.args["kind"] == "calendar_backfill" and j.args["user_id"] == kamal.user.id,
+               do: j
+             )
+
+    assert :ok = perform_job(Job, job.args)
+    assert length(for {^krc, _, %{"kind" => "calendar_invite"}} <- posts(), do: :invite) == 0
+  end
+
   test "a ledger item: the owner's invite at extraction, the counterpart's once tracked", ctx do
     c = item!(ctx, state: "proposed", item_state: "proposed", summary_id: Ecto.UUID.generate())
     {:ok, c} = Commitment.open(c)
