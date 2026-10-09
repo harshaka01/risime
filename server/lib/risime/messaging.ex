@@ -730,8 +730,8 @@ defmodule RisiMe.Messaging do
   end
 
   # v1.24 §24.7: an Official event or a `chat_event` wakes only `tabs` devices.
-  defp push_scope(event),
-    do: if(RisiMe.Groups.Tabs.tabs_only?(event), do: :tabs, else: :all)
+  # v1.25 §25.2: a Risi-chat event (or `risi_tool_call`) wakes only `risi_tools` devices.
+  defp push_scope(event), do: RisiMe.Groups.Tabs.scope(event)
 
   @doc false
   def broadcast(user_id, event),
@@ -771,6 +771,7 @@ defmodule RisiMe.Messaging do
   end
 
   defp scope_key(%{kind: "chat_event"}), do: :chat_event
+  defp scope_key(%{kind: "risi_tool_call"}), do: :risi_tool_call
   defp scope_key(%{data: data}) when is_map(data), do: data["conversation_id"] || data["group_id"]
   defp scope_key(_), do: nil
 

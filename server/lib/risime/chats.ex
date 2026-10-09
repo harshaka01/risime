@@ -285,7 +285,7 @@ defmodule RisiMe.Chats do
           )
 
         if n == 1 do
-          RisiMe.Groups.Tabs.put(id, "official")
+          RisiMe.Groups.Tabs.put(id, "official", chat.kind)
 
           # §24.1: a 1:1 Official has both users as admins; a group's mirrors the Private roles.
           humans =

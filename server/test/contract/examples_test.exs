@@ -4156,6 +4156,31 @@ defmodule RisiMe.ContractExamplesTest do
       assert "risi_tools" in caps and "tabs" in caps and "groups" in caps
     end
 
+    test "auth_config_v125.json and device_put_risi_tools.json against the server (S9)",
+         %{a: a} do
+      with_attestation_key(%{})
+      RisiMe.TabsHelpers.tabs_on!()
+      RisiMe.TabsHelpers.risi_tools_on!()
+      {200, cfg} = get_json("/api/v1/auth/config")
+
+      assert keys(cfg) -- ["modes", "issuer", "client_id"] ==
+               keys(example("auth_config_v125.json")) -- ["modes", "issuer", "client_id"]
+
+      assert cfg["risi_tools"] == "on"
+
+      dev = Ecto.UUID.generate()
+
+      {200, _} =
+        RisiMe.GroupHelpers.api(
+          :put,
+          "/api/v1/me/devices/#{dev}",
+          a.token,
+          example("device_put_risi_tools.json")
+        )
+
+      assert RisiMe.Devices.risi_tools_device?(a.user.id, dev)
+    end
+
     test "chat_reply_risi.json and risi_chat_create_reply.json: the Risi chat" do
       c = example("chat_reply_risi.json")["chat"]
       risi_chat25_ok?(c)

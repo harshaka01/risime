@@ -157,6 +157,9 @@ if backups = System.get_env("BACKUPS"), do: config(:risime, :backups, backups !=
 on? = fn v -> String.downcase(v) in ["on", "1", "true"] end
 if tabs = System.get_env("TABS"), do: config(:risime, :tabs, on?.(tabs))
 if risi = System.get_env("RISI"), do: config(:risime, :risi, on?.(risi))
+# v1.25 §25.8: RISI_TOOLS=on turns on Risi's tool loop, client tools and the Risi chat
+# (`/auth/config` `risi_tools`, default off).
+if tools = System.get_env("RISI_TOOLS"), do: config(:risime, :risi_tools, on?.(tools))
 if id = System.get_env("RISI_USER_ID"), do: config(:risime, :risi_user_id, id)
 if id = System.get_env("RISI_DEVICE_ID"), do: config(:risime, :risi_device_id, id)
 if tz = System.get_env("RISI_DEFAULT_TZ"), do: config(:risime, :risi_default_tz, tz)

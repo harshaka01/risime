@@ -34,6 +34,8 @@ defmodule RisiMeWeb.InboxChannel do
         |> assign(:history, RisiMe.Devices.history?(device))
         # v1.24 §24.7: only a `tabs` device gets Official traffic and `chat_event`s.
         |> assign(:tabs, RisiMe.Devices.tabs?(device))
+        # v1.25 §25.2: only a `risi_tools` device gets Risi-chat traffic, tool calls, progress.
+        |> assign(:risi_tools, RisiMe.Devices.risi_tools?(device))
         # v1.24 §24.5: an agent's sockets get only its Official conversations while on.
         |> assign(:agent, RisiMe.Risi.agent?(user_id))
 
@@ -239,6 +241,13 @@ defmodule RisiMeWeb.InboxChannel do
       else: {:noreply, socket}
   end
 
+  # v1.25 §25.2: the device registered (or lost) `risi_tools` while connected.
+  def handle_info({:device_risi_tools, device_id, tools?}, socket) do
+    if device_id == socket.assigns[:device_id],
+      do: {:noreply, assign(socket, :risi_tools, tools?)},
+      else: {:noreply, socket}
+  end
+
   # v1.15 §17.1: the device registered (or lost) `history_share` while connected.
   def handle_info({:device_history, device_id, history?}, socket) do
     if device_id == socket.assigns[:device_id] and history? != socket.assigns[:history] do
@@ -332,9 +341,30 @@ defmodule RisiMeWeb.InboxChannel do
   # rule.
   defp visible?(socket, event, agent_ok \\ nil) do
     (socket.assigns[:tabs] == true or not RisiMe.Groups.Tabs.tabs_only?(event)) and
+      risi_visible?(socket, event) and
       agent_visible?(socket, event, agent_ok) and
       visible_v123?(socket, event)
   end
+
+  # v1.25 §25.2/§25.3: Risi-chat events, `risi_progress` and `risi_tool_call` only for a
+  # `risi_tools` socket (Risi's own sockets keep its Risi chats), and a `risi_tool_call` only for
+  # the device it names.
+  defp risi_visible?(socket, event) do
+    cond do
+      not RisiMe.Groups.Tabs.risi_only?(event) -> true
+      socket.assigns[:agent] == true -> kind(event) not in ["risi_tool_call", "risi_progress"]
+      socket.assigns[:risi_tools] != true -> false
+      kind(event) == "risi_tool_call" -> socket.assigns[:device_id] in to_devices(event)
+      true -> true
+    end
+  end
+
+  defp kind(%{kind: k}), do: k
+  defp kind(%{"kind" => k}), do: k
+  defp kind(_), do: nil
+
+  defp to_devices(%{data: %{"to_devices" => ds}}) when is_list(ds), do: ds
+  defp to_devices(_), do: []
 
   defp agent_visible?(socket, event, agent_ok) do
     cond do

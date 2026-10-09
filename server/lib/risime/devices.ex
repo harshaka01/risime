@@ -67,6 +67,7 @@ defmodule RisiMe.Devices do
         member_devices_changed(user_id, existing, mls_key, caps)
         history_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
         tabs_changed(user_id, device_id, existing, mls_key, caps)
+        risi_tools_changed(user_id, device_id, existing, mls_key, caps)
 
         calls_changed(
           user_id,
@@ -134,8 +135,9 @@ defmodule RisiMe.Devices do
   # v1.13 §16.1: `calls`.
   # v1.15 §17.1: `history_share`.
   # v1.18 §19.1: `video`. v1.19 §20.1: `group_calls`. v1.24 §24.7: `tabs`.
+  # v1.25 §25.8: `risi_tools`.
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
-                         group_calls call_switch screen_share tabs)
+                         group_calls call_switch screen_share tabs risi_tools)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1),
@@ -307,6 +309,62 @@ defmodule RisiMe.Devices do
         do:
           Groups.device_changed(user_id, device_id, if(now, do: :added, else: :removed),
             only: :official
+          )
+    end
+
+    :ok
+  end
+
+  @doc """
+  v1.25 §25.8: true if the device is a current MLS device with `groups`, `tabs` and
+  `risi_tools` (it may see the Risi chat, `risi_tool_call` and `risi_progress`).
+  """
+  def risi_tools?(%Device{mls_signature_key: k, capabilities: caps}) when is_binary(k),
+    do: Enum.all?(~w(groups tabs risi_tools), &(&1 in (caps || [])))
+
+  def risi_tools?(_), do: false
+
+  @doc "v1.25: true if `device_id` (may be nil) names a `risi_tools` device of the user."
+  def risi_tools_device?(_user_id, nil), do: false
+
+  def risi_tools_device?(user_id, device_id) do
+    case Ecto.UUID.cast(device_id) do
+      {:ok, d} -> risi_tools?(Repo.get_by(Device, user_id: user_id, device_id: d))
+      :error -> false
+    end
+  end
+
+  @doc "v1.25 §25.2: the device ids of the user's `risi_tools` devices."
+  def risi_tools_device_ids(user_id) do
+    Repo.all(
+      from d in Device,
+        where:
+          d.user_id == ^user_id and not is_nil(d.mls_signature_key) and
+            "tabs" in d.capabilities and "groups" in d.capabilities and
+            "risi_tools" in d.capabilities,
+        select: d.device_id
+    )
+  end
+
+  # v1.25 §25.2: live sockets of the device start or stop getting Risi-chat traffic; a device
+  # that gains (loses) `risi_tools` is added to (removed from) the user's Risi chat.
+  defp risi_tools_changed(user_id, device_id, existing, mls_key, caps) do
+    was = risi_tools?(existing)
+
+    now =
+      if mls_key, do: Enum.all?(~w(groups tabs risi_tools), &(&1 in caps)), else: was
+
+    if was != now do
+      Phoenix.PubSub.broadcast(
+        RisiMe.PubSub,
+        RisiMe.Messaging.topic(user_id),
+        {:device_risi_tools, device_id, now}
+      )
+
+      if groups?(existing) and mls_key != nil and "groups" in caps,
+        do:
+          Groups.device_changed(user_id, device_id, if(now, do: :added, else: :removed),
+            only: :risi
           )
     end
 

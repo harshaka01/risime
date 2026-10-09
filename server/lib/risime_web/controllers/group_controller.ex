@@ -24,10 +24,14 @@ defmodule RisiMeWeb.GroupController do
   # v1.24 §24.7: Official groups only for an `X-Device-Id` naming a `tabs` device.
   defp tabs?(conn), do: RisiMe.Devices.tabs_device?(me(conn), device(conn))
 
-  def index(conn, _params), do: json(conn, %{groups: Groups.list(me(conn), tabs?(conn))})
+  # v1.25 §25.2: Risi chats only for an `X-Device-Id` naming a `risi_tools` device.
+  defp risi_tools?(conn), do: RisiMe.Devices.risi_tools_device?(me(conn), device(conn))
+
+  def index(conn, _params),
+    do: json(conn, %{groups: Groups.list(me(conn), tabs?(conn), risi_tools?(conn))})
 
   def show(conn, %{"id" => id}) do
-    case Groups.show(me(conn), id, tabs?(conn)) do
+    case Groups.show(me(conn), id, tabs?(conn), risi_tools?(conn)) do
       {:ok, group} -> json(conn, %{group: group})
       error -> error(conn, error)
     end

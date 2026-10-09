@@ -60,6 +60,17 @@ defmodule RisiMe.Push.Dispatcher do
 
   defp connections(user_id, :all), do: Presence.connections(user_id)
 
+  defp connections(user_id, :risi_tools) do
+    case Presence.connections(user_id) do
+      [] ->
+        []
+
+      conns ->
+        tools = MapSet.new(Devices.risi_tools_device_ids(user_id))
+        Enum.filter(conns, fn {_, d, _} -> MapSet.member?(tools, d) end)
+    end
+  end
+
   defp connections(user_id, :tabs) do
     case Presence.connections(user_id) do
       [] ->
@@ -138,6 +149,10 @@ defmodule RisiMe.Push.Dispatcher do
       case scope do
         :all ->
           Devices.push_targets(user_id)
+
+        :risi_tools ->
+          tools = MapSet.new(Devices.risi_tools_device_ids(user_id))
+          for {d, _} = t <- Devices.push_targets(user_id), MapSet.member?(tools, d), do: t
 
         :tabs ->
           tabs = MapSet.new(Devices.tabs_device_ids(user_id))
@@ -441,7 +456,10 @@ defmodule RisiMe.Push.Dispatcher do
     Task.Supervisor.start_child(RisiMe.Push.TaskSupervisor, fn -> push_now(user_id, scope) end)
   end
 
+  # The wider scope wins: :all > :tabs > :risi_tools (v1.25 §25.2).
   defp merge(:all, _), do: :all
   defp merge(_, :all), do: :all
+  defp merge(:tabs, _), do: :tabs
+  defp merge(_, :tabs), do: :tabs
   defp merge(_, scope), do: scope
 end

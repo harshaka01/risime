@@ -28,6 +28,9 @@ defmodule RisiMe.Risi do
   @doc "True while `TABS=on` (`/auth/config` `tabs`)."
   def tabs_on?, do: Application.get_env(:risime, :tabs, false) == true
 
+  @doc "v1.25 §25.8: true while `RISI_TOOLS=on` (`/auth/config` `risi_tools`, default off)."
+  def tools_on?, do: Application.get_env(:risime, :risi_tools, false) == true
+
   def user_id, do: Application.get_env(:risime, :risi_user_id, @default_user)
   def device_id, do: Application.get_env(:risime, :risi_device_id, @default_device)
 
