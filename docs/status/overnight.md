@@ -459,6 +459,10 @@ were needed after nightly.11.
   `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
 - **Agents:** none running.
 - **Needs Harsha:**
+S. **Risi skills (§26, decision 069), open questions:**
+   1. Should pending scheduled messages be included in backups? Default: no; they stay on the phone.
+   2. Do you also want "Schedule send" in the normal composer, without Risi? It needs no wire change.
+   3. Email needs the OAuth accounts (item E), then its own proposal.
 E. **Email skill (later, for the pilot), needs your accounts:**
    - **Google:** a Google Cloud project with the Gmail API enabled, an OAuth consent screen in
      "Testing" with up to 100 test users, an Android OAuth client (package `lk.codegen.risime`, our
