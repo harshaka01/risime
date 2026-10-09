@@ -365,7 +365,15 @@ if [ "$RISI" = 1 ]; then
   tap "● Official" || fail "tap the Official tab"
   wait_for 'text="Start Official"' 20 || fail "no 'Start Official'"
   tap "Start Official" || fail "tap Start Official"
-  wait_text "ZZ UI B · Risi" 90 || fail "the 1:1 Official's header isn't 'ZZ UI B · Risi'"
+  # The title is two text nodes since 30fa758 (the name ellipsizes, " · Risi" never does): match the
+  # merged node or both parts.
+  ok_t=""
+  for _ in $(seq 1 90); do
+    dump
+    if grep -qF 'ZZ UI B · Risi' "$WORK/ui-$DEV.xml" || { grep -qF 'text="ZZ UI B"' "$WORK/ui-$DEV.xml" && grep -qE 'text="[ ]?· Risi"' "$WORK/ui-$DEV.xml"; }; then ok_t=1; break; fi
+    sleep 1
+  done
+  [ -n "$ok_t" ] || fail "the 1:1 Official's header isn't 'ZZ UI B · Risi'"
   has ' members"' && fail "the 1:1 Official's header shows a member count"
   wait_for 'text="Message"' 30 || fail "the Official composer's placeholder isn't 'Message'"
   has 'text="Risi is listening"' || fail "the 'Risi is listening' strip is gone"
