@@ -33,7 +33,7 @@ defmodule RisiMe.Agent.Ledger do
 
   require Logger
 
-  alias RisiMe.Agent.{Clock, Commitment, Discussion, LLM, Prompts, Secretary}
+  alias RisiMe.Agent.{Clock, Commitment, Discussion, ItemDedupe, LLM, Offers, Prompts, Secretary}
   alias RisiMe.{Repo, TimeUUID}
   alias RisiMe.Workers.Risi, as: Job
 
@@ -243,6 +243,8 @@ defmodule RisiMe.Agent.Ledger do
     case LLM.complete(req) do
       {:ok, %{call_ref: call_ref, output: out}} ->
         found = validate(out, refs, members, tzs)
+        # Item 10: an item that repeats one already kept is merged into it, not stored again.
+        found = %{found | items: ItemDedupe.drop_merged(found.items)}
         newest = msg_ts(List.last(msgs))
 
         window = %{
@@ -435,7 +437,8 @@ defmodule RisiMe.Agent.Ledger do
         source_message_ids: i.source_message_ids,
         confidence: i.confidence,
         call_ref: d.call_ref,
-        proposed_at: Clock.usec(now)
+        proposed_at: Clock.usec(now),
+        needs_clarification: Offers.vague?(i.due, i.due_text)
       }
 
       case Commitment.seal(row) do
@@ -473,10 +476,10 @@ defmodule RisiMe.Agent.Ledger do
   after the summary (`item_expire`). Oban result.
   """
   def publish(%Discussion{} = d, rows) do
-    for r <- RisiMe.Agent.LedgerOut.publish(d, rows),
-        Commitment.ledger?(r),
-        do: expire_timer(d.conversation_id, r.id)
-
+    kept = RisiMe.Agent.LedgerOut.publish(d, rows)
+    for r <- kept, Commitment.ledger?(r), do: expire_timer(d.conversation_id, r.id)
+    # Items 8/10: "Add to calendar?" for a timed item, one question for a vague one.
+    Offers.consider_all(kept)
     :ok
   end
 

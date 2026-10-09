@@ -94,28 +94,7 @@ defmodule RisiMe.Agent.Writes do
     w = insert!(ctx, tool, card, wid, target, "pending", nil)
     expires = DateTime.add(w.inserted_at, @ttl_s, :second)
 
-    risi =
-      %{
-        "kind" => "confirm",
-        "request_id" => ctx.request_id,
-        "write_id" => wid,
-        "tool" => tool.name,
-        "summary" => card.summary,
-        "when" => card.when,
-        "text" => card.text,
-        "for" => [ctx.asker],
-        "buttons" => ["add", "cancel"],
-        "expires_at" => RisiMe.Agent.Clock.ts(expires),
-        "turn_ref" => ctx.turn_id,
-        "call_ref" => Map.get(ctx, :call_ref),
-        "notify" => [ctx.asker]
-      }
-      |> put_some("skill_id", card[:skill_id])
-      |> put_some("args", card[:card_args])
-      # P0 2026-10-09: the calendar hint (the phone's remembered choice, or null).
-      |> then(
-        &if(tool.name == "calendar_add", do: Map.put(&1, "calendar", card[:calendar]), else: &1)
-      )
+    risi = card_risi(ctx, tool, card, wid, expires)
 
     case Out.post(target, card.summary <> "? Update RisiMe to answer.", risi) do
       {:ok, %{message_id: mid}} ->
@@ -130,6 +109,68 @@ defmodule RisiMe.Agent.Writes do
         Repo.delete(w)
         {:error, "failed"}
     end
+  end
+
+  @doc """
+  Item 8 (2026-10-09): a **proactive offer** of a write, not from a turn. The `confirm` card goes
+  to `user`'s Risi chat `rc`, always asked (never "Allowed": nothing runs without [Add]), with
+  `origin: "offer"` and the ledger item's `item_id`; `ttl_s` replaces the 24 h (the card lives
+  until the event). No `risi_progress` (there is no request). `card` as in `propose/3`, plus an
+  optional `device_id` (the fallback device of the write). `{:ok, write_id}` or `{:error, reason}`.
+  """
+  def offer(user, rc, tool, card, item_id, ttl_s) do
+    wid = Ecto.UUID.generate()
+
+    ctx = %{
+      asker: user,
+      conv: rc,
+      request_id: Ecto.UUID.generate(),
+      turn_id: nil,
+      device_id: Map.get(card, :device_id)
+    }
+
+    w = insert!(ctx, tool, card, wid, rc, "pending", nil)
+    expires = DateTime.add(w.inserted_at, ttl_s, :second)
+    w = w |> Ecto.Changeset.change(expires_at: expires) |> Repo.update!()
+
+    risi =
+      ctx
+      |> card_risi(tool, card, wid, expires)
+      |> Map.merge(%{"origin" => "offer", "item_id" => item_id})
+
+    case Out.post(rc, card.summary <> "? Update RisiMe to answer.", risi) do
+      {:ok, %{message_id: mid}} ->
+        w |> Ecto.Changeset.change(card_message_id: mid) |> Repo.update!()
+        {:ok, wid}
+
+      {:error, reason} ->
+        Repo.delete(w)
+        {:error, reason}
+    end
+  end
+
+  defp card_risi(ctx, tool, card, wid, expires) do
+    %{
+      "kind" => "confirm",
+      "request_id" => ctx.request_id,
+      "write_id" => wid,
+      "tool" => tool.name,
+      "summary" => card.summary,
+      "when" => card.when,
+      "text" => card.text,
+      "for" => [ctx.asker],
+      "buttons" => ["add", "cancel"],
+      "expires_at" => RisiMe.Agent.Clock.ts(expires),
+      "turn_ref" => ctx.turn_id,
+      "call_ref" => Map.get(ctx, :call_ref),
+      "notify" => [ctx.asker]
+    }
+    |> put_some("skill_id", card[:skill_id])
+    |> put_some("args", card[:card_args])
+    # P0 2026-10-09: the calendar hint (the phone's remembered choice, or null).
+    |> then(
+      &if(tool.name == "calendar_add", do: Map.put(&1, "calendar", card[:calendar]), else: &1)
+    )
   end
 
   # §26.3: an allowed write runs now, in the turn, for the asker's own request.
@@ -341,6 +382,9 @@ defmodule RisiMe.Agent.Writes do
     # P0 2026-10-09: the action draft behind this card is finished.
     if state in ~w(done cancelled),
       do: RisiMe.Agent.ActionDraft.finished(w.user_id, w.conversation_id, w.write_id)
+
+    # Item 8: a proactive offer's card was answered (never offered again either way).
+    RisiMe.Agent.Offers.settled(w.write_id, state)
   end
 
   ## Queries

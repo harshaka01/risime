@@ -87,7 +87,8 @@ defmodule RisiMe.Agent.LedgerActions do
             all_day: all_day,
             by: user,
             confirmed_at: c.confirmed_at || Clock.usec(Clock.now()),
-            schedule_v: c.schedule_v + 1
+            schedule_v: c.schedule_v + 1,
+            needs_clarification: RisiMe.Agent.Offers.vague?(due, due_text)
           ] ++ sealed
         )
         |> Repo.update!()
@@ -193,6 +194,8 @@ defmodule RisiMe.Agent.LedgerActions do
     Commitments.cancel_timers(c.id)
     Commitments.learn(c)
     RisiMe.Agent.LedgerReminders.schedule(c)
+    # Items 8/10: tracked now (counterparts may be offered too), or a new due after an edit.
+    RisiMe.Agent.Offers.consider(c)
     :ok
   end
 end

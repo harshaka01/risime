@@ -195,6 +195,10 @@ defmodule RisiMe.Agent.Commitments do
       seen? ->
         :ok
 
+      # Item 10: a near-duplicate of a live item is merged into it (no second card).
+      RisiMe.Agent.ItemDedupe.merged?(c) ->
+        :ok
+
       RateLimiter.hit_if_allowed(:risi_cards, conv, @cards_per_day, :timer.hours(24)) != :ok ->
         Logger.info("Risi card limit reached in #{conv}")
 
@@ -221,7 +225,8 @@ defmodule RisiMe.Agent.Commitments do
         source_message_ids: c.source_message_ids,
         confidence: c.confidence,
         call_ref: call_ref,
-        proposed_at: now
+        proposed_at: now,
+        needs_clarification: RisiMe.Agent.Offers.vague?(c.due, c.due_text)
       })
 
     case sealed do
@@ -232,6 +237,8 @@ defmodule RisiMe.Agent.Commitments do
       {:ok, row} ->
         row = Repo.insert!(row)
         post_proposal(conv, row, call_ref, members)
+        # Items 8/10: the offers of the new item (if its card went out and it is kept).
+        RisiMe.Agent.Offers.consider_all([row])
     end
   end
 
@@ -373,6 +380,8 @@ defmodule RisiMe.Agent.Commitments do
     cancel_timers(c.id)
     schedule(c)
     learn(c)
+    # Items 8/10: tracked now, so counterparts may get their offers too.
+    RisiMe.Agent.Offers.consider(c)
     update_card(c, "confirmed", user)
   end
 
@@ -417,7 +426,8 @@ defmodule RisiMe.Agent.Commitments do
             due_kind: kind,
             by: user,
             confirmed_at: c.confirmed_at || DateTime.utc_now(),
-            schedule_v: c.schedule_v + 1
+            schedule_v: c.schedule_v + 1,
+            needs_clarification: RisiMe.Agent.Offers.vague?(due, due_text)
           ] ++ sealed
         )
         |> Repo.update!()
@@ -426,6 +436,7 @@ defmodule RisiMe.Agent.Commitments do
       schedule(c)
       Repo.delete_all(from f in Fact, where: f.commitment_id == ^c.id)
       learn(c)
+      RisiMe.Agent.Offers.consider(c)
       update_card(c, "edited", user)
     else
       _ -> :ok
@@ -515,6 +526,9 @@ defmodule RisiMe.Agent.Commitments do
   end
 
   ## Timers
+
+  @doc "Schedules a tracked v1.24 commitment's timers again (its `schedule_v` already bumped)."
+  def reschedule(%Commitment{} = c), do: schedule(c)
 
   defp schedule(%Commitment{due: nil}), do: :ok
 

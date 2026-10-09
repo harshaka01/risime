@@ -17,6 +17,7 @@ defmodule RisiMe.Workers.Risi do
   | `prune` | `risi_timers` | cron hourly: expired confirm cards, old tool-call rows, activity over 90 days |
   | `undo_timeout` | `risi_timers` | a client undo unanswered after 15 s → `failed` (§26.4) |
   | `forget` | `risi_timers` | the safety re-run of `RisiMe.Agent.forget/1` (§24.4, within 1 h) |
+  | `offers_backfill` | `risi_timers` | one-shot: offers for existing future-dated items (item 8, idempotent) |
 
   Every job re-checks the §24.5 rule (`RisiMe.Agent.may_act?/1`) before touching anything, and
   is discarded while `RISI` is off.
@@ -60,6 +61,24 @@ defmodule RisiMe.Workers.Risi do
   # v1.26 §26.4: a client undo whose phone didn't answer in 15 s.
   def perform(%Oban.Job{args: %{"kind" => "undo_timeout", "entry_id" => e, "tool_call_id" => c}}),
     do: RisiMe.Agent.Skills.undo_timeout(e, c)
+
+  # Item 8 (2026-10-09): the one-shot offers backfill (`RisiMe.Release.risi_offers_backfill/1`).
+  def perform(%Oban.Job{args: %{"kind" => "offers_backfill"}}) do
+    cond do
+      not RisiMe.Risi.enabled?() ->
+        {:cancel, :risi_off}
+
+      not Out.ready?() ->
+        {:snooze, 60}
+
+      true ->
+        require Logger
+        # Run first: a filtered-out Logger call never evaluates its message.
+        counts = RisiMe.Agent.Offers.backfill()
+        Logger.info("risi offers backfill: #{inspect(counts)}")
+        :ok
+    end
+  end
 
   def perform(%Oban.Job{args: %{"kind" => "digest_sweep"}}) do
     if Out.ready?() do

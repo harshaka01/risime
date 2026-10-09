@@ -12,6 +12,7 @@ defmodule RisiMe.Release do
       bin/risime eval "RisiMe.Release.dm_device_ops()"            # v1.16, dry run by default
       bin/risime eval "RisiMe.Release.stale_device_ops()"         # v1.21, dry run by default
       bin/risime eval "RisiMe.Release.risi_preflight()"           # read-only Risi key/NIF check
+      bin/risime eval "RisiMe.Release.risi_offers_backfill()"     # item 8, dry run by default
 
   `migrate_cql/1` applies `priv/cql/*.cql` exactly like `mix risime.cql.migrate`: it creates the
   keyspace if needed, applies each file once in name order and records it in the keyspace's
@@ -31,7 +32,62 @@ defmodule RisiMe.Release do
     seal_risi_learning_log()
     migrate_friendships()
     seed_risi()
+    risi_offers_backfill(dry_run: false)
     :ok
+  end
+
+  @doc """
+  Item 8 (2026-10-09), one-shot and idempotent: "Add to calendar?" (and "Remind me?") cards for
+  the existing live items with a concrete future time (`RisiMe.Agent.Offers.backfill/1`; an item
+  already offered to a user is skipped). **Dry run by default** (counts only). Posting needs the
+  running node (Risi's MLS sender), so the real run from `eval` queues one `offers_backfill`
+  job (unique: queued once while one exists) that the running server executes (its log shows
+  the counts); inside the node it runs at once. `migrate/0` queues it on every deploy (a no-op
+  once everything was offered). Prints counts only.
+
+      bin/risime eval "RisiMe.Release.risi_offers_backfill()"                # dry run
+      bin/risime eval "RisiMe.Release.risi_offers_backfill(dry_run: false)"  # offers
+  """
+  def risi_offers_backfill(opts \\ []) do
+    dry_run = Keyword.get(opts, :dry_run, true)
+
+    job = fn ->
+      RisiMe.Workers.Risi.new(%{"kind" => "offers_backfill"},
+        queue: :risi_timers,
+        # 5 min: from `migrate/0` the previous release may still be running (it would take
+        # the job and drop it, not knowing the kind); the new one runs it.
+        schedule_in: 300,
+        unique: [period: :infinity, keys: [:kind], states: [:available, :scheduled, :retryable]]
+      )
+    end
+
+    result =
+      cond do
+        dry_run and Process.whereis(RisiMe.Repo) != nil ->
+          RisiMe.Agent.Offers.backfill(dry_run: true)
+
+        dry_run ->
+          with_repo(fn -> RisiMe.Agent.Offers.backfill(dry_run: true) end)
+
+        Process.whereis(RisiMe.Repo) != nil and RisiMe.Agent.Out.ready?() ->
+          RisiMe.Agent.Offers.backfill()
+
+        Process.whereis(RisiMe.Repo) != nil ->
+          Oban.insert(job.())
+          :queued_for_the_running_server
+
+        true ->
+          with_repo(fn ->
+            # Oban isn't running under `eval`: the job row is written directly.
+            RisiMe.Repo.insert!(job.())
+            :queued_for_the_running_server
+          end)
+      end
+
+    line = "risi offers backfill (dry_run=#{dry_run}): #{inspect(result)}"
+    Logger.info(line)
+    IO.puts(line)
+    {:ok, result}
   end
 
   @doc """
