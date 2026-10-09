@@ -20,6 +20,10 @@ defmodule RisiMe.Agent.LedgerS21Test do
   setup do
     ledger_on!()
     t0 = DateTime.utc_now() |> DateTime.add(-5 * 3600) |> DateTime.truncate(:second)
+    # The tests run ~1 h past t0 and the daily cap is per local day: keep them before Colombo
+    # midnight (from 22:00 local, start 3 h earlier; still within the buffer's two UTC days).
+    l = RisiMe.Agent.Clock.local(t0, "Asia/Colombo")
+    t0 = if l.hour >= 22, do: DateTime.add(t0, -3 * 3600), else: t0
     t0 = %{t0 | microsecond: {0, 6}}
     clock!(t0)
 
