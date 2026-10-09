@@ -317,7 +317,18 @@ class ApiClient(
     // ---- §24.11 Risi (private REST) ----
     suspend fun risiFeedback(body: RisiFeedback): ApiResult<Unit> = call("POST", "risi/feedback", body)
 
-    suspend fun risiFacts(): ApiResult<RisiFactsReply> = call<Unit, RisiFactsReply>("GET", "risi/facts", null)
+    /** §25.8: with `X-Device-Id` (a `risi_tools` device sees notes as `note`, others as `preference`). */
+    suspend fun risiFacts(): ApiResult<RisiFactsReply> = call<Unit, RisiFactsReply>("GET", "risi/facts", null, headers = deviceHeaders())
+
+    // ---- §25 (v1.25) Risi with tools (risi_tools devices only) ----
+
+    /** §25.2 `201` (created, `state: creating`) or `200` (the existing one); both carry the chat and its group. */
+    suspend fun createRisiChat(deviceId: String): ApiResult<RisiChatReply> =
+        call("POST", "risi/chat", JsonObject(emptyMap()), headers = mapOf(DEVICE_HEADER to deviceId))
+
+    /** §25.3 a client tool's result (`204`); never logged. */
+    suspend fun postRisiToolResult(toolCallId: String, body: RisiToolResult, deviceId: String): ApiResult<Unit> =
+        call("POST", "risi/tool_calls/$toolCallId/result", body, headers = mapOf(DEVICE_HEADER to deviceId))
 
     suspend fun deleteRisiFact(factId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/facts/$factId", null)
 

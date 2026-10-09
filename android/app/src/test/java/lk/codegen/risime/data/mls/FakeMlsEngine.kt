@@ -118,6 +118,10 @@ class FakeMlsEngine(override val userId: String, override val deviceId: String) 
     // ---- §24 tabs (stand-in for the v1.24 core) ----
     var tabsOn = false
     override val tabsSupported: Boolean get() = tabsOn
+
+    // ---- §25 Risi chats (stand-in for the v1.25 core) ----
+    var risiChatOn = false
+    override val risiChatSupported: Boolean get() = risiChatOn
     val agents = mutableMapOf<String, Set<String>>()
     override fun agentUsers(conversationId: String): Set<String> = agents[conversationId].orEmpty()
 

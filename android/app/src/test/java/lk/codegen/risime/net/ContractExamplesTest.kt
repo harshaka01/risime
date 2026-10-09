@@ -33,19 +33,19 @@ class ContractExamplesTest {
         "envelope_risi_action_me_too.json" to { s -> ProtocolJson.decodeFromString<RisiActionEnvelope>(s).also { require(it.action == RisiActions.ME_TOO) } },
         "envelope_risi_answer_v2.json" to { s ->
             ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
-                require(it.kind == RisiKinds.ANSWER && it.steps.size == 2 && it.steps[0] == RisiStep("calendar_check", RisiStepStatus.OK))
+                require(it.kind == "answer" && it.steps.size == 2 && it.steps[0] == RisiStep("calendar_check", RisiStepStatus.OK))
                 require(it.sources.map { x -> x.type } == listOf("calendar", "message", "note", "link") && it.sources.all { x -> x.showable })
                 require(it.nextSteps.size == 1 && it.localSearch!!.text == "budget" && it.turnRef != null)
             }
         },
         "envelope_risi_confirm.json" to { s ->
             ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
-                require(it.kind == RisiKinds.CONFIRM && it.writeId != null && it.tool == "calendar_add" && it.forUsers.size == 1 && it.expiresAt != null)
+                require(it.kind == "confirm" && it.writeId != null && it.tool == "calendar_add" && it.forUsers.size == 1 && it.expiresAt != null)
                 require(it.confirmWhen()!!.end != null && it.buttons == listOf("add", "cancel") && it.text == "Dentist")
             }
         },
-        "envelope_risi_draft.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds.DRAFT && it.language == "ta" && it.targetConversationId!!.startsWith("grp:")) } },
-        "envelope_risi_reminder_set.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds.REMINDER_SET && it.reminderId != null && it.reminderWhen() != null && it.meToo && it.participants.size == 1) } },
+        "envelope_risi_draft.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == "draft" && it.language == "ta" && it.targetConversationId!!.startsWith("grp:")) } },
+        "envelope_risi_reminder_set.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == "reminder_set" && it.reminderId != null && it.reminderWhen() != null && it.meToo && it.participants.size == 1) } },
         "error_tool_call_expired.json" to { s -> apiError(s, RisiToolsErrors.TOOL_CALL_EXPIRED) },
         "event_risi_tool_call_calendar_add.json" to { s -> ProtocolJson.decodeFromString<Event>(s).risiToolCall()!!.also { require(it.tool == RisiToolCall.TOOL_CALENDAR_ADD && it.calendarAddArgs()!!.title == "Dentist" && it.toDevices == listOf(it.deviceId)) } },
         "event_risi_tool_call_calendar_check.json" to { s -> ProtocolJson.decodeFromString<Event>(s).risiToolCall()!!.also { require(it.tool == RisiToolCall.TOOL_CALENDAR_CHECK && it.calendarCheckArgs() != null) } },

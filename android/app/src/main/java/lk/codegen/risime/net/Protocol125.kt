@@ -87,16 +87,6 @@ data class RisiLocalSearch(val text: String, val since: String? = null)
 @Serializable
 data class RisiWhen(val start: String, val end: String? = null, @SerialName("all_day") val allDay: Boolean = false)
 
-/** The v1.25 `risi.kind`s. */
-object RisiKinds {
-    const val ANSWER = "answer"
-    const val CONFIRM = "confirm"
-    const val REMINDER_SET = "reminder_set"
-    const val DRAFT = "draft"
-    const val REMINDER = "reminder"
-    const val ERROR = "error"
-}
-
 /** The v1.25 `risi_action` values (target = `write_id` or `reminder_id`). */
 object RisiActions {
     const val CONFIRM_WRITE = "confirm_write"

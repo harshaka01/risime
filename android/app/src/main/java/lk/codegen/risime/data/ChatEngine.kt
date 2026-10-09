@@ -116,6 +116,11 @@ class ChatEngine(
      * pipeline refuses on its own too (the core can close between this check and the event).
      */
     private val mlsReady: suspend () -> Boolean = { true },
+    /**
+     * §25.3 (v1.25) a `risi_tool_call` for this device, handed over after its event's transaction
+     * (null = an app without `risi_tools`: skipped, the cursor still advances). Never stored.
+     */
+    private val risiToolCalls: (suspend (lk.codegen.risime.net.RisiToolCall) -> Unit)? = null,
 ) : RealtimeListener, lk.codegen.risime.data.history.SendLanes {
     /** §15.4–§15.6 applied inside each event's transaction. */
     private val applier = deletes?.let { lk.codegen.risime.data.deletes.DeleteApplier(it, messages, images, clock, log) }
@@ -175,6 +180,7 @@ class ChatEngine(
             // Plaintext events before it are applied (and notify); the MLS event and everything after it
             // wait for the rejoin from the unchanged cursor (rule 9: never marked seen, never skipped).
             callQueue.clear() // anything queued by the refused (rolled-back) event
+            risiQueue.clear()
             finishBatch(newIncoming)
             throw e
         }
@@ -245,6 +251,10 @@ class ChatEngine(
                         chatEvents?.let { apply -> runCatching { e.chatEvent() }.getOrNull()?.let { apply(e.eventId, it, me) } }
                         false
                     }
+                    Event.KIND_RISI_TOOL_CALL -> {
+                        if (risiToolCalls != null) e.risiToolCall()?.let { risiQueue.add(it) }
+                        false
+                    }
                     Event.KIND_GROUP_RECEIPT -> {
                         runCatching { e.groupReceipt() }.getOrNull()?.let { groups?.applyReceipt(it) }
                         false
@@ -270,6 +280,7 @@ class ChatEngine(
             }
             onApplied(applied)
             dispatchCalls()
+            dispatchRisiToolCalls()
             if (historyTouched) {
                 historyTouched = false
                 history?.afterCommit()
@@ -287,6 +298,17 @@ class ChatEngine(
             images?.received()
         }
         afterDeletes()
+    }
+
+    /** §25.3: tool calls of the applied events (not of a rolled-back one: cleared with the call queue's batch). */
+    private val risiQueue = java.util.concurrent.ConcurrentLinkedQueue<lk.codegen.risime.net.RisiToolCall>()
+
+    private suspend fun dispatchRisiToolCalls() {
+        val h = risiToolCalls ?: return
+        while (true) {
+            val c = risiQueue.poll() ?: break
+            runCatching { h(c) }.onFailure { log("risi tool call: ${it.message}") }
+        }
     }
 
     /** §16: after the event's transaction committed, in event order. */

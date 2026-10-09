@@ -108,6 +108,9 @@ interface MlsEngine {
     /** True once the bundled core enforces §24.1 (tab/chat_id immutable, no agent in Private or a DM, admin-only agent adds). */
     val tabsSupported: Boolean get() = false
 
+    /** v1.25 §25.2: the core reads and writes `group_meta.chat_kind` and enforces the Risi-chat rules (crypto C4). */
+    val risiChatSupported: Boolean get() = false
+
     /** §24.1/§24.11: the users holding a leaf whose attestation says `kind: "agent"` (from MLS, never server JSON). */
     fun agentUsers(conversationId: String): Set<String> = emptySet()
 

@@ -17,6 +17,11 @@ object RisiKinds {
     const val REPORT = "report"
     const val OFFER = "offer"
     const val ERROR = "error"
+
+    // v1.25 §25.4
+    const val CONFIRM = "confirm"
+    const val REMINDER_SET = "reminder_set"
+    const val DRAFT = "draft"
 }
 
 /** A commitment's current state after the `commitment_update`s that followed its card. */
@@ -116,6 +121,8 @@ object RisiCards {
         "rate_limited" -> "Too many requests to Risi. Try again later."
         "nothing_to_summarise" -> "There is nothing to summarise yet."
         "out_of_window" -> "I can only summarise the last 24 hours."
+        "queue_overflow" -> "Risi has too many of your requests waiting. Try again in a few minutes."
+        "tool_timeout" -> "I couldn't reach your phone to add it."
         else -> "Risi couldn't do that."
     }
 
