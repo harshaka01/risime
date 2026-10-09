@@ -7376,6 +7376,45 @@ maximum.
   4. `RISI_LEDGER=on` after gate items 1–3 pass with fake-llm; then `RISI_TRANSCRIBE=on` after
      4–7 and the canary pass.
 
+### 27.13 30-day summaries (2026-10-09, Harsha; server 8af622d)
+Raw text stays 24 h (§24.12). Risi answers longer periods from **stored, sealed summaries**.
+Everything here is optional and backward compatible.
+
+- **Day summary:**
+  - While `RISI_LEDGER=on`, Risi stores one summary per local day of each Official chat (never a
+    Risi chat), built at 23:30 local or later from that day's buffered text.
+  - Learning-log task: `daily_summarise`.
+  - Nothing is posted.
+- **Weekly rollup:**
+  - On the chat's local Sunday, from the day summaries only.
+  - Learning-log task: `summary_rollup`.
+- **Storage:** `risi_daily_summaries` (scope `day` | `week`, the period, message count, `call_ref`,
+  `made_by`).
+  - The summary JSON is sealed with `RISI_DATA_KEY`.
+  - Kept **35 days**.
+  - Deleted with the chat's Risi data (Official off, §24.4) or on request (below).
+- **`risi_request summarise` scope** also accepts:
+  - `{"period": "today" | "7d" | "30d"}` (recommended);
+  - the bare strings `"today"`, `"7d"`, `"30d"`;
+  - `{"from": ts, "to": ts}` (at most 31 days back, else `out_of_window`).
+
+  The answer rests on the stored summaries in range, the tracked commitments, and the uncovered last
+  24 h of raw text. With nothing in range, the reply is `nothing_to_summarise`.
+- **The reply** is the §24.11 `summary` kind with two optional fields, which old apps ignore:
+  - `"period": {"from", "to", "scope": "today" | "7d" | "30d" | "range"}`;
+  - `"days": [{"date", "to", "scope": "day" | "week", "summary_id"}]`, the stored summaries used,
+    oldest first.
+
+  `body` names the period ("Summary of the last 7 days (3–9 Oct): …").
+- **"Summaries" in `GET /api/v1/risi/facts`** (to `risi_tools` devices only):
+  - items `{"fact_id" (= summary id), "kind": "summary", "text", "chat_id", "created_at", "scope",
+    "period": {"from", "to"}}`;
+  - `DELETE /api/v1/risi/facts/{id}` with a summary id deletes it **for the chat** (any active
+    member);
+  - `DELETE /api/v1/risi/facts` (everything about me) does not delete chat summaries.
+- **Examples:** `envelope_risi_request_period.json`, `envelope_risi_summary_period.json`,
+  `risi_facts_reply_summaries.json` (added together with their server and Android coverage).
+
 ## Changelog
 - **v1.27** (2026-10-09): model transparency, the Commitment Ledger follow-ups and call
   transcription (§27, decision 070; proposal `2026-10-09-ledger-followups-transcription.md`,
