@@ -518,8 +518,7 @@ fun revokeCancelLabel(skillId: String, pending: Int?): String? = when {
 
 /**
  * P0 2026-10-09 Calendar → Details: what Risi can read on this phone: the permission, each calendar (name,
- * account, events in the next 7 days, hidden / sync off), why a check can't be trusted, and the direct
- * Google Calendar connection (not built yet).
+ * account, events in the next 7 days, hidden / sync off) and why a check can't be trusted.
  */
 @Composable
 private fun CalendarSourcesBlock(port: lk.codegen.risime.data.tabs.RisiCalendarPort) {
@@ -549,7 +548,6 @@ private fun CalendarSourcesBlock(port: lk.codegen.risime.data.tabs.RisiCalendarP
                 if (!o.readOk) Text(lk.codegen.risime.data.tabs.CalendarRead.reasonText(o.reason), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_calendar_sources_reason"))
             }
         }
-        Text("Google Calendar (direct): not connected yet", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_calendar_source_google_direct"))
     }
 }
 

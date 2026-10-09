@@ -15,14 +15,16 @@
   `read_ok:false` (`api_error`), never an empty calendar; hidden calendars stay out of free/busy. Calendars
   list reads `SYNC_EVENTS`; Instances projection adds `CALENDAR_ID`. Settings → Calendar → Details: "What Risi
   can read" (permission state, each calendar with account, events in the next 7 days, hidden / sync off, the
-  exact reason) and "Google Calendar (direct): not connected yet".
+  exact reason). No Google row (root, 2026-10-09: Risi Calendar first; Google optional later).
 - **Contract asks (v1.29 §29.2, shape as aligned by root).** `calendar_check` ok result:
   `{"blocks":[…], "sources":[{"source":"phone_provider"|"google_api","calendars":[{"name","account_type","events":int}],"read_ok":bool,"reason":null|"not_connected"|"no_permission"|"reauth_needed"|"no_play_services"|"network"|"timeout"|"api_error"|"no_calendars"}], "connected_sources":["phone_provider"]}`.
   Both sources always present (`google_api` = `read_ok:false, reason:"not_connected"`); an email-named
   calendar is sent as "Primary calendar"; no titles/attendees/ids. Ask: finer `phone_provider` reasons
   (`google_sync_off`, `google_calendars_hidden`, `no_google_calendar`); the phone knows them but maps them to
   `no_calendars` on the wire for now, so Risi can say "turn on Calendar sync for your Google account".
-  Permission missing stays status `no_permission` (no source connected).
+  Permission missing stays status `no_permission` (no source connected). Server already accepts a third source
+  kind `risi_calendar` (server-side Risi Calendar); the honesty rule is source-agnostic (any source with `read_ok`
+  and ≥ 1 calendar is a read; an unconnected optional source is not mentioned in answers).
 
 ## Server items 8–10 (2026-10-09): offer cards, item_clarify, My promises split — READY
 For server 6cc393a/35a6b99/47156fe ("Android needs" in docs/status/server.md). All new fields optional; an older
