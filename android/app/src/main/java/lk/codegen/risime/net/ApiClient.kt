@@ -370,6 +370,8 @@ class ApiClient(
         val builder = Request.Builder().url(url)
             .method(method, body ?: if (method == "GET") null else ByteArray(0).toRequestBody(JSON))
         if (auth) token()?.let { builder.header("Authorization", "Bearer $it") }
+        // Every authenticated request names this install's device (one place, so no endpoint can forget it).
+        if (auth) deviceId()?.let { builder.header(DEVICE_HEADER, it) }
         headers.forEach { (k, v) -> builder.header(k, v) }
         return withContext(Dispatchers.IO) {
             try {

@@ -46,6 +46,16 @@ const val DELETE_EVERYTHING_LABEL = "Delete everything"
 const val RISI_FACTS_EMPTY = "Risi hasn't stored anything about you."
 const val PROMISES_EMPTY = "No open promises."
 const val RISI_OFFLINE = "Couldn't reach the server. Try again."
+const val RISI_UNAVAILABLE = "Risi isn't available for this account yet."
+const val RISI_SERVER_PROBLEM = "The server had a problem \u2014 try again."
+
+/** Honest message for a failed Risi call: only network trouble says "couldn't reach the server". */
+fun risiErrorMessage(r: ApiResult<*>?): String = when {
+    r is ApiResult.Error && (r.httpStatus == 404 || r.httpStatus == 403) -> RISI_UNAVAILABLE
+    r is ApiResult.Error && r.httpStatus >= 500 -> RISI_SERVER_PROBLEM
+    r is ApiResult.Error -> "Something went wrong (${r.httpStatus}). Try again."
+    else -> RISI_OFFLINE
+}
 
 /** §24.11 the order and titles of the fact kinds. */
 val FACT_KINDS = listOf("commitment" to "Commitments", "date" to "Dates", "person" to "People", "preference" to "Preferences", "topic" to "Topics")
@@ -75,7 +85,7 @@ class RisiFactsModel(private val rest: RisiRest, private val scope: CoroutineSco
         scope.launch {
             when (val r = runCatching { rest.facts() }.getOrNull()) {
                 is ApiResult.Ok -> _state.update { it.copy(loading = false, facts = r.value.facts) }
-                else -> _state.update { it.copy(loading = false, error = RISI_OFFLINE) }
+                else -> _state.update { it.copy(loading = false, error = risiErrorMessage(r)) }
             }
         }
     }
@@ -83,10 +93,10 @@ class RisiFactsModel(private val rest: RisiRest, private val scope: CoroutineSco
     /** Hard delete on the server; the row leaves the list only once the server said so. */
     fun delete(factId: String) {
         scope.launch {
-            when (runCatching { rest.deleteFact(factId) }.getOrNull()) {
+            when (val r = runCatching { rest.deleteFact(factId) }.getOrNull()) {
                 is ApiResult.Ok -> _state.update { s -> s.copy(facts = s.facts.filter { it.factId != factId }, error = null) }
                 is ApiResult.Error -> _state.update { s -> s.copy(facts = s.facts.filter { it.factId != factId }) } // 404: already gone
-                else -> _state.update { it.copy(error = RISI_OFFLINE) }
+                else -> _state.update { it.copy(error = risiErrorMessage(r)) }
             }
         }
     }
@@ -98,9 +108,9 @@ class RisiFactsModel(private val rest: RisiRest, private val scope: CoroutineSco
     fun confirmDeleteAll() {
         _state.update { it.copy(confirmAll = false) }
         scope.launch {
-            when (runCatching { rest.deleteAllFacts() }.getOrNull()) {
+            when (val r = runCatching { rest.deleteAllFacts() }.getOrNull()) {
                 is ApiResult.Ok -> _state.update { it.copy(facts = emptyList(), error = null) }
-                else -> _state.update { it.copy(error = RISI_OFFLINE) }
+                else -> _state.update { it.copy(error = risiErrorMessage(r)) }
             }
         }
     }
@@ -118,7 +128,7 @@ class RisiPromisesModel(private val rest: RisiRest, private val scope: Coroutine
         scope.launch {
             when (val r = runCatching { rest.commitments("open") }.getOrNull()) {
                 is ApiResult.Ok -> _state.value = PromisesUi(false, r.value.commitments)
-                else -> _state.update { it.copy(loading = false, error = RISI_OFFLINE) }
+                else -> _state.update { it.copy(loading = false, error = risiErrorMessage(r)) }
             }
         }
     }

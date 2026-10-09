@@ -74,6 +74,20 @@ class ApiClientTest {
     }
 
     @Test
+    fun everyAuthenticatedCallCarriesTheDeviceHeader() = runBlocking {
+        val withDev = ApiClient(OkHttpClient(), { server.url("/").toString() }, { "tok" }, deviceId = { "dev-1" })
+        repeat(4) { server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":{"code":"not_found","message":""}}""")) }
+        withDev.risiFacts()
+        withDev.risiCommitments("open")
+        withDev.contacts()
+        withDev.me()
+        repeat(4) {
+            val req = server.takeRequest()
+            assertEquals(req.path, "dev-1", req.getHeader("X-Device-Id"))
+        }
+    }
+
+    @Test
     fun groupReadsSendNoDeviceHeaderWithoutADeviceId() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":{"code":"not_found","message":""}}"""))
         api.group("grp:x")
