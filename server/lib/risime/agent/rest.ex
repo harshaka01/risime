@@ -40,7 +40,16 @@ defmodule RisiMe.Agent.Rest do
   :agent_unavailable}` when they can't be opened (texts are sealed under `RISI_DATA_KEY`; no or
   a wrong key). No rows: `{:ok, []}` with or without a key.
   """
-  def facts(user) do
+  def facts(user, device_id \\ nil) do
+    with {:ok, facts} <- user_facts(user) do
+      # 30-day summaries: the "Summaries" group, for apps that know the kind (risi_tools).
+      if RisiMe.Devices.risi_tools_device?(user, device_id),
+        do: {:ok, facts ++ RisiMe.Agent.DailySummaries.facts(user)},
+        else: {:ok, facts}
+    end
+  end
+
+  defp user_facts(user) do
     Repo.all(
       from f in Fact,
         where: f.subject_user_id == ^user and f.conversation_id in subquery(mine(user)),
@@ -65,8 +74,17 @@ defmodule RisiMe.Agent.Rest do
            Repo.delete_all(from f in Fact, where: f.id == ^id and f.subject_user_id == ^user) do
       :ok
     else
-      {0, _} -> {:error, :not_found}
-      error -> error
+      # 30-day summaries: a summary of a chat the caller is a member of (for the chat).
+      {0, _} ->
+        {:ok, id} = Ecto.UUID.cast(fact_id)
+
+        case RisiMe.Agent.DailySummaries.delete(user, id) do
+          :ok -> :ok
+          :not_found -> {:error, :not_found}
+        end
+
+      error ->
+        error
     end
   end
 

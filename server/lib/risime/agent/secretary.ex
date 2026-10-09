@@ -304,6 +304,7 @@ defmodule RisiMe.Agent.Secretary do
     RisiMe.Agent.Reminders.forget(conv)
     # v1.27 §27.9: discussions and pending copies go too (items are commitments, below).
     RisiMe.Agent.Ledger.forget(conv)
+    RisiMe.Agent.DailySummaries.forget(conv)
 
     Repo.transaction(fn ->
       Repo.delete_all(from f in Fact, where: f.conversation_id == ^conv)

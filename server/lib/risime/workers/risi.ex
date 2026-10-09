@@ -42,6 +42,8 @@ defmodule RisiMe.Workers.Risi do
     RisiMe.Agent.Reminders.prune()
     # v1.27 §27.3: held copies (expired ones go; ready ones are posted).
     if Out.ready?(), do: RisiMe.Agent.LedgerOut.prune()
+    # 30-day summaries are kept 35 days.
+    RisiMe.Agent.DailySummaries.prune()
     :ok
   end
 
@@ -63,6 +65,8 @@ defmodule RisiMe.Workers.Risi do
       Commitments.digest_sweep()
       # v1.27 §27.6: the personal 09:00 digests of ledger items.
       RisiMe.Agent.LedgerReminders.digest_sweep()
+      # 30-day summaries: each Official chat's summary of its day (23:30 local).
+      RisiMe.Agent.DailySummaries.sweep()
     else
       :ok
     end

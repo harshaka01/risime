@@ -364,6 +364,23 @@ defmodule RisiMe.Agent.Prompts do
   def question(text),
     do: "\n\n<question>\n" <> Jason.encode!(%{"q" => text}, escape: :html_safe) <> "\n</question>"
 
+  @doc "Stored day/week summaries (derived data only), one JSON object per line."
+  def summaries_block(lines) do
+    body = Enum.map_join(lines, "\n", &Jason.encode!(&1, escape: :html_safe))
+    "<summaries>\n" <> body <> "\n</summaries>"
+  end
+
+  @doc "30-day summaries: the system prompt of a summary over a longer period."
+  def period_system,
+    do: """
+    You are Risi, a note-taker inside a team chat. Summarise the period factually and briefly, \
+    in the chat's main language: a short summary, the decisions taken, action items ("Name: \
+    task, due"), and open questions. Use only the earlier summaries between <summaries> and \
+    </summaries> (one per day or week), the tracked commitments in <commitments>, and the recent \
+    chat lines in <chat>, if any.
+    #{@untrusted}
+    """
+
   @doc "The tracked commitments block of a report (derived data only)."
   def commitments_block(items) do
     lines = for i <- items, do: Jason.encode!(i, escape: :html_safe)
