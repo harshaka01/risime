@@ -81,9 +81,11 @@ class RisiCardContext(
     val messages: List<MessageEntity> = emptyList(),
     /** §25.4 a next-step chip pre-fills this screen's composer. */
     val prefill: (String) -> Unit = {},
+    /** §27.4 this phone has a usable Risi chat with the Ledger on (observed, so the short card's button follows it). */
+    val risiChatReady: Boolean = false,
 )
 
 /** Builds a [RisiCardContext] for the rows on screen. */
-fun risiCardContext(host: RisiHost, messages: List<MessageEntity>, nameOf: (String) -> String, nowMs: Long, onRef: (String) -> Unit, knownNames: List<String> = emptyList(), readOnly: Boolean = false, prefill: (String) -> Unit = {}) =
+fun risiCardContext(host: RisiHost, messages: List<MessageEntity>, nameOf: (String) -> String, nowMs: Long, onRef: (String) -> Unit, knownNames: List<String> = emptyList(), readOnly: Boolean = false, prefill: (String) -> Unit = {}, risiChatReady: Boolean = false) =
     RisiCardContext(host, nameOf, RisiCards.states(messages), RisiCards.awaiting(messages, host.me, nowMs), nowMs, onRef, knownNames, readOnly,
-        quotes = { r -> RisiCards.sourceQuotes(r, messages, nameOf) }, messages = messages, prefill = prefill)
+        quotes = { r -> RisiCards.sourceQuotes(r, messages, nameOf) }, messages = messages, prefill = prefill, risiChatReady = risiChatReady)

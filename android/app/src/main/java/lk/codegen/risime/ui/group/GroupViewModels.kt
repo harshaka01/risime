@@ -580,6 +580,11 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         private fun risiChatId(): String? = c.chatTabs.rows.value?.values?.firstOrNull { it.risi }?.conversationId
     }
 
+    /** §27.4 a usable Risi chat with the Ledger on ([Open Risi chat] on the short card). */
+    val risiChatReady: StateFlow<Boolean> = combine(c.chatTabs.rows, c.risiLedger.on, c.risiTools.on) { rows, ledger, tools ->
+        ledger && tools && rows?.values?.any { it.risi } == true
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     /** §27.3/§27.4 where this chat should scroll when it opens from a Risi card (taken once). */
     fun takeFocus(): lk.codegen.risime.data.tabs.RisiUiBus.Focus? = c.risiUi.takeFocus(conversationId)
 

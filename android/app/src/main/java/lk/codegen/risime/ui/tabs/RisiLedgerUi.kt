@@ -108,7 +108,7 @@ internal fun DiscussionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContex
         if (participant) {
             Text(RisiLedger.cardCountLine(r.itemsCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_card_count"))
             val sid = r.summaryId
-            if (sid != null && ctx.host.risiChatAvailable()) {
+            if (sid != null && (ctx.risiChatReady || ctx.host.risiChatAvailable())) {
                 TextButton(onClick = { ctx.host.openRisiChat(sid) }, modifier = Modifier.testTag("risi_open_risi_chat")) { Text("Open Risi chat") }
             }
         }

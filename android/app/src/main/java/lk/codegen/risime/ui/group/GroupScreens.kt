@@ -159,6 +159,7 @@ fun GroupChatScreen(
         }
     }
     val scroll = rememberChatScrollState()
+    val risiChatReady by vm.risiChatReady.collectAsStateWithLifecycle()
     // §27.3/§27.4 opened from a Risi card ([Open chat] / [Open Risi chat]): scroll there once the message is here.
     var focus by remember { mutableStateOf<lk.codegen.risime.data.tabs.RisiUiBus.Focus?>(null) }
     LaunchedEffect(Unit) { focus = vm.takeFocus() }
@@ -203,6 +204,7 @@ fun GroupChatScreen(
         readOnly = readOnly,
         // §25.4 a next-step chip pre-fills the composer (as a question to Risi in the Risi chat and while continuing).
         prefill = { s -> draft = TextFieldValue(s, androidx.compose.ui.text.TextRange(s.length)); if (!risiChat) risiChip = true },
+        risiChatReady = risiChatReady,
     )
     val typingLabel = groupTypingLabel(typing)
     val count = members.count { it.current && it.state != GroupMember.STATE_PENDING_ADD }
