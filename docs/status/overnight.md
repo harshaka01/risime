@@ -47,39 +47,29 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
-## P0 (2026-10-09 ~08:00 UTC): Risi calendar action loop (Harsha, real phone, nightly.43, skills on)
-- **What happened:** "add my interview with Shenika on Mon 12 Oct 2pm to my calendar" was restated
-  but only offered text chips. A chip tap sent text ("I don't see any event details"), then 6 turns
-  of interrogation, and nothing was added.
-- **Evidence:** `risi_turn_steps` shows every turn as one step `tool=final`: **no tool was ever
-  chosen**.
-- **Causes:**
-  - calendar not offered (the phone's calendar tool wasn't implemented yet, the skill was off);
-  - no conversation memory in the Risi chat;
-  - chips sent as text;
-  - no draft state;
-  - no loop guard.
-- **Fix in progress (2 top-model agents):**
-  - **Server:**
-    - the last 20 Risi-chat turns plus a sealed pending draft;
-    - only real action cards for writes, question/confirm chips filtered;
-    - `need_skill` instead of text loops;
-    - defaults (phone tz, 1 h, title from context), at most one question;
-    - a loop guard → a prefilled card;
-    - a ledger lookup prefill;
-    - digest == My promises.
-  - **Android:**
-    - a real `calendar_check`/`add`/`remove` on a synced **Google** calendar (picker remembered,
-      read-back verify, exact failure reasons);
-    - the action card [Add][Edit][Cancel] and the success card [Open][Undo];
-    - chips only fill the composer.
-- **Gate:** replay Harsha's conversation (on the calendar within 2 turns, 1 card, 1 tap), a 5-turn
-  context test, the loop guard, digest == promises, screenshots 29–31.
-- **Then (next release):**
-  - item 8, proactive "Add to calendar?" offers, backfilled for the Shenika interview;
-  - item 9, My promises split into "I promised" / "Promised to me";
-  - item 10, dedupe and vague-item clarification;
-  - item 12, the §27 per-person summaries (nightly.45).
+## v0.2.0-nightly.45 (live 2026-10-09 ~09:11 UTC, hotfix, not required): P0 Risi calendar action loop; §27 follow-ups (ledger off)
+- **P0 (Harsha, real phone, nightly.43):** "add my interview with Shenika on Mon 12 Oct 2pm to my
+  calendar" produced chips, then 6 turns of questions, and nothing was added (`risi_turn_steps`: every
+  turn was one step `tool=final`, no tool chosen).
+- **Fixed (server 2b448cc; android fee8d84 → 08603a6):**
+  - Risi chat remembers the last 20 turns plus a sealed pending draft;
+  - writes only as real action cards [Add][Edit][Cancel]; chips only fill the composer;
+  - defaults (phone time zone, 1 h, title from context), at most one question;
+  - a loop guard after 2 non-progress turns → a prefilled card;
+  - a ledger lookup prefill; "12 Oct" no longer read as 12 o'clock;
+  - a real calendar tool on a synced Google calendar (picker remembered, read-back verify, exact
+    failure reasons), a success line with [Open][Undo];
+  - digest counts == My promises.
+- **Gate:** all PASS, including ui-entry-test --skills --ledger --calendar (Harsha's conversation
+  replayed: one card, one Add, the event read back from the Google calendar), the 5-turn context
+  test, the loop guard, boot check, canary, push, upgrade (updater, Back, locked chat, per-chat
+  counts, restore, reinstall).
+- **Gate harness fixes on the way:** ui-entry scrolls "What Risi knows" clear of the nav bar
+  (039e36c); fake-llm matches the current `<question>` now that history precedes it (40577c2).
+- **§27 follow-ups** (per-person summaries, call transcription plumbing) are in this build but off
+  (RISI_LEDGER, RISI_TRANSCRIBE off) until Harsha says "turn the ledger on".
+- **Next release:** item 8 proactive "Add to calendar?" offers (backfill the Shenika interview);
+  item 9 My promises "I promised" / "Promised to me"; item 10 dedupe and vague-item clarification.
 
 ## v0.2.0-nightly.44 (live 2026-10-09 ~07:30 UTC, not required): screen share fixed, Risi text sealed at rest
 - **What's in:**
