@@ -21,6 +21,16 @@ defmodule RisiMe.Agent.DailySummariesTest do
   setup do
     ledger_on!()
     now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    # Before 06:00 local the "-5 h" discussion would fall on yesterday ("today" then has a past day):
+    # pin the fixed clock to 23:59 of the previous local day (still within the 24 h buffer).
+    l = Clock.local(now, @tz)
+
+    now =
+      if l.hour < 6,
+        do: DateTime.add(now, -(l.hour * 3600 + l.minute * 60 + l.second + 60)),
+        else: now
+
     t0 = DateTime.add(now, -5 * 3600)
     # Keep the discussion before 22:00 local so its day's 23:35 sweep comes after it.
     local = Clock.local(t0, @tz)
