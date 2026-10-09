@@ -6,6 +6,8 @@ defmodule RisiMe.Workers.Risi do
   | kind | queue | what |
   |---|---|---|
   | `extract` | `risi` (2) | commitment extraction of a conversation (debounced, one pending) |
+  | `discussion_quiet` | `risi` | v1.27 §27.2 quiet rule of a conversation (one pending, moved by each counted message) |
+  | `item_expire` | `risi_timers` | v1.27 §27.5: a proposed ledger item unconfirmed after 48 h |
   | `request` | `risi_requests` (2) | an `ask`/`summarise`/`report` (or its `error` reply) |
   | `action` | `risi_timers` (4) | a `risi_action`: a commitment, or a confirm card (§25.4; a client write waits ≤ 15 s for the phone here) |
   | `expire` | `risi_timers` | a proposal unconfirmed after 48 h is deleted |
@@ -61,6 +63,12 @@ defmodule RisiMe.Workers.Risi do
   def perform(_job), do: :ok
 
   defp run(%{"kind" => "extract", "conv" => conv}), do: Commitments.extract(conv)
+
+  # v1.27 §27.2: the quiet rule's check of a conversation.
+  defp run(%{"kind" => "discussion_quiet", "conv" => conv}), do: RisiMe.Agent.Ledger.quiet(conv)
+
+  # v1.27 §27.5: a proposed item unconfirmed 48 h after its summary.
+  defp run(%{"kind" => "item_expire", "item_id" => id}), do: RisiMe.Agent.Ledger.expire(id)
 
   defp run(%{"kind" => "request", "conv" => conv, "user_id" => user} = a) do
     cond do

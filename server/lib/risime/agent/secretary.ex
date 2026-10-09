@@ -38,7 +38,7 @@ defmodule RisiMe.Agent.Secretary do
     if RisiMe.Agent.official?(conv) do
       case Jason.decode(pt) do
         # v1.25 §25.2: a plain `text` in a Risi chat is never a request and never extracted.
-        {:ok, %{"type" => "text"}} -> unless risi_chat?(conv), do: schedule_extract(conv)
+        {:ok, %{"type" => "text"}} -> unless risi_chat?(conv), do: counted(conv, id)
         {:ok, %{"type" => "risi_request"} = env} -> request(conv, id, user, env)
         {:ok, %{"type" => "risi_action"}} -> action(conv, id, user)
         _ -> :ok
@@ -54,6 +54,14 @@ defmodule RisiMe.Agent.Secretary do
   end
 
   defp risi_chat?(conv), do: RisiMe.Groups.Tabs.risi_chat?(conv)
+
+  # v1.27 §27.2: with RISI_LEDGER=on a text is a counted message of the quiet rule (the
+  # discussion summary replaces the per-message v1.24 extraction); off, v1.26 behaviour.
+  defp counted(conv, id) do
+    if RisiMe.Risi.ledger_on?(),
+      do: RisiMe.Agent.Ledger.on_counted(conv, id),
+      else: schedule_extract(conv)
+  end
 
   @doc "Enqueues the debounced extraction of `conv` (at most one pending job per conversation)."
   def schedule_extract(conv, delay_s \\ nil) do
@@ -294,6 +302,8 @@ defmodule RisiMe.Agent.Secretary do
     # v1.25 §25.4: its confirm cards' writes (sealed args) go too.
     RisiMe.Agent.Writes.forget(conv)
     RisiMe.Agent.Reminders.forget(conv)
+    # v1.27 §27.9: discussions and pending copies go too (items are commitments, below).
+    RisiMe.Agent.Ledger.forget(conv)
 
     Repo.transaction(fn ->
       Repo.delete_all(from f in Fact, where: f.conversation_id == ^conv)

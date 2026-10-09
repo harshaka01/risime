@@ -318,6 +318,8 @@ defmodule RisiMe.Agent.Commitments do
     with {:ok, _} <- Ecto.UUID.cast(target),
          %Commitment{} = c <- Repo.get(Commitment, target),
          true <- c.conversation_id == conv,
+         # v1.27 §27.5: a v1.24 action on a ledger item is ignored (those go to the Ledger).
+         false <- Commitment.ledger?(c),
          true <- user == c.owner_id or user in c.counterpart_ids,
          {:ok, c} <- open(c) do
       do_act(action, c, user, env["edit"])
