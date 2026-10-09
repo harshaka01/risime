@@ -78,6 +78,10 @@ object RisiLedger {
      * the first message at or after `at` in Official (null: not on this phone yet).
      */
     fun focusTarget(messages: List<MessageEntity>, f: RisiUiBus.Focus): String? {
+        f.messageId?.let { mid ->
+            // Not (yet) on this phone: no scroll; the chat opens at its end and scrolls when history brings it.
+            return messages.firstOrNull { it.messageId.equals(mid, true) }?.messageId
+        }
         f.summaryId?.let { sid ->
             return messages.firstOrNull { m -> m.messageId != null && RisiMessages.meta(m)?.let { it.kind == RisiKinds127.DISCUSSION_SUMMARY && it.summaryId.equals(sid, true) } == true }?.messageId
         }

@@ -54,6 +54,8 @@ data class RisiDigestItem(
     @SerialName("all_day") val allDay: Boolean = false,
     @SerialName("due_text") val dueText: String? = null,
     val state: String? = null,
+    /** Server item 9 (personal digest): "i_promised" | "promised_to_me" | "others"; absent from older servers. */
+    val direction: String? = null,
 ) {
     val id: String get() = itemId ?: commitmentId ?: ""
 }
@@ -82,6 +84,9 @@ object RisiKinds127 {
     const val ITEM_NUDGE = "item_nudge"
     const val CALL_LISTEN = "call_listen"
     const val DIGEST = "digest"
+
+    /** Server item 10 (2026-10-09): the one "when is it due?" question of a vague item ([New date] = `item_edit`). */
+    const val ITEM_CLARIFY = "item_clarify"
 
     val ALL = setOf(DISCUSSION_SUMMARY, DISCUSSION_CARD, ITEM_UPDATE, ITEM_DUE, ITEM_OVERDUE, ITEM_NUDGE, CALL_LISTEN)
 }

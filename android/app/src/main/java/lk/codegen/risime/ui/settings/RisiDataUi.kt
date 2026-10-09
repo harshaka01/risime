@@ -1,5 +1,6 @@
 package lk.codegen.risime.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,8 +31,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import lk.codegen.risime.data.tabs.RisiPromises
 import lk.codegen.risime.net.ApiResult
 import lk.codegen.risime.net.RisiCommitment
+import lk.codegen.risime.net.RisiTotals
 import lk.codegen.risime.net.RisiFact
 import lk.codegen.risime.net.RisiRest
 import lk.codegen.risime.ui.common.RisiTopBar
@@ -47,13 +50,27 @@ const val RISI_FACTS_EMPTY = "Risi hasn't stored anything about you."
 const val PROMISES_EMPTY = "No open promises."
 const val OWED_TO_ME_TITLE = "Owed to me"
 
+/** Row test tags per direction (the v1.27 tags kept for "I promised" and "Promised to me"). */
+private val PROMISE_TAGS = mapOf(RisiPromises.I_PROMISED to "risi_promise", RisiPromises.PROMISED_TO_ME to "risi_owed", RisiPromises.OTHERS to "risi_promise_other")
+
+/** One item: text, owner · due (all-day aware) · status ("Needs a date"); a tap opens its source chat (server item 9). */
 @Composable
-private fun PromiseRow(c: RisiCommitment, me: String, nameOf: (String) -> String, tag: String) {
-    Column(Modifier.fillMaxWidth().padding(vertical = Spacing.sm).testTag(tag)) {
+private fun PromiseRow(c: RisiCommitment, me: String, nameOf: (String) -> String, tag: String, onOpen: ((RisiCommitment) -> Unit)?) {
+    val open = onOpen?.takeIf { RisiPromises.target(c) != null }
+    Column(
+        Modifier.fillMaxWidth().then(if (open != null) Modifier.clickable(onClickLabel = "Open chat") { open(c) } else Modifier)
+            .padding(vertical = Spacing.sm).testTag(tag),
+    ) {
         Text(c.text, style = MaterialTheme.typography.bodyLarge)
-        val who = c.owner?.let { if (it.equals(me, true)) "You" else nameOf(it) }
-        val due = if (c.allDay != null) lk.codegen.risime.data.tabs.RisiLedger.dueLabel(c.due, c.allDay, c.dueText) else (formatDue(c.due) ?: c.dueText)?.let { "due $it" }
-        Text(listOfNotNull(who, due).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val who = RisiPromises.owner(c, me, nameOf)
+        val due = RisiPromises.due(c, timed = { formatDue(it) })
+        Text(listOfNotNull(who, due).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_promise_meta"))
+        val status = RisiPromises.status(c)
+        Text(
+            status, style = MaterialTheme.typography.labelMedium,
+            color = if (status == "Needs a date") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("risi_promise_status"),
+        )
     }
     HorizontalDivider()
 }
@@ -128,19 +145,58 @@ class RisiFactsModel(private val rest: RisiRest, private val scope: CoroutineSco
     }
 }
 
-data class PromisesUi(val loading: Boolean = true, val items: List<RisiCommitment> = emptyList(), val error: String? = null)
+data class PromisesUi(
+    val loading: Boolean = true,
+    val items: List<RisiCommitment> = emptyList(),
+    val error: String? = null,
+    /** Server item 9: the reply's per-direction counts (null from older servers: counted from the list). */
+    val totals: RisiTotals? = null,
+    /** A tap could not open the chat ("That chat isn't on this phone."). */
+    val note: String? = null,
+) {
+    /** "I promised" / "Promised to me" / "Others" with their counts. */
+    val sections: List<RisiPromises.Section> get() = RisiPromises.sections(items, totals)
+}
+
+/** Opens an item's source chat for My promises (the app's navigation; absent in tests and previews). */
+interface RisiPromiseOpener {
+    /** The conversation is on this phone. */
+    suspend fun has(conversationId: String): Boolean
+
+    /** Open it, scrolled to [messageId] once that message is here (null: at its end). */
+    fun open(conversationId: String, messageId: String?)
+}
+
+const val PROMISE_CHAT_MISSING = "That chat isn't on this phone."
 
 /** "My promises": `GET /risi/commitments?state=open`. */
-class RisiPromisesModel(private val rest: RisiRest, private val scope: CoroutineScope) {
+class RisiPromisesModel(private val rest: RisiRest, private val scope: CoroutineScope, private val opener: RisiPromiseOpener? = null) {
     val state: StateFlow<PromisesUi> get() = _state
     private val _state = MutableStateFlow(PromisesUi())
+
+    /** Rows are tappable only with an opener. */
+    val canOpen: Boolean get() = opener != null
 
     fun load() {
         _state.update { it.copy(loading = true, error = null) }
         scope.launch {
             when (val r = runCatching { rest.commitments("open") }.getOrNull()) {
-                is ApiResult.Ok -> _state.value = PromisesUi(false, r.value.commitments)
+                is ApiResult.Ok -> _state.value = PromisesUi(false, r.value.commitments, totals = r.value.totals)
                 else -> _state.update { it.copy(loading = false, error = risiErrorMessage(r)) }
+            }
+        }
+    }
+
+    /** A tap: the item's source conversation at its source message; a chat not on this phone says so. */
+    fun open(c: RisiCommitment) {
+        val o = opener ?: return
+        val (conv, mid) = RisiPromises.target(c) ?: return
+        scope.launch {
+            if (runCatching { o.has(conv) }.getOrDefault(false)) {
+                _state.update { it.copy(note = null) }
+                o.open(conv, mid)
+            } else {
+                _state.update { it.copy(note = PROMISE_CHAT_MISSING) }
             }
         }
     }
@@ -150,8 +206,8 @@ class RisiFactsViewModel(rest: RisiRest) : ViewModel() {
     val model = RisiFactsModel(rest, viewModelScope).also { it.load() }
 }
 
-class RisiPromisesViewModel(rest: RisiRest) : ViewModel() {
-    val model = RisiPromisesModel(rest, viewModelScope).also { it.load() }
+class RisiPromisesViewModel(rest: RisiRest, opener: RisiPromiseOpener? = null) : ViewModel() {
+    val model = RisiPromisesModel(rest, viewModelScope, opener).also { it.load() }
 }
 
 @Composable
@@ -205,17 +261,21 @@ fun RisiPromisesScreen(model: RisiPromisesModel, me: String, nameOf: (String) ->
     Scaffold(topBar = { RisiTopBar(title = MY_PROMISES_TITLE, onBack = onBack) }, contentWindowInsets = WindowInsets(0)) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = Spacing.xl, vertical = Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
             s.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            s.note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_promises_note")) }
             when {
                 s.loading -> CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
                 s.items.isEmpty() && s.error == null -> Text(PROMISES_EMPTY, modifier = Modifier.testTag("risi_promises_empty"))
                 else -> LazyColumn(Modifier.testTag("risi_promises_list")) {
-                    // §27.9: my own promises, then "Owed to me" (ledger items where I am the counterpart).
-                    val (mine, owed) = lk.codegen.risime.data.tabs.RisiLedger.promisesSplit(s.items, me)
-                    if (owed.isNotEmpty() && mine.isNotEmpty()) item(key = "h:mine") { SectionHeader(MY_PROMISES_TITLE) }
-                    items(mine, key = { it.commitmentId }) { c -> PromiseRow(c, me, nameOf, "risi_promise") }
-                    if (owed.isNotEmpty()) {
-                        item(key = "h:owed") { SectionHeader(OWED_TO_ME_TITLE) }
-                        items(owed, key = { "o:" + it.commitmentId }) { c -> PromiseRow(c, me, nameOf, "risi_owed") }
+                    // Server item 9: "I promised" / "Promised to me" / "Others" by `direction`, counts from `totals`.
+                    val onOpen: ((RisiCommitment) -> Unit)? = if (model.canOpen) model::open else null
+                    s.sections.forEach { sec ->
+                        item(key = "h:" + sec.direction) {
+                            Text(
+                                "${sec.title} (${sec.count})", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = Spacing.md, bottom = Spacing.xs).testTag("risi_promises_section_" + sec.direction),
+                            )
+                        }
+                        items(sec.items, key = { sec.direction + ":" + it.commitmentId }) { c -> PromiseRow(c, me, nameOf, PROMISE_TAGS[sec.direction] ?: "risi_promise_other", onOpen) }
                     }
                 }
             }

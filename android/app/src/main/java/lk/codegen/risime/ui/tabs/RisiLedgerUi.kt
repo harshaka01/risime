@@ -146,6 +146,7 @@ internal fun ItemReminderCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCont
 /** §27.6 the personal digest: my open items, then what is owed to me. */
 @Composable
 internal fun PersonalDigestCard(r: RisiMeta, ctx: RisiCardContext) {
+    if (r.totals != null || r.items.any { it.direction != null }) return DirectionDigest(r, ctx)
     val (mine, owed) = RisiLedger.digestSplit(r, ctx.host.me)
     Column(Modifier.testTag("risi_personal_digest"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         if (mine.isNotEmpty()) {
@@ -155,6 +156,18 @@ internal fun PersonalDigestCard(r: RisiMeta, ctx: RisiCardContext) {
         if (owed.isNotEmpty()) {
             Text("Owed to you", style = MaterialTheme.typography.titleSmall)
             owed.forEach { DigestLine(it, it.owner?.let(ctx.nameOf)) }
+        }
+    }
+}
+
+/** Server item 9: the digest grouped like My promises, its section counts from the digest's `totals` (= the API's). */
+@Composable
+private fun DirectionDigest(r: RisiMeta, ctx: RisiCardContext) {
+    val me = ctx.host.me
+    Column(Modifier.testTag("risi_personal_digest"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        lk.codegen.risime.data.tabs.RisiPromises.digestSections(r, me).forEach { (dir, n, items) ->
+            Text("${lk.codegen.risime.data.tabs.RisiPromises.title(dir)} ($n)", style = MaterialTheme.typography.titleSmall, modifier = Modifier.testTag("risi_digest_section_$dir"))
+            items.forEach { DigestLine(it, if (dir == lk.codegen.risime.data.tabs.RisiPromises.I_PROMISED) null else it.owner?.let(ctx.nameOf)) }
         }
     }
 }

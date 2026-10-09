@@ -109,6 +109,7 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     lk.codegen.risime.net.RisiKinds127.DISCUSSION_SUMMARY -> DiscussionSummaryCard(r, ctx)
                     lk.codegen.risime.net.RisiKinds127.DISCUSSION_CARD -> DiscussionCard(row, r, ctx)
                     lk.codegen.risime.net.RisiKinds127.ITEM_DUE, lk.codegen.risime.net.RisiKinds127.ITEM_OVERDUE, lk.codegen.risime.net.RisiKinds127.ITEM_NUDGE -> ItemReminderCard(row, r, ctx)
+                    lk.codegen.risime.net.RisiKinds127.ITEM_CLARIFY -> ItemClarifyCard(row, r, ctx)
                     else -> Text(row.body)
                 }
                 FeedbackRow(r, ctx)
@@ -126,7 +127,9 @@ private fun headerOf(r: RisiMeta) = when (r.kind) {
     RisiKinds.SUMMARY -> "Risi · Summary" + if (r.partial) " (partial)" else ""
     RisiKinds.REPORT -> "Risi · Report"
     RisiKinds.OFFER -> "Risi"
-    RisiKinds.CONFIRM -> if (lk.codegen.risime.data.tabs.RisiCalendarCards.isCalendarAdd(r)) "Risi · Add to calendar" else "Risi · Confirm"
+    // Server item 8: a proactive offer (origin "offer") asks "Add to calendar?" / "Remind me?".
+    RisiKinds.CONFIRM -> lk.codegen.risime.data.tabs.RisiOffers.header(r)?.let { "Risi · $it" }
+        ?: if (lk.codegen.risime.data.tabs.RisiCalendarCards.isCalendarAdd(r)) "Risi · Add to calendar" else "Risi · Confirm"
     RisiKinds.REMINDER_SET -> "Risi · Reminder set"
     RisiKinds.DRAFT -> "Risi · Draft"
     RisiKinds.SKILL_DONE -> "Risi · Done"
@@ -135,6 +138,7 @@ private fun headerOf(r: RisiMeta) = when (r.kind) {
     lk.codegen.risime.net.RisiKinds127.DISCUSSION_CARD -> "Risi · Discussion summary"
     lk.codegen.risime.net.RisiKinds127.ITEM_DUE, lk.codegen.risime.net.RisiKinds127.ITEM_OVERDUE, lk.codegen.risime.net.RisiKinds127.ITEM_NUDGE ->
         lk.codegen.risime.data.tabs.RisiLedger.reminderHeader(r)
+    lk.codegen.risime.net.RisiKinds127.ITEM_CLARIFY -> "Risi · When is it due?"
     else -> "Risi"
 }
 

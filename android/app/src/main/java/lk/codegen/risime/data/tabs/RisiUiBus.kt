@@ -20,8 +20,11 @@ class RisiUiBus {
         data class Skills(val skillId: String?) : Nav
     }
 
-    /** Where a chat opened from a Risi card scrolls to: a summary's card, or the first message at or after [at]. */
-    data class Focus(val summaryId: String? = null, val at: String? = null)
+    /**
+     * Where a chat opened from a Risi card scrolls to: a summary's card, the first message at or after [at],
+     * or (server item 9, My promises) the item's source message [messageId] once it is on this phone.
+     */
+    data class Focus(val summaryId: String? = null, val at: String? = null, val messageId: String? = null)
 
     private val drafts = ConcurrentHashMap<String, String>()
     private val focus = ConcurrentHashMap<String, Focus>()

@@ -138,4 +138,57 @@ class RisiDataTest {
         rule.onNodeWithText("Send the revised quote").assertExists()
         rule.onNodeWithTag("risi_promise").assertExists()
     }
+
+    private fun fixture(name: String) = javaClass.classLoader!!.getResource("fixtures/risi_items_8_10/$name")!!.readText()
+
+    private class Opener(private val here: Set<String>) : RisiPromiseOpener {
+        val opened = mutableListOf<Pair<String, String?>>()
+        override suspend fun has(conversationId: String) = conversationId in here
+        override fun open(conversationId: String, messageId: String?) { opened += conversationId to messageId }
+    }
+
+    private fun promises(opener: Opener?): RisiPromisesModel {
+        val rest = Fake(facts, ProtocolJson.decodeFromString(RisiCommitmentsReply.serializer(), fixture("risi_commitments_reply_item9.json")))
+        val model = RisiPromisesModel(rest, scope, opener)
+        model.load()
+        rule.setContent { RisiMeTheme { RisiPromisesScreen(model, me = "7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3", nameOf = { "Someone" }, onBack = {}) } }
+        await { !model.state.value.loading }
+        rule.waitForIdle()
+        return model
+    }
+
+    @Config(qualifiers = "w411dp-h1200dp")
+    @Test fun myPromisesSplitsByDirectionWithTheServersTotals() {
+        val model = promises(null)
+        assertEquals(listOf("I promised", "Promised to me", "Others"), model.state.value.sections.map { it.title })
+        rule.onNodeWithText("I promised (2)").assertExists()
+        rule.onNodeWithText("Promised to me (1)").assertExists()
+        rule.onNodeWithText("Others (1)").assertExists()
+        assertEquals(2, rule.onAllNodesWithTag("risi_promise").fetchSemanticsNodes().size)
+        assertEquals(1, rule.onAllNodesWithTag("risi_owed").fetchSemanticsNodes().size)
+        assertEquals(1, rule.onAllNodesWithTag("risi_promise_other").fetchSemanticsNodes().size)
+        // owner_name, due (all-day aware) and the status, "Needs a date" for the vague item.
+        rule.onNodeWithText("Needs a date").assertExists()
+        rule.onNodeWithText("Shenika · ", substring = true).assertExists()
+        rule.onNodeWithText("Kamal · ", substring = true).assertExists()
+    }
+
+    @Test fun tappingARowOpensItsSourceChatAtTheSourceMessage() {
+        val opener = Opener(setOf("grp:4e5f6a7b-8c9d-4e0f-9a1b-2c3d4e5f6a7b"))
+        promises(opener)
+        rule.onNodeWithText("Book the site visit transport").performClick()
+        await { opener.opened.isNotEmpty() }
+        assertEquals(listOf("grp:4e5f6a7b-8c9d-4e0f-9a1b-2c3d4e5f6a7b" to "c1a2b3f1-a4f0-11f1-8000-0242ac120009"), opener.opened)
+    }
+
+    @Config(qualifiers = "w411dp-h1200dp")
+    @Test fun aChatNotOnThisPhoneSaysSoInsteadOfOpening() {
+        val opener = Opener(emptySet())
+        val model = promises(opener)
+        rule.onNodeWithText("Kamal sends the minutes").performClick()
+        await { model.state.value.note != null }
+        rule.waitForIdle()
+        assertTrue(opener.opened.isEmpty())
+        rule.onNodeWithTag("risi_promises_note").assertExists()
+    }
 }

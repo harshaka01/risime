@@ -182,6 +182,10 @@ data class RisiMeta(
     val since: String? = null,
     // proposal 2026-10-09-risi-30day-summaries: a period summary's stored days (`period` above gains `scope`)
     val days: List<RisiSummaryDay> = emptyList(),
+    // Server items 8–10 (2026-10-09): a proactive offer's `confirm` (`origin: "offer"`, `item_id` above; no
+    // request behind its `request_id`, `turn_ref` null) and the personal digest's per-direction `totals`.
+    val origin: String? = null,
+    val totals: RisiTotals? = null,
 ) {
     /** `confirm.calendar` (null if absent, null or malformed). */
     fun calendarHint(): RisiCalendarRef? =
@@ -276,10 +280,29 @@ data class RisiCommitment(
     @SerialName("all_day") val allDay: Boolean? = null,
     /** "owner" | "counterpart" (§27.9); null for a legacy commitment. */
     val role: String? = null,
+    // Server item 9 (2026-10-09), all optional (absent from older servers): the My promises split.
+    /** "i_promised" | "promised_to_me" | "others" (any other value is read as "others"). */
+    val direction: String? = null,
+    /** "You" for the caller, else the owner's display name. */
+    @SerialName("owner_name") val ownerName: String? = null,
+    /** The item's state, or "needs_clarification" for a live item without a usable due. */
+    val status: String? = null,
+    @SerialName("needs_clarification") val needsClarification: Boolean? = null,
+    @SerialName("source_conversation_id") val sourceConversationId: String? = null,
+    @SerialName("source_message_id") val sourceMessageId: String? = null,
+    @SerialName("source_message_ids") val sourceMessageIds: List<String> = emptyList(),
+)
+
+/** Server item 9: open items per direction (`GET /risi/commitments` and the personal digest; equal by construction). */
+@Serializable
+data class RisiTotals(
+    @SerialName("i_promised") val iPromised: Int = 0,
+    @SerialName("promised_to_me") val promisedToMe: Int = 0,
+    val others: Int = 0,
 )
 
 @Serializable
-data class RisiCommitmentsReply(val commitments: List<RisiCommitment>)
+data class RisiCommitmentsReply(val commitments: List<RisiCommitment>, val totals: RisiTotals? = null)
 
 @Serializable
 data class RisiFact(

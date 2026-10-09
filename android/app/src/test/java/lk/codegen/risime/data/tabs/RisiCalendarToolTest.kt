@@ -91,6 +91,20 @@ class RisiCalendarToolTest {
         assertEquals(1, be.events.size)
     }
 
+    @Test fun aProactiveOfferCardRunsOnMyConfirmWithoutAnyRequestBehindIt() = runBlocking {
+        // Server item 8: origin "offer", a request_id no risi_request of mine names, turn_ref null.
+        card("envelope_risi_confirm.json") {
+            JsonObject(
+                it + ("skill_id" to JsonPrimitive("calendar")) + ("args" to RisiToolExecutor.argsWithoutWriteId(add)) +
+                    ("origin" to JsonPrimitive("offer")) + ("item_id" to JsonPrimitive("a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d")) +
+                    ("request_id" to JsonPrimitive("0f1e2d3c-4b5a-4968-8776-655443322110")) + ("turn_ref" to kotlinx.serialization.json.JsonNull),
+            )
+        }
+        confirm()
+        assertEquals(RisiToolResult.OK, ex.execute(add).status)
+        assertEquals(1, be.events.size)
+    }
+
     @Test fun aV125CardWithoutArgsMatchesOnTextAndWhen() = runBlocking {
         card("envelope_risi_confirm.json")
         confirm()

@@ -438,7 +438,14 @@ private fun MainNav(c: AppContainer, meId: String) {
         composable("risi_promises") {
             val contacts by c.contacts.contacts.collectAsState(emptyList())
             lk.codegen.risime.ui.settings.RisiPromisesScreen(
-                viewModel { lk.codegen.risime.ui.settings.RisiPromisesViewModel(c.risiRest) }.model, meId,
+                viewModel {
+                    // Server item 9: a row opens its source chat at the source message (when that chat is on this phone).
+                    lk.codegen.risime.ui.settings.RisiPromisesViewModel(c.risiRest, object : lk.codegen.risime.ui.settings.RisiPromiseOpener {
+                        override suspend fun has(conversationId: String): Boolean = c.db.groups().get(conversationId) != null
+                        override fun open(conversationId: String, messageId: String?) =
+                            c.risiUi.openChat(conversationId, messageId?.let { lk.codegen.risime.data.tabs.RisiUiBus.Focus(messageId = it) })
+                    })
+                }.model, meId,
                 nameOf = { id -> contacts.firstOrNull { it.userId.equals(id, true) }?.displayName ?: "Someone" },
                 onBack = { nav.popBackStack() },
             )
