@@ -47,6 +47,40 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## P0 (2026-10-09 ~08:00 UTC): Risi calendar action loop (Harsha, real phone, nightly.43, skills on)
+- **What happened:** "add my interview with Shenika on Mon 12 Oct 2pm to my calendar" was restated
+  but only offered text chips. A chip tap sent text ("I don't see any event details"), then 6 turns
+  of interrogation, and nothing was added.
+- **Evidence:** `risi_turn_steps` shows every turn as one step `tool=final`: **no tool was ever
+  chosen**.
+- **Causes:**
+  - calendar not offered (the phone's calendar tool wasn't implemented yet, the skill was off);
+  - no conversation memory in the Risi chat;
+  - chips sent as text;
+  - no draft state;
+  - no loop guard.
+- **Fix in progress (2 top-model agents):**
+  - **Server:**
+    - the last 20 Risi-chat turns plus a sealed pending draft;
+    - only real action cards for writes, question/confirm chips filtered;
+    - `need_skill` instead of text loops;
+    - defaults (phone tz, 1 h, title from context), at most one question;
+    - a loop guard → a prefilled card;
+    - a ledger lookup prefill;
+    - digest == My promises.
+  - **Android:**
+    - a real `calendar_check`/`add`/`remove` on a synced **Google** calendar (picker remembered,
+      read-back verify, exact failure reasons);
+    - the action card [Add][Edit][Cancel] and the success card [Open][Undo];
+    - chips only fill the composer.
+- **Gate:** replay Harsha's conversation (on the calendar within 2 turns, 1 card, 1 tap), a 5-turn
+  context test, the loop guard, digest == promises, screenshots 29–31.
+- **Then (next release):**
+  - item 8, proactive "Add to calendar?" offers, backfilled for the Shenika interview;
+  - item 9, My promises split into "I promised" / "Promised to me";
+  - item 10, dedupe and vague-item clarification;
+  - item 12, the §27 per-person summaries (nightly.45).
+
 ## v0.2.0-nightly.44 (live 2026-10-09 ~07:30 UTC, not required): screen share fixed, Risi text sealed at rest
 - **What's in:**
   - "Entire screen" share shows RisiMe (FLAG_SECURE only on the app lock / Locked chats folder /
