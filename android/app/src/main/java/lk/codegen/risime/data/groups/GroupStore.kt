@@ -27,6 +27,8 @@ data class SystemLine(
     val role: String? = null,
     /** metadata_changed / created: the group name at that time (from the local group_meta). */
     val name: String? = null,
+    /** created: the chat kind (`risi`, `dm`) of a chat that is not a named group, so the line never says "the group". */
+    val chatKind: String? = null,
 ) {
     fun encode(): String = ProtocolJson.encodeToString(serializer(), this)
 
@@ -70,7 +72,7 @@ fun systemText(line: SystemLine, me: String, nameOf: (String) -> String): String
     }
     val actor = n(line.actor, true)
     return when (line.action) {
-        GroupEvent.CREATED -> if (line.name != null) "$actor created the group “${line.name}”" else "$actor created the group"
+        GroupEvent.CREATED -> if (line.chatKind == "risi") "$actor started your Risi chat" else if (line.chatKind == "dm" || line.name?.isEmpty() == true) "$actor started this chat" else if (line.name != null) "$actor created the group “${line.name}”" else "$actor created the group"
         GroupEvent.ADDED -> "$actor added ${list(line.targets)}"
         GroupEvent.REMOVED -> "$actor removed ${list(line.targets)}"
         GroupEvent.LEFT -> "${n(line.targets.firstOrNull() ?: line.actor, true)} left"
@@ -275,7 +277,7 @@ class GroupStore(
                 upsertMembers(conv, members)
                 val myRole = members.firstOrNull { it.userId.equals(me, true) }?.role ?: g.myRole
                 g = g.copy(state = GroupEntity.STATE_ACTIVE, myRole = myRole, createdBy = e.actor, generation = e.generation)
-                line = line?.copy(name = meta?.name)
+                line = line?.copy(name = meta?.name, chatKind = meta?.chatKind?.takeIf { it == "risi" || it == "dm" })
                 if (meta != null) g = g.copy(iconSha = iconSha(meta), announcedName = meta.name)
                 if (!e.actor.equals(me, true) && existing == null) onAddedMe(conv, e.actor)
             }

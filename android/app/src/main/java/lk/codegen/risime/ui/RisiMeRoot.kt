@@ -299,7 +299,8 @@ private fun MainNav(c: AppContainer, meId: String) {
                         onInfo = if (dmChat) chatInfo else groupInfo,
                         lock = lockControl, tabBar = tabBar,
                         // A 1:1 Official: "Kumu · Risi", never "3 members" (its members are the two of you and Risi).
-                        titleOverride = peerName?.let { lk.codegen.risime.ui.tabs.officialDmTitle(it) },
+                        titleOverride = peerName,
+                        titleSuffix = if (dmChat) lk.codegen.risime.ui.tabs.OFFICIAL_DM_TITLE_SUFFIX else null,
                         subtitleOverride = if (dmChat) lk.codegen.risime.ui.tabs.OFFICIAL_DM_SUBTITLE else null,
                         readOnlyReason = if (readOnly) lk.codegen.risime.ui.tabs.OFFICIAL_HISTORY_LABEL else null,
                         // The composer says "Message"; "Risi is listening" stays in the strip under the tabs.

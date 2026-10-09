@@ -172,6 +172,8 @@ fun RisiTopBar(
     /** Tapping the avatar + title opens chat/group info (WhatsApp-style), announced with [titleClickLabel]. */
     onTitleClick: (() -> Unit)? = null,
     titleClickLabel: String? = null,
+    /** Always-visible tail of the title (e.g. " · Risi"): [title] ellipsizes first, the suffix never does. */
+    titleSuffix: String? = null,
 ) {
     TopAppBar(
         navigationIcon = {
@@ -191,13 +193,20 @@ fun RisiTopBar(
                     Spacer(Modifier.width(if (onBack != null) Spacing.sm + Spacing.xxs else Spacing.md))
                 }
                 Column {
-                    Text(
-                        title,
-                        style = if (brand) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
-                        color = if (brand) MaterialTheme.colorScheme.primary else Color.Unspecified,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.semantics { heading() },
-                    )
+                    val titleStyle = if (brand) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium
+                    val titleColor = if (brand) MaterialTheme.colorScheme.primary else Color.Unspecified
+                    if (titleSuffix == null) {
+                        Text(
+                            title, style = titleStyle, color = titleColor,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.semantics { heading() },
+                        )
+                    } else {
+                        Row(Modifier.semantics(mergeDescendants = true) { heading() }) {
+                            Text(title, style = titleStyle, color = titleColor, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            Text(titleSuffix, style = titleStyle, color = titleColor, maxLines = 1, softWrap = false)
+                        }
+                    }
                     if (!subtitle.isNullOrEmpty()) {
                         Text(
                             subtitle,

@@ -97,6 +97,14 @@ class GroupStoreTest {
         assertEquals("Encryption was reset; some messages may be missing", t(SystemLine(GroupEvent.RESET, kamal)))
     }
 
+    @Test fun createdLineNeverSaysTheGroupForOfficialDmOrRisiChat() {
+        val t = { l: SystemLine -> systemText(l, me) { "?" } }
+        assertEquals("You started this chat", t(SystemLine(GroupEvent.CREATED, me, name = "")))
+        assertEquals("You started this chat", t(SystemLine(GroupEvent.CREATED, me, name = "", chatKind = "dm")))
+        assertEquals("You started your Risi chat", t(SystemLine(GroupEvent.CREATED, me, name = "", chatKind = "risi")))
+        assertEquals("You created the group “Team”", t(SystemLine(GroupEvent.CREATED, me, name = "Team")))
+    }
+
     @Test fun addedMeIntoAGroupIDidntKnowNotifiesOnce() = runTest {
         store.applyEvent("e1", ev(GroupEvent.ADDED, kamal, listOf(me), epoch = 5), me)
         assertEquals(listOf(conv to kamal), addedMe)

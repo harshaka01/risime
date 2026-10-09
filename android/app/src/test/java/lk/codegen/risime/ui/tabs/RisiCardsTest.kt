@@ -1,6 +1,7 @@
 package lk.codegen.risime.ui.tabs
 
 import android.app.Application
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
@@ -19,6 +20,8 @@ import lk.codegen.risime.data.tabs.RisiMessages
 import lk.codegen.risime.net.ProtocolJson
 import lk.codegen.risime.net.RisiMeta
 import lk.codegen.risime.ui.theme.RisiMeTheme
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -230,6 +233,25 @@ class RisiCardsTest {
         rule.onNodeWithText(lk.codegen.risime.data.tabs.RisiFollowUp.CHIP_LABEL).assertIsDisplayed()
         rule.onNodeWithTag("risi_follow_up").performClick()
         assertEquals(1, dismissed)
+    }
+
+    @Config(sdk = [34], application = Application::class, qualifiers = "w360dp-h640dp")
+    @Test fun officialDmTitleKeepsRisiVisibleAt360dp() {
+        val long = "A very long contact name that cannot possibly fit"
+        rule.setContent {
+            RisiMeTheme {
+                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.width(360.dp)) {
+                    lk.codegen.risime.ui.common.RisiTopBar(
+                        title = long, titleSuffix = OFFICIAL_DM_TITLE_SUFFIX, subtitle = OFFICIAL_DM_SUBTITLE, onBack = {},
+                        actions = {
+                            repeat(4) { androidx.compose.material3.IconButton(onClick = {}) { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, "b$it") } }
+                        },
+                    )
+                }
+            }
+        }
+        rule.onNodeWithText(OFFICIAL_DM_TITLE_SUFFIX, useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText(OFFICIAL_DM_SUBTITLE).assertIsDisplayed()
     }
 
     @Test fun officialDmHeaderAndComposerTexts() {

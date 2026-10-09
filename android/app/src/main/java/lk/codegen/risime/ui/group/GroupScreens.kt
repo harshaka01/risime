@@ -118,6 +118,8 @@ fun GroupChatScreen(
     titleOverride: String? = null,
     /** A 1:1 Official's subtitle instead of the member count. */
     subtitleOverride: String? = null,
+    /** A 1:1 Official's " · Risi": always visible, the peer name ellipsizes first. */
+    titleSuffix: String? = null,
     /** §24.4: Official turned off: its history is read-only (the composer is replaced by this line). */
     readOnlyReason: String? = null,
     /** §24.9: "Risi is listening" in Official. */
@@ -163,8 +165,12 @@ fun GroupChatScreen(
     val names = members.associate { it.userId.lowercase() to it.displayName }
     var risiChip by rememberSaveable { mutableStateOf(false) }
     // Follow-ups: my next message within 3 min of Risi's answer to me continues with Risi (chip, × to opt out).
-    val followUpNow by androidx.compose.runtime.produceState(System.currentTimeMillis()) {
-        while (true) { kotlinx.coroutines.delay(10_000); value = System.currentTimeMillis() }
+    // Composition-scoped: only while an Official follow-up chip can show; cancelled on dispose or when keys change.
+    var followUpNow by remember { mutableStateOf(System.currentTimeMillis()) }
+    if (risi != null && !risiChat) {
+        LaunchedEffect(Unit) {
+            while (true) { kotlinx.coroutines.delay(10_000); followUpNow = System.currentTimeMillis() }
+        }
     }
     val followUp = if (risi == null || risiChat) null else remember(messages, followUpNow) { lk.codegen.risime.data.tabs.RisiFollowUp.active(messages, meId, followUpNow) }
     var followUpDismissed by rememberSaveable { mutableStateOf<String?>(null) }
@@ -182,6 +188,7 @@ fun GroupChatScreen(
         topBar = {
             RisiTopBar(
                 title = name,
+                titleSuffix = titleSuffix,
                 subtitle = typingLabel ?: connectionLabel(conn) ?: buildString {
                     if (encrypted == true) append("🔒 ")
                     append(subtitleOverride ?: if (risiChat) "Risi" else if (count == 1) "1 member" else "$count members")

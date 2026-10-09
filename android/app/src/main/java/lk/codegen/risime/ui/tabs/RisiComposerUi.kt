@@ -29,7 +29,10 @@ const val OFFICIAL_COMPOSER_HINT = "Message"
 const val OFFICIAL_DM_SUBTITLE = "Official"
 
 /** A 1:1 Official's title: "Kumu · Risi". */
-fun officialDmTitle(peerName: String): String = "$peerName · Risi"
+fun officialDmTitle(peerName: String): String = "$peerName$OFFICIAL_DM_TITLE_SUFFIX"
+
+/** The always-visible tail of a 1:1 Official's title (the peer name ellipsizes, this does not). */
+const val OFFICIAL_DM_TITLE_SUFFIX = " · Risi"
 
 /**
  * §24.9 the Official composer's "@Risi" chip. Tapping it puts the chip into the message (selected, with
