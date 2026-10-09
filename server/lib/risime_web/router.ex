@@ -94,6 +94,8 @@ defmodule RisiMeWeb.Router do
     delete "/risi/facts/:fact_id", RisiController, :delete_fact
     delete "/risi/facts", RisiController, :delete_facts
     get "/risi/commitments", RisiController, :commitments
+    # v1.25 §25.3.
+    post "/risi/tool_calls/:id/result", RisiController, :tool_result
     post "/blobs", BlobController, :create
     post "/backups", BackupController, :create
     get "/backups", BackupController, :index

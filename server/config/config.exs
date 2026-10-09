@@ -66,7 +66,7 @@ config :risime, Oban,
     history: 5,
     risi: 2,
     risi_requests: 2,
-    risi_timers: 2
+    risi_timers: 4
   ],
   plugins: [
     # Completed/cancelled/discarded jobs are deleted after 7 days.
@@ -83,7 +83,9 @@ config :risime, Oban,
        # v1.21 §12.12.6: hourly stale-leaf sweep (cleanup ops).
        {"23 * * * *", RisiMe.Workers.StaleLeaves},
        # v1.24 §24.11: Risi's 09:00-local digests (every 15 min covers :30 and :45 zones).
-       {"*/15 * * * *", RisiMe.Workers.Risi, args: %{"kind" => "digest_sweep"}}
+       {"*/15 * * * *", RisiMe.Workers.Risi, args: %{"kind" => "digest_sweep"}},
+       # v1.25/v1.26: expired confirm cards, old tool-call rows (and S14+ activity, reminders).
+       {"7 * * * *", RisiMe.Workers.Risi, args: %{"kind" => "prune"}}
      ]}
   ]
 

@@ -7,10 +7,11 @@ defmodule RisiMe.Workers.Risi do
   |---|---|---|
   | `extract` | `risi` (2) | commitment extraction of a conversation (debounced, one pending) |
   | `request` | `risi_requests` (2) | an `ask`/`summarise`/`report` (or its `error` reply) |
-  | `action` | `risi_timers` (2) | a `risi_action` on a commitment |
+  | `action` | `risi_timers` (4) | a `risi_action`: a commitment, or a confirm card (§25.4; a client write waits ≤ 15 s for the phone here) |
   | `expire` | `risi_timers` | a proposal unconfirmed after 48 h is deleted |
   | `reminder`, `escalation` | `risi_timers` | §24.11 timing (no-op when `v` is stale) |
   | `digest_sweep` | `risi_timers` | cron every 15 min: 09:00-local digests |
+  | `prune` | `risi_timers` | cron hourly: expired confirm cards and old tool-call rows (S13+) |
   | `forget` | `risi_timers` | the safety re-run of `RisiMe.Agent.forget/1` (§24.4, within 1 h) |
 
   Every job re-checks the §24.5 rule (`RisiMe.Agent.may_act?/1`) before touching anything, and
@@ -19,7 +20,7 @@ defmodule RisiMe.Workers.Risi do
   use Oban.Worker, queue: :risi, max_attempts: 3
 
   alias RisiMe.Agent
-  alias RisiMe.Agent.{Commitments, Out, Requests, Secretary}
+  alias RisiMe.Agent.{Commitments, Out, Requests, Secretary, Writes}
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"kind" => "forget", "conv" => conv}}) do
@@ -28,6 +29,13 @@ defmodule RisiMe.Workers.Risi do
 
   def perform(%Oban.Job{args: %{"kind" => "expire", "commitment_id" => id}}),
     do: Commitments.expire(id)
+
+  # v1.25/v1.26 (S13+): expired confirm cards (their sealed args), old tool-call rows.
+  def perform(%Oban.Job{args: %{"kind" => "prune"}}) do
+    RisiMe.Agent.Writes.prune()
+    RisiMe.Agent.ToolCalls.prune()
+    :ok
+  end
 
   def perform(%Oban.Job{args: %{"kind" => "digest_sweep"}}) do
     if Out.ready?(), do: Commitments.digest_sweep(), else: :ok
@@ -57,7 +65,11 @@ defmodule RisiMe.Workers.Risi do
   defp run(%{"kind" => "action", "conv" => conv, "message_id" => id, "user_id" => user}) do
     with true <- Secretary.active_human?(conv, user),
          %{"type" => "risi_action", "__sender" => ^user} = env <- Secretary.envelope(conv, id) do
-      Commitments.act(conv, user, env)
+      case env["action"] do
+        # v1.25 §25.4: confirm cards (the write runs here, without a model call).
+        a when a in ~w(confirm_write cancel_write) -> Writes.act(conv, user, env["__device"], env)
+        _ -> Commitments.act(conv, user, env)
+      end
     else
       _ -> :ok
     end

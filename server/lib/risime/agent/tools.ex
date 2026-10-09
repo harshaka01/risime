@@ -9,16 +9,19 @@ defmodule RisiMe.Agent.Tools do
     * `personal`: true for tools over the asker's own data (calendar, notes, RisiWork,
       cross-conversation search): offered only to an asker with an active Risi chat, and their
       output goes to that Risi chat (§25.1 audience rule);
-    * `write`: true for a write proposal (`set_reminder`, `calendar_add`; at most 2 a turn);
+    * `write`: true for a write proposal (`set_reminder`, `calendar_add`; at most 2 a turn): its
+      `run` returns `{:propose, card}` (`RisiMe.Agent.Writes.propose/3`), and its `exec`
+      runs the write once confirmed;
     * `finds`: true for a tool that can look something up (the §25.1 post-check);
     * `args`: the JSON schema of its `args` (the server's, §25.5);
     * `run`: `(args, ctx) -> {:ok, result, meta} | {:error, status}` where `meta` may carry
       `refs: %{"c1" => Source}` (refs handed to the model, §25.4) and `personal: true`; a status
-      is a §25.4 `StepStatus`.
+      is a §25.4 `StepStatus`; `{:error, "failed", reason}` tells the model why (an ambiguous
+      time: the `final` asks, §25.5);
+    * `skill`: the §26.1 skill it runs under (nil for the read-only tools that need none).
 
   The registry is `config :risime, :risi_tool_registry` (a module with `tools/0`), default
-  `RisiMe.Agent.Tools.Registry`. **S11 registers only `capabilities`**; the real tools come in
-  S13+ (tests use a stub registry).
+  `RisiMe.Agent.Tools.Registry` (tests use stub registries).
 
   **Permission by construction:** each step's `risi_next_action` schema lists only the tools
   `allowed/1` returns for this asker, device and conversation, and `authorize/3` checks a tool
@@ -41,6 +44,12 @@ defmodule RisiMe.Agent.Tools do
 
   @doc "A registered tool by name, or nil."
   def get(name), do: Enum.find(tools(), &(&1.name == name))
+
+  @doc """
+  A tool this server knows by name (registered or not, e.g. a write whose card outlived a
+  registry change), or nil.
+  """
+  def known(name), do: Enum.find(__MODULE__.Registry.tools(), &(&1.name == name))
 
   @doc """
   `:ok` or `{:error, :denied}`: may the asker use `tool` here, now? Client tools need the asking
@@ -126,9 +135,16 @@ defmodule RisiMe.Agent.Tools do
     do: Enum.map_join(allowed, "\n", &"- #{&1.name}: #{&1.description}")
 
   defmodule Registry do
-    @moduledoc "The default registry (S11: `capabilities` only; S13+ add the §25.5 tools)."
+    @moduledoc "The default registry (§25.5, §26.6)."
 
-    def tools, do: [RisiMe.Agent.Tools.capabilities()]
+    alias RisiMe.Agent.ClientTools
+
+    def tools,
+      do: [
+        RisiMe.Agent.Tools.capabilities(),
+        ClientTools.calendar_check(),
+        ClientTools.calendar_add()
+      ]
   end
 
   @doc "The `capabilities` tool: lists what Risi can do for this asker now and what's coming."

@@ -37,12 +37,14 @@ defmodule RisiMe.Agent.Turn do
   alias RisiMe.Agent.{
     Audience,
     Capabilities,
+    Clock,
     LLM,
     Progress,
     Prompts,
     Secretary,
     Tools,
-    TurnSteps
+    TurnSteps,
+    Writes
   }
 
   @max_tool_steps 6
@@ -95,6 +97,9 @@ defmodule RisiMe.Agent.Turn do
     ctx = %{
       asker: asker,
       device_id: env["__device"],
+      # §25.5: times resolve from the request's `server_ts` and the asker's zone.
+      now: request_ts(env["__ts"], now),
+      tz: Clock.user_tz(asker),
       conv: conv,
       request_id: request_id,
       turn_id: turn_id,
@@ -125,6 +130,15 @@ defmodule RisiMe.Agent.Turn do
     unless match?({:snooze, _}, result), do: Progress.send(asker, request_id, conv, "done")
     result
   end
+
+  defp request_ts(ts, now) when is_binary(ts) do
+    case DateTime.from_iso8601(ts) do
+      {:ok, dt, _} -> dt
+      _ -> now
+    end
+  end
+
+  defp request_ts(_ts, now), do: now
 
   ## Context (§25.1: the request and the context the server chose)
 
@@ -291,7 +305,7 @@ defmodule RisiMe.Agent.Turn do
         cond do
           auth != :ok -> {"denied", nil, %{}}
           tool.write and st.writes >= ctx.bounds.writes -> {"skipped", nil, %{}}
-          true -> run_tool(tool, args, ctx)
+          true -> run_tool(tool, args, Map.put(ctx, :call_ref, st.call_ref))
         end
 
       latency = System.monotonic_time(:millisecond) - t0
@@ -301,9 +315,11 @@ defmodule RisiMe.Agent.Turn do
       Progress.send(ctx.asker, ctx.request_id, ctx.conv, "step", step: step_of(n, name, status))
 
       reply =
-        if status == "ok",
-          do: %{"ok" => true, "result" => result},
-          else: %{"ok" => false, "status" => status}
+        cond do
+          status == "ok" -> %{"ok" => true, "result" => result}
+          r = meta[:reason] -> %{"ok" => false, "status" => status, "reason" => r}
+          true -> %{"ok" => false, "status" => status}
+        end
 
       ok? = status == "ok"
 
@@ -326,10 +342,27 @@ defmodule RisiMe.Agent.Turn do
 
   defp run_tool(tool, args, ctx) do
     case tool.run.(args, ctx) do
-      {:ok, result, meta} -> {"ok", result, meta}
-      {:error, status} when is_binary(status) -> {status, nil, %{}}
-      {:error, status} when is_atom(status) -> {Atom.to_string(status), nil, %{}}
-      _ -> {"failed", nil, %{}}
+      {:ok, result, meta} ->
+        {"ok", result, meta}
+
+      # A write proposal (§25.4): a confirm card, or (§26.3) an allowed write.
+      {:propose, card} when tool.write ->
+        case Writes.propose(ctx, tool, card) do
+          {:ok, result, meta} -> {"ok", result, meta}
+          {:error, status} -> {status, nil, %{}}
+        end
+
+      {:error, status, reason} when is_binary(status) and is_binary(reason) ->
+        {status, nil, %{reason: reason}}
+
+      {:error, status} when is_binary(status) ->
+        {status, nil, %{}}
+
+      {:error, status} when is_atom(status) ->
+        {Atom.to_string(status), nil, %{}}
+
+      _ ->
+        {"failed", nil, %{}}
     end
   rescue
     e ->

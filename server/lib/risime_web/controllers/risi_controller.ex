@@ -25,6 +25,35 @@ defmodule RisiMeWeb.RisiController do
     end
   end
 
+  @doc """
+  `POST /api/v1/risi/tool_calls/{id}/result` (v1.25 §25.3): `204`, or 404 / 409
+  `tool_call_expired` / 409 `write_not_confirmed` / 413 / 422 (`RisiMe.Agent.ToolCalls`).
+  """
+  def tool_result(conn, %{"id" => id}) do
+    body = conn.body_params
+    size = body_size(conn, body)
+    device = RisiMeWeb.MLSController.caller_device(conn)
+
+    case RisiMe.Agent.ToolCalls.result(me(conn), device, id, body, size) do
+      :ok -> send_resp(conn, 204, "")
+      {:error, :bad_request} -> ApiError.send_error(conn, 422, :bad_request)
+      error -> GroupController.error(conn, error)
+    end
+  end
+
+  defp body_size(conn, body) do
+    case get_req_header(conn, "content-length") do
+      [n] ->
+        case Integer.parse(n) do
+          {n, ""} -> n
+          _ -> byte_size(Jason.encode!(body))
+        end
+
+      _ ->
+        byte_size(Jason.encode!(body))
+    end
+  end
+
   def feedback(conn, params) do
     with {:ok, call_ref, rating, reason} <- parse(params),
          :ok <- RateLimiter.hit_if_allowed(:risi_feedback, me(conn), @feedback_limit, @window),

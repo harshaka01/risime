@@ -179,6 +179,25 @@ defmodule RisiMe.Push.Dispatcher do
   end
 
   @doc """
+  v1.25 §25.3: the content-free inbox wake to one device's token only (a `risi_tool_call` for a
+  device without a live inbox channel), now and never coalesced. No token: nothing.
+  """
+  def push_device(user_id, device_id) do
+    with sender when sender != nil <- Push.sender() do
+      Task.Supervisor.start_child(RisiMe.Push.TaskSupervisor, fn ->
+        hash = user_hash(user_id)
+
+        case for {d, tok} <- Devices.push_targets(user_id), d == device_id, do: tok do
+          [] -> Logger.info("push: none kind=inbox user=#{hash} reason=no_token")
+          tokens -> for tok <- tokens, do: deliver(sender, tok, Push.payload(), {hash, device_id})
+        end
+      end)
+    end
+
+    :ok
+  end
+
+  @doc """
   v1.13 §16.8: sends the call wake-up to these push tokens now, in the push task supervisor
   (never coalesced, never the 10-s rule, never the user-level inbox push).
   """

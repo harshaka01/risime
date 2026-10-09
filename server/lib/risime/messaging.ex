@@ -797,6 +797,25 @@ defmodule RisiMe.Messaging do
 
   def history_ttl_s, do: @history_ttl_s
 
+  @doc """
+  v1.25 §25.3: stores a per-device event (a `risi_tool_call`, `to_devices: [device_id]`) in
+  `user_id`'s inbox with `ttl_s`, broadcasts it (the inbox channel delivers it only to that
+  device's sockets) and, if that device has no live inbox channel, sends the content-free wake
+  to **that device's token only**. Never a `message`: no index row, no acks.
+  """
+  def publish_device(user_id, device_id, event, ttl_s) do
+    :ok = store().append_event(user_id, event, ttl: ttl_s)
+    broadcast(user_id, event)
+
+    unless RisiMe.Presence.device_online?(device_id),
+      do: RisiMe.Push.Dispatcher.push_device(user_id, device_id)
+
+    :ok
+  end
+
+  @doc "Deletes stored inbox events of `user_id` (a `risi_tool_call` once answered)."
+  def delete_events(user_id, event_ids), do: store().delete_events(user_id, event_ids)
+
   @doc "Health of the message store (`GET /health`)."
   def store_health, do: store().health()
 

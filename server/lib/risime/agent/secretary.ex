@@ -207,7 +207,10 @@ defmodule RisiMe.Agent.Secretary do
       if row.message_id == message_id do
         case Jason.decode(row.plaintext) do
           {:ok, %{} = env} ->
-            env |> Map.put("__sender", row.sender_id) |> Map.put("__device", row.sender_device)
+            env
+            |> Map.put("__sender", row.sender_id)
+            |> Map.put("__device", row.sender_device)
+            |> Map.put("__ts", RisiMe.Agent.Clock.ts(TimeUUID.to_datetime(row.message_id)))
 
           _ ->
             nil
@@ -288,6 +291,8 @@ defmodule RisiMe.Agent.Secretary do
   def forget(conv) do
     Transcript.purge(conv)
     cancel_jobs(conv)
+    # v1.25 §25.4: its confirm cards' writes (sealed args) go too.
+    RisiMe.Agent.Writes.forget(conv)
 
     Repo.transaction(fn ->
       Repo.delete_all(from f in Fact, where: f.conversation_id == ^conv)
