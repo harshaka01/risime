@@ -968,12 +968,14 @@ class ChatEngine(
      * Insert as pending first, then try to push. [target] is a conversation id (`dm:`/`grp:`) or,
      * for a DM, the peer's user id. Returns the client_msg_id.
      */
-    suspend fun sendText(target: String, text: String): String? {
+    suspend fun sendText(target: String, text: String, clientMsgId: String? = null): String? {
         val body = text.trim()
         // §11.1: the server counts graphemes (authoritative); the composer warns with ICU. Here only the byte cap.
         if (body.isEmpty() || body.toByteArray(Charsets.UTF_8).size > MAX_BODY_BYTES) return null
         val me = meId() ?: return null
-        val id = newClientMsgId()
+        // §26.6 a scheduled occurrence carries its own id (persisted before the first attempt): queued once.
+        if (clientMsgId != null && messages.byClientMsgId(clientMsgId) != null) return clientMsgId
+        val id = clientMsgId ?: newClientMsgId()
         val conv = conversationFor(me, target)
         // §12 (Room v5): `to_id` holds the conversation id for groups.
         val to = dmPeer(conv, me) ?: conv

@@ -193,6 +193,9 @@ interface WipeDao {
         profilePhotoConvs()
         chatTabs()
         chatPrefs()
+        scheduledMessages()
+        scheduledSends()
+        risiWrites()
     }
 
     @Query("DELETE FROM messages")
@@ -264,6 +267,15 @@ interface WipeDao {
 
     @Query("DELETE FROM chat_prefs")
     suspend fun chatPrefs()
+
+    @Query("DELETE FROM scheduled_messages")
+    suspend fun scheduledMessages()
+
+    @Query("DELETE FROM scheduled_sends")
+    suspend fun scheduledSends()
+
+    @Query("DELETE FROM risi_writes")
+    suspend fun risiWrites()
 }
 
 /** v7 (§15): tombstones, hidden tombstones, the delete outbox and Clear/Delete chat state. */
@@ -776,6 +788,37 @@ interface ProfilePhotoDao {
 
     @Query("DELETE FROM profile_photo_convs WHERE conversation_id = :conv")
     suspend fun deleteConv(conv: String)
+}
+
+/** v12 (§26.6): scheduled messages, their sends, and the local record of Risi's writes. */
+@Dao
+interface ScheduledDao {
+    @Query("SELECT * FROM scheduled_messages WHERE state IN ('pending', 'missed') ORDER BY next_at")
+    fun open(): Flow<List<ScheduledMessageEntity>>
+
+    @Query("SELECT * FROM scheduled_messages WHERE state = 'pending' ORDER BY next_at")
+    suspend fun pendingNow(): List<ScheduledMessageEntity>
+
+    @Query("SELECT COUNT(*) FROM scheduled_messages WHERE state = 'pending'")
+    suspend fun pendingCount(): Int
+
+    @Query("SELECT * FROM scheduled_messages WHERE schedule_id = :id")
+    suspend fun get(id: String): ScheduledMessageEntity?
+
+    @Upsert
+    suspend fun upsert(s: ScheduledMessageEntity)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertSend(s: ScheduledSendEntity): Long
+
+    @Query("SELECT * FROM scheduled_sends")
+    fun sends(): Flow<List<ScheduledSendEntity>>
+
+    @Query("SELECT * FROM risi_writes WHERE write_id = :writeId")
+    suspend fun write(writeId: String): RisiWriteEntity?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertWrite(w: RisiWriteEntity): Long
 }
 
 /** v11 (§24): chat ids, tabs and per-chat tab preferences. */

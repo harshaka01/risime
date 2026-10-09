@@ -548,6 +548,8 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         override fun hasConversation(conversationId: String): Boolean = conversationNames.value.containsKey(conversationId.lowercase())
 
         override fun conversationName(conversationId: String): String? = conversationNames.value[conversationId.lowercase()]
+
+        override fun scheduleMayBeLate(): Boolean = !c.backgroundSkillPermissions.exactAlarmsAllowed()
     }
 
     /** Entries undone from this screen (their [Undo] goes; a failure brings it back). */
@@ -567,6 +569,15 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
     /** §25.4 a draft's [Use] opened this chat: the composer starts with it (taken once). */
     fun takeDraft(): String? = c.risiUi.takeDraft(conversationId)
+
+    /** §26.6 this chat's scheduled messages (the sender's phone only). */
+    val scheduledCtl = lk.codegen.risime.ui.chat.ScheduledControls(
+        c.scheduled, c.db.scheduled().open(), c.db.scheduled().sends(), viewModelScope, conversationId,
+        afterSend = { c.flushOutboxAfterUpload() },
+    )
+
+    /** "Scheduled messages" in the chat ⋮: on a risi_skills phone, or while this chat has any. */
+    fun scheduledMenu(): Boolean = c.risiSkillsOn()
 
     fun send(text: String) {
         typingSender.stop()

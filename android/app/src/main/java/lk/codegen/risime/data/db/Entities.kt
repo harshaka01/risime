@@ -667,3 +667,62 @@ data class ChatPrefEntity(
     /** "on" | "off" | "none"; null = not known yet. */
     @ColumnInfo(name = "official_state") val officialState: String?,
 )
+
+/**
+ * v12 (contract v1.26 §26.6): a message the user scheduled through Risi, stored and sent by this
+ * phone only (the server never keeps the text). Local data like a chat: an update never deletes it
+ * (hard rule 9); it is not in backups in v1.26.
+ */
+@Entity(tableName = "scheduled_messages", indices = [Index("conversation_id")])
+data class ScheduledMessageEntity(
+    @PrimaryKey @ColumnInfo(name = "schedule_id") val scheduleId: String,
+    /** The confirmed write it came from (null: made on the phone). */
+    @ColumnInfo(name = "write_id") val writeId: String?,
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    val text: String,
+    /** "daily" | null (one-off). */
+    val repeat: String?,
+    /** The wall-clock time a daily schedule keeps in the phone's zone. */
+    @ColumnInfo(name = "local_hour") val localHour: Int,
+    @ColumnInfo(name = "local_minute") val localMinute: Int,
+    /** The next send (epoch ms). */
+    @ColumnInfo(name = "next_at") val nextAt: Long,
+    /** pending | sent | cancelled | missed (a one-off more than 12 h late: [Send now] [Discard]). */
+    val state: String,
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    /** The occurrence being sent and its client_msg_id, persisted before the first attempt (no duplicates). */
+    @ColumnInfo(name = "occurrence_at") val occurrenceAt: Long? = null,
+    @ColumnInfo(name = "occurrence_client_msg_id") val occurrenceClientMsgId: String? = null,
+) {
+    val pending: Boolean get() = state == STATE_PENDING
+
+    companion object {
+        const val STATE_PENDING = "pending"
+        const val STATE_SENT = "sent"
+        const val STATE_CANCELLED = "cancelled"
+        const val STATE_MISSED = "missed"
+        const val REPEAT_DAILY = "daily"
+    }
+}
+
+/** v12 (§26.6): one occurrence this phone sent for a schedule ("Sent late" on the sender's bubble only). */
+@Entity(tableName = "scheduled_sends", indices = [Index("schedule_id")])
+data class ScheduledSendEntity(
+    @PrimaryKey @ColumnInfo(name = "client_msg_id") val clientMsgId: String,
+    @ColumnInfo(name = "schedule_id") val scheduleId: String,
+    @ColumnInfo(name = "occurrence_at") val occurrenceAt: Long,
+    @ColumnInfo(name = "queued_at") val queuedAt: Long,
+)
+
+/**
+ * v12 (§25.3/§26.3/§26.4): the local record of every write RisiMe ran on this phone: a `write_id`
+ * is used once, and an undo only removes what is recorded here (`target` = the schedule id or the
+ * calendar event id).
+ */
+@Entity(tableName = "risi_writes")
+data class RisiWriteEntity(
+    @PrimaryKey @ColumnInfo(name = "write_id") val writeId: String,
+    val tool: String,
+    val target: String?,
+    val at: Long,
+)

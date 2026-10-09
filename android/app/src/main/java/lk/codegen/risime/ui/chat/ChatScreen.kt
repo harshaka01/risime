@@ -91,6 +91,9 @@ fun ChatScreen(
     var draftValue by rememberSaveable(stateSaver = androidx.compose.ui.text.input.TextFieldValue.Saver) {
         mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(""))
     }
+    val scheduledHere by vm.scheduledCtl.here.collectAsStateWithLifecycle()
+    val scheduledSends by vm.scheduledCtl.sendsById.collectAsStateWithLifecycle()
+    var scheduledSheet by remember { mutableStateOf(false) }
     // §25.4 a Risi draft's [Use] opened this chat: the composer starts with it; nothing is sent.
     LaunchedEffect(Unit) {
         vm.takeDraft()?.let { draftValue = androidx.compose.ui.text.input.TextFieldValue(it, androidx.compose.ui.text.TextRange(it.length)) }
@@ -157,7 +160,12 @@ fun ChatScreen(
                         onCall = vm::startCall,
                     )
                     E2eeHeaderLock(encrypted) { if (onInfo != null) onInfo() else showInfo = true }
-                    ChatOverflowMenu(onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock)
+                    ChatOverflowMenu(
+                        onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock,
+                        extra = if (vm.scheduledMenu() || scheduledHere.isNotEmpty()) ({ close ->
+                            androidx.compose.material3.DropdownMenuItem(text = { Text(SCHEDULED_MESSAGES_TITLE) }, onClick = { close(); scheduledSheet = true })
+                        }) else null,
+                    )
                 },
             )
         },
@@ -194,7 +202,7 @@ fun ChatScreen(
                             )
                             return@DmMessageRow
                         }
-                        Bubble(
+                        WithSentLate(isSentLate(item.m, scheduledSends)) { Bubble(
                             item.m, canRetry = isFriend, onRetry = vm::retry, onDelete = vm::delete,
                             media = media[item.m.clientMsgId], loader = vm.imgs.loader,
                             onImageTap = { vm.imgs.tap(item.m) }, onImageVisible = vm.imgs::onVisible,
@@ -206,10 +214,13 @@ fun ChatScreen(
                             upload = uploads[item.m.clientMsgId],
                             sharedBy = lk.codegen.risime.ui.history.sharedByLabel(item.m) { id -> if (id.equals(vm.peerId, true)) name else "your contact" },
                             tail = lk.codegen.risime.ui.common.startsRun(items, i),
-                        )
+                        ) }
                     }
                 }
             }
+            // §26.6 this chat's scheduled messages (clock icon; Edit / Send now / Cancel).
+            ScheduledBubbles(scheduledHere, vm.scheduledCtl)
+            if (scheduledSheet) ScheduledMessagesSheet(scheduledHere, vm.scheduledCtl) { scheduledSheet = false }
             toast?.let { ImageToast(it) }
             if (!isFriend) {
                 NotFriendsBar(name, requested, onAddFriend = vm::requestFriend)

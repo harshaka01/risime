@@ -149,6 +149,9 @@ fun GroupChatScreen(
     // §25.4 a Risi draft's [Use] opened this chat: the composer starts with it; nothing is sent.
     LaunchedEffect(Unit) { vm.takeDraft()?.let { draft = TextFieldValue(it, androidx.compose.ui.text.TextRange(it.length)) } }
     val risiProgress by vm.risiProgress.collectAsStateWithLifecycle()
+    val scheduledHere by vm.scheduledCtl.here.collectAsStateWithLifecycle()
+    val scheduledSends by vm.scheduledCtl.sendsById.collectAsStateWithLifecycle()
+    var scheduledSheet by remember { mutableStateOf(false) }
     @Suppress("UNUSED_VARIABLE") val undoneNow by vm.undoneState.collectAsStateWithLifecycle()
     var progressNow by remember { mutableStateOf(System.currentTimeMillis()) }
     if (risi != null && risiProgress.isNotEmpty()) {
@@ -221,7 +224,13 @@ fun GroupChatScreen(
                     lk.codegen.risime.ui.chat.E2eeHeaderLock(encrypted == true, onInfo)
                     lk.codegen.risime.ui.chat.ChatOverflowMenu(
                         onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock,
-                        extra = risi?.takeIf { !risiChat }?.let { h -> { close -> lk.codegen.risime.ui.tabs.RisiMenuItems(h, enabled = !readOnly, close = close) } },
+                        extra = { close ->
+                            risi?.takeIf { !risiChat }?.let { h -> lk.codegen.risime.ui.tabs.RisiMenuItems(h, enabled = !readOnly, close = close) }
+                            // §26.6 "Scheduled messages" (never in the Risi chat: nothing is scheduled into it).
+                            if (!risiChat && (vm.scheduledMenu() || scheduledHere.isNotEmpty())) {
+                                androidx.compose.material3.DropdownMenuItem(text = { Text(lk.codegen.risime.ui.chat.SCHEDULED_MESSAGES_TITLE) }, onClick = { close(); scheduledSheet = true })
+                            }
+                        },
                     )
                 },
             )
@@ -269,7 +278,12 @@ fun GroupChatScreen(
                 }) else null,
                 risi = risiCtx,
                 risiChat = risiChat,
+                scheduledSends = scheduledSends,
             )
+            if (!risiChat) {
+                lk.codegen.risime.ui.chat.ScheduledBubbles(scheduledHere, vm.scheduledCtl)
+                if (scheduledSheet) lk.codegen.risime.ui.chat.ScheduledMessagesSheet(scheduledHere, vm.scheduledCtl) { scheduledSheet = false }
+            }
             // §25.4 the progress bubble of a request made here (ends with `done` or the turn's message).
             if (risi != null) risiProgress.forEach { lk.codegen.risime.ui.tabs.RisiProgressBubble(it, progressNow) }
             joinAsk?.let { (env, starter) ->
@@ -351,6 +365,8 @@ internal fun GroupMessageList(
     risi: lk.codegen.risime.ui.tabs.RisiCardContext? = null,
     /** §25.2 the Risi chat: the user's own `ask`s are their bubbles (not system lines). */
     risiChat: Boolean = false,
+    /** §26.6 scheduled sends ("Sent late" under a bubble that went out more than 2 minutes late). */
+    scheduledSends: Map<String, lk.codegen.risime.data.db.ScheduledSendEntity> = emptyMap(),
 ) {
     ChatMessageList(
         messages = messages,
@@ -435,7 +451,7 @@ internal fun GroupMessageList(
                         Box(Modifier.weight(1f)) { bubble() }
                     }
                 } else {
-                    bubble()
+                    lk.codegen.risime.ui.chat.WithSentLate(lk.codegen.risime.ui.chat.isSentLate(item.m, scheduledSends)) { bubble() }
                 }
             }
         }

@@ -91,6 +91,19 @@
             android:name=".calls.CallActionReceiver"
             android:exported="false" />
 
+        <!-- §26.6 scheduled messages: the exact alarm's receiver, and re-arming after a reboot or an update. -->
+        <receiver
+            android:name=".push.ScheduledSendReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".push.ScheduledRearmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Camera captures for sending: cache/camera only, deleted once encrypted or dropped. -->
         <provider
             android:name="androidx.core.content.FileProvider"

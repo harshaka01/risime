@@ -43,6 +43,9 @@ interface RisiHost {
 
     /** A conversation's local name ("Kumu", a group's name), or null when it isn't on this phone. */
     fun conversationName(conversationId: String): String? = null
+
+    /** §26.6 without SCHEDULE_EXACT_ALARM a scheduled message may be a few minutes late (the card says so). */
+    fun scheduleMayBeLate(): Boolean = false
 }
 
 /** Everything a card needs from its screen. */

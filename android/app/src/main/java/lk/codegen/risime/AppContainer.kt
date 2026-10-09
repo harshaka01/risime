@@ -247,16 +247,60 @@ class AppContainer(
         lk.codegen.risime.data.tabs.AndroidSkillPermissions(appContext, { asker.runtime }, { asker.exactAlarm })
 
     /** "Also cancel N pending": this phone's own pending items of a skill (null: none kept on the phone). */
-    suspend fun pendingSkillItems(skillId: String): Int? = null
+    suspend fun pendingSkillItems(skillId: String): Int? =
+        if (skillId == lk.codegen.risime.net.RisiSkillIds.SCHEDULED_MESSAGES) runCatching { db.scheduled().pendingCount() }.getOrNull() else null
 
     /** §26.5 revoke with "Also cancel N pending": the phone cancels its own items. */
-    suspend fun cancelLocalSkillItems(skillId: String) {}
+    suspend fun cancelLocalSkillItems(skillId: String) {
+        if (skillId == lk.codegen.risime.net.RisiSkillIds.SCHEDULED_MESSAGES) scheduled.cancelAll()
+    }
+
+    /** §26.6 scheduled messages: stored and sent by this phone (exact alarm or WorkManager). */
+    val scheduled: lk.codegen.risime.data.tabs.ScheduledMessages by lazy {
+        lk.codegen.risime.data.tabs.ScheduledMessages(
+            db.scheduled(), lk.codegen.risime.push.AndroidScheduleArmer(appContext),
+            send = { conv, text, id -> engine.sendText(conv, text, id) != null },
+            isMember = { conv -> scheduleTargetOk(conv) },
+            graphemes = { lk.codegen.risime.data.IcuGraphemes.count(it) },
+            log = { Log.i("RisiMe", it) },
+        )
+    }
+
+    /** §26.6 `not_member` otherwise: a conversation this phone holds, the user active in it, never a Risi chat. */
+    private suspend fun scheduleTargetOk(conv: String): Boolean {
+        val rows = chatTabs.rows.value
+        if (lk.codegen.risime.data.tabs.isRisiChat(conv, rows)) return false
+        val me = sessionStore.current()?.user?.id ?: return false
+        return if (conv.startsWith("dm:")) {
+            val peer = lk.codegen.risime.net.dmPeer(conv, me) ?: return false
+            db.contacts().byUserId(peer)?.let { it.friend && it.registered } == true
+        } else {
+            db.groups().get(conv)?.state == lk.codegen.risime.data.db.GroupEntity.STATE_ACTIVE
+        }
+    }
+
+    /** §25.3/§26.3/§26.6 the phone's executor for Risi's client tools (only on a `risi_skills` device). */
+    val risiToolExecutor: lk.codegen.risime.data.tabs.RisiToolExecutor by lazy {
+        lk.codegen.risime.data.tabs.RisiToolExecutor(
+            me = { sessionStore.current()?.user?.id },
+            history = { conv -> db.messages().conversation(conv).first() },
+            risiChats = { chatTabs.rows.value?.values?.filter { it.risi }?.map { it.conversationId }.orEmpty() },
+            skillState = { risiSkillsStore.localState(it) },
+            dao = db.scheduled(),
+            scheduled = scheduled,
+            setAlarm = { a -> withContext(Dispatchers.Main) { lk.codegen.risime.push.fireSetAlarm(appContext, a) } },
+            graphemes = { lk.codegen.risime.data.IcuGraphemes.count(it) },
+            log = { Log.i("RisiMe", it) },
+        )
+    }
 
     /** §25.3 client tools: answered over TLS, never stored (A7: every known tool is declined until the executor lands). */
     val risiToolCalls = lk.codegen.risime.data.tabs.RisiToolCallHandler(
         deviceId = { runCatching { sessionStore.deviceId() }.getOrNull() },
         post = { id, result, device -> api.postRisiToolResult(id, result, device) },
         enabled = { risiTools.on.value },
+        // §26.6: the new tools only on a risi_skills device (else unknown_tool, §26.9); calendar stays declined until its chunk.
+        execute = { call -> if (risiSkillsOn()) risiToolExecutor.execute(call) else lk.codegen.risime.data.tabs.RisiToolCallHandler.stubResult(call) },
         log = { Log.i("RisiMe", it) },
     )
 
@@ -922,6 +966,8 @@ class AppContainer(
             if (id != null && risi != null && risi.equals(id, true) && sessionStore.current() != null) risiTools.restoreAdvertised(true)
             val skills = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_risi_skills_device", null)
             if (id != null && skills != null && skills.equals(id, true) && sessionStore.current() != null) risiSkills.restoreAdvertised(true)
+            // §26.6: every process start re-arms the pending schedules and sends what is overdue.
+            if (sessionStore.current() != null) runCatching { scheduled.rearmAll() }.onFailure { Log.w("RisiMe", "scheduled message: re-arm failed: ${it.javaClass.simpleName}") }
         }
         if (BuildConfig.DEBUG) registerDebugOidcSignIn(context)
         if (BuildConfig.DEBUG) registerDebugLockChat(context)

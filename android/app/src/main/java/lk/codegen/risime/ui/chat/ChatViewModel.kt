@@ -27,6 +27,15 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
     /** §25.4 a Risi draft's [Use] for this chat (taken once; never sent). */
     fun takeDraft(): String? = c.risiUi.takeDraft(conversationId)
 
+    /** §26.6 this chat's scheduled messages (the sender's phone only). */
+    val scheduledCtl = lk.codegen.risime.ui.chat.ScheduledControls(
+        c.scheduled, c.db.scheduled().open(), c.db.scheduled().sends(), viewModelScope, conversationId,
+        afterSend = { c.flushOutboxAfterUpload() },
+    )
+
+    /** "Scheduled messages" in the chat ⋮: on a risi_skills phone, or while this chat has any. */
+    fun scheduledMenu(): Boolean = c.risiSkillsOn()
+
     /** My user id (tombstone wording, §15.6). */
     val me: String get() = meId
 

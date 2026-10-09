@@ -60,6 +60,9 @@ internal fun ConfirmCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) 
                 }
             }
         }
+        if (r.tool == lk.codegen.risime.net.RisiToolCall.TOOL_SCHEDULE_MESSAGE && state == RisiToolCards.ConfirmState.OPEN && ctx.host.scheduleMayBeLate()) {
+            Text("May be a few minutes late on this phone (exact alarms are off).", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_confirm_late"))
+        }
         val stateText = when (state) {
             RisiToolCards.ConfirmState.CONFIRMED -> "Confirmed"
             RisiToolCards.ConfirmState.CANCELLED -> "Cancelled"

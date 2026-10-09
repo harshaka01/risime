@@ -35,6 +35,9 @@ import androidx.sqlite.execSQL
         ProfilePhotoConvEntity::class,
         ChatTabEntity::class,
         ChatPrefEntity::class,
+        ScheduledMessageEntity::class,
+        ScheduledSendEntity::class,
+        RisiWriteEntity::class,
     ],
     version = AppDatabase.VERSION,
     exportSchema = true,
@@ -56,16 +59,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun profilePhotos(): ProfilePhotoDao
     abstract fun backup(): BackupDao
     abstract fun chatTabs(): ChatTabDao
+    abstract fun scheduled(): ScheduledDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 11
+        const val VERSION = 12
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11, Migration11To12)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
@@ -287,6 +291,24 @@ object Migration10To11 : Migration(10, 11) {
             "SELECT c, c, 'private', CASE WHEN c LIKE 'grp:%' THEN 'group' ELSE 'dm' END FROM (" +
             "SELECT `conversation_id` AS c FROM `messages` UNION SELECT `conversation_id` FROM `groups` UNION SELECT `conversation_id` FROM `chat_state`" +
             ") WHERE c IS NOT NULL AND c != ''",
+    )
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/**
+ * v11 → v12 (contract v1.26 §26.6): scheduled messages, their sends and the local record of Risi's
+ * writes. Additive: three new tables, nothing else is touched (hard rule 9).
+ */
+object Migration11To12 : Migration(11, 12) {
+    val SQL = listOf(
+        "CREATE TABLE IF NOT EXISTS `scheduled_messages` (`schedule_id` TEXT NOT NULL, `write_id` TEXT, `conversation_id` TEXT NOT NULL, `text` TEXT NOT NULL, `repeat` TEXT, `local_hour` INTEGER NOT NULL, `local_minute` INTEGER NOT NULL, `next_at` INTEGER NOT NULL, `state` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `occurrence_at` INTEGER, `occurrence_client_msg_id` TEXT, PRIMARY KEY(`schedule_id`))",
+        "CREATE INDEX IF NOT EXISTS `index_scheduled_messages_conversation_id` ON `scheduled_messages` (`conversation_id`)",
+        "CREATE TABLE IF NOT EXISTS `scheduled_sends` (`client_msg_id` TEXT NOT NULL, `schedule_id` TEXT NOT NULL, `occurrence_at` INTEGER NOT NULL, `queued_at` INTEGER NOT NULL, PRIMARY KEY(`client_msg_id`))",
+        "CREATE INDEX IF NOT EXISTS `index_scheduled_sends_schedule_id` ON `scheduled_sends` (`schedule_id`)",
+        "CREATE TABLE IF NOT EXISTS `risi_writes` (`write_id` TEXT NOT NULL, `tool` TEXT NOT NULL, `target` TEXT, `at` INTEGER NOT NULL, PRIMARY KEY(`write_id`))",
     )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
