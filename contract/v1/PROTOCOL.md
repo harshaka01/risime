@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.26 (Release 0.3)
+# RisiMe Wire Protocol — v1.27 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -4166,7 +4166,8 @@ nothing new.
 - **Group (`grp:`) conversations only.** DMs keep the P2P path of §16 and §19. (v1.24) This
   includes Official groups, also a 1:1's Official tab (§24.5); a `call_id` belongs to one
   conversation. Agent devices are never rung, never count for `group_calls_ready` and get no room
-  token (`403 invalid_device`); no transcription in stage 1.
+  token (`403 invalid_device`); no transcription in stage 1 (v1.27: Risi may listen to Official
+  calls as a visible participant, §27.7).
 - **Voice and video in one version.** `media: "audio" | "video"` as in §19; both ship behind one
   capability. Caps: **32 participants** in a voice call, **8** in a video call (§20.9).
 - **No call table on the server.** LiveKit's in-memory room list is the only call state
@@ -5610,7 +5611,7 @@ Lazy for 1:1s and migrated chats; immediate for new groups.
 - **Calls:** a `call_id` and its room belong to exactly one conversation. A Private 1:1 call is a
   §16/§19 call on the `dm:`; an Official call is a §20 call on its `grp:`. Agent devices are never
   rung, never counted for `group_calls_ready`, and `POST /calls/rooms` refuses them
-  (`403 invalid_device`); no transcription in stage 1.
+  (`403 invalid_device`); no transcription in stage 1 (v1.27: Official calls only, §27.7).
 - **History sharing:** agent devices are never §17 providers or requesters (§17.4).
 - **Agent devices never** receive pushes (§8), never own blobs other than through their own
   messages, never send `profile_photo` (§18), and never commit anything but self-updates of their
@@ -5700,7 +5701,7 @@ Lazy for 1:1s and migrated chats; immediate for new groups.
   (§8.2). A Risi message notifies only the users in its `risi.notify` (§24.11); for everyone else it
   is silent (no sound, no heads-up; the unread badge still counts it).
 - **Calls:** a Private 1:1 call is §16/§19 on the `dm:`; an Official call (1:1 or group) is §20
-  LiveKit on its `grp:`. No transcription in Private, ever, and none in stage 1.
+  LiveKit on its `grp:`. No transcription in Private, ever; in Official only under §27.7 (v1.27).
 - **Encryption state** (decision 048) is per tab: each tab shows its own lock or "Not end-to-end
   encrypted yet: <reason>". Official is always e2ee (it is a `grp:`).
 - **Room (additive migration; hard rule 9):** `chat_tabs(conversation_id PK, chat_id, tab,
@@ -6873,7 +6874,523 @@ deleted.
 
   Email waits for Harsha's OAuth set-up (Needs Harsha E) and its own proposal.
 
+## 27. Model transparency, the Commitment Ledger follow-ups, and call transcription (v1.27)
+Proposal `2026-10-09-ledger-followups-transcription.md` (requirements: Harsha, 2026-10-09), decision
+070. It extends §20, §24.11–§24.15, §25 and §26 and overrides them where they differ, as stated
+here (§27.11 lists every amendment). The change is additive:
+- the optional `risi.made_by` on every Risi envelope;
+- the device capability `risi_ledger`;
+- the server switches `/auth/config` `risi_ledger` and `risi_transcribe`;
+- the `risi.kind`s `discussion_summary`, `discussion_card`, `item_update`, `item_due`,
+  `item_overdue`, `item_nudge` and `call_listen`;
+- the `risi_action` values `item_confirm`, `item_decline` and `item_edit`;
+- the optional `risi` field on the `call_offer` (`mode: "sfu"`) and `group_call` `started` envelopes;
+- `POST /api/v1/calls/rooms` `risi_listen`, the `risi` object in the rooms replies, and the action
+  `risi_stop`;
+- the signal kind `call_risi`;
+- Risi as a visible LiveKit participant of Official calls (§27.7);
+- optional ledger fields in `GET /api/v1/risi/commitments`.
+
+**Apps without `risi_ledger` see exactly v1.26** (§27.10). No new error codes.
+
+### 27.0 Principles
+- **Every Risi message says what made it** (§27.1): a model (local or commercial, by name), or
+  RisiMe's own rules with no model. The phone shows it on a tap; the server never hides a model.
+- **The Ledger is per person.** After a discussion or a call, each participant gets the summary
+  **in their own Risi chat** (§25.2) and confirms **only their own items**. Nothing is tracked
+  without the owner's ✓ (§24.11, unchanged). The Official conversation gets one short card.
+- **Reminders go to the person they concern,** in their own Risi chat. The other party hears about
+  an item only once the owner has confirmed it.
+- **Risi listens to a call only where everyone can see it listening.** Only Official calls (1:1 and
+  group, both §20), only when the starter chose it, only while every person in the call is on an
+  app that shows "Risi is listening", and only until anyone taps **Stop Risi listening**. Never
+  Private, never a Risi chat.
+- **E2EE stays end to end between members.** Risi is an MLS member of Official (§24.11) and joins
+  the call as a visible participant with its own leaf identity; it derives the frame keys from its
+  MLS state like every member (§20.6). LiveKit and coturn still see only ciphertext.
+- **Learn and delete, also for speech** (decision 066): raw audio is never written anywhere; the
+  transcript lives only in the sealed 24 h buffer and is deleted once the follow-up is extracted.
+
+### 27.1 `made_by`: model transparency
+Every Risi envelope (every `text` with a `risi` object from the agent leaf, §24.11) **may** carry
+`risi.made_by`, and a v1.27 server **always** sends it (`envelope_risi_answer_made_by.json`):
+```
+"made_by": {"model": str | null, "provider": str, "at": ts,
+            "also": [{"model": str, "provider": str, "task": str}]}
+```
+- **`model`:** the model that produced the message's content, from the learning-log row of
+  `call_ref` (§24.12): the **alias** for a local model (`"risi-l1"`), the provider's model id for a
+  commercial one. **`null`** means no model made it: reminders, escalations, digests, `item_*`
+  reminders, `item_update`, `call_listen`, `reminder_set`, `skill_done`, `skill_needed`, and cards
+  the server builds itself when a model can't be asked (§25.1).
+- **`provider`:** `"risime"` for our own models and rules (spark2), else the commercial provider's
+  display name as configured (`RISI_COMMERCIAL_PROVIDER_NAME`, e.g. `"Anthropic"`).
+- **`at`:** when the content was made (the learning-log row's completion time, or the moment Risi
+  built a rule message).
+- **`also`** (may be empty): other models whose output the content rests on, in the order they ran,
+  without repeats, each with its learning-log `task`: e.g. the speech model of a call summary
+  (`{"model": "faster-whisper-large-v3", "provider": "risime", "task": "transcribe"}`, §27.8), or
+  another model used in an earlier step of the same turn (§25.1).
+- **The phone shows** (android, normative): a tap on the Risi name or ⓘ of any Risi bubble or card
+  opens a sheet: **"Made by: <label> · <time>"**, where `<label>` is
+  - `"RisiMe model (<model>)"` when `provider` is `"risime"` and `model` is set;
+  - `"RisiMe (no AI model)"` when `model` is `null`;
+  - `"<provider> (<model>)"` otherwise (a commercial model is always named);
+
+  and `<time>` is `at` in the phone's zone ("09:14", or "Tue 09:14" when not today). Each `also`
+  entry adds a line "<task label>: <label>" ("Transcribed by: RisiMe model
+  (faster-whisper-large-v3)"; an unknown task shows "Also used"). The sheet keeps the 👍/👎
+  feedback of §24.11. A message without `made_by` (an older server) shows "Made by: not recorded".
+- `made_by` is honoured only where the `risi` object is (§24.11: from an agent leaf, in Official or
+  a Risi chat). It is the server's statement, display only; the learning log (§24.12) is the
+  record.
+
+### 27.2 When a discussion is summarised (the quiet rule; server, normative)
+Per **Official conversation** (`tab: "official"`, `chat_kind` `dm` or `group`; **never** a Risi
+chat), Risi keeps a **cutoff**: the `server_ts` of the last message covered by a discussion
+summary (initially the time Risi joined the conversation, or the start of the 24 h buffer).
+**Counted messages** are `text` messages from **active human members**, after
+the cutoff, not deleted (§15); never Risi's own, `risi_request`/`risi_action`, call envelopes,
+system lines or reactions.
+
+**A chat discussion triggers** when all of these hold, checked at `last + 10 min` (an Oban job per
+conversation, rescheduled by each counted message):
+1. **Quiet:** the newest counted message is **at least 600 s old** (`RISI_QUIET_S`, default 600).
+2. **Enough:** at least **6 counted messages** (`RISI_QUIET_MIN_MSGS`) from **at least 2 distinct
+   human users** since the cutoff.
+3. **Spacing:** no discussion summary for this conversation in the last **30 min**, and fewer than
+   **8** today (the chat's zone).
+4. Official is `on`, and `RISI_LEDGER=on`.
+
+**Long discussions:** when the oldest counted message after the cutoff is **4 h** old, it triggers
+at the next gap of at least 3 min even if condition 1 doesn't hold.
+
+**A call triggers** at once when a call Risi listened to ends (§27.7) with **at least 60 s of
+transcribed speech from at least 2 human users**; it also covers the counted messages typed in the
+Official conversation since the cutoff (`source: "call"`).
+
+**On a trigger** Risi runs one extraction (learning-log task `discussion_summarise`) over the
+window (counted messages and, for a call, the transcript) and gets key points and items. Then:
+- **No item:** nothing is posted; the cutoff moves on. (Summaries on request, §24.11, are
+  unchanged.)
+- **At least one item:** the per-person flow (§27.3) and the short card (§27.4). The cutoff moves to
+  the newest message in the window.
+- Items need confidence ≥ `RISI_MIN_CONFIDENCE` (§24.11 extraction); at most **10 items** per
+  summary; an item's `owner` must be an active human member of the chat.
+- **Participants** (`with` and the recipients): for a chat, the human users who sent a counted
+  message in the window; for a call, the human users present in the room for at least 60 s while
+  Risi listened. **Recipients** = participants ∪ the owners of items, minus anyone no longer an
+  active member.
+
+### 27.3 The per-person summary: `discussion_summary` (in each recipient's Risi chat)
+For each recipient R, Risi posts one `text` envelope **in R's own Risi chat** (§25.2) with the same
+`summary_id` for every recipient (`envelope_risi_discussion_summary_chat.json`,
+`envelope_risi_discussion_summary_call.json`):
+```
+risi: {"v": 1, "kind": "discussion_summary", "summary_id": uuid,
+  "chat_id", "conversation_id": "grp:…" (the Official conversation),
+  "for": uuid (R), "with": [uuid] (the other participants),
+  "started_at": ts, "ended_at": ts, "source": "chat" | "call",
+  "call_id": uuid | null, "media": "audio" | "video" | null, "duration_s": int | null,
+  "key_points": [str],
+  "items": [Item], "expires_at": ts,
+  "call_ref", "made_by", "notify": [R]}
+Item = {"item_id": uuid, "owner": uuid, "counterpart": [uuid], "text": str,
+        "due": ts | null, "all_day": bool, "due_text": str | null,
+        "state": "proposed" | "confirmed" | "edited" | "declined" | "done" | "cancelled" | "expired"}
+```
+- **Fields:** `call_id`, `media`, `duration_s` only for `source: "call"` (`duration_s` = the time
+  Risi listened). `key_points`: 1–8 entries of at most 200 characters. `text`: 1–200 characters.
+  `due`: a time, or for a date-only due the end of that local day with `all_day: true`; `null`
+  when no date was agreed. `counterpart`: the people the item was promised to (in a 1:1, the other
+  person; in a group, those the extraction names, possibly none). `expires_at` = sent + **48 h**.
+- **`body`** is rendered for R in R's zone, so any app can show it:
+  "Summary of your discussion with Shenika (09:12, video call 32 min)" (or "…with Shenika and
+  Kamal (09:12–09:40, chat)"), the key points, then **"You agreed:"** with R's own items, then
+  **"<Name> agreed:"** per other owner, each item with its due, and the line "Confirm your items
+  in RisiMe." Names in `body` are the server's display names; the card shows names from the
+  phone's own data.
+- **The card** (android, normative): the header as above; key points; "You agreed:" with **✓ ✗ ✎
+  on each of R's own items only**; "<Name> agreed:" items read-only with their state ("waiting",
+  "confirmed ✓", "declined"). An item whose `owner` is R and whose state is `proposed` shows the
+  buttons until `expires_at`; afterwards it greys out as "Not tracked". [Open chat] opens the
+  Official conversation at `started_at`.
+- **One summary, many copies:** each copy carries the items as they were when it was sent; later
+  changes arrive as `item_update` (§27.5), which the phone applies to the card it holds.
+- **A recipient with no active Risi chat** but a `risi_ledger` device: Risi holds that copy (sealed,
+  §27.9) for up to **24 h** and posts it when the Risi chat becomes `active`; the app creates its
+  Risi chat at start when it has none (§25.2 `POST /api/v1/risi/chat`). After 24 h the copy is
+  dropped; that recipient's own items stay `proposed` and expire as usual.
+- **An owner with no `risi_ledger` device** (only older apps): that owner's items are posted **in
+  the Official conversation** as the v1.24 `commitment` card (§24.11, unchanged, with `made_by`),
+  and follow the v1.24 rules (reminder, escalation, digest). The other recipients' copies show
+  them as "<Name> agreed:" with state `proposed` and later updates.
+
+### 27.4 The short card in the Official conversation: `discussion_card`
+With every per-person flow, Risi posts **one** `text` in the Official conversation
+(`envelope_risi_discussion_card.json`):
+```
+risi: {"v": 1, "kind": "discussion_card", "summary_id", "source": "chat" | "call",
+  "call_id": uuid | null, "media": … | null, "duration_s": int | null,
+  "started_at", "ended_at", "with": [uuid] (all participants),
+  "summary": str, "items_count": int,
+  "call_ref", "made_by", "notify": []}
+```
+- `summary`: one line of at most 280 characters built only from the discussion (it is Official
+  content, posted to Official: the audience rule of §25.1). **No items, owners or dues** appear in
+  it; they are only in the per-person copies.
+- `body`: "Risi summarised this discussion (3 items). Details in your Risi chat." The card shows
+  `summary`, "3 items · Details in your Risi chat", and [Open Risi chat] for participants (others
+  see only the line). Silent (`notify: []`).
+- **It replaces the in-group `proposed` commitment card** for owners with a `risi_ledger` device
+  (§27.11). The §24.13 limit of 10 commitment cards per chat per day counts these legacy cards
+  only.
+
+### 27.5 Confirming items, and the item life cycle
+**Actions** (the §24.11 `risi_action` envelope, sent **in the actor's own Risi chat**, where the
+summary copy is; `target` = `item_id`; `envelope_risi_action_item_confirm.json`,
+`envelope_risi_action_item_decline.json`, `envelope_risi_action_item_edit.json`):
+
+| `action` | `edit` | Who (others are ignored) | When | New state |
+|---|---|---|---|---|
+| `item_confirm` | `null` | the item's `owner`, from a human leaf | `proposed`, before `expires_at` | `confirmed` |
+| `item_edit` | `{"text", "due", "all_day"}` | the owner | `proposed` before `expires_at`, or `confirmed`/`edited` | `edited` (counts as confirmed) |
+| `item_decline` | `null` | the owner | `proposed` → `declined`; `confirmed`/`edited` → `cancelled` | as stated |
+| `done` (§24.11) | `null` | the owner or a counterpart | `confirmed`/`edited` | `done` |
+
+- Risi checks the attested user of the sending leaf (§25.4), that the Risi chat is that user's own
+  and that the item belongs to a summary that user received. Repeats are idempotent. A `risi_action`
+  `confirm`/`decline`/`edit` (v1.24) on an `item_id` is ignored.
+- `item_edit.edit.text` is 1–200 characters; `due` is a future ts or `null`. An edit after
+  confirmation re-schedules the reminders (§27.6).
+- **No item is tracked without the owner's ✓ or ✎.** A `proposed` item expires 48 h after its
+  summary (`expired`) and is then deleted, like a declined one.
+- **Confirmed and edited items are the owner's promises:** they appear in "My promises"
+  (`GET /api/v1/risi/commitments`, §27.9), for the owner, and as "Owed to me" for counterparts.
+- **`item_update`** (`envelope_risi_item_update.json`): after every accepted action Risi posts
+  `{"kind": "item_update", "summary_id", "item_id", "state", "by": uuid, "text", "due", "all_day",
+  "made_by" (model null), "notify": []}` in **the Risi chat of every recipient of that summary**
+  (the actor's included). Phones apply it to the card and show **no separate bubble**; a phone
+  without the card shows it as a small line ("Shenika confirmed 'Send the quote'"). The owner's
+  ✓ is the only event that tells counterparts the item is tracked.
+
+### 27.6 Reminders, follow-ups and the personal digest
+All in **the addressee's own Risi chat**, `notify` = that person (the push is the content-free wake,
+§8.2), `made_by.model: null`, times in the addressee's zone (§24.11 `tz`). Only for items in state
+`confirmed` or `edited`; a job finding any other state does nothing. Items with `due: null` get no
+reminder. Each has `body` as readable text.
+
+| `kind` | To | When (timed `due`) | When (`all_day`) | `body` |
+|---|---|---|---|---|
+| `item_due` `moment: "before"` | owner | `due − 1 h` (skipped if confirmed later than that) | 09:00 on the day before | "Reminder: send the revised quote to Harsha (due 17:00)." |
+| `item_due` `moment: "at"` | owner | `due` | 09:00 on the due date | "Due now: send the revised quote to Harsha." |
+| `item_due` `moment: "today"` | each counterpart | 09:00 on the due date, or `due − 1 h` if that is earlier | 09:00 on the due date | "Shenika's item 'Send the revised quote' is due today." |
+| `item_overdue` | owner | `due + 2 h` | 10:00 the next day | "'Send the revised quote' was due at 17:00. Done, or a new date?" |
+| `item_nudge` | each counterpart | 24 h after `item_overdue` | the same | "Shenika's item 'Send the revised quote' was due yesterday and isn't marked done." |
+
+Fields (`envelope_risi_item_due.json`, `envelope_risi_item_due_counterpart.json`,
+`envelope_risi_item_overdue.json`, `envelope_risi_item_nudge.json`):
+```
+item_due:     {"item_id", "summary_id", "owner", "text", "due", "all_day",
+               "moment": "before" | "at" | "today", "role": "owner" | "counterpart",
+               "buttons": ["done", "new_date"] (owner) | [] (counterpart)}
+item_overdue: {"item_id", "summary_id", "text", "due", "all_day", "overdue_by": int (s),
+               "buttons": ["done", "new_date"]}
+item_nudge:   {"item_id", "summary_id", "owner", "text", "due", "all_day", "overdue_by"}
+```
+- [Done] sends `done`; [New date] opens a date picker and sends `item_edit` with the new `due`
+  (the reminders start again from the new `due`; `item_overdue` and `item_nudge` happen at most
+  **once per item** in its life, whatever the edits).
+- A counterpart's `item_due`/`item_nudge` has **no buttons** that act for the owner; it may offer
+  [Mark done] (`done`, allowed for counterparts, §27.5) and [Open chat].
+- **Personal digest:** the §24.11 digest kind, posted at 09:00 local in the user's Risi chat, only
+  when the user has open items (own or owed) due within 7 days or overdue, at most once per day,
+  with `"scope": "personal"` (`envelope_risi_digest_personal.json`). The **group digest**
+  (§24.11) is no longer posted in an Official conversation whose human members all have a
+  `risi_ledger` device; otherwise it continues for that chat's legacy cards only.
+- These replace the §24.11 `reminder` and `escalation` for ledger items; legacy cards (§27.3) keep
+  them.
+
+### 27.7 Call transcription: Risi in Official calls
+**Where.** Only a §20 call on an **Official** `grp:` (`chat_kind` `dm` or `group`) whose chat has
+Official `on`. **Never** a Private call (a §16/§19 call on a `dm:`, or a §20 call on a Private
+`grp:`; Risi has no leaf and no key there, and the server mints it no token), never a Risi chat.
+
+**Who decides.** The starter. The start sheet in Official shows **"Risi listens for follow-ups"**,
+on by default (the last choice is remembered per chat on the phone); the starter's app may offer it
+only when its device advertises `risi_ledger`, `/auth/config` says `risi_transcribe: "on"`, and
+Official is on. Nobody can turn it on later in the same call.
+
+**The wire, in order** (server, normative):
+1. **`POST /api/v1/calls/rooms` `start`** gains `"risi_listen": true`
+   (`calls_room_request_risi.json`). The server accepts it only for an Official group with Official
+   `on`, `RISI_TRANSCRIBE=on`, the listener and speech model healthy, and fewer than
+   `RISI_LISTEN_MAX` (default 4) listened calls running; otherwise it creates the room without
+   Risi. The room metadata gains `"r": 1`, LiveKit's `max_participants` is the §20.9 cap **+ 1**
+   (Risi's seat), and `call_full`/the §23.6 cap count **human identities only**. The reply gains
+   `"risi": {"state": "requested" | "unavailable" | "off", "reason": str | null}`
+   (`calls_room_reply_risi.json`; `reason` e.g. `"busy"`, `"unavailable"`).
+2. The starter connects, then sends the durable **`group_call` `started`** with
+   **`"risi": "listen"`** (`group_call_started_risi_payload.json`), and the ring **`call_offer`**
+   (`mode: "sfu"`) with **`"risi": "listen"`** (`call_offer_sfu_risi_payload.json`). Absent means
+   `"off"`. Both are MLS-authenticated by the starter's leaf.
+3. **Risi joins only** when its agent tree has decrypted that `group_call` `started` with
+   `"risi": "listen"` from an active human member's leaf **and** the room has `r: 1`. It connects
+   to the room as a participant (below) within 30 s, else not at all for that call
+   (`call_listen` `stopped`, `reason: "unavailable"`).
+4. On joining, Risi posts the durable **`call_listen`** in the Official conversation
+   (`envelope_risi_call_listen.json`): `{"kind": "call_listen", "call_id", "state": "listening",
+   "since": ts, "by": null, "reason": null, "made_by" (model null), "notify": []}`, and the server
+   sends the signal `call_risi` `listening` (§27.8).
+
+**Risi as a LiveKit participant** (server, normative):
+- Identity **`"<risi_user_id>/<risi_device_id>"`**, the leaf identity of Risi's device in that
+  Official group (§20.6 names it and derives its frame key like any leaf's). Phones name it from
+  MLS (§20.6 K7): "Risi" with the agent badge.
+- The token is minted **inside the server** (never through REST; `POST /calls/rooms` still refuses
+  agent devices with `403 invalid_device`) with the §20.2 claims except
+  (`livekit_token_claims_risi.json`): `canPublish: false`, `canPublishSources: []`,
+  `canSubscribe: true`, `canPublishData: false`, `hidden: false`, `recorder: false`. Risi is
+  therefore **always listed** as a participant and never sends media.
+- It subscribes **only to microphone tracks**, never to camera or screen tracks (it sets no video
+  subscription; a test asserts it), and transcribes only while **at least 2 human participants**
+  are connected.
+- **Frame keys:** Risi's agent tree derives `call_frame_keys(conversation_id, call_id)` (§20.6)
+  from its own MLS state (crypto C10) and hands the keys to the listener process in memory
+  (§27.8). It follows K3 (rekey on every epoch, 10 s overlap), K4 (newest epoch only), K5 (a
+  removed member gets no key) and K10 (keys in memory only). A track that doesn't decrypt is not
+  transcribed.
+- It leaves when the last human participant leaves, when the call reaches 4 h, on a stop, and when
+  Official is turned off (§24.4: Risi forgets that call at once).
+- §20.4 step 4 counts **human** participants: "no other participant" ignores Risi's identity.
+
+**The "Risi is listening" state on the call screen** (android, normative). The phone shows a
+persistent banner **"Risi is listening"** (agent avatar, accent colour) and a Risi tile/row in the
+participant list, with **[Stop Risi listening]**, whenever **any** of these holds:
+- Risi's identity is present in the LiveKit room (authoritative: Risi can hear only while present);
+- the call's MLS `call_offer`/`group_call` says `"risi": "listen"` and no `call_listen` `stopped`
+  or `call_risi` `stopped` for that call has been seen, for the first 30 s of the call ("Risi is
+  joining…");
+- the last `call_risi` signal for the call says `listening`.
+
+It shows **from the first frame of the call screen**: on the starter's screen as soon as the start
+reply says `requested`; on the **incoming-call screen** ("Risi will listen to this call") before
+Answer; on the chat line's **Join** (from `status`, below) before joining. The first time a user
+is in a listened call, a one-time sheet explains it ("Risi transcribes Official calls to send
+everyone their follow-ups. Audio isn't kept. Anyone can stop it.") with [OK]. Joining a call that
+shows the banner is the joiner's consent; [Stop Risi listening] is always one tap away. The banner
+is removed only when Risi's identity is not in the room **and** a stop or unavailability was seen.
+
+**Mid-call joins** (server, normative):
+- A device that advertises `risi_ledger` joins normally; its phone shows the banner before audio
+  flows (above).
+- **A device without `risi_ledger` never shares a call with a listening Risi:** on its `join`, the
+  server first **stops Risi** for that call (the stop below, `reason: "old_app"`), and only then
+  answers with the token. The call goes on; transcription ends for that call and **does not
+  resume**. The starter's own `start` needs a `risi_ledger` device anyway. *(Decision 070: refuse
+  transcription, never block the call.)*
+- `status` (§20.2) gains the same `risi` object (`calls_room_status_reply_v127.json`), with
+  `state` `listening`, `stopped`, `unavailable` or `off`, so the Join line can say "Risi is
+  listening".
+
+**Stop Risi listening** (any participant, any time):
+- **`POST /api/v1/calls/rooms` `action: "risi_stop"`** (`calls_room_risi_stop.json`; `X-Device-Id`;
+  body as §20.2 with the call's start `media`): the requester's identity must be present in the
+  room (else `409 not_in_call`). The server removes Risi's identity (`RemoveParticipant`), the
+  listener drops every audio buffer of the call and Risi **deletes that call's transcript at once:
+  no summary is made from it**. Reply `200 {"risi": {"state": "stopped", "reason": "stopped"}}`
+  (`calls_room_risi_stop_reply.json`); idempotent (already stopped or never listening → `200` with
+  the current state). Rate limit: 10 per user per minute.
+- Then the server sends `call_risi` `stopped` with `by`, and Risi posts the durable `call_listen`
+  `{"state": "stopped", "by": <user>, "reason": "stopped"}` (`envelope_risi_call_listen_stopped.json`;
+  `body` "Kamal stopped Risi listening. Risi deleted what it heard in this call."). Reasons:
+  `stopped` (a participant), `old_app` (a device without `risi_ledger` joined), `ended` (the call
+  ended normally; `body` "Risi listened to this call (09:12–09:44).", the transcript goes to
+  extraction), `unavailable` (Risi couldn't join or the speech model failed), `official_off`.
+- **No restart** in the same call. A new call can be listened to.
+- Text typed in the Official chat during the call is unaffected (§27.2 chat rule).
+
+**Limits:** at most `RISI_LISTEN_MAX` (4) listened calls at once on spark2; a call over that is
+created without Risi (`unavailable`, `reason: "busy"`). Transcription stops at the §20.9 4-h
+maximum.
+
+### 27.8 The audio path (server and infra, normative)
+- **`risi-listen`**, a Rust program on spark2 (the LiveKit Rust SDK, pinned in its decision),
+  started by `RisiMe.Agent` as an **Erlang Port** (stdin/stdout, length-prefixed JSON): commands
+  `join {url, token, call_id}`, `keys {epoch, key_index, keys: [{identity, key}]}`, `stop`; events
+  `joined`, `segment {identity, start, end, text, lang}`, `left {reason}`. Frame keys and audio
+  never touch a file or a log; the Port dies with the agent tree.
+- It connects to LiveKit on loopback (`ws://127.0.0.1:7880`; media to `10.20.20.15:49500–49999`,
+  same host), installs keys with `set_key(identity, key, key_index)`, lets libwebrtc decrypt and
+  **decode Opus**, resamples each speaker's PCM to 16 kHz mono **in memory**, and cuts per-speaker
+  segments at a pause of 0.8 s or 30 s. Each segment is sent once to the speech model and then
+  zeroed. At most 30 s of audio per speaker is ever held.
+- **The speech model:** **faster-whisper** (CTranslate2, CUDA) in the container `risime-whisper`
+  (`infra/docker-compose.whisper.yml`), bound to **`127.0.0.1:8200`** only, an OpenAI-compatible
+  `POST /v1/audio/transcriptions` (multipart WAV in memory, `response_format=verbose_json`,
+  `Authorization: Bearer WHISPER_API_KEY`), model `faster-whisper-large-v3` from
+  `~/risime-models/` (offline, no hub, no telemetry), `vad_filter` on, language auto-detected
+  among `en`, `si`, `ta`. The container is read-only with a size-limited `tmpfs` for `/tmp`, writes
+  no upload to disk, and logs no text.
+- **The transcript** goes only to `risi_buffer` (§24.12; sealed with `RISI_DATA_KEY`, TTL 24 h) as
+  rows `(conversation_id, call_id, seg_n, speaker user_id, start, end, text)`. It is **deleted as
+  soon as the call's extraction (§27.2) has run** (successfully or with no items), on a stop, on
+  Official off, and by the TTL in any case. It is never used for `@Risi` answers, search or
+  facts other than through that extraction.
+- **Learning log** (§24.12): one row per listened call, task **`transcribe`**: model
+  `faster-whisper-large-v3`, provider `risime`, audio seconds, segment count, detected languages,
+  latency; **`output` is `null`** (a transcript is raw text, never logged) and the input is the
+  `call_id`. The `discussion_summarise` row's `made_by.also` names it.
+- **The signal `call_risi`** (§2.3 `signal`, ephemeral; `signal_call_risi.json`), sent to the live
+  sockets of every `risi_ledger` device of the group's active members:
+  `{"kind": "call_risi", "data": {"conversation_id", "call_id", "state": "listening" | "stopped" |
+  "unavailable", "reason": str | null, "by": uuid | null, "server_ts"}}`. It is a fast hint; the
+  room roster and Risi's durable `call_listen` are what the phone trusts (§27.7).
+
+### 27.9 Server storage and REST
+- **Postgres:**
+  - `risi_commitments` gains `summary_id`, `all_day`, `source` (`chat` | `call`) and
+    `item_state`; ledger items are commitments with `commitment_id = item_id`;
+  - new **`risi_discussions(summary_id PK, conversation_id, chat_id, source, call_id, started_at,
+    ended_at, participants uuid[], key_points sealed, created_at)`**, sealed with
+    `RISI_MEMORY_KEY`, deleted with the chat's Risi data (§24.4) and after 90 days;
+  - new **`risi_followups_pending(summary_id, user_id, envelope sealed, expires_at)`** for copies
+    waiting for a Risi chat (24 h);
+  - `risi_chat_state` gains `summary_cutoff_ts`, `summaries_today`, `last_summary_at`.
+- Oban: `discussion_quiet` (unique per conversation, replaced on each counted message),
+  `item_reminder` (per item and moment, carries `schedule_v` like §24.11 timers; job args never
+  carry text).
+- **`GET /api/v1/risi/commitments`** (§24.11) gains, for ledger items, `"summary_id"`, `"source"`,
+  `"all_day"` and **`"role": "owner" | "counterpart"`** (`risi_commitments_reply_v127.json`);
+  `state=open` = `confirmed`/`edited`, not done. Unknown fields are ignored by older apps.
+- Delete: a §15 delete for everyone of a message in the window removes its buffer row; items
+  derived only from it are cancelled (`item_update` `cancelled`). Official off deletes
+  discussions, items, pending copies, transcripts and jobs of that chat within 1 h (§24.4).
+- **Never** in the learning log or logs: key points, item text, transcript text, audio.
+
+### 27.10 Capability, switches and old apps
+- **Capability:** a v1.27 app advertises **`"risi_ledger"`** in `mls.capabilities`, together with
+  `risi_tools` (`device_put_risi_ledger.json`), once it renders every §27 kind, sends the item
+  actions, creates its Risi chat at start, and (with `group_calls`) implements the call-screen
+  rules of §27.7. Risi's device is unchanged (`["groups", "tabs"]`). The `mls.capabilities`
+  strings as of v1.27: those of §26.9 plus **`risi_ledger`**.
+- **`GET /auth/config`** gains **`"risi_ledger": "on" | "off"`** (`RISI_LEDGER`) and
+  **`"risi_transcribe": "on" | "off"`** (`RISI_TRANSCRIBE`; only `on` together with `risi_ledger`
+  and a healthy speech model) (`auth_config_v127.json`). Absent means `off`. While
+  `risi_ledger` is `off`: v1.26 behaviour (in-group commitment cards, §24.11 timing). While
+  `risi_transcribe` is `off`: the start sheet hides the option and `risi_listen` is ignored
+  (`risi.state: "off"`).
+- **`made_by`** needs no capability: every app ignores the unknown field; v1.27 apps show it.
+- **Older apps** (no `risi_ledger`): never receive a `discussion_summary` copy as the addressee
+  (the owner fallback of §27.3 applies); a `risi_tools` device of a ledger user sees new kinds in
+  the Risi chat as `body` (which says "Confirm your items in RisiMe"); in Official they see the
+  `discussion_card` and `call_listen` as `body`. **They are never in a call while Risi listens**
+  (§27.7). Old apps without `tabs` see nothing of Official (§24.7), unchanged.
+
+### 27.11 Amendments
+- **§20.0, §24.5, §24.9:** "no transcription in stage 1" becomes: Risi may join an **Official**
+  call as a listening, non-publishing participant under §27.7 only; agent devices are still never
+  rung, never counted for readiness, and refused by `POST /calls/rooms` (`403 invalid_device`).
+- **§20.2:** `start` `risi_listen`, the room metadata `r`, the +1 seat, human-only caps, `risi` in
+  the replies and `status`, the action `risi_stop`; the server mints Risi's token internally.
+- **§20.3, §20.4:** the optional `risi` on `call_offer` (`sfu`) and `group_call` `started`; "no
+  other participant" counts humans only. Old validators ignore the unknown field (§10.3).
+- **§20.8:** with Risi listening, the server (inside the `RisiMe.Agent` boundary) hears the call's
+  audio and holds its transcript for at most 24 h; LiveKit and coturn still learn no content.
+- **§24.11:** `made_by` on every kind; for owners with a `risi_ledger` device the in-group
+  `proposed` commitment card is replaced by §27.3–§27.4, only the owner confirms, and reminders,
+  escalations and the digest are §27.6; `risi_action` gains three values and may be sent in the
+  actor's Risi chat for ledger items.
+- **§24.12:** the buffer also holds call transcripts (deleted after extraction); the learning log
+  gains the tasks `discussion_summarise` and `transcribe` (output `null`).
+- **§24.13:** discussion summaries at most 1 per conversation per 30 min and 8 per day; at most 10
+  items per summary; listened calls at most 4 at once.
+- **§25.1 audience rule:** a discussion's per-person copy goes to each recipient's Risi chat (it is
+  personal follow-up), the short card to Official.
+
+### 27.12 Gate and rollout (all roles)
+- **Harsha's tests:**
+  1. Every Risi bubble's ⓘ shows "Made by: RisiMe model (risi-l1) · 09:14" (a reminder: "RisiMe
+     (no AI model)"; with the commercial model on: the provider's name).
+  2. A 1:1 Official chat with Shenika goes quiet for 10 min: both get "Summary of your discussion
+     with …" in their Risi chats, each confirms only their own items, confirmed items appear in My
+     promises, the Official chat has the short card.
+  3. Reminders: the owner gets before and at; the other person gets "…is due today" only for a
+     confirmed item; overdue gives the owner's follow-up, then the nudge.
+  4. An Official video call: "Risi is listening" on every screen from the start (incoming screen
+     included); after hang-up both get "Summary of your discussion with … (video call N min)".
+  5. [Stop Risi listening] mid-call: the banner goes away on every phone, Risi leaves the room, no
+     summary of the call, the transcript rows are gone.
+  6. A device without `risi_ledger` joins a listened call: Risi stops first (`old_app`), the call
+     continues.
+  7. A Private call: no Risi option, no Risi participant, no token minted (server log check).
+- **Canary:** `CANARY-<uuid>` spoken (TTS into a test participant) and typed in a **Private** call
+  and chat reaches no transcript, buffer, learning log, server log or push; spoken in an Official
+  call that was **stopped**, it is absent from every table after the stop; spoken in a listened
+  call, it is absent from every table after extraction, except derived items/key points.
+- **No audio on disk:** a listened call leaves no new file under the listener's and the whisper
+  container's writable paths (inotify check in `scripts/interop`).
+- **Server:** the quiet rule (every condition, the 4-h rule, spacing), recipients, the owner
+  fallback, pending copies, item actions (owner-only confirm, counterpart `done`, expiry), every
+  reminder moment in the addressee's zone, `made_by` on every kind (`model: null` for rules),
+  `risi_listen`/`r`/+1 seat/human caps, Risi's token claims, the old-app join stop ordering,
+  `risi_stop` (`not_in_call`, idempotent, transcript deleted), the `call_risi` signal, the
+  `transcribe` learning-log row with `output` null, every new example.
+- **Android (JVM):** decoding every new example; the made-by sheet labels; the per-person card
+  (buttons only on own items, read-only others, `item_update` applied without a bubble); reminder
+  buttons; the call-screen banner rules (any of the three sources; removal rule), the incoming and
+  Join notices, the stop call, the start-sheet toggle; Risi named from MLS in the roster; §20.4
+  human-only end rule.
+- **Crypto:** C10, `call_frame_keys` for the agent leaf through the Risi NIF (decision 067), same
+  vectors as §20.6.
+- **Examples (v1.27):** `envelope_risi_answer_made_by.json`,
+  `envelope_risi_discussion_summary_chat.json`, `envelope_risi_discussion_summary_call.json`,
+  `envelope_risi_discussion_card.json`, `envelope_risi_item_update.json`,
+  `envelope_risi_item_due.json`, `envelope_risi_item_due_counterpart.json`,
+  `envelope_risi_item_overdue.json`, `envelope_risi_item_nudge.json`,
+  `envelope_risi_digest_personal.json`, `envelope_risi_action_item_confirm.json`,
+  `envelope_risi_action_item_decline.json`, `envelope_risi_action_item_edit.json`,
+  `envelope_risi_call_listen.json`, `envelope_risi_call_listen_stopped.json`,
+  `call_offer_sfu_risi_payload.json`, `group_call_started_risi_payload.json`,
+  `calls_room_request_risi.json`, `calls_room_reply_risi.json`, `calls_room_risi_stop.json`,
+  `calls_room_risi_stop_reply.json`, `calls_room_status_reply_v127.json`, `signal_call_risi.json`,
+  `livekit_token_claims_risi.json`, `risi_commitments_reply_v127.json`, `auth_config_v127.json`,
+  `device_put_risi_ledger.json`.
+- **Rollout:**
+  1. Server: `made_by` everywhere (no switch needed); the ledger with `RISI_LEDGER=off`; the rooms
+     changes with `RISI_TRANSCRIBE=off`.
+  2. Infra: the `risime-whisper` container healthy on spark2 (decision 070).
+  3. An app that advertises `risi_ledger`.
+  4. `RISI_LEDGER=on` after gate items 1–3 pass with fake-llm; then `RISI_TRANSCRIBE=on` after
+     4–7 and the canary pass.
+
 ## Changelog
+- **v1.27** (2026-10-09): model transparency, the Commitment Ledger follow-ups and call
+  transcription (§27, decision 070; proposal `2026-10-09-ledger-followups-transcription.md`,
+  requirements by Harsha):
+  - `risi.made_by {model, provider, at, also}` on every Risi envelope (alias `risi-l1` or the
+    commercial provider and model; `model: null` for rule messages), shown as "Made by: … · time";
+  - the quiet rule (last human message ≥ 600 s old, ≥ 6 messages from ≥ 2 humans since the last
+    summary, ≥ 30 min apart, ≤ 8 a day; 4-h long-discussion rule; a listened call triggers at its
+    end) and the per-person `discussion_summary` in each recipient's Risi chat (key points,
+    "You agreed:" / "<Name> agreed:" items with owner and due), with the short `discussion_card`
+    in Official replacing the in-group proposed commitment card for ledger owners;
+  - owner-only `item_confirm`/`item_decline`/`item_edit` (counterparts may mark `done`),
+    `item_update` applied to every copy, 48-h expiry, My promises with `role`;
+  - reminders in each person's Risi chat: `item_due` `before`/`at` to the owner, `today` to
+    counterparts only for confirmed items, `item_overdue` to the owner, then `item_nudge` to
+    counterparts; a personal digest;
+  - Official call transcription: the starter's `risi_listen` on `POST /calls/rooms` `start`
+    (metadata `r`, a +1 seat, human-only caps), `risi: "listen"` on `call_offer`/`group_call`,
+    Risi as a visible, non-publishing LiveKit participant with its leaf identity and MLS-derived
+    frame keys, microphone tracks only; "Risi is listening" on the call, incoming and Join
+    screens; `risi_stop` (any participant; deletes the call's transcript), a device without
+    `risi_ledger` joining stops Risi first (the call goes on), `call_listen` durable lines and the
+    `call_risi` signal; `risi-listen` (Rust, Erlang Port, audio in memory only) and faster-whisper
+    on `127.0.0.1:8200`; the transcript only in the sealed 24-h buffer, deleted after extraction;
+    a `transcribe` learning-log row with no output; never Private;
+  - the capability `risi_ledger`, `/auth/config` `risi_ledger` and `risi_transcribe`. Additive; no
+    new error codes.
 - **v1.26** (2026-10-09): Risi skills (§26, decision 069; proposal `2026-10-09-risi-skills.md`,
   requirements by Harsha). Skills are the permission layer every tool runs under:
   - a server registry (`alarm`, `reminders`, `calendar`, `scheduled_messages`, and `email` not yet
