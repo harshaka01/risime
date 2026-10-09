@@ -127,7 +127,7 @@ defmodule RisiMe.Agent.Reminders do
     due = Clock.usec(due)
 
     cond do
-      DateTime.compare(due, DateTime.utc_now()) != :gt ->
+      DateTime.compare(due, Clock.now()) != :gt ->
         Writes.post(w, "That time has passed, so I didn't set the reminder.", %{
           "kind" => "error",
           "request_id" => w.request_id,
@@ -220,7 +220,7 @@ defmodule RisiMe.Agent.Reminders do
     with {:ok, id} <- Ecto.UUID.cast(target),
          %__MODULE__{state: "pending"} = r <- Repo.get(__MODULE__, id),
          true <- r.conversation_id == conv,
-         true <- DateTime.compare(DateTime.utc_now(), r.due_at) == :lt do
+         true <- DateTime.compare(Clock.now(), r.due_at) == :lt do
       case action do
         "me_too" when user != r.owner_id and r.me_too ->
           set_participants(r, Enum.uniq(r.participants ++ [user]))
@@ -312,7 +312,7 @@ defmodule RisiMe.Agent.Reminders do
   def undo(user_id, %{"reminder_id" => id}) when is_binary(id) do
     case Repo.get(__MODULE__, id) do
       %__MODULE__{owner_id: ^user_id, state: "pending"} = r ->
-        if DateTime.compare(DateTime.utc_now(), r.due_at) == :lt,
+        if DateTime.compare(Clock.now(), r.due_at) == :lt,
           do: cancel(r),
           else: {:error, :undo_unavailable}
 

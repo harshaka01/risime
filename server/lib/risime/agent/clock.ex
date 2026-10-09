@@ -11,6 +11,20 @@ defmodule RisiMe.Agent.Clock do
 
   @default "Asia/Colombo"
 
+  @doc """
+  The clock Risi reads ("now" for time phrases, reminders and request times). Defaults to
+  `DateTime.utc_now/0`; tests fix it with `config :risime, :risi_now` (an ISO-8601 string, a
+  `DateTime`, or a zero-arity function), so no Risi test depends on the wall clock.
+  """
+  def now do
+    case Application.get_env(:risime, :risi_now) do
+      nil -> DateTime.utc_now()
+      f when is_function(f, 0) -> f.()
+      %DateTime{} = dt -> dt
+      s when is_binary(s) -> elem(DateTime.from_iso8601(s), 1)
+    end
+  end
+
   def default_tz, do: Application.get_env(:risime, :risi_default_tz, @default)
 
   @doc "The user's zone (or the default)."

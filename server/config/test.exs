@@ -116,3 +116,7 @@ config :risime, :risi_llm,
 config :risime, :risi_sender, RisiMe.Agent.TestSender
 # Risi's own post limit is global (15 per 10 s); tests post faster than that.
 config :risime, :risi_send_limit, 10_000
+
+# Risi's clock is fixed in tests (a Monday, 13:30 Asia/Colombo) so no test depends on the wall
+# clock. RISI_TEST_NOW (ISO-8601) overrides it to prove that.
+config :risime, :risi_now, System.get_env("RISI_TEST_NOW", "2026-10-05T08:00:00Z")

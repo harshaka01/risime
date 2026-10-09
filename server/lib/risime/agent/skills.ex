@@ -623,7 +623,7 @@ defmodule RisiMe.Agent.Skills do
   defp shown_state(%Entry{undo_state: s}, _now), do: s
 
   @doc "An entry as its wire map (`Entry`, §26.4)."
-  def entry_json(%Entry{} = e, now \\ DateTime.utc_now()) do
+  def entry_json(%Entry{} = e, now \\ RisiMe.Agent.Clock.now()) do
     sealed =
       case open(e) do
         {:ok, m} -> m
@@ -658,7 +658,7 @@ defmodule RisiMe.Agent.Skills do
          {:ok, limit} <- limit(params["limit"]),
          {:ok, q} <- before(user_id, skill_id, params["before"]) do
       rows = Repo.all(from e in q, order_by: [desc: e.at, desc: e.entry_id], limit: ^(limit + 1))
-      now = DateTime.utc_now()
+      now = RisiMe.Agent.Clock.now()
 
       {:ok,
        %{
@@ -776,7 +776,7 @@ defmodule RisiMe.Agent.Skills do
            Repo.get(Entry, id) || {:error, :not_found},
          {:ok, sealed} <- open(e) |> or_unavailable(),
          true <-
-           (shown_state(e, DateTime.utc_now()) in ~w(available failed) and
+           (shown_state(e, RisiMe.Agent.Clock.now()) in ~w(available failed) and
               is_binary(sealed["token"]) and
               Plug.Crypto.secure_compare(sealed["token"], token)) ||
              {:error, :undo_unavailable} do

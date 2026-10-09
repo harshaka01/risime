@@ -93,7 +93,7 @@ defmodule RisiMe.Agent.Turn do
     b = bounds()
     started = System.monotonic_time(:millisecond)
     turn_id = Ecto.UUID.generate()
-    now = DateTime.utc_now()
+    now = Clock.now()
 
     ctx = %{
       asker: asker,
@@ -134,14 +134,19 @@ defmodule RisiMe.Agent.Turn do
     result
   end
 
+  # A fixed test clock (`:risi_now`) wins over the message's real timestamp.
   defp request_ts(ts, now) when is_binary(ts) do
+    if Application.get_env(:risime, :risi_now), do: now, else: parse_ts(ts, now)
+  end
+
+  defp request_ts(_ts, now), do: now
+
+  defp parse_ts(ts, now) do
     case DateTime.from_iso8601(ts) do
       {:ok, dt, _} -> dt
       _ -> now
     end
   end
-
-  defp request_ts(_ts, now), do: now
 
   ## Context (§25.1: the request and the context the server chose)
 
