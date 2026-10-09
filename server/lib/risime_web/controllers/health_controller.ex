@@ -23,6 +23,8 @@ defmodule RisiMeWeb.HealthController do
     checks = Map.put(checks, "blob_storage", RisiMe.Blobs.DiskGuard.health())
     # Risi (P0 2026-10-08): "off" | "ok" | "unavailable: <reason>"; never a 503, never a secret.
     checks = Map.put(checks, "risi", risi())
+    # v1.26 §26.9: "off" | "ok" | "unavailable: <reason>" (e.g. RISI_MEMORY_KEY missing).
+    checks = Map.put(checks, "risi_skills", RisiMe.Agent.Skills.health())
 
     conn
     |> put_status(if healthy, do: 200, else: 503)

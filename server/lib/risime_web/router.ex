@@ -96,6 +96,12 @@ defmodule RisiMeWeb.Router do
     get "/risi/commitments", RisiController, :commitments
     # v1.25 §25.3.
     post "/risi/tool_calls/:id/result", RisiController, :tool_result
+    # v1.26 §26.2, §26.4.
+    get "/risi/skills", RisiSkillsController, :index
+    patch "/risi/skills", RisiSkillsController, :update
+    get "/risi/skills/:id/activity", RisiSkillsController, :activity
+    delete "/risi/skills/:id/activity", RisiSkillsController, :clear
+    post "/risi/skills/:id/activity/:entry_id/undo", RisiSkillsController, :undo
     post "/blobs", BlobController, :create
     post "/backups", BackupController, :create
     get "/backups", BackupController, :index

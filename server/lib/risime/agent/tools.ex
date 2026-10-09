@@ -62,6 +62,8 @@ defmodule RisiMe.Agent.Tools do
       not member?(ctx) -> {:error, :denied}
       tool.where == :client and not client_device?(ctx) -> {:error, :denied}
       tool.personal and not risi_chat?(ctx) -> {:error, :denied}
+      # v1.26 §26.8: the skill gates (state, risi_skills device, reported permission).
+      not RisiMe.Agent.Skills.allows?(tool, ctx) -> {:error, :denied}
       f = Map.get(tool, :authorize) -> if f.(ctx) == :ok, do: :ok, else: {:error, :denied}
       true -> :ok
     end
@@ -96,7 +98,7 @@ defmodule RisiMe.Agent.Tools do
   The `risi_next_action` JSON schema for the allowed tools: one alternative per tool
   (`{"tool": <name>, "args": <its schema>}`) plus `final`.
   """
-  def schema(allowed) do
+  def schema(allowed, needed \\ []) do
     tool_alts =
       for t <- allowed do
         %{
@@ -127,7 +129,28 @@ defmodule RisiMe.Agent.Tools do
       "additionalProperties" => false
     }
 
-    %{"anyOf" => tool_alts ++ [final]}
+    # v1.26 §26.5: the pseudo-tool `need_skill`, over the skills this asker lacks.
+    need =
+      if needed == [],
+        do: [],
+        else: [
+          %{
+            "type" => "object",
+            "properties" => %{
+              "tool" => %{"enum" => ["need_skill"]},
+              "args" => %{
+                "type" => "object",
+                "properties" => %{"skill_id" => %{"enum" => needed}},
+                "required" => ["skill_id"],
+                "additionalProperties" => false
+              }
+            },
+            "required" => ["tool", "args"],
+            "additionalProperties" => false
+          }
+        ]
+
+    %{"anyOf" => tool_alts ++ need ++ [final]}
   end
 
   @doc "The tool lines of the system prompt."

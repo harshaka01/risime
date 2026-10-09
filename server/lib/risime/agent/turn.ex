@@ -42,6 +42,7 @@ defmodule RisiMe.Agent.Turn do
     Progress,
     Prompts,
     Secretary,
+    Skills,
     Tools,
     TurnSteps,
     Writes
@@ -105,6 +106,8 @@ defmodule RisiMe.Agent.Turn do
       turn_id: turn_id,
       chat_id: Secretary.chat_id(conv),
       in_risi_chat?: RisiMe.Groups.Tabs.risi_chat?(conv),
+      # v1.26 §26.9: is the asker gated by skills (computed once a turn)?
+      gated?: Skills.gated?(asker),
       deadline: started + b.turn_ms,
       bounds: b
     }
@@ -183,7 +186,7 @@ defmodule RisiMe.Agent.Turn do
   ## The system prompt (§25.1: identity, the capability list from the registry, the rules)
 
   @doc false
-  def system(allowed) do
+  def system(allowed, needed \\ []) do
     names = Enum.map(allowed, & &1.name)
 
     """
@@ -191,7 +194,7 @@ defmodule RisiMe.Agent.Turn do
     person who asked (the asker). Everyone in the chat can see what you post.
     #{Capabilities.prompt(names)}
     Your tools for this request (call one per step, or answer with final):
-    #{Tools.prompt_lines(allowed)}
+    #{Tools.prompt_lines(allowed)}#{need_line(needed)}
     Rules:
     - Reply with exactly one JSON action: {"tool": "<tool>", "args": {...}} to use a tool, or \
     {"tool": "final", "answer": "...", "sources": [...], "next_steps": [...]} to answer.
@@ -206,6 +209,14 @@ defmodule RisiMe.Agent.Turn do
     - Never promote, advertise or recommend any product, service or company.
     """
   end
+
+  # v1.26 §26.5: the pseudo-tool for a skill the asker hasn't turned on (or can't use here).
+  defp need_line([]), do: ""
+
+  defp need_line(needed),
+    do:
+      "\n- need_skill: when the request needs one of these skills that you don't have " <>
+        "(#{Enum.join(needed, ", ")}), answer with need_skill and that skill_id"
 
   ## The loop
 
@@ -223,17 +234,18 @@ defmodule RisiMe.Agent.Turn do
 
   defp step(st, ctx) do
     allowed = Tools.allowed(ctx)
+    needed = Skills.needed(ctx)
     ctx = Map.put(ctx, :allowed_names, Enum.map(allowed, & &1.name))
 
     req = %{
       task: "risi_next_action",
       conversation_id: ctx.conv,
       chat_id: ctx.chat_id,
-      system: system(allowed),
+      system: system(allowed, needed),
       user: ctx.user_text,
       history: st.history,
       schema_name: "risi_next_action",
-      schema: Tools.schema(allowed),
+      schema: Tools.schema(allowed, needed),
       source_message_ids: ctx.msg_ids,
       max_tokens: 800,
       timeout_ms: min(ctx.bounds.call_ms, max(left(ctx), 1)),
@@ -281,6 +293,19 @@ defmodule RisiMe.Agent.Turn do
       true ->
         finish(st, ctx, Capabilities.fallback_answer(ctx.allowed_names), [], out["next_steps"])
     end
+  end
+
+  # v1.26 §26.5: `need_skill` ends the turn with a `skill_needed` card in the Risi chat (the
+  # group, if asked there, gets the pointer line). In the learning log it is a `denied` step.
+  defp action(%{"tool" => "need_skill", "args" => %{"skill_id" => sid}} = out, st, ctx, _allowed) do
+    n = length(st.steps) + 1
+    st = record(st, ctx, n, "need_skill", out["args"], "denied", "denied", 0, 0)
+
+    Progress.send(ctx.asker, ctx.request_id, ctx.conv, "step",
+      step: step_of(n, "need_skill", "denied")
+    )
+
+    Skills.need_skill(ctx, sid, st.call_ref)
   end
 
   # A tool step.

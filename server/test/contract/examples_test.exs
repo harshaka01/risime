@@ -4409,6 +4409,40 @@ defmodule RisiMe.ContractExamplesTest do
       assert "risi_skills" in caps and "risi_tools" in caps
     end
 
+    test "auth_config_v126.json and device_put_risi_skills.json against the server (S14)",
+         %{a: a} do
+      with_attestation_key(%{})
+      RisiMe.TabsHelpers.tabs_on!()
+      RisiMe.TabsHelpers.risi_tools_on!()
+      RisiMe.RisiHelpers.skills_on!()
+      {200, cfg} = get_json("/api/v1/auth/config")
+
+      assert keys(cfg) -- ["modes", "issuer", "client_id"] ==
+               keys(example("auth_config_v126.json")) -- ["modes", "issuer", "client_id"]
+
+      assert cfg["risi_skills"] == "on"
+      dev = Ecto.UUID.generate()
+
+      {200, _} =
+        RisiMe.GroupHelpers.api(
+          :put,
+          "/api/v1/me/devices/#{dev}",
+          a.token,
+          example("device_put_risi_skills.json")
+        )
+
+      assert RisiMe.Devices.risi_skills_device?(a.user.id, dev)
+
+      # The server's GET /risi/skills has the example's shape.
+      {200, %{"skills" => skills}} =
+        RisiMe.GroupHelpers.api(:get, "/api/v1/risi/skills", a.token, nil, dev)
+
+      for {ours, theirs} <- Enum.zip(skills, example("risi_skills_reply.json")["skills"]) do
+        skill26_ok?(ours)
+        assert keys(ours) == keys(theirs) and ours["id"] == theirs["id"]
+      end
+    end
+
     test "risi_skills_reply.json, risi_skills_patch*.json: the registry shape" do
       skills = example("risi_skills_reply.json")["skills"]
       assert Enum.map(skills, & &1["id"]) == @skill_ids

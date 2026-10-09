@@ -160,6 +160,12 @@ if risi = System.get_env("RISI"), do: config(:risime, :risi, on?.(risi))
 # v1.25 §25.8: RISI_TOOLS=on turns on Risi's tool loop, client tools and the Risi chat
 # (`/auth/config` `risi_tools`, default off).
 if tools = System.get_env("RISI_TOOLS"), do: config(:risime, :risi_tools, on?.(tools))
+# v1.26 §26.9: RISI_SKILLS=on turns on the skills (gates, REST, the new client tools;
+# `/auth/config` `risi_skills`, default off). RISI_MEMORY_KEY (base64, 32 bytes, .env only,
+# never logged) seals the skills activity log; without it the skills are unavailable (`/health`
+# `checks.risi_skills` says why), never a boot failure.
+if skills = System.get_env("RISI_SKILLS"), do: config(:risime, :risi_skills, on?.(skills))
+if key = System.get_env("RISI_MEMORY_KEY"), do: config(:risime, :risi_memory_key, key)
 if id = System.get_env("RISI_USER_ID"), do: config(:risime, :risi_user_id, id)
 if id = System.get_env("RISI_DEVICE_ID"), do: config(:risime, :risi_device_id, id)
 if tz = System.get_env("RISI_DEFAULT_TZ"), do: config(:risime, :risi_default_tz, tz)

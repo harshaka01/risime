@@ -11,7 +11,8 @@ defmodule RisiMe.Workers.Risi do
   | `expire` | `risi_timers` | a proposal unconfirmed after 48 h is deleted |
   | `reminder`, `escalation` | `risi_timers` | §24.11 timing (no-op when `v` is stale) |
   | `digest_sweep` | `risi_timers` | cron every 15 min: 09:00-local digests |
-  | `prune` | `risi_timers` | cron hourly: expired confirm cards and old tool-call rows (S13+) |
+  | `prune` | `risi_timers` | cron hourly: expired confirm cards, old tool-call rows, activity over 90 days |
+  | `undo_timeout` | `risi_timers` | a client undo unanswered after 15 s → `failed` (§26.4) |
   | `forget` | `risi_timers` | the safety re-run of `RisiMe.Agent.forget/1` (§24.4, within 1 h) |
 
   Every job re-checks the §24.5 rule (`RisiMe.Agent.may_act?/1`) before touching anything, and
@@ -34,8 +35,13 @@ defmodule RisiMe.Workers.Risi do
   def perform(%Oban.Job{args: %{"kind" => "prune"}}) do
     RisiMe.Agent.Writes.prune()
     RisiMe.Agent.ToolCalls.prune()
+    RisiMe.Agent.Skills.prune()
     :ok
   end
+
+  # v1.26 §26.4: a client undo whose phone didn't answer in 15 s.
+  def perform(%Oban.Job{args: %{"kind" => "undo_timeout", "entry_id" => e, "tool_call_id" => c}}),
+    do: RisiMe.Agent.Skills.undo_timeout(e, c)
 
   def perform(%Oban.Job{args: %{"kind" => "digest_sweep"}}) do
     if Out.ready?(), do: Commitments.digest_sweep(), else: :ok

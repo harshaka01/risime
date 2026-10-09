@@ -31,6 +31,9 @@ defmodule RisiMe.Risi do
   @doc "v1.25 §25.8: true while `RISI_TOOLS=on` (`/auth/config` `risi_tools`, default off)."
   def tools_on?, do: Application.get_env(:risime, :risi_tools, false) == true
 
+  @doc "v1.26 §26.9: true while `RISI_SKILLS=on` (`/auth/config` `risi_skills`, default off)."
+  def skills_switch?, do: Application.get_env(:risime, :risi_skills, false) == true
+
   def user_id, do: Application.get_env(:risime, :risi_user_id, @default_user)
   def device_id, do: Application.get_env(:risime, :risi_device_id, @default_device)
 

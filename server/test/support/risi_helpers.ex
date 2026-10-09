@@ -204,6 +204,57 @@ defmodule RisiMe.RisiHelpers do
       |> Jason.decode!()
       |> Map.fetch!("rules")
 
+  @doc "A Risi chat of `user` that Risi may act in (direct rows, as S10's tests)."
+  def own_risi_chat!(user) do
+    rc =
+      RisiMe.TabsHelpers.official_group!(
+        "grp:" <> Ecto.UUID.generate(),
+        [{user.id, "admin"}],
+        agents: [RisiMe.Risi.user_id()],
+        chat_kind: "risi"
+      )
+
+    RisiMe.Repo.insert_all("risi_chats", [
+      %{
+        conversation_id: rc,
+        owner_id: Ecto.UUID.dump!(user.id),
+        state: "active",
+        inserted_at: DateTime.utc_now()
+      }
+    ])
+
+    rc
+  end
+
+  @doc "v1.26: `RISI_SKILLS=on` with a `RISI_MEMORY_KEY` for the test."
+  def skills_on!(key \\ Base.encode64(:crypto.strong_rand_bytes(32))) do
+    restore_on_exit([:risi_skills, :risi_memory_key, :risi_tool_deadline_ms])
+    Application.put_env(:risime, :risi_skills, true)
+    if key, do: Application.put_env(:risime, :risi_memory_key, key)
+    :ok
+  end
+
+  @doc "v1.26: a `risi_skills` device (tabs + risi_tools + risi_skills). Returns its id."
+  def skills_device!(user),
+    do:
+      RisiMe.TabsHelpers.tabs_device!(user,
+        caps: ~w(groups member_devices tabs risi_tools risi_skills)
+      )
+
+  @doc "Restores these app env keys when the test exits."
+  def restore_on_exit(keys) do
+    old = for k <- keys, do: {k, Application.fetch_env(:risime, k)}
+
+    on_exit(fn ->
+      for {k, prev} <- old do
+        case prev do
+          {:ok, v} -> Application.put_env(:risime, k, v)
+          :error -> Application.delete_env(:risime, k)
+        end
+      end
+    end)
+  end
+
   @doc "Buffers any envelope from `user` and hands it to the secretary; returns its id."
   def envelope!(conv, user, env, device \\ nil) do
     id = TimeUUID.generate()

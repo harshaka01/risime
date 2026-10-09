@@ -101,6 +101,13 @@ defmodule RisiMeWeb.GroupController do
   def error(conn, {:error, :write_not_confirmed}),
     do: ApiError.send_error(conn, 409, :write_not_confirmed)
 
+  # v1.26 §26.9.
+  def error(conn, {:error, :skill_unavailable}),
+    do: ApiError.send_error(conn, 409, :skill_unavailable)
+
+  def error(conn, {:error, :undo_unavailable}),
+    do: ApiError.send_error(conn, 409, :undo_unavailable)
+
   def error(conn, {:error, :agent_unavailable}),
     do: ApiError.send_error(conn, 503, :agent_unavailable)
 

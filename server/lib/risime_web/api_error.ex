@@ -62,7 +62,10 @@ defmodule RisiMeWeb.ApiError do
     # v1.25 §25.8.
     risi_chat: "Your Risi chat has no members or settings to change",
     tool_call_expired: "This request from Risi has expired",
-    write_not_confirmed: "This change wasn't confirmed"
+    write_not_confirmed: "This change wasn't confirmed",
+    # v1.26 §26.9.
+    skill_unavailable: "This skill isn't available yet",
+    undo_unavailable: "This can't be undone any more"
   }
 
   @doc """

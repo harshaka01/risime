@@ -185,11 +185,16 @@ defmodule RisiMe.Agent.ToolCalls do
            ) do
       drop_event(c)
 
-      Phoenix.PubSub.broadcast(
-        RisiMe.PubSub,
-        "risi_tool:" <> id,
-        {:risi_tool_result, id, status, result}
-      )
+      # §26.4: an undo's result settles its entry; any other goes to the waiting process.
+      if c.undo_entry_id do
+        RisiMe.Agent.Skills.undo_result(c, status, result)
+      else
+        Phoenix.PubSub.broadcast(
+          RisiMe.PubSub,
+          "risi_tool:" <> id,
+          {:risi_tool_result, id, status, result}
+        )
+      end
 
       :ok
     else

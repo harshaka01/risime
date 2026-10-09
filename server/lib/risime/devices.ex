@@ -135,14 +135,18 @@ defmodule RisiMe.Devices do
   # v1.13 §16.1: `calls`.
   # v1.15 §17.1: `history_share`.
   # v1.18 §19.1: `video`. v1.19 §20.1: `group_calls`. v1.24 §24.7: `tabs`.
-  # v1.25 §25.8: `risi_tools`.
+  # v1.25 §25.8: `risi_tools`. v1.26 §26.9: `risi_skills`, kept only with `risi_tools`.
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
-                         group_calls call_switch screen_share tabs risi_tools)
+                         group_calls call_switch screen_share tabs risi_tools risi_skills)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
-    if length(caps) <= 32 and Enum.all?(caps, &is_binary/1),
-      do: {:ok, caps |> Enum.filter(&(&1 in @known_capabilities)) |> Enum.uniq()},
-      else: :error
+    if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do
+      caps = caps |> Enum.filter(&(&1 in @known_capabilities)) |> Enum.uniq()
+
+      {:ok, if("risi_tools" in caps, do: caps, else: List.delete(caps, "risi_skills"))}
+    else
+      :error
+    end
   end
 
   defp capabilities(%{"capabilities" => nil}), do: {:ok, []}
@@ -331,6 +335,44 @@ defmodule RisiMe.Devices do
     case Ecto.UUID.cast(device_id) do
       {:ok, d} -> risi_tools?(Repo.get_by(Device, user_id: user_id, device_id: d))
       :error -> false
+    end
+  end
+
+  @doc """
+  v1.26 §26.9: true if the device is a `risi_tools` device that also advertises `risi_skills`
+  (it may get the v1.26 client tools and use the skills REST).
+  """
+  def risi_skills?(%Device{capabilities: caps} = d),
+    do: risi_tools?(d) and "risi_skills" in (caps || [])
+
+  def risi_skills?(_), do: false
+
+  @doc "v1.26: true if `device_id` (may be nil) names a `risi_skills` device of the user."
+  def risi_skills_device?(_user_id, nil), do: false
+
+  def risi_skills_device?(user_id, device_id) do
+    case Ecto.UUID.cast(device_id) do
+      {:ok, d} -> risi_skills?(Repo.get_by(Device, user_id: user_id, device_id: d))
+      :error -> false
+    end
+  end
+
+  @doc "v1.26 §26.9: true if any device of the user advertises `risi_skills`."
+  def any_risi_skills?(user_id) do
+    Repo.exists?(
+      from d in Device,
+        where:
+          d.user_id == ^user_id and not is_nil(d.mls_signature_key) and
+            "tabs" in d.capabilities and "groups" in d.capabilities and
+            "risi_tools" in d.capabilities and "risi_skills" in d.capabilities
+    )
+  end
+
+  @doc "The device row of a user's device (or nil)."
+  def get(user_id, device_id) do
+    case Ecto.UUID.cast(device_id || "") do
+      {:ok, d} -> Repo.get_by(Device, user_id: user_id, device_id: d)
+      :error -> nil
     end
   end
 

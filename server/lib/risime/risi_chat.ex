@@ -252,6 +252,8 @@ defmodule RisiMe.RisiChat do
     RisiMe.Agent.forget(conv)
 
     Repo.delete_all(from f in RisiMe.Agent.Fact, where: f.chat_id == ^conv)
+    # v1.26 §26.4: the skills activity asked from this Risi chat goes with it.
+    RisiMe.Agent.Skills.forget_conversation(conv)
 
     if RisiMe.Agent.running?() do
       Task.start(fn ->

@@ -28,6 +28,9 @@ defmodule RisiMeWeb.AuthController do
     body = if RisiMe.Risi.tabs_on?(), do: Map.put(body, :tabs, "on"), else: body
     # v1.25 §25.8: `risi_tools: "on"` while RISI_TOOLS=on; left out while off (absent = off).
     body = if RisiMe.Risi.tools_on?(), do: Map.put(body, :risi_tools, "on"), else: body
+    # v1.26 §26.9: `risi_skills: "on"` while RISI_SKILLS=on and the skills can run (their
+    # RISI_MEMORY_KEY is set); left out otherwise (absent = off).
+    body = if RisiMe.Agent.Skills.on?(), do: Map.put(body, :risi_skills, "on"), else: body
 
     json(conn, body)
   end
