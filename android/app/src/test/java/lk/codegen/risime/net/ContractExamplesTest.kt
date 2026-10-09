@@ -25,6 +25,58 @@ class ContractExamplesTest {
 
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
+        // v1.26 (§26 Risi skills): typed models in net/Protocol126.kt (and RisiMeta's / RisiToolCall's optional fields).
+        "auth_config_v126.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiSkillsOn && it.risiToolsOn && it.tabsOn) } },
+        "device_put_risi_skills.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_SKILLS in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) } },
+        "envelope_risi_action_calendar_accept.json" to { s -> ProtocolJson.decodeFromString<RisiActionEnvelope>(s).also { require(it.action == RisiActions126.CALENDAR_ACCEPT && it.edit == null && it.options!!["reminder"]!!.jsonPrimitive.boolean) } },
+        "envelope_risi_action_calendar_decline.json" to { s -> ProtocolJson.decodeFromString<RisiActionEnvelope>(s).also { require(it.action == RisiActions126.CALENDAR_DECLINE && it.options == null) } },
+        "envelope_risi_calendar_offer.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == "calendar_offer" && it.offerId != null && it.title == "Board meeting" && it.start != null && it.end != null && it.allDay == false)
+                require(it.forUsers.size == 2 && it.reminderBeforeMin == 15 && it.buttons == listOf("add", "decline") && it.expiresAt == it.start)
+            }
+        },
+        "envelope_risi_confirm_schedule_message.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == "confirm" && it.tool == RisiToolCall.TOOL_SCHEDULE_MESSAGE && it.skillId == RisiSkillIds.SCHEDULED_MESSAGES)
+                require(it.args!!["text"]!!.jsonPrimitive.content == "Good morning" && it.args!!["repeat"]!!.jsonPrimitive.content == "daily" && "write_id" !in it.args!!)
+            }
+        },
+        "envelope_risi_confirm_set_alarm.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == "confirm" && it.tool == RisiToolCall.TOOL_SET_ALARM && it.skillId == RisiSkillIds.ALARM && it.args!!["time"]!!.jsonPrimitive.content == "05:30")
+            }
+        },
+        "envelope_risi_skill_done.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == "skill_done" && it.skillId == RisiSkillIds.ALARM && it.entryId != null && it.action == "alarm_set" && it.via == "allowed")
+                require(it.undo!!.kind == RisiUndo.UNDO_MANUAL && it.undo!!.hint == "Open Clock to remove it" && it.undoToken == null)
+            }
+        },
+        "envelope_risi_skill_needed.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == "skill_needed" && it.skillId == RisiSkillIds.ALARM && it.reason == "off" && it.wasOn == true && it.buttons == listOf("open_skills")) } },
+        "error_skill_unavailable.json" to { s -> apiError(s, RisiSkillsErrors.SKILL_UNAVAILABLE) },
+        "error_undo_unavailable.json" to { s -> apiError(s, RisiSkillsErrors.UNDO_UNAVAILABLE) },
+        "event_risi_tool_call_calendar_remove.json" to { s -> ProtocolJson.decodeFromString<Event>(s).risiToolCall()!!.also { require(it.tool == RisiToolCall.TOOL_CALENDAR_REMOVE && it.calendarRemoveArgs()!!.targetWriteId.isNotEmpty() && it.undoEntryId != null && it.conversationId == null && it.writeId == null) } },
+        "event_risi_tool_call_cancel_scheduled.json" to { s -> ProtocolJson.decodeFromString<Event>(s).risiToolCall()!!.also { require(it.tool == RisiToolCall.TOOL_CANCEL_SCHEDULED && it.cancelScheduledArgs()!!.writeId == null && it.undoEntryId != null && it.requestId == null) } },
+        "event_risi_tool_call_schedule_message.json" to { s -> ProtocolJson.decodeFromString<Event>(s).risiToolCall()!!.also { val a = it.scheduleMessageArgs()!!; require(it.tool == RisiToolCall.TOOL_SCHEDULE_MESSAGE && a.text == "Good morning" && a.repeat == "daily" && a.conversationId.startsWith("dm:") && it.writeId == a.writeId && it.undoEntryId == null) } },
+        "event_risi_tool_call_set_alarm.json" to { s -> ProtocolJson.decodeFromString<Event>(s).risiToolCall()!!.also { val a = it.setAlarmArgs()!!; require(it.tool == RisiToolCall.TOOL_SET_ALARM && a.time == "05:30" && a.label == "Wake up" && a.days == null) } },
+        "risi_skill_activity_reply.json" to { s -> ProtocolJson.decodeFromString<RisiActivityReply>(s).also { require(it.entries.size == 2 && it.entries[0].undo.kind == RisiUndo.UNDO_CLIENT && it.entries[0].undoToken != null && !it.hasMore) } },
+        "risi_skill_activity_scheduled_reply.json" to { s -> ProtocolJson.decodeFromString<RisiActivityReply>(s).also { require(it.entries[0].targetConversationId!!.startsWith("dm:") && it.entries[0].undo.until == null && it.entries[1].undo.kind == RisiUndo.UNDO_MANUAL) } },
+        "risi_skill_undo.json" to { s -> ProtocolJson.decodeFromString<RisiUndoRequest>(s).also { require(it.undoToken.startsWith("u1.")) } },
+        "risi_skill_undo_reply.json" to { s -> ProtocolJson.decodeFromString<RisiUndoReply>(s).also { require(it.entry.undo.state == RisiUndo.PENDING && it.entry.undoToken == null) } },
+        "risi_skills_patch.json" to { s -> ProtocolJson.decodeFromString<RisiSkillsPatch>(s).also { require(it.changes.size == 2 && it.changes[1].state == null && it.changes[1].clientPermission == ClientPermission.DENIED && !it.cancelPending) } },
+        "risi_skills_patch_reply.json" to { s -> ProtocolJson.decodeFromString<RisiSkillsReply>(s).also { require(it.skills.map { k -> k.id } == listOf("calendar", "scheduled_messages") && it.skills[0].state == RisiSkillStates.ASK) } },
+        "risi_skills_reply.json" to { s ->
+            ProtocolJson.decodeFromString<RisiSkillsReply>(s).also {
+                require(it.skills.map { k -> k.id } == listOf("alarm", "reminders", "calendar", "scheduled_messages", "email"))
+                require(it.skills[0].state == RisiSkillStates.ALLOWED && it.skills[0].client!!.permission == ClientPermission.NOT_NEEDED && !it.skills[4].available && it.skills[4].client == null)
+                require(it.skills[3].modes == listOf("ask") && it.skills[2].permissions.all { p -> p.runtime })
+            }
+        },
+        "risi_tool_result_calendar_remove.json" to { s -> ProtocolJson.decodeFromString<RisiToolResult>(s).also { require(ProtocolJson.decodeFromJsonElement(CalendarRemoveResult.serializer(), it.result!!).removed) } },
+        "risi_tool_result_cancel_scheduled.json" to { s -> ProtocolJson.decodeFromString<RisiToolResult>(s).also { require(ProtocolJson.decodeFromJsonElement(CancelScheduledResult.serializer(), it.result!!).cancelled) } },
+        "risi_tool_result_schedule_message.json" to { s -> ProtocolJson.decodeFromString<RisiToolResult>(s).also { require(ProtocolJson.decodeFromJsonElement(ScheduleMessageResult.serializer(), it.result!!).scheduleId.isNotEmpty()) } },
+        "risi_tool_result_set_alarm.json" to { s -> ProtocolJson.decodeFromString<RisiToolResult>(s).also { require(ProtocolJson.decodeFromJsonElement(SetAlarmResult.serializer(), it.result!!).alarmSet) } },
         // v1.25 (§25 Risi with tools): typed models in net/Protocol125.kt (and RisiMeta's optional fields).
         "auth_config_v125.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiToolsOn && it.tabsOn) } },
         "chat_reply_risi.json" to { s -> ProtocolJson.decodeFromString<ChatReply>(s).also { require(it.chat.kind == CHAT_KIND_RISI && it.chat.privateSide == null && !it.chat.canToggle && it.chat.official.conversationId == it.chat.chatId) } },

@@ -114,14 +114,31 @@ data class RisiToolCall(
     @SerialName("tool_call_id") val toolCallId: String,
     @SerialName("turn_id") val turnId: String? = null,
     @SerialName("request_id") val requestId: String? = null,
-    @SerialName("conversation_id") val conversationId: String,
+    /** Null for a §26.4 undo call. */
+    @SerialName("conversation_id") val conversationId: String? = null,
     @SerialName("device_id") val deviceId: String? = null,
     val tool: String,
     val args: JsonObject = JsonObject(emptyMap()),
     @SerialName("expires_at") val expiresAt: String,
     @SerialName("to_devices") val toDevices: List<String> = emptyList(),
     @SerialName("server_ts") val serverTs: String? = null,
+    /** §26.4 (v1.26): set on an undo call (no `write_id`, no confirm card). */
+    @SerialName("undo_entry_id") val undoEntryId: String? = null,
 ) {
+    fun setAlarmArgs(): SetAlarmArgs? = argsAs(SetAlarmArgs.serializer())
+
+    fun scheduleMessageArgs(): ScheduleMessageArgs? = argsAs(ScheduleMessageArgs.serializer())
+
+    fun cancelScheduledArgs(): CancelScheduledArgs? = argsAs(CancelScheduledArgs.serializer())
+
+    fun calendarRemoveArgs(): CalendarRemoveArgs? = argsAs(CalendarRemoveArgs.serializer())
+
+    /** The call's `write_id` (null for reads and undo calls). */
+    val writeId: String? get() = (args["write_id"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+    private fun <T> argsAs(ser: KSerializer<T>): T? =
+        runCatching { ProtocolJson.decodeFromJsonElement(ser, args) }.getOrNull()
+
     fun calendarCheckArgs(): CalendarCheckArgs? =
         runCatching { ProtocolJson.decodeFromJsonElement(CalendarCheckArgs.serializer(), args) }.getOrNull()
 
@@ -131,6 +148,12 @@ data class RisiToolCall(
     companion object {
         const val TOOL_CALENDAR_CHECK = "calendar_check"
         const val TOOL_CALENDAR_ADD = "calendar_add"
+
+        // v1.26 §26.6
+        const val TOOL_SET_ALARM = "set_alarm"
+        const val TOOL_SCHEDULE_MESSAGE = "schedule_message"
+        const val TOOL_CANCEL_SCHEDULED = "cancel_scheduled"
+        const val TOOL_CALENDAR_REMOVE = "calendar_remove"
     }
 }
 

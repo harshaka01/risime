@@ -330,6 +330,21 @@ class ApiClient(
     suspend fun postRisiToolResult(toolCallId: String, body: RisiToolResult, deviceId: String): ApiResult<Unit> =
         call("POST", "risi/tool_calls/$toolCallId/result", body, headers = mapOf(DEVICE_HEADER to deviceId))
 
+    // ---- §26 (v1.26) Risi skills ----
+    /** `GET /risi/skills` (with `X-Device-Id`: `client` is this device's reported permission). */
+    suspend fun risiSkills(): ApiResult<RisiSkillsReply> = call<Unit, RisiSkillsReply>("GET", "risi/skills", null, headers = deviceHeaders())
+
+    /** `PATCH /risi/skills` (a `risi_skills` device only, else `403 invalid_device`). */
+    suspend fun patchRisiSkills(body: RisiSkillsPatch): ApiResult<RisiSkillsReply> = call("PATCH", "risi/skills", body, headers = deviceHeaders())
+
+    suspend fun risiSkillActivity(skillId: String, before: String? = null): ApiResult<RisiActivityReply> =
+        call<Unit, RisiActivityReply>("GET", "risi/skills/$skillId/activity" + (before?.let { "?before=$it" } ?: ""), null, headers = deviceHeaders())
+
+    suspend fun clearRisiSkillActivity(skillId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/skills/$skillId/activity", null, headers = deviceHeaders())
+
+    suspend fun undoRisiSkillEntry(skillId: String, entryId: String, token: String): ApiResult<RisiUndoReply> =
+        call("POST", "risi/skills/$skillId/activity/$entryId/undo", RisiUndoRequest(token), headers = deviceHeaders())
+
     suspend fun deleteRisiFact(factId: String): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/facts/$factId", null)
 
     suspend fun deleteRisiFacts(): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/facts", null)

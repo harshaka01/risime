@@ -9,7 +9,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Wire models for contract/v1/PROTOCOL.md. Field names match the contract exactly. */
 
 /** The PROTOCOL.md version this client implements (shown in Settings → About; checked by a test). */
-const val PROTOCOL_VERSION = "1.25"
+const val PROTOCOL_VERSION = "1.26"
 
 val ProtocolJson: Json = Json {
     ignoreUnknownKeys = true // §0: clients must ignore unknown fields
@@ -351,11 +351,16 @@ data class AuthConfig(
     val tabs: String? = null,
     /** §25.8 (v1.25): "on" | "off"; absent = off. */
     @SerialName("risi_tools") val risiTools: String? = null,
+    /** §26.9 (v1.26): "on" | "off"; absent = off. */
+    @SerialName("risi_skills") val risiSkills: String? = null,
 ) {
     val tabsOn: Boolean get() = tabs == "on"
 
     /** §25.8: the server runs Risi's tool loop; only then does the app advertise `risi_tools`. */
     val risiToolsOn: Boolean get() = risiTools == "on"
+
+    /** §26.9: skill gates on the server; only then does the app advertise `risi_skills` (with `risi_tools`). */
+    val risiSkillsOn: Boolean get() = risiSkills == "on"
     val phoneVerificationRequired: Boolean get() = phoneVerification == PHONE_REQUIRED
     val signupOpen: Boolean get() = signup == SIGNUP_OPEN
 
@@ -639,6 +644,9 @@ data class DeviceMls(
 
         /** v1.25 §25.8: Risi's tools and the Risi chat, only while `/auth/config` says `risi_tools: on` (with `groups` and `tabs`). */
         const val CAP_RISI_TOOLS = CAPABILITY_RISI_TOOLS
+
+        /** v1.26 §26.9: Risi skills, only with `risi_tools` and while `/auth/config` says `risi_skills: on`. */
+        const val CAP_RISI_SKILLS = CAPABILITY_RISI_SKILLS
     }
 }
 

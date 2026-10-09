@@ -137,6 +137,22 @@ data class RisiMeta(
     // v1.25 draft
     val language: String? = null,
     @SerialName("target_conversation_id") val targetConversationId: String? = null,
+    // v1.26 §26.5: confirm `skill_id`/`args`; skill_done; skill_needed
+    @SerialName("skill_id") val skillId: String? = null,
+    /** `confirm`: the client tool's exact args without `write_id` (compared exactly, §26.5). */
+    val args: JsonObject? = null,
+    @SerialName("entry_id") val entryId: String? = null,
+    val action: String? = null,
+    val via: String? = null,
+    val undo: RisiUndo? = null,
+    @SerialName("undo_token") val undoToken: String? = null,
+    val reason: String? = null,
+    @SerialName("was_on") val wasOn: Boolean? = null,
+    // v1.26 §26.7 calendar_offer
+    val start: String? = null,
+    val end: String? = null,
+    @SerialName("all_day") val allDay: Boolean? = null,
+    @SerialName("reminder_before_min") val reminderBeforeMin: Int? = null,
 ) {
     /** `confirm.when` (null if absent or not an object). */
     fun confirmWhen(): RisiWhen? =
@@ -189,6 +205,10 @@ data class RisiActionEnvelope(
     val target: String,
     val action: String,
     val edit: JsonObject? = null,
+    /** v1.26 §26.7: `{"reminder": bool}` on a `calendar_accept`, else null. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val options: JsonObject? = null,
 )
 
 /** `POST /risi/feedback` body. */
