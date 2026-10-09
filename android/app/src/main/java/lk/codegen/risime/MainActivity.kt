@@ -33,11 +33,16 @@ class MainActivity : FragmentActivity() {
                 androidx.compose.runtime.CompositionLocalProvider(lk.codegen.risime.ui.common.LocalAvatars provides avatars) { RisiMeRoot(container, authUi) }
             }
         }
-        // Decision 064: no Recents thumbnail of the chats while the fingerprint lock is on.
+        // Decision 064: no Recents thumbnail of the chats while the fingerprint lock is on. FLAG_SECURE
+        // only on the app-lock screen, the Locked chats folder and an open locked chat (never on normal
+        // screens: an "Entire screen" share shows RisiMe to the viewer, as WhatsApp does).
         lifecycleScope.launch {
-            // §23.5: and FLAG_SECURE while a screen share runs (other chats never reach the viewer).
-            kotlinx.coroutines.flow.combine(container.appLock.settings, lk.codegen.risime.calls.ScreenSharing.flow) { s, sharing -> (s?.enabled == true) to sharing }
-                .collect { (lock, sharing) -> lk.codegen.risime.ui.lock.LockPrivacy.apply(this@MainActivity, lock, sharing = sharing) }
+            kotlinx.coroutines.flow.combine(
+                container.appLock.settings,
+                lk.codegen.risime.ui.lock.SecureScreens.held,
+                lk.codegen.risime.calls.ScreenSharing.flow,
+            ) { s, held, sharing -> Triple(s?.enabled == true, held.isNotEmpty(), sharing) }
+                .collect { (lock, secure, sharing) -> lk.codegen.risime.ui.lock.LockPrivacy.apply(this@MainActivity, lock, secure, sharing) }
         }
         // The installer's confirmation (when Android doesn't allow a silent self-update).
         lifecycleScope.launch {

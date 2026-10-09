@@ -84,6 +84,8 @@ fun AppLockScreen(
     showPin: Boolean = false,
     onUsePin: () -> Unit = {},
 ) {
+    // FLAG_SECURE here only (and on the Locked chats folder and an open locked chat): never in a share or screenshot.
+    SecureWindow(SecureScreen.APP_LOCK)
     if (autoPrompt) {
         LifecycleResumeEffect(Unit) {
             onAutoPrompt()

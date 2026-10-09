@@ -226,25 +226,26 @@ class ChatTabsControllerTest {
         assertFalse(other.bar.await { !it.showOfficial }.canStartOfficial)
     }
 
-    @Test fun theIntroScreenHasTheChatMenuWithLockChat() {
+    @Test fun theIntroScreenHasNoLockChatMenuItsTitleOpensChatInfo() {
         val c = controller(dm, initial = Tab.OFFICIAL)
-        var locks = 0
+        var infos = 0
         rule.setContent {
             RisiMeTheme {
                 TabbedChatContent(
                     c, "Kumu", onBack = {},
                     privateScreen = { Text("private screen") },
                     officialScreen = { _, _, _ -> Text("official") },
-                    lock = lk.codegen.risime.ui.lock.ChatLockControl(false) { locks++ },
+                    onInfo = { infos++ },
                 )
             }
         }
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("start_official").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText(START_OFFICIAL_LABEL).assertIsDisplayed()
         rule.onNodeWithText(PRIVATE_TAB_LABEL).assertIsDisplayed()
-        rule.onNode(androidx.compose.ui.test.hasContentDescription("More options")).performClick()
-        rule.onNodeWithText(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL).performClick()
-        assertEquals(1, locks)
+        rule.onNode(androidx.compose.ui.test.hasContentDescription("More options")).assertDoesNotExist()
+        rule.onNodeWithText(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL).assertDoesNotExist()
+        rule.onNode(androidx.compose.ui.test.hasText("Kumu") and androidx.compose.ui.test.hasClickAction()).performClick()
+        assertEquals(1, infos)
     }
 
     @Test fun theLastAdvertisementShowsTabsAtOnceUntilARegistrationAnswers() = runBlocking {

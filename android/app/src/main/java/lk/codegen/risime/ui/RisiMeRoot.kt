@@ -246,8 +246,9 @@ private fun MainNav(c: AppContainer, meId: String) {
                 )
                 return@composable
             }
-            val lockControl = chatLockControl(c, nav, conv, isLocked, gate)
             lk.codegen.risime.ui.lock.LockGateDialog(gate)
+            // A locked chat is FLAG_SECURE while open (normal chats never are: an entire-screen share shows them).
+            lk.codegen.risime.ui.lock.SecureWindow(lk.codegen.risime.ui.lock.SecureScreen.LOCKED_CHAT, on = isLocked)
             // §25.2 the Risi chat (MLS says chat_kind "risi"): one conversation, Official styling, no tabs or
             // toggle; its composer only asks Risi. Not shown at all on a device without risi_tools.
             if (lk.codegen.risime.data.tabs.isRisiChat(conv, tabRows)) {
@@ -261,7 +262,6 @@ private fun MainNav(c: AppContainer, meId: String) {
                     risiVm, meId,
                     onBack = { nav.popBackStack() },
                     onInfo = {},
-                    lock = lockControl,
                     tabBar = { lk.codegen.risime.ui.tabs.RisiChatStrip() },
                     titleOverride = lk.codegen.risime.data.tabs.RISI_CHAT_NAME,
                     risi = risiVm.risi,
@@ -273,7 +273,6 @@ private fun MainNav(c: AppContainer, meId: String) {
             val chatInfo = { nav.navigate("chat_info/${android.net.Uri.encode(conv)}") { launchSingleTop = true }; Unit }
             // §24.9: with tabs off (server switch or capability) this is exactly the v1.23 screen.
             lk.codegen.risime.ui.tabs.TabbedChat(
-                lock = lockControl,
                 onInfo = if (lk.codegen.risime.net.isGroupConversation(conv)) groupInfo else chatInfo,
                 tabsOn = tabsOn,
                 vm = {
@@ -286,12 +285,12 @@ private fun MainNav(c: AppContainer, meId: String) {
                     if (lk.codegen.risime.net.isGroupConversation(conv)) {
                         lk.codegen.risime.ui.group.GroupChatScreen(
                             viewModel(key = conv) { lk.codegen.risime.ui.group.GroupChatViewModel(c, meId, conv) }, meId,
-                            onBack = { nav.popBackStack() }, onInfo = groupInfo, lock = lockControl, tabBar = tabBar,
+                            onBack = { nav.popBackStack() }, onInfo = groupInfo, tabBar = tabBar,
                         )
                     } else {
                         lk.codegen.risime.net.dmPeer(conv, meId)?.let { peer ->
                             ChatScreen(
-                                viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() }, lock = lockControl, tabBar = tabBar,
+                                viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() }, tabBar = tabBar,
                                 // Chat info (WhatsApp): Lock chat, media; with tabs on also the Official switch (§24.4).
                                 onInfo = chatInfo,
                             )
@@ -309,7 +308,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                         onBack = { nav.popBackStack() },
                         // Chat info is the chat's (the Private group's); a 1:1 Official has no member management (§24.1 dm_chat).
                         onInfo = if (dmChat) chatInfo else groupInfo,
-                        lock = lockControl, tabBar = tabBar,
+                        tabBar = tabBar,
                         // A 1:1 Official: "Kumu · Risi", never "3 members" (its members are the two of you and Risi).
                         titleOverride = peerName,
                         titleSuffix = if (dmChat) lk.codegen.risime.ui.tabs.OFFICIAL_DM_TITLE_SUFFIX else null,
@@ -339,6 +338,8 @@ private fun MainNav(c: AppContainer, meId: String) {
             lk.codegen.risime.ui.lock.LockGateDialog(lockGate)
             val lockedIds by c.lockedChats.ids.collectAsState()
             val lock = chatLockControl(c, nav, conv, lockedIds?.contains(c.chatTabs.chatId(conv).lowercase()) == true, lockGate)
+            // A locked group's info (its media) is part of the open locked chat: FLAG_SECURE too.
+            lk.codegen.risime.ui.lock.SecureWindow(lk.codegen.risime.ui.lock.SecureScreen.LOCKED_CHAT, on = lock.locked)
             lk.codegen.risime.ui.group.GroupInfoScreen(
                 viewModel(key = "info:$conv") { lk.codegen.risime.ui.group.GroupInfoViewModel(c, meId, conv) },
                 onBack = { nav.popBackStack() },
@@ -388,6 +389,8 @@ private fun MainNav(c: AppContainer, meId: String) {
             lk.codegen.risime.ui.lock.LockGateDialog(lockGate)
             val lockedIds by c.lockedChats.ids.collectAsState()
             val lock = chatLockControl(c, nav, chat, lockedIds?.contains(chat.lowercase()) == true, lockGate)
+            // A locked chat's info (its media) is part of the open locked chat: FLAG_SECURE too.
+            lk.codegen.risime.ui.lock.SecureWindow(lk.codegen.risime.ui.lock.SecureScreen.LOCKED_CHAT, on = lock.locked)
             lk.codegen.risime.ui.tabs.DmChatInfoContent(
                 title, lk.codegen.risime.net.dmPeer(chat, meId),
                 encrypted = e2ee is lk.codegen.risime.data.mls.E2eeState.Encrypted,
@@ -452,7 +455,7 @@ private fun MainNav(c: AppContainer, meId: String) {
 
 /**
  * WhatsApp "Lock chat" / "Unlock chat" for chat [chat] (its Private id; both tabs lock together), from
- * chat info or a chat's ⋮: the fingerprint/PIN confirmation first ([gate]); locking returns to the
+ * chat info: the fingerprint/PIN confirmation first ([gate]); locking returns to the
  * chat list, where the chat has left for the Locked chats folder.
  */
 private fun chatLockControl(

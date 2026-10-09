@@ -542,17 +542,29 @@ fun callInfoLines(s: CallSnapshot, routes: CallRoutes, stats: DtlsStats?): List<
     stats?.localCandidateType?.let { l -> "Path" to (if (l == "relay" || stats.remoteCandidateType == "relay") "Relayed" else "Direct") },
 )
 
-/** §23.5 (Android ≤ 14), once per share before the system consent. */
+const val SHARE_DIALOG_TITLE = "Share your screen?"
+const val SHARE_DIALOG_TEXT = "Your whole screen, including notifications, will be visible."
+const val SHARE_DIALOG_DND_TEXT = "Turn on Do Not Disturb to hide notifications from other apps."
+const val SHARE_DIALOG_START = "Start"
+
+/** Android ≤ 14 has no system redaction of other apps' notifications during a projection (§23.5): the DND hint. */
+fun shareDialogShowsDnd(sdk: Int): Boolean = sdk <= 34
+
+/**
+ * Before every share (Harsha's report; WhatsApp's wording), then the system consent: RisiMe's own
+ * screens are visible in an "Entire screen" share (only the app lock, the Locked chats folder and a
+ * locked chat are hidden). [dnd] (Android ≤ 14): the Do Not Disturb hint and its button.
+ */
 @Composable
-fun ShareWarningDialog(onContinue: () -> Unit, onDnd: () -> Unit, onCancel: () -> Unit) {
+fun ShareConfirmDialog(dnd: Boolean, onStart: () -> Unit, onDnd: () -> Unit, onCancel: () -> Unit) {
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("Share your screen?") },
-        text = { Text("Notifications from other apps may be visible while you share. Turn on Do Not Disturb to hide them.") },
-        confirmButton = { TextButton(onClick = onContinue) { Text("Continue") } },
+        title = { Text(SHARE_DIALOG_TITLE) },
+        text = { Text(if (dnd) "$SHARE_DIALOG_TEXT $SHARE_DIALOG_DND_TEXT" else SHARE_DIALOG_TEXT) },
+        confirmButton = { TextButton(onClick = onStart) { Text(SHARE_DIALOG_START) } },
         dismissButton = {
             Row {
-                TextButton(onClick = onDnd) { Text("Do Not Disturb") }
+                if (dnd) TextButton(onClick = onDnd) { Text("Do Not Disturb") }
                 TextButton(onClick = onCancel) { Text("Cancel") }
             }
         },

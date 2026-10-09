@@ -6,10 +6,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * §23.5 privacy rules while this device shares its screen: RisiMe's own windows are `FLAG_SECURE`
- * (viewers see black: no mirror loop, other chats never leak) and its own message notifications
- * carry no sender or content and make no sound. Read by the activities and the notifier; set by
- * the call manager from the call state.
+ * §23.5 privacy rules while this device shares its screen: its own message notifications carry no
+ * sender or content and make no sound. RisiMe's normal screens are NOT FLAG_SECURE while sharing
+ * (Harsha's real-phone report: an "Entire screen" share showed black to the viewer while RisiMe was on
+ * screen; WhatsApp shows itself): only the app-lock screen, the Locked chats folder and an open locked
+ * chat are ([lk.codegen.risime.ui.lock.SecureScreens]). Before every share the call screen says "Your
+ * whole screen, including notifications, will be visible". Read by MainActivity and the notifier; set
+ * by the call manager from the call state.
  */
 object ScreenSharing {
     private val _flow = MutableStateFlow(false)
@@ -35,7 +38,4 @@ object ScreenSharing {
                 runCatching { refresh(now) }
             }
         }
-
-    /** `FLAG_SECURE` on RisiMe's own windows: while sharing (and, below API 33, while the app lock asks for it). */
-    fun secureWindow(sharing: Boolean, lockWants: Boolean): Boolean = sharing || lockWants
 }

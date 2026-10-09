@@ -111,7 +111,6 @@ fun GroupChatScreen(
     meId: String,
     onBack: () -> Unit,
     onInfo: () -> Unit,
-    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
     /** §24.9: the Private | Official tab bar, directly under the header (null: tabs off, the screen as before). */
     tabBar: (@Composable () -> Unit)? = null,
     /** §24.1: a 1:1 Official has no name: the peer's name is shown. */
@@ -223,7 +222,7 @@ fun GroupChatScreen(
                     }
                     lk.codegen.risime.ui.chat.E2eeHeaderLock(encrypted == true, onInfo)
                     lk.codegen.risime.ui.chat.ChatOverflowMenu(
-                        onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock,
+                        onClear = { clearAsk = false }, onDelete = { clearAsk = true },
                         extra = { close ->
                             risi?.takeIf { !risiChat }?.let { h -> lk.codegen.risime.ui.tabs.RisiMenuItems(h, enabled = !readOnly, close = close) }
                             // §26.6 "Scheduled messages" (never in the Risi chat: nothing is scheduled into it).

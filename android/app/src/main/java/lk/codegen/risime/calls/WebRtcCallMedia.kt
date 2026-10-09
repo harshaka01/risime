@@ -158,6 +158,15 @@ class WebRtcCallMedia(
     /** Is the current local camera the front one (the preview is mirrored)? */
     val frontCamera: Boolean get() = current?.front ?: true
 
+    @Volatile private var lastDebugLine: String? = null
+
+    /** Debug builds only: one log line (repeats of the same line are dropped); the device gate reads them. */
+    fun debugLine(line: String) {
+        if (!debug || line == lastDebugLine) return
+        lastDebugLine = line
+        Log.i("RisiMe", line)
+    }
+
     /** Debug overlay data (§19.9): the last video stats line. */
     @Volatile var lastVideoStats: String? = null
         private set
@@ -417,9 +426,26 @@ class WebRtcCallMedia(
         @Volatile private var screenOn = false
         private var rotation: android.content.ComponentCallbacks? = null
 
+        /**
+         * The whole display (system bars included) in its current orientation: the virtual display
+         * then has the screen's own aspect ratio, so nothing is squeezed or letterboxed at the sender.
+         * (`resources.displayMetrics` is the app's area, without the bars, on some versions.)
+         */
         private fun displaySize(): Pair<Int, Int> {
+            val wm = context.getSystemService(android.view.WindowManager::class.java)
+            val real = runCatching {
+                if (android.os.Build.VERSION.SDK_INT >= 30) {
+                    wm.maximumWindowMetrics.bounds.let { it.width() to it.height() }
+                } else {
+                    val m = android.util.DisplayMetrics()
+                    @Suppress("DEPRECATION")
+                    wm.defaultDisplay.getRealMetrics(m)
+                    m.widthPixels to m.heightPixels
+                }
+            }.getOrNull()?.takeIf { it.first > 0 && it.second > 0 }
             val m = context.resources.displayMetrics
-            return WebRtcConfig.screenSize(m.widthPixels, m.heightPixels)
+            val (w, h) = real ?: (m.widthPixels to m.heightPixels)
+            return WebRtcConfig.screenSize(w, h)
         }
 
         override fun startScreen(grant: Any, onStopped: () -> Unit): Boolean {

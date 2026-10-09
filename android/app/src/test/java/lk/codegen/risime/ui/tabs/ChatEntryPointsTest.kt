@@ -86,29 +86,26 @@ class ChatEntryPointsTest {
         assertEquals(1, toggles)
     }
 
-    @Test fun theChatsOverflowMenuHasLockAndUnlock() {
-        var locked by androidx.compose.runtime.mutableStateOf(false)
-        var toggles = 0
-        rule.setContent {
-            RisiMeTheme {
-                lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = {}, onDelete = {}, lock = ChatLockControl(locked) { toggles++ })
-            }
-        }
+    /** Harsha's report: the chat's ⋮ (Private and Official) has no Lock chat / Unlock chat; chat info and the long-press do. */
+    @Test fun theChatsOverflowMenuHasNoLockOrUnlock() {
+        var clears = 0
+        rule.setContent { RisiMeTheme { lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = { clears++ }, onDelete = {}) } }
         rule.onNodeWithContentDescription("More options").performClick()
-        rule.onNodeWithText(LOCK_CHAT_LABEL).performClick()
-        assertEquals(1, toggles)
-        locked = true
-        rule.onNodeWithContentDescription("More options").performClick()
-        rule.onNodeWithText(UNLOCK_CHAT_LABEL).assertIsDisplayed()
+        rule.onNodeWithText("Delete chat").assertIsDisplayed()
+        rule.onNodeWithText(LOCK_CHAT_LABEL).assertDoesNotExist()
+        rule.onNodeWithText(UNLOCK_CHAT_LABEL).assertDoesNotExist()
+        rule.onNodeWithText("Clear chat").performClick()
+        assertEquals(1, clears)
     }
 
-    @Test fun theIntroScreensMenuHasOnlyLockChat() {
-        var toggles = 0
-        rule.setContent { RisiMeTheme { lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = null, onDelete = null, lock = ChatLockControl(false) { toggles++ }) } }
-        rule.onNodeWithContentDescription("More options").performClick()
-        rule.onNodeWithText("Clear chat").assertDoesNotExist()
-        rule.onNodeWithText(LOCK_CHAT_LABEL).performClick()
-        assertEquals(1, toggles)
+    @Test fun noChatScreenPassesALockToItsMenu() {
+        // The ⋮ menu takes no lock any more; the chat screens and the intro screen don't carry one either.
+        val root = java.io.File("src/main/java/lk/codegen/risime/ui")
+        for (f in listOf("chat/ChatScreen.kt", "group/GroupScreens.kt", "tabs/ChatTabsUi.kt", "chat/DeleteUi.kt")) {
+            val src = java.io.File(root, f).readText()
+            assert(!src.contains("ChatLockControl")) { "$f still takes a ChatLockControl" }
+            assert(!src.contains("LOCK_CHAT_LABEL")) { "$f still shows Lock chat" }
+        }
     }
 
     @Test fun longPressSelectionBarOverflowHasLockChat() {

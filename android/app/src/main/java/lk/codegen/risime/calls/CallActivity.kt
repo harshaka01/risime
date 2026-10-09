@@ -62,7 +62,7 @@ class CallActivity : ComponentActivity() {
 
     // ---- §23 switching and screen sharing ----
 
-    /** "Call info" and the pre-consent notification warning (Android ≤ 14). */
+    /** "Call info" and the pre-share dialog ("Your whole screen, including notifications, will be visible"). */
     private var info by mutableStateOf(false)
     private var shareWarning by mutableStateOf(false)
 
@@ -97,11 +97,11 @@ class CallActivity : ComponentActivity() {
         calls.answerVideoRequest(accept, camera)
     }
 
-    /** Share: Stop while sharing; else (Android ≤ 14) the notifications warning once per share, then the system consent. */
+    /** Share: Stop while sharing; else "Your whole screen … will be visible" before every share, then the system consent. */
     private fun share() {
         val s = calls.state.value ?: return
         if (s.sharing) return calls.stopShare("button")
-        if (Build.VERSION.SDK_INT <= 34) shareWarning = true else launchConsent()
+        shareWarning = true
     }
 
     private fun launchConsent() {
@@ -131,12 +131,6 @@ class CallActivity : ComponentActivity() {
             override fun handleOnBackPressed() = leaveToChat()
         })
         handle(intent)
-        // §23.5: the call screen is FLAG_SECURE while this phone shares its screen (no mirror loop).
-        lifecycleScope.launch {
-            ScreenSharing.flow.collect { on ->
-                if (on) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-            }
-        }
         setContent {
             RisiMeTheme { androidx.compose.runtime.CompositionLocalProvider(lk.codegen.risime.ui.common.LocalAvatars provides avatars()) {
                 val s by calls.state.collectAsStateWithLifecycle()
@@ -210,8 +204,9 @@ class CallActivity : ComponentActivity() {
                             }) else null,
                         )
                         if (info) CallInfoDialog(snap, title, routes, wm?.lastStats, onDismiss = { info = false })
-                        if (shareWarning) ShareWarningDialog(
-                            onContinue = { shareWarning = false; launchConsent() },
+                        if (shareWarning) ShareConfirmDialog(
+                            dnd = shareDialogShowsDnd(Build.VERSION.SDK_INT),
+                            onStart = { shareWarning = false; launchConsent() },
                             onDnd = { shareWarning = false; runCatching { startActivity(Intent(android.provider.Settings.ACTION_ZEN_MODE_PRIORITY_SETTINGS)) }.onFailure { runCatching { startActivity(Intent(android.provider.Settings.ACTION_SETTINGS)) } } },
                             onCancel = { shareWarning = false },
                         )

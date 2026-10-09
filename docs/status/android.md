@@ -1,5 +1,42 @@
 # Android status — 0.2 nightlies
 
+## Real-phone fixes: chat lock entry points, entire-screen share, shared-screen fit — READY (JVM gate green; device: see below)
+- **Chat lock entry points:** "Lock chat"/"Unlock chat" removed from the ⋮ inside a chat (Private, Official and the
+  Official intro screen, whose header now has no ⋮ at all; its title still opens Chat info). Locking stays in **Chat info**
+  (the toggle) and the chat list's **long-press** selection bar; unlocking in Chat info and the folder's long-press.
+  `ChatOverflowMenu` and the chat screens no longer take a `ChatLockControl`.
+- **"Entire screen" share showed black while RisiMe was on screen** — cause: 4a7d35b made every RisiMe window
+  (MainActivity and CallActivity) `FLAG_SECURE` while sharing (§23.5 as written), so a whole-display projection showed
+  black wherever RisiMe was; a single-app share of another app was unaffected. Fix (WhatsApp's behaviour): normal screens
+  are never `FLAG_SECURE`, during a share or not; only the **app-lock screen**, the **Locked chats folder** and a **locked
+  chat while open** (incl. its Chat info / Group info) are, always (`SecureWindow(SecureScreen…)` → `SecureScreens` →
+  `LockPrivacy.plan(lock, sdk, secureScreen, sharing)`). CallActivity is never secure. Below API 33 the lock's Recents
+  fallback (FLAG_SECURE on every screen while the app lock is on) is dropped while this phone shares (the user chose to
+  show the screen). Before **every** share (all Android versions) the call screen asks "Share your screen? — Your whole
+  screen, including notifications, will be visible." **[Start] [Cancel]** (Android ≤ 14 also offers Do Not Disturb, as
+  before), then the system consent. Message notifications stay silent and content-free while sharing (unchanged).
+  **Decision 062 / PROTOCOL §23.5 need root's update:** the §23.5 line "RisiMe's own windows are `FLAG_SECURE` while
+  sharing" is replaced by the above (proposal `contract/proposals/2026-10-09-screen-share-flag-secure.md`).
+- **Shared screen enlarged/cropped on the viewer** — cause: the screen renderer (TextureViewRenderer, SCALE_ASPECT_FIT)
+  filled the stage, and the renderer crops each frame to its view's aspect ratio (EglRenderer's layout aspect = view
+  width/height), so the fit scaling type never letterboxed: any sender/viewer aspect difference was cropped and enlarged.
+  Fix: the view is laid out at exactly `ShareFit.fit(stage, frame)` — the frame's size after its rotation
+  (`onFrameResolutionChanged` width/height/rotation; a rotation on either phone re-fits), centred, letterboxed, never
+  cropped; pinch-zoom (≤ 5×) with pan clamped to the zoomed overflow, double tap resets. Camera video keeps its fill.
+  The sender's capture size is now the real display (`maximumWindowMetrics`, system bars included) instead of the app
+  area. Debug builds log `calls: share-fit frame=WxH rot=R view=WxH box=WxH at=X,Y`.
+- **Tests:** `ChatEntryPointsTest` (⋮ has no Lock/Unlock; no chat screen takes a lock), `ChatTabsControllerTest` (intro: no ⋮,
+  title → Chat info), `LockPrivacyTest` (secure screens on every API level, a share never secures a normal screen, pre-33
+  fallback dropped while sharing, CallActivity has no FLAG_SECURE), `SharePrivacyUiTest` (the pre-share dialog Start/Cancel/
+  DND, the Share button always asks, AppLockScreen registers/unregisters, stacked secure windows, exactly the three screens),
+  `ShareFitTest` (portrait sender on landscape viewer and vice versa, rotation, re-fit, never cropped, pan clamp).
+- **Device (root-delegated scripts):** `scripts/ui-entry-test` step 4 is now "the chat's ⋮ does NOT have Lock chat" → lock
+  via Chat info → PIN; step 5 checks the Locked chats folder's screenshot is black (FLAG_SECURE).
+  `scripts/call-device-test` call 14: the pre-share dialog (screenshot `25-share-predialog.png`), then A goes to its chat
+  list while sharing and B's screenshot of the video area must not be black and the renderer's laid-out size must match the
+  frame's aspect within 2 %, inside the stage, filling one side (`24-share-entire-screen-viewer.png`). redroid's
+  MediaProjection (PROJECT_MEDIA appop) is always the whole display: "single app" can't be chosen there.
+
 ## §26 Risi skills, A0 + A10 + A13 + A14 — READY (JVM gate green, UI ENTRY OK; risi_skills only while /auth/config says on)
 - **A0 (v1.26 wire, 866e542):** `net/Protocol126.kt` (skills REST, activity/undo, the four tools' args and results,
   error codes, `risi_skills`), `RisiMeta` gains confirm `skill_id`/`args`, `skill_done`, `skill_needed` and
@@ -117,7 +154,8 @@ stuck, no tab row. The gates tested logic, not entry points; `scripts/ui-entry-t
 - **Lock chat, all paths (1:1 and groups, tabs on and off):** cause: the A4 tabs Chat info replaced the old screen without a
   lock row (and with tabs off a 1:1 had only a dialog); the Official intro screen's header had no ⋮; the long-press was a dialog,
   not WhatsApp's selection bar. Fix: Chat info (1:1: always the full screen now; group info too) has a **Lock chat** switch under
-  the Official section (`chatLockItems`); the chat's ⋮ (Private, Official, and the intro screen) has Lock chat / Unlock chat;
+  the Official section (`chatLockItems`); ~~the chat's ⋮ (Private, Official, and the intro screen) has Lock chat / Unlock chat~~
+  (removed after Harsha's real-phone report: Chat info and the long-press only);
   long-press → selection bar (back, "1", Delete, ⋮ → Lock chat / Clear chat). Locking returns to the chat list.
 - **Prompt on `LockPrompter`:** the chat lock made a new BiometricPrompt per tap (`BiometricChatLockAuth`): authenticate() dropped
   after onSaveInstanceState left the gate busy for ever (the nightly.35 pattern). Now `PrompterChatLockAuth` (AuthUi.chatLock,
@@ -169,7 +207,8 @@ stuck, no tab row. The gates tested logic, not entry points; `scripts/ui-entry-t
 - **Screen sharing (§23.5):** system consent on every share (Android ≤ 14: the notifications/DND warning first); the
   call service is restarted with `phoneCall|microphone|mediaProjection` **before** the projection starts
   (`FOREGROUND_SERVICE_MEDIA_PROJECTION`); one notification ("Sharing your screen" + Stop sharing); stops on Stop,
-  `onStop`, SCREEN_OFF, `voice`, call end; RisiMe's own windows FLAG_SECURE while sharing (MainActivity + CallActivity);
+  `onStop`, SCREEN_OFF, `voice`, call end; ~~RisiMe's own windows FLAG_SECURE while sharing~~ (replaced: only the app lock,
+  the Locked chats folder and an open locked chat are FLAG_SECURE; "Your whole screen … will be visible" before every share);
   message notifications silent and content-free while sharing. MediaProjection wiring = our call service (not
   LiveKit's ScreenCaptureService) — to record as an android decision (docs/decisions is root's).
 - **Routing (§23.7):** to video → speaker (unless a headset); back to voice → earpiece only if the speaker came from
@@ -384,7 +423,7 @@ stuck, no tab row. The gates tested logic, not entry points; `scripts/ui-entry-t
   Calls tab, the notification actions; with the lock on and "Show content" off check no name shows.
 
 ## Locked chats (WhatsApp "Lock chat") — READY (device gate: see below; real phone to confirm the prompts)
-- **Lock:** chat list long-press → **Lock chat**, or the chat's ⋮ menu → Lock chat / Unlock chat (1:1 and groups).
+- **Lock:** chat list long-press → **Lock chat**, or Chat info's **Lock chat** toggle (1:1 and groups; no longer in the chat's ⋮).
   Confirmation first (`ui/lock/LockedChatsAuth.kt`): `BIOMETRIC_STRONG | DEVICE_CREDENTIAL` on API 30+ (a phone with no
   fingerprint uses its PIN/pattern; `canAuthenticate` of that combination decides); none enrolled → "Set a screen lock
   first". Android 8–10 can't combine them in one prompt, so there only a strong biometric works (same limit as WhatsApp's).
@@ -431,8 +470,9 @@ stuck, no tab row. The gates tested logic, not entry points; `scripts/ui-entry-t
 - "Show content" off holds before the lock settings load (a push-started process reads them first; unreadable in
   3 s → hidden). The lock turns itself off only for NONE_ENROLLED / NO_HARDWARE; a busy sensor keeps it on and
   shows "Fingerprint unavailable — try again" (lock and migration screens; the old vault is kept).
-- Lock on: no Recents thumbnail (`setRecentsScreenshotEnabled(false)` on 33+, FLAG_SECURE below) on MainActivity
-  only, never CallActivity; undone when the lock is off.
+- Lock on: no Recents thumbnail (`setRecentsScreenshotEnabled(false)` on 33+, FLAG_SECURE below — not while sharing) on
+  MainActivity only, never CallActivity; undone when the lock is off. The app-lock screen, the Locked chats folder and an
+  open locked chat are always FLAG_SECURE.
 - Calls: `refreshService()` decides and stops under `serviceLock` (wake-ups counted), so no stop lands between a
   push's start and its `startForeground`. `CallPushTest.theStartUpCleanup…` now asserts ordering (10/10 green).
 - Way out of a vault that stays Transient: after ~60 s in one process, or on the 3rd process start in a row

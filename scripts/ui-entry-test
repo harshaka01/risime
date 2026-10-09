@@ -14,8 +14,10 @@
 #  2. A's chat: the "🔒 Private" | "● Official" row under the header; the Official tab's "Start Official".
 #  3. Chat info (tap the name): "Messages are end-to-end encrypted" within 30 s (never stuck on
 #     "Checking encryption…"), and the "Lock chat" toggle.
-#  4. The chat's ⋮ → "Lock chat" → the system PIN prompt (`locksettings set-pin`) → the chat leaves the list.
-#  5. Pull down on the chat list → the "Locked chats" row → PIN → the folder holds the chat → unlock it.
+#  4. The chat's ⋮ does NOT have "Lock chat" (Harsha's report: only Chat info and the long-press lock);
+#     Chat info's "Lock chat" toggle → the system PIN prompt (`locksettings set-pin`) → the chat leaves the list.
+#  5. Pull down on the chat list → the "Locked chats" row → PIN → the folder holds the chat (its window
+#     is FLAG_SECURE: the screenshot is black) → unlock it.
 #  6. Long-press the chat → the selection bar's ⋮ → "Lock chat".
 #  7. Chat list ⋮ → "Chat lock settings" → PIN → "Hide locked chats" and "Secret code".
 #  8. Settings → Privacy → "What Risi knows about me" opens without an error.
@@ -358,16 +360,22 @@ shot "03-chat-info"
 pass "chat info: 'Lock chat' under the Official section"
 A shell input keyevent KEYCODE_BACK; sleep 1
 
-# ---------------------------------------------------------------- 4. the chat's ⋮ → Lock chat → PIN
+# ---------------------------------------------------------------- 4. the chat's ⋮ has no Lock chat; lock via Chat info → PIN
 A shell locksettings set-pin "$PIN" >/dev/null || fail "locksettings set-pin"
 wait_for 'text="Encrypted message"' 10 || fail "not back in the chat"
 tap "More options" || fail "the chat's ⋮"
-wait_for 'text="Lock chat"' 10 || fail "the chat's ⋮ has no 'Lock chat'"
-shot "04-chat-menu-lock"
-pass "the chat's ⋮ has 'Lock chat'"
-mark_prompts; tap "Lock chat" || fail "tap Lock chat"
+wait_for 'text="Delete chat"' 10 || fail "the chat's ⋮ didn't open (no 'Delete chat')"
+has 'text="Lock chat"' && fail "the chat's ⋮ still has 'Lock chat' (only Chat info and the long-press may)"
+has 'text="Unlock chat"' && fail "the chat's ⋮ has 'Unlock chat'"
+shot "04-chat-menu-no-lock"
+pass "the chat's ⋮ does NOT have 'Lock chat'"
+A shell input keyevent KEYCODE_BACK; sleep 1
+tap "ZZ UI B" || fail "tap the chat's name (chat info) to lock"
+wait_for 'text="Chat info"' 15 || fail "the name didn't open Chat info"
+wait_for 'text="Lock chat"' 10 || fail "chat info: no 'Lock chat' toggle"
+mark_prompts; tap "Lock chat" || fail "tap Chat info's Lock chat"
 # (No screenshot of the PIN prompt itself: it is a secure window, screencap shows the screen behind it.)
-confirm_pin "Lock chat (chat ⋮)"
+confirm_pin "Lock chat (Chat info)"
 wait_list 15 || fail "after locking: not back on the chat list"
 wait_gone 'text="ZZ UI B"' 15 || fail "the locked chat is still on the chat list"
 shot "06-chat-locked"
@@ -386,8 +394,19 @@ pass "pull-down shows the 'Locked chats' row"
 mark_prompts; tap "Locked chats" || fail "tap Locked chats"
 confirm_pin "Locked chats folder"
 wait_for 'text="ZZ UI B"' 15 || fail "the Locked chats folder doesn't hold the chat"
-shot "08-locked-folder"
-pass "PIN → the Locked chats folder holds the chat"
+# The folder is FLAG_SECURE (black in screenshots, recordings and screen shares); uiautomator still reads it.
+A exec-out screencap -p > "$WORK/folder.png" 2>/dev/null || fail "screencap of the folder"
+lum="$(python3 -I - "$WORK/folder.png" <<'PY'
+import sys
+from PIL import Image, ImageStat
+im = Image.open(sys.argv[1]).convert("L")
+w, h = im.size
+# The app's area (the status bar is drawn by the system, not by the secure window).
+print(int(ImageStat.Stat(im.crop((0, h // 10, w, h * 9 // 10))).mean[0]))
+PY
+)"
+[ "${lum:-255}" -le 16 ] || fail "the Locked chats folder is not FLAG_SECURE (screenshot mean luminance $lum, want black)"
+pass "PIN → the Locked chats folder holds the chat; its window is secure (screenshot luminance $lum)"
 long_press "ZZ UI B" || fail "long-press in the folder"
 wait_for 'text="Unlock chat"' 10 || fail "the folder's long-press has no 'Unlock chat'"
 tap "Unlock chat" || fail "tap Unlock chat"

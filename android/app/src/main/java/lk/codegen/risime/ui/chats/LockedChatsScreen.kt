@@ -122,6 +122,8 @@ fun LockedChatsScreen(
     onSettings: () -> Unit,
     onBack: () -> Unit,
 ) {
+    // FLAG_SECURE while the folder is on screen (black in a screen share, a screenshot, Recents).
+    lk.codegen.risime.ui.lock.SecureWindow(lk.codegen.risime.ui.lock.SecureScreen.LOCKED_CHATS_FOLDER)
     val rows by vm.lockedRows.collectAsStateWithLifecycle()
     var menu by remember { mutableStateOf(false) }
     var unlockFor by remember { mutableStateOf<ChatRow?>(null) }

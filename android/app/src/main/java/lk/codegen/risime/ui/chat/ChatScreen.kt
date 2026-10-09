@@ -70,7 +70,6 @@ import lk.codegen.risime.ui.theme.Spacing
 fun ChatScreen(
     vm: ChatViewModel,
     onBack: () -> Unit,
-    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
     /** §24.9: the Private | Official tab bar, directly under the header (null: tabs off, the screen as before). */
     tabBar: (@Composable () -> Unit)? = null,
     /** The chat info screen (Lock chat; tabs on: the Official switch); null: the info dialog (tests). */
@@ -161,7 +160,7 @@ fun ChatScreen(
                     )
                     E2eeHeaderLock(encrypted) { if (onInfo != null) onInfo() else showInfo = true }
                     ChatOverflowMenu(
-                        onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock,
+                        onClear = { clearAsk = false }, onDelete = { clearAsk = true },
                         extra = if (vm.scheduledMenu() || scheduledHere.isNotEmpty()) ({ close ->
                             androidx.compose.material3.DropdownMenuItem(text = { Text(SCHEDULED_MESSAGES_TITLE) }, onClick = { close(); scheduledSheet = true })
                         }) else null,

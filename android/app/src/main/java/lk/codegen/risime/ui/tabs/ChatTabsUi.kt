@@ -194,14 +194,13 @@ fun TabbedChat(
     officialScreen: @Composable (conversationId: String, readOnly: Boolean, tabBar: @Composable () -> Unit) -> Unit,
     /** §24.9 search in the tab on screen (its conversation, its tab). */
     onSearch: ((conversationId: String, tab: Tab) -> Unit)? = null,
-    /** The intro screen's header: ⋮ → Lock chat / Unlock chat, and its title opens chat info. */
-    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
+    /** The intro screen's title opens chat info (Lock chat is there, not in a ⋮). */
     onInfo: (() -> Unit)? = null,
 ) {
     if (!tabsOn) return privateScreen(null)
     val model = vm()
     val title by model.title.collectAsStateWithLifecycle()
-    TabbedChatContent(model.controller, title, onBack, privateScreen, officialScreen, onSearch, lock, onInfo)
+    TabbedChatContent(model.controller, title, onBack, privateScreen, officialScreen, onSearch, onInfo)
 }
 
 @Composable
@@ -212,7 +211,6 @@ fun TabbedChatContent(
     privateScreen: @Composable (tabBar: (@Composable () -> Unit)?) -> Unit,
     officialScreen: @Composable (conversationId: String, readOnly: Boolean, tabBar: @Composable () -> Unit) -> Unit,
     onSearch: ((conversationId: String, tab: Tab) -> Unit)? = null,
-    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
     onInfo: (() -> Unit)? = null,
 ) {
     val content by controller.content.collectAsStateWithLifecycle()
@@ -247,7 +245,6 @@ fun TabbedChatContent(
                 RisiTopBar(
                     title = title, onBack = onBack,
                     onTitleClick = onInfo, titleClickLabel = "Chat info",
-                    actions = { if (lock != null) lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = null, onDelete = null, lock = lock) },
                 )
             },
             contentWindowInsets = WindowInsets(0),

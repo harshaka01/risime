@@ -26,7 +26,12 @@
 #     the caller), audio both ways, the speaker; "Switch to voice call" → no new frames on either side,
 #     the voice UI, audio; A shares the screen (MediaProjection consent through the PROJECT_MEDIA appop
 #     or the system dialog) → B "Watch" → "… is sharing their screen" and frames on B, src=screen on A,
-#     B's texture renderer drawing them (debug stats `view=… rendered=…`); Stop → the label goes; A's
+#     B's texture renderer drawing them (debug stats `view=… rendered=…`); A's pre-share dialog ("Your whole
+#     screen, including notifications, will be visible", screenshot 25); A leaves for its chat list during
+#     the share (redroid's projection is the whole display: no "single app" choice) → B's screenshot of the
+#     video area is not black (RisiMe's normal windows are not FLAG_SECURE) and the shared frame is shown
+#     at the sender's aspect ratio within 2 %, letterboxed, never cropped (B's `calls: share-fit` debug
+#     line; screenshot 24); back on the call screen, Stop → the label goes; A's
 #     camera on → B's camera renderer draws it; back to voice from B's More; hang up → "Video call · m:ss".
 #     CALLTEST_SWITCH_ONLY=1 runs only call 14 (iteration). Debug builds keep the call controls on
 #     screen for uiautomator (files/debug_keep_call_controls; the auto-hide is unit-tested).
@@ -709,9 +714,27 @@ frames_still() {
   [ "${d2:-0}" = "${d1:-0}" ] || fail "$1: $2 still decodes video in voice mode (decoded $d1→$d2)"
   echo "    [$2] decoded stays at ${d2:-0}"
 }
-# A's share: the Android ≤ 14 notifications warning, then the system consent (skipped by the appop).
+SHOTS="$REPO/docs/status/screens"; mkdir -p "$SHOTS"
+# shot <name> [png]: the current device's screen (or a saved png), downscaled, to docs/status/screens/<name>.png.
+shot() {
+  local src="${2:-$WORK/shot.png}"
+  [ -n "${2:-}" ] || A exec-out screencap -p > "$src" 2>/dev/null || return 0
+  python3 -I - "$src" "$SHOTS/$1.png" <<'PY' || cp "$src" "$SHOTS/$1.png"
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1]).convert("RGB")
+w, h = im.size
+im = im.resize((360, max(1, h * 360 // w)), Image.LANCZOS)
+im.quantize(colors=96, method=Image.Quantize.MEDIANCUT).save(sys.argv[2], optimize=True)
+PY
+}
+# A's share: "Your whole screen, including notifications, will be visible" [Start] [Cancel] before
+# every share, then the system consent (skipped by the appop).
 consent() {
-  wait_for "Share your screen?" 10 && { tap "Continue" || fail "$1: no Continue on the share warning"; }
+  wait_for "Your whole screen, including notifications, will be visible" 10 || fail "$1: no pre-share dialog (\"Your whole screen, including notifications, will be visible\")"
+  has 'text="Cancel"' || fail "$1: the pre-share dialog has no Cancel"
+  shot "25-share-predialog"
+  tap "Start" || fail "$1: no Start on the pre-share dialog"
   # The PROJECT_MEDIA appop grants at once; otherwise the system dialog is in front: "Start now".
   local i; for i in $(seq 1 8); do
     sleep 1
@@ -719,6 +742,47 @@ consent() {
     tap "Start now" || tap "START NOW" || true
   done
   return 0
+}
+# share_visible <label>: B's view of A's entire-screen share (A on its chat list) is not black and is
+# fitted: the renderer's laid-out size (B's `calls: share-fit frame=WxH rot=R view=WxH box=WxH at=X,Y`
+# debug line) has the frame's oriented aspect within 2 %, lies inside the stage and fills it on one side.
+share_visible() {
+  local line="" out
+  DEV=B; sleep 4
+  for _ in $(seq 1 10); do line="$(A logcat -d 2>/dev/null | grep -oE 'calls: share-fit .*' | tail -1 || true)"; [ -n "$line" ] && break; sleep 1; done
+  [ -n "$line" ] || fail "$1: B logged no \"calls: share-fit\" line"
+  A exec-out screencap -p > "$WORK/B-share.png" 2>/dev/null || fail "$1: no screenshot of B"
+  out="$(python3 -I - "$WORK/B-share.png" "$line" <<'PY'
+import re, sys
+from PIL import Image, ImageStat
+line = sys.argv[2]
+def pair(k):
+    m = re.search(k + r"=(-?\d+)[x,](-?\d+)", line)
+    return int(m.group(1)), int(m.group(2))
+fw, fh = pair("frame"); rot = int(re.search(r"rot=(-?\d+)", line).group(1))
+if rot % 180 == 90: fw, fh = fh, fw
+vw, vh = pair("view"); bw, bh = pair("box"); x, y = pair("at")
+bad = []
+if fw <= 0 or fh <= 0 or vw <= 0 or vh <= 0: bad.append("no frame/view size")
+else:
+    err = abs(vw / vh - fw / fh) / (fw / fh)
+    if err >= 0.02: bad.append("aspect off by %.1f%% (view %dx%d, frame %dx%d)" % (err * 100, vw, vh, fw, fh))
+    if vw > bw + 1 or vh > bh + 1: bad.append("view %dx%d larger than the stage %dx%d (cropped)" % (vw, vh, bw, bh))
+    if abs(vw - bw) > 2 and abs(vh - bh) > 2: bad.append("view %dx%d fills neither side of %dx%d" % (vw, vh, bw, bh))
+im = Image.open(sys.argv[1]).convert("L")
+W, H = im.size
+box = (max(0, x + vw // 10), max(0, y + vh * 3 // 10), min(W, x + vw * 9 // 10), min(H, y + vh * 7 // 10))
+st = ImageStat.Stat(im.crop(box))
+mean, sd = st.mean[0], st.stddev[0]
+if mean <= 12 or sd <= 6: bad.append("the video area is black (mean %.1f, stddev %.1f)" % (mean, sd))
+print("frame %dx%d (rot %d) view %dx%d stage %dx%d at %d,%d; aspect %.4f vs %.4f; video area mean %.1f stddev %.1f" % (fw, fh, rot, vw, vh, bw, bh, x, y, vw / max(vh, 1), fw / max(fh, 1), mean, sd))
+if bad:
+    print("; ".join(bad)); sys.exit(1)
+PY
+)" || fail "$1: B's view of A's entire-screen share: $out"
+  shot "24-share-entire-screen-viewer" "$WORK/B-share.png"
+  echo "    [B] $out"
+  pass "$1: B sees A's chat list in the entire-screen share (not black), fitted at A's aspect within 2 %, never cropped"
 }
 switch_call() {
   local l="call 14 (§23 switch and share)" n d
@@ -756,6 +820,15 @@ switch_call() {
   DEV=A; n="$(renegs)"; [ "$n" = 1 ] || fail "$l: the share renegotiated again ($n re-offers)"
   audio_ok "$l (sharing)"
   pass "$l: A shares its screen: B shows the label, decodes frames and its texture renderer draws them, src=screen on A, still one re-offer"
+  # Harsha's report: an "Entire screen" share showed black while RisiMe was on screen. A goes to its chat
+  # list (the share goes on in the background); B must see it, fitted at A's aspect ratio.
+  DEV=A; A shell input keyevent KEYCODE_BACK; sleep 1
+  for _ in 1 2 3; do on_list && break; A shell input keyevent KEYCODE_BACK; sleep 1; done
+  on_list || fail "$l: A isn't on its chat list during the share"
+  A logcat -d 2>/dev/null | grep -q "screen share off" && fail "$l: A's share stopped when A left the call screen"
+  share_visible "$l"
+  DEV=A; tap "Call in progress — tap to return" || fail "$l: A has no return-to-call bar during the share"
+  wait_for "sharing your screen" 10 || fail "$l: A's call screen didn't come back with the share bar"
   DEV=A; tap "Stop" || fail "$l: no Stop on A's bar"
   DEV=B; for _ in $(seq 1 15); do has "is sharing their screen" || break; sleep 1; done
   has "is sharing their screen" && fail "$l: B still shows the screen label after Stop"
