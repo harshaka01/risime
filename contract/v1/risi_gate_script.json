@@ -50,8 +50,8 @@
     {
      "tool": "calendar_check",
      "args": {
-      "from": "Tuesday 00:00",
-      "to": "Tuesday 23:59"
+      "from": "next Tuesday 00:00",
+      "to": "next Tuesday 23:59"
      }
     },
     {
