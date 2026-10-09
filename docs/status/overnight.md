@@ -148,6 +148,14 @@ were needed after nightly.11.
      - another member's message can't trigger a skill.
    - **Contract:** a §25 addendum (skill registry/state, the client tools `set_alarm` and
      `schedule_message`, the meeting "add for" card).
+   - **Risi summaries over 30 days (Harsha 2026-10-09):**
+     - Summarise today / 7 days / 30 days / a range, from **daily summaries rolled up**
+       (daily → weekly → 30-day) plus confirmed commitments; raw text stays at 24 h.
+     - The answer states the period and links to the days it used.
+     - Daily summaries are sealed with RISI_DATA_KEY, listed in "What Risi knows" → Summaries, and
+       deletable.
+     - Folded into the §27 build (a contract addendum: `scope` ranges, `daily_summary` storage and
+       REST).
 5. **"Teach Risi"** (Harsha 2026-10-09):
    - **Profile:** Settings → "My Risi profile" (bio, roles, people, preferences, interests).
    - **Ways to teach:**
@@ -504,6 +512,15 @@ were needed after nightly.11.
   `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
 - **Agents:** none running.
 - **Needs Harsha:**
+L. **Follow-ups and call transcription (§27 on branch `contract/v127`, decision 070); defaults are
+   chosen, nothing blocks:**
+   1. **"Risi listens for follow-ups"** is ON by default when starting an Official call (anyone in
+      the call can tap Stop, and everyone sees "Risi is listening" from the start). Keep it on?
+   2. **The consent explainer and banner wording.** Does any customer need a spoken notice?
+   3. **Quiet rule:** summarise after 10 min of quiet, with at least 6 messages from at least
+      2 people since the last summary, at most every 30 min and 8 times a day. OK?
+   4. **Whisper's Sinhala and Tamil transcription quality is limited.** Expect weaker summaries of
+      calls in those languages.
 S. **Risi skills (§26, decision 069), open questions:**
    1. Should pending scheduled messages be included in backups? Default: no; they stay on the phone.
    2. Do you also want "Schedule send" in the normal composer, without Risi? It needs no wire change.

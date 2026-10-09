@@ -199,57 +199,73 @@ defmodule RisiMe.Agent.Commitments do
         Logger.info("Risi card limit reached in #{conv}")
 
       true ->
-        now = DateTime.utc_now()
+        new_proposal(conv, c, call_ref, members)
+    end
+  end
 
-        row =
-          Repo.insert!(%Commitment{
-            id: Ecto.UUID.generate(),
-            conversation_id: conv,
-            chat_id: Secretary.chat_id(conv),
-            state: "proposed",
-            text: c.text,
-            owner_id: c.owner,
-            counterpart_ids: c.counterparts,
-            due: c.due,
-            due_kind: c.due_kind,
-            due_text: c.due_text,
-            source_message_ids: c.source_message_ids,
-            confidence: c.confidence,
-            call_ref: call_ref,
-            proposed_at: now
-          })
+  defp new_proposal(conv, c, call_ref, members) do
+    now = DateTime.utc_now()
 
-        names = Map.new(members, &{&1.user_id, &1.name})
+    sealed =
+      Commitment.seal(%Commitment{
+        id: Ecto.UUID.generate(),
+        conversation_id: conv,
+        chat_id: Secretary.chat_id(conv),
+        state: "proposed",
+        text: c.text,
+        owner_id: c.owner,
+        counterpart_ids: c.counterparts,
+        due: c.due,
+        due_kind: c.due_kind,
+        due_text: c.due_text,
+        source_message_ids: c.source_message_ids,
+        confidence: c.confidence,
+        call_ref: call_ref,
+        proposed_at: now
+      })
 
-        body =
-          "#{names[row.owner_id]} will: #{row.text}" <>
-            if(row.due_text, do: " (#{row.due_text})", else: "") <> ". Track it?"
+    case sealed do
+      # No data key: nothing can be kept sealed, so nothing is proposed.
+      :error ->
+        Logger.warning("Risi commitment not proposed in #{conv}: missing_key RISI_DATA_KEY")
 
-        risi = %{
-          "kind" => "commitment",
-          "commitment_id" => row.id,
-          "state" => "proposed",
-          "text" => row.text,
-          "owner" => row.owner_id,
-          "counterpart" => row.counterpart_ids,
-          "due" => Clock.ts(row.due),
-          "due_text" => row.due_text,
-          "source_message_ids" => row.source_message_ids,
-          "confidence" => row.confidence,
-          "call_ref" => call_ref,
-          "notify" => [row.owner_id | row.counterpart_ids]
-        }
+      {:ok, row} ->
+        row = Repo.insert!(row)
+        post_proposal(conv, row, call_ref, members)
+    end
+  end
 
-        case Out.post(conv, body, risi) do
-          {:ok, %{message_id: mid}} ->
-            row |> Ecto.Changeset.change(card_message_id: mid) |> Repo.update!()
-            timer(%{"kind" => "expire", "conv" => conv, "commitment_id" => row.id}, @expire_s)
+  defp post_proposal(conv, row, call_ref, members) do
+    names = Map.new(members, &{&1.user_id, &1.name})
 
-          {:error, reason} ->
-            # No card, no proposal: nothing is kept.
-            Logger.warning("Risi card not sent in #{conv}: #{inspect(reason)}")
-            Repo.delete!(row)
-        end
+    body =
+      "#{names[row.owner_id]} will: #{row.text}" <>
+        if(row.due_text, do: " (#{row.due_text})", else: "") <> ". Track it?"
+
+    risi = %{
+      "kind" => "commitment",
+      "commitment_id" => row.id,
+      "state" => "proposed",
+      "text" => row.text,
+      "owner" => row.owner_id,
+      "counterpart" => row.counterpart_ids,
+      "due" => Clock.ts(row.due),
+      "due_text" => row.due_text,
+      "source_message_ids" => row.source_message_ids,
+      "confidence" => row.confidence,
+      "call_ref" => call_ref,
+      "notify" => [row.owner_id | row.counterpart_ids]
+    }
+
+    case Out.post(conv, body, risi) do
+      {:ok, %{message_id: mid}} ->
+        row |> Ecto.Changeset.change(card_message_id: mid) |> Repo.update!()
+        timer(%{"kind" => "expire", "conv" => conv, "commitment_id" => row.id}, @expire_s)
+
+      {:error, reason} ->
+        # No card, no proposal: nothing is kept.
+        Logger.warning("Risi card not sent in #{conv}: #{inspect(reason)}")
+        Repo.delete!(row)
     end
   end
 
@@ -302,7 +318,8 @@ defmodule RisiMe.Agent.Commitments do
     with {:ok, _} <- Ecto.UUID.cast(target),
          %Commitment{} = c <- Repo.get(Commitment, target),
          true <- c.conversation_id == conv,
-         true <- user == c.owner_id or user in c.counterpart_ids do
+         true <- user == c.owner_id or user in c.counterpart_ids,
+         {:ok, c} <- open(c) do
       do_act(action, c, user, env["edit"])
     else
       _ -> :ok
@@ -310,6 +327,19 @@ defmodule RisiMe.Agent.Commitments do
   end
 
   def act(_conv, _user, _env), do: :ok
+
+  # A sealed row opened; without the data key (or with a wrong one) the commitment is
+  # unavailable: the action, reminder or digest is skipped (never a crash, never plaintext).
+  defp open(c) do
+    case Commitment.open(c) do
+      {:ok, c} ->
+        {:ok, c}
+
+      :error ->
+        Logger.warning("Risi commitment unavailable: missing_key or wrong RISI_DATA_KEY")
+        :unavailable
+    end
+  end
 
   defp do_act("confirm", %Commitment{state: "proposed"} = c, user, _edit) do
     c =
@@ -356,20 +386,21 @@ defmodule RisiMe.Agent.Commitments do
           {c.due, c.due_kind}
       end
 
-    if text == "" or String.length(text) > 200 do
-      :ok
-    else
+    due_text = if(due == c.due, do: c.due_text, else: nil)
+
+    with false <- text == "" or String.length(text) > 200,
+         {:ok, sealed} <- Commitment.sealed_changes(c.id, text, due_text) do
       c =
         c
         |> Ecto.Changeset.change(
-          state: "edited",
-          text: text,
-          due: due,
-          due_kind: kind,
-          due_text: if(due == c.due, do: c.due_text, else: nil),
-          by: user,
-          confirmed_at: c.confirmed_at || DateTime.utc_now(),
-          schedule_v: c.schedule_v + 1
+          [
+            state: "edited",
+            due: due,
+            due_kind: kind,
+            by: user,
+            confirmed_at: c.confirmed_at || DateTime.utc_now(),
+            schedule_v: c.schedule_v + 1
+          ] ++ sealed
         )
         |> Repo.update!()
 
@@ -378,6 +409,8 @@ defmodule RisiMe.Agent.Commitments do
       Repo.delete_all(from f in Fact, where: f.commitment_id == ^c.id)
       learn(c)
       update_card(c, "edited", user)
+    else
+      _ -> :ok
     end
   end
 
@@ -443,20 +476,20 @@ defmodule RisiMe.Agent.Commitments do
         for(u <- c.counterpart_ids, do: {u, "#{owner} will: #{c.text}"})
 
     for {subject, text} <- rows do
-      fact =
-        Repo.insert!(%Fact{
-          id: Ecto.UUID.generate(),
-          subject_user_id: subject,
-          chat_id: c.chat_id,
-          conversation_id: c.conversation_id,
-          kind: "commitment",
-          text: String.slice(text, 0, 400),
-          source_message_ids: c.source_message_ids,
-          commitment_id: c.id,
-          inserted_at: now
-        })
+      fact = %Fact{
+        id: Ecto.UUID.generate(),
+        subject_user_id: subject,
+        chat_id: c.chat_id,
+        conversation_id: c.conversation_id,
+        kind: "commitment",
+        text: String.slice(text, 0, 400),
+        source_message_ids: c.source_message_ids,
+        commitment_id: c.id,
+        inserted_at: now
+      }
 
-      Embeddings.index(fact)
+      # Sealed at rest; without the data key nothing is learned (never plaintext).
+      with {:ok, fact} <- Fact.seal(fact), do: fact |> Repo.insert!() |> Embeddings.index()
     end
 
     :ok
@@ -562,8 +595,11 @@ defmodule RisiMe.Agent.Commitments do
 
   defp current(id, v) do
     case Repo.get(Commitment, id) do
-      %Commitment{schedule_v: ^v} = c -> if Commitment.open?(c), do: c, else: :ok
-      _ -> :ok
+      %Commitment{schedule_v: ^v} = c ->
+        with true <- Commitment.open?(c), {:ok, c} <- open(c), do: c, else: (_ -> :ok)
+
+      _ ->
+        :ok
     end
   end
 
@@ -602,12 +638,18 @@ defmodule RisiMe.Agent.Commitments do
     local = Clock.local(now, tz)
     today = NaiveDateTime.to_date(local)
 
+    # Sealed rows that can't be opened (no or a wrong data key): no digest.
     items =
       Repo.all(
         from c in Commitment,
           where: c.conversation_id == ^conv and c.state in ^Commitment.open_states(),
           order_by: [asc_nulls_last: c.due, asc: c.inserted_at]
       )
+      |> Commitment.open_all()
+      |> case do
+        {:ok, items} -> items
+        :error -> []
+      end
 
     last =
       Repo.one(

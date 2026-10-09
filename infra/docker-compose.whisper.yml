@@ -1,0 +1,57 @@
+# Self-hosted speech-to-text for Risi call transcription (decisions 070, 071). faster-whisper
+# (CTranslate2 built from source with CUDA for the GB10, sm_121) behind an OpenAI-compatible
+# POST /v1/audio/transcriptions. Binds 127.0.0.1:8200 only (rule 6); no Caddy route. The only
+# client is the app server's risi-listen path. No audio or text leaves spark2: the model is local,
+# the hub is offline, audio is decoded in memory and no transcript is logged.
+#   docker compose --env-file .env -f infra/docker-compose.whisper.yml up -d --build
+# Needs in .env: WHISPER_API_KEY (Bearer token; scripts/whisper-smoke generates it if absent).
+# Model: ~/risime-models/faster-whisper-large-v3 (outside the repo), see decision 071.
+# Faster option: WHISPER_MODEL_DIR=faster-whisper-large-v3-turbo in .env (alias stays the same
+# unless WHISPER_MODEL_ALIAS is set too; the learning log records the alias).
+# Smoke test: scripts/whisper-smoke
+name: risime-whisper
+services:
+  whisper:
+    build:
+      context: whisper
+    image: risime/whisper:ct2-4.8.2-fw-1.2.1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8200:8000"
+    gpus: all
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # Host-side RAM (Python, decoder, buffers). On the GB10 the model's CUDA memory is unified
+    # memory that the driver allocates outside this cgroup; it is bounded by the model size and
+    # the CTranslate2 cache limit below. Measured numbers: docs/decisions/071-whisper.md.
+    mem_limit: 6g
+    environment:
+      WHISPER_API_KEY: ${WHISPER_API_KEY:?set in .env}
+      WHISPER_MODEL_PATH: /models/${WHISPER_MODEL_DIR:-faster-whisper-large-v3}
+      WHISPER_MODEL_ALIAS: ${WHISPER_MODEL_ALIAS:-faster-whisper-large-v3}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-float16}
+      WHISPER_NUM_WORKERS: ${WHISPER_NUM_WORKERS:-2}
+      # CTranslate2's caching allocator keeps at most 1 GiB of freed CUDA blocks.
+      CT2_CUDA_ALLOCATOR: cub_caching
+      CT2_CUDA_CACHING_ALLOCATOR_CONFIG: "4,3,12,1073741824"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      DO_NOT_TRACK: "1"
+      HOME: /tmp
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ${HOME}/risime-models:/models:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

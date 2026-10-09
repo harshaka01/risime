@@ -85,7 +85,10 @@ defmodule RisiMeWeb.RisiController do
   defp parse(_), do: {:error, :bad_request}
 
   def facts(conn, _params) do
-    json(conn, %{facts: Rest.facts(me(conn))})
+    case Rest.facts(me(conn)) do
+      {:ok, facts} -> json(conn, %{facts: facts})
+      error -> GroupController.error(conn, error)
+    end
   end
 
   def delete_fact(conn, %{"fact_id" => id}) do
@@ -104,6 +107,9 @@ defmodule RisiMeWeb.RisiController do
   def commitments(conn, params) do
     state = if params["state"] == "all", do: :all, else: :open
 
-    json(conn, %{commitments: Rest.commitments(me(conn), state)})
+    case Rest.commitments(me(conn), state) do
+      {:ok, commitments} -> json(conn, %{commitments: commitments})
+      error -> GroupController.error(conn, error)
+    end
   end
 end

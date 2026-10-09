@@ -212,6 +212,12 @@ defmodule RisiMe.Agent.Requests do
         where: c.conversation_id == ^conv and c.state in ["confirmed", "edited", "done"],
         order_by: [asc: c.inserted_at]
     )
+    # Sealed at rest: without (or with a wrong) RISI_DATA_KEY the answer goes without them.
+    |> Commitment.open_all()
+    |> case do
+      {:ok, cs} -> cs
+      :error -> []
+    end
     |> Enum.map(fn c ->
       %{
         "text" => c.text,

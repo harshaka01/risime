@@ -16,6 +16,46 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
+## Privacy fix 2026-10-09: Risi-derived text sealed at rest — READY (not deployed)
+- **What:** every chat-derived text Risi keeps is now AES-256-GCM under `RISI_DATA_KEY`
+  (`Agent.Seal`, AAD `<table>:<row id>:<column>`), like the buffer:
+  `risi_commitments.text`/`due_text` → `text_sealed`/`due_text_sealed`; `risi_facts.text` →
+  `text_sealed`; learning log `risi_llm_calls_by_day`/`_by_chat.output` → `output_sealed`;
+  `risi_llm_feedback.reason` → `reason_sealed`. The plaintext columns stay (rollback is code
+  only) but are NULL; in Postgres a CHECK (`risi_commitments_no_plaintext`,
+  `risi_facts_no_plaintext`) keeps them NULL. `text`/`due_text` are virtual in the schemas
+  (`Commitment.seal/open`, `Fact.seal/open`).
+- **Readers decrypt:** `/risi/facts`, `/risi/commitments`, actions/edit, reminder, escalation,
+  digest, the request's tracked commitments, `LearningLog.get/list_*`, `list_feedback`.
+- **Missing or wrong key:** never a crash. REST lists with rows → `503 agent_unavailable`
+  (no rows → `[]`); digest skipped; reminder/action no-op; requests answer without tracked
+  commitments; no proposal and no facts are stored; a learning-log entry is kept without its
+  output (`output_unavailable: true` on read), feedback without its reason.
+- **Migration:** Postgres `20261018100000_seal_risi_text` (one transaction: add columns, seal +
+  blank every plaintext row via `Agent.SealMigration`, NOT NULL on the sealed columns, CHECKs;
+  raises and changes nothing without the key when plaintext rows exist). Cassandra
+  `009_risi_sealed_text.cql` (ADD columns) then `Release.seal_risi_learning_log/1` (in
+  `Release.migrate/0`): walks the day partitions of the last 92 days × 8 buckets, writes
+  `output_sealed`/`reason_sealed` with `TTL(output)`/`TTL(reason)` and deletes the plaintext
+  cell; idempotent; without the key it changes nothing.
+- **Pilot rows affected (risime_dev, read-only count 2026-10-09):** 5 commitments (5 texts, 2
+  due texts), 10 facts, 71 + 71 learning-log outputs (by_day, by_chat), 6 feedback rows with 0
+  reasons; `risi_fact_embeddings` empty.
+- **Checked, no chat-derived plaintext:** `risi_buffer` (sealed), `risi_mls_kv` (sealed in Rust),
+  `risi_pending_writes.args` and `risi_reminders.text` (sealed), `risi_skill_activity.sealed`
+  (RISI_MEMORY_KEY), `risi_turn_steps` (hashes only), `risi_tool_calls` (no args),
+  `risi_chat_state`, `risi_chats`, `risi_skills`, `risi_skill_devices`, `risi_key_checks`,
+  `risi_agent_cursor` (ids/states), Oban `RisiMe.Workers.Risi` args (ids, codes, counters).
+  `risi_fact_embeddings` would hold a vector of the fact text (stub, nothing written).
+- **Tests:** `test/risime/agent/seal_at_rest_test.exs` (canary through extraction → no
+  `risi_*` table, `oban_jobs` or learning-log/feedback row holds it in a raw SQL/CQL read; REST,
+  digest, reminder decrypt; edit re-seals; CHECK; Postgres and Cassandra migration of plaintext
+  rows with TTL kept and idempotence; wrong and missing key → unavailable).
+- **Gate (partition `_seal`):** 863 tests, 8 failures, all pre-existing and date-dependent:
+  `writes_s13_test` (5) and `skills_s14_test` (3) ask for "dentist Friday 10am", which on
+  Friday 2026-10-09 after 10:00 Colombo resolves to the past, so `calendar_add` fails before the
+  confirm card. Untouched by this fix; to be made clock-independent.
+
 ## v1.26 Risi skills (§26, decision 069) + §25 writes — S0, S13–S16 READY; offers, notes open
 - **Gate:** 858 tests, 0 failures, 1 skipped, 3 excluded (`:livekit`, `:llm_live`); partition
   `_s13`, NIF built. Nothing deployed. New env: `RISI_SKILLS` (default off) and
