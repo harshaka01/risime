@@ -46,6 +46,18 @@ interface RisiHost {
 
     /** §26.6 without SCHEDULE_EXACT_ALARM a scheduled message may be a few minutes late (the card says so). */
     fun scheduleMayBeLate(): Boolean = false
+
+    /** §27.5 an item action (`item_confirm`/`item_decline`/`item_edit`/`done`) in this (the actor's Risi) chat. */
+    fun actItem(itemId: String, action: String, text: String? = null, due: String? = null, allDay: Boolean = false) = act(itemId, action, text, due)
+
+    /** §27.3/§27.6 [Open chat]: the Official conversation, scrolled to the first message at or after [atIso]. */
+    fun openChat(conversationId: String, atIso: String?) {}
+
+    /** §27.4 [Open Risi chat] on the short card: my Risi chat at that summary (only when [risiChatAvailable]). */
+    fun openRisiChat(summaryId: String) {}
+
+    /** This phone has a usable Risi chat with the Ledger on (the short card's button shows only then). */
+    fun risiChatAvailable(): Boolean = false
 }
 
 /** Everything a card needs from its screen. */

@@ -45,6 +45,18 @@ const val RISI_KNOWS_BLURB = "What Risi has learned from your Official chats. De
 const val DELETE_EVERYTHING_LABEL = "Delete everything"
 const val RISI_FACTS_EMPTY = "Risi hasn't stored anything about you."
 const val PROMISES_EMPTY = "No open promises."
+const val OWED_TO_ME_TITLE = "Owed to me"
+
+@Composable
+private fun PromiseRow(c: RisiCommitment, me: String, nameOf: (String) -> String, tag: String) {
+    Column(Modifier.fillMaxWidth().padding(vertical = Spacing.sm).testTag(tag)) {
+        Text(c.text, style = MaterialTheme.typography.bodyLarge)
+        val who = c.owner?.let { if (it.equals(me, true)) "You" else nameOf(it) }
+        val due = if (c.allDay != null) lk.codegen.risime.data.tabs.RisiLedger.dueLabel(c.due, c.allDay, c.dueText) else (formatDue(c.due) ?: c.dueText)?.let { "due $it" }
+        Text(listOfNotNull(who, due).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    HorizontalDivider()
+}
 const val RISI_OFFLINE = "Couldn't reach the server. Try again."
 const val RISI_UNAVAILABLE = "Risi isn't available for this account yet."
 const val RISI_SERVER_PROBLEM = "The server had a problem \u2014 try again."
@@ -191,14 +203,13 @@ fun RisiPromisesScreen(model: RisiPromisesModel, me: String, nameOf: (String) ->
                 s.loading -> CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
                 s.items.isEmpty() && s.error == null -> Text(PROMISES_EMPTY, modifier = Modifier.testTag("risi_promises_empty"))
                 else -> LazyColumn(Modifier.testTag("risi_promises_list")) {
-                    items(s.items, key = { it.commitmentId }) { c ->
-                        Column(Modifier.fillMaxWidth().padding(vertical = Spacing.sm).testTag("risi_promise")) {
-                            Text(c.text, style = MaterialTheme.typography.bodyLarge)
-                            val who = c.owner?.let { if (it.equals(me, true)) "You" else nameOf(it) }
-                            val due = formatDue(c.due) ?: c.dueText
-                            Text(listOfNotNull(who, due?.let { "due $it" }).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        HorizontalDivider()
+                    // §27.9: my own promises, then "Owed to me" (ledger items where I am the counterpart).
+                    val (mine, owed) = lk.codegen.risime.data.tabs.RisiLedger.promisesSplit(s.items, me)
+                    if (owed.isNotEmpty() && mine.isNotEmpty()) item(key = "h:mine") { SectionHeader(MY_PROMISES_TITLE) }
+                    items(mine, key = { it.commitmentId }) { c -> PromiseRow(c, me, nameOf, "risi_promise") }
+                    if (owed.isNotEmpty()) {
+                        item(key = "h:owed") { SectionHeader(OWED_TO_ME_TITLE) }
+                        items(owed, key = { "o:" + it.commitmentId }) { c -> PromiseRow(c, me, nameOf, "risi_owed") }
                     }
                 }
             }

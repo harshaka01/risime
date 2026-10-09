@@ -18,13 +18,19 @@ object RisiControl {
     const val TYPE_ACTION = "risi_action"
 
     val REQUEST_ACTIONS = setOf("ask", "summarise", "report")
-    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS
+    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS + V127_ACTIONS
 
     /** §25.4 (v1.25): on a confirm card (`write_id`) or a group reminder (`reminder_id`). */
     val V125_ACTIONS: Set<String> get() = setOf("confirm_write", "cancel_write", "me_too", "not_me")
 
     /** §26.7 (v1.26): on a `calendar_offer` (`offer_id`). */
     val V126_ACTIONS: Set<String> get() = setOf("calendar_accept", "calendar_decline")
+
+    /** §27.5 (v1.27): on a ledger item (`item_id`), sent in the actor's own Risi chat. */
+    val V127_ACTIONS: Set<String> get() = setOf("item_confirm", "item_decline", "item_edit")
+
+    /** §27.5 `item_edit.edit.text`: 1-200 characters. */
+    const val MAX_ITEM_TEXT = 200
 
     /** `text` of an `ask`: 1-1000 grapheme clusters (§24.11). */
     const val MAX_ASK_GRAPHEMES = 1000
@@ -45,12 +51,15 @@ object RisiControl {
         if (sinceMs != null) put("scope", buildJsonObject { put("since", iso(sinceMs)) })
     }
 
-    fun action(target: String, action: String, editText: String? = null, editDue: String? = null, reminder: Boolean? = null): JsonObject = buildJsonObject {
+    fun action(target: String, action: String, editText: String? = null, editDue: String? = null, reminder: Boolean? = null, editAllDay: Boolean? = null): JsonObject = buildJsonObject {
         put("v", 1)
         put("type", TYPE_ACTION)
         put("target", target)
         put("action", action)
-        if (action == "edit") {
+        if (action == "item_edit") {
+            // §27.5 {"text", "due", "all_day"}
+            put("edit", lk.codegen.risime.net.RisiActions127.editObject((editText ?: "").take(MAX_ITEM_TEXT), editDue, editAllDay == true))
+        } else if (action == "edit") {
             put("edit", buildJsonObject {
                 put("text", editText ?: "")
                 if (editDue == null) put("due", JsonNull) else put("due", editDue)
@@ -97,6 +106,9 @@ object RisiControl {
             "not_me" -> "Not me"
             "calendar_accept" -> "Added to calendar"
             "calendar_decline" -> "Declined the meeting card"
+            "item_confirm" -> "Confirmed an item"
+            "item_decline" -> "Declined an item"
+            "item_edit" -> "Edited an item"
             else -> "Risi"
         }
     }
@@ -126,6 +138,9 @@ object RisiControl {
                 "not_me" -> "$who: not me"
                 "calendar_accept" -> "$who added it to their calendar"
                 "calendar_decline" -> "$who declined"
+                "item_confirm" -> "$who confirmed an item"
+                "item_decline" -> "$who declined an item"
+                "item_edit" -> "$who edited an item"
                 else -> null
             }
         }
@@ -176,9 +191,10 @@ class RisiRequests(
         return true
     }
 
-    suspend fun act(target: String, action: String, editText: String? = null, editDue: String? = null): Boolean {
+    suspend fun act(target: String, action: String, editText: String? = null, editDue: String? = null, editAllDay: Boolean? = null): Boolean {
         if (action !in RisiControl.ACTIONS || !isOfficial()) return false
-        send(RisiControl.action(target, action, editText, editDue))
+        if (action == "item_edit" && editText.isNullOrBlank()) return false
+        send(RisiControl.action(target, action, editText, editDue, editAllDay = editAllDay))
         return true
     }
 }

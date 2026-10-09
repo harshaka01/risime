@@ -550,7 +550,26 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         override fun conversationName(conversationId: String): String? = conversationNames.value[conversationId.lowercase()]
 
         override fun scheduleMayBeLate(): Boolean = !c.backgroundSkillPermissions.exactAlarmsAllowed()
+
+        override fun actItem(itemId: String, action: String, text: String?, due: String?, allDay: Boolean) {
+            viewModelScope.launch { requests.act(itemId, action, text, due, allDay) }
+        }
+
+        override fun openChat(conversationId: String, atIso: String?) =
+            c.risiUi.openChat(conversationId, atIso?.let { lk.codegen.risime.data.tabs.RisiUiBus.Focus(at = it) })
+
+        override fun openRisiChat(summaryId: String) {
+            val conv = risiChatId() ?: return
+            c.risiUi.openChat(conv, lk.codegen.risime.data.tabs.RisiUiBus.Focus(summaryId = summaryId))
+        }
+
+        override fun risiChatAvailable(): Boolean = c.risiLedgerOn() && risiChatId() != null
+
+        private fun risiChatId(): String? = c.chatTabs.rows.value?.values?.firstOrNull { it.risi }?.conversationId
     }
+
+    /** §27.3/§27.4 where this chat should scroll when it opens from a Risi card (taken once). */
+    fun takeFocus(): lk.codegen.risime.data.tabs.RisiUiBus.Focus? = c.risiUi.takeFocus(conversationId)
 
     /** Entries undone from this screen (their [Undo] goes; a failure brings it back). */
     private val undoneEntries = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())

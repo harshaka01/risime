@@ -393,6 +393,20 @@ class AppContainer(
 
     suspend fun openRisiChat(): lk.codegen.risime.data.tabs.RisiChatOpen = risiChatOpener.open()
 
+    private val risiChatEnsured = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** §27.10 once per process: create the Risi chat when this phone has none (POST /risi/chat is idempotent). */
+    private suspend fun ensureRisiChat() {
+        if (risiChatEnsured.get()) return
+        val rows = chatTabs.rows.first { it != null } ?: return
+        if (rows.values.any { it.risi }) { risiChatEnsured.set(true); return }
+        when (val r = runCatching { openRisiChat() }.getOrNull()) {
+            is lk.codegen.risime.data.tabs.RisiChatOpen.Ready -> { risiChatEnsured.set(true); Log.i("RisiMe", "risi_ledger: Risi chat created at start") }
+            is lk.codegen.risime.data.tabs.RisiChatOpen.Failed -> Log.w("RisiMe", "risi_ledger: Risi chat at start failed: ${r.text}")
+            null -> Log.w("RisiMe", "risi_ledger: Risi chat at start failed")
+        }
+    }
+
     /**
      * §24.2 [Start Official] / a new group's Official: `POST /chats/{chat_id}/official` now (its refusal is
      * the user's answer), then the epoch-0 commit through the group-op outbox (survives process death).
@@ -824,6 +838,8 @@ class AppContainer(
                 risiSkills.setAdvertised(skills)
                 val ledger = lk.codegen.risime.net.DeviceMls.CAP_RISI_LEDGER in caps
                 risiLedger.setAdvertised(ledger)
+                // §27.10: a risi_ledger app creates its Risi chat at start when it has none (follow-ups land there).
+                if (ledger && risi) scope.launch { ensureRisiChat() }
                 // §26.2: report the Android permission state on start (and the phone's record of each skill).
                 if (skills) scope.launch { runCatching { risiSkillsStore.refresh(backgroundSkillPermissions) } }
                 // Remembered per device id: the next process start shows the tab bar at once (ChatTabs.restoreAdvertised).

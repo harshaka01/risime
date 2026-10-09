@@ -159,6 +159,14 @@ fun GroupChatScreen(
         }
     }
     val scroll = rememberChatScrollState()
+    // §27.3/§27.4 opened from a Risi card ([Open chat] / [Open Risi chat]): scroll there once the message is here.
+    var focus by remember { mutableStateOf<lk.codegen.risime.data.tabs.RisiUiBus.Focus?>(null) }
+    LaunchedEffect(Unit) { focus = vm.takeFocus() }
+    LaunchedEffect(focus, messages) {
+        val f = focus ?: return@LaunchedEffect
+        val target = lk.codegen.risime.data.tabs.RisiLedger.focusTarget(messages, f) ?: return@LaunchedEffect
+        if (lk.codegen.risime.ui.tabs.scrollToMessage(scroll, messages, target)) focus = null
+    }
     val media by vm.imgs.media.collectAsStateWithLifecycle()
     val imagesReady by vm.imgs.imagesReady.collectAsStateWithLifecycle()
     val toast by vm.imgs.toast.collectAsStateWithLifecycle()

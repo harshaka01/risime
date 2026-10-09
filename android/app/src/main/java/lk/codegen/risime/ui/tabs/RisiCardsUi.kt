@@ -77,6 +77,11 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
         SystemLineText(row.body)
         return
     }
+    if (r.kind == lk.codegen.risime.net.RisiKinds127.ITEM_UPDATE) {
+        // §27.5 applied to the summary card it belongs to (no bubble); without that card, a small line.
+        if (!lk.codegen.risime.data.tabs.RisiLedger.updateHasCard(r, ctx.messages)) SystemLineText(row.body)
+        return
+    }
     Box(modifier.fillMaxWidth().padding(end = 32.dp), contentAlignment = Alignment.CenterStart) {
         Surface(
             shape = MaterialTheme.shapes.medium,
@@ -90,7 +95,7 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     RisiKinds.COMMITMENT -> CommitmentCard(row, r, ctx)
                     RisiKinds.REMINDER -> ReminderCard(row, r, ctx)
                     RisiKinds.ESCALATION -> EscalationCard(row, r, ctx)
-                    RisiKinds.DIGEST -> DigestCard(r, ctx)
+                    RisiKinds.DIGEST -> if (r.scope == "personal") PersonalDigestCard(r, ctx) else DigestCard(r, ctx)
                     RisiKinds.ANSWER -> AnswerCard(row, r, ctx)
                     RisiKinds.SUMMARY -> SummaryCard(r, ctx)
                     RisiKinds.REPORT -> ReportCard(r)
@@ -101,6 +106,9 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     RisiKinds.DRAFT -> DraftCard(row, r, ctx)
                     RisiKinds.SKILL_DONE -> SkillDoneCard(row, r, ctx)
                     RisiKinds.SKILL_NEEDED -> SkillNeededCard(row, r, ctx)
+                    lk.codegen.risime.net.RisiKinds127.DISCUSSION_SUMMARY -> DiscussionSummaryCard(r, ctx)
+                    lk.codegen.risime.net.RisiKinds127.DISCUSSION_CARD -> DiscussionCard(row, r, ctx)
+                    lk.codegen.risime.net.RisiKinds127.ITEM_DUE, lk.codegen.risime.net.RisiKinds127.ITEM_OVERDUE, lk.codegen.risime.net.RisiKinds127.ITEM_NUDGE -> ItemReminderCard(row, r, ctx)
                     else -> Text(row.body)
                 }
                 FeedbackRow(r, ctx)
@@ -113,7 +121,7 @@ private fun headerOf(r: RisiMeta) = when (r.kind) {
     RisiKinds.COMMITMENT -> "Risi · Track this?"
     RisiKinds.REMINDER -> "Risi · Reminder"
     RisiKinds.ESCALATION -> "Risi · Overdue"
-    RisiKinds.DIGEST -> "Risi · Open items" + (r.date?.let { " · $it" } ?: "")
+    RisiKinds.DIGEST -> (if (r.scope == "personal") "Risi · Your items" else "Risi · Open items") + (r.date?.let { " · $it" } ?: "")
     RisiKinds.ANSWER -> "Risi"
     RisiKinds.SUMMARY -> "Risi · Summary" + if (r.partial) " (partial)" else ""
     RisiKinds.REPORT -> "Risi · Report"
@@ -123,6 +131,10 @@ private fun headerOf(r: RisiMeta) = when (r.kind) {
     RisiKinds.DRAFT -> "Risi · Draft"
     RisiKinds.SKILL_DONE -> "Risi · Done"
     RisiKinds.SKILL_NEEDED -> "Risi · Skill needed"
+    lk.codegen.risime.net.RisiKinds127.DISCUSSION_SUMMARY -> "Risi · Follow-ups"
+    lk.codegen.risime.net.RisiKinds127.DISCUSSION_CARD -> "Risi · Discussion summary"
+    lk.codegen.risime.net.RisiKinds127.ITEM_DUE, lk.codegen.risime.net.RisiKinds127.ITEM_OVERDUE, lk.codegen.risime.net.RisiKinds127.ITEM_NUDGE ->
+        lk.codegen.risime.data.tabs.RisiLedger.reminderHeader(r)
     else -> "Risi"
 }
 
