@@ -364,20 +364,13 @@ were needed after nightly.11.
   `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
 - **Agents:** none running.
 - **Needs Harsha:**
-T. **Risi tools: two points conflict with earlier rules (please decide; I proceed with the other
-   tools meanwhile):**
-   - **(c) search_chats "private threads only when asked from inside Private"**
-     - **The conflict:** decision 065/066 and your rule "Risi only ever sees Official; Private is
-       never a model input". Risi isn't a member of Private, so the server can't read it (E2EE).
-       Only the asker's phone could search Private locally and hand the matching snippets to Risi.
-     - **Default:** Official only, with no Private search. Option: phone-side search of Private,
-       only when the user asks from inside Private, results sent only to Risi, never stored.
-   - **(e) ask_risiwork**
-     - **The conflict:** it forwards the question and the user's Keycloak token off spark2 to
-       risicloud.ai. That breaks "no chat text leaves spark2", and needs a token whose audience is
-       RisiWork.
-     - **Default:** only when the user explicitly asks Risi to ask RisiWork, a one-time consent per
-       user, and only the question text (no transcript). Confirm, or say no.
+T. **Risi tools (spec updated by Harsha, 2026-10-09):** the conflicts are resolved (Private search
+   on the phone only, never sent to Risi; RisiWork via a Keycloak token-exchange token). Still needed:
+   1. **The commercial model for tool use, Sinhala and Tamil:** which provider, an API key in `.env`,
+      and a zero-retention agreement. Until then Risi runs on risi-l1 alone and the gate shows which
+      questions it fails.
+   2. **The Keycloak token-exchange settings for the RisiCloud lead:** exact settings follow with the
+      design.
 R. ✅ **DONE 2026-10-08 23:23 UTC** (Harsha: "turn Risi on"). Verified:
    - `/auth/config` says `tabs: on`;
    - the Risi user `kind=agent` is seeded;
