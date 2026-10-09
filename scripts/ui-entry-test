@@ -1,0 +1,338 @@
+#!/usr/bin/env bash
+# UI entry-point gate (root-delegated to android, nightly.39 real-phone report: no way to lock a chat,
+# no tab row, "Checking encryption…" for ever). The REAL debug app in two redroid containers (native
+# arm64 Android 14, decision 045) against a temp server with TABS=on (RISI off: the tab row, "Start
+# Official" and "What Risi knows about me" must work either way). Navigates like a user: taps and
+# long-presses by visible text / content description from `uiautomator dump`, no debug hooks.
+#   timeout 1800 scripts/ui-entry-test [--apk app-debug.apk] [--keep]
+#
+#  1. A and B sign in through the login UI (dev OTP), become friends, both open the DM; it turns e2ee.
+#  2. A's chat: the "🔒 Private" | "● Official" row under the header; the Official tab's "Start Official".
+#  3. Chat info (tap the name): "Messages are end-to-end encrypted" within 30 s (never stuck on
+#     "Checking encryption…"), and the "Lock chat" toggle.
+#  4. The chat's ⋮ → "Lock chat" → the system PIN prompt (`locksettings set-pin`) → the chat leaves the list.
+#  5. Pull down on the chat list → the "Locked chats" row → PIN → the folder holds the chat → unlock it.
+#  6. Long-press the chat → the selection bar's ⋮ → "Lock chat".
+#  7. Chat list ⋮ → "Chat lock settings" → PIN → "Hide locked chats" and "Secret code".
+#  8. Settings → Privacy → "What Risi knows about me" opens without an error.
+#  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
+#  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
+#  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+PKG=lk.codegen.risime.debug
+CLS=lk.codegen.risime
+SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
+APK=""; KEEP=0
+while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
+[ -f "$APK" ] || { echo "no APK at $APK (cd android && ./gradlew assembleDebug)"; exit 2; }
+PATH="$("$REPO/scripts/android-target" adb):$PATH"
+I1="${UITEST_REDROID_A:--ui1}"; P1="${UITEST_REDROID_A_PORT:-5851}"
+I2="${UITEST_REDROID_B:--ui2}"; P2="${UITEST_REDROID_B_PORT:-5852}"
+SHOTS="${UITEST_SHOTS:-$REPO/docs/status/screens}"; mkdir -p "$SHOTS"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-uientry.XXXXXX")"
+LOGS="$HOME/risime-logs/uientry$SUF"; mkdir -p "$LOGS"; rm -f "$LOGS"/*.txt "$LOGS"/*.png "$LOGS"/*.xml "$LOGS"/*.log 2>/dev/null || true
+export RISIME_DEV_DB="risime_uientry$SUF" RISIME_DEV_KEYSPACE="risime_uientry$SUF" ERL_EPMD_ADDRESS=127.0.0.1
+export MIX_BUILD_PATH="$REPO/server/_build/uientry$SUF" RISIME_CODE_RELOADER=false
+PIN=1234
+SA=""; SB=""; DEV=A
+pass() { echo "UIENTRY PASS $*"; }
+fail() { echo "UIENTRY FAIL $*"; diag; exit 1; }
+ser() { if [ "$1" = A ]; then echo "$SA"; else echo "$SB"; fi; }
+A() { adb -s "$(ser "$DEV")" "$@"; }
+diag() {
+  local d
+  for d in A B; do
+    [ -n "$(ser $d)" ] || continue
+    adb -s "$(ser $d)" exec-out screencap -p > "$LOGS/$d-screen.png" 2>/dev/null || true
+    adb -s "$(ser $d)" logcat -d > "$LOGS/$d-logcat.txt" 2>/dev/null || true
+    cp "$WORK/ui-$d.xml" "$LOGS/$d-ui.xml" 2>/dev/null || true
+  done
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  echo "    diagnostics in $LOGS"
+}
+cleanup() {
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  tmux kill-session -t "risime-uientry$SUF" 2>/dev/null || true
+  if [ "$KEEP" = 0 ]; then
+    REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+    REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+  fi
+  (cd "$REPO/server" && $M mix ecto.drop --quiet --force >/dev/null 2>&1) || true
+  rm -rf -- "${WORK:?}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+# ---------------------------------------------------------------- server (TABS=on, RISI off)
+ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT busy"; exit 1; }
+cat > "$WORK/fixtures.exs" <<'EXS'
+alias RisiMe.{Accounts, Repo}
+alias RisiMe.Accounts.User
+[mode | _] = System.argv()
+a_phone = "+94770000981"; b_phone = "+94770000982"
+case mode do
+  "setup" ->
+    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "uientry81@example.com", display_name: "ZZ UI A", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "uientry82@example.com", display_name: "ZZ UI B", company: "CodeGen"})
+    IO.puts("uientry: setup ok")
+  "friends" ->
+    a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
+    RisiMe.Social.make_friends!(a.id, b.id)
+    IO.puts("uientry: friends ok")
+  "e2ee" ->
+    a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
+    conv = RisiMe.Messaging.conversation_id(a.id, b.id)
+    IO.puts("uientry: e2ee=#{RisiMe.MLS.group(conv) != nil}")
+end
+EXS
+fx() { (cd server && $M mix run "$WORK/fixtures.exs" "$@" 2>/dev/null | grep '^uientry:' || true); }
+echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB, E2EE on, TABS=on)"
+(cd server && { $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true; } && $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
+  || { echo "could not create/migrate the uientry store (server deps fetched? mix deps.get)"; exit 1; }
+(cd server && $M mix risime.attestation.gen "$WORK/attest.jwk" >/dev/null 2>&1) || true
+[ -f "$WORK/attest.jwk" ] || { echo "no attestation key"; exit 1; }
+tmux new -d -s "risime-uientry$SUF" "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
+  PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text TABS=on \
+  ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix phx.server > '$WORK/server.log' 2>&1"
+for _ in $(seq 1 180); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't start"; tail -20 "$WORK/server.log"; exit 1; }
+curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"tabs":"on"' || { echo "the temp server's /auth/config doesn't say tabs: on"; exit 1; }
+[ "$(fx setup)" = "uientry: setup ok" ] || { echo "fixture: setup"; exit 1; }
+otp() { grep -a "\[DEV OTP\] $1:" "$WORK/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true; }
+
+# ---------------------------------------------------------------- devices
+echo "==> two redroid containers ($I1:$P1, $I2:$P2)"
+SA="$(REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" start)"
+SB="$(REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" start)"
+for DEV in A B; do
+  A uninstall "$PKG" >/dev/null 2>&1 || true
+  A install "$APK" >/dev/null
+  A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  # Redroid's IME can hang system_server while binding (docs/status/android.md); `input text` still types.
+  A shell pm disable-user com.android.inputmethod.latin >/dev/null 2>&1 || true
+  A shell locksettings clear --old "$PIN" >/dev/null 2>&1 || true
+  A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+  A logcat -G 16M >/dev/null 2>&1 || true
+  A logcat -c || true
+done
+
+# ---- UI helpers (uiautomator dump; taps by visible text or content description, as in scripts/call-device-test)
+dump() { A shell rm -f /sdcard/ui.xml >/dev/null 2>&1; A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui-$DEV.xml" 2>/dev/null || : > "$WORK/ui-$DEV.xml"; }
+has() { dump; grep -qF -- "$1" "$WORK/ui-$DEV.xml"; }
+wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "    [$DEV] timeout waiting for: $1"; return 1; }
+# Exact visible text, compared after XML decoding (uiautomator writes emoji as &#NNN; entities).
+wait_text() { for _ in $(seq 1 "${2:-30}"); do [ -n "$(node_xy "$1")" ] && return 0; sleep 1; done; echo "    [$DEV] timeout waiting for text: $1"; return 1; }
+wait_gone() { for _ in $(seq 1 "${2:-15}"); do has "$1" || return 0; sleep 1; done; echo "    [$DEV] still on screen: $1"; return 1; }
+# The centre of the first node whose text or content-desc is $1 ("prefix*" matches a text prefix).
+node_xy() {
+  dump
+  python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+want = sys.argv[2]
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+for n in nodes:
+    t, d = n.get('text') or '', n.get('content-desc') or ''
+    if t == want or d == want or (want.endswith('*') and t.startswith(want[:-1])):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+}
+tap() { local b; b="$(node_xy "$1")"; [ -n "$b" ] || { echo "    [$DEV] no UI node: $1"; return 1; }; A shell input tap $b; }
+long_press() { local b; b="$(node_xy "$1")"; [ -n "$b" ] || { echo "    [$DEV] no UI node: $1"; return 1; }; set -- $b; A shell input swipe "$1" "$2" "$1" "$2" 900; }
+clear_field() { A shell "for i in \$(seq 1 80); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true; }
+hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; [[ "$st" == *"mInputShown=true"* ]] && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
+type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
+dismiss_prompts() { has "Not now" && { tap "Not now" || true; }; has "Later" && { tap "Later" || true; }; true; }
+on_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui-$DEV.xml"; }
+wait_list() { for _ in $(seq 1 "${1:-30}"); do on_list && return 0; sleep 1; done; return 1; }
+back_to_list() { for _ in 1 2 3 4 5; do on_list && return 0; A shell input keyevent KEYCODE_BACK; sleep 1; done; on_list; }
+rl() { A logcat -d -s RisiMe:* 2>/dev/null | grep -a "$1" || true; }
+count() { rl "$1" | wc -l; }
+# A screenshot of this step, downscaled to 360 px wide and palette-quantised (docs/status/screens).
+shot() {
+  A exec-out screencap -p > "$WORK/shot.png" 2>/dev/null || return 0
+  python3 -I - "$WORK/shot.png" "$SHOTS/$1.png" <<'PY' || cp "$WORK/shot.png" "$SHOTS/$1.png"
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1]).convert("RGB")
+w, h = im.size
+im = im.resize((360, max(1, h * 360 // w)), Image.LANCZOS)
+im.quantize(colors=96, method=Image.Quantize.MEDIANCUT).save(sys.argv[2], optimize=True)
+PY
+  echo "    screenshot: docs/status/screens/$1.png"
+}
+# The system's PIN prompt for a chat-lock confirmation ([n] = how many prompts were shown before it).
+wait_chat_prompt() {
+  for _ in $(seq 1 20); do [ "$(count 'RisiMe chat lock: prompt shown')" -gt "$1" ] && return 0; sleep 1; done
+  return 1
+}
+enter_pin() { sleep 1; A shell input text "$PIN"; sleep 0.3; A shell input keyevent KEYCODE_ENTER; }
+# Call mark_prompts right before the tap that asks for the PIN (the prompt can show within the tap).
+mark_prompts() { PROMPTS0="$(count 'RisiMe chat lock: prompt shown')"; OKS0="$(count 'RisiMe chat lock: auth succeeded')"; }
+PROMPTS0=0; OKS0=0
+confirm_pin() {  # $1 label: the prompt appears, the PIN confirms it, "auth succeeded"
+  local n="$PROMPTS0" ok="$OKS0"
+  wait_chat_prompt "$n" || fail "$1: no fingerprint/PIN prompt appeared"
+  shot_pending="${2:-}"; [ -n "$shot_pending" ] && shot "$shot_pending"
+  enter_pin
+  for _ in $(seq 1 15); do [ "$(count 'RisiMe chat lock: auth succeeded')" -gt "$ok" ] && return 0; sleep 1; done
+  fail "$1: the PIN didn't confirm (no 'auth succeeded')"
+}
+sign_in() {  # $1 phone, $2 email
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null
+  wait_for "Server:" 40 || return 1
+  tap "Server:*" || return 1; sleep 1
+  tap "Server URL" || tap "http://*" || tap "https://*" || return 1; sleep 0.5
+  clear_field; A shell input text "http://127.0.0.1:$PORT"; sleep 0.5; hide_keyboard
+  if ! tap "Use this server"; then tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; fi
+  sleep 2
+  for _ in $(seq 1 30); do has "Phone number" && break; has "Developer sign-in (OTP)" && tap "Developer sign-in (OTP)"; sleep 1; done
+  wait_for "Phone number" 5 || return 1
+  type_into "Phone number" "$1"; type_into "Work email" "$2"; hide_keyboard; tap "Send code" || return 1
+  wait_for "6-digit code" 30 || return 1
+  local code=""; for _ in $(seq 1 20); do code="$(otp "$1")"; [ -n "$code" ] && break; sleep 1; done
+  [ -n "$code" ] || return 1
+  type_into "6-digit code" "$code"; sleep 1; has "Verify" && tap "Verify" || true
+  wait_list 40 || return 1
+  dismiss_prompts
+}
+open_chat() {
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1; dismiss_prompts
+  back_to_list || { A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2; dismiss_prompts; }
+  wait_for "$1" 40 || return 1; tap "$1"; sleep 2
+}
+logcat_ok() { local out; out="$(A logcat -d 2>/dev/null || true)"; printf '%s\n' "$out" | "$REPO/scripts/logcat-gate" "$1 $DEV" || fail "$1: $DEV crashed or touched the database on the main thread"; }
+
+# ---------------------------------------------------------------- 1. sign in, friends, e2ee DM
+DEV=A; sign_in "+94770000981" "uientry81@example.com" || fail "sign-in A"
+DEV=B; sign_in "+94770000982" "uientry82@example.com" || fail "sign-in B"
+pass "A and B signed in through the login UI"
+[ "$(fx friends)" = "uientry: friends ok" ] || fail "fixture: friends"
+for DEV in A B; do A shell am force-stop "$PKG"; done
+DEV=B; open_chat "ZZ UI A" || fail "B: the chat with A isn't listed"
+DEV=A; open_chat "ZZ UI B" || fail "A: the chat with B isn't listed"
+for _ in $(seq 1 60); do [ "$(fx e2ee)" = "uientry: e2ee=true" ] && break; sleep 2; done
+[ "$(fx e2ee)" = "uientry: e2ee=true" ] || fail "the DM never became e2ee"
+pass "both opened the DM; it is e2ee"
+
+# ---------------------------------------------------------------- 2. the tab row under the header, Start Official
+DEV=A
+wait_text "🔒 Private" 30 || fail "tab row: no '🔒 Private' under the chat header (tabs on)"
+wait_text "● Official" 5 || fail "tab row: no '● Official' under the chat header (tabs on)"
+python3 -I - "$WORK/ui-A.xml" <<'PY' || fail "tab row: not directly under the chat header"
+import re, sys, xml.etree.ElementTree as ET
+nodes = list(ET.parse(sys.argv[1]).iter('node'))
+def top(pred):
+    for n in nodes:
+        if pred(n):
+            return list(map(int, re.findall(r'\d+', n.get('bounds'))))
+name = top(lambda n: n.get('text') == 'ZZ UI B')
+tab = top(lambda n: n.get('text') == '🔒 Private')
+assert name and tab and name[1] < tab[1] < 600, (name, tab)
+PY
+shot "01-tab-row"
+pass "the '🔒 Private' | '● Official' row is directly under the chat header"
+tap "● Official" || fail "tap the Official tab"
+wait_for 'text="Start Official"' 20 || fail "the Official tab shows no 'Start Official'"
+shot "02-start-official"
+pass "the Official tab offers 'Start Official'"
+tap "🔒 Private" || fail "back to the Private tab"
+wait_for 'text="Encrypted message"' 15 || fail "the Private tab's composer didn't come back"
+
+# ---------------------------------------------------------------- 3. chat info: encryption within 30 s, Lock chat
+tap "ZZ UI B" || fail "tap the chat's name (chat info)"
+wait_for 'text="Chat info"' 15 || fail "the name didn't open Chat info"
+t0=$(date +%s)
+wait_for 'text="Messages are end-to-end encrypted"' 30 || { has "Checking encryption" && fail "chat info: still 'Checking encryption…' after 30 s"; fail "chat info: no 'Messages are end-to-end encrypted' within 30 s"; }
+pass "chat info: 'Messages are end-to-end encrypted' after $(( $(date +%s) - t0 )) s"
+has 'text="Lock chat"' || fail "chat info: no 'Lock chat' toggle"
+has 'text="Official"' || fail "chat info: no Official switch (tabs on)"
+shot "03-chat-info"
+pass "chat info: 'Lock chat' under the Official section"
+A shell input keyevent KEYCODE_BACK; sleep 1
+
+# ---------------------------------------------------------------- 4. the chat's ⋮ → Lock chat → PIN
+A shell locksettings set-pin "$PIN" >/dev/null || fail "locksettings set-pin"
+wait_for 'text="Encrypted message"' 10 || fail "not back in the chat"
+tap "More options" || fail "the chat's ⋮"
+wait_for 'text="Lock chat"' 10 || fail "the chat's ⋮ has no 'Lock chat'"
+shot "04-chat-menu-lock"
+pass "the chat's ⋮ has 'Lock chat'"
+mark_prompts; tap "Lock chat" || fail "tap Lock chat"
+# (No screenshot of the PIN prompt itself: it is a secure window, screencap shows the screen behind it.)
+confirm_pin "Lock chat (chat ⋮)"
+wait_list 15 || fail "after locking: not back on the chat list"
+wait_gone 'text="ZZ UI B"' 15 || fail "the locked chat is still on the chat list"
+shot "06-chat-locked"
+pass "locked through the PIN prompt; the chat left the chat list"
+
+# ---------------------------------------------------------------- 5. pull down → Locked chats → folder → unlock
+size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
+found=0
+for _ in 1 2 3; do
+  A shell input swipe $((W / 2)) $((H * 35 / 100)) $((W / 2)) $((H * 80 / 100)) 500; sleep 1
+  has 'text="Locked chats"' && { found=1; break; }
+done
+[ "$found" = 1 ] || fail "pull-down: no 'Locked chats' row at the top of the chat list"
+shot "07-locked-chats-row"
+pass "pull-down shows the 'Locked chats' row"
+mark_prompts; tap "Locked chats" || fail "tap Locked chats"
+confirm_pin "Locked chats folder"
+wait_for 'text="ZZ UI B"' 15 || fail "the Locked chats folder doesn't hold the chat"
+shot "08-locked-folder"
+pass "PIN → the Locked chats folder holds the chat"
+long_press "ZZ UI B" || fail "long-press in the folder"
+wait_for 'text="Unlock chat"' 10 || fail "the folder's long-press has no 'Unlock chat'"
+tap "Unlock chat" || fail "tap Unlock chat"
+sleep 1; back_to_list || fail "back to the chat list"
+wait_for 'text="ZZ UI B"' 15 || fail "the unlocked chat didn't come back to the list"
+pass "unlocked from the folder; the chat is back on the list"
+
+# ---------------------------------------------------------------- 6. long-press → selection bar ⋮ → Lock chat
+long_press "ZZ UI B" || fail "long-press the chat"
+wait_for 'content-desc="Delete chat"' 10 || fail "long-press: no selection bar"
+tap "More options" || fail "the selection bar's ⋮"
+wait_for 'text="Lock chat"' 10 || fail "the selection bar's ⋮ has no 'Lock chat'"
+shot "09-long-press-menu"
+pass "long-press → ⋮ has 'Lock chat'"
+A shell input keyevent KEYCODE_BACK; sleep 0.5; A shell input keyevent KEYCODE_BACK; sleep 1
+wait_list 10 || fail "the selection didn't end"
+
+# ---------------------------------------------------------------- 7. ⋮ → Chat lock settings
+tap "More options" || fail "the chat list's ⋮"
+wait_for 'text="Chat lock settings"' 10 || fail "the chat list's ⋮ has no 'Chat lock settings'"
+mark_prompts; tap "Chat lock settings" || fail "tap Chat lock settings"
+confirm_pin "Chat lock settings"
+wait_for 'text="Hide locked chats"' 15 || fail "chat lock settings: no 'Hide locked chats'"
+has 'text="Secret code"' || fail "chat lock settings: no 'Secret code'"
+shot "10-chat-lock-settings"
+pass "Chat lock settings: 'Hide locked chats' and 'Secret code'"
+back_to_list || fail "back to the chat list"
+
+# ---------------------------------------------------------------- 8. Settings → Privacy → What Risi knows about me
+tap "More options" || fail "the chat list's ⋮ (Settings)"
+wait_for 'text="Settings"' 10 || fail "no Settings item"
+tap "Settings" || fail "tap Settings"
+found=0
+for _ in 1 2 3 4 5 6; do
+  has 'text="What Risi knows about me"' && { found=1; break; }
+  A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1
+done
+[ "$found" = 1 ] || fail "Settings: no 'What Risi knows about me' (tabs on)"
+tap "What Risi knows about me" || fail "tap What Risi knows about me"
+wait_for 'stored anything about you' 20 || fail "'What Risi knows about me' didn't open cleanly"
+for bad in "Something went wrong" "reach the server" "The server had a problem" "available for this account"; do
+  has "$bad" && fail "'What Risi knows about me' shows an error: $bad"
+done
+shot "11-what-risi-knows"
+pass "Settings → Privacy → 'What Risi knows about me' opens without an error"
+
+logcat_ok "ui entry"
+DEV=B; logcat_ok "ui entry"
+echo "UI ENTRY OK"
