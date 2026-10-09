@@ -1,5 +1,29 @@
 # Android status — 0.2 nightlies
 
+## P0 calendar honesty (nightly.45 real phone: "Check my calendar for Monday 2pm" → "Your calendar is clear" while Google Calendar was full) — READY (JVM gate green)
+
+- **Diagnosis.** Prod `risi_turn_steps` for both of Harsha's checks (09:18 UTC): `calendar_check` status
+  `ok`, 79-byte result = `{"from","to","blocks":[]}`: READ_CALENDAR was granted and the provider returned
+  **zero instances** for the window. The read path was already `CalendarContract.Instances`
+  (`instances/when/<ms>/<ms>`, recurring events expanded, ms not s, no account filter, no remembered-pick
+  filter), so no query bug was found; the only filter was `Instances.VISIBLE=1`. Candidates on his phone:
+  the Google account's Calendar sync to the provider is off (`SYNC_EVENTS=0`, events then exist only in the
+  Google Calendar app's own store), all Google calendars hidden, or a genuinely empty 1-hour window. The new
+  `sources` report (and Settings → Risi skills → Calendar → Details) now shows which one.
+- **Changes.** `calendar_check` result adds `sources` + `connected_sources` (below); per visible calendar the
+  instance count in the window; `read_ok` only with a visible, syncing Google calendar; a provider failure is
+  `read_ok:false` (`api_error`), never an empty calendar; hidden calendars stay out of free/busy. Calendars
+  list reads `SYNC_EVENTS`; Instances projection adds `CALENDAR_ID`. Settings → Calendar → Details: "What Risi
+  can read" (permission state, each calendar with account, events in the next 7 days, hidden / sync off, the
+  exact reason) and "Google Calendar (direct): not connected yet".
+- **Contract asks (v1.29 §29.2, shape as aligned by root).** `calendar_check` ok result:
+  `{"blocks":[…], "sources":[{"source":"phone_provider"|"google_api","calendars":[{"name","account_type","events":int}],"read_ok":bool,"reason":null|"not_connected"|"no_permission"|"reauth_needed"|"no_play_services"|"network"|"timeout"|"api_error"|"no_calendars"}], "connected_sources":["phone_provider"]}`.
+  Both sources always present (`google_api` = `read_ok:false, reason:"not_connected"`); an email-named
+  calendar is sent as "Primary calendar"; no titles/attendees/ids. Ask: finer `phone_provider` reasons
+  (`google_sync_off`, `google_calendars_hidden`, `no_google_calendar`); the phone knows them but maps them to
+  `no_calendars` on the wire for now, so Risi can say "turn on Calendar sync for your Google account".
+  Permission missing stays status `no_permission` (no source connected).
+
 ## Server items 8–10 (2026-10-09): offer cards, item_clarify, My promises split — READY
 For server 6cc393a/35a6b99/47156fe ("Android needs" in docs/status/server.md). All new fields optional; an older
 server's replies and cards render as before; unknown fields/kinds stay tolerated.

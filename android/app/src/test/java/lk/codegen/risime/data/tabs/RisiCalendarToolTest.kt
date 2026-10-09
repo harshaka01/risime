@@ -160,7 +160,25 @@ class RisiCalendarToolTest {
         val c = call("event_risi_tool_call_calendar_check.json")
         be.extra += BusyRow(Instant.parse("2026-10-13T04:00:00Z").toEpochMilli(), Instant.parse("2026-10-13T05:00:00Z").toEpochMilli(), false, true)
         val r = ex.execute(c)
-        assertEquals("""{"blocks":[{"start":"2026-10-13T04:00:00Z","end":"2026-10-13T05:00:00Z","busy":true,"all_day":false}]}""", r.result.toString())
+        assertEquals(
+            """{"blocks":[{"start":"2026-10-13T04:00:00Z","end":"2026-10-13T05:00:00Z","busy":true,"all_day":false}],""" +
+                """"sources":[{"source":"phone_provider","calendars":[{"name":"Primary calendar","account_type":"com.google","events":0},""" +
+                """{"name":"Holidays","account_type":"com.google","events":0},{"name":"Phone","account_type":"LOCAL","events":0}],"read_ok":true,"reason":null},""" +
+                """{"source":"google_api","calendars":[],"read_ok":false,"reason":"not_connected"}],""" +
+                """"connected_sources":["phone_provider"]}""",
+            r.result.toString(),
+        )
+        // No Google calendar on the phone: the read can't be trusted, and says why.
+        val saved = be.cals.toList()
+        be.cals.removeAll { it.accountType == "com.google" }
+        val local = ProtocolJson.decodeFromJsonElement(lk.codegen.risime.net.CalendarCheckResult.serializer(), ex.execute(c).result!!)
+        val phone = local.sources!!.single { it.source == "phone_provider" }
+        assertEquals(false, phone.readOk)
+        assertEquals("no_calendars", phone.reason)
+        assertEquals("not_connected", local.sources!!.single { it.source == "google_api" }.reason)
+        assertEquals(emptyList<String>(), local.connectedSources)
+        be.cals.clear()
+        be.cals += saved
         val wide = c.copy(args = JsonObject(mapOf("from" to JsonPrimitive("2026-10-01T00:00:00Z"), "to" to JsonPrimitive("2026-10-16T00:00:01Z"))))
         assertEquals("""{"code":"bad_args"}""", ex.execute(wide).result.toString())
         be.read = false

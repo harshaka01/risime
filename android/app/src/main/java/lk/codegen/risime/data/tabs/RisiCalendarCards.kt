@@ -47,6 +47,9 @@ interface RisiCalendarPort {
 
     /** The calendar app at that event. */
     fun open(eventId: Long)
+
+    /** Settings → Calendar → Details: the calendars this phone can see (null: no read permission). */
+    suspend fun overview(): CalendarOverview? = null
 }
 
 /** The event a `calendar_add` card proposes. */

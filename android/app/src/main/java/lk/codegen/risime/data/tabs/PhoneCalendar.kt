@@ -34,10 +34,15 @@ data class PhoneCalendarInfo(
     val visible: Boolean,
     val ownerAccount: String? = null,
     val isPrimary: Boolean = false,
+    /** `SYNC_EVENTS`: false when the account's sync for this calendar is off (the provider holds no events for it). */
+    val syncEvents: Boolean = true,
 )
 
-/** One instance in a time window (`CalendarContract.Instances`): only what free/busy needs. */
-data class BusyRow(val begin: Long, val end: Long, val allDay: Boolean, val busy: Boolean)
+/**
+ * One instance in a time window (`CalendarContract.Instances`): only what free/busy needs, plus its
+ * calendar (for the per-calendar counts a check reports) and whether that calendar is visible.
+ */
+data class BusyRow(val begin: Long, val end: Long, val allDay: Boolean, val busy: Boolean, val calendarId: Long = 0, val visible: Boolean = true)
 
 /** An event read back from the provider (`CalendarContract.Events`). */
 data class EventRow(val id: Long, val calendarId: Long, val title: String?, val dtStart: Long, val dtEnd: Long, val allDay: Boolean)
@@ -50,7 +55,10 @@ interface CalendarBackend {
 
     fun calendars(): List<PhoneCalendarInfo>
 
-    /** Instances of visible calendars overlapping [fromMs, toMs) (cancelled and declined ones left out). */
+    /**
+     * Instances of every calendar overlapping [fromMs, toMs) (cancelled and declined ones left out), over
+     * `CalendarContract.Instances` (recurring events expanded); [BusyRow.visible] says if its calendar is shown.
+     */
     fun instances(fromMs: Long, toMs: Long): List<BusyRow>
 
     /** The new event's id, or null when the provider refused it. */
@@ -207,6 +215,79 @@ class CalendarWriteLog(
     }
 }
 
+/** Settings → Calendar → Details: each calendar with its instances in the next days, and the read verdict. */
+data class CalendarOverview(val calendars: List<Pair<PhoneCalendarInfo, Int>>, val readOk: Boolean, val reason: String?)
+
+/** What a `calendar_check` read: the merged blocks and the `phone_provider` source report. */
+data class CalendarRead(val blocks: List<CalendarBlock>, val source: lk.codegen.risime.net.CalendarSourceReport) {
+    companion object {
+        const val SOURCE = "phone_provider"
+        const val MAX_CALENDARS = 30
+        const val NO_CALENDARS = "no_calendars"
+        const val NO_GOOGLE_CALENDAR = "no_google_calendar"
+        const val GOOGLE_SYNC_OFF = "google_sync_off"
+        const val GOOGLE_HIDDEN = "google_calendars_hidden"
+        const val QUERY_FAILED = "query_failed"
+
+        fun source(cals: List<lk.codegen.risime.net.CalendarSourceCalendar>, ok: Boolean, reason: String?) =
+            lk.codegen.risime.net.CalendarSourceReport(SOURCE, cals, ok, if (ok) null else reason)
+
+        const val GOOGLE_API = "google_api"
+
+        /** v1.29 §29.2 (root alignment): the direct Google Calendar connection isn't built yet. */
+        val GOOGLE_API_NOT_CONNECTED = lk.codegen.risime.net.CalendarSourceReport(GOOGLE_API, emptyList(), false, "not_connected")
+
+        private val EMAIL = Regex("^[^@\\s]+@[^@\\s]+$")
+
+        /** The calendar's name as this phone shows it (Settings; never sent). */
+        fun nameOf(c: PhoneCalendarInfo): String = c.displayName.ifBlank { c.accountName }.ifBlank { CalendarSelection.typeLabel(c.accountType) }.take(100)
+
+        /** The name a check sends: an email address (the account's own calendar) becomes "Primary calendar". */
+        fun wireName(c: PhoneCalendarInfo): String = nameOf(c).let { if (EMAIL.matches(it.trim())) "Primary calendar" else it }
+
+        /** v1.29 §29.2 reason codes on the wire (the precise reason stays on the phone, for Settings). */
+        fun wireReason(r: String?): String? = when (r) {
+            null -> null
+            NO_CALENDARS, NO_GOOGLE_CALENDAR, GOOGLE_SYNC_OFF, GOOGLE_HIDDEN -> "no_calendars"
+            QUERY_FAILED -> "api_error"
+            else -> r
+        }
+
+        /**
+         * Can a read of these calendars be trusted? Only with a Google account calendar that syncs events
+         * to this phone and is shown; else the exact reason.
+         */
+        fun verdict(cals: List<PhoneCalendarInfo>): Pair<Boolean, String?> {
+            val google = cals.filter(CalendarSelection::isGoogle)
+            return when {
+                cals.isEmpty() -> false to NO_CALENDARS
+                google.isEmpty() -> false to NO_GOOGLE_CALENDAR
+                google.none { it.syncEvents } -> false to GOOGLE_SYNC_OFF
+                google.none { it.syncEvents && it.visible } -> false to GOOGLE_HIDDEN
+                else -> true to null
+            }
+        }
+
+        /** The words for a reason, as Settings shows it. */
+        fun reasonText(reason: String?): String = when (reason) {
+            null -> ""
+            NO_CALENDARS -> "This phone has no calendars."
+            NO_GOOGLE_CALENDAR -> "No Google account calendar on this phone. Add your Google account in Android Settings → Accounts."
+            GOOGLE_SYNC_OFF -> "Calendar sync is off for your Google account. Turn it on in Android Settings → Accounts → Google → Account sync → Calendar."
+            GOOGLE_HIDDEN -> "Your Google calendars are hidden on this phone."
+            QUERY_FAILED -> "The phone's calendar couldn't be read."
+            else -> reason
+        }
+    }
+
+    val wire: lk.codegen.risime.net.CalendarCheckResult
+        get() = lk.codegen.risime.net.CalendarCheckResult(
+            blocks,
+            listOf(source.copy(reason = wireReason(source.reason)), GOOGLE_API_NOT_CONNECTED),
+            if (source.readOk) listOf(SOURCE) else emptyList(),
+        )
+}
+
 sealed interface CalendarAddOutcome {
     data class Added(val record: CalendarAddRecord, val calendar: PhoneCalendarInfo) : CalendarAddOutcome
 
@@ -285,9 +366,46 @@ class PhoneCalendar(
     }
 
     /** Null without read permission. */
-    fun check(fromMs: Long, toMs: Long): List<CalendarBlock>? {
+    fun check(fromMs: Long, toMs: Long): List<CalendarBlock>? = read(fromMs, toMs)?.blocks
+
+    /**
+     * P0 2026-10-09 (honesty): free/busy over the visible calendars' instances, and what was read: the
+     * calendars (name, account type, instances in the window) and whether the read can be trusted
+     * (`read_ok`: a visible, synced Google calendar exists). Null without read permission.
+     */
+    fun read(fromMs: Long, toMs: Long): CalendarRead? {
         if (!backend.canRead()) return null
-        return merge(backend.instances(fromMs, toMs), fromMs, toMs)
+        val cals = runCatching { backend.calendars() }.getOrElse {
+            log("risi calendar: calendar list failed")
+            return CalendarRead(emptyList(), CalendarRead.source(emptyList(), false, CalendarRead.QUERY_FAILED))
+        }
+        val rows = runCatching { backend.instances(fromMs, toMs) }.getOrElse {
+            log("risi calendar: instances query failed")
+            return CalendarRead(emptyList(), CalendarRead.source(emptyList(), false, CalendarRead.QUERY_FAILED))
+        }
+        val known = cals.map { it.id }.toSet()
+        val visibleIds = cals.filter { it.visible }.map { it.id }.toSet()
+        // A row of a calendar the list doesn't know (a race) counts when its own flag says visible.
+        val used = rows.filter { r -> r.visible && (r.calendarId !in known || r.calendarId in visibleIds) }
+        val inWindow = used.filter { it.end > fromMs && it.begin < toMs && it.end > it.begin }
+        val read = cals.filter { it.visible }.sortedWith(googleFirst).take(CalendarRead.MAX_CALENDARS).map { c ->
+            lk.codegen.risime.net.CalendarSourceCalendar(CalendarRead.wireName(c),c.accountType.take(100), inWindow.count { it.calendarId == c.id })
+        }
+        val (ok, reason) = CalendarRead.verdict(cals)
+        log("risi calendar: check read ${cals.size} calendars (${read.size} visible), ${inWindow.size} instances, read_ok=$ok${reason?.let { " ($it)" } ?: ""}")
+        return CalendarRead(merge(used, fromMs, toMs), CalendarRead.source(read, ok, reason))
+    }
+
+    private val googleFirst = compareByDescending<PhoneCalendarInfo> { CalendarSelection.isGoogle(it) }.thenBy { it.id }
+
+    /** Settings → Calendar → Details: every calendar with its instances in the next [days] days (null: no permission). */
+    fun overview(days: Int = 7): CalendarOverview? {
+        if (!backend.canRead()) return null
+        val from = now()
+        val cals = runCatching { backend.calendars() }.getOrElse { return CalendarOverview(emptyList(), false, CalendarRead.QUERY_FAILED) }
+        val rows = runCatching { backend.instances(from, from + days * 86_400_000L) }.getOrElse { return CalendarOverview(emptyList(), false, CalendarRead.QUERY_FAILED) }
+        val (ok, reason) = CalendarRead.verdict(cals)
+        return CalendarOverview(cals.sortedWith(googleFirst).map { c -> c to rows.count { it.calendarId == c.id } }, ok, reason)
     }
 
     /** All-day events are stored as UTC midnights of the phone's dates (Android's rule). */

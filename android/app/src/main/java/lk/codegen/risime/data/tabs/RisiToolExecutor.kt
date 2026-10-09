@@ -261,9 +261,10 @@ class RisiToolExecutor(
         if (to <= from || to - from > PhoneCalendar.MAX_WINDOW_MS) return RisiToolResult.error(RisiToolErrorCodes.BAD_ARGS)
         if (gated && !skillOn(call)) { log("risi tool ${call.tool}: declined (skill off on this phone)"); return RisiToolResult.declined() }
         val cal = calendar ?: return RisiToolResult.error(RisiToolErrorCodes.CALENDAR_UNAVAILABLE)
-        val blocks = runCatching { cal.check(from, to) }.getOrElse { return RisiToolResult.error(RisiToolErrorCodes.CALENDAR_UNAVAILABLE) }
+        // P0 2026-10-09 (honesty): the result names the calendars read and whether the read is trustworthy.
+        val read = runCatching { cal.read(from, to) }.getOrElse { return RisiToolResult.error(RisiToolErrorCodes.CALENDAR_UNAVAILABLE) }
             ?: return RisiToolResult(RisiToolResult.NO_PERMISSION, null)
-        return ok(CalendarCheckResult.serializer(), CalendarCheckResult(blocks))
+        return ok(CalendarCheckResult.serializer(), read.wire)
     }
 
     /**

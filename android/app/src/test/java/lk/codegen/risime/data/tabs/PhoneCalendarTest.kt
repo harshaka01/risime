@@ -29,7 +29,7 @@ class FakeCalendarBackend : CalendarBackend {
     override fun calendars() = cals.toList()
 
     override fun instances(fromMs: Long, toMs: Long) =
-        events.values.filter { it.dtEnd > fromMs && it.dtStart < toMs }.map { BusyRow(it.dtStart, it.dtEnd, it.allDay, true) } + extra
+        events.values.filter { it.dtEnd > fromMs && it.dtStart < toMs }.map { e -> BusyRow(e.dtStart, e.dtEnd, e.allDay, true, e.calendarId, cals.firstOrNull { it.id == e.calendarId }?.visible ?: true) } + extra
 
     override fun insert(calendarId: Long, title: String, startMs: Long, endMs: Long, allDay: Boolean, timeZone: String): Long? {
         if (refuseInsert || cals.none { it.id == calendarId }) return null
@@ -190,5 +190,69 @@ class PhoneCalendarTest {
             "Add \"Interview with Shenika\" to my calendar on Mon 12 Oct 2026 from 14:30 to 15:15",
             RisiCalendarCards.editRequest("Interview with Shenika", java.time.LocalDate.of(2026, 10, 12), java.time.LocalTime.of(14, 30), 45, false),
         )
+    }
+
+    // ---- P0 2026-10-09 honesty: what a check read ----
+
+    @Test fun checkCountsPerVisibleCalendarAndLeavesHiddenOnesOut() {
+        be.cals += listOf(google, googleWork, hidden)
+        be.events[1] = EventRow(1, google.id, "x", start, end, false)
+        be.events[2] = EventRow(2, googleWork.id, "y", start + 600_000, end, false)
+        be.events[3] = EventRow(3, hidden.id, "z", end, end + 3_600_000, false)
+        val r = cal.read(start, end + 3_600_000)!!
+        assertTrue(r.source.readOk)
+        assertNull(r.source.reason)
+        assertEquals(listOf("Primary calendar" to 1, "Work" to 1), r.source.calendars.map { it.name to it.events })
+        // Only the visible calendars' busy time; the hidden calendar's hour is free.
+        assertEquals(1, r.blocks.size)
+        assertEquals("2026-10-12T09:30:00Z", r.blocks[0].end)
+        assertEquals(listOf("phone_provider"), r.wire.connectedSources)
+    }
+
+    @Test fun anEmptyReadOfASyncedGoogleCalendarIsTrustworthy() {
+        be.cals += google
+        val r = cal.read(start, end)!!
+        assertTrue(r.blocks.isEmpty())
+        assertTrue(r.source.readOk)
+        assertEquals(listOf("Primary calendar" to 0), r.source.calendars.map { it.name to it.events })
+    }
+
+    @Test fun untrustworthyReadsSayWhy() {
+        assertEquals(false to "no_calendars", CalendarRead.verdict(emptyList()))
+        assertEquals(false to "no_google_calendar", CalendarRead.verdict(listOf(local)))
+        assertEquals(false to "google_sync_off", CalendarRead.verdict(listOf(local, google.copy(syncEvents = false))))
+        assertEquals(false to "google_calendars_hidden", CalendarRead.verdict(listOf(hidden)))
+        assertEquals(true to null, CalendarRead.verdict(listOf(hidden, google)))
+        be.cals += google.copy(syncEvents = false)
+        val r = cal.read(start, end)!!
+        assertEquals(false, r.source.readOk)
+        assertEquals("google_sync_off", r.source.reason)
+        assertEquals(emptyList<String>(), r.wire.connectedSources)
+    }
+
+    @Test fun permissionMissingIsNotAnEmptyCalendar() {
+        be.cals += google
+        be.read = false
+        assertNull(cal.read(start, end))
+        assertNull(cal.check(start, end))
+        assertNull(cal.overview())
+    }
+
+    @Test fun aFailingProviderIsNotAnEmptyCalendar() {
+        val failing = object : CalendarBackend by be {
+            override fun instances(fromMs: Long, toMs: Long): List<BusyRow> = error("provider died")
+        }
+        be.cals += google
+        val r = PhoneCalendar(failing, choice, log).read(start, end)!!
+        assertEquals(false, r.source.readOk)
+        assertEquals("query_failed", r.source.reason)
+    }
+
+    @Test fun overviewCountsTheNextSevenDaysForEveryCalendar() {
+        be.cals += listOf(google, hidden)
+        be.events[1] = EventRow(1, hidden.id, "x", 2000L, 3000L, false)
+        val o = cal.overview()!!
+        assertEquals(listOf(google to 0, hidden to 1), o.calendars)
+        assertTrue(o.readOk)
     }
 }

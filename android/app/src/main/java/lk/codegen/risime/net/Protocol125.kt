@@ -174,7 +174,34 @@ data class CalendarAddArgs(
 data class CalendarBlock(val start: String, val end: String, val busy: Boolean, @SerialName("all_day") val allDay: Boolean)
 
 @Serializable
-data class CalendarCheckResult(val blocks: List<CalendarBlock>)
+data class CalendarCheckResult(
+    val blocks: List<CalendarBlock>,
+    /**
+     * P0 2026-10-09 (honesty, docs/status/android.md "Contract asks"): what was actually read, per source.
+     * Null only on an old phone (the server then treats the read as unknown: never "clear").
+     */
+    val sources: List<CalendarSourceReport>? = null,
+    /** The sources read successfully (`read_ok`): `["phone_provider"]` or empty. */
+    @SerialName("connected_sources") val connectedSources: List<String>? = null,
+)
+
+/** One calendar a check read: its name, raw account type (`com.google`, `LOCAL`…) and instances in the window. */
+@Serializable
+data class CalendarSourceCalendar(val name: String, @SerialName("account_type") val accountType: String, val events: Int)
+
+/**
+ * One source of a `calendar_check` (v1.29 §29.2 as aligned with root): `phone_provider` (Android's
+ * CalendarContract) or `google_api` (not connected yet). `read_ok` false with a `reason` (`not_connected`,
+ * `no_permission`, `reauth_needed`, `no_play_services`, `network`, `timeout`, `api_error`, `no_calendars`)
+ * when nothing trustworthy was read. Names only: an email-named calendar is sent as "Primary calendar".
+ */
+@Serializable
+data class CalendarSourceReport(
+    val source: String,
+    val calendars: List<CalendarSourceCalendar>,
+    @SerialName("read_ok") val readOk: Boolean,
+    val reason: String? = null,
+)
 
 @Serializable
 data class CalendarAddResult(

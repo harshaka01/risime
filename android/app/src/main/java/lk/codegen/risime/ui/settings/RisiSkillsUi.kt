@@ -411,6 +411,10 @@ private fun SkillCard(
                 }
             }
             s.client?.let { Text("This phone: " + permissionText(it.permission), style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("risi_skill_client_${s.id}")) }
+            if (calendar != null) {
+                HorizontalDivider()
+                CalendarSourcesBlock(calendar)
+            }
             if (calendar != null && s.on) {
                 HorizontalDivider()
                 CalendarChoiceRow(calendar)
@@ -510,6 +514,43 @@ fun revokeCancelLabel(skillId: String, pending: Int?): String? = when {
     skillId == RisiSkillIds.SCHEDULED_MESSAGES -> if (pending == null || pending > 0) "Also cancel ${pending ?: "the"} pending" + if (pending == 1) " message" else " messages" else null
     skillId == RisiSkillIds.REMINDERS -> "Also cancel pending reminders"
     else -> null
+}
+
+/**
+ * P0 2026-10-09 Calendar → Details: what Risi can read on this phone: the permission, each calendar (name,
+ * account, events in the next 7 days, hidden / sync off), why a check can't be trusted, and the direct
+ * Google Calendar connection (not built yet).
+ */
+@Composable
+private fun CalendarSourcesBlock(port: lk.codegen.risime.data.tabs.RisiCalendarPort) {
+    var loaded by remember { mutableStateOf(false) }
+    var ov by remember { mutableStateOf<lk.codegen.risime.data.tabs.CalendarOverview?>(null) }
+    LaunchedEffect(Unit) { ov = runCatching { port.overview() }.getOrNull(); loaded = true }
+    Column(Modifier.testTag("risi_calendar_sources"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+        Text("What Risi can read", style = MaterialTheme.typography.titleSmall)
+        val o = ov
+        when {
+            !loaded -> Text("Reading the phone's calendars…", style = MaterialTheme.typography.bodySmall)
+            o == null -> Text("Phone calendar: calendar permission is off on this phone, so Risi can't read it.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_calendar_sources_permission"))
+            else -> {
+                Text("Phone calendar: permission on", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_calendar_sources_permission"))
+                if (o.calendars.isEmpty()) Text("No calendars on this phone.", style = MaterialTheme.typography.bodySmall)
+                o.calendars.forEach { (c, n) ->
+                    val flags = listOfNotNull("hidden".takeIf { !c.visible }, "sync off".takeIf { !c.syncEvents }).joinToString(", ")
+                    Column(Modifier.testTag("risi_calendar_source_row")) {
+                        Text(lk.codegen.risime.data.tabs.CalendarRead.nameOf(c), style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            lk.codegen.risime.data.tabs.CalendarSelection.label(c) + " · " + (if (n == 1) "1 event" else "$n events") + " in the next 7 days" + if (flags.isNotEmpty()) " · $flags" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (!o.readOk) Text(lk.codegen.risime.data.tabs.CalendarRead.reasonText(o.reason), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_calendar_sources_reason"))
+            }
+        }
+        Text("Google Calendar (direct): not connected yet", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_calendar_source_google_direct"))
+    }
 }
 
 /** Calendar → Details: "Adds to: harsha@… · Google [Change]" (kept on this phone; the contract has no field for it). */

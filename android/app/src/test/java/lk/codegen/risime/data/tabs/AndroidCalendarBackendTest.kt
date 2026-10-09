@@ -69,6 +69,7 @@ class FakeCalendarProvider : ContentProvider() {
                         CalendarContract.Instances.SELF_ATTENDEE_STATUS to e[CalendarContract.Events.SELF_ATTENDEE_STATUS],
                         CalendarContract.Instances.VISIBLE to cal[CalendarContract.Calendars.VISIBLE],
                         CalendarContract.Instances.TITLE to e[CalendarContract.Events.TITLE],
+                        CalendarContract.Instances.CALENDAR_ID to e[CalendarContract.Events.CALENDAR_ID],
                     )
                 }
                 cursor(projection, rows)
@@ -154,5 +155,33 @@ class AndroidCalendarBackendTest {
         assertTrue(blocks[0].busy)
         assertTrue(pc.remove("w1", r.record.eventId!!))
         assertNull(be.event(r.record.eventId!!))
+    }
+
+    @Test fun instancesQueryIsTheInstancesTableWithMillisecondWindow() {
+        val from = java.time.Instant.parse("2026-10-12T08:30:00Z").toEpochMilli()
+        val uri = AndroidCalendarBackend.instancesUri(from, from + 3_600_000)
+        assertEquals("content://com.android.calendar/instances/when/1791793800000/1791797400000", uri.toString())
+        assertTrue(CalendarContract.Instances.CALENDAR_ID in AndroidCalendarBackend.INSTANCES_PROJECTION)
+        assertTrue(CalendarContract.Instances.BEGIN in AndroidCalendarBackend.INSTANCES_PROJECTION)
+    }
+
+    @Test fun checkReportsEveryVisibleCalendarWithItsCountAndSyncState() = runBlocking {
+        shadowOf(app).grantPermissions(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+        val start = java.time.Instant.parse("2026-10-12T08:30:00Z").toEpochMilli()
+        // An event on the primary Google calendar, another on a hidden one (left out of free/busy and the report).
+        FakeCalendarProvider.calendars += cal(4, "Hidden", "uitest.risime@gmail.com", "com.google", CalendarContract.Calendars.CAL_ACCESS_OWNER, visible = 0)
+        listOf(3L to "A", 4L to "B").forEachIndexed { i, (c, t) ->
+            FakeCalendarProvider.events[900L + i] = mutableMapOf(
+                CalendarContract.Events._ID to 900L + i, CalendarContract.Events.CALENDAR_ID to c, CalendarContract.Events.TITLE to t,
+                CalendarContract.Events.DTSTART to start, CalendarContract.Events.DTEND to start + 3_600_000, CalendarContract.Events.ALL_DAY to 0,
+            )
+        }
+        val pc = PhoneCalendar(AndroidCalendarBackend(app), MemoryCalendarChoice(), CalendarWriteLog())
+        val r = pc.read(start, start + 3_600_000)!!
+        assertEquals(1, r.blocks.size)
+        assertTrue(r.source.readOk)
+        assertEquals("phone_provider", r.source.source)
+        assertEquals(listOf("Holidays in Sri Lanka" to 0, "Primary calendar" to 1, "Phone" to 0), r.source.calendars.map { it.name to it.events })
+        assertEquals(listOf("phone_provider"), r.wire.connectedSources)
     }
 }

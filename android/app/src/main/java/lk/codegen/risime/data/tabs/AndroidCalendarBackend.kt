@@ -10,6 +10,30 @@ import androidx.core.content.ContextCompat
 
 /** [CalendarBackend] over Android's `CalendarContract` (runs off the main thread). */
 class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
+    companion object {
+        /**
+         * `content://com.android.calendar/instances/when/<fromMs>/<toMs>`: the provider expands recurring
+         * events into instances for the window (an `Events` DTSTART range would miss every repeat and
+         * every event that started before the window). Times are epoch milliseconds.
+         */
+        fun instancesUri(fromMs: Long, toMs: Long): android.net.Uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
+            ContentUris.appendId(it, fromMs)
+            ContentUris.appendId(it, toMs)
+        }.build()
+
+        /** No selection: every calendar's instances (hidden calendars are kept out in [PhoneCalendar.read], and counted in Settings). */
+        val INSTANCES_PROJECTION = arrayOf(
+            CalendarContract.Instances.BEGIN,
+            CalendarContract.Instances.END,
+            CalendarContract.Instances.ALL_DAY,
+            CalendarContract.Instances.AVAILABILITY,
+            CalendarContract.Instances.STATUS,
+            CalendarContract.Instances.SELF_ATTENDEE_STATUS,
+            CalendarContract.Instances.VISIBLE,
+            CalendarContract.Instances.CALENDAR_ID,
+        )
+    }
+
     private val cr get() = context.contentResolver
 
     private fun granted(p: String) = ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED
@@ -28,6 +52,7 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
             CalendarContract.Calendars.VISIBLE,
             CalendarContract.Calendars.OWNER_ACCOUNT,
             CalendarContract.Calendars.IS_PRIMARY,
+            CalendarContract.Calendars.SYNC_EVENTS,
         )
         val out = ArrayList<PhoneCalendarInfo>()
         cr.query(CalendarContract.Calendars.CONTENT_URI, proj, null, null, null)?.use { q ->
@@ -41,6 +66,7 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
                     visible = q.getInt(5) != 0,
                     ownerAccount = q.getString(6),
                     isPrimary = !q.isNull(7) && q.getInt(7) != 0,
+                    syncEvents = q.isNull(8) || q.getInt(8) != 0,
                 )
             }
         }
@@ -48,27 +74,16 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
     }
 
     override fun instances(fromMs: Long, toMs: Long): List<BusyRow> {
-        val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
-            ContentUris.appendId(it, fromMs)
-            ContentUris.appendId(it, toMs)
-        }.build()
-        val proj = arrayOf(
-            CalendarContract.Instances.BEGIN,
-            CalendarContract.Instances.END,
-            CalendarContract.Instances.ALL_DAY,
-            CalendarContract.Instances.AVAILABILITY,
-            CalendarContract.Instances.STATUS,
-            CalendarContract.Instances.SELF_ATTENDEE_STATUS,
-            CalendarContract.Instances.VISIBLE,
-        )
         val out = ArrayList<BusyRow>()
-        cr.query(uri, proj, null, null, null)?.use { q ->
+        cr.query(instancesUri(fromMs, toMs), INSTANCES_PROJECTION, null, null, null)?.use { q ->
             while (q.moveToNext()) {
-                if (q.getInt(6) == 0) continue
                 if (!q.isNull(4) && q.getInt(4) == CalendarContract.Events.STATUS_CANCELED) continue
                 if (!q.isNull(5) && q.getInt(5) == CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED) continue
                 val avail = if (q.isNull(3)) CalendarContract.Events.AVAILABILITY_BUSY else q.getInt(3)
-                out += BusyRow(q.getLong(0), q.getLong(1), q.getInt(2) != 0, busy = avail != CalendarContract.Events.AVAILABILITY_FREE)
+                out += BusyRow(
+                    q.getLong(0), q.getLong(1), q.getInt(2) != 0, busy = avail != CalendarContract.Events.AVAILABILITY_FREE,
+                    calendarId = if (q.isNull(7)) 0 else q.getLong(7), visible = q.isNull(6) || q.getInt(6) != 0,
+                )
             }
         }
         return out
@@ -134,6 +149,8 @@ class AndroidCalendarPort(
     override suspend fun matchHint(hint: lk.codegen.risime.net.RisiCalendarRef?): PhoneCalendarInfo? =
         if (hint == null || !cal.canRead()) null
         else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { CalendarSelection.matchHint(cal.allCalendars(), hint) }.getOrNull() }
+
+    override suspend fun overview(): CalendarOverview? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { cal.overview() }
 
     override fun open(eventId: Long) {
         val i = android.content.Intent(android.content.Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId))
