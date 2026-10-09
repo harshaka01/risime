@@ -4,7 +4,8 @@ defmodule RisiMe.Agent.Rest do
   "what Risi knows about me" (facts) and "my promises" (commitments). Everything is scoped to the
   caller: facts whose subject is the caller, commitments where the caller is owner or
   counterpart, and only in conversations where the caller is still an active member. With RISI
-  off the tables are simply empty, so the lists are `[]`.
+  off the tables are simply empty, so the lists are `[]`. Fact and commitment texts are sealed
+  at rest (`RISI_DATA_KEY`); when they can't be opened the lists answer `503 agent_unavailable`.
   """
   import Ecto.Query
 
@@ -34,14 +35,19 @@ defmodule RisiMe.Agent.Rest do
         select: m.group_id
       )
 
-  @doc "The caller's facts, newest first, as wire maps."
+  @doc """
+  The caller's facts, newest first, as wire maps: `{:ok, list}`, or `{:error,
+  :agent_unavailable}` when they can't be opened (texts are sealed under `RISI_DATA_KEY`; no or
+  a wrong key). No rows: `{:ok, []}` with or without a key.
+  """
   def facts(user) do
     Repo.all(
       from f in Fact,
         where: f.subject_user_id == ^user and f.conversation_id in subquery(mine(user)),
         order_by: [desc: f.inserted_at, asc: f.id]
     )
-    |> Enum.map(fn f ->
+    |> opened(&Fact.open_all/1)
+    |> wire(fn f ->
       %{
         fact_id: f.id,
         kind: f.kind,
@@ -70,7 +76,27 @@ defmodule RisiMe.Agent.Rest do
     :ok
   end
 
-  @doc "The caller's commitments (`:open` = confirmed or edited, or `:all`) as wire maps."
+  defp opened([], _open), do: {:ok, []}
+
+  defp opened(rows, open) do
+    case open.(rows) do
+      {:ok, rows} ->
+        {:ok, rows}
+
+      :error ->
+        require Logger
+        Logger.warning("Risi data unavailable: missing_key or wrong RISI_DATA_KEY")
+        {:error, :agent_unavailable}
+    end
+  end
+
+  defp wire({:ok, rows}, fun), do: {:ok, Enum.map(rows, fun)}
+  defp wire(error, _fun), do: error
+
+  @doc """
+  The caller's commitments (`:open` = confirmed or edited, or `:all`) as wire maps: `{:ok,
+  list}` or `{:error, :agent_unavailable}` (like `facts/1`).
+  """
   def commitments(user, state) do
     q =
       from c in Commitment,
@@ -82,7 +108,8 @@ defmodule RisiMe.Agent.Rest do
     q = if state == :open, do: where(q, [c], c.state in ^Commitment.open_states()), else: q
 
     Repo.all(q)
-    |> Enum.map(fn c ->
+    |> opened(&Commitment.open_all/1)
+    |> wire(fn c ->
       %{
         commitment_id: c.id,
         chat_id: c.chat_id,

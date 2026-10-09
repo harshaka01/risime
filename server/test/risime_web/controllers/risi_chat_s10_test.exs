@@ -232,7 +232,7 @@ defmodule RisiMeWeb.RisiChatS10Test do
     conv = active_chat!(ctx)
 
     {:ok, note} =
-      Repo.insert(%RisiMe.Agent.Fact{
+      RisiMe.Agent.Fact.seal(%RisiMe.Agent.Fact{
         id: Ecto.UUID.generate(),
         subject_user_id: a.user.id,
         chat_id: conv,
@@ -241,6 +241,8 @@ defmodule RisiMeWeb.RisiChatS10Test do
         text: "My dentist is Dr Swan",
         source_message_ids: []
       })
+
+    {:ok, note} = Repo.insert(note)
 
     {204, _} = api(:post, "/api/v1/groups/#{conv}/leave", a.token, %{}, a_dev)
     assert Repo.get(RisiMe.Agent.Fact, note.id) == nil

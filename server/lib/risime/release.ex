@@ -28,9 +28,40 @@ defmodule RisiMe.Release do
   def migrate do
     migrate_ecto()
     migrate_cql()
+    seal_risi_learning_log()
     migrate_friendships()
     seed_risi()
     :ok
+  end
+
+  @doc """
+  Privacy fix 2026-10-09 (`priv/cql/009_risi_sealed_text.cql`): seals the learning-log outputs
+  and feedback reasons still held in plaintext with `RISI_DATA_KEY`, keeping each value's
+  remaining TTL (`RisiMe.Agent.LearningLog.Cassandra.seal_existing/2`). Idempotent. Without the
+  key it changes nothing and says so (Risi doesn't run without it either; the rows expire within
+  90 days). Prints counts only. Options: `:keyspace`, `:nodes`.
+
+      bin/risime eval "RisiMe.Release.seal_risi_learning_log()"
+  """
+  def seal_risi_learning_log(opts \\ []) do
+    load_app()
+    {:ok, _} = Application.ensure_all_started(:xandra)
+    config = Application.fetch_env!(@app, :cassandra)
+    [node | _] = opts[:nodes] || config[:nodes]
+    keyspace = opts[:keyspace] || config[:keyspace]
+    {:ok, conn} = Xandra.start_link(nodes: [node], keyspace: keyspace)
+
+    result =
+      try do
+        RisiMe.Agent.LearningLog.Cassandra.seal_existing(&Xandra.execute(conn, &1, &2, &3))
+      after
+        GenServer.stop(conn)
+      end
+
+    line = "risi learning log sealed (#{keyspace}): #{inspect(result)}"
+    Logger.info(line)
+    IO.puts(line)
+    result
   end
 
   @doc "v1.24 §24.11: seeds the Risi agent user and device while `RISI` is on (idempotent)."

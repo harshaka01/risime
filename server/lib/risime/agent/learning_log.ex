@@ -5,7 +5,7 @@ defmodule RisiMe.Agent.LearningLog do
 
   An entry holds the call's `call_ref` (= `call_id`, a TimeUUID), task, model alias and real
   model, provider, fallback outcome, latency, tokens, cost, confidence, status and the derived
-  output (the validated JSON). **The input is only `source_message_ids` plus `prompt_sha256`;
+  output (the validated JSON, sealed at rest under `RISI_DATA_KEY`). **The input is only `source_message_ids` plus `prompt_sha256`;
   the raw text of a prompt is never written.** Rows live 90 days (TTL). Feedback (§24.11, private
   REST) is one row per call and user; a repeat replaces it.
 

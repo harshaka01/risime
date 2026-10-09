@@ -29,15 +29,18 @@ defmodule RisiMeWeb.RisiRestS8Test do
   defp fact!(user_id, og, text, kind \\ "commitment", chat \\ nil) do
     id = Ecto.UUID.generate()
 
-    Repo.insert!(%Fact{
-      id: id,
-      subject_user_id: user_id,
-      chat_id: chat || og,
-      conversation_id: og,
-      kind: kind,
-      text: text,
-      inserted_at: DateTime.utc_now()
-    })
+    {:ok, fact} =
+      Fact.seal(%Fact{
+        id: id,
+        subject_user_id: user_id,
+        chat_id: chat || og,
+        conversation_id: og,
+        kind: kind,
+        text: text,
+        inserted_at: DateTime.utc_now()
+      })
+
+    Repo.insert!(fact)
 
     Repo.query!(
       "INSERT INTO risi_fact_embeddings (fact_id, model, embedding, inserted_at) VALUES ($1, 'm', '[1,2,3]', now())",
@@ -54,18 +57,21 @@ defmodule RisiMeWeb.RisiRestS8Test do
   defp commitment!(og, owner, counterpart, state, text) do
     now = DateTime.utc_now()
 
-    Repo.insert!(%Commitment{
-      id: Ecto.UUID.generate(),
-      conversation_id: og,
-      chat_id: "grp:" <> Ecto.UUID.generate(),
-      state: state,
-      text: text,
-      owner_id: owner,
-      counterpart_ids: counterpart,
-      due: DateTime.add(now, 86_400),
-      due_text: "tomorrow",
-      proposed_at: now
-    })
+    {:ok, c} =
+      Commitment.seal(%Commitment{
+        id: Ecto.UUID.generate(),
+        conversation_id: og,
+        chat_id: "grp:" <> Ecto.UUID.generate(),
+        state: state,
+        text: text,
+        owner_id: owner,
+        counterpart_ids: counterpart,
+        due: DateTime.add(now, 86_400),
+        due_text: "tomorrow",
+        proposed_at: now
+      })
+
+    Repo.insert!(c)
   end
 
   describe "facts" do

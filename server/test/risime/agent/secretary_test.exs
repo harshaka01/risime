@@ -735,16 +735,19 @@ defmodule RisiMe.Agent.SecretaryTest do
     # A fact with two sources survives the delete of one of them, without that id.
     other = TimeUUID.generate()
 
-    Repo.insert!(%Fact{
-      id: Ecto.UUID.generate(),
-      subject_user_id: ctx.harsha.id,
-      chat_id: ctx.og,
-      conversation_id: ctx.og,
-      kind: "topic",
-      text: "Quotes",
-      source_message_ids: [src, other],
-      inserted_at: DateTime.utc_now()
-    })
+    {:ok, fact} =
+      Fact.seal(%Fact{
+        id: Ecto.UUID.generate(),
+        subject_user_id: ctx.harsha.id,
+        chat_id: ctx.og,
+        conversation_id: ctx.og,
+        kind: "topic",
+        text: "Quotes",
+        source_message_ids: [src, other],
+        inserted_at: DateTime.utc_now()
+      })
+
+    Repo.insert!(fact)
 
     Secretary.message_deleted(ctx.og, [src])
     assert Repo.get(Commitment, card["commitment_id"]) == nil
