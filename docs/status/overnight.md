@@ -47,6 +47,30 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## Needs Harsha G: Google Calendar connection (Google Cloud Console, ~10 min)
+Project `risime` (734811134567), console.cloud.google.com. The section is "Google Auth Platform"
+(older UI: "OAuth consent screen").
+1. APIs & Services → Library → **Google Calendar API** → Enable.
+2. Branding: app name RisiMe, your support email and developer email, no logo for now, home page
+   `https://risime.risicloud.ai`, privacy policy `https://risime.risicloud.ai/privacy` (I'll publish
+   it), authorized domain `risicloud.ai`.
+3. Audience: External, **Testing**; Test users → add your Google account and the pilot testers'
+   (up to 100).
+4. Data Access → add scopes manually: `https://www.googleapis.com/auth/calendar.events` and
+   `https://www.googleapis.com/auth/calendar.calendarlist.readonly` → Save. Nothing else.
+5. Clients → Create client → **Android**:
+   - release: package `lk.codegen.risime`, SHA-1 `4C:E1:A7:54:30:D4:D9:CB:E6:B2:1D:0A:D6:9B:12:5C:F8:67:D4:D0`;
+   - debug: package `lk.codegen.risime.debug`, SHA-1 `E5:09:19:56:B7:4E:F6:58:2E:90:BD:3E:46:FD:7B:6A:9E:5A:30:4E`.
+   If Console says one already exists (Firebase auto-created it), keep that one.
+6. No Web client and no google-services.json change are needed. Tell me "Google clients done".
+- **Testing mode:** only listed test users can connect; the grant ends every 7 days and the app
+  shows "Reconnect Google Calendar".
+- **Before a public launch (Google verification, no security assessment needed):** verify
+  `risicloud.ai` in Search Console (DNS TXT); public home page and privacy policy on that domain
+  (with the Limited Use statement); a one-paragraph justification per scope; an unlisted YouTube demo
+  video (consent screen, each scope in use, Disconnect). Brand review takes 2–3 days, scope review
+  days to weeks.
+
 ## v0.2.0-nightly.45 (live 2026-10-09 ~09:11 UTC, hotfix, not required): P0 Risi calendar action loop; §27 follow-ups (ledger off)
 - **P0 (Harsha, real phone, nightly.43):** "add my interview with Shenika on Mon 12 Oct 2pm to my
   calendar" produced chips, then 6 turns of questions, and nothing was added (`risi_turn_steps`: every
