@@ -293,6 +293,7 @@ defmodule RisiMe.Agent.Secretary do
     cancel_jobs(conv)
     # v1.25 §25.4: its confirm cards' writes (sealed args) go too.
     RisiMe.Agent.Writes.forget(conv)
+    RisiMe.Agent.Reminders.forget(conv)
 
     Repo.transaction(fn ->
       Repo.delete_all(from f in Fact, where: f.conversation_id == ^conv)

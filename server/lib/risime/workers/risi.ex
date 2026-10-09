@@ -10,6 +10,7 @@ defmodule RisiMe.Workers.Risi do
   | `action` | `risi_timers` (4) | a `risi_action`: a commitment, or a confirm card (§25.4; a client write waits ≤ 15 s for the phone here) |
   | `expire` | `risi_timers` | a proposal unconfirmed after 48 h is deleted |
   | `reminder`, `escalation` | `risi_timers` | §24.11 timing (no-op when `v` is stale) |
+  | `reminder_fire` | `risi_timers` | a `set_reminder` reminder at its time (§25.4) |
   | `digest_sweep` | `risi_timers` | cron every 15 min: 09:00-local digests |
   | `prune` | `risi_timers` | cron hourly: expired confirm cards, old tool-call rows, activity over 90 days |
   | `undo_timeout` | `risi_timers` | a client undo unanswered after 15 s → `failed` (§26.4) |
@@ -36,6 +37,7 @@ defmodule RisiMe.Workers.Risi do
     RisiMe.Agent.Writes.prune()
     RisiMe.Agent.ToolCalls.prune()
     RisiMe.Agent.Skills.prune()
+    RisiMe.Agent.Reminders.prune()
     :ok
   end
 
@@ -74,12 +76,17 @@ defmodule RisiMe.Workers.Risi do
       case env["action"] do
         # v1.25 §25.4: confirm cards (the write runs here, without a model call).
         a when a in ~w(confirm_write cancel_write) -> Writes.act(conv, user, env["__device"], env)
+        a when a in ~w(me_too not_me) -> RisiMe.Agent.Reminders.act(conv, user, env)
         _ -> Commitments.act(conv, user, env)
       end
     else
       _ -> :ok
     end
   end
+
+  # v1.25 §25.4: a `set_reminder` reminder fires.
+  defp run(%{"kind" => "reminder_fire", "reminder_id" => id}),
+    do: RisiMe.Agent.Reminders.fire(id)
 
   defp run(%{"kind" => "reminder", "commitment_id" => id, "v" => v}),
     do: Commitments.remind(id, v)

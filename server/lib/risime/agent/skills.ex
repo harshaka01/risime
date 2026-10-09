@@ -582,7 +582,7 @@ defmodule RisiMe.Agent.Skills do
       device_id: opts[:device_id],
       undo_kind: kind,
       undo_state: state,
-      undo_until: opts[:undo_until],
+      undo_until: opts[:undo_until] && RisiMe.Agent.Clock.usec(opts[:undo_until]),
       sealed: Seal.seal(key, aad(id), sealed),
       at: DateTime.utc_now()
     })

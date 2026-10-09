@@ -109,6 +109,9 @@ defmodule RisiMe.Agent.Clock do
       else: Calendar.strftime(local, "%a %-d %b, %H:%M")
   end
 
+  @doc "The same instant with microsecond precision (for `:utc_datetime_usec` columns)."
+  def usec(%DateTime{microsecond: {us, _}} = dt), do: %{dt | microsecond: {us, 6}}
+
   @doc "`2026-10-09T11:30:00.000Z` (milliseconds, as every contract timestamp)."
   def ts(nil), do: nil
 

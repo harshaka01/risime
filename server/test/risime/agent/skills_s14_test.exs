@@ -304,7 +304,7 @@ defmodule RisiMe.Agent.SkillsS14Test do
     scripted_llm!([%{"actions" => [final()]}])
     {_, :ok} = ask!(ctx.og, k, "hi", kdev)
     [req] = llm_requests()
-    assert schema_tools(req) == ~w(capabilities calendar_check calendar_add final)
+    assert schema_tools(req) == ~w(capabilities set_reminder calendar_check calendar_add final)
   end
 
   test "need_skill: a skill_needed card in the Risi chat, the pointer in the group", ctx do

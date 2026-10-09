@@ -165,6 +165,7 @@ defmodule RisiMe.Agent.Tools do
     def tools,
       do: [
         RisiMe.Agent.Tools.capabilities(),
+        RisiMe.Agent.Reminders.tool(),
         ClientTools.calendar_check(),
         ClientTools.calendar_add()
       ]
