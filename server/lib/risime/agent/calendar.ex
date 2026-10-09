@@ -162,14 +162,18 @@ defmodule RisiMe.Agent.Calendar do
     if ok? do
       s = Map.merge(settings(user_id), body)
 
-      Repo.insert!(
-        %Settings{
-          user_id: user_id,
-          default_reminder_min: s["default_reminder_min"],
-          default_duration_min: s["default_duration_min"],
-          digest_events: s["digest_events"],
-          updated_at: DateTime.utc_now()
-        },
+      # insert_all: an explicit NULL reminder ("none") must not fall back to the column default.
+      Repo.insert_all(
+        Settings,
+        [
+          %{
+            user_id: user_id,
+            default_reminder_min: s["default_reminder_min"],
+            default_duration_min: s["default_duration_min"],
+            digest_events: s["digest_events"],
+            updated_at: DateTime.utc_now()
+          }
+        ],
         on_conflict:
           {:replace, [:default_reminder_min, :default_duration_min, :digest_events, :updated_at]},
         conflict_target: [:user_id]
@@ -224,6 +228,7 @@ defmodule RisiMe.Agent.Calendar do
          %Participant{removed: false} <- Enum.find(parts, &(&1.user_id == user_id)) do
       view(e, parts, user_id)
     else
+      {:error, :agent_unavailable} = e -> e
       _ -> {:error, :not_found}
     end
   end
@@ -490,7 +495,8 @@ defmodule RisiMe.Agent.Calendar do
     end
   end
 
-  defp midnight?(t, tz), do: NaiveDateTime.to_time(Clock.local(t, tz)) == ~T[00:00:00]
+  defp midnight?(t, tz),
+    do: Time.compare(NaiveDateTime.to_time(Clock.local(t, tz)), ~T[00:00:00]) == :eq
 
   # §29.3: an Official conversation or the caller's Risi chat where the caller is an active
   # member (a Private or `dm:` id is always refused).
