@@ -111,7 +111,7 @@ defmodule RisiMe.Agent.LLMTest do
     assert model in ["Qwen3.6-35B-A3B-FP8", "risi-l1"]
   end
 
-  test "one retry: a 5xx then an answer succeeds; two failures are model_unavailable (logged)" do
+  test "backoff retries: a 5xx then an answer succeeds; 1 + 3 failures are model_unavailable" do
     {:ok, n} = Agent.start_link(fn -> 0 end)
 
     fake_llm!(fn _, _ ->
@@ -126,8 +126,14 @@ defmodule RisiMe.Agent.LLMTest do
 
     fake_llm!(fn _, _ -> {:status, 500} end)
     r = req("b", [RisiMe.TimeUUID.generate()])
-    assert {:error, :model_unavailable} = LLM.complete(r)
-    assert length(llm_requests()) == 2
+
+    log =
+      capture_log(fn -> assert {:error, :model_unavailable} = LLM.complete(r) end)
+
+    assert length(llm_requests()) == 4
+
+    for n <- 1..4,
+        do: assert(log =~ "risi llm: provider=risi_l1 status=5xx attempt=#{n}")
 
     [row] = LearningLog.list_by_chat(r.chat_id, Calendar.strftime(Date.utc_today(), "%Y-%m"))
     assert row.status == "http_5xx"

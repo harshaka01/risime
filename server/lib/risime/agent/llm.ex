@@ -10,11 +10,15 @@ defmodule RisiMe.Agent.LLM do
     2. calls the **local provider** `risi_l1` (`RisiMe.Agent.LLM.Local`: vLLM on loopback, model
        alias `risi-l1`) with JSON-schema guided decoding (`response_format: json_schema`),
        thinking off (`chat_template_kwargs.enable_thinking: false`, as decision 061 serves it),
-       temperature 0.2, top_p 0.8; one retry on a timeout, a transport error, a 5xx or an output
-       that fails the schema;
-    3. only when `RISI_FALLBACK=on` (default **off**) and the answer's confidence is below
-       `RISI_FALLBACK_THRESHOLD` (default 0.5), consults the fallback provider
-       (`RisiMe.Agent.LLM.Fallback`, a stub that makes no call: Needs Harsha);
+       temperature 0.2, top_p 0.8; an upstream 429, 5xx, timeout or transport error is retried
+       with exponential backoff (1 s, 2 s, 4 s: at most 3 retries, never past the request's
+       `:deadline_ms`), an output that fails the schema once at once (hotfix 2026-10-09). Every
+       upstream failure logs `risi llm: provider=… status=429|5xx|timeout|transport attempt=n`
+       (no content);
+    3. when the local provider still fails, or (only with `RISI_FALLBACK=on`, default **off**)
+       the answer's confidence is below `RISI_FALLBACK_THRESHOLD` (default 0.5), the other
+       provider is tried if it is configured (`RisiMe.Agent.LLM.Fallback`, a stub that is not
+       configured and makes no call: Needs Harsha);
     4. writes one **learning-log** entry (`RisiMe.Agent.LearningLog`) for the call, success or
        not: call_ref, task, alias, real model, provider, latency, tokens, cost (0 locally),
        confidence, status, the derived output, and the input **only** as source message ids plus
@@ -54,7 +58,10 @@ defmodule RisiMe.Agent.LLM do
           required(:schema) => map,
           required(:source_message_ids) => [String.t()],
           optional(:max_tokens) => pos_integer,
-          optional(:confidence) => (map -> float)
+          optional(:confidence) => (map -> float),
+          optional(:history) => [map],
+          optional(:timeout_ms) => pos_integer,
+          optional(:deadline_ms) => integer
         }
 
   @doc "Runs one task through the cascade (see the module doc)."
@@ -76,10 +83,13 @@ defmodule RisiMe.Agent.LLM do
   end
 
   defp run(req) do
-    messages = [
-      %{"role" => "system", "content" => req.system},
-      %{"role" => "user", "content" => req.user}
-    ]
+    # §25.1: earlier steps of a turn (and a post-check retry) follow the request as
+    # assistant/user pairs.
+    messages =
+      [
+        %{"role" => "system", "content" => req.system},
+        %{"role" => "user", "content" => req.user}
+      ] ++ Map.get(req, :history, [])
 
     body = %{
       "model" => @alias,
@@ -96,8 +106,10 @@ defmodule RisiMe.Agent.LLM do
 
     started = System.monotonic_time(:millisecond)
     local = provider()
-    result = attempt(local, body, req.schema, 2)
+    opts = call_opts(req)
+    result = attempt(local, body, req.schema, 1, opts)
     confidence_of = Map.get(req, :confidence, &default_confidence/1)
+    fb = fallback_provider()
 
     {provider, result, fallback} =
       case result do
@@ -105,9 +117,7 @@ defmodule RisiMe.Agent.LLM do
           conf = confidence_of.(output)
 
           if fallback_on?() and conf < threshold() do
-            fb = fallback_provider()
-
-            case attempt(fb, body, req.schema, 1) do
+            case attempt(fb, body, req.schema, 1, Keyword.put(opts, :retries, 0)) do
               {:ok, resp2, output2} -> {fb, {:ok, resp2, output2}, "used"}
               {:error, _} -> {local, {:ok, resp, output}, "unavailable"}
             end
@@ -116,7 +126,15 @@ defmodule RisiMe.Agent.LLM do
           end
 
         error ->
-          {local, error, if(fallback_on?(), do: "not_tried", else: "off")}
+          # The local model keeps failing: the other model, when one is configured.
+          if configured?(fb) do
+            case attempt(fb, body, req.schema, 1, opts) do
+              {:ok, _, _} = ok -> {fb, ok, "used"}
+              _ -> {local, error, "unavailable"}
+            end
+          else
+            {local, error, if(fallback_on?(), do: "not_tried", else: "off")}
+          end
       end
 
     latency = System.monotonic_time(:millisecond) - started
@@ -159,10 +177,29 @@ defmodule RisiMe.Agent.LLM do
     end
   end
 
-  # Calls `mod`, decodes and checks the JSON; retries `tries - 1` times on a retryable failure.
-  defp attempt(mod, body, schema, tries) do
+  @upstream [:timeout, :transport, :http_5xx, :busy]
+
+  defp call_opts(req) do
+    [
+      retries: Map.get(req, :retries, config()[:retries] || 3),
+      backoff_ms: config()[:backoff_ms] || 1_000,
+      deadline_ms: Map.get(req, :deadline_ms),
+      chat: if(t = Map.get(req, :timeout_ms), do: [timeout: t], else: [])
+    ]
+  end
+
+  defp configured?(mod) do
+    Code.ensure_loaded?(mod) and function_exported?(mod, :configured?, 0) and mod.configured?()
+  end
+
+  # Calls `mod`, decodes and checks the JSON. Upstream failures (429, 5xx, timeout, transport)
+  # are retried with exponential backoff (`backoff_ms` · 2^(n-1), at most `retries` times, never
+  # past the deadline); an output failing the schema is retried once at once.
+  defp attempt(mod, body, schema, n, opts) do
+    chat_opts = clamp_timeout(opts[:chat], opts[:deadline_ms])
+
     result =
-      case mod.chat(body, []) do
+      case mod.chat(body, chat_opts) do
         {:ok, resp} ->
           with {:ok, output} <- decode(resp.content),
                :ok <- Schema.validate(schema, output) do
@@ -176,13 +213,50 @@ defmodule RisiMe.Agent.LLM do
       end
 
     case result do
-      {:error, reason}
-      when tries > 1 and reason in [:timeout, :transport, :http_5xx, :busy, :invalid_output] ->
-        attempt(mod, body, schema, tries - 1)
+      {:error, :invalid_output} when n == 1 ->
+        log_failure(mod, :invalid_output, n)
+        attempt(mod, body, schema, n + 1, opts)
+
+      {:error, reason} when reason in @upstream ->
+        log_failure(mod, reason, n)
+        wait = opts[:backoff_ms] * Integer.pow(2, n - 1)
+
+        if n <= opts[:retries] and time_left?(opts[:deadline_ms], wait) do
+          if wait > 0, do: Process.sleep(wait)
+          attempt(mod, body, schema, n + 1, opts)
+        else
+          result
+        end
 
       other ->
         other
     end
+  end
+
+  defp clamp_timeout(chat_opts, nil), do: chat_opts
+
+  defp clamp_timeout(chat_opts, deadline) do
+    left = max(deadline - System.monotonic_time(:millisecond), 1)
+    Keyword.update(chat_opts, :timeout, left, &min(&1, left))
+  end
+
+  # A retry is worth it only when it can still start (and get a little time) before the deadline.
+  defp time_left?(nil, _wait), do: true
+
+  defp time_left?(deadline, wait),
+    do: System.monotonic_time(:millisecond) + wait + 500 < deadline
+
+  defp log_failure(mod, reason, n) do
+    require Logger
+
+    status =
+      case reason do
+        :busy -> "429"
+        :http_5xx -> "5xx"
+        other -> Atom.to_string(other)
+      end
+
+    Logger.warning("risi llm: provider=#{mod.name()} status=#{status} attempt=#{n}")
   end
 
   defp decode(content) do

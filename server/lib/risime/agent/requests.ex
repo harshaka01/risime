@@ -2,13 +2,17 @@ defmodule RisiMe.Agent.Requests do
   @moduledoc """
   `risi_request` (§24.11): `ask`, `summarise` and `report` over the sealed buffer, which holds at
   most 24 h. `scope.since` further back than 24 h gets the `error` `out_of_window`; an empty
-  window gets `nothing_to_summarise`; a model that is down or fails gets `model_unavailable`; a
-  queue of 50+ pending requests (or 200 a day in a chat) gives `rate_limited`; the global queue and
-  the per-user limit make a request wait instead. Every reply notifies the requester only.
+  window gets `nothing_to_summarise` for a summary or report (an `ask` always goes to the model,
+  which knows what Risi can do: `RisiMe.Agent.Capabilities`). The global queue, the per-user
+  limit and a model that is down make a request wait (the job snoozes) and answer late; only
+  after 10 minutes of waiting comes `queue_overflow` (global queue) or `model_unavailable`
+  (hotfix 2026-10-09: never `rate_limited` in normal use). An answer saying "the transcript does
+  not contain …" is retried once (§25.1 post-check), and ref labels ("Message 1") are removed
+  from model text: sources are real message refs only. Every reply notifies the requester only.
   """
   import Ecto.Query
 
-  alias RisiMe.Agent.{Clock, Commitment, LLM, Out, Prompts, Secretary}
+  alias RisiMe.Agent.{Capabilities, Clock, Commitment, LLM, Out, Prompts, Secretary}
   alias RisiMe.Repo
 
   @window_s 24 * 3600
@@ -75,36 +79,35 @@ defmodule RisiMe.Agent.Requests do
     q = env["text"]
 
     if is_binary(q) and String.length(String.trim(q)) in 1..1000 do
-      case Secretary.text_messages(conv, since) do
-        [] ->
-          reply_error(conv, rid, user, "nothing_to_summarise")
+      # An empty window still goes to the model: "what can you do" needs no chat lines.
+      msgs = Secretary.text_messages(conv, since)
+      {text, refs} = render(conv, msgs, now)
 
-        msgs ->
-          {text, refs} = render(conv, msgs, now)
+      complete(conv, rid, user, %{
+        task: "ask",
+        system: Prompts.answer_system(),
+        user: text <> Prompts.question(String.trim(q)),
+        schema_name: "answer",
+        schema: Prompts.answer_schema(),
+        msgs: msgs,
+        max_tokens: 600,
+        post_check: true,
+        reply: fn out, call_ref, conf ->
+          # Only refs the server handed out become sources (real message ids); labels go.
+          ids = out["refs"] |> Enum.map(&refs.messages[&1]) |> Enum.reject(&is_nil/1)
+          answer = Capabilities.strip_labels(out["answer"])
 
-          complete(conv, rid, user, %{
-            task: "ask",
-            system: Prompts.answer_system(),
-            user: text <> Prompts.question(String.trim(q)),
-            schema_name: "answer",
-            schema: Prompts.answer_schema(),
-            msgs: msgs,
-            max_tokens: 600,
-            reply: fn out, call_ref, conf ->
-              ids = out["refs"] |> Enum.map(&refs.messages[&1]) |> Enum.reject(&is_nil/1)
-
-              {out["answer"],
-               %{
-                 "kind" => "answer",
-                 "request_id" => rid,
-                 "answer" => out["answer"],
-                 "refs" => Enum.uniq(ids),
-                 "confidence" => conf,
-                 "call_ref" => call_ref
-               }}
-            end
-          })
-      end
+          {answer,
+           %{
+             "kind" => "answer",
+             "request_id" => rid,
+             "answer" => answer,
+             "refs" => Enum.uniq(ids),
+             "confidence" => conf,
+             "call_ref" => call_ref
+           }}
+        end
+      })
     else
       # A malformed ask (no or too long text) is ignored, as any invalid envelope.
       :ok
@@ -128,6 +131,8 @@ defmodule RisiMe.Agent.Requests do
           msgs: msgs,
           max_tokens: 1_000,
           reply: fn out, call_ref, _conf ->
+            out = strip_all(out, ~w(summary decisions action_items open_questions))
+
             {"Summary: " <> out["summary"],
              %{
                "kind" => "summary",
@@ -168,7 +173,11 @@ defmodule RisiMe.Agent.Requests do
              "request_id" => rid,
              "title" => out["title"],
              "period" => %{"from" => Clock.ts(since), "to" => Clock.ts(now)},
-             "sections" => out["sections"],
+             "sections" =>
+               Enum.map(
+                 out["sections"],
+                 &Map.update!(&1, "body", fn b -> Capabilities.strip_labels(b) end)
+               ),
              "call_ref" => call_ref
            }}
         end
@@ -202,6 +211,17 @@ defmodule RisiMe.Agent.Requests do
     end)
   end
 
+  # Ref labels out of every text field (strings and string lists).
+  defp strip_all(out, keys) do
+    Enum.reduce(keys, out, fn k, acc ->
+      Map.update(acc, k, nil, fn
+        s when is_binary(s) -> Capabilities.strip_labels(s)
+        l when is_list(l) -> Enum.map(l, &Capabilities.strip_labels/1)
+        other -> other
+      end)
+    end)
+  end
+
   defp complete(conv, rid, user, t) do
     req = %{
       task: t.task,
@@ -215,26 +235,69 @@ defmodule RisiMe.Agent.Requests do
       max_tokens: t.max_tokens
     }
 
-    case LLM.complete(req) do
+    case LLM.complete(req) |> post_check(req, t) do
       {:ok, %{call_ref: call_ref, output: out, confidence: conf}} ->
         {body, risi} = t.reply.(out, call_ref, conf)
         post(conv, body, Map.put(risi, "notify", [user]))
 
       # The global in-flight queue is full: wait (the job snoozes), answer late rather than
-      # refuse; only after 10 minutes of waiting the polite error.
+      # refuse; only after 10 minutes of waiting the polite error (§25.6 `queue_overflow`).
       {:error, :rate_limited} ->
-        if waited_s() > @max_wait_s,
-          do: reply_error(conv, rid, user, "rate_limited"),
-          else: {:snooze, 10}
+        if waited_s() > @max_wait_s do
+          Secretary.log_limit(user, conv, "refused", "waited_over_10_min")
+          reply_error(conv, rid, user, "queue_overflow")
+        else
+          Secretary.log_limit(user, conv, "queued", "global_in_flight")
+          {:snooze, 10}
+        end
 
+      # The model is down after its retries: try again later, answer late; only after 10
+      # minutes the polite error.
       {:error, _} ->
-        reply_error(conv, rid, user, "model_unavailable")
+        if waited_s() > @max_wait_s,
+          do: reply_error(conv, rid, user, "model_unavailable"),
+          else: {:snooze, 30}
     end
   end
+
+  # §25.1 post-check (hotfix 2026-10-09): an answer saying the transcript/chat lacks something
+  # is retried once with a correction; if it still does, a server-built answer says what Risi
+  # can do now and what's coming.
+  defp post_check({:ok, %{output: %{"answer" => a}}} = ok, req, %{post_check: true}) do
+    if Capabilities.forbidden?(a) do
+      retry =
+        Map.put(req, :history, [
+          %{"role" => "assistant", "content" => Jason.encode!(elem(ok, 1).output)},
+          %{"role" => "user", "content" => Capabilities.retry_instruction()}
+        ])
+
+      case LLM.complete(retry) do
+        {:ok, %{output: %{"answer" => a2}}} = ok2 ->
+          if Capabilities.forbidden?(a2), do: fallback(ok2), else: ok2
+
+        _ ->
+          fallback(ok)
+      end
+    else
+      ok
+    end
+  end
+
+  defp post_check(result, _req, _t), do: result
+
+  defp fallback({:ok, %{output: out} = r}),
+    do:
+      {:ok,
+       %{
+         r
+         | output: %{out | "answer" => Capabilities.fallback_answer(), "refs" => []}
+       }}
 
   @bodies %{
     "model_unavailable" => "I can't answer right now. Please try again later.",
     "rate_limited" => "Too many requests right now. Please try again in a few minutes.",
+    "queue_overflow" =>
+      "You have a lot of questions waiting, so I skipped this one. Please ask again in a moment.",
     "nothing_to_summarise" => "There's nothing to summarise in that period.",
     "out_of_window" => "I can only summarise the last 24 hours."
   }

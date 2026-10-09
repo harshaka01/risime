@@ -109,7 +109,9 @@ config :risime, :risi_agent_check, false
 config :risime, :risi_llm,
   url: "http://127.0.0.1:8100/v1",
   req_options: [plug: {Req.Test, RisiMe.Agent.LLM.Local}],
-  fallback: false
+  fallback: false,
+  # Upstream retries without waiting (1 s / 2 s / 4 s in dev and prod).
+  backoff_ms: 0
 
 config :risime, :risi_sender, RisiMe.Agent.TestSender
 # Risi's own post limit is global (15 per 10 s); tests post faster than that.

@@ -8,6 +8,8 @@ defmodule RisiMe.Agent.SecretaryTest do
   use Oban.Testing, repo: RisiMe.Repo
 
   import ExUnit.CaptureLog
+
+  require Logger
   import RisiMe.RisiHelpers
 
   alias RisiMe.Agent.{Clock, Commitment, Commitments, Fact, LearningLog, Secretary, Transcript}
@@ -471,14 +473,31 @@ defmodule RisiMe.Agent.SecretaryTest do
 
     clear_chat_limit()
     say!(ctx.og, ctx.kamal, "something")
-    rid = request!(ctx, ctx.harsha, "summarise")
+    rid = Ecto.UUID.generate()
+
+    envelope!(ctx.og, ctx.harsha, %{
+      "v" => 1,
+      "type" => "risi_request",
+      "request_id" => rid,
+      "action" => "summarise"
+    })
+
+    # The model is down after its backoff retries: the job waits and answers late (hotfix
+    # 2026-10-09), no error yet.
+    job = request_job(rid)
+    assert {:snooze, 30} = perform_job(Job, job.args)
+    refute_receive {:risi_post, _, _, _}
+    # 1 call + 3 backoff retries.
+    assert length(llm_requests()) == 4
+
+    # Still down after 10 minutes of waiting: the polite error.
+    stale = Map.put(job.args, "t0", System.system_time(:second) - 700)
+    assert :ok = perform_job(Job, stale)
 
     assert_receive {:risi_post, _, body,
                     %{"kind" => "error", "code" => "model_unavailable", "request_id" => ^rid}}
 
     assert body =~ "try again"
-    # One retry, then the error.
-    assert length(llm_requests()) == 2
   end
 
   test "rate limits (§24.13): 20 a minute per user are all answered at once; the rest queue in order",
@@ -524,16 +543,53 @@ defmodule RisiMe.Agent.SecretaryTest do
     for j <- Repo.all(Oban.Job), do: refute(inspect(j.args) =~ "something to summarise")
   end
 
-  test "more than 50 pending requests of one user get a polite rate_limited", ctx do
+  test "more than 50 pending requests of one user get a polite queue_overflow (§25.6)", ctx do
     say!(ctx.og, ctx.kamal, "hello")
-    for _ <- 1..75, do: enqueue_request!(ctx, ctx.harsha)
+    level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: level) end)
+
+    log =
+      capture_log([level: :info], fn ->
+        for _ <- 1..75, do: enqueue_request!(ctx, ctx.harsha)
+      end)
 
     queued = for j <- all_enqueued(worker: Job), j.args["queued"] == true, do: j
     assert length(queued) == 50
-    errs = for j <- all_enqueued(worker: Job), j.args["error"] == "rate_limited", do: j
+    errs = for j <- all_enqueued(worker: Job), j.args["error"] == "queue_overflow", do: j
     assert length(errs) == 1
     assert perform_job(Job, hd(errs).args) == :ok
-    assert_receive {:risi_post, _, _, %{"kind" => "error", "code" => "rate_limited"}}
+    assert_receive {:risi_post, _, _, %{"kind" => "error", "code" => "queue_overflow"}}
+
+    # Every limiter decision is logged with hashed ids, never content.
+    h = RisiMe.Push.Dispatcher.user_hash(ctx.harsha.id)
+    assert log =~ "risi limit: user=#{h} chat="
+    assert log =~ "decision=accepted reason=under_limit"
+    assert log =~ "decision=queued"
+    assert log =~ "decision=refused reason=pending_over_50"
+    refute log =~ "hello"
+    refute log =~ ctx.harsha.id
+  end
+
+  test "no per-chat cap: a busy chat's requests are queued, never refused", ctx do
+    say!(ctx.og, ctx.kamal, "hello")
+    users = for i <- 1..12, do: RisiMe.GroupHelpers.fast_user!("U#{i}")
+
+    for u <- users do
+      Repo.insert!(%RisiMe.Groups.Member{
+        group_id: ctx.og,
+        user_id: u.id,
+        role: "member",
+        kind: "user",
+        state: "active",
+        joined_at: DateTime.utc_now(),
+        inserted_at: DateTime.utc_now()
+      })
+    end
+
+    # 12 users x 20 = 240 requests in one chat (more than the old 200 per chat per day).
+    for u <- users, _ <- 1..20, do: enqueue_request!(ctx, u)
+    refute Enum.any?(all_enqueued(worker: Job), &(&1.args["error"] != nil))
   end
 
   test "the global queue full: the request waits (snooze), no error, no model call", ctx do
@@ -549,10 +605,10 @@ defmodule RisiMe.Agent.SecretaryTest do
     refute_receive {:risi_post, _, _, _}
     assert llm_requests() == []
 
-    # Waited more than 10 minutes: the polite error.
+    # Waited more than 10 minutes: the polite error (§25.6 queue_overflow, never rate_limited).
     stale = Map.put(job.args, "t0", System.system_time(:second) - 700)
     assert :ok = perform_job(Job, stale)
-    assert_receive {:risi_post, _, _, %{"kind" => "error", "code" => "rate_limited"}}
+    assert_receive {:risi_post, _, _, %{"kind" => "error", "code" => "queue_overflow"}}
   end
 
   ## Digest

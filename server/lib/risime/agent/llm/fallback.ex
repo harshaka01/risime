@@ -14,4 +14,7 @@ defmodule RisiMe.Agent.LLM.Fallback do
 
   @impl true
   def chat(_body, _opts \\ []), do: {:error, :not_configured}
+
+  @doc "False: no provider is configured (so the router never falls back to it on failure)."
+  def configured?, do: false
 end
