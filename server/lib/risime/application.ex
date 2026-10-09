@@ -28,6 +28,8 @@ defmodule RisiMe.Application do
     RisiMe.Groups.Tabs.init()
     # v1.24 §24.13: the global Risi queue (16 model calls in flight).
     RisiMe.Agent.LLM.init_gate()
+    # v1.25 §25.4: risi_progress `seq` counters.
+    RisiMe.Agent.Progress.init()
     # v1.11 §14.8: temp files of uploads killed with the previous run.
     RisiMe.Blobs.sweep_tmp()
 

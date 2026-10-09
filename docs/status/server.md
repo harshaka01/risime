@@ -16,6 +16,88 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
+## v1.25 Risi with tools (§25, decision 068) — S0, S9–S12 READY (+ pilot hotfix); S13–S19 open
+- **Gate:** see the latest commit message; partition `_s9`, NIF built (`scripts/build-mls-nif`, with crypto C4).
+- **S0** `examples_test.exs` `@checked_v1_25`: all 17 v1.25 examples; real responses for
+  `auth_config_v125`, `device_put_risi_tools` (examples test) and `chat_reply_risi`,
+  `risi_chat_create_reply` (`risi_chat_s10_test.exs`); the rest by structure (client formats or
+  not produced yet: tool calls, results, progress, envelopes, `risi_facts_reply_v125`,
+  `error_tool_call_expired`).
+- **S9** `risi_tools` capability (kept only with `groups` + `tabs`), `Devices.risi_tools_device?/
+  ids`, `Groups.risi_tools_readiness/1`; `RISI_TOOLS` (default off) → `/auth/config`
+  `risi_tools: "on"` (left out while off, as `tabs`); `Groups.cap_for/1` = `risi_tools` for a
+  Risi chat (owner's `risi_tools` devices + Risi's `tabs` device; claims use the same set);
+  delivery filter `Tabs.risi_only?/1` + `Tabs.scope/1`: Risi-chat events (and `chat_event`s
+  naming one), `risi_progress`, `risi_tool_call` only to `risi_tools` sockets (a tool call only
+  to the device in `to_devices`), push scope `:risi_tools`, `GET /groups[/id]` hide Risi chats.
+- **S10** the Risi chat: migration `20261014100000_risi_chats` (`risi_chats(conversation_id →
+  groups, owner_id, state creating|active|left, left_at)`, partial unique index per owner while
+  not left); `RisiMe.RisiChat`; `POST /api/v1/risi/chat` 201/200 `{chat, group}` (403
+  `invalid_device` without a `risi_tools` `X-Device-Id`, 503 `agent_unavailable` while Risi or
+  `RISI_TOOLS` is off; the race's loser gets the winner's chat); epoch 0 = owner's `risi_tools`
+  devices + Risi's device (no `chats` row, no `chat_event`; 10-min `creating` TTL); `Chat`
+  `kind: "risi"`, `private: null`, `can_toggle: false`; `GET /chats[/id]` only on `risi_tools`
+  devices; `422 risi_chat` on PATCH `/chats`, `…/official`, member add/remove, role calls;
+  leave = both memberships close (no one is left to commit, none asked), `group_event`
+  `removed` to the owner, `RisiMe.Agent.forget/1` (now + 10 min), notes/facts with that
+  `chat_id` deleted, Risi's MLS state purged; a later POST makes a new chat. Devices ops add only
+  `risi_tools` devices. Risi ignores a plain `text` there. `Groups.Policy` mirrors crypto C4
+  (`risi_cases`, plus `chat_kind` immutable for any group).
+- **Pilot hotfix (2026-10-09):** every limiter decision logs `risi limit: user=<hash8>
+  chat=<id8> decision=accepted|queued|refused reason=…`; every upstream failure `risi llm:
+  provider=… status=429|5xx|timeout|transport|invalid_output attempt=n`; upstream failures retry
+  with backoff 1/2/4 s (≤3, never past a deadline), then the other model when configured
+  (`Fallback.configured?/0` is false today); a model still down snoozes the job (answer late;
+  `model_unavailable` only after 10 min); no per-chat daily cap; >50 pending or >10 min on the
+  global queue = `queue_overflow` (never `rate_limited` in normal use). `RisiMe.Agent.Capabilities`:
+  now/coming lists in the system prompt, "what can you do" works in an empty chat, the
+  "transcript does not contain" post-check (one retry, then a server-built answer), "Message 1"
+  labels stripped (sources are real message refs only).
+- **S11** `RisiMe.Agent.Turn` (RISI_TOOLS=on, `ask` only; `summarise`/`report` stay v1.24): the
+  `risi_next_action` loop of §25.1 — schema `anyOf` one alternative per allowed tool + `final`;
+  `Tools.authorize/3` at offer and at run (`denied`); bounds 6 tool steps / 8 model calls / 20 s
+  per call / 60 s per turn / 24k-token prompt (oldest chat lines dropped) / 2 writes, a bound
+  ends with a server-built `final`; refs `m<n>` + tool refs, unknown refs dropped; the post-check;
+  system prompt = identity + `Capabilities` + tool lines + rules; `risi_turn_steps`
+  (`priv/cql/008`, Q21–Q22, column `authz`: AUTHORIZE is a CQL keyword; hashes only; plus a
+  `final` row); `risi_progress` (`RisiMe.Agent.Progress`: queued with position from the
+  secretary, working, step running/status, done; not on a snooze); one running turn per user
+  (`:global` lock; a second snoozes 2 s); the request's device = the sending leaf's
+  (`__device` from the buffer). Registry: `config :risime, :risi_tool_registry`
+  (default `Tools.Registry` = `capabilities` only). Answer v2 fields `steps`, `sources`,
+  `next_steps`, `turn_ref` (no `local_search` yet).
+- **S12** `RisiMe.Agent.Audience`: own-content outputs to the conversation; personal (any
+  personal tool step that succeeded, or a tool's `meta.personal`) to the asker's active Risi
+  chat + the pointer `answer` "I've replied in your Risi chat." (no sources/steps/next steps)
+  in the group; in the Risi chat everything stays; personal content without a Risi chat is never
+  posted in the group. Drafts and personal confirms will call `Audience.deliver(…, true)`.
+- **Tests:** `risi_tools_s9_test.exs`, `risi_chat_s10_test.exs`, `policy_test.exs` risi cases,
+  `risi_hotfix_test.exs`, `turn_s11_test.exs` (gate script via `RisiHelpers.scripted_llm!/2`, a
+  Req.Test port of `fake-llm --script`; a stub registry for bounds/authorize/audience),
+  `agent_tree_test.exs` (real NIF + C4: Risi joins a Risi chat from its Welcome, a turn answered
+  there over MLS, leave purges).
+- **Decisions taken (for root):**
+  1. `/auth/config` omits `risi_tools` while off (absent = off, §25.8), as `tabs`.
+  2. `POST /risi/chat` returns `epoch: null` for a `creating` group (as `…/official`; the
+     example shows 0).
+  3. A `422 risi_chat` is only for a member of the Risi chat; anyone else gets 404.
+  4. Leaving a Risi chat asks no one to commit (only the owner was a human member): both rows go
+     `pending_remove` at once and Risi purges its MLS state itself.
+  5. A turn whose model is down before any step snoozes 30 s (answer late), consistent with the
+     hotfix; after a step it ends with a server-built `final`.
+  6. `confidence` of a turn's answer: 1.0 when every step was `ok`, else 0.5 (no model score).
+- **For S13–S19:** register tools in `Tools.Registry.tools/0` (`where`, `personal`, `write`,
+  `finds`, `args` schema, `run`, optional `authorize`); a tool returns `{:ok, result, %{refs:
+  %{"c1" => Source}, personal: bool}}` or `{:error, StepStatus}`. Client tools need the
+  `risi_tool_call` event (per-device; the filter and `scope_key` already exist), `POST
+  /risi/tool_calls/{id}/result` (16 KiB, 409s, 15 s wait in the turn's memory), the wake to that
+  device only. Writes need the confirm card + `write_id` table, `confirm_write`/`cancel_write`/
+  `me_too`/`not_me` in `Commitments.act`-like handling, `waiting_confirm` progress, and
+  `Audience.deliver(…, true)` for personal confirms and drafts. Notes need the sealed
+  `risi_facts` migration (`RISI_MEMORY_KEY`, existing facts re-sealed) and the
+  `preference` mapping in `GET /risi/facts`. Round-robin dispatch across users is not done (Oban
+  FIFO + the 16-in-flight gate); `risi_requests` concurrency is still 2 per node.
+
 ## P0 2026-10-08: Risi can never stop the server — READY (no wire change)
 - **Incident:** nightly.39 with `RISI=on` crash-looped at boot: `RISI_MLS_KEK` had been
   replaced after Risi sealed its `risi_mls_kv` rows, `Agent.Mls.init/1` failed with `:tampered`,

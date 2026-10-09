@@ -118,6 +118,10 @@ defmodule RisiMe.Agent.Secretary do
             if(count > 0, do: "pending=#{count}", else: "over_#{per_min}_per_min")
           )
 
+          # v1.25 §25.4: the bubble shows the place in the asker's queue.
+          if RisiMe.Risi.tools_on?(),
+            do: RisiMe.Agent.Progress.send(user, rid, conv, "queued", position: count + 1)
+
           spacing = Application.get_env(:risime, :risi_req_spacing_s, @req_spacing_s)
           first = DateTime.add(DateTime.utc_now(), RateLimiter.retry_after_s(window), :second)
 

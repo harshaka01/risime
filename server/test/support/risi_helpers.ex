@@ -148,10 +148,73 @@ defmodule RisiMe.RisiHelpers do
     id
   end
 
+  @doc """
+  The fake model answering like `scripts/fake-llm --script` (contract v1.25 §25.1, §25.9): the
+  first rule whose `task` fully matches the schema name, `match` is found in the FIRST user
+  message and `match_last` in the LAST one wins; the step index is the number of assistant
+  messages in the request (past the end the last action repeats). `rules` is a list of rule maps
+  or a path to a script file (default: `contract/v1/risi_gate_script.json`). A request no rule
+  matches gets `fallback.(name, body)`.
+  """
+  def scripted_llm!(rules \\ nil, fallback \\ fn _, _ -> {:status, 500} end) do
+    rules =
+      case rules do
+        nil ->
+          gate_script()
+
+        path when is_binary(path) ->
+          path |> File.read!() |> Jason.decode!() |> Map.fetch!("rules")
+
+        list when is_list(list) ->
+          list
+      end
+
+    fake_llm!(fn name, body ->
+      msgs = body["messages"]
+      users = for %{"role" => "user", "content" => c} <- msgs, do: c
+      first = List.first(users) || ""
+      last = List.last(users) || ""
+      step = Enum.count(msgs, &(&1["role"] == "assistant"))
+
+      rule =
+        Enum.find(rules, fn r ->
+          (r["task"] == nil or Regex.match?(~r/\A(?:#{r["task"]})\z/, name || "")) and
+            (r["match"] == nil or Regex.match?(Regex.compile!(r["match"]), first)) and
+            (r["match_last"] == nil or Regex.match?(Regex.compile!(r["match_last"]), last))
+        end)
+
+      case rule do
+        nil ->
+          fallback.(name, body)
+
+        %{"actions" => actions} ->
+          case Enum.at(actions, min(step, length(actions) - 1)) do
+            s when is_binary(s) -> {:raw, s}
+            a -> a
+          end
+      end
+    end)
+  end
+
+  @doc "The rules of `contract/v1/risi_gate_script.json`."
+  def gate_script,
+    do:
+      Path.expand("../../../contract/v1/risi_gate_script.json", __DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+      |> Map.fetch!("rules")
+
   @doc "Buffers any envelope from `user` and hands it to the secretary; returns its id."
-  def envelope!(conv, user, env) do
+  def envelope!(conv, user, env, device \\ nil) do
     id = TimeUUID.generate()
-    m = %{message_id: id, sender_id: user.id, sender_device: nil, plaintext: Jason.encode!(env)}
+
+    m = %{
+      message_id: id,
+      sender_id: user.id,
+      sender_device: device,
+      plaintext: Jason.encode!(env)
+    }
+
     :ok = Transcript.put(conv, m)
     RisiMe.Agent.Secretary.on_message(conv, m)
     id

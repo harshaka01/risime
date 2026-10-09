@@ -35,16 +35,27 @@ defmodule RisiMe.Agent.Requests do
     Process.put(:risi_req_t0, t0)
 
     case Secretary.envelope(conv, message_id) do
+      # v1.25 §25.1: with RISI_TOOLS=on an `ask` is a turn of the tool loop.
       %{"type" => "risi_request", "request_id" => ^request_id, "action" => action} = env ->
-        now = DateTime.utc_now()
-
-        case since(env, now) do
-          :out_of_window -> reply_error(conv, request_id, user, "out_of_window")
-          {:ok, since} -> run(action, conv, request_id, user, env, since, now)
-        end
+        if action == "ask" and RisiMe.Risi.tools_on?() and valid_question?(env["text"]),
+          do: RisiMe.Agent.Turn.run(conv, env, request_id, user),
+          else: v124(conv, env, request_id, user)
 
       _ ->
         :ok
+    end
+  end
+
+  defp valid_question?(q) when is_binary(q), do: String.length(String.trim(q)) in 1..1000
+  defp valid_question?(_q), do: false
+
+  # The v1.24 secretary path (`summarise`, `report`, and `ask` while RISI_TOOLS is off).
+  defp v124(conv, %{"action" => action} = env, request_id, user) do
+    now = DateTime.utc_now()
+
+    case since(env, now) do
+      :out_of_window -> reply_error(conv, request_id, user, "out_of_window")
+      {:ok, since} -> run(action, conv, request_id, user, env, since, now)
     end
   end
 

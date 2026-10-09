@@ -14,7 +14,7 @@ defmodule RisiMe.AgentTreeTest do
   import RisiMe.MLSHelpers, only: [with_attestation_key: 1]
   import RisiMe.GroupHelpers
   import RisiMe.TabsHelpers, only: [tabs_device!: 1]
-  import RisiMe.RisiHelpers, only: [fake_llm!: 1, llm_requests: 0, ref_of: 2]
+  import RisiMe.RisiHelpers, only: [fake_llm!: 1, llm_requests: 0, ref_of: 2, scripted_llm!: 0]
 
   alias RisiMe.Agent.{ConversationSup, Inbox, KeyPackages, Mls, Transcript}
   alias RisiMe.Agent.Mls.Nif
@@ -103,7 +103,7 @@ defmodule RisiMe.AgentTreeTest do
   end
 
   # A human device: a NIF handle whose key the server attests like an app's (PUT /me/devices).
-  defp human!(user) do
+  defp human!(user, caps \\ ["groups", "member_devices", "tabs"]) do
     dev = Ecto.UUID.generate()
     anchors = Enum.map(Attestation.public_keys(), &Jason.encode!/1)
     {:ok, h, _} = Nif.open(user.user.id, dev, anchors, :crypto.strong_rand_bytes(32), [])
@@ -114,7 +114,7 @@ defmodule RisiMe.AgentTreeTest do
         "platform" => "android",
         "mls" => %{
           "signature_key" => Base.encode64(pk),
-          "capabilities" => ["groups", "member_devices", "tabs"]
+          "capabilities" => caps
         }
       })
 
@@ -564,6 +564,111 @@ defmodule RisiMe.AgentTreeTest do
     assert Repo.get(RisiMe.Agent.Commitment, card["commitment_id"]) == nil
     assert Repo.all(from f in RisiMe.Agent.Fact, where: f.conversation_id == ^og) == []
     assert Transcript.list(og) == []
+  end
+
+  test "S10/S11 end to end: the Risi chat (Risi joins from its Welcome) and a turn answered there",
+       ctx do
+    Application.put_env(:risime, :risi_tools, true)
+    on_exit(fn -> Application.delete_env(:risime, :risi_tools) end)
+    risi = ctx.risi
+    {h, dev} = human!(ctx.a, ["groups", "member_devices", "tabs", "risi_tools"])
+
+    {201, %{"chat" => %{"chat_id" => rc}, "group" => g}} =
+      api(:post, "/api/v1/risi/chat", ctx.a.token, %{}, dev)
+
+    assert g["chat_kind"] == "risi"
+
+    %{"devices" => devices} =
+      api(
+        :post,
+        "/api/v1/mls/key_packages/claim",
+        ctx.a.token,
+        %{"user_ids" => [risi], "conversation_id" => rc},
+        dev
+      )
+      |> assert_status(200)
+
+    [%{"key_package" => kp}] = Enum.filter(devices, &(&1["user_id"] == risi))
+    gid = RisiMe.Agent.group_id(rc, 1)
+
+    meta =
+      Jason.encode!(%{
+        v: 1,
+        name: nil,
+        icon: nil,
+        admins: [ctx.a.user.id],
+        tab: "official",
+        chat_id: rc,
+        agents: [risi],
+        chat_kind: "risi"
+      })
+
+    {:ok, gc, _} = Nif.test_create_group(h, gid, [Base.decode64!(kp)], meta)
+
+    {200, %{"epoch" => 1}} =
+      api(
+        :post,
+        "/api/v1/mls/groups/#{rc}/commit",
+        ctx.a.token,
+        create_commit([], {ctx.a.user.id, dev}, %{
+          "added" => [ref(risi, ctx.risi_dev)],
+          "commit" => Base.encode64(gc.commit),
+          "welcome" => Base.encode64(gc.welcome)
+        }),
+        dev
+      )
+
+    eventually(fn -> Mls.epoch(gid) == {:ok, Groups.epoch(rc)} end)
+    assert RisiMe.RisiChat.active?(ctx.a.user.id)
+
+    # An ask in the Risi chat: a turn (scripted like fake-llm --script), answered there.
+    scripted_llm!()
+    rid = Ecto.UUID.generate()
+
+    env =
+      Jason.encode!(%{
+        v: 1,
+        type: "risi_request",
+        request_id: rid,
+        action: "ask",
+        text: "What can you do"
+      })
+
+    {:ok, ct, _} = Nif.encrypt(h, gid, env)
+
+    {:ok, _} =
+      Messaging.send(
+        ctx.a.user.id,
+        %{
+          "conversation_id" => rc,
+          "client_msg_id" => Ecto.UUID.generate(),
+          "ciphertext" => Base.encode64(ct),
+          "generation" => 1,
+          "epoch" => Groups.epoch(rc)
+        },
+        device_id: dev
+      )
+
+    eventually(fn ->
+      Enum.any?(all_enqueued(worker: RisiMe.Workers.Risi), &(&1.args["request_id"] == rid))
+    end)
+
+    [job] = for j <- all_enqueued(worker: RisiMe.Workers.Risi), j.args["request_id"] == rid, do: j
+    assert :ok = perform_job(RisiMe.Workers.Risi, job.args)
+
+    ev = ctx.a.user.id |> risi_messages(risi) |> Enum.find(&(&1["data"]["conversation_id"] == rc))
+    assert %{"type" => "text", "body" => body, "risi" => a} = decrypt!(h, gid, ev)
+    assert body =~ "I can set reminders"
+    assert a["kind"] == "answer" and a["request_id"] == rid
+    assert a["steps"] == [%{"tool" => "capabilities", "status" => "ok"}]
+
+    # The request's device came from the sending leaf.
+    [first | _] = llm_requests()
+    assert hd(first["messages"])["content"] =~ "You are Risi"
+
+    # Leaving: Risi purges its MLS state for the chat.
+    {204, _} = api(:post, "/api/v1/groups/#{rc}/leave", ctx.a.token, %{}, dev)
+    eventually(fn -> Mls.epoch(gid) != {:ok, 1} end)
   end
 
   test "a Welcome into another conversation's MLS group is purged at once (logged)", ctx do
