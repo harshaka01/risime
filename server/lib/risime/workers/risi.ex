@@ -37,6 +37,7 @@ defmodule RisiMe.Workers.Risi do
   # v1.25/v1.26 (S13+): expired confirm cards (their sealed args), old tool-call rows.
   def perform(%Oban.Job{args: %{"kind" => "prune"}}) do
     RisiMe.Agent.Writes.prune()
+    RisiMe.Agent.ActionDraft.prune()
     RisiMe.Agent.ToolCalls.prune()
     RisiMe.Agent.Skills.prune()
     RisiMe.Agent.Reminders.prune()

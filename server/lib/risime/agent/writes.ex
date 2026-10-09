@@ -112,6 +112,10 @@ defmodule RisiMe.Agent.Writes do
       }
       |> put_some("skill_id", card[:skill_id])
       |> put_some("args", card[:card_args])
+      # P0 2026-10-09: the calendar hint (the phone's remembered choice, or null).
+      |> then(
+        &if(tool.name == "calendar_add", do: Map.put(&1, "calendar", card[:calendar]), else: &1)
+      )
 
     case Out.post(target, card.summary <> "? Update RisiMe to answer.", risi) do
       {:ok, %{message_id: mid}} ->
@@ -175,13 +179,18 @@ defmodule RisiMe.Agent.Writes do
   A `confirm_write` / `cancel_write` from `user` (sending device `device`) in `conv`. Oban
   result (always `:ok`: a refused or repeated action is ignored).
   """
-  def act(conv, user, device, %{"action" => action, "target" => target})
+  def act(conv, user, device, %{"action" => action, "target" => target} = env)
       when action in ~w(confirm_write cancel_write) do
     with {:ok, wid} <- Ecto.UUID.cast(target),
          %Write{} = w <- Repo.get(Write, wid),
          true <- w.card_conversation_id == conv and w.user_id == user,
          true <- DateTime.compare(DateTime.utc_now(), w.expires_at) == :lt do
-      if action == "cancel_write", do: cancel(w), else: confirm(w, device)
+      cond do
+        action == "cancel_write" -> cancel(w)
+        edit_ok?(w, Map.get(env, "edit")) -> confirm(w, device, Map.get(env, "edit"))
+        # A malformed edit runs nothing (never the unedited write the asker changed).
+        true -> :ok
+      end
     else
       _ -> :ok
     end
@@ -195,6 +204,60 @@ defmodule RisiMe.Agent.Writes do
   end
 
   defp cancel(_w), do: :ok
+
+  # P0 2026-10-09 (proposal 2026-10-09-risi-action-loop): the action card's [Edit] sends the
+  # edited `calendar_add` args with its `confirm_write` (`edit`: title, start, end, all_day;
+  # every key optional, timestamps as on the wire). Other writes take no edit.
+  @edit_keys ~w(title start end all_day)
+  @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?(Z|[+-]\d\d:\d\d)$/
+
+  defp edit_ok?(_w, nil), do: true
+
+  defp edit_ok?(%Write{tool: "calendar_add"}, %{} = e) do
+    Map.keys(e) -- @edit_keys == [] and
+      Enum.all?(e, fn
+        {"title", t} -> is_binary(t) and String.trim(t) != "" and String.length(t) <= 200
+        {"all_day", b} -> is_boolean(b)
+        {_k, ts} -> is_binary(ts) and ts =~ @ts
+      end)
+  end
+
+  defp edit_ok?(_w, _edit), do: false
+
+  defp edited(args, nil), do: {:ok, args}
+
+  defp edited(%{"wire" => wire} = args, %{} = e) do
+    wire = Map.merge(wire, Map.update(e, "title", nil, &String.trim/1) |> drop_nil())
+
+    with {:ok, s, _} <- DateTime.from_iso8601(wire["start"]),
+         {:ok, t, _} <- DateTime.from_iso8601(wire["end"]),
+         :lt <- DateTime.compare(s, t) do
+      {:ok, %{args | "wire" => wire} |> Map.put("title", wire["title"])}
+    else
+      _ -> :error
+    end
+  end
+
+  defp edited(_args, _edit), do: :error
+
+  defp drop_nil(m), do: m |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
+
+  defp confirm(w, device, nil), do: confirm(w, device)
+
+  defp confirm(%Write{state: state} = w, device, edit) when state in ~w(pending confirmed) do
+    with {:ok, args} <- open_args(w),
+         {:ok, args} <- edited(args, edit),
+         {:ok, key} <- Seal.data() do
+      w =
+        w |> Ecto.Changeset.change(args: Seal.seal(key, aad(w.write_id), args)) |> Repo.update!()
+
+      confirm(w, device)
+    else
+      _ -> :ok
+    end
+  end
+
+  defp confirm(w, device, _edit), do: confirm(w, device)
 
   defp confirm(%Write{state: "void"} = w, _device), do: void_reply(w)
 
@@ -274,6 +337,10 @@ defmodule RisiMe.Agent.Writes do
     Repo.update_all(from(x in Write, where: x.write_id == ^w.write_id),
       set: [state: state, args: nil]
     )
+
+    # P0 2026-10-09: the action draft behind this card is finished.
+    if state in ~w(done cancelled),
+      do: RisiMe.Agent.ActionDraft.finished(w.user_id, w.conversation_id, w.write_id)
   end
 
   ## Queries

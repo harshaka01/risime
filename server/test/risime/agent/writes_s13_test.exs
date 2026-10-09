@@ -200,7 +200,7 @@ defmodule RisiMe.Agent.WritesS13Test do
       result!(ctx, d["tool_call_id"], %{"status" => "ok", "result" => %{"event_id" => "e1"}})
 
     assert :ok = Task.await(task)
-    assert_receive {:risi_post, rc, "Added \"Dentist\" to your calendar.", a}
+    assert_receive {:risi_post, rc, "Added to your calendar: Dentist · Fri 9 Oct, 10–11 AM", a}
     assert rc == ctx.rc and a["steps"] == [%{"tool" => "calendar_add", "status" => "ok"}]
 
     # The args are gone: the event is deleted, the write is done with no args.

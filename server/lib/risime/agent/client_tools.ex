@@ -140,7 +140,9 @@ defmodule RisiMe.Agent.ClientTools do
          when: %{"start" => wire["start"], "end" => wire["end"], "all_day" => all_day},
          text: title,
          personal: true,
-         skill_id: "calendar"
+         skill_id: "calendar",
+         # P0 2026-10-09: the calendar the phone last reported (null: it asks on first use).
+         calendar: RisiMe.Agent.CalendarChoice.get(ctx.asker)
        }}
     end
   end
@@ -494,12 +496,73 @@ defmodule RisiMe.Agent.ClientTools do
   end
 
   defp ok(w, args, dev, result) do
-    RisiMe.Agent.Skills.client_done(w, args, dev, result) || answer(w, "ok", done_text(w, args))
+    # P0 2026-10-09: the phone said which calendar it used: remembered for the next card.
+    if w.tool == "calendar_add" and is_map(result["calendar"]),
+      do: RisiMe.Agent.CalendarChoice.put(w.user_id, result["calendar"])
+
+    RisiMe.Agent.Skills.client_done(w, args, dev, result) ||
+      answer(w, "ok", done_text(w, Map.put(args, "result", result)))
+
     :ok
   end
 
-  defp done_text(%{tool: "calendar_add"}, args),
-    do: "Added \"#{args["title"]}\" to your calendar."
+  @doc """
+  The success line of a `calendar_add` (P0 2026-10-09): "Added to your Google Calendar:
+  Interview with Shenika · Mon 12 Oct, 2–3 PM" (the calendar's name from the phone's result,
+  else "calendar").
+  """
+  def added_text(args, result, tz) do
+    result = result || args["result"] || %{}
+    wire = args["wire"] || %{}
+
+    where =
+      case result["calendar"] do
+        %{"name" => n} when is_binary(n) and n != "" -> n
+        _ -> "calendar"
+      end
+
+    with {:ok, start, _} <- DateTime.from_iso8601(wire["start"] || ""),
+         {:ok, stop, _} <- DateTime.from_iso8601(wire["end"] || "") do
+      "Added to your #{where}: #{args["title"]} · " <>
+        span12(start, stop, wire["all_day"] == true, tz)
+    else
+      _ -> "Added to your #{where}: #{args["title"]}"
+    end
+  end
+
+  @doc "`Mon 12 Oct, 2–3 PM`, `Mon 12 Oct, 11 AM–12:30 PM`, `Mon 12 Oct` (all day), in `tz`."
+  def span12(start, stop, all_day, tz) do
+    a = Clock.local(start, tz)
+    b = Clock.local(stop, tz)
+    day = &Calendar.strftime(&1, "%a %-d %b")
+
+    cond do
+      all_day ->
+        last = NaiveDateTime.add(b, -1)
+
+        if NaiveDateTime.to_date(last) == NaiveDateTime.to_date(a),
+          do: day.(a),
+          else: day.(a) <> " – " <> day.(last)
+
+      NaiveDateTime.to_date(a) == NaiveDateTime.to_date(b) ->
+        if ampm(a) == ampm(b),
+          do: "#{day.(a)}, #{h12(a)}–#{h12(b)} #{ampm(b)}",
+          else: "#{day.(a)}, #{h12(a)} #{ampm(a)}–#{h12(b)} #{ampm(b)}"
+
+      true ->
+        "#{day.(a)}, #{h12(a)} #{ampm(a)} – #{day.(b)}, #{h12(b)} #{ampm(b)}"
+    end
+  end
+
+  defp ampm(t), do: if(t.hour < 12, do: "AM", else: "PM")
+
+  defp h12(t) do
+    h = rem(t.hour + 11, 12) + 1
+    if t.minute == 0, do: "#{h}", else: "#{h}:#{String.pad_leading("#{t.minute}", 2, "0")}"
+  end
+
+  defp done_text(%{tool: "calendar_add"} = w, args),
+    do: added_text(args, nil, Clock.user_tz(w.user_id))
 
   defp done_text(_w, _args), do: "Done."
 

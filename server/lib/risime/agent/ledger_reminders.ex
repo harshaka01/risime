@@ -18,8 +18,8 @@ defmodule RisiMe.Agent.LedgerReminders do
   `schedule_v` only, never text.
 
   **Personal digest** (`digest_sweep/1`, every 15 min): at 09:xx in the user's zone, at most once
-  a day, in the user's Risi chat, only when the user has open ledger items (own or owed) due
-  within 7 days or overdue (`scope: "personal"`).
+  a day, in the user's Risi chat, only when the user has open promises (own or owed): exactly the
+  items of "My promises" (`GET /risi/commitments`, P0 2026-10-09) (`scope: "personal"`).
   """
   import Ecto.Query
 
@@ -266,10 +266,13 @@ defmodule RisiMe.Agent.LedgerReminders do
   """
   def digest_sweep(now \\ Clock.now()) do
     if RisiMe.Risi.ledger_on?() do
+      # Everyone with an open promise (the rows `GET /risi/commitments` lists as open).
       users =
         Repo.all(
           from c in Commitment,
-            where: c.item_state in ^@open,
+            where:
+              c.state in ^Commitment.open_states() and
+                (is_nil(c.item_state) or c.item_state != "proposed"),
             select: {c.owner_id, c.counterpart_ids}
         )
         |> Enum.flat_map(fn {o, cps} -> [o | cps] end)
@@ -281,37 +284,32 @@ defmodule RisiMe.Agent.LedgerReminders do
     :ok
   end
 
-  @doc "Sends `user`'s personal digest if their clock reads 09:xx and none was sent today."
+  @doc """
+  Sends `user`'s personal digest if their clock reads 09:xx and none was sent today. P0
+  2026-10-09: its items are exactly "My promises" (`RisiMe.Agent.Rest.open_commitments/1`, the
+  query of `GET /risi/commitments`), so the digest never says less than the app lists.
+  """
   def digest(user, now \\ Clock.now()) do
     tz = Clock.user_tz(user)
     local = Clock.local(now, tz)
     today = NaiveDateTime.to_date(local)
     rc = RisiChat.active_id(user)
-    horizon = DateTime.add(now, 7 * 86_400)
 
     items =
-      if (rc && local.hour == 9) and last_digest(rc) != today do
-        Repo.all(
-          from c in Commitment,
-            where:
-              c.item_state in ^@open and not is_nil(c.due) and c.due <= ^horizon and
-                (c.owner_id == ^user or ^user in c.counterpart_ids),
-            order_by: [asc: c.due, asc: c.inserted_at]
-        )
-        |> Enum.filter(&Secretary.active_human?(&1.conversation_id, user))
-        |> Commitment.open_all()
-        |> case do
-          {:ok, items} -> items
-          :error -> []
-        end
-      else
-        []
-      end
+      if (rc && local.hour == 9) and last_digest(rc) != today, do: digest_items(user), else: []
 
     if items == [] do
       :skipped
     else
       post_digest(user, rc, tz, today, items)
+    end
+  end
+
+  @doc "The digest's items for `user`: \"My promises\" (open), as the app lists them."
+  def digest_items(user) do
+    case RisiMe.Agent.Rest.open_commitments(user) do
+      {:ok, items} -> items
+      {:error, _} -> []
     end
   end
 
@@ -341,7 +339,7 @@ defmodule RisiMe.Agent.LedgerReminders do
             "text" => c.text,
             "owner" => c.owner_id,
             "due" => Clock.ts(c.due),
-            "state" => c.item_state
+            "state" => c.item_state || c.state
           }
         end,
       "notify" => [user]
@@ -365,6 +363,8 @@ defmodule RisiMe.Agent.LedgerReminders do
         :error
     end
   end
+
+  defp digest_due(%{due: nil}, _tz, _today), do: "no date"
 
   defp digest_due(c, tz, today) do
     local = Clock.local(c.due, tz)

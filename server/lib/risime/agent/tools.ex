@@ -123,7 +123,10 @@ defmodule RisiMe.Agent.Tools do
           "type" => "array",
           "maxItems" => 3,
           "items" => %{"type" => "string", "maxLength" => 120}
-        }
+        },
+        # P0 2026-10-09: the structured slots of an event or reminder the asker asks for
+        # (optional; `RisiMe.Agent.ActionDraft`).
+        "draft" => RisiMe.Agent.ActionDraft.schema()
       },
       "required" => ["tool", "answer", "sources", "next_steps"],
       "additionalProperties" => false

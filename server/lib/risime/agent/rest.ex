@@ -116,6 +116,23 @@ defmodule RisiMe.Agent.Rest do
   list}` or `{:error, :agent_unavailable}` (like `facts/1`).
   """
   def commitments(user, state) do
+    user
+    |> query(state)
+    |> Repo.all()
+    |> opened(&Commitment.open_all/1)
+    |> wire(fn c -> commitment_json(c, user) end)
+  end
+
+  @doc """
+  The caller's open promises exactly as `GET /risi/commitments` lists them (the same query),
+  opened: `{:ok, [Commitment]}` or `{:error, :agent_unavailable}`. The personal digest and the
+  Risi chat's context use this (P0 2026-10-09: the digest must never disagree with My
+  promises).
+  """
+  def open_commitments(user),
+    do: user |> query(:open) |> Repo.all() |> opened(&Commitment.open_all/1)
+
+  defp query(user, state) do
     q =
       from c in Commitment,
         where:
@@ -127,11 +144,7 @@ defmodule RisiMe.Agent.Rest do
 
     # v1.27 §27.5: a ledger item is a promise only once its owner confirmed it; until then it
     # is nobody's (counterparts hear about it only after the owner's ✓).
-    q = where(q, [c], is_nil(c.item_state) or c.item_state != "proposed")
-
-    Repo.all(q)
-    |> opened(&Commitment.open_all/1)
-    |> wire(fn c -> commitment_json(c, user) end)
+    where(q, [c], is_nil(c.item_state) or c.item_state != "proposed")
   end
 
   # v1.27 §27.9: ledger items gain summary_id, source, all_day and the caller's role.

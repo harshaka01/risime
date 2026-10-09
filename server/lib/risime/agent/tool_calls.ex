@@ -267,6 +267,13 @@ defmodule RisiMe.Agent.ToolCalls do
   defp valid_ok?("calendar_add", %{"event_id" => id} = r) when map_size(r) == 1,
     do: is_binary(id) and byte_size(id) in 1..256
 
+  # P0 2026-10-09 (proposal 2026-10-09-risi-action-loop): the calendar it was added to.
+  defp valid_ok?("calendar_add", %{"event_id" => id, "calendar" => c} = r)
+       when map_size(r) == 2,
+       do:
+         is_binary(id) and byte_size(id) in 1..256 and
+           (c == nil or RisiMe.Agent.CalendarChoice.valid?(c))
+
   defp valid_ok?("set_alarm", %{"alarm_set" => true} = r) when map_size(r) == 1, do: true
 
   defp valid_ok?("schedule_message", %{"schedule_id" => id} = r) when map_size(r) == 1,

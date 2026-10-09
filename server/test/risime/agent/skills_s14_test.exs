@@ -398,7 +398,7 @@ defmodule RisiMe.Agent.SkillsS14Test do
     assert {_, :ok} = Task.await(task)
 
     refute_received {:risi_post, _, _, %{"kind" => "confirm"}}
-    assert_receive {:risi_post, rc, "Added 'Dentist' to your calendar.", done}
+    assert_receive {:risi_post, rc, "Added to your calendar: Dentist · Fri 9 Oct, 10–11 AM", done}
     assert rc == ctx.rc and done["kind"] == "skill_done" and done["via"] == "allowed"
     assert done["skill_id"] == "calendar" and done["action"] == "calendar_added"
     assert done["undo"]["kind"] == "client" and done["undo"]["state"] == "available"

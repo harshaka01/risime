@@ -174,6 +174,20 @@ if key = System.get_env("RISI_MEMORY_KEY"), do: config(:risime, :risi_memory_key
 if v = System.get_env("RISI_LEDGER"), do: config(:risime, :risi_ledger, on?.(v))
 if v = System.get_env("RISI_TRANSCRIBE"), do: config(:risime, :risi_transcribe, on?.(v))
 
+# §27.2 quiet-rule thresholds (defaults 600 s, 6 messages, 2 people, 30 min, < 8 a day), so
+# tests and UI gates can shorten them. A value that isn't a positive integer is ignored.
+for {var, key} <- [
+      {"RISI_QUIET_S", :risi_quiet_s},
+      {"RISI_QUIET_MIN_MSGS", :risi_quiet_min_msgs},
+      {"RISI_QUIET_MIN_PEOPLE", :risi_quiet_min_people},
+      {"RISI_QUIET_SPACING_S", :risi_quiet_spacing_s},
+      {"RISI_QUIET_PER_DAY", :risi_quiet_per_day}
+    ],
+    v = System.get_env(var),
+    match?({n, ""} when n > 0, Integer.parse(String.trim(v))) do
+  config(:risime, key, v |> String.trim() |> String.to_integer())
+end
+
 if v = System.get_env("RISI_COMMERCIAL_PROVIDER_NAME"),
   do: config(:risime, :risi_commercial_provider_name, v)
 

@@ -33,10 +33,36 @@ defmodule RisiMe.Agent.Out do
   def post(conv, body, risi, opts \\ []) when is_binary(body) and is_map(risi) do
     limit = Application.get_env(:risime, :risi_send_limit, @limit)
 
-    with :ok <- RateLimiter.hit_if_allowed(:risi_send, :risi, limit, @window) do
-      sender().text(conv, body, risi(risi, opts))
+    with :ok <- RateLimiter.hit_if_allowed(:risi_send, :risi, limit, @window),
+         {:ok, sent} <- sender().text(conv, body, risi(risi, opts)) do
+      remember(conv, sent, body, risi)
+      {:ok, sent}
     end
   end
+
+  # P0 2026-10-09: in a Risi chat, Risi's own post joins the sealed 24-h buffer (as
+  # `risi_post`, never a `text`), so the next turn sees both sides of the conversation.
+  defp remember(conv, %{message_id: mid}, body, risi) when is_binary(mid) do
+    if RisiMe.Groups.Tabs.risi_chat?(conv) do
+      env = %{"v" => 1, "type" => "risi_post", "kind" => risi["kind"], "body" => body}
+
+      RisiMe.Agent.Transcript.put(conv, %{
+        message_id: mid,
+        sender_id: RisiMe.Risi.user_id(),
+        sender_device: nil,
+        plaintext: Jason.encode!(env)
+      })
+    end
+
+    :ok
+  rescue
+    e ->
+      require Logger
+      Logger.warning("Risi post not buffered: #{inspect(e.__struct__)}")
+      :ok
+  end
+
+  defp remember(_conv, _sent, _body, _risi), do: :ok
 
   @doc "The complete `risi` object of a post (defaults and `made_by` filled in)."
   def risi(risi, opts \\ []) do

@@ -46,7 +46,34 @@ defmodule RisiMe.Agent.TimePhrase do
     "weeks" => 604_800
   }
 
-  @fillers ~w(at on this by the in)
+  @months %{
+    "jan" => 1,
+    "january" => 1,
+    "feb" => 2,
+    "february" => 2,
+    "mar" => 3,
+    "march" => 3,
+    "apr" => 4,
+    "april" => 4,
+    "may" => 5,
+    "jun" => 6,
+    "june" => 6,
+    "jul" => 7,
+    "july" => 7,
+    "aug" => 8,
+    "august" => 8,
+    "sep" => 9,
+    "sept" => 9,
+    "september" => 9,
+    "oct" => 10,
+    "october" => 10,
+    "nov" => 11,
+    "november" => 11,
+    "dec" => 12,
+    "december" => 12
+  }
+
+  @fillers ~w(at on this by the in of)
 
   @doc "Resolves `phrase` (see the module doc)."
   def resolve(phrase, %DateTime{} = now, tz) when is_binary(phrase) do
@@ -93,6 +120,7 @@ defmodule RisiMe.Agent.TimePhrase do
       |> String.replace(~r/(\d)\s+(am|pm)\b/, "\\1\\2")
       |> String.split(~r/\s+/, trim: true)
       |> Enum.reject(&(&1 in @fillers))
+      |> month_days()
 
     local_now = Clock.local(now, tz)
 
@@ -101,7 +129,76 @@ defmodule RisiMe.Agent.TimePhrase do
     end
   end
 
+  # P0 2026-10-09: "12 Oct", "October 12th", "12 oct 2026" are one date token
+  # (`{:md, month, day, year | nil}`), so the day number is never read as a bare hour.
+  defp month_days([d, m, y | rest]) when is_binary(d) and is_binary(m) and is_binary(y) do
+    with {:ok, day} <- day_of_month(d),
+         {:ok, mon} <- Map.fetch(@months, m),
+         {:ok, yr} <- year(y) do
+      [{:md, mon, day, yr} | month_days(rest)]
+    else
+      _ -> month_days_2([d, m, y | rest])
+    end
+  end
+
+  defp month_days(tokens), do: month_days_2(tokens)
+
+  defp month_days_2([a, b | rest]) when is_binary(a) and is_binary(b) do
+    cond do
+      match?({:ok, _}, day_of_month(a)) and Map.has_key?(@months, b) ->
+        {:ok, day} = day_of_month(a)
+        [{:md, @months[b], day, nil} | month_days(rest)]
+
+      Map.has_key?(@months, a) and match?({:ok, _}, day_of_month(b)) ->
+        {:ok, day} = day_of_month(b)
+
+        case rest do
+          [y | rest2] when is_binary(y) ->
+            case year(y) do
+              {:ok, yr} -> [{:md, @months[a], day, yr} | month_days(rest2)]
+              :error -> [{:md, @months[a], day, nil} | month_days(rest)]
+            end
+
+          _ ->
+            [{:md, @months[a], day, nil} | month_days(rest)]
+        end
+
+      true ->
+        [a | month_days([b | rest])]
+    end
+  end
+
+  defp month_days_2(tokens), do: tokens
+
+  defp day_of_month(t) do
+    case Regex.run(~r/^(\d{1,2})(?:st|nd|rd|th)?$/, t) do
+      [_, d] -> if String.to_integer(d) in 1..31, do: {:ok, String.to_integer(d)}, else: :error
+      _ -> :error
+    end
+  end
+
+  defp year(t) do
+    case Regex.run(~r/^(20\d\d)$/, t) do
+      [_, y] -> {:ok, String.to_integer(y)}
+      _ -> :error
+    end
+  end
+
   defp classify([], acc), do: {:ok, {acc.day, acc.next}, acc.time}
+
+  # An explicit date wins over a weekday said with it ("Monday 12 Oct").
+  defp classify([{:md, m, d, y} | rest], acc) do
+    case acc.day do
+      day when day == nil or (is_tuple(day) and elem(day, 0) == :weekday) ->
+        classify(rest, %{acc | day: {:md, m, d, y}})
+
+      _ ->
+        {:error, :unreadable}
+    end
+  end
+
+  defp classify([t | rest], %{day: {:md, _, _, _}} = acc) when is_map_key(@weekdays, t),
+    do: classify(rest, acc)
 
   defp classify(["next" | rest], acc), do: classify(rest, %{acc | next: true})
 
@@ -199,6 +296,9 @@ defmodule RisiMe.Agent.TimePhrase do
         {:date, d} ->
           d
 
+        {:md, m, d, y} ->
+          month_day(m, d, y, today)
+
         {:weekday, wd} ->
           diff = Integer.mod(wd - Date.day_of_week(today), 7)
 
@@ -225,9 +325,30 @@ defmodule RisiMe.Agent.TimePhrase do
           Date.add(today, diff)
       end
 
-    case time do
-      nil -> {:ok, Clock.to_utc(NaiveDateTime.new!(date, ~T[00:00:00]), tz), :date}
-      t -> {:ok, Clock.to_utc(NaiveDateTime.new!(date, t), tz), :datetime}
+    case {date, time} do
+      {nil, _} -> {:error, :unreadable}
+      {date, nil} -> {:ok, Clock.to_utc(NaiveDateTime.new!(date, ~T[00:00:00]), tz), :date}
+      {date, t} -> {:ok, Clock.to_utc(NaiveDateTime.new!(date, t), tz), :datetime}
+    end
+  end
+
+  # A day and month without a year: this year's, or next year's once it has passed.
+  defp month_day(m, d, nil, today) do
+    case Date.new(today.year, m, d) do
+      {:ok, date} ->
+        if Date.compare(date, today) == :lt,
+          do: month_day(m, d, today.year + 1, today),
+          else: date
+
+      _ ->
+        nil
+    end
+  end
+
+  defp month_day(m, d, y, _today) do
+    case Date.new(y, m, d) do
+      {:ok, date} -> date
+      _ -> nil
     end
   end
 end

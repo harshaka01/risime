@@ -16,6 +16,41 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
+## P0 2026-10-09: the Risi action loop — READY (not deployed)
+Harsha (nightly.43, skills on, Risi chat): "add my interview with Shenika on Monday 12 Oct at 2pm
+to my calendar" → text chips only, 6 turns of questions, nothing added.
+- **Root causes confirmed:** (1) a Risi-chat turn had **no history** (`Turn.context` gave the
+  Risi chat no lines; Risi's own posts were never buffered), so a chip tap ("Confirm to add the
+  event") arrived with nothing; (2) **no draft state**, no loop guard, model `next_steps` posted
+  verbatim (questions, "Confirm…"); (3) `TimePhrase` read "12" in "Monday 12 Oct 2pm" as a
+  bare hour (`ambiguous`), so even a `calendar_add` would have failed; (4) the prompt never told
+  the model how to add an event. **Tools-not-offered not confirmed:** on the pilot the calendar
+  skill was `ask` with `granted` on the asking device from 06:11:04, before all 20 turns
+  (06:12–06:23), so `calendar_add` was most likely offered and the model chose `final` each
+  time.
+- **Fix** (`Agent.ActionDraft`, `Agent.CalendarChoice`, `Agent.Turn`; proposal
+  `contract/proposals/2026-10-09-risi-action-loop.md`, all optional fields): last 20 Risi-chat
+  messages + the asker's open promises (`k<n>`) + the sealed pending draft in the context;
+  `final.draft` (structured slots) patches the draft; the server posts the real `calendar_add`/
+  `set_reminder` confirm card itself (authorised again, a `risi_turn_steps` row); one question
+  at most, a question about known slots → the card; loop guard (2 asks / 2 stalled turns →
+  prefilled card); `skill_needed` server-built when the skill is off/no permission;
+  `next_steps` questions/confirms dropped; defaults tz/1 h/title from a promise; `confirm.calendar`
+  hint (PATCH `calendar` or the `calendar_add` result `calendar`); `confirm_write` `edit` for
+  [Edit]; success line "Added to your Google Calendar: … · Mon 12 Oct, 2–3 PM"; personal digest
+  = `Rest.open_commitments/1` (the `GET /risi/commitments` query). Plus root's add-on: the
+  §27.2 thresholds from `RISI_QUIET_S`, `RISI_QUIET_MIN_MSGS`, `RISI_QUIET_MIN_PEOPLE`,
+  `RISI_QUIET_SPACING_S`, `RISI_QUIET_PER_DAY` (`config/runtime.exs`).
+- **Migration:** `20261021100000_risi_action_drafts` (`risi_action_drafts`,
+  `risi_calendar_choices`; additive, sealed with RISI_DATA_KEY).
+- **Tests:** `action_loop_p0_test.exs` (replay → card in turn 1, [Add] → `calendar_add` →
+  Google Calendar line, no model call; chip tap sees history + draft; 5-turn follow-up; loop
+  guard; known-slot question; chip filter; ledger prefill; need_skill then card; [Edit];
+  buffered Risi posts; digest == My promises; date phrases), `ledger_quiet_env_test.exs`.
+  Gate (partition `_p0a`): 926 tests, 0 failures, 11 skipped, 3 excluded.
+- **Changed behaviour:** the digest now lists items without a due or due after 7 days (§27.6
+  amendment in the proposal); the calendar success text changed (tests updated).
+
 ## Contract v1.27 §27 (S28-first, S20–S24) + 30-day summaries — READY (not deployed)
 Call transcription (S25–S27) is **not** in this chunk. Gate green (911 tests). Commits:
 ff5ef51 (S28-first), 3c9763d (S20), 28717a5 (S21), 569c3a5 (S22), 19641f0 (S23), 4c4b523 (S24),

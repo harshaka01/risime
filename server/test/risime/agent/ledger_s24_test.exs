@@ -288,8 +288,10 @@ defmodule RisiMe.Agent.LedgerS24Test do
     # Once a day.
     assert LedgerReminders.digest(ctx.harsha.id, DateTime.add(nine, 900)) == :skipped
 
-    # Nothing due within 7 days: no digest.
-    assert LedgerReminders.digest(ctx.harsha.id, ~U[2026-11-20 03:30:00Z]) == :skipped
+    # P0 2026-10-09: the digest lists exactly "My promises", also those due later than 7 days.
+    assert LedgerReminders.digest(ctx.harsha.id, ~U[2026-11-20 03:30:00Z]) == :sent
+    [{^rc_h, _body, d}] = posts()
+    assert length(d["items"]) == 2
   end
 
   test "the group digest is retired where every human has risi_ledger", ctx do

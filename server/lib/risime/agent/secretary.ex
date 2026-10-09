@@ -301,6 +301,7 @@ defmodule RisiMe.Agent.Secretary do
     cancel_jobs(conv)
     # v1.25 §25.4: its confirm cards' writes (sealed args) go too.
     RisiMe.Agent.Writes.forget(conv)
+    RisiMe.Agent.ActionDraft.forget(conv)
     RisiMe.Agent.Reminders.forget(conv)
     # v1.27 §27.9: discussions and pending copies go too (items are commitments, below).
     RisiMe.Agent.Ledger.forget(conv)

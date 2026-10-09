@@ -39,6 +39,7 @@ defmodule RisiMe.Agent.Ledger do
 
   @quiet_s 600
   @min_msgs 6
+  @min_people 2
   @spacing_s 30 * 60
   @per_day 8
   @long_s 4 * 3600
@@ -51,6 +52,15 @@ defmodule RisiMe.Agent.Ledger do
 
   @doc "RISI_QUIET_MIN_MSGS (default 6)."
   def min_msgs, do: Application.get_env(:risime, :risi_quiet_min_msgs, @min_msgs)
+
+  @doc "RISI_QUIET_MIN_PEOPLE: distinct humans needed (default 2)."
+  def min_people, do: Application.get_env(:risime, :risi_quiet_min_people, @min_people)
+
+  @doc "RISI_QUIET_SPACING_S: seconds between two summaries of a chat (default 1800)."
+  def spacing_s, do: Application.get_env(:risime, :risi_quiet_spacing_s, @spacing_s)
+
+  @doc "RISI_QUIET_PER_DAY: summaries per chat per local day, fewer than this (default 8)."
+  def per_day, do: Application.get_env(:risime, :risi_quiet_per_day, @per_day)
 
   @doc "A proposed item's life (48 h)."
   def expire_s, do: @expire_s
@@ -156,13 +166,13 @@ defmodule RisiMe.Agent.Ledger do
           not (quiet? or long?) ->
             schedule_quiet(conv, check_at(newest, oldest))
 
-          length(msgs) < min_msgs() or length(senders) < 2 ->
+          length(msgs) < min_msgs() or length(senders) < min_people() ->
             :ok
 
-          st.last_summary_at && DateTime.diff(now, st.last_summary_at) < @spacing_s ->
-            schedule_quiet(conv, DateTime.add(st.last_summary_at, @spacing_s, :second))
+          st.last_summary_at && DateTime.diff(now, st.last_summary_at) < spacing_s() ->
+            schedule_quiet(conv, DateTime.add(st.last_summary_at, spacing_s(), :second))
 
-          today_count(st, Secretary.chat_tz(conv), now) >= @per_day ->
+          today_count(st, Secretary.chat_tz(conv), now) >= per_day() ->
             :ok
 
           true ->

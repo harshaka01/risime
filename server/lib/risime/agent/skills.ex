@@ -459,7 +459,18 @@ defmodule RisiMe.Agent.Skills do
         # A cancel by request settles the schedule's own entry (nothing left to undo).
         if w.tool == "cancel_scheduled" and args["entry_id"], do: settle(args["entry_id"])
 
-        done_card(w, e)
+        # P0 2026-10-09: "Added to your Google Calendar: Interview with Shenika · Mon 12 Oct,
+        # 2–3 PM" (the calendar's name from the phone's result).
+        body =
+          if w.tool == "calendar_add",
+            do:
+              RisiMe.Agent.ClientTools.added_text(
+                args,
+                result,
+                RisiMe.Agent.Clock.user_tz(w.user_id)
+              )
+
+        done_card(w, e, body)
         :ok
     end
   end
@@ -506,11 +517,12 @@ defmodule RisiMe.Agent.Skills do
     end
   end
 
-  defp done_card(w, e) do
+  defp done_card(w, e, body) do
     j = entry_json(e)
 
     body =
       case j["action"] do
+        _ when is_binary(body) -> body
         "alarm_set" -> j["summary"] <> ". To remove it, open Clock."
         "calendar_added" -> String.replace(j["summary"], "to calendar", "to your calendar") <> "."
         _ -> j["summary"] <> "."
@@ -1011,13 +1023,23 @@ defmodule RisiMe.Agent.Skills do
   defp parse_patch(_), do: {:error, :bad_request}
 
   defp change_ok?(%{"id" => id} = c) when is_binary(id) do
-    Map.keys(c) -- ["id", "state", "client_permission"] == [] and
-      (Map.has_key?(c, "state") or Map.has_key?(c, "client_permission")) and
+    Map.keys(c) -- ["id", "state", "client_permission", "calendar"] == [] and
+      (Map.has_key?(c, "state") or Map.has_key?(c, "client_permission") or
+         Map.has_key?(c, "calendar")) and
       Map.get(c, "state", "off") in ~w(off ask allowed) and
-      Map.get(c, "client_permission", "unknown") in @perms
+      Map.get(c, "client_permission", "unknown") in @perms and
+      calendar_ok?(c)
   end
 
   defp change_ok?(_), do: false
+
+  # P0 2026-10-09: the phone's calendar choice, only on the calendar skill (null forgets it).
+  defp calendar_ok?(%{"calendar" => nil, "id" => "calendar"}), do: true
+
+  defp calendar_ok?(%{"calendar" => c, "id" => "calendar"}),
+    do: RisiMe.Agent.CalendarChoice.valid?(c)
+
+  defp calendar_ok?(c), do: not Map.has_key?(c, "calendar")
 
   defp check_changes(changes) do
     Enum.reduce_while(changes, :ok, fn c, :ok ->
@@ -1041,6 +1063,9 @@ defmodule RisiMe.Agent.Skills do
 
   defp apply_change(user_id, d, c, cancel?, now) do
     id = c["id"]
+
+    if Map.has_key?(c, "calendar"),
+      do: RisiMe.Agent.CalendarChoice.put(user_id, c["calendar"])
 
     if p = c["client_permission"] do
       Repo.insert_all(
