@@ -12,6 +12,7 @@
 #   --ledger (implies --risi, contract v1.27 §27): RISI_TOOLS=on RISI_LEDGER=on, the quiet rule shortened
 #   for the test (RISI_QUIET_S=$UITEST_QUIET_S, default 20), fake-llm --script with a scripted
 #   `discussion_summarise` answer, and step 11 runs. UITEST_LEDGER_ONLY=1 runs only steps 1 and 11.
+#   --calendar (implies --skills; P0 Harsha's phone): step 12 runs. UITEST_CALENDAR_ONLY=1 runs only steps 1 and 12.
 #
 #  1. A and B sign in through the login UI (dev OTP), become friends, both open the DM; it turns e2ee.
 #  2. A's chat: the "🔒 Private" | "● Official" row under the header; the Official tab's "Start Official".
@@ -44,6 +45,16 @@
 #     with "You agreed:" (✓ ✗ ✎ on their own item only) and "<Name> agreed:"; the ⓘ shows "Made by:
 #     RisiMe model (risi-l1) · hh:mm"; A confirms its item (✓) → "confirmed ✓" on A's card and on B's
 #     ("ZZ UI A agreed:"); the Official chat has the short card; Settings → My promises lists A's item.
+# 12. (--calendar, P0) Harsha's conversation replayed with the scripted model: a Google-type calendar is
+#     seeded on A (redroid has no Google account: `content insert` as the calendar sync adapter, account_type
+#     com.google, plus a read-only Google "Holidays" and a local "Phone" calendar); Settings → Risi skills:
+#     Calendar on (the runtime READ/WRITE_CALENDAR prompt); the Risi chat: "add my interview with Shenika on
+#     Monday 12 Oct at 2pm to my calendar" → ONE action card (title, Mon 12 Oct, 2–3 PM, "Choose calendar",
+#     Add / Edit / Cancel) in one turn; chips: no question/confirm chip, a chip tap only fills the composer
+#     (no request); [Add] → the picker lists only "uitest.risime@gmail.com · Google" → the event is in that
+#     calendar (CalendarContract: title, start, end, calendar id) with no further model call; the card reads
+#     "Added to your Google Calendar: …" with Open / Undo; Undo removes it (calendar_remove); never "I don't
+#     see any event details".
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -53,8 +64,8 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
 CLS=lk.codegen.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0; RISI=0; SKILLS=0; LEDGER=0
-while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;; --skills) RISI=1; SKILLS=1; shift;; --ledger) RISI=1; LEDGER=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK=""; KEEP=0; RISI=0; SKILLS=0; LEDGER=0; CALENDAR=0
+while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;; --skills) RISI=1; SKILLS=1; shift;; --ledger) RISI=1; LEDGER=1; shift;; --calendar) RISI=1; SKILLS=1; CALENDAR=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
 QUIET_S="${UITEST_QUIET_S:-20}"
 LLM_PORT="${UITEST_LLM_PORT:-8197}"
 APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
@@ -101,12 +112,24 @@ trap 'exit 130' INT TERM
 # fake-llm (--risi). With --skills it runs `--script`: this run's skill scenarios first (step 10 sets
 # the scheduled time), then contract/v1/risi_gate_script.json. Restartable on the same port.
 write_script() {  # $1 = the scheduled message's "at" (ISO, UTC), $2 = the DM conversation id
-  python3 -I - "$REPO/contract/v1/risi_gate_script.json" "$WORK/llm-script.json" "${1:-2099-01-01T00:00:00.000Z}" "${2:-dm:none}" <<'PY'
+  python3 -I - "$REPO/contract/v1/risi_gate_script.json" "$WORK/llm-script.json" "${1:-2099-01-01T00:00:00.000Z}" "${2:-dm:none}" \
+    "${CAL_START:-2099-01-05T08:30:00.000Z}" "${CAL_END:-2099-01-05T09:30:00.000Z}" <<'PY'
 import json, sys
 base = json.load(open(sys.argv[1], encoding="utf-8"))
 at, conv = sys.argv[3], sys.argv[4]
+cal_start, cal_end = sys.argv[5], sys.argv[6]
 final = lambda a: {"tool": "final", "answer": a, "sources": [], "next_steps": []}
 rules = [
+    # Step 12 (P0): Harsha's request → one calendar_add proposal (the action card), and the chips the
+    # model offered on the phone (a confirm phrase and a question are hidden; the third only fills).
+    {"name": "calendar_shenika", "task": "risi_next_action", "match": "(?i)interview with shenika",
+     "actions": [{"tool": "calendar_add", "args": {"title": "Interview with Shenika", "start": cal_start, "end": cal_end, "all_day": False}},
+                 {"tool": "final", "answer": "Here it is. Tap Add to put it on your Google Calendar.", "sources": [],
+                  "next_steps": ["Confirm to add the event", "What else is on Monday?", "Remind me 30 min before"]}]},
+    # The P0 failure mode: a chip SENT as a request. The gate fails if this answer ever shows.
+    {"name": "calendar_chip_sent", "task": "risi_next_action", "match": "(?i)(confirm to add|remind me 30)",
+     "actions": [final("I don't see any event details.")]},
+
     # Step 9 with RISI_TOOLS on: the ask goes through the tool loop (no v1.24 answer path).
     {"name": "step9_ask", "task": "risi_next_action", "match": "(?i)what did we agree",
      "actions": [final("You agreed the budget review on Tuesday.")]},
@@ -140,7 +163,7 @@ start_llm() {
   for _ in $(seq 1 20); do ss -ltnH "sport = :$LLM_PORT" | grep -q . || break; sleep 0.5; done
   local extra=""
   if [ "$SKILLS" = 1 ] || [ "$LEDGER" = 1 ]; then [ -f "$WORK/llm-script.json" ] || write_script; extra="--script '$WORK/llm-script.json'"; fi
-  tmux new -d -s "risime-uientry-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT $extra >> '$WORK/fake-llm.out' 2>&1"
+  tmux new -d -s "risime-uientry-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT --record '$WORK/llm-requests.jsonl' $extra >> '$WORK/fake-llm.out' 2>&1"
   for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && break; sleep 0.5; done
   curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" || { echo "fake-llm didn't start"; tail -5 "$WORK/fake-llm.out"; exit 1; }
 }
@@ -374,7 +397,8 @@ pass "both opened the DM; it is e2ee"
 
 # UITEST_SKILLS_ONLY=1 (with --skills): only steps 1 and 10 (a quicker run while working on step 10).
 # UITEST_LEDGER_ONLY=1 (with --ledger): only steps 1 and 11.
-if [ "${UITEST_SKILLS_ONLY:-0}" != 1 ] && [ "${UITEST_LEDGER_ONLY:-0}" != 1 ]; then
+# UITEST_CALENDAR_ONLY=1 (with --calendar): only steps 1 and 12.
+if [ "${UITEST_SKILLS_ONLY:-0}" != 1 ] && [ "${UITEST_LEDGER_ONLY:-0}" != 1 ] && [ "${UITEST_CALENDAR_ONLY:-0}" != 1 ]; then
 # ---------------------------------------------------------------- 2. the tab row under the header, Start Official
 DEV=A
 wait_text "🔒 Private" 30 || fail "tab row: no '🔒 Private' under the chat header (tabs on)"
@@ -647,7 +671,7 @@ fi
 fi  # UITEST_SKILLS_ONLY
 
 # ---------------------------------------------------------------- 10. (--skills) Risi skills: alarm, scheduled message, revoke
-if [ "$SKILLS" = 1 ] && [ "${UITEST_LEDGER_ONLY:-0}" != 1 ]; then
+if [ "$SKILLS" = 1 ] && [ "${UITEST_LEDGER_ONLY:-0}" != 1 ] && [ "${UITEST_CALENDAR_ONLY:-0}" != 1 ]; then
   DEV=A
   size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
   conv="$(fx conv | sed -n 's/^uientry: conv=//p')"; [ -n "$conv" ] || fail "fixture: the DM's conversation id"
@@ -860,6 +884,169 @@ PY
   shot "28-my-promises"
   pass "ledger: Settings → My promises lists '$mine'"
   back_to_list || true
+fi
+
+# ---------------------------------------------------------------- 12. (--calendar, P0) Harsha's calendar conversation
+if [ "$CALENDAR" = 1 ] && [ "${UITEST_LEDGER_ONLY:-0}" != 1 ]; then
+  DEV=A
+  size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
+  GACC="uitest.risime@gmail.com"
+  # Redroid has no Google account (no Play services authenticator): the calendars are inserted the way
+  # Google's sync adapter writes them (caller_is_syncadapter, account_type com.google). The app sees exactly
+  # what a synced Google calendar looks like in CalendarContract; the sync to Google itself isn't covered.
+  cal_insert() {  # $1 account name, $2 account type, $3 display name, $4 access level
+    A shell "content insert --uri 'content://com.android.calendar/calendars?caller_is_syncadapter=true&account_name=$1&account_type=$2' --bind account_name:s:$1 --bind account_type:s:$2 --bind name:s:$3 --bind calendar_displayName:s:$3 --bind calendar_access_level:i:$4 --bind visible:i:1 --bind sync_events:i:1 --bind ownerAccount:s:$1 --bind calendar_color:i:-14069085 --bind calendar_timezone:s:UTC" >/dev/null
+  }
+  cal_insert "$GACC" com.google "$GACC" 700
+  cal_insert "$GACC" com.google "Holidays" 200
+  cal_insert Phone LOCAL Phone 700
+  cal_rows() { A shell "content query --uri content://com.android.calendar/calendars --projection _id:account_name:account_type:calendar_access_level:calendar_displayName" 2>/dev/null | tr -d '\r'; }
+  GCAL="$(cal_rows | sed -n "s/^Row: [0-9]* _id=\([0-9]*\), account_name=$GACC, account_type=com.google, calendar_access_level=700,.*/\1/p" | head -1)"
+  [ -n "$GCAL" ] || { cal_rows | sed 's/^/    /'; fail "calendar: could not seed the Google-type calendar"; }
+  pass "calendar: seeded a com.google calendar ($GACC, id $GCAL), a read-only Google 'Holidays' and a local 'Phone' calendar"
+  # Next Monday 14:00–15:00 on A's clock (Harsha's "Monday 12 Oct at 2pm"), and the card's expected texts.
+  dtz="$(A shell getprop persist.sys.timezone | tr -d '\r')"; dtz="${dtz:-UTC}"
+  read -r CAL_START CAL_END CAL_START_MS CAL_DATE <<<"$(python3 -I - "$dtz" <<'PY'
+import sys, datetime as dt
+from zoneinfo import ZoneInfo
+z = ZoneInfo(sys.argv[1])
+now = dt.datetime.now(z)
+d = now.date() + dt.timedelta(days=(7 - now.weekday()) % 7 or 7)
+s = dt.datetime(d.year, d.month, d.day, 14, 0, tzinfo=z)
+e = s + dt.timedelta(hours=1)
+iso = lambda t: t.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+print(iso(s), iso(e), int(s.timestamp() * 1000), s.strftime("%a %-d %b"))
+PY
+)"
+  export CAL_START CAL_END
+  conv="$(fx conv | sed -n 's/^uientry: conv=//p')"
+  write_script "2099-01-01T00:00:00.000Z" "${conv:-dm:none}"; start_llm
+  reqs() { [ -f "$WORK/llm-requests.jsonl" ] && wc -l < "$WORK/llm-requests.jsonl" || echo 0; }
+
+  # -- Settings → Risi skills → Calendar on: the runtime READ/WRITE_CALENDAR prompt, answered Allow
+  back_to_list || fail "calendar: back to the chat list"
+  tap "More options" || fail "calendar: the chat list's ⋮"
+  wait_for 'text="Settings"' 10 || fail "calendar: no Settings item"
+  tap "Settings" || fail "calendar: tap Settings"
+  for _ in 1 2 3 4 5 6; do has 'text="Risi skills"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
+  tap "Risi skills" || fail "calendar: Settings has no 'Risi skills'"
+  found=0
+  for _ in 1 2 3 4 5 6; do
+    has 'content-desc="Calendar skill"' && { found=1; break; }
+    A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 35 / 100)) 400; sleep 1
+  done
+  [ "$found" = 1 ] || fail "calendar: Risi skills has no Calendar switch"
+  tap "Calendar skill" || fail "calendar: turn on Calendar"
+  # The system's permission dialog (com.android.permissioncontroller): its Allow button by resource id.
+  allow_xy() {
+    dump
+    python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+for n in nodes:
+    rid, t = n.get('resource-id') or '', (n.get('text') or '').lower()
+    if rid.endswith('permission_allow_button') or (rid.startswith('com.android.permissioncontroller') and t == 'allow'):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+  }
+  asked=0
+  for _ in $(seq 1 20); do
+    xy="$(allow_xy)"
+    if [ -n "$xy" ]; then
+      [ "$asked" = 0 ] && shot "32-calendar-permission"
+      A shell input tap $xy; asked=$((asked + 1)); sleep 1.5; continue
+    fi
+    [ "$asked" -gt 0 ] && break
+    sleep 1
+  done
+  [ "$asked" -gt 0 ] || { echo "    (no runtime prompt seen: granting READ/WRITE_CALENDAR with pm)"; A shell pm grant "$PKG" android.permission.READ_CALENDAR; A shell pm grant "$PKG" android.permission.WRITE_CALENDAR; }
+  wait_skill "Calendar" "Ask me each time" 20 || fail "calendar: Calendar didn't turn on (Ask me each time)"
+  pass "calendar: Settings → Risi skills → Calendar on (Ask me each time) after the calendar permission prompt ($asked tap(s) on Allow)"
+
+  # -- Harsha's request in the Risi chat → one action card in one turn
+  back_to_list || fail "calendar: back to the chat list (Risi chat)"
+  wait_text "Risi" 30 || fail "calendar: the chat list has no Risi entry"
+  tap "Risi" || fail "calendar: open the Risi chat"
+  wait_for 'text="Ask Risi…"' 60 || fail "calendar: the Risi chat didn't open"
+  r0="$(reqs)"
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "add%smy%sinterview%swith%sShenika%son%sMonday%s12%sOct%sat%s2pm%sto%smy%scalendar"; sleep 0.5
+  tap "Send" || fail "calendar: send Harsha's request"
+  wait_text "2–3 PM" 120 || fail "calendar: no action card (2–3 PM)"
+  wait_text "Add" 30 || fail "calendar: the action card has no [Add]"
+  has 'text="Edit"' || fail "calendar: the action card has no [Edit]"
+  has 'text="Cancel"' || fail "calendar: the action card has no [Cancel]"
+  has 'text="Choose calendar"' || fail "calendar: first use: the card doesn't offer 'Choose calendar'"
+  [ "$(count_text "2–3 PM")" = 1 ] || fail "calendar: want exactly one action card ($(count_text "2–3 PM") cards)"
+  # (The server may drop the question/confirm chips itself; the app hides them in any case.)
+  has 'Confirm to add the event' && fail "calendar: a confirm-phrase chip is shown ('Confirm to add the event')"
+  has 'What else is on Monday?' && fail "calendar: a question chip is shown ('What else is on Monday?')"
+  # The card's top (title, date) above the fold: scroll it into view for the check and the screenshot.
+  for _ in 1 2 3 4; do has 'text="Interview with Shenika"' && break; A shell input swipe $((W / 2)) $((H * 35 / 100)) $((W / 2)) $((H * 55 / 100)) 300; sleep 1; done
+  has 'text="Interview with Shenika"' || fail "calendar: the action card has no title"
+  has "text=\"$CAL_DATE\"" || fail "calendar: the card doesn't show the date ($CAL_DATE)"
+  [ "$(count_text "Interview with Shenika")" = 1 ] || fail "calendar: want exactly one action card title"
+  shot "29-calendar-action-card"
+  for _ in 1 2 3; do A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 30 / 100)) 300; sleep 0.5; done
+  wait_text "Remind me 30 min before" 30 || fail "calendar: the answer's usable chip is missing"
+  pass "calendar: ONE action card (Interview with Shenika · $CAL_DATE · 2–3 PM · Choose calendar · Add/Edit/Cancel); no question/confirm chips"
+  # A chip only fills the composer: no request goes out, and no "I don't see any event details".
+  r1="$(reqs)"
+  tap "Remind me 30 min before" || fail "calendar: tap the chip"
+  sleep 8
+  [ "$(reqs)" = "$r1" ] || fail "calendar: tapping a chip sent a request to Risi ($(reqs) vs $r1 model calls)"
+  dump; [ "$(count_text "Remind me 30 min before")" -ge 2 ] || fail "calendar: the chip didn't fill the composer"
+  has "see any event details" && fail "calendar: a chip produced \"I don't see any event details\""
+  pass "calendar: the chip filled the composer and sent nothing (model calls unchanged: $r1)"
+  # Empty the composer again (the EditText, not the chip).
+  xy="$(python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+for n in ET.parse(sys.argv[1]).iter('node'):
+    if n.get('class') == 'android.widget.EditText':
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+)"
+  [ -n "$xy" ] && { A shell input tap $xy; sleep 0.5; A shell input keyevent KEYCODE_MOVE_END; clear_field; hide_keyboard; }
+
+  # -- [Add] → first use: the picker (only the writable Google calendar) → the event is on the calendar
+  r2="$(reqs)"
+  tap "Add" || fail "calendar: tap Add"
+  wait_text "Choose a calendar" 15 || fail "calendar: first use: [Add] didn't open the calendar picker"
+  has "text=\"$GACC · Google\"" || fail "calendar: the picker doesn't list '$GACC · Google'"
+  has 'Holidays' && fail "calendar: the picker lists the read-only Holidays calendar"
+  has 'Phone · Phone only' && fail "calendar: the picker lists the local Phone calendar although a Google calendar exists"
+  shot "31-calendar-picker"
+  pass "calendar: the picker lists only '$GACC · Google' (read-only and local calendars excluded)"
+  tap "Use this calendar" || fail "calendar: pick the calendar"
+  wait_text "Added to your Google Calendar: Interview with Shenika · $CAL_DATE, 2–3 PM" 90 || fail "calendar: no 'Added to your Google Calendar: …' on the card"
+  has 'text="Open"' || fail "calendar: the success card has no [Open]"
+  wait_text "Undo" 30 || fail "calendar: the success card has no [Undo]"
+  shot "30-calendar-added"
+  ev="$(A shell "content query --uri content://com.android.calendar/events --projection _id:calendar_id:title:dtstart:dtend:deleted" 2>/dev/null | tr -d '\r' | grep 'title=Interview with Shenika,' | grep 'deleted=0' || true)"
+  [ -n "$ev" ] || fail "calendar: no 'Interview with Shenika' event in CalendarContract"
+  [ "$(printf '%s\n' "$ev" | wc -l)" = 1 ] || fail "calendar: more than one event added: $ev"
+  printf '%s\n' "$ev" | grep -q "calendar_id=$GCAL," || fail "calendar: the event isn't in the Google calendar $GCAL: $ev"
+  printf '%s\n' "$ev" | grep -q "dtstart=$CAL_START_MS," || fail "calendar: the event's start isn't $CAL_START: $ev"
+  printf '%s\n' "$ev" | grep -q "dtend=$((CAL_START_MS + 3600000))," || fail "calendar: the event's end isn't +1 h: $ev"
+  [ "$(reqs)" = "$r2" ] || fail "calendar: [Add] cost a model call ($(reqs) vs $r2): it must run the tool directly"
+  turns="$(( r2 - r0 ))"
+  [ "$turns" -le 2 ] || fail "calendar: the card took $turns model calls (want one turn: ≤ 2 steps)"
+  pass "calendar: on the Google calendar (id $GCAL, $CAL_START, 1 h) after one card and one [Add]; model calls: $turns for the turn, 0 for [Add]"
+  # -- Undo: the server's undo → calendar_remove on this phone → the event is gone
+  tap "Undo" || fail "calendar: tap Undo"
+  gone=""
+  for _ in $(seq 1 45); do
+    A shell "content query --uri content://com.android.calendar/events --projection _id:title:deleted" 2>/dev/null | tr -d '\r' | grep 'title=Interview with Shenika,' | grep -q 'deleted=0' || { gone=1; break; }
+    sleep 1
+  done
+  [ -n "$gone" ] || fail "calendar: Undo didn't remove the event"
+  wait_text "Removed from your calendar" 30 || fail "calendar: the card doesn't say 'Removed from your calendar' after Undo"
+  pass "calendar: Undo removed the event (calendar_remove of this phone's own add)"
+  has "see any event details" && fail "calendar: \"I don't see any event details\" appeared"
+  logcat_ok "calendar"
 fi
 
 DEV=A; logcat_ok "ui entry"
