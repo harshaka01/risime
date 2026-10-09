@@ -102,6 +102,18 @@ fi
 # candidate boots with the REAL .env + pilot.env (throwaway DB/keyspace/port), with TABS/RISI off, on,
 # on again over its sealed store, and on with a wrong RISI_MLS_KEK (must still boot healthy); plus the
 # read-only Risi preflight against the pilot DB when the release has it. No skip switch.
+# UI entry gate (Harsha 2026-10-09: features passed logic tests but had no way in on a real screen):
+# two redroids driven like a user (tap/long-press by visible text only) must SEE every new feature's
+# entry point (Lock chat ×3, Locked chats row, tab row, Start Official, What Risi knows, E2EE label).
+# Screenshots land in ~/risime-logs/uientry_rel/. UI_ENTRY_SKIP=1: emergency only (say so in the notes).
+if [ -n "${UI_ENTRY_SKIP:-}" ]; then echo "==> ui-entry-test SKIPPED (UI_ENTRY_SKIP)"
+elif scripts/android-target check >/dev/null 2>&1; then
+  echo "==> ui-entry-test (user-style entry points, redroid)"
+  UITEST_INSTANCE=_rel UITEST_PORT=4552 UITEST_REDROID_A=-relui1 UITEST_REDROID_A_PORT=5861 \
+    UITEST_REDROID_B=-relui2 UITEST_REDROID_B_PORT=5862 \
+    step scripts/ui-entry-test --apk android/app/build/outputs/apk/debug/app-debug.apk
+fi
+
 echo "==> boot check (scripts/boot-check: prod release, real env, Risi off/on/reopen/wrong key)"
 BOOTCHECK_INSTANCE=_rel BOOTCHECK_PORT=4591 BOOTCHECK_ENV="$HOME/development/risime/.env" step scripts/boot-check
 
