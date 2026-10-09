@@ -194,6 +194,27 @@ defmodule RisiMe.ContractExamplesTest do
                     risi_facts_reply.json
                     risi_feedback.json)
 
+  # v1.25 (Risi with tools, §25): checked in the "v1.25" describe below. Server-produced
+  # replies against real responses where the server produces them; client formats (envelopes
+  # inside MLS, tool results) and not-yet-produced events by structure.
+  @checked_v1_25 ~w(auth_config_v125.json
+                    chat_reply_risi.json
+                    device_put_risi_tools.json
+                    envelope_risi_action_confirm_write.json
+                    envelope_risi_action_me_too.json
+                    envelope_risi_answer_v2.json
+                    envelope_risi_confirm.json
+                    envelope_risi_draft.json
+                    envelope_risi_reminder_set.json
+                    error_tool_call_expired.json
+                    event_risi_tool_call_calendar_add.json
+                    event_risi_tool_call_calendar_check.json
+                    risi_chat_create_reply.json
+                    risi_facts_reply_v125.json
+                    risi_tool_result_calendar_add.json
+                    risi_tool_result_calendar_check.json
+                    signal_risi_progress.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -249,7 +270,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_21 ++
         @checked_v1_22 ++
         @checked_v1_23 ++
-        @checked_v1_24
+        @checked_v1_24 ++
+        @checked_v1_25
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -4073,7 +4095,8 @@ defmodule RisiMe.ContractExamplesTest do
     end
 
     test "Risi envelopes (inside MLS): structure" do
-      names = for n <- @files, String.starts_with?(n, "envelope_risi_"), do: n
+      names =
+        for n <- @files, String.starts_with?(n, "envelope_risi_"), n in @checked_v1_24, do: n
 
       kinds =
         for n <- names do
@@ -4105,6 +4128,169 @@ defmodule RisiMe.ContractExamplesTest do
       assert Enum.sort(Enum.reject(kinds, &is_nil/1)) ==
                Enum.sort(~w(answer commitment commitment_update digest error escalation offer
                             reminder report summary))
+    end
+  end
+
+  describe "v1.25" do
+    @step_statuses ~w(running ok failed timeout no_permission declined denied skipped)
+
+    defp ts25?(v), do: is_binary(v) and v =~ @ts
+
+    defp risi_chat25_ok?(c) do
+      assert c["chat_id"] =~ ~r/^grp:/ and c["kind"] == "risi"
+      assert c["private"] == nil and c["can_toggle"] == false
+      o = c["official"]
+      assert o["state"] in ~w(none on) and o["conversation_id"] == c["chat_id"]
+      assert o["changed_by"] == nil and o["changed_at"] == nil
+      assert is_boolean(c["official_ready"]) and is_list(c["missing"])
+    end
+
+    test "auth_config_v125.json: risi_tools flag" do
+      ex = example("auth_config_v125.json")
+      assert ex["risi_tools"] in ~w(on off) and ex["tabs"] in ~w(on off)
+      assert keys(ex) -- ["risi_tools"] == keys(example("auth_config_v124.json"))
+    end
+
+    test "device_put_risi_tools.json: risi_tools with groups and tabs" do
+      caps = example("device_put_risi_tools.json")["mls"]["capabilities"]
+      assert "risi_tools" in caps and "tabs" in caps and "groups" in caps
+    end
+
+    test "chat_reply_risi.json and risi_chat_create_reply.json: the Risi chat" do
+      c = example("chat_reply_risi.json")["chat"]
+      risi_chat25_ok?(c)
+      assert c["official"]["state"] == "on"
+
+      %{"chat" => c, "group" => g} = example("risi_chat_create_reply.json")
+      risi_chat25_ok?(c)
+      assert c["official"]["state"] == "none"
+      assert g["id"] == c["chat_id"] and g["chat_id"] == g["id"]
+      assert g["state"] == "creating" and g["epoch"] == 0 and g["my_role"] == "admin"
+      assert g["tab"] == "official" and g["chat_kind"] == "risi"
+
+      assert [%{"kind" => "user", "role" => "admin"}, %{"kind" => "agent", "role" => "member"}] =
+               g["members"]
+
+      assert g["agents"] == for(m <- g["members"], m["kind"] == "agent", do: m["user_id"])
+      assert ts25?(g["created_at"]) and g["pending"] == []
+    end
+
+    test "risi_facts_reply_v125.json: notes" do
+      facts = example("risi_facts_reply_v125.json")["facts"]
+      assert Enum.any?(facts, &(&1["kind"] == "note"))
+
+      for f <- facts do
+        assert keys(f) == ~w(chat_id created_at fact_id kind text)
+        assert f["fact_id"] =~ @uuid and f["chat_id"] =~ ~r/^(grp|dm):/
+        assert ts25?(f["created_at"]) and is_binary(f["text"])
+      end
+    end
+
+    test "error_tool_call_expired.json" do
+      e = example("error_tool_call_expired.json")["error"]
+      assert e["code"] == "tool_call_expired" and is_binary(e["message"])
+    end
+
+    test "event_risi_tool_call_*.json: the per-device tool call" do
+      for {n, tool, arg_keys} <- [
+            {"event_risi_tool_call_calendar_check.json", "calendar_check", ~w(from to)},
+            {"event_risi_tool_call_calendar_add.json", "calendar_add",
+             ~w(all_day end start title write_id)}
+          ] do
+        ex = example(n)
+        assert ex["event_id"] =~ @timeuuid and ex["kind"] == "risi_tool_call"
+        d = ex["data"]
+
+        assert keys(d) ==
+                 ~w(args conversation_id device_id expires_at request_id server_ts to_devices
+                    tool tool_call_id turn_id)
+
+        assert d["tool"] == tool and keys(d["args"]) == arg_keys
+        assert d["to_devices"] == [d["device_id"]]
+
+        for k <- ~w(tool_call_id turn_id request_id device_id), do: assert(d[k] =~ @uuid)
+        assert d["conversation_id"] =~ ~r/^grp:/
+        assert ts25?(d["expires_at"]) and ts25?(d["server_ts"])
+        {:ok, exp, _} = DateTime.from_iso8601(d["expires_at"])
+        {:ok, at, _} = DateTime.from_iso8601(d["server_ts"])
+        assert DateTime.diff(exp, at) in 1..120
+      end
+    end
+
+    test "risi_tool_result_*.json: client tool results" do
+      %{"status" => "ok", "result" => %{"blocks" => blocks}} =
+        example("risi_tool_result_calendar_check.json")
+
+      assert blocks != []
+
+      for b <- blocks do
+        assert keys(b) == ~w(all_day busy end start)
+        assert ts25?(b["start"]) and ts25?(b["end"]) and is_boolean(b["busy"])
+      end
+
+      assert %{"status" => "ok", "result" => %{"event_id" => id}} =
+               example("risi_tool_result_calendar_add.json")
+
+      assert is_binary(id)
+    end
+
+    test "signal_risi_progress.json" do
+      %{"kind" => "risi_progress", "data" => d} = example("signal_risi_progress.json")
+
+      assert keys(d) ==
+               ~w(conversation_id position request_id seq server_ts state step)
+
+      assert d["state"] in ~w(queued working step waiting_confirm done)
+      assert d["request_id"] =~ @uuid and is_integer(d["seq"]) and ts25?(d["server_ts"])
+      assert d["position"] == nil or is_integer(d["position"])
+      if d["state"] == "step", do: assert(d["step"]["status"] in @step_statuses)
+      assert is_integer(d["step"]["n"]) and is_binary(d["step"]["tool"])
+    end
+
+    test "Risi v1.25 envelopes (inside MLS): structure" do
+      a = example("envelope_risi_answer_v2.json")["risi"]
+      assert a["kind"] == "answer" and a["turn_ref"] =~ @uuid
+      assert Enum.all?(a["steps"], &(&1["status"] in @step_statuses and is_binary(&1["tool"])))
+      assert length(a["next_steps"]) <= 3
+      assert a["local_search"]["text"] |> is_binary()
+
+      assert Enum.sort(Enum.map(a["sources"], & &1["type"])) ==
+               ~w(calendar link message note)
+
+      for s <- a["sources"] do
+        case s["type"] do
+          "message" -> assert s["message_id"] =~ @timeuuid and s["conversation_id"] =~ ~r/^grp:/
+          "calendar" -> assert ts25?(s["start"]) and is_boolean(s["busy"])
+          "note" -> assert s["fact_id"] =~ @uuid
+          "link" -> assert String.starts_with?(s["url"], "https://")
+        end
+      end
+
+      c = example("envelope_risi_confirm.json")["risi"]
+      assert c["kind"] == "confirm" and c["write_id"] =~ @uuid
+      assert c["tool"] in ~w(set_reminder calendar_add ask_risiwork)
+      assert c["buttons"] in [~w(add cancel), ~w(allow cancel)]
+      assert [asker] = c["for"]
+      assert asker =~ @uuid and ts25?(c["expires_at"]) and ts25?(c["when"]["start"])
+      assert is_binary(c["summary"]) and is_binary(c["text"]) and is_boolean(c["when"]["all_day"])
+
+      r = example("envelope_risi_reminder_set.json")["risi"]
+      assert r["kind"] == "reminder_set" and r["reminder_id"] =~ @uuid
+      assert ts25?(r["when"]) and is_boolean(r["me_too"])
+      assert Enum.all?(r["participants"], &(&1 =~ @uuid))
+
+      d = example("envelope_risi_draft.json")["risi"]
+      assert d["kind"] == "draft" and d["language"] in ~w(en si ta)
+      assert d["target_conversation_id"] =~ ~r/^(grp|dm):/ and is_binary(d["text"])
+
+      for {n, action} <- [
+            {"envelope_risi_action_confirm_write.json", "confirm_write"},
+            {"envelope_risi_action_me_too.json", "me_too"}
+          ] do
+        e = example(n)
+        assert e["type"] == "risi_action" and e["action"] == action
+        assert e["target"] =~ @uuid and e["edit"] == nil
+      end
     end
   end
 end
