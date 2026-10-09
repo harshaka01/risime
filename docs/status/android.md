@@ -1,5 +1,58 @@
 # Android status — 0.2 nightlies
 
+## §27 made_by + the Commitment Ledger follow-ups, A19 + A13–A16 + 30-day summaries — READY (JVM gate green, UI ENTRY OK; risi_ledger only while /auth/config says on)
+- **A19 (v1.27 wire, d2ce50e):** `net/Protocol127.kt` (`RisiMadeBy`, items, item states/kinds/actions, `CallRisiState`,
+  `call_risi` signal, `risi_stop`), `RisiMeta` gains `made_by` and every §27 kind's fields (`for` accepts a string or a
+  list), `RisiDigestItem` is also the §27.3 Item (`item_id` | `commitment_id`), `RisiCommitment` gains
+  `summary_id`/`source`/`all_day`/`role`, `AuthConfig.risi_ledger`/`risi_transcribe`, `CallsRoomRequest.risi_listen`,
+  `risi` in the rooms replies; `call_offer` (sfu) and `group_call started` keep `risi` and re-encode exactly.
+  `PROTOCOL_VERSION` 1.27; `ContractExamplesTest` decodes all 27 new examples. **`risi_ledger`** is advertised only with
+  `risi_tools` and while `/auth/config` says `risi_ledger: on` (remembered per device id, `DeviceRegistrarTest`).
+- **A13 Made by (39677a2):** a tap on any Risi card's header ("Risi · …  ⓘ") opens "Made by: RisiMe model (risi-l1) ·
+  09:14" / "RisiMe (no AI model)" / "<Provider> (<model>)" ("Tue 09:14" when not today), one line per `also`
+  ("Transcribed by: …", else "Also used: …"), "Made by: not recorded" without `made_by`; 👍/👎 in the sheet.
+- **A14 (44233db, 1f3c317):** `discussion_summary` in the Risi chat: "Summary of your discussion with Shenika (09:12,
+  video call 32 min)" / "(09:12–09:31, chat)" with names from the phone (friends and other chats' members: the Risi
+  chat itself has only me and Risi), key points, "You agreed:" with ✓ ✗ ✎ **only on my own proposed items** until
+  `expires_at` (then greyed "Not tracked"), "<Name> agreed:" read-only (waiting / confirmed ✓ / declined), Done for a
+  tracked item's owner or counterpart, [Open chat] → the Official conversation scrolled to `started_at`.
+  `item_update` is applied to the card (no bubble; a small line when the card isn't on the phone).
+  `item_confirm`/`item_decline`/`item_edit {text, due, all_day}` go out in my Risi chat (byte-equal to the examples).
+  My promises: `role` owner (and legacy) first, then **"Owed to me"**. A `risi_ledger` phone creates its Risi chat at
+  start when it has none (§27.10).
+- **A15:** `item_due` (Reminder / Due now / Due today), `item_overdue`, `item_nudge` cards: the owner's Done / New date
+  (`item_edit`, the reminders restart server-side), a counterpart's Mark done, Open chat when the summary is on the
+  phone; no buttons once the item is done/cancelled/declined locally. The personal digest: "Your open items" / "Owed to
+  you". (The contract has no Snooze: New date instead.)
+- **A16:** `discussion_card` in Official: the line, "N items · Details in your Risi chat" and [Open Risi chat] (scrolls
+  to that summary) for participants only; others see only the line.
+- **A16 fix (9b4b33a):** [Open Risi chat] follows the Risi chat's arrival (`GroupChatViewModel.risiChatReady`, observed);
+  found by the UI gate (the card was composed before the Risi chat's row existed).
+- **30-day summaries (9e9694b, proposal `2026-10-09-risi-30day-summaries.md`, all optional):** the Official ⋮ "Summarise"
+  opens Today / Last 7 days / Last 30 days / Date range… (`scope {"period"}` or `{"from","to"}`, the picker allows
+  only the last 31 days); the summary card shows "Last 7 days (3–9 Oct)" and "Based on: Mon 5 Oct, week 28 Sep–4 Oct"
+  (`period`/`days`); "What Risi knows about me" has a **Summaries** group (Day/Week label, per-item delete). Root: fold
+  the proposal into PROTOCOL.md and add its 3 examples (then `ContractExamplesTest` needs decoders for them).
+- **Tests:** `ContractExamplesTest`, `DeviceRegistrarTest`, `RisiMadeByTest`, `RisiLedgerTest` (headers, item_update
+  fold, owner-only buttons, expiry, encodings, focus, promises split, every card), `SummaryPeriodsTest`. No Room change
+  (still v13).
+- **UI gate:** **UI ENTRY OK** — `scripts/ui-entry-test --ledger` (root-delegated; RISI_TOOLS=on RISI_LEDGER=on, the
+  quiet rule shortened for the run, fake-llm `--script` answers `discussion_summary` with one item per member ref) adds
+  step 11: A and B discuss in the 1:1 Official (6 messages) → the quiet rule → the short card ("2 items · Details in
+  your Risi chat") → [Open Risi chat] → "Summary of your discussion with ZZ UI B" with exactly one ✓ (A's own item) →
+  ⓘ "Made by: RisiMe model (risi-l1) · hh:mm" → A ✓ → "confirmed ✓" on A's and on B's card ("ZZ UI A agreed:") →
+  Settings → My promises lists it. Screenshots `docs/status/screens/26-made-by.png`, `27-discussion-summary.png`,
+  `28-my-promises.png`. Full run `--skills --ledger` (steps 1–11, own instances `_a27`, ports 4571/8271, redroids
+  5871/5872): **42 PASS, UI ENTRY OK**. `UITEST_LEDGER_ONLY=1` runs steps 1 and 11. The quiet rule is shortened with
+  `RISI_QUIET_S` and, because the server reads it only as app env today, `ELIXIR_ERL_OPTIONS="-risime risi_quiet_s
+  20 -risime risi_quiet_min_msgs 6"` (test-only, no server change).
+- **Open:** (1) Call transcription UI (A17/A18) is not in this chunk, yet `risi_ledger` is advertised (with
+  `group_calls`): §27.10 ties it to the call-screen rules — keep `RISI_TRANSCRIBE=off` until A17/A18 land (this app
+  never sends `risi_listen`, but another listened call could include it). (2) Server: read `RISI_QUIET_S` /
+  `RISI_QUIET_MIN_MSGS` from the env in runtime.exs (the test works around it). (3) The contract has no Snooze on
+  reminders; New date (item_edit) is offered instead. (4) Risi chat risi_ctl lines ("You confirmed an item") show in
+  the Risi chat; fine, but could be hidden. (5) The Risi chat header subtitle "🔒 Risi" ellipsizes on 360 dp (pre-existing).
+
 ## Real-phone fixes: chat lock entry points, entire-screen share, shared-screen fit — READY (JVM gate green, CALLTEST OK (call 14), UI ENTRY OK)
 - **Chat lock entry points:** "Lock chat"/"Unlock chat" removed from the ⋮ inside a chat (Private, Official and the
   Official intro screen, whose header now has no ⋮ at all; its title still opens Chat info). Locking stays in **Chat info**
