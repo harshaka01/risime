@@ -5791,6 +5791,9 @@ caller's earlier rating.
   "official_conversation_id", "state", "text", "owner", "counterpart", "due", "due_text",
   "created_at", "updated_at"}]}` (`risi_commitments_reply.json`), the caller's commitments as owner
   or counterpart; `open` = `confirmed` or `edited` and not `done`. It backs "My promises".
+- Both lists are stored sealed with `RISI_DATA_KEY` (§24.12). When the server can't open them
+  (the key is missing or doesn't match) they answer **`503 agent_unavailable`** if the caller has
+  rows, and an empty list if not. Clients show "Risi isn't available right now" and retry later.
 
 **Timezone.** `PATCH /me` accepts `{"tz": "<IANA zone>"}` (`422 bad_request` for an unknown zone),
 and `User` gains `"tz"` (absent or null: the server default `RISI_DEFAULT_TZ`, `Asia/Colombo`).
