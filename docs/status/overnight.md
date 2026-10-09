@@ -47,7 +47,9 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
-## Needs Harsha G: Google Calendar connection (Google Cloud Console, ~10 min)
+## Needs Harsha G (later, optional, not a blocker): Google Calendar sync (Google Cloud Console, ~10 min)
+Direction change 2026-10-09: RisiMe gets its own Risi Calendar and Risi Notes first (nightly.47, .48);
+Google becomes an optional one-way mirror later. These steps can wait.
 Project `risime` (734811134567), console.cloud.google.com. The section is "Google Auth Platform"
 (older UI: "OAuth consent screen").
 1. APIs & Services → Library → **Google Calendar API** → Enable.
