@@ -1,0 +1,1 @@
+{"kind":"risi_progress","data":{"request_id":"6d1f2e3a-4b5c-4d6e-9f7a-8b9c0d1e2f3a","conversation_id":"grp:2f3a4b5c-6d7e-4f8a-9b0c-1d2e3f4a5b6c","state":"step","position":null,"seq":3,"step":{"n":1,"tool":"calendar_check","status":"running"},"server_ts":"2026-10-09T09:15:31.002Z"}}

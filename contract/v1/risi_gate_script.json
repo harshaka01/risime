@@ -1,0 +1,229 @@
+{
+ "v": 1,
+ "about": "Contract v1.25 §25.9: the scripted next actions for the ten gate questions, for `scripts/fake-llm --script contract/v1/risi_gate_script.json`. Each rule matches the asker's request (the first user message of a risi_next_action call, §25.1) and returns one action per step: actions[n] answers the call that already holds n assistant messages (n earlier steps). Tool names and args follow §25.5; `final` follows §25.1. Synthetic data only.",
+ "rules": [
+  {
+   "name": "q1_capabilities",
+   "task": "risi_next_action",
+   "match": "(?i)what can you do",
+   "actions": [
+    {
+     "tool": "capabilities",
+     "args": {}
+    },
+    {
+     "tool": "final",
+     "answer": "I can set reminders, check and add to your calendar, search and summarise Official chats, draft replies, and remember notes for you.",
+     "sources": [],
+     "next_steps": [
+      "Try: remind us about Tuesday 2pm"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "q2_group_reminder",
+   "task": "risi_next_action",
+   "match": "(?i)remind us",
+   "actions": [
+    {
+     "tool": "set_reminder",
+     "args": {
+      "when": "Tuesday 2pm",
+      "text": "Budget review",
+      "audience": "conversation"
+     }
+    },
+    {
+     "tool": "final",
+     "answer": "Tap Add to set the reminder for Tuesday 2 pm; others can tap Me too.",
+     "sources": [],
+     "next_steps": []
+    }
+   ]
+  },
+  {
+   "name": "q3_free_busy",
+   "task": "risi_next_action",
+   "match": "(?i)am i free",
+   "actions": [
+    {
+     "tool": "calendar_check",
+     "args": {
+      "from": "Tuesday 00:00",
+      "to": "Tuesday 23:59"
+     }
+    },
+    {
+     "tool": "final",
+     "answer": "You're free on Tuesday at 2 pm.",
+     "sources": [
+      "c1"
+     ],
+     "next_steps": [
+      "Ask me to add it to your calendar"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "q4_calendar_add",
+   "task": "risi_next_action",
+   "match": "(?i)add dentist",
+   "actions": [
+    {
+     "tool": "calendar_add",
+     "args": {
+      "title": "Dentist",
+      "start": "Friday 10:00",
+      "end": "Friday 11:00"
+     }
+    },
+    {
+     "tool": "final",
+     "answer": "Tap Add to put Dentist on Friday 10 am in your calendar.",
+     "sources": [],
+     "next_steps": []
+    }
+   ]
+  },
+  {
+   "name": "q5_remember",
+   "task": "risi_next_action",
+   "match": "(?i)swan is my dentist",
+   "actions": [
+    {
+     "tool": "remember",
+     "args": {
+      "text": "My dentist is Dr Swan"
+     }
+    },
+    {
+     "tool": "final",
+     "answer": "Noted: your dentist is Dr Swan.",
+     "sources": [
+      "n1"
+     ],
+     "next_steps": []
+    }
+   ]
+  },
+  {
+   "name": "q6_recall",
+   "task": "risi_next_action",
+   "match": "(?i)who is my dentist",
+   "actions": [
+    {
+     "tool": "final",
+     "answer": "Your dentist is Dr Swan.",
+     "sources": [
+      "n1"
+     ],
+     "next_steps": []
+    }
+   ]
+  },
+  {
+   "name": "q7_forget",
+   "task": "risi_next_action",
+   "match": "(?i)forget that",
+   "actions": [
+    {
+     "tool": "forget",
+     "args": {
+      "ref": "n1"
+     }
+    },
+    {
+     "tool": "final",
+     "answer": "Forgotten.",
+     "sources": [],
+     "next_steps": []
+    }
+   ]
+  },
+  {
+   "name": "q9_summary_si",
+   "task": "risi_next_action",
+   "match": "(?i)summari[sz]e today in sinhala",
+   "actions": [
+    {
+     "tool": "summarise",
+     "args": {
+      "conversation": "this",
+      "range": "today",
+      "language": "si"
+     }
+    },
+    {
+     "tool": "final",
+     "answer": "අද: අයවැය අනුමත විය.",
+     "sources": [],
+     "next_steps": []
+    }
+   ]
+  },
+  {
+   "name": "q10_draft_ta",
+   "task": "risi_next_action",
+   "match": "(?i)draft a reply in tamil",
+   "actions": [
+    {
+     "tool": "draft_reply",
+     "args": {
+      "tone": "polite",
+      "language": "ta",
+      "conversation": "this"
+     }
+    },
+    {
+     "tool": "final",
+     "answer": "Here is a draft in your Risi chat.",
+     "sources": [],
+     "next_steps": []
+    }
+   ]
+  },
+  {
+   "name": "q10_risiwork",
+   "task": "risi_next_action",
+   "match": "(?i)risiwork",
+   "actions": [
+    {
+     "tool": "ask_risiwork",
+     "args": {
+      "question": "What is my leave balance?"
+     }
+    },
+    {
+     "tool": "final",
+     "answer": "RisiWork says you have 6 days of leave left.",
+     "sources": [],
+     "next_steps": []
+    }
+   ]
+  },
+  {
+   "name": "q8_search",
+   "task": "risi_next_action",
+   "match": "(?i)budget",
+   "actions": [
+    {
+     "tool": "search_chats",
+     "args": {
+      "text": "budget decision",
+      "range": "7d"
+     }
+    },
+    {
+     "tool": "final",
+     "answer": "The budget was approved on Monday.",
+     "sources": [
+      "m1"
+     ],
+     "next_steps": []
+    }
+   ]
+  }
+ ]
+}
