@@ -120,8 +120,12 @@ internal fun DraftCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
 @Composable
 internal fun SkillDoneCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
     val context = LocalContext.current
+    val calendarCard = r.skillId == lk.codegen.risime.net.RisiSkillIds.CALENDAR && lk.codegen.risime.data.tabs.RisiCalendarCards.hasActionCard(r, ctx.messages)
     Column(Modifier.testTag("risi_skill_done"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         Text(row.body.ifBlank { r.summary.orEmpty() }, style = MaterialTheme.typography.bodyLarge)
+        // P0: after an action card, [Open] and [Undo] live on that card (one card per action).
+        if (calendarCard) return@Column
+        if (r.skillId == lk.codegen.risime.net.RisiSkillIds.CALENDAR) CalendarOpenButton(r, ctx)
         val entry = r.entryId
         val skill = r.skillId
         val token = r.undoToken
@@ -147,7 +151,10 @@ internal fun SkillNeededCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardConte
     Column(Modifier.testTag("risi_skill_needed"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         Text(RisiSkillCards.neededText(r, row.body), style = MaterialTheme.typography.bodyLarge)
         if ("open_skills" in r.buttons || r.buttons.isEmpty()) {
-            Button(onClick = { ctx.host.openSkills(r.skillId) }, modifier = Modifier.testTag("risi_open_skills")) { Text("Open Risi skills") }
+            // A skill never turned on: "Turn on Calendar" (opens Settings → Risi skills at it); after a revoke or
+            // for a permission: "Open Risi skills".
+            val label = if (r.reason == "off" && r.wasOn != true && r.skillId != null) "Turn on ${RisiSkillCards.skillTitle(r.skillId)}" else "Open Risi skills"
+            Button(onClick = { ctx.host.openSkills(r.skillId) }, modifier = Modifier.testTag("risi_open_skills")) { Text(label) }
         }
     }
 }

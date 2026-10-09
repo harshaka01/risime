@@ -41,6 +41,14 @@ class FakeScheduledDao : ScheduledDao {
         writes[w.writeId] = w
         return 1
     }
+
+    override suspend fun setWriteTarget(writeId: String, target: String?) {
+        writes[writeId]?.let { writes[writeId] = it.copy(target = target) }
+    }
+
+    override suspend fun deleteWrite(writeId: String) {
+        writes.remove(writeId)
+    }
 }
 
 class FakeArmer(var exactOk: Boolean = true) : ScheduleArmer {

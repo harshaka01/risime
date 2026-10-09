@@ -567,6 +567,8 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override fun scheduleMayBeLate(): Boolean = !c.backgroundSkillPermissions.exactAlarmsAllowed()
 
+        override val calendar: lk.codegen.risime.data.tabs.RisiCalendarPort get() = c.calendarPort
+
         override fun actItem(itemId: String, action: String, text: String?, due: String?, allDay: Boolean) {
             viewModelScope.launch { requests.act(itemId, action, text, due, allDay) }
         }

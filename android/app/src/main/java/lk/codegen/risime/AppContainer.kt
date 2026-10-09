@@ -79,6 +79,7 @@ import lk.codegen.risime.push.SOCKET_NOTIFY_DEBOUNCE_MS
 import kotlinx.coroutines.flow.update
 import lk.codegen.risime.push.planChatNotifications
 import kotlinx.coroutines.flow.first
+import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
@@ -291,6 +292,41 @@ class AppContainer(
         }
     }
 
+    /**
+     * P0 §25.3/§26.6 the phone's calendar: a synced Google calendar (or the user's explicit pick), the
+     * remembered pick and the local write_id → event record in DataStore (loaded off the main thread).
+     */
+    val phoneCalendar: lk.codegen.risime.data.tabs.PhoneCalendar by lazy {
+        val chosenKey = androidx.datastore.preferences.core.longPreferencesKey("risi_calendar_id")
+        val writesKey = androidx.datastore.preferences.core.stringPreferencesKey("risi_calendar_writes")
+        val loaded = CompletableDeferred<Unit>()
+        val chosen = MutableStateFlow<Long?>(null)
+        val choice = object : lk.codegen.risime.data.tabs.CalendarChoiceStore {
+            override val chosen = chosen
+            override suspend fun set(id: Long?) {
+                loaded.await()
+                chosen.value = id
+                prefs.edit { p -> if (id == null) p.remove(chosenKey) else p[chosenKey] = id }
+            }
+        }
+        val writes = lk.codegen.risime.data.tabs.CalendarWriteLog(null) { json -> prefs.edit { it[writesKey] = json } }
+        scope.launch(Dispatchers.IO) {
+            try {
+                val p = prefs.data.first()
+                chosen.value = p[chosenKey]
+                writes.restore(p[writesKey])
+            } finally {
+                loaded.complete(Unit)
+            }
+        }
+        lk.codegen.risime.data.tabs.PhoneCalendar(
+            lk.codegen.risime.data.tabs.AndroidCalendarBackend(appContext), choice, writes,
+            log = { Log.i("RisiMe", it) }, ready = { loaded.await() },
+        )
+    }
+
+    val calendarPort: lk.codegen.risime.data.tabs.RisiCalendarPort by lazy { lk.codegen.risime.data.tabs.AndroidCalendarPort(appContext, phoneCalendar) }
+
     /** §25.3/§26.3/§26.6 the phone's executor for Risi's client tools (only on a `risi_skills` device). */
     val risiToolExecutor: lk.codegen.risime.data.tabs.RisiToolExecutor by lazy {
         lk.codegen.risime.data.tabs.RisiToolExecutor(
@@ -303,16 +339,17 @@ class AppContainer(
             setAlarm = { a -> withContext(Dispatchers.Main) { lk.codegen.risime.push.fireSetAlarm(appContext, a) } },
             graphemes = { lk.codegen.risime.data.IcuGraphemes.count(it) },
             log = { Log.i("RisiMe", it) },
+            calendar = phoneCalendar,
         )
     }
 
-    /** §25.3 client tools: answered over TLS, never stored (A7: every known tool is declined until the executor lands). */
+    /** §25.3 client tools: answered over TLS, never stored. */
     val risiToolCalls = lk.codegen.risime.data.tabs.RisiToolCallHandler(
         deviceId = { runCatching { sessionStore.deviceId() }.getOrNull() },
         post = { id, result, device -> api.postRisiToolResult(id, result, device) },
         enabled = { risiTools.on.value },
-        // §26.6: the new tools only on a risi_skills device (else unknown_tool, §26.9); calendar stays declined until its chunk.
-        execute = { call -> if (risiSkillsOn()) risiToolExecutor.execute(call) else lk.codegen.risime.data.tabs.RisiToolCallHandler.stubResult(call) },
+        // §26.6: the new tools only on a risi_skills device (else unknown_tool, §26.9); a v1.25 device runs the calendar under the card rule.
+        execute = { call -> if (risiSkillsOn()) risiToolExecutor.execute(call) else risiToolExecutor.executeV125(call) },
         log = { Log.i("RisiMe", it) },
     )
 

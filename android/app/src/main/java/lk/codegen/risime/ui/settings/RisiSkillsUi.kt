@@ -277,7 +277,7 @@ fun RisiSkillsRoute(c: AppContainer, skillId: String?, onBack: () -> Unit) {
         }
     }
     LaunchedEffect(Unit) { model.load(permissions) }
-    RisiSkillsScreen(model, permissions, skillId, onBack, openSettings = {
+    RisiSkillsScreen(model, permissions, skillId, onBack, calendar = c.calendarPort, openSettings = {
         runCatching { ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }, openClock = {
         runCatching { ctx.startActivity(Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
@@ -292,6 +292,8 @@ fun RisiSkillsScreen(
     onBack: () -> Unit,
     openSettings: () -> Unit = {},
     openClock: () -> Unit = {},
+    /** P0 Calendar → Details: the calendar Risi adds to (changeable); null: not shown. */
+    calendar: lk.codegen.risime.data.tabs.RisiCalendarPort? = null,
 ) {
     val skills by model.store.skills.collectAsStateWithLifecycle()
     val error by model.store.error.collectAsStateWithLifecycle()
@@ -337,6 +339,7 @@ fun RisiSkillsScreen(
                         onUndo = model::undo,
                         onClear = { model.clear(s.id) },
                         openSettings = openSettings, openClock = openClock,
+                        calendar = calendar.takeIf { s.id == RisiSkillIds.CALENDAR },
                     )
                 }
             }
@@ -361,6 +364,7 @@ private fun SkillCard(
     onClear: () -> Unit,
     openSettings: () -> Unit,
     openClock: () -> Unit,
+    calendar: lk.codegen.risime.data.tabs.RisiCalendarPort? = null,
 ) {
     Card(Modifier.fillMaxWidth().testTag("risi_skill_${s.id}")) {
         Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -407,6 +411,10 @@ private fun SkillCard(
                 }
             }
             s.client?.let { Text("This phone: " + permissionText(it.permission), style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("risi_skill_client_${s.id}")) }
+            if (calendar != null && s.on) {
+                HorizontalDivider()
+                CalendarChoiceRow(calendar)
+            }
             if (s.on) {
                 HorizontalDivider()
                 if (s.allowsAllowed) {
@@ -502,4 +510,35 @@ fun revokeCancelLabel(skillId: String, pending: Int?): String? = when {
     skillId == RisiSkillIds.SCHEDULED_MESSAGES -> if (pending == null || pending > 0) "Also cancel ${pending ?: "the"} pending" + if (pending == 1) " message" else " messages" else null
     skillId == RisiSkillIds.REMINDERS -> "Also cancel pending reminders"
     else -> null
+}
+
+/** Calendar → Details: "Adds to: harsha@… · Google [Change]" (kept on this phone; the contract has no field for it). */
+@Composable
+private fun CalendarChoiceRow(port: lk.codegen.risime.data.tabs.RisiCalendarPort) {
+    val chosenId by port.chosenId.collectAsStateWithLifecycle()
+    var chosen by remember { mutableStateOf<lk.codegen.risime.data.tabs.PhoneCalendarInfo?>(null) }
+    var options by remember { mutableStateOf<List<lk.codegen.risime.data.tabs.PhoneCalendarInfo>?>(null) }
+    var note by remember { mutableStateOf<String?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    LaunchedEffect(chosenId) { chosen = port.chosen() }
+    Column(Modifier.testTag("risi_calendar_settings"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+        Text("Calendar", style = MaterialTheme.typography.titleSmall)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(chosen?.let { lk.codegen.risime.data.tabs.CalendarSelection.label(it) } ?: "Not chosen yet: Risi asks the first time it adds an event.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_calendar_settings_label"))
+                chosen?.let { lk.codegen.risime.data.tabs.CalendarSelection.subLabel(it) }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            }
+            TextButton(onClick = {
+                scope.launch {
+                    if (!port.hasPermission()) { note = "Calendar permission is off on this phone."; return@launch }
+                    val o = port.options()
+                    if (o.isEmpty()) note = "No writable Google calendar on this phone. Add your Google account in Android Settings → Accounts." else options = o
+                }
+            }, modifier = Modifier.testTag("risi_calendar_settings_change")) { Text(if (chosen == null) "Choose" else "Change") }
+        }
+        note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    }
+    options?.let { o ->
+        lk.codegen.risime.ui.tabs.CalendarPickerDialog(o, chosen?.id, onPick = { c -> options = null; scope.launch { port.choose(c.id); chosen = c; note = null } }, onDismiss = { options = null })
+    }
 }

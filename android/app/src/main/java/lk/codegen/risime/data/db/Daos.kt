@@ -827,6 +827,14 @@ interface ScheduledDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertWrite(w: RisiWriteEntity): Long
+
+    /** A calendar add's provider event id, once it is added and verified (§26.6 the local write_id → event map). */
+    @Query("UPDATE risi_writes SET target = :target WHERE write_id = :writeId")
+    suspend fun setWriteTarget(writeId: String, target: String?)
+
+    /** A write that failed is released, so a §25.4 [Retry] (`confirm_write` again) can run it once more. */
+    @Query("DELETE FROM risi_writes WHERE write_id = :writeId")
+    suspend fun deleteWrite(writeId: String)
 }
 
 /** v11 (§24): chat ids, tabs and per-chat tab preferences. */

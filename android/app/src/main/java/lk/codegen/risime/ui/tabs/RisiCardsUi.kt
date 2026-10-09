@@ -101,7 +101,7 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     RisiKinds.REPORT -> ReportCard(r)
                     RisiKinds.OFFER -> OfferCard(r, ctx)
                     RisiKinds.ERROR -> Text(RisiCards.errorText(r.code), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_error_text"))
-                    RisiKinds.CONFIRM -> ConfirmCard(row, r, ctx)
+                    RisiKinds.CONFIRM -> if (lk.codegen.risime.data.tabs.RisiCalendarCards.isCalendarAdd(r) && lk.codegen.risime.data.tabs.RisiCalendarCards.proposal(r) != null) CalendarActionCard(row, r, ctx) else ConfirmCard(row, r, ctx)
                     RisiKinds.REMINDER_SET -> ReminderSetCard(row, r, ctx)
                     RisiKinds.DRAFT -> DraftCard(row, r, ctx)
                     RisiKinds.SKILL_DONE -> SkillDoneCard(row, r, ctx)
@@ -126,7 +126,7 @@ private fun headerOf(r: RisiMeta) = when (r.kind) {
     RisiKinds.SUMMARY -> "Risi · Summary" + if (r.partial) " (partial)" else ""
     RisiKinds.REPORT -> "Risi · Report"
     RisiKinds.OFFER -> "Risi"
-    RisiKinds.CONFIRM -> "Risi · Confirm"
+    RisiKinds.CONFIRM -> if (lk.codegen.risime.data.tabs.RisiCalendarCards.isCalendarAdd(r)) "Risi · Add to calendar" else "Risi · Confirm"
     RisiKinds.REMINDER_SET -> "Risi · Reminder set"
     RisiKinds.DRAFT -> "Risi · Draft"
     RisiKinds.SKILL_DONE -> "Risi · Done"

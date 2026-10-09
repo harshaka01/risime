@@ -148,6 +148,27 @@ object RisiSkillCards {
         "$mark $what$why"
     }
 
-    /** At most 3 chips (§25.4); blank ones dropped. */
-    fun nextSteps(r: RisiMeta): List<String> = r.nextSteps.map { it.trim() }.filter { it.isNotEmpty() }.take(3)
+    /**
+     * At most 3 chips (§25.4); blank ones dropped. A chip only FILLS the composer, so a chip that is a
+     * question ("What is…?") or a confirm/answer phrase ("Confirm…", "Yes…", "Cancel") is hidden: sent
+     * as a request it means nothing to Risi (P0: "Confirm to add the event" → "I don't see any event
+     * details"). Confirming is the card's [Add].
+     */
+    fun nextSteps(r: RisiMeta): List<String> = r.nextSteps.map { it.trim() }.filter { it.isNotEmpty() && chipUsable(it) }.take(3)
+
+    private val QUESTION_START = Regex(
+        "^(what|what's|whats|which|when|where|who|whom|whose|why|how|is|are|am|was|were|do you|does|did|can you|could you|would you|should|shall|will you|may i|want me)\\b",
+        RegexOption.IGNORE_CASE,
+    )
+    private val CONFIRM_START = Regex(
+        "^(confirm|yes|yeah|yep|ok|okay|sure|go ahead|proceed|approve|accept|add it|do it|please confirm|tap|no|nope|cancel|don't|do not)\\b",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** A chip that reads as a request of its own (not a question, not an answer to a card). */
+    fun chipUsable(s: String): Boolean {
+        val t = s.trim().trimStart('“', '"', '\'')
+        if (t.isEmpty() || t.trimEnd('”', '"', '\'', '.', ' ').endsWith("?")) return false
+        return !QUESTION_START.containsMatchIn(t) && !CONFIRM_START.containsMatchIn(t)
+    }
 }

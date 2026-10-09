@@ -64,6 +64,9 @@ interface RisiHost {
 
     /** This phone has a usable Risi chat with the Ledger on (the short card's button shows only then). */
     fun risiChatAvailable(): Boolean = false
+
+    /** P0 the phone's calendar for the calendar action card (picker, the local add record, Open). */
+    val calendar: lk.codegen.risime.data.tabs.RisiCalendarPort? get() = null
 }
 
 /** Everything a card needs from its screen. */
