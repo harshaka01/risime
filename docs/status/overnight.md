@@ -47,6 +47,22 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.44 (live 2026-10-09 ~07:30 UTC, not required): screen share fixed, Risi text sealed at rest
+- **What's in:**
+  - "Entire screen" share shows RisiMe (FLAG_SECURE only on the app lock / Locked chats folder /
+    an open locked chat), with a pre-share warning;
+  - the viewer sees an aspect-fit share, never cropped; a still shared screen stays visible;
+  - Lock chat removed from the in-chat ⋮;
+  - Risi-derived text sealed with RISI_DATA_KEY (c69985a);
+  - the fixed-clock tests.
+- **Gate:** all PASS (ui-entry --skills, boot check, canary, push, upgrade).
+- **Verified on the pilot after the migration:**
+  - 0 plaintext / 6 sealed commitments;
+  - 0 / 12 facts;
+  - 0 / 89 learning-log outputs.
+- **Pilot switches:** TABS, RISI, RISI_TOOLS, RISI_SKILLS on (skills turned on 06:08 UTC at
+  Harsha's request, guarded, healthy). RISI_LEDGER and RISI_TRANSCRIBE off.
+
 ## v0.2.0-nightly.43 (live 2026-10-09 ~13:00 UTC, not required): Calls tab like WhatsApp; Risi Skills and reminders (switched off)
 - **Calls tab:** select and delete, Clear call log, voice/video icons, New call, the call info screen.
 - **§25/§26 shipped, OFF on the pilot** (`RISI_TOOLS`, `RISI_SKILLS` unset; `RISI_MEMORY_KEY` absent):
