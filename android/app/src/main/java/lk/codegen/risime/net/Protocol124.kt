@@ -178,6 +178,8 @@ data class RisiMeta(
     val scope: String? = null,
     // v1.27 §27.7 call_listen
     val since: String? = null,
+    // proposal 2026-10-09-risi-30day-summaries: a period summary's stored days (`period` above gains `scope`)
+    val days: List<RisiSummaryDay> = emptyList(),
 ) {
     /** `confirm.when` (null if absent or not an object). */
     fun confirmWhen(): RisiWhen? =
@@ -188,7 +190,21 @@ data class RisiMeta(
 }
 
 @Serializable
-data class RisiPeriod(val from: String, val to: String)
+data class RisiPeriod(
+    val from: String,
+    val to: String,
+    /** Proposal 2026-10-09-risi-30day-summaries (optional): "today" | "7d" | "30d" | "range"; "day" | "week" on a stored summary. */
+    val scope: String? = null,
+)
+
+/** Proposal 2026-10-09-risi-30day-summaries: a stored day/week summary a period summary rests on. */
+@Serializable
+data class RisiSummaryDay(
+    val date: String,
+    val to: String? = null,
+    val scope: String = "day",
+    @SerialName("summary_id") val summaryId: String? = null,
+)
 
 @Serializable
 data class RisiSection(val heading: String, val body: String)
@@ -266,6 +282,9 @@ data class RisiFact(
     val text: String,
     @SerialName("chat_id") val chatId: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
+    /** Proposal 2026-10-09-risi-30day-summaries: a stored chat summary (`kind: "summary"`): "day" | "week". */
+    val scope: String? = null,
+    val period: RisiPeriod? = null,
 )
 
 @Serializable

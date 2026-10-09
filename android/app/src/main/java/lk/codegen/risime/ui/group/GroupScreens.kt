@@ -151,6 +151,7 @@ fun GroupChatScreen(
     val scheduledHere by vm.scheduledCtl.here.collectAsStateWithLifecycle()
     val scheduledSends by vm.scheduledCtl.sendsById.collectAsStateWithLifecycle()
     var scheduledSheet by remember { mutableStateOf(false) }
+    var summariseAsk by remember { mutableStateOf(false) }
     @Suppress("UNUSED_VARIABLE") val undoneNow by vm.undoneState.collectAsStateWithLifecycle()
     var progressNow by remember { mutableStateOf(System.currentTimeMillis()) }
     if (risi != null && risiProgress.isNotEmpty()) {
@@ -234,7 +235,7 @@ fun GroupChatScreen(
                     lk.codegen.risime.ui.chat.ChatOverflowMenu(
                         onClear = { clearAsk = false }, onDelete = { clearAsk = true },
                         extra = { close ->
-                            risi?.takeIf { !risiChat }?.let { h -> lk.codegen.risime.ui.tabs.RisiMenuItems(h, enabled = !readOnly, close = close) }
+                            risi?.takeIf { !risiChat }?.let { h -> lk.codegen.risime.ui.tabs.RisiMenuItems(h, enabled = !readOnly, close = close, onSummarise = { summariseAsk = true }) }
                             // §26.6 "Scheduled messages" (never in the Risi chat: nothing is scheduled into it).
                             if (!risiChat && (vm.scheduledMenu() || scheduledHere.isNotEmpty())) {
                                 androidx.compose.material3.DropdownMenuItem(text = { Text(lk.codegen.risime.ui.chat.SCHEDULED_MESSAGES_TITLE) }, onClick = { close(); scheduledSheet = true })
@@ -292,6 +293,8 @@ fun GroupChatScreen(
             if (!risiChat) {
                 lk.codegen.risime.ui.chat.ScheduledBubbles(scheduledHere, vm.scheduledCtl)
                 if (scheduledSheet) lk.codegen.risime.ui.chat.ScheduledMessagesSheet(scheduledHere, vm.scheduledCtl) { scheduledSheet = false }
+                // Summarise: Today / 7 days / 30 days / Date range… (proposal 2026-10-09-risi-30day-summaries).
+                if (summariseAsk && risi != null) lk.codegen.risime.ui.tabs.SummarisePeriodDialog(risi) { summariseAsk = false }
             }
             // §25.4 the progress bubble of a request made here (ends with `done` or the turn's message).
             if (risi != null) risiProgress.forEach { lk.codegen.risime.ui.tabs.RisiProgressBubble(it, progressNow) }

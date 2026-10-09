@@ -237,7 +237,17 @@ private fun AnswerCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
 @Composable
 private fun SummaryCard(r: RisiMeta, ctx: RisiCardContext) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        lk.codegen.risime.data.tabs.SummaryPeriods.periodLine(r.period)?.let {
+            Text(it, style = MaterialTheme.typography.titleSmall, modifier = Modifier.testTag("risi_summary_period"))
+        }
         r.summary?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
+        if (r.days.isNotEmpty()) {
+            Text(
+                "Based on: " + r.days.joinToString(", ") { lk.codegen.risime.data.tabs.SummaryPeriods.dayLabel(it) },
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("risi_summary_days"),
+            )
+        }
         Section("Decisions", r.decisions, "risi_decisions")
         if (r.actionItems.isNotEmpty()) {
             Text("Action items", style = MaterialTheme.typography.titleSmall)

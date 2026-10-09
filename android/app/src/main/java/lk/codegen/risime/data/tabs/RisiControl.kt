@@ -51,6 +51,22 @@ object RisiControl {
         if (sinceMs != null) put("scope", buildJsonObject { put("since", iso(sinceMs)) })
     }
 
+    /** Proposal 2026-10-09-risi-30day-summaries: `summarise` with a `scope` object (`{"period"}` or `{"from","to"}`). */
+    fun request(requestId: String, action: String, scope: JsonObject): JsonObject = buildJsonObject {
+        put("v", 1)
+        put("type", TYPE_REQUEST)
+        put("request_id", requestId)
+        put("action", action)
+        put("text", JsonNull)
+        put("scope", scope)
+    }
+
+    /** "today" | "7d" | "30d" (an older server reads no `since` and answers its 24-h default). */
+    val PERIODS = listOf("today", "7d", "30d")
+
+    /** A date range is at most 31 days back (else `out_of_window`). */
+    const val RANGE_MAX_DAYS = 31L
+
     fun action(target: String, action: String, editText: String? = null, editDue: String? = null, reminder: Boolean? = null, editAllDay: Boolean? = null): JsonObject = buildJsonObject {
         put("v", 1)
         put("type", TYPE_ACTION)
@@ -182,6 +198,20 @@ class RisiRequests(
     suspend fun summarise(): Boolean {
         if (!isOfficial()) return false
         send(RisiControl.request(newId(), "summarise", null, now() - RisiControl.SUMMARY_WINDOW_MS))
+        return true
+    }
+
+    /** Summarise a period ("today" | "7d" | "30d"): `scope {"period"}`. */
+    suspend fun summarisePeriod(period: String): Boolean {
+        if (period !in RisiControl.PERIODS || !isOfficial()) return false
+        send(RisiControl.request(newId(), "summarise", buildJsonObject { put("period", period) }))
+        return true
+    }
+
+    /** Summarise a date range: `scope {"from", "to"}` ([fromMs] at most 31 days back). */
+    suspend fun summariseRange(fromMs: Long, toMs: Long): Boolean {
+        if (toMs <= fromMs || now() - fromMs > RisiControl.RANGE_MAX_DAYS * 86_400_000L || !isOfficial()) return false
+        send(RisiControl.request(newId(), "summarise", buildJsonObject { put("from", RisiControl.iso(fromMs)); put("to", RisiControl.iso(minOf(toMs, now()))) }))
         return true
     }
 

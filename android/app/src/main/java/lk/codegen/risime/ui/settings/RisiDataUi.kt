@@ -70,7 +70,7 @@ fun risiErrorMessage(r: ApiResult<*>?): String = when {
 }
 
 /** §24.11 the order and titles of the fact kinds. */
-val FACT_KINDS = listOf("commitment" to "Commitments", "date" to "Dates", "person" to "People", "preference" to "Preferences", "topic" to "Topics", "note" to "Notes")
+val FACT_KINDS = listOf("commitment" to "Commitments", "date" to "Dates", "person" to "People", "preference" to "Preferences", "topic" to "Topics", "note" to "Notes", "summary" to "Summaries")
 
 data class FactsUi(
     val loading: Boolean = true,
@@ -170,7 +170,13 @@ fun RisiFactsScreen(model: RisiFactsModel, onBack: () -> Unit) {
                             item(key = "h:$title") { SectionHeader(title) }
                             items(facts, key = { it.factId }) { f ->
                                 Row(Modifier.fillMaxWidth().testTag("risi_fact"), verticalAlignment = Alignment.CenterVertically) {
-                                    Text(f.text, Modifier.weight(1f).padding(vertical = Spacing.sm))
+                                    Column(Modifier.weight(1f).padding(vertical = Spacing.sm)) {
+                                        Text(f.text)
+                                        // A stored chat summary (proposal 2026-10-09-risi-30day-summaries): its day or week.
+                                        lk.codegen.risime.data.tabs.SummaryPeriods.factLabel(f.scope, f.period)?.let {
+                                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_fact_period"))
+                                        }
+                                    }
                                     TextButton(onClick = { model.delete(f.factId) }, modifier = Modifier.testTag("risi_fact_delete")) { Text("Delete") }
                                 }
                                 HorizontalDivider()

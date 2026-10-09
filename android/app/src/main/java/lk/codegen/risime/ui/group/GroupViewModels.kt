@@ -534,6 +534,10 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override fun report() { viewModelScope.launch { requests.report() } }
 
+        override fun summarisePeriod(period: String) { viewModelScope.launch { requests.summarisePeriod(period) } }
+
+        override fun summariseRange(fromMs: Long, toMs: Long) { viewModelScope.launch { requests.summariseRange(fromMs, toMs) } }
+
         override fun act(target: String, action: String, editText: String?, editDue: String?) {
             viewModelScope.launch { requests.act(target, action, editText, editDue) }
         }

@@ -94,8 +94,8 @@ fun RisiFollowUpChip(onDismiss: () -> Unit) {
 
 /** The Official chat menu's two Risi items. */
 @Composable
-fun RisiMenuItems(host: RisiHost, enabled: Boolean, close: () -> Unit) {
-    DropdownMenuItem(text = { Text(SUMMARISE_LABEL) }, enabled = enabled, onClick = { close(); host.summarise() }, modifier = Modifier.testTag("risi_menu_summarise"))
+fun RisiMenuItems(host: RisiHost, enabled: Boolean, close: () -> Unit, onSummarise: (() -> Unit)? = null) {
+    DropdownMenuItem(text = { Text(SUMMARISE_LABEL) }, enabled = enabled, onClick = { close(); onSummarise?.invoke() ?: host.summarise() }, modifier = Modifier.testTag("risi_menu_summarise"))
     DropdownMenuItem(text = { Text(REPORT_LABEL) }, enabled = enabled, onClick = { close(); host.report() }, modifier = Modifier.testTag("risi_menu_report"))
 }
 

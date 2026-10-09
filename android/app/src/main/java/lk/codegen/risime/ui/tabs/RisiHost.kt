@@ -20,6 +20,12 @@ interface RisiHost {
 
     fun report()
 
+    /** Summarise "today" | "7d" | "30d" (proposal 2026-10-09-risi-30day-summaries). */
+    fun summarisePeriod(period: String) = summarise()
+
+    /** Summarise a date range (at most 31 days back). */
+    fun summariseRange(fromMs: Long, toMs: Long) = summarise()
+
     /** `risi_action` on a commitment or an offer (`edit` carries [editText] and [editDue]). */
     fun act(target: String, action: String, editText: String? = null, editDue: String? = null)
 
