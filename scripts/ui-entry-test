@@ -523,6 +523,9 @@ for _ in 1 2 3 4 5 6; do
   A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1
 done
 [ "$found" = 1 ] || fail "Settings: no 'What Risi knows about me' (tabs on)"
+# Present in the tree can still mean behind the navigation bar (new Settings rows pushed it down;
+# the tap then hit Home): scroll once more before tapping.
+A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1
 tap "What Risi knows about me" || fail "tap What Risi knows about me"
 wait_for 'stored anything about you' 20 || fail "'What Risi knows about me' didn't open cleanly"
 for bad in "Something went wrong" "reach the server" "The server had a problem" "available for this account"; do
