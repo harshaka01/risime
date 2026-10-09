@@ -88,7 +88,8 @@ data class RisiEvent(
     @SerialName("all_day") val allDay: Boolean = false,
     val tz: String? = null,
     val participants: List<RisiEventParticipant> = emptyList(),
-    @SerialName("my_status") val myStatus: String = RisiEventStatus.PROPOSED,
+    /** Null only from a view of an event the caller isn't in (read as proposed). */
+    @SerialName("my_status") val myStatus: String? = RisiEventStatus.PROPOSED,
     @SerialName("my_reminder_min") val myReminderMin: Int? = null,
     val source: RisiEventSource? = null,
     @SerialName("created_by") val createdBy: String? = null,

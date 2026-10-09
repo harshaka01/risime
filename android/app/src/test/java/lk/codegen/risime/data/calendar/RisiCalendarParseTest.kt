@@ -91,6 +91,17 @@ class RisiCalendarParseTest {
         assertEquals(30, RisiCalendarSettings().defaultReminderMin)
     }
 
+    /** The server writes `my_status`/`my_reminder_min` as `me && …` (null outside the event), `owner`/`tz` may be dropped. */
+    @Test fun nullsFromTheServerDecode() {
+        val s = """{"event_id":"e1","version":1,"title":"x","start":"2026-10-12T08:30:00.000Z","end":"2026-10-12T09:30:00.000Z","all_day":false,
+            "participants":[{"user_id":"u","status":"proposed","responded_at":null}],"my_status":null,"my_reminder_min":null,"owner":null,"tz":null,
+            "source":{"conversation_id":null,"message_ids":[],"item_id":null,"note_id":null},"created_by":"user","state":"active","created_at":null,"updated_at":null}"""
+        val e = ProtocolJson.decodeFromString(lk.codegen.risime.net.RisiEvent.serializer(), s)
+        assertNull(e.myStatus)
+        assertFalse(e.isOwner(me))
+        assertEquals("", RisiCalendarViews.statusLabel(e.myStatus))
+    }
+
     @Test fun inboxEventIsContentFree() {
         val e = ProtocolJson.decodeFromString(Event.serializer(), fixture("event_risi_calendar_changed.json"))
         assertEquals("c1.000000000045", e.risiCalendarChanged()!!.cursor)

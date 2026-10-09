@@ -3,7 +3,9 @@
 ## v1.29 §29 Risi Calendar (proposal 2026-10-09-risi-calendar-notes, decision 073) — READY
 Coded against the proposal's REST/JSON shapes (the server is built in parallel); fixtures under
 `android/app/src/test/resources/fixtures/risi_calendar/` (one per proposal example name, plus a page-1 feed, a cancelled
-update and an unknown kind). `PROTOCOL_VERSION` stays 1.28 until root merges §29 into PROTOCOL.md. §30 Notes not started.
+update and an unknown kind). Checked afterwards against server 5ea7902/43627a5 (controller, `Calendar.view`, the cards
+in `calendar_cards.ex`): same routes and keys; `my_status`/`my_reminder_min` may be null and decode. `PROTOCOL_VERSION`
+stays 1.28 until root merges §29 into PROTOCOL.md. §30 Notes not started.
 - **Switch/capability:** `/auth/config` `risi_events` (absent = off) → the app advertises `risi_events` only together with
   `risi_tools`, `risi_skills`, `risi_ledger` (and `tabs`). Off: no Calendar tab, no calendar REST, the v1.28 cards and
   flows exactly (the phone `calendar_add` card is untouched).
