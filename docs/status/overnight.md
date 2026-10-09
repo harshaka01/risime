@@ -47,6 +47,27 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.46 (live 2026-10-09 ~14:54 UTC, not required): honest calendar answers, calendar offers, My promises split
+- **Calendar honesty** (Harsha's "your calendar is clear" while Google Calendar had events): every
+  calendar answer ends with "I checked: Phone calendar — <calendars> N events"; with no successful
+  read the server replaces the model's text with "I couldn't read your calendar on this phone
+  (<reason>)…". Never "free/clear" without a read (server-enforced). Settings → Risi skills → Calendar →
+  Details lists every phone calendar with account, 7-day event count, hidden / sync-off.
+  - Root cause on Harsha's phone: the app's read was correct (Instances, all visible calendars); the
+    phone's calendar store returned 0 events at 09:18 → most likely Google Calendar sync to the
+    phone is off, or the calendars are hidden. Details now shows which.
+- **Items 8–10:** "Add to calendar?" / "Remind me?" offers for dated promises; "When is it due?" for
+  vague ones; duplicates merged; My promises "I promised (n)" / "Promised to me (n)" with tap-through,
+  counts == digest.
+- **Invalid-output loop fixed:** a model calling an unavailable tool gets one corrective retry, then a
+  server-built answer in seconds (was: retried every 30 s without limit).
+- Risi Calendar (§29) and Risi Notes (§30) code ships switched off (RISI_EVENTS, RISI_NOTES).
+- **Gate:** all PASS incl. ui-entry --skills --ledger --calendar --offers (twice locally), boot
+  check, canary, push, upgrade. First gate run failed once at the calendar step (the test phone left
+  Settings; not reproduced). The deploy's final epmd check tripped on a loopback-only epmd from a
+  test node: fixed in run-server (3d9e7cd) to fail only on non-loopback binds.
+- **Next:** nightly.47 Risi Calendar on; nightly.48 Risi Notes (needs "turn the ledger on").
+
 ## Needs Harsha G (later, optional, not a blocker): Google Calendar sync (Google Cloud Console, ~10 min)
 Direction change 2026-10-09: RisiMe gets its own Risi Calendar and Risi Notes first (nightly.47, .48);
 Google becomes an optional one-way mirror later. These steps can wait.
