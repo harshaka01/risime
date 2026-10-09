@@ -46,6 +46,7 @@ defmodule RisiMe.Agent.Turn do
 
   alias RisiMe.Agent.{
     ActionDraft,
+    CalendarHonesty,
     Audience,
     Capabilities,
     Clock,
@@ -148,7 +149,9 @@ defmodule RisiMe.Agent.Turn do
       draft: draft_state && draft_state.draft,
       draft_changed: false,
       proposed: nil,
-      asked: false
+      asked: false,
+      # P0 2026-10-09: the calendar checks of this turn (`CalendarHonesty`), in order.
+      calendar_checks: []
     }
 
     result = loop(st, ctx)
@@ -373,7 +376,7 @@ defmodule RisiMe.Agent.Turn do
     person who asked (the asker). Everyone in the chat can see what you post.
     #{Capabilities.prompt(names)}
     Your tools for this request (call one per step, or answer with final):
-    #{Tools.prompt_lines(allowed)}#{need_line(needed)}
+    #{Tools.prompt_lines(allowed)}#{need_line(needed)}#{calendar_line(names)}
     Rules:
     - Reply with exactly one JSON action: {"tool": "<tool>", "args": {...}} to use a tool, or \
     {"tool": "final", "answer": "...", "sources": [...], "next_steps": [...]} to answer.
@@ -398,6 +401,15 @@ defmodule RisiMe.Agent.Turn do
   end
 
   # v1.26 §26.5: the pseudo-tool for a skill the asker hasn't turned on (or can't use here).
+  # P0 2026-10-09: enforced again after the model by `CalendarHonesty`.
+  defp calendar_line(names) do
+    if "calendar_check" in names,
+      do:
+        "\n- calendar_check: say the asker is free only when a source has read_ok true and " <>
+          "calendars above 0; otherwise say you couldn't read their calendar and why",
+      else: ""
+  end
+
   defp need_line([]), do: ""
 
   defp need_line(needed),
@@ -544,6 +556,16 @@ defmodule RisiMe.Agent.Turn do
       end
 
     ok? = status == "ok"
+
+    st =
+      if name == "calendar_check",
+        do: %{
+          st
+          | calendar_checks:
+              st.calendar_checks ++
+                [CalendarHonesty.check(status, meta[:calendar_check], meta[:reason])]
+        },
+        else: st
 
     st = %{
       st
@@ -823,10 +845,15 @@ defmodule RisiMe.Agent.Turn do
   end
 
   defp finish(st, ctx, answer, source_refs, next_steps) do
+    checks = Map.get(st, :calendar_checks, [])
+    # P0 2026-10-09: never "clear" without a trustworthy read; always name what was checked.
+    answer = CalendarHonesty.enforce(answer, checks, ctx.tz)
+
     sources =
       (source_refs || [])
       |> Enum.uniq()
       |> Enum.flat_map(fn r -> List.wrap(st.refs[r]) end)
+      |> Kernel.++(CalendarHonesty.answer_sources(checks))
 
     message_ids = for %{"type" => "message", "message_id" => id} <- sources, do: id
 

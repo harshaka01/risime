@@ -68,14 +68,29 @@ defmodule RisiMe.Agent.ClientTools do
       args = %{"from" => Clock.ts(from), "to" => Clock.ts(to)}
 
       case call(ctx, "calendar_check", args) do
-        {:ok, "ok", %{"blocks" => blocks}} ->
+        {:ok, "ok", %{"blocks" => blocks} = r} ->
           refs =
             blocks
             |> Enum.with_index(1)
             |> Map.new(fn {b, i} -> {"c#{i}", Map.put(b, "type", "calendar")} end)
 
           shown = for {b, i} <- Enum.with_index(blocks, 1), do: Map.put(b, "ref", "c#{i}")
-          {:ok, %{"from" => args["from"], "to" => args["to"], "blocks" => shown}, %{refs: refs}}
+          result = %{"from" => args["from"], "to" => args["to"], "blocks" => shown}
+
+          # P0 2026-10-09: the model sees per source only {source, read_ok, reason, calendars:
+          # <count>}; the calendar names stay in `meta` for the server-built "I checked" line
+          # (`RisiMe.Agent.CalendarHonesty`). An old phone says nothing: `sources: null`.
+          result =
+            Map.merge(result, %{
+              "sources" => model_sources(r["sources"]),
+              "connected_sources" => r["connected_sources"] || []
+            })
+
+          check = Map.merge(result, Map.take(r, ["sources", "connected_sources"]))
+          {:ok, result, %{refs: refs, calendar_check: check}}
+
+        {:ok, "error", %{"code" => code}} ->
+          {:error, "failed", code}
 
         other ->
           status(other)
@@ -84,6 +99,19 @@ defmodule RisiMe.Agent.ClientTools do
   end
 
   defp run_check(_args, _ctx), do: {:error, "failed", "bad_args"}
+
+  defp model_sources(sources) when is_list(sources) do
+    for s <- sources do
+      %{
+        "source" => s["source"],
+        "read_ok" => s["read_ok"],
+        "reason" => s["reason"],
+        "calendars" => length(s["calendars"] || [])
+      }
+    end
+  end
+
+  defp model_sources(_), do: nil
 
   ## calendar_add
 

@@ -388,7 +388,7 @@ defmodule RisiMe.Agent.TurnS11Test do
         "actions" => [
           %{
             "tool" => "final",
-            "answer" => "Looked: you're free.",
+            "answer" => "Looked: nothing new there.",
             "sources" => [],
             "next_steps" => []
           }
@@ -407,7 +407,7 @@ defmodule RisiMe.Agent.TurnS11Test do
     ])
 
     {_, :ok} = ask!(ctx, "Am I free?")
-    assert_receive {:risi_post, _, "Looked: you're free.", _}
+    assert_receive {:risi_post, _, "Looked: nothing new there.", _}
     assert length(llm_requests()) == 2
   end
 

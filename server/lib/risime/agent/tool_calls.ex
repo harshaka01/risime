@@ -253,6 +253,19 @@ defmodule RisiMe.Agent.ToolCalls do
 
   defp ts?(v), do: is_binary(v) and v =~ @ts
 
+  @calendar_sources ~w(phone_provider google_api)
+  @source_reasons [nil] ++
+                    ~w(not_connected no_permission reauth_needed no_play_services network
+                       timeout api_error no_calendars)
+
+  # P0 2026-10-09 (v1.29 §29.2 as aligned with root): what the phone read, per source.
+  defp valid_ok?("calendar_check", %{"blocks" => _, "sources" => s, "connected_sources" => c} = r)
+       when map_size(r) == 3 do
+    valid_ok?("calendar_check", Map.take(r, ["blocks"])) and
+      is_list(s) and length(s) <= 4 and Enum.all?(s, &valid_source?/1) and
+      is_list(c) and length(c) <= 4 and Enum.all?(c, &(&1 in @calendar_sources))
+  end
+
   defp valid_ok?("calendar_check", %{"blocks" => blocks} = r) when map_size(r) == 1 do
     is_list(blocks) and length(blocks) <= 200 and
       Enum.all?(blocks, fn
@@ -288,6 +301,25 @@ defmodule RisiMe.Agent.ToolCalls do
        do: is_boolean(rm) and why in [nil, "not_found"]
 
   defp valid_ok?(_tool, _result), do: false
+
+  defp valid_source?(
+         %{"source" => src, "calendars" => cals, "read_ok" => ok, "reason" => why} = s
+       )
+       when map_size(s) == 4 do
+    src in @calendar_sources and is_boolean(ok) and why in @source_reasons and is_list(cals) and
+      length(cals) <= 50 and Enum.all?(cals, &valid_source_calendar?/1)
+  end
+
+  defp valid_source?(_), do: false
+
+  # Names and account types only: never a title, attendee or event id.
+  defp valid_source_calendar?(%{"name" => n, "account_type" => t, "events" => e} = c)
+       when map_size(c) == 3,
+       do:
+         is_binary(n) and String.length(n) <= 100 and is_binary(t) and String.length(t) <= 100 and
+           is_integer(e) and e >= 0
+
+  defp valid_source_calendar?(_), do: false
 
   @doc "Deletes call rows older than a day (they hold no args; the 409 check needs them a while)."
   def prune(now \\ DateTime.utc_now()) do

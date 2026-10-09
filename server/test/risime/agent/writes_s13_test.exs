@@ -395,11 +395,161 @@ defmodule RisiMe.Agent.WritesS13Test do
       result!(ctx, d["tool_call_id"], %{"status" => "ok", "result" => %{"blocks" => [block]}})
 
     assert {_rid, :ok} = Task.await(task)
-    assert_receive {:risi_post, rc, "You're free on Tuesday at 2 pm.", a}
+    # P0 2026-10-09: an old phone doesn't say what it read, so "free" is never claimed.
+    assert_receive {:risi_post, rc, text, a}
+
+    assert text ==
+             "I couldn't read your Google Calendar on this phone (this version of the app " <>
+               "doesn't say which calendars it read; update RisiMe). Connect it in Settings → " <>
+               "Risi skills → Calendar."
+
     assert rc == ctx.rc
     assert a["sources"] == [Map.put(block, "type", "calendar")]
     assert_receive {:risi_post, og, "I've replied in your Risi chat.", _}
     assert og == ctx.og
+  end
+
+  describe "P0 2026-10-09 calendar honesty (a turn)" do
+    @google_api %{
+      "source" => "google_api",
+      "calendars" => [],
+      "read_ok" => false,
+      "reason" => "not_connected"
+    }
+
+    defp source(cals, ok, reason \\ nil),
+      do: %{
+        "source" => "phone_provider",
+        "calendars" => cals,
+        "read_ok" => ok,
+        "reason" => reason
+      }
+
+    # Runs "Am I free Tuesday 2pm?" with the phone answering `body`: {answer, risi, model bodies}.
+    defp check_turn(ctx, body) do
+      h = ctx.harsha
+      me = self()
+
+      task =
+        Task.async(fn ->
+          scripted_llm!()
+          send(me, {:llm_rec, Process.get(:risi_llm_rec)})
+          ask!(ctx.og, h.user, "Am I free Tuesday 2pm?", ctx.dev)
+        end)
+
+      d = wait_call(h.user.id)["data"]
+      {204, _} = result!(ctx, d["tool_call_id"], body)
+      assert {_rid, :ok} = Task.await(task)
+      assert_receive {:llm_rec, rec}
+      # A personal read answers in the Risi chat; a failed one where it was asked.
+      assert_receive {:risi_post, rc, text, a}
+      assert rc in [ctx.rc, ctx.og]
+      {text, a, Agent.get(rec, & &1) |> Enum.map(&Jason.encode!/1)}
+    end
+
+    test "a read with 0 events: free is allowed, the calendar is named, the model never sees it",
+         ctx do
+      cal = %{"name" => "Secret Project", "account_type" => "com.google", "events" => 0}
+
+      {text, a, bodies} =
+        check_turn(ctx, %{
+          "status" => "ok",
+          "result" => %{
+            "blocks" => [],
+            "sources" => [source([cal], true), @google_api],
+            "connected_sources" => ["phone_provider"]
+          }
+        })
+
+      assert text =~
+               ~r/^You're free on Tuesday at 2 pm\.\n\nI checked: Phone calendar — Secret Project \(Google\) 0 events \(Tue \d+ Oct, 00:00–23:59\)\.$/u
+
+      assert %{
+               "type" => "calendar_source",
+               "source" => "phone_provider",
+               "names" => ["Secret Project"],
+               "read_ok" => true,
+               "reason" => nil
+             } in a["sources"]
+
+      assert length(bodies) >= 2
+      refute Enum.any?(bodies, &String.contains?(&1, "Secret Project"))
+      assert Enum.any?(bodies, &String.contains?(&1, "read_ok"))
+    end
+
+    test "nothing read (no Google calendar): never clear, says why", ctx do
+      {text, a, _} =
+        check_turn(ctx, %{
+          "status" => "ok",
+          "result" => %{
+            "blocks" => [],
+            "sources" => [source([], false, "no_calendars"), @google_api],
+            "connected_sources" => []
+          }
+        })
+
+      assert text ==
+               "I couldn't read your Google Calendar on this phone (no calendars on this " <>
+                 "phone). Connect it in Settings → Risi skills → Calendar."
+
+      assert Enum.any?(a["sources"], &(&1["type"] == "calendar_source" and !&1["read_ok"]))
+    end
+
+    test "a read with busy time: a free claim is rewritten from the blocks", ctx do
+      cal = %{"name" => "Primary calendar", "account_type" => "com.google", "events" => 1}
+
+      busy = %{
+        "start" => "2026-10-13T08:30:00.000Z",
+        "end" => "2026-10-13T09:30:00.000Z",
+        "busy" => true,
+        "all_day" => false
+      }
+
+      {text, _a, _} =
+        check_turn(ctx, %{
+          "status" => "ok",
+          "result" => %{
+            "blocks" => [busy],
+            "sources" => [source([cal], true), @google_api],
+            "connected_sources" => ["phone_provider"]
+          }
+        })
+
+      assert text =~
+               "You're not free then: your calendar has 1 busy time (Tue 13 Oct, 14:00–15:00)."
+
+      assert text =~ "I checked: Phone calendar — Primary calendar (Google) 1 event"
+    end
+
+    test "no permission: never clear", ctx do
+      {text, _a, _} = check_turn(ctx, %{"status" => "no_permission"})
+
+      assert text ==
+               "I couldn't read your Google Calendar on this phone (calendar permission is " <>
+                 "off). Connect it in Settings → Risi skills → Calendar."
+    end
+
+    test "a result with a title in a source is refused", ctx do
+      {:ok, call} =
+        ToolCalls.start(%{
+          user: ctx.harsha.user.id,
+          device: ctx.dev,
+          tool: "calendar_check",
+          args: %{"from" => "x", "to" => "y"}
+        })
+
+      cal = %{"name" => "Work", "account_type" => "com.google", "events" => 0, "title" => "x"}
+
+      {422, _} =
+        result!(ctx, call.tool_call_id, %{
+          "status" => "ok",
+          "result" => %{
+            "blocks" => [],
+            "sources" => [source([cal], true)],
+            "connected_sources" => []
+          }
+        })
+    end
   end
 
   describe "TimePhrase (§25.5)" do
