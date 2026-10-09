@@ -205,19 +205,23 @@ defmodule RisiMeWeb.RisiRestS8Test do
   end
 
   describe "gates" do
-    test "a non-tabs device (or none) is refused; RISI off gives empty lists", ctx do
+    test "no X-Device-Id (or a non-tabs one) still answers with the caller's own data; RISI off gives empty lists",
+         ctx do
       old = old_device!(ctx.a)
-      assert {404, _} = api(:get, "/api/v1/risi/facts", ctx.a.token, nil, old)
-      assert {404, _} = api(:get, "/api/v1/risi/commitments", ctx.a.token, nil)
-      assert {403, _} = api(:delete, "/api/v1/risi/facts", ctx.a.token, nil, old)
+      assert {200, %{"facts" => []}} = api(:get, "/api/v1/risi/facts", ctx.a.token, nil)
+      assert {200, %{"facts" => []}} = api(:get, "/api/v1/risi/facts", ctx.a.token, nil, old)
 
-      assert {403, _} =
+      assert {200, %{"commitments" => []}} =
+               api(:get, "/api/v1/risi/commitments", ctx.a.token, nil)
+
+      assert {204, _} = api(:delete, "/api/v1/risi/facts", ctx.a.token, nil)
+
+      assert {404, _} =
                api(:delete, "/api/v1/risi/facts/#{Ecto.UUID.generate()}", ctx.a.token, nil)
 
       body = %{"call_ref" => TimeUUID.generate(), "rating" => "up", "reason" => nil}
-      assert {403, _} = api(:post, "/api/v1/risi/feedback", ctx.a.token, body, old)
+      assert {404, _} = api(:post, "/api/v1/risi/feedback", ctx.a.token, body, old)
 
-      # RISI is off in this test: nothing to show, nothing to fail on.
       assert {200, %{"facts" => []}} =
                api(:get, "/api/v1/risi/facts", ctx.a.token, nil, ctx.a_dev)
 
