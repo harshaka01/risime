@@ -47,6 +47,28 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## Harsha's real-phone feedback (2026-10-09 morning): answers and work started
+- **Model split so far (learning log):** 45 of 45 Risi calls on our own **risi-l1**
+  (Qwen3.6-35B-A3B-FP8): 15 ask, 22 commitment_extract, 4 summarise, 4 report. The commercial
+  fallback has never run (no provider configured).
+- **Today's Harsha–Shenika call was NOT transcribed:**
+  - no speech-to-text exists yet (Stage 3);
+  - §20 keeps agents out of calls ("never rung, never join, no room token");
+  - any summary mentioning the call came from Official chat text.
+  No P0.
+- **Started:**
+  - **android:**
+    - Lock chat removed from the in-chat ⋮;
+    - "Entire screen" share not black (FLAG_SECURE only on the app lock / Locked chats folder /
+      open locked chat), plus a pre-share warning;
+    - shared screen aspect-FIT, never cropped;
+    - device checks and screenshots.
+  - **root:** the contract for §27 on branch `contract/v127`:
+    - `made_by` on every Risi message;
+    - per-person discussion summaries in each person's Risi chat, with own-item confirms and
+      reminders/nudges for both parties;
+    - call transcription only from Official, with "Risi is listening" from the start.
+
 ## v0.2.0-nightly.42 (live 2026-10-09 ~06:30 UTC, not required): Risi hotfix from Harsha's screens
 - **What's in:**
   - the Risi system prompt (what it can do now, what's coming; never "the transcript does not
