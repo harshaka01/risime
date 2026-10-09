@@ -16,6 +16,15 @@ defmodule RisiMeWeb.RisiController do
 
   defp me(conn), do: conn.assigns.current_user.id
 
+  @doc "`POST /api/v1/risi/chat` (v1.25 §25.2): `201` new, `200` existing `{chat, group}`."
+  def create_chat(conn, _params) do
+    case RisiMe.RisiChat.create(me(conn), RisiMeWeb.MLSController.caller_device(conn)) do
+      {:ok, :created, reply} -> conn |> put_status(201) |> json(reply)
+      {:ok, :existing, reply} -> json(conn, reply)
+      error -> GroupController.error(conn, error)
+    end
+  end
+
   def feedback(conn, params) do
     with {:ok, call_ref, rating, reason} <- parse(params),
          :ok <- RateLimiter.hit_if_allowed(:risi_feedback, me(conn), @feedback_limit, @window),

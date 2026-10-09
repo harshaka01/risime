@@ -27,6 +27,16 @@ defmodule RisiMe.Groups.Policy do
        admin-only); such a commit may otherwise hold only the committer's own-user changes and no
        meta change.
 
+  v1.25 §25.2 (crypto C4, `risi_cases`; only when the input names `chat_kind: "risi"`, the base
+  epoch's `group_meta.chat_kind`):
+
+    6. the base meta is valid only with `tab: "official"`, `chat_id` equal to the group's own
+       conversation id (`:chat_id_is_own`), exactly one admin and exactly one agent;
+    7. a commit may not change `chat_kind`, the admins or the agents;
+    8. an added leaf must belong to the sole admin or the listed agent (never a second human).
+
+  `chat_kind` never changes after epoch 0 for any group (`meta.chat_kind_changed`).
+
   Optional inputs: `:tab`, `:conversation` (`"grp"` | `"dm"`), `:agent_users` (users whose
   leaves attest `kind: "agent"`; default `agents`), `:leaves` (every base-epoch leaf, for rule
   5), and in `meta`: `:tab` (the new value, nil = unchanged), `:chat_id_changed`, `:agents` (the
@@ -52,7 +62,8 @@ defmodule RisiMe.Groups.Policy do
     meta = c.meta
     new_admins = meta && Map.get(meta, :admins)
 
-    with :ok <- tab_rules(c, agents, agent_users, admin?) do
+    with :ok <- risi_rules(c, agents),
+         :ok <- tab_rules(c, agents, agent_users, admin?) do
       cond do
         not admin? and meta != nil ->
           {:error, :not_admin}
@@ -75,6 +86,36 @@ defmodule RisiMe.Groups.Policy do
   @doc "True if the commit touches leaves of a user other than the committer."
   def others?(%{committer: me, adds: adds, removes: removes}),
     do: Enum.any?(adds ++ removes, fn {u, _} -> u != me end)
+
+  # v1.25 §25.2 rules 6–8 (and chat_kind is immutable for every group).
+  defp risi_rules(c, agents) do
+    meta = c.meta || %{}
+    admins = Enum.to_list(c.admins)
+    new_admins = Map.get(meta, :admins)
+    new_agents = Map.get(meta, :agents)
+
+    cond do
+      Map.get(meta, :chat_kind_changed) == true ->
+        {:error, :bad_request}
+
+      Map.get(c, :chat_kind) != "risi" ->
+        :ok
+
+      Map.get(c, :tab) != "official" or Map.get(c, :chat_id_is_own, true) != true or
+        length(admins) != 1 or length(agents) != 1 ->
+        {:error, :bad_request}
+
+      (is_list(new_admins) and Enum.sort(new_admins) != Enum.sort(admins)) or
+          (is_list(new_agents) and Enum.sort(new_agents) != Enum.sort(agents)) ->
+        {:error, :bad_request}
+
+      Enum.any?(c.adds, fn {u, _} -> u not in admins and u not in agents end) ->
+        {:error, :bad_request}
+
+      true ->
+        :ok
+    end
+  end
 
   # §24.1 rules 1–4 (rule 5 is in member_ok?/3).
   defp tab_rules(%{tab: tab} = c, agents, agent_users, admin?) do

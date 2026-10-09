@@ -36,7 +36,8 @@ defmodule RisiMe.Agent.Secretary do
   def on_message(conv, %{message_id: id, sender_id: user, plaintext: pt}) do
     if RisiMe.Agent.official?(conv) do
       case Jason.decode(pt) do
-        {:ok, %{"type" => "text"}} -> schedule_extract(conv)
+        # v1.25 §25.2: a plain `text` in a Risi chat is never a request and never extracted.
+        {:ok, %{"type" => "text"}} -> unless risi_chat?(conv), do: schedule_extract(conv)
         {:ok, %{"type" => "risi_request"} = env} -> request(conv, id, user, env)
         {:ok, %{"type" => "risi_action"}} -> action(conv, id, user)
         _ -> :ok
@@ -50,6 +51,8 @@ defmodule RisiMe.Agent.Secretary do
       Logger.warning("Risi secretary skipped a message in #{conv}: #{inspect(e.__struct__)}")
       :ok
   end
+
+  defp risi_chat?(conv), do: RisiMe.Groups.Tabs.risi_chat?(conv)
 
   @doc "Enqueues the debounced extraction of `conv` (at most one pending job per conversation)."
   def schedule_extract(conv, delay_s \\ nil) do

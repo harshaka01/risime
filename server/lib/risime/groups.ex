@@ -606,7 +606,8 @@ defmodule RisiMe.Groups do
          %{"user_ids" => ids} when is_list(ids) and ids != [] <- params,
          {:ok, ids} <- cast_ids(ids) do
       locked_chat(id, fn tabs ->
-        with {:ok, g, m} <- visible_active(me, id),
+        with :ok <- not_risi_chat(me, id),
+             {:ok, g, m} <- visible_active(me, id),
              :ok <- not_dm_chat(g),
              :ok <- no_agents(g, ids),
              :ok <- require_admin(m),
@@ -706,7 +707,8 @@ defmodule RisiMe.Groups do
         leave(me, device_id, id)
       else
         locked_chat(id, fn tabs ->
-          with {:ok, g, m} <- visible_active(me, id),
+          with :ok <- not_risi_chat(me, id),
+               {:ok, g, m} <- visible_active(me, id),
                :ok <- not_dm_chat(g),
                :ok <- require_admin(m),
                :ok <- agent_target(g, target) do
@@ -791,6 +793,10 @@ defmodule RisiMe.Groups do
           m.state == "pending_remove" ->
             {:ok, nil}
 
+          # v1.25 §25.2: the owner's leave ends a Risi chat (also while `creating`).
+          risi_chat?(g) and m.state == "active" ->
+            RisiMe.RisiChat.leave(me, g)
+
           m.state != "active" or g.state != "active" ->
             {:error, :not_found}
 
@@ -814,8 +820,28 @@ defmodule RisiMe.Groups do
             {:ok, nil}
         end
       end)
-      |> ok_nil()
+      |> after_leave(id)
     end
+  end
+
+  defp after_leave({:ok, [_ | _] = events}, id) do
+    Messaging.publish_batch(events)
+    RisiMe.RisiChat.after_leave(id)
+    :ok
+  end
+
+  defp after_leave({:ok, []}, id) do
+    if RisiMe.Groups.Tabs.risi_chat?(id), do: RisiMe.RisiChat.after_leave(id)
+    :ok
+  end
+
+  defp after_leave(result, _id), do: ok_nil(result)
+
+  # v1.25 §25.2: member, role and invite calls on a Risi chat (for one of its members).
+  defp not_risi_chat(me, id) do
+    if RisiMe.Groups.Tabs.risi_chat?(id) and member(id, me) != nil,
+      do: {:error, :risi_chat},
+      else: :ok
   end
 
   # Removal is immediate on the server (§12.3): no more group events or sends.
@@ -852,7 +878,8 @@ defmodule RisiMe.Groups do
          {:ok, target} <- cast_uuid(target),
          %{"role" => role} when role in ["admin", "member"] <- params do
       locked_chat(id, fn tabs ->
-        with {:ok, g, m} <- visible_active(me, id),
+        with :ok <- not_risi_chat(me, id),
+             {:ok, g, m} <- visible_active(me, id),
              :ok <- not_dm_chat(g),
              :ok <- require_admin(m),
              %Member{state: "active"} = t <- member(id, target) || {:error, :not_found},

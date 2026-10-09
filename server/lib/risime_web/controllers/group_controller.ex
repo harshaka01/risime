@@ -92,6 +92,14 @@ defmodule RisiMeWeb.GroupController do
   def error(conn, {:error, :not_e2ee}), do: ApiError.send_error(conn, 409, :not_e2ee)
   def error(conn, {:error, :dm_chat}), do: ApiError.send_error(conn, 422, :dm_chat)
   def error(conn, {:error, :invalid_member}), do: ApiError.send_error(conn, 422, :invalid_member)
+  # v1.25 §25.8.
+  def error(conn, {:error, :risi_chat}), do: ApiError.send_error(conn, 422, :risi_chat)
+
+  def error(conn, {:error, :tool_call_expired}),
+    do: ApiError.send_error(conn, 409, :tool_call_expired)
+
+  def error(conn, {:error, :write_not_confirmed}),
+    do: ApiError.send_error(conn, 409, :write_not_confirmed)
 
   def error(conn, {:error, :agent_unavailable}),
     do: ApiError.send_error(conn, 503, :agent_unavailable)

@@ -58,7 +58,11 @@ defmodule RisiMeWeb.ApiError do
     invalid_member: "An agent can't be added this way",
     agent_unavailable: "Risi isn't available right now",
     official_off: "Official is turned off for this chat",
-    members_changed: "The chat's members changed; refresh the group and try again"
+    members_changed: "The chat's members changed; refresh the group and try again",
+    # v1.25 §25.8.
+    risi_chat: "Your Risi chat has no members or settings to change",
+    tool_call_expired: "This request from Risi has expired",
+    write_not_confirmed: "This change wasn't confirmed"
   }
 
   @doc """
