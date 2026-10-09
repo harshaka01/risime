@@ -166,6 +166,10 @@ defmodule RisiMe.Agent.OffersItems810Test do
 
     assert card["kind"] == "confirm" and card["tool"] == "calendar_add"
     assert card["origin"] == "offer" and card["item_id"] == c.id
+    # v1.28 §28.5: the offer card as in the example, key for key.
+    ex = RisiMe.TabsHelpers.example("envelope_risi_confirm_offer.json")["risi"]
+    assert Enum.sort(Map.keys(card)) == Enum.sort(Map.keys(ex))
+    assert card["turn_ref"] == nil and card["made_by"]["model"] == nil
     assert card["args"] == @interview and card["for"] == [ctx.h]
     assert card["buttons"] == ["add", "cancel"] and card["skill_id"] == "calendar"
     assert Map.has_key?(card, "calendar") and is_binary(card["request_id"])
@@ -375,6 +379,10 @@ defmodule RisiMe.Agent.OffersItems810Test do
     assert Offers.consider_all([v]) == 1
     assert [{rc, body, q}] = posts()
     assert rc == ctx.rc and q["kind"] == "item_clarify"
+    # v1.28 §28.6: item_clarify as in the example, key for key.
+    ex = RisiMe.TabsHelpers.example("envelope_risi_item_clarify.json")
+    assert Enum.sort(Map.keys(q)) == Enum.sort(Map.keys(ex["risi"]))
+    assert q["question"] == body and q["due_text"] == "soon"
 
     assert body ==
              "When is \"Send the photos\" due? You said \"soon\". Give me a day and time and I'll track it."

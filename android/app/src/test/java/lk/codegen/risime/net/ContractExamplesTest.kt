@@ -106,6 +106,52 @@ class ContractExamplesTest {
         "risi_commitments_reply_v127.json" to { s ->
             ProtocolJson.decodeFromString<RisiCommitmentsReply>(s).also { require(it.commitments.map { c -> c.role } == listOf("owner", "counterpart") && it.commitments[1].allDay == true && it.commitments[0].summaryId != null && it.commitments[0].source == "call") }
         },
+        // v1.28 (§28 the Risi action loop, proactive offers, My promises; §27.13 30-day summaries). Fields the
+        // app does not model yet (origin, totals, direction, ...) are checked on the raw JSON (clients ignore them).
+        "envelope_risi_confirm_calendar_add.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == "confirm" && it.tool == RisiToolCall.TOOL_CALENDAR_ADD && it.skillId == RisiSkillIds.CALENDAR && it.args!!["title"]!!.jsonPrimitive.content == "Interview with Shenika")
+                require(it.calendarHint() == RisiCalendarRef("Google Calendar", null) && it.buttons == listOf("add", "cancel") && it.turnRef != null)
+            }
+        },
+        "envelope_risi_confirm_offer.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == "confirm" && it.tool == RisiToolCall.TOOL_CALENDAR_ADD && it.calendarHint() == null && it.turnRef == null && it.itemId != null && it.madeBy!!.model == null)
+                require((ProtocolJson.parseToJsonElement(s).jsonObject["risi"]!!.jsonObject["origin"]!!.jsonPrimitive.content) == "offer")
+            }
+        },
+        "envelope_risi_action_confirm_write_edit.json" to { s ->
+            ProtocolJson.decodeFromString<RisiActionEnvelope>(s).also { require(it.action == RisiActions.CONFIRM_WRITE && it.edit!!["title"]!!.jsonPrimitive.content == "Interview with Shenika (HR)" && ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s)) }
+        },
+        "risi_tool_result_calendar_add_v128.json" to { s ->
+            ProtocolJson.decodeFromString<RisiToolResult>(s).also { require(ProtocolJson.decodeFromJsonElement(CalendarAddResult.serializer(), it.result!!).calendar == RisiCalendarRef("Google Calendar", null)) }
+        },
+        "risi_skills_patch_calendar.json" to { s ->
+            ProtocolJson.decodeFromString<RisiSkillsPatch>(s).also { require(it.changes.single().id == RisiSkillIds.CALENDAR && it.changes.single().calendar!!.name == "Google Calendar" && it.changes.single().state == null) }
+        },
+        "envelope_risi_item_clarify.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { e -> e.risi!!.also { require(it.kind == "item_clarify" && it.itemId != null && it.question == e.body && it.dueText == "soon" && it.buttons == listOf("new_date")) } }
+        },
+        "risi_commitments_reply_v128.json" to { s ->
+            ProtocolJson.decodeFromString<RisiCommitmentsReply>(s).also {
+                require(it.commitments.size == 3 && it.commitments[2].summaryId == null && it.commitments[2].allDay == false && it.commitments[2].due == null)
+                val raw = ProtocolJson.parseToJsonElement(s).jsonObject
+                require(raw["totals"]!!.jsonObject["promised_to_me"]!!.jsonPrimitive.content == "2")
+                require(raw["commitments"]!!.jsonArray.map { c -> c.jsonObject["direction"]!!.jsonPrimitive.content } == listOf("i_promised", "promised_to_me", "promised_to_me"))
+            }
+        },
+        "envelope_risi_digest_personal_v128.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == "digest" && it.scope == "personal" && it.items.size == 3 && it.items[2].due == null) }
+        },
+        "envelope_risi_request_period.json" to { s ->
+            ProtocolJson.decodeFromString<RisiRequestEnvelope>(s).also { require(it.action == "summarise" && it.scope!!["period"]!!.jsonPrimitive.content == "7d") }
+        },
+        "envelope_risi_summary_period.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == "summary" && it.period!!.scope == "7d" && it.days.size == 3 && it.days.all { d -> d.scope == "day" }) }
+        },
+        "risi_facts_reply_summaries.json" to { s ->
+            ProtocolJson.decodeFromString<RisiFactsReply>(s).also { require(it.facts.count { f -> f.kind == "summary" } == 2 && it.facts.last().scope == "week" && it.facts.last().period!!.from == "2026-09-28") }
+        },
         // v1.26 (§26 Risi skills): typed models in net/Protocol126.kt (and RisiMeta's / RisiToolCall's optional fields).
         "auth_config_v126.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiSkillsOn && it.risiToolsOn && it.tabsOn) } },
         "device_put_risi_skills.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_SKILLS in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) } },

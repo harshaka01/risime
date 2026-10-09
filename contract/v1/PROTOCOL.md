@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.27 (Release 0.3)
+# RisiMe Wire Protocol — v1.28 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -7405,17 +7405,290 @@ Everything here is optional and backward compatible.
   - `"days": [{"date", "to", "scope": "day" | "week", "summary_id"}]`, the stored summaries used,
     oldest first.
 
-  `body` names the period ("Summary of the last 7 days (3–9 Oct): …").
+  `body` names the period ("Summary of the last 7 days (2–9 Oct): …"; `7d` and `30d` reach back
+  7 × 24 h and 30 × 24 h from the request, `today` from 00:00 in the requester's zone).
 - **"Summaries" in `GET /api/v1/risi/facts`** (to `risi_tools` devices only):
   - items `{"fact_id" (= summary id), "kind": "summary", "text", "chat_id", "created_at", "scope",
     "period": {"from", "to"}}`;
   - `DELETE /api/v1/risi/facts/{id}` with a summary id deletes it **for the chat** (any active
     member);
   - `DELETE /api/v1/risi/facts` (everything about me) does not delete chat summaries.
-- **Examples:** `envelope_risi_request_period.json`, `envelope_risi_summary_period.json`,
-  `risi_facts_reply_summaries.json` (added together with their server and Android coverage).
+- **Examples (added in v1.28):** `envelope_risi_request_period.json` (`{"period": "7d"}`),
+  `envelope_risi_summary_period.json` (with `period` and `days`), `risi_facts_reply_summaries.json`
+  (a fact, a `day` and a `week` summary).
+
+## 28. The Risi action loop, proactive offers and My promises (v1.28)
+Folds proposal `2026-10-09-risi-action-loop.md` (the P0 action loop, server 2b448cc, android
+fee8d84, 9e4b43e, 08603a6; shipped in v0.2.0-nightly.45) and the server's items 8–10 (server
+6cc393a, 35a6b99: proactive offers, the My promises split, near-duplicate merge and vague items).
+It amends §25, §26 and §27 where stated (§28.9 lists every amendment). **Everything is optional
+and additive:** an app that ignores the new fields keeps working as in v1.27; no new capability,
+switch or error code.
+
+### 28.0 Principles
+- **One card, one tap.** A request to add an event or a reminder ends in the real `confirm` card
+  (the **action card**) as early as possible, never in a chain of text questions. Confirming is
+  only the card's [Add]; [Edit] corrects it without a new model turn; [Cancel] ends it.
+- **Risi remembers the conversation it is in.** A Risi-chat turn sees the recent Risi chat (both
+  sides), the asker's open promises and the pending draft (§28.1).
+- **Offers are asked, never run.** A proactive card (§28.5) is always a confirm card, even under
+  "Allowed" (§26.3), and is shown once per item and person.
+- **The digest is My promises.** The personal digest and `GET /api/v1/risi/commitments` are the same
+  query, so their items and `totals` always agree (§28.7).
+
+### 28.1 The turn's context in the Risi chat (server, normative)
+In the Risi chat (§25.2) a turn's context holds:
+- the **last 20 Risi-chat messages**: the asker's requests and card taps, and Risi's own posts.
+  Risi's posts are kept in the sealed 24-h buffer (§24.12) as `{"type": "risi_post", "kind", "body"}`,
+  never as a counted `text` (§27.2 does not count them; the Risi chat is never summarised);
+- the asker's **open promises** (the §28.7 query), each named by a turn-local ref `k<n>`; given to the
+  model in the Risi chat only (the §25.1 audience rule);
+- the **pending draft** (§28.2), if any.
+
+A tap on a next-step chip arrives as an ordinary `risi_request` and is read with this context.
+
+### 28.2 The pending draft (server, normative; not on the wire to apps)
+- The model's `final` (§25.1) may carry an optional **`draft`** (server and `scripts/fake-llm
+  --script` only):
+  ```
+  "draft": {"kind": "event" | "reminder", "new"?: bool, "title"?: str, "date"?: "YYYY-MM-DD" | phrase,
+            "time"?: "HH:MM" | phrase, "end_time"?: "HH:MM", "duration_min"?: 5–1440,
+            "all_day"?: bool, "item"?: "k<n>"} | null
+  ```
+  The args of a `calendar_add`/`set_reminder` step patch the draft in the same way. Free text is
+  never parsed for intent (decision 066); phrases are resolved once, at the request's `server_ts`
+  in the asker's zone (`TimePhrase` reads "Monday 12 Oct 2pm", "12 Oct", "October 12th", with an
+  optional year).
+- One draft per (user, conversation), **sealed with `RISI_DATA_KEY`** (`risi_action_drafts`, AAD
+  `risi_action_drafts:<user>:<conversation>`), with the counters `asks` and `stalls` and the
+  `write_id` of the card last proposed from it. It lives **24 h**, and is deleted when its write is
+  done or cancelled, and with the conversation's Risi data. `new: true` starts a fresh draft.
+- **Defaults, never asked:** the asker's zone (`PATCH /me` `tz`, else `RISI_DEFAULT_TZ`), a duration
+  of **1 hour**, and the title of the promise named by `item`.
+- **The server posts the card itself** as soon as the draft has a title and a time (or a day for an
+  all-day event): the §25.4 `confirm` of `calendar_add` or `set_reminder`, authorised again
+  (`authorize/3`, §25.1) and recorded as a `risi_turn_steps` row. The model never has to phrase it.
+
+### 28.3 Questions, next steps and the loop guard (server, normative)
+- **At most one question per turn,** and only for a missing title, day or time. A question about a
+  slot the draft already has is dropped and the card is shown.
+- **Loop guard:** after **2 questions** or **2 turns without progress** on the same draft, the card
+  is shown prefilled: a missing time gives an all-day event; nothing at all gives tomorrow 09:00.
+  The asker can [Edit] or [Cancel] it.
+- **`answer.next_steps`** (§25.4) never holds a question or a confirming phrase ("Confirm…",
+  "Yes…", "Add it", "Shall I…?"): the server drops them. Confirming is only the card's [Add].
+- **A skill that is off, or a phone without its permission:** the turn ends in `skill_needed`
+  (§26.5), built by the server when the model did not choose `need_skill`, never in a text loop.
+- When a card is posted the turn's text reply is short ("Tap Add on the card to put it in your
+  calendar, or Cancel.").
+
+### 28.4 The action card (`calendar_add`) on the wire
+**`confirm.calendar`** (`calendar_add` cards only; `envelope_risi_confirm_calendar_add.json`):
+`"calendar": {"name": str, "account": str | null} | null`. The calendar the asker's phone last
+reported (below); `null` until it has reported one, so the phone asks on first use. It is a hint for
+the card and the phone's choice, **not** part of `args` (the §26.5 exact `args` check is unchanged).
+A v1.28 server always sends it on a `calendar_add` card (the object or `null`).
+
+**The phone reports its calendar** in either of two ways, and the server remembers the latest
+(sealed with `RISI_DATA_KEY`, `risi_calendar_choices`, one per user):
+- **`calendar_add` result** (§25.3; `risi_tool_result_calendar_add_v128.json`):
+  `{"event_id": str, "calendar"?: {"name", "account"} | null}`. The 16-KiB limit and the strict
+  schema otherwise stand (any other key is still `422`).
+- **Calendar skill `PATCH`** (§26.2; `risi_skills_patch_calendar.json`): a change entry with
+  `"id": "calendar"` may carry `"calendar": {"name": 1–100 chars, "account": null | ≤ 200 chars} |
+  null` (`null` forgets it). It counts as a change by itself (`{"id", "calendar"}` is valid). On
+  any other skill id → `422 bad_request`.
+
+**[Edit]: `confirm_write` with `edit`** (`envelope_risi_action_confirm_write_edit.json`): for a
+`calendar_add` card only, `risi_action` `confirm_write` may carry
+`"edit": {"title"?, "start"?, "end"?, "all_day"?}` (the `calendar_add` wire shapes) instead of
+`null`. The server checks it (title 1–200 characters, `start < end` after the merge), re-seals the
+write's args and sends the tool call with the edited args, with no model call. A malformed edit, or
+an edit on another tool, runs **nothing**.
+- **Phone rule (amends §25.3, §26.5):** for a `calendar_add` call the args (minus `write_id`) must
+  equal the card's `args`, **or** the card's `args` merged with the `edit` that a leaf of the phone's
+  own user sent in the `confirm_write` for that `write_id`.
+
+**The success line:** the `skill_done` (§26.4) of a `calendar_add`, or the v1.25 `answer`, says
+**"Added to your Google Calendar: Interview with Shenika · Mon 12 Oct, 2–3 PM"**, naming the
+calendar from the result's `calendar.name`; without it, "Added to your calendar: …".
+
+**The phone (android, normative):**
+- The action card shows the title, the date, start–end (or "all day") and the calendar, with
+  **[Add] [Edit] [Cancel]**. [Add] sends `confirm_write` at once (no extra turn); on first use with
+  no usable hint it opens the calendar picker first.
+- **Which calendar:** the `confirm.calendar` hint when it matches a writable calendar on this phone;
+  else the remembered pick; else a synced Google calendar (`com.google`, visible, access ≥
+  contributor); a local calendar only by the user's explicit pick. A pick, or a change in Settings →
+  Risi skills → Calendar, is reported with the `PATCH` above.
+- The phone writes the event, reads it back to verify it, and answers with `calendar` in the result.
+  A failed add releases its `write_id` so [Retry] works; the card states the exact failure (no
+  permission, no writable Google calendar, insert failed, verify mismatch).
+- **After [Add]:** the card becomes **"✓ Added · Mon 12 Oct, 2–3 PM"**, and the success line below it
+  carries **[Open]** (the event in the calendar app) and **[Undo]** (the §26.4 undo, a
+  `calendar_remove` of only the event this phone added). Without a `skill_done` (a v1.25 server) the
+  card itself shows the full success line with [Open] [Undo]. The answer's `calendar_add` step next
+  to its card is not shown again as "Added".
+- **Next-step chips only fill the composer** (§25.4); they never send. The phone also hides chips
+  that are questions or confirming phrases, whatever the server sends.
+- `skill_needed` for a skill that was never on shows "Turn on Calendar" (§26.5).
+
+### 28.5 Proactive offers: `confirm.origin` and `confirm.item_id`
+When Risi finds an item with a **concrete future time** (a ledger item or a v1.24 commitment with a
+`due` that is not all-day and not past), each person it involves gets, **in their own Risi chat**:
+- **"Add to calendar?"**: the action card of §28.4 (`tool: "calendar_add"`, title = the item's text,
+  start = `due`, 1 hour, exact `args`, the `calendar` hint, `buttons: ["add", "cancel"]`;
+  `envelope_risi_confirm_offer.json`);
+- **"Remind me?"**: a second `confirm` with `tool: "set_reminder"` for 15 min before `due`, only when
+  the Reminders skill is `ask` or `allowed` and that time is more than 1 min ahead.
+
+Both carry two new fields:
+```
+"origin": "offer", "item_id": uuid   (the commitment / ledger item offered)
+```
+- For such a card `request_id` is a fresh uuid that names **no request**, `turn_ref` is `null`, no
+  `risi_progress` is sent, and `expires_at` is the event's start (at least 1 h, at most 14 days from
+  posting) instead of 24 h. `made_by.model` is `null`.
+- [Add], [Edit] and [Cancel] work exactly as on §28.4 (`confirm_write` with or without `edit`,
+  `cancel_write`). Suggested header: "Add to calendar?" / "Remind me?". The phone shows no progress
+  bubble for it.
+- **Gates:** `RISI_SKILLS=on`, the user has a `risi_skills` device and an active Risi chat, the
+  Calendar skill (the Reminders skill for the reminder card) is `ask` or `allowed`, and the user is
+  still an active member of the item's conversation. A proactive card is **always asked**, never run
+  under "Allowed".
+- **Who:** the owner; counterparts too once a ledger item is tracked (`confirmed`/`edited`, §27.5:
+  they hear of it only after the owner's ✓), or at once for a v1.24 card (posted to all of Official).
+- **When:** on extraction (a ledger summary is published, or a v1.24 proposal), on the owner's ✓ or
+  ✎, and after a merge (§28.6) gave the item a `due`. A one-shot backfill offers existing future
+  items (`RisiMe.Release.risi_offers_backfill/1`, run on deploy, idempotent).
+- **Once:** at most **one card per (item, user, kind)** (`calendar`, `reminder`, `clarify`), ever,
+  whatever happens to it (Add, Cancel, expiry). `risi_item_offers(item_id, user_id, kind, state,
+  write_id)` holds ids and states only, no text, and is deleted with the item. A card that could not
+  be posted releases its claim.
+- §26.7 `calendar_offer` is not used for these (it is Official-only).
+
+### 28.6 Near duplicates and vague items (server, normative)
+**Dedupe.** Before a ledger item or a v1.24 commitment is stored, Risi looks for a **live** one
+(`proposed`, `confirmed` or `edited`, created in the last **30 days**) that is the same item, when all
+of these hold:
+- the same owner;
+- counterparts that agree: equal, or one set contains the other;
+- overlapping text: of the content words (lower case, without stop words and day/time words),
+  Jaccard ≥ **0.5**, or at least **2** shared words covering ≥ **60 %** of the shorter text;
+- dues in the same window: both missing, one missing, or at most **24 h** apart.
+
+The new item is then **merged into the live one**: counterparts and source messages are unioned, a
+missing `due` is filled (with its phrase), `needs_clarification` is re-evaluated, a tracked item's
+reminders are rescheduled (§27.6) and the item is considered for offers again (§28.5). No second row,
+card, promise or reminder is made, and a §27.3 summary whose items were all repeats is not posted.
+
+**Vague items.** An item with no `due`, or whose `due_text` is vague ("sometime", "soon", "later",
+"asap", "at some point", "eventually", "one day", "in the next few days", "no rush", "tbd", …) gets
+`needs_clarification: true` (`risi_commitments.needs_clarification`), **no calendar offer**, and
+**one** `item_clarify` card to its owner (once per item, §28.5).
+
+**`item_clarify`** (in the owner's Risi chat; `envelope_risi_item_clarify.json`):
+```
+risi: {"v": 1, "kind": "item_clarify", "item_id": uuid, "summary_id": uuid | null,
+       "text": str, "due_text": str | null, "question": str,
+       "buttons": ["new_date"] | [], "call_ref": null, "made_by" (model null), "notify": [owner]}
+```
+- `body` = `question` ("When is \"Send the photos\" due? You said \"soon\". Give me a day and time
+  and I'll track it."), readable on any app.
+- `buttons: ["new_date"]` for a ledger item: [New date] opens the date/time picker and sends the
+  §27.5 `risi_action` `item_edit` (`target` = `item_id`, `edit: {"due": ts, "all_day": bool}`) in
+  the owner's Risi chat (amends §27.5: any of `text`, `due`, `all_day` may be left out of an
+  `item_edit`, meaning unchanged). That clears `needs_clarification` and brings the calendar
+  offer. `buttons: []` (a v1.24 item, `summary_id: null`): the question only.
+
+### 28.7 My promises: `GET /api/v1/risi/commitments` (amends §24.11, §27.9)
+Every item gains (`risi_commitments_reply_v128.json`):
+
+| Field | Value |
+|---|---|
+| `direction` | `"i_promised"` (the caller is the owner), `"promised_to_me"` (a counterpart), `"others"` (neither; reserved, the query returns none today) |
+| `owner_name` | `"You"` for the caller, else the owner's display name (`"Member"` if unknown) |
+| `status` | `"needs_clarification"` for a live item with `needs_clarification`, else `item_state` (ledger) or `state` |
+| `needs_clarification` | bool (§28.6) |
+| `all_day` | bool, now on **every** item (v1.27: ledger items only) |
+| `source_conversation_id` | the Official conversation the item came from |
+| `source_message_id` | the first source message (TimeUUID), or `null` |
+| `source_message_ids` | all source messages (after merges, §28.6) |
+
+and the reply gains **`"totals": {"i_promised": int, "promised_to_me": int, "others": int}`** (all
+three keys always present). Ledger items keep `summary_id`, `source` and `role` (§27.9).
+
+**The query** (normative, also for §28.8): items where the caller is the owner or a counterpart, in
+conversations the caller is still an active member of; `state=open` = `confirmed`/`edited`, not done;
+a ledger item still `proposed` is nobody's; ordered by `due` (nulls last), then creation.
+
+**The phone (android):** My promises is split by `direction` ("I promised" / "Promised to me"), with
+`totals` as the header counts; each item is labelled with `owner_name` and shows `status`
+(`needs_clarification` → "needs a date"); a tap opens `source_conversation_id` at
+`source_message_id` (when not null).
+
+### 28.8 The personal digest = My promises (amends §27.6)
+The personal 09:00 digest lists **exactly** the open items of `GET /risi/commitments` (the §28.7
+query), including legacy v1.24 cards, items without a `due` (shown "no date") and items due later
+than 7 days. It is still posted at most once a day and only when there is at least one item. This
+replaces "due within 7 days or overdue". The digest gains (`envelope_risi_digest_personal_v128.json`):
+- per item, **`direction`** (as §28.7);
+- **`totals`**, equal to the API's `totals` by construction.
+
+The digest card may show `totals` and group its items by `direction`.
+
+### 28.9 Amendments, operations and examples
+- **§25.1:** the `final` `draft` (§28.2); the Risi chat's context (§28.1); the server-built card and
+  `skill_needed` (§28.2, §28.3).
+- **§25.3:** the `calendar_add` result's `calendar`; the phone's args rule with `edit` (§28.4).
+- **§25.4:** `confirm.calendar`, `confirm.origin`, `confirm.item_id`; `confirm_write.edit`;
+  `next_steps` never hold questions or confirming phrases, and chips only fill the composer.
+- **§26.2:** the Calendar skill `PATCH` `calendar`. **§26.3:** a proactive card is never run under
+  "Allowed". **§26.4:** the calendar success line.
+- **§27.2:** the quiet-rule thresholds are read from the environment (ops and tests only, no wire
+  change): `RISI_QUIET_S` (600), `RISI_QUIET_MIN_MSGS` (6), `RISI_QUIET_MIN_PEOPLE` (2),
+  `RISI_QUIET_SPACING_S` (1800), `RISI_QUIET_PER_DAY` (8); a value that is not a positive integer is
+  ignored.
+- **§27.5:** `item_edit.edit` fields may be left out (unchanged).
+- **§27.3:** a summary whose items were all merged into live ones (§28.6) is not posted.
+- **§27.6:** the digest of §28.8. **§27.9:** the My promises fields of §28.7.
+- **Storage (Postgres, additive):** `risi_action_drafts`, `risi_calendar_choices` (both sealed with
+  `RISI_DATA_KEY`), `risi_item_offers` (ids and states only), `risi_commitments.needs_clarification`.
+  None of them reaches the learning log.
+- **Examples (v1.28):** `envelope_risi_confirm_calendar_add.json`, `envelope_risi_confirm_offer.json`,
+  `envelope_risi_action_confirm_write_edit.json`, `risi_tool_result_calendar_add_v128.json`,
+  `risi_skills_patch_calendar.json`, `envelope_risi_item_clarify.json`,
+  `risi_commitments_reply_v128.json`, `envelope_risi_digest_personal_v128.json`; and the §27.13
+  examples `envelope_risi_request_period.json`, `envelope_risi_summary_period.json`,
+  `risi_facts_reply_summaries.json`.
+- **Gate:** server tests compare the real My promises reply, digest, offer card and `item_clarify`
+  against these examples key for key; Android decodes every example. Harsha's P0 replay ("add my
+  interview with Shenika on Monday 12 Oct at 2pm to my calendar") gives one card in the first turn,
+  one [Add], the event in the Google calendar and the success line with [Open] [Undo]
+  (`scripts/ui-entry-test --calendar`).
 
 ## Changelog
+- **v1.28** (2026-10-09): the Risi action loop, proactive offers and My promises (§28; proposal
+  `2026-10-09-risi-action-loop.md`, server 2b448cc, 6cc393a, 35a6b99; android fee8d84..08603a6):
+  - the Risi chat's turn context (last 20 Risi-chat messages, Risi's posts buffered as `risi_post`,
+    the asker's open promises as `k<n>`, the sealed 24-h pending draft) and the model's
+    `final.draft`; the server posts the real `calendar_add`/`set_reminder` card itself; at most
+    one question per turn, a loop guard (2 questions or 2 stalled turns → a prefilled card),
+    `next_steps` without questions or confirming phrases, server-built `skill_needed`;
+  - the action card [Add] [Edit] [Cancel]: `confirm.calendar` (the phone's last calendar), the
+    `calendar_add` result `calendar` and the Calendar skill `PATCH` `calendar`, `confirm_write`
+    `edit` (the phone accepts the card's args merged with its own user's edit), the success line
+    "Added to your Google Calendar: … · Mon 12 Oct, 2–3 PM" with [Open] [Undo]; chips only fill the
+    composer;
+  - proactive offers: `confirm.origin: "offer"` and `confirm.item_id` (no request, `turn_ref` null,
+    expiring at the event), once per item, person and kind, always asked;
+  - near-duplicate merge and vague items: `needs_clarification` and the kind `item_clarify`
+    ([New date] = `item_edit`);
+  - My promises: `direction`, `owner_name`, `status`, `needs_clarification`, `all_day` on every
+    item, `source_conversation_id`, `source_message_id(s)` and the reply's `totals`; the personal
+    digest lists exactly My promises, with item `direction` and the same `totals`;
+  - the §27.2 quiet-rule thresholds from `RISI_QUIET_*`; the §27.13 examples. Additive; no new
+    capability, switch or error code.
 - **v1.27** (2026-10-09): model transparency, the Commitment Ledger follow-ups and call
   transcription (§27, decision 070; proposal `2026-10-09-ledger-followups-transcription.md`,
   requirements by Harsha):

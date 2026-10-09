@@ -1,5 +1,8 @@
 # Proposal 2026-10-09: the Risi action loop (P0, server side)
 
+**Status: FOLDED into PROTOCOL.md v1.28, §28** (root, 2026-10-09). PROTOCOL.md is normative; this
+file is kept for history.
+
 From the server role, for root to fold into PROTOCOL.md (§25/§26/§27). Every field below is
 **optional and additive**: an app that ignores it keeps working as in v1.27. The server already
 implements all of it (commit `fix(server): P0 Risi action loop …`).

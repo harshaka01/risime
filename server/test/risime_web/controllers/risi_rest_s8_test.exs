@@ -123,17 +123,17 @@ defmodule RisiMeWeb.RisiRestS8Test do
       commitment!(og, ctx.b.user.id, [ctx.c.user.id], "confirmed", "Not mine")
       commitment!(other, ctx.a.user.id, [ctx.c.user.id], "confirmed", "Chat I am not in")
 
-      {200, %{"commitments" => cs}} =
+      {200, %{"commitments" => cs} = reply} =
         api(:get, "/api/v1/risi/commitments?state=open", ctx.a.token, nil, ctx.a_dev)
 
       assert Enum.sort(Enum.map(cs, & &1["commitment_id"])) == Enum.sort([own.id, cp.id])
-      ex = RisiMe.TabsHelpers.example("risi_commitments_reply.json")["commitments"]
-      # Item 9 (2026-10-09) adds optional fields (server status "Contract asks").
-      item9 =
-        ~w(all_day direction owner_name status needs_clarification source_conversation_id
-           source_message_id source_message_ids)
+      # v1.28 §28.7: a v1.24 item as in the v1.28 example (its last item), key for key.
+      ex = RisiMe.TabsHelpers.example("risi_commitments_reply_v128.json")
+      legacy = ex["commitments"] |> Enum.reject(&Map.has_key?(&1, "summary_id")) |> hd()
+      assert keys(reply) == keys(ex)
+      assert keys(reply["totals"]) == keys(ex["totals"])
 
-      for c <- cs, do: assert(keys(c) == Enum.sort(keys(hd(ex)) ++ item9))
+      for c <- cs, do: assert(keys(c) == keys(legacy))
 
       mine = Enum.find(cs, &(&1["commitment_id"] == own.id))
 

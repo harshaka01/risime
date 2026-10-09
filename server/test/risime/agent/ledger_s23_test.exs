@@ -231,17 +231,12 @@ defmodule RisiMe.Agent.LedgerS23Test do
 
     {:ok, list} = Rest.commitments(ctx.harsha.id, :open)
     wire = list |> Jason.encode!() |> Jason.decode!()
-    ex = RisiMe.TabsHelpers.example("risi_commitments_reply_v127.json")["commitments"]
+    # v1.28 §28.7: the ledger items of the v1.28 example, key for key.
+    ex = RisiMe.TabsHelpers.example("risi_commitments_reply_v128.json")["commitments"]
     assert length(wire) == 2
 
     for c <- wire do
-      # Item 9 (2026-10-09) adds optional fields (server status "Contract asks").
-      assert Enum.sort(Map.keys(c)) ==
-               Enum.sort(
-                 Map.keys(hd(ex)) ++
-                   ~w(direction owner_name status needs_clarification source_conversation_id
-                      source_message_id source_message_ids)
-               )
+      assert Enum.sort(Map.keys(c)) == Enum.sort(Map.keys(hd(ex)))
 
       assert c["source"] == "chat" and is_binary(c["summary_id"])
     end

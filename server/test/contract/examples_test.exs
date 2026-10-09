@@ -275,6 +275,22 @@ defmodule RisiMe.ContractExamplesTest do
                     risi_commitments_reply_v127.json
                     signal_call_risi.json)
 
+  # v1.28 (the Risi action loop, proactive offers, My promises, §28; plus the §27.13 examples):
+  # checked in the "v1.28" describe below by structure; the server's real output against them in
+  # test/risime/agent/{ledger_s23,ledger_s24,offers_items_8_10}_test.exs and
+  # test/risime_web/controllers/risi_rest_s8_test.exs.
+  @checked_v1_28 ~w(envelope_risi_action_confirm_write_edit.json
+                    envelope_risi_confirm_calendar_add.json
+                    envelope_risi_confirm_offer.json
+                    envelope_risi_digest_personal_v128.json
+                    envelope_risi_item_clarify.json
+                    envelope_risi_request_period.json
+                    envelope_risi_summary_period.json
+                    risi_commitments_reply_v128.json
+                    risi_facts_reply_summaries.json
+                    risi_skills_patch_calendar.json
+                    risi_tool_result_calendar_add_v128.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -333,7 +349,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_24 ++
         @checked_v1_25 ++
         @checked_v1_26 ++
-        @checked_v1_27
+        @checked_v1_27 ++
+        @checked_v1_28
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -4926,6 +4943,147 @@ defmodule RisiMe.ContractExamplesTest do
       assert v["canSubscribe"] == true and v["canPublishData"] == false
       assert v["hidden"] == false and v["recorder"] == false
       assert keys(claims) == keys(example("livekit_token_claims.json"))
+    end
+  end
+
+  describe "v1.28" do
+    @dir28 ~w(i_promised promised_to_me others)
+
+    defp calendar_ref28?(nil), do: true
+
+    defp calendar_ref28?(c) do
+      keys(c) == ~w(account name) and String.length(c["name"]) in 1..100 and
+        (c["account"] == nil or is_binary(c["account"]))
+    end
+
+    test "the action card and the offer card (§28.4, §28.5)" do
+      card = example("envelope_risi_confirm_calendar_add.json")["risi"]
+      offer = example("envelope_risi_confirm_offer.json")["risi"]
+      v126 = example("envelope_risi_confirm_set_alarm.json")["risi"]
+
+      for r <- [card, offer] do
+        assert r["kind"] == "confirm" and r["tool"] == "calendar_add"
+        assert r["skill_id"] == "calendar"
+        assert Map.has_key?(r, "calendar") and calendar_ref28?(r["calendar"])
+        assert keys(r["args"]) == ~w(all_day end start title) and r["buttons"] == ~w(add cancel)
+        assert r["when"]["start"] == r["args"]["start"] and r["text"] == r["args"]["title"]
+        made_by27_ok?(r["made_by"], r["call_ref"] != nil)
+      end
+
+      # Additive over the v1.26 card: `calendar` (and `made_by`); the offer adds origin, item_id.
+      assert keys(card) -- ~w(calendar made_by) == keys(v126)
+      assert keys(offer) -- ~w(origin item_id) == keys(card)
+      assert offer["origin"] == "offer" and offer["item_id"] =~ @uuid
+      assert offer["turn_ref"] == nil and offer["made_by"]["model"] == nil
+      assert offer["expires_at"] == offer["args"]["start"]
+    end
+
+    test "confirm_write edit, the calendar_add result and the Calendar skill PATCH (§28.4)" do
+      e = example("envelope_risi_action_confirm_write_edit.json")
+      assert e["action"] == "confirm_write" and e["target"] =~ @uuid
+      assert keys(e) == keys(example("envelope_risi_action_confirm_write.json"))
+      assert keys(e["edit"]) -- ~w(all_day end start title) == []
+      assert ts27?(e["edit"]["start"]) and ts27?(e["edit"]["end"])
+      assert e["edit"]["start"] < e["edit"]["end"]
+
+      r = example("risi_tool_result_calendar_add_v128.json")
+      assert r["status"] == "ok" and keys(r["result"]) == ~w(calendar event_id)
+      assert calendar_ref28?(r["result"]["calendar"])
+
+      %{"changes" => [c]} = example("risi_skills_patch_calendar.json")
+      assert c["id"] == "calendar" and keys(c) == ~w(calendar id)
+      assert calendar_ref28?(c["calendar"])
+    end
+
+    test "item_clarify (§28.6)" do
+      e = example("envelope_risi_item_clarify.json")
+      r = e["risi"]
+
+      assert keys(r) ==
+               ~w(buttons call_ref due_text item_id kind made_by notify question summary_id text v)
+
+      assert r["kind"] == "item_clarify" and r["item_id"] =~ @uuid and e["body"] == r["question"]
+      assert r["buttons"] in [["new_date"], []] and length(r["notify"]) == 1
+      made_by27_ok?(r["made_by"], false)
+    end
+
+    test "My promises and the personal digest (§28.7, §28.8)" do
+      ex = example("risi_commitments_reply_v128.json")
+      cs = ex["commitments"]
+      v127 = example("risi_commitments_reply_v127.json")["commitments"]
+      [v124] = example("risi_commitments_reply.json")["commitments"]
+
+      new =
+        ~w(all_day direction needs_clarification owner_name source_conversation_id
+           source_message_id source_message_ids status)
+
+      for c <- cs do
+        assert c["direction"] in @dir28 and is_boolean(c["needs_clarification"])
+        assert is_boolean(c["all_day"]) and c["source_conversation_id"] =~ ~r/^grp:/
+        assert c["source_message_id"] == List.first(c["source_message_ids"])
+        assert Enum.all?(c["source_message_ids"], &(&1 =~ @timeuuid))
+        assert c["direction"] == "i_promised" == (c["owner_name"] == "You")
+
+        assert c["status"] ==
+                 if(c["needs_clarification"], do: "needs_clarification", else: c["state"])
+
+        if Map.has_key?(c, "summary_id"),
+          do: assert(keys(c) -- new == keys(hd(v127)) -- ["all_day"]),
+          else: assert(keys(c) -- new == keys(v124))
+      end
+
+      assert keys(ex) == ~w(commitments totals) and keys(ex["totals"]) == Enum.sort(@dir28)
+
+      assert ex["totals"] ==
+               Map.merge(
+                 Map.new(@dir28, &{&1, 0}),
+                 Enum.frequencies_by(cs, & &1["direction"])
+               )
+
+      d = example("envelope_risi_digest_personal_v128.json")["risi"]
+
+      assert keys(d) ==
+               Enum.sort(
+                 keys(example("envelope_risi_digest_personal.json")["risi"]) ++ ["totals"]
+               )
+
+      assert d["totals"] == ex["totals"]
+      assert Enum.map(d["items"], & &1["commitment_id"]) == Enum.map(cs, & &1["commitment_id"])
+
+      for i <- d["items"] do
+        assert keys(i) == ~w(commitment_id direction due owner state text)
+        assert i["direction"] in @dir28
+      end
+    end
+
+    test "30-day summaries (§27.13)" do
+      req = example("envelope_risi_request_period.json")
+      assert req["action"] == "summarise" and req["scope"] == %{"period" => "7d"}
+      assert keys(req) == keys(example("envelope_risi_request.json"))
+
+      e = example("envelope_risi_summary_period.json")
+      r = e["risi"]
+      assert r["kind"] == "summary" and e["body"] =~ ~r/^Summary of the last 7 days \(/
+      v124 = example("envelope_risi_summary.json")["risi"]
+      assert keys(r) -- ~w(days made_by period) == keys(v124)
+      assert keys(r["period"]) == ~w(from scope to)
+      assert r["period"]["scope"] in ~w(today 7d 30d range)
+      assert ts27?(r["period"]["from"]) and ts27?(r["period"]["to"])
+      made_by27_ok?(r["made_by"], true)
+
+      for d <- r["days"] do
+        assert keys(d) == ~w(date scope summary_id to) and d["scope"] in ~w(day week)
+        assert d["date"] =~ ~r/^\d{4}-\d\d-\d\d$/ and d["summary_id"] =~ @uuid
+      end
+
+      [plain | sums] = example("risi_facts_reply_summaries.json")["facts"]
+      assert keys(plain) == keys(hd(example("risi_facts_reply_v125.json")["facts"]))
+
+      for f <- sums do
+        assert f["kind"] == "summary" and f["scope"] in ~w(day week)
+        assert keys(f) == Enum.sort(keys(plain) ++ ~w(period scope))
+        assert keys(f["period"]) == ~w(from to)
+      end
     end
   end
 end
