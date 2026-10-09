@@ -44,7 +44,12 @@ fun RisiChipRow(active: Boolean, onToggle: (Boolean) -> Unit) {
  * other case it is an ordinary message, whatever it says ("free text is never parsed for intent").
  * @return true when the chip was used (the caller clears it).
  */
-fun sendFromComposer(risi: RisiHost?, chip: Boolean, text: String, plain: (String) -> Unit): Boolean {
+fun sendFromComposer(risi: RisiHost?, chip: Boolean, text: String, plain: (String) -> Unit, risiChat: Boolean = false): Boolean {
+    // §25.2: in the Risi chat every message is a `risi_request` `ask`, never plain text.
+    if (risiChat) {
+        risi?.ask(text)
+        return false
+    }
     if (risi != null && chip) {
         risi.ask(text)
         return true

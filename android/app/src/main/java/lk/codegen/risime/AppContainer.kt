@@ -278,6 +278,20 @@ class AppContainer(
         if (before != cfg.tabsOn || risiBefore != cfg.risiToolsOn) refreshCapabilities()
     }
 
+    /** §25.2 the Risi chat's first open (only on a `risi_tools` device). */
+    private val risiChatOpener by lazy {
+        lk.codegen.risime.data.tabs.RisiChatOpener(
+            enabled = { risiTools.on.value && chatTabs.uiOn.value },
+            create = { api.createRisiChat(sessionStore.deviceId()) },
+            applyGroup = { g -> sessionStore.current()?.user?.id?.let { me -> dbTx.run { groupStore.applyServerGroup(g, me) } } },
+            hasMlsGroup = { conv -> mlsEngine?.let { e -> dbTx.run { e.group(conv) } } != null },
+            queueEpoch0 = { conv -> groupStore.queueLocal(conv, lk.codegen.risime.data.groups.GroupOpType.CREATE_RISI_CHAT) },
+            log = { Log.i("RisiMe", it) },
+        )
+    }
+
+    suspend fun openRisiChat(): lk.codegen.risime.data.tabs.RisiChatOpen = risiChatOpener.open()
+
     /**
      * §24.2 [Start Official] / a new group's Official: `POST /chats/{chat_id}/official` now (its refusal is
      * the user's answer), then the epoch-0 commit through the group-op outbox (survives process death).
@@ -459,6 +473,7 @@ class AppContainer(
         override suspend fun commit(id: String, body: lk.codegen.risime.net.GroupCommitRequest) = api.groupCommit(id, body, dev()).map { it.epoch }
         override suspend fun uploadBlob(conversationId: String, bytes: ByteArray) = api.uploadBlob(conversationId, bytes).map { it.ref() }
         override suspend fun createOfficial(chatId: String) = api.createOfficial(chatId, dev()).map { it.group }
+        override suspend fun createRisiChat() = api.createRisiChat(dev()).map { it.group }
     }
 
     private val dbTx: TransactionRunner = transactions?.invoke(db) ?: object : TransactionRunner {

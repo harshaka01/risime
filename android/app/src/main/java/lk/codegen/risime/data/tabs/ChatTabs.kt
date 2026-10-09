@@ -55,6 +55,8 @@ fun tabFromMls(conversationId: String, meta: GroupMeta?): ChatTabEntity? {
     if (conversationId.startsWith("dm:")) return ChatTabEntity(conversationId, conversationId, ChatTabEntity.TAB_PRIVATE, ChatTabEntity.KIND_DM)
     meta ?: return null
     if (!meta.official) return ChatTabEntity(conversationId, conversationId, ChatTabEntity.TAB_PRIVATE, ChatTabEntity.KIND_GROUP)
+    // §25.2: a Risi chat is its own chat (no Private tab); taken from the MLS state only.
+    if (meta.isRisiChat(conversationId)) return ChatTabEntity(conversationId, conversationId, ChatTabEntity.TAB_OFFICIAL, ChatTabEntity.KIND_RISI)
     val chatId = meta.chatId?.takeIf { it.isNotBlank() } ?: conversationId
     val kind = if (chatId.startsWith("dm:")) ChatTabEntity.KIND_DM else ChatTabEntity.KIND_GROUP
     return ChatTabEntity(conversationId, chatId, ChatTabEntity.TAB_OFFICIAL, kind)
@@ -63,12 +65,15 @@ fun tabFromMls(conversationId: String, meta: GroupMeta?): ChatTabEntity? {
 /** §24.1: Private unless the MLS-derived row says Official (unknown = Private). */
 fun isPrivate(conversationId: String, rows: Map<String, ChatTabEntity>?): Boolean = rows?.get(conversationId)?.official != true
 
+/** §25.2: [conversationId] is a Risi chat per its MLS-derived row. */
+fun isRisiChat(conversationId: String, rows: Map<String, ChatTabEntity>?): Boolean = rows?.get(conversationId.lowercase())?.risi == true
+
 /** The chat a conversation belongs to (a conversation without an MLS-derived row is its own chat). */
 fun chatIdOf(conversationId: String, rows: Map<String, ChatTabEntity>?): String = rows?.get(conversationId)?.chatId ?: conversationId
 
 /** The chat's Official conversation, if this device holds one (MLS-derived). */
 fun officialConversationOf(chatId: String, rows: Map<String, ChatTabEntity>?): String? =
-    rows?.values?.firstOrNull { it.official && it.chatId.equals(chatId, true) }?.conversationId
+    rows?.values?.firstOrNull { it.official && !it.risi && it.chatId.equals(chatId, true) }?.conversationId
 
 /**
  * §24.9 the tab a chat opens on: the last one used ([ChatPrefEntity.lastTab]); a chat with no

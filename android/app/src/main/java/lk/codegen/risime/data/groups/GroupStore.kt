@@ -140,6 +140,9 @@ object GroupOpType {
 
     /** §24.2 create (or finish) a chat's Official conversation. */
     const val CREATE_OFFICIAL = "create_official"
+
+    /** §25.2 create (or finish) the user's Risi chat. */
+    const val CREATE_RISI_CHAT = "create_risi_chat"
     const val ADD = "add"
     const val REMOVE = "remove"
     const val LEAVE = "leave"

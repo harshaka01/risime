@@ -296,6 +296,7 @@ fun tabIcon(tab: lk.codegen.risime.data.tabs.Tab?): String = when (tab) {
 @Composable
 internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> Unit)? = null) {
     val presence = presenceLabel(row.presence, System.currentTimeMillis())
+    if (row.risi) return RisiRowItem(row, onClick)
     if (row.group) return GroupRowItem(row, onClick, onLongClick)
     val sub = when {
         !row.friend -> "Not friends any more"
@@ -327,6 +328,27 @@ internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> 
     )
 }
 
+
+/** §25.2 the Risi chat's row (Official styling, Risi's avatar); before it exists, "Ask Risi anything". */
+@Composable
+private fun RisiRowItem(row: ChatRow, onClick: () -> Unit) {
+    val last = row.last
+    val lastText = last?.let { lk.codegen.risime.push.bodyPreview(it.kind, it.body) }.orEmpty()
+    ListRow(
+        title = row.name,
+        subtitle = when {
+            row.stateLine != null && row.stateLine != "Creating…" -> row.stateLine
+            last == null || lastText.isEmpty() -> lk.codegen.risime.data.tabs.RISI_CHAT_EMPTY_PREVIEW
+            last.outgoing -> "You: $lastText"
+            else -> lastText
+        },
+        leading = { lk.codegen.risime.ui.tabs.RisiAvatar() },
+        meta = last?.takeIf { lastText.isNotEmpty() }?.let { shortStamp(it.localTs) },
+        strong = row.unread > 0,
+        badge = if (row.unread > 0) ({ UnreadBadge(row.unread) }) else null,
+        onClick = onClick,
+    )
+}
 
 /** §12 group row: decrypted name ("Rejoining group…" until the Welcome), "Kamal: …" last line, typing, unread. */
 @Composable

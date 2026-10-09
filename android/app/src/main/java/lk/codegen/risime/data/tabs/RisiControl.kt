@@ -122,6 +122,10 @@ object RisiControl {
         }
     }
 
+    /** §25.2 the text of a stored `ask` (the Risi chat shows it as the user's own bubble), or null. */
+    fun askText(json: String?): String? =
+        parse(json)?.takeIf { str(it, "type") == TYPE_REQUEST && str(it, "action") == "ask" }?.let { str(it, "text") }
+
     /** The action of a stored `risi_action` row, or null. */
     fun actionOf(json: String?): String? = parse(json)?.takeIf { str(it, "type") == TYPE_ACTION }?.let { str(it, "action") }
 

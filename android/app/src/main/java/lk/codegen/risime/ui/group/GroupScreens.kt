@@ -122,6 +122,8 @@ fun GroupChatScreen(
     composerHint: String? = null,
     /** §24.9/§24.11 Official only: Risi cards, the @Risi chip and the Summarise/Report menu items. Private passes null. */
     risi: lk.codegen.risime.ui.tabs.RisiHost? = null,
+    /** §25.2 the user's Risi chat: every message is an `ask`, no attachments, calls, chip or Summarise/Report. */
+    risiChat: Boolean = false,
 ) {
     val group by vm.group.collectAsStateWithLifecycle()
     val members by vm.members.collectAsStateWithLifecycle()
@@ -173,16 +175,16 @@ fun GroupChatScreen(
                 title = name,
                 subtitle = typingLabel ?: connectionLabel(conn) ?: buildString {
                     if (encrypted == true) append("🔒 ")
-                    append(if (count == 1) "1 member" else "$count members")
+                    append(if (risiChat) "Risi" else if (count == 1) "1 member" else "$count members")
                 },
                 emphasis = typingLabel != null,
                 onBack = onBack,
-                avatar = { InitialsAvatar(name, size = Sizes.avatarSmall + 4.dp, photoKey = vm.conversationId) },
+                avatar = { if (risiChat) lk.codegen.risime.ui.tabs.RisiAvatar(Sizes.avatarSmall + 4.dp) else InitialsAvatar(name, size = Sizes.avatarSmall + 4.dp, photoKey = vm.conversationId) },
                 onTitleClick = onInfo,
                 titleClickLabel = "Group info",
                 actions = {
                     // §20.1 the group's call and video-call buttons (disabled until group_calls_ready; a tap explains).
-                    if (lk.codegen.risime.BuildConfig.GROUP_CALLS_ENABLED && !readOnly) {
+                    if (lk.codegen.risime.BuildConfig.GROUP_CALLS_ENABLED && !readOnly && !risiChat) {
                         val ready by vm.groupCallsReady.collectAsStateWithLifecycle()
                         val toastOf: (String) -> Unit = { vm.imgs.toast.value = it; vm.refreshGroupCalls() }
                         lk.codegen.risime.ui.chat.VideoHeaderButton(vm.groupCallBlockedText(encrypted == true, ready, video = true), toastOf) { cam -> vm.startGroupCall(video = true, camera = cam) }
@@ -191,7 +193,7 @@ fun GroupChatScreen(
                     lk.codegen.risime.ui.chat.E2eeHeaderLock(encrypted == true, onInfo)
                     lk.codegen.risime.ui.chat.ChatOverflowMenu(
                         onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock,
-                        extra = risi?.let { h -> { close -> lk.codegen.risime.ui.tabs.RisiMenuItems(h, enabled = !readOnly, close = close) } },
+                        extra = risi?.takeIf { !risiChat }?.let { h -> { close -> lk.codegen.risime.ui.tabs.RisiMenuItems(h, enabled = !readOnly, close = close) } },
                     )
                 },
             )
@@ -238,6 +240,7 @@ fun GroupChatScreen(
                     joinAsk = env to starter
                 }) else null,
                 risi = risiCtx,
+                risiChat = risiChat,
             )
             joinAsk?.let { (env, starter) ->
                 JoinCallPermissions(env.video, onDenied = { vm.imgs.toast.value = it; joinAsk = null }) { cam ->
@@ -257,23 +260,23 @@ fun GroupChatScreen(
                 }
             } else {
                 Composer(
-                    attach = if (!vm.imgs.available || encrypted != true) null else ({
+                    attach = if (risiChat || !vm.imgs.available || encrypted != true) null else ({
                         lk.codegen.risime.ui.chat.AttachButton(enabled = true) {
                             vm.imgs.refreshImagesReady()
                             pickPhoto()
                         }
                     }),
-                    placeholder = if (risi != null && risiChip) lk.codegen.risime.ui.tabs.RISI_ASK_PLACEHOLDER else composerHint ?: if (encrypted == true) "Encrypted message" else "Message",
+                    placeholder = if (risiChat || (risi != null && risiChip)) lk.codegen.risime.ui.tabs.RISI_ASK_PLACEHOLDER else composerHint ?: if (encrypted == true) "Encrypted message" else "Message",
                     value = draft,
                     onValue = { draft = it; vm.onDraftChanged(it.text) },
                     onSend = {
                         if (draft.text.isNotBlank()) {
                             // §24.11: with the @Risi chip the message is a structured `risi_request`; else an ordinary message.
-                            if (lk.codegen.risime.ui.tabs.sendFromComposer(risi, risiChip, draft.text, vm::send)) risiChip = false
+                            if (lk.codegen.risime.ui.tabs.sendFromComposer(risi, risiChip, draft.text, vm::send, risiChat)) risiChip = false
                             draft = TextFieldValue("")
                         }
                     },
-                    topSlot = if (risi != null) ({ lk.codegen.risime.ui.tabs.RisiChipRow(risiChip) { risiChip = it } }) else null,
+                    topSlot = if (risi != null && !risiChat) ({ lk.codegen.risime.ui.tabs.RisiChipRow(risiChip) { risiChip = it } }) else null,
                 )
             }
             reactionsFor?.let { target -> ReactionsSheet(reactions[target].orEmpty(), vm::nameOf) { reactionsFor = null } }
@@ -313,6 +316,8 @@ internal fun GroupMessageList(
     onJoinCall: ((lk.codegen.risime.calls.GroupCallEnvelope, String) -> Unit)? = null,
     /** §24.11 Official only: draws Risi's messages as cards (null: every message is a bubble; Private never has one). */
     risi: lk.codegen.risime.ui.tabs.RisiCardContext? = null,
+    /** §25.2 the Risi chat: the user's own `ask`s are their bubbles (not system lines). */
+    risiChat: Boolean = false,
 ) {
     ChatMessageList(
         messages = messages,
@@ -325,6 +330,14 @@ internal fun GroupMessageList(
             is ChatItem.Day -> DaySeparator(item.label)
             is ChatItem.Msg -> if (item.m.system && historyMarker != null && item.m.clientMsgId == lk.codegen.risime.data.HistoryMarkers.historyId(item.m.conversationId)) {
                 historyMarker(item.m)
+            } else if (risiChat && item.m.risiCtl && item.m.outgoing && lk.codegen.risime.data.tabs.RisiControl.askText(item.m.systemJson) != null) {
+                // §25.2: in the Risi chat a request is the user's own message.
+                GroupBubble(
+                    item.m.copy(kind = MessageEntity.KIND_TEXT, body = lk.codegen.risime.data.tabs.RisiControl.askText(item.m.systemJson)!!),
+                    sender = null, canAct = false, chips = emptyList(), onReact = { _, _ -> }, onOpenReactions = {},
+                    onRetry = onRetry, onDelete = onDelete, onInfo = {},
+                    tail = startsRun(items, i),
+                )
             } else if (item.m.risiCtl) {
                 // §24.11 a member's request/action to Risi: a small system line ("Kamal confirmed").
                 SystemLineText(lk.codegen.risime.data.tabs.RisiControl.line(item.m.systemJson, nameOf(item.m.from)) ?: item.m.body)
