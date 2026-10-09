@@ -148,6 +148,14 @@ were needed after nightly.11.
      - another member's message can't trigger a skill.
    - **Contract:** a §25 addendum (skill registry/state, the client tools `set_alarm` and
      `schedule_message`, the meeting "add for" card).
+   - **Risi summaries over 30 days (Harsha 2026-10-09):**
+     - Summarise today / 7 days / 30 days / a range, from **daily summaries rolled up**
+       (daily → weekly → 30-day) plus confirmed commitments; raw text stays at 24 h.
+     - The answer states the period and links to the days it used.
+     - Daily summaries are sealed with RISI_DATA_KEY, listed in "What Risi knows" → Summaries, and
+       deletable.
+     - Folded into the §27 build (a contract addendum: `scope` ranges, `daily_summary` storage and
+       REST).
 5. **"Teach Risi"** (Harsha 2026-10-09):
    - **Profile:** Settings → "My Risi profile" (bio, roles, people, preferences, interests).
    - **Ways to teach:**
