@@ -24,6 +24,9 @@ import lk.codegen.risime.realtime.ConnectionState
 class ChatViewModel(private val c: AppContainer, private val meId: String, val peerId: String) : ViewModel() {
     val conversationId = dmConversationId(meId, peerId)
 
+    /** §25.4 a Risi draft's [Use] for this chat (taken once; never sent). */
+    fun takeDraft(): String? = c.risiUi.takeDraft(conversationId)
+
     /** My user id (tombstone wording, §15.6). */
     val me: String get() = meId
 

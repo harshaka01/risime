@@ -211,6 +211,9 @@ class AppContainer(
     /** §25.4 Risi's progress bubbles (in memory). */
     val risiProgress = lk.codegen.risime.data.tabs.RisiProgressStore()
 
+    /** §25.4/§26.5 a draft's [Use] and "Open Risi skills" from a card. */
+    val risiUi = lk.codegen.risime.data.tabs.RisiUiBus()
+
     /** §25.3 client tools: answered over TLS, never stored (A7: every known tool is declined until the executor lands). */
     val risiToolCalls = lk.codegen.risime.data.tabs.RisiToolCallHandler(
         deviceId = { runCatching { sessionStore.deviceId() }.getOrNull() },

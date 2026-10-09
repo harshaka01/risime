@@ -25,6 +25,24 @@ interface RisiHost {
 
     /** 👍/👎 on a Risi card: private REST, no visible reaction. */
     fun feedback(callRef: String, rating: String, reason: String?)
+
+    /** §26.4 [Undo] on a `skill_done` (`POST …/activity/{entry}/undo`); the outcome shows as a notice. */
+    fun undo(skillId: String, entryId: String, token: String) {}
+
+    /** Entry ids undone (or being undone) from this screen: their [Undo] is gone. */
+    val undone: Set<String> get() = emptySet()
+
+    /** §26.5 "Open Risi skills" (Settings → Risi skills at [skillId]). */
+    fun openSkills(skillId: String?) {}
+
+    /** §25.4 a draft's [Use]: opens [conversationId] with the composer filled; never sends. */
+    fun useDraft(conversationId: String, text: String) {}
+
+    /** Whether a conversation is on this phone (a draft's [Use] shows only then). */
+    fun hasConversation(conversationId: String): Boolean = false
+
+    /** A conversation's local name ("Kumu", a group's name), or null when it isn't on this phone. */
+    fun conversationName(conversationId: String): String? = null
 }
 
 /** Everything a card needs from its screen. */
@@ -44,9 +62,13 @@ class RisiCardContext(
     val readOnly: Boolean = false,
     /** An answer's sources as quotes of messages on this phone (none found: nothing shown). */
     val quotes: (lk.codegen.risime.net.RisiMeta) -> List<lk.codegen.risime.data.tabs.SourceQuote> = { emptyList() },
+    /** Every message of the conversation (card states that follow actions: confirm, Me too). */
+    val messages: List<MessageEntity> = emptyList(),
+    /** §25.4 a next-step chip pre-fills this screen's composer. */
+    val prefill: (String) -> Unit = {},
 )
 
 /** Builds a [RisiCardContext] for the rows on screen. */
-fun risiCardContext(host: RisiHost, messages: List<MessageEntity>, nameOf: (String) -> String, nowMs: Long, onRef: (String) -> Unit, knownNames: List<String> = emptyList(), readOnly: Boolean = false) =
+fun risiCardContext(host: RisiHost, messages: List<MessageEntity>, nameOf: (String) -> String, nowMs: Long, onRef: (String) -> Unit, knownNames: List<String> = emptyList(), readOnly: Boolean = false, prefill: (String) -> Unit = {}) =
     RisiCardContext(host, nameOf, RisiCards.states(messages), RisiCards.awaiting(messages, host.me, nowMs), nowMs, onRef, knownNames, readOnly,
-        quotes = { r -> RisiCards.sourceQuotes(r, messages, nameOf) })
+        quotes = { r -> RisiCards.sourceQuotes(r, messages, nameOf) }, messages = messages, prefill = prefill)

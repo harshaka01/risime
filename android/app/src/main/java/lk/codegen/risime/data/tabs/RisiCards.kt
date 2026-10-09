@@ -22,6 +22,11 @@ object RisiKinds {
     const val CONFIRM = "confirm"
     const val REMINDER_SET = "reminder_set"
     const val DRAFT = "draft"
+
+    // v1.26 §26.5/§26.7
+    const val SKILL_DONE = "skill_done"
+    const val SKILL_NEEDED = "skill_needed"
+    const val CALENDAR_OFFER = "calendar_offer"
 }
 
 /** One answer source shown as a quote of the message (tapping scrolls to it). */

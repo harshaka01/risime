@@ -91,6 +91,10 @@ fun ChatScreen(
     var draftValue by rememberSaveable(stateSaver = androidx.compose.ui.text.input.TextFieldValue.Saver) {
         mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(""))
     }
+    // §25.4 a Risi draft's [Use] opened this chat: the composer starts with it; nothing is sent.
+    LaunchedEffect(Unit) {
+        vm.takeDraft()?.let { draftValue = androidx.compose.ui.text.input.TextFieldValue(it, androidx.compose.ui.text.TextRange(it.length)) }
+    }
     val reactions by vm.reactions.collectAsStateWithLifecycle()
     val selection by vm.del.selected.collectAsStateWithLifecycle()
     var clearAsk by remember { mutableStateOf<Boolean?>(null) }

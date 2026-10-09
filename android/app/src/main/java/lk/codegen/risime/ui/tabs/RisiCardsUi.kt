@@ -96,6 +96,11 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     RisiKinds.REPORT -> ReportCard(r)
                     RisiKinds.OFFER -> OfferCard(r, ctx)
                     RisiKinds.ERROR -> Text(RisiCards.errorText(r.code), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_error_text"))
+                    RisiKinds.CONFIRM -> ConfirmCard(row, r, ctx)
+                    RisiKinds.REMINDER_SET -> ReminderSetCard(row, r, ctx)
+                    RisiKinds.DRAFT -> DraftCard(row, r, ctx)
+                    RisiKinds.SKILL_DONE -> SkillDoneCard(row, r, ctx)
+                    RisiKinds.SKILL_NEEDED -> SkillNeededCard(row, r, ctx)
                     else -> Text(row.body)
                 }
                 FeedbackRow(r, ctx)
@@ -113,6 +118,11 @@ private fun headerOf(r: RisiMeta) = when (r.kind) {
     RisiKinds.SUMMARY -> "Risi · Summary" + if (r.partial) " (partial)" else ""
     RisiKinds.REPORT -> "Risi · Report"
     RisiKinds.OFFER -> "Risi"
+    RisiKinds.CONFIRM -> "Risi · Confirm"
+    RisiKinds.REMINDER_SET -> "Risi · Reminder set"
+    RisiKinds.DRAFT -> "Risi · Draft"
+    RisiKinds.SKILL_DONE -> "Risi · Done"
+    RisiKinds.SKILL_NEEDED -> "Risi · Skill needed"
     else -> "Risi"
 }
 
@@ -208,6 +218,7 @@ private fun AnswerCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
                 )
             }
         }
+        AnswerExtras(r, ctx)
     }
 }
 

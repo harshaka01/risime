@@ -150,6 +150,26 @@ class RisiProgressStore(private val now: () -> Long = System::currentTimeMillis)
     companion object {
         /** A bubble without a signal for this long says "Still working…". */
         const val STILL_WORKING_MS = 90_000L
+
+        /** A bubble with no signal for this long is dropped (a lost `done`). */
+        const val STALE_MS = 10L * 60_000
+
+        /**
+         * §25.4 the bubbles to draw in [conversationId]: its requests, minus those a Risi message for
+         * the same request arrived for since their last signal (the turn's message ends the bubble).
+         */
+        fun visible(shown: Collection<Shown>, rows: List<MessageEntity>, conversationId: String, nowMs: Long = System.currentTimeMillis()): List<Shown> {
+            val answered = HashMap<String, Long>()
+            for (m in rows) {
+                val rid = RisiMessages.meta(m)?.requestId?.lowercase() ?: continue
+                answered[rid] = maxOf(answered[rid] ?: 0L, m.localTs)
+            }
+            return shown.filter { s ->
+                s.progress.conversationId.equals(conversationId, true) &&
+                    nowMs - s.atMs < STALE_MS &&
+                    (answered[s.progress.requestId.lowercase()]?.let { it < s.atMs } ?: true)
+            }.sortedBy { it.atMs }
+        }
     }
 }
 
@@ -166,7 +186,33 @@ object RisiStepLabels {
         "forget" -> "Forgetting that…"
         "ask_risiwork" -> "Asking RisiWork…"
         "capabilities" -> "Checking what I can do…"
+        // v1.26 §26.6
+        "set_alarm" -> "Setting an alarm…"
+        "schedule_message" -> "Scheduling your message…"
+        "cancel_scheduled" -> "Cancelling a scheduled message…"
+        "calendar_remove" -> "Removing it from your calendar…"
+        "need_skill" -> "Checking your Risi skills…"
         else -> "Working…"
+    }
+
+    /** A finished step in an answer ("Checked your calendar"). */
+    fun done(tool: String?): String = when (tool) {
+        "calendar_check" -> "Checked your calendar"
+        "calendar_add" -> "Added to your calendar"
+        "calendar_remove" -> "Removed from your calendar"
+        "set_reminder" -> "Set a reminder"
+        "search_chats" -> "Searched your chats"
+        "summarise" -> "Summarised"
+        "draft_reply" -> "Drafted a reply"
+        "remember" -> "Remembered"
+        "forget" -> "Forgot"
+        "ask_risiwork" -> "Asked RisiWork"
+        "capabilities" -> "Checked what I can do"
+        "set_alarm" -> "Set an alarm"
+        "schedule_message" -> "Scheduled your message"
+        "cancel_scheduled" -> "Cancelled a scheduled message"
+        "need_skill" -> "Checked your Risi skills"
+        else -> "Worked on it"
     }
 
     fun of(shown: RisiProgressStore.Shown, nowMs: Long): String {
@@ -215,6 +261,8 @@ object RisiToolCards {
         if (state != ConfirmState.OPEN) return emptyList()
         if (r.forUsers.none { it.equals(me, true) }) return emptyList()
         if (r.writeId?.lowercase() in awaiting) return emptyList()
+        // §26.9: an unknown `tool` shows its summary only.
+        if (!RisiSkillCards.knownConfirmTool(r)) return emptyList()
         return r.buttons.filter { it in setOf("add", "cancel", "allow") }
     }
 

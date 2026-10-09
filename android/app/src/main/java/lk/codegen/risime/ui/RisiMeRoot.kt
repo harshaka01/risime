@@ -47,6 +47,7 @@ import lk.codegen.risime.ui.search.SearchScreen
 import lk.codegen.risime.ui.search.SearchViewModel
 import lk.codegen.risime.ui.settings.AppSettingsBackend
 import lk.codegen.risime.ui.settings.SettingsScreen
+import lk.codegen.risime.ui.settings.RISI_SKILLS_ROUTE
 import lk.codegen.risime.ui.settings.SettingsViewModel
 import lk.codegen.risime.ui.tabs.officialInfoItems
 import lk.codegen.risime.ui.tabs.tabMediaItems
@@ -161,6 +162,17 @@ private fun MainNav(c: AppContainer, meId: String) {
             val under = runCatching { nav.getBackStackEntry("locked") }.isSuccess
             // Chat lock settings opened from the chat list's ⋮ (no folder under it) close the same way.
             if (under || nav.currentBackStackEntry?.destination?.route == "locked_settings") nav.popBackStack("chats", false)
+        }
+    }
+    // §25.4/§26.5 Risi cards: a draft's [Use] opens its chat (composer filled), "Open Risi skills" opens Settings.
+    LaunchedEffect(nav) {
+        c.risiUi.nav.collect { req ->
+            runCatching {
+                when (req) {
+                    is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Chat -> nav.navigate("chat/${android.net.Uri.encode(req.conversationId)}")
+                    is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Skills -> nav.navigate(RISI_SKILLS_ROUTE + (req.skillId?.let { "?skill=${android.net.Uri.encode(it)}" } ?: "")) { launchSingleTop = true }
+                }
+            }
         }
     }
     NotificationPermissionPrompt(c)
@@ -412,6 +424,9 @@ private fun MainNav(c: AppContainer, meId: String) {
                 onRisiKnows = { nav.navigate("risi_facts") { launchSingleTop = true } },
                 onMyPromises = { nav.navigate("risi_promises") { launchSingleTop = true } },
             )
+        }
+        composable("$RISI_SKILLS_ROUTE?skill={skill}", arguments = listOf(androidx.navigation.navArgument("skill") { nullable = true; defaultValue = null })) { entry ->
+            lk.codegen.risime.ui.settings.RisiSkillsRoute(c, entry.arguments?.getString("skill"), onBack = { nav.popBackStack() })
         }
         composable("risi_facts") {
             lk.codegen.risime.ui.settings.RisiFactsScreen(viewModel { lk.codegen.risime.ui.settings.RisiFactsViewModel(c.risiRest) }.model, onBack = { nav.popBackStack() })

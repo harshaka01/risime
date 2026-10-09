@@ -529,7 +529,44 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         override fun feedback(callRef: String, rating: String, reason: String?) {
             c.scope.launch { runCatching { c.risiRest.feedback(callRef, rating, reason) } }
         }
+
+        override val undone: Set<String> get() = undoneEntries.value
+
+        override fun undo(skillId: String, entryId: String, token: String) {
+            undoneEntries.value = undoneEntries.value + entryId.lowercase()
+            c.scope.launch {
+                val r = c.api.undoRisiSkillEntry(skillId, entryId, token)
+                imgs.toast.value = lk.codegen.risime.ui.settings.undoResultText(r)
+                if (r !is ApiResult.Ok) undoneEntries.value = undoneEntries.value - entryId.lowercase()
+            }
+        }
+
+        override fun openSkills(skillId: String?) = c.risiUi.openSkills(skillId)
+
+        override fun useDraft(conversationId: String, text: String) = c.risiUi.useDraft(conversationId, text)
+
+        override fun hasConversation(conversationId: String): Boolean = conversationNames.value.containsKey(conversationId.lowercase())
+
+        override fun conversationName(conversationId: String): String? = conversationNames.value[conversationId.lowercase()]
     }
+
+    /** Entries undone from this screen (their [Undo] goes; a failure brings it back). */
+    private val undoneEntries = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+    val undoneState: StateFlow<Set<String>> = undoneEntries
+
+    /** Local conversation names for draft targets and scheduled-message recipients. */
+    val conversationNames: StateFlow<Map<String, String>> = combine(c.db.groups().all(), c.db.contacts().all(), c.chatTabs.rows) { g, ct, rows ->
+        lk.codegen.risime.data.tabs.ConversationDirectory.names(meId, g, ct, rows)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    /** §25.4 Risi's progress bubbles for requests made in this conversation. */
+    val risiProgress: StateFlow<List<lk.codegen.risime.data.tabs.RisiProgressStore.Shown>> = combine(c.risiProgress.byRequest, messages) { m, rows ->
+        lk.codegen.risime.data.tabs.RisiProgressStore.visible(m.values, rows, conversationId)
+    }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** §25.4 a draft's [Use] opened this chat: the composer starts with it (taken once). */
+    fun takeDraft(): String? = c.risiUi.takeDraft(conversationId)
 
     fun send(text: String) {
         typingSender.stop()

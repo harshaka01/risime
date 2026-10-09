@@ -18,10 +18,13 @@ object RisiControl {
     const val TYPE_ACTION = "risi_action"
 
     val REQUEST_ACTIONS = setOf("ask", "summarise", "report")
-    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS
+    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS
 
     /** §25.4 (v1.25): on a confirm card (`write_id`) or a group reminder (`reminder_id`). */
     val V125_ACTIONS: Set<String> get() = setOf("confirm_write", "cancel_write", "me_too", "not_me")
+
+    /** §26.7 (v1.26): on a `calendar_offer` (`offer_id`). */
+    val V126_ACTIONS: Set<String> get() = setOf("calendar_accept", "calendar_decline")
 
     /** `text` of an `ask`: 1-1000 grapheme clusters (§24.11). */
     const val MAX_ASK_GRAPHEMES = 1000
@@ -42,7 +45,7 @@ object RisiControl {
         if (sinceMs != null) put("scope", buildJsonObject { put("since", iso(sinceMs)) })
     }
 
-    fun action(target: String, action: String, editText: String? = null, editDue: String? = null): JsonObject = buildJsonObject {
+    fun action(target: String, action: String, editText: String? = null, editDue: String? = null, reminder: Boolean? = null): JsonObject = buildJsonObject {
         put("v", 1)
         put("type", TYPE_ACTION)
         put("target", target)
@@ -55,6 +58,8 @@ object RisiControl {
         } else {
             put("edit", JsonNull)
         }
+        if (action == "calendar_accept") put("options", buildJsonObject { put("reminder", reminder == true) })
+        else if (action == "calendar_decline") put("options", JsonNull)
     }
 
     fun encode(o: JsonObject): ByteArray = ProtocolJson.encodeToString(JsonObject.serializer(), o).toByteArray(Charsets.UTF_8)
@@ -90,6 +95,8 @@ object RisiControl {
             "cancel_write" -> "Cancelled"
             "me_too" -> "Me too"
             "not_me" -> "Not me"
+            "calendar_accept" -> "Added to calendar"
+            "calendar_decline" -> "Declined the meeting card"
             else -> "Risi"
         }
     }
@@ -117,6 +124,8 @@ object RisiControl {
                 "cancel_write" -> "$who cancelled"
                 "me_too" -> "$who: me too"
                 "not_me" -> "$who: not me"
+                "calendar_accept" -> "$who added it to their calendar"
+                "calendar_decline" -> "$who declined"
                 else -> null
             }
         }

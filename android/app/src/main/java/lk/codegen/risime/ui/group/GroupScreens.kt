@@ -146,6 +146,16 @@ fun GroupChatScreen(
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
     var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+    // §25.4 a Risi draft's [Use] opened this chat: the composer starts with it; nothing is sent.
+    LaunchedEffect(Unit) { vm.takeDraft()?.let { draft = TextFieldValue(it, androidx.compose.ui.text.TextRange(it.length)) } }
+    val risiProgress by vm.risiProgress.collectAsStateWithLifecycle()
+    @Suppress("UNUSED_VARIABLE") val undoneNow by vm.undoneState.collectAsStateWithLifecycle()
+    var progressNow by remember { mutableStateOf(System.currentTimeMillis()) }
+    if (risi != null && risiProgress.isNotEmpty()) {
+        LaunchedEffect(risiProgress) {
+            while (true) { progressNow = System.currentTimeMillis(); kotlinx.coroutines.delay(5_000) }
+        }
+    }
     val scroll = rememberChatScrollState()
     val media by vm.imgs.media.collectAsStateWithLifecycle()
     val imagesReady by vm.imgs.imagesReady.collectAsStateWithLifecycle()
@@ -181,6 +191,8 @@ fun GroupChatScreen(
         onRef = { id -> risiScope.launch { lk.codegen.risime.ui.tabs.scrollToMessage(scroll, messages, id) } },
         knownNames = members.filter { it.current }.map { it.displayName },
         readOnly = readOnly,
+        // §25.4 a next-step chip pre-fills the composer (as a question to Risi in the Risi chat and while continuing).
+        prefill = { s -> draft = TextFieldValue(s, androidx.compose.ui.text.TextRange(s.length)); if (!risiChat) risiChip = true },
     )
     val typingLabel = groupTypingLabel(typing)
     val count = members.count { it.current && it.state != GroupMember.STATE_PENDING_ADD }
@@ -258,6 +270,8 @@ fun GroupChatScreen(
                 risi = risiCtx,
                 risiChat = risiChat,
             )
+            // §25.4 the progress bubble of a request made here (ends with `done` or the turn's message).
+            if (risi != null) risiProgress.forEach { lk.codegen.risime.ui.tabs.RisiProgressBubble(it, progressNow) }
             joinAsk?.let { (env, starter) ->
                 JoinCallPermissions(env.video, onDenied = { vm.imgs.toast.value = it; joinAsk = null }) { cam ->
                     joinAsk = null
