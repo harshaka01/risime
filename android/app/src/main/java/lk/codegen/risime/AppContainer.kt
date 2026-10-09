@@ -226,6 +226,18 @@ class AppContainer(
     /** Skills on this device: the server switch, the advertisement, and `risi_tools`. */
     fun risiSkillsOn(): Boolean = risiSkills.on.value && risiTools.on.value
 
+    // ---- §27 (v1.27) the Commitment Ledger follow-ups ----
+
+    /** §27.10 the `risi_ledger` server switch (kept across restarts) and this device's advertisement. */
+    val risiLedger = lk.codegen.risime.data.tabs.RisiToolsSwitch(
+        persistedServerOn = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getBoolean("risi_ledger_on", false),
+        persistServerOn = { on -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putBoolean("risi_ledger_on", on).apply() },
+        log = { Log.i("RisiMe", it.replace("risi_tools", "risi_ledger")) },
+    )
+
+    /** The Ledger on this device: the server switch, the advertisement, and `risi_tools`. */
+    fun risiLedgerOn(): Boolean = risiLedger.on.value && risiTools.on.value
+
     /** §26.2 the skills, this user's state and the phone's own record of it (the allowed path trusts only that). */
     val risiSkillsStore: lk.codegen.risime.data.tabs.RisiSkillsStore by lazy {
         val p = context.getSharedPreferences("risime_skills", Context.MODE_PRIVATE)
@@ -362,7 +374,9 @@ class AppContainer(
         risiTools.setServerOn(cfg.risiToolsOn)
         val skillsBefore = risiSkills.serverOn.value
         risiSkills.setServerOn(cfg.risiSkillsOn)
-        if (before != cfg.tabsOn || risiBefore != cfg.risiToolsOn || skillsBefore != cfg.risiSkillsOn) refreshCapabilities()
+        val ledgerBefore = risiLedger.serverOn.value
+        risiLedger.setServerOn(cfg.risiLedgerOn)
+        if (before != cfg.tabsOn || risiBefore != cfg.risiToolsOn || skillsBefore != cfg.risiSkillsOn || ledgerBefore != cfg.risiLedgerOn) refreshCapabilities()
     }
 
     /** §25.2 the Risi chat's first open (only on a `risi_tools` device). */
@@ -799,6 +813,7 @@ class AppContainer(
             tabsSupported = { chatTabs.serverOn.value },
             risiToolsSupported = { risiTools.serverOn.value },
             risiSkillsSupported = { risiSkills.serverOn.value },
+            risiLedgerSupported = { risiLedger.serverOn.value },
             onAdvertised = { caps ->
                 val tabs = lk.codegen.risime.net.DeviceMls.CAP_TABS in caps
                 chatTabs.setAdvertised(tabs)
@@ -807,6 +822,8 @@ class AppContainer(
                 if (!risi) risiProgress.clear()
                 val skills = lk.codegen.risime.net.DeviceMls.CAP_RISI_SKILLS in caps
                 risiSkills.setAdvertised(skills)
+                val ledger = lk.codegen.risime.net.DeviceMls.CAP_RISI_LEDGER in caps
+                risiLedger.setAdvertised(ledger)
                 // §26.2: report the Android permission state on start (and the phone's record of each skill).
                 if (skills) scope.launch { runCatching { risiSkillsStore.refresh(backgroundSkillPermissions) } }
                 // Remembered per device id: the next process start shows the tab bar at once (ChatTabs.restoreAdvertised).
@@ -815,7 +832,8 @@ class AppContainer(
                     appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit()
                         .putString("advertised_tabs_device", if (tabs) id else null)
                         .putString("advertised_risi_tools_device", if (risi) id else null)
-                        .putString("advertised_risi_skills_device", if (skills) id else null).apply()
+                        .putString("advertised_risi_skills_device", if (skills) id else null)
+                        .putString("advertised_risi_ledger_device", if (ledger) id else null).apply()
                 }
             },
         )
@@ -966,6 +984,8 @@ class AppContainer(
             if (id != null && risi != null && risi.equals(id, true) && sessionStore.current() != null) risiTools.restoreAdvertised(true)
             val skills = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_risi_skills_device", null)
             if (id != null && skills != null && skills.equals(id, true) && sessionStore.current() != null) risiSkills.restoreAdvertised(true)
+            val ledger = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_risi_ledger_device", null)
+            if (id != null && ledger != null && ledger.equals(id, true) && sessionStore.current() != null) risiLedger.restoreAdvertised(true)
             // §26.6: every process start re-arms the pending schedules and sends what is overdue.
             if (sessionStore.current() != null) runCatching { scheduled.rearmAll() }.onFailure { Log.w("RisiMe", "scheduled message: re-arm failed: ${it.javaClass.simpleName}") }
         }

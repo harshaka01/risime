@@ -225,6 +225,27 @@ class DeviceRegistrarTest {
         assertEquals("[\"groups\",\"tabs\"]", advertise())
     }
 
+    /** v1.27 §27.10: `risi_ledger` only together with `risi_tools` and while its own server switch is on. */
+    @Test fun risiLedgerAdvertisedOnlyWithRisiToolsAndTheSwitch() = runBlocking {
+        var risiOn = true
+        var ledgerOn = false
+        val reg = DeviceRegistrar(api, { "dev-1" }, "0.3.0", { mls }, groupsReplacedFor = { "x" }, tabsSupported = { true }, risiToolsSupported = { risiOn }, risiLedgerSupported = { ledgerOn })
+        fun caps() = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject["mls"]!!.jsonObject["capabilities"].toString()
+        suspend fun advertise(): String {
+            server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+            server.enqueue(json(200, """{"count":30}"""))
+            reg.register(null)
+            return caps().also { server.takeRequest() }
+        }
+        mls.tabsOn = true
+        mls.risiChatOn = true
+        assertEquals("[\"groups\",\"tabs\",\"risi_tools\"]", advertise())
+        ledgerOn = true
+        assertEquals("[\"groups\",\"tabs\",\"risi_tools\",\"risi_ledger\"]", advertise())
+        risiOn = false // never without risi_tools
+        assertEquals("[\"groups\",\"tabs\"]", advertise())
+    }
+
     @Test fun coreWithoutGroupsKeepsTheV17Registration() = runBlocking {
         mls.groupsOn = false
         server.enqueue(json(200, """{"attestation":"a.b.c"}"""))

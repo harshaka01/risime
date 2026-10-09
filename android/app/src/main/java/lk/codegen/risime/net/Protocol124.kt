@@ -128,6 +128,8 @@ data class RisiMeta(
     val tool: String? = null,
     /** `confirm`: a [RisiWhen] object; `reminder_set`: a timestamp. Read with [confirmWhen] / [reminderWhen]. */
     @SerialName("when") val whenRaw: JsonElement? = null,
+    /** `confirm`: the users who may act (a list); v1.27 `discussion_summary`: the one recipient (a string, read as one element). */
+    @Serializable(with = StringOrListSerializer::class)
     @SerialName("for") val forUsers: List<String> = emptyList(),
     @SerialName("expires_at") val expiresAt: String? = null,
     // v1.25 reminder_set (and reminder.reminder_id)
@@ -153,6 +155,29 @@ data class RisiMeta(
     val end: String? = null,
     @SerialName("all_day") val allDay: Boolean? = null,
     @SerialName("reminder_before_min") val reminderBeforeMin: Int? = null,
+    // v1.27 §27.1: what made this message (absent from older servers: "not recorded")
+    @SerialName("made_by") val madeBy: RisiMadeBy? = null,
+    // v1.27 §27.3/§27.4 discussion_summary / discussion_card (`items` above holds the summary's items)
+    @SerialName("summary_id") val summaryId: String? = null,
+    @SerialName("chat_id") val chatId: String? = null,
+    @SerialName("conversation_id") val conversationId: String? = null,
+    @SerialName("with") val withUsers: List<String> = emptyList(),
+    @SerialName("started_at") val startedAt: String? = null,
+    @SerialName("ended_at") val endedAt: String? = null,
+    val source: String? = null,
+    @SerialName("call_id") val callId: String? = null,
+    val media: String? = null,
+    @SerialName("duration_s") val durationS: Long? = null,
+    @SerialName("key_points") val keyPoints: List<String> = emptyList(),
+    @SerialName("items_count") val itemsCount: Int? = null,
+    // v1.27 §27.5/§27.6 item_update / item_due / item_overdue / item_nudge (`state`, `by`, `text`, `due`, `all_day`, `owner` above)
+    @SerialName("item_id") val itemId: String? = null,
+    val moment: String? = null,
+    val role: String? = null,
+    // v1.27 §27.6 personal digest
+    val scope: String? = null,
+    // v1.27 §27.7 call_listen
+    val since: String? = null,
 ) {
     /** `confirm.when` (null if absent or not an object). */
     fun confirmWhen(): RisiWhen? =
@@ -161,15 +186,6 @@ data class RisiMeta(
     /** `reminder_set.when` (null if absent or not a string). */
     fun reminderWhen(): String? = (whenRaw as? JsonPrimitive)?.takeIf { it.isString }?.content
 }
-
-@Serializable
-data class RisiDigestItem(
-    @SerialName("commitment_id") val commitmentId: String,
-    val text: String,
-    val owner: String? = null,
-    val due: String? = null,
-    val state: String? = null,
-)
 
 @Serializable
 data class RisiPeriod(val from: String, val to: String)
@@ -232,6 +248,12 @@ data class RisiCommitment(
     @SerialName("due_text") val dueText: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
+    // v1.27 §27.9 ledger items (absent for legacy commitments)
+    @SerialName("summary_id") val summaryId: String? = null,
+    val source: String? = null,
+    @SerialName("all_day") val allDay: Boolean? = null,
+    /** "owner" | "counterpart" (§27.9); null for a legacy commitment. */
+    val role: String? = null,
 )
 
 @Serializable

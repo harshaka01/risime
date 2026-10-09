@@ -22,6 +22,8 @@ data class GroupCallEnvelope(
     val reason: String? = null,
     val connectedAt: String? = null,
     val durationS: Long? = null,
+    /** v1.27 §27.7: `"listen"` on a `started` whose starter chose Risi listening; null = absent ("off"). */
+    val risi: String? = null,
 ) {
     val video: Boolean get() = media == CallEnvelope.MEDIA_VIDEO
 
@@ -31,6 +33,7 @@ data class GroupCallEnvelope(
         put("call_id", callId)
         put("media", media)
         put("state", state)
+        if (state == STARTED) risi?.let { put("risi", it) }
         if (state == ENDED) {
             put("reason", reason)
             put("connected_at", connectedAt?.let { JsonPrimitive(it) } ?: JsonNull)
@@ -68,7 +71,7 @@ data class GroupCallEnvelope(
             val media = str("media")
             if (media !in CallEnvelope.MEDIAS) return drop("media")
             return when (str("state")) {
-                STARTED -> GroupCallEnvelope(callId!!, media!!, STARTED)
+                STARTED -> GroupCallEnvelope(callId!!, media!!, STARTED, risi = str("risi")?.takeIf { it.length <= 32 })
                 ENDED -> {
                     val reason = str("reason")
                     if (reason != R_HANGUP && reason != R_TIMEOUT) return drop("reason")
