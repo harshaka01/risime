@@ -47,6 +47,29 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.42 (live 2026-10-09 ~06:30 UTC, not required): Risi hotfix from Harsha's screens
+- **What's in:**
+  - the Risi system prompt (what it can do now, what's coming; never "the transcript does not
+    contain");
+  - sources as tappable quotes (no "Message 1");
+  - the 1:1 Official header "Kumu · Risi";
+  - the placeholder "Message";
+  - the "Continuing with Risi" follow-up chip;
+  - limiter and upstream logs, backoff and fallback;
+  - no empty "created the group" line.
+  The §25 S9–S12 groundwork ships too (`RISI_TOOLS` off).
+- **Released from branch `hotfix/n42`** (96e1ed0 plus gate fixes), because main already had §26
+  merged. The merge back into main was clean.
+- **Gate:** all PASS (ui-entry-test --risi, boot check, canary, push, upgrade).
+- **Attempts 1–3 failed on test infrastructure, all fixed:**
+  - a one-off SIGABRT in the interop JVM;
+  - the upgrade test's locked-chat step vs the n41 selection bar (`56c83e3`);
+  - a fake-llm port clash with a parallel agent run (`d3940f8`).
+- **On main, coming in n43:**
+  - the Calls tab like WhatsApp;
+  - the server side of §26 Skills, reminders, alarm and scheduled messages;
+  - the app side of §26 (in progress).
+
 ## v0.2.0-nightly.41 (live 2026-10-09 ~03:00 UTC, not required): Lock chat everywhere, tab row, encryption label, Risi queue
 - **What's in:**
   - Lock chat in Chat info, long-press ⋮ and the chat ⋮;
