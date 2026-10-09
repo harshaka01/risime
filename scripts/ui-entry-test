@@ -1857,11 +1857,19 @@ print(sum(1 for y, t in nodes if ty is not None and y > ty and t.startswith("Sum
 PY
 )"
     [ "$below" = 0 ] || fail "risi-notes: a 'Summary of your discussion' card was posted with the note (want the note only)"
-    for _ in 1 2 3; do has "text=\"$RN_TEXT\"" && has 'Room walkthrough' && break; A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 40 / 100)) 300; sleep 1; done
-    has 'text="Agreed"' || fail "risi-notes: A's note card has no 'Agreed'"
-    has "text=\"$RN_TEXT\"" || fail "risi-notes: A's note card doesn't list '$RN_TEXT'"
-    has 'text="Meetings"' || fail "risi-notes: A's note card has no 'Meetings'"
-    has '• Room walkthrough' || fail "risi-notes: A's note card has no meeting 'Room walkthrough'"
+    # The card can be taller than the screen: remember each part once seen while scrolling down
+    # from its title in small steps (a part may scroll off the top before the last one shows).
+    s_ag=; s_it=; s_mt=; s_rw=
+    for _ in 1 2 3 4 5; do
+      has 'text="Agreed"' && s_ag=1; has "text=\"$RN_TEXT\"" && s_it=1
+      has 'text="Meetings"' && s_mt=1; has '• Room walkthrough' && s_rw=1
+      [ -n "$s_ag$s_it$s_mt$s_rw" ] && [ "$s_ag$s_it$s_mt$s_rw" = 1111 ] && break
+      A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 45 / 100)) 1200; sleep 1
+    done
+    [ -n "$s_ag" ] || fail "risi-notes: A's note card has no 'Agreed'"
+    [ -n "$s_it" ] || fail "risi-notes: A's note card doesn't list '$RN_TEXT'"
+    [ -n "$s_mt" ] || fail "risi-notes: A's note card has no 'Meetings'"
+    [ -n "$s_rw" ] || fail "risi-notes: A's note card has no meeting 'Room walkthrough'"
     shot "note-card"
     pass "risi-notes: A's Risi chat: the note card '$NOTE_A …' with Agreed ($RN_TEXT, owner + due) and Meetings (Room walkthrough); no discussion summary"
     DEV=B; open_risi_chat || fail "risi-notes: B can't open its Risi chat"
