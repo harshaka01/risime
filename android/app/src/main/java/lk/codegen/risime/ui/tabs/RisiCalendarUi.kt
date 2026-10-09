@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.data.tabs.CalendarAddRecord
+import lk.codegen.risime.data.tabs.CalendarProposal
 import lk.codegen.risime.data.tabs.CalendarSelection
 import lk.codegen.risime.data.tabs.PhoneCalendarInfo
 import lk.codegen.risime.data.tabs.RisiCalendarCards
@@ -207,23 +208,18 @@ private fun StateLine(text: String, tag: String = "risi_confirm_state") =
 /** "Added to your Google Calendar: … [Open] [Undo]" (Undo with the matching `skill_done`'s token). */
 @Composable
 private fun AddedBlock(rec: CalendarAddRecord, r: RisiMeta, ctx: RisiCardContext, port: RisiCalendarPort?, zone: ZoneId) {
+    // With the server's skill_done below, that line carries the success text, [Open] and [Undo] (its undo
+    // token): the card only says it is done. Without one (a v1.25 answer), the card is the success card.
+    if (RisiCalendarCards.skillDoneFor(r, ctx.messages) != null) {
+        Text("✓ Added · " + RisiCalendarCards.whenText(CalendarProposal(rec.title, java.time.Instant.parse(rec.start), java.time.Instant.parse(rec.end), rec.allDay), zone),
+            style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_calendar_added_short"))
+        rec.calendarName?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        return
+    }
     Text(RisiCalendarCards.addedText(rec, zone), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("risi_calendar_added"))
     rec.calendarName?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-    val done = RisiCalendarCards.skillDoneFor(r, ctx.messages)
-    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        val eid = rec.eventId
-        if (port != null && eid != null) FilledTonalButton(onClick = { port.open(eid) }, modifier = Modifier.testTag("risi_calendar_open")) { Text("Open") }
-        if (done != null && !ctx.readOnly) {
-            val entry = done.entryId
-            val token = done.undoToken
-            val skill = done.skillId
-            if (entry != null && token != null && skill != null && RisiSkillCards.canUndo(done, ctx.nowMs, ctx.host.undone)) {
-                OutlinedButton(onClick = { ctx.host.undo(skill, entry, token) }, modifier = Modifier.testTag("risi_undo")) { Text("Undo") }
-            } else if (entry != null && entry.lowercase() in ctx.host.undone) {
-                Text("Undo requested", style = MaterialTheme.typography.labelMedium, modifier = Modifier.align(Alignment.CenterVertically).testTag("risi_undo_state"))
-            }
-        }
-    }
+    val eid = rec.eventId
+    if (port != null && eid != null) FilledTonalButton(onClick = { port.open(eid) }, modifier = Modifier.testTag("risi_calendar_open")) { Text("Open") }
 }
 
 /** First use (and Change): the writable calendars as "harsha@… · Google"; read-only ones never listed. */

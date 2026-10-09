@@ -120,11 +120,9 @@ internal fun DraftCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
 @Composable
 internal fun SkillDoneCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
     val context = LocalContext.current
-    val calendarCard = r.skillId == lk.codegen.risime.net.RisiSkillIds.CALENDAR && lk.codegen.risime.data.tabs.RisiCalendarCards.hasActionCard(r, ctx.messages)
     Column(Modifier.testTag("risi_skill_done"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         Text(row.body.ifBlank { r.summary.orEmpty() }, style = MaterialTheme.typography.bodyLarge)
-        // P0: after an action card, [Open] and [Undo] live on that card (one card per action).
-        if (calendarCard) return@Column
+        // P0: the success line ("Added to your Google Calendar: …") with [Open] and [Undo]; the action card above shows "Added".
         if (r.skillId == lk.codegen.risime.net.RisiSkillIds.CALENDAR) CalendarOpenButton(r, ctx)
         val entry = r.entryId
         val skill = r.skillId

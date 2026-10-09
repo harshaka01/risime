@@ -177,10 +177,11 @@ class RisiCalendarCardUiTest {
                 ("undo" to ProtocolJson.parseToJsonElement("""{"kind":"client","state":"available","until":null,"hint":null}""")))
         }
         show(h, listOf(calendarCard(), done), extra = listOf(confirmed()))
-        rule.onNodeWithText("Added to your Google Calendar: Dentist · Fri 16 Oct, 10–11 AM").assertIsDisplayed()
+        // The card says it is done; the success line below (skill_done) carries [Open] and [Undo], once each.
+        rule.onNodeWithText("✓ Added · Fri 16 Oct, 10–11 AM").assertIsDisplayed()
+        assertEquals(1, rule.onAllNodes(hasTestTag("risi_calendar_open")).fetchSemanticsNodes().size)
         rule.onNodeWithTag("risi_calendar_open").performClick()
         assertEquals(listOf(4711L), port.opened)
-        // One card per action: the skill_done carries no second Undo.
         assertEquals(1, rule.onAllNodes(hasTestTag("risi_undo")).fetchSemanticsNodes().size)
         rule.onNodeWithTag("risi_undo").performClick()
         assertEquals(listOf("undo:calendar:7c6b5a49-3827-4615-9403-f2a1b0c9d8e7:tok"), h.calls)
@@ -199,6 +200,16 @@ class RisiCalendarCardUiTest {
         assertTrue(!exists("risi_calendar_picker"))
         assertEquals(1L, port.chosenId.value)
         assertEquals(listOf("act:$writeId:confirm_write"), h.calls)
+    }
+
+    @Test fun withoutASkillDoneTheCardIsTheSuccessCard() {
+        val port = Port(listOf(google), chosen = google)
+        port.records.value = mapOf(writeId to CalendarAddRecord(writeId, null, "Dentist", "2026-10-16T04:30:00Z", "2026-10-16T05:30:00Z", false,
+            eventId = 4711, calendarId = 1, calendarName = "harsha@example.com · Google", accountType = "com.google"))
+        show(Host(asker, port), listOf(calendarCard()), extra = listOf(confirmed()))
+        rule.onNodeWithText("Added to your Google Calendar: Dentist · Fri 16 Oct, 10–11 AM").assertIsDisplayed()
+        rule.onNodeWithTag("risi_calendar_open").performClick()
+        assertEquals(listOf(4711L), port.opened)
     }
 
     @Test fun aFailedAddSaysWhy() {
