@@ -4,7 +4,7 @@
 # arm64 Android 14, decision 045) against a temp server with TABS=on (RISI off: the tab row, "Start
 # Official" and "What Risi knows about me" must work either way). Navigates like a user: taps and
 # long-presses by visible text / content description from `uiautomator dump`, no debug hooks.
-#   timeout 1800 scripts/ui-entry-test [--apk app-debug.apk] [--keep] [--risi] [--skills] [--ledger]
+#   timeout 1800 scripts/ui-entry-test [--apk app-debug.apk] [--keep] [--risi] [--skills] [--ledger] [--calendar] [--offers]
 #   --risi: the server also runs Risi (RISI=on, the MLS NIF built --prod, scripts/fake-llm on
 #   127.0.0.1:$UITEST_LLM_PORT, default 8197; throwaway keys) and step 9 runs.
 #   --skills (implies --risi): RISI_TOOLS=on RISI_SKILLS=on, fake-llm --script (contract/v1/
@@ -13,6 +13,8 @@
 #   for the test (RISI_QUIET_S=$UITEST_QUIET_S, default 20), fake-llm --script with a scripted
 #   `discussion_summarise` answer, and step 11 runs. UITEST_LEDGER_ONLY=1 runs only steps 1 and 11.
 #   --calendar (implies --skills; P0 Harsha's phone): step 12 runs. UITEST_CALENDAR_ONLY=1 runs only steps 1 and 12.
+#   --offers (server items 8-10): the server runs RISI_TOOLS/SKILLS/LEDGER on with RISI_QUIET_SPACING_S=1 (two
+#   summaries in a row) and step 13 runs (steps 10/11 only with --skills/--ledger). UITEST_OFFERS_ONLY=1: steps 1 and 13.
 #
 #  1. A and B sign in through the login UI (dev OTP), become friends, both open the DM; it turns e2ee.
 #  2. A's chat: the "🔒 Private" | "● Official" row under the header; the Official tab's "Start Official".
@@ -54,7 +56,18 @@
 #     (no request); [Add] → the picker lists only "uitest.risime@gmail.com · Google" → the event is in that
 #     calendar (CalendarContract: title, start, end, calendar id) with no further model call; the card reads
 #     "Added to your Google Calendar: …" with Open / Undo; Undo removes it (calendar_remove); never "I don't
-#     see any event details".
+#     see any event details". Calendar honesty (P0): "Am I free Tuesday 2pm?" → the answer carries the server's
+#     "I checked: Phone calendar …"; Calendar → Details shows what Risi can read; last of all (after 13) with the
+#     calendar permission revoked the same question → "I couldn't read your calendar …", no free/clear.
+# 13. (--offers, server items 8-10) A and B discuss in the 1:1 Official; the scripted extraction gives A a timed
+#     item, two vague ones and B an all-day one. (a) A's Risi chat: "Risi · Add to calendar?" for the timed item →
+#     [Add] → the event is read back from A's Google-type calendar (CalendarContract, the server's due) with no model
+#     call, and the item is offered once only (risi_item_offers, also after ✓ and the repeat below); (b) the vague
+#     item's "Risi · When is it due?" → [New date] → date + time → item_edit → "New date sent" → its calendar offer
+#     (10–11 AM on the picked day); (c) Settings → My promises: "I promised (n)" / "Promised to me (n)" equal to
+#     the personal digest's totals (LedgerReminders.digest_items, the same query), a "Needs a date" row, a tap opens
+#     the source chat; (d) a second discussion repeats the timed promise in other words → merged: no new row, no
+#     new summary, one row in My promises.
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -64,8 +77,13 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
 CLS=lk.codegen.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0; RISI=0; SKILLS=0; LEDGER=0; CALENDAR=0
-while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;; --skills) RISI=1; SKILLS=1; shift;; --ledger) RISI=1; LEDGER=1; shift;; --calendar) RISI=1; SKILLS=1; CALENDAR=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0
+while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;;
+  --skills) RISI=1; SKILLS=1; SKILLS_STEP=1; shift;; --ledger) RISI=1; LEDGER=1; shift;;
+  --calendar) RISI=1; SKILLS=1; SKILLS_STEP=1; CALENDAR=1; shift;; --offers) RISI=1; SKILLS=1; OFFERS=1; shift;;
+  *) echo "unknown arg $1"; exit 2;; esac; done
+# The ledger's server flags (the quiet rule, the extraction) for --ledger and --offers.
+LEDGER_ON=0; { [ "$LEDGER" = 1 ] || [ "$OFFERS" = 1 ]; } && LEDGER_ON=1
 QUIET_S="${UITEST_QUIET_S:-20}"
 LLM_PORT="${UITEST_LLM_PORT:-8197}"
 APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
@@ -114,7 +132,7 @@ trap 'exit 130' INT TERM
 write_script() {  # $1 = the scheduled message's "at" (ISO, UTC), $2 = the DM conversation id
   python3 -I - "$REPO/contract/v1/risi_gate_script.json" "$WORK/llm-script.json" "${1:-2099-01-01T00:00:00.000Z}" "${2:-dm:none}" \
     "${CAL_START:-2099-01-05T08:30:00.000Z}" "${CAL_END:-2099-01-05T09:30:00.000Z}" <<'PY'
-import json, sys
+import json, os, sys
 base = json.load(open(sys.argv[1], encoding="utf-8"))
 at, conv = sys.argv[3], sys.argv[4]
 cal_start, cal_end = sys.argv[5], sys.argv[6]
@@ -127,6 +145,10 @@ rules = [
                  {"tool": "final", "answer": "Here it is. Tap Add to put it on your Google Calendar.", "sources": [],
                   "next_steps": ["Confirm to add the event", "What else is on Monday?", "Remind me 30 min before"]}]},
     # The P0 failure mode: a chip SENT as a request. The gate fails if this answer ever shows.
+    # Calendar honesty, no read: with the permission revoked calendar_check isn't offered; the model claims the
+    # asker is free anyway. The server must replace that ("I couldn't read your calendar …").
+    {"name": "calendar_free_unchecked", "task": "risi_next_action", "match": "(?i)am i still free",
+     "actions": [final("Yes, you're free on Tuesday at 2 pm. Your calendar is clear.")]},
     {"name": "calendar_chip_sent", "task": "risi_next_action", "match": "(?i)(confirm to add|remind me 30)",
      "actions": [final("I don't see any event details.")]},
 
@@ -141,6 +163,28 @@ rules = [
      "actions": [{"tool": "schedule_message", "args": {"to": "ZZ UI B", "text": "Good morning", "at": at, "repeat": None}},
                  final("Tap Add to send it from your phone at that time.")]},
 ]
+# Step 13 (--offers): the extraction of two Official discussions (both before step 11's catch-all rule). The
+# owner refs follow the members' order (u1/u2), so each rule exists for A = u1 and A = u2, told apart by the
+# prompt's member line {"name":"ZZ UI A",…,"ref":"uN",…}. Discussion 1 ("cement delivery"): A's timed item, two
+# vague ones, B's all-day one. Discussion 2 ("just a reminder"): A's timed promise again in other words (merged).
+t_due, b_due, r_due = (os.environ.get(k, d) for k, d in
+                       (("OFF_T_DUE", "2099-01-05T15:00"), ("OFF_B_DUE", "2099-01-05"), ("OFF_R_DUE", "2099-01-05T15:30")))
+for a, b in (("u1", "u2"), ("u2", "u1")):
+    who = '(?=[\\s\\S]*"name":"ZZ UI A"[^}]*"ref":"%s")' % a
+    item = lambda text, owner, due, due_text, src: {"text": text, "owner": owner, "counterparts": [b if owner == a else a],
+                                                    "due_local": due, "due_text": due_text, "source": [src], "confidence": 0.9}
+    rules += [
+        {"name": "offers_repeat_" + a, "task": "discussion_summar(y|ise)", "match": "(?i)^(?=[\\s\\S]*just a reminder)" + who,
+         "actions": [{"key_points": ["The supplier call stays as agreed."], "summary": "A reminder about the supplier call.",
+                      "items": [item("Call the cement supplier about the delivery", a, r_due, None, "m2")]}]},
+        {"name": "offers_d1_" + a, "task": "discussion_summar(y|ise)", "match": "(?i)^(?=[\\s\\S]*cement delivery)" + who,
+         "actions": [{"key_points": ["The cement delivery needs a supplier call.", "The audit report and the crane quote follow."],
+                      "summary": "Chat about the cement delivery, the audit report and the crane quote.",
+                      "items": [item("Call the supplier about the cement delivery", a, t_due, None, "m1"),
+                                item("Send the site photos", b, b_due, None, "m2"),
+                                item("Share the safety audit report", a, None, "sometime next week", "m3"),
+                                item("Check the crane hire quote", a, None, "soon", "m5")]}]},
+    ]
 # Step 11 (--ledger): the quiet-rule extraction (§27.2, learning-log task discussion_summarise) over the
 # Official discussion: two key points and one item for each member ref (u1, u2: A and B in the server's
 # order), so each phone owns exactly one item whichever ref it got.
@@ -162,7 +206,7 @@ start_llm() {
   tmux kill-session -t "risime-uientry-llm$SUF" 2>/dev/null || true
   for _ in $(seq 1 20); do ss -ltnH "sport = :$LLM_PORT" | grep -q . || break; sleep 0.5; done
   local extra=""
-  if [ "$SKILLS" = 1 ] || [ "$LEDGER" = 1 ]; then [ -f "$WORK/llm-script.json" ] || write_script; extra="--script '$WORK/llm-script.json'"; fi
+  if [ "$SKILLS" = 1 ] || [ "$LEDGER_ON" = 1 ]; then [ -f "$WORK/llm-script.json" ] || write_script; extra="--script '$WORK/llm-script.json'"; fi
   tmux new -d -s "risime-uientry-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT --record '$WORK/llm-requests.jsonl' $extra >> '$WORK/fake-llm.out' 2>&1"
   for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && break; sleep 0.5; done
   curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" || { echo "fake-llm didn't start"; tail -5 "$WORK/fake-llm.out"; exit 1; }
@@ -212,9 +256,11 @@ if [ "$RISI" = 1 ]; then
     echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"; echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"
     if [ "$SKILLS" = 1 ]; then echo "RISI_TOOLS=on"; echo "RISI_SKILLS=on"; fi
     # The quiet rule shortened for this run: the env names of §27.2 and, until the server reads them, the app env.
-    if [ "$LEDGER" = 1 ]; then echo "RISI_TOOLS=on"; echo "RISI_LEDGER=on"; echo "RISI_QUIET_S=$QUIET_S"; echo "RISI_QUIET_MIN_MSGS=6"
+    if [ "$LEDGER_ON" = 1 ]; then echo "RISI_TOOLS=on"; echo "RISI_LEDGER=on"; echo "RISI_QUIET_S=$QUIET_S"; echo "RISI_QUIET_MIN_MSGS=6"
       echo "ELIXIR_ERL_OPTIONS=\"-risime risi_quiet_s $QUIET_S -risime risi_quiet_min_msgs 6\""; fi
-    if [ "$SKILLS" = 1 ] || [ "$LEDGER" = 1 ]; then echo "RISI_MEMORY_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; fi; } > "$WORK/risi.env"
+    # --offers: two summaries of the same Official in a row (the repeat of step 13 (d)), not 30 min apart.
+    if [ "$OFFERS" = 1 ]; then echo "RISI_QUIET_SPACING_S=1"; fi
+    if [ "$SKILLS" = 1 ] || [ "$LEDGER_ON" = 1 ]; then echo "RISI_MEMORY_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; fi; } > "$WORK/risi.env"
   umask 022
   # Parallel runs (agents, the release gate) must not share the fake model: refuse a busy port.
   ss -ltnH "sport = :$LLM_PORT" | grep -q . && { echo "fake-llm port $LLM_PORT busy (another ui-entry-test?): set UITEST_LLM_PORT"; exit 1; }
@@ -231,7 +277,7 @@ curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"tabs":"on"' || 
 if [ "$SKILLS" = 1 ]; then
   curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"risi_skills":"on"' || { echo "the temp server's /auth/config doesn't say risi_skills: on"; exit 1; }
 fi
-if [ "$LEDGER" = 1 ]; then
+if [ "$LEDGER_ON" = 1 ]; then
   curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"risi_ledger":"on"' || { echo "the temp server's /auth/config doesn't say risi_ledger: on"; exit 1; }
 fi
 [ "$(fx setup)" = "uientry: setup ok" ] || { echo "fixture: setup"; exit 1; }
@@ -398,7 +444,9 @@ pass "both opened the DM; it is e2ee"
 # UITEST_SKILLS_ONLY=1 (with --skills): only steps 1 and 10 (a quicker run while working on step 10).
 # UITEST_LEDGER_ONLY=1 (with --ledger): only steps 1 and 11.
 # UITEST_CALENDAR_ONLY=1 (with --calendar): only steps 1 and 12.
-if [ "${UITEST_SKILLS_ONLY:-0}" != 1 ] && [ "${UITEST_LEDGER_ONLY:-0}" != 1 ] && [ "${UITEST_CALENDAR_ONLY:-0}" != 1 ]; then
+# UITEST_OFFERS_ONLY=1 (with --offers): only steps 1 and 13.
+ONLY="${UITEST_SKILLS_ONLY:-0}${UITEST_LEDGER_ONLY:-0}${UITEST_CALENDAR_ONLY:-0}${UITEST_OFFERS_ONLY:-0}"
+if [ "$ONLY" = 0000 ]; then
 # ---------------------------------------------------------------- 2. the tab row under the header, Start Official
 DEV=A
 wait_text "🔒 Private" 30 || fail "tab row: no '🔒 Private' under the chat header (tabs on)"
@@ -674,7 +722,7 @@ fi
 fi  # UITEST_SKILLS_ONLY
 
 # ---------------------------------------------------------------- 10. (--skills) Risi skills: alarm, scheduled message, revoke
-if [ "$SKILLS" = 1 ] && [ "${UITEST_LEDGER_ONLY:-0}" != 1 ] && [ "${UITEST_CALENDAR_ONLY:-0}" != 1 ]; then
+if [ "$SKILLS_STEP" = 1 ] && { [ "$ONLY" = 0000 ] || [ "${UITEST_SKILLS_ONLY:-0}" = 1 ]; }; then
   DEV=A
   size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
   conv="$(fx conv | sed -n 's/^uientry: conv=//p')"; [ -n "$conv" ] || fail "fixture: the DM's conversation id"
@@ -806,6 +854,108 @@ for i, l in enumerate(lines):
   pass "'Open Risi skills' opens Settings → Risi skills"
 fi
 
+# Helpers of steps 11-13.
+# Read-only views of the server's store (Repo only, `mix run --no-start`: no second Oban or Risi here).
+cat > "$WORK/offers_fx.exs" <<'EXS'
+{:ok, _} = Application.ensure_all_started(:ecto_sql)
+{:ok, _} = Application.ensure_all_started(:postgrex)
+{:ok, _} = RisiMe.Repo.start_link(pool_size: 2)
+import Ecto.Query
+alias RisiMe.Repo
+alias RisiMe.Accounts.User
+alias RisiMe.Agent.{Commitment, Discussion, LedgerReminders, Offers, Rest}
+a = Repo.get_by!(User, phone: "+94770000981")
+case System.argv() do
+  ["tz"] ->
+    IO.puts("uientry: tz=#{RisiMe.Agent.Clock.user_tz(a.id)}")
+  ["state"] ->
+    for c <- Repo.all(from c in Commitment, order_by: [asc: c.inserted_at]) do
+      {:ok, o} = Commitment.open(c)
+      offers = for(f <- Offers.list(c.id), f.user_id == a.id, do: "#{f.kind}:#{f.state}") |> Enum.sort() |> Enum.join(",")
+      owner = if c.owner_id == a.id, do: "A", else: "B"
+      due = if c.due, do: DateTime.to_unix(c.due, :millisecond), else: ""
+      IO.puts("uientry: item #{owner}|#{o.text}|#{c.item_state || c.state}|#{c.needs_clarification}|#{due}|#{offers}")
+    end
+    IO.puts("uientry: discussions=#{Repo.aggregate(Discussion, :count)}")
+  ["totals"] ->
+    # The personal digest's items and totals (§27.6, item 9: the query of GET /risi/commitments).
+    items = LedgerReminders.digest_items(a.id)
+    t = Rest.totals(items, a.id)
+    IO.puts("uientry: totals=#{t["i_promised"]} #{t["promised_to_me"]} #{t["others"]} n=#{length(items)}")
+end
+EXS
+ofx() { (cd server && set -a && . "$WORK/risi.env" && set +a && $M mix run --no-start "$WORK/offers_fx.exs" "$@" 2>/dev/null | grep '^uientry:' || true); }
+# Taps the first node with the exact text $2 below the node $1 (exact text/content-desc, or "prefix*") and above
+# the next card or item ("Risi · …" header, "• …" item line). Scrolls the chat to find them: the anchor not
+# on screen → older; the target not yet on screen → a little newer.
+tap_below() {
+  local r
+  for _ in $(seq 1 16); do
+    dump
+    r="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" "$2" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+want, target = sys.argv[2], sys.argv[3]
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+def c(n):
+    x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); return (x1 + x2) // 2, (y1 + y2) // 2
+def is_anchor(n):
+    t, d = n.get('text') or '', n.get('content-desc') or ''
+    return t == want or d == want or (want.endswith('*') and t.startswith(want[:-1]))
+anchors = [n for n in nodes if is_anchor(n)]
+if not anchors:
+    print("noanchor"); sys.exit()
+ay = c(anchors[-1])[1]
+stops = [c(n)[1] for n in nodes if not is_anchor(n) and c(n)[1] > ay and ((n.get('text') or '').startswith('• ') or (n.get('text') or '').startswith('Risi · '))]
+limit = min(stops) if stops else 10 ** 6
+hits = sorted((c(n)[1], c(n)[0]) for n in nodes if (n.get('text') or '') == target and ay < c(n)[1] < limit)
+print("%d %d" % (hits[0][1], hits[0][0]) if hits else ("notarget" if not stops else "blocked"))
+PY
+)"
+    case "$r" in
+      noanchor) A shell input swipe $((W / 2)) $((H * 30 / 100)) $((W / 2)) $((H * 65 / 100)) 300 ;;
+      notarget) A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 42 / 100)) 300 ;;
+      blocked) echo "    [$DEV] no '$2' under '$1' (the next item/card follows)"; return 1 ;;
+      *) A shell input tap $r; return 0 ;;
+    esac
+    sleep 1
+  done
+  echo "    [$DEV] no '$2' below '$1'"; return 1
+}
+# Scrolls the chat (older first, then back to the newest) until the text $1 ("prefix*" allowed) is on screen.
+scroll_to() {
+  local i
+  for i in $(seq 1 24); do
+    [ -n "$(node_xy "$1")" ] && return 0
+    if [ "$i" -le 12 ]; then A shell input swipe $((W / 2)) $((H * 30 / 100)) $((W / 2)) $((H * 65 / 100)) 300
+    else A shell input swipe $((W / 2)) $((H * 65 / 100)) $((W / 2)) $((H * 30 / 100)) 300; fi
+    sleep 1
+  done
+  echo "    [$DEV] not in the chat: $1"; return 1
+}
+item_line() { ofx state | grep -F "|$1|" | head -1; }
+# Material 3's date picker: the day cell whose content description names $1 (YYYY-MM-DD), paging months forward.
+pick_day() {
+  local xy
+  for _ in 1 2 3 4; do
+    dump
+    xy="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import datetime as dt, re, sys, xml.etree.ElementTree as ET
+d = dt.date.fromisoformat(sys.argv[2])
+full = "%s %d, %d" % (d.strftime("%B"), d.day, d.year)
+for n in ET.parse(sys.argv[1]).iter('node'):
+    if full in (n.get('content-desc') or '') or full in (n.get('text') or ''):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+)"
+    [ -n "$xy" ] && { A shell input tap $xy; return 0; }
+    tap "Change to next month" || return 1
+    sleep 1
+  done
+  return 1
+}
 # ---------------------------------------------------------------- 11. (--ledger) a discussion → each Risi chat's summary
 # The Official tab of the DM, with a usable composer ("Message"); starts Official the first time.
 official_tab() {
@@ -826,7 +976,8 @@ open_risi_chat() {
   tap "Risi" || return 1
   wait_for 'text="Ask Risi…"' 60
 }
-if [ "$LEDGER" = 1 ]; then
+if [ "$LEDGER" = 1 ] && { [ "$ONLY" = 0000 ] || [ "${UITEST_LEDGER_ONLY:-0}" = 1 ]; }; then
+  DEV=A; size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
   DEV=A; official_tab B || fail "ledger: A can't open the DM's Official tab"
   DEV=B; official_tab A || fail "ledger: B can't open the DM's Official tab"
   pass "ledger: both phones are in the 1:1 Official ('Risi is listening')"
@@ -869,9 +1020,11 @@ PY
   pass "ledger: A confirmed '$mine' (✓) → 'confirmed ✓' after Risi's item_update"
   DEV=B; open_risi_chat || fail "ledger: B can't open its Risi chat"
   # (The summary card is taller on B once A confirmed: its header may be scrolled off; the items are what matter.)
-  wait_text "ZZ UI A agreed:" 90 || fail "ledger: B's Risi chat has no summary with 'ZZ UI A agreed:'"
-  has 'text="You agreed:"' || fail "ledger: B's summary has no 'You agreed:'"
+  # (Since server item 10 each undated item also gets a "When is it due?" card below the summary: scroll up to it.)
+  wait_text "ZZ UI A agreed:" 30 || scroll_to "ZZ UI A agreed:" || fail "ledger: B's Risi chat has no summary with 'ZZ UI A agreed:'"
   wait_text "confirmed ✓" 60 || fail "ledger: B doesn't see A's item as 'confirmed ✓'"
+  for _ in 1 2 3 4; do has 'text="You agreed:"' && break; A shell input swipe $((W / 2)) $((H * 35 / 100)) $((W / 2)) $((H * 55 / 100)) 300; sleep 1; done
+  has 'text="You agreed:"' || fail "ledger: B's summary has no 'You agreed:'"
   n_ok="$(count_text "✓")"
   [ "$n_ok" = 1 ] || fail "ledger: B's summary shows $n_ok ✓ buttons (want 1: B's own item)"
   pass "ledger: B's Risi chat has the same summary; A's item shows 'confirmed ✓', B confirms only its own"
@@ -889,8 +1042,10 @@ PY
   back_to_list || true
 fi
 
-# ---------------------------------------------------------------- 12. (--calendar, P0) Harsha's calendar conversation
-if [ "$CALENDAR" = 1 ] && [ "${UITEST_LEDGER_ONLY:-0}" != 1 ]; then
+# A's calendars and the Calendar skill (steps 12 and 13, once per run): $1 = the step's label.
+CAL_READY=0
+calendar_setup() {
+  [ "$CAL_READY" = 1 ] && return 0
   DEV=A
   size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
   GACC="uitest.risime@gmail.com"
@@ -905,41 +1060,22 @@ if [ "$CALENDAR" = 1 ] && [ "${UITEST_LEDGER_ONLY:-0}" != 1 ]; then
   cal_insert Phone LOCAL Phone 700
   cal_rows() { A shell "content query --uri content://com.android.calendar/calendars --projection _id:account_name:account_type:calendar_access_level:calendar_displayName" 2>/dev/null | tr -d '\r'; }
   GCAL="$(cal_rows | sed -n "s/^Row: [0-9]* _id=\([0-9]*\), account_name=$GACC, account_type=com.google, calendar_access_level=700,.*/\1/p" | head -1)"
-  [ -n "$GCAL" ] || { cal_rows | sed 's/^/    /'; fail "calendar: could not seed the Google-type calendar"; }
-  pass "calendar: seeded a com.google calendar ($GACC, id $GCAL), a read-only Google 'Holidays' and a local 'Phone' calendar"
-  # Next Monday 14:00–15:00 on A's clock (Harsha's "Monday 12 Oct at 2pm"), and the card's expected texts.
-  dtz="$(A shell getprop persist.sys.timezone | tr -d '\r')"; dtz="${dtz:-UTC}"
-  read -r CAL_START CAL_END CAL_START_MS CAL_DATE <<<"$(python3 -I - "$dtz" <<'PY'
-import sys, datetime as dt
-from zoneinfo import ZoneInfo
-z = ZoneInfo(sys.argv[1])
-now = dt.datetime.now(z)
-d = now.date() + dt.timedelta(days=(7 - now.weekday()) % 7 or 7)
-s = dt.datetime(d.year, d.month, d.day, 14, 0, tzinfo=z)
-e = s + dt.timedelta(hours=1)
-iso = lambda t: t.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-print(iso(s), iso(e), int(s.timestamp() * 1000), s.strftime("%a %-d %b"))
-PY
-)"
-  export CAL_START CAL_END
-  conv="$(fx conv | sed -n 's/^uientry: conv=//p')"
-  write_script "2099-01-01T00:00:00.000Z" "${conv:-dm:none}"; start_llm
-  reqs() { [ -f "$WORK/llm-requests.jsonl" ] && wc -l < "$WORK/llm-requests.jsonl" || echo 0; }
-
+  [ -n "$GCAL" ] || { cal_rows | sed 's/^/    /'; fail "$1: could not seed the Google-type calendar"; }
+  pass "$1: seeded a com.google calendar ($GACC, id $GCAL), a read-only Google 'Holidays' and a local 'Phone' calendar"
   # -- Settings → Risi skills → Calendar on: the runtime READ/WRITE_CALENDAR prompt, answered Allow
-  back_to_list || fail "calendar: back to the chat list"
-  tap "More options" || fail "calendar: the chat list's ⋮"
-  wait_for 'text="Settings"' 10 || fail "calendar: no Settings item"
-  tap "Settings" || fail "calendar: tap Settings"
+  back_to_list || fail "$1: back to the chat list"
+  tap "More options" || fail "$1: the chat list's ⋮"
+  wait_for 'text="Settings"' 10 || fail "$1: no Settings item"
+  tap "Settings" || fail "$1: tap Settings"
   for _ in 1 2 3 4 5 6; do has 'text="Risi skills"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
-  tap "Risi skills" || fail "calendar: Settings has no 'Risi skills'"
+  tap "Risi skills" || fail "$1: Settings has no 'Risi skills'"
   found=0
   for _ in 1 2 3 4 5 6; do
     has 'content-desc="Calendar skill"' && { found=1; break; }
     A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 35 / 100)) 400; sleep 1
   done
-  [ "$found" = 1 ] || fail "calendar: Risi skills has no Calendar switch"
-  tap "Calendar skill" || fail "calendar: turn on Calendar"
+  [ "$found" = 1 ] || fail "$1: Risi skills has no Calendar switch"
+  tap "Calendar skill" || fail "$1: turn on Calendar"
   # The system's permission dialog (com.android.permissioncontroller): its Allow button by resource id.
   allow_xy() {
     dump
@@ -965,8 +1101,33 @@ PY
     sleep 1
   done
   [ "$asked" -gt 0 ] || { echo "    (no runtime prompt seen: granting READ/WRITE_CALENDAR with pm)"; A shell pm grant "$PKG" android.permission.READ_CALENDAR; A shell pm grant "$PKG" android.permission.WRITE_CALENDAR; }
-  wait_skill "Calendar" "Ask me each time" 20 || fail "calendar: Calendar didn't turn on (Ask me each time)"
-  pass "calendar: Settings → Risi skills → Calendar on (Ask me each time) after the calendar permission prompt ($asked tap(s) on Allow)"
+  wait_skill "Calendar" "Ask me each time" 20 || fail "$1: Calendar didn't turn on (Ask me each time)"
+  pass "$1: Settings → Risi skills → Calendar on (Ask me each time) after the calendar permission prompt ($asked tap(s) on Allow)"
+  CAL_READY=1
+}
+reqs() { [ -f "$WORK/llm-requests.jsonl" ] && wc -l < "$WORK/llm-requests.jsonl" || echo 0; }
+
+# ---------------------------------------------------------------- 12. (--calendar, P0) Harsha's calendar conversation
+if [ "$CALENDAR" = 1 ] && { [ "$ONLY" = 0000 ] || [ "${UITEST_CALENDAR_ONLY:-0}" = 1 ]; }; then
+  DEV=A
+  calendar_setup calendar
+  # Next Monday 14:00–15:00 on A's clock (Harsha's "Monday 12 Oct at 2pm"), and the card's expected texts.
+  dtz="$(A shell getprop persist.sys.timezone | tr -d '\r')"; dtz="${dtz:-UTC}"
+  read -r CAL_START CAL_END CAL_START_MS CAL_DATE <<<"$(python3 -I - "$dtz" <<'PY'
+import sys, datetime as dt
+from zoneinfo import ZoneInfo
+z = ZoneInfo(sys.argv[1])
+now = dt.datetime.now(z)
+d = now.date() + dt.timedelta(days=(7 - now.weekday()) % 7 or 7)
+s = dt.datetime(d.year, d.month, d.day, 14, 0, tzinfo=z)
+e = s + dt.timedelta(hours=1)
+iso = lambda t: t.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+print(iso(s), iso(e), int(s.timestamp() * 1000), s.strftime("%a %-d %b"))
+PY
+)"
+  export CAL_START CAL_END
+  conv="$(fx conv | sed -n 's/^uientry: conv=//p')"
+  write_script "2099-01-01T00:00:00.000Z" "${conv:-dm:none}"; start_llm
 
   # -- Harsha's request in the Risi chat → one action card in one turn
   back_to_list || fail "calendar: back to the chat list (Risi chat)"
@@ -1048,8 +1209,280 @@ PY
   has 'text="Undo"' && fail "calendar: [Undo] is still offered after the undo"
   pass "calendar: Undo removed the event (calendar_remove of this phone's own add)"
   has "see any event details" && fail "calendar: \"I don't see any event details\" appeared"
+
+  # -- P0 calendar honesty (server 407606d/f063970, android 9c722e5/339bb36): a free/busy answer names what was
+  # read. The scripted model says "You're free…" after calendar_check (risi_gate_script q3_free_busy); the match is
+  # the server's own line "I checked: Phone calendar …", never the model's words.
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "Am%sI%sfree%sTuesday%s2pm?"; sleep 0.5
+  tap "Send" || fail "calendar: send 'Am I free Tuesday 2pm?'"
+  wait_for "I checked: Phone calendar" 120 || fail "calendar: the free/busy answer doesn't say 'I checked: Phone calendar …' (CalendarHonesty)"
+  rc_line="$(python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+print(next((n.get('text') for n in ET.parse(sys.argv[1]).iter('node') if 'I checked: Phone calendar' in (n.get('text') or '')), '').replace('\n', ' '))
+PY
+)"
+  echo "    answer: $rc_line"
+  shot "39-calendar-i-checked"
+  pass "calendar: 'Am I free Tuesday 2pm?' → the answer names what was read ('I checked: Phone calendar …')"
+
+  # -- Settings → Risi skills → Calendar → Details: what Risi can read on this phone (android 9c722e5). The test tags
+  # risi_calendar_sources / risi_calendar_source_row / risi_calendar_sources_permission aren't exported to
+  # uiautomator (no testTagsAsResourceId), so their visible texts are matched: "What Risi can read" (the block),
+  # "Phone calendar: permission on" (the permission line), "<calendar> · N events in the next 7 days" (a row).
+  back_to_list || fail "calendar: back to the chat list (Details)"
+  tap "More options" || fail "calendar: the chat list's ⋮ (Details)"
+  wait_for 'text="Settings"' 10 || fail "calendar: no Settings item (Details)"
+  tap "Settings" || fail "calendar: tap Settings (Details)"
+  for _ in 1 2 3 4 5 6; do has 'text="Risi skills"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
+  # (The row can sit behind the navigation bar, where a tap goes nowhere: retry a little further up.)
+  opened=""
+  for _ in 1 2 3; do
+    tap "Risi skills" || fail "calendar: Settings has no 'Risi skills' (Details)"
+    wait_for 'text="Risi skills"' 3 >/dev/null; sleep 2
+    has 'content-desc="Alarm skill"' && { opened=1; break; }
+    A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1
+  done
+  [ -n "$opened" ] || fail "calendar: 'Risi skills' didn't open (Details)"
+  for _ in 1 2 3 4 5 6; do has 'content-desc="Calendar skill"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 35 / 100)) 400; sleep 1; done
+  has 'content-desc="Calendar skill"' || fail "calendar: Risi skills has no Calendar (Details)"
+  # (A tap right after a swipe only stops the fling: tap again until the details are open.)
+  # Bring the Calendar card's title to the upper quarter first ([Details] can sit behind the navigation bar).
+  opened=""
+  for _ in 1 2 3; do
+    cy="$(node_xy "Calendar" | awk '{print $2}')"
+    [ -n "$cy" ] && [ "$cy" -gt $((H * 30 / 100)) ] && { A shell input swipe $((W / 2)) "$cy" $((W / 2)) $((H * 20 / 100)) 800; }
+    sleep 1.5
+    tap_below "Calendar" "Details" || fail "calendar: Risi skills → Calendar has no [Details]"
+    sleep 2
+    { has 'text="What Risi can read"' || has 'text="Can"' || has 'text="Cannot"'; } && { opened=1; break; }
+  done
+  [ -n "$opened" ] || fail "calendar: Calendar → [Details] didn't open"
+  found=0
+  for _ in 1 2 3 4 5 6 7 8; do
+    has 'text="What Risi can read"' && has 'text="Phone calendar: permission on"' && has 'events in the next 7 days' && { found=1; break; }
+    A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1
+  done
+  [ "$found" = 1 ] || fail "calendar: Calendar → Details lacks 'What Risi can read' / 'Phone calendar: permission on' / a calendar row (risi_calendar_sources, _permission, _source_row)"
+  shot "40-calendar-details-sources"
+  pass "calendar: Settings → Risi skills → Calendar → Details shows what Risi can read (sources block, permission line, calendar rows)"
+  back_to_list || true
   logcat_ok "calendar"
 fi
+
+# P0 calendar honesty, no read: calendar permission revoked → "Am I still free Tuesday 2pm?" (calendar_check is
+# then not offered; the scripted model claims "free … clear" without a check) → the server's "I couldn't read your
+# calendar on this phone (…)", never "free"/"clear". Run last (after step 13, which needs the permission).
+calendar_revoke_check() {
+  DEV=A
+  A shell pm revoke "$PKG" android.permission.READ_CALENDAR 2>/dev/null || true
+  A shell pm revoke "$PKG" android.permission.WRITE_CALENDAR 2>/dev/null || true
+  sleep 2
+  open_risi_chat || fail "calendar (revoked): A can't open its Risi chat"
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "Am%sI%sstill%sfree%sTuesday%s2pm?"; sleep 0.5
+  tap "Send" || fail "calendar (revoked): send 'Am I still free Tuesday 2pm?'"
+  local ok="" ans=""
+  for _ in $(seq 1 120); do
+    dump
+    ans="$(python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+nodes = [(int(re.findall(r'\d+', n.get('bounds'))[1]), n.get('text') or '') for n in ET.parse(sys.argv[1]).iter('node')]
+hits = sorted((y, t) for y, t in nodes if "couldn't read" in t)
+print(hits[-1][1].replace('\n', ' ') if hits else '')
+PY
+)"
+    [ -n "$ans" ] && { ok=1; break; }
+    has 'Open Risi skills' && break
+    sleep 1
+  done
+  [ -n "$ok" ] || { shot "41-calendar-revoked"; fail "calendar (revoked): the answer doesn't say it couldn't read the calendar"; }
+  echo "    answer: $ans"
+  printf '%s' "$ans" | grep -qiE '\b(free|clear)\b' && fail "calendar (revoked): the no-read answer still says free/clear: $ans"
+  shot "41-calendar-revoked"
+  pass "calendar (revoked): 'Am I still free Tuesday 2pm?' → \"couldn't read\", no free/clear (the model's claim discarded)"
+  A shell pm grant "$PKG" android.permission.READ_CALENDAR 2>/dev/null || true
+  A shell pm grant "$PKG" android.permission.WRITE_CALENDAR 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------- 13. (--offers, server items 8-10) offers, clarify, My promises, dedupe
+if [ "$OFFERS" = 1 ] && { [ "$ONLY" = 0000 ] || [ "${UITEST_OFFERS_ONLY:-0}" = 1 ]; }; then
+  DEV=A
+  calendar_setup offers
+  size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
+  # The timed item: 15:00 two days ahead in A's zone on the server (the model's due_local is read there); B's
+  # all-day item that day; the repeat at 15:30 (same 24-h window); [New date] picks three days ahead, 10:00.
+  stz="$(ofx tz | sed -n 's/^uientry: tz=//p')"; [ -n "$stz" ] || fail "offers: fixture: A's zone"
+  dtz="$(A shell getprop persist.sys.timezone | tr -d '\r')"; dtz="${dtz:-UTC}"
+  read -r OFF_T_DUE OFF_B_DUE OFF_R_DUE OFF_T_MS OFF_D2 <<<"$(python3 -I - "$stz" "$dtz" <<'PY'
+import sys, datetime as dt
+from zoneinfo import ZoneInfo
+s, d = ZoneInfo(sys.argv[1]), ZoneInfo(sys.argv[2])
+d1 = dt.datetime.now(s).date() + dt.timedelta(days=2)
+t = dt.datetime(d1.year, d1.month, d1.day, 15, 0, tzinfo=s)
+d2 = dt.datetime.now(d).date() + dt.timedelta(days=3)
+print(t.strftime("%Y-%m-%dT%H:%M"), d1.isoformat(), t.strftime("%Y-%m-%dT15:30"), int(t.timestamp() * 1000), d2.isoformat())
+PY
+)"
+  export OFF_T_DUE OFF_B_DUE OFF_R_DUE
+  conv="$(fx conv | sed -n 's/^uientry: conv=//p')"
+  write_script "2099-01-01T00:00:00.000Z" "${conv:-dm:none}"; start_llm
+  T_TEXT="Call the supplier about the cement delivery"; V1_TEXT="Share the safety audit report"
+  V2_TEXT="Check the crane hire quote"; B_TEXT="Send the site photos"
+
+  # -- discussion 1 in the 1:1 Official → A's Risi chat: the offer and two questions
+  DEV=A; official_tab B || fail "offers: A can't open the DM's Official tab"
+  DEV=B; official_tab A || fail "offers: B can't open the DM's Official tab"
+  DEV=A; say "I will call the supplier about the cement delivery" || fail "offers: A message 1"
+  DEV=B; say "Good. I will send the site photos that day" || fail "offers: B message 2"
+  DEV=A; say "I will share the safety audit report sometime next week" || fail "offers: A message 3"
+  DEV=B; say "Thanks, the audit matters" || fail "offers: B message 4"
+  DEV=A; say "I will check the crane hire quote soon" || fail "offers: A message 5"
+  DEV=B; say "Perfect, talk then" || fail "offers: B message 6"
+  pass "offers: A and B discussed in Official (6 messages)"
+  DEV=A; open_risi_chat || fail "offers: A can't open its Risi chat"
+  # The quiet rule, the extraction, then the cards (the server's record first: the newest cards push the offer up).
+  t0=$(date +%s)
+  until item_line "$T_TEXT" | grep -q '|calendar:offered'; do
+    [ $(( $(date +%s) - t0 )) -gt $(( QUIET_S + 180 )) ] && { ofx state | sed 's/^/    /'; fail "offers: the server made no calendar offer of the timed item (quiet rule → extraction → offer)"; }
+    sleep 3
+  done
+  wait_text "Risi · When is it due?" 60 || fail "offers: A's Risi chat shows no 'Risi · When is it due?' card (vague items)"
+  scroll_to "Risi · Add to calendar?" || fail "offers: no 'Risi · Add to calendar?' card in A's Risi chat (timed item)"
+  for _ in 1 2 3 4; do has "text=\"$T_TEXT\"" && has 'text="Edit"' && break; A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 42 / 100)) 300; sleep 1; done
+  has "text=\"$T_TEXT\"" || fail "offers: the offer card doesn't name the item ('$T_TEXT')"
+  has 'text="Add"' || fail "offers: the offer card has no [Add]"
+  has 'text="Edit"' || fail "offers: the offer card has no [Edit]"
+  shot "32-offer-add-to-calendar"
+  pass "offers (a): A's Risi chat: 'Risi · Add to calendar?' with '$T_TEXT' and Add / Edit / Cancel"
+
+  # -- (a) [Add] → the event on A's Google calendar, with no model call
+  r2="$(reqs)"
+  tap_below "Risi · Add to calendar?" "Add" || fail "offers: tap Add on the offer"
+  sleep 2
+  if has "Choose a calendar"; then
+    has "text=\"$GACC · Google\"" || fail "offers: the picker doesn't list '$GACC · Google'"
+    tap "Use this calendar" || fail "offers: pick the calendar"
+  fi
+  wait_text "Added to your Google Calendar: $T_TEXT*" 90 || fail "offers: no 'Added to your Google Calendar: $T_TEXT …' after [Add]"
+  ev="$(A shell "content query --uri content://com.android.calendar/events --projection _id:calendar_id:title:dtstart:dtend:deleted" 2>/dev/null | tr -d '\r' | grep "title=$T_TEXT," | grep 'deleted=0' || true)"
+  [ -n "$ev" ] || fail "offers: no '$T_TEXT' event in CalendarContract"
+  [ "$(printf '%s\n' "$ev" | wc -l)" = 1 ] || fail "offers: more than one event added: $ev"
+  printf '%s\n' "$ev" | grep -q "calendar_id=$GCAL," || fail "offers: the event isn't in the Google calendar $GCAL: $ev"
+  printf '%s\n' "$ev" | grep -q "dtstart=$OFF_T_MS," || fail "offers: the event's start isn't the item's due ($OFF_T_DUE $stz = $OFF_T_MS): $ev"
+  printf '%s\n' "$ev" | grep -q "dtend=$((OFF_T_MS + 3600000))," || fail "offers: the event's end isn't +1 h: $ev"
+  [ "$(reqs)" = "$r2" ] || fail "offers: [Add] cost a model call ($(reqs) vs $r2)"
+  for _ in $(seq 1 20); do item_line "$T_TEXT" | grep -q '|calendar:added$' && break; sleep 1; done
+  item_line "$T_TEXT" | grep -q '|calendar:added$' || fail "offers: the offer isn't recorded as added: $(item_line "$T_TEXT")"
+  shot "33-offer-added"
+  pass "offers (a): [Add] → '$T_TEXT' read back from the Google calendar (id $GCAL, $OFF_T_DUE $stz, 1 h); 0 model calls"
+
+  # -- (b) the vague item's question → [New date] → item_edit → its calendar offer
+  scroll_to "When is \"$V1_TEXT\" due?*" || fail "offers: no 'When is \"$V1_TEXT\" due?' question"
+  has 'text="Risi · When is it due?"' || fail "offers: the question card's header isn't 'Risi · When is it due?'"
+  item_line "$V1_TEXT" | grep -q '|true|' || fail "offers: '$V1_TEXT' isn't marked needs_clarification: $(item_line "$V1_TEXT")"
+  item_line "$V1_TEXT" | grep -q 'calendar:' && fail "offers: a vague item got a calendar offer: $(item_line "$V1_TEXT")"
+  shot "34-clarify-when-due"
+  pass "offers (b): '$V1_TEXT' (vague) → 'Risi · When is it due?', no calendar offer"
+  tap_below "When is \"$V1_TEXT\" due?*" "New date" || fail "offers: no [New date] on the question"
+  wait_text "Pick a date" 15 || fail "offers: [New date] didn't open the date form"
+  tap "Pick a date" || fail "offers: tap Pick a date"
+  sleep 1
+  pick_day "$OFF_D2" || fail "offers: the date picker has no $OFF_D2"
+  sleep 0.5; tap "OK" || fail "offers: confirm the date"
+  wait_text "Pick a time" 10 || fail "offers: no 'Pick a time' after the date"
+  tap "Pick a time" || fail "offers: tap Pick a time"
+  sleep 1; tap "OK" || fail "offers: confirm the time (10:00)"
+  wait_text "10:00 AM" 10 || fail "offers: the form doesn't show 10:00 AM"
+  shot "35-clarify-new-date"
+  tap "Save" || fail "offers: tap Save"
+  for _ in $(seq 1 30); do item_line "$V1_TEXT" | grep -q '|calendar:offered' && break; sleep 2; done
+  item_line "$V1_TEXT" | grep -q '|edited|false|' || fail "offers: item_edit didn't set the date: $(item_line "$V1_TEXT")"
+  item_line "$V1_TEXT" | grep -q '|calendar:offered' || fail "offers: no calendar offer after the new date: $(item_line "$V1_TEXT")"
+  for _ in 1 2 3; do A shell input swipe $((W / 2)) $((H * 65 / 100)) $((W / 2)) $((H * 25 / 100)) 300; sleep 0.5; done
+  wait_text "$V1_TEXT" 60 || fail "offers: no offer card for '$V1_TEXT' after the new date"
+  wait_text "10–11 AM" 30 || fail "offers: the new offer isn't 10–11 AM"
+  d2_label="$(python3 -I -c 'import sys, datetime as dt; d = dt.date.fromisoformat(sys.argv[1]); print(d.strftime("%a ") + str(d.day) + d.strftime(" %b"))' "$OFF_D2")"
+  has "text=\"$d2_label\"" || fail "offers: the new offer isn't on $d2_label"
+  shot "36-clarify-then-offer"
+  scroll_to "New date sent" || fail "offers: the question card doesn't say 'New date sent' after Save"
+  pass "offers (b): [New date] → $OFF_D2 10:00 → item_edit ('New date sent') → 'Add to calendar?' for '$V1_TEXT' (10–11 AM)"
+
+  # -- ✓ the timed item and the other vague one (A), B's item (B): My promises lists confirmed items only
+  tap_below "• $V2_TEXT" "✓" || fail "offers: ✓ on '$V2_TEXT'"
+  tap_below "• $T_TEXT" "✓" || fail "offers: ✓ on '$T_TEXT'"
+  DEV=B; open_risi_chat || fail "offers: B can't open its Risi chat"
+  sleep 2; scroll_to "• $B_TEXT" || fail "offers: B's Risi chat doesn't list '$B_TEXT'"
+  tap_below "• $B_TEXT" "✓" || fail "offers: B's ✓ on '$B_TEXT'"
+  DEV=A
+  ok=""
+  for _ in $(seq 1 30); do
+    st="$(ofx state)"
+    printf '%s\n' "$st" | grep -qF "A|$V2_TEXT|confirmed|true|" && printf '%s\n' "$st" | grep -qF "A|$T_TEXT|confirmed|" \
+      && printf '%s\n' "$st" | grep -qF "B|$B_TEXT|confirmed|" && { ok=1; break; }
+    sleep 1
+  done
+  [ -n "$ok" ] || { printf '%s\n' "$st" | sed 's/^/    /'; fail "offers: the ✓ didn't confirm the items"; }
+  item_line "$T_TEXT" | grep -q '|calendar:added$' || fail "offers: ✓ changed the timed item's offers: $(item_line "$T_TEXT")"
+  pass "offers: ✓ '$T_TEXT' and '$V2_TEXT' (A), ✓ '$B_TEXT' (B); still one offer of '$T_TEXT' (added)"
+
+  # -- (d) discussion 2 repeats the timed promise in other words → merged, nothing new
+  st0="$(ofx state)"; n0="$(printf '%s\n' "$st0" | grep -c '^uientry: item ')"; d0="$(printf '%s\n' "$st0" | sed -n 's/^uientry: discussions=//p')"
+  DEV=A; official_tab B || fail "offers: A can't reopen the Official tab"
+  DEV=B; official_tab A || fail "offers: B can't reopen the Official tab"
+  DEV=A; say "Just a reminder about the supplier call" || fail "offers: A repeat 1"
+  DEV=B; say "Yes, please call the cement supplier about the delivery" || fail "offers: B repeat 2"
+  DEV=A; say "I will call the cement supplier about the delivery, same time" || fail "offers: A repeat 3"
+  DEV=B; say "Great" || fail "offers: B repeat 4"
+  DEV=A; say "Talk then" || fail "offers: A repeat 5"
+  DEV=B; say "Bye for now" || fail "offers: B repeat 6"
+  hits=0
+  for _ in $(seq 1 $(( QUIET_S + 180 ))); do
+    hits="$(curl -sf "http://127.0.0.1:$LLM_PORT/script/hits" | python3 -I -c 'import json,sys; h=json.load(sys.stdin); print(h.get("offers_repeat_u1",0)+h.get("offers_repeat_u2",0))' 2>/dev/null || echo 0)"
+    [ "$hits" -gt 0 ] && break; sleep 1
+  done
+  [ "$hits" -gt 0 ] || fail "offers: the repeat discussion was never summarised (quiet rule)"
+  sleep 8
+  st1="$(ofx state)"; n1="$(printf '%s\n' "$st1" | grep -c '^uientry: item ')"; d1="$(printf '%s\n' "$st1" | sed -n 's/^uientry: discussions=//p')"
+  [ "$n1" = "$n0" ] || { printf '%s\n' "$st1" | sed 's/^/    /'; fail "offers: the repeated promise became a new row ($n0 → $n1 items)"; }
+  [ "$d1" = "$d0" ] || fail "offers: a summary of only repeats was stored/posted ($d0 → $d1 discussions)"
+  printf '%s\n' "$st1" | grep -q '|Call the cement supplier about the delivery|' && fail "offers: the repeat is stored as its own item"
+  [ "$(printf '%s\n' "$st1" | grep -cF "|$T_TEXT|")" = 1 ] || fail "offers: '$T_TEXT' isn't exactly one row"
+  item_line "$T_TEXT" | grep -q '|calendar:added$' || fail "offers: the merge offered '$T_TEXT' again: $(item_line "$T_TEXT")"
+  pass "offers (d): the same promise said again → merged into '$T_TEXT' (items $n0 → $n1, discussions $d0 → $d1, one offer)"
+
+  # -- (c) Settings → My promises: the split, the digest's totals, "Needs a date", tap → the source chat
+  read -r TI TP TO TN <<<"$(ofx totals | sed -n 's/^uientry: totals=\([0-9]*\) \([0-9]*\) \([0-9]*\) n=\([0-9]*\)/\1 \2 \3 \4/p')"
+  [ -n "${TI:-}" ] || fail "offers: fixture: the digest totals"
+  [ "$TI" -ge 3 ] && [ "$TP" -ge 1 ] || fail "offers: digest totals i_promised=$TI promised_to_me=$TP (want ≥ 3 and ≥ 1)"
+  DEV=A; back_to_list || fail "offers: back to the chat list (My promises)"
+  tap "More options" || fail "offers: the chat list's ⋮ (Settings)"
+  wait_for 'text="Settings"' 10 || fail "offers: no Settings item"
+  tap "Settings" || fail "offers: tap Settings"
+  for _ in 1 2 3 4 5 6; do has 'text="My promises"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
+  tap "My promises" || fail "offers: Settings has no 'My promises'"
+  wait_text "I promised ($TI)" 30 || fail "offers: My promises has no 'I promised ($TI)' (the digest's i_promised)"
+  wait_text "Needs a date" 10 || fail "offers: My promises has no 'Needs a date' row"
+  [ "$(count_text "$T_TEXT")" = 1 ] || fail "offers: My promises shows '$T_TEXT' $(count_text "$T_TEXT") times (want 1)"
+  has "text=\"$V2_TEXT\"" || fail "offers: My promises doesn't list '$V2_TEXT'"
+  for _ in 1 2 3 4; do has "text=\"Promised to me ($TP)\"" && break; A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 300; sleep 1; done
+  has "text=\"Promised to me ($TP)\"" || fail "offers: My promises has no 'Promised to me ($TP)' (the digest's promised_to_me)"
+  has "text=\"$B_TEXT\"" || fail "offers: 'Promised to me' doesn't list '$B_TEXT'"
+  shot "37-my-promises-split"
+  pass "offers (c): My promises: 'I promised ($TI)', 'Promised to me ($TP)' (= the digest's totals), a 'Needs a date' row, '$T_TEXT' once"
+  for _ in 1 2 3 4; do has "text=\"$V2_TEXT\"" && break; A shell input swipe $((W / 2)) $((H * 40 / 100)) $((W / 2)) $((H * 70 / 100)) 300; sleep 1; done
+  tap "$V2_TEXT" || fail "offers: tap the '$V2_TEXT' row"
+  wait_for 'Risi is listening' 30 || fail "offers: the row didn't open its source chat (the Official)"
+  has 'ZZ UI B' || fail "offers: the opened chat isn't the one with ZZ UI B"
+  shot "38-my-promises-opens-chat"
+  pass "offers (c): tapping '$V2_TEXT' opens its source chat (the 1:1 Official with ZZ UI B)"
+  back_to_list || true
+  DEV=A; logcat_ok "offers"
+  DEV=B; logcat_ok "offers"
+  DEV=A
+fi
+
+if [ "$CALENDAR" = 1 ] && { [ "$ONLY" = 0000 ] || [ "${UITEST_CALENDAR_ONLY:-0}" = 1 ]; }; then calendar_revoke_check; fi
 
 DEV=A; logcat_ok "ui entry"
 DEV=B; logcat_ok "ui entry"
