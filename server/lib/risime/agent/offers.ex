@@ -78,15 +78,26 @@ defmodule RisiMe.Agent.Offers do
   """
   def consider(%Commitment{} = c) do
     cond do
-      not Skills.on?() or c.state not in @live or not is_binary(c.text) -> 0
-      c.needs_clarification -> clarify(c)
-      timed_future?(c) -> Enum.sum(for u <- recipients(c), do: offer(c, u))
+      c.state not in @live or not is_binary(c.text) -> 0
+      # v1.29: Risi Calendar invites don't need RISI_SKILLS; the §28.5 cards do.
+      not Skills.on?() and not RisiMe.Agent.Calendar.on?() -> 0
+      c.needs_clarification -> if Skills.on?(), do: clarify(c), else: 0
+      timed_future?(c) -> timed(c)
       true -> 0
     end
   rescue
     e ->
       Logger.warning("Risi offer failed: #{inspect(e.__struct__)}")
       0
+  end
+
+  # v1.29 §29.12: calendar users get a proposed Risi Calendar event and an invite instead of the
+  # §28.5 cards; everyone else keeps §28.5.
+  defp timed(c) do
+    rs = recipients(c)
+    {sent, calendar_users} = RisiMe.Agent.CalendarOffers.consider(c, rs)
+    others = if Skills.on?(), do: for(u <- rs, u not in calendar_users, do: offer(c, u)), else: []
+    sent + Enum.sum(others)
   end
 
   @doc "`consider/1` over rows (sealed or opened); rows deleted meanwhile are skipped."
@@ -104,7 +115,11 @@ defmodule RisiMe.Agent.Offers do
       DateTime.compare(due, Clock.now()) == :gt
   end
 
-  defp recipients(c) do
+  @doc """
+  Who hears about an item: the owner; counterparts once a ledger item is tracked (or for a
+  v1.24 card); only active human members of its conversation.
+  """
+  def recipients(c) do
     counterparts =
       if Commitment.ledger?(c) and c.item_state not in @tracked, do: [], else: c.counterpart_ids
 

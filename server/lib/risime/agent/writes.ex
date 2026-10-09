@@ -171,6 +171,19 @@ defmodule RisiMe.Agent.Writes do
     |> then(
       &if(tool.name == "calendar_add", do: Map.put(&1, "calendar", card[:calendar]), else: &1)
     )
+    |> then(&if(tool.name == "risi_calendar_add", do: risi_calendar_card(&1, card), else: &1))
+  end
+
+  # v1.29 §29.8: the Risi Calendar action card ([Add] [Edit] [Cancel]; no skill, no phone
+  # calendar).
+  defp risi_calendar_card(risi, card) do
+    Map.merge(risi, %{
+      "skill_id" => nil,
+      "calendar" => nil,
+      "buttons" => ["add", "edit", "cancel"],
+      "origin" => nil,
+      "item_id" => card[:item_id]
+    })
   end
 
   # §26.3: an allowed write runs now, in the turn, for the asker's own request.
@@ -263,9 +276,36 @@ defmodule RisiMe.Agent.Writes do
       end)
   end
 
+  # v1.29 §29.8: the Risi Calendar card's [Edit] may also change `with` and `reminder_min`.
+  defp edit_ok?(%Write{tool: "risi_calendar_add"}, %{} = e) do
+    Map.keys(e) -- (@edit_keys -- ~w(with reminder_min)) == [] and
+      Enum.all?(e, fn
+        {"title", t} -> is_binary(t) and String.trim(t) != "" and String.length(t) <= 200
+        {"all_day", b} -> is_boolean(b)
+        {"with", ids} -> is_list(ids) and length(ids) <= 19 and Enum.all?(ids, &uuid?/1)
+        {"reminder_min", r} -> is_nil(r) or (is_integer(r) and r in 0..10_080)
+        {_k, ts} -> is_binary(ts) and ts =~ @ts
+      end)
+  end
+
   defp edit_ok?(_w, _edit), do: false
 
+  defp uuid?(s), do: is_binary(s) and match?({:ok, _}, Ecto.UUID.cast(s))
+
   defp edited(args, nil), do: {:ok, args}
+
+  defp edited(%{"wire" => %{"tz" => _} = wire} = args, %{} = e) do
+    times = e |> Map.take(@edit_keys) |> Map.update("title", nil, &String.trim/1) |> drop_nil()
+    wire = wire |> Map.merge(times) |> Map.merge(Map.take(e, ~w(with reminder_min)))
+
+    with {:ok, s, _} <- DateTime.from_iso8601(wire["start"]),
+         {:ok, t, _} <- DateTime.from_iso8601(wire["end"]),
+         :lt <- DateTime.compare(s, t) do
+      {:ok, %{args | "wire" => wire} |> Map.put("title", wire["title"])}
+    else
+      _ -> :error
+    end
+  end
 
   defp edited(%{"wire" => wire} = args, %{} = e) do
     wire = Map.merge(wire, Map.update(e, "title", nil, &String.trim/1) |> drop_nil())

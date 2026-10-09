@@ -47,6 +47,9 @@ defmodule RisiMe.Agent.CalendarHonesty do
       checks == [] ->
         {answer, false}
 
+      risi_check?(List.last(checks)) ->
+        enforce_v129(answer, List.last(checks), tz)
+
       true ->
         last = List.last(checks)
 
@@ -76,6 +79,107 @@ defmodule RisiMe.Agent.CalendarHonesty do
   end
 
   def enforce_made(answer, _checks, _tz), do: {answer, false}
+
+  ## v1.29 §29.7: a check that includes Risi Calendar (`risi_calendar_check`)
+
+  defp risi_check?(%{status: "ok", result: %{"sources" => sources}}) when is_list(sources),
+    do: Enum.any?(sources, &(&1["source"] == "risi_calendar"))
+
+  defp risi_check?(_), do: false
+
+  @cant_check "I couldn't check your calendar, so I can't tell whether you're free."
+
+  # Sources in the §29.7 order: Risi Calendar, the phone, Google (`not_connected` until §31).
+  defp v129_sources(%{"sources" => sources}) do
+    sources =
+      if Enum.any?(sources, &(&1["source"] == "google_api")),
+        do: sources,
+        else:
+          sources ++
+            [
+              %{
+                "source" => "google_api",
+                "read_ok" => false,
+                "reason" => "not_connected",
+                "calendars" => []
+              }
+            ]
+
+    order = %{"risi_calendar" => 0, "phone_provider" => 1, "google_api" => 2}
+    Enum.sort_by(sources, &Map.get(order, &1["source"], 3))
+  end
+
+  defp read?(%{"source" => "risi_calendar", "read_ok" => true}), do: true
+
+  defp read?(%{"read_ok" => true, "calendars" => [_ | _]}), do: true
+  defp read?(_), do: false
+
+  defp enforce_v129(answer, %{result: result}, tz) do
+    sources = v129_sources(result)
+    {read, missed} = Enum.split_with(sources, &read?/1)
+
+    if read == [] do
+      # No read: the model's text is discarded; one line per source.
+      lines =
+        Enum.map_join(
+          sources,
+          "\n",
+          &"#{source_label(&1["source"])}: #{v129_reason(&1["reason"])}."
+        )
+
+      {@cant_check <> "\n" <> lines, true}
+    else
+      busy = busy_blocks(result)
+      rewrite? = claims_free?(answer) and busy != []
+      body = if rewrite?, do: busy_text(busy, tz), else: answer
+      {add_line(body, v129_line(read, missed)), rewrite?}
+    end
+  end
+
+  defp v129_reason("not_connected"), do: "not connected"
+  defp v129_reason(nil), do: reason_text("query_failed")
+  defp v129_reason(r), do: reason_text(r)
+
+  @doc """
+  "Checked: Risi Calendar · Phone calendar (Work). Not checked: Google Calendar (not
+  connected)." (§29.7).
+  """
+  def v129_line(read, missed) do
+    checked =
+      Enum.map_join(read, " · ", fn s ->
+        case {s["source"], s["calendars"] || []} do
+          {"risi_calendar", _} ->
+            "Risi Calendar"
+
+          {src, cals} ->
+            names = for c <- Enum.take(cals, @max_named), is_binary(c["name"]), do: c["name"]
+            more = length(cals) - length(names)
+            names = if more > 0, do: names ++ ["#{more} more"], else: names
+
+            case names do
+              [] -> source_label(src)
+              ns -> "#{source_label(src)} (#{Enum.join(ns, ", ")})"
+            end
+        end
+      end)
+
+    not_checked =
+      case missed do
+        [] ->
+          ""
+
+        ms ->
+          " Not checked: " <>
+            Enum.map_join(
+              ms,
+              ", ",
+              &"#{source_label(&1["source"])} (#{v129_reason(&1["reason"])})"
+            ) <>
+            "."
+      end
+
+    "Checked: #{checked}.#{not_checked}"
+  end
 
   defp trusted_v1_reason,
     do: {:error, "this version of the app doesn't say which calendars it read; update RisiMe"}
@@ -148,6 +252,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
   def reason_text("timeout"), do: "the calendar didn't answer in time"
   def reason_text("api_error"), do: "the calendar couldn't be read"
   def reason_text("calendar_unavailable"), do: "the phone's calendar isn't available"
+  def reason_text("unavailable"), do: "it couldn't be opened"
   def reason_text("bad_args"), do: "the time to check couldn't be read"
   def reason_text("end_before_start"), do: "the time to check couldn't be read"
 

@@ -278,7 +278,8 @@ defmodule RisiMe.Agent.LedgerReminders do
         |> Enum.flat_map(fn {o, cps} -> [o | cps] end)
         |> Enum.uniq()
 
-      for u <- Devices.risi_ledger_users(users), do: digest(u, now)
+      users = Devices.risi_ledger_users(users) ++ RisiMe.Agent.Calendar.digest_users(now)
+      for u <- Enum.uniq(users), do: digest(u, now)
     end
 
     :ok
@@ -295,15 +296,20 @@ defmodule RisiMe.Agent.LedgerReminders do
     today = NaiveDateTime.to_date(local)
     rc = RisiChat.active_id(user)
 
-    items =
-      if (rc && local.hour == 9) and last_digest(rc) != today, do: digest_items(user), else: []
+    due? = rc && local.hour == 9 && last_digest(rc) != today
+    items = if due?, do: digest_items(user), else: []
+    # v1.29 §29.12: a calendar user's digest gains `events` (posted for items or events).
+    events = if due?, do: RisiMe.Agent.Calendar.digest_events(user, now, tz)
 
-    if items == [] do
+    if items == [] and not any_events?(events) do
       :skipped
     else
-      post_digest(user, rc, tz, today, items)
+      post_digest(user, rc, tz, today, items, events)
     end
   end
+
+  defp any_events?(nil), do: false
+  defp any_events?(ev), do: Enum.any?(Map.values(ev), &(&1 != []))
 
   @doc "The digest's items for `user`: \"My promises\" (open), as the app lists them."
   def digest_items(user) do
@@ -313,7 +319,26 @@ defmodule RisiMe.Agent.LedgerReminders do
     end
   end
 
-  defp post_digest(user, rc, tz, today, items) do
+  defp event_parts(ev, tz) do
+    line = fn r ->
+      with {:ok, s, _} <- DateTime.from_iso8601(r["start"]),
+           {:ok, e, _} <- DateTime.from_iso8601(r["end"]) do
+        tentative = if r["my_status"] == "proposed", do: ", tentative", else: ""
+
+        "#{r["title"]} (#{RisiMe.Agent.ClientTools.span12(s, e, r["all_day"], tz)}#{tentative})"
+      end
+    end
+
+    [
+      {"Today", ev["today"]},
+      {"Tomorrow", ev["tomorrow"]},
+      {"Waiting for your answer", ev["pending"]}
+    ]
+    |> Enum.reject(fn {_label, refs} -> refs == [] end)
+    |> Enum.map(fn {label, refs} -> "#{label}: " <> Enum.map_join(refs, "; ", line) <> "." end)
+  end
+
+  defp post_digest(user, rc, tz, today, items, events) do
     {own, owed} = Enum.split_with(items, &(&1.owner_id == user))
 
     line = fn c -> "#{lower_first(c.text)} (due #{digest_due(c, tz, today)})" end
@@ -348,6 +373,13 @@ defmodule RisiMe.Agent.LedgerReminders do
       "totals" => RisiMe.Agent.Rest.totals(items, user),
       "notify" => [user]
     }
+
+    # v1.29 §29.12: the calendar user's events (today, tomorrow, invites awaiting an answer).
+    {risi, parts} =
+      case events do
+        nil -> {risi, parts}
+        ev -> {Map.put(risi, "events", ev), parts ++ event_parts(ev, tz)}
+      end
 
     case Out.post(rc, Enum.join(parts, " "), risi) do
       {:ok, _} ->

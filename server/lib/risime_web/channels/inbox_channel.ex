@@ -342,6 +342,7 @@ defmodule RisiMeWeb.InboxChannel do
   defp visible?(socket, event, agent_ok \\ nil) do
     (socket.assigns[:tabs] == true or not RisiMe.Groups.Tabs.tabs_only?(event)) and
       risi_visible?(socket, event) and
+      calendar_visible?(socket, event) and
       agent_visible?(socket, event, agent_ok) and
       visible_v123?(socket, event)
   end
@@ -357,6 +358,13 @@ defmodule RisiMeWeb.InboxChannel do
       kind(event) == "risi_tool_call" -> socket.assigns[:device_id] in to_devices(event)
       true -> true
     end
+  end
+
+  # v1.29 §29.6: `risi_calendar_changed` only for the user's `risi_events` devices.
+  defp calendar_visible?(socket, event) do
+    kind(event) != "risi_calendar_changed" or
+      (socket.assigns[:agent] != true and
+         RisiMe.Devices.risi_events_device?(socket.assigns.user_id, socket.assigns[:device_id]))
   end
 
   defp kind(%{kind: k}), do: k

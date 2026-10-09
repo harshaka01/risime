@@ -119,10 +119,11 @@ defmodule RisiMe.Agent.CalendarHonestyTest do
 
     out = H.enforce(@clear, [ok([], [phone([], false, "no_permission"), risi])], @tz)
 
+    # v1.29 §29.7: with Risi Calendar, the "Checked: … Not checked: …" line (Google always named).
     assert out ==
              @clear <>
-               "\n\nI checked: Risi Calendar — Risi (Risime) 0 events (Mon 12 Oct, 14:00–15:00)." <>
-               " Not checked: Phone calendar (calendar permission is off)."
+               "\n\nChecked: Risi Calendar. Not checked: Phone calendar (calendar permission " <>
+               "is off), Google Calendar (not connected)."
   end
 
   test "answer sources name what was read" do

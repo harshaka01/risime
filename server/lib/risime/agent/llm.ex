@@ -318,6 +318,17 @@ defmodule RisiMe.Agent.LLM do
 
   defp threshold, do: config()[:fallback_threshold] || 0.5
 
+  @doc """
+  v1.29 §29.7: true when every call of a turn can only run on a RisiMe model (the local
+  `risi_l1` provider, the fallback off and not configured): only then may Risi Calendar titles
+  reach the model; a commercial model never sees them.
+  """
+  def own_only? do
+    provider().name() == "risi_l1" and not fallback_on?() and not configured?(fallback_provider())
+  rescue
+    _ -> false
+  end
+
   ## The global Risi queue (§24.13): 16 in flight on this node.
 
   @doc "Calls in flight now."

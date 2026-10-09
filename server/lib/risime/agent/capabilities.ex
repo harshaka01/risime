@@ -24,6 +24,8 @@ defmodule RisiMe.Agent.Capabilities do
     "set_reminder" => "set reminders when you ask (\"remind us Tuesday 2pm\")",
     "calendar_check" => "check whether you're free in your phone's calendar",
     "calendar_add" => "add events to your phone's calendar after you tap Add",
+    "risi_calendar_check" => "check whether you're free in your Risi Calendar (and your phone's)",
+    "risi_calendar_add" => "add events to your Risi Calendar and invite people after you tap Add",
     "search_chats" => "search your Official chats",
     "summarise" => "summarise a chat in English, Sinhala or Tamil",
     "draft_reply" => "draft replies for you to send",
@@ -47,6 +49,8 @@ defmodule RisiMe.Agent.Capabilities do
 
   @doc "What is coming (not offered to this asker yet)."
   def coming(tools \\ []) do
+    # v1.29: a Risi Calendar user checks their calendar with `risi_calendar_check`.
+    tools = if "risi_calendar_check" in tools, do: ["calendar_check" | tools], else: tools
     for {t, line} <- @coming, t not in tools, do: line
   end
 

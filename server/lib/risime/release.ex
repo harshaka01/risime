@@ -13,6 +13,7 @@ defmodule RisiMe.Release do
       bin/risime eval "RisiMe.Release.stale_device_ops()"         # v1.21, dry run by default
       bin/risime eval "RisiMe.Release.risi_preflight()"           # read-only Risi key/NIF check
       bin/risime eval "RisiMe.Release.risi_offers_backfill()"     # item 8, dry run by default
+      bin/risime eval "RisiMe.Release.risi_calendar_backfill()"   # v1.29, dry run by default
 
   `migrate_cql/1` applies `priv/cql/*.cql` exactly like `mix risime.cql.migrate`: it creates the
   keyspace if needed, applies each file once in name order and records it in the keyspace's
@@ -33,7 +34,60 @@ defmodule RisiMe.Release do
     migrate_friendships()
     seed_risi()
     risi_offers_backfill(dry_run: false)
+    risi_calendar_backfill(dry_run: false)
     :ok
+  end
+
+  @doc """
+  v1.29 §29.12, one-shot and idempotent: every live tracked item (or v1.24 commitment) with a
+  concrete future time gets its **proposed Risi Calendar event** and an invite card per
+  participant (`RisiMe.Agent.CalendarOffers.backfill/1`; claimed once per item and person in
+  `risi_item_offers`). Nothing happens while `RISI_EVENTS` is off. **Dry run by default**
+  (counts only). Like `risi_offers_backfill/1`, the real run from `eval` queues one
+  `calendar_backfill` job that the running server executes; `migrate/0` queues it on every
+  deploy (a no-op once everything was done). Prints counts only, never a title.
+
+      bin/risime eval "RisiMe.Release.risi_calendar_backfill()"                # dry run
+      bin/risime eval "RisiMe.Release.risi_calendar_backfill(dry_run: false)"  # events + invites
+  """
+  def risi_calendar_backfill(opts \\ []) do
+    dry_run = Keyword.get(opts, :dry_run, true)
+
+    job = fn ->
+      RisiMe.Workers.Risi.new(%{"kind" => "calendar_backfill"},
+        queue: :risi_timers,
+        # After the offers backfill (5 min), on the new release.
+        schedule_in: 360,
+        unique: [period: :infinity, keys: [:kind], states: [:available, :scheduled, :retryable]]
+      )
+    end
+
+    result =
+      cond do
+        dry_run and Process.whereis(RisiMe.Repo) != nil ->
+          RisiMe.Agent.CalendarOffers.backfill(dry_run: true)
+
+        dry_run ->
+          with_repo(fn -> RisiMe.Agent.CalendarOffers.backfill(dry_run: true) end)
+
+        Process.whereis(RisiMe.Repo) != nil and RisiMe.Agent.Out.ready?() ->
+          RisiMe.Agent.CalendarOffers.backfill()
+
+        Process.whereis(RisiMe.Repo) != nil ->
+          Oban.insert(job.())
+          :queued_for_the_running_server
+
+        true ->
+          with_repo(fn ->
+            RisiMe.Repo.insert!(job.())
+            :queued_for_the_running_server
+          end)
+      end
+
+    line = "risi calendar backfill (dry_run=#{dry_run}): #{inspect(result)}"
+    Logger.info(line)
+    IO.puts(line)
+    {:ok, result}
   end
 
   @doc """

@@ -68,6 +68,7 @@ defmodule RisiMe.Devices do
         history_changed(user_id, device_id, existing, mls_key, caps, key_changed?)
         tabs_changed(user_id, device_id, existing, mls_key, caps)
         risi_tools_changed(user_id, device_id, existing, mls_key, caps)
+        risi_events_changed(user_id, existing, mls_key, caps)
 
         calls_changed(
           user_id,
@@ -137,15 +138,23 @@ defmodule RisiMe.Devices do
   # v1.18 §19.1: `video`. v1.19 §20.1: `group_calls`. v1.24 §24.7: `tabs`.
   # v1.25 §25.8: `risi_tools`. v1.26 §26.9: `risi_skills`, kept only with `risi_tools`.
   # v1.27 §27.10: `risi_ledger`, kept only with `risi_tools`.
+  # v1.29 §29.1: `risi_events`, kept only with `risi_tools`, `risi_skills` and `risi_ledger`.
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
                          group_calls call_switch screen_share tabs risi_tools risi_skills
-                         risi_ledger)
+                         risi_ledger risi_events)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do
       caps = caps |> Enum.filter(&(&1 in @known_capabilities)) |> Enum.uniq()
 
-      {:ok, if("risi_tools" in caps, do: caps, else: caps -- ~w(risi_skills risi_ledger))}
+      caps = if "risi_tools" in caps, do: caps, else: caps -- ~w(risi_skills risi_ledger)
+
+      caps =
+        if Enum.all?(~w(risi_tools risi_skills risi_ledger), &(&1 in caps)),
+          do: caps,
+          else: caps -- ["risi_events"]
+
+      {:ok, caps}
     else
       :error
     end
@@ -407,6 +416,35 @@ defmodule RisiMe.Devices do
     )
   end
 
+  @doc """
+  v1.29 §29.1: true if the device is a `risi_ledger` device that also advertises `risi_events`
+  (with `risi_tools`, `risi_skills` and `risi_ledger`).
+  """
+  def risi_events?(%Device{capabilities: caps} = d),
+    do: risi_ledger?(d) and Enum.all?(~w(risi_skills risi_events), &(&1 in (caps || [])))
+
+  def risi_events?(_), do: false
+
+  @doc "v1.29: true if `device_id` (may be nil) names a `risi_events` device of the user."
+  def risi_events_device?(_user_id, nil), do: false
+  def risi_events_device?(user_id, device_id), do: risi_events?(get(user_id, device_id))
+
+  @doc "v1.29: the users among `user_ids` with a current `risi_events` device."
+  def risi_events_users([]), do: []
+
+  def risi_events_users(user_ids) do
+    Repo.all(
+      from d in Device,
+        where:
+          d.user_id in ^user_ids and not is_nil(d.mls_signature_key) and
+            "tabs" in d.capabilities and "groups" in d.capabilities and
+            "risi_tools" in d.capabilities and "risi_skills" in d.capabilities and
+            "risi_ledger" in d.capabilities and "risi_events" in d.capabilities,
+        distinct: true,
+        select: d.user_id
+    )
+  end
+
   @doc "The device row of a user's device (or nil)."
   def get(user_id, device_id) do
     case Ecto.UUID.cast(device_id || "") do
@@ -429,6 +467,15 @@ defmodule RisiMe.Devices do
 
   # v1.25 §25.2: live sockets of the device start or stop getting Risi-chat traffic; a device
   # that gains (loses) `risi_tools` is added to (removed from) the user's Risi chat.
+  # v1.29 §29.1: a device started advertising `risi_events`: the user's held invites go out.
+  defp risi_events_changed(user_id, existing, mls_key, caps) do
+    if mls_key != nil and "risi_events" in caps and
+         "risi_events" not in ((existing && existing.capabilities) || []),
+       do: RisiMe.Agent.CalendarCards.became_calendar_user(user_id)
+
+    :ok
+  end
+
   defp risi_tools_changed(user_id, device_id, existing, mls_key, caps) do
     was = risi_tools?(existing)
 

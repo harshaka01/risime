@@ -780,6 +780,14 @@ defmodule RisiMe.Messaging do
     publish(user_id, %{event_id: TimeUUID.generate(), kind: kind, data: data}, push: false)
   end
 
+  @doc """
+  v1.29 §29.6: stores and broadcasts a content-free inbox event (`risi_calendar_changed`); never
+  a push wake (the inbox channel delivers it only to the sockets allowed to see it).
+  """
+  def publish_quiet(user_id, kind, data) do
+    publish(user_id, %{event_id: TimeUUID.generate(), kind: kind, data: data}, push: false)
+  end
+
   # v1.15 §17.5: history events live 48 h.
   @history_ttl_s 172_800
 

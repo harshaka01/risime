@@ -172,6 +172,10 @@ if key = System.get_env("RISI_MEMORY_KEY"), do: config(:risime, :risi_memory_key
 # healthy speech model; default off). RISI_COMMERCIAL_PROVIDER_NAME names a commercial model's
 # provider in `made_by` (§27.1).
 if v = System.get_env("RISI_LEDGER"), do: config(:risime, :risi_ledger, on?.(v))
+
+# v1.29 §29.1: RISI_EVENTS=on turns on Risi Calendar (`/auth/config` `risi_events`, default off;
+# off: every `/risi/calendar…` call answers 503 agent_unavailable and Risi keeps the v1.28 flows).
+if v = System.get_env("RISI_EVENTS"), do: config(:risime, :risi_events, on?.(v))
 if v = System.get_env("RISI_TRANSCRIBE"), do: config(:risime, :risi_transcribe, on?.(v))
 
 # §27.2 quiet-rule thresholds (defaults 600 s, 6 messages, 2 people, 30 min, < 8 a day), so

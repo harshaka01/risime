@@ -102,6 +102,18 @@ defmodule RisiMeWeb.Router do
     get "/risi/skills/:id/activity", RisiSkillsController, :activity
     delete "/risi/skills/:id/activity", RisiSkillsController, :clear
     post "/risi/skills/:id/activity/:entry_id/undo", RisiSkillsController, :undo
+    # v1.29 §29.3.
+    get "/risi/calendar/events", RisiCalendarController, :index
+    post "/risi/calendar/events", RisiCalendarController, :create
+    get "/risi/calendar/changes", RisiCalendarController, :changes
+    get "/risi/calendar/events/:id", RisiCalendarController, :show
+    patch "/risi/calendar/events/:id", RisiCalendarController, :update
+    delete "/risi/calendar/events/:id", RisiCalendarController, :delete
+    post "/risi/calendar/events/:id/respond", RisiCalendarController, :respond
+    post "/risi/calendar/suggestions/:suggestion_id/resolve", RisiCalendarController, :resolve
+    get "/risi/calendar/settings", RisiCalendarController, :settings
+    patch "/risi/calendar/settings", RisiCalendarController, :update_settings
+    delete "/risi/calendar", RisiCalendarController, :delete_all
     post "/blobs", BlobController, :create
     post "/backups", BackupController, :create
     get "/backups", BackupController, :index

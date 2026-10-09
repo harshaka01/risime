@@ -34,6 +34,8 @@ defmodule RisiMeWeb.AuthController do
     # v1.27 §27.10: `risi_ledger` / `risi_transcribe` "on" while switched on (absent = off).
     body = if RisiMe.Risi.ledger_on?(), do: Map.put(body, :risi_ledger, "on"), else: body
     body = if RisiMe.Risi.transcribe_on?(), do: Map.put(body, :risi_transcribe, "on"), else: body
+    # v1.29 §29.1: `risi_events: "on"` while RISI_EVENTS=on (absent = off: v1.28 exactly).
+    body = if RisiMe.Risi.events_on?(), do: Map.put(body, :risi_events, "on"), else: body
 
     json(conn, body)
   end

@@ -142,7 +142,13 @@ defmodule RisiMe.Agent.ActionDraft do
         "end_time" => @phrase,
         "duration_min" => %{"type" => ["integer", "null"], "minimum" => 5, "maximum" => 1440},
         "all_day" => %{"type" => ["boolean", "null"]},
-        "item" => %{"type" => ["string", "null"], "pattern" => "^k[0-9]{1,3}$"}
+        "item" => %{"type" => ["string", "null"], "pattern" => "^k[0-9]{1,3}$"},
+        # v1.29 §29.8: the people to invite to a Risi Calendar event (names as said).
+        "with" => %{
+          "type" => ["array", "null"],
+          "maxItems" => 10,
+          "items" => %{"type" => "string", "maxLength" => 80}
+        }
       },
       "required" => ["kind"],
       "additionalProperties" => false
@@ -166,6 +172,7 @@ defmodule RisiMe.Agent.ActionDraft do
       |> put_if("all_day", raw["all_day"], &is_boolean/1)
       |> put_if("item", raw["item"], &(is_binary(&1) and &1 =~ ~r/^k\d{1,3}$/))
       |> put_if("new", raw["new"], &(&1 == true))
+      |> put_if("with", names(raw["with"]), &(&1 != []))
 
     {date, date_time} = date_of(raw["date"], now, tz)
     {time, time_date} = time_of(raw["time"], now, tz)
@@ -190,6 +197,17 @@ defmodule RisiMe.Agent.ActionDraft do
   end
 
   defp clean_title(_), do: nil
+
+  defp names(list) when is_list(list) do
+    list
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&(&1 |> String.trim() |> String.slice(0, 80)))
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.take(10)
+  end
+
+  defp names(_), do: nil
 
   # A date phrase: {date, a time it also named}.
   defp date_of(p, now, tz) when is_binary(p) and p != "" do
@@ -237,6 +255,13 @@ defmodule RisiMe.Agent.ActionDraft do
       now,
       tz
     )
+  end
+
+  # v1.29: the Risi Calendar card's args are the same slots (plus the people named).
+  def from_tool("risi_calendar_add", %{} = a, now, tz) do
+    "calendar_add"
+    |> from_tool(a, now, tz)
+    |> Map.merge(normalise(%{"kind" => "event", "with" => a["with"]}, now, tz))
   end
 
   def from_tool("set_reminder", %{} = a, now, tz),

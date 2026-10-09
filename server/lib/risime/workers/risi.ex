@@ -18,6 +18,10 @@ defmodule RisiMe.Workers.Risi do
   | `undo_timeout` | `risi_timers` | a client undo unanswered after 15 s → `failed` (§26.4) |
   | `forget` | `risi_timers` | the safety re-run of `RisiMe.Agent.forget/1` (§24.4, within 1 h) |
   | `offers_backfill` | `risi_timers` | one-shot: offers for existing future-dated items (item 8, idempotent) |
+  | `calendar_reminder` | `risi_timers` | v1.29 §29.10: a Risi Calendar reminder (event, user, `v`) |
+  | `calendar_changed` | `risi_timers` | v1.29 §29.6: the coalesced `risi_calendar_changed` of a user |
+  | `calendar_pending` | `risi_timers` | v1.29 §29.1: a user's held invites (a new `risi_events` device) |
+  | `calendar_backfill` | `risi_timers` | v1.29 §29.12: one-shot proposed events + invites (idempotent) |
 
   Every job re-checks the §24.5 rule (`RisiMe.Agent.may_act?/1`) before touching anything, and
   is discarded while `RISI` is off.
@@ -46,15 +50,71 @@ defmodule RisiMe.Workers.Risi do
     if Out.ready?(), do: RisiMe.Agent.LedgerOut.prune()
     # 30-day summaries are kept 35 days.
     RisiMe.Agent.DailySummaries.prune()
+    # v1.29 §29.4–§29.6: purged cancelled events, the 30-day change log, held invites.
+    RisiMe.Agent.Calendar.prune()
     :ok
   end
 
-  # v1.27 §27.3: a Risi chat became active; its owner's held copies are posted.
+  # v1.27 §27.3: a Risi chat became active; its owner's held copies are posted (v1.29: and
+  # their held calendar invites).
   def perform(%Oban.Job{args: %{"kind" => "pending_copies", "user_id" => user}}) do
     cond do
+      not RisiMe.Risi.enabled?() ->
+        {:cancel, :risi_off}
+
+      not Out.ready?() ->
+        {:snooze, 60}
+
+      true ->
+        result = RisiMe.Agent.LedgerOut.deliver_pending(user)
+        RisiMe.Agent.CalendarCards.deliver_pending(user)
+        result
+    end
+  end
+
+  # v1.29 §29.10: a Risi Calendar reminder (ids and `v` only).
+  def perform(%Oban.Job{args: %{"kind" => "calendar_reminder"} = args}) do
+    cond do
       not RisiMe.Risi.enabled?() -> {:cancel, :risi_off}
+      not RisiMe.Agent.Calendar.on?() -> :ok
       not Out.ready?() -> {:snooze, 60}
-      true -> RisiMe.Agent.LedgerOut.deliver_pending(user)
+      true -> RisiMe.Agent.CalendarReminders.fire(args)
+    end
+  end
+
+  # v1.29 §29.6: the coalesced `risi_calendar_changed` (the latest cursor wins).
+  def perform(%Oban.Job{args: %{"kind" => "calendar_changed", "user_id" => user}}),
+    do: RisiMe.Agent.Calendar.publish_changed(user)
+
+  # v1.29 §29.1: held invites of a user who became a calendar user.
+  def perform(%Oban.Job{args: %{"kind" => "calendar_pending", "user_id" => user}}) do
+    cond do
+      not RisiMe.Risi.enabled?() ->
+        {:cancel, :risi_off}
+
+      not Out.ready?() ->
+        {:snooze, 60}
+
+      true ->
+        RisiMe.Agent.CalendarCards.deliver_pending(user)
+        :ok
+    end
+  end
+
+  # v1.29 §29.12: the one-shot calendar backfill (`RisiMe.Release.risi_calendar_backfill/1`).
+  def perform(%Oban.Job{args: %{"kind" => "calendar_backfill"}}) do
+    cond do
+      not RisiMe.Risi.enabled?() ->
+        {:cancel, :risi_off}
+
+      not Out.ready?() ->
+        {:snooze, 60}
+
+      true ->
+        require Logger
+        counts = RisiMe.Agent.CalendarOffers.backfill()
+        Logger.info("risi calendar backfill: #{inspect(counts)}")
+        :ok
     end
   end
 
@@ -132,6 +192,10 @@ defmodule RisiMe.Workers.Risi do
 
         a when a in ~w(me_too not_me) ->
           RisiMe.Agent.Reminders.act(conv, user, env)
+
+        # v1.29 §29.11: Risi Calendar invites and suggestions.
+        a when a in ~w(event_accept event_decline event_suggest suggestion_use suggestion_keep) ->
+          RisiMe.Agent.CalendarActions.act(conv, user, env)
 
         # v1.27 §27.5: item actions (and done) on ledger items, in the actor's Risi chat.
         a when a in ~w(item_confirm item_decline item_edit) ->

@@ -171,6 +171,9 @@ defmodule RisiMe.Agent.Tools do
         RisiMe.Agent.Reminders.tool(),
         ClientTools.calendar_check(),
         ClientTools.calendar_add(),
+        # v1.29 §29.7, §29.8: Risi Calendar (calendar users only).
+        RisiMe.Agent.CalendarTools.risi_calendar_check(),
+        RisiMe.Agent.CalendarTools.risi_calendar_add(),
         ClientTools.set_alarm(),
         ClientTools.schedule_message(),
         ClientTools.cancel_scheduled()

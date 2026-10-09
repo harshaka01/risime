@@ -55,6 +55,10 @@ defmodule RisiMe.Agent.ClientTools do
       finds: true,
       skill: "calendar",
       args: obj(%{"from" => @str, "to" => @str}, ["from", "to"]),
+      # v1.29 §29.7: a calendar user's check is `risi_calendar_check` (it runs this one too).
+      authorize: fn ctx ->
+        if RisiMe.Agent.Calendar.calendar_user?(ctx.asker), do: {:error, :denied}, else: :ok
+      end,
       run: &run_check/2
     }
   end

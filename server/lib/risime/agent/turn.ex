@@ -293,6 +293,12 @@ defmodule RisiMe.Agent.Turn do
         |> Enum.map(fn {c, i} ->
           %{
             ref: "k#{i}",
+            # v1.29 §29.8: the promise's people and source (a Risi Calendar card's defaults).
+            id: c.id,
+            owner_id: c.owner_id,
+            counterpart_ids: c.counterpart_ids,
+            conversation_id: c.conversation_id,
+            source_message_ids: c.source_message_ids || [],
             text: c.text,
             due: c.due,
             all_day: c.all_day == true or c.due_kind == "date",
@@ -407,6 +413,16 @@ defmodule RisiMe.Agent.Turn do
       do:
         "\n- calendar_check: say the asker is free only when a source has read_ok true and " <>
           "calendars above 0; otherwise say you couldn't read their calendar and why",
+      else: risi_calendar_line(names)
+  end
+
+  # v1.29 §29.7, §29.8: a calendar user's Risi Calendar is the default.
+  defp risi_calendar_line(names) do
+    if "risi_calendar_check" in names,
+      do:
+        "\n- risi_calendar_check: free/clear/available only about the calendars checked; a " <>
+          "proposed event is tentative. Events go to the Risi Calendar (risi_calendar_add) " <>
+          "unless the asker asks for their phone calendar",
       else: ""
   end
 
@@ -558,7 +574,7 @@ defmodule RisiMe.Agent.Turn do
     ok? = status == "ok"
 
     st =
-      if name == "calendar_check",
+      if name in ~w(calendar_check risi_calendar_check),
         do: %{
           st
           | calendar_checks:
@@ -585,7 +601,8 @@ defmodule RisiMe.Agent.Turn do
 
   # P0 2026-10-09: a write tool's args are structured slots of the draft; the card it proposed
   # (or the allowed write it ran) is the draft's write.
-  defp draft_step(st, ctx, name, args, ok?, result) when name in ~w(calendar_add set_reminder) do
+  defp draft_step(st, ctx, name, args, ok?, result)
+       when name in ~w(calendar_add risi_calendar_add set_reminder) do
     new = ActionDraft.from_tool(name, args, ctx.now, ctx.tz)
     # A step that failed (a past, ambiguous or unreadable time) keeps only what it named.
     new = if ok?, do: new, else: Map.take(new, ["kind", "title"])
@@ -712,13 +729,23 @@ defmodule RisiMe.Agent.Turn do
   # The server proposes the write itself: the write tool's own step (authorised again, its
   # card; [Add] runs it with no model turn).
   defp server_card(st, ctx, r, answer) do
-    name = if r.kind == "reminder", do: "set_reminder", else: "calendar_add"
+    names = Map.get(ctx, :allowed_names, [])
+
+    name =
+      cond do
+        r.kind == "reminder" -> "set_reminder"
+        # v1.29 §29.8: a calendar user's event goes to Risi Calendar (no phone permission).
+        "risi_calendar_add" in names -> "risi_calendar_add"
+        true -> "calendar_add"
+      end
+
     skill = Skills.skill_of(name)
+    args = if name == "risi_calendar_add", do: risi_args(r.args, st.draft, ctx), else: r.args
 
     cond do
-      name in Map.get(ctx, :allowed_names, []) ->
-        out = %{"tool" => name, "args" => r.args}
-        {st, status, result, meta} = exec_step(st, ctx, name, r.args, out)
+      name in names ->
+        out = %{"tool" => name, "args" => args}
+        {st, status, result, meta} = exec_step(st, ctx, name, args, out)
 
         case {status, result} do
           {"ok", %{"status" => "done"}} ->
@@ -726,7 +753,11 @@ defmodule RisiMe.Agent.Turn do
 
           {"ok", _} ->
             what =
-              if r.kind == "reminder", do: "set the reminder", else: "put it in your calendar"
+              cond do
+                r.kind == "reminder" -> "set the reminder"
+                name == "risi_calendar_add" -> "put it in your Risi Calendar"
+                true -> "put it in your calendar"
+              end
 
             finish(st, ctx, "Tap Add on the card to #{what}, or Cancel.", [], [])
 
@@ -753,6 +784,36 @@ defmodule RisiMe.Agent.Turn do
       true ->
         finish(st, ctx, drop_confirm_questions(answer), [], [])
     end
+  end
+
+  # v1.29 §29.8: defaults never asked: `with` from the promise's people or the names the asker
+  # gave (only invitables, checked by the tool), the promise as the source.
+  defp risi_args(args, draft, ctx) do
+    item = (draft || %{})["item"] && (ctx[:items] || %{})[draft["item"]]
+
+    from_item =
+      if item, do: Enum.uniq([item.owner_id | item.counterpart_ids]) -- [ctx.asker], else: []
+
+    named =
+      case (draft || %{})["with"] do
+        [_ | _] = ns -> RisiMe.Agent.CalendarTools.resolve_names(ctx.asker, ns)
+        _ -> []
+      end
+
+    source =
+      if item && RisiMe.Agent.official?(item.conversation_id),
+        do: %{
+          "conversation_id" => item.conversation_id,
+          "message_ids" =>
+            item.source_message_ids
+            |> Enum.filter(&match?({:ok, _}, Ecto.UUID.cast(&1)))
+            |> Enum.take(20),
+          "item_id" => item.id
+        }
+
+    args
+    |> Map.put("with_ids", Enum.uniq(from_item ++ named))
+    |> then(&if(source, do: Map.put(&1, "source", source), else: &1))
   end
 
   # "Shall I add it?" never stays in an answer: confirming is the card's [Add].
