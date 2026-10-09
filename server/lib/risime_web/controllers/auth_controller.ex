@@ -31,6 +31,9 @@ defmodule RisiMeWeb.AuthController do
     # v1.26 §26.9: `risi_skills: "on"` while RISI_SKILLS=on and the skills can run (their
     # RISI_MEMORY_KEY is set); left out otherwise (absent = off).
     body = if RisiMe.Agent.Skills.on?(), do: Map.put(body, :risi_skills, "on"), else: body
+    # v1.27 §27.10: `risi_ledger` / `risi_transcribe` "on" while switched on (absent = off).
+    body = if RisiMe.Risi.ledger_on?(), do: Map.put(body, :risi_ledger, "on"), else: body
+    body = if RisiMe.Risi.transcribe_on?(), do: Map.put(body, :risi_transcribe, "on"), else: body
 
     json(conn, body)
   end

@@ -20,7 +20,11 @@ class RisiUiBus {
         data class Skills(val skillId: String?) : Nav
     }
 
+    /** Where a chat opened from a Risi card scrolls to: a summary's card, or the first message at or after [at]. */
+    data class Focus(val summaryId: String? = null, val at: String? = null)
+
     private val drafts = ConcurrentHashMap<String, String>()
+    private val focus = ConcurrentHashMap<String, Focus>()
     private val _nav = MutableSharedFlow<Nav>(extraBufferCapacity = 8)
     val nav: SharedFlow<Nav> = _nav.asSharedFlow()
 
@@ -32,6 +36,15 @@ class RisiUiBus {
 
     /** The draft waiting for [conversationId] (taken once). */
     fun takeDraft(conversationId: String): String? = drafts.remove(conversationId.lowercase())
+
+    /** §27.3/§27.4 open a chat at a point ([Open chat], [Open Risi chat]). */
+    fun openChat(conversationId: String, f: Focus?) {
+        if (f != null) focus[conversationId.lowercase()] = f else focus.remove(conversationId.lowercase())
+        _nav.tryEmit(Nav.Chat(conversationId))
+    }
+
+    /** The focus waiting for [conversationId] (taken once). */
+    fun takeFocus(conversationId: String): Focus? = focus.remove(conversationId.lowercase())
 
     fun openSkills(skillId: String?) {
         _nav.tryEmit(Nav.Skills(skillId))

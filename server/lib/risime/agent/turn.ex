@@ -125,6 +125,9 @@ defmodule RisiMe.Agent.Turn do
       refs: refs,
       personal: false,
       call_ref: nil,
+      # v1.27 §27.1: every model call of the turn, in order (`made_by.also`).
+      call_refs: [],
+      rule_made: false,
       retried: false
     }
 
@@ -259,7 +262,8 @@ defmodule RisiMe.Agent.Turn do
 
     case LLM.complete(req) do
       {:ok, %{output: action, call_ref: ref}} ->
-        action(action, %{st | calls: st.calls + 1, call_ref: ref}, ctx, allowed)
+        st = %{st | calls: st.calls + 1, call_ref: ref, call_refs: st.call_refs ++ [ref]}
+        action(action, st, ctx, allowed)
 
       # The global in-flight queue is full: wait inside the turn's time.
       {:error, :rate_limited} ->
@@ -434,8 +438,9 @@ defmodule RisiMe.Agent.Turn do
 
     so_far = if done == [], do: "", else: " after: #{Enum.join(done, ", ")}"
 
+    # v1.27 §27.1: this answer is built by the server, not by a model.
     finish(
-      st,
+      %{st | rule_made: true},
       ctx,
       "#{reason}#{so_far}. Ask me again and I'll continue from there.",
       [],
@@ -477,6 +482,11 @@ defmodule RisiMe.Agent.Turn do
       "next_steps" => next_steps,
       "turn_ref" => ctx.turn_id,
       "call_ref" => st.call_ref,
+      "made_by" =>
+        if(st.rule_made,
+          do: RisiMe.Agent.MadeBy.rule(),
+          else: RisiMe.Agent.MadeBy.build(st.call_ref, st.call_refs)
+        ),
       "notify" => [ctx.asker]
     }
 

@@ -67,6 +67,57 @@ defmodule RisiMe.Agent.Prompts do
       "additionalProperties" => false
     }
 
+  @doc """
+  v1.27 §27.2 `discussion_summarise`: key points (1–8, ≤ 200 characters), a one-line summary
+  for the Official card (≤ 280, no items, owners or dues), and the agreed items (≤ 10).
+  """
+  def discussion_schema,
+    do: %{
+      "type" => "object",
+      "properties" => %{
+        "key_points" => str_list(8, 200),
+        "summary" => %{"type" => "string", "maxLength" => 280},
+        "items" => %{
+          "type" => "array",
+          "maxItems" => 10,
+          "items" => %{
+            "type" => "object",
+            "properties" => %{
+              "text" => %{"type" => "string", "maxLength" => 200},
+              "owner" => %{"type" => "string", "pattern" => @member_ref},
+              "counterparts" => %{
+                "type" => "array",
+                "maxItems" => 20,
+                "items" => %{"type" => "string", "pattern" => @member_ref}
+              },
+              "due_local" => %{
+                "anyOf" => [
+                  %{
+                    "type" => "string",
+                    "pattern" => "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2})?$"
+                  },
+                  %{"type" => "null"}
+                ]
+              },
+              "due_text" => %{
+                "anyOf" => [%{"type" => "string", "maxLength" => 100}, %{"type" => "null"}]
+              },
+              "source" => %{
+                "type" => "array",
+                "maxItems" => 10,
+                "items" => %{"type" => "string", "pattern" => @message_ref}
+              },
+              "confidence" => %{"type" => "number", "minimum" => 0, "maximum" => 1}
+            },
+            "required" => ~w(text owner counterparts due_local due_text source confidence),
+            "additionalProperties" => false
+          }
+        }
+      },
+      "required" => ~w(key_points summary items),
+      "additionalProperties" => false
+    }
+
   defp str_list(max_items, max_len),
     do: %{
       "type" => "array",
@@ -158,6 +209,25 @@ defmodule RisiMe.Agent.Prompts do
     - source: refs (m1, m2, ...) of the messages the commitment comes from.
     - confidence: 0 to 1, how sure you are that this is a real commitment.
     - When there is none, return {"commitments": []}. Do not invent anything.
+    #{@untrusted}
+    """
+
+  @doc "v1.27 §27.2: the `discussion_summarise` system prompt."
+  def discussion_system,
+    do: """
+    You are Risi, a careful note-taker inside a team chat. A discussion just ended. Write:
+    - key_points: 1 to 8 short factual points of what was discussed or decided (each at most \
+    200 characters), in the chat's main language.
+    - summary: one line (at most 280 characters) saying what the discussion was about. Never \
+    name owners, tasks or deadlines in it.
+    - items: the things members clearly agreed or promised to do. owner: the member ref (u1, u2, \
+    ...) of the person who will do it; counterparts: member refs of the people it was promised \
+    to, [] if none is clear, never the owner; text: a short imperative phrase, at most 12 words, \
+    without the deadline; due_local: the deadline in the owner's local time, "YYYY-MM-DDTHH:MM", \
+    or "YYYY-MM-DD" when only a day is given, or null; due_text: the deadline words as said, or \
+    null; source: refs (m1, m2, ...) of the messages it comes from; confidence: 0 to 1.
+    Not items: questions, suggestions, wishes, group plans without an owner, things already \
+    done, vague intentions. When there is no item, return "items": []. Do not invent anything.
     #{@untrusted}
     """
 
@@ -293,6 +363,23 @@ defmodule RisiMe.Agent.Prompts do
   @doc "The question block of an `ask`."
   def question(text),
     do: "\n\n<question>\n" <> Jason.encode!(%{"q" => text}, escape: :html_safe) <> "\n</question>"
+
+  @doc "Stored day/week summaries (derived data only), one JSON object per line."
+  def summaries_block(lines) do
+    body = Enum.map_join(lines, "\n", &Jason.encode!(&1, escape: :html_safe))
+    "<summaries>\n" <> body <> "\n</summaries>"
+  end
+
+  @doc "30-day summaries: the system prompt of a summary over a longer period."
+  def period_system,
+    do: """
+    You are Risi, a note-taker inside a team chat. Summarise the period factually and briefly, \
+    in the chat's main language: a short summary, the decisions taken, action items ("Name: \
+    task, due"), and open questions. Use only the earlier summaries between <summaries> and \
+    </summaries> (one per day or week), the tracked commitments in <commitments>, and the recent \
+    chat lines in <chat>, if any.
+    #{@untrusted}
+    """
 
   @doc "The tracked commitments block of a report (derived data only)."
   def commitments_block(items) do

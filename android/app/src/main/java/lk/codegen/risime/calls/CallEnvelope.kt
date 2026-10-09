@@ -122,7 +122,13 @@ object CallEnvelope {
     }
 
     /** §20.3 a group call's ring: no SDP (the media goes through LiveKit), sent by the starter once it is in the room. */
-    data class SfuOffer(override val callId: String, val media: String, val sentAt: String) : Env {
+    data class SfuOffer(
+        override val callId: String,
+        val media: String,
+        val sentAt: String,
+        /** v1.27 §27.7: `"listen"` when the starter chose Risi listening; null = absent ("off"). */
+        val risi: String? = null,
+    ) : Env {
         override val type get() = OFFER
     }
 
@@ -208,6 +214,7 @@ object CallEnvelope {
                 put("mode", MODE_SFU)
                 put("media", env.media)
                 put("sent_at", env.sentAt)
+                env.risi?.let { put("risi", it) }
             }
             is Member -> put("state", env.state)
             is Ringing, is Busy -> Unit
@@ -308,7 +315,8 @@ object CallEnvelope {
                         if (str("mode") != MODE_SFU) return drop("mode ${(m as? JsonPrimitive)?.contentOrNull}")
                         if (obj["sdp"] != null) return drop("sdp in an sfu offer")
                         if (obj["restart"].let { it != null && it != JsonNull && bool("restart") != false }) return drop("restart in an sfu offer")
-                        return SfuOffer(callId, media!!, sentAt)
+                        // v1.27 §27.7: the optional `risi` (a display hint; a non-string is ignored).
+                        return SfuOffer(callId, media!!, sentAt, str("risi")?.takeIf { it.length <= 32 })
                     }
                 }
                 val restart = when (val r = obj["restart"]) {

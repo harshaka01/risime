@@ -85,7 +85,7 @@ defmodule RisiMeWeb.RisiController do
   defp parse(_), do: {:error, :bad_request}
 
   def facts(conn, _params) do
-    case Rest.facts(me(conn)) do
+    case Rest.facts(me(conn), RisiMeWeb.MLSController.caller_device(conn)) do
       {:ok, facts} -> json(conn, %{facts: facts})
       error -> GroupController.error(conn, error)
     end

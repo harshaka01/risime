@@ -216,6 +216,13 @@ defmodule RisiMe.RisiChat do
       set: [state: "active"]
     )
 
+    # v1.27 §27.3: copies held for this owner are posted now that the chat is active.
+    if owner = owner(id) do
+      %{"kind" => "pending_copies", "user_id" => owner}
+      |> RisiMe.Workers.Risi.new(queue: :risi_timers)
+      |> Oban.insert()
+    end
+
     []
   end
 

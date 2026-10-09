@@ -166,6 +166,17 @@ if tools = System.get_env("RISI_TOOLS"), do: config(:risime, :risi_tools, on?.(t
 # `checks.risi_skills` says why), never a boot failure.
 if skills = System.get_env("RISI_SKILLS"), do: config(:risime, :risi_skills, on?.(skills))
 if key = System.get_env("RISI_MEMORY_KEY"), do: config(:risime, :risi_memory_key, key)
+# v1.27 §27.10: RISI_LEDGER=on turns on the Commitment Ledger follow-ups (quiet-rule summaries,
+# per-person copies, item reminders; `/auth/config` `risi_ledger`, default off). RISI_TRANSCRIBE
+# =on offers call transcription (`/auth/config` `risi_transcribe`, only with the ledger on and a
+# healthy speech model; default off). RISI_COMMERCIAL_PROVIDER_NAME names a commercial model's
+# provider in `made_by` (§27.1).
+if v = System.get_env("RISI_LEDGER"), do: config(:risime, :risi_ledger, on?.(v))
+if v = System.get_env("RISI_TRANSCRIBE"), do: config(:risime, :risi_transcribe, on?.(v))
+
+if v = System.get_env("RISI_COMMERCIAL_PROVIDER_NAME"),
+  do: config(:risime, :risi_commercial_provider_name, v)
+
 if id = System.get_env("RISI_USER_ID"), do: config(:risime, :risi_user_id, id)
 if id = System.get_env("RISI_DEVICE_ID"), do: config(:risime, :risi_device_id, id)
 if tz = System.get_env("RISI_DEFAULT_TZ"), do: config(:risime, :risi_default_tz, tz)

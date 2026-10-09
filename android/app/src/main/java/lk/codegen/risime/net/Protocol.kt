@@ -9,7 +9,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Wire models for contract/v1/PROTOCOL.md. Field names match the contract exactly. */
 
 /** The PROTOCOL.md version this client implements (shown in Settings → About; checked by a test). */
-const val PROTOCOL_VERSION = "1.26"
+const val PROTOCOL_VERSION = "1.27"
 
 val ProtocolJson: Json = Json {
     ignoreUnknownKeys = true // §0: clients must ignore unknown fields
@@ -321,7 +321,12 @@ data class Signal(val kind: String, val data: JsonObject) {
     fun risiProgress(): RisiProgress? =
         if (kind == KIND_RISI_PROGRESS) runCatching { ProtocolJson.decodeFromJsonElement<RisiProgress>(data) }.getOrNull() else null
 
+    /** §27.8 (v1.27) Risi listening to an Official call (ephemeral hint). */
+    fun callRisi(): CallRisiSignal? =
+        if (kind == KIND_CALL_RISI) runCatching { ProtocolJson.decodeFromJsonElement<CallRisiSignal>(data) }.getOrNull() else null
+
     companion object {
+        const val KIND_CALL_RISI = "call_risi"
         const val KIND_PRESENCE = "presence"
         const val KIND_TYPING = "typing"
         const val KIND_FRIEND = "friend"
@@ -353,7 +358,17 @@ data class AuthConfig(
     @SerialName("risi_tools") val risiTools: String? = null,
     /** §26.9 (v1.26): "on" | "off"; absent = off. */
     @SerialName("risi_skills") val risiSkills: String? = null,
+    /** §27.10 (v1.27): "on" | "off"; absent = off. */
+    @SerialName("risi_ledger") val risiLedger: String? = null,
+    /** §27.10 (v1.27): "on" | "off"; absent = off (only on together with `risi_ledger`). */
+    @SerialName("risi_transcribe") val risiTranscribe: String? = null,
 ) {
+    /** §27.10: the Ledger follow-ups run on the server; only then does the app advertise `risi_ledger` (with `risi_tools`). */
+    val risiLedgerOn: Boolean get() = risiLedger == "on"
+
+    /** §27.10: call transcription offered (the start sheet's option). */
+    val risiTranscribeOn: Boolean get() = risiTranscribe == "on" && risiLedgerOn
+
     val tabsOn: Boolean get() = tabs == "on"
 
     /** §25.8: the server runs Risi's tool loop; only then does the app advertise `risi_tools`. */
@@ -647,6 +662,9 @@ data class DeviceMls(
 
         /** v1.26 §26.9: Risi skills, only with `risi_tools` and while `/auth/config` says `risi_skills: on`. */
         const val CAP_RISI_SKILLS = CAPABILITY_RISI_SKILLS
+
+        /** v1.27 §27.10: the Ledger follow-ups, only with `risi_tools` and while `/auth/config` says `risi_ledger: on`. */
+        const val CAP_RISI_LEDGER = CAPABILITY_RISI_LEDGER
     }
 }
 
@@ -1316,11 +1334,18 @@ data class CallsRoomRequest(
     @SerialName("call_id") val callId: String,
     val media: String,
     val action: String,
+    /** v1.27 §27.7: `start` only; omitted (never `null`) otherwise. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("risi_listen") val risiListen: Boolean? = null,
 ) {
     companion object {
         const val START = "start"
         const val JOIN = "join"
         const val STATUS = "status"
+
+        /** v1.27 §27.7: any participant stops Risi listening. */
+        const val RISI_STOP = "risi_stop"
     }
 }
 
@@ -1333,6 +1358,8 @@ data class CallsRoomReply(
     val token: String,
     @SerialName("expires_at") val expiresAt: String,
     @SerialName("max_participants") val maxParticipants: Int,
+    /** v1.27 §27.7: Risi's state for this call (absent = off). */
+    val risi: CallRisiState? = null,
 ) {
     override fun toString() = "CallsRoomReply(room=$room, identity=$identity, max=$maxParticipants)" // never the token
 }
@@ -1343,4 +1370,6 @@ data class CallsRoomStatusReply(
     val active: Boolean,
     val participants: Int = 0,
     @SerialName("max_participants") val maxParticipants: Int = 0,
+    /** v1.27 §27.7: so the Join line can say "Risi is listening" (absent = off). */
+    val risi: CallRisiState? = null,
 )

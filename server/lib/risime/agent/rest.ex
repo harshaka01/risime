@@ -40,7 +40,16 @@ defmodule RisiMe.Agent.Rest do
   :agent_unavailable}` when they can't be opened (texts are sealed under `RISI_DATA_KEY`; no or
   a wrong key). No rows: `{:ok, []}` with or without a key.
   """
-  def facts(user) do
+  def facts(user, device_id \\ nil) do
+    with {:ok, facts} <- user_facts(user) do
+      # 30-day summaries: the "Summaries" group, for apps that know the kind (risi_tools).
+      if RisiMe.Devices.risi_tools_device?(user, device_id),
+        do: {:ok, facts ++ RisiMe.Agent.DailySummaries.facts(user)},
+        else: {:ok, facts}
+    end
+  end
+
+  defp user_facts(user) do
     Repo.all(
       from f in Fact,
         where: f.subject_user_id == ^user and f.conversation_id in subquery(mine(user)),
@@ -65,8 +74,17 @@ defmodule RisiMe.Agent.Rest do
            Repo.delete_all(from f in Fact, where: f.id == ^id and f.subject_user_id == ^user) do
       :ok
     else
-      {0, _} -> {:error, :not_found}
-      error -> error
+      # 30-day summaries: a summary of a chat the caller is a member of (for the chat).
+      {0, _} ->
+        {:ok, id} = Ecto.UUID.cast(fact_id)
+
+        case RisiMe.Agent.DailySummaries.delete(user, id) do
+          :ok -> :ok
+          :not_found -> {:error, :not_found}
+        end
+
+      error ->
+        error
     end
   end
 
@@ -107,22 +125,43 @@ defmodule RisiMe.Agent.Rest do
 
     q = if state == :open, do: where(q, [c], c.state in ^Commitment.open_states()), else: q
 
+    # v1.27 §27.5: a ledger item is a promise only once its owner confirmed it; until then it
+    # is nobody's (counterparts hear about it only after the owner's ✓).
+    q = where(q, [c], is_nil(c.item_state) or c.item_state != "proposed")
+
     Repo.all(q)
     |> opened(&Commitment.open_all/1)
-    |> wire(fn c ->
-      %{
-        commitment_id: c.id,
-        chat_id: c.chat_id,
-        official_conversation_id: c.conversation_id,
-        state: c.state,
-        text: c.text,
-        owner: c.owner_id,
-        counterpart: c.counterpart_ids,
-        due: c.due && Messaging.iso(c.due),
-        due_text: c.due_text,
-        created_at: Messaging.iso(c.inserted_at),
-        updated_at: Messaging.iso(c.updated_at)
-      }
-    end)
+    |> wire(fn c -> commitment_json(c, user) end)
+  end
+
+  # v1.27 §27.9: ledger items gain summary_id, source, all_day and the caller's role.
+  defp commitment_json(c, user) do
+    base = commitment_json(c)
+
+    if Commitment.ledger?(c),
+      do:
+        Map.merge(base, %{
+          summary_id: c.summary_id,
+          source: c.source,
+          all_day: c.all_day == true,
+          role: if(c.owner_id == user, do: "owner", else: "counterpart")
+        }),
+      else: base
+  end
+
+  defp commitment_json(c) do
+    %{
+      commitment_id: c.id,
+      chat_id: c.chat_id,
+      official_conversation_id: c.conversation_id,
+      state: c.state,
+      text: c.text,
+      owner: c.owner_id,
+      counterpart: c.counterpart_ids,
+      due: c.due && Messaging.iso(c.due),
+      due_text: c.due_text,
+      created_at: Messaging.iso(c.inserted_at),
+      updated_at: Messaging.iso(c.updated_at)
+    }
   end
 end

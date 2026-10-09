@@ -38,6 +38,14 @@ defmodule RisiMe.Agent.Commitment do
     field :schedule_v, :integer, default: 0
     field :proposed_at, :utc_datetime_usec
     field :confirmed_at, :utc_datetime_usec
+    # v1.27 §27.9: a ledger item (commitment_id = item_id) has an `item_state`; a v1.24 card
+    # (also one from a summary's owner fallback) has none.
+    field :summary_id, :binary_id
+    field :all_day, :boolean, default: false
+    field :source, :string
+    field :item_state, :string
+    field :overdue_sent_at, :utc_datetime_usec
+    field :nudged_at, :utc_datetime_usec
     timestamps()
   end
 
@@ -48,6 +56,9 @@ defmodule RisiMe.Agent.Commitment do
   def open_states, do: @open
 
   def open?(%__MODULE__{state: s}), do: s in @open
+
+  @doc "True for a v1.27 ledger item (owner-confirmed in the Risi chat, §27.5)."
+  def ledger?(%__MODULE__{item_state: s}), do: s != nil
 
   @doc "Seals `text` and `due_text` into their columns: `{:ok, c}` or `:error` (no key)."
   def seal(%__MODULE__{id: id, text: text} = c) when is_binary(text) do

@@ -16,6 +16,57 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
+## Contract v1.27 §27 (S28-first, S20–S24) + 30-day summaries — READY (not deployed)
+Call transcription (S25–S27) is **not** in this chunk. Gate green (911 tests). Commits:
+ff5ef51 (S28-first), 3c9763d (S20), 28717a5 (S21), 569c3a5 (S22), 19641f0 (S23), 4c4b523 (S24),
+8af622d (30-day summaries).
+- **S28-first:** `@checked_v1_27` covers the 27 §27 examples (structure; `/auth/config` and the
+  capability against the server; the ledger envelopes and My promises against real output in
+  `test/risime/agent/ledger_s2*_test.exs`). `/auth/config` `risi_ledger` (RISI_LEDGER) and
+  `risi_transcribe` (RISI_TRANSCRIBE **and** the ledger on **and** `:risi_speech_ready`, false
+  until S25–S27 wire the speech model's health) — both default off, absent when off.
+  `risi_ledger` capability kept only with `risi_tools` (`Devices.risi_ledger?/any_risi_ledger?/
+  risi_ledger_users`).
+- **S20 `made_by`:** `Out.post` adds it to every Risi envelope (`Agent.MadeBy`): from the
+  learning-log row of `call_ref` (`risi-l1`/`risime`; a commercial row → model id +
+  `RISI_COMMERCIAL_PROVIDER_NAME`); `at` = the call's TimeUUID time; `model: null` for rule kinds
+  (reminder, escalation, digest, commitment_update, error, item_*, call_listen, reminder_set,
+  skill_*) and server-built answers (post-check fallback, bound finals, pointer lines). A turn's
+  earlier calls fill `also` (no repeats, never the main model).
+- **S21 quiet rule** (`Agent.Ledger`): cutoff/`discussion_since`/spacing in `risi_chat_state`;
+  one `discussion_quiet` job per conversation moved by each counted message (newest + 600 s, or
+  the next 3-min gap after 4 h); ≥ 6 counted from ≥ 2 humans; 30 min spacing (re-checked then);
+  < 8/day (chat zone). `discussion_summarise` (key points ≤ 8, one-line summary, items ≤ 10 with
+  owners/counterparts checked against the active humans, confidence ≥ RISI_MIN_CONFIDENCE).
+  No items → nothing posted, cutoff moves. With RISI_LEDGER=on the v1.24 per-message extraction
+  is replaced by this. `risi_discussions` (key points + summary sealed with **RISI_DATA_KEY**).
+- **S22 fan-out** (`Agent.LedgerOut`): `discussion_summary` into each `risi_ledger` recipient's
+  own Risi chat (body in their zone); no active Risi chat (or a send-limit failure) → held sealed
+  in `risi_followups_pending` 24 h, posted on activation (`pending_copies` job from
+  `RisiChat.activated/1`) or by the hourly prune. Owners without `risi_ledger` → v1.24 card in
+  Official (10/day) + v1.24 rules; `discussion_card` in Official whenever a copy went out.
+- **S23 actions** (`Agent.LedgerActions`): item_confirm/edit/decline owner-only, done by owner or
+  counterpart, only in the actor's own Risi chat on a summary they received; 48 h expiry
+  (`item_expire`); `item_update` to every ledger recipient's Risi chat (also when an
+  owner-fallback card changes). `GET /risi/commitments` adds `summary_id`, `source`, `all_day`,
+  `role` for ledger items; proposed ledger items are not listed.
+- **S24 reminders** (`Agent.LedgerReminders`): `item_reminder` jobs (before/at to the owner,
+  today to counterparts in their zone, overdue at due+2h / 10:00 next day, nudge 24 h later; the
+  last two once per item via `overdue_sent_at`/`nudged_at`); the personal 09:00 digest
+  (`scope: "personal"`); the group digest covers legacy cards only and is retired where every
+  human has `risi_ledger`.
+- **30-day summaries** (`Agent.DailySummaries`, `Agent.PeriodSummary`; proposal
+  `contract/proposals/2026-10-09-risi-30day-summaries.md`): day summary per Official chat at
+  23:30 local, weekly rollup on Sunday, `risi_daily_summaries` sealed (RISI_DATA_KEY), 35 days;
+  `summarise` scope today/7d/30d/{period}/{from,to} with optional `period` and `days`; facts kind
+  `summary` for risi_tools devices, deletable per id.
+- **Migrations:** `20261019100000_risi_ledger`, `20261020100000_risi_daily_summaries` (additive).
+- **Deviations / open:** `risi_discussions` sealed with RISI_DATA_KEY (task rule) instead of
+  §27.9's RISI_MEMORY_KEY; a §15 delete removes items derived only from the deleted messages but
+  posts no `item_update cancelled` (no actor id at that point); expired proposals are deleted
+  without an `item_update`; `risi_transcribe` needs `:risi_speech_ready` until S25–S27; the 30-day
+  summaries run under RISI_LEDGER (no switch of their own).
+
 ## Privacy fix 2026-10-09: Risi-derived text sealed at rest — READY (not deployed)
 - **What:** every chat-derived text Risi keeps is now AES-256-GCM under `RISI_DATA_KEY`
   (`Agent.Seal`, AAD `<table>:<row id>:<column>`), like the buffer:

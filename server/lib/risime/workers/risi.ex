@@ -6,6 +6,8 @@ defmodule RisiMe.Workers.Risi do
   | kind | queue | what |
   |---|---|---|
   | `extract` | `risi` (2) | commitment extraction of a conversation (debounced, one pending) |
+  | `discussion_quiet` | `risi` | v1.27 §27.2 quiet rule of a conversation (one pending, moved by each counted message) |
+  | `item_expire` | `risi_timers` | v1.27 §27.5: a proposed ledger item unconfirmed after 48 h |
   | `request` | `risi_requests` (2) | an `ask`/`summarise`/`report` (or its `error` reply) |
   | `action` | `risi_timers` (4) | a `risi_action`: a commitment, or a confirm card (§25.4; a client write waits ≤ 15 s for the phone here) |
   | `expire` | `risi_timers` | a proposal unconfirmed after 48 h is deleted |
@@ -22,7 +24,7 @@ defmodule RisiMe.Workers.Risi do
   use Oban.Worker, queue: :risi, max_attempts: 3
 
   alias RisiMe.Agent
-  alias RisiMe.Agent.{Commitments, Out, Requests, Secretary, Writes}
+  alias RisiMe.Agent.{Commitments, LedgerActions, Out, Requests, Secretary, Writes}
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"kind" => "forget", "conv" => conv}}) do
@@ -38,7 +40,20 @@ defmodule RisiMe.Workers.Risi do
     RisiMe.Agent.ToolCalls.prune()
     RisiMe.Agent.Skills.prune()
     RisiMe.Agent.Reminders.prune()
+    # v1.27 §27.3: held copies (expired ones go; ready ones are posted).
+    if Out.ready?(), do: RisiMe.Agent.LedgerOut.prune()
+    # 30-day summaries are kept 35 days.
+    RisiMe.Agent.DailySummaries.prune()
     :ok
+  end
+
+  # v1.27 §27.3: a Risi chat became active; its owner's held copies are posted.
+  def perform(%Oban.Job{args: %{"kind" => "pending_copies", "user_id" => user}}) do
+    cond do
+      not RisiMe.Risi.enabled?() -> {:cancel, :risi_off}
+      not Out.ready?() -> {:snooze, 60}
+      true -> RisiMe.Agent.LedgerOut.deliver_pending(user)
+    end
   end
 
   # v1.26 §26.4: a client undo whose phone didn't answer in 15 s.
@@ -46,7 +61,15 @@ defmodule RisiMe.Workers.Risi do
     do: RisiMe.Agent.Skills.undo_timeout(e, c)
 
   def perform(%Oban.Job{args: %{"kind" => "digest_sweep"}}) do
-    if Out.ready?(), do: Commitments.digest_sweep(), else: :ok
+    if Out.ready?() do
+      Commitments.digest_sweep()
+      # v1.27 §27.6: the personal 09:00 digests of ledger items.
+      RisiMe.Agent.LedgerReminders.digest_sweep()
+      # 30-day summaries: each Official chat's summary of its day (23:30 local).
+      RisiMe.Agent.DailySummaries.sweep()
+    else
+      :ok
+    end
   end
 
   def perform(%Oban.Job{args: %{"conv" => conv} = args}) do
@@ -62,6 +85,15 @@ defmodule RisiMe.Workers.Risi do
 
   defp run(%{"kind" => "extract", "conv" => conv}), do: Commitments.extract(conv)
 
+  # v1.27 §27.2: the quiet rule's check of a conversation.
+  defp run(%{"kind" => "discussion_quiet", "conv" => conv}), do: RisiMe.Agent.Ledger.quiet(conv)
+
+  # v1.27 §27.6: a ledger item's reminder, follow-up or nudge.
+  defp run(%{"kind" => "item_reminder"} = args), do: RisiMe.Agent.LedgerReminders.fire(args)
+
+  # v1.27 §27.5: a proposed item unconfirmed 48 h after its summary.
+  defp run(%{"kind" => "item_expire", "item_id" => id}), do: RisiMe.Agent.Ledger.expire(id)
+
   defp run(%{"kind" => "request", "conv" => conv, "user_id" => user} = a) do
     cond do
       not Secretary.active_human?(conv, user) -> :ok
@@ -75,9 +107,23 @@ defmodule RisiMe.Workers.Risi do
          %{"type" => "risi_action", "__sender" => ^user} = env <- Secretary.envelope(conv, id) do
       case env["action"] do
         # v1.25 §25.4: confirm cards (the write runs here, without a model call).
-        a when a in ~w(confirm_write cancel_write) -> Writes.act(conv, user, env["__device"], env)
-        a when a in ~w(me_too not_me) -> RisiMe.Agent.Reminders.act(conv, user, env)
-        _ -> Commitments.act(conv, user, env)
+        a when a in ~w(confirm_write cancel_write) ->
+          Writes.act(conv, user, env["__device"], env)
+
+        a when a in ~w(me_too not_me) ->
+          RisiMe.Agent.Reminders.act(conv, user, env)
+
+        # v1.27 §27.5: item actions (and done) on ledger items, in the actor's Risi chat.
+        a when a in ~w(item_confirm item_decline item_edit) ->
+          LedgerActions.act(conv, user, env)
+
+        "done" ->
+          if risi_chat?(conv),
+            do: LedgerActions.act(conv, user, env),
+            else: Commitments.act(conv, user, env)
+
+        _ ->
+          Commitments.act(conv, user, env)
       end
     else
       _ -> :ok
@@ -95,4 +141,6 @@ defmodule RisiMe.Workers.Risi do
     do: Commitments.escalate(id, v, n)
 
   defp run(_args), do: :ok
+
+  defp risi_chat?(conv), do: RisiMe.Groups.Tabs.risi_chat?(conv)
 end

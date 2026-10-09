@@ -25,6 +25,87 @@ class ContractExamplesTest {
 
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = mapOf(
+        // v1.27 (§27 made_by, the Ledger follow-ups, call transcription): net/Protocol127.kt and RisiMeta's optional fields.
+        "auth_config_v127.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiLedgerOn && it.risiTranscribeOn && it.risiSkillsOn && it.risiToolsOn) } },
+        "device_put_risi_ledger.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_LEDGER in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) } },
+        "envelope_risi_answer_made_by.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == "answer" && it.madeBy!!.model == "risi-l1" && it.madeBy!!.provider == "risime" && it.madeBy!!.at != null && it.madeBy!!.also.isEmpty()) }
+        },
+        "envelope_risi_discussion_summary_chat.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == RisiKinds127.DISCUSSION_SUMMARY && it.summaryId != null && it.conversationId!!.startsWith("grp:") && it.chatId!!.startsWith("dm:"))
+                require(it.forUsers.single() == it.items[0].owner && it.withUsers.size == 1 && it.source == "chat" && it.callId == null && it.durationS == null && it.keyPoints.size == 2)
+                require(it.items.size == 2 && it.items[0].id == it.items[0].itemId && !it.items[0].allDay && it.items[1].allDay && it.items.all { i -> i.state == RisiItemStates.PROPOSED } && it.expiresAt != null)
+            }
+        },
+        "envelope_risi_discussion_summary_call.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == RisiKinds127.DISCUSSION_SUMMARY && it.source == "call" && it.media == "video" && it.durationS == 1925L && it.callId != null)
+                require(it.madeBy!!.also.single().task == RisiMadeByAlso.TASK_TRANSCRIBE && it.items[1].counterpart.single() == it.items[0].owner)
+            }
+        },
+        "envelope_risi_discussion_card.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds127.DISCUSSION_CARD && it.itemsCount == 2 && it.summary!!.isNotEmpty() && it.withUsers.size == 2 && it.notify.isEmpty() && it.items.isEmpty()) }
+        },
+        "envelope_risi_item_update.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds127.ITEM_UPDATE && it.itemId != null && it.state == RisiItemStates.CONFIRMED && it.by != null && it.allDay == true && it.madeBy!!.model == null && it.callRef == null) }
+        },
+        "envelope_risi_item_due.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds127.ITEM_DUE && it.moment == RisiItemDue.BEFORE && it.role == RisiItemDue.ROLE_OWNER && it.buttons == listOf("done", "new_date") && it.allDay == false) }
+        },
+        "envelope_risi_item_due_counterpart.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds127.ITEM_DUE && it.moment == RisiItemDue.TODAY && it.role == RisiItemDue.ROLE_COUNTERPART && it.buttons.isEmpty()) }
+        },
+        "envelope_risi_item_overdue.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds127.ITEM_OVERDUE && it.overdueBy == 7200L && it.buttons == listOf("done", "new_date") && it.owner == null) }
+        },
+        "envelope_risi_item_nudge.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds127.ITEM_NUDGE && it.overdueBy == 93600L && it.owner != null && it.buttons.isEmpty()) }
+        },
+        "envelope_risi_digest_personal.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == "digest" && it.scope == "personal" && it.items.size == 2 && it.items[0].id == it.items[0].commitmentId) }
+        },
+        "envelope_risi_action_item_confirm.json" to { s -> ProtocolJson.decodeFromString<RisiActionEnvelope>(s).also { require(it.action == RisiActions127.ITEM_CONFIRM && it.edit == null && ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s)) } },
+        "envelope_risi_action_item_decline.json" to { s -> ProtocolJson.decodeFromString<RisiActionEnvelope>(s).also { require(it.action == RisiActions127.ITEM_DECLINE && it.edit == null && ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s)) } },
+        "envelope_risi_action_item_edit.json" to { s ->
+            ProtocolJson.decodeFromString<RisiActionEnvelope>(s).also {
+                require(it.action == RisiActions127.ITEM_EDIT && it.edit == RisiActions127.editObject("Send the revised quote with transport", "2026-10-10T06:30:00.000Z", false))
+                require(ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s))
+            }
+        },
+        "envelope_risi_call_listen.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds127.CALL_LISTEN && it.state == CallRisiState.LISTENING && it.since != null && it.by == null && it.callId != null) }
+        },
+        "envelope_risi_call_listen_stopped.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds127.CALL_LISTEN && it.state == CallRisiState.STOPPED && it.reason == "stopped" && it.by != null) }
+        },
+        "call_offer_sfu_risi_payload.json" to { s ->
+            (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.SfuOffer).also {
+                require(it.risi == CALL_RISI_LISTEN && it.media == "video")
+                require(lk.codegen.risime.calls.CallEnvelope.toJson(it) == ProtocolJson.parseToJsonElement(s)) // re-encodes exactly
+            }
+        },
+        "group_call_started_risi_payload.json" to { s -> groupCall(s).also { require(it.state == "started" && it.risi == CALL_RISI_LISTEN) } },
+        "calls_room_request_risi.json" to { s ->
+            ProtocolJson.decodeFromString<CallsRoomRequest>(s).also { require(it.action == CallsRoomRequest.START && it.risiListen == true && ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s)) }
+        },
+        "calls_room_reply_risi.json" to { s -> ProtocolJson.decodeFromString<CallsRoomReply>(s).also { require(it.risi!!.state == CallRisiState.REQUESTED && it.risi!!.reason == null && !it.toString().contains(it.token)) } },
+        "calls_room_risi_stop.json" to { s ->
+            ProtocolJson.decodeFromString<CallsRoomRequest>(s).also { require(it.action == CallsRoomRequest.RISI_STOP && it.risiListen == null && ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s)) }
+        },
+        "calls_room_risi_stop_reply.json" to { s -> ProtocolJson.decodeFromString<CallsRoomRisiStopReply>(s).also { require(it.risi.state == CallRisiState.STOPPED && it.risi.reason == "stopped") } },
+        "calls_room_status_reply_v127.json" to { s -> ProtocolJson.decodeFromString<CallsRoomStatusReply>(s).also { require(it.active && it.risi!!.state == CallRisiState.LISTENING) } },
+        "signal_call_risi.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).callRisi()!!.also { require(it.state == CallRisiState.STOPPED && it.by != null && it.conversationId.startsWith("grp:")) } },
+        // Server-side claims for Risi's internal token: never sent to the app; checked for the listen-only grants.
+        "livekit_token_claims_risi.json" to { s ->
+            (ProtocolJson.parseToJsonElement(s) as JsonObject).also { o ->
+                val v = o["video"]!!.jsonObject
+                require(!v["canPublish"]!!.jsonPrimitive.boolean && v["canSubscribe"]!!.jsonPrimitive.boolean && !v["hidden"]!!.jsonPrimitive.boolean && v["canPublishSources"]!!.jsonArray.isEmpty())
+            }
+        },
+        "risi_commitments_reply_v127.json" to { s ->
+            ProtocolJson.decodeFromString<RisiCommitmentsReply>(s).also { require(it.commitments.map { c -> c.role } == listOf("owner", "counterpart") && it.commitments[1].allDay == true && it.commitments[0].summaryId != null && it.commitments[0].source == "call") }
+        },
         // v1.26 (§26 Risi skills): typed models in net/Protocol126.kt (and RisiMeta's / RisiToolCall's optional fields).
         "auth_config_v126.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiSkillsOn && it.risiToolsOn && it.tabsOn) } },
         "device_put_risi_skills.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_SKILLS in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) } },

@@ -235,6 +235,22 @@ defmodule RisiMe.Agent.Commitments do
     end
   end
 
+  @doc """
+  v1.27 §27.3 owner fallback: a summary item of an owner without a `risi_ledger` device (its row
+  already stored, `item_state` nil) gets the v1.24 card in Official and the v1.24 rules. Over
+  the 10-a-day card limit the row is deleted. True when the card went out and the row is kept.
+  """
+  def legacy_card(conv, %Commitment{} = row, call_ref) do
+    if RateLimiter.hit_if_allowed(:risi_cards, conv, @cards_per_day, :timer.hours(24)) == :ok do
+      post_proposal(conv, row, call_ref, Secretary.members(conv))
+      Repo.get(Commitment, row.id) != nil
+    else
+      Logger.info("Risi card limit reached in #{conv}")
+      Repo.delete!(row)
+      false
+    end
+  end
+
   defp post_proposal(conv, row, call_ref, members) do
     names = Map.new(members, &{&1.user_id, &1.name})
 
@@ -318,6 +334,8 @@ defmodule RisiMe.Agent.Commitments do
     with {:ok, _} <- Ecto.UUID.cast(target),
          %Commitment{} = c <- Repo.get(Commitment, target),
          true <- c.conversation_id == conv,
+         # v1.27 §27.5: a v1.24 action on a ledger item is ignored (those go to the Ledger).
+         false <- Commitment.ledger?(c),
          true <- user == c.owner_id or user in c.counterpart_ids,
          {:ok, c} <- open(c) do
       do_act(action, c, user, env["edit"])
@@ -453,7 +471,7 @@ defmodule RisiMe.Agent.Commitments do
     }
 
     case Out.post(c.conversation_id, body, risi) do
-      {:ok, _} -> :ok
+      {:ok, _} -> RisiMe.Agent.LedgerOut.legacy_update(c, state, by)
       {:error, :rate_limited} -> {:snooze, 10}
       {:error, reason} -> {:error, reason}
     end
@@ -466,7 +484,8 @@ defmodule RisiMe.Agent.Commitments do
 
   # Facts (§24.12) are written only for a tracked commitment: one for the owner and one for
   # each counterpart. Derived lines only; embeddings when a model is served.
-  defp learn(c) do
+  @doc false
+  def learn(c) do
     names = names(c.conversation_id)
     owner = names[c.owner_id] || "A member"
     now = DateTime.utc_now()
@@ -623,13 +642,25 @@ defmodule RisiMe.Agent.Commitments do
     convs =
       Repo.all(
         from c in Commitment,
-          where: c.state in ^Commitment.open_states(),
+          where: c.state in ^Commitment.open_states() and is_nil(c.item_state),
           distinct: true,
           select: c.conversation_id
       )
 
     for conv <- convs, RisiMe.Agent.may_act?(conv), do: digest(conv, now)
     :ok
+  end
+
+  @doc """
+  v1.27 §27.6: with the ledger on, the group digest is no longer posted in an Official
+  conversation whose human members all have a `risi_ledger` device (they get personal digests);
+  otherwise it continues for that chat's legacy cards only.
+  """
+  def group_digest_retired?(conv) do
+    humans = Enum.map(Secretary.members(conv), & &1.user_id)
+
+    RisiMe.Risi.ledger_on?() and humans != [] and
+      length(RisiMe.Devices.risi_ledger_users(humans)) == length(humans)
   end
 
   @doc "Sends `conv`'s digest if its local time is 09:xx and none was sent today."
@@ -642,7 +673,9 @@ defmodule RisiMe.Agent.Commitments do
     items =
       Repo.all(
         from c in Commitment,
-          where: c.conversation_id == ^conv and c.state in ^Commitment.open_states(),
+          where:
+            c.conversation_id == ^conv and c.state in ^Commitment.open_states() and
+              is_nil(c.item_state),
           order_by: [asc_nulls_last: c.due, asc: c.inserted_at]
       )
       |> Commitment.open_all()
@@ -656,7 +689,7 @@ defmodule RisiMe.Agent.Commitments do
         from s in "risi_chat_state", where: s.conversation_id == ^conv, select: s.last_digest_on
       )
 
-    if local.hour == 9 and items != [] and last != today do
+    if local.hour == 9 and items != [] and last != today and not group_digest_retired?(conv) do
       names = names(conv)
 
       lines =

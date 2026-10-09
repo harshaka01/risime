@@ -71,6 +71,8 @@ defmodule RisiMe.Agent.Audience do
       "next_steps" => [],
       "turn_ref" => risi["turn_ref"],
       "call_ref" => risi["call_ref"],
+      # v1.27 §27.1: the pointer line is fixed server text, made by no model.
+      "made_by" => RisiMe.Agent.MadeBy.rule(),
       "notify" => risi["notify"]
     }
   end

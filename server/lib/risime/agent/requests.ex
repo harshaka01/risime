@@ -53,11 +53,41 @@ defmodule RisiMe.Agent.Requests do
   defp v124(conv, %{"action" => action} = env, request_id, user) do
     now = DateTime.utc_now()
 
-    case since(env, now) do
-      :out_of_window -> reply_error(conv, request_id, user, "out_of_window")
-      {:ok, since} -> run(action, conv, request_id, user, env, since, now)
+    case {action, period(env["scope"])} do
+      # 30-day summaries (proposal 2026-10-09-risi-30day-summaries): a named period.
+      {"summarise", {:ok, p}} ->
+        RisiMe.Agent.PeriodSummary.run(conv, request_id, user, p, &complete/4)
+
+      _ ->
+        env = if is_map(env["scope"]), do: env, else: Map.delete(env, "scope")
+
+        case since(env, now) do
+          :out_of_window -> reply_error(conv, request_id, user, "out_of_window")
+          {:ok, since} -> run(action, conv, request_id, user, env, since, now)
+        end
     end
   end
+
+  # `scope`: "today" | "7d" | "30d" (also as {"period": …}) or {"from": ts, "to": ts}.
+  defp period(p) when p in ["today", "7d", "30d"], do: {:ok, p}
+  defp period(%{"period" => p}) when p in ["today", "7d", "30d"], do: {:ok, p}
+
+  defp period(%{"from" => f, "to" => t}) when is_binary(f) and is_binary(t) do
+    with {:ok, from, _} <- DateTime.from_iso8601(f),
+         {:ok, to, _} <- DateTime.from_iso8601(t) do
+      {:ok, {from, to}}
+    else
+      _ -> nil
+    end
+  end
+
+  defp period(_), do: nil
+
+  @doc false
+  def tracked_items(conv), do: tracked(conv)
+
+  @doc false
+  def render_messages(conv, msgs, now), do: render(conv, msgs, now)
 
   defp waited_s do
     case Process.get(:risi_req_t0) do
@@ -253,9 +283,17 @@ defmodule RisiMe.Agent.Requests do
     }
 
     case LLM.complete(req) |> post_check(req, t) do
-      {:ok, %{call_ref: call_ref, output: out, confidence: conf}} ->
+      {:ok, %{call_ref: call_ref, output: out, confidence: conf} = result_meta} ->
         {body, risi} = t.reply.(out, call_ref, conf)
-        post(conv, body, Map.put(risi, "notify", [user]))
+        risi = Map.put(risi, "notify", [user])
+
+        # v1.27 §27.1: a server-built answer (the post-check fallback) is made by no model.
+        risi =
+          if Map.get(result_meta, :rule_made),
+            do: Map.put(risi, "made_by", RisiMe.Agent.MadeBy.rule()),
+            else: risi
+
+        post(conv, body, risi)
 
       # The global in-flight queue is full: wait (the job snoozes), answer late rather than
       # refuse; only after 10 minutes of waiting the polite error (§25.6 `queue_overflow`).
@@ -305,10 +343,11 @@ defmodule RisiMe.Agent.Requests do
   defp fallback({:ok, %{output: out} = r}),
     do:
       {:ok,
-       %{
-         r
-         | output: %{out | "answer" => Capabilities.fallback_answer(), "refs" => []}
-       }}
+       Map.put(
+         %{r | output: %{out | "answer" => Capabilities.fallback_answer(), "refs" => []}},
+         :rule_made,
+         true
+       )}
 
   @bodies %{
     "model_unavailable" => "I can't answer right now. Please try again later.",

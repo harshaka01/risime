@@ -77,6 +77,11 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
         SystemLineText(row.body)
         return
     }
+    if (r.kind == lk.codegen.risime.net.RisiKinds127.ITEM_UPDATE) {
+        // §27.5 applied to the summary card it belongs to (no bubble); without that card, a small line.
+        if (!lk.codegen.risime.data.tabs.RisiLedger.updateHasCard(r, ctx.messages)) SystemLineText(row.body)
+        return
+    }
     Box(modifier.fillMaxWidth().padding(end = 32.dp), contentAlignment = Alignment.CenterStart) {
         Surface(
             shape = MaterialTheme.shapes.medium,
@@ -85,12 +90,12 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
             modifier = Modifier.testTag("risi_card_${r.kind}"),
         ) {
             Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                Text(headerOf(r), style = MaterialTheme.typography.labelMedium, color = OfficialAccent, fontWeight = FontWeight.SemiBold)
+                RisiCardHeader(headerOf(r), r, ctx)
                 when (r.kind) {
                     RisiKinds.COMMITMENT -> CommitmentCard(row, r, ctx)
                     RisiKinds.REMINDER -> ReminderCard(row, r, ctx)
                     RisiKinds.ESCALATION -> EscalationCard(row, r, ctx)
-                    RisiKinds.DIGEST -> DigestCard(r, ctx)
+                    RisiKinds.DIGEST -> if (r.scope == "personal") PersonalDigestCard(r, ctx) else DigestCard(r, ctx)
                     RisiKinds.ANSWER -> AnswerCard(row, r, ctx)
                     RisiKinds.SUMMARY -> SummaryCard(r, ctx)
                     RisiKinds.REPORT -> ReportCard(r)
@@ -101,6 +106,9 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     RisiKinds.DRAFT -> DraftCard(row, r, ctx)
                     RisiKinds.SKILL_DONE -> SkillDoneCard(row, r, ctx)
                     RisiKinds.SKILL_NEEDED -> SkillNeededCard(row, r, ctx)
+                    lk.codegen.risime.net.RisiKinds127.DISCUSSION_SUMMARY -> DiscussionSummaryCard(r, ctx)
+                    lk.codegen.risime.net.RisiKinds127.DISCUSSION_CARD -> DiscussionCard(row, r, ctx)
+                    lk.codegen.risime.net.RisiKinds127.ITEM_DUE, lk.codegen.risime.net.RisiKinds127.ITEM_OVERDUE, lk.codegen.risime.net.RisiKinds127.ITEM_NUDGE -> ItemReminderCard(row, r, ctx)
                     else -> Text(row.body)
                 }
                 FeedbackRow(r, ctx)
@@ -113,7 +121,7 @@ private fun headerOf(r: RisiMeta) = when (r.kind) {
     RisiKinds.COMMITMENT -> "Risi · Track this?"
     RisiKinds.REMINDER -> "Risi · Reminder"
     RisiKinds.ESCALATION -> "Risi · Overdue"
-    RisiKinds.DIGEST -> "Risi · Open items" + (r.date?.let { " · $it" } ?: "")
+    RisiKinds.DIGEST -> (if (r.scope == "personal") "Risi · Your items" else "Risi · Open items") + (r.date?.let { " · $it" } ?: "")
     RisiKinds.ANSWER -> "Risi"
     RisiKinds.SUMMARY -> "Risi · Summary" + if (r.partial) " (partial)" else ""
     RisiKinds.REPORT -> "Risi · Report"
@@ -123,6 +131,10 @@ private fun headerOf(r: RisiMeta) = when (r.kind) {
     RisiKinds.DRAFT -> "Risi · Draft"
     RisiKinds.SKILL_DONE -> "Risi · Done"
     RisiKinds.SKILL_NEEDED -> "Risi · Skill needed"
+    lk.codegen.risime.net.RisiKinds127.DISCUSSION_SUMMARY -> "Risi · Follow-ups"
+    lk.codegen.risime.net.RisiKinds127.DISCUSSION_CARD -> "Risi · Discussion summary"
+    lk.codegen.risime.net.RisiKinds127.ITEM_DUE, lk.codegen.risime.net.RisiKinds127.ITEM_OVERDUE, lk.codegen.risime.net.RisiKinds127.ITEM_NUDGE ->
+        lk.codegen.risime.data.tabs.RisiLedger.reminderHeader(r)
     else -> "Risi"
 }
 
@@ -273,6 +285,41 @@ private fun OfferCard(r: RisiMeta, ctx: RisiCardContext) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 if ("offer_yes" in buttons) Button(onClick = { ctx.host.act(id, "offer_yes") }, modifier = Modifier.testTag("risi_yes")) { Text("Yes") }
                 if ("offer_not_now" in buttons) OutlinedButton(onClick = { ctx.host.act(id, "offer_not_now") }, modifier = Modifier.testTag("risi_not_now")) { Text("Not now") }
+            }
+        }
+    }
+}
+
+/**
+ * §27.1 the card's header: a tap on the Risi name or ⓘ opens "Made by: … · 09:14" (with `also` lines and
+ * the 👍/👎 of §24.11). A message without `made_by` (an older server) says "Made by: not recorded".
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RisiCardHeader(text: String, r: RisiMeta, ctx: RisiCardContext) {
+    var open by remember { mutableStateOf(false) }
+    Row(
+        Modifier.clickable(onClickLabel = "Made by") { open = true }.testTag("risi_made_by_open"),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, style = MaterialTheme.typography.labelMedium, color = OfficialAccent, fontWeight = FontWeight.SemiBold)
+        Text("ⓘ", style = MaterialTheme.typography.labelMedium, color = OfficialAccent, modifier = Modifier.testTag("risi_made_by_info"))
+    }
+    if (open) {
+        ModalBottomSheet(onDismissRequest = { open = false }) {
+            Column(Modifier.padding(Spacing.lg).testTag("risi_made_by_sheet"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Text(lk.codegen.risime.data.tabs.MadeByLabels.title(r.madeBy, ctx.nowMs), style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("risi_made_by"))
+                lk.codegen.risime.data.tabs.MadeByLabels.alsoLines(r.madeBy).forEach {
+                    Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_made_by_also"))
+                }
+                r.callRef?.let { ref ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Was this helpful?", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("👍", Modifier.clickable { open = false; ctx.host.feedback(ref, "up", null) }.padding(Spacing.sm).testTag("risi_made_by_up"))
+                        Text("👎", Modifier.clickable { open = false; ctx.host.feedback(ref, "down", null) }.padding(Spacing.sm).testTag("risi_made_by_down"))
+                    }
+                }
             }
         }
     }

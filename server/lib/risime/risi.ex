@@ -34,6 +34,20 @@ defmodule RisiMe.Risi do
   @doc "v1.26 §26.9: true while `RISI_SKILLS=on` (`/auth/config` `risi_skills`, default off)."
   def skills_switch?, do: Application.get_env(:risime, :risi_skills, false) == true
 
+  @doc "v1.27 §27.10: true while `RISI_LEDGER=on` (`/auth/config` `risi_ledger`, default off)."
+  def ledger_on?, do: Application.get_env(:risime, :risi_ledger, false) == true
+
+  @doc """
+  v1.27 §27.10: true while `RISI_TRANSCRIBE=on`, the ledger is on and the speech model is
+  healthy (`/auth/config` `risi_transcribe`, default off). Until the listener and the speech model
+  are wired (S25–S27), "healthy" is the `:risi_speech_ready` setting (default false), so the
+  switch alone never offers transcription.
+  """
+  def transcribe_on? do
+    Application.get_env(:risime, :risi_transcribe, false) == true and ledger_on?() and
+      Application.get_env(:risime, :risi_speech_ready, false) == true
+  end
+
   def user_id, do: Application.get_env(:risime, :risi_user_id, @default_user)
   def device_id, do: Application.get_env(:risime, :risi_device_id, @default_device)
 

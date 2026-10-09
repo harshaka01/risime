@@ -497,8 +497,20 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
     fun nameOf(userId: String): String = when {
         userId.equals(meId, true) -> "You"
-        else -> members.value.firstOrNull { it.userId.equals(userId, true) }?.displayName ?: "Former member"
+        else -> members.value.firstOrNull { it.userId.equals(userId, true) }?.displayName
+            ?: knownPeople.value[userId.lowercase()] ?: "Former member"
     }
+
+    /**
+     * §27.3 names of people outside this conversation from the phone's own data (friends, members of other
+     * chats): the Risi chat's summaries name the other participants ("…with Shenika").
+     */
+    private val knownPeople: StateFlow<Map<String, String>> = combine(c.db.contacts().all(), c.db.groups().observeAllMembers()) { ct, ms ->
+        val out = HashMap<String, String>()
+        ms.forEach { m -> if (m.displayName.isNotBlank()) out[m.userId.lowercase()] = m.displayName }
+        ct.forEach { x -> x.userId?.let { out[it.lowercase()] = x.displayName } }
+        out as Map<String, String>
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     fun onDraftChanged(text: String) {
         if (group.value?.readOnly != true) typingSender.onInput(text)
@@ -550,7 +562,26 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         override fun conversationName(conversationId: String): String? = conversationNames.value[conversationId.lowercase()]
 
         override fun scheduleMayBeLate(): Boolean = !c.backgroundSkillPermissions.exactAlarmsAllowed()
+
+        override fun actItem(itemId: String, action: String, text: String?, due: String?, allDay: Boolean) {
+            viewModelScope.launch { requests.act(itemId, action, text, due, allDay) }
+        }
+
+        override fun openChat(conversationId: String, atIso: String?) =
+            c.risiUi.openChat(conversationId, atIso?.let { lk.codegen.risime.data.tabs.RisiUiBus.Focus(at = it) })
+
+        override fun openRisiChat(summaryId: String) {
+            val conv = risiChatId() ?: return
+            c.risiUi.openChat(conv, lk.codegen.risime.data.tabs.RisiUiBus.Focus(summaryId = summaryId))
+        }
+
+        override fun risiChatAvailable(): Boolean = c.risiLedgerOn() && risiChatId() != null
+
+        private fun risiChatId(): String? = c.chatTabs.rows.value?.values?.firstOrNull { it.risi }?.conversationId
     }
+
+    /** §27.3/§27.4 where this chat should scroll when it opens from a Risi card (taken once). */
+    fun takeFocus(): lk.codegen.risime.data.tabs.RisiUiBus.Focus? = c.risiUi.takeFocus(conversationId)
 
     /** Entries undone from this screen (their [Undo] goes; a failure brings it back). */
     private val undoneEntries = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
