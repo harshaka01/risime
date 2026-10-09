@@ -381,13 +381,32 @@ were needed after nightly.11.
   `scripts/call-device-test` (calls 1–10 incl. video, CALLTEST OK).
 - **Agents:** none running.
 - **Needs Harsha:**
-T. **Risi tools (spec updated by Harsha, 2026-10-09):** the conflicts are resolved (Private search
-   on the phone only, never sent to Risi; RisiWork via a Keycloak token-exchange token). Still needed:
-   1. **The commercial model for tool use, Sinhala and Tamil:** which provider, an API key in `.env`,
-      and a zero-retention agreement. Until then Risi runs on risi-l1 alone and the gate shows which
-      questions it fails.
-   2. **The Keycloak token-exchange settings for the RisiCloud lead:** exact settings follow with the
-      design.
+T. **Risi tools (§25 proposal `contract/proposals/2026-10-09-risi-client-tools.md`, decision 068):**
+   1. **The commercial model** for tool use and Sinhala/Tamil: which provider, an API key in `.env`,
+      and a zero-retention agreement. Until then everything runs on risi-l1, and the gate shows what
+      it fails.
+   2. **Learning log:**
+      - **(A, default)** hashes only (decision 066): risi-l1 can be evaluated, not trained on these
+        logs;
+      - **(B)** sealed prompts, 30-day TTL, Official only.
+   3. **Keycloak token exchange for RisiWork Ask (RisiCloud lead, realm `aoa`; Keycloak ≥ 26.2):**
+      - New confidential client **`risime-risi`**:
+        - Client authentication ON; Standard flow / Direct access grants / Service accounts OFF;
+        - **Standard Token Exchange ON**; "Allow refresh token in Standard Token Exchange" = No;
+        - credentials: a client secret (or signed JWT) → sent to root for `.env`
+          `RISIWORK_EXCHANGE_SECRET`;
+        - access token lifespan 5 min.
+      - Client scope **`risime-risi-aud`**: an Audience mapper (Included Client Audience
+        `risime-risi`, add to access token), set as a **Default** scope on client `risime`.
+      - Client scope **`risiwork-ask`**: an Audience mapper (Included Client Audience `risiwork`) and
+        a role-scope mapping of the client role **`risiwork:ask-user`**. Add it as an **Optional**
+        scope on `risime-risi`.
+      - **RisiWork Ask must accept:** `aud=risiwork`, `azp=risime-risi`, scope `risiwork-ask` and
+        role `risiwork:ask-user`. Anything else → 403, which Risi turns into "you don't have
+        RisiWork".
+      - **Keycloak < 26.2 instead:** legacy V1 token exchange, using Fine-Grained Admin Permissions
+        on `risiwork` ("token-exchange" permission, with a client policy allowing `risime-risi`).
+      - Please send back the Keycloak version.
 R. ✅ **DONE 2026-10-08 23:23 UTC** (Harsha: "turn Risi on"). Verified:
    - `/auth/config` says `tabs: on`;
    - the Risi user `kind=agent` is seeded;
