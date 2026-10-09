@@ -261,22 +261,30 @@ defmodule RisiMe.Agent.CalendarOffers do
   @doc """
   §29.12: every live tracked item (or v1.24 commitment) with a concrete future time gets its
   proposed event and invites (only the calendar path; no §28.5 cards). Idempotent through the
-  claims. Counts only: `%{items: n, cards: m}` (`dry_run: true`: nothing is created).
+  claims. `user_id: id` limits it to the items that user owns or is a counterpart of (a device
+  that newly advertises `risi_events`). Counts only: `%{items: n, cards: m}` (`dry_run: true`:
+  nothing is created).
   """
   def backfill(opts \\ []) do
     now = Clock.now()
 
-    rows =
-      Repo.all(
-        from c in Commitment,
-          where:
-            c.state in ["proposed", "confirmed", "edited"] and
-              (is_nil(c.item_state) or c.item_state in ^@tracked) and not is_nil(c.due) and
-              c.due > ^now and c.all_day == false and
-              (is_nil(c.due_kind) or c.due_kind == "datetime") and
-              c.needs_clarification == false,
-          order_by: [asc: c.due]
-      )
+    q =
+      from c in Commitment,
+        where:
+          c.state in ["proposed", "confirmed", "edited"] and
+            (is_nil(c.item_state) or c.item_state in ^@tracked) and not is_nil(c.due) and
+            c.due > ^now and c.all_day == false and
+            (is_nil(c.due_kind) or c.due_kind == "datetime") and
+            c.needs_clarification == false,
+        order_by: [asc: c.due]
+
+    q =
+      case Keyword.get(opts, :user_id) do
+        nil -> q
+        u -> from c in q, where: c.owner_id == ^u or ^u in c.counterpart_ids
+      end
+
+    rows = Repo.all(q)
 
     cards =
       if Keyword.get(opts, :dry_run, false) or not Calendar.on?() do

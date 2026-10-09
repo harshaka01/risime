@@ -337,29 +337,21 @@ defmodule RisiMe.Agent.Offers do
 
   @doc """
   Offers every live item (proposed, confirmed or edited) with a concrete future time. Idempotent:
-  an item already offered to a user is skipped (`risi_item_offers`). `user_id: id` limits it to
-  that user's items (a device that newly advertises `risi_events`). Returns counts only:
+  an item already offered to a user is skipped (`risi_item_offers`). Returns counts only:
   `%{items: n, cards: m}` (`dry_run: true`: `cards` is 0, nothing is posted).
   """
   def backfill(opts \\ []) do
     now = Clock.now()
 
-    q =
-      from c in Commitment,
-        where:
-          c.state in ^@live and not is_nil(c.due) and c.due > ^now and c.all_day == false and
-            (is_nil(c.due_kind) or c.due_kind == "datetime") and
-            c.needs_clarification == false,
-        order_by: [asc: c.due]
-
-    # `user_id:` limits the rows to items the user owns or is a counterpart of.
-    q =
-      case Keyword.get(opts, :user_id) do
-        nil -> q
-        u -> from c in q, where: c.owner_id == ^u or ^u in c.counterpart_ids
-      end
-
-    rows = Repo.all(q)
+    rows =
+      Repo.all(
+        from c in Commitment,
+          where:
+            c.state in ^@live and not is_nil(c.due) and c.due > ^now and c.all_day == false and
+              (is_nil(c.due_kind) or c.due_kind == "datetime") and
+              c.needs_clarification == false,
+          order_by: [asc: c.due]
+      )
 
     cards = if Keyword.get(opts, :dry_run, false), do: 0, else: consider_all(rows)
     %{items: length(rows), cards: cards}
