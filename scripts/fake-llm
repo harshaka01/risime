@@ -26,7 +26,9 @@ the gate runs without the real model. The file is {"v": 1, "rules": [Rule]} (or 
 e.g. contract/v1/risi_gate_script.json. Each request is matched against the rules in order; the
 first rule whose every given field matches wins:
   "task":       regex, full match on response_format.json_schema.name (e.g. "risi_next_action");
-  "match":      regex, searched in the FIRST user message (the asker's request, §25.1);
+  "match":      regex, searched in the asker's CURRENT request: the last <question>…</question>
+                block if any (the first user message also carries the chat history), else the
+                FIRST user message (§25.1);
   "match_last": regex, searched in the LAST user message (e.g. a tool result);
   "actions":    [action, ...]: JSON objects (sent as the completion content) or strings (sent
                 verbatim). The step index is the number of assistant messages in the request
@@ -83,6 +85,12 @@ class Script:
         users = [m.get("content") for m in msgs
                  if m.get("role") == "user" and isinstance(m.get("content"), str)]
         first = users[0] if users else ""
+        # Since the P0 action-loop fix (2b448cc) the first user message also carries the Risi-chat
+        # history: "match" means the asker's CURRENT request, i.e. the last <question>…</question>
+        # block when there is one.
+        qs = [q for u in users for q in re.findall(r"<question>(.*?)</question>", u, re.S)]
+        if qs:
+            first = qs[-1]
         last = users[-1] if users else ""
         task = ((body.get("response_format") or {}).get("json_schema") or {}).get("name") or ""
         step = sum(1 for m in msgs if m.get("role") == "assistant")
