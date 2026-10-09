@@ -47,6 +47,25 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.43 (live 2026-10-09 ~13:00 UTC, not required): Calls tab like WhatsApp; Risi Skills and reminders (switched off)
+- **Calls tab:** select and delete, Clear call log, voice/video icons, New call, the call info screen.
+- **§25/§26 shipped, OFF on the pilot** (`RISI_TOOLS`, `RISI_SKILLS` unset; `RISI_MEMORY_KEY` absent):
+  - Settings → Risi skills;
+  - confirm / skill_done / skill_needed cards;
+  - set_reminder with Me too;
+  - a real alarm;
+  - scheduled messages sent by the phone.
+- **Gate:** all PASS, including ui-entry-test --skills (a real alarm in DeskClock, a phone-sent
+  scheduled message, revoke → skill_needed), the boot check, the canary, push and upgrade.
+- **To switch tools/skills on for testers (Harsha decides):** `scripts/risi-enable`-style:
+  `RISI_MEMORY_KEY` into .env (generated), then `RISI_TOOLS=on RISI_SKILLS=on` in pilot.env,
+  restart, `/health` `risi_skills: ok`.
+- **Next (n44):**
+  - the sealing of Risi-derived text (c69985a; the migration seals 71+5+10 rows);
+  - the screen-share fixes;
+  - Lock chat removed from the in-chat ⋮;
+  - the fixed-clock tests.
+
 ## Harsha's real-phone feedback (2026-10-09 morning): answers and work started
 - **Model split so far (learning log):** 45 of 45 Risi calls on our own **risi-l1**
   (Qwen3.6-35B-A3B-FP8): 15 ask, 22 commitment_extract, 4 summarise, 4 report. The commercial
