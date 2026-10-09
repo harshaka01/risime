@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Smoke test of the self-hosted speech-to-text (infra/docker-compose.whisper.yml, decision 071).
+# Checks, against the running risime-whisper container:
+#   - port 8200 is bound to 127.0.0.1 only;
+#   - /health is OK, a request without the API key is refused (401), /v1/models lists the alias;
+#   - English: infra/whisper/testdata/en-jfk.ogg (public domain, Opus like call audio) must give
+#     a transcript with the expected words, within WHISPER_SMOKE_MAX_S (default 5 s);
+#   - Sinhala and Tamil: one clip each, scored by character error rate against the reference
+#     text and reported. Informational only (Whisper's si/ta quality is limited, decision 070).
+# The key comes from .env and is never printed. --init-key adds WHISPER_API_KEY to .env if absent.
+#   scripts/whisper-smoke [--url http://127.0.0.1:8200] [--init-key]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+url=http://127.0.0.1:8200
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --url) url=$2; shift 2 ;;
+    --init-key)
+      touch .env; chmod 600 .env
+      if ! grep -qE '^WHISPER_API_KEY=.+' .env; then
+        echo "WHISPER_API_KEY=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 40)" >> .env
+        echo "added WHISPER_API_KEY to .env"
+      fi
+      shift ;;
+    *) echo "usage: $0 [--url URL] [--init-key]" >&2; exit 2 ;;
+  esac
+done
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+WHISPER_API_KEY="$(grep -E '^WHISPER_API_KEY=' .env 2>/dev/null | tail -1 | cut -d= -f2-)"
+[[ -n "$WHISPER_API_KEY" ]] || fail "WHISPER_API_KEY missing from .env (run with --init-key)"
+export WHISPER_API_KEY WHISPER_URL="$url" TESTDATA="$PWD/infra/whisper/testdata"
+
+# 1. Binding: every listener on :8200 is 127.0.0.1.
+port="${url##*:}"; port="${port%%/*}"
+binds="$(ss -ltnH "sport = :$port" | awk '{print $4}' | sort -u)"
+[[ -n "$binds" ]] || fail "nothing listens on :$port"
+while read -r b; do
+  [[ "$b" == "127.0.0.1:$port" ]] || fail "port $port bound to $b (must be 127.0.0.1 only)"
+done <<<"$binds"
+echo "ok   bind: $(echo "$binds" | tr '\n' ' ')"
+
+# 2. Health and auth.
+[[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url/health")" == 200 ]] || fail "/health"
+echo "ok   /health 200"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url/v1/models")"
+[[ "$code" == 401 ]] || fail "/v1/models without key returned $code, want 401"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H 'Authorization: Bearer wrong' \
+  -F "file=@$TESTDATA/en-jfk.ogg" "$url/v1/audio/transcriptions")"
+[[ "$code" == 401 ]] || fail "transcription with a wrong key returned $code, want 401"
+echo "ok   no/wrong key -> 401"
+
+# 3-4. Transcriptions (stdlib Python, isolated mode).
+python3 -I - <<'PY'
+import json, os, sys, time, unicodedata, urllib.request, uuid
+
+URL, KEY, DATA = os.environ["WHISPER_URL"], os.environ["WHISPER_API_KEY"], os.environ["TESTDATA"]
+MAX_S = float(os.environ.get("WHISPER_SMOKE_MAX_S", "5"))
+
+def fail(msg):
+    print(f"FAIL: {msg}", file=sys.stderr); sys.exit(1)
+
+req = urllib.request.Request(URL + "/v1/models", headers={"Authorization": f"Bearer {KEY}"})
+with urllib.request.urlopen(req, timeout=10) as r:
+    ids = [m["id"] for m in json.load(r)["data"]]
+print(f"ok   /v1/models: {ids}")
+alias = ids[0]
+
+def transcribe(path, language=None):
+    b = uuid.uuid4().hex
+    fields = {"model": alias, "response_format": "verbose_json"}
+    if language: fields["language"] = language
+    body = b""
+    for k, v in fields.items():
+        body += f"--{b}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+    body += (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; "
+             f"filename=\"{os.path.basename(path)}\"\r\nContent-Type: audio/ogg\r\n\r\n").encode()
+    body += open(path, "rb").read() + f"\r\n--{b}--\r\n".encode()
+    req = urllib.request.Request(URL + "/v1/audio/transcriptions", data=body, method="POST",
+        headers={"Authorization": f"Bearer {KEY}",
+                 "Content-Type": f"multipart/form-data; boundary={b}"})
+    t0 = time.monotonic()
+    with urllib.request.urlopen(req, timeout=120) as r:
+        out = json.load(r)
+    return out, time.monotonic() - t0
+
+def norm(s):
+    s = unicodedata.normalize("NFC", s).lower()
+    return "".join(c for c in s if c.isalnum() or c.isspace() or unicodedata.category(c).startswith("M"))
+
+def cer(ref, hyp):
+    a, b = norm(ref).replace(" ", ""), norm(hyp).replace(" ", "")
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1] / max(len(a), 1)
+
+# English: warm-up (first request after start pays CUDA init), then the timed run.
+en = os.path.join(DATA, "en-jfk.ogg")
+transcribe(en)
+out, dt = transcribe(en)
+text = norm(out["text"])
+want = ["ask not", "your country", "can do for you", "fellow americans"]
+missing = [w for w in want if w not in text]
+if missing: fail(f"English transcript lacks {missing}: {out['text']!r}")
+if dt > MAX_S: fail(f"English latency {dt:.2f}s > {MAX_S}s")
+print(f"ok   en: {out['duration']:.1f}s audio in {dt:.2f}s (server {out['processing_s']:.2f}s, "
+      f"RTF {dt / out['duration']:.3f}), lang {out['language']}: {out['text']!r}")
+
+# Sinhala, Tamil: informational quality (character error rate vs the reference).
+for lang, name, ref_file in [("si", "si-slr30-sin_6897_3117231257.ogg", "si.txt"),
+                             ("ta", "ta-fleurs-10015420708072669120.ogg", "ta.txt")]:
+    ref = open(os.path.join(DATA, ref_file), encoding="utf-8").read().strip()
+    for forced in (lang, None):
+        out, dt = transcribe(os.path.join(DATA, name), forced)
+        how = f"language={forced}" if forced else "auto-detect"
+        print(f"info {lang} ({how}): {out['duration']:.1f}s audio in {dt:.2f}s, detected "
+              f"{out['language']} p={out['language_probability']:.2f}, CER {cer(ref, out['text']):.0%}")
+        print(f"       ref: {ref}")
+        print(f"       got: {out['text']}")
+PY
+echo "PASS whisper-smoke"
