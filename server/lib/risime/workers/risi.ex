@@ -59,7 +59,13 @@ defmodule RisiMe.Workers.Risi do
     do: RisiMe.Agent.Skills.undo_timeout(e, c)
 
   def perform(%Oban.Job{args: %{"kind" => "digest_sweep"}}) do
-    if Out.ready?(), do: Commitments.digest_sweep(), else: :ok
+    if Out.ready?() do
+      Commitments.digest_sweep()
+      # v1.27 §27.6: the personal 09:00 digests of ledger items.
+      RisiMe.Agent.LedgerReminders.digest_sweep()
+    else
+      :ok
+    end
   end
 
   def perform(%Oban.Job{args: %{"conv" => conv} = args}) do
@@ -77,6 +83,9 @@ defmodule RisiMe.Workers.Risi do
 
   # v1.27 §27.2: the quiet rule's check of a conversation.
   defp run(%{"kind" => "discussion_quiet", "conv" => conv}), do: RisiMe.Agent.Ledger.quiet(conv)
+
+  # v1.27 §27.6: a ledger item's reminder, follow-up or nudge.
+  defp run(%{"kind" => "item_reminder"} = args), do: RisiMe.Agent.LedgerReminders.fire(args)
 
   # v1.27 §27.5: a proposed item unconfirmed 48 h after its summary.
   defp run(%{"kind" => "item_expire", "item_id" => id}), do: RisiMe.Agent.Ledger.expire(id)

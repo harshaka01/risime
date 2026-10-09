@@ -642,13 +642,25 @@ defmodule RisiMe.Agent.Commitments do
     convs =
       Repo.all(
         from c in Commitment,
-          where: c.state in ^Commitment.open_states(),
+          where: c.state in ^Commitment.open_states() and is_nil(c.item_state),
           distinct: true,
           select: c.conversation_id
       )
 
     for conv <- convs, RisiMe.Agent.may_act?(conv), do: digest(conv, now)
     :ok
+  end
+
+  @doc """
+  v1.27 §27.6: with the ledger on, the group digest is no longer posted in an Official
+  conversation whose human members all have a `risi_ledger` device (they get personal digests);
+  otherwise it continues for that chat's legacy cards only.
+  """
+  def group_digest_retired?(conv) do
+    humans = Enum.map(Secretary.members(conv), & &1.user_id)
+
+    RisiMe.Risi.ledger_on?() and humans != [] and
+      length(RisiMe.Devices.risi_ledger_users(humans)) == length(humans)
   end
 
   @doc "Sends `conv`'s digest if its local time is 09:xx and none was sent today."
@@ -661,7 +673,9 @@ defmodule RisiMe.Agent.Commitments do
     items =
       Repo.all(
         from c in Commitment,
-          where: c.conversation_id == ^conv and c.state in ^Commitment.open_states(),
+          where:
+            c.conversation_id == ^conv and c.state in ^Commitment.open_states() and
+              is_nil(c.item_state),
           order_by: [asc_nulls_last: c.due, asc: c.inserted_at]
       )
       |> Commitment.open_all()
@@ -675,7 +689,7 @@ defmodule RisiMe.Agent.Commitments do
         from s in "risi_chat_state", where: s.conversation_id == ^conv, select: s.last_digest_on
       )
 
-    if local.hour == 9 and items != [] and last != today do
+    if local.hour == 9 and items != [] and last != today and not group_digest_retired?(conv) do
       names = names(conv)
 
       lines =
