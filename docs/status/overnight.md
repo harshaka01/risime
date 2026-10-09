@@ -47,6 +47,40 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## Risi queue (set 2026-10-09)
+1. **Risi hotfix** (n42), from Harsha's real-phone screens:
+   - our limiter → the queue (in n41) plus limiter and upstream logging, backoff and fallback;
+   - the system prompt with what Risi can do now and what's coming;
+   - sources as tappable quotes (no "Message 1");
+   - the 1:1 Official header "Kumu · Risi";
+   - the placeholder "Message";
+   - the "Continuing with Risi" follow-up chip;
+   - all of it in ui-entry-test with screenshots.
+2. **§25 tools, wave 1** (running): S9–S12 (risi_tools, Risi chat, Turn loop, audience) and A7–A8
+   (decoders, Risi chat row).
+3. **Reminders tool:** set_reminder plus confirm card, Me too, firing (S13–S14 / A10).
+4. **"Teach Risi"** (Harsha 2026-10-09):
+   - **Profile:** Settings → "My Risi profile" (bio, roles, people, preferences, interests).
+   - **Ways to teach:**
+     - paste text or upload PDF/DOCX → extracted fact cards to confirm/edit;
+     - "Interview me" in the Risi chat (5–10 questions, stoppable and resumable);
+     - "Risi, remember that …" → confirm card;
+     - voice later.
+   - **"What Risi knows about me"** becomes one grouped view with sources, edit and delete.
+   - **Visibility per item:** Only me (default) / My contacts; never sent to partner agents without
+     a per-request Yes.
+   - **Storage:** sealed with the Risi data key, never in logs, nothing from Private.
+   - Answers cite the profile.
+   - Needs a §25 addendum (contract proposal: profile REST, extraction/confirm, document upload,
+     visibility) when it starts.
+5. **The rest of §25:**
+   - calendar client tool (S15 / A9);
+   - notes and memory (S16), merged into Teach Risi;
+   - search / summarise / draft (S17);
+   - RisiWork (S18);
+   - routing (S19);
+   - the ten-question and safety gate.
+
 ## v0.2.0-nightly.40 (live 2026-10-09 ~01:10 UTC, not required): Risi boot isolation, Risi REST without device header
 - **What's in:**
   - Risi can never stop the server (`5503d83`): `/health` `checks.risi`, a KEK check, the read-only
