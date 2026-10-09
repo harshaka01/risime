@@ -16,6 +16,22 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
+## Fix 2026-10-09: invalid model output never loops (release gate, calendar permission off) — READY
+Bug: with calendar permission off `calendar_check` isn't offered; a model emitting it anyway failed the schema →
+`model_unavailable` → the turn job snoozed 30 s and re-ran forever (no answer for 2+ min). Now:
+- `LLM.complete` with `invalid_output: :return` (the turn only) returns `{:error, {:invalid_output, out, call_ref}}`
+  without the blind schema retry; other callers unchanged.
+- The turn gives **one** corrective retry (offered tools named; for calendar tools "never say free"), then ends at
+  once, made by the rule: calendar check → "I couldn't read your calendar on this phone (<reason>). Connect it in
+  Settings → Risi skills → Calendar." (`risi_calendar_check` → the §29.7 "I couldn't check your calendar…" text);
+  Calendar skill **off** → `skill_needed` card carrying that text; another disabled skill's tool → `skill_needed`;
+  an unknown tool → "I can't use <tool> here right now…"; a final that only broke a limit → its answer, post-checked;
+  non-JSON → "I couldn't put together an answer this time. Ask me again."
+- A step repeating an earlier failed step (same tool + args) isn't run again: the turn ends with an answer.
+- The model down before any step snoozes only while the request has waited < 120 s (`:risi_turn` `wait_s`), then
+  "I couldn't reach my model…". The 60 s turn bound is unchanged.
+Tests: `test/risime/agent/turn_invalid_output_test.exs` (9). Gate (`_unoff`): 1016 tests, 0 failures, 15 skipped.
+
 ## v1.29 §30 Risi Notes (proposal 2026-10-09-risi-calendar-notes, decision 073) — READY (not deployed; `RISI_NOTES` off by default)
 Commit: fecd471 (feature + tests), plus this status. Gate (partition `_notes`): `mix format --check-formatted && mix
 compile --warnings-as-errors && MIX_TEST_PARTITION=_notes mix test` → 1006 tests, 0 failures, 15 skipped, 3 excluded (after rebasing on root 60c05e2).
