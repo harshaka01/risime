@@ -243,6 +243,38 @@ defmodule RisiMe.ContractExamplesTest do
                     risi_tool_result_schedule_message.json
                     risi_tool_result_set_alarm.json)
 
+  # v1.27 (made_by, the Commitment Ledger follow-ups, call transcription, §27): checked in the
+  # "v1.27" describe below; server-produced shapes against real responses where the server
+  # produces them (auth/config, the device capability, the ledger envelopes and My promises in
+  # test/risime/agent/ledger_*_test.exs); MLS envelopes and the call parts by structure.
+  @checked_v1_27 ~w(auth_config_v127.json
+                    call_offer_sfu_risi_payload.json
+                    calls_room_reply_risi.json
+                    calls_room_request_risi.json
+                    calls_room_risi_stop.json
+                    calls_room_risi_stop_reply.json
+                    calls_room_status_reply_v127.json
+                    device_put_risi_ledger.json
+                    envelope_risi_action_item_confirm.json
+                    envelope_risi_action_item_decline.json
+                    envelope_risi_action_item_edit.json
+                    envelope_risi_answer_made_by.json
+                    envelope_risi_call_listen.json
+                    envelope_risi_call_listen_stopped.json
+                    envelope_risi_digest_personal.json
+                    envelope_risi_discussion_card.json
+                    envelope_risi_discussion_summary_call.json
+                    envelope_risi_discussion_summary_chat.json
+                    envelope_risi_item_due.json
+                    envelope_risi_item_due_counterpart.json
+                    envelope_risi_item_nudge.json
+                    envelope_risi_item_overdue.json
+                    envelope_risi_item_update.json
+                    group_call_started_risi_payload.json
+                    livekit_token_claims_risi.json
+                    risi_commitments_reply_v127.json
+                    signal_call_risi.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -300,7 +332,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_23 ++
         @checked_v1_24 ++
         @checked_v1_25 ++
-        @checked_v1_26
+        @checked_v1_26 ++
+        @checked_v1_27
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -4573,6 +4606,326 @@ defmodule RisiMe.ContractExamplesTest do
       assert n["kind"] == "skill_needed" and n["skill_id"] in @skill_ids
       assert n["reason"] in ~w(off no_permission unavailable) and is_boolean(n["was_on"])
       assert n["buttons"] == ["open_skills"]
+    end
+  end
+
+  describe "v1.27" do
+    @item_states ~w(proposed confirmed edited declined done cancelled expired)
+
+    defp ts27?(v), do: is_binary(v) and v =~ @ts
+    defp uuids27?(l), do: is_list(l) and Enum.all?(l, &(&1 =~ @uuid))
+
+    defp made_by27_ok?(m, model?) do
+      assert keys(m) == ~w(also at model provider)
+      assert ts27?(m["at"]) and is_binary(m["provider"]) and is_list(m["also"])
+      if model?, do: assert(is_binary(m["model"])), else: assert(m["model"] == nil)
+
+      for a <- m["also"] do
+        assert keys(a) == ~w(model provider task)
+        assert is_binary(a["model"]) and is_binary(a["provider"]) and is_binary(a["task"])
+      end
+    end
+
+    defp item27_ok?(i) do
+      assert keys(i) == ~w(all_day counterpart due due_text item_id owner state text)
+      assert i["item_id"] =~ @uuid and i["owner"] =~ @uuid and uuids27?(i["counterpart"])
+      assert String.length(i["text"]) in 1..200 and is_boolean(i["all_day"])
+      assert i["due"] == nil or ts27?(i["due"])
+      assert i["state"] in @item_states
+    end
+
+    defp summary27_ok?(r) do
+      assert keys(r) ==
+               ~w(call_id call_ref chat_id conversation_id duration_s ended_at expires_at for
+                  items key_points kind made_by media notify source started_at summary_id v
+                  with)
+
+      assert r["kind"] == "discussion_summary" and r["v"] == 1
+      assert r["summary_id"] =~ @uuid and r["for"] =~ @uuid and uuids27?(r["with"])
+      assert r["conversation_id"] =~ ~r/^grp:/ and r["notify"] == [r["for"]]
+      assert ts27?(r["started_at"]) and ts27?(r["ended_at"]) and ts27?(r["expires_at"])
+      assert r["started_at"] <= r["ended_at"]
+      assert length(r["key_points"]) in 1..8
+      assert Enum.all?(r["key_points"], &(String.length(&1) in 1..200))
+      assert length(r["items"]) in 1..10
+      Enum.each(r["items"], &item27_ok?/1)
+      made_by27_ok?(r["made_by"], true)
+
+      case r["source"] do
+        "chat" ->
+          assert r["call_id"] == nil and r["media"] == nil and r["duration_s"] == nil
+
+        "call" ->
+          assert r["call_id"] =~ @uuid and r["media"] in ~w(audio video)
+          assert is_integer(r["duration_s"])
+      end
+    end
+
+    defp card27_ok?(r) do
+      assert keys(r) ==
+               ~w(call_id call_ref duration_s ended_at items_count kind made_by media notify
+                  source started_at summary summary_id v with)
+
+      assert r["kind"] == "discussion_card" and r["notify"] == []
+      assert r["summary_id"] =~ @uuid and uuids27?(r["with"])
+      assert String.length(r["summary"]) in 1..280 and is_integer(r["items_count"])
+      assert r["items_count"] >= 1 and r["source"] in ~w(chat call)
+      made_by27_ok?(r["made_by"], true)
+    end
+
+    defp update27_ok?(r) do
+      assert keys(r) ==
+               ~w(all_day by call_ref due item_id kind made_by notify state summary_id text v)
+
+      assert r["kind"] == "item_update" and r["notify"] == [] and r["call_ref"] == nil
+      assert r["item_id"] =~ @uuid and r["summary_id"] =~ @uuid and r["by"] =~ @uuid
+      assert r["state"] in @item_states and is_boolean(r["all_day"])
+      made_by27_ok?(r["made_by"], false)
+    end
+
+    defp reminder27_ok?(r) do
+      base = ~w(all_day call_ref due item_id kind made_by notify summary_id text v)
+
+      extra =
+        case r["kind"] do
+          "item_due" -> ~w(buttons moment owner role)
+          "item_overdue" -> ~w(buttons overdue_by)
+          "item_nudge" -> ~w(overdue_by owner)
+        end
+
+      assert keys(r) == Enum.sort(base ++ extra)
+      assert r["item_id"] =~ @uuid and r["summary_id"] =~ @uuid and ts27?(r["due"])
+      assert r["call_ref"] == nil and length(r["notify"]) == 1
+      made_by27_ok?(r["made_by"], false)
+
+      case r["kind"] do
+        "item_due" ->
+          assert r["moment"] in ~w(before at today) and r["role"] in ~w(owner counterpart)
+
+          if r["role"] == "owner",
+            do: assert(r["buttons"] == ~w(done new_date) and r["notify"] == [r["owner"]]),
+            else: assert(r["buttons"] == [] and r["moment"] == "today")
+
+        "item_overdue" ->
+          assert r["buttons"] == ~w(done new_date) and is_integer(r["overdue_by"])
+
+        "item_nudge" ->
+          assert is_integer(r["overdue_by"]) and r["notify"] != [r["owner"]]
+      end
+    end
+
+    defp commitment27_ok?(c) do
+      assert keys(c) ==
+               ~w(all_day chat_id commitment_id counterpart created_at due due_text
+                  official_conversation_id owner role source state summary_id text updated_at)
+
+      assert c["role"] in ~w(owner counterpart) and c["source"] in ~w(chat call)
+      assert c["summary_id"] =~ @uuid and is_boolean(c["all_day"])
+      assert c["state"] in ~w(confirmed edited done)
+    end
+
+    test "auth_config_v127.json and device_put_risi_ledger.json" do
+      ex = example("auth_config_v127.json")
+      assert ex["risi_ledger"] in ~w(on off) and ex["risi_transcribe"] in ~w(on off)
+
+      assert keys(ex) -- ["risi_ledger", "risi_transcribe"] ==
+               keys(example("auth_config_v126.json"))
+
+      caps = example("device_put_risi_ledger.json")["mls"]["capabilities"]
+      assert "risi_ledger" in caps and "risi_tools" in caps
+    end
+
+    test "auth_config_v127.json and device_put_risi_ledger.json against the server (S28)",
+         %{a: a} do
+      with_attestation_key(%{})
+      RisiMe.TabsHelpers.tabs_on!()
+      RisiMe.TabsHelpers.risi_tools_on!()
+      RisiMe.RisiHelpers.skills_on!()
+      RisiMe.RisiHelpers.restore_on_exit([:risi_ledger, :risi_transcribe, :risi_speech_ready])
+
+      # Default off: both left out (absent = off), the reply stays v1.26.
+      {200, cfg} = get_json("/api/v1/auth/config")
+      refute Map.has_key?(cfg, "risi_ledger") or Map.has_key?(cfg, "risi_transcribe")
+
+      # RISI_TRANSCRIBE alone (no ledger, no healthy speech model) never offers transcription.
+      Application.put_env(:risime, :risi_transcribe, true)
+      {200, cfg} = get_json("/api/v1/auth/config")
+      refute Map.has_key?(cfg, "risi_transcribe")
+
+      Application.put_env(:risime, :risi_ledger, true)
+      {200, cfg} = get_json("/api/v1/auth/config")
+      assert cfg["risi_ledger"] == "on" and not Map.has_key?(cfg, "risi_transcribe")
+
+      Application.put_env(:risime, :risi_speech_ready, true)
+      {200, cfg} = get_json("/api/v1/auth/config")
+
+      assert keys(cfg) -- ["modes", "issuer", "client_id"] ==
+               keys(example("auth_config_v127.json")) -- ["modes", "issuer", "client_id"]
+
+      assert cfg["risi_ledger"] == "on" and cfg["risi_transcribe"] == "on"
+
+      dev = Ecto.UUID.generate()
+
+      {200, _} =
+        RisiMe.GroupHelpers.api(
+          :put,
+          "/api/v1/me/devices/#{dev}",
+          a.token,
+          example("device_put_risi_ledger.json")
+        )
+
+      assert RisiMe.Devices.risi_ledger_device?(a.user.id, dev)
+      assert RisiMe.Devices.any_risi_ledger?(a.user.id)
+
+      # Without risi_tools the capability is dropped.
+      old = Ecto.UUID.generate()
+
+      body =
+        update_in(
+          example("device_put_risi_ledger.json"),
+          ["mls", "capabilities"],
+          &(&1 -- ["risi_tools"])
+        )
+
+      {200, _} = RisiMe.GroupHelpers.api(:put, "/api/v1/me/devices/#{old}", a.token, body)
+      refute RisiMe.Devices.risi_ledger_device?(a.user.id, old)
+    end
+
+    test "made_by (§27.1): envelope_risi_answer_made_by.json and every v1.27 Risi envelope" do
+      r = example("envelope_risi_answer_made_by.json")["risi"]
+      assert r["kind"] == "answer" and r["call_ref"] =~ @uuid
+      made_by27_ok?(r["made_by"], true)
+      assert r["made_by"]["provider"] == "risime" and r["made_by"]["also"] == []
+
+      for n <- @checked_v1_27, String.starts_with?(n, "envelope_risi_"), r = example(n)["risi"] do
+        assert Map.has_key?(r, "made_by"), n
+        made_by27_ok?(r["made_by"], r["call_ref"] != nil)
+      end
+    end
+
+    test "discussion_summary (chat and call) and discussion_card: structure" do
+      chat = example("envelope_risi_discussion_summary_chat.json")
+      assert chat["type"] == "text" and is_binary(chat["body"])
+      summary27_ok?(chat["risi"])
+      assert chat["risi"]["source"] == "chat"
+
+      call = example("envelope_risi_discussion_summary_call.json")["risi"]
+      summary27_ok?(call)
+      assert call["source"] == "call"
+      assert [%{"task" => "transcribe"}] = call["made_by"]["also"]
+
+      card = example("envelope_risi_discussion_card.json")
+      card27_ok?(card["risi"])
+      assert card["body"] =~ "Details in your Risi chat"
+    end
+
+    test "item_update, item_due (owner, counterpart), item_overdue, item_nudge: structure" do
+      update27_ok?(example("envelope_risi_item_update.json")["risi"])
+
+      for n <- ~w(envelope_risi_item_due.json envelope_risi_item_due_counterpart.json
+                  envelope_risi_item_overdue.json envelope_risi_item_nudge.json) do
+        reminder27_ok?(example(n)["risi"])
+      end
+    end
+
+    test "envelope_risi_digest_personal.json" do
+      r = example("envelope_risi_digest_personal.json")["risi"]
+
+      assert r["kind"] == "digest" and r["scope"] == "personal" and
+               r["date"] =~ ~r/^\d{4}-\d\d-\d\d$/
+
+      assert length(r["notify"]) == 1
+      made_by27_ok?(r["made_by"], false)
+
+      for i <- r["items"] do
+        assert keys(i) == ~w(commitment_id due owner state text)
+        assert i["state"] in ~w(confirmed edited)
+      end
+    end
+
+    test "item actions: envelope_risi_action_item_*.json" do
+      for {n, action} <- [
+            {"envelope_risi_action_item_confirm.json", "item_confirm"},
+            {"envelope_risi_action_item_decline.json", "item_decline"},
+            {"envelope_risi_action_item_edit.json", "item_edit"}
+          ] do
+        e = example(n)
+        assert e["type"] == "risi_action" and e["action"] == action and e["target"] =~ @uuid
+
+        if action == "item_edit" do
+          assert keys(e["edit"]) == ~w(all_day due text)
+          assert String.length(e["edit"]["text"]) in 1..200 and ts27?(e["edit"]["due"])
+        else
+          assert e["edit"] == nil
+        end
+      end
+    end
+
+    test "risi_commitments_reply_v127.json: the ledger fields" do
+      cs = example("risi_commitments_reply_v127.json")["commitments"]
+      Enum.each(cs, &commitment27_ok?/1)
+      assert Enum.map(cs, & &1["role"]) == ~w(owner counterpart)
+
+      # Only additive over v1.24.
+      [old] = example("risi_commitments_reply.json")["commitments"]
+
+      for c <- cs,
+          do: assert(keys(c) -- ~w(all_day role source summary_id) == keys(old))
+    end
+
+    test "call transcription (§27.7, §27.8): payloads, rooms, signal, token claims" do
+      for n <- ~w(call_offer_sfu_risi_payload.json group_call_started_risi_payload.json) do
+        e = example(n)
+        assert e["risi"] == "listen" and e["call_id"] =~ @uuid
+      end
+
+      assert example("call_offer_sfu_risi_payload.json")["mode"] == "sfu"
+      assert example("group_call_started_risi_payload.json")["state"] == "started"
+
+      req = example("calls_room_request_risi.json")
+      assert req["risi_listen"] == true and req["action"] == "start"
+      assert keys(req) -- ["risi_listen"] == keys(example("calls_room_request.json"))
+
+      stop = example("calls_room_risi_stop.json")
+      assert stop["action"] == "risi_stop" and stop["conversation_id"] =~ ~r/^grp:/
+
+      reply = example("calls_room_reply_risi.json")
+      assert reply["risi"]["state"] in ~w(requested unavailable off)
+      assert keys(reply["risi"]) == ~w(reason state)
+
+      status = example("calls_room_status_reply_v127.json")
+      assert keys(status) -- ["risi", "media"] == keys(example("calls_room_status_reply.json"))
+      assert status["risi"]["state"] in ~w(listening stopped unavailable off)
+
+      assert example("calls_room_risi_stop_reply.json") ==
+               %{"risi" => %{"state" => "stopped", "reason" => "stopped"}}
+
+      for n <- ~w(envelope_risi_call_listen.json envelope_risi_call_listen_stopped.json) do
+        r = example(n)["risi"]
+
+        assert keys(r) ==
+                 ~w(by call_id call_ref kind made_by notify reason since state v)
+
+        assert r["kind"] == "call_listen" and r["state"] in ~w(listening stopped)
+        assert r["notify"] == [] and ts27?(r["since"])
+        made_by27_ok?(r["made_by"], false)
+
+        if r["state"] == "stopped",
+          do: assert(r["by"] =~ @uuid and r["reason"] == "stopped"),
+          else: assert(r["by"] == nil and r["reason"] == nil)
+      end
+
+      %{"kind" => "call_risi", "data" => d} = example("signal_call_risi.json")
+
+      assert keys(d) == ~w(by call_id conversation_id reason server_ts state)
+      assert d["state"] in ~w(listening stopped unavailable) and ts27?(d["server_ts"])
+
+      claims = example("livekit_token_claims_risi.json")
+      v = claims["video"]
+      assert v["canPublish"] == false and v["canPublishSources"] == []
+      assert v["canSubscribe"] == true and v["canPublishData"] == false
+      assert v["hidden"] == false and v["recorder"] == false
+      assert keys(claims) == keys(example("livekit_token_claims.json"))
     end
   end
 end

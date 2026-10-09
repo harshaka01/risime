@@ -136,14 +136,16 @@ defmodule RisiMe.Devices do
   # v1.15 §17.1: `history_share`.
   # v1.18 §19.1: `video`. v1.19 §20.1: `group_calls`. v1.24 §24.7: `tabs`.
   # v1.25 §25.8: `risi_tools`. v1.26 §26.9: `risi_skills`, kept only with `risi_tools`.
+  # v1.27 §27.10: `risi_ledger`, kept only with `risi_tools`.
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
-                         group_calls call_switch screen_share tabs risi_tools risi_skills)
+                         group_calls call_switch screen_share tabs risi_tools risi_skills
+                         risi_ledger)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do
       caps = caps |> Enum.filter(&(&1 in @known_capabilities)) |> Enum.uniq()
 
-      {:ok, if("risi_tools" in caps, do: caps, else: List.delete(caps, "risi_skills"))}
+      {:ok, if("risi_tools" in caps, do: caps, else: caps -- ~w(risi_skills risi_ledger))}
     else
       :error
     end
@@ -365,6 +367,43 @@ defmodule RisiMe.Devices do
           d.user_id == ^user_id and not is_nil(d.mls_signature_key) and
             "tabs" in d.capabilities and "groups" in d.capabilities and
             "risi_tools" in d.capabilities and "risi_skills" in d.capabilities
+    )
+  end
+
+  @doc """
+  v1.27 §27.10: true if the device is a `risi_tools` device that also advertises `risi_ledger`
+  (it renders every §27 kind and sends the item actions).
+  """
+  def risi_ledger?(%Device{capabilities: caps} = d),
+    do: risi_tools?(d) and "risi_ledger" in (caps || [])
+
+  def risi_ledger?(_), do: false
+
+  @doc "v1.27: true if `device_id` (may be nil) names a `risi_ledger` device of the user."
+  def risi_ledger_device?(_user_id, nil), do: false
+
+  def risi_ledger_device?(user_id, device_id) do
+    case Ecto.UUID.cast(device_id) do
+      {:ok, d} -> risi_ledger?(Repo.get_by(Device, user_id: user_id, device_id: d))
+      :error -> false
+    end
+  end
+
+  @doc "v1.27 §27.3: true if any current device of the user advertises `risi_ledger`."
+  def any_risi_ledger?(user_id), do: risi_ledger_users([user_id]) != []
+
+  @doc "v1.27: the users among `user_ids` with a current `risi_ledger` device."
+  def risi_ledger_users([]), do: []
+
+  def risi_ledger_users(user_ids) do
+    Repo.all(
+      from d in Device,
+        where:
+          d.user_id in ^user_ids and not is_nil(d.mls_signature_key) and
+            "tabs" in d.capabilities and "groups" in d.capabilities and
+            "risi_tools" in d.capabilities and "risi_ledger" in d.capabilities,
+        distinct: true,
+        select: d.user_id
     )
   end
 
