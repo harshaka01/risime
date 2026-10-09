@@ -934,7 +934,14 @@ if [ "$LK_STEP" = yes ]; then
   pin_set || fail "locked chat: locksettings set-pin"
   # Redroid never sleeps, but a PIN would turn a screen-off into a keyguard: keep the screen on.
   A shell svc power stayon true >/dev/null 2>&1 || true
-  long_press "ZZ Upgrade D" && wait_for 'text="Lock chat"' 10 && tap "^Lock chat" || fail "locked chat: the chat list's long-press menu has no \"Lock chat\""
+  # n37–n40: long-press opens a menu with "Lock chat". n41+: WhatsApp's selection bar, Lock chat under ⋮.
+  lock_via_long_press() {
+    long_press "ZZ Upgrade D" || return 1
+    if wait_for 'text="Lock chat"' 5; then tap "^Lock chat"; return; fi
+    tap "More options" >/dev/null 2>&1 || tap "More" >/dev/null 2>&1 || return 1
+    wait_for 'text="Lock chat"' 10 && tap "^Lock chat"
+  }
+  lock_via_long_press || fail "locked chat: neither the long-press menu nor the selection bar's ⋮ has \"Lock chat\""
   enter_pin_prompt "Lock chat" || fail "locked chat: the device-credential prompt for \"Lock chat\" didn't show"
   hidden=""; for _ in $(seq 1 15); do on_chat_list && ! grep -qF 'text="ZZ Upgrade D"' "$WORK/ui.xml" && { hidden=1; break; }; sleep 1; done
   [ -n "$hidden" ] || fail "locked chat: D's chat is still in the list after locking it"
