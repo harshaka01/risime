@@ -1073,6 +1073,11 @@ class AppContainer(
             when (ok) {
                 true -> {
                     Log.i("RisiMe", "MLS device registered, ${(r as Registration.Mls).keyPackages} key packages")
+                    // A server switch read while this registration was in flight (refreshTabsSwitch →
+                    // refreshCapabilities found nothing registered yet and returned) was advertised with
+                    // the old value: compare again now (a no-op when nothing changed). Seen on redroid:
+                    // RISI_EVENTS turned on, the app restarted, no `risi_events` until the next foreground.
+                    refreshCapabilities()
                     // Key packages are up with `groups`: now the server can re-add this device (§12.8).
                     scope.launch { runCatching { syncGroups() } }
                 }

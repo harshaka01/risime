@@ -219,6 +219,21 @@ class RisiNotesTest {
         assertTrue(RisiNotes.pending(listOf(myAction(mine, "done", now - 3 * 60_000)), me, now).isEmpty())
     }
 
+    @Test fun risisItemUpdateEndsThePendingAction() {
+        val now = 1_000_000L
+        // ✓ sent, then Risi's item_update (received later): the tick-box is usable at once, not after 2 minutes.
+        val confirm = myAction(mine, "confirm", now - 10_000)
+        val answered = update(mine, "confirmed").copy(localTs = now - 5_000)
+        assertTrue(RisiNotes.pending(listOf(confirm, answered), me, now).isEmpty())
+        val confirmed = RisiNotes.liveItems(card.items, noteId, listOf(answered), null)[0]
+        assertEquals(NoteItemControl.Tick(false, true), RisiNotes.control(me, confirmed, false, RisiNotes.pending(listOf(confirm, answered), me, now)[mine]))
+        // An update from before the action doesn't end it; another item's update doesn't either.
+        val older = update(mine, "confirmed").copy(localTs = now - 20_000)
+        assertEquals("done", RisiNotes.pending(listOf(older, myAction(mine, "done", now - 1_000)), me, now)[mine])
+        val other = update(hers, "confirmed").copy(localTs = now - 500)
+        assertEquals("done", RisiNotes.pending(listOf(myAction(mine, "done", now - 1_000), other), me, now)[mine])
+    }
+
     @Test fun cardCopyFollowsEveryItemUpdateInOrder() {
         val rows = listOf(update(mine, "confirmed"), update(mine, "done"), update(mine, "confirmed"), update(hers, "declined"), update("other-item", "done"))
         val live = RisiNotes.liveItems(card.items, noteId, rows, null)

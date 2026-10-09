@@ -106,18 +106,28 @@ object RisiNotes {
 
     /**
      * Item actions of mine still on their way (sent < 2 min ago, not failed) by item id: the last one wins.
-     * Shown at once (a tick shows ticked) until Risi's `item_update` arrives.
+     * Shown at once (a tick shows ticked) until Risi's `item_update` arrives: an `item_update` of that item
+     * received after the action ends it (before, the tick-box stayed off for the full 2 minutes after a ✓,
+     * found by scripts/ui-entry-test --risi-notes).
      */
     fun pending(rows: List<MessageEntity>, me: String, nowMs: Long): Map<String, String> {
-        val out = HashMap<String, String>()
+        val out = HashMap<String, Pair<String, Long>>()
+        val updated = HashMap<String, Long>()
         for (m in rows) {
-            if (m.kind != MessageEntity.KIND_RISI_CTL || !m.from.equals(me, true)) continue
+            if (m.kind != MessageEntity.KIND_RISI_CTL || !m.from.equals(me, true)) {
+                if (m.from.equals(me, true) || m.systemJson == null) continue
+                val r = RisiMessages.meta(m) ?: continue
+                if (r.kind != RisiKinds127.ITEM_UPDATE) continue
+                val id = r.itemId?.lowercase() ?: continue
+                updated[id] = maxOf(updated[id] ?: Long.MIN_VALUE, m.localTs)
+                continue
+            }
             if (m.status == MessageStatus.FAILED.name || nowMs - m.localTs > RisiCards.ACTION_PENDING_MS) continue
             val target = RisiControl.targetOf(m.systemJson)?.lowercase() ?: continue
             val action = RisiControl.actionOf(m.systemJson) ?: continue
-            out[target] = action
+            out[target] = action to m.localTs
         }
-        return out
+        return out.filter { (id, a) -> (updated[id] ?: Long.MIN_VALUE) < a.second }.mapValues { it.value.first }
     }
 
     /** §30.3 an item's control for [me] ([expired]: the note copy is past `expires_at`; [pending]: my action on its way). */
