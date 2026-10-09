@@ -114,6 +114,8 @@ if [ "$RISI" = 1 ]; then
   { echo "RISI=on"; echo "RISI_MLS_NIF=$WORK/librisime_mls_nif"; echo "RISI_LLM_URL=http://127.0.0.1:$LLM_PORT/v1"; echo "RISI_FALLBACK=off"
     echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"; echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; } > "$WORK/risi.env"
   umask 022
+  # Parallel runs (agents, the release gate) must not share the fake model: refuse a busy port.
+  ss -ltnH "sport = :$LLM_PORT" | grep -q . && { echo "fake-llm port $LLM_PORT busy (another ui-entry-test?): set UITEST_LLM_PORT"; exit 1; }
   tmux new -d -s "risime-uientry-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT > '$WORK/fake-llm.out' 2>&1"
   for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && break; sleep 0.5; done
   curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" || { echo "fake-llm didn't start"; exit 1; }
