@@ -47,6 +47,33 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.47 (live 2026-10-09 ~22:34 UTC, not required): Risi Calendar (RISI_EVENTS on since 22:34 UTC)
+- **Risi Calendar (contract v1.29 §29, decision 073):** RisiMe's own calendar, sealed per user on the
+  server and synced to every phone you sign in on. Nothing from Private tabs.
+  - A **Calendar** tab with agenda, day, week and month views.
+  - Risi adds events itself through a native card [Add][Edit][Cancel], never text chips.
+  - Times agreed in Official chats become proposed events, with an invite card for each person
+    [Accept][Decline][Suggest another time].
+  - An event card with a small day timeline.
+  - Reminders 30 min before, plus the digest.
+  - "Am I free…" always names what was checked ("Checked: Risi Calendar · Not checked: Google
+    Calendar (not connected)"); it never says "clear" without reading one.
+- **Backfill:** existing upcoming agreed items (the Shenika interview among them) get proposed
+  events and invite cards. 3 items qualified. The run at 22:40 UTC made **0 cards**: invites
+  only go to phones running the nightly.47 app, and none had updated yet. The backfill is
+  idempotent; root re-runs it once Harsha and Shenika have updated
+  (`bin/risime eval "RisiMe.Release.risi_calendar_backfill(dry_run: false)"`). Next build: the
+  server re-runs it for a person when their phone first reports Calendar support.
+- **Release check:** the full set of checks plus phone tests, including Harsha's gate (his
+  conversation replayed → event in the Risi Calendar within 2 turns; invite cards for both;
+  accepted events in both calendars). Screens: docs/status/screens/calendar-*.png,
+  event-card-official.png, risi-calendar-action-card.png.
+- **Gate fix:** the test phone tapped "Risi skills" while it was behind the navigation buttons
+  (Settings grew). Settings navigation now scrolls in small checked steps (1036837). Also
+  e71d9ca (time-of-day test) and 3d9e7cd (loopback-only epmd allowed).
+- **Switch:** `scripts/risi-flag RISI_EVENTS off` turns it off with the same safety checks.
+- Risi Notes (§30) is in the build but **off** until Harsha says "turn the ledger on".
+
 ## v0.2.0-nightly.46 (live 2026-10-09 ~14:54 UTC, not required): honest calendar answers, calendar offers, My promises split
 - **Calendar honesty** (Harsha's "your calendar is clear" while Google Calendar had events): every
   calendar answer ends with "I checked: Phone calendar — <calendars> N events"; with no successful
