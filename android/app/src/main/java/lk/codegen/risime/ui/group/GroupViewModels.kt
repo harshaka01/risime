@@ -497,8 +497,20 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
     fun nameOf(userId: String): String = when {
         userId.equals(meId, true) -> "You"
-        else -> members.value.firstOrNull { it.userId.equals(userId, true) }?.displayName ?: "Former member"
+        else -> members.value.firstOrNull { it.userId.equals(userId, true) }?.displayName
+            ?: knownPeople.value[userId.lowercase()] ?: "Former member"
     }
+
+    /**
+     * §27.3 names of people outside this conversation from the phone's own data (friends, members of other
+     * chats): the Risi chat's summaries name the other participants ("…with Shenika").
+     */
+    private val knownPeople: StateFlow<Map<String, String>> = combine(c.db.contacts().all(), c.db.groups().observeAllMembers()) { ct, ms ->
+        val out = HashMap<String, String>()
+        ms.forEach { m -> if (m.displayName.isNotBlank()) out[m.userId.lowercase()] = m.displayName }
+        ct.forEach { x -> x.userId?.let { out[it.lowercase()] = x.displayName } }
+        out as Map<String, String>
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     fun onDraftChanged(text: String) {
         if (group.value?.readOnly != true) typingSender.onInput(text)
