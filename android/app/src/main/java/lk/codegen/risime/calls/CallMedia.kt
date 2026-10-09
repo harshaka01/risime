@@ -110,8 +110,10 @@ object VideoRules {
 
     /**
      * §23.2 rendering rule (crypto C3): nothing is rendered in voice mode, whatever arrives; in video
-     * mode [showPeerVideo] decides.
+     * mode [showPeerVideo] decides. A shared screen ([peerScreen], the peer's `call_media` says `screen`)
+     * has no frozen rule: a screencast sends frames only when the screen changes, so a still screen
+     * (a chat list, a document) sends none for seconds and must stay on, not turn into the avatar.
      */
-    fun render(videoMode: Boolean, peerCamera: Boolean, cameraChangedAtMs: Long, lastFrameAtMs: Long, nowMs: Long): Boolean =
-        videoMode && showPeerVideo(peerCamera, cameraChangedAtMs, lastFrameAtMs, nowMs)
+    fun render(videoMode: Boolean, peerCamera: Boolean, cameraChangedAtMs: Long, lastFrameAtMs: Long, nowMs: Long, peerScreen: Boolean = false): Boolean =
+        videoMode && (if (peerScreen) lastFrameAtMs > 0 else showPeerVideo(peerCamera, cameraChangedAtMs, lastFrameAtMs, nowMs))
 }

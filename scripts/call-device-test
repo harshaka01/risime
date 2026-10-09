@@ -302,7 +302,9 @@ call_records() {
   DEV=B; tap "ZZ Call A (2)" || fail "records: B can't open call info"
   wait_for "Incoming voice call" 10 && has "Incoming video call" || fail "records: B's call info doesn't list the voice and the video call"
   pass "records: B's call info lists both calls"
-  tap "Close" || true; sleep 1
+  # Call info is a screen since the Calls-tab rework (Back), a dialog before (Close).
+  tap "Close" || A shell input keyevent KEYCODE_BACK; sleep 1
+  wait_for "Video call ZZ Call A" 10 || true
   # Call back from the row's icon: the newest call was video, so A rings with an incoming VIDEO call.
   tap "Video call ZZ Call A" || fail "records: B's row has no video call-back icon"
   DEV=A; wait_ring 30 || fail "records: A never rang for B's call back"
@@ -746,11 +748,14 @@ consent() {
 # share_visible <label>: B's view of A's entire-screen share (A on its chat list) is not black and is
 # fitted: the renderer's laid-out size (B's `calls: share-fit frame=WxH rot=R view=WxH box=WxH at=X,Y`
 # debug line) has the frame's oriented aspect within 2 %, lies inside the stage and fills it on one side.
-share_visible() {
+share_check() {  # <label> <screenshot name or "">
   local line="" out
   DEV=B; sleep 4
   for _ in $(seq 1 10); do line="$(A logcat -d 2>/dev/null | grep -oE 'calls: share-fit .*' | tail -1 || true)"; [ -n "$line" ] && break; sleep 1; done
   [ -n "$line" ] || fail "$1: B logged no \"calls: share-fit\" line"
+  # The video must be on screen, not the avatar ("… camera is off"): a still shared screen sends no frames.
+  for _ in $(seq 1 5); do has "camera is off" || break; sleep 1; done
+  has "camera is off" && fail "$1: B shows A's avatar instead of the shared screen (A's screen is still: no new frames)"
   A exec-out screencap -p > "$WORK/B-share.png" 2>/dev/null || fail "$1: no screenshot of B"
   out="$(python3 -I - "$WORK/B-share.png" "$line" <<'PY'
 import re, sys
@@ -780,9 +785,17 @@ if bad:
     print("; ".join(bad)); sys.exit(1)
 PY
 )" || fail "$1: B's view of A's entire-screen share: $out"
-  shot "24-share-entire-screen-viewer" "$WORK/B-share.png"
+  [ -z "$2" ] || shot "$2" "$WORK/B-share.png"
   echo "    [B] $out"
   pass "$1: B sees A's chat list in the entire-screen share (not black), fitted at A's aspect within 2 %, never cropped"
+}
+# Both redroids are 720×1280 (same aspect): the second check makes B's display wider (900×1280) so the
+# shared portrait screen must be pillarboxed (letterbox bars left and right), not stretched or cropped.
+share_visible() {
+  share_check "$1" "24-share-entire-screen-viewer"
+  DEV=B; A logcat -c; A shell wm size 900x1280
+  share_check "$1 (B's display 900x1280: pillarboxed)" ""
+  DEV=B; A shell wm size reset; sleep 2
 }
 switch_call() {
   local l="call 14 (§23 switch and share)" n d

@@ -1,6 +1,6 @@
 # Android status — 0.2 nightlies
 
-## Real-phone fixes: chat lock entry points, entire-screen share, shared-screen fit — READY (JVM gate green; device: see below)
+## Real-phone fixes: chat lock entry points, entire-screen share, shared-screen fit — READY (JVM gate green, CALLTEST OK (call 14), UI ENTRY OK)
 - **Chat lock entry points:** "Lock chat"/"Unlock chat" removed from the ⋮ inside a chat (Private, Official and the
   Official intro screen, whose header now has no ⋮ at all; its title still opens Chat info). Locking stays in **Chat info**
   (the toggle) and the chat list's **long-press** selection bar; unlocking in Chat info and the folder's long-press.
@@ -25,17 +25,28 @@
   cropped; pinch-zoom (≤ 5×) with pan clamped to the zoomed overflow, double tap resets. Camera video keeps its fill.
   The sender's capture size is now the real display (`maximumWindowMetrics`, system bars included) instead of the app
   area. Debug builds log `calls: share-fit frame=WxH rot=R view=WxH box=WxH at=X,Y`.
+- **Found by the device check — a still shared screen turned into the avatar on the viewer:** a screencast sends frames
+  only when the screen changes, and the §19.5 frozen rule (3 s without a frame → avatar) applied to screens too, so a
+  still chat list or document showed "<name>'s camera is off" after 3 s. `VideoRules.render(…, peerScreen)` drops the
+  frozen rule while the peer's `call_media` says `screen` (camera video keeps it).
 - **Tests:** `ChatEntryPointsTest` (⋮ has no Lock/Unlock; no chat screen takes a lock), `ChatTabsControllerTest` (intro: no ⋮,
   title → Chat info), `LockPrivacyTest` (secure screens on every API level, a share never secures a normal screen, pre-33
   fallback dropped while sharing, CallActivity has no FLAG_SECURE), `SharePrivacyUiTest` (the pre-share dialog Start/Cancel/
   DND, the Share button always asks, AppLockScreen registers/unregisters, stacked secure windows, exactly the three screens),
   `ShareFitTest` (portrait sender on landscape viewer and vice versa, rotation, re-fit, never cropped, pan clamp).
 - **Device (root-delegated scripts):** `scripts/ui-entry-test` step 4 is now "the chat's ⋮ does NOT have Lock chat" → lock
-  via Chat info → PIN; step 5 checks the Locked chats folder's screenshot is black (FLAG_SECURE).
+  via Chat info → PIN; step 5 checks the Locked chats folder is secure (Android 14's screencap refuses the screen, or it
+  is black). `back_to_list` no longer presses Back after a failed dump (the step-8 flake that sent the app Home).
+  **UI ENTRY OK** (all steps, 20 PASS); screenshot `04-chat-menu-no-lock.png` (old `04-chat-menu-lock.png` and
+  `08-locked-folder.png` removed: the folder can't be screenshotted any more).
   `scripts/call-device-test` call 14: the pre-share dialog (screenshot `25-share-predialog.png`), then A goes to its chat
   list while sharing and B's screenshot of the video area must not be black and the renderer's laid-out size must match the
   frame's aspect within 2 %, inside the stage, filling one side (`24-share-entire-screen-viewer.png`). redroid's
-  MediaProjection (PROJECT_MEDIA appop) is always the whole display: "single app" can't be chosen there.
+  MediaProjection (PROJECT_MEDIA appop) is always the whole display: "single app" can't be chosen there. Both redroids
+  are 720×1280, so the check runs twice: B as is (`frame 720x1280 view 720x1280 stage 720x1280`, video-area mean 225,
+  stddev 46) and with B's display at 900×1280 (`view 720x1280 stage 900x1280 at 90,0`: pillarboxed, aspect 0.5625 =
+  0.5625). The check also fails if B shows the avatar instead of the video. **CALLTEST OK** (`CALLTEST_SWITCH_ONLY=1`:
+  records + call 14). The call-records step now leaves the call info *screen* with Back (it was a dialog with Close).
 
 ## §26 Risi skills, A0 + A10 + A13 + A14 — READY (JVM gate green, UI ENTRY OK; risi_skills only while /auth/config says on)
 - **A0 (v1.26 wire, 866e542):** `net/Protocol126.kt` (skills REST, activity/undo, the four tools' args and results,

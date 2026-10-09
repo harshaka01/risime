@@ -233,7 +233,18 @@ type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; A she
 dismiss_prompts() { has "Not now" && { tap "Not now" || true; }; has "Later" && { tap "Later" || true; }; true; }
 on_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui-$DEV.xml"; }
 wait_list() { for _ in $(seq 1 "${1:-30}"); do on_list && return 0; sleep 1; done; return 1; }
-back_to_list() { for _ in 1 2 3 4 5; do on_list && return 0; A shell input keyevent KEYCODE_BACK; sleep 1; done; on_list; }
+# A failed dump (empty XML) is retried, never answered with Back (a Back on the list itself sent the app
+# Home: step 8's old flake); if the app still left, it is brought back to its list.
+back_to_list() {
+  for _ in 1 2 3 4 5 6; do
+    on_list && return 0
+    [ -s "$WORK/ui-$DEV.xml" ] || { sleep 1; continue; }
+    A shell input keyevent KEYCODE_BACK; sleep 1
+  done
+  on_list && return 0
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || true
+  wait_list 10
+}
 rl() { A logcat -d -s RisiMe:* 2>/dev/null | grep -a "$1" || true; }
 count() { rl "$1" | wc -l; }
 # A screenshot of this step, downscaled to 360 px wide and palette-quantised (docs/status/screens).
@@ -399,14 +410,17 @@ A exec-out screencap -p > "$WORK/folder.png" 2>/dev/null || fail "screencap of t
 lum="$(python3 -I - "$WORK/folder.png" <<'PY'
 import sys
 from PIL import Image, ImageStat
-im = Image.open(sys.argv[1]).convert("L")
+try:
+    im = Image.open(sys.argv[1]).convert("L")
+except Exception:
+    print("refused"); sys.exit(0)  # screencap refuses a screen with a secure window (Android 14): also secure
 w, h = im.size
 # The app's area (the status bar is drawn by the system, not by the secure window).
 print(int(ImageStat.Stat(im.crop((0, h // 10, w, h * 9 // 10))).mean[0]))
 PY
 )"
-[ "${lum:-255}" -le 16 ] || fail "the Locked chats folder is not FLAG_SECURE (screenshot mean luminance $lum, want black)"
-pass "PIN → the Locked chats folder holds the chat; its window is secure (screenshot luminance $lum)"
+[ "$lum" = refused ] || [ "${lum:-255}" -le 16 ] || fail "the Locked chats folder is not FLAG_SECURE (screenshot mean luminance $lum, want black)"
+pass "PIN → the Locked chats folder holds the chat; its window is secure (screenshot: $lum)"
 long_press "ZZ UI B" || fail "long-press in the folder"
 wait_for 'text="Unlock chat"' 10 || fail "the folder's long-press has no 'Unlock chat'"
 tap "Unlock chat" || fail "tap Unlock chat"

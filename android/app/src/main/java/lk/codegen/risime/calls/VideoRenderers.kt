@@ -80,8 +80,8 @@ fun LiveRemoteVideo(media: WebRtcCallMedia, snap: CallSnapshot, name: String, mo
             now = System.currentTimeMillis()
         }
     }
-    val showPeer = VideoRules.render(snap.video, snap.peerCamera, snap.peerCameraAtMs, media.lastRemoteFrameAt(), now)
     val screen = snap.peerSharing
+    val showPeer = VideoRules.render(snap.video, snap.peerCamera, snap.peerCameraAtMs, media.lastRemoteFrameAt(), now, peerScreen = screen)
     VideoCallStage(
         showPeer = showPeer,
         name = name,

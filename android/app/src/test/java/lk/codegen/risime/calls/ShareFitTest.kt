@@ -77,4 +77,13 @@ class ShareFitTest {
         // At zoom 5 the height overflows too: (486*5 - 2400)/2 = 15.
         assertEquals(Offset(10f, 15f), ShareFit.clampPan(Offset(10f, 100f), 1080, 486, 1080, 2400, 5f))
     }
+
+    @Test fun aStillSharedScreenNeverTurnsIntoTheAvatar() {
+        // A screencast sends no frames while the screen doesn't change (the device gate: A's still chat list).
+        val t = 100_000L
+        assertTrue(VideoRules.render(true, false, t - 60_000, t - 30_000, t, peerScreen = true))
+        assertTrue("the camera keeps its 3-s frozen rule", !VideoRules.render(true, true, 0, t - 30_000, t))
+        assertTrue("never in voice mode", !VideoRules.render(false, false, 0, t - 10, t, peerScreen = true))
+        assertTrue("not before a frame", !VideoRules.render(true, false, 0, 0, t, peerScreen = true))
+    }
 }
