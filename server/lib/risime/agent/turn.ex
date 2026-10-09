@@ -41,6 +41,14 @@ defmodule RisiMe.Agent.Turn do
     without progress the card is shown prefilled. A skill that is off or lacks the phone's
     permission gets `skill_needed`, never a text loop. `next_steps` that are questions or
     confirm phrasings are dropped (chips only fill the composer).
+  * **Invalid output never loops** (fix 2026-10-09, release gate: calendar permission off, the
+    model still emitting `calendar_check`): an action that fails the schema (a tool not offered
+    this turn, a disabled skill's tool, broken JSON) gets **one** corrective retry naming the
+    offered tools; a second one ends the turn at once with a server-built answer: for a
+    calendar tool the honesty no-read answer (`CalendarHonesty`, with `skill_needed` when the
+    Calendar skill is off), for another tool what is unavailable. A step repeating an earlier
+    failed step (same tool and args) is not run again: the turn ends. A turn whose model stays
+    down is snoozed only while the request has waited under 2 minutes, then answered.
   """
   require Logger
 
@@ -67,6 +75,10 @@ defmodule RisiMe.Agent.Turn do
   @max_prompt_tokens 24_000
   @max_writes 2
   @window_s 24 * 3600
+  # A request whose model is down is snoozed (answered late) only this long after it was queued.
+  @max_wait_s 120
+  @calendar_checks ~w(calendar_check risi_calendar_check)
+  @calendar_tools ~w(calendar_check calendar_add calendar_remove risi_calendar_check risi_calendar_add)
 
   @doc "The bounds (tests may override `:turn_ms` and `:call_ms` via `config :risime, :risi_turn`)."
   def bounds do
@@ -78,7 +90,8 @@ defmodule RisiMe.Agent.Turn do
       call_ms: Keyword.get(cfg, :call_ms, @call_ms),
       turn_ms: Keyword.get(cfg, :turn_ms, @turn_ms),
       prompt_tokens: Keyword.get(cfg, :prompt_tokens, @max_prompt_tokens),
-      writes: @max_writes
+      writes: @max_writes,
+      wait_s: Keyword.get(cfg, :wait_s, @max_wait_s)
     }
   end
 
@@ -148,6 +161,9 @@ defmodule RisiMe.Agent.Turn do
       call_refs: [],
       rule_made: false,
       retried: false,
+      # Fix 2026-10-09: one corrective retry after an invalid action; failed steps by tool+args.
+      corrected: false,
+      failed: %{},
       # P0 2026-10-09: the action draft of this turn, whether it moved, the write it proposed.
       draft: draft_state && draft_state.draft,
       draft_changed: false,
@@ -477,13 +493,19 @@ defmodule RisiMe.Agent.Turn do
       source_message_ids: ctx.msg_ids,
       max_tokens: 800,
       timeout_ms: min(ctx.bounds.call_ms, max(left(ctx), 1)),
-      deadline_ms: ctx.deadline
+      deadline_ms: ctx.deadline,
+      invalid_output: :return
     }
 
     case LLM.complete(req) do
       {:ok, %{output: action, call_ref: ref}} ->
         st = %{st | calls: st.calls + 1, call_ref: ref, call_refs: st.call_refs ++ [ref]}
         action(action, st, ctx, allowed)
+
+      # The model answered, but not with an action it may take now: never a retry loop.
+      {:error, {:invalid_output, out, ref}} ->
+        st = %{st | calls: st.calls + 1, call_ref: ref, call_refs: st.call_refs ++ [ref]}
+        invalid(out, st, ctx, allowed, needed)
 
       # The global in-flight queue is full: wait inside the turn's time.
       {:error, :rate_limited} ->
@@ -496,8 +518,11 @@ defmodule RisiMe.Agent.Turn do
 
       {:error, _} ->
         st = %{st | calls: st.calls + 1}
-        # Nothing done yet: the job waits and the turn runs again later (answer late).
-        if st.steps == [], do: {:snooze, 30}, else: bound_final(st, ctx, :model)
+        # Nothing done yet: the job waits and the turn runs again later (answer late), but
+        # never for longer than `wait_s` since the request was queued.
+        if st.steps == [] and waited_s() < ctx.bounds.wait_s,
+          do: {:snooze, 30},
+          else: bound_final(st, ctx, :model)
     end
   end
 
@@ -543,13 +568,163 @@ defmodule RisiMe.Agent.Turn do
   defp action(%{"tool" => name} = out, st, ctx, _allowed) do
     args = out["args"] || %{}
     n = length(st.steps) + 1
+    earlier = st.failed[{name, TurnSteps.args_hash(args)}]
 
-    if n > ctx.bounds.tool_steps do
-      st = record(st, ctx, n, name, args, "skipped", "not_run", 0, 0)
-      bound_final(st, ctx, :tool_steps)
+    cond do
+      n > ctx.bounds.tool_steps ->
+        st = record(st, ctx, n, name, args, "skipped", "not_run", 0, 0)
+        bound_final(st, ctx, :tool_steps)
+
+      # The same step failed already: running it again can only fail again.
+      earlier != nil ->
+        st = record(st, ctx, n, name, args, "skipped", "not_run", 0, 0)
+
+        Progress.send(ctx.asker, ctx.request_id, ctx.conv, "step",
+          step: step_of(n, name, "skipped")
+        )
+
+        rule_final(st, ctx, "I tried #{name}, but it didn't work (#{earlier}), so I stopped.")
+
+      true ->
+        {st, _status, _result, _meta} = exec_step(st, ctx, name, args, out)
+        loop(st, ctx)
+    end
+  end
+
+  ## Invalid actions (fix 2026-10-09)
+
+  defp invalid(out, st, ctx, allowed, needed) do
+    name = if is_map(out) and is_binary(out["tool"]), do: out["tool"]
+
+    offered =
+      Enum.map(allowed, & &1.name) ++ if(needed == [], do: [], else: ["need_skill"]) ++ ["final"]
+
+    if not st.corrected and st.calls < ctx.bounds.calls and left(ctx) > 1_000 do
+      history =
+        st.history ++
+          [
+            %{"role" => "assistant", "content" => if(out, do: Jason.encode!(out), else: "{}")},
+            %{"role" => "user", "content" => correction(name, offered, needed)}
+          ]
+
+      loop(%{st | history: history, corrected: true}, ctx)
     else
-      {st, _status, _result, _meta} = exec_step(st, ctx, name, args, out)
-      loop(st, ctx)
+      end_invalid(out, name, st, ctx, allowed, offered, needed)
+    end
+  end
+
+  defp correction(name, offered, needed) do
+    why =
+      if is_binary(name) and name not in offered,
+        do: "#{name} is not available in this turn",
+        else: "the last action didn't match the risi_next_action schema"
+
+    calendar =
+      if name in @calendar_tools,
+        do:
+          " No such calendar tool is available now: answer with " <>
+            if("calendar" in needed, do: "need_skill (calendar) or ", else: "") <>
+            "final saying you couldn't read the calendar; never say the person is free.",
+        else: ""
+
+    Jason.encode!(%{
+      "ok" => false,
+      "status" => "invalid",
+      "reason" =>
+        "#{why}. Answer with exactly one JSON action whose tool is one of: " <>
+          Enum.join(offered, ", ") <> "." <> calendar
+    })
+  end
+
+  defp end_invalid(out, name, st, ctx, allowed, offered, needed) do
+    skill = if is_binary(name), do: Skills.skill_of(name)
+
+    cond do
+      name in @calendar_tools ->
+        calendar_unavailable(st, ctx, name, out)
+
+      skill != nil and skill in needed ->
+        st = denied_step(st, ctx, name, out)
+        save_draft(st, ctx)
+        Skills.need_skill(ctx, skill, st.call_ref)
+
+      # A final that only broke a limit (too long, a bad ref): its answer, checked as usual.
+      name == "final" and is_binary(out["answer"]) and out["answer"] != "" ->
+        fixed = %{
+          "tool" => "final",
+          "answer" => String.slice(out["answer"], 0, 2_000),
+          "sources" => Enum.filter(List.wrap(out["sources"]), &is_binary/1),
+          "next_steps" => Enum.filter(List.wrap(out["next_steps"]), &is_binary/1)
+        }
+
+        action(fixed, %{st | retried: true}, ctx, allowed)
+
+      is_binary(name) and name not in offered ->
+        st = denied_step(st, ctx, name, out)
+
+        rule_final(
+          st,
+          ctx,
+          "I can't use #{name} here right now (it isn't available to me for this request), " <>
+            "so I couldn't finish this. Check Settings → Risi skills, then ask me again."
+        )
+
+      true ->
+        rule_final(st, ctx, "I couldn't put together an answer this time. Ask me again.")
+    end
+  end
+
+  defp denied_step(st, ctx, name, out) do
+    n = length(st.steps) + 1
+    args = if is_map(out["args"]), do: out["args"], else: %{}
+    st = record(st, ctx, n, name, args, "denied", "denied", 0, 0)
+    Progress.send(ctx.asker, ctx.request_id, ctx.conv, "step", step: step_of(n, name, "denied"))
+    st
+  end
+
+  # A calendar tool that isn't offered: the honesty answer (never "free"), and `skill_needed`
+  # (with that answer as its text) when the Calendar skill is off.
+  defp calendar_unavailable(st, ctx, name, out) do
+    st = denied_step(st, ctx, name, out)
+    reason = Skills.missing_reason(ctx, "calendar")
+    answer = calendar_answer(name, reason)
+
+    if reason == "off" and not String.starts_with?(name, "risi_") do
+      save_draft(st, ctx)
+
+      {_body, risi} =
+        Skills.needed_card(ctx.asker, "calendar", ctx, ctx.request_id, ctx.turn_id, st.call_ref)
+
+      Audience.deliver(ctx, answer, risi, true)
+    else
+      rule_final(st, ctx, answer)
+    end
+  end
+
+  defp calendar_answer("risi_calendar_check", _reason),
+    do: CalendarHonesty.cant_check() <> "\nRisi Calendar: not available here."
+
+  defp calendar_answer("risi_" <> _, _reason),
+    do: "I couldn't add it to Risi Calendar (not available here)."
+
+  defp calendar_answer(name, reason) do
+    why =
+      case reason do
+        "off" -> "the Calendar skill is off"
+        "unavailable" -> "the Calendar skill isn't available yet"
+        r when is_binary(r) -> CalendarHonesty.reason_text(r)
+        nil -> "this phone can't share it with me right now"
+      end
+
+    if name in @calendar_checks,
+      do: CalendarHonesty.cant_read(why),
+      else: CalendarHonesty.cant_use(why)
+  end
+
+  defp waited_s do
+    case Process.get(:risi_req_t0) do
+      t0 when is_integer(t0) -> System.system_time(:second) - t0
+      _ -> 0
     end
   end
 
@@ -585,6 +760,11 @@ defmodule RisiMe.Agent.Turn do
       end
 
     ok? = status == "ok"
+
+    st =
+      if ok?,
+        do: st,
+        else: %{st | failed: Map.put(st.failed, {name, TurnSteps.args_hash(args)}, status)}
 
     st =
       if name in ~w(calendar_check risi_calendar_check),
@@ -917,6 +1097,10 @@ defmodule RisiMe.Agent.Turn do
       ["Ask me again"]
     )
   end
+
+  # A server-built answer (v1.27 §27.1: made by the rule, not by a model).
+  defp rule_final(st, ctx, answer),
+    do: finish(%{st | rule_made: true}, ctx, answer, [], ["Ask me again"])
 
   defp finish(st, ctx, answer, source_refs, next_steps) do
     checks = Map.get(st, :calendar_checks, [])

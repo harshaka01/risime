@@ -26,6 +26,11 @@ defmodule RisiMe.Agent.LLM do
 
   Returns `{:ok, %{call_ref, output, confidence}}` or `{:error, :rate_limited}` /
   `{:error, :model_unavailable}`. Nothing here logs a prompt or an output.
+
+  A request with `invalid_output: :return` (the turn loop, fix 2026-10-09) is not retried blindly
+  on an output that fails the schema: it gets `{:error, {:invalid_output, output | nil,
+  call_ref}}` (the decoded JSON, if any) so the caller can correct the model once and then end
+  deterministically. An invalid output is never `:model_unavailable` there.
   """
 
   alias RisiMe.Agent.LearningLog
@@ -61,13 +66,15 @@ defmodule RisiMe.Agent.LLM do
           optional(:confidence) => (map -> float),
           optional(:history) => [map],
           optional(:timeout_ms) => pos_integer,
-          optional(:deadline_ms) => integer
+          optional(:deadline_ms) => integer,
+          optional(:invalid_output) => :retry | :return
         }
 
   @doc "Runs one task through the cascade (see the module doc)."
   @spec complete(request) ::
           {:ok, %{call_ref: String.t(), output: map, confidence: float}}
           | {:error, :rate_limited | :model_unavailable}
+          | {:error, {:invalid_output, map | nil, String.t()}}
   def complete(req) do
     case acquire() do
       :ok ->
@@ -119,7 +126,7 @@ defmodule RisiMe.Agent.LLM do
           if fallback_on?() and conf < threshold() do
             case attempt(fb, body, req.schema, 1, Keyword.put(opts, :retries, 0)) do
               {:ok, resp2, output2} -> {fb, {:ok, resp2, output2}, "used"}
-              {:error, _} -> {local, {:ok, resp, output}, "unavailable"}
+              _ -> {local, {:ok, resp, output}, "unavailable"}
             end
           else
             {local, result, if(fallback_on?(), do: "not_needed", else: "off")}
@@ -171,6 +178,13 @@ defmodule RisiMe.Agent.LLM do
 
         {:ok, %{call_ref: call_id, output: output, confidence: conf}}
 
+      {:error, :invalid_output, output} ->
+        log(Map.merge(entry, %{model: nil, status: "invalid_output"}))
+
+        if opts[:invalid] == :return,
+          do: {:error, {:invalid_output, output, call_id}},
+          else: {:error, :model_unavailable}
+
       {:error, reason} ->
         log(Map.merge(entry, %{model: nil, status: Atom.to_string(reason)}))
         {:error, :model_unavailable}
@@ -196,6 +210,7 @@ defmodule RisiMe.Agent.LLM do
       retries: Map.get(req, :retries, config()[:retries] || 3),
       backoff_ms: config()[:backoff_ms] || 1_000,
       deadline_ms: Map.get(req, :deadline_ms),
+      invalid: Map.get(req, :invalid_output, :retry),
       chat: if(t = Map.get(req, :timeout_ms), do: [timeout: t], else: [])
     ]
   end
@@ -213,11 +228,14 @@ defmodule RisiMe.Agent.LLM do
     result =
       case mod.chat(body, chat_opts) do
         {:ok, resp} ->
-          with {:ok, output} <- decode(resp.content),
-               :ok <- Schema.validate(schema, output) do
-            {:ok, resp, output}
-          else
-            _ -> {:error, :invalid_output}
+          case decode(resp.content) do
+            {:ok, output} ->
+              if Schema.validate(schema, output) == :ok,
+                do: {:ok, resp, output},
+                else: {:error, :invalid_output, output}
+
+            _ ->
+              {:error, :invalid_output, nil}
           end
 
         {:error, _} = e ->
@@ -225,9 +243,13 @@ defmodule RisiMe.Agent.LLM do
       end
 
     case result do
-      {:error, :invalid_output} when n == 1 ->
+      # Retried once at once, unless the caller corrects the model itself.
+      {:error, :invalid_output, _} ->
         log_failure(mod, :invalid_output, n)
-        attempt(mod, body, schema, n + 1, opts)
+
+        if n == 1 and opts[:invalid] != :return,
+          do: attempt(mod, body, schema, n + 1, opts),
+          else: result
 
       {:error, reason} when reason in @upstream ->
         log_failure(mod, reason, n)

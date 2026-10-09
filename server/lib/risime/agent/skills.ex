@@ -325,6 +325,14 @@ defmodule RisiMe.Agent.Skills do
     if ctx_gated?(ctx), do: for(s <- @registry, reason(ctx, s), do: s.id), else: []
   end
 
+  @doc "Why `skill_id` is missing for this asker (`off` | `no_permission` | `unavailable`), or nil."
+  def missing_reason(ctx, skill_id) do
+    case skill(skill_id) do
+      nil -> nil
+      s -> if ctx_gated?(ctx), do: reason(ctx, s)
+    end
+  end
+
   defp reason(ctx, s) do
     cond do
       not s.available -> "unavailable"

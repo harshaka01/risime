@@ -266,6 +266,13 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
   def reason_text(_), do: "the phone couldn't read its calendar"
 
+  @doc "The Risi Calendar (§29.7) sentence when nothing could be checked."
+  def cant_check, do: @cant_check
+
+  @doc "The sentence when a calendar write couldn't be offered (fix 2026-10-09)."
+  def cant_use(reason),
+    do: "I couldn't use your calendar on this phone (#{reason}). #{@connect}"
+
   @doc "The sentence for an untrustworthy read."
   def cant_read(reason),
     do: "I couldn't read your calendar on this phone (#{reason}). #{@connect}"
