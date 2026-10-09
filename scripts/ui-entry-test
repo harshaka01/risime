@@ -434,6 +434,83 @@ back_to_list() {
   A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || true
   wait_list 10
 }
+# ---- Scrolling to a row and opening it, safely (nightly.46/.47: Settings grew, the 45 %-swipe fling loop stopped as
+# soon as "Risi skills" was anywhere in the dump — behind the 3-button navigation bar — and the tap there went
+# nowhere or Home; the next loop then scrolled Settings to its end). Rows are tapped only inside the safe band
+# (18-78 % of the height), reached by slow drags with a fresh dump after each, never from the bottom bar area.
+screen_wh() { local s; s="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${s%x*}"; H="${s#*x}"; }
+# A slow vertical drag (no fling to speak of) between $1 and $2, both clamped to 15-80 % of the height.
+drag() {
+  local a=$1 b=$2 lo=$((H * 15 / 100)) hi=$((H * 80 / 100))
+  [ "$a" -lt "$lo" ] && a=$lo; [ "$a" -gt "$hi" ] && a=$hi; [ "$b" -lt "$lo" ] && b=$lo; [ "$b" -gt "$hi" ] && b=$hi
+  A shell input swipe $((W / 2)) "$a" $((W / 2)) "$b" 1500; sleep 0.8
+}
+# Brings the node $1 (exact text or content-desc, "prefix*": node_xy's match) into the safe band. Not on screen:
+# drags on (content up) until the screen stops changing, then back the other way. Fails if the app left.
+reveal() {
+  local i xy y sig last="" dir=up flips=0 lo hi
+  [ -n "${W:-}" ] && [ -n "${H:-}" ] || screen_wh
+  lo=$((H * 18 / 100)); hi=$((H * 78 / 100))
+  for i in $(seq 1 "${2:-30}"); do
+    xy="$(node_xy "$1")"
+    grep -qF "package=\"$PKG\"" "$WORK/ui-$DEV.xml" || { [ "$i" -gt 2 ] && { echo "    [$DEV] the app isn't in the foreground (looking for: $1)"; return 1; }; sleep 1; continue; }
+    if [ -n "$xy" ]; then
+      y="${xy#* }"
+      [ "$y" -ge "$lo" ] && [ "$y" -le "$hi" ] && return 0
+      if [ "$y" -gt "$hi" ]; then drag $((H * 70 / 100)) $((H * 70 / 100 - (y - H * 50 / 100)))
+      else drag $((H * 30 / 100)) $((H * 30 / 100 + (H * 50 / 100 - y))); fi
+      continue
+    fi
+    sig="$(grep -oE '(text|content-desc)="[^"]+"' "$WORK/ui-$DEV.xml" | md5sum)"
+    if [ "$sig" = "$last" ]; then
+      flips=$((flips + 1)); [ "$flips" -ge 3 ] && break
+      [ "$dir" = up ] && dir=down || dir=up
+    fi
+    last="$sig"
+    if [ "$dir" = up ]; then drag $((H * 70 / 100)) $((H * 35 / 100)); else drag $((H * 35 / 100)) $((H * 70 / 100)); fi
+  done
+  echo "    [$DEV] couldn't bring into view: $1"; return 1
+}
+# True when the screen's top bar (top 15 %) has the exact title $1 (and isn't Settings itself).
+title_is() {
+  dump
+  python3 -I - "$WORK/ui-$DEV.xml" "$1" "$H" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+top = {n.get('text') for n in nodes if n.get('text') and int(re.findall(r'\d+', n.get('bounds'))[3]) < int(sys.argv[3]) * 15 // 100}
+sys.exit(0 if sys.argv[2] in top and (sys.argv[2] == 'Settings' or 'Settings' not in top) else 1)
+PY
+}
+# Taps the row $1 (revealed into the safe band first) until a screen titled $1 shows (3 tries).
+open_row() {
+  local t
+  [ -n "${W:-}" ] && [ -n "${H:-}" ] || screen_wh
+  for t in 1 2 3; do
+    reveal "$1" || return 1
+    tap "$1" || return 1
+    for _ in $(seq 1 8); do title_is "$1" && return 0; sleep 1; done
+    echo "    [$DEV] tapped '$1' but its screen didn't open (try $t)"
+  done
+  return 1
+}
+# Chat list → ⋮ → Settings → the row $1 → the screen titled $1. Starts over once from the chat list (which brings
+# the app back if it left the foreground).
+settings_open() {
+  local try
+  screen_wh
+  for try in 1 2; do
+    if back_to_list && tap "More options" && wait_for 'text="Settings"' 10 && tap "Settings"; then
+      # (Settings' own screen: its title in the top bar and a Back arrow, not the ⋮ menu's "Settings" item.)
+      for _ in $(seq 1 10); do title_is "Settings" && grep -qF 'content-desc="Back"' "$WORK/ui-$DEV.xml" && break; sleep 1; done
+      open_row "$1" && return 0
+    fi
+    echo "    [$DEV] Settings → $1: didn't open (attempt $try)"
+  done
+  return 1
+}
 rl() { A logcat -d -s RisiMe:* 2>/dev/null | grep -a "$1" || true; }
 count() { rl "$1" | wc -l; }
 # A screenshot of this step, downscaled to 360 px wide and palette-quantised (docs/status/screens).
@@ -644,19 +721,7 @@ pass "Chat lock settings: 'Hide locked chats' and 'Secret code'"
 back_to_list || fail "back to the chat list"
 
 # ---------------------------------------------------------------- 8. Settings → Privacy → What Risi knows about me
-tap "More options" || fail "the chat list's ⋮ (Settings)"
-wait_for 'text="Settings"' 10 || fail "no Settings item"
-tap "Settings" || fail "tap Settings"
-found=0
-for _ in 1 2 3 4 5 6; do
-  has 'text="What Risi knows about me"' && { found=1; break; }
-  A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1
-done
-[ "$found" = 1 ] || fail "Settings: no 'What Risi knows about me' (tabs on)"
-# Present in the tree can still mean behind the navigation bar (new Settings rows pushed it down;
-# the tap then hit Home): scroll once more before tapping.
-A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1
-tap "What Risi knows about me" || fail "tap What Risi knows about me"
+settings_open "What Risi knows about me" || fail "Settings → 'What Risi knows about me' (tabs on) didn't open"
 wait_for 'stored anything about you' 20 || fail "'What Risi knows about me' didn't open cleanly"
 for bad in "Something went wrong" "reach the server" "The server had a problem" "available for this account"; do
   has "$bad" && fail "'What Risi knows about me' shows an error: $bad"
@@ -811,28 +876,13 @@ if [ "$SKILLS_STEP" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_SKILLS_ONLY:-0
   # Android's "Alarms & reminders" page, granted the way a user would (redroid has no Settings UI for it).
   A shell appops set "$PKG" SCHEDULE_EXACT_ALARM allow >/dev/null 2>&1 || true
   A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
-  back_to_list || fail "back to the chat list (skills)"
-  tap "More options" || fail "the chat list's ⋮ (Settings, skills)"
-  wait_for 'text="Settings"' 10 || fail "no Settings item (skills)"
-  tap "Settings" || fail "tap Settings (skills)"
-  found=0
-  for _ in 1 2 3 4 5 6; do
-    has 'text="Risi skills"' && { found=1; break; }
-    A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1
-  done
-  [ "$found" = 1 ] || fail "Settings: no 'Risi skills' (risi_skills on)"
-  tap "Risi skills" || fail "tap Risi skills"
+  settings_open "Risi skills" || fail "Settings → 'Risi skills' (risi_skills on) didn't open"
   wait_for 'content-desc="Alarm skill"' 30 || fail "Risi skills: no Alarm switch"
   has 'Coming later' || true
-  tap "Alarm skill" || fail "turn on Alarm"
+  reveal "Alarm skill" && tap "Alarm skill" || fail "turn on Alarm"
   wait_skill "Alarm" "Ask me each time" 20 || fail "Alarm didn't turn on (Ask me each time)"
   pass "Settings → Risi skills: Alarm on (Ask me each time)"
-  found=0
-  for _ in 1 2 3 4 5 6; do
-    has 'content-desc="Scheduled messages skill"' && { found=1; break; }
-    A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 35 / 100)) 400; sleep 1
-  done
-  [ "$found" = 1 ] || fail "Risi skills: no Scheduled messages switch"
+  reveal "Scheduled messages skill" || fail "Risi skills: no Scheduled messages switch"
   tap "Scheduled messages skill" || fail "turn on Scheduled messages"
   wait_skill "Scheduled messages" "Ask me each time" 20 || fail "Scheduled messages didn't turn on (exact alarms granted)"
   A shell input swipe $((W / 2)) $((H * 30 / 100)) $((W / 2)) $((H * 80 / 100)) 300; sleep 1
@@ -909,14 +959,9 @@ for i, l in enumerate(lines):
   A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1
 
   # -- revoke Alarm → "wake me up at 7" → skill_needed
-  back_to_list || fail "back to the chat list (revoke)"
-  tap "More options" || fail "the chat list's ⋮ (revoke)"
-  wait_for 'text="Settings"' 10 || fail "no Settings item (revoke)"
-  tap "Settings" || fail "tap Settings (revoke)"
-  for _ in 1 2 3 4 5 6; do has 'text="Risi skills"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
-  tap "Risi skills" || fail "tap Risi skills (revoke)"
+  settings_open "Risi skills" || fail "Settings → 'Risi skills' didn't open (revoke)"
   wait_for 'content-desc="Alarm skill"' 30 || fail "Risi skills: no Alarm switch (revoke)"
-  tap "Alarm skill" || fail "turn off Alarm"
+  reveal "Alarm skill" && tap "Alarm skill" || fail "turn off Alarm"
   wait_for 'text="Turn off"' 10 || fail "no revoke dialog"
   tap "Turn off" || fail "confirm Turn off"
   wait_skill "Alarm" "Off" 20 || fail "Alarm didn't turn off"
@@ -1129,13 +1174,7 @@ PY
   [ "$n_ok" = 1 ] || fail "ledger: B's summary shows $n_ok ✓ buttons (want 1: B's own item)"
   pass "ledger: B's Risi chat has the same summary; A's item shows 'confirmed ✓', B confirms only its own"
   DEV=A
-  back_to_list || fail "ledger: back to the chat list (My promises)"
-  tap "More options" || fail "ledger: the chat list's ⋮ (Settings)"
-  wait_for 'text="Settings"' 10 || fail "ledger: no Settings item"
-  tap "Settings" || fail "ledger: tap Settings"
-  size="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; W="${size%x*}"; H="${size#*x}"
-  for _ in 1 2 3 4 5 6; do has 'text="My promises"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
-  tap "My promises" || fail "ledger: Settings has no 'My promises'"
+  settings_open "My promises" || fail "ledger: Settings → 'My promises' didn't open"
   wait_for "$mine" 30 || fail "ledger: My promises doesn't list '$mine'"
   shot "28-my-promises"
   pass "ledger: Settings → My promises lists '$mine'"
@@ -1163,18 +1202,8 @@ calendar_setup() {
   [ -n "$GCAL" ] || { cal_rows | sed 's/^/    /'; fail "$1: could not seed the Google-type calendar"; }
   pass "$1: seeded a com.google calendar ($GACC, id $GCAL), a read-only Google 'Holidays' and a local 'Phone' calendar"
   # -- Settings → Risi skills → Calendar on: the runtime READ/WRITE_CALENDAR prompt, answered Allow
-  back_to_list || fail "$1: back to the chat list"
-  tap "More options" || fail "$1: the chat list's ⋮"
-  wait_for 'text="Settings"' 10 || fail "$1: no Settings item"
-  tap "Settings" || fail "$1: tap Settings"
-  for _ in 1 2 3 4 5 6; do has 'text="Risi skills"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
-  tap "Risi skills" || fail "$1: Settings has no 'Risi skills'"
-  found=0
-  for _ in 1 2 3 4 5 6; do
-    has 'content-desc="Calendar skill"' && { found=1; break; }
-    A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 35 / 100)) 400; sleep 1
-  done
-  [ "$found" = 1 ] || fail "$1: Risi skills has no Calendar switch"
+  settings_open "Risi skills" || fail "$1: Settings → 'Risi skills' didn't open"
+  reveal "Calendar skill" || fail "$1: Risi skills has no Calendar switch"
   tap "Calendar skill" || fail "$1: turn on Calendar"
   # The system's permission dialog (com.android.permissioncontroller): its Allow button by resource id.
   allow_xy() {
@@ -1330,22 +1359,8 @@ PY
   # risi_calendar_sources / risi_calendar_source_row / risi_calendar_sources_permission aren't exported to
   # uiautomator (no testTagsAsResourceId), so their visible texts are matched: "What Risi can read" (the block),
   # "Phone calendar: permission on" (the permission line), "<calendar> · N events in the next 7 days" (a row).
-  back_to_list || fail "calendar: back to the chat list (Details)"
-  tap "More options" || fail "calendar: the chat list's ⋮ (Details)"
-  wait_for 'text="Settings"' 10 || fail "calendar: no Settings item (Details)"
-  tap "Settings" || fail "calendar: tap Settings (Details)"
-  for _ in 1 2 3 4 5 6; do has 'text="Risi skills"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
-  # (The row can sit behind the navigation bar, where a tap goes nowhere: retry a little further up.)
-  opened=""
-  for _ in 1 2 3; do
-    tap "Risi skills" || fail "calendar: Settings has no 'Risi skills' (Details)"
-    wait_for 'text="Risi skills"' 3 >/dev/null || true; sleep 2
-    has 'content-desc="Alarm skill"' && { opened=1; break; }
-    A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1
-  done
-  [ -n "$opened" ] || fail "calendar: 'Risi skills' didn't open (Details)"
-  for _ in 1 2 3 4 5 6; do has 'content-desc="Calendar skill"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 35 / 100)) 400; sleep 1; done
-  has 'content-desc="Calendar skill"' || fail "calendar: Risi skills has no Calendar (Details)"
+  settings_open "Risi skills" || fail "calendar: Settings → 'Risi skills' didn't open (Details)"
+  reveal "Calendar skill" || fail "calendar: Risi skills has no Calendar (Details)"
   # (A tap right after a swipe only stops the fling: tap again until the details are open.)
   # Bring the Calendar card's title to the upper quarter first ([Details] can sit behind the navigation bar).
   opened=""
@@ -1555,12 +1570,7 @@ PY
   read -r TI TP TO TN <<<"$(ofx totals | sed -n 's/^uientry: totals=\([0-9]*\) \([0-9]*\) \([0-9]*\) n=\([0-9]*\)/\1 \2 \3 \4/p')"
   [ -n "${TI:-}" ] || fail "offers: fixture: the digest totals"
   [ "$TI" -ge 3 ] && [ "$TP" -ge 1 ] || fail "offers: digest totals i_promised=$TI promised_to_me=$TP (want ≥ 3 and ≥ 1)"
-  DEV=A; back_to_list || fail "offers: back to the chat list (My promises)"
-  tap "More options" || fail "offers: the chat list's ⋮ (Settings)"
-  wait_for 'text="Settings"' 10 || fail "offers: no Settings item"
-  tap "Settings" || fail "offers: tap Settings"
-  for _ in 1 2 3 4 5 6; do has 'text="My promises"' && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
-  tap "My promises" || fail "offers: Settings has no 'My promises'"
+  DEV=A; settings_open "My promises" || fail "offers: Settings → 'My promises' didn't open"
   wait_text "I promised ($TI)" 30 || fail "offers: My promises has no 'I promised ($TI)' (the digest's i_promised)"
   wait_text "Needs a date" 10 || fail "offers: My promises has no 'Needs a date' row"
   [ "$(count_text "$T_TEXT")" = 1 ] || fail "offers: My promises shows '$T_TEXT' $(count_text "$T_TEXT") times (want 1)"
@@ -1730,15 +1740,7 @@ switch_server() {
   fi
   return 0
 }
-open_settings_row() {  # $1 = the row's text (Settings, scrolled into view)
-  back_to_list || return 1
-  tap "More options" || return 1
-  wait_for 'text="Settings"' 10 || return 1
-  tap "Settings" || return 1
-  for _ in 1 2 3 4 5 6; do has "text=\"$1\"" && break; A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done
-  A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 45 / 100)) 400; sleep 1
-  tap "$1"
-}
+open_settings_row() { settings_open "$1"; }  # $1 = the row's text in Settings
 
 # -- 14, before the switch: Shenika's real case, an item with a concrete time agreed in Official (B owns it, B ✓ it).
 if [ "$RCAL" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_RISI_ONLY:-0}" = 1 ]; }; then
