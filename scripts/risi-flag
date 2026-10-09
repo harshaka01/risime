@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Guarded switch of one pilot Risi feature flag in infra/pilot/pilot.env:
+#   scripts/risi-flag RISI_EVENTS|RISI_NOTES|RISI_LEDGER|RISI_TRANSCRIBE on|off
+# Backs up pilot.env, writes exactly one NAME=on|off line, restarts risime.service, then watches /health
+# for 60 s (status ok, risi ok, stable 20 s) and checks /api/v1/auth/config reflects the switch. On any
+# failure it puts the previous line back and restarts (automatic rollback). Never touches .env keys.
+set -euo pipefail
+NAME="${1:-}"; WANT="${2:-}"
+case "$NAME" in RISI_EVENTS|RISI_NOTES|RISI_LEDGER|RISI_TRANSCRIBE) ;; *) echo "usage: scripts/risi-flag RISI_EVENTS|RISI_NOTES|RISI_LEDGER|RISI_TRANSCRIBE on|off"; exit 2;; esac
+case "$WANT" in on|off) ;; *) echo "usage: scripts/risi-flag $NAME on|off"; exit 2;; esac
+R=/home/harsha/development/risime; PE="$R/infra/pilot/pilot.env"; B="$HOME/risime-backups"
+TS=$(date -u +%Y%m%dT%H%M%SZ); mkdir -p "$B"
+install -m 600 "$PE" "$B/pilot.env-before-$NAME-$WANT-$TS"; echo "backup: $B/pilot.env-before-$NAME-$WANT-$TS"
+PREV="$(grep -E "^$NAME=" "$PE" | tail -1 | cut -d= -f2 || true)"; PREV="${PREV:-off}"
+KEY="$(tr 'A-Z' 'a-z' <<<"$NAME")"   # /auth/config key, e.g. risi_events
+
+set_flag() {  # $1 on|off: exactly one NAME line
+  python3 - "$PE" "$NAME" "$1" <<'PY'
+import sys
+p, k, v = sys.argv[1:4]
+lines = [l for l in open(p) if l.split("=", 1)[0].strip() != k]
+while lines and lines[-1].strip() == "": lines.pop()
+lines.append(f"\n{k}={v}\n")
+open(p, "w").writelines(lines)
+PY
+  grep -E "^$NAME=" "$PE"
+}
+watch_ok() {
+  local t h c
+  for t in $(seq 1 30); do
+    sleep 2
+    h="$(curl -sf -m 3 http://127.0.0.1:4000/health || true)"
+    if grep -q '"status":"ok"' <<<"$h" && grep -q '"risi":"ok"' <<<"$h"; then
+      if [ "$t" -ge 10 ]; then
+        c="$(curl -sf -m 3 http://127.0.0.1:4000/api/v1/auth/config || true)"
+        echo "health: $h"
+        if [ "$WANT" = on ]; then grep -q "\"$KEY\":\"on\"\|\"$KEY\":true" <<<"$c" || { echo "auth/config has no $KEY on"; return 1; }
+        else ! grep -q "\"$KEY\":\"on\"\|\"$KEY\":true" <<<"$c" || { echo "auth/config still has $KEY on"; return 1; }; fi
+        return 0
+      fi
+    fi
+  done
+  echo "health: ${h:-none}"; return 1
+}
+
+set_flag "$WANT"
+systemctl --user restart risime.service
+if watch_ok; then echo "$NAME=$WANT: healthy"; exit 0; fi
+echo "==> not healthy with $NAME=$WANT: rolling back to $NAME=$PREV"
+set_flag "$PREV"
+systemctl --user reset-failed risime.service 2>/dev/null || true
+systemctl --user restart risime.service
+sleep 15; curl -s http://127.0.0.1:4000/health; echo
+echo "ROLLED BACK"; exit 1
