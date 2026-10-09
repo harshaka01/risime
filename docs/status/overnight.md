@@ -47,6 +47,23 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## v0.2.0-nightly.40 (live 2026-10-09 ~01:10 UTC, not required): Risi boot isolation, Risi REST without device header
+- **What's in:**
+  - Risi can never stop the server (`5503d83`): `/health` `checks.risi`, a KEK check, the read-only
+    preflight;
+  - `/api/v1/risi/*` without X-Device-Id (`ce8d347`); the app sends X-Device-Id on every request
+    and shows honest Risi error messages (`2969b11`);
+  - §24.13 queue limits are in the contract (the server change follows).
+- **Gate:** all PASS, including the new **boot check** (prod release with the real env: off, on,
+  reopen, wrong key → healthy with kek_mismatch; pilot preflight OK) and the Risi canary.
+- **Live:** `/health` → `"risi":"ok"`.
+- **Next (nightly.41):**
+  - the lock-chat entry points in all 3 places;
+  - the tab row under the header;
+  - "Checking encryption…" fixed;
+  - the UI entry gate with screenshots;
+  - Risi request queueing.
+
 ## P0 (2026-10-08 23:24 UTC): pilot crash-looped with RISI=on; Risi is ON again since 23:33 UTC
 - **What happened:**
   1. The orchestrator turned Risi on at 23:23 (keys pair #1 in .env; healthy; Risi sealed 33
