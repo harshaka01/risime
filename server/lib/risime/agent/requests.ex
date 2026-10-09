@@ -253,9 +253,17 @@ defmodule RisiMe.Agent.Requests do
     }
 
     case LLM.complete(req) |> post_check(req, t) do
-      {:ok, %{call_ref: call_ref, output: out, confidence: conf}} ->
+      {:ok, %{call_ref: call_ref, output: out, confidence: conf} = result_meta} ->
         {body, risi} = t.reply.(out, call_ref, conf)
-        post(conv, body, Map.put(risi, "notify", [user]))
+        risi = Map.put(risi, "notify", [user])
+
+        # v1.27 §27.1: a server-built answer (the post-check fallback) is made by no model.
+        risi =
+          if Map.get(result_meta, :rule_made),
+            do: Map.put(risi, "made_by", RisiMe.Agent.MadeBy.rule()),
+            else: risi
+
+        post(conv, body, risi)
 
       # The global in-flight queue is full: wait (the job snoozes), answer late rather than
       # refuse; only after 10 minutes of waiting the polite error (§25.6 `queue_overflow`).
@@ -305,10 +313,11 @@ defmodule RisiMe.Agent.Requests do
   defp fallback({:ok, %{output: out} = r}),
     do:
       {:ok,
-       %{
-         r
-         | output: %{out | "answer" => Capabilities.fallback_answer(), "refs" => []}
-       }}
+       Map.put(
+         %{r | output: %{out | "answer" => Capabilities.fallback_answer(), "refs" => []}},
+         :rule_made,
+         true
+       )}
 
   @bodies %{
     "model_unavailable" => "I can't answer right now. Please try again later.",
