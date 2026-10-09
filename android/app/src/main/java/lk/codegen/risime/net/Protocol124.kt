@@ -134,6 +134,8 @@ data class RisiMeta(
     @SerialName("expires_at") val expiresAt: String? = null,
     // v1.25 reminder_set (and reminder.reminder_id)
     @SerialName("reminder_id") val reminderId: String? = null,
+    /** v1.25 `reminder_set` ids; v1.29 calendar cards' `{"user_id", "status"}` objects read as their ids (see RisiCalendarCard). */
+    @Serializable(with = LenientIdListSerializer::class)
     val participants: List<String> = emptyList(),
     @SerialName("me_too") val meToo: Boolean = false,
     // v1.25 draft
@@ -186,6 +188,8 @@ data class RisiMeta(
     // request behind its `request_id`, `turn_ref` null) and the personal digest's per-direction `totals`.
     val origin: String? = null,
     val totals: RisiTotals? = null,
+    // v1.29 §29.9 `event_card` "added" | "official" (the other calendar fields: RisiCalendarCard).
+    val mode: String? = null,
 ) {
     /** `confirm.calendar` (null if absent, null or malformed). */
     fun calendarHint(): RisiCalendarRef? =

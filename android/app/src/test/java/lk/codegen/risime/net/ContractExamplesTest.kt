@@ -21,10 +21,50 @@ class ContractExamplesTest {
         javaClass.classLoader!!.getResource("contract/v1/examples/$name")?.readText()
             ?: error("missing contract example $name")
 
+    /** v1.29 §29 Risi Calendar (net/Protocol129.kt): ready for the examples the build adds (proposal 2026-10-09-risi-calendar-notes). */
+    private val calendarV129: Map<String, (String) -> Any> by lazy {
+        fun card(s: String, kind: String) = ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == kind) }.let { m ->
+            if (kind in RisiKinds129.ALL) RisiCalendarCard.parse(ProtocolJson.parseToJsonElement(s).jsonObject["risi"].toString())!!.also { require(it.kind == kind) } else m
+        }
+        fun action(s: String, a: String) = ProtocolJson.parseToJsonElement(s).jsonObject.also { require(lk.codegen.risime.data.tabs.RisiControl.valid(it) && it["action"]!!.jsonPrimitive.content == a) }
+        mapOf(
+            "auth_config_v129.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiEventsOn) } },
+            "device_put_risi_events.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_EVENTS in it.mls!!.capabilities!!) } },
+            "risi_calendar_events_reply.json" to { s -> ProtocolJson.decodeFromString<RisiCalendarEventsReply>(s).also { require(it.events.isNotEmpty() && it.cursor != null) } },
+            "risi_calendar_changes_reply.json" to { s -> ProtocolJson.decodeFromString<RisiCalendarChangesReply>(s).also { require(it.changes.any { c -> c.removed } && it.changes.any { c -> c.event != null }) } },
+            "risi_calendar_event_create.json" to { s -> ProtocolJson.parseToJsonElement(s).jsonObject.also { require("client_event_id" in it && "start" in it && "with" in it) } },
+            "risi_calendar_event_create_reply.json" to { s -> ProtocolJson.decodeFromString<RisiEventReply>(s) },
+            "risi_calendar_event_patch.json" to { s -> ProtocolJson.parseToJsonElement(s).jsonObject.also { require("version" in it) } },
+            "risi_calendar_respond_accept.json" to { s -> ProtocolJson.parseToJsonElement(s).jsonObject.also { require(it["response"]!!.jsonPrimitive.content == "accept") } },
+            "risi_calendar_respond_suggest.json" to { s -> ProtocolJson.parseToJsonElement(s).jsonObject.also { require(it["response"]!!.jsonPrimitive.content == "suggest" && it["suggest"] is JsonObject) } },
+            "risi_calendar_suggestion_resolve.json" to { s -> ProtocolJson.parseToJsonElement(s).jsonObject.also { require(it["action"]!!.jsonPrimitive.content in setOf("use", "keep")) } },
+            "risi_calendar_settings.json" to { s ->
+                val o = ProtocolJson.parseToJsonElement(s).jsonObject
+                if ("settings" in o) ProtocolJson.decodeFromString<RisiCalendarSettingsReply>(s) else ProtocolJson.decodeFromString<RisiCalendarSettings>(s)
+            },
+            "event_risi_calendar_changed.json" to { s -> ProtocolJson.decodeFromString<Event>(s).risiCalendarChanged()!!.also { require(it.cursor != null) } },
+            "envelope_risi_confirm_risi_calendar_add.json" to { s -> card(s, "confirm").also { require((it as RisiMeta).tool == RisiKinds129.TOOL_RISI_CALENDAR_ADD) } },
+            "envelope_risi_action_confirm_write_edit_risi_calendar.json" to { s -> action(s, "confirm_write") },
+            "envelope_risi_event_card_added.json" to { s -> card(s, RisiKinds129.EVENT_CARD) },
+            "envelope_risi_event_card_official.json" to { s -> card(s, RisiKinds129.EVENT_CARD) },
+            "envelope_risi_calendar_invite.json" to { s -> card(s, RisiKinds129.CALENDAR_INVITE) },
+            "envelope_risi_event_update.json" to { s -> card(s, RisiKinds129.EVENT_UPDATE) },
+            "envelope_risi_calendar_suggestion.json" to { s -> card(s, RisiKinds129.CALENDAR_SUGGESTION) },
+            "envelope_risi_calendar_reminder.json" to { s -> card(s, RisiKinds129.CALENDAR_REMINDER) },
+            "envelope_risi_action_event_accept.json" to { s -> action(s, RisiActions129.EVENT_ACCEPT) },
+            "envelope_risi_action_event_suggest.json" to { s -> action(s, RisiActions129.EVENT_SUGGEST) },
+            "envelope_risi_answer_calendar_sources_risi.json" to { s -> card(s, "answer") },
+            "envelope_risi_digest_personal_v129.json" to { s -> card(s, "digest") },
+            "error_version_conflict.json" to { s -> apiError(s, "version_conflict") },
+            "error_cursor_expired.json" to { s -> apiError(s, "cursor_expired") },
+            "error_not_invitable.json" to { s -> apiError(s, "not_invitable") },
+        )
+    }
+
     private val all: List<String> by lazy { read("index.txt").lines().filter { it.isNotBlank() } }
 
     /** Every example file must map to a model; a new file without a decoder fails this test. */
-    private val decoders: Map<String, (String) -> Any> = mapOf(
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + mapOf(
         // v1.27 (§27 made_by, the Ledger follow-ups, call transcription): net/Protocol127.kt and RisiMeta's optional fields.
         "auth_config_v127.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiLedgerOn && it.risiTranscribeOn && it.risiSkillsOn && it.risiToolsOn) } },
         "device_put_risi_ledger.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_LEDGER in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) } },
@@ -773,6 +813,18 @@ class ContractExamplesTest {
         check("device_put_mls.json", DevicePut.serializer())
         check("key_packages_upload.json", KeyPackagesUpload.serializer())
         check("key_packages_claim.json", KeyPackagesClaim.serializer())
+    }
+
+    /** The v1.29 decoders hold for the Android fixtures of the same names (until the contract examples land). */
+    @Test
+    fun calendarV129DecodersAcceptTheFixtures() {
+        var n = 0
+        for ((name, decode) in calendarV129) {
+            val s = javaClass.classLoader!!.getResource("fixtures/risi_calendar/$name")?.readText() ?: continue
+            assertNotNull(name, decode(s))
+            n++
+        }
+        assertEquals(calendarV129.size, n)
     }
 
     @Test

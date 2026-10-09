@@ -569,6 +569,9 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override val calendar: lk.codegen.risime.data.tabs.RisiCalendarPort get() = c.calendarPort
 
+        // §29: only on a risi_events device (else the cards render from their own data, without buttons).
+        override val risiCalendar: lk.codegen.risime.data.calendar.RisiCalendarCardsPort? get() = if (c.risiEventsOn()) c.risiCalendarCards else null
+
         override fun confirmEdited(writeId: String, edit: kotlinx.serialization.json.JsonObject) {
             viewModelScope.launch { requests.confirmEdited(writeId, edit) }
         }

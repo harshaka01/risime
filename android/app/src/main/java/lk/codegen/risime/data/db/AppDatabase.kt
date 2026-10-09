@@ -40,6 +40,8 @@ import androidx.sqlite.execSQL
         RisiWriteEntity::class,
         HiddenCallEntity::class,
         CallLogMarkEntity::class,
+        RisiCalendarEventEntity::class,
+        RisiCalendarStateEntity::class,
     ],
     version = AppDatabase.VERSION,
     exportSchema = true,
@@ -63,16 +65,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun chatTabs(): ChatTabDao
     abstract fun scheduled(): ScheduledDao
     abstract fun callLog(): CallLogDao
+    abstract fun risiCalendar(): RisiCalendarDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 13
+        const val VERSION = 14
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11, Migration11To12, Migration12To13)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11, Migration11To12, Migration12To13, Migration13To14)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
@@ -327,6 +330,18 @@ object Migration12To13 : Migration(12, 13) {
     val SQL = listOf(
         "CREATE TABLE IF NOT EXISTS `hidden_calls` (`call_id` TEXT NOT NULL, `hidden_at` INTEGER NOT NULL, PRIMARY KEY(`call_id`))",
         "CREATE TABLE IF NOT EXISTS `call_log_marks` (`id` INTEGER NOT NULL, `cleared_before` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+    )
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/** v14 (§29.6 Risi Calendar cache, hard rule 9): two new, empty tables; no existing row is touched. */
+object Migration13To14 : Migration(13, 14) {
+    val SQL = listOf(
+        "CREATE TABLE IF NOT EXISTS `risi_calendar_cache` (`event_id` TEXT NOT NULL, `start_ms` INTEGER NOT NULL, `end_ms` INTEGER NOT NULL, `version` INTEGER NOT NULL, `json` TEXT NOT NULL, PRIMARY KEY(`event_id`))",
+        "CREATE TABLE IF NOT EXISTS `risi_calendar_state` (`id` INTEGER NOT NULL, `cursor` TEXT, PRIMARY KEY(`id`))",
     )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)

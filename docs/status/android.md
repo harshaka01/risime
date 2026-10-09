@@ -1,5 +1,74 @@
 # Android status — 0.2 nightlies
 
+## v1.29 §29 Risi Calendar (proposal 2026-10-09-risi-calendar-notes, decision 073) — READY
+Coded against the proposal's REST/JSON shapes (the server is built in parallel); fixtures under
+`android/app/src/test/resources/fixtures/risi_calendar/` (one per proposal example name, plus a page-1 feed, a cancelled
+update and an unknown kind). `PROTOCOL_VERSION` stays 1.28 until root merges §29 into PROTOCOL.md. §30 Notes not started.
+- **Switch/capability:** `/auth/config` `risi_events` (absent = off) → the app advertises `risi_events` only together with
+  `risi_tools`, `risi_skills`, `risi_ledger` (and `tabs`). Off: no Calendar tab, no calendar REST, the v1.28 cards and
+  flows exactly (the phone `calendar_add` card is untouched).
+- **Calendar tab** (4th tab after Chats/Calls/Requests, only while on): Agenda (default; from today, by day), Day, Week
+  (Monday first), Month (dots per day; tap → Day). Each event: title, time, "With: Shenika ✓, Kamal ?", "From: <chat>"
+  (tap opens it), status (Proposed shown dashed/accent, Accepted, Declined, Cancelled). Declined hidden unless Settings →
+  "Show declined" (phone setting). Detail: people + statuses, source chat, my reminder (none/0/5/10/15/30/60/120/1440),
+  Accept/Decline, Edit (owner only: title/date/time/duration/all day → versioned PATCH of what changed), Delete (owner:
+  cancelled for everyone; participant: declined + removed). [New event] creates (`created_by: user`). ⓘ says once: "Your
+  Risi Calendar is stored on the RisiMe server, encrypted at rest. Risi can read it to answer you. It is not end-to-end
+  encrypted." Settings: default reminder (30 min), show declined, events in the digest.
+- **Cache + sync:** Room v14 `risi_calendar_cache` (event json per id) + `risi_calendar_state` (cursor); Migration13To14
+  adds two empty tables (hard rule 9 test: every row/count unchanged). Not in backup bundles (bundles list their entries
+  explicitly), wiped only with the chat data on a confirmed logout/account switch. Sync: no cursor → `GET /events` for
+  now−30 d … now+62 d (≤ 92 d) and replace; else `GET /changes?since=` until `has_more` false (changed → upsert, `removed`
+  → drop); `410 cursor_expired` → re-list and continue from its cursor. Triggers: device registered with `risi_events`
+  (app start), Calendar tab open, the content-free `risi_calendar_changed` inbox event (skipped when the cursor is
+  already ours; never blocks the inbox), any `calendar_invite`/`event_update` card. Day/Week/Month outside the window
+  list that range (upsert only). Writes: `409 version_conflict` → `GET /events/{id}` and show "This event changed
+  elsewhere"; an accept/decline/suggest on a stale version is re-sent once if the event's time still matches the card.
+- **Cards (native, never chips):** `confirm` + `tool: "risi_calendar_add"` → "Risi · Add to Risi Calendar": title, when,
+  with, reminder, mini timeline; [Add] = `confirm_write` (no client tool, no permission, no picker), [Edit] =
+  `confirm_write` + `edit` (title/start/end/all_day), [Cancel] = `cancel_write`. `event_card` added ("Added to your Risi
+  Calendar"; [Open] [Edit] [Delete] for the owner, [Open] otherwise) and official ("Meeting"; [Accept] [Decline]
+  [Suggest another time] only for participants whose status is proposed, else [Open in Calendar]). `calendar_invite`
+  ("Invitation"; "The time changed" for `time_changed`; greyed "Expired" after `expires_at`). [Suggest another time] →
+  date + time picker prefilled +1 h, same length → `respond suggest`. `calendar_suggestion` (owner: [Use this time]
+  [Keep original]). `calendar_reminder` ("In 30 min: Interview (14:00)" + [Open]). Card buttons call the REST (same
+  effect as the §29.11 actions; received `event_*`/`suggestion_*` controls render as lines). `event_update` updates
+  every card of that event and the cache silently; a chat without such a card shows a line ("Shenika accepted
+  'Interview'"). Cards follow later updates and the newer cached version.
+- **Mini day timeline** (on event cards, invites, suggestions and the action card): 07:00–21:00 of the event's day in the
+  phone's zone, widened to the hour around the event; my own Risi Calendar events of that day from the local cache in
+  grey (proposed hatched; declined, cancelled and all-day left out; no titles), this event in the accent, overlaps red
+  + "Clashes with N event(s)". Computed on the phone; nothing is sent.
+- **Reminders from push:** `calendar_reminder` is a Risi-chat message with `notify: [me]` → the normal content-free wake
+  and message notification (body "In 30 min: …"); no device permission beyond notifications.
+- **Unknown kinds/fields tolerated:** `RisiMeta.participants` reads `{user_id,status}` objects as ids (before this, a
+  v1.29 card would have failed to decode as a Risi card at all); an unknown kind shows its `body`.
+- **Tests:** `RisiCalendarParseTest` (every fixture, bodies key for key, unknown kind), `RisiCalendarSyncTest` (list,
+  paged feed, 410 re-list, known cursor no-op, off = no calls, failure keeps cache, event_update, 409 reload, stale
+  answer retry/no-retry, delete owner/participant, create defaults), `RisiCalendarViewsTest` (timeline clash cases,
+  agenda/day/week/month, labels, nav, edit → PATCH, card view/buttons/update line), `RisiCalendarCardsUiTest` (card
+  actions, timeline + clash, suggest picker, official/added/suggestion/reminder, the tab's views, detail, info sheet),
+  `Migration13To14Test`, `DeviceRegistrarTest` (capability gating), `ContractExamplesTest` (decoders ready for every
+  §29 example name; checked against the fixtures).
+- **Suggested Redroid ui-entry-test (`--risi-calendar`, root owns scripts/; fake-llm; `RISI_EVENTS=on`):**
+  1. Revoke the phone calendar permission (`pm revoke lk.codegen.risime.debug android.permission.READ_CALENDAR` and
+     `WRITE_CALENDAR`). Replay "add my interview with Shenika on Monday 12 Oct at 2pm…" in the Risi chat → wait for
+     `risi_calendar_add_card` (≤ 2 turns) → tap `risi_confirm_add` → the "Added to your Risi Calendar" card
+     (`risi_event_card`) → tap the "Calendar" tab → `calendar_agenda` shows "Interview"; screenshot
+     `calendar-agenda.png`; check `GET /risi/calendar/events` has it. Screenshot the action card first:
+     `risi-calendar-action-card.png`.
+  2. Shenika backfill → `risi_calendar_invite` in both Risi chats (`calendar-invite-card.png`) → `risi_event_accept` on
+     both → "Accepted" on the card; Harsha's 2nd device: Calendar tab shows it accepted without a restart.
+  3. Seed an overlapping accepted event, then the Official meeting → `risi_event_card` in Official with
+     `risi_event_timeline` and "Clashes with 1 event" (`event-card-official.png`); assert no SuggestionChip nodes.
+  4. Calendar tab: `calendar_mode_day` / `_week` / `_month` → `calendar-day.png`, `calendar-week.png`,
+     `calendar-month.png`.
+  5. `risi_event_suggest` → `risi_suggest_send` → owner's `risi_calendar_suggestion` → `risi_suggestion_use` → the
+     other phone gets a new invite with "The time changed"; owner `calendar_detail_delete` → "Cancelled" on every card;
+     participant delete → owner sees Declined.
+  6. Reminder at start − 30 min → `risi_calendar_reminder` + notification; detail `calendar_reminder_10` → reschedules.
+  7. Switch off (`RISI_EVENTS=off`, restart app): no "Calendar" tab, no `/risi/calendar` requests in the server log.
+
 ## P0 calendar honesty (nightly.45 real phone: "Check my calendar for Monday 2pm" → "Your calendar is clear" while Google Calendar was full) — READY (JVM gate green)
 
 - **Diagnosis.** Prod `risi_turn_steps` for both of Harsha's checks (09:18 UTC): `calendar_check` status

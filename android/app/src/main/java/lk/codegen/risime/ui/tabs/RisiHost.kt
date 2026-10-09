@@ -70,6 +70,9 @@ interface RisiHost {
 
     /** P0 the phone's calendar for the calendar action card (picker, the local add record, Open). */
     val calendar: lk.codegen.risime.data.tabs.RisiCalendarPort? get() = null
+
+    /** §29 Risi Calendar for the event cards (null: not a calendar device; the cards render from their own data). */
+    val risiCalendar: lk.codegen.risime.data.calendar.RisiCalendarCardsPort? get() = null
 }
 
 /** Everything a card needs from its screen. */

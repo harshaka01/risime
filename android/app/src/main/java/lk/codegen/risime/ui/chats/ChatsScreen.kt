@@ -68,6 +68,8 @@ fun ChatsScreen(
     onNewGroup: () -> Unit = {},
     onLockedFolder: () -> Unit = {},
     onChatLockSettings: () -> Unit = {},
+    /** §29 the Calendar tab (shown only while this device is a `risi_events` device). */
+    calendar: lk.codegen.risime.ui.calendar.RisiCalendarViewModel? = null,
 ) {
     val rows by vm.rows.collectAsStateWithLifecycle()
     val lockedRows by vm.lockedRows.collectAsStateWithLifecycle()
@@ -83,6 +85,11 @@ fun ChatsScreen(
     var askLogout by remember { mutableStateOf(false) }
     var askLogoutDelete by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    val calendarOn by (calendar?.on ?: NO_CALENDAR).collectAsStateWithLifecycle()
+    val calendarFocus by (calendar?.focus ?: NO_FOCUS).collectAsStateWithLifecycle()
+    // §29: the switch off → v1.28 exactly (no Calendar tab); an [Open] on an event card shows the tab.
+    androidx.compose.runtime.LaunchedEffect(calendarOn) { if (!calendarOn && tab == CALENDAR_TAB) tab = 0 }
+    androidx.compose.runtime.LaunchedEffect(calendarFocus, calendarOn) { if (calendarFocus != null && calendarOn) tab = CALENDAR_TAB }
     val callsUi = remember { CallsUi() }
     val callRows by vm.calls.collectAsStateWithLifecycle()
     val callBack = rememberCallBack(vm)
@@ -206,7 +213,7 @@ fun ChatsScreen(
                             text = { Text("New call") },
                         )
                     }
-                } else {
+                } else if (tab != CALENDAR_TAB) {
                     ExtendedFloatingActionButton(
                         onClick = onAddFriend,
                         icon = { Icon(Icons.Default.Add, null) },
@@ -218,7 +225,7 @@ fun ChatsScreen(
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
-            TabRow(selectedTabIndex = tab) {
+            TabRow(selectedTabIndex = if (tab == CALENDAR_TAB && !calendarOn) 0 else tab) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Chats") })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Calls") })
                 Tab(
@@ -233,9 +240,12 @@ fun ChatsScreen(
                         contentDescription = "Requests" + if (friends.incoming.isNotEmpty()) ", ${friends.incoming.size} new" else ""
                     },
                 )
+                if (calendarOn) Tab(selected = tab == CALENDAR_TAB, onClick = { tab = CALENDAR_TAB }, text = { Text("Calendar") }, modifier = Modifier.semantics { contentDescription = "Calendar" })
             }
             lk.codegen.risime.calls.FullScreenIntentPrompt()
-            if (tab == 1) {
+            if (tab == CALENDAR_TAB && calendarOn && calendar != null) {
+                lk.codegen.risime.ui.calendar.RisiCalendarTab(calendar)
+            } else if (tab == 1) {
                 CallsTab(vm, callsUi)
             } else if (tab == 2) {
                 RequestsTab(friendsVm, onAddFriend)
@@ -276,6 +286,12 @@ fun ChatsScreen(
     CallsOverlays(vm, callsUi, callRows, callBack, onOpen)
     }
 }
+
+/** §29 the Calendar tab's index (after Chats, Calls, Requests). */
+const val CALENDAR_TAB = 3
+
+private val NO_CALENDAR = kotlinx.coroutines.flow.MutableStateFlow(false)
+private val NO_FOCUS = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
 
 /** Full-screen Calls pages over the chat list: call info and New call. */
 @Composable

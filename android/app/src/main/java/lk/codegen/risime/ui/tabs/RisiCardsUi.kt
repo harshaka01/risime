@@ -82,6 +82,11 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
         if (!lk.codegen.risime.data.tabs.RisiLedger.updateHasCard(r, ctx.messages)) SystemLineText(row.body)
         return
     }
+    if (r.kind == lk.codegen.risime.net.RisiKinds129.EVENT_UPDATE) {
+        // §29.10 applied to the cards of that event and the cache (no bubble); without such a card, a small line.
+        lk.codegen.risime.net.RisiCalendarCard.parse(row.systemJson)?.let { RisiEventUpdateLine(row, it, ctx) }
+        return
+    }
     Box(modifier.fillMaxWidth().padding(end = 32.dp), contentAlignment = Alignment.CenterStart) {
         Surface(
             shape = MaterialTheme.shapes.medium,
@@ -101,7 +106,8 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     RisiKinds.REPORT -> ReportCard(r)
                     RisiKinds.OFFER -> OfferCard(r, ctx)
                     RisiKinds.ERROR -> Text(RisiCards.errorText(r.code), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_error_text"))
-                    RisiKinds.CONFIRM -> if (lk.codegen.risime.data.tabs.RisiCalendarCards.isCalendarAdd(r) && lk.codegen.risime.data.tabs.RisiCalendarCards.proposal(r) != null) CalendarActionCard(row, r, ctx) else ConfirmCard(row, r, ctx)
+                    RisiKinds.CONFIRM -> if (r.tool == lk.codegen.risime.net.RisiKinds129.TOOL_RISI_CALENDAR_ADD) RisiCalendarAddCard(row, r, ctx)
+                        else if (lk.codegen.risime.data.tabs.RisiCalendarCards.isCalendarAdd(r) && lk.codegen.risime.data.tabs.RisiCalendarCards.proposal(r) != null) CalendarActionCard(row, r, ctx) else ConfirmCard(row, r, ctx)
                     RisiKinds.REMINDER_SET -> ReminderSetCard(row, r, ctx)
                     RisiKinds.DRAFT -> DraftCard(row, r, ctx)
                     RisiKinds.SKILL_DONE -> SkillDoneCard(row, r, ctx)
@@ -110,6 +116,7 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     lk.codegen.risime.net.RisiKinds127.DISCUSSION_CARD -> DiscussionCard(row, r, ctx)
                     lk.codegen.risime.net.RisiKinds127.ITEM_DUE, lk.codegen.risime.net.RisiKinds127.ITEM_OVERDUE, lk.codegen.risime.net.RisiKinds127.ITEM_NUDGE -> ItemReminderCard(row, r, ctx)
                     lk.codegen.risime.net.RisiKinds127.ITEM_CLARIFY -> ItemClarifyCard(row, r, ctx)
+                    in lk.codegen.risime.net.RisiKinds129.ALL -> RisiCalendarCardBody(row, r, ctx)
                     else -> Text(row.body)
                 }
                 FeedbackRow(r, ctx)
@@ -118,7 +125,7 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
     }
 }
 
-private fun headerOf(r: RisiMeta) = when (r.kind) {
+private fun headerOf(r: RisiMeta) = risiCalendarHeader(r) ?: when (r.kind) {
     RisiKinds.COMMITMENT -> "Risi · Track this?"
     RisiKinds.REMINDER -> "Risi · Reminder"
     RisiKinds.ESCALATION -> "Risi · Overdue"

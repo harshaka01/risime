@@ -12,6 +12,7 @@ import lk.codegen.risime.data.db.SeenEventEntity
 import lk.codegen.risime.data.db.SyncDao
 import lk.codegen.risime.data.db.SyncStateEntity
 import lk.codegen.risime.net.Event
+import lk.codegen.risime.net.risiCalendarChanged
 import lk.codegen.risime.net.MessageData
 import lk.codegen.risime.data.mls.MlsEngine
 import lk.codegen.risime.data.mls.MlsNotReady
@@ -121,6 +122,11 @@ class ChatEngine(
      * (null = an app without `risi_tools`: skipped, the cursor still advances). Never stored.
      */
     private val risiToolCalls: (suspend (lk.codegen.risime.net.RisiToolCall) -> Unit)? = null,
+    /**
+     * §29.6 (v1.29) `risi_calendar_changed` (content-free; its `cursor`): the Risi Calendar syncs off the
+     * event path (null = an app without `risi_events`: skipped, the cursor still advances). Must not block.
+     */
+    private val onRisiCalendarChanged: ((cursor: String?) -> Unit)? = null,
 ) : RealtimeListener, lk.codegen.risime.data.history.SendLanes {
     /** §15.4–§15.6 applied inside each event's transaction. */
     private val applier = deletes?.let { lk.codegen.risime.data.deletes.DeleteApplier(it, messages, images, clock, log) }
@@ -253,6 +259,10 @@ class ChatEngine(
                     }
                     Event.KIND_RISI_TOOL_CALL -> {
                         if (risiToolCalls != null) e.risiToolCall()?.let { risiQueue.add(it) }
+                        false
+                    }
+                    lk.codegen.risime.net.KIND_RISI_CALENDAR_CHANGED -> {
+                        onRisiCalendarChanged?.let { f -> e.risiCalendarChanged()?.let { d -> runCatching { f(d.cursor) } } }
                         false
                     }
                     Event.KIND_GROUP_RECEIPT -> {

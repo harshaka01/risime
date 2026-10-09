@@ -351,6 +351,41 @@ class ApiClient(
 
     suspend fun risiCommitments(state: String): ApiResult<RisiCommitmentsReply> = call<Unit, RisiCommitmentsReply>("GET", "risi/commitments?state=$state", null)
 
+    // ---- §29.3 Risi Calendar (a `risi_events` device; else 403 invalid_device) ----
+    private fun q(v: String) = java.net.URLEncoder.encode(v, "UTF-8")
+
+    suspend fun risiCalendarEvents(from: String, to: String): ApiResult<RisiCalendarEventsReply> =
+        call<Unit, RisiCalendarEventsReply>("GET", "risi/calendar/events?from=${q(from)}&to=${q(to)}", null, headers = deviceHeaders())
+
+    suspend fun risiCalendarChanges(since: String, limit: Int): ApiResult<RisiCalendarChangesReply> =
+        call<Unit, RisiCalendarChangesReply>("GET", "risi/calendar/changes?since=${q(since)}&limit=$limit", null, headers = deviceHeaders())
+
+    suspend fun risiCalendarEvent(id: String): ApiResult<RisiEventReply> =
+        call<Unit, RisiEventReply>("GET", "risi/calendar/events/$id", null, headers = deviceHeaders())
+
+    suspend fun createRisiCalendarEvent(body: kotlinx.serialization.json.JsonObject): ApiResult<RisiEventReply> =
+        call("POST", "risi/calendar/events", body, headers = deviceHeaders())
+
+    suspend fun patchRisiCalendarEvent(id: String, body: kotlinx.serialization.json.JsonObject): ApiResult<RisiEventReply> =
+        call("PATCH", "risi/calendar/events/$id", body, headers = deviceHeaders())
+
+    suspend fun deleteRisiCalendarEvent(id: String): ApiResult<Unit> =
+        call<Unit, Unit>("DELETE", "risi/calendar/events/$id", null, headers = deviceHeaders())
+
+    suspend fun respondRisiCalendarEvent(id: String, body: kotlinx.serialization.json.JsonObject): ApiResult<RisiEventReply> =
+        call("POST", "risi/calendar/events/$id/respond", body, headers = deviceHeaders())
+
+    suspend fun resolveRisiCalendarSuggestion(suggestionId: String, body: kotlinx.serialization.json.JsonObject): ApiResult<RisiEventReply> =
+        call("POST", "risi/calendar/suggestions/$suggestionId/resolve", body, headers = deviceHeaders())
+
+    suspend fun risiCalendarSettings(): ApiResult<RisiCalendarSettingsReply> =
+        call<Unit, RisiCalendarSettingsReply>("GET", "risi/calendar/settings", null, headers = deviceHeaders())
+
+    suspend fun patchRisiCalendarSettings(body: kotlinx.serialization.json.JsonObject): ApiResult<RisiCalendarSettingsReply> =
+        call("PATCH", "risi/calendar/settings", body, headers = deviceHeaders())
+
+    suspend fun deleteRisiCalendar(): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/calendar", null, headers = deviceHeaders())
+
     suspend fun contacts(): ApiResult<ContactsReply> = call<Unit, ContactsReply>("GET", "contacts", null)
 
     suspend fun logout(): ApiResult<Unit> = call<Unit, Unit>("POST", "auth/logout", null)

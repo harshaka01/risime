@@ -24,6 +24,8 @@ object RisiSkillCards {
     val CONFIRM_TOOLS = setOf(
         "set_reminder", RisiToolCall.TOOL_CALENDAR_ADD, "ask_risiwork",
         RisiToolCall.TOOL_SET_ALARM, RisiToolCall.TOOL_SCHEDULE_MESSAGE, RisiToolCall.TOOL_CANCEL_SCHEDULED,
+        // v1.29 §29.8: the server-side Risi Calendar add (no client tool, no device permission).
+        lk.codegen.risime.net.RisiKinds129.TOOL_RISI_CALENDAR_ADD,
     )
 
     fun knownConfirmTool(r: RisiMeta): Boolean = r.tool in CONFIRM_TOOLS

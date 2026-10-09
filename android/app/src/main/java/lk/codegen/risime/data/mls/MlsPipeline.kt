@@ -161,6 +161,8 @@ class MlsPipeline(
     private val coreExpected: () -> Boolean = { false },
     /** This device's id (known without the core): events that name other devices are still ignored while it is closed. */
     private val deviceId: suspend () -> String? = { null },
+    /** §29.10 an honoured `risi` object arrived (encoded JSON): the Risi Calendar applies `event_update`s to its cache (no network here). */
+    private val onRisiObject: (String) -> Unit = {},
 ) {
     private val b64 = Base64.getDecoder()
 
@@ -330,7 +332,7 @@ class MlsPipeline(
                     is MlsPayload.Decoded.Text -> MlsResult.Plaintext(
                         msg, p.body,
                         lk.codegen.risime.data.tabs.RisiMessages.honoured(p.risi, if (p.risi != null) mls.groupMeta(conv) else null, d.sender.userId, if (p.risi != null) mls.agentUsers(conv) else emptySet())
-                            ?.let(lk.codegen.risime.data.tabs.RisiMessages::encode),
+                            ?.let(lk.codegen.risime.data.tabs.RisiMessages::encode)?.also { j -> runCatching { onRisiObject(j) } },
                     )
                     is MlsPayload.Decoded.Reaction -> MlsResult.Reaction(msg, p.target, p.emoji, p.op)
                     is MlsPayload.Decoded.Image -> MlsResult.Image(msg, p.envelope)

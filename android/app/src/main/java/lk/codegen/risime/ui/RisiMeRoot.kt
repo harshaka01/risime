@@ -171,6 +171,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                 when (req) {
                     is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Chat -> nav.navigate("chat/${android.net.Uri.encode(req.conversationId)}")
                     is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Skills -> nav.navigate(RISI_SKILLS_ROUTE + (req.skillId?.let { "?skill=${android.net.Uri.encode(it)}" } ?: "")) { launchSingleTop = true }
+                    is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Calendar -> nav.popBackStack("chats", false)
                 }
             }
         }
@@ -185,6 +186,7 @@ private fun MainNav(c: AppContainer, meId: String) {
             ChatsScreen(
                 viewModel { ChatsViewModel(c, meId) },
                 viewModel(key = "friends") { FriendsViewModel(c) },
+                calendar = viewModel(key = "risi_calendar") { lk.codegen.risime.ui.calendar.RisiCalendarViewModel(c, meId) },
                 onOpen = {
                     // §25.2 the "Risi" entry before the Risi chat exists: create it first.
                     if (it == lk.codegen.risime.ui.chats.RISI_NEW_TARGET) nav.navigate("risi_open") { launchSingleTop = true }

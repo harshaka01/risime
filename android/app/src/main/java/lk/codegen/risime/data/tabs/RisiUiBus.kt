@@ -18,6 +18,9 @@ class RisiUiBus {
         data class Chat(val conversationId: String) : Nav
 
         data class Skills(val skillId: String?) : Nav
+
+        /** §29.9 [Open] on an event card: the chat list's Calendar tab (the event comes from RisiCalendar.focus). */
+        data object Calendar : Nav
     }
 
     /**
@@ -48,6 +51,10 @@ class RisiUiBus {
 
     /** The focus waiting for [conversationId] (taken once). */
     fun takeFocus(conversationId: String): Focus? = focus.remove(conversationId.lowercase())
+
+    fun openCalendar() {
+        _nav.tryEmit(Nav.Calendar)
+    }
 
     fun openSkills(skillId: String?) {
         _nav.tryEmit(Nav.Skills(skillId))

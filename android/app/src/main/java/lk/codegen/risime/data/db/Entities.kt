@@ -744,3 +744,23 @@ data class CallLogMarkEntity(
     @PrimaryKey val id: Int = 0,
     @ColumnInfo(name = "cleared_before") val clearedBefore: Long,
 )
+
+/**
+ * v14 §29.6: the local cache of this user's Risi Calendar (one row per event, the server's [json] view).
+ * A cache: never in a backup bundle, never shared by history sharing; a new device lists from the server.
+ */
+@Entity(tableName = "risi_calendar_cache")
+data class RisiCalendarEventEntity(
+    @PrimaryKey @ColumnInfo(name = "event_id") val eventId: String,
+    @ColumnInfo(name = "start_ms") val startMs: Long,
+    @ColumnInfo(name = "end_ms") val endMs: Long,
+    val version: Int,
+    val json: String,
+)
+
+/** v14 §29.6: the change-feed cursor of [RisiCalendarEventEntity] (single row id 0). */
+@Entity(tableName = "risi_calendar_state")
+data class RisiCalendarStateEntity(
+    @PrimaryKey val id: Int = 0,
+    val cursor: String?,
+)

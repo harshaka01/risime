@@ -198,7 +198,15 @@ interface WipeDao {
         risiWrites()
         hiddenCalls()
         callLogMarks()
+        risiCalendarCache()
+        risiCalendarState()
     }
+
+    @Query("DELETE FROM risi_calendar_cache")
+    suspend fun risiCalendarCache()
+
+    @Query("DELETE FROM risi_calendar_state")
+    suspend fun risiCalendarState()
 
     @Query("DELETE FROM hidden_calls")
     suspend fun hiddenCalls()
@@ -893,4 +901,32 @@ interface CallLogDao {
 
     @Upsert
     suspend fun setMark(m: CallLogMarkEntity)
+}
+
+/** §29.6 the Risi Calendar cache. */
+@Dao
+interface RisiCalendarDao {
+    @Query("SELECT * FROM risi_calendar_cache ORDER BY start_ms")
+    fun observeAll(): Flow<List<RisiCalendarEventEntity>>
+
+    @Query("SELECT * FROM risi_calendar_cache")
+    suspend fun all(): List<RisiCalendarEventEntity>
+
+    @Upsert
+    suspend fun upsert(rows: List<RisiCalendarEventEntity>)
+
+    @Query("DELETE FROM risi_calendar_cache WHERE event_id IN (:ids)")
+    suspend fun remove(ids: List<String>)
+
+    @Query("DELETE FROM risi_calendar_cache")
+    suspend fun clearEvents()
+
+    @Query("SELECT cursor FROM risi_calendar_state WHERE id = 0")
+    suspend fun cursor(): String?
+
+    @Upsert
+    suspend fun setState(s: RisiCalendarStateEntity)
+
+    @Query("DELETE FROM risi_calendar_state")
+    suspend fun clearState()
 }

@@ -362,7 +362,12 @@ data class AuthConfig(
     @SerialName("risi_ledger") val risiLedger: String? = null,
     /** §27.10 (v1.27): "on" | "off"; absent = off (only on together with `risi_ledger`). */
     @SerialName("risi_transcribe") val risiTranscribe: String? = null,
+    /** §29.1 (v1.29): "on" | "off"; absent = off. */
+    @SerialName("risi_events") val risiEvents: String? = null,
 ) {
+    /** §29.1: Risi Calendar on the server; only then does the app advertise `risi_events` (with tools, skills, ledger). */
+    val risiEventsOn: Boolean get() = risiEvents == "on"
+
     /** §27.10: the Ledger follow-ups run on the server; only then does the app advertise `risi_ledger` (with `risi_tools`). */
     val risiLedgerOn: Boolean get() = risiLedger == "on"
 
@@ -665,6 +670,9 @@ data class DeviceMls(
 
         /** v1.27 §27.10: the Ledger follow-ups, only with `risi_tools` and while `/auth/config` says `risi_ledger: on`. */
         const val CAP_RISI_LEDGER = CAPABILITY_RISI_LEDGER
+
+        /** v1.29 §29.1: Risi Calendar, only with `risi_tools`, `risi_skills`, `risi_ledger` and while `/auth/config` says `risi_events: on`. */
+        const val CAP_RISI_EVENTS = CAPABILITY_RISI_EVENTS
     }
 }
 

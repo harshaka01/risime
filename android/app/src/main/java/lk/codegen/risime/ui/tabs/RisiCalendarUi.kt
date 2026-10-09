@@ -258,9 +258,10 @@ private val TIME_IN = DateTimeFormatter.ofPattern("HH:mm")
 
 /** [Edit]: title, date, time, duration and calendar; [Add] confirms the card with the corrected event. */
 @Composable
-private fun CalendarEditDialog(
+internal fun CalendarEditDialog(
     title0: String, date0: LocalDate, time0: LocalTime, duration0: Int, allDay0: Boolean,
     calendarLabel: String?, onChooseCalendar: (() -> Unit)?, onSend: (kotlinx.serialization.json.JsonObject) -> Unit, onDismiss: () -> Unit,
+    heading: String = "Edit event", confirmLabel: String = "Add",
 ) {
     var title by remember { mutableStateOf(title0) }
     var date by remember { mutableStateOf(DATE_IN.format(date0)) }
@@ -272,7 +273,7 @@ private fun CalendarEditDialog(
     val valid = title.isNotBlank() && title.length <= 200 && d != null && (allDay || t != null)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit event") },
+        title = { Text(heading) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()).testTag("risi_calendar_edit_form"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 OutlinedTextField(title, { title = it }, label = { Text("Title") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("risi_calendar_edit_title"))
@@ -300,7 +301,7 @@ private fun CalendarEditDialog(
             }
         },
         confirmButton = {
-            TextButton(enabled = valid, onClick = { onSend(RisiCalendarCards.editArgs(title, d!!, t ?: LocalTime.MIDNIGHT, duration, allDay, ZoneId.systemDefault())) }, modifier = Modifier.testTag("risi_calendar_edit_send")) { Text("Add") }
+            TextButton(enabled = valid, onClick = { onSend(RisiCalendarCards.editArgs(title, d!!, t ?: LocalTime.MIDNIGHT, duration, allDay, ZoneId.systemDefault())) }, modifier = Modifier.testTag("risi_calendar_edit_send")) { Text(confirmLabel) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Back") } },
     )

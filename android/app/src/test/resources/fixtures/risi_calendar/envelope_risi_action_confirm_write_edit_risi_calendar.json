@@ -1,0 +1,1 @@
+{"v": 1, "type": "risi_action", "target": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e", "action": "confirm_write", "edit": {"title": "Interview", "start": "2026-10-12T09:30:00.000Z", "end": "2026-10-12T10:30:00.000Z", "all_day": false, "with": ["0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e"], "reminder_min": 10}}
