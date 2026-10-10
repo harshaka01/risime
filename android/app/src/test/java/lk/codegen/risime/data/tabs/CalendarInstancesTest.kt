@@ -162,4 +162,59 @@ class CalendarInstancesTest {
         assertTrue(d.text().contains("Error: READ_CALENDAR is not granted: nothing can be read"))
         assertEquals(0, d.calendars.size)
     }
+
+    // ---- P0 2026-10-10 redroid: a LOCAL-only phone (4 events) read_ok=false (no_google_calendar) while Details showed 4 ----
+
+    private val seed = PhoneCalendarInfo(7, "RisiMe Seed", "RisiMe Seed", "LOCAL", 700, true, "RisiMe Seed")
+
+    private fun agree(cals: List<PhoneCalendarInfo>, rows: List<InstanceRow>) {
+        val c = pc(RawBackend(cals) { rows })
+        val week = now to now + 7 * InstanceFilter.DAY_MS
+        val o = c.overview()!!
+        val r = c.read(week.first, week.second)!!
+        val d = c.diagnostics()
+        // Details, calendar_check and diagnostics agree: same verdict, same per-calendar counts.
+        assertEquals(o.readOk, r.source.readOk)
+        assertEquals(o.reason, r.source.reason)
+        val byName = r.source.calendars.associate { it.name to it.events }
+        o.calendars.forEach { (cal, n) -> assertEquals(cal.displayName, n, byName[CalendarRead.wireName(cal)]) }
+        o.calendars.forEach { (cal, n) -> assertEquals(n, d.calendars.first { it.info.id == cal.id }.counted) }
+        assertEquals(rows.count { InstanceFilter.exclusion(it) == null && !CalendarRead.isRisiCopy(it.syncId) }, r.source.calendars.sumOf { it.events })
+    }
+
+    private fun seedRows() = listOf(
+        InstanceRow(now + 3_600_000, now + 7_200_000, false, calendarId = 7),
+        InstanceRow(now + 86_400_000, now + 88_200_000, false, calendarId = 7), // a weekly instance
+        InstanceRow(ms("2026-10-14T00:00:00Z"), ms("2026-10-15T00:00:00Z"), true, calendarId = 7), // all-day
+        InstanceRow(now + 6 * 86_400_000L, now + 6 * 86_400_000L + 3_600_000, false, calendarId = 7), // 6 days out
+    )
+
+    @Test fun aLocalOnlyPhoneIsReadOkWithItsBlocks() {
+        val c = pc(RawBackend(listOf(seed)) { seedRows() })
+        val r = c.read(now, now + 7 * InstanceFilter.DAY_MS)!!
+        assertTrue(r.source.readOk)
+        assertNull(r.source.reason)
+        assertEquals(listOf(4), r.source.calendars.map { it.events })
+        assertEquals(4, r.blocks.size)
+        assertEquals(listOf("phone_provider"), r.wire.connectedSources)
+        assertNull(r.wire.sources!!.first().reason)
+        // The old heuristic is only a note in Details.
+        val o = c.overview()!!
+        assertTrue(o.readOk)
+        assertEquals(CalendarRead.NO_GOOGLE_CALENDAR, o.note)
+        assertEquals(listOf(seed to 4), o.calendars)
+    }
+
+    @Test fun detailsAndCalendarCheckAgreeOnTheSameProvider() {
+        agree(listOf(seed), seedRows())
+        agree(listOf(google, hiddenUnsynced, seed), seedRows() + InstanceRow(now + 3_600_000, now + 7_200_000, false, calendarId = 2))
+        agree(listOf(hiddenUnsynced), listOf(InstanceRow(now + 3_600_000, now + 7_200_000, false, calendarId = 2))) // google_sync_off: still read_ok
+        agree(listOf(google), listOf(InstanceRow(now + 3_600_000, now + 7_200_000, false, calendarId = 1, status = InstanceFilter.STATUS_CANCELED)))
+        agree(emptyList(), emptyList()) // no calendars: both say no_calendars
+        // A RisiMe Google copy (loop guard) is left out of both.
+        val copy = InstanceRow(now + 3_600_000, now + 7_200_000, false, calendarId = 1, syncId = "risi" + "a".repeat(32))
+        val c = pc(RawBackend(listOf(google)) { listOf(copy) })
+        assertEquals(listOf(google to 0), c.overview()!!.calendars)
+        assertEquals(listOf(0), c.read(now, now + 7 * InstanceFilter.DAY_MS)!!.source.calendars.map { it.events })
+    }
 }

@@ -307,17 +307,20 @@ class PhoneCalendarTest {
         assertEquals(listOf("Primary calendar" to 0), r.source.calendars.map { it.name to it.events })
     }
 
-    @Test fun untrustworthyReadsSayWhy() {
+    @Test fun onlyNoCalendarsIsUntrustworthyTheRestIsANote() {
         assertEquals(false to "no_calendars", CalendarRead.verdict(emptyList()))
-        assertEquals(false to "no_google_calendar", CalendarRead.verdict(listOf(local)))
-        assertEquals(false to "google_sync_off", CalendarRead.verdict(listOf(local, google.copy(syncEvents = false))))
-        assertEquals(true to null, CalendarRead.verdict(listOf(hidden))) // hidden calendars are read too
-        assertEquals(true to null, CalendarRead.verdict(listOf(hidden, google)))
+        // P0 2026-10-10: a LOCAL-only or unsynced phone is read_ok; the old heuristics are a Details note only.
+        assertEquals(true to null, CalendarRead.verdict(listOf(local)))
+        assertEquals("no_google_calendar", CalendarRead.note(listOf(local)))
+        assertEquals(true to null, CalendarRead.verdict(listOf(local, google.copy(syncEvents = false))))
+        assertEquals("google_sync_off", CalendarRead.note(listOf(local, google.copy(syncEvents = false))))
+        assertEquals(true to null, CalendarRead.verdict(listOf(hidden)))
+        assertNull(CalendarRead.note(listOf(hidden, google)))
         be.cals += google.copy(syncEvents = false)
         val r = cal.read(start, end)!!
-        assertEquals(false, r.source.readOk)
-        assertEquals("google_sync_off", r.source.reason)
-        assertEquals(emptyList<String>(), r.wire.connectedSources)
+        assertEquals(true, r.source.readOk)
+        assertNull(r.source.reason)
+        assertEquals(listOf("phone_provider"), r.wire.connectedSources)
     }
 
     @Test fun permissionMissingIsNotAnEmptyCalendar() {

@@ -574,6 +574,7 @@ private fun CalendarSourcesBlock(port: lk.codegen.risime.data.tabs.RisiCalendarP
                         SyncOffRow(syncOffAccountText(name), type, port) { syncScope.launch { port.refreshSync(name, type); kotlinx.coroutines.delay(1500); reload++ } }
                     }
                 }
+                o.note?.let { Text(lk.codegen.risime.data.tabs.CalendarRead.reasonText(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_calendar_sources_note")) }
                 if (!o.readOk) Text(lk.codegen.risime.data.tabs.CalendarRead.reasonText(o.reason), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_calendar_sources_reason"))
             }
         }

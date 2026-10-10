@@ -279,6 +279,8 @@ data class CalendarOverview(
     val syncOffAccounts: List<Pair<String, String>> = emptyList(),
     /** P0 2026-10-10: the query error's text when the read failed (shown in Details and diagnostics). */
     val error: String? = null,
+    /** Informational only (`no_google_calendar`, `google_sync_off`): never makes the read untrusted. */
+    val note: String? = null,
 )
 
 /** What a `calendar_check` read: the merged blocks and the `phone_provider` source report. */
@@ -323,16 +325,22 @@ data class CalendarRead(val blocks: List<CalendarBlock>, val source: lk.codegen.
         }
 
         /**
-         * Can a read of these calendars be trusted? Only with a Google account calendar that syncs events
-         * to this phone and is shown; else the exact reason.
+         * Can a successful read be trusted? Yes whenever the phone has any calendar (P0 2026-10-10: a LOCAL-only or
+         * unsynced phone's events are real events; `no_google_calendar` / `google_sync_off` are only a [note],
+         * never read_ok=false). Only "no calendars at all" is unreadable here; `sync_off` (§29.7) and query
+         * errors are decided by the caller.
          */
-        fun verdict(cals: List<PhoneCalendarInfo>): Pair<Boolean, String?> {
+        fun verdict(cals: List<PhoneCalendarInfo>): Pair<Boolean, String?> =
+            if (cals.isEmpty()) false to NO_CALENDARS else true to null
+
+        /** The old P0 2026-10-09 heuristics, as an informational note for Details only (never sent, never read_ok). */
+        fun note(cals: List<PhoneCalendarInfo>): String? {
             val google = cals.filter(CalendarSelection::isGoogle)
             return when {
-                cals.isEmpty() -> false to NO_CALENDARS
-                google.isEmpty() -> false to NO_GOOGLE_CALENDAR
-                google.none { it.syncEvents } -> false to GOOGLE_SYNC_OFF
-                else -> true to null
+                cals.isEmpty() -> null
+                google.isEmpty() -> NO_GOOGLE_CALENDAR
+                google.none { it.syncEvents } -> GOOGLE_SYNC_OFF
+                else -> null
             }
         }
 
@@ -548,7 +556,9 @@ class PhoneCalendar(
         }
         val off = runCatching { CalendarRead.syncOffAccounts(cals, backend) }.getOrDefault(emptyList())
         val master = runCatching { !backend.masterSyncOn() }.getOrDefault(false)
-        return CalendarOverview(sorted.map { c -> c to rows.count { it.calendarId == c.id } }, ok, reason, master, off)
+        // Same rows as calendar_check (RisiMe's own Google copies left out there too), so Details and Risi agree.
+        val counted = rows.filter { !CalendarRead.isRisiCopy(it.syncId) }
+        return CalendarOverview(sorted.map { c -> c to counted.count { it.calendarId == c.id } }, ok, reason, master, off, note = CalendarRead.note(cals))
     }
 
     /**
@@ -570,7 +580,7 @@ class PhoneCalendar(
             val (b, e) = if (r.allDay) InstanceFilter.localAllDay(r.begin, z) to InstanceFilter.localAllDay(r.end, z) else r.begin to r.end
             InstanceFilter.overlaps(b, e, from, to)
         }
-        val counted = raw?.let { InstanceFilter.busyRows(it, z, from, to) }
+        val counted = raw?.let { InstanceFilter.busyRows(it, z, from, to).filter { r -> !CalendarRead.isRisiCopy(r.syncId) } }
         val events = runCatching { backend.eventCounts() }.getOrElse { errors += errorText("events", it); null }
         val list = cals.sortedWith(googleFirst).map { c ->
             val local = c.accountType.equals(CalendarSelection.LOCAL, true)

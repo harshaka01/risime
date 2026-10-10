@@ -1,5 +1,16 @@
 # Android status — 0.2 nightlies
 
+## READY fix: a successful read is read_ok (redroid LOCAL-only phone said "no calendars") (JVM gate green: 1620 tests, 0 failed, 9 skipped)
+- Cause: `CalendarRead.verdict` (P0 2026-10-09) made any read untrusted without a Google calendar (`no_google_calendar`) or with every Google calendar
+  SYNC_EVENTS=0 (`google_sync_off`), even after instances were read. A LOCAL-only phone with 4 events sent `read_ok:false`, `connected_sources: []`.
+- Now: `verdict` is read_ok=false only for "no calendars at all". `sync_off` (§29.7, contract) and query errors (`api_error`) are unchanged. The old heuristics are
+  `CalendarOverview.note`, shown in Details as a muted line (`risi_calendar_sources_note`, same texts as before), never sent and never read_ok.
+- Details/check agreement: Details and diagnostics "Counted" now also leave out RisiMe's own Google copies (`risi<hex32>` sync id), as calendar_check does.
+  The only remaining difference is the §31.4 skip of the connected Google account's provider events while Google is read through the API in the same check
+  (that's Google's own count). Test `detailsAndCalendarCheckAgreeOnTheSameProvider`: on the same fake provider, Details, calendar_check and diagnostics give the same
+  verdict and per-calendar counts (LOCAL only, mixed with hidden/unsynced Google, google_sync_off, cancelled, no calendars, a Risi copy).
+  `aLocalOnlyPhoneIsReadOkWithItsBlocks`: read_ok true, reason null, 4 events, 4 blocks, connected_sources [phone_provider].
+
 ## READY P0 2026-10-10 (nightly.47 screenshots): calendar_add v1.32, event card, next_actions chips, Markdown in Risi bubbles, header height (JVM gate green: `assembleDebug testDebugUnitTest`, 1618 tests, 0 failed, 9 skipped)
 Branch `v1.32`, against contract 3641fca (§25.3 v1.32, §25.4 `next_actions`). No Room change, no new dependency (the Markdown renderer is ~150 lines of AnnotatedString).
 

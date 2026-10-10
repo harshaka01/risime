@@ -170,15 +170,21 @@ class RisiCalendarToolTest {
                 """"connected_sources":["phone_provider"]}""",
             r.result.toString(),
         )
-        // No Google calendar on the phone: the read can't be trusted, and says why.
+        // P0 2026-10-10: only a local calendar on the phone: a successful read is read_ok with its blocks (no_google_calendar is no reason).
         val saved = be.cals.toList()
         be.cals.removeAll { it.accountType == "com.google" }
         val local = ProtocolJson.decodeFromJsonElement(lk.codegen.risime.net.CalendarCheckResult.serializer(), ex.execute(c).result!!)
         val phone = local.sources!!.single { it.source == "phone_provider" }
-        assertEquals(false, phone.readOk)
-        assertEquals("no_calendars", phone.reason)
+        assertEquals(true, phone.readOk)
+        assertNull(phone.reason)
+        assertEquals(1, local.blocks.size)
         assertEquals("not_connected", local.sources!!.single { it.source == "google_api" }.reason)
-        assertEquals(emptyList<String>(), local.connectedSources)
+        assertEquals(listOf("phone_provider"), local.connectedSources)
+        // No calendars at all: unreadable, and says why.
+        be.cals.clear()
+        val none = ProtocolJson.decodeFromJsonElement(lk.codegen.risime.net.CalendarCheckResult.serializer(), ex.execute(c).result!!)
+        assertEquals(false to "no_calendars", none.sources!!.single { it.source == "phone_provider" }.let { it.readOk to it.reason })
+        assertEquals(emptyList<String>(), none.connectedSources)
         be.cals.clear()
         be.cals += saved
         val wide = c.copy(args = JsonObject(mapOf("from" to JsonPrimitive("2026-10-01T00:00:00Z"), "to" to JsonPrimitive("2026-10-16T00:00:01Z"))))
