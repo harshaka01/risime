@@ -1,0 +1,8 @@
+# One watchdog tick (scripts/watchdog; incident-2026-10-10, docs/MONITORING.md); run by risime-watchdog.timer.
+[Unit]
+Description=RisiMe pilot watchdog tick (health, diagnostics, limited restart, alert)
+
+[Service]
+Type=oneshot
+ExecStart=%h/development/risime/scripts/watchdog
+TimeoutStartSec=15min

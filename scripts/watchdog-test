@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Regression test for scripts/watchdog (incident-2026-10-10): fake local/public /health on loopback, WATCHDOG_DRY=1
+# (no restart, no alert, throwaway state). Checks: 3 local failures → one restart + "restarted"; at most 3 restarts
+# per hour, then "gave_up" and no more restarts; "recovered" when healthy; public-only failures → one "public_down"
+# (no restart), then "recovered". Prints "WATCHDOG TEST OK".
+set -euo pipefail
+cd "$(dirname "$0")/.."
+T="$(mktemp -d)"; trap 'kill $SRV 2>/dev/null || true; rm -rf "$T"' EXIT
+echo ok > "$T/local"; echo ok > "$T/public"
+python3 -I - "$T" > "$T/port" <<'EOF' &
+import http.server, sys, os, socketserver
+d = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        which = "local" if self.path.startswith("/local") else "public"
+        good = open(os.path.join(d, which)).read().strip() == "ok"
+        body = b'{"status":"ok","version":"test"}' if good else b'{"status":"error"}'
+        self.send_response(200 if good else 503); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+s = socketserver.TCPServer(("127.0.0.1", 0), H)
+print(s.server_address[1], flush=True); s.serve_forever()
+EOF
+SRV=$!
+for _ in $(seq 50); do [ -s "$T/port" ] && break; sleep 0.1; done
+P="$(cat "$T/port")"
+export WATCHDOG_DRY=1 WATCHDOG_RUN="$T/run" WATCHDOG_LOG="$T/wd.log" \
+  WATCHDOG_LOCAL_URL="http://127.0.0.1:$P/local" WATCHDOG_PUBLIC_URL="http://127.0.0.1:$P/public"
+mkdir -p "$T/run"; : > "$T/wd.log"
+tick() { scripts/watchdog || true; }
+n() { grep -c "$1" "$T/wd.log" || true; }
+fail() { echo "WATCHDOG TEST FAIL: $*"; cat "$T/wd.log"; exit 1; }
+
+tick; tick; [ "$(n ALERT)" = 0 ] || fail "alert while healthy"
+echo bad > "$T/local"
+tick; tick; [ "$(n 'safe-restart')" = 0 ] || fail "restart before 3 failures"
+tick; [ "$(n 'safe-restart')" = 1 ] && [ "$(n 'ALERT(dry) restarted local')" = 1 ] || fail "no restart+alert after 3 failures"
+tick; tick; tick; tick; tick; tick   # 2 more episodes: restarts 2 and 3
+[ "$(n 'safe-restart')" = 3 ] || fail "expected 3 restarts, got $(n safe-restart)"
+tick; tick; tick                     # 4th episode within the hour
+[ "$(n 'safe-restart')" = 3 ] && [ "$(n 'ALERT(dry) gave_up local')" = 1 ] || fail "4th restart in an hour not refused"
+tick; tick; tick; tick
+[ "$(n 'safe-restart')" = 3 ] && [ "$(n 'ALERT(dry) gave_up')" = 1 ] || fail "restarted or re-alerted after gave_up"
+echo ok > "$T/local"; tick
+[ "$(n 'ALERT(dry) recovered local')" = 1 ] && [ ! -f "$T/run/.watchdog-gaveup" ] || fail "no recovered after gave_up"
+echo bad > "$T/public"; tick; tick; tick; tick; tick
+[ "$(n 'ALERT(dry) public_down public')" = 1 ] && [ "$(n 'safe-restart')" = 3 ] || fail "public_down not exactly once, or restarted"
+echo ok > "$T/public"; tick
+[ "$(n 'ALERT(dry) recovered public')" = 1 ] || fail "no recovered for public"
+echo bad > "$T/local"; tick; tick; tick
+[ "$(n 'safe-restart')" = 3 ] || fail "restarted again within the hour"
+echo "WATCHDOG TEST OK"

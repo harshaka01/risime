@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Pilot health check (risime-health.timer, every 5 min; docs/decisions/025).
-# Checks http://127.0.0.1:4000/health; on two failures 15 s apart, restarts risime.service.
+# Checks http://127.0.0.1:4000/health; on two failures 15 s apart, restarts risime.service (unless
+# risime-watchdog.timer is active: then scripts/watchdog restarts, with its limits and alerts).
 # Skips while a deploy holds ~/risime-run/.deploy.lock. Logs to ~/risime-logs/health.log.
 # Then scripts/outage-check --tick: after a network outage, boot-check + recovery checks → docs/status/overnight.md.
 set -uo pipefail
@@ -17,6 +18,8 @@ if ok; then
 fi
 sleep 15
 ok && { log "recovered on retry"; exit 0; }
+# The 30-s watchdog (scripts/watchdog, incident-2026-10-10) owns restarts while its timer is active.
+if systemctl --user is-active -q risime-watchdog.timer; then log "FAIL /health twice; the watchdog handles it"; exit 1; fi
 log "FAIL /health twice; restarting risime.service"
 systemctl --user restart risime.service
 for _ in $(seq 1 60); do ok && { log "restart ok"; exit 0; }; sleep 2; done

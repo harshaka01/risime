@@ -56,9 +56,9 @@ Checked at 04:32–04:45 UTC (pilot still nightly.47, RISI_EVENTS on):
 - **Websocket:** the route is reachable (403 without a token), and phones reconnected at 04:32–04:33 UTC.
 - **FCM:** fcm.googleapis.com and oauth2.googleapis.com are reachable. The last real push was ok at
   03:53. Pushes after that were "skipped: online", as expected, because the phones were connected.
-- **Login / token refresh:** Keycloak is **not in use yet** (OIDC_ENABLED off; the `risime` client is
-  still waiting on RisiCloud). Phone sign-in (/auth/config 200) works. There is no refresh endpoint;
-  sessions are long-lived tokens.
+- **Login / token refresh:** ~~Keycloak is not in use yet~~ **Correction (07:35 UTC): wrong.** The pilot runs
+  with `OIDC_ENABLED=true`; phones sign in and refresh tokens at Keycloak (risicloud.ai, realm aoa). See
+  incident-2026-10-10.md: the server's key refresh from Keycloak timed out 13 times from 02:54 to 05:24 UTC.
 - **Not outage-related, but open:** since ~02:00 UTC several phones (6–7 mobile IPs) get
   `401 invalid_token` on /friends, /me and PUT /me/devices/<id>, and one device has had nothing but
   401s since 04:18. This started before the outage. The affected phone probably needs to sign in again.
@@ -1330,3 +1330,10 @@ fixes go out together.
   allowed. Adding `-wo` is recommended; publishing doesn't need reads.
 - Release builds from nightly.3 on default to `https://risime.risicloud.ai`. It works once the
   public URL is live; until then, testers use "Server · Change".
+
+### P0 2026-10-10 "connecting": step 1 + step 3 (07:35 UTC)
+- Step 1 (diagnose, restart): server not hung; new connections to both public addresses (RisiMe edge,
+  Keycloak) sometimes stall 6–8 s; safe restart 05:51 OK. Details: incident-2026-10-10.md.
+- Step 3 (watchdog): `risime-watchdog.timer` every 30 s on since 07:33 (scripts/watchdog, test
+  scripts/watchdog-test OK). Risi alert endpoint: contract v1.32 §32, server agent implementing on branch v1.32.
+- Next: step 2 (root cause), step 4 (monitoring console); nightly.48 tail fix and rerun.

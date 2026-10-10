@@ -1,0 +1,14 @@
+# Every 30 s: local + public /health (5-s timeout); 3 local failures in a row → diagnostics, safe restart
+# (at most 3 per hour), alert in the operator's Risi chat (e-mail / SMS fallback).
+# Install: cp infra/pilot/systemd/risime-watchdog.* ~/.config/systemd/user/ && systemctl --user daemon-reload &&
+#          systemctl --user enable --now risime-watchdog.timer
+[Unit]
+Description=RisiMe pilot watchdog every 30 seconds
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Pilot watchdog (P0 incident 2026-10-10; risime-watchdog.timer, every 30 s). One tick:
+#   * local  http://127.0.0.1:4000/health and public https://risime.risicloud.ai/health, 5-s timeout each;
+#   * local failed 3 ticks in a row → scripts/capture-diag, scripts/safe-restart (restart → watch → retry →
+#     rollback), alert "restarted" / "rolled_back" / "gave_up";
+#   * never more than 3 restarts in an hour: the 4th time it alerts "gave_up" and stops restarting
+#     (~/risime-run/.watchdog-gaveup) until the server is healthy again (then "recovered") or an operator
+#     removes the file;
+#   * local ok but public failed 3 in a row → diagnostics + alert "public_down" (no restart: a network or Caddy
+#     fault a restart can't fix), "recovered" when public answers again.
+# Alerts (contract §32): a Risi message to the operators (POST /internal/ops-alert, OPS_ALERT_TOKEN); when it is
+# not delivered (server down, Risi off, endpoint not deployed) → e-mail (SMTP_* + OPS_ALERT_EMAIL) and, with
+# OPS_ALERT_SMS=on, SMS via Notify.lk (OPS_ALERT_PHONES). All settings in .env only.
+# Skips while a deploy holds ~/risime-run/.deploy.lock. State ~/risime-run/.watchdog. Log ~/risime-logs/watchdog.log.
+#   scripts/watchdog --test-alert   sends a "recovered"-style test alert through the same path.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"
+# Test hooks (scripts/watchdog-test): WATCHDOG_DRY=1 uses WATCHDOG_RUN for state and never restarts or alerts for real.
+LOCAL="${WATCHDOG_LOCAL_URL:-http://127.0.0.1:4000/health}"; PUBLIC="${WATCHDOG_PUBLIC_URL:-https://risime.risicloud.ai/health}"
+DRY="${WATCHDOG_DRY:-0}"
+RUN="${WATCHDOG_RUN:-$HOME/risime-run}"; ST="$RUN/.watchdog"; GAVE="$RUN/.watchdog-gaveup"; RESTARTS="$RUN/.watchdog-restarts"
+LOG="${WATCHDOG_LOG:-$HOME/risime-logs/watchdog.log}"; mkdir -p "$(dirname "$LOG")"
+log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG"; }
+env_get() { sed -n "s/^$1=//p" "$REPO/.env" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/'; }
+up() { curl -s -m 5 "$1" 2>/dev/null | grep -q '"status":"ok"'; }
+version() { curl -s -m 5 http://127.0.0.1:4000/health | grep -oE '"version":"[^"]*"' | cut -d'"' -f4; }
+
+alert() {  # state check detail
+  local state="$1" check="$2" detail="${3:0:300}" tok res sent=0
+  if [ "$DRY" = 1 ]; then log "ALERT(dry) $state $check: $detail"; return 0; fi
+  tok="$(env_get OPS_ALERT_TOKEN)"
+  if [ -n "$tok" ]; then
+    res="$(python3 -I -c 'import json,sys; print(json.dumps({"state":sys.argv[1],"check":sys.argv[2],"detail":sys.argv[3]}))' "$state" "$check" "$detail" \
+      | curl -s -m 10 -H @<(printf 'Authorization: Bearer %s\n' "$tok") -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:4000/internal/ops-alert)"
+    sent="$(printf '%s' "$res" | grep -oE '"sent": *[0-9]+' | grep -oE '[0-9]+$' || echo 0)"
+  fi
+  if [ "${sent:-0}" -ge 1 ]; then log "alert $state ($check): Risi message sent to $sent"; return 0; fi
+  log "alert $state ($check): Risi message not delivered (${res:-no token}); fallbacks"
+  local subj="RisiMe watchdog: $state ($check)" text="RisiMe watchdog on spark2, $(date -u +%F' '%H:%M) UTC: $state ($check). $detail"
+  local host port user pass from to
+  host="$(env_get SMTP_HOST)"; port="$(env_get SMTP_PORT)"; user="$(env_get SMTP_USERNAME)"; pass="$(env_get SMTP_PASSWORD)"
+  from="$(env_get SMTP_FROM)"; to="$(env_get OPS_ALERT_EMAIL)"
+  if [ -n "$host" ] && [ -n "$to" ] && [ -n "$from" ]; then
+    local scheme=smtp; [ "${port:-587}" = 465 ] && scheme=smtps
+    if printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%s\r\n' "$from" "$to" "$subj" "$text" \
+      | curl -s -m 20 --ssl-reqd "$scheme://$host:${port:-587}" ${user:+--netrc-file <(printf 'machine %s login %s password %s\n' "$host" "$user" "$pass")} \
+          --mail-from "$(printf '%s' "$from" | grep -oE '[^<> ]+@[^<> ]+')" --mail-rcpt "$to" -T - ; then
+      log "alert $state: e-mail sent"
+    else log "alert $state: e-mail FAILED"; fi
+  else log "alert $state: no e-mail (SMTP_HOST / SMTP_FROM / OPS_ALERT_EMAIL not set in .env)"; fi
+  if [ "$(env_get OPS_ALERT_SMS)" = on ] && [ -n "$(env_get NOTIFYLK_API_KEY)" ]; then
+    local ph
+    for ph in $(env_get OPS_ALERT_PHONES | tr ',' ' '); do
+      curl -s -m 15 -o /dev/null -w '%{http_code}' https://app.notify.lk/api/v1/send -K <(
+        printf 'data-urlencode = "%s"\n' "user_id=$(env_get NOTIFYLK_USER_ID)" "api_key=$(env_get NOTIFYLK_API_KEY)" \
+          "sender_id=$(env_get NOTIFYLK_SENDER_ID)" "to=${ph#+}" "message=${text:0:300}") | grep -q 200 && log "alert $state: SMS sent" || log "alert $state: SMS FAILED"
+    done
+  fi
+}
+
+if [ "${1:-}" = --test-alert ]; then alert recovered local "Test alert from scripts/watchdog --test-alert (nothing is wrong)."; exit 0; fi
+
+exec 9>"$RUN/.deploy.lock"
+flock -n 9 || exit 0          # a deploy or a restart is running
+exec 9>&-
+read -r lf pf pub_alerted 2>/dev/null < "$ST" || true
+lf="${lf:-0}"; pf="${pf:-0}"; pub_alerted="${pub_alerted:-0}"
+save() { echo "$lf $pf $pub_alerted" > "$ST"; }
+
+if up "$LOCAL"; then
+  [ "$lf" -gt 0 ] && log "local ok again after $lf failed tick(s)"
+  lf=0
+  if [ -f "$GAVE" ]; then rm -f "$GAVE"; log "healthy again after gave_up"; alert recovered local "The server is healthy again ($(version)). The watchdog restarts again when needed."; fi
+  if up "$PUBLIC"; then
+    if [ "$pub_alerted" = 1 ]; then alert recovered public "risime.risicloud.ai answers again."; fi
+    pf=0; pub_alerted=0
+  else
+    pf=$((pf + 1)); log "public /health failed ($pf in a row; local ok)"
+    if [ "$pf" -ge 3 ] && [ "$pub_alerted" = 0 ]; then
+      d="(dry)"; [ "$DRY" = 1 ] || d="$(scripts/capture-diag 2>/dev/null | tail -1)"
+      alert public_down public "Public /health failed 3 times in a row (5-s timeout) while local is ok; diagnostics $d"
+      pub_alerted=1
+    fi
+  fi
+  save; exit 0
+fi
+
+lf=$((lf + 1)); log "local /health failed ($lf in a row)"
+if [ "$lf" -lt 3 ] || [ -f "$GAVE" ]; then save; exit 0; fi
+
+d="(dry)"; [ "$DRY" = 1 ] || d="$(scripts/capture-diag 2>/dev/null | tail -1)"; log "diagnostics $d"
+now=$(date +%s); recent=$(awk -v n="$now" '$1 > n - 3600' "$RESTARTS" 2>/dev/null | wc -l)
+if [ "$recent" -ge 3 ]; then
+  touch "$GAVE"; log "GAVE UP: $recent restarts in the last hour"
+  alert gave_up local "Still not answering after $recent restarts in the last hour; restarts stopped. Diagnostics $d"
+  lf=0; save; exit 1
+fi
+echo "$now" >> "$RESTARTS"; tail -n 20 "$RESTARTS" > "$RESTARTS.tmp" && mv "$RESTARTS.tmp" "$RESTARTS"
+if [ "$DRY" = 1 ]; then out="${WATCHDOG_DRY_RESULT:-RESTART OK}"; else out="$(scripts/safe-restart --no-backup --reason "watchdog: local /health failed 3 times in a row" 2>&1 | tail -1)"; fi
+log "safe-restart: $out"
+lf=0; save
+case "$out" in
+  *"RESTART OK"*) alert restarted local "local /health failed 3 times in a row; restarted; healthy again ($(version)). Diagnostics $d";;
+  *"ROLLED BACK"*) alert rolled_back local "Unhealthy after restart and retry; rolled back to $(version). Diagnostics $d";;
+  *) touch "$GAVE"; alert gave_up local "Restart and rollback did not help ($out); restarts stopped. Diagnostics $d"; exit 1;;
+esac
