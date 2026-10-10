@@ -6123,6 +6123,28 @@ most **16 KiB** (`risi_tool_result_calendar_check.json`, `risi_tool_result_calen
 - It adds the event to the primary writable calendar, or else to a local calendar named "RisiMe"
   (created on first use). `result`: `{"event_id": str}` (the provider's id, opaque; never shown).
   No write permission: `no_permission`.
+- **v1.32 (P0 2026-10-10: "added" while nothing was in any calendar):**
+  - **Target:** the write calendar the user picked (Settings → Risi skills → Calendar), else the primary
+    calendar of a Google account (`IS_PRIMARY`, or the calendar whose name equals its account name), else a
+    local "RisiMe" calendar. Only calendars with `CALENDAR_ACCESS_LEVEL >= CAL_ACCESS_CONTRIBUTOR` (500) are
+    targets; holiday, birthday and other read-only calendars never are.
+  - **Insert:** `CALENDAR_ID`, `DTSTART`, `DTEND` (all-day: UTC midnights), `EVENT_TIMEZONE` (the device zone;
+    `UTC` for all-day), `TITLE`. Then **read the row back by its id** and check calendar, start, end and title.
+    Then `ContentResolver.requestSync` for that account (expedited), so the event reaches Google.
+  - `result`: `{"event_id": str, "verified": true}` only when the read-back matched. Otherwise
+    `{"status": "error", "code": …}`: `no_permission`, `read_only_calendar` (no writable target),
+    `insert_failed` (the provider returned no row), `verify_failed` (the read-back didn't match or found
+    nothing), plus `"detail": str` (≤ 200 chars, the exception's class/message; no titles).
+  - **Honesty (hard rule, server):** Risi says an event was added **only** for a result with `event_id` **and**
+    `verified: true`. A result from an older phone without `verified` reads "Your phone reported the event as
+    added, but couldn't confirm it. Please check your calendar." Any error code is said exactly: "I couldn't add
+    it: <calendar access is off | your calendars are read-only | the phone's calendar refused it | the event
+    wasn't there when I checked>". The model's text is never used to claim a write. The same rule holds for every
+    write tool (`set_reminder`, `risi_calendar_add`): "done" only on a successful tool result.
+  - **The event card:** the success post carries `"added_event": {"event_id": str}`. The asker's phone shows a
+    card from its own provider row: title, day and time, calendar name, and an **Open in Calendar** button (an
+    ACTION_VIEW intent for the event). Without the row: "This event is no longer on this phone".
+    Other devices show the body text.
 
 ### 25.4 The bubble on the wire
 **Signal `risi_progress`** (§2.3 `signal`; ephemeral, never stored, ignored by old apps;
@@ -6151,6 +6173,15 @@ most **16 KiB** (`risi_tool_result_calendar_check.json`, `risi_tool_result_calen
   `{"type": "link", "url", "title"}` (`https` only);
   clients show unknown types as nothing;
 - `next_steps: [str]` (at most 3; the app may show them as chips that pre-fill the composer);
+  **v1.32:** a chip never pre-fills the composer and never sends text other than as the user's own Risi
+  request. The answer adds **`next_actions`**, at most 3, each one of:
+  - `{"label": str, "action": "ask", "text": str}`: sends `text` as the user's Risi request;
+  - `{"label": str, "action": "open", "target": "settings.calendar" | "settings.risi_skills" | "settings.notifications" | "settings.calendar_permission" | "calendar.event"}`:
+    a deep link, or the permission dialog (`calendar.event` takes `"event_id"`).
+
+  A v1.32 app shows chips only from `next_actions` when the field is present, and drops an unknown `action`
+  or `target`. The server puts in `next_actions` only steps it can classify: instructions such as "Connect
+  your calendar in Settings" become `open` actions, never `ask`. `next_steps` stays for old apps.
 - **`local_search`**: `{"text": str, "since": ts | null}` | null: the app runs this search **over its
   own Private conversations on the phone** and shows a local card "Also in your Private chats"
   under the answer, **visible only on that phone**; nothing about it is sent anywhere (§25.5);
@@ -8877,7 +8908,8 @@ an ordinary §24.11 Risi post in the operator's **own active Risi chat** only (n
 
 ## Changelog
 - **v1.32** (2026-10-10): `calendar_check` phone source reason `sync_off` (§29.7); `answer.local_events` (the
-  user's own events listed by the phone, titles never sent; §29.7); an unconnected Google link is no longer named; Ops alerts
+  user's own events listed by the phone, titles never sent; §29.7); `calendar_add` target/insert/read-back/
+  `verified` and its error codes, the write honesty rule, `added_event` (§25.3); `next_actions` chips (§25.4); an unconnected Google link is no longer named; Ops alerts
   (§32): the Risi rule kind `ops_alert` and the loopback-only `POST /internal/ops-alert` (watchdog states, and
   `alert` / `resolved` from Alertmanager through the loopback bridge).
 - **v1.31** (2026-10-10): the Google Calendar link (§31; decision 074; folds the deferred
