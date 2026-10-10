@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.32 (Release 0.3)
+# RisiMe Wire Protocol — v1.33 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -2582,8 +2582,8 @@ in §16.14.
   "Can't connect the call", never hang (§16.11).
 - **No model calls,** so nothing for the learning log (§16.13).
 - **(v1.24) A call belongs to one conversation.** A 1:1 call on the `dm:` is the chat's **Private**
-  call (§16/§19, never transcribed); a call in a 1:1's **Official** tab is a §20 group call on its
-  `grp:` (§24.5). Agents are never rung and never join.
+  call (§16/§19, never transcribed); (v1.33) a call from a 1:1's **Official** tab is also this §16/§19
+  call on the `dm:` (§24.5). Agents are never rung and never join.
 
 ### 16.1 Capability and readiness
 - A v1.13 app advertises **`"calls"`** with its MLS device:
@@ -4164,8 +4164,8 @@ nothing new.
   derived from the group's MLS state** (§20.6). LiveKit and coturn forward ciphertext frames;
   LiveKit terminates only the hop-by-hop DTLS-SRTP.
 - **Group (`grp:`) conversations only.** DMs keep the P2P path of §16 and §19. (v1.24) This
-  includes Official groups, also a 1:1's Official tab (§24.5); a `call_id` belongs to one
-  conversation. Agent devices are never rung, never count for `group_calls_ready` and get no room
+  includes Official groups; (v1.33) not a 1:1's Official tab, which calls over §16/§19 on its `dm:`
+  (§24.5); a `call_id` belongs to one conversation. Agent devices are never rung, never count for `group_calls_ready` and get no room
   token (`403 invalid_device`); no transcription in stage 1 (v1.27: Risi may listen to Official
   calls as a visible participant, §27.7).
 - **Voice and video in one version.** `media: "audio" | "video"` as in §19; both ship behind one
@@ -5618,7 +5618,11 @@ Lazy for 1:1s and migrated chats; immediate for new groups.
   agent devices is filtered by the same query, so a Private message can't reach it even by a bug in
   the client or in the op machinery.
 - **Calls:** a `call_id` and its room belong to exactly one conversation. A Private 1:1 call is a
-  §16/§19 call on the `dm:`; an Official call is a §20 call on its `grp:`. Agent devices are never
+  §16/§19 call on the `dm:`. (v1.33) A call placed from a 1:1's **Official** tab is the same §16/§19
+  peer-to-peer call on that chat's `dm:` (`call:signal` with `to` = the peer; the call screen shows the
+  peer's name): same E2EE, never transcribed, Risi never rung and never in the call; its history line
+  lives in the `dm:`. An Official call of a **group** chat is a §20 call on its Official `grp:`. (Risi
+  listening to 1:1 Official calls is a later version, NEXT-PHASE D2.) Agent devices are never
   rung, never counted for `group_calls_ready`, and `POST /calls/rooms` refuses them
   (`403 invalid_device`); no transcription in stage 1 (v1.27: Official calls only, §27.7).
 - **History sharing:** agent devices are never §17 providers or requesters (§17.4).
@@ -5709,8 +5713,8 @@ Lazy for 1:1s and migrated chats; immediate for new groups.
 - **Notifications:** titled "Kamal · Official" or "Kamal · 🔒 Private". The push stays content-free
   (§8.2). A Risi message notifies only the users in its `risi.notify` (§24.11); for everyone else it
   is silent (no sound, no heads-up; the unread badge still counts it).
-- **Calls:** a Private 1:1 call is §16/§19 on the `dm:`; an Official call (1:1 or group) is §20
-  LiveKit on its `grp:`. No transcription in Private, ever; in Official only under §27.7 (v1.27).
+- **Calls:** (v1.33) a 1:1 call from either tab is §16/§19 on the `dm:` (the call screen shows the
+  peer's name); a group's Official call is §20 LiveKit on its Official `grp:`. No transcription in Private, ever; in Official only under §27.7 (v1.27).
 - **Encryption state** (decision 048) is per tab: each tab shows its own lock or "Not end-to-end
   encrypted yet: <reason>". Official is always e2ee (it is a `grp:`).
 - **Room (additive migration; hard rule 9):** `chat_tabs(conversation_id PK, chat_id, tab,
@@ -7162,7 +7166,8 @@ item_nudge:   {"item_id", "summary_id", "owner", "text", "due", "all_day", "over
   them.
 
 ### 27.7 Call transcription: Risi in Official calls
-**Where.** Only a §20 call on an **Official** `grp:` (`chat_kind` `dm` or `group`) whose chat has
+**Where.** Only a §20 call on an **Official** `grp:` (`chat_kind` `group`; v1.33: a 1:1's Official tab
+calls over §16/§19 and Risi does not listen, until D2) whose chat has
 Official `on`. **Never** a Private call (a §16/§19 call on a `dm:`, or a §20 call on a Private
 `grp:`; Risi has no leaf and no key there, and the server mints it no token), never a Risi chat.
 
@@ -8907,6 +8912,8 @@ an ordinary §24.11 Risi post in the operator's **own active Risi chat** only (n
 - Example: `envelope_risi_ops_alert.json`.
 
 ## Changelog
+- **v1.33** (2026-10-11): a call from a 1:1's Official tab is the §16/§19 peer-to-peer call on the
+  `dm:` (NEXT-PHASE D1; §16.0, §20.0, §24.5, §24.9); §20 and §27.7 apply to group Official calls only.
 - **v1.32** (2026-10-10): `calendar_check` phone source reason `sync_off` (§29.7); `answer.local_events` (the
   user's own events listed by the phone, titles never sent; §29.7); `calendar_add` target/insert/read-back/
   `verified` and its error codes, the write honesty rule, `added_event` (§25.3); `next_actions` chips (§25.4); an unconnected Google link is no longer named; Ops alerts
