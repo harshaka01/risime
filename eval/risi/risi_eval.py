@@ -746,7 +746,11 @@ def cmd_asr(a):
             try:
                 hyp, sec = transcribe(a.url, key, a.model, m["audio"], None if a.auto else m["lang"])
             except Exception as e:  # noqa: BLE001
-                hyp, sec = f"<error {e}>", 0
+                fh.write(json.dumps({"id": m["id"], "lang": m["lang"], "error": str(e)}) + "\n")
+                tot.setdefault("_errors", {}).setdefault(m["lang"], 0)
+                tot["_errors"][m["lang"]] += 1
+                print(f"[{i}/{len(man)}] {m['id']} ERROR {e}", flush=True)
+                continue
             ref_n, hyp_n = norm_text(m["text"]), norm_text(hyp)
             we = edit(ref_n.split(), hyp_n.split())
             ce = edit(ref_n.replace(" ", ""), hyp_n.replace(" ", ""))
@@ -768,7 +772,8 @@ def cmd_asr(a):
     summ = {lang: {"n": t["n"], "wer": round(t["w_err"] / max(1, t["w"]), 3),
                    "cer": round(t["c_err"] / max(1, t["c"]), 3),
                    "rtf": round(t["sec"] / t["audio_s"], 3) if t["audio_s"] else None,
-                   "script": t["script"]} for lang, t in tot.items()}
+                   "script": t["script"], "errors": tot.get("_errors", {}).get(lang, 0)}
+            for lang, t in tot.items() if lang != "_errors"}
     json.dump({"label": a.label, "model": a.model, "manifest": a.manifest, "summary": summ},
               open(os.path.join(RES, f"asr-{a.label}.score.json"), "w"), indent=1)
     print(json.dumps(summ, ensure_ascii=False))

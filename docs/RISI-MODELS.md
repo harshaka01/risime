@@ -36,12 +36,171 @@ Rerun everything with `scripts/risi-eval` (see "How to rerun").
      risi-l1 today.
 
 ### LLMs: the eval set (140 items) against Risi's real prompts
-<!-- LLM-TABLE -->
+Each run ends in one of two states:
+- **Done**: scored, and judged blind A/B by Claude subagents (see the Method section).
+- **Blocked**: no memory window opened. A run is blocked when MemAvailable never reached the
+  share + 7 GB overhead + 10 GB headroom while no gate was running.
+
+| Model | Status | Peak memory GB | tok/s | TTFT s | JSON valid | Tool calls ok (as served / tool first) | False action claims (as served / tool first) | Summary + extract + ask ok | Other hallucinations | si / ta script ok | Blind A/B vs risi-l1, all 140 (W-T-L, mean judge score 1–5) | Blind A/B, tool-first turns (80) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **risi-l1** Qwen3.6-35B-A3B-FP8 (live) | done (read-only) | 47.4 resident | **50.9** | 0.23 | 100% | 8% / **68%** | 19 / **0** | 93% | 3 | 78% / 67% | baseline | baseline |
+| gemma-4-12B-it QAT w4a16 | done | 20.2 | 24.9 | 0.12 | 99% | 67% / 68% | 0 / 0 | 95% | 3 | 83% / 90% | **80-32-28** (4.06 vs 2.88). Turns 55-8-17; summary/extract/ask 25-24-11 | 18-35-**27** (3.58 vs 3.77): risi-l1 better |
+| gemma-4-12B-it FP8 | partial: 78/140, then killed by the 6 GB memory floor; a retry was killed while loading | 27.3 | 16.1 | 0.10 | (54%, errors) | (35%) / – | 4 / – | 97% of answered | 2 | 86% / 86% | not judged | – |
+| gemma-4-26B-A4B AWQ 4-bit | **blocked** (needs 37 GB) | – | – | – | – | – | – | – | – | – | – | – |
+| Qwen3.8-27B NVFP4 | **blocked** (needs 42 GB) | – | – | – | – | – | – | – | – | – | – | – |
+| gemma-4-26B-A4B FP8 | **blocked** (needs 49 GB) | – | – | – | – | – | – | – | – | – | – | – |
+| Qwen3.8-27B FP8 | **blocked** (needs 51 GB) | – | – | – | – | – | – | – | – | – | – | – |
+| gemma-4-31B FP8 | **blocked** (needs 54 GB) | – | – | – | – | – | – | – | – | – | – | – |
+
+How to read the table:
+- **MemAvailable seen all day** (2026-10-10, 02:00–14:20 UTC) was 18–38 GB without a candidate.
+  Release gates (nightly.48 ×3, several `ui-entry-test` runs) took most of the day.
+- **Peak memory** is the drop in MemAvailable while the candidate was loaded. nvidia-smi
+  per-process figures are in `results/gpu-mem.tsv`.
+- **Speed** is single-stream with guided JSON. risi-l1 runs with CUDA graphs at 0.34 share; the
+  12B models are dense, so they are slower than the 3B-active MoE.
+- **Judge:** blind A/B by Claude (Opus 5.5) subagents with `eval/risi/JUDGE.md`. A/B was shuffled
+  per item and the key was never shown to the judges. Verdicts and keys are in
+  `results/pairs/`.
+
+**What the judges saw:**
+- **risi-l1 as served:**
+  - It answers `final` and says "I've set it" for alarms, reminders and messages, so nothing
+    happens.
+  - It writes **English summaries for Sinhala and Tamil chats**, e.g. si-SU1, ta-SU1/2/3/6.
+  - On F03 it mis-converts the UTC busy block.
+- **gemma-12B-QAT:**
+  - It calls tools even with the sorted-key schema, keeps Sinhala and Tamil in native script
+    more often, and ignored the SU5 injection, which risi-l1 echoed in Sinhala.
+  - But it often leaves times unresolved ("Friday 3pm"), loops on a few Tamil items (repeated
+    list lines), stumbles on Singlish ("Badada" resolved to today), and is half as fast.
+- **Shared failures:**
+  - neither asks a question on "remind me at 6" (both guess 6 pm);
+  - both miss the weekday repeat on T08;
+  - both say "free all afternoon" despite the 14:00–15:00 block on some F03 items.
 
 ### ASR (50 Sinhala clips from SPEAK-ASR/youtube-sinhala-asr test, 50 Tamil clips from FLEURS ta_in test)
-<!-- ASR-TABLE -->
+All transcriptions used a language hint. Text was NFC-normalised, lower-cased, and stripped of
+punctuation and ZWJ.
 
-<!-- RECOMMENDATION -->
+| ASR model | Sinhala WER / CER | Tamil WER / CER | Real-time factor (si / ta) | Peak memory GB | Runtime |
+|---|---|---|---|---|---|
+| faster-whisper large-v3 (**live**, :8200) | 107.9% / 92.1% | 57.9% / 23.4% | 3.24 / 0.83 | 6.9 resident | CTranslate2 FP16 |
+| faster-whisper large-v3-turbo | 124.5% / 97.2% (19 clips in the wrong script) | 81.1% / 37.8% | 0.49 / 0.12 | 3.1 | CTranslate2 FP16 |
+| **SinhaSpeech/whisper-small-sinhala** | **14.5% / 5.7%** | – | 0.05 | 9.4 (vLLM share 6) | vLLM Whisper |
+| kasunw/whisper-large-v3-sinhala | 62.3% / 37.6% | – | 0.23 | 11.3 | vLLM Whisper |
+| **lemuralabs/tamil-asr-qwen3** | – | **35.8% / 19.2%**, partial: 17/50 clips before a release gate started (live whisper on the same 17: 64.9% / 30.6%) | 0.09 | 8.6 | vLLM Qwen3-ASR |
+
+Caveats:
+- **whisper-small-sinhala:** its training pool (SinhaSpeech/sinhala-asr-data) includes YouTube
+  speech, so some overlap with the SPEAK-ASR YouTube test can't be ruled out. Confirm it on
+  Harsha's 20 recordings (`eval/risi/speech/`).
+- **Tamil:** FLEURS is read speech. Phone and call audio will be harder.
+
+### Recommendation
+**LLM: keep risi-l1 (Qwen3.6-35B-A3B-FP8), and ship the schema-order fix first (server role).**
+- With `tool` first it gets 68% correct tool calls, 0 false claims and 51 tok/s.
+- It beats the only fully tested candidate, gemma-4-12B QAT, in the blind tool-turn comparison
+  (27-35-18), at twice the speed.
+- Its real weakness is **language**: 22–33% of its Sinhala/Tamil answers and summaries come back
+  in English. The QAT 12B does better there (83/90% native script; wins summary/extract/ask
+  25-24-11). Two ways to fix it:
+  - a prompt fix: "write in the chat's script: Sinhala → සිංහල, Tamil → தமிழ்";
+  - later, per-task routing of `summarise`/`discussion_summarise` for si/ta chats to a Gemma-4
+    model, but only after that model wins the same gate.
+- The newer and bigger candidates are downloaded and verified, but **untested: they don't fit
+  beside risi-l1 under the 10 GB headroom rule** today. They are Qwen3.8-27B (FP8/NVFP4) and
+  Gemma-4 26B-A4B (FP8/AWQ) / 31B. No recommendation for or against them yet.
+
+**Sinhala ASR: SinhaSpeech/whisper-small-sinhala.**
+- 14.5% WER / 5.7% CER, against 108% for the live large-v3.
+- Small (0.24B) and fast (RTF 0.05).
+- Confirm it on Harsha's recordings first (possible data overlap).
+
+**Tamil ASR: lemuralabs/tamil-asr-qwen3.**
+- About half the live whisper's WER on the same clips (35.8% vs 64.9%; 17 clips, full 50-clip run
+  pending).
+- Keep large-v3 as the Tamil fallback until the full run confirms it.
+
+### Do they fit together beside RisiMe on the GB10?
+Unified memory is 121.6 GB. Measured 2026-10-10:
+- nvidia-smi per process;
+- `docker stats`;
+- `systemctl --user show risime -p MemoryCurrent`.
+
+| Component | GB |
+|---|---|
+| risi-l1 vLLM (0.34 share + CUDA) | 47.4 |
+| Cassandra | 6.8 |
+| Postgres | 0.3 |
+| Monitoring stack (Prometheus, Grafana, Loki, Alloy, Alertmanager, exporters, Uptime Kuma, blackbox) | ~0.7 |
+| RisiMe pilot (`risime.service`) | 0.1 |
+| LiveKit + coturn | <0.1 |
+| dockerd, kernel slab/page tables, OS | ~4 |
+| **Base without speech** | **~59** |
+| whisper-small-sinhala (vLLM, as measured) | 9.4 (likely ~2 as CTranslate2, unmeasured) |
+| tamil-asr-qwen3 (vLLM, as measured) | 8.6 |
+| **Proposed resident set** (the two new ASR models replace large-v3's 6.9) | **~77** |
+| Release gates: 3 Redroid phones + Gradle/Kotlin daemons, measured as the MemAvailable drop during gates | 20–30 |
+
+**Verdict:**
+- **The proposed set fits.** It is about 77 GB resident, leaving about 44 GB, which still covers
+  a release gate (20–30 GB) with ≥10 GB to spare.
+- **Adding a second LLM does not fit while gates run.** gemma-12B-QAT at 20 GB would make it
+  ~97 GB, so 97 + 25 is more than 121.6. The same goes for any of the 27–31B models.
+- **A bigger LLM would have to replace risi-l1, not sit beside it.** That needs a switch window
+  and Harsha's yes.
+
+### Needs Harsha
+1. **Approve the schema-order fix** (the server role implements it): `tool` first in the
+   `risi_next_action` schema. It's the biggest quality gain found here: 8% → 68% correct tool
+   calls, 19 → 0 false "done" claims on the live model.
+2. **A test window for the 27–31B candidates.** They need 42–54 GB MemAvailable, i.e. no
+   release/UI gates and the Gradle daemons stopped. Optionally, also stop the live whisper,
+   which nothing uses yet (+6.9 GB). Never stop risi-l1 without a yes. Then run
+   `RISI_EVAL_WAIT=1 scripts/risi-eval chain gemma4-26b-a4b-awq qwen38-27b-nvfp4 gemma4-26b-a4b-fp8 qwen38-27b-fp8 gemma4-31b-fp8`
+   and `LANGS=ta scripts/risi-eval asr tamil-asr-qwen3` (the full Tamil run).
+3. **Recordings:** 20 Sinhala + 20 Tamil clips per `eval/risi/speech/README.md`.
+4. **Review the Sinhala/Tamil wording** (items marked `review` in `eval/risi/*.jsonl`):
+   - si-T04 (හවස 3), si-T17 (අවන්හල), si-F02, si-SU2;
+   - ta-T05, ta-T13, ta-F02, ta-SU6;
+   - speech si line 15, ta line 11.
+5. **Gated or skipped:**
+   - ai4bharat/indic-conformer-600m (gated);
+   - CohereLabs tiny-aya (gated, non-commercial);
+   - Common Voice (left HF);
+   - FLEURS has no Sinhala;
+   - Nerdstorm/Qwen3-ASR-0.6B-Sinhala (MLX/OpenVINO only; needs an FP16 export to test).
+
+### Safety record (2026-10-10)
+- **risi-l1 (risime-llm-vllm-1) was never touched:** running since 10-08, 0 restarts. It only
+  served read-only eval requests (sequential, one at a time).
+- **Every live probe passed** (risi-l1 `/health` + a completion + pilot `/health`) before, every
+  60 s during, and after each candidate.
+- **The memory floor worked:** it killed gemma-4-12B-FP8 twice, at MemAvailable 5.9 GB and
+  5.6 GB, before risi-l1 was affected. The measured overhead then went into the budget.
+- **Every `scripts/risi-canary` run passed** (`_eval` instance; at least 4 runs, 04:22–10:50 UTC).
+  - It ran before and after the candidates.
+  - The run *during* each candidate was skipped every time: with a candidate loaded,
+    MemAvailable was below the 18 GB the canary's Gradle + server need. The 60-s live probe
+    covered those windows. This is a deviation from the "during" rule, recorded here.
+- **Gates:** candidates waited for every `nightly-release` / `ui-entry-test`, and each one
+  yielded (was killed) the moment a gate started. That's why the Tamil ASR run is partial.
+- **The pilot `/health` watch** (every 30 s, pausing while it takes > 1 s) has been active since
+  08:45 UTC. It never triggered.
+- **Weights are all kept** in `~/risime-eval-models` (~158 GB), verified against HF
+  (`docs/status/downloads.md`). No downloads after Harsha's stop.
+
+### How to rerun
+```
+scripts/risi-eval dump && scripts/risi-eval build   # Risi's real prompts -> eval set
+scripts/risi-eval baseline                          # live risi-l1, read-only
+scripts/risi-eval candidate <name>                  # eval/risi/candidates.json; RISI_EVAL_WAIT=1 to wait for gates/memory
+scripts/risi-eval asr live | asr <name>             # ASR (LANGS=si|ta)
+python3 -I eval/risi/risi_eval.py pairs risi-l1 <name>   # blind pairs, then judge with eval/risi/JUDGE.md
+python3 -I eval/risi/risi_eval.py unblind risi-l1 <name>
+scripts/risi-eval report                            # eval/risi/results/REPORT.md
+```
 
 ## 1. Hugging Face survey (checked 2026-10-10 against the public HF API, no token)
 Notes on the numbers:

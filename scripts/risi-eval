@@ -7,7 +7,7 @@
 #   scripts/risi-eval dump                  # re-dump Risi's real prompts/schemas -> eval/risi/prompts.json
 #   scripts/risi-eval probe                 # live risi-l1 /health + 1-token completion + pilot /health
 #   scripts/risi-eval baseline              # the eval set against risi-l1 (label risi-l1)
-#   scripts/risi-eval fetch <name>          # download a candidate (eval/risi/candidates.json) to ~/risime-eval-models
+#   scripts/risi-eval fetch <name>          # download a candidate to ~/risime-eval-models (rule 10: needs RISI_EVAL_DOWNLOAD_APPROVED)
 #   scripts/risi-eval candidate <name>      # launch on 127.0.0.1:8101, eval, stop + remove (see safety below)
 #   scripts/risi-eval asr-data              # FLEURS ta_in + SPEAK-ASR youtube-sinhala test subsets -> ~/risime-eval-data
 #   scripts/risi-eval asr <name>|live       # ASR WER/CER (live = the running whisper on :8200, read-only)
@@ -107,6 +107,9 @@ case "$cmd" in
   fetch)
     name=$1; kind=${2:-llm}; repo=$(cand "$kind" "$name" repo)
     [ -n "$repo" ] || { echo "unknown $kind candidate $name"; exit 1; }
+    # CLAUDE.md rule 10: a download over 2 GB needs Harsha's OK, runs 22:00-06:00 Sri Lanka time
+    # (16:30-00:30 UTC), rate-limited, logged in docs/status/downloads.md.
+    [ -n "${RISI_EVAL_DOWNLOAD_APPROVED:-}" ] || { echo "rule 10: downloads need Harsha's OK (set RISI_EVAL_DOWNLOAD_APPROVED=<who/when> inside the night window, rate-limited, and log it in docs/status/downloads.md)"; exit 2; }
     docker run --rm --name "risi-eval-fetch-$name" -v "$MODELS:/out" -v "$EV/hf_fetch.py:/f.py:ro" \
       --entrypoint python3 "$IMG" /f.py "$repo" "$name"
     du -sh "$MODELS/$name" ;;

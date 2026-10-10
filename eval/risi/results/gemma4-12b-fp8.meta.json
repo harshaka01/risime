@@ -1,0 +1,9 @@
+{
+ "name": "gemma4-12b-fp8",
+ "repo": "RedHatAI/gemma-4-12B-it-FP8-Dynamic",
+ "mem_avail_before_gb": 33.2,
+ "mem_avail_min_gb": 5.9,
+ "peak_mem_gb": 27.3,
+ "load_s": 252,
+ "gpu_mem_util_gb": 20.0
+}

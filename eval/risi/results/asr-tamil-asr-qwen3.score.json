@@ -1,0 +1,9 @@
+{
+ "label": "tamil-asr-qwen3 (partial: 17/50 clips, run yielded to a release gate)",
+ "model": "tamil-asr-qwen3",
+ "manifest": "/home/harsha/risime-eval-data/manifest.jsonl",
+ "summary": {
+  "ta": {"n": 17, "wer": 0.358, "cer": 0.192, "rtf": 0.09, "errors": 33,
+         "same_17_clips_whisper_large_v3_live": {"wer": 0.649, "cer": 0.306}}
+ }
+}
