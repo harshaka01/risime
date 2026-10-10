@@ -78,6 +78,6 @@ fun DmChatInfoDialog(name: String, encrypted: Boolean, notEncryptedText: String?
         onDismissRequest = onDismiss,
         title = { Text(name) },
         text = { E2eeInfoLine(encrypted, notEncryptedText) },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }

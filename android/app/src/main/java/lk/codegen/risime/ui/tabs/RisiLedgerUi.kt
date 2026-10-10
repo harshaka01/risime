@@ -49,10 +49,10 @@ private fun ItemRows(items: List<LedgerItemView>, mine: Boolean, expired: Boolea
             if (line.isNotEmpty()) Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_item_state"))
             if (buttons.isNotEmpty()) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    if (RisiLedger.CONFIRM in buttons) FilledTonalButton(onClick = { ctx.host.actItem(item.itemId, RisiLedger.CONFIRM) }, modifier = Modifier.testTag("risi_item_confirm")) { Text("✓") }
-                    if (RisiLedger.DECLINE in buttons) OutlinedButton(onClick = { ctx.host.actItem(item.itemId, RisiLedger.DECLINE) }, modifier = Modifier.testTag("risi_item_decline")) { Text("✗") }
-                    if (RisiLedger.EDIT in buttons) OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_item_edit")) { Text("✎") }
-                    if (RisiLedger.DONE in buttons) FilledTonalButton(onClick = { ctx.host.actItem(item.itemId, RisiLedger.DONE) }, modifier = Modifier.testTag("risi_item_done")) { Text("Done") }
+                    if (RisiLedger.CONFIRM in buttons) FilledTonalButton(onClick = { ctx.host.actItem(item.itemId, RisiLedger.CONFIRM) }, modifier = Modifier.testTag("risi_item_confirm")) { Text("✓", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                    if (RisiLedger.DECLINE in buttons) OutlinedButton(onClick = { ctx.host.actItem(item.itemId, RisiLedger.DECLINE) }, modifier = Modifier.testTag("risi_item_decline")) { Text("✗", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                    if (RisiLedger.EDIT in buttons) OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_item_edit")) { Text("✎", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                    if (RisiLedger.DONE in buttons) FilledTonalButton(onClick = { ctx.host.actItem(item.itemId, RisiLedger.DONE) }, modifier = Modifier.testTag("risi_item_done")) { Text("Done", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 }
             }
         }
@@ -94,7 +94,7 @@ internal fun DiscussionSummaryCard(r: RisiMeta, ctx: RisiCardContext) {
             ItemRows(its, mine = false, expired = expired, ctx = ctx)
         }
         r.conversationId?.let { conv ->
-            TextButton(onClick = { ctx.host.openChat(conv, r.startedAt) }, modifier = Modifier.testTag("risi_open_chat")) { Text("Open chat") }
+            TextButton(onClick = { ctx.host.openChat(conv, r.startedAt) }, modifier = Modifier.testTag("risi_open_chat")) { Text("Open chat", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         }
     }
 }
@@ -109,7 +109,7 @@ internal fun DiscussionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContex
             Text(RisiLedger.cardCountLine(r.itemsCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_card_count"))
             val sid = r.summaryId
             if (sid != null && (ctx.risiChatReady || ctx.host.risiChatAvailable())) {
-                TextButton(onClick = { ctx.host.openRisiChat(sid) }, modifier = Modifier.testTag("risi_open_risi_chat")) { Text("Open Risi chat") }
+                TextButton(onClick = { ctx.host.openRisiChat(sid) }, modifier = Modifier.testTag("risi_open_risi_chat")) { Text("Open Risi chat", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
     }
@@ -130,12 +130,12 @@ internal fun ItemReminderCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCont
         val id = r.itemId
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), itemVerticalAlignment = Alignment.CenterVertically) {
             if (id != null) {
-                if (RisiItemDue.BUTTON_DONE in buttons) FilledTonalButton(onClick = { ctx.host.actItem(id, RisiLedger.DONE) }, modifier = Modifier.testTag("risi_reminder_done")) { Text("Done") }
-                if (RisiItemDue.BUTTON_NEW_DATE in buttons) OutlinedButton(onClick = { newDate = true }, modifier = Modifier.testTag("risi_reminder_new_date")) { Text("New date") }
-                if (RisiLedger.MARK_DONE in buttons) OutlinedButton(onClick = { ctx.host.actItem(id, RisiLedger.DONE) }, modifier = Modifier.testTag("risi_reminder_mark_done")) { Text("Mark done") }
+                if (RisiItemDue.BUTTON_DONE in buttons) FilledTonalButton(onClick = { ctx.host.actItem(id, RisiLedger.DONE) }, modifier = Modifier.testTag("risi_reminder_done")) { Text("Done", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if (RisiItemDue.BUTTON_NEW_DATE in buttons) OutlinedButton(onClick = { newDate = true }, modifier = Modifier.testTag("risi_reminder_new_date")) { Text("New date", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if (RisiLedger.MARK_DONE in buttons) OutlinedButton(onClick = { ctx.host.actItem(id, RisiLedger.DONE) }, modifier = Modifier.testTag("risi_reminder_mark_done")) { Text("Mark done", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
             summary?.conversationId?.let { conv ->
-                TextButton(onClick = { ctx.host.openChat(conv, summary.startedAt) }, modifier = Modifier.testTag("risi_reminder_open_chat")) { Text("Open chat") }
+                TextButton(onClick = { ctx.host.openChat(conv, summary.startedAt) }, modifier = Modifier.testTag("risi_reminder_open_chat")) { Text("Open chat", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
     }

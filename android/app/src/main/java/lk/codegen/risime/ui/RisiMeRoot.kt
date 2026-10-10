@@ -251,6 +251,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                 return@composable
             }
             lk.codegen.risime.ui.lock.LockGateDialog(gate)
+            val headerLock = chatLockControl(c, nav, conv, isLocked, gate)
             // A locked chat is FLAG_SECURE while open (normal chats never are: an entire-screen share shows them).
             lk.codegen.risime.ui.lock.SecureWindow(lk.codegen.risime.ui.lock.SecureScreen.LOCKED_CHAT, on = isLocked)
             // §25.2 the Risi chat (MLS says chat_kind "risi"): one conversation, Official styling, no tabs or
@@ -289,14 +290,14 @@ private fun MainNav(c: AppContainer, meId: String) {
                     if (lk.codegen.risime.net.isGroupConversation(conv)) {
                         lk.codegen.risime.ui.group.GroupChatScreen(
                             viewModel(key = conv) { lk.codegen.risime.ui.group.GroupChatViewModel(c, meId, conv) }, meId,
-                            onBack = { nav.popBackStack() }, onInfo = groupInfo, tabBar = tabBar,
+                            onBack = { nav.popBackStack() }, onInfo = groupInfo, tabBar = tabBar, lock = headerLock,
                         )
                     } else {
                         lk.codegen.risime.net.dmPeer(conv, meId)?.let { peer ->
                             ChatScreen(
                                 viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() }, tabBar = tabBar,
                                 // Chat info (WhatsApp): Lock chat, media; with tabs on also the Official switch (§24.4).
-                                onInfo = chatInfo,
+                                onInfo = chatInfo, lock = headerLock,
                             )
                         }
                     }
@@ -313,6 +314,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                         // Chat info is the chat's (the Private group's); a 1:1 Official has no member management (§24.1 dm_chat).
                         onInfo = if (dmChat) chatInfo else groupInfo,
                         tabBar = tabBar,
+                        lock = headerLock,
                         // A 1:1 Official: "Kumu · Risi", never "3 members" (its members are the two of you and Risi).
                         titleOverride = peerName,
                         titleSuffix = if (dmChat) lk.codegen.risime.ui.tabs.OFFICIAL_DM_TITLE_SUFFIX else null,

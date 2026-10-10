@@ -90,7 +90,7 @@ fun MigrationScreen(authUi: AuthUi) {
             textAlign = TextAlign.Center,
         )
         notice?.let { Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) }
-        Button(onClick = authUi::finishMigration, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Continue") }
+        Button(onClick = authUi::finishMigration, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Continue", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         TextButton(onClick = authUi::signOutLocked) { Text(SIGN_OUT_KEEPS_CHATS) }
     }
 }
@@ -246,7 +246,7 @@ fun SignupContent(
         OutlinedTextField(
             value = state.displayName,
             onValueChange = { onChange(state.copy(displayName = it.take(64), error = null)) },
-            label = { Text("Your name") },
+            label = { Text("Your name", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             singleLine = true,
             enabled = !state.busy,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Next),
@@ -256,7 +256,7 @@ fun SignupContent(
             OutlinedTextField(
                 value = state.countryCode,
                 onValueChange = { v -> onChange(state.copy(countryCode = v.filter { it == '+' || it.isDigit() }.take(5), phoneError = null)) },
-                label = { Text("Code") },
+                label = { Text("Code", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 singleLine = true,
                 enabled = !state.busy,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Next),
@@ -265,7 +265,7 @@ fun SignupContent(
             OutlinedTextField(
                 value = state.number,
                 onValueChange = { onChange(state.copy(number = it.take(20), phoneError = null)) },
-                label = { Text("Mobile number") },
+                label = { Text("Mobile number", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 singleLine = true,
                 enabled = !state.busy,
                 isError = state.phoneError != null,

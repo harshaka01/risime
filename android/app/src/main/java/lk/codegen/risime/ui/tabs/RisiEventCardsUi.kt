@@ -231,15 +231,15 @@ internal fun RisiEventCard(row: MessageEntity, card: RisiCalendarCard, ctx: Risi
         }
         note?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("risi_event_note")) }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            if ("accept" in answer) FilledTonalButton(onClick = { run { port!!.respond(v.eventId, "accept", v.version, v.start, v.end) } }, modifier = Modifier.testTag("risi_event_accept")) { Text("Accept") }
-            if ("decline" in answer) OutlinedButton(onClick = { run { port!!.respond(v.eventId, "decline", v.version, v.start, v.end) } }, modifier = Modifier.testTag("risi_event_decline")) { Text("Decline") }
-            if ("suggest" in answer) OutlinedButton(onClick = { suggesting = true }, modifier = Modifier.testTag("risi_event_suggest")) { Text("Suggest another time") }
+            if ("accept" in answer) FilledTonalButton(onClick = { run { port!!.respond(v.eventId, "accept", v.version, v.start, v.end) } }, modifier = Modifier.testTag("risi_event_accept")) { Text("Accept", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+            if ("decline" in answer) OutlinedButton(onClick = { run { port!!.respond(v.eventId, "decline", v.version, v.start, v.end) } }, modifier = Modifier.testTag("risi_event_decline")) { Text("Decline", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+            if ("suggest" in answer) OutlinedButton(onClick = { suggesting = true }, modifier = Modifier.testTag("risi_event_suggest")) { Text("Suggest another time", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             if (added && port != null && !ctx.readOnly) {
                 val b = RisiEventCards.addedButtons(card, v, ctx.host.me)
-                if ("open" in b) OutlinedButton(onClick = { port.open(v.eventId) }, modifier = Modifier.testTag("risi_event_open")) { Text("Open") }
+                if ("open" in b) OutlinedButton(onClick = { port.open(v.eventId) }, modifier = Modifier.testTag("risi_event_open")) { Text("Open", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 // [Edit] opens the event in the Calendar tab (title, time, reminder).
-                if ("edit" in b) OutlinedButton(onClick = { port.open(v.eventId) }, enabled = !busy, modifier = Modifier.testTag("risi_event_edit")) { Text("Edit") }
-                if ("delete" in b) OutlinedButton(onClick = { askDelete = true }, enabled = !busy, modifier = Modifier.testTag("risi_event_delete")) { Text("Delete") }
+                if ("edit" in b) OutlinedButton(onClick = { port.open(v.eventId) }, enabled = !busy, modifier = Modifier.testTag("risi_event_edit")) { Text("Edit", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if ("delete" in b) OutlinedButton(onClick = { askDelete = true }, enabled = !busy, modifier = Modifier.testTag("risi_event_delete")) { Text("Delete", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             } else if (!added && answer.isEmpty() && port != null && !ctx.readOnly) {
                 // Official: everyone else sees the participants line and [Open in Calendar].
                 OutlinedButton(onClick = { port.open(v.eventId) }, modifier = Modifier.testTag("risi_event_open")) { Text(if (invite) "Open" else "Open in Calendar") }
@@ -256,10 +256,10 @@ internal fun RisiEventCard(row: MessageEntity, card: RisiCalendarCard, ctx: Risi
     if (askDelete) {
         AlertDialog(
             onDismissRequest = { askDelete = false },
-            title = { Text("Delete event?") },
+            title = { Text("Delete event?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = { Text("It is cancelled for everyone invited.") },
-            confirmButton = { TextButton(onClick = { askDelete = false; run { port!!.delete(v.eventId) } }, modifier = Modifier.testTag("risi_event_delete_confirm")) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { askDelete = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { askDelete = false; run { port!!.delete(v.eventId) } }, modifier = Modifier.testTag("risi_event_delete_confirm")) { Text("Delete", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { askDelete = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
 }
@@ -312,7 +312,7 @@ internal fun RisiCalendarReminderCard(card: RisiCalendarCard, ctx: RisiCardConte
         val port = ctx.host.risiCalendar
         val id = card.eventId
         if (port != null && id != null && "open" in card.buttons.ifEmpty { listOf("open") }) {
-            OutlinedButton(onClick = { port.open(id) }, modifier = Modifier.testTag("risi_event_open")) { Text("Open") }
+            OutlinedButton(onClick = { port.open(id) }, modifier = Modifier.testTag("risi_event_open")) { Text("Open", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         }
     }
 }
@@ -355,13 +355,13 @@ internal fun RisiCalendarAddCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardC
             RisiToolCards.ConfirmState.CANCELLED -> Text("Cancelled", modifier = Modifier.testTag("risi_confirm_state"))
             RisiToolCards.ConfirmState.EXPIRED -> Text("Expired", modifier = Modifier.testTag("risi_confirm_state"))
             RisiToolCards.ConfirmState.CONFIRMED -> Text("Adding to your Risi Calendar…", modifier = Modifier.testTag("risi_confirm_state"))
-            RisiToolCards.ConfirmState.OPEN -> if (wid != null && wid.lowercase() in ctx.awaiting) Text("Sending…")
+            RisiToolCards.ConfirmState.OPEN -> if (wid != null && wid.lowercase() in ctx.awaiting) Text("Sending…", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
         }
         if (buttons.isNotEmpty() && wid != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if ("add" in buttons) FilledTonalButton(onClick = { ctx.host.act(wid, "confirm_write") }, modifier = Modifier.testTag("risi_confirm_add")) { Text("Add") }
-                if ("edit" in buttons) OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_calendar_edit")) { Text("Edit") }
-                if ("cancel" in buttons) OutlinedButton(onClick = { ctx.host.act(wid, "cancel_write") }, modifier = Modifier.testTag("risi_confirm_cancel")) { Text("Cancel") }
+                if ("add" in buttons) FilledTonalButton(onClick = { ctx.host.act(wid, "confirm_write") }, modifier = Modifier.testTag("risi_confirm_add")) { Text("Add", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if ("edit" in buttons) OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_calendar_edit")) { Text("Edit", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if ("cancel" in buttons) OutlinedButton(onClick = { ctx.host.act(wid, "cancel_write") }, modifier = Modifier.testTag("risi_confirm_cancel")) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
     }
@@ -400,7 +400,7 @@ internal fun SuggestTimeDialog(date0: LocalDate, time0: LocalTime, durationMin: 
     var pickTime by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Suggest another time") },
+        title = { Text("Suggest another time", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         text = {
             Column(Modifier.testTag("risi_suggest_form"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -409,7 +409,7 @@ internal fun SuggestTimeDialog(date0: LocalDate, time0: LocalTime, durationMin: 
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(allDay, onCheckedChange = { allDay = it })
-                    Text("All day")
+                    Text("All day", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
                 if (!allDay) FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                     listOf(30, 60, 90, 120).forEach { m -> FilterChip(selected = duration == m, onClick = { duration = m }, label = { Text(if (m < 60) "$m min" else if (m % 60 == 0) "${m / 60} h" else "1 h 30 min") }) }
@@ -421,24 +421,24 @@ internal fun SuggestTimeDialog(date0: LocalDate, time0: LocalTime, durationMin: 
                 val s = if (allDay) date.atStartOfDay(zone) else date.atTime(time).atZone(zone)
                 val e = if (allDay) date.plusDays(1).atStartOfDay(zone) else s.plusMinutes(duration.toLong())
                 onPick(WIRE.format(s.toInstant()), WIRE.format(e.toInstant()), allDay)
-            }, modifier = Modifier.testTag("risi_suggest_send")) { Text("Suggest") }
+            }, modifier = Modifier.testTag("risi_suggest_send")) { Text("Suggest", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
     if (pickDate) {
         val st = rememberDatePickerState(initialSelectedDateMillis = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
         DatePickerDialog(
             onDismissRequest = { pickDate = false },
-            confirmButton = { TextButton(onClick = { st.selectedDateMillis?.let { date = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() }; pickDate = false }) { Text("OK") } },
-            dismissButton = { TextButton(onClick = { pickDate = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { st.selectedDateMillis?.let { date = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() }; pickDate = false }) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { pickDate = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         ) { DatePicker(st) }
     }
     if (pickTime) {
         val st = rememberTimePickerState(time.hour, time.minute, true)
         AlertDialog(
             onDismissRequest = { pickTime = false },
-            confirmButton = { TextButton(onClick = { time = LocalTime.of(st.hour, st.minute); pickTime = false }) { Text("OK") } },
-            dismissButton = { TextButton(onClick = { pickTime = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { time = LocalTime.of(st.hour, st.minute); pickTime = false }) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { pickTime = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
             text = { TimePicker(st) },
         )
     }

@@ -105,9 +105,9 @@ fun NoteItemRow(item: LedgerItemView, control: NoteItemControl, me: String, name
             if (line.isNotEmpty()) Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_note_item_meta"))
             if (control is NoteItemControl.Decide) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    FilledTonalButton(onClick = { actions.send(item.itemId, RisiLedger.CONFIRM, null, null, false) }, modifier = Modifier.testTag("risi_note_item_confirm")) { Text("✓") }
-                    OutlinedButton(onClick = { actions.send(item.itemId, RisiLedger.DECLINE, null, null, false) }, modifier = Modifier.testTag("risi_note_item_decline")) { Text("✗") }
-                    OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_note_item_edit")) { Text("✎") }
+                    FilledTonalButton(onClick = { actions.send(item.itemId, RisiLedger.CONFIRM, null, null, false) }, modifier = Modifier.testTag("risi_note_item_confirm")) { Text("✓", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                    OutlinedButton(onClick = { actions.send(item.itemId, RisiLedger.DECLINE, null, null, false) }, modifier = Modifier.testTag("risi_note_item_decline")) { Text("✗", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                    OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_note_item_edit")) { Text("✎", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 }
             }
         }
@@ -132,8 +132,8 @@ private fun MeetingRow(e: RisiNoteEvent, onAccept: (() -> Unit)?, onOpen: (() ->
         e.myStatus?.let { Text(statusWord(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         if (onAccept != null || onOpen != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if (onAccept != null) FilledTonalButton(onClick = onAccept, modifier = Modifier.testTag("risi_note_event_accept")) { Text("Accept") }
-                if (onOpen != null) OutlinedButton(onClick = onOpen, modifier = Modifier.testTag("risi_note_event_open")) { Text("Open") }
+                if (onAccept != null) FilledTonalButton(onClick = onAccept, modifier = Modifier.testTag("risi_note_event_accept")) { Text("Accept", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if (onOpen != null) OutlinedButton(onClick = onOpen, modifier = Modifier.testTag("risi_note_event_open")) { Text("Open", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
     }
@@ -181,7 +181,7 @@ fun NoteCardBody(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
             Text("Meetings", style = MaterialTheme.typography.titleSmall)
             note.events.forEach { Text("• " + RisiNotes.eventLine(it), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_note_event")) }
         }
-        TextButton(onClick = { ctx.host.openNote(note.noteId) }, modifier = Modifier.testTag("risi_note_open")) { Text("Open note") }
+        TextButton(onClick = { ctx.host.openNote(note.noteId) }, modifier = Modifier.testTag("risi_note_open")) { Text("Open note", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
     }
 }
 
@@ -242,7 +242,7 @@ fun NoteScreen(
                 if (canDelete && view != null) {
                     IconButton(onClick = { menu = true }, modifier = Modifier.testTag("risi_note_menu")) { Icon(Icons.Filled.MoreVert, "More") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(text = { Text("Delete from my notes") }, onClick = { menu = false; confirmDelete = true }, modifier = Modifier.testTag("risi_note_delete"))
+                        DropdownMenuItem(text = { Text("Delete from my notes", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { menu = false; confirmDelete = true }, modifier = Modifier.testTag("risi_note_delete"))
                     }
                 }
             })
@@ -279,7 +279,7 @@ fun NoteScreen(
                         }
                     }
                     if (onOpenChat != null && n.conversationId != null) {
-                        item { TextButton(onClick = { onOpenChat(n) }, modifier = Modifier.testTag("risi_note_open_chat")) { Text("Open chat") } }
+                        item { TextButton(onClick = { onOpenChat(n) }, modifier = Modifier.testTag("risi_note_open_chat")) { Text("Open chat", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } }
                     }
                     item {
                         HorizontalDivider(Modifier.padding(vertical = Spacing.sm))
@@ -292,10 +292,10 @@ fun NoteScreen(
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete this note?") },
+            title = { Text("Delete this note?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = { Text("It leaves your Notes list. Agreed items, promises and meetings stay; so does the card in your Risi chat.") },
-            confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }, modifier = Modifier.testTag("risi_note_delete_confirm")) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }, modifier = Modifier.testTag("risi_note_delete_confirm")) { Text("Delete", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
 }
@@ -321,7 +321,7 @@ fun NotesListScreen(
             RisiTopBar(title = RisiNotes.NOTES_TITLE, onBack = onBack, actions = {
                 IconButton(onClick = { menu = true }, modifier = Modifier.testTag("risi_notes_menu")) { Icon(Icons.Filled.MoreVert, "More") }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text("Delete all notes") }, onClick = { menu = false; onAskDeleteAll() }, enabled = !s.local, modifier = Modifier.testTag("risi_notes_delete_all"))
+                    DropdownMenuItem(text = { Text("Delete all notes", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { menu = false; onAskDeleteAll() }, enabled = !s.local, modifier = Modifier.testTag("risi_notes_delete_all"))
                 }
             })
         },
@@ -329,7 +329,7 @@ fun NotesListScreen(
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = Spacing.xl, vertical = Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
             OutlinedTextField(
-                value = s.query, onValueChange = onQuery, singleLine = true, placeholder = { Text("Search notes") },
+                value = s.query, onValueChange = onQuery, singleLine = true, placeholder = { Text("Search notes", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 modifier = Modifier.fillMaxWidth().testTag("risi_notes_search"),
             )
             Text(RisiNotes.INFO_LINE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_notes_info"))
@@ -340,7 +340,7 @@ fun NotesListScreen(
                 s.notes.isEmpty() && s.error == null -> Text(if (s.query.isBlank()) NOTES_EMPTY else NOTES_NO_MATCH, modifier = Modifier.testTag("risi_notes_empty"))
                 else -> LazyColumn(Modifier.weight(1f).testTag("risi_notes_list"), contentPadding = WindowInsets.navigationBars.asPaddingValues()) {
                     items(s.notes, key = { it.noteId }) { n -> NoteListRow(n, titleOf(n), onOpen, onShare, onDelete) }
-                    if (s.hasMore) item { TextButton(onClick = onMore, enabled = !s.loading, modifier = Modifier.fillMaxWidth().testTag("risi_notes_more")) { Text("More") } }
+                    if (s.hasMore) item { TextButton(onClick = onMore, enabled = !s.loading, modifier = Modifier.fillMaxWidth().testTag("risi_notes_more")) { Text("More", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } }
                 }
             }
         }
@@ -348,10 +348,10 @@ fun NotesListScreen(
     if (s.confirmAll) {
         AlertDialog(
             onDismissRequest = onCancelDeleteAll,
-            title = { Text("Delete all notes?") },
+            title = { Text("Delete all notes?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = { Text("Your Notes list becomes empty. Agreed items, promises and meetings stay; so do the cards in your Risi chat.") },
-            confirmButton = { TextButton(onClick = onConfirmDeleteAll, modifier = Modifier.testTag("risi_notes_delete_all_confirm")) { Text("Delete all") } },
-            dismissButton = { TextButton(onClick = onCancelDeleteAll) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = onConfirmDeleteAll, modifier = Modifier.testTag("risi_notes_delete_all_confirm")) { Text("Delete all", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = onCancelDeleteAll) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
 }
@@ -369,8 +369,8 @@ private fun NoteListRow(n: RisiNoteSummary, title: String, onOpen: (String) -> U
         }
         IconButton(onClick = { menu = true }, modifier = Modifier.testTag("risi_notes_row_menu")) { Icon(Icons.Filled.MoreVert, "More") }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("Share into a chat") }, onClick = { menu = false; onShare(n.noteId) }, modifier = Modifier.testTag("risi_notes_row_share"))
-            DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete(n.noteId) }, modifier = Modifier.testTag("risi_notes_row_delete"))
+            DropdownMenuItem(text = { Text("Share into a chat", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { menu = false; onShare(n.noteId) }, modifier = Modifier.testTag("risi_notes_row_share"))
+            DropdownMenuItem(text = { Text("Delete", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { menu = false; onDelete(n.noteId) }, modifier = Modifier.testTag("risi_notes_row_delete"))
         }
     }
     HorizontalDivider()
@@ -388,7 +388,7 @@ fun ShareChatPicker(share: ShareUi, chats: List<Pair<String, String>>, onPick: (
     if (share.text == null) return
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("Share into a chat") },
+        title = { Text("Share into a chat", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Text("It is sent as your own message.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -405,7 +405,7 @@ fun ShareChatPicker(share: ShareUi, chats: List<Pair<String, String>>, onPick: (
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 

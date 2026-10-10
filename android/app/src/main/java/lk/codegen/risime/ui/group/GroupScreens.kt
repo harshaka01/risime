@@ -128,6 +128,8 @@ fun GroupChatScreen(
     risi: lk.codegen.risime.ui.tabs.RisiHost? = null,
     /** §25.2 the user's Risi chat: every message is an `ask`, no attachments, calls, chip or Summarise/Report. */
     risiChat: Boolean = false,
+    /** v1.32 item 4: the ⋮ menu's "Lock chat" / "Unlock chat" (null: no item). */
+    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
 ) {
     val group by vm.group.collectAsStateWithLifecycle()
     val members by vm.members.collectAsStateWithLifecycle()
@@ -233,15 +235,14 @@ fun GroupChatScreen(
                         lk.codegen.risime.ui.chat.VideoHeaderButton(vm.groupCallBlockedText(encrypted == true, ready, video = true), toastOf) { cam -> vm.startGroupCall(video = true, camera = cam) }
                         lk.codegen.risime.ui.chat.CallHeaderButton(vm.groupCallBlockedText(encrypted == true, ready, video = false), toastOf) { vm.startGroupCall(video = false, camera = false) }
                     }
-                    lk.codegen.risime.ui.chat.E2eeHeaderLock(encrypted == true, onInfo)
                     lk.codegen.risime.ui.chat.ChatOverflowMenu(
-                        onClear = { clearAsk = false }, onDelete = { clearAsk = true },
+                        onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock.takeIf { !risiChat },
                         extra = { close ->
                             risi?.takeIf { !risiChat }?.let { h -> lk.codegen.risime.ui.tabs.RisiMenuItems(h, enabled = !readOnly, close = close, onSummarise = { summariseAsk = true }) }
                             // §30.6 Risi chat ⋮ → Notes (only on a Risi Notes device).
                             if (risiChat && notesActive && risi != null) {
                                 androidx.compose.material3.DropdownMenuItem(
-                                    text = { Text("Notes") }, onClick = { close(); risi.openNotes() },
+                                    text = { Text("Notes", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { close(); risi.openNotes() },
                                     modifier = Modifier.testTag("risi_chat_menu_notes"),
                                 )
                             }
@@ -558,7 +559,7 @@ private fun GroupBubble(
 @Composable
 fun GroupInfoScreen(vm: GroupInfoViewModel, onBack: () -> Unit, tabsItems: (androidx.compose.foundation.lazy.LazyListScope.() -> Unit)? = null) {
     val ui by vm.ui.collectAsStateWithLifecycle()
-    val pick = lk.codegen.risime.ui.common.rememberPhotoCropper("Move and scale", onCropped = vm::setPhoto, onError = vm::photoError)
+    val pick = lk.codegen.risime.ui.common.rememberPhotoCropper("Move and scale", onCropped = vm::setPhoto, onError = vm::photoError, hasPhoto = ui.hasPhoto, onRemove = vm::removePhoto)
     GroupInfoContent(
         ui, onBack = onBack, onAdd = vm::add, onRemove = vm::remove, onSetAdmin = vm::setRole, onRename = vm::rename,
         onLeave = vm::leave, onReset = vm::reset, onDismissError = vm::dismissError,
@@ -588,7 +589,6 @@ fun GroupInfoContent(
     /** §24.4/§24.9 (tabs on): the Official switch, its history, the Official members and both tabs' media. */
     tabsItems: (androidx.compose.foundation.lazy.LazyListScope.() -> Unit)? = null,
 ) {
-    var photoMenu by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
@@ -602,16 +602,12 @@ fun GroupInfoContent(
                 Column(Modifier.fillMaxWidth().padding(Spacing.lg), horizontalAlignment = Alignment.CenterHorizontally) {
                     Box {
                         Box(
-                            if (onSetPhoto != null) Modifier.clickable(onClickLabel = "Change group photo") { if (ui.hasPhoto) photoMenu = true else onSetPhoto() } else Modifier,
+                            if (onSetPhoto != null) Modifier.clickable(onClickLabel = "Change group photo") { onSetPhoto() } else Modifier,
                         ) { InitialsAvatar(ui.name, size = Sizes.avatarLarge, photoKey = ui.conversationId) }
-                        androidx.compose.material3.DropdownMenu(photoMenu, onDismissRequest = { photoMenu = false }) {
-                            androidx.compose.material3.DropdownMenuItem(text = { Text("Change photo") }, onClick = { photoMenu = false; onSetPhoto?.invoke() })
-                            androidx.compose.material3.DropdownMenuItem(text = { Text("Remove photo") }, onClick = { photoMenu = false; onRemovePhoto() })
-                        }
                     }
                     ui.photoBusy?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     Spacer(Modifier.heightIn(min = Spacing.sm))
-                    Text(ui.name, style = MaterialTheme.typography.headlineSmall)
+                    Text(ui.name, style = MaterialTheme.typography.headlineSmall, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     Text(
                         ui.stateLine ?: if (ui.memberCount == 1) "1 member" else "${ui.memberCount} members",
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -630,7 +626,7 @@ fun GroupInfoContent(
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (ui.iAmAdmin) TextButton(onClick = { renaming = true }) { Text("Rename") }
+                    if (ui.iAmAdmin) TextButton(onClick = { renaming = true }) { Text("Rename", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 }
             }
             ui.error?.let { e ->
@@ -638,7 +634,7 @@ fun GroupInfoContent(
                     Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.lg)) {
                         Row(Modifier.padding(Spacing.md), verticalAlignment = Alignment.CenterVertically) {
                             Text(e, Modifier.weight(1f), color = MaterialTheme.colorScheme.onErrorContainer)
-                            TextButton(onClick = onDismissError) { Text("OK") }
+                            TextButton(onClick = onDismissError) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                         }
                     }
                 }
@@ -646,7 +642,7 @@ fun GroupInfoContent(
             item { SectionHeader("Members", Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) }
             if (ui.iAmAdmin) {
                 item {
-                    TextButton(onClick = { adding = true }, modifier = Modifier.padding(horizontal = Spacing.sm).heightIn(min = Sizes.minTouch)) { Text("Add members") }
+                    TextButton(onClick = { adding = true }, modifier = Modifier.padding(horizontal = Spacing.sm).heightIn(min = Sizes.minTouch)) { Text("Add members", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 }
             }
             items(ui.members, key = { it.userId }) { m -> MemberRow(m, ui.iAmAdmin, onRemove, onSetAdmin) }
@@ -666,7 +662,7 @@ fun GroupInfoContent(
                 item {
                     // §12.12.3 (A6): held back while this phone is still being re-added (the server would refuse).
                     TextButton(onClick = { confirmReset = true }, enabled = !ui.resetBlocked, modifier = Modifier.padding(horizontal = Spacing.sm).heightIn(min = Sizes.minTouch)) {
-                        Text("Reset encryption")
+                        Text("Reset encryption", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -699,14 +695,14 @@ private fun MemberRow(m: MemberUi, iAmAdmin: Boolean, onRemove: (String) -> Unit
             InitialsAvatar(m.name, photoKey = m.userId)
             Spacer(Modifier.width(Spacing.md))
             Column(Modifier.weight(1f)) {
-                Text(if (m.me) "${m.name} (you)" else m.name, maxLines = 1)
+                Text(if (m.me) "${m.name} (you)" else m.name, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 when (m.state) {
                     GroupMember.STATE_PENDING_ADD -> Text("Adding…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     GroupMember.STATE_PENDING_REMOVE -> Text("Removing…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     else -> if (m.newPhone) Text("${m.name}'s new phone is being added", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            if (m.admin) AssistChip(onClick = {}, label = { Text("Admin") }, enabled = false)
+            if (m.admin) Text("Admin", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(
@@ -723,10 +719,10 @@ private fun RenameDialog(current: String, onRename: (String) -> Unit, onDismiss:
     var name by remember { mutableStateOf(current) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Group name") },
+        title = { Text("Group name", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         text = { OutlinedTextField(name, { name = it }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
-        confirmButton = { TextButton(onClick = { onRename(name); onDismiss() }, enabled = name.isNotBlank()) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = { onRename(name); onDismiss() }, enabled = name.isNotBlank()) { Text("Save", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 
@@ -736,15 +732,15 @@ private fun AddMembersDialog(candidates: List<PickFriend>, onAdd: (Set<String>) 
     var query by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add members") },
+        title = { Text("Add members", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         text = {
             Box(Modifier.heightIn(max = 420.dp)) {
                 FriendPicker(candidates, selected, query, { query = it }, { id -> selected = if (id in selected) selected - id else selected + id },
                     emptyText = "All your friends are already in this group.")
             }
         },
-        confirmButton = { TextButton(onClick = { onAdd(selected); onDismiss() }, enabled = selected.isNotEmpty()) { Text("Add") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = { onAdd(selected); onDismiss() }, enabled = selected.isNotEmpty()) { Text("Add", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 

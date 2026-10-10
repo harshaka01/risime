@@ -13,6 +13,11 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -52,21 +57,57 @@ import lk.codegen.risime.data.profile.AvatarEncoder
 import lk.codegen.risime.data.profile.CropSquare
 import lk.codegen.risime.ui.theme.Spacing
 
+/** v1.32 item 6: the photo sheet's rows (profile photo and group photo). */
+const val PHOTO_SHEET_TAKE = "Take photo"
+const val PHOTO_SHEET_GALLERY = "Gallery"
+const val PHOTO_SHEET_REMOVE = "Remove photo"
+
+/** The rows the sheet shows: Remove photo only when a photo is set. */
+fun photoSheetRows(hasPhoto: Boolean): List<String> = listOfNotNull(PHOTO_SHEET_TAKE, PHOTO_SHEET_GALLERY, PHOTO_SHEET_REMOVE.takeIf { hasPhoto })
+
+/** The bottom sheet: Take photo, Gallery, and Remove photo (only when [hasPhoto]). */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun PhotoSheet(hasPhoto: Boolean, onTake: () -> Unit, onGallery: () -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit) {
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.navigationBarsPadding().testTag("photo_sheet")) {
+            photoSheetRows(hasPhoto).forEach { label ->
+                Text(
+                    label, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    color = if (label == PHOTO_SHEET_REMOVE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                        .clickable { when (label) { PHOTO_SHEET_TAKE -> onTake(); PHOTO_SHEET_GALLERY -> onGallery(); else -> onRemove() } }
+                        .padding(horizontal = Spacing.lg, vertical = Spacing.md).testTag("photo_sheet_" + label.substringBefore(' ').lowercase()),
+                )
+            }
+        }
+    }
+}
+
 /**
- * §18.6: the system Photo Picker, then a square crop the user sees (pinch to zoom, drag to move,
- * a circle shows what peers will see). [onCropped] gets the picked bytes and the square; the
- * caller re-encodes them ([AvatarEncoder]) off the main thread. Returns the "pick" action.
+ * §18.6 + v1.32 item 6: the photo sheet (Take photo / Gallery / Remove photo), then a square crop the user
+ * sees (pinch to zoom, drag to move, a circle shows what peers will see). Take photo is
+ * `ActivityResultContracts.TakePicture` into our FileProvider cache; Gallery the Photo Picker. [onCropped] gets
+ * the picked bytes and the square; the caller re-encodes them ([AvatarEncoder]) off the main thread.
+ * Returns the "open the sheet" action.
  */
 @Composable
-fun rememberPhotoCropper(title: String, onCropped: (source: ByteArray, crop: CropSquare) -> Unit, onError: (String) -> Unit = {}): () -> Unit {
+fun rememberPhotoCropper(
+    title: String,
+    onCropped: (source: ByteArray, crop: CropSquare) -> Unit,
+    onError: (String) -> Unit = {},
+    hasPhoto: Boolean = false,
+    onRemove: (() -> Unit)? = null,
+): () -> Unit {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var picked by remember { mutableStateOf<Pair<ByteArray, ImageBitmap>?>(null) }
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) scope.launch {
+    var sheet by remember { mutableStateOf(false) }
+    fun show(read: () -> ByteArray?) {
+        scope.launch {
             val r = withContext(Dispatchers.IO) {
                 runCatching {
-                    val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@runCatching null
+                    val bytes = read() ?: return@runCatching null
                     if (bytes.size > AvatarEncoder.MAX_SOURCE_BYTES) return@runCatching null
                     val d = AndroidBitmapOps.decode(bytes, PREVIEW_SIDE) ?: return@runCatching null
                     val o = if (d.orientationApplied) 1 else ImageBytes.exifOrientation(bytes)
@@ -78,13 +119,33 @@ fun rememberPhotoCropper(title: String, onCropped: (source: ByteArray, crop: Cro
             if (r == null) onError("This photo format isn't supported on this phone") else picked = r
         }
     }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) show { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }
+    }
+    val shot = remember { java.io.File(java.io.File(ctx.cacheDir, "camera").also { it.mkdirs() }, "avatar.jpg") }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok) show { runCatching { shot.readBytes() }.getOrNull().also { shot.delete() } } else shot.delete()
+    }
+    if (sheet) {
+        PhotoSheet(
+            hasPhoto,
+            onTake = {
+                sheet = false
+                runCatching { camera.launch(androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", shot)) }
+                    .onFailure { onError("No camera app can take a photo on this phone") }
+            },
+            onGallery = { sheet = false; launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onRemove = { sheet = false; onRemove?.invoke() },
+            onDismiss = { sheet = false },
+        )
+    }
     picked?.let { (bytes, img) ->
         CropDialog(img, title, onCancel = { picked = null }, onUse = { crop ->
             picked = null
             onCropped(bytes, crop)
         })
     }
-    return { launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+    return { sheet = true }
 }
 
 private const val PREVIEW_SIDE = 1440
@@ -137,7 +198,7 @@ fun CropDialog(image: ImageBitmap, title: String, onCancel: () -> Unit, onUse: (
                         val s = (view / minOf(w, h)) * zoom
                         val o = off ?: Offset.Zero
                         onUse(CropSquare(left = (-o.x / s) / w, top = (-o.y / s) / h, side = (view / s) / minOf(w, h)))
-                    }) { Text("Use photo") }
+                    }) { Text("Use photo", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 }
             }
         }

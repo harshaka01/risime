@@ -98,14 +98,26 @@ class ChatEntryPointsTest {
         assertEquals(1, clears)
     }
 
-    @Test fun noChatScreenPassesALockToItsMenu() {
-        // The ⋮ menu takes no lock any more; the chat screens and the intro screen don't carry one either.
+    @Test fun theChatMenuHasLockAndUnlockAndTheHeaderHasNoLockIcon() {
+        // v1.32 UI batch item 4: the lock action moved from the header into the ⋮ menu ("Lock chat" / "Unlock chat").
         val root = java.io.File("src/main/java/lk/codegen/risime/ui")
-        for (f in listOf("chat/ChatScreen.kt", "group/GroupScreens.kt", "tabs/ChatTabsUi.kt", "chat/DeleteUi.kt")) {
+        for (f in listOf("chat/ChatScreen.kt", "group/GroupScreens.kt")) {
             val src = java.io.File(root, f).readText()
-            assert(!src.contains("ChatLockControl")) { "$f still takes a ChatLockControl" }
-            assert(!src.contains("LOCK_CHAT_LABEL")) { "$f still shows Lock chat" }
+            assert(!src.contains("E2eeHeaderLock(")) { "$f still draws a lock icon in the header" }
+            assert(src.contains("ChatLockControl")) { "$f does not take the lock for its menu" }
         }
+        var toggles = 0
+        var lockedState by androidx.compose.runtime.mutableStateOf(false)
+        rule.setContent {
+            RisiMeTheme {
+                lk.codegen.risime.ui.chat.ChatOverflowMenu(onClear = {}, onDelete = {}, lock = lk.codegen.risime.ui.lock.ChatLockControl(lockedState) { toggles++; lockedState = !lockedState })
+            }
+        }
+        rule.onNodeWithContentDescription("More options").performClick()
+        rule.onNodeWithText(LOCK_CHAT_LABEL).assertIsDisplayed().performClick()
+        assertEquals(1, toggles)
+        rule.onNodeWithContentDescription("More options").performClick()
+        rule.onNodeWithText("Unlock chat").assertIsDisplayed()
     }
 
     @Test fun longPressSelectionBarOverflowHasLockChat() {

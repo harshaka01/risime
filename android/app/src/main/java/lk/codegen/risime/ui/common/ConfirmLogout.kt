@@ -82,7 +82,7 @@ fun LogoutConfirmDialog(
                 Text(if (deleteChats) "Delete chats and log out" else "Log out")
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 
@@ -113,9 +113,9 @@ fun accountSwitchText(previousName: String, newName: String) =
 fun AccountSwitchDialog(previousName: String, newName: String, onContinue: () -> Unit, onCancel: () -> Unit) {
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("Switch account?") },
+        title = { Text("Switch account?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         text = { Text(accountSwitchText(previousName, newName)) },
-        confirmButton = { TextButton(onClick = onContinue) { Text("Delete chats and continue") } },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = onContinue) { Text("Delete chats and continue", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }

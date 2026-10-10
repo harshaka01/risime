@@ -134,8 +134,8 @@ fun ScheduledBubble(s: ScheduledMessageEntity, ctl: ScheduledControls) {
             }
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            if (!missed) DropdownMenuItem(text = { Text("Edit") }, onClick = { menu = false; editing = true })
-            DropdownMenuItem(text = { Text("Send now") }, onClick = { menu = false; ctl.sendNow(s.scheduleId) })
+            if (!missed) DropdownMenuItem(text = { Text("Edit", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { menu = false; editing = true })
+            DropdownMenuItem(text = { Text("Send now", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { menu = false; ctl.sendNow(s.scheduleId) })
             DropdownMenuItem(text = { Text(if (missed) "Discard" else "Cancel") }, onClick = { menu = false; if (missed) ctl.discard(s.scheduleId) else ctl.cancel(s.scheduleId) })
         }
     }
@@ -143,10 +143,10 @@ fun ScheduledBubble(s: ScheduledMessageEntity, ctl: ScheduledControls) {
         var text by remember { mutableStateOf(s.text) }
         AlertDialog(
             onDismissRequest = { editing = false },
-            title = { Text("Edit scheduled message") },
+            title = { Text("Edit scheduled message", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = { OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth().testTag("scheduled_edit_text")) },
-            confirmButton = { TextButton(onClick = { editing = false; ctl.edit(s.scheduleId, text) }, enabled = text.isNotBlank()) { Text("Save") } },
-            dismissButton = { TextButton(onClick = { editing = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { editing = false; ctl.edit(s.scheduleId, text) }, enabled = text.isNotBlank()) { Text("Save", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { editing = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
 }

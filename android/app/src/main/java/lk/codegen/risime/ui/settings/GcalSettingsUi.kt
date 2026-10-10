@@ -346,7 +346,7 @@ fun GoogleCalendarSection(model: GcalSettingsModel) {
         if (ui.deletedInGoogle > 0 && ui.section is GcalSection.Connected) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("gcal_removed_row")) {
                 Text("${GcalText.removedInGoogle(ui.deletedInGoogle)} · ", style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = model::addAgain, modifier = Modifier.testTag("gcal_add_again")) { Text("Add again") }
+                TextButton(onClick = model::addAgain, modifier = Modifier.testTag("gcal_add_again")) { Text("Add again", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
         Text(GcalText.INFO, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("gcal_info"))

@@ -63,7 +63,7 @@ fun HistoryPrivacyContent(
                     Text("Phone ${a.deviceId.take(8)}", style = MaterialTheme.typography.bodyMedium)
                     Text("Allowed ${java.text.DateFormat.getDateInstance().format(java.util.Date(a.at))}", style = MaterialTheme.typography.bodySmall)
                 }
-                TextButton(onClick = { onRemove(a.deviceId) }) { Text("Remove") }
+                TextButton(onClick = { onRemove(a.deviceId) }) { Text("Remove", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
     }

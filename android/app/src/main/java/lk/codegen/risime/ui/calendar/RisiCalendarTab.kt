@@ -123,10 +123,10 @@ fun RisiCalendarScreen(
             }
             if (nav.mode != RisiCalendarViews.Mode.AGENDA) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.md), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { go(nav.prev()) }, modifier = Modifier.testTag("calendar_prev")) { Text("‹") }
+                    TextButton(onClick = { go(nav.prev()) }, modifier = Modifier.testTag("calendar_prev")) { Text("‹", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                     Text(nav.title(), style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center, modifier = Modifier.weight(1f).testTag("calendar_title"))
-                    TextButton(onClick = { go(nav.next()) }, modifier = Modifier.testTag("calendar_next")) { Text("›") }
-                    TextButton(onClick = { go(nav.copy(anchor = today)) }) { Text("Today") }
+                    TextButton(onClick = { go(nav.next()) }, modifier = Modifier.testTag("calendar_next")) { Text("›", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                    TextButton(onClick = { go(nav.copy(anchor = today)) }) { Text("Today", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 }
             }
             notice?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = Spacing.md).testTag("calendar_notice")) }
@@ -141,7 +141,7 @@ fun RisiCalendarScreen(
         ExtendedFloatingActionButton(
             onClick = { creating = true },
             icon = { Icon(Icons.Default.Add, null) },
-            text = { Text("New event") },
+            text = { Text("New event", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             modifier = Modifier.align(Alignment.BottomEnd).padding(Spacing.md).testTag("calendar_new"),
         )
     }
@@ -149,9 +149,9 @@ fun RisiCalendarScreen(
     if (info) {
         AlertDialog(
             onDismissRequest = { info = false },
-            title = { Text("Risi Calendar") },
+            title = { Text("Risi Calendar", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = { Text(RISI_CALENDAR_INFO, modifier = Modifier.testTag("calendar_info_text")) },
-            confirmButton = { TextButton(onClick = { info = false }) { Text("OK") } },
+            confirmButton = { TextButton(onClick = { info = false }) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
     if (settingsOpen) CalendarSettingsDialog(settings, showDeclined, actions) { settingsOpen = false }
@@ -362,8 +362,8 @@ private fun EventDetailDialog(
                     }
                     run {
                         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                            if (e.myStatus != RisiEventStatus.ACCEPTED) FilledTonalButton(onClick = { actions.respond(e, "accept") }, modifier = Modifier.testTag("calendar_detail_accept")) { Text("Accept") }
-                            if (e.myStatus != RisiEventStatus.DECLINED) OutlinedButton(onClick = { actions.respond(e, "decline") }, modifier = Modifier.testTag("calendar_detail_decline")) { Text("Decline") }
+                            if (e.myStatus != RisiEventStatus.ACCEPTED) FilledTonalButton(onClick = { actions.respond(e, "accept") }, modifier = Modifier.testTag("calendar_detail_accept")) { Text("Accept", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                            if (e.myStatus != RisiEventStatus.DECLINED) OutlinedButton(onClick = { actions.respond(e, "decline") }, modifier = Modifier.testTag("calendar_detail_decline")) { Text("Decline", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                         }
                     }
                 }
@@ -371,9 +371,9 @@ private fun EventDetailDialog(
         },
         confirmButton = {
             Row {
-                if (owner && !e.cancelled) TextButton(onClick = { editing = true }, modifier = Modifier.testTag("calendar_detail_edit")) { Text("Edit") }
+                if (owner && !e.cancelled) TextButton(onClick = { editing = true }, modifier = Modifier.testTag("calendar_detail_edit")) { Text("Edit", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 if (!e.cancelled) TextButton(onClick = { askDelete = true }, modifier = Modifier.testTag("calendar_detail_delete")) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-                TextButton(onClick = onDismiss) { Text("Close") }
+                TextButton(onClick = onDismiss) { Text("Close", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         },
     )
@@ -391,10 +391,10 @@ private fun EventDetailDialog(
     if (askDelete) {
         AlertDialog(
             onDismissRequest = { askDelete = false },
-            title = { Text("Delete event?") },
+            title = { Text("Delete event?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = { Text(if (owner) "It is cancelled for everyone invited." else "It is declined and removed from your calendar.") },
-            confirmButton = { TextButton(onClick = { askDelete = false; onDismiss(); actions.delete(e) }, modifier = Modifier.testTag("calendar_delete_confirm")) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { askDelete = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { askDelete = false; onDismiss(); actions.delete(e) }, modifier = Modifier.testTag("calendar_delete_confirm")) { Text("Delete", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { askDelete = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
 }
@@ -407,7 +407,7 @@ private fun CalendarSettingsDialog(settings: RisiCalendarSettings, showDeclined:
     var declined by remember { mutableStateOf(showDeclined) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Calendar settings") },
+        title = { Text("Calendar settings", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         text = {
             Column(Modifier.testTag("calendar_settings_form"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Text("Default reminder", style = MaterialTheme.typography.labelMedium)
@@ -432,9 +432,9 @@ private fun CalendarSettingsDialog(settings: RisiCalendarSettings, showDeclined:
                 if (declined != showDeclined) actions.setShowDeclined(declined)
                 if (reminder != settings.defaultReminderMin || digest != settings.digestEvents) actions.saveSettings(settings.copy(defaultReminderMin = reminder, digestEvents = digest))
                 onDismiss()
-            }, modifier = Modifier.testTag("calendar_settings_save")) { Text("Save") }
+            }, modifier = Modifier.testTag("calendar_settings_save")) { Text("Save", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 

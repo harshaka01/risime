@@ -54,7 +54,7 @@ internal fun ItemClarifyCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardConte
             RisiClarify.answered(me, r, ctx.messages) ->
                 Text("New date sent", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_clarify_sent"))
             !ctx.readOnly && RisiClarify.canPickDate(me, r, ctx.messages, ctx.awaiting) ->
-                OutlinedButton(onClick = { picking = true }, modifier = Modifier.testTag("risi_clarify_new_date")) { Text("New date") }
+                OutlinedButton(onClick = { picking = true }, modifier = Modifier.testTag("risi_clarify_new_date")) { Text("New date", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         }
     }
     if (picking && id != null && text != null) {
@@ -79,7 +79,7 @@ internal fun NewDateDialog(onPick: (due: String, allDay: Boolean) -> Unit, onDis
     var pickTime by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New date") },
+        title = { Text("New date", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         text = {
             Column(Modifier.testTag("risi_new_date_form"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -90,7 +90,7 @@ internal fun NewDateDialog(onPick: (due: String, allDay: Boolean) -> Unit, onDis
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(allDay, onCheckedChange = { allDay = it }, modifier = Modifier.testTag("risi_new_date_all_day"))
-                    Text("All day")
+                    Text("All day", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
             }
         },
@@ -100,16 +100,16 @@ internal fun NewDateDialog(onPick: (due: String, allDay: Boolean) -> Unit, onDis
                 enabled = d != null && (allDay || time != null),
                 onClick = { if (d != null) RisiClarify.due(d, if (allDay) null else time).let { (due, ad) -> onPick(due, ad) } },
                 modifier = Modifier.testTag("risi_new_date_save"),
-            ) { Text("Save") }
+            ) { Text("Save", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
     if (pickDate) {
         val st = rememberDatePickerState(initialSelectedDateMillis = (date ?: LocalDate.now()).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
         DatePickerDialog(
             onDismissRequest = { pickDate = false },
-            confirmButton = { TextButton(onClick = { st.selectedDateMillis?.let { date = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() }; pickDate = false }) { Text("OK") } },
-            dismissButton = { TextButton(onClick = { pickDate = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { st.selectedDateMillis?.let { date = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() }; pickDate = false }) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { pickDate = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         ) { DatePicker(st) }
     }
     if (pickTime) {
@@ -117,8 +117,8 @@ internal fun NewDateDialog(onPick: (due: String, allDay: Boolean) -> Unit, onDis
         val st = rememberTimePickerState(t0.hour, t0.minute, false)
         AlertDialog(
             onDismissRequest = { pickTime = false },
-            confirmButton = { TextButton(onClick = { time = LocalTime.of(st.hour, st.minute); pickTime = false }) { Text("OK") } },
-            dismissButton = { TextButton(onClick = { pickTime = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { time = LocalTime.of(st.hour, st.minute); pickTime = false }) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { pickTime = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
             text = { TimePicker(st) },
         )
     }

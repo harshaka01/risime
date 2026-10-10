@@ -74,9 +74,9 @@ internal fun ConfirmCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) 
         val buttons = if (ctx.readOnly || wid == null) emptyList() else RisiToolCards.confirmButtons(ctx.host.me, r, state, ctx.awaiting)
         if (buttons.isNotEmpty() && wid != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if ("add" in buttons) FilledTonalButton(onClick = { ctx.host.act(wid, "confirm_write") }, modifier = Modifier.testTag("risi_confirm_add")) { Text("Add") }
-                if ("allow" in buttons) FilledTonalButton(onClick = { ctx.host.act(wid, "confirm_write") }, modifier = Modifier.testTag("risi_confirm_allow")) { Text("Allow") }
-                if ("cancel" in buttons) OutlinedButton(onClick = { ctx.host.act(wid, "cancel_write") }, modifier = Modifier.testTag("risi_confirm_cancel")) { Text("Cancel") }
+                if ("add" in buttons) FilledTonalButton(onClick = { ctx.host.act(wid, "confirm_write") }, modifier = Modifier.testTag("risi_confirm_add")) { Text("Add", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if ("allow" in buttons) FilledTonalButton(onClick = { ctx.host.act(wid, "confirm_write") }, modifier = Modifier.testTag("risi_confirm_allow")) { Text("Allow", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if ("cancel" in buttons) OutlinedButton(onClick = { ctx.host.act(wid, "cancel_write") }, modifier = Modifier.testTag("risi_confirm_cancel")) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         } else if (state == RisiToolCards.ConfirmState.OPEN && wid != null && wid.lowercase() in ctx.awaiting) {
             Text("Sending…", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -97,8 +97,8 @@ internal fun ReminderSetCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardConte
         val buttons = if (ctx.readOnly || rid == null || rid.lowercase() in ctx.awaiting) emptyList() else RisiToolCards.reminderButtons(ctx.host.me, r, participants, ctx.nowMs)
         if (rid != null && buttons.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if ("me_too" in buttons) FilledTonalButton(onClick = { ctx.host.act(rid, "me_too") }, modifier = Modifier.testTag("risi_me_too")) { Text("Me too") }
-                if ("not_me" in buttons) OutlinedButton(onClick = { ctx.host.act(rid, "not_me") }, modifier = Modifier.testTag("risi_not_me")) { Text("Not me") }
+                if ("me_too" in buttons) FilledTonalButton(onClick = { ctx.host.act(rid, "me_too") }, modifier = Modifier.testTag("risi_me_too")) { Text("Me too", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if ("not_me" in buttons) OutlinedButton(onClick = { ctx.host.act(rid, "not_me") }, modifier = Modifier.testTag("risi_not_me")) { Text("Not me", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
     }
@@ -112,7 +112,7 @@ internal fun DraftCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
         Text(r.text ?: row.body, style = MaterialTheme.typography.bodyLarge)
         if (usable) {
             val target = r.targetConversationId!!
-            FilledTonalButton(onClick = { ctx.host.useDraft(target, r.text!!) }, modifier = Modifier.testTag("risi_draft_use")) { Text("Use") }
+            FilledTonalButton(onClick = { ctx.host.useDraft(target, r.text!!) }, modifier = Modifier.testTag("risi_draft_use")) { Text("Use", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         }
     }
 }
@@ -128,7 +128,7 @@ internal fun SkillDoneCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext
         val skill = r.skillId
         val token = r.undoToken
         if (!ctx.readOnly && entry != null && skill != null && token != null && RisiSkillCards.canUndo(r, ctx.nowMs, ctx.host.undone)) {
-            OutlinedButton(onClick = { ctx.host.undo(skill, entry, token) }, modifier = Modifier.testTag("risi_undo")) { Text("Undo") }
+            OutlinedButton(onClick = { ctx.host.undo(skill, entry, token) }, modifier = Modifier.testTag("risi_undo")) { Text("Undo", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         } else if (entry != null && entry.lowercase() in ctx.host.undone) {
             Text("Undo requested", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_undo_state"))
         }
@@ -138,7 +138,7 @@ internal fun SkillDoneCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext
                 OutlinedButton(
                     onClick = { runCatching { context.startActivity(Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } },
                     modifier = Modifier.testTag("risi_open_clock"),
-                ) { Text("Open Clock") }
+                ) { Text("Open Clock", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
     }
@@ -163,7 +163,7 @@ internal fun GoogleReconnectCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardC
     Column(Modifier.testTag("risi_google_reconnect"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         Text(row.body, style = MaterialTheme.typography.bodyLarge)
         if ("reconnect" in r.buttons && !ctx.readOnly) {
-            Button(onClick = { ctx.host.openGoogleCalendarSettings() }, modifier = Modifier.testTag("risi_google_reconnect_button")) { Text("Reconnect") }
+            Button(onClick = { ctx.host.openGoogleCalendarSettings() }, modifier = Modifier.testTag("risi_google_reconnect_button")) { Text("Reconnect", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         }
     }
 }
@@ -180,12 +180,8 @@ internal fun AnswerExtras(r: RisiMeta, ctx: RisiCardContext) {
             steps.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
-    val next = RisiSkillCards.nextSteps(r)
-    if (next.isNotEmpty() && !ctx.readOnly) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            next.forEachIndexed { i, s -> AssistChip(onClick = { ctx.prefill(s) }, label = { Text(s) }, modifier = Modifier.testTag("risi_next_$i")) }
-        }
-    }
+    // v1.32 item 7 (no fake chips): the server's `next_steps` are suggestions of what to type; a chip that only
+    // pre-fills its label as chat text has no action of its own, so none is drawn (the contract says "may").
 }
 
 /** §25.4 the progress bubble for a running request ("Checking your calendar…", "Still working…"). */

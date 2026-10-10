@@ -88,7 +88,7 @@ fun FriendPicker(
     Column(modifier) {
         OutlinedTextField(
             value = query, onValueChange = onQuery, singleLine = true,
-            placeholder = { Text("Search friends") },
+            placeholder = { Text("Search friends", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         )
         notice?.let {
@@ -192,7 +192,7 @@ fun CreateGroupContent(
                 Column(Modifier.weight(1f).padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     OutlinedTextField(
                         value = ui.name, onValueChange = onName, singleLine = true,
-                        label = { Text("Group name") },
+                        label = { Text("Group name", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                         isError = ui.nameError != null && ui.name.isNotEmpty(),
                         supportingText = { Text(ui.nameError?.takeIf { ui.name.isNotEmpty() } ?: "${ui.selected.size + 1} members, you included") },
                         modifier = Modifier.fillMaxWidth(),
@@ -216,9 +216,9 @@ fun CreateGroupContent(
                         CircularProgressIndicator(Modifier.padding(end = Spacing.md).semantics { contentDescription = "Creating group" })
                     }
                     if (ui.step == 0) {
-                        Button(onClick = onNext, enabled = ui.canContinue) { Text("Next") }
+                        Button(onClick = onNext, enabled = ui.canContinue) { Text("Next", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                     } else {
-                        Button(onClick = onCreate, enabled = ui.canCreate) { Text("Create") }
+                        Button(onClick = onCreate, enabled = ui.canCreate) { Text("Create", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                     }
                 }
             }
@@ -278,7 +278,7 @@ fun ReadByContent(state: ReadByState, nameOf: (String) -> String, onRetry: () ->
                 }
             }
         }
-        TextButton(onClick = onClose, modifier = Modifier.align(Alignment.End).padding(end = Spacing.md)) { Text("Close") }
+        TextButton(onClick = onClose, modifier = Modifier.align(Alignment.End).padding(end = Spacing.md)) { Text("Close", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
     }
 }
 
@@ -300,6 +300,6 @@ fun ConfirmDialog(title: String, text: String, confirm: String, onConfirm: () ->
         title = { Text(title) },
         text = { Text(text) },
         confirmButton = { TextButton(onClick = { onConfirm(); onDismiss() }) { Text(confirm) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }

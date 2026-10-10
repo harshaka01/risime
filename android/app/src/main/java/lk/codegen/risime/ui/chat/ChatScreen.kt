@@ -74,6 +74,8 @@ fun ChatScreen(
     tabBar: (@Composable () -> Unit)? = null,
     /** The chat info screen (Lock chat; tabs on: the Official switch); null: the info dialog (tests). */
     onInfo: (() -> Unit)? = null,
+    /** v1.32 item 4: the ⋮ menu's "Lock chat" / "Unlock chat" (null: no item, e.g. tests). */
+    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
 ) {
     val messages by vm.messages.collectAsStateWithLifecycle()
     val peer by vm.peer.collectAsStateWithLifecycle()
@@ -158,9 +160,9 @@ fun ChatScreen(
                         onBlocked = { t -> vm.imgs.toast.value = t; vm.calls.refresh() },
                         onCall = vm::startCall,
                     )
-                    E2eeHeaderLock(encrypted) { if (onInfo != null) onInfo() else showInfo = true }
+                    // v1.32 item 4: icons <= 2 (video, call); the lock action is in the ⋮ menu, the E2EE state in the subtitle.
                     ChatOverflowMenu(
-                        onClear = { clearAsk = false }, onDelete = { clearAsk = true },
+                        onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock,
                         extra = if (vm.scheduledMenu() || scheduledHere.isNotEmpty()) ({ close ->
                             androidx.compose.material3.DropdownMenuItem(text = { Text(SCHEDULED_MESSAGES_TITLE) }, onClick = { close(); scheduledSheet = true })
                         }) else null,

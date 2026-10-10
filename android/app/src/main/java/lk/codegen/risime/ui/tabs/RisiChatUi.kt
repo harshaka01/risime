@@ -89,9 +89,9 @@ fun RisiChatOpenScreen(open: suspend () -> RisiChatOpen, onReady: (String) -> Un
                 Text("Setting up your Risi chat…", textAlign = TextAlign.Center)
             } else {
                 Text(e, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center, modifier = Modifier.testTag("risi_chat_error"))
-                Button(onClick = { attempt++ }) { Text("Retry") }
+                Button(onClick = { attempt++ }) { Text("Retry", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
-            TextButton(onClick = onBack) { Text("Back") }
+            TextButton(onClick = onBack) { Text("Back", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         }
     }
 }
@@ -102,7 +102,7 @@ fun RisiChatUnavailable(onBack: () -> Unit) {
     Box(Modifier.fillMaxSize().padding(Spacing.lg), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
             Text(RISI_CHAT_UNAVAILABLE, textAlign = TextAlign.Center)
-            TextButton(onClick = onBack) { Text("Back") }
+            TextButton(onClick = onBack) { Text("Back", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         }
     }
 }

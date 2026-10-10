@@ -197,13 +197,13 @@ fun RisiTopBar(
                     val titleColor = if (brand) MaterialTheme.colorScheme.primary else Color.Unspecified
                     if (titleSuffix == null) {
                         Text(
-                            title, style = titleStyle, color = titleColor,
+                            title, style = titleStyle, color = titleColor, fontWeight = FontWeight.Bold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.semantics { heading() },
                         )
                     } else {
                         Row(Modifier.semantics(mergeDescendants = true) { heading() }) {
-                            Text(title, style = titleStyle, color = titleColor, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            Text(title, style = titleStyle, color = titleColor, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                             Text(titleSuffix, style = titleStyle, color = titleColor, maxLines = 1, softWrap = false)
                         }
                     }
@@ -305,7 +305,7 @@ fun UnreadBadge(n: Int, modifier: Modifier = Modifier) {
 
 @Composable
 fun SectionHeader(text: String, modifier: Modifier = Modifier) {
-    Text(text, modifier.semantics { heading() }, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+    Text(text, modifier.semantics { heading() }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 // ---- Empty and error states ----
@@ -334,7 +334,7 @@ fun ErrorState(message: String, modifier: Modifier = Modifier, onRetry: (() -> U
         Icon(Icons.Default.Warning, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
         Spacer(Modifier.width(Spacing.sm))
         Text(message, Modifier.weight(1f), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-        if (onRetry != null) TextButton(onClick = onRetry) { Text("Retry") }
+        if (onRetry != null) TextButton(onClick = onRetry) { Text("Retry", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
     }
 }
 

@@ -48,7 +48,16 @@ fun ProfilePhotoControls(userId: String) {
     var busy by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(rev, userId) { has = photos.hasPhoto(userId) }
-    val pick = rememberPhotoCropper("Move and scale", onCropped = { source, crop ->
+    val removePhoto: () -> Unit = {
+        message = null
+        busy = "Removing your photo…"
+        scope.launch {
+            val r = photos.removeOwnPhoto()
+            busy = null
+            message = (r as? PhotoChange.Refused)?.text
+        }
+    }
+    val pick = rememberPhotoCropper("Move and scale", hasPhoto = has, onRemove = removePhoto, onCropped = { source, crop ->
         message = null
         busy = "Setting your photo…"
         scope.launch {
@@ -69,17 +78,6 @@ fun ProfilePhotoControls(userId: String) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
             OutlinedButton(onClick = pick, enabled = busy == null) { Text(if (has) "Change photo" else "Set photo") }
-            if (has) {
-                TextButton(onClick = {
-                    message = null
-                    busy = "Removing your photo…"
-                    scope.launch {
-                        val r = photos.removeOwnPhoto()
-                        busy = null
-                        message = (r as? PhotoChange.Refused)?.text
-                    }
-                }, enabled = busy == null) { Text("Remove photo") }
-            }
         }
         (busy ?: message)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (busy == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
         Text(PROFILE_PHOTO_AUDIENCE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

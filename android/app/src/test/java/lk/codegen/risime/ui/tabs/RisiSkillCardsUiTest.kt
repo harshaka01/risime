@@ -181,12 +181,12 @@ class RisiSkillCardsUiTest {
         assertEquals(listOf("act:${r.reminderId}:me_too"), h.calls)
     }
 
-    @Test fun answerV2ShowsStepsAndChipsThatPrefill() {
+    @Test fun answerV2ShowsStepsAndNoFakeChips() {
         show(Host(asker), listOf(row("envelope_risi_answer_v2.json")))
         rule.onNodeWithTag("risi_steps").assertIsDisplayed()
         rule.onNodeWithText("✓ Checked your calendar").assertIsDisplayed()
-        rule.onNodeWithTag("risi_next_0").performClick()
-        assertTrue(prefilled!!.isNotBlank())
+        rule.onNodeWithTag("risi_next_0").assertDoesNotExist()
+        assertEquals(null, prefilled)
     }
 
     @Test fun progressBubbleShowsTheStepAndStillWorking() {

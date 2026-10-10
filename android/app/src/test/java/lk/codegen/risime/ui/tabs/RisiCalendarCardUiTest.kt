@@ -220,17 +220,16 @@ class RisiCalendarCardUiTest {
         assertTrue(!exists("risi_confirm_add"))
     }
 
-    @Test fun chipsOnlyFillTheComposerAndNeverOfferAQuestionOrAConfirm() {
+    @Test fun noNextStepChipIsDrawnAndNothingIsSentOrPrefilled() {
         val h = Host(asker, null)
         val answer = row("envelope_risi_answer_v2.json") {
             JsonObject(it + ("next_steps" to JsonArray(listOf("Confirm to add the event", "What is on Monday?", "Remind me 30 min before").map(::JsonPrimitive))))
         }
         show(h, listOf(answer))
-        rule.onNodeWithText("Remind me 30 min before").assertIsDisplayed()
-        assertTrue(!exists("risi_next_1"))
-        rule.onNodeWithTag("risi_next_0").performClick()
-        assertEquals("Remind me 30 min before", prefilled)
-        // Never sent: no request, no action.
+        // v1.32 item 7: a chip that only pre-fills its label as chat text is a fake chip: none is drawn.
+        assertTrue(!exists("risi_next_0") && !exists("risi_next_1"))
+        rule.onNodeWithText("Remind me 30 min before").assertDoesNotExist()
+        assertEquals(null, prefilled)
         assertTrue(h.calls.isEmpty())
     }
 

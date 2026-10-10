@@ -230,7 +230,7 @@ fun RecoveryKeyContent(key: String, onCopy: () -> Unit, onConfirmed: () -> Unit,
                 if (!asking) {
                     Text(RECOVERY_KEY_EXPLAIN, style = MaterialTheme.typography.bodyMedium)
                     Text(key, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("recovery_key"))
-                    TextButton(onClick = onCopy) { Text("Copy") }
+                    TextButton(onClick = onCopy) { Text("Copy", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 } else {
                     Text("To check you saved it, type group ${CONFIRM_GROUPS[0] + 1} and group ${CONFIRM_GROUPS[1] + 1} of your recovery key.")
                     CONFIRM_GROUPS.forEachIndexed { n, i ->
@@ -269,7 +269,7 @@ fun PassphraseContent(check: (String) -> String?, onSet: (String) -> Unit, onSki
     var problem by remember { mutableStateOf<String?>(null) }
     FieldDialog(
         onDismissRequest = onSkip,
-        title = { Text("Add a passphrase?") },
+        title = { Text("Add a passphrase?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Text(PASSPHRASE_EXPLAIN, style = MaterialTheme.typography.bodyMedium)
@@ -284,9 +284,9 @@ fun PassphraseContent(check: (String) -> String?, onSet: (String) -> Unit, onSki
             TextButton(onClick = {
                 problem = check(p)
                 if (problem == null) onSet(p)
-            }) { Text("Add passphrase") }
+            }) { Text("Add passphrase", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         },
-        dismissButton = { TextButton(onClick = onSkip) { Text("Not now") } },
+        dismissButton = { TextButton(onClick = onSkip) { Text("Not now", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 
@@ -319,13 +319,13 @@ fun SecretEntryContent(title: String, text: String, error: String?, busy: Boolea
                 if (busy) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                         CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp)
-                        Text("Opening the backup…")
+                        Text("Opening the backup…", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     }
                 }
             }
         },
         confirmButton = { TextButton(onClick = { onSubmit(secret, kind) }, enabled = !busy && secret.isNotBlank()) { Text(RESTORE_BUTTON) } },
-        dismissButton = { TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 
@@ -355,10 +355,10 @@ fun RestoreGateContent(backup: Backup, busy: String?, message: String?, onRestor
     if (confirmSkip) {
         AlertDialog(
             onDismissRequest = { confirmSkip = false },
-            title = { Text("Skip restore?") },
+            title = { Text("Skip restore?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = { Text(SKIP_CONFIRM_TEXT) },
             confirmButton = { TextButton(onClick = { confirmSkip = false; onSkip() }) { Text(SKIP_BUTTON) } },
-            dismissButton = { TextButton(onClick = { confirmSkip = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmSkip = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
 }
