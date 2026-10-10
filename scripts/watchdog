@@ -27,7 +27,7 @@ up() { curl -s -m 5 "$1" 2>/dev/null | grep -q '"status":"ok"'; }
 version() { curl -s -m 5 http://127.0.0.1:4000/health | grep -oE '"version":"[^"]*"' | cut -d'"' -f4; }
 
 alert() {  # state check detail
-  local state="$1" check="$2" detail="${3:0:300}" tok res sent=0
+  local state="$1" check="$2" detail="${3:0:300}" tok res sent=0 held=0
   if [ "$DRY" = 1 ]; then log "ALERT(dry) $state $check: $detail"; return 0; fi
   tok="$(env_get OPS_ALERT_TOKEN)"
   if [ -n "$tok" ]; then
@@ -35,7 +35,8 @@ alert() {  # state check detail
       | curl -s -m 10 -H @<(printf 'Authorization: Bearer %s\n' "$tok") -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:4000/internal/ops-alert)"
     sent="$(printf '%s' "$res" | grep -oE '"sent": *[0-9]+' | grep -oE '[0-9]+$' || echo 0)"
   fi
-  if [ "${sent:-0}" -ge 1 ]; then log "alert $state ($check): Risi message sent to $sent"; return 0; fi
+  held="$(printf '%s' "$res" | grep -oE '"held": *[0-9]+' | grep -oE '[0-9]+$' || echo 0)"
+  if [ "${sent:-0}" -ge 1 ] && [ "${held:-0}" = 0 ]; then log "alert $state ($check): Risi message sent to $sent"; return 0; fi
   log "alert $state ($check): Risi message not delivered (${res:-no token}); fallbacks"
   local subj="RisiMe watchdog: $state ($check)" text="RisiMe watchdog on spark2, $(date -u +%F' '%H:%M) UTC: $state ($check). $detail"
   local host port user pass from to
