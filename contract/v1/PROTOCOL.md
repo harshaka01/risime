@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.31 (Release 0.3)
+# RisiMe Wire Protocol — v1.32 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -7900,7 +7900,8 @@ order of the "Checked:" line is Risi Calendar · Google Calendar · Phone calend
               "calendars": [{"name": str, "account_type": str, "events": int}],
               "read_ok": bool,
               "reason": null | "not_connected" | "no_permission" | "reauth_needed" |
-                        "no_play_services" | "network" | "timeout" | "api_error" | "no_calendars"}],
+                        "no_play_services" | "network" | "timeout" | "api_error" | "no_calendars" |
+                        "sync_off"}],
  "connected_sources": ["phone_provider" | "google_api"]}
 ```
 - The server accepts exactly `{blocks}` (v1) or `{blocks, sources, connected_sources}` (any other
@@ -7909,6 +7910,24 @@ order of the "Checked:" line is Risi Calendar · Google Calendar · Phone calend
   `read_ok: false, reason: "not_connected"`), `read_ok: true` ⇒ `reason: null`; a provider failure
   is `read_ok: false` (`api_error`), never an empty calendar; hidden calendars stay out of busy
   blocks. A missing permission stays status `no_permission`.
+- **v1.32: `sync_off`** (Harsha 2026-10-10: Risi must tell apart *no access*, *sync off* and *empty*).
+  A new `reason` for a `phone_provider` source: the phone has calendars, but Android sync is off
+  for **every** non-local account that holds a visible calendar (`ContentResolver
+  .getMasterSyncAutomatically()` false, or `getSyncAutomatically(account, CalendarContract.AUTHORITY)`
+  false for each such account). The source is then `read_ok: false, reason: "sync_off"` and its
+  `calendars` are still listed (names and counts as read, which may be stale); the phone still sends
+  its `blocks` (they don't count as a read). Calendars of a `LOCAL` account never cause `sync_off`.
+  If at least one synced calendar is on, the source is a normal read (`read_ok: true`) and the
+  sync-off calendars are only shown in Details. The three cases the user sees:
+  - **No access:** status `no_permission` (or the skill off, §26.5): "Calendar permission is off
+    on this phone".
+  - **Sync off:** "I couldn't read your calendar on this phone (sync is off, so it may be out of
+    date). Turn on sync in Settings → Risi skills → Calendar → Details." With Risi Calendar in the
+    check: "Not checked: Phone calendar (sync is off)."
+  - **Empty:** a real read with 0 events: "Checked: Phone calendar (Work) · 0 events", and a free
+    claim stands.
+  A v1.31 server answers `422` to `sync_off`; the v1.32 phone then re-sends the result once with
+  `reason: "api_error"` (`risi_tool_result_calendar_check_sync_off.json`).
 - **Amends §25.3 "never calendar names":** names only in `sources[].calendars[].name`; an
   email-address name is sent as "Primary calendar". Never titles, descriptions, attendees, places or
   event ids.
@@ -7962,7 +7981,10 @@ window **in the same step**, so the answer covers every connected source. **The 
 
 The Android Calendar skill's Details (Settings → Risi skills → Calendar) shows "What Risi can read":
 the permission state and each calendar with its account, events in the next 7 days, hidden / sync
-off, and the exact reason. There is no Google row until §31. (v1.31: the Google Calendar section of
+off, and the exact reason. (v1.32: when any account's calendar sync is off, Details shows "Sync is off
+for <account>" with **Open sync settings** (Android `Settings.ACTION_SYNC_SETTINGS`) and **Refresh**
+(re-reads the provider and requests a sync for that account); the same state reaches Risi as
+`sync_off` above.) There is no Google row until §31. (v1.31: the Google Calendar section of
 §31.2 adds it.)
 
 ### 29.8 The action card: `confirm` with `tool: "risi_calendar_add"` (amends §28.2–§28.4)
