@@ -156,7 +156,80 @@ class ContractExamplesTest {
     private val all: List<String> by lazy { read("index.txt").lines().filter { it.isNotBlank() } }
 
     /** Every example file must map to a model; a new file without a decoder fails this test. */
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + mapOf(
+    /** v1.34 §33 basic messaging (net/Protocol134.kt, data/media/FileEnvelope.kt). */
+    private val basicMessaging134: Map<String, (String) -> Any> by lazy {
+        fun decode(s: String) = lk.codegen.risime.data.mls.MlsPayload.decode(s.toByteArray())
+        fun text(s: String) = decode(s) as lk.codegen.risime.data.mls.MlsPayload.Decoded.Text
+        fun file(s: String) = (decode(s) as lk.codegen.risime.data.mls.MlsPayload.Decoded.File).envelope
+        mapOf(
+            "envelope_text_forwarded.json" to { s -> text(s).also { require(it.extras.forwardHops == 1 && !it.extras.forwardedMany && it.body.isNotEmpty()) } },
+            "envelope_text_forwarded_many.json" to { s -> text(s).also { require(it.extras.forwardHops == 7 && it.extras.forwardedMany) } },
+            // hops 0: shown without a label, never dropped.
+            "envelope_text_forwarded_bad.json" to { s -> text(s).also { require(it.extras.forwardHops == null && it.body == "Site visit moved to 3 PM") } },
+            "envelope_text_reply.json" to { s ->
+                text(s).also { require(it.extras.replyTo == ReplyRef("c1a2b3e1-a0b1-11f0-8000-0242ac120002", "0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e") && it.extras.forwardHops == null) }
+            },
+            "envelope_text_view_once_reserved.json" to { s -> text(s).also { require(it.extras.viewOnce) } },
+            "image_payload_forwarded.json" to { s -> imageEnvelope(s).also { require(it.extras.forwardHops == 2 && it.caption == "Site visit, level 3") } },
+            "file_payload.json" to { s ->
+                file(s).also {
+                    require(!it.partsOnly && it.blob!!.size == 196_656L && it.enc!!.plainSize == 196_608L && it.pages == 3 && it.thumb != null && it.caption == "Notes from Friday")
+                    require(it.mime == lk.codegen.risime.data.media.FileEnvelope.MIME_PDF && !it.isApk && it.displayName == "Interview planning – 2026-10-09.pdf")
+                    // Re-encoding gives the example back exactly.
+                    require(ProtocolJson.parseToJsonElement(it.encode().decodeToString()) == ProtocolJson.parseToJsonElement(s))
+                }
+            },
+            // A name with `/` (path traversal): dropped as malformed.
+            "file_payload_bad_name.json" to { s -> (decode(s) as lk.codegen.risime.data.mls.MlsPayload.Decoded.Ignored).also { require(it.type.startsWith("file")) } },
+            // `parts` (reserved for A) without `blob`: a placeholder bubble, never dropped.
+            "file_payload_parts.json" to { s -> file(s).also { require(it.partsOnly && it.name == "Site survey.zip") } },
+            "device_put_files.json" to { s ->
+                ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_FILES in it.mls!!.capabilities!! && CAPABILITY_PDF_EXPORT in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) }
+            },
+            "mls_group_files_ready.json" to { s -> ProtocolJson.decodeFromString<MlsGroup>(s).also { require(!it.filesReady && it.missingFiles.size == 1 && !it.imagesReady) } },
+            "envelope_risi_answer_next_action_pdf.json" to { s ->
+                ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                    val a = it.nextActions!!.single()
+                    require(it.kind == "answer" && a.action == RisiTools134.ACTION_PDF && a.label == "PDF" && PdfSources.valid(a.source) && PdfSources.type(a.source) == PdfSources.NOTE)
+                }
+            },
+            "envelope_risi_confirm_export_pdf.json" to { s ->
+                ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                    require(it.kind == "confirm" && it.tool == RisiTools134.TOOL_EXPORT_PDF && it.buttons == listOf("send", "cancel") && (it.whenRaw == null || it.whenRaw is kotlinx.serialization.json.JsonNull))
+                    require(PdfSources.valid(it.export!!.source) && it.export!!.conversationId.startsWith("dm:") && it.writeId != null)
+                }
+            },
+            "event_risi_tool_call_export_pdf.json" to { s ->
+                ProtocolJson.decodeFromString<Event>(s).risiToolCall()!!.also {
+                    val a = it.exportPdfArgs()!!
+                    require(it.tool == RisiTools134.TOOL_EXPORT_PDF && a.writeId == it.writeId && PdfSources.valid(a.source) && a.conversationId.startsWith("dm:"))
+                }
+            },
+            "risi_tool_result_export_pdf.json" to { s ->
+                ProtocolJson.decodeFromString<RisiToolResult>(s).also {
+                    val r = ProtocolJson.decodeFromJsonElement(ExportPdfResult.serializer(), it.result!!)
+                    require(it.status == RisiToolResult.OK && r.state == ExportPdfResult.SENT && r.pages == 3)
+                    require(ProtocolJson.parseToJsonElement(ProtocolJson.encodeToString(RisiToolResult.serializer(), RisiToolResult(RisiToolResult.OK, ProtocolJson.encodeToJsonElement(ExportPdfResult.serializer(), r) as JsonObject))) == ProtocolJson.parseToJsonElement(s))
+                }
+            },
+            "risi_tool_result_export_pdf_error.json" to { s ->
+                ProtocolJson.decodeFromString<RisiToolResult>(s).also {
+                    require(it.status == RisiToolResult.ERROR && it.result!!["code"]!!.jsonPrimitive.content == ExportPdfErrors.FILES_NOT_READY)
+                    require(ProtocolJson.parseToJsonElement(ProtocolJson.encodeToString(RisiToolResult.serializer(), RisiToolResult.error(ExportPdfErrors.FILES_NOT_READY))) == ProtocolJson.parseToJsonElement(s))
+                }
+            },
+            "backup_entry_message_v134.json" to { s ->
+                ProtocolJson.decodeFromString<lk.codegen.risime.data.backup.BackupMessageLine>(s).also {
+                    require(it.starredAt == "2026-10-11T08:20:00.000Z")
+                    val f = (lk.codegen.risime.data.mls.MlsPayload.decode(it.payload.toString().toByteArray()) as lk.codegen.risime.data.mls.MlsPayload.Decoded.File).envelope
+                    require(f.extras.forwardHops == 1 && f.thumb == null)
+                    require(ProtocolJson.encodeToJsonElement(lk.codegen.risime.data.backup.BackupMessageLine.serializer(), it) == ProtocolJson.parseToJsonElement(s))
+                }
+            },
+        )
+    }
+
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.

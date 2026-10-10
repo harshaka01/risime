@@ -34,6 +34,8 @@ data class ImageEnvelope(
     val h: Int,
     val thumb: ImageThumb?,
     val caption: String?,
+    /** v1.34 §33: `forwarded`, `reply_to` and the reserved `view_once`. */
+    val extras: lk.codegen.risime.net.EnvelopeExtras = lk.codegen.risime.net.EnvelopeExtras.NONE,
 ) {
     /** UTF-8 JSON; `thumb` is set to null when a long caption would push it over [MAX_ENVELOPE_BYTES]. */
     fun encode(): ByteArray {
@@ -80,6 +82,7 @@ data class ImageEnvelope(
                 )
             }
             caption?.takeIf { it.isNotEmpty() }?.let { put("caption", it) }
+            extras.putInto(this)
         },
     ).toByteArray(Charsets.UTF_8)
 
@@ -141,7 +144,7 @@ data class ImageEnvelope(
                 is JsonPrimitive -> if (c.isString) c.content.takeIf { it.isNotBlank() }?.let(::cutCaption) else return null
                 else -> return null
             }
-            return ImageEnvelope(BlobRef(blobId, size, sha), ImageEnc(MediaFormat.ALG, key, plain), mime, w.toInt(), h.toInt(), thumb, caption)
+            return ImageEnvelope(BlobRef(blobId, size, sha), ImageEnc(MediaFormat.ALG, key, plain), mime, w.toInt(), h.toInt(), thumb, caption, lk.codegen.risime.net.EnvelopeExtras.of(o))
         }
 
         /** Receivers cut a caption at 4096 graphemes (§14.4, §11.1). */

@@ -202,6 +202,8 @@ data class RisiMeta(
     // v1.29 §30.4 note_card / notes_saved (a note's id = its §27 summary_id; `item_update`s may carry either).
     @SerialName("note_id") val noteId: String? = null,
     @SerialName("events_count") val eventsCount: Int? = null,
+    /** v1.34 §33.15: an `export_pdf` confirm's `{"source": PdfSource, "conversation_id"}`. */
+    val export: RisiExport? = null,
 ) {
     /** The §27 summary this row belongs to: `summary_id`, else a note's `note_id` (§30.3: the same id). */
     val summaryKey: String? get() = summaryId ?: noteId
@@ -399,6 +401,8 @@ data class RisiNextAction(
     val text: String? = null,
     val target: String? = null,
     @SerialName("event_id") val eventId: String? = null,
+    /** v1.34 §33.15 `action: "pdf"`: the PdfSource the phone renders locally. */
+    val source: JsonObject? = null,
 ) {
     companion object {
         const val ASK = "ask"

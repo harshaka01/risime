@@ -19,7 +19,10 @@ object MlsPayload {
 
     sealed interface Decoded {
         /** [risi]: the §24.11 `risi` object, if any (honoured only from an agent leaf in Official). */
-        data class Text(val body: String, val risi: JsonObject? = null) : Decoded
+        data class Text(val body: String, val risi: JsonObject? = null, val extras: lk.codegen.risime.net.EnvelopeExtras = lk.codegen.risime.net.EnvelopeExtras.NONE) : Decoded
+
+        /** v1.34 §33.13: a strictly validated `file` envelope (a `parts` file is a placeholder). */
+        data class File(val envelope: lk.codegen.risime.data.media.FileEnvelope) : Decoded
 
         /** §11.2: an encrypted reaction (op "add" sets, "remove" clears). */
         data class Reaction(val target: String, val emoji: String, val op: String) : Decoded
@@ -116,6 +119,10 @@ object MlsPayload {
         if (type == TYPE_DELETE) {
             return validateDelete(obj)?.let { Decoded.Delete(it) } ?: Decoded.Ignored("delete (malformed)")
         }
+        if (type == lk.codegen.risime.data.media.FileEnvelope.TYPE) {
+            // §33.13: a bad name (or blob/enc) → dropped as malformed and logged; `parts` → a placeholder.
+            return lk.codegen.risime.data.media.FileEnvelope.validate(obj)?.let { Decoded.File(it) } ?: Decoded.Ignored("file (malformed)")
+        }
         if (type == lk.codegen.risime.data.media.ImageEnvelope.TYPE) {
             // §14.4: malformed → dropped and logged like an unknown type (never stored, fetched or decoded).
             return lk.codegen.risime.data.media.ImageEnvelope.validate(obj)?.let { Decoded.Image(it) } ?: Decoded.Ignored("image (malformed)")
@@ -143,6 +150,6 @@ object MlsPayload {
         }
         if (type != TYPE_TEXT) return Decoded.Ignored(type)
         val body = (obj["body"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: return Decoded.Ignored("text without body")
-        return Decoded.Text(body, obj["risi"] as? JsonObject)
+        return Decoded.Text(body, obj["risi"] as? JsonObject, lk.codegen.risime.net.EnvelopeExtras.of(obj))
     }
 }

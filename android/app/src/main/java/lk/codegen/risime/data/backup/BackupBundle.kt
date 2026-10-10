@@ -111,6 +111,10 @@ data class BackupMessageLine(
     @SerialName("shared_by") val sharedBy: String? = null,
     /** Outgoing rows only: "sent" | "delivered" | "read". */
     val status: String? = null,
+    /** v1.34 §33.11: when this phone starred it; absent when not starred. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("starred_at") val starredAt: String? = null,
 ) {
     companion object {
         const val TYPE = "message"

@@ -9,7 +9,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Wire models for contract/v1/PROTOCOL.md. Field names match the contract exactly. */
 
 /** The PROTOCOL.md version this client implements (shown in Settings → About; checked by a test). */
-const val PROTOCOL_VERSION = "1.33"
+const val PROTOCOL_VERSION = "1.34"
 
 val ProtocolJson: Json = Json {
     ignoreUnknownKeys = true // §0: clients must ignore unknown fields
@@ -769,6 +769,9 @@ data class MlsGroup(
     @SerialName("missing_video") val missingVideo: List<MissingImages> = emptyList(),
     /** §20.1 (groups): my user and at least one other active member have a `group_calls` device (absent = false). */
     @SerialName("group_calls_ready") val groupCallsReady: Boolean = false,
+    /** v1.34 §33.1: as `images_ready`, for the `file` envelope (`files` capability). A hint only. */
+    @SerialName("files_ready") val filesReady: Boolean = false,
+    @SerialName("missing_files") val missingFiles: List<MissingImages> = emptyList(),
     /** §20.1 members' instances seen in 30 days without `group_calls` (information only). */
     @SerialName("missing_group_calls") val missingGroupCalls: List<MissingImages> = emptyList(),
     /** v1.33 §20.1: `"server"` while the server has no LiveKit (`group_calls_ready` is then false); absent otherwise. */
