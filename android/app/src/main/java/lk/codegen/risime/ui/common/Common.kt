@@ -209,7 +209,7 @@ fun RisiTopBar(
                         // name ellipsizes first), both on one baseline.
                         Row(Modifier.semantics(mergeDescendants = true) { heading() }) {
                             Text(title, style = titleStyle, color = titleColor, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).alignByBaseline().testTag("risi_header_title"))
-                            Text(titleSuffix, style = titleStyle, color = titleColor, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible, modifier = Modifier.alignByBaseline().testTag("risi_header_suffix"))
+                            Text(titleSuffix, style = titleStyle, color = titleColor, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible, modifier = Modifier.alignByBaseline().padding(end = 2.dp).testTag("risi_header_suffix"))
                         }
                     }
                     if (!subtitle.isNullOrEmpty()) {
@@ -227,7 +227,17 @@ fun RisiTopBar(
         },
         actions = actions,
         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+        // P0 2026-10-10 ("Ris'" on nightly.47): the bar clips its content to its height; with a title and a subtitle
+        // at a large font scale 64 dp is not enough, so the bar grows with the font scale (never below 64 dp).
+        expandedHeight = headerBarHeight(androidx.compose.ui.platform.LocalDensity.current.fontScale, !subtitle.isNullOrEmpty()),
     )
+}
+
+/** The bar's height: 64 dp, or more for a title + subtitle at font scale > 1 (title 24 sp + subtitle 16 sp lines + 16 dp). */
+fun headerBarHeight(fontScale: Float, twoLines: Boolean): Dp {
+    val base = TopAppBarDefaults.TopAppBarExpandedHeight
+    if (!twoLines) return maxOf(base, (24 * fontScale + 28).dp)
+    return maxOf(base, ((24 + 16) * fontScale * 1.1f + 16).dp)
 }
 
 // ---- Lists ----

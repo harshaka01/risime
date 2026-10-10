@@ -564,6 +564,10 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override fun openSkills(skillId: String?) = c.risiUi.openSkills(skillId)
 
+        override fun openNotificationSettings() {
+            c.startExternal(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, c.packageNameForLinks))
+        }
+
         override fun useDraft(conversationId: String, text: String) = c.risiUi.useDraft(conversationId, text)
 
         override fun hasConversation(conversationId: String): Boolean = conversationNames.value.containsKey(conversationId.lowercase())

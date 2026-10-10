@@ -326,21 +326,29 @@ class RisiToolExecutor(
         val n = graphemes(a.title)
         if (start == null || end == null || start >= end || n < 1 || n > 200 || a.title.isBlank()) return RisiToolResult.error(RisiToolErrorCodes.BAD_ARGS)
         if (!accepted(call, allowedPath = true, gated = gated)) return RisiToolResult.declined()
-        val cal = calendar ?: return RisiToolResult.error(RisiToolErrorCodes.CALENDAR_UNAVAILABLE)
+        val cal = calendar ?: return RisiToolResult.addError(lk.codegen.risime.net.CalendarAddErrors.INSERT_FAILED, "no calendar on this build")
         if (!cal.canWrite() || !cal.canRead()) {
             cal.writes.put(CalendarAddRecord(a.writeId, call.requestId, a.title, a.start, a.end, a.allDay, failure = CalendarFailure.NO_PERMISSION.name, at = now()))
-            return RisiToolResult(RisiToolResult.NO_PERMISSION, null)
+            return RisiToolResult.addError(lk.codegen.risime.net.CalendarAddErrors.NO_PERMISSION, "WRITE_CALENDAR or READ_CALENDAR not granted")
         }
         if (!record(call, null)) return RisiToolResult.declined()
-        return when (val r = runCatching { cal.add(a.writeId, call.requestId, a.title, start, end, a.allDay) }.getOrElse { CalendarAddOutcome.Failed(CalendarFailure.INSERT_FAILED) }) {
+        val r = try {
+            cal.add(a.writeId, call.requestId, a.title, start, end, a.allDay)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            CalendarAddOutcome.Failed(CalendarFailure.INSERT_FAILED, "add: ${e.javaClass.simpleName}")
+        }
+        return when (r) {
             is CalendarAddOutcome.Added -> {
                 dao.setWriteTarget(a.writeId, r.record.eventId.toString())
-                ok(CalendarAddResult.serializer(), CalendarAddResult(r.record.eventId.toString(), CalendarSelection.ref(r.calendar)))
+                // v1.32 §25.3: `verified: true` only here, after the read-back matched.
+                ok(CalendarAddResult.serializer(), CalendarAddResult(r.record.eventId.toString(), CalendarSelection.ref(r.calendar), verified = true))
             }
             is CalendarAddOutcome.Failed -> {
                 dao.deleteWrite(a.writeId)
-                if (r.reason == CalendarFailure.NO_PERMISSION) RisiToolResult(RisiToolResult.NO_PERMISSION, null)
-                else RisiToolResult.error(RisiToolErrorCodes.CALENDAR_UNAVAILABLE)
+                log("risi tool calendar_add: ${r.reason.code}")
+                RisiToolResult.addError(r.reason.code, r.detail)
             }
         }
     }

@@ -42,6 +42,7 @@ class FakeCalendarBackend : CalendarBackend {
         events.values.filter { it.dtEnd > fromMs && it.dtStart < toMs }.map { e -> BusyRow(e.dtStart, e.dtEnd, e.allDay, true, e.calendarId, cals.firstOrNull { it.id == e.calendarId }?.visible ?: true) } + extra
 
     override fun insert(calendarId: Long, title: String, startMs: Long, endMs: Long, allDay: Boolean, timeZone: String): Long? {
+        insertThrows?.let { throw it }
         if (refuseInsert || cals.none { it.id == calendarId }) return null
         val id = next++
         var row = EventRow(id, calendarId, title, startMs, endMs, allDay)
@@ -52,6 +53,17 @@ class FakeCalendarBackend : CalendarBackend {
     }
 
     override fun event(id: Long) = events[id]
+
+    /** v1.32 §25.3: whether the provider lets the app create the local "RisiMe" calendar. */
+    var canCreateLocal = false
+    var insertThrows: RuntimeException? = null
+
+    override fun createLocalCalendar(name: String): Long? {
+        if (!canCreateLocal) return null
+        val id = 900L + cals.size
+        cals += PhoneCalendarInfo(id, name, name, "LOCAL", 700, true, name)
+        return id
+    }
 
     override fun delete(id: Long) = events.remove(id) != null
 }
@@ -134,23 +146,91 @@ class PhoneCalendarTest {
     @Test fun failureReasons() = runBlocking {
         // No permission.
         be.write = false
-        assertEquals(CalendarAddOutcome.Failed(CalendarFailure.NO_PERMISSION), cal.add("w1", null, "T", start, end, false))
+        assertEquals(CalendarFailure.NO_PERMISSION, (cal.add("w1", null, "T", start, end, false) as CalendarAddOutcome.Failed).reason)
         be.write = true
-        // Only a local calendar and no pick: no writable Google calendar (never silently local).
-        be.cals += listOf(local, holidays)
-        assertEquals(CalendarAddOutcome.Failed(CalendarFailure.NO_GOOGLE_CALENDAR), cal.add("w2", null, "T", start, end, false))
+        // Only read-only calendars, a local one that isn't "RisiMe", and no RisiMe can be created: read_only_calendar.
+        be.cals += listOf(local.copy(accessLevel = 200), holidays)
+        val ro = cal.add("w2", null, "T", start, end, false) as CalendarAddOutcome.Failed
+        assertEquals(CalendarFailure.NO_GOOGLE_CALENDAR, ro.reason)
+        assertEquals("read_only_calendar", ro.reason.code)
         assertTrue(be.events.isEmpty())
         assertEquals("NO_GOOGLE_CALENDAR", log.get("w2")!!.failure)
-        // The provider refuses the insert.
+        // The provider refuses the insert (no row): insert_failed.
         be.cals += google
         be.refuseInsert = true
-        assertEquals(CalendarAddOutcome.Failed(CalendarFailure.INSERT_FAILED), cal.add("w3", null, "T", start, end, false))
-        // It stores something else: verify mismatch, and the wrong event is removed again.
+        val nf = cal.add("w3", null, "T", start, end, false) as CalendarAddOutcome.Failed
+        assertEquals("insert_failed" to "insert: the provider returned no row", nf.reason.code to nf.detail)
+        // The insert throws: insert_failed with the exception, never swallowed into "added".
         be.refuseInsert = false
+        be.insertThrows = IllegalArgumentException("Only sync adapters may write to x")
+        val th = cal.add("w3b", null, "Secret title", start, end, false) as CalendarAddOutcome.Failed
+        assertEquals("insert_failed", th.reason.code)
+        assertEquals("insert: IllegalArgumentException: Only sync adapters may write to x", th.detail)
+        be.insertThrows = null
+        // It stores something else: verify_failed, and the wrong event is removed again; the detail never has the title.
         be.corrupt = { it.copy(dtStart = it.dtStart + 3_600_000) }
-        assertEquals(CalendarAddOutcome.Failed(CalendarFailure.VERIFY_MISMATCH), cal.add("w4", null, "T", start, end, false))
+        val vf = cal.add("w4", null, "Secret title", start, end, false) as CalendarAddOutcome.Failed
+        assertEquals("verify_failed", vf.reason.code)
+        assertTrue(vf.detail!!.startsWith("read-back: start "))
+        assertTrue("Secret" !in vf.detail!! && "Secret" !in th.detail!!)
         assertTrue(be.events.isEmpty())
-        assertTrue(log.get("w4")!!.failureText!!.contains("didn't read back"))
+        assertTrue(log.get("w4")!!.failureText!!.contains("wasn't there when the phone checked"))
+        // Gone on read-back: verify_failed "no row".
+        be.corrupt = null
+        val gone = object : CalendarBackend by be { override fun event(id: Long): EventRow? = null }
+        val g = PhoneCalendar(gone, choice, log, zone = { zone }).add("w5", null, "T", start, end, false) as CalendarAddOutcome.Failed
+        assertEquals("verify_failed", g.reason.code)
+        assertTrue(g.detail!!.startsWith("read-back: no row for id"))
+    }
+
+    // ---- v1.32 §25.3 target ----
+
+    @Test fun targetIsThePickElseAGooglePrimaryElseLocalRisiMeNeverReadOnly() = runBlocking {
+        val shared = PhoneCalendarInfo(7, "Team", "harsha@example.com", "com.google", 600, true, "team@group.calendar.google.com")
+        // A writable shared Google calendar is not the primary: never the default.
+        assertNull(CalendarSelection.defaultGoogle(listOf(shared, holidays)))
+        assertEquals(google, CalendarSelection.target(listOf(shared, holidays, google), null))
+        // A primary without IS_PRIMARY: the calendar named after its account.
+        val named = google.copy(isPrimary = false, ownerAccount = null)
+        assertEquals(named, CalendarSelection.defaultGoogle(listOf(shared, named)))
+        // The pick wins while it accepts events (even hidden); a read-only pick never.
+        assertEquals(shared, CalendarSelection.target(listOf(shared, google), shared.id))
+        assertEquals(google, CalendarSelection.target(listOf(holidays, google), holidays.id))
+        // No Google primary: the local "RisiMe" calendar, created on first use.
+        be.cals += listOf(shared.copy(accessLevel = 200), holidays)
+        be.canCreateLocal = true
+        val r = cal.add("w1", null, "T", start, end, false) as CalendarAddOutcome.Added
+        assertEquals("RisiMe", r.calendar.displayName)
+        assertEquals("LOCAL", r.calendar.accountType)
+        assertTrue(be.syncRequests.isEmpty()) // a local calendar has nothing to sync
+        // A second add reuses it.
+        val r2 = cal.add("w2", null, "T", start, end, false) as CalendarAddOutcome.Added
+        assertEquals(r.calendar.id, r2.calendar.id)
+        assertEquals(1, be.cals.count { it.displayName == "RisiMe" })
+    }
+
+    @Test fun aVerifiedGoogleAddRequestsASyncForItsAccount() = runBlocking {
+        be.cals += google
+        cal.add("w1", null, "T", start, end, false) as CalendarAddOutcome.Added
+        assertEquals(listOf("harsha@example.com"), be.syncRequests)
+        // All-day: UTC midnights, EVENT_TIMEZONE UTC.
+        val r = cal.add("w2", null, "Day", ms("2026-10-11T18:30:00Z"), ms("2026-10-12T18:30:00Z"), true) as CalendarAddOutcome.Added
+        val ev = be.events[r.record.eventId!!]!!
+        assertEquals(ms("2026-10-12T00:00:00Z") to ms("2026-10-13T00:00:00Z"), ev.dtStart to ev.dtEnd)
+        assertEquals("UTC", be.tz[ev.id])
+        assertEquals("Asia/Colombo", be.tz[r.record.eventId!! - 1])
+    }
+
+    @Test fun theEventCardReadsOnlyWhatThisPhoneAdded() = runBlocking {
+        be.cals += google
+        val r = cal.add("w1", null, "Meeting", start, end, false) as CalendarAddOutcome.Added
+        val v = cal.addedEvent(r.record.eventId!!) as AddedEventView.Present
+        assertEquals("Meeting", v.event.title)
+        assertEquals(start to end, v.event.begin to v.event.end)
+        assertEquals("harsha@example.com · Google", v.calendarLabel)
+        assertEquals(AddedEventView.NotHere, cal.addedEvent(4242)) // not added by this phone
+        be.events.clear()
+        assertEquals(AddedEventView.Gone, cal.addedEvent(r.record.eventId!!))
     }
 
     @Test fun removeOnlyWhatIsStillThere() = runBlocking {

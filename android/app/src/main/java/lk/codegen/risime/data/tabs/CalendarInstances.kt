@@ -110,6 +110,8 @@ data class CalendarDiagnostics(
     val days: Int,
     val calendars: List<CalendarDiag>,
     val errors: List<String>,
+    /** v1.32 §25.3 the last Risi adds on this phone: "<at> · <calendar or failure> · event <id> · on this phone: yes|no". */
+    val adds: List<String> = emptyList(),
 ) {
     companion object {
         const val TITLE = "Calendar diagnostics"
@@ -138,6 +140,11 @@ data class CalendarDiagnostics(
             add("  VISIBLE: ${if (c.info.visible) 1 else 0} · SYNC_EVENTS: ${if (c.info.syncEvents) 1 else 0}")
             add("  Account sync: ${yn(c.accountSync)} · Sync state: ${c.syncState ?: UNKNOWN} · Last sync: ${c.lastSync ?: UNKNOWN}")
             add("  Events (raw): ${n(c.events)} · Instances next $days days: ${n(c.instances)} · Counted: ${n(c.counted)}")
+        }
+        if (adds.isNotEmpty()) {
+            add("")
+            add("Risi adds (latest first):")
+            adds.forEach { add("  $it") }
         }
         add("")
         if (errors.isEmpty()) add("Errors: none") else errors.forEach { add("Error: $it") }

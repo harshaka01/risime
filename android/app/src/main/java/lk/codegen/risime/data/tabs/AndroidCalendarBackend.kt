@@ -167,6 +167,29 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
         return out.filter { r -> r.end > fromMs && r.begin < toMs }
     }
 
+    override fun createLocalCalendar(name: String): Long? {
+        val acct = name
+        val uri = CalendarContract.Calendars.CONTENT_URI.buildUpon()
+            .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
+            .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, acct)
+            .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_TYPE, CalendarContract.ACCOUNT_TYPE_LOCAL)
+            .build()
+        val v = ContentValues().apply {
+            put(CalendarContract.Calendars.ACCOUNT_NAME, acct)
+            put(CalendarContract.Calendars.ACCOUNT_TYPE, CalendarContract.ACCOUNT_TYPE_LOCAL)
+            put(CalendarContract.Calendars.NAME, name)
+            put(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME, name)
+            put(CalendarContract.Calendars.CALENDAR_COLOR, -14069085)
+            put(CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL, CalendarContract.Calendars.CAL_ACCESS_OWNER)
+            put(CalendarContract.Calendars.OWNER_ACCOUNT, acct)
+            put(CalendarContract.Calendars.VISIBLE, 1)
+            put(CalendarContract.Calendars.SYNC_EVENTS, 1)
+            put(CalendarContract.Calendars.CALENDAR_TIME_ZONE, java.util.TimeZone.getDefault().id)
+        }
+        val u = cr.insert(uri, v) ?: return null
+        return runCatching { ContentUris.parseId(u) }.getOrNull()?.takeIf { it > 0 }
+    }
+
     override fun eventCounts(): Map<Long, Int> {
         val q = cr.query(CalendarContract.Events.CONTENT_URI, arrayOf(CalendarContract.Events.CALENDAR_ID), "${CalendarContract.Events.DELETED} = 0", null, null)
             ?: throw CalendarQueryException("Events query returned no cursor (calendar provider unavailable)")
@@ -265,6 +288,8 @@ class AndroidCalendarPort(
     }
 
     override suspend fun overview(): CalendarOverview? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { cal.overview() }
+
+    override suspend fun addedEvent(eventId: Long): AddedEventView = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { cal.addedEvent(eventId) }
 
     override suspend fun diagnostics(): CalendarDiagnostics = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { cal.diagnostics() }
 

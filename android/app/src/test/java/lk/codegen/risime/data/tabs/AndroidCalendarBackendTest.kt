@@ -153,7 +153,7 @@ class AndroidCalendarBackendTest {
         val be = AndroidCalendarBackend(app)
         assertTrue(!be.canRead() && !be.canWrite())
         val pc = PhoneCalendar(be, MemoryCalendarChoice(), CalendarWriteLog())
-        assertEquals(CalendarAddOutcome.Failed(CalendarFailure.NO_PERMISSION), pc.add("w", null, "T", 0, 3_600_000, false))
+        assertEquals(CalendarFailure.NO_PERMISSION, (pc.add("w", null, "T", 0, 3_600_000, false) as CalendarAddOutcome.Failed).reason)
         assertNull(pc.check(0, 1))
         assertTrue(pc.options().isEmpty())
     }

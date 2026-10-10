@@ -1,5 +1,62 @@
 # Android status — 0.2 nightlies
 
+## READY P0 2026-10-10 (nightly.47 screenshots): calendar_add v1.32, event card, next_actions chips, Markdown in Risi bubbles, header height (JVM gate green: `assembleDebug testDebugUnitTest`, 1618 tests, 0 failed, 9 skipped)
+Branch `v1.32`, against contract 3641fca (§25.3 v1.32, §25.4 `next_actions`). No Room change, no new dependency (the Markdown renderer is ~150 lines of AnnotatedString).
+
+**Why "added" while it was in no calendar (evidence, pilot DB on spark2, ids only, titles are sealed and were not read)**
+- `risi_tool_calls`: the user who ran the 14:17 calendar check (de9b6235…, device ad92ca09… on nightly.47) has three `calendar_add` calls, all on 9 Oct
+  (15:22, 15:33, 16:05 UTC), all `answered`, each followed by a `calendar_added` entry in `risi_skill_activity`. The server writes that entry only on the
+  phone's `ok` with an `event_id` (`Skills.client_done`), and nightly.47 sends `ok` only after its read-back by id matched (calendar, title, start, end, all_day).
+  The user has no `calendar_add` on 10 Oct. So for those adds the phone's accept rule did not decline, and the insert did not fail and get swallowed. The rows were in this phone's
+  CalendarContract provider when it checked.
+- What nightly.47 lacked: no `requestSync` after the insert, and it couldn't read sync state at all (`READ_SYNC_SETTINGS` undeclared, fixed in d073737).
+  So an event written into a provider calendar whose Google sync never runs stays on the phone and never reaches Google Calendar. This matches the read side: on the
+  same phone every calendar showed 0 events while the Google Calendar app showed meetings, which means the provider's Google calendars weren't being synced.
+  Not provable without the phone. The new "Risi adds" lines in Calendar diagnostics show, for each add, the calendar and whether its row is still on the phone.
+- The other suspects, with tests: a read-only/holiday target is impossible (access >= 500, `targetIsThePick…NeverReadOnly`); a non-primary writable Google
+  calendar (a shared one) is no longer the default (the default is now a Google primary only); a LOCAL calendar is used only when picked or as "RisiMe";
+  insert exceptions and null rows are `insert_failed` with the exception in `detail` (`failureReasons`), never "added".
+
+**§25.3 v1.32 calendar_add (phone)**
+- Target: the picked calendar while `CALENDAR_ACCESS_LEVEL >= 500` (hidden allowed); else a Google primary (`IS_PRIMARY`, or named after or owned by its
+  account; shown and >= 500); else the local "RisiMe" calendar (ACCOUNT_TYPE_LOCAL, created as its sync adapter on first use, reused after).
+- Insert: CALENDAR_ID, TITLE, DTSTART, DTEND, EVENT_TIMEZONE (device zone; all-day: UTC midnights and `UTC`), AVAILABILITY busy. Read back by id and check calendar,
+  title, start, end, all_day; a mismatch deletes the row. Then `requestSync(account, AUTHORITY, MANUAL+EXPEDITED)` for a non-LOCAL account.
+- Wire: `{"status":"ok","result":{"event_id":"…","calendar":{…},"verified":true}}`; errors `{"status":"error","code":"no_permission|read_only_calendar|insert_failed|verify_failed","detail":"…"}`
+  (top level, detail <= 200 chars, never the title: e.g. `insert: the provider returned no row`, `insert: IllegalArgumentException: …`, `read-back: no row for id N`,
+  `read-back: start A != B`, `read-back: title differs`). `RisiToolResult.result` is now omitted when null (`{"status":"declined"}`). nightly.47's server accepts that.
+- Card texts kept on the phone: read_only "No calendar on this phone accepts new events. Add your Google account in Android Settings → Accounts, or choose a calendar.",
+  verify "The event wasn't there when the phone checked, so nothing was added."
+- Diagnostics gains "Risi adds (latest first):" with up to 5 lines `<ISO time> · <calendar label | failed: <code>> · event <id> · on this phone: yes|no[ · undone]`.
+
+**Event card (`added_event.event_id`)**: on `skill_done` (and an answer) that carries it, only on the phone whose write log holds that id. It shows the provider row:
+  - title (1 line, ellipsis) [`risi_added_event_title`]
+  - day/time like "Your events": `Sun 11 Oct · 09:00–10:00` / `… · All day` [`risi_added_event_when`]
+  - the calendar label `<account> · Google` [`risi_added_event_calendar`]
+  - a button `Open in Calendar` (ACTION_VIEW on `Events/<id>`, falling back to the calendar app at the event's day) [`risi_added_event_open`]
+
+  When the row is gone: `This event is no longer on this phone` [`risi_added_event_gone`]. Other devices show only the body. The old "Open" button shows only without `added_event`.
+
+**Chips (§25.4)**: `next_actions` when present (even an empty list = no chips). `ask` → `risi_request` ask with `text`; `open` → `settings.calendar` (Settings → Risi skills →
+Calendar), `settings.risi_skills`, `settings.notifications` (Android app notification settings), `settings.calendar_permission` (Android READ/WRITE_CALENDAR dialog;
+refused → Calendar skill settings), `calendar.event` (needs `event_id`; opens it). Unknown action/target, blank label, or a `calendar.event` without an id is dropped. Without
+`next_actions`, an old `next_steps` line matching Settings|Connect|Turn on|Allow|Enable|Open (case-insensitive word) becomes a deep link by keyword (notification →
+notifications; calendar + permission/access/allow → permission; skill → risi_skills; calendar → settings.calendar) or is not shown. Never sent as text:
+"Connect your calendar in Settings" now opens Calendar settings. Questions and confirm phrases are still dropped; at most 3. Tags `risi_next_<i>`.
+
+**Markdown in Risi bubbles** (answer text, summary, skill_done body, other Risi cards' body): `**bold**`/`__bold__`, `*italic*`/`_italic_` (word-bounded, so `2 * 3` and
+snake_case stay), `` `code` `` (monospace), `[label](https://…)` links (http/https only), `- `/`* `/`• `/`+ ` bullets (2-space nesting), `1. `/`1) ` numbered, `# ` headings (bold).
+An unpaired `**`/`__` is dropped, so no raw `**` is shown. Consecutive paragraphs stay one Text, so plain answers render exactly as before.
+
+**Header**: the subtitle was already its own Text (maxLines 1, ellipsis). The TopAppBar clips to its height, and that height was a fixed 64 dp. It is now
+`max(64 dp, (24+16) sp × fontScale × 1.1 + 16 dp)` with a subtitle (`headerBarHeight`): 64 dp at scale 1.0, 73 dp at 1.3. The suffix keeps overflow Visible, and has
+2 dp end padding for the glyph's overhang. Still to be checked on a device (redroid at 1.0/1.3 by root's ui-batch step).
+
+**Tests added**: `PhoneCalendarTest` (failure codes with details and no titles, verify gone, target pick/primary/RisiMe/never read-only, requestSync, all-day UTC, event card
+NotHere/Gone/Present); `RisiCalendarToolTest` (verified:true, error JSON shape); `ContractExamplesTest` (both v1.32 calendar_add examples round-trip);
+`RisiChipsTest` (every next_actions type, dropped unknowns, next_steps instructions → deep link or nothing, visibility, decoding); `AddedEventCardUiTest`;
+`RisiMarkdownTest` (spans, links, no raw `**`, lists/headings, rendering, header height).
+
 ## READY v1.32 §29.7 answer.local_events "Your events" (JVM gate green: `assembleDebug testDebugUnitTest`, 1601 tests, 0 failed, 9 skipped)
 Branch `v1.32`, against contract a9c0720. No Room or dependency change; titles never leave the phone and are never logged; nothing is stored in the message.
 - `RisiMeta.localEvents` (`local_events: {from, to}`, `RisiLocalEventsRange`); `ContractExamplesTest` decodes `envelope_risi_answer_local_events.json`.

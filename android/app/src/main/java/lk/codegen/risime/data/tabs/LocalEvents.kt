@@ -78,10 +78,13 @@ object LocalEvents {
      * One row: "Mon 12 Oct · 10:00–11:00 · Standup", "Thu 15 Oct · All day · Poya", a multi-day all-day event
      * "Thu 15 Oct – Sat 17 Oct · All day · Trip". The title is last, so the ellipsis cuts the title, never the time.
      */
-    fun rowText(e: LocalEvent, zone: ZoneId, locale: Locale = Locale.getDefault(), use24h: Boolean = true, dayPattern: String = DEFAULT_DAY_PATTERN): String {
+    fun rowText(e: LocalEvent, zone: ZoneId, locale: Locale = Locale.getDefault(), use24h: Boolean = true, dayPattern: String = DEFAULT_DAY_PATTERN): String =
+        whenText(e, zone, locale, use24h, dayPattern) + " · " + e.title.trim().ifEmpty { NO_TITLE }
+
+    /** "Mon 12 Oct · 10:00–11:00", "Thu 15 Oct · All day" (the row without its title; the event card's time line). */
+    fun whenText(e: LocalEvent, zone: ZoneId, locale: Locale = Locale.getDefault(), use24h: Boolean = true, dayPattern: String = DEFAULT_DAY_PATTERN): String {
         val df = DateTimeFormatter.ofPattern(dayPattern, locale)
         val tf = DateTimeFormatter.ofPattern(if (use24h) "HH:mm" else "h:mm a", locale)
-        val title = e.title.trim().ifEmpty { NO_TITLE }
         val start = day(e.begin, zone, df)
         val whenText = if (e.allDay) {
             val lastDay = day(maxOf(e.begin, e.end - 1), zone, df)
@@ -92,7 +95,7 @@ object LocalEvents {
             val t1 = Instant.ofEpochMilli(e.end).atZone(zone).format(tf)
             if (endDay != start && e.end - e.begin >= 86_400_000) "$start $t0 – $endDay $t1" else "$start · $t0–$t1"
         }
-        return "$whenText · $title"
+        return whenText
     }
 
     /** "No events in your phone calendars from Mon 12 Oct to Sun 18 Oct" (`to` is exclusive: its previous day). */

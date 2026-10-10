@@ -83,6 +83,12 @@ interface CalendarBackend {
     fun instanceRows(fromMs: Long, toMs: Long): List<InstanceRow> =
         instances(fromMs, toMs).map { InstanceRow(it.begin, it.end, it.allDay, if (it.busy) null else InstanceFilter.AVAILABILITY_FREE, calendarId = it.calendarId, visible = it.visible, syncId = it.syncId) }
 
+    /**
+     * v1.32 §25.3: creates the local "RisiMe" calendar (ACCOUNT_TYPE_LOCAL, owner access, visible, synced) and
+     * returns its id; null when the provider refuses. Default (fakes): none.
+     */
+    fun createLocalCalendar(name: String): Long? = null
+
     /** Diagnostics: raw `Events` rows (not deleted) per calendar id; null when not available. */
     fun eventCounts(): Map<Long, Int>? = null
 
@@ -125,16 +131,31 @@ object CalendarSelection {
         return (google.ifEmpty { w }).sortedWith(preferred)
     }
 
-    /** The default without a remembered pick: the account's own Google calendar (never a local one). */
-    fun defaultGoogle(all: List<PhoneCalendarInfo>): PhoneCalendarInfo? = all.filter { writable(it) && isGoogle(it) }.sortedWith(preferred).firstOrNull()
+    /** v1.32 §25.3: a calendar the provider lets us add to (`CALENDAR_ACCESS_LEVEL >= CAL_ACCESS_CONTRIBUTOR`). */
+    fun accepts(c: PhoneCalendarInfo): Boolean = c.accessLevel >= CAL_ACCESS_CONTRIBUTOR
+
+    /** A Google account's primary calendar: `IS_PRIMARY`, or the calendar named after (or owned by) its account. */
+    fun isPrimaryGoogle(c: PhoneCalendarInfo): Boolean =
+        isGoogle(c) && (c.isPrimary || c.displayName.equals(c.accountName, true) || c.ownerAccount.equals(c.accountName, true))
+
+    /** The default without a remembered pick: a Google account's primary calendar, writable and shown (never a local one). */
+    fun defaultGoogle(all: List<PhoneCalendarInfo>): PhoneCalendarInfo? = all.filter { writable(it) && isPrimaryGoogle(it) }.sortedWith(preferred).firstOrNull()
+
+    /** v1.32 §25.3 the local fallback calendar's name. */
+    const val RISIME_LOCAL = "RisiMe"
+
+    /** The local "RisiMe" calendar, when this phone has one that accepts events. */
+    fun localRisiMe(all: List<PhoneCalendarInfo>): PhoneCalendarInfo? =
+        all.firstOrNull { it.accountType.equals(LOCAL, true) && it.displayName == RISIME_LOCAL && accepts(it) }
 
     /**
-     * Where an event goes: the remembered pick while it is still writable (a local calendar only gets here
-     * by the user's explicit pick); else the default Google calendar; else nothing.
+     * v1.32 §25.3 where an event goes: the remembered pick while it still accepts events; else a Google account's
+     * primary calendar; else the local "RisiMe" calendar (created by [PhoneCalendar.add] when missing). Read-only
+     * calendars (holidays, birthdays, someone else's) never.
      */
     fun target(all: List<PhoneCalendarInfo>, rememberedId: Long?): PhoneCalendarInfo? {
-        rememberedId?.let { id -> all.firstOrNull { it.id == id && writable(it) }?.let { return it } }
-        return defaultGoogle(all)
+        rememberedId?.let { id -> all.firstOrNull { it.id == id && accepts(it) }?.let { return it } }
+        return defaultGoogle(all) ?: localRisiMe(all)
     }
 
     fun typeLabel(accountType: String): String = when (accountType) {
@@ -173,11 +194,11 @@ object CalendarSelection {
 }
 
 /** Why an add failed, kept on the phone and shown on the card (the wire only says `no_permission` / `calendar_unavailable`). */
-enum class CalendarFailure(val text: String) {
-    NO_PERMISSION("Calendar permission is off on this phone."),
-    NO_GOOGLE_CALENDAR("No writable Google calendar on this phone. Add your Google account in Android Settings → Accounts, or choose a calendar."),
-    INSERT_FAILED("Your calendar didn't accept the event."),
-    VERIFY_MISMATCH("The event didn't read back as it was added, so it was removed again."),
+enum class CalendarFailure(val text: String, val code: String) {
+    NO_PERMISSION("Calendar permission is off on this phone.", lk.codegen.risime.net.CalendarAddErrors.NO_PERMISSION),
+    NO_GOOGLE_CALENDAR("No calendar on this phone accepts new events. Add your Google account in Android Settings → Accounts, or choose a calendar.", lk.codegen.risime.net.CalendarAddErrors.READ_ONLY_CALENDAR),
+    INSERT_FAILED("Your calendar didn't accept the event.", lk.codegen.risime.net.CalendarAddErrors.INSERT_FAILED),
+    VERIFY_MISMATCH("The event wasn't there when the phone checked, so nothing was added.", lk.codegen.risime.net.CalendarAddErrors.VERIFY_FAILED),
 }
 
 /** What this phone added for a `calendar_add` (`write_id` → event), or why it couldn't. Local only. */
@@ -355,10 +376,22 @@ data class CalendarRead(val blocks: List<CalendarBlock>, val source: lk.codegen.
         )
 }
 
+/** v1.32 §25.3 what the event card shows. */
+sealed interface AddedEventView {
+    /** Not added by this phone: the card shows the body text only. */
+    data object NotHere : AddedEventView
+
+    /** "This event is no longer on this phone". */
+    data object Gone : AddedEventView
+
+    data class Present(val event: LocalEvent, val calendarLabel: String?) : AddedEventView
+}
+
 sealed interface CalendarAddOutcome {
     data class Added(val record: CalendarAddRecord, val calendar: PhoneCalendarInfo) : CalendarAddOutcome
 
-    data class Failed(val reason: CalendarFailure) : CalendarAddOutcome
+    /** [detail]: the exception's class/message or what didn't match (≤ 200 chars, never a title). */
+    data class Failed(val reason: CalendarFailure, val detail: String? = null) : CalendarAddOutcome
 }
 
 class PhoneCalendar(
@@ -551,7 +584,15 @@ class PhoneCalendar(
                 counted = counted?.count { it.calendarId == c.id },
             )
         }
-        return CalendarDiagnostics(true, writeGranted, master, days, list, errors)
+        return CalendarDiagnostics(true, writeGranted, master, days, list, errors, addLines())
+    }
+
+    /** The last 5 Risi adds (no titles): when, where (or why not), the event id and whether its row is still here. */
+    private fun addLines(): List<String> = writes.records.value.values.sortedByDescending { it.at }.take(5).map { r ->
+        val at = Instant.ofEpochMilli(r.at).toString()
+        val where = r.failure?.let { f -> "failed: " + (CalendarFailure.entries.firstOrNull { it.name == f }?.code ?: f) } ?: (r.calendarName ?: "unknown calendar")
+        val present = r.eventId?.let { id -> if (runCatching { backend.event(id) }.getOrNull() != null) "yes" else "no" }
+        "$at · $where" + (r.eventId?.let { " · event $it · on this phone: $present" } ?: "") + if (r.removed) " · undone" else ""
     }
 
     /** "instances: IllegalArgumentException: Invalid column x" (the exception's class and message; no user data). */
@@ -578,24 +619,67 @@ class PhoneCalendar(
     suspend fun add(writeId: String, requestId: String?, title: String, startMs: Long, endMs: Long, allDay: Boolean): CalendarAddOutcome {
         ready()
         val base = CalendarAddRecord(writeId, requestId, title, iso(startMs), iso(endMs), allDay, at = now())
-        suspend fun fail(f: CalendarFailure): CalendarAddOutcome {
+        suspend fun fail(f: CalendarFailure, detail: String? = null): CalendarAddOutcome {
             log("risi calendar: add failed (${f.name})")
             writes.put(base.copy(failure = f.name))
-            return CalendarAddOutcome.Failed(f)
+            return CalendarAddOutcome.Failed(f, detail?.take(200))
         }
-        if (!backend.canWrite() || !backend.canRead()) return fail(CalendarFailure.NO_PERMISSION)
-        val cal = target() ?: return fail(CalendarFailure.NO_GOOGLE_CALENDAR)
+        if (!backend.canWrite() || !backend.canRead()) return fail(CalendarFailure.NO_PERMISSION, "WRITE_CALENDAR or READ_CALENDAR not granted")
+        val all = runCatching { backend.calendars() }.getOrElse { return fail(CalendarFailure.INSERT_FAILED, "calendars: ${errText(it)}") }
+        // v1.32 §25.3: the pick, else a Google primary, else the local "RisiMe" calendar (created on first use).
+        val cal = CalendarSelection.target(all, choice.chosen.value)
+            ?: runCatching { backend.createLocalCalendar(CalendarSelection.RISIME_LOCAL) }.getOrNull()?.let { id ->
+                runCatching { backend.calendars() }.getOrDefault(emptyList()).firstOrNull { it.id == id && CalendarSelection.accepts(it) }
+            }
+            ?: return fail(CalendarFailure.NO_GOOGLE_CALENDAR, "no calendar with access >= contributor (${all.size} calendars)")
         val (s, e, tz) = if (allDay) allDaySpan(startMs, endMs).let { Triple(it.first, it.second, "UTC") } else Triple(startMs, endMs, zone().id)
-        val id = runCatching { backend.insert(cal.id, title, s, e, allDay, tz) }.getOrNull() ?: return fail(CalendarFailure.INSERT_FAILED)
-        val back = runCatching { backend.event(id) }.getOrNull()
-        if (back == null || back.calendarId != cal.id || back.title != title || back.dtStart != s || back.dtEnd != e || back.allDay != allDay) {
-            runCatching { backend.delete(id) }
-            return fail(CalendarFailure.VERIFY_MISMATCH)
+        val id = try {
+            backend.insert(cal.id, title, s, e, allDay, tz)
+        } catch (t: Exception) {
+            return fail(CalendarFailure.INSERT_FAILED, "insert: ${errText(t)}")
+        } ?: return fail(CalendarFailure.INSERT_FAILED, "insert: the provider returned no row")
+        val back = try {
+            backend.event(id)
+        } catch (t: Exception) {
+            return fail(CalendarFailure.VERIFY_MISMATCH, "read-back: ${errText(t)}")
+        }
+        val mismatch = verifyMismatch(back, id, cal.id, title, s, e, allDay)
+        if (mismatch != null) {
+            if (back != null) runCatching { backend.delete(id) }
+            return fail(CalendarFailure.VERIFY_MISMATCH, mismatch)
         }
         val rec = base.copy(eventId = id, calendarId = cal.id, calendarName = CalendarSelection.label(cal), accountType = cal.accountType)
         writes.put(rec)
+        // v1.32 §25.3: push it to the account now (expedited), so it reaches Google and the user's other devices.
+        if (!cal.accountType.equals(CalendarSelection.LOCAL, true)) runCatching { backend.requestSync(cal.accountName, cal.accountType) }
         log("risi calendar: added and verified (${CalendarSelection.typeLabel(cal.accountType)})")
         return CalendarAddOutcome.Added(rec, cal)
+    }
+
+    private fun errText(t: Throwable) = "${t.javaClass.simpleName}${t.message?.let { ": $it" } ?: ""}"
+
+    /** v1.32 §25.3 the read-back check: what didn't match (never the title's text), or null. */
+    private fun verifyMismatch(back: EventRow?, id: Long, calId: Long, title: String, s: Long, e: Long, allDay: Boolean): String? = when {
+        back == null -> "read-back: no row for id $id"
+        back.calendarId != calId -> "read-back: calendar ${back.calendarId} != $calId"
+        back.title != title -> "read-back: title differs"
+        back.dtStart != s -> "read-back: start ${back.dtStart} != $s"
+        back.dtEnd != e -> "read-back: end ${back.dtEnd} != $e"
+        back.allDay != allDay -> "read-back: all_day differs"
+        else -> null
+    }
+
+    /**
+     * v1.32 §25.3 the event card: the provider row of an event THIS phone added ([writes] holds it), with its
+     * calendar's label. [AddedEventView.NotHere] on another device; [AddedEventView.Gone] when the row is gone.
+     */
+    fun addedEvent(eventId: Long): AddedEventView {
+        if (writes.records.value.values.none { it.eventId == eventId }) return AddedEventView.NotHere
+        if (!backend.canRead()) return AddedEventView.Gone
+        val row = runCatching { backend.event(eventId) }.getOrNull() ?: return AddedEventView.Gone
+        val cal = runCatching { backend.calendars() }.getOrDefault(emptyList()).firstOrNull { it.id == row.calendarId }
+        val (b, en) = if (row.allDay) InstanceFilter.localAllDay(row.dtStart, zone()) to InstanceFilter.localAllDay(row.dtEnd, zone()) else row.dtStart to row.dtEnd
+        return AddedEventView.Present(LocalEvent(row.title.orEmpty(), b, en, row.allDay), cal?.let { CalendarSelection.label(it) })
     }
 
     /** Undo: deletes the event this phone added for [writeId] if it is still there; false: not found. */

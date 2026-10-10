@@ -15,6 +15,19 @@ interface RisiHost {
     /** `risi_request` `ask` from the @Risi chip (the text is never parsed). */
     fun ask(text: String)
 
+    /** v1.32 §25.4 an `open` chip: `settings.calendar`, `settings.risi_skills`, `settings.notifications`, `calendar.event`. */
+    fun openTarget(target: String, eventId: String?) {
+        when (target) {
+            lk.codegen.risime.net.RisiNextAction.SETTINGS_CALENDAR, lk.codegen.risime.net.RisiNextAction.SETTINGS_CALENDAR_PERMISSION -> openSkills(lk.codegen.risime.net.RisiSkillIds.CALENDAR)
+            lk.codegen.risime.net.RisiNextAction.SETTINGS_RISI_SKILLS -> openSkills(null)
+            lk.codegen.risime.net.RisiNextAction.SETTINGS_NOTIFICATIONS -> openNotificationSettings()
+            lk.codegen.risime.net.RisiNextAction.CALENDAR_EVENT -> eventId?.toLongOrNull()?.let { calendar?.open(it) }
+        }
+    }
+
+    /** Android's notification settings for this app. */
+    fun openNotificationSettings() {}
+
     /** v1.32 §29.7 "Your events": this phone's own events in the range (phone provider + cached Risi Calendar). */
     suspend fun localEvents(fromMs: Long, toMs: Long): lk.codegen.risime.data.tabs.LocalEventsResult = lk.codegen.risime.data.tabs.LocalEventsResult.Unavailable
 

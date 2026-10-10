@@ -123,6 +123,10 @@ data class RisiMeta(
     @SerialName("next_steps") val nextSteps: List<String> = emptyList(),
     /** v1.32 §29.7: the checked range whose events the asker's own phone lists under the answer (never sent back). */
     @SerialName("local_events") val localEvents: RisiLocalEventsRange? = null,
+    /** v1.32 §25.4: typed chips (`ask` | `open`); when present, `next_steps` are not shown. Null: absent. */
+    @SerialName("next_actions") val nextActions: List<RisiNextAction>? = null,
+    /** v1.32 §25.3: the success post of a `calendar_add` (the adding phone shows its own provider row). */
+    @SerialName("added_event") val addedEvent: RisiAddedEvent? = null,
     @SerialName("local_search") val localSearch: RisiLocalSearch? = null,
     @SerialName("turn_ref") val turnRef: String? = null,
     // v1.25 confirm
@@ -386,3 +390,28 @@ interface RisiRest {
 /** v1.32 §29.7 `answer.local_events`: the checked range (at most 14 days); the asker's phone lists its own events in it. */
 @Serializable
 data class RisiLocalEventsRange(val from: String, val to: String)
+
+/** v1.32 §25.4 one chip: `ask` sends [text] as the user's Risi request; `open` a deep link [target]. */
+@Serializable
+data class RisiNextAction(
+    val label: String = "",
+    val action: String = "",
+    val text: String? = null,
+    val target: String? = null,
+    @SerialName("event_id") val eventId: String? = null,
+) {
+    companion object {
+        const val ASK = "ask"
+        const val OPEN = "open"
+        const val SETTINGS_CALENDAR = "settings.calendar"
+        const val SETTINGS_RISI_SKILLS = "settings.risi_skills"
+        const val SETTINGS_NOTIFICATIONS = "settings.notifications"
+        const val SETTINGS_CALENDAR_PERMISSION = "settings.calendar_permission"
+        const val CALENDAR_EVENT = "calendar.event"
+        val TARGETS = setOf(SETTINGS_CALENDAR, SETTINGS_RISI_SKILLS, SETTINGS_NOTIFICATIONS, SETTINGS_CALENDAR_PERMISSION, CALENDAR_EVENT)
+    }
+}
+
+/** v1.32 §25.3 `added_event`: the provider's event id on the phone that added it. */
+@Serializable
+data class RisiAddedEvent(@SerialName("event_id") val eventId: String)

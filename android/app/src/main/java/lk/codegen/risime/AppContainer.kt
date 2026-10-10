@@ -834,6 +834,11 @@ class AppContainer(
     // ---- Images (contract v1.11 §14, decision 042). Only with the native core (media API). ----
     private val appContext: Context = context.applicationContext
 
+    /** v1.32 §25.4 deep links from Risi chips (Android settings screens). */
+    fun startExternal(i: android.content.Intent) { runCatching { appContext.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+
+    val packageNameForLinks: String get() = appContext.packageName
+
     fun appContentResolver(): android.content.ContentResolver = appContext.contentResolver
     val mediaCrypto: lk.codegen.risime.data.media.MediaCrypto? by lazy {
         if (BuildConfig.CRYPTO_AVAILABLE) lk.codegen.risime.data.media.MediaCrypto.get() else null

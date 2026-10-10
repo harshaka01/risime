@@ -159,6 +159,20 @@ class ContractExamplesTest {
     private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
+        // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.
+        "risi_tool_result_calendar_add_v132.json" to { s ->
+            ProtocolJson.decodeFromString<RisiToolResult>(s).also {
+                val r = ProtocolJson.decodeFromJsonElement(CalendarAddResult.serializer(), it.result!!)
+                require(it.status == RisiToolResult.OK && r.eventId == "4711" && r.verified == true)
+                require(ProtocolJson.parseToJsonElement(ProtocolJson.encodeToString(RisiToolResult.serializer(), RisiToolResult(RisiToolResult.OK, ProtocolJson.encodeToJsonElement(CalendarAddResult.serializer(), CalendarAddResult("4711", verified = true)) as kotlinx.serialization.json.JsonObject))) == ProtocolJson.parseToJsonElement(s))
+            }
+        },
+        "risi_tool_result_calendar_add_error_v132.json" to { s ->
+            ProtocolJson.decodeFromString<RisiToolResult>(s).also {
+                require(it.status == RisiToolResult.ERROR && it.code == CalendarAddErrors.VERIFY_FAILED && it.detail == "read-back: no row for id 4711" && it.result == null)
+                require(ProtocolJson.parseToJsonElement(ProtocolJson.encodeToString(RisiToolResult.serializer(), RisiToolResult.addError("verify_failed", "read-back: no row for id 4711"))) == ProtocolJson.parseToJsonElement(s))
+            }
+        },
         // v1.32 §29.7 answer.local_events: the checked range the asker's phone lists its own events for.
         "envelope_risi_answer_local_events.json" to { s ->
             ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {

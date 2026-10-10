@@ -120,7 +120,7 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     lk.codegen.risime.net.RisiKinds130.NOTE_CARD -> lk.codegen.risime.ui.notes.NoteCardBody(row, r, ctx)
                     lk.codegen.risime.net.RisiKinds130.NOTES_SAVED -> lk.codegen.risime.ui.notes.NotesSavedCardBody(row, r, ctx)
                     lk.codegen.risime.net.RisiKinds131.GOOGLE_RECONNECT -> GoogleReconnectCard(row, r, ctx)
-                    else -> Text(row.body)
+                    else -> lk.codegen.risime.ui.common.RisiMarkdownText(row.body)
                 }
                 FeedbackRow(r, ctx)
             }
@@ -232,7 +232,7 @@ private fun DigestCard(r: RisiMeta, ctx: RisiCardContext) {
 @Composable
 private fun AnswerCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        Text(lk.codegen.risime.data.gcal.GcalNames.render(r.answer ?: row.body, r.sources, ctx.host.gcalNames), style = MaterialTheme.typography.bodyLarge)
+        lk.codegen.risime.ui.common.RisiMarkdownText(lk.codegen.risime.data.gcal.GcalNames.render(r.answer ?: row.body, r.sources, ctx.host.gcalNames), style = MaterialTheme.typography.bodyLarge)
         // Sources: a tappable quote of each message (sender + first words) that scrolls to it; nothing for one not on this phone.
         ctx.quotes(r).forEachIndexed { i, q ->
             Surface(
@@ -258,7 +258,7 @@ private fun SummaryCard(r: RisiMeta, ctx: RisiCardContext) {
         lk.codegen.risime.data.tabs.SummaryPeriods.periodLine(r.period)?.let {
             Text(it, style = MaterialTheme.typography.titleSmall, modifier = Modifier.testTag("risi_summary_period"))
         }
-        r.summary?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
+        r.summary?.let { lk.codegen.risime.ui.common.RisiMarkdownText(it, style = MaterialTheme.typography.bodyLarge) }
         if (r.days.isNotEmpty()) {
             Text(
                 "Based on: " + r.days.joinToString(", ") { lk.codegen.risime.data.tabs.SummaryPeriods.dayLabel(it) },
