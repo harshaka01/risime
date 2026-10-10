@@ -100,6 +100,17 @@ private fun Line(label: String, value: String, tag: String? = null, onClick: (()
     }
 }
 
+/** §29.9 + §31.7 the mini day timeline with the Google busy blocks (or the caption) beside the Risi events. */
+@Composable
+internal fun CardTimeline(ctx: RisiCardContext, eventId: String?, start: String, end: String, allDay: Boolean, cache: List<RisiEvent>, zone: ZoneId) {
+    val s = remember(start) { lk.codegen.risime.data.calendar.RisiEventRows.ms(start) }
+    val g by androidx.compose.runtime.produceState<lk.codegen.risime.data.calendar.TimelineGoogle?>(null, ctx.host, s, zone) {
+        value = if (s == null) null else runCatching { ctx.host.googleTimeline(s, zone) }.getOrNull()
+    }
+    val t = remember(eventId, start, end, allDay, cache, zone, g) { RisiCalendarTimeline.compute(eventId, start, end, allDay, cache, zone, g) }
+    t?.let { MiniDayTimeline(it) }
+}
+
 /** Title, when, with, from: the body every event card shares. */
 @Composable
 private fun EventBody(v: EventCardView, sourceConversationId: String?, ctx: RisiCardContext, zone: ZoneId) {
@@ -146,6 +157,12 @@ fun MiniDayTimeline(t: DayTimeline, modifier: Modifier = Modifier) {
                     b.clash -> red
                     else -> grey
                 }
+                if (b.google) {
+                    // §31.7 Google busy time: grey with a dotted edge.
+                    drawRect(c.copy(alpha = 0.35f), Offset(x0, h * 0.15f), Size(x1 - x0, h * 0.7f))
+                    drawRect(c, Offset(x0, h * 0.15f), Size(x1 - x0, h * 0.7f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f, pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(4f, 4f))))
+                    continue
+                }
                 if (!b.self && b.proposed) {
                     drawRect(c.copy(alpha = 0.25f), Offset(x0, 0f), Size(x1 - x0, h))
                     clipRect(x0, 0f, x1, h) {
@@ -163,6 +180,7 @@ fun MiniDayTimeline(t: DayTimeline, modifier: Modifier = Modifier) {
             if (t.allDay) Text("All day", style = MaterialTheme.typography.labelSmall)
             Text("%02d:%02d".format((t.toMin / 60) % 24, t.toMin % 60).let { if (t.toMin >= 1440) "24:00" else it }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        t.googleNote?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_event_google_note")) }
         t.clashText?.let { Text(it, color = clashColor(), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("risi_event_clash")) }
     }
 }
@@ -203,8 +221,7 @@ internal fun RisiEventCard(row: MessageEntity, card: RisiCalendarCard, ctx: Risi
         if (invite && card.reason == "time_changed") Text("The time changed", style = MaterialTheme.typography.labelMedium, color = OfficialAccent)
         EventBody(v, card.sourceConversationId, ctx, zone)
         if (!v.cancelled && v.start != null) {
-            val t = remember(v, cache) { RisiCalendarTimeline.compute(v.eventId, v.start!!, v.end ?: v.start!!, v.allDay, cache, zone) }
-            t?.let { MiniDayTimeline(it) }
+            CardTimeline(ctx, v.eventId, v.start!!, v.end ?: v.start!!, v.allDay, cache, zone)
         }
         val mine = v.statusOf(ctx.host.me)
         val answer = if (ctx.readOnly || port == null || busy) emptyList() else RisiEventCards.answerButtons(card, v, ctx.host.me, ctx.nowMs)
@@ -263,7 +280,7 @@ internal fun RisiCalendarSuggestionCard(row: MessageEntity, card: RisiCalendarCa
         val title = cached?.title ?: card.title
         Text("$who suggests ${RisiCalendarViews.whenLabel(card.start, card.end, card.allDay, zone)}" + (title?.let { " for '$it'" } ?: ""), style = MaterialTheme.typography.bodyMedium)
         if (card.start != null) {
-            RisiCalendarTimeline.compute(card.eventId, card.start!!, card.end ?: card.start!!, card.allDay, events, zone)?.let { MiniDayTimeline(it) }
+            CardTimeline(ctx, card.eventId, card.start!!, card.end ?: card.start!!, card.allDay, events, zone)
         }
         answered?.let { Text(if (it == "use") "Moved to the suggested time" else "Kept the original time", style = MaterialTheme.typography.labelLarge, modifier = Modifier.testTag("risi_suggestion_state")) }
         note?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -332,7 +349,7 @@ internal fun RisiCalendarAddCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardC
         }
         Text("Risi Calendar · " + RisiCalendarViews.reminderLabel(reminder), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (state == RisiToolCards.ConfirmState.OPEN && start != null) {
-            RisiCalendarTimeline.compute(null, start, end ?: start, allDay, events, zone)?.let { MiniDayTimeline(it) }
+            CardTimeline(ctx, null, start, end ?: start, allDay, events, zone)
         }
         when (state) {
             RisiToolCards.ConfirmState.CANCELLED -> Text("Cancelled", modifier = Modifier.testTag("risi_confirm_state"))

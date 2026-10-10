@@ -85,6 +85,21 @@ interface RisiHost {
 
     /** §30.6 the Notes list. */
     fun openNotes() {}
+
+    /**
+     * §31.5 the local names of Google calendars by their `ref` (the Google phone only: empty elsewhere). The "Checked:"
+     * line of an answer shows them in place of the server's counts; the stored message is never changed.
+     */
+    val gcalNames: Map<String, String> get() = emptyMap()
+
+    /**
+     * §31.7 the Google side of the day timeline of an event at [startMs]: the day's busy blocks on the Google phone
+     * (kept 5 minutes in memory, never stored), or the caption on a failed read / on the user's other devices.
+     */
+    suspend fun googleTimeline(startMs: Long, zone: java.time.ZoneId): lk.codegen.risime.data.calendar.TimelineGoogle? = null
+
+    /** §31.8 the `google_reconnect` card's [Reconnect]: Settings → Risi skills → Calendar. */
+    fun openGoogleCalendarSettings() = openSkills(lk.codegen.risime.net.RisiSkillIds.CALENDAR)
 }
 
 /** Everything a card needs from its screen. */

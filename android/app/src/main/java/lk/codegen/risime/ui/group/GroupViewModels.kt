@@ -596,6 +596,15 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override fun openNote(noteId: String) = c.risiUi.openNote(noteId)
 
+        // §31.5 / §31.7 (the Google phone shows real names and Google busy blocks; elsewhere the counts and a caption).
+        override val gcalNames: Map<String, String> get() = if (c.googleCalendarOn()) c.gcalNames.value else emptyMap()
+
+        override suspend fun googleTimeline(startMs: Long, zone: java.time.ZoneId) =
+            if (!c.googleCalendarOn()) null else c.gcal.timelineFor(
+                startMs, zone, c.risiSkillsStore.localState(lk.codegen.risime.net.RisiSkillIds.CALENDAR) == lk.codegen.risime.net.RisiSkillStates.OFF,
+                runCatching { c.sessionStore.deviceId() }.getOrNull(),
+            )
+
         override fun openNotes() = c.risiUi.openNotes()
 
         private fun risiChatId(): String? = c.chatTabs.rows.value?.values?.firstOrNull { it.risi }?.conversationId

@@ -303,6 +303,11 @@ class AppContainer(
 
     private fun googleGrantsSkill(s: lk.codegen.risime.net.RisiSkill) = s.id == lk.codegen.risime.net.RisiSkillIds.CALENDAR && gcalHeld.value && gcalSwitch.serverOn.value
 
+    /** §31.5 the local names of the picked Google calendars by `ref` (this phone only; the "Checked:" line shows them). */
+    val gcalNames: kotlinx.coroutines.flow.StateFlow<Map<String, String>> by lazy {
+        db.gcal().observeCalendars().map { rows -> rows.associate { it.ref to it.name } }.stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyMap())
+    }
+
     /** §31: the link, the picks, the busy reads and the copies. Created on first use. */
     val gcal: lk.codegen.risime.data.gcal.GcalRuntime by lazy {
         lk.codegen.risime.data.gcal.GcalRuntime(

@@ -157,6 +157,17 @@ internal fun SkillNeededCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardConte
     }
 }
 
+/** v1.31 §31.8 `google_reconnect`: the body, and [Reconnect] (opens Settings → Risi skills → Calendar, where the section offers it). */
+@Composable
+internal fun GoogleReconnectCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
+    Column(Modifier.testTag("risi_google_reconnect"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+        Text(row.body, style = MaterialTheme.typography.bodyLarge)
+        if ("reconnect" in r.buttons && !ctx.readOnly) {
+            Button(onClick = { ctx.host.openGoogleCalendarSettings() }, modifier = Modifier.testTag("risi_google_reconnect_button")) { Text("Reconnect") }
+        }
+    }
+}
+
 /** §25.4 answer v2: the steps under the answer and up to 3 next-step chips (they pre-fill the composer). */
 @Composable
 internal fun AnswerExtras(r: RisiMeta, ctx: RisiCardContext) {

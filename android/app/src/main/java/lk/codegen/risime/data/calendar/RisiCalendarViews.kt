@@ -159,9 +159,19 @@ object RisiCalendarViews {
 }
 
 /** The mini day timeline of an event card (§29.9). Minutes of the viewer's day. */
-data class TimelineBlock(val startMin: Int, val endMin: Int, val self: Boolean, val proposed: Boolean, val clash: Boolean)
+data class TimelineBlock(val startMin: Int, val endMin: Int, val self: Boolean, val proposed: Boolean, val clash: Boolean, val google: Boolean = false)
 
-data class DayTimeline(val date: LocalDate, val fromMin: Int, val toMin: Int, val blocks: List<TimelineBlock>, val clashCount: Int, val allDay: Boolean) {
+/**
+ * v1.31 §31.7 the Google side of a day's timeline (the Google phone only): the day's Google busy blocks (epoch ms; copies
+ * are never in them, no titles) and/or a [note] ("Google Calendar not checked", "Google Calendar is checked on Pixel 8").
+ */
+data class TimelineGoogle(val blocks: List<Pair<Long, Long>> = emptyList(), val note: String? = null)
+
+data class DayTimeline(
+    val date: LocalDate, val fromMin: Int, val toMin: Int, val blocks: List<TimelineBlock>, val clashCount: Int, val allDay: Boolean,
+    /** §31.7 the caption under the timeline about Google (null: nothing to say). */
+    val googleNote: String? = null,
+) {
     val clashText: String? get() = when (clashCount) {
         0 -> null
         1 -> "Clashes with 1 event"
@@ -178,7 +188,7 @@ object RisiCalendarTimeline {
      * from the local cache (cancelled, declined and all-day ones left out; proposed hatched), this event in
      * the accent, and every other event overlapping it marked as a clash. No titles.
      */
-    fun compute(eventId: String?, start: String, end: String, allDay: Boolean, cache: List<RisiEvent>, zone: ZoneId): DayTimeline? {
+    fun compute(eventId: String?, start: String, end: String, allDay: Boolean, cache: List<RisiEvent>, zone: ZoneId, google: TimelineGoogle? = null): DayTimeline? {
         val s = RisiEventRows.ms(start) ?: return null
         val e = (RisiEventRows.ms(end) ?: (s + 3_600_000L)).coerceAtLeast(s)
         val date = Instant.ofEpochMilli(s).atZone(zone).toLocalDate()
@@ -197,6 +207,13 @@ object RisiCalendarTimeline {
         }
         val blocks = ArrayList<TimelineBlock>()
         var clashes = 0
+        // §31.7 Google busy blocks: grey with a dotted edge; they count in "Clashes with N events".
+        for ((gs, ge) in google?.blocks.orEmpty()) {
+            if (ge <= day0 || gs >= day1 || ge <= gs) continue
+            val clash = !allDay && gs < e && ge > s
+            if (clash) clashes++
+            blocks += TimelineBlock(minOf(gs), if (ge >= day1) ((day1 - day0) / 60_000L).toInt() else minOf(ge), self = false, proposed = false, clash = clash, google = true)
+        }
         for ((os, oe, proposed) in others) {
             val clash = !allDay && os < e && oe > s
             if (clash) clashes++
@@ -205,7 +222,7 @@ object RisiCalendarTimeline {
         val from = if (allDay) DAY_FROM_MIN else kotlin.math.min(DAY_FROM_MIN, (selfFrom / 60) * 60)
         val to = if (allDay) DAY_TO_MIN else kotlin.math.max(DAY_TO_MIN, ((selfTo + 59) / 60) * 60).coerceAtMost(24 * 60)
         if (!allDay) blocks += TimelineBlock(selfFrom, selfTo, self = true, proposed = false, clash = clashes > 0)
-        return DayTimeline(date, from, to, blocks.sortedBy { it.startMin }, clashes, allDay)
+        return DayTimeline(date, from, to, blocks.sortedBy { it.startMin }, clashes, allDay, google?.note)
     }
 }
 

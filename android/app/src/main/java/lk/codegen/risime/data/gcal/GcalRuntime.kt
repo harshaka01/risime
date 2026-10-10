@@ -85,6 +85,42 @@ class GcalRuntime(
         return r
     }
 
+    private data class Cached(val at: Long, val read: GcalRead)
+
+    private val dayCache = java.util.concurrent.ConcurrentHashMap<Pair<Long, Long>, Cached>()
+
+    /**
+     * §31.7 the Google side of an event card's day timeline. On the Google phone: that day's busy blocks, read when
+     * the card renders and kept in memory for 5 minutes (never stored, no titles); a failed read gives the caption
+     * "Google Calendar not checked", never an empty day. On the user's other devices: "Google Calendar is checked on <device>".
+     */
+    suspend fun timelineFor(startMs: Long, zone: java.time.ZoneId, skillOff: Boolean, me: String?, nowMs: Long = System.currentTimeMillis()): lk.codegen.risime.data.calendar.TimelineGoogle? {
+        if (!switchOn()) return null
+        val l = manager.link.value
+        if (!l.linked) return null
+        if (!manager.isMine(l, me)) {
+            return lk.codegen.risime.data.calendar.TimelineGoogle(note = "Google Calendar is checked on ${l.deviceName?.takeIf { it.isNotBlank() } ?: "another device"}")
+        }
+        val notChecked = lk.codegen.risime.data.calendar.TimelineGoogle(note = "Google Calendar not checked")
+        if (l.state != GcalLinkStates.CONNECTED || manager.localReauth.value || skillOff || dao.calendars().none { it.read }) return notChecked
+        val day = java.time.Instant.ofEpochMilli(startMs).atZone(zone).toLocalDate()
+        val from = day.atStartOfDay(zone).toInstant().toEpochMilli()
+        val to = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val key = from to to
+        val hit = dayCache[key]?.takeIf { nowMs - it.at < 5 * 60_000L }
+        val read = hit?.read ?: busy.read(from, to).also { dayCache[key] = Cached(nowMs, it) }
+        if (read.reauth) runCatching { manager.markReauth() }
+        if (!read.report.readOk) return notChecked
+        return lk.codegen.risime.data.calendar.TimelineGoogle(read.blocks.mapNotNull { b ->
+            val s = lk.codegen.risime.data.calendar.RisiEventRows.ms(b.start) ?: return@mapNotNull null
+            val e = lk.codegen.risime.data.calendar.RisiEventRows.ms(b.end) ?: return@mapNotNull null
+            s to e
+        })
+    }
+
+    /** Drops what the timeline cached (Disconnect, reconnect, picks changed). */
+    fun clearDayCache() = dayCache.clear()
+
     /** The `gcal-copy` job's body: refresh the link if this process doesn't know it yet, run, and pause on a lost grant. */
     suspend fun runCopies(full: Boolean): CopyOutcome {
         if (!switchOn()) return CopyOutcome.IDLE

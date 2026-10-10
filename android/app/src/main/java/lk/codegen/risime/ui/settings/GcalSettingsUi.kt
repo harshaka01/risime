@@ -241,6 +241,7 @@ class GcalSettingsModel(
                 val sel = GcalSelection(p.calendars, p.read, p.write, p.mirror)
                 val account = rt.authorizer.accountName()
                 val r = if (p.changing) manager.change(sel, account) else manager.connect(sel, account)
+                rt.clearDayCache()
                 if (r is GcalOutcome.Failed) {
                     ui { it.copy(note = GcalText.FAILED) }
                 } else {
@@ -274,6 +275,7 @@ class GcalSettingsModel(
         scope.launch {
             try {
                 val r = manager.disconnect(removeCopies)
+                rt.clearDayCache()
                 if (r is GcalOutcome.Failed) note(GcalText.FAILED) else note(null)
             } finally {
                 busy(false)

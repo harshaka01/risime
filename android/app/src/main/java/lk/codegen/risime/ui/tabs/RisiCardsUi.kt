@@ -119,6 +119,7 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     in lk.codegen.risime.net.RisiKinds129.ALL -> RisiCalendarCardBody(row, r, ctx)
                     lk.codegen.risime.net.RisiKinds130.NOTE_CARD -> lk.codegen.risime.ui.notes.NoteCardBody(row, r, ctx)
                     lk.codegen.risime.net.RisiKinds130.NOTES_SAVED -> lk.codegen.risime.ui.notes.NotesSavedCardBody(row, r, ctx)
+                    lk.codegen.risime.net.RisiKinds131.GOOGLE_RECONNECT -> GoogleReconnectCard(row, r, ctx)
                     else -> Text(row.body)
                 }
                 FeedbackRow(r, ctx)
@@ -150,6 +151,7 @@ private fun headerOf(r: RisiMeta) = risiCalendarHeader(r) ?: when (r.kind) {
     lk.codegen.risime.net.RisiKinds127.ITEM_CLARIFY -> "Risi · When is it due?"
     lk.codegen.risime.net.RisiKinds130.NOTE_CARD -> "Risi · Notes"
     lk.codegen.risime.net.RisiKinds130.NOTES_SAVED -> "Risi · Notes saved"
+    lk.codegen.risime.net.RisiKinds131.GOOGLE_RECONNECT -> "Risi · Google Calendar"
     else -> "Risi"
 }
 
@@ -229,7 +231,7 @@ private fun DigestCard(r: RisiMeta, ctx: RisiCardContext) {
 @Composable
 private fun AnswerCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        Text(r.answer ?: row.body, style = MaterialTheme.typography.bodyLarge)
+        Text(lk.codegen.risime.data.gcal.GcalNames.render(r.answer ?: row.body, r.sources, ctx.host.gcalNames), style = MaterialTheme.typography.bodyLarge)
         // Sources: a tappable quote of each message (sender + first words) that scrolls to it; nothing for one not on this phone.
         ctx.quotes(r).forEachIndexed { i, q ->
             Surface(
