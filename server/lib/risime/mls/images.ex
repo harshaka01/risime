@@ -22,20 +22,23 @@ defmodule RisiMe.MLS.Images do
   @census_days 30
 
   @doc """
-  Adds `images_ready`/`missing_images` (§14.1) and `deletes_ready`/`missing_deletes` (§15.1) to
+  Adds `images_ready`/`missing_images` (§14.1), `files_ready`/`missing_files` (v1.34 §33.1, same rule) and `deletes_ready`/`missing_deletes` (§15.1) to
   a `GET /mls/groups/{id}` view.
   """
   def put_readiness(%{e2ee: e2ee} = view, conversation_id, caller \\ nil) do
     members = member_ids(conversation_id)
     missing = missing(members, "images")
     missing_deletes = missing(members, "deletes")
+    missing_files = missing(members, "files")
 
     view
     |> Map.merge(%{
       images_ready: e2ee and missing == [],
       missing_images: missing,
       deletes_ready: missing_deletes == [],
-      missing_deletes: missing_deletes
+      missing_deletes: missing_deletes,
+      files_ready: e2ee and missing_files == [],
+      missing_files: missing_files
     })
     |> put_calls(conversation_id, members)
     |> put_group_calls(conversation_id, members, caller)

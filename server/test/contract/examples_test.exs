@@ -336,6 +336,16 @@ defmodule RisiMe.ContractExamplesTest do
   # v1.33 (§20.1 group_calls_ready without LiveKit): checked in the "v1.19" describe below.
   @checked_v1_33 ~w(mls_group_group_calls_unavailable.json)
 
+  # v1.34 (§33 basic messaging): checked in test/contract/examples_v134_test.exs.
+  @checked_v1_34 ~w(backup_entry_message_v134.json device_put_files.json
+                    envelope_risi_answer_next_action_pdf.json envelope_risi_confirm_export_pdf.json
+                    envelope_text_forwarded.json envelope_text_forwarded_bad.json
+                    envelope_text_forwarded_many.json envelope_text_reply.json
+                    envelope_text_view_once_reserved.json event_risi_tool_call_export_pdf.json
+                    file_payload.json file_payload_bad_name.json file_payload_parts.json
+                    image_payload_forwarded.json mls_group_files_ready.json
+                    risi_tool_result_export_pdf.json risi_tool_result_export_pdf_error.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -400,7 +410,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_30 ++
         @checked_v1_31 ++
         @checked_v1_32 ++
-        @checked_v1_33
+        @checked_v1_33 ++
+        @checked_v1_34
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -955,7 +966,7 @@ defmodule RisiMe.ContractExamplesTest do
       assert keys(
                Map.drop(
                  view,
-                 ~w(images_ready missing_images deletes_ready missing_deletes calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+                 ~w(images_ready missing_images deletes_ready missing_deletes files_ready missing_files calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
                )
              ) ==
                keys(ex)
@@ -1746,7 +1757,7 @@ defmodule RisiMe.ContractExamplesTest do
       assert keys(
                Map.drop(
                  view,
-                 ~w(deletes_ready missing_deletes calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+                 ~w(deletes_ready missing_deletes files_ready missing_files calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
                )
              ) ==
                keys(ex)
@@ -1754,7 +1765,7 @@ defmodule RisiMe.ContractExamplesTest do
       assert_same_shape(
         Map.drop(
           view,
-          ~w(missing devices missing_images deletes_ready missing_deletes calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+          ~w(missing devices missing_images deletes_ready missing_deletes files_ready missing_files calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
         ),
         Map.drop(ex, ~w(missing devices missing_images))
       )
@@ -2140,14 +2151,14 @@ defmodule RisiMe.ContractExamplesTest do
       assert keys(
                Map.drop(
                  view,
-                 ~w(calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+                 ~w(files_ready missing_files calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
                )
              ) == keys(ex)
 
       assert_same_shape(
         Map.drop(
           view,
-          ~w(missing devices calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+          ~w(missing devices files_ready missing_files calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
         ),
         Map.drop(ex, ~w(missing devices))
       )
@@ -2640,10 +2651,11 @@ defmodule RisiMe.ContractExamplesTest do
       {200, view} = RisiMe.GroupHelpers.api(:get, "/api/v1/mls/groups/#{conv}", a.token)
       ex = example("mls_group_calls_ready.json")
       # v1.18 adds video_ready / missing_video (mls_group_video_ready.json).
-      assert keys(Map.drop(view, ~w(video_ready missing_video))) == keys(ex)
+      assert keys(Map.drop(view, ~w(video_ready missing_video files_ready missing_files))) ==
+               keys(ex)
 
       assert_same_shape(
-        Map.drop(view, ~w(missing devices video_ready missing_video)),
+        Map.drop(view, ~w(missing devices video_ready missing_video files_ready missing_files)),
         Map.drop(ex, ~w(missing devices))
       )
 
@@ -2908,6 +2920,7 @@ defmodule RisiMe.ContractExamplesTest do
 
       {200, view} = RisiMe.GroupHelpers.api(:get, "/api/v1/mls/groups/#{conv}", a.token)
       ex = example("mls_group_video_ready.json")
+      view = Map.drop(view, ~w(files_ready missing_files))
       assert keys(view) == keys(ex)
       assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
       assert view["video_ready"] == true and view["calls_ready"] == true
@@ -3103,6 +3116,7 @@ defmodule RisiMe.ContractExamplesTest do
       ex = example("mls_group_group_calls_ready.json")
       # The deletes readiness (v1.12) is in every view; the example leaves it out.
       view = Map.drop(view, ~w(deletes_ready missing_deletes))
+      view = Map.drop(view, ~w(files_ready missing_files))
       assert keys(view) == keys(ex)
       assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
       assert view["group_calls_ready"] == true
@@ -3117,6 +3131,7 @@ defmodule RisiMe.ContractExamplesTest do
       Application.put_env(:risime, :livekit, cfg)
       ex = example("mls_group_group_calls_unavailable.json")
       view = Map.drop(view, ~w(deletes_ready missing_deletes))
+      view = Map.drop(view, ~w(files_ready missing_files))
       assert keys(view) == keys(ex)
       assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
       assert view["group_calls_ready"] == false

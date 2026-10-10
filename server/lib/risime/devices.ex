@@ -141,9 +141,10 @@ defmodule RisiMe.Devices do
   # v1.29 §29.1: `risi_events`, kept only with `risi_tools`, `risi_skills` and `risi_ledger`.
   # v1.29 §30.1: `risi_notes`, kept only with `risi_events`.
   # v1.31 §31.1: `google_calendar`, kept only with `risi_events`.
+  # v1.34 §33.1: `files`; `pdf_export`, kept only with `risi_tools` (silently dropped otherwise).
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
                          group_calls call_switch screen_share tabs risi_tools risi_skills
-                         risi_ledger risi_events risi_notes google_calendar)
+                         risi_ledger risi_events risi_notes google_calendar files pdf_export)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do
@@ -157,6 +158,7 @@ defmodule RisiMe.Devices do
           else: caps -- ["risi_events"]
 
       caps = if "risi_events" in caps, do: caps, else: caps -- ~w(risi_notes google_calendar)
+      caps = if "risi_tools" in caps, do: caps, else: caps -- ["pdf_export"]
 
       {:ok, caps}
     else
