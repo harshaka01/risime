@@ -70,7 +70,9 @@ defmodule RisiMeWeb.ApiError do
     not_owner: "Only the event's owner can change this",
     version_conflict: "This event changed; here is the current version",
     cursor_expired: "Your calendar sync is too old; list your events again",
-    not_invitable: "You can only invite people you share a chat with"
+    not_invitable: "You can only invite people you share a chat with",
+    # v1.31 §31.3.
+    not_google_device: "Google Calendar is connected on another device"
   }
 
   @doc """

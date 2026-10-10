@@ -449,6 +449,16 @@ defmodule RisiMe.Devices do
     )
   end
 
+  @doc "v1.31 §31.1: true if the device is a `risi_events` device that also advertises `google_calendar`."
+  def google_calendar?(%Device{capabilities: caps} = d),
+    do: risi_events?(d) and "google_calendar" in (caps || [])
+
+  def google_calendar?(_), do: false
+
+  @doc "v1.31 §31.3: true if `device_id` (may be nil) names a `google_calendar` device of the user."
+  def google_calendar_device?(_user_id, nil), do: false
+  def google_calendar_device?(user_id, device_id), do: google_calendar?(get(user_id, device_id))
+
   @doc "v1.29 §30.1: true if the device is a `risi_events` device that also advertises `risi_notes`."
   def risi_notes?(%Device{capabilities: caps} = d),
     do: risi_events?(d) and "risi_notes" in (caps || [])
@@ -673,6 +683,8 @@ defmodule RisiMe.Devices do
         from(d in Device, where: d.user_id == ^user_id and d.id not in subquery(keep), select: d)
       )
 
+    RisiMe.Agent.GoogleLink.device_removed(for d <- evicted, do: d.device_id)
+
     evicted
   end
 
@@ -794,6 +806,8 @@ defmodule RisiMe.Devices do
   # Deletes and emits mls_membership `removed` for MLS devices. Returns the count.
   defp removed(query) do
     {n, rows} = Repo.delete_all(from(d in query, select: d))
+    # v1.31 §31.3: a removed device takes its Google link with it.
+    RisiMe.Agent.GoogleLink.device_removed(for d <- rows, do: d.device_id)
 
     MLS.reset_first_seen(for d <- rows, do: {d.user_id, d.device_id})
 

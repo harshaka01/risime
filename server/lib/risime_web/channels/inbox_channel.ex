@@ -343,6 +343,7 @@ defmodule RisiMeWeb.InboxChannel do
     (socket.assigns[:tabs] == true or not RisiMe.Groups.Tabs.tabs_only?(event)) and
       risi_visible?(socket, event) and
       calendar_visible?(socket, event) and
+      google_visible?(socket, event) and
       agent_visible?(socket, event, agent_ok) and
       visible_v123?(socket, event)
   end
@@ -365,6 +366,16 @@ defmodule RisiMeWeb.InboxChannel do
     kind(event) != "risi_calendar_changed" or
       (socket.assigns[:agent] != true and
          RisiMe.Devices.risi_events_device?(socket.assigns.user_id, socket.assigns[:device_id]))
+  end
+
+  # v1.31 §31.3: `google_calendar_link` only for the user's `google_calendar` devices.
+  defp google_visible?(socket, event) do
+    kind(event) != "google_calendar_link" or
+      (socket.assigns[:agent] != true and
+         RisiMe.Devices.google_calendar_device?(
+           socket.assigns.user_id,
+           socket.assigns[:device_id]
+         ))
   end
 
   defp kind(%{kind: k}), do: k

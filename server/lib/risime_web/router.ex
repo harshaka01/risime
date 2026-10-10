@@ -103,6 +103,9 @@ defmodule RisiMeWeb.Router do
     delete "/risi/skills/:id/activity", RisiSkillsController, :clear
     post "/risi/skills/:id/activity/:entry_id/undo", RisiSkillsController, :undo
     # v1.29 §29.3.
+    get "/risi/calendar/google", RisiGoogleController, :show
+    put "/risi/calendar/google", RisiGoogleController, :put
+    delete "/risi/calendar/google", RisiGoogleController, :delete
     get "/risi/calendar/events", RisiCalendarController, :index
     post "/risi/calendar/events", RisiCalendarController, :create
     get "/risi/calendar/changes", RisiCalendarController, :changes
