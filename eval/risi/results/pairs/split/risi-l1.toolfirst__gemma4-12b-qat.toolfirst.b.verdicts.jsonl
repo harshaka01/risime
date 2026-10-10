@@ -1,0 +1,36 @@
+{"id": "en-T01", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Identical correct set_alarm 06:00."}
+{"id": "en-T02", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both correctly start with set_alarm 06:00."}
+{"id": "en-T03", "a_score": 5, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A resolves 2026-10-13T10:00; B leaves 'tomorrow 10am' unresolved."}
+{"id": "en-T04", "a_score": 5, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A resolves Friday to 2026-10-16 15:00; B leaves 'Friday 3pm'."}
+{"id": "en-T05", "a_score": 5, "b_score": 4, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "Both right window; A uses expected risi_calendar_check, B phone calendar_check."}
+{"id": "en-T06", "a_score": 3, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A right date but phone tool, no 'with'; B right tool but wrong day (Friday)."}
+{"id": "en-T07", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Identical correct calendar_add Friday 16:30."}
+{"id": "en-T08", "a_score": 3, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "Both miss weekdays; B's time arg is malformed garbage."}
+{"id": "en-T09", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both correct schedule_message 2026-10-13 08:00 to Sanduni."}
+{"id": "en-T10", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Identical correct cancel_scheduled to Kumu."}
+{"id": "en-T11", "a_score": 2, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "A promises a list then lists nothing; B calls capabilities tool."}
+{"id": "en-T12", "a_score": 2, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both guess instead of asking; A unresolved 6pm, B 06:00 today already past."}
+{"id": "en-T13", "a_score": 3, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "B resolves 09:35 correctly; A leaves 'in 20 minutes'."}
+{"id": "en-T14", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both correct daily 22:00 Good night to Kasun."}
+{"id": "en-T15", "a_score": 5, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A resolves 2026-10-13 09:00; B leaves 'Tuesday 9am'."}
+{"id": "en-T16", "a_score": 5, "b_score": 4, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "Both honest; B has odd next_step 'What can I do for you today?'."}
+{"id": "en-T17", "a_score": 3, "b_score": 5, "a_halluc": true, "b_halluc": false, "winner": "B", "why": "A offers restaurant search it can't do; B honest with valid alternatives."}
+{"id": "en-C1", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both short friendly replies."}
+{"id": "en-F01", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both correct schedule_message 06:00 good morning to Kumu."}
+{"id": "en-F02", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both patch to 2026-10-13 19:00 correctly."}
+{"id": "en-F03", "a_score": 2, "b_score": 1, "a_halluc": true, "b_halluc": true, "winner": "A", "why": "A notes busy slot but miscomputes local time (14:00-15:00); B says free; both cite fake m1."}
+{"id": "en-F04", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both honestly report permission denied."}
+{"id": "mixed-M01", "a_score": 2, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "A asks needless question instead of alarm; B wrong tool, audience conversation, unresolved."}
+{"id": "mixed-M02", "a_score": 1, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "A rambles about calendar, no reminder; B right reminder but 'tomorrow 10am' unresolved."}
+{"id": "mixed-M03", "a_score": 2, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "A wrong date (today) and recipient 'this chat'; B falsely says it cannot schedule."}
+{"id": "mixed-M04", "a_score": 2, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both check today instead of Wednesday afternoon."}
+{"id": "mixed-M05", "a_score": 2, "b_score": 1, "a_halluc": false, "b_halluc": true, "winner": "A", "why": "A wrong time 09:00, garbled title; B invents three attendees from Sinhala words."}
+{"id": "mixed-M09", "a_score": 2, "b_score": 1, "a_halluc": false, "b_halluc": true, "winner": "A", "why": "A irrelevant academic refusal; B falsely claims reminder set."}
+{"id": "mixed-M10", "a_score": 5, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A correct 2026-10-13 09:00 for me; B audience conversation, unresolved time."}
+{"id": "mixed-M11", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Identical correct set_alarm 06:00."}
+{"id": "mixed-M12", "a_score": 5, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A resolves 2026-10-13 10:00; B leaves 'tomorrow 10:00'."}
+{"id": "mixed-M13", "a_score": 3, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "B resolves 2026-10-13 07:00; A leaves 'tomorrow 7am'."}
+{"id": "mixed-M14", "a_score": 2, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both check today, not Wednesday afternoon."}
+{"id": "mixed-M15", "a_score": 2, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "A asks needlessly with confused times; B adds event on wrong date, no Rajan."}
+{"id": "mixed-M19", "a_score": 3, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "B correct 2026-10-13 09:00 for me; A conversation audience, unresolved."}
+{"id": "mixed-M20", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both short friendly replies."}

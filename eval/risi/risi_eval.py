@@ -664,7 +664,7 @@ def cmd_unblind(a):
     v = load_jsonl(stem + ".verdicts.jsonl")
     res = {"cand_wins": 0, "base_wins": 0, "ties": 0, "cand_score": 0, "base_score": 0,
            "cand_halluc": 0, "base_halluc": 0, "n": 0}
-    by_lang = {}
+    by_lang, by_kind = {}, {}
     items = {i["id"]: i for i in load_items()}
     for x in v:
         k = key[x["id"]]
@@ -672,10 +672,13 @@ def cmd_unblind(a):
         base_side = "B" if cand_side == "A" else "A"
         lang = items[x["id"]]["lang"]
         bl = by_lang.setdefault(lang, {"cand_wins": 0, "base_wins": 0, "ties": 0})
+        kind = "turn" if items[x["id"]]["kind"] == "turn" else "summary_extract_ask"
+        bk = by_kind.setdefault(kind, {"cand_wins": 0, "base_wins": 0, "ties": 0})
         w = x["winner"]
         tag = "ties" if w == "tie" else ("cand_wins" if w == cand_side else "base_wins")
         res[tag] += 1
         bl[tag] += 1
+        bk[tag] += 1
         res["cand_score"] += x[f"{cand_side.lower()}_score"]
         res["base_score"] += x[f"{base_side.lower()}_score"]
         res["cand_halluc"] += int(bool(x.get(f"{cand_side.lower()}_halluc")))
@@ -685,6 +688,7 @@ def cmd_unblind(a):
         res["cand_score"] = round(res["cand_score"] / res["n"], 2)
         res["base_score"] = round(res["base_score"] / res["n"], 2)
     res["by_lang"] = by_lang
+    res["by_kind"] = by_kind
     json.dump(res, open(stem + ".result.json", "w"), indent=1)
     print(json.dumps(res))
 
@@ -803,32 +807,62 @@ def cmd_probe(a):
 
 
 def cmd_report(a):
-    rows = []
-    for f in sorted(os.listdir(RES)):
-        if f.endswith(".score.json") and not f.startswith("asr-"):
-            d = json.load(open(os.path.join(RES, f), encoding="utf-8"))
-            rows.append(d)
-    pairs = {}
-    pdir = os.path.join(RES, "pairs")
-    if os.path.isdir(pdir):
-        for f in os.listdir(pdir):
-            if f.endswith(".result.json"):
-                pairs[f.split("__")[1].replace(".result.json", "")] = json.load(open(os.path.join(pdir, f)))
-    lines = ["| model | JSON valid | tool-call ok | turn ok | task ok | si script ok | ta script ok | "
-             "hallucinations | blind A/B vs risi-l1 (W-T-L) | judge score (cand/base) | tok/s (median) | "
-             "TTFT median s | peak memory GB |", "|" + "---|" * 13]
-    for d in rows:
-        s, m, lab = d["summary"], d.get("meta", {}), d["label"]
-        p = pairs.get(lab)
-        ab = f"{p['cand_wins']}-{p['ties']}-{p['base_wins']}" if p else "baseline" if m.get("baseline") else "-"
-        js = f"{p['cand_score']}/{p['base_score']}" if p else "-"
+    """results/REPORT.md: the LLM table (production schema and tool-first side by side, blind
+    A/B vs risi-l1) and the ASR table."""
+    def load(name):
+        p = os.path.join(RES, name)
+        return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else None
+
+    labels = sorted(f[:-len(".score.json")] for f in os.listdir(RES)
+                    if f.endswith(".score.json") and not f.startswith("asr-") and ".toolfirst" not in f)
+    labels.sort(key=lambda x: (x != "risi-l1", x))
+
+    def pair(base, cand):
+        return load(os.path.join("pairs", f"{base}__{cand}.result.json"))
+
+    def pct(v):
+        return "-" if v is None else f"{v:.0f}%"
+
+    L = ["| model | peak memory GB | tok/s | TTFT s | JSON valid | tool calls ok (as served / tool first) | "
+         "false action claims (as served / tool first) | summary+extract+ask ok | other hallucinations | "
+         "si / ta script ok | blind A/B vs risi-l1, all 140 (W-T-L, judge 1-5) | blind A/B tool-first turns (W-T-L) |",
+         "|" + "---|" * 12]
+    for lab in labels:
+        d = load(f"{lab}.score.json")
+        t = load(f"{lab}.toolfirst.score.json")
+        s, m = d["summary"], d.get("meta", {})
+        ts = t["summary"] if t else {}
         bl = s.get("by_lang", {})
-        lines.append(f"| {m.get('name', lab)} | {s['json_valid_pct']}% | {s['tool_call_pct']}% | {s['turn_ok_pct']}% | "
-                     f"{s['task_ok_pct']}% | {bl.get('si', {}).get('script_ok_pct')}% | "
-                     f"{bl.get('ta', {}).get('script_ok_pct')}% | {s['halluc']} | {ab} | {js} | {s['tps_med']} | "
-                     f"{s['ttft_med_s']} | {m.get('peak_mem_gb', '-')} |")
-    open(os.path.join(RES, "REPORT.md"), "w").write("\n".join(lines) + "\n")
-    print("\n".join(lines))
+        p = pair("risi-l1", lab)
+        pt = pair("risi-l1.toolfirst", f"{lab}.toolfirst")
+        ab = "baseline" if lab == "risi-l1" else (
+            f"{p['cand_wins']}-{p['ties']}-{p['base_wins']} ({p['cand_score']} vs {p['base_score']})" if p else "not judged")
+        abt = "baseline" if lab == "risi-l1" else (
+            f"{pt['cand_wins']}-{pt['ties']}-{pt['base_wins']} ({pt['cand_score']} vs {pt['base_score']})" if pt else "not judged")
+        other = s["halluc"] - s.get("false_claims", 0)
+        errs = f" ({s['errors']} errors)" if s.get("errors") else ""
+        L.append(f"| {m.get('name', lab)}{errs} | {m.get('peak_mem_gb', '-')} | {s['tps_med'] and round(s['tps_med'], 1)} | "
+                 f"{s['ttft_med_s']} | {pct(s['json_valid_pct'])} | {pct(s['tool_call_pct'])} / {pct(ts.get('tool_call_pct'))} | "
+                 f"{s.get('false_claims', 0)} / {ts.get('false_claims', '-')} | {pct(s['task_ok_pct'])} | {other} | "
+                 f"{pct(bl.get('si', {}).get('script_ok_pct'))} / {pct(bl.get('ta', {}).get('script_ok_pct'))} | {ab} | {abt} |")
+    A = ["| ASR model | Sinhala WER / CER | Tamil WER / CER | real-time factor (si / ta) | peak memory GB |",
+         "|---|---|---|---|---|"]
+    for f in sorted(os.listdir(RES)):
+        if f.startswith("asr-") and f.endswith(".score.json"):
+            d = json.load(open(os.path.join(RES, f)))
+            sm = d["summary"]
+            mem_p = os.path.join(RES, f.replace(".score.json", ".mem.txt"))
+            mem = open(mem_p).read().split()[1] if os.path.exists(mem_p) else "resident 6.9 (nvidia-smi)"
+
+            def wc(lang):
+                x = sm.get(lang)
+                return f"{x['wer']:.1%} / {x['cer']:.1%}" if x else "-"
+
+            rtf = " / ".join(str(sm.get(l, {}).get("rtf", "-")) for l in ("si", "ta"))
+            A.append(f"| {d['label']} | {wc('si')} | {wc('ta')} | {rtf} | {mem} |")
+    out = "\n".join(L) + "\n\n" + "\n".join(A) + "\n"
+    open(os.path.join(RES, "REPORT.md"), "w").write(out)
+    print(out)
 
 
 def main():

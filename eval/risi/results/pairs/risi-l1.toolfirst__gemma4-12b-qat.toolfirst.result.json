@@ -1,0 +1,32 @@
+{
+ "cand_wins": 18,
+ "base_wins": 27,
+ "ties": 35,
+ "cand_score": 3.58,
+ "base_score": 3.77,
+ "cand_halluc": 5,
+ "base_halluc": 8,
+ "n": 80,
+ "by_lang": {
+  "si": {
+   "cand_wins": 3,
+   "base_wins": 9,
+   "ties": 10
+  },
+  "ta": {
+   "cand_wins": 10,
+   "base_wins": 5,
+   "ties": 7
+  },
+  "en": {
+   "cand_wins": 3,
+   "base_wins": 8,
+   "ties": 11
+  },
+  "mixed": {
+   "cand_wins": 2,
+   "base_wins": 5,
+   "ties": 7
+  }
+ }
+}

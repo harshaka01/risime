@@ -28,5 +28,17 @@
    "base_wins": 2,
    "ties": 6
   }
+ },
+ "by_kind": {
+  "turn": {
+   "cand_wins": 55,
+   "base_wins": 17,
+   "ties": 8
+  },
+  "summary_extract_ask": {
+   "cand_wins": 25,
+   "base_wins": 11,
+   "ties": 24
+  }
  }
 }
