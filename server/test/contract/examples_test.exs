@@ -317,6 +317,9 @@ defmodule RisiMe.ContractExamplesTest do
                     risi_commitments_reply_v130.json risi_note_reply.json
                     risi_notes_reply.json)
 
+  # v1.31 (Google Calendar link, §31): checked in test/contract/examples_v131_test.exs.
+  @checked_v1_31 RisiMe.Contract.ExamplesV131Test.files()
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -378,7 +381,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_27 ++
         @checked_v1_28 ++
         @checked_v1_29 ++
-        @checked_v1_30
+        @checked_v1_30 ++
+        @checked_v1_31
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
