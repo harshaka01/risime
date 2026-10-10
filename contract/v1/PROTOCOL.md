@@ -8852,8 +8852,8 @@ an ordinary §24.11 Risi post in the operator's **own active Risi chat** only (n
   constant time) and **no** `X-Forwarded-For` / `Forwarded` header (so a request through Caddy is
   refused even from loopback). `{"state", "check", "detail"}` → `202 {"sent": n, "held": n}`;
   `401` without the token or through a proxy; `404` when `OPS_ALERT_TOKEN` is unset. When Risi
-  is off or the operator has no active Risi chat, it is `held` (§24 sealed hold, 24 h) and the
-  watchdog also sends the e-mail fallback. Limit: 10 per hour (`429 rate_limited`).
+  is off, the operator has no active Risi chat or the phone has no user, it is counted as `held`
+  (not stored; logged without the phone) and the watchdog sends the e-mail / SMS fallback. Limit: 10 per hour (`429 rate_limited`).
 - Not end-to-end private beyond any other Risi post; it never contains message content, tokens or
   phone numbers.
 - Example: `envelope_risi_ops_alert.json`.
