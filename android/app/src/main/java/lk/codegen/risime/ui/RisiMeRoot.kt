@@ -322,6 +322,12 @@ private fun MainNav(c: AppContainer, meId: String) {
                         readOnlyReason = if (readOnly) lk.codegen.risime.ui.tabs.OFFICIAL_HISTORY_LABEL else null,
                         // The composer says "Message"; "Risi is listening" stays in the strip under the tabs.
                         composerHint = lk.codegen.risime.ui.tabs.OFFICIAL_COMPOSER_HINT,
+                        // v1.33 §24.5 (NEXT-PHASE D1): a 1:1's Official calls are the §16/§19 peer-to-peer
+                        // calls on its dm: (the peer's name on the call screen), never §20 on the grp:.
+                        dmCallButtons = if (dmChat) ({ toast ->
+                            val dmCalls = viewModel(key = "dmcalls:$conv") { lk.codegen.risime.ui.chat.DmCallsViewModel(c, conv) }
+                            lk.codegen.risime.ui.chat.DmCallButtons(dmCalls.calls, peerName ?: "", toast)
+                        }) else null,
                     )
                 },
             )

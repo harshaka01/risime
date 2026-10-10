@@ -1397,8 +1397,13 @@ class AppContainer(
         override suspend fun groupCallStarted(conv: String, env: lk.codegen.risime.calls.GroupCallEnvelope) { engine.queueGroupCallStarted(conv, env) }
         override suspend fun groupCallEnded(conv: String, env: lk.codegen.risime.calls.GroupCallEnvelope) { engine.sendGroupCallEnded(conv, env) }
         override suspend fun groupCallOver(conv: String, callId: String) { engine.markGroupCallOver(conv, callId) }
-        override suspend fun groupName(conv: String): String =
-            runCatching { db.groups().get(conv)?.name }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Group"
+        override suspend fun groupName(conv: String): String {
+            runCatching { db.groups().get(conv)?.name }.getOrNull()?.takeIf { it.isNotBlank() }?.let { return it }
+            // v1.33: a 1:1's Official grp: is named after the peer, never "Group".
+            val peer = chatTabs.dmChatForCall(conv)?.let { dm -> me()?.let { lk.codegen.risime.net.dmPeer(dm, it) } }
+            return peer?.let { runCatching { displayName(it) }.getOrNull() } ?: "Group"
+        }
+        override fun dmChatForCall(conv: String): String? = chatTabs.dmChatForCall(conv)
     }
 
     val calls: lk.codegen.risime.calls.CallManager by lazy {

@@ -383,23 +383,27 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
     /** §20.1: who still needs to update for group calls (group info; information only). */
     val missingGroupCalls = MutableStateFlow<List<String>>(emptyList())
 
+    private val _groupCallsUnavailable = MutableStateFlow<String?>(null)
+
+    /** v1.33 §20.1 `group_calls_unavailable` (`"server"`: no LiveKit on this server). */
+    val groupCallsUnavailable: StateFlow<String?> = _groupCallsUnavailable
+
     fun refreshGroupCalls() {
         viewModelScope.launch {
             val r = c.api.mlsGroup(conversationId)
             if (r is lk.codegen.risime.net.ApiResult.Ok) {
                 _groupCallsReady.value = r.value.e2ee && r.value.groupCallsReady
+                _groupCallsUnavailable.value = r.value.groupCallsUnavailable
                 missingGroupCalls.value = r.value.missingGroupCalls.map { it.userId }.distinct()
             }
         }
     }
 
     /** Null = the call buttons work; otherwise what a tap explains (§20.1 UI). */
-    fun groupCallBlockedText(encrypted: Boolean, ready: Boolean, video: Boolean): String? = when {
-        !runCatching { c.calls.canAdvertiseGroupCalls() }.getOrDefault(false) -> lk.codegen.risime.calls.CallTexts.GROUP_UPDATE_TEXT
-        !encrypted -> "Calls need an end-to-end encrypted chat."
-        !ready -> lk.codegen.risime.calls.CallTexts.GROUP_NOT_READY_TEXT
-        else -> null
-    }
+    fun groupCallBlockedText(encrypted: Boolean, ready: Boolean, video: Boolean): String? = groupCallBlockedText(
+        thisPhone = runCatching { c.calls.canAdvertiseGroupCalls() }.getOrDefault(false),
+        unavailable = _groupCallsUnavailable.value, encrypted = encrypted, ready = ready,
+    )
 
     fun startGroupCall(video: Boolean, camera: Boolean) {
         c.calls.placeCall(conversationId, video = video, camera = camera)
@@ -710,4 +714,16 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         typingSender.stop()
         c.openConversation.compareAndSet(conversationId, null)
     }
+}
+
+/**
+ * §20.1 the group call buttons' rule order: this phone first, then (v1.33) the server without LiveKit
+ * (`group_calls_unavailable: "server"`), then e2ee, then the members' readiness. Null = the buttons work.
+ */
+fun groupCallBlockedText(thisPhone: Boolean, unavailable: String?, encrypted: Boolean, ready: Boolean): String? = when {
+    !thisPhone -> lk.codegen.risime.calls.CallTexts.GROUP_UPDATE_TEXT
+    unavailable != null -> lk.codegen.risime.calls.CallTexts.GROUP_SERVER_UNAVAILABLE_TEXT
+    !encrypted -> "Calls need an end-to-end encrypted chat."
+    !ready -> lk.codegen.risime.calls.CallTexts.GROUP_NOT_READY_TEXT
+    else -> null
 }

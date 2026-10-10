@@ -15,6 +15,8 @@ import lk.codegen.risime.data.tabs.CallTarget
 import lk.codegen.risime.data.tabs.Tab
 import lk.codegen.risime.data.tabs.callPathOf
 import lk.codegen.risime.data.tabs.callTargetFor
+import lk.codegen.risime.data.tabs.dmChatForCall
+import lk.codegen.risime.ui.group.groupCallBlockedText
 import lk.codegen.risime.net.dmConversationId
 import lk.codegen.risime.ui.chats.tabIcon
 import lk.codegen.risime.ui.search.searchResults
@@ -91,16 +93,48 @@ class TabSearchCallsTest {
     @Test fun callsArePerTab() {
         // Private 1:1: §16/§19 on the dm:.
         assertEquals(CallTarget(dm, CallPath.PEER_TO_PEER), callTargetFor(dm, Tab.PRIVATE, dmOfficial))
-        // Official 1:1: §20 LiveKit on the Official grp:, never the dm:.
-        assertEquals(CallTarget(dmOfficial, CallPath.SFU), callTargetFor(dm, Tab.OFFICIAL, dmOfficial))
-        // Groups: §20 on the tab's own grp:.
+        // v1.33 §24.5 (NEXT-PHASE D1) Official 1:1: the same §16/§19 call on the dm:, never §20 on the grp:.
+        assertEquals(CallTarget(dm, CallPath.PEER_TO_PEER), callTargetFor(dm, Tab.OFFICIAL, dmOfficial))
+        // ... also before this phone holds the Official conversation (the peer is known from the dm:).
+        assertEquals(CallTarget(dm, CallPath.PEER_TO_PEER), callTargetFor(dm, Tab.OFFICIAL, null))
+        // Groups: §20 on the tab's own grp: (a group's Official stays SFU).
         assertEquals(CallTarget(grp, CallPath.SFU), callTargetFor(grp, Tab.PRIVATE, grpOfficial))
         assertEquals(CallTarget(grpOfficial, CallPath.SFU), callTargetFor(grp, Tab.OFFICIAL, grpOfficial))
-        // No Official conversation yet: nothing to call from Official.
-        assertNull(callTargetFor(dm, Tab.OFFICIAL, null))
-        // CallManager.placeCall routes by the conversation's path.
-        assertEquals(CallPath.SFU, callPathOf(dmOfficial))
+        // A group without an Official conversation yet: nothing to call from Official.
+        assertNull(callTargetFor(grp, Tab.OFFICIAL, null))
         assertEquals(CallPath.PEER_TO_PEER, callPathOf(dm))
+    }
+
+    @Test fun placeCallRedirectsA1to1OfficialGrpToItsDm() {
+        // CallManager.placeCall's guard: a grp: whose MLS row is Official with chat_kind dm calls on its dm:.
+        assertEquals(dm, dmChatForCall(dmOfficial, rows))
+        // A group's Official, a Private group, a dm: and an unknown grp: are left alone.
+        val groupRows = rows + (grpOfficial to ChatTabEntity(grpOfficial, grp, ChatTabEntity.TAB_OFFICIAL, ChatTabEntity.KIND_GROUP))
+        assertNull(dmChatForCall(grpOfficial, groupRows))
+        assertNull(dmChatForCall(grp, groupRows))
+        assertNull(dmChatForCall(dm, groupRows))
+        assertNull(dmChatForCall(dmOfficial, null))
+        // A Risi chat (official, chat_kind risi) is never a call target redirect.
+        val risiConv = "grp:7b8c9d0e-1f2a-4b3c-9d4e-5f6a7b8c9d0e"
+        assertNull(dmChatForCall(risiConv, mapOf(risiConv to ChatTabEntity(risiConv, risiConv, ChatTabEntity.TAB_OFFICIAL, ChatTabEntity.KIND_RISI))))
+    }
+
+    @Test fun groupCallButtonsHonourServerUnavailable() {
+        // v1.33 §20.1: no LiveKit on the server → disabled with its own text, even when everyone is ready.
+        assertEquals(
+            "Group calls aren't available on this server yet",
+            groupCallBlockedText(thisPhone = true, unavailable = "server", encrypted = true, ready = true),
+        )
+        // This phone's own reason still comes first.
+        assertEquals(
+            lk.codegen.risime.calls.CallTexts.GROUP_UPDATE_TEXT,
+            groupCallBlockedText(thisPhone = false, unavailable = "server", encrypted = true, ready = true),
+        )
+        assertEquals(
+            lk.codegen.risime.calls.CallTexts.GROUP_NOT_READY_TEXT,
+            groupCallBlockedText(thisPhone = true, unavailable = null, encrypted = true, ready = false),
+        )
+        assertNull(groupCallBlockedText(thisPhone = true, unavailable = null, encrypted = true, ready = true))
     }
 }
 

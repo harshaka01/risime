@@ -86,6 +86,9 @@ interface CallAppPort {
     suspend fun groupCallOver(conv: String, callId: String) = Unit
 
     suspend fun groupName(conv: String): String = "Group"
+
+    /** v1.33 §24.5: the `dm:` of a 1:1 whose Official `grp:` is [conv] (its calls go peer to peer there); null otherwise. */
+    fun dmChatForCall(conv: String): String? = null
 }
 
 /**
@@ -465,7 +468,15 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     /** The call button (RECORD_AUDIO already granted by the UI); [video] with [camera] = CAMERA granted (§19.6). */
     fun placeCall(conversationId: String, video: Boolean = false, camera: Boolean = video) {
-        // §24.5: per tab — an Official conversation (1:1 included) is a grp: and always takes the §20 path.
+        // v1.33 §24.5: a 1:1's Official grp: (chat_kind dm) never takes the §20 path: its call is the
+        // §16/§19 peer-to-peer call on the chat's dm: (the peer's name on the call screen, no Risi).
+        val dm = runCatching { port.dmChatForCall(conversationId) }.getOrNull()
+        if (dm != null) {
+            log("call: $conversationId is a 1:1's Official conversation: calling on its dm")
+            scope.launch { _machine.value?.placeCall(dm, video, camera) }
+            return
+        }
+        // §24.5: a group (Private or Official) is a grp: and takes the §20 path.
         if (lk.codegen.risime.data.tabs.callPathOf(conversationId) == lk.codegen.risime.data.tabs.CallPath.SFU) {
             scope.launch { _group.value?.start(conversationId, video, camera) }
             return
@@ -1466,6 +1477,9 @@ object CallTexts {
     /** §20.1 the disabled group call buttons. */
     const val GROUP_NOT_READY_TEXT = "Nobody else in this group can join calls yet"
     const val GROUP_UPDATE_TEXT = "Update RisiMe on this phone to make calls"
+
+    /** v1.33 §20.1 `group_calls_unavailable: "server"` (no LiveKit on this server). */
+    const val GROUP_SERVER_UNAVAILABLE_TEXT = "Group calls aren't available on this server yet"
 
     /** §19.1: the disabled video button and the `video_not_ready` refusal. */
     fun videoNotReadyText(name: String) = "$name needs to update the app for video calls"

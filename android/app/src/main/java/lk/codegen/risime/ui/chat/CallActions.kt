@@ -9,9 +9,13 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,11 +31,16 @@ class CallActions(private val c: AppContainer, private val scope: CoroutineScope
 
     /** §19.1 `video_ready` (each user has a recent `video` device). */
     val videoReady: StateFlow<Boolean> = _video
+    private val _e2ee = MutableStateFlow(false)
+
+    /** §10 the DM is e2ee (the server's view; for a header that has no E2EE state of its own, v1.33 Official 1:1). */
+    val e2ee: StateFlow<Boolean> = _e2ee
 
     fun refresh() {
         scope.launch {
             val r = c.api.mlsGroup(conversationId)
             if (r is ApiResult.Ok) {
+                _e2ee.value = r.value.e2ee
                 _ready.value = r.value.e2ee && r.value.callsReady
                 _video.value = r.value.e2ee && r.value.videoReady
             }
@@ -130,4 +139,32 @@ fun VideoHeaderButton(blocked: String?, onBlocked: (String) -> Unit, onVideoCall
     }) {
         Icon(lk.codegen.risime.ui.common.RisiIcons.Videocam, if (blocked == null) "Video call" else "Video call (unavailable)", tint = if (blocked == null) androidx.compose.material3.LocalContentColor.current else Color.Gray)
     }
+}
+
+/**
+ * v1.33 §24.5 (NEXT-PHASE D1) a 1:1's Official tab: its calls are the §16/§19 peer-to-peer calls on the
+ * chat's `dm:` — the same [CallActions] as the Private tab (readiness refetched on open, on
+ * `mls_membership` and on reconnect), never the Official `grp:`.
+ */
+class DmCallsViewModel(private val c: AppContainer, val dm: String) : ViewModel() {
+    val calls = CallActions(c, viewModelScope, dm)
+
+    init {
+        calls.refresh()
+        viewModelScope.launch { c.mlsMembershipSeen.collect { e -> if (e.conversationId == dm) calls.refresh() } }
+        viewModelScope.launch {
+            c.realtime.state.collect { if (it == lk.codegen.risime.realtime.ConnectionState.Live) calls.refresh() }
+        }
+    }
+}
+
+/** The 1:1 header's video and voice buttons for [calls] (the Private chat's rules and texts, the peer's name). */
+@Composable
+fun DmCallButtons(calls: CallActions, peerName: String, onBlocked: (String) -> Unit) {
+    val e2ee by calls.e2ee.collectAsStateWithLifecycle()
+    val ready by calls.callsReady.collectAsStateWithLifecycle()
+    val video by calls.videoReady.collectAsStateWithLifecycle()
+    val tap: (String) -> Unit = { t -> onBlocked(t); calls.refresh() }
+    VideoHeaderButton(blocked = calls.videoBlockedText(e2ee, ready, video, peerName), onBlocked = tap, onVideoCall = calls::startVideo)
+    CallHeaderButton(blocked = calls.blockedText(e2ee, ready, peerName), onBlocked = tap, onCall = calls::start)
 }

@@ -130,6 +130,11 @@ fun GroupChatScreen(
     risiChat: Boolean = false,
     /** v1.32 item 4: the ⋮ menu's "Lock chat" / "Unlock chat" (null: no item). */
     lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
+    /**
+     * v1.33 §24.5/§24.9 a 1:1's Official tab: the 1:1 call buttons (§16/§19 on the `dm:`) instead of the
+     * §20 group ones; the argument shows a tap's explanation. Null: a group's buttons.
+     */
+    dmCallButtons: (@Composable (toast: (String) -> Unit) -> Unit)? = null,
 ) {
     val group by vm.group.collectAsStateWithLifecycle()
     val members by vm.members.collectAsStateWithLifecycle()
@@ -233,8 +238,12 @@ fun GroupChatScreen(
                 titleClickLabel = "Group info",
                 actions = {
                     // §20.1 the group's call and video-call buttons (disabled until group_calls_ready; a tap explains).
-                    if (lk.codegen.risime.BuildConfig.GROUP_CALLS_ENABLED && !readOnly && !risiChat) {
+                    if (dmCallButtons != null) {
+                        if (!readOnly && !risiChat) dmCallButtons { vm.imgs.toast.value = it }
+                    } else if (lk.codegen.risime.BuildConfig.GROUP_CALLS_ENABLED && !readOnly && !risiChat) {
                         val ready by vm.groupCallsReady.collectAsStateWithLifecycle()
+                        // v1.33 §20.1 no LiveKit on the server: disabled, a tap says so (recomposes when it changes).
+                        @Suppress("UNUSED_VARIABLE") val unavailable by vm.groupCallsUnavailable.collectAsStateWithLifecycle()
                         val toastOf: (String) -> Unit = { vm.imgs.toast.value = it; vm.refreshGroupCalls() }
                         lk.codegen.risime.ui.chat.VideoHeaderButton(vm.groupCallBlockedText(encrypted == true, ready, video = true), toastOf) { cam -> vm.startGroupCall(video = true, camera = cam) }
                         lk.codegen.risime.ui.chat.CallHeaderButton(vm.groupCallBlockedText(encrypted == true, ready, video = false), toastOf) { vm.startGroupCall(video = false, camera = false) }

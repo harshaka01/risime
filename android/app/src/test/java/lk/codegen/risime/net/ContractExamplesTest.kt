@@ -576,6 +576,8 @@ class ContractExamplesTest {
             }
         },
         "mls_group_group_calls_ready.json" to { s -> ProtocolJson.decodeFromString<MlsGroup>(s).also { require(it.groupCallsReady && it.missingGroupCalls.single().deviceId != null) } },
+        // v1.33 §20.1: no LiveKit on the server → not ready, and why.
+        "mls_group_group_calls_unavailable.json" to { s -> ProtocolJson.decodeFromString<MlsGroup>(s).also { require(!it.groupCallsReady && it.groupCallsUnavailable == "server") } },
         // v1.18 (§19 1:1 video calls): typed models, the envelopes through the strict validators (§19.4 SDP rules).
         "call_end_video_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.End).also { require(it.media == "video" && it.durationS == 312L) } },
         "call_media_payload.json" to { s -> (callEnv(s) as lk.codegen.risime.calls.CallEnvelope.Media).also { require(!it.camera && it.toDevice.isNotEmpty()) } },

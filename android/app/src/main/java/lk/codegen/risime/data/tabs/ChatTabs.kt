@@ -220,6 +220,9 @@ class ChatTabs(
 
     fun officialOf(chatId: String): String? = officialConversationOf(chatId, _rows.value)
 
+    /** v1.33 §24.5: the `dm:` a call placed on [conversationId] goes to (a 1:1's Official `grp:`), else null. */
+    fun dmChatForCall(conversationId: String): String? = lk.codegen.risime.data.tabs.dmChatForCall(conversationId, _rows.value)
+
     /** §24.1: Private unless MLS says Official. */
     fun private(conversationId: String): Boolean = isPrivate(conversationId.lowercase(), _rows.value)
 
