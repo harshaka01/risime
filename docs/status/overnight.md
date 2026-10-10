@@ -1353,3 +1353,11 @@ fixes go out together.
   a third redroid that doesn't exist. The variable is now `GCAL_ID`. Short repros passed because they skip --calendar.
 - Plan: no separate release of main. The next nightly (number 48, as nothing was published) = v1.32 merged + Harsha's
   P0 calendar-read hotfix (android/server agents running) + the UI-batch font-scale test, through the full gate.
+
+### 23:15 UTC: v0.2.0-nightly.48 LIVE
+- Calendar P0 hotfix (read/write/read-back/honesty/Your events/diagnostics), chips (next_actions), Markdown, UI batch,
+  sync_off, faster reconnect, JWKS retry, ops alerts, PromEx + LiveDashboard on 127.0.0.1:4021.
+- Gates: server + android unit, interop, logcat, boot-check, push test, upgrade gate (nightly.47 → 48 via the updater,
+  back step, reinstall, restore) all PASS. ui-batch (non-blocking, rule 11): PASS, 27 steps.
+- Next (Harsha 2026-10-10): docs/NEXT-PHASE.md merged; D1 (Official call connect bug) and E (copy/forward/share/star/PDF),
+  contract first.
