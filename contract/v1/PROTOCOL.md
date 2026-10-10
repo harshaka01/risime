@@ -8840,9 +8840,12 @@ an ordinary §24.11 Risi post in the operator's **own active Risi chat** only (n
   after going back one release), `"gave_up"` (still unhealthy, or the restart limit of 3 per hour
   reached: the watchdog stops restarting until an operator acts), `"public_down"` (the server is
   healthy on spark2 but `https://risime.risicloud.ai/health` failed 3 times in a row: a network or
-  Caddy fault a restart can't fix), `"recovered"` (a `public_down` or `gave_up` is over).
-- `check`: `"local"` | `"public"`. `detail`: one line of plain text (≤ 300 chars; the failure, the
-  release tag, where the diagnostics were saved). `at`: when the watchdog saw it (ts).
+  Caddy fault a restart can't fix), `"recovered"` (a `public_down` or `gave_up` is over),
+  and, from monitoring (step 4), `"alert"` (an Alertmanager alert is firing) and `"resolved"` (it stopped).
+- `check`: `"local"` | `"public"` for the watchdog states; for `alert` / `resolved` the alert's name, lowercase
+  `[a-z0-9_]{1,40}` (e.g. `health_down`, `p95_latency`, `ram_high`, `swap_growing`, `disk_high`,
+  `cassandra_gc`, `cert_expiry`). `detail`: one line of plain text (≤ 300 chars; the failure, the
+  release tag, where the diagnostics were saved, or the alert's summary). `at`: when it was seen (ts).
 - `notify`: the operator. `body` is the English line every client can show; clients without the
   kind fall back to `body` (§24.11). Android shows it as a plain Risi message with a warning icon.
 - **Who:** the users whose phone numbers are listed in the server env `OPS_ALERT_PHONES` (`.env`,
@@ -8853,14 +8856,15 @@ an ordinary §24.11 Risi post in the operator's **own active Risi chat** only (n
   refused even from loopback). `{"state", "check", "detail"}` → `202 {"sent": n, "held": n}`;
   `401` without the token or through a proxy; `404` when `OPS_ALERT_TOKEN` is unset. When Risi
   is off, the operator has no active Risi chat or the phone has no user, it is counted as `held`
-  (not stored; logged without the phone) and the watchdog sends the e-mail / SMS fallback. Limit: 10 per hour (`429 rate_limited`).
+  (not stored; logged without the phone) and the watchdog sends the e-mail / SMS fallback. Limit: 30 per hour (`429 rate_limited`; Alertmanager groups and repeats at most every 4 h).
 - Not end-to-end private beyond any other Risi post; it never contains message content, tokens or
   phone numbers.
 - Example: `envelope_risi_ops_alert.json`.
 
 ## Changelog
 - **v1.32** (2026-10-10): `calendar_check` phone source reason `sync_off` (§29.7); Ops alerts
-  (§32): the Risi rule kind `ops_alert` and the loopback-only `POST /internal/ops-alert`.
+  (§32): the Risi rule kind `ops_alert` and the loopback-only `POST /internal/ops-alert` (watchdog states, and
+  `alert` / `resolved` from Alertmanager through the loopback bridge).
 - **v1.31** (2026-10-10): the Google Calendar link (§31; decision 074; folds the deferred
   `2026-10-09-google-calendar.md`; Harsha's requirements of 2026-10-10):
   - the switch `/auth/config` `google_calendar` (`RISI_GCAL`, only with `RISI_EVENTS`), the
