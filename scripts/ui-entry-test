@@ -2670,6 +2670,16 @@ elif check == 'header':  # name : the peer's (prefix) name is in the top bar (to
     for x in nodes:
         if desc(x) in ('Lock chat', 'Unlock chat', 'End-to-end encrypted') and box(x)[3] < H * 0.15: bad("a header icon %r is still there" % desc(x))
     print("ok: header %r" % txt(n))
+elif check == 'official':  # "<name> · Risi" header: neither part clipped (the " · Risi" node is as high as the name's)
+    name, H = args[0], int(args[1])
+    top = [n for n in nodes if txt(n) and box(n)[3] < H * 0.15]
+    nm = next((n for n in top if txt(n).startswith(name)), None)
+    rs = next((n for n in top if txt(n).strip() in ('· Risi', '·Risi') or txt(n).endswith(' · Risi')), None)
+    if nm is None or rs is None: bad("no '%s · Risi' header: %s" % (name, [txt(n) for n in top]))
+    if nm is rs: print("ok: one title node %r (%d px)" % (txt(nm), h(nm))); sys.exit(0)
+    if h(rs) < h(nm) - 2: bad("' · Risi' is clipped: %d px high vs the name's %d px" % (h(rs), h(nm)))
+    if h(nm) < 20: bad("the title is only %d px high" % h(nm))
+    print("ok: name %d px, ' · Risi' %d px" % (h(nm), h(rs)))
 elif check == 'nochips':
     hit = [txt(n) for n in nodes if txt(n).startswith('UIB chip') or desc(n).startswith('UIB chip')]
     if hit: bad("next_steps are drawn as chips: %s" % hit)
@@ -2773,6 +2783,15 @@ ui_batch_section() {
     wait_for 'text="Encrypted message"' 20 || fail "ui-batch [$UIB_SC]: DM didn't open"
     uib_check header "ZZ UI B" "$H"
     shot "50-uibatch-header-$UIB_SC"
+    # (b) the 1:1 Official header "<name> · Risi" is not clipped at this font scale.
+    if has 'text="● Official"'; then
+      tap "● Official" || fail "ui-batch [$UIB_SC]: tap Official"
+      if wait_for 'text="Start Official"' 8; then tap "Start Official" || fail "ui-batch [$UIB_SC]: tap Start Official"; fi
+      for _ in $(seq 1 60); do dump; grep -qE 'text="[ ]?· Risi"|· Risi"' "$WORK/ui-$DEV.xml" && break; sleep 1; done
+      uib_check official "ZZ UI B" "$H"
+      shot "50-uibatch-official-header-$UIB_SC"
+      tap "🔒 Private" || true; sleep 1
+    fi
     uib_lock_cycle
     pass "ui-batch [$UIB_SC]: the header always shows the name; Lock chat lives in the ⋮"
     # 6. no fake chips in the Risi chat
@@ -2784,7 +2803,10 @@ ui_batch_section() {
     tap "Send" || fail "ui-batch [$UIB_SC]: send to Risi"
     wait_for "UIBATCH answer ready." 90 || fail "ui-batch [$UIB_SC]: Risi didn't answer the scripted question"
     sleep 2; dump
-    uib_check nochips
+    # TODO(root, P0 addition (c)): android is bringing the suggestion chips back (a tap sends the request to Risi and a turn
+    # runs). When that lands, replace this "no chips" check by: tap "UIB chip tell me more" → fake-llm's record
+    # ($WORK/llm-requests.jsonl) holds a request with that text, the composer stays empty.
+    [ "${UIB_CHIPS_BACK:-0}" = 1 ] || uib_check nochips
     shot "50-uibatch-risi-$UIB_SC"
     pass "ui-batch [$UIB_SC]: Risi's answer has no next_steps chips"
     back_to_list || fail "ui-batch [$UIB_SC]: back to the list"
