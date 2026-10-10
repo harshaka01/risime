@@ -1033,6 +1033,41 @@ ofx() { (cd server && set -a && . "$WORK/risi.env" && . "$WORK/phase.env" && set
 # Taps the first node with the exact text $2 below the node $1 (exact text/content-desc, or "prefix*") and above
 # the next card or item ("Risi · …" header, "• …" item line). Scrolls the chat to find them: the anchor not
 # on screen → older; the target not yet on screen → a little newer.
+# The "Risi · Invitation" card titled $1 (the header's next text): scroll to it (up first, then down, small
+# steps) and tap its [Accept] (the first Accept below that header). A chat can hold several invitations.
+invite_accept() {
+  local i xy
+  for i in $(seq 1 24); do
+    dump
+    xy="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" "$H" <<'PY2'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    nodes = [n for n in ET.parse(sys.argv[1]).iter('node') if (n.get('text') or '') not in ('', 'ⓘ')]
+except ET.ParseError:
+    nodes = []
+H = int(sys.argv[3])
+box = lambda n: [int(v) for v in re.findall(r'\d+', n.get('bounds'))]
+for k, n in enumerate(nodes[:-1]):
+    if n.get('text') == 'Risi · Invitation' and nodes[k + 1].get('text') == sys.argv[2]:
+        hy = box(n)[1]
+        acc = [box(m) for m in nodes[k + 1:] if m.get('text') == 'Accept' and box(m)[1] > hy]
+        if acc and acc[0][3] < H * 0.85:
+            b = acc[0]; print((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+        else:
+            print("below")
+        break
+PY2
+)"
+    case "$xy" in
+      below) A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 45 / 100)) 1200 ;;
+      "") if [ "$i" -le 12 ]; then A shell input swipe $((W / 2)) $((H * 30 / 100)) $((W / 2)) $((H * 65 / 100)) 300
+          else A shell input swipe $((W / 2)) $((H * 65 / 100)) $((W / 2)) $((H * 30 / 100)) 300; fi ;;
+      *) A shell input tap $xy; return 0 ;;
+    esac
+    sleep 1
+  done
+  echo "    [$DEV] no invitation '$1' with Accept"; return 1
+}
 tap_below() {
   local r
   for _ in $(seq 1 16); do
@@ -1905,13 +1940,12 @@ PY
     pass "risi-calendar: RisiMe.Release.risi_calendar_backfill(dry_run: false) in the test server → one proposed 'Interview' for A and B"
     DEV=B; open_risi_chat || fail "risi-calendar: B can't open its Risi chat (invite)"
     scroll_to "Risi · Invitation" || fail "risi-calendar: no 'Risi · Invitation' in B's Risi chat"
-    for _ in 1 2 3; do has 'text="Accept"' && break; A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 45 / 100)) 300; sleep 1; done
-    has 'text="Interview"' || fail "risi-calendar: B's invitation isn't for 'Interview'"
+    # (Other invitations can be there too, e.g. step 15's note meeting: act on the 'Interview' one.)
     shot "calendar-invite-card"
-    tap_below "Risi · Invitation" "Accept" || fail "risi-calendar: B's [Accept]"
+    invite_accept "Interview" || fail "risi-calendar: B has no 'Interview' invitation with [Accept]"
     DEV=A; open_risi_chat || fail "risi-calendar: A can't open its Risi chat (invite)"
     scroll_to "Risi · Invitation" || fail "risi-calendar: no 'Risi · Invitation' in A's Risi chat"
-    tap_below "Risi · Invitation" "Accept" || fail "risi-calendar: A's [Accept]"
+    invite_accept "Interview" || fail "risi-calendar: A has no 'Interview' invitation with [Accept]"
     ok=""; for _ in $(seq 1 30); do
       ofx events A | grep -F 'uientry: event Interview|risi|' | grep -q '|accepted|accepted,accepted|active|' \
         && ofx events B | grep -F 'uientry: event Interview|risi|' | grep -q '|accepted|accepted,accepted|active|' && { ok=1; break; }
