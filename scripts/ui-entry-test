@@ -2857,7 +2857,8 @@ ui_batch_calendar() {
   done
   has "Your events" || fail "ui-batch calendar: no 'Your events' header under Risi's answer"
   pass "ui-batch calendar: Risi's week answer lists the 4 seeded events under 'Your events'"
-  A shell am broadcast -a "$SEED" -p "$P" --es op clear >/dev/null 2>&1 || true
+  # (The seeded calendar stays for ui_batch_actions, which clears it. UITEST_UIBATCH_CAL_ONLY=3 runs the add on a phone with NO calendar:
+  # android finding, [Add] says "No writable Google calendar on this phone" instead of creating the local RisiMe calendar.)
   back_to_list || true
   logcat_ok "ui-batch calendar"
 }
@@ -3033,6 +3034,7 @@ PY
 }
 ui_batch_section() {
   DEV=A; screen_wh
+  [ "${UITEST_UIBATCH_CAL_ONLY:-0}" = 3 ] && { ui_batch_calendar_prep; seed --es op clear; ui_batch_actions; return 0; }  # (no calendar on the phone at all)
   [ "${UITEST_UIBATCH_CAL_ONLY:-0}" = 2 ] && { ui_batch_calendar_prep; ui_batch_actions; return 0; }
   [ "${UITEST_UIBATCH_CAL_ONLY:-0}" = 1 ] && { ui_batch_calendar; return 0; }  # (quick iterations on the calendar part)
   A shell locksettings set-pin "$PIN" >/dev/null 2>&1 || true
