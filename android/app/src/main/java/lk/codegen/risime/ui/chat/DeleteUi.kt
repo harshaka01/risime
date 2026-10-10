@@ -1,5 +1,6 @@
 package lk.codegen.risime.ui.chat
 
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -169,9 +170,9 @@ fun DeleteMessagesDialog(state: DeleteDialogState, onMe: () -> Unit, onEveryone:
         },
         confirmButton = {
             androidx.compose.foundation.layout.Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
-                if (state.canEveryone) androidx.compose.material3.TextButton(onClick = onEveryone) { androidx.compose.material3.Text("Delete for everyone") }
-                androidx.compose.material3.TextButton(onClick = onMe) { androidx.compose.material3.Text("Delete for me") }
-                androidx.compose.material3.TextButton(onClick = onDismiss) { androidx.compose.material3.Text("Cancel") }
+                if (state.canEveryone) androidx.compose.material3.TextButton(onClick = onEveryone) { androidx.compose.material3.Text("Delete for everyone", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                androidx.compose.material3.TextButton(onClick = onMe) { androidx.compose.material3.Text("Delete for me", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                androidx.compose.material3.TextButton(onClick = onDismiss) { androidx.compose.material3.Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         },
     )
@@ -185,9 +186,9 @@ fun DeleteNoticeDialog(notice: lk.codegen.risime.data.ChatEngine.DeleteNotice, o
         title = { androidx.compose.material3.Text(DeleteRules.FAILED) },
         text = { if (notice.text != DeleteRules.FAILED) androidx.compose.material3.Text(notice.text) },
         confirmButton = {
-            if (notice.failedClientMsgIds.isNotEmpty()) androidx.compose.material3.TextButton(onClick = onMe) { androidx.compose.material3.Text("Delete for me") }
+            if (notice.failedClientMsgIds.isNotEmpty()) androidx.compose.material3.TextButton(onClick = onMe) { androidx.compose.material3.Text("Delete for me", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         },
-        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { androidx.compose.material3.Text("OK") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { androidx.compose.material3.Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 
@@ -204,7 +205,7 @@ fun ClearChatDialog(hide: Boolean, onConfirm: () -> Unit, onDismiss: () -> Unit)
             )
         },
         confirmButton = { androidx.compose.material3.TextButton(onClick = onConfirm) { androidx.compose.material3.Text(if (hide) "Delete chat" else "Clear chat") } },
-        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { androidx.compose.material3.Text("Cancel") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { androidx.compose.material3.Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 
@@ -218,20 +219,22 @@ fun SelectionTopBar(count: Int, onCopy: () -> Unit, onDelete: () -> Unit, onClos
         ) {
             androidx.compose.material3.IconButton(onClick = onClose) { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Close, "Cancel selection") }
             androidx.compose.material3.Text("$count selected", androidx.compose.ui.Modifier.weight(1f), style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
-            androidx.compose.material3.TextButton(onClick = onCopy) { androidx.compose.material3.Text("Copy") }
+            androidx.compose.material3.TextButton(onClick = onCopy) { androidx.compose.material3.Text("Copy", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             androidx.compose.material3.IconButton(onClick = onDelete) { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Delete, "Delete selected") }
         }
     }
 }
 
 /**
- * The chat overflow menu: Clear chat / Delete chat (always on: local + my own inbox). No "Lock chat"
- * here (Harsha's report): a chat is locked from Chat info's toggle or the chat list's long-press.
+ * The chat overflow menu: Clear chat / Delete chat (always on: local + my own inbox). "Lock chat" /
+ * "Unlock chat" is the first item (v1.32: it moved here from the header); also in Chat info and the chat list's long-press.
  */
 @Composable
 fun ChatOverflowMenu(
     onClear: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    /** v1.32 item 4: "Lock chat" / "Unlock chat" (the lock moved here from the header); null: no item. */
+    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
     /** More items first (the Official chat's "Summarise" and "Report"); `close` dismisses the menu. */
     extra: (@androidx.compose.runtime.Composable (close: () -> Unit) -> Unit)? = null,
 ) {
@@ -239,9 +242,16 @@ fun ChatOverflowMenu(
     androidx.compose.foundation.layout.Box {
         androidx.compose.material3.IconButton(onClick = { open = true }) { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.MoreVert, "More options") }
         androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            lock?.let { l ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { androidx.compose.material3.Text(if (l.locked) lk.codegen.risime.ui.lock.UNLOCK_CHAT_LABEL else lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL) },
+                    onClick = { open = false; l.onToggle() },
+                    modifier = androidx.compose.ui.Modifier.testTag("chat_menu_lock"),
+                )
+            }
             extra?.invoke { open = false }
-            onClear?.let { f -> androidx.compose.material3.DropdownMenuItem(text = { androidx.compose.material3.Text("Clear chat") }, onClick = { open = false; f() }) }
-            onDelete?.let { f -> androidx.compose.material3.DropdownMenuItem(text = { androidx.compose.material3.Text("Delete chat") }, onClick = { open = false; f() }) }
+            onClear?.let { f -> androidx.compose.material3.DropdownMenuItem(text = { androidx.compose.material3.Text("Clear chat", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { open = false; f() }) }
+            onDelete?.let { f -> androidx.compose.material3.DropdownMenuItem(text = { androidx.compose.material3.Text("Delete chat", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { open = false; f() }) }
         }
     }
 }

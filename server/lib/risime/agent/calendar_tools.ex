@@ -46,7 +46,8 @@ defmodule RisiMe.Agent.CalendarTools do
       name: "risi_calendar_check",
       description:
         "check when the asker is free or busy: their Risi Calendar, and their phone's calendar " <>
-          "when it is connected (from, to: an ISO time or a local phrase like \"Monday 00:00\"; " <>
+          "(Google accounts synced to the phone included; the phone gives busy times only, no " <>
+          "titles) when the Calendar skill is on (from, to: an ISO time or a local phrase like \"Monday 00:00\"; " <>
           "at most 14 days); a proposed event is tentative",
       where: :server,
       personal: true,

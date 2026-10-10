@@ -109,6 +109,13 @@ class ContractExamplesTest {
                     require(it.tool == RisiToolCall.TOOL_CALENDAR_CHECK && it.calendarCheckArgs()!!.sources == listOf("google_api") && it.toDevices.size == 1)
                 }
             },
+            "risi_tool_result_calendar_check_sync_off.json" to { s ->
+                val r = toolResult(s)
+                val c = ProtocolJson.decodeFromJsonElement(CalendarCheckResult.serializer(), r.result!!)
+                val p = c.sources!!.single { it.source == "phone_provider" }
+                require(r.status == "ok" && !p.readOk && p.reason == "sync_off" && p.calendars.size == 1 && c.connectedSources == listOf("phone_provider"))
+                r
+            },
             "risi_tool_result_calendar_check_google.json" to { s ->
                 val r = toolResult(s)
                 val rep = ProtocolJson.decodeFromJsonElement(GoogleSourceReport.serializer(), r.result!!["sources"]!!.jsonArray.single())
@@ -150,6 +157,29 @@ class ContractExamplesTest {
 
     /** Every example file must map to a model; a new file without a decoder fails this test. */
     private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + mapOf(
+        // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
+        "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
+        // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.
+        "risi_tool_result_calendar_add_v132.json" to { s ->
+            ProtocolJson.decodeFromString<RisiToolResult>(s).also {
+                val r = ProtocolJson.decodeFromJsonElement(CalendarAddResult.serializer(), it.result!!)
+                require(it.status == RisiToolResult.OK && r.eventId == "4711" && r.verified == true)
+                require(ProtocolJson.parseToJsonElement(ProtocolJson.encodeToString(RisiToolResult.serializer(), RisiToolResult(RisiToolResult.OK, ProtocolJson.encodeToJsonElement(CalendarAddResult.serializer(), CalendarAddResult("4711", verified = true)) as kotlinx.serialization.json.JsonObject))) == ProtocolJson.parseToJsonElement(s))
+            }
+        },
+        "risi_tool_result_calendar_add_error_v132.json" to { s ->
+            ProtocolJson.decodeFromString<RisiToolResult>(s).also {
+                require(it.status == RisiToolResult.ERROR && it.code == CalendarAddErrors.VERIFY_FAILED && it.detail == "read-back: no row for id 4711" && it.result == null)
+                require(ProtocolJson.parseToJsonElement(ProtocolJson.encodeToString(RisiToolResult.serializer(), RisiToolResult.addError("verify_failed", "read-back: no row for id 4711"))) == ProtocolJson.parseToJsonElement(s))
+            }
+        },
+        // v1.32 §29.7 answer.local_events: the checked range the asker's phone lists its own events for.
+        "envelope_risi_answer_local_events.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == "answer" && it.localEvents!!.from == "2026-10-11T18:30:00.000Z" && it.localEvents!!.to == "2026-10-18T18:30:00.000Z" && it.notify.size == 1)
+                require(lk.codegen.risime.data.tabs.LocalEvents.range(it.localEvents) != null)
+            }
+        },
         // v1.27 (§27 made_by, the Ledger follow-ups, call transcription): net/Protocol127.kt and RisiMeta's optional fields.
         "auth_config_v127.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiLedgerOn && it.risiTranscribeOn && it.risiSkillsOn && it.risiToolsOn) } },
         "device_put_risi_ledger.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_LEDGER in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) } },

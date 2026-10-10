@@ -530,6 +530,11 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override fun ask(text: String) { viewModelScope.launch { requests.ask(text) } }
 
+        override suspend fun localEvents(fromMs: Long, toMs: Long): lk.codegen.risime.data.tabs.LocalEventsResult =
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                lk.codegen.risime.data.tabs.LocalEvents.build(fromMs, toMs, phone = { c.phoneCalendar.localEvents(fromMs, toMs) }, risi = { c.risiCalendar.eventsNow() })
+            }
+
         override fun summarise() { viewModelScope.launch { requests.summarise() } }
 
         override fun report() { viewModelScope.launch { requests.report() } }
@@ -558,6 +563,10 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         }
 
         override fun openSkills(skillId: String?) = c.risiUi.openSkills(skillId)
+
+        override fun openNotificationSettings() {
+            c.startExternal(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, c.packageNameForLinks))
+        }
 
         override fun useDraft(conversationId: String, text: String) = c.risiUi.useDraft(conversationId, text)
 

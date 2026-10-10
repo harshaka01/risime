@@ -49,7 +49,7 @@ fun NotificationPermissionPrompt(c: AppContainer) {
                     "The notification is built on your phone; message text never goes through Google.",
             )
         },
-        confirmButton = { TextButton(onClick = { done(true) }) { Text("Allow") } },
-        dismissButton = { TextButton(onClick = { done(false) }) { Text("Not now") } },
+        confirmButton = { TextButton(onClick = { done(true) }) { Text("Allow", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+        dismissButton = { TextButton(onClick = { done(false) }) { Text("Not now", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }

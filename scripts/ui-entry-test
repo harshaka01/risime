@@ -107,6 +107,14 @@
 #     (an insert that failed with 500 is retried: still one copy); loop guard (one busy time); edit → PATCH; delete →
 #     DELETE; revoked → "needs reconnecting", ONE google_reconnect card, Reconnect works; Disconnect on A2 with Remove →
 #     copies gone, link none; canaries (CANARY-GTITLE, the token, the account, Work/Personal) in no log or dump.
+# 18. (--ui-batch, UI batch 2026-10-10, branch v1.32; docs/status/briefs/ui-batch-2026-10-10.md) at font scale 1.0 and 1.3
+#     (`settings put system font_scale`, apps restarted; 1.0 restored): chat-list rows are two lines (name + preview, no
+#     "last seen"), names are one line, a long name stays inside its row; the "Requests" tab label is one line and as
+#     high as the other tabs'; the chat header shows the peer's name, "Lock chat" is in the chat's ⋮ (no header icon),
+#     lock → ⋮ shows "Unlock chat" → unlock; ONE round FAB "New" → a sheet "New chat" / "New group" / "Add friend";
+#     Settings → profile photo sheet "Take photo" / "Gallery" / "Remove photo" (when set); the Risi chat shows no
+#     next_steps chips. UITEST_UIBATCH_ONLY=1: only steps 1 and 18. Shots 50-uibatch-*-<scale>. With --ui-batch step 4
+#     expects "Lock chat" IN the chat's ⋮ (v1.32; the pre-v1.32 app must not have it).
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -119,12 +127,13 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
 CLS=lk.codegen.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0
+APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0; UIBATCH=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;;
   --skills) RISI=1; SKILLS=1; SKILLS_STEP=1; shift;; --ledger) RISI=1; LEDGER=1; shift;;
   --calendar) RISI=1; SKILLS=1; SKILLS_STEP=1; CALENDAR=1; shift;; --offers) RISI=1; SKILLS=1; OFFERS=1; shift;;
   --risi-calendar) RISI=1; SKILLS=1; RCAL=1; shift;; --risi-notes) RISI=1; SKILLS=1; RNOTES=1; shift;;
   --google) RISI=1; SKILLS=1; GCAL=1; shift;;
+  --ui-batch) RISI=1; SKILLS=1; UIBATCH=1; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 # --google alone: UITEST_GOOGLE_ONLY=1 = steps 1 and 17 (steps 2-16 are skipped through UITEST_RISI_ONLY, which only
 # the --risi-calendar/--risi-notes blocks and the google block look at).
@@ -169,6 +178,9 @@ cleanup() {
   tmux kill-session -t "risime-uientry$SUF" 2>/dev/null || true
   tmux kill-session -t "risime-uientry-llm$SUF" 2>/dev/null || true
   tmux kill-session -t "risime-uientry-gcal$SUF" 2>/dev/null || true
+  if [ "${UIB_SCALE_SET:-0}" = 1 ]; then
+    for d in A B; do [ -n "$(ser $d)" ] && adb -s "$(ser $d)" shell settings put system font_scale 1.0 >/dev/null 2>&1 || true; done
+  fi
   if [ "$KEEP" = 0 ]; then
     REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
     REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
@@ -191,6 +203,31 @@ at, conv = sys.argv[3], sys.argv[4]
 cal_start, cal_end = sys.argv[5], sys.argv[6]
 final = lambda a: {"tool": "final", "answer": a, "sources": [], "next_steps": []}
 rules = [
+    # Step 18 (--ui-batch): an answer that carries next_steps; the app must not draw them as chips (UI batch item 7).
+    {"name": "uibatch_chips", "task": "risi_next_action", "match": "(?i)uibatch hello",
+     "actions": [{"tool": "final", "answer": "UIBATCH answer ready.", "sources": [],
+                  "next_steps": ["UIB chip remind me tomorrow", "UIB chip tell me more"]}]},
+    {"name": "uibatch_upali_mon", "task": "risi_next_action", "match": "(?i)upali monday",
+     "actions": [{"tool": "calendar_add", "args": {"title": "Meeting with Upali", "start": os.environ.get("UIB_MON", "2099-01-05T10:00:00.000Z"), "end": os.environ.get("UIB_MON_END", "2099-01-05T11:00:00.000Z"), "all_day": False}},
+                 {"tool": "final", "answer": "Tap Add to put it on your calendar.", "sources": [], "next_steps": []}]},
+    {"name": "uibatch_upali_tue", "task": "risi_next_action", "match": "(?i)upali tuesday",
+     "actions": [{"tool": "calendar_add", "args": {"title": "Meeting with Upali two", "start": os.environ.get("UIB_TUE", "2099-01-06T10:00:00.000Z"), "end": os.environ.get("UIB_TUE_END", "2099-01-06T11:00:00.000Z"), "all_day": False}},
+                 {"tool": "final", "answer": "Tap Add to put it on your calendar.", "sources": [], "next_steps": []}]},
+    {"name": "uibatch_upali_wed", "task": "risi_next_action", "match": "(?i)upali wednesday",
+     "actions": [{"tool": "calendar_add", "args": {"title": "Meeting with Upali google", "start": os.environ.get("UIB_WED", "2099-01-07T10:00:00.000Z"), "end": os.environ.get("UIB_WED_END", "2099-01-07T11:00:00.000Z"), "all_day": False}},
+                 {"tool": "final", "answer": "Tap Add to put it on your calendar.", "sources": [], "next_steps": []}]},
+    {"name": "uibatch_actions", "task": "risi_next_action", "match": "(?i)uibatch actions",
+     "actions": [{"tool": "final", "answer": "UIBATCH actions ready.", "sources": [],
+                  "next_steps": ["Connect your calendar in Settings", "Check if I'm free on Monday"]}]},
+    {"name": "uibatch_monday", "task": "risi_next_action", "match": "(?i)free on monday",
+     "actions": [{"tool": "final", "answer": "UIBATCH monday answer.", "sources": [], "next_steps": []}]},
+    {"name": "uibatch_md", "task": "risi_next_action", "match": "(?i)uibatch markdown",
+     "actions": [{"tool": "final", "answer": "Plan: **bold text** and __more bold__ here.\n\n- item one\n- item two", "sources": [], "next_steps": []}]},
+    {"name": "uibatch_chip_tap", "task": "risi_next_action", "match": "(?i)uib chip tell me more",
+     "actions": [{"tool": "final", "answer": "UIBATCH chip answered.", "sources": [], "next_steps": []}]},
+    {"name": "uibatch_week", "task": "risi_next_action", "match": "(?i)what.?s on my calendar this week",
+     "actions": [{"tool": "calendar_check", "args": {"from": os.environ.get("UIB_FROM", "2099-01-01") + "T00:00", "to": os.environ.get("UIB_TO", "2099-01-08") + "T00:00"}},
+                 {"tool": "final", "answer": "UIBATCH week answer.", "sources": ["c1"], "next_steps": []}]},
     # Step 12 (P0): Harsha's request → one calendar_add proposal (the action card), and the chips the
     # model offered on the phone (a confirm phrase and a question are hidden; the third only fills).
     {"name": "calendar_shenika", "task": "risi_next_action", "match": "(?i)interview with shenika",
@@ -300,6 +337,10 @@ rules += base["rules"] if isinstance(base, dict) else base
 json.dump({"v": 1, "rules": rules}, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
 PY
 }
+export UIB_MON="$(date -u -d 'next monday' +%FT10:00:00.000Z)" UIB_MON_END="$(date -u -d 'next monday' +%FT11:00:00.000Z)"
+export UIB_TUE="$(date -u -d 'next tuesday' +%FT10:00:00.000Z)" UIB_TUE_END="$(date -u -d 'next tuesday' +%FT11:00:00.000Z)"
+export UIB_WED="$(date -u -d 'next wednesday' +%FT10:00:00.000Z)" UIB_WED_END="$(date -u -d 'next wednesday' +%FT11:00:00.000Z)"
+export UIB_FROM="$(date -u +%F)" UIB_TO="$(date -u -d '+8 days' +%F)"
 start_llm() {
   tmux kill-session -t "risime-uientry-llm$SUF" 2>/dev/null || true
   for _ in $(seq 1 20); do ss -ltnH "sport = :$LLM_PORT" | grep -q . || break; sleep 0.5; done
@@ -326,6 +367,14 @@ case mode do
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
     RisiMe.Social.make_friends!(a.id, b.id)
     IO.puts("uientry: friends ok")
+  "longfriend" ->
+    # A third, long-named friend of A (UI batch: a name longer than the row). Inserted directly: no device signs in as C.
+    a = Repo.get_by!(User, phone: a_phone)
+    c = Repo.get_by(User, phone: "+94770000983") ||
+          Repo.insert!(%User{phone: "+94770000983", email: "uientry83@example.com", company: "CodeGen",
+                             display_name: "ZZ UI Cee With An Extremely Long Display Name For Ellipsis Test"})
+    RisiMe.Social.make_friends!(a.id, c.id)
+    IO.puts("uientry: longfriend ok")
   "risi" ->
     :ok = RisiMe.Risi.seed()
     IO.puts("uientry: risi ok")
@@ -652,6 +701,7 @@ pass "both opened the DM; it is e2ee"
 # UITEST_OFFERS_ONLY=1 (with --offers): only steps 1 and 13.
 # UITEST_RISI_ONLY=1 (with --risi-calendar/--risi-notes): only steps 1 and 14-16.
 ONLY="${UITEST_SKILLS_ONLY:-0}${UITEST_LEDGER_ONLY:-0}${UITEST_CALENDAR_ONLY:-0}${UITEST_OFFERS_ONLY:-0}${UITEST_RISI_ONLY:-0}"
+[ "${UITEST_UIBATCH_ONLY:-0}" = 1 ] && ONLY=x
 if [ "$ONLY" = 00000 ]; then
 # ---------------------------------------------------------------- 2. the tab row under the header, Start Official
 DEV=A
@@ -694,10 +744,16 @@ A shell locksettings set-pin "$PIN" >/dev/null || fail "locksettings set-pin"
 wait_for 'text="Encrypted message"' 10 || fail "not back in the chat"
 tap "More options" || fail "the chat's ⋮"
 wait_for 'text="Delete chat"' 10 || fail "the chat's ⋮ didn't open (no 'Delete chat')"
-has 'text="Lock chat"' && fail "the chat's ⋮ still has 'Lock chat' (only Chat info and the long-press may)"
-has 'text="Unlock chat"' && fail "the chat's ⋮ has 'Unlock chat'"
-shot "04-chat-menu-no-lock"
-pass "the chat's ⋮ does NOT have 'Lock chat'"
+if [ "$UIBATCH" = 1 ]; then  # v1.32: the lock moved from the header into the ⋮ (UI batch item 4)
+  has 'text="Lock chat"' || fail "the chat's ⋮ has no 'Lock chat' (v1.32)"
+  shot "04-chat-menu-lock"
+  pass "the chat's ⋮ has 'Lock chat' (v1.32)"
+else
+  has 'text="Lock chat"' && fail "the chat's ⋮ still has 'Lock chat' (only Chat info and the long-press may)"
+  has 'text="Unlock chat"' && fail "the chat's ⋮ has 'Unlock chat'"
+  shot "04-chat-menu-no-lock"
+  pass "the chat's ⋮ does NOT have 'Lock chat'"
+fi
 A shell input keyevent KEYCODE_BACK; sleep 1
 tap "ZZ UI B" || fail "tap the chat's name (chat info) to lock"
 wait_for 'text="Chat info"' 15 || fail "the name didn't open Chat info"
@@ -2574,6 +2630,527 @@ JSON
   pass "google: canaries (event title, token, account, calendar names) are in no logcat, server log, model request or Postgres row"
   DEV=A; logcat_ok "google"; DEV=C; logcat_ok "google"; DEV=A
 fi
+
+# ---------------------------------------------------------------- 18. UI batch 2026-10-10 (--ui-batch; v1.32), font scale 1.0 and 1.3
+# Layout checks read the node bounds of `uiautomator dump` (taps stay by visible text / content description only).
+# TODO(root): brief item 7 (Calendar Details "Sync is off for <account>" + "Open sync settings" + "Refresh") is not here: it
+# needs a calendar account with calendar sync OFF and the Details screen (--calendar's step 12 fixtures seed a Google-type
+# calendar through `content insert` with no registered Account, so the sync flag the app reads is the provider's default and
+# not under this test's control; `ContentResolver.setSyncAutomatically` needs a real AccountManager account, which redroid
+# has none of). Covered by the android Robolectric tests (CalendarBackend fake) until redroid can add an account.
+uib_py() {  # $1 = check name, rest = args; reads $WORK/ui-$DEV.xml; prints the problem and exits 1
+  python3 -I - "$WORK/ui-$DEV.xml" "$@" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+xml_path, check, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+try:
+    nodes = list(ET.parse(xml_path).iter('node'))
+except ET.ParseError:
+    print("unreadable dump"); sys.exit(1)
+def box(n): return list(map(int, re.findall(r'-?\d+', n.get('bounds'))))
+def txt(n): return n.get('text') or ''
+def desc(n): return n.get('content-desc') or ''
+def h(n): b = box(n); return b[3] - b[1]
+def bad(msg): print(msg); sys.exit(1)
+if check == 'list':   # short_name long_prefix preview scale
+    short, longp, preview, scale = args[0], args[1], args[2], float(args[3])
+    if any('last seen' in (txt(n) + desc(n)).lower() for n in nodes): bad("the chat list shows 'last seen'")
+    names = [n for n in nodes if txt(n) == short or txt(n).startswith(longp) or txt(n) == 'Risi']
+    if len(names) < 2: bad("fewer than two name nodes to compare: %s" % [txt(n) for n in names])
+    ref = min(h(n) for n in names)
+    for n in names:
+        if h(n) > ref * 1.4: bad("name %r is %d px high, a single line is %d: it wraps" % (txt(n), h(n), ref))
+    # The short name's row: the smallest clickable node around it holds exactly two text lines (name+time, preview).
+    nm = next(n for n in nodes if txt(n) == short)
+    nb = box(nm)
+    rows = [n for n in nodes if n.get('clickable') == 'true' and box(n)[0] <= nb[0] and box(n)[1] <= nb[1] and box(n)[2] >= nb[2] and box(n)[3] >= nb[3]]
+    if not rows: bad("no clickable row around %r" % short)
+    row = min(rows, key=lambda n: (box(n)[2] - box(n)[0]) * (box(n)[3] - box(n)[1])); rb = box(row)
+    inside = [n for n in nodes if (txt(n) or desc(n)) and box(n)[0] >= rb[0] and box(n)[2] <= rb[2] and box(n)[1] >= rb[1] and box(n)[3] <= rb[3] and n is not row]
+    centres = sorted((box(n)[1] + box(n)[3]) // 2 for n in inside if txt(n))
+    bands = []
+    for c in centres:
+        if not bands or c - bands[-1] > ref * 0.7: bands.append(c)
+    if len(bands) != 2: bad("row of %r has %d text lines (want 2): %s" % (short, len(bands), [txt(n) for n in inside if txt(n)]))
+    pv = [n for n in inside if any(q in txt(n) for q in preview.split('|'))]
+    if not pv: bad("row of %r has no preview containing %r: %s" % (short, preview, [txt(n) for n in inside if txt(n)]))
+    if (box(pv[0])[1] + box(pv[0])[3]) // 2 <= (nb[1] + nb[3]) // 2: bad("the preview is not under the name")
+    # The long name: one line, inside its row (not under the time at its end).
+    lg = next((n for n in nodes if txt(n).startswith(longp)), None)
+    if lg is None: bad("the long-named friend is not on the list")
+    lrows = [n for n in nodes if n.get('clickable') == 'true' and box(n)[1] <= box(lg)[1] and box(n)[3] >= box(lg)[3] and box(n)[0] <= box(lg)[0]]
+    lrow = min(lrows, key=lambda n: (box(n)[2] - box(n)[0]) * (box(n)[3] - box(n)[1]))
+    if box(lg)[2] > box(lrow)[2]: bad("the long name runs outside its row")
+    same = [n for n in nodes if txt(n) and n is not lg and box(n)[0] >= box(lrow)[0] and box(n)[2] <= box(lrow)[2] and abs((box(n)[1] + box(n)[3]) // 2 - (box(lg)[1] + box(lg)[3]) // 2) < ref * 0.7 and box(n)[0] >= box(lg)[2] - 2]
+    for n in same:
+        if box(lg)[2] > box(n)[0] + 2: bad("the long name overlaps %r" % txt(n))
+    if (box(lg)[2] - box(lg)[0]) < (box(lrow)[2] - box(lrow)[0]) * 0.35: bad("the long name got only %d px of a %d px row" % (box(lg)[2] - box(lg)[0], box(lrow)[2] - box(lrow)[0]))
+    print("ok: name line %d px, bands 2, long name %d..%d in row %d..%d" % (ref, box(lg)[0], box(lg)[2], box(lrow)[0], box(lrow)[2]))
+elif check == 'tabs':
+    hs = {}
+    for lab in ('Chats', 'Calls', 'Requests', 'Calendar'):
+        n = next((n for n in nodes if txt(n) == lab), None)
+        if n is None: n = next((n for n in nodes if desc(n) == lab or desc(n).startswith(lab + ',')), None)
+        if n is not None: hs[lab] = h(n)
+    if 'Requests' not in hs or 'Chats' not in hs: bad("tab row without Chats/Requests: %s" % hs)
+    base = min(hs.values())
+    if hs['Requests'] > base * 1.3 or max(hs.values()) > base * 1.3: bad("tab heights differ (Requests wraps?): %s" % hs)
+    print("ok: tab heights %s" % hs)
+elif check == 'header':  # name : the peer's (prefix) name is in the top bar (top 15 %), one line
+    name, H = args[0], int(args[1])
+    n = next((n for n in nodes if txt(n).startswith(name) and box(n)[3] < H * 0.15), None)
+    if n is None: bad("the chat header doesn't show %r (top bar texts: %s)" % (name, [txt(x) for x in nodes if txt(x) and box(x)[3] < H * 0.15]))
+    for x in nodes:
+        if desc(x) in ('Lock chat', 'Unlock chat', 'End-to-end encrypted') and box(x)[3] < H * 0.15: bad("a header icon %r is still there" % desc(x))
+    print("ok: header %r" % txt(n))
+elif check == 'official':  # "<name> · Risi" header: neither part clipped (the " · Risi" node is as high as the name's)
+    name, H = args[0], int(args[1])
+    top = [n for n in nodes if txt(n) and box(n)[3] < H * 0.15]
+    nm = next((n for n in top if txt(n).startswith(name)), None)
+    rs = next((n for n in top if txt(n).strip() in ('· Risi', '·Risi') or txt(n).endswith(' · Risi')), None)
+    if nm is None or rs is None: bad("no '%s · Risi' header: %s" % (name, [txt(n) for n in top]))
+    if nm is rs: print("ok: one title node %r (%d px)" % (txt(nm), h(nm))); sys.exit(0)
+    if h(rs) < h(nm) - 2: bad("' · Risi' is clipped: %d px high vs the name's %d px" % (h(rs), h(nm)))
+    if h(nm) < 20: bad("the title is only %d px high" % h(nm))
+    print("ok: name %d px, ' · Risi' %d px" % (h(nm), h(rs)))
+elif check == 'nochips':
+    hit = [txt(n) for n in nodes if txt(n).startswith('UIB chip') or desc(n).startswith('UIB chip')]
+    if hit: bad("next_steps are drawn as chips: %s" % hit)
+    print("ok")
+elif check == 'fab':   # exactly one node with the content description New
+    k = [n for n in nodes if desc(n) == 'New']
+    if len(k) != 1: bad("%d nodes with content-desc 'New' (want one)" % len(k))
+    print("ok")
+PY
+}
+uib_check() { local what="$1"; shift; local out; dump; out="$(uib_py "$what" "$@")" || fail "ui-batch [$UIB_SC] $what: $out"; echo "    $what [$UIB_SC]: $out"; }
+uib_set_scale() {  # $1 = scale: both phones, apps restarted
+  local d
+  for d in A B; do DEV=$d; A shell settings put system font_scale "$1"; A shell am force-stop "$PKG"; done
+  UIB_SCALE_SET=1; DEV=A
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2; dismiss_prompts
+  back_to_list || fail "ui-batch [$1]: no chat list after the restart"
+}
+# Locks the chat open in the DM from its ⋮ (PIN prompt), checks that the ⋮ then says "Unlock chat", unlocks again.
+uib_lock_cycle() {
+  tap "More options" || fail "ui-batch [$UIB_SC]: the chat's ⋮"
+  wait_text "Lock chat" 10 || fail "ui-batch [$UIB_SC]: the chat's ⋮ has no 'Lock chat'"
+  has 'content-desc="Lock chat"' && fail "ui-batch [$UIB_SC]: 'Lock chat' is also a header icon"
+  shot "50-uibatch-menu-$UIB_SC"
+  mark_prompts; tap "Lock chat" || fail "ui-batch [$UIB_SC]: tap Lock chat"
+  confirm_pin "ui-batch: Lock chat from the chat's ⋮"
+  sleep 2
+  if ! on_list; then   # still in the chat: the ⋮ now offers Unlock chat
+    tap "More options" || fail "ui-batch [$UIB_SC]: the ⋮ after locking"
+    wait_text "Unlock chat" 10 || fail "ui-batch [$UIB_SC]: after locking, the chat's ⋮ has no 'Unlock chat'"
+    shot "50-uibatch-unlock-$UIB_SC"
+    mark_prompts; tap "Unlock chat" || fail "ui-batch [$UIB_SC]: tap Unlock chat"
+    sleep 1; [ "$(count 'RisiMe chat lock: prompt shown')" -gt "$PROMPTS0" ] && { enter_pin; sleep 1; }
+    pass "ui-batch [$UIB_SC]: ⋮ → Lock chat → ⋮ → Unlock chat"
+  else                  # the lock closes the chat: it is in the Locked chats folder
+    wait_gone 'text="ZZ UI B"' 15 || fail "ui-batch [$UIB_SC]: the locked chat is still on the list"
+    local found=0
+    for _ in 1 2 3; do
+      A shell input swipe $((W / 2)) $((H * 35 / 100)) $((W / 2)) $((H * 80 / 100)) 500; sleep 1
+      has 'text="Locked chats"' && { found=1; break; }
+    done
+    [ "$found" = 1 ] || fail "ui-batch [$UIB_SC]: no 'Locked chats' row after locking"
+    mark_prompts; tap "Locked chats" || fail "ui-batch: tap Locked chats"
+    confirm_pin "ui-batch: Locked chats folder"
+    wait_for 'text="ZZ UI B"' 15 || fail "ui-batch [$UIB_SC]: the folder doesn't hold the chat"
+    tap "ZZ UI B"; sleep 2
+    tap "More options" || fail "ui-batch [$UIB_SC]: the locked chat's ⋮"
+    wait_text "Unlock chat" 10 || fail "ui-batch [$UIB_SC]: the locked chat's ⋮ has no 'Unlock chat'"
+    shot "50-uibatch-unlock-$UIB_SC"
+    mark_prompts; tap "Unlock chat" || fail "ui-batch [$UIB_SC]: tap Unlock chat"
+    sleep 1
+    [ "$(count 'RisiMe chat lock: prompt shown')" -gt "$PROMPTS0" ] && { enter_pin; sleep 1; }
+    pass "ui-batch [$UIB_SC]: ⋮ → Lock chat (→ folder) → ⋮ → Unlock chat"
+  fi
+  back_to_list || fail "ui-batch [$UIB_SC]: back to the list after unlocking"
+  wait_for 'text="ZZ UI B"' 15 || fail "ui-batch [$UIB_SC]: the unlocked chat didn't come back to the list"
+}
+# P0 (calendar "0 events"): a LOCAL calendar with four events seeded through the debug seam (android d073737); Calendar
+# Details counts all 4, the diagnostics section and its Copy button exist, and Risi's week answer lists them.
+ui_batch_calendar_prep() {
+  DEV=A
+  local out
+  P=lk.codegen.risime.debug; SEED=lk.codegen.risime.debug.CALENDAR_SEED
+  A shell pm grant "$PKG" android.permission.READ_CALENDAR 2>/dev/null || true
+  A shell pm grant "$PKG" android.permission.WRITE_CALENDAR 2>/dev/null || true
+  seed() { out="$(A shell am broadcast -a "$SEED" -p "$P" "$@" 2>&1 | tr -d '\r')"; printf '%s' "$out" | grep -q 'data="ok' || fail "ui-batch calendar: seed $*: $out"; }
+  local d1 d2 d3 d6
+  d1="$(date -u -d '+1 day' +%F)"; d2="$(date -u -d '+2 days' +%F)"; d3="$(date -u -d '+3 days' +%F)"; d6="$(date -u -d '+6 days' +%F)"
+  seed --es op clear
+  seed --es op calendar --es name "'RisiMe Seed'"
+  seed --es op event --es title "UIBSingle" --es start "${d1}T09:00:00+00:00" --es end "${d1}T10:00:00+00:00" --es tz UTC
+  seed --es op event --es title "UIBWeekly" --es start "${d2}T11:00:00+00:00" --es end "${d2}T11:30:00+00:00" --es tz UTC --es rrule "'FREQ=WEEKLY;COUNT=4'"
+  seed --es op event --es title "UIBAllday" --ez all_day true --es date "$d3"
+  seed --es op event --es title "UIBFar" --es start "${d6}T10:00:00+00:00" --es end "${d6}T11:00:00+00:00" --es tz UTC
+  pass "ui-batch calendar: seeded a LOCAL calendar 'RisiMe Seed' with 4 events (single, weekly, all-day, 6 days out)"
+  # Calendar skill on (READ/WRITE already granted).
+  settings_open "Risi skills" || fail "ui-batch calendar: Settings → 'Risi skills' didn't open"
+  reveal "Calendar skill" || fail "ui-batch calendar: Risi skills has no Calendar switch"
+  wait_skill "Calendar" "Off" 3 && { tap "Calendar skill" || fail "ui-batch calendar: turn on Calendar"; sleep 3; }
+  dismiss_prompts
+}
+uib_open_details() {  # Settings → Risi skills → Calendar → Details (the card expands in place)
+  settings_open "Risi skills" || fail "ui-batch calendar: Settings → 'Risi skills' didn't open"
+  reveal "Calendar skill" || fail "ui-batch calendar: Risi skills has no Calendar switch"
+  local opened="" found=0
+  local xy
+  for _ in $(seq 1 12); do   # (every skill has a [Details], and an expanded card has bullets: the first one between the Calendar title and the next skill's)
+    has 'text="What Risi can read"' && { opened=1; break; }  # (Details expands the card in place)
+    xy="$(python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+def c(n):
+    x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); return (x1 + x2) // 2, (y1 + y2) // 2
+cal = [c(n)[1] for n in nodes if n.get('text') == 'Calendar']
+if cal:
+    top = cal[-1]
+    nxt = [c(n)[1] for n in nodes if (n.get('text') or '') == 'Scheduled messages' and c(n)[1] > top]
+    lim = min(nxt) if nxt else 10 ** 6
+    hit = sorted((c(n)[1], c(n)[0]) for n in nodes if n.get('text') == 'Details' and top < c(n)[1] < lim)
+    if hit and hit[0][0] < 1100: print(hit[0][1], hit[0][0])
+PY
+)"
+    if [ -n "$xy" ]; then A shell input tap $xy; sleep 2; fi
+    A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 500; sleep 1
+  done
+  [ -n "$opened" ] || fail "ui-batch calendar: Calendar → [Details] didn't open"
+}
+ui_batch_calendar() {
+  DEV=A
+  ui_batch_calendar_prep
+  # Details
+  uib_open_details
+  local found=0
+  for _ in 1 2 3 4 5 6 7 8; do
+    has 'RisiMe Seed · Phone only · 4 events in the next 7 days' && { found=1; break; }
+    A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1
+  done
+  [ "$found" = 1 ] || { grep -o 'text="[^"]*event[^"]*"' "$WORK/ui-A.xml" | head -5; fail "ui-batch calendar: Details lacks 'RisiMe Seed · Phone only · 4 events in the next 7 days'"; }
+  shot "51-uibatch-calendar-details"
+  found=0
+  for _ in 1 2 3 4 5 6 7 8; do
+    has 'text="Calendar diagnostics"' && has 'Events (raw): 4 · Instances next 7 days: 4 · Counted: 4' && has 'Account type: LOCAL' && found=1
+    [ "$found" = 1 ] && break
+    A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1
+  done
+  [ "$found" = 1 ] || fail "ui-batch calendar: no 'Calendar diagnostics' with 'Events (raw): 4 · Instances next 7 days: 4 · Counted: 4' and 'Account type: LOCAL'"
+  for _ in 1 2 3 4; do has 'text="Copy diagnostics"' && break; A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1; done
+  has 'text="Copy diagnostics"' || fail "ui-batch calendar: no 'Copy diagnostics' button"
+  shot "52-uibatch-calendar-diagnostics"
+  pass "ui-batch calendar: Details 'RisiMe Seed · Phone only · 4 events in the next 7 days'; Calendar diagnostics (raw 4 / instances 4 / counted 4, LOCAL) and 'Copy diagnostics'"
+  # Risi's answer
+  back_to_list || fail "ui-batch calendar: back to the list"
+  wait_text "Risi" 30 || fail "ui-batch calendar: no Risi entry"
+  tap "Risi" || fail "ui-batch calendar: open the Risi chat"
+  wait_for 'text="Ask Risi…"' 60 || fail "ui-batch calendar: the Risi chat didn't open"
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "what%ss%son%smy%scalendar%sthis%sweek"; sleep 0.5
+  tap "Send" || fail "ui-batch calendar: send the week question"
+  wait_for "UIBATCH week answer." 120 || fail "ui-batch calendar: no answer to 'what's on my calendar this week'"
+  sleep 3; dump
+  has "I couldn" && fail "ui-batch calendar: Risi says it couldn't read the calendar"
+  has "0 events" && fail "ui-batch calendar: Risi's answer says '0 events'"
+  shot "53-uibatch-calendar-answer"
+  for t in "UIBSingle" "UIBWeekly" "UIBAllday" "UIBFar"; do
+    has "$t" || { [ "$t" = "UIBSingle" ] && grep -o 'text="[^"]*"' "$WORK/ui-A.xml" | tail -15; fail "ui-batch calendar: the answer's 'Your events' list lacks '$t'"; }
+  done
+  has "Your events" || fail "ui-batch calendar: no 'Your events' header under Risi's answer"
+  pass "ui-batch calendar: Risi's week answer lists the 4 seeded events under 'Your events'"
+  # (The seeded calendar stays for ui_batch_actions, which clears it. UITEST_UIBATCH_CAL_ONLY=3 runs the add on a phone with NO calendar:
+  # android finding, [Add] says "No writable Google calendar on this phone" instead of creating the local RisiMe calendar.)
+  back_to_list || true
+  logcat_ok "ui-batch calendar"
+}
+# ---- (a) (b) (c) (d) of the P0 hotfix: the add (card → [Add] → provider row, event card, Open in Calendar, honest failure),
+# the chip gate (deep link / request, never plain text), Markdown, and a com.google-type calendar next to the LOCAL one.
+uib_ask() {  # $1 = the sentence typed into the Risi chat
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "$(printf '%s' "$1" | sed 's/ /%s/g')"; sleep 0.5
+  tap "Send" || fail "ui-batch: send '$1'"
+}
+uib_risi_chat() {
+  back_to_list || fail "ui-batch: back to the list"
+  wait_text "Risi" 30 || fail "ui-batch: no Risi entry"
+  tap "Risi" || fail "ui-batch: open the Risi chat"
+  wait_for 'text="Ask Risi…"' 60 || fail "ui-batch: the Risi chat didn't open"
+}
+uib_events() {  # $1 = exact title: the live rows "id calendar_id"
+  A shell "content query --uri content://com.android.calendar/events --projection _id:calendar_id:title:deleted" 2>/dev/null | tr -d '\r' | grep "title=$1," | grep 'deleted=0' | sed 's/^Row: [0-9]* _id=\([0-9]*\), calendar_id=\([0-9]*\),.*/\1 \2/' || true
+}
+uib_focus() { A shell dumpsys activity activities 2>/dev/null | grep -E 'topResumedActivity|mResumedActivity' | head -1 | sed 's/^ *//'; }
+uib_add_flow() {  # $1 = the sentence, $2 = the title, $3 = a label for messages: card → [Add] → (picker) → the row
+  uib_ask "$1"
+  wait_text "Add" 120 || fail "ui-batch add [$3]: no action card with [Add]"
+  has "text=\"$2\"" || { for _ in 1 2 3; do A shell input swipe $((W / 2)) $((H * 35 / 100)) $((W / 2)) $((H * 55 / 100)) 300; sleep 1; has "text=\"$2\"" && break; done; }
+  has "text=\"$2\"" || fail "ui-batch add [$3]: the card doesn't show '$2'"
+  tap "Add" || fail "ui-batch add [$3]: tap Add"
+  sleep 2
+  if has 'text="Choose a calendar"'; then tap "Use this calendar" || fail "ui-batch add [$3]: pick the calendar"; fi
+}
+ui_batch_actions() {
+  DEV=A; screen_wh
+  local ev id cal before after l0 l1
+  uib_risi_chat
+  # (a) LOCAL calendar only (nothing else on the phone yet): the add → the provider row, the event card, Open in Calendar
+  uib_add_flow "add meeting with Upali Monday 10am" "Meeting with Upali" local
+  wait_text "Open in Calendar" 90 || { shot "55-uibatch-add-failed"; fail "ui-batch add [local]: no event card with 'Open in Calendar' after [Add]"; }
+  has "Added to your" || has "added" || true
+  ev="$(uib_events "Meeting with Upali")"
+  [ -n "$ev" ] || fail "ui-batch add [local]: no 'Meeting with Upali' row in CalendarContract"
+  [ "$(printf '%s\n' "$ev" | wc -l)" = 1 ] || fail "ui-batch add [local]: more than one row: $ev"
+  id="${ev% *}"; cal="${ev#* }"
+  A shell "content query --uri content://com.android.calendar/calendars --projection _id:calendar_access_level --where \"_id=$cal\"" | tr -d '\r' | grep -qE 'calendar_access_level=(500|600|700|800)' || fail "ui-batch add [local]: the event is in calendar $cal, which is not writable"
+  has 'text="Meeting with Upali"' || fail "ui-batch add [local]: the event card shows no title"
+  shot "55-uibatch-add-event-card"
+  before="$(uib_focus)"; l0="$(A logcat -d 2>/dev/null | grep -c 'START u0 {act=android.intent.action.VIEW dat=content://com.android.calendar' || true)"
+  tap "Open in Calendar" || fail "ui-batch add: tap Open in Calendar"
+  sleep 4
+  after="$(uib_focus)"
+  echo "    focus before: $before"; echo "    focus after:  $after"
+  # (Redroid's stock Calendar crashes on EventInfoActivity (ClassCastException in the AOSP app itself): the launch of the
+  # VIEW intent for the event is then the proof, together with a changed resumed activity when it stays up.)
+  l1="$(A logcat -d 2>/dev/null | grep -c 'START u0 {act=android.intent.action.VIEW dat=content://com.android.calendar' || true)"
+  [ "$after" != "$before" ] || [ "${l1:-0}" -gt "${l0:-0}" ] || { shot "55-uibatch-open-calendar"; fail "ui-batch add: 'Open in Calendar' opened nothing (the resumed activity didn't change)"; }
+  shot "55-uibatch-open-calendar"
+  pass "ui-batch add [local]: card → [Add] → row $id in writable calendar $cal; event card with 'Open in Calendar'; it opened: ${after##* }"
+  for _ in 1 2 3; do  # (the stock Calendar crashed or is on top: bring RisiMe back)
+    A shell input keyevent KEYCODE_HOME; sleep 1
+    A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || true; sleep 3; dump
+    grep -qF "package=\"$PKG\"" "$WORK/ui-$DEV.xml" && break
+  done
+  dismiss_prompts
+  uib_risi_chat
+  # honest failure: WRITE_CALENDAR revoked → never "added", and the failure is named
+  A shell pm revoke "$PKG" android.permission.WRITE_CALENDAR 2>/dev/null || true
+  sleep 8; A shell input keyevent KEYCODE_HOME; sleep 1; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || true; sleep 4; dismiss_prompts   # (a revoke kills the app, a moment later)
+  uib_risi_chat
+  uib_ask "add meeting with Upali Tuesday 10am"
+  wait_text "Add" 120 || fail "ui-batch add [no write]: no action card with [Add]"
+  tap "Add" || fail "ui-batch add [no write]: tap Add"
+  sleep 3
+  for _ in $(seq 1 6); do  # a system permission dialog, if the app asks: refuse it
+    xy="$(python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+for n in ET.parse(sys.argv[1]).iter('node'):
+    rid = n.get('resource-id') or ''
+    if rid.endswith('permission_deny_button') or rid.endswith('permission_deny_and_dont_ask_again_button'):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+)"
+    [ -n "$xy" ] && { A shell input tap $xy; sleep 2; }
+    dump; has "Couldn't add" || has "couldn't add" || has "No permission" || has "access is off" || has "permission" && break; sleep 2
+  done
+  sleep 2; dump
+  shot "55-uibatch-add-no-write"
+  [ -z "$(uib_events "Meeting with Upali two")" ] || fail "ui-batch add [no write]: a row was written without WRITE_CALENDAR"
+  has "Added to your" && fail "ui-batch add [no write]: the chat says it added the event"
+  has "I've added" && fail "ui-batch add [no write]: the chat says it added the event"
+  grep -qiE "couldn.t add|calendar access is off|permission|nothing was (added|changed)" "$WORK/ui-$DEV.xml" || fail "ui-batch add [no write]: the failure isn't named (see 55-uibatch-add-no-write)"
+  pass "ui-batch add [no write]: with WRITE_CALENDAR revoked nothing is added and the failure is named"
+  A shell pm grant "$PKG" android.permission.WRITE_CALENDAR 2>/dev/null || true
+  sleep 8; A shell input keyevent KEYCODE_HOME; sleep 1; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || true; sleep 4; dismiss_prompts
+  uib_risi_chat
+  # (d) a com.google-type calendar (as in step 12): read and add against it as well
+  local GA="uitest.risime@gmail.com" gid
+  A shell "content insert --uri 'content://com.android.calendar/calendars?caller_is_syncadapter=true&account_name=$GA&account_type=com.google' --bind account_name:s:$GA --bind account_type:s:com.google --bind name:s:$GA --bind calendar_displayName:s:$GA --bind calendar_access_level:i:700 --bind visible:i:1 --bind sync_events:i:1 --bind ownerAccount:s:$GA --bind calendar_color:i:-14069085 --bind calendar_timezone:s:UTC" >/dev/null
+  gid="$(A shell "content query --uri content://com.android.calendar/calendars --projection _id:account_type" | tr -d '\r' | sed -n 's/^Row: [0-9]* _id=\([0-9]*\), account_type=com.google.*/\1/p' | head -1)"
+  [ -n "$gid" ] || fail "ui-batch google: could not seed the com.google calendar"
+  local gs gd; gd="$(date -u -d '+2 days' +%F)"; gs="$(date -u -d "${gd}T08:00:00Z" +%s)000"
+  A shell "content insert --uri 'content://com.android.calendar/events?caller_is_syncadapter=true&account_name=$GA&account_type=com.google' --bind calendar_id:i:$gid --bind title:s:UIBGoogleEv --bind dtstart:l:$gs --bind dtend:l:$((gs + 3600000)) --bind eventTimezone:s:UTC" >/dev/null
+  pass "ui-batch google: seeded a com.google calendar ($GA, id $gid) with one event (UIBGoogleEv)"
+  # Redroid has no real Account for com.google (no AccountManager): the account's calendar sync is off, so §29.7 (v1.32)
+  # applies: every non-local account holding a visible calendar has sync off → "sync_off", NOT "0 events" and not "free".
+  # That is also item 7: Details says "Sync is off for <account>" with "Open sync settings" and "Refresh".
+  uib_ask "what s on my calendar this week"
+  wait_for "sync is off" 120 || fail "ui-batch google: no 'sync is off' answer to the week question (a Google calendar whose sync is off)"
+  sleep 2; dump
+  has "I couldn't read your calendar on this phone (sync is off" || fail "ui-batch google: the answer isn't the v1.32 §29.7 sync-off text"
+  has "0 events" && fail "ui-batch google: the answer says '0 events' for a calendar whose sync is off"
+  has "you're free" && fail "ui-batch google: the answer claims free time although it couldn't read the calendar"
+  shot "56-uibatch-google-sync-off-answer"
+  pass "ui-batch google: with a com.google calendar whose sync is off the answer says it couldn't read (sync is off), not 0 events"
+  uib_open_details
+  for _ in 1 2 3 4 5 6 8; do has "Sync is off for $GA" && has 'text="Open sync settings"' && has 'text="Refresh"' && break; A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1; done
+  has "Sync is off for $GA" || fail "ui-batch google: Details lacks 'Sync is off for $GA'"
+  has 'text="Open sync settings"' || fail "ui-batch google: Details lacks 'Open sync settings'"
+  has 'text="Refresh"' || fail "ui-batch google: Details lacks 'Refresh'"
+  shot "56-uibatch-google-sync-off-details"
+  pass "ui-batch google: Calendar Details: 'Sync is off for $GA' with 'Open sync settings' and 'Refresh' (brief item 7)"
+  uib_risi_chat
+  # (The first add above made the phone's own RisiMe calendar the remembered pick, so the Google calendar is chosen on the card.)
+  uib_ask "add meeting with Upali Wednesday 10am"
+  wait_text "Add" 120 || fail "ui-batch add [google]: no action card with [Add]"
+  tap "Change" || fail "ui-batch add [google]: the card has no calendar [Change]"
+  wait_text "Choose a calendar" 15 || fail "ui-batch add [google]: Change opened no picker"
+  has "text=\"$GA · Google\"" || fail "ui-batch add [google]: the picker doesn't list '$GA · Google'"
+  shot "56-uibatch-google-picker"
+  tap "$GA · Google" || fail "ui-batch add [google]: pick the Google calendar"
+  tap "Use this calendar" || fail "ui-batch add [google]: Use this calendar"
+  sleep 2
+  has 'text="Open in Calendar"' || { wait_text "Add" 20 && tap "Add" || true; }
+  wait_text "Open in Calendar" 90 || { shot "56-uibatch-google-add-failed"; fail "ui-batch add [google]: no event card with 'Open in Calendar'"; }
+  ev="$(uib_events "Meeting with Upali google")"
+  [ -n "$ev" ] || fail "ui-batch add [google]: no row in CalendarContract"
+  [ "${ev#* }" = "$gid" ] || fail "ui-batch add [google]: the event is in calendar ${ev#* }, not the Google calendar $gid"
+  shot "56-uibatch-google-added"
+  pass "ui-batch add [google]: the add went to the com.google calendar ($gid), event card shown"
+  # (c) Markdown
+  uib_ask "uibatch markdown"
+  wait_text "item one" 90 || wait_for "item one" 60 || fail "ui-batch markdown: no answer"
+  sleep 1; dump
+  grep -qF '**' "$WORK/ui-$DEV.xml" && fail "ui-batch markdown: a raw ** is on screen"
+  grep -qF '__' "$WORK/ui-$DEV.xml" && fail "ui-batch markdown: a raw __ is on screen"
+  has "bold text" || fail "ui-batch markdown: the bold words aren't shown"
+  has "item two" || fail "ui-batch markdown: the list isn't shown"
+  shot "57-uibatch-markdown"
+  pass "ui-batch markdown: bold and a list render with no raw ** or __"
+  # (b) chip gate: a deep link, and a request
+  uib_ask "uibatch actions"
+  wait_text "Connect your calendar in Settings" 90 || fail "ui-batch chips: no 'Connect your calendar in Settings' chip"
+  wait_text "Check if I'm free on Monday" 10 || fail "ui-batch chips: no 'Check if I'm free on Monday' chip"
+  shot "57-uibatch-chips"
+  tap "Connect your calendar in Settings" || fail "ui-batch chips: tap the first chip"
+  sleep 3; dump
+  has 'text="Risi skills"' || fail "ui-batch chips: the first chip didn't open Settings → Risi skills"
+  has 'text="Calendar"' || fail "ui-batch chips: Risi skills shows no Calendar"
+  shot "57-uibatch-chip-deeplink"
+  grep -qE 'content-desc="You: Connect your calendar' "$WORK/ui-$DEV.xml" && fail "ui-batch chips: the chip text became a message"
+  pass "ui-batch chips: 'Connect your calendar in Settings' opens Risi skills (Calendar)"
+  uib_risi_chat
+  grep -qE 'content-desc="You: Connect your calendar' "$WORK/ui-$DEV.xml" && fail "ui-batch chips: the first chip's text is a chat message"
+  local m0 m1
+  m0="$(grep -c "free on Monday" "$WORK/llm-requests.jsonl" 2>/dev/null || true)"
+  wait_text "Check if I'm free on Monday" 30 || fail "ui-batch chips: the second chip is gone"
+  tap "Check if I'm free on Monday" || fail "ui-batch chips: tap the second chip"
+  wait_for "UIBATCH monday answer." 90 || fail "ui-batch chips: the second chip started no Risi turn"
+  m1="$(grep -c "free on Monday" "$WORK/llm-requests.jsonl" 2>/dev/null || true)"
+  [ "${m1:-0}" -gt "${m0:-0}" ] || fail "ui-batch chips: the fake-llm got no request with the chip's text"
+  has 'text="Ask Risi…"' || fail "ui-batch chips: the composer isn't empty after the chip"
+  pass "ui-batch chips: 'Check if I'm free on Monday' sends a Risi request (fake-llm saw it); no chip text pre-filled the composer"
+  A shell am broadcast -a "$SEED" -p "$P" --es op clear >/dev/null 2>&1 || true
+  back_to_list || true
+  logcat_ok "ui-batch actions"
+}
+ui_batch_section() {
+  DEV=A; screen_wh
+  [ "${UITEST_UIBATCH_CAL_ONLY:-0}" = 3 ] && { ui_batch_calendar_prep; seed --es op clear; ui_batch_actions; return 0; }  # (no calendar on the phone at all)
+  [ "${UITEST_UIBATCH_CAL_ONLY:-0}" = 2 ] && { ui_batch_calendar_prep; ui_batch_actions; return 0; }
+  [ "${UITEST_UIBATCH_CAL_ONLY:-0}" = 1 ] && { ui_batch_calendar; return 0; }  # (quick iterations on the calendar part)
+  A shell locksettings set-pin "$PIN" >/dev/null 2>&1 || true
+  [ "$(fx longfriend)" = "uientry: longfriend ok" ] || fail "ui-batch: fixture longfriend"
+  local LONGP="ZZ UI Cee With An Extremely"
+  # A preview line for B's row, typed through the UI.
+  open_chat "ZZ UI B" || fail "ui-batch: A can't open the DM"
+  wait_for 'text="Encrypted message"' 20 || fail "ui-batch: no composer"
+  tap "Encrypted message" || true; sleep 0.5
+  A shell input text "uibatch%spreview"; sleep 0.5
+  tap "Send" || fail "ui-batch: send the preview message"
+  wait_for "uibatch preview" 20 || fail "ui-batch: the message didn't show"
+  back_to_list || fail "ui-batch: back to the list"
+  for UIB_SC in 1.0 1.3; do
+    uib_set_scale "$UIB_SC"
+    # The long-named friend arrives with a refresh.
+    for _ in 1 2 3 4 5 6; do has "$LONGP" && break; tap "Refresh friends" || true; sleep 2; done
+    has "$LONGP" || fail "ui-batch [$UIB_SC]: the long-named friend is not on the list"
+    # 1. rows; 2. tab row
+    # (From the second round on the Official started in round one is the newest line of the DM.)
+    for _ in $(seq 1 15); do has "uibatch preview" || has "You started this chat" && break; sleep 1; done
+    uib_check list "ZZ UI B" "$LONGP" "uibatch preview|You started this chat" "$UIB_SC"
+    uib_check tabs
+    shot "50-uibatch-list-$UIB_SC"
+    pass "ui-batch [$UIB_SC]: rows have two lines, names stay on one line and inside the row, no 'last seen'; the Requests tab is one line"
+    # 4. the round FAB and its sheet
+    has 'text="Add friend"' && fail "ui-batch [$UIB_SC]: an 'Add friend' button is still on the list (extended FAB?)"
+    uib_check fab
+    tap "New" || fail "ui-batch [$UIB_SC]: tap the New FAB"
+    wait_text "New chat" 10 || fail "ui-batch [$UIB_SC]: the FAB sheet has no 'New chat'"
+    wait_text "New group" 5 || fail "ui-batch [$UIB_SC]: the FAB sheet has no 'New group'"
+    wait_text "Add friend" 5 || fail "ui-batch [$UIB_SC]: the FAB sheet has no 'Add friend'"
+    shot "50-uibatch-fab-sheet-$UIB_SC"
+    A shell input keyevent KEYCODE_BACK; sleep 1
+    wait_gone 'text="New group"' 8 || fail "ui-batch [$UIB_SC]: Back didn't dismiss the FAB sheet"
+    on_list || fail "ui-batch [$UIB_SC]: not on the chat list after dismissing the sheet"
+    pass "ui-batch [$UIB_SC]: one round FAB 'New' → New chat / New group / Add friend"
+    # 3. chat header with the long name, then the lock cycle in the short-named DM
+    tap "$LONGP*" || fail "ui-batch [$UIB_SC]: open the long-named chat"
+    sleep 2; dump
+    uib_check header "$LONGP" "$H"
+    shot "50-uibatch-header-long-$UIB_SC"
+    back_to_list || fail "ui-batch [$UIB_SC]: back to the list"
+    tap "ZZ UI B" || fail "ui-batch [$UIB_SC]: open the DM"
+    wait_for 'text="Encrypted message"' 20 || fail "ui-batch [$UIB_SC]: DM didn't open"
+    uib_check header "ZZ UI B" "$H"
+    shot "50-uibatch-header-$UIB_SC"
+    # (b) the 1:1 Official header "<name> · Risi" is not clipped at this font scale.
+    if has 'text="● Official"'; then
+      tap "● Official" || fail "ui-batch [$UIB_SC]: tap Official"
+      if wait_for 'text="Start Official"' 8; then tap "Start Official" || fail "ui-batch [$UIB_SC]: tap Start Official"; fi
+      for _ in $(seq 1 60); do dump; grep -qE 'text="[ ]?· Risi"|· Risi"' "$WORK/ui-$DEV.xml" && break; sleep 1; done
+      uib_check official "ZZ UI B" "$H"
+      shot "50-uibatch-official-header-$UIB_SC"
+      tap "🔒 Private" || true; sleep 1
+    fi
+    uib_lock_cycle
+    pass "ui-batch [$UIB_SC]: the header always shows the name; Lock chat lives in the ⋮"
+    # 6. no fake chips in the Risi chat
+    wait_text "Risi" 30 || fail "ui-batch [$UIB_SC]: the chat list has no Risi entry"
+    tap "Risi" || fail "ui-batch [$UIB_SC]: open the Risi chat"
+    wait_for 'text="Ask Risi…"' 60 || fail "ui-batch [$UIB_SC]: the Risi chat didn't open"
+    tap "Ask Risi…" || true; sleep 0.5
+    A shell input text "uibatch%shello%s$UIB_SC"; sleep 0.5
+    tap "Send" || fail "ui-batch [$UIB_SC]: send to Risi"
+    wait_for "UIBATCH answer ready." 90 || fail "ui-batch [$UIB_SC]: Risi didn't answer the scripted question"
+    sleep 2; dump
+    # TODO(root, P0 addition (c)): android is bringing the suggestion chips back (a tap sends the request to Risi and a turn
+    # runs). When that lands, replace this "no chips" check by: tap "UIB chip tell me more" → fake-llm's record
+    # ($WORK/llm-requests.jsonl) holds a request with that text, the composer stays empty.
+    # (c) the suggestion chips are back: a tap sends the request to Risi at once (a model call with the chip's text, an
+    # answer), and the composer stays empty (no pre-fill).
+    local n0 n1
+    n0="$(grep -c 'UIB chip tell me more' "$WORK/llm-requests.jsonl" 2>/dev/null || true)"
+    wait_text "UIB chip tell me more" 20 || fail "ui-batch [$UIB_SC]: Risi's answer has no 'UIB chip tell me more' chip"
+    tap "UIB chip tell me more" || fail "ui-batch [$UIB_SC]: tap the chip"
+    wait_for "UIBATCH chip answered." 90 || fail "ui-batch [$UIB_SC]: the chip tap started no Risi turn (no answer)"
+    n1="$(grep -c 'UIB chip tell me more' "$WORK/llm-requests.jsonl" 2>/dev/null || true)"
+    [ "${n1:-0}" -gt "${n0:-0}" ] || fail "ui-batch [$UIB_SC]: the fake-llm got no request containing the chip's text"
+    has 'text="Ask Risi…"' || fail "ui-batch [$UIB_SC]: the composer isn't empty after the chip tap"
+    echo "    chip tap [$UIB_SC]: fake-llm requests with the chip text $n0 -> $n1"
+    shot "50-uibatch-risi-$UIB_SC"
+    pass "ui-batch [$UIB_SC]: a next_steps chip tap runs a Risi turn and leaves the composer empty"
+    back_to_list || fail "ui-batch [$UIB_SC]: back to the list"
+    # 5. profile photo sheet
+    if back_to_list && tap "More options" && wait_for 'text="Settings"' 10 && tap "Settings"; then
+      sleep 2
+      local ptxt=""; for _ in 1 2 3 4 5; do for t in "Set photo" "Change photo"; do has "text=\"$t\"" && ptxt="$t"; done; [ -n "$ptxt" ] && break; sleep 1; done
+      [ -n "$ptxt" ] || fail "ui-batch [$UIB_SC]: Settings has no 'Set photo' / 'Change photo'"
+      tap "$ptxt" || fail "ui-batch [$UIB_SC]: tap $ptxt"
+      wait_text "Take photo" 10 || fail "ui-batch [$UIB_SC]: the photo sheet has no 'Take photo'"
+      wait_text "Gallery" 5 || fail "ui-batch [$UIB_SC]: the photo sheet has no 'Gallery'"
+      [ "$ptxt" = "Change photo" ] && { wait_text "Remove photo" 5 || fail "ui-batch [$UIB_SC]: a set photo's sheet has no 'Remove photo'"; }
+      [ "$ptxt" = "Set photo" ] && [ -n "$(node_xy 'Remove photo')" ] && fail "ui-batch [$UIB_SC]: 'Remove photo' with no photo set"
+      shot "50-uibatch-photo-sheet-$UIB_SC"
+      A shell input keyevent KEYCODE_BACK; sleep 1
+      wait_gone 'text="Take photo"' 8 || fail "ui-batch [$UIB_SC]: Back didn't dismiss the photo sheet"
+      pass "ui-batch [$UIB_SC]: profile photo sheet: Take photo / Gallery$([ "$ptxt" = "Change photo" ] && echo ' / Remove photo')"
+    else
+      fail "ui-batch [$UIB_SC]: couldn't open Settings"
+    fi
+    back_to_list || fail "ui-batch [$UIB_SC]: back to the list"
+    DEV=A; logcat_ok "ui-batch $UIB_SC"
+  done
+  uib_set_scale 1.0; UIB_SCALE_SET=0
+  ui_batch_calendar
+  ui_batch_actions
+  pass "ui-batch: all checks at font scale 1.0 and 1.3; the scale is back at 1.0"
+}
+if [ "$UIBATCH" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_UIBATCH_ONLY:-0}" = 1 ]; }; then ui_batch_section; fi
 
 DEV=A; logcat_ok "ui entry"
 DEV=B; logcat_ok "ui entry"

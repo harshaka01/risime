@@ -13,7 +13,6 @@ import net.openid.appauth.GrantTypeValues
 import net.openid.appauth.TokenRequest
 import net.openid.appauth.TokenResponse
 import net.openid.appauth.connectivity.ConnectionBuilder
-import net.openid.appauth.connectivity.DefaultConnectionBuilder
 import java.net.HttpURLConnection
 import java.net.URL
 import okhttp3.FormBody
@@ -25,9 +24,34 @@ import kotlin.coroutines.resume
 /** Scopes for RisiMe (decision 014). `offline_access` gives the refresh token the vault keeps. */
 const val OIDC_SCOPES = "openid email profile offline_access"
 
+/** Keycloak connection timeouts (P0 2026-10-10: a stalled connect costs 5 s, then the refresh retries). */
+object KeycloakTimeouts {
+    const val CONNECT_MS = 5_000
+    const val READ_MS = 10_000
+}
+
+/**
+ * AppAuth connections with [KeycloakTimeouts]. https only; in debug builds http on loopback is also
+ * allowed (the device gates run a stand-in issuer on adb-reverse loopback).
+ */
+class TimedConnections(private val allowLoopbackHttp: Boolean) : ConnectionBuilder {
+    private val loopback = setOf("127.0.0.1", "10.0.2.2", "localhost")
+
+    override fun openConnection(uri: Uri): HttpURLConnection {
+        require(uri.scheme == "https" || (allowLoopbackHttp && uri.scheme == "http" && uri.host in loopback)) {
+            "only https (or http on loopback in debug)"
+        }
+        return (URL(uri.toString()).openConnection() as HttpURLConnection).apply {
+            connectTimeout = KeycloakTimeouts.CONNECT_MS
+            readTimeout = KeycloakTimeouts.READ_MS
+            instanceFollowRedirects = false
+        }
+    }
+}
+
 /** AppAuth-backed Keycloak calls: discovery (cached per issuer), refresh, RFC 7009 revocation. */
 class AppAuthGateway(context: Context, private val http: OkHttpClient) : OidcGateway {
-    private val connections: ConnectionBuilder = if (lk.codegen.risime.BuildConfig.DEBUG) LoopbackDebugConnections else DefaultConnectionBuilder.INSTANCE
+    private val connections: ConnectionBuilder = TimedConnections(allowLoopbackHttp = lk.codegen.risime.BuildConfig.DEBUG)
     private val service = AuthorizationService(context.applicationContext, AppAuthConfiguration.Builder().setConnectionBuilder(connections).build())
     private val configs = ConcurrentHashMap<String, AuthorizationServiceConfiguration>()
 
@@ -62,23 +86,6 @@ class AppAuthGateway(context: Context, private val http: OkHttpClient) : OidcGat
             .build()
         withContext(Dispatchers.IO) {
             runCatching { http.newCall(Request.Builder().url(endpoint).post(body).build()).execute().close() }
-        }
-    }
-
-    /**
-     * Debug builds only: AppAuth's default builder refuses http. The device gates (scripts/push-device-test)
-     * run a stand-in issuer on adb-reverse loopback; release builds keep https-only.
-     */
-    private object LoopbackDebugConnections : ConnectionBuilder {
-        private val loopback = setOf("127.0.0.1", "10.0.2.2", "localhost")
-
-        override fun openConnection(uri: Uri): HttpURLConnection {
-            require(uri.scheme == "https" || (uri.scheme == "http" && uri.host in loopback)) { "only https (or http on loopback in debug)" }
-            return (URL(uri.toString()).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 15_000
-                readTimeout = 10_000
-                instanceFollowRedirects = false
-            }
         }
     }
 

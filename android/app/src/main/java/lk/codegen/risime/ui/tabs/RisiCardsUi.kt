@@ -120,7 +120,7 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     lk.codegen.risime.net.RisiKinds130.NOTE_CARD -> lk.codegen.risime.ui.notes.NoteCardBody(row, r, ctx)
                     lk.codegen.risime.net.RisiKinds130.NOTES_SAVED -> lk.codegen.risime.ui.notes.NotesSavedCardBody(row, r, ctx)
                     lk.codegen.risime.net.RisiKinds131.GOOGLE_RECONNECT -> GoogleReconnectCard(row, r, ctx)
-                    else -> Text(row.body)
+                    else -> lk.codegen.risime.ui.common.RisiMarkdownText(row.body)
                 }
                 FeedbackRow(r, ctx)
             }
@@ -158,7 +158,8 @@ private fun headerOf(r: RisiMeta) = risiCalendarHeader(r) ?: when (r.kind) {
 @Composable
 private fun OwnerChip(owner: String?, ctx: RisiCardContext) {
     if (owner == null) return
-    SuggestionChip(onClick = {}, label = { Text(ctx.nameOf(owner)) }, modifier = Modifier.testTag("risi_owner"))
+    // v1.32 item 7: a label, not a chip (a chip with no action is removed).
+    Text(ctx.nameOf(owner), style = MaterialTheme.typography.labelLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.testTag("risi_owner"))
 }
 
 @Composable
@@ -178,10 +179,10 @@ private fun CommitmentCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext
         val buttons = if (ctx.readOnly) emptyList() else RisiCards.buttons(ctx.host.me, r, view, row, ctx.awaiting, ctx.nowMs)
         if (buttons.isNotEmpty() && id != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if ("confirm" in buttons) FilledTonalButton(onClick = { ctx.host.act(id, "confirm") }, modifier = Modifier.testTag("risi_confirm")) { Text("✓ Confirm") }
-                if ("decline" in buttons) OutlinedButton(onClick = { ctx.host.act(id, "decline") }, modifier = Modifier.testTag("risi_decline")) { Text("✗ Decline") }
-                if ("edit" in buttons) OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_edit")) { Text("✎ Edit") }
-                if ("done" in buttons) FilledTonalButton(onClick = { ctx.host.act(id, "done") }, modifier = Modifier.testTag("risi_done")) { Text("✓ Done") }
+                if ("confirm" in buttons) FilledTonalButton(onClick = { ctx.host.act(id, "confirm") }, modifier = Modifier.testTag("risi_confirm")) { Text("✓ Confirm", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if ("decline" in buttons) OutlinedButton(onClick = { ctx.host.act(id, "decline") }, modifier = Modifier.testTag("risi_decline")) { Text("✗ Decline", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if ("edit" in buttons) OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_edit")) { Text("✎ Edit", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if ("done" in buttons) FilledTonalButton(onClick = { ctx.host.act(id, "done") }, modifier = Modifier.testTag("risi_done")) { Text("✓ Done", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
     }
@@ -231,7 +232,7 @@ private fun DigestCard(r: RisiMeta, ctx: RisiCardContext) {
 @Composable
 private fun AnswerCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        Text(lk.codegen.risime.data.gcal.GcalNames.render(r.answer ?: row.body, r.sources, ctx.host.gcalNames), style = MaterialTheme.typography.bodyLarge)
+        lk.codegen.risime.ui.common.RisiMarkdownText(lk.codegen.risime.data.gcal.GcalNames.render(r.answer ?: row.body, r.sources, ctx.host.gcalNames), style = MaterialTheme.typography.bodyLarge)
         // Sources: a tappable quote of each message (sender + first words) that scrolls to it; nothing for one not on this phone.
         ctx.quotes(r).forEachIndexed { i, q ->
             Surface(
@@ -257,7 +258,7 @@ private fun SummaryCard(r: RisiMeta, ctx: RisiCardContext) {
         lk.codegen.risime.data.tabs.SummaryPeriods.periodLine(r.period)?.let {
             Text(it, style = MaterialTheme.typography.titleSmall, modifier = Modifier.testTag("risi_summary_period"))
         }
-        r.summary?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
+        r.summary?.let { lk.codegen.risime.ui.common.RisiMarkdownText(it, style = MaterialTheme.typography.bodyLarge) }
         if (r.days.isNotEmpty()) {
             Text(
                 "Based on: " + r.days.joinToString(", ") { lk.codegen.risime.data.tabs.SummaryPeriods.dayLabel(it) },
@@ -271,7 +272,7 @@ private fun SummaryCard(r: RisiMeta, ctx: RisiCardContext) {
             r.actionItems.forEach { item ->
                 val (owner, text) = splitOwner(item, ctx.knownNames)
                 Row(Modifier.testTag("risi_action_item"), horizontalArrangement = Arrangement.spacedBy(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
-                    if (owner != null) SuggestionChip(onClick = {}, label = { Text(owner) }, modifier = Modifier.testTag("risi_action_owner"))
+                    if (owner != null) Text(owner, style = MaterialTheme.typography.labelLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.testTag("risi_action_owner"))
                     Text(text, style = MaterialTheme.typography.bodyMedium)
                 }
             }
@@ -310,8 +311,8 @@ private fun OfferCard(r: RisiMeta, ctx: RisiCardContext) {
         Text(r.question ?: r.topic.orEmpty(), style = MaterialTheme.typography.bodyLarge)
         if (id != null && buttons.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if ("offer_yes" in buttons) Button(onClick = { ctx.host.act(id, "offer_yes") }, modifier = Modifier.testTag("risi_yes")) { Text("Yes") }
-                if ("offer_not_now" in buttons) OutlinedButton(onClick = { ctx.host.act(id, "offer_not_now") }, modifier = Modifier.testTag("risi_not_now")) { Text("Not now") }
+                if ("offer_yes" in buttons) Button(onClick = { ctx.host.act(id, "offer_yes") }, modifier = Modifier.testTag("risi_yes")) { Text("Yes", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                if ("offer_not_now" in buttons) OutlinedButton(onClick = { ctx.host.act(id, "offer_not_now") }, modifier = Modifier.testTag("risi_not_now")) { Text("Not now", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
     }
@@ -369,8 +370,8 @@ private fun FeedbackRow(r: RisiMeta, ctx: RisiCardContext) {
                 Text("What went wrong? (optional)", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(reason, { reason = it.take(500) }, Modifier.fillMaxWidth().testTag("risi_reason"), placeholder = { Text("Wrong due date, not relevant, …") })
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    Button(onClick = { reasonFor = false; ctx.host.feedback(ref, "down", reason) }, modifier = Modifier.testTag("risi_reason_send")) { Text("Send") }
-                    TextButton(onClick = { reasonFor = false; ctx.host.feedback(ref, "down", null) }) { Text("Skip") }
+                    Button(onClick = { reasonFor = false; ctx.host.feedback(ref, "down", reason) }, modifier = Modifier.testTag("risi_reason_send")) { Text("Send", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                    TextButton(onClick = { reasonFor = false; ctx.host.feedback(ref, "down", null) }) { Text("Skip", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 }
             }
         }
@@ -390,16 +391,16 @@ fun RisiEditDialog(initialText: String, initialDue: String?, ownerName: String?,
     var pickTime by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit commitment") },
+        title = { Text("Edit commitment", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
-                OutlinedTextField(text, { text = it.take(300) }, Modifier.fillMaxWidth().testTag("risi_edit_text"), label = { Text("What") })
+                OutlinedTextField(text, { text = it.take(300) }, Modifier.fillMaxWidth().testTag("risi_edit_text"), label = { Text("What", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) })
                 ownerName?.let { Text("Owner: $it", style = MaterialTheme.typography.bodySmall) }
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     OutlinedButton(onClick = { pickDate = true }, modifier = Modifier.testTag("risi_edit_date")) { Text(date?.format(DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)) ?: "Pick a date") }
                     OutlinedButton(onClick = { pickTime = true }, enabled = date != null, modifier = Modifier.testTag("risi_edit_time")) { Text(time?.format(DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)) ?: "Pick a time") }
                 }
-                if (date != null) TextButton(onClick = { date = null; time = null }) { Text("No due date") }
+                if (date != null) TextButton(onClick = { date = null; time = null }) { Text("No due date", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         },
         confirmButton = {
@@ -410,16 +411,16 @@ fun RisiEditDialog(initialText: String, initialDue: String?, ownerName: String?,
                 },
                 enabled = text.isNotBlank(),
                 modifier = Modifier.testTag("risi_edit_save"),
-            ) { Text("Save") }
+            ) { Text("Save", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
     if (pickDate) {
         val st = rememberDatePickerState(initialSelectedDateMillis = (date ?: LocalDate.now()).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
         DatePickerDialog(
             onDismissRequest = { pickDate = false },
-            confirmButton = { TextButton(onClick = { st.selectedDateMillis?.let { date = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() }; pickDate = false }) { Text("OK") } },
-            dismissButton = { TextButton(onClick = { pickDate = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { st.selectedDateMillis?.let { date = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() }; pickDate = false }) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { pickDate = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         ) { DatePicker(st) }
     }
     if (pickTime) {
@@ -427,8 +428,8 @@ fun RisiEditDialog(initialText: String, initialDue: String?, ownerName: String?,
         val st = rememberTimePickerState(t0.hour, t0.minute, false)
         AlertDialog(
             onDismissRequest = { pickTime = false },
-            confirmButton = { TextButton(onClick = { time = LocalTime.of(st.hour, st.minute); pickTime = false }) { Text("OK") } },
-            dismissButton = { TextButton(onClick = { pickTime = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { time = LocalTime.of(st.hour, st.minute); pickTime = false }) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { pickTime = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
             text = { TimePicker(st) },
         )
     }

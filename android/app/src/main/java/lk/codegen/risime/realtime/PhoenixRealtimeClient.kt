@@ -51,7 +51,9 @@ class PhoenixRealtimeClient(
     private val http: OkHttpClient,
     private val scope: CoroutineScope,
     private val listener: RealtimeListener,
-    private val backoffMs: List<Long> = listOf(1_000, 2_000, 5_000, 10_000, 30_000),
+    private val backoffMs: List<Long> = lk.codegen.risime.data.auth.ReconnectBackoff.BASE_MS,
+    /** [0, 1) source for the reconnect jitter (tests pin it). */
+    private val random: () -> Double = Math::random,
     private val heartbeatMs: Long = 30_000,
     private val replyTimeoutMs: Long = 10_000,
     private val pageLimit: Int = 500,
@@ -70,6 +72,24 @@ class PhoenixRealtimeClient(
     override val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
     private var job: Job? = null
+
+    /** Reconnect attempt counter (backoff step); reset on a join and by [networkChanged]. */
+    @Volatile
+    private var attempt = 0
+
+    /** Wakes a reconnect wait early (network change / foreground). */
+    private val wake = Channel<Unit>(Channel.CONFLATED)
+
+    override fun networkChanged() {
+        attempt = 0
+        wake.trySend(Unit)
+    }
+
+    private suspend fun backoffWait() {
+        val ms = lk.codegen.risime.data.auth.ReconnectBackoff.delayMs(attempt, backoffMs, random)
+        attempt++
+        withTimeoutOrNull(ms) { wake.receive() }
+    }
     private val refs = AtomicLong(0)
 
     @Volatile
@@ -160,7 +180,8 @@ class PhoenixRealtimeClient(
         current?.takeIf { _state.value == ConnectionState.Live || _state.value == ConnectionState.Syncing }
 
     private suspend fun runLoop(session: RealtimeSession) {
-        var attempt = 0
+        attempt = 0
+        wake.tryReceive()
         while (scope.isActive) {
             _state.value = ConnectionState.Connecting
             val force = forceRefresh
@@ -180,14 +201,16 @@ class PhoenixRealtimeClient(
                     return
                 }
                 _state.value = ConnectionState.Disconnected
-                delay(backoffMs[attempt.coerceAtMost(backoffMs.lastIndex)])
-                attempt++
+                backoffWait()
                 continue
             }
             val conn = Connection(session, token)
             current = conn
             val outcome = try {
-                conn.run { attempt = 0 }
+                conn.run {
+                    attempt = 0
+                    wake.tryReceive()
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -207,8 +230,7 @@ class PhoenixRealtimeClient(
                 forceRefresh = true
             }
             _state.value = ConnectionState.Disconnected
-            delay(backoffMs[attempt.coerceAtMost(backoffMs.lastIndex)])
-            attempt++
+            backoffWait()
         }
     }
 

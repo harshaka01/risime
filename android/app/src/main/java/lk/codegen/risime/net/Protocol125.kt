@@ -222,11 +222,36 @@ data class CalendarAddResult(
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     val calendar: RisiCalendarRef? = null,
+    /** v1.32 §25.3: true only after the row was read back and matched (omitted by older phones). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val verified: Boolean? = null,
 )
+
+/** v1.32 §25.3 `calendar_add` error codes (top-level `code`). */
+object CalendarAddErrors {
+    const val NO_PERMISSION = "no_permission"
+    const val READ_ONLY_CALENDAR = "read_only_calendar"
+    const val INSERT_FAILED = "insert_failed"
+    const val VERIFY_FAILED = "verify_failed"
+}
 
 /** `POST /risi/tool_calls/{id}/result` body; `result` is the tool's result for `ok`, `{"code"}` for `error`, else null. */
 @Serializable
-data class RisiToolResult(val status: String, val result: JsonObject? = null) {
+data class RisiToolResult(
+    val status: String,
+    /** Omitted when null (v1.32 §25.3: a `calendar_add` error has no `result` key, only `code`/`detail`). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val result: JsonObject? = null,
+    /** v1.32 §25.3: a `calendar_add` error's code and detail sit at the top level (omitted otherwise). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val code: String? = null,
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val detail: String? = null,
+) {
     companion object {
         const val OK = "ok"
         const val NO_PERMISSION = "no_permission"
@@ -239,6 +264,9 @@ data class RisiToolResult(val status: String, val result: JsonObject? = null) {
         fun declined() = RisiToolResult(DECLINED, null)
 
         fun error(code: String) = RisiToolResult(ERROR, JsonObject(mapOf("code" to JsonPrimitive(code))))
+
+        /** v1.32 §25.3 `{"status":"error","code":…,"detail":…}` (detail ≤ 200 chars, no titles). */
+        fun addError(code: String, detail: String?) = RisiToolResult(ERROR, null, code, detail?.take(200))
     }
 }
 

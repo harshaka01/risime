@@ -115,7 +115,7 @@ elif scripts/android-target check >/dev/null 2>&1; then
   echo "==> ui-entry-test (user-style entry points, redroid)"
   UITEST_INSTANCE=_rel UITEST_PORT=4552 UITEST_LLM_PORT=8396 UITEST_REDROID_A=-relui1 UITEST_REDROID_A_PORT=5861 \
     UITEST_REDROID_B=-relui2 UITEST_REDROID_B_PORT=5862 \
-    STEP_T="${UIENTRY_STEP_TIMEOUT:-5400}" step scripts/ui-entry-test --skills --ledger --calendar --offers --risi-calendar --risi-notes \
+    STEP_T="${UIENTRY_STEP_TIMEOUT:-5400}" step scripts/ui-entry-test --skills --ledger --calendar --offers --risi-calendar --risi-notes --ui-batch \
       --apk android/app/build/outputs/apk/debug/app-debug.apk
   # Google Calendar link gate (contract v1.31 §31.12, decision 074): OFF by default, so a release isn't blocked before
   # the server and android parts of v1.31 have landed. Root switches it on with UIENTRY_GOOGLE=1 (e.g. in the unit

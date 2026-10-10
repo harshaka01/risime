@@ -1927,3 +1927,87 @@ Greppable in `~/risime-logs/server.log` (info level; tokens, phone and email are
 Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/push_audit_test.exs`.
 
 - v1.24 (§24): the 34 examples are covered (@checked_v1_24 in examples_test.exs). Policy `tab_cases` are loaded in policy_test.exs but tagged :pending_v124 (excluded by default): server Policy does not enforce §24.1 tab/agent rules yet (group_meta is opaque to the server; the MLS core enforces them).
+
+## READY v1.32 (contract §29.7 `sync_off`)
+- `calendar_check` result: `reason: "sync_off"` accepted only on a `phone_provider` source with
+  `read_ok: false` (on `google_api`, or with `read_ok: true`, it is `422`); any other new key is still `422`.
+  Code: `Agent.ToolCalls` (`sync_off_ok?/3`), `Agent.CalendarHonesty` (texts).
+- Server-built answers: no access (unchanged); sync off, phone-only: "I couldn't read your calendar on this phone
+  (sync is off, so it may be out of date). Turn on sync in Settings → Risi skills → Calendar → Details."; with Risi
+  Calendar: "Not checked: Phone calendar (sync is off)."; empty real read: "0 events", a free claim stands.
+- The model sees `{source, read_ok, reason, calendars: <count>}` only (unchanged `model_sources/1`).
+- Tests: `calendar_honesty_test.exs` (v1.32 describe), `risi_calendar_flow_test.exs` (sync_off accept/422 cases,
+  model view without names, empty read), `contract/examples_v132_test.exs` (the new example, listed in
+  `@checked_v1_32`). Time-independent (fixed clock).
+
+## READY v1.32 (contract §32 Ops alerts)
+- `POST /internal/ops-alert` (`OpsAlertController`, `RisiMe.OpsAlert`): body `{state, check, detail}`
+  (detail truncated to 300; wrong state/check/types -> 422 `bad_request`); `Authorization: Bearer
+  <OPS_ALERT_TOKEN>` (`Plug.Crypto.secure_compare`); 401 `invalid_token` on missing/wrong token, any of
+  `x-forwarded-for`/`forwarded`/`x-real-ip`, or non-loopback `remote_ip`; 404 while the token is unset/empty;
+  30/hour (was 10) via `RateLimiter` -> 429; 202 `{"sent": n, "held": n}`.
+- Env (`.env`, read in config/runtime.exs, not in test): `OPS_ALERT_TOKEN`, `OPS_ALERT_PHONES` (comma-separated
+  E.164). Needs a pilot restart after being set. `ops_alert` added to `MadeBy` rule kinds (`model: null`).
+- Held = no user for the phone, Risi not ready, no active Risi chat, or the post failed: counted and logged
+  (no token or phone in logs); no sealed hold (the existing hold table is tied to ledger summaries); the
+  watchdog sends e-mail when `held > 0`.
+- Tests: `test/risime_web/controllers/ops_alert_v132_test.exs` (7: 401 cases, 404, 422, 202 sent, held, 429,
+  example shape); `envelope_risi_ops_alert.json` registered in `@checked_v1_32`. Full suite: 1075 tests
+  (+7), 0 failures after the registration fix.
+
+## READY v1.32 (decision 075: monitoring in the server)
+- Ops alerts: states `alert` / `resolved` (check = `^[a-z0-9_]{1,40}$`; watchdog states keep `local|public`),
+  bodies "Monitoring alert: <check>. <detail>" / "Resolved: <check>. <detail>", limit 30/hour.
+- PromEx (`RisiMe.PromEx`: Application, Beam, Phoenix, Ecto, Oban; `RisiMe.PromEx.Risi`: `risime_risi_turn_total`
+  and `_duration_milliseconds` by outcome ok|snooze|error, `risime_jwks_fetch_total` by result ok|timeout|error,
+  `risime_sockets_open`). Events added: `[:risime,:risi,:turn,:stop]` (`Agent.Turn.run`), `[:risime,:jwks,:fetch]`
+  (`Auth.JWKS`). Grafana upload/dashboards off, no PromEx own HTTP server.
+- `RisiMeWeb.OpsEndpoint` (+ `OpsRouter`): `/metrics` and LiveDashboard `/dashboard` (metrics `RisiMeWeb.Telemetry`) on
+  **127.0.0.1:METRICS_PORT** only. Prod default 4021; dev default `off`; `METRICS_PORT=off` disables; never started in
+  tests (a test starts it). Not routed on the main endpoint (tested 404). check_origin
+  `https://monitor.risicloud.ai` and `http://127.0.0.1:<port>`; reuses SECRET_KEY_BASE. Ecto-repos page of
+  LiveDashboard not enabled (needs `ecto_psql_extras`).
+- Env: `METRICS_PORT`, `OPS_ALERT_TOKEN`, `OPS_ALERT_PHONES` (restart needed). New deps: `prom_ex 1.12`,
+  `phoenix_live_dashboard 0.9` (pulls phoenix_live_view, phoenix_html, peep, finch, ...). Pilot restart needed.
+- `rel/env.sh.eex`: with `RELEASE_DISTRIBUTION=name` the node is `risime@127.0.0.1`, `ERL_AFLAGS` adds
+  `-kernel inet_dist_use_interface {127,0,0,1}` and fixed port 4370 (min=max). Default stays `none`.
+  Checked: prod release builds, env.sh contains the block; a throwaway `erl -name` with those flags listened on
+  127.0.0.1:4370 only (no 0.0.0.0).
+- Tests: full suite 1082 tests, 0 failures, 15 skipped (new: ops_alert_v132 +1, `ops_endpoint_test.exs` 5).
+
+## P0 2026-10-10 (nightly.47): Risi must not say it cannot read Google Calendar  -- READY
+
+- Cause: no literal "cannot read Google" string existed. Two server texts steered the model: the
+  system-prompt example "I can't see your calendar yet. Calendar access is coming soon" (Prompts.answer_system,
+  Capabilities.retry_instruction) plus the "Coming soon: checking your calendar" capability line, and the
+  server-built "Not checked: Google Calendar (not connected)" / "Google Calendar: not connected." line that
+  `CalendarHonesty` added for the optional `google_api` link even when RISI_GCAL is off.
+- Fix: a `google_api` source that was never connected is not a source any more (not in the Checked/Not checked
+  line, the no-read lines, `answer.sources`, or the model's tool result). Google accounts synced to the phone are
+  the `phone_provider` and named by calendar name ("Work (Google)"). With RISI_GCAL on and a link in play, Google
+  is named exactly as in v1.31 §31.5. New `Capabilities.calendar_rules/0` in every Risi prompt (answer only from
+  the tool result; say why: permission / sync off / phone silent / no events in calendars A, B; never "free"
+  without a read; no calendar tool offered = turn on the Calendar skill). Tool descriptions say the phone calendar
+  includes Google accounts synced to the phone. The "can't see your calendar" example is gone.
+- `calendar_check` is free/busy only (contract §25.3: never titles). "What's on my calendar this week" therefore
+  lists busy times (and Risi Calendar events), not titles of phone events. No contract change made.
+- Contract example `envelope_risi_answer_calendar_sources_risi.json` changed (text and sources no longer name the
+  unconnected Google API); PROTOCOL.md §29.7/§31 prose "Google always named" still says the old thing: root to amend.
+- Tests: `calendar_honesty_p0_1010_test.exs` (13: grep of prompts/tool texts, reasons, RISI_GCAL off/on).
+  Existing v129/v131 expectations updated. "Add meeting Monday 10am" path is covered by action_loop_p0_test
+  (card -> `calendar_add` -> "Added to your Google Calendar: ...") and risi_calendar_flow_test.
+
+### P0 follow-up: `answer.local_events` (v1.32 §29.7)  -- READY
+- `CalendarHonesty.local_events/1` + `Turn.finish`: `{"from","to"}` (the checked range) added to the answer only when
+  the last check holds a `phone_provider` source with `read_ok: true` and the turn is in the asker's own Risi chat.
+  Body stays the busy-times text. Calendar rules in the prompt say the phone lists the events under the answer.
+- Example `envelope_risi_answer_local_events.json` matches the real output exactly (no changes needed). The older
+  `envelope_risi_answer_calendar_sources_risi.json` now also carries `local_events` (real output; example updated).
+- Full suite 1099 tests, 0 failures, 15 skipped.
+
+### P0 2026-10-10 write honesty + next_actions  -- READY
+- Cause of the false "added" (nightly.47): the server built "Added to your calendar" from a bare `event_id` in the phone's `calendar_add` result (log: the result POST was accepted 204 with the old shape). An old phone's insert returned an id for a row that never persisted or synced; nothing verified it.
+- Now (`ClientTools`): "added" only for `{event_id, verified: true}`; a bare event_id gives "Your phone reported the event as added, but couldn't confirm it. Please check your calendar." (step failed, write stays retryable). `ToolCalls.parse` accepts `verified: true` and the top-level error `{status: "error", code: no_permission|read_only_calendar|insert_failed|verify_failed, detail?}`; each code has its exact text; declined and timeout are said as they are. The success post carries `added_event: {event_id}` (answer and skill_done).
+- Model text (`WriteHonesty`, in `Turn.finish`): a sentence claiming an add/set/schedule is removed unless this turn ran a write that reported `done`; an empty remainder becomes a plain statement. Prompt rule added to `Capabilities.calendar_rules`.
+- `answer.next_actions` (`NextActions`): settings instructions become `open` (settings.calendar | risi_skills | calendar_permission | notifications), questions/requests become `ask`, the rest is dropped, max 3; key omitted when empty; `next_steps` unchanged. No contract example exists yet for next_actions / added_event (tested inline).
+- Tests: full suite 1104, 0 failures, 15 skipped. Canary in writes_s13_test.

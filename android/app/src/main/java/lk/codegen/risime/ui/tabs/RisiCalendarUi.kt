@@ -145,7 +145,7 @@ internal fun CalendarActionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCo
                 rec?.removed == true -> StateLine("Removed from your calendar", "risi_calendar_removed")
                 rec?.failureText != null -> {
                     Text("Couldn't add it: ${rec.failureText}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_calendar_failed"))
-                    if (rec.failure == "NO_PERMISSION") OutlinedButton(onClick = { ctx.host.openSkills(RisiSkillIds.CALENDAR) }) { Text("Open Risi skills") }
+                    if (rec.failure == "NO_PERMISSION") OutlinedButton(onClick = { ctx.host.openSkills(RisiSkillIds.CALENDAR) }) { Text("Open Risi skills", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 }
                 else -> StateLine("Adding to your calendar…", "risi_calendar_adding")
             }
@@ -159,10 +159,10 @@ internal fun CalendarActionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCo
                         // First use: the picker, then the add. Otherwise straight to confirm_write (the phone adds it).
                         pendingEdit = null
                         if (port != null && chosen == null) openPicker(true) else confirmNow(chosen)
-                    }, modifier = Modifier.testTag("risi_confirm_add")) { Text("Add") }
-                    OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_calendar_edit")) { Text("Edit") }
+                    }, modifier = Modifier.testTag("risi_confirm_add")) { Text("Add", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                    OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_calendar_edit")) { Text("Edit", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 }
-                if ("cancel" in buttons) OutlinedButton(onClick = { ctx.host.act(wid, "cancel_write") }, modifier = Modifier.testTag("risi_confirm_cancel")) { Text("Cancel") }
+                if ("cancel" in buttons) OutlinedButton(onClick = { ctx.host.act(wid, "cancel_write") }, modifier = Modifier.testTag("risi_confirm_cancel")) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         } else if (state == RisiToolCards.ConfirmState.OPEN && wid != null && wid.lowercase() in ctx.awaiting) {
             StateLine("Sending…")
@@ -219,7 +219,7 @@ private fun AddedBlock(rec: CalendarAddRecord, r: RisiMeta, ctx: RisiCardContext
     Text(RisiCalendarCards.addedText(rec, zone), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("risi_calendar_added"))
     rec.calendarName?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     val eid = rec.eventId
-    if (port != null && eid != null) FilledTonalButton(onClick = { port.open(eid) }, modifier = Modifier.testTag("risi_calendar_open")) { Text("Open") }
+    if (port != null && eid != null) FilledTonalButton(onClick = { port.open(eid) }, modifier = Modifier.testTag("risi_calendar_open")) { Text("Open", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
 }
 
 /** First use (and Change): the writable calendars as "harsha@… · Google"; read-only ones never listed. */
@@ -229,7 +229,7 @@ fun CalendarPickerDialog(options: List<PhoneCalendarInfo>, selectedId: Long?, on
     val localOnly = options.none(CalendarSelection::isGoogle)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Choose a calendar") },
+        title = { Text("Choose a calendar", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()).testTag("risi_calendar_picker"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 Text("Risi adds events here. You can change it in Settings → Risi skills → Calendar.", style = MaterialTheme.typography.bodySmall)
@@ -248,8 +248,8 @@ fun CalendarPickerDialog(options: List<PhoneCalendarInfo>, selectedId: Long?, on
                 if (localOnly) Text("No Google calendar on this phone: these stay on this phone only and are not synced.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
         },
-        confirmButton = { TextButton(onClick = { sel?.let(onPick) }, enabled = sel != null, modifier = Modifier.testTag("risi_calendar_pick")) { Text("Use this calendar") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = { sel?.let(onPick) }, enabled = sel != null, modifier = Modifier.testTag("risi_calendar_pick")) { Text("Use this calendar", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 
@@ -276,14 +276,14 @@ internal fun CalendarEditDialog(
         title = { Text(heading) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()).testTag("risi_calendar_edit_form"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                OutlinedTextField(title, { title = it }, label = { Text("Title") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("risi_calendar_edit_title"))
-                OutlinedTextField(date, { date = it }, label = { Text("Date (YYYY-MM-DD)") }, singleLine = true, isError = d == null, modifier = Modifier.fillMaxWidth().testTag("risi_calendar_edit_date"))
+                OutlinedTextField(title, { title = it }, label = { Text("Title", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("risi_calendar_edit_title"))
+                OutlinedTextField(date, { date = it }, label = { Text("Date (YYYY-MM-DD)", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, singleLine = true, isError = d == null, modifier = Modifier.fillMaxWidth().testTag("risi_calendar_edit_date"))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(allDay, onCheckedChange = { allDay = it })
-                    Text("All day")
+                    Text("All day", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
                 if (!allDay) {
-                    OutlinedTextField(time, { time = it }, label = { Text("Start (HH:MM)") }, singleLine = true, isError = t == null,
+                    OutlinedTextField(time, { time = it }, label = { Text("Start (HH:MM)", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, singleLine = true, isError = t == null,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth().testTag("risi_calendar_edit_time"))
                     Text("Duration", style = MaterialTheme.typography.labelMedium)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
@@ -303,7 +303,7 @@ internal fun CalendarEditDialog(
         confirmButton = {
             TextButton(enabled = valid, onClick = { onSend(RisiCalendarCards.editArgs(title, d!!, t ?: LocalTime.MIDNIGHT, duration, allDay, ZoneId.systemDefault())) }, modifier = Modifier.testTag("risi_calendar_edit_send")) { Text(confirmLabel) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Back") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Back", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 
@@ -315,5 +315,5 @@ internal fun CalendarOpenButton(r: RisiMeta, ctx: RisiCardContext) {
     val rec = RisiCalendarCards.recordForRequest(r.requestId, records) ?: return
     val eid = rec.eventId ?: return
     if (rec.removed) return
-    FilledTonalButton(onClick = { port.open(eid) }, modifier = Modifier.testTag("risi_calendar_open")) { Text("Open") }
+    FilledTonalButton(onClick = { port.open(eid) }, modifier = Modifier.testTag("risi_calendar_open")) { Text("Open", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
 }

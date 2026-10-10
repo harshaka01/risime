@@ -107,6 +107,10 @@ class RisiToolCallHandler(
         if (sent is ApiResult.Error && sent.code == "bad_request" && res != null && "calendar" in res) {
             sent = post(call.toolCallId, result.copy(result = kotlinx.serialization.json.JsonObject(res - "calendar")), me)
         }
+        // v1.32 §29.7: a v1.31 server answers 422 to reason "sync_off": re-send once as "api_error".
+        if (sent is ApiResult.Error && sent.httpStatus == 422 && res != null && SYNC_OFF_MARK in res.toString()) {
+            sent = post(call.toolCallId, result.copy(result = downgradeSyncOff(res)), me)
+        }
         when (val r = sent) {
             is ApiResult.Ok -> log("risi tool ${call.tool}: ${result.status}")
             is ApiResult.Error -> log("risi tool ${call.tool}: result refused (${r.code})")
@@ -118,6 +122,22 @@ class RisiToolCallHandler(
     }
 
     companion object {
+        private const val SYNC_OFF_MARK = "\"sync_off\""
+
+        /** The result with every source `reason: "sync_off"` replaced by `"api_error"`. */
+        fun downgradeSyncOff(res: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
+            val srcs = res["sources"] as? kotlinx.serialization.json.JsonArray ?: return res
+            val fixed = kotlinx.serialization.json.JsonArray(
+                srcs.map { e ->
+                    val o = e as? kotlinx.serialization.json.JsonObject ?: return@map e
+                    if ((o["reason"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "sync_off") {
+                        kotlinx.serialization.json.JsonObject(o + ("reason" to kotlinx.serialization.json.JsonPrimitive("api_error")))
+                    } else e
+                },
+            )
+            return kotlinx.serialization.json.JsonObject(res + ("sources" to fixed))
+        }
+
         /** A7 stub: known tools are declined (nothing read, nothing added), unknown ones are `unknown_tool`. */
         fun stubResult(call: RisiToolCall): RisiToolResult = when (call.tool) {
             RisiToolCall.TOOL_CALENDAR_CHECK, RisiToolCall.TOOL_CALENDAR_ADD -> RisiToolResult.declined()

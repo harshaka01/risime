@@ -80,7 +80,7 @@ class RisiCalendarToolTest {
         assertEquals(RisiToolResult.OK, r.status)
         val ev = be.events.values.single()
         // Exactly the contract's schema on the wire.
-        assertEquals("""{"event_id":"${ev.id}","calendar":{"name":"Google Calendar","account":"harsha@example.com"}}""", r.result.toString())
+        assertEquals("""{"event_id":"${ev.id}","calendar":{"name":"Google Calendar","account":"harsha@example.com"},"verified":true}""", r.result.toString())
         assertEquals(1L, ev.calendarId)
         assertEquals("Dentist", ev.title)
         assertEquals(Instant.parse("2026-10-16T04:30:00Z").toEpochMilli(), ev.dtStart)
@@ -138,17 +138,19 @@ class RisiCalendarToolTest {
         v126Card()
         confirm()
         be.write = false
-        assertEquals(RisiToolResult(RisiToolResult.NO_PERMISSION, null), ex.execute(add))
+        // v1.32 §25.3: errors are {"status":"error","code":…,"detail":…} (top level), never "added".
+        assertEquals(RisiToolResult.addError("no_permission", "WRITE_CALENDAR or READ_CALENDAR not granted"), ex.execute(add))
         assertEquals("NO_PERMISSION", writes.get(add.writeId!!)!!.failure)
         be.write = true
         be.refuseInsert = true
-        assertEquals("""{"code":"calendar_unavailable"}""", ex.execute(add).result.toString())
+        val nf = ex.execute(add)
+        assertEquals("""{"status":"error","code":"insert_failed","detail":"insert: the provider returned no row"}""", ProtocolJson.encodeToString(RisiToolResult.serializer(), nf))
         assertEquals("INSERT_FAILED", writes.get(add.writeId!!)!!.failure)
         assertNull(dao.writes[add.writeId!!])
-        // Only a local calendar left: never written without the user's pick.
+        // Only a local "Phone" calendar left and no RisiMe can be made: read_only_calendar.
         be.refuseInsert = false
         be.cals.removeAll { it.accountType == "com.google" }
-        assertEquals("""{"code":"calendar_unavailable"}""", ex.execute(add).result.toString())
+        assertEquals("read_only_calendar", ex.execute(add).code)
         assertEquals("NO_GOOGLE_CALENDAR", writes.get(add.writeId!!)!!.failure)
         // [Retry] after the user picked the local calendar: it runs (the write was released).
         cal.choose(5)
@@ -168,15 +170,21 @@ class RisiCalendarToolTest {
                 """"connected_sources":["phone_provider"]}""",
             r.result.toString(),
         )
-        // No Google calendar on the phone: the read can't be trusted, and says why.
+        // P0 2026-10-10: only a local calendar on the phone: a successful read is read_ok with its blocks (no_google_calendar is no reason).
         val saved = be.cals.toList()
         be.cals.removeAll { it.accountType == "com.google" }
         val local = ProtocolJson.decodeFromJsonElement(lk.codegen.risime.net.CalendarCheckResult.serializer(), ex.execute(c).result!!)
         val phone = local.sources!!.single { it.source == "phone_provider" }
-        assertEquals(false, phone.readOk)
-        assertEquals("no_calendars", phone.reason)
+        assertEquals(true, phone.readOk)
+        assertNull(phone.reason)
+        assertEquals(1, local.blocks.size)
         assertEquals("not_connected", local.sources!!.single { it.source == "google_api" }.reason)
-        assertEquals(emptyList<String>(), local.connectedSources)
+        assertEquals(listOf("phone_provider"), local.connectedSources)
+        // No calendars at all: unreadable, and says why.
+        be.cals.clear()
+        val none = ProtocolJson.decodeFromJsonElement(lk.codegen.risime.net.CalendarCheckResult.serializer(), ex.execute(c).result!!)
+        assertEquals(false to "no_calendars", none.sources!!.single { it.source == "phone_provider" }.let { it.readOk to it.reason })
+        assertEquals(emptyList<String>(), none.connectedSources)
         be.cals.clear()
         be.cals += saved
         val wide = c.copy(args = JsonObject(mapOf("from" to JsonPrimitive("2026-10-01T00:00:00Z"), "to" to JsonPrimitive("2026-10-16T00:00:01Z"))))

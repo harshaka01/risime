@@ -105,32 +105,64 @@ fun meOutcome(r: ApiResult<MeReply>): MeOutcome = when (r) {
 }
 
 /**
- * §6.2: refresh about [marginMs] before expiry, computed from `expires_in` at receipt on the
- * monotonic clock (never the device wall clock against `exp`). Never sooner than [minDelayMs]
- * (very short tokens), never negative.
+ * §6.2: refresh ahead of expiry, computed from `expires_in` at receipt on the monotonic clock
+ * (never the device wall clock against `exp`). P0 2026-10-10: the margin is max(120 s, 1/3 of the
+ * token's lifetime), so a refresh that stalls (5-s connect timeout) can be retried ~3 times
+ * (1 s, 3 s, 7 s) before the token expires. Never sooner than [MIN_DELAY_MS], never negative.
  */
 object RefreshTiming {
-    const val MARGIN_MS = 60_000L
+    const val MIN_MARGIN_MS = 120_000L
     const val MIN_DELAY_MS = 5_000L
+
+    /** Kept for callers that have no lifetime at hand (the minimum margin). */
+    const val MARGIN_MS = MIN_MARGIN_MS
 
     /** Monotonic deadline (elapsedRealtime ms) after which the access token is considered expired. */
     fun expiresAt(receivedAtElapsedMs: Long, expiresInSec: Long): Long = receivedAtElapsedMs + expiresInSec * 1_000
 
+    /** Refresh when this much life is left: the larger of [MIN_MARGIN_MS] and a third of [lifetimeMs]. */
+    fun marginMs(lifetimeMs: Long = 0): Long = maxOf(MIN_MARGIN_MS, lifetimeMs / 3)
+
     fun refreshDelayMs(
         expiresAtElapsedMs: Long,
         nowElapsedMs: Long,
-        marginMs: Long = MARGIN_MS,
+        lifetimeMs: Long = 0,
         minDelayMs: Long = MIN_DELAY_MS,
     ): Long {
+        val margin = marginMs(lifetimeMs)
         val lifetimeLeft = expiresAtElapsedMs - nowElapsedMs
         // For tokens shorter than twice the margin, refresh at half their remaining life instead.
-        val target = if (lifetimeLeft < 2 * marginMs) lifetimeLeft / 2 else lifetimeLeft - marginMs
+        val target = if (lifetimeLeft < 2 * margin) lifetimeLeft / 2 else lifetimeLeft - margin
         return target.coerceAtLeast(minDelayMs.coerceAtMost(lifetimeLeft.coerceAtLeast(0)))
     }
 
     /** Is the token too close to expiry to start a new request/connection with? */
-    fun needsRefresh(expiresAtElapsedMs: Long, nowElapsedMs: Long, marginMs: Long = MARGIN_MS): Boolean =
-        expiresAtElapsedMs - nowElapsedMs <= marginMs
+    fun needsRefresh(expiresAtElapsedMs: Long, nowElapsedMs: Long, lifetimeMs: Long = 0): Boolean =
+        expiresAtElapsedMs - nowElapsedMs <= marginMs(lifetimeMs)
+}
+
+/** Retry timing for a failed (transient) Keycloak refresh or socket reconnect, P0 2026-10-10. */
+object RefreshRetry {
+    /** Quick retries after a transient failure, then [LATER_MS] steps. */
+    val QUICK_MS = listOf(1_000L, 3_000L, 7_000L)
+    val LATER_MS = listOf(15_000L, 30_000L)
+
+    /** Wait before retry number [failures] (1 = after the first failure). Capped at 30 s. */
+    fun delayMs(failures: Int): Long {
+        val i = (failures - 1).coerceAtLeast(0)
+        return if (i < QUICK_MS.size) QUICK_MS[i] else LATER_MS[(i - QUICK_MS.size).coerceAtMost(LATER_MS.lastIndex)]
+    }
+}
+
+/** Socket reconnect delay: base steps 1 s … 30 s, each scaled by jitter in [0.5, 1.0]. */
+object ReconnectBackoff {
+    val BASE_MS = listOf(1_000L, 2_000L, 5_000L, 10_000L, 30_000L)
+
+    /** [random] returns [0, 1). Result is in [base/2, base] of step [attempt] (0-based, capped at the last). */
+    fun delayMs(attempt: Int, base: List<Long> = BASE_MS, random: () -> Double = Math::random): Long {
+        val b = base[attempt.coerceIn(0, base.lastIndex)]
+        return (b * (0.5 + 0.5 * random().coerceIn(0.0, 1.0))).toLong().coerceAtLeast(1)
+    }
 }
 
 /** Top-level screen, in priority order (decision 020 / contract §7). */

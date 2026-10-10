@@ -48,7 +48,7 @@ fun SummarisePeriodDialog(host: RisiHost, onDismiss: () -> Unit) {
                 }
             },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
         return
     }
@@ -77,6 +77,6 @@ fun SummarisePeriodDialog(host: RisiHost, onDismiss: () -> Unit) {
                 modifier = Modifier.testTag("risi_summarise_range_ok"),
             ) { Text(SUMMARISE_LABEL) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     ) { DateRangePicker(st, Modifier.testTag("risi_summarise_range_picker")) }
 }

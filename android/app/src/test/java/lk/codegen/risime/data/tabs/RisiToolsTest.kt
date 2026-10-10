@@ -103,6 +103,22 @@ class RisiToolsTest {
         assertEquals(listOf(full.result.toString(), """{"event_id":"7"}"""), sent)
     }
 
+    @Test fun aV131ServerRefusingSyncOffGetsApiErrorOnce() = runBlocking {
+        val c = call("event_risi_tool_call_calendar_check.json")
+        val sent = mutableListOf<String>()
+        val body = ProtocolJson.parseToJsonElement(read("risi_tool_result_calendar_check_sync_off.json")) as kotlinx.serialization.json.JsonObject
+        val full = RisiToolResult(RisiToolResult.OK, body["result"] as kotlinx.serialization.json.JsonObject)
+        val h = RisiToolCallHandler(
+            { dev },
+            { _, r, _ -> sent += r.result.toString(); if ("sync_off" in r.result.toString()) ApiResult.Error(422, "bad_request", "") else ApiResult.Ok(Unit) },
+            { true }, { ms(c.serverTs!!) }, execute = { full },
+        )
+        h.handle(c)
+        assertEquals(2, sent.size)
+        assertTrue("sync_off" in sent[0])
+        assertTrue("sync_off" !in sent[1] && "\"reason\":\"api_error\"" in sent[1])
+    }
+
     @Test fun progressDropsLowerSeqAndEndsOnDone() {
         val base = ProtocolJson.decodeFromString<Signal>(read("signal_risi_progress.json")).risiProgress()!!
         var now = 1_000L

@@ -1,0 +1,1 @@
+{"status":"ok","result":{"blocks":[],"sources":[{"source":"phone_provider","calendars":[{"name":"Primary calendar","account_type":"com.google","events":0}],"read_ok":false,"reason":"sync_off"},{"source":"google_api","calendars":[],"read_ok":false,"reason":"not_connected"}],"connected_sources":["phone_provider"]}}

@@ -1,5 +1,6 @@
 package lk.codegen.risime.data.auth
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -394,5 +395,86 @@ class AuthManagerTest {
         manager().revokeStored(legacy.unlockCipher())
         assertEquals(listOf("r9"), gw.revoked)
         assertNotEquals(SessionState.READY, manager().restore())
+    }
+
+    /** Keycloak answers with [script] one call at a time, then [Gateway.next]-style success. */
+    private class ScriptedGateway(val script: MutableList<RefreshResult>) : OidcGateway {
+        var calls = 0
+        override suspend fun refresh(issuer: String, clientId: String, refreshToken: String): RefreshResult {
+            calls++
+            return if (script.isEmpty()) RefreshResult.Ok(OidcTokens("a-ok", 300, null, null)) else script.removeAt(0)
+        }
+        override suspend fun revoke(issuer: String, clientId: String, refreshToken: String) = Unit
+    }
+
+    @Test fun aStalledRefreshIsRetriedAfterOneThreeAndSevenSecondsWithoutSigningOut() = runTest {
+        val g = ScriptedGateway(mutableListOf(RefreshResult.Failed("timeout"), RefreshResult.Failed("timeout"), RefreshResult.Failed("timeout")))
+        val m = AuthManager(g, vault, legacy, { now }, { pushed += it }, diag)
+        m.adopt("iss", "risime", OidcTokens("a1", 300, "r1", null))
+        val ok = m.refreshWithRetry()
+        assertTrue(ok)
+        assertEquals(4, g.calls) // 3 stalls, then success
+        assertEquals(1_000L + 3_000 + 7_000, testScheduler.currentTime) // 1 s, 3 s, 7 s
+        assertFalse(m.refreshFailingTransiently())
+        assertEquals(SessionState.READY, m.state.value)
+        assertFalse(m.signInNeeded.value)
+        assertTrue(vault.exists())
+        assertEquals("a-ok", m.bearer())
+    }
+
+    @Test fun retriesGoOnPastTheQuickLadderAndNeverEndTheSession() = runTest {
+        val g = ScriptedGateway(MutableList(6) { RefreshResult.Failed("offline") })
+        val m = AuthManager(g, vault, legacy, { now }, { pushed += it }, diag)
+        m.adopt("iss", "risime", OidcTokens("a1", 300, "r1", null))
+        now = 400_000 // the token expired while Keycloak was unreachable
+        assertTrue(m.refreshWithRetry())
+        assertEquals(7, g.calls)
+        // 1 + 3 + 7 + 15 + 30 + 30 s
+        assertEquals(86_000L, testScheduler.currentTime)
+        assertEquals(SessionState.READY, m.state.value)
+        assertFalse(m.signInNeeded.value)
+        assertTrue(vault.exists())
+    }
+
+    @Test fun invalidGrantStopsTheRetriesAndEndsTheSession() = runTest {
+        val g = ScriptedGateway(mutableListOf(RefreshResult.Failed("timeout"), RefreshResult.InvalidGrant))
+        val m = AuthManager(g, vault, legacy, { now }, { pushed += it }, diag)
+        m.adopt("iss", "risime", OidcTokens("a1", 300, "r1", null))
+        assertFalse(m.refreshWithRetry())
+        assertEquals(2, g.calls)
+        assertEquals(SessionState.NONE, m.state.value)
+        assertTrue(m.signInNeeded.value)
+    }
+
+    @Test fun refreshStaysSingleFlight() = runTest {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val g = object : OidcGateway {
+            override suspend fun refresh(issuer: String, clientId: String, refreshToken: String): RefreshResult {
+                calls.incrementAndGet()
+                gate.await()
+                return RefreshResult.Ok(OidcTokens("a-new", 300, null, null))
+            }
+            override suspend fun revoke(issuer: String, clientId: String, refreshToken: String) = Unit
+        }
+        val m = AuthManager(g, vault, legacy, { now }, { pushed += it }, diag)
+        m.adopt("iss", "risime", OidcTokens("a1", 300, "r1", null))
+        now = 200_000 // inside the new 120-s margin: every caller wants a refresh
+        val callers = List(5) { async { m.bearer() } }
+        kotlinx.coroutines.yield()
+        gate.complete(Unit)
+        assertEquals(List(5) { "a-new" }, callers.map { it.await() })
+        assertEquals(1, calls.get())
+    }
+
+    @Test fun theTokenIsRefreshedWithTwoMinutesLeft() = runTest {
+        val m = manager()
+        m.adopt("iss", "risime", OidcTokens("a1", 300, "r1", null))
+        now = 179_000 // 121 s left: still fresh
+        assertEquals("a1", m.bearer())
+        assertEquals(0, gw.refreshedWith.size)
+        now = 181_000 // 119 s left: refreshed
+        assertEquals("a2", m.bearer())
+        assertEquals(1, gw.refreshedWith.size)
     }
 }

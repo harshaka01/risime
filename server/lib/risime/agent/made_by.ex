@@ -28,7 +28,7 @@ defmodule RisiMe.Agent.MadeBy do
   # §27.1: kinds no model makes, even when a `call_ref` (for feedback) rides along.
   @rule_kinds ~w(reminder escalation digest commitment_update error item_due item_overdue
                  item_nudge item_update call_listen reminder_set skill_done skill_needed
-                 google_reconnect)
+                 google_reconnect ops_alert)
 
   @doc "True for a `risi.kind` that is always rule-made (§27.1 `model: null`)."
   def rule_kind?(kind), do: kind in @rule_kinds

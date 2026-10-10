@@ -146,7 +146,7 @@ fun OfficialBanner(onDismiss: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(OFFICIAL_BANNER_TEXT, Modifier.weight(1f).padding(vertical = Spacing.sm), style = MaterialTheme.typography.bodyMedium)
-        TextButton(onClick = onDismiss, modifier = Modifier.testTag("official_banner_ok")) { Text("OK") }
+        TextButton(onClick = onDismiss, modifier = Modifier.testTag("official_banner_ok")) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
     }
 }
 

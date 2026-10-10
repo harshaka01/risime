@@ -90,7 +90,7 @@ fun PhoneVerifyContent(
             OutlinedTextField(
                 value = s.code,
                 onValueChange = onCode,
-                label = { Text("6-digit code") },
+                label = { Text("6-digit code", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 singleLine = true,
                 enabled = !s.busy && !s.codeLocked,
                 textStyle = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 6.sp, textAlign = TextAlign.Center),

@@ -296,7 +296,7 @@ defmodule RisiMe.ContractExamplesTest do
   @checked_v1_29 ~w(auth_config_v129.json device_put_risi_events.json
                     envelope_risi_action_confirm_write_edit_risi_calendar.json
                     envelope_risi_action_event_accept.json envelope_risi_action_event_suggest.json
-                    envelope_risi_answer_calendar_sources_risi.json
+                    envelope_risi_answer_calendar_sources_risi.json envelope_risi_answer_local_events.json
                     envelope_risi_calendar_invite.json envelope_risi_calendar_reminder.json
                     envelope_risi_calendar_suggestion.json
                     envelope_risi_confirm_risi_calendar_add.json
@@ -327,6 +327,11 @@ defmodule RisiMe.ContractExamplesTest do
                     risi_google_link_reply.json risi_skills_reply_v131.json
                     risi_tool_result_calendar_check_google.json
                     risi_tool_result_calendar_check_google_reauth.json)
+
+  # v1.32 (§29.7 sync_off): checked in test/contract/examples_v132_test.exs; §32 ops alert in
+  # test/risime_web/controllers/ops_alert_v132_test.exs.
+  @checked_v1_32 ~w(risi_tool_result_calendar_check_sync_off.json envelope_risi_ops_alert.json
+                     risi_tool_result_calendar_add_v132.json risi_tool_result_calendar_add_error_v132.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -390,7 +395,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_28 ++
         @checked_v1_29 ++
         @checked_v1_30 ++
-        @checked_v1_31
+        @checked_v1_31 ++
+        @checked_v1_32
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end

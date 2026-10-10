@@ -261,30 +261,30 @@ private fun BackupDialogs(c: AppContainer, flow: BackupFlow, set: (BackupFlow) -
         )
         is BackupFlow.Replace -> AlertDialog(
             onDismissRequest = { set(BackupFlow.None) },
-            title = { Text("Back up this phone instead?") },
+            title = { Text("Back up this phone instead?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = { Text("Back up this phone instead of ${flow.deviceName}? Only one phone backs up your chats to the server.") },
-            confirmButton = { TextButton(onClick = { upload { c.backups.replaceDevice() } }) { Text("Back up this phone") } },
-            dismissButton = { TextButton(onClick = { set(BackupFlow.None) }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { upload { c.backups.replaceDevice() } }) { Text("Back up this phone", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { set(BackupFlow.None) }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
         BackupFlow.ConfirmReset -> AlertDialog(
             onDismissRequest = { set(BackupFlow.None) },
-            title = { Text("Reset backup key?") },
+            title = { Text("Reset backup key?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = { Text("This deletes your backups on the server and the backup key on this phone. Backup files you exported before can't be opened without the old recovery key.") },
-            confirmButton = { TextButton(onClick = { set(BackupFlow.None); scope.launch { note(c.backups.resetBackupKey()) } }) { Text("Reset") } },
-            dismissButton = { TextButton(onClick = { set(BackupFlow.None) }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { set(BackupFlow.None); scope.launch { note(c.backups.resetBackupKey()) } }) { Text("Reset", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { set(BackupFlow.None) }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
         BackupFlow.ConfirmOff -> AlertDialog(
             onDismissRequest = { set(BackupFlow.None) },
-            title = { Text("Turn off server backup?") },
+            title = { Text("Turn off server backup?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = { Text("Your last server backups stay unless you delete them. Local backups on this phone continue.") },
-            confirmButton = { TextButton(onClick = { set(BackupFlow.None); scope.launch { note(c.backups.turnOffServer(delete = false)) } }) { Text("Turn off") } },
+            confirmButton = { TextButton(onClick = { set(BackupFlow.None); scope.launch { note(c.backups.turnOffServer(delete = false)) } }) { Text("Turn off", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
             dismissButton = { TextButton(onClick = { set(BackupFlow.None); scope.launch { note(c.backups.turnOffServer(delete = true)) } }) { Text("Turn off and delete server backup") } },
         )
         is BackupFlow.Info -> AlertDialog(
             onDismissRequest = { set(BackupFlow.None) },
             title = { Text(flow.title) },
             text = { Text(flow.text) },
-            confirmButton = { TextButton(onClick = { set(BackupFlow.None) }) { Text("OK") } },
+            confirmButton = { TextButton(onClick = { set(BackupFlow.None) }) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
 }

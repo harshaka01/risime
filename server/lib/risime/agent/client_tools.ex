@@ -47,8 +47,9 @@ defmodule RisiMe.Agent.ClientTools do
     %{
       name: "calendar_check",
       description:
-        "check when the asker is free or busy on their phone's calendar (from, to: an ISO time " <>
-          "or a local phrase like \"Tuesday 00:00\"; at most 14 days)",
+        "check when the asker is free or busy on their phone's calendar, which includes Google " <>
+          "accounts synced to the phone (busy times only, no event titles; from, to: an ISO " <>
+          "time or a local phrase like \"Tuesday 00:00\"; at most 14 days)",
       where: :client,
       personal: true,
       write: false,
@@ -108,7 +109,8 @@ defmodule RisiMe.Agent.ClientTools do
   defp run_check(_args, _ctx), do: {:error, "failed", "bad_args"}
 
   defp model_sources(sources) when is_list(sources) do
-    for s <- sources do
+    # P0 2026-10-10: a `google_api` that was never connected is not news to the model.
+    for s <- sources, not never_connected_google?(s) do
       %{
         "source" => s["source"],
         "read_ok" => s["read_ok"],
@@ -120,13 +122,20 @@ defmodule RisiMe.Agent.ClientTools do
 
   defp model_sources(_), do: nil
 
+  @doc false
+  def never_connected_google?(%{"source" => "google_api", "reason" => "not_connected"} = s),
+    do: not Map.has_key?(s, "count")
+
+  def never_connected_google?(_), do: false
+
   ## calendar_add
 
   def calendar_add do
     %{
       name: "calendar_add",
       description:
-        "propose adding an event to the asker's phone calendar (the asker confirms first; " <>
+        "propose adding an event to the asker's phone calendar, Google accounts synced to the " <>
+          "phone included (the asker confirms first; " <>
           "start/end: ISO or a local phrase like \"Friday 10:00\")",
       where: :client,
       personal: true,
@@ -506,8 +515,8 @@ defmodule RisiMe.Agent.ClientTools do
         unless w.via == "allowed", do: timeout_reply(w)
         {:error, "timeout"}
 
-      {:ok, status, _} ->
-        unless w.via == "allowed", do: failed_reply(w, status)
+      {:ok, status, result} ->
+        unless w.via == "allowed", do: failed_reply(w, status, result)
         {:error, status}
     end
   end
@@ -530,13 +539,31 @@ defmodule RisiMe.Agent.ClientTools do
     :ok
   end
 
-  defp ok(w, args, dev, result) do
+  # v1.32 §25.3 write honesty (P0 2026-10-10): "added" only for an `event_id` the phone read
+  # back (`verified: true`). An older phone's bare `event_id` is not proof.
+  defp ok(%{tool: "calendar_add"} = w, args, dev, result) do
+    if is_map(result) and result["verified"] == true and is_binary(result["event_id"]) do
+      done(w, args, dev, result)
+    else
+      answer(w, "failed", unconfirmed_text())
+      {:error, "unconfirmed"}
+    end
+  end
+
+  defp ok(w, args, dev, result), do: done(w, args, dev, result)
+
+  defp done(w, args, dev, result) do
     # P0 2026-10-09: the phone said which calendar it used: remembered for the next card.
     if w.tool == "calendar_add" and is_map(result["calendar"]),
       do: RisiMe.Agent.CalendarChoice.put(w.user_id, result["calendar"])
 
     RisiMe.Agent.Skills.client_done(w, args, dev, result) ||
-      answer(w, "ok", done_text(w, Map.put(args, "result", result)))
+      answer(
+        w,
+        "ok",
+        done_text(w, Map.put(args, "result", result)),
+        added_event(w, result)
+      )
 
     :ok
   end
@@ -596,24 +623,52 @@ defmodule RisiMe.Agent.ClientTools do
     if t.minute == 0, do: "#{h}", else: "#{h}:#{String.pad_leading("#{t.minute}", 2, "0")}"
   end
 
+  @doc false
+  def added_event(%{tool: "calendar_add"}, %{"event_id" => id}),
+    do: %{"added_event" => %{"event_id" => id}}
+
+  def added_event(_w, _result), do: %{}
+
   defp done_text(%{tool: "calendar_add"} = w, args),
     do: added_text(args, nil, Clock.user_tz(w.user_id))
 
   defp done_text(_w, _args), do: "Done."
 
-  defp answer(w, status, text) do
-    Writes.post(w, text, %{
-      "kind" => "answer",
-      "request_id" => w.request_id,
-      "answer" => text,
-      "refs" => [],
-      "confidence" => 1.0,
-      "steps" => [%{"tool" => w.tool, "status" => status}],
-      "sources" => [],
-      "next_steps" => [],
-      "turn_ref" => w.turn_id,
-      "notify" => [w.user_id]
-    })
+  @doc "The words for a `calendar_add` that the phone reported but did not verify."
+  def unconfirmed_text,
+    do:
+      "Your phone reported the event as added, but couldn't confirm it. " <>
+        "Please check your calendar."
+
+  @doc "The words for a `calendar_add` error `code` (§25.3 write honesty)."
+  def add_error_text("no_permission"), do: "I couldn't add it: calendar access is off."
+  def add_error_text("read_only_calendar"), do: "I couldn't add it: your calendars are read-only."
+
+  def add_error_text("insert_failed"),
+    do: "I couldn't add it: the phone's calendar refused it."
+
+  def add_error_text("verify_failed"),
+    do: "I couldn't add it: the event wasn't there when I checked."
+
+  def add_error_text(_), do: "Your phone couldn't do it, so nothing was changed."
+
+  defp answer(w, status, text, extra \\ %{}) do
+    Writes.post(
+      w,
+      text,
+      Map.merge(extra, %{
+        "kind" => "answer",
+        "request_id" => w.request_id,
+        "answer" => text,
+        "refs" => [],
+        "confidence" => 1.0,
+        "steps" => [%{"tool" => w.tool, "status" => status}],
+        "sources" => [],
+        "next_steps" => [],
+        "turn_ref" => w.turn_id,
+        "notify" => [w.user_id]
+      })
+    )
   end
 
   defp timeout_reply(w) do
@@ -627,12 +682,23 @@ defmodule RisiMe.Agent.ClientTools do
     })
   end
 
-  defp failed_reply(w, status) do
+  defp failed_reply(w, status, result) do
     text =
       case status do
-        "no_permission" -> "I couldn't do it: the permission is off on your phone."
-        "declined" -> "Your phone declined it, so nothing was changed."
-        _ -> "Your phone couldn't do it, so nothing was changed."
+        "error" when w.tool == "calendar_add" ->
+          add_error_text(is_map(result) && result["code"])
+
+        "no_permission" when w.tool == "calendar_add" ->
+          add_error_text("no_permission")
+
+        "no_permission" ->
+          "I couldn't do it: the permission is off on your phone."
+
+        "declined" ->
+          "Your phone declined it, so nothing was changed."
+
+        _ ->
+          "Your phone couldn't do it, so nothing was changed."
       end
 
     answer(w, if(status == "error", do: "failed", else: status), text)

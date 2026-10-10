@@ -84,22 +84,22 @@ fun RequestsTab(vm: FriendsViewModel, onAddFriend: () -> Unit) {
                 meta = isoMs(r.insertedAt)?.let(::shortStamp),
             )
             Row(Modifier.padding(start = Spacing.lg)) {
-                TextButton(onClick = { confirm = "Cancel the request to ${r.phone}?" to { vm.cancel(r.id) } }) { Text("Cancel request") }
+                TextButton(onClick = { confirm = "Cancel the request to ${r.phone}?" to { vm.cancel(r.id) } }) { Text("Cancel request", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
         if (f.blocked.isNotEmpty()) item { Header("Blocked") }
         items(f.blocked, key = { "b:" + it.userId }) { b ->
             ListRow(title = b.displayName, subtitle = b.phone, leading = { InitialsAvatar(b.displayName, enabled = false) })
-            Row(Modifier.padding(start = Spacing.lg)) { TextButton(onClick = { vm.unblock(b.userId) }) { Text("Unblock") } }
+            Row(Modifier.padding(start = Spacing.lg)) { TextButton(onClick = { vm.unblock(b.userId) }) { Text("Unblock", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } }
         }
     }
     confirm?.let { (title, act) ->
         AlertDialog(
             onDismissRequest = { confirm = null },
             title = { Text(title) },
-            text = { Text("They won't be told.") },
-            confirmButton = { TextButton(onClick = { act(); confirm = null }) { Text("Yes") } },
-            dismissButton = { TextButton(onClick = { confirm = null }) { Text("No") } },
+            text = { Text("They won't be told.", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+            confirmButton = { TextButton(onClick = { act(); confirm = null }) { Text("Yes", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("No", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
 }
@@ -129,8 +129,8 @@ internal fun IncomingRowContent(
     )
     if (!r.phoneConfirmed) lk.codegen.risime.ui.auth.PhoneNotVerifiedNote(Modifier.padding(start = Spacing.lg))
     Row(Modifier.padding(start = Spacing.lg), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        Button(onClick = { onAccept(r.id) }) { Text("Accept") }
-        OutlinedButton(onClick = { ask("Decline $name's request?") { onDecline(r.id) } }) { Text("Decline") }
+        Button(onClick = { onAccept(r.id) }) { Text("Accept", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+        OutlinedButton(onClick = { ask("Decline $name's request?") { onDecline(r.id) } }) { Text("Decline", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         r.userId?.let { uid ->
             TextButton(onClick = { ask("Block $name? You won't get messages or requests from them.") { onBlock(uid) } }) {
                 Text("Block", color = MaterialTheme.colorScheme.error)
@@ -160,7 +160,7 @@ fun AddFriendScreen(vm: FriendsViewModel, onBack: () -> Unit) {
                 OutlinedTextField(
                     value = s.phone,
                     onValueChange = vm::onPhone,
-                    label = { Text("Phone number") },
+                    label = { Text("Phone number", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Send),
                     modifier = Modifier.fillMaxWidth(),
@@ -173,16 +173,16 @@ fun AddFriendScreen(vm: FriendsViewModel, onBack: () -> Unit) {
                 Text(requestSentText(s.sentTo!!), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyLarge)
                 if (!s.inviting) {
                     Text("Not on RisiMe yet?", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Button(onClick = vm::startInvite, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Send an invite") }
-                    TextButton(onClick = { vm.resetAdd(); onBack() }) { Text("Done") }
+                    Button(onClick = vm::startInvite, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Send an invite", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                    TextButton(onClick = { vm.resetAdd(); onBack() }) { Text("Done", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 } else {
                     Text("Invite ${s.sentTo}", style = MaterialTheme.typography.titleMedium)
                     OutlinedTextField(
-                        value = s.inviteName, onValueChange = vm::onInviteName, label = { Text("Their name") }, singleLine = true,
+                        value = s.inviteName, onValueChange = vm::onInviteName, label = { Text("Their name", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     OutlinedTextField(
-                        value = s.inviteEmail, onValueChange = vm::onInviteEmail, label = { Text("Email they'll sign in with") },
+                        value = s.inviteEmail, onValueChange = vm::onInviteEmail, label = { Text("Email they'll sign in with", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Done),
                         modifier = Modifier.fillMaxWidth(),
@@ -223,7 +223,7 @@ fun InvitesScreen(vm: FriendsViewModel, onBack: () -> Unit) {
                 )
                 if (inv.pending) {
                     Row(Modifier.padding(start = Spacing.lg)) {
-                        TextButton(onClick = { shareInvite(context, inv) }) { Text("Share again") }
+                        TextButton(onClick = { shareInvite(context, inv) }) { Text("Share again", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                         TextButton(onClick = { vm.revoke(inv.id) }) { Text("Revoke", color = MaterialTheme.colorScheme.error) }
                     }
                 }

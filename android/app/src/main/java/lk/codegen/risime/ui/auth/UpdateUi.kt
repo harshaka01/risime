@@ -91,7 +91,7 @@ fun UpdateBar(state: UpdateState, c: AppContainer) {
             }
             if (banner.busy && banner.percent == null) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             banner.action?.let { TextButton(onClick = { c.updater.start(info) }) { Text(it) } }
-            if (banner.canDismiss) TextButton(onClick = c.updater::dismiss) { Text("Later") }
+            if (banner.canDismiss) TextButton(onClick = c.updater::dismiss) { Text("Later", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         }
         banner.percent?.let { p ->
             LinearProgressIndicator(progress = { p / 100f }, modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs))

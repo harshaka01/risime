@@ -115,7 +115,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
                 enabled = !s.busy,
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Log out") }
+            ) { Text("Log out", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             androidx.compose.material3.TextButton(
                 onClick = vm::askLogoutAndDelete,
                 enabled = !s.busy,
@@ -129,7 +129,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
     s.confirmServer?.let { url ->
         AlertDialog(
             onDismissRequest = vm::cancelServerChange,
-            title = { Text("Switch server?") },
+            title = { Text("Switch server?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = {
                 Column {
                     Text("You'll be logged out, because your login belongs to the current server. " +
@@ -138,8 +138,8 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
                     lk.codegen.risime.ui.common.SaveBackupFileButton()
                 }
             },
-            confirmButton = { TextButton(onClick = vm::confirmServerChange) { Text("Log out and switch") } },
-            dismissButton = { TextButton(onClick = vm::cancelServerChange) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = vm::confirmServerChange) { Text("Log out and switch", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = vm::cancelServerChange) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
     if (s.confirmLogout || s.confirmDeleteChats) {
@@ -173,14 +173,14 @@ private fun ProfileSection(s: SettingsUiState, vm: SettingsViewModel) {
     OutlinedTextField(
         value = s.nameDraft,
         onValueChange = vm::onNameDraft,
-        label = { Text("Display name") },
+        label = { Text("Display name", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         singleLine = true,
         isError = s.nameError != null,
         supportingText = {
             when {
                 s.nameError != null -> Text(s.nameError)
-                s.nameSaved -> Text("Saved")
-                else -> Text("Shown to your contacts")
+                s.nameSaved -> Text("Saved", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                else -> Text("Shown to your contacts", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
         },
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -190,7 +190,7 @@ private fun ProfileSection(s: SettingsUiState, vm: SettingsViewModel) {
     FilledTonalButton(
         onClick = vm::saveName,
         enabled = !s.busy && s.nameDraft.trim() != user.displayName,
-    ) { Text("Save name") }
+    ) { Text("Save name", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
     InfoRow("Phone", user.phone)
     if (!user.phoneConfirmed) lk.codegen.risime.ui.auth.PhoneNotVerifiedNote()
     InfoRow("Company", user.company)
@@ -202,7 +202,7 @@ private fun ServerSection(s: SettingsUiState, vm: SettingsViewModel) {
     OutlinedTextField(
         value = s.serverDraft,
         onValueChange = vm::onServerDraft,
-        label = { Text("Server URL") },
+        label = { Text("Server URL", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         singleLine = true,
         isError = s.serverError != null,
         supportingText = {
@@ -215,7 +215,7 @@ private fun ServerSection(s: SettingsUiState, vm: SettingsViewModel) {
     FilledTonalButton(
         onClick = vm::saveServer,
         enabled = !s.busy && s.serverDraft.trim().trimEnd('/') != s.serverUrl,
-    ) { Text("Change server") }
+    ) { Text("Change server", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
 }
 
 /** Decision 048: About states the real rule; each chat shows its own state. */

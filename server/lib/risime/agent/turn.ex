@@ -58,6 +58,7 @@ defmodule RisiMe.Agent.Turn do
     Audience,
     Capabilities,
     Clock,
+    NextActions,
     LLM,
     Progress,
     Prompts,
@@ -65,6 +66,7 @@ defmodule RisiMe.Agent.Turn do
     Skills,
     Tools,
     TurnSteps,
+    WriteHonesty,
     Writes
   }
 
@@ -104,8 +106,19 @@ defmodule RisiMe.Agent.Turn do
     lock = {{:risi_turn, asker}, self()}
 
     if :global.set_lock(lock, [node()], 0) do
+      started = System.monotonic_time()
+
       try do
-        do_run(conv, env, request_id, asker)
+        result = do_run(conv, env, request_id, asker)
+
+        # Decision 075: PromEx's RisiMe.PromEx.Risi turns this into a counter and a histogram.
+        :telemetry.execute(
+          [:risime, :risi, :turn, :stop],
+          %{duration: System.monotonic_time() - started},
+          %{outcome: turn_outcome(result)}
+        )
+
+        result
       after
         :global.del_lock(lock, [node()])
       end
@@ -113,6 +126,10 @@ defmodule RisiMe.Agent.Turn do
       {:snooze, 2}
     end
   end
+
+  defp turn_outcome(:ok), do: :ok
+  defp turn_outcome({:snooze, _}), do: :snooze
+  defp turn_outcome(_), do: :error
 
   defp do_run(conv, env, request_id, asker) do
     b = bounds()
@@ -153,6 +170,7 @@ defmodule RisiMe.Agent.Turn do
       steps: [],
       calls: 0,
       writes: 0,
+      writes_done: 0,
       history: [],
       refs: refs,
       personal: false,
@@ -441,7 +459,9 @@ defmodule RisiMe.Agent.Turn do
     if "calendar_check" in names,
       do:
         "\n- calendar_check: say the asker is free only when a source has read_ok true and " <>
-          "calendars above 0; otherwise say you couldn't read their calendar and why",
+          "calendars above 0 (the phone's calendar includes Google accounts synced to it); " <>
+          "otherwise say why you couldn't read it (permission, sync off, no answer), never " <>
+          "that Google Calendar can't be read",
       else: risi_calendar_line(names)
   end
 
@@ -450,7 +470,8 @@ defmodule RisiMe.Agent.Turn do
     if "risi_calendar_check" in names,
       do:
         "\n- risi_calendar_check: free/clear/available only about the calendars checked; a " <>
-          "proposed event is tentative. Events go to the Risi Calendar (risi_calendar_add) " <>
+          "proposed event is tentative; the phone's calendar includes Google accounts synced to " <>
+          "it, and you list only what the result shows. Events go to the Risi Calendar (risi_calendar_add) " <>
           "unless the asker asks for their phone calendar",
       else: ""
   end
@@ -786,7 +807,12 @@ defmodule RisiMe.Agent.Turn do
             ],
         refs: if(ok?, do: Map.merge(st.refs, Map.get(meta, :refs, %{})), else: st.refs),
         personal: st.personal or (ok? and (tool.personal or Map.get(meta, :personal, false))),
-        writes: if(ok? and tool.write, do: st.writes + 1, else: st.writes)
+        writes: if(ok? and tool.write, do: st.writes + 1, else: st.writes),
+        writes_done:
+          if(ok? and tool.write and match?(%{"status" => "done"}, result),
+            do: st.writes_done + 1,
+            else: st.writes_done
+          )
     }
 
     {draft_step(st, ctx, name, args, ok?, result), status, result, meta}
@@ -1106,6 +1132,12 @@ defmodule RisiMe.Agent.Turn do
     checks = Map.get(st, :calendar_checks, [])
     # P0 2026-10-09: never "clear" without a trustworthy read; always name what was checked.
     {answer, rule?, retry} = CalendarHonesty.enforce_full(answer, checks, ctx.tz)
+    # v1.32 §25.3: the model's text never claims a write that no tool result reported done.
+    {answer, claim_removed?} =
+      WriteHonesty.enforce(answer, Map.get(st, :writes_done, 0), Map.get(st, :proposed) != nil)
+
+    rule? = rule? or claim_removed?
+    raw_steps = next_steps
     next_steps = retry || next_steps
     # v1.29 §29.3: an answer the server rebuilt is made by the rule, not the model.
     st = if rule?, do: %{st | rule_made: true}, else: st
@@ -1151,6 +1183,22 @@ defmodule RisiMe.Agent.Turn do
         ),
       "notify" => [ctx.asker]
     }
+
+    # v1.32 §25.4: the chips of a v1.32 app (`next_steps` stays for old apps).
+    answer_risi =
+      case NextActions.build(retry || raw_steps) do
+        [] -> answer_risi
+        actions -> Map.put(answer_risi, "next_actions", actions)
+      end
+
+    # v1.32 §29.7: the phone lists the asker's own events under the answer (own Risi chat only).
+    answer_risi =
+      with true <- ctx.in_risi_chat?,
+           %{} = le <- CalendarHonesty.local_events(checks) do
+        Map.put(answer_risi, "local_events", le)
+      else
+        _ -> answer_risi
+      end
 
     Audience.deliver(ctx, answer, answer_risi, st.personal)
   end

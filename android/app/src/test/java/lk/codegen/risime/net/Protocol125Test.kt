@@ -29,7 +29,7 @@ class Protocol125Test {
             val s = read(f).trim()
             assertEquals(f, ProtocolJson.parseToJsonElement(s), ProtocolJson.encodeToJsonElement(RisiToolResult.serializer(), ProtocolJson.decodeFromString(s)))
         }
-        assertEquals("""{"status":"declined","result":null}""", ProtocolJson.encodeToString(RisiToolResult.serializer(), RisiToolResult.declined()))
+        assertEquals("""{"status":"declined"}""", ProtocolJson.encodeToString(RisiToolResult.serializer(), RisiToolResult.declined()))
         assertEquals("""{"status":"error","result":{"code":"unknown_tool"}}""", ProtocolJson.encodeToString(RisiToolResult.serializer(), RisiToolResult.error(RisiToolErrorCodes.UNKNOWN_TOOL)))
     }
 

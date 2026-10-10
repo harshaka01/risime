@@ -81,8 +81,8 @@ private fun PromiseRow(c: RisiCommitment, me: String, nameOf: (String) -> String
                 TextButton(onClick = open, modifier = Modifier.testTag("risi_promise_from_note")) { Text("From note: " + (bits.title ?: "open"), maxLines = 1) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                bits.done?.let { OutlinedButton(onClick = it, enabled = !bits.busy, modifier = Modifier.testTag("risi_promise_done")) { Text("Done") } }
-                bits.reopen?.let { OutlinedButton(onClick = it, enabled = !bits.busy, modifier = Modifier.testTag("risi_promise_reopen")) { Text("Reopen") } }
+                bits.done?.let { OutlinedButton(onClick = it, enabled = !bits.busy, modifier = Modifier.testTag("risi_promise_done")) { Text("Done", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } }
+                bits.reopen?.let { OutlinedButton(onClick = it, enabled = !bits.busy, modifier = Modifier.testTag("risi_promise_reopen")) { Text("Reopen", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } }
             }
         }
     }
@@ -330,7 +330,7 @@ fun RisiFactsScreen(model: RisiFactsModel, onBack: () -> Unit) {
                                             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_fact_period"))
                                         }
                                     }
-                                    TextButton(onClick = { model.delete(f.factId) }, modifier = Modifier.testTag("risi_fact_delete")) { Text("Delete") }
+                                    TextButton(onClick = { model.delete(f.factId) }, modifier = Modifier.testTag("risi_fact_delete")) { Text("Delete", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                                 }
                                 HorizontalDivider()
                             }
@@ -347,7 +347,7 @@ fun RisiFactsScreen(model: RisiFactsModel, onBack: () -> Unit) {
             title = { Text(DELETE_EVERYTHING_LABEL + "?") },
             text = { Text("Risi forgets everything it has stored about you. This can't be undone.") },
             confirmButton = { TextButton(onClick = model::confirmDeleteAll, modifier = Modifier.testTag("risi_delete_all_confirm")) { Text(DELETE_EVERYTHING_LABEL) } },
-            dismissButton = { TextButton(onClick = model::cancelDeleteAll) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = model::cancelDeleteAll) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
 }

@@ -125,7 +125,7 @@ class AppContainer(
     )
 
     private val http = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS) // P0 2026-10-10: a stalled connect is retried within seconds
         .readTimeout(20, TimeUnit.SECONDS)
         .build()
 
@@ -833,6 +833,11 @@ class AppContainer(
 
     // ---- Images (contract v1.11 §14, decision 042). Only with the native core (media API). ----
     private val appContext: Context = context.applicationContext
+
+    /** v1.32 §25.4 deep links from Risi chips (Android settings screens). */
+    fun startExternal(i: android.content.Intent) { runCatching { appContext.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+
+    val packageNameForLinks: String get() = appContext.packageName
 
     fun appContentResolver(): android.content.ContentResolver = appContext.contentResolver
     val mediaCrypto: lk.codegen.risime.data.media.MediaCrypto? by lazy {
@@ -1603,6 +1608,7 @@ class AppContainer(
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 foreground.value = true
+                realtime.networkChanged() // reconnect now, not after a long backoff
                 appLock.checkOnReturn()
                 scope.launch { appLock.onForeground() }
                 refreshCapabilities()
@@ -1621,6 +1627,18 @@ class AppContainer(
                 scope.launch { sessionStore.setNotifiedUpTo(System.currentTimeMillis()) }
             }
         })
+        // P0 2026-10-10: a network change (Wi-Fi <-> mobile, back from offline) drops pooled connections
+        // and starts the reconnect backoff over, so a stall is recovered in seconds.
+        runCatching {
+            appContext.getSystemService(android.net.ConnectivityManager::class.java)?.registerDefaultNetworkCallback(
+                object : android.net.ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: android.net.Network) {
+                        http.connectionPool.evictAll()
+                        realtime.networkChanged()
+                    }
+                },
+            )
+        }.onFailure { Log.w("RisiMe", "connectivity callback not registered: ${it.message}") }
         // Connected only while in the foreground (+ a 5-s grace) and signed in with a bearer. In the
         // background the socket is closed so the server pushes (P0 background delivery).
         scope.launch {
@@ -1726,7 +1744,8 @@ class AppContainer(
             combine(foreground, oidcReady()) { fg, u -> fg && u }.distinctUntilChanged().collectLatest { active ->
                 while (active) {
                     delay(auth.refreshDueInMs() ?: break)
-                    auth.bearer(forceRefresh = true)
+                    // Transient failure: retried after 1 s, 3 s, 7 s, then 15/30 s; never a sign-out.
+                    auth.refreshWithRetry()
                 }
             }
         }
@@ -2154,7 +2173,14 @@ class AppContainer(
     }
 
     /** Socket upgrade refused / join unauthorized: ask GET /me why (contract §6.2). */
-    private suspend fun onSocketRefused(): Boolean = when (val o = meOutcome(api.me())) {
+    private suspend fun onSocketRefused(): Boolean {
+        // A refresh that is failing transiently left an expired token: retry it first (one attempt,
+        // 5-s connect timeout) rather than treating the 401 as a sign-in problem.
+        if (auth.refreshFailingTransiently()) runCatching { auth.bearer(forceRefresh = true) }
+        return onSocketRefusedAfterRefresh()
+    }
+
+    private suspend fun onSocketRefusedAfterRefresh(): Boolean = when (val o = meOutcome(api.me())) {
         is MeOutcome.Ok -> true
         is MeOutcome.NeedsPhone -> {
             // §7.2: show the phone screen; don't reconnect in a loop.

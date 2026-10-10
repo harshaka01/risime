@@ -90,7 +90,7 @@ private fun LoginScreen(s: LoginUiState, vm: LoginViewModel, authUi: AuthUi, not
             OutlinedTextField(
                 value = s.serverUrl,
                 onValueChange = vm::onServerUrl,
-                label = { Text("Server URL") },
+                label = { Text("Server URL", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 singleLine = true,
                 isError = s.serverError != null,
                 supportingText = s.serverError?.let { { Text(it) } },
@@ -104,7 +104,7 @@ private fun LoginScreen(s: LoginUiState, vm: LoginViewModel, authUi: AuthUi, not
             TextButton(onClick = {
                 vm.applyServer()
                 editServer = false
-            }) { Text("Use this server") }
+            }) { Text("Use this server", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         } else {
             TextButton(onClick = { editServer = true }) {
                 Text("Server: ${s.serverUrl} · Change", style = MaterialTheme.typography.bodySmall)
@@ -119,7 +119,7 @@ private fun LoginScreen(s: LoginUiState, vm: LoginViewModel, authUi: AuthUi, not
                 val dev = SignInOption.DEV in choice.options
                 if (oidc) RisiCloudSignIn(choice, authUi)
                 if (dev && oidc) {
-                    TextButton(onClick = vm::toggleDevForm) { Text("Developer sign-in (OTP)") }
+                    TextButton(onClick = vm::toggleDevForm) { Text("Developer sign-in (OTP)", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 }
                 if (dev && (!oidc || s.devFormOpen)) DevLoginForm(s, vm)
             }
@@ -133,7 +133,7 @@ private fun DevLoginForm(s: LoginUiState, vm: LoginViewModel) {
     OutlinedTextField(
         value = s.phone,
         onValueChange = vm::onPhone,
-        label = { Text("Phone number") },
+        label = { Text("Phone number", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Next),
         modifier = Modifier.fillMaxWidth(),
@@ -141,7 +141,7 @@ private fun DevLoginForm(s: LoginUiState, vm: LoginViewModel) {
     OutlinedTextField(
         value = s.email,
         onValueChange = vm::onEmail,
-        label = { Text("Work email") },
+        label = { Text("Work email", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Done),
         modifier = Modifier.fillMaxWidth(),
@@ -183,7 +183,7 @@ fun OtpContent(s: LoginUiState, onCode: (String) -> Unit, onVerify: () -> Unit, 
         OutlinedTextField(
             value = s.code,
             onValueChange = onCode,
-            label = { Text("6-digit code") },
+            label = { Text("6-digit code", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             singleLine = true,
             enabled = !s.busy && !s.codeLocked,
             textStyle = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 6.sp, textAlign = TextAlign.Center),
@@ -200,6 +200,6 @@ fun OtpContent(s: LoginUiState, onCode: (String) -> Unit, onVerify: () -> Unit, 
         TextButton(onClick = onResend, enabled = s.canSend, modifier = Modifier.testTag(OTP_RESEND_TAG)) {
             Text(if (s.resendInSec > 0) "Resend in ${CodeLimits.countdown(s.resendInSec)}" else "Resend code")
         }
-        TextButton(onClick = onBack) { Text("Change phone or email") }
+        TextButton(onClick = onBack) { Text("Change phone or email", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
     }
 }

@@ -25,6 +25,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
   @connect "Connect it in Settings → Risi skills → Calendar."
   @max_named 6
+  @sync_off_why "sync is off, so it may be out of date"
 
   @doc """
   A check as the turn keeps it: `%{status, result, reason}` (`result` the `calendar_check` step
@@ -129,19 +130,9 @@ defmodule RisiMe.Agent.CalendarHonesty do
   # Sources in the §29.7 order, Risi Calendar · Google Calendar · Phone calendar as of v1.31
   # (with no link in play: Risi Calendar · Phone calendar, and Google `not_connected`).
   defp v129_sources(%{"sources" => sources}) do
-    sources =
-      if Enum.any?(sources, &(&1["source"] == "google_api")),
-        do: sources,
-        else:
-          sources ++
-            [
-              %{
-                "source" => "google_api",
-                "read_ok" => false,
-                "reason" => "not_connected",
-                "calendars" => []
-              }
-            ]
+    # P0 2026-10-10: a Google API link that is not in play is not a source at all: the phone
+    # provider already covers Google accounts synced to the phone.
+    sources = Enum.reject(sources, &ClientTools.never_connected_google?/1)
 
     order =
       if linked?(sources),
@@ -299,12 +290,12 @@ defmodule RisiMe.Agent.CalendarHonesty do
     # The phone's own reason first ("google_api" is `not_connected` until it is built).
     failed =
       sources
-      |> Enum.reject(&(&1["read_ok"] == true))
+      |> Enum.reject(&(&1["read_ok"] == true or ClientTools.never_connected_google?(&1)))
       |> Enum.sort_by(&(&1["reason"] == "not_connected"))
 
     cond do
       read != [] -> {:ok, read}
-      s = List.first(failed) -> {:error, reason_text(s["reason"] || "no_calendars")}
+      s = List.first(failed) -> {:error, trusted_reason(s)}
       true -> {:error, reason_text("no_calendars")}
     end
   end
@@ -322,7 +313,12 @@ defmodule RisiMe.Agent.CalendarHonesty do
   def trusted(%{reason: r}) when is_binary(r), do: {:error, reason_text(r)}
   def trusted(_), do: {:error, "the phone couldn't read its calendar"}
 
+  # v1.32 §29.7: sync off is told apart from no access and from an empty read.
+  defp trusted_reason(%{"reason" => "sync_off"}), do: @sync_off_why
+  defp trusted_reason(s), do: reason_text(s["reason"] || "no_calendars")
+
   @doc "The words for a phone's `reason` code."
+  def reason_text("sync_off"), do: "sync is off"
   def reason_text("no_permission"), do: "calendar permission is off"
   def reason_text("no_calendars"), do: "no calendars on this phone"
   def reason_text("no_google_calendar"), do: "no Google account calendar on this phone"
@@ -363,6 +359,11 @@ defmodule RisiMe.Agent.CalendarHonesty do
     do: "I couldn't use your calendar on this phone (#{reason}). #{@connect}"
 
   @doc "The sentence for an untrustworthy read."
+  def cant_read(@sync_off_why),
+    do:
+      "I couldn't read your calendar on this phone (#{@sync_off_why}). " <>
+        "Turn on sync in Settings → Risi skills → Calendar → Details."
+
   def cant_read(reason),
     do: "I couldn't read your calendar on this phone (#{reason}). #{@connect}"
 
@@ -399,7 +400,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
   def answer_sources(checks) do
     case List.last(checks) do
       %{status: "ok", result: %{"sources" => sources}} when is_list(sources) ->
-        for s <- sources do
+        for s <- sources, not ClientTools.never_connected_google?(s) do
           base = %{
             "type" => "calendar_source",
             "source" => s["source"],
@@ -421,6 +422,23 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
       _ ->
         []
+    end
+  end
+
+  @doc """
+  v1.32 §29.7 `answer.local_events`: `%{"from", "to"}` (the checked range) when the last check
+  holds a successful `phone_provider` read, else nil. The caller adds it in the asker's own
+  Risi chat only.
+  """
+  def local_events(checks) when is_list(checks) do
+    case List.last(checks) do
+      %{status: "ok", result: %{"sources" => ss, "from" => f, "to" => t}}
+      when is_list(ss) and is_binary(f) and is_binary(t) ->
+        if Enum.any?(ss, &(&1["source"] == "phone_provider" and &1["read_ok"] == true)),
+          do: %{"from" => f, "to" => t}
+
+      _ ->
+        nil
     end
   end
 

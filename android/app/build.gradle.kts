@@ -453,7 +453,7 @@ abstract class CheckNoGcalSeam : DefaultTask() {
 
     @TaskAction
     fun check() {
-        val needles = listOf("GCAL_TEST", "GcalTestReceiver", "FakeGcalAuthorizer")
+        val needles = listOf("GCAL_TEST", "GcalTestReceiver", "FakeGcalAuthorizer", "CALENDAR_SEED", "CalendarSeedReceiver")
         val patterns = needles.flatMap { listOf(it.toByteArray(Charsets.UTF_8), it.toByteArray(Charsets.UTF_16LE)) }
         val files = apks.get().asFile.walkTopDown().filter { it.isFile && it.name.endsWith(".apk") }.toList()
         if (files.isEmpty()) throw GradleException("no release APK to check under ${apks.get().asFile}")
@@ -480,7 +480,7 @@ abstract class CheckNoGcalSeam : DefaultTask() {
     }
 }
 val checkNoGcalSeam = tasks.register<CheckNoGcalSeam>("checkNoGcalSeamInRelease") {
-    description = "Fails if the GCAL_TEST receiver or action string is in the release APK (contract v1.31 §31.11)"
+    description = "Fails if the GCAL_TEST or CALENDAR_SEED receiver or action string is in the release APK (contract v1.31 §31.11)"
     apks.set(layout.buildDirectory.dir("outputs/apk/release"))
     stamp.set(layout.buildDirectory.file("gcalSeam/release.txt"))
 }

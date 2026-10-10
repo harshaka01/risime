@@ -185,7 +185,7 @@ fun LazyListScope.officialInfoItems(ui: OfficialInfoUi, onToggle: (Boolean) -> U
             Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.lg)) {
                 Row(Modifier.padding(Spacing.md), verticalAlignment = Alignment.CenterVertically) {
                     Text(e, Modifier.weight(1f).testTag("official_toggle_error"), color = MaterialTheme.colorScheme.onErrorContainer)
-                    TextButton(onClick = onDismissError) { Text("OK") }
+                    TextButton(onClick = onDismissError) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 }
             }
         }
@@ -213,7 +213,7 @@ private fun OfficialMemberRow(m: OfficialMemberUi) {
     ) {
         InitialsAvatar(m.name, photoKey = if (m.agent) null else m.userId)
         Spacer(Modifier.width(Spacing.md))
-        Text(if (m.me) "${m.name} (you)" else m.name, Modifier.weight(1f), maxLines = 1)
+        Text(if (m.me) "${m.name} (you)" else m.name, Modifier.weight(1f), fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
         if (m.agent) {
             Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small) {
                 Text(AI_AGENT_BADGE, Modifier.padding(horizontal = Spacing.sm, vertical = 2.dp).testTag("ai_agent_badge"), style = MaterialTheme.typography.labelSmall)
@@ -273,7 +273,7 @@ fun DmChatInfoContent(
                 Column(Modifier.fillMaxWidth().padding(Spacing.lg), horizontalAlignment = Alignment.CenterHorizontally) {
                     InitialsAvatar(name, size = Sizes.avatarLarge, photoKey = peerId)
                     Spacer(Modifier.heightIn(min = Spacing.sm))
-                    Text(name, style = MaterialTheme.typography.headlineSmall)
+                    Text(name, style = MaterialTheme.typography.headlineSmall, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     lk.codegen.risime.ui.chat.E2eeInfoLine(encrypted = encrypted, notEncryptedText = notEncryptedText)
                 }
             }

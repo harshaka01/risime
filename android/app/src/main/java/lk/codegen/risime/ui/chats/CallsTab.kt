@@ -178,7 +178,7 @@ fun CallsSelectionBar(count: Int, onClose: () -> Unit, onSelectAll: () -> Unit, 
         title = count.toString(),
         onBack = onClose,
         actions = {
-            TextButton(onClick = onSelectAll, modifier = Modifier.semantics { contentDescription = "Select all" }) { Text("All") }
+            TextButton(onClick = onSelectAll, modifier = Modifier.semantics { contentDescription = "Select all" }) { Text("All", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete") }
         },
     )
@@ -193,17 +193,17 @@ fun CallsDialogs(ui: CallsUi, rows: List<CallRow>, onDelete: (List<CallRecord>) 
             onDismissRequest = { ui.askDelete = false },
             title = { Text(deleteCallsTitle(recs.size)) },
             text = { Text("They are removed from the Calls list on this phone. The calls stay in the chats.") },
-            confirmButton = { TextButton(onClick = { ui.askDelete = false; ui.selected = emptySet(); onDelete(recs) }) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { ui.askDelete = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { ui.askDelete = false; ui.selected = emptySet(); onDelete(recs) }) { Text("Delete", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { ui.askDelete = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
     if (ui.askClear) {
         AlertDialog(
             onDismissRequest = { ui.askClear = false },
-            title = { Text("Clear call log?") },
+            title = { Text("Clear call log?", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
             text = { Text("Every call is removed from the Calls list on this phone. The calls stay in the chats.") },
-            confirmButton = { TextButton(onClick = { ui.askClear = false; ui.selected = emptySet(); onClear() }) { Text("Clear") } },
-            dismissButton = { TextButton(onClick = { ui.askClear = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { ui.askClear = false; ui.selected = emptySet(); onClear() }) { Text("Clear", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+            dismissButton = { TextButton(onClick = { ui.askClear = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
 }
@@ -231,7 +231,7 @@ fun CallInfoScreen(
                     Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More options") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            DropdownMenuItem(text = { Text("Remove from call log") }, onClick = { menu = false; onRemove() })
+                            DropdownMenuItem(text = { Text("Remove from call log", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { menu = false; onRemove() })
                         }
                     }
                 },
@@ -248,9 +248,9 @@ fun CallInfoScreen(
                 }
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.sm), horizontalArrangement = Arrangement.SpaceEvenly) {
-                TextButton(onClick = onMessage) { Text("Message") }
-                TextButton(onClick = { onCallBack(row.group.conversationId, false) }) { Text("Voice call") }
-                TextButton(onClick = { onCallBack(row.group.conversationId, true) }) { Text("Video call") }
+                TextButton(onClick = onMessage) { Text("Message", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                TextButton(onClick = { onCallBack(row.group.conversationId, false) }) { Text("Voice call", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                TextButton(onClick = { onCallBack(row.group.conversationId, true) }) { Text("Video call", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
             LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
                 items(row.group.calls, key = { it.clientMsgId }) { c ->

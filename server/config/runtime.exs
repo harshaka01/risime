@@ -284,6 +284,28 @@ if config_env() != :test do
     http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 end
 
+# Decision 075: /metrics and LiveDashboard on their own listener, 127.0.0.1 only. METRICS_PORT
+# (prod default 4021; dev default off so a dev run never collides with the pilot; `off` disables).
+if config_env() != :test do
+  default = if config_env() == :prod, do: "4021", else: "off"
+
+  case System.get_env("METRICS_PORT", default) do
+    "off" ->
+      config :risime, :ops_listener, false
+
+    port ->
+      config :risime, :ops_listener, true
+
+      config :risime, RisiMeWeb.OpsEndpoint,
+        server: true,
+        http: [ip: {127, 0, 0, 1}, port: String.to_integer(port)],
+        check_origin: ["https://monitor.risicloud.ai", "http://127.0.0.1:#{port}"],
+        secret_key_base:
+          System.get_env("SECRET_KEY_BASE") ||
+            raise("SECRET_KEY_BASE is missing from .env (needed by the ops endpoint)")
+  end
+end
+
 if config_env() == :prod do
   # Prod release (decision 024; the pilot of decision 023 runs at https://risime.risicloud.ai
   # behind Caddy on spark2). Everything comes from the environment; nothing here is a secret.
@@ -375,3 +397,14 @@ config :risime, :social,
     (System.get_env("INVITE_ADMINS") || "")
     |> String.split(",", trim: true)
     |> Enum.map(&String.trim/1)
+
+# Contract v1.32 §32: the watchdog's loopback POST /internal/ops-alert. No token, no route (404).
+if config_env() != :test do
+  config :risime, :ops_alert,
+    token: System.get_env("OPS_ALERT_TOKEN"),
+    phones:
+      (System.get_env("OPS_ALERT_PHONES") || "")
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+end

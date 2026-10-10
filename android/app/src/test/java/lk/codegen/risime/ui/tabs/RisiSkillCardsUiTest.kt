@@ -181,12 +181,36 @@ class RisiSkillCardsUiTest {
         assertEquals(listOf("act:${r.reminderId}:me_too"), h.calls)
     }
 
-    @Test fun answerV2ShowsStepsAndChipsThatPrefill() {
+    @Test fun answerV2WithoutASendPathShowsNoChips() {
         show(Host(asker), listOf(row("envelope_risi_answer_v2.json")))
         rule.onNodeWithTag("risi_steps").assertIsDisplayed()
         rule.onNodeWithText("✓ Checked your calendar").assertIsDisplayed()
+        rule.onNodeWithTag("risi_next_0").assertDoesNotExist()
+        assertEquals(null, prefilled)
+    }
+
+    // P0 2026-10-10: a chip runs its request (a risi_request ask), never fills the composer, never a plain message.
+    @Test fun aChipTapSendsItsTextToRisiAtOnce() {
+        val h = Host(asker)
+        val (m, r) = row("envelope_risi_answer_v2.json") { o -> JsonObject(o + ("next_steps" to kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("Check if you are free on Monday"), JsonPrimitive("What is next?"))))) }
+        val ctx = risiCardContext(h, listOf(m), { "You" }, now, onRef = {}, prefill = { prefilled = it }, sendChip = { RisiChips.send(h, it) })
+        rule.setContent { RisiMeTheme { Column { RisiCardRow(m, r, ctx) } } }
+        rule.onNodeWithText("Check if you are free on Monday").assertIsDisplayed()
+        rule.onNodeWithTag("risi_next_1").assertDoesNotExist() // a question is never a chip
         rule.onNodeWithTag("risi_next_0").performClick()
-        assertTrue(prefilled!!.isNotBlank())
+        assertEquals(listOf("ask:Check if you are free on Monday"), h.calls)
+        assertEquals(null, prefilled)
+    }
+
+    @Test fun chipsOnlyWhereTheyCanBeSentAndOnlyOnMyAnswer() {
+        val (_, r) = row("envelope_risi_answer_v2.json") { o -> JsonObject(o + ("next_steps" to kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("Check if you are free on Monday"))))) }
+        assertEquals(listOf("Check if you are free on Monday"), RisiChips.visible(r.copy(forUsers = emptyList()), asker, readOnly = false, canSend = true))
+        assertEquals(emptyList<String>(), RisiChips.visible(r, asker, readOnly = true, canSend = true))
+        assertEquals(emptyList<String>(), RisiChips.visible(r, asker, readOnly = false, canSend = false))
+        assertEquals(emptyList<String>(), RisiChips.visible(r.copy(forUsers = listOf(other)), asker, readOnly = false, canSend = true))
+        val h = Host(asker)
+        RisiChips.send(h, "  ")
+        assertEquals(emptyList<String>(), h.calls)
     }
 
     @Test fun progressBubbleShowsTheStepAndStillWorking() {

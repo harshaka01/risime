@@ -35,7 +35,8 @@ defmodule RisiMe.Agent.Capabilities do
   }
 
   @coming [
-    {"calendar_check", "checking your calendar and adding events to it"},
+    {"calendar_check",
+     "checking your calendar and adding events to it (needs the Calendar skill and the phone)"},
     {"set_reminder", "reminders on request"},
     {"search_chats", "searching your chats"},
     {"remember", "remembering notes for you"},
@@ -61,7 +62,27 @@ defmodule RisiMe.Agent.Capabilities do
     #{Enum.map_join(now(tools), "\n", &("- " <> &1))}
     Coming soon (not available yet; never pretend to do these):
     #{Enum.map_join(coming(tools), "\n", &("- " <> &1))}
+    #{calendar_rules()}
     """
+  end
+
+  @doc """
+  What Risi may say about calendars (P0 2026-10-10, Harsha: Risi said it could not read Google
+  Calendar). Google accounts synced to the phone are part of the phone's calendar provider; only
+  the separate Google API link (§31) is optional, and its absence is never a reason to refuse.
+  """
+  def calendar_rules do
+    "Calendars: the asker's phone calendar includes the Google accounts synced to the phone, " <>
+      "so you can read and add events there with the calendar tools when they are offered. " <>
+      "Google Calendar on the phone is within reach for both. Answer a calendar question only from " <>
+      "the calendar tool result: say what it found, or exactly why it could not read (no " <>
+      "calendar permission, sync off, the phone did not answer). Never say the asker is free " <>
+      "without a successful read. For \"what's on my calendar\" answer with the busy times; the " <>
+      "phone lists the events (titles) under your answer, so never say you can't see titles " <>
+      "in a way that sounds like you can't read the calendar. Writes: never state that an event, " <>
+      "reminder or alarm was added or set; you only propose it on a card. The server reports a " <>
+      "write after the phone confirms it. When no calendar tool is offered, say the Calendar skill " <>
+      "must be turned on (Settings → Risi skills → Calendar); never say the calendar can't be read."
   end
 
   @doc "A short sentence of what Risi can do now and what's coming (server-built answers)."
@@ -92,7 +113,7 @@ defmodule RisiMe.Agent.Capabilities do
   def retry_instruction do
     "Don't say that the transcript, chat or context does not contain something. If you can't " <>
       "answer from what you have, say plainly what you can do now and what is coming, and offer " <>
-      "an alternative (for example: \"I can't see your calendar yet. Calendar access is coming " <>
+      "an alternative (for example: \"I can't ask RisiWork yet. It is coming " <>
       "soon; want me to set a reminder instead?\"). Answer again in the same JSON format."
   end
 

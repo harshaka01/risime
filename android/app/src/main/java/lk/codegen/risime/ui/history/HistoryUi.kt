@@ -59,7 +59,7 @@ fun HistoryPromptDialog(p: HistoryProvideEntity, name: String, onAnswer: (Boolea
             }
         },
         confirmButton = { TextButton(onClick = { onAnswer(true) }) { Text(if (p.own) "Allow" else "Share") } },
-        dismissButton = { TextButton(onClick = { onAnswer(false) }) { Text("Not now") } },
+        dismissButton = { TextButton(onClick = { onAnswer(false) }) { Text("Not now", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 

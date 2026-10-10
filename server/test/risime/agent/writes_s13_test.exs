@@ -197,7 +197,10 @@ defmodule RisiMe.Agent.WritesS13Test do
     {422, _} = result!(ctx, d["tool_call_id"], %{"status" => "maybe", "result" => nil})
 
     {204, _} =
-      result!(ctx, d["tool_call_id"], %{"status" => "ok", "result" => %{"event_id" => "e1"}})
+      result!(ctx, d["tool_call_id"], %{
+        "status" => "ok",
+        "result" => %{"event_id" => "e1", "verified" => true}
+      })
 
     assert :ok = Task.await(task)
     assert_receive {:risi_post, rc, "Added to your calendar: Dentist · Fri 9 Oct, 10–11 AM", a}
@@ -210,11 +213,100 @@ defmodule RisiMe.Agent.WritesS13Test do
 
     # A second result: 409. A repeated confirm: nothing.
     {409, %{"error" => %{"code" => "tool_call_expired"}}} =
-      result!(ctx, d["tool_call_id"], %{"status" => "ok", "result" => %{"event_id" => "e1"}})
+      result!(ctx, d["tool_call_id"], %{
+        "status" => "ok",
+        "result" => %{"event_id" => "e1", "verified" => true}
+      })
 
     args = action!(ctx.rc, h.user, "confirm_write", card["write_id"], ctx.dev)
     assert :ok = perform_job(Job, args)
     assert events(h.user.id, "risi_tool_call") == []
+  end
+
+  test "write honesty canary (P0 2026-10-10): nothing says 'added' without event_id + verified",
+       ctx do
+    card = card!(ctx)
+    h = ctx.harsha
+    Application.put_env(:risime, :risi_tool_deadline_ms, 5_000)
+
+    flush = fn flush ->
+      receive do
+        {:risi_post, _, _, _} -> flush.(flush)
+      after
+        0 -> :ok
+      end
+    end
+
+    run = fn reply ->
+      flush.(flush)
+
+      task = run_async(action!(ctx.rc, h.user, "confirm_write", card["write_id"], ctx.dev))
+      d = wait_call(h.user.id)["data"]
+
+      if reply do
+        {204, _} = result!(ctx, d["tool_call_id"], reply)
+      else
+        Application.put_env(:risime, :risi_tool_deadline_ms, 100)
+      end
+
+      Task.await(task)
+      Application.put_env(:risime, :risi_tool_deadline_ms, 5_000)
+    end
+
+    posts = fn ->
+      for _ <- 1..1, reduce: [] do
+        acc ->
+          receive do
+            {:risi_post, _, body, risi} -> [{body, risi} | acc]
+          after
+            500 -> acc
+          end
+      end
+    end
+
+    claims? = fn body ->
+      body =~ ~r/Added to your|I've added|I have added/i
+    end
+
+    # 1. event_id without `verified` (an old phone): reported, not confirmed.
+    run.(%{"status" => "ok", "result" => %{"event_id" => "e1"}})
+    [{body, risi}] = posts.()
+    refute claims?.(body)
+
+    assert body ==
+             "Your phone reported the event as added, but couldn't confirm it. Please check your calendar."
+
+    refute Map.has_key?(risi, "added_event")
+
+    # 2. each error code, top-level `code` as in the contract example.
+    for {code, text} <- [
+          {"no_permission", "calendar access is off"},
+          {"read_only_calendar", "your calendars are read-only"},
+          {"insert_failed", "the phone's calendar refused it"},
+          {"verify_failed", "the event wasn't there when I checked"}
+        ] do
+      run.(%{"status" => "error", "code" => code, "detail" => "x"})
+      [{body, _}] = posts.()
+      assert body == "I couldn't add it: " <> text <> "."
+      refute body =~ ~r/added/i
+    end
+
+    # 3. declined and the status no_permission.
+    run.(%{"status" => "declined", "result" => nil})
+    [{body, _}] = posts.()
+    assert body =~ "declined" and not claims?.(body)
+
+    # 4. a timeout.
+    run.(nil)
+    [{body, risi}] = posts.()
+    assert risi["code"] == "tool_timeout" and not claims?.(body)
+    refute body =~ ~r/added/i
+
+    # 5. and only event_id + verified says added, with `added_event`.
+    run.(%{"status" => "ok", "result" => %{"event_id" => "e1", "verified" => true}})
+    [{body, risi}] = posts.()
+    assert body == "Added to your calendar: Dentist · Fri 9 Oct, 10–11 AM"
+    assert risi["added_event"] == %{"event_id" => "e1"}
   end
 
   test "a phone that doesn't answer: tool_timeout, then Retry runs it again", ctx do
@@ -288,7 +380,10 @@ defmodule RisiMe.Agent.WritesS13Test do
       })
 
     {409, %{"error" => %{"code" => "write_not_confirmed"}}} =
-      result!(ctx, call.tool_call_id, %{"status" => "ok", "result" => %{"event_id" => "e"}})
+      result!(ctx, call.tool_call_id, %{
+        "status" => "ok",
+        "result" => %{"event_id" => "e", "verified" => true}
+      })
 
     # A forged write id is no better.
     {:ok, call} =
@@ -301,7 +396,10 @@ defmodule RisiMe.Agent.WritesS13Test do
       })
 
     {409, _} =
-      result!(ctx, call.tool_call_id, %{"status" => "ok", "result" => %{"event_id" => "e"}})
+      result!(ctx, call.tool_call_id, %{
+        "status" => "ok",
+        "result" => %{"event_id" => "e", "verified" => true}
+      })
   end
 
   test "the result endpoint: 404, 413, 409 after the deadline", ctx do

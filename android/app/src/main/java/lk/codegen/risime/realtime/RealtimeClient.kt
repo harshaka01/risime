@@ -92,6 +92,9 @@ interface RealtimeClient {
 
     fun stop()
 
+    /** The network changed or the app came to the foreground: skip any reconnect wait and start the backoff over. */
+    fun networkChanged() {}
+
     suspend fun sendMessage(msg: MsgSend): PushResult<MsgSendReply>
 
     /** §11.2 plaintext reaction: msg:send with `reaction` instead of `body`. */

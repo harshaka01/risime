@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -193,18 +194,22 @@ fun RisiTopBar(
                     Spacer(Modifier.width(if (onBack != null) Spacing.sm + Spacing.xxs else Spacing.md))
                 }
                 Column {
-                    val titleStyle = if (brand) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium
+                    val titleStyle = headerTitleStyle(if (brand) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium)
                     val titleColor = if (brand) MaterialTheme.colorScheme.primary else Color.Unspecified
                     if (titleSuffix == null) {
                         Text(
-                            title, style = titleStyle, color = titleColor,
+                            title, style = titleStyle, color = titleColor, fontWeight = FontWeight.Bold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.semantics { heading() },
+                            modifier = Modifier.semantics { heading() }.testTag("risi_header_title"),
                         )
                     } else {
+                        // P0 2026-10-10 ("Shenika · Risı"): the suffix used to be `softWrap = false` with the default Clip
+                        // overflow, so a sub-pixel overflow of its width clipped it to its line box, which cut the dot
+                        // of the "i" off. Now: font padding on, an untrimmed line height, the suffix never clips (the
+                        // name ellipsizes first), both on one baseline.
                         Row(Modifier.semantics(mergeDescendants = true) { heading() }) {
-                            Text(title, style = titleStyle, color = titleColor, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                            Text(titleSuffix, style = titleStyle, color = titleColor, maxLines = 1, softWrap = false)
+                            Text(title, style = titleStyle, color = titleColor, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).alignByBaseline().testTag("risi_header_title"))
+                            Text(titleSuffix, style = titleStyle, color = titleColor, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible, modifier = Modifier.alignByBaseline().padding(end = 2.dp).testTag("risi_header_suffix"))
                         }
                     }
                     if (!subtitle.isNullOrEmpty()) {
@@ -222,7 +227,17 @@ fun RisiTopBar(
         },
         actions = actions,
         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+        // P0 2026-10-10 ("Ris'" on nightly.47): the bar clips its content to its height; with a title and a subtitle
+        // at a large font scale 64 dp is not enough, so the bar grows with the font scale (never below 64 dp).
+        expandedHeight = headerBarHeight(androidx.compose.ui.platform.LocalDensity.current.fontScale, !subtitle.isNullOrEmpty()),
     )
+}
+
+/** The bar's height: 64 dp, or more for a title + subtitle at font scale > 1 (title 24 sp + subtitle 16 sp lines + 16 dp). */
+fun headerBarHeight(fontScale: Float, twoLines: Boolean): Dp {
+    val base = TopAppBarDefaults.TopAppBarExpandedHeight
+    if (!twoLines) return maxOf(base, (24 * fontScale + 28).dp)
+    return maxOf(base, ((24 + 16) * fontScale * 1.1f + 16).dp)
 }
 
 // ---- Lists ----
@@ -305,7 +320,7 @@ fun UnreadBadge(n: Int, modifier: Modifier = Modifier) {
 
 @Composable
 fun SectionHeader(text: String, modifier: Modifier = Modifier) {
-    Text(text, modifier.semantics { heading() }, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+    Text(text, modifier.semantics { heading() }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 // ---- Empty and error states ----
@@ -334,7 +349,7 @@ fun ErrorState(message: String, modifier: Modifier = Modifier, onRetry: (() -> U
         Icon(Icons.Default.Warning, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
         Spacer(Modifier.width(Spacing.sm))
         Text(message, Modifier.weight(1f), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-        if (onRetry != null) TextButton(onClick = onRetry) { Text("Retry") }
+        if (onRetry != null) TextButton(onClick = onRetry) { Text("Retry", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
     }
 }
 
@@ -644,3 +659,16 @@ fun memberColor(userId: String): Color {
 
 private val MEMBER_COLORS_LIGHT = listOf(Color(0xFF0B6E69), Color(0xFF9C4A00), Color(0xFF6A3FA0), Color(0xFF1F5FAD), Color(0xFFA0306A), Color(0xFF3C6E1F))
 private val MEMBER_COLORS_DARK = listOf(Color(0xFF6FD6CF), Color(0xFFFFB873), Color(0xFFCDB0FF), Color(0xFF9CC3FF), Color(0xFFFF9CC9), Color(0xFFA9DB86))
+
+/**
+ * A header title's style: one line with room above and below the glyphs at any font scale (font padding on, the
+ * line height at least 1.3 × the font size and never trimmed), so dots and descenders are never cut off.
+ */
+fun headerTitleStyle(base: androidx.compose.ui.text.TextStyle): androidx.compose.ui.text.TextStyle = base.copy(
+    lineHeight = if (base.fontSize.isSp && (!base.lineHeight.isSp || base.lineHeight.value < base.fontSize.value * 1.3f)) (base.fontSize.value * 1.3f).sp else base.lineHeight,
+    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = true),
+    lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
+        alignment = androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
+        trim = androidx.compose.ui.text.style.LineHeightStyle.Trim.None,
+    ),
+)

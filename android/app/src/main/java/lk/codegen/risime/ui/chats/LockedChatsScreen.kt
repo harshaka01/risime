@@ -133,7 +133,7 @@ fun LockedChatsScreen(
             title = { Text(r.name) },
             text = { Text("Unlocking moves this chat back to your chat list. Nothing is deleted.") },
             confirmButton = { TextButton(onClick = { unlockFor = null; vm.unlockChat(r) }) { Text(UNLOCK_CHAT_LABEL) } },
-            dismissButton = { TextButton(onClick = { unlockFor = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { unlockFor = null }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
     Scaffold(
@@ -244,20 +244,20 @@ fun SecretCodeDialog(onSave: (String) -> Unit, onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                 )
                 OutlinedTextField(
-                    code, { code = it }, label = { Text("Secret code") }, singleLine = true,
+                    code, { code = it }, label = { Text("Secret code", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 )
                 OutlinedTextField(
-                    again, { again = it }, label = { Text("Type it again") }, singleLine = true,
+                    again, { again = it }, label = { Text("Type it again", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 )
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(code) }, enabled = SecretCode.valid(code) && code == again) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = { onSave(code) }, enabled = SecretCode.valid(code) && code == again) { Text("Save", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 
@@ -288,9 +288,9 @@ fun LockedChatsResetSection(c: AppContainer, gate: LockGate = rememberLockGate()
                 TextButton(onClick = {
                     ask = false
                     scope.launch { c.lockedChats.resetAll() }
-                }) { Text("Unlock all") }
+                }) { Text("Unlock all", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             },
-            dismissButton = { TextButton(onClick = { ask = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { ask = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
     }
 }

@@ -51,7 +51,7 @@ fun SearchScreen(vm: SearchViewModel, onOpen: (String) -> Unit, onBack: () -> Un
                     TextField(
                         value = q,
                         onValueChange = vm::onQuery,
-                        placeholder = { Text("Search chats and people") },
+                        placeholder = { Text("Search chats and people", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                         singleLine = true,
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,

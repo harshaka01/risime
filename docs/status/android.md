@@ -1,5 +1,230 @@
 # Android status — 0.2 nightlies
 
+## READY fix: a successful read is read_ok (redroid LOCAL-only phone said "no calendars") (JVM gate green: 1620 tests, 0 failed, 9 skipped)
+- Cause: `CalendarRead.verdict` (P0 2026-10-09) made any read untrusted without a Google calendar (`no_google_calendar`) or with every Google calendar
+  SYNC_EVENTS=0 (`google_sync_off`), even after instances were read. A LOCAL-only phone with 4 events sent `read_ok:false`, `connected_sources: []`.
+- Now: `verdict` is read_ok=false only for "no calendars at all". `sync_off` (§29.7, contract) and query errors (`api_error`) are unchanged. The old heuristics are
+  `CalendarOverview.note`, shown in Details as a muted line (`risi_calendar_sources_note`, same texts as before), never sent and never read_ok.
+- Details/check agreement: Details and diagnostics "Counted" now also leave out RisiMe's own Google copies (`risi<hex32>` sync id), as calendar_check does.
+  The only remaining difference is the §31.4 skip of the connected Google account's provider events while Google is read through the API in the same check
+  (that's Google's own count). Test `detailsAndCalendarCheckAgreeOnTheSameProvider`: on the same fake provider, Details, calendar_check and diagnostics give the same
+  verdict and per-calendar counts (LOCAL only, mixed with hidden/unsynced Google, google_sync_off, cancelled, no calendars, a Risi copy).
+  `aLocalOnlyPhoneIsReadOkWithItsBlocks`: read_ok true, reason null, 4 events, 4 blocks, connected_sources [phone_provider].
+
+## READY P0 2026-10-10 (nightly.47 screenshots): calendar_add v1.32, event card, next_actions chips, Markdown in Risi bubbles, header height (JVM gate green: `assembleDebug testDebugUnitTest`, 1618 tests, 0 failed, 9 skipped)
+Branch `v1.32`, against contract 3641fca (§25.3 v1.32, §25.4 `next_actions`). No Room change, no new dependency (the Markdown renderer is ~150 lines of AnnotatedString).
+
+**Why "added" while it was in no calendar (evidence, pilot DB on spark2, ids only, titles are sealed and were not read)**
+- `risi_tool_calls`: the user who ran the 14:17 calendar check (de9b6235…, device ad92ca09… on nightly.47) has three `calendar_add` calls, all on 9 Oct
+  (15:22, 15:33, 16:05 UTC), all `answered`, each followed by a `calendar_added` entry in `risi_skill_activity`. The server writes that entry only on the
+  phone's `ok` with an `event_id` (`Skills.client_done`), and nightly.47 sends `ok` only after its read-back by id matched (calendar, title, start, end, all_day).
+  The user has no `calendar_add` on 10 Oct. So for those adds the phone's accept rule did not decline, and the insert did not fail and get swallowed. The rows were in this phone's
+  CalendarContract provider when it checked.
+- What nightly.47 lacked: no `requestSync` after the insert, and it couldn't read sync state at all (`READ_SYNC_SETTINGS` undeclared, fixed in d073737).
+  So an event written into a provider calendar whose Google sync never runs stays on the phone and never reaches Google Calendar. This matches the read side: on the
+  same phone every calendar showed 0 events while the Google Calendar app showed meetings, which means the provider's Google calendars weren't being synced.
+  Not provable without the phone. The new "Risi adds" lines in Calendar diagnostics show, for each add, the calendar and whether its row is still on the phone.
+- The other suspects, with tests: a read-only/holiday target is impossible (access >= 500, `targetIsThePick…NeverReadOnly`); a non-primary writable Google
+  calendar (a shared one) is no longer the default (the default is now a Google primary only); a LOCAL calendar is used only when picked or as "RisiMe";
+  insert exceptions and null rows are `insert_failed` with the exception in `detail` (`failureReasons`), never "added".
+
+**§25.3 v1.32 calendar_add (phone)**
+- Target: the picked calendar while `CALENDAR_ACCESS_LEVEL >= 500` (hidden allowed); else a Google primary (`IS_PRIMARY`, or named after or owned by its
+  account; shown and >= 500); else the local "RisiMe" calendar (ACCOUNT_TYPE_LOCAL, created as its sync adapter on first use, reused after).
+- Insert: CALENDAR_ID, TITLE, DTSTART, DTEND, EVENT_TIMEZONE (device zone; all-day: UTC midnights and `UTC`), AVAILABILITY busy. Read back by id and check calendar,
+  title, start, end, all_day; a mismatch deletes the row. Then `requestSync(account, AUTHORITY, MANUAL+EXPEDITED)` for a non-LOCAL account.
+- Wire: `{"status":"ok","result":{"event_id":"…","calendar":{…},"verified":true}}`; errors `{"status":"error","code":"no_permission|read_only_calendar|insert_failed|verify_failed","detail":"…"}`
+  (top level, detail <= 200 chars, never the title: e.g. `insert: the provider returned no row`, `insert: IllegalArgumentException: …`, `read-back: no row for id N`,
+  `read-back: start A != B`, `read-back: title differs`). `RisiToolResult.result` is now omitted when null (`{"status":"declined"}`). nightly.47's server accepts that.
+- Card texts kept on the phone: read_only "No calendar on this phone accepts new events. Add your Google account in Android Settings → Accounts, or choose a calendar.",
+  verify "The event wasn't there when the phone checked, so nothing was added."
+- Diagnostics gains "Risi adds (latest first):" with up to 5 lines `<ISO time> · <calendar label | failed: <code>> · event <id> · on this phone: yes|no[ · undone]`.
+
+**Event card (`added_event.event_id`)**: on `skill_done` (and an answer) that carries it, only on the phone whose write log holds that id. It shows the provider row:
+  - title (1 line, ellipsis) [`risi_added_event_title`]
+  - day/time like "Your events": `Sun 11 Oct · 09:00–10:00` / `… · All day` [`risi_added_event_when`]
+  - the calendar label `<account> · Google` [`risi_added_event_calendar`]
+  - a button `Open in Calendar` (ACTION_VIEW on `Events/<id>`, falling back to the calendar app at the event's day) [`risi_added_event_open`]
+
+  When the row is gone: `This event is no longer on this phone` [`risi_added_event_gone`]. Other devices show only the body. The old "Open" button shows only without `added_event`.
+
+**Chips (§25.4)**: `next_actions` when present (even an empty list = no chips). `ask` → `risi_request` ask with `text`; `open` → `settings.calendar` (Settings → Risi skills →
+Calendar), `settings.risi_skills`, `settings.notifications` (Android app notification settings), `settings.calendar_permission` (Android READ/WRITE_CALENDAR dialog;
+refused → Calendar skill settings), `calendar.event` (needs `event_id`; opens it). Unknown action/target, blank label, or a `calendar.event` without an id is dropped. Without
+`next_actions`, an old `next_steps` line matching Settings|Connect|Turn on|Allow|Enable|Open (case-insensitive word) becomes a deep link by keyword (notification →
+notifications; calendar + permission/access/allow → permission; skill → risi_skills; calendar → settings.calendar) or is not shown. Never sent as text:
+"Connect your calendar in Settings" now opens Calendar settings. Questions and confirm phrases are still dropped; at most 3. Tags `risi_next_<i>`.
+
+**Markdown in Risi bubbles** (answer text, summary, skill_done body, other Risi cards' body): `**bold**`/`__bold__`, `*italic*`/`_italic_` (word-bounded, so `2 * 3` and
+snake_case stay), `` `code` `` (monospace), `[label](https://…)` links (http/https only), `- `/`* `/`• `/`+ ` bullets (2-space nesting), `1. `/`1) ` numbered, `# ` headings (bold).
+An unpaired `**`/`__` is dropped, so no raw `**` is shown. Consecutive paragraphs stay one Text, so plain answers render exactly as before.
+
+**Header**: the subtitle was already its own Text (maxLines 1, ellipsis). The TopAppBar clips to its height, and that height was a fixed 64 dp. It is now
+`max(64 dp, (24+16) sp × fontScale × 1.1 + 16 dp)` with a subtitle (`headerBarHeight`): 64 dp at scale 1.0, 73 dp at 1.3. The suffix keeps overflow Visible, and has
+2 dp end padding for the glyph's overhang. Still to be checked on a device (redroid at 1.0/1.3 by root's ui-batch step).
+
+**Tests added**: `PhoneCalendarTest` (failure codes with details and no titles, verify gone, target pick/primary/RisiMe/never read-only, requestSync, all-day UTC, event card
+NotHere/Gone/Present); `RisiCalendarToolTest` (verified:true, error JSON shape); `ContractExamplesTest` (both v1.32 calendar_add examples round-trip);
+`RisiChipsTest` (every next_actions type, dropped unknowns, next_steps instructions → deep link or nothing, visibility, decoding); `AddedEventCardUiTest`;
+`RisiMarkdownTest` (spans, links, no raw `**`, lists/headings, rendering, header height).
+
+## READY v1.32 §29.7 answer.local_events "Your events" (JVM gate green: `assembleDebug testDebugUnitTest`, 1601 tests, 0 failed, 9 skipped)
+Branch `v1.32`, against contract a9c0720. No Room or dependency change; titles never leave the phone and are never logged; nothing is stored in the message.
+- `RisiMeta.localEvents` (`local_events: {from, to}`, `RisiLocalEventsRange`); `ContractExamplesTest` decodes `envelope_risi_answer_local_events.json`.
+- Shown only when the screen is the user's Risi chat (`RisiCardContext.risiChat`) AND the answer's `notify` names me AND the range parses with to > from and <= 14 days.
+  Never in an Official chat, a group, or on someone else's device. Built when shown (`RisiHost.localEvents` → `LocalEvents.build`): `PhoneCalendar.localEvents`
+  (the fixed read: every calendar, deleted/cancelled/declined out, all-day on local dates, RisiMe's own `risi<hex32>` Google copies left out) plus the cached
+  Risi Calendar events in the range (cancelled and declined out), sorted by start, then end, then title.
+- Exact strings (tags in brackets):
+  - header `Your events` [`risi_your_events`]
+  - row (maxLines 1, ellipsis; the title is last so it is what ellipsizes) [`risi_your_event_<i>`]:
+    `Mon 12 Oct · 10:00–11:00 · Standup`, `Thu 15 Oct · All day · Poya`, multi-day all-day `Thu 15 Oct – Sat 17 Oct · All day · Trip`,
+    a timed event of 24 h or more `Mon 12 Oct 10:00 – Tue 13 Oct 11:00 · <title>`, a blank title `(No title)`. Day = the locale's best `EEEdMMM` pattern,
+    time `HH:mm` or the 12-hour form per the phone's 24-hour setting.
+  - none [`risi_your_events_none`]: `No events in your phone calendars from Mon 12 Oct to Sun 18 Oct` (`to` is exclusive, so the last day shown is the day before it).
+  - cap: 30 rows, then `+N more` [`risi_your_events_more`].
+  - no permission [`risi_your_events_permission`]: `Allow calendar access to see your events` + button `Allow` [`risi_your_events_allow`]: Android's READ/WRITE_CALENDAR
+    dialog; granted → the list re-reads; refused (or the dialog can't show) → Settings → Risi skills → Calendar.
+  - provider error [`risi_your_events_failed`]: `Your phone's calendar couldn't be read.` (never "No events").
+- Tests: `LocalEventsTest` (who sees it, range checks, row texts, empty text, cap, Risi Calendar merge, phone read with exclusions/hidden calendar/Risi copy,
+  no permission), `YourEventsUiTest` (rows, none, no permission, not in Official, not on another user's device), ContractExamplesTest entry.
+
+## READY P0 2026-10-10 calendar "0 events", diagnostics, chips run, header clipping (JVM gate green: `assembleDebug testDebugUnitTest`, 1591 tests, 0 failed, 9 skipped; `RequiredUpdateScreenTest` failed once with "uncaught exceptions before the test started" and passed on rerun)
+Branch `v1.32`. No protocol, server, Room or dependency change; nothing is deleted or signed out (hard rule 9). Manifest: + `READ_SYNC_SETTINGS`, `READ_SYNC_STATS` (normal permissions, granted on update).
+
+**Root cause (what the code shows; Harsha's device not reproduced here)**
+- The read path already used `Instances` with an epoch-ms window (the URI is `.../instances/when/<fromMs>/<toMs>`, tested); the window, the projection
+  (every column is in AOSP's `sInstancesProjectionMap`, checked against CalendarProvider2 main) and the STATUS/SELF_ATTENDEE_STATUS filters (null counts) were not wrong.
+  Neither was the Details count's query: Details and the busy read use the same `instances()`.
+- What was wrong, each one able to give "0 events" or hide why:
+  1. `READ_SYNC_SETTINGS` was never declared, so `getMasterSyncAutomatically` / `getSyncAutomatically` always threw SecurityException, swallowed by `runCatching`:
+     the v1.32 "Sync is off" row could never appear (Details always looked "synced"). Fixed (manifest).
+  2. Calendars with `SYNC_EVENTS = 0` are never expanded into Instances by AOSP (`CalendarInstancesHelper.getEntries`: `sync_events != ?` with "0"), so they always read 0.
+     Now their non-recurring events are read from `Events` (recurring ones there are counted raw in diagnostics only).
+  3. VISIBLE = 0 calendars were left out of the busy read and the report, and "all Google calendars hidden" made the read untrusted. Now every calendar counts.
+  4. All-day instances (UTC midnights) were used as instants: an all-day Monday was Mon 05:30 → Tue 05:30 in Asia/Colombo, and the provider window cut them at the edges.
+     Now the provider is asked for a window one day wider on both sides and all-day rows move to local midnights of their dates before the window filter.
+  5. Query errors: the v1.31 projection fallback swallowed the first error; a null cursor returned an empty list ("0 events"); a failed Instances query made Details say
+     "No calendars on this phone." Now: both projections failing or a null cursor throws `CalendarQueryException`; Details keeps the calendars listed with
+     "events couldn't be read" and the reason "The phone's calendar couldn't be read."; `calendar_check` sends `read_ok:false`, reason `api_error`.
+  6. Deleted instances (`Events.deleted`, joined into Instances) were not excluded. Now excluded with cancelled and declined.
+- If Harsha's Pixel still shows 0 after this build, the new diagnostics settle it: "Events (raw): 0" on a Google calendar with SYNC_EVENTS 1 means the provider really
+  holds no events for it (the Google Calendar app shows its own store; the account's calendar sync has not delivered to the provider); "Events (raw): N · Instances …: 0" means
+  the provider's expansion is the problem; an "Error: …" line gives the exception.
+
+**Details → Calendar diagnostics (Settings → Risi skills → Calendar → Details, under "What Risi can read")** — exact strings, one Text per line, maxLines 1 + ellipsis
+(error lines 4); the copied text is the same lines joined by "\n" (blank lines between calendars). Tags: `risi_calendar_diagnostics`, button `risi_calendar_diagnostics_copy`,
+`risi_calendar_diagnostics_copied`.
+```
+Calendar diagnostics
+READ_CALENDAR: granted | not granted
+WRITE_CALENDAR: granted | not granted
+Auto-sync: on | off | unknown
+Window: next 7 days
+Calendars: <n>
+
+<display name, "(no name)">
+  Account: <account name>
+  Account type: <account type>
+  VISIBLE: 0|1 · SYNC_EVENTS: 0|1
+  Account sync: on|off|unknown · Sync state: active|pending|idle|unknown · Last sync: unknown
+  Events (raw): <n> · Instances next 7 days: <n> · Counted: <n>
+
+Errors: none            (or one "Error: <what>: <text>" line per error)
+```
+Button "Copy diagnostics", then "Copied". LOCAL calendars show "Account sync: unknown · Sync state: unknown". "Last sync" is always "unknown" (Android has no public
+last-sync time for another app's adapter). Account names are only shown and copied, never logged.
+Details row per calendar (unchanged format): `<account or name> · <Google|Phone only|…> · <n> events in the next 7 days` ("1 event in the next 7 days";
+"events couldn't be read" on a query error), then ` · hidden` / ` · sync off` flags. "Counted" in diagnostics equals the Details count.
+
+**Debug seam for redroid (debug source set only; `checkNoGcalSeamInRelease` now also fails on `CALENDAR_SEED` / `CalendarSeedReceiver`)**
+A local calendar (account "RisiMe Seed", ACCOUNT_TYPE_LOCAL, written as its sync adapter) and events in the real provider; needs `pm grant <pkg> android.permission.WRITE_CALENDAR`
+(and READ_CALENDAR). Result in `am broadcast`'s `data="…"`: `ok calendar_id=N`, `ok event_id=N`, `ok cleared=N`, `error: …`.
+```
+P=lk.codegen.risime.debug; A=lk.codegen.risime.debug.CALENDAR_SEED
+adb shell am broadcast -a $A -p $P --es op calendar [--es name "RisiMe Seed"] [--ez sync_events true]
+adb shell am broadcast -a $A -p $P --es op event --es title "Single" --es start 2026-10-12T09:00:00+05:30 --es end 2026-10-12T10:00:00+05:30
+adb shell am broadcast -a $A -p $P --es op event --es title "Weekly" --es start 2026-10-13T11:00:00+05:30 --es end 2026-10-13T11:30:00+05:30 --es rrule "FREQ=WEEKLY;COUNT=4"
+adb shell am broadcast -a $A -p $P --es op event --es title "All day" --ez all_day true --es date 2026-10-14 [--ei days 1]
+adb shell am broadcast -a $A -p $P --es op clear
+```
+`start`/`end` take ISO-8601 with an offset or epoch ms (end defaults to start + 1 h); `tz` (default the phone's zone) for timed events; all-day events are UTC midnights
+with EVENT_TIMEZONE UTC; a recurring event gets DURATION instead of DTEND. `--ez sync_events false` makes a calendar the provider doesn't expand (tests the Events fallback).
+Expected for a single event, a weekly event (first instance in the window), an all-day event and one 6 days out, all within the next 7 days (sync_events
+true): Details row "RisiMe Seed" / `RisiMe Seed · Phone only · 4 events in the next 7 days` (the weekly event counts once per 7 days), diagnostics
+`Events (raw): 4 · Instances next 7 days: 4 · Counted: 4`, `Account type: LOCAL`, `Account sync: unknown · Sync state: unknown · Last sync: unknown`.
+
+**Chips run the action**: the answer's `next_steps` chips are back (at most 3, questions/confirm phrases still hidden, `risi_next_<i>`); a tap calls
+`RisiHost.ask(text)` at once (`RisiChips.send`), the same `risi_request` `ask` as typing it in the Risi chat and pressing send; in an Official chat it is the @Risi request in
+that chat. There is no paste and no plain-message path. Hidden when read-only or on an answer `for` someone else. The envelope has no structured chip action (contract §25.4: strings).
+
+**Header clipping ("Shenika · Risı")**: `RisiTopBar` (every "<name> · Risi" header: 1:1 Official and group/Risi screens) used `softWrap=false` with the default Clip overflow on
+the suffix; a sub-pixel width overflow clipped the Text to its line box and cut the dot of the "i". Now the suffix has `overflow = Visible`, both texts share a baseline, and
+`headerTitleStyle` gives includeFontPadding = true, line height >= 1.3 x font size, `LineHeightStyle(Center, Trim.None)`; the name still ellipsizes first.
+
+**Tests added**: `CalendarInstancesTest` (declined/cancelled/deleted, null status counts, all-day Monday stays Monday in Asia/Colombo, window, every calendar whatever
+VISIBLE/SYNC_EVENTS, query error is never 0 (Details null count, `api_error`, diagnostics error line), durations, exact diagnostics text, no permission);
+`AndroidCalendarBackendTest` against the fake provider (Details counts with deleted/cancelled/declined, refused column → fallback, both refused → error, SecurityException → error,
+SYNC_EVENTS=0 calendar read from Events, all-day Monday through the provider); `CalendarDiagnosticsUiTest` (section + Copy → clipboard text); `RisiSkillCardsUiTest`
+(chip tap → `ask:<text>`, no prefill; visibility rules); `RisiCardsTest` (header title + suffix one line, no height overflow at font scale 1.0 and 1.3; style).
+
+## READY P0 2026-10-10 network-stall recovery (JVM gate green: `assembleDebug testDebugUnitTest`, 1572 tests, 0 failed, 9 skipped)
+Branch `v1.32`. No protocol, server, Room or dependency change; nothing is ever signed out or wiped on a transient failure (hard rule 9, app lock untouched).
+- Keycloak (AppAuth) connections: connect timeout 5 s (was 15 s), read 10 s (`TimedConnections`, `KeycloakTimeouts`; https only, loopback http in debug as before).
+- App OkHttp client (REST + websocket upgrade): connect timeout 5 s (was 10 s), read 20 s unchanged.
+- Refresh timing (`RefreshTiming`): refresh when the token has <= max(120 s, lifetime/3) left (300-s token: at 180 s; 10-min token: at 400 s). Lifetime comes from `expires_in`.
+  The margin exceeds the worst-case retry ladder (1+3+7 s waits + 4 x 5 s connect timeouts = 31 s).
+- Transient refresh failure (`AuthManager.refreshWithRetry`, used by the foreground refresh loop): retries after 1 s, 3 s, 7 s, then 15 s, then every 30 s, until it works,
+  invalid_grant (the only sign-out path, chats kept) or cancel. Still single-flight (one mutex). A socket refusal while the refresh is failing first retries the refresh once,
+  then `GET /me`; a 401 during a failing refresh keeps the session (as before).
+- Socket reconnect (`ReconnectBackoff`): base 1, 2, 5, 10, 30 s (cap 30 s), each scaled by jitter in [0.5, 1.0]. `RealtimeClient.networkChanged()` resets the backoff and wakes the wait;
+  called from a `ConnectivityManager` default-network callback (`onAvailable`, which also evicts pooled connections) and on app foreground.
+- Status line: after 20 s not connected, "Connecting…" reads "Connecting… (network is slow)" (`connectionStatus`; same three headers that already showed `connectionLabel`, no new UI).
+- Also: `ContractExamplesTest` now has a decoder for the new contract example `envelope_risi_ops_alert.json` (v1.32 §32; it decodes as a text with an unknown risi kind; no UI).
+- Tests added: RefreshTiming margin/delays, retry ladder, backoff jitter bounds (start <= 1 s, cap <= 30 s), Keycloak timeouts, retry sequence on a stalled refresh (virtual time 1+3+7 s),
+  retries past the ladder without sign-out, invalid_grant stops retries, single-flight refresh, refresh at 120 s left, networkChanged skips a 60-s backoff.
+
+## READY UI batch 2026-10-10 + v1.32 (JVM gate green: `assembleDebug testDebugUnitTest`, 1562 tests, 0 failed, 9 skipped)
+Branch `v1.32` (not main). Commits: c636e3c (v1.32 `sync_off`, Details, 422 re-send), d68f4cc (UI batch items 1-7), plus the status commit with this section.
+`PROTOCOL_VERSION` is "1.32". No Room change, no new dependency, no data is deleted by any of this (hard rule 9).
+
+**Run notes**
+- Item 9 (`PhoneCalendar.read`): `sync_off` exactly when every non-LOCAL account holding a visible calendar has sync off
+  (`ContentResolver.getSyncAutomatically(account, CalendarContract.AUTHORITY)`), or master sync is off. The source is `read_ok:false, reason:"sync_off"`,
+  calendars still listed, `blocks` still sent, and `connected_sources` still names `phone_provider` (as the server example does). One synced account keeps
+  `read_ok:true`. LOCAL calendars never cause it. `RisiToolCallHandler`: on `422` for a result containing `sync_off`, it re-sends once with `reason:"api_error"`.
+  The facade is `CalendarBackend.masterSyncOn()/accountSyncOn()/requestSync()` (fake in `FakeCalendarBackend`, real in `AndroidCalendarBackend`, tested under Robolectric).
+- Item 8 (Details): per account with sync off a row with the text, `Open sync settings` (`Settings.ACTION_SYNC_SETTINGS` + `EXTRA_ACCOUNT_TYPES`) and `Refresh`
+  (`ContentResolver.requestSync`, MANUAL+EXPEDITED, then Details re-reads after 1.5 s). Master off: one row "Auto-sync is off on this phone", the same buttons.
+- Item 5: ONE round FAB on Chats and Requests. The Calls tab keeps its own round "New call" button (a different tab and action; I did not fold it into the "New" sheet).
+  Calendar tab: no FAB. "New chat" opens a friend picker page (registered friends, 1:1 only); "New group" -> create group; "Add friend" -> add friend.
+- Item 3: the tab row is a `ScrollableTabRow` (edgePadding 0) with one-line labels, so "Requests" cannot wrap at any font scale (unit test at 1.3 on 1080 px).
+  All short literal `Text("...")` in `ui/` got `maxLines=1, overflow=Ellipsis` (264 places); long/dynamic body text is untouched.
+- Item 4: header icons are video + call only, then the ⋮. The lock icon is gone from DM and group headers (E2EE state stays in the subtitle "🔒 End-to-end encrypted" and the
+  per-chat strip). ⋮ has "Lock chat" / "Unlock chat" first (after the confirmation gate, same as chat info). The old test that forbade a lock in the menu was inverted.
+- Item 6: `rememberPhotoCropper` now opens the photo sheet; Take photo = `TakePicture` into the existing FileProvider cache (`cache/camera/avatar.jpg`, deleted after use),
+  Gallery = Photo Picker; both go to the existing square crop dialog and the existing upload. Used by Settings -> Profile and Group info (admins). The old extra
+  "Remove photo" button and the group dropdown were folded into the sheet.
+- Item 7 (chip audit): removed the Risi answer `next_steps` chips (they only pre-filled their label as chat text), the "Admin" chip and the owner chips (no action; now plain
+  labels). Kept real chips: `@Risi` toggle, follow-up "Continuing with Risi x" (dismiss), Calendar view/duration/reminder filter chips, debug sign-in mode.
+  A source-scan test fails if any chip has an empty `onClick` or its handler calls send/ask/prefill.
+- Item 1/2: the DM row no longer shows presence/last seen (line 3 removed; "vouched by" moved into the preview line when there is no message). Names/headers: top bar titles,
+  section headers, info-screen names and member names are bold.
+- Not done: no emulator on spark2, so none of this was run on a device (Robolectric only). Take photo needs a camera app on the phone (else a message "No camera app can take a photo on this phone").
+  The Details "Refresh" result is only visible after the provider actually syncs.
+- Contract note: v1.32 `next_steps` chips are "may"; I chose not to draw them. Tell me if root wants a real action for them instead.
+
+**UI batch 2026-10-10 strings** (exact, for ui-entry-test)
+- FAB content description: `New` (tag `new_fab`). Calls tab FAB description: `New call`.
+- FAB sheet rows, in order: `New chat`, `New group`, `Add friend` (tags `new_sheet_chat`, `new_sheet_group`, `new_sheet_friend`; sheet tag `new_sheet`). New chat page title: `New chat` (list tag `new_chat_list`).
+- Photo sheet rows: `Take photo`, `Gallery`, `Remove photo` (only when a photo is set); tags `photo_sheet`, `photo_sheet_take`, `photo_sheet_gallery`, `photo_sheet_remove`. Crop screen title `Move and scale`, buttons `Cancel`, `Use photo`.
+  Entry buttons: Settings -> Profile `Set photo` / `Change photo`; Group info: tap the group photo (admins).
+- Calendar Details (tag `risi_calendar_sources`), per account: `Sync is off for <account>`; master: `Auto-sync is off on this phone`; buttons `Open sync settings` (tag `risi_calendar_open_sync`) and
+  `Refresh` (tag `risi_calendar_refresh`); row tag `risi_calendar_sync_off`. Reason line when sync is off: `Calendar sync is off on this phone, so what Risi reads may be out of date.`
+  Permission row unchanged: `Phone calendar: permission on` / `Phone calendar: calendar permission is off on this phone, so Risi can't read it.`
+- Chat ⋮ menu: `Lock chat` (or `Unlock chat` while locked), tag `chat_menu_lock`, then `Clear chat`, `Delete chat`. Header content descriptions: video call, call, `More options`; no `End-to-end encrypted` lock icon.
+- Tabs: `Chats`, `Calls`, `Requests` (content description `Requests, N new` with pending requests), `Calendar`.
+
 ## v1.31 §31 Google Calendar link (decision 074) — READY v1.31 (JVM gate green; assembleRelease green, seam proven absent)
 Commits on main: 9de2f58 (models, decoders, `PROTOCOL_VERSION` 1.31), c21a1b1 (Google API client, Room v15), 45772bd (busy reads,
 copies, link manager, Settings section, debug seam, capability), e7439dd (rendering, tests), plus the status commit that adds this section.

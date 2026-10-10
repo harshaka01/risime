@@ -90,7 +90,7 @@ fun NotificationHealthScreen(c: AppContainer, onBack: () -> Unit) {
             }
             SectionHeader("Autostart and background")
             Text(oemGuidance(oemBrand(Build.MANUFACTURER, Build.BRAND)), style = MaterialTheme.typography.bodyMedium)
-            OutlinedButton(onClick = { probe.openAutostart() }, modifier = Modifier.fillMaxWidth()) { Text("Open phone settings") }
+            OutlinedButton(onClick = { probe.openAutostart() }, modifier = Modifier.fillMaxWidth()) { Text("Open phone settings", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             Spacer(Modifier.height(24.dp))
         }
     }

@@ -188,7 +188,7 @@ fun LockGateDialog(gate: LockGate) {
             onDismissRequest = { gate.needsScreenLock = false },
             title = { Text(SCREEN_LOCK_NEEDED_TITLE) },
             text = { Text(SCREEN_LOCK_NEEDED_TEXT) },
-            confirmButton = { TextButton(onClick = { gate.needsScreenLock = false }) { Text("OK") } },
+            confirmButton = { TextButton(onClick = { gate.needsScreenLock = false }) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
         )
         return
     }
@@ -196,7 +196,7 @@ fun LockGateDialog(gate: LockGate) {
     AlertDialog(
         onDismissRequest = { gate.problem = null },
         text = { Text(p) },
-        confirmButton = { TextButton(onClick = { gate.problem = null }) { Text("OK") } },
+        confirmButton = { TextButton(onClick = { gate.problem = null }) { Text("OK", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 
@@ -213,9 +213,9 @@ fun LockedChatGate(gate: LockGate, onUnlock: () -> Unit, onBack: () -> Unit, loa
     ) {
         Text("This chat is locked", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
         if (!loading) {
-            androidx.compose.material3.Button(onClick = { gate.run(LOCKED_CHATS_TITLE, onConfirmed = onUnlock) }) { Text("Unlock") }
+            androidx.compose.material3.Button(onClick = { gate.run(LOCKED_CHATS_TITLE, onConfirmed = onUnlock) }) { Text("Unlock", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
         }
-        TextButton(onClick = onBack) { Text("Back") }
+        TextButton(onClick = onBack) { Text("Back", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
     }
     LockGateDialog(gate)
 }

@@ -7,9 +7,8 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.semantics.contentDescription
@@ -37,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,6 +82,9 @@ fun ChatsScreen(
     val err by vm.refreshError.collectAsStateWithLifecycle()
     val friends by vm.friendsState.collectAsStateWithLifecycle()
     var menu by remember { mutableStateOf(false) }
+    var newSheet by remember { mutableStateOf(false) }
+    var newChat by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(enabled = newChat) { newChat = false }
     var askLogout by remember { mutableStateOf(false) }
     var askLogoutDelete by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -143,7 +146,7 @@ fun ChatsScreen(
                 )
             } else RisiTopBar(
                 title = "RisiMe",
-                subtitle = connectionLabel(conn),
+                subtitle = connectionStatus(conn),
                 brand = true,
                 avatar = {
                     androidx.compose.foundation.Image(
@@ -157,16 +160,16 @@ fun ChatsScreen(
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More options") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         if (tab == 1 && callRows.isNotEmpty()) {
-                            DropdownMenuItem(text = { Text("Clear call log") }, onClick = {
+                            DropdownMenuItem(text = { Text("Clear call log", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = {
                                 menu = false
                                 callsUi.askClear = true
                             })
                         }
-                        DropdownMenuItem(text = { Text("Invites") }, onClick = {
+                        DropdownMenuItem(text = { Text("Invites", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = {
                             menu = false
                             onInvites()
                         })
-                        DropdownMenuItem(text = { Text("Settings") }, onClick = {
+                        DropdownMenuItem(text = { Text("Settings", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = {
                             menu = false
                             onSettings()
                         })
@@ -178,7 +181,7 @@ fun ChatsScreen(
                                 onChatLockSettings()
                             }
                         })
-                        DropdownMenuItem(text = { Text("Log out") }, onClick = {
+                        DropdownMenuItem(text = { Text("Log out", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = {
                             menu = false
                             askLogout = true
                         })
@@ -194,54 +197,24 @@ fun ChatsScreen(
             )
         },
         floatingActionButton = {
-            Column(Modifier.navigationBarsPadding(), horizontalAlignment = androidx.compose.ui.Alignment.End, verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.md)) {
-                if (groupsAvailable && tab == 0) {
-                    ExtendedFloatingActionButton(
-                        onClick = onNewGroup,
-                        icon = { Icon(Icons.Default.Create, null) },
-                        text = { Text("New group") },
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    )
+            // v1.32 UI batch item 5: ONE round FAB. Chats / Requests: "New" -> sheet (New chat, New group, Add friend).
+            // Calls keeps its own round "New call" button (a different tab and action); Calendar has none.
+            if (tab == 1) {
+                if (!callsUi.selecting) {
+                    androidx.compose.material3.FloatingActionButton(
+                        onClick = { callsUi.newCall = true },
+                        shape = androidx.compose.foundation.shape.CircleShape,
+                        modifier = Modifier.navigationBarsPadding().semantics { contentDescription = "New call" },
+                    ) { Icon(Icons.Default.Call, null) }
                 }
-                if (tab == 1) {
-                    if (!callsUi.selecting) {
-                        ExtendedFloatingActionButton(
-                            onClick = { callsUi.newCall = true },
-                            modifier = Modifier.semantics { contentDescription = "New call" },
-                            icon = { Icon(Icons.Default.Call, null) },
-                            text = { Text("New call") },
-                        )
-                    }
-                } else if (tab != CALENDAR_TAB) {
-                    ExtendedFloatingActionButton(
-                        onClick = onAddFriend,
-                        icon = { Icon(Icons.Default.Add, null) },
-                        text = { Text("Add friend") },
-                    )
-                }
+            } else if (tab != CALENDAR_TAB) {
+                NewFab(onClick = { newSheet = true })
             }
         },
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
-            TabRow(selectedTabIndex = if (tab == CALENDAR_TAB && !calendarOn) 0 else tab) {
-                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Chats") })
-                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Calls") })
-                Tab(
-                    selected = tab == 2,
-                    onClick = { tab = 2 },
-                    text = {
-                        BadgedBox(badge = {
-                            if (friends.incoming.isNotEmpty()) Badge { Text(friends.incoming.size.toString()) }
-                        }) { Text("Requests") }
-                    },
-                    modifier = Modifier.semantics {
-                        contentDescription = "Requests" + if (friends.incoming.isNotEmpty()) ", ${friends.incoming.size} new" else ""
-                    },
-                )
-                if (calendarOn) Tab(selected = tab == CALENDAR_TAB, onClick = { tab = CALENDAR_TAB }, text = { Text("Calendar") }, modifier = Modifier.semantics { contentDescription = "Calendar" })
-            }
+            ChatsTabRow(tab = if (tab == CALENDAR_TAB && !calendarOn) 0 else tab, calendarOn = calendarOn, incoming = friends.incoming.size, onSelect = { tab = it })
             lk.codegen.risime.calls.FullScreenIntentPrompt()
             if (tab == CALENDAR_TAB && calendarOn && calendar != null) {
                 lk.codegen.risime.ui.calendar.RisiCalendarTab(calendar)
@@ -284,7 +257,51 @@ fun ChatsScreen(
         }
     }
     CallsOverlays(vm, callsUi, callRows, callBack, onOpen)
+    if (newSheet) {
+        NewSheet(
+            onNewChat = { newSheet = false; newChat = true },
+            onNewGroup = { newSheet = false; onNewGroup() },
+            onAddFriend = { newSheet = false; onAddFriend() },
+            onDismiss = { newSheet = false },
+        )
     }
+    if (newChat) {
+        androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            NewChatScreen(newChatCandidates(rows), onBack = { newChat = false }, onOpen = { newChat = false; onOpen(it) })
+        }
+    }
+    }
+}
+
+/**
+ * v1.32 item 3: the chat list's tabs. A scrollable row sizes each tab to its label, so "Requests" (with its badge)
+ * never wraps to two lines, at any font scale.
+ */
+@Composable
+fun ChatsTabRow(tab: Int, calendarOn: Boolean, incoming: Int, onSelect: (Int) -> Unit) {
+    ScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
+        Tab(selected = tab == 0, onClick = { onSelect(0) }, text = { TabLabel("Chats") })
+        Tab(selected = tab == 1, onClick = { onSelect(1) }, text = { TabLabel("Calls") })
+        Tab(
+            selected = tab == 2,
+            onClick = { onSelect(2) },
+            text = {
+                BadgedBox(badge = {
+                    if (incoming > 0) Badge { Text(incoming.toString()) }
+                }) { TabLabel("Requests") }
+            },
+            modifier = Modifier.semantics {
+                contentDescription = "Requests" + if (incoming > 0) ", $incoming new" else ""
+            },
+        )
+        if (calendarOn) Tab(selected = tab == CALENDAR_TAB, onClick = { onSelect(CALENDAR_TAB) }, text = { TabLabel("Calendar") }, modifier = Modifier.semantics { contentDescription = "Calendar" })
+    }
+}
+
+/** A tab label: one line, never wraps (item 3). */
+@Composable
+fun TabLabel(text: String) {
+    Text(text, maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
 }
 
 /** §29 the Calendar tab's index (after Chats, Calls, Requests). */
@@ -341,7 +358,7 @@ fun ChatSelectionBar(onClose: () -> Unit, onDelete: () -> Unit, onClear: () -> U
                     onLock?.let { f ->
                         DropdownMenuItem(text = { Text(lk.codegen.risime.ui.lock.LOCK_CHAT_LABEL) }, onClick = { more = false; f() })
                     }
-                    DropdownMenuItem(text = { Text("Clear chat") }, onClick = { more = false; onClear() })
+                    DropdownMenuItem(text = { Text("Clear chat", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { more = false; onClear() })
                 }
             }
         },
@@ -357,10 +374,28 @@ fun dmPreview(last: lk.codegen.risime.data.db.LastMessage): String = when {
     else -> lk.codegen.risime.push.bodyPreview(last.kind, last.body)
 }
 
-fun connectionLabel(s: ConnectionState): String? = when (s) {
+/** How long "Connecting…" runs before the status line says the network is slow. */
+const val CONNECTING_SLOW_AFTER_MS = 20_000L
+
+/** [connectionLabel] with the slow-network hint once not connected for [CONNECTING_SLOW_AFTER_MS]. */
+@Composable
+fun connectionStatus(s: ConnectionState): String? {
+    val notLive = s != ConnectionState.Live && s != ConnectionState.Syncing
+    var slow by remember { mutableStateOf(false) }
+    LaunchedEffect(notLive) {
+        slow = false
+        if (notLive) {
+            kotlinx.coroutines.delay(CONNECTING_SLOW_AFTER_MS)
+            slow = true
+        }
+    }
+    return connectionLabel(s, slow)
+}
+
+fun connectionLabel(s: ConnectionState, slow: Boolean = false): String? = when (s) {
     ConnectionState.Live -> null
     ConnectionState.Syncing -> "Syncing…"
-    ConnectionState.Connecting -> "Connecting…"
+    ConnectionState.Connecting -> if (slow) "Connecting… (network is slow)" else "Connecting…"
     ConnectionState.Disconnected -> "Waiting for network…"
     ConnectionState.AuthFailed -> "Signed out"
 }
@@ -374,7 +409,6 @@ fun tabIcon(tab: lk.codegen.risime.data.tabs.Tab?): String = when (tab) {
 
 @Composable
 internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> Unit)? = null) {
-    val presence = presenceLabel(row.presence, System.currentTimeMillis())
     if (row.risi) return RisiRowItem(row, onClick)
     if (row.group) return GroupRowItem(row, onClick, onLongClick)
     val sub = when {
@@ -382,7 +416,8 @@ internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> 
         !row.registered -> "Waiting for them to confirm their phone"
         row.typing -> TYPING_LABEL
         row.last != null -> tabIcon(row.lastTab) + dmPreview(row.last)
-        presence != null -> presence
+        // v1.32 UI batch: no "last seen" in the list (it stays in the chat header / info).
+        row.vouchedBy != null -> "vouched by ${row.vouchedBy}"
         else -> row.company
     }
     ListRow(
@@ -398,10 +433,6 @@ internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> 
             else -> null
         },
         badge = if (row.unread > 0) ({ UnreadBadge(row.unread) }) else null,
-        footer = listOfNotNull(
-            presence?.takeIf { !row.typing && row.last != null },
-            row.vouchedBy?.let { "vouched by $it" },
-        ).joinToString(" · ").ifEmpty { null },
         onClick = onClick,
         onLongClick = onLongClick?.takeIf { row.userId != null && (row.friend || row.last != null) },
     )

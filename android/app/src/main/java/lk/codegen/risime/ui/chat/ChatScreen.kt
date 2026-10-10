@@ -54,7 +54,7 @@ import androidx.compose.material3.TextButton
 import lk.codegen.risime.data.MessageStatus
 import lk.codegen.risime.net.AuthErrors
 import lk.codegen.risime.data.db.MessageEntity
-import lk.codegen.risime.ui.chats.connectionLabel
+import lk.codegen.risime.ui.chats.connectionStatus
 import lk.codegen.risime.ui.common.DaySeparator
 import lk.codegen.risime.ui.common.InitialsAvatar
 import lk.codegen.risime.ui.common.MessageBubble
@@ -74,6 +74,8 @@ fun ChatScreen(
     tabBar: (@Composable () -> Unit)? = null,
     /** The chat info screen (Lock chat; tabs on: the Official switch); null: the info dialog (tests). */
     onInfo: (() -> Unit)? = null,
+    /** v1.32 item 4: the ⋮ menu's "Lock chat" / "Unlock chat" (null: no item, e.g. tests). */
+    lock: lk.codegen.risime.ui.lock.ChatLockControl? = null,
 ) {
     val messages by vm.messages.collectAsStateWithLifecycle()
     val peer by vm.peer.collectAsStateWithLifecycle()
@@ -133,7 +135,7 @@ fun ChatScreen(
                 title = name,
                 subtitle = when {
                     typing -> TYPING_LABEL
-                    else -> connectionLabel(conn)
+                    else -> connectionStatus(conn)
                         ?: (if (phoneUnconfirmed) lk.codegen.risime.ui.auth.PHONE_NOT_VERIFIED else null)
                         ?: if (encrypted) "🔒 End-to-end encrypted" else null
                         ?: presenceLabel(presence, System.currentTimeMillis())
@@ -158,9 +160,9 @@ fun ChatScreen(
                         onBlocked = { t -> vm.imgs.toast.value = t; vm.calls.refresh() },
                         onCall = vm::startCall,
                     )
-                    E2eeHeaderLock(encrypted) { if (onInfo != null) onInfo() else showInfo = true }
+                    // v1.32 item 4: icons <= 2 (video, call); the lock action is in the ⋮ menu, the E2EE state in the subtitle.
                     ChatOverflowMenu(
-                        onClear = { clearAsk = false }, onDelete = { clearAsk = true },
+                        onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock,
                         extra = if (vm.scheduledMenu() || scheduledHere.isNotEmpty()) ({ close ->
                             androidx.compose.material3.DropdownMenuItem(text = { Text(SCHEDULED_MESSAGES_TITLE) }, onClick = { close(); scheduledSheet = true })
                         }) else null,

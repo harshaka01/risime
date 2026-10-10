@@ -60,12 +60,55 @@ class AuthLogicTest {
     @Test fun refreshTimingFromExpiresIn() {
         val exp = RefreshTiming.expiresAt(receivedAtElapsedMs = 1_000, expiresInSec = 300) // 5 min token
         assertEquals(301_000, exp)
-        assertEquals(240_000, RefreshTiming.refreshDelayMs(exp, nowElapsedMs = 1_000)) // 60 s early
-        assertEquals(45_000, RefreshTiming.refreshDelayMs(exp, nowElapsedMs = 211_000)) // 90 s left → half
-        assertEquals(5_000, RefreshTiming.refreshDelayMs(exp, nowElapsedMs = 295_000)) // floor
-        assertEquals(0, RefreshTiming.refreshDelayMs(exp, nowElapsedMs = 400_000)) // already expired: now
-        assertFalse(RefreshTiming.needsRefresh(exp, 1_000))
-        assertTrue(RefreshTiming.needsRefresh(exp, 241_000))
+        // margin = max(120 s, 300 s / 3 = 100 s) = 120 s: refresh with 120 s left (at 181 s)
+        assertEquals(180_000, RefreshTiming.refreshDelayMs(exp, nowElapsedMs = 1_000, lifetimeMs = 300_000))
+        assertEquals(180_000, RefreshTiming.refreshDelayMs(exp, nowElapsedMs = 1_000)) // lifetime unknown: 120 s
+        assertEquals(60_000, RefreshTiming.refreshDelayMs(exp, nowElapsedMs = 181_000, lifetimeMs = 300_000)) // 120 s left < 240 s: half
+        assertEquals(5_000, RefreshTiming.refreshDelayMs(exp, nowElapsedMs = 295_000, lifetimeMs = 300_000)) // floor
+        assertEquals(0, RefreshTiming.refreshDelayMs(exp, nowElapsedMs = 400_000, lifetimeMs = 300_000)) // already expired: now
+        assertFalse(RefreshTiming.needsRefresh(exp, 1_000, 300_000))
+        assertFalse(RefreshTiming.needsRefresh(exp, 180_000, 300_000)) // 121 s left
+        assertTrue(RefreshTiming.needsRefresh(exp, 181_000, 300_000)) // 120 s left
+    }
+
+    @Test fun refreshMarginIsTheLargerOfTwoMinutesAndAThirdOfTheLifetime() {
+        assertEquals(120_000, RefreshTiming.marginMs(300_000)) // 100 s < 120 s
+        assertEquals(120_000, RefreshTiming.marginMs(360_000)) // exactly 120 s
+        assertEquals(200_000, RefreshTiming.marginMs(600_000)) // 10 min token: a third
+        assertEquals(1_200_000, RefreshTiming.marginMs(3_600_000)) // 1 h token: 20 min
+        // 10-min token: refresh at 400 s, leaving 200 s for three retries
+        val exp = RefreshTiming.expiresAt(0, 600)
+        assertEquals(400_000, RefreshTiming.refreshDelayMs(exp, 0, 600_000))
+        // the margin leaves room for the whole retry ladder plus a 5-s connect timeout each
+        val worstCase = RefreshRetry.QUICK_MS.sum() + 4 * 5_000L
+        assertTrue(RefreshTiming.marginMs(300_000) > worstCase)
+    }
+
+    @Test fun refreshRetryLadder() {
+        assertEquals(listOf(1_000L, 3_000L, 7_000L, 15_000L, 30_000L, 30_000L, 30_000L), (1..7).map { RefreshRetry.delayMs(it) })
+        assertEquals(1_000L, RefreshRetry.delayMs(0))
+    }
+
+    @Test fun reconnectBackoffStartsAtOneSecondCapsAtThirtyWithJitter() {
+        // no jitter draw at the extremes: [base/2, base]
+        for (attempt in 0..8) {
+            val base = ReconnectBackoff.BASE_MS[attempt.coerceAtMost(ReconnectBackoff.BASE_MS.lastIndex)]
+            assertEquals(base / 2, ReconnectBackoff.delayMs(attempt, random = { 0.0 }))
+            val hi = ReconnectBackoff.delayMs(attempt, random = { 1.0 })
+            assertEquals(base, hi)
+            val rnd = java.util.Random(7)
+            repeat(200) {
+                val d = ReconnectBackoff.delayMs(attempt, random = { rnd.nextDouble() })
+                assertTrue("attempt $attempt delay $d", d in base / 2..base)
+            }
+        }
+        assertTrue(ReconnectBackoff.delayMs(0, random = { 1.0 }) <= 1_000)
+        assertTrue(ReconnectBackoff.delayMs(99, random = { 1.0 }) <= 30_000)
+    }
+
+    @Test fun keycloakTimeouts() {
+        assertEquals(5_000, KeycloakTimeouts.CONNECT_MS)
+        assertEquals(10_000, KeycloakTimeouts.READ_MS)
     }
 
     @Test fun phoneVerificationMapping() {

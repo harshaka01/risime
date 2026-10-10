@@ -11,5 +11,14 @@
                 <action android:name="lk.codegen.risime.debug.GCAL_TEST" />
             </intent-filter>
         </receiver>
+        <!-- P0 2026-10-10: the calendar seam (a local calendar + events in CalendarContract, for redroid). Same protection. -->
+        <receiver
+            android:name="lk.codegen.risime.debug.CalendarSeedReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="lk.codegen.risime.debug.CALENDAR_SEED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

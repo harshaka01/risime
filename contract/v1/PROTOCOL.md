@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.31 (Release 0.3)
+# RisiMe Wire Protocol — v1.32 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -6123,6 +6123,28 @@ most **16 KiB** (`risi_tool_result_calendar_check.json`, `risi_tool_result_calen
 - It adds the event to the primary writable calendar, or else to a local calendar named "RisiMe"
   (created on first use). `result`: `{"event_id": str}` (the provider's id, opaque; never shown).
   No write permission: `no_permission`.
+- **v1.32 (P0 2026-10-10: "added" while nothing was in any calendar):**
+  - **Target:** the write calendar the user picked (Settings → Risi skills → Calendar), else the primary
+    calendar of a Google account (`IS_PRIMARY`, or the calendar whose name equals its account name), else a
+    local "RisiMe" calendar. Only calendars with `CALENDAR_ACCESS_LEVEL >= CAL_ACCESS_CONTRIBUTOR` (500) are
+    targets; holiday, birthday and other read-only calendars never are.
+  - **Insert:** `CALENDAR_ID`, `DTSTART`, `DTEND` (all-day: UTC midnights), `EVENT_TIMEZONE` (the device zone;
+    `UTC` for all-day), `TITLE`. Then **read the row back by its id** and check calendar, start, end and title.
+    Then `ContentResolver.requestSync` for that account (expedited), so the event reaches Google.
+  - `result`: `{"event_id": str, "verified": true}` only when the read-back matched. Otherwise
+    `{"status": "error", "code": …}`: `no_permission`, `read_only_calendar` (no writable target),
+    `insert_failed` (the provider returned no row), `verify_failed` (the read-back didn't match or found
+    nothing), plus `"detail": str` (≤ 200 chars, the exception's class/message; no titles).
+  - **Honesty (hard rule, server):** Risi says an event was added **only** for a result with `event_id` **and**
+    `verified: true`. A result from an older phone without `verified` reads "Your phone reported the event as
+    added, but couldn't confirm it. Please check your calendar." Any error code is said exactly: "I couldn't add
+    it: <calendar access is off | your calendars are read-only | the phone's calendar refused it | the event
+    wasn't there when I checked>". The model's text is never used to claim a write. The same rule holds for every
+    write tool (`set_reminder`, `risi_calendar_add`): "done" only on a successful tool result.
+  - **The event card:** the success post carries `"added_event": {"event_id": str}`. The asker's phone shows a
+    card from its own provider row: title, day and time, calendar name, and an **Open in Calendar** button (an
+    ACTION_VIEW intent for the event). Without the row: "This event is no longer on this phone".
+    Other devices show the body text.
 
 ### 25.4 The bubble on the wire
 **Signal `risi_progress`** (§2.3 `signal`; ephemeral, never stored, ignored by old apps;
@@ -6151,6 +6173,15 @@ most **16 KiB** (`risi_tool_result_calendar_check.json`, `risi_tool_result_calen
   `{"type": "link", "url", "title"}` (`https` only);
   clients show unknown types as nothing;
 - `next_steps: [str]` (at most 3; the app may show them as chips that pre-fill the composer);
+  **v1.32:** a chip never pre-fills the composer and never sends text other than as the user's own Risi
+  request. The answer adds **`next_actions`**, at most 3, each one of:
+  - `{"label": str, "action": "ask", "text": str}`: sends `text` as the user's Risi request;
+  - `{"label": str, "action": "open", "target": "settings.calendar" | "settings.risi_skills" | "settings.notifications" | "settings.calendar_permission" | "calendar.event"}`:
+    a deep link, or the permission dialog (`calendar.event` takes `"event_id"`).
+
+  A v1.32 app shows chips only from `next_actions` when the field is present, and drops an unknown `action`
+  or `target`. The server puts in `next_actions` only steps it can classify: instructions such as "Connect
+  your calendar in Settings" become `open` actions, never `ask`. `next_steps` stays for old apps.
 - **`local_search`**: `{"text": str, "since": ts | null}` | null: the app runs this search **over its
   own Private conversations on the phone** and shows a local card "Also in your Private chats"
   under the answer, **visible only on that phone**; nothing about it is sent anywhere (§25.5);
@@ -7900,7 +7931,8 @@ order of the "Checked:" line is Risi Calendar · Google Calendar · Phone calend
               "calendars": [{"name": str, "account_type": str, "events": int}],
               "read_ok": bool,
               "reason": null | "not_connected" | "no_permission" | "reauth_needed" |
-                        "no_play_services" | "network" | "timeout" | "api_error" | "no_calendars"}],
+                        "no_play_services" | "network" | "timeout" | "api_error" | "no_calendars" |
+                        "sync_off"}],
  "connected_sources": ["phone_provider" | "google_api"]}
 ```
 - The server accepts exactly `{blocks}` (v1) or `{blocks, sources, connected_sources}` (any other
@@ -7909,6 +7941,24 @@ order of the "Checked:" line is Risi Calendar · Google Calendar · Phone calend
   `read_ok: false, reason: "not_connected"`), `read_ok: true` ⇒ `reason: null`; a provider failure
   is `read_ok: false` (`api_error`), never an empty calendar; hidden calendars stay out of busy
   blocks. A missing permission stays status `no_permission`.
+- **v1.32: `sync_off`** (Harsha 2026-10-10: Risi must tell apart *no access*, *sync off* and *empty*).
+  A new `reason` for a `phone_provider` source: the phone has calendars, but Android sync is off
+  for **every** non-local account that holds a visible calendar (`ContentResolver
+  .getMasterSyncAutomatically()` false, or `getSyncAutomatically(account, CalendarContract.AUTHORITY)`
+  false for each such account). The source is then `read_ok: false, reason: "sync_off"` and its
+  `calendars` are still listed (names and counts as read, which may be stale); the phone still sends
+  its `blocks` (they don't count as a read). Calendars of a `LOCAL` account never cause `sync_off`.
+  If at least one synced calendar is on, the source is a normal read (`read_ok: true`) and the
+  sync-off calendars are only shown in Details. The three cases the user sees:
+  - **No access:** status `no_permission` (or the skill off, §26.5): "Calendar permission is off
+    on this phone".
+  - **Sync off:** "I couldn't read your calendar on this phone (sync is off, so it may be out of
+    date). Turn on sync in Settings → Risi skills → Calendar → Details." With Risi Calendar in the
+    check: "Not checked: Phone calendar (sync is off)."
+  - **Empty:** a real read with 0 events: "Checked: Phone calendar (Work) · 0 events", and a free
+    claim stands.
+  A v1.31 server answers `422` to `sync_off`; the v1.32 phone then re-sends the result once with
+  `reason: "api_error"` (`risi_tool_result_calendar_check_sync_off.json`).
 - **Amends §25.3 "never calendar names":** names only in `sources[].calendars[].name`; an
   email-address name is sent as "Primary calendar". Never titles, descriptions, attendees, places or
   event ids.
@@ -7962,8 +8012,24 @@ window **in the same step**, so the answer covers every connected source. **The 
 
 The Android Calendar skill's Details (Settings → Risi skills → Calendar) shows "What Risi can read":
 the permission state and each calendar with its account, events in the next 7 days, hidden / sync
-off, and the exact reason. There is no Google row until §31. (v1.31: the Google Calendar section of
+off, and the exact reason. (v1.32: when any account's calendar sync is off, Details shows "Sync is off
+for <account>" with **Open sync settings** (Android `Settings.ACTION_SYNC_SETTINGS`) and **Refresh**
+(re-reads the provider and requests a sync for that account); the same state reaches Risi as
+`sync_off` above.) There is no Google row until §31. (v1.31: the Google Calendar section of
 §31.2 adds it.)
+
+- **v1.32: the user's own events, listed on the phone** (Harsha 2026-10-10: "what's on my calendar this week" must
+  list the events). Phone event titles still never leave the phone. Instead an `answer` that rests on a
+  **successful** `phone_provider` read for the asker (`read_ok: true`) may carry
+  **`"local_events": {"from": ts, "to": ts}`**: the checked range, at most 14 days. The asker's phone renders,
+  under the answer's text, "Your events" and the instances of its own calendar provider in that range: title,
+  day and time ("All day" for all-day events), sorted by start. It uses the same calendars and exclusions as the
+  read (all calendars; deleted, cancelled and declined left out), and adds Risi Calendar events in the range. With
+  none: "No events in your phone calendars from <from> to <to>". The list is built when the message is shown
+  (it is not stored in the message), and only on the asker's own devices: other devices of other users, and any
+  Official chat, never show it. The server's `body` stays the busy-times text for old apps. The server adds
+  `local_events` only in the asker's own Risi chat, never in Official or a group. Example:
+  `envelope_risi_answer_local_events.json`.
 
 ### 29.8 The action card: `confirm` with `tool: "risi_calendar_add"` (amends §28.2–§28.4)
 For a calendar user, every user-asked event write (the §28.2 draft `kind: "event"`, or the model's
@@ -8400,7 +8466,8 @@ when another device of the same user is linked.
   and `RISI_EVENTS=on`** (`RISI_GCAL` alone does nothing); otherwise the key is **absent** (absent =
   off; `auth_config_v131.json`). The default is off.
   - While off: `/risi/calendar/google` answers `503 agent_unavailable`; no Google tool call is sent;
-    answers read as v1.30 ("Not checked: Google Calendar (not connected)").
+    answers name no Google source at all (v1.32: the phone calendar already covers Google accounts synced to the
+    phone; a `google_api` source that is `not_connected` is dropped from answers, `answer.sources` and the model's result).
   - Existing links are kept but dormant. A phone that sees the key absent stops reading and copying
     and keeps its grant; it resumes when the key is back.
 - Device capability **`"google_calendar"`** in `mls.capabilities` (`device_put_google_calendar.json`)
@@ -8806,7 +8873,45 @@ redacts `Authorization` headers and response bodies in OkHttp logging.
   check the Reconnect flow; Disconnect, and check RisiMe is gone from myaccount → Third-party
   connections.
 
+## 32. Ops alerts (v1.32)
+(P0 incident 2026-10-10.) The pilot watchdog (`scripts/watchdog`, every 30 s) tells the operators,
+in their Risi chat, when the server was down and what it did. A rule message (§27.1 `model: null`),
+an ordinary §24.11 Risi post in the operator's **own active Risi chat** only (never a group):
+
+`{"v": 1, "type": "text", "body", "risi": {"v": 1, "kind": "ops_alert", "state", "check", "detail",
+"at", "call_ref": null, "notify": [uuid], "made_by"}}`
+
+- `state`: `"restarted"` (unhealthy, restarted and healthy again), `"rolled_back"` (healthy only
+  after going back one release), `"gave_up"` (still unhealthy, or the restart limit of 3 per hour
+  reached: the watchdog stops restarting until an operator acts), `"public_down"` (the server is
+  healthy on spark2 but `https://risime.risicloud.ai/health` failed 3 times in a row: a network or
+  Caddy fault a restart can't fix), `"recovered"` (a `public_down` or `gave_up` is over),
+  and, from monitoring (step 4), `"alert"` (an Alertmanager alert is firing) and `"resolved"` (it stopped).
+- `check`: `"local"` | `"public"` for the watchdog states; for `alert` / `resolved` the alert's name, lowercase
+  `[a-z0-9_]{1,40}` (e.g. `health_down`, `p95_latency`, `ram_high`, `swap_growing`, `disk_high`,
+  `cassandra_gc`, `cert_expiry`). `detail`: one line of plain text (≤ 300 chars; the failure, the
+  release tag, where the diagnostics were saved, or the alert's summary). `at`: when it was seen (ts).
+- `notify`: the operator. `body` is the English line every client can show; clients without the
+  kind fall back to `body` (§24.11). Android shows it as a plain Risi message with a warning icon.
+- **Who:** the users whose phone numbers are listed in the server env `OPS_ALERT_PHONES` (`.env`,
+  never in Git). Nobody else ever receives one.
+- **How it is sent:** `POST /internal/ops-alert` on the server, **only** on `127.0.0.1:4000`
+  directly: the request must carry `Authorization: Bearer <OPS_ALERT_TOKEN>` (`.env`; compared in
+  constant time) and **no** `X-Forwarded-For` / `Forwarded` header (so a request through Caddy is
+  refused even from loopback). `{"state", "check", "detail"}` → `202 {"sent": n, "held": n}`;
+  `401` without the token or through a proxy; `404` when `OPS_ALERT_TOKEN` is unset. When Risi
+  is off, the operator has no active Risi chat or the phone has no user, it is counted as `held`
+  (not stored; logged without the phone) and the watchdog sends the e-mail / SMS fallback. Limit: 30 per hour (`429 rate_limited`; Alertmanager groups and repeats at most every 4 h).
+- Not end-to-end private beyond any other Risi post; it never contains message content, tokens or
+  phone numbers.
+- Example: `envelope_risi_ops_alert.json`.
+
 ## Changelog
+- **v1.32** (2026-10-10): `calendar_check` phone source reason `sync_off` (§29.7); `answer.local_events` (the
+  user's own events listed by the phone, titles never sent; §29.7); `calendar_add` target/insert/read-back/
+  `verified` and its error codes, the write honesty rule, `added_event` (§25.3); `next_actions` chips (§25.4); an unconnected Google link is no longer named; Ops alerts
+  (§32): the Risi rule kind `ops_alert` and the loopback-only `POST /internal/ops-alert` (watchdog states, and
+  `alert` / `resolved` from Alertmanager through the loopback bridge).
 - **v1.31** (2026-10-10): the Google Calendar link (§31; decision 074; folds the deferred
   `2026-10-09-google-calendar.md`; Harsha's requirements of 2026-10-10):
   - the switch `/auth/config` `google_calendar` (`RISI_GCAL`, only with `RISI_EVENTS`), the
@@ -8868,7 +8973,7 @@ redacts `Authorization` headers and response bodies in OkHttp logging.
     `risi_calendar_check` (Risi Calendar plus the phone in one step; the phone `calendar_check` is
     not offered to calendar users; titles only to our own model, calendar names never to any
     model); no read → the model's text is discarded; a read → "Checked: Risi Calendar · Phone
-    calendar (Work). Not checked: Google Calendar (not connected)." or the phone-only "I checked:"
+    calendar (Work)." (v1.32: an unconnected Google link is not named) or the phone-only "I checked:"
     line; `answer.sources` `calendar_source`;
   - errors `403 not_owner`, `409 version_conflict`, `410 cursor_expired`, `422 not_invitable`.
     §30 Risi Notes (v1.30) and §31 Google Calendar sync were not part of v1.29.
