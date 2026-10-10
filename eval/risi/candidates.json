@@ -19,6 +19,14 @@
       "repo": "RedHatAI/gemma-4-31B-it-FP8-block", "disk_gb": 33.3, "mem_gb": 42,
       "args": ["--limit-mm-per-prompt", "{\"image\": 0, \"audio\": 0}"]
     },
+    "gemma4-12b-qat": {
+      "repo": "google/gemma-4-12B-it-qat-w4a16-ct", "disk_gb": 10.3, "mem_gb": 15,
+      "args": ["--limit-mm-per-prompt", "{\"image\": 0, \"audio\": 0}"]
+    },
+    "gemma4-26b-a4b-awq": {
+      "repo": "cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit", "disk_gb": 17.2, "mem_gb": 22,
+      "args": ["--limit-mm-per-prompt", "{\"image\": 0, \"audio\": 0}"]
+    },
     "gemma4-12b-fp8": {
       "repo": "RedHatAI/gemma-4-12B-it-FP8-Dynamic", "disk_gb": 15.0, "mem_gb": 20,
       "args": ["--limit-mm-per-prompt", "{\"image\": 0, \"audio\": 0}"]

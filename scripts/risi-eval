@@ -11,14 +11,14 @@
 #   scripts/risi-eval candidate <name>      # launch on 127.0.0.1:8101, eval, stop + remove (see safety below)
 #   scripts/risi-eval asr-data              # FLEURS ta_in + SPEAK-ASR youtube-sinhala test subsets -> ~/risime-eval-data
 #   scripts/risi-eval asr <name>|live       # ASR WER/CER (live = the running whisper on :8200, read-only)
-#   scripts/risi-eval canary                # scripts/risi-canary on its own instance (_eval, ports 4340/8398)
+#   scripts/risi-eval canary                # scripts/risi-canary on its own instance (_eval, ports 4390/8490: no gate uses them)
 #   scripts/risi-eval score|report          # rescore every result / write eval/risi/results/REPORT.md
 #   scripts/risi-eval drop <name>           # delete a candidate's downloaded weights
 #
 # Safety (Harsha's rules, binding):
 #  * one candidate at a time, container risi-eval-<name>, 127.0.0.1:8101 only, the same aarch64 image
 #    as risi-l1 (nvcr.io/nvidia/vllm:26.09-py3); always stopped and removed afterwards (trap);
-#  * refuses while scripts/nightly-release runs (RISI_EVAL_WAIT=1 polls every 5 min instead);
+#  * refuses while scripts/nightly-release or scripts/ui-entry-test runs (RISI_EVAL_WAIT=1 polls every 5 min instead);
 #  * launches only if MemAvailable >= mem_gb + 10 GB; --gpu-memory-utilization = mem_gb / MemTotal,
 #    --max-model-len 8192, --max-num-seqs 4; MemAvailable is sampled every 2 s (peak recorded) and
 #    the candidate is killed at once if it falls under 6 GB;
@@ -35,10 +35,11 @@ log() { echo "[$(date +%H:%M:%S)] $*"; }
 avail_gb() { awk '/MemAvailable/ {printf "%.1f", $2/1048576}' /proc/meminfo; }
 total_gb() { awk '/MemTotal/ {printf "%.1f", $2/1048576}' /proc/meminfo; }
 cand() { python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); k,n,f=sys.argv[2:5]; v=d[k][n].get(f); print(json.dumps(v) if isinstance(v,(list,dict)) else ("" if v is None else v))' "$EV/candidates.json" "$@"; }
-release_running() { pgrep -f 'scripts/nightly-release' >/dev/null; }
+# A gate process itself, not a shell that merely mentions its name (pollers, this script).
+release_running() { pgrep -af 'nightly-release|ui-entry-test' | grep -v -e shell-snapshots -e pgrep -e risi-eval | grep -q .; }
 wait_release() {
   while release_running; do
-    [ -n "${RISI_EVAL_WAIT:-}" ] || { echo "a release (scripts/nightly-release) is running: not starting a candidate (RISI_EVAL_WAIT=1 to wait)"; exit 2; }
+    [ -n "${RISI_EVAL_WAIT:-}" ] || { echo "a release gate (scripts/nightly-release or ui-entry-test) is running: not starting a candidate (RISI_EVAL_WAIT=1 to wait)"; exit 2; }
     log "release running; waiting 5 min"; sleep 300
   done
 }
@@ -70,6 +71,8 @@ watch_mem() {  # background: min MemAvailable to $1; kills the candidate under t
       a=$(avail_gb); m=$(cat "$out"); python3 -I -c "import sys; sys.exit(0 if $a < $m else 1)" && echo "$a" > "$out"
       if python3 -I -c "import sys; sys.exit(0 if $a < $FLOOR_GB else 1)"; then
         echo "MEMORY FLOOR: MemAvailable $a GB < $FLOOR_GB GB, killing $CONTAINER" >&2; docker rm -f "$CONTAINER" >/dev/null 2>&1; fi
+      if release_running; then
+        echo "A RELEASE GATE STARTED: yielding, killing $CONTAINER" >&2; docker rm -f "$CONTAINER" >/dev/null 2>&1; fi
       n=$((n+1)); if [ $((n % 30)) = 0 ]; then
         $PY probe >/dev/null 2>&1 || { echo "LIVE PROBE FAILED: killing $CONTAINER" >&2; docker rm -f "$CONTAINER" >/dev/null 2>&1; }; fi
       sleep 2
@@ -108,10 +111,17 @@ case "$cmd" in
   candidate)
     name=$1; repo=$(cand llm "$name" repo); mem=$(cand llm "$name" mem_gb)
     [ -n "$repo" ] || { echo "unknown candidate $name"; exit 1; }
-    [ -d "$MODELS/$name" ] || { echo "not downloaded: scripts/risi-eval fetch $name"; exit 1; }
+    python3 -I "$EV/complete.py" "$MODELS/$name" || { echo "not (fully) downloaded: scripts/risi-eval fetch $name"; exit 1; }
     docker ps -a --format '{{.Names}}' | grep -q '^risi-eval-' && { echo "another risi-eval container exists"; exit 1; }
     wait_release
-    a=$(avail_gb); need=$(python3 -I -c "print($mem + $HEADROOM_GB)")
+    need=$(python3 -I -c "print($mem + $HEADROOM_GB)")
+    for _ in $(seq 1 "${RISI_EVAL_WAIT_MAX:-144}"); do  # RISI_EVAL_WAIT: up to 12 h (default) for the memory (and the gates) to free up
+      a=$(avail_gb); python3 -I -c "import sys; sys.exit(0 if $a >= $need else 1)" && ! release_running && break
+      [ -n "${RISI_EVAL_WAIT:-}" ] || break
+      log "waiting: MemAvailable $a GB < $need GB or a gate is running"; sleep 300
+    done
+    wait_release
+    a=$(avail_gb)
     python3 -I -c "import sys; sys.exit(0 if $a >= $need else 1)" || { echo "MemAvailable $a GB < $need GB (mem $mem + $HEADROOM_GB headroom): not launching $name"; exit 3; }
     $PY probe
     mapfile -t extra < <(python3 -I -c 'import json,sys; [print(x) for x in json.load(open(sys.argv[1]))["llm"][sys.argv[2]]["args"]]' "$EV/candidates.json" "$name")
@@ -120,14 +130,17 @@ case "$cmd" in
     MEMF=$(mktemp); watch_mem "$MEMF"
     wait_health || { echo "candidate $name did not become healthy"; docker logs --tail 40 "$CONTAINER" 2>&1 | tail -40; exit 1; }
     load_s=$(( $(date +%s) - t0 )); log "healthy after ${load_s}s, MemAvailable $(avail_gb) GB"
-    $PY probe
+    $PY probe || { echo "LIVE PROBE FAILED with $name loaded"; exit 9; }
     if [ -n "${CANARY:-}" ]; then
       if python3 -I -c "import sys; sys.exit(0 if $(avail_gb) >= ${CANARY_NEED_GB:-18} else 1)"; then
-        "$0" canary || { echo "CANARY FAILED with $name loaded: stopping it"; exit 1; }
+        "$0" canary || { echo "CANARY FAILED with $name loaded: stopping it"; exit 9; }
       else log "canary skipped while loaded: MemAvailable $(avail_gb) GB < ${CANARY_NEED_GB:-18} GB"; fi
     fi
     $PY run --url "http://127.0.0.1:$PORT" --model cand --label "$name" --sleep 0.2 ${RUN_ARGS:-}
-    $PY probe || { echo "LIVE PROBE FAILED after the run"; exit 1; }
+    # The same turn items with "tool" first in the schema (see docs/RISI-MODELS.md, schema order).
+    $PY run --url "http://127.0.0.1:$PORT" --model cand --label "$name.toolfirst" --tool-first --sleep 0.2 \
+      --only='-(T[0-9]+|F[0-9]+|C1|M(0[1-59]|1[0-5]|19|20))$'
+    $PY probe || { echo "LIVE PROBE FAILED after the run"; exit 9; }
     minf=$(cat "$MEMF")
     peak=$(python3 -I -c "print(round($before - $minf, 1))")
     python3 -I -c 'import json,sys; json.dump({"name": sys.argv[1], "repo": sys.argv[2], "mem_avail_before_gb": float(sys.argv[3]), "mem_avail_min_gb": float(sys.argv[4]), "peak_mem_gb": float(sys.argv[5]), "load_s": int(sys.argv[6]), "gpu_mem_util_gb": float(sys.argv[7])}, open(sys.argv[8], "w"), indent=1)' \
@@ -135,7 +148,7 @@ case "$cmd" in
     docker logs "$CONTAINER" 2>&1 | grep -E "Model loading took|KV cache|Maximum concurrency|memory" | tail -8 > "$EV/results/$name.vllm.txt" || true
     cleanup; CONTAINER=""; WATCH=""
     $PY probe
-    $PY score "$name"; log "peak memory $peak GB (MemAvailable $before -> $minf)" ;;
+    $PY score "$name"; $PY score "$name.toolfirst" --partial; log "peak memory $peak GB (MemAvailable $before -> $minf)" ;;
   asr-data) python3 -I "$EV/asr_data.py" "$DATA" ;;
   asr)
     name=$1; man="$DATA/manifest.jsonl"; [ -f "$man" ] || { echo "run scripts/risi-eval asr-data first"; exit 1; }
@@ -165,8 +178,18 @@ case "$cmd" in
     $PY probe
     echo "peak $(python3 -I -c "print(round($before - $(cat "$MEMF"), 1))") GB" | tee "$EV/results/asr-$name.mem.txt" ;;
   canary)
-    log "risi-canary (instance _eval, ports 4340/8398), MemAvailable $(avail_gb) GB"
-    CANARY_INSTANCE=_eval CANARY_PORT=4340 CANARY_LLM_PORT=8398 scripts/risi-canary ;;
+    log "risi-canary (instance _eval, ports 4390/8490), MemAvailable $(avail_gb) GB"
+    CANARY_INSTANCE=_eval CANARY_PORT=4390 CANARY_LLM_PORT=8490 scripts/risi-canary ;;
+  chain)  # unattended: wait for an idle box, canary, each candidate (CANARY=1), canary
+    for _ in $(seq 1 288); do release_running || break; log "gate running; waiting 5 min"; sleep 300; done
+    release_running && { echo "still busy after 24 h"; exit 2; }
+    [ -n "${SKIP_FIRST_CANARY:-}" ] || "$0" canary
+    for n in "$@"; do
+      rc=0; CANARY=1 RISI_EVAL_WAIT=1 "$0" candidate "$n" || rc=$?
+      log "candidate $n finished rc=$rc"
+      [ "$rc" = 9 ] && { echo "SAFETY STOP (canary or live probe failed): chain aborted"; exit 9; }
+    done
+    "$0" canary ;;
   score) for f in "$EV"/results/*.jsonl; do b=$(basename "$f" .jsonl); case "$b" in asr-*) ;; *) $PY score "$b";; esac; done ;;
   report) $PY report ;;
   *) sed -n '2,30p' "$0"; exit 1 ;;
