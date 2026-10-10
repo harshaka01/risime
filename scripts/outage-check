@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Outage self-check (Harsha 2026-10-10, after the spark2 network outage ~03:50-04:30 UTC).
+#   scripts/outage-check --tick   called by scripts/healthcheck (risime-health.timer, every 5 min): probes the
+#                                 outside world (Google FCM/OAuth hosts, Cloudflare). When it was down and is back,
+#                                 runs the full check below once.
+#   scripts/outage-check [--since <ISO time>]   the full check now (also by hand):
+#     * pilot: local and public /health, /api/v1/auth/config, the websocket route (403 without a token = reachable),
+#       FCM and Google OAuth hosts reachable;
+#     * from the pilot log since the outage: phones reconnected (socket CONNECTED), push results, invalid_token count;
+#     * scripts/boot-check (prod build, throwaway stores; instance _outage, port 4594). While a release gate
+#       (nightly-release / ui-entry-test / push-device-test) runs, boot-check is deferred to a later tick (memory: the
+#       GB10 is shared with risi-l1). OUTAGE_CANARY=1 also runs scripts/risi-canary (instance _outage, 4395/8495).
+#   Appends the result to docs/status/overnight.md and commits that one file locally (root pushes it).
+# State: ~/risime-run/.net-state ("up" | "down <since>" | "pending <since> <back>"). Log: ~/risime-logs/outage.log.
+# Never touches the pilot's data, risi-l1, or :4000 beyond GET requests.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"
+STATE="$HOME/risime-run/.net-state"; LOG="$HOME/risime-logs/outage.log"; mkdir -p "$HOME/risime-logs"
+log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG"; }
+now() { date -u +%FT%TZ; }
+
+online() {  # any one of three independent outside hosts answers (any HTTP status)
+  local u
+  for u in https://fcm.googleapis.com/ https://oauth2.googleapis.com/ https://1.1.1.1/; do
+    [ "$(curl -s -o /dev/null -m 8 -w '%{http_code}' "$u" || true)" != 000 ] && return 0
+  done
+  return 1
+}
+gate_running() { pgrep -u "$USER" -f '^(bash )?(scripts/|.*/scripts/)(nightly-release|ui-entry-test|push-device-test)( |$)' >/dev/null; }
+
+if [ "${1:-}" = --tick ]; then
+  st="$(cat "$STATE" 2>/dev/null || echo up)"
+  if ! online; then
+    case "$st" in down*) ;; *) echo "down $(now)" > "$STATE"; log "network down (outside hosts unreachable)";; esac
+    exit 0
+  fi
+  case "$st" in
+    down*) since="${st#down }"; echo "pending $since $(now)" > "$STATE"; log "network back (down since $since)";;
+    pending*) ;;
+    *) exit 0;;
+  esac
+  read -r _ since back < "$STATE"
+  if gate_running; then log "full check deferred: a release gate is running"; exit 0; fi
+  exec 8>"$HOME/risime-run/.outage.lock"; flock -n 8 || exit 0
+  "$REPO/scripts/outage-check" --since "$since" --back "$back" >> "$LOG" 2>&1 || log "full check: not all recovered (see docs/status/overnight.md)"
+  echo up > "$STATE"
+  exit 0
+fi
+
+SINCE=""; BACK="$(now)"
+while [ $# -gt 0 ]; do case "$1" in --since) SINCE="$2"; shift 2;; --back) BACK="$2"; shift 2;; *) echo "unknown arg $1"; exit 2;; esac; done
+OUT=(); BAD=0
+row() { OUT+=("- $1: $2"); [ "$3" = ok ] || BAD=1; }
+code() { curl -s -o /dev/null -m 10 -w '%{http_code}' "$@" || true; }
+
+[ "$(code http://127.0.0.1:4000/health)" = 200 ] && row "local /health" "200" ok || row "local /health" "FAILED" bad
+c="$(code https://risime.risicloud.ai/health)"; [ "$c" = 200 ] && row "public /health" "200" ok || row "public /health" "$c" bad
+c="$(code https://risime.risicloud.ai/api/v1/auth/config)"; [ "$c" = 200 ] && row "auth config (phone sign-in)" "200" ok || row "auth config (phone sign-in)" "$c" bad
+c="$(code -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' 'https://risime.risicloud.ai/socket/websocket?vsn=2.0.0')"
+[ "$c" = 403 ] && row "websocket route" "reachable (403 without a token)" ok || row "websocket route" "$c" bad
+f="$(code https://fcm.googleapis.com/)"; o="$(code https://oauth2.googleapis.com/)"
+[ "$f" != 000 ] && [ "$o" != 000 ] && row "FCM + Google OAuth hosts" "reachable" ok || row "FCM + Google OAuth hosts" "fcm=$f oauth=$o" bad
+
+# From the pilot log since the outage began (JSON lines with "time":"<ISO>").
+SL="$HOME/risime-logs/server.log"
+if [ -f "$SL" ] && [ -n "$SINCE" ]; then
+  tail -c 30000000 "$SL" | python3 -I -c '
+import json, re, sys
+since, back = sys.argv[1][:19], sys.argv[2][:19]
+c = {"conn_after": 0, "push_ok_after": 0, "push_fail_after": 0, "invalid_token": 0}
+for l in sys.stdin:
+    m = re.search(r"\"time\":\"([^\"]{19})", l)
+    if not m or m.group(1) < since: continue
+    after = m.group(1) >= back
+    if "CONNECTED TO RisiMeWeb.UserSocket" in l and after: c["conn_after"] += 1
+    if "push: kind=" in l and after:
+        c["push_ok_after" if "result=ok" in l else "push_fail_after"] += 1
+    if "kind=invalid_token" in l: c["invalid_token"] += 1
+print(" ".join(f"{k}={v}" for k, v in c.items()))' "$SINCE" "$BACK" > "$HOME/risime-logs/.outage-counts" 2>/dev/null || true
+  cnt="$(cat "$HOME/risime-logs/.outage-counts" 2>/dev/null)"
+  row "pilot log since the outage" "${cnt:-unreadable}" ok
+  case "$cnt" in *push_fail_after=0*|"") ;; *) OUT+=("  (push failures after recovery: check ~/risime-logs/server.log)");; esac
+fi
+
+if gate_running; then
+  row "boot-check" "deferred (a release gate is running)" ok
+else
+  BL="$HOME/risime-logs/bootcheck-outage-$(date -u +%m%d-%H%M).log"
+  if BOOTCHECK_INSTANCE=_outage BOOTCHECK_PORT=4594 timeout 1500 scripts/boot-check > "$BL" 2>&1 && grep -q "BOOT CHECK OK" "$BL"; then
+    row "boot-check" "BOOT CHECK OK" ok
+  else
+    row "boot-check" "FAILED ($(grep -m1 -iE 'fail|error' "$BL" | cut -c1-120); log $BL)" bad
+  fi
+  if [ "${OUTAGE_CANARY:-0}" = 1 ]; then
+    CL="$HOME/risime-logs/canary-outage-$(date -u +%m%d-%H%M).log"
+    CANARY_INSTANCE=_outage CANARY_PORT=4395 CANARY_LLM_PORT=8495 timeout 1800 scripts/risi-canary > "$CL" 2>&1 && grep -q "RISI CANARY OK" "$CL" \
+      && row "risi canary" "RISI CANARY OK" ok || row "risi canary" "FAILED (log $CL)" bad
+  fi
+fi
+
+verdict=$([ "$BAD" = 0 ] && echo "all recovered" || echo "NOT all recovered")
+{
+  echo
+  echo "### Outage self-check $(date -u +%F' '%H:%M) UTC: $verdict"
+  echo "Network down ${SINCE:-?} → back ${BACK} (outside hosts unreachable from spark2; scripts/outage-check)."
+  printf '%s\n' "${OUT[@]}"
+} | tee -a "$REPO/docs/status/overnight.md"
+
+# Commit only that file, locally; skip while a rebase/merge is in progress in the shared checkout.
+if [ ! -d .git/rebase-merge ] && [ ! -d .git/rebase-apply ] && [ ! -f .git/MERGE_HEAD ]; then
+  git commit -q -m "chore(root): outage self-check $(date -u +%F' '%H:%M) UTC: $verdict" -- docs/status/overnight.md || true
+fi
+[ "$BAD" = 0 ]

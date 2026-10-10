@@ -2,10 +2,12 @@
 # Pilot health check (risime-health.timer, every 5 min; docs/decisions/025).
 # Checks http://127.0.0.1:4000/health; on two failures 15 s apart, restarts risime.service.
 # Skips while a deploy holds ~/risime-run/.deploy.lock. Logs to ~/risime-logs/health.log.
+# Then scripts/outage-check --tick: after a network outage, boot-check + recovery checks → docs/status/overnight.md.
 set -uo pipefail
 LOG="$HOME/risime-logs/health.log"; mkdir -p "$HOME/risime-logs"
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG"; }
 ok() { curl -sf --max-time 5 http://127.0.0.1:4000/health | grep -q '"status":"ok"'; }
+trap 'exec 9>&-; "$(dirname "$0")/outage-check" --tick || true' EXIT
 exec 9>"$HOME/risime-run/.deploy.lock"
 flock -n 9 || { log "skip: deploy in progress"; exit 0; }
 if ok; then

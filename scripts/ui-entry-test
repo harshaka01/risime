@@ -111,6 +111,8 @@
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
 set -euo pipefail
+# A set -e exit outside fail() (no "UIENTRY FAIL" line) still names its line (nightly.48 n48f ended silently).
+trap 'rc=$?; echo "UIENTRY ERR line $LINENO (exit $rc): $BASH_COMMAND" >&2' ERR
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
