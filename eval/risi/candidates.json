@@ -1,0 +1,33 @@
+{
+  "_doc": "Candidates for scripts/risi-eval candidate <name>. mem_gb = weights + KV (8k ctx, 4 seqs) + ~3 GB activations/graphs; the launch needs MemAvailable >= mem_gb + 10 GB headroom. Sources: the HF survey in docs/RISI-MODELS.md (2026-10-10).",
+  "llm": {
+    "qwen38-27b-fp8": {
+      "repo": "Qwen/Qwen3.8-27B-FP8", "disk_gb": 30.9, "mem_gb": 38,
+      "args": ["--language-model-only", "--reasoning-parser", "qwen3",
+               "--default-chat-template-kwargs", "{\"enable_thinking\": false}"]
+    },
+    "qwen38-27b-nvfp4": {
+      "repo": "RadixArk/Qwen3.8-27B-NVFP4", "disk_gb": 21.9, "mem_gb": 29,
+      "args": ["--language-model-only", "--reasoning-parser", "qwen3",
+               "--default-chat-template-kwargs", "{\"enable_thinking\": false}"]
+    },
+    "gemma4-26b-a4b-fp8": {
+      "repo": "RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic", "disk_gb": 28.6, "mem_gb": 34,
+      "args": ["--limit-mm-per-prompt", "{\"image\": 0, \"audio\": 0}"]
+    },
+    "gemma4-31b-fp8": {
+      "repo": "RedHatAI/gemma-4-31B-it-FP8-block", "disk_gb": 33.3, "mem_gb": 42,
+      "args": ["--limit-mm-per-prompt", "{\"image\": 0, \"audio\": 0}"]
+    },
+    "gemma4-12b-fp8": {
+      "repo": "RedHatAI/gemma-4-12B-it-FP8-Dynamic", "disk_gb": 15.0, "mem_gb": 20,
+      "args": ["--limit-mm-per-prompt", "{\"image\": 0, \"audio\": 0}"]
+    }
+  },
+  "asr": {
+    "whisper-small-sinhala": {"repo": "SinhaSpeech/whisper-small-sinhala-v6-e6-run11-best", "mem_gb": 6, "langs": ["si"]},
+    "whisper-large-v3-sinhala": {"repo": "kasunw/whisper-large-v3-sinhala", "mem_gb": 10, "langs": ["si"]},
+    "tamil-asr-qwen3": {"repo": "lemuralabs/tamil-asr-qwen3", "mem_gb": 9, "langs": ["ta"]},
+    "whisper-large-v3-turbo": {"local_ct2": "faster-whisper-large-v3-turbo", "mem_gb": 5, "langs": ["si", "ta"]}
+  }
+}
