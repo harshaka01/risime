@@ -2,6 +2,7 @@ package lk.codegen.risime.data.tabs
 
 import kotlinx.serialization.json.JsonObject
 import lk.codegen.risime.data.HistoryMarkers
+import lk.codegen.risime.data.gcal.GcalBusy
 import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.data.db.RisiWriteEntity
 import lk.codegen.risime.data.db.ScheduledDao
@@ -46,6 +47,10 @@ class RisiToolExecutor(
     private val log: (String) -> Unit = {},
     /** §25.3/§26.6 the phone's calendar (null: no calendar on this build; calendar tools answer `calendar_unavailable`). */
     private val calendar: PhoneCalendar? = null,
+    /** v1.31 §31.4 the Google busy read on the Google device (null: this phone holds no link, so `google_api` is `not_connected`). */
+    private val google: (suspend (fromMs: Long, toMs: Long) -> lk.codegen.risime.data.gcal.GcalRead)? = null,
+    /** The connected Google account while this phone holds the link (its provider events are skipped when Google is read in the same call). */
+    private val googleAccount: suspend () -> String? = { null },
 ) {
     companion object {
         /** §26.3 the request must be at most this old at the call's `server_ts`. */
@@ -254,17 +259,58 @@ class RisiToolExecutor(
     }
 
     /** §25.3 free/busy blocks only (merged, ≤ 14 days); `no_permission` without READ_CALENDAR. */
-    private fun calendarCheckTool(call: RisiToolCall, gated: Boolean = true): RisiToolResult {
+    private suspend fun calendarCheckTool(call: RisiToolCall, gated: Boolean = true): RisiToolResult {
         val a = call.calendarCheckArgs() ?: return RisiToolResult.error(RisiToolErrorCodes.BAD_ARGS)
         val from = tsMs(a.from) ?: return RisiToolResult.error(RisiToolErrorCodes.BAD_ARGS)
         val to = tsMs(a.to) ?: return RisiToolResult.error(RisiToolErrorCodes.BAD_ARGS)
         if (to <= from || to - from > PhoneCalendar.MAX_WINDOW_MS) return RisiToolResult.error(RisiToolErrorCodes.BAD_ARGS)
         if (gated && !skillOn(call)) { log("risi tool ${call.tool}: declined (skill off on this phone)"); return RisiToolResult.declined() }
+        // v1.31 §31.4: with `args.sources` the result lists exactly the sources asked for.
+        a.sources?.let { return calendarCheckSources(it.toSet(), from, to) }
         val cal = calendar ?: return RisiToolResult.error(RisiToolErrorCodes.CALENDAR_UNAVAILABLE)
         // P0 2026-10-09 (honesty): the result names the calendars read and whether the read is trustworthy.
         val read = runCatching { cal.read(from, to) }.getOrElse { return RisiToolResult.error(RisiToolErrorCodes.CALENDAR_UNAVAILABLE) }
             ?: return RisiToolResult(RisiToolResult.NO_PERMISSION, null)
         return ok(CalendarCheckResult.serializer(), read.wire)
+    }
+
+    /**
+     * §31.4 `calendar_check` with `sources`: `phone_provider` (the v1.29 read, loop-guarded) and/or `google_api`
+     * (the picked Google calendars, read through the API). Blocks are the merged union of what was read; a source
+     * that could not be read is `read_ok: false` with its reason and contributes no block (never "free").
+     */
+    private suspend fun calendarCheckSources(sources: Set<String>, from: Long, to: Long): RisiToolResult {
+        val wantPhone = CalendarRead.SOURCE in sources
+        val wantGoogle = CalendarRead.GOOGLE_API in sources
+        val entries = ArrayList<JsonObject>()
+        val rows = ArrayList<BusyRow>()
+        val connected = ArrayList<String>()
+        var permissionDenied = false
+        fun addRows(blocks: List<lk.codegen.risime.net.CalendarBlock>) {
+            blocks.forEach { b -> rows += BusyRow(tsMs(b.start) ?: return@forEach, tsMs(b.end) ?: return@forEach, b.allDay, b.busy) }
+        }
+        if (wantPhone) {
+            val cal = calendar
+            val read = if (cal == null) null else runCatching { cal.read(from, to, skipGoogleAccount = if (wantGoogle) googleAccount() else null) }.getOrElse { return RisiToolResult.error(RisiToolErrorCodes.CALENDAR_UNAVAILABLE) }
+            if (read == null) {
+                permissionDenied = true
+                entries += ProtocolJson.encodeToJsonElement(lk.codegen.risime.net.CalendarSourceReport.serializer(), lk.codegen.risime.net.CalendarSourceReport(CalendarRead.SOURCE, emptyList(), false, "no_permission")) as JsonObject
+            } else {
+                entries += ProtocolJson.encodeToJsonElement(lk.codegen.risime.net.CalendarSourceReport.serializer(), read.source.copy(reason = CalendarRead.wireReason(read.source.reason))) as JsonObject
+                addRows(read.blocks)
+                if (read.source.readOk) connected += CalendarRead.SOURCE
+            }
+        }
+        if (wantGoogle) {
+            val g = google?.let { runCatching { it(from, to) }.getOrElse { GcalBusy.failed(lk.codegen.risime.net.GcalReadReasons.API_ERROR) } }
+                ?: GcalBusy.failed(lk.codegen.risime.net.GcalReadReasons.NOT_CONNECTED)
+            entries += ProtocolJson.encodeToJsonElement(lk.codegen.risime.net.GoogleSourceReport.serializer(), g.report) as JsonObject
+            addRows(g.blocks)
+            if (g.report.readOk) connected += CalendarRead.GOOGLE_API
+        }
+        if (permissionDenied && !wantGoogle) return RisiToolResult(RisiToolResult.NO_PERMISSION, null)
+        val merged = PhoneCalendar.merge(rows, from, to)
+        return ok(lk.codegen.risime.net.CalendarCheckSourcesResult.serializer(), lk.codegen.risime.net.CalendarCheckSourcesResult(merged, entries, connected))
     }
 
     /**

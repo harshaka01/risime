@@ -216,7 +216,7 @@ class GcalApi(
     private suspend fun send(method: String, u: HttpUrl, body: JsonObject?): GcalResult<JsonObject> {
         var token = when (val a = authorizer.authorize()) {
             is AuthResult.Token -> a.value
-            is AuthResult.NeedsResolution -> return GcalResult.Fail(GcalErr.REAUTH)
+            is AuthResult.NeedsResolution, AuthResult.Cancelled -> return GcalResult.Fail(GcalErr.REAUTH)
             is AuthResult.Unavailable -> return GcalResult.Fail(GcalErr.UNAVAILABLE)
         }
         repeat(2) { attempt ->

@@ -1,5 +1,6 @@
 import java.io.ByteArrayOutputStream
 import java.util.Properties
+import java.util.zip.ZipFile
 import javax.inject.Inject
 
 plugins {
@@ -439,3 +440,48 @@ for (v in listOf("Debug", "Release")) {
     }
     tasks.matching { it.name == "assemble$v" }.configureEach { dependsOn(check) }
 }
+
+// ---- v1.31 §31.11: the Google Calendar test seam must be ABSENT from the release APK ----
+// Scans every release APK's dex files and binary manifest for the broadcast action and the receiver class
+// (UTF-8 and UTF-16LE). Runs after every assembleRelease, so a release that contains the seam cannot be produced.
+abstract class CheckNoGcalSeam : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val apks: DirectoryProperty
+
+    @get:OutputFile abstract val stamp: RegularFileProperty
+
+    @TaskAction
+    fun check() {
+        val needles = listOf("GCAL_TEST", "GcalTestReceiver", "FakeGcalAuthorizer")
+        val patterns = needles.flatMap { listOf(it.toByteArray(Charsets.UTF_8), it.toByteArray(Charsets.UTF_16LE)) }
+        val files = apks.get().asFile.walkTopDown().filter { it.isFile && it.name.endsWith(".apk") }.toList()
+        if (files.isEmpty()) throw GradleException("no release APK to check under ${apks.get().asFile}")
+        for (apk in files) {
+            ZipFile(apk).use { zip ->
+                for (e in zip.entries()) {
+                    if (!(e.name.endsWith(".dex") || e.name == "AndroidManifest.xml")) continue
+                    val bytes = zip.getInputStream(e).readBytes()
+                    for ((i, p) in patterns.withIndex()) {
+                        if (indexOf(bytes, p) >= 0) throw GradleException("${apk.name}!${e.name} contains '${needles[i / 2]}': the Google test seam must not be in the release APK")
+                    }
+                }
+            }
+        }
+        stamp.get().asFile.writeText("ok: ${files.map { it.name }}")
+    }
+
+    private fun indexOf(h: ByteArray, n: ByteArray): Int {
+        outer@ for (i in 0..h.size - n.size) {
+            for (j in n.indices) if (h[i + j] != n[j]) continue@outer
+            return i
+        }
+        return -1
+    }
+}
+val checkNoGcalSeam = tasks.register<CheckNoGcalSeam>("checkNoGcalSeamInRelease") {
+    description = "Fails if the GCAL_TEST receiver or action string is in the release APK (contract v1.31 §31.11)"
+    apks.set(layout.buildDirectory.dir("outputs/apk/release"))
+    stamp.set(layout.buildDirectory.file("gcalSeam/release.txt"))
+}
+tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy(checkNoGcalSeam) }

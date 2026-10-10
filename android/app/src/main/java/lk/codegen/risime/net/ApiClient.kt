@@ -386,6 +386,15 @@ class ApiClient(
 
     suspend fun deleteRisiCalendar(): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/calendar", null, headers = deviceHeaders())
 
+    // ---- §31.3 Google Calendar link (a `google_calendar` device; else 403 invalid_device) ----
+
+    suspend fun googleLink(): ApiResult<GoogleLinkReply> = call<Unit, GoogleLinkReply>("GET", "risi/calendar/google", null, headers = deviceHeaders())
+
+    suspend fun putGoogleLink(body: GoogleLinkPut): ApiResult<GoogleLinkReply> = call("PUT", "risi/calendar/google", body, headers = deviceHeaders())
+
+    suspend fun deleteGoogleLink(removeCopies: Boolean): ApiResult<Unit> =
+        call<Unit, Unit>("DELETE", "risi/calendar/google?remove_copies=$removeCopies", null, headers = deviceHeaders())
+
     // ---- §30.6 Risi Notes (a `risi_notes` device; else 403 invalid_device) ----
 
     suspend fun risiNotes(query: String?, before: String?, limit: Int): ApiResult<RisiNotesReply> {

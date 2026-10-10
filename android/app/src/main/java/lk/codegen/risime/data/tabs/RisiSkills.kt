@@ -152,6 +152,17 @@ class RisiSkillsStore(
         }
     }
 
+    /**
+     * §31.2 step 5 / §26.2 (amended): an OAuth source (the Google grant) completes its flow BEFORE this PATCH, so the
+     * skill is turned on with `client_permission: "granted"` and no Android permission prompt.
+     */
+    suspend fun turnOnGranted(id: String): Boolean = lock.withLock {
+        when (val r = patch(RisiSkillsPatch(listOf(RisiSkillChange(id, state = RisiSkillStates.ASK, clientPermission = ClientPermission.GRANTED))))) {
+            is ApiResult.Ok -> { merge(r.value.skills); true }
+            else -> false
+        }
+    }
+
     /** "Ask me each time" / "Allowed" (only where the skill's `modes` allow it). */
     suspend fun setMode(id: String, state: String): String? = lock.withLock {
         val skill = skill(id) ?: return@withLock skillsErrorText(null)

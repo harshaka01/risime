@@ -65,6 +65,8 @@ class DeviceRegistrar(
     private val risiEventsSupported: () -> Boolean = { false },
     /** §30.1: `/auth/config` says `risi_notes: on` (advertised only together with `risi_events`). */
     private val risiNotesSupported: () -> Boolean = { false },
+    /** §31.1: `/auth/config` says `google_calendar: on` (advertised only together with `risi_events`). */
+    private val googleCalendarSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
 ) {
@@ -110,6 +112,11 @@ class DeviceRegistrar(
             DeviceMls.CAP_RISI_NOTES.takeIf {
                 mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiSkillsSupported() && risiLedgerSupported() &&
                     risiEventsSupported() && risiNotesSupported()
+            },
+            // v1.31 §31.1: only with `risi_events`, while the server switch is on (with or without Play services).
+            DeviceMls.CAP_GOOGLE_CALENDAR.takeIf {
+                mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiSkillsSupported() && risiLedgerSupported() &&
+                    risiEventsSupported() && googleCalendarSupported()
             },
         )
         else -> null

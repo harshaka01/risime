@@ -32,12 +32,22 @@ sealed interface AuthResult {
 
     /** Cannot authorize at all (no Play services). */
     data class Unavailable(val reason: String) : AuthResult
+
+    /** The user backed out of the consent screen (not an error: the section stays as it was). */
+    data object Cancelled : AuthResult
 }
 
 /** §31.2 the Google sign-in, replaceable (the debug seam installs a fake; tests too). */
 interface GcalAuthorizer {
     /** A token, silently when the grant is valid; [NeedsResolution] when the user must consent again. */
     suspend fun authorize(): AuthResult
+
+    /**
+     * The Settings screen's consent flow (§31.2 step 1): like [authorize], but a needed consent is shown through
+     * [launch] (the screen runs the `PendingIntent` and returns the reply `Intent`, null if the user backed out).
+     * Only the Settings screen may call this.
+     */
+    suspend fun authorizeInteractive(launch: suspend (PendingIntent) -> android.content.Intent?): AuthResult = authorize()
 
     /** Drops the cached token (a `401`, Disconnect). */
     fun invalidate()
@@ -78,6 +88,15 @@ class PlayAuthorizer(
         cached?.takeIf { it.expiresAt - now() > 60_000 }?.let { return it }
         if (!available()) return AuthResult.Unavailable("no_play_services")
         val r = runCatching { Identity.getAuthorizationClient(context).authorize(request()).await() }.getOrElse { return AuthResult.Unavailable("no_play_services") }
+        return result(r)
+    }
+
+    override suspend fun authorizeInteractive(launch: suspend (PendingIntent) -> android.content.Intent?): AuthResult {
+        val first = authorize()
+        if (first !is AuthResult.NeedsResolution) return first
+        val pi = first.pendingIntent ?: return first
+        val reply = launch(pi) ?: return AuthResult.Cancelled
+        val r = runCatching { Identity.getAuthorizationClient(context).getAuthorizationResultFromIntent(reply) }.getOrElse { return AuthResult.Cancelled }
         return result(r)
     }
 

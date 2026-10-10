@@ -149,8 +149,13 @@ class RisiCalendar(
     private val log: (String) -> Unit = {},
     loadShowDeclined: () -> Boolean = { false },
     private val saveShowDeclined: (Boolean) -> Unit = {},
+    /** v1.31 §31.6: the cache changed (a feed page, a re-list, an own write); [removed] are events that left it. Must not block. */
+    private val onCacheChanged: (removed: List<String>) -> Unit = {},
 ) {
     val events: Flow<List<RisiEvent>> = store.events
+
+    /** The cache as it is now (v1.31 §31.6: the copy job's input). */
+    suspend fun eventsNow(): List<RisiEvent> = store.all()
 
     /** §29.2 the phone setting "Show declined". */
     private val _showDeclined = MutableStateFlow(loadShowDeclined())
@@ -213,7 +218,10 @@ class RisiCalendar(
         val (from, to) = window()
         return when (val r = remote.events(from, to)) {
             is ApiResult.Ok -> {
+                val before = runCatching { store.all().map { it.eventId.lowercase() } }.getOrDefault(emptyList())
                 store.replaceAll(r.value.events, r.value.cursor)
+                val now = r.value.events.map { it.eventId.lowercase() }.toSet()
+                runCatching { onCacheChanged(before.filter { it !in now }) }
                 log("risi_calendar: listed ${r.value.events.size}")
                 SyncOutcome.RELISTED
             }
@@ -245,6 +253,7 @@ class RisiCalendar(
         val events = page.changes.filter { !it.removed }.mapNotNull { it.event }
         if (removed.isNotEmpty()) store.remove(removed)
         if (events.isNotEmpty()) store.upsert(events)
+        if (removed.isNotEmpty() || events.isNotEmpty()) runCatching { onCacheChanged(removed.map { it.lowercase() }) }
     }
 
     /**
@@ -268,13 +277,14 @@ class RisiCalendar(
             allDay = if (card.start != null) card.allDay else cached.allDay, participants = parts, myStatus = mine,
             state = card.state ?: if (card.change == "cancelled") RisiEvent.STATE_CANCELLED else cached.state,
         )))
+        runCatching { onCacheChanged(emptyList()) }
         return true
     }
 
     // ---- writes ----
 
     private suspend fun result(r: ApiResult<RisiEventReply>): CalendarResult = when (r) {
-        is ApiResult.Ok -> { store.upsert(listOf(r.value.event)); CalendarResult.Ok(r.value.event) }
+        is ApiResult.Ok -> { store.upsert(listOf(r.value.event)); runCatching { onCacheChanged(emptyList()) }; CalendarResult.Ok(r.value.event) }
         is ApiResult.Error -> CalendarResult.Failed(r.code)
         is ApiResult.NetworkError -> CalendarResult.Failed("network")
     }
@@ -308,6 +318,7 @@ class RisiCalendar(
         return when (val r = remote.delete(event.eventId)) {
             is ApiResult.Ok -> {
                 if (event.isOwner(me())) store.upsert(listOf(event.copy(state = RisiEvent.STATE_CANCELLED))) else store.remove(listOf(event.eventId))
+                runCatching { onCacheChanged(if (event.isOwner(me())) emptyList() else listOf(event.eventId.lowercase())) }
                 CalendarResult.Ok(null)
             }
             is ApiResult.Error -> if (r.httpStatus == 404) { store.remove(listOf(event.eventId)); CalendarResult.Ok(null) } else CalendarResult.Failed(r.code)

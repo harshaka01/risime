@@ -49,6 +49,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import lk.codegen.risime.AppContainer
@@ -277,7 +278,14 @@ fun RisiSkillsRoute(c: AppContainer, skillId: String?, onBack: () -> Unit) {
         }
     }
     LaunchedEffect(Unit) { model.load(permissions) }
-    RisiSkillsScreen(model, permissions, skillId, onBack, calendar = c.calendarPort, openSettings = {
+    // v1.31 §31.2: the Google Calendar section of the Calendar skill (hidden while the server switch is off).
+    val google = remember {
+        GcalSettingsModel(
+            c.gcal, c.scope, me = { c.sessionStore.deviceId() }, switchOn = c.googleCalendarActive,
+            skillOff = c.risiSkillsStore.skills.map { c.risiSkillsStore.localState(RisiSkillIds.CALENDAR) == RisiSkillStates.OFF },
+        )
+    }
+    RisiSkillsScreen(model, permissions, skillId, onBack, calendar = c.calendarPort, google = google, openSettings = {
         runCatching { ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }, openClock = {
         runCatching { ctx.startActivity(Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
@@ -294,6 +302,8 @@ fun RisiSkillsScreen(
     openClock: () -> Unit = {},
     /** P0 Calendar → Details: the calendar Risi adds to (changeable); null: not shown. */
     calendar: lk.codegen.risime.data.tabs.RisiCalendarPort? = null,
+    /** v1.31 §31.2: the Calendar skill's Google Calendar section (null: not shown, e.g. in tests). */
+    google: GcalSettingsModel? = null,
 ) {
     val skills by model.store.skills.collectAsStateWithLifecycle()
     val error by model.store.error.collectAsStateWithLifecycle()
@@ -340,6 +350,7 @@ fun RisiSkillsScreen(
                         onClear = { model.clear(s.id) },
                         openSettings = openSettings, openClock = openClock,
                         calendar = calendar.takeIf { s.id == RisiSkillIds.CALENDAR },
+                        google = google.takeIf { s.id == RisiSkillIds.CALENDAR },
                     )
                 }
             }
@@ -365,6 +376,7 @@ private fun SkillCard(
     openSettings: () -> Unit,
     openClock: () -> Unit,
     calendar: lk.codegen.risime.data.tabs.RisiCalendarPort? = null,
+    google: GcalSettingsModel? = null,
 ) {
     Card(Modifier.fillMaxWidth().testTag("risi_skill_${s.id}")) {
         Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -394,6 +406,11 @@ private fun SkillCard(
             note?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("risi_skill_note_${s.id}"))
                 OutlinedButton(onClick = openSettings) { Text("Open settings") }
+            }
+            // v1.31 §31.2: the Google Calendar section sits on the Calendar card itself (not behind Details).
+            if (google != null) {
+                HorizontalDivider()
+                GoogleCalendarSection(google)
             }
             if (!open) {
                 TextButton(onClick = onToggleOpen) { Text("Details") }

@@ -13,6 +13,7 @@ import lk.codegen.risime.data.db.SyncDao
 import lk.codegen.risime.data.db.SyncStateEntity
 import lk.codegen.risime.net.Event
 import lk.codegen.risime.net.risiCalendarChanged
+import lk.codegen.risime.net.googleCalendarLink
 import lk.codegen.risime.net.MessageData
 import lk.codegen.risime.data.mls.MlsEngine
 import lk.codegen.risime.data.mls.MlsNotReady
@@ -127,6 +128,8 @@ class ChatEngine(
      * event path (null = an app without `risi_events`: skipped, the cursor still advances). Must not block.
      */
     private val onRisiCalendarChanged: ((cursor: String?) -> Unit)? = null,
+    /** §31.3 `google_calendar_link` (cursor-ordered, content-light): the Google section refreshes (null = an app without `google_calendar`: skipped, the cursor still advances). Must not block. */
+    private val onGoogleCalendarLink: ((lk.codegen.risime.net.GoogleCalendarLinkData) -> Unit)? = null,
 ) : RealtimeListener, lk.codegen.risime.data.history.SendLanes {
     /** §15.4–§15.6 applied inside each event's transaction. */
     private val applier = deletes?.let { lk.codegen.risime.data.deletes.DeleteApplier(it, messages, images, clock, log) }
@@ -263,6 +266,10 @@ class ChatEngine(
                     }
                     lk.codegen.risime.net.KIND_RISI_CALENDAR_CHANGED -> {
                         onRisiCalendarChanged?.let { f -> e.risiCalendarChanged()?.let { d -> runCatching { f(d.cursor) } } }
+                        false
+                    }
+                    lk.codegen.risime.net.KIND_GOOGLE_CALENDAR_LINK -> {
+                        onGoogleCalendarLink?.let { f -> e.googleCalendarLink()?.let { d -> runCatching { f(d) } } }
                         false
                     }
                     Event.KIND_GROUP_RECEIPT -> {

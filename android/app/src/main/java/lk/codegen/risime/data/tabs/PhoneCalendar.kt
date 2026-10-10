@@ -42,7 +42,11 @@ data class PhoneCalendarInfo(
  * One instance in a time window (`CalendarContract.Instances`): only what free/busy needs, plus its
  * calendar (for the per-calendar counts a check reports) and whether that calendar is visible.
  */
-data class BusyRow(val begin: Long, val end: Long, val allDay: Boolean, val busy: Boolean, val calendarId: Long = 0, val visible: Boolean = true)
+data class BusyRow(
+    val begin: Long, val end: Long, val allDay: Boolean, val busy: Boolean, val calendarId: Long = 0, val visible: Boolean = true,
+    /** The provider's `_SYNC_ID` (v1.31 §31.4 loop guard): `risi` + 32 hex digits marks a RisiMe copy. */
+    val syncId: String? = null,
+)
 
 /** An event read back from the provider (`CalendarContract.Events`). */
 data class EventRow(val id: Long, val calendarId: Long, val title: String?, val dtStart: Long, val dtEnd: Long, val allDay: Boolean)
@@ -234,6 +238,11 @@ data class CalendarRead(val blocks: List<CalendarBlock>, val source: lk.codegen.
 
         const val GOOGLE_API = "google_api"
 
+        private val RISI_SYNC_ID = Regex("^risi[0-9a-f]{32}$")
+
+        /** v1.31 §31.4: a provider event synced down from one of RisiMe's Google copies. */
+        fun isRisiCopy(syncId: String?): Boolean = syncId != null && RISI_SYNC_ID.matches(syncId)
+
         /** v1.29 §29.2 (root alignment): the direct Google Calendar connection isn't built yet. */
         val GOOGLE_API_NOT_CONNECTED = lk.codegen.risime.net.CalendarSourceReport(GOOGLE_API, emptyList(), false, "not_connected")
 
@@ -373,7 +382,7 @@ class PhoneCalendar(
      * calendars (name, account type, instances in the window) and whether the read can be trusted
      * (`read_ok`: a visible, synced Google calendar exists). Null without read permission.
      */
-    fun read(fromMs: Long, toMs: Long): CalendarRead? {
+    fun read(fromMs: Long, toMs: Long, skipGoogleAccount: String? = null): CalendarRead? {
         if (!backend.canRead()) return null
         val cals = runCatching { backend.calendars() }.getOrElse {
             log("risi calendar: calendar list failed")
@@ -386,7 +395,11 @@ class PhoneCalendar(
         val known = cals.map { it.id }.toSet()
         val visibleIds = cals.filter { it.visible }.map { it.id }.toSet()
         // A row of a calendar the list doesn't know (a race) counts when its own flag says visible.
-        val used = rows.filter { r -> r.visible && (r.calendarId !in known || r.calendarId in visibleIds) }
+        // v1.31 §31.4 loop guard: RisiMe's own copies (a `risi<hex32>` sync id) are never busy here (the Risi Calendar
+        // counts them); and while Google is read through the API in the same call, the connected account's provider
+        // events are skipped so nothing is counted twice.
+        val skipIds = if (skipGoogleAccount == null) emptySet() else cals.filter { it.accountType == CalendarSelection.GOOGLE && it.accountName.equals(skipGoogleAccount, true) }.map { it.id }.toSet()
+        val used = rows.filter { r -> r.visible && (r.calendarId !in known || r.calendarId in visibleIds) && !CalendarRead.isRisiCopy(r.syncId) && r.calendarId !in skipIds }
         val inWindow = used.filter { it.end > fromMs && it.begin < toMs && it.end > it.begin }
         val read = cals.filter { it.visible }.sortedWith(googleFirst).take(CalendarRead.MAX_CALENDARS).map { c ->
             lk.codegen.risime.net.CalendarSourceCalendar(CalendarRead.wireName(c),c.accountType.take(100), inWindow.count { it.calendarId == c.id })

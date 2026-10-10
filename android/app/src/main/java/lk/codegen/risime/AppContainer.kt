@@ -276,6 +276,80 @@ class AppContainer(
             .stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
     }
 
+    // ---- §31 (v1.31) Google Calendar link ----
+
+    /** §31.1 the `google_calendar` server switch (kept across restarts) and this device's advertisement. */
+    val gcalSwitch = lk.codegen.risime.data.tabs.RisiToolsSwitch(
+        persistedServerOn = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getBoolean("google_calendar_on", false),
+        persistServerOn = { on -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putBoolean("google_calendar_on", on).apply() },
+        log = { Log.i("RisiMe", it.replace("risi_tools", "google_calendar")) },
+    )
+
+    /** The Google link on this device: the switch and advertisement, with everything `risi_events` needs. */
+    fun googleCalendarOn(): Boolean = gcalSwitch.on.value && risiEventsOn()
+
+    /** The same as a flow (the Settings section shows only while it is true; v1.30 exactly otherwise). */
+    val googleCalendarActive: kotlinx.coroutines.flow.StateFlow<Boolean> by lazy {
+        kotlinx.coroutines.flow.combine(gcalSwitch.on, risiEventsActive) { a, b -> a && b }
+            .stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
+    }
+
+    /** This phone holds a Google grant (it has picks): the Calendar skill's permission is then granted (§31.2), not READ_CALENDAR. */
+    private val gcalHeld = MutableStateFlow(false)
+
+    init {
+        scope.launch { runCatching { db.gcal().observeCalendars().collect { gcalHeld.value = it.isNotEmpty() } } }
+    }
+
+    private fun googleGrantsSkill(s: lk.codegen.risime.net.RisiSkill) = s.id == lk.codegen.risime.net.RisiSkillIds.CALENDAR && gcalHeld.value && gcalSwitch.serverOn.value
+
+    /** §31: the link, the picks, the busy reads and the copies. Created on first use. */
+    val gcal: lk.codegen.risime.data.gcal.GcalRuntime by lazy {
+        lk.codegen.risime.data.gcal.GcalRuntime(
+            appContext, http, lk.codegen.risime.data.gcal.ApiGcalRest(api), db.gcal(),
+            events = { risiCalendar.eventsNow() },
+            myDevice = { runCatching { sessionStore.deviceId() }.getOrNull() },
+            skillOff = { risiSkillsStore.localState(lk.codegen.risime.net.RisiSkillIds.CALENDAR) == lk.codegen.risime.net.RisiSkillStates.OFF },
+            enableSkill = { risiSkillsStore.turnOnGranted(lk.codegen.risime.net.RisiSkillIds.CALENDAR) },
+            switchOn = { googleCalendarOn() },
+            scheduleCopy = { full -> lk.codegen.risime.push.GcalCopyWorker.enqueue(appContext, full) },
+            log = { Log.i("RisiMe", it) },
+        )
+    }
+
+    /** §31.6 the Risi Calendar cache changed: events that left it lose their copy; the copy job runs (a no-op unless this phone holds the link). */
+    private fun gcalOnCacheChanged(removed: List<String>) {
+        if (!googleCalendarOn()) return
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val g = gcal
+                if (g.dao.calendars().isEmpty()) return@runCatching
+                if (removed.isNotEmpty()) g.copies.onRemoved(removed)
+                lk.codegen.risime.push.GcalCopyWorker.enqueue(appContext, full = false)
+            }
+        }
+    }
+
+    /** §31.6 at most one reconcile per 24 h on app start (and the section refresh). */
+    private fun gcalOnStart() {
+        if (!googleCalendarOn()) return
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val g = gcal
+                g.manager.refresh()
+                if (g.dao.calendars().isEmpty()) return@runCatching
+                val p = appContext.getSharedPreferences("risime_gcal", Context.MODE_PRIVATE)
+                if (System.currentTimeMillis() - p.getLong("reconcile_at", 0) > 24 * 3600_000L) lk.codegen.risime.push.GcalCopyWorker.enqueue(appContext, full = true)
+            }
+        }
+    }
+
+    /** §31.3 `google_calendar_link`: refresh the section; the old Google device acts on `disconnected` / `replaced`. */
+    private fun onGoogleCalendarLink(d: lk.codegen.risime.net.GoogleCalendarLinkData) {
+        if (!googleCalendarOn()) return
+        scope.launch(Dispatchers.IO) { runCatching { gcal.manager.onLinkEvent(d) } }
+    }
+
     /** §30.6 the Notes REST. */
     val risiNotesRest: lk.codegen.risime.net.RisiNotesRest by lazy { lk.codegen.risime.net.RisiNotesApi(api) }
 
@@ -303,6 +377,7 @@ class AppContainer(
             enabled = { risiEventsOn() },
             me = { sessionStore.current()?.user?.id },
             log = { Log.i("RisiMe", it) },
+            onCacheChanged = { removed -> gcalOnCacheChanged(removed) },
             loadShowDeclined = { prefs.getBoolean("show_declined", false) },
             saveShowDeclined = { on -> prefs.edit().putBoolean("show_declined", on).apply() },
         )
@@ -361,11 +436,11 @@ class AppContainer(
     }
 
     /** What Android says about each skill's permissions (no prompt: background reporting). */
-    val backgroundSkillPermissions by lazy { lk.codegen.risime.data.tabs.AndroidSkillPermissions(appContext, { null }, { null }) }
+    val backgroundSkillPermissions by lazy { lk.codegen.risime.data.tabs.AndroidSkillPermissions(appContext, { null }, { null }, externallyGranted = ::googleGrantsSkill) }
 
     /** The Settings screen's permissions: the prompt goes through its launchers. */
     fun skillPermissions(asker: lk.codegen.risime.ui.settings.ScreenPermissionAsker): lk.codegen.risime.data.tabs.SkillPermissions =
-        lk.codegen.risime.data.tabs.AndroidSkillPermissions(appContext, { asker.runtime }, { asker.exactAlarm })
+        lk.codegen.risime.data.tabs.AndroidSkillPermissions(appContext, { asker.runtime }, { asker.exactAlarm }, externallyGranted = ::googleGrantsSkill)
 
     /** "Also cancel N pending": this phone's own pending items of a skill (null: none kept on the phone). */
     suspend fun pendingSkillItems(skillId: String): Int? =
@@ -448,6 +523,9 @@ class AppContainer(
             graphemes = { lk.codegen.risime.data.IcuGraphemes.count(it) },
             log = { Log.i("RisiMe", it) },
             calendar = phoneCalendar,
+            // §31.4: the Google busy read, when the server sends `sources: ["google_api"]` to this (the Google) device.
+            google = { from, to -> gcal.readForCheck(from, to, skillOff = risiSkillsStore.localState(lk.codegen.risime.net.RisiSkillIds.CALENDAR) == lk.codegen.risime.net.RisiSkillStates.OFF, me = runCatching { sessionStore.deviceId() }.getOrNull()) },
+            googleAccount = { runCatching { gcal.accountIfMine(sessionStore.deviceId()) }.getOrNull() },
         )
     }
 
@@ -525,6 +603,9 @@ class AppContainer(
         val notesBefore = risiNotes.serverOn.value
         risiNotes.setServerOn(cfg.risiNotesOn)
         risiEvents.setServerOn(cfg.risiEventsOn)
+        val gcalBefore = gcalSwitch.serverOn.value
+        gcalSwitch.setServerOn(cfg.googleCalendarOn)
+        if (gcalBefore != cfg.googleCalendarOn) refreshCapabilities()
         if (before != cfg.tabsOn || risiBefore != cfg.risiToolsOn || skillsBefore != cfg.risiSkillsOn || ledgerBefore != cfg.risiLedgerOn || eventsBefore != cfg.risiEventsOn || notesBefore != cfg.risiNotesOn) refreshCapabilities()
     }
 
@@ -980,6 +1061,7 @@ class AppContainer(
             risiLedgerSupported = { risiLedger.serverOn.value },
             risiEventsSupported = { risiEvents.serverOn.value },
             risiNotesSupported = { risiNotes.serverOn.value },
+            googleCalendarSupported = { gcalSwitch.serverOn.value },
             onAdvertised = { caps ->
                 val tabs = lk.codegen.risime.net.DeviceMls.CAP_TABS in caps
                 chatTabs.setAdvertised(tabs)
@@ -993,6 +1075,9 @@ class AppContainer(
                 val events = lk.codegen.risime.net.DeviceMls.CAP_RISI_EVENTS in caps
                 risiEvents.setAdvertised(events)
                 risiNotes.setAdvertised(lk.codegen.risime.net.DeviceMls.CAP_RISI_NOTES in caps)
+                val gcalAdvertised = lk.codegen.risime.net.DeviceMls.CAP_GOOGLE_CALENDAR in caps
+                gcalSwitch.setAdvertised(gcalAdvertised)
+                if (gcalAdvertised) gcalOnStart()
                 // §29.6: a calendar device syncs on start (lists when it has no cursor yet).
                 if (events) scope.launch { runCatching { risiCalendar.sync(); risiCalendar.loadSettings() } }
                 // §27.10: a risi_ledger app creates its Risi chat at start when it has none (follow-ups land there).
@@ -1008,7 +1093,8 @@ class AppContainer(
                         .putString("advertised_risi_skills_device", if (skills) id else null)
                         .putString("advertised_risi_ledger_device", if (ledger) id else null)
                         .putString("advertised_risi_events_device", if (events) id else null)
-                        .putString("advertised_risi_notes_device", if (lk.codegen.risime.net.DeviceMls.CAP_RISI_NOTES in caps) id else null).apply()
+                        .putString("advertised_risi_notes_device", if (lk.codegen.risime.net.DeviceMls.CAP_RISI_NOTES in caps) id else null)
+                        .putString("advertised_google_calendar_device", if (gcalAdvertised) id else null).apply()
                 }
             },
         )
@@ -1170,6 +1256,8 @@ class AppContainer(
             if (id != null && events != null && events.equals(id, true) && sessionStore.current() != null) risiEvents.restoreAdvertised(true)
             val notes = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_risi_notes_device", null)
             if (id != null && notes != null && notes.equals(id, true) && sessionStore.current() != null) risiNotes.restoreAdvertised(true)
+            val gcalSaved = appContext.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getString("advertised_google_calendar_device", null)
+            if (id != null && gcalSaved != null && gcalSaved.equals(id, true) && sessionStore.current() != null) gcalSwitch.restoreAdvertised(true)
             // §26.6: every process start re-arms the pending schedules and sends what is overdue.
             if (sessionStore.current() != null) runCatching { scheduled.rearmAll() }.onFailure { Log.w("RisiMe", "scheduled message: re-arm failed: ${it.javaClass.simpleName}") }
         }
@@ -1483,6 +1571,8 @@ class AppContainer(
         risiToolCalls = { call -> scope.launch { risiToolCalls.handle(call) } },
         // §29.6: content-free; the calendar syncs off the event path (no-op unless this device advertises risi_events).
         onRisiCalendarChanged = { cursor -> syncRisiCalendar(cursor) },
+        // §31.3: content-free for the server's purposes; the Settings section refreshes (a no-op unless this device advertises google_calendar).
+        onGoogleCalendarLink = { d -> onGoogleCalendarLink(d) },
     )
 
 
@@ -1978,6 +2068,8 @@ class AppContainer(
     suspend fun logout(confirmed: lk.codegen.risime.data.UserConfirmation) {
         authDiagnostics.signedOut(if (confirmed.deleteChats) lk.codegen.risime.data.auth.SignOutTrigger.USER_LOGOUT_DELETE else lk.codegen.risime.data.auth.SignOutTrigger.USER_LOGOUT)
         notifier.cancelAll()
+        // §31.8 a confirmed logout: the Google grant is revoked (attempted) and the local Google data goes.
+        withTimeoutOrNull(LOGOUT_NETWORK_MS) { runCatching { if (gcalSwitch.serverOn.value) gcal.manager.onLogout() } }
         val end = auth.issuerAndClient()?.let { (issuer, _) -> auth.idToken()?.let { EndSession(issuer, it) } }
         try {
             // Server side is best effort and bounded: a dead network or a Keycloak error never

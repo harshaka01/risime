@@ -31,7 +31,10 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
             CalendarContract.Instances.SELF_ATTENDEE_STATUS,
             CalendarContract.Instances.VISIBLE,
             CalendarContract.Instances.CALENDAR_ID,
+            // v1.31 §31.4 loop guard (the Events column, joined into the Instances view); dropped if a provider refuses it.
+            CalendarContract.Events._SYNC_ID,
         )
+        val INSTANCES_PROJECTION_V1 = INSTANCES_PROJECTION.copyOf(8)
     }
 
     private val cr get() = context.contentResolver
@@ -75,7 +78,9 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
 
     override fun instances(fromMs: Long, toMs: Long): List<BusyRow> {
         val out = ArrayList<BusyRow>()
-        cr.query(instancesUri(fromMs, toMs), INSTANCES_PROJECTION, null, null, null)?.use { q ->
+        val withSync = runCatching { cr.query(instancesUri(fromMs, toMs), INSTANCES_PROJECTION, null, null, null) }.getOrNull()
+        (withSync ?: cr.query(instancesUri(fromMs, toMs), INSTANCES_PROJECTION_V1, null, null, null))?.use { q ->
+            val hasSync = q.columnCount > 8
             while (q.moveToNext()) {
                 if (!q.isNull(4) && q.getInt(4) == CalendarContract.Events.STATUS_CANCELED) continue
                 if (!q.isNull(5) && q.getInt(5) == CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED) continue
@@ -83,6 +88,7 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
                 out += BusyRow(
                     q.getLong(0), q.getLong(1), q.getInt(2) != 0, busy = avail != CalendarContract.Events.AVAILABILITY_FREE,
                     calendarId = if (q.isNull(7)) 0 else q.getLong(7), visible = q.isNull(6) || q.getInt(6) != 0,
+                    syncId = if (hasSync && !q.isNull(8)) q.getString(8) else null,
                 )
             }
         }

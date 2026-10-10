@@ -17,6 +17,8 @@ class AndroidSkillPermissions(
     private val context: Context,
     private val runtimeAsker: () -> (suspend (Array<String>) -> Unit)?,
     private val exactAlarmAsker: () -> (suspend () -> Unit)?,
+    /** v1.31 §31.2: a skill whose OAuth grant is held on this phone (the Google grant IS the Calendar skill's permission). */
+    private val externallyGranted: (RisiSkill) -> Boolean = { false },
 ) : SkillPermissions {
     private val prefs = context.getSharedPreferences("risime_skills", Context.MODE_PRIVATE)
 
@@ -43,6 +45,7 @@ class AndroidSkillPermissions(
 
     override fun current(skill: RisiSkill): String {
         if (skill.permissions.any { it.name == "com.android.alarm.permission.SET_ALARM" } && !clockAvailable()) return ClientPermission.UNSUPPORTED
+        if (externallyGranted(skill)) return ClientPermission.GRANTED
         val runtime = runtimeOf(skill)
         if (runtime.isEmpty()) return ClientPermission.NOT_NEEDED
         val states = runtime.map { p -> if (granted(p)) ClientPermission.GRANTED else if (asked(p)) ClientPermission.DENIED else ClientPermission.NOT_ASKED }
