@@ -151,6 +151,8 @@ data class RisiMeta(
     val undo: RisiUndo? = null,
     @SerialName("undo_token") val undoToken: String? = null,
     val reason: String? = null,
+    /** v1.31 §31.8 `google_reconnect`: the Google device. */
+    @SerialName("device_id") val deviceId: String? = null,
     @SerialName("was_on") val wasOn: Boolean? = null,
     // v1.26 §26.7 calendar_offer
     val start: String? = null,

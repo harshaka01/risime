@@ -68,6 +68,13 @@ data class RisiSource(
     @SerialName("fact_id") val factId: String? = null,
     val url: String? = null,
     val title: String? = null,
+    // `calendar_source` (§29.7, v1.31 §31.5): the source read, whether it was, why not; `count`/`refs` for `google_api`
+    val source: String? = null,
+    val names: List<String> = emptyList(),
+    @SerialName("read_ok") val readOk: Boolean? = null,
+    val reason: String? = null,
+    val count: Int? = null,
+    val refs: List<String> = emptyList(),
 ) {
     /** Whether the app can show it: a known type with its fields (a link only over https). */
     val showable: Boolean get() = when (type) {
@@ -158,7 +165,12 @@ data class RisiToolCall(
 }
 
 @Serializable
-data class CalendarCheckArgs(val from: String, val to: String)
+data class CalendarCheckArgs(
+    val from: String,
+    val to: String,
+    /** §31.4 (v1.31): the sources to read (`phone_provider`, `google_api`); absent = everything the phone reads (v1.29). */
+    val sources: List<String>? = null,
+)
 
 @Serializable
 data class CalendarAddArgs(

@@ -9,7 +9,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Wire models for contract/v1/PROTOCOL.md. Field names match the contract exactly. */
 
 /** The PROTOCOL.md version this client implements (shown in Settings → About; checked by a test). */
-const val PROTOCOL_VERSION = "1.30"
+const val PROTOCOL_VERSION = "1.31"
 
 val ProtocolJson: Json = Json {
     ignoreUnknownKeys = true // §0: clients must ignore unknown fields
@@ -366,7 +366,12 @@ data class AuthConfig(
     @SerialName("risi_events") val risiEvents: String? = null,
     /** §30.1 (v1.29): "on" | "off"; absent = off (only on together with `risi_ledger`). */
     @SerialName("risi_notes") val risiNotes: String? = null,
+    /** §31.1 (v1.31): "on" while `RISI_GCAL` and `RISI_EVENTS` are on; absent = off. */
+    @SerialName("google_calendar") val googleCalendar: String? = null,
 ) {
+    /** §31.1: the Google Calendar link on the server; only then does the app advertise `google_calendar` (with `risi_events`). */
+    val googleCalendarOn: Boolean get() = googleCalendar == "on"
+
     /** §30.1: Risi Notes on the server; only then does the app advertise `risi_notes` (with `risi_events`). */
     val risiNotesOn: Boolean get() = risiNotes == "on"
 
@@ -681,6 +686,9 @@ data class DeviceMls(
 
         /** v1.29 §30.1: Risi Notes, only with `risi_events` and while `/auth/config` says `risi_notes: on`. */
         const val CAP_RISI_NOTES = CAPABILITY_RISI_NOTES
+
+        /** v1.31 §31.1: the Google Calendar link, only with `risi_events` and while `/auth/config` says `google_calendar: on`. */
+        const val CAP_GOOGLE_CALENDAR = CAPABILITY_GOOGLE_CALENDAR
     }
 }
 

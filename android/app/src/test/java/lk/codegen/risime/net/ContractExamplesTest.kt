@@ -85,10 +85,71 @@ class ContractExamplesTest {
         )
     }
 
+    /** v1.31 §31 Google Calendar link (net/Protocol131.kt): the server's real examples (PROTOCOL.md §31.12). */
+    private val google131: Map<String, (String) -> Any> by lazy {
+        fun env(s: String) = ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!
+        fun toolResult(s: String) = ProtocolJson.decodeFromString<RisiToolResult>(s)
+        mapOf(
+            "auth_config_v131.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.googleCalendarOn && it.risiEventsOn) } },
+            "device_put_google_calendar.json" to { s ->
+                ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_GOOGLE_CALENDAR in it.mls!!.capabilities!! && CAPABILITY_RISI_EVENTS in it.mls!!.capabilities!!) }
+            },
+            "risi_google_link_put.json" to { s ->
+                ProtocolJson.decodeFromString<GoogleLinkPut>(s).also { require(it.connect && it.state == GcalLinkStates.CONNECTED && it.readCalendars == 2 && it.writeCalendar && it.mirror) }
+            },
+            "risi_google_link_reply.json" to { s ->
+                ProtocolJson.decodeFromString<GoogleLinkReply>(s).google.also { require(it.state == GcalLinkStates.CONNECTED && it.deviceName == "Pixel 8" && it.readCalendars == 2 && it.deviceId != null) }
+            },
+            "event_google_calendar_link.json" to { s ->
+                ProtocolJson.decodeFromString<Event>(s).googleCalendarLink()!!.also { require(it.reason == GcalLinkReasons.DISCONNECTED && it.state == GcalLinkStates.NOT_CONNECTED && !it.removeCopies) }
+            },
+            "error_not_google_device.json" to { s -> apiError(s, GcalErrors.NOT_GOOGLE_DEVICE) },
+            "event_risi_tool_call_calendar_check_google.json" to { s ->
+                ProtocolJson.decodeFromString<Event>(s).risiToolCall()!!.also {
+                    require(it.tool == RisiToolCall.TOOL_CALENDAR_CHECK && it.calendarCheckArgs()!!.sources == listOf("google_api") && it.toDevices.size == 1)
+                }
+            },
+            "risi_tool_result_calendar_check_google.json" to { s ->
+                val r = toolResult(s)
+                val rep = ProtocolJson.decodeFromJsonElement(GoogleSourceReport.serializer(), r.result!!["sources"]!!.jsonArray.single())
+                require(r.status == "ok" && rep.readOk && rep.calendars.map { it.ref } == listOf("g4k2m7qa", "g9t3b8rc") && rep.reason == null)
+                require("\"name\"" !in s && "account_type" !in s)
+                r
+            },
+            "risi_tool_result_calendar_check_google_reauth.json" to { s ->
+                val r = toolResult(s)
+                val rep = ProtocolJson.decodeFromJsonElement(GoogleSourceReport.serializer(), r.result!!["sources"]!!.jsonArray.single())
+                require(!rep.readOk && rep.reason == GcalReadReasons.REAUTH_NEEDED && rep.calendars.isEmpty())
+                r
+            },
+            "envelope_risi_answer_calendar_sources_google.json" to { s ->
+                env(s).also { m ->
+                    val g = m.sources.single { it.source == "google_api" }
+                    require(m.kind == "answer" && g.type == "calendar_source" && g.count == 2 && g.refs.size == 2 && g.names.isEmpty() && g.readOk == true)
+                }
+            },
+            "envelope_risi_answer_calendar_google_no_answer.json" to { s ->
+                env(s).also { m ->
+                    val g = m.sources.single { it.source == "google_api" }
+                    require(g.readOk == false && g.reason == GcalReadReasons.NO_ANSWER && g.refs.isEmpty() && g.count == 2 && m.nextSteps == listOf("Retry"))
+                }
+            },
+            "envelope_risi_google_reconnect.json" to { s ->
+                env(s).also { require(it.kind == RisiKinds131.GOOGLE_RECONNECT && it.reason == "reauth_needed" && it.buttons == listOf("reconnect") && it.deviceId != null) }
+            },
+            "risi_skills_reply_v131.json" to { s ->
+                ProtocolJson.decodeFromString<RisiSkillsReply>(s).also { r ->
+                    val cal = r.skills.single { it.id == "calendar" }
+                    require(cal.permissions.count { it.scope == "oauth" } == 2)
+                }
+            },
+        )
+    }
+
     private val all: List<String> by lazy { read("index.txt").lines().filter { it.isNotBlank() } }
 
     /** Every example file must map to a model; a new file without a decoder fails this test. */
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + mapOf(
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + mapOf(
         // v1.27 (§27 made_by, the Ledger follow-ups, call transcription): net/Protocol127.kt and RisiMeta's optional fields.
         "auth_config_v127.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiLedgerOn && it.risiTranscribeOn && it.risiSkillsOn && it.risiToolsOn) } },
         "device_put_risi_ledger.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_LEDGER in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) } },
