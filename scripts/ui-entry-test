@@ -2657,7 +2657,8 @@ if check == 'list':   # short_name long_prefix preview scale
 elif check == 'tabs':
     hs = {}
     for lab in ('Chats', 'Calls', 'Requests', 'Calendar'):
-        n = next((n for n in nodes if txt(n) == lab), None) or next((n for n in nodes if desc(n) == lab or desc(n).startswith(lab + ',')), None)
+        n = next((n for n in nodes if txt(n) == lab), None)
+        if n is None: n = next((n for n in nodes if desc(n) == lab or desc(n).startswith(lab + ',')), None)
         if n is not None: hs[lab] = h(n)
     if 'Requests' not in hs or 'Chats' not in hs: bad("tab row without Chats/Requests: %s" % hs)
     base = min(hs.values())
