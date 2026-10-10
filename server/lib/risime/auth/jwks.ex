@@ -145,7 +145,19 @@ defmodule RisiMe.Auth.JWKS do
   defp with_state({:error, reason}, state), do: {:error, reason, state}
 
   defp get_json(url) do
-    opts = [retry: false, receive_timeout: 5_000] ++ Config.oidc(:req_options)
+    # Incident 2026-10-10: a transient failure (timeout, closed, econnrefused, 5xx) is retried
+    # once after 1 s; the :req_options override (tests stub here) comes last and wins.
+    opts =
+      Keyword.merge(
+        [
+          retry: :transient,
+          max_retries: 1,
+          retry_delay: 1_000,
+          receive_timeout: 5_000,
+          connect_options: [timeout: 3_000]
+        ],
+        Config.oidc(:req_options)
+      )
 
     case Req.get(url, opts) do
       {:ok, %Req.Response{status: 200, body: body}} when is_map(body) ->

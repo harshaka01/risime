@@ -187,6 +187,39 @@ defmodule RisiMe.Auth.JWTTest do
       assert {:ok, _} = verify(sign(claims()))
     end
 
+    test "a transient failure is retried once; telemetry reports the final outcome", %{counter: c} do
+      ref = make_ref()
+      me = self()
+      id = {:jwks_retry, ref}
+
+      :telemetry.attach(
+        id,
+        [:risime, :jwks, :fetch],
+        fn _, _, m, _ -> send(me, {ref, m}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      Req.Test.stub(JWKS, fn conn ->
+        n =
+          Agent.get_and_update(c, fn s ->
+            {Map.get(s, :n, 0) + 1, Map.put(s, :n, Map.get(s, :n, 0) + 1)}
+          end)
+
+        if n == 1,
+          do: Plug.Conn.send_resp(conn, 503, ""),
+          else: Req.Test.json(conn, jwks([:rsa]))
+      end)
+
+      Req.Test.allow(JWKS, self(), Process.whereis(JWKS))
+      put_oidc(jwks: {:url, issuer() <> "/protocol/openid-connect/certs"})
+      assert JWKS.refresh_now() == 1
+      assert Agent.get(c, & &1.n) == 2
+      assert_received {^ref, _}
+      refute_received {^ref, _}
+    end
+
     test "concurrent unknown kids cause a single fetch", %{counter: c} do
       serve(c)
       put_oidc(jwks: {:url, issuer() <> "/protocol/openid-connect/certs"}, min_refetch_ms: 60_000)
