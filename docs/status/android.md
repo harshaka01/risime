@@ -1,5 +1,82 @@
 # Android status — 0.2 nightlies
 
+## v1.31 §31 Google Calendar link (decision 074) — READY v1.31 (JVM gate green; assembleRelease green, seam proven absent)
+Commits on main: 9de2f58 (models, decoders, `PROTOCOL_VERSION` 1.31), c21a1b1 (Google API client, Room v15), 45772bd (busy reads,
+copies, link manager, Settings section, debug seam, capability), e7439dd (rendering, tests), plus the status commit that adds this section.
+Gate: `./gradlew assembleDebug testDebugUnitTest` green; `assembleRelease` runs `checkNoGcalSeamInRelease` (ok).
+
+**What is there**
+- **Models** `net/Protocol131.kt`: `AuthConfig.googleCalendarOn`, `CAPABILITY_GOOGLE_CALENDAR`, `GoogleLink`/`GoogleLinkPut`/`GoogleLinkReply`,
+  the `google_calendar_link` event, `calendar_check` `args.sources`, `GoogleSourceReport {ref, events}`, `calendar_source` `count`/`refs`,
+  kind `google_reconnect`, error `not_google_device`. `ContractExamplesTest` decodes all 13 v1.31 examples (map `google131`).
+- **Capability** `google_calendar` is advertised only with `risi_events` (tabs, tools, skills, ledger) while `/auth/config` says
+  `google_calendar: on`; with or without Play services. Key absent: no section, no Google call, v1.30 answers.
+- **Google client** `data/gcal/`: `GcalApi` (OkHttp + kotlinx.serialization; calendarList, events.list with the §31.4 `fields`, insert/get/put/
+  patch/delete/move, every write `sendUpdates=none`, all pages, no logging interceptor at all, 8 s per call), `GcalAuthorizer`/`PlayAuthorizer`
+  (`Identity.getAuthorizationClient`, exactly the two scopes, no offline access, no web client id; token in memory only; `play-services-auth`
+  21.5.1), `401` -> one silent re-authorize -> `reauth_needed`. `GcalBusy` (parallel, 12 s total, busy rules + loop guard, any failure fails the
+  source), `GcalCopies` (§31.6 incl. 409 -> GET -> PUT, `deleted_in_google` never re-added, adopt by id, move, reconcile, remove-all),
+  `GcalLinkManager` (connect/change/reconnect/reauth/disconnect/replaced/logout), `GcalRuntime` (wiring), `GcalNames` (names in the Checked line).
+- **Room v15** (`Migration14To15`, additive, `Migration14To15Test` keeps every row/count): `gcal_calendars` (calendar_id, ref, name, role, read,
+  write, account) and `gcal_copies` (event_id, calendar_id, google_event_id, risi_version, state, updated_at). Cleared by Disconnect, `replaced`,
+  a missed disconnect (next GET), a confirmed logout (revoke attempted) and `WipeDao.allChatData`. Never in a backup (the bundle exporter is a
+  whitelist of messages/contacts) and never in history sharing. `GcalKeepsChatsTest`: every path keeps every chat message (HARD RULE 9).
+- **Busy reads** `calendar_check` with `sources`: `["google_api"]`, `["phone_provider"]` or both (ONE call on the asking Google device, blocks merged);
+  the result lists exactly the sources asked for; `google_api` calendars are `{ref, events}` (a test fails if `name`/`account_type`/an id appears).
+  Without `sources` the v1.29 result is unchanged. Loop guard in the phone provider on EVERY device: `_SYNC_ID ^risi[0-9a-f]{32}$` is never busy;
+  when Google is read by API in the same call the connected account's (com.google, same name) provider events are skipped too. Reasons the phone
+  reports: `reauth_needed` (+ it `PUT`s the state), `network`, `timeout`, `api_error`, `no_calendars`, `not_connected`; `no_answer`/`paused` are the server's.
+  A late result gets `409 tool_call_expired`: only logged. The call is handled from the inbox wake with no UI and never shows a consent.
+- **Copies**: one WorkManager unique job `gcal-copy` (network), enqueued after the Risi Calendar cache changes (feed page, re-list, own write, silent
+  update card), after connect/reconnect/mirror-on (full reconcile), and at most once per 24 h on start. A failed run re-enqueues itself with a
+  back-off 30 s doubling up to 1 h (WorkManager's own back-off cannot be capped at 1 h). Paused while `reauth_needed`/`paused`/key absent/mirror off.
+- **Rendering**: "Checked:" shows local names on the Google phone only when it knows every ref (stored message unchanged); the mini day timeline gets
+  Google busy blocks (grey, dotted edge, counted in "Clashes with N events", 5-minute in-memory cache, never stored), the caption "Google Calendar
+  not checked" on a failed read and "Google Calendar is checked on <device_name>" on other devices; `google_reconnect` card with [Reconnect]
+  (opens Settings -> Risi skills at Calendar). The Calendar skill's client permission is reported `granted` while the Google grant is held
+  (so the background report never flips it to denied without READ_CALENDAR); connect turns the skill on with `state: ask`,
+  `client_permission: granted`.
+- **Debug seam** `src/debug/`: `GcalTestReceiver` (action `lk.codegen.risime.debug.GCAL_TEST`, `android:permission="android.permission.DUMP"`,
+  declared only in `src/debug/AndroidManifest.xml`, `BuildConfig.DEBUG` guard). Extras: `base_url` (only `http://127.0.0.1:<port>/` or
+  `http://10.0.2.2:<port>/`), `access_token`, `account`, `state` = `connected` | `reauth_needed` | `none`. `GcalTestSeamTest` (src/testDebug) proves
+  other hosts are refused. Release: `checkNoGcalSeamInRelease` (finalizes every `assembleRelease`) scans the APK's dex + manifest (UTF-8 and UTF-16)
+  for `GCAL_TEST`, `GcalTestReceiver`, `FakeGcalAuthorizer`; it passes on `app-release.apk` and the debug dex does contain the string.
+  Run it alone: `./gradlew assembleRelease` (the check is its finalizer) or `./gradlew :app:checkNoGcalSeamInRelease` after one.
+
+**v1.31 UI strings (for `scripts/ui-entry-test --google`)**
+- Where: Settings -> Risi skills -> the **Calendar** card, section directly on the card (not behind Details). Title text node `Google Calendar`
+  (only present while the switch is on). Info line (exact, §31.9) under the section: `Your Google sign-in stays on this phone. ...`
+- States (status text): `Not connected` + button `Connect Google Calendar`; `Connected on this phone · Checking 2 calendars · Adding events to Work`
+  (+ `Connected as <email>` line when Play gives it) + buttons `Change calendars`, `Disconnect`; `Connected on Pixel 8` + `Connect here instead`,
+  `Disconnect`; `Needs reconnecting` + `Reconnect Google Calendar`, `Disconnect`; `Paused: turn on the Calendar skill to use it` + `Disconnect`;
+  `Google Play services isn't available on this phone.` + a disabled `Connect Google Calendar`.
+- Picker (an AlertDialog, testTag `gcal_picker`): heading texts `Check for busy times`, `Add my Risi events to`, switch label `Copy my Risi
+  Calendar events to Google`. Each calendar row = a separate `CheckBox` node (testTag `gcal_read_<name>`, checked by default: primary + selected and
+  not hidden) and a text node with the name; the write list = `RadioButton` (testTag `gcal_write_<name>`, primary preselected) + the name, only owner/
+  writer calendars. Switch testTag `gcal_mirror_switch` (contentDescription = the label). **Confirm button text `Save`** (tag `gcal_picker_save`),
+  `Cancel` (tag `gcal_picker_cancel`). At most 10 boxes can be ticked.
+- Disconnect sheet (AlertDialog, tag `gcal_disconnect_sheet`): title `Disconnect Google Calendar?`, body `Risi will stop checking it and stop copying
+  events.`, `Events already copied:`, radios `Keep them in Google` (default, tag `gcal_keep`) and `Remove them from Google` (tag `gcal_remove`);
+  **confirm button text `Disconnect`** (tag `gcal_disconnect_confirm`), `Cancel`. (The section's own `Disconnect` sits above the dialog; the dialog's
+  is the lowest node with that text.)
+- Mirror switched off in [Change calendars] with copies in Google: dialog `Remove the N copies from Google?` buttons `Remove` / `Keep`.
+- Row `1 Risi event was removed in Google` (`N Risi events ...`) + button `Add again` (tag `gcal_add_again`), shown while connected.
+- Errors: `Google Calendar needs both permissions` (a scope missing), `Couldn't load your Google calendars. Try again.`, `Couldn't change it. Try again.`
+- Reconnect card in the Risi chat: header `Risi · Google Calendar`, the server's body text (`Google Calendar needs reconnecting. ...`), button `Reconnect`
+  (testTags `risi_google_reconnect`, `risi_google_reconnect_button`). Timeline captions: `Google Calendar not checked`, `Google Calendar is checked on Pixel 8`
+  (tag `risi_event_google_note`). Checked line on the Google phone: `Google Calendar (Work, Personal)`.
+- Seam command the script sends matches the receiver: `am broadcast -a lk.codegen.risime.debug.GCAL_TEST -p <pkg> --es base_url ... --es access_token ... --es account ... --es state ...`.
+  After `state=reauth_needed` or `revoked`, `Reconnect Google Calendar` calls the fake's authorize; send `state=connected` first, as the script does.
+
+**Notes / deviations (none contradict the contract)**
+- Reason words are shown from the server's text; the app does not re-localise the "Not checked: ..." line from the codes (English only).
+- `Connected as <email>` appears only if Play services returns the account (`toGoogleSignInAccount()` may be null); the fake seam supplies it.
+- The provider-account skip (`com.google`, same name) is applied only when `google_api` is read in the same call, so a phone-only check never loses events.
+- `calendarList` is read exactly as §31.2 (no `showHidden`): a calendar Google hides is not offered on a real phone (the fake lists it).
+- Local `gcal_*` data is deleted on every user-confirmed logout (with or without deleting chats), not on a silent token expiry.
+- Not testable here (no Play services, no real Google): the real consent screen, `getAuthorizationResultFromIntent`, `revokeAccess` and the 7-day Testing expiry.
+  They are exactly the real-phone checklist in `docs/status/briefs/v1.31-android.md`.
+
 ## v1.29 §30 Risi Notes (proposal 2026-10-09-risi-calendar-notes §30, decision 073) — READY
 Coded against the proposal's JSON shapes; fixtures under `android/app/src/test/resources/fixtures/risi_notes/` (one per
 proposal example name, plus `auth_config_v129_notes.json`, `envelope_risi_item_update_done.json` and a future-shaped
