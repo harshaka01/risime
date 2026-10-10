@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.30 (Release 0.3)
+# RisiMe Wire Protocol — v1.31 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -6104,6 +6104,11 @@ most **16 KiB** (`risi_tool_result_calendar_check.json`, `risi_tool_result_calen
   **Never** titles, descriptions, attendees, places, calendar names or event ids.
   (v1.29: the result may add `sources` and `connected_sources`, the only place calendar names
   may appear, §29.7.)
+  (v1.31: `args` may add `"sources": ["phone_provider" | "google_api"]`, and a `calendar_check`
+  that asks for `google_api` goes to the user's **Google device**, which may not be the asking
+  device: `to_devices` names it, the wake goes to its token, and only it may post the result. A
+  `google_api` source in the result lists calendars as `{"ref", "events"}` only, never a name;
+  §31.4.)
 - No calendar permission: `no_permission` (the app may ask once, from the Risi card, never from the
   background). The user refusing a prompt shown for this call: `declined`.
 
@@ -7686,7 +7691,8 @@ permission is needed for anything in §29.**
 ### 29.0 Principles
 - **RisiMe's own calendar.** Events live on the RisiMe server, per user, sealed with
   `RISI_DATA_KEY` like commitments and facts (§24.12, §28.2). Risi writes there directly; no
-  Android or Google permission is involved. Google Calendar is optional and later (§31).
+  Android or Google permission is involved. Google Calendar is optional (v1.31: the Google
+  Calendar link, §31).
 - **Honest about where it lives.** Risi Calendar is *sealed at rest on the server*, **not**
   end-to-end encrypted: the server (Risi) can read it. The Calendar tab says so once in its info
   sheet: "Your Risi Calendar is stored on the RisiMe server, encrypted at rest. Risi can read it to
@@ -7711,7 +7717,7 @@ permission is needed for anything in §29.**
   off); while off the key is **absent** (absent = off; `auth_config_v129.json`). Off: every
   `/risi/calendar…` call answers `503 agent_unavailable`, no calendar card is sent, and Risi uses the
   v1.28 flows (device `calendar_add` cards, §28.5 offers). (The key `risi_calendar` stays reserved
-  for §31.)
+  for §31.) (v1.31: §31 uses the key `google_calendar`; `risi_calendar` stays reserved and unused.)
 - Device capability **`"risi_events"`** in `mls.capabilities` (`device_put_risi_events.json`) is
   kept only together with `risi_tools`, `risi_skills` and `risi_ledger`; otherwise the server drops
   it silently. A user is a **calendar user** when the switch is on and any of their devices
@@ -7884,7 +7890,8 @@ risi_calendar_client_ids(user_id, client_event_id, event_id, …)               
 Applies to **every** turn that checked a calendar, for calendar users and others alike. Sources, in
 this order: **`risi_calendar`** (server, always for a calendar user), **`phone_provider`** (the
 device `calendar_check` of §25.3, when the Calendar skill is on), **`google_api`** (§31, later;
-`not_connected` until then).
+`not_connected` until then). (v1.31: `google_api` is read by the user's Google device, §31.4; the
+order of the "Checked:" line is Risi Calendar · Google Calendar · Phone calendar, §31.5.)
 
 **The phone's `calendar_check` result v2 (amends §25.3).** An `ok` result may carry what was read:
 ```
@@ -7938,13 +7945,16 @@ window **in the same step**, so the answer covers every connected source. **The 
    and the server **always** appends the line:
    - with Risi Calendar: **"Checked: Risi Calendar · Phone calendar (Work). Not checked: Google
      Calendar (not connected)."** Every source not read is named under "Not checked", **Google
-     always** (until §31);
+     always** (until §31; v1.31: Google stays named whenever it was not read, and a connected
+     Google Calendar shows as "Google Calendar (2 calendars)", with names filled in only on the
+     Google phone, §31.5);
    - a phone-only check: "I checked: Phone calendar — Work (Google) 0 events (Mon 12 Oct,
      14:00–15:00)." plus " Not checked: <source> (<reason>)." for a failed source (an optional
      source that was never connected is not mentioned);
    - a v1 phone (no `sources`) with blocks: "Checked: your phone's calendar (update RisiMe to see
      which calendars)." (a free claim then counts as no read).
-   The words "free", "clear", "available" may only refer to the checked calendars.
+   The words "free", "clear", "available" may only refer to the checked calendars. (v1.31: a free
+   claim while a **connected** source was not read is rewritten, §31.5.)
 3. `answer.sources` (§25.4) gains `{"type": "calendar_source", "source": "risi_calendar" |
    "phone_provider" | "google_api", "names": [str], "read_ok": bool, "reason": str | null}`, one per
    source of the turn's last check (`envelope_risi_answer_calendar_sources_risi.json`).
@@ -7952,7 +7962,8 @@ window **in the same step**, so the answer covers every connected source. **The 
 
 The Android Calendar skill's Details (Settings → Risi skills → Calendar) shows "What Risi can read":
 the permission state and each calendar with its account, events in the next 7 days, hidden / sync
-off, and the exact reason. There is no Google row until §31.
+off, and the exact reason. There is no Google row until §31. (v1.31: the Google Calendar section of
+§31.2 adds it.)
 
 ### 29.8 The action card: `confirm` with `tool: "risi_calendar_add"` (amends §28.2–§28.4)
 For a calendar user, every user-asked event write (the §28.2 draft `kind: "event"`, or the model's
@@ -8346,7 +8357,479 @@ dates; topic and key points stay in the discussion's language (`language`); neut
   proposal's gate 10–14, except that "a listened call's end → `source: "call"`" is checked only by
   the server test until the call-end hook is wired.
 
+## 31. Google Calendar link (v1.31)
+Folds the deferred design of `2026-10-09-google-calendar.md` (its §29.0, §29.1, §29.4, §29.6, §29.8,
+§29.9, rewritten for the Risi Calendar) with Harsha's requirements of 2026-10-10; decision 074
+(supersedes the deferral in 072 and 073). The Google Cloud set-up is `docs/GOOGLE-CALENDAR-SETUP.md`.
+It amends §25.3, §26.1, §26.2, §29.6, §29.7 and §29.9 where stated (§31.12). **Additive only:**
+- the device capability `google_calendar` and the `/auth/config` switch `google_calendar`;
+- REST `/api/v1/risi/calendar/google` and the stored event kind `google_calendar_link`;
+- the `calendar_check` `args.sources` and the `google_api` source entry of its result;
+- `calendar_source` `count` and `refs`, the reasons `no_answer` and `paused`;
+- the `risi.kind` `google_reconnect` and the error `409 not_google_device`.
+
+**An app without `google_calendar` sees v1.30 exactly**, apart from the "Checked:" wording of §31.5
+when another device of the same user is linked.
+
+### 31.0 Principles
+- **The Google token stays on the phone.** The phone gets it from Google Play services with the
+  Authorization API. The RisiMe server never receives, stores, logs or forwards a Google token, an
+  auth code, the Google account's email, a Google calendar name or id, or a Google event title or
+  id. The server makes no Google call (§25.7 egress unchanged).
+- **One Google device per user:** the device that connected. It holds the grant, reads Google busy
+  times when Risi asks (§31.4) and writes the copies of the user's Risi events (§31.6). The server
+  knows only that a link exists, which device holds it, its state and two counts (§31.3).
+- **A two-way link, with clear limits:**
+  - Risi → Google: the user's accepted Risi Calendar events are copied to the one Google calendar the
+    user picked for writing. Updates and cancellations follow.
+  - Google → Risi: only **busy times** from the calendars the user picked for reading. They count for
+    "am I free" and for the clash check on the Google phone's cards. Google titles never leave the
+    phone.
+  - Edits made in Google to a copy are not copied back (§31.6).
+- **Honest answers (amends §29.7):** every answer names the calendars that were checked. A connected
+  Google Calendar that could not be read is "Not checked (phone didn't answer)" or another reason;
+  it is never counted as free (§31.5).
+- **The model never sees calendar names** (§29.7, unchanged) and never sees anything from Google
+  except busy blocks and a calendar count.
+- **RisiMe changes only what it created in Google:** events it inserted, tagged as RisiMe copies
+  (§31.6). No attendees, and Google sends no emails (`sendUpdates=none`).
+- **Always revocable:** Disconnect in Settings, or Google's own "Remove access", works at any time.
+
+### 31.1 Switch and capability
+- `GET /auth/config` gains **`"google_calendar": "on"`** while the server env **`RISI_GCAL=on`
+  and `RISI_EVENTS=on`** (`RISI_GCAL` alone does nothing); otherwise the key is **absent** (absent =
+  off; `auth_config_v131.json`). The default is off.
+  - While off: `/risi/calendar/google` answers `503 agent_unavailable`; no Google tool call is sent;
+    answers read as v1.30 ("Not checked: Google Calendar (not connected)").
+  - Existing links are kept but dormant. A phone that sees the key absent stops reading and copying
+    and keeps its grant; it resumes when the key is back.
+- Device capability **`"google_calendar"`** in `mls.capabilities` (`device_put_google_calendar.json`)
+  is kept only together with `risi_events`; otherwise the server drops it silently. An app advertises
+  it once it implements §31, with or without Google Play services. The server uses only the linked
+  device.
+- No Android build flag. The `risime.gcal` flag of decision 072 is dropped, because the Android OAuth
+  client needs no client id or secret inside the app (`GOOGLE-CALENDAR-SETUP.md` §6).
+- `google_calendar` is listed in the `mls.capabilities` strings as of v1.31 (§25.8).
+
+### 31.2 Connect (Android, normative)
+**Where:** Settings → Risi skills → Calendar → section **"Google Calendar"**. The section shows one of:
+- "Not connected" with **[Connect Google Calendar]**;
+- "Connected on this phone · Checking 2 calendars · Adding events to Work", with [Change calendars]
+  and [Disconnect];
+- "Connected on Pixel 8", on another device of the user, with [Connect here instead] and [Disconnect];
+- "Needs reconnecting" with **[Reconnect Google Calendar]**;
+- "Paused: turn on the Calendar skill to use it" while the Calendar skill is `off`.
+
+Without Google Play services (Huawei, Redroid) the button is disabled and the section says "Google
+Play services isn't available on this phone." (`GoogleApiAvailability`).
+
+**Steps, all from this screen (never from the background):**
+1. `Identity.getAuthorizationClient(activity).authorize(request)`, where `request` is
+   `AuthorizationRequest.builder().setRequestedScopes(listOf(Scope(CAL_EVENTS),
+   Scope(CAL_LIST_RO))).build()` with exactly the two scopes:
+   - `https://www.googleapis.com/auth/calendar.events`;
+   - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`.
+
+   No `requestOfflineAccess` (no server auth code) and no web client id.
+   - If the result `hasResolution()`, launch its `PendingIntent` (`IntentSenderRequest`) and read the
+     reply with `getAuthorizationResultFromIntent`.
+   - Both scopes must be in `grantedScopes`. Otherwise the phone shows "Google Calendar needs both
+     permissions" and stays not connected.
+   - The user cancelling is not an error: the section stays as it was.
+2. The calendar list: `GET users/me/calendarList?minAccessRole=freeBusyReader&fields=items(id,
+   summary,summaryOverride,primary,accessRole,selected,hidden,deleted),nextPageToken` (all pages).
+3. The picker sheet:
+   - **"Check for busy times"**: checkboxes. The default is the primary calendar plus those Google
+     shows (`selected`, not `hidden`). At most 10.
+   - **"Add my Risi events to"**: one choice among calendars with `accessRole` `owner` or `writer`.
+     The default is the primary calendar.
+   - **"Copy my Risi Calendar events to Google"**: a switch, on by default.
+4. `PUT /api/v1/risi/calendar/google` with `connect: true` (§31.3).
+5. If the Calendar skill is `off`, the app turns it on: `PATCH /risi/skills` with `state: "ask"` and
+   `client_permission: "granted"`. The Google grant is the skill's permission, so `READ_CALENDAR` is
+   not required (amends §26.2: an OAuth source completes its flow before the `PATCH`).
+6. The first copy run (§31.6) starts.
+
+**The token** is never written to disk. The phone keeps it in memory with its expiry, and before each
+use calls `authorize()` again, which returns a token silently while the grant is valid. It is never
+logged, never in a crash report, a backup, a push or a request to RisiMe.
+
+**Local data** (Room, in the encrypted DB; tables `gcal_calendars`, `gcal_copies`):
+- each picked calendar: its Google id, display name, role, read/write choice, and a random local
+  **`ref`** (`g` + 7 characters `[a-z0-9]`, new for each connect; never the Google id);
+- the Google account's email, shown only in the section ("Connected as …");
+- the copy map (§31.6).
+
+This data is never in a backup bundle (the §22.5 "never" list gains it) and never shared by history
+sharing (§17). It is deleted on Disconnect, on "Connect here instead" from another device (§31.8), and
+with the chat data on a confirmed logout or account switch. It is not chat data, so hard rule 9 does
+not apply to it, and no app update deletes it.
+
+### 31.3 REST: `/api/v1/risi/calendar/google` (auth; `X-Device-Id` of a `google_calendar` device of the caller, else `403 invalid_device`)
+```
+Link = {"state": "not_connected" | "connected" | "reauth_needed" | "paused",
+        "device_id": uuid | null, "device_name": str | null,
+        "read_calendars": int (0–10), "write_calendar": bool, "mirror": bool,
+        "connected_at": ts | null, "updated_at": ts | null}
+```
+`paused` is computed: there is a link, but the user's Calendar skill is `off`. `device_name` is the
+name the device registered with (§1.2).
+
+| Method | Body | Reply |
+|---|---|---|
+| `GET` | — | `200 {"google": Link}` (`risi_google_link_reply.json`) |
+| `PUT` | `{"connect": bool, "state": "connected" \| "reauth_needed", "read_calendars": 0–10, "write_calendar": bool, "mirror": bool}` (`risi_google_link_put.json`) | `200 {"google": Link}` |
+| `DELETE` | — (query `remove_copies=true\|false`, default `false`) | `204` |
+
+- **`connect: true`** makes the caller the Google device. If another device held the link, that
+  device gets a `google_calendar_link` event with `reason: "replaced"` (§31.8).
+- **`connect: false`** updates the link. It is allowed only from the current Google device; from any
+  other device it is **`409 not_google_device`** (`error_not_google_device.json`). It is also
+  `409 not_google_device` when there is no link.
+- **`DELETE`** is allowed from any `google_calendar` device of the user. It removes the link. The Google
+  device is told with `reason: "disconnected"` and the caller's `remove_copies`.
+- `422 bad_request` for a malformed body or an unknown key. `429 rate_limited` above 30 writes per user
+  per minute. `503 agent_unavailable` while the switch is off.
+
+**Storage (server, normative; Postgres, additive):**
+```
+risi_gcal_links(user_id uuid PK, device_id uuid NOT NULL, state text NOT NULL,
+                read_calendars smallint NOT NULL, write_calendar bool NOT NULL, mirror bool NOT NULL,
+                connected_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+                reconnect_card_at timestamptz NULL)
+  CHECK (state IN ('connected','reauth_needed')) CHECK (read_calendars BETWEEN 0 AND 10)
+```
+- There is no column for a token, an email, a calendar name or id, or an event id. The migration test
+  asserts the exact column list.
+- When the device is removed (logout, device deletion) the link is deleted too.
+- Every change writes one `google_calendar_link` event (below) and nothing else. Logs carry the user
+  id, the device id and the state only.
+
+**Stored event `google_calendar_link`** (§2.3; cursor-ordered; delivered offline to the user's
+`google_calendar` devices only; no push wake; `event_google_calendar_link.json`):
+`{"event_id", "kind": "google_calendar_link", "data": {"state": Link.state, "device_id": uuid | null,
+"reason": "connected" | "updated" | "disconnected" | "replaced", "remove_copies": bool, "server_ts"}}`.
+Each device refreshes its Settings section from it. The old Google device acts on `disconnected` /
+`replaced` as §31.8 says.
+
+### 31.4 Google busy reads ("am I free"; amends §25.3, §29.7)
+**When.** In a `risi_calendar_check` step (§29.7), Google is read when all of these hold: the switch is
+on, the asker has a link in state `connected`, and their Calendar skill is not `off`.
+- Link `reauth_needed`: no call is sent. The source is `read_ok: false, reason: "reauth_needed"`.
+- Skill `off`: no call is sent. The source is `reason: "paused"`.
+- No link: `reason: "not_connected"` (as v1.29).
+
+**The call.** The server sends a `calendar_check` client tool call (§25.3) to the **Google device**
+(`event_risi_tool_call_calendar_check_google.json`):
+```
+args: {"from": ts, "to": ts, "sources": ["google_api"]}
+to_devices: [<the Google device>]          device_id: the asking device, as before
+```
+- If the Google device is also the asking device and the §29.7 phone check runs too, that is **one**
+  call with `"sources": ["phone_provider", "google_api"]`. Otherwise the two calls run in parallel, in
+  the same step.
+- The deadline is 15 s from the event, as in §25.3. The wake (§25.3) goes to the Google device's
+  token. If no result has arrived by then, the source is **`read_ok: false, reason: "no_answer"`**
+  ("phone didn't answer") and the turn goes on. A result after the deadline gets
+  `409 tool_call_expired`.
+- Only the device in `to_devices` may post the result (else `404 not_found`, as §25.3).
+- `args.sources` absent means everything the phone reads (v1.29). With `sources`, the result's
+  `sources` lists exactly the sources asked for.
+
+**On the Google phone (normative):**
+- For each picked read calendar, in parallel, 8 s each and 12 s in all:
+  `GET calendars/{id}/events?timeMin=&timeMax=&singleEvents=true&maxResults=250&fields=items(id,
+  status,transparency,start,end,attendees(self,responseStatus),extendedProperties/private),
+  nextPageToken` (all pages).
+- **Not busy:** `status: "cancelled"`, `transparency: "transparent"`, events the user declined
+  (`attendees[self].responseStatus: "declined"`), and **RisiMe copies** (a private extended property
+  `risi_event_id`). The copies are the loop guard: the Risi Calendar already counts those events.
+- Busy events are merged into `blocks` as in §25.3.
+- Any calendar failing makes the whole source `read_ok: false`. It is never an empty calendar.
+  - `401`: the phone calls `authorize()` once more. If that needs a resolution, the reason is
+    `reauth_needed` and the phone also `PUT`s the link `state: "reauth_needed"`.
+  - No network: `network`. A calendar over 8 s or the source over 12 s: `timeout`. Other errors
+    (`403`, `404`, `5xx`): `api_error`. No calendar picked: `no_calendars`.
+
+**The `google_api` result entry** (`risi_tool_result_calendar_check_google.json`,
+`risi_tool_result_calendar_check_google_reauth.json`):
+```
+{"source": "google_api", "calendars": [{"ref": str, "events": int}], "read_ok": bool, "reason": …}
+```
+- `calendars` lists the picked read calendars by local `ref` only: no `name`, no `account_type`. The
+  server refuses either key for `google_api` with `422 bad_request`.
+- `ref` is 1–16 characters of `[a-z0-9]`. `events` is the number of busy events read. There are at
+  most 10 entries; `[]` when `read_ok` is false.
+- `phone_provider` keeps its v2 shape (§29.7).
+
+**The phone's own provider source (loop guard, every device):** events whose `_SYNC_ID` matches
+`^risi[0-9a-f]{32}$` are RisiMe copies and are not busy. On the Google device, while it is connected,
+the provider's copies of the connected Google account's calendars (account type `com.google`, the same
+account name) are skipped, so nothing is counted twice.
+
+**What the model sees.** The `risi_calendar_check` result (§29.7) gains `"google": {"source":
+"google_api", "read_ok", "reason", "calendars": <count>, "blocks": [{"start", "end", "all_day",
+"ref": "c<n>"}]} | null`. It never contains refs, names or titles. Google blocks count for the
+free-claim rewrite of §29.7 ("your calendars have 1 busy time").
+
+### 31.5 The "Checked:" line with Google (amends §29.7)
+- **Order:** Risi Calendar · Google Calendar · Phone calendar.
+- **Google read:** "Google Calendar (2 calendars)" ("(1 calendar)" for one). The server never knows
+  the names. Example: **"Checked: Risi Calendar · Google Calendar (2 calendars). Not checked: Phone
+  calendar (not connected)."** (`envelope_risi_answer_calendar_sources_google.json`).
+- **Google not read:** it is named under "Not checked" with its reason
+  (`envelope_risi_answer_calendar_google_no_answer.json`):
+
+  | `reason` | Words |
+  |---|---|
+  | `not_connected` | not connected |
+  | `reauth_needed` | needs reconnecting |
+  | `no_answer` | phone didn't answer |
+  | `paused` | Calendar skill is off |
+  | `network` | no network on the phone |
+  | `timeout` | Google didn't answer in time |
+  | `api_error` | Google didn't answer |
+  | `no_calendars` | no calendars picked |
+
+  A source the user never connected is still named while the switch is on, as in v1.29.
+- **A connected source that was not read** (Google `reauth_needed`, `no_answer`, `network`,
+  `timeout`, `api_error`): the server **rewrites a free claim** to "Your Risi Calendar is free then,
+  but I couldn't check Google Calendar (<words>)." and adds `next_steps` ["Retry"]. "Free", "clear"
+  and "available" are never said about an unread source.
+- **No read at all:** §29.7 rule 1, with the line "Google Calendar: <words>." for Google.
+- **`answer.sources` (§25.4):** the `google_api` `calendar_source` gains **`"count": int`** (the link's
+  `read_calendars`) and **`"refs": [str]`** (the refs read; `[]` when not read). Its `names` is always
+  `[]`.
+- **Names on the Google phone only (Android, normative).** The server's "Checked:" paragraph is the
+  last paragraph of `answer` (after a blank line) and starts with "Checked:". When rendering it, a
+  phone that holds a name for **every** ref in `refs` replaces the exact text "Google Calendar (<n>
+  calendar[s])" in that paragraph with "Google Calendar (Work, Personal)", using its local names. The
+  stored message is never changed. Other devices, and old apps, show the counts.
+- **Never to the model:** refs, counts per name and names stay out of the prompt,
+  `risi_turn_steps`, the learning log and logs (§29.7).
+
+### 31.6 Copies: Risi Calendar → Google (the Google device only; Android, normative)
+**What is copied.** Every Risi Calendar event in the phone's synced cache (§29.6) with `state:
+"active"`, `my_status: "accepted"`, not removed, and ending after now − 1 day. This includes events
+the user added (accepted at once, §29.2) and Risi-made events the user accepted. Proposed and
+declined events are never copied. Copies are made only while the link is `connected` and its
+`mirror` is true.
+
+**The copy** (`POST calendars/{write}/events?sendUpdates=none`):
+- `id` = `"risi"` + the 32 hex digits of `event_id`. This is a valid Google event id
+  (base32hex), so the same Risi event always has the same Google id: inserts are idempotent across
+  retries, reinstalls and a new Google device.
+- `summary` = the title. `description` = the notes (if any), a blank line, then "Added by RisiMe.
+  Change it in RisiMe: changes made here are not copied back."
+- `start` / `end` = `{"dateTime", "timeZone": tz}`, or `{"date"}` for all-day (end = the next day).
+- `transparency: "opaque"`, and `reminders: {"useDefault": false, "overrides": []}` (Risi already
+  reminds, §29.10).
+- `extendedProperties.private` = `{"risime": "1", "risi_event_id": <event_id>, "risi_version":
+  <version>}`.
+- No attendees, location, conference or attachments.
+
+**Local copy map** (`gcal_copies`): `event_id`, `calendar_id`, `google_event_id`, `risi_version`,
+`state` (`copied` | `removed_by_risi` | `deleted_in_google`) and `updated_at`.
+
+**Changes:**
+- An insert that gets `409` (the id exists): `GET` it. If its `risi_event_id` matches, update it with
+  `PUT`. A copy found `cancelled` is restored only if the map says `removed_by_risi`. With no map
+  entry, or `deleted_in_google`, it is left alone.
+- Title, notes or time changed → `PATCH` (`sendUpdates=none`).
+- Status no longer `accepted`, the event cancelled, or a `removed` change → `DELETE` the copy;
+  `404`/`410` counts as done. The map says `removed_by_risi`.
+- The user deleted the copy in Google (`404`/`410` or `cancelled` on a `PATCH`): the map says
+  `deleted_in_google` and RisiMe does not add it again. The section shows "1 Risi event was removed in
+  Google" with [Add again].
+- The write calendar changed in the picker → `POST calendars/{old}/events/{id}/move?destination=
+  {new}` for each copy.
+- `mirror` switched off → stop copying, and ask "Remove the 4 copies from Google?" [Remove] [Keep].
+- Edits made in Google to a copy are **not** copied back. The next Risi change overwrites them.
+
+**When:**
+- After the phone applies any change from `GET /risi/calendar/changes` (§29.6): one WorkManager
+  unique job `gcal-copy` (network required, backoff from 30 s up to 1 h).
+- A full reconcile on connect, after reconnect, and at most once per 24 h on app start. It lists the
+  write calendar's copies (`privateExtendedProperty=risime=1`, now − 1 day … now + 92 days), adds
+  missing ones, and deletes tagged copies whose Risi event is no longer accepted.
+- RisiMe never touches a Google event without `risime=1`.
+- While the link is `reauth_needed` or `paused` the jobs wait. They run after reconnect.
+
+**The server is told nothing about copies:** no flag, no count, no Google id.
+
+### 31.7 Clashes on the Google phone (amends §29.9)
+- On the Google device, the mini day timeline of every card (§29.9) also shows that day's Google
+  busy blocks from the picked read calendars (the busy rules of §31.4, copies excluded). They are grey
+  with a dotted edge and count in "Clashes with N events".
+- They are read when the card renders and kept in memory for 5 minutes. They are never stored and never
+  sent anywhere. No titles.
+- If the read fails, the timeline adds the caption "Google Calendar not checked". It never shows that
+  day as free in Google.
+- On the user's other devices the caption is "Google Calendar is checked on Pixel 8" (`device_name`
+  from `GET /risi/calendar/google`).
+
+### 31.8 Reconnect, pause, disconnect, replace
+**Needs reconnecting.** Testing mode ends Google's grant after 7 days; the user can also remove access
+in their Google account. The phone sees it as an `authorize()` that needs a resolution (outside the
+Settings screen), or a `401` that a silent `authorize()` does not fix.
+- The phone `PUT`s `state: "reauth_needed"` and stops reading and copying. It never shows a consent
+  pop-up from the background.
+- The section shows **[Reconnect Google Calendar]**. Reconnect = §31.2 steps 1 and 4. The picks are
+  kept, and a reconcile follows.
+- **Server:** on the change to `reauth_needed` it posts **one** `google_reconnect` card in the user's
+  Risi chat, at most one per 24 h (`reconnect_card_at`; `envelope_risi_google_reconnect.json`):
+  ```
+  risi: {"v": 1, "kind": "google_reconnect", "reason": "reauth_needed", "device_id": uuid,
+         "buttons": ["reconnect"], "made_by" (model null), "call_ref": null, "notify": [user]}
+  ```
+  `body`: "Google Calendar needs reconnecting. Until then I can't see your Google busy times or copy
+  events there. Reconnect it on Pixel 8: Settings → Risi skills → Calendar." [Reconnect] opens the
+  Calendar skill page. On another device that page offers [Connect here instead].
+
+**Paused.** The Calendar skill turned `off` pauses the link: no reads and no copies. The link and the
+grant are kept. Turning the skill on again resumes it.
+
+**Disconnect** (from any `google_calendar` device). The confirm sheet says: "Disconnect Google Calendar?
+Risi will stop checking it and stop copying events." with "Events already copied:" [Keep them in
+Google] (default) / [Remove them from Google].
+- On the Google device:
+  1. If the user chose Remove, delete the tagged copies.
+  2. `Identity.getAuthorizationClient(ctx).revokeAccess(RevokeAccessRequest.builder()
+     .setAccount(account).setScopes(<both scopes>).build())`. Where that is unavailable, `POST
+     https://oauth2.googleapis.com/revoke?token=<token>`.
+  3. Delete the local `gcal_*` data.
+  4. `DELETE /risi/calendar/google?remove_copies=…`.
+- From another device: the `DELETE` only. The Google device then does steps 1–3 when it gets
+  `google_calendar_link` with `reason: "disconnected"` (and `remove_copies`). If it is offline, the
+  server has already stopped using it.
+
+**Replaced** ("Connect here instead" on another device). The old device gets `reason: "replaced"`. It
+deletes its local `gcal_*` data, and **does not revoke**: revoking would also end the new device's
+grant for the same Google account. Copies stay. The new device's reconcile adopts them by their fixed
+ids.
+
+**Logout or account switch (confirmed):** local `gcal_*` data is deleted and revoke is attempted. The
+link goes with the device (§31.3).
+
+### 31.9 Wording (English; the app localises from the codes)
+- Section: "Google Calendar", "Connect Google Calendar", "Reconnect Google Calendar", "Connect here
+  instead", "Disconnect", "Change calendars", "Check for busy times", "Add my Risi events to", "Copy my
+  Risi Calendar events to Google".
+- Info line under the section: "Your Google sign-in stays on this phone. RisiMe's server never sees it,
+  your Google calendar names or your Google event titles. Risi sees only busy times. Copies of your
+  Risi events are written to Google from this phone."
+- The Calendar skill's `description`, `can`, `cannot` and the two OAuth permissions:
+  `risi_skills_reply_v131.json` (§31.12).
+
+### 31.10 Privacy checks (all roles)
+These must never appear in server logs, Postgres or Cassandra dumps, `inbox_events`,
+`risi_turn_steps`, the learning log, the fake-llm record, push payloads, or a release build's logcat:
+- the Google token;
+- the Google account email;
+- a Google calendar name or id;
+- a Google event title or id;
+- a local `ref`. A `ref` may appear only in the tool result and in `answer.sources` inside the
+  MLS-encrypted answer.
+
+The strict `calendar_check` result schema (§31.4) is what keeps titles out. The Android debug build
+redacts `Authorization` headers and response bodies in OkHttp logging.
+
+### 31.11 Test seams (debug only) and `scripts/fake-gcal`
+- **Android.** The Calendar API base URL `https://www.googleapis.com/calendar/v3/` is compiled in.
+  Only a **debug** build has the seam:
+  - a broadcast `lk.codegen.risime.debug.GCAL_TEST`, received only when `BuildConfig.DEBUG`, by a
+    receiver in the debug source set protected by `android.permission.DUMP` (so only `adb shell` can
+    send it);
+  - its extras are `base_url` (only `http://127.0.0.1:<port>/` or `http://10.0.2.2:<port>/`),
+    `access_token`, `account`, and `state` = `connected` | `reauth_needed` | `none`;
+  - it installs a fake authorizer, which returns that token or "needs a resolution", and the base URL.
+    So Redroid, which has no Play services, can run the whole flow, picker included.
+  - The release APK contains neither the receiver nor the action string (a gate check on the dex).
+- **`scripts/fake-gcal`** (root; Python, loopback only): `--port 8198 --token T --record file`.
+  - API: `GET /users/me/calendarList`; `GET /calendars/{id}/events` (`timeMin`/`timeMax`,
+    `singleEvents`, `privateExtendedProperty`, paging with a page size of 2 so paging is exercised);
+    `POST /calendars/{id}/events` (a client `id`; `409` on a duplicate); `GET`, `PUT`, `PATCH`,
+    `DELETE /calendars/{id}/events/{eid}`; `POST …/{eid}/move`.
+  - It checks the bearer token on every call. A wrong or missing one gets `401`.
+  - Control: `POST /_control {"mode": "ok" | "revoked" | "error500" | "slow"}` ("revoked" makes every
+    call `401`; "slow" waits 10 s). `POST /_seed {"calendars": […], "events": […]}`. `GET /_events`
+    returns the store for assertions.
+  - The record has one JSON line per request (method, path, query, body), never the token.
+- **Server tests** need no Google at all: the Google device is a test socket that answers the tool
+  call (or doesn't, for `no_answer`).
+
+### 31.12 Amendments, examples, gate
+- **§25.3:** `calendar_check` `args.sources`; the call may go to the Google device; the `google_api`
+  result entry (`ref`, `events`). **§25.8:** the capability `google_calendar`. **§26.1:** the Calendar
+  skill's `permissions` add the two OAuth scopes (`runtime: true`), and its texts change
+  (`risi_skills_reply_v131.json`). **§26.2:** an OAuth source turns the skill on with
+  `client_permission: "granted"`. **§29.1:** the key `google_calendar`; `risi_calendar` stays reserved.
+  **§29.6:** the Google device runs the copy job after each change. **§29.7:** Google as a live
+  source, the reasons `no_answer` and `paused`, the rewrite for a connected source not read,
+  `calendar_source` `count` and `refs`, names only on the Google phone. **§29.9:** Google blocks on
+  the Google phone's timeline. **§22.5:** local `gcal_*` data is never in a backup.
+- **Errors (new):** `409 not_google_device`. Reused: `403 invalid_device`, `422 bad_request`,
+  `429 rate_limited`, `503 agent_unavailable`, `409 tool_call_expired`.
+- **Examples (v1.31),** to be replaced by the server's real output (checked exactly by
+  `server/test/contract/examples_v131_test.exs`, decoded by Android):
+  - `auth_config_v131.json`, `device_put_google_calendar.json`;
+  - `risi_google_link_put.json`, `risi_google_link_reply.json`, `event_google_calendar_link.json`,
+    `error_not_google_device.json`;
+  - `event_risi_tool_call_calendar_check_google.json`, `risi_tool_result_calendar_check_google.json`,
+    `risi_tool_result_calendar_check_google_reauth.json`;
+  - `envelope_risi_answer_calendar_sources_google.json`,
+    `envelope_risi_answer_calendar_google_no_answer.json`, `envelope_risi_google_reconnect.json`;
+  - `risi_skills_reply_v131.json`.
+- **Gate (nightly.49, `scripts/ui-entry-test --google`, fake-llm and `scripts/fake-gcal`,
+  `RISI_EVENTS=on RISI_GCAL=on`):**
+  1. Switch off → no Google section, and v1.30 answers.
+  2. Connect via the seam on A → the picker lists the fake calendars; pick 2 to read and "Work" to
+     write → `GET /risi/calendar/google` says `connected`, 2 calendars, A's device.
+  3. A Google busy event Mon 14:00 → "Am I free Monday 2pm" asked **on A's second device** → not
+     free, "Checked: Risi Calendar · Google Calendar (2 calendars) …"; on A the line reads "Google
+     Calendar (Work, Personal)".
+  4. A's Google device offline (the container stopped) → "Not checked: Google Calendar (phone didn't
+     answer)", never "free".
+  5. [Add] a Risi event → fake-gcal has one copy with `id` `risi…`, `risime=1`, `sendUpdates=none`;
+     edit its time in RisiMe → `PATCH`; decline/delete → `DELETE`; a retried insert makes no
+     duplicate.
+  6. The loop guard: with the copy in Google, "am I free" at its time counts it once (one busy time).
+  7. `revoked` → the next read gives "needs reconnecting", the `google_reconnect` card (once), and
+     [Reconnect] works.
+  8. Disconnect with "Remove them" → copies gone, link `not_connected`, local `gcal_*` empty.
+  9. Canaries (§31.10) on every dump and log, and the release-dex check of §31.11.
+- **Real-phone checklist (Harsha, release build, Testing mode, after `GOOGLE-CALENDAR-SETUP.md`):**
+  Connect on the Pixel; check the picker against Google's own list; "Am I free" against a real
+  meeting; add a Risi event and see it in Google Calendar (web and phone) with no email sent; move
+  and cancel it; delete a copy in Google and check it is not re-added; ask from a second device with
+  the Pixel in airplane mode ("phone didn't answer"); after 7 days (or myaccount "Remove access")
+  check the Reconnect flow; Disconnect, and check RisiMe is gone from myaccount → Third-party
+  connections.
+
 ## Changelog
+- **v1.31** (2026-10-10): the Google Calendar link (§31; decision 074; folds the deferred
+  `2026-10-09-google-calendar.md`; Harsha's requirements of 2026-10-10):
+  - the switch `/auth/config` `google_calendar` (`RISI_GCAL`, only with `RISI_EVENTS`), the
+    capability `google_calendar` (only with `risi_events`); no Android build flag;
+  - Connect from Settings → Risi skills → Calendar with the Authorization API on the phone, the
+    two scopes `calendar.events` and `calendar.calendarlist.readonly`; the token never leaves the
+    phone and is never persisted; picked read calendars (≤ 10) and one write calendar;
+  - one Google device per user; REST `/api/v1/risi/calendar/google` (GET/PUT/DELETE; the server
+    keeps only the device, the state and two counts), the stored event `google_calendar_link`, the
+    error `409 not_google_device`;
+  - Google busy reads through the §25.3 `calendar_check` sent to the Google device
+    (`args.sources`, the `google_api` entry with local `ref`s, never names); 15 s → `no_answer`;
+    copies of Risi events excluded (loop guard), also in the phone provider;
+  - the "Checked:" line with "Google Calendar (2 calendars)", names filled in only on the Google
+    phone; `calendar_source` `count` and `refs`; a free claim with a connected source unread is
+    rewritten; the reasons `no_answer` and `paused`;
+  - copies of accepted Risi events in the picked Google calendar with a fixed id `risi<hex>`,
+    `sendUpdates=none`, updated and deleted with the event, never re-added after a delete in Google,
+    never copied back;
+  - reconnect after the 7-day Testing grant (the `google_reconnect` card), pause with the skill,
+    Disconnect with revoke on the phone, "Connect here instead" without revoke;
+  - the debug-only seam `GCAL_TEST`, `scripts/fake-gcal`, `ui-entry-test --google`, and a
+    real-phone checklist.
 - **v1.30** (2026-10-09): Risi Notes (§30; decision 073; proposal
   `2026-10-09-risi-calendar-notes.md` §30, server fecd471, 8b2287e; android a0d6e26, f56bdbe):
   - the switch `/auth/config` `risi_notes` (`RISI_NOTES`, only with `RISI_LEDGER`), the capability

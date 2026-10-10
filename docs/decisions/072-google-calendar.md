@@ -1,6 +1,6 @@
 # 072: Google Calendar via the Android Authorization API, phone-side only
 
-Date: 2026-10-09. Status: accepted (root), build in progress. Proposal:
+Date: 2026-10-09. Status: accepted (root); deferred by 073; built as contract v1.31 §31 (decision 074). Proposal:
 `contract/proposals/2026-10-09-google-calendar.md` (contract v1.29 §29).
 
 ## Context

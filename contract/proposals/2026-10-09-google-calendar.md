@@ -1,5 +1,13 @@
 # Proposal 2026-10-09: Google Calendar as Risi's primary calendar, honest calendar answers, the event card, the in-app Calendar (v1.29, §29)
 
+> **Folded into v1.31 §31 (2026-10-10, root; decision 074).** The rest of this design (§29.0, §29.1,
+> §29.4, §29.6, §29.8, §29.9) is now `contract/v1/PROTOCOL.md` **v1.31 §31 "Google Calendar link"**,
+> rewritten for the Risi Calendar: one Google device per user, busy reads through `calendar_check`
+> with `args.sources`, copies of accepted Risi events into one picked Google calendar, calendar names
+> only on the phone. Not folded, and dropped: the `risime.gcal` build flag, `/auth/config`
+> `risi_calendar: 2`, `skill_needed` `no_source`, the §29.5 Google/RisiMe invites (`event_invite`) and
+> the §29.7 in-app Google agenda. PROTOCOL.md wins wherever the two differ.
+
 > **Folded (2026-10-09, root):** the honesty parts — §29.2 (`calendar_check` result `sources`,
 > `connected_sources`; names only there; the model sees counts only) and §29.3 (the honesty rule,
 > `answer.sources` `calendar_source`) — are in `contract/v1/PROTOCOL.md` **v1.29 §29.7** as shipped

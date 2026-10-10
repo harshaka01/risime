@@ -1,0 +1,1 @@
+{"result":{"blocks":[{"all_day":false,"busy":true,"end":"2026-10-12T09:30:00.000Z","start":"2026-10-12T08:30:00.000Z"}],"connected_sources":["google_api"],"sources":[{"calendars":[{"events":1,"ref":"g4k2m7qa"},{"events":0,"ref":"g9t3b8rc"}],"read_ok":true,"reason":null,"source":"google_api"}]},"status":"ok"}
