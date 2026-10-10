@@ -2755,11 +2755,11 @@ ui_batch_calendar() {
   local d1 d2 d3 d6
   d1="$(date -u -d '+1 day' +%F)"; d2="$(date -u -d '+2 days' +%F)"; d3="$(date -u -d '+3 days' +%F)"; d6="$(date -u -d '+6 days' +%F)"
   seed --es op clear
-  seed --es op calendar --es name "RisiMe Seed"
-  seed --es op event --es title "UIB Single" --es start "${d1}T09:00:00+00:00" --es end "${d1}T10:00:00+00:00" --es tz UTC
-  seed --es op event --es title "UIB Weekly" --es start "${d2}T11:00:00+00:00" --es end "${d2}T11:30:00+00:00" --es tz UTC --es rrule "FREQ=WEEKLY;COUNT=4"
-  seed --es op event --es title "UIB All day" --ez all_day true --es date "$d3"
-  seed --es op event --es title "UIB Far" --es start "${d6}T10:00:00+00:00" --es end "${d6}T11:00:00+00:00" --es tz UTC
+  seed --es op calendar --es name "'RisiMe Seed'"
+  seed --es op event --es title "UIBSingle" --es start "${d1}T09:00:00+00:00" --es end "${d1}T10:00:00+00:00" --es tz UTC
+  seed --es op event --es title "UIBWeekly" --es start "${d2}T11:00:00+00:00" --es end "${d2}T11:30:00+00:00" --es tz UTC --es rrule "'FREQ=WEEKLY;COUNT=4'"
+  seed --es op event --es title "UIBAllday" --ez all_day true --es date "$d3"
+  seed --es op event --es title "UIBFar" --es start "${d6}T10:00:00+00:00" --es end "${d6}T11:00:00+00:00" --es tz UTC
   pass "ui-batch calendar: seeded a LOCAL calendar 'RisiMe Seed' with 4 events (single, weekly, all-day, 6 days out)"
   # Calendar skill on (READ/WRITE already granted).
   settings_open "Risi skills" || fail "ui-batch calendar: Settings → 'Risi skills' didn't open"
@@ -2768,13 +2768,28 @@ ui_batch_calendar() {
   dismiss_prompts
   # Details
   local opened="" cy found=0
-  for _ in 1 2 3; do
-    cy="$(node_xy "Calendar" | awk '{print $2}')"
-    [ -n "$cy" ] && [ "$cy" -gt $((H * 30 / 100)) ] && A shell input swipe $((W / 2)) "$cy" $((W / 2)) $((H * 20 / 100)) 800
-    sleep 1.5
-    tap_below "Calendar" "Details" || fail "ui-batch calendar: Risi skills → Calendar has no [Details]"
-    sleep 2
-    has 'text="What Risi can read"' && { opened=1; break; }
+  local xy
+  for _ in $(seq 1 12); do   # (every skill has a [Details], and an expanded card has bullets: the first one between the Calendar title and the next skill's)
+    has 'text="What Risi can read"' && { opened=1; break; }  # (Details expands the card in place)
+    xy="$(python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+def c(n):
+    x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); return (x1 + x2) // 2, (y1 + y2) // 2
+cal = [c(n)[1] for n in nodes if n.get('text') == 'Calendar']
+if cal:
+    top = cal[-1]
+    nxt = [c(n)[1] for n in nodes if (n.get('text') or '') == 'Scheduled messages' and c(n)[1] > top]
+    lim = min(nxt) if nxt else 10 ** 6
+    hit = sorted((c(n)[1], c(n)[0]) for n in nodes if n.get('text') == 'Details' and top < c(n)[1] < lim)
+    if hit and hit[0][0] < 1100: print(hit[0][1], hit[0][0])
+PY
+)"
+    if [ -n "$xy" ]; then A shell input tap $xy; sleep 2; fi
+    A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 500; sleep 1
   done
   [ -n "$opened" ] || fail "ui-batch calendar: Calendar → [Details] didn't open"
   for _ in 1 2 3 4 5 6 7 8; do
@@ -2807,8 +2822,8 @@ ui_batch_calendar() {
   has "I couldn" && fail "ui-batch calendar: Risi says it couldn't read the calendar"
   has "0 events" && fail "ui-batch calendar: Risi's answer says '0 events'"
   shot "53-uibatch-calendar-answer"
-  for t in "UIB Single" "UIB Weekly" "UIB All day" "UIB Far"; do
-    has "$t" || { [ "$t" = "UIB Single" ] && grep -o 'text="[^"]*"' "$WORK/ui-A.xml" | tail -15; fail "ui-batch calendar: the answer's 'Your events' list lacks '$t'"; }
+  for t in "UIBSingle" "UIBWeekly" "UIBAllday" "UIBFar"; do
+    has "$t" || { [ "$t" = "UIBSingle" ] && grep -o 'text="[^"]*"' "$WORK/ui-A.xml" | tail -15; fail "ui-batch calendar: the answer's 'Your events' list lacks '$t'"; }
   done
   has "Your events" || fail "ui-batch calendar: no 'Your events' header under Risi's answer"
   pass "ui-batch calendar: Risi's week answer lists the 4 seeded events under 'Your events'"
@@ -2818,6 +2833,7 @@ ui_batch_calendar() {
 }
 ui_batch_section() {
   DEV=A; screen_wh
+  [ "${UITEST_UIBATCH_CAL_ONLY:-0}" = 1 ] && { ui_batch_calendar; return 0; }  # (quick iterations on the calendar part)
   A shell locksettings set-pin "$PIN" >/dev/null 2>&1 || true
   [ "$(fx longfriend)" = "uientry: longfriend ok" ] || fail "ui-batch: fixture longfriend"
   local LONGP="ZZ UI Cee With An Extremely"
@@ -2898,7 +2914,7 @@ ui_batch_section() {
     has 'text="Ask Risi…"' || fail "ui-batch [$UIB_SC]: the composer isn't empty after the chip tap"
     echo "    chip tap [$UIB_SC]: fake-llm requests with the chip text $n0 -> $n1"
     shot "50-uibatch-risi-$UIB_SC"
-    pass "ui-batch [$UIB_SC]: Risi's answer has no next_steps chips"
+    pass "ui-batch [$UIB_SC]: a next_steps chip tap runs a Risi turn and leaves the composer empty"
     back_to_list || fail "ui-batch [$UIB_SC]: back to the list"
     # 5. profile photo sheet
     if back_to_list && tap "More options" && wait_for 'text="Settings"' 10 && tap "Settings"; then
