@@ -1945,7 +1945,7 @@ Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/p
   (detail truncated to 300; wrong state/check/types -> 422 `bad_request`); `Authorization: Bearer
   <OPS_ALERT_TOKEN>` (`Plug.Crypto.secure_compare`); 401 `invalid_token` on missing/wrong token, any of
   `x-forwarded-for`/`forwarded`/`x-real-ip`, or non-loopback `remote_ip`; 404 while the token is unset/empty;
-  10/hour via `RateLimiter` -> 429; 202 `{"sent": n, "held": n}`.
+  30/hour (was 10) via `RateLimiter` -> 429; 202 `{"sent": n, "held": n}`.
 - Env (`.env`, read in config/runtime.exs, not in test): `OPS_ALERT_TOKEN`, `OPS_ALERT_PHONES` (comma-separated
   E.164). Needs a pilot restart after being set. `ops_alert` added to `MadeBy` rule kinds (`model: null`).
 - Held = no user for the phone, Risi not ready, no active Risi chat, or the post failed: counted and logged
@@ -1954,3 +1954,23 @@ Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/p
 - Tests: `test/risime_web/controllers/ops_alert_v132_test.exs` (7: 401 cases, 404, 422, 202 sent, held, 429,
   example shape); `envelope_risi_ops_alert.json` registered in `@checked_v1_32`. Full suite: 1075 tests
   (+7), 0 failures after the registration fix.
+
+## READY v1.32 (decision 075: monitoring in the server)
+- Ops alerts: states `alert` / `resolved` (check = `^[a-z0-9_]{1,40}$`; watchdog states keep `local|public`),
+  bodies "Monitoring alert: <check>. <detail>" / "Resolved: <check>. <detail>", limit 30/hour.
+- PromEx (`RisiMe.PromEx`: Application, Beam, Phoenix, Ecto, Oban; `RisiMe.PromEx.Risi`: `risime_risi_turn_total`
+  and `_duration_milliseconds` by outcome ok|snooze|error, `risime_jwks_fetch_total` by result ok|timeout|error,
+  `risime_sockets_open`). Events added: `[:risime,:risi,:turn,:stop]` (`Agent.Turn.run`), `[:risime,:jwks,:fetch]`
+  (`Auth.JWKS`). Grafana upload/dashboards off, no PromEx own HTTP server.
+- `RisiMeWeb.OpsEndpoint` (+ `OpsRouter`): `/metrics` and LiveDashboard `/dashboard` (metrics `RisiMeWeb.Telemetry`) on
+  **127.0.0.1:METRICS_PORT** only. Prod default 4021; dev default `off`; `METRICS_PORT=off` disables; never started in
+  tests (a test starts it). Not routed on the main endpoint (tested 404). check_origin
+  `https://monitor.risicloud.ai` and `http://127.0.0.1:<port>`; reuses SECRET_KEY_BASE. Ecto-repos page of
+  LiveDashboard not enabled (needs `ecto_psql_extras`).
+- Env: `METRICS_PORT`, `OPS_ALERT_TOKEN`, `OPS_ALERT_PHONES` (restart needed). New deps: `prom_ex 1.12`,
+  `phoenix_live_dashboard 0.9` (pulls phoenix_live_view, phoenix_html, peep, finch, ...). Pilot restart needed.
+- `rel/env.sh.eex`: with `RELEASE_DISTRIBUTION=name` the node is `risime@127.0.0.1`, `ERL_AFLAGS` adds
+  `-kernel inet_dist_use_interface {127,0,0,1}` and fixed port 4370 (min=max). Default stays `none`.
+  Checked: prod release builds, env.sh contains the block; a throwaway `erl -name` with those flags listened on
+  127.0.0.1:4370 only (no 0.0.0.0).
+- Tests: full suite 1082 tests, 0 failures, 15 skipped (new: ops_alert_v132 +1, `ops_endpoint_test.exs` 5).
