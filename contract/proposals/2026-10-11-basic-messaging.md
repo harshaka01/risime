@@ -1,9 +1,14 @@
 # Proposal 2026-10-11: Basic messaging — copy, forward, reply, share, star, info, files, PDF export (v1.34, §33)
 
-> **DRAFT (root, 2026-10-11).** Not folded into PROTOCOL.md. NEXT-PHASE section E. The task named
-> this v1.33; PROTOCOL.md became **v1.33** on 2026-10-11 with the D1 call change (fd5ca02, 3fdbec3),
-> so this is **v1.34 / §33**. If F (view once) or A (media) is folded first, renumber; §33.2 and
-> §33.13 are written so F and A can reference them.
+> **Accepted into v1.34 (root, 2026-10-11).** Folded into `contract/v1/PROTOCOL.md` **§33**, with
+> examples under `contract/v1/examples/` and the fixture `contract/v1/copy_format_cases.json`.
+> PROTOCOL.md wins where they differ. Root's decisions on the draft's open questions: **no blob
+> grants** (a forward of media always re-uploads with a fresh key, so the server learns no forward
+> graph; grants are a "later" note, §33.6); star is device-local plus backups; copy dates follow the
+> phone locale; "Forwarded many times" → one target; own forwards unlabelled; the PDF writer is
+> checked by android first (a library plus a decision note if `pdftotext` fails); no general file
+> picker until A; no forward to Risi; only Private copies are marked sensitive; the view-once marker
+> name `view_once` is reserved now for F. (PROTOCOL.md became v1.33 with D1, so this is v1.34.)
 
 Requested by Harsha in `docs/NEXT-PHASE.md` §E (WhatsApp parity). It extends §10.3, §11, §12.7,
 §14, §15, §17.7, §22.5, §24.9, §25.3 and §25.4, and overrides them where it differs (§33.17 lists
@@ -13,13 +18,12 @@ every amendment).
 - three optional envelope fields: `forwarded`, `reply_to` and `file` (a new envelope type);
 - two device capabilities, `files` and `pdf_export`;
 - readiness fields `files_ready` and `missing_files`;
-- one `/auth/config` key, `blob_grants`;
-- blob grants: `POST` and `DELETE /api/v1/blobs/{blob_id}/grants…`;
+- the reserved envelope field `view_once` (its fields are defined by F);
 - one Risi client tool `export_pdf`, one `confirm` button pair `["send", "cancel"]`, and one
   `next_actions` action `pdf`;
 - `starred_at` on the backup `message` line.
 
-No new event kind, and no new error code. Apps before v1.34 ignore the new fields and the `file`
+No new event kind, no new REST endpoint, and no new error code. Apps before v1.34 ignore the new fields and the `file`
 type (§10.3); what they show is in §33.18. **Hard rule 9:** the only Room change is the new table
 `stars` (§33.11), plus nullable columns. Nothing is moved or rewritten.
 
@@ -30,13 +34,15 @@ type (§10.3); what they show is in §33.18. **Hard rule 9:** the only Room chan
 ### 33.0 Principles
 - **Client-first.** Copy, Share, Star and the PDF are on the phone only. Forward and Reply are
   ordinary MLS application messages sent through the normal outbox. The server learns nothing
-  new from them, except the blob grants (§33.5), which are documented in §33.16.
+  new from any of them (§33.16): a forwarded photo or file is a fresh upload with a fresh key.
 - **No plaintext on the server, ever.** A forward is re-encrypted on the phone for each target
   (MLS, §10.3). A PDF is made on the phone and never on the server. Risi never sees a PDF's
   bytes, and the model never writes a PDF's content (§33.15).
-- **View once is never copied, forwarded, shared, starred, quoted or exported.** This covers F's
-  view-once items, which are not defined yet. §33.2 excludes any envelope that F marks as view
-  once. F must state its marker so that §33.2 can name it.
+- **View once is never copied, forwarded, shared, starred, quoted or exported.** The envelope
+  field name **`view_once`** is reserved now: any envelope carrying a `view_once` key (any JSON
+  value; F defines its fields) is **never forwardable, copyable, shareable, starrable, quotable
+  or exportable**, and is never indexed for search. Clients apply this from v1.34 on, before F
+  exists, so a v1.34 app can never leak an F item.
 - **Private stays Private.** Moving content from Private into Official is the user's explicit
   choice, after a one-time warning (§33.8). The Risi chat is never a forward target in v1.34.
 - **Honest labels.**
@@ -45,10 +51,7 @@ type (§10.3); what they show is in §33.18. **Hard rule 9:** the only Room chan
   - Risi says a PDF was "sent" only on a phone result `sent` (§33.15; the §25.3 v1.32 honesty
     rule).
 
-### 33.1 Switches and capabilities
-- **`/auth/config`** gains `"blob_grants": "on"` (`auth_config_v134.json`). It is absent while the
-  server env `BLOB_GRANTS` is off (default on). The key means the server serves §33.5. While it
-  is absent, clients always use the re-upload path (§33.6).
+### 33.1 Capabilities and readiness
 - Device capability **`"files"`** (`device_put_files.json`). An app advertises it only once it
   can **receive, validate and open** the `file` envelope (§33.13).
 - **`GET /api/v1/mls/groups/{conversation_id}`** gains **`files_ready`** and **`missing_files`**
@@ -77,7 +80,7 @@ type (§10.3); what they show is in §33.18. **Hard rule 9:** the only Room chan
   - system lines (§12.7 `group_event`, §13.3/§17.12 markers, the §12.8 lines);
   - call lines (§16.6) and the "couldn't be decrypted" lines;
   - reactions;
-  - **any view-once item** (F; also excluded from search);
+  - **any item whose envelope carries `view_once`** (§33.0; also excluded from search);
   - the §25.4 progress bubble.
 - **When each action is enabled.** If an action doesn't apply to every selected bubble, it is
   disabled; it is not applied to a subset.
@@ -136,6 +139,7 @@ prefix.
   | voice (A) | `<Voice note m:ss>`, or `h:mm:ss` from one hour |
   | video (A) | `<Video m:ss>`, plus ` <caption>` |
   | Risi message | its `body`. A `note_card` uses the §30.6 share text |
+| own `risi_request` (shown as the user's bubble in the Risi chat, §25.2) | its `text` |
 
 - **Clipboard:** a `ClipData` with the label "RisiMe".
   - **Copies from a Private conversation** set `ClipDescription.EXTRA_IS_SENSITIVE` on API 33+,
@@ -146,14 +150,10 @@ prefix.
   - `{"locale", "hour24", "zone", "own_name", "messages": [{"from_name", "own", "server_ts", "payload"}], "expected"}`;
   - en-GB and en-US cases are exact; si-LK and ta-LK are checked against the regex
     `^\[[0-9/.\-]+, [0-9:]+( ?[^\]]+)?\] .+: .*$` (CLDR patterns vary by Android version);
-  - cases:
-    1. three texts from two people;
-    2. a multi-line body;
-    3. a photo with a caption and one without;
-    4. a file;
-    5. a Risi answer;
-    6. an own pending row;
-    7. a 12-hour U+202F case.
+  - cases (11, in the file): texts and a photo from two people; a multi-line body (CRLF) and a
+    forwarded text (no marker); photos with and without a caption; files; a Risi request and
+    answer; an own unsent row; en-US 12-hour (day ≠ month, U+202F); a single message (no prefix);
+    a single photo (caption only); si-LK and ta-LK structure.
   - Example of case 1 (en-GB, 24 h, Asia/Colombo):
     ```
     [10/10/26, 07:26] Kamal: Can we move the site visit?
@@ -170,8 +170,8 @@ prefix.
 
 **Building the forwarded envelope (sender).** It is rebuilt from the **parsed known fields** of
 the source envelope. The raw JSON is never copied, so unknown fields are never carried.
-- **Dropped:** `risi`, `reply_to`, any view-once field (the source can't be view once anyway), and
-  the source's `forwarded`.
+- **Dropped:** `risi`, `reply_to` and the source's `forwarded`. (A source with `view_once` is
+  never forwarded, §33.0.)
 - **`hops`:**
   - `source.forwarded.hops + 1` when the source was forwarded;
   - `1` when the source is someone else's unforwarded message;
@@ -179,7 +179,8 @@ the source envelope. The raw JSON is never copied, so unknown fields are never c
     WhatsApp).
   - The value is capped at **255**.
 - **Media fields** (`blob`, `enc`, `mime`, `w`, `h`, `thumb`, `caption`, `name`, `pages`, A's
-  duration and waveform fields) are copied unchanged. The `blob` and `enc` follow §33.5 or §33.6.
+  duration and waveform fields) are copied unchanged, except `blob` and `enc`, which come from a
+  fresh upload for each target (§33.5).
 - **A Risi message** (a `text` envelope with `risi` from the agent leaf) becomes a plain `text`
   envelope whose `body` is the card's `body`. A `note_card` uses the §30.6 share text, which ends
   "— shared from Risi Notes". The `risi` object is never copied (it would be ignored from a human
@@ -222,12 +223,12 @@ the source envelope. The raw JSON is never copied, so unknown fields are never c
 3. Show the **Private → Official hint** (§33.8) if it is due.
 4. **Persist before sending.** For each target and each source, in chat order: one outbox row with
    a fresh `client_msg_id`, the built envelope sealed as for any outbox row, and, for media, a
-   pending `client_grant_id` (UUIDv4).
+   pending re-upload job (§33.5) with its own `client_blob_id` (UUIDv4).
    - All rows are written in **one transaction** before anything is sent, so a crash resumes the
      whole forward.
    - The sender's bubbles appear at once in each target, with the "Forwarded" label (own view)
      and the clock tick.
-5. **Media:** get read access for the target (a grant, §33.5) or re-upload (§33.6), then send.
+5. **Media:** re-encrypt and upload for that target (§33.5), then send.
    Text rows are sent at once, without waiting for media rows. This is the §14.7 rule that a media
    row never blocks the outbox.
 6. **Send** each row with the normal e2ee `msg:send` (§10.3 / §12.9). It is encrypted at send time
@@ -239,124 +240,57 @@ the source envelope. The raw JSON is never copied, so unknown fields are never c
 **Search** (local, §24.9) indexes forwarded messages like any other. View-once items are never
 indexed (F).
 
-### 33.5 Blob grants: forwarding media without re-uploading (server; extends §14.2)
-**Why a grant is needed.** Media is already encrypted per blob, with a fresh key `K` carried in the
-envelope (§14.3, §14.4). A forward can therefore **reuse the same ciphertext and key**: copy
-`blob` and `enc` into the new envelope, which is encrypted for the target by MLS. But the §14.2
-`media` read rule binds a blob to **its upload conversation**, so the target's members would get
-`404`. A **grant** adds read access for one more conversation, with no bytes moved.
+### 33.5 Media on forward: always a re-upload with a fresh key (client)
+Media is encrypted per blob with a fresh key `K` carried in the envelope (§14.3, §14.4), and the
+§14.2 `media` read rule binds a blob to **its upload conversation**: the target's members can't
+read the source blob. v1.34 therefore **never reuses a blob across conversations**. Every forward
+of a photo, file, voice note or video is, **for each target**:
+1. **Plaintext:** decrypt the cached, verified ciphertext with the stored key (§14.7), or, if
+   the cache is gone and the blob is still fetchable (`server_ts + 29 days`), download and verify
+   it first (with progress), then decrypt. Plaintext is held in memory or streamed file to file in
+   `noBackupFilesDir`, and never kept after the job.
+2. **Images** are re-encoded first as for Save (§14.7 receiving 8): the same output rules as a new
+   photo (§14.7 sending 2–3), including a fresh thumbnail. **Files**, voice notes and videos are
+   encrypted byte for byte; their `thumb` (if any) is copied.
+3. **A new encrypt call** (§14.3): a fresh `K`, never the source's key and never the same
+   ciphertext (a byte-identical blob would let the server link the two conversations).
+4. **Upload** with `purpose=media` into the **target** conversation and a new `client_blob_id`
+   (§14.2: idempotency, retries, quota and the §14.7 failure wording unchanged).
+5. Put the new `blob` and `enc` into that target's envelope, then send it (§33.4 step 6).
 
-**`POST /api/v1/blobs/{blob_id}/grants`** (auth). Body: `{"conversation_id": "dm:…" | "grp:…",
-"client_grant_id": "<uuid-v4>"}` (`blob_grant_request.json`).
-- Reply: **`201 {"blob_id", "conversation_id", "expires_at"}`** (`blob_grant_reply.json`).
-- A repeat of the same `client_grant_id` by the same user is answered **`200`** with the same body.
-  It doesn't count against the rate.
-- **Order of checks:**
-  1. **shape** (`400 bad_request`);
-  2. **the source**: the blob is a `media` blob, unexpired and not deleted, and the caller is a
-     **reader** of it now, by the §14.2 rule for its upload conversation or by a live grant the
-     caller can read through. Otherwise **`404 not_found`**, the same for every case;
-  3. **the target**: the caller may upload `media` into `conversation_id` by the §14.2 "who may
-     upload" rules, including §24 (an Official tab that is off is read-only). Otherwise `404` or
-     **`409 not_e2ee`**;
-  4. **idempotency**: the same id with a different blob or conversation is `400`;
-  5. **quota**: the grant counts the blob's `size` against the caller's `media` quota while it
-     lives, otherwise `413 quota_exceeded`;
-  6. **rate**: **300 grants per hour and 3 000 per day** per user, and at most **1 000 live grants
-     per blob**. Otherwise `429 rate_limited` with `Retry-After`;
-  7. store the grant.
-- **A grant to the blob's own upload conversation**, or to a conversation that already has a live
-  grant from this caller, is answered `201` (or `200`) with that access's `expires_at`. No new
-  row is stored.
-- **`expires_at` = grant time + 30 days.** The **file is kept until the later of** the blob's own
-  `expires_at` and the latest live grant's. The blob row and its upload rights expire as before
-  (§14.5).
-- **Readers through a grant**, for its lifetime:
-  - the granter;
-  - for a `dm:`, either of the two users;
-  - for a `grp:`, a user with an active-membership interval overlapping `[granted_at, now]`
-    (§14.8). A member removed before the grant gets nothing; `pending_add` gets nothing.
+- **One upload per target.** Five targets mean five uploads with five keys, so the server can't
+  link targets by bytes. It sees only ordinary new uploads (§33.16).
+- **The user's own media still uploading** is forwarded from its local ciphertext the same way; it
+  doesn't wait for the source's upload.
+- **Not forwardable:** an item whose blob is past its horizon (or `404`) and that this phone never
+  downloaded, or whose cache was evicted. It is disabled in the selection with "This photo is no
+  longer available" ("…file…", "…voice note…", "…video…").
+- Quota (`413 quota_exceeded`): the row fails with "You've reached your photo and file storage
+  limit. Older items free up space after 30 days." Each failed bubble offers Retry / Delete
+  (§14.7).
+- The PDF "Send to chat" (§33.14) follows the same rule: one encrypt and upload per target.
 
-  Ranges, `ETag` and every other `GET /blobs/{id}` behaviour are unchanged (§14.2).
-- **`DELETE /api/v1/blobs/{blob_id}/grants/{client_grant_id}`** (the granter only) → `204`, and is
-  idempotent. Clients use it for a forward cancelled after the grant and before `msg:send`.
-- **Deletes (amends §14.2 and §15.2):**
-  - The owner's `DELETE /blobs/{id}`, or a §15 delete for everyone of the original message,
-    removes the **upload conversation's and the owner's** read rights at once. The **file stays
-    while a live grant exists**, because forwarded copies are other people's messages (§15.0:
-    deletion is best effort, and the item may already have been forwarded).
-  - A §15 `msg:delete` (`everyone`) whose `blob_ids` name a blob **granted to this conversation
-    by a sender of a deleted target** removes **that grant**.
-  - The §15.2 "blob mismatches never fail" rule is unchanged: anything else is skipped and logged.
-  - Deleting or resetting a group expires its grants, as for its blobs.
-- **Usage:** `GET /blobs/usage` `media.used` counts live grants too. The shape is unchanged.
-- **Purposes:** only `media` blobs can be granted. `icon`, `avatar`, `mls`, `history` and `backup`
-  answer `404`.
-- **Storage (Postgres):**
-  ```
-  blob_grants(blob_id FK, conversation_id, granted_by, client_grant_id, granted_at, expires_at,
-              deleted_at NULL, size)
-  UNIQUE (granted_by, client_grant_id)
-  INDEX (blob_id), INDEX (granted_by) for the quota, INDEX (conversation_id)
-  ```
-  - The read check is: the §14.2 upload-conversation rule **or** an `EXISTS` on a live grant whose
-    conversation passes the same rule with `granted_at`.
-  - The §14.8 expiry sweep removes a **file** only when its row is expired or deleted **and** no
-    live grant is left. Grant rows are swept at their `expires_at`.
-- **The client's fetchable horizon** (§14.5) for a forwarded item is `server_ts + 29 days` of the
-  **forwarded message**. It holds because the grant was made just before the send.
-
-**Client: the grant step.** The step runs once per (media row, target), before `msg:send`.
-- **`201`/`200`:** keep the source's `blob` and `enc` unchanged, then send.
-- **`404`:** go to §33.6.
-- **`409 not_e2ee`**, or the target's readiness is lost: the row fails with the §14.7 wording.
-- **`413 quota_exceeded`:** the row fails with "You've reached your photo and file storage limit".
-  A re-upload would hit the same quota.
-- **`429`:** retry with backoff, as §14.2.
-- **Network or `5xx`:** retry with the same `client_grant_id`.
-- A grant needs **only the envelope** (blob reference and key). The forwarder doesn't need to have
-  downloaded the item.
-
-### 33.6 When the forwarder re-uploads
-A re-upload is a **new encrypt call with a fresh key** (§14.3; never the same ciphertext, which
-would give the server the same byte-identical linkage as a grant). Then:
-- a new `client_blob_id`;
-- a `media` upload into the target conversation (§14.2);
-- a new `blob` and `enc` in that target's envelope.
-
-Every other field is copied. **Images** are re-encoded first as for Save (§14.7 receiving 8).
-**Files**, voice notes and videos are encrypted byte for byte. A re-upload is needed when:
-1. `/auth/config` has no `blob_grants` (an old server, or the switch is off);
-2. the source is past its fetchable horizon (`server_ts + 29 days`; the grant is skipped);
-3. the grant answered `404` (the blob expired, was deleted, or the caller is no longer a reader);
-4. the source is the user's **own unsent** media (no blob yet). The forward rows wait for the
-   source's upload; then they use a grant (or rule 1).
-
-The re-upload needs the plaintext: the cached, verified ciphertext decrypted with the stored key,
-or a fresh download if the blob is still fetchable.
-- **If neither is possible** (expired and never downloaded, or the cache was evicted), the item
-  can't be forwarded. It is disabled in the selection with "This photo is no longer available"
-  ("…file…", "…voice note…", "…video…").
-- **One re-upload per target.** Each target gets its own fresh key, so the server can't link two
-  targets by the bytes.
-- **Exception:** with `blob_grants` on, a forwarder that re-uploads once (cases 2 and 3) may grant
-  that **new** blob to the other targets.
+### 33.6 Later: blob grants (not in v1.34)
+A server "grant" that lets a second conversation read an existing blob would forward media without
+re-uploading, but it would tell the server which conversations a photo or file moved between (the
+forward graph). Root decided against it for v1.34. If Harsha wants it, it needs its own proposal,
+with that metadata cost stated in the privacy note.
 
 ### 33.7 What can be forwarded
 
 | Source | Forwardable | Becomes |
 |---|---|---|
 | `text` | yes | `text` + `forwarded` |
-| `image` (§14.4) | yes, if the item can be granted or re-uploaded (§33.6) | `image` + `forwarded`; the caption is kept |
+| `image` (§14.4) | yes, if the phone has or can still fetch it (§33.5) | `image` + `forwarded`; the caption is kept |
 | `file` (§33.13) | yes, as for an image | `file` + `forwarded` |
 | `voice`, `video` (A) | yes, as for an image. A defines the fields; this rule applies to every envelope with `blob` + `enc` | the same type + `forwarded` |
 | Risi messages (`answer`, `summary`, `report`, `digest`, `discussion_summary`, `discussion_card`, `notes_saved`, `event_card`, `reminder`, `reminder_set`, `draft`, `commitment*`, `ops_alert`, unknown kinds) | yes | `text` from `body` (§33.4); no `risi`. The receiver's label reads "Forwarded" like any forward |
 | `note_card` (§30.4) | yes | `text` with the §30.6 share text ("…— shared from Risi Notes") |
 | Risi `confirm`, `offer`, `calendar_offer`, `calendar_invite`, `error` | **no** | meaningless outside their conversation, with buttons |
-| view-once (F) | **never** | — |
+| any envelope with `view_once` (F) | **never** | — |
 | tombstones, system lines, call lines, reactions, `profile_photo`, history and control envelopes | no (not selectable) | — |
 | own pending text | yes | `text` (the source's local content) |
-| own media still uploading | yes, waits (§33.6 case 4) | — |
+| own media still uploading | yes, from its local ciphertext (§33.5) | the same type, own upload |
 
 ### 33.8 Private → Official hint (client only)
 - **When:** the first time on this device that a forward has **at least one source from a Private
@@ -379,7 +313,7 @@ or a fresh download if the blob is still fetchable.
 - **No snippet travels.** This keeps §15.6 ("a quote … never keeps a copy of its body"): every
   receiver renders the quote from **its own local copy** of the target.
 - **The target** must be a normal message of the **same conversation**: one with a `message_id`,
-  not a reaction, control, system line or tombstone, and not view once (F).
+  not a reaction, control, system line or tombstone, and without `view_once` (§33.0).
 - **Sender:**
   - Reply is offered only on such targets (§33.2).
   - The composer shows the quote bar, with the name and first line, and an ✕.
@@ -418,7 +352,7 @@ or a fresh download if the blob is still fetchable.
     `revokeUriPermission`. Every write mode is refused.
 - **Only downloaded and verified media** can be shared. A tap on Share for an item not yet
   downloaded starts the download with progress first.
-- **Not shareable:** view once (F), and anything not copyable (§33.2).
+- **Not shareable:** anything with `view_once` (§33.0), and anything not copyable (§33.2).
 - Share is one of the paths by which plaintext leaves the app (amends §14.7 receiving 8, "the only
   path": now Save, Share and Open-with, §33.13).
 - (Inbound share, from other apps into RisiMe, is A's file and photo picker work, not v1.34.)
@@ -443,7 +377,7 @@ or a fresh download if the blob is still fetchable.
     a star on a Private message would reach the server agent, and Private never reaches Risi
     (§24.0).
   - A proper channel needs a new **own-devices MLS group** (`self:`), with core policy like the
-    Risi chat minus the agent. That is a crypto change, proposed for later (open question 2).
+    Risi chat minus the agent. That is a crypto change, for a later proposal.
     It would also carry read state and drafts.
   - Until then, stars live on the phone and in its backups. The Starred screen says "Stars are kept
     on this phone".
@@ -554,8 +488,8 @@ which A extends (picker, 100 MB, progress, resume); A must not redefine these fi
       them.
   - No new endpoint and no server rendering.
   - **The generator:** platform `android.graphics.pdf.PdfDocument` with `StaticLayout` (no new
-    dependency). If §33.19 gate 10 fails with it (Sinhala or Tamil conjuncts not extractable),
-    Android may switch to a library, with a `docs/decisions/` note (open question 6).
+    dependency). If §33.20 gate 4 fails with it (Sinhala or Tamil conjuncts not extractable),
+    Android switches to a library, with a `docs/decisions/` note.
 - **Fonts, embedded:**
   - **Noto Sans** (Latin), **Noto Sans Sinhala** and **Noto Sans Tamil**, Regular and Bold, as
     static TTFs bundled in the APK (about 1 MB; SIL OFL 1.1, listed under Settings → About →
@@ -597,8 +531,7 @@ which A extends (picker, 100 MB, progress, resume); A must not redefine these fi
   - **[Share]**: §33.10 (the PDF streamed through `ShareProvider`).
   - **[Save to Downloads]**: §33.13 Save.
   - **[Send to chat…]**: the §33.4 target picker (up to 5). The PDF is sent as a **`file`**: one
-    encrypt and upload, then grants for the other targets (§33.5), or one upload per target
-    without `blob_grants`.
+    encrypt and upload **per target** (§33.5).
 - **Privacy:** the PDF and its text never reach the server, the model, the learning log or a push.
   The on-device behaviour log records "pdf exported" with the page count and the source type only.
 
@@ -682,13 +615,10 @@ so the model never writes or sees the PDF's content. There are two paths, both u
   message, except by length. MLS application messages aren't padded yet (§14.9, crypto S1), so a
   forwarded text has about the length of its source plus about 20 bytes. That is a weak
   cross-conversation correlation, which already exists for any repeated text.
-- **New metadata from blob grants:** for each grant, the server learns that **blob X, uploaded in
-  conversation A, is now readable in conversation B, by the granter's choice, at time t**. That is
-  the **forward graph for media** between conversations the granter belongs to. It does not learn
-  content, type, caption, or that a text was forwarded.
-  - With `blob_grants` off, or on a re-upload with a fresh key (§33.6), there is no new linkage
-    beyond the existing download-then-upload timing.
-  - This goes in the app's privacy note next to §14.9 (open question 1).
+- **Forwarded media** is a fresh upload with a fresh key per target (§33.5): to the server it is
+  an ordinary new `media` upload in that conversation. It can at most guess from timing (a
+  download followed by an upload of a similar padded size, §14.9). There is **no new metadata**
+  and no forward graph.
 - **Private → Official:** after the hint (§33.8), the forwarded item is Official content. Risi
   receives it like any Official message (the MLS key included for media), under §24.12.
 - **Learning log:** no model is involved, except the `export_pdf` turn steps (§25.1 hashes only).
@@ -697,13 +627,10 @@ so the model never writes or sees the PDF's content. There are two paths, both u
 
 ### 33.17 Amendments
 - **§10.3:** `text` gains the optional `forwarded` and `reply_to`. The new type is `file`.
-- **§14.2 / §14.5:** the reader rule gains grants (§33.5). The file is kept while a live grant
-  exists. `media.used` counts grants.
 - **§14.4:** `image` gains the optional `forwarded` and `reply_to`.
 - **§14.7 receiving 8:** Share (§33.10) and Open-with (§33.13) are further paths by which plaintext
   leaves the app. Copy of an image copies the caption (unchanged).
-- **§15.2:** `blob_ids` covers **media targets** (`image`, `file`, A's types) and grants made into
-  this conversation by a sender of a deleted target (§33.5).
+- **§15.2:** `blob_ids` covers **media targets** (`image`, `file`, A's types), not only images.
 - **§15.6:** star rows, `forward_hops`, `reply_to_message_id` and opened-file temporaries are
   derived rows that the purge removes. The quote rule is now normative (§33.9).
 - **§17.7:** the export filter `kind` `text` or `image` becomes `text`, `image` or `file`.
@@ -718,7 +645,7 @@ so the model never writes or sees the PDF's content. There are two paths, both u
   (§33.14).
 
 ### 33.18 Rollout and old apps
-- **Server first** (grants, `files` readiness, the `pdf_export` filter, `export_pdf`, the examples),
+- **Server first** (`files` readiness, the `pdf_export` filter, `export_pdf`, the examples),
   **then the app.** No `required` update (decision 016).
 - **Pre-v1.34 apps:**
   - They show forwarded messages and replies as plain messages, without the label or quote.
@@ -729,7 +656,7 @@ so the model never writes or sees the PDF's content. There are two paths, both u
   columns (`forward_hops`, `reply_to_message_id`, `delivered_at`, `read_at`). Per-conversation
   counts (1:1, groups, photos, call records) are identical before and after the update.
 
-### 33.19 Examples (to be written under `contract/v1/examples/` when folded; the server's real output where it produces them)
+### 33.19 Examples (`contract/v1/examples/`)
 
 | File | Content |
 |---|---|
@@ -737,15 +664,13 @@ so the model never writes or sees the PDF's content. There are two paths, both u
 | `envelope_text_forwarded_many.json` | `{"v":1,"type":"text","body":"Site visit moved to 3 PM","forwarded":{"hops":7}}` |
 | `envelope_text_forwarded_bad.json` | `{"v":1,"type":"text","body":"Site visit moved to 3 PM","forwarded":{"hops":0}}`: shown **without** a label, not dropped |
 | `envelope_text_reply.json` | `{"v":1,"type":"text","body":"Yes, 3 works","reply_to":{"message_id":"c1a2b3e1-a0b1-11f0-8000-0242ac120002","from":"0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e"}}` |
-| `image_payload_forwarded.json` | `image_payload.json` plus `"forwarded":{"hops":2}` (the same `blob` and `enc`) |
+| `image_payload_forwarded.json` | `image_payload.json` with a **new** `blob` and `enc` (the per-target re-upload, §33.5) plus `"forwarded":{"hops":2}` |
+| `envelope_text_view_once_reserved.json` | `{"v":1,"type":"text","body":"Door code 4711","view_once":{}}`: shown (F defines the rendering) but never selectable, quotable, searchable or forwardable (§33.0) |
 | `file_payload.json` | as §33.13 (below) |
 | `file_payload_bad_name.json` | `file_payload.json` with `"name":"../../evil.pdf"`: **dropped** |
-| `file_payload_parts.json` | `{"v":1,"type":"file","parts":[{"blob_id":"…","size":16777216,"sha256":"…"}],"enc":{"alg":"A256GCM-S64K","key":"…","plain_size":40000000},"name":"Site survey.zip","mime":"application/zip"}`: a placeholder bubble, not dropped (A reserves `parts`) |
-| `blob_grant_request.json` | `{"conversation_id":"grp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d","client_grant_id":"3b4c5d6e-7f80-4912-a3b4-c5d6e7f8091a"}` |
-| `blob_grant_reply.json` | `{"blob_id":"7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f","conversation_id":"grp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d","expires_at":"2026-11-10T08:15:30.456Z"}` |
+| `file_payload_parts.json` | `{"v":1,"type":"file","parts":[{"blob_id","size":16777216,"sha256"}, …],"enc":{"alg":"A256GCM-S64K","key","plain_size":30000000},"name":"Site survey.zip","mime":"application/zip"}`: a placeholder bubble, not dropped (A reserves `parts`) |
 | `device_put_files.json` | `device_put_risi_notes.json` with `"files"` and `"pdf_export"` added to `capabilities`, `app_version` `0.3.0-nightly.50` |
 | `mls_group_files_ready.json` | `mls_group_images_ready.json` plus `"files_ready":false,"missing_files":[{"user_id":"0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e","device_id":"c0a80101-0000-4000-8000-000000000004"}]` |
-| `auth_config_v134.json` | `auth_config_v131.json` plus `"blob_grants":"on"` |
 | `envelope_risi_answer_next_action_pdf.json` | below |
 | `envelope_risi_confirm_export_pdf.json` | below |
 | `event_risi_tool_call_export_pdf.json` | below |
@@ -790,8 +715,9 @@ so the model never writes or sees the PDF's content. There are two paths, both u
 2. **Forward to a DM and a group:**
    - On phone A, forward a text and a photo from DM(A,B) to DM(A,C) and to a group with B. Both
      arrive, and the photo opens on the receiving phone.
-   - Server check: **one** `media` upload for the photo in total. The forward makes **grants**
-     (rows in `blob_grants`) and no new `blobs` rows.
+   - Server check: **one new `media` upload per target** for the photo, each in its target
+     conversation, and the two forwarded envelopes carry different `enc.key`s (checked on the
+     receiving phones' debug dump).
 3. **The "Forwarded" label on the second phone** (B, in the group). Then B forwards it on; after
    the chain reaches `hops` 5 (a debug seam may inject `hops` 4), **"Forwarded many times"** shows,
    and the picker allows 1 target.
@@ -805,14 +731,12 @@ so the model never writes or sees the PDF's content. There are two paths, both u
 
 **Further gates:**
 
-5. **Re-upload path:** with `BLOB_GRANTS=off` (`/auth/config` without the key), the forward of
-   gate 2 still arrives, with **one new upload per target**, each with a different key (the
-   envelopes' `enc.key` differ).
-6. **Grant lifetime:** a server test.
-   - The original sender deletes the photo for everyone in DM(A,B). The forwarded copy in the
-     group still downloads, because the grant keeps the file.
-   - A delete for everyone of the forwarded message in the group removes the grant, and then
-     the group gets `404`.
+5. **Expired source:** a photo past its horizon that the phone never downloaded is disabled for
+   Forward with "This photo is no longer available"; one that was downloaded is still forwarded
+   (a fresh upload). (Android test with a clock seam.)
+6. **Delete independence:** the original sender deletes the photo for everyone in DM(A,B); the
+   forwarded copy in the group still opens (it is its own blob). A delete for everyone of the
+   forwarded message removes **its** blob (§15.2 `blob_ids`, `file` included).
 7. **Private → Official hint:** forward from Private to an Official tab. The hint shows once. A
    second forward shows no hint.
 8. **Reply:**
@@ -837,24 +761,16 @@ so the model never writes or sees the PDF's content. There are two paths, both u
 11. **No plaintext on the server:**
     - `CANARY-<uuid>` is in a Private text that is forwarded Private → Private, and in a PDF's
       content and file name.
-    - The canary appears in no server table, log, blob file (ciphertext only) or `blob_grants`
-      row, and in no push. The §24.14 canary also covers `export_pdf` tool args (references only).
-12. **View once:** F's gate covers its exclusion from Copy, Forward, Share, Star, Reply and search
-    once F lands. Until then, a unit test feeds a synthetic view-once row (F's marker) and checks
-    that the bar disables everything.
+    - The canary appears in no server table, log or blob file (ciphertext only), and in no
+      push. The §24.14 canary also covers `export_pdf` tool args (references only).
+12. **View once:** a unit test feeds a synthetic envelope with `"view_once": {}` and checks that
+    it is not selectable, not quotable, not searchable and never built into a forward; F's gate
+    repeats it with real items once F lands.
 13. **The upgrade gate** (hard rule 9): counts are unchanged from v1.33 to v1.34. Also the logcat
     gate, and ui-entry-test at font scale 1.0 and 1.3 with screenshots of the selection bar, the
     forward picker, the hint, Info, the file bubble and the PDF sheet.
 14. **Server tests:**
-    - the grant endpoint: every check and their order; `200` replay; the `400` mismatch;
-    - readers via a grant:
-      - DM;
-      - a group interval at `granted_at`;
-      - a member removed before the grant gets nothing; `pending_add` gets nothing;
-      - the granter after leaving;
-    - the per-blob cap and the rate limit; quota under concurrency; `usage`;
-    - the expiry sweep keeping the file while a grant lives;
-    - the `msg:delete` grant removal;
+    - `msg:delete` `blob_ids` accepting `file` blobs;
     - the `files_ready` computation;
     - the `pdf_export` capability being dropped without `risi_tools`;
     - `export_pdf` authorisation (offered only to `pdf_export` devices), the confirm card built
@@ -868,37 +784,20 @@ so the model never writes or sees the PDF's content. There are two paths, both u
     - `file` validation (bad name dropped, `parts` placeholder, mime fallback, APK rule);
     - the selection-bar matrix; the target rules (5/1, disabled reasons);
     - outbox persistence of a 30 × 5 forward and resume after a kill;
-    - the grant/re-upload state machine (each §33.6 case);
+    - the re-upload state machine (§33.5: cached, download-first, own unsent, expired, quota);
     - the `ShareProvider` pipe (no disk writes);
     - the Room migration and its counts; purging the star rows;
     - the PDF generator on API 26 and 34 (the run splitting versus `CustomFallbackBuilder`).
 
-### Open questions (for Harsha; root's recommendation first)
-1. **Blob grants reveal the media forward graph to the server** (§33.16). **Recommendation:**
-   accept it for the pilot (Harsha's spec asks for no re-upload; it saves data and battery), and
-   document it in the privacy note. The alternative is always re-uploading with a fresh key, which
-   adds no new metadata but costs a full upload per target. A middle option is to always
-   re-upload when the source is Private.
-2. **Star sync.** Stars are device-local plus backups in v1.34 (§33.11). **Recommendation:** a
-   later `self:` own-devices MLS group (a crypto change, with its own proposal). It would also
-   carry read state, drafts and settings.
-3. **The copy date format** follows the phone's locale (§33.3; en-GB gives exactly
-   "[10/10/26, 07:26]"). The alternative is a fixed `dd/MM/yy, HH:mm` for everyone.
-   **Recommendation:** the locale, as WhatsApp does.
-4. **"Forwarded many times" limits a forward to 1 target**, as on WhatsApp. This isn't in
-   NEXT-PHASE. **Recommendation:** yes, it slows viral chains.
-5. **The user's own messages are forwarded without a label**, as on WhatsApp. **Recommendation:**
-   yes.
-6. **The PDF generator:** the platform `PdfDocument` (Skia) may not give `pdftotext` a usable
-   ToUnicode mapping for Sinhala or Tamil conjuncts. If gate 4 fails, Android picks a library (for
-   example one that writes `ActualText`) with a decision note. This is a risk to the E gate, not a
-   wire question.
-7. **Sending general documents** (the picker) is left to A. v1.34 sends files only from PDF export
-   and forwards. Should a simple picker for files up to 16 MiB come in v1.34? **Recommendation:**
-   no; keep A whole.
-8. **Forward to Risi** ("Ask Risi about this") is excluded in v1.34, because the Risi chat ignores
-   plain `text` (§25.2). It could come later as a `risi_request` with a quoted Official message
-   only.
-9. **`EXTRA_IS_SENSITIVE`** applies to Private copies only, not Official. Is that OK?
-10. **Version:** this is v1.34 because D1 took v1.33. F and A proposals written in parallel must
-    take the next numbers, and F must name its view-once marker for §33.2.
+### Decisions (root, 2026-10-11, on the draft's open questions)
+1. No blob grants in v1.34; media forwards always re-upload with a fresh key (§33.5, §33.6).
+2. Star is device-local and kept in backups; own-device sync later (§33.11).
+3. Copy dates follow the phone locale (§33.3).
+4. "Forwarded many times" → one target only (§33.4).
+5. The user's own forwards carry no label (§33.4).
+6. PDF Sinhala/Tamil extraction: android checks the platform writer first; if `pdftotext` fails,
+   a library plus a `docs/decisions/` note (§33.14).
+7. No general file picker until A (§33.13).
+8. No forward to Risi (§33.4).
+9. Only Private copies are marked sensitive (§33.3).
+10. The view-once marker name `view_once` is reserved for F (§33.0).

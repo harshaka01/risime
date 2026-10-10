@@ -1,0 +1,451 @@
+{
+ "v": 1,
+ "description": "PROTOCOL.md §33.3 copy format (v1.34). Android only. Each case: the selected messages in chat order, the phone's locale, 24-hour setting and zone, and the user's own display name; `expected` is the exact clipboard text, or each line must match `expected_regex`. `server_ts` null means an unsent own row, timed by `local_ts`. A single selected message copies its content without a prefix.",
+ "cases": [
+  {
+   "name": "texts_and_photo_en_gb",
+   "locale": "en-GB",
+   "hour24": true,
+   "zone": "Asia/Colombo",
+   "own_name": "Harsha",
+   "messages": [
+    {
+     "from_name": "Kamal",
+     "own": false,
+     "server_ts": "2026-10-10T01:56:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "Can we move the site visit?"
+     }
+    },
+    {
+     "from_name": "Harsha",
+     "own": true,
+     "server_ts": "2026-10-10T01:57:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "Yes, 3 PM"
+     }
+    },
+    {
+     "from_name": "Kamal",
+     "own": false,
+     "server_ts": "2026-10-10T01:57:40.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "image",
+      "blob": {
+       "blob_id": "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+       "size": 1311040,
+       "sha256": "OmRGrwNuM4bzkILNWQT16tHm5bpZDP+uBAMD+z2MNfI="
+      },
+      "enc": {
+       "alg": "A256GCM-S64K",
+       "key": "usaTFgbKkrHupsKDgiEilO6aTvojlqaCfF8jyJ2PAII=",
+       "plain_size": 1300000
+      },
+      "mime": "image/jpeg",
+      "w": 2048,
+      "h": 1536,
+      "thumb": null,
+      "caption": "Level 3 plan"
+     }
+    }
+   ],
+   "expected": "[10/10/26, 07:26] Kamal: Can we move the site visit?\n[10/10/26, 07:27] Harsha: Yes, 3 PM\n[10/10/26, 07:27] Kamal: <Photo> Level 3 plan"
+  },
+  {
+   "name": "multiline_and_forwarded_en_gb",
+   "locale": "en-GB",
+   "hour24": true,
+   "zone": "Asia/Colombo",
+   "own_name": "Harsha",
+   "messages": [
+    {
+     "from_name": "Kamal",
+     "own": false,
+     "server_ts": "2026-10-10T03:30:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "Agenda:\r\n1. Budget\n2. Site"
+     }
+    },
+    {
+     "from_name": "Kamal",
+     "own": false,
+     "server_ts": "2026-10-10T03:31:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "Site visit moved to 3 PM",
+      "forwarded": {
+       "hops": 1
+      }
+     }
+    }
+   ],
+   "expected": "[10/10/26, 09:00] Kamal: Agenda:\n1. Budget\n2. Site\n[10/10/26, 09:01] Kamal: Site visit moved to 3 PM"
+  },
+  {
+   "name": "photos_with_and_without_caption_en_gb",
+   "locale": "en-GB",
+   "hour24": true,
+   "zone": "Asia/Colombo",
+   "own_name": "Harsha",
+   "messages": [
+    {
+     "from_name": "Shenika",
+     "own": false,
+     "server_ts": "2026-10-05T12:00:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "image",
+      "blob": {
+       "blob_id": "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+       "size": 1311040,
+       "sha256": "OmRGrwNuM4bzkILNWQT16tHm5bpZDP+uBAMD+z2MNfI="
+      },
+      "enc": {
+       "alg": "A256GCM-S64K",
+       "key": "usaTFgbKkrHupsKDgiEilO6aTvojlqaCfF8jyJ2PAII=",
+       "plain_size": 1300000
+      },
+      "mime": "image/jpeg",
+      "w": 2048,
+      "h": 1536,
+      "thumb": null
+     }
+    },
+    {
+     "from_name": "Shenika",
+     "own": false,
+     "server_ts": "2026-10-05T12:00:05.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "image",
+      "blob": {
+       "blob_id": "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+       "size": 1311040,
+       "sha256": "OmRGrwNuM4bzkILNWQT16tHm5bpZDP+uBAMD+z2MNfI="
+      },
+      "enc": {
+       "alg": "A256GCM-S64K",
+       "key": "usaTFgbKkrHupsKDgiEilO6aTvojlqaCfF8jyJ2PAII=",
+       "plain_size": 1300000
+      },
+      "mime": "image/jpeg",
+      "w": 2048,
+      "h": 1536,
+      "thumb": null,
+      "caption": "Front gate"
+     }
+    }
+   ],
+   "expected": "[05/10/26, 17:30] Shenika: <Photo>\n[05/10/26, 17:30] Shenika: <Photo> Front gate"
+  },
+  {
+   "name": "files_en_gb",
+   "locale": "en-GB",
+   "hour24": true,
+   "zone": "Asia/Colombo",
+   "own_name": "Harsha",
+   "messages": [
+    {
+     "from_name": "Harsha",
+     "own": true,
+     "server_ts": "2026-10-09T10:15:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "file",
+      "blob": {
+       "blob_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+       "size": 196656,
+       "sha256": "OmRGrwNuM4bzkILNWQT16tHm5bpZDP+uBAMD+z2MNfI="
+      },
+      "enc": {
+       "alg": "A256GCM-S64K",
+       "key": "usaTFgbKkrHupsKDgiEilO6aTvojlqaCfF8jyJ2PAII=",
+       "plain_size": 196608
+      },
+      "name": "Interview planning – 2026-10-09.pdf",
+      "mime": "application/pdf",
+      "thumb": null,
+      "pages": 3,
+      "caption": "Notes from Friday"
+     }
+    },
+    {
+     "from_name": "Shenika",
+     "own": false,
+     "server_ts": "2026-10-09T10:16:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "file",
+      "blob": {
+       "blob_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+       "size": 196656,
+       "sha256": "OmRGrwNuM4bzkILNWQT16tHm5bpZDP+uBAMD+z2MNfI="
+      },
+      "enc": {
+       "alg": "A256GCM-S64K",
+       "key": "usaTFgbKkrHupsKDgiEilO6aTvojlqaCfF8jyJ2PAII=",
+       "plain_size": 196608
+      },
+      "name": "Interview planning – 2026-10-09.pdf",
+      "mime": "application/pdf",
+      "thumb": null,
+      "pages": 3
+     }
+    }
+   ],
+   "expected": "[09/10/26, 15:45] Harsha: <File: Interview planning – 2026-10-09.pdf> Notes from Friday\n[09/10/26, 15:46] Shenika: <File: Interview planning – 2026-10-09.pdf>"
+  },
+  {
+   "name": "risi_answer_en_gb",
+   "locale": "en-GB",
+   "hour24": true,
+   "zone": "Asia/Colombo",
+   "own_name": "Harsha",
+   "messages": [
+    {
+     "from_name": "Harsha",
+     "own": true,
+     "server_ts": "2026-10-10T04:00:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "risi_request",
+      "request_id": "6d1f2e3a-4b5c-4d6e-9f7a-8b9c0d1e2f3a",
+      "action": "ask",
+      "text": "Am I free on Friday at 10?",
+      "scope": {
+       "since": "2026-10-09T04:00:00.000Z"
+      }
+     }
+    },
+    {
+     "from_name": "Risi",
+     "own": false,
+     "server_ts": "2026-10-10T04:00:09.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "Yes, you're free on Fri 16 Oct, 10:00–11:00.",
+      "risi": {
+       "v": 1,
+       "kind": "answer",
+       "request_id": "6d1f2e3a-4b5c-4d6e-9f7a-8b9c0d1e2f3a",
+       "answer": "Yes, you're free on Fri 16 Oct, 10:00–11:00.",
+       "refs": [],
+       "confidence": 0.9,
+       "call_ref": null,
+       "notify": []
+      }
+     }
+    }
+   ],
+   "expected": "[10/10/26, 09:30] Harsha: Am I free on Friday at 10?\n[10/10/26, 09:30] Risi: Yes, you're free on Fri 16 Oct, 10:00–11:00.",
+   "note": "A risi_request in the Risi chat is shown as the user's own bubble (§25.2); its content is its text."
+  },
+  {
+   "name": "own_pending_row_en_gb",
+   "locale": "en-GB",
+   "hour24": true,
+   "zone": "Asia/Colombo",
+   "own_name": "Harsha",
+   "messages": [
+    {
+     "from_name": "Kamal",
+     "own": false,
+     "server_ts": "2026-10-10T05:00:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "Sending the plan now"
+     }
+    },
+    {
+     "from_name": "Harsha",
+     "own": true,
+     "server_ts": null,
+     "local_ts": "2026-10-10T05:01:00.000Z",
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "Thanks!"
+     }
+    }
+   ],
+   "expected": "[10/10/26, 10:30] Kamal: Sending the plan now\n[10/10/26, 10:31] Harsha: Thanks!"
+  },
+  {
+   "name": "twelve_hour_en_us",
+   "locale": "en-US",
+   "hour24": false,
+   "zone": "Asia/Colombo",
+   "own_name": "Harsha",
+   "messages": [
+    {
+     "from_name": "Kamal",
+     "own": false,
+     "server_ts": "2026-10-05T01:56:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "See you at 10"
+     }
+    },
+    {
+     "from_name": "Harsha",
+     "own": true,
+     "server_ts": "2026-10-05T08:40:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "On my way"
+     }
+    }
+   ],
+   "expected": "[10/05/26, 07:26 AM] Kamal: See you at 10\n[10/05/26, 02:10 PM] Harsha: On my way",
+   "note": "ICU may put U+202F before AM/PM; it is replaced by U+0020 (§33.3)."
+  },
+  {
+   "name": "single_message_no_prefix",
+   "locale": "en-GB",
+   "hour24": true,
+   "zone": "Asia/Colombo",
+   "own_name": "Harsha",
+   "messages": [
+    {
+     "from_name": "Kamal",
+     "own": false,
+     "server_ts": "2026-10-10T01:56:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "Line one\nLine two"
+     }
+    }
+   ],
+   "expected": "Line one\nLine two"
+  },
+  {
+   "name": "single_photo_caption_only",
+   "locale": "en-GB",
+   "hour24": true,
+   "zone": "Asia/Colombo",
+   "own_name": "Harsha",
+   "messages": [
+    {
+     "from_name": "Kamal",
+     "own": false,
+     "server_ts": "2026-10-10T01:56:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "image",
+      "blob": {
+       "blob_id": "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+       "size": 1311040,
+       "sha256": "OmRGrwNuM4bzkILNWQT16tHm5bpZDP+uBAMD+z2MNfI="
+      },
+      "enc": {
+       "alg": "A256GCM-S64K",
+       "key": "usaTFgbKkrHupsKDgiEilO6aTvojlqaCfF8jyJ2PAII=",
+       "plain_size": 1300000
+      },
+      "mime": "image/jpeg",
+      "w": 2048,
+      "h": 1536,
+      "thumb": null,
+      "caption": "Level 3 plan"
+     }
+    }
+   ],
+   "expected": "Level 3 plan"
+  },
+  {
+   "name": "sinhala_locale_structure",
+   "locale": "si-LK",
+   "hour24": true,
+   "zone": "Asia/Colombo",
+   "own_name": "Harsha",
+   "messages": [
+    {
+     "from_name": "කමල්",
+     "own": false,
+     "server_ts": "2026-10-10T01:56:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "හෙට හමුවෙමු"
+     }
+    },
+    {
+     "from_name": "Harsha",
+     "own": true,
+     "server_ts": "2026-10-10T01:57:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "හරි"
+     }
+    }
+   ],
+   "expected_regex": "^\\[[0-9/.\\-]+, [0-9:]+( ?[^\\]]+)?\\] .+: .*$",
+   "note": "Each line is checked against the regex (CLDR patterns vary by Android version); digits are Latin."
+  },
+  {
+   "name": "tamil_locale_structure",
+   "locale": "ta-LK",
+   "hour24": true,
+   "zone": "Asia/Colombo",
+   "own_name": "Harsha",
+   "messages": [
+    {
+     "from_name": "கமல்",
+     "own": false,
+     "server_ts": "2026-10-10T01:56:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "நாளை சந்திப்போம்"
+     }
+    },
+    {
+     "from_name": "Harsha",
+     "own": true,
+     "server_ts": "2026-10-10T01:57:00.000Z",
+     "local_ts": null,
+     "payload": {
+      "v": 1,
+      "type": "text",
+      "body": "சரி"
+     }
+    }
+   ],
+   "expected_regex": "^\\[[0-9/.\\-]+, [0-9:]+( ?[^\\]]+)?\\] .+: .*$",
+   "note": "As sinhala_locale_structure."
+  }
+ ]
+}
