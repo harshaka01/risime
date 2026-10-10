@@ -1996,3 +1996,11 @@ Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/p
 - Tests: `calendar_honesty_p0_1010_test.exs` (13: grep of prompts/tool texts, reasons, RISI_GCAL off/on).
   Existing v129/v131 expectations updated. "Add meeting Monday 10am" path is covered by action_loop_p0_test
   (card -> `calendar_add` -> "Added to your Google Calendar: ...") and risi_calendar_flow_test.
+
+### P0 follow-up: `answer.local_events` (v1.32 §29.7)  -- READY
+- `CalendarHonesty.local_events/1` + `Turn.finish`: `{"from","to"}` (the checked range) added to the answer only when
+  the last check holds a `phone_provider` source with `read_ok: true` and the turn is in the asker's own Risi chat.
+  Body stays the busy-times text. Calendar rules in the prompt say the phone lists the events under the answer.
+- Example `envelope_risi_answer_local_events.json` matches the real output exactly (no changes needed). The older
+  `envelope_risi_answer_calendar_sources_risi.json` now also carries `local_events` (real output; example updated).
+- Full suite 1099 tests, 0 failures, 15 skipped.

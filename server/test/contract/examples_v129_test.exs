@@ -35,7 +35,7 @@ defmodule RisiMe.Contract.ExamplesV129Test do
             envelope_risi_calendar_invite.json envelope_risi_event_update.json
             envelope_risi_calendar_suggestion.json envelope_risi_calendar_reminder.json
             envelope_risi_action_event_accept.json envelope_risi_action_event_suggest.json
-            envelope_risi_answer_calendar_sources_risi.json
+            envelope_risi_answer_calendar_sources_risi.json envelope_risi_answer_local_events.json
             envelope_risi_digest_personal_v129.json error_version_conflict.json
             error_cursor_expired.json error_not_invitable.json)
 
@@ -494,5 +494,75 @@ defmodule RisiMe.Contract.ExamplesV129Test do
     assert body =~ "Checked: Risi Calendar · Phone calendar (Work)."
     refute body =~ "Google Calendar"
     check!("envelope_risi_answer_calendar_sources_risi.json", envelope(a))
+  end
+
+  test "§29.7 v1.32: a phone read in the asker's Risi chat carries local_events", ctx do
+    item!(ctx)
+    CalendarOffers.backfill()
+    posts()
+    change = %{"id" => "calendar", "state" => "ask", "client_permission" => "granted"}
+
+    {200, _} =
+      api(:patch, "/api/v1/risi/skills", ctx.harsha.token, %{"changes" => [change]}, ctx.hd)
+
+    fake_llm!(fn _name, body ->
+      if Enum.any?(body["messages"], &(&1["role"] == "assistant")),
+        do:
+          final(
+            "You have 3 busy times this week (Mon 12 Oct, 10:00–11:00; Tue 13 Oct, 14:00–15:00; Thu 15 Oct, all day)."
+          ),
+        else: %{
+          "tool" => "risi_calendar_check",
+          "args" => %{"from" => "2026-10-11T18:30:00Z", "to" => "2026-10-18T18:30:00Z"}
+        }
+    end)
+
+    job = request!(ctx, "What's on my calendar this week?")
+    task = Task.async(fn -> perform_job(Job, job.args) end)
+    call = wait_call(ctx.h)
+    assert call["data"]["tool"] == "calendar_check"
+
+    result = %{
+      "blocks" => [],
+      "sources" => [
+        %{
+          "source" => "phone_provider",
+          "calendars" => [
+            %{"name" => "Work (Google)", "account_type" => "com.google", "events" => 2},
+            %{"name" => "Personal (Google)", "account_type" => "com.google", "events" => 1}
+          ],
+          "read_ok" => true,
+          "reason" => nil
+        },
+        %{
+          "source" => "google_api",
+          "calendars" => [],
+          "read_ok" => false,
+          "reason" => "not_connected"
+        }
+      ],
+      "connected_sources" => ["phone_provider"]
+    }
+
+    {204, _} =
+      api(
+        :post,
+        "/api/v1/risi/tool_calls/#{call["data"]["tool_call_id"]}/result",
+        ctx.harsha.token,
+        %{"status" => "ok", "result" => result},
+        ctx.hd
+      )
+
+    assert :ok = Task.await(task)
+    {_, body, _} = a = post_in(posts(), ctx.hrc, "answer")
+    assert body =~ "Checked: Risi Calendar · Phone calendar (Work (Google), Personal (Google))."
+    refute body =~ "Not checked"
+
+    assert a |> elem(2) |> Map.get("local_events") == %{
+             "from" => "2026-10-11T18:30:00.000Z",
+             "to" => "2026-10-18T18:30:00.000Z"
+           }
+
+    check!("envelope_risi_answer_local_events.json", envelope(a))
   end
 end

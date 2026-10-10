@@ -296,7 +296,7 @@ defmodule RisiMe.ContractExamplesTest do
   @checked_v1_29 ~w(auth_config_v129.json device_put_risi_events.json
                     envelope_risi_action_confirm_write_edit_risi_calendar.json
                     envelope_risi_action_event_accept.json envelope_risi_action_event_suggest.json
-                    envelope_risi_answer_calendar_sources_risi.json
+                    envelope_risi_answer_calendar_sources_risi.json envelope_risi_answer_local_events.json
                     envelope_risi_calendar_invite.json envelope_risi_calendar_reminder.json
                     envelope_risi_calendar_suggestion.json
                     envelope_risi_confirm_risi_calendar_add.json

@@ -208,4 +208,25 @@ defmodule RisiMe.Agent.CalendarHonestyP01010Test do
       assert out =~ "I couldn't read your calendar"
     end
   end
+
+  describe "local_events (v1.32 §29.7)" do
+    test "only after a successful phone_provider read" do
+      ok_read = ok([], [phone([@work], true)])
+
+      assert CalendarHonesty.local_events([ok_read]) == %{
+               "from" => @window["from"],
+               "to" => @window["to"]
+             }
+
+      assert CalendarHonesty.local_events([ok([], [phone([@work], false, "sync_off")])]) == nil
+      assert CalendarHonesty.local_events([ok([], [@risi])]) == nil
+      assert CalendarHonesty.local_events([CalendarHonesty.check("timeout", nil, nil)]) == nil
+      assert CalendarHonesty.local_events([]) == nil
+    end
+
+    test "the calendar rules tell Risi the phone lists the events" do
+      assert Capabilities.calendar_rules() =~ "the phone lists the events"
+      refute Regex.match?(@forbidden, Capabilities.calendar_rules())
+    end
+  end
 end

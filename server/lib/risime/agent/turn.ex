@@ -1170,6 +1170,15 @@ defmodule RisiMe.Agent.Turn do
       "notify" => [ctx.asker]
     }
 
+    # v1.32 §29.7: the phone lists the asker's own events under the answer (own Risi chat only).
+    answer_risi =
+      with true <- ctx.in_risi_chat?,
+           %{} = le <- CalendarHonesty.local_events(checks) do
+        Map.put(answer_risi, "local_events", le)
+      else
+        _ -> answer_risi
+      end
+
     Audience.deliver(ctx, answer, answer_risi, st.personal)
   end
 end

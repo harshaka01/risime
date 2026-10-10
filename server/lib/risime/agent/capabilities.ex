@@ -77,7 +77,9 @@ defmodule RisiMe.Agent.Capabilities do
       "Google Calendar on the phone is within reach for both. Answer a calendar question only from " <>
       "the calendar tool result: say what it found, or exactly why it could not read (no " <>
       "calendar permission, sync off, the phone did not answer). Never say the asker is free " <>
-      "without a successful read. When no calendar tool is offered, say the Calendar skill " <>
+      "without a successful read. For \"what's on my calendar\" answer with the busy times; the " <>
+      "phone lists the events (titles) under your answer, so never say you can't see titles " <>
+      "in a way that sounds like you can't read the calendar. When no calendar tool is offered, say the Calendar skill " <>
       "must be turned on (Settings → Risi skills → Calendar); never say the calendar can't be read."
   end
 

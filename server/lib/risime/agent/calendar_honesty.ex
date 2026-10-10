@@ -425,6 +425,23 @@ defmodule RisiMe.Agent.CalendarHonesty do
     end
   end
 
+  @doc """
+  v1.32 §29.7 `answer.local_events`: `%{"from", "to"}` (the checked range) when the last check
+  holds a successful `phone_provider` read, else nil. The caller adds it in the asker's own
+  Risi chat only.
+  """
+  def local_events(checks) when is_list(checks) do
+    case List.last(checks) do
+      %{status: "ok", result: %{"sources" => ss, "from" => f, "to" => t}}
+      when is_list(ss) and is_binary(f) and is_binary(t) ->
+        if Enum.any?(ss, &(&1["source"] == "phone_provider" and &1["read_ok"] == true)),
+          do: %{"from" => f, "to" => t}
+
+      _ ->
+        nil
+    end
+  end
+
   defp window(%{"from" => f, "to" => t}, tz) when is_binary(f) and is_binary(t) do
     with {:ok, a, _} <- DateTime.from_iso8601(f),
          {:ok, b, _} <- DateTime.from_iso8601(t) do
