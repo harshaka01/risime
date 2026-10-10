@@ -215,7 +215,7 @@ defmodule RisiMe.Agent.ActionLoopP0Test do
     {204, _} =
       result!(ctx, d["tool_call_id"], %{
         "status" => "ok",
-        "result" => %{"event_id" => "e1", "calendar" => cal}
+        "result" => %{"event_id" => "e1", "verified" => true, "calendar" => cal}
       })
 
     assert :ok = Task.await(task)
@@ -487,7 +487,10 @@ defmodule RisiMe.Agent.ActionLoopP0Test do
     assert d["args"]["start"] == edit["start"] and d["args"]["end"] == edit["end"]
 
     {204, _} =
-      result!(ctx, d["tool_call_id"], %{"status" => "ok", "result" => %{"event_id" => "e"}})
+      result!(ctx, d["tool_call_id"], %{
+        "status" => "ok",
+        "result" => %{"event_id" => "e", "verified" => true}
+      })
 
     assert :ok = Task.await(task)
 

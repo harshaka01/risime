@@ -66,6 +66,12 @@ defmodule RisiMe.Agent.CalendarHonestyP01010Test do
       refute t =~ "can't see your calendar"
     end
 
+    # P0 2026-10-10: no prompt tells the model to claim a write.
+    for t <- texts do
+      refute Regex.match?(~r/I(?:'ve| have) (?:added|set|scheduled|created)/i, t)
+    end
+
+    assert Capabilities.calendar_rules() =~ "never state that an event"
     assert Capabilities.prompt([]) =~ "Google accounts synced to the phone"
     assert ClientTools.calendar_check().description =~ "Google accounts synced to the phone"
     assert ClientTools.calendar_add().description =~ "Google accounts synced to the phone"

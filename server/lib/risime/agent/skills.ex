@@ -478,7 +478,7 @@ defmodule RisiMe.Agent.Skills do
                 RisiMe.Agent.Clock.user_tz(w.user_id)
               )
 
-        done_card(w, e, body)
+        done_card(w, e, body, RisiMe.Agent.ClientTools.added_event(w, result))
         :ok
     end
   end
@@ -525,7 +525,7 @@ defmodule RisiMe.Agent.Skills do
     end
   end
 
-  defp done_card(w, e, body) do
+  defp done_card(w, e, body, extra) do
     j = entry_json(e)
 
     body =
@@ -536,19 +536,24 @@ defmodule RisiMe.Agent.Skills do
         _ -> j["summary"] <> "."
       end
 
-    post_personal(w.user_id, w.card_conversation_id, body, %{
-      "kind" => "skill_done",
-      "request_id" => w.request_id,
-      "skill_id" => w.skill_id,
-      "entry_id" => j["entry_id"],
-      "action" => j["action"],
-      "summary" => j["summary"],
-      "via" => j["via"],
-      "undo" => j["undo"],
-      "undo_token" => j["undo_token"],
-      "turn_ref" => w.turn_id,
-      "notify" => [w.user_id]
-    })
+    post_personal(
+      w.user_id,
+      w.card_conversation_id,
+      body,
+      Map.merge(extra, %{
+        "kind" => "skill_done",
+        "request_id" => w.request_id,
+        "skill_id" => w.skill_id,
+        "entry_id" => j["entry_id"],
+        "action" => j["action"],
+        "summary" => j["summary"],
+        "via" => j["via"],
+        "undo" => j["undo"],
+        "undo_token" => j["undo_token"],
+        "turn_ref" => w.turn_id,
+        "notify" => [w.user_id]
+      })
+    )
   end
 
   ## The activity log (§26.4)

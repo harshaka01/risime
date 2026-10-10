@@ -2004,3 +2004,10 @@ Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/p
 - Example `envelope_risi_answer_local_events.json` matches the real output exactly (no changes needed). The older
   `envelope_risi_answer_calendar_sources_risi.json` now also carries `local_events` (real output; example updated).
 - Full suite 1099 tests, 0 failures, 15 skipped.
+
+### P0 2026-10-10 write honesty + next_actions  -- READY
+- Cause of the false "added" (nightly.47): the server built "Added to your calendar" from a bare `event_id` in the phone's `calendar_add` result (log: the result POST was accepted 204 with the old shape). An old phone's insert returned an id for a row that never persisted or synced; nothing verified it.
+- Now (`ClientTools`): "added" only for `{event_id, verified: true}`; a bare event_id gives "Your phone reported the event as added, but couldn't confirm it. Please check your calendar." (step failed, write stays retryable). `ToolCalls.parse` accepts `verified: true` and the top-level error `{status: "error", code: no_permission|read_only_calendar|insert_failed|verify_failed, detail?}`; each code has its exact text; declined and timeout are said as they are. The success post carries `added_event: {event_id}` (answer and skill_done).
+- Model text (`WriteHonesty`, in `Turn.finish`): a sentence claiming an add/set/schedule is removed unless this turn ran a write that reported `done`; an empty remainder becomes a plain statement. Prompt rule added to `Capabilities.calendar_rules`.
+- `answer.next_actions` (`NextActions`): settings instructions become `open` (settings.calendar | risi_skills | calendar_permission | notifications), questions/requests become `ask`, the rest is dropped, max 3; key omitted when empty; `next_steps` unchanged. No contract example exists yet for next_actions / added_event (tested inline).
+- Tests: full suite 1104, 0 failures, 15 skipped. Canary in writes_s13_test.

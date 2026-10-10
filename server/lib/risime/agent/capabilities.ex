@@ -79,7 +79,9 @@ defmodule RisiMe.Agent.Capabilities do
       "calendar permission, sync off, the phone did not answer). Never say the asker is free " <>
       "without a successful read. For \"what's on my calendar\" answer with the busy times; the " <>
       "phone lists the events (titles) under your answer, so never say you can't see titles " <>
-      "in a way that sounds like you can't read the calendar. When no calendar tool is offered, say the Calendar skill " <>
+      "in a way that sounds like you can't read the calendar. Writes: never state that an event, " <>
+      "reminder or alarm was added or set; you only propose it on a card. The server reports a " <>
+      "write after the phone confirms it. When no calendar tool is offered, say the Calendar skill " <>
       "must be turned on (Settings → Risi skills → Calendar); never say the calendar can't be read."
   end
 

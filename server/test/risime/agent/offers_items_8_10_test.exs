@@ -197,6 +197,7 @@ defmodule RisiMe.Agent.OffersItems810Test do
           "status" => "ok",
           "result" => %{
             "event_id" => "e1",
+            "verified" => true,
             "calendar" => %{"name" => "Google Calendar", "account" => nil}
           }
         },

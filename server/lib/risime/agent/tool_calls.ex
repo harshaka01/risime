@@ -244,15 +244,41 @@ defmodule RisiMe.Agent.ToolCalls do
     result = Map.get(p, "result", :missing)
 
     cond do
-      Map.keys(p) -- ["status", "result"] != [] -> {:error, :bad_request}
-      status == "ok" and valid_ok?(tool, result) -> {:ok, status, result}
-      status == "error" and valid_error?(result) -> {:ok, status, result}
-      status in ~w(no_permission declined) and result in [nil, :missing] -> {:ok, status, nil}
-      true -> {:error, :bad_request}
+      # v1.32 §25.3: `calendar_add` errors carry `code` (and `detail`) at the top level.
+      status == "error" and tool == "calendar_add" and result == :missing ->
+        add_error(p)
+
+      Map.keys(p) -- ["status", "result"] != [] ->
+        {:error, :bad_request}
+
+      status == "ok" and valid_ok?(tool, result) ->
+        {:ok, status, result}
+
+      status == "error" and valid_error?(result) ->
+        {:ok, status, result}
+
+      status in ~w(no_permission declined) and result in [nil, :missing] ->
+        {:ok, status, nil}
+
+      true ->
+        {:error, :bad_request}
     end
   end
 
   def parse(_tool, _params), do: {:error, :bad_request}
+
+  @add_codes ~w(no_permission read_only_calendar insert_failed verify_failed)
+
+  defp add_error(%{"code" => code} = p) when code in @add_codes do
+    detail = Map.get(p, "detail")
+
+    if Map.keys(p) -- ["status", "code", "detail"] == [] and
+         (detail == nil or (is_binary(detail) and String.length(detail) <= 200)),
+       do: {:ok, "error", %{"code" => code}},
+       else: {:error, :bad_request}
+  end
+
+  defp add_error(_), do: {:error, :bad_request}
 
   @error_codes ~w(unknown_tool bad_args calendar_unavailable alarm_unavailable
                   too_many_scheduled not_member)
@@ -302,6 +328,17 @@ defmodule RisiMe.Agent.ToolCalls do
 
   defp valid_ok?("calendar_add", %{"event_id" => id} = r) when map_size(r) == 1,
     do: is_binary(id) and byte_size(id) in 1..256
+
+  # v1.32 §25.3: `verified: true` only after the phone read the row back.
+  defp valid_ok?("calendar_add", %{"event_id" => id, "verified" => true} = r)
+       when map_size(r) == 2,
+       do: is_binary(id) and byte_size(id) in 1..256
+
+  defp valid_ok?("calendar_add", %{"event_id" => id, "verified" => true, "calendar" => c} = r)
+       when map_size(r) == 3,
+       do:
+         is_binary(id) and byte_size(id) in 1..256 and
+           (c == nil or RisiMe.Agent.CalendarChoice.valid?(c))
 
   # P0 2026-10-09 (proposal 2026-10-09-risi-action-loop): the calendar it was added to.
   defp valid_ok?("calendar_add", %{"event_id" => id, "calendar" => c} = r)

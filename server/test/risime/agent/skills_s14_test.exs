@@ -369,7 +369,10 @@ defmodule RisiMe.Agent.SkillsS14Test do
     set!(ctx, "calendar", "off")
 
     {204, _} =
-      result!(ctx, d["tool_call_id"], %{"status" => "ok", "result" => %{"event_id" => "e"}})
+      result!(ctx, d["tool_call_id"], %{
+        "status" => "ok",
+        "result" => %{"event_id" => "e", "verified" => true}
+      })
 
     assert :ok = Task.await(task)
     refute_receive {:risi_post, _, _, %{"kind" => "skill_done"}}, 100
@@ -393,7 +396,10 @@ defmodule RisiMe.Agent.SkillsS14Test do
     assert d["undo_entry_id"] == nil and d["args"]["title"] == "Dentist"
 
     {204, _} =
-      result!(ctx, d["tool_call_id"], %{"status" => "ok", "result" => %{"event_id" => "e"}})
+      result!(ctx, d["tool_call_id"], %{
+        "status" => "ok",
+        "result" => %{"event_id" => "e", "verified" => true}
+      })
 
     assert {_, :ok} = Task.await(task)
 

@@ -58,6 +58,7 @@ defmodule RisiMe.Agent.Turn do
     Audience,
     Capabilities,
     Clock,
+    NextActions,
     LLM,
     Progress,
     Prompts,
@@ -65,6 +66,7 @@ defmodule RisiMe.Agent.Turn do
     Skills,
     Tools,
     TurnSteps,
+    WriteHonesty,
     Writes
   }
 
@@ -168,6 +170,7 @@ defmodule RisiMe.Agent.Turn do
       steps: [],
       calls: 0,
       writes: 0,
+      writes_done: 0,
       history: [],
       refs: refs,
       personal: false,
@@ -804,7 +807,12 @@ defmodule RisiMe.Agent.Turn do
             ],
         refs: if(ok?, do: Map.merge(st.refs, Map.get(meta, :refs, %{})), else: st.refs),
         personal: st.personal or (ok? and (tool.personal or Map.get(meta, :personal, false))),
-        writes: if(ok? and tool.write, do: st.writes + 1, else: st.writes)
+        writes: if(ok? and tool.write, do: st.writes + 1, else: st.writes),
+        writes_done:
+          if(ok? and tool.write and match?(%{"status" => "done"}, result),
+            do: st.writes_done + 1,
+            else: st.writes_done
+          )
     }
 
     {draft_step(st, ctx, name, args, ok?, result), status, result, meta}
@@ -1124,6 +1132,12 @@ defmodule RisiMe.Agent.Turn do
     checks = Map.get(st, :calendar_checks, [])
     # P0 2026-10-09: never "clear" without a trustworthy read; always name what was checked.
     {answer, rule?, retry} = CalendarHonesty.enforce_full(answer, checks, ctx.tz)
+    # v1.32 §25.3: the model's text never claims a write that no tool result reported done.
+    {answer, claim_removed?} =
+      WriteHonesty.enforce(answer, Map.get(st, :writes_done, 0), Map.get(st, :proposed) != nil)
+
+    rule? = rule? or claim_removed?
+    raw_steps = next_steps
     next_steps = retry || next_steps
     # v1.29 §29.3: an answer the server rebuilt is made by the rule, not the model.
     st = if rule?, do: %{st | rule_made: true}, else: st
@@ -1169,6 +1183,13 @@ defmodule RisiMe.Agent.Turn do
         ),
       "notify" => [ctx.asker]
     }
+
+    # v1.32 §25.4: the chips of a v1.32 app (`next_steps` stays for old apps).
+    answer_risi =
+      case NextActions.build(retry || raw_steps) do
+        [] -> answer_risi
+        actions -> Map.put(answer_risi, "next_actions", actions)
+      end
 
     # v1.32 §29.7: the phone lists the asker's own events under the answer (own Risi chat only).
     answer_risi =
