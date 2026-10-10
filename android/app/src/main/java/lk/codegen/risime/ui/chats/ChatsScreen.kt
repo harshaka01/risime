@@ -36,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -145,7 +146,7 @@ fun ChatsScreen(
                 )
             } else RisiTopBar(
                 title = "RisiMe",
-                subtitle = connectionLabel(conn),
+                subtitle = connectionStatus(conn),
                 brand = true,
                 avatar = {
                     androidx.compose.foundation.Image(
@@ -373,10 +374,28 @@ fun dmPreview(last: lk.codegen.risime.data.db.LastMessage): String = when {
     else -> lk.codegen.risime.push.bodyPreview(last.kind, last.body)
 }
 
-fun connectionLabel(s: ConnectionState): String? = when (s) {
+/** How long "Connecting…" runs before the status line says the network is slow. */
+const val CONNECTING_SLOW_AFTER_MS = 20_000L
+
+/** [connectionLabel] with the slow-network hint once not connected for [CONNECTING_SLOW_AFTER_MS]. */
+@Composable
+fun connectionStatus(s: ConnectionState): String? {
+    val notLive = s != ConnectionState.Live && s != ConnectionState.Syncing
+    var slow by remember { mutableStateOf(false) }
+    LaunchedEffect(notLive) {
+        slow = false
+        if (notLive) {
+            kotlinx.coroutines.delay(CONNECTING_SLOW_AFTER_MS)
+            slow = true
+        }
+    }
+    return connectionLabel(s, slow)
+}
+
+fun connectionLabel(s: ConnectionState, slow: Boolean = false): String? = when (s) {
     ConnectionState.Live -> null
     ConnectionState.Syncing -> "Syncing…"
-    ConnectionState.Connecting -> "Connecting…"
+    ConnectionState.Connecting -> if (slow) "Connecting… (network is slow)" else "Connecting…"
     ConnectionState.Disconnected -> "Waiting for network…"
     ConnectionState.AuthFailed -> "Signed out"
 }

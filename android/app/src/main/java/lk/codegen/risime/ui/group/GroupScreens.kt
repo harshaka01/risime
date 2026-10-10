@@ -70,7 +70,7 @@ import lk.codegen.risime.ui.chat.Composer
 import lk.codegen.risime.ui.chat.MessageActionsSheet
 import lk.codegen.risime.ui.chat.ReactionChipsRow
 import lk.codegen.risime.ui.chat.ReactionsSheet
-import lk.codegen.risime.ui.chats.connectionLabel
+import lk.codegen.risime.ui.chats.connectionStatus
 import lk.codegen.risime.ui.common.DaySeparator
 import lk.codegen.risime.ui.common.InitialsAvatar
 import lk.codegen.risime.ui.common.MessageBubble
@@ -218,7 +218,7 @@ fun GroupChatScreen(
             RisiTopBar(
                 title = name,
                 titleSuffix = titleSuffix,
-                subtitle = typingLabel ?: connectionLabel(conn) ?: buildString {
+                subtitle = typingLabel ?: connectionStatus(conn) ?: buildString {
                     if (encrypted == true) append("🔒 ")
                     append(subtitleOverride ?: if (risiChat) "Risi" else if (count == 1) "1 member" else "$count members")
                 },

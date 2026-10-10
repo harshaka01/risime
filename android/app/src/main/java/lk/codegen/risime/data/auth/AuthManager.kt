@@ -44,6 +44,8 @@ private class Live(
     val clientId: String,
     var accessToken: String?,
     var expiresAtElapsed: Long,
+    /** expires_in of the current access token (ms), for the refresh margin. */
+    var lifetimeMs: Long,
     var refreshToken: String,
     var idToken: String?,
 )
@@ -194,7 +196,7 @@ class AuthManager(
                 }
                 is SessionVault.Load.Tokens -> {
                     val t = l.tokens
-                    live = Live(t.issuer, t.clientId, null, 0, t.refreshToken, t.idToken)
+                    live = Live(t.issuer, t.clientId, null, 0, 0, t.refreshToken, t.idToken)
                     SessionState.READY
                 }
                 is SessionVault.Load.Unreadable -> {
@@ -236,7 +238,7 @@ class AuthManager(
     fun migrationCipher(): Cipher? = legacy?.unlockCipher()
 
     /** Monotonic time at which the current access token should be refreshed (null: none). */
-    fun refreshDueInMs(): Long? = live?.let { RefreshTiming.refreshDelayMs(it.expiresAtElapsed, elapsed()) }
+    fun refreshDueInMs(): Long? = live?.let { RefreshTiming.refreshDelayMs(it.expiresAtElapsed, elapsed(), it.lifetimeMs) }
 
     fun idToken(): String? = live?.idToken
 
@@ -248,7 +250,7 @@ class AuthManager(
     /** After the browser sign-in and a successful `GET /me`: keep in memory and seal for next time. */
     suspend fun adopt(issuer: String, clientId: String, t: OidcTokens): Boolean = lock.withLock {
         val rt = t.refreshToken ?: return@withLock false
-        live = Live(issuer, clientId, t.accessToken, RefreshTiming.expiresAt(elapsed(), t.expiresInSec), rt, t.idToken)
+        live = Live(issuer, clientId, t.accessToken, RefreshTiming.expiresAt(elapsed(), t.expiresInSec), t.expiresInSec * 1_000, rt, t.idToken)
         transientFailure = false
         _signInNeeded.value = false
         _state.value = SessionState.READY
@@ -280,7 +282,7 @@ class AuthManager(
         }
         val moved = withContext(Dispatchers.IO) { vault.store(stored) }
         lock.withLock {
-            live = Live(stored.issuer, stored.clientId, null, 0, stored.refreshToken, stored.idToken)
+            live = Live(stored.issuer, stored.clientId, null, 0, 0, stored.refreshToken, stored.idToken)
             _state.value = SessionState.READY
         }
         if (moved) withContext(Dispatchers.IO) { old.clear() }
@@ -300,13 +302,14 @@ class AuthManager(
         val token = lock.withLock {
             val l = live ?: return@withLock null
             retryUnsavedLocked(force = forceRefresh)
-            val fresh = l.accessToken != null && !RefreshTiming.needsRefresh(l.expiresAtElapsed, elapsed())
+            val fresh = l.accessToken != null && !RefreshTiming.needsRefresh(l.expiresAtElapsed, elapsed(), l.lifetimeMs)
             if (fresh && !forceRefresh) return@withLock l.accessToken
             when (val r = gateway.refresh(l.issuer, l.clientId, l.refreshToken)) {
                 is RefreshResult.Ok -> {
                     transientFailure = false
                     l.accessToken = r.tokens.accessToken
                     l.expiresAtElapsed = RefreshTiming.expiresAt(elapsed(), r.tokens.expiresInSec)
+                    l.lifetimeMs = r.tokens.expiresInSec * 1_000
                     r.tokens.idToken?.let { l.idToken = it }
                     val rotated = r.tokens.refreshToken
                     if (rotated != null && rotated != l.refreshToken) {
@@ -338,6 +341,21 @@ class AuthManager(
         }
         pushed?.let { onNewAccessToken(it) }
         return token
+    }
+
+    /**
+     * Refreshes now; on a transient failure retries after 1 s, 3 s, 7 s, then every 15 s / 30 s
+     * ([RefreshRetry]) until it works, the session ends (invalid_grant) or the caller cancels. Never
+     * signs out on a transient failure. Returns true when a fresh token was obtained.
+     */
+    suspend fun refreshWithRetry(): Boolean {
+        var failures = 0
+        while (true) {
+            if (bearer(forceRefresh = true) != null && !refreshFailingTransiently()) return true
+            if (!refreshFailingTransiently()) return false // no session / invalid_grant
+            failures++
+            kotlinx.coroutines.delay(RefreshRetry.delayMs(failures))
+        }
     }
 
     /**

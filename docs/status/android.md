@@ -1,5 +1,21 @@
 # Android status — 0.2 nightlies
 
+## READY P0 2026-10-10 network-stall recovery (JVM gate green: `assembleDebug testDebugUnitTest`, 1572 tests, 0 failed, 9 skipped)
+Branch `v1.32`. No protocol, server, Room or dependency change; nothing is ever signed out or wiped on a transient failure (hard rule 9, app lock untouched).
+- Keycloak (AppAuth) connections: connect timeout 5 s (was 15 s), read 10 s (`TimedConnections`, `KeycloakTimeouts`; https only, loopback http in debug as before).
+- App OkHttp client (REST + websocket upgrade): connect timeout 5 s (was 10 s), read 20 s unchanged.
+- Refresh timing (`RefreshTiming`): refresh when the token has <= max(120 s, lifetime/3) left (300-s token: at 180 s; 10-min token: at 400 s). Lifetime comes from `expires_in`.
+  The margin exceeds the worst-case retry ladder (1+3+7 s waits + 4 x 5 s connect timeouts = 31 s).
+- Transient refresh failure (`AuthManager.refreshWithRetry`, used by the foreground refresh loop): retries after 1 s, 3 s, 7 s, then 15 s, then every 30 s, until it works,
+  invalid_grant (the only sign-out path, chats kept) or cancel. Still single-flight (one mutex). A socket refusal while the refresh is failing first retries the refresh once,
+  then `GET /me`; a 401 during a failing refresh keeps the session (as before).
+- Socket reconnect (`ReconnectBackoff`): base 1, 2, 5, 10, 30 s (cap 30 s), each scaled by jitter in [0.5, 1.0]. `RealtimeClient.networkChanged()` resets the backoff and wakes the wait;
+  called from a `ConnectivityManager` default-network callback (`onAvailable`, which also evicts pooled connections) and on app foreground.
+- Status line: after 20 s not connected, "Connecting…" reads "Connecting… (network is slow)" (`connectionStatus`; same three headers that already showed `connectionLabel`, no new UI).
+- Also: `ContractExamplesTest` now has a decoder for the new contract example `envelope_risi_ops_alert.json` (v1.32 §32; it decodes as a text with an unknown risi kind; no UI).
+- Tests added: RefreshTiming margin/delays, retry ladder, backoff jitter bounds (start <= 1 s, cap <= 30 s), Keycloak timeouts, retry sequence on a stalled refresh (virtual time 1+3+7 s),
+  retries past the ladder without sign-out, invalid_grant stops retries, single-flight refresh, refresh at 120 s left, networkChanged skips a 60-s backoff.
+
 ## READY UI batch 2026-10-10 + v1.32 (JVM gate green: `assembleDebug testDebugUnitTest`, 1562 tests, 0 failed, 9 skipped)
 Branch `v1.32` (not main). Commits: c636e3c (v1.32 `sync_off`, Details, 422 re-send), d68f4cc (UI batch items 1-7), plus the status commit with this section.
 `PROTOCOL_VERSION` is "1.32". No Room change, no new dependency, no data is deleted by any of this (hard rule 9).

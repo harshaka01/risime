@@ -54,7 +54,7 @@ import androidx.compose.material3.TextButton
 import lk.codegen.risime.data.MessageStatus
 import lk.codegen.risime.net.AuthErrors
 import lk.codegen.risime.data.db.MessageEntity
-import lk.codegen.risime.ui.chats.connectionLabel
+import lk.codegen.risime.ui.chats.connectionStatus
 import lk.codegen.risime.ui.common.DaySeparator
 import lk.codegen.risime.ui.common.InitialsAvatar
 import lk.codegen.risime.ui.common.MessageBubble
@@ -135,7 +135,7 @@ fun ChatScreen(
                 title = name,
                 subtitle = when {
                     typing -> TYPING_LABEL
-                    else -> connectionLabel(conn)
+                    else -> connectionStatus(conn)
                         ?: (if (phoneUnconfirmed) lk.codegen.risime.ui.auth.PHONE_NOT_VERIFIED else null)
                         ?: if (encrypted) "🔒 End-to-end encrypted" else null
                         ?: presenceLabel(presence, System.currentTimeMillis())

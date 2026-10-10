@@ -155,6 +155,22 @@ class PhoenixRealtimeClientTest {
         client.stop()
     }
 
+    /** P0 2026-10-10: a network change skips the reconnect wait (backoff here is 60 s) and starts over. */
+    @Test
+    fun networkChangeSkipsTheBackoffWait() = runBlocking {
+        server.enqueue(MockResponse().withWebSocketUpgrade(FakeServer()))
+        val client = PhoenixRealtimeClient(OkHttpClient(), scope, listener, backoffMs = listOf(60_000), random = { 1.0 }, heartbeatMs = 60_000)
+        client.start(RealtimeSession(server.url("/").toString(), "tok", "u1"))
+        withTimeout(5_000) { while (received.none { it.event == "phx_join" }) kotlinx.coroutines.delay(10) }
+        serverSockets.first().close(1000, "bye")
+        withTimeout(5_000) { client.state.first { it == ConnectionState.Disconnected } }
+        kotlinx.coroutines.delay(300)
+        assertEquals(1, received.count { it.event == "phx_join" }) // still waiting
+        client.networkChanged()
+        withTimeout(5_000) { while (received.count { it.event == "phx_join" } < 2) kotlinx.coroutines.delay(10) }
+        client.stop()
+    }
+
     /** Server closes the socket after the first sync; the client rejoins with the advanced cursor. */
     @Test
     fun reconnectsAfterCloseAndRejoinsWithCursor() = runBlocking {
