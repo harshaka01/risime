@@ -102,21 +102,21 @@
   "asr": {
     "whisper-small-sinhala": {
       "repo": "SinhaSpeech/whisper-small-sinhala-v6-e6-run11-best",
-      "mem_gb": 6,
+      "mem_gb": 6, "args": ["--max-model-len", "448", "--max-num-batched-tokens", "2048"],
       "langs": [
         "si"
       ]
     },
     "whisper-large-v3-sinhala": {
       "repo": "kasunw/whisper-large-v3-sinhala",
-      "mem_gb": 10,
+      "mem_gb": 10, "args": ["--max-model-len", "448", "--max-num-batched-tokens", "2048"],
       "langs": [
         "si"
       ]
     },
     "tamil-asr-qwen3": {
       "repo": "lemuralabs/tamil-asr-qwen3",
-      "mem_gb": 9,
+      "mem_gb": 9, "args": ["--max-model-len", "4096", "--max-num-batched-tokens", "4096"],
       "langs": [
         "ta"
       ]

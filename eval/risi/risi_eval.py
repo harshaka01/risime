@@ -71,6 +71,32 @@ def schema_of(path):
 
 # ------------------------------------------------------------------------------------------ run
 
+_last_health = [0.0]
+PAUSES = {"n": 0, "s": 0.0}
+
+
+def pilot_gate(every=30, limit=1.0):
+    """Harsha's rule: watch RisiMe /health every 30 s; pause while it answers slower than 1 s
+    (or not at all), resume once it is back under."""
+    if time.monotonic() - _last_health[0] < every:
+        return
+    while True:
+        t0 = time.monotonic()
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:4000/health", timeout=5) as r:
+                ok = r.status == 200
+        except Exception:  # noqa: BLE001
+            ok = False
+        dt_s = time.monotonic() - t0
+        _last_health[0] = time.monotonic()
+        if ok and dt_s <= limit:
+            return
+        PAUSES["n"] += 1
+        PAUSES["s"] += every
+        print(f"pilot /health {'slow' if ok else 'down'} ({dt_s:.2f}s): pausing {every}s", flush=True)
+        time.sleep(every)
+
+
 def tool_first(schema):
     """The risi_next_action schema with "tool" as the first property of every alternative.
     The server sends it Jason-encoded (sorted keys: "args"/"answer" before "tool"), and guided
@@ -137,6 +163,7 @@ def cmd_run(a):
         for n, it in enumerate(items, 1):
             if it["id"] in done:
                 continue
+            pilot_gate()
             body = {"model": a.model, "messages": it["messages"], "temperature": 0.2, "top_p": 0.8,
                     "max_tokens": it["max_tokens"], "stream": True,
                     "stream_options": {"include_usage": True},
@@ -164,7 +191,7 @@ def cmd_run(a):
             status = rec.get("error") or f"{rec['completion_tokens']} tok {rec['total_s']}s"
             print(f"[{n}/{len(items)}] {it['id']}: {status}", flush=True)
             time.sleep(a.sleep)
-    print(f"wrote {out}")
+    print(f"wrote {out} (pilot-health pauses: {PAUSES['n']}, {PAUSES['s']:.0f} s)")
 
 
 # ---------------------------------------------------------------------------------- time checks
@@ -711,6 +738,7 @@ def cmd_asr(a):
     tot = {}
     with open(out_p, "w", encoding="utf-8") as fh:
         for i, m in enumerate(man, 1):
+            pilot_gate()
             try:
                 hyp, sec = transcribe(a.url, key, a.model, m["audio"], None if a.auto else m["lang"])
             except Exception as e:  # noqa: BLE001

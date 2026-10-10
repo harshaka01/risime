@@ -1,0 +1,17 @@
+{
+ "label": "whisper-small-sinhala",
+ "model": "whisper-small-sinhala",
+ "manifest": "/home/harsha/risime-eval-data/manifest.jsonl",
+ "summary": {
+  "si": {
+   "n": 50,
+   "wer": 0.145,
+   "cer": 0.057,
+   "rtf": 0.046,
+   "script": {
+    "ok": 48,
+    "mixed_script": 2
+   }
+  }
+ }
+}
