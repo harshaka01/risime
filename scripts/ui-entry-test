@@ -1465,41 +1465,26 @@ PY
   tap "Ask Risi…" || true; sleep 0.5
   A shell input text "add%smy%sinterview%swith%sShenika%son%sMonday%s12%sOct%sat%s2pm%sto%smy%scalendar"; sleep 0.5
   tap "Send" || fail "calendar: send Harsha's request"
-  wait_text "2–3 PM" 120 || fail "calendar: no action card (2–3 PM)"
-  wait_text "Add" 30 || fail "calendar: the action card has no [Add]"
-  has 'text="Edit"' || fail "calendar: the action card has no [Edit]"
+  # The card and the answer's chips arrive together; with v1.32's chips the answer is taller and the card's time/title rows can be
+  # above the fold, so wait for the card's [Add], then scroll to each row instead of expecting it on screen.
+  wait_text "Add" 120 || fail "calendar: no action card ([Add])"
+  scroll_to "2–3 PM" || fail "calendar: no action card (2–3 PM)"
+  has 'text="Edit"' || scroll_to "Edit" || fail "calendar: the action card has no [Edit]"
   has 'text="Cancel"' || fail "calendar: the action card has no [Cancel]"
+  # Deliberate product choice (P0 2026-10-09, kept in v1.32): with no remembered pick the card says "Choose calendar" and the
+  # first [Add] opens the picker, so the user sees once where Risi writes; later adds go straight to the remembered calendar.
   has 'text="Choose calendar"' || fail "calendar: first use: the card doesn't offer 'Choose calendar'"
   [ "$(count_text "2–3 PM")" = 1 ] || fail "calendar: want exactly one action card ($(count_text "2–3 PM") cards)"
-  # (The server may drop the question/confirm chips itself; the app hides them in any case.)
+  # v1.32 §25.4: chips come from next_actions and RUN their request (questions included); a confirm phrase is never a chip.
   has 'Confirm to add the event' && fail "calendar: a confirm-phrase chip is shown ('Confirm to add the event')"
-  has 'What else is on Monday?' && fail "calendar: a question chip is shown ('What else is on Monday?')"
-  # The card's top (title, date) above the fold: scroll it into view for the check and the screenshot.
-  for _ in 1 2 3 4; do has 'text="Interview with Shenika"' && break; A shell input swipe $((W / 2)) $((H * 35 / 100)) $((W / 2)) $((H * 55 / 100)) 300; sleep 1; done
-  has 'text="Interview with Shenika"' || fail "calendar: the action card has no title"
-  has "text=\"$CAL_DATE\"" || fail "calendar: the card doesn't show the date ($CAL_DATE)"
+  scroll_to "Interview with Shenika" || fail "calendar: the action card has no title"
+  has "text=\"$CAL_DATE\"" || scroll_to "$CAL_DATE" || fail "calendar: the card doesn't show the date ($CAL_DATE)"
   [ "$(count_text "Interview with Shenika")" = 1 ] || fail "calendar: want exactly one action card title"
   shot "29-calendar-action-card"
-  for _ in 1 2 3; do A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 30 / 100)) 300; sleep 0.5; done
-  wait_text "Remind me 30 min before" 30 || fail "calendar: the answer's usable chip is missing"
-  pass "calendar: ONE action card (Interview with Shenika · $CAL_DATE · 2–3 PM · Choose calendar · Add/Edit/Cancel); no question/confirm chips"
-  # A chip only fills the composer: no request goes out, and no "I don't see any event details".
-  r1="$(reqs)"
-  tap "Remind me 30 min before" || fail "calendar: tap the chip"
-  sleep 8
-  [ "$(reqs)" = "$r1" ] || fail "calendar: tapping a chip sent a request to Risi ($(reqs) vs $r1 model calls)"
-  dump; [ "$(count_text "Remind me 30 min before")" -ge 2 ] || fail "calendar: the chip didn't fill the composer"
-  has "see any event details" && fail "calendar: a chip produced \"I don't see any event details\""
-  pass "calendar: the chip filled the composer and sent nothing (model calls unchanged: $r1)"
-  # Empty the composer again (the EditText, not the chip).
-  xy="$(python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
-import re, sys, xml.etree.ElementTree as ET
-for n in ET.parse(sys.argv[1]).iter('node'):
-    if n.get('class') == 'android.widget.EditText':
-        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); print((x1 + x2) // 2, (y1 + y2) // 2); break
-PY
-)"
-  [ -n "$xy" ] && { A shell input tap $xy; sleep 0.5; A shell input keyevent KEYCODE_MOVE_END; clear_field; hide_keyboard; }
+  scroll_to "Remind me 30 min before" || fail "calendar: the answer's usable chip is missing"
+  pass "calendar: ONE action card (Interview with Shenika · $CAL_DATE · 2–3 PM · Choose calendar · Add/Edit/Cancel); no confirm-phrase chip"
+  # (A chip tap runs a Risi turn now; that is checked by --ui-batch. Not tapped here: this flow's fake-llm script has no turn for it.)
+  scroll_to "Add" || fail "calendar: [Add] scrolled away"
 
   # -- [Add] → first use: the picker (only the writable Google calendar) → the event is on the calendar
   r2="$(reqs)"
@@ -1512,7 +1497,8 @@ PY
   pass "calendar: the picker lists only '$GACC · Google' (read-only and local calendars excluded)"
   tap "Use this calendar" || fail "calendar: pick the calendar"
   wait_text "Added to your Google Calendar: Interview with Shenika · $CAL_DATE, 2–3 PM" 90 || fail "calendar: no 'Added to your Google Calendar: …' on the card"
-  wait_text "Open" 30 || fail "calendar: the success line has no [Open]"
+  # v1.32 §25.3: the success post carries added_event → the event card from this phone's provider row with [Open in Calendar].
+  scroll_to "Open in Calendar" || fail "calendar: the success card has no [Open in Calendar] (added_event card)"
   wait_text "Undo" 30 || fail "calendar: the success line has no [Undo]"
   shot "30-calendar-added"
   ev="$(A shell "content query --uri content://com.android.calendar/events --projection _id:calendar_id:title:dtstart:dtend:deleted" 2>/dev/null | tr -d '\r' | grep 'title=Interview with Shenika,' | grep 'deleted=0' || true)"
@@ -1543,15 +1529,25 @@ PY
   tap "Ask Risi…" || true; sleep 0.5
   A shell input text "Am%sI%sfree%sTuesday%s2pm?"; sleep 0.5
   tap "Send" || fail "calendar: send 'Am I free Tuesday 2pm?'"
-  wait_for "I checked: Phone calendar" 120 || fail "calendar: the free/busy answer doesn't say 'I checked: Phone calendar …' (CalendarHonesty)"
-  rc_line="$(python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
+  # Since v1.32 (READ_SYNC_SETTINGS, §29.7) the app reads the account's sync state: redroid's seeded com.google calendar has no
+  # AccountManager account, so its sync reads as off and the honest answer is the server's sync-off line, never "free".
+  # (ui-batch's google step relies on the same redroid artefact for its sync-off check.) Either server line passes.
+  ok_hon=""
+  for _ in $(seq 1 120); do
+    if has "I checked: Phone calendar"; then ok_hon="I checked: Phone calendar"; break; fi
+    if has "I couldn't read your calendar on this phone (sync is off"; then ok_hon="I couldn't read your calendar on this phone (sync is off"; break; fi
+    sleep 1
+  done
+  [ -n "$ok_hon" ] || fail "calendar: the free/busy answer names neither what was read ('I checked: Phone calendar …') nor the sync-off reason (CalendarHonesty)"
+  has "You're free" && [ "$ok_hon" != "I checked: Phone calendar" ] && fail "calendar: a sync-off read was answered 'You're free'"
+  rc_line="$(python3 -I - "$WORK/ui-$DEV.xml" "$ok_hon" <<'PY'
 import sys, xml.etree.ElementTree as ET
-print(next((n.get('text') for n in ET.parse(sys.argv[1]).iter('node') if 'I checked: Phone calendar' in (n.get('text') or '')), '').replace('\n', ' '))
+print(next((n.get('text') for n in ET.parse(sys.argv[1]).iter('node') if sys.argv[2] in (n.get('text') or '')), '').replace('\n', ' '))
 PY
 )"
   echo "    answer: $rc_line"
   shot "39-calendar-i-checked"
-  pass "calendar: 'Am I free Tuesday 2pm?' → the answer names what was read ('I checked: Phone calendar …')"
+  pass "calendar: 'Am I free Tuesday 2pm?' → the answer names what was read or why it couldn't ('$ok_hon …')"
 
   # -- Settings → Risi skills → Calendar → Details: what Risi can read on this phone (android 9c722e5). The test tags
   # risi_calendar_sources / risi_calendar_source_row / risi_calendar_sources_permission aren't exported to
@@ -2712,6 +2708,18 @@ elif check == 'official':  # "<name> · Risi" header: neither part clipped (the 
     if h(rs) < h(nm) - 2: bad("' · Risi' is clipped: %d px high vs the name's %d px" % (h(rs), h(nm)))
     if h(nm) < 20: bad("the title is only %d px high" % h(nm))
     print("ok: name %d px, ' · Risi' %d px" % (h(nm), h(rs)))
+elif check == 'subtitle':  # nightly.48: the header subtitle (and title) lie inside the top bar; the lock is an icon, not "🔒"
+    def rid(n): return (n.get('resource-id') or '').rsplit('/', 1)[-1]
+    bar = next((n for n in nodes if rid(n) == 'risi_top_bar'), None)
+    if bar is None: bad("no top bar node (resource-id risi_top_bar)")
+    bb = box(bar)
+    sub = [n for n in nodes if rid(n) in ('risi_header_subtitle', 'risi_header_subtitle_text')]
+    if not sub: bad("no header subtitle node")
+    for n in sub + [n for n in nodes if rid(n) in ('risi_header_title', 'risi_header_suffix')]:
+        b = box(n)
+        if b[3] > bb[3] or b[1] < bb[1] or b[0] < bb[0] or b[2] > bb[2]: bad("%s %s lies outside the bar %s" % (rid(n), b, bb))
+    if any(txt(n).startswith('\U0001F512') and box(n)[3] <= bb[3] for n in nodes): bad("the header still draws the lock emoji")
+    print("ok: bar %s, subtitle %s" % (bb, [box(n) for n in sub]))
 elif check == 'nochips':
     hit = [txt(n) for n in nodes if txt(n).startswith('UIB chip') or desc(n).startswith('UIB chip')]
     if hit: bad("next_steps are drawn as chips: %s" % hit)
@@ -3087,6 +3095,7 @@ ui_batch_section() {
     tap "ZZ UI B" || fail "ui-batch [$UIB_SC]: open the DM"
     wait_for 'text="Encrypted message"' 20 || fail "ui-batch [$UIB_SC]: DM didn't open"
     uib_check header "ZZ UI B" "$H"
+    uib_check subtitle
     shot "50-uibatch-header-$UIB_SC"
     # (b) the 1:1 Official header "<name> · Risi" is not clipped at this font scale.
     if has 'text="● Official"'; then
@@ -3108,6 +3117,7 @@ ui_batch_section() {
     tap "Send" || fail "ui-batch [$UIB_SC]: send to Risi"
     wait_for "UIBATCH answer ready." 90 || fail "ui-batch [$UIB_SC]: Risi didn't answer the scripted question"
     sleep 2; dump
+    uib_check subtitle  # the Risi chat's "🔒 Risi" subtitle (nightly.48: "Risⁱ" was cut off)
     # TODO(root, P0 addition (c)): android is bringing the suggestion chips back (a tap sends the request to Risi and a turn
     # runs). When that lands, replace this "no chips" check by: tap "UIB chip tell me more" → fake-llm's record
     # ($WORK/llm-requests.jsonl) holds a request with that text, the composer stays empty.

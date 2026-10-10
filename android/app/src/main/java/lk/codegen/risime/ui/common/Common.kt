@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Badge
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,6 +53,7 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.style.TextAlign
@@ -176,13 +179,17 @@ fun RisiTopBar(
     /** Always-visible tail of the title (e.g. " · Risi"): [title] ellipsizes first, the suffix never does. */
     titleSuffix: String? = null,
 ) {
-    TopAppBar(
-        navigationIcon = {
-            if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-        },
-        title = {
+    // P0 2026-10-10 (nightly.48 gate, "🔒 Risⁱ"): no Material TopAppBar any more. It clips its content to a fixed height,
+    // and the 🔒 emoji's fallback-font metrics measured narrower and taller than they drew. This bar is a Surface + Row that
+    // grows with its content (min 64 dp), the lock is an Icon, and the title uses the theme's normal line height.
+    Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth().semantics { testTagsAsResourceId = true }.testTag("risi_top_bar")) {
+        Row(
+            Modifier.fillMaxWidth().windowInsetsPadding(TopAppBarDefaults.windowInsets).heightIn(min = 64.dp).padding(horizontal = Spacing.xxs, vertical = Spacing.xxs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } else Spacer(Modifier.width(Spacing.md - Spacing.xxs))
             Row(
-                Modifier.then(
+                Modifier.weight(1f).then(
                     if (onTitleClick != null) {
                         Modifier.clip(RisiShapes.pill).clickable(onClickLabel = titleClickLabel, onClick = onTitleClick)
                     } else Modifier,
@@ -193,8 +200,8 @@ fun RisiTopBar(
                     it()
                     Spacer(Modifier.width(if (onBack != null) Spacing.sm + Spacing.xxs else Spacing.md))
                 }
-                Column {
-                    val titleStyle = headerTitleStyle(if (brand) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium)
+                Column(Modifier.padding(vertical = Spacing.xxs)) {
+                    val titleStyle = if (brand) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium
                     val titleColor = if (brand) MaterialTheme.colorScheme.primary else Color.Unspecified
                     if (titleSuffix == null) {
                         Text(
@@ -203,41 +210,41 @@ fun RisiTopBar(
                             modifier = Modifier.semantics { heading() }.testTag("risi_header_title"),
                         )
                     } else {
-                        // P0 2026-10-10 ("Shenika · Risı"): the suffix used to be `softWrap = false` with the default Clip
-                        // overflow, so a sub-pixel overflow of its width clipped it to its line box, which cut the dot
-                        // of the "i" off. Now: font padding on, an untrimmed line height, the suffix never clips (the
-                        // name ellipsizes first), both on one baseline.
+                        // The name ellipsizes first; the suffix (" · Risi") never clips.
                         Row(Modifier.semantics(mergeDescendants = true) { heading() }) {
                             Text(title, style = titleStyle, color = titleColor, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).alignByBaseline().testTag("risi_header_title"))
                             Text(titleSuffix, style = titleStyle, color = titleColor, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible, modifier = Modifier.alignByBaseline().padding(end = 2.dp).testTag("risi_header_suffix"))
                         }
                     }
-                    if (!subtitle.isNullOrEmpty()) {
-                        Text(
-                            subtitle,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (emphasis) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                        )
-                    }
+                    if (!subtitle.isNullOrEmpty()) HeaderSubtitle(subtitle, emphasis)
                 }
             }
-        },
-        actions = actions,
-        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
-        // P0 2026-10-10 ("Ris'" on nightly.47): the bar clips its content to its height; with a title and a subtitle
-        // at a large font scale 64 dp is not enough, so the bar grows with the font scale (never below 64 dp).
-        expandedHeight = headerBarHeight(androidx.compose.ui.platform.LocalDensity.current.fontScale, !subtitle.isNullOrEmpty()),
-    )
+            Row(verticalAlignment = Alignment.CenterVertically, content = actions)
+        }
+    }
 }
 
-/** The bar's height: 64 dp, or more for a title + subtitle at font scale > 1 (title 24 sp + subtitle 16 sp lines + 16 dp). */
-fun headerBarHeight(fontScale: Float, twoLines: Boolean): Dp {
-    val base = TopAppBarDefaults.TopAppBarExpandedHeight
-    if (!twoLines) return maxOf(base, (24 * fontScale + 28).dp)
-    return maxOf(base, ((24 + 16) * fontScale * 1.1f + 16).dp)
+/** A header subtitle starting with "🔒 " is drawn as a lock Icon + the text (never the emoji). */
+const val HEADER_LOCK_PREFIX = "🔒 "
+
+/** (locked, text) of a header subtitle. */
+fun headerSubtitleParts(subtitle: String): Pair<Boolean, String> =
+    if (subtitle.startsWith(HEADER_LOCK_PREFIX)) true to subtitle.removePrefix(HEADER_LOCK_PREFIX) else false to subtitle
+
+@Composable
+private fun HeaderSubtitle(subtitle: String, emphasis: Boolean) {
+    val (locked, text) = headerSubtitleParts(subtitle)
+    val color = if (emphasis) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }.testTag("risi_header_subtitle"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (locked) {
+            Icon(Icons.Filled.Lock, contentDescription = null, tint = color, modifier = Modifier.size(13.dp).testTag("risi_header_lock"))
+            Spacer(Modifier.width(3.dp))
+        }
+        Text(text, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("risi_header_subtitle_text"))
+    }
 }
 
 // ---- Lists ----
@@ -659,16 +666,3 @@ fun memberColor(userId: String): Color {
 
 private val MEMBER_COLORS_LIGHT = listOf(Color(0xFF0B6E69), Color(0xFF9C4A00), Color(0xFF6A3FA0), Color(0xFF1F5FAD), Color(0xFFA0306A), Color(0xFF3C6E1F))
 private val MEMBER_COLORS_DARK = listOf(Color(0xFF6FD6CF), Color(0xFFFFB873), Color(0xFFCDB0FF), Color(0xFF9CC3FF), Color(0xFFFF9CC9), Color(0xFFA9DB86))
-
-/**
- * A header title's style: one line with room above and below the glyphs at any font scale (font padding on, the
- * line height at least 1.3 × the font size and never trimmed), so dots and descenders are never cut off.
- */
-fun headerTitleStyle(base: androidx.compose.ui.text.TextStyle): androidx.compose.ui.text.TextStyle = base.copy(
-    lineHeight = if (base.fontSize.isSp && (!base.lineHeight.isSp || base.lineHeight.value < base.fontSize.value * 1.3f)) (base.fontSize.value * 1.3f).sp else base.lineHeight,
-    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = true),
-    lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
-        alignment = androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
-        trim = androidx.compose.ui.text.style.LineHeightStyle.Trim.None,
-    ),
-)

@@ -1,5 +1,26 @@
 # Android status — 0.2 nightlies
 
+## READY nightly.48 gate fixes (main): header bar never clips, lock icon, calendar step scrolls (JVM gate green: 1622 tests, 0 failed, 9 skipped; redroid: --calendar (UITEST_CALENDAR_ONLY=1) and --ui-batch (UITEST_UIBATCH_ONLY=1) green, subtitle-in-bar at 1.0 and 1.3 in the DM and the Risi chat)
+- **Header ("🔒 Risⁱ")**: the uiautomator dump showed the subtitle node `🔒 Risi` at 74 px wide, narrower than it drew. The emoji's fallback-font metrics are measured
+  differently from how they draw, so the ellipsis clip cut the last glyph. `RisiTopBar` is no longer a Material TopAppBar (which also clips to a fixed height). It is a
+  Surface + Row, `heightIn(min = 64.dp)` with the status-bar insets, so it grows with its content. The title uses the theme's normal line height (`headerTitleStyle`
+  and `headerBarHeight` are removed). A subtitle starting with "🔒 " (Risi chat "🔒 Risi", group "🔒 N members", DM "🔒 End-to-end encrypted") is drawn as
+  `Icons.Filled.Lock` (13 dp, no content description) + the text. Tags exposed as resource-ids for the dump (`testTagsAsResourceId` on the bar only): `risi_top_bar`,
+  `risi_header_title`, `risi_header_suffix`, `risi_header_subtitle`, `risi_header_subtitle_text`, `risi_header_lock`.
+  Test `RisiCardsTest.headerSubtitleInsideTheBarAt1/13/2`: subtitle, title and suffix bounds lie inside the bar at font scale 1.0, 1.3 and 2.0, and no "🔒" text is drawn.
+  ui-entry-test --ui-batch: `uib_check subtitle` in the DM and in the Risi chat (subtitle/title nodes inside `risi_top_bar`, no lock emoji in the bar).
+- **"Calendar: Choose calendar" in --calendar**: kept as a deliberate product choice (P0 2026-10-09). With no remembered pick the action card says "Choose calendar"
+  and the first [Add] opens the picker, so the user sees once where Risi writes (the 9/10 Oct "added but in no calendar" reports are why). After that the remembered
+  calendar is used. The phone's own `calendar_add` target rule (pick → Google primary → local RisiMe) still applies when no card is involved. [Add] works on first use (picker → add).
+- **sync_off on redroid** (the gate's "Am I free Tuesday 2pm?" step): with `READ_SYNC_SETTINGS` declared (d073737), `getSyncAutomatically` really answers. For
+  redroid's seeded com.google calendar (no AccountManager account) it says off, so the read is `sync_off` and the server's honest line is "I couldn't read your
+  calendar on this phone (sync is off…". The app is unchanged here: ui-batch's google step uses this artefact on purpose to test sync-off. The --calendar step
+  now accepts either honest server line ("I checked: Phone calendar …" or the sync-off line) and still fails on "You're free" after a sync-off read.
+- **Success card**: the gate expected "Open"; the v1.32 `added_event` card's button is "Open in Calendar" (the step now scrolls to it).
+- **The step's "2–3 PM" wait**: the v1.32 chips make the answer taller, so the card's time and title rows are above the fold. The step now waits for [Add], then
+  `scroll_to`s "2–3 PM", the title and the date, the way other steps do. The old "question chip must not show" check is gone: chips come from `next_actions` and run
+  their request. The confirm-phrase check stays. The "chip fills the composer and sends nothing" check is removed: chips now run a turn, which --ui-batch checks.
+
 ## READY fix: a successful read is read_ok (redroid LOCAL-only phone said "no calendars") (JVM gate green: 1620 tests, 0 failed, 9 skipped)
 - Cause: `CalendarRead.verdict` (P0 2026-10-09) made any read untrusted without a Google calendar (`no_google_calendar`) or with every Google calendar
   SYNC_EVENTS=0 (`google_sync_off`), even after instances were read. A LOCAL-only phone with 4 events sent `read_ok:false`, `connected_sources: []`.

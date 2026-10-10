@@ -68,10 +68,4 @@ class RisiMarkdownTest {
         rule.setContent { RisiMeTheme { RisiMarkdownText(body) } }
         rule.onNodeWithText(body).assertIsDisplayed()
     }
-
-    @Test fun headerBarGrowsWithFontScale() {
-        assertEquals(64f, headerBarHeight(1.0f, twoLines = true).value, 0.01f)
-        assertTrue(headerBarHeight(1.3f, twoLines = true).value > 64f)
-        assertEquals(64f, headerBarHeight(1.0f, twoLines = false).value, 0.01f)
-    }
 }

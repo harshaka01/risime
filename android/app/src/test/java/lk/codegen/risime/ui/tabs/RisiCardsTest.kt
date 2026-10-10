@@ -20,6 +20,7 @@ import lk.codegen.risime.data.tabs.RisiMessages
 import lk.codegen.risime.net.ProtocolJson
 import lk.codegen.risime.net.RisiMeta
 import lk.codegen.risime.ui.theme.RisiMeTheme
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -281,16 +282,48 @@ class RisiCardsTest {
         rule.onNodeWithText(OFFICIAL_DM_TITLE_SUFFIX, useUnmergedTree = true).assertIsDisplayed()
     }
 
+    // nightly.48 gate ("🔒 Risⁱ"): the lock is an Icon, and the subtitle (and title) lie fully inside the bar at 1.0, 1.3 and 2.0.
+    private fun subtitleInsideAt(fontScale: Float, subtitle: String) {
+        rule.setContent {
+            val d = androidx.compose.ui.platform.LocalDensity.current
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(d.density, fontScale)) {
+                RisiMeTheme {
+                    androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.width(360.dp)) {
+                        lk.codegen.risime.ui.common.RisiTopBar(
+                            title = "Shenika", titleSuffix = OFFICIAL_DM_TITLE_SUFFIX, subtitle = subtitle, onBack = {},
+                            avatar = { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.size(44.dp)) },
+                            actions = { androidx.compose.material3.IconButton(onClick = {}) { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, "x") } },
+                        )
+                    }
+                }
+            }
+        }
+        val bar = rule.onNodeWithTag("risi_top_bar", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        for (tag in listOf("risi_header_subtitle", "risi_header_subtitle_text", "risi_header_title", "risi_header_suffix")) {
+            val b = rule.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            assertTrue("$tag $b outside the bar $bar at $fontScale", b.top >= bar.top - 0.5f && b.bottom <= bar.bottom + 0.5f && b.left >= bar.left - 0.5f && b.right <= bar.right + 0.5f)
+        }
+        if (subtitle.startsWith("🔒 ")) {
+            rule.onNodeWithTag("risi_header_lock", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText(subtitle.removePrefix("🔒 "), useUnmergedTree = true).assertIsDisplayed()
+        }
+        rule.onNodeWithText("🔒", substring = true, useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun headerSubtitleInsideTheBarAt1() = subtitleInsideAt(1.0f, "🔒 Risi")
+
+    @Test fun headerSubtitleInsideTheBarAt13() = subtitleInsideAt(1.3f, "🔒 Risi")
+
+    @Test fun headerSubtitleInsideTheBarAt2() = subtitleInsideAt(2.0f, "🔒 End-to-end encrypted")
+
+    @Test fun headerSubtitleParts() {
+        assertEquals(true to "Risi", lk.codegen.risime.ui.common.headerSubtitleParts("🔒 Risi"))
+        assertEquals(false to "typing…", lk.codegen.risime.ui.common.headerSubtitleParts("typing…"))
+    }
+
     @Test fun headerSuffixIsNotClippedAtFontScale1() = headerAt(1.0f)
 
     @Test fun headerSuffixIsNotClippedAtFontScale13() = headerAt(1.3f)
-
-    @Test fun headerTitleStyleKeepsRoomForDots() {
-        val s = lk.codegen.risime.ui.common.headerTitleStyle(androidx.compose.ui.text.TextStyle(fontSize = 16.sp, lineHeight = 18.sp))
-        assertEquals(20.8f, s.lineHeight.value, 0.01f)
-        assertEquals(true, s.platformStyle?.paragraphStyle?.includeFontPadding)
-        assertEquals(androidx.compose.ui.text.style.LineHeightStyle.Trim.None, s.lineHeightStyle?.trim)
-    }
 
     @Test fun officialDmHeaderAndComposerTexts() {
         assertEquals("Kumu · Risi", officialDmTitle("Kumu"))
