@@ -1,5 +1,46 @@
 # Android status — 0.2 nightlies
 
+## READY UI batch 2026-10-10 + v1.32 (JVM gate green: `assembleDebug testDebugUnitTest`, 1562 tests, 0 failed, 9 skipped)
+Branch `v1.32` (not main). Commits: c636e3c (v1.32 `sync_off`, Details, 422 re-send), d68f4cc (UI batch items 1-7), plus the status commit with this section.
+`PROTOCOL_VERSION` is "1.32". No Room change, no new dependency, no data is deleted by any of this (hard rule 9).
+
+**Run notes**
+- Item 9 (`PhoneCalendar.read`): `sync_off` exactly when every non-LOCAL account holding a visible calendar has sync off
+  (`ContentResolver.getSyncAutomatically(account, CalendarContract.AUTHORITY)`), or master sync is off. The source is `read_ok:false, reason:"sync_off"`,
+  calendars still listed, `blocks` still sent, and `connected_sources` still names `phone_provider` (as the server example does). One synced account keeps
+  `read_ok:true`. LOCAL calendars never cause it. `RisiToolCallHandler`: on `422` for a result containing `sync_off`, it re-sends once with `reason:"api_error"`.
+  The facade is `CalendarBackend.masterSyncOn()/accountSyncOn()/requestSync()` (fake in `FakeCalendarBackend`, real in `AndroidCalendarBackend`, tested under Robolectric).
+- Item 8 (Details): per account with sync off a row with the text, `Open sync settings` (`Settings.ACTION_SYNC_SETTINGS` + `EXTRA_ACCOUNT_TYPES`) and `Refresh`
+  (`ContentResolver.requestSync`, MANUAL+EXPEDITED, then Details re-reads after 1.5 s). Master off: one row "Auto-sync is off on this phone", the same buttons.
+- Item 5: ONE round FAB on Chats and Requests. The Calls tab keeps its own round "New call" button (a different tab and action; I did not fold it into the "New" sheet).
+  Calendar tab: no FAB. "New chat" opens a friend picker page (registered friends, 1:1 only); "New group" -> create group; "Add friend" -> add friend.
+- Item 3: the tab row is a `ScrollableTabRow` (edgePadding 0) with one-line labels, so "Requests" cannot wrap at any font scale (unit test at 1.3 on 1080 px).
+  All short literal `Text("...")` in `ui/` got `maxLines=1, overflow=Ellipsis` (264 places); long/dynamic body text is untouched.
+- Item 4: header icons are video + call only, then the ⋮. The lock icon is gone from DM and group headers (E2EE state stays in the subtitle "🔒 End-to-end encrypted" and the
+  per-chat strip). ⋮ has "Lock chat" / "Unlock chat" first (after the confirmation gate, same as chat info). The old test that forbade a lock in the menu was inverted.
+- Item 6: `rememberPhotoCropper` now opens the photo sheet; Take photo = `TakePicture` into the existing FileProvider cache (`cache/camera/avatar.jpg`, deleted after use),
+  Gallery = Photo Picker; both go to the existing square crop dialog and the existing upload. Used by Settings -> Profile and Group info (admins). The old extra
+  "Remove photo" button and the group dropdown were folded into the sheet.
+- Item 7 (chip audit): removed the Risi answer `next_steps` chips (they only pre-filled their label as chat text), the "Admin" chip and the owner chips (no action; now plain
+  labels). Kept real chips: `@Risi` toggle, follow-up "Continuing with Risi x" (dismiss), Calendar view/duration/reminder filter chips, debug sign-in mode.
+  A source-scan test fails if any chip has an empty `onClick` or its handler calls send/ask/prefill.
+- Item 1/2: the DM row no longer shows presence/last seen (line 3 removed; "vouched by" moved into the preview line when there is no message). Names/headers: top bar titles,
+  section headers, info-screen names and member names are bold.
+- Not done: no emulator on spark2, so none of this was run on a device (Robolectric only). Take photo needs a camera app on the phone (else a message "No camera app can take a photo on this phone").
+  The Details "Refresh" result is only visible after the provider actually syncs.
+- Contract note: v1.32 `next_steps` chips are "may"; I chose not to draw them. Tell me if root wants a real action for them instead.
+
+**UI batch 2026-10-10 strings** (exact, for ui-entry-test)
+- FAB content description: `New` (tag `new_fab`). Calls tab FAB description: `New call`.
+- FAB sheet rows, in order: `New chat`, `New group`, `Add friend` (tags `new_sheet_chat`, `new_sheet_group`, `new_sheet_friend`; sheet tag `new_sheet`). New chat page title: `New chat` (list tag `new_chat_list`).
+- Photo sheet rows: `Take photo`, `Gallery`, `Remove photo` (only when a photo is set); tags `photo_sheet`, `photo_sheet_take`, `photo_sheet_gallery`, `photo_sheet_remove`. Crop screen title `Move and scale`, buttons `Cancel`, `Use photo`.
+  Entry buttons: Settings -> Profile `Set photo` / `Change photo`; Group info: tap the group photo (admins).
+- Calendar Details (tag `risi_calendar_sources`), per account: `Sync is off for <account>`; master: `Auto-sync is off on this phone`; buttons `Open sync settings` (tag `risi_calendar_open_sync`) and
+  `Refresh` (tag `risi_calendar_refresh`); row tag `risi_calendar_sync_off`. Reason line when sync is off: `Calendar sync is off on this phone, so what Risi reads may be out of date.`
+  Permission row unchanged: `Phone calendar: permission on` / `Phone calendar: calendar permission is off on this phone, so Risi can't read it.`
+- Chat ⋮ menu: `Lock chat` (or `Unlock chat` while locked), tag `chat_menu_lock`, then `Clear chat`, `Delete chat`. Header content descriptions: video call, call, `More options`; no `End-to-end encrypted` lock icon.
+- Tabs: `Chats`, `Calls`, `Requests` (content description `Requests, N new` with pending requests), `Calendar`.
+
 ## v1.31 §31 Google Calendar link (decision 074) — READY v1.31 (JVM gate green; assembleRelease green, seam proven absent)
 Commits on main: 9de2f58 (models, decoders, `PROTOCOL_VERSION` 1.31), c21a1b1 (Google API client, Room v15), 45772bd (busy reads,
 copies, link manager, Settings section, debug seam, capability), e7439dd (rendering, tests), plus the status commit that adds this section.
