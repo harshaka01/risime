@@ -47,6 +47,43 @@ were needed after nightly.11.
   nightly.14+.
 - History sharing (needs answer 2), then group voice via LiveKit (v1.14).
 
+## 2026-10-10 network outage (09:20–10:00 Sri Lanka = 03:50–04:30 UTC): recovered
+Checked at 04:32–04:45 UTC (pilot still nightly.47, RISI_EVENTS on):
+- **/health** local + public 200 throughout. spark2's own health timer saw no failure, because the
+  public URL loops back to spark2's IP, so it can't see an outside outage (fixed below).
+- **boot-check:** BOOT CHECK OK (off, on, on-reopen, wrong key; RISI PREFLIGHT OK).
+- **Risi canary:** RISI CANARY OK (140 s; the agent talked only to loopback).
+- **Websocket:** the route is reachable (403 without a token), and phones reconnected at 04:32–04:33 UTC.
+- **FCM:** fcm.googleapis.com and oauth2.googleapis.com are reachable. The last real push was ok at
+  03:53. Pushes after that were "skipped: online", as expected, because the phones were connected.
+- **Login / token refresh:** Keycloak is **not in use yet** (OIDC_ENABLED off; the `risime` client is
+  still waiting on RisiCloud). Phone sign-in (/auth/config 200) works. There is no refresh endpoint;
+  sessions are long-lived tokens.
+- **Not outage-related, but open:** since ~02:00 UTC several phones (6–7 mobile IPs) get
+  `401 invalid_token` on /friends, /me and PUT /me/devices/<id>, and one device has had nothing but
+  401s since 04:18. This started before the outage. The affected phone probably needs to sign in again.
+  To investigate (server): why a session became invalid, and whether the app shows "Sign in again".
+- **Outage self-check added** (c520def): `scripts/outage-check --tick` runs every 5 min from
+  scripts/healthcheck. It probes outside hosts. After an outage it runs the checks above plus
+  boot-check (deferred while a release gate runs), appends them here and commits this file
+  locally.
+- **nightly.48 run n48f (03:18 UTC)** failed at 04:21, during the outage: every UI step passed,
+  then one adb call failed with an empty device serial. The same steps re-run at 04:26 passed
+  (UI ENTRY OK). The ui-entry-test ERR trap now names the line. Run **n48g** started 04:58 UTC.
+
+### Plan (Harsha 2026-10-10), in order
+1. nightly.48: Risi Calendar fixes + Notes code (RISI_NOTES stays off until "turn the ledger on"):
+   gate running (n48g).
+2. UI batch + contract **v1.32** `sync_off` (branch `v1.32`, brief docs/status/briefs/ui-batch-2026-10-10.md):
+   the Android and server agents are working on it. Root adds ui-entry-test at font scale 1.0 and 1.3, then nightly.49.
+3. Google Calendar link (v1.31, coded; RISI_GCAL off): the --google gate after nightly.48.
+   Needs "Google clients done".
+4. Model eval (8101 only): eval set + harness + risi-l1 baseline pushed. Live Whisper ASR
+   baseline: si 108% WER, ta 58% WER. Candidates run when no gate is running.
+5. SPEC-GAP.md: done (9237da0; 40 live, 8 behind a flag, 4 code only, 15 not started).
+6. Next phase: voice notes, files, video first; then the Risi Calendar UI; then My Risi
+   (an Official-only knowledge hub).
+
 ## v0.2.0-nightly.47 (live 2026-10-09 ~22:34 UTC, not required): Risi Calendar (RISI_EVENTS on since 22:34 UTC)
 - **Risi Calendar (contract v1.29 §29, decision 073):** RisiMe's own calendar, sealed per user on the
   server and synced to every phone you sign in on. Nothing from Private tabs.
