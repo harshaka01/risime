@@ -7987,6 +7987,19 @@ for <account>" with **Open sync settings** (Android `Settings.ACTION_SYNC_SETTIN
 `sync_off` above.) There is no Google row until §31. (v1.31: the Google Calendar section of
 §31.2 adds it.)
 
+- **v1.32: the user's own events, listed on the phone** (Harsha 2026-10-10: "what's on my calendar this week" must
+  list the events). Phone event titles still never leave the phone. Instead an `answer` that rests on a
+  **successful** `phone_provider` read for the asker (`read_ok: true`) may carry
+  **`"local_events": {"from": ts, "to": ts}`**: the checked range, at most 14 days. The asker's phone renders,
+  under the answer's text, "Your events" and the instances of its own calendar provider in that range: title,
+  day and time ("All day" for all-day events), sorted by start. It uses the same calendars and exclusions as the
+  read (all calendars; deleted, cancelled and declined left out), and adds Risi Calendar events in the range. With
+  none: "No events in your phone calendars from <from> to <to>". The list is built when the message is shown
+  (it is not stored in the message), and only on the asker's own devices: other devices of other users, and any
+  Official chat, never show it. The server's `body` stays the busy-times text for old apps. The server adds
+  `local_events` only in the asker's own Risi chat, never in Official or a group. Example:
+  `envelope_risi_answer_local_events.json`.
+
 ### 29.8 The action card: `confirm` with `tool: "risi_calendar_add"` (amends §28.2–§28.4)
 For a calendar user, every user-asked event write (the §28.2 draft `kind: "event"`, or the model's
 `risi_calendar_add` step `{title, start, end?, all_day?, with?: [name], reminder_min?}`) ends in
@@ -8422,7 +8435,8 @@ when another device of the same user is linked.
   and `RISI_EVENTS=on`** (`RISI_GCAL` alone does nothing); otherwise the key is **absent** (absent =
   off; `auth_config_v131.json`). The default is off.
   - While off: `/risi/calendar/google` answers `503 agent_unavailable`; no Google tool call is sent;
-    answers read as v1.30 ("Not checked: Google Calendar (not connected)").
+    answers name no Google source at all (v1.32: the phone calendar already covers Google accounts synced to the
+    phone; a `google_api` source that is `not_connected` is dropped from answers, `answer.sources` and the model's result).
   - Existing links are kept but dormant. A phone that sees the key absent stops reading and copying
     and keeps its grant; it resumes when the key is back.
 - Device capability **`"google_calendar"`** in `mls.capabilities` (`device_put_google_calendar.json`)
@@ -8862,7 +8876,8 @@ an ordinary §24.11 Risi post in the operator's **own active Risi chat** only (n
 - Example: `envelope_risi_ops_alert.json`.
 
 ## Changelog
-- **v1.32** (2026-10-10): `calendar_check` phone source reason `sync_off` (§29.7); Ops alerts
+- **v1.32** (2026-10-10): `calendar_check` phone source reason `sync_off` (§29.7); `answer.local_events` (the
+  user's own events listed by the phone, titles never sent; §29.7); an unconnected Google link is no longer named; Ops alerts
   (§32): the Risi rule kind `ops_alert` and the loopback-only `POST /internal/ops-alert` (watchdog states, and
   `alert` / `resolved` from Alertmanager through the loopback bridge).
 - **v1.31** (2026-10-10): the Google Calendar link (§31; decision 074; folds the deferred
@@ -8926,7 +8941,7 @@ an ordinary §24.11 Risi post in the operator's **own active Risi chat** only (n
     `risi_calendar_check` (Risi Calendar plus the phone in one step; the phone `calendar_check` is
     not offered to calendar users; titles only to our own model, calendar names never to any
     model); no read → the model's text is discarded; a read → "Checked: Risi Calendar · Phone
-    calendar (Work). Not checked: Google Calendar (not connected)." or the phone-only "I checked:"
+    calendar (Work)." (v1.32: an unconnected Google link is not named) or the phone-only "I checked:"
     line; `answer.sources` `calendar_source`;
   - errors `403 not_owner`, `409 version_conflict`, `410 cursor_expired`, `422 not_invitable`.
     §30 Risi Notes (v1.30) and §31 Google Calendar sync were not part of v1.29.
