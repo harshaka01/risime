@@ -109,6 +109,13 @@ class ContractExamplesTest {
                     require(it.tool == RisiToolCall.TOOL_CALENDAR_CHECK && it.calendarCheckArgs()!!.sources == listOf("google_api") && it.toDevices.size == 1)
                 }
             },
+            "risi_tool_result_calendar_check_sync_off.json" to { s ->
+                val r = toolResult(s)
+                val c = ProtocolJson.decodeFromJsonElement(CalendarCheckResult.serializer(), r.result!!)
+                val p = c.sources!!.single { it.source == "phone_provider" }
+                require(r.status == "ok" && !p.readOk && p.reason == "sync_off" && p.calendars.size == 1 && c.connectedSources == listOf("phone_provider"))
+                r
+            },
             "risi_tool_result_calendar_check_google.json" to { s ->
                 val r = toolResult(s)
                 val rep = ProtocolJson.decodeFromJsonElement(GoogleSourceReport.serializer(), r.result!!["sources"]!!.jsonArray.single())

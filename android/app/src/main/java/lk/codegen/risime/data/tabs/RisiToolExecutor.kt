@@ -298,7 +298,7 @@ class RisiToolExecutor(
             } else {
                 entries += ProtocolJson.encodeToJsonElement(lk.codegen.risime.net.CalendarSourceReport.serializer(), read.source.copy(reason = CalendarRead.wireReason(read.source.reason))) as JsonObject
                 addRows(read.blocks)
-                if (read.source.readOk) connected += CalendarRead.SOURCE
+                if (read.source.readOk || read.source.reason == CalendarRead.SYNC_OFF) connected += CalendarRead.SOURCE
             }
         }
         if (wantGoogle) {

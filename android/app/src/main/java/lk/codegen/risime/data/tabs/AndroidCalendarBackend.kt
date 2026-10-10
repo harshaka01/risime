@@ -1,7 +1,10 @@
 package lk.codegen.risime.data.tabs
 
 import android.Manifest
+import android.accounts.Account
+import android.content.ContentResolver
 import android.content.ContentUris
+import android.os.Bundle
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
@@ -74,6 +77,19 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
             }
         }
         return out
+    }
+
+    override fun masterSyncOn(): Boolean = ContentResolver.getMasterSyncAutomatically()
+
+    override fun accountSyncOn(accountName: String, accountType: String): Boolean =
+        ContentResolver.getSyncAutomatically(Account(accountName, accountType), CalendarContract.AUTHORITY)
+
+    override fun requestSync(accountName: String, accountType: String) {
+        val extras = Bundle().apply {
+            putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true)
+            putBoolean(ContentResolver.SYNC_EXTRAS_EXPEDITED, true)
+        }
+        ContentResolver.requestSync(Account(accountName, accountType), CalendarContract.AUTHORITY, extras)
     }
 
     override fun instances(fromMs: Long, toMs: Long): List<BusyRow> {
@@ -155,6 +171,22 @@ class AndroidCalendarPort(
     override suspend fun matchHint(hint: lk.codegen.risime.net.RisiCalendarRef?): PhoneCalendarInfo? =
         if (hint == null || !cal.canRead()) null
         else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { CalendarSelection.matchHint(cal.allCalendars(), hint) }.getOrNull() }
+
+    /** v1.32 Details: opens Android's sync settings for that account type. */
+    override fun openSyncSettings(accountType: String?) {
+        val i = android.content.Intent(android.provider.Settings.ACTION_SYNC_SETTINGS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (!accountType.isNullOrBlank()) i.putExtra(android.provider.Settings.EXTRA_ACCOUNT_TYPES, arrayOf(accountType))
+        runCatching { context.startActivity(i) }
+    }
+
+    /** v1.32 Details "Refresh": ask the provider to sync the account, then Details re-reads. */
+    override suspend fun refreshSync(accountName: String?, accountType: String?) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val accts = if (accountName != null && accountType != null) listOf(accountName to accountType)
+            else CalendarRead.syncAccounts(cal.allCalendars())
+            accts.forEach { (n, t) -> runCatching { cal.requestSync(n, t) } }
+        }
+    }
 
     override suspend fun overview(): CalendarOverview? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { cal.overview() }
 

@@ -28,6 +28,16 @@ class FakeCalendarBackend : CalendarBackend {
 
     override fun calendars() = cals.toList()
 
+    var masterSync = true
+    val syncOffAccounts = mutableSetOf<String>()
+    val syncRequests = mutableListOf<String>()
+
+    override fun masterSyncOn() = masterSync
+
+    override fun accountSyncOn(accountName: String, accountType: String) = accountName !in syncOffAccounts
+
+    override fun requestSync(accountName: String, accountType: String) { syncRequests += accountName }
+
     override fun instances(fromMs: Long, toMs: Long) =
         events.values.filter { it.dtEnd > fromMs && it.dtStart < toMs }.map { e -> BusyRow(e.dtStart, e.dtEnd, e.allDay, true, e.calendarId, cals.firstOrNull { it.id == e.calendarId }?.visible ?: true) } + extra
 
@@ -254,5 +264,57 @@ class PhoneCalendarTest {
         val o = cal.overview()!!
         assertEquals(listOf(google to 0, hidden to 1), o.calendars)
         assertTrue(o.readOk)
+    }
+    // ---- v1.32 §29.7 sync_off ----
+    @Test fun syncOffWhenEveryNonLocalAccountHasSyncOff() {
+        be.cals += listOf(google, googleWork)
+        be.syncOffAccounts += "harsha@example.com"
+        val r = cal.read(start, end)!!
+        assertEquals(false, r.source.readOk)
+        assertEquals("sync_off", r.source.reason)
+        assertEquals(2, r.source.calendars.size) // still listed
+        assertEquals("sync_off", r.wire.sources!!.first().reason)
+        assertEquals(listOf("harsha@example.com" to "com.google"), cal.overview()!!.syncOffAccounts)
+    }
+
+    @Test fun masterSyncOffIsSyncOff() {
+        be.cals += google
+        be.masterSync = false
+        assertEquals("sync_off", cal.read(start, end)!!.source.reason)
+        assertTrue(cal.overview()!!.masterSyncOff)
+    }
+
+    @Test fun oneSyncedAccountKeepsTheReadOk() {
+        val other = google.copy(id = 9, accountName = "b@example.com", displayName = "b@example.com")
+        be.cals += listOf(google, other)
+        be.syncOffAccounts += "harsha@example.com"
+        val r = cal.read(start, end)!!
+        assertTrue(r.source.readOk)
+        assertNull(r.source.reason)
+        assertEquals(listOf("harsha@example.com" to "com.google"), cal.overview()!!.syncOffAccounts)
+    }
+
+    @Test fun localCalendarsNeverCauseSyncOff() {
+        be.cals += local
+        be.masterSync = false
+        assertTrue(cal.read(start, end)!!.source.reason != "sync_off")
+        be.cals += google
+        be.syncOffAccounts += "harsha@example.com"
+        assertEquals("sync_off", cal.read(start, end)!!.source.reason) // the Google account has sync off
+        be.syncOffAccounts.clear()
+        be.masterSync = true
+        assertTrue(cal.read(start, end)!!.source.readOk)
+    }
+
+    @Test fun hiddenCalendarsDoNotCountForSyncOff() {
+        be.cals += listOf(google, hidden.copy(accountName = "x@example.com"))
+        be.syncOffAccounts += "x@example.com"
+        assertTrue(cal.read(start, end)!!.source.readOk)
+    }
+
+    @Test fun refreshRequestsASyncForTheAccount() {
+        be.cals += google
+        cal.requestSync("harsha@example.com", "com.google")
+        assertEquals(listOf("harsha@example.com"), be.syncRequests)
     }
 }

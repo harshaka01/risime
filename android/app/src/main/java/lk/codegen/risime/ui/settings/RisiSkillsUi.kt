@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -405,7 +406,7 @@ private fun SkillCard(
             Text(s.description, style = MaterialTheme.typography.bodyMedium)
             note?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("risi_skill_note_${s.id}"))
-                OutlinedButton(onClick = openSettings) { Text("Open settings") }
+                OutlinedButton(onClick = openSettings) { Text("Open settings", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
             // v1.31 §31.2: the Google Calendar section sits on the Calendar card itself (not behind Details).
             if (google != null) {
@@ -413,13 +414,13 @@ private fun SkillCard(
                 GoogleCalendarSection(google)
             }
             if (!open) {
-                TextButton(onClick = onToggleOpen) { Text("Details") }
+                TextButton(onClick = onToggleOpen) { Text("Details", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 return@Column
             }
             Bullets("Can", s.can)
             Bullets("Cannot", s.cannot)
             if (s.permissions.isNotEmpty()) {
-                Text("Permissions", style = MaterialTheme.typography.titleSmall)
+                Text("Permissions", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 s.permissions.forEach { p ->
                     Column(Modifier.testTag("risi_skill_perm")) {
                         Text(p.label.ifBlank { p.name }, style = MaterialTheme.typography.bodyMedium)
@@ -458,14 +459,14 @@ private fun SkillCard(
                     Column(Modifier.testTag("risi_activity_entry")) {
                         Text(entryLine(e), style = MaterialTheme.typography.bodyMedium)
                         entryUndoState(e)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        if (entryUndoable(e, nowMs)) OutlinedButton(onClick = { onUndo(e) }, modifier = Modifier.testTag("risi_activity_undo")) { Text("Undo") }
+                        if (entryUndoable(e, nowMs)) OutlinedButton(onClick = { onUndo(e) }, modifier = Modifier.testTag("risi_activity_undo")) { Text("Undo", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                         if (e.undo.kind == RisiUndo.UNDO_MANUAL) {
                             Text(e.undo.hint ?: "Remove it yourself", style = MaterialTheme.typography.bodySmall)
-                            if (e.skillId == RisiSkillIds.ALARM) TextButton(onClick = openClock) { Text("Open Clock") }
+                            if (e.skillId == RisiSkillIds.ALARM) TextButton(onClick = openClock) { Text("Open Clock", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                         }
                     }
                 }
-                if (a.entries.isNotEmpty()) TextButton(onClick = onClear) { Text("Clear activity") }
+                if (a.entries.isNotEmpty()) TextButton(onClick = onClear) { Text("Clear activity", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             }
         }
     }
@@ -474,7 +475,7 @@ private fun SkillCard(
 @Composable
 private fun Bullets(title: String, items: List<String>) {
     if (items.isEmpty()) return
-    Text(title, style = MaterialTheme.typography.titleSmall)
+    Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
     items.forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium) }
 }
 
@@ -521,8 +522,8 @@ private fun RevokeDialog(r: RisiSkillsModel.Revoke, onConfirm: (Boolean) -> Unit
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onConfirm(cancel) }, modifier = Modifier.testTag("risi_revoke_confirm")) { Text("Turn off") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep on") } },
+        confirmButton = { TextButton(onClick = { onConfirm(cancel) }, modifier = Modifier.testTag("risi_revoke_confirm")) { Text("Turn off", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep on", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
 
@@ -541,9 +542,11 @@ fun revokeCancelLabel(skillId: String, pending: Int?): String? = when {
 private fun CalendarSourcesBlock(port: lk.codegen.risime.data.tabs.RisiCalendarPort) {
     var loaded by remember { mutableStateOf(false) }
     var ov by remember { mutableStateOf<lk.codegen.risime.data.tabs.CalendarOverview?>(null) }
-    LaunchedEffect(Unit) { ov = runCatching { port.overview() }.getOrNull(); loaded = true }
+    var reload by remember { mutableStateOf(0) }
+    val syncScope = androidx.compose.runtime.rememberCoroutineScope()
+    LaunchedEffect(reload) { ov = runCatching { port.overview() }.getOrNull(); loaded = true }
     Column(Modifier.testTag("risi_calendar_sources"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-        Text("What Risi can read", style = MaterialTheme.typography.titleSmall)
+        Text("What Risi can read", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         val o = ov
         when {
             !loaded -> Text("Reading the phone's calendars…", style = MaterialTheme.typography.bodySmall)
@@ -562,8 +565,33 @@ private fun CalendarSourcesBlock(port: lk.codegen.risime.data.tabs.RisiCalendarP
                         )
                     }
                 }
+                // v1.32 section 29.7: sync off, per account (or master), with Open sync settings + Refresh.
+                if (o.masterSyncOff) {
+                    SyncOffRow(SYNC_MASTER_OFF, null, port) { syncScope.launch { port.refreshSync(null, null); kotlinx.coroutines.delay(1500); reload++ } }
+                } else {
+                    o.syncOffAccounts.forEach { (name, type) ->
+                        SyncOffRow(syncOffAccountText(name), type, port) { syncScope.launch { port.refreshSync(name, type); kotlinx.coroutines.delay(1500); reload++ } }
+                    }
+                }
                 if (!o.readOk) Text(lk.codegen.risime.data.tabs.CalendarRead.reasonText(o.reason), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_calendar_sources_reason"))
             }
+        }
+    }
+}
+
+const val SYNC_MASTER_OFF = "Auto-sync is off on this phone"
+const val SYNC_OPEN_SETTINGS = "Open sync settings"
+const val SYNC_REFRESH = "Refresh"
+
+fun syncOffAccountText(account: String): String = "Sync is off for ${account.ifBlank { "this account" }}"
+
+@Composable
+private fun SyncOffRow(text: String, accountType: String?, port: lk.codegen.risime.data.tabs.RisiCalendarPort, onRefresh: () -> Unit) {
+    Column(Modifier.testTag("risi_calendar_sync_off"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.error, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+            TextButton(onClick = { port.openSyncSettings(accountType) }, modifier = Modifier.testTag("risi_calendar_open_sync")) { Text(SYNC_OPEN_SETTINGS, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            TextButton(onClick = onRefresh, modifier = Modifier.testTag("risi_calendar_refresh")) { Text(SYNC_REFRESH, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
     }
 }
@@ -578,7 +606,7 @@ private fun CalendarChoiceRow(port: lk.codegen.risime.data.tabs.RisiCalendarPort
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     LaunchedEffect(chosenId) { chosen = port.chosen() }
     Column(Modifier.testTag("risi_calendar_settings"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-        Text("Calendar", style = MaterialTheme.typography.titleSmall)
+        Text("Calendar", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(chosen?.let { lk.codegen.risime.data.tabs.CalendarSelection.label(it) } ?: "Not chosen yet: Risi asks the first time it adds an event.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_calendar_settings_label"))

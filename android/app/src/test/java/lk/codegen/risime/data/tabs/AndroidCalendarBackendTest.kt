@@ -176,6 +176,7 @@ class AndroidCalendarBackendTest {
                 CalendarContract.Events.DTSTART to start, CalendarContract.Events.DTEND to start + 3_600_000, CalendarContract.Events.ALL_DAY to 0,
             )
         }
+        syncOn()
         val pc = PhoneCalendar(AndroidCalendarBackend(app), MemoryCalendarChoice(), CalendarWriteLog())
         val r = pc.read(start, start + 3_600_000)!!
         assertEquals(1, r.blocks.size)
@@ -183,5 +184,28 @@ class AndroidCalendarBackendTest {
         assertEquals("phone_provider", r.source.source)
         assertEquals(listOf("Holidays in Sri Lanka" to 0, "Primary calendar" to 1, "Phone" to 0), r.source.calendars.map { it.name to it.events })
         assertEquals(listOf("phone_provider"), r.wire.connectedSources)
+    }
+
+    private fun syncOn() {
+        android.content.ContentResolver.setMasterSyncAutomatically(true)
+        android.content.ContentResolver.setSyncAutomatically(android.accounts.Account("uitest.risime@gmail.com", "com.google"), CalendarContract.AUTHORITY, true)
+    }
+
+    // v1.32 §29.7: the real ContentResolver facade.
+    @Test fun syncOffWhenTheGoogleAccountSyncIsOffAndOkWhenOn() {
+        shadowOf(app).grantPermissions(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+        val start = java.time.Instant.parse("2026-10-12T08:30:00Z").toEpochMilli()
+        val pc = PhoneCalendar(AndroidCalendarBackend(app), MemoryCalendarChoice(), CalendarWriteLog())
+        val acct = android.accounts.Account("uitest.risime@gmail.com", "com.google")
+        android.content.ContentResolver.setMasterSyncAutomatically(true)
+        android.content.ContentResolver.setSyncAutomatically(acct, CalendarContract.AUTHORITY, false)
+        val off = pc.read(start, start + 3_600_000)!!
+        assertEquals("sync_off", off.source.reason)
+        assertTrue(!off.source.readOk && off.source.calendars.isNotEmpty())
+        android.content.ContentResolver.setSyncAutomatically(acct, CalendarContract.AUTHORITY, true)
+        assertTrue(pc.read(start, start + 3_600_000)!!.source.readOk)
+        android.content.ContentResolver.setMasterSyncAutomatically(false)
+        assertEquals("sync_off", pc.read(start, start + 3_600_000)!!.source.reason)
+        android.content.ContentResolver.setMasterSyncAutomatically(true)
     }
 }

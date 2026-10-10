@@ -59,6 +59,15 @@ interface CalendarBackend {
 
     fun calendars(): List<PhoneCalendarInfo>
 
+    /** v1.32 §29.7: `ContentResolver.getMasterSyncAutomatically()` (true when unknown). */
+    fun masterSyncOn(): Boolean = true
+
+    /** v1.32 §29.7: `ContentResolver.getSyncAutomatically(account, CalendarContract.AUTHORITY)` (true when unknown). */
+    fun accountSyncOn(accountName: String, accountType: String): Boolean = true
+
+    /** v1.32 Details "Refresh": `ContentResolver.requestSync` for the account's calendar authority (MANUAL + EXPEDITED). */
+    fun requestSync(accountName: String, accountType: String) {}
+
     /**
      * Instances of every calendar overlapping [fromMs, toMs) (cancelled and declined ones left out), over
      * `CalendarContract.Instances` (recurring events expanded); [BusyRow.visible] says if its calendar is shown.
@@ -220,7 +229,15 @@ class CalendarWriteLog(
 }
 
 /** Settings → Calendar → Details: each calendar with its instances in the next days, and the read verdict. */
-data class CalendarOverview(val calendars: List<Pair<PhoneCalendarInfo, Int>>, val readOk: Boolean, val reason: String?)
+data class CalendarOverview(
+    val calendars: List<Pair<PhoneCalendarInfo, Int>>,
+    val readOk: Boolean,
+    val reason: String?,
+    /** v1.32: master auto-sync is off on this phone. */
+    val masterSyncOff: Boolean = false,
+    /** v1.32: non-local accounts holding a visible calendar whose calendar sync is off (account name, account type). */
+    val syncOffAccounts: List<Pair<String, String>> = emptyList(),
+)
 
 /** What a `calendar_check` read: the merged blocks and the `phone_provider` source report. */
 data class CalendarRead(val blocks: List<CalendarBlock>, val source: lk.codegen.risime.net.CalendarSourceReport) {
@@ -232,6 +249,7 @@ data class CalendarRead(val blocks: List<CalendarBlock>, val source: lk.codegen.
         const val GOOGLE_SYNC_OFF = "google_sync_off"
         const val GOOGLE_HIDDEN = "google_calendars_hidden"
         const val QUERY_FAILED = "query_failed"
+        const val SYNC_OFF = "sync_off"
 
         fun source(cals: List<lk.codegen.risime.net.CalendarSourceCalendar>, ok: Boolean, reason: String?) =
             lk.codegen.risime.net.CalendarSourceReport(SOURCE, cals, ok, if (ok) null else reason)
@@ -277,6 +295,25 @@ data class CalendarRead(val blocks: List<CalendarBlock>, val source: lk.codegen.
             }
         }
 
+        /** The non-local accounts that hold a visible calendar, as (name, type), in calendar order. */
+        fun syncAccounts(cals: List<PhoneCalendarInfo>): List<Pair<String, String>> =
+            cals.filter { it.visible && !it.accountType.equals(CalendarSelection.LOCAL, true) }.map { it.accountName to it.accountType }.distinct()
+
+        /** v1.32 §29.7: the accounts (with a visible calendar) whose sync is off; all of them when master sync is off. */
+        fun syncOffAccounts(cals: List<PhoneCalendarInfo>, b: CalendarBackend): List<Pair<String, String>> {
+            val accts = syncAccounts(cals)
+            return if (!b.masterSyncOn()) accts else accts.filter { !b.accountSyncOn(it.first, it.second) }
+        }
+
+        /**
+         * v1.32 §29.7: `sync_off` exactly when there is a non-local account with a visible calendar and sync is off for
+         * every such account (or master sync is off). Calendars of a `LOCAL` account never cause it.
+         */
+        fun syncOff(cals: List<PhoneCalendarInfo>, b: CalendarBackend): Boolean {
+            val accts = syncAccounts(cals)
+            return accts.isNotEmpty() && syncOffAccounts(cals, b).size == accts.size
+        }
+
         /** The words for a reason, as Settings shows it. */
         fun reasonText(reason: String?): String = when (reason) {
             null -> ""
@@ -285,6 +322,7 @@ data class CalendarRead(val blocks: List<CalendarBlock>, val source: lk.codegen.
             GOOGLE_SYNC_OFF -> "Calendar sync is off for your Google account. Turn it on in Android Settings → Accounts → Google → Account sync → Calendar."
             GOOGLE_HIDDEN -> "Your Google calendars are hidden on this phone."
             QUERY_FAILED -> "The phone's calendar couldn't be read."
+            SYNC_OFF -> "Calendar sync is off on this phone, so what Risi reads may be out of date."
             else -> reason
         }
     }
@@ -293,7 +331,7 @@ data class CalendarRead(val blocks: List<CalendarBlock>, val source: lk.codegen.
         get() = lk.codegen.risime.net.CalendarCheckResult(
             blocks,
             listOf(source.copy(reason = wireReason(source.reason)), GOOGLE_API_NOT_CONNECTED),
-            if (source.readOk) listOf(SOURCE) else emptyList(),
+            if (source.readOk || source.reason == SYNC_OFF) listOf(SOURCE) else emptyList(),
         )
 }
 
@@ -351,6 +389,9 @@ class PhoneCalendar(
 
     fun canRead() = backend.canRead()
 
+    /** v1.32 Details "Refresh": ask the provider to sync [accountName] now (no-op in tests). */
+    fun requestSync(accountName: String, accountType: String) = backend.requestSync(accountName, accountType)
+
     fun canWrite() = backend.canWrite()
 
     /** The picker's list (empty without read permission). */
@@ -404,7 +445,9 @@ class PhoneCalendar(
         val read = cals.filter { it.visible }.sortedWith(googleFirst).take(CalendarRead.MAX_CALENDARS).map { c ->
             lk.codegen.risime.net.CalendarSourceCalendar(CalendarRead.wireName(c),c.accountType.take(100), inWindow.count { it.calendarId == c.id })
         }
-        val (ok, reason) = CalendarRead.verdict(cals)
+        val (ok, reason) = CalendarRead.verdict(cals).let { v ->
+            if (runCatching { CalendarRead.syncOff(cals, backend) }.getOrDefault(false)) false to CalendarRead.SYNC_OFF else v
+        }
         log("risi calendar: check read ${cals.size} calendars (${read.size} visible), ${inWindow.size} instances, read_ok=$ok${reason?.let { " ($it)" } ?: ""}")
         return CalendarRead(merge(used, fromMs, toMs), CalendarRead.source(read, ok, reason))
     }
@@ -417,8 +460,12 @@ class PhoneCalendar(
         val from = now()
         val cals = runCatching { backend.calendars() }.getOrElse { return CalendarOverview(emptyList(), false, CalendarRead.QUERY_FAILED) }
         val rows = runCatching { backend.instances(from, from + days * 86_400_000L) }.getOrElse { return CalendarOverview(emptyList(), false, CalendarRead.QUERY_FAILED) }
-        val (ok, reason) = CalendarRead.verdict(cals)
-        return CalendarOverview(cals.sortedWith(googleFirst).map { c -> c to rows.count { it.calendarId == c.id } }, ok, reason)
+        val (ok, reason) = CalendarRead.verdict(cals).let { v ->
+            if (runCatching { CalendarRead.syncOff(cals, backend) }.getOrDefault(false)) false to CalendarRead.SYNC_OFF else v
+        }
+        val off = runCatching { CalendarRead.syncOffAccounts(cals, backend) }.getOrDefault(emptyList())
+        val master = runCatching { !backend.masterSyncOn() }.getOrDefault(false)
+        return CalendarOverview(cals.sortedWith(googleFirst).map { c -> c to rows.count { it.calendarId == c.id } }, ok, reason, master, off)
     }
 
     /** All-day events are stored as UTC midnights of the phone's dates (Android's rule). */

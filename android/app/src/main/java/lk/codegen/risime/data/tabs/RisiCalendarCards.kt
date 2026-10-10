@@ -50,6 +50,12 @@ interface RisiCalendarPort {
 
     /** Settings → Calendar → Details: the calendars this phone can see (null: no read permission). */
     suspend fun overview(): CalendarOverview? = null
+
+    /** v1.32 Details "Open sync settings": `Settings.ACTION_SYNC_SETTINGS` with `EXTRA_ACCOUNT_TYPES` for [accountType] (null: all). */
+    fun openSyncSettings(accountType: String?) {}
+
+    /** v1.32 Details "Refresh": `requestSync` (manual, expedited) for the account (null: every calendar account). */
+    suspend fun refreshSync(accountName: String?, accountType: String?) {}
 }
 
 /** The event a `calendar_add` card proposes. */
