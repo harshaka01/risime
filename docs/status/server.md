@@ -16,6 +16,42 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
+## v1.31 Google Calendar link (§31, decision 074) — READY v1.31
+Gate: `cd server && MIX_TEST_PARTITION=_gcal mix format --check-formatted && mix compile --warnings-as-errors && mix test`
+(1063 tests, 0 failures). Commits on `main`: 6f80159 (coverage), 91aa540 (§31.1 switch), 68fe5c0 (§31.3 REST),
+e0e302e (§31.4 routed check), 8d85b71 (§31.5 line), fa7c18a (§31.8 card), 6e42bdf (skills, privacy), and the
+commit that adds this note (exact v1.31 examples).
+- **Off by default.** `RISI_GCAL=on` **and** `RISI_EVENTS=on` (`Risi.gcal_on?/0`); `/auth/config` `google_calendar:
+  "on"`; the capability `google_calendar` is kept only with `risi_events`. Off: `/risi/calendar/google` is 503 and the
+  answers are v1.30 byte for byte (`google_honesty_v131_test`).
+- **Link:** `risi_gcal_links` (exact columns of §31.3, CHECKs, no token/email/name/id), `RisiMe.Agent.GoogleLink`,
+  `RisiGoogleController` (GET/PUT/DELETE; 403 `invalid_device`, 409 `not_google_device`, 422, 429 at 30 writes/min, 503).
+  Removing a device deletes its link (and tells the other Google devices). `google_calendar_link` is a stored,
+  no-wake event, visible only to `google_calendar` sockets (live, replay and sync). Event `device_id`: the new holder on
+  `connected`/`updated`/`replaced`, the device that held the link on `disconnected` (the old device compares it with its own).
+- **Routed check:** `risi_calendar_check` sends `calendar_check` with `args.sources: ["google_api"]` to the Google device
+  (`device_id` = asker, `to_devices` = Google device, wake to its token; the result is accepted from that device only,
+  `risi_tool_calls.sources` holds the asked source names). Same device as the asker and the phone check runs: ONE call
+  with `["phone_provider","google_api"]`. 15 s with no result: source `no_answer`, the turn goes on, a late result is 409
+  `tool_call_expired`. Link `reauth_needed` / skill `off`: no call (`reauth_needed` / `paused`). Strict `google_api`
+  schema (ref `^[a-z0-9]{1,16}$`, `events`, at most 10, 422 on `name`/`account_type`); the result's sources must equal the
+  asked ones. The model sees `google: {source, read_ok, reason, calendars: <count>, blocks[c<n>]}`, never refs or names.
+- **Honesty (§31.5):** order Risi · Google · Phone (with a link in play), "Google Calendar (N calendars)", the §31.5
+  reason words (for Google; the phone keeps its own), free-claim rewrite "Your Risi Calendar is free then, but I couldn't
+  check Google Calendar (<words>)." + `next_steps ["Retry"]` (rule-made), "calendars have N busy times", `answer.sources`
+  `google_api` gets `names: []`, `count`, `refs`. No link or switch off: the v1.30 line and sources.
+- **Card (§31.8):** one `google_reconnect` card on the change to `reauth_needed`, at most per 24 h.
+- **Skills (§26.1):** the Calendar entry has the two OAuth permissions and new description only for `google_calendar` devices.
+- **Privacy:** canary test (`google_privacy_v131_test`); request logs now filter `result` params (tool results).
+- **Examples:** `test/contract/examples_v131_test.exs` checks all 13 files exactly. One file was edited (root path, per the
+  brief): `envelope_risi_answer_calendar_sources_google.json` `made_by.model` `risi-l1` -> `null` (the busy rewrite is
+  rule-made, as §29.3 says; the no_answer example already had null).
+- **Notes for Android/root:** (1) in the combined one-call case (asker = Google device) the Google and phone blocks arrive
+  merged, so all blocks go to the model under `phone` and `google.blocks` is `[]`; (2) when a Google link is in play the
+  phone source is always named (`not_connected`, or `paused` while the skill is off) and `answer.sources` lists it; (3) the
+  phone's reason words are unchanged (the §31.5 table applies to Google); (4) a Google device must answer with the
+  `connected_sources` it read and may send reasons `reauth_needed|network|timeout|api_error|no_calendars`.
+
 ## Fix 2026-10-09: invalid model output never loops (release gate, calendar permission off) — READY
 Bug: with calendar permission off `calendar_check` isn't offered; a model emitting it anyway failed the schema →
 `model_unavailable` → the turn job snoozed 30 s and re-ran forever (no answer for 2+ min). Now:
