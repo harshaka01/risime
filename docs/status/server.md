@@ -1927,3 +1927,15 @@ Greppable in `~/risime-logs/server.log` (info level; tokens, phone and email are
 Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/push_audit_test.exs`.
 
 - v1.24 (§24): the 34 examples are covered (@checked_v1_24 in examples_test.exs). Policy `tab_cases` are loaded in policy_test.exs but tagged :pending_v124 (excluded by default): server Policy does not enforce §24.1 tab/agent rules yet (group_meta is opaque to the server; the MLS core enforces them).
+
+## READY v1.32 (contract §29.7 `sync_off`)
+- `calendar_check` result: `reason: "sync_off"` accepted only on a `phone_provider` source with
+  `read_ok: false` (on `google_api`, or with `read_ok: true`, it is `422`); any other new key is still `422`.
+  Code: `Agent.ToolCalls` (`sync_off_ok?/3`), `Agent.CalendarHonesty` (texts).
+- Server-built answers: no access (unchanged); sync off, phone-only: "I couldn't read your calendar on this phone
+  (sync is off, so it may be out of date). Turn on sync in Settings → Risi skills → Calendar → Details."; with Risi
+  Calendar: "Not checked: Phone calendar (sync is off)."; empty real read: "0 events", a free claim stands.
+- The model sees `{source, read_ok, reason, calendars: <count>}` only (unchanged `model_sources/1`).
+- Tests: `calendar_honesty_test.exs` (v1.32 describe), `risi_calendar_flow_test.exs` (sync_off accept/422 cases,
+  model view without names, empty read), `contract/examples_v132_test.exs` (the new example, listed in
+  `@checked_v1_32`). Time-independent (fixed clock).

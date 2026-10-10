@@ -328,6 +328,9 @@ defmodule RisiMe.ContractExamplesTest do
                     risi_tool_result_calendar_check_google.json
                     risi_tool_result_calendar_check_google_reauth.json)
 
+  # v1.32 (§29.7 sync_off): checked in test/contract/examples_v132_test.exs.
+  @checked_v1_32 ~w(risi_tool_result_calendar_check_sync_off.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -390,7 +393,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_28 ++
         @checked_v1_29 ++
         @checked_v1_30 ++
-        @checked_v1_31
+        @checked_v1_31 ++
+        @checked_v1_32
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end

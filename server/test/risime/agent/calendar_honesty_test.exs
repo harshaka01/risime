@@ -134,4 +134,34 @@ defmodule RisiMe.Agent.CalendarHonestyTest do
 
     assert H.answer_sources([H.check("no_permission", nil, nil)]) == []
   end
+
+  describe "v1.32 sync_off" do
+    test "phone-only: told apart from no access and from an empty read" do
+      sync = ok([], [phone([@work], false, "sync_off"), @google_api])
+
+      assert H.enforce(@clear, [sync], @tz) ==
+               "I couldn't read your calendar on this phone (sync is off, so it may be out of " <>
+                 "date). Turn on sync in Settings → Risi skills → Calendar → Details."
+
+      assert H.enforce(@clear, [H.check("no_permission", nil, nil)], @tz) ==
+               "I couldn't read your calendar on this phone (calendar permission is off). " <>
+                 @connect
+
+      assert H.enforce(@clear, [ok([], [phone([@work], true), @google_api])], @tz) =~
+               "0 events"
+    end
+
+    test "with Risi Calendar: Not checked: Phone calendar (sync is off)." do
+      risi = %{
+        "source" => "risi_calendar",
+        "calendars" => [%{"name" => "Risi Calendar", "account_type" => "risime", "events" => 0}],
+        "read_ok" => true,
+        "reason" => nil
+      }
+
+      out = H.enforce("Nothing then.", [ok([], [risi, phone([@work], false, "sync_off")])], @tz)
+      assert out =~ "Checked: Risi Calendar."
+      assert out =~ "Not checked: Phone calendar (sync is off)"
+    end
+  end
 end

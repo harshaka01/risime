@@ -279,7 +279,7 @@ defmodule RisiMe.Agent.ToolCalls do
   @calendar_sources ~w(phone_provider google_api risi_calendar)
   @source_reasons [nil] ++
                     ~w(not_connected no_permission reauth_needed no_play_services network
-                       timeout api_error no_calendars)
+                       timeout api_error no_calendars sync_off)
 
   # P0 2026-10-09 (v1.29 §29.2 as aligned with root): what the phone read, per source.
   defp valid_ok?("calendar_check", %{"blocks" => _, "sources" => s, "connected_sources" => c} = r)
@@ -332,7 +332,8 @@ defmodule RisiMe.Agent.ToolCalls do
        )
        when map_size(s) == 4 do
     is_boolean(ok) and why in @source_reasons and is_list(cals) and length(cals) <= 10 and
-      (ok or cals == []) and Enum.all?(cals, &valid_google_calendar?/1)
+      (ok or cals == []) and Enum.all?(cals, &valid_google_calendar?/1) and
+      sync_off_ok?("google_api", ok, why)
   end
 
   defp valid_source?(
@@ -340,10 +341,15 @@ defmodule RisiMe.Agent.ToolCalls do
        )
        when map_size(s) == 4 do
     src in @calendar_sources and is_boolean(ok) and why in @source_reasons and is_list(cals) and
-      length(cals) <= 50 and Enum.all?(cals, &valid_source_calendar?/1)
+      length(cals) <= 50 and Enum.all?(cals, &valid_source_calendar?/1) and
+      sync_off_ok?(src, ok, why)
   end
 
   defp valid_source?(_), do: false
+
+  # v1.32 §29.7: `sync_off` only on the phone's own provider, and never as a read.
+  defp sync_off_ok?(src, ok, "sync_off"), do: src == "phone_provider" and ok == false
+  defp sync_off_ok?(_src, _ok, _why), do: true
 
   defp valid_google_calendar?(%{"ref" => ref, "events" => e} = c) when map_size(c) == 2,
     do: is_binary(ref) and ref =~ ~r/^[a-z0-9]{1,16}$/ and is_integer(e) and e >= 0

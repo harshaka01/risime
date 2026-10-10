@@ -25,6 +25,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
   @connect "Connect it in Settings → Risi skills → Calendar."
   @max_named 6
+  @sync_off_why "sync is off, so it may be out of date"
 
   @doc """
   A check as the turn keeps it: `%{status, result, reason}` (`result` the `calendar_check` step
@@ -304,7 +305,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
     cond do
       read != [] -> {:ok, read}
-      s = List.first(failed) -> {:error, reason_text(s["reason"] || "no_calendars")}
+      s = List.first(failed) -> {:error, trusted_reason(s)}
       true -> {:error, reason_text("no_calendars")}
     end
   end
@@ -322,7 +323,12 @@ defmodule RisiMe.Agent.CalendarHonesty do
   def trusted(%{reason: r}) when is_binary(r), do: {:error, reason_text(r)}
   def trusted(_), do: {:error, "the phone couldn't read its calendar"}
 
+  # v1.32 §29.7: sync off is told apart from no access and from an empty read.
+  defp trusted_reason(%{"reason" => "sync_off"}), do: @sync_off_why
+  defp trusted_reason(s), do: reason_text(s["reason"] || "no_calendars")
+
   @doc "The words for a phone's `reason` code."
+  def reason_text("sync_off"), do: "sync is off"
   def reason_text("no_permission"), do: "calendar permission is off"
   def reason_text("no_calendars"), do: "no calendars on this phone"
   def reason_text("no_google_calendar"), do: "no Google account calendar on this phone"
@@ -363,6 +369,11 @@ defmodule RisiMe.Agent.CalendarHonesty do
     do: "I couldn't use your calendar on this phone (#{reason}). #{@connect}"
 
   @doc "The sentence for an untrustworthy read."
+  def cant_read(@sync_off_why),
+    do:
+      "I couldn't read your calendar on this phone (#{@sync_off_why}). " <>
+        "Turn on sync in Settings → Risi skills → Calendar → Details."
+
   def cant_read(reason),
     do: "I couldn't read your calendar on this phone (#{reason}). #{@connect}"
 

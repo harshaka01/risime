@@ -821,4 +821,120 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
     LedgerReminders.digest(ctx.s, now)
     assert Enum.all?(posts(), fn {_, _, r} -> not Map.has_key?(r, "events") end)
   end
+
+  ## v1.32 §29.7: sync off / no access / empty, told apart
+
+  defp phone_check!(ctx, phone_source) do
+    change = %{"id" => "calendar", "state" => "ask", "client_permission" => "granted"}
+
+    {200, _} =
+      RisiMe.GroupHelpers.api(
+        :patch,
+        "/api/v1/risi/skills",
+        ctx.harsha.token,
+        %{"changes" => [change]},
+        ctx.hd
+      )
+
+    check_llm!("You are free then.")
+    rid = Ecto.UUID.generate()
+
+    envelope!(
+      ctx.hrc,
+      ctx.harsha.user,
+      %{
+        "v" => 1,
+        "type" => "risi_request",
+        "request_id" => rid,
+        "action" => "ask",
+        "text" => "Am I free Monday 2pm?"
+      },
+      ctx.hd
+    )
+
+    [job] = for j <- all_enqueued(worker: Job), j.args["request_id"] == rid, do: j
+    task = Task.async(fn -> perform_job(Job, job.args) end)
+    call = wait_call(ctx.h)
+
+    result = %{
+      "blocks" => [],
+      "sources" => [phone_source],
+      "connected_sources" => ["phone_provider"]
+    }
+
+    post = fn body ->
+      RisiMe.GroupHelpers.api(
+        :post,
+        "/api/v1/risi/tool_calls/#{call["data"]["tool_call_id"]}/result",
+        ctx.harsha.token,
+        body,
+        ctx.hd
+      )
+    end
+
+    {post, result, task}
+  end
+
+  @work_cal %{"name" => "Quokka", "account_type" => "com.google", "events" => 3}
+
+  test "sync_off with Risi Calendar in the check: not checked, the model sees counts only", ctx do
+    src = %{
+      "source" => "phone_provider",
+      "calendars" => [@work_cal],
+      "read_ok" => false,
+      "reason" => "sync_off"
+    }
+
+    {post, result, task} = phone_check!(ctx, src)
+
+    # `sync_off` is only for a phone_provider source that was not read.
+    bad = &put_in(result, ["sources", Access.at(0), &1], &2)
+    assert {422, _} = post.(%{"status" => "ok", "result" => bad.("read_ok", true)})
+
+    assert {422, _} =
+             post.(%{
+               "status" => "ok",
+               "result" =>
+                 bad.("source", "google_api")
+                 |> put_in(["sources", Access.at(0), "calendars"], [])
+             })
+
+    assert {422, _} = post.(%{"status" => "ok", "result" => Map.put(result, "extra", 1)})
+    assert {204, _} = post.(%{"status" => "ok", "result" => result})
+    assert :ok = Task.await(task)
+
+    {_, body, a} = answer_of(posts())
+    assert body =~ "Checked: Risi Calendar."
+    assert body =~ "Not checked: Phone calendar (sync is off)"
+
+    assert %{
+             "type" => "calendar_source",
+             "source" => "phone_provider",
+             "read_ok" => false,
+             "reason" => "sync_off",
+             "names" => ["Quokka"]
+           } in a["sources"]
+
+    # The model saw {source, read_ok, reason, calendars: <count>} and no name.
+    req = Jason.encode!(llm_requests())
+
+    assert req =~ ~s(\\"reason\\":\\"sync_off\\")
+    refute req =~ "Quokka"
+  end
+
+  test "empty real read: 0 events, a free claim stands", ctx do
+    src = %{
+      "source" => "phone_provider",
+      "calendars" => [%{@work_cal | "events" => 0}],
+      "read_ok" => true,
+      "reason" => nil
+    }
+
+    {post, result, task} = phone_check!(ctx, src)
+    assert {204, _} = post.(%{"status" => "ok", "result" => result})
+    assert :ok = Task.await(task)
+    {_, body, _} = answer_of(posts())
+    assert body =~ "You are free then."
+    assert body =~ "Checked: Risi Calendar · Phone calendar (Quokka)."
+  end
 end
