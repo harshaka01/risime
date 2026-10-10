@@ -4190,6 +4190,10 @@ nothing new.
   caller's user and at least one other active member have a `group_calls` device that can still
   receive, §12.1) and **`"missing_group_calls": [{"user_id", "device_id" | null}]`** (members'
   instances seen in 30 days without it; information only) (`mls_group_group_calls_ready.json`).
+  (v1.33) `group_calls_ready` is also **false while the server has no LiveKit configured**
+  (`LIVEKIT_URL` / keys unset: `POST /calls/rooms` would answer `503 calls_unavailable`), with
+  **`"group_calls_unavailable": "server"`**; the app's disabled buttons then say "Group calls aren't
+  available on this server yet" instead of failing at connect.
 - **UI:** the group header shows call and video-call buttons, disabled until `group_calls_ready`
   ("Nobody else in this group can join calls yet"); on a device without `group_calls`: "Update
   RisiMe on this phone to make calls". Group info lists who needs to update.
@@ -8913,7 +8917,8 @@ an ordinary §24.11 Risi post in the operator's **own active Risi chat** only (n
 
 ## Changelog
 - **v1.33** (2026-10-11): a call from a 1:1's Official tab is the §16/§19 peer-to-peer call on the
-  `dm:` (NEXT-PHASE D1; §16.0, §20.0, §24.5, §24.9); §20 and §27.7 apply to group Official calls only.
+  `dm:` (NEXT-PHASE D1; §16.0, §20.0, §24.5, §24.9); §20 and §27.7 apply to group Official calls only; `group_calls_ready` is false without LiveKit
+  (`group_calls_unavailable: "server"`, §20.1).
 - **v1.32** (2026-10-10): `calendar_check` phone source reason `sync_off` (§29.7); `answer.local_events` (the
   user's own events listed by the phone, titles never sent; §29.7); `calendar_add` target/insert/read-back/
   `verified` and its error codes, the write honesty rule, `added_event` (§25.3); `next_actions` chips (§25.4); an unconnected Google link is no longer named; Ops alerts
