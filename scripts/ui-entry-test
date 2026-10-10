@@ -1092,6 +1092,53 @@ ofx() { (cd server && set -a && . "$WORK/risi.env" && . "$WORK/phase.env" && set
 # on screen → older; the target not yet on screen → a little newer.
 # The "Risi · Invitation" card titled $1 (the header's next text): scroll to it (up first, then down, small
 # steps) and tap its [Accept] (the first Accept below that header). A chat can hold several invitations.
+# card_seen HEADER TITLE NEEDLE…: scroll to the card HEADER (e.g. "Risi · Meeting") whose title (next text) is
+# TITLE, then read only that card (down to the next "Risi · " header) in small steps, remembering what was seen.
+# Prints the needles found, one per line. A chat can hold several such cards; a card can be taller than the screen.
+card_seen() {
+  local hdr="$1" title="$2"; shift 2
+  local i out found="" started=""
+  for i in $(seq 1 30); do
+    dump
+    out="$(python3 -I - "$WORK/ui-$DEV.xml" "$hdr" "$title" "$started" "$@" <<'PY2'
+import re, sys, xml.etree.ElementTree as ET
+f, hdr, title, started, needles = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
+try:
+    nodes = [n for n in ET.parse(f).iter('node') if (n.get('text') or n.get('content-desc') or '') not in ('', 'ⓘ')]
+except ET.ParseError:
+    nodes = []
+txt = lambda n: n.get('text') or n.get('content-desc') or ''
+start = None
+for k, n in enumerate(nodes[:-1]):
+    if txt(n) == hdr and txt(nodes[k + 1]) == title:
+        start = k
+        break
+if start is None and not started:
+    print("MISSING"); sys.exit()
+seg, end = [], False
+for n in nodes[(start if start is not None else 0) + (1 if start is not None else 0):]:
+    if txt(n).startswith("Risi · "):
+        end = True; break
+    seg.append(txt(n))
+for nd in needles:
+    if any(nd in t for t in seg): print("SEEN " + nd)
+print("START" if start is not None else "CONT")
+print("END" if end else "MORE")
+PY2
+)"
+    if [ "$out" = MISSING ]; then
+      if [ "$i" -le 12 ]; then A shell input swipe $((W / 2)) $((H * 30 / 100)) $((W / 2)) $((H * 65 / 100)) 300
+      else A shell input swipe $((W / 2)) $((H * 65 / 100)) $((W / 2)) $((H * 30 / 100)) 300; fi
+      sleep 1; continue
+    fi
+    started=1
+    found="$found
+$(printf '%s\n' "$out" | sed -n 's/^SEEN //p')"
+    printf '%s\n' "$out" | grep -qx END && break
+    A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 45 / 100)) 1200; sleep 1
+  done
+  printf '%s\n' "$found" | sed '/^$/d' | sort -u
+}
 invite_accept() {
   local i xy
   for i in $(seq 1 24); do
@@ -2014,9 +2061,12 @@ PY
     # The Official chat's Meeting card: the mini timeline from A's own calendar, the replayed event clashing.
     official_tab B || fail "risi-calendar: A can't open Official (event card)"
     scroll_to "Risi · Meeting" || fail "risi-calendar: no 'Risi · Meeting' card in Official"
-    for _ in 1 2 3; do has 'Clashes with 1 event' && break; A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 45 / 100)) 300; sleep 1; done
-    has 'Your day' || fail "risi-calendar: the Official event card has no mini day timeline"
-    has 'Clashes with 1 event' || fail "risi-calendar: the Official event card doesn't show 'Clashes with 1 event' (A's own Interview at the same time)"
+    # (Official also holds step 15's note-meeting card: read the 'Interview' one only.)
+    seen="$(card_seen "Risi · Meeting" "Interview" "Your day" "Clashes with 1 event")"
+    grep -qx 'Your day' <<<"$seen" || fail "risi-calendar: the Official event card has no mini day timeline"
+    grep -qx 'Clashes with 1 event' <<<"$seen" || fail "risi-calendar: the Official event card doesn't show 'Clashes with 1 event' (A's own Interview at the same time)"
+    # Bring the timeline back into view for the screenshot.
+    for _ in 1 2 3 4; do has 'Your day' && break; A shell input swipe $((W / 2)) $((H * 45 / 100)) $((W / 2)) $((H * 60 / 100)) 1200; sleep 1; done
     shot "event-card-official"
     pass "risi-calendar: Official 'Risi · Meeting' card with the mini timeline and 'Clashes with 1 event'"
     DEV=B; back_to_list || true; tap "Calendar" || fail "risi-calendar: B has no Calendar tab"
