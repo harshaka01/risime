@@ -36,6 +36,32 @@ defmodule RisiMe.Agent.CalendarHonesty do
   def enforce(answer, checks, tz), do: elem(enforce_made(answer, checks, tz), 0)
 
   @doc """
+  `{answer, rule_made?, next_steps}`: as `enforce_made/3`, and `next_steps` is `["Retry"]` when
+  the answer was rewritten because a connected source (Google) could not be read (v1.31 §31.5),
+  else `nil` (the model's own).
+  """
+  def enforce_full(answer, checks, tz) when is_binary(answer) do
+    {out, rule?} = enforce_made(answer, checks, tz)
+    {out, rule?, if(unread_connected?(checks), do: retry_if_rewritten(answer, out), else: nil)}
+  end
+
+  def enforce_full(answer, _checks, _tz), do: {answer, false, nil}
+
+  # The free-claim rewrite of `unread_text/2` (the only answer built with this sentence).
+  defp retry_if_rewritten(_answer, out),
+    do: if(out =~ ~r/^Your .* free then, but I couldn't check /, do: ["Retry"])
+
+  defp unread_connected?(checks) do
+    case List.last(checks) do
+      %{status: "ok", result: %{"sources" => ss}} when is_list(ss) ->
+        Enum.any?(ss, &unread_connected_source?/1)
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
   `{answer, rule_made?}`: `rule_made?` when the model's text was discarded (the answer is then
   built by the server, `made_by` rule, v1.29 §29.3).
   """
@@ -89,7 +115,19 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
   @cant_check "I couldn't check your calendar, so I can't tell whether you're free."
 
-  # Sources in the §29.7 order: Risi Calendar, the phone, Google (`not_connected` until §31).
+  # v1.31 §31.5: a connected Google Calendar that was not read for one of these reasons.
+  @unread_reasons ~w(reauth_needed no_answer network timeout api_error)
+
+  defp unread_connected_source?(%{"source" => "google_api", "read_ok" => false, "reason" => r}),
+    do: r in @unread_reasons
+
+  defp unread_connected_source?(_), do: false
+
+  # A real link is in play (v1.31): the source carries the link's `count`.
+  defp linked?(sources), do: Enum.any?(sources, &(&1["source"] == "google_api" and &1["count"]))
+
+  # Sources in the §29.7 order, Risi Calendar · Google Calendar · Phone calendar as of v1.31
+  # (with no link in play: Risi Calendar · Phone calendar, and Google `not_connected`).
   defp v129_sources(%{"sources" => sources}) do
     sources =
       if Enum.any?(sources, &(&1["source"] == "google_api")),
@@ -105,7 +143,11 @@ defmodule RisiMe.Agent.CalendarHonesty do
               }
             ]
 
-    order = %{"risi_calendar" => 0, "phone_provider" => 1, "google_api" => 2}
+    order =
+      if linked?(sources),
+        do: %{"risi_calendar" => 0, "google_api" => 1, "phone_provider" => 2},
+        else: %{"risi_calendar" => 0, "phone_provider" => 1, "google_api" => 2}
+
     Enum.sort_by(sources, &Map.get(order, &1["source"], 3))
   end
 
@@ -124,21 +166,60 @@ defmodule RisiMe.Agent.CalendarHonesty do
         Enum.map_join(
           sources,
           "\n",
-          &"#{source_label(&1["source"])}: #{v129_reason(&1["reason"])}."
+          &"#{source_label(&1["source"])}: #{v129_reason(&1)}."
         )
 
       {@cant_check <> "\n" <> lines, true}
     else
       busy = busy_blocks(result)
-      rewrite? = claims_free?(answer) and busy != []
-      body = if rewrite?, do: busy_text(busy, tz), else: answer
-      {add_line(body, v129_line(read, missed)), rewrite?}
+      claims? = claims_free?(answer)
+      unread = Enum.filter(missed, &unread_connected_source?/1)
+      google_read? = Enum.any?(read, &(&1["source"] == "google_api"))
+
+      cond do
+        claims? and busy != [] ->
+          {add_line(busy_text(busy, tz, google_read?), v129_line(read, missed)), true}
+
+        # v1.31 §31.5: never "free" about a connected source that was not read.
+        claims? and unread != [] ->
+          {add_line(unread_text(read, unread), v129_line(read, missed)), true}
+
+        true ->
+          {add_line(answer, v129_line(read, missed)), false}
+      end
     end
   end
 
-  defp v129_reason("not_connected"), do: "not connected"
-  defp v129_reason(nil), do: reason_text("query_failed")
-  defp v129_reason(r), do: reason_text(r)
+  defp unread_text(read, [g | _]) do
+    names = Enum.map(read, &source_label(&1["source"]))
+
+    who =
+      case names do
+        ["Risi Calendar"] -> "Your Risi Calendar is"
+        ns -> "Your #{Enum.join(ns, " and ")} #{if length(ns) > 1, do: "are", else: "is"}"
+      end
+
+    "#{who} free then, but I couldn't check #{source_label(g["source"])} (#{v129_reason(g)})."
+  end
+
+  # A source's reason in words. Google uses the §31.5 table; the phone keeps its own words.
+  defp v129_reason(%{"source" => "google_api", "reason" => r}), do: google_reason(r)
+  defp v129_reason(%{"reason" => "not_connected"}), do: "not connected"
+  defp v129_reason(%{"reason" => nil}), do: reason_text("query_failed")
+  defp v129_reason(%{"reason" => "paused"}), do: google_reason("paused")
+  defp v129_reason(%{"reason" => r}), do: reason_text(r)
+
+  @doc "The words for a Google Calendar `reason` (§31.5 table)."
+  def google_reason("not_connected"), do: "not connected"
+  def google_reason("reauth_needed"), do: "needs reconnecting"
+  def google_reason("no_answer"), do: "phone didn't answer"
+  def google_reason("paused"), do: "Calendar skill is off"
+  def google_reason("network"), do: "no network on the phone"
+  def google_reason("timeout"), do: "Google didn't answer in time"
+  def google_reason("api_error"), do: "Google didn't answer"
+  def google_reason("no_calendars"), do: "no calendars picked"
+  def google_reason(nil), do: "Google didn't answer"
+  def google_reason(r), do: reason_text(r)
 
   @doc """
   "Checked: Risi Calendar · Phone calendar (Work). Not checked: Google Calendar (not
@@ -150,6 +231,11 @@ defmodule RisiMe.Agent.CalendarHonesty do
         case {s["source"], s["calendars"] || []} do
           {"risi_calendar", _} ->
             "Risi Calendar"
+
+          {"google_api", cals} ->
+            # The server never knows the names: a count ("2 calendars"), §31.5.
+            n = s["count"] || length(cals)
+            "Google Calendar (#{n} #{if n == 1, do: "calendar", else: "calendars"})"
 
           {src, cals} ->
             names = for c <- Enum.take(cals, @max_named), is_binary(c["name"]), do: c["name"]
@@ -163,6 +249,9 @@ defmodule RisiMe.Agent.CalendarHonesty do
         end
       end)
 
+    # v1.31 example: " · " between the unread sources once a Google link is in play.
+    sep = if linked?(read ++ missed), do: " · ", else: ", "
+
     not_checked =
       case missed do
         [] ->
@@ -172,8 +261,8 @@ defmodule RisiMe.Agent.CalendarHonesty do
           " Not checked: " <>
             Enum.map_join(
               ms,
-              ", ",
-              &"#{source_label(&1["source"])} (#{v129_reason(&1["reason"])})"
+              sep,
+              &"#{source_label(&1["source"])} (#{v129_reason(&1)})"
             ) <>
             "."
       end
@@ -311,13 +400,23 @@ defmodule RisiMe.Agent.CalendarHonesty do
     case List.last(checks) do
       %{status: "ok", result: %{"sources" => sources}} when is_list(sources) ->
         for s <- sources do
-          %{
+          base = %{
             "type" => "calendar_source",
             "source" => s["source"],
             "names" => for(c <- s["calendars"] || [], do: c["name"]),
             "read_ok" => s["read_ok"] == true,
             "reason" => s["reason"]
           }
+
+          # v1.31 §31.5: Google has no names (always []), its `count` and the `refs` read.
+          if s["source"] == "google_api",
+            do:
+              Map.merge(base, %{
+                "names" => [],
+                "count" => s["count"] || length(s["calendars"] || []),
+                "refs" => for(c <- s["calendars"] || [], do: c["ref"])
+              }),
+            else: base
         end
 
       _ ->
@@ -354,7 +453,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
   defp busy_blocks(_), do: []
 
-  defp busy_text(busy, tz) do
+  defp busy_text(busy, tz, plural? \\ false) do
     spans =
       busy
       |> Enum.take(3)
@@ -370,7 +469,8 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
     n = length(busy)
     what = if n == 1, do: "1 busy time", else: "#{n} busy times"
-    "You're not free then: your calendar has #{what} (#{Enum.join(spans, "; ")})."
+    have = if plural?, do: "your calendars have", else: "your calendar has"
+    "You're not free then: #{have} #{what} (#{Enum.join(spans, "; ")})."
   end
 
   defp add_line(answer, line) do

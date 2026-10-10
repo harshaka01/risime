@@ -95,6 +95,7 @@ defmodule RisiMe.Agent.CalendarTools do
             )
         })
 
+      check = with_phone_placeholder(check, phone, google, ctx)
       refs = Map.merge((phone && phone.refs) || %{}, (google && google.refs) || %{})
       {:ok, model, %{refs: refs, calendar_check: check}}
     end
@@ -140,6 +141,32 @@ defmodule RisiMe.Agent.CalendarTools do
     }
 
   ## The Google read (v1.31 §31.4)
+
+  # With a Google link in play, the phone source is named too, even when it wasn't consulted
+  # (`not_connected`, or `paused` while the Calendar skill is off): the §31.5 line and
+  # `answer.sources` list the three sources.
+  defp with_phone_placeholder(check, nil, %{} = _google, ctx) do
+    reason =
+      if RisiMe.Agent.Skills.state(ctx.asker, "calendar") == "off",
+        do: "paused",
+        else: "not_connected"
+
+    Map.update!(
+      check,
+      "sources",
+      &(&1 ++
+          [
+            %{
+              "source" => "phone_provider",
+              "read_ok" => false,
+              "reason" => reason,
+              "calendars" => []
+            }
+          ])
+    )
+  end
+
+  defp with_phone_placeholder(check, _phone, _google, _ctx), do: check
 
   # `{phone, google}`: the phone read (nil: not consulted) and the Google read (nil: the link is
   # not in play: the switch is off, or the user has none).
