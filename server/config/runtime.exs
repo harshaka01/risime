@@ -180,6 +180,11 @@ if v = System.get_env("RISI_EVENTS"), do: config(:risime, :risi_events, on?.(v))
 # v1.29 §30.1: RISI_NOTES=on turns on Risi Notes (`/auth/config` `risi_notes`, default off; only
 # with RISI_LEDGER on; off: every `/risi/notes…` call answers 503 and §27.3/§27.4 stay as they are).
 if v = System.get_env("RISI_NOTES"), do: config(:risime, :risi_notes, on?.(v))
+
+# v1.31 §31.1: RISI_GCAL=on turns on the Google Calendar link (`/auth/config` `google_calendar`,
+# default off; only with RISI_EVENTS on; off: `/risi/calendar/google` answers 503 and answers read
+# as v1.30). The server never calls Google.
+if v = System.get_env("RISI_GCAL"), do: config(:risime, :risi_gcal, on?.(v))
 if v = System.get_env("RISI_TRANSCRIBE"), do: config(:risime, :risi_transcribe, on?.(v))
 
 # §27.2 quiet-rule thresholds (defaults 600 s, 6 messages, 2 people, 30 min, < 8 a day), so

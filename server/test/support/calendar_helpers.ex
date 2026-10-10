@@ -26,6 +26,21 @@ defmodule RisiMe.CalendarHelpers do
   @doc "A `risi_events` device (with risi_tools, risi_skills, risi_ledger). Returns its id."
   def calendar_device!(user), do: RisiMe.TabsHelpers.tabs_device!(user, caps: @caps)
 
+  @doc "v1.31: `RISI_GCAL=on` for the test (also needs `events_on!/0`)."
+  def gcal_on! do
+    restore_on_exit([:risi_gcal])
+    Application.put_env(:risime, :risi_gcal, true)
+    :ok
+  end
+
+  @doc "v1.31: a `risi_events` device that also advertises `google_calendar`. Returns its id."
+  def gcal_device!(user, opts \\ []),
+    do:
+      RisiMe.TabsHelpers.tabs_device!(
+        user,
+        Keyword.put(opts, :caps, @caps ++ ["risi_notes", "google_calendar"])
+      )
+
   @doc "The world: Harsha and Shenika, calendar users, an Official chat, their Risi chats."
   def calendar_world! do
     restore_on_exit([:risi_now, :risi_ledger])

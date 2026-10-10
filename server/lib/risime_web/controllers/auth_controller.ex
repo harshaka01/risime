@@ -38,6 +38,8 @@ defmodule RisiMeWeb.AuthController do
     body = if RisiMe.Risi.events_on?(), do: Map.put(body, :risi_events, "on"), else: body
     # v1.29 §30.1: `risi_notes: "on"` while RISI_NOTES=on (only with the ledger; absent = off).
     body = if RisiMe.Risi.notes_on?(), do: Map.put(body, :risi_notes, "on"), else: body
+    # v1.31 §31.1: `google_calendar: "on"` while RISI_GCAL=on and RISI_EVENTS=on (absent = off).
+    body = if RisiMe.Risi.gcal_on?(), do: Map.put(body, :google_calendar, "on"), else: body
 
     json(conn, body)
   end

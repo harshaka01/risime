@@ -40,6 +40,9 @@ defmodule RisiMe.Risi do
   @doc "v1.29 §29.1: true while `RISI_EVENTS=on` (`/auth/config` `risi_events`, default off)."
   def events_on?, do: Application.get_env(:risime, :risi_events, false) == true
 
+  @doc "v1.31 §31.1: true while `RISI_GCAL=on` and Risi Calendar is on (`/auth/config` `google_calendar`)."
+  def gcal_on?, do: Application.get_env(:risime, :risi_gcal, false) == true and events_on?()
+
   @doc "v1.29 §30.1: true while `RISI_NOTES=on` and the ledger is on (`/auth/config` `risi_notes`)."
   def notes_on?, do: Application.get_env(:risime, :risi_notes, false) == true and ledger_on?()
 
