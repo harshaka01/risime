@@ -2801,6 +2801,14 @@ ui_batch_calendar_prep() {
   local d1 d2 d3 d6
   d1="$(date -u -d '+1 day' +%F)"; d2="$(date -u -d '+2 days' +%F)"; d3="$(date -u -d '+3 days' +%F)"; d6="$(date -u -d '+6 days' +%F)"
   seed --es op clear
+  # Start from a phone with only this section's calendar (nightly.48 attempt l): the --calendar step's calendars (a
+  # com.google one that reads as sync off on redroid, "Holidays", "Phone") belong to that step. Deleting a calendar
+  # deletes its events. A full run then matches UITEST_UIBATCH_ONLY.
+  local acct
+  for acct in "uitest.risime@gmail.com:com.google" "Phone:LOCAL"; do
+    A shell "content delete --uri 'content://com.android.calendar/calendars?caller_is_syncadapter=true&account_name=${acct%%:*}&account_type=${acct#*:}' --where \"account_name='${acct%%:*}' AND account_type='${acct#*:}'\"" >/dev/null 2>&1 || true
+  done
+  CAL_READY=0
   seed --es op calendar --es name "'RisiMe Seed'"
   seed --es op event --es title "UIBSingle" --es start "${d1}T09:00:00+00:00" --es end "${d1}T10:00:00+00:00" --es tz UTC
   seed --es op event --es title "UIBWeekly" --es start "${d2}T11:00:00+00:00" --es end "${d2}T11:30:00+00:00" --es tz UTC --es rrule "'FREQ=WEEKLY;COUNT=4'"
@@ -2854,12 +2862,18 @@ ui_batch_calendar() {
   done
   [ "$found" = 1 ] || { grep -o 'text="[^"]*event[^"]*"' "$WORK/ui-A.xml" | head -5; fail "ui-batch calendar: Details lacks 'RisiMe Seed · Phone only · 4 events in the next 7 days'"; }
   shot "51-uibatch-calendar-details"
-  found=0
-  for _ in 1 2 3 4 5 6 7 8; do
-    has 'text="Calendar diagnostics"' && has 'Events (raw): 4 · Instances next 7 days: 4 · Counted: 4' && has 'Account type: LOCAL' && found=1
-    [ "$found" = 1 ] && break
+  # The section is long in the full run (the --calendar step's calendars and the "Risi adds" list too; nightly.48
+  # attempt l): find its header first, then collect each line while scrolling down (they needn't share a screen).
+  scroll_to "Calendar diagnostics" || true
+  local d_hdr=0 d_cnt=0 d_loc=0
+  for _ in $(seq 1 16); do
+    has 'text="Calendar diagnostics"' && d_hdr=1
+    has 'Events (raw): 4 · Instances next 7 days: 4 · Counted: 4' && d_cnt=1
+    has 'Account type: LOCAL' && d_loc=1
+    [ "$d_hdr$d_cnt$d_loc" = 111 ] && break
     A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1
   done
+  [ "$d_hdr$d_cnt$d_loc" = 111 ] && found=1 || found=0
   [ "$found" = 1 ] || fail "ui-batch calendar: no 'Calendar diagnostics' with 'Events (raw): 4 · Instances next 7 days: 4 · Counted: 4' and 'Account type: LOCAL'"
   for _ in 1 2 3 4; do has 'text="Copy diagnostics"' && break; A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1; done
   has 'text="Copy diagnostics"' || fail "ui-batch calendar: no 'Copy diagnostics' button"
