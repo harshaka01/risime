@@ -333,6 +333,9 @@ defmodule RisiMe.ContractExamplesTest do
   @checked_v1_32 ~w(risi_tool_result_calendar_check_sync_off.json envelope_risi_ops_alert.json
                      risi_tool_result_calendar_add_v132.json risi_tool_result_calendar_add_error_v132.json)
 
+  # v1.33 (§20.1 group_calls_ready without LiveKit): checked in the "v1.19" describe below.
+  @checked_v1_33 ~w(mls_group_group_calls_unavailable.json)
+
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/
@@ -396,7 +399,8 @@ defmodule RisiMe.ContractExamplesTest do
         @checked_v1_29 ++
         @checked_v1_30 ++
         @checked_v1_31 ++
-        @checked_v1_32
+        @checked_v1_32 ++
+        @checked_v1_33
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -3104,6 +3108,19 @@ defmodule RisiMe.ContractExamplesTest do
       assert view["group_calls_ready"] == true
       assert view["missing_group_calls"] == [%{"user_id" => b.user.id, "device_id" => tablet}]
       assert_same_shape(hd(view["missing_group_calls"]), hd(ex["missing_group_calls"]))
+      refute Map.has_key?(view, "group_calls_unavailable")
+
+      # v1.33 §20.1: without LiveKit the same group isn't ready and says why.
+      cfg = Application.get_env(:risime, :livekit)
+      Application.put_env(:risime, :livekit, Keyword.put(cfg, :url, nil))
+      {200, view} = G.api(:get, "/api/v1/mls/groups/#{id}", a.token)
+      Application.put_env(:risime, :livekit, cfg)
+      ex = example("mls_group_group_calls_unavailable.json")
+      view = Map.drop(view, ~w(deletes_ready missing_deletes))
+      assert keys(view) == keys(ex)
+      assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
+      assert view["group_calls_ready"] == false
+      assert view["group_calls_unavailable"] == "server"
     end
   end
 

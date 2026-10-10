@@ -44,18 +44,27 @@ defmodule RisiMe.MLS.Images do
   # v1.19 §20.1: `group_calls_ready` when the caller's user and at least one other active member
   # have a `group_calls` device that can still receive (superseded devices never count);
   # `missing_group_calls` lists the members' instances without it (information only).
+  # v1.33: also false while the server has no LiveKit configured.
   defp put_group_calls(view, "grp:" <> _, members, caller) do
     ready = ready_users(members, "group_calls", skip_superseded: true)
+    livekit? = RisiMe.Calls.LiveKit.configured?()
 
-    Map.merge(view, %{
+    view
+    |> Map.merge(%{
       group_calls_ready:
-        caller != nil and MapSet.member?(ready, caller) and
+        livekit? and caller != nil and MapSet.member?(ready, caller) and
           Enum.any?(members, &(&1 != caller and MapSet.member?(ready, &1))),
       missing_group_calls: missing(members, "group_calls")
     })
+    |> put_unavailable(livekit?)
   end
 
   defp put_group_calls(view, _conv, _members, _caller), do: view
+
+  # v1.33 §20.1: without LiveKit (`POST /calls/rooms` would answer 503 calls_unavailable)
+  # `group_calls_ready` is false and the view says why.
+  defp put_unavailable(view, true), do: view
+  defp put_unavailable(view, false), do: Map.put(view, :group_calls_unavailable, "server")
 
   # v1.13 §16.1 (DMs only): `calls_ready` when the DM is e2ee and each of the two users has at
   # least one instance seen in the last 30 days that advertises `calls` (a device without it
