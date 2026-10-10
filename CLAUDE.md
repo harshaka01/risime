@@ -77,6 +77,13 @@ Google ships the Android build tools for linux-x86_64 only.
    rate-limited (default 10 MB/s, e.g. `curl --limit-rate 10M` or `trickle`), and is
    logged in `docs/status/downloads.md`: what, size, source, when, approved by, result.
 
+11. **Test-harness problems never hold a release (Harsha 2026-10-10).** A test-HARNESS problem (the script's
+   scrolling, timing or tapping, not a product bug) gets at most **2 attempts or 90 minutes**. After that, mark that
+   step non-blocking, file it in `docs/status/flaky-tests.md`, and release. **Product-safety gates are never skipped:**
+   the upgrade gate (no data loss, decision 055), crash/logcat, crypto, and server/android unit tests.
+   **Cadence:** release whatever is green at least every 6 hours, with unfinished features behind flags. Never hold a
+   finished fix for a test script.
+
 ## Stack
 **Server**
 - Elixir/Phoenix: app `:risime`, module `RisiMe`, in folder `server/`.

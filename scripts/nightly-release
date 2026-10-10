@@ -115,8 +115,15 @@ elif scripts/android-target check >/dev/null 2>&1; then
   echo "==> ui-entry-test (user-style entry points, redroid)"
   UITEST_INSTANCE=_rel UITEST_PORT=4552 UITEST_LLM_PORT=8396 UITEST_REDROID_A=-relui1 UITEST_REDROID_A_PORT=5861 \
     UITEST_REDROID_B=-relui2 UITEST_REDROID_B_PORT=5862 \
-    STEP_T="${UIENTRY_STEP_TIMEOUT:-5400}" step scripts/ui-entry-test --skills --ledger --calendar --offers --risi-calendar --risi-notes --ui-batch \
+    STEP_T="${UIENTRY_STEP_TIMEOUT:-5400}" step scripts/ui-entry-test --skills --ledger --calendar --offers --risi-calendar --risi-notes \
       --apk android/app/build/outputs/apk/debug/app-debug.apk
+  # The UI-batch end-to-end script (--ui-batch: font scale 1.0/1.3, chips, calendar add/read on redroid) is NON-BLOCKING
+  # (Harsha 2026-10-10, CLAUDE.md rule 11): run once on its own redroids, each step's PASS/FAIL goes into the release notes.
+  UIB_LOG="$HOME/risime-logs/release/uibatch-v$next.log"
+  if UITEST_UIBATCH_ONLY=1 UITEST_INSTANCE=_relb UITEST_PORT=4554 UITEST_LLM_PORT=8395 UITEST_REDROID_A=-relb1 UITEST_REDROID_A_PORT=5867 \
+      UITEST_REDROID_B=-relb2 UITEST_REDROID_B_PORT=5868 timeout -k 60 3000 scripts/ui-entry-test --skills --ui-batch \
+      --apk android/app/build/outputs/apk/debug/app-debug.apk > "$UIB_LOG" 2>&1; then UIB_RES="PASS"; else UIB_RES="FAIL (non-blocking)"; fi
+  echo "==> ui-batch (non-blocking): $UIB_RES; $(grep -c 'UIENTRY PASS' "$UIB_LOG") steps passed; log $UIB_LOG"
   # Google Calendar link gate (contract v1.31 §31.12, decision 074): OFF by default, so a release isn't blocked before
   # the server and android parts of v1.31 have landed. Root switches it on with UIENTRY_GOOGLE=1 (e.g. in the unit
   # environment of the nightly), after which `ui-entry-test --google` (fake-llm + scripts/fake-gcal, A's two devices on
@@ -261,6 +268,10 @@ if [ ! -f "$notes" ]; then
     echo; echo "## Changes since ${last:-the start}"; git log --no-merges --format='- %s' ${last:+$last..}HEAD; } > "$notes"
 fi
 [ -n "${OVERRIDE_NOTE:-}" ] && { echo; echo "## Release gate"; echo "- $OVERRIDE_NOTE"; } >> "$notes"
+if [ -n "${UIB_LOG:-}" ] && [ -f "$UIB_LOG" ]; then
+  { echo; echo "## UI batch end-to-end (non-blocking, CLAUDE.md rule 11): ${UIB_RES:-not run}"
+    grep -E '^UIENTRY (PASS|FAIL)' "$UIB_LOG" | sed -E 's/^UIENTRY (PASS|FAIL) /- \1: /'; } >> "$notes"
+fi
 git add VERSION "$notes"
 git commit -q -m "chore(root): release v$next
 

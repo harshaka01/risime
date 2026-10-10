@@ -744,16 +744,10 @@ A shell locksettings set-pin "$PIN" >/dev/null || fail "locksettings set-pin"
 wait_for 'text="Encrypted message"' 10 || fail "not back in the chat"
 tap "More options" || fail "the chat's ⋮"
 wait_for 'text="Delete chat"' 10 || fail "the chat's ⋮ didn't open (no 'Delete chat')"
-if [ "$UIBATCH" = 1 ]; then  # v1.32: the lock moved from the header into the ⋮ (UI batch item 4)
-  has 'text="Lock chat"' || fail "the chat's ⋮ has no 'Lock chat' (v1.32)"
-  shot "04-chat-menu-lock"
-  pass "the chat's ⋮ has 'Lock chat' (v1.32)"
-else
-  has 'text="Lock chat"' && fail "the chat's ⋮ still has 'Lock chat' (only Chat info and the long-press may)"
-  has 'text="Unlock chat"' && fail "the chat's ⋮ has 'Unlock chat'"
-  shot "04-chat-menu-no-lock"
-  pass "the chat's ⋮ does NOT have 'Lock chat'"
-fi
+# v1.32 (UI batch item 4, shipped from nightly.48): the lock moved from the header into the ⋮, with or without --ui-batch.
+has 'text="Lock chat"' || fail "the chat's ⋮ has no 'Lock chat' (v1.32)"
+shot "04-chat-menu-lock"
+pass "the chat's ⋮ has 'Lock chat' (v1.32)"
 A shell input keyevent KEYCODE_BACK; sleep 1
 tap "ZZ UI B" || fail "tap the chat's name (chat info) to lock"
 wait_for 'text="Chat info"' 15 || fail "the name didn't open Chat info"
