@@ -84,7 +84,7 @@ defmodule RisiMe.Agent.GoogleLink do
   end
 
   # The name the device registered with (§1.2): its login token's `device_name`.
-  defp device_name(device_id) do
+  def device_name(device_id) do
     Repo.one(
       from d in Devices.Device,
         join: t in RisiMe.Accounts.UserToken,
@@ -225,13 +225,6 @@ defmodule RisiMe.Agent.GoogleLink do
 
     length(rows)
   end
-
-  @doc "Marks the reconnect card as posted (at most one per 24 h)."
-  def mark_card(%__MODULE__{} = l, at),
-    do:
-      Repo.update_all(from(x in __MODULE__, where: x.user_id == ^l.user_id),
-        set: [reconnect_card_at: at]
-      )
 
   # §31.3 stored event: `{"state", "device_id", "reason", "remove_copies", "server_ts"}`.
   defp publish(user_id, link, device_id, reason, remove_copies?, now \\ DateTime.utc_now()) do
