@@ -318,7 +318,15 @@ defmodule RisiMe.ContractExamplesTest do
                     risi_notes_reply.json)
 
   # v1.31 (Google Calendar link, §31): checked in test/contract/examples_v131_test.exs.
-  @checked_v1_31 RisiMe.Contract.ExamplesV131Test.files()
+  @checked_v1_31 ~w(auth_config_v131.json device_put_google_calendar.json
+                    envelope_risi_answer_calendar_google_no_answer.json
+                    envelope_risi_answer_calendar_sources_google.json
+                    envelope_risi_google_reconnect.json error_not_google_device.json
+                    event_google_calendar_link.json
+                    event_risi_tool_call_calendar_check_google.json risi_google_link_put.json
+                    risi_google_link_reply.json risi_skills_reply_v131.json
+                    risi_tool_result_calendar_check_google.json
+                    risi_tool_result_calendar_check_google_reauth.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/

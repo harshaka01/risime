@@ -70,8 +70,11 @@ defmodule RisiMe.Agent.ClientTools do
          true <- DateTime.compare(to, from) == :gt || {:error, "failed", "end_before_start"} do
       to = Enum.min([to, DateTime.add(from, @max_range_s, :second)], DateTime)
       args = %{"from" => Clock.ts(from), "to" => Clock.ts(to)}
+      # v1.31 §31.4: the routed Google read (`risi_calendar_check`) asks for named sources.
+      call_args =
+        if s = ctx[:check_sources], do: Map.put(args, "sources", s), else: args
 
-      case call(ctx, "calendar_check", args) do
+      case call(ctx, "calendar_check", call_args) do
         {:ok, "ok", %{"blocks" => blocks} = r} ->
           refs =
             blocks
@@ -644,6 +647,7 @@ defmodule RisiMe.Agent.ClientTools do
       %{
         user: ctx.asker,
         device: ctx.device_id,
+        to_device: ctx[:check_to],
         tool: tool,
         args: args,
         turn_id: ctx.turn_id,

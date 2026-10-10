@@ -66,7 +66,7 @@ defmodule RisiMe.Agent.CalendarTools do
       to = Enum.min([to, DateTime.add(from, @max_range_s, :second)], DateTime)
       window = %{"from" => Clock.ts(from), "to" => Clock.ts(to)}
       {risi_source, risi_blocks} = risi_read(ctx.asker, from, to)
-      phone = phone_read(window, ctx)
+      {phone, google} = reads(window, ctx)
 
       model =
         Map.merge(window, %{
@@ -76,16 +76,26 @@ defmodule RisiMe.Agent.CalendarTools do
           "phone" => phone && phone.model
         })
 
+      # v1.31 §31.4: the model sees Google as {source, read_ok, reason, calendars: <count>,
+      # blocks} only: no refs of calendars, no names.
+      model = if google, do: Map.put(model, "google", google.model), else: model
+
       busy = for b <- risi_blocks, do: Map.drop(b, ["title", "ref"]) |> Map.put("busy", true)
 
       check =
         Map.merge(window, %{
-          "blocks" => busy ++ ((phone && phone.blocks) || []),
-          "sources" => [risi_source | (phone && phone.sources) || []],
-          "connected_sources" => Enum.uniq(["risi_calendar" | (phone && phone.connected) || []])
+          "blocks" =>
+            busy ++ ((phone && phone.blocks) || []) ++ ((google && google.blocks) || []),
+          "sources" =>
+            [risi_source | (phone && phone.sources) || []] ++ ((google && [google.source]) || []),
+          "connected_sources" =>
+            Enum.uniq(
+              ["risi_calendar" | (phone && phone.connected) || []] ++
+                ((google && google.connected) || [])
+            )
         })
 
-      refs = (phone && phone.refs) || %{}
+      refs = Map.merge((phone && phone.refs) || %{}, (google && google.refs) || %{})
       {:ok, model, %{refs: refs, calendar_check: check}}
     end
   end
@@ -128,6 +138,175 @@ defmodule RisiMe.Agent.CalendarTools do
           else: []
         )
     }
+
+  ## The Google read (v1.31 §31.4)
+
+  # `{phone, google}`: the phone read (nil: not consulted) and the Google read (nil: the link is
+  # not in play: the switch is off, or the user has none).
+  defp reads(window, ctx) do
+    tool = ClientTools.calendar_check()
+    phone? = phone_ok?(tool, ctx)
+
+    case google_plan(ctx.asker) do
+      nil ->
+        {phone_read(window, ctx), nil}
+
+      {:skip, reason, link} ->
+        {phone_read(window, ctx), google_result(link, reason, [], [], %{})}
+
+      {:call, link} when phone? and link.device_id == ctx.device_id ->
+        combined_read(window, ctx, link)
+
+      {:call, link} ->
+        gtask = Task.async(fn -> google_read(window, ctx, link) end)
+        phone = phone_read(window, ctx)
+        google = Task.await(gtask, :infinity)
+        {phone, renumber(google, phone)}
+    end
+  end
+
+  # The link is in play only for a `connected` link and a Calendar skill that is not `off`.
+  defp google_plan(user) do
+    with true <- RisiMe.Agent.GoogleLink.on?(),
+         %{} = link <- RisiMe.Agent.GoogleLink.get(user) do
+      cond do
+        RisiMe.Agent.Skills.state(user, "calendar") == "off" -> {:skip, "paused", link}
+        link.state != "connected" -> {:skip, "reauth_needed", link}
+        true -> {:call, link}
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  # The Google device is also the asking device: ONE call for both sources.
+  defp combined_read(window, ctx, link) do
+    tool = ClientTools.calendar_check()
+    gctx = Map.put(ctx, :check_sources, ["phone_provider", "google_api"])
+
+    case tool.run.(window, gctx) do
+      {:ok, result, meta} ->
+        check = meta[:calendar_check] || %{}
+        {gsrc, others} = Enum.split_with(check["sources"] || [], &(&1["source"] == "google_api"))
+        gsrc = List.first(gsrc) || %{}
+
+        phone = %{
+          model: Map.update(result, "sources", nil, &drop_google/1),
+          blocks: check["blocks"] || [],
+          sources: others,
+          connected: Enum.reject(check["connected_sources"] || [], &(&1 == "google_api")),
+          refs: meta[:refs] || %{}
+        }
+
+        # The blocks of the two sources arrive merged: they stay in the phone's list.
+        google =
+          google_result(
+            link,
+            gsrc["reason"],
+            gsrc["calendars"] || [],
+            [],
+            %{},
+            gsrc["read_ok"] == true
+          )
+
+        {phone, google}
+
+      other ->
+        {phone_failed(other), google_result(link, google_failure(other), [], [], %{})}
+    end
+  end
+
+  defp drop_google(sources) when is_list(sources),
+    do: Enum.reject(sources, &(&1["source"] == "google_api"))
+
+  defp drop_google(other), do: other
+
+  # A separate call to the Google device.
+  defp google_read(window, ctx, link) do
+    tool = ClientTools.calendar_check()
+
+    gctx =
+      ctx |> Map.put(:check_sources, ["google_api"]) |> Map.put(:check_to, link.device_id)
+
+    case tool.run.(window, gctx) do
+      {:ok, _result, meta} ->
+        check = meta[:calendar_check] || %{}
+        gsrc = Enum.find(check["sources"] || [], %{}, &(&1["source"] == "google_api"))
+        read? = gsrc["read_ok"] == true
+
+        google_result(
+          link,
+          gsrc["reason"],
+          gsrc["calendars"] || [],
+          check["blocks"] || [],
+          meta[:refs] || %{},
+          read?
+        )
+
+      other ->
+        google_result(link, google_failure(other), [], [], %{})
+    end
+  end
+
+  # An unanswered call is `no_answer` ("phone didn't answer"); the turn goes on.
+  defp google_failure({:error, "timeout"}), do: "no_answer"
+  defp google_failure(_), do: "api_error"
+
+  defp phone_failed({:error, status, reason}), do: failed(status, reason)
+  defp phone_failed({:error, status}), do: failed(status, nil)
+  defp phone_failed(_), do: failed("failed", nil)
+
+  # The Google blocks take `c<n>` refs after the phone's.
+  defp renumber(google, phone) do
+    offset = map_size((phone && phone.refs) || %{})
+
+    {blocks, refs} =
+      google.blocks
+      |> Enum.with_index(offset + 1)
+      |> Enum.map(fn {b, i} -> {b, "c#{i}"} end)
+      |> Enum.reduce({[], %{}}, fn {b, ref}, {bs, rs} ->
+        {[Map.put(b, "ref", ref) | bs], Map.put(rs, ref, Map.put(b, "type", "calendar"))}
+      end)
+
+    shown = Enum.reverse(blocks)
+
+    put_in(
+      %{google | refs: refs},
+      [:model, "blocks"],
+      Enum.map(shown, &Map.take(&1, ~w(start end all_day ref)))
+    )
+  end
+
+  # The Google source as the check keeps it (refs and a count, never names) and as the model sees
+  # it (§31.4).
+  defp google_result(link, reason, calendars, blocks, refs, read? \\ false) do
+    reason = if read?, do: nil, else: reason || "api_error"
+    cals = if read?, do: calendars, else: []
+
+    %{
+      source: %{
+        "source" => "google_api",
+        "read_ok" => read?,
+        "reason" => reason,
+        "calendars" => cals,
+        "count" => link.read_calendars
+      },
+      model: %{
+        "source" => "google_api",
+        "read_ok" => read?,
+        "reason" => reason,
+        "calendars" => length(cals),
+        "blocks" =>
+          for(
+            {b, i} <- Enum.with_index(blocks, 1),
+            do: Map.take(b, ~w(start end all_day)) |> Map.put("ref", "c#{i}")
+          )
+      },
+      blocks: blocks,
+      refs: refs,
+      connected: ["google_api"]
+    }
+  end
 
   # The phone `calendar_check` for the same window, when the asker's Calendar skill and phone
   # allow it (nil: not consulted).

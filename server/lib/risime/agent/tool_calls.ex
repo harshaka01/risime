@@ -36,6 +36,9 @@ defmodule RisiMe.Agent.ToolCalls do
     field :undo_entry_id, :binary_id
     field :turn_id, :binary_id
     field :event_id, :string
+    # v1.31 §31.4: the `args.sources` a `calendar_check` asked for (nil: everything the phone
+    # reads); the result's `sources` must be exactly these. No other args are kept.
+    field :sources, {:array, :string}
     field :state, :string, default: "waiting"
     field :expires_at, :utc_datetime_usec
     field :inserted_at, :utc_datetime_usec
@@ -65,7 +68,8 @@ defmodule RisiMe.Agent.ToolCalls do
   @doc """
   Sends a tool call and waits for its result (at most `wait_ms`, never past the 15-s deadline).
   `spec`: `user`, `device`, `tool`, `args`, and optionally `turn_id`, `request_id`, `conv`,
-  `write_id`. Returns `{:ok, status, result}` or `{:error, :timeout}`.
+  `write_id`, and (v1.31 §31.4) `to_device`: the device that must answer when it is not the
+  asking `device`. Returns `{:ok, status, result}` or `{:error, :timeout}`.
   """
   def call(spec, wait_ms \\ nil) do
     wait = min(wait_ms || deadline_ms(), deadline_ms())
@@ -94,6 +98,7 @@ defmodule RisiMe.Agent.ToolCalls do
   """
   def start(spec) do
     id = Map.get(spec, :tool_call_id) || Ecto.UUID.generate()
+    to_device = Map.get(spec, :to_device) || spec.device
     now = DateTime.utc_now()
     expires = DateTime.add(now, deadline_ms(), :millisecond)
     event_id = TimeUUID.generate()
@@ -102,12 +107,14 @@ defmodule RisiMe.Agent.ToolCalls do
       Repo.insert!(%__MODULE__{
         tool_call_id: id,
         user_id: spec.user,
-        device_id: spec.device,
+        # The device that may post the result (`to_devices`); `data.device_id` stays the asker.
+        device_id: to_device,
         tool: spec.tool,
         write_id: Map.get(spec, :write_id),
         undo_entry_id: Map.get(spec, :undo_entry_id),
         turn_id: Map.get(spec, :turn_id),
         event_id: event_id,
+        sources: sources_of(spec),
         state: "waiting",
         expires_at: expires,
         inserted_at: now
@@ -122,7 +129,7 @@ defmodule RisiMe.Agent.ToolCalls do
       "tool" => spec.tool,
       "args" => spec.args,
       "expires_at" => Messaging.iso(expires),
-      "to_devices" => [spec.device],
+      "to_devices" => [to_device],
       "server_ts" => Messaging.iso(now)
     }
 
@@ -133,9 +140,12 @@ defmodule RisiMe.Agent.ToolCalls do
         else: data
 
     event = %{event_id: event_id, kind: "risi_tool_call", data: data}
-    :ok = Messaging.publish_device(spec.user, spec.device, event, @ttl_s)
+    :ok = Messaging.publish_device(spec.user, to_device, event, @ttl_s)
     {:ok, row}
   end
+
+  defp sources_of(%{tool: "calendar_check", args: %{"sources" => s}}) when is_list(s), do: s
+  defp sources_of(_), do: nil
 
   # The waiter left: the call is over (a late result gets 409) and its args are gone.
   defp give_up(%__MODULE__{} = call) do
@@ -177,6 +187,7 @@ defmodule RisiMe.Agent.ToolCalls do
          true <- (c.user_id == user and c.device_id == device) || {:error, :not_found},
          :ok <- open?(c),
          {:ok, status, result} <- parse(c.tool, params),
+         :ok <- sources_match(c, status, result),
          :ok <- confirmed?(c, status),
          {1, _} <-
            Repo.update_all(
@@ -249,6 +260,18 @@ defmodule RisiMe.Agent.ToolCalls do
   defp valid_error?(%{"code" => code} = r) when map_size(r) == 1, do: code in @error_codes
   defp valid_error?(_), do: false
 
+  # v1.31 §31.4: with `args.sources`, the result's `sources` are exactly the sources asked for.
+  defp sources_match(%{sources: asked}, "ok", %{"sources" => got}) when is_list(asked) do
+    if Enum.sort(Enum.map(got, & &1["source"])) == Enum.sort(asked),
+      do: :ok,
+      else: {:error, :bad_request}
+  end
+
+  defp sources_match(%{sources: asked}, "ok", _result) when is_list(asked),
+    do: {:error, :bad_request}
+
+  defp sources_match(_call, _status, _result), do: :ok
+
   @ts ~r/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?(Z|[+-]\d\d:\d\d)$/
 
   defp ts?(v), do: is_binary(v) and v =~ @ts
@@ -302,6 +325,16 @@ defmodule RisiMe.Agent.ToolCalls do
 
   defp valid_ok?(_tool, _result), do: false
 
+  # v1.31 §31.4: a `google_api` entry carries local refs and counts only (no `name`, no
+  # `account_type`): at most 10 entries, none when the read failed.
+  defp valid_source?(
+         %{"source" => "google_api", "calendars" => cals, "read_ok" => ok, "reason" => why} = s
+       )
+       when map_size(s) == 4 do
+    is_boolean(ok) and why in @source_reasons and is_list(cals) and length(cals) <= 10 and
+      (ok or cals == []) and Enum.all?(cals, &valid_google_calendar?/1)
+  end
+
   defp valid_source?(
          %{"source" => src, "calendars" => cals, "read_ok" => ok, "reason" => why} = s
        )
@@ -311,6 +344,11 @@ defmodule RisiMe.Agent.ToolCalls do
   end
 
   defp valid_source?(_), do: false
+
+  defp valid_google_calendar?(%{"ref" => ref, "events" => e} = c) when map_size(c) == 2,
+    do: is_binary(ref) and ref =~ ~r/^[a-z0-9]{1,16}$/ and is_integer(e) and e >= 0
+
+  defp valid_google_calendar?(_), do: false
 
   # Names and account types only: never a title, attendee or event id.
   defp valid_source_calendar?(%{"name" => n, "account_type" => t, "events" => e} = c)
