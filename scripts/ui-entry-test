@@ -112,6 +112,7 @@
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
 set -euo pipefail
 # A set -e exit outside fail() (no "UIENTRY FAIL" line) still names its line (nightly.48 n48f ended silently).
+set -E  # the ERR trap also inside functions (n48g ended silently inside one)
 trap 'rc=$?; echo "UIENTRY ERR line $LINENO (exit $rc): $BASH_COMMAND" >&2' ERR
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
@@ -373,7 +374,7 @@ NODE=""; COOKIE=""
 if [ "$RCAL" = 1 ]; then NODE="risime_uientry${SUF}_$$"; COOKIE="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"; fi
 start_server() {
   local run="$M mix phx.server"
-  [ -n "$NODE" ] && run="$M elixir --sname $NODE --cookie $COOKIE -S mix phx.server"
+  [ -n "$NODE" ] && run="$M elixir --sname $NODE --cookie $COOKIE --erl '-kernel inet_dist_use_interface {127,0,0,1}' -S mix phx.server"
   SERVER_STARTED=1
   tmux new -d -s "risime-uientry$SUF" "cd '$REPO/server' && set -a && . '$WORK/risi.env' && . '$WORK/phase.env' && set +a && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
     PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text TABS=on \
@@ -2037,7 +2038,7 @@ PY
   # ---- 14. Shenika backfill: the release task inside the test server → invites in both Risi chats → both accept
   if [ "$RCAL" = 1 ]; then
     DEV=A
-    out="$(cd server && timeout 120 $M elixir --sname "uientry_rpc_$$" --cookie "$COOKIE" --rpc-eval "$NODE@$(hostname -s)" 'RisiMe.Release.risi_calendar_backfill(dry_run: false)' 2>&1 || true)"
+    out="$(cd server && timeout 120 $M elixir --sname "uientry_rpc_$$" --cookie "$COOKIE" --erl '-kernel inet_dist_use_interface {127,0,0,1}' --rpc-eval "$NODE@$(hostname -s)" 'RisiMe.Release.risi_calendar_backfill(dry_run: false)' 2>&1 || true)"
     printf '%s\n' "$out" | tail -2 | sed 's/^/    release task: /'
     ev=""; for _ in $(seq 1 45); do ev="$(ofx events B | grep -F 'uientry: event Interview|risi|' || true)"; [ -n "$ev" ] && break; sleep 2; done
     [ -n "$ev" ] || { grep -a 'calendar backfill' "$WORK/server.log" | tail -3 | sed 's/^/    /'; fail "risi-calendar: the backfill made no 'Interview' event for B (Shenika)"; }
@@ -2192,6 +2193,9 @@ PY
   pass "risi off: no Calendar tab on either phone, no 'Notes' in the Risi chat's ⋮, no /risi/calendar|notes request, no device advertises risi_events/risi_notes"
 fi
 
+# nightly.48 (n48f, n48g) died silently between step 16 and "UI ENTRY OK" with "adb: error: more than one device with
+# serial " (an empty serial): trace the rest of the run to $LOGS/tail-trace.log.
+exec {XT}>>"$LOGS/tail-trace.log"; BASH_XTRACEFD=$XT; set -x
 # ---------------------------------------------------------------- 17. (--google) the Google Calendar link (contract v1.31 §31)
 # Gate items 1-9 of §31.12 with scripts/fake-gcal (Google's Calendar API on 127.0.0.1:$GP) and the debug seam
 # `lk.codegen.risime.debug.GCAL_TEST` (a fake authorizer + the base URL: Redroid has no Play services).
