@@ -1278,6 +1278,18 @@ scroll_to() {
   done
   echo "    [$DEV] not in the chat: $1"; return 1
 }
+# Like scroll_to, but looks DOWN first (for something below the current position, e.g. an answer's chip under its card):
+# scroll_to's 12 swipes up can run far into a long chat's history and not get back down (nightly.48 attempt j).
+scroll_down_to() {
+  local i
+  for i in $(seq 1 24); do
+    [ -n "$(node_xy "$1")" ] && return 0
+    if [ "$i" -le 12 ]; then A shell input swipe $((W / 2)) $((H * 65 / 100)) $((W / 2)) $((H * 30 / 100)) 300
+    else A shell input swipe $((W / 2)) $((H * 30 / 100)) $((W / 2)) $((H * 65 / 100)) 300; fi
+    sleep 1
+  done
+  echo "    [$DEV] not in the chat (looking down first): $1"; return 1
+}
 item_line() { ofx state | grep -F "|$1|" | head -1; }
 # Material 3's date picker: the day cell whose content description names $1 (YYYY-MM-DD), paging months forward.
 pick_day() {
@@ -1481,7 +1493,7 @@ PY
   has "text=\"$CAL_DATE\"" || scroll_to "$CAL_DATE" || fail "calendar: the card doesn't show the date ($CAL_DATE)"
   [ "$(count_text "Interview with Shenika")" = 1 ] || fail "calendar: want exactly one action card title"
   shot "29-calendar-action-card"
-  scroll_to "Remind me 30 min before" || fail "calendar: the answer's usable chip is missing"
+  scroll_down_to "Remind me 30 min before" || fail "calendar: the answer's usable chip is missing"
   pass "calendar: ONE action card (Interview with Shenika · $CAL_DATE · 2–3 PM · Choose calendar · Add/Edit/Cancel); no confirm-phrase chip"
   # (A chip tap runs a Risi turn now; that is checked by --ui-batch. Not tapped here: this flow's fake-llm script has no turn for it.)
   scroll_to "Add" || fail "calendar: [Add] scrolled away"
@@ -1498,7 +1510,7 @@ PY
   tap "Use this calendar" || fail "calendar: pick the calendar"
   wait_text "Added to your Google Calendar: Interview with Shenika · $CAL_DATE, 2–3 PM" 90 || fail "calendar: no 'Added to your Google Calendar: …' on the card"
   # v1.32 §25.3: the success post carries added_event → the event card from this phone's provider row with [Open in Calendar].
-  scroll_to "Open in Calendar" || fail "calendar: the success card has no [Open in Calendar] (added_event card)"
+  scroll_down_to "Open in Calendar" || fail "calendar: the success card has no [Open in Calendar] (added_event card)"
   wait_text "Undo" 30 || fail "calendar: the success line has no [Undo]"
   shot "30-calendar-added"
   ev="$(A shell "content query --uri content://com.android.calendar/events --projection _id:calendar_id:title:dtstart:dtend:deleted" 2>/dev/null | tr -d '\r' | grep 'title=Interview with Shenika,' | grep 'deleted=0' || true)"
