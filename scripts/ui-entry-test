@@ -2904,10 +2904,18 @@ ui_batch_calendar() {
 }
 # ---- (a) (b) (c) (d) of the P0 hotfix: the add (card → [Add] → provider row, event card, Open in Calendar, honest failure),
 # the chip gate (deep link / request, never plain text), Markdown, and a com.google-type calendar next to the LOCAL one.
-uib_ask() {  # $1 = the sentence typed into the Risi chat
-  tap "Ask Risi…" || true; sleep 0.5
-  A shell input text "$(printf '%s' "$1" | sed 's/ /%s/g')"; sleep 0.5
-  tap "Send" || fail "ui-batch: send '$1'"
+uib_ask() {  # $1 = the sentence typed into the Risi chat; retried until it shows in the chat (nightly.48 attempt m:
+  # right after the app was restarted by a permission revoke the first typing went nowhere)
+  local try
+  for try in 1 2 3; do
+    wait_for 'text="Ask Risi…"' 30 || true
+    tap "Ask Risi…" || true; sleep 1
+    A shell input text "$(printf '%s' "$1" | sed 's/ /%s/g')"; sleep 0.5
+    tap "Send" || true
+    wait_text "$1" 15 && return 0
+    echo "    [$DEV] '$1' didn't reach the chat (try $try)"; dismiss_prompts
+  done
+  fail "ui-batch: send '$1'"
 }
 uib_risi_chat() {
   back_to_list || fail "ui-batch: back to the list"
