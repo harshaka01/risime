@@ -204,7 +204,7 @@ class PhoneCalendarTest {
 
     // ---- P0 2026-10-09 honesty: what a check read ----
 
-    @Test fun checkCountsPerVisibleCalendarAndLeavesHiddenOnesOut() {
+    @Test fun checkCountsEveryCalendarHiddenOnesToo() {
         be.cals += listOf(google, googleWork, hidden)
         be.events[1] = EventRow(1, google.id, "x", start, end, false)
         be.events[2] = EventRow(2, googleWork.id, "y", start + 600_000, end, false)
@@ -212,10 +212,10 @@ class PhoneCalendarTest {
         val r = cal.read(start, end + 3_600_000)!!
         assertTrue(r.source.readOk)
         assertNull(r.source.reason)
-        assertEquals(listOf("Primary calendar" to 1, "Work" to 1), r.source.calendars.map { it.name to it.events })
-        // Only the visible calendars' busy time; the hidden calendar's hour is free.
+        assertEquals(listOf("Primary calendar" to 1, "Work" to 1, "Hidden" to 1), r.source.calendars.map { it.name to it.events })
+        // P0 2026-10-10: a hidden calendar's hour is busy too (VISIBLE only hides it in the calendar app).
         assertEquals(1, r.blocks.size)
-        assertEquals("2026-10-12T09:30:00Z", r.blocks[0].end)
+        assertEquals("2026-10-12T10:30:00Z", r.blocks[0].end)
         assertEquals(listOf("phone_provider"), r.wire.connectedSources)
     }
 
@@ -231,7 +231,7 @@ class PhoneCalendarTest {
         assertEquals(false to "no_calendars", CalendarRead.verdict(emptyList()))
         assertEquals(false to "no_google_calendar", CalendarRead.verdict(listOf(local)))
         assertEquals(false to "google_sync_off", CalendarRead.verdict(listOf(local, google.copy(syncEvents = false))))
-        assertEquals(false to "google_calendars_hidden", CalendarRead.verdict(listOf(hidden)))
+        assertEquals(true to null, CalendarRead.verdict(listOf(hidden))) // hidden calendars are read too
         assertEquals(true to null, CalendarRead.verdict(listOf(hidden, google)))
         be.cals += google.copy(syncEvents = false)
         val r = cal.read(start, end)!!
@@ -251,6 +251,8 @@ class PhoneCalendarTest {
     @Test fun aFailingProviderIsNotAnEmptyCalendar() {
         val failing = object : CalendarBackend by be {
             override fun instances(fromMs: Long, toMs: Long): List<BusyRow> = error("provider died")
+
+            override fun instanceRows(fromMs: Long, toMs: Long): List<InstanceRow> = throw CalendarQueryException("Instances query returned no cursor")
         }
         be.cals += google
         val r = PhoneCalendar(failing, choice, log).read(start, end)!!

@@ -557,11 +557,12 @@ private fun CalendarSourcesBlock(port: lk.codegen.risime.data.tabs.RisiCalendarP
                 o.calendars.forEach { (c, n) ->
                     val flags = listOfNotNull("hidden".takeIf { !c.visible }, "sync off".takeIf { !c.syncEvents }).joinToString(", ")
                     Column(Modifier.testTag("risi_calendar_source_row")) {
-                        Text(lk.codegen.risime.data.tabs.CalendarRead.nameOf(c), style = MaterialTheme.typography.bodyMedium)
+                        Text(lk.codegen.risime.data.tabs.CalendarRead.nameOf(c), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            lk.codegen.risime.data.tabs.CalendarSelection.label(c) + " · " + (if (n == 1) "1 event" else "$n events") + " in the next 7 days" + if (flags.isNotEmpty()) " · $flags" else "",
+                            lk.codegen.risime.data.tabs.CalendarSelection.label(c) + " · " + calendarCountText(n) + if (flags.isNotEmpty()) " · $flags" else "",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (n == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -575,6 +576,56 @@ private fun CalendarSourcesBlock(port: lk.codegen.risime.data.tabs.RisiCalendarP
                 }
                 if (!o.readOk) Text(lk.codegen.risime.data.tabs.CalendarRead.reasonText(o.reason), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_calendar_sources_reason"))
             }
+        }
+        CalendarDiagnosticsBlock(port, reload)
+    }
+}
+
+/** "3 events in the next 7 days"; a count that couldn't be read is never shown as 0. */
+fun calendarCountText(n: Int?): String = when (n) {
+    null -> CALENDAR_COUNT_ERROR
+    1 -> "1 event in the next 7 days"
+    else -> "$n events in the next 7 days"
+}
+
+const val CALENDAR_COUNT_ERROR = "events couldn't be read"
+
+/**
+ * P0 2026-10-10 Details → "Calendar diagnostics": permissions, each calendar (account, type, VISIBLE, SYNC_EVENTS,
+ * sync state, raw Events and Instances counts), query errors, and "Copy diagnostics" (plain text, the user's own
+ * clipboard; never logged).
+ */
+@Composable
+fun CalendarDiagnosticsBlock(port: lk.codegen.risime.data.tabs.RisiCalendarPort, reload: Int = 0) {
+    var d by remember { mutableStateOf<lk.codegen.risime.data.tabs.CalendarDiagnostics?>(null) }
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(reload) { d = runCatching { port.diagnostics() }.getOrNull() }
+    val diag = d ?: return
+    val context = LocalContext.current
+    Column(Modifier.fillMaxWidth().padding(top = Spacing.sm).testTag("risi_calendar_diagnostics"), verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+        val lines = diag.lines()
+        Text(lines.first(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        lines.drop(1).filter { it.isNotEmpty() }.forEach { line ->
+            val head = !line.startsWith(" ") && diag.calendars.any { it.info.displayName.ifBlank { "(no name)" } == line }
+            Text(
+                line.trim(),
+                style = if (head) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall,
+                fontWeight = if (head) FontWeight.SemiBold else null,
+                color = if (line.startsWith("Error:")) MaterialTheme.colorScheme.error else if (head) androidx.compose.ui.graphics.Color.Unspecified else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = if (line.startsWith("Error:")) 4 else 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = if (line.startsWith(" ")) Spacing.sm else androidx.compose.ui.unit.Dp(0f)),
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = {
+                val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                runCatching { cm?.setPrimaryClip(android.content.ClipData.newPlainText(lk.codegen.risime.data.tabs.CalendarDiagnostics.TITLE, diag.text())) }
+                copied = true
+            }, modifier = Modifier.testTag("risi_calendar_diagnostics_copy")) {
+                Text(lk.codegen.risime.data.tabs.CalendarDiagnostics.COPY, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (copied) Text(lk.codegen.risime.data.tabs.CalendarDiagnostics.COPIED, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(start = Spacing.sm).testTag("risi_calendar_diagnostics_copied"))
         }
     }
 }

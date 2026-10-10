@@ -74,6 +74,24 @@ interface CalendarBackend {
      */
     fun instances(fromMs: Long, toMs: Long): List<BusyRow>
 
+    /**
+     * P0 2026-10-10: the raw rows (no filter; all-day rows as UTC midnights) of every calendar overlapping
+     * [fromMs, toMs): the provider's `Instances`, plus the non-recurring `Events` of calendars it doesn't
+     * expand (`SYNC_EVENTS` = 0). Throws [CalendarQueryException] when the provider can't be read, never
+     * returns an empty list for an error. Default (fakes): [instances] as raw rows.
+     */
+    fun instanceRows(fromMs: Long, toMs: Long): List<InstanceRow> =
+        instances(fromMs, toMs).map { InstanceRow(it.begin, it.end, it.allDay, if (it.busy) null else InstanceFilter.AVAILABILITY_FREE, calendarId = it.calendarId, visible = it.visible, syncId = it.syncId) }
+
+    /** Diagnostics: raw `Events` rows (not deleted) per calendar id; null when not available. */
+    fun eventCounts(): Map<Long, Int>? = null
+
+    /** Diagnostics: "active" / "pending" / "idle" for the account's calendar sync; null when unknown. */
+    fun syncState(accountName: String, accountType: String): String? = null
+
+    /** Diagnostics: the account's last calendar sync, when the phone says it; null (unknown) otherwise. */
+    fun lastSync(accountName: String, accountType: String): String? = null
+
     /** The new event's id, or null when the provider refused it. */
     fun insert(calendarId: Long, title: String, startMs: Long, endMs: Long, allDay: Boolean, timeZone: String): Long?
 
@@ -230,13 +248,16 @@ class CalendarWriteLog(
 
 /** Settings → Calendar → Details: each calendar with its instances in the next days, and the read verdict. */
 data class CalendarOverview(
-    val calendars: List<Pair<PhoneCalendarInfo, Int>>,
+    /** Each calendar with its count; null: the count couldn't be read (see [error]). */
+    val calendars: List<Pair<PhoneCalendarInfo, Int?>>,
     val readOk: Boolean,
     val reason: String?,
     /** v1.32: master auto-sync is off on this phone. */
     val masterSyncOff: Boolean = false,
     /** v1.32: non-local accounts holding a visible calendar whose calendar sync is off (account name, account type). */
     val syncOffAccounts: List<Pair<String, String>> = emptyList(),
+    /** P0 2026-10-10: the query error's text when the read failed (shown in Details and diagnostics). */
+    val error: String? = null,
 )
 
 /** What a `calendar_check` read: the merged blocks and the `phone_provider` source report. */
@@ -290,7 +311,6 @@ data class CalendarRead(val blocks: List<CalendarBlock>, val source: lk.codegen.
                 cals.isEmpty() -> false to NO_CALENDARS
                 google.isEmpty() -> false to NO_GOOGLE_CALENDAR
                 google.none { it.syncEvents } -> false to GOOGLE_SYNC_OFF
-                google.none { it.syncEvents && it.visible } -> false to GOOGLE_HIDDEN
                 else -> true to null
             }
         }
@@ -429,44 +449,98 @@ class PhoneCalendar(
             log("risi calendar: calendar list failed")
             return CalendarRead(emptyList(), CalendarRead.source(emptyList(), false, CalendarRead.QUERY_FAILED))
         }
-        val rows = runCatching { backend.instances(fromMs, toMs) }.getOrElse {
+        val rows = runCatching { busyRows(fromMs, toMs) }.getOrElse {
             log("risi calendar: instances query failed")
             return CalendarRead(emptyList(), CalendarRead.source(emptyList(), false, CalendarRead.QUERY_FAILED))
         }
-        val known = cals.map { it.id }.toSet()
-        val visibleIds = cals.filter { it.visible }.map { it.id }.toSet()
-        // A row of a calendar the list doesn't know (a race) counts when its own flag says visible.
+        // P0 2026-10-10: every calendar counts, whatever its VISIBLE or SYNC_EVENTS flag says.
         // v1.31 §31.4 loop guard: RisiMe's own copies (a `risi<hex32>` sync id) are never busy here (the Risi Calendar
         // counts them); and while Google is read through the API in the same call, the connected account's provider
         // events are skipped so nothing is counted twice.
         val skipIds = if (skipGoogleAccount == null) emptySet() else cals.filter { it.accountType == CalendarSelection.GOOGLE && it.accountName.equals(skipGoogleAccount, true) }.map { it.id }.toSet()
-        val used = rows.filter { r -> r.visible && (r.calendarId !in known || r.calendarId in visibleIds) && !CalendarRead.isRisiCopy(r.syncId) && r.calendarId !in skipIds }
-        val inWindow = used.filter { it.end > fromMs && it.begin < toMs && it.end > it.begin }
-        val read = cals.filter { it.visible }.sortedWith(googleFirst).take(CalendarRead.MAX_CALENDARS).map { c ->
-            lk.codegen.risime.net.CalendarSourceCalendar(CalendarRead.wireName(c),c.accountType.take(100), inWindow.count { it.calendarId == c.id })
+        val used = rows.filter { r -> !CalendarRead.isRisiCopy(r.syncId) && r.calendarId !in skipIds }
+        val inWindow = used
+        val read = cals.sortedWith(googleFirst).take(CalendarRead.MAX_CALENDARS).map { c ->
+            lk.codegen.risime.net.CalendarSourceCalendar(CalendarRead.wireName(c), c.accountType.take(100), inWindow.count { it.calendarId == c.id })
         }
         val (ok, reason) = CalendarRead.verdict(cals).let { v ->
             if (runCatching { CalendarRead.syncOff(cals, backend) }.getOrDefault(false)) false to CalendarRead.SYNC_OFF else v
         }
-        log("risi calendar: check read ${cals.size} calendars (${read.size} visible), ${inWindow.size} instances, read_ok=$ok${reason?.let { " ($it)" } ?: ""}")
+        log("risi calendar: check read ${cals.size} calendars (${cals.count { it.visible }} visible), ${inWindow.size} instances, read_ok=$ok${reason?.let { " ($it)" } ?: ""}")
         return CalendarRead(merge(used, fromMs, toMs), CalendarRead.source(read, ok, reason))
     }
 
     private val googleFirst = compareByDescending<PhoneCalendarInfo> { CalendarSelection.isGoogle(it) }.thenBy { it.id }
 
-    /** Settings → Calendar → Details: every calendar with its instances in the next [days] days (null: no permission). */
+    /**
+     * The rows that count in [fromMs, toMs): the provider's raw rows over a window one day wider (all-day rows are
+     * UTC midnights), deleted / cancelled / declined ones left out, all-day ones moved to the phone's own dates.
+     */
+    private fun busyRows(fromMs: Long, toMs: Long): List<BusyRow> {
+        val (qf, qt) = InstanceFilter.queryWindow(fromMs, toMs)
+        return InstanceFilter.busyRows(backend.instanceRows(qf, qt), zone(), fromMs, toMs)
+    }
+
+    /**
+     * Settings → Calendar → Details: every calendar with its instances in the next [days] days (null: no permission).
+     * A failed instances query keeps the calendars listed with no count (null) and the error: never "0 events".
+     */
     fun overview(days: Int = 7): CalendarOverview? {
         if (!backend.canRead()) return null
         val from = now()
-        val cals = runCatching { backend.calendars() }.getOrElse { return CalendarOverview(emptyList(), false, CalendarRead.QUERY_FAILED) }
-        val rows = runCatching { backend.instances(from, from + days * 86_400_000L) }.getOrElse { return CalendarOverview(emptyList(), false, CalendarRead.QUERY_FAILED) }
+        val cals = runCatching { backend.calendars() }.getOrElse { return CalendarOverview(emptyList(), false, CalendarRead.QUERY_FAILED, error = errorText("calendars", it)) }
+        val sorted = cals.sortedWith(googleFirst)
+        val rows = runCatching { busyRows(from, from + days * InstanceFilter.DAY_MS) }.getOrElse {
+            log("risi calendar: Details instances query failed")
+            return CalendarOverview(sorted.map { it to null }, false, CalendarRead.QUERY_FAILED, error = errorText("instances", it))
+        }
         val (ok, reason) = CalendarRead.verdict(cals).let { v ->
             if (runCatching { CalendarRead.syncOff(cals, backend) }.getOrDefault(false)) false to CalendarRead.SYNC_OFF else v
         }
         val off = runCatching { CalendarRead.syncOffAccounts(cals, backend) }.getOrDefault(emptyList())
         val master = runCatching { !backend.masterSyncOn() }.getOrDefault(false)
-        return CalendarOverview(cals.sortedWith(googleFirst).map { c -> c to rows.count { it.calendarId == c.id } }, ok, reason, master, off)
+        return CalendarOverview(sorted.map { c -> c to rows.count { it.calendarId == c.id } }, ok, reason, master, off)
     }
+
+    /**
+     * Details → "Calendar diagnostics": the permissions, each calendar's flags and sync state, its raw Events
+     * count and its Instances in the next [days] days (raw and counted), and every query error's text.
+     */
+    fun diagnostics(days: Int = 7, writeGranted: Boolean = backend.canWrite()): CalendarDiagnostics {
+        val readOk = backend.canRead()
+        val errors = ArrayList<String>()
+        val master = runCatching { backend.masterSyncOn() }.getOrNull()
+        if (!readOk) return CalendarDiagnostics(false, writeGranted, master, days, emptyList(), listOf("READ_CALENDAR is not granted: nothing can be read"))
+        val cals = runCatching { backend.calendars() }.getOrElse { errors += errorText("calendars", it); emptyList() }
+        val from = now()
+        val to = from + days * InstanceFilter.DAY_MS
+        val (qf, qt) = InstanceFilter.queryWindow(from, to)
+        val raw = runCatching { backend.instanceRows(qf, qt) }.getOrElse { errors += errorText("instances", it); null }
+        val z = zone()
+        val rawIn = raw?.filter { r ->
+            val (b, e) = if (r.allDay) InstanceFilter.localAllDay(r.begin, z) to InstanceFilter.localAllDay(r.end, z) else r.begin to r.end
+            InstanceFilter.overlaps(b, e, from, to)
+        }
+        val counted = raw?.let { InstanceFilter.busyRows(it, z, from, to) }
+        val events = runCatching { backend.eventCounts() }.getOrElse { errors += errorText("events", it); null }
+        val list = cals.sortedWith(googleFirst).map { c ->
+            val local = c.accountType.equals(CalendarSelection.LOCAL, true)
+            CalendarDiag(
+                c,
+                accountSync = if (local) null else runCatching { backend.accountSyncOn(c.accountName, c.accountType) }.getOrNull(),
+                syncState = if (local) null else runCatching { backend.syncState(c.accountName, c.accountType) }.getOrNull(),
+                lastSync = if (local) null else runCatching { backend.lastSync(c.accountName, c.accountType) }.getOrNull(),
+                events = events?.let { it[c.id] ?: 0 },
+                instances = rawIn?.count { it.calendarId == c.id },
+                counted = counted?.count { it.calendarId == c.id },
+            )
+        }
+        return CalendarDiagnostics(true, writeGranted, master, days, list, errors)
+    }
+
+    /** "instances: IllegalArgumentException: Invalid column x" (the exception's class and message; no user data). */
+    private fun errorText(what: String, t: Throwable): String =
+        if (t is CalendarQueryException) "$what: ${t.message?.take(300)}" else "$what: ${t.javaClass.simpleName}${t.message?.let { ": ${it.take(300)}" } ?: ""}"
 
     /** All-day events are stored as UTC midnights of the phone's dates (Android's rule). */
     private fun allDaySpan(startMs: Long, endMs: Long): Pair<Long, Long> {

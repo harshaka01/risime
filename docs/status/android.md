@@ -1,5 +1,84 @@
 # Android status — 0.2 nightlies
 
+## READY P0 2026-10-10 calendar "0 events", diagnostics, chips run, header clipping (JVM gate green: `assembleDebug testDebugUnitTest`, 1591 tests, 0 failed, 9 skipped; `RequiredUpdateScreenTest` failed once with "uncaught exceptions before the test started" and passed on rerun)
+Branch `v1.32`. No protocol, server, Room or dependency change; nothing is deleted or signed out (hard rule 9). Manifest: + `READ_SYNC_SETTINGS`, `READ_SYNC_STATS` (normal permissions, granted on update).
+
+**Root cause (what the code shows; Harsha's device not reproduced here)**
+- The read path already used `Instances` with an epoch-ms window (the URI is `.../instances/when/<fromMs>/<toMs>`, tested); the window, the projection
+  (every column is in AOSP's `sInstancesProjectionMap`, checked against CalendarProvider2 main) and the STATUS/SELF_ATTENDEE_STATUS filters (null counts) were not wrong.
+  Neither was the Details count's query: Details and the busy read use the same `instances()`.
+- What was wrong, each one able to give "0 events" or hide why:
+  1. `READ_SYNC_SETTINGS` was never declared, so `getMasterSyncAutomatically` / `getSyncAutomatically` always threw SecurityException, swallowed by `runCatching`:
+     the v1.32 "Sync is off" row could never appear (Details always looked "synced"). Fixed (manifest).
+  2. Calendars with `SYNC_EVENTS = 0` are never expanded into Instances by AOSP (`CalendarInstancesHelper.getEntries`: `sync_events != ?` with "0"), so they always read 0.
+     Now their non-recurring events are read from `Events` (recurring ones there are counted raw in diagnostics only).
+  3. VISIBLE = 0 calendars were left out of the busy read and the report, and "all Google calendars hidden" made the read untrusted. Now every calendar counts.
+  4. All-day instances (UTC midnights) were used as instants: an all-day Monday was Mon 05:30 → Tue 05:30 in Asia/Colombo, and the provider window cut them at the edges.
+     Now the provider is asked for a window one day wider on both sides and all-day rows move to local midnights of their dates before the window filter.
+  5. Query errors: the v1.31 projection fallback swallowed the first error; a null cursor returned an empty list ("0 events"); a failed Instances query made Details say
+     "No calendars on this phone." Now: both projections failing or a null cursor throws `CalendarQueryException`; Details keeps the calendars listed with
+     "events couldn't be read" and the reason "The phone's calendar couldn't be read."; `calendar_check` sends `read_ok:false`, reason `api_error`.
+  6. Deleted instances (`Events.deleted`, joined into Instances) were not excluded. Now excluded with cancelled and declined.
+- If Harsha's Pixel still shows 0 after this build, the new diagnostics settle it: "Events (raw): 0" on a Google calendar with SYNC_EVENTS 1 means the provider really
+  holds no events for it (the Google Calendar app shows its own store; the account's calendar sync has not delivered to the provider); "Events (raw): N · Instances …: 0" means
+  the provider's expansion is the problem; an "Error: …" line gives the exception.
+
+**Details → Calendar diagnostics (Settings → Risi skills → Calendar → Details, under "What Risi can read")** — exact strings, one Text per line, maxLines 1 + ellipsis
+(error lines 4); the copied text is the same lines joined by "\n" (blank lines between calendars). Tags: `risi_calendar_diagnostics`, button `risi_calendar_diagnostics_copy`,
+`risi_calendar_diagnostics_copied`.
+```
+Calendar diagnostics
+READ_CALENDAR: granted | not granted
+WRITE_CALENDAR: granted | not granted
+Auto-sync: on | off | unknown
+Window: next 7 days
+Calendars: <n>
+
+<display name, "(no name)">
+  Account: <account name>
+  Account type: <account type>
+  VISIBLE: 0|1 · SYNC_EVENTS: 0|1
+  Account sync: on|off|unknown · Sync state: active|pending|idle|unknown · Last sync: unknown
+  Events (raw): <n> · Instances next 7 days: <n> · Counted: <n>
+
+Errors: none            (or one "Error: <what>: <text>" line per error)
+```
+Button "Copy diagnostics", then "Copied". LOCAL calendars show "Account sync: unknown · Sync state: unknown". "Last sync" is always "unknown" (Android has no public
+last-sync time for another app's adapter). Account names are only shown and copied, never logged.
+Details row per calendar (unchanged format): `<account or name> · <Google|Phone only|…> · <n> events in the next 7 days` ("1 event in the next 7 days";
+"events couldn't be read" on a query error), then ` · hidden` / ` · sync off` flags. "Counted" in diagnostics equals the Details count.
+
+**Debug seam for redroid (debug source set only; `checkNoGcalSeamInRelease` now also fails on `CALENDAR_SEED` / `CalendarSeedReceiver`)**
+A local calendar (account "RisiMe Seed", ACCOUNT_TYPE_LOCAL, written as its sync adapter) and events in the real provider; needs `pm grant <pkg> android.permission.WRITE_CALENDAR`
+(and READ_CALENDAR). Result in `am broadcast`'s `data="…"`: `ok calendar_id=N`, `ok event_id=N`, `ok cleared=N`, `error: …`.
+```
+P=lk.codegen.risime.debug; A=lk.codegen.risime.debug.CALENDAR_SEED
+adb shell am broadcast -a $A -p $P --es op calendar [--es name "RisiMe Seed"] [--ez sync_events true]
+adb shell am broadcast -a $A -p $P --es op event --es title "Single" --es start 2026-10-12T09:00:00+05:30 --es end 2026-10-12T10:00:00+05:30
+adb shell am broadcast -a $A -p $P --es op event --es title "Weekly" --es start 2026-10-13T11:00:00+05:30 --es end 2026-10-13T11:30:00+05:30 --es rrule "FREQ=WEEKLY;COUNT=4"
+adb shell am broadcast -a $A -p $P --es op event --es title "All day" --ez all_day true --es date 2026-10-14 [--ei days 1]
+adb shell am broadcast -a $A -p $P --es op clear
+```
+`start`/`end` take ISO-8601 with an offset or epoch ms (end defaults to start + 1 h); `tz` (default the phone's zone) for timed events; all-day events are UTC midnights
+with EVENT_TIMEZONE UTC; a recurring event gets DURATION instead of DTEND. `--ez sync_events false` makes a calendar the provider doesn't expand (tests the Events fallback).
+Expected for a single event, a weekly event (first instance in the window), an all-day event and one 6 days out, all within the next 7 days (sync_events
+true): Details row "RisiMe Seed" / `RisiMe Seed · Phone only · 4 events in the next 7 days` (the weekly event counts once per 7 days), diagnostics
+`Events (raw): 4 · Instances next 7 days: 4 · Counted: 4`, `Account type: LOCAL`, `Account sync: unknown · Sync state: unknown · Last sync: unknown`.
+
+**Chips run the action**: the answer's `next_steps` chips are back (at most 3, questions/confirm phrases still hidden, `risi_next_<i>`); a tap calls
+`RisiHost.ask(text)` at once (`RisiChips.send`), the same `risi_request` `ask` as typing it in the Risi chat and pressing send; in an Official chat it is the @Risi request in
+that chat. There is no paste and no plain-message path. Hidden when read-only or on an answer `for` someone else. The envelope has no structured chip action (contract §25.4: strings).
+
+**Header clipping ("Shenika · Risı")**: `RisiTopBar` (every "<name> · Risi" header: 1:1 Official and group/Risi screens) used `softWrap=false` with the default Clip overflow on
+the suffix; a sub-pixel width overflow clipped the Text to its line box and cut the dot of the "i". Now the suffix has `overflow = Visible`, both texts share a baseline, and
+`headerTitleStyle` gives includeFontPadding = true, line height >= 1.3 x font size, `LineHeightStyle(Center, Trim.None)`; the name still ellipsizes first.
+
+**Tests added**: `CalendarInstancesTest` (declined/cancelled/deleted, null status counts, all-day Monday stays Monday in Asia/Colombo, window, every calendar whatever
+VISIBLE/SYNC_EVENTS, query error is never 0 (Details null count, `api_error`, diagnostics error line), durations, exact diagnostics text, no permission);
+`AndroidCalendarBackendTest` against the fake provider (Details counts with deleted/cancelled/declined, refused column → fallback, both refused → error, SecurityException → error,
+SYNC_EVENTS=0 calendar read from Events, all-day Monday through the provider); `CalendarDiagnosticsUiTest` (section + Copy → clipboard text); `RisiSkillCardsUiTest`
+(chip tap → `ask:<text>`, no prefill; visibility rules); `RisiCardsTest` (header title + suffix one line, no height overflow at font scale 1.0 and 1.3; style).
+
 ## READY P0 2026-10-10 network-stall recovery (JVM gate green: `assembleDebug testDebugUnitTest`, 1572 tests, 0 failed, 9 skipped)
 Branch `v1.32`. No protocol, server, Room or dependency change; nothing is ever signed out or wiped on a transient failure (hard rule 9, app lock untouched).
 - Keycloak (AppAuth) connections: connect timeout 5 s (was 15 s), read 10 s (`TimedConnections`, `KeycloakTimeouts`; https only, loopback http in debug as before).

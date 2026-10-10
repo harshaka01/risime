@@ -314,8 +314,8 @@ defmodule RisiMe.Agent.Prompts do
     Answer the member's question. Use the chat transcript for questions about the chat. When \
     they ask what you can do, answer with the lists above. When you can't answer from what you \
     have, never say that the transcript, chat or context does not contain it: say plainly what \
-    you can do now and what is coming, and offer an alternative (for example: "I can't see your \
-    calendar yet. Calendar access is coming soon; want me to set a reminder instead?").
+    you can do now and what is coming, and offer an alternative (for example: "I can't ask \
+    RisiWork yet. It is coming soon; want me to set a reminder instead?").
     Say what you did and the next step. Keep the answer short and in the language of the \
     question. Never write message labels such as "Message 1" or "m1" in the answer: list the \
     refs (m1, m2, ...) of the messages the answer is based on in refs only. confidence: 0 to 1. \

@@ -1974,3 +1974,25 @@ Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/p
   Checked: prod release builds, env.sh contains the block; a throwaway `erl -name` with those flags listened on
   127.0.0.1:4370 only (no 0.0.0.0).
 - Tests: full suite 1082 tests, 0 failures, 15 skipped (new: ops_alert_v132 +1, `ops_endpoint_test.exs` 5).
+
+## P0 2026-10-10 (nightly.47): Risi must not say it cannot read Google Calendar  -- READY
+
+- Cause: no literal "cannot read Google" string existed. Two server texts steered the model: the
+  system-prompt example "I can't see your calendar yet. Calendar access is coming soon" (Prompts.answer_system,
+  Capabilities.retry_instruction) plus the "Coming soon: checking your calendar" capability line, and the
+  server-built "Not checked: Google Calendar (not connected)" / "Google Calendar: not connected." line that
+  `CalendarHonesty` added for the optional `google_api` link even when RISI_GCAL is off.
+- Fix: a `google_api` source that was never connected is not a source any more (not in the Checked/Not checked
+  line, the no-read lines, `answer.sources`, or the model's tool result). Google accounts synced to the phone are
+  the `phone_provider` and named by calendar name ("Work (Google)"). With RISI_GCAL on and a link in play, Google
+  is named exactly as in v1.31 §31.5. New `Capabilities.calendar_rules/0` in every Risi prompt (answer only from
+  the tool result; say why: permission / sync off / phone silent / no events in calendars A, B; never "free"
+  without a read; no calendar tool offered = turn on the Calendar skill). Tool descriptions say the phone calendar
+  includes Google accounts synced to the phone. The "can't see your calendar" example is gone.
+- `calendar_check` is free/busy only (contract §25.3: never titles). "What's on my calendar this week" therefore
+  lists busy times (and Risi Calendar events), not titles of phone events. No contract change made.
+- Contract example `envelope_risi_answer_calendar_sources_risi.json` changed (text and sources no longer name the
+  unconnected Google API); PROTOCOL.md §29.7/§31 prose "Google always named" still says the old thing: root to amend.
+- Tests: `calendar_honesty_p0_1010_test.exs` (13: grep of prompts/tool texts, reasons, RISI_GCAL off/on).
+  Existing v129/v131 expectations updated. "Add meeting Monday 10am" path is covered by action_loop_p0_test
+  (card -> `calendar_add` -> "Added to your Google Calendar: ...") and risi_calendar_flow_test.

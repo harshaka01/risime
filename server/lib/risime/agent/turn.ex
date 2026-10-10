@@ -456,7 +456,9 @@ defmodule RisiMe.Agent.Turn do
     if "calendar_check" in names,
       do:
         "\n- calendar_check: say the asker is free only when a source has read_ok true and " <>
-          "calendars above 0; otherwise say you couldn't read their calendar and why",
+          "calendars above 0 (the phone's calendar includes Google accounts synced to it); " <>
+          "otherwise say why you couldn't read it (permission, sync off, no answer), never " <>
+          "that Google Calendar can't be read",
       else: risi_calendar_line(names)
   end
 
@@ -465,7 +467,8 @@ defmodule RisiMe.Agent.Turn do
     if "risi_calendar_check" in names,
       do:
         "\n- risi_calendar_check: free/clear/available only about the calendars checked; a " <>
-          "proposed event is tentative. Events go to the Risi Calendar (risi_calendar_add) " <>
+          "proposed event is tentative; the phone's calendar includes Google accounts synced to " <>
+          "it, and you list only what the result shows. Events go to the Risi Calendar (risi_calendar_add) " <>
           "unless the asker asks for their phone calendar",
       else: ""
   end

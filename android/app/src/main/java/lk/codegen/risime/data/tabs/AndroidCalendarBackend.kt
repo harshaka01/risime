@@ -24,7 +24,12 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
             ContentUris.appendId(it, toMs)
         }.build()
 
-        /** No selection: every calendar's instances (hidden calendars are kept out in [PhoneCalendar.read], and counted in Settings). */
+        /**
+         * No selection: every calendar's instances, whatever VISIBLE or SYNC_EVENTS say (P0 2026-10-10). Every
+         * column is in AOSP's Instances projection map (`CalendarProvider2.sInstancesProjectionMap`): `deleted` is
+         * "Events.deleted", `_sync_id` the Events column (v1.31 §31.4 loop guard). A provider that refuses one
+         * gets [INSTANCES_PROJECTION_V1]; when both fail the error is thrown, never an empty list.
+         */
         val INSTANCES_PROJECTION = arrayOf(
             CalendarContract.Instances.BEGIN,
             CalendarContract.Instances.END,
@@ -34,10 +39,36 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
             CalendarContract.Instances.SELF_ATTENDEE_STATUS,
             CalendarContract.Instances.VISIBLE,
             CalendarContract.Instances.CALENDAR_ID,
-            // v1.31 §31.4 loop guard (the Events column, joined into the Instances view); dropped if a provider refuses it.
+            CalendarContract.Events._SYNC_ID,
+            CalendarContract.Events.DELETED,
+        )
+        val INSTANCES_PROJECTION_V1 = INSTANCES_PROJECTION.copyOf(8).requireNoNulls()
+
+        /** Non-recurring `Events` of calendars the provider doesn't expand into Instances (SYNC_EVENTS = 0). */
+        val EVENTS_PROJECTION = arrayOf(
+            CalendarContract.Events.DTSTART,
+            CalendarContract.Events.DTEND,
+            CalendarContract.Events.DURATION,
+            CalendarContract.Events.ALL_DAY,
+            CalendarContract.Events.AVAILABILITY,
+            CalendarContract.Events.STATUS,
+            CalendarContract.Events.SELF_ATTENDEE_STATUS,
+            CalendarContract.Events.CALENDAR_ID,
+            CalendarContract.Events.RRULE,
+            CalendarContract.Events.RDATE,
             CalendarContract.Events._SYNC_ID,
         )
-        val INSTANCES_PROJECTION_V1 = INSTANCES_PROJECTION.copyOf(8)
+
+        /** One `Instances` cursor row ([INSTANCES_PROJECTION] or its V1 prefix) as a raw row. */
+        fun instanceRow(q: android.database.Cursor): InstanceRow {
+            fun int(i: Int): Int? = if (i >= q.columnCount || q.isNull(i)) null else q.getInt(i)
+            return InstanceRow(
+                begin = q.getLong(0), end = if (q.isNull(1)) q.getLong(0) else q.getLong(1), allDay = int(2) == 1,
+                availability = int(3), status = int(4), selfStatus = int(5),
+                deleted = (int(9) ?: 0) != 0, calendarId = if (q.isNull(7)) 0 else q.getLong(7), visible = int(6)?.let { it != 0 } ?: true,
+                syncId = if (q.columnCount > 8 && !q.isNull(8)) q.getString(8) else null,
+            )
+        }
     }
 
     private val cr get() = context.contentResolver
@@ -92,24 +123,65 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
         ContentResolver.requestSync(Account(accountName, accountType), CalendarContract.AUTHORITY, extras)
     }
 
-    override fun instances(fromMs: Long, toMs: Long): List<BusyRow> {
-        val out = ArrayList<BusyRow>()
-        val withSync = runCatching { cr.query(instancesUri(fromMs, toMs), INSTANCES_PROJECTION, null, null, null) }.getOrNull()
-        (withSync ?: cr.query(instancesUri(fromMs, toMs), INSTANCES_PROJECTION_V1, null, null, null))?.use { q ->
-            val hasSync = q.columnCount > 8
-            while (q.moveToNext()) {
-                if (!q.isNull(4) && q.getInt(4) == CalendarContract.Events.STATUS_CANCELED) continue
-                if (!q.isNull(5) && q.getInt(5) == CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED) continue
-                val avail = if (q.isNull(3)) CalendarContract.Events.AVAILABILITY_BUSY else q.getInt(3)
-                out += BusyRow(
-                    q.getLong(0), q.getLong(1), q.getInt(2) != 0, busy = avail != CalendarContract.Events.AVAILABILITY_FREE,
-                    calendarId = if (q.isNull(7)) 0 else q.getLong(7), visible = q.isNull(6) || q.getInt(6) != 0,
-                    syncId = if (hasSync && !q.isNull(8)) q.getString(8) else null,
-                )
+    /** The filtered busy rows (raw provider times); [PhoneCalendar] reads [instanceRows] and localizes all-day ones. */
+    override fun instances(fromMs: Long, toMs: Long): List<BusyRow> =
+        instanceRows(fromMs, toMs).mapNotNull { r -> if (InstanceFilter.exclusion(r) != null) null else BusyRow(r.begin, r.end, r.allDay, r.availability != InstanceFilter.AVAILABILITY_FREE, r.calendarId, r.visible, r.syncId) }
+
+    override fun instanceRows(fromMs: Long, toMs: Long): List<InstanceRow> {
+        val uri = instancesUri(fromMs, toMs)
+        val first = runCatching { cr.query(uri, INSTANCES_PROJECTION, null, null, null) }
+        val q = first.getOrNull() ?: runCatching { cr.query(uri, INSTANCES_PROJECTION_V1, null, null, null) }.getOrElse { e ->
+            throw CalendarQueryException("Instances query failed (${first.exceptionOrNull()?.javaClass?.simpleName ?: "no cursor"}, then ${e.javaClass.simpleName}: ${e.message})", e)
+        } ?: throw CalendarQueryException("Instances query returned no cursor (calendar provider unavailable)")
+        val out = ArrayList<InstanceRow>()
+        q.use { while (it.moveToNext()) out += instanceRow(it) }
+        return out + unexpandedEvents(fromMs, toMs)
+    }
+
+    /**
+     * AOSP expands only calendars with SYNC_EVENTS != 0 into Instances (`CalendarInstancesHelper.getEntries`), so a
+     * calendar with sync off (a local calendar made without the flag) would read as empty: its non-recurring
+     * events are read from `Events` instead. Recurring ones there can't be expanded here (Diagnostics shows the raw count).
+     */
+    private fun unexpandedEvents(fromMs: Long, toMs: Long): List<InstanceRow> {
+        val ids = calendars().filter { !it.syncEvents }.map { it.id }
+        if (ids.isEmpty()) return emptyList()
+        val sel = "${CalendarContract.Events.CALENDAR_ID} IN (${ids.joinToString(",") { "?" }}) AND ${CalendarContract.Events.DELETED} = 0 AND ${CalendarContract.Events.DTSTART} < ?"
+        val args = (ids.map { it.toString() } + toMs.toString()).toTypedArray()
+        val q = cr.query(CalendarContract.Events.CONTENT_URI, EVENTS_PROJECTION, sel, args, null)
+            ?: throw CalendarQueryException("Events query returned no cursor (calendar provider unavailable)")
+        val out = ArrayList<InstanceRow>()
+        q.use {
+            while (it.moveToNext()) {
+                if (!it.isNull(8) || !it.isNull(9)) continue // recurring
+                val b = it.getLong(0)
+                val e = if (!it.isNull(1)) it.getLong(1) else b + (InstanceFilter.durationMs(it.getString(2)) ?: 0L)
+                fun int(i: Int): Int? = if (it.isNull(i)) null else it.getInt(i)
+                out += InstanceRow(b, e, int(3) == 1, int(4), int(5), int(6), false, it.getLong(7), true, if (it.isNull(10)) null else it.getString(10))
             }
         }
+        return out.filter { r -> r.end > fromMs && r.begin < toMs }
+    }
+
+    override fun eventCounts(): Map<Long, Int> {
+        val q = cr.query(CalendarContract.Events.CONTENT_URI, arrayOf(CalendarContract.Events.CALENDAR_ID), "${CalendarContract.Events.DELETED} = 0", null, null)
+            ?: throw CalendarQueryException("Events query returned no cursor (calendar provider unavailable)")
+        val out = HashMap<Long, Int>()
+        q.use { while (it.moveToNext()) if (!it.isNull(0)) out.merge(it.getLong(0), 1, Int::plus) }
         return out
     }
+
+    override fun syncState(accountName: String, accountType: String): String? {
+        val a = Account(accountName, accountType)
+        return when {
+            ContentResolver.isSyncActive(a, CalendarContract.AUTHORITY) -> "active"
+            ContentResolver.isSyncPending(a, CalendarContract.AUTHORITY) -> "pending"
+            else -> "idle"
+        }
+    }
+
+    /** Android has no public "last sync" time for another app's sync adapter: unknown. */
+    override fun lastSync(accountName: String, accountType: String): String? = null
 
     override fun insert(calendarId: Long, title: String, startMs: Long, endMs: Long, allDay: Boolean, timeZone: String): Long? {
         val v = ContentValues().apply {
@@ -189,6 +261,8 @@ class AndroidCalendarPort(
     }
 
     override suspend fun overview(): CalendarOverview? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { cal.overview() }
+
+    override suspend fun diagnostics(): CalendarDiagnostics = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { cal.diagnostics() }
 
     override fun open(eventId: Long) {
         val i = android.content.Intent(android.content.Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId))

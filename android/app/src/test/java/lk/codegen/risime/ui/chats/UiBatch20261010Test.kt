@@ -135,16 +135,22 @@ class UiBatch20261010Test {
                 val click = call.substringAfter("onClick =", "").substringBefore("label").replace("\\s".toRegex(), "")
                 val line = text.substring(0, m.range.first).count { it == '\n' } + 1
                 if (click.startsWith("{}") || click.isEmpty()) bad += "$path:$line has no action"
-                if (Regex("""\b(send|onSend|ask|sendText|sendMessage|prefill)\(""").containsMatchIn(click)) bad += "$path:$line sends/prefills its label"
+                // P0 2026-10-10: Risi's next-step chips are requests to Risi and RUN them (`ctx.sendChip` → `risi_request` ask);
+                // that is their action, not a paste of the label. Any other chip that sends or pre-fills its label is still a fake chip.
+                val risiRequestChip = path.endsWith("RisiSkillCardsUi.kt") && click.startsWith("{send(s)}")
+                if (!risiRequestChip && Regex("""\b(send|onSend|ask|sendText|sendMessage|prefill)\(""").containsMatchIn(click)) bad += "$path:$line sends/prefills its label"
             }
         }
         assertTrue("chips: $chips", chips > 0)
         assertEquals(emptyList<String>(), bad)
     }
 
-    @Test fun noRisiNextStepChipsAreDrawn() {
+    // P0 2026-10-10 supersedes item 7: the next-step chips are back, and they run the request instead of pasting it.
+    @Test fun risiNextStepChipsRunTheRequestAndNeverPrefill() {
         val skill = sources().first { it.first.endsWith("RisiSkillCardsUi.kt") }.second
-        assertFalse("risi_next_" in skill)
-        assertFalse("AssistChip(" in skill)
+        val extras = skill.substringAfter("internal fun AnswerExtras").substringBefore("\n}\n")
+        assertTrue("onClick = { send(s) }" in extras)
+        assertTrue("ctx.sendChip" in extras)
+        assertFalse("prefill" in extras)
     }
 }

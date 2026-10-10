@@ -125,9 +125,14 @@ class RisiCardContext(
     val prefill: (String) -> Unit = {},
     /** §27.4 this phone has a usable Risi chat with the Ledger on (observed, so the short card's button follows it). */
     val risiChatReady: Boolean = false,
+    /**
+     * P0 2026-10-10 a next-step chip RUNS its request: sends the text to Risi as the user's `risi_request` `ask`
+     * (the same path as typing it in the Risi chat and pressing send). Null: no chips on this screen.
+     */
+    val sendChip: ((String) -> Unit)? = null,
 )
 
 /** Builds a [RisiCardContext] for the rows on screen. */
-fun risiCardContext(host: RisiHost, messages: List<MessageEntity>, nameOf: (String) -> String, nowMs: Long, onRef: (String) -> Unit, knownNames: List<String> = emptyList(), readOnly: Boolean = false, prefill: (String) -> Unit = {}, risiChatReady: Boolean = false) =
+fun risiCardContext(host: RisiHost, messages: List<MessageEntity>, nameOf: (String) -> String, nowMs: Long, onRef: (String) -> Unit, knownNames: List<String> = emptyList(), readOnly: Boolean = false, prefill: (String) -> Unit = {}, risiChatReady: Boolean = false, sendChip: ((String) -> Unit)? = null) =
     RisiCardContext(host, nameOf, RisiCards.states(messages), RisiCards.awaiting(messages, host.me, nowMs), nowMs, onRef, knownNames, readOnly,
-        quotes = { r -> RisiCards.sourceQuotes(r, messages, nameOf) }, messages = messages, prefill = prefill, risiChatReady = risiChatReady)
+        quotes = { r -> RisiCards.sourceQuotes(r, messages, nameOf) }, messages = messages, prefill = prefill, risiChatReady = risiChatReady, sendChip = sendChip)

@@ -130,19 +130,9 @@ defmodule RisiMe.Agent.CalendarHonesty do
   # Sources in the §29.7 order, Risi Calendar · Google Calendar · Phone calendar as of v1.31
   # (with no link in play: Risi Calendar · Phone calendar, and Google `not_connected`).
   defp v129_sources(%{"sources" => sources}) do
-    sources =
-      if Enum.any?(sources, &(&1["source"] == "google_api")),
-        do: sources,
-        else:
-          sources ++
-            [
-              %{
-                "source" => "google_api",
-                "read_ok" => false,
-                "reason" => "not_connected",
-                "calendars" => []
-              }
-            ]
+    # P0 2026-10-10: a Google API link that is not in play is not a source at all: the phone
+    # provider already covers Google accounts synced to the phone.
+    sources = Enum.reject(sources, &ClientTools.never_connected_google?/1)
 
     order =
       if linked?(sources),
@@ -300,7 +290,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
     # The phone's own reason first ("google_api" is `not_connected` until it is built).
     failed =
       sources
-      |> Enum.reject(&(&1["read_ok"] == true))
+      |> Enum.reject(&(&1["read_ok"] == true or ClientTools.never_connected_google?(&1)))
       |> Enum.sort_by(&(&1["reason"] == "not_connected"))
 
     cond do
@@ -410,7 +400,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
   def answer_sources(checks) do
     case List.last(checks) do
       %{status: "ok", result: %{"sources" => sources}} when is_list(sources) ->
-        for s <- sources do
+        for s <- sources, not ClientTools.never_connected_google?(s) do
           base = %{
             "type" => "calendar_source",
             "source" => s["source"],

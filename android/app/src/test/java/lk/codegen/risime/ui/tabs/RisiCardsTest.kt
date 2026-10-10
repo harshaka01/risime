@@ -22,6 +22,7 @@ import lk.codegen.risime.net.RisiMeta
 import lk.codegen.risime.ui.theme.RisiMeTheme
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -252,6 +253,43 @@ class RisiCardsTest {
         }
         rule.onNodeWithText(OFFICIAL_DM_TITLE_SUFFIX, useUnmergedTree = true).assertIsDisplayed()
         rule.onNodeWithText(OFFICIAL_DM_SUBTITLE).assertIsDisplayed()
+    }
+
+    // P0 2026-10-10 "Shenika · Risı": the suffix never clips (one line, no visual overflow, room for the i's dot).
+    private fun headerAt(fontScale: Float) {
+        rule.setContent {
+            val d = androidx.compose.ui.platform.LocalDensity.current
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(d.density, fontScale)) {
+                RisiMeTheme {
+                    androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.width(360.dp)) {
+                        lk.codegen.risime.ui.common.RisiTopBar(title = "Shenika", titleSuffix = OFFICIAL_DM_TITLE_SUFFIX, subtitle = OFFICIAL_DM_SUBTITLE, onBack = {})
+                    }
+                }
+            }
+        }
+        for (tag in listOf("risi_header_title", "risi_header_suffix")) {
+            val node = rule.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode()
+            val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            node.config[androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
+            val t = results.single()
+            assertEquals("$tag at $fontScale", 1, t.lineCount)
+            // Vertical room is what the "i" dot needs (Robolectric's glyph widths aren't real, so width isn't asserted here).
+            assertTrue("$tag clipped at $fontScale", !t.didOverflowHeight)
+            // The line box is taller than the glyphs: at least 1.3 × the font size.
+            assertTrue("$tag line too short at $fontScale", t.size.height >= with(androidx.compose.ui.unit.Density(node.layoutInfo.density.density, fontScale)) { (16 * 1.3f).sp.toPx() } - 1)
+        }
+        rule.onNodeWithText(OFFICIAL_DM_TITLE_SUFFIX, useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test fun headerSuffixIsNotClippedAtFontScale1() = headerAt(1.0f)
+
+    @Test fun headerSuffixIsNotClippedAtFontScale13() = headerAt(1.3f)
+
+    @Test fun headerTitleStyleKeepsRoomForDots() {
+        val s = lk.codegen.risime.ui.common.headerTitleStyle(androidx.compose.ui.text.TextStyle(fontSize = 16.sp, lineHeight = 18.sp))
+        assertEquals(20.8f, s.lineHeight.value, 0.01f)
+        assertEquals(true, s.platformStyle?.paragraphStyle?.includeFontPadding)
+        assertEquals(androidx.compose.ui.text.style.LineHeightStyle.Trim.None, s.lineHeightStyle?.trim)
     }
 
     @Test fun officialDmHeaderAndComposerTexts() {

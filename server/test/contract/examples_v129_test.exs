@@ -491,7 +491,8 @@ defmodule RisiMe.Contract.ExamplesV129Test do
 
     assert :ok = Task.await(task)
     {_, body, _} = a = post_in(posts(), ctx.hrc, "answer")
-    assert body =~ "Checked: Risi Calendar · Phone calendar (Work). Not checked: Google Calendar"
+    assert body =~ "Checked: Risi Calendar · Phone calendar (Work)."
+    refute body =~ "Google Calendar"
     check!("envelope_risi_answer_calendar_sources_risi.json", envelope(a))
   end
 end

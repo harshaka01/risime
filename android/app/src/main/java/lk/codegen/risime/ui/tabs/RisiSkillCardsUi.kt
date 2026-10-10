@@ -180,8 +180,37 @@ internal fun AnswerExtras(r: RisiMeta, ctx: RisiCardContext) {
             steps.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
-    // v1.32 item 7 (no fake chips): the server's `next_steps` are suggestions of what to type; a chip that only
-    // pre-fills its label as chat text has no action of its own, so none is drawn (the contract says "may").
+    // P0 2026-10-10: the `next_steps` chips are back, and a tap RUNS the request (a `risi_request` `ask` with the
+    // chip's text, as if typed and sent in the Risi chat), never a paste into the composer, never a plain message.
+    val send = ctx.sendChip
+    val next = RisiChips.visible(r, ctx.host.me, ctx.readOnly, send != null)
+    if (next.isNotEmpty() && send != null) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            next.forEachIndexed { i, s ->
+                AssistChip(
+                    onClick = { send(s) },
+                    label = { Text(s, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                    modifier = Modifier.testTag("risi_next_$i"),
+                )
+            }
+        }
+    }
+}
+
+/** P0 2026-10-10 which `next_steps` chips an answer shows, and what a tap does. */
+object RisiChips {
+    /** At most 3 usable chips, only on a screen that can send them, never read-only, never on someone else's answer. */
+    fun visible(r: lk.codegen.risime.net.RisiMeta, me: String, readOnly: Boolean, canSend: Boolean): List<String> {
+        if (readOnly || !canSend) return emptyList()
+        if (r.forUsers.isNotEmpty() && r.forUsers.none { it.equals(me, true) }) return emptyList()
+        return RisiSkillCards.nextSteps(r)
+    }
+
+    /** A tap: the chip's text to Risi as the user's own request (`risi_request` `ask`). There is no plain-message path. */
+    fun send(host: RisiHost, text: String) {
+        val t = text.trim()
+        if (t.isNotEmpty()) host.ask(t)
+    }
 }
 
 /** §25.4 the progress bubble for a running request ("Checking your calendar…", "Still working…"). */

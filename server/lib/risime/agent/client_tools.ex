@@ -47,8 +47,9 @@ defmodule RisiMe.Agent.ClientTools do
     %{
       name: "calendar_check",
       description:
-        "check when the asker is free or busy on their phone's calendar (from, to: an ISO time " <>
-          "or a local phrase like \"Tuesday 00:00\"; at most 14 days)",
+        "check when the asker is free or busy on their phone's calendar, which includes Google " <>
+          "accounts synced to the phone (busy times only, no event titles; from, to: an ISO " <>
+          "time or a local phrase like \"Tuesday 00:00\"; at most 14 days)",
       where: :client,
       personal: true,
       write: false,
@@ -108,7 +109,8 @@ defmodule RisiMe.Agent.ClientTools do
   defp run_check(_args, _ctx), do: {:error, "failed", "bad_args"}
 
   defp model_sources(sources) when is_list(sources) do
-    for s <- sources do
+    # P0 2026-10-10: a `google_api` that was never connected is not news to the model.
+    for s <- sources, not never_connected_google?(s) do
       %{
         "source" => s["source"],
         "read_ok" => s["read_ok"],
@@ -120,13 +122,20 @@ defmodule RisiMe.Agent.ClientTools do
 
   defp model_sources(_), do: nil
 
+  @doc false
+  def never_connected_google?(%{"source" => "google_api", "reason" => "not_connected"} = s),
+    do: not Map.has_key?(s, "count")
+
+  def never_connected_google?(_), do: false
+
   ## calendar_add
 
   def calendar_add do
     %{
       name: "calendar_add",
       description:
-        "propose adding an event to the asker's phone calendar (the asker confirms first; " <>
+        "propose adding an event to the asker's phone calendar, Google accounts synced to the " <>
+          "phone included (the asker confirms first; " <>
           "start/end: ISO or a local phrase like \"Friday 10:00\")",
       where: :client,
       personal: true,

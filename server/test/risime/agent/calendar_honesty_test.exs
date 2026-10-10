@@ -119,17 +119,18 @@ defmodule RisiMe.Agent.CalendarHonestyTest do
 
     out = H.enforce(@clear, [ok([], [phone([], false, "no_permission"), risi])], @tz)
 
-    # v1.29 §29.7: with Risi Calendar, the "Checked: … Not checked: …" line (Google always named).
+    # v1.29 §29.7: with Risi Calendar, the "Checked: … Not checked: …" line; P0 2026-10-10: a
+    # Google API link that is not connected is not named (the phone provider covers Google
+    # accounts synced to the phone).
     assert out ==
              @clear <>
                "\n\nChecked: Risi Calendar. Not checked: Phone calendar (calendar permission " <>
-               "is off), Google Calendar (not connected)."
+               "is off)."
   end
 
   test "answer sources name what was read" do
     assert [
-             %{"type" => "calendar_source", "source" => "phone_provider", "names" => ["Work"]},
-             %{"source" => "google_api", "read_ok" => false, "reason" => "not_connected"}
+             %{"type" => "calendar_source", "source" => "phone_provider", "names" => ["Work"]}
            ] = H.answer_sources([ok([], [phone([@work], true), @google_api])])
 
     assert H.answer_sources([H.check("no_permission", nil, nil)]) == []

@@ -210,6 +210,9 @@ fun GroupChatScreen(
         // §25.4 a next-step chip pre-fills the composer (as a question to Risi in the Risi chat and while continuing).
         prefill = { s -> draft = TextFieldValue(s, androidx.compose.ui.text.TextRange(s.length)); if (!risiChat) risiChip = true },
         risiChatReady = risiChatReady,
+        // P0 2026-10-10 a next-step chip runs at once: a `risi_request` ask (in the Risi chat exactly what typing it
+        // and pressing send does; in an Official chat the @Risi request), never pasted, never a plain message.
+        sendChip = if (readOnly) null else ({ s -> lk.codegen.risime.ui.tabs.RisiChips.send(risi, s) }),
     )
     val typingLabel = groupTypingLabel(typing)
     val count = members.count { it.current && it.state != GroupMember.STATE_PENDING_ADD }

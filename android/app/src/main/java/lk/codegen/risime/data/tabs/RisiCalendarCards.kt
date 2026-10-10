@@ -51,6 +51,9 @@ interface RisiCalendarPort {
     /** Settings → Calendar → Details: the calendars this phone can see (null: no read permission). */
     suspend fun overview(): CalendarOverview? = null
 
+    /** P0 2026-10-10 Details → "Calendar diagnostics" (null: not available). */
+    suspend fun diagnostics(): CalendarDiagnostics? = null
+
     /** v1.32 Details "Open sync settings": `Settings.ACTION_SYNC_SETTINGS` with `EXTRA_ACCOUNT_TYPES` for [accountType] (null: all). */
     fun openSyncSettings(accountType: String?) {}
 

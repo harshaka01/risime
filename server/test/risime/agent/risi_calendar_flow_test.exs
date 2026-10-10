@@ -637,7 +637,7 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
     {_, body, a} = answer_of(posts())
 
     assert body ==
-             "Nothing much on Monday afternoon.\n\nChecked: Risi Calendar. Not checked: Google Calendar (not connected)."
+             "Nothing much on Monday afternoon.\n\nChecked: Risi Calendar."
 
     assert %{"type" => "calendar_source", "source" => "risi_calendar", "read_ok" => true} in a[
              "sources"
@@ -727,8 +727,7 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
     {_, body, a} = answer_of(posts())
 
     assert body ==
-             "Nothing on Monday at 2.\n\nChecked: Risi Calendar · Phone calendar (Work). " <>
-               "Not checked: Google Calendar (not connected)."
+             "Nothing on Monday at 2.\n\nChecked: Risi Calendar · Phone calendar (Work)."
 
     assert Enum.map(a["sources"], & &1["source"]) == ["risi_calendar", "phone_provider"]
   end
@@ -767,7 +766,7 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
 
     assert body ==
              "I couldn't check your calendar, so I can't tell whether you're free.\n" <>
-               "Risi Calendar: it couldn't be opened.\nGoogle Calendar: not connected."
+               "Risi Calendar: it couldn't be opened."
 
     refute body =~ ~r/\b(clear|available)\b/i
     assert a["made_by"]["model"] == nil

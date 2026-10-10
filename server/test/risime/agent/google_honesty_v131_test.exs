@@ -149,8 +149,7 @@ defmodule RisiMe.Agent.GoogleHonestyV131Test do
     posts()
   end
 
-  @v130 "Nothing on then.\n\nChecked: Risi Calendar · Phone calendar (Gzzname). " <>
-          "Not checked: Google Calendar (not connected)."
+  @v130 "Nothing on then.\n\nChecked: Risi Calendar · Phone calendar (Gzzname)."
 
   test "Google read, busy: calendars have N busy times; the Checked line counts calendars",
        ctx do
