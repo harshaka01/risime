@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Test for infra/monitoring/am-bridge.py: fake ops-alert server on a random loopback port, post an
+# Alertmanager-shaped payload, assert the forwarded JSON + auth header, then the e-mail fallback.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec python3 -I - <<'PY'
+import json, os, subprocess, sys, tempfile, threading, time, urllib.request
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+got, reply = [], {"sent": 1, "held": 0}
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers["Content-Length"])
+        got.append((self.path, self.headers.get("Authorization"), json.loads(self.rfile.read(n))))
+        b = json.dumps(reply).encode()
+        self.send_response(202); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def log_message(self, *a): pass
+fake = HTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=fake.serve_forever, daemon=True).start()
+
+d = tempfile.mkdtemp()
+envf = os.path.join(d, ".env")
+open(envf, "w").write("OPS_ALERT_TOKEN=test-token\nSMTP_HOST=smtp.invalid\nSMTP_FROM=a@b.c\nOPS_ALERT_EMAIL=ops@b.c\n")
+probe = HTTPServer(("127.0.0.1", 0), H); bport = probe.server_address[1]; probe.server_close()
+env = dict(os.environ, AMB_PORT=str(bport), AMB_ENV_FILE=envf, AMB_DRY_MAIL="1",
+           AMB_TARGET="http://127.0.0.1:%d/internal/ops-alert" % fake.server_address[1])
+logf = open(os.path.join(d, "bridge.log"), "w")
+p = subprocess.Popen([sys.executable, "-I", "infra/monitoring/am-bridge.py"], env=env, stderr=logf)
+try:
+    for _ in range(50):
+        try: urllib.request.urlopen("http://127.0.0.1:%d/health" % bport, timeout=1); break
+        except OSError: time.sleep(0.1)
+    def post(alerts):
+        req = urllib.request.Request("http://127.0.0.1:%d/alert" % bport,
+            data=json.dumps({"version": "4", "status": "firing", "alerts": alerts}).encode(), method="POST")
+        assert urllib.request.urlopen(req, timeout=5).status == 200
+    long = "x" * 400
+    post([{"status": "firing", "labels": {"alertname": "HealthDown", "service": "risime"}, "annotations": {"summary": "risime /health fails"}},
+          {"status": "resolved", "labels": {"alertname": "SwapGrowing"}, "annotations": {"summary": long}}])
+    assert len(got) == 2, got
+    assert got[0] == ("/internal/ops-alert", "Bearer test-token", {"state": "alert", "check": "health_down", "detail": "risime /health fails"}), got[0]
+    assert got[1][2]["state"] == "resolved" and got[1][2]["check"] == "swap_growing" and len(got[1][2]["detail"]) == 300, got[1]
+    # held > 0 -> e-mail fallback
+    reply.update(sent=1, held=1); post([{"status": "firing", "labels": {"alertname": "RamHigh"}, "annotations": {"summary": "ram"}}])
+    time.sleep(0.3)
+    log = open(os.path.join(d, "bridge.log")).read()
+    assert "MAIL(dry)" in log and "ram_high" in log, log
+    assert "test-token" not in log
+    print("am-bridge-test: OK")
+finally:
+    p.terminate()
+PY

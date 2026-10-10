@@ -1,0 +1,13 @@
+# One receiver: the loopback bridge (infra/monitoring/am-bridge.py) -> POST /internal/ops-alert (contract §32).
+route:
+  receiver: ops-bridge
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h        # at most one repeat per 4 h (the endpoint allows 30 per hour)
+receivers:
+  - name: ops-bridge
+    webhook_configs:
+      - url: http://127.0.0.1:9099/alert
+        send_resolved: true
+        max_alerts: 5

@@ -1,0 +1,6 @@
+[Unit]
+Description=RisiMe monitoring textfile collector (GPU, Cassandra, restarts)
+
+[Service]
+Type=oneshot
+ExecStart=%h/development/risime/scripts/mon-textfile

@@ -1,0 +1,15 @@
+[Unit]
+Description=RisiMe Alertmanager -> ops-alert bridge (127.0.0.1:9099)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/development/risime
+ExecStart=/usr/bin/python3 -I %h/development/risime/infra/monitoring/am-bridge.py
+Restart=always
+RestartSec=5
+StandardError=append:%h/risime-logs/am-bridge.log
+StandardOutput=null
+
+[Install]
+WantedBy=default.target

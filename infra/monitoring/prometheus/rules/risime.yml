@@ -1,0 +1,68 @@
+groups:
+  - name: risime
+    rules:
+      # ---- alerts (names become the contract §32 `check`: lower snake case) ----
+      - alert: HealthDown
+        expr: probe_success{job="probe_health"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.service }} /health fails on the {{ $labels.path }} path ({{ $labels.instance }}) for 2 min"
+      - alert: P95Latency
+        # PromEx Phoenix: <otp_app>_prom_ex_phoenix_http_request_duration_milliseconds (best guess, check /metrics)
+        expr: histogram_quantile(0.95, sum by (le) (rate(risime_prom_ex_phoenix_http_request_duration_milliseconds_bucket[5m]))) > 2000
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Server p95 request latency {{ $value | printf \"%.0f\" }} ms (> 2000 ms for 5 min)"
+      - alert: RamHigh
+        expr: 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 90
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "RAM used {{ $value | printf \"%.0f\" }} % on spark2"
+      - alert: SwapGrowing
+        expr: deriv(node_memory_SwapFree_bytes[30m]) < 0 and (1 - node_memory_SwapFree_bytes / node_memory_SwapTotal_bytes) > 0.5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Swap is growing and over 50 % used ({{ $value | humanize1024 }}B/s trend) on spark2"
+      - alert: DiskHigh
+        expr: 100 * (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs",mountpoint="/"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs",mountpoint="/"}) > 85
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} {{ $value | printf \"%.0f\" }} % full"
+      - alert: CassandraGc
+        expr: risime_cassandra_gc_max_pause_ms > 1000
+        labels: { severity: warning }
+        annotations:
+          summary: "Cassandra max GC pause {{ $value | printf \"%.0f\" }} ms (> 1 s)"
+      - alert: CertExpiry
+        expr: (probe_ssl_earliest_cert_expiry{job=~"probe_http|probe_health"} - time()) / 86400 < 14
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in {{ $value | printf \"%.0f\" }} days"
+      - alert: JwksFetchFailures
+        # best guess; server role: counter risime_jwks_fetch_total{result="error"} (PromEx custom metric)
+        expr: increase(risime_jwks_fetch_total{result="error"}[15m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "Keycloak JWKS fetch failures: {{ $value | printf \"%.0f\" }} in 15 min"
+      - alert: PublicConnectSlow
+        expr: probe_http_duration_seconds{phase="connect",path="public"} > 3
+        for: 3m
+        labels: { severity: warning }
+        annotations:
+          summary: "Public-VIP connect to {{ $labels.instance }} takes {{ $value | printf \"%.1f\" }} s (> 3 s)"
+      - alert: TargetDown
+        expr: up{job=~"node|postgres|prometheus|alertmanager|blackbox_exporter"} == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Monitoring target {{ $labels.job }} is down"
+
+      # ---- recordings for the dashboards ----
+      - record: risime:http_p95_ms
+        expr: histogram_quantile(0.95, sum by (le) (rate(risime_prom_ex_phoenix_http_request_duration_milliseconds_bucket[5m])))

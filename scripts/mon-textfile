@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Textfile collector for node_exporter (monitoring console, decision 075). Run every 30 s by the user timer
+# risime-mon-textfile.timer. Writes ~/risime-monitoring/textfile/risime.prom atomically:
+#   GPU (nvidia-smi; GB10 has no DCGM and unified memory, so no memory.used), per-process GPU memory,
+#   Cassandra (nodetool in the container: max GC pause since the previous run, pending/blocked tasks, heap),
+#   and the number of watchdog/manual restarts logged in ~/risime-logs/restarts.log.
+set -uo pipefail
+DIR="${MON_TEXTFILE_DIR:-$HOME/risime-monitoring/textfile}"; mkdir -p "$DIR"
+CASS="${CASSANDRA_CONTAINER:-risime-dev-cassandra-1}"
+tmp="$(mktemp "$DIR/.risime.XXXXXX")"; trap 'rm -f "$tmp"' EXIT
+num() { [[ "$1" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] && printf '%s' "$1" || printf 'NaN'; }
+m() { printf '# TYPE %s gauge\n%s %s\n' "$1" "$1" "$(num "$2")"; }
+
+{
+  if g="$(timeout 10 nvidia-smi --query-gpu=utilization.gpu,temperature.gpu,power.draw,clocks.sm --format=csv,noheader,nounits 2>/dev/null)"; then
+    IFS=',' read -r u t p c <<< "$g"
+    m risime_gpu_utilization_percent "${u// /}"; m risime_gpu_temperature_celsius "${t// /}"
+    m risime_gpu_power_watts "${p// /}"; m risime_gpu_sm_clock_mhz "${c// /}"
+    printf '# TYPE risime_gpu_process_memory_mib gauge\n'
+    timeout 10 nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null \
+      | while IFS=',' read -r pid mem; do printf 'risime_gpu_process_memory_mib{pid="%s"} %s\n' "${pid// /}" "$(num "${mem// /}")"; done
+    m risime_gpu_up 1
+  else m risime_gpu_up 0; fi
+
+  if gc="$(timeout 15 docker exec "$CASS" nodetool gcstats 2>/dev/null | tail -1)" && [ -n "$gc" ]; then
+    read -r _ maxgc _ <<< "$gc"
+    m risime_cassandra_gc_max_pause_ms "$maxgc"
+    pend=0; blk=0
+    while read -r pool act pending comp blocked atb; do
+      [[ "$pending" =~ ^[0-9]+$ ]] || continue
+      pend=$((pend + pending)); blk=$((blk + blocked))
+      printf 'risime_cassandra_pool_pending{pool="%s"} %s\nrisime_cassandra_pool_blocked{pool="%s"} %s\n' "$pool" "$pending" "$pool" "$blocked"
+    done < <(timeout 15 docker exec "$CASS" nodetool tpstats 2>/dev/null)
+    m risime_cassandra_pending_tasks "$pend"; m risime_cassandra_blocked_tasks "$blk"
+    heap="$(timeout 15 docker exec "$CASS" nodetool info 2>/dev/null | sed -n 's/^Heap Memory (MB) *: *//p')"
+    m risime_cassandra_heap_used_mb "$(echo "$heap" | awk '{print $1}')"; m risime_cassandra_heap_max_mb "$(echo "$heap" | awk '{print $3}')"
+    m risime_cassandra_up 1
+  else m risime_cassandra_up 0; fi
+
+  m risime_restarts_logged "$(grep -c 'restart requested' "$HOME/risime-logs/restarts.log" 2>/dev/null || echo 0)"
+  m risime_textfile_last_run_timestamp_seconds "$(date +%s)"
+} > "$tmp"
+chmod 644 "$tmp"; mv -f "$tmp" "$DIR/risime.prom"; trap - EXIT

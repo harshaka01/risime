@@ -1,0 +1,172 @@
+# RisiMe monitoring console (docs/decisions/075, docs/MONITORING.md). Project: risime-mon.
+#   docker compose -f infra/monitoring/docker-compose.monitoring.yml --env-file .env up -d
+#   (+ the login proxy, once MONITOR_OIDC_CLIENT_SECRET is in .env:  --profile oidc up -d)
+# Everything runs with host networking so it can reach the 127.0.0.1 services (server :4021, vLLM :8100,
+# Postgres :5432, LiveKit :7880) and EVERY service is told to listen on 127.0.0.1 only (its own flag/env).
+# Check:  ss -ltnp | grep -v 127.0.0.1   (nothing new on 0.0.0.0 / [::]).
+# Pinned, multi-arch (arm64) images. Memory is shared with the GPU model: every service has a limit.
+name: risime-mon
+
+x-defaults: &defaults
+  restart: unless-stopped
+  network_mode: host
+  logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+
+services:
+  prometheus:                       # 127.0.0.1:9090
+    <<: *defaults
+    image: prom/prometheus:v3.5.0
+    mem_limit: 1g
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.listen-address=127.0.0.1:9090
+      - --web.enable-lifecycle
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=10GB
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prom-data:/prometheus
+
+  alertmanager:                     # 127.0.0.1:9093 (no cluster port)
+    <<: *defaults
+    image: prom/alertmanager:v0.28.1
+    mem_limit: 128m
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --web.listen-address=127.0.0.1:9093
+      - --cluster.listen-address=
+      - --storage.path=/alertmanager
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - am-data:/alertmanager
+
+  node-exporter:                    # 127.0.0.1:9100 (+ textfile collector: GPU, Cassandra, restarts)
+    <<: *defaults
+    image: prom/node-exporter:v1.9.1
+    pid: host
+    mem_limit: 128m
+    command:
+      - --web.listen-address=127.0.0.1:9100
+      - --path.rootfs=/host
+      - --collector.textfile.directory=/textfile
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|var/lib/containers/.+)($$|/)
+    volumes:
+      - /:/host:ro,rslave
+      - ${HOME}/risime-monitoring/textfile:/textfile:ro
+
+  postgres-exporter:                # 127.0.0.1:9187; reads the dev Postgres (existing user, see docs/MONITORING.md)
+    <<: *defaults
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    mem_limit: 128m
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-risime}:${POSTGRES_PASSWORD:?set in .env}@127.0.0.1:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-risime_dev}?sslmode=disable
+    command:
+      - --web.listen-address=127.0.0.1:9187
+
+  blackbox:                         # 127.0.0.1:9115
+    <<: *defaults
+    image: prom/blackbox-exporter:v0.27.0
+    mem_limit: 128m
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+      - --web.listen-address=127.0.0.1:9115
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+
+  loki:                             # 127.0.0.1:3100 (+ grpc 9096)
+    <<: *defaults
+    image: grafana/loki:3.5.3
+    mem_limit: 512m
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+
+  alloy:                            # 127.0.0.1:12345; ships ~/risime-logs/*.log and the journal
+    <<: *defaults
+    image: grafana/alloy:v1.10.0
+    mem_limit: 384m
+    user: "${MON_UID:-1000}:${MON_GID:-1000}"     # server.log is mode 600 (harsha)
+    group_add: ["4"]                                # adm: system journal
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --storage.path=/alloy-data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - ${HOME}/risime-logs:/logs:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - ${HOME}/risime-monitoring/alloy-data:/alloy-data
+
+  grafana:                          # 127.0.0.1:3000; auth.proxy (header from oauth2-proxy), anonymous off
+    <<: *defaults
+    image: grafana/grafana:12.1.0
+    mem_limit: 512m
+    environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SERVER_HTTP_PORT: "3000"
+      GF_SERVER_ROOT_URL: https://monitor.risicloud.ai/
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set in .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-Forwarded-Email
+      GF_AUTH_PROXY_HEADER_PROPERTY: email
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: Admin    # only risime-admins reach it through oauth2-proxy
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_UNIFIED_ALERTING_ENABLED: "false"    # alerts live in Prometheus/Alertmanager
+      GF_ALERTING_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
+  uptime-kuma:                      # 127.0.0.1:3001; public status page is configured by hand (docs/MONITORING.md)
+    <<: *defaults
+    image: louislam/uptime-kuma:1.23.16
+    mem_limit: 384m
+    environment:
+      UPTIME_KUMA_HOST: 127.0.0.1
+      UPTIME_KUMA_PORT: "3001"
+    volumes:
+      - kuma-data:/app/data
+
+  oauth2-proxy:                     # 127.0.0.1:4180 -> Grafana + LiveDashboard; needs MONITOR_OIDC_CLIENT_SECRET
+    <<: *defaults
+    profiles: [oidc]
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
+    mem_limit: 128m
+    environment:
+      OAUTH2_PROXY_CLIENT_SECRET: ${MONITOR_OIDC_CLIENT_SECRET:-}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET:-}
+    command:
+      - --config=/etc/oauth2-proxy/oauth2-proxy.cfg
+    volumes:
+      - ./oauth2-proxy/oauth2-proxy.cfg:/etc/oauth2-proxy/oauth2-proxy.cfg:ro
+
+  oauth2-proxy-kuma:                # 127.0.0.1:4181 -> Uptime Kuma admin (own host name, Kuma has no sub-path support)
+    <<: *defaults
+    profiles: [oidc]
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
+    mem_limit: 128m
+    environment:
+      OAUTH2_PROXY_CLIENT_SECRET: ${MONITOR_OIDC_CLIENT_SECRET:-}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET:-}
+    command:
+      - --config=/etc/oauth2-proxy/oauth2-proxy.cfg
+    volumes:
+      - ./oauth2-proxy/oauth2-proxy-kuma.cfg:/etc/oauth2-proxy/oauth2-proxy.cfg:ro
+
+volumes:
+  prom-data:
+  am-data:
+  loki-data:
+  grafana-data:
+  kuma-data:

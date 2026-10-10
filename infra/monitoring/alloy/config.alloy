@@ -1,0 +1,52 @@
+// Ships ~/risime-logs/*.log (mounted at /logs) and the system journal to Loki on 127.0.0.1:3100.
+local.file_match "files" {
+  path_targets = [{"__path__" = "/logs/*.log", "job" = "risime-logs"}]
+  sync_period  = "30s"
+}
+
+loki.source.file "files" {
+  targets    = local.file_match.files.targets
+  forward_to = [loki.process.files.receiver]
+}
+
+loki.process "files" {
+  // server.log: JSON lines from the Phoenix release (level, msg, time, mfa).
+  stage.match {
+    selector = "{filename=\"/logs/server.log\"}"
+    stage.json {
+      expressions = { level = "level", msg = "msg" }
+    }
+    stage.labels {
+      values = { level = "" }
+    }
+  }
+  stage.static_labels {
+    values = { host = "spark2" }
+  }
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.relabel "journal" {
+  forward_to = []
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "journal" {
+  max_age       = "12h"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = { job = "journal", host = "spark2" }
+  forward_to    = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://127.0.0.1:3100/loki/api/v1/push"
+  }
+}
