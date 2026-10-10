@@ -72,6 +72,11 @@ Google ships the Android build tools for linux-x86_64 only.
    counts (1:1, groups, photos, call records) before and after the update and after a re-sign-in:
    any loss blocks the release.
 
+10. **Large downloads need Harsha's OK (2026-10-10).** Any download over 2 GB (models, images, datasets) needs
+   Harsha's explicit OK first. It runs only between 22:00 and 06:00 Sri Lanka time (16:30–00:30 UTC), is
+   rate-limited (default 10 MB/s, e.g. `curl --limit-rate 10M` or `trickle`), and is
+   logged in `docs/status/downloads.md`: what, size, source, when, approved by, result.
+
 ## Stack
 **Server**
 - Elixir/Phoenix: app `:risime`, module `RisiMe`, in folder `server/`.
