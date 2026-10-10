@@ -2906,13 +2906,18 @@ ui_batch_calendar() {
 # the chip gate (deep link / request, never plain text), Markdown, and a com.google-type calendar next to the LOCAL one.
 uib_ask() {  # $1 = the sentence typed into the Risi chat; retried until it shows in the chat (nightly.48 attempt m:
   # right after the app was restarted by a permission revoke the first typing went nowhere)
-  local try
+  # Sent = the fake model received it (the Risi chat may scroll the question away as soon as a card arrives).
+  local try n0 i
   for try in 1 2 3; do
+    n0="$(grep -acF -- "$1" "$WORK/llm-requests.jsonl" 2>/dev/null || true)"
     wait_for 'text="Ask Risi…"' 30 || true
     tap "Ask Risi…" || true; sleep 1
     A shell input text "$(printf '%s' "$1" | sed 's/ /%s/g')"; sleep 0.5
     tap "Send" || true
-    wait_text "$1" 15 && return 0
+    for i in $(seq 1 30); do
+      [ "$(grep -acF -- "$1" "$WORK/llm-requests.jsonl" 2>/dev/null || true)" -gt "${n0:-0}" ] && return 0
+      sleep 1
+    done
     echo "    [$DEV] '$1' didn't reach the chat (try $try)"; dismiss_prompts
   done
   fail "ui-batch: send '$1'"
