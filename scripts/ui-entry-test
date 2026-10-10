@@ -3068,6 +3068,8 @@ ui_batch_section() {
   local LONGP="ZZ UI Cee With An Extremely"
   # A preview line for B's row, typed through the UI.
   open_chat "ZZ UI B" || fail "ui-batch: A can't open the DM"
+  # The DM may reopen on the Official tab where an earlier step left it (nightly.48 attempt k): the Private composer.
+  wait_text "🔒 Private" 10 && tap "🔒 Private" || true
   wait_for 'text="Encrypted message"' 20 || fail "ui-batch: no composer"
   tap "Encrypted message" || true; sleep 0.5
   A shell input text "uibatch%spreview"; sleep 0.5
@@ -3105,6 +3107,7 @@ ui_batch_section() {
     shot "50-uibatch-header-long-$UIB_SC"
     back_to_list || fail "ui-batch [$UIB_SC]: back to the list"
     tap "ZZ UI B" || fail "ui-batch [$UIB_SC]: open the DM"
+    wait_text "🔒 Private" 10 && tap "🔒 Private" || true  # (it may reopen on the Official tab of round one)
     wait_for 'text="Encrypted message"' 20 || fail "ui-batch [$UIB_SC]: DM didn't open"
     uib_check header "ZZ UI B" "$H"
     uib_check subtitle
