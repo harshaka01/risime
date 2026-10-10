@@ -1337,3 +1337,12 @@ fixes go out together.
 - Step 3 (watchdog): `risime-watchdog.timer` every 30 s on since 07:33 (scripts/watchdog, test
   scripts/watchdog-test OK). Risi alert endpoint: contract v1.32 §32, server agent implementing on branch v1.32.
 - Next: step 2 (root cause), step 4 (monitoring console); nightly.48 tail fix and rerun.
+
+### 07:57 UTC: P0 steps 2 + 4, nightly.48 attempt h
+- Step 2 root cause in incident-2026-10-10.md §4–5: the FortiGate VIP path (RisiMe and Keycloak, both on our LAN)
+  was degraded ~02:50–05:30 UTC around the full outage; the server stayed healthy. Fixes: FortiGate logs (Harsha/IT),
+  /etc/hosts LAN route for Keycloak (sudo), JWKS retry (server 1bd1ab3, v1.32), faster app retry (android, running).
+- Step 4: monitoring stack `risime-mon` running on loopback (9 containers, ~0.7 GB; 55f6c28); PromEx + LiveDashboard
+  on 127.0.0.1:4021 in v1.32 (bf16e40). Waiting on Harsha: DNS, Keycloak client `monitor` + group, Caddy blocks.
+- nightly.48 tail repro with release settings passed (UI ENTRY OK); attempt h started 07:57 with the tail trace,
+  set -E, and the test node's Erlang distribution bound to 127.0.0.1 (it was on 0.0.0.0).
