@@ -1939,3 +1939,18 @@ Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/p
 - Tests: `calendar_honesty_test.exs` (v1.32 describe), `risi_calendar_flow_test.exs` (sync_off accept/422 cases,
   model view without names, empty read), `contract/examples_v132_test.exs` (the new example, listed in
   `@checked_v1_32`). Time-independent (fixed clock).
+
+## READY v1.32 (contract §32 Ops alerts)
+- `POST /internal/ops-alert` (`OpsAlertController`, `RisiMe.OpsAlert`): body `{state, check, detail}`
+  (detail truncated to 300; wrong state/check/types -> 422 `bad_request`); `Authorization: Bearer
+  <OPS_ALERT_TOKEN>` (`Plug.Crypto.secure_compare`); 401 `invalid_token` on missing/wrong token, any of
+  `x-forwarded-for`/`forwarded`/`x-real-ip`, or non-loopback `remote_ip`; 404 while the token is unset/empty;
+  10/hour via `RateLimiter` -> 429; 202 `{"sent": n, "held": n}`.
+- Env (`.env`, read in config/runtime.exs, not in test): `OPS_ALERT_TOKEN`, `OPS_ALERT_PHONES` (comma-separated
+  E.164). Needs a pilot restart after being set. `ops_alert` added to `MadeBy` rule kinds (`model: null`).
+- Held = no user for the phone, Risi not ready, no active Risi chat, or the post failed: counted and logged
+  (no token or phone in logs); no sealed hold (the existing hold table is tied to ledger summaries); the
+  watchdog sends e-mail when `held > 0`.
+- Tests: `test/risime_web/controllers/ops_alert_v132_test.exs` (7: 401 cases, 404, 422, 202 sent, held, 429,
+  example shape); `envelope_risi_ops_alert.json` registered in `@checked_v1_32`. Full suite: 1075 tests
+  (+7), 0 failures after the registration fix.
