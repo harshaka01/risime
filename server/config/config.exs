@@ -105,7 +105,7 @@ config :logger, :default_formatter,
 
 # Never log message bodies, OTP codes or tokens: Phoenix replaces params whose key contains
 # any of these with "[FILTERED]" (request logs, channel join/handle_in logs, socket connect).
-config :phoenix, :filter_parameters, ["password", "code", "token", "body", "secret"]
+config :phoenix, :filter_parameters, ["password", "code", "token", "body", "secret", "result"]
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason

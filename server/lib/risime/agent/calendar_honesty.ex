@@ -408,8 +408,8 @@ defmodule RisiMe.Agent.CalendarHonesty do
             "reason" => s["reason"]
           }
 
-          # v1.31 §31.5: Google has no names (always []), its `count` and the `refs` read.
-          if s["source"] == "google_api",
+          # v1.31 §31.5: a linked Google has no names (always []), its `count` and the `refs` read.
+          if s["source"] == "google_api" and s["count"],
             do:
               Map.merge(base, %{
                 "names" => [],

@@ -942,10 +942,42 @@ defmodule RisiMe.Agent.Skills do
   def list(user_id, device_id) do
     states = states(user_id)
     ps = device_id && permissions(user_id, device_id)
-    Enum.map(@registry, &skill_json(&1, states, ps))
+    g? = google_device?(user_id, device_id)
+    Enum.map(@registry, &skill_json(&1, states, ps, g?))
   end
 
-  defp skill_json(s, states, ps) do
+  defp google_device?(_user_id, nil), do: false
+  defp google_device?(user_id, device_id), do: Devices.google_calendar_device?(user_id, device_id)
+
+  # v1.31 §26.1: the Calendar skill's texts and the two OAuth permissions, for devices that
+  # advertise `google_calendar` only (older devices keep the v1.30 entry unchanged).
+  @calendar_v131_description "Checks when you're free in your calendars and adds events you agree to."
+  @calendar_v131_permissions [
+    %{
+      scope: "oauth",
+      name: "https://www.googleapis.com/auth/calendar.events",
+      label: "See busy times and add your Risi events in the Google calendars you pick",
+      runtime: true
+    },
+    %{
+      scope: "oauth",
+      name: "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+      label: "List your Google calendars so you can pick them",
+      runtime: true
+    }
+  ]
+
+  defp for_device(%{id: "calendar"} = s, true),
+    do: %{
+      s
+      | description: @calendar_v131_description,
+        permissions: s.permissions ++ @calendar_v131_permissions
+    }
+
+  defp for_device(s, _google?), do: s
+
+  defp skill_json(s, states, ps, google?) do
+    s = for_device(s, google?)
     st = states[s.id]
 
     %{
@@ -1011,7 +1043,8 @@ defmodule RisiMe.Agent.Skills do
       states = states(user_id)
       ps = permissions(user_id, device_id)
       ids = Enum.map(changes, & &1["id"])
-      {:ok, for(s <- @registry, s.id in ids, do: skill_json(s, states, ps))}
+      g? = google_device?(user_id, device_id)
+      {:ok, for(s <- @registry, s.id in ids, do: skill_json(s, states, ps, g?))}
     end
   end
 
