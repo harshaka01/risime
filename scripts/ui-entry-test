@@ -107,6 +107,14 @@
 #     (an insert that failed with 500 is retried: still one copy); loop guard (one busy time); edit → PATCH; delete →
 #     DELETE; revoked → "needs reconnecting", ONE google_reconnect card, Reconnect works; Disconnect on A2 with Remove →
 #     copies gone, link none; canaries (CANARY-GTITLE, the token, the account, Work/Personal) in no log or dump.
+# 18. (--ui-batch, UI batch 2026-10-10, branch v1.32; docs/status/briefs/ui-batch-2026-10-10.md) at font scale 1.0 and 1.3
+#     (`settings put system font_scale`, apps restarted; 1.0 restored): chat-list rows are two lines (name + preview, no
+#     "last seen"), names are one line, a long name stays inside its row; the "Requests" tab label is one line and as
+#     high as the other tabs'; the chat header shows the peer's name, "Lock chat" is in the chat's ⋮ (no header icon),
+#     lock → ⋮ shows "Unlock chat" → unlock; ONE round FAB "New" → a sheet "New chat" / "New group" / "Add friend";
+#     Settings → profile photo sheet "Take photo" / "Gallery" / "Remove photo" (when set); the Risi chat shows no
+#     next_steps chips. UITEST_UIBATCH_ONLY=1: only steps 1 and 18. Shots 50-uibatch-*-<scale>. With --ui-batch step 4
+#     expects "Lock chat" IN the chat's ⋮ (v1.32; the pre-v1.32 app must not have it).
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -116,12 +124,13 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
 CLS=lk.codegen.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0
+APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0; UIBATCH=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;;
   --skills) RISI=1; SKILLS=1; SKILLS_STEP=1; shift;; --ledger) RISI=1; LEDGER=1; shift;;
   --calendar) RISI=1; SKILLS=1; SKILLS_STEP=1; CALENDAR=1; shift;; --offers) RISI=1; SKILLS=1; OFFERS=1; shift;;
   --risi-calendar) RISI=1; SKILLS=1; RCAL=1; shift;; --risi-notes) RISI=1; SKILLS=1; RNOTES=1; shift;;
   --google) RISI=1; SKILLS=1; GCAL=1; shift;;
+  --ui-batch) RISI=1; SKILLS=1; UIBATCH=1; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 # --google alone: UITEST_GOOGLE_ONLY=1 = steps 1 and 17 (steps 2-16 are skipped through UITEST_RISI_ONLY, which only
 # the --risi-calendar/--risi-notes blocks and the google block look at).
@@ -166,6 +175,9 @@ cleanup() {
   tmux kill-session -t "risime-uientry$SUF" 2>/dev/null || true
   tmux kill-session -t "risime-uientry-llm$SUF" 2>/dev/null || true
   tmux kill-session -t "risime-uientry-gcal$SUF" 2>/dev/null || true
+  if [ "${UIB_SCALE_SET:-0}" = 1 ]; then
+    for d in A B; do [ -n "$(ser $d)" ] && adb -s "$(ser $d)" shell settings put system font_scale 1.0 >/dev/null 2>&1 || true; done
+  fi
   if [ "$KEEP" = 0 ]; then
     REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
     REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
@@ -188,6 +200,10 @@ at, conv = sys.argv[3], sys.argv[4]
 cal_start, cal_end = sys.argv[5], sys.argv[6]
 final = lambda a: {"tool": "final", "answer": a, "sources": [], "next_steps": []}
 rules = [
+    # Step 18 (--ui-batch): an answer that carries next_steps; the app must not draw them as chips (UI batch item 7).
+    {"name": "uibatch_chips", "task": "risi_next_action", "match": "(?i)uibatch hello",
+     "actions": [{"tool": "final", "answer": "UIBATCH answer ready.", "sources": [],
+                  "next_steps": ["UIB chip remind me tomorrow", "UIB chip tell me more"]}]},
     # Step 12 (P0): Harsha's request → one calendar_add proposal (the action card), and the chips the
     # model offered on the phone (a confirm phrase and a question are hidden; the third only fills).
     {"name": "calendar_shenika", "task": "risi_next_action", "match": "(?i)interview with shenika",
@@ -323,6 +339,14 @@ case mode do
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
     RisiMe.Social.make_friends!(a.id, b.id)
     IO.puts("uientry: friends ok")
+  "longfriend" ->
+    # A third, long-named friend of A (UI batch: a name longer than the row). Inserted directly: no device signs in as C.
+    a = Repo.get_by!(User, phone: a_phone)
+    c = Repo.get_by(User, phone: "+94770000983") ||
+          Repo.insert!(%User{phone: "+94770000983", email: "uientry83@example.com", company: "CodeGen",
+                             display_name: "ZZ UI Cee With An Extremely Long Display Name For Ellipsis Test"})
+    RisiMe.Social.make_friends!(a.id, c.id)
+    IO.puts("uientry: longfriend ok")
   "risi" ->
     :ok = RisiMe.Risi.seed()
     IO.puts("uientry: risi ok")
@@ -649,6 +673,7 @@ pass "both opened the DM; it is e2ee"
 # UITEST_OFFERS_ONLY=1 (with --offers): only steps 1 and 13.
 # UITEST_RISI_ONLY=1 (with --risi-calendar/--risi-notes): only steps 1 and 14-16.
 ONLY="${UITEST_SKILLS_ONLY:-0}${UITEST_LEDGER_ONLY:-0}${UITEST_CALENDAR_ONLY:-0}${UITEST_OFFERS_ONLY:-0}${UITEST_RISI_ONLY:-0}"
+[ "${UITEST_UIBATCH_ONLY:-0}" = 1 ] && ONLY=x
 if [ "$ONLY" = 00000 ]; then
 # ---------------------------------------------------------------- 2. the tab row under the header, Start Official
 DEV=A
@@ -691,10 +716,16 @@ A shell locksettings set-pin "$PIN" >/dev/null || fail "locksettings set-pin"
 wait_for 'text="Encrypted message"' 10 || fail "not back in the chat"
 tap "More options" || fail "the chat's ⋮"
 wait_for 'text="Delete chat"' 10 || fail "the chat's ⋮ didn't open (no 'Delete chat')"
-has 'text="Lock chat"' && fail "the chat's ⋮ still has 'Lock chat' (only Chat info and the long-press may)"
-has 'text="Unlock chat"' && fail "the chat's ⋮ has 'Unlock chat'"
-shot "04-chat-menu-no-lock"
-pass "the chat's ⋮ does NOT have 'Lock chat'"
+if [ "$UIBATCH" = 1 ]; then  # v1.32: the lock moved from the header into the ⋮ (UI batch item 4)
+  has 'text="Lock chat"' || fail "the chat's ⋮ has no 'Lock chat' (v1.32)"
+  shot "04-chat-menu-lock"
+  pass "the chat's ⋮ has 'Lock chat' (v1.32)"
+else
+  has 'text="Lock chat"' && fail "the chat's ⋮ still has 'Lock chat' (only Chat info and the long-press may)"
+  has 'text="Unlock chat"' && fail "the chat's ⋮ has 'Unlock chat'"
+  shot "04-chat-menu-no-lock"
+  pass "the chat's ⋮ does NOT have 'Lock chat'"
+fi
 A shell input keyevent KEYCODE_BACK; sleep 1
 tap "ZZ UI B" || fail "tap the chat's name (chat info) to lock"
 wait_for 'text="Chat info"' 15 || fail "the name didn't open Chat info"
@@ -2568,6 +2599,219 @@ JSON
   pass "google: canaries (event title, token, account, calendar names) are in no logcat, server log, model request or Postgres row"
   DEV=A; logcat_ok "google"; DEV=C; logcat_ok "google"; DEV=A
 fi
+
+# ---------------------------------------------------------------- 18. UI batch 2026-10-10 (--ui-batch; v1.32), font scale 1.0 and 1.3
+# Layout checks read the node bounds of `uiautomator dump` (taps stay by visible text / content description only).
+# TODO(root): brief item 7 (Calendar Details "Sync is off for <account>" + "Open sync settings" + "Refresh") is not here: it
+# needs a calendar account with calendar sync OFF and the Details screen (--calendar's step 12 fixtures seed a Google-type
+# calendar through `content insert` with no registered Account, so the sync flag the app reads is the provider's default and
+# not under this test's control; `ContentResolver.setSyncAutomatically` needs a real AccountManager account, which redroid
+# has none of). Covered by the android Robolectric tests (CalendarBackend fake) until redroid can add an account.
+uib_py() {  # $1 = check name, rest = args; reads $WORK/ui-$DEV.xml; prints the problem and exits 1
+  python3 -I - "$WORK/ui-$DEV.xml" "$@" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+xml_path, check, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+try:
+    nodes = list(ET.parse(xml_path).iter('node'))
+except ET.ParseError:
+    print("unreadable dump"); sys.exit(1)
+def box(n): return list(map(int, re.findall(r'-?\d+', n.get('bounds'))))
+def txt(n): return n.get('text') or ''
+def desc(n): return n.get('content-desc') or ''
+def h(n): b = box(n); return b[3] - b[1]
+def bad(msg): print(msg); sys.exit(1)
+if check == 'list':   # short_name long_prefix preview scale
+    short, longp, preview, scale = args[0], args[1], args[2], float(args[3])
+    if any('last seen' in (txt(n) + desc(n)).lower() for n in nodes): bad("the chat list shows 'last seen'")
+    names = [n for n in nodes if txt(n) == short or txt(n).startswith(longp) or txt(n) == 'Risi']
+    if len(names) < 2: bad("fewer than two name nodes to compare: %s" % [txt(n) for n in names])
+    ref = min(h(n) for n in names)
+    for n in names:
+        if h(n) > ref * 1.4: bad("name %r is %d px high, a single line is %d: it wraps" % (txt(n), h(n), ref))
+    # The short name's row: the smallest clickable node around it holds exactly two text lines (name+time, preview).
+    nm = next(n for n in nodes if txt(n) == short)
+    nb = box(nm)
+    rows = [n for n in nodes if n.get('clickable') == 'true' and box(n)[0] <= nb[0] and box(n)[1] <= nb[1] and box(n)[2] >= nb[2] and box(n)[3] >= nb[3]]
+    if not rows: bad("no clickable row around %r" % short)
+    row = min(rows, key=lambda n: (box(n)[2] - box(n)[0]) * (box(n)[3] - box(n)[1])); rb = box(row)
+    inside = [n for n in nodes if (txt(n) or desc(n)) and box(n)[0] >= rb[0] and box(n)[2] <= rb[2] and box(n)[1] >= rb[1] and box(n)[3] <= rb[3] and n is not row]
+    centres = sorted((box(n)[1] + box(n)[3]) // 2 for n in inside if txt(n))
+    bands = []
+    for c in centres:
+        if not bands or c - bands[-1] > ref * 0.7: bands.append(c)
+    if len(bands) != 2: bad("row of %r has %d text lines (want 2): %s" % (short, len(bands), [txt(n) for n in inside if txt(n)]))
+    pv = [n for n in inside if preview in txt(n)]
+    if not pv: bad("row of %r has no preview containing %r: %s" % (short, preview, [txt(n) for n in inside if txt(n)]))
+    if (box(pv[0])[1] + box(pv[0])[3]) // 2 <= (nb[1] + nb[3]) // 2: bad("the preview is not under the name")
+    # The long name: one line, inside its row (not under the time at its end).
+    lg = next((n for n in nodes if txt(n).startswith(longp)), None)
+    if lg is None: bad("the long-named friend is not on the list")
+    lrows = [n for n in nodes if n.get('clickable') == 'true' and box(n)[1] <= box(lg)[1] and box(n)[3] >= box(lg)[3] and box(n)[0] <= box(lg)[0]]
+    lrow = min(lrows, key=lambda n: (box(n)[2] - box(n)[0]) * (box(n)[3] - box(n)[1]))
+    if box(lg)[2] > box(lrow)[2]: bad("the long name runs outside its row")
+    same = [n for n in nodes if txt(n) and n is not lg and box(n)[0] >= box(lrow)[0] and box(n)[2] <= box(lrow)[2] and abs((box(n)[1] + box(n)[3]) // 2 - (box(lg)[1] + box(lg)[3]) // 2) < ref * 0.7 and box(n)[0] >= box(lg)[2] - 2]
+    for n in same:
+        if box(lg)[2] > box(n)[0] + 2: bad("the long name overlaps %r" % txt(n))
+    if (box(lg)[2] - box(lg)[0]) < (box(lrow)[2] - box(lrow)[0]) * 0.35: bad("the long name got only %d px of a %d px row" % (box(lg)[2] - box(lg)[0], box(lrow)[2] - box(lrow)[0]))
+    print("ok: name line %d px, bands 2, long name %d..%d in row %d..%d" % (ref, box(lg)[0], box(lg)[2], box(lrow)[0], box(lrow)[2]))
+elif check == 'tabs':
+    hs = {}
+    for lab in ('Chats', 'Calls', 'Requests', 'Calendar'):
+        n = next((n for n in nodes if txt(n) == lab), None) or next((n for n in nodes if desc(n) == lab or desc(n).startswith(lab + ',')), None)
+        if n is not None: hs[lab] = h(n)
+    if 'Requests' not in hs or 'Chats' not in hs: bad("tab row without Chats/Requests: %s" % hs)
+    base = min(hs.values())
+    if hs['Requests'] > base * 1.3 or max(hs.values()) > base * 1.3: bad("tab heights differ (Requests wraps?): %s" % hs)
+    print("ok: tab heights %s" % hs)
+elif check == 'header':  # name : the peer's (prefix) name is in the top bar (top 15 %), one line
+    name, H = args[0], int(args[1])
+    n = next((n for n in nodes if txt(n).startswith(name) and box(n)[3] < H * 0.15), None)
+    if n is None: bad("the chat header doesn't show %r (top bar texts: %s)" % (name, [txt(x) for x in nodes if txt(x) and box(x)[3] < H * 0.15]))
+    for x in nodes:
+        if desc(x) in ('Lock chat', 'Unlock chat', 'End-to-end encrypted') and box(x)[3] < H * 0.15: bad("a header icon %r is still there" % desc(x))
+    print("ok: header %r" % txt(n))
+elif check == 'nochips':
+    hit = [txt(n) for n in nodes if txt(n).startswith('UIB chip') or desc(n).startswith('UIB chip')]
+    if hit: bad("next_steps are drawn as chips: %s" % hit)
+    print("ok")
+elif check == 'fab':   # exactly one node with the content description New
+    k = [n for n in nodes if desc(n) == 'New']
+    if len(k) != 1: bad("%d nodes with content-desc 'New' (want one)" % len(k))
+    print("ok")
+PY
+}
+uib_check() { local what="$1"; shift; local out; dump; out="$(uib_py "$what" "$@")" || fail "ui-batch [$UIB_SC] $what: $out"; echo "    $what [$UIB_SC]: $out"; }
+uib_set_scale() {  # $1 = scale: both phones, apps restarted
+  local d
+  for d in A B; do DEV=$d; A shell settings put system font_scale "$1"; A shell am force-stop "$PKG"; done
+  UIB_SCALE_SET=1; DEV=A
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2; dismiss_prompts
+  back_to_list || fail "ui-batch [$1]: no chat list after the restart"
+}
+# Locks the chat open in the DM from its ⋮ (PIN prompt), checks that the ⋮ then says "Unlock chat", unlocks again.
+uib_lock_cycle() {
+  tap "More options" || fail "ui-batch [$UIB_SC]: the chat's ⋮"
+  wait_text "Lock chat" 10 || fail "ui-batch [$UIB_SC]: the chat's ⋮ has no 'Lock chat'"
+  has 'content-desc="Lock chat"' && fail "ui-batch [$UIB_SC]: 'Lock chat' is also a header icon"
+  shot "50-uibatch-menu-$UIB_SC"
+  mark_prompts; tap "Lock chat" || fail "ui-batch [$UIB_SC]: tap Lock chat"
+  confirm_pin "ui-batch: Lock chat from the chat's ⋮"
+  sleep 2
+  if ! on_list; then   # still in the chat: the ⋮ now offers Unlock chat
+    tap "More options" || fail "ui-batch [$UIB_SC]: the ⋮ after locking"
+    wait_text "Unlock chat" 10 || fail "ui-batch [$UIB_SC]: after locking, the chat's ⋮ has no 'Unlock chat'"
+    shot "50-uibatch-unlock-$UIB_SC"
+    mark_prompts; tap "Unlock chat" || fail "ui-batch [$UIB_SC]: tap Unlock chat"
+    sleep 1; [ "$(count 'RisiMe chat lock: prompt shown')" -gt "$PROMPTS0" ] && { enter_pin; sleep 1; }
+    pass "ui-batch [$UIB_SC]: ⋮ → Lock chat → ⋮ → Unlock chat"
+  else                  # the lock closes the chat: it is in the Locked chats folder
+    wait_gone 'text="ZZ UI B"' 15 || fail "ui-batch [$UIB_SC]: the locked chat is still on the list"
+    local found=0
+    for _ in 1 2 3; do
+      A shell input swipe $((W / 2)) $((H * 35 / 100)) $((W / 2)) $((H * 80 / 100)) 500; sleep 1
+      has 'text="Locked chats"' && { found=1; break; }
+    done
+    [ "$found" = 1 ] || fail "ui-batch [$UIB_SC]: no 'Locked chats' row after locking"
+    mark_prompts; tap "Locked chats" || fail "ui-batch: tap Locked chats"
+    confirm_pin "ui-batch: Locked chats folder"
+    wait_for 'text="ZZ UI B"' 15 || fail "ui-batch [$UIB_SC]: the folder doesn't hold the chat"
+    tap "ZZ UI B"; sleep 2
+    tap "More options" || fail "ui-batch [$UIB_SC]: the locked chat's ⋮"
+    wait_text "Unlock chat" 10 || fail "ui-batch [$UIB_SC]: the locked chat's ⋮ has no 'Unlock chat'"
+    shot "50-uibatch-unlock-$UIB_SC"
+    mark_prompts; tap "Unlock chat" || fail "ui-batch [$UIB_SC]: tap Unlock chat"
+    sleep 1
+    [ "$(count 'RisiMe chat lock: prompt shown')" -gt "$PROMPTS0" ] && { enter_pin; sleep 1; }
+    pass "ui-batch [$UIB_SC]: ⋮ → Lock chat (→ folder) → ⋮ → Unlock chat"
+  fi
+  back_to_list || fail "ui-batch [$UIB_SC]: back to the list after unlocking"
+  wait_for 'text="ZZ UI B"' 15 || fail "ui-batch [$UIB_SC]: the unlocked chat didn't come back to the list"
+}
+ui_batch_section() {
+  DEV=A; screen_wh
+  A shell locksettings set-pin "$PIN" >/dev/null 2>&1 || true
+  [ "$(fx longfriend)" = "uientry: longfriend ok" ] || fail "ui-batch: fixture longfriend"
+  local LONGP="ZZ UI Cee With An Extremely"
+  # A preview line for B's row, typed through the UI.
+  open_chat "ZZ UI B" || fail "ui-batch: A can't open the DM"
+  wait_for 'text="Encrypted message"' 20 || fail "ui-batch: no composer"
+  tap "Encrypted message" || true; sleep 0.5
+  A shell input text "uibatch%spreview"; sleep 0.5
+  tap "Send" || fail "ui-batch: send the preview message"
+  wait_for "uibatch preview" 20 || fail "ui-batch: the message didn't show"
+  back_to_list || fail "ui-batch: back to the list"
+  for UIB_SC in 1.0 1.3; do
+    uib_set_scale "$UIB_SC"
+    # The long-named friend arrives with a refresh.
+    for _ in 1 2 3 4 5 6; do has "$LONGP" && break; tap "Refresh friends" || true; sleep 2; done
+    has "$LONGP" || fail "ui-batch [$UIB_SC]: the long-named friend is not on the list"
+    # 1. rows; 2. tab row
+    wait_for "uibatch preview" 15 || fail "ui-batch [$UIB_SC]: no preview line in A's list"
+    uib_check list "ZZ UI B" "$LONGP" "uibatch preview" "$UIB_SC"
+    uib_check tabs
+    shot "50-uibatch-list-$UIB_SC"
+    pass "ui-batch [$UIB_SC]: rows have two lines, names stay on one line and inside the row, no 'last seen'; the Requests tab is one line"
+    # 4. the round FAB and its sheet
+    has 'text="Add friend"' && fail "ui-batch [$UIB_SC]: an 'Add friend' button is still on the list (extended FAB?)"
+    uib_check fab
+    tap "New" || fail "ui-batch [$UIB_SC]: tap the New FAB"
+    wait_text "New chat" 10 || fail "ui-batch [$UIB_SC]: the FAB sheet has no 'New chat'"
+    wait_text "New group" 5 || fail "ui-batch [$UIB_SC]: the FAB sheet has no 'New group'"
+    wait_text "Add friend" 5 || fail "ui-batch [$UIB_SC]: the FAB sheet has no 'Add friend'"
+    shot "50-uibatch-fab-sheet-$UIB_SC"
+    A shell input keyevent KEYCODE_BACK; sleep 1
+    wait_gone 'text="New group"' 8 || fail "ui-batch [$UIB_SC]: Back didn't dismiss the FAB sheet"
+    on_list || fail "ui-batch [$UIB_SC]: not on the chat list after dismissing the sheet"
+    pass "ui-batch [$UIB_SC]: one round FAB 'New' → New chat / New group / Add friend"
+    # 3. chat header with the long name, then the lock cycle in the short-named DM
+    tap "$LONGP*" || fail "ui-batch [$UIB_SC]: open the long-named chat"
+    sleep 2; dump
+    uib_check header "$LONGP" "$H"
+    shot "50-uibatch-header-long-$UIB_SC"
+    back_to_list || fail "ui-batch [$UIB_SC]: back to the list"
+    tap "ZZ UI B" || fail "ui-batch [$UIB_SC]: open the DM"
+    wait_for 'text="Encrypted message"' 20 || fail "ui-batch [$UIB_SC]: DM didn't open"
+    uib_check header "ZZ UI B" "$H"
+    shot "50-uibatch-header-$UIB_SC"
+    uib_lock_cycle
+    pass "ui-batch [$UIB_SC]: the header always shows the name; Lock chat lives in the ⋮"
+    # 6. no fake chips in the Risi chat
+    wait_text "Risi" 30 || fail "ui-batch [$UIB_SC]: the chat list has no Risi entry"
+    tap "Risi" || fail "ui-batch [$UIB_SC]: open the Risi chat"
+    wait_for 'text="Ask Risi…"' 60 || fail "ui-batch [$UIB_SC]: the Risi chat didn't open"
+    tap "Ask Risi…" || true; sleep 0.5
+    A shell input text "uibatch%shello%s$UIB_SC"; sleep 0.5
+    tap "Send" || fail "ui-batch [$UIB_SC]: send to Risi"
+    wait_for "UIBATCH answer ready." 90 || fail "ui-batch [$UIB_SC]: Risi didn't answer the scripted question"
+    sleep 2; dump
+    uib_check nochips
+    shot "50-uibatch-risi-$UIB_SC"
+    pass "ui-batch [$UIB_SC]: Risi's answer has no next_steps chips"
+    back_to_list || fail "ui-batch [$UIB_SC]: back to the list"
+    # 5. profile photo sheet
+    if back_to_list && tap "More options" && wait_for 'text="Settings"' 10 && tap "Settings"; then
+      sleep 2
+      local ptxt=""; for _ in 1 2 3 4 5; do for t in "Set photo" "Change photo"; do has "text=\"$t\"" && ptxt="$t"; done; [ -n "$ptxt" ] && break; sleep 1; done
+      [ -n "$ptxt" ] || fail "ui-batch [$UIB_SC]: Settings has no 'Set photo' / 'Change photo'"
+      tap "$ptxt" || fail "ui-batch [$UIB_SC]: tap $ptxt"
+      wait_text "Take photo" 10 || fail "ui-batch [$UIB_SC]: the photo sheet has no 'Take photo'"
+      wait_text "Gallery" 5 || fail "ui-batch [$UIB_SC]: the photo sheet has no 'Gallery'"
+      [ "$ptxt" = "Change photo" ] && { wait_text "Remove photo" 5 || fail "ui-batch [$UIB_SC]: a set photo's sheet has no 'Remove photo'"; }
+      [ "$ptxt" = "Set photo" ] && [ -n "$(node_xy 'Remove photo')" ] && fail "ui-batch [$UIB_SC]: 'Remove photo' with no photo set"
+      shot "50-uibatch-photo-sheet-$UIB_SC"
+      A shell input keyevent KEYCODE_BACK; sleep 1
+      wait_gone 'text="Take photo"' 8 || fail "ui-batch [$UIB_SC]: Back didn't dismiss the photo sheet"
+      pass "ui-batch [$UIB_SC]: profile photo sheet: Take photo / Gallery$([ "$ptxt" = "Change photo" ] && echo ' / Remove photo')"
+    else
+      fail "ui-batch [$UIB_SC]: couldn't open Settings"
+    fi
+    back_to_list || fail "ui-batch [$UIB_SC]: back to the list"
+    DEV=A; logcat_ok "ui-batch $UIB_SC"
+  done
+  uib_set_scale 1.0; UIB_SCALE_SET=0
+  pass "ui-batch: all checks at font scale 1.0 and 1.3; the scale is back at 1.0"
+}
+if [ "$UIBATCH" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_UIBATCH_ONLY:-0}" = 1 ]; }; then ui_batch_section; fi
 
 DEV=A; logcat_ok "ui entry"
 DEV=B; logcat_ok "ui entry"
