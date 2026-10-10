@@ -60,7 +60,7 @@ class WebRtcTwoDeviceTest {
         assertTrue(media.available)
         var machine: CallStateMachine? = null
         val signals = object : CallSignals {
-            override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env): SignalOutcome {
+            override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env, media: String): SignalOutcome {
                 send(out, "signal", env)
                 return SignalOutcome.Ok
             }

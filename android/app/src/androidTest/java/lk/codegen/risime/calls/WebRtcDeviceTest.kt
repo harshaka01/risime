@@ -122,7 +122,7 @@ class WebRtcDeviceTest {
         val devOf = mapOf(ua to "a1a1a1a1-0000-4000-8000-000000000001", ub to "b1b1b1b1-0000-4000-8000-000000000003")
         val ends = CopyOnWriteArrayList<CallEnvelope.End>()
         fun signalsFor(me: String) = object : CallSignals {
-            override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env): SignalOutcome {
+            override suspend fun signal(conversationId: String, peer: String, env: CallEnvelope.Env, media: String): SignalOutcome {
                 val target = machines[peer]!!
                 scope.launch { runCatching { target.onSignal(InboundCall(conversationId, me, devOf[me]!!, System.currentTimeMillis(), env)) } }
                 return SignalOutcome.Ok
