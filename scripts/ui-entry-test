@@ -2646,7 +2646,7 @@ if check == 'list':   # short_name long_prefix preview scale
     for c in centres:
         if not bands or c - bands[-1] > ref * 0.7: bands.append(c)
     if len(bands) != 2: bad("row of %r has %d text lines (want 2): %s" % (short, len(bands), [txt(n) for n in inside if txt(n)]))
-    pv = [n for n in inside if preview in txt(n)]
+    pv = [n for n in inside if any(q in txt(n) for q in preview.split('|'))]
     if not pv: bad("row of %r has no preview containing %r: %s" % (short, preview, [txt(n) for n in inside if txt(n)]))
     if (box(pv[0])[1] + box(pv[0])[3]) // 2 <= (nb[1] + nb[3]) // 2: bad("the preview is not under the name")
     # The long name: one line, inside its row (not under the time at its end).
@@ -2835,8 +2835,9 @@ ui_batch_section() {
     for _ in 1 2 3 4 5 6; do has "$LONGP" && break; tap "Refresh friends" || true; sleep 2; done
     has "$LONGP" || fail "ui-batch [$UIB_SC]: the long-named friend is not on the list"
     # 1. rows; 2. tab row
-    wait_for "uibatch preview" 15 || fail "ui-batch [$UIB_SC]: no preview line in A's list"
-    uib_check list "ZZ UI B" "$LONGP" "uibatch preview" "$UIB_SC"
+    # (From the second round on the Official started in round one is the newest line of the DM.)
+    for _ in $(seq 1 15); do has "uibatch preview" || has "You started this chat" && break; sleep 1; done
+    uib_check list "ZZ UI B" "$LONGP" "uibatch preview|You started this chat" "$UIB_SC"
     uib_check tabs
     shot "50-uibatch-list-$UIB_SC"
     pass "ui-batch [$UIB_SC]: rows have two lines, names stay on one line and inside the row, no 'last seen'; the Requests tab is one line"
