@@ -69,7 +69,7 @@ Checked at 04:32–04:45 UTC (pilot still nightly.47, RISI_EVENTS on):
   locally.
 - **nightly.48 run n48f (03:18 UTC)** failed at 04:21, during the outage: every UI step passed,
   then one adb call failed with an empty device serial. The same steps re-run at 04:26 passed
-  (UI ENTRY OK). The ui-entry-test ERR trap now names the line. Run **n48g** started 04:58 UTC.
+  (UI ENTRY OK). The ui-entry-test ERR trap now names the line. Run **n48g** started 04:45 UTC.
 
 ### Plan (Harsha 2026-10-10), in order
 1. nightly.48: Risi Calendar fixes + Notes code (RISI_NOTES stays off until "turn the ledger on"):
