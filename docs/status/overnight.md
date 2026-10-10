@@ -1346,3 +1346,10 @@ fixes go out together.
   on 127.0.0.1:4021 in v1.32 (bf16e40). Waiting on Harsha: DNS, Keycloak client `monitor` + group, Caddy blocks.
 - nightly.48 tail repro with release settings passed (UI ENTRY OK); attempt h started 07:57 with the tail trace,
   set -E, and the test node's Erlang distribution bound to 127.0.0.1 (it was on 0.0.0.0).
+
+### 09:05 UTC: nightly.48 attempt h failed; cause found and fixed (63eb573)
+- The tail trace showed step 17 (--google, Google link) running in the release without --google: the --calendar step
+  stored the seeded Google calendar's row id in `GCAL`, the flag's variable; with id 1 the step ran `adb -s ''` for
+  a third redroid that doesn't exist. The variable is now `GCAL_ID`. Short repros passed because they skip --calendar.
+- Plan: no separate release of main. The next nightly (number 48, as nothing was published) = v1.32 merged + Harsha's
+  P0 calendar-read hotfix (android/server agents running) + the UI-batch font-scale test, through the full gate.
