@@ -72,6 +72,49 @@ Send in chat: **"Google clients done"** plus
 **Never paste** a password, a verification code, or anything labelled "secret" or "private key".
 None of these steps produces one.
 
+## After setup: test it
+Do this on your Pixel with the release build that has the Google Calendar link (the release notes say so),
+after the server has `RISI_GCAL=on` (root switches it on). Use a Google account you added as a test user.
+Each step says what you should see. If something differs, send a screenshot and the step number.
+
+1. **Connect.** Settings → Risi skills → Calendar → **Connect Google Calendar**.
+   - Google shows "Google hasn't verified this app": tap **Continue**.
+   - Both permissions are ticked (see events, see your calendar list). Tap **Allow**.
+   - You see a list of your calendars. It matches Google Calendar's own list. Under **Check for busy
+     times** tick the calendars Risi should read. Under **Add my Risi events to** pick one calendar (for
+     example "Work"). Leave **Copy my Risi Calendar events to Google** on, and confirm.
+   - The section now says "Connected on this phone · Checking N calendars · Adding events to <name>".
+2. **"Am I free" sees real Google events.** Pick a real meeting in your Google Calendar. In the Risi
+   chat ask "Am I free on <that day> at <that time>?".
+   - Risi says you are not free and the line under the answer reads "Checked: Risi Calendar · Google
+     Calendar (<your calendar names>)".
+   - Ask for a time with nothing booked: Risi says you are free, and the Checked line is the same.
+   - The meeting's title is never shown by Risi in the answer; only that you are busy.
+3. **Add the Shenika interview.** In the Risi chat write "add my interview with Shenika on <a day> at
+   2pm to my calendar". A card appears: tap **Add**.
+   - Open the Google Calendar app (and calendar.google.com). The event "Interview with Shenika" is in the
+     calendar you picked, with the note "Added by RisiMe". It has no guests, and no email was sent.
+   - Move it in RisiMe (Calendar tab → the event → Edit). It moves in Google within a minute or two.
+   - Delete it in RisiMe. It is gone from Google.
+4. **A copy you delete in Google stays deleted.** Add the interview again, then delete the copy in the
+   Google Calendar app. RisiMe does not add it back. The Google Calendar section shows "1 Risi event was
+   removed in Google" with **Add again**.
+5. **Ask from another device.** With the Pixel in airplane mode, ask "Am I free ..." from your other
+   phone or the laptop. The answer says "Not checked: Google Calendar (phone didn't answer)". It never
+   says you are free.
+6. **Reconnect.** Either wait 7 days (testing mode) or go to myaccount.google.com → Security →
+   Third-party connections → RisiMe → **Remove access**. Then ask "Am I free ..." again.
+   - The answer says "Google Calendar (needs reconnecting)", and one card appears in the Risi chat:
+     "Google Calendar needs reconnecting". There is only one card per day.
+   - Tap **Reconnect** on the card (it opens the Calendar skill), then **Reconnect Google Calendar**. One
+     tap on Allow, and reads work again.
+7. **Disconnect.** Settings → Risi skills → Calendar → **Disconnect**. Choose "Remove them from Google" (or
+   "Keep them in Google"), and confirm.
+   - The events RisiMe copied disappear from Google (or stay, if you kept them). Your own Google events are
+     never touched.
+   - RisiMe is gone from myaccount.google.com → Security → Third-party connections.
+   - All your chats are still there.
+
 ## Good to know
 - **Testing mode:** only the test users can connect. Google ends a testing-mode grant after
   7 days; RisiMe then shows "Reconnect Google Calendar" (one tap).

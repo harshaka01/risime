@@ -1,0 +1,572 @@
+#!/usr/bin/env python3
+"""A fake Google Calendar API v3 for the Google Calendar link gate (contract v1.31 §31.11, decision 074).
+
+An HTTP stub on LOOPBACK only. It answers the subset the Android app uses (paths are relative to the
+app's compiled-in base URL `https://www.googleapis.com/calendar/v3/`, which the debug seam replaces by
+`http://127.0.0.1:<port>/`; an optional `/calendar/v3` prefix is accepted as well):
+  GET    /users/me/calendarList          minAccessRole, pageToken, (fields is recorded, ignored)
+  GET    /calendars/{id}/events          timeMin, timeMax, singleEvents, privateExtendedProperty (repeatable,
+                                         `k=v`, all must match), showDeleted, maxResults, pageToken
+  POST   /calendars/{id}/events          a client `id` is kept; 409 `duplicate` when the id exists
+                                         (also when it is a cancelled tombstone, as Google does)
+  GET    /calendars/{id}/events/{eid}    a deleted event is returned with status "cancelled"
+  PUT    /calendars/{id}/events/{eid}    replace (keeps id)
+  PATCH  /calendars/{id}/events/{eid}    recursive merge, null deletes a key
+  DELETE /calendars/{id}/events/{eid}    204, the event stays as a cancelled tombstone; again -> 410
+  POST   /calendars/{id}/events/{eid}/move?destination=CAL
+  (No freeBusy: the contract reads events.list and decides busy on the phone, §31.4.)
+Paging uses a page size of 2 (events and calendar list; --page / --calendar-page) so paging is exercised.
+PUT/PATCH/GET of an id that never existed -> 404; of a tombstone -> 200 with status "cancelled" (the copy
+was "deleted in Google"); a write to a tombstone is not applied.
+
+Every call needs `Authorization: Bearer <token>` (--token); a wrong or missing token gets 401 (Google's
+error body). Control endpoints (no token needed, loopback only):
+  POST /_control  {"mode": "ok"|"revoked"|"error500"|"slow"}   "revoked": every API call -> 401 (the app
+                  must show Reconnect); "error500": every API call -> 500; "slow": waits 10 s first
+                  (also {"token": "new"} to change the accepted token, {"slow_s": 3} to change the wait)
+  POST /_seed     {"calendars": [...], "events": [...]} replaces the store. Also accepted:
+                  {"accounts": [{"email": "a@test", "calendars": [{id, summary, primary, accessRole,
+                  selected, hidden, "events": [...]}]}]} (accounts -> calendars -> events; accounts are
+                  flattened, the fake has one token). Events may carry "calendarId" (calendars/events form).
+  POST /_delete   {"calendarId": ..., "id": ...}   "the user deleted it in Google" (tombstone)
+  GET  /_events   the store for assertions: {"mode", "calendars": [...], "events": [... with calendarId,
+                  including cancelled ones]}
+  GET  /_requests the request log as a JSON list;   GET /health
+The record (--record FILE.jsonl) has one JSON line per API request (method, path, query, body, status),
+NEVER the token. Seed from a JSON file with --seed FILE (same shapes as /_seed). Stdlib only; synthetic data.
+
+  scripts/fake-gcal [--port 8198] [--token T] [--record /path/gcal.jsonl] [--seed seed.json]
+  scripts/fake-gcal --self-test
+"""
+import argparse
+import copy
+import json
+import os
+import re
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ROLES = {"freeBusyReader": 0, "reader": 1, "writer": 2, "owner": 3}
+
+
+def now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+
+
+def parse_ts(v):
+    """An RFC3339 timestamp or a date -> epoch seconds (UTC); None when unparseable."""
+    import datetime
+    if not v:
+        return None
+    try:
+        if len(v) == 10:
+            return datetime.datetime.fromisoformat(v).replace(tzinfo=datetime.timezone.utc).timestamp()
+        return datetime.datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def ev_bounds(ev):
+    s = parse_ts((ev.get("start") or {}).get("dateTime") or (ev.get("start") or {}).get("date"))
+    e = parse_ts((ev.get("end") or {}).get("dateTime") or (ev.get("end") or {}).get("date"))
+    return s, e
+
+
+def merge(dst, patch):
+    for k, v in patch.items():
+        if v is None:
+            dst.pop(k, None)
+        elif isinstance(v, dict) and isinstance(dst.get(k), dict):
+            merge(dst[k], v)
+        else:
+            dst[k] = copy.deepcopy(v)
+    return dst
+
+
+class Store:
+    def __init__(self, token, record, page=2, calendar_page=2):
+        self.lock = threading.RLock()
+        self.token = token
+        self.record = record
+        self.page = page
+        self.calendar_page = calendar_page
+        self.mode = "ok"
+        self.slow_s = 10.0
+        self.calendars = []   # [{id, summary, primary, accessRole, selected, hidden, ...}]
+        self.events = {}      # calendarId -> {eventId: resource}
+        self.log = []
+
+    def seed(self, doc):
+        cals, evs = [], []
+        if isinstance(doc.get("accounts"), list):
+            for acc in doc["accounts"]:
+                for c in acc.get("calendars", []):
+                    c = dict(c)
+                    for e in c.pop("events", []) or []:
+                        evs.append(dict(e, calendarId=c["id"]))
+                    cals.append(c)
+        cals += [dict(c) for c in doc.get("calendars", [])]
+        for c in list(cals):
+            inline = c.pop("events", None)
+            for e in inline or []:
+                evs.append(dict(e, calendarId=c["id"]))
+        evs += [dict(e) for e in doc.get("events", [])]
+        with self.lock:
+            self.calendars = []
+            self.events = {}
+            for c in cals:
+                if not isinstance(c.get("id"), str):
+                    raise ValueError("a calendar needs an id")
+                c.setdefault("summary", c["id"])
+                c.setdefault("accessRole", "owner")
+                self.calendars.append(c)
+                self.events[c["id"]] = {}
+            for e in evs:
+                cid = e.pop("calendarId", None)
+                if cid not in self.events:
+                    raise ValueError(f"event for unknown calendar {cid!r}")
+                self.add(cid, e)
+
+    def add(self, cid, e):
+        e = copy.deepcopy(e)
+        e.setdefault("id", uuid.uuid4().hex)
+        e.setdefault("status", "confirmed")
+        e.setdefault("created", now_iso())
+        e["updated"] = now_iso()
+        e["etag"] = '"%s"' % uuid.uuid4().hex[:12]
+        self.events[cid][e["id"]] = e
+        return e
+
+    def snapshot(self):
+        with self.lock:
+            flat = [dict(e, calendarId=cid) for cid, d in self.events.items() for e in d.values()]
+            return {"mode": self.mode, "calendars": copy.deepcopy(self.calendars), "events": flat}
+
+    def add_log(self, entry):
+        with self.lock:
+            self.log.append(entry)
+            if self.record:
+                with open(self.record, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def gerr(code, status, msg, reason=None):
+    err = {"code": code, "message": msg, "status": status,
+           "errors": [{"message": msg, "domain": "global", "reason": reason or status.lower()}]}
+    return code, {"error": err}
+
+
+def paged(items, qs, key, default_page):
+    """(page, nextPageToken|None) for list `items`; the token is the offset."""
+    try:
+        start = int(qs.get("pageToken", ["0"])[0])
+    except ValueError:
+        start = 0
+    try:
+        size = max(1, min(int(qs.get("maxResults", [str(default_page)])[0]), default_page))
+    except ValueError:
+        size = default_page
+    chunk = items[start:start + size]
+    nxt = str(start + size) if start + size < len(items) else None
+    out = {"kind": "calendar#" + key, "items": chunk}
+    if nxt:
+        out["nextPageToken"] = nxt
+    return out
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "fake-gcal"
+
+    def log_message(self, *args):  # never log request contents
+        pass
+
+    def _send(self, code, obj):
+        raw = b"" if obj is None else json.dumps(obj).encode()
+        self.send_response(code)
+        if raw:
+            self.send_header("Content-Type", "application/json; charset=UTF-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _body(self):
+        n = int(self.headers.get("Content-Length", "0") or 0)
+        raw = self.rfile.read(n) if n else b""
+        if not raw:
+            return None
+        return json.loads(raw)
+
+    def do_GET(self):
+        self._dispatch("GET")
+
+    def do_POST(self):
+        self._dispatch("POST")
+
+    def do_PUT(self):
+        self._dispatch("PUT")
+
+    def do_PATCH(self):
+        self._dispatch("PATCH")
+
+    def do_DELETE(self):
+        self._dispatch("DELETE")
+
+    def _dispatch(self, method):
+        st = self.server.store
+        u = urllib.parse.urlsplit(self.path)
+        path = urllib.parse.unquote(u.path)
+        qs = urllib.parse.parse_qs(u.query, keep_blank_values=True)
+        if path.startswith("/_") or path == "/health":
+            try:
+                return self._control(method, path, st)
+            except ValueError as e:
+                return self._send(*gerr(400, "INVALID_ARGUMENT", str(e)))
+        if path.startswith("/calendar/v3/"):
+            path = path[len("/calendar/v3"):]
+        try:
+            body = self._body()
+        except ValueError:
+            body = None
+            code, obj = gerr(400, "INVALID_ARGUMENT", "bad json")
+            st.add_log({"ts": now_iso(), "method": method, "path": path, "query": qs, "body": None, "status": code})
+            return self._send(code, obj)
+        code, obj = self._api(method, path, qs, body, st)
+        st.add_log({"ts": now_iso(), "method": method, "path": path, "query": qs, "body": body, "status": code})
+        self._send(code, obj)
+
+    # ---- control endpoints
+    def _control(self, method, path, st):
+        if path == "/health":
+            return self._send(200, {})
+        if method == "GET" and path == "/_events":
+            return self._send(200, st.snapshot())
+        if method == "GET" and path == "/_requests":
+            with st.lock:
+                return self._send(200, list(st.log))
+        body = self._body() or {}
+        if method == "POST" and path == "/_control":
+            with st.lock:
+                if "mode" in body:
+                    if body["mode"] not in ("ok", "revoked", "error500", "slow"):
+                        return self._send(*gerr(400, "INVALID_ARGUMENT", "mode"))
+                    st.mode = body["mode"]
+                if isinstance(body.get("token"), str):
+                    st.token = body["token"]
+                if "slow_s" in body:
+                    st.slow_s = float(body["slow_s"])
+            return self._send(200, {"mode": st.mode})
+        if method == "POST" and path == "/_seed":
+            st.seed(body)
+            return self._send(200, {"calendars": len(st.calendars)})
+        if method == "POST" and path == "/_delete":
+            with st.lock:
+                e = st.events.get(body.get("calendarId"), {}).get(body.get("id"))
+                if not e:
+                    return self._send(*gerr(404, "NOT_FOUND", "no such event"))
+                e["status"] = "cancelled"
+                e["updated"] = now_iso()
+            return self._send(200, {})
+        return self._send(*gerr(404, "NOT_FOUND", "not found"))
+
+    # ---- the API
+    def _api(self, method, path, qs, body, st):
+        auth = self.headers.get("Authorization", "")
+        with st.lock:
+            mode, token, slow_s = st.mode, st.token, st.slow_s
+        if mode == "slow":
+            time.sleep(slow_s)
+        if mode == "revoked" or auth != "Bearer " + token:
+            return gerr(401, "UNAUTHENTICATED", "Invalid Credentials", "authError")
+        if mode == "error500":
+            return gerr(500, "INTERNAL", "Backend Error", "backendError")
+        with st.lock:
+            return self._route(method, path, qs, body, st)
+
+    def _route(self, method, path, qs, body, st):
+        if path == "/users/me/calendarList" and method == "GET":
+            floor = ROLES.get(qs.get("minAccessRole", ["freeBusyReader"])[0], 0)
+            items = [c for c in st.calendars if ROLES.get(c.get("accessRole"), 0) >= floor]
+            return 200, paged(items, qs, "calendarList", st.calendar_page)
+        m = re.fullmatch(r"/calendars/([^/]+)/events(?:/([^/]+)(/move)?)?", path)
+        if not m:
+            return gerr(404, "NOT_FOUND", "Not Found", "notFound")
+        cid, eid, move = m.group(1), m.group(2), m.group(3)
+        cal = next((c for c in st.calendars if c["id"] == cid), None)
+        if cal is None:
+            return gerr(404, "NOT_FOUND", "Not Found", "notFound")
+        if method != "GET" and ROLES.get(cal.get("accessRole"), 0) < ROLES["writer"]:
+            return gerr(403, "PERMISSION_DENIED", "Forbidden", "forbidden")
+        evs = st.events[cid]
+        if eid is None:
+            if method == "GET":
+                return 200, self._list(cid, qs, st)
+            if method == "POST":
+                if not isinstance(body, dict):
+                    return gerr(400, "INVALID_ARGUMENT", "body required", "invalid")
+                if "id" in body and not re.fullmatch(r"[a-v0-9]{5,1024}", str(body["id"])):
+                    return gerr(400, "INVALID_ARGUMENT", "Invalid resource id value.", "invalid")
+                if "id" in body and body["id"] in evs:
+                    return gerr(409, "ALREADY_EXISTS", "The requested identifier already exists.", "duplicate")
+                return 200, copy.deepcopy(st.add(cid, body))
+            return gerr(405, "METHOD_NOT_ALLOWED", "method")
+        ev = evs.get(eid)
+        if move:
+            if method != "POST":
+                return gerr(405, "METHOD_NOT_ALLOWED", "method")
+            dest = qs.get("destination", [None])[0]
+            if ev is None:
+                return gerr(404, "NOT_FOUND", "Not Found", "notFound")
+            if dest not in st.events:
+                return gerr(404, "NOT_FOUND", "destination", "notFound")
+            if eid in st.events[dest]:
+                return gerr(409, "ALREADY_EXISTS", "The requested identifier already exists.", "duplicate")
+            del evs[eid]
+            ev["updated"] = now_iso()
+            st.events[dest][eid] = ev
+            return 200, copy.deepcopy(ev)
+        if method == "DELETE":
+            if ev is None:
+                return gerr(404, "NOT_FOUND", "Not Found", "notFound")
+            if ev["status"] == "cancelled":
+                return gerr(410, "GONE", "Resource has been deleted", "deleted")
+            ev["status"] = "cancelled"
+            ev["updated"] = now_iso()
+            return 204, None
+        if ev is None:
+            return gerr(404, "NOT_FOUND", "Not Found", "notFound")
+        if method == "GET":
+            return 200, copy.deepcopy(ev)
+        if method in ("PUT", "PATCH") and isinstance(body, dict):
+            if ev["status"] == "cancelled":
+                return 200, copy.deepcopy(ev)  # tombstone: not applied
+            if method == "PUT":
+                keep = {k: ev[k] for k in ("id", "created")}
+                ev.clear()
+                ev.update(copy.deepcopy(body))
+                ev.update(keep)
+                ev.setdefault("status", "confirmed")
+            else:
+                merge(ev, body)
+                ev["id"] = eid
+            ev["updated"] = now_iso()
+            ev["etag"] = '"%s"' % uuid.uuid4().hex[:12]
+            return 200, copy.deepcopy(ev)
+        return gerr(405, "METHOD_NOT_ALLOWED", "method")
+
+    def _list(self, cid, qs, st):
+        tmin = parse_ts(qs.get("timeMin", [None])[0])
+        tmax = parse_ts(qs.get("timeMax", [None])[0])
+        show_deleted = qs.get("showDeleted", ["false"])[0] == "true"
+        props = []
+        for p in qs.get("privateExtendedProperty", []):
+            k, _, v = p.partition("=")
+            props.append((k, v))
+        out = []
+        for ev in st.events[cid].values():
+            if ev["status"] == "cancelled" and not show_deleted:
+                continue
+            priv = (ev.get("extendedProperties") or {}).get("private") or {}
+            if any(priv.get(k) != v for k, v in props):
+                continue
+            s, e = ev_bounds(ev)
+            if tmin is not None and e is not None and e <= tmin:
+                continue
+            if tmax is not None and s is not None and s >= tmax:
+                continue
+            out.append(copy.deepcopy(ev))
+        out.sort(key=lambda x: (ev_bounds(x)[0] or 0, x["id"]))
+        res = paged(out, qs, "events", st.page)
+        res["summary"] = next((c.get("summary") for c in st.calendars if c["id"] == cid), cid)
+        return res
+
+
+def make_server(port, token, record, page=2, calendar_page=2, seed=None):
+    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    srv.daemon_threads = True
+    srv.store = Store(token, record, page, calendar_page)
+    if seed:
+        with open(seed, encoding="utf-8") as f:
+            srv.store.seed(json.load(f))
+    return srv
+
+
+# ---------------------------------------------------------------- self-test
+def self_test():
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="fake-gcal-test-")
+    rec = os.path.join(tmp, "rec.jsonl")
+    seed = os.path.join(tmp, "seed.json")
+    with open(seed, "w", encoding="utf-8") as f:
+        json.dump({"accounts": [{"email": "a@test", "calendars": [
+            {"id": "work", "summary": "Work", "primary": True, "accessRole": "owner", "selected": True,
+             "events": [{"id": "seed1", "summary": "CANARY-GTITLE", "start": {"dateTime": "2030-01-07T14:00:00Z"},
+                         "end": {"dateTime": "2030-01-07T15:00:00Z"}},
+                        {"id": "seed2", "summary": "later", "start": {"dateTime": "2030-01-08T14:00:00Z"},
+                         "end": {"dateTime": "2030-01-08T15:00:00Z"}},
+                        {"id": "seed3", "summary": "later2", "start": {"dateTime": "2030-01-09T14:00:00Z"},
+                         "end": {"dateTime": "2030-01-09T15:00:00Z"}}]},
+            {"id": "personal", "summary": "Personal", "accessRole": "owner", "selected": True},
+            {"id": "holidays", "summary": "Holidays", "accessRole": "reader", "hidden": True}]}]}, f)
+    srv = make_server(0, "tok-secret-0", rec, seed=seed)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{port}"
+    fails = []
+
+    def call(method, path, body=None, token="tok-secret-0", expect=None):
+        req = urllib.request.Request(base + path, method=method,
+                                     data=None if body is None else json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                code, raw = r.status, r.read()
+        except urllib.error.HTTPError as e:
+            code, raw = e.code, e.read()
+        obj = json.loads(raw) if raw else None
+        if expect is not None and code != expect:
+            fails.append(f"{method} {path}: want {expect}, got {code} {obj}")
+        return code, obj
+
+    def check(cond, what):
+        if not cond:
+            fails.append(what)
+
+    # health, auth
+    call("GET", "/health", token=None, expect=200)
+    call("GET", "/users/me/calendarList", token=None, expect=401)
+    call("GET", "/users/me/calendarList", token="nope", expect=401)
+    # calendarList: paging (3 calendars, page 2), minAccessRole
+    _, p1 = call("GET", "/users/me/calendarList?minAccessRole=freeBusyReader", expect=200)
+    check(len(p1["items"]) == 2 and p1.get("nextPageToken"), "calendarList page 1")
+    _, p2 = call("GET", "/users/me/calendarList?pageToken=" + p1["nextPageToken"], expect=200)
+    check(len(p2["items"]) == 1 and "nextPageToken" not in p2, "calendarList page 2")
+    _, own = call("GET", "/users/me/calendarList?minAccessRole=writer", expect=200)
+    check([c["id"] for c in own["items"]] == ["work", "personal"], "minAccessRole=writer")
+    # events.list: paging + time window + singleEvents
+    q = "/calendars/work/events?singleEvents=true&timeMin=2030-01-01T00:00:00Z&timeMax=2030-02-01T00:00:00Z"
+    _, e1 = call("GET", q, expect=200)
+    check(len(e1["items"]) == 2 and e1.get("nextPageToken"), "events page 1 has 2 + token")
+    _, e2 = call("GET", q + "&pageToken=" + e1["nextPageToken"], expect=200)
+    check(len(e2["items"]) == 1, "events page 2")
+    _, e3 = call("GET", "/calendars/work/events?timeMin=2030-01-07T14:30:00Z&timeMax=2030-01-07T14:40:00Z", expect=200)
+    check([x["id"] for x in e3["items"]] == ["seed1"], "overlap window")
+    _, e4 = call("GET", "/calendars/work/events?timeMin=2030-01-10T00:00:00Z", expect=200)
+    check(e4["items"] == [], "window after all events is empty")
+    # insert with a client id; 409 on duplicate; wrong calendar 404; reader calendar 403
+    ev = {"id": "risi" + "ab" * 16, "summary": "Interview", "start": {"dateTime": "2030-01-08T10:00:00+05:30"},
+          "end": {"dateTime": "2030-01-08T11:00:00+05:30"}, "transparency": "opaque",
+          "extendedProperties": {"private": {"risime": "1", "risi_event_id": "e1", "risi_version": "1"}}}
+    c, got = call("POST", "/calendars/work/events?sendUpdates=none", ev, expect=200)
+    check(got and got["id"] == ev["id"], "insert keeps the client id")
+    call("POST", "/calendars/work/events?sendUpdates=none", ev, expect=409)
+    call("POST", "/calendars/nope/events", ev, expect=404)
+    call("POST", "/calendars/holidays/events", dict(ev, id="zzzzz1"), expect=403)
+    call("POST", "/calendars/work/events", dict(ev, id="BAD ID"), expect=400)
+    # privateExtendedProperty filter
+    _, pf = call("GET", "/calendars/work/events?privateExtendedProperty=risime%3D1", expect=200)
+    check([x["id"] for x in pf["items"]] == [ev["id"]], "privateExtendedProperty=risime=1")
+    _, pf2 = call("GET", "/calendars/work/events?privateExtendedProperty=risime%3D1&privateExtendedProperty=risi_event_id%3Dnope",
+                  expect=200)
+    check(pf2["items"] == [], "two privateExtendedProperty filters must both match")
+    # get, patch (recursive merge), put
+    _, g = call("GET", "/calendars/work/events/" + ev["id"], expect=200)
+    check(g["summary"] == "Interview", "get")
+    _, pt = call("PATCH", "/calendars/work/events/" + ev["id"] + "?sendUpdates=none",
+                 {"start": {"dateTime": "2030-01-08T12:00:00+05:30"}, "extendedProperties": {"private": {"risi_version": "2"}}},
+                 expect=200)
+    check(pt["start"]["dateTime"].startswith("2030-01-08T12") and pt["end"]["dateTime"].startswith("2030-01-08T11")
+          and pt["extendedProperties"]["private"] == {"risime": "1", "risi_event_id": "e1", "risi_version": "2"},
+          "patch merges recursively")
+    _, pu = call("PUT", "/calendars/work/events/" + ev["id"] + "?sendUpdates=none", dict(ev, summary="Interview 2"), expect=200)
+    check(pu["summary"] == "Interview 2" and pu["id"] == ev["id"], "put replaces")
+    call("PATCH", "/calendars/work/events/nothere1", {"summary": "x"}, expect=404)
+    # move
+    call("POST", "/calendars/work/events/" + ev["id"] + "/move?destination=personal", expect=200)
+    call("GET", "/calendars/work/events/" + ev["id"], expect=404)
+    call("POST", "/calendars/personal/events/" + ev["id"] + "/move?destination=work", expect=200)
+    # delete: 204, tombstone (get -> cancelled, list hides it, insert same id -> 409, delete again -> 410)
+    call("DELETE", "/calendars/work/events/" + ev["id"] + "?sendUpdates=none", expect=204)
+    _, tg = call("GET", "/calendars/work/events/" + ev["id"], expect=200)
+    check(tg["status"] == "cancelled", "deleted event is a cancelled tombstone")
+    _, pf3 = call("GET", "/calendars/work/events?privateExtendedProperty=risime%3D1", expect=200)
+    check(pf3["items"] == [], "list hides tombstones")
+    call("POST", "/calendars/work/events", ev, expect=409)
+    call("DELETE", "/calendars/work/events/" + ev["id"], expect=410)
+    call("DELETE", "/calendars/work/events/nothere1", expect=404)
+    # /_events, /_requests
+    _, snap = call("GET", "/_events", token=None, expect=200)
+    check(any(e["id"] == ev["id"] and e["status"] == "cancelled" and e["calendarId"] == "work" for e in snap["events"]),
+          "/_events shows the tombstone with calendarId")
+    _, reqs = call("GET", "/_requests", token=None, expect=200)
+    ins = [r for r in reqs if r["method"] == "POST" and r["path"] == "/calendars/work/events" and r["status"] == 200]
+    check(ins and ins[0]["query"].get("sendUpdates") == ["none"] and ins[0]["body"]["id"] == ev["id"],
+          "request log has the insert with sendUpdates=none")
+    # /_delete (user deleted in Google), /_seed
+    call("POST", "/_delete", {"calendarId": "work", "id": "seed2"}, token=None, expect=200)
+    _, e5 = call("GET", "/calendars/work/events?timeMin=2030-01-01T00:00:00Z&timeMax=2030-02-01T00:00:00Z&pageToken=0", expect=200)
+    _, e5b = call("GET", "/calendars/work/events?timeMin=2030-01-01T00:00:00Z&timeMax=2030-02-01T00:00:00Z&pageToken=2", expect=200)
+    check("seed2" not in [x["id"] for x in e5["items"] + e5b["items"]], "/_delete hides the event")
+    call("POST", "/_seed", {"calendars": [{"id": "c1", "summary": "One", "primary": True}],
+                            "events": [{"calendarId": "c1", "id": "aaaaa", "summary": "s",
+                                        "start": {"date": "2030-03-01"}, "end": {"date": "2030-03-02"}}]}, token=None, expect=200)
+    _, e6 = call("GET", "/calendars/c1/events?timeMin=2030-03-01T00:00:00Z&timeMax=2030-03-01T12:00:00Z", expect=200)
+    check([x["id"] for x in e6["items"]] == ["aaaaa"], "seed via /_seed, all-day event")
+    # control: revoked -> 401; error500; slow; token change; back to ok
+    call("POST", "/_control", {"mode": "revoked"}, token=None, expect=200)
+    c, err = call("GET", "/users/me/calendarList", expect=401)
+    check(err and err["error"]["status"] == "UNAUTHENTICATED", "revoked gives Google's 401 body")
+    call("POST", "/_control", {"mode": "error500"}, token=None, expect=200)
+    call("GET", "/users/me/calendarList", expect=500)
+    call("POST", "/_control", {"mode": "slow", "slow_s": 0.3}, token=None, expect=200)
+    t0 = time.time()
+    call("GET", "/users/me/calendarList", expect=200)
+    check(time.time() - t0 >= 0.3, "slow mode waits")
+    call("POST", "/_control", {"mode": "ok", "token": "tok-secret-1"}, token=None, expect=200)
+    call("GET", "/users/me/calendarList", token="tok-secret-0", expect=401)
+    call("GET", "/users/me/calendarList", token="tok-secret-1", expect=200)
+    call("POST", "/_control", {"mode": "bogus"}, token=None, expect=400)
+    # the record never holds a token
+    raw = open(rec, encoding="utf-8").read()
+    check("tok-secret-0" not in raw and "tok-secret-1" not in raw and "Bearer" not in raw, "the record must not hold the token")
+    check(len(raw.splitlines()) >= 25, "the record has one line per API request")
+    srv.shutdown()
+    if fails:
+        for f in fails:
+            print("FAIL", f)
+        print("fake-gcal self-test: FAILED (%d)" % len(fails))
+        return 1
+    print("fake-gcal self-test: ok")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--port", type=int, default=8198)
+    ap.add_argument("--token", default=os.environ.get("FAKE_GCAL_TOKEN", "fake-gcal-token"))
+    ap.add_argument("--record", default=os.path.join(os.getcwd(), "fake-gcal-requests.jsonl"))
+    ap.add_argument("--seed", default=None, help="JSON file: accounts -> calendars -> events (or calendars + events)")
+    ap.add_argument("--page", type=int, default=2, help="events.list page size (default 2)")
+    ap.add_argument("--calendar-page", type=int, default=2, help="calendarList page size (default 2)")
+    ap.add_argument("--self-test", action="store_true")
+    args = ap.parse_args()
+    if args.self_test:
+        return self_test()
+    srv = make_server(args.port, args.token, args.record, args.page, args.calendar_page, args.seed)
+    print(f"fake-gcal on http://127.0.0.1:{srv.server_address[1]}/, recording to {args.record}", flush=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

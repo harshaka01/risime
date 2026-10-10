@@ -20,6 +20,13 @@
 #   today); step 14 restarts the temp server with RISI_EVENTS=on RISI_NOTES=on RISI_LEDGER=on (and the apps), step 16
 #   restarts it with both off again. UITEST_RISI_ONLY=1: steps 1 and 14-16.
 #
+#   --google (v1.31 §31, decision 074; standalone, implies --risi --skills): step 17, the Google Calendar link against
+#   scripts/fake-gcal on 127.0.0.1:$UITEST_GCAL_PORT (default 8198; adb reverse to the phones). A THIRD redroid (-ui3,
+#   5853: UITEST_REDROID_C[_PORT]) is A's second device (A2); A's first (A1, "DEV=A") is the Google device. The server
+#   runs RISI_EVENTS=on RISI_LEDGER=on, first without RISI_GCAL (v1.30 answers, no Google section), then RISI_GCAL=on.
+#   The debug seam `lk.codegen.risime.debug.GCAL_TEST` stands in for Google Play services (Redroid has none).
+#   UITEST_GOOGLE_ONLY=1: only steps 1 and 17 (what scripts/nightly-release runs when UIENTRY_GOOGLE=1).
+#
 #  1. A and B sign in through the login UI (dev OTP), become friends, both open the DM; it turns e2ee.
 #  2. A's chat: the "🔒 Private" | "● Official" row under the header; the Official tab's "Start Official".
 #  3. Chat info (tap the name): "Messages are end-to-end encrypted" within 30 s (never stuck on
@@ -93,6 +100,13 @@
 #     Screens (docs/status/screens/, Harsha's GATE names): risi-calendar-action-card, calendar-agenda, calendar-day,
 #     calendar-week, calendar-month, calendar-invite-card, event-card-official, note-card, note-screen, notes-list,
 #     notes-saved-official.
+# 17. (--google, contract v1.31 §31.11 gate items 1-9) see the block near the end of this file: switch off (no Google
+#     section, v1.30 "Checked:" line); connect through the seam (picker: Work + Personal read, Work write); "Am I free
+#     Monday 2pm" asked on A2 → not free, "Checked: Risi Calendar · Google Calendar (2 calendars)" (names on A1);
+#     A1 stopped → "phone didn't answer", never free; [Add] Shenika's interview → one copy risi<hex> risime=1 sendUpdates=none
+#     (an insert that failed with 500 is retried: still one copy); loop guard (one busy time); edit → PATCH; delete →
+#     DELETE; revoked → "needs reconnecting", ONE google_reconnect card, Reconnect works; Disconnect on A2 with Remove →
+#     copies gone, link none; canaries (CANARY-GTITLE, the token, the account, Work/Personal) in no log or dump.
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -102,12 +116,16 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
 CLS=lk.codegen.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0
+APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;;
   --skills) RISI=1; SKILLS=1; SKILLS_STEP=1; shift;; --ledger) RISI=1; LEDGER=1; shift;;
   --calendar) RISI=1; SKILLS=1; SKILLS_STEP=1; CALENDAR=1; shift;; --offers) RISI=1; SKILLS=1; OFFERS=1; shift;;
   --risi-calendar) RISI=1; SKILLS=1; RCAL=1; shift;; --risi-notes) RISI=1; SKILLS=1; RNOTES=1; shift;;
+  --google) RISI=1; SKILLS=1; GCAL=1; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
+# --google alone: UITEST_GOOGLE_ONLY=1 = steps 1 and 17 (steps 2-16 are skipped through UITEST_RISI_ONLY, which only
+# the --risi-calendar/--risi-notes blocks and the google block look at).
+[ "${UITEST_GOOGLE_ONLY:-0}" = 1 ] && [ "$GCAL" = 1 ] && export UITEST_RISI_ONLY=1
 # The ledger's server flags (the quiet rule, the extraction) for --ledger, --offers and steps 14-15.
 RISI2=0; { [ "$RCAL" = 1 ] || [ "$RNOTES" = 1 ]; } && RISI2=1
 LEDGER_ON=0; { [ "$LEDGER" = 1 ] || [ "$OFFERS" = 1 ] || [ "$RISI2" = 1 ]; } && LEDGER_ON=1
@@ -118,20 +136,22 @@ APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
 PATH="$("$REPO/scripts/android-target" adb):$PATH"
 I1="${UITEST_REDROID_A:--ui1}"; P1="${UITEST_REDROID_A_PORT:-5851}"
 I2="${UITEST_REDROID_B:--ui2}"; P2="${UITEST_REDROID_B_PORT:-5852}"
+I3="${UITEST_REDROID_C:--ui3}"; P3="${UITEST_REDROID_C_PORT:-5853}"   # --google: A's second device (A2)
+GP="${UITEST_GCAL_PORT:-8198}"
 SHOTS="${UITEST_SHOTS:-$REPO/docs/status/screens}"; mkdir -p "$SHOTS"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-uientry.XXXXXX")"
 LOGS="$HOME/risime-logs/uientry$SUF"; mkdir -p "$LOGS"; rm -f "$LOGS"/*.txt "$LOGS"/*.png "$LOGS"/*.xml "$LOGS"/*.log 2>/dev/null || true
 export RISIME_DEV_DB="risime_uientry$SUF" RISIME_DEV_KEYSPACE="risime_uientry$SUF" ERL_EPMD_ADDRESS=127.0.0.1
 export MIX_BUILD_PATH="$REPO/server/_build/uientry$SUF" RISIME_CODE_RELOADER=false
 PIN=1234
-SA=""; SB=""; DEV=A
+SA=""; SB=""; SC=""; DEV=A
 pass() { echo "UIENTRY PASS $*"; }
 fail() { echo "UIENTRY FAIL $*"; diag; exit 1; }
-ser() { if [ "$1" = A ]; then echo "$SA"; else echo "$SB"; fi; }
+ser() { case "$1" in A) echo "$SA";; C) echo "$SC";; *) echo "$SB";; esac; }
 A() { adb -s "$(ser "$DEV")" "$@"; }
 diag() {
   local d
-  for d in A B; do
+  for d in A B C; do
     [ -n "$(ser $d)" ] || continue
     adb -s "$(ser $d)" exec-out screencap -p > "$LOGS/$d-screen.png" 2>/dev/null || true
     adb -s "$(ser $d)" logcat -d > "$LOGS/$d-logcat.txt" 2>/dev/null || true
@@ -145,9 +165,11 @@ cleanup() {
   [ "${SERVER_STARTED:-0}" = 1 ] && { stop_server >/dev/null 2>&1 || true; }
   tmux kill-session -t "risime-uientry$SUF" 2>/dev/null || true
   tmux kill-session -t "risime-uientry-llm$SUF" 2>/dev/null || true
+  tmux kill-session -t "risime-uientry-gcal$SUF" 2>/dev/null || true
   if [ "$KEEP" = 0 ]; then
     REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
     REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+    [ "$GCAL" = 1 ] && { REDROID_INSTANCE="$I3" REDROID_PORT="$P3" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true; }
   fi
   (cd "$REPO/server" && $M mix ecto.drop --quiet --force >/dev/null 2>&1) || true
   rm -rf -- "${WORK:?}"
@@ -198,6 +220,23 @@ if os.environ.get("RC_LIVE") == "1":
                      "actions": [{"tool": "risi_calendar_add", "args": {"title": "Interview", "start": os.environ["RC_START"], "end": None,
                                                                        "all_day": None, "with": None, "reminder_min": None}},
                                  final("Tap Add on the card.")]})
+# Step 17 (--google, GCAL_LIVE=1; RISI_EVENTS on): "Am I free Monday 2pm" / "... Tuesday 10am" -> the server tool
+# risi_calendar_check over that whole day (the Google call goes to the Google device in the same step), then a
+# "free" claim that the server must rewrite against the busy Google event or the copy (29.7, 31.5); Shenika's
+# interview on Tuesday 10:00 -> risi_calendar_add (the Risi Calendar card). GC_MON / GC_TUE are A's local dates.
+if os.environ.get("GCAL_LIVE") == "1":
+    mon, tue = os.environ["GC_MON"], os.environ["GC_TUE"]
+    day = lambda d: {"from": d + "T00:00", "to": d + "T23:59"}
+    rules[0:0] = [
+        {"name": "gcal_free_mon", "task": "risi_next_action", "match": "(?i)am i free monday",
+         "actions": [{"tool": "risi_calendar_check", "args": day(mon)}, final("You're free on Monday at 2 pm.")]},
+        {"name": "gcal_free_tue", "task": "risi_next_action", "match": "(?i)am i free tuesday",
+         "actions": [{"tool": "risi_calendar_check", "args": day(tue)}, final("You're free on Tuesday at 10 am.")]},
+        {"name": "gcal_shenika", "task": "risi_next_action", "match": "(?i)interview with shenika",
+         "actions": [{"tool": "risi_calendar_add", "args": {"title": "Interview with Shenika", "start": tue + "T10:00", "end": None,
+                                                           "all_day": None, "with": None, "reminder_min": None}},
+                     final("Tap Add on the card.")]},
+    ]
 # Step 13 (--offers): the extraction of two Official discussions (both before step 11's catch-all rule). The
 # owner refs follow the members' order (u1/u2), so each rule exists for A = u1 and A = u2, told apart by the
 # prompt's member line {"name":"ZZ UI A",…,"ref":"uN",…}. Discussion 1 ("cement delivery"): A's timed item, two
@@ -367,7 +406,12 @@ otp() { grep -a "\[DEV OTP\] $1:" "$WORK/server.log" | tail -1 | grep -oE '[0-9]
 echo "==> two redroid containers ($I1:$P1, $I2:$P2)"
 SA="$(REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" start)"
 SB="$(REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" start)"
-for DEV in A B; do
+DEVS="A B"
+if [ "$GCAL" = 1 ]; then
+  echo "==> --google: a third redroid ($I3:$P3) as A's second device"
+  SC="$(REDROID_INSTANCE="$I3" REDROID_PORT="$P3" "$REPO/scripts/android-target" start)"; DEVS="A B C"
+fi
+for DEV in $DEVS; do
   A uninstall "$PKG" >/dev/null 2>&1 || true
   A install "$APK" >/dev/null
   A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
@@ -1017,6 +1061,19 @@ case System.argv() do
     # Step 16: how many of A's and B's devices still advertise risi_events / risi_notes.
     n = Enum.count(Repo.all(RisiMe.Devices.Device), &Enum.any?(&1.capabilities || [], fn c -> c in ~w(risi_events risi_notes) end))
     IO.puts("uientry: advertised=#{n}")
+  ["gcal_link"] ->
+    # Step 17: A's Google link row (§31.3 storage: state, read_calendars, write_calendar, mirror, device_id) or "none".
+    rows = Repo.query!("select state, read_calendars, write_calendar, mirror, device_id::text from risi_gcal_links where user_id = $1", [Ecto.UUID.dump!(a.id)]).rows
+    IO.puts("uientry: gcal_link=" <> (case rows do [] -> "none"; [[s, r, w, m, d] | _] -> "#{s} #{r} #{w} #{m} #{d}" end))
+  ["pgscan", tables | needles] ->
+    # Step 17 canaries (§31.10): the needles must be in no row of the listed tables ("*" = every public table).
+    all = Repo.query!("select table_name from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE'").rows |> List.flatten()
+    ts = if tables == "*", do: all, else: String.split(tables, ",")
+    for t <- ts, n <- needles do
+      [[c]] = Repo.query!("select count(*) from \"#{t}\" x where x::text like $1", ["%" <> n <> "%"]).rows
+      if c > 0, do: IO.puts("uientry: canary #{String.slice(n, 0, 6)}… in #{t}=#{c}")
+    end
+    IO.puts("uientry: pgscan done #{length(ts)} tables")
   ["events", who] ->
     # The caller's view of GET /risi/calendar/events (Calendar.list, the controller's call) from yesterday on.
     u = if who == "B", do: Repo.get_by!(User, phone: "+94770000982"), else: a
@@ -2081,6 +2138,385 @@ PY
   adv="$(ofx advertised)"
   [ "$adv" = "uientry: advertised=0" ] || fail "risi off: devices still advertise risi_events/risi_notes after the switch off ($adv)"
   pass "risi off: no Calendar tab on either phone, no 'Notes' in the Risi chat's ⋮, no /risi/calendar|notes request, no device advertises risi_events/risi_notes"
+fi
+
+# ---------------------------------------------------------------- 17. (--google) the Google Calendar link (contract v1.31 §31)
+# Gate items 1-9 of §31.12 with scripts/fake-gcal (Google's Calendar API on 127.0.0.1:$GP) and the debug seam
+# `lk.codegen.risime.debug.GCAL_TEST` (a fake authorizer + the base URL: Redroid has no Play services).
+# Devices: A (= "A1", the Google device), C (= "A2", A's second device, signed in with A's phone number), B is only the
+# DM peer. UI texts are the ones of §31.2/§31.8/§31.9 and the android brief (docs/status/briefs/v1.31-android.md);
+# the strings marked TODO(android) are not fixed by the brief: check docs/status/android.md ("v1.31 UI strings").
+if [ "$GCAL" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_RISI_ONLY:-0}" = 1 ]; }; then
+  DEV=A; screen_wh
+  GACC="a@test"; GTOK="uitest-gcal-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  GREC="$WORK/gcal.jsonl"; GCANARY="CANARY-GTITLE"; : > "$GREC"
+  # TODO(android): the picker's confirm button (the brief doesn't fix it); the first of these that exists is tapped.
+  GPICK_OK="${UITEST_GCAL_PICK_OK:-Save}"
+  # TODO(android): the Disconnect sheet's confirm button (the sheet is titled "Disconnect Google Calendar?").
+  GDISC_OK="${UITEST_GCAL_DISCONNECT_OK:-Disconnect}"
+
+  # ---- helpers
+  cat > "$WORK/gtext.py" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+# gtext.py XML after "<question>"   -> the texts of every node below the (last) node whose text is the question
+# gtext.py XML count "<needle>"     -> how many nodes' text contain the needle
+# gtext.py XML rows                 -> "x y text" of every EditText whose text is HH:MM
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+def box(n): return list(map(int, re.findall(r'\d+', n.get('bounds'))))
+def cy(n): b = box(n); return (b[1] + b[3]) // 2
+mode = sys.argv[2]
+if mode == 'after':
+    qs = [cy(n) for n in nodes if (n.get('text') or '') == sys.argv[3]]
+    if qs:
+        qy = max(qs)
+        print(' ¶ '.join((n.get('text') or '').replace('\n', ' ') for n in sorted((n for n in nodes if n.get('text') and cy(n) > qy), key=cy)))
+elif mode == 'count':
+    print(sum(1 for n in nodes if sys.argv[3] in (n.get('text') or '')))
+elif mode == 'rows':
+    for n in nodes:
+        t = n.get('text') or ''
+        if n.get('class') == 'android.widget.EditText' and re.fullmatch(r'\d\d:\d\d', t):
+            b = box(n); print((b[0] + b[2]) // 2, (b[1] + b[3]) // 2, t)
+PY
+  gstore() { curl -sf "http://127.0.0.1:$GP/_events"; }
+  gctl() { curl -sf -X POST "http://127.0.0.1:$GP/_control" -d "$1" >/dev/null; }
+  gapi() { curl -sf -X "$1" "http://127.0.0.1:$GP$2" -H "Authorization: Bearer $GTOK" -H 'Content-Type: application/json' -d "$3"; }
+  # "id|summary|calendar|start|risime|has_attendees|status" for every RisiMe copy (id risi + 32 hex digits).
+  gcopies() {
+    gstore | python3 -I -c '
+import json, re, sys
+for e in json.load(sys.stdin)["events"]:
+    if re.fullmatch(r"risi[0-9a-f]{32}", e["id"]):
+        p = (e.get("extendedProperties") or {}).get("private") or {}
+        print("|".join([e["id"], e.get("summary", ""), e["calendarId"], (e.get("start") or {}).get("dateTime", ""), p.get("risime", ""), str("attendees" in e).lower(), e["status"]]))'
+  }
+  gn_copies() { gcopies | grep -c '|confirmed$' || true; }
+  # "METHOD path status sendUpdates" of every logged call, from the fake's request log.
+  greq() {
+    curl -sf "http://127.0.0.1:$GP/_requests" | python3 -I -c '
+import json, sys
+for r in json.load(sys.stdin):
+    print(r["method"], r["path"], r["status"], "sendUpdates=" + ",".join(r["query"].get("sendUpdates", [])))'
+  }
+  greq_has() { greq | grep -q -- "$1"; }
+  gwait() { local n=$1; shift; for _ in $(seq 1 "$n"); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done; return 1; }
+  gcopies_eq() { [ "$(gn_copies)" = "$1" ]; }
+  seam() {  # $1 = connected | reauth_needed | none, on DEV (debug broadcast, protected by android.permission.DUMP)
+    A shell am broadcast -a lk.codegen.risime.debug.GCAL_TEST -p "$PKG" --es base_url "http://127.0.0.1:$GP/" \
+      --es access_token "$GTOK" --es account "$GACC" --es state "$1" >/dev/null
+  }
+  gsee() {  # the answer to the question $1 (on DEV), as the texts below that question: sets ANS
+    ANS=""
+    for _ in $(seq 1 "${2:-60}"); do
+      dump; ANS="$(python3 -I "$WORK/gtext.py" "$WORK/ui-$DEV.xml" after "$1")"
+      case "$ANS" in *"Checked:"*) return 0;; esac
+      sleep 2
+    done
+    return 1
+  }
+  gask() {  # $1 = a UNIQUE question (typed in the Risi chat on DEV), $2 = wait seconds → ANS (has the "Checked:" line)
+    open_risi_chat || fail "google: $DEV can't open its Risi chat"
+    tap "Ask Risi…" || true; sleep 0.5
+    A shell input text "$(printf '%s' "$1" | sed 's/ /%s/g')"; sleep 0.5
+    tap "Send" || fail "google: $DEV: send '$1'"
+    gsee "$1" "${2:-60}" || fail "google: $DEV: no answer with a 'Checked:' line to '$1' (got: ${ANS:-nothing})"
+    echo "    [$DEV] answer: $ANS"
+  }
+  tap_last_text() {  # the lowest node with the exact text $1 (a sheet's confirm button under a same-named row)
+    local xy; dump
+    xy="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try: nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError: nodes = []
+hits = []
+for n in nodes:
+    if (n.get('text') or '') == sys.argv[2]:
+        b = list(map(int, re.findall(r'\d+', n.get('bounds')))); hits.append(((b[1] + b[3]) // 2, (b[0] + b[2]) // 2))
+if hits: y, x = max(hits); print(x, y)
+PY
+)"
+    [ -n "$xy" ] || { echo "    [$DEV] no text node: $1"; return 1; }
+    A shell input tap $xy
+  }
+  # Settings → Risi skills → Calendar → the "Google Calendar" section (§31.2), left on screen. TODO(android): the
+  # section may sit on the Calendar card or behind [Details]; both are tried.
+  gsec_any() { has 'text="Connect Google Calendar"' || has 'text="Reconnect Google Calendar"' || has 'Connected on ' || has 'Needs reconnecting' || has 'Paused: turn on the Calendar skill'; }
+  gsec_open() {
+    settings_open "Risi skills" || return 1
+    reveal "Calendar skill" || return 1
+    local i
+    for i in 1 2 3 4 5 6; do gsec_any && return 0; A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 45 / 100)) 700; sleep 1; done
+    reveal "Calendar skill" || true
+    tap_below "Calendar" "Details" || true; sleep 2
+    for i in 1 2 3 4 5 6; do gsec_any && return 0; A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 45 / 100)) 700; sleep 1; done
+    return 1
+  }
+  gsec_wait() {  # $1 text fragment of the section, $2 s
+    for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done
+    echo "    [$DEV] the Google Calendar section never showed: $1"; return 1
+  }
+  gevents_n() { ofx events A | grep -cF 'uientry: event Interview with Shenika|' || true; }
+  gapps_restart() {
+    local d
+    for d in A C; do DEV=$d; A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || true; done
+    for d in A C; do DEV=$d; wait_list 60 || fail "google: $d's app didn't come back to its chat list ($1)"; dismiss_prompts; done
+    DEV=A
+  }
+  gswitch() {  # $1 = events (RISI_EVENTS, no Google) | gcal (RISI_EVENTS + RISI_GCAL)
+    stop_server || fail "google: couldn't stop the temp server"
+    printf 'RISI_EVENTS=on\nRISI_LEDGER=on\nRISI_TOOLS=on\nRISI_SKILLS=on\n' > "$WORK/phase.env"
+    [ "$1" = gcal ] && echo 'RISI_GCAL=on' >> "$WORK/phase.env"
+    start_server
+    local cfg; cfg="$(curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" || true)"
+    printf '%s' "$cfg" | grep -q '"risi_events":"on"' || fail "google: /auth/config doesn't say risi_events: on ($cfg)"
+    if [ "$1" = gcal ]; then printf '%s' "$cfg" | grep -q '"google_calendar":"on"' || fail "google: /auth/config doesn't say google_calendar: on with RISI_GCAL=on ($cfg)"
+    else printf '%s' "$cfg" | grep -q 'google_calendar' && fail "google: /auth/config has google_calendar while RISI_GCAL is unset ($cfg)"; fi
+    return 0
+  }
+
+  # ---- dates (A's zone on the server): next Monday 14:00-15:00 (the busy Google event) and the Tuesday after
+  stz="$(ofx tz | sed -n 's/^uientry: tz=//p')"; [ -n "$stz" ] || fail "google: fixture: A's zone"
+  read -r GC_MON GC_TUE GMON_S GMON_E <<<"$(python3 -I - "$stz" <<'PY'
+import sys, datetime as dt
+from zoneinfo import ZoneInfo
+z = ZoneInfo(sys.argv[1]); now = dt.datetime.now(z)
+d = now.date() + dt.timedelta(days=(7 - now.weekday()) % 7 or 7)
+s = dt.datetime(d.year, d.month, d.day, 14, 0, tzinfo=z)
+print(d.isoformat(), (d + dt.timedelta(days=1)).isoformat(), s.isoformat(), (s + dt.timedelta(hours=1)).isoformat())
+PY
+)"
+  export GC_MON GC_TUE GCAL_LIVE=1
+  conv="$(fx conv | sed -n 's/^uientry: conv=//p')"
+  write_script "2099-01-01T00:00:00.000Z" "${conv:-dm:none}"; start_llm
+
+  # ---- fake-gcal: Work (primary, owner), Personal (owner), Holidays (reader, hidden); loopback; token for this run
+  cat > "$WORK/gcal-seed.json" <<'JSON'
+{"accounts": [{"email": "a@test", "calendars": [
+  {"id": "work", "summary": "Work", "primary": true, "accessRole": "owner", "selected": true},
+  {"id": "personal", "summary": "Personal", "accessRole": "owner", "selected": true},
+  {"id": "holidays", "summary": "Holidays", "accessRole": "reader", "selected": false, "hidden": true}]}]}
+JSON
+  ss -ltnH "sport = :$GP" | grep -q . && { echo "fake-gcal port $GP busy (another ui-entry-test?): set UITEST_GCAL_PORT"; exit 1; }
+  tmux kill-session -t "risime-uientry-gcal$SUF" 2>/dev/null || true
+  tmux new -d -s "risime-uientry-gcal$SUF" "python3 -I '$REPO/scripts/fake-gcal' --port $GP --token '$GTOK' --record '$GREC' --seed '$WORK/gcal-seed.json' >> '$WORK/fake-gcal.out' 2>&1"
+  for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$GP/health" && break; sleep 0.5; done
+  curl -sf -o /dev/null "http://127.0.0.1:$GP/health" || { echo "fake-gcal didn't start"; tail -5 "$WORK/fake-gcal.out"; exit 1; }
+  for DEV in A C; do A reverse "tcp:$GP" "tcp:$GP" >/dev/null; done
+  DEV=C; sign_in "+94770000981" "uientry81@example.com" || fail "google: A's second device (A2) couldn't sign in"
+  DEV=A
+  pass "google: fake-gcal on 127.0.0.1:$GP (Work, Personal, Holidays); A's second device (A2) signed in as A"
+
+  # ---- 1. switch off: RISI_EVENTS on, RISI_GCAL unset → no Google section, the v1.30 "Checked:" line
+  echo "==> the temp server with RISI_EVENTS=on and no RISI_GCAL (gate item 1)"
+  gswitch events
+  gapps_restart "gcal off"
+  for DEV in A C; do wait_for 'content-desc="Calendar"' 60 || fail "google: $DEV's chat list has no Calendar tab"; done
+  DEV=A
+  cu=""; for _ in $(seq 1 30); do cu="$(ofx caluser)"; [ "$cu" = "uientry: caluser=true true" ] && break; sleep 2; done
+  [ "$cu" = "uientry: caluser=true true" ] || fail "google: A and B aren't calendar users: $cu"
+  settings_open "Risi skills" || fail "google: Settings → Risi skills (switch off)"
+  reveal "Calendar skill" || fail "google: Risi skills has no Calendar"
+  for _ in 1 2 3 4; do A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 45 / 100)) 700; sleep 1; done
+  dump
+  has 'text="Connect Google Calendar"' && fail "google: the switch is off but Settings shows [Connect Google Calendar]"
+  has 'text="Google Calendar"' && fail "google: the switch is off but Settings has a 'Google Calendar' section"
+  pass "google: switch off (RISI_GCAL unset): /auth/config has no google_calendar and Settings → Risi skills → Calendar has no Google Calendar section"
+  DEV=C; gask "Am I free Monday 2pm round one" 90
+  case "$ANS" in *"Google Calendar (not connected)"*) ;; *) fail "google: switch off: the answer lacks 'Google Calendar (not connected)' (the v1.30 line): $ANS";; esac
+  case "$ANS" in *"Google Calendar (2 calendar"*) fail "google: switch off: the answer names a connected Google Calendar: $ANS";; esac
+  pass "google: switch off: 'Am I free Monday 2pm' → the v1.30 line ('Not checked: … Google Calendar (not connected)')"
+
+  # ---- 2. switch on; connect on A1 through the seam; the picker; Work + Personal read, Work write
+  echo "==> the temp server with RISI_EVENTS=on RISI_GCAL=on (gate item 2)"
+  gswitch gcal
+  gapps_restart "gcal on"
+  DEV=A; seam connected
+  gsec_open || fail "google: Settings → Risi skills → Calendar has no Google Calendar section (switch on)"
+  has 'text="Connect Google Calendar"' || fail "google: the section has no [Connect Google Calendar]"
+  has "Your Google sign-in stays on this phone" || fail "google: the section lacks the info line (§31.9)"
+  shot "gcal-section-not-connected"
+  tap "Connect Google Calendar" || fail "google: tap [Connect Google Calendar]"
+  wait_for "Check for busy times" 60 || fail "google: no picker ('Check for busy times') after [Connect Google Calendar] (debug seam installed? $GACC/$GTOK)"
+  has "Add my Risi events to" || fail "google: the picker lacks 'Add my Risi events to'"
+  has "Copy my Risi Calendar events to Google" || fail "google: the picker lacks the copy switch"
+  for c in Work Personal Holidays; do has "text=\"$c\"" || fail "google: the picker doesn't list the fake calendar '$c'"; done
+  [ "$(checkbox_of Work | awk '{print $3}')" = true ] || fail "google: picker: Work isn't ticked by default (primary)"
+  [ "$(checkbox_of Personal | awk '{print $3}')" = true ] || fail "google: picker: Personal isn't ticked by default (selected in Google)"
+  [ "$(checkbox_of Holidays | awk '{print $3}')" = false ] || fail "google: picker: the hidden Holidays calendar is ticked"
+  shot "gcal-picker"
+  ok=""; for b in "$GPICK_OK" Save Done Connect Continue OK; do tap_exact "$b" && { ok="$b"; break; }; done
+  [ -n "$ok" ] || fail "google: the picker has no confirm button (TODO(android): set UITEST_GCAL_PICK_OK)"
+  gsec_wait "Connected on this phone" 90 || fail "google: after the picker the section isn't 'Connected on this phone'"
+  gsec_wait "Checking 2 calendars" 20 || fail "google: the section lacks 'Checking 2 calendars'"
+  gsec_wait "Adding events to Work" 20 || fail "google: the section lacks 'Adding events to Work'"
+  shot "gcal-section-connected"
+  link="$(ofx gcal_link)"
+  case "$link" in "uientry: gcal_link=connected 2 true true "*) ;; *) fail "google: GET /risi/calendar/google: want 'connected 2 true true <device>', got: $link";; esac
+  pass "google: seam → picker (Work+Personal read, Holidays off, write to Work) → connected on A1: server row '${link#uientry: gcal_link=}'"
+
+  # ---- 3. a Google busy event Mon 14:00; "Am I free Monday 2pm" on A2 (not the Google device)
+  gapi POST "/calendars/work/events?sendUpdates=none" "{\"id\":\"seedmon0001\",\"summary\":\"$GCANARY\",\"start\":{\"dateTime\":\"$GMON_S\"},\"end\":{\"dateTime\":\"$GMON_E\"}}" >/dev/null \
+    || fail "google: couldn't seed the Google busy event"
+  DEV=C; gask "Am I free Monday 2pm round two" 120
+  case "$ANS" in *"1 busy time"*) ;; *) fail "google: A2: the answer doesn't say '1 busy time' (the Google event): $ANS";; esac
+  case "$ANS" in *"Checked: Risi Calendar · Google Calendar (2 calendars)"*) ;; *) fail "google: A2: the Checked line isn't 'Checked: Risi Calendar · Google Calendar (2 calendars)': $ANS";; esac
+  case "$ANS" in *"$GCANARY"*) fail "google: A2 shows the Google event title";; esac
+  shot "gcal-checked-a2"
+  DEV=A; open_risi_chat || fail "google: A1 can't open its Risi chat"
+  scroll_until has "Google Calendar (Work, Personal)" || fail "google: A1: the same answer doesn't read 'Google Calendar (Work, Personal)' (names on the Google phone only)"
+  shot "gcal-checked-a1"
+  pass "google: 'Am I free Monday 2pm' on A2: not free (1 busy time), 'Checked: Risi Calendar · Google Calendar (2 calendars)'; on A1 the line reads '(Work, Personal)'"
+
+  # ---- 4. the Google device doesn't answer: its app is stopped (no FCM here) → "phone didn't answer", never free
+  DEV=A; A shell am force-stop "$PKG"
+  DEV=C; gask "Am I free Monday at 2pm round three" 120
+  case "$ANS" in *"Google Calendar (phone didn't answer)"*) ;; *) fail "google: A1 stopped: the answer lacks 'Google Calendar (phone didn't answer)': $ANS";; esac
+  case "$ANS" in *"couldn't check Google Calendar"*) ;; *) fail "google: A1 stopped: no 'couldn't check Google Calendar' rewrite: $ANS";; esac
+  case "$ANS" in *"You're free on Monday"*) fail "google: A1 stopped: the answer says free: $ANS";; esac
+  shot "gcal-not-answered"
+  DEV=A; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || true; wait_list 60 || fail "google: A1's app didn't come back"; dismiss_prompts
+  pass "google: A1's app stopped → 'Not checked: Google Calendar (phone didn't answer)', never 'free'"
+
+  # ---- 5. [Add] the Shenika-style interview on A1 → one copy in Work (a first insert that fails with 500 is retried)
+  DEV=A; n_ev0="$(gevents_n)"
+  gctl '{"mode":"error500"}'
+  open_risi_chat || fail "google: A1 can't open its Risi chat (add)"
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "add%smy%sinterview%swith%sShenika%son%sTuesday%sat%s10am%sto%smy%scalendar"; sleep 0.5
+  tap "Send" || fail "google: send the interview request"
+  wait_text "Risi · Add to Risi Calendar" 120 || fail "google: no 'Risi · Add to Risi Calendar' card"
+  tap_below "Risi · Add to Risi Calendar" "Add" || fail "google: tap [Add]"
+  for _ in $(seq 1 60); do [ "$(gevents_n)" -gt "$n_ev0" ] && break; sleep 1; done
+  ev="$(ofx events A | grep -F 'uientry: event Interview with Shenika|' | tail -1)"; [ -n "$ev" ] || fail "google: the interview isn't in A's Risi Calendar"
+  EV_ID="$(printf '%s' "$ev" | awk -F'|' '{print $7}')"; GID="risi$(printf '%s' "$EV_ID" | tr -d '-' | tr 'A-F' 'a-f')"
+  gwait 150 greq_has '^POST /calendars/work/events 500' || fail "google: no insert reached fake-gcal (the copy job never ran; error500 mode)"
+  gctl '{"mode":"ok"}'
+  gwait 240 gcopies_eq 1 || { gcopies | sed 's/^/    /'; greq | tail -8 | sed 's/^/    /'; fail "google: no copy in the write calendar after the failed insert was retried (WorkManager backoff)"; }
+  cp="$(gcopies | grep '|confirmed$')"
+  [ "$(printf '%s' "$cp" | wc -l)" = 0 ] || fail "google: more than one copy after the retry: $cp"
+  IFS='|' read -r c_id c_sum c_cal c_start c_tag c_att c_st <<<"$cp"
+  [ "$c_id" = "$GID" ] || fail "google: the copy id is $c_id, want risi + the event id's hex ($GID)"
+  [ "$c_cal" = work ] || fail "google: the copy is in '$c_cal', want the write calendar 'work'"
+  [ "$c_tag" = 1 ] || fail "google: the copy lacks the private property risime=1"
+  [ "$c_att" = false ] || fail "google: the copy has attendees"
+  case "$c_sum" in "Interview with Shenika") ;; *) fail "google: the copy's summary is '$c_sum'";; esac
+  greq | grep -F "POST /calendars/work/events 200 " | grep -qF "sendUpdates=none" || fail "google: the insert wasn't sent with sendUpdates=none: $(greq | grep -F 'POST /calendars/work/events')"
+  greq | grep -F "POST /calendars/work/events" | grep -v 'sendUpdates=none' | grep -q . && fail "google: an insert without sendUpdates=none" || true
+  pass "google: [Add] → ONE copy $c_id in Work (risime=1, no attendees, sendUpdates=none); a first insert that failed with 500 was retried without a duplicate"
+
+  # ---- 6. loop guard: with the copy in Google, "am I free Tuesday" counts the event once (the copy is skipped)
+  DEV=C; gask "Am I free Tuesday 10am round four" 120
+  case "$ANS" in *"1 busy time"*) ;; *) fail "google: loop guard: want '1 busy time' (the Risi event once, the Google copy skipped): $ANS";; esac
+  case "$ANS" in *"2 busy"*) fail "google: loop guard: the event is counted twice: $ANS";; esac
+  pass "google: loop guard: with the copy in Google, 'Am I free Tuesday 10am' counts ONE busy time"
+
+  # ---- 5b. move it in RisiMe (Calendar tab → the event → Edit → a new start) → PATCH
+  DEV=A; back_to_list || fail "google: A1 chat list (edit)"
+  tap "Calendar" || fail "google: A1 has no Calendar tab"
+  wait_text "Agenda" 20 || fail "google: the Calendar tab has no Agenda"
+  gopen_event() {
+    for _ in $(seq 1 12); do
+      xy="$(node_xy "Interview with Shenika")"; [ -n "$xy" ] && { A shell input tap $xy; return 0; }
+      A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 40 / 100)) 600; sleep 1
+    done
+    return 1
+  }
+  gopen_event || fail "google: the Agenda doesn't list 'Interview with Shenika'"
+  wait_for 'text="Edit"' 15 || fail "google: the event detail has no Edit"
+  tap_exact "Edit" || fail "google: tap Edit"
+  wait_for "Edit event" 15 || fail "google: no 'Edit event' dialog"
+  dump; row="$(python3 -I "$WORK/gtext.py" "$WORK/ui-A.xml" rows | head -1)"
+  [ -n "$row" ] || fail "google: the edit dialog has no HH:MM start field"
+  read -r rx ry old_hm <<<"$row"; new_hm="$(printf '%02d:%s' $(( (10#${old_hm%%:*} + 1) % 24 )) "${old_hm##*:}")"
+  A shell input tap "$rx" "$ry"; sleep 0.5; clear_field; A shell input text "$new_hm"; hide_keyboard
+  tap_exact "Save" || fail "google: tap Save in the edit dialog"
+  gwait 180 greq_has '^PATCH ' || fail "google: moving the event in RisiMe sent no PATCH to Google"
+  gcopies | grep -F "|work|" | grep -qF "T${new_hm}:" || { gcopies | sed 's/^/    /'; fail "google: the copy didn't move to $new_hm"; }
+  greq | grep '^PATCH' | grep -qF 'sendUpdates=none' || fail "google: the PATCH wasn't sent with sendUpdates=none"
+  [ "$(gn_copies)" = 1 ] || fail "google: the move made a second copy"
+  pass "google: moved the event in RisiMe ($old_hm → $new_hm) → PATCH (sendUpdates=none), still one copy"
+
+  # ---- 5c. delete it in RisiMe → DELETE
+  gopen_event || fail "google: the Agenda lost 'Interview with Shenika'"
+  wait_for 'text="Delete"' 15 || fail "google: the event detail has no Delete"
+  tap_exact "Delete" || fail "google: tap Delete"
+  wait_for "Delete event" 15 || fail "google: no 'Delete event?' confirm"
+  tap_last_text "Delete" || fail "google: confirm Delete"
+  gwait 180 gcopies_eq 0 || { gcopies | sed 's/^/    /'; fail "google: deleting the event in RisiMe didn't delete the copy"; }
+  greq | grep -q '^DELETE' || fail "google: no DELETE reached Google"
+  pass "google: deleted the event in RisiMe → DELETE → no copy left in Google"
+  back_to_list || true
+
+  # ---- 5d. add it again (a new copy for the disconnect step)
+  DEV=A; n_ev0="$(gevents_n)"
+  open_risi_chat || fail "google: A1 can't open its Risi chat (re-add)"
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "add%smy%sinterview%swith%sShenika%sagain%son%sTuesday%sat%s10am%sto%smy%scalendar"; sleep 0.5
+  tap "Send" || fail "google: send the second interview request"
+  wait_text "Risi · Add to Risi Calendar" 120 || fail "google: no second 'Risi · Add to Risi Calendar' card"
+  tap_below "Risi · Add to Risi Calendar" "Add" || fail "google: tap [Add] (second)"
+  gwait 240 gcopies_eq 1 || fail "google: the second event wasn't copied"
+
+  # ---- 7. revoked: "needs reconnecting", ONE google_reconnect card, the section shows [Reconnect], Reconnect works
+  gctl '{"mode":"revoked"}'
+  DEV=C; gask "Am I free Monday 2pm round five" 150
+  case "$ANS" in *"Google Calendar (needs reconnecting)"*) ;; *) fail "google: revoked: the answer lacks 'Google Calendar (needs reconnecting)': $ANS";; esac
+  for _ in $(seq 1 60); do case "$(ofx gcal_link)" in "uientry: gcal_link=reauth_needed "*) break;; esac; sleep 1; done
+  case "$(ofx gcal_link)" in "uientry: gcal_link=reauth_needed "*) ;; *) fail "google: revoked: the link isn't reauth_needed: $(ofx gcal_link)";; esac
+  DEV=C; wait_for "Google Calendar needs reconnecting" 90 || fail "google: revoked: no google_reconnect card in the Risi chat"
+  shot "gcal-reconnect-card"
+  DEV=C; gask "Am I free Monday 2pm round six" 90
+  DEV=A; open_risi_chat || fail "google: A1 Risi chat (reconnect card)"
+  scroll_to "Google Calendar needs reconnecting*" || fail "google: A1: no reconnect card"
+  [ "$(python3 -I "$WORK/gtext.py" "$WORK/ui-A.xml" count "Google Calendar needs reconnecting")" = 1 ] || fail "google: more than one google_reconnect card after two reads (once per 24 h)"
+  gsec_open || fail "google: A1: the section after revoke"
+  has 'text="Reconnect Google Calendar"' || fail "google: revoked: the section has no [Reconnect Google Calendar]"
+  gctl '{"mode":"ok"}'; seam connected
+  tap "Reconnect Google Calendar" || fail "google: tap [Reconnect Google Calendar]"
+  gsec_wait "Connected on this phone" 90 || fail "google: after Reconnect the section isn't 'Connected on this phone'"
+  DEV=C; gask "Am I free Monday 2pm round seven" 120
+  case "$ANS" in *"Google Calendar (2 calendars)"*) ;; *) fail "google: after Reconnect the answer doesn't read Google Calendar (2 calendars): $ANS";; esac
+  pass "google: revoked → 'Google Calendar (needs reconnecting)', ONE google_reconnect card, the section shows [Reconnect]; after Reconnect reads work again"
+
+  # ---- 8. Disconnect on A2 with [Remove them from Google]
+  DEV=C; gsec_open || fail "google: A2: Settings → Risi skills → Calendar → Google Calendar section"
+  has 'Connected on ' || fail "google: A2: the section doesn't say 'Connected on <device>'"
+  has "Connected on this phone" && fail "google: A2's section says 'Connected on this phone' (A1 is the Google device)"
+  tap "Disconnect" || fail "google: A2: tap [Disconnect]"
+  wait_for "Disconnect Google Calendar?" 15 || fail "google: A2: no 'Disconnect Google Calendar?' sheet"
+  tap_exact "Remove them from Google" || fail "google: A2: the sheet has no 'Remove them from Google'"
+  tap_last_text "$GDISC_OK" || fail "google: A2: the Disconnect sheet's confirm button (TODO(android): UITEST_GCAL_DISCONNECT_OK)"
+  for _ in $(seq 1 60); do [ "$(ofx gcal_link)" = "uientry: gcal_link=none" ] && break; sleep 1; done
+  [ "$(ofx gcal_link)" = "uientry: gcal_link=none" ] || fail "google: after Disconnect the link isn't gone: $(ofx gcal_link)"
+  gwait 180 gcopies_eq 0 || { gcopies | sed 's/^/    /'; fail "google: A1 didn't delete the copies after 'Remove them from Google'"; }
+  DEV=A; gsec_open || fail "google: A1: the section after Disconnect"
+  gsec_wait 'text="Connect Google Calendar"' 60 || fail "google: A1's section isn't 'Not connected' after the other device disconnected"
+  pass "google: Disconnect on A2 with 'Remove them from Google' → copies gone from Google, link none, A1's section is Not connected"
+  # TODO(android): the local gcal_* tables are empty after Disconnect (Room is encrypted: android's unit tests cover it).
+
+  # ---- 9. canaries (§31.10): the Google event title, the token and the account in no log, dump or model request
+  for d in A C; do
+    DEV=$d; out="$(A logcat -d 2>/dev/null || true)"
+    for n in "$GCANARY" "$GTOK" "$GACC"; do printf '%s' "$out" | grep -qF -- "$n" && fail "google: canary '${n:0:8}…' is in $d's logcat"; done
+  done
+  for f in "$WORK/server.log" "$WORK/llm-requests.jsonl"; do
+    for n in "$GCANARY" "$GTOK" "$GACC"; do grep -aqF -- "$n" "$f" && fail "google: canary '${n:0:8}…' is in $(basename "$f")"; done
+  done
+  grep -aq '"Work"\|"Personal"' "$WORK/llm-requests.jsonl" && fail "google: a Google calendar name is in the model requests"
+  grep -aq 'Work\b' "$WORK/server.log" && grep -aE '\b(Work|Personal)\b' "$WORK/server.log" | grep -aiq 'calendar' && fail "google: a Google calendar name is in the server log"
+  scan="$(ofx pgscan '*' "$GCANARY" "$GTOK" "$GACC")"
+  printf '%s' "$scan" | grep -q 'pgscan done' || fail "google: the Postgres canary scan didn't finish"
+  printf '%s' "$scan" | grep -q 'canary' && { printf '%s\n' "$scan" | sed 's/^/    /'; fail "google: a canary is in a Postgres table"; }
+  scan="$(ofx pgscan risi_gcal_links,risi_turn_steps Work Personal)"
+  printf '%s' "$scan" | grep -q 'pgscan done' || fail "google: the Postgres name scan didn't finish"
+  printf '%s' "$scan" | grep -q 'canary' && { printf '%s\n' "$scan" | sed 's/^/    /'; fail "google: a Google calendar name is in risi_gcal_links / risi_turn_steps"; }
+  # TODO(root): the Cassandra dump (inbox_events) and the release-dex check (GCAL_TEST absent from the release APK,
+  # android's Gradle check) are not covered here: the first needs the cql dump helper, the second a release build.
+  pass "google: canaries (event title, token, account, calendar names) are in no logcat, server log, model request or Postgres row"
+  DEV=A; logcat_ok "google"; DEV=C; logcat_ok "google"; DEV=A
 fi
 
 DEV=A; logcat_ok "ui entry"

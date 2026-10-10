@@ -117,6 +117,18 @@ elif scripts/android-target check >/dev/null 2>&1; then
     UITEST_REDROID_B=-relui2 UITEST_REDROID_B_PORT=5862 \
     STEP_T="${UIENTRY_STEP_TIMEOUT:-5400}" step scripts/ui-entry-test --skills --ledger --calendar --offers --risi-calendar --risi-notes \
       --apk android/app/build/outputs/apk/debug/app-debug.apk
+  # Google Calendar link gate (contract v1.31 §31.12, decision 074): OFF by default, so a release isn't blocked before
+  # the server and android parts of v1.31 have landed. Root switches it on with UIENTRY_GOOGLE=1 (e.g. in the unit
+  # environment of the nightly), after which `ui-entry-test --google` (fake-llm + scripts/fake-gcal, A's two devices on
+  # three redroids, step 17 only) must pass. Its own temp server (:4553), store, redroids and ports.
+  if [ "${UIENTRY_GOOGLE:-0}" = 1 ]; then
+    echo "==> ui-entry-test --google (Google Calendar link, redroid + fake-gcal)"
+    UITEST_GOOGLE_ONLY=1 UITEST_INSTANCE=_relg UITEST_PORT=4553 UITEST_LLM_PORT=8397 UITEST_GCAL_PORT=8398 \
+      UITEST_REDROID_A=-relg1 UITEST_REDROID_A_PORT=5864 UITEST_REDROID_B=-relg2 UITEST_REDROID_B_PORT=5865 \
+      UITEST_REDROID_C=-relg3 UITEST_REDROID_C_PORT=5866 \
+      STEP_T="${UIENTRY_STEP_TIMEOUT:-5400}" step scripts/ui-entry-test --google \
+        --apk android/app/build/outputs/apk/debug/app-debug.apk
+  fi
 fi
 
 echo "==> boot check (scripts/boot-check: prod release, real env, Risi off/on/reopen/wrong key)"
