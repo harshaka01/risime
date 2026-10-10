@@ -121,6 +121,8 @@ data class RisiMeta(
     val steps: List<RisiStep> = emptyList(),
     val sources: List<RisiSource> = emptyList(),
     @SerialName("next_steps") val nextSteps: List<String> = emptyList(),
+    /** v1.32 §29.7: the checked range whose events the asker's own phone lists under the answer (never sent back). */
+    @SerialName("local_events") val localEvents: RisiLocalEventsRange? = null,
     @SerialName("local_search") val localSearch: RisiLocalSearch? = null,
     @SerialName("turn_ref") val turnRef: String? = null,
     // v1.25 confirm
@@ -380,3 +382,7 @@ interface RisiRest {
 
     suspend fun commitments(state: String): ApiResult<RisiCommitmentsReply>
 }
+
+/** v1.32 §29.7 `answer.local_events`: the checked range (at most 14 days); the asker's phone lists its own events in it. */
+@Serializable
+data class RisiLocalEventsRange(val from: String, val to: String)

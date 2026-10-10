@@ -159,6 +159,13 @@ class ContractExamplesTest {
     private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
+        // v1.32 §29.7 answer.local_events: the checked range the asker's phone lists its own events for.
+        "envelope_risi_answer_local_events.json" to { s ->
+            ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                require(it.kind == "answer" && it.localEvents!!.from == "2026-10-11T18:30:00.000Z" && it.localEvents!!.to == "2026-10-18T18:30:00.000Z" && it.notify.size == 1)
+                require(lk.codegen.risime.data.tabs.LocalEvents.range(it.localEvents) != null)
+            }
+        },
         // v1.27 (§27 made_by, the Ledger follow-ups, call transcription): net/Protocol127.kt and RisiMeta's optional fields.
         "auth_config_v127.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiLedgerOn && it.risiTranscribeOn && it.risiSkillsOn && it.risiToolsOn) } },
         "device_put_risi_ledger.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_LEDGER in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) } },

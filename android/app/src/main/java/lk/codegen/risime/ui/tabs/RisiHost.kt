@@ -15,6 +15,9 @@ interface RisiHost {
     /** `risi_request` `ask` from the @Risi chip (the text is never parsed). */
     fun ask(text: String)
 
+    /** v1.32 §29.7 "Your events": this phone's own events in the range (phone provider + cached Risi Calendar). */
+    suspend fun localEvents(fromMs: Long, toMs: Long): lk.codegen.risime.data.tabs.LocalEventsResult = lk.codegen.risime.data.tabs.LocalEventsResult.Unavailable
+
     /** Official chat menu: "Summarise" (the last 24 h) and "Report". */
     fun summarise()
 
@@ -130,9 +133,11 @@ class RisiCardContext(
      * (the same path as typing it in the Risi chat and pressing send). Null: no chips on this screen.
      */
     val sendChip: ((String) -> Unit)? = null,
+    /** This screen is the user's own Risi chat (v1.32 §29.7 "Your events" shows only there). */
+    val risiChat: Boolean = false,
 )
 
 /** Builds a [RisiCardContext] for the rows on screen. */
-fun risiCardContext(host: RisiHost, messages: List<MessageEntity>, nameOf: (String) -> String, nowMs: Long, onRef: (String) -> Unit, knownNames: List<String> = emptyList(), readOnly: Boolean = false, prefill: (String) -> Unit = {}, risiChatReady: Boolean = false, sendChip: ((String) -> Unit)? = null) =
+fun risiCardContext(host: RisiHost, messages: List<MessageEntity>, nameOf: (String) -> String, nowMs: Long, onRef: (String) -> Unit, knownNames: List<String> = emptyList(), readOnly: Boolean = false, prefill: (String) -> Unit = {}, risiChatReady: Boolean = false, sendChip: ((String) -> Unit)? = null, risiChat: Boolean = false) =
     RisiCardContext(host, nameOf, RisiCards.states(messages), RisiCards.awaiting(messages, host.me, nowMs), nowMs, onRef, knownNames, readOnly,
-        quotes = { r -> RisiCards.sourceQuotes(r, messages, nameOf) }, messages = messages, prefill = prefill, risiChatReady = risiChatReady, sendChip = sendChip)
+        quotes = { r -> RisiCards.sourceQuotes(r, messages, nameOf) }, messages = messages, prefill = prefill, risiChatReady = risiChatReady, sendChip = sendChip, risiChat = risiChat)

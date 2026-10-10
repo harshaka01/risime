@@ -530,6 +530,11 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override fun ask(text: String) { viewModelScope.launch { requests.ask(text) } }
 
+        override suspend fun localEvents(fromMs: Long, toMs: Long): lk.codegen.risime.data.tabs.LocalEventsResult =
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                lk.codegen.risime.data.tabs.LocalEvents.build(fromMs, toMs, phone = { c.phoneCalendar.localEvents(fromMs, toMs) }, risi = { c.risiCalendar.eventsNow() })
+            }
+
         override fun summarise() { viewModelScope.launch { requests.summarise() } }
 
         override fun report() { viewModelScope.launch { requests.report() } }

@@ -482,6 +482,22 @@ class PhoneCalendar(
     }
 
     /**
+     * v1.32 §29.7 "Your events": this phone's own events in [fromMs, toMs) with their titles, from the same rows and
+     * exclusions as the busy read (every calendar; deleted, cancelled, declined out; all-day on local dates; RisiMe's
+     * own Google copies left out, the Risi Calendar lists them). Null without permission; throws on a query error.
+     */
+    fun localEvents(fromMs: Long, toMs: Long): List<LocalEvent>? {
+        if (!backend.canRead()) return null
+        val (qf, qt) = InstanceFilter.queryWindow(fromMs, toMs)
+        val z = zone()
+        return backend.instanceRows(qf, qt).mapNotNull { r ->
+            if (CalendarRead.isRisiCopy(r.syncId)) return@mapNotNull null
+            val b = InstanceFilter.busy(r, z) ?: return@mapNotNull null
+            if (!InstanceFilter.overlaps(b.begin, b.end, fromMs, toMs)) null else LocalEvent(r.title.orEmpty(), b.begin, b.end, r.allDay)
+        }
+    }
+
+    /**
      * Settings → Calendar → Details: every calendar with its instances in the next [days] days (null: no permission).
      * A failed instances query keeps the calendars listed with no count (null) and the error: never "0 events".
      */

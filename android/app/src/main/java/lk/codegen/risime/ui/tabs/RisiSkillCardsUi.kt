@@ -20,6 +20,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -180,6 +183,7 @@ internal fun AnswerExtras(r: RisiMeta, ctx: RisiCardContext) {
             steps.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
+    if (lk.codegen.risime.data.tabs.LocalEvents.shows(r, ctx.host.me, ctx.risiChat)) YourEvents(r, ctx)
     // P0 2026-10-10: the `next_steps` chips are back, and a tap RUNS the request (a `risi_request` `ask` with the
     // chip's text, as if typed and sent in the Risi chat), never a paste into the composer, never a plain message.
     val send = ctx.sendChip
@@ -192,6 +196,55 @@ internal fun AnswerExtras(r: RisiMeta, ctx: RisiCardContext) {
                     label = { Text(s, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                     modifier = Modifier.testTag("risi_next_$i"),
                 )
+            }
+        }
+    }
+}
+
+/**
+ * v1.32 §29.7 "Your events" under an answer with `local_events`, on the asker's own phone in the Risi chat: built when
+ * shown (never stored), phone provider + cached Risi Calendar, sorted by start, one line per event, at most 30 + "+N more".
+ */
+@Composable
+internal fun YourEvents(r: lk.codegen.risime.net.RisiMeta, ctx: RisiCardContext) {
+    val (from, to) = lk.codegen.risime.data.tabs.LocalEvents.range(r.localEvents) ?: return
+    var reload by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val result by androidx.compose.runtime.produceState<lk.codegen.risime.data.tabs.LocalEventsResult?>(null, from, to, reload) {
+        value = runCatching { ctx.host.localEvents(from, to) }.getOrElse { lk.codegen.risime.data.tabs.LocalEventsResult.Failed }
+    }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val ask = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) { g ->
+        if (g[android.Manifest.permission.READ_CALENDAR] == true) reload++ else ctx.host.openSkills(lk.codegen.risime.net.RisiSkillIds.CALENDAR)
+    }
+    val zone = java.time.ZoneId.systemDefault()
+    val locale = java.util.Locale.getDefault()
+    val pattern = remember(locale) { runCatching { android.text.format.DateFormat.getBestDateTimePattern(locale, "EEEdMMM") }.getOrDefault(lk.codegen.risime.data.tabs.LocalEvents.DEFAULT_DAY_PATTERN) }
+    val h24 = android.text.format.DateFormat.is24HourFormat(context)
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(Modifier.fillMaxWidth().padding(top = Spacing.xs).testTag("risi_your_events"), verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+        Text(lk.codegen.risime.data.tabs.LocalEvents.HEADER, style = MaterialTheme.typography.titleSmall, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, maxLines = 1)
+        val ellipsis = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        when (val res = result) {
+            null, lk.codegen.risime.data.tabs.LocalEventsResult.Unavailable -> {}
+            lk.codegen.risime.data.tabs.LocalEventsResult.NoPermission -> Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(lk.codegen.risime.data.tabs.LocalEvents.NO_PERMISSION, style = MaterialTheme.typography.bodySmall, color = muted, maxLines = 2, overflow = ellipsis, modifier = Modifier.weight(1f).testTag("risi_your_events_permission"))
+                androidx.compose.material3.TextButton(
+                    onClick = { runCatching { ask.launch(arrayOf(android.Manifest.permission.READ_CALENDAR, android.Manifest.permission.WRITE_CALENDAR)) }.onFailure { ctx.host.openSkills(lk.codegen.risime.net.RisiSkillIds.CALENDAR) } },
+                    modifier = Modifier.testTag("risi_your_events_allow"),
+                ) { Text(lk.codegen.risime.data.tabs.LocalEvents.ALLOW, maxLines = 1, overflow = ellipsis) }
+            }
+            lk.codegen.risime.data.tabs.LocalEventsResult.Failed ->
+                Text(lk.codegen.risime.data.tabs.LocalEvents.FAILED, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, maxLines = 1, overflow = ellipsis, modifier = Modifier.testTag("risi_your_events_failed"))
+            is lk.codegen.risime.data.tabs.LocalEventsResult.Events -> {
+                if (res.events.isEmpty()) {
+                    Text(lk.codegen.risime.data.tabs.LocalEvents.emptyText(res.fromMs, res.toMs, zone, locale, pattern), style = MaterialTheme.typography.bodySmall, color = muted, maxLines = 2, overflow = ellipsis, modifier = Modifier.testTag("risi_your_events_none"))
+                } else {
+                    val (rows, more) = lk.codegen.risime.data.tabs.LocalEvents.capped(res.events)
+                    rows.forEachIndexed { i, e ->
+                        Text(lk.codegen.risime.data.tabs.LocalEvents.rowText(e, zone, locale, h24, pattern), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = ellipsis, modifier = Modifier.testTag("risi_your_event_$i"))
+                    }
+                    more?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1, modifier = Modifier.testTag("risi_your_events_more")) }
+                }
             }
         }
     }

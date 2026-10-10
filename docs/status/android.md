@@ -1,5 +1,26 @@
 # Android status — 0.2 nightlies
 
+## READY v1.32 §29.7 answer.local_events "Your events" (JVM gate green: `assembleDebug testDebugUnitTest`, 1601 tests, 0 failed, 9 skipped)
+Branch `v1.32`, against contract a9c0720. No Room or dependency change; titles never leave the phone and are never logged; nothing is stored in the message.
+- `RisiMeta.localEvents` (`local_events: {from, to}`, `RisiLocalEventsRange`); `ContractExamplesTest` decodes `envelope_risi_answer_local_events.json`.
+- Shown only when the screen is the user's Risi chat (`RisiCardContext.risiChat`) AND the answer's `notify` names me AND the range parses with to > from and <= 14 days.
+  Never in an Official chat, a group, or on someone else's device. Built when shown (`RisiHost.localEvents` → `LocalEvents.build`): `PhoneCalendar.localEvents`
+  (the fixed read: every calendar, deleted/cancelled/declined out, all-day on local dates, RisiMe's own `risi<hex32>` Google copies left out) plus the cached
+  Risi Calendar events in the range (cancelled and declined out), sorted by start, then end, then title.
+- Exact strings (tags in brackets):
+  - header `Your events` [`risi_your_events`]
+  - row (maxLines 1, ellipsis; the title is last so it is what ellipsizes) [`risi_your_event_<i>`]:
+    `Mon 12 Oct · 10:00–11:00 · Standup`, `Thu 15 Oct · All day · Poya`, multi-day all-day `Thu 15 Oct – Sat 17 Oct · All day · Trip`,
+    a timed event of 24 h or more `Mon 12 Oct 10:00 – Tue 13 Oct 11:00 · <title>`, a blank title `(No title)`. Day = the locale's best `EEEdMMM` pattern,
+    time `HH:mm` or the 12-hour form per the phone's 24-hour setting.
+  - none [`risi_your_events_none`]: `No events in your phone calendars from Mon 12 Oct to Sun 18 Oct` (`to` is exclusive, so the last day shown is the day before it).
+  - cap: 30 rows, then `+N more` [`risi_your_events_more`].
+  - no permission [`risi_your_events_permission`]: `Allow calendar access to see your events` + button `Allow` [`risi_your_events_allow`]: Android's READ/WRITE_CALENDAR
+    dialog; granted → the list re-reads; refused (or the dialog can't show) → Settings → Risi skills → Calendar.
+  - provider error [`risi_your_events_failed`]: `Your phone's calendar couldn't be read.` (never "No events").
+- Tests: `LocalEventsTest` (who sees it, range checks, row texts, empty text, cap, Risi Calendar merge, phone read with exclusions/hidden calendar/Risi copy,
+  no permission), `YourEventsUiTest` (rows, none, no permission, not in Official, not on another user's device), ContractExamplesTest entry.
+
 ## READY P0 2026-10-10 calendar "0 events", diagnostics, chips run, header clipping (JVM gate green: `assembleDebug testDebugUnitTest`, 1591 tests, 0 failed, 9 skipped; `RequiredUpdateScreenTest` failed once with "uncaught exceptions before the test started" and passed on rerun)
 Branch `v1.32`. No protocol, server, Room or dependency change; nothing is deleted or signed out (hard rule 9). Manifest: + `READ_SYNC_SETTINGS`, `READ_SYNC_STATS` (normal permissions, granted on update).
 

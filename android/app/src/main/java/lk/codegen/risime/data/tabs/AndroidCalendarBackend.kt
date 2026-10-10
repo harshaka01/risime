@@ -41,6 +41,8 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
             CalendarContract.Instances.CALENDAR_ID,
             CalendarContract.Events._SYNC_ID,
             CalendarContract.Events.DELETED,
+            // v1.32 §29.7 "Your events" (the title stays on the phone).
+            CalendarContract.Instances.TITLE,
         )
         val INSTANCES_PROJECTION_V1 = INSTANCES_PROJECTION.copyOf(8).requireNoNulls()
 
@@ -57,6 +59,7 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
             CalendarContract.Events.RRULE,
             CalendarContract.Events.RDATE,
             CalendarContract.Events._SYNC_ID,
+            CalendarContract.Events.TITLE,
         )
 
         /** One `Instances` cursor row ([INSTANCES_PROJECTION] or its V1 prefix) as a raw row. */
@@ -67,6 +70,7 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
                 availability = int(3), status = int(4), selfStatus = int(5),
                 deleted = (int(9) ?: 0) != 0, calendarId = if (q.isNull(7)) 0 else q.getLong(7), visible = int(6)?.let { it != 0 } ?: true,
                 syncId = if (q.columnCount > 8 && !q.isNull(8)) q.getString(8) else null,
+                title = if (q.columnCount > 10 && !q.isNull(10)) q.getString(10) else null,
             )
         }
     }
@@ -157,7 +161,7 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
                 val b = it.getLong(0)
                 val e = if (!it.isNull(1)) it.getLong(1) else b + (InstanceFilter.durationMs(it.getString(2)) ?: 0L)
                 fun int(i: Int): Int? = if (it.isNull(i)) null else it.getInt(i)
-                out += InstanceRow(b, e, int(3) == 1, int(4), int(5), int(6), false, it.getLong(7), true, if (it.isNull(10)) null else it.getString(10))
+                out += InstanceRow(b, e, int(3) == 1, int(4), int(5), int(6), false, it.getLong(7), true, if (it.isNull(10)) null else it.getString(10), if (it.isNull(11)) null else it.getString(11))
             }
         }
         return out.filter { r -> r.end > fromMs && r.begin < toMs }

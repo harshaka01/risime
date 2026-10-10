@@ -28,6 +28,8 @@ data class InstanceRow(
     val calendarId: Long = 0,
     val visible: Boolean = true,
     val syncId: String? = null,
+    /** Only for "Your events" on this phone (v1.32 §29.7); never sent. */
+    val title: String? = null,
 )
 
 object InstanceFilter {
