@@ -171,7 +171,8 @@ case "$cmd" in
       key=eval
     else
       [ -d "$MODELS/$name" ] || { echo "not downloaded: scripts/risi-eval fetch $name asr"; exit 1; }
-      serve "risi-eval-$name" "$MODELS/$name" "$name" "$mem"; key=""
+      mapfile -t extra < <(python3 -I -c 'import json,sys; [print(x) for x in json.load(open(sys.argv[1]))["asr"][sys.argv[2]].get("args", [])]' "$EV/candidates.json" "$name")
+      serve "risi-eval-$name" "$MODELS/$name" "$name" "$mem" "${extra[@]}"; key=""
     fi
     MEMF=$(mktemp); watch_mem "$MEMF"
     wait_health || { echo "$name did not become healthy"; docker logs --tail 40 "$CONTAINER" 2>&1 | tail -40; exit 1; }
