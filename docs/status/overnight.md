@@ -95,7 +95,10 @@ were needed after nightly.11.
   test node: fixed in run-server (3d9e7cd) to fail only on non-loopback binds.
 - **Next:** nightly.47 Risi Calendar on; nightly.48 Risi Notes (needs "turn the ledger on").
 
-## Needs Harsha G (later, optional, not a blocker): Google Calendar sync (Google Cloud Console, ~10 min)
+## Needs Harsha G (NOW, priority 2026-10-10): Google Calendar connection (Google Cloud Console, ~10 min)
+**Use docs/GOOGLE-CALENDAR-SETUP.md** (click by click; SHA-1 checked against the published nightly.47
+APK). Then send "Google clients done" + project ID + the Android client ID. The notes below are the
+earlier draft.
 Direction change 2026-10-09: RisiMe gets its own Risi Calendar and Risi Notes first (nightly.47, .48);
 Google becomes an optional one-way mirror later. These steps can wait.
 Project `risime` (734811134567), console.cloud.google.com. The section is "Google Auth Platform"
