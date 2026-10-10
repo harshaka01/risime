@@ -104,8 +104,19 @@ defmodule RisiMe.Agent.Turn do
     lock = {{:risi_turn, asker}, self()}
 
     if :global.set_lock(lock, [node()], 0) do
+      started = System.monotonic_time()
+
       try do
-        do_run(conv, env, request_id, asker)
+        result = do_run(conv, env, request_id, asker)
+
+        # Decision 075: PromEx's RisiMe.PromEx.Risi turns this into a counter and a histogram.
+        :telemetry.execute(
+          [:risime, :risi, :turn, :stop],
+          %{duration: System.monotonic_time() - started},
+          %{outcome: turn_outcome(result)}
+        )
+
+        result
       after
         :global.del_lock(lock, [node()])
       end
@@ -113,6 +124,10 @@ defmodule RisiMe.Agent.Turn do
       {:snooze, 2}
     end
   end
+
+  defp turn_outcome(:ok), do: :ok
+  defp turn_outcome({:snooze, _}), do: :snooze
+  defp turn_outcome(_), do: :error
 
   defp do_run(conv, env, request_id, asker) do
     b = bounds()

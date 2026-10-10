@@ -23,6 +23,20 @@ config :risime, RisiMeWeb.Endpoint,
   pubsub_server: RisiMe.PubSub,
   live_view: [signing_salt: "9jWWlwaT"]
 
+config :risime, RisiMeWeb.OpsEndpoint,
+  adapter: Bandit.PhoenixAdapter,
+  url: [host: "localhost"],
+  pubsub_server: RisiMe.PubSub,
+  live_view: [signing_salt: "ops-lv-Wm3x"],
+  server: false
+
+config :risime, RisiMe.PromEx,
+  disabled: false,
+  manual_metrics_start_delay: :no_delay,
+  drop_metrics_groups: [],
+  grafana: :disabled,
+  metrics_server: :disabled
+
 config :risime, :otp_dev_log, false
 
 config :risime, :cassandra,

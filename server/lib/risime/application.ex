@@ -37,6 +37,7 @@ defmodule RisiMe.Application do
       RisiMeWeb.Telemetry,
       RisiMe.Repo,
       {Oban, Application.fetch_env!(:risime, Oban)},
+      RisiMe.PromEx,
       RisiMe.Messaging.Store.Cassandra,
       RisiMe.RateLimiter,
       RisiMe.Blobs.Slots,
@@ -65,7 +66,11 @@ defmodule RisiMe.Application do
     # the endpoint by RisiMe.Agent.Starter, which can't fail: a tree that fails to start or
     # keeps crashing only makes Risi unavailable (/health checks.risi), never stops the boot or
     # the server (P0 2026-10-08).
-    children = children ++ [RisiMeWeb.Endpoint] ++ RisiMe.Agent.children()
+    # Decision 075: the metrics/LiveDashboard listener (127.0.0.1 only; off in tests).
+    ops =
+      if Application.get_env(:risime, :ops_listener, false), do: [RisiMeWeb.OpsEndpoint], else: []
+
+    children = children ++ [RisiMeWeb.Endpoint] ++ ops ++ RisiMe.Agent.children()
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options

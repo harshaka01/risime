@@ -100,17 +100,24 @@ defmodule RisiMe.Auth.JWKS do
     case load(state) do
       {:ok, %{"keys" => keys}, state} when is_list(keys) ->
         store(keys)
+        fetched(:ok)
         state
 
       {:ok, _other, state} ->
         Logger.warning("JWKS: response has no keys list; keeping #{size()} cached key(s)")
+        fetched(:error)
         state
 
       {:error, reason, state} ->
         Logger.warning("JWKS fetch failed (#{reason}); keeping #{size()} cached key(s)")
+        fetched(if(to_string(reason) =~ ~r/timeout/i, do: :timeout, else: :error))
         state
     end
   end
+
+  # Decision 075: [:risime, :jwks, :fetch] with result ok | timeout | error.
+  defp fetched(result),
+    do: :telemetry.execute([:risime, :jwks, :fetch], %{count: 1}, %{result: result})
 
   defp load(state) do
     case Config.oidc(:jwks) do
