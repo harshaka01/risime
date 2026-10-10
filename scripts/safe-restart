@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Safe restart of the pilot (P0 2026-10-10, incident-2026-10-10): backup → restart → 60-s watch → one retry →
+# rollback to the previous tag (scripts/rollback) if still unhealthy. Same release, no migration.
+#   scripts/safe-restart [--no-backup] [--reason "<text>"]
+# Healthy = local /health "ok" and still ok 20 s later, checks.risi not "unavailable" (when it was ok before).
+# Holds ~/risime-run/.deploy.lock (waits up to 10 min for a deploy). Logs to ~/risime-logs/restarts.log.
+# Prints "RESTART OK", "RESTART OK (after retry)", "ROLLED BACK <tag>" or "RESTART FAILED"; exit 0 only on OK.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+BACKUP=1; REASON="manual"
+while [ $# -gt 0 ]; do case "$1" in --no-backup) BACKUP=0; shift;; --reason) REASON="$2"; shift 2;; *) echo "unknown arg $1"; exit 2;; esac; done
+RLOG="$HOME/risime-logs/restarts.log"; mkdir -p "$HOME/risime-logs"
+log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$RLOG"; }
+H() { curl -sf -m 5 http://127.0.0.1:4000/health; }
+exec 9>"$HOME/risime-run/.deploy.lock"
+flock -w 600 9 || { log "RESTART FAILED: deploy lock busy for 10 min"; exit 1; }
+risi_was_ok=0; H | grep -q '"risi":"ok"' && risi_was_ok=1
+healthy() {
+  for _ in $(seq 1 30); do
+    if H | grep -q '"status":"ok"'; then
+      sleep 20
+      H | grep -q '"status":"ok"' || return 1
+      [ "$risi_was_ok" = 1 ] && H | grep -q '"risi":"unavailable' && return 1
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+log "restart requested ($REASON); version $(H | grep -oE '"version":"[^"]*"' || echo '?')"
+if [ "$BACKUP" = 1 ]; then
+  BLOB_DIR="$(sed -n 's/^BLOB_DIR=//p' infra/pilot/pilot.env | tail -1)"
+  if scripts/backup --env dev --dest "$HOME/risime-backups" --keep 7 ${BLOB_DIR:+--blobs "$BLOB_DIR"} >> "$RLOG" 2>&1; then log "backup ok"; else log "backup FAILED (restart continues: no migration, no data change)"; fi
+fi
+systemctl --user restart risime.service
+if healthy; then log "RESTART OK"; exit 0; fi
+log "unhealthy after restart; one retry"
+systemctl --user restart risime.service
+if healthy; then log "RESTART OK (after retry)"; exit 0; fi
+log "still unhealthy: rolling back"
+flock -u 9
+if scripts/rollback >> "$RLOG" 2>&1 && healthy; then log "ROLLED BACK $(H | grep -oE '"version":"[^"]*"')"; exit 1; fi
+log "RESTART FAILED: unhealthy after rollback (journalctl --user -u risime)"
+exit 1
