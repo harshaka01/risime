@@ -20,7 +20,7 @@
 #    as risi-l1 (nvcr.io/nvidia/vllm:26.09-py3); always stopped and removed afterwards (trap);
 #  * refuses while scripts/nightly-release or scripts/ui-entry-test runs (RISI_EVAL_WAIT=1 polls every 5 min instead);
 #  * launches only if MemAvailable >= mem_gb + 10 GB; --gpu-memory-utilization = mem_gb / MemTotal,
-#    --max-model-len 8192, --max-num-seqs 4; MemAvailable is sampled every 2 s (peak recorded) and
+#    --max-model-len 8192, --max-num-seqs 2; plus OVERHEAD_GB (measured ~7 GB) in the launch check; MemAvailable is sampled every 2 s (peak recorded) and
 #    the candidate is killed at once if it falls under 6 GB;
 #  * the live probe runs before, every 60 s during, and after; a failed probe kills the candidate.
 #    CANARY=1 also runs scripts/risi-canary while the candidate is loaded (if memory allows).
@@ -30,6 +30,9 @@ REPO="$PWD"; EV="$REPO/eval/risi"; PY="python3 -I $EV/risi_eval.py"
 IMG=nvcr.io/nvidia/vllm:26.09-py3
 MODELS="${RISI_EVAL_MODELS:-$HOME/risime-eval-models}"; DATA="${RISI_EVAL_DATA:-$HOME/risime-eval-data}"
 PORT=8101; HEADROOM_GB=10; FLOOR_GB=6
+# Measured 2026-10-10: a candidate takes ~5-7 GB beyond its --gpu-memory-utilization share (CUDA
+# context, torch, compile workers), so the launch check counts it on top of mem_gb + headroom.
+OVERHEAD_GB=${RISI_EVAL_OVERHEAD_GB:-7}
 mkdir -p "$MODELS" "$DATA" "$EV/results"
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 avail_gb() { awk '/MemAvailable/ {printf "%.1f", $2/1048576}' /proc/meminfo; }
@@ -61,7 +64,7 @@ serve() {  # serve <container> <model dir> <served name> <mem_gb> [extra vllm ar
   docker run -d --name "$name" --gpus all --shm-size 8g --ulimit memlock=-1 --ulimit stack=67108864 \
     -p "127.0.0.1:$PORT:8000" -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -e VLLM_NO_USAGE_STATS=1 -e DO_NOT_TRACK=1 \
     -v "$dir:/model:ro" "$IMG" vllm serve /model --served-model-name "$served" --host 0.0.0.0 --port 8000 \
-    --max-model-len 8192 --max-num-seqs 4 --gpu-memory-utilization "$util" --disable-uvicorn-access-log "$@" >/dev/null
+    --max-model-len 8192 --max-num-seqs 2 --gpu-memory-utilization "$util" --disable-uvicorn-access-log "$@" >/dev/null
   ss -ltnH "sport = :$PORT" | awk '{print $4}' | grep -qv '^127\.0\.0\.1:' && { echo "port $PORT not loopback-only"; exit 1; } || true
 }
 
@@ -112,9 +115,9 @@ case "$cmd" in
     name=$1; repo=$(cand llm "$name" repo); mem=$(cand llm "$name" mem_gb)
     [ -n "$repo" ] || { echo "unknown candidate $name"; exit 1; }
     python3 -I "$EV/complete.py" "$MODELS/$name" || { echo "not (fully) downloaded: scripts/risi-eval fetch $name"; exit 1; }
-    docker ps -a --format '{{.Names}}' | grep -q '^risi-eval-' && { echo "another risi-eval container exists"; exit 1; }
+    docker ps -a --format '{{.Names}}' | grep -v '^risi-eval-fetch-' | grep -q '^risi-eval-' && { echo "another risi-eval container exists"; exit 1; }
     wait_release
-    need=$(python3 -I -c "print($mem + $HEADROOM_GB)")
+    need=$(python3 -I -c "print($mem + $OVERHEAD_GB + $HEADROOM_GB)")
     for _ in $(seq 1 "${RISI_EVAL_WAIT_MAX:-144}"); do  # RISI_EVAL_WAIT: up to 12 h (default) for the memory (and the gates) to free up
       a=$(avail_gb); python3 -I -c "import sys; sys.exit(0 if $a >= $need else 1)" && ! release_running && break
       [ -n "${RISI_EVAL_WAIT:-}" ] || break
@@ -156,7 +159,7 @@ case "$cmd" in
       $PY asr --url http://127.0.0.1:8200 --model faster-whisper-large-v3 --key-env WHISPER_API_KEY --label whisper-large-v3-live --manifest "$man"; exit 0
     fi
     mem=$(cand asr "$name" mem_gb); ct2=$(cand asr "$name" local_ct2)
-    docker ps -a --format '{{.Names}}' | grep -q '^risi-eval-' && { echo "another risi-eval container exists"; exit 1; }
+    docker ps -a --format '{{.Names}}' | grep -v '^risi-eval-fetch-' | grep -q '^risi-eval-' && { echo "another risi-eval container exists"; exit 1; }
     wait_release
     a=$(avail_gb); python3 -I -c "import sys; sys.exit(0 if $a >= $mem + $HEADROOM_GB else 1)" || { echo "MemAvailable $a GB too low for $name"; exit 3; }
     $PY probe; before=$a

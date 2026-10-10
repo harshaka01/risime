@@ -1,0 +1,9 @@
+{
+ "name": "gemma4-12b-qat",
+ "repo": "google/gemma-4-12B-it-qat-w4a16-ct",
+ "mem_avail_before_gb": 29.6,
+ "mem_avail_min_gb": 9.4,
+ "peak_mem_gb": 20.2,
+ "load_s": 216,
+ "gpu_mem_util_gb": 15.0
+}

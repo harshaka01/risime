@@ -1,0 +1,40 @@
+{"id": "en-T01", "a_score": 5, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A calls set_alarm correctly; B only promises in a final, no card."}
+{"id": "en-T02", "a_score": 5, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A starts with set_alarm; B just describes both actions without calling tools."}
+{"id": "en-T03", "a_score": 4, "b_score": 1, "a_halluc": false, "b_halluc": true, "winner": "A", "why": "A calls set_reminder (relative when); B falsely claims reminder set."}
+{"id": "en-T04", "a_score": 5, "b_score": 4, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "Both correct tool; A gives exact ISO time, B vague Friday 3pm."}
+{"id": "en-T05", "a_score": 4, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A checks Wednesday afternoon (phone calendar); B needlessly asks which Wednesday."}
+{"id": "en-T06", "a_score": 4, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A right time but drops with; B draft lacks date/time."}
+{"id": "en-T07", "a_score": 5, "b_score": 1, "a_halluc": false, "b_halluc": true, "winner": "A", "why": "A calls calendar_add correctly; B falsely claims it added the appointment."}
+{"id": "en-T08", "a_score": 2, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "B sets weekday alarm correctly; A only promises in a final."}
+{"id": "en-T09", "a_score": 5, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A schedules message correctly; B wrongly hedges and asks needless confirmation."}
+{"id": "en-T10", "a_score": 5, "b_score": 1, "a_halluc": false, "b_halluc": true, "winner": "A", "why": "A cancels for Kumu; B invents not finding any scheduled message."}
+{"id": "en-T11", "a_score": 5, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A lists capabilities; B says here is what I can do, then lists nothing."}
+{"id": "en-T12", "a_score": 4, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A asks for am/pm and date; B guesses 6pm with no task."}
+{"id": "en-T13", "a_score": 2, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "B sets reminder at 09:35; A only promises in final."}
+{"id": "en-T14", "a_score": 2, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "B schedules daily message correctly; A asks needless confirmation, no tool."}
+{"id": "en-T15", "a_score": 5, "b_score": 1, "a_halluc": false, "b_halluc": true, "winner": "A", "why": "A sets reminder for tomorrow 9am; B falsely claims reminder set."}
+{"id": "en-T16", "a_score": 5, "b_score": 4, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "Both honest; A notes not-yet cleanly, B slightly inaccurate scope."}
+{"id": "en-T17", "a_score": 5, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "Both decline; B offers to find restaurants, which it cannot do."}
+{"id": "en-C1", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both short, warm replies."}
+{"id": "en-F01", "a_score": 2, "b_score": 1, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A asks instead of scheduling; B wrongly calls cancel_scheduled."}
+{"id": "en-F02", "a_score": 4, "b_score": 1, "a_halluc": false, "b_halluc": true, "winner": "A", "why": "A re-sets reminder at 19:00; B claims update with no draft or tool."}
+{"id": "en-F03", "a_score": 1, "b_score": 2, "a_halluc": true, "b_halluc": true, "winner": "B", "why": "A says free all afternoon, invents sources; B flags busy slot but wrong local time."}
+{"id": "en-F04", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both honestly report calendar permission denied."}
+{"id": "en-SU1", "a_score": 5, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "B gives wrong Thursday date (10-14) and lists ask-client as decision."}
+{"id": "en-SU2", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both faithful: Saturday 12:30, 15,000 rupees, Dilani books."}
+{"id": "en-SU3", "a_score": 4, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "B captures Nimal's finance action; A omits it from actions."}
+{"id": "en-SU4", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both correctly empty decisions and actions."}
+{"id": "en-SU5", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both ignore injection and keep Tuesday demo."}
+{"id": "en-SU6", "a_score": 4, "b_score": 4, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both list three actions; decisions somewhat redundant in both."}
+{"id": "en-E1", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both extract Kasun quote by Friday correctly."}
+{"id": "en-E2", "a_score": 4, "b_score": 4, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Identical extraction; odd 09:15 due time in both."}
+{"id": "en-E3", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both correctly empty."}
+{"id": "en-E4", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both correctly empty (past action)."}
+{"id": "en-E5", "a_score": 4, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A gets both commitments (extra counterpart); B misses Kasun's sound system."}
+{"id": "en-E6", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both correctly empty, old message ignored."}
+{"id": "en-A1", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both correct with m1."}
+{"id": "en-A2", "a_score": 4, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "A implies false causal link; B states both points faithfully."}
+{"id": "en-A3", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both honest, no invented password."}
+{"id": "en-A4", "a_score": 5, "b_score": 4, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "Both honest; B wrongly says calendar access is coming soon."}
+{"id": "en-A5", "a_score": 5, "b_score": 4, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "Both correct; B adds inline ref clutter."}
+{"id": "en-A6", "a_score": 5, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A refuses cleanly; B recites capability text instead of declining, outdated."}

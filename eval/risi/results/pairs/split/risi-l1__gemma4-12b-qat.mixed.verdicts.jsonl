@@ -1,0 +1,20 @@
+{"id": "mixed-M01", "a_score": 3, "b_score": 1, "a_halluc": false, "b_halluc": true, "winner": "A", "why": "A sets reminder instead of alarm; B echoes nonsense about flowers."}
+{"id": "mixed-M02", "a_score": 4, "b_score": 1, "a_halluc": false, "b_halluc": true, "winner": "A", "why": "A sets reminder correctly; B misreads as banks, rambling Sinhala."}
+{"id": "mixed-M03", "a_score": 1, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "A schedules for today to this chat, not Kumu; B hedges, no tool."}
+{"id": "mixed-M04", "a_score": 2, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "A only promises a check; B checks wrong day (today)."}
+{"id": "mixed-M05", "a_score": 3, "b_score": 1, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A right tool and Nimal but 09:00 not 15:00; B repetitive gibberish."}
+{"id": "mixed-M06", "a_score": 5, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A has the action item and before 10; B has no action, says at 10."}
+{"id": "mixed-M07", "a_score": 5, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A extracts Sanduni's report by 17:00; B misses the commitment."}
+{"id": "mixed-M08", "a_score": 5, "b_score": 4, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "Both correct; B drops raa (night), making 7 ambiguous."}
+{"id": "mixed-M09", "a_score": 2, "b_score": 1, "a_halluc": false, "b_halluc": true, "winner": "A", "why": "A guesses 6pm with no task; B invents a 6th-grade topic."}
+{"id": "mixed-M10", "a_score": 4, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A sets reminder (audience should be me); B only promises."}
+{"id": "mixed-M11", "a_score": 5, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A sets 06:00 alarm; B only promises in Tanglish."}
+{"id": "mixed-M12", "a_score": 5, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A sets reminder; B only promises."}
+{"id": "mixed-M13", "a_score": 4, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A schedules to Kavi (relative time); B says it will send, no tool."}
+{"id": "mixed-M14", "a_score": 2, "b_score": 2, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "A checks wrong day; B asks for the date already given."}
+{"id": "mixed-M15", "a_score": 3, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "A wrong date (today); B draft lacks date/time."}
+{"id": "mixed-M16", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both faithful summaries with action and Wednesday before 10."}
+{"id": "mixed-M17", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both extract Nithya's report by 17:00 correctly."}
+{"id": "mixed-M18", "a_score": 5, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "tie", "why": "Both answer Saturday 7 pm with m1."}
+{"id": "mixed-M19", "a_score": 4, "b_score": 3, "a_halluc": false, "b_halluc": false, "winner": "A", "why": "A sets reminder (audience off); B draft lacks date/time."}
+{"id": "mixed-M20", "a_score": 1, "b_score": 5, "a_halluc": false, "b_halluc": false, "winner": "B", "why": "A wrongly sets an alarm for thanks; B replies warmly."}

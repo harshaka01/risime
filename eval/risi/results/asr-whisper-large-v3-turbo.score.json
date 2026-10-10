@@ -1,0 +1,31 @@
+{
+ "label": "whisper-large-v3-turbo",
+ "model": "whisper-large-v3-turbo",
+ "manifest": "/home/harsha/risime-eval-data/manifest.jsonl",
+ "summary": {
+  "ta": {
+   "n": 50,
+   "wer": 0.811,
+   "cer": 0.378,
+   "rtf": 0.116,
+   "script": {
+    "ok": 46,
+    "mixed_script": 2,
+    "wrong_script": 1,
+    "romanised": 1
+   }
+  },
+  "si": {
+   "n": 50,
+   "wer": 1.245,
+   "cer": 0.972,
+   "rtf": 0.49,
+   "script": {
+    "wrong_script": 19,
+    "ok": 28,
+    "romanised": 2,
+    "mixed_script": 1
+   }
+  }
+ }
+}
