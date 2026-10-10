@@ -431,6 +431,19 @@ defmodule RisiMe.Devices do
 
   def risi_events?(_), do: false
 
+  @doc """
+  v1.34 §33.1: true if `device_id` (may be nil) names a `pdf_export` device of the user (it is
+  stored only together with `risi_tools`).
+  """
+  def pdf_export_device?(_user_id, nil), do: false
+
+  def pdf_export_device?(user_id, device_id) do
+    case get(user_id, device_id) do
+      %Device{capabilities: caps} = d -> risi_tools?(d) and "pdf_export" in (caps || [])
+      _ -> false
+    end
+  end
+
   @doc "v1.29: true if `device_id` (may be nil) names a `risi_events` device of the user."
   def risi_events_device?(_user_id, nil), do: false
   def risi_events_device?(user_id, device_id), do: risi_events?(get(user_id, device_id))

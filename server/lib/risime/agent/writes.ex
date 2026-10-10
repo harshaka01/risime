@@ -96,7 +96,9 @@ defmodule RisiMe.Agent.Writes do
 
     risi = card_risi(ctx, tool, card, wid, expires)
 
-    case Out.post(target, card.summary <> "? Update RisiMe to answer.", risi) do
+    body = card[:body] || card.summary <> "? Update RisiMe to answer."
+
+    case Out.post(target, body, risi) do
       {:ok, %{message_id: mid}} ->
         w |> Ecto.Changeset.change(card_message_id: mid) |> Repo.update!()
         Progress.send(ctx.asker, ctx.request_id, ctx.conv, "waiting_confirm")
@@ -167,12 +169,18 @@ defmodule RisiMe.Agent.Writes do
     }
     |> put_some("skill_id", card[:skill_id])
     |> put_some("args", card[:card_args])
+    |> then(&if(tool.name == "export_pdf", do: export_card(&1, card), else: &1))
     # P0 2026-10-09: the calendar hint (the phone's remembered choice, or null).
     |> then(
       &if(tool.name == "calendar_add", do: Map.put(&1, "calendar", card[:calendar]), else: &1)
     )
     |> then(&if(tool.name == "risi_calendar_add", do: risi_calendar_card(&1, card), else: &1))
   end
+
+  # v1.34 §33.15: the PDF card is [Send] [Cancel], has no time, and names its source and target
+  # in `export` (built from server-held data; the phone checks its tool call against it).
+  defp export_card(risi, card),
+    do: risi |> Map.put("buttons", ["send", "cancel"]) |> Map.put("export", card[:export])
 
   # v1.29 §29.8: the Risi Calendar action card ([Add] [Edit] [Cancel]; no skill, no phone
   # calendar).

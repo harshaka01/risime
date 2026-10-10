@@ -49,9 +49,9 @@ defmodule RisiMe.Agent.ToolCalls do
   @max_body 16_384
 
   @tools ~w(calendar_check calendar_add set_alarm schedule_message cancel_scheduled
-            calendar_remove)
+            calendar_remove export_pdf)
   @v126 ~w(set_alarm schedule_message cancel_scheduled calendar_remove)
-  @writes ~w(calendar_add set_alarm schedule_message cancel_scheduled)
+  @writes ~w(calendar_add set_alarm schedule_message cancel_scheduled export_pdf)
 
   @doc "The client tools this server knows (§25.3, §26.6)."
   def tools, do: @tools
@@ -135,7 +135,7 @@ defmodule RisiMe.Agent.ToolCalls do
 
     # v1.26 §26.6: `undo_entry_id` on the v1.26 tools (and every undo); absent for v1.25 ones.
     data =
-      if Map.has_key?(spec, :undo_entry_id) or v126?(spec.tool),
+      if Map.has_key?(spec, :undo_entry_id) or v126?(spec.tool) or spec.tool == "export_pdf",
         do: Map.put(data, "undo_entry_id", Map.get(spec, :undo_entry_id)),
         else: data
 
@@ -254,7 +254,7 @@ defmodule RisiMe.Agent.ToolCalls do
       status == "ok" and valid_ok?(tool, result) ->
         {:ok, status, result}
 
-      status == "error" and valid_error?(result) ->
+      status == "error" and valid_error?(tool, result) ->
         {:ok, status, result}
 
       status in ~w(no_permission declined) and result in [nil, :missing] ->
@@ -283,8 +283,18 @@ defmodule RisiMe.Agent.ToolCalls do
   @error_codes ~w(unknown_tool bad_args calendar_unavailable alarm_unavailable
                   too_many_scheduled not_member)
 
-  defp valid_error?(%{"code" => code} = r) when map_size(r) == 1, do: code in @error_codes
-  defp valid_error?(_), do: false
+  # v1.34 §33.15: `export_pdf` has its own five codes (plus the two generic ones every tool has).
+  @pdf_codes ~w(source_unavailable not_member files_not_ready too_large pdf_failed)
+
+  defp valid_error?("export_pdf", %{"code" => code} = r) when map_size(r) == 1,
+    do: code in @pdf_codes or code in ~w(unknown_tool bad_args)
+
+  defp valid_error?("export_pdf", _), do: false
+
+  defp valid_error?(_tool, %{"code" => code} = r) when map_size(r) == 1,
+    do: code in @error_codes
+
+  defp valid_error?(_tool, _), do: false
 
   # v1.31 §31.4: with `args.sources`, the result's `sources` are exactly the sources asked for.
   defp sources_match(%{sources: asked}, "ok", %{"sources" => got}) when is_list(asked) do
@@ -346,6 +356,10 @@ defmodule RisiMe.Agent.ToolCalls do
        do:
          is_binary(id) and byte_size(id) in 1..256 and
            (c == nil or RisiMe.Agent.CalendarChoice.valid?(c))
+
+  # v1.34 §33.15: the PDF's state (`sent` only after the `msg:send` reply) and its page count.
+  defp valid_ok?("export_pdf", %{"state" => st, "pages" => p} = r) when map_size(r) == 2,
+    do: st in ~w(sent queued) and is_integer(p) and p in 1..200
 
   defp valid_ok?("set_alarm", %{"alarm_set" => true} = r) when map_size(r) == 1, do: true
 

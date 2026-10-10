@@ -176,7 +176,9 @@ defmodule RisiMe.Agent.Tools do
         RisiMe.Agent.CalendarTools.risi_calendar_add(),
         ClientTools.set_alarm(),
         ClientTools.schedule_message(),
-        ClientTools.cancel_scheduled()
+        ClientTools.cancel_scheduled(),
+        # v1.34 §33.15: "send this as a PDF" (only for a `pdf_export` device).
+        ClientTools.export_pdf()
       ]
   end
 

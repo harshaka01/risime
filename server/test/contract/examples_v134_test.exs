@@ -2,7 +2,9 @@ defmodule RisiMe.Contract.ExamplesV134Test do
   @moduledoc """
   Contract v1.34 §33 (basic messaging): one test for each of the 17 new example files.
   Client-only envelopes (inside MLS) are checked against the §33 rules; server-produced
-  examples are compared exactly against what the server produces.
+  examples are compared exactly against what the server produces (the Risi ones in
+  test/risime/agent/export_pdf_test.exs). `msg:delete` `blob_ids` already take any `media` blob
+  of the conversation, so a `file` blob needs no new rule (test/risime_web/channels/deletes_v112_test.exs).
   """
   use RisiMeWeb.ChannelCase, async: false
 

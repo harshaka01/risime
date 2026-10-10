@@ -18,6 +18,13 @@ defmodule RisiMe.Agent.ClientTools do
     `undo_entry_id`, `RisiMe.Agent.Skills`).
   * `calendar_remove` (v1.26) is undo-only: never offered to the model.
 
+  * `export_pdf` (v1.34 §33.15, personal, no skill): the model chooses only **references**; the
+    phone renders the PDF from its own copy. Without `send_to` the turn ends with a server-built
+    answer and a `pdf` chip (no write, no tool call). With `send_to` it is a write: a `confirm`
+    card built from server-held metadata (never model text), then the tool call to the
+    confirming device (`pdf_export`), strict result checks, and the honest sentences below
+    ("Sent" only for the phone's `sent`).
+
   The v1.26 tools go only to `risi_skills` devices (`RisiMe.Agent.Skills.allows?/2`).
 
   **Device routing** (§25.4, §26.8): a confirmed write goes to the confirming device when it
@@ -485,6 +492,201 @@ defmodule RisiMe.Agent.ClientTools do
 
   defp run_cancel(_args, _ctx), do: {:error, "failed", "bad_args"}
 
+  ## export_pdf (v1.34 §33.15)
+
+  @pdf_kinds %{
+    "answer" => "Risi answer",
+    "summary" => "Risi summary",
+    "report" => "Risi report",
+    "digest" => "Risi digest",
+    "discussion_summary" => "Discussion summary",
+    "note_card" => "Risi note"
+  }
+  @pdf_views ~w(day week agenda)
+  @pdf_max_days 31
+
+  @doc "The Risi message kinds a PDF can be made of (§33.14)."
+  def pdf_kinds, do: Map.keys(@pdf_kinds)
+
+  def export_pdf do
+    %{
+      name: "export_pdf",
+      description:
+        "make a PDF on the asker's phone of one of Risi's own earlier messages or a note " <>
+          "(source: its ref, e.g. \"m3\" or \"n1\", only refs you were given) or of the " <>
+          "calendar ({\"calendar\": {\"view\": \"day\"|\"week\"|\"agenda\", \"from\": " <>
+          "ISO or phrase, \"to\": ISO or phrase, at most 31 days}}). send_to: null when they " <>
+          "just want the PDF (they get a PDF button); or a friend's name, or \"this chat\" when " <>
+          "they say to send it there (always confirmed). You choose only the reference; the " <>
+          "phone writes the PDF, you never see or write its content",
+      where: :client,
+      personal: true,
+      write: true,
+      finds: false,
+      skill: nil,
+      args:
+        obj(
+          %{
+            "source" => %{
+              "anyOf" => [
+                %{"type" => "string", "pattern" => "^[mn][0-9]{1,3}$"},
+                obj(
+                  %{
+                    "calendar" =>
+                      obj(
+                        %{
+                          "view" => %{"enum" => @pdf_views},
+                          "from" => @str,
+                          "to" => @str
+                        },
+                        ["view", "from", "to"]
+                      )
+                  },
+                  ["calendar"]
+                )
+              ]
+            },
+            "send_to" => %{"type" => ["string", "null"], "maxLength" => 64}
+          },
+          ["source", "send_to"]
+        ),
+      # §33.1: only a device that advertises `pdf_export` (kept only with `risi_tools`).
+      authorize: fn ctx ->
+        if Devices.pdf_export_device?(ctx.asker, ctx.device_id), do: :ok, else: {:error, :denied}
+      end,
+      run: &run_pdf/2,
+      exec: &exec/3
+    }
+  end
+
+  defp run_pdf(%{"source" => src} = a, ctx) do
+    with {:ok, source, title} <- pdf_source(src, ctx),
+         {:ok, target} <- pdf_target(a["send_to"], ctx) do
+      case target do
+        nil ->
+          # §33.15 path 1: no tool call, nothing sent; the turn ends with the `pdf` chip.
+          {:ok, %{"status" => "button_ready"}, %{pdf_source: source}}
+
+        {conv, name, label} ->
+          who = name || "this chat"
+          wire = %{"source" => source, "conversation_id" => conv}
+          what = "Send \"#{title}\" as a PDF to #{who} (#{label})"
+
+          {:propose,
+           %{
+             args: %{"wire" => wire, "to_name" => who},
+             card_args: nil,
+             export: wire,
+             summary: what,
+             body: String.replace(what, ~r/\((?:🔒|●) /, "(") <> "? Update RisiMe to answer.",
+             when: nil,
+             text: title,
+             personal: true,
+             skill_id: nil
+           }}
+      end
+    end
+  end
+
+  defp run_pdf(_args, _ctx), do: {:error, "failed", "bad_args"}
+
+  @unknown_source "unknown_source: I couldn't tell which item to export; ask which one"
+
+  # A ref the server handed out this turn (never a model-written id), or a calendar range.
+  defp pdf_source("m" <> _ = ref, ctx) do
+    case (ctx[:export_refs] || %{})[ref] do
+      %{conversation_id: conv, message_id: mid, kind: kind} when is_map_key(@pdf_kinds, kind) ->
+        title = "#{@pdf_kinds[kind]} · #{pdf_day(RisiMe.TimeUUID.to_datetime(mid), ctx.tz)}"
+        {:ok, %{"type" => "message", "conversation_id" => conv, "message_id" => mid}, title}
+
+      _ ->
+        {:error, "failed", @unknown_source}
+    end
+  end
+
+  defp pdf_source("n" <> _ = ref, ctx) do
+    with %{"type" => "note", "note_id" => id} <- (ctx[:refs] || %{})[ref],
+         {:ok, note} <- RisiMe.Agent.Notes.kept(ctx.asker, id),
+         {:ok, note} <- RisiMe.Agent.Notes.open(note) do
+      at = note.started_at || note.created_at
+
+      {:ok, %{"type" => "note", "note_id" => note.note_id},
+       "#{note.topic} · #{pdf_day(at, ctx.tz)}"}
+    else
+      _ -> {:error, "failed", @unknown_source}
+    end
+  end
+
+  defp pdf_source(%{"calendar" => %{"view" => view, "from" => f, "to" => t}}, ctx)
+       when view in @pdf_views do
+    with {:ok, from, _} <- time(f, ctx),
+         {:ok, to, kind} <- time(t, ctx),
+         to = if(kind == :date, do: DateTime.add(to, 86_400, :second), else: to),
+         true <- DateTime.compare(to, from) == :gt || {:error, "failed", "end_before_start"},
+         true <-
+           DateTime.diff(to, from) <= @pdf_max_days * 86_400 ||
+             {:error, "failed", "range_too_long: at most 31 days"} do
+      last = DateTime.add(to, -1, :second)
+      a = Clock.local(from, ctx.tz)
+      b = Clock.local(last, ctx.tz)
+
+      days =
+        if NaiveDateTime.to_date(a) == NaiveDateTime.to_date(b),
+          do: Calendar.strftime(a, "%a %-d %b"),
+          else: Calendar.strftime(a, "%-d %b") <> " – " <> Calendar.strftime(b, "%-d %b")
+
+      {:ok,
+       %{"type" => "calendar", "view" => view, "from" => Clock.ts(from), "to" => Clock.ts(to)},
+       "Calendar · " <> days}
+    end
+  end
+
+  defp pdf_source(_other, _ctx), do: {:error, "failed", @unknown_source}
+
+  defp pdf_day(%DateTime{} = t, tz), do: Calendar.strftime(Clock.local(t, tz), "%a %-d %b")
+
+  # `send_to`, resolved like `schedule_message`'s recipient (§26.6): a friend's 1:1 is Private;
+  # Official only for "this chat". Never a Risi chat (`recipient/2`).
+  defp pdf_target(nil, _ctx), do: {:ok, nil}
+
+  defp pdf_target(to, ctx) when is_binary(to) do
+    if String.trim(to) == "" do
+      {:ok, nil}
+    else
+      with {:ok, conv, name} <- recipient(to, ctx) do
+        {:ok, {conv, name, if(name, do: "🔒 Private", else: "● Official")}}
+      end
+    end
+  end
+
+  defp pdf_target(_to, _ctx), do: {:error, "failed", "bad_args"}
+
+  @doc """
+  The words for an `export_pdf` error `code` (§33.15 honesty). `noun` is "note", "message" or
+  "calendar view"; `who` the recipient's name.
+  """
+  def pdf_error_text(code, noun, who) do
+    "I couldn't send it: " <>
+      case code do
+        "source_unavailable" -> "the #{noun} isn't on this phone"
+        "not_member" -> "you're not in that chat any more"
+        "files_not_ready" -> "#{who} needs to update RisiMe to receive files"
+        "too_large" -> "it's too long for a PDF"
+        "pdf_failed" -> "the phone couldn't make the PDF"
+        _ -> "your phone couldn't do it"
+      end <> "."
+  end
+
+  @doc "The `sent` / `queued` sentences (§33.15). Only the phone's `sent` says \"Sent\"."
+  def pdf_done_text("sent", who), do: "Sent the PDF to #{who}."
+
+  def pdf_done_text("queued", _who),
+    do: "The PDF is in your phone's outbox. It goes as soon as your phone is online."
+
+  defp source_noun(%{"wire" => %{"source" => %{"type" => "note"}}}), do: "note"
+  defp source_noun(%{"wire" => %{"source" => %{"type" => "calendar"}}}), do: "calendar view"
+  defp source_noun(_), do: "message"
+
   ## Running a confirmed (or allowed) client write on the phone
 
   @doc """
@@ -516,7 +718,7 @@ defmodule RisiMe.Agent.ClientTools do
         {:error, "timeout"}
 
       {:ok, status, result} ->
-        unless w.via == "allowed", do: failed_reply(w, status, result)
+        unless w.via == "allowed", do: failed_reply(w, args, status, result)
         {:error, status}
     end
   end
@@ -526,9 +728,12 @@ defmodule RisiMe.Agent.ClientTools do
 
   defp route(w, device) do
     cap? =
-      if ToolCalls.v126?(w.tool),
-        do: RisiMe.Agent.Skills.device?(w.user_id, device),
-        else: Devices.risi_tools_device?(w.user_id, device)
+      cond do
+        # v1.34 §33.15: the confirming device when it advertises `pdf_export`, else the turn's.
+        w.tool == "export_pdf" -> Devices.pdf_export_device?(w.user_id, device)
+        ToolCalls.v126?(w.tool) -> RisiMe.Agent.Skills.device?(w.user_id, device)
+        true -> Devices.risi_tools_device?(w.user_id, device)
+      end
 
     if device && cap?, do: device, else: w.device_id
   end
@@ -537,6 +742,20 @@ defmodule RisiMe.Agent.ClientTools do
   defp ok(%{tool: "cancel_scheduled"} = w, _args, _dev, %{"cancelled" => false}) do
     answer(w, "ok", "That message was already sent or isn't scheduled any more.")
     :ok
+  end
+
+  # v1.34 §33.15: "Sent" only for the phone's `sent`; `queued` says it is in the outbox. The
+  # result was checked by `ToolCalls.parse/2` (state, pages); anything else is not believed.
+  defp ok(%{tool: "export_pdf"} = w, args, _dev, result) do
+    case result do
+      %{"state" => state} when state in ~w(sent queued) ->
+        answer(w, "ok", pdf_done_text(state, args["to_name"] || "the chat"))
+        :ok
+
+      _ ->
+        answer(w, "failed", "Your phone didn't confirm that the PDF was sent. Please check.")
+        {:error, "unconfirmed"}
+    end
   end
 
   # v1.32 §25.3 write honesty (P0 2026-10-10): "added" only for an `event_id` the phone read
@@ -672,7 +891,10 @@ defmodule RisiMe.Agent.ClientTools do
   end
 
   defp timeout_reply(w) do
-    body = "I couldn't reach your phone to add it. Tap Retry to try again."
+    body =
+      if w.tool == "export_pdf",
+        do: "I couldn't reach your phone to send the PDF. Tap Retry to try again.",
+        else: "I couldn't reach your phone to add it. Tap Retry to try again."
 
     Writes.post(w, body, %{
       "kind" => "error",
@@ -682,9 +904,16 @@ defmodule RisiMe.Agent.ClientTools do
     })
   end
 
-  defp failed_reply(w, status, result) do
+  defp failed_reply(w, args, status, result) do
     text =
       case status do
+        "error" when w.tool == "export_pdf" ->
+          pdf_error_text(
+            is_map(result) && result["code"],
+            source_noun(args),
+            args["to_name"] || "They"
+          )
+
         "error" when w.tool == "calendar_add" ->
           add_error_text(is_map(result) && result["code"])
 

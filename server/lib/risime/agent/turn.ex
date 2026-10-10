@@ -163,8 +163,8 @@ defmodule RisiMe.Agent.Turn do
     draft_state = ActionDraft.get(asker, conv)
     items = if ctx.in_risi_chat?, do: promises(asker, ctx.tz), else: []
     ctx = Map.merge(ctx, %{draft_state: draft_state, items: Map.new(items, &{&1.ref, &1})})
-    {user_text, refs, msg_ids} = context(ctx, question, now, items)
-    ctx = Map.merge(ctx, %{user_text: user_text, msg_ids: msg_ids})
+    {user_text, refs, msg_ids, export_refs} = context(ctx, question, now, items)
+    ctx = Map.merge(ctx, %{user_text: user_text, msg_ids: msg_ids, export_refs: export_refs})
 
     st = %{
       steps: [],
@@ -237,13 +237,13 @@ defmodule RisiMe.Agent.Turn do
         keys -> "\n\nRefs you may cite in sources: " <> Enum.join(Enum.sort(keys), ", ") <> "."
       end
 
-    extra =
-      if ctx.in_risi_chat?,
-        do: history_block(ctx, now, tz) <> promises_block(items),
-        else: ""
+    {history, export_refs} =
+      if ctx.in_risi_chat?, do: history_block(ctx, now, tz), else: {"", %{}}
+
+    extra = if ctx.in_risi_chat?, do: history <> promises_block(items), else: ""
 
     {text <> extra <> draft_block(ctx.draft_state) <> Prompts.question(question) <> cite, refs,
-     Map.values(rrefs.messages)}
+     Map.values(rrefs.messages), export_refs}
   end
 
   ## The Risi chat's memory (P0 2026-10-09)
@@ -261,28 +261,50 @@ defmodule RisiMe.Agent.Turn do
       |> Enum.flat_map(&history_line(&1, ctx))
       |> Enum.take(-@history)
 
+    # v1.34 §33.15: Risi's own earlier messages a PDF can be made of get a ref `m<n>` here
+    # (the asker's own lines and every other kind get none).
+    {lines, export_refs} = pdf_refs(lines, ctx.conv)
+
     if lines == [] do
-      ""
+      {"", %{}}
     else
       offset = NaiveDateTime.diff(Clock.local(now, tz), DateTime.to_naive(now))
 
       body =
-        Enum.map_join(lines, "\n", fn {id, from, text} ->
+        Enum.map_join(lines, "\n", fn {id, from, text, ref} ->
           local =
             id
             |> RisiMe.TimeUUID.to_datetime()
             |> DateTime.to_naive()
             |> NaiveDateTime.add(offset)
 
-          Jason.encode!(
-            %{"from" => from, "time" => Calendar.strftime(local, "%a %H:%M"), "text" => text},
-            escape: :html_safe
-          )
+          line = %{"from" => from, "time" => Calendar.strftime(local, "%a %H:%M"), "text" => text}
+          line = if ref, do: Map.put(line, "ref", ref), else: line
+          Jason.encode!(line, escape: :html_safe)
         end)
 
-      "\n\nEarlier in this Risi chat (oldest first; use it, never ask again for what was " <>
-        "already said):\n<history>\n" <> body <> "\n</history>"
+      {"\n\nEarlier in this Risi chat (oldest first; use it, never ask again for what was " <>
+         "already said; a \"ref\" can be passed to export_pdf):\n<history>\n" <>
+         body <> "\n</history>", export_refs}
     end
+  end
+
+  defp pdf_refs(lines, conv) do
+    kinds = MapSet.new(RisiMe.Agent.ClientTools.pdf_kinds())
+
+    {lines, {refs, _}} =
+      Enum.map_reduce(lines, {%{}, 1}, fn {id, from, text, kind}, {refs, n} ->
+        if from == "Risi" and MapSet.member?(kinds, kind) do
+          ref = "m#{n}"
+
+          {{id, from, text, ref},
+           {Map.put(refs, ref, %{conversation_id: conv, message_id: id, kind: kind}), n + 1}}
+        else
+          {{id, from, text, nil}, {refs, n}}
+        end
+      end)
+
+    {lines, refs}
   end
 
   @calendar_kinds ~w(calendar_invite event_card event_update calendar_suggestion
@@ -293,14 +315,17 @@ defmodule RisiMe.Agent.Turn do
       {:ok, %{"type" => "risi_request", "request_id" => rid} = e}
       when rid != ctx.request_id and row.sender_id == ctx.asker ->
         case e["text"] do
-          t when is_binary(t) and t != "" -> [{row.message_id, "asker", String.slice(t, 0, 500)}]
-          _ -> []
+          t when is_binary(t) and t != "" ->
+            [{row.message_id, "asker", String.slice(t, 0, 500), nil}]
+
+          _ ->
+            []
         end
 
       {:ok, %{"type" => "risi_action", "action" => a}} when row.sender_id == ctx.asker ->
         case a do
-          "confirm_write" -> [{row.message_id, "asker", "(tapped Add on the card)"}]
-          "cancel_write" -> [{row.message_id, "asker", "(tapped Cancel on the card)"}]
+          "confirm_write" -> [{row.message_id, "asker", "(tapped Add on the card)", nil}]
+          "cancel_write" -> [{row.message_id, "asker", "(tapped Cancel on the card)", nil}]
           _ -> []
         end
 
@@ -321,7 +346,7 @@ defmodule RisiMe.Agent.Turn do
               b
           end
 
-        [{row.message_id, "Risi", String.slice(text, 0, 500)}]
+        [{row.message_id, "Risi", String.slice(text, 0, 500), e["kind"]}]
 
       _ ->
         []
@@ -607,10 +632,20 @@ defmodule RisiMe.Agent.Turn do
         rule_final(st, ctx, "I tried #{name}, but it didn't work (#{earlier}), so I stopped.")
 
       true ->
-        {st, _status, _result, _meta} = exec_step(st, ctx, name, args, out)
-        loop(st, ctx)
+        {st, status, _result, meta} = exec_step(st, ctx, name, args, out)
+
+        # v1.34 §33.15 path 1: "make this a PDF" ends the turn with the server's own answer
+        # and the `pdf` chip (nothing is sent, nothing is claimed).
+        if status == "ok" and is_map(meta[:pdf_source]),
+          do: pdf_final(st, ctx, meta[:pdf_source]),
+          else: loop(st, ctx)
     end
   end
+
+  @pdf_answer "Tap PDF to create it on your phone."
+
+  defp pdf_final(st, ctx, source),
+    do: finish(Map.put(%{st | rule_made: true}, :pdf_source, source), ctx, @pdf_answer, [], [])
 
   ## Invalid actions (fix 2026-10-09)
 
@@ -764,7 +799,7 @@ defmodule RisiMe.Agent.Turn do
       cond do
         auth != :ok -> {"denied", nil, %{}}
         tool.write and st.writes >= ctx.bounds.writes -> {"skipped", nil, %{}}
-        true -> run_tool(tool, args, Map.put(ctx, :call_ref, st.call_ref))
+        true -> run_tool(tool, args, Map.merge(ctx, %{call_ref: st.call_ref, refs: st.refs}))
       end
 
     latency = System.monotonic_time(:millisecond) - t0
@@ -1189,6 +1224,17 @@ defmodule RisiMe.Agent.Turn do
       case NextActions.build(retry || raw_steps) do
         [] -> answer_risi
         actions -> Map.put(answer_risi, "next_actions", actions)
+      end
+
+    # v1.34 §33.15: the `pdf` chip of an `export_pdf` without `send_to`, first.
+    answer_risi =
+      case Map.get(st, :pdf_source) do
+        %{} = source ->
+          chip = %{"label" => "PDF", "action" => "pdf", "source" => source}
+          Map.update(answer_risi, "next_actions", [chip], &Enum.take([chip | &1], 3))
+
+        _ ->
+          answer_risi
       end
 
     # v1.32 §29.7: the phone lists the asker's own events under the answer (own Risi chat only).

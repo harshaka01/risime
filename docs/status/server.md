@@ -2011,3 +2011,28 @@ Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/p
 - Model text (`WriteHonesty`, in `Turn.finish`): a sentence claiming an add/set/schedule is removed unless this turn ran a write that reported `done`; an empty remainder becomes a plain statement. Prompt rule added to `Capabilities.calendar_rules`.
 - `answer.next_actions` (`NextActions`): settings instructions become `open` (settings.calendar | risi_skills | calendar_permission | notifications), questions/requests become `ask`, the rest is dropped, max 3; key omitted when empty; `next_steps` unchanged. No contract example exists yet for next_actions / added_event (tested inline).
 - Tests: full suite 1104, 0 failures, 15 skipped. Canary in writes_s13_test.
+
+### v1.34 §33 basic messaging (server part)  -- READY
+- Capabilities: `files` and `pdf_export` are known device capabilities (`Devices`); `pdf_export` is kept only with
+  `risi_tools` (silently dropped otherwise). `GET /mls/groups/{id}` has `files_ready`/`missing_files` (same rule as
+  `images_ready`, `RisiMe.MLS.Images`; a hint, never enforced). `msg:delete` `blob_ids` already accept any `media`
+  blob of the conversation, so file blobs need no change (`file` plain_size cap 16 515 072 fits the 16 MiB media cap).
+- Risi `export_pdf` (`ClientTools.export_pdf/0`, personal, no skill, only for a `pdf_export` device with an active Risi
+  chat): `source` is a ref the server handed out (`m<n>` = Risi's own earlier summary/report/answer/digest/
+  discussion_summary/note_card in the asker's Risi chat history, shown to the model with a `ref`; `n<n>` = a note ref
+  of this turn the asker keeps) or `{calendar: {view, from, to}}` (max 31 days). Anything else: step `failed`.
+  - No `send_to`: turn ends with the server answer "Tap PDF to create it on your phone." + `next_actions`
+    `[{label: "PDF", action: "pdf", source}]` (no tool call, no card).
+  - `send_to` (friend name = Private, "this chat" = Official, never a Risi chat): `confirm` card with `tool:
+    export_pdf`, `buttons: [send, cancel]`, `when: null`, `export`, title/summary from server-held data (note topic,
+    message kind + date, calendar range), never model text. [Send] -> `risi_tool_call` to the confirming
+    `pdf_export` device (else the turn's), args `{write_id, source, conversation_id}`.
+  - Result checks (`ToolCalls.parse`): `ok` exactly `{state: sent|queued, pages: 1..200}`; `error` exactly one of the
+    five codes (+ unknown_tool/bad_args); anything else 422. Sentences: "Sent the PDF to <name>." only for `sent`;
+    `queued` -> outbox sentence; errors "I couldn't send it: ..."; timeout -> `tool_timeout` + Retry.
+- Tests: `test/contract/examples_v134_test.exs` (all 17 files), `test/risime/agent/export_pdf_test.exs` (14).
+  Full suite 1124 tests, 0 failures, 15 skipped.
+- Notes for root: (1) no turn tool yet produces `n<n>` note refs, so a note PdfSource is covered at the tool level
+  only; (2) the new confirm/answer examples have no `made_by` and the answer example has `local_search: null`; the
+  server always adds `made_by` to a Risi post and does not send `local_search` yet (tests compare without them);
+  (3) Official-chat `m<n>` refs are not exportable (Risi's own posts are only buffered in the Risi chat).

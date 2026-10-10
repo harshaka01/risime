@@ -26,6 +26,7 @@ defmodule RisiMe.Agent.Capabilities do
     "calendar_add" => "add events to your phone's calendar after you tap Add",
     "risi_calendar_check" => "check whether you're free in your Risi Calendar (and your phone's)",
     "risi_calendar_add" => "add events to your Risi Calendar and invite people after you tap Add",
+    "export_pdf" => "make a PDF of a summary, report, note or your calendar on your phone",
     "search_chats" => "search your Official chats",
     "summarise" => "summarise a chat in English, Sinhala or Tamil",
     "draft_reply" => "draft replies for you to send",
