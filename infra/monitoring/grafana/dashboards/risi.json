@@ -30,7 +30,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "histogram_quantile(0.5, sum by (le) (rate(risime_prom_ex_risi_turn_duration_milliseconds_bucket[5m])))",
+     "expr": "histogram_quantile(0.5, sum by (le) (rate(risime_risi_turn_duration_milliseconds_bucket[5m])))",
      "legendFormat": "p50",
      "datasource": {
       "type": "prometheus",
@@ -39,7 +39,7 @@
     },
     {
      "refId": "B",
-     "expr": "histogram_quantile(0.95, sum by (le) (rate(risime_prom_ex_risi_turn_duration_milliseconds_bucket[5m])))",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(risime_risi_turn_duration_milliseconds_bucket[5m])))",
      "legendFormat": "p95",
      "datasource": {
       "type": "prometheus",
@@ -72,7 +72,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (outcome) (rate(risime_prom_ex_risi_turn_total[5m]))",
+     "expr": "sum by (outcome) (rate(risime_risi_turn_total[5m]))",
      "legendFormat": "{{outcome}}",
      "datasource": {
       "type": "prometheus",

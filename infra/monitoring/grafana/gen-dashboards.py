@@ -43,8 +43,8 @@ overview = dash("risime-overview", "RisiMe Overview", [
     panel(13, "Host boot / uptime", ['time() - node_boot_time_seconds'], 16, 19, kind="stat", unit="s"),
 ])
 risi = dash("risime-risi", "RisiMe Risi", [
-    panel(1, "Risi turn duration p50/p95", ['histogram_quantile(0.5, sum by (le) (rate(risime_prom_ex_risi_turn_duration_milliseconds_bucket[5m])))', 'histogram_quantile(0.95, sum by (le) (rate(risime_prom_ex_risi_turn_duration_milliseconds_bucket[5m])))'], 0, 0, 12, 8, unit="ms", legends=["p50", "p95"]),
-    panel(2, "Turn outcomes", ['sum by (outcome) (rate(risime_prom_ex_risi_turn_total[5m]))'], 12, 0, 12, 8, legends=["{{outcome}}"]),
+    panel(1, "Risi turn duration p50/p95", ['histogram_quantile(0.5, sum by (le) (rate(risime_risi_turn_duration_milliseconds_bucket[5m])))', 'histogram_quantile(0.95, sum by (le) (rate(risime_risi_turn_duration_milliseconds_bucket[5m])))'], 0, 0, 12, 8, unit="ms", legends=["p50", "p95"]),
+    panel(2, "Turn outcomes", ['sum by (outcome) (rate(risime_risi_turn_total[5m]))'], 12, 0, 12, 8, legends=["{{outcome}}"]),
     panel(3, "vLLM time to first token p95", ['histogram_quantile(0.95, sum by (le) (rate(vllm:time_to_first_token_seconds_bucket[5m])))'], 0, 8, 8, 8, unit="s"),
     panel(4, "vLLM e2e request latency p95", ['histogram_quantile(0.95, sum by (le) (rate(vllm:e2e_request_latency_seconds_bucket[5m])))'], 8, 8, 8, 8, unit="s"),
     panel(5, "vLLM running / waiting requests", ['vllm:num_requests_running', 'vllm:num_requests_waiting'], 16, 8, 8, 8, legends=["running", "waiting"]),
