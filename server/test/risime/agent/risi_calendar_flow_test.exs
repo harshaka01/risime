@@ -123,6 +123,27 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
   defp status_of(e, user),
     do: Enum.find_value(e["participants"], &(&1["user_id"] == user && &1["status"]))
 
+  test "the backfill's catch-up events don't use up the chat's daily cap (a live one still fits)",
+       ctx do
+    for h <- 0..3,
+        do:
+          item!(ctx,
+            text: "Shenika: task #{h}",
+            due: DateTime.add(~U[2026-10-12 08:30:00.000000Z], h * 3600)
+          )
+
+    # All four old items get their events (the cap of 3 doesn't hold the catch-up).
+    assert %{items: 4} = CalendarOffers.backfill()
+    assert length(only_event(ctx.h)) == 4
+
+    # Not counted against live chatter: a new item's event (or a note's meeting) still has room.
+    assert CalendarOffers.room?(ctx.og, "Walkthrough", ~U[2026-10-13 05:30:00.000000Z]) == :ok
+    c = item!(ctx, text: "Shenika: walkthrough", due: ~U[2026-10-13 05:30:00.000000Z])
+    {:ok, c} = Commitment.open(c)
+    assert {n, _} = CalendarOffers.consider(c, [ctx.s, ctx.h])
+    assert n > 0 and length(only_event(ctx.h)) == 5
+  end
+
   ## The Shenika backfill (gate case 2)
 
   test "backfill: one proposed 'Interview' 14:00–15:00 Colombo, invites in both Risi chats, the

@@ -30,14 +30,15 @@ defmodule RisiMe.Agent.CalendarOffers do
   @doc """
   Routes the calendar users among `recipients` of item `c` (opened) to Risi Calendar.
   Returns `{cards_posted, calendar_users_handled}`; the caller sends §28.5 offers to the others.
-  Never raises.
+  Never raises. `catch_up: true` (the §29.12 backfill): the event of an existing item neither
+  counts against nor is held by the per-chat daily cap (that guards live conversations).
   """
-  def consider(%Commitment{} = c, recipients) do
+  def consider(%Commitment{} = c, recipients, opts \\ []) do
     with true <- Calendar.on?(),
          true <- RisiMe.Agent.official?(c.conversation_id),
          false <- RisiMe.Groups.Tabs.risi_chat?(c.conversation_id),
          cal when cal != [] <- Calendar.calendar_users(recipients),
-         {:ok, e} <- event_for(c) do
+         {:ok, e} <- event_for(c, opts) do
       {e, parts} = Calendar.load(e.event_id)
       ids = Enum.map(parts, & &1.user_id)
 
@@ -58,11 +59,12 @@ defmodule RisiMe.Agent.CalendarOffers do
   end
 
   # The item's one Risi-made event: created now (claimed), or the one made before.
-  defp event_for(c) do
+  defp event_for(c, opts) do
     case claim(c.id, c.owner_id, "risi_event") do
       :ok ->
-        case create(c) do
+        case create(c, opts) do
           {:ok, id} ->
+            if opts[:catch_up], do: claim(c.id, c.owner_id, "risi_event_catch_up")
             {:ok, %Event{event_id: id}}
 
           error ->
@@ -83,14 +85,14 @@ defmodule RisiMe.Agent.CalendarOffers do
     end
   end
 
-  defp create(c) do
+  defp create(c, opts) do
     start = Clock.usec(c.due)
     stop = DateTime.add(start, 3600, :second)
     people = Enum.uniq([c.owner_id | c.counterpart_ids])
     names = CalendarCards.names(people) |> Map.values()
     title = neutral_title(c.text, names)
 
-    with :ok <- room?(c.conversation_id, title, start) do
+    with :ok <- room?(c.conversation_id, title, start, opts) do
       attrs = %{
         title: title,
         notes: nil,
@@ -137,16 +139,23 @@ defmodule RisiMe.Agent.CalendarOffers do
   end
 
   @doc "§29.12: 3 Risi-made events per Official chat per day; 1 per (title, start). `:ok` or an error."
-  def room?(conv, title, start) do
+  def room?(conv, title, start, opts \\ []) do
     since = DateTime.add(DateTime.utc_now(), -86_400, :second)
 
+    # The backfill's catch-up events (marked by their claim) are not live chatter: not counted.
     today =
-      Repo.all(
-        from e in Event,
-          where:
-            e.source_conversation_id == ^conv and e.created_by == "risi" and
-              e.created_at > ^since
-      )
+      if opts[:catch_up],
+        do: [],
+        else:
+          Repo.all(
+            from e in Event,
+              left_join: o in Offers.Offer,
+              on: o.item_id == e.source_item_id and o.kind == "risi_event_catch_up",
+              where:
+                e.source_conversation_id == ^conv and e.created_by == "risi" and
+                  e.created_at > ^since and is_nil(o.item_id),
+              select: e.event_id
+          )
 
     same? =
       Repo.all(
@@ -293,7 +302,7 @@ defmodule RisiMe.Agent.CalendarOffers do
         Enum.sum(
           for r <- rows,
               {:ok, c} <- [Commitment.open(r)] do
-            {n, _} = consider(c, Offers.recipients(c))
+            {n, _} = consider(c, Offers.recipients(c), catch_up: true)
             n
           end
         )
