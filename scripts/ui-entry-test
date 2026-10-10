@@ -1368,9 +1368,9 @@ calendar_setup() {
   cal_insert "$GACC" com.google "Holidays" 200
   cal_insert Phone LOCAL Phone 700
   cal_rows() { A shell "content query --uri content://com.android.calendar/calendars --projection _id:account_name:account_type:calendar_access_level:calendar_displayName" 2>/dev/null | tr -d '\r'; }
-  GCAL="$(cal_rows | sed -n "s/^Row: [0-9]* _id=\([0-9]*\), account_name=$GACC, account_type=com.google, calendar_access_level=700,.*/\1/p" | head -1)"
-  [ -n "$GCAL" ] || { cal_rows | sed 's/^/    /'; fail "$1: could not seed the Google-type calendar"; }
-  pass "$1: seeded a com.google calendar ($GACC, id $GCAL), a read-only Google 'Holidays' and a local 'Phone' calendar"
+  GCAL_ID="$(cal_rows | sed -n "s/^Row: [0-9]* _id=\([0-9]*\), account_name=$GACC, account_type=com.google, calendar_access_level=700,.*/\1/p" | head -1)"
+  [ -n "$GCAL_ID" ] || { cal_rows | sed 's/^/    /'; fail "$1: could not seed the Google-type calendar"; }
+  pass "$1: seeded a com.google calendar ($GACC, id $GCAL_ID), a read-only Google 'Holidays' and a local 'Phone' calendar"
   # -- Settings → Risi skills → Calendar on: the runtime READ/WRITE_CALENDAR prompt, answered Allow
   settings_open "Risi skills" || fail "$1: Settings → 'Risi skills' didn't open"
   reveal "Calendar skill" || fail "$1: Risi skills has no Calendar switch"
@@ -1490,13 +1490,13 @@ PY
   ev="$(A shell "content query --uri content://com.android.calendar/events --projection _id:calendar_id:title:dtstart:dtend:deleted" 2>/dev/null | tr -d '\r' | grep 'title=Interview with Shenika,' | grep 'deleted=0' || true)"
   [ -n "$ev" ] || fail "calendar: no 'Interview with Shenika' event in CalendarContract"
   [ "$(printf '%s\n' "$ev" | wc -l)" = 1 ] || fail "calendar: more than one event added: $ev"
-  printf '%s\n' "$ev" | grep -q "calendar_id=$GCAL," || fail "calendar: the event isn't in the Google calendar $GCAL: $ev"
+  printf '%s\n' "$ev" | grep -q "calendar_id=$GCAL_ID," || fail "calendar: the event isn't in the Google calendar $GCAL_ID: $ev"
   printf '%s\n' "$ev" | grep -q "dtstart=$CAL_START_MS," || fail "calendar: the event's start isn't $CAL_START: $ev"
   printf '%s\n' "$ev" | grep -q "dtend=$((CAL_START_MS + 3600000))," || fail "calendar: the event's end isn't +1 h: $ev"
   [ "$(reqs)" = "$r2" ] || fail "calendar: [Add] cost a model call ($(reqs) vs $r2): it must run the tool directly"
   turns="$(( r2 - r0 ))"
   [ "$turns" -le 2 ] || fail "calendar: the card took $turns model calls (want one turn: ≤ 2 steps)"
-  pass "calendar: on the Google calendar (id $GCAL, $CAL_START, 1 h) after one card and one [Add]; model calls: $turns for the turn, 0 for [Add]"
+  pass "calendar: on the Google calendar (id $GCAL_ID, $CAL_START, 1 h) after one card and one [Add]; model calls: $turns for the turn, 0 for [Add]"
   # -- Undo: the server's undo → calendar_remove on this phone → the event is gone
   tap "Undo" || fail "calendar: tap Undo"
   gone=""
@@ -1653,14 +1653,14 @@ PY
   ev="$(A shell "content query --uri content://com.android.calendar/events --projection _id:calendar_id:title:dtstart:dtend:deleted" 2>/dev/null | tr -d '\r' | grep "title=$T_TEXT," | grep 'deleted=0' || true)"
   [ -n "$ev" ] || fail "offers: no '$T_TEXT' event in CalendarContract"
   [ "$(printf '%s\n' "$ev" | wc -l)" = 1 ] || fail "offers: more than one event added: $ev"
-  printf '%s\n' "$ev" | grep -q "calendar_id=$GCAL," || fail "offers: the event isn't in the Google calendar $GCAL: $ev"
+  printf '%s\n' "$ev" | grep -q "calendar_id=$GCAL_ID," || fail "offers: the event isn't in the Google calendar $GCAL_ID: $ev"
   printf '%s\n' "$ev" | grep -q "dtstart=$OFF_T_MS," || fail "offers: the event's start isn't the item's due ($OFF_T_DUE $stz = $OFF_T_MS): $ev"
   printf '%s\n' "$ev" | grep -q "dtend=$((OFF_T_MS + 3600000))," || fail "offers: the event's end isn't +1 h: $ev"
   [ "$(reqs)" = "$r2" ] || fail "offers: [Add] cost a model call ($(reqs) vs $r2)"
   for _ in $(seq 1 20); do item_line "$T_TEXT" | grep -q '|calendar:added$' && break; sleep 1; done
   item_line "$T_TEXT" | grep -q '|calendar:added$' || fail "offers: the offer isn't recorded as added: $(item_line "$T_TEXT")"
   shot "33-offer-added"
-  pass "offers (a): [Add] → '$T_TEXT' read back from the Google calendar (id $GCAL, $OFF_T_DUE $stz, 1 h); 0 model calls"
+  pass "offers (a): [Add] → '$T_TEXT' read back from the Google calendar (id $GCAL_ID, $OFF_T_DUE $stz, 1 h); 0 model calls"
 
   # -- (b) the vague item's question → [New date] → item_edit → its calendar offer
   scroll_to "When is \"$V1_TEXT\" due?*" || fail "offers: no 'When is \"$V1_TEXT\" due?' question"
