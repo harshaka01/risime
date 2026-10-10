@@ -8828,7 +8828,39 @@ redacts `Authorization` headers and response bodies in OkHttp logging.
   check the Reconnect flow; Disconnect, and check RisiMe is gone from myaccount → Third-party
   connections.
 
+## 32. Ops alerts (v1.32)
+(P0 incident 2026-10-10.) The pilot watchdog (`scripts/watchdog`, every 30 s) tells the operators,
+in their Risi chat, when the server was down and what it did. A rule message (§27.1 `model: null`),
+an ordinary §24.11 Risi post in the operator's **own active Risi chat** only (never a group):
+
+`{"v": 1, "type": "text", "body", "risi": {"v": 1, "kind": "ops_alert", "state", "check", "detail",
+"at", "call_ref": null, "notify": [uuid], "made_by"}}`
+
+- `state`: `"restarted"` (unhealthy, restarted and healthy again), `"rolled_back"` (healthy only
+  after going back one release), `"gave_up"` (still unhealthy, or the restart limit of 3 per hour
+  reached: the watchdog stops restarting until an operator acts), `"public_down"` (the server is
+  healthy on spark2 but `https://risime.risicloud.ai/health` failed 3 times in a row: a network or
+  Caddy fault a restart can't fix), `"recovered"` (a `public_down` or `gave_up` is over).
+- `check`: `"local"` | `"public"`. `detail`: one line of plain text (≤ 300 chars; the failure, the
+  release tag, where the diagnostics were saved). `at`: when the watchdog saw it (ts).
+- `notify`: the operator. `body` is the English line every client can show; clients without the
+  kind fall back to `body` (§24.11). Android shows it as a plain Risi message with a warning icon.
+- **Who:** the users whose phone numbers are listed in the server env `OPS_ALERT_PHONES` (`.env`,
+  never in Git). Nobody else ever receives one.
+- **How it is sent:** `POST /internal/ops-alert` on the server, **only** on `127.0.0.1:4000`
+  directly: the request must carry `Authorization: Bearer <OPS_ALERT_TOKEN>` (`.env`; compared in
+  constant time) and **no** `X-Forwarded-For` / `Forwarded` header (so a request through Caddy is
+  refused even from loopback). `{"state", "check", "detail"}` → `202 {"sent": n, "held": n}`;
+  `401` without the token or through a proxy; `404` when `OPS_ALERT_TOKEN` is unset. When Risi
+  is off or the operator has no active Risi chat, it is `held` (§24 sealed hold, 24 h) and the
+  watchdog also sends the e-mail fallback. Limit: 10 per hour (`429 rate_limited`).
+- Not end-to-end private beyond any other Risi post; it never contains message content, tokens or
+  phone numbers.
+- Example: `envelope_risi_ops_alert.json`.
+
 ## Changelog
+- **v1.32** (2026-10-10): `calendar_check` phone source reason `sync_off` (§29.7); Ops alerts
+  (§32): the Risi rule kind `ops_alert` and the loopback-only `POST /internal/ops-alert`.
 - **v1.31** (2026-10-10): the Google Calendar link (§31; decision 074; folds the deferred
   `2026-10-09-google-calendar.md`; Harsha's requirements of 2026-10-10):
   - the switch `/auth/config` `google_calendar` (`RISI_GCAL`, only with `RISI_EVENTS`), the
