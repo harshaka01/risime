@@ -12,7 +12,8 @@ defmodule RisiMe.OpsAlert do
   alias RisiMe.{Repo, RisiChat}
   alias RisiMe.Accounts.User
 
-  @states ~w(restarted rolled_back gave_up public_down recovered)
+  @watchdog_states ~w(restarted rolled_back gave_up public_down recovered)
+  @states @watchdog_states ++ ~w(alert resolved)
   @checks ~w(local public)
   @max_detail 300
 
@@ -20,8 +21,15 @@ defmodule RisiMe.OpsAlert do
 
   @doc "Validates the request body: `{:ok, {state, check, detail}}` or `:error`."
   def parse(%{"state" => s, "check" => c, "detail" => d})
-      when s in @states and c in @checks and is_binary(d),
+      when s in @watchdog_states and c in @checks and is_binary(d),
       do: {:ok, {s, c, String.slice(d, 0, @max_detail)}}
+
+  def parse(%{"state" => s, "check" => c, "detail" => d})
+      when s in ["alert", "resolved"] and is_binary(c) and is_binary(d) do
+    if Regex.match?(~r/\A[a-z0-9_]{1,40}\z/, c),
+      do: {:ok, {s, c, String.slice(d, 0, @max_detail)}},
+      else: :error
+  end
 
   def parse(_), do: :error
 
@@ -65,6 +73,10 @@ defmodule RisiMe.OpsAlert do
 
   def body("recovered", detail), do: line("RisiMe is reachable again.", detail)
 
+  def body("alert", check, detail), do: line("Monitoring alert: #{check}.", detail)
+  def body("resolved", check, detail), do: line("Resolved: #{check}.", detail)
+  def body(state, _check, detail), do: body(state, detail)
+
   defp line(text, ""), do: text
   defp line(text, detail), do: text <> " " <> detail
 
@@ -92,7 +104,7 @@ defmodule RisiMe.OpsAlert do
     with %User{id: uid} <- Repo.get_by(User, phone: phone),
          true <- Out.ready?(),
          rc when not is_nil(rc) <- RisiChat.active_id(uid),
-         {:ok, _} <- Out.post(rc, body(state, detail), risi(state, check, detail, uid, at)) do
+         {:ok, _} <- Out.post(rc, body(state, check, detail), risi(state, check, detail, uid, at)) do
       :sent
     else
       other ->

@@ -1,7 +1,7 @@
 defmodule RisiMeWeb.OpsAlertController do
   @moduledoc """
   `POST /internal/ops-alert` (contract v1.32 §32): loopback only, bearer `OPS_ALERT_TOKEN`
-  (constant-time compare), refused when any proxy header is present, 10 per hour.
+  (constant-time compare), refused when any proxy header is present, 30 per hour.
   """
   use RisiMeWeb, :controller
 
@@ -49,7 +49,7 @@ defmodule RisiMeWeb.OpsAlertController do
   defp loopback?(_), do: false
 
   defp limit do
-    case RateLimiter.hit(:ops_alert, OpsAlert.bucket_key(), 10, :timer.hours(1)) do
+    case RateLimiter.hit(:ops_alert, OpsAlert.bucket_key(), 30, :timer.hours(1)) do
       :ok -> :ok
       _ -> :rate_limited
     end

@@ -91,10 +91,30 @@ defmodule RisiMeWeb.OpsAlertV132Test do
     assert json_response(call(@good), 202) == %{"sent" => 0, "held" => 2}
   end
 
-  test "429 after 10 in an hour" do
-    for _ <- 1..10, do: assert(call(@good).status == 202)
+  test "429 after 30 in an hour" do
+    for _ <- 1..30, do: assert(call(@good).status == 202)
     conn = call(@good)
     assert json_response(conn, 429)["error"]["code"] == "rate_limited"
+  end
+
+  test "alert and resolved: any [a-z0-9_]{1,40} check, body texts, bad checks refused", ctx do
+    own_risi_chat!(ctx.user)
+    a = %{"state" => "alert", "check" => "health_down", "detail" => "down 2m"}
+    assert json_response(call(a), 202) == %{"sent" => 1, "held" => 0}
+    assert [{_, "Monitoring alert: health_down. down 2m", %{"state" => "alert"}}] = posts()
+
+    r = %{"state" => "resolved", "check" => "p95_latency", "detail" => "ok"}
+    assert json_response(call(r), 202) == %{"sent" => 1, "held" => 0}
+    assert [{_, "Resolved: p95_latency. ok", %{"state" => "resolved"}}] = posts()
+
+    for bad <- ["Health", "a-b", "", String.duplicate("a", 41), "local "] do
+      assert call(%{a | "check" => bad}).status == 422
+    end
+
+    # watchdog states stay local|public
+    assert call(%{@good | "check" => "health_down"}).status == 422
+    assert RisiMe.OpsAlert.body("alert", "x_y", "d") == "Monitoring alert: x_y. d"
+    assert RisiMe.OpsAlert.body("resolved", "x_y", "") == "Resolved: x_y."
   end
 
   test "envelope_risi_ops_alert.json: the built envelope has exactly its shape", ctx do
