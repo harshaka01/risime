@@ -375,3 +375,14 @@ config :risime, :social,
     (System.get_env("INVITE_ADMINS") || "")
     |> String.split(",", trim: true)
     |> Enum.map(&String.trim/1)
+
+# Contract v1.32 §32: the watchdog's loopback POST /internal/ops-alert. No token, no route (404).
+if config_env() != :test do
+  config :risime, :ops_alert,
+    token: System.get_env("OPS_ALERT_TOKEN"),
+    phones:
+      (System.get_env("OPS_ALERT_PHONES") || "")
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+end

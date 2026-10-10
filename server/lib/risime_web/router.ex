@@ -23,6 +23,8 @@ defmodule RisiMeWeb.Router do
     pipe_through :api
 
     get "/health", HealthController, :show
+    # v1.32 §32: loopback + bearer token only; 404 while OPS_ALERT_TOKEN is unset.
+    post "/internal/ops-alert", OpsAlertController, :create
   end
 
   scope "/api/v1", RisiMeWeb do

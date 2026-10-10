@@ -328,8 +328,9 @@ defmodule RisiMe.ContractExamplesTest do
                     risi_tool_result_calendar_check_google.json
                     risi_tool_result_calendar_check_google_reauth.json)
 
-  # v1.32 (§29.7 sync_off): checked in test/contract/examples_v132_test.exs.
-  @checked_v1_32 ~w(risi_tool_result_calendar_check_sync_off.json)
+  # v1.32 (§29.7 sync_off): checked in test/contract/examples_v132_test.exs; §32 ops alert in
+  # test/risime_web/controllers/ops_alert_v132_test.exs.
+  @checked_v1_32 ~w(risi_tool_result_calendar_check_sync_off.json envelope_risi_ops_alert.json)
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
