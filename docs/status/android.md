@@ -1,5 +1,17 @@
 # Android status — 0.2 nightlies
 
+## READY v1.33 D1: a 1:1's Official tab calls peer to peer on the dm: (JVM gate green; redroid `CALLTEST_TABS_ONLY=1 scripts/call-device-test` green: 8 calls, 64 PASS)
+- `callTargetFor(dm, OFFICIAL, …)` = `(dm:, PEER_TO_PEER)`; a group's Official stays §20 SFU.
+- The 1:1 Official header uses the 1:1 `CallActions` on the `dm:` (`DmCallsViewModel` + `DmCallButtons`: calls/video readiness, blocked texts with the peer's
+  name); the call screen names the peer. `CallManager.placeCall` redirects a `grp:` whose MLS row is Official with `chat_kind` dm to its `dm:`
+  (`dmChatForCall`); `groupName` falls back to the peer's name for such a grp:, never "Group".
+- Group headers honour `group_calls_unavailable: "server"` (v1.33 §20.1): buttons disabled, a tap says "Group calls aren't available on this server yet".
+- `PROTOCOL_VERSION` 1.33; tests: `TabSearchCallsTest` (per-tab targets, the placeCall redirect, the blocked-text order), the new example's decode.
+- Call 15 in `scripts/call-device-test` (CALLTEST_TABS=1 / CALLTEST_TABS_ONLY=1; TABS=on RISI=on temp server): voice and video from the Private and Official tabs,
+  A→B and B→A: the caller's screen names the peer, the callee rings with the caller's name, DTLS-SRTP media, audio both ways, VP8 on the callee, and the
+  server log has `call:signal … to=<user> ring=true` and no `POST /calls/rooms`. Attempt 1 failed on a harness timing issue (audio sampled before the first
+  packet); fixed with call_once's 6 s settle; attempt 2 green.
+
 ## READY nightly.48 gate fixes (main): header bar never clips, lock icon, calendar step scrolls (JVM gate green: 1622 tests, 0 failed, 9 skipped; redroid: --calendar (UITEST_CALENDAR_ONLY=1) and --ui-batch (UITEST_UIBATCH_ONLY=1) green, subtitle-in-bar at 1.0 and 1.3 in the DM and the Risi chat)
 - **Header ("🔒 Risⁱ")**: the uiautomator dump showed the subtitle node `🔒 Risi` at 74 px wide, narrower than it drew. The emoji's fallback-font metrics are measured
   differently from how they draw, so the ellipsis clip cut the last glyph. `RisiTopBar` is no longer a Material TopAppBar (which also clips to a fixed height). It is a

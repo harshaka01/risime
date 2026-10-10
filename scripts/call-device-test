@@ -35,6 +35,13 @@
 #     camera on → B's camera renderer draws it; back to voice from B's More; hang up → "Video call · m:ss".
 #     CALLTEST_SWITCH_ONLY=1 runs only call 14 (iteration). Debug builds keep the call controls on
 #     screen for uiautomator (files/debug_keep_call_controls; the auto-hide is unit-tested).
+#  9. Call 15 (v1.33 §24.5, NEXT-PHASE D1: calls from both tabs; CALLTEST_TABS=1, or CALLTEST_TABS_ONLY=1 for this
+#     step alone right after the DM is e2ee): the temp server runs TABS=on RISI=on (the MLS NIF built --prod,
+#     scripts/fake-llm on 127.0.0.1:$CALLTEST_LLM_PORT, default 8196, throwaway keys); both phones start Official
+#     for the A–B chat; then voice and video calls from the Private tab and from the Official tab, A→B and B→A:
+#     the caller's call screen names the peer (never "Group", never "Can't connect"), the callee rings with the
+#     caller's name, media connects (§16.10 stats), audio both ways (audio_ok), VP8 frames on the callee for
+#     video, and the server log has the 1:1 `call:signal … to=<user id> ring=true` and NO `POST /calls/rooms`.
 # Prints "CALLTEST PASS|FAIL <step>" lines and "CALLTEST OK" at the end. Never touches :4000.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -69,6 +76,7 @@ cleanup() {
   [ "$FAILED" = 0 ] || true
   cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
   tmux kill-session -t "risime-calltest$SUF" 2>/dev/null || true
+  tmux kill-session -t "risime-calltest-llm$SUF" 2>/dev/null || true
   if [ "$KEEP" = 0 ]; then
     REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
     REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
@@ -86,6 +94,22 @@ TURN_ENV=""
 if [ "${CALLTEST_TURN:-0}" = 1 ]; then
   ts="$(grep '^TURN_SECRET=' .env | cut -d= -f2-)"; [ -n "$ts" ] || { echo "CALLTEST_TURN=1 needs TURN_SECRET in .env"; exit 2; }
   TURN_ENV="TURN_SECRET='$ts' TURN_URLS='turn:203.115.26.139:3478?transport=udp,turn:203.115.26.139:3478?transport=tcp'"
+fi
+# Call 15 (v1.33 D1): TABS=on and Risi on (Official needs Risi in the group, §24.2).
+[ "${CALLTEST_TABS_ONLY:-0}" = 1 ] && { CALLTEST_TABS=1; CALLTEST_FAST=1; CALLTEST_SWITCH_ONLY=1; }
+TABS="${CALLTEST_TABS:-0}"; LLM_PORT="${CALLTEST_LLM_PORT:-8196}"
+: > "$WORK/risi.env"
+if [ "$TABS" = 1 ]; then
+  ss -ltnH "sport = :$LLM_PORT" | grep -q . && { echo "fake-llm port $LLM_PORT busy: set CALLTEST_LLM_PORT"; exit 1; }
+  echo "==> TABS=on RISI=on: MLS NIF (--prod), throwaway keys, fake-llm on 127.0.0.1:$LLM_PORT"
+  MLS_NIF_OUT="$WORK/librisime_mls_nif.so" timeout 1200 scripts/build-mls-nif --prod >/dev/null || { echo "scripts/build-mls-nif --prod failed"; exit 1; }
+  umask 077
+  { echo "TABS=on"; echo "RISI=on"; echo "RISI_MLS_NIF=$WORK/librisime_mls_nif"; echo "RISI_LLM_URL=http://127.0.0.1:$LLM_PORT/v1"; echo "RISI_FALLBACK=off"
+    echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"; echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; } > "$WORK/risi.env"
+  umask 022
+  tmux new -d -s "risime-calltest-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT --record '$WORK/llm-requests.jsonl' >> '$WORK/fake-llm.out' 2>&1"
+  for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && break; sleep 0.5; done
+  curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" || { echo "fake-llm didn't start"; tail -5 "$WORK/fake-llm.out"; exit 1; }
 fi
 cat > "$WORK/fixtures.exs" <<'EXS'
 alias RisiMe.{Accounts, Repo}
@@ -110,6 +134,9 @@ case mode do
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
     conv = RisiMe.Messaging.conversation_id(a.id, b.id)
     IO.puts("calltest: e2ee=#{RisiMe.MLS.group(conv) != nil}")
+  "risi" ->
+    :ok = RisiMe.Risi.seed()
+    IO.puts("calltest: risi ok")
 end
 EXS
 fx() { (cd server && $M mix run "$WORK/fixtures.exs" "$@" 2>/dev/null | grep '^calltest:' || true); }
@@ -119,7 +146,8 @@ echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB, E2EE on)"
 (cd server && $M mix risime.attestation.gen "$WORK/attest.jwk" >/dev/null 2>&1) || true
 [ -f "$WORK/attest.jwk" ] || { echo "no attestation key"; exit 1; }
 (cd server && $M mix compile >/dev/null 2>&1) || { echo "server compile failed"; exit 1; }
-tmux new -d -s "risime-calltest$SUF" "cd '$REPO/server' && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
+if [ "$TABS" = 1 ]; then [ "$(RISI=on RISI_MLS_NIF=/nonexistent fx risi)" = "calltest: risi ok" ] || { echo "fixture: risi seed"; exit 1; }; fi
+tmux new -d -s "risime-calltest$SUF" "cd '$REPO/server' && set -a && . '$WORK/risi.env' && set +a && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
   PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
   ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $TURN_ENV $M mix phx.server > '$WORK/server.log' 2>&1"
 for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
@@ -336,6 +364,7 @@ msg_check() {  # $1 label
 [ "${CALLTEST_FAST:-0}" = 1 ] || { msg_check "after both updated"; }
 # A message stuck in the outbox (sent offline), then fresh starts straight into chats while MLS is
 # active: the chat screen flushes the outbox (nightly.17/18 did that on the main thread and crashed).
+if [ "${CALLTEST_TABS_ONLY:-0}" != 1 ]; then
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"
 A reverse --remove "tcp:$PORT" >/dev/null 2>&1 || true; sleep 2
 { type_into "Encrypted message" "stuck-while-offline" || type_into "Message" "stuck-while-offline"; } && tap "Send" || fail "A: could not type"
@@ -352,7 +381,18 @@ wait_for "stuck-while-offline" 60 || fail "the stuck message was never delivered
 pass "A opened the DM 3 times with a stuck message (offline, MLS active): no crash; delivered once online"
 DEV=A; A shell am force-stop "$PKG"; open_chat "ZZ Call B" || fail "A: DM"
 sleep 3
+fi
 
+# Video stats (§19, debug builds): the latest "call video video/VP8 in … decoded=N out … sent=M" line on $DEV.
+vline() { A logcat -d 2>/dev/null | grep -E 'call video .*VP8 in .* decoded=' | tail -1 || true; }
+vdecoded() { vline | sed -nE 's/.* decoded=([0-9]+) .*/\1/p'; }
+vsent() { vline | sed -nE 's/.* out .* sent=([0-9]+).*/\1/p'; }
+# frames_rise <label> <A|B>: the decoded count on that phone grows over 5 s.
+frames_rise() {
+  local d1 d2; DEV=$2; d1="$(vdecoded)"; sleep 5; d2="$(vdecoded)"
+  [ "${d2:-0}" -gt "${d1:-0}" ] || fail "$1: no video frames decoded on $2 (decoded ${d1:-none}→${d2:-none}; $(vline | sed 's/.*call video //'))"
+  echo "    [$2] decoded ${d1:-0}→$d2 ($(vline | sed -E 's/.*call video ([^ ]+ in [^ ]+).*/\1/'))"
+}
 # One call: A calls, B answers through the activity intent, media host/host, A hangs up.
 call_once() {  # $1 label
   logcat_ok "before $1"
@@ -440,6 +480,99 @@ hang_up_a() {  # $1 label
   pass "$1: A hung up; both ended"
   no_leftovers "$1"
 }
+
+# ---------------------------------------------------------------- call 15 (v1.33 §24.5, NEXT-PHASE D1): both tabs
+# A 1:1 call from the Private tab and from the Official tab is the same §16/§19 peer-to-peer call on the dm:.
+name_of() { if [ "$1" = A ]; then echo "ZZ Call A"; else echo "ZZ Call B"; fi; }
+other_of() { if [ "$1" = A ]; then echo B; else echo A; fi; }
+# official_on <peer name>: the DM's Official tab with a usable composer; starts Official the first time.
+official_on() {
+  open_chat "$1" || return 1
+  tap "● Official" || return 1
+  for _ in $(seq 1 90); do
+    has 'text="Start Official"' && { tap "Start Official" || true; sleep 2; }
+    has 'text="Message"' && has 'Risi is listening' && return 0
+    sleep 1
+  done
+  return 1
+}
+# The title of $DEV's ringing CallStyle notification (channel `calls`).
+ring_title() { notif_dump | awk -v p="pkg=$PKG " '/NotificationRecord\(/{on = (index($0, p) > 0 && index($0, "channel=calls ") > 0)} on && /android\.title=/{print; exit}'; }
+tab_call() {  # <private|official> <caller A|B> <voice|video>
+  local tab="$1" caller="$2" kind="$3" callee btn label peer me tabtext mark log m t ok
+  callee="$(other_of "$caller")"; peer="$(name_of "$callee")"; me="$(name_of "$caller")"
+  btn="Voice call"; [ "$kind" = video ] && btn="Video call"
+  tabtext="🔒 Private"; [ "$tab" = official ] && tabtext="● Official"
+  label="call 15 ($tab tab, $kind, $caller→$callee)"
+  logcat_ok "before $label"
+  for DEV in A B; do
+    A shell pm grant "$PKG" android.permission.CAMERA 2>/dev/null || true
+    A shell cmd notification cancel_all >/dev/null 2>&1 || true
+    A logcat -c
+  done
+  DEV=$callee; open_chat "$me" || fail "$label: $callee can't open the DM"
+  DEV=$caller; open_chat "$peer" || fail "$label: $caller can't open the DM"
+  tap "$tabtext" || fail "$label: $caller has no \"$tabtext\" tab"; sleep 2
+  if [ "$tab" = official ]; then wait_for 'Risi is listening' 20 || fail "$label: $caller isn't on the Official tab"; fi
+  mark="$(wc -l < "$WORK/server.log")"
+  ok=""; for _ in $(seq 1 20); do tap "$btn" && { ok=1; break; }; sleep 2; done
+  if [ -z "$ok" ]; then
+    tap "$btn (unavailable)" && sleep 0.5 && dump && grep -o 'text="[^"]*"' "$WORK/ui-$DEV.xml" | grep -v 'text=""' | head -8 | sed "s/^/    $caller shows: /"
+    fail "$label: the $tab tab's \"$btn\" button never became enabled"
+  fi
+  # The caller's call screen names the peer: never "Group", never "Can't connect".
+  t=""; for _ in $(seq 1 15); do
+    dump
+    grep -qF "Can't connect" "$WORK/ui-$DEV.xml" && fail "$label: $caller's call screen says \"Can't connect\""
+    grep -qF 'End call' "$WORK/ui-$DEV.xml" && grep -qF "text=\"$peer" "$WORK/ui-$DEV.xml" && { t=1; break; }
+    sleep 1
+  done
+  [ -n "$t" ] || { grep -o 'text="[^"]*"' "$WORK/ui-$DEV.xml" | grep -v 'text=""' | head -8 | sed "s/^/    $caller shows: /"; fail "$label: $caller's call screen doesn't name $peer"; }
+  grep -qE 'text="Group[" ·]' "$WORK/ui-$DEV.xml" && fail "$label: $caller's call screen says \"Group\""
+  pass "$label: $caller's call screen names $peer (not \"Group\")"
+  DEV=$callee; wait_ring 30 || fail "$label: $callee never rang"
+  t="$(ring_title || true)"
+  [[ "$t" == *"$me"* ]] || fail "$label: $callee's ringing notification doesn't name $me (${t:-no title})"
+  [[ "$t" == *Group* ]] && fail "$label: $callee's ringing notification says Group ($t)"
+  pass "$label: $callee rings with $me's name"
+  answer_intent || fail "$label: no Answer action on $callee's incoming-call notification"
+  m=""; for _ in $(seq 1 30); do DEV=A; m="$(media_ok)"; [ -n "$m" ] && { DEV=B; [ -n "$(media_ok)" ] && break; }; m=""; sleep 1; done
+  [ -n "$m" ] || fail "$label: media never connected ($MEDIA_PAIR) with DTLS-SRTP on both"
+  pass "$label: answered; media connected peer to peer, DTLS-SRTP on both (${m##*call stats: })"
+  sleep 6   # as call_once: the first stats line is taken before any audio arrived
+  audio_ok "$label"
+  if [ "$kind" = video ]; then
+    # Answered from the notification = the callee's camera off (android A3): the callee decodes the caller's VP8.
+    for _ in $(seq 1 15); do DEV=$callee; [ "$(vdecoded)" -gt 0 ] 2>/dev/null && break; sleep 1; done
+    frames_rise "$label" "$callee"
+    pass "$label: VP8 frames decoded and rising on $callee"
+  fi
+  # The server saw the §16 1:1 signal (to = the peer's user id), never a §20 group signal or a room.
+  log="$(tail -n +"$(( mark + 1 ))" "$WORK/server.log")"
+  grep -qE "call:signal call=[^ ]+ from=[^ ]+ dev=[^ ]+ to=[0-9a-f]{8}-[0-9a-f-]{27} ring=true" <<<"$log" \
+    || fail "$label: no 1:1 \"call:signal … to=<user> ring=true\" in the server log"
+  grep -qE "call:signal .* to=grp:" <<<"$log" && fail "$label: the server saw a group call:signal (to=grp:…)"
+  grep -qE "POST /api/v1/calls/rooms|calls:rooms " <<<"$log" && fail "$label: the server saw POST /calls/rooms"
+  pass "$label: the server log has call:signal … to=<user> and no POST /calls/rooms"
+  DEV=$caller; tap "End call" || fail "$label: $caller has no End call button"
+  DEV=$callee; for _ in $(seq 1 20); do has "End call" || break; sleep 1; done
+  has "End call" && fail "$label: $callee still in the call after $caller hung up"
+  DEV=$caller; sleep 4; has "End call" && fail "$label: $caller still shows the call"
+  pass "$label: $caller hung up; both ended"
+  no_leftovers "$label"
+}
+tabs_calls() {
+  DEV=A; official_on "ZZ Call B" || fail "call 15: A can't start Official for the DM with B"
+  DEV=B; official_on "ZZ Call A" || fail "call 15: B can't open the DM's Official tab"
+  pass "call 15: Official is on for the A–B chat (both phones: 'Risi is listening')"
+  local tab caller kind
+  for tab in private official; do for caller in A B; do for kind in voice video; do
+    tab_call "$tab" "$caller" "$kind"
+  done; done; done
+  logcat_ok "call 15"
+  pass "call 15: voice and video from both tabs, both directions: the 1:1 peer-to-peer call on the dm:"
+}
+if [ "${CALLTEST_TABS_ONLY:-0}" = 1 ]; then tabs_calls; echo "CALLTEST OK"; exit 0; fi
 
 if [ "${CALLTEST_SWITCH_ONLY:-0}" != 1 ]; then
 [ "${CALLTEST_FAST:-0}" = 1 ] || { call_once "call 1"; hang_up_a "call 1"; }
@@ -550,15 +683,7 @@ fi
 #   "call video video/VP8 in 640x480@14.0 decoded=305 out 640x480@15.0 sent=123456".
 # The receiver shows "<name>'s camera is off" (the avatar) on `camera: false` and after 3 s without
 # a frame (§19.5).
-vline() { A logcat -d 2>/dev/null | grep -E 'call video .*VP8 in .* decoded=' | tail -1 || true; }
-vdecoded() { vline | sed -nE 's/.* decoded=([0-9]+) .*/\1/p'; }
-vsent() { vline | sed -nE 's/.* out .* sent=([0-9]+).*/\1/p'; }
-# frames_rise <label> <A|B>: the decoded count on that phone grows over 5 s.
-frames_rise() {
-  local d1 d2; DEV=$2; d1="$(vdecoded)"; sleep 5; d2="$(vdecoded)"
-  [ "${d2:-0}" -gt "${d1:-0}" ] || fail "$1: no video frames decoded on $2 (decoded ${d1:-none}→${d2:-none}; $(vline | sed 's/.*call video //'))"
-  echo "    [$2] decoded ${d1:-0}→$d2 ($(vline | sed -E 's/.*call video ([^ ]+ in [^ ]+).*/\1/'))"
-}
+# (vline, vdecoded, vsent, frames_rise: defined above, with the call helpers.)
 # frames_stop <label>: A decodes nothing new over 5 s (B's camera off), after 3 s to drain.
 frames_stop() {
   local d1 d2; DEV=A; sleep 3; d1="$(vdecoded)"; sleep 5; d2="$(vdecoded)"
@@ -863,6 +988,7 @@ switch_call() {
 call_records
 DEV=A; open_chat "ZZ Call B" || fail "A: DM"; DEV=B; open_chat "ZZ Call A" || fail "B: DM"
 switch_call
+[ "$TABS" = 1 ] && tabs_calls
 logcat_ok "the end"
 # CALLTEST_EXTRA=<file>: more steps sourced here with every helper available (debugging scenarios).
 if [ -n "${CALLTEST_EXTRA:-}" ]; then source "$CALLTEST_EXTRA"; fi

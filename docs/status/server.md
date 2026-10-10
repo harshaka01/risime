@@ -16,6 +16,12 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 (634 tests, 2 excluded: the optional `:livekit` integration tests, both green against the local
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
+
+## v1.33 §20.1 group_calls_ready without LiveKit — READY
+`GET /mls/groups/{grp}` reports `group_calls_ready: false` and `group_calls_unavailable: "server"` while `RisiMe.Calls.LiveKit.configured?/0` is false
+(the pilot has no LIVEKIT_URL, so `/calls/rooms` would answer 503). Example `mls_group_group_calls_unavailable.json` checked in `examples_test.exs`.
+Known: `risi_notes_test.exs:454` ("@Risi summarise without a period … a period is unchanged") fails on main independent of this change (also with the
+change reverted, at 18:4x UTC; green again in a later run, so time-of-day dependent around the Colombo midnight); not fixed here.
 ## v1.31 Google Calendar link (§31, decision 074) — READY v1.31
 Gate: `cd server && MIX_TEST_PARTITION=_gcal mix format --check-formatted && mix compile --warnings-as-errors && mix test`
 (1063 tests, 0 failures). Commits on `main`: 6f80159 (coverage), 91aa540 (§31.1 switch), 68fe5c0 (§31.3 REST),
