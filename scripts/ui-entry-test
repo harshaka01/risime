@@ -1823,9 +1823,18 @@ if [ "$RISI2" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_RISI_ONLY:-0}" = 1 ]
     wait_text "Interview" 20 || fail "risi-calendar: the Day view (tomorrow) doesn't show 'Interview'"
     shot "calendar-day"
     tap "Week" || fail "risi-calendar: no Week view"
-    wait_text "Interview" 20 || fail "risi-calendar: the Week view doesn't show 'Interview'"
-    # (Later in the week than the screen holds: bring the event's day into view for the screenshot.)
-    A shell input swipe $((W / 2)) $((H * 75 / 100)) $((W / 2)) $((H * 40 / 100)) 400; sleep 1
+    # The event is tomorrow: late in this week (below the screen, e.g. on a Saturday) or, on a
+    # Sunday, in next week's view. Scroll down in small steps; then page to the next week once.
+    sleep 2; wk=""
+    for pg in 1 2; do
+      for _ in 1 2 3 4 5 6 7; do
+        [ -n "$(node_xy "Interview")" ] && { wk=1; break; }
+        A shell input swipe $((W / 2)) $((H * 70 / 100)) $((W / 2)) $((H * 45 / 100)) 1200; sleep 1
+      done
+      [ -n "$wk" ] && break
+      [ "$pg" = 1 ] && { tap "›" || fail "risi-calendar: Week: no ›"; sleep 2; }
+    done
+    [ -n "$wk" ] || fail "risi-calendar: the Week view doesn't show 'Interview'"
     shot "calendar-week"
     tap "Month" || fail "risi-calendar: no Month view"; sleep 2
     shot "calendar-month"
