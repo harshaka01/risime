@@ -200,7 +200,15 @@ interface WipeDao {
         callLogMarks()
         risiCalendarCache()
         risiCalendarState()
+        gcalCalendars()
+        gcalCopies()
     }
+
+    @Query("DELETE FROM gcal_calendars")
+    suspend fun gcalCalendars()
+
+    @Query("DELETE FROM gcal_copies")
+    suspend fun gcalCopies()
 
     @Query("DELETE FROM risi_calendar_cache")
     suspend fun risiCalendarCache()
@@ -929,4 +937,45 @@ interface RisiCalendarDao {
 
     @Query("DELETE FROM risi_calendar_state")
     suspend fun clearState()
+}
+
+/** §31.2/§31.6 the Google link's local data. Wiped on Disconnect, on `replaced`, and with the chat data on a confirmed logout only. */
+@Dao
+interface GcalDao {
+    @Query("SELECT * FROM gcal_calendars ORDER BY name COLLATE NOCASE")
+    suspend fun calendars(): List<GcalCalendarEntity>
+
+    @Query("SELECT * FROM gcal_calendars ORDER BY name COLLATE NOCASE")
+    fun observeCalendars(): Flow<List<GcalCalendarEntity>>
+
+    @Upsert
+    suspend fun upsertCalendars(rows: List<GcalCalendarEntity>)
+
+    @Query("DELETE FROM gcal_calendars")
+    suspend fun clearCalendars()
+
+    @Query("SELECT * FROM gcal_copies")
+    suspend fun copies(): List<GcalCopyEntity>
+
+    @Query("SELECT * FROM gcal_copies")
+    fun observeCopies(): Flow<List<GcalCopyEntity>>
+
+    @Query("SELECT * FROM gcal_copies WHERE event_id = :eventId")
+    suspend fun copy(eventId: String): GcalCopyEntity?
+
+    @Upsert
+    suspend fun upsertCopy(row: GcalCopyEntity)
+
+    @Query("DELETE FROM gcal_copies WHERE event_id = :eventId")
+    suspend fun deleteCopy(eventId: String)
+
+    @Query("DELETE FROM gcal_copies")
+    suspend fun clearCopies()
+
+    /** Disconnect / replaced: both tables in one transaction. */
+    @androidx.room.Transaction
+    suspend fun clearAll() {
+        clearCalendars()
+        clearCopies()
+    }
 }

@@ -218,6 +218,7 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging) // push wake-ups (decision 026); inert without google-services.json
     implementation(libs.androidx.work.runtime)
+    implementation(libs.play.services.auth) // v1.31 §31.2 Google Authorization API (token in memory only)
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.fragment.ktx)
 

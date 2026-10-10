@@ -764,3 +764,40 @@ data class RisiCalendarStateEntity(
     @PrimaryKey val id: Int = 0,
     val cursor: String?,
 )
+
+/**
+ * v15 §31.2 a Google calendar the user picked (Room, in the encrypted DB; never in a backup or history share).
+ * [ref] is `g` + 7 random characters, new for each connect: the only name for it that leaves the phone.
+ */
+@Entity(tableName = "gcal_calendars")
+data class GcalCalendarEntity(
+    @PrimaryKey @ColumnInfo(name = "calendar_id") val calendarId: String,
+    val ref: String,
+    val name: String,
+    /** Google's `accessRole` (owner, writer, reader, freeBusyReader). */
+    val role: String,
+    /** Checked for busy times. */
+    val read: Boolean,
+    /** The one calendar copies are written to. */
+    val write: Boolean,
+    /** The Google account shown in the section ("Connected as ..."). */
+    val account: String?,
+)
+
+/** v15 §31.6 the copy map: which Risi Calendar event is in which Google calendar, and what became of it. */
+@Entity(tableName = "gcal_copies")
+data class GcalCopyEntity(
+    @PrimaryKey @ColumnInfo(name = "event_id") val eventId: String,
+    @ColumnInfo(name = "calendar_id") val calendarId: String,
+    @ColumnInfo(name = "google_event_id") val googleEventId: String,
+    @ColumnInfo(name = "risi_version") val risiVersion: Int,
+    /** `copied` | `removed_by_risi` | `deleted_in_google` (see [GcalCopyState]). */
+    val state: String,
+    @ColumnInfo(name = "updated_at") val updatedAt: Long,
+)
+
+object GcalCopyState {
+    const val COPIED = "copied"
+    const val REMOVED_BY_RISI = "removed_by_risi"
+    const val DELETED_IN_GOOGLE = "deleted_in_google"
+}

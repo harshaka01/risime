@@ -42,6 +42,8 @@ import androidx.sqlite.execSQL
         CallLogMarkEntity::class,
         RisiCalendarEventEntity::class,
         RisiCalendarStateEntity::class,
+        GcalCalendarEntity::class,
+        GcalCopyEntity::class,
     ],
     version = AppDatabase.VERSION,
     exportSchema = true,
@@ -66,16 +68,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun scheduled(): ScheduledDao
     abstract fun callLog(): CallLogDao
     abstract fun risiCalendar(): RisiCalendarDao
+    abstract fun gcal(): GcalDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 14
+        const val VERSION = 15
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11, Migration11To12, Migration12To13, Migration13To14)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11, Migration11To12, Migration12To13, Migration13To14, Migration14To15)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
@@ -342,6 +345,18 @@ object Migration13To14 : Migration(13, 14) {
     val SQL = listOf(
         "CREATE TABLE IF NOT EXISTS `risi_calendar_cache` (`event_id` TEXT NOT NULL, `start_ms` INTEGER NOT NULL, `end_ms` INTEGER NOT NULL, `version` INTEGER NOT NULL, `json` TEXT NOT NULL, PRIMARY KEY(`event_id`))",
         "CREATE TABLE IF NOT EXISTS `risi_calendar_state` (`id` INTEGER NOT NULL, `cursor` TEXT, PRIMARY KEY(`id`))",
+    )
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/** v15 (§31 Google Calendar link, hard rule 9): two new, empty tables; no existing row is touched. */
+object Migration14To15 : Migration(14, 15) {
+    val SQL = listOf(
+        "CREATE TABLE IF NOT EXISTS `gcal_calendars` (`calendar_id` TEXT NOT NULL, `ref` TEXT NOT NULL, `name` TEXT NOT NULL, `role` TEXT NOT NULL, `read` INTEGER NOT NULL, `write` INTEGER NOT NULL, `account` TEXT, PRIMARY KEY(`calendar_id`))",
+        "CREATE TABLE IF NOT EXISTS `gcal_copies` (`event_id` TEXT NOT NULL, `calendar_id` TEXT NOT NULL, `google_event_id` TEXT NOT NULL, `risi_version` INTEGER NOT NULL, `state` TEXT NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`event_id`))",
     )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)

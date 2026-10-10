@@ -22,6 +22,8 @@ appcompat = "1.7.1"
 firebaseBom = "34.19.0"
 googleServices = "4.5.0"
 work = "2.12.0"
+# v1.31 §31.2 (decision 072/074): Authorization API (Identity.getAuthorizationClient, revokeAccess). No Google API client library.
+playServicesAuth = "21.5.1"
 jna = "5.19.1"
 icu4j = "78.3"
 emojipicker = "1.7.0"
@@ -70,6 +72,7 @@ androidx-fragment-ktx = { module = "androidx.fragment:fragment-ktx", version.ref
 firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
 androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+play-services-auth = { module = "com.google.android.gms:play-services-auth", version.ref = "playServicesAuth" }
 sqlite-bundled-jvm = { module = "androidx.sqlite:sqlite-bundled-jvm", version = "2.6.2" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 icu4j = { module = "com.ibm.icu:icu4j", version.ref = "icu4j" }
