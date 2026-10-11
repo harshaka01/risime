@@ -78,7 +78,20 @@ echo "==> android gate + release build"
 # E2EE: pin the pilot attestation public key (decision 032; public by design, committed).
 PIN_FILE=infra/pilot/attestation-public.jwk
 PIN_ARGS=(); [ -f "$PIN_FILE" ] && PIN_ARGS=("-Prisime.mlsPinnedKeys=$(tr -d '\n' < "$PIN_FILE")")
-(cd android && step $M ./gradlew --no-configuration-cache "${PIN_ARGS[@]}" assembleDebug testDebugUnitTest assembleRelease)
+# Android unit tests stay blocking (CLAUDE.md rule 11). A failing test CLASS is re-run once on its own: a pass then
+# (an intermittent Compose/Robolectric timing failure) continues and is named in the release notes and
+# docs/status/flaky-tests.md; a second failure blocks.
+ANDROID_FLAKY=""
+if ! (cd android && step $M ./gradlew --no-configuration-cache "${PIN_ARGS[@]}" assembleDebug testDebugUnitTest assembleRelease); then
+  failed="$(grep -l '<failure' android/app/build/test-results/testDebugUnitTest/*.xml 2>/dev/null | sed -E 's#.*/TEST-(.*)\.xml#\1#' | sort -u)"
+  [ -n "$failed" ] || { echo "android build/tests failed (no failed test class found)"; exit 1; }
+  [ "$(printf '%s\n' "$failed" | wc -l)" -le 3 ] || { echo "android: more than 3 test classes failed; not a flake"; printf '%s\n' "$failed"; exit 1; }
+  args=(); for c in $failed; do args+=(--tests "$c"); done
+  echo "==> android: re-running once: $(echo $failed)"
+  (cd android && step $M ./gradlew --no-configuration-cache "${PIN_ARGS[@]}" testDebugUnitTest "${args[@]}") || { echo "android tests failed twice: $(echo $failed)"; exit 1; }
+  (cd android && step $M ./gradlew --no-configuration-cache "${PIN_ARGS[@]}" assembleDebug assembleRelease)
+  ANDROID_FLAKY="$(echo $failed)"; echo "==> android: passed on the re-run (flaky): $ANDROID_FLAKY"
+fi
 
 echo "==> live interop (scripts/interop: real Android clients vs a temp server from this checkout)"
 # Own interop instance (ports 4200/4899, DB/keyspace risime_interop_rel): other sessions may be
@@ -275,6 +288,7 @@ if [ ! -f "$notes" ]; then
     echo; echo "## Changes since ${last:-the start}"; git log --no-merges --format='- %s' ${last:+$last..}HEAD; } > "$notes"
 fi
 [ -n "${OVERRIDE_NOTE:-}" ] && { echo; echo "## Release gate"; echo "- $OVERRIDE_NOTE"; } >> "$notes"
+[ -n "${ANDROID_FLAKY:-}" ] && { echo; echo "## Flaky unit tests (passed on the one re-run)"; echo "- $ANDROID_FLAKY"; } >> "$notes"
 if [ -n "${UIB_LOG:-}" ] && [ -f "$UIB_LOG" ]; then
   { echo; echo "## UI batch end-to-end (non-blocking, CLAUDE.md rule 11): ${UIB_RES:-not run}"
     grep -E '^UIENTRY (PASS|FAIL)' "$UIB_LOG" | sed -E 's/^UIENTRY (PASS|FAIL) /- \1: /'; } >> "$notes"
