@@ -1,5 +1,86 @@
 # Android status — 0.2 nightlies
 
+## READY v1.34 §33 basic messaging (NEXT-PHASE E) (JVM gate green: `assembleDebug testDebugUnitTest`, 1680 tests, 0 failed, 9 skipped; redroid 14: `PdfScriptsDeviceTest` OK)
+Branch `e-android`, against contract eb69114 (v1.34). Room v16, additive only (hard rule 9).
+
+**Room v16 (`Migration15To16`, test `Migration15To16Test`)**: creates `stars(message_id PK, conversation_id, starred_at)` and adds only nullable
+columns: `messages.forward_hops`, `reply_to_message_id`, `reply_to_from`, `delivered_at`, `read_at`, `view_once`, and `media.forward_from` (a forward's
+re-upload job). Every v15 row keeps every value; the §33.18 per-conversation counts (1:1, groups, photos, call records) are equal before and after.
+Note for root: §33.18 lists four columns; `reply_to_from` (the "Reply to <name>" when the target isn't on the phone), `view_once` (the reserved flag) and
+`media.forward_from` are the same kind of nullable addition.
+
+**PDF risk (§33.20 gate 4) — result**: `android.graphics.pdf.PdfDocument` alone **fails**: on redroid 14 (Skia m112) `pdftotext` lost Sinhala conjuncts
+(`ශ්‍රී` → `ශ`), reordered vowel signs (ෙ, ே) and even the Latin `ffi` ligature ("sign-off" → "sign-o"); Tamil was mostly empty. No new library was needed:
+`PdfWriter` draws each word as one single-script segment and records its text; `PdfPost` wraps every Skia text object in `/Span <</ActualText …>> BDC … EMC`
+(incremental update, together with the Info dict: Title, Producer "RisiMe <version>", CreationDate; no Author, no XMP). If a page's text objects don't match
+its records 1:1, that page is left as drawn (still correct on screen). With that, `pdftotext -enc UTF-8` returns `ශ්‍රී ලංකා`, `ප්‍රධාන කරුණු`, `க்ஷேத்திர`,
+`க்ஷ ஸ்ரீ`, "sign-off", "RisiMe" and "Page 1 of 1"; `pdffonts` lists NotoSans, NotoSansSinhala and NotoSansTamil (Regular/Bold) `emb yes sub yes uni yes`,
+both through `Typeface.CustomFallbackBuilder` (API 29+) and the API 26–28 script runs. Fonts: static Noto TTFs subset with fonttools (no hinting, Latin
+subset for Noto Sans), 524 KB in `assets/fonts/` with `OFL.txt` (Settings → About → Licences). Decision note proposal for root: "PDF text extraction:
+PdfDocument + ActualText post-pass (no new dependency)". Run: `scripts/android-target start` (REDROID_INSTANCE/PORT of your choice), install the debug and
+androidTest APKs, `am instrument -w -e class lk.codegen.risime.pdf.PdfScriptsDeviceTest lk.codegen.risime.debug.test/androidx.test.runner.AndroidJUnitRunner`,
+`adb pull /sdcard/Android/data/lk.codegen.risime.debug/files/pdf-gate`, then `pdffonts` / `pdftotext -enc UTF-8` on each PDF.
+
+**What landed**
+- Decoders for all 17 §33 examples (`ContractExamplesTest`); `EnvelopeExtras` (validated `forwarded.hops` 1..255, `reply_to`, the reserved `view_once`);
+  `FileEnvelope` (strict name rules, mime fallback, `parts` placeholder, APK rule, 22 KiB bound with thumb dropped first); `files_ready`; `starred_at`.
+- Copy (§33.3) passes every `copy_format_cases.json` case (`CopyFormatTest`, ICU4J with Android's hour-field matching); clipboard label "RisiMe";
+  Private copies set `EXTRA_IS_SENSITIVE`; the toast only on API ≤ 32.
+- Selection bar (§33.2): count + Reply, Star/Unstar, Copy, Forward, Delete as icons; Share, Info in ⋮; the matrix in `SelectionRules` (`SelectionRulesTest`).
+  The long-press menu gains Reply, Forward, Star, Share, Info, Select text (and Save for a file). Risi cards get a long-press menu with Export PDF.
+- Forward (§33.4/§33.5/§33.8): picker with search, Recent chats, A–Z, each tab its own target, 5 targets (1 when forwarded many times), exclusions and
+  disabled reasons, "Add a message", the one-time Private → Official hint (DataStore `hints.private_to_official_forward`). A whole forward is persisted in one
+  transaction (`Forwarder`; 30 × 5 test), texts go at once, each photo/file is a REENCRYPT job (`ForwardMedia`): decrypt the verified source (download first
+  while fetchable), re-encode images, encrypt with a fresh key, upload into the target. One target: the chat opens.
+- Reply (§33.9): quote bar in the composer; the quote is rendered from the local copy (deleted / not on this phone / another conversation → no quote);
+  tap jumps and flashes. Stars (§33.11): icon in the time row, chat ⋮ → Starred messages, chat list ⋮ → Starred; purged with their message; kept in backups.
+- Info (§33.12): DM Sent/Delivered/Read times from `status` events; group: Read by (newest first) / Delivered to / Waiting, agents never listed, 404 →
+  "Receipts are no longer available", offline → last list with "Couldn't refresh · Retry", refreshed by `group_receipt`.
+- Share (§33.10): `ShareProvider` (exported=false, grantUriPermissions, read only, 10-minute URIs), pipes fed from decrypted bytes (photos re-encoded).
+- File (§33.13): card (type icon, name, size, pages, thumb), tap downloads then opens externally (decrypt to `noBackupFilesDir/open/<uuid>/`, served by
+  the same provider; cleaned on return, after 1 h, on start); APK → Save only with the warning; Save → `Download/RisiMe` (26–28: Save dialog).
+- PDF (§33.14/§33.15): `PdfContent` mapping (note, summary, report, answer, digest, discussion_summary, calendar), the sheet (preview, Share, Save to
+  Downloads, Send to chat… with one upload per target), entry points (Risi card menu, note screen ⋮, Calendar icon, the `pdf` chip). `export_pdf`: accepted
+  only for the agent's confirm card with this write_id/tool, my own confirm_write, args equal to the card's `export`, an unused write_id (`ExportPdfToolTest`);
+  results `sent` / `queued` / the §33.15 error codes. Capabilities: `files` (with the media core) and `pdf_export` (only with `risi_tools`).
+- Backups / history shares: `starred_at`, `file` by reference, `forwarded` / `reply_to` inside the payload; history shares never carry a view-once row.
+  Previews: "📄 <name>", "↪ Forwarded: …" on local notifications.
+
+**UI strings for the redroid gate (§33.20)** (test tags in brackets)
+- Selection bar `[selection_bar]`: "N selected" `[selection_count]`; icons Reply `[sel_reply]`, Star / Unstar `[sel_star]`, Copy `[sel_copy]`, Forward
+  `[sel_forward]`, "Delete selected" `[sel_delete]`; ⋮ "More options" `[sel_more]` → "Share" `[sel_share]`, "Info" `[sel_info]`; close "Cancel selection".
+- Long-press menu: "Copy", "Reply", "Forward", "Star" / "Unstar", "Share", "Info", "Select text", "Save to Downloads" (files), "Delete", "Select";
+  Risi cards `[risi_card_actions]`: "Export PDF" `[menu_export_pdf]`.
+- Copy toast (API ≤ 32): "Copied", "Copied N messages".
+- Labels `[forwarded_label]`: "↪ Forwarded", "⇉ Forwarded many times"; TalkBack prefixes "Forwarded, " / "Forwarded many times, ".
+- Forward picker `[forward_picker]`: "Forward to…", search "Search" `[forward_search]`, "Recent chats", "All chats", rows `[forward_target_<conv>]` with
+  "🔒 Private" / "● Official", disabled "<name> needs to update the app to receive photos" / "…files", group notice "Some members need to update to see files",
+  "Add a message" `[forward_add_message]`, "Send" `[forward_send]`, snackbar `[forward_snack]` "Messages forwarded many times can be sent to one chat at a time",
+  done "Forwarded to N chats" / "Forwarded to 1 chat".
+- Hint `[forward_hint]`: "Forward to Official?", "Risi can read messages, photos and files in Official chats. What you forward there is no longer only in
+  Private.", buttons "Forward" `[hint_forward]` / "Cancel".
+- Reply: composer bar `[reply_bar]` "Reply to <name>" + first line; quote `[quote_block]`; "Original message isn't on this phone", "This message was deleted",
+  "Original message isn't loaded"; TalkBack "Replying to <name>: …".
+- Stars: star icon `[star_icon]` (TalkBack ", starred"); chat ⋮ "Starred messages" `[chat_menu_starred]`; chat list ⋮ "Starred" `[chats_menu_starred]` →
+  screen `[starred_screen]` / list `[starred_list]` / empty `[starred_empty]` "No starred messages"; "Stars are kept on this phone".
+- Info `[info_sheet]` (DM): "Message info", "Sent", "Delivered", "Read" (time, "✓ —" or "—"); group sheet: "Read by N of M", "Delivered to N", "Waiting N",
+  "Receipts are no longer available", "Couldn't refresh · Retry".
+- File card `[file_card]`: type "PDF"/"DOC"/"XLS"/"ZIP"/"FILE", name, "196 KB · 3 pages", "Tap to download", "Downloading…", "Sending file…",
+  "This file is no longer available", "Couldn't open this file", "Update RisiMe to open this file", "This is an app installer. Only install apps you trust.",
+  "Saved to Download/RisiMe", "No app on this phone can open this file".
+- PDF sheet `[pdf_sheet]`: "Making the PDF…", preview `[pdf_preview]`, file name `[pdf_name]`, "N pages", "Share" `[pdf_share]`, "Save to Downloads"
+  `[pdf_save]`, "Send to chat…" `[pdf_send]` → "Send PDF to…", done "PDF sent to N chats"; errors "Too long to export; choose a shorter period",
+  "This isn't on this phone", "The phone couldn't make the PDF"; note screen ⋮ "Export PDF" `[risi_note_export_pdf]`; Calendar icon "Export PDF"
+  `[calendar_export_pdf]`; export_pdf card button "Send" `[risi_confirm_send]` and "Cancel" `[risi_confirm_cancel]`.
+- PDF page: header "RisiMe" + title, footer "Made on this phone with RisiMe" and "Page n of N"; page 1 "Risi note · <date>", "Generated <date, time>",
+  "Participants: …", "Written by Risi"; headings "Key points", "Agreed", "Meetings", "Decisions", "Action items", "Open questions", "Sources".
+- Settings → About: "Licences" (the Noto OFL text).
+
+**Not done / for the gate**
+- Debug seams named in §33.20 (inject `hops` 4; copy the PDFs to `/sdcard/Download/RisiMe`; a clipboard read) are not added; the redroid gate can read the
+  clipboard with `cmd clipboard` and use the sheet's Save to Downloads (`Download/RisiMe`) for the PDFs.
+- Voice/video (A) types are not handled beyond the generic rules (no A envelopes yet).
+
 ## READY v1.33 D1: a 1:1's Official tab calls peer to peer on the dm: (JVM gate green; redroid `CALLTEST_TABS_ONLY=1 scripts/call-device-test` green: 8 calls, 64 PASS)
 - `callTargetFor(dm, OFFICIAL, …)` = `(dm:, PEER_TO_PEER)`; a group's Official stays §20 SFU.
 - The 1:1 Official header uses the 1:1 `CallActions` on the `dm:` (`DmCallsViewModel` + `DmCallButtons`: calls/video readiness, blocked texts with the peer's
