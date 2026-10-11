@@ -47,18 +47,17 @@ Nothing else: no full `calendar` scope, no Gmail, no contacts.
 ## 6. Android client (Clients → Create client, or Credentials → Create credentials → OAuth client ID)
 - Application type: **Android**.
 - Name: `RisiMe Android`.
-- Package name: **`lk.codegen.risime`**
-- SHA-1 certificate fingerprint (our release signing key, read from the published
-  nightly.47 APK):
+- Package name: **`ai.risicloud.risime`** (decision 079; the old app's client for the old package stays as it is)
+- SHA-1 certificate fingerprint (the Risi release signing key, `CN=Risi`):
 
 ```
-4C:E1:A7:54:30:D4:D9:CB:E6:B2:1D:0A:D6:9B:12:5C:F8:67:D4:D0
+DF:FE:15:1A:F6:74:62:FC:39:D5:3A:5A:D1:76:CC:21:2B:C8:0D:3D
 ```
 
 - **Create**. You don't need to download anything. There is no secret.
 - Optional, for the developer build on the emulator: a second Android client with package
-  `lk.codegen.risime.debug` and SHA-1
-  `E5:09:19:56:B7:4E:F6:58:2E:90:BD:3E:46:FD:7B:6A:9E:5A:30:4E`.
+  `ai.risicloud.risime.debug` and SHA-1
+  `E5:09:19:56:B7:4E:F6:58:2E:90:BD:3E:46:FD:7B:6A:9E:5A:30:4E` (the debug key, unchanged).
 
 No Web client, no API key and no google-services.json change are needed.
 

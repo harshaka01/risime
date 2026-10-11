@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -135,7 +136,9 @@ fun ChatMessageList(
         snapshotFlow { scroll.atBottom }.distinctUntilChanged().filter { it }.collect { scroll.unseen = 0 }
     }
     val coroutines = rememberCoroutineScope()
-    Box(modifier.background(ai.risicloud.risime.ui.theme.RisiTheme.colors.chatBackground)) {
+    // clipToBounds: nothing of a half-scrolled message draws (or lays claim to the screen) above the list's top edge,
+    // e.g. over the Official tab's "Risi is listening" strip.
+    Box(modifier.clipToBounds().background(ai.risicloud.risime.ui.theme.RisiTheme.colors.chatBackground)) {
         LazyColumn(
             state = scroll.list,
             modifier = Modifier.fillMaxWidth().testTag(CHAT_LIST_TAG),

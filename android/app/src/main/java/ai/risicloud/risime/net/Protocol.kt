@@ -9,7 +9,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Wire models for contract/v1/PROTOCOL.md. Field names match the contract exactly. */
 
 /** The PROTOCOL.md version this client implements (shown in Settings → About; checked by a test). */
-const val PROTOCOL_VERSION = "1.36"
+const val PROTOCOL_VERSION = "1.37"
 
 val ProtocolJson: Json = Json {
     ignoreUnknownKeys = true // §0: clients must ignore unknown fields
@@ -499,11 +499,11 @@ data class DevicePut(
     val mls: DeviceMls? = null,
     /**
      * v1.37 (decision 079): this build's Android application id; the server picks the Firebase project for
-     * this device's pushes by it. Always sent by this app (`ai.risicloud.risime` or `.debug`).
+     * this device's pushes by it. Always sent by this app ([android] sets it); omitted when null.
      */
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
-    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.ALWAYS)
-    @SerialName("app_id") val appId: String? = APP_ID,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("app_id") val appId: String? = null,
 ) {
     override fun toString() = "DevicePut(platform=$platform, appVersion=$appVersion, appId=$appId, <token hidden>)"
 
@@ -512,6 +512,10 @@ data class DevicePut(
 
         /** The application id sent as `app_id` (v1.37). */
         val APP_ID: String = ai.risicloud.risime.BuildConfig.APPLICATION_ID
+
+        /** This app's registration body: always with `app_id` (v1.37, decision 079). */
+        fun android(pushToken: String?, appVersion: String, mls: DeviceMls? = null) =
+            DevicePut(PLATFORM_ANDROID, pushToken, appVersion, mls, APP_ID)
     }
 }
 

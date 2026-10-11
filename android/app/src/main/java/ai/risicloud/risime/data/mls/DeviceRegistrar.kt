@@ -151,7 +151,7 @@ class DeviceRegistrar(
         val mls = engine()
         if (mls == null) {
             if (pushToken.isNullOrBlank()) return Registration.Skipped
-            return when (val r = api.putDevice(id, DevicePut(DevicePut.PLATFORM_ANDROID, pushToken, appVersion))) {
+            return when (val r = api.putDevice(id, DevicePut.android(pushToken, appVersion))) {
                 is ApiResult.Ok -> Registration.PushOnly.also { onPushTokenRegistered(pushToken) }
                 is ApiResult.Error -> Registration.Failed(r.code)
                 is ApiResult.NetworkError -> Registration.Failed("network")
@@ -161,7 +161,7 @@ class DeviceRegistrar(
         // §12.1: advertise `groups` only with a core that really does groups (0xFA01 key packages).
         // §15.1: `deletes` once the core answers AAD + sender_is_admin and the app applies delete events.
         val caps = capabilities(mls)
-        val body = DevicePut(DevicePut.PLATFORM_ANDROID, pushToken?.takeIf { it.isNotBlank() }, appVersion, DeviceMls(sigKey, caps))
+        val body = DevicePut.android(pushToken?.takeIf { it.isNotBlank() }, appVersion, DeviceMls(sigKey, caps))
         return when (val r = api.putMlsDevice(id, body)) {
             is ApiResult.Ok -> {
                 mls.setAttestation(r.value.attestation)
@@ -173,7 +173,7 @@ class DeviceRegistrar(
             is ApiResult.Error -> when {
                 r.code == AuthErrors.MLS_UNAVAILABLE -> {
                     // E2EE is off on the server: register for push only, as a v1.6 app would.
-                    if (!pushToken.isNullOrBlank() && api.putDevice(id, DevicePut(DevicePut.PLATFORM_ANDROID, pushToken, appVersion)) is ApiResult.Ok) {
+                    if (!pushToken.isNullOrBlank() && api.putDevice(id, DevicePut.android(pushToken, appVersion)) is ApiResult.Ok) {
                         onPushTokenRegistered(pushToken)
                     }
                     Registration.MlsUnavailable

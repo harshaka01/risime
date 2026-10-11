@@ -45,6 +45,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -298,7 +299,9 @@ fun GroupChatScreen(
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
-            tabBar?.invoke()
+            // a11y (Official tab): the tab bar + "Risi is listening" strip sit above the message list in z-order, so a
+            // half-scrolled message (its expanded touch bounds) never covers them in the accessibility tree.
+            tabBar?.let { bar -> androidx.compose.foundation.layout.Box(Modifier.zIndex(1f)) { bar() } }
             ai.risicloud.risime.ui.chat.SelectionBarFor(vm.del, messages, selection, x)
             ai.risicloud.risime.ui.chat.MessagingHost(x, starredOpen, onStarredClose = { starredOpen = false }, groupInfo = { m -> m.messageId?.let(vm::openReadBy) })
             ai.risicloud.risime.ui.chat.DeleteHost(vm.del, clearAsk, onClearAskDone = { clearAsk = null }, onDeletedChat = onBack)

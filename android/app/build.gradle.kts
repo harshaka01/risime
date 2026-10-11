@@ -12,7 +12,7 @@ plugins {
 }
 
 // ---- Push (decisions 026, 079) ----
-// Firebase config is Harsha's credential, never committed. Source, first that exists: env GOOGLE_SERVICES_JSON,
+// Firebase config is a credential, never committed. Source, first that exists: env GOOGLE_SERVICES_JSON,
 // ~/secrets/firebase/google-services.json, or an app/google-services.json already in place (gitignored).
 // It is copied to app/google-services.json and the Firebase plugin is applied only when the file lists every
 // application id this build produces (release + .debug); otherwise the app builds without FCM (push off).
@@ -84,7 +84,8 @@ val risiVersionCodeValue: Int = risiVersionCode(risiVersionName)
 // for a local mirror) points the updater at a test mirror. Every check (host, path, sha256, pinned
 // signing certificate, package, versionCode) stays on; About shows the server in red. Published
 // releases (scripts/nightly-release) never pass it.
-val DEFAULT_UPDATE_BASE_URL = "https://risicloud.ai/app/risime/"
+// Decision 079: the new app has its own feed (the root feed stays the old app's).
+val DEFAULT_UPDATE_BASE_URL = "https://risicloud.ai/app/risime/$risiAppId/"
 val updateBaseUrl: String = providers.gradleProperty("risime.updateBaseUrl").orNull?.trim()?.takeIf { it.isNotEmpty() }?.let { u ->
     if (!Regex("""^(https://[A-Za-z0-9.-]+(:\d+)?|http://(127\.0\.0\.1|10\.0\.2\.2)(:\d+)?)/([A-Za-z0-9._~/-]*/)?$""").matches(u)) {
         throw GradleException("risime.updateBaseUrl '$u' must be https://host/path/ or http://127.0.0.1:PORT/path/ (ending in /)")

@@ -235,31 +235,15 @@ internal fun AboutSection() {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    // v1.34 §33.14 the fonts embedded in exported PDFs (SIL OFL 1.1).
+    // Decision 079: Settings → About → Open-source licences (third-party components + fonts, with licence texts).
     var licences by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    androidx.compose.material3.TextButton(onClick = { licences = true }) { Text(LICENCES_TITLE) }
-    if (licences) {
-        val context = androidx.compose.ui.platform.LocalContext.current
-        val ofl = androidx.compose.runtime.remember { runCatching { context.assets.open("fonts/OFL.txt").bufferedReader().use { it.readText() } }.getOrDefault("") }
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { licences = false },
-            title = { Text(LICENCES_TITLE) },
-            text = {
-                androidx.compose.foundation.layout.Column(Modifier.verticalScrollCompat()) {
-                    Text(FONT_LICENCE_LINE, style = MaterialTheme.typography.bodyMedium)
-                    Text(ofl, style = MaterialTheme.typography.bodySmall)
-                }
-            },
-            confirmButton = { androidx.compose.material3.TextButton(onClick = { licences = false }) { Text("Close") } },
-        )
-    }
+    androidx.compose.material3.TextButton(onClick = { licences = true }, modifier = Modifier.testTag("open_source_licences")) { Text(LICENCES_TITLE) }
+    if (licences) OpenSourceLicencesDialog(onDismiss = { licences = false })
+    Text("© 2026 Risi. All rights reserved.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
-const val LICENCES_TITLE = "Licences"
+const val LICENCES_TITLE = OPEN_SOURCE_LICENCES_TITLE
 const val FONT_LICENCE_LINE = "PDF export embeds Noto Sans, Noto Sans Sinhala and Noto Sans Tamil (SIL Open Font License 1.1)."
-
-@Composable
-private fun Modifier.verticalScrollCompat(): Modifier = this.then(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()))
 
 /** Debug builds only: force the login screen's sign-in mode (applies after sign-out). */
 @Composable

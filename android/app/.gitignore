@@ -1,2 +1,3 @@
-# Harsha's Firebase config (decision 026): copied in from ~/risime-keys/, never committed.
+# Firebase config (decisions 026, 079): copied in at build time from GOOGLE_SERVICES_JSON or
+# ~/secrets/firebase/google-services.json by build.gradle.kts; never committed.
 google-services.json

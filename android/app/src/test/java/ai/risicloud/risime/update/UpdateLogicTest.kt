@@ -15,7 +15,7 @@ class UpdateLogicTest {
     private val published = """
         {"versionCode": 20002, "versionName": "0.2.0-nightly.2", "date": "2026-10-07T01:30:00Z",
          "notes": "Presence and typing", "url": "https://risicloud.ai/app/risime/risime-0.2.0-nightly.2.apk",
-         "sha256": "$sha", "certSha256": "DA:7B:98:24:15:E5:D1:1D:D9:0A:EE:89:37:16:C7:A0:4E:D0:84:1E:21:89:0F:FC:C8:E0:75:F4:16:C9:9E:2E",
+         "sha256": "$sha", "certSha256": "46:BE:A9:24:71:52:25:12:2C:85:95:88:D9:02:54:21:51:E7:1D:DB:60:F2:5B:CD:31:FD:D6:84:9C:5F:60:AA",
          "required": false, "extra": 1}
     """.trimIndent()
 
@@ -70,6 +70,11 @@ class UpdateLogicTest {
         assertEquals("App not installed: it conflicts with the installed app: INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match.",
             installFailureMessage(5, "INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match"))
         assertEquals("App not installed: not enough storage.", installFailureMessage(6, " "))
+        // Decision 079: the new app's own feed under the download page; the page lists the new app first.
+        if (!ai.risicloud.risime.BuildConfig.UPDATE_BASE_URL_OVERRIDDEN) {
+            assertEquals("https://risicloud.ai/app/risime/ai.risicloud.risime/", ai.risicloud.risime.BuildConfig.UPDATE_BASE_URL)
+        }
+        assertEquals("46bea924715225122c859588d902542151e71ddb60f25bcd31fdd6849c5f60aa", PINNED_CERT_SHA256)
         assertEquals("https://risicloud.ai/app/risime/", DOWNLOAD_PAGE_URL)
         assertEquals("Download from website", DOWNLOAD_FROM_WEBSITE)
         assertEquals("Install over the old app — never uninstall: uninstalling deletes your chats.", NEVER_UNINSTALL_TEXT)

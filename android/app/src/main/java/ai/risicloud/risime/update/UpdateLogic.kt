@@ -13,8 +13,11 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  * In-app updater rules (decision 016). Pure and JVM-tested; the Android side is [Updater].
  */
 
-/** The release signing certificate (decision 003), SHA-256 of the DER cert, lowercase hex. */
-const val PINNED_CERT_SHA256 = "da7b982415e5d11dd90aee893716c7a04ed0841e21890ffcc8e075f416c99e2e"
+/**
+ * The release signing certificate of ai.risicloud.risime (decision 079: the Risi key, CN=Risi, O=Risi, C=LK),
+ * SHA-256 of the DER cert, lowercase hex.
+ */
+const val PINNED_CERT_SHA256 = "46bea924715225122c859588d902542151e71ddb60f25bcd31fdd6849c5f60aa"
 
 /** One published release, as advertised by `version.json`. */
 @kotlinx.serialization.Serializable

@@ -46,8 +46,8 @@ class ApiClientTest {
         // v1.37 (decision 079): app_id = BuildConfig.APPLICATION_ID, with and without MLS.
         server.enqueue(MockResponse().setResponseCode(204))
         server.enqueue(MockResponse().setResponseCode(204))
-        api.putDevice("dev-1", DevicePut(DevicePut.PLATFORM_ANDROID, "fcm-t", "0.3.0"))
-        api.putDevice("dev-1", DevicePut(DevicePut.PLATFORM_ANDROID, null, "0.3.0", DeviceMls("sig", listOf("calls"))))
+        api.putDevice("dev-1", DevicePut.android("fcm-t", "0.3.0"))
+        api.putDevice("dev-1", DevicePut.android(null, "0.3.0", DeviceMls("sig", listOf("calls"))))
         repeat(2) {
             val req = server.takeRequest()
             assertEquals("PUT", req.method)
