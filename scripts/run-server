@@ -21,6 +21,13 @@ flock -w 600 9 || { echo "another deploy holds $RUNROOT/.deploy.lock"; exit 1; }
 git fetch -q origin --tags
 TAG="${TAG:-$(cat "$HOME/risime-releases/LATEST" 2>/dev/null || git tag -l 'v*' --sort=-creatordate | sed -n 1p)}"
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "no such tag: $TAG"; exit 1; }
+# Fast-lane guard (CLAUDE.md rule 12): never replace a running -srvN build that already contains this tag's commit
+# (a nightly cut before a fast-lane deploy would otherwise roll Risi back).
+CUR="$(cat "$RUNROOT/CURRENT" 2>/dev/null || true)"
+if [ -n "$CUR" ] && [ "$CUR" != "$TAG" ] && [[ "$CUR" == *-srv* ]] && git rev-parse -q --verify "refs/tags/$CUR" >/dev/null \
+   && git merge-base --is-ancestor "$TAG^{commit}" "$CUR^{commit}"; then
+  echo "==> SKIP deploy: the running $CUR already contains $TAG (fast lane); the server stays on $CUR"; exit 0
+fi
 RUN="$RUNROOT/$TAG"
 [ -e "$RUN/.git" ] || git worktree add -q --detach "$RUN" "$TAG"
 [ "$(git -C "$RUN" rev-parse HEAD)" = "$(git rev-parse "$TAG^{commit}")" ] || { echo "$RUN is not at $TAG"; exit 1; }
