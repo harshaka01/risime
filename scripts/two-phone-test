@@ -39,8 +39,13 @@ BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* 2>/dev/null | sor
 badging="$("$BT/aapt2" dump badging "$APK" | sed -n 1p)"
 PKG="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")"
 VN="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$badging")"
-case "$PKG" in ai.risicloud.risime|ai.risicloud.risime.debug) ;; *) echo "two-phone-test is for ai.risicloud.risime(.debug), not '$PKG'"; exit 2;; esac
-CLS=ai.risicloud.risime
+# TWOPHONE_ANY_PKG=1: a diagnostic/control run of an older app id (e.g. the legacy app); never a release result.
+case "$PKG" in ai.risicloud.risime|ai.risicloud.risime.debug) CLS=ai.risicloud.risime ;;
+  *) [ "${TWOPHONE_ANY_PKG:-0}" = 1 ] || { echo "two-phone-test is for ai.risicloud.risime(.debug), not '$PKG'"; exit 2; }
+     CLS="${PKG%.debug}" ;; esac
+# TWOPHONE_STOP_AFTER=dm|photo|group|call|risi: stop (no PASS result) after that step (diagnostics).
+STOP_AFTER="${TWOPHONE_STOP_AFTER:-}"
+stop_after() { [ "$STOP_AFTER" = "$1" ] || return 0; REASON="stopped after $1 (TWOPHONE_STOP_AFTER)"; echo "==> stopped after $1"; write_result; exit 0; }
 VERSION="${VERSION:-$VN}"; COMMIT="${COMMIT:-$(git rev-parse HEAD)}"
 APK_SHA="$(sha256sum "$APK" | cut -d' ' -f1)"
 PATH="$("$REPO/scripts/android-target" adb):$PATH"
@@ -204,7 +209,9 @@ tap() { local b; b="$(node_xy "$1")"; [ -n "$b" ] || { echo "    [$DEV] no UI no
 clear_field() { A shell "for i in \$(seq 1 80); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true; }
 hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; [[ "$st" == *"mInputShown=true"* ]] && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
 type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
-dismiss_prompts() { has "Not now" && { tap "Not now" || true; }; has "Later" && { tap "Later" || true; }; true; }
+dismiss_prompts() { has "Not now" && { tap "Not now" || true; }; has "Later" && { tap "Later" || true; }; risi_intro_ok; true; }
+# The one-time Official intro ("Risi listens in Official and helps with follow-ups." + OK) covers the tab row.
+risi_intro_ok() { grep -qF 'Risi listens in Official' "$WORK/ui-$DEV.xml" 2>/dev/null && { tap "OK" >/dev/null || true; sleep 1; }; true; }
 on_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui-$DEV.xml"; }
 wait_list() { for _ in $(seq 1 "${1:-30}"); do on_list && return 0; sleep 1; done; return 1; }
 back_to_list() {
@@ -241,6 +248,15 @@ open_chat() {
   wait_for "$1" 40 || return 1; tap "$1"; sleep 2
 }
 ENC="Encrypted message"   # the composer's placeholder in an e2ee chat
+# A chat with Risi on may open on its Official tab: switch to the Private tab (no-op when already there).
+private_tab() {
+  for _ in 1 2 3 4 5; do
+    dump; risi_intro_ok
+    has 'Risi is listening' || grep -qF 'Search in Official' "$WORK/ui-$DEV.xml" || return 0
+    tap "🔒 Private" >/dev/null || true; sleep 2
+  done
+  return 1
+}
 send_text() {  # $1 text
   { type_into "$ENC" "$1" || type_into "Message" "$1"; } || return 1
   sleep 0.5; tap "Send"
@@ -249,9 +265,13 @@ send_text() {  # $1 text
 lock_shown() {
   for _ in $(seq 1 "${1:-30}"); do
     dump
-    # 1:1: the "End-to-end encrypted" subtitle/lock; group: the subtitle "🔒 N members" (never the "🔒 Private" tab).
-    grep -qE '(text|content-desc)="End-to-end encrypted"|text="(&#128274;|🔒) [0-9]+ members?"' "$WORK/ui-$DEV.xml" \
-      && ! grep -qF 'Not end-to-end encrypted yet' "$WORK/ui-$DEV.xml" && return 0
+    # 1:1: the "End-to-end encrypted" subtitle/lock. Group: the header's "🔒 N members" is drawn as an unlabelled lock
+    # Icon + "N members" (HEADER_LOCK_PREFIX), invisible to uiautomator; the same `encrypted` flag gives the composer
+    # its "Encrypted message" placeholder, so a group counts with "N members" + that composer (never the strip).
+    ! grep -qF 'Not end-to-end encrypted yet' "$WORK/ui-$DEV.xml" && {
+      grep -qE '(text|content-desc)="End-to-end encrypted"|text="(&#128274;|🔒) [0-9]+ members?"|resource-id="risi_header_lock"' "$WORK/ui-$DEV.xml" \
+        || { grep -qE 'text="[0-9]+ members"' "$WORK/ui-$DEV.xml" && grep -qF "text=\"$ENC\"" "$WORK/ui-$DEV.xml"; }
+    } && return 0
     sleep 1
   done
   echo "    [$DEV] no lock: $(grep -oE '(text|content-desc)="[^"]*(ncrypt)[^"]*"' "$WORK/ui-$DEV.xml" | head -3 | tr '\n' ' ')"
@@ -293,6 +313,7 @@ media_ok() { local out; out="$(A logcat -d 2>/dev/null || true)"; grep -E "call 
 official_tab() {
   local i
   for i in $(seq 1 90); do
+    dump; risi_intro_ok
     has 'text="Message"' && { grep -qF 'Risi is listening' "$WORK/ui-$DEV.xml" || grep -qF 'Search in Official' "$WORK/ui-$DEV.xml"; } && return 0
     grep -qF 'text="Start Official"' "$WORK/ui-$DEV.xml" && { tap "Start Official" || true; sleep 2; continue; }
     [ $((i % 10)) = 1 ] && { tap "● Official" || true; }
@@ -335,6 +356,7 @@ send_text "tp-dm-from-B" || fail "B can't send in the DM"
 DEV=A; wait_for "tp-dm-from-B" 60 || fail "A never received B's message"
 logcat_ok "1:1"
 pass "1:1 A↔B: e2ee, the lock on both phones, a message each way"; CHECKS+=" dm_e2ee dm_lock dm_both_ways"
+stop_after dm
 
 # ---------------------------------------------------------------- 3. photo A→B
 DEV=A; push_photo
@@ -349,6 +371,7 @@ for _ in $(seq 1 10); do tap "@Send photo" >/dev/null || tap "^Send" >/dev/null 
 has "Send photo" && fail "the photo preview's Send didn't go through"
 DEV=B; wait_for "Photo," 90 || { open_chat "ZZ 2P A" >/dev/null || true; wait_for "Photo," 60; } || fail "B never received A's photo"
 pass "photo A→B received"; CHECKS+=" photo"
+stop_after photo
 
 # ---------------------------------------------------------------- 4. group A+B+C
 DEV=A; back_to_list || fail "A: back to the chat list"
@@ -368,6 +391,9 @@ for i in $(seq 1 120); do
   grep -qE 'text="(&#128274;|🔒) [0-9]+ members"' "$WORK/ui-$DEV.xml" && { ok=1; break; }
   [ $((i % 30)) = 0 ] && echo "    [A] group step, ${i}s: $(grep -o 'text="[^"]*"' "$WORK/ui-$DEV.xml" | grep -v 'text=""' | head -20 | tr '\n' ' ')"
   if grep -qF 'text="Group info"' "$WORK/ui-$DEV.xml"; then A shell input keyevent KEYCODE_BACK; sleep 1; continue; fi
+  # With Risi on, a new group may open on its Official tab ("Risi is listening"): the e2ee check is the Private tab's.
+  if grep -qF 'Risi listens in Official' "$WORK/ui-$DEV.xml"; then risi_intro_ok; continue; fi
+  if grep -qF -e 'Risi is listening' -e 'Search in Official' "$WORK/ui-$DEV.xml"; then tap "🔒 Private" >/dev/null || true; sleep 2; continue; fi
   if [ $((i % 20)) = 0 ] || on_list; then open_chat "Two-phone group" >/dev/null || true; fi
   sleep 1
 done
@@ -376,13 +402,15 @@ lock_shown 60 || fail "A: the group's header shows no lock"
 send_text "tp-group-from-A" || fail "A can't send in the group"
 for d in B C; do
   DEV=$d; open_chat "Two-phone group" || fail "$d: the group isn't listed (Welcome not processed)"
+  private_tab || fail "$d: can't switch the group to its Private tab"
   wait_for "tp-group-from-A" 90 || fail "$d never received A's group message"
 done
 DEV=C; lock_shown 60 || fail "C: the group's header shows no lock"
 send_text "tp-group-from-C" || fail "C can't send in the group"
-DEV=A; wait_for "tp-group-from-C" 90 || { open_chat "Two-phone group" >/dev/null || true; wait_for "tp-group-from-C" 60; } || fail "A never received C's group message"
+DEV=A; wait_for "tp-group-from-C" 90 || { open_chat "Two-phone group" >/dev/null || true; private_tab || true; wait_for "tp-group-from-C" 60; } || fail "A never received C's group message"
 logcat_ok "group"
 pass "group A+B+C: e2ee with the lock, A → B and C, C → A"; CHECKS+=" group_e2ee group_lock group_send_receive"
+stop_after group
 
 # ---------------------------------------------------------------- 5. 1:1 voice call A→B
 DEV=B; back_to_list || true; A logcat -c
@@ -399,6 +427,7 @@ pass "call: answered, media connected (${m##*call stats: })"
 DEV=A; sleep 3; tap "End call" || tap "Hang up" || fail "call: A can't hang up"
 sleep 3
 CHECKS+=" call_ring call_connect"
+stop_after call
 
 # ---------------------------------------------------------------- 6. Risi in Official (fake-llm)
 DEV=A; open_chat "ZZ 2P B" || fail "A: DM for Official"
@@ -408,7 +437,9 @@ tap "Message" || true; sleep 0.5
 A shell input text "We%sagreed%sthe%sbudget%sreview%son%sTuesday"; sleep 0.5
 tap "Send" || fail "A: send a normal Official message"
 sleep 3
-tap "@Risi" || fail "A: no @Risi chip in Official"
+hide_keyboard; dump; risi_intro_ok
+wait_text "^@Risi" 30 || fail "A: no @Risi chip in Official"
+tap "^@Risi" || { sleep 2; tap "^@Risi"; } || fail "A: can't tap the @Risi chip"
 wait_for 'text="Ask Risi…"' 10 || fail "the @Risi chip didn't switch the composer"
 tap "Ask Risi…" || true; sleep 0.5
 A shell input text "what%sdid%swe%sagree"; sleep 0.5
@@ -416,6 +447,7 @@ tap "Send" || fail "A: send the @Risi ask"
 wait_text "Continuing with Risi" 150 || fail "Risi never answered in Official (fake-llm)"
 [ -s "$WORK/llm-requests.jsonl" ] || fail "Risi answered without a model call (fake-llm saw no request)"
 pass "Risi in Official: @Risi got an answer from the (fake) model"; CHECKS+=" risi_official"
+stop_after risi
 
 # ---------------------------------------------------------------- 7. app_id stored (v1.37), push note
 ids="$(fx app_ids | sed -n 's/^twophone: app_ids=//p')"
