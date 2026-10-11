@@ -490,6 +490,16 @@ PY
   [ -n "$b" ] || return 1
   A shell input tap $b
 }
+# nightly.49: the message sheet (reactions, Copy, Reply, Forward, Star, Info, Select, Delete) scrolls on a small screen;
+# swipe it up until the row $1 is in the dump.
+sheet_to() {
+  local sz w h; sz="$(A shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)"; w="${sz%x*}"; h="${sz#*x}"
+  for _ in 1 2 3 4 5 6; do
+    [ -n "$(node_xy "$1")" ] && return 0
+    A shell input swipe $((w / 2)) $((h * 85 / 100)) $((w / 2)) $((h * 60 / 100)) 400; sleep 1
+  done
+  echo "no UI node in the sheet: $1"; return 1
+}
 long_press() {  # a long-press (900 ms) on the node $1 (see node_xy)
   local b; b="$(node_xy "$1")"
   [ -n "$b" ] || { echo "no UI node: $1"; return 1; }
@@ -1095,7 +1105,7 @@ PY
     # (d) Delete for everyone of the seeded group message: a tombstone at A (Room) and at C (UI).
     step "delete the seeded group message for everyone"
     d_before="$(field "$DB_AFTER" deleted)"
-    { long_press "~upgrade-test A9" && wait_for "Select" 10 && tap "Delete" && wait_for "Delete for everyone" 10 && tap "Delete for everyone"; } \
+    { long_press "~upgrade-test A9" && wait_for "Copy" 10 && sheet_to "Delete" && tap "Delete" && wait_for "Delete for everyone" 10 && tap "Delete for everyone"; } \
       || fail "the delete UI didn't offer Delete for everyone on A's own message"
     wait_for "You deleted this message" 30 || fail "A shows no tombstone"
     await_field deleted "$(( ${d_before:-0} + 1 ))" || fail "A's Room row is not a tombstone ($DB_AFTER)"
