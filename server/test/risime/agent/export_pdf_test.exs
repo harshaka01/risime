@@ -235,7 +235,12 @@ defmodule RisiMe.Agent.ExportPdfTest do
       assert Enum.any?(posts, fn {_, _, r} -> r["kind"] in ~w(answer error) end)
 
       for {_, _, r} <- posts, r["kind"] == "answer" do
-        refute Map.has_key?(r, "next_actions")
+        # v1.35 §34.3: a failed step gets only the server's "Ask me again" (the original text).
+        assert Map.get(r, "next_actions", []) --
+                 [
+                   %{"label" => "Ask me again", "action" => "ask", "text" => "make a pdf"}
+                 ] == []
+
         refute Enum.any?(r["steps"], &(&1["tool"] == "export_pdf" and &1["status"] == "ok"))
       end
     end
@@ -268,7 +273,10 @@ defmodule RisiMe.Agent.ExportPdfTest do
     scripted_llm!(script(long))
     {_, :ok} = ask!(ctx.rc, ctx.harsha.user, "pdf of a long calendar", ctx.dev)
     posts = RisiMe.CalendarHelpers.posts()
-    refute Enum.any?(posts, fn {_, _, r} -> r["next_actions"] not in [nil, []] end)
+    # v1.35 §34.3: a failed step may only bring the server's "Ask me again".
+    refute Enum.any?(posts, fn {_, _, r} ->
+             Enum.any?(r["next_actions"] || [], &(&1["label"] != "Ask me again"))
+           end)
   end
 
   ## With send_to: confirm card, tool call, result

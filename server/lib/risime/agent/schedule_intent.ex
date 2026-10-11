@@ -45,7 +45,7 @@ defmodule RisiMe.Agent.ScheduleIntent do
     ~r/(?:තියෙනවද|තියෙන්නේ|මොනවද|உள்ளன|இருக்கிறது|இருக்கிறதா|என்ன\s+இருக்கு)/u
   ]
 
-  @other ~r/\b(?:summari[sz]e|summary|translate|explain|feel\s+free|for\s+free|free\s+to)\b/iu
+  @other ~r/\b(?:summari[sz]e|summary|translate|explain|pdf|export|share|forward|feel\s+free|for\s+free|free\s+to)\b/iu
 
   @presence ~r/\b(?:do|did|have|will)\s+i\s+(?:have|got)\b|\bwhat\s+(?:do|did)\s+i\s+have\b|\bwhat'?s\s+(?:on|happening|planned)\b|\bcheck\b/iu
 

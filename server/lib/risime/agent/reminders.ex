@@ -143,8 +143,14 @@ defmodule RisiMe.Agent.Reminders do
   end
 
   defp create(w, args, due) do
-    {:ok, key} = Seal.data()
     id = Ecto.UUID.generate()
+    create(w, args, due, id)
+    RisiMe.Agent.RisiItems.record_reminder(w.user_id, id, due, w.card_conversation_id)
+    :ok
+  end
+
+  defp create(w, args, due, id) do
+    {:ok, key} = Seal.data()
     now = DateTime.utc_now()
     group? = args["audience"] == "conversation"
 
@@ -357,6 +363,47 @@ defmodule RisiMe.Agent.Reminders do
 
     :ok
   end
+
+  @doc """
+  v1.35 §34.4 `PATCH /risi/items/{id}` of a reminder: a new `at` (future) and/or `text`
+  (1–500 chars) for the owner's pending reminder; its job moves with it. `:ok` or
+  `{:error, :not_found | :bad_request}`.
+  """
+  def patch(user_id, id, at, text) do
+    with %__MODULE__{owner_id: ^user_id, state: "pending"} = r <- Repo.get(__MODULE__, id),
+         {:ok, key} <- Seal.data() do
+      changes =
+        [updated_at: DateTime.utc_now()]
+        |> then(&if(text, do: Keyword.put(&1, :text, Seal.seal(key, aad(id), text)), else: &1))
+        |> then(&if(at, do: Keyword.put(&1, :due_at, Clock.usec(at)), else: &1))
+
+      r |> Ecto.Changeset.change(changes) |> Repo.update!()
+
+      if at do
+        cancel_job(id)
+
+        %{"kind" => "reminder_fire", "conv" => r.conversation_id, "reminder_id" => id}
+        |> RisiMe.Workers.Risi.new(queue: :risi_timers, scheduled_at: at)
+        |> Oban.insert!()
+      end
+
+      :ok
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc "v1.35 §34.4: the opened text of a pending reminder, `{:ok, text}` or `:error`."
+  def open_text(%__MODULE__{reminder_id: id, text: sealed}) when is_binary(sealed) do
+    with {:ok, key} <- Seal.data(),
+         {:ok, text} when is_binary(text) <- Seal.open(key, aad(id), sealed) do
+      {:ok, text}
+    else
+      _ -> :error
+    end
+  end
+
+  def open_text(_r), do: :error
 
   @doc "A reminder by id (tests)."
   def get(id), do: Repo.get(__MODULE__, id)

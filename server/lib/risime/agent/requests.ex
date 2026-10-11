@@ -37,6 +37,10 @@ defmodule RisiMe.Agent.Requests do
     case Secretary.envelope(conv, message_id) do
       # v1.25 §25.1: with RISI_TOOLS=on an `ask` is a turn of the tool loop.
       %{"type" => "risi_request", "request_id" => ^request_id, "action" => action} = env ->
+        # v1.35 §34.3: an error card of this request re-asks its original text.
+        if action == "ask" and is_binary(env["text"]),
+          do: Process.put(:risi_req_text, String.slice(String.trim(env["text"]), 0, 1000))
+
         if action == "ask" and RisiMe.Risi.tools_on?() and valid_question?(env["text"]),
           do: RisiMe.Agent.Turn.run(conv, env, request_id, user),
           else: v124(conv, env, request_id, user)
@@ -381,12 +385,20 @@ defmodule RisiMe.Agent.Requests do
 
   @doc "Sends the §24.11 `error` envelope for a request."
   def reply_error(conv, rid, user, code) do
-    post(conv, Map.fetch!(@bodies, code), %{
-      "kind" => "error",
-      "request_id" => rid,
-      "code" => code,
-      "notify" => [user]
-    })
+    risi = %{"kind" => "error", "request_id" => rid, "code" => code, "notify" => [user]}
+
+    risi =
+      case Process.get(:risi_req_text) do
+        t when is_binary(t) and t != "" ->
+          Map.put(risi, "next_actions", [
+            %{"label" => "Ask me again", "action" => "ask", "text" => t}
+          ])
+
+        _ ->
+          risi
+      end
+
+    post(conv, Map.fetch!(@bodies, code), risi)
   end
 
   defp post(conv, body, risi) do

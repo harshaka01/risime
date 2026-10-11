@@ -277,14 +277,18 @@ defmodule RisiMe.Agent.SkillsS14Test do
     {_, :ok} = ask!(ctx.og, ctx.harsha.user, "hi", ctx.dev)
     [req] = llm_requests()
     # Every skill is off for a gated user: no calendar tool, and need_skill offers them.
-    assert schema_tools(req) == ~w(capabilities need_skill final)
+    # v1.35 §34.4: risi_items is offered to every asker with a Risi chat.
+    assert schema_tools(req) -- ["risi_items"] == ~w(capabilities need_skill final)
     assert need_enum(req) == ~w(alarm reminders calendar scheduled_messages email)
 
     set!(ctx, "calendar", "ask", "granted")
     scripted_llm!([%{"actions" => [final()]}])
     {_, :ok} = ask!(ctx.og, ctx.harsha.user, "hi", ctx.dev)
     [req] = llm_requests()
-    assert schema_tools(req) == ~w(capabilities calendar_check calendar_add need_skill final)
+
+    assert schema_tools(req) -- ["risi_items"] ==
+             ~w(capabilities calendar_check calendar_add need_skill final)
+
     refute "calendar" in need_enum(req)
 
     # The phone reports the permission denied: not offered there, need_skill says why.
@@ -294,7 +298,7 @@ defmodule RisiMe.Agent.SkillsS14Test do
     scripted_llm!([%{"actions" => [final()]}])
     {_, :ok} = ask!(ctx.og, ctx.harsha.user, "hi", ctx.dev)
     [req] = llm_requests()
-    assert schema_tools(req) == ~w(capabilities need_skill final)
+    assert schema_tools(req) -- ["risi_items"] == ~w(capabilities need_skill final)
     assert "calendar" in need_enum(req)
 
     # A user without a risi_skills device keeps v1.25: calendar tools, no need_skill.
@@ -304,7 +308,9 @@ defmodule RisiMe.Agent.SkillsS14Test do
     scripted_llm!([%{"actions" => [final()]}])
     {_, :ok} = ask!(ctx.og, k, "hi", kdev)
     [req] = llm_requests()
-    assert schema_tools(req) == ~w(capabilities set_reminder calendar_check calendar_add final)
+
+    assert schema_tools(req) -- ["risi_items"] ==
+             ~w(capabilities set_reminder calendar_check calendar_add final)
   end
 
   test "need_skill: a skill_needed card in the Risi chat, the pointer in the group", ctx do

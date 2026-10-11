@@ -633,7 +633,7 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
         phone check isn't offered separately",
        ctx do
     check_llm!("Nothing much on Monday afternoon.")
-    ask!(ctx, "Am I free Monday 2pm?")
+    ask!(ctx, "Monday 2pm ok for the call?")
     {_, body, a} = answer_of(posts())
 
     assert body ==
@@ -658,7 +658,7 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
     CalendarOffers.backfill()
     posts()
     check_llm!("You're free then.")
-    ask!(ctx, "Am I free Monday 2pm?")
+    ask!(ctx, "Monday 2pm ok for the call?")
     {_, body, _} = answer_of(posts())
 
     assert body =~
@@ -691,7 +691,7 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
         "type" => "risi_request",
         "request_id" => rid,
         "action" => "ask",
-        "text" => "Am I free Monday 2pm?"
+        "text" => "Monday 2pm ok for the call?"
       },
       ctx.hd
     )
@@ -761,7 +761,7 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
       end
     end)
 
-    _ = ask!(ctx, "Am I free Monday 2pm?")
+    _ = ask!(ctx, "Monday 2pm ok for the call?")
     {_, body, a} = answer_of(posts())
 
     assert body ==
@@ -778,7 +778,7 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
     posts()
 
     check_llm!("You have an interview.")
-    ask!(ctx, "Am I free Monday 2pm?")
+    ask!(ctx, "Monday 2pm ok for the call?")
     assert ["Interview"] == block_titles(List.last(llm_requests()))
 
     restore_on_exit([:risi_llm])
@@ -790,7 +790,7 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
     )
 
     check_llm!("You have something.")
-    ask!(ctx, "Am I free Monday 2pm?")
+    ask!(ctx, "Monday 2pm ok for the call?")
     last = List.last(llm_requests())
     assert block_titles(last) == [nil]
     refute Jason.encode!(last) =~ "Interview"
@@ -846,7 +846,7 @@ defmodule RisiMe.Agent.RisiCalendarFlowTest do
         "type" => "risi_request",
         "request_id" => rid,
         "action" => "ask",
-        "text" => "Am I free Monday 2pm?"
+        "text" => "Monday 2pm ok for the call?"
       },
       ctx.hd
     )

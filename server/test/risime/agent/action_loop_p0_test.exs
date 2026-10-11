@@ -275,7 +275,9 @@ defmodule RisiMe.Agent.ActionLoopP0Test do
     {_, body, a} = answer(ps)
     assert body == "Tap Add on the card to confirm."
     assert a["next_steps"] == []
-    assert ActionDraft.get(ctx.harsha.user.id, ctx.rc).write_id == c["write_id"]
+    # v1.35 §34.2: the new request superseded the card; the unpatched draft is gone.
+    assert RisiMe.Agent.Writes.get(c["write_id"]).state == "superseded"
+    assert ActionDraft.get(ctx.harsha.user.id, ctx.rc) == nil
   end
 
   test "a 5-turn follow-up keeps context and patches the draft", ctx do
@@ -329,7 +331,9 @@ defmodule RisiMe.Agent.ActionLoopP0Test do
     assert user_text(last) =~ "make it 3pm"
   end
 
-  test "the loop guard: after two turns without progress, the prefilled card", ctx do
+  # v1.35 §34.2 replaces the loop guard: a card comes only from a draft this turn patched, and an
+  # unpatched draft is deleted at the end of its turn (never a card from an old draft).
+  test "a draft no turn patches is dropped; no card from it", ctx do
     model!(%{
       "add interview with Shenika on Monday 12 Oct" =>
         final("What time does it start?", [], %{
@@ -345,12 +349,9 @@ defmodule RisiMe.Agent.ActionLoopP0Test do
     assert {_, "What time does it start?", _} = answer(posts())
     ask!(ctx, "hmm")
     assert {_, "What time does the interview start?", _} = answer(posts())
+    assert ActionDraft.get(ctx.harsha.user.id, ctx.rc) == nil
     ask!(ctx, "I said it already")
-    c = card(posts())
-
-    # Everything known: the title and the day; no time → an all-day event to edit or cancel.
-    assert c["args"]["title"] == "Interview with Shenika" and c["args"]["all_day"] == true
-    assert c["when"]["start"] == "2026-10-11T18:30:00.000Z"
+    refute card(posts())
   end
 
   test "a question about something already given is dropped and the card shown", ctx do
@@ -456,7 +457,17 @@ defmodule RisiMe.Agent.ActionLoopP0Test do
 
     # Turned on: the waiting draft becomes the card on the next ask.
     set!(ctx, "calendar", "ask", "granted")
-    model!(%{"try again" => final("Trying again.", [], %{"kind" => "event"})})
+    # v1.35 §34.3: "try again" re-asks the original request (a fresh turn).
+    model!(%{
+      "add my interview with Shenika on Monday 12 Oct at 2pm to my calendar" =>
+        final("Trying again.", [], %{
+          "kind" => "event",
+          "title" => "Interview with Shenika",
+          "date" => "Monday 12 Oct",
+          "time" => "2pm"
+        })
+    })
+
     ask!(ctx, "try again")
     assert card(posts())["args"] == @interview
   end

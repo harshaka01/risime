@@ -776,6 +776,23 @@ defmodule RisiMe.Agent.ClientTools do
     if w.tool == "calendar_add" and is_map(result["calendar"]),
       do: RisiMe.Agent.CalendarChoice.put(w.user_id, result["calendar"])
 
+    # v1.35 §34.4: Risi's items (ids, times; the title sealed; never a message's text).
+    cond do
+      w.tool == "calendar_add" ->
+        RisiMe.Agent.RisiItems.record_phone_event(w, args, dev, result)
+
+      w.tool == "schedule_message" and is_binary(result["schedule_id"]) ->
+        RisiMe.Agent.RisiItems.record_scheduled(
+          w.user_id,
+          result["schedule_id"],
+          dev,
+          args["wire"] || %{}
+        )
+
+      true ->
+        :ok
+    end
+
     RisiMe.Agent.Skills.client_done(w, args, dev, result) ||
       answer(
         w,

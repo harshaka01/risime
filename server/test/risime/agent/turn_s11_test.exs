@@ -406,7 +406,7 @@ defmodule RisiMe.Agent.TurnS11Test do
       }
     ])
 
-    {_, :ok} = ask!(ctx, "Am I free?")
+    {_, :ok} = ask!(ctx, "Is now ok for the call?")
     assert_receive {:risi_post, _, "Looked: nothing new there.", _}
     assert length(llm_requests()) == 2
   end

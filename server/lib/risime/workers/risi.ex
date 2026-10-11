@@ -43,6 +43,7 @@ defmodule RisiMe.Workers.Risi do
   def perform(%Oban.Job{args: %{"kind" => "prune"}}) do
     RisiMe.Agent.Writes.prune()
     RisiMe.Agent.ActionDraft.prune()
+    RisiMe.Agent.RisiItems.prune()
     RisiMe.Agent.ToolCalls.prune()
     RisiMe.Agent.Skills.prune()
     RisiMe.Agent.Reminders.prune()

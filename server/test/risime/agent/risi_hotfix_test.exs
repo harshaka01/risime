@@ -113,7 +113,7 @@ defmodule RisiMe.Agent.RisiHotfixTest do
       end
     end)
 
-    {rid, :ok} = ask!(ctx, "Am I free Tuesday?")
+    {rid, :ok} = ask!(ctx, "Tuesday ok for the call?")
     assert_receive {:risi_post, _, body, %{"kind" => "answer", "request_id" => ^rid}}
     assert body =~ "Calendar access is coming soon"
     [_, retry] = llm_requests()

@@ -613,6 +613,7 @@ defmodule RisiMe.Agent.CalendarTools do
          {ok_ids, dropped} = Calendar.invitable(w.user_id, wire["with"] || []),
          {:ok, view} <- Calendar.create(w.user_id, %{attrs | with: ok_ids}) do
       {e, parts} = Calendar.load(view["event_id"])
+      RisiMe.Agent.RisiItems.record_risi_event(w.user_id, e)
       CalendarCards.added(e, parts, w.card_conversation_id, w.user_id, dropped)
       :ok
     else

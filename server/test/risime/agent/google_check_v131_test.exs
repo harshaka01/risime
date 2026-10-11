@@ -66,7 +66,7 @@ defmodule RisiMe.Agent.GoogleCheckV131Test do
         "type" => "risi_request",
         "request_id" => rid,
         "action" => "ask",
-        "text" => "Am I free Monday 2pm?"
+        "text" => "Monday 2pm ok for the call?"
       },
       device
     )

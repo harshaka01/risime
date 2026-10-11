@@ -105,7 +105,7 @@ defmodule RisiMe.Agent.TurnInvalidOutputTest do
     set!(ctx, "calendar", "ask", "denied")
     always(check())
 
-    {:ok, ms} = ask!(ctx, "Am I free Monday at 2pm?")
+    {:ok, ms} = ask!(ctx, "Monday at 2pm ok for the call?")
     assert ms < 5_000
 
     [{rc, body, a}] = posts()
@@ -133,7 +133,7 @@ defmodule RisiMe.Agent.TurnInvalidOutputTest do
     set!(ctx, "calendar", "off", "granted")
     always(check())
 
-    {:ok, ms} = ask!(ctx, "Am I free Monday at 2pm?")
+    {:ok, ms} = ask!(ctx, "Monday at 2pm ok for the call?")
     assert ms < 5_000
     [{_, body, n}] = posts()
     assert n["kind"] == "skill_needed" and n["skill_id"] == "calendar" and n["reason"] == "off"
@@ -156,7 +156,7 @@ defmodule RisiMe.Agent.TurnInvalidOutputTest do
         else: check()
     end)
 
-    {:ok, _} = ask!(ctx, "Am I free Monday at 2pm?")
+    {:ok, _} = ask!(ctx, "Monday at 2pm ok for the call?")
     [{_, body, a}] = posts()
     assert body == "I can't see your calendar right now."
     assert a["kind"] == "answer"
@@ -176,7 +176,7 @@ defmodule RisiMe.Agent.TurnInvalidOutputTest do
         else: check()
     end)
 
-    {:ok, _} = ask!(ctx, "Am I free Monday at 2pm?")
+    {:ok, _} = ask!(ctx, "Monday at 2pm ok for the call?")
     [{_, body, _}] = posts()
     assert body =~ "I couldn't read your calendar"
     refute_free(body)

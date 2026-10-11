@@ -58,6 +58,7 @@ defmodule RisiMe.Agent.Writes do
   end
 
   @ttl_s 24 * 3600
+  @superseded "This was replaced by your newer request."
 
   @doc "How long a confirm card lives (24 h, §25.4)."
   def ttl_s, do: @ttl_s
@@ -81,7 +82,8 @@ defmodule RisiMe.Agent.Writes do
   defp mode(ctx, tool, card), do: RisiMe.Agent.Skills.write_mode(ctx, tool, card)
 
   defp ask(ctx, tool, card) do
-    wid = Ecto.UUID.generate()
+    # v1.35 §34.5: a card after a name question carries the question's write_id.
+    wid = Map.get(ctx, :write_id) || Ecto.UUID.generate()
 
     target =
       case Audience.target(ctx, card.personal) do
@@ -196,7 +198,7 @@ defmodule RisiMe.Agent.Writes do
 
   # §26.3: an allowed write runs now, in the turn, for the asker's own request.
   defp allowed(ctx, tool, card) do
-    wid = Ecto.UUID.generate()
+    wid = Map.get(ctx, :write_id) || Ecto.UUID.generate()
     rc = RisiMe.RisiChat.active_id(ctx.asker) || ctx.conv
     w = insert!(ctx, tool, card, wid, rc, "running", "allowed")
 
@@ -350,6 +352,21 @@ defmodule RisiMe.Agent.Writes do
 
   defp confirm(%Write{state: "void"} = w, _device), do: void_reply(w)
 
+  # v1.35 §34.2: a superseded card runs nothing; the error says why (Phase 1).
+  defp confirm(%Write{state: "superseded"} = w, _device) do
+    post(w, @superseded, %{
+      "kind" => "error",
+      "request_id" => w.request_id,
+      "code" => "superseded",
+      "write_id" => w.write_id,
+      "call_ref" => nil,
+      "made_by" => RisiMe.Agent.MadeBy.rule(),
+      "notify" => [w.user_id]
+    })
+
+    :ok
+  end
+
   defp confirm(%Write{state: state} = w, device) when state in ~w(pending confirmed) do
     # Checked again when it runs (§25.1, §26.5): a revoked skill voids the card.
     if gate(w) == :ok do
@@ -433,6 +450,113 @@ defmodule RisiMe.Agent.Writes do
 
     # Item 8: a proactive offer's card was answered (never offered again either way).
     RisiMe.Agent.Offers.settled(w.write_id, state)
+  end
+
+  ## Superseding (v1.35 §34.2) and the name question (§34.5)
+
+  @doc """
+  A new request of `user` in `conv` (`request_id`) supersedes every open card of that user in
+  `conv` that came from a turn (`pending` confirm cards and `clarify` name questions; offers
+  are not affected), except `keep`. A user with a `risi_items` device gets a silent
+  `confirm_update` per card. Returns the superseded write ids.
+  """
+  def supersede(user, conv, request_id, keep \\ nil) do
+    now = DateTime.utc_now()
+
+    q =
+      from w in Write,
+        where:
+          w.user_id == ^user and w.card_conversation_id == ^conv and
+            w.state in ["pending", "clarify"] and not is_nil(w.turn_id) and w.expires_at > ^now,
+        select: w.write_id
+
+    q = if keep, do: where(q, [w], w.write_id != ^keep), else: q
+    wids = Repo.all(q)
+
+    if wids != [] do
+      Repo.update_all(from(w in Write, where: w.write_id in ^wids),
+        set: [state: "superseded", args: nil]
+      )
+
+      if RisiMe.Devices.any_risi_items?(user) do
+        for wid <- wids do
+          Out.post(conv, "Replaced by your newer request.", %{
+            "kind" => "confirm_update",
+            "write_id" => wid,
+            "state" => "superseded",
+            "by_request_id" => request_id,
+            "call_ref" => nil,
+            "made_by" => RisiMe.Agent.MadeBy.rule(),
+            "notify" => []
+          })
+        end
+      end
+    end
+
+    wids
+  rescue
+    e ->
+      Logger.warning("Risi supersede failed: #{inspect(e.__struct__)}")
+      []
+  end
+
+  @doc """
+  Holds a write behind a name question (§34.5): a `clarify` row with the question's `wid`,
+  its tool and `payload` (`args`, `said`, `options`, `chips`) sealed. `target` is where the
+  question was posted.
+  """
+  def hold_clarify(ctx, tool_name, wid, target, payload) do
+    {:ok, key} = Seal.data()
+    now = DateTime.utc_now()
+
+    Repo.insert!(%Write{
+      write_id: wid,
+      user_id: ctx.asker,
+      conversation_id: ctx.conv,
+      card_conversation_id: target,
+      request_id: ctx.request_id,
+      turn_id: ctx.turn_id,
+      device_id: ctx.device_id,
+      tool: tool_name,
+      args: Seal.seal(key, aad(wid), payload),
+      state: "clarify",
+      personal: true,
+      expires_at: DateTime.add(now, @ttl_s, :second),
+      inserted_at: now
+    })
+
+    :ok
+  end
+
+  @doc """
+  The held name question in `conv` whose chip text equals `text` (case-insensitive, trimmed):
+  `{write, payload, choice}` (`choice` the chosen option, or nil to keep), or nil.
+  """
+  def clarify_answer(user, conv, text) do
+    t = text |> String.trim() |> String.downcase()
+    now = DateTime.utc_now()
+
+    Repo.all(
+      from w in Write,
+        where:
+          w.user_id == ^user and w.card_conversation_id == ^conv and w.state == "clarify" and
+            w.expires_at > ^now,
+        order_by: [desc: w.inserted_at]
+    )
+    |> Enum.find_value(fn w ->
+      with {:ok, payload} <- open_args(w),
+           {:ok, choice} <- Map.fetch(payload["chips"] || %{}, t) do
+        {w, payload, choice}
+      else
+        _ -> nil
+      end
+    end)
+  end
+
+  @doc "Drops a held name question (its card is about to be posted with the same id)."
+  def drop(wid) do
+    Repo.delete_all(from w in Write, where: w.write_id == ^wid)
+    :ok
   end
 
   ## Queries

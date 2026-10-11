@@ -456,7 +456,7 @@ defmodule RisiMe.Contract.ExamplesV129Test do
         }
     end)
 
-    job = request!(ctx, "Am I free Monday 2pm?")
+    job = request!(ctx, "Monday 2pm ok for the call?")
     task = Task.async(fn -> perform_job(Job, job.args) end)
     call = wait_call(ctx.h)
     assert call["data"]["tool"] == "calendar_check"
@@ -517,7 +517,7 @@ defmodule RisiMe.Contract.ExamplesV129Test do
         }
     end)
 
-    job = request!(ctx, "What's on my calendar this week?")
+    job = request!(ctx, "Give me a rundown of the next few days")
     task = Task.async(fn -> perform_job(Job, job.args) end)
     call = wait_call(ctx.h)
     assert call["data"]["tool"] == "calendar_check"

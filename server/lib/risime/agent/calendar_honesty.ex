@@ -110,7 +110,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
   ## v1.29 §29.7: a check that includes Risi Calendar (`risi_calendar_check`)
 
   defp risi_check?(%{status: "ok", result: %{"sources" => sources}}) when is_list(sources),
-    do: Enum.any?(sources, &(&1["source"] == "risi_calendar"))
+    do: Enum.any?(sources, &(&1["source"] in ["risi_calendar", "risi_items"]))
 
   defp risi_check?(_), do: false
 
@@ -136,13 +136,19 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
     order =
       if linked?(sources),
-        do: %{"risi_calendar" => 0, "google_api" => 1, "phone_provider" => 2},
-        else: %{"risi_calendar" => 0, "phone_provider" => 1, "google_api" => 2}
+        do: %{"risi_calendar" => 0, "risi_items" => 0.5, "google_api" => 1, "phone_provider" => 2},
+        else: %{
+          "risi_calendar" => 0,
+          "risi_items" => 0.5,
+          "phone_provider" => 1,
+          "google_api" => 2
+        }
 
     Enum.sort_by(sources, &Map.get(order, &1["source"], 3))
   end
 
   defp read?(%{"source" => "risi_calendar", "read_ok" => true}), do: true
+  defp read?(%{"source" => "risi_items", "read_ok" => true}), do: true
 
   defp read?(%{"read_ok" => true, "calendars" => [_ | _]}), do: true
   defp read?(_), do: false
@@ -222,6 +228,9 @@ defmodule RisiMe.Agent.CalendarHonesty do
         case {s["source"], s["calendars"] || []} do
           {"risi_calendar", _} ->
             "Risi Calendar"
+
+          {"risi_items", _} ->
+            "Risi's items"
 
           {"google_api", cals} ->
             # The server never knows the names: a count ("2 calendars"), §31.5.
@@ -389,6 +398,7 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
   def source_label("google_api"), do: "Google Calendar"
   def source_label("risi_calendar"), do: "Risi Calendar"
+  def source_label("risi_items"), do: "Risi's items"
   def source_label(_), do: "Phone calendar"
 
   @doc """

@@ -19,6 +19,14 @@ defmodule RisiMe.Agent.WritesS13Test do
 
   @moduletag capture_log: true
 
+  # v1.35 §34.1: "am I free …" is now routed to a forced read before the model; the model-
+  # driven calendar_check honesty is exercised with a phrase the classifier leaves alone.
+  defp q3_rules,
+    do:
+      Enum.map(gate_script(), fn r ->
+        if r["name"] == "q3_free_busy", do: Map.put(r, "match", "(?i)ok for the call"), else: r
+      end)
+
   setup do
     RisiMe.MLSHelpers.with_attestation_key(%{})
     harsha = RisiMe.Fixtures.logged_in_user(display_name: "Harsha")
@@ -138,7 +146,7 @@ defmodule RisiMe.Agent.WritesS13Test do
       )
 
   defp card!(ctx) do
-    scripted_llm!()
+    scripted_llm!(q3_rules())
     {_rid, :ok} = ask!(ctx.og, ctx.harsha.user, "Add dentist Friday 10am", ctx.dev)
     assert_receive {:risi_post, rc, _body, %{"kind" => "confirm"} = card}
     assert rc == ctx.rc
@@ -472,8 +480,8 @@ defmodule RisiMe.Agent.WritesS13Test do
 
     task =
       Task.async(fn ->
-        scripted_llm!()
-        ask!(ctx.og, h.user, "Am I free Tuesday 2pm?", ctx.dev)
+        scripted_llm!(q3_rules())
+        ask!(ctx.og, h.user, "Tuesday 2pm ok for the call?", ctx.dev)
       end)
 
     d = wait_call(h.user.id)["data"]
@@ -523,16 +531,16 @@ defmodule RisiMe.Agent.WritesS13Test do
         "reason" => reason
       }
 
-    # Runs "Am I free Tuesday 2pm?" with the phone answering `body`: {answer, risi, model bodies}.
+    # Runs "Tuesday 2pm ok for the call?" with the phone answering `body`: {answer, risi, model bodies}.
     defp check_turn(ctx, body) do
       h = ctx.harsha
       me = self()
 
       task =
         Task.async(fn ->
-          scripted_llm!()
+          scripted_llm!(q3_rules())
           send(me, {:llm_rec, Process.get(:risi_llm_rec)})
-          ask!(ctx.og, h.user, "Am I free Tuesday 2pm?", ctx.dev)
+          ask!(ctx.og, h.user, "Tuesday 2pm ok for the call?", ctx.dev)
         end)
 
       d = wait_call(h.user.id)["data"]

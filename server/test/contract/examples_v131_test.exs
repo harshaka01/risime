@@ -149,7 +149,7 @@ defmodule RisiMe.Contract.ExamplesV131Test do
         "type" => "risi_request",
         "request_id" => rid,
         "action" => "ask",
-        "text" => "Am I free Monday 2pm?"
+        "text" => "Monday 2pm ok for the call?"
       },
       ctx.hd
     )
@@ -259,7 +259,22 @@ defmodule RisiMe.Contract.ExamplesV131Test do
     Application.put_env(:risime, :risi_tool_deadline_ms, 300)
     task = ask!(ctx)
     assert :ok = Task.await(task)
-    check!("envelope_risi_answer_calendar_google_no_answer.json", envelope(answer(posts())))
+    # v1.35 §34.3 adds the server's "Ask me again" chip to a no-read answer (this v1.31 example
+    # predates it); everything else is compared exactly.
+    {conv, body, a} = answer(posts())
+
+    assert a["next_actions"] == [
+             %{
+               "label" => "Ask me again",
+               "action" => "ask",
+               "text" => "Monday 2pm ok for the call?"
+             }
+           ]
+
+    check!(
+      "envelope_risi_answer_calendar_google_no_answer.json",
+      envelope({conv, body, Map.delete(a, "next_actions")})
+    )
   end
 
   test "§31.4: reauth_needed result; §31.8: the reconnect card", ctx do

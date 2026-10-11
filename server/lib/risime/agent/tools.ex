@@ -216,7 +216,9 @@ defmodule RisiMe.Agent.Tools do
         ClientTools.schedule_message(),
         ClientTools.cancel_scheduled(),
         # v1.34 §33.15: "send this as a PDF" (only for a `pdf_export` device).
-        ClientTools.export_pdf()
+        ClientTools.export_pdf(),
+        # v1.35 §34.4: "what have you set up for me?" (Risi's items, every Risi-chat asker).
+        RisiMe.Agent.RisiItems.tool()
       ]
   end
 
