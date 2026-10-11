@@ -420,6 +420,8 @@ fun MessageBubble(
     /** §33.13 a file card (in place of a photo), read by TalkBack as [attachmentLabel]. */
     attachment: (@Composable () -> Unit)? = null,
     attachmentLabel: String? = null,
+    /** §33.9 what TalkBack reads for the quote ("Replying to Kamal: …"). */
+    quoteLabel: String? = null,
     /** The first bubble of a run (a new sender or side): the tail and a little more space above. */
     tail: Boolean = true,
 ) {
@@ -452,6 +454,7 @@ fun MessageBubble(
                         append(if (mine) "You: " else sender?.let { "$it: " } ?: "")
                         if (forwardHops != null) append(if (forwardHops >= lk.codegen.risime.net.Forwarding.MANY_TIMES) "Forwarded many times, " else "Forwarded, ")
                         attachmentLabel?.let { append(it).append(", ") }
+                        quoteLabel?.let { append(it).append(", ") }
                         append(if (image == null) body else if (body.isBlank()) "Photo" else "Photo, $body")
                         imageStatus?.let { append(", ").append(it) }
                         append(", ").append(time)

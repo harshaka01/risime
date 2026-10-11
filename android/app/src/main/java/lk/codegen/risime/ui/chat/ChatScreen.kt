@@ -394,6 +394,7 @@ internal fun Bubble(
         tail = tail,
         forwardHops = extras?.forwardHops,
         quote = extras?.quote?.let { q -> { QuoteBlock(q, extras.onQuoteTap) } },
+        quoteLabel = extras?.quote?.let(Quotes::label),
         starred = extras?.starred == true,
         attachment = if (m.file && x != null) ({ FileCard(x.c, m, media) }) else null,
         attachmentLabel = if (m.file) "File, " + (lk.codegen.risime.data.media.FileMeta.decode(m.systemJson)?.let { lk.codegen.risime.data.media.FileEnvelope.displayName(it.name) } ?: "") else null,

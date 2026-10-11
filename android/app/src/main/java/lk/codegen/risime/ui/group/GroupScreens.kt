@@ -590,6 +590,7 @@ private fun GroupBubble(
         tail = tail,
         forwardHops = extras?.forwardHops,
         quote = extras?.quote?.let { q -> { lk.codegen.risime.ui.chat.QuoteBlock(q, extras.onQuoteTap) } },
+        quoteLabel = extras?.quote?.let(lk.codegen.risime.ui.chat.Quotes::label),
         starred = extras?.starred == true,
         attachment = if (m.file && x != null) ({ lk.codegen.risime.ui.chat.FileCard(x.c, m, media) }) else null,
         attachmentLabel = if (m.file) "File, " + (lk.codegen.risime.data.media.FileMeta.decode(m.systemJson)?.let { lk.codegen.risime.data.media.FileEnvelope.displayName(it.name) } ?: "") else null,

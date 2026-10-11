@@ -286,6 +286,13 @@ object Quotes {
         else -> firstLines(m.body)
     }
 
+    /** TalkBack: "Replying to Kamal: <first lines>", or the missing / deleted line. */
+    fun label(q: QuoteView): String = when (q) {
+        is QuoteView.Found -> "Replying to ${q.name}: ${q.text}"
+        is QuoteView.Missing -> "${MessagingStrings.replyTo(q.name)}: ${MessagingStrings.QUOTE_MISSING}"
+        QuoteView.Deleted -> "Replying to: ${MessagingStrings.QUOTE_DELETED}"
+    }
+
     fun firstLines(s: String, n: Int = 2): String = CopyFormat.normalise(s).lines().take(n).joinToString("\n")
 
     /**
@@ -358,11 +365,12 @@ fun ForwardPickerSheet(
     onDone: (Int) -> Unit,
     onDismiss: () -> Unit,
     noteText: (MessageEntity) -> String? = { null },
+    onOneTarget: (String) -> Unit = {},
 ) {
     TargetPickerSheet(
         c, hasImage = sources.any { it.image }, hasFile = sources.any { it.file }, max = ForwardRules.maxTargets(sources),
         sourcePrivate = sourcePrivate, title = ForwardRules.PICKER_TITLE, allowMessage = true,
-        onSend = { targets, add -> c.forward(sources, targets, add, noteText) }, onDone = onDone, onDismiss = onDismiss,
+        onSend = { targets, add -> c.forward(sources, targets, add, noteText) }, onDone = onDone, onDismiss = onDismiss, onOneTarget = onOneTarget,
     )
 }
 
@@ -381,6 +389,7 @@ fun TargetPickerSheet(
     title: String,
     allowMessage: Boolean,
     onSend: suspend (List<String>, String?) -> Int,
+    onOneTarget: (String) -> Unit = {},
     onDone: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -399,7 +408,9 @@ fun TargetPickerSheet(
     fun send() {
         sending = true
         scope.launch {
-            val n = onSend(picked.map { it.conversationId }, add.takeIf { allowMessage && it.isNotBlank() })
+            val targets = picked.map { it.conversationId }
+            val n = onSend(targets, add.takeIf { allowMessage && it.isNotBlank() })
+            if (n > 0 && targets.size == 1) onOneTarget(targets.single())
             onDone(n)
         }
     }
@@ -418,7 +429,7 @@ fun TargetPickerSheet(
                         val on = picked.any { it.conversationId == t.conversationId }
                         ListItem(
                             headlineContent = { Text(t.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            supportingContent = { Text(t.disabledReason ?: t.label, style = MaterialTheme.typography.labelSmall) },
+                            supportingContent = { Text(t.disabledReason ?: listOfNotNull(t.label, t.notice).joinToString(" · "), style = MaterialTheme.typography.labelSmall) },
                             trailingContent = { Checkbox(checked = on, onCheckedChange = null, enabled = t.disabledReason == null) },
                             modifier = Modifier.clickable(enabled = t.disabledReason == null) {
                                 picked = when {
@@ -617,6 +628,8 @@ fun MessagingHost(
         ForwardPickerSheet(
             x.c, sources, sourcePrivate = x.ctl.private,
             onDone = { n -> x.ctl.forwarding.value = null; x.ctl.toast.value = ForwardRules.done(n) },
+            // §33.4 step 7: with one target, the app opens that chat.
+            onOneTarget = { conv -> if (!conv.equals(x.ctl.conversationId, true)) x.c.risiUi.openChat(conv, null) },
             onDismiss = { x.ctl.forwarding.value = null },
             noteText = noteText,
         )

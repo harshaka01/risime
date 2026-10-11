@@ -36,6 +36,8 @@ data class ForwardTarget(
     /** Offered but disabled (null: selectable). */
     val disabledReason: String? = null,
     val lastActivity: Long = 0,
+    /** §33.1 a group some of whose members can't see files yet (still selectable). */
+    val notice: String? = null,
 ) {
     val label: String get() = if (official) OFFICIAL_LABEL else PRIVATE_LABEL
 
@@ -65,6 +67,7 @@ data class ForwardCandidate(
 
 object ForwardRules {
     const val MANY_TIMES_SNACKBAR = "Messages forwarded many times can be sent to one chat at a time"
+    const val GROUP_FILES_NOTICE = "Some members need to update to see files"
     const val HINT_TITLE = "Forward to Official?"
     const val HINT_BODY = "Risi can read messages, photos and files in Official chats. What you forward there is no longer only in Private."
     const val HINT_FORWARD = "Forward"
@@ -96,7 +99,9 @@ object ForwardRules {
                     dm && hasFile && c.filesReady == false -> "${c.name} needs to update the app to receive files"
                     else -> null
                 }
-                ForwardTarget(c.conversationId, c.name, c.official, dm, why, c.lastActivity)
+                // §33.1 groups: sending is allowed, with a one-line notice.
+                val notice = if (!dm && hasFile && c.filesReady == false) GROUP_FILES_NOTICE else null
+                ForwardTarget(c.conversationId, c.name, c.official, dm, why, c.lastActivity, notice)
             }
 
     /** The picker's lists: "Recent chats" (by last activity, at most [recent]) then all chats A–Z; [query] filters by name. */

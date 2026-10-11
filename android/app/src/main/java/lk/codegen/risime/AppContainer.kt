@@ -1013,7 +1013,7 @@ class AppContainer(
             val state = prefsNow[chat]?.officialState
             var images: Boolean? = null
             var files: Boolean? = null
-            if (dm && (hasImage || hasFile)) {
+            if ((dm && (hasImage || hasFile)) || (!dm && hasFile)) {
                 (runCatching { api.mlsGroup(conv) }.getOrNull() as? ApiResult.Ok)?.value?.let { g -> images = g.imagesReady; files = g.filesReady }
             }
             out += lk.codegen.risime.data.messaging.ForwardCandidate(
