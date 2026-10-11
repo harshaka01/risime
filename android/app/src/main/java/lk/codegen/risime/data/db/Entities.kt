@@ -165,6 +165,8 @@ data class LastMessage(
     @ColumnInfo(name = "deleted_by") val deletedBy: String? = null,
     @ColumnInfo(name = "deleted_by_admin") val deletedByAdmin: Boolean = false,
     @ColumnInfo(name = "delete_state") val deleteState: String? = null,
+    /** v1.34 §33.13: a file's name for "📄 <name>". */
+    @ColumnInfo(name = "system_json") val systemJson: String? = null,
 )
 
 /** Chats-list badge: unread incoming messages in one conversation. */

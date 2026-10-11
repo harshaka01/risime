@@ -126,11 +126,20 @@ class HistoryImporter(
             var systemJson: String? = null
             var callId: String? = null
             var image: lk.codegen.risime.data.media.ImageEnvelope? = null
+            var file: lk.codegen.risime.data.media.FileEnvelope? = null
+            var extras = lk.codegen.risime.net.EnvelopeExtras.NONE
             when (payload) {
-                is MlsPayload.Decoded.Text -> { kind = MessageEntity.KIND_TEXT; body = payload.body }
+                is MlsPayload.Decoded.Text -> { kind = MessageEntity.KIND_TEXT; body = payload.body; extras = payload.extras }
                 is MlsPayload.Decoded.Image -> {
                     if (images == null) { skip("malformed"); continue }
-                    kind = MessageEntity.KIND_IMAGE; body = payload.envelope.caption.orEmpty(); image = payload.envelope
+                    kind = MessageEntity.KIND_IMAGE; body = payload.envelope.caption.orEmpty(); image = payload.envelope; extras = payload.envelope.extras
+                }
+                // v1.34 §17.7: a `file` by reference (a `parts` file as its placeholder row).
+                is MlsPayload.Decoded.File -> {
+                    if (images == null && !payload.envelope.partsOnly) { skip("malformed"); continue }
+                    kind = MessageEntity.KIND_FILE; body = payload.envelope.caption.orEmpty()
+                    systemJson = lk.codegen.risime.data.media.FileMeta.of(payload.envelope).encode()
+                    file = payload.envelope.takeIf { !it.partsOnly }; extras = payload.envelope.extras
                 }
                 is MlsPayload.Decoded.Call -> {
                     val end = payload.env as? lk.codegen.risime.calls.CallEnvelope.End
@@ -164,12 +173,18 @@ class HistoryImporter(
                 clientMsgId = g.clientMsgId, messageId = id, conversationId = conv, from = g.from, to = to, body = body,
                 serverTs = g.serverTs, localTs = ts, status = if (outgoing) MessageStatus.SENT.name else MessageStatus.READ.name,
                 outgoing = outgoing, ackedStatus = MessageStatus.READ.name, kind = kind, systemJson = systemJson,
-                blobId = image?.blob?.blobId, callId = callId, origin = origin, sharedBy = c.providerUser.lowercase(),
+                blobId = image?.blob?.blobId ?: file?.blob?.blobId, callId = callId, origin = origin, sharedBy = c.providerUser.lowercase(),
                 fromDevice = g.fromDevice ?: e.fromDevice?.lowercase(),
+                forwardHops = extras.forwardHops, replyToMessageId = extras.replyTo?.messageId, replyToFrom = extras.replyTo?.from,
+                viewOnce = if (extras.viewOnce) true else null,
             )
             if (messages.insert(row) == -1L) { skip("existing_row"); done += id; continue }
             if (image != null) {
                 images?.stored(row, image)
+                anyImage = true
+            }
+            if (file != null) {
+                images?.storedFile(row, file)
                 anyImage = true
             }
             imported++

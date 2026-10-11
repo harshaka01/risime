@@ -124,6 +124,8 @@ object HistoryExport {
         for (m in dao.exportCandidates(conv)) {
             val id = m.messageId?.lowercase() ?: continue
             if (m.deleted || m.system || m.risiCtl || m.deleteState != null || m.deleteUnverified) continue
+            // v1.34 §33.0: a view-once item is never shared.
+            if (m.isViewOnce) continue
             if (m.status == MessageStatus.PENDING.name || m.status == MessageStatus.FAILED.name) continue
             if (m.call && !req.own) continue // android R3: a call line is from one user's perspective
             val ticks = TimeUuid.ticks(id)
@@ -138,7 +140,7 @@ object HistoryExport {
                     val blobId = row.blobId ?: continue
                     val enc = runCatching { s.openEnc(m.clientMsgId, row.sealedEnc) }.getOrNull() ?: continue
                     val thumb = row.sealedThumb?.let { t -> runCatching { s.openThumb(m.clientMsgId, t) }.getOrNull() }
-                    val env = ImageEnvelope(lk.codegen.risime.net.BlobRef(blobId, row.blobSize, row.blobSha256), enc, row.mime, row.w, row.h, thumb, m.body.takeIf { it.isNotEmpty() })
+                    val env = ImageEnvelope(lk.codegen.risime.net.BlobRef(blobId, row.blobSize, row.blobSha256), enc, row.mime, row.w, row.h, thumb, m.body.takeIf { it.isNotEmpty() }, lk.codegen.risime.data.mls.sendExtras(m))
                     val obj = json(env.encode())
                     ImageEnvelope.validate(obj) ?: continue // §14.4 before export; expired images still go
                     obj
@@ -148,7 +150,21 @@ object HistoryExport {
                     if (lk.codegen.risime.calls.CallEnvelope.decode(obj.toString().toByteArray()) !is lk.codegen.risime.calls.CallEnvelope.End) continue
                     obj
                 }
-                else -> json(MlsPayload.text(m.body))
+                // v1.34 §17.7: `file` by reference like an image.
+                m.file -> {
+                    val meta = lk.codegen.risime.data.media.FileMeta.decode(m.systemJson)?.takeIf { !it.parts } ?: continue
+                    val row = media?.get(m.clientMsgId) ?: continue
+                    val s = sealer ?: continue
+                    val blobId = row.blobId ?: continue
+                    val enc = runCatching { s.openEnc(m.clientMsgId, row.sealedEnc) }.getOrNull() ?: continue
+                    val thumb = row.sealedThumb?.let { t -> runCatching { s.openThumb(m.clientMsgId, t) }.getOrNull() }
+                    val env = lk.codegen.risime.data.media.FileEnvelope(lk.codegen.risime.net.BlobRef(blobId, row.blobSize, row.blobSha256), enc, meta.name, meta.mime, thumb, meta.pages, m.body.takeIf { it.isNotEmpty() }, lk.codegen.risime.data.mls.sendExtras(m))
+                    val obj = json(env.encode())
+                    lk.codegen.risime.data.media.FileEnvelope.validate(obj) ?: continue
+                    obj
+                }
+                // v1.34: `forwarded` and `reply_to` travel as part of the payload.
+                else -> json(MlsPayload.text(m.body, lk.codegen.risime.data.mls.sendExtras(m)))
             }
             val lines = mutableListOf(line(HistoryBundleEntry(id, m.clientMsgId, m.from.lowercase(), m.fromDevice, m.serverTs!!, payload)))
             for (r in reactions[id].orEmpty().sortedBy { ms(it.confirmedTs) ?: 0 }) {

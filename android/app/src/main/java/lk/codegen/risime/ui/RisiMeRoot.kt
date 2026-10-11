@@ -203,6 +203,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                 onInvites = { nav.navigate("invites") { launchSingleTop = true } },
                 onLockedFolder = { nav.navigate("locked") { launchSingleTop = true } },
                 onChatLockSettings = { nav.navigate("locked_settings") { launchSingleTop = true } },
+                onStarred = { nav.navigate("starred") { launchSingleTop = true } },
             )
         }
         // Locked chats: the folder is reachable only after the confirmation (folderOpen) and closes when
@@ -421,6 +422,10 @@ private fun MainNav(c: AppContainer, meId: String) {
         }
         composable("add_friend") {
             AddFriendScreen(viewModel { FriendsViewModel(c) }, onBack = { nav.popBackStack() })
+        }
+        // v1.34 §33.11 every starred message (device-local).
+        composable("starred") {
+            lk.codegen.risime.ui.chat.StarredScreen(c, meId, onBack = { nav.popBackStack() })
         }
         composable("invites") {
             InvitesScreen(viewModel { FriendsViewModel(c) }, onBack = { nav.popBackStack() })

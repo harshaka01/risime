@@ -29,6 +29,9 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
     /** §25.4 a Risi draft's [Use] for this chat (taken once; never sent). */
     fun takeDraft(): String? = c.risiUi.takeDraft(conversationId)
 
+    /** v1.34 §33.11 opened from Starred: scroll to the message once it is shown (taken once). */
+    fun takeFocus(): lk.codegen.risime.data.tabs.RisiUiBus.Focus? = c.risiUi.takeFocus(conversationId)
+
     /** §26.6 this chat's scheduled messages (the sender's phone only). */
     val scheduledCtl = lk.codegen.risime.ui.chat.ScheduledControls(
         c.scheduled, c.db.scheduled().open(), c.db.scheduled().sends(), viewModelScope, conversationId,

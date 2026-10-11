@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import lk.codegen.risime.ui.chat.testTagOf
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -68,6 +69,8 @@ fun ChatsScreen(
     onNewGroup: () -> Unit = {},
     onLockedFolder: () -> Unit = {},
     onChatLockSettings: () -> Unit = {},
+    /** v1.34 §33.11 ⋮ → "Starred". */
+    onStarred: () -> Unit = {},
     /** §29 the Calendar tab (shown only while this device is a `risi_events` device). */
     calendar: lk.codegen.risime.ui.calendar.RisiCalendarViewModel? = null,
 ) {
@@ -165,6 +168,10 @@ fun ChatsScreen(
                                 callsUi.askClear = true
                             })
                         }
+                        DropdownMenuItem(text = { Text(lk.codegen.risime.ui.chat.MessagingStrings.STARRED, maxLines = 1) }, onClick = {
+                            menu = false
+                            onStarred()
+                        }, modifier = Modifier.then(androidx.compose.ui.Modifier.testTagOf("chats_menu_starred")))
                         DropdownMenuItem(text = { Text("Invites", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = {
                             menu = false
                             onInvites()
@@ -369,9 +376,9 @@ fun ChatSelectionBar(onClose: () -> Unit, onDelete: () -> Unit, onClear: () -> U
 fun dmPreview(last: lk.codegen.risime.data.db.LastMessage): String = when {
     last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_SYSTEM -> last.body
     last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_DELETED -> last.body // §15.6 tombstone text (forPreview)
-    last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_CALL -> lk.codegen.risime.push.bodyPreview(last.kind, last.body) // §16.6, no "You:"
-    last.outgoing -> "You: " + lk.codegen.risime.push.bodyPreview(last.kind, last.body)
-    else -> lk.codegen.risime.push.bodyPreview(last.kind, last.body)
+    last.kind == lk.codegen.risime.data.db.MessageEntity.KIND_CALL -> lk.codegen.risime.push.bodyPreview(last.kind, last.body, last.systemJson) // §16.6, no "You:"
+    last.outgoing -> "You: " + lk.codegen.risime.push.bodyPreview(last.kind, last.body, last.systemJson)
+    else -> lk.codegen.risime.push.bodyPreview(last.kind, last.body, last.systemJson)
 }
 
 /** How long "Connecting…" runs before the status line says the network is slow. */
@@ -443,7 +450,7 @@ internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> 
 @Composable
 private fun RisiRowItem(row: ChatRow, onClick: () -> Unit) {
     val last = row.last
-    val lastText = last?.let { lk.codegen.risime.push.bodyPreview(it.kind, it.body) }.orEmpty()
+    val lastText = last?.let { lk.codegen.risime.push.bodyPreview(it.kind, it.body, it.systemJson) }.orEmpty()
     ListRow(
         title = row.name,
         subtitle = when {
@@ -464,7 +471,7 @@ private fun RisiRowItem(row: ChatRow, onClick: () -> Unit) {
 @Composable
 private fun GroupRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> Unit)? = null) {
     val last = row.last
-    val lastText = last?.let { lk.codegen.risime.push.bodyPreview(it.kind, it.body) }.orEmpty()
+    val lastText = last?.let { lk.codegen.risime.push.bodyPreview(it.kind, it.body, it.systemJson) }.orEmpty()
     val sub = when {
         row.typingLabel != null -> row.typingLabel
         row.stateLine != null -> row.stateLine

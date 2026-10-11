@@ -56,13 +56,15 @@ class BundleExporter(
             val line = conversationLine(conv)
             if (line.official) official = true
             out(encodeLine(BackupConversationLine.serializer(), line))
+            // v1.34 §33.11: the `message` line carries `starred_at` (absent when not starred).
+            val stars = dao.starsIn(conv).associate { it.messageId.lowercase() to it.starredAt }
             var afterTs = Long.MIN_VALUE
             var afterId = ""
             while (true) {
                 val page = dao.page(conv, afterTs, afterId, pageSize)
                 if (page.isEmpty()) break
                 for (m in page) {
-                    val line = rowLine(conv, m) ?: continue
+                    val line = rowLine(conv, m, stars) ?: continue
                     when (line) {
                         is BackupMessageLine -> { messages++; out(encodeLine(BackupMessageLine.serializer(), line)) }
                         is BackupTombstoneLine -> { tombstones++; out(encodeLine(BackupTombstoneLine.serializer(), line)) }
@@ -131,7 +133,7 @@ class BundleExporter(
     }
 
     /** One row → its line, or null when it never goes into a backup. */
-    private suspend fun rowLine(conv: String, m: MessageEntity): Any? {
+    private suspend fun rowLine(conv: String, m: MessageEntity, stars: Map<String, Long> = emptyMap()): Any? {
         if (m.system) {
             // §12.7 group lines only; §13.3/§17.12 markers and other local lines stay out.
             if (!m.clientMsgId.startsWith("sys:")) return null
@@ -151,11 +153,13 @@ class BundleExporter(
         if (m.status == MessageStatus.PENDING.name || m.status == MessageStatus.FAILED.name) return null
         val payload: JsonObject = when (m.kind) {
             // §24.10: a Risi message keeps its `risi` object.
-            MessageEntity.KIND_TEXT -> json(MlsPayload.text(m.body)).let { t ->
+            // v1.34: `forwarded` and `reply_to` are part of the payload (and a reserved `view_once` stays one).
+            MessageEntity.KIND_TEXT -> json(MlsPayload.text(m.body, lk.codegen.risime.data.mls.sendExtras(m))).let { t ->
                 val risi = if (lk.codegen.risime.data.tabs.RisiMessages.meta(m) != null) runCatching { ProtocolJson.parseToJsonElement(m.systemJson!!) as JsonObject }.getOrNull() else null
                 if (risi == null) t else JsonObject(t + ("risi" to risi))
-            }
-            MessageEntity.KIND_IMAGE -> imagePayload(m) ?: return null
+            }.let { viewOnce(m, it) }
+            MessageEntity.KIND_IMAGE -> imagePayload(m)?.let { viewOnce(m, it) } ?: return null
+            MessageEntity.KIND_FILE -> filePayload(m)?.let { viewOnce(m, it) } ?: return null
             MessageEntity.KIND_CALL -> callPayload(m) ?: return null
             else -> return null
         }
@@ -164,7 +168,29 @@ class BundleExporter(
             conversationId = conv, messageId = id, clientMsgId = m.clientMsgId, from = m.from.lowercase(), fromDevice = m.fromDevice?.lowercase(),
             serverTs = m.serverTs, payload = payload, origin = m.origin, sharedBy = m.sharedBy?.lowercase(),
             status = if (m.outgoing) statusName(m.status) else null,
+            starredAt = id?.let { stars[it] }?.let { BackupTime.iso(it) },
         )
+    }
+
+    private fun viewOnce(m: MessageEntity, o: JsonObject): JsonObject =
+        if (m.isViewOnce) JsonObject(o + (lk.codegen.risime.net.ViewOnce.FIELD to JsonObject(emptyMap()))) else o
+
+    /** v1.34 §22.5: a `file` by reference with `enc` and `thumb` (the bytes are not in a backup); a `parts` file as its placeholder. */
+    private suspend fun filePayload(m: MessageEntity): JsonObject? {
+        val meta = lk.codegen.risime.data.media.FileMeta.decode(m.systemJson) ?: return null
+        if (meta.parts) return null
+        val row = media?.get(m.clientMsgId) ?: return null
+        val s = sealer ?: return null
+        val blobId = row.blobId ?: m.blobId ?: return null
+        val enc = runCatching { s.openEnc(m.clientMsgId, row.sealedEnc) }.getOrNull() ?: return null
+        val thumb = row.sealedThumb?.let { t -> runCatching { s.openThumb(m.clientMsgId, t) }.getOrNull() }
+        val env = lk.codegen.risime.data.media.FileEnvelope(
+            BlobRef(blobId, row.blobSize, row.blobSha256), enc, meta.name, meta.mime, thumb, meta.pages, m.body.takeIf { it.isNotEmpty() },
+            lk.codegen.risime.data.mls.sendExtras(m),
+        )
+        val obj = json(env.encode())
+        lk.codegen.risime.data.media.FileEnvelope.validate(obj) ?: return null
+        return obj
     }
 
     private fun statusName(s: String): String = when (s) {
@@ -180,7 +206,7 @@ class BundleExporter(
         val blobId = row.blobId ?: m.blobId ?: return null
         val enc = runCatching { s.openEnc(m.clientMsgId, row.sealedEnc) }.getOrNull() ?: return null
         val thumb = row.sealedThumb?.let { t -> runCatching { s.openThumb(m.clientMsgId, t) }.getOrNull() }
-        val env = ImageEnvelope(BlobRef(blobId, row.blobSize, row.blobSha256), enc, row.mime, row.w, row.h, thumb, m.body.takeIf { it.isNotEmpty() })
+        val env = ImageEnvelope(BlobRef(blobId, row.blobSize, row.blobSha256), enc, row.mime, row.w, row.h, thumb, m.body.takeIf { it.isNotEmpty() }, lk.codegen.risime.data.mls.sendExtras(m))
         val obj = json(env.encode())
         ImageEnvelope.validate(obj) ?: return null
         return obj

@@ -106,7 +106,7 @@ interface MessageDao {
     suspend fun lastInConversation(conversationId: String): MessageEntity?
 
     @Query(
-        "SELECT conversation_id, body, local_ts, outgoing, status, from_id, kind, deleted_by, deleted_by_admin, delete_state FROM messages m " +
+        "SELECT conversation_id, body, local_ts, outgoing, status, from_id, kind, deleted_by, deleted_by_admin, delete_state, CASE WHEN kind = 'file' THEN system_json ELSE NULL END AS system_json FROM messages m " +
             "WHERE local_ts = (SELECT MAX(local_ts) FROM messages WHERE conversation_id = m.conversation_id) " +
             "GROUP BY conversation_id",
     )
@@ -753,7 +753,7 @@ interface HistoryDao {
 
     /** Candidate rows of one conversation, newest first (filtered further in Kotlin, android R2). */
     @Query(
-        "SELECT * FROM messages WHERE conversation_id = :conv AND message_id IS NOT NULL AND kind IN ('text', 'image', 'call') " +
+        "SELECT * FROM messages WHERE conversation_id = :conv AND message_id IS NOT NULL AND kind IN ('text', 'image', 'file', 'call') " +
             "ORDER BY local_ts DESC",
     )
     suspend fun exportCandidates(conv: String): List<MessageEntity>
@@ -814,6 +814,13 @@ interface BackupDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertChatState(s: ChatStateEntity): Long
+
+    /** v1.34 §33.11 a conversation's stars (the `message` line's `starred_at`). */
+    @Query("SELECT * FROM stars WHERE conversation_id = :conv")
+    suspend fun starsIn(conv: String): List<StarEntity>
+
+    @Upsert
+    suspend fun putStar(s: StarEntity)
 
     /** The upgrade gate's per-conversation counts (hard rule 9): 1:1/group messages, photos, call lines. */
     @Query(

@@ -735,6 +735,34 @@ fun StarredList(rows: List<StarredRow>, showChat: Boolean, onOpen: (MessageEntit
     }
 }
 
+/** §33.11 the chat list's ⋮ → "Starred": every conversation, newest star first, with the chat name and tab. */
+@Composable
+fun StarredScreen(c: AppContainer, me: String, onBack: () -> Unit) {
+    val starred by c.db.stars().starredAll().collectAsState(initial = emptyList())
+    val groups by c.db.groups().all().collectAsState(initial = emptyList())
+    val contacts by c.db.contacts().all().collectAsState(initial = emptyList())
+    val tabRows by c.chatTabs.rows.collectAsState()
+    val names = remember(groups, contacts, tabRows) { lk.codegen.risime.data.tabs.ConversationDirectory.names(me, groups, contacts, tabRows) }
+    val scope = rememberCoroutineScope()
+    androidx.compose.material3.Scaffold(
+        topBar = { lk.codegen.risime.ui.common.RisiTopBar(title = MessagingStrings.STARRED, onBack = onBack) },
+        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0),
+    ) { pad ->
+        Box(Modifier.padding(pad).testTag("starred_screen")) {
+            StarredList(
+                starred.map { s ->
+                    val conv = s.message.conversationId.lowercase()
+                    val official = tabRows?.get(conv)?.official == true
+                    StarredRow(s.message, s.starredAt, names[conv] ?: "Chat", if (official) ForwardTarget.OFFICIAL_LABEL else ForwardTarget.PRIVATE_LABEL)
+                },
+                showChat = true,
+                onOpen = { m -> c.risiUi.openChat(m.conversationId, lk.codegen.risime.data.tabs.RisiUiBus.Focus(messageId = m.messageId)) },
+                onUnstar = { m -> scope.launch { m.messageId?.let { c.db.stars().remove(listOf(it)) } } },
+            )
+        }
+    }
+}
+
 /** The media rows a selection needs for its rules (client_msg_id → media). */
 fun selectionActions(rows: List<MessageEntity>, selection: Set<String>, me: String, media: Map<String, MediaEntity>, starred: Set<String>, canSend: Boolean): SelectionRules.Actions {
     val selected = rows.filter { it.clientMsgId in selection }

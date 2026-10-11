@@ -116,6 +116,14 @@ fun ChatScreen(
     var flash by remember { mutableStateOf<String?>(null) }
     var starredOpen by remember { mutableStateOf(false) }
     val jumpScope = rememberCoroutineScope()
+    // §33.11 opened from Starred: scroll there once the message is shown.
+    var focus by remember { mutableStateOf<lk.codegen.risime.data.tabs.RisiUiBus.Focus?>(null) }
+    LaunchedEffect(Unit) { focus = vm.takeFocus() }
+    LaunchedEffect(focus, messages) {
+        val f = focus ?: return@LaunchedEffect
+        val target = lk.codegen.risime.data.tabs.RisiLedger.focusTarget(messages, f) ?: return@LaunchedEffect
+        if (lk.codegen.risime.ui.tabs.scrollToMessage(scroll, messages, target)) focus = null
+    }
     val peerName = peer?.displayName ?: "Chat"
     val x = ChatMessaging(
         vm.container, vm.messaging, vm.files, messages, media, starred,

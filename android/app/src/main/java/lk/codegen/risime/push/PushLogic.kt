@@ -126,18 +126,18 @@ fun planChatNotifications(
                     conversationId = conv,
                     peerId = peer,
                     title = groupNames[conv] ?: lk.codegen.risime.data.groups.GROUP_NAME_PENDING,
-                    lines = shown.map { "${who(it.from)}: ${preview(bodyPreview(it.kind, it.body))}" },
+                    lines = shown.map { "${who(it.from)}: ${preview(bodyPreview(it.kind, it.body, it.systemJson.takeIf { _ -> it.file }, it.forwardHops))}" },
                     count = sorted.size,
                     newestTs = sorted.last().localTs,
                     group = true,
-                    messages = shown.map { NotifLine(who(it.from), preview(bodyPreview(it.kind, it.body)), it.localTs) },
+                    messages = shown.map { NotifLine(who(it.from), preview(bodyPreview(it.kind, it.body, it.systemJson.takeIf { _ -> it.file }, it.forwardHops)), it.localTs) },
                 ).let(::titled)
             }
             ChatNotification(
                 conversationId = conv,
                 peerId = peer,
                 title = names[peer.lowercase()] ?: "New message",
-                lines = sorted.takeLast(MAX_LINES).map { preview(bodyPreview(it.kind, it.body)) },
+                lines = sorted.takeLast(MAX_LINES).map { preview(bodyPreview(it.kind, it.body, it.systemJson.takeIf { _ -> it.file }, it.forwardHops)) },
                 count = sorted.size,
                 newestTs = sorted.last().localTs,
             ).let(::titled)
@@ -146,11 +146,18 @@ fun planChatNotifications(
 }
 
 /** §14.7 Receiving 9: an image reads "📷 Photo" or "📷 <caption>" (never the image itself). */
-fun bodyPreview(kind: String, body: String): String = when {
-    kind == lk.codegen.risime.data.db.MessageEntity.KIND_CALL -> "📞 $body" // §16.6 "📞 Missed voice call"
-    kind != lk.codegen.risime.data.db.MessageEntity.KIND_IMAGE -> body
-    body.isBlank() -> "📷 Photo"
-    else -> "📷 $body"
+fun bodyPreview(kind: String, body: String, systemJson: String? = null, forwardHops: Int? = null): String {
+    val p = when {
+        kind == lk.codegen.risime.data.db.MessageEntity.KIND_CALL -> "📞 $body" // §16.6 "📞 Missed voice call"
+        // v1.34 §33.13: "📄 <name>" (never the file itself).
+        kind == lk.codegen.risime.data.db.MessageEntity.KIND_FILE ->
+            "📄 " + (lk.codegen.risime.data.media.FileMeta.decode(systemJson)?.let { lk.codegen.risime.data.media.FileEnvelope.displayName(it.name) } ?: "File")
+        kind != lk.codegen.risime.data.db.MessageEntity.KIND_IMAGE -> body
+        body.isBlank() -> "📷 Photo"
+        else -> "📷 $body"
+    }
+    // v1.34 §33.4: "↪ Forwarded: <preview>" on a local notification's content line.
+    return if (forwardHops != null) "↪ Forwarded: $p" else p
 }
 
 fun preview(body: String): String {

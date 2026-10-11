@@ -231,9 +231,12 @@ class BundleImporter(
         var systemJson: String? = null
         var callId: String? = null
         var image: lk.codegen.risime.data.media.ImageEnvelope? = null
+        var file: lk.codegen.risime.data.media.FileEnvelope? = null
+        var extras = lk.codegen.risime.net.EnvelopeExtras.NONE
         when (payload) {
             is MlsPayload.Decoded.Text -> {
                 body = payload.body
+                extras = payload.extras
                 // §24.10: a Risi message in an Official conversation keeps its `risi` object (plain text anywhere else).
                 if (payload.risi != null && conv.lowercase() in officialConvs) systemJson = lk.codegen.risime.data.tabs.RisiMessages.encode(payload.risi)
             }
@@ -242,6 +245,16 @@ class BundleImporter(
                 kind = MessageEntity.KIND_IMAGE
                 body = payload.envelope.caption.orEmpty()
                 image = payload.envelope
+                extras = payload.envelope.extras
+            }
+            // v1.34 §22.5 amendment: a `file` by reference, like an image (the bytes are not in a backup).
+            is MlsPayload.Decoded.File -> {
+                if (images == null && !payload.envelope.partsOnly) return skip("images_unavailable")
+                kind = MessageEntity.KIND_FILE
+                body = payload.envelope.caption.orEmpty()
+                systemJson = lk.codegen.risime.data.media.FileMeta.of(payload.envelope).encode()
+                file = payload.envelope.takeIf { !it.partsOnly }
+                extras = payload.envelope.extras
             }
             is MlsPayload.Decoded.Call -> {
                 val end = payload.env as? lk.codegen.risime.calls.CallEnvelope.End ?: return skip("malformed")
@@ -266,14 +279,22 @@ class BundleImporter(
             serverTs = e.serverTs, localTs = ts,
             status = if (outgoing) outgoingStatus(e.status) else MessageStatus.READ.name,
             outgoing = outgoing, ackedStatus = if (outgoing) null else MessageStatus.READ.name,
-            kind = kind, systemJson = systemJson, blobId = image?.blob?.blobId, callId = callId,
+            kind = kind, systemJson = systemJson, blobId = image?.blob?.blobId ?: file?.blob?.blobId, callId = callId,
             origin = e.origin ?: ORIGIN_BACKUP, sharedBy = e.sharedBy?.lowercase(), fromDevice = e.fromDevice?.lowercase(),
+            forwardHops = extras.forwardHops, replyToMessageId = extras.replyTo?.messageId, replyToFrom = extras.replyTo?.from,
+            viewOnce = if (extras.viewOnce) true else null,
         )
         if (messages.insert(row) == -1L) return skip("existing_row")
         image?.let {
             images?.stored(row, it)
             anyImage = true
         }
+        file?.let {
+            images?.storedFile(row, it)
+            anyImage = true
+        }
+        // v1.34 §33.11: restore re-creates the star.
+        if (id != null) e.starredAt?.let { at -> BackupTime.ms(at)?.let { ms -> backupDao.putStar(lk.codegen.risime.data.db.StarEntity(id, conv, ms)) } }
         imported++
         // §22.6: a matching gap row goes; its marker is updated at the end.
         if (id != null) history?.let { h -> if (h.gap(id) != null) { h.deleteGaps(listOf(id)); gapsTouched += conv } }
