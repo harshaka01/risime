@@ -50,7 +50,7 @@ run_env() {  # $1 = off|on|on-reopen|on-wrongkey; exports for the child
   # on-wrongkey: tonight's P0 class (a RISI_MLS_KEK that doesn't match the sealed store): the server
   # must still boot and stay healthy (Risi unavailable), never crash-loop.
   [ "$1" = on-wrongkey ] && export RISI_MLS_KEK="$(openssl rand -base64 32)" RISI_DATA_KEY="$(openssl rand -base64 32)"
-  export TABS="$f" RISI="$f" POSTGRES_DB="$BC_DB" CASSANDRA_KEYSPACE="$BC_KS" PORT="$BC_PORT" PHX_SERVER=true \
+  export TABS="$f" RISI="$f" POSTGRES_DB="$BC_DB" CASSANDRA_KEYSPACE="$BC_KS" PORT="$BC_PORT" METRICS_PORT=off PHX_SERVER=true \
     BLOB_DIR="$WORK/blobs" RISIME_AUTH_LOG="$WORK/auth.log" FCM_ENABLED=false RELEASE_DISTRIBUTION=none \
     ERL_EPMD_ADDRESS=127.0.0.1
   unset DATABASE_URL
@@ -98,10 +98,10 @@ done
 
 # Read-only preflight against the PILOT database (the sealed store vs RISI_MLS_KEK), when the release has it.
 if grep -qw on <<<"$MODES" && grep -qE "^RISI=on" "$PILOT"; then
-  if ( set -a; . "$ENVF"; . "$PILOT"; set +a; export RELEASE_DISTRIBUTION=none PORT=0 
+  if ( set -a; . "$ENVF"; . "$PILOT"; set +a; export RELEASE_DISTRIBUTION=none PORT=0 METRICS_PORT=off 
        timeout 120 "$BIN" eval 'IO.puts(Code.ensure_loaded?(RisiMe.Release) and function_exported?(RisiMe.Release, :risi_preflight, 0))' ) 2>/dev/null | grep -q true; then
     echo "==> Risi preflight against the pilot database (read-only)"
-    ( set -a; . "$ENVF"; . "$PILOT"; set +a; export RELEASE_DISTRIBUTION=none PORT=0
+    ( set -a; . "$ENVF"; . "$PILOT"; set +a; export RELEASE_DISTRIBUTION=none PORT=0 METRICS_PORT=off
       timeout 300 "$BIN" eval "RisiMe.Release.risi_preflight()" ) >"$LOGS/preflight.log" 2>&1 || { tail -5 "$LOGS/preflight.log"; echo "BOOT CHECK FAIL: Risi preflight"; exit 1; }
     grep -E "RISI PREFLIGHT" "$LOGS/preflight.log" | tail -1
   else
