@@ -17,7 +17,17 @@ import java.util.Locale
  */
 
 /** One event in "Your events". [begin]/[end] are instants (all-day ones at local midnights). */
-data class LocalEvent(val title: String, val begin: Long, val end: Long, val allDay: Boolean, val risi: Boolean = false)
+data class LocalEvent(
+    val title: String,
+    val begin: Long,
+    val end: Long,
+    val allDay: Boolean,
+    val risi: Boolean = false,
+    /** v1.35 §34.1: the provider event id, or a Risi Calendar event's id (to drop a Risi item already shown); never sent. */
+    val eventId: String? = null,
+    /** v1.35 §34.4: a row from Risi's items (`GET /risi/items`), with its kind; null for provider / Risi Calendar rows. */
+    val itemKind: String? = null,
+)
 
 sealed interface LocalEventsResult {
     /** Calendar permission is off: "Allow calendar access to see your events". */
@@ -65,7 +75,7 @@ object LocalEvents {
         if (e.cancelled || e.myStatus == RisiEventStatus.DECLINED) return@mapNotNull null
         val b = runCatching { Instant.parse(e.start).toEpochMilli() }.getOrNull() ?: return@mapNotNull null
         val en = runCatching { Instant.parse(e.end).toEpochMilli() }.getOrNull() ?: b
-        if (!InstanceFilter.overlaps(b, maxOf(en, b + 1), fromMs, toMs)) null else LocalEvent(e.title, b, en, e.allDay, risi = true)
+        if (!InstanceFilter.overlaps(b, maxOf(en, b + 1), fromMs, toMs)) null else LocalEvent(e.title, b, en, e.allDay, risi = true, eventId = e.eventId)
     }
 
     /** Phone and Risi Calendar events, sorted by start (then end, then title). */
@@ -109,7 +119,14 @@ object LocalEvents {
         if (events.size <= MAX_ROWS) events to null else events.take(MAX_ROWS) to "+${events.size - MAX_ROWS} more"
 
     /** Builds the list for the range: null phone events mean no permission; a provider error is [LocalEventsResult.Failed]. */
-    suspend fun build(fromMs: Long, toMs: Long, phone: suspend () -> List<LocalEvent>?, risi: suspend () -> List<RisiEvent>): LocalEventsResult {
+    suspend fun build(
+        fromMs: Long,
+        toMs: Long,
+        phone: suspend () -> List<LocalEvent>?,
+        risi: suspend () -> List<RisiEvent>,
+        /** v1.35 §34.1 (Phase 2): Risi's items for the same range, merged and de-duplicated by event id. Never fatal. */
+        items: (suspend () -> List<LocalEvent>)? = null,
+    ): LocalEventsResult {
         val p = try {
             phone() ?: return LocalEventsResult.NoPermission
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -124,6 +141,25 @@ object LocalEvents {
         } catch (e: Exception) {
             emptyList()
         }
-        return LocalEventsResult.Events(merge(p, r), fromMs, toMs)
+        val shown = merge(p, r)
+        val extra = if (items == null) emptyList() else try {
+            items()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptyList()
+        }
+        return LocalEventsResult.Events(withItems(shown, extra), fromMs, toMs)
+    }
+
+    /**
+     * v1.35 §34.1: adds Risi's item rows to [shown], dropping each whose event id is already shown (a
+     * `phone_event_added` from this phone's provider, a `risi_calendar_event` from the cached Risi Calendar).
+     */
+    fun withItems(shown: List<LocalEvent>, items: List<LocalEvent>): List<LocalEvent> {
+        if (items.isEmpty()) return shown
+        val ids = shown.mapNotNull { it.eventId?.lowercase() }.toHashSet()
+        val add = items.filter { it.eventId == null || it.eventId.lowercase() !in ids }.distinctBy { listOf(it.itemKind, it.eventId ?: it.title, it.begin) }
+        return merge(shown, add)
     }
 }

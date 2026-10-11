@@ -296,6 +296,27 @@ class DeviceRegistrarTest {
         assertEquals("[\"groups\",\"tabs\",\"risi_tools\",\"risi_skills\",\"risi_ledger\"]", advertise())
     }
 
+    /** v1.35 §34 Phase 2: `risi_items` only with `risi_tools`. */
+    @Test fun risiItemsAdvertisedOnlyWithRisiTools() = runBlocking {
+        var toolsOn = true
+        val reg = DeviceRegistrar(
+            api, { "dev-1" }, "0.3.0", { mls }, groupsReplacedFor = { "x" }, tabsSupported = { true }, risiToolsSupported = { toolsOn },
+            risiItemsSupported = { true },
+        )
+        fun caps() = ProtocolJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject["mls"]!!.jsonObject["capabilities"].toString()
+        suspend fun advertise(): String {
+            server.enqueue(json(200, """{"attestation":"a.b.c"}"""))
+            server.enqueue(json(200, """{"count":30}"""))
+            reg.register(null)
+            return caps().also { server.takeRequest() }
+        }
+        mls.tabsOn = true
+        mls.risiChatOn = true
+        assertEquals("[\"groups\",\"tabs\",\"risi_tools\",\"risi_items\"]", advertise())
+        toolsOn = false // never without risi_tools
+        assertEquals("[\"groups\",\"tabs\"]", advertise())
+    }
+
     @Test fun coreWithoutGroupsKeepsTheV17Registration() = runBlocking {
         mls.groupsOn = false
         server.enqueue(json(200, """{"attestation":"a.b.c"}"""))

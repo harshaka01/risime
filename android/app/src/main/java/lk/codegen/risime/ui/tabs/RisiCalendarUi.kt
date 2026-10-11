@@ -139,8 +139,8 @@ internal fun CalendarActionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCo
             }
         }
         when (state) {
-            RisiToolCards.ConfirmState.CANCELLED -> StateLine("Cancelled")
-            RisiToolCards.ConfirmState.EXPIRED -> StateLine("Expired")
+            RisiToolCards.ConfirmState.CANCELLED, RisiToolCards.ConfirmState.EXPIRED, RisiToolCards.ConfirmState.SUPERSEDED, RisiToolCards.ConfirmState.CLOSED ->
+                StateLine(RisiToolCards.closedText(state).orEmpty())
             RisiToolCards.ConfirmState.CONFIRMED -> when {
                 rec?.removed == true -> StateLine("Removed from your calendar", "risi_calendar_removed")
                 rec?.failureText != null -> {

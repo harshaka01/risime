@@ -352,8 +352,8 @@ internal fun RisiCalendarAddCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardC
             CardTimeline(ctx, null, start, end ?: start, allDay, events, zone)
         }
         when (state) {
-            RisiToolCards.ConfirmState.CANCELLED -> Text("Cancelled", modifier = Modifier.testTag("risi_confirm_state"))
-            RisiToolCards.ConfirmState.EXPIRED -> Text("Expired", modifier = Modifier.testTag("risi_confirm_state"))
+            RisiToolCards.ConfirmState.CANCELLED, RisiToolCards.ConfirmState.EXPIRED, RisiToolCards.ConfirmState.SUPERSEDED, RisiToolCards.ConfirmState.CLOSED ->
+                Text(RisiToolCards.closedText(state).orEmpty(), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.testTag("risi_confirm_state"))
             RisiToolCards.ConfirmState.CONFIRMED -> Text("Adding to your Risi Calendar…", modifier = Modifier.testTag("risi_confirm_state"))
             RisiToolCards.ConfirmState.OPEN -> if (wid != null && wid.lowercase() in ctx.awaiting) Text("Sending…", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
         }

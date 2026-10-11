@@ -242,7 +242,7 @@ class ScreenPermissionAsker {
 }
 
 @Composable
-fun RisiSkillsRoute(c: AppContainer, skillId: String?, onBack: () -> Unit) {
+fun RisiSkillsRoute(c: AppContainer, skillId: String?, onBack: () -> Unit, onRisiItems: (() -> Unit)? = null) {
     val asker = remember { ScreenPermissionAsker() }
     val permissions = remember { c.skillPermissions(asker) }
     val model = remember {
@@ -286,7 +286,7 @@ fun RisiSkillsRoute(c: AppContainer, skillId: String?, onBack: () -> Unit) {
             skillOff = c.risiSkillsStore.skills.map { c.risiSkillsStore.localState(RisiSkillIds.CALENDAR) == RisiSkillStates.OFF },
         )
     }
-    RisiSkillsScreen(model, permissions, skillId, onBack, calendar = c.calendarPort, google = google, openSettings = {
+    RisiSkillsScreen(model, permissions, skillId, onBack, calendar = c.calendarPort, google = google, openRisiItems = onRisiItems?.takeIf { c.risiItemsOn() }, openSettings = {
         runCatching { ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }, openClock = {
         runCatching { ctx.startActivity(Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
@@ -305,6 +305,8 @@ fun RisiSkillsScreen(
     calendar: lk.codegen.risime.data.tabs.RisiCalendarPort? = null,
     /** v1.31 §31.2: the Calendar skill's Google Calendar section (null: not shown, e.g. in tests). */
     google: GcalSettingsModel? = null,
+    /** v1.35 §34.4: Calendar → "Risi's items" (null: not shown, i.e. this phone doesn't advertise `risi_items`). */
+    openRisiItems: (() -> Unit)? = null,
 ) {
     val skills by model.store.skills.collectAsStateWithLifecycle()
     val error by model.store.error.collectAsStateWithLifecycle()
@@ -352,6 +354,7 @@ fun RisiSkillsScreen(
                         openSettings = openSettings, openClock = openClock,
                         calendar = calendar.takeIf { s.id == RisiSkillIds.CALENDAR },
                         google = google.takeIf { s.id == RisiSkillIds.CALENDAR },
+                        openRisiItems = openRisiItems.takeIf { s.id == RisiSkillIds.CALENDAR },
                     )
                 }
             }
@@ -378,6 +381,7 @@ private fun SkillCard(
     openClock: () -> Unit,
     calendar: lk.codegen.risime.data.tabs.RisiCalendarPort? = null,
     google: GcalSettingsModel? = null,
+    openRisiItems: (() -> Unit)? = null,
 ) {
     Card(Modifier.fillMaxWidth().testTag("risi_skill_${s.id}")) {
         Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -412,6 +416,12 @@ private fun SkillCard(
             if (google != null) {
                 HorizontalDivider()
                 GoogleCalendarSection(google)
+            }
+            // v1.35 §34.4: everything Risi set up (on the Calendar card itself, not behind Details).
+            if (openRisiItems != null) {
+                OutlinedButton(onClick = openRisiItems, modifier = Modifier.fillMaxWidth().testTag("risi_skill_risi_items")) {
+                    Text(lk.codegen.risime.data.tabs.RisiItems.TITLE, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                }
             }
             if (!open) {
                 TextButton(onClick = onToggleOpen) { Text("Details", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }

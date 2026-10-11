@@ -27,13 +27,26 @@ class RisiUiBus {
 
         /** §30.6 the Notes list (Risi chat ⋮ → Notes). */
         data object Notes : Nav
+
+        /** v1.35 §34.4 Open on a promise / follow-up in Risi's items: My promises. */
+        data class Promises(val itemId: String?) : Nav
+    }
+
+    fun openPromises(itemId: String?) {
+        _nav.tryEmit(Nav.Promises(itemId))
     }
 
     /**
      * Where a chat opened from a Risi card scrolls to: a summary's card, the first message at or after [at],
      * or (server item 9, My promises) the item's source message [messageId] once it is on this phone.
      */
-    data class Focus(val summaryId: String? = null, val at: String? = null, val messageId: String? = null)
+    data class Focus(
+        val summaryId: String? = null,
+        val at: String? = null,
+        val messageId: String? = null,
+        /** v1.35 §34.4 Open on a scheduled message in Risi's items: the chat's "Scheduled messages" sheet. */
+        val scheduled: Boolean = false,
+    )
 
     private val drafts = ConcurrentHashMap<String, String>()
     private val focus = ConcurrentHashMap<String, Focus>()

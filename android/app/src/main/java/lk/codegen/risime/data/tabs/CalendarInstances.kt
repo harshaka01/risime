@@ -30,6 +30,8 @@ data class InstanceRow(
     val syncId: String? = null,
     /** Only for "Your events" on this phone (v1.32 §29.7); never sent. */
     val title: String? = null,
+    /** v1.35 §34.1: the provider event id, to drop a Risi item this phone already shows; never sent. */
+    val eventId: Long? = null,
 )
 
 object InstanceFilter {

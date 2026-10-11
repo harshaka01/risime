@@ -48,6 +48,9 @@ interface RisiCalendarPort {
     /** The calendar app at that event. */
     fun open(eventId: Long)
 
+    /** v1.35 §34.4 Risi's items → Edit of a phone event: the calendar app's editor (`ACTION_EDIT`). */
+    fun edit(eventId: Long) {}
+
     /** Settings → Calendar → Details: the calendars this phone can see (null: no read permission). */
     suspend fun overview(): CalendarOverview? = null
 

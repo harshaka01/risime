@@ -1,5 +1,66 @@
 # Android status — 0.2 nightlies
 
+## READY v1.35 §34 Risi P0, Phase 2 (JVM gate green: `assembleDebug testDebugUnitTest`, 1710 tests, 0 failed)
+Branch `phase2-android`, against contract a8e5488 (v1.35). No Room change (hard rule 9 untouched). The urgent decoder fix went straight to main first
+(a2daca5: the ten §34 examples in `ContractExamplesTest`, `PROTOCOL_VERSION` 1.35).
+
+**What landed**
+- Capability `risi_items` (`DeviceMls.CAP_RISI_ITEMS`), advertised only with `risi_tools` (`DeviceRegistrarTest.risiItemsAdvertisedOnlyWithRisiTools`).
+- §34.2 `confirm_update`: `RisiToolCards.confirmState` gains `SUPERSEDED` ("Replaced by your newer request") and `CLOSED` (unknown state, "Closed"); the
+  first decisive message in MLS order wins (`confirm_write`, `cancel_write` or an honoured agent `confirm_update`). All three confirm cards (generic,
+  phone `calendar_add`, `risi_calendar_add`) grey out with no buttons. The `confirm_update` row itself is no bubble when its card is on the phone, else a
+  small system line. A `confirm_update` from a non-agent is never honoured (only agent rows keep a `risi` object).
+- §34.3 error cards: the line is the known code's wording, else the server's `body` (`superseded` → "This was replaced by your newer request."); its
+  `next_actions` render as the same chips as on answers (`NextActionChips`; "Ask me again" sends the original text as a `risi_request` ask).
+- §34.5 native clarify card from `answer.clarify` (header "Risi · Check the name"): one button per option + [Keep "<said>"]; a tap sends the `ask`
+  text of the matching `next_actions` entry (never invented text; no matching entry → no button); the two chips are not shown twice; greyed with
+  "Replaced by your newer request" after a `confirm_update` for its `write_id`, "Answered" once the confirm card with that `write_id` arrives.
+- §34.1 "Your events" merges `GET /risi/items` for the answer's range (only on a `risi_items` phone; an items failure never hides the list). De-dup
+  by event id: a `phone_event_added` of THIS phone is dropped when the provider shows its `event_id` (the Instances query now also reads
+  `Instances.EVENT_ID` / `Events._ID`, never sent); a `risi_calendar_event` is dropped when the cached Risi Calendar shows it; another phone's provider
+  ids are never matched. Item rows read "Reminder: …", "Scheduled message: <local text>" (or "On your other phone"), "Your promise: …", "Following up: …".
+- §34.4 Settings → Risi skills → Calendar → **"Risi's items"** (button on the Calendar card, only on a `risi_items` phone; route `risi_items`):
+  upcoming items (from now) grouped by day under bold headers, each row one line + ellipsis: bold "<kind> · <time>", the title, the calendar.
+  Buttons only as `actions` allow, and a `phone_event_added` / `scheduled_message` only on the phone in `ref.device_id`.
+  - Open (deep links only): phone event → `ACTION_VIEW`; Risi Calendar event → the Calendar tab at the event; reminder → the Risi chat; scheduled
+    message → its chat with the "Scheduled messages" sheet open (`RisiUiBus.Focus.scheduled`); promise / follow-up → My promises.
+  - Edit: reminder → dialog → `PATCH /risi/items/{id}` (`at`, `text`); scheduled message → local text edit (§26.6, nothing to the server); promise →
+    §27.5 `item_edit`; phone event → `ACTION_EDIT` (falls back to the view); Risi Calendar event → its event screen (whose Edit is the §29.3 PATCH).
+  - Delete: always a confirm dialog. Reminder / Risi Calendar event → `DELETE` (server routes it). Phone event → this phone deletes the provider row
+    first, and only one in its own write record (§26.4), then `DELETE`; a row already gone from the provider still drops the server row. Scheduled
+    message → cancelled on this phone first, then `DELETE`. Promise / follow-up: no Delete. A local failure never calls `DELETE`; `404` counts as gone.
+- REST: `ApiClient.risiItems/patchRisiItem/deleteRisiItem` (with `X-Device-Id`).
+
+**Tests**: `RisiP0V135Test` (17: superseded/closed/first-wins, forged update ignored, error text, clarify buttons/state, items buttons/routing/
+grouping/titles, "Your events" merge + dedup, the model's Delete/Edit paths incl. a phone event not in the write record), `RisiP0CardsUiTest` (7:
+greyed superseded card, the update's line, Ask me again, superseded error body, clarify taps, closed clarify), `RisiItemsUiTest` (5: list, other
+phone, Open/Edit deep links, Delete of a `phone_event_added` removing the provider row after the dialog, Cancel), the registrar test, and the ten
+contract examples.
+
+**UI strings for the redroid gate** (test tags in brackets)
+- Superseded card: state line "Replaced by your newer request" `[risi_confirm_state]` (unknown state: "Closed"); no `[risi_confirm_add]` /
+  `[risi_confirm_cancel]`; without its card the update shows "Replaced by your newer request." as a system line.
+- Error card `[risi_error_card]`: text `[risi_error_text]` (e.g. "This was replaced by your newer request."), chips `[risi_next_0]`… ("Ask me again").
+- Clarify card `[risi_clarify_card]`, header "Risi · Check the name", question `[risi_clarify_question]` ("Did you mean Shirazi?"), options
+  `[risi_clarify_option_<i>]` ("Shirazi"), keep `[risi_clarify_keep]` ("Keep \"Shutazi\""), state `[risi_clarify_state]` ("Replaced by your newer
+  request" / "Answered").
+- Settings → Risi skills → Calendar card: button "Risi's items" `[risi_skill_risi_items]`.
+- Risi's items screen: title "Risi's items"; blurb "Everything Risi set up for you: events, reminders, scheduled messages and promises."; list
+  `[risi_items_list]`; day headers `[risi_items_day]` ("Mon 12 Oct", last "No date"); rows `[risi_item_<kind>]` with `[risi_item_head]`
+  ("Phone calendar · 14:00–15:00", "Risi Calendar · …", "Reminder · …", "Scheduled message · 06:00 (every day)", "Your promise · …", "Following up"),
+  `[risi_item_title]` (title / local text / "On your other phone" / "(No title)"); buttons "Open" `[risi_item_open]`, "Edit" `[risi_item_edit]`,
+  "Delete" `[risi_item_delete]`; empty "Nothing coming up that Risi set up for you." `[risi_items_empty]`; error `[risi_items_error]`; note
+  `[risi_items_note]` ("Deleted", "Couldn't delete it. Try again.", "Couldn't save it. Try again.").
+- Delete dialog: title "Delete", question `[risi_item_delete_question]` ("Delete this event from your phone's calendar?", "Delete this event from
+  your Risi Calendar?", "Cancel this reminder?", "Cancel this scheduled message? It won't be sent."), "Delete" `[risi_item_delete_confirm]`, "Cancel".
+- Edit dialogs: "Edit reminder" / "Edit promise" (fields `[risi_edit_text]`, `[risi_edit_date]`, `[risi_edit_time]`, "Save" `[risi_edit_save]`);
+  "Edit scheduled message" (`[risi_item_message_text]`, "Save" `[risi_item_message_save]`).
+- "Your events" item rows: "Reminder: <title>", "Scheduled message: <text>" / "Scheduled message: On your other phone", "Your promise: …",
+  "Following up: …".
+
+**Notes for root**: Edit of a `risi_calendar_event` opens its event screen (the existing §29.3 editor) instead of a second editor in Settings. The
+"Your events" merge calls `GET /risi/items?from&to` once per shown answer (no cache).
+
 ## READY v1.34 §33 basic messaging (NEXT-PHASE E) (JVM gate green: `assembleDebug testDebugUnitTest`, 1680 tests, 0 failed, 9 skipped; redroid 14: `PdfScriptsDeviceTest` OK)
 Branch `e-android`, against contract eb69114 (v1.34). Room v16, additive only (hard rule 9).
 

@@ -101,6 +101,9 @@ class ScheduledMessages(
 
     suspend fun pendingCount(): Int = dao.pendingCount()
 
+    /** v1.35 §34.4 Risi's items: this phone's own schedule (its local text never leaves the phone). */
+    suspend fun get(scheduleId: String): ScheduledMessageEntity? = dao.get(scheduleId)
+
     /** §26.6 `schedule_message` once its acceptance rule held: validated, stored, armed. */
     suspend fun schedule(a: ScheduleMessageArgs): ScheduleOutcome = lock.withLock {
         val text = a.text.trim()

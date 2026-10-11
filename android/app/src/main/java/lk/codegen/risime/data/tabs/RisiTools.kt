@@ -257,7 +257,36 @@ object RisiStepLabels {
 /** §25.4 the rules of the v1.25 cards (confirm, reminder_set, draft). */
 object RisiToolCards {
     /** Card state from the actions seen after it. */
-    enum class ConfirmState { OPEN, CONFIRMED, CANCELLED, EXPIRED }
+    enum class ConfirmState {
+        OPEN, CONFIRMED, CANCELLED, EXPIRED,
+
+        /** v1.35 §34.2 `confirm_update` `state: "superseded"`: greyed, no buttons. */
+        SUPERSEDED,
+
+        /** v1.35 §34.2 a `confirm_update` with a state this build doesn't know. */
+        CLOSED,
+    }
+
+    const val SUPERSEDED_TEXT = "Replaced by your newer request"
+    const val CLOSED_TEXT = "Closed"
+
+    /** The state line of a closed card (null for OPEN and CONFIRMED, which each card words itself). */
+    fun closedText(state: ConfirmState): String? = when (state) {
+        ConfirmState.CANCELLED -> "Cancelled"
+        ConfirmState.EXPIRED -> "Expired"
+        ConfirmState.SUPERSEDED -> SUPERSEDED_TEXT
+        ConfirmState.CLOSED -> CLOSED_TEXT
+        ConfirmState.OPEN, ConfirmState.CONFIRMED -> null
+    }
+
+    /** v1.35 §34.2: the `confirm_update` for [writeId] in an honoured Risi row (only the agent's rows keep a `risi` object), else null. */
+    fun confirmUpdate(m: MessageEntity, writeId: String): RisiMeta? {
+        if (m.kind != MessageEntity.KIND_TEXT) return null
+        val json = m.systemJson ?: return null
+        if (!json.contains(lk.codegen.risime.net.RisiKinds135.CONFIRM_UPDATE)) return null
+        val r = RisiMessages.meta(m) ?: return null
+        return r.takeIf { it.kind == lk.codegen.risime.net.RisiKinds135.CONFIRM_UPDATE && it.writeId?.equals(writeId, true) == true }
+    }
 
     fun confirmExpired(r: RisiMeta, nowMs: Long): Boolean {
         val exp = r.expiresAt?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() } ?: return true
@@ -271,6 +300,8 @@ object RisiToolCards {
     fun confirmState(r: RisiMeta, actions: List<MessageEntity>, nowMs: Long): ConfirmState {
         val wid = r.writeId ?: return ConfirmState.EXPIRED
         for (m in actions) {
+            // v1.35 §34.2: the first decisive message wins (MLS order): confirm_write, cancel_write or Risi's confirm_update.
+            confirmUpdate(m, wid)?.let { u -> return if (u.state == lk.codegen.risime.net.RisiKinds135.STATE_SUPERSEDED) ConfirmState.SUPERSEDED else ConfirmState.CLOSED }
             if (m.kind != MessageEntity.KIND_RISI_CTL) continue
             if (RisiControl.targetOf(m.systemJson)?.equals(wid, true) != true) continue
             if (r.forUsers.none { it.equals(m.from, true) }) continue

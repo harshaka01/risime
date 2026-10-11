@@ -118,7 +118,7 @@ fun ChatScreen(
     val jumpScope = rememberCoroutineScope()
     // §33.11 opened from Starred: scroll there once the message is shown.
     var focus by remember { mutableStateOf<lk.codegen.risime.data.tabs.RisiUiBus.Focus?>(null) }
-    LaunchedEffect(Unit) { focus = vm.takeFocus() }
+    LaunchedEffect(Unit) { focus = vm.takeFocus()?.let { f -> if (f.scheduled) { scheduledSheet = true; null } else f } }
     LaunchedEffect(focus, messages) {
         val f = focus ?: return@LaunchedEffect
         val target = lk.codegen.risime.data.tabs.RisiLedger.focusTarget(messages, f) ?: return@LaunchedEffect

@@ -71,6 +71,8 @@ class DeviceRegistrar(
     private val filesSupported: () -> Boolean = { false },
     /** v1.34 §33.1: §33.14 and the Risi parts of §33.15 (advertised only with `risi_tools`). */
     private val pdfExportSupported: () -> Boolean = { false },
+    /** v1.35 §34 Phase 2: `confirm_update`, the native `clarify` card and Risi's items (advertised only with `risi_tools`). */
+    private val risiItemsSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
 ) {
@@ -126,6 +128,8 @@ class DeviceRegistrar(
             DeviceMls.CAP_FILES.takeIf { imagesSupported() && filesSupported() },
             // v1.34 §33.1: `pdf_export` only with `risi_tools` (the server drops it otherwise).
             DeviceMls.CAP_PDF_EXPORT.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && imagesSupported() && filesSupported() && pdfExportSupported() },
+            // v1.35 §34 Phase 2: `risi_items` only with `risi_tools` (the cards it unlocks live in the Risi chat).
+            DeviceMls.CAP_RISI_ITEMS.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiItemsSupported() },
         )
         else -> null
     }

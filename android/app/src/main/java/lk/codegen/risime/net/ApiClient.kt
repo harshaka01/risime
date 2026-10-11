@@ -357,6 +357,18 @@ class ApiClient(
     suspend fun risiCalendarEvents(from: String, to: String): ApiResult<RisiCalendarEventsReply> =
         call<Unit, RisiCalendarEventsReply>("GET", "risi/calendar/events?from=${q(from)}&to=${q(to)}", null, headers = deviceHeaders())
 
+    // ---- v1.35 §34.4 Risi's items (X-Device-Id of the caller's device) ----
+    suspend fun risiItems(from: String? = null, to: String? = null, kinds: List<String>? = null): ApiResult<RisiItemsReply> {
+        val qs = listOfNotNull(from?.let { "from=${q(it)}" }, to?.let { "to=${q(it)}" }, kinds?.takeIf { it.isNotEmpty() }?.let { "kinds=${q(it.joinToString(","))}" })
+        return call<Unit, RisiItemsReply>("GET", "risi/items" + (if (qs.isEmpty()) "" else "?" + qs.joinToString("&")), null, headers = deviceHeaders())
+    }
+
+    suspend fun patchRisiItem(id: String, body: RisiItemPatch): ApiResult<RisiItemReply> =
+        call("PATCH", "risi/items/${q(id)}", body, headers = deviceHeaders())
+
+    suspend fun deleteRisiItem(id: String): ApiResult<Unit> =
+        call<Unit, Unit>("DELETE", "risi/items/${q(id)}", null, headers = deviceHeaders())
+
     suspend fun risiCalendarChanges(since: String, limit: Int): ApiResult<RisiCalendarChangesReply> =
         call<Unit, RisiCalendarChangesReply>("GET", "risi/calendar/changes?since=${q(since)}&limit=$limit", null, headers = deviceHeaders())
 

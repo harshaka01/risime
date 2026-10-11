@@ -362,6 +362,73 @@ class AppContainer(
     /** §30.6 share a note into a chat: an ordinary message of the user's own (Risi isn't involved). */
     suspend fun shareText(conversationId: String, text: String): Boolean = engine.sendText(conversationId, text) != null
 
+    /** v1.35 §34 Phase 2: this phone advertised `risi_items` (Risi's items in "Your events" and Settings). */
+    fun risiItemsOn(): Boolean = deviceRegistrar.advertised?.contains(lk.codegen.risime.net.DeviceMls.CAP_RISI_ITEMS) == true
+
+    val risiItemsRest: lk.codegen.risime.data.tabs.RisiItemsRest by lazy { lk.codegen.risime.data.tabs.RisiItemsApi(api) }
+
+    /** v1.35 §34.4 this phone's side of Risi's items: its provider rows and its scheduled messages. */
+    val risiItemsLocal: lk.codegen.risime.data.tabs.RisiItemsLocal by lazy {
+        object : lk.codegen.risime.data.tabs.RisiItemsLocal {
+            override suspend fun deviceId(): String? = runCatching { sessionStore.deviceId() }.getOrNull()
+            override suspend fun ownsPhoneEvent(writeId: String?, eventId: Long): Boolean =
+                writeId != null && calendarPort.records.value[writeId.lowercase()]?.eventId == eventId
+            override suspend fun deletePhoneEvent(writeId: String, eventId: Long): Boolean =
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    // Deleted now, or already gone from the provider (then only the server row is left to drop).
+                    phoneCalendar.remove(writeId, eventId) || phoneCalendar.addedEvent(eventId) == lk.codegen.risime.data.tabs.AddedEventView.Gone
+                }
+            override suspend fun scheduledText(scheduleId: String): String? = scheduled.get(scheduleId)?.takeIf { it.pending }?.text
+            // Cancelled now, or no longer pending here (sent, cancelled or gone): only the server row is left to drop.
+            override suspend fun cancelSchedule(scheduleId: String): Boolean =
+                scheduled.cancel(scheduleId).cancelled || scheduled.get(scheduleId)?.let { it.pending || it.state == lk.codegen.risime.data.db.ScheduledMessageEntity.STATE_MISSED } != true
+            override suspend fun editSchedule(scheduleId: String, text: String): Boolean = scheduled.edit(scheduleId, text)
+            override suspend fun editPromise(itemId: String, text: String, due: String?): Boolean =
+                sendItemAction(itemId, lk.codegen.risime.net.RisiActions127.ITEM_EDIT, text, due)
+        }
+    }
+
+    /** v1.35 §34.4 Open / Edit of Risi's items: deep links only (nothing is sent to Risi). */
+    val risiItemOpener: lk.codegen.risime.ui.settings.RisiItemOpener by lazy {
+        object : lk.codegen.risime.ui.settings.RisiItemOpener {
+            private fun openEvent(id: String) {
+                risiCalendar.requestFocus(id)
+                risiUi.openCalendar()
+            }
+
+            override fun open(item: lk.codegen.risime.net.RisiItem) {
+                when (item.kind) {
+                    lk.codegen.risime.net.RisiItem.PHONE_EVENT_ADDED -> item.eventId?.toLongOrNull()?.let { calendarPort.open(it) }
+                    lk.codegen.risime.net.RisiItem.RISI_CALENDAR_EVENT -> item.eventId?.let { openEvent(it) }
+                    lk.codegen.risime.net.RisiItem.REMINDER -> risiChatConversation()?.let { risiUi.openChat(it, null) }
+                    lk.codegen.risime.net.RisiItem.SCHEDULED_MESSAGE -> (item.targetConversationId ?: item.conversationId)?.let {
+                        risiUi.openChat(it, lk.codegen.risime.data.tabs.RisiUiBus.Focus(scheduled = true))
+                    }
+                    lk.codegen.risime.net.RisiItem.PROMISE, lk.codegen.risime.net.RisiItem.FOLLOW_UP -> risiUi.openPromises(item.itemId ?: item.id)
+                }
+            }
+
+            override fun editElsewhere(item: lk.codegen.risime.net.RisiItem) {
+                when (item.kind) {
+                    lk.codegen.risime.net.RisiItem.PHONE_EVENT_ADDED -> item.eventId?.toLongOrNull()?.let { calendarPort.edit(it) }
+                    lk.codegen.risime.net.RisiItem.RISI_CALENDAR_EVENT -> item.eventId?.let { openEvent(it) }
+                }
+            }
+        }
+    }
+
+    /** v1.35 §34.1 Risi's items for "Your events" in [fromMs, toMs) (empty without `risi_items` or on any error). */
+    suspend fun risiItemsAsEvents(fromMs: Long, toMs: Long): List<lk.codegen.risime.data.tabs.LocalEvent> {
+        if (!risiItemsOn()) return emptyList()
+        val r = risiItemsRest.list(java.time.Instant.ofEpochMilli(fromMs).toString(), java.time.Instant.ofEpochMilli(toMs).toString())
+        val items = (r as? lk.codegen.risime.net.ApiResult.Ok)?.value?.items ?: return emptyList()
+        val me = risiItemsLocal.deviceId()
+        val texts = HashMap<String, String>()
+        items.filter { it.kind == lk.codegen.risime.net.RisiItem.SCHEDULED_MESSAGE && lk.codegen.risime.data.tabs.RisiItems.isMine(it, me) }
+            .forEach { i -> i.scheduleId?.let { sid -> risiItemsLocal.scheduledText(sid)?.let { texts[sid] = it } } }
+        return lk.codegen.risime.data.tabs.RisiItems.toLocalEvents(items, fromMs, toMs, me) { texts[it] }
+    }
+
     /** The user's Risi chat (null: none on this phone yet). */
     fun risiChatConversation(): String? = chatTabs.rows.value?.values?.firstOrNull { it.risi }?.conversationId
 
@@ -1266,6 +1333,8 @@ class AppContainer(
             // v1.34 §33.1: files and PDF export ship together in this build.
             filesSupported = { true },
             pdfExportSupported = { true },
+            // v1.35 §34 Phase 2 (confirm_update, clarify, Risi's items) ships in this build.
+            risiItemsSupported = { true },
             onAdvertised = { caps ->
                 val tabs = lk.codegen.risime.net.DeviceMls.CAP_TABS in caps
                 chatTabs.setAdvertised(tabs)

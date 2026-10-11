@@ -534,7 +534,7 @@ class PhoneCalendar(
         return backend.instanceRows(qf, qt).mapNotNull { r ->
             if (CalendarRead.isRisiCopy(r.syncId)) return@mapNotNull null
             val b = InstanceFilter.busy(r, z) ?: return@mapNotNull null
-            if (!InstanceFilter.overlaps(b.begin, b.end, fromMs, toMs)) null else LocalEvent(r.title.orEmpty(), b.begin, b.end, r.allDay)
+            if (!InstanceFilter.overlaps(b.begin, b.end, fromMs, toMs)) null else LocalEvent(r.title.orEmpty(), b.begin, b.end, r.allDay, eventId = r.eventId?.toString())
         }
     }
 

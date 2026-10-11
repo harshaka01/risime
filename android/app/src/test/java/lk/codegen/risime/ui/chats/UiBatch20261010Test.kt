@@ -148,7 +148,9 @@ class UiBatch20261010Test {
     // P0 2026-10-10 supersedes item 7: the next-step chips are back, and they run the request instead of pasting it.
     @Test fun risiNextStepChipsRunTheRequestAndNeverPrefill() {
         val skill = sources().first { it.first.endsWith("RisiSkillCardsUi.kt") }.second
-        val extras = skill.substringAfter("internal fun AnswerExtras").substringBefore("\n}\n")
+        // v1.35: the chips live in NextActionChips (answers and error cards); AnswerExtras calls it.
+        assertTrue("NextActionChips(r, ctx)" in skill.substringAfter("internal fun AnswerExtras").substringBefore("\n}\n"))
+        val extras = skill.substringAfter("internal fun NextActionChips").substringBefore("\n}\n")
         assertTrue("RisiChips.run(c, ctx.host, send)" in extras)
         assertTrue("ctx.sendChip" in extras)
         assertFalse("prefill" in extras)

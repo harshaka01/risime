@@ -82,6 +82,12 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
         if (!lk.codegen.risime.data.tabs.RisiLedger.updateHasCard(r, ctx.messages)) SystemLineText(row.body)
         return
     }
+    if (r.kind == lk.codegen.risime.net.RisiKinds135.CONFIRM_UPDATE) {
+        // v1.35 §34.2 applied to the card with that write_id (greyed, "Replaced by your newer request"); no bubble.
+        // Without that card on this phone, a small line.
+        if (!lk.codegen.risime.data.tabs.RisiP0Cards.confirmUpdateHasCard(r, ctx.messages)) SystemLineText(row.body)
+        return
+    }
     if (r.kind == lk.codegen.risime.net.RisiKinds129.EVENT_UPDATE) {
         // §29.10 applied to the cards of that event and the cache (no bubble); without such a card, a small line.
         lk.codegen.risime.net.RisiCalendarCard.parse(row.systemJson)?.let { RisiEventUpdateLine(row, it, ctx) }
@@ -101,11 +107,11 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     RisiKinds.REMINDER -> ReminderCard(row, r, ctx)
                     RisiKinds.ESCALATION -> EscalationCard(row, r, ctx)
                     RisiKinds.DIGEST -> if (r.scope == "personal") PersonalDigestCard(r, ctx) else DigestCard(r, ctx)
-                    RisiKinds.ANSWER -> AnswerCard(row, r, ctx)
+                    RisiKinds.ANSWER -> if (r.clarify != null) RisiClarifyCard(row, r, ctx) else AnswerCard(row, r, ctx)
                     RisiKinds.SUMMARY -> SummaryCard(r, ctx)
                     RisiKinds.REPORT -> ReportCard(r)
                     RisiKinds.OFFER -> OfferCard(r, ctx)
-                    RisiKinds.ERROR -> Text(RisiCards.errorText(r.code), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_error_text"))
+                    RisiKinds.ERROR -> RisiErrorCard(row, r, ctx)
                     RisiKinds.CONFIRM -> if (r.tool == lk.codegen.risime.net.RisiKinds129.TOOL_RISI_CALENDAR_ADD) RisiCalendarAddCard(row, r, ctx)
                         else if (lk.codegen.risime.data.tabs.RisiCalendarCards.isCalendarAdd(r) && lk.codegen.risime.data.tabs.RisiCalendarCards.proposal(r) != null) CalendarActionCard(row, r, ctx) else ConfirmCard(row, r, ctx)
                     RisiKinds.REMINDER_SET -> ReminderSetCard(row, r, ctx)
@@ -133,7 +139,7 @@ private fun headerOf(r: RisiMeta) = risiCalendarHeader(r) ?: when (r.kind) {
     RisiKinds.REMINDER -> "Risi · Reminder"
     RisiKinds.ESCALATION -> "Risi · Overdue"
     RisiKinds.DIGEST -> (if (r.scope == "personal") "Risi · Your items" else "Risi · Open items") + (r.date?.let { " · $it" } ?: "")
-    RisiKinds.ANSWER -> "Risi"
+    RisiKinds.ANSWER -> if (r.clarify != null) lk.codegen.risime.data.tabs.RisiP0Cards.CLARIFY_HEADER else "Risi"
     RisiKinds.SUMMARY -> "Risi · Summary" + if (r.partial) " (partial)" else ""
     RisiKinds.REPORT -> "Risi · Report"
     RisiKinds.OFFER -> "Risi"
@@ -381,7 +387,7 @@ private fun FeedbackRow(r: RisiMeta, ctx: RisiCardContext) {
 /** ✎ Edit: the text and the due date and time (the owner stays as Risi proposed it; the contract's `edit` carries text and due only). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RisiEditDialog(initialText: String, initialDue: String?, ownerName: String?, onSave: (text: String, due: String?) -> Unit, onDismiss: () -> Unit) {
+fun RisiEditDialog(initialText: String, initialDue: String?, ownerName: String?, onSave: (text: String, due: String?) -> Unit, onDismiss: () -> Unit, title: String = "Edit commitment") {
     val zone = ZoneId.systemDefault()
     val initial = remember(initialDue) { initialDue?.let { runCatching { Instant.parse(it).atZone(zone).toLocalDateTime() }.getOrNull() } }
     var text by remember { mutableStateOf(initialText) }
@@ -391,7 +397,7 @@ fun RisiEditDialog(initialText: String, initialDue: String?, ownerName: String?,
     var pickTime by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit commitment", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+        title = { Text(title, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 OutlinedTextField(text, { text = it.take(300) }, Modifier.fillMaxWidth().testTag("risi_edit_text"), label = { Text("What", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) })

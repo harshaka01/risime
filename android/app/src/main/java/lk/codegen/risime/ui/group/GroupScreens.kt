@@ -172,7 +172,7 @@ fun GroupChatScreen(
     val notesActive by vm.notesActive.collectAsStateWithLifecycle()
     // §27.3/§27.4 opened from a Risi card ([Open chat] / [Open Risi chat]): scroll there once the message is here.
     var focus by remember { mutableStateOf<lk.codegen.risime.data.tabs.RisiUiBus.Focus?>(null) }
-    LaunchedEffect(Unit) { focus = vm.takeFocus() }
+    LaunchedEffect(Unit) { focus = vm.takeFocus()?.let { f -> if (f.scheduled) { scheduledSheet = true; null } else f } }
     LaunchedEffect(focus, messages) {
         val f = focus ?: return@LaunchedEffect
         val target = lk.codegen.risime.data.tabs.RisiLedger.focusTarget(messages, f) ?: return@LaunchedEffect

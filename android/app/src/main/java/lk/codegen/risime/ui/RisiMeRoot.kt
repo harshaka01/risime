@@ -174,6 +174,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                     is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Calendar -> nav.popBackStack("chats", false)
                     is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Note -> nav.navigate("risi_note/${android.net.Uri.encode(req.noteId)}") { launchSingleTop = true }
                     is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Notes -> nav.navigate("risi_notes") { launchSingleTop = true }
+                    is lk.codegen.risime.data.tabs.RisiUiBus.Nav.Promises -> nav.navigate("risi_promises") { launchSingleTop = true }
                 }
             }
         }
@@ -450,7 +451,17 @@ private fun MainNav(c: AppContainer, meId: String) {
             )
         }
         composable("$RISI_SKILLS_ROUTE?skill={skill}", arguments = listOf(androidx.navigation.navArgument("skill") { nullable = true; defaultValue = null })) { entry ->
-            lk.codegen.risime.ui.settings.RisiSkillsRoute(c, entry.arguments?.getString("skill"), onBack = { nav.popBackStack() })
+            lk.codegen.risime.ui.settings.RisiSkillsRoute(
+                c, entry.arguments?.getString("skill"), onBack = { nav.popBackStack() },
+                onRisiItems = { nav.navigate("risi_items") { launchSingleTop = true } },
+            )
+        }
+        // v1.35 §34.4 Settings → Risi skills → Calendar → "Risi's items".
+        composable("risi_items") {
+            lk.codegen.risime.ui.settings.RisiItemsScreen(
+                viewModel { lk.codegen.risime.ui.settings.RisiItemsViewModel(c.risiItemsRest, c.risiItemsLocal) }.model,
+                c.risiItemOpener, onBack = { nav.popBackStack() },
+            )
         }
         composable("risi_facts") {
             lk.codegen.risime.ui.settings.RisiFactsScreen(viewModel { lk.codegen.risime.ui.settings.RisiFactsViewModel(c.risiRest) }.model, onBack = { nav.popBackStack() })

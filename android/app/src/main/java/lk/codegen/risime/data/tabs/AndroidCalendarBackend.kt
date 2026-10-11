@@ -43,6 +43,8 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
             CalendarContract.Events.DELETED,
             // v1.32 §29.7 "Your events" (the title stays on the phone).
             CalendarContract.Instances.TITLE,
+            // v1.35 §34.1: the event id, to drop a Risi item this phone already shows (never sent).
+            CalendarContract.Instances.EVENT_ID,
         )
         val INSTANCES_PROJECTION_V1 = INSTANCES_PROJECTION.copyOf(8).requireNoNulls()
 
@@ -60,6 +62,7 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
             CalendarContract.Events.RDATE,
             CalendarContract.Events._SYNC_ID,
             CalendarContract.Events.TITLE,
+            CalendarContract.Events._ID,
         )
 
         /** One `Instances` cursor row ([INSTANCES_PROJECTION] or its V1 prefix) as a raw row. */
@@ -71,6 +74,7 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
                 deleted = (int(9) ?: 0) != 0, calendarId = if (q.isNull(7)) 0 else q.getLong(7), visible = int(6)?.let { it != 0 } ?: true,
                 syncId = if (q.columnCount > 8 && !q.isNull(8)) q.getString(8) else null,
                 title = if (q.columnCount > 10 && !q.isNull(10)) q.getString(10) else null,
+                eventId = if (q.columnCount > 11 && !q.isNull(11)) q.getLong(11) else null,
             )
         }
     }
@@ -161,7 +165,7 @@ class AndroidCalendarBackend(private val context: Context) : CalendarBackend {
                 val b = it.getLong(0)
                 val e = if (!it.isNull(1)) it.getLong(1) else b + (InstanceFilter.durationMs(it.getString(2)) ?: 0L)
                 fun int(i: Int): Int? = if (it.isNull(i)) null else it.getInt(i)
-                out += InstanceRow(b, e, int(3) == 1, int(4), int(5), int(6), false, it.getLong(7), true, if (it.isNull(10)) null else it.getString(10), if (it.isNull(11)) null else it.getString(11))
+                out += InstanceRow(b, e, int(3) == 1, int(4), int(5), int(6), false, it.getLong(7), true, if (it.isNull(10)) null else it.getString(10), if (it.isNull(11)) null else it.getString(11), if (it.isNull(12)) null else it.getLong(12))
             }
         }
         return out.filter { r -> r.end > fromMs && r.begin < toMs }
@@ -292,6 +296,13 @@ class AndroidCalendarPort(
     override suspend fun addedEvent(eventId: Long): AddedEventView = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { cal.addedEvent(eventId) }
 
     override suspend fun diagnostics(): CalendarDiagnostics = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { cal.diagnostics() }
+
+    override fun edit(eventId: Long) {
+        val i = android.content.Intent(android.content.Intent.ACTION_EDIT, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId))
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        // No editor for it: the event's view (its app offers Edit there).
+        runCatching { context.startActivity(i) }.onFailure { open(eventId) }
+    }
 
     override fun open(eventId: Long) {
         val i = android.content.Intent(android.content.Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId))

@@ -66,12 +66,7 @@ internal fun ConfirmCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext) 
         if (r.tool == lk.codegen.risime.net.RisiToolCall.TOOL_SCHEDULE_MESSAGE && state == RisiToolCards.ConfirmState.OPEN && ctx.host.scheduleMayBeLate()) {
             Text("May be a few minutes late on this phone (exact alarms are off).", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_confirm_late"))
         }
-        val stateText = when (state) {
-            RisiToolCards.ConfirmState.CONFIRMED -> "Confirmed"
-            RisiToolCards.ConfirmState.CANCELLED -> "Cancelled"
-            RisiToolCards.ConfirmState.EXPIRED -> "Expired"
-            RisiToolCards.ConfirmState.OPEN -> null
-        }
+        val stateText = if (state == RisiToolCards.ConfirmState.CONFIRMED) "Confirmed" else RisiToolCards.closedText(state)
         stateText?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_confirm_state")) }
         val wid = r.writeId
         val buttons = if (ctx.readOnly || wid == null) emptyList() else RisiToolCards.confirmButtons(ctx.host.me, r, state, ctx.awaiting)
@@ -189,8 +184,16 @@ internal fun AnswerExtras(r: RisiMeta, ctx: RisiCardContext) {
     }
     r.addedEvent?.let { AddedEventCard(it.eventId, ctx) }
     if (lk.codegen.risime.data.tabs.LocalEvents.shows(r, ctx.host.me, ctx.risiChat)) YourEvents(r, ctx)
-    // v1.32 §25.4: typed chips. `ask` RUNS the request (a `risi_request` ask, as if typed and sent in the Risi chat);
-    // `open` is a deep link. Never a paste into the composer, never a plain message.
+    // v1.35 §34.5: an answer with `clarify` shows its own card (RisiClarifyCard), with the remaining chips.
+    if (r.clarify == null) NextActionChips(r, ctx)
+}
+
+/**
+ * v1.32 §25.4 typed chips (answers; v1.35 §34.3 error cards too). `ask` RUNS the request (a `risi_request` ask, as
+ * if typed and sent in the Risi chat); `open` is a deep link. Never a paste into the composer, never a plain message.
+ */
+@Composable
+internal fun NextActionChips(r: RisiMeta, ctx: RisiCardContext) {
     val send = ctx.sendChip
     val chips = RisiChips.chips(r, ctx.host.me, ctx.readOnly, send != null)
     if (chips.isNotEmpty() && send != null) {

@@ -124,6 +124,9 @@ object RisiCards {
     }
 
     /** Error codes as text. */
+    /** The error codes [errorText] words itself (any other code shows the server's body, v1.35 §34). */
+    val KNOWN_ERRORS = setOf("model_unavailable", "rate_limited", "nothing_to_summarise", "out_of_window", "queue_overflow", "tool_timeout")
+
     fun errorText(code: String?): String = when (code) {
         "model_unavailable" -> "Risi can't answer right now. Try again later."
         "rate_limited" -> "Too many requests to Risi. Try again later."
