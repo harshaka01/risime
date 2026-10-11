@@ -4,7 +4,7 @@ Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `script
 
 ## Step 2: long-term memory and retrieval (contract v1.36 §35.1–§35.3)
 
-**State:** green on `main` (server suite 1185 tests, 0 failures; live risi-l1 memory checks 4/4). Root deploys it through the fast lane; not live until root reports the `-srvN` tag.
+**State:** green on `main` (`6edec63`; server suite 1185 tests, 0 failures; live risi-l1 memory checks 4/4). Root deployed it through the fast lane. The example now carries `turn_ref` (9ca479b) and is compared exactly. The hashing embeddings are recorded as decision 078.
 
 ### What it does
 - **Memory (§35.1).**
@@ -65,8 +65,39 @@ Memory only starts at the deploy. Before that, Risi only has the last 24 h of th
   - `RisiMeWeb.RisiMemoryController`;
   - `test/contract/examples_test.exs`: the coverage list.
 
-## Step 3: always-on ingest worker (calendar proposals, quiet-period summaries + per-person Notes)
-Not started.
+## Step 3: always-on ingest worker (contract v1.36 §35.4)
+
+**State:** green on `main` (server suite 1191 tests, 0 failures; live risi-l1 checks 5/5, which include the note translations). Root deploys it through the fast lane.
+
+**The autonomy runs inside the Commitment Ledger and Notes pipeline. The pilot has `RISI_LEDGER` and `RISI_NOTES` off** (`infra/pilot/pilot.env`). That is why Risi "never acts on its own" today.
+- For step 3 to be live, root (Harsha's call) must set `RISI_LEDGER=on` and `RISI_NOTES=on`.
+- `RISI_QUIET_S` can stay unset: the default is now 1800.
+- Memory (step 2) does not depend on these flags.
+
+### What it does
+- **Quiet period (§35.4).** The default `RISI_QUIET_S` is now **1800 s** (30 min after the last message). The ≥ 6 messages from ≥ 2 people, the 30-min spacing and the 8-a-day caps are unchanged.
+- **Chat summary.** A discussion with **≥ 3 key points** is now summarised **to the chat** even without items or notes users. The chat gets a `discussion_card` with `items_count: 0`, the `summary` and `key_points`, and the body `Summary: …` plus bullets. Fewer than 3 key points and no item still posts nothing.
+- **Per-participant Risi Note in their language.** Each recipient's language is the script of their own remembered Official messages (`Lang.user_lang`: si or ta when at least 30 % of their messages are in that script, else en).
+  - When it differs from the note's language, the topic and key points are translated once per language by risi-l1 (task `note_translate`, with a weekday glossary) and sealed in `risi_note_translations`.
+  - The note card and `GET /risi/notes/{id}` show each viewer their own language.
+  - A failed translation, or one in the wrong script, falls back to the original.
+- **Calendar proposals per participant, by the Calendar skill.**
+  - **Risi Calendar users** (item offers and note meetings): under **Allowed** the participant accepts at once, the status is read back from the event, and they get `event_card mode: "added"` ("Added to your Risi Calendar: …"). Under **Ask** they get the `calendar_invite` as before.
+  - **Phone calendar users** (item offers): under **Allowed** the server runs `calendar_add` on the phone at once (`Writes.offer_allowed`). It counts as added **only after the phone's read-back** (`verified: true`, then "Added to your calendar: …"). A phone that does not confirm falls back to the "Add to calendar?" card, so an item is never offered twice. Under **Ask**, the card is posted as before.
+
+### Test phrases and steps for Harsha (after root turns the ledger and notes on)
+1. Settings → Risi skills → Calendar → **Allowed**. In an Official group with Risi, agree a meeting with at least one other person, for example "Site visit on Wednesday 2pm with Shenika?" / "Yes, Wednesday 2pm works". Send 6 or more messages, then wait 30 min. You get "Added to your Risi Calendar: Site visit · Wed …" in your Risi chat. Shenika, on Ask, gets an invite.
+2. With Calendar on **Ask**: the same chat gives you an invite or an "Add to calendar?" card instead.
+3. Talk about work in a group without promises (3 or more distinct points), then wait 30 min. The group gets "Summary: …" with bullets.
+4. A Sinhala-writing participant gets the Risi Note card in Sinhala, and an English writer gets it in English. Open Notes in the app to see the same.
+5. A summary right away still works: `@Risi summarise`.
+
+### Notes for root
+- Authorised edits outside the risi paths:
+  - `config/test.exs`: `risi_quiet_s 600` keeps the §27/§30 suites on their timeline;
+  - `RisiMe.Agent.*` modules Ledger, LedgerOut, Offers, CalendarOffers, Notes, NotesOut and Writes, which are under `server/lib/risime/agent` (my path).
+- New migration: `20261028100000_risi_note_translations.exs` (additive).
+- Live-model finding: the Sinhala translation once rendered "installed" as "sent", and before the glossary it rendered Thursday as Wednesday. Weekdays are now in the glossary; general translation quality still depends on risi-l1.
 
 ## Step 4: cancellation propagation, nudges, 07:00 brief
 Not started.

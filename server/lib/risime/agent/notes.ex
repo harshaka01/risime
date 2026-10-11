@@ -206,7 +206,8 @@ defmodule RisiMe.Agent.Notes do
              created_by: "risi"
            }) do
       {e, parts} = Calendar.load(view["event_id"])
-      for p <- parts, do: CalendarCards.invite(e, parts, p.user_id, "new", nil)
+      # v1.36 §35.4: "Allowed" participants get it added (read back), the others an invite.
+      for p <- parts, do: CalendarOffers.invite_or_add(e, parts, p.user_id)
       [e.event_id]
     else
       _ -> []
@@ -432,7 +433,8 @@ defmodule RisiMe.Agent.Notes do
   def get(user, id) do
     with {:ok, n} <- kept(user, id) do
       case open(n) do
-        {:ok, n} -> {:ok, note_json(n, user)}
+        # v1.36 §35.4: the viewer's own language when a translation was made.
+        {:ok, n} -> {:ok, note_json(RisiMe.Agent.NoteLang.for_user(n, user), user)}
         :error -> {:error, :agent_unavailable}
       end
     end

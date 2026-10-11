@@ -44,7 +44,9 @@ defmodule RisiMe.Agent.CalendarOffers do
 
       invites =
         for u <- recipients, u in ids, claim(c.id, u, "risi_invite") == :ok do
-          CalendarCards.invite(e, parts, u, "new", nil)
+          # v1.36 §35.4: under the Calendar skill's "Allowed" the participant accepts at once
+          # (read back from the event), and gets the "Added to your Risi Calendar" card.
+          invite_or_add(e, parts, u)
         end
 
       official = official_card(c, e, parts)
@@ -56,6 +58,35 @@ defmodule RisiMe.Agent.CalendarOffers do
     err ->
       Logger.warning("Risi calendar offer failed: #{inspect(err.__struct__)}")
       {0, []}
+  end
+
+  @doc """
+  v1.36 §35.4: a Risi-made event for participant `user`: under the Calendar skill's "Allowed"
+  it is accepted at once (the status read back from the event) and `user` gets the "Added to
+  your Risi Calendar" card; otherwise (or when that fails) the ordinary invite. `:sent` or the
+  invite's result.
+  """
+  def invite_or_add(e, parts, user) do
+    if allowed?(user),
+      do: accept(e, user, parts),
+      else: CalendarCards.invite(e, parts, user, "new", nil)
+  end
+
+  defp allowed?(user), do: RisiMe.Agent.Skills.state(user, "calendar") == "allowed"
+
+  # Accept for `user`, read the status back, then the `added` card; anything else falls back to
+  # the ordinary invite (never "added" without the read-back).
+  defp accept(e, user, parts) do
+    with %RisiMe.Agent.Calendar.Participant{} = me <- Enum.find(parts, &(&1.user_id == user)),
+         {:ok, _view} <- Calendar.answer(e, me, "accepted", :keep),
+         {e2, ps2} <- Calendar.load(e.event_id),
+         %{status: "accepted"} <- Enum.find(ps2, &(&1.user_id == user)),
+         rc when is_binary(rc) <- RisiMe.RisiChat.active_id(user),
+         :ok <- CalendarCards.added(e2, ps2, rc, user) do
+      :sent
+    else
+      _ -> CalendarCards.invite(e, parts, user, "new", nil)
+    end
   end
 
   # The item's one Risi-made event: created now (claimed), or the one made before.

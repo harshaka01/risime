@@ -2,9 +2,6 @@ defmodule RisiMe.Contract.ExamplesV136Test do
   @moduledoc """
   Contract v1.36 §35 (Risi Brain v2): one test for each of the 3 new example files, compared
   exactly against what the server really sends or answers (ids and clock times normalised).
-
-  `envelope_risi_answer_memory_sources.json` has no `turn_ref`, which every turn answer carries
-  (§25.4); that one key is dropped from the real envelope before the comparison.
   """
   use RisiMe.DataCase, async: false
   use Oban.Testing, repo: RisiMe.Repo
@@ -93,7 +90,7 @@ defmodule RisiMe.Contract.ExamplesV136Test do
     {_conv, body, risi} = Enum.find(posts(), fn {_, _, r} -> r["kind"] == "answer" end)
 
     real =
-      %{"v" => 1, "type" => "text", "body" => body, "risi" => Map.delete(risi, "turn_ref")}
+      %{"v" => 1, "type" => "text", "body" => body, "risi" => risi}
       |> Jason.encode!()
       |> Jason.decode!()
 

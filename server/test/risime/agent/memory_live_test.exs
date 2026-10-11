@@ -134,4 +134,41 @@ defmodule RisiMe.Agent.MemoryLiveTest do
     assert [%{"tool" => "summarise_range", "status" => "ok"} | _] = a["steps"]
     assert body =~ ~r/panel|invoice|inverter/i
   end
+
+  test "step 3: note_translate on the live model gives Sinhala and Tamil script", ctx do
+    now = DateTime.utc_now()
+    id = Ecto.UUID.generate()
+
+    d = %{
+      summary_id: id,
+      conversation_id: ctx.og,
+      chat_id: ctx.og,
+      source: "chat",
+      call_id: nil,
+      media: nil,
+      duration_s: nil,
+      started_at: now,
+      ended_at: now,
+      participants: [ctx.h, ctx.s],
+      made_by: %{},
+      call_ref: nil,
+      created_at: now
+    }
+
+    found = %{
+      topic: "Galle solar job",
+      language: "en",
+      key_points: ["All 12 panels are installed.", "The inverter goes in on Thursday."]
+    }
+
+    {:ok, n} = RisiMe.Agent.Notes.build(d, found)
+    RisiMe.Agent.Notes.insert!(n, [ctx.h, ctx.s])
+
+    for lang <- ~w(si ta) do
+      t = RisiMe.Agent.NoteLang.localise(n, lang, create: true)
+      IO.puts("risi-l1 live note (#{lang}): #{t.topic} | #{Enum.join(t.key_points, " | ")}")
+      assert t.language == lang and length(t.key_points) == 2
+      refute Lang.wrong_script?(lang, Enum.join([t.topic | t.key_points], " "))
+    end
+  end
 end

@@ -57,7 +57,8 @@ defmodule RisiMe.Agent.Ledger do
   alias RisiMe.{Repo, TimeUUID}
   alias RisiMe.Workers.Risi, as: Job
 
-  @quiet_s 600
+  # v1.36 §35.4: the quiet-period summary comes 30 min after the last message.
+  @quiet_s 1800
   @min_msgs 6
   @min_people 2
   @spacing_s 30 * 60
@@ -67,7 +68,7 @@ defmodule RisiMe.Agent.Ledger do
   @max_items 10
   @expire_s 48 * 3600
 
-  @doc "RISI_QUIET_S (default 600)."
+  @doc "RISI_QUIET_S (default 1800, v1.36 §35.4)."
   def quiet_s, do: Application.get_env(:risime, :risi_quiet_s, @quiet_s)
 
   @doc "RISI_QUIET_MIN_MSGS (default 6)."
@@ -370,8 +371,10 @@ defmodule RisiMe.Agent.Ledger do
             Map.new(opts)
           )
 
-        if found.items == [] and not (notes? and note_worthy?(found)) do
-          # No item (and nothing for a note): nothing is posted; the cutoff moves on.
+        # v1.36 §35.4: a discussion with ≥ 3 key points is summarised to the chat even without
+        # an item or a notes user.
+        if found.items == [] and not note_worthy?(found) do
+          # No item and nothing worth a summary: nothing is posted; the cutoff moves on.
           move_cutoff(conv, newest, false)
           :nothing
         else
@@ -568,7 +571,6 @@ defmodule RisiMe.Agent.Ledger do
   ## Storing
 
   defp store_and_publish(window, found, members, notes?) do
-    conv = window.conversation_id
     now = Clock.now()
     summary_id = Ecto.UUID.generate()
     owners = found.items |> Enum.map(& &1.owner) |> Enum.uniq()
@@ -582,13 +584,7 @@ defmodule RisiMe.Agent.Ledger do
 
     note_users = if notes?, do: Notes.users(recipients), else: []
 
-    if found.items == [] and note_users == [] do
-      # Only a note would have been worth posting, and nobody here takes notes.
-      move_cutoff(conv, window.ended_at, false)
-      :nothing
-    else
-      store_and_publish(window, found, summary_id, recipients, note_users, now)
-    end
+    store_and_publish(window, found, summary_id, recipients, note_users, now)
   end
 
   defp store_and_publish(window, found, summary_id, recipients, note_users, now) do

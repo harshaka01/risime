@@ -2,7 +2,7 @@ defmodule RisiMe.Agent.LedgerQuietEnvTest do
   @moduledoc """
   §27.2: the quiet rule's thresholds come from the environment (`config/runtime.exs`):
   RISI_QUIET_S, RISI_QUIET_MIN_MSGS, RISI_QUIET_MIN_PEOPLE, RISI_QUIET_SPACING_S,
-  RISI_QUIET_PER_DAY, with the §27 defaults (600 s, 6, 2, 30 min, 8 a day) when unset or bad.
+  RISI_QUIET_PER_DAY, with the defaults (v1.36 §35.4: 1800 s; 6, 2, 30 min, 8 a day) when unset or bad.
   """
   use ExUnit.Case, async: false
 
@@ -44,7 +44,7 @@ defmodule RisiMe.Agent.LedgerQuietEnvTest do
     for k <- @keys, do: refute(Keyword.has_key?(cfg, k))
 
     assert {Ledger.quiet_s(), Ledger.min_msgs(), Ledger.min_people(), Ledger.spacing_s(),
-            Ledger.per_day()} == {600, 6, 2, 1800, 8}
+            Ledger.per_day()} == {1800, 6, 2, 1800, 8}
   end
 
   test "the env values are read and honoured" do

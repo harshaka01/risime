@@ -25,7 +25,17 @@ defmodule RisiMe.Agent.NotesOut do
     json = Notes.note_json(n, nil)
 
     for r <- recipients do
-      {body, risi} = card(n, json, r, names, d.created_at)
+      # v1.36 §35.4: each recipient's note in their own language (translated once per language).
+      nr = RisiMe.Agent.NoteLang.for_user(n, r, create: true)
+
+      jr =
+        Map.merge(json, %{
+          "topic" => nr.topic,
+          "key_points" => nr.key_points,
+          "language" => nr.language
+        })
+
+      {body, risi} = card(nr, jr, r, names, d.created_at)
       LedgerOut.deliver_or_hold(d, r, body, risi)
       r
     end

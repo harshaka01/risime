@@ -153,6 +153,32 @@ defmodule RisiMe.Agent.Writes do
     end
   end
 
+  @doc """
+  v1.36 §35.4: a proactive write under the user's **"Allowed"** skill setting. It runs at once
+  (no card), exactly like an allowed write of a turn: a phone `calendar_add` goes to the phone
+  and counts as added only after the phone's read-back (`verified: true`; the success answer
+  with `added_event` is posted to `rc` by the tool). `{:ok, write_id}` when it was done, else
+  `{:error, status}` (the caller then offers the ordinary card instead).
+  """
+  def offer_allowed(user, rc, tool, card) do
+    wid = Ecto.UUID.generate()
+
+    ctx = %{
+      asker: user,
+      conv: rc,
+      request_id: Ecto.UUID.generate(),
+      turn_id: nil,
+      device_id: Map.get(card, :device_id)
+    }
+
+    w = insert!(ctx, tool, card, wid, rc, "running", "allowed")
+
+    case execute(w, card.args, ctx.device_id) do
+      :ok -> {:ok, wid}
+      {:error, status} -> {:error, status}
+    end
+  end
+
   defp card_risi(ctx, tool, card, wid, expires) do
     %{
       "kind" => "confirm",

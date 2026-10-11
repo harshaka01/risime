@@ -69,6 +69,43 @@ defmodule RisiMe.Agent.Lang do
       "Your answer was not in Tamil. Reply again with the same JSON action, but write answer " <>
         "and next_steps in Tamil script (தமிழ்). Keep the same facts and sources."
 
+  @doc """
+  A user's own language (Risi Brain v2 step 3, §35.4 "in that participant's language"): the
+  script of their last 40 remembered Official messages. "si" or "ta" when at least 30 % of them
+  are in that script, else "en" (Singlish is Latin script).
+  """
+  def user_lang(user) when is_binary(user) do
+    import Ecto.Query
+
+    langs =
+      RisiMe.Repo.all(
+        from m in RisiMe.Agent.Memory.Message,
+          where: m.sender_id == ^user and m.from_risi == false,
+          order_by: [desc: m.at],
+          limit: 40
+      )
+      |> Enum.flat_map(fn m ->
+        case RisiMe.Agent.Seal.open_text("risi_memory_messages", m.id, "body", m.body_sealed) do
+          {:ok, t} -> [detect(t)]
+          _ -> []
+        end
+      end)
+
+    n = length(langs)
+    f = Enum.frequencies(langs)
+
+    cond do
+      n == 0 -> "en"
+      Map.get(f, "si", 0) >= Map.get(f, "ta", 0) and Map.get(f, "si", 0) / n >= 0.3 -> "si"
+      Map.get(f, "ta", 0) / n >= 0.3 -> "ta"
+      true -> "en"
+    end
+  rescue
+    _ -> "en"
+  end
+
+  def user_lang(_), do: "en"
+
   @doc "The language's name for a model prompt."
   def name("si"), do: "Sinhala (සිංහල script)"
   def name("ta"), do: "Tamil (தமிழ் script)"

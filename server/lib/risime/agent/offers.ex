@@ -11,8 +11,10 @@ defmodule RisiMe.Agent.Offers do
 
   **Gates:** `RISI_SKILLS=on` (`Skills.on?/0`), the user has a `risi_skills` device and an active
   Risi chat, and the user's Calendar skill (Reminders skill for the reminder card) is `ask` or
-  `allowed`. A proactive card is **always asked**, even under "Allowed". The user must still be
-  an active member of the item's conversation.
+  `allowed`. v1.36 §35.4: under **"Allowed"** the calendar event is added at once (the phone's
+  read-back makes it "added"; `Writes.offer_allowed/4`), and only a failed or unconfirmed add
+  falls back to the card; under "Ask" the card is asked. The reminder card is always asked. The
+  user must still be an active member of the item's conversation.
 
   **Who:** the owner; counterparts too once the item is tracked (a ledger item counterparts only
   hear about after the owner's ✓, §27.5), or for a v1.24 card (posted to everyone in Official).
@@ -172,7 +174,30 @@ defmodule RisiMe.Agent.Offers do
       device_id: device(user)
     }
 
-    post_card(c, user, rc, "calendar", ClientTools.calendar_add(), card, start)
+    # v1.36 §35.4: under "Allowed" the event is added at once (read back by the phone); a
+    # failed or unconfirmed add falls back to the ordinary card (same claim: offered once).
+    if Skills.state(user, "calendar") == "allowed",
+      do: allowed_add(c, user, rc, card, start),
+      else: post_card(c, user, rc, "calendar", ClientTools.calendar_add(), card, start)
+  end
+
+  defp allowed_add(c, user, rc, card, start) do
+    case claim(c.id, user, "calendar") do
+      :ok ->
+        case Writes.offer_allowed(user, rc, ClientTools.calendar_add(), card) do
+          {:ok, wid} ->
+            set_write(c.id, user, "calendar", wid)
+            settled(wid, "done")
+            1
+
+          {:error, reason} ->
+            Logger.info("Risi allowed calendar add not done (#{inspect(reason)}); card offered")
+            post_claimed(c, user, rc, "calendar", ClientTools.calendar_add(), card, start)
+        end
+
+      :taken ->
+        0
+    end
   end
 
   defp reminder(c, user, rc) do
@@ -205,14 +230,19 @@ defmodule RisiMe.Agent.Offers do
   end
 
   defp post_card(c, user, rc, kind, tool, card, until) do
-    with :ok <- claim(c.id, user, kind),
-         ttl = DateTime.diff(until, Clock.now()) |> max(@min_ttl_s) |> min(@max_ttl_s),
-         {:ok, wid} <- Writes.offer(user, rc, tool, card, c.id, ttl) do
-      set_write(c.id, user, kind, wid)
-      1
-    else
-      :taken ->
-        0
+    case claim(c.id, user, kind) do
+      :ok -> post_claimed(c, user, rc, kind, tool, card, until)
+      :taken -> 0
+    end
+  end
+
+  defp post_claimed(c, user, rc, kind, tool, card, until) do
+    ttl = DateTime.diff(until, Clock.now()) |> max(@min_ttl_s) |> min(@max_ttl_s)
+
+    case Writes.offer(user, rc, tool, card, c.id, ttl) do
+      {:ok, wid} ->
+        set_write(c.id, user, kind, wid)
+        1
 
       {:error, reason} ->
         Logger.warning("Risi #{kind} offer not sent: #{inspect(reason)}")

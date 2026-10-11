@@ -73,6 +73,8 @@ defmodule RisiMe.Agent.LedgerOut do
     cond do
       noted != [] -> RisiMe.Agent.NotesOut.saved(note, d.summary)
       copies != [] and items != [] -> card(d, length(items))
+      # v1.36 §35.4: the quiet-period summary of a discussion without items goes to the chat.
+      rows == [] -> summary_card(d)
       true -> :ok
     end
 
@@ -190,6 +192,34 @@ defmodule RisiMe.Agent.LedgerOut do
     case Enum.map(ids, &(names[&1] || "a member")) do
       [one] -> one
       list -> Enum.join(Enum.drop(list, -1), ", ") <> " and " <> List.last(list)
+    end
+  end
+
+  # v1.36 §35.4: a `discussion_card` with no items whose body is the summary itself.
+  defp summary_card(d) do
+    risi = %{
+      "kind" => "discussion_card",
+      "summary_id" => d.summary_id,
+      "source" => d.source,
+      "call_id" => d.call_id,
+      "media" => d.media,
+      "duration_s" => d.duration_s,
+      "started_at" => Clock.ts(d.started_at),
+      "ended_at" => Clock.ts(d.ended_at),
+      "with" => d.participants,
+      "summary" => d.summary,
+      "key_points" => d.key_points,
+      "items_count" => 0,
+      "call_ref" => d.call_ref,
+      "made_by" => d.made_by,
+      "notify" => []
+    }
+
+    body = Enum.join(["Summary: " <> d.summary | Enum.map(d.key_points, &("• " <> &1))], "\n")
+
+    case Out.post(d.conversation_id, body, risi) do
+      {:ok, _} -> :ok
+      {:error, reason} -> Logger.warning("Risi summary card not sent: #{inspect(reason)}")
     end
   end
 

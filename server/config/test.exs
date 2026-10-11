@@ -142,3 +142,7 @@ config :risime, :risi_send_limit, 10_000
 # Risi's clock is fixed in tests (a Monday, 13:30 Asia/Colombo) so no test depends on the wall
 # clock. RISI_TEST_NOW (ISO-8601) overrides it to prove that.
 config :risime, :risi_now, System.get_env("RISI_TEST_NOW", "2026-10-05T08:00:00Z")
+
+# v1.36 §35.4 moved the quiet-period default to 1800 s; the §27/§30 suites keep their 600-s
+# timeline (LedgerQuietEnvTest checks the real default).
+config :risime, :risi_quiet_s, 600
