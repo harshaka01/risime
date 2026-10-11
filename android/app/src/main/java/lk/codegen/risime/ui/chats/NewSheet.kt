@@ -1,5 +1,7 @@
 package lk.codegen.risime.ui.chats
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -63,7 +65,7 @@ fun NewFab(onClick: () -> Unit, modifier: Modifier = Modifier) {
 @Composable
 fun NewSheet(onNewChat: () -> Unit, onNewGroup: () -> Unit, onAddFriend: () -> Unit, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.navigationBarsPadding().testTag("new_sheet"), verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().testTag("new_sheet"), verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
             NewSheetRow(NEW_SHEET_NEW_CHAT, Icons.Default.Create, "new_sheet_chat", onNewChat)
             NewSheetRow(NEW_SHEET_NEW_GROUP, Icons.Default.Person, "new_sheet_group", onNewGroup)
             NewSheetRow(NEW_SHEET_ADD_FRIEND, Icons.Default.Add, "new_sheet_friend", onAddFriend)

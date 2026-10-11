@@ -1,5 +1,7 @@
 package lk.codegen.risime.ui.history
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -135,7 +137,7 @@ fun HistoryMarkerRow(
     }
     if (sheet && state != null) {
         ModalBottomSheet(onDismissRequest = { sheet = false }) {
-            Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = Spacing.lg)) {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = Spacing.lg)) {
                 Text("Get earlier messages from:", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm))
                 historySourceOptions(state, conversationId, me, peerName).forEach { (label, sources) ->
                     ListItem(headlineContent = { Text(label) }, modifier = Modifier.clickable { sheet = false; onRequest(sources) })

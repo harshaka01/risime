@@ -1,5 +1,8 @@
 package lk.codegen.risime.ui.tabs
 
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -342,7 +345,7 @@ fun RisiCardHeader(text: String, r: RisiMeta, ctx: RisiCardContext) {
     }
     if (open) {
         ModalBottomSheet(onDismissRequest = { open = false }) {
-            Column(Modifier.padding(Spacing.lg).testTag("risi_made_by_sheet"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(Spacing.lg).testTag("risi_made_by_sheet"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Text(lk.codegen.risime.data.tabs.MadeByLabels.title(r.madeBy, ctx.nowMs), style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("risi_made_by"))
                 lk.codegen.risime.data.tabs.MadeByLabels.alsoLines(r.madeBy).forEach {
                     Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_made_by_also"))
@@ -372,7 +375,7 @@ private fun FeedbackRow(r: RisiMeta, ctx: RisiCardContext) {
     if (reasonFor) {
         var reason by remember { mutableStateOf("") }
         ModalBottomSheet(onDismissRequest = { reasonFor = false; ctx.host.feedback(ref, "down", null) }) {
-            Column(Modifier.padding(Spacing.lg).testTag("risi_reason_sheet"), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(Spacing.lg).testTag("risi_reason_sheet"), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text("What went wrong? (optional)", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(reason, { reason = it.take(500) }, Modifier.fillMaxWidth().testTag("risi_reason"), placeholder = { Text("Wrong due date, not relevant, …") })
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {

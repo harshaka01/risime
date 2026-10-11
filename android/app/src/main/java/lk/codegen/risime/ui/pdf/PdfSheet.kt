@@ -1,5 +1,7 @@
 package lk.codegen.risime.ui.pdf
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import android.content.Intent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
@@ -86,7 +88,7 @@ fun PdfExportHost(c: AppContainer) {
         }
     }
     ModalBottomSheet(onDismissRequest = ::close) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = Spacing.lg).testTag("pdf_sheet")) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = Spacing.lg).testTag("pdf_sheet")) {
             if (o == null) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = Spacing.lg)) {
                     CircularProgressIndicator(Modifier.size(24.dp))

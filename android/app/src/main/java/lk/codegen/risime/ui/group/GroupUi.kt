@@ -1,5 +1,7 @@
 package lk.codegen.risime.ui.group
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -266,7 +268,7 @@ fun ReadBySheet(state: ReadByState, nameOf: (String) -> String, onRetry: () -> U
 
 @Composable
 fun ReadByContent(state: ReadByState, nameOf: (String) -> String, onRetry: () -> Unit, onClose: () -> Unit, isAgent: (String) -> Boolean = { false }) {
-    Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = Spacing.lg)) {
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = Spacing.lg)) {
         Text("Message info", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm))
         val reply = (state as? ReadByState.Loaded)?.reply ?: (state as? ReadByState.Stale)?.reply
         when {

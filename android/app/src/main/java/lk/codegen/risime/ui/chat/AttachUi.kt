@@ -1,5 +1,7 @@
 package lk.codegen.risime.ui.chat
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -110,7 +112,7 @@ fun AttachOptionsSheet(options: List<AttachOption>, onPick: (AttachOption) -> Un
 @Composable
 fun AttachOptionsContent(options: List<AttachOption>, onPick: (AttachOption) -> Unit) {
     Column(
-        Modifier.fillMaxWidth().navigationBarsPadding().padding(start = Spacing.xl, end = Spacing.xl, bottom = Spacing.xl),
+        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(start = Spacing.xl, end = Spacing.xl, bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.lg),
     ) {
         options.chunked(3).forEach { row ->

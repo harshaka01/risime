@@ -1,5 +1,7 @@
 package lk.codegen.risime.ui.chat
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -424,7 +426,7 @@ fun TargetPickerSheet(
                 androidx.compose.material3.CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally).padding(Spacing.lg))
             } else {
                 val (recent, az) = ForwardRules.lists(all, query)
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = 380.dp)) {
                     fun row(t: ForwardTarget, keyPrefix: String) = item(key = keyPrefix + t.conversationId) {
                         val on = picked.any { it.conversationId == t.conversationId }
                         ListItem(
@@ -483,7 +485,7 @@ fun TargetPickerSheet(
 @Composable
 fun DmInfoSheet(m: MessageEntity, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = Spacing.lg, vertical = Spacing.sm).testTag("info_sheet")) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = Spacing.lg, vertical = Spacing.sm).testTag("info_sheet")) {
             Text(MessagingStrings.INFO_TITLE, style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.size(Spacing.sm))
             Surface(color = lk.codegen.risime.ui.theme.RisiTheme.colors.bubbleMine, shape = MaterialTheme.shapes.medium) {

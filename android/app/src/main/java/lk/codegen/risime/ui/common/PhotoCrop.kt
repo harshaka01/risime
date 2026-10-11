@@ -1,5 +1,7 @@
 package lk.codegen.risime.ui.common
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -70,7 +72,7 @@ fun photoSheetRows(hasPhoto: Boolean): List<String> = listOfNotNull(PHOTO_SHEET_
 @Composable
 fun PhotoSheet(hasPhoto: Boolean, onTake: () -> Unit, onGallery: () -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit) {
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.navigationBarsPadding().testTag("photo_sheet")) {
+        Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().testTag("photo_sheet")) {
             photoSheetRows(hasPhoto).forEach { label ->
                 Text(
                     label, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
