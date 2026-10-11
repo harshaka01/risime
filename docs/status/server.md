@@ -17,6 +17,24 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
 
+## v1.35 §34 Risi P0 2026-10-11 (Phase 1, server-only) — READY v1.35
+Gate green on main (1164 tests, 0 failures). Commits 45d7ee3, ca2e1d5. Migration `20261026100000_risi_items` (additive).
+- §34.1 `ScheduleIntent` (fixture `risi_routing_cases.json`, all cases pass) forces `risi_calendar_check` (or `calendar_check`
+  when Risi Calendar is off) as step 1 for the day/range asked (Asia/Colombo); no write tool after it; the answer is server-built:
+  every Risi Calendar event and Risi's item in range (phone busy times only when there are no `local_events`), then the Checked line
+  with `Risi's items`. `risi_next_action` is sent with `tool` first (`Tools.wire_schema/1`).
+- §34.2 a new request supersedes open cards/name questions (confirm → `error superseded`; `confirm_update` only for `risi_items`
+  devices); a card only from a draft patched this turn; unpatched drafts deleted (the old loop guard is gone).
+- §34.3 "Ask me again" = `next_actions` ask with the original text (answers and `reply_error`); the old words "Ask me again"/"Retry"
+  re-ask the previous request. Server-written `next_steps` ("Ask me again", "Retry") stay for old apps.
+- §34.4 `risi_items` table (sealed titles), `GET/PATCH/DELETE /api/v1/risi/items`, the `risi_items` tool and route; promises and
+  follow-ups read live; lazy backfill (pending reminders, Risi-created events, scheduled messages from the activity log).
+- §34.5 name check before calendar_add, risi_calendar_add, set_reminder, schedule_message (`NameCheck`): "Did you mean X?"
+  with `Use X` / `Keep Y` chips + `clarify`; the chip posts the held card under the same write_id, no model call.
+- Note: `envelope_risi_answer_schedule_read.json` shows the server list together with `local_events`; the server follows the
+  example (Risi Calendar + Risi's items listed; phone events only via `local_events`), so nightly.48 may show a Risi Calendar
+  event both in the text and in its local list.
+
 ## v1.33 §20.1 group_calls_ready without LiveKit — READY
 `GET /mls/groups/{grp}` reports `group_calls_ready: false` and `group_calls_unavailable: "server"` while `RisiMe.Calls.LiveKit.configured?/0` is false
 (the pilot has no LIVEKIT_URL, so `/calls/rooms` would answer 503). Example `mls_group_group_calls_unavailable.json` checked in `examples_test.exs`.
