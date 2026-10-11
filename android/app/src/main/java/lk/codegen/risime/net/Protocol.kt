@@ -689,6 +689,12 @@ data class DeviceMls(
 
         /** v1.31 §31.1: the Google Calendar link, only with `risi_events` and while `/auth/config` says `google_calendar: on`. */
         const val CAP_GOOGLE_CALENDAR = CAPABILITY_GOOGLE_CALENDAR
+
+        /** v1.34 §33.1: receive, validate and open the `file` envelope. */
+        const val CAP_FILES = CAPABILITY_FILES
+
+        /** v1.34 §33.1: the Risi `export_pdf` tool and the `pdf` chip (kept only with `risi_tools`). */
+        const val CAP_PDF_EXPORT = CAPABILITY_PDF_EXPORT
     }
 }
 

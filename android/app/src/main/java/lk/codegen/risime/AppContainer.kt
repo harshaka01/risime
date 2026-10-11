@@ -532,7 +532,50 @@ class AppContainer(
             // §31.4: the Google busy read, when the server sends `sources: ["google_api"]` to this (the Google) device.
             google = { from, to -> gcal.readForCheck(from, to, skillOff = risiSkillsStore.localState(lk.codegen.risime.net.RisiSkillIds.CALENDAR) == lk.codegen.risime.net.RisiSkillStates.OFF, me = runCatching { sessionStore.deviceId() }.getOrNull()) },
             googleAccount = { runCatching { gcal.accountIfMine(sessionStore.deviceId()) }.getOrNull() },
+            exportPdf = { a -> exportPdfForRisi(a) },
         )
+    }
+
+    /**
+     * v1.34 §33.15 a confirmed `export_pdf`: generate the PDF here (§33.14), persist a `file` outbox row for
+     * the target (its own upload and key), wait up to 10 s for the send. `sent` only after the server took
+     * it; `queued` while it waits in this phone's outbox. The server never sees the PDF.
+     */
+    private suspend fun exportPdfForRisi(a: lk.codegen.risime.net.ExportPdfArgs): lk.codegen.risime.net.RisiToolResult {
+        val conv = a.conversationId.lowercase()
+        val errors = lk.codegen.risime.net.ExportPdfErrors
+        fun err(code: String) = lk.codegen.risime.net.RisiToolResult.error(code)
+        // Never a Risi chat; only a chat this phone is an active, e2ee member of.
+        if (lk.codegen.risime.data.tabs.isRisiChat(conv, chatTabs.rows.value)) return err(errors.NOT_MEMBER)
+        val group = db.groups().get(conv)
+        if (lk.codegen.risime.net.isGroupConversation(conv) && (group == null || group.readOnly)) return err(errors.NOT_MEMBER)
+        if (runCatching { mlsEngine?.group(conv) == null }.getOrDefault(true)) return err(errors.NOT_MEMBER)
+        if (conv.startsWith("dm:")) {
+            val ready = (runCatching { api.mlsGroup(conv) }.getOrNull() as? ApiResult.Ok)?.value?.filesReady
+            if (ready == false) return err(errors.FILES_NOT_READY)
+        }
+        val made = when (val o = lk.codegen.risime.ui.pdf.PdfExport.make(appContext, this, a.source)) {
+            is lk.codegen.risime.ui.pdf.PdfExport.Outcome.Ok -> o.made
+            is lk.codegen.risime.ui.pdf.PdfExport.Outcome.Failed -> return err(o.code)
+        }
+        try {
+            val row = lk.codegen.risime.ui.pdf.PdfExport.sendTo(this, made, listOf(conv)).singleOrNull() ?: return err(errors.PDF_FAILED)
+            val sent = withTimeoutOrNull(10_000) {
+                while (true) {
+                    val r = db.messages().byClientMsgId(row.clientMsgId)
+                    if (r?.messageId != null) return@withTimeoutOrNull true
+                    delay(250)
+                }
+                @Suppress("UNREACHABLE_CODE") false
+            } == true
+            val state = if (sent) lk.codegen.risime.net.ExportPdfResult.SENT else lk.codegen.risime.net.ExportPdfResult.QUEUED
+            return lk.codegen.risime.net.RisiToolResult(
+                lk.codegen.risime.net.RisiToolResult.OK,
+                lk.codegen.risime.net.ProtocolJson.encodeToJsonElement(lk.codegen.risime.net.ExportPdfResult.serializer(), lk.codegen.risime.net.ExportPdfResult(state, made.pages)) as kotlinx.serialization.json.JsonObject,
+            )
+        } finally {
+            made.file.delete()
+        }
     }
 
     /** §25.3 client tools: answered over TLS, never stored. */
@@ -1220,6 +1263,9 @@ class AppContainer(
             risiEventsSupported = { risiEvents.serverOn.value },
             risiNotesSupported = { risiNotes.serverOn.value },
             googleCalendarSupported = { gcalSwitch.serverOn.value },
+            // v1.34 §33.1: files and PDF export ship together in this build.
+            filesSupported = { true },
+            pdfExportSupported = { true },
             onAdvertised = { caps ->
                 val tabs = lk.codegen.risime.net.DeviceMls.CAP_TABS in caps
                 chatTabs.setAdvertised(tabs)

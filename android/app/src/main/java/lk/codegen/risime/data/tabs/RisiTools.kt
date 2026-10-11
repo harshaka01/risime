@@ -290,7 +290,7 @@ object RisiToolCards {
         if (r.writeId?.lowercase() in awaiting) return emptyList()
         // §26.9: an unknown `tool` shows its summary only.
         if (!RisiSkillCards.knownConfirmTool(r)) return emptyList()
-        return r.buttons.filter { it in setOf("add", "cancel", "allow") }
+        return r.buttons.filter { it in setOf("add", "cancel", "allow", lk.codegen.risime.net.RisiTools134.BUTTON_SEND) }
     }
 
     /**

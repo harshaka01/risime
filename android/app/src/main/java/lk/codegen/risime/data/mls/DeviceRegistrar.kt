@@ -67,6 +67,10 @@ class DeviceRegistrar(
     private val risiNotesSupported: () -> Boolean = { false },
     /** §31.1: `/auth/config` says `google_calendar: on` (advertised only together with `risi_events`). */
     private val googleCalendarSupported: () -> Boolean = { false },
+    /** v1.34 §33.1: this build can receive, validate and open `file` (and has the media core). */
+    private val filesSupported: () -> Boolean = { false },
+    /** v1.34 §33.1: §33.14 and the Risi parts of §33.15 (advertised only with `risi_tools`). */
+    private val pdfExportSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
 ) {
@@ -118,6 +122,10 @@ class DeviceRegistrar(
                 mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiSkillsSupported() && risiLedgerSupported() &&
                     risiEventsSupported() && googleCalendarSupported()
             },
+            // v1.34 §33.1: `files` once the app can receive, validate and open a `file` (the media core is there).
+            DeviceMls.CAP_FILES.takeIf { imagesSupported() && filesSupported() },
+            // v1.34 §33.1: `pdf_export` only with `risi_tools` (the server drops it otherwise).
+            DeviceMls.CAP_PDF_EXPORT.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && imagesSupported() && filesSupported() && pdfExportSupported() },
         )
         else -> null
     }

@@ -20,6 +20,7 @@ import lk.codegen.risime.net.RisiToolResult
 import lk.codegen.risime.net.ScheduleMessageResult
 import lk.codegen.risime.net.SetAlarmArgs
 import lk.codegen.risime.net.SetAlarmResult
+import lk.codegen.risime.net.exportPdfArgs
 import java.time.Instant
 
 /*
@@ -51,6 +52,8 @@ class RisiToolExecutor(
     private val google: (suspend (fromMs: Long, toMs: Long) -> lk.codegen.risime.data.gcal.GcalRead)? = null,
     /** The connected Google account while this phone holds the link (its provider events are skipped when Google is read in the same call). */
     private val googleAccount: suspend () -> String? = { null },
+    /** v1.34 §33.15 make the PDF on this phone and send it as a `file` (null: this build has no PDF export). */
+    private val exportPdf: (suspend (lk.codegen.risime.net.ExportPdfArgs) -> RisiToolResult)? = null,
 ) {
     companion object {
         /** §26.3 the request must be at most this old at the call's `server_ts`. */
@@ -110,6 +113,7 @@ class RisiToolExecutor(
         RisiToolCall.TOOL_CALENDAR_REMOVE -> calendarRemoveTool(call)
         RisiToolCall.TOOL_CALENDAR_CHECK -> calendarCheckTool(call)
         RisiToolCall.TOOL_CALENDAR_ADD -> calendarAddTool(call)
+        lk.codegen.risime.net.RisiTools134.TOOL_EXPORT_PDF -> exportPdfTool(call)
         else -> RisiToolResult.error(RisiToolErrorCodes.UNKNOWN_TOOL)
     }
 
@@ -120,6 +124,8 @@ class RisiToolExecutor(
     suspend fun executeV125(call: RisiToolCall): RisiToolResult = when (call.tool) {
         RisiToolCall.TOOL_CALENDAR_CHECK -> calendarCheckTool(call, gated = false)
         RisiToolCall.TOOL_CALENDAR_ADD -> calendarAddTool(call, gated = false)
+        // v1.34 §33.15: gated by `pdf_export` (kept by the server only with `risi_tools`), not by a skill.
+        lk.codegen.risime.net.RisiTools134.TOOL_EXPORT_PDF -> exportPdfTool(call)
         else -> RisiToolResult.error(RisiToolErrorCodes.UNKNOWN_TOOL)
     }
 
@@ -220,6 +226,38 @@ class RisiToolExecutor(
 
     private suspend fun record(call: RisiToolCall, target: String?): Boolean =
         dao.insertWrite(RisiWriteEntity(call.writeId!!, call.tool, target, now())) != -1L
+
+    /**
+     * v1.34 §33.15: the phone accepts an `export_pdf` call only if its Risi chat holds the agent-leaf
+     * `confirm` with this `write_id` and `tool: "export_pdf"` (for this user, not expired), the user's own
+     * `confirm_write` for it, the args equal the card's `export` exactly, and the `write_id` is unused.
+     */
+    suspend fun exportConfirmed(call: RisiToolCall, args: lk.codegen.risime.net.ExportPdfArgs): Boolean {
+        val my = me() ?: return false
+        val (card, rows) = cardRows(call) ?: return false
+        if (card.forUsers.none { it.equals(my, true) }) return false
+        val export = card.export ?: return false
+        if (export.source != args.source || !export.conversationId.equals(args.conversationId, true)) return false
+        val exp = tsMs(card.expiresAt) ?: return false
+        val confirm = rows.firstOrNull { m ->
+            m.kind == MessageEntity.KIND_RISI_CTL && m.from.equals(my, true) &&
+                RisiControl.targetOf(m.systemJson)?.equals(call.writeId, true) == true &&
+                RisiControl.actionOf(m.systemJson) in setOf(RisiActions126Local.CONFIRM, RisiActions126Local.CANCEL)
+        } ?: return false
+        if (RisiControl.actionOf(confirm.systemJson) != RisiActions126Local.CONFIRM) return false
+        val at = HistoryMarkers.epochMs(confirm.serverTs) ?: confirm.localTs
+        return at <= exp
+    }
+
+    private suspend fun exportPdfTool(call: RisiToolCall): RisiToolResult {
+        val run = exportPdf ?: return RisiToolResult.error(RisiToolErrorCodes.UNKNOWN_TOOL)
+        val a = call.exportPdfArgs() ?: return RisiToolResult.error(RisiToolErrorCodes.BAD_ARGS)
+        if (a.writeId != call.writeId || !lk.codegen.risime.net.PdfSources.valid(a.source)) return RisiToolResult.error(RisiToolErrorCodes.BAD_ARGS)
+        if (!unused(call.writeId)) { log("risi tool export_pdf: declined (write_id used)"); return RisiToolResult.declined() }
+        if (!exportConfirmed(call, a)) { log("risi tool export_pdf: declined (no confirmed card)"); return RisiToolResult.declined() }
+        if (!record(call, a.conversationId)) return RisiToolResult.declined()
+        return run(a)
+    }
 
     // ---- tools ----
 
