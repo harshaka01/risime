@@ -3,7 +3,7 @@
 #   scripts/risi-fastlane [--skip-canary] [--ref <commit>]
 # 1. a clean worktree at origin/main (or --ref); server format + compile --warnings-as-errors + the agent suite
 #    (test/risime/agent, test/contract) in its own test partition;
-# 2. scripts/risi-canary with the live model (instance _fl);
+# 2. scripts/risi-canary (fake model: no canary in logs/pushes/rows, sealing, loopback-only egress; instance _fl);
 # 3. tag v<VERSION>-srvN (next N), push it, scripts/run-server <tag> (backup, migrate, switch);
 # 4. 60-s watch (local /health ok 12/12 and version); else scripts/rollback.
 # Prints "FASTLANE LIVE <tag>" or "FASTLANE FAILED: <step>". Log: ~/risime-logs/fastlane/<time>.log.
@@ -30,7 +30,7 @@ say "1/4 server: format, compile, agent + contract tests"
 say "    $(grep -E '[0-9]+ tests, [0-9]+ failures' "$LOG" | tail -1)"
 
 if [ "$CANARY" = 1 ]; then
-  say "2/4 Risi canary (live model)"
+  say "2/4 Risi canary (fake model: leaks, sealing, egress)"
   ( cd "$WT" && CANARY_INSTANCE=_fl CANARY_PORT=4397 CANARY_LLM_PORT=8497 timeout 2400 scripts/risi-canary ) >> "$LOG" 2>&1 \
     && grep -q 'RISI CANARY OK' "$LOG" || die "Risi canary (see $LOG)"
 else say "2/4 Risi canary SKIPPED (--skip-canary)"; fi
