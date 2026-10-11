@@ -75,6 +75,9 @@ data class RisiSource(
     val reason: String? = null,
     val count: Int? = null,
     val refs: List<String> = emptyList(),
+    /** v1.35 §34.4 `risi_item`: one of Risi's items behind the answer (old apps show nothing for it). */
+    @SerialName("item_id") val itemId: String? = null,
+    val kind: String? = null,
 ) {
     /** Whether the app can show it: a known type with its fields (a link only over https). */
     val showable: Boolean get() = when (type) {

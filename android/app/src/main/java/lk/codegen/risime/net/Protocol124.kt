@@ -204,6 +204,10 @@ data class RisiMeta(
     @SerialName("events_count") val eventsCount: Int? = null,
     /** v1.34 §33.15: an `export_pdf` confirm's `{"source": PdfSource, "conversation_id"}`. */
     val export: RisiExport? = null,
+    /** v1.35 §34.2 `confirm_update`: the request that superseded the card (`state` above, `write_id` names the card). */
+    @SerialName("by_request_id") val byRequestId: String? = null,
+    /** v1.35 §34.5 `answer.clarify`: the name question (Phase 2 renders it natively; a tap sends the matching `ask`). */
+    val clarify: RisiNameClarify? = null,
 ) {
     /** The §27 summary this row belongs to: `summary_id`, else a note's `note_id` (§30.3: the same id). */
     val summaryKey: String? get() = summaryId ?: noteId

@@ -229,7 +229,69 @@ class ContractExamplesTest {
         )
     }
 
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + mapOf(
+    /** v1.35 §34 Risi P0 (net/Protocol135.kt). */
+    private val risiP0V135: Map<String, (String) -> Any> by lazy {
+        fun env(s: String) = ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!
+        val ask = "Check my calendar for Monday, October 12th"
+        mapOf(
+            "envelope_risi_answer_schedule_read.json" to { s ->
+                env(s).also { m ->
+                    require(m.kind == "answer" && m.localEvents != null && m.steps.single().tool == "risi_calendar_check")
+                    require(m.sources.any { it.type == "calendar_source" && it.source == RisiKinds135.CALENDAR_SOURCE_RISI_ITEMS && it.readOk == true })
+                    require(m.sources.single { it.type == RisiKinds135.SOURCE_RISI_ITEM }.let { it.itemId == "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f" && it.kind == RisiItem.PHONE_EVENT_ADDED })
+                }
+            },
+            "envelope_risi_error_superseded.json" to { s ->
+                env(s).also { require(it.kind == "error" && it.code == RisiKinds135.ERROR_SUPERSEDED && it.writeId == "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e" && it.nextActions == null) }
+            },
+            "envelope_risi_confirm_update_superseded.json" to { s ->
+                val e = ProtocolJson.decodeFromString<RisiTextEnvelope>(s)
+                e.risi!!.also {
+                    require(it.kind == RisiKinds135.CONFIRM_UPDATE && it.state == RisiKinds135.STATE_SUPERSEDED && it.writeId == "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e")
+                    require(it.byRequestId == "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" && it.notify.isEmpty() && e.body == "Replaced by your newer request.")
+                }
+            },
+            "envelope_risi_error_ask_again.json" to { s ->
+                env(s).also { require(it.kind == "error" && it.code == "model_unavailable" && it.nextActions!!.single().let { a -> a.action == RisiNextAction.ASK && a.label == "Ask me again" && a.text == ask }) }
+            },
+            "envelope_risi_answer_ask_again.json" to { s ->
+                env(s).also { m ->
+                    require(m.kind == "answer" && m.nextActions!!.size == 2 && m.nextActions!![0].text == ask && m.nextActions!![1].target == RisiNextAction.SETTINGS_CALENDAR)
+                }
+            },
+            "risi_items_reply.json" to { s ->
+                ProtocolJson.decodeFromString<RisiItemsReply>(s).also { r ->
+                    require(r.items.map { it.kind } == listOf("scheduled_message", "risi_calendar_event", "phone_event_added", "reminder", "promise", "follow_up"))
+                    val sm = r.items[0]
+                    require(sm.title == null && sm.scheduleId != null && sm.repeat == "daily" && sm.deviceId == "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d")
+                    val pe = r.items[2]
+                    require(pe.eventId == "4711" && pe.calendar == RisiCalendarRef("Work", "Google") && pe.writeId != null && pe.can(RisiItem.DELETE))
+                    require(r.items[3].reminderId != null && r.items[4].itemId == r.items[4].id && !r.items[4].can(RisiItem.DELETE) && r.items[5].start == null && r.items[5].actions == listOf("open"))
+                }
+            },
+            "risi_items_patch_reminder.json" to { s ->
+                ProtocolJson.decodeFromString<RisiItemPatch>(s).also {
+                    require(it.at == "2026-10-13T04:30:00.000Z" && it.text == "Pay the electricity bill")
+                    require(ProtocolJson.parseToJsonElement(ProtocolJson.encodeToString(RisiItemPatch.serializer(), it)) == ProtocolJson.parseToJsonElement(s))
+                }
+            },
+            "envelope_risi_answer_risi_items.json" to { s ->
+                env(s).also { m -> require(m.kind == "answer" && m.sources.size == 6 && m.sources.all { it.type == RisiKinds135.SOURCE_RISI_ITEM && it.itemId != null && it.kind in RisiItem.KINDS } && m.sources.none { it.showable }) }
+            },
+            "envelope_risi_answer_name_clarify.json" to { s ->
+                env(s).also { m ->
+                    val c = m.clarify!!
+                    require(c.about == RisiNameClarify.ABOUT_NAME && c.said == "Shutazi" && c.keep && c.options.single().name == "Shirazi" && c.writeId == "5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e")
+                    require(m.nextActions!!.map { it.text } == listOf("Use Shirazi", "Keep Shutazi"))
+                }
+            },
+            "device_put_risi_items.json" to { s ->
+                ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_RISI_ITEMS in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) }
+            },
+        )
+    }
+
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.

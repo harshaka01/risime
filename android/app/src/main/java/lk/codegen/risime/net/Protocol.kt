@@ -9,7 +9,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Wire models for contract/v1/PROTOCOL.md. Field names match the contract exactly. */
 
 /** The PROTOCOL.md version this client implements (shown in Settings → About; checked by a test). */
-const val PROTOCOL_VERSION = "1.34"
+const val PROTOCOL_VERSION = "1.35"
 
 val ProtocolJson: Json = Json {
     ignoreUnknownKeys = true // §0: clients must ignore unknown fields
@@ -695,6 +695,9 @@ data class DeviceMls(
 
         /** v1.34 §33.1: the Risi `export_pdf` tool and the `pdf` chip (kept only with `risi_tools`). */
         const val CAP_PDF_EXPORT = CAPABILITY_PDF_EXPORT
+
+        /** v1.35 §34 Phase 2: `confirm_update`, the native `clarify` card and Risi's items (only with `risi_tools`). */
+        const val CAP_RISI_ITEMS = CAPABILITY_RISI_ITEMS
     }
 }
 
