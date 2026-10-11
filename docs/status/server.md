@@ -24,6 +24,10 @@ Gate green on main (1204 tests, 0 failures). Migration `20261030100000_device_ap
   (project `risicloud`), else the original `FCM_SERVICE_ACCOUNT_FILE`. Separate OAuth token caches; a 401 drops only
   that project's token. No risicloud credential → warning, `result=no_credentials`, never sent via the old project.
   UNREGISTERED cleanup stays per device. `.env` (gitignored) carries the path.
+- Live: fast lane `v0.2.0-nightly.49-srv1` (health 12/12, migration applied). FCM validate_only dry run with a fake
+  token: both projects OAuth 200, send 400 INVALID_ARGUMENT (key and project access OK).
+- Keycloak: no change needed. The old app already used the redirect URIs `ai.risicloud.risime[.debug]://callback|logout`
+  (since b80d449). Note: spark2 can't reach risicloud.ai:443 (timeout), so JWKS refresh runs on the cached key.
 
 ## v1.35 §34 Risi P0 2026-10-11 (Phase 1, server-only) — READY v1.35
 Gate green on main (1164 tests, 0 failures). Commits 45d7ee3, ca2e1d5. Migration `20261026100000_risi_items` (additive).
