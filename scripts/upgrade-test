@@ -466,7 +466,11 @@ tap() {  # tap the node whose text or content-desc equals $1 (see node_xy)
 # The chat list's "New group" FAB: uiautomator shows the extended FABs as text-less Buttons at the
 # bottom right ("New group" above "Add friend", only while groups are available).
 tap_new_group() {
+  # nightly.48+ (G): ONE round FAB "New" opens a sheet with "New chat" / "New group" / "Add friend".
   dump
+  if grep -qE '(text|content-desc)="New"' "$WORK/ui.xml" && ! grep -qE '(text|content-desc)="New group"' "$WORK/ui.xml"; then
+    tap "New" || return 1; sleep 2; dump
+  fi
   local b; b="$(python3 -I - "$WORK/ui.xml" <<'PY'
 import re, sys, xml.etree.ElementTree as ET
 nodes = list(ET.parse(sys.argv[1]).iter('node'))
