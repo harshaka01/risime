@@ -10055,6 +10055,11 @@ Decision 077 (Harsha 2026-10-11) **overrides the 24-hour limit** of §24.12, §2
 - **Daily brief** at 07:00 local in the user's Risi chat (`digest` kind): today's meetings, promises due, overdue,
   waiting on others, yesterday's key decisions.
 - Every autonomous post follows the honesty rules (§25.3 v1.32): no claim without a tool result.
+- **Wire uses (existing kinds, additive fields):** the brief is a `digest` with `scope: "brief"` and the fields
+  `events`, `risi_items`, `items`, `decisions`, `language`. Every line comes from stored data, and it ends with a
+  "Checked:" line. A missed-deadline question to the owner is a `reminder` with `phase: "overdue"`. "Reschedule?"
+  offers up to 3 slots free for everyone **in Risi Calendar**, as `next_actions` `ask` chips; phone calendars can't
+  be read by the server, and the text says so. Older apps show `body`. `RISI_BRIEF=off` disables the brief.
 
 ### 35.5 Backfill (later; specified when it starts)
 With the chat owner's consent the phone uploads an Official chat's existing history, encrypted to the Risi member.
