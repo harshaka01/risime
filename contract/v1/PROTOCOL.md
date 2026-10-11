@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.35 (Release 0.3)
+# RisiMe Wire Protocol — v1.36 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -10001,7 +10001,69 @@ must pass all of them; Android does not use it.
 - Phase 2 UI tests: a greyed superseded card; the clarify card; the Risi's items list with Open,
   Edit and Delete; and Delete of a `phone_event_added` item removing the provider row.
 
+## 35. Risi Brain v2: long-term memory of Official, retrieval, autonomy (v1.36)
+Decision 077 (Harsha 2026-10-11) **overrides the 24-hour limit** of §24.12, §25 (`search_chats` "the 24 h buffer"),
+§27 and §30 for **Official** only. Private is never read or stored (unchanged).
+
+### 35.1 Retention
+- Every Official message Risi decrypts as a member is kept, sealed with `RISI_DATA_KEY` (per-row AAD), as long-term
+  memory **until deleted** (§35.3). Risi's own posts are kept the same way. The 24-hour buffer remains as the
+  working set for the turn loop; memory is its long-term store.
+- Derived knowledge: **items** of kind `person` · `project` · `decision` · `promise` · `meeting` · `deadline` ·
+  `open_question` · `summary`, each with `{text, people: [user_id | name], project | null, at | null,
+  sources: [{conversation_id, message_ids}]}`, plus embeddings (pgvector, computed on spark2 only; sealed vectors
+  are not used, the vector index holds no text). Items appear in "What Risi knows about me" (§24.13) as their
+  `kind`; clients show an unknown kind as text.
+- A participant who opted out (§35.3) is never stored or extracted from that point; the server drops their
+  messages before sealing.
+
+### 35.2 Retrieval (server tools; §25 routing, §34.1 intent router extended)
+- The deterministic router runs before the model:
+  - schedule → the calendar read (§34.1);
+  - "summarise <range | person | project>", "what did I agree with <person>", "what's pending with <person>" →
+    `memory_search` and `summarise_range`;
+  - promises → the ledger (My promises);
+  - "what have you set up" → `risi_items` (§34.4).
+- `memory_search {query, range: {from, to} | null, people: [str], kinds: [str], conversation_id | null}` and
+  `summarise_range {range, people, project | null}`: map-reduce over the stored history of the asker's Official
+  chats only (a member of each); the answer cites `answer.sources` of type `memory` `{conversation_id,
+  message_ids, at}`. The model writes the text only from the tool results; no result → "I don't have anything
+  about that", never invented.
+
+### 35.3 Controls (REST, the caller's own scope)
+- `DELETE /api/v1/risi/memory?conversation_id=<grp:>` → `204`: deletes the caller's messages, Risi's posts to the
+  caller, and the items derived from them in that chat (other members' rows stay).
+- `DELETE /api/v1/risi/memory` → `204`: the same over every chat (with `X-Confirm: delete-all`, else `400`).
+- `PUT /api/v1/risi/learning` `{"conversation_id": "grp:…" | null, "enabled": bool}` → `204`: "Stop Risi learning
+  from my messages" for one chat or everywhere (`null`); `GET /api/v1/risi/learning` → `{"global": bool,
+  "chats": [{"conversation_id", "enabled"}]}`. Any participant may set their own.
+- Existing `DELETE /api/v1/risi/facts[/{id}]` also deletes memory items and embeddings.
+- Examples: `risi_learning_put.json`, `risi_learning_reply.json`, `envelope_risi_answer_memory_sources.json`.
+
+### 35.4 Autonomy (server, Oban; rules are server-normative, wire shapes are existing kinds)
+- **Ingest on every Official message:** extract promises, deadlines, meetings, decisions, cancellations and changes;
+  update items and the §34.4 ledger.
+- **Agreed meetings and deadlines** → a proposed calendar event per participant through the existing card/add path
+  (§25.3 v1.32 read-back): the participant's Calendar skill setting decides (Allowed → added directly, with the
+  `added_event` card; Ask → a `confirm` card).
+- **Quiet-period summary** (30 min after the last message, or "@Risi summarise"): to the chat (§27 discussion
+  summary) and a Risi Note per participant in their own Risi chat, in that participant's language.
+- **Cancellation or change** of a meeting Risi created → update the entries it created (read-back), notify the other
+  participants, offer "Reschedule?" with free slots computed from each participant's free/busy (§29.7 reads).
+- **Follow-ups:** a nudge to the owner before a promise is due; after a missed deadline, ask the owner for status and
+  tell the counterpart (per their settings).
+- **Daily brief** at 07:00 local in the user's Risi chat (`digest` kind): today's meetings, promises due, overdue,
+  waiting on others, yesterday's key decisions.
+- Every autonomous post follows the honesty rules (§25.3 v1.32): no claim without a tool result.
+
+### 35.5 Backfill (later; specified when it starts)
+With the chat owner's consent the phone uploads an Official chat's existing history, encrypted to the Risi member.
+Needs an APK; not in v1.36.
+
 ## Changelog
+- **v1.36** (2026-10-11): Risi Brain v2 (§35, decision 077): long-term sealed memory of Official, `memory_search` /
+  `summarise_range`, memory controls and learning opt-out REST, autonomy rules (ingest, calendar proposals,
+  summaries, cancellation propagation, follow-ups, 07:00 brief).
 - **v1.35** (2026-10-11): Risi P0 (§34): schedule questions answered only after a forced calendar read (deterministic classifier + the model's choice, no write tools in that turn, the server-built event list, `risi_next_action` with `tool` first); a new request supersedes open cards and unpatched drafts (`error` `superseded`; Phase 2 `confirm_update`); "Ask me again" = `ask` with the original text (`error.next_actions`); Risi's items (`risi_items` table, `GET`/`PATCH`/`DELETE /api/v1/risi/items`, the server tool `risi_items`, the `calendar_source` `risi_items`, the `Source` `risi_item`); the name check before writes (`answer.clarify` + `ask` chips); the fixture `risi_routing_cases.json`; Phase 1 server-only (nightly.48), Phase 2 behind the device capability `risi_items`.
 - **v1.34** (2026-10-11): basic messaging (§33, NEXT-PHASE E): the copy format (client; fixture
   `copy_format_cases.json`); forward with `forwarded: {hops}` ("Forwarded", "Forwarded many times" at
