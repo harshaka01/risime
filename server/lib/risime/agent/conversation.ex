@@ -216,6 +216,8 @@ defmodule RisiMe.Agent.Conversation do
     if u == data["from"] and member != nil and member.state == "active" and member.kind == "user" do
       m = %{message_id: data["message_id"], sender_id: u, sender_device: d, plaintext: pt}
       :ok = Transcript.put(state.conv, m)
+      # v1.36 §35.1: the long-term memory (sealed; opt-outs dropped before sealing).
+      RisiMe.Agent.Memory.put_message(state.conv, m)
       # S6/S7: the secretary only enqueues id-only jobs here; no model call, no send.
       RisiMe.Agent.Secretary.on_message(state.conv, m)
     end

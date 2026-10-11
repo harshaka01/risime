@@ -129,6 +129,10 @@ defmodule RisiMeWeb.Router do
     get "/risi/notes/:id", RisiNotesController, :show
     delete "/risi/notes/:id", RisiNotesController, :delete
     delete "/risi/notes", RisiNotesController, :delete_all
+    # v1.36 §35.3: Risi memory controls (decision 077).
+    delete "/risi/memory", RisiMemoryController, :delete
+    put "/risi/learning", RisiMemoryController, :put_learning
+    get "/risi/learning", RisiMemoryController, :learning
     post "/blobs", BlobController, :create
     post "/backups", BackupController, :create
     get "/backups", BackupController, :index

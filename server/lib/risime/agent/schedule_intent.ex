@@ -6,7 +6,8 @@ defmodule RisiMe.Agent.ScheduleIntent do
   are implementation.
 
   `classify(text, today)` → `{:schedule_read, %{from: Date, to: Date, now?: bool}}` (`to`
-  exclusive; `now?` when no day was named: the read starts now), `:risi_items`, or `:none`.
+  exclusive; `now?` when no day was named: the read starts now), `:risi_items`, v1.36 §35.2
+  `{:memory, %{mode, range, people, query}}` (`RisiMe.Agent.MemoryIntent`), or `:none`.
 
   A request whose main verb writes something (add, put, book, create, set, remind, send,
   schedule a …, and the Sinhala/Tamil/Singlish equivalents) is never a schedule question.
@@ -56,6 +57,8 @@ defmodule RisiMe.Agent.ScheduleIntent do
     cond do
       t == "" -> :none
       Enum.any?(@items, &Regex.match?(&1, t)) -> :risi_items
+      # v1.36 §35.2: summarise a range / what did I agree / what's pending → memory.
+      match?({:memory, _}, memory = RisiMe.Agent.MemoryIntent.classify(t, today)) -> memory
       Enum.any?(@write, &Regex.match?(&1, t)) -> :none
       Regex.match?(@other, t) -> :none
       schedule?(t) -> {:schedule_read, range(t, today)}

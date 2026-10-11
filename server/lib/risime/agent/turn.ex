@@ -58,6 +58,7 @@ defmodule RisiMe.Agent.Turn do
     Audience,
     Capabilities,
     Clock,
+    Lang,
     NextActions,
     LLM,
     NameCheck,
@@ -182,11 +183,29 @@ defmodule RisiMe.Agent.Turn do
         _ -> nil
       end
 
-    ctx = Map.merge(ctx, %{question: question, intent: intent, schedule: schedule})
+    # v1.36 §35.2: the memory route (summarise a range, what did I agree, what's pending).
+    memory =
+      case intent do
+        {:memory, m} -> m
+        _ -> nil
+      end
+
+    ctx =
+      Map.merge(ctx, %{
+        question: question,
+        intent: intent,
+        schedule: schedule,
+        memory: memory,
+        # Risi Brain v2: the answer's language (Sinhala/Tamil script enforced, RISI-MODELS.md).
+        lang: Lang.detect(question)
+      })
+
     # P0 2026-10-09: the pending action draft and (in the Risi chat) the asker's promises.
     # v1.35 §34.2: a schedule question never sees the draft.
     draft_state =
-      if schedule || intent == :risi_items, do: nil, else: ActionDraft.get(asker, conv)
+      if schedule || memory || intent == :risi_items,
+        do: nil,
+        else: ActionDraft.get(asker, conv)
 
     items = if ctx.in_risi_chat?, do: promises(asker, ctx.tz), else: []
     ctx = Map.merge(ctx, %{draft_state: draft_state, items: Map.new(items, &{&1.ref, &1})})
@@ -223,6 +242,7 @@ defmodule RisiMe.Agent.Turn do
         clarified -> resolve_clarify(st, ctx, clarified)
         schedule -> forced_read(st, ctx)
         intent == :risi_items -> forced_items(st, ctx)
+        memory -> forced_memory(st, ctx)
         true -> loop(st, ctx)
       end
 
@@ -560,7 +580,7 @@ defmodule RisiMe.Agent.Turn do
   defp step(st, ctx) do
     # v1.35 §34.1: after a forced read (a schedule question, Risi's items) no write tool.
     allowed =
-      if ctx[:schedule] || ctx[:intent] == :risi_items,
+      if ctx[:schedule] || ctx[:memory] || ctx[:intent] == :risi_items,
         do: Enum.reject(Tools.allowed(ctx), & &1.write),
         else: Tools.allowed(ctx)
 
@@ -571,7 +591,7 @@ defmodule RisiMe.Agent.Turn do
       task: "risi_next_action",
       conversation_id: ctx.conv,
       chat_id: ctx.chat_id,
-      system: system(allowed, needed),
+      system: system(allowed, needed) <> Lang.rule(Map.get(ctx, :lang, "en")) <> "\n",
       user: ctx.user_text,
       history: st.history,
       schema_name: "risi_next_action",
@@ -612,11 +632,47 @@ defmodule RisiMe.Agent.Turn do
     end
   end
 
+  @lead_in_retry "Your answer stopped after its first line. Reply again with the same JSON " <>
+                   "action and put the WHOLE answer in the answer string: write each point " <>
+                   "after \"\\n- \" inside the string (an escaped line break), never a raw line break."
+
+  defp lead_in_only?(answer) when is_binary(answer),
+    do: answer |> String.trim() |> String.ends_with?([":", "："])
+
+  defp lead_in_only?(_), do: false
+
   # A final.
   defp action(%{"tool" => "final"} = out, st, ctx, allowed) do
     answer = Capabilities.strip_labels(out["answer"])
+    lang = Map.get(ctx, :lang, "en")
 
     cond do
+      # Risi Brain v2: a Sinhala/Tamil request answered in English is rewritten once.
+      Lang.wrong_script?(lang, answer) and not Map.get(st, :lang_retried, false) and
+        st.calls < ctx.bounds.calls and not is_map(ctx[:schedule]) and
+          ctx[:intent] != :risi_items ->
+        history =
+          st.history ++
+            [
+              %{"role" => "assistant", "content" => Jason.encode!(out)},
+              %{"role" => "user", "content" => Lang.retry_instruction(lang)}
+            ]
+
+        loop(Map.put(%{st | history: history}, :lang_retried, true), ctx)
+
+      # Risi Brain v2 (live eval): guided decoding can't emit a raw line break inside the JSON
+      # string, so the model stops after "Here is a summary:". One retry asks for the whole text.
+      lead_in_only?(answer) and not Map.get(st, :lead_retried, false) and
+          st.calls < ctx.bounds.calls ->
+        history =
+          st.history ++
+            [
+              %{"role" => "assistant", "content" => Jason.encode!(out)},
+              %{"role" => "user", "content" => @lead_in_retry}
+            ]
+
+        loop(Map.put(%{st | history: history}, :lead_retried, true), ctx)
+
       not Capabilities.forbidden?(answer) ->
         act_final(st, ctx, answer, out)
 
@@ -687,6 +743,10 @@ defmodule RisiMe.Agent.Turn do
           # v1.35 §34.4: Risi's items are answered by the server from the ledger only.
           status == "ok" and is_map(meta[:risi_items]) ->
             items_final(st, ctx, meta[:risi_items])
+
+          # v1.36 §35.2: the memory's coverage travels to the answer (the honesty line).
+          status == "ok" and is_map(meta[:memory]) ->
+            loop(Map.put(st, :memory_meta, meta[:memory]), ctx)
 
           true ->
             loop(st, ctx)
@@ -990,8 +1050,9 @@ defmodule RisiMe.Agent.Turn do
 
   # A final: patch the draft from its `draft`, then the card, one question, or the answer.
   # v1.35 §34.1: a schedule (or Risi's items) turn ignores final.draft and posts no card.
-  defp act_final(st, ctx, answer, out) when is_map(ctx.schedule) or ctx.intent == :risi_items,
-    do: finish(st, ctx, answer, out["sources"], out["next_steps"])
+  defp act_final(st, ctx, answer, out)
+       when is_map(ctx.schedule) or is_map(ctx.memory) or ctx.intent == :risi_items,
+       do: finish(st, ctx, answer, out["sources"], out["next_steps"])
 
   defp act_final(st, ctx, answer, out) do
     new = ActionDraft.normalise(out["draft"], ctx.now, ctx.tz)
@@ -1239,6 +1300,7 @@ defmodule RisiMe.Agent.Turn do
     do: finish(%{st | rule_made: true}, ctx, answer, [], ["Ask me again"])
 
   defp finish(st, ctx, answer, source_refs, next_steps) do
+    {st, answer, source_refs} = memory_finish(st, ctx, answer, source_refs)
     checks = Map.get(st, :calendar_checks, [])
     local? = ctx.in_risi_chat? and CalendarHonesty.local_events(checks) != nil
     schedule? = is_map(Map.get(ctx, :schedule)) and checks != []
@@ -1487,6 +1549,145 @@ defmodule RisiMe.Agent.Turn do
       _ ->
         st
     end
+  end
+
+  ## v1.36 §35.2: the memory route
+
+  # Step 1 is the router's memory tool with the router's args (no model call); then the model
+  # writes the answer from the result only (no write tools). Nothing found: the server answers.
+  defp forced_memory(st, ctx) do
+    names = ctx |> Tools.allowed() |> Enum.map(& &1.name)
+    ctx = Map.put(ctx, :allowed_names, names)
+    m = ctx.memory
+    name = if m.mode == :summarise, do: "summarise_range", else: "memory_search"
+
+    if name in names do
+      args = memory_args(m, ctx)
+      out = %{"tool" => name, "args" => args}
+      {st, status, _result, meta} = exec_step(st, ctx, name, args, out)
+
+      cond do
+        status != "ok" ->
+          memory_rule(st, ctx, Lang.t(:unavailable, ctx.lang))
+
+        meta.memory.found == 0 ->
+          st = Map.put(st, :memory_meta, meta.memory)
+
+          text =
+            if meta.memory.known_since == nil,
+              do: Lang.t(:no_memory, ctx.lang),
+              else: Lang.t(:nothing, ctx.lang)
+
+          memory_rule(st, ctx, text)
+
+        true ->
+          loop(Map.put(st, :memory_meta, meta.memory), ctx)
+      end
+    else
+      # No Risi chat (personal tools): the normal loop.
+      loop(st, ctx)
+    end
+  end
+
+  defp memory_args(m, ctx) do
+    range =
+      case m.range do
+        %{from: f, to: t} ->
+          %{"from" => Date.to_iso8601(f), "to" => Date.to_iso8601(Date.add(t, -1))}
+
+        _ ->
+          nil
+      end
+
+    people = Enum.uniq_by(m.people ++ contact_names(ctx), &NameCheck.norm/1)
+
+    case m.mode do
+      :summarise ->
+        %{"range" => range, "people" => people, "project" => nil}
+
+      mode ->
+        kinds =
+          if mode == :pending,
+            do: ~w(promise deadline open_question meeting),
+            else: ~w(decision promise meeting deadline)
+
+        %{
+          "query" => String.slice(m.query, 0, 300),
+          "range" => range,
+          "people" => people,
+          "kinds" => kinds,
+          "conversation_id" => nil
+        }
+    end
+  end
+
+  # Contacts the question names by a whole word of their name (a lower-case "upali" too).
+  defp contact_names(ctx) do
+    words = ctx.question |> NameCheck.norm() |> String.split() |> MapSet.new()
+
+    for {_id, n} <- RisiMe.Agent.CalendarTools.contacts(ctx.asker),
+        is_binary(n),
+        w = n |> NameCheck.norm() |> String.split() |> List.first(),
+        w != nil and String.length(w) >= 3 and MapSet.member?(words, w),
+        uniq: true,
+        do: w
+  rescue
+    _ -> []
+  end
+
+  defp memory_rule(st, ctx, text) do
+    st =
+      %{st | rule_made: true, personal: true}
+      |> Map.put(:prebuilt, true)
+
+    finish(st, ctx, text, [], [])
+  end
+
+  # The memory's honesty (§35.2): sources of type `memory` (the model's r-refs; when it cited
+  # none, every chat it was given, so the answer still says where it comes from), and the
+  # "before <date> I don't know" line when the range starts before memory does.
+  defp memory_finish(st, ctx, answer, source_refs) do
+    case Map.get(st, :memory_meta) do
+      %{} = mm ->
+        cited? =
+          Enum.any?(source_refs || [], fn r -> match?(%{"type" => "memory"}, st.refs[r]) end)
+
+        st =
+          if cited? or mm.found == 0,
+            do: st,
+            else:
+              Map.update(
+                st,
+                :extra_sources,
+                by_chat(mm.all_sources),
+                &(&1 ++ by_chat(mm.all_sources))
+              )
+
+        answer =
+          if mm.ranged? and mm.known_since != nil and mm.from != nil and
+               Date.compare(mm.from, mm.known_since) == :lt,
+             do:
+               String.trim_trailing(answer) <>
+                 "\n\n" <> Lang.t({:since, mm.known_since}, ctx.lang),
+             else: answer
+
+        {st, answer, source_refs}
+
+      _ ->
+        {st, answer, source_refs}
+    end
+  end
+
+  defp by_chat(sources) do
+    sources
+    |> Enum.group_by(& &1["conversation_id"])
+    |> Enum.map(fn {conv, ss} ->
+      ids = ss |> Enum.flat_map(& &1["message_ids"]) |> Enum.uniq() |> Enum.take(50)
+      at = ss |> Enum.map(& &1["at"]) |> Enum.reject(&is_nil/1) |> Enum.max(fn -> nil end)
+      %{"type" => "memory", "conversation_id" => conv, "message_ids" => ids, "at" => at}
+    end)
+    |> Enum.sort_by(& &1["at"], :desc)
+    |> Enum.take(10)
   end
 
   ## v1.35 §34.4: "what have you set up for me?"

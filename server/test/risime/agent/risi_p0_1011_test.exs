@@ -273,7 +273,8 @@ defmodule RisiMe.Agent.RisiP01011Test do
 
   test "a failed turn's chip asks the ORIGINAL question again; the old 'Ask me again' words too",
        ctx do
-    q = "summarise my week of work please"
+    # (v1.36: "summarise my week of work" is a memory question now, answered by the server.)
+    q = "translate my last message into Tamil please"
     fake_llm!(fn _name, _body -> {:raw, "not json"} end)
     ask!(ctx, q)
     {_, _body, a} = answer_of(posts())

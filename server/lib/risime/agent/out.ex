@@ -43,6 +43,9 @@ defmodule RisiMe.Agent.Out do
   # P0 2026-10-09: in a Risi chat, Risi's own post joins the sealed 24-h buffer (as
   # `risi_post`, never a `text`), so the next turn sees both sides of the conversation.
   defp remember(conv, %{message_id: mid}, body, risi) when is_binary(mid) do
+    # v1.36 §35.1: Risi's own posts in Official chats join its long-term memory.
+    RisiMe.Agent.Memory.put_risi_post(conv, mid, body, risi)
+
     if RisiMe.Groups.Tabs.risi_chat?(conv) do
       env = %{"v" => 1, "type" => "risi_post", "kind" => risi["kind"], "body" => body}
 

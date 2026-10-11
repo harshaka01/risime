@@ -298,6 +298,8 @@ defmodule RisiMe.Agent.Secretary do
   """
   def forget(conv) do
     Transcript.purge(conv)
+    # v1.36 §35: the chat's long-term memory goes with Risi (Official off, Risi removed).
+    RisiMe.Agent.Memory.forget(conv)
     cancel_jobs(conv)
     # v1.25 §25.4: its confirm cards' writes (sealed args) go too.
     RisiMe.Agent.Writes.forget(conv)
@@ -339,6 +341,7 @@ defmodule RisiMe.Agent.Secretary do
   """
   def message_deleted(conv, [_ | _] = ids) do
     ids = Enum.uniq(ids)
+    RisiMe.Agent.Memory.message_deleted(conv, ids)
 
     for c <-
           Repo.all(

@@ -41,6 +41,13 @@ defmodule RisiMe.Agent.SealAtRestTest do
     end
   end
 
+  # v1.36: the memory vectors as text (Postgrex has no pgvector type).
+  defp sql_rows("risi_memory_vectors"),
+    do:
+      inspect(
+        Repo.query!("SELECT owner_id, model, embedding::text FROM risi_memory_vectors").rows
+      )
+
   defp sql_rows(table), do: inspect(Repo.query!("SELECT * FROM #{table}").rows)
 
   # Extraction over a line holding the canary: the model returns it as the commitment text and

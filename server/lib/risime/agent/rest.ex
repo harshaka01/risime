@@ -42,6 +42,9 @@ defmodule RisiMe.Agent.Rest do
   """
   def facts(user, device_id \\ nil) do
     with {:ok, facts} <- user_facts(user) do
+      # v1.36 §35.1: memory items about the caller, as their kind.
+      facts = facts ++ RisiMe.Agent.Memory.facts(user)
+
       # 30-day summaries: the "Summaries" group, for apps that know the kind (risi_tools).
       if RisiMe.Devices.risi_tools_device?(user, device_id),
         do: {:ok, facts ++ RisiMe.Agent.DailySummaries.facts(user)},
@@ -78,9 +81,9 @@ defmodule RisiMe.Agent.Rest do
       {0, _} ->
         {:ok, id} = Ecto.UUID.cast(fact_id)
 
-        case RisiMe.Agent.DailySummaries.delete(user, id) do
-          :ok -> :ok
-          :not_found -> {:error, :not_found}
+        with :not_found <- RisiMe.Agent.DailySummaries.delete(user, id),
+             :not_found <- RisiMe.Agent.Memory.delete_item(user, id) do
+          {:error, :not_found}
         end
 
       error ->
@@ -91,6 +94,8 @@ defmodule RisiMe.Agent.Rest do
   @doc "Hard-deletes every fact about the caller (in any chat, including ones they left)."
   def delete_facts(user) do
     Repo.delete_all(from f in Fact, where: f.subject_user_id == ^user)
+    # v1.36 §35.3: memory items about the caller and their vectors too.
+    RisiMe.Agent.Memory.delete_items_about(user)
     :ok
   end
 

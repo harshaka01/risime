@@ -92,7 +92,8 @@ defmodule RisiMe.Agent.Tools do
 
   ## The per-step schema (§25.1)
 
-  @ref "^[mcnl][0-9]{1,3}$"
+  # v1.36 §35.2: `r<n>` refs of memory results (up to 4 digits: a month can hold many messages).
+  @ref "^(?:[mcnl][0-9]{1,3}|r[0-9]{1,4})$"
 
   @doc """
   The `risi_next_action` JSON schema for the allowed tools: one alternative per tool
@@ -218,7 +219,10 @@ defmodule RisiMe.Agent.Tools do
         # v1.34 §33.15: "send this as a PDF" (only for a `pdf_export` device).
         ClientTools.export_pdf(),
         # v1.35 §34.4: "what have you set up for me?" (Risi's items, every Risi-chat asker).
-        RisiMe.Agent.RisiItems.tool()
+        RisiMe.Agent.RisiItems.tool(),
+        # v1.36 §35.2: long-term memory of the asker's Official chats.
+        RisiMe.Agent.MemoryTools.memory_search(),
+        RisiMe.Agent.MemoryTools.summarise_range()
       ]
   end
 

@@ -6,6 +6,7 @@ defmodule RisiMe.Workers.Risi do
   | kind | queue | what |
   |---|---|---|
   | `extract` | `risi` (2) | commitment extraction of a conversation (debounced, one pending) |
+  | `memory_ingest` | `risi` | v1.36 §35: memory items + vectors of a conversation (debounced, one pending) |
   | `discussion_quiet` | `risi` | v1.27 §27.2 quiet rule of a conversation (one pending, moved by each counted message) |
   | `item_expire` | `risi_timers` | v1.27 §27.5: a proposed ledger item unconfirmed after 48 h |
   | `request` | `risi_requests` (2) | an `ask`/`summarise`/`report` (or its `error` reply) |
@@ -55,6 +56,8 @@ defmodule RisiMe.Workers.Risi do
     RisiMe.Agent.Calendar.prune()
     # v1.29 §30.7: notes after 365 days, and notes nobody keeps.
     RisiMe.Agent.Notes.prune()
+    # v1.36 §35.1: chats whose memory hasn't started copy the 24-h buffer in (once).
+    RisiMe.Agent.Memory.seed_all()
     :ok
   end
 
@@ -168,6 +171,9 @@ defmodule RisiMe.Workers.Risi do
   def perform(_job), do: :ok
 
   defp run(%{"kind" => "extract", "conv" => conv}), do: Commitments.extract(conv)
+
+  # v1.36 §35.1/§35.4: the memory ingest of a conversation (items + vectors).
+  defp run(%{"kind" => "memory_ingest", "conv" => conv}), do: RisiMe.Agent.MemoryIngest.run(conv)
 
   # v1.27 §27.2: the quiet rule's check of a conversation.
   defp run(%{"kind" => "discussion_quiet", "conv" => conv}), do: RisiMe.Agent.Ledger.quiet(conv)
