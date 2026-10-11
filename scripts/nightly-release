@@ -124,6 +124,13 @@ elif scripts/android-target check >/dev/null 2>&1; then
       UITEST_REDROID_B=-relb2 UITEST_REDROID_B_PORT=5868 timeout -k 60 3000 scripts/ui-entry-test --skills --ui-batch \
       --apk android/app/build/outputs/apk/debug/app-debug.apk > "$UIB_LOG" 2>&1; then UIB_RES="PASS"; else UIB_RES="FAIL (non-blocking)"; fi
   echo "==> ui-batch (non-blocking): $UIB_RES; $(grep -c 'UIENTRY PASS' "$UIB_LOG") steps passed; log $UIB_LOG"
+  # The basic-messaging end-to-end script (--messaging: copy format, star/info/reply, forward + "Forwarded" label, Sinhala and
+  # Tamil PDFs with pdftotext/pdffonts; NEXT-PHASE E gate) is NON-BLOCKING the same way, on its own instance and redroids.
+  MSG_LOG="$HOME/risime-logs/release/messaging-v$next.log"
+  if UITEST_MESSAGING_ONLY=1 UITEST_INSTANCE=_relm UITEST_PORT=4555 UITEST_LLM_PORT=8394 UITEST_REDROID_A=-relm1 UITEST_REDROID_A_PORT=5869 \
+      UITEST_REDROID_B=-relm2 UITEST_REDROID_B_PORT=5870 timeout -k 60 3000 scripts/ui-entry-test --skills --messaging \
+      --apk android/app/build/outputs/apk/debug/app-debug.apk > "$MSG_LOG" 2>&1; then MSG_RES="PASS"; else MSG_RES="FAIL (non-blocking)"; fi
+  echo "==> messaging (non-blocking): $MSG_RES; $(grep -c 'UIENTRY PASS' "$MSG_LOG") steps passed; log $MSG_LOG"
   # Google Calendar link gate (contract v1.31 §31.12, decision 074): OFF by default, so a release isn't blocked before
   # the server and android parts of v1.31 have landed. Root switches it on with UIENTRY_GOOGLE=1 (e.g. in the unit
   # environment of the nightly), after which `ui-entry-test --google` (fake-llm + scripts/fake-gcal, A's two devices on
@@ -271,6 +278,10 @@ fi
 if [ -n "${UIB_LOG:-}" ] && [ -f "$UIB_LOG" ]; then
   { echo; echo "## UI batch end-to-end (non-blocking, CLAUDE.md rule 11): ${UIB_RES:-not run}"
     grep -E '^UIENTRY (PASS|FAIL)' "$UIB_LOG" | sed -E 's/^UIENTRY (PASS|FAIL) /- \1: /'; } >> "$notes"
+fi
+if [ -n "${MSG_LOG:-}" ] && [ -f "$MSG_LOG" ]; then
+  { echo; echo "## Basic messaging end-to-end (non-blocking, CLAUDE.md rule 11): ${MSG_RES:-not run}"
+    grep -E '^UIENTRY (PASS|FAIL|SKIP)' "$MSG_LOG" | sed -E 's/^UIENTRY (PASS|FAIL|SKIP) /- \1: /'; } >> "$notes"
 fi
 git add VERSION "$notes"
 git commit -q -m "chore(root): release v$next

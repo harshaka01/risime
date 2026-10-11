@@ -115,6 +115,13 @@
 #     Settings → profile photo sheet "Take photo" / "Gallery" / "Remove photo" (when set); the Risi chat shows no
 #     next_steps chips. UITEST_UIBATCH_ONLY=1: only steps 1 and 18. Shots 50-uibatch-*-<scale>. With --ui-batch step 4
 #     expects "Lock chat" IN the chat's ⋮ (v1.32; the pre-v1.32 app must not have it).
+# 19. (--messaging, contract v1.34 §33.20, NEXT-PHASE E gate; UITEST_MESSAGING_ONLY=1: only steps 1 and 19) basic messaging on
+#     redroid, en-GB / 24 h: Copy (long-press → Select a second message → Copy: `cmd clipboard get-text`, else Paste into the
+#     composer, equals the "[dd/MM/yy, HH:mm] Name: text" lines in chat order); Star / Info / Reply presence; a group
+#     (A + B); Forward of a text and a photo (Photo Picker fixture, as scripts/upgrade-test) to the group and the DM, and
+#     "↪ Forwarded" on B in both; Risi answers with Sinhala and Tamil text (fake-llm) → Export PDF → Save to Downloads
+#     (Download/RisiMe) → adb pull → pdftotext -enc UTF-8 holds the exact strings, pdffonts lists NotoSans, NotoSansSinhala,
+#     NotoSansTamil with `emb yes`. Shots 58-messaging-*. A step that cannot run (no photo picker) prints UIENTRY SKIP.
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -127,13 +134,14 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=lk.codegen.risime.debug
 CLS=lk.codegen.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0; UIBATCH=0
+APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0; UIBATCH=0; MSG=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;;
   --skills) RISI=1; SKILLS=1; SKILLS_STEP=1; shift;; --ledger) RISI=1; LEDGER=1; shift;;
   --calendar) RISI=1; SKILLS=1; SKILLS_STEP=1; CALENDAR=1; shift;; --offers) RISI=1; SKILLS=1; OFFERS=1; shift;;
   --risi-calendar) RISI=1; SKILLS=1; RCAL=1; shift;; --risi-notes) RISI=1; SKILLS=1; RNOTES=1; shift;;
   --google) RISI=1; SKILLS=1; GCAL=1; shift;;
   --ui-batch) RISI=1; SKILLS=1; UIBATCH=1; shift;;
+  --messaging) RISI=1; SKILLS=1; MSG=1; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 # --google alone: UITEST_GOOGLE_ONLY=1 = steps 1 and 17 (steps 2-16 are skipped through UITEST_RISI_ONLY, which only
 # the --risi-calendar/--risi-notes blocks and the google block look at).
@@ -204,6 +212,13 @@ cal_start, cal_end = sys.argv[5], sys.argv[6]
 final = lambda a: {"tool": "final", "answer": a, "sources": [], "next_steps": []}
 rules = [
     # Step 18 (--ui-batch): an answer that carries next_steps; the app must not draw them as chips (UI batch item 7).
+    # Step 19 (--messaging): answers in Sinhala and Tamil (the PDF is made on the phone from the card's text).
+    {"name": "msg_pdf_si", "task": "risi_next_action", "match": "(?i)messaging sinhala pdf",
+     "actions": [{"tool": "final", "answer": "MSGPDF-SI ශ්\u200dරී ලංකා ගැන සටහන: මූලික කරුණු සහ ක්\u200dරියාමාර්ග.", "sources": [], "next_steps": []}]},
+    {"name": "msg_pdf_ta", "task": "risi_next_action", "match": "(?i)messaging tamil pdf",
+     "actions": [{"tool": "final", "answer": "MSGPDF-TA க்ஷேத்ரம் பற்றிய குறிப்பு: முக்கிய புள்ளிகள் மற்றும் செயல்கள்.", "sources": [], "next_steps": []}]},
+    {"name": "msg_pdf_en", "task": "risi_next_action", "match": "(?i)messaging english pdf",
+     "actions": [{"tool": "final", "answer": "MSGPDF-EN The site visit is agreed for Friday.", "sources": [], "next_steps": []}]},
     {"name": "uibatch_chips", "task": "risi_next_action", "match": "(?i)uibatch hello",
      "actions": [{"tool": "final", "answer": "UIBATCH answer ready.", "sources": [],
                   "next_steps": ["UIB chip remind me tomorrow", "UIB chip tell me more"]}]},
@@ -702,6 +717,7 @@ pass "both opened the DM; it is e2ee"
 # UITEST_RISI_ONLY=1 (with --risi-calendar/--risi-notes): only steps 1 and 14-16.
 ONLY="${UITEST_SKILLS_ONLY:-0}${UITEST_LEDGER_ONLY:-0}${UITEST_CALENDAR_ONLY:-0}${UITEST_OFFERS_ONLY:-0}${UITEST_RISI_ONLY:-0}"
 [ "${UITEST_UIBATCH_ONLY:-0}" = 1 ] && ONLY=x
+[ "${UITEST_MESSAGING_ONLY:-0}" = 1 ] && ONLY=x
 if [ "$ONLY" = 00000 ]; then
 # ---------------------------------------------------------------- 2. the tab row under the header, Start Official
 DEV=A
@@ -3197,6 +3213,266 @@ ui_batch_section() {
   pass "ui-batch: all checks at font scale 1.0 and 1.3; the scale is back at 1.0"
 }
 if [ "$UIBATCH" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_UIBATCH_ONLY:-0}" = 1 ]; }; then ui_batch_section; fi
+
+# ---------------------------------------------------------------- 19. (--messaging) basic messaging (NEXT-PHASE E gate)
+msg_tap_has() {  # tap the first node whose text or content-desc CONTAINS $1 (a bubble's merged description)
+  local b; dump
+  b="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    for n in ET.parse(sys.argv[1]).iter('node'):
+        if sys.argv[2] in (n.get('text') or '') or sys.argv[2] in (n.get('content-desc') or ''):
+            x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); print((x1 + x2) // 2, (y1 + y2) // 2); break
+except ET.ParseError:
+    pass
+PY
+)"
+  [ -n "$b" ] || { echo "    [$DEV] no UI node containing: $1"; return 1; }
+  A shell input tap $b
+}
+msg_long_press() {  # exact text, else a node containing it
+  local b; b="$(node_xy "$1")"
+  if [ -z "$b" ]; then
+    b="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    for n in ET.parse(sys.argv[1]).iter('node'):
+        if sys.argv[2] in (n.get('text') or '') or sys.argv[2] in (n.get('content-desc') or ''):
+            x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); print((x1 + x2) // 2, (y1 + y2) // 2); break
+except ET.ParseError:
+    pass
+PY
+)"
+  fi
+  [ -n "$b" ] || { echo "    [$DEV] no UI node: $1"; return 1; }
+  set -- $b; A shell input swipe "$1" "$2" "$1" "$2" 900
+}
+msg_send() {  # $1 = text typed into the open chat's composer (placeholder "Encrypted message" or "Message")
+  local c="Encrypted message"
+  has 'text="Encrypted message"' || c="Message"
+  tap "$c" || return 1; sleep 0.5
+  A shell input text "$(printf '%s' "$1" | sed 's/ /%s/g')"; sleep 0.5
+  tap "Send" || return 1
+  wait_for "$1" 20
+}
+msg_open() {  # $1 = chat name on the list: open it on its Private tab
+  open_chat "$1" || return 1
+  wait_text "🔒 Private" 5 && tap "🔒 Private" || true
+  return 0
+}
+msg_clip() {  # the clipboard text of the DEV phone: `cmd clipboard get-text`, else Paste into the composer
+  local out; out="$(A shell cmd clipboard get-text 2>/dev/null | tr -d '\r' || true)"
+  case "$out" in *"["*"]"*) printf '%s' "$out"; return 0;; esac
+  # (fallback) KEYCODE_PASTE into the composer; the multi-line text node of the dump
+  hide_keyboard; tap "Encrypted message" || tap "Message" || return 1; sleep 0.5
+  A shell input keyevent KEYCODE_PASTE; sleep 1; dump
+  python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+for n in ET.parse(sys.argv[1]).iter('node'):
+    t = n.get('text') or ''
+    if t.startswith('['): print(t, end=''); break
+PY
+  clear_field
+}
+msg_group_pdf() {  # $1 = prompt sentence, $2 = answer prefix, $3 = label ("si"/"ta"/"en"): ask Risi, Export PDF, Save to Downloads
+  local before after f
+  uib_ask "$1"
+  wait_for "$2" 120 || fail "messaging pdf [$3]: Risi's answer ($2) didn't come"
+  msg_long_press "$2" || fail "messaging pdf [$3]: long-press the answer"
+  wait_text "Export PDF" 10 || fail "messaging pdf [$3]: the answer card's menu has no 'Export PDF'"
+  tap "Export PDF" || fail "messaging pdf [$3]: tap Export PDF"
+  wait_text "Save to Downloads" 60 || fail "messaging pdf [$3]: no PDF sheet with 'Save to Downloads'"
+  shot "58-messaging-pdf-sheet-$3"
+  before="$(A shell ls /sdcard/Download/RisiMe 2>/dev/null | tr -d '\r' | sort || true)"
+  tap "Save to Downloads" || fail "messaging pdf [$3]: tap Save to Downloads"
+  wait_for "Saved to Download/RisiMe" 20 || fail "messaging pdf [$3]: no 'Saved to Download/RisiMe'"
+  after="$(A shell ls /sdcard/Download/RisiMe 2>/dev/null | tr -d '\r' | sort || true)"
+  f="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | grep -i '\.pdf$' | tail -1 || true)"
+  [ -n "$f" ] || fail "messaging pdf [$3]: no new PDF under /sdcard/Download/RisiMe (before: $before | after: $after)"
+  mkdir -p "$WORK/pdf-$3"; rm -f "$WORK/pdf-$3/x.pdf"
+  A pull "/sdcard/Download/RisiMe/$f" "$WORK/pdf-$3/x.pdf" >/dev/null || fail "messaging pdf [$3]: adb pull $f"
+  cp "$WORK/pdf-$3/x.pdf" "$LOGS/messaging-$3.pdf" 2>/dev/null || true
+  A shell input keyevent KEYCODE_BACK; sleep 1
+  wait_gone 'text="Save to Downloads"' 8 || { A shell input keyevent KEYCODE_BACK; sleep 1; }
+  echo "    pdf [$3]: $f ($(stat -c %s "$WORK/pdf-$3/x.pdf") bytes)"
+}
+msg_pdf_check() {  # $1 = label; $2.. = expected strings (the text goes through NFC, no ZWJ/ZWNJ, no whitespace)
+  local lbl="$1"; shift
+  pdftotext -enc UTF-8 "$WORK/pdf-$lbl/x.pdf" "$WORK/pdf-$lbl/x.txt" || fail "messaging pdf [$lbl]: pdftotext failed"
+  pdffonts "$WORK/pdf-$lbl/x.pdf" > "$WORK/pdf-$lbl/fonts.txt" || fail "messaging pdf [$lbl]: pdffonts failed"
+  python3 -I - "$WORK/pdf-$lbl/x.txt" "$WORK/pdf-$lbl/fonts.txt" "$lbl" "$@" <<'PY' || fail "messaging pdf [$lbl]: see the lines above"
+import re, sys, unicodedata
+txt = open(sys.argv[1], encoding='utf-8').read(); fonts = open(sys.argv[2], encoding='utf-8').read()
+lbl, want = sys.argv[3], sys.argv[4:]
+norm = lambda s: re.sub(r'\s+', '', unicodedata.normalize('NFC', s).replace('\u200c', '').replace('\u200d', ''))
+t = norm(txt); bad = 0
+for w in want + ['RisiMe', 'Pageof'] :
+    if norm(w) not in t:
+        print("    missing in the PDF text: %r" % w); bad = 1
+if not re.search(r'Page\s+1\s+of', txt): print("    no 'Page 1 of'"); bad = 1
+need = ['NotoSans'] + (['NotoSansSinhala'] if lbl == 'si' else ['NotoSansTamil'] if lbl == 'ta' else [])
+for f in need:
+    rows = [l for l in fonts.splitlines() if re.search(r'(^|\+)%s(-|\s)' % f, l)]
+    if not any(re.search(r'\s(yes|no)\s+(yes|no)\s+(yes|no)\s+\d+\s+\d+\s*$', l) and re.search(r'\s+yes\s+(yes|no)\s+(yes|no)\s+\d+\s+\d+\s*$', l) for l in rows):
+        print("    font %s is not `emb yes`:\n%s" % (f, fonts)); bad = 1
+sys.exit(bad)
+PY
+}
+messaging_section() {
+  DEV=A; screen_wh
+  local STAMP_RE LANG_SET c1 c2 clip
+  # ---- en-GB, 24 h on both phones (the app's locale; the copy format follows the phone's locale and 24 h setting)
+  for DEV in A B; do
+    A shell settings put system time_12_24 24 >/dev/null 2>&1 || true
+    A shell cmd locale set-app-locales "$PKG" --locales en-GB >/dev/null 2>&1 || A shell setprop persist.sys.locale en-GB >/dev/null 2>&1 || true
+    A shell am force-stop "$PKG"
+  done
+  DEV=B; msg_open "ZZ UI A" || fail "messaging: B can't open the DM"
+  DEV=A; msg_open "ZZ UI B" || fail "messaging: A can't open the DM"
+  wait_for 'text="Encrypted message"' 30 || fail "messaging: the DM has no e2ee composer"
+  # ---- 19.1 Copy
+  local t0 t1; t0="$(A shell date +'%d/%m/%y, %H:%M' | tr -d '\r')"
+  msg_send "msgtest one from A" || fail "messaging copy: A's first message"
+  DEV=B; wait_for "msgtest one from A" 40 || fail "messaging copy: B didn't get A's message"
+  msg_send "msgtest two from B" || fail "messaging copy: B's reply"
+  DEV=A; wait_for "msgtest two from B" 40 || fail "messaging copy: A didn't get B's reply"
+  t1="$(A shell date +'%d/%m/%y, %H:%M' | tr -d '\r')"
+  msg_long_press "msgtest one from A" || fail "messaging copy: long-press A's message"
+  wait_text "Select" 10 || fail "messaging copy: the message menu has no 'Select'"
+  tap "Select" || fail "messaging copy: tap Select"
+  sleep 1; msg_tap_has "msgtest two from B" || fail "messaging copy: select the second message"
+  wait_text "2 selected" 10 || fail "messaging copy: the selection bar doesn't say '2 selected'"
+  shot "58-messaging-selection-bar"
+  tap "Copy" || fail "messaging copy: tap Copy"
+  sleep 1
+  clip="$(msg_clip)" || true
+  echo "    clipboard: $(printf '%s' "$clip" | tr '\n' '|')"
+  python3 -I - "$clip" "$t0" "$t1" <<'PY' || fail "messaging copy: the copied text isn't '[dd/MM/yy, HH:mm] Name: text' lines in chat order"
+import re, sys
+clip, t0, t1 = sys.argv[1:4]
+lines = clip.strip('\n').split('\n')
+if len(lines) != 2: print("    expected 2 lines, got %d: %r" % (len(lines), clip)); sys.exit(1)
+ok = {t0, t1}
+for line, (name, text) in zip(lines, (("ZZ UI A", "msgtest one from A"), ("ZZ UI B", "msgtest two from B"))):
+    m = re.fullmatch(r'\[(\d\d/\d\d/\d\d, \d\d:\d\d)\] (.*?): (.*)', line)
+    if not m: print("    bad line: %r" % line); sys.exit(1)
+    if m.group(1) not in ok: print("    stamp %r not in %r (en-GB, 24 h)" % (m.group(1), ok)); sys.exit(1)
+    if m.group(2) != name or m.group(3) != text: print("    expected %s: %s, got %r" % (name, text, line)); sys.exit(1)
+PY
+  A shell input keyevent KEYCODE_BACK; sleep 1
+  has "selected" && { tap "Cancel selection" || true; }
+  pass "messaging: Copy of two selected messages is '[dd/MM/yy, HH:mm] Name: text' lines in chat order (en-GB, 24 h)"
+  # ---- 19.2 Star / Info / Reply presence
+  msg_long_press "msgtest one from A" || fail "messaging menu: long-press A's own message"
+  for w in Copy Reply Forward Star Info Select; do wait_text "$w" 10 || fail "messaging menu: no '$w' on A's own message"; done
+  shot "58-messaging-menu"
+  tap "Star" || fail "messaging star: tap Star"
+  sleep 1
+  msg_long_press "msgtest one from A" || fail "messaging star: long-press again"
+  wait_text "Unstar" 10 || fail "messaging star: the menu offers no 'Unstar' after starring"
+  tap "Info" || fail "messaging info: tap Info"
+  wait_text "Message info" 10 || fail "messaging info: no 'Message info' sheet"
+  for w in Sent Delivered Read; do wait_text "$w" 5 || fail "messaging info: no '$w' row"; done
+  shot "58-messaging-info"
+  A shell input keyevent KEYCODE_BACK; sleep 1
+  msg_long_press "msgtest two from B" || fail "messaging reply: long-press B's message"
+  wait_text "Reply" 10 || fail "messaging reply: no 'Reply'"
+  tap "Reply" || fail "messaging reply: tap Reply"
+  wait_for "Reply to ZZ UI B" 10 || fail "messaging reply: no 'Reply to ZZ UI B' bar over the composer"
+  shot "58-messaging-reply-bar"
+  msg_send "msgtest reply from A" || fail "messaging reply: send the reply"
+  DEV=B; wait_for "msgtest reply from A" 40 || fail "messaging reply: B didn't get the reply"
+  has "msgtest two from B" || fail "messaging reply: B's quote of its own message isn't shown"
+  DEV=A
+  pass "messaging: Star (Unstar after), Info (Sent / Delivered / Read) and Reply (bar, quote on B) are there"
+  # ---- 19.3 a group A + B
+  back_to_list || fail "messaging group: back to the list"
+  tap "New" || fail "messaging group: tap the New FAB"
+  wait_text "New group" 10 || fail "messaging group: no 'New group'"
+  tap "New group" || fail "messaging group: tap New group"
+  wait_text "ZZ UI B" 20 || fail "messaging group: the friend picker has no ZZ UI B"
+  tap "ZZ UI B" || fail "messaging group: pick ZZ UI B"
+  tap "Next" || fail "messaging group: Next"
+  wait_text "Group name" 10 || fail "messaging group: no name field"
+  type_into "Group name" "ZZ Msg Group"; hide_keyboard
+  tap "Create" || fail "messaging group: Create"
+  for _ in $(seq 1 40); do has "ZZ Msg Group" && wait_for 'text="Encrypted message"' 2 && break; sleep 1; done
+  wait_for 'text="Encrypted message"' 30 || fail "messaging group: the new group didn't open with an e2ee composer"
+  DEV=B; back_to_list || true
+  for _ in 1 2 3 4 5 6; do has "ZZ Msg Group" && break; tap "Refresh friends" || true; sleep 3; done
+  has "ZZ Msg Group" || fail "messaging group: B's list has no ZZ Msg Group"
+  DEV=A
+  pass "messaging: a group 'ZZ Msg Group' (A + B) was created and B has it"
+  # ---- 19.4 Forward a text and a photo to the group and the DM; "↪ Forwarded" on B
+  msg_open "ZZ UI B" || fail "messaging forward: A reopens the DM"
+  local photo=0
+  python3 -I - "$WORK/msg-photo.png" <<'PY'
+import struct, sys, zlib
+w, h = 160, 120
+rows = b"".join(b"\x00" + b"".join(bytes((20, 90, 200) if 40 <= x < 120 and 30 <= y < 90 else (230, 120, 40)) for x in range(w)) for y in range(h))
+chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+PY
+  A push "$WORK/msg-photo.png" /sdcard/Pictures/msg-photo.png >/dev/null
+  A shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Pictures/msg-photo.png >/dev/null
+  hide_keyboard
+  if tap "Attach" && wait_for "Gallery" 10 && tap "Gallery" && wait_for "Photo taken on" 20 && msg_tap_has "Photo taken on"; then
+    wait_for "Send photo" 5 || { dump; tap "Add" >/dev/null || tap "Done" >/dev/null || true; }
+    if wait_for "Send photo" 20; then
+      for _ in $(seq 1 10); do tap "Send photo" >/dev/null || true; sleep 2; has 'content-desc="Send photo"' || break; done
+      for _ in $(seq 1 30); do has 'content-desc="Photo' && photo=1 && break; sleep 2; done
+    fi
+  fi
+  if [ "$photo" = 1 ]; then echo "    photo sent in the DM"
+  else echo "UIENTRY SKIP messaging: no photo could be sent through the Photo Picker; forwarding the text only"; A shell input keyevent KEYCODE_BACK; sleep 1; back_to_list || true; msg_open "ZZ UI B" || true; fi
+  msg_long_press "msgtest one from A" || fail "messaging forward: long-press the text"
+  wait_text "Select" 10 || fail "messaging forward: no 'Select'"
+  tap "Select" || fail "messaging forward: Select"
+  sleep 1
+  [ "$photo" = 1 ] && { msg_tap_has "Photo" || fail "messaging forward: select the photo"; }
+  tap "Forward" || fail "messaging forward: tap Forward in the selection bar"
+  wait_for "Forward to…" 15 || fail "messaging forward: no picker"
+  wait_text "ZZ Msg Group" 10 || fail "messaging forward: the picker has no ZZ Msg Group"
+  tap "ZZ Msg Group" || fail "messaging forward: pick the group"
+  local dm_target=0
+  if [ -n "$(node_xy 'ZZ UI B')" ]; then tap "ZZ UI B" && dm_target=1; fi
+  shot "58-messaging-forward-picker"
+  tap "Send" || fail "messaging forward: tap Send"
+  wait_for "Forwarded to" 30 || echo "    (no 'Forwarded to N chats' note seen)"
+  sleep 3
+  DEV=B
+  for _ in 1 2 3 4 5 6; do has "ZZ Msg Group" && break; back_to_list || true; sleep 2; done
+  msg_open "ZZ Msg Group" || fail "messaging forward: B can't open the group"
+  wait_for "msgtest one from A" 60 || fail "messaging forward: B's group has no forwarded text"
+  wait_for "↪ Forwarded" 20 || fail "messaging forward: B's group shows no '↪ Forwarded' label"
+  [ "$photo" = 1 ] && { wait_for 'content-desc="Photo' 60 || fail "messaging forward: B's group has no forwarded photo"; }
+  shot "58-messaging-forwarded-group"
+  if [ "$dm_target" = 1 ]; then
+    back_to_list || true; msg_open "ZZ UI A" || fail "messaging forward: B reopens the DM"
+    local n; n="$(count_text 'msgtest one from A')"
+    for _ in $(seq 1 30); do dump; n="$(count_text 'msgtest one from A')"; [ "${n:-0}" -ge 2 ] && break; sleep 2; done
+    [ "${n:-0}" -ge 2 ] || fail "messaging forward: the DM didn't get the forwarded copy (texts: $n)"
+    wait_for "↪ Forwarded" 10 || fail "messaging forward: the DM shows no '↪ Forwarded' label"
+  else echo "UIENTRY SKIP messaging: the picker doesn't list the open DM; forwarded to the group only"; fi
+  DEV=A; back_to_list || true
+  pass "messaging: forwarded the text$([ "$photo" = 1 ] && echo ' and the photo') to the group$([ "$dm_target" = 1 ] && echo ' and the DM'); B shows '↪ Forwarded'"
+  # ---- 19.5 PDF: Risi answers in Sinhala / Tamil / English → Export PDF → Save to Downloads → adb pull
+  uib_risi_chat
+  A shell rm -rf /sdcard/Download/RisiMe >/dev/null 2>&1 || true
+  msg_group_pdf "messaging english pdf" "MSGPDF-EN" en
+  msg_pdf_check en "The site visit is agreed for Friday."
+  pass "messaging: Risi answer → Export PDF → Save to Downloads: RisiMe, 'Page 1 of', NotoSans embedded"
+  msg_group_pdf "messaging sinhala pdf" "MSGPDF-SI" si
+  msg_pdf_check si "ශ්‍රී ලංකා" "මූලික කරුණු" "ක්‍රියාමාර්ග"
+  pass "messaging: the Sinhala PDF extracts ශ්‍රී ලංකා / මූලික කරුණු / ක්‍රියාමාර්ග; NotoSans and NotoSansSinhala are emb yes"
+  msg_group_pdf "messaging tamil pdf" "MSGPDF-TA" ta
+  msg_pdf_check ta "க்ஷேத்ரம்" "முக்கிய புள்ளிகள்" "செயல்கள்"
+  pass "messaging: the Tamil PDF extracts க்ஷேத்ரம் / முக்கிய புள்ளிகள் / செயல்கள்; NotoSans and NotoSansTamil are emb yes"
+  DEV=A; logcat_ok "messaging"
+  DEV=B; logcat_ok "messaging"
+  pass "messaging: no crash, no main-thread database work"
+}
+if [ "$MSG" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_MESSAGING_ONLY:-0}" = 1 ]; }; then messaging_section; fi
 
 DEV=A; logcat_ok "ui entry"
 DEV=B; logcat_ok "ui entry"
