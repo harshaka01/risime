@@ -57,6 +57,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
                 .padding(horizontal = Spacing.xl, vertical = Spacing.md),
             verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
+            lk.codegen.risime.ui.common.MovedSettingsRow() // decision 079
             ProfileSection(s, vm)
             HorizontalDivider()
             ServerSection(s, vm)

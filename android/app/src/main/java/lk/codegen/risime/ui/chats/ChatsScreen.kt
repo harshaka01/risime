@@ -221,6 +221,7 @@ fun ChatsScreen(
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
+            lk.codegen.risime.ui.common.MovedBanner() // decision 079: last lk.codegen.risime build
             ChatsTabRow(tab = if (tab == CALENDAR_TAB && !calendarOn) 0 else tab, calendarOn = calendarOn, incoming = friends.incoming.size, onSelect = { tab = it })
             lk.codegen.risime.calls.FullScreenIntentPrompt()
             if (tab == CALENDAR_TAB && calendarOn && calendar != null) {
