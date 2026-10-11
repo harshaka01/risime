@@ -1,0 +1,206 @@
+{
+ "v": 1,
+ "note": "§34 classifier and name-check cases (server tests; normative). expect: schedule_read | risi_items | none. range is in the asker's zone (Asia/Colombo), now = 2026-10-11T10:00 local (a Sunday).",
+ "routing": [
+  {
+   "text": "what appointment do I have tomorrow",
+   "lang": "en",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-12",
+    "to": "2026-10-13"
+   }
+  },
+  {
+   "text": "Check my calendar for Monday, October 12th",
+   "lang": "en",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-12",
+    "to": "2026-10-13"
+   },
+   "never": [
+    "schedule_message",
+    "set_reminder",
+    "calendar_add",
+    "risi_calendar_add"
+   ]
+  },
+  {
+   "text": "am I free on Wednesday afternoon?",
+   "lang": "en",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-14",
+    "to": "2026-10-15"
+   }
+  },
+  {
+   "text": "what's on this week",
+   "lang": "en",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-11",
+    "to": "2026-10-18"
+   }
+  },
+  {
+   "text": "do I have any meetings today",
+   "lang": "en",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-11",
+    "to": "2026-10-12"
+   }
+  },
+  {
+   "text": "හෙට මට තියෙන appointments මොනවද?",
+   "lang": "si",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-12",
+    "to": "2026-10-13"
+   }
+  },
+  {
+   "text": "අද මට meeting තියෙනවද?",
+   "lang": "si",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-11",
+    "to": "2026-10-12"
+   }
+  },
+  {
+   "text": "நாளை எனக்கு என்ன சந்திப்புகள் உள்ளன?",
+   "lang": "ta",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-12",
+    "to": "2026-10-13"
+   }
+  },
+  {
+   "text": "இன்று நான் free-ஆ?",
+   "lang": "ta",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-11",
+    "to": "2026-10-12"
+   }
+  },
+  {
+   "text": "heta mata meeting thiyenawada?",
+   "lang": "singlish",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-12",
+    "to": "2026-10-13"
+   }
+  },
+  {
+   "text": "ada mama free da?",
+   "lang": "singlish",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-11",
+    "to": "2026-10-12"
+   }
+  },
+  {
+   "text": "sanduda mokada thiyenne?",
+   "lang": "singlish",
+   "expect": "schedule_read",
+   "range": {
+    "from": "2026-10-12",
+    "to": "2026-10-13"
+   }
+  },
+  {
+   "text": "what have you set up for me?",
+   "lang": "en",
+   "expect": "risi_items"
+  },
+  {
+   "text": "show my reminders",
+   "lang": "en",
+   "expect": "risi_items"
+  },
+  {
+   "text": "ඔයා මට මොනවද set කරලා තියෙන්නේ?",
+   "lang": "si",
+   "expect": "risi_items"
+  },
+  {
+   "text": "add my interview with Shenika on Monday 12 Oct at 2pm to my calendar",
+   "lang": "en",
+   "expect": "none"
+  },
+  {
+   "text": "remind me tomorrow at 9 to call Kamal",
+   "lang": "en",
+   "expect": "none"
+  },
+  {
+   "text": "send Kumu good morning every day at 6",
+   "lang": "en",
+   "expect": "none"
+  },
+  {
+   "text": "summarise this chat",
+   "lang": "en",
+   "expect": "none"
+  }
+ ],
+ "names": {
+  "friends": [
+   "Shirazi Perera",
+   "Shenika Fernando",
+   "Kamal",
+   "Zoë Silva"
+  ],
+  "cases": [
+   {
+    "said": "Shutazi",
+    "expect": "clarify",
+    "options": [
+     "Shirazi Perera"
+    ]
+   },
+   {
+    "said": "Shirazi",
+    "expect": "exact"
+   },
+   {
+    "said": "shirazi",
+    "expect": "exact"
+   },
+   {
+    "said": "Zoe",
+    "expect": "exact"
+   },
+   {
+    "said": "Shenica",
+    "expect": "clarify",
+    "options": [
+     "Shenika Fernando"
+    ]
+   },
+   {
+    "said": "Kamel",
+    "expect": "clarify",
+    "options": [
+     "Kamal"
+    ]
+   },
+   {
+    "said": "Zebediah",
+    "expect": "pass"
+   },
+   {
+    "said": "Dr Wickramasinghe",
+    "expect": "pass"
+   }
+  ]
+ }
+}

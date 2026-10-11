@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.34 (Release 0.3)
+# RisiMe Wire Protocol — v1.35 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -9647,7 +9647,362 @@ reserved for A). Device and readiness: `device_put_files.json`, `mls_group_files
     - the Room migration and its counts; purging the star rows;
     - the PDF generator on API 26 and 34 (the run splitting versus `CustomFallbackBuilder`).
 
+## 34. Risi P0 2026-10-11: schedule routing, pending drafts, Risi's items, name check (v1.35)
+Harsha's P0 on nightly.48:
+1. "what appointment do I have tomorrow" ran no calendar read; the model answered from chat memory.
+2. The chip "Check my calendar for Monday, October 12th" called `schedule_message`, which failed.
+   "Ask me again" repeated the failed tool, and a pending `schedule_message` card hijacked the next
+   turn.
+3. He wants a list of everything Risi set up for him.
+4. "Shutazi" was saved although his contact is "Shirazi".
+
+**Two phases.**
+- **Phase 1 is server-only** and works with the nightly.48 app unchanged. It covers §34.1, §34.2
+  (the server side), §34.3, §34.4 (storage, REST and the `risi_items` tool) and §34.5. Each part
+  uses only wire shapes that nightly.48 already renders: `answer` with `next_actions` `ask` chips,
+  `error` with its `body`, and `local_events`.
+- **Phase 2 is the next APK**, which advertises the device capability **`risi_items`**
+  (`device_put_risi_items.json`). It adds the `confirm_update` card state (§34.2), the native
+  `clarify` view (§34.5) and Settings → Risi skills → Calendar → "Risi's items" (§34.4).
+
+The server sends a Phase-2-only kind **only when the asker has at least one device advertising
+`risi_items`**. Otherwise it sends the Phase 1 form. Everything else is additive; clients ignore
+unknown fields.
+
+### 34.1 Schedule questions are always answered from a calendar read (server, normative)
+**What counts as a schedule question.** A request is a schedule question when it asks about the
+asker's schedule, in English, Sinhala, Tamil or Singlish. That covers:
+- schedule, appointments, meetings, free time, busy, "what's on", "am I free", "do I have …";
+- for today, tomorrow, a weekday, a date, or a range ("this week", "next Monday to Wednesday").
+
+"Check my calendar for …" is a schedule question. A request whose main verb writes something is
+**not** one: add, put, book, create, set, remind, send, schedule a message.
+
+**Detection.** The server combines two signals:
+- a deterministic classifier, `RisiMe.Agent.ScheduleIntent`, whose word lists are implementation;
+  its required behaviour is the fixture `contract/v1/risi_routing_cases.json`;
+- the model's tool choice: a schedule question is detected when either the classifier fires or the
+  model chooses `risi_calendar_check` or `calendar_check`.
+
+The classifier also returns the range:
+- today, tomorrow and dates are the asker's local days (§24.11 `tz`);
+- a weekday is its next occurrence, today included;
+- "this week" is today plus the next 6 days;
+- no day at all means from now to the end of today;
+- the range is clamped to 14 days (§29.7);
+- when a date and a weekday disagree, the date wins.
+
+**Enforcement.** When the classifier fires:
+1. **Step 1 of the turn is the read.** The server runs it itself, with no model call: either
+   `risi_calendar_check` (for a calendar user, §29.7, which also runs the phone `calendar_check`
+   in the same step), or the phone `calendar_check` (§25.3) when Risi Calendar is off. The step is a
+   normal `risi_turn_steps` row. Its result goes to the model as step 1 (§25.1 message order).
+2. **For the rest of the turn the `tool` enum of `risi_next_action` holds no write tool.** The
+   excluded tools are `schedule_message`, `set_reminder`, `calendar_add`, `risi_calendar_add`,
+   `set_alarm`, `cancel_scheduled` and `export_pdf`. The turn's `final.draft` (§28.2) is ignored,
+   and no card is posted. Calendar questions never route to a write tool.
+3. **Without a read, there is no schedule answer.** Two cases:
+   - The classifier did not fire, but the model's `final` answers about the schedule without a read
+     in the turn. That means it names a time, an event, "free", "busy", "nothing on" or "you have"
+     in a turn that the model began with a calendar or schedule phrase. The server then discards
+     the text and runs step 1 as above, once. Phrase detection is the classifier's own.
+   - The read itself failed. Then §29.7 rule 1 applies unchanged.
+
+   Chat history (§28.1) is never a source for a schedule answer. The system prompt says: "Never
+   answer schedule questions from chat context; the calendar read is the only source."
+
+**The answer lists every event in the range**, by start time, across every calendar read plus
+Risi's items (§34.4):
+- **Phone events** stay on the phone. The answer carries `local_events` (§29.7, v1.32) whenever the
+  phone source was read (`read_ok: true`). The phone renders its provider events and the Risi
+  Calendar events, as in v1.32. A Phase 2 phone also merges `GET /risi/items` for the same range,
+  and drops a `phone_event_added` item whose `event_id` it already shows from its provider.
+- **Without `local_events`** (no phone read, or a nightly.48 phone without `risi_items` data), the
+  **server** appends the list of events it holds itself to `answer`/`body`. That means Risi Calendar
+  events and Risi's items, one line each: "Mon 12 Oct, 14:00–15:00 · Interview with Shenika (Risi
+  Calendar)" or "… (added by Risi to Work)". With `local_events`, the server appends no list, so
+  nothing is shown twice.
+- The model never lists events itself, because the server builds the list. The §29.7 rules ("free"
+  claims, the "Checked:" line, titles to a commercial model) are unchanged.
+- **"Checked:" line.** `risi_items` is a new `calendar_source` source, added to the §29.7 rule 3
+  enum. It is read whenever Risi Calendar is read, or alone when Risi Calendar is off. In the
+  "Checked:" line it reads "Risi's items" and comes after Risi Calendar
+  (`envelope_risi_answer_schedule_read.json`).
+
+**The model sees the items** in the read tool's result. `risi_calendar_check` (and a forced phone
+`calendar_check`) gains `"risi_items": [{"kind", "start", "end", "all_day", "ref": "i<n>"}]`, with
+titles only under the §29.7 RisiMe-model rule. This shape is server-internal, not wire.
+
+**`risi_next_action` puts `tool` first (server-normative).** The JSON schema sent to the model lists
+**`tool` as the first property**, both in `properties` and in `required`. After it come `args`, then
+`answer`, `sources`, `next_steps` and `draft`.
+- This is a model-eval finding: with sorted order, guided decoding writes the args before it
+  chooses the tool, and only 8 % of tool calls were correct; with `tool` first, 68 % were.
+- The server must serialise the schema in declaration order. An Elixir map with 32 keys or fewer
+  is sorted, so the server needs an ordered encoder, for example `Jason.OrderedObject`.
+- A server test asserts that the encoded schema's first property key is `"tool"`.
+- `scripts/fake-llm` and the model eval read this same order.
+
+### 34.2 A new request closes the open cards (server, normative; Phase 2 card state)
+**Rule.** When a `risi_request` (any `action`) from user U in conversation C **starts its turn**,
+every card in C that meets all of these is **`superseded`** before the model is called:
+- it is a §25.4 `confirm` with `for: [U]`, a `clarify` (§34.5), or the §34.5 Phase 1 name question;
+- it came from a turn (`turn_ref` not null; proactive `origin: "offer"` cards are not affected);
+- it has not been confirmed, cancelled or expired.
+
+The server marks the `write_id` void. It then handles the pending draft (§28.2):
+- the new turn's model still sees the draft, so "make it 3 pm" keeps working, **except** in a
+  schedule-question turn (§34.1), which never sees it;
+- the server posts a card from the draft **only if this turn patched it**, through a
+  `calendar_add`, `set_reminder`, `risi_calendar_add` or `schedule_message` step, or a
+  `final.draft`; a patched draft gets a **new** `write_id`;
+- a draft this turn did not patch is deleted at the end of the turn.
+
+So an old card or draft can never hijack the next turn.
+
+**Tapping a superseded card.** A `confirm_write` (with or without `edit`) for a superseded
+`write_id` runs **nothing**. The server posts an `error` in C with `code: "superseded"`, `write_id`
+set, and the body **"This was replaced by your newer request."** (`envelope_risi_error_superseded.json`).
+- This is the **Phase 1** behaviour. nightly.48 shows the `body` of an unknown error code (§25.4).
+- A `cancel_write` on a superseded card is a silent no-op.
+- The phone's own §25.3 check is unchanged. The server never sends a tool call for a void
+  `write_id`.
+
+**`confirm_update` (new `risi.kind`, Phase 2).** This is how a Phase 2 card learns that it was
+superseded:
+```
+risi: {"v": 1, "kind": "confirm_update", "write_id": uuid, "state": "superseded",
+       "by_request_id": uuid, "call_ref": null, "made_by" (model null), "notify": []}
+```
+- `body` is "Replaced by your newer request.", and `notify: []` means it is silent
+  (`envelope_risi_confirm_update_superseded.json`).
+- Risi posts it in C, right after the rule above runs, **only when U has a `risi_items` device**,
+  because a nightly.48 app would show the body as a stray line.
+- A Phase 2 app shows the card with that `write_id` greyed, with the state "Replaced by your newer
+  request" and no buttons. The first decisive message wins: `confirm_write`, `cancel_write` or
+  `confirm_update`, in MLS order.
+- A Phase 2 app shows an unknown `state` as "Closed". Only the agent leaf may send
+  `confirm_update`; one from anywhere else is ignored.
+
+### 34.3 "Ask me again" re-asks the original question (server, normative)
+Every retry chip is the §25.4 `next_actions` entry
+**`{"label": "Ask me again", "action": "ask", "text": <the ORIGINAL request text of the failed turn>}`**.
+That is the asker's `risi_request.text` exactly as received: a chip's own text when the request was
+a chip tap, at most 1000 grapheme clusters.
+- **Never the failed tool's args.** A retry is a fresh turn, so the §34.1 classifier and routing run
+  again.
+- **When it is added.** The server adds this entry itself in these cases:
+  - an `answer` whose turn has a step `failed`, `timeout` or `denied` and no successful write;
+  - every `error` card of a turn except `superseded` (a `tool_timeout` also keeps its [Retry], below);
+  - every §29.7 no-read answer.
+- The model's own retry-like `next_steps` and `next_actions` ("Try again", "Retry", "Ask me
+  again") are dropped and replaced by this one.
+- `error` gains the optional field **`next_actions`** (the §25.4 shape;
+  `envelope_risi_error_ask_again.json`). nightly.48 renders `next_actions` on answers. A v1.35 app
+  renders them on error cards too, and an older app shows only the body.
+- **Unchanged:** `tool_timeout` on a **confirmed** write keeps the §25.4 [Retry] (`confirm_write`
+  again for the same `write_id`), because that retries the write the user already approved.
+- Example of an answer with the chip: `envelope_risi_answer_ask_again.json`.
+
+### 34.4 Risi's items (server, normative; Android in Phase 2)
+**What it is.** A per-user ledger of everything Risi set up for the user. Only the user's own items
+appear.
+
+| `kind` | Written when | `ref` | Source of truth |
+|---|---|---|---|
+| `phone_event_added` | a device `calendar_add` result is `ok` with `event_id` and `verified: true` (§25.3) | `{"event_id": str (opaque), "write_id", "device_id", "calendar": {"name", "account"} \| null}` | this row (title, start/end and calendar come from the confirm card's `args` and the result; **no new phone data**) |
+| `risi_calendar_event` | a `risi_calendar_add` is confirmed (§29.8) | `{"event_id": uuid}` | `risi_events` (§29.5) |
+| `reminder` | a `set_reminder` is confirmed (§25.4) | `{"reminder_id": uuid}` | the reminder |
+| `scheduled_message` | a `schedule_message` result is `ok` (§26.6) | `{"schedule_id": uuid, "device_id", "target_conversation_id", "repeat": "daily" \| null}` | the phone. **The text is never stored on the server** (§26.6): `title` is `null`, and the phone shows its local text |
+| `follow_up` | — (read live) | `{"item_id": uuid}` | ledger items where the user is a counterpart (§28.7 `promised_to_me`) |
+| `promise` | — (read live) | `{"item_id": uuid}` | ledger items where the user is the owner (§28.7 `i_promised`) |
+
+**Storage.** The new Postgres table **`risi_items`** holds rows for the first four kinds:
+```
+risi_items(id uuid PK, user_id uuid NOT NULL, kind text NOT NULL, ref jsonb NOT NULL,   -- ids only
+           title_sealed bytea NULL, calendar_sealed bytea NULL,                          -- RISI_DATA_KEY
+           start_at timestamptz NULL, end_at timestamptz NULL, all_day bool NOT NULL,
+           state text NOT NULL DEFAULT 'active', created_at, updated_at)
+  INDEX (user_id, start_at)
+```
+- Sealing works as in §29.5, through `RisiMe.Agent.Seal`, with AAD `risi_items:<id>:title` and
+  `…:calendar`. There is no plaintext title column.
+- `follow_up` and `promise` are not copied. The read joins the §28.7 query (open items) at query
+  time, with `start` = `due`.
+- **Freshness.** On read, a `risi_calendar_event` or `reminder` row takes its current state and
+  time from its source. A row whose source is gone, cancelled or fired is left out.
+- **Retention** follows each kind's own rules:
+  - `phone_event_added`: 30 days after `end`, as the §26.4 undo window, or on delete;
+  - `risi_calendar_event`: with the event's purge (§29.5);
+  - `reminder`: 30 days after it fires or is cancelled;
+  - `scheduled_message`: on cancel, or 30 days after the last send of a one-off;
+  - all rows are deleted with account deletion.
+- None of this reaches the learning log, `risi_turn_steps`, logs or pushes (titles as §29.5).
+- Rows are written from the same success paths that write the §26.4 activity entries.
+
+**REST** (auth, with `X-Device-Id` of a device of the caller, else `403 invalid_device`):
+
+| Method, path | Body / query | Reply |
+|---|---|---|
+| `GET /api/v1/risi/items?from=ts&to=ts&kinds=k1,k2` | `from` defaults to now, `to` to `from` + 92 days (at most 366 days, else `422 bad_request`); `kinds` defaults to all; an unknown kind is `422` | `200 {"items": [RisiItem]}`, at most 500, sorted by `start` with items without a `start` last (`risi_items_reply.json`) |
+| `PATCH /api/v1/risi/items/{id}` | `reminder` only: `{"at"?: ts, "text"?: 1–500 chars}` (`risi_items_patch_reminder.json`) | `200 {"item": RisiItem}`; another kind is `422 bad_request` |
+| `DELETE /api/v1/risi/items/{id}` | — | `204`; routed by kind, see below |
+
+```
+RisiItem = {"id": uuid, "kind", "title": str | null, "start": ts | null, "end": ts | null,
+            "all_day": bool, "state": "active", "calendar": {"name", "account"} | null,
+            "conversation_id": str | null, "ref": {…as the table}, "created_at": ts,
+            "actions": ["open" | "edit" | "delete"]}
+```
+- For a `follow_up` or `promise`, `id` = `item_id`. `actions` is computed for the calling device.
+- **What DELETE does for each kind:**
+  - `risi_calendar_event`: the §29.4 `DELETE`.
+  - `reminder`: cancels it, and writes a `reminder_cancelled` activity entry.
+  - `phone_event_added`, `scheduled_message`: **client actions.** The phone in `ref.device_id`
+    first deletes the provider row by `event_id`, or cancels the schedule locally, after a confirm
+    dialog. It then calls `DELETE` to drop the row. From any other device the reply is
+    `403 invalid_device`. As in §26.4, the phone touches only rows that are in its own local record
+    of what it created.
+  - `follow_up`, `promise`: `422 bad_request`. These are edited in My promises (§28.7, §27.5).
+- **Errors.** `404 not_found` for someone else's item or an unknown one. `503 agent_unavailable` as
+  §24.11 when the sealed rows can't be opened.
+
+**Server tool `risi_items`** `{from?, to?, kinds?}` answers "what have you set up for me?":
+- It is offered to every asker with a Risi chat, and it is in the `risi_next_action` enum.
+- The classifier also fires on it: "what have you set up / added / scheduled for me", "my
+  reminders", "what did you put in my calendar", in all four languages. The server then forces this
+  tool as step 1, in the same way as §34.1.
+- **The answer comes from the ledger only.** The model's text is discarded, and the server builds
+  the `answer`: one line per item, by time, grouped by kind. A `scheduled_message` line names only
+  the recipient and the time (§26.4). With no items the answer is "I haven't set anything up for you
+  from <from> to <to>."
+- `sources` carries one **`{"type": "risi_item", "item_id": uuid, "kind": str}`** per item. This is a
+  new `Source`; old apps show nothing for it (`envelope_risi_answer_risi_items.json`).
+
+**Android (Phase 2): Settings → Risi skills → Calendar → "Risi's items".**
+- An upcoming list from `GET /risi/items` (from now), grouped by day. A `phone_event_added` item
+  shows its provider row when this phone has it, as the `added_event` card does (§25.3). A
+  `scheduled_message` item shows the local text on its own phone, and "On your other phone"
+  elsewhere.
+- **Open:**
+  - `phone_event_added`: `ACTION_VIEW` of the event;
+  - `risi_calendar_event`: the event screen;
+  - `reminder`: the Risi chat;
+  - `scheduled_message`: the chat's "Scheduled messages";
+  - `promise` and `follow_up`: My promises at the item.
+- **Edit:**
+  - `phone_event_added`: `ACTION_EDIT`;
+  - `risi_calendar_event`: the §29.3 `PATCH`;
+  - `reminder`: the `PATCH` above;
+  - `scheduled_message`: the local Edit (§26.6);
+  - `promise`: the §27.5 `item_edit`.
+- **Delete:** a confirm dialog, then the `DELETE` routing above. Buttons appear only as `actions`
+  allows.
+
+### 34.5 Name check before a write (server, normative)
+**When it runs.** Before the server posts the confirm card of a write that names people:
+- `calendar_add`, `risi_calendar_add`;
+- `set_reminder` with a person;
+- `schedule_message` (the recipient's name, before it is resolved to a conversation).
+
+It runs also under "Allowed" (§26.3).
+
+**Which names are checked.** The names come from the draft or step slot `with: [str]` (§29.8). This
+release extends that slot to `calendar_add`, `set_reminder` and `schedule_message` drafts; it is
+server-side only, and the phone's `calendar_add` args are unchanged. The server also checks the
+words after "with " in an English title, up to punctuation.
+
+**Matching.** Each name is matched against the asker's friends: their contacts (§1.4) and the
+co-members of their chats, by display name and by each word of it.
+- Before matching, both sides are normalised: NFKD, combining marks removed, case-folded, spaces
+  collapsed.
+- **Exact match:** the write goes straight through.
+- **Close match:** a Levenshtein distance of at most 2 (at most 1 for names of 4 characters or
+  fewer), **or** an equal Double Metaphone primary code (Latin script only).
+- **No close match:** the write goes through unchanged, because the person need not be a contact.
+
+**Unknown name with a close match.** The confirm card is held, and a question is asked first: at
+most one name per turn, and at most once per name per draft. The question is in the conversation of
+the card, normally the Risi chat. "Shutazi" with the contact "Shirazi" asks **"Did you mean
+Shirazi?"**, with up to 3 candidates, best first; ties go to the most recently messaged contact.
+- **Phase 1 (nightly.48; the clarify form it already renders):** an `answer` with
+  `next_actions: [{"label": "Shirazi", "action": "ask", "text": "Use Shirazi"},
+  {"label": "Keep \"Shutazi\"", "action": "ask", "text": "Keep Shutazi"}]` and the field
+  **`clarify`** below (`envelope_risi_answer_name_clarify.json`).
+  - The draft remembers the offered chip texts.
+  - The next request whose text **equals** one of them (case-insensitive, trimmed) resolves the
+    name without a model call: the draft's name is replaced, or kept. The server then posts the
+    confirm card. These are server-issued strings matched exactly; free text is still not parsed
+    for intent (decision 066).
+  - Any other request supersedes the question (§34.2).
+- **Phase 2 (`risi_items` device):** the same `answer`, where the app renders `clarify` natively as
+  a card with one button per option plus [Keep "<said>"]. A tap sends the `ask` of the matching
+  `next_actions` entry, so there is one path for both phases.
+- The `clarify` field:
+  ```
+  "clarify": {"about": "name", "write_id": uuid, "said": "Shutazi",
+              "options": [{"name": "Shirazi", "user_id": uuid | null}], "keep": true}
+  ```
+  `write_id` is the one the following confirm card will carry, so `confirm_update` (§34.2) also
+  closes the question. An answer to the question never counts as a §28.3 question.
+
+### 34.6 Amendments, examples, gate
+**Amendments.**
+- **§25.1:** the enforced read step, the write-free enum and the `tool`-first schema (§34.1).
+- **§25.4:** `error.next_actions`; the `error` code `superseded`; the `Source` `risi_item`; the kind
+  `confirm_update` (§34.2, §34.3, §34.4).
+- **§28.2:** drafts are posted only when patched in this turn, and are superseded by a new request;
+  `with` covers every write.
+- **§28.3:** the name question does not count as a question.
+- **§29.7:** the source `risi_items`, the server-built list, and `local_events` + Risi's items.
+- **§26.4:** rows of `risi_items` are written alongside activity entries.
+- **New:** the device capability `risi_items` (Phase 2) and the table `risi_items`.
+
+**Examples** (`contract/v1/examples/`):
+- `envelope_risi_answer_schedule_read.json`
+- `envelope_risi_error_superseded.json`
+- `envelope_risi_confirm_update_superseded.json`
+- `envelope_risi_error_ask_again.json`
+- `envelope_risi_answer_ask_again.json`
+- `risi_items_reply.json`
+- `risi_items_patch_reminder.json`
+- `envelope_risi_answer_risi_items.json`
+- `envelope_risi_answer_name_clarify.json`
+- `device_put_risi_items.json`
+
+**Fixture.** `contract/v1/risi_routing_cases.json` holds classifier and name-check cases. The server
+must pass all of them; Android does not use it.
+
+**Gate.** These canary and regression cases are normative. They are server tests, plus the
+`scripts/fake-llm --script` replay, plus the model eval for 1 and 2:
+1. Schedule questions in English, Sinhala, Tamil and Singlish (every `schedule_read` case of the
+   fixture) call `risi_calendar_check`, or `calendar_check` where Risi Calendar is off, before any
+   answer. This holds even when the scripted model answers straight away or picks
+   `schedule_message`.
+2. "Check my calendar for Monday, October 12th" calls the read tool for Mon 12 Oct, and **never**
+   `schedule_message` or any other write tool.
+3. A pending `schedule_message` card or draft does not hijack the next turn:
+   - the next request supersedes it;
+   - a `confirm_write` on it gives the `superseded` error and no tool call;
+   - a Phase 2 device sees `confirm_update`;
+   - no card is posted from an unpatched draft.
+4. After a failed turn, "Ask me again" is an `ask` with the original text and runs a fresh turn
+   with fresh routing.
+5. "what have you set up for me?" calls `risi_items`, and the answer lists exactly the ledger rows
+   (all four stored kinds plus promises and follow-ups).
+6. "add a meeting with Shutazi tomorrow at 3pm", with the friend "Shirazi", gives the name question
+   before any confirm card. "Use Shirazi" gives a card with Shirazi. "Keep Shutazi" gives a card
+   with Shutazi. An exact "Shirazi", or a name with no close match ("Zebediah"), goes straight to
+   the card.
+7. The encoded `risi_next_action` schema has `tool` as its first property.
+
+**Android:**
+- decodes every new example;
+- Phase 2 UI tests: a greyed superseded card; the clarify card; the Risi's items list with Open,
+  Edit and Delete; and Delete of a `phone_event_added` item removing the provider row.
+
 ## Changelog
+- **v1.35** (2026-10-11): Risi P0 (§34): schedule questions answered only after a forced calendar read (deterministic classifier + the model's choice, no write tools in that turn, the server-built event list, `risi_next_action` with `tool` first); a new request supersedes open cards and unpatched drafts (`error` `superseded`; Phase 2 `confirm_update`); "Ask me again" = `ask` with the original text (`error.next_actions`); Risi's items (`risi_items` table, `GET`/`PATCH`/`DELETE /api/v1/risi/items`, the server tool `risi_items`, the `calendar_source` `risi_items`, the `Source` `risi_item`); the name check before writes (`answer.clarify` + `ask` chips); the fixture `risi_routing_cases.json`; Phase 1 server-only (nightly.48), Phase 2 behind the device capability `risi_items`.
 - **v1.34** (2026-10-11): basic messaging (§33, NEXT-PHASE E): the copy format (client; fixture
   `copy_format_cases.json`); forward with `forwarded: {hops}` ("Forwarded", "Forwarded many times" at
   ≥ 5 hops and then one target), up to 30 items × 5 targets, re-encrypted per target, media always
