@@ -171,4 +171,42 @@ defmodule RisiMe.Agent.MemoryLiveTest do
       refute Lang.wrong_script?(lang, Enum.join([t.topic | t.key_points], " "))
     end
   end
+
+  test "step 4: the live model marks a cancelled meeting and the event is cancelled", ctx do
+    {:ok, view} =
+      RisiMe.Agent.Calendar.create(ctx.h, %{
+        title: "Site visit",
+        notes: nil,
+        tz: "Asia/Colombo",
+        start: ~U[2026-10-12 08:30:00.000000Z],
+        stop: ~U[2026-10-12 09:30:00.000000Z],
+        all_day: false,
+        with: [ctx.s],
+        drop: true,
+        reminder_min: :default,
+        source: %{conversation_id: ctx.og, message_ids: [], item_id: nil, note_id: nil},
+        created_by: "risi"
+      })
+
+    remember!(
+      ctx.og,
+      ctx.harsha.user,
+      "Site visit Monday 12 Oct at 2pm with Shenika?",
+      ~U[2026-10-08 04:00:00Z]
+    )
+
+    remember!(ctx.og, ctx.shenika.user, "Yes, Monday 2pm works.", ~U[2026-10-08 04:05:00Z])
+
+    remember!(
+      ctx.og,
+      ctx.shenika.user,
+      "Sorry, we have to cancel Monday's site visit, the client is away.",
+      ~U[2026-10-09 03:00:00Z]
+    )
+
+    assert :ok = MemoryIngest.run(ctx.og)
+    {e, _} = RisiMe.Agent.Calendar.load(view["event_id"])
+    IO.puts("risi-l1 live step 4: event state after the cancel message: #{e.state}")
+    assert e.state == "cancelled"
+  end
 end

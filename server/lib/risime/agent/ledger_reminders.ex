@@ -296,7 +296,11 @@ defmodule RisiMe.Agent.LedgerReminders do
     today = NaiveDateTime.to_date(local)
     rc = RisiChat.active_id(user)
 
-    due? = rc && local.hour == 9 && last_digest(rc) != today
+    # v1.36 §35.4: no 09:00 digest on a day the 07:00 brief went out.
+    due? =
+      rc && local.hour == 9 && last_digest(rc) != today &&
+        not (RisiMe.Agent.Brief.on?() and RisiMe.Agent.Brief.sent_today?(user, now))
+
     items = if due?, do: digest_items(user), else: []
     # v1.29 §29.12: a calendar user's digest gains `events` (posted for items or events).
     events = if due?, do: RisiMe.Agent.Calendar.digest_events(user, now, tz)

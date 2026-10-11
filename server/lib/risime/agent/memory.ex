@@ -248,7 +248,7 @@ defmodule RisiMe.Agent.Memory do
   """
   def put_item(conv, %{kind: kind, text: text} = it) when kind in @kinds and is_binary(text) do
     id = Ecto.UUID.generate()
-    now = RisiMe.Agent.Clock.usec(DateTime.utc_now())
+    now = RisiMe.Agent.Clock.usec(RisiMe.Agent.Clock.now())
 
     with {:ok, key} <- Seal.data() do
       sealed =

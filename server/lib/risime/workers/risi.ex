@@ -14,7 +14,7 @@ defmodule RisiMe.Workers.Risi do
   | `expire` | `risi_timers` | a proposal unconfirmed after 48 h is deleted |
   | `reminder`, `escalation` | `risi_timers` | §24.11 timing (no-op when `v` is stale) |
   | `reminder_fire` | `risi_timers` | a `set_reminder` reminder at its time (§25.4) |
-  | `digest_sweep` | `risi_timers` | cron every 15 min: 09:00-local digests |
+  | `digest_sweep` | `risi_timers` | cron every 15 min: the 07:00 brief (v1.36), 09:00-local digests |
   | `prune` | `risi_timers` | cron hourly: expired confirm cards, old tool-call rows, activity over 90 days |
   | `undo_timeout` | `risi_timers` | a client undo unanswered after 15 s → `failed` (§26.4) |
   | `forget` | `risi_timers` | the safety re-run of `RisiMe.Agent.forget/1` (§24.4, within 1 h) |
@@ -149,6 +149,8 @@ defmodule RisiMe.Workers.Risi do
 
   def perform(%Oban.Job{args: %{"kind" => "digest_sweep"}}) do
     if Out.ready?() do
+      # v1.36 §35.4: the 07:00 daily brief (independent of RISI_LEDGER/RISI_NOTES).
+      RisiMe.Agent.Brief.sweep()
       Commitments.digest_sweep()
       # v1.27 §27.6: the personal 09:00 digests of ledger items.
       RisiMe.Agent.LedgerReminders.digest_sweep()

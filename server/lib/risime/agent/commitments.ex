@@ -604,8 +604,40 @@ defmodule RisiMe.Agent.Commitments do
     end
   end
 
-  @doc "Escalation `n` (1 or 2) to the counterparts, 24 h apart after due."
-  def escalate(id, v, _n) do
+  @doc """
+  Escalation `n` (1 or 2) to the counterparts, 24 h apart after due. v1.36 §35.4: the first
+  one also asks the owner for the status, in the owner's own Risi chat.
+  """
+  def escalate(id, v, n) do
+    with %Commitment{} = c <- current(id, v), 1 <- n, do: ask_owner(c)
+    escalate_counterparts(id, v)
+  end
+
+  # v1.36 §35.4 "after a missed deadline, ask the owner for status".
+  defp ask_owner(c) do
+    with rc when is_binary(rc) <- RisiMe.RisiChat.active_id(c.owner_id) do
+      tz = Clock.user_tz(c.owner_id)
+      due = Clock.human(c.due, c.due_kind, tz)
+
+      Out.post(
+        rc,
+        "\"#{c.text}\" was due #{due}. Is it done? Tap Done on its card in the chat, or agree a new date there.",
+        %{
+          "kind" => "reminder",
+          "phase" => "overdue",
+          "commitment_id" => c.id,
+          "due" => Clock.ts(c.due),
+          "notify" => [c.owner_id]
+        }
+      )
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp escalate_counterparts(id, v) do
     with %Commitment{counterpart_ids: [_ | _]} = c <- current(id, v) do
       overdue = max(DateTime.diff(DateTime.utc_now(), c.due, :second), 0)
       days = max(div(overdue + 3600, 86_400), 1)

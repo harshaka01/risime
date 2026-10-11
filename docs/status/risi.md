@@ -99,8 +99,61 @@ Memory only starts at the deploy. Before that, Risi only has the last 24 h of th
 - New migration: `20261028100000_risi_note_translations.exs` (additive).
 - Live-model finding: the Sinhala translation once rendered "installed" as "sent", and before the glossary it rendered Thursday as Wednesday. Weekdays are now in the glossary; general translation quality still depends on risi-l1.
 
-## Step 4: cancellation propagation, nudges, 07:00 brief
-Not started.
+## Step 4: cancellation and change propagation, deadline nudges, the 07:00 brief (contract v1.36 §35.4)
+
+**State:** green on `main` (server suite 1198 tests, 0 failures; live risi-l1 checks 6/6). Root deploys it through the fast lane.
+
+Two of the three parts do not need `RISI_LEDGER` or `RISI_NOTES`:
+- **The brief.** It reads Risi Calendar, Risi's items, promises as stored, and memory.
+- **Propagation.** It runs from the memory ingest.
+
+The nudges work in both modes.
+
+### What it does
+- **07:00 daily brief** (`RisiMe.Agent.Brief`, run by the `digest_sweep` job every 15 min). At 07:xx in the user's zone, once a day, it posts a `digest` with `scope: "brief"` in the user's Risi chat. It has these sections:
+  - **Today:** Risi Calendar events and Risi's items of the day.
+  - **Due today** and **Overdue:** the user's own open promises.
+  - **Waiting on others:** promises owed to the user, due within 7 days or overdue.
+  - **From your chats:** today's deadlines and meetings found by memory that are not already listed.
+  - **Yesterday's decisions:** decisions memory found yesterday.
+
+  More details:
+  - Every line comes from a stored row; no model writes it. The "Checked:" line says the phone calendar isn't read.
+  - Labels are in the user's language (si, ta or en).
+  - Nothing to say means no post. `RISI_BRIEF=off` turns it off.
+  - The ledger's 09:00 personal digest is skipped on a day the brief went out.
+- **Deadline nudges.**
+  - Before the deadline: the existing reminder at due − 1 h, or the ledger's `item_due`.
+  - After a missed deadline, ledger off: the first escalation (24 h after due) now also asks the owner in their Risi chat: "\"X\" was due …. Is it done? …". The counterparts are told in the chat as before.
+  - After a missed deadline, ledger on: `item_overdue` goes to the owner and `item_nudge` to the counterparts, as before.
+- **Cancellation and change propagation** (`RisiMe.Agent.Propagation`). The memory ingest now marks a meeting as `status: cancelled` or `moved` (with `new_at`). Then:
+  - **Matching:** the one active, future Risi Calendar event made from that chat is found. The time is matched within 1 h, or the date when only a date is given; otherwise the clear best title match is used. When nothing matches clearly, nothing changes.
+  - **Cancelled:**
+    - The event is cancelled for everyone and the cancellation is read back.
+    - The participants get the "was cancelled" update.
+    - Each participant with a Risi chat gets **"Reschedule?"** with up to 3 slots free for everyone in Risi Calendar: the next 5 days, 09:00–18:00, no Sundays, the original length, as `ask` chips such as "Add \"Site visit\" with Shenika on Tue 13 Oct 10:00".
+  - **Moved:** the event is moved as its owner and the new start is read back. The others are asked again.
+
+### Test phrases and steps for Harsha
+1. **Brief.** Tomorrow at 07:00, your Risi chat gets "Good morning. Your day, …", provided you have a Risi Calendar event, a promise, or something from your chats. A Sinhala writer gets Sinhala labels. Nothing to report means no message.
+2. **Cancel.** Agree a meeting in an Official group so that Risi makes a Risi Calendar event for it (from a promise or a note meeting). Then write in the group "Sorry, we have to cancel Monday's site visit". About 2 minutes later:
+   - the event is cancelled;
+   - both of you get the update;
+   - each of you gets "Reschedule? Free for everyone in Risi Calendar: …" with tap-to-ask chips.
+3. **Move.** Write "the site visit moves to Tuesday 10am". The event moves, and the others are asked to accept again.
+4. **Overdue.** A promise 24 h past due gives you, the owner, "Is it done?" in your Risi chat.
+
+### Notes for root
+- Authorised edits outside the risi paths:
+  - `RisiMe.Workers.Risi`: `Brief.sweep` in `digest_sweep`.
+  - Inside `server/lib/risime/agent` (my path): Commitments, LedgerReminders, Memory and MemoryIngest.
+- New migration: `20261029100000_risi_brief.exs` (additive).
+- New wire use:
+  - `digest` with `scope: "brief"`, with the fields `events`, `risi_items`, `items`, `decisions` and `language`;
+  - `reminder` with `phase: "overdue"`.
+
+  Old apps show the body. Root may want to note both in §35.4.
+- Slots count only Risi Calendar busy time, because the server can't read phone calendars. The message says so.
 
 ## Step 5: backfill
 Not started; it goes through root's APK path.
