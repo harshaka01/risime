@@ -78,6 +78,9 @@ data class RisiSource(
     /** v1.35 §34.4 `risi_item`: one of Risi's items behind the answer (old apps show nothing for it). */
     @SerialName("item_id") val itemId: String? = null,
     val kind: String? = null,
+    /** v1.36 §35 `memory`: the messages behind the answer, and when (shown as nothing). */
+    @SerialName("message_ids") val messageIds: List<String> = emptyList(),
+    val at: String? = null,
 ) {
     /** Whether the app can show it: a known type with its fields (a link only over https). */
     val showable: Boolean get() = when (type) {

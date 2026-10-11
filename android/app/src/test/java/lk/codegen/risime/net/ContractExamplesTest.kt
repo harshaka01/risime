@@ -291,7 +291,21 @@ class ContractExamplesTest {
         )
     }
 
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + mapOf(
+    /** v1.36 §35 Risi Brain v2 (net/Protocol136.kt). */
+    private val brainV136: Map<String, (String) -> Any> by lazy {
+        mapOf(
+            "risi_learning_put.json" to { s -> ProtocolJson.decodeFromString<RisiLearningPut>(s).also { require(!it.enabled && it.conversationId.startsWith("grp:")) } },
+            "risi_learning_reply.json" to { s -> ProtocolJson.decodeFromString<RisiLearningReply>(s).also { require(it.global && !it.chats.single().enabled) } },
+            "envelope_risi_answer_memory_sources.json" to { s ->
+                ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { m ->
+                    val src = m.sources.single()
+                    require(m.kind == "answer" && src.type == RisiKinds136.SOURCE_MEMORY && src.conversationId != null && src.messageIds.size == 1 && src.at != null && !src.showable)
+                }
+            },
+        )
+    }
+
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.
