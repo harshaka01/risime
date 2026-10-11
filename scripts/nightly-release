@@ -323,7 +323,8 @@ if [ -n "$HOTFIX" ]; then
   rel_commit="$(git rev-parse HEAD)"
   git fetch -q origin main
   mwt="$(mktemp -d)"; git worktree add -q --detach "$mwt" origin/main
-  if git -C "$mwt" merge -q --no-edit -m "chore(root): merge hotfix v$next into main
+  if [ "${HOTFIX_NO_MAIN_MERGE:-0}" = 1 ]; then echo "==> HOTFIX_NO_MAIN_MERGE: v$next stays on $HOTFIX (legacy line, decision 079)"
+  elif git -C "$mwt" merge -q --no-edit -m "chore(root): merge hotfix v$next into main
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" "$rel_commit" && git -C "$mwt" push -q origin HEAD:main; then
     echo "==> hotfix v$next merged into main"
@@ -362,8 +363,11 @@ else
   echo "==> --no-publish: run scripts/nightly-release --publish-only v$next when ready"
 fi
 
+if [ "${NO_SERVER_SWITCH:-0}" = 1 ]; then echo "==> NO_SERVER_SWITCH: the pilot server stays on $(cat "$HOME/risime-run/CURRENT" 2>/dev/null) (legacy app-only release, decision 079)"
+else
 echo "==> switch the pilot server to v$next (prod release; docs/decisions/006, 023)"
 scripts/run-server "v$next"
+fi
 if [ -n "$ROBOT_NOTE" ]; then
   setsid nohup scripts/ui-robot-report "$next" android/app/build/outputs/apk/debug/app-debug.apk \
     > "$HOME/risime-logs/release/robot-v$next.out" 2>&1 < /dev/null &
