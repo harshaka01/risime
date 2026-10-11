@@ -107,7 +107,11 @@ defmodule RisiMe.Agent.LLM do
       "chat_template_kwargs" => %{"enable_thinking" => false},
       "response_format" => %{
         "type" => "json_schema",
-        "json_schema" => %{"name" => req.schema_name, "schema" => req.schema, "strict" => true}
+        "json_schema" => %{
+          "name" => req.schema_name,
+          "schema" => RisiMe.Agent.Tools.wire_schema(req.schema),
+          "strict" => true
+        }
       }
     }
 

@@ -144,7 +144,8 @@ defmodule RisiMe.Devices do
   # v1.34 §33.1: `files`; `pdf_export`, kept only with `risi_tools` (silently dropped otherwise).
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
                          group_calls call_switch screen_share tabs risi_tools risi_skills
-                         risi_ledger risi_events risi_notes google_calendar files pdf_export)
+                         risi_ledger risi_events risi_notes google_calendar files pdf_export
+                         risi_items)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do
@@ -159,6 +160,8 @@ defmodule RisiMe.Devices do
 
       caps = if "risi_events" in caps, do: caps, else: caps -- ~w(risi_notes google_calendar)
       caps = if "risi_tools" in caps, do: caps, else: caps -- ["pdf_export"]
+      # v1.35 §34: `risi_items` (Phase 2), kept only with `risi_tools`.
+      caps = if "risi_tools" in caps, do: caps, else: caps -- ["risi_items"]
 
       {:ok, caps}
     else
@@ -442,6 +445,16 @@ defmodule RisiMe.Devices do
       %Device{capabilities: caps} = d -> risi_tools?(d) and "pdf_export" in (caps || [])
       _ -> false
     end
+  end
+
+  @doc "v1.35 §34: true if the user has at least one device advertising `risi_items`."
+  def any_risi_items?(user_id) do
+    Repo.exists?(
+      from d in Device,
+        where:
+          d.user_id == ^user_id and not is_nil(d.mls_signature_key) and
+            "risi_tools" in d.capabilities and "risi_items" in d.capabilities
+    )
   end
 
   @doc "v1.29: true if `device_id` (may be nil) names a `risi_events` device of the user."

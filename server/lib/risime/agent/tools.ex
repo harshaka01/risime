@@ -156,6 +156,44 @@ defmodule RisiMe.Agent.Tools do
     %{"anyOf" => tool_alts ++ need ++ [final]}
   end
 
+  @first_props ~w(tool args answer sources next_steps draft)
+  @first_keys ~w(type enum anyOf properties required additionalProperties)
+
+  @doc """
+  P0 2026-10-11: the schema as sent to the model, with `tool` FIRST in every object's
+  `properties` (then `args`, `answer`, …) and a fixed key order (`Jason.OrderedObject`). Guided
+  decoding emits properties in schema order: the live risi-l1 eval made 68% correct tool calls
+  with `tool` first and 8% without. The map form stays for validation.
+  """
+  def wire_schema(%{} = schema) do
+    keys = order(Map.keys(schema), @first_keys)
+
+    Jason.OrderedObject.new(
+      for k <- keys do
+        v = Map.fetch!(schema, k)
+
+        v =
+          if k == "properties" and is_map(v) do
+            Jason.OrderedObject.new(
+              for pk <- order(Map.keys(v), @first_props), do: {pk, wire_schema(v[pk])}
+            )
+          else
+            wire_schema(v)
+          end
+
+        {k, v}
+      end
+    )
+  end
+
+  def wire_schema(list) when is_list(list), do: Enum.map(list, &wire_schema/1)
+  def wire_schema(other), do: other
+
+  defp order(keys, first) do
+    lead = Enum.filter(first, &(&1 in keys))
+    lead ++ Enum.sort(keys -- lead)
+  end
+
   @doc "The tool lines of the system prompt."
   def prompt_lines(allowed),
     do: Enum.map_join(allowed, "\n", &"- #{&1.name}: #{&1.description}")

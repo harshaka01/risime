@@ -565,7 +565,8 @@ defmodule RisiMe.Agent.CalendarTools do
     |> Kernel.--([asker])
   end
 
-  defp contacts(asker) do
+  @doc false
+  def contacts(asker) do
     groups =
       Repo.all(
         from a in RisiMe.Groups.Member,
