@@ -1558,6 +1558,9 @@ PY
   for _ in $(seq 1 120); do
     if has "I checked: Phone calendar"; then ok_hon="I checked: Phone calendar"; break; fi
     if has "I couldn't read your calendar on this phone (sync is off"; then ok_hon="I couldn't read your calendar on this phone (sync is off"; break; fi
+    # v1.35 §34.1: the server-built schedule answer ("Checked: … Not checked: Phone calendar (sync is off).")
+    if has "Not checked: Phone calendar (sync is off)"; then ok_hon="Not checked: Phone calendar (sync is off)"; break; fi
+    if has "Checked: Risi" && has "Phone calendar"; then ok_hon="Checked: … Phone calendar"; break; fi
     sleep 1
   done
   [ -n "$ok_hon" ] || fail "calendar: the free/busy answer names neither what was read ('I checked: Phone calendar …') nor the sync-off reason (CalendarHonesty)"
@@ -3247,6 +3250,52 @@ PY
   [ -n "$b" ] || { echo "    [$DEV] no UI node: $1"; return 1; }
   set -- $b; A shell input swipe "$1" "$2" "$1" "$2" 900
 }
+msg_menu_tap() {  # tap $1 in the open long-press sheet; on the small redroid screen the sheet's lower items are off-screen
+  # (uiautomator drops them), so drag the sheet up until the item is on screen and clear of the navigation bar.
+  local b i
+  for i in 1 2 3 4; do
+    b="$(node_xy "$1")"
+    if [ -n "$b" ] && [ "${b#* }" -lt $((H * 91 / 100)) ]; then A shell input tap $b; return 0; fi
+    A shell input swipe $((W / 2)) $((H * 78 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1
+  done
+  echo "    [$DEV] no sheet item on screen: $1"; return 1
+}
+msg_menu_has() { local i; for i in 1 2 3 4; do [ -n "$(node_xy "$1")" ] && return 0; A shell input swipe $((W / 2)) $((H * 78 / 100)) $((W / 2)) $((H * 30 / 100)) 400; sleep 1; done; return 1; }
+msg_tap_desc() {  # tap the node whose content-description is exactly $1 (never a text of the same words)
+  local b; dump
+  b="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    for n in ET.parse(sys.argv[1]).iter('node'):
+        if (n.get('content-desc') or '') == sys.argv[2]:
+            x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); print((x1 + x2) // 2, (y1 + y2) // 2); break
+except ET.ParseError:
+    pass
+PY
+)"
+  [ -n "$b" ] || return 1
+  A shell input tap $b
+}
+msg_pick_private() {  # the forward picker's row "$1" whose second line is "🔒 Private" (a chat has one row per tab); toggles it
+  local b i
+  for i in 1 2 3; do
+    dump
+    b="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+try:
+    nodes = [n for n in ET.parse(sys.argv[1]).iter('node') if (n.get('text') or '')]
+except ET.ParseError:
+    nodes = []
+for i, n in enumerate(nodes[:-1]):
+    if n.get('text') == sys.argv[2] and nodes[i + 1].get('text') == '\U0001f512 Private':
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+)"
+    [ -n "$b" ] && { A shell input tap $b; return 0; }
+    A shell input swipe $((W / 2)) $((H * 60 / 100)) $((W / 2)) $((H * 40 / 100)) 300; sleep 1
+  done
+  echo "    [$DEV] the picker has no Private row for $1"; return 1
+}
 msg_send() {  # $1 = text typed into the open chat's composer (placeholder "Encrypted message" or "Message")
   local c="Encrypted message"
   has 'text="Encrypted message"' || c="Message"
@@ -3264,7 +3313,10 @@ msg_clip() {  # the clipboard text of the DEV phone: `cmd clipboard get-text`, e
   local out; out="$(A shell cmd clipboard get-text 2>/dev/null | tr -d '\r' || true)"
   case "$out" in *"["*"]"*) printf '%s' "$out"; return 0;; esac
   # (fallback) KEYCODE_PASTE into the composer; the multi-line text node of the dump
-  hide_keyboard; tap "Encrypted message" || tap "Message" || return 1; sleep 0.5
+  # (Android 14 shows its clipboard preview with a Share chip over the composer's left for ~6 s after a copy; a tap there opens the
+  # share chooser.) Wait it out, then tap the composer's right half.
+  sleep 8; hide_keyboard; local b; b="$(node_xy 'Encrypted message')"; [ -n "$b" ] || b="$(node_xy 'Message')"; [ -n "$b" ] || return 1
+  A shell input tap $((W * 70 / 100)) "${b#* }"; sleep 0.5
   A shell input keyevent KEYCODE_PASTE; sleep 1; dump
   python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
 import sys, xml.etree.ElementTree as ET
@@ -3279,8 +3331,7 @@ msg_group_pdf() {  # $1 = prompt sentence, $2 = answer prefix, $3 = label ("si"/
   uib_ask "$1"
   wait_for "$2" 120 || fail "messaging pdf [$3]: Risi's answer ($2) didn't come"
   msg_long_press "$2" || fail "messaging pdf [$3]: long-press the answer"
-  wait_text "Export PDF" 10 || fail "messaging pdf [$3]: the answer card's menu has no 'Export PDF'"
-  tap "Export PDF" || fail "messaging pdf [$3]: tap Export PDF"
+  msg_menu_tap "Export PDF" || fail "messaging pdf [$3]: tap Export PDF"
   wait_text "Save to Downloads" 60 || fail "messaging pdf [$3]: no PDF sheet with 'Save to Downloads'"
   shot "58-messaging-pdf-sheet-$3"
   before="$(A shell ls /sdcard/Download/RisiMe 2>/dev/null | tr -d '\r' | sort || true)"
@@ -3324,6 +3375,9 @@ messaging_section() {
   # ---- en-GB, 24 h on both phones (the app's locale; the copy format follows the phone's locale and 24 h setting)
   for DEV in A B; do
     A shell settings put system time_12_24 24 >/dev/null 2>&1 || true
+    # The long-press sheet (10 rows) doesn't scroll and clips its last row ("Select") on a 720x1280 phone at 320 dpi
+    # (product finding, shot 58-messaging-sheet-clipped-720x1280): a taller screen in dp for this step.
+    A shell wm density "${UITEST_MSG_DENSITY:-240}" >/dev/null 2>&1 || true
     A shell cmd locale set-app-locales "$PKG" --locales en-GB >/dev/null 2>&1 || A shell setprop persist.sys.locale en-GB >/dev/null 2>&1 || true
     A shell am force-stop "$PKG"
   done
@@ -3331,15 +3385,14 @@ messaging_section() {
   DEV=A; msg_open "ZZ UI B" || fail "messaging: A can't open the DM"
   wait_for 'text="Encrypted message"' 30 || fail "messaging: the DM has no e2ee composer"
   # ---- 19.1 Copy
-  local t0 t1; t0="$(A shell date +'%d/%m/%y, %H:%M' | tr -d '\r')"
+  local t0 t1; t0="$(A shell "date '+%d/%m/%y, %H:%M'" | tr -d '\r')"
   msg_send "msgtest one from A" || fail "messaging copy: A's first message"
   DEV=B; wait_for "msgtest one from A" 40 || fail "messaging copy: B didn't get A's message"
   msg_send "msgtest two from B" || fail "messaging copy: B's reply"
   DEV=A; wait_for "msgtest two from B" 40 || fail "messaging copy: A didn't get B's reply"
-  t1="$(A shell date +'%d/%m/%y, %H:%M' | tr -d '\r')"
+  t1="$(A shell "date '+%d/%m/%y, %H:%M'" | tr -d '\r')"
   msg_long_press "msgtest one from A" || fail "messaging copy: long-press A's message"
-  wait_text "Select" 10 || fail "messaging copy: the message menu has no 'Select'"
-  tap "Select" || fail "messaging copy: tap Select"
+  msg_menu_tap "Select" || fail "messaging copy: the message menu has no 'Select'"
   sleep 1; msg_tap_has "msgtest two from B" || fail "messaging copy: select the second message"
   wait_text "2 selected" 10 || fail "messaging copy: the selection bar doesn't say '2 selected'"
   shot "58-messaging-selection-bar"
@@ -3359,25 +3412,23 @@ for line, (name, text) in zip(lines, (("ZZ UI A", "msgtest one from A"), ("ZZ UI
     if m.group(1) not in ok: print("    stamp %r not in %r (en-GB, 24 h)" % (m.group(1), ok)); sys.exit(1)
     if m.group(2) != name or m.group(3) != text: print("    expected %s: %s, got %r" % (name, text, line)); sys.exit(1)
 PY
-  A shell input keyevent KEYCODE_BACK; sleep 1
-  has "selected" && { tap "Cancel selection" || true; }
+  back_to_list || fail "messaging copy: back to the list"; msg_open "ZZ UI B" || fail "messaging copy: reopen the DM"
   pass "messaging: Copy of two selected messages is '[dd/MM/yy, HH:mm] Name: text' lines in chat order (en-GB, 24 h)"
   # ---- 19.2 Star / Info / Reply presence
   msg_long_press "msgtest one from A" || fail "messaging menu: long-press A's own message"
-  for w in Copy Reply Forward Star Info Select; do wait_text "$w" 10 || fail "messaging menu: no '$w' on A's own message"; done
+  for w in Copy Reply Forward Star Info Select; do msg_menu_has "$w" || fail "messaging menu: no '$w' on A's own message"; done
   shot "58-messaging-menu"
-  tap "Star" || fail "messaging star: tap Star"
+  msg_menu_tap "Star" || fail "messaging star: tap Star"
   sleep 1
   msg_long_press "msgtest one from A" || fail "messaging star: long-press again"
-  wait_text "Unstar" 10 || fail "messaging star: the menu offers no 'Unstar' after starring"
-  tap "Info" || fail "messaging info: tap Info"
+  msg_menu_has "Unstar" || fail "messaging star: the menu offers no 'Unstar' after starring"
+  msg_menu_tap "Info" || fail "messaging info: tap Info"
   wait_text "Message info" 10 || fail "messaging info: no 'Message info' sheet"
   for w in Sent Delivered Read; do wait_text "$w" 5 || fail "messaging info: no '$w' row"; done
   shot "58-messaging-info"
   A shell input keyevent KEYCODE_BACK; sleep 1
   msg_long_press "msgtest two from B" || fail "messaging reply: long-press B's message"
-  wait_text "Reply" 10 || fail "messaging reply: no 'Reply'"
-  tap "Reply" || fail "messaging reply: tap Reply"
+  msg_menu_tap "Reply" || fail "messaging reply: tap Reply"
   wait_for "Reply to ZZ UI B" 10 || fail "messaging reply: no 'Reply to ZZ UI B' bar over the composer"
   shot "58-messaging-reply-bar"
   msg_send "msgtest reply from A" || fail "messaging reply: send the reply"
@@ -3396,7 +3447,8 @@ PY
   wait_text "Group name" 10 || fail "messaging group: no name field"
   type_into "Group name" "ZZ Msg Group"; hide_keyboard
   tap "Create" || fail "messaging group: Create"
-  for _ in $(seq 1 40); do has "ZZ Msg Group" && wait_for 'text="Encrypted message"' 2 && break; sleep 1; done
+  wait_for "You created the group" 60 || fail "messaging group: the new group didn't open"
+  wait_text "🔒 Private" 10 && tap "🔒 Private" || true  # (a new group opens on its Official tab when Risi is on)
   wait_for 'text="Encrypted message"' 30 || fail "messaging group: the new group didn't open with an e2ee composer"
   DEV=B; back_to_list || true
   for _ in 1 2 3 4 5 6; do has "ZZ Msg Group" && break; tap "Refresh friends" || true; sleep 3; done
@@ -3404,8 +3456,9 @@ PY
   DEV=A
   pass "messaging: a group 'ZZ Msg Group' (A + B) was created and B has it"
   # ---- 19.4 Forward a text and a photo to the group and the DM; "↪ Forwarded" on B
-  msg_open "ZZ UI B" || fail "messaging forward: A reopens the DM"
-  local photo=0
+  # (§33.4: A's OWN unforwarded message is forwarded without a `forwarded` field, so there's no label; B's text and photo are the
+  # sources, A forwards them: they carry hops 1 and B, who is in both targets, sees "↪ Forwarded".)
+  local photo=0 FT="msgtest fwd text from B"
   python3 -I - "$WORK/msg-photo.png" <<'PY'
 import struct, sys, zlib
 w, h = 160, 120
@@ -3413,29 +3466,33 @@ rows = b"".join(b"\x00" + b"".join(bytes((20, 90, 200) if 40 <= x < 120 and 30 <
 chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
 open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 PY
+  DEV=B; back_to_list || true; msg_open "ZZ UI A" || fail "messaging forward: B reopens the DM"
+  msg_send "$FT" || fail "messaging forward: B's text"
   A push "$WORK/msg-photo.png" /sdcard/Pictures/msg-photo.png >/dev/null
   A shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Pictures/msg-photo.png >/dev/null
   hide_keyboard
   if tap "Attach" && wait_for "Gallery" 10 && tap "Gallery" && wait_for "Photo taken on" 20 && msg_tap_has "Photo taken on"; then
-    wait_for "Send photo" 5 || { dump; tap "Add" >/dev/null || tap "Done" >/dev/null || true; }
-    if wait_for "Send photo" 20; then
-      for _ in $(seq 1 10); do tap "Send photo" >/dev/null || true; sleep 2; has 'content-desc="Send photo"' || break; done
-      for _ in $(seq 1 30); do has 'content-desc="Photo' && photo=1 && break; sleep 2; done
+    tap "Add (*" >/dev/null || tap "Add" >/dev/null || true
+    if wait_for 'content-desc="Send photo"' 20; then
+      for _ in $(seq 1 10); do msg_tap_desc "Send photo" || true; sleep 2; has 'content-desc="Send photo"' || break; done
+      for _ in $(seq 1 30); do dump; grep -qE 'content-desc="You: Photo' "$WORK/ui-$DEV.xml" && { photo=1; break; }; sleep 2; done
     fi
   fi
-  if [ "$photo" = 1 ]; then echo "    photo sent in the DM"
-  else echo "UIENTRY SKIP messaging: no photo could be sent through the Photo Picker; forwarding the text only"; A shell input keyevent KEYCODE_BACK; sleep 1; back_to_list || true; msg_open "ZZ UI B" || true; fi
-  msg_long_press "msgtest one from A" || fail "messaging forward: long-press the text"
-  wait_text "Select" 10 || fail "messaging forward: no 'Select'"
-  tap "Select" || fail "messaging forward: Select"
+  if [ "$photo" = 1 ]; then echo "    B sent a photo in the DM"
+  else echo "UIENTRY SKIP messaging: no photo could be sent through the Photo Picker; forwarding the text only"; A shell input keyevent KEYCODE_BACK; sleep 1; fi
+  DEV=A; back_to_list || true; msg_open "ZZ UI B" || fail "messaging forward: A reopens the DM"
+  wait_for "$FT" 40 || fail "messaging forward: A didn't get B's text"
+  [ "$photo" = 1 ] && { for _ in $(seq 1 30); do dump; grep -qE 'content-desc="[^"]*Photo' "$WORK/ui-A.xml" && break; sleep 2; done; }
+  msg_long_press "$FT" || fail "messaging forward: long-press B's text"
+  msg_menu_tap "Select" || fail "messaging forward: no 'Select'"
   sleep 1
-  [ "$photo" = 1 ] && { msg_tap_has "Photo" || fail "messaging forward: select the photo"; }
+  [ "$photo" = 1 ] && { msg_tap_has "Photo, " || fail "messaging forward: select B's photo"; }
   tap "Forward" || fail "messaging forward: tap Forward in the selection bar"
   wait_for "Forward to…" 15 || fail "messaging forward: no picker"
   wait_text "ZZ Msg Group" 10 || fail "messaging forward: the picker has no ZZ Msg Group"
-  tap "ZZ Msg Group" || fail "messaging forward: pick the group"
+  msg_pick_private "ZZ Msg Group" || fail "messaging forward: pick the group's Private row"
   local dm_target=0
-  if [ -n "$(node_xy 'ZZ UI B')" ]; then tap "ZZ UI B" && dm_target=1; fi
+  msg_pick_private "ZZ UI B" && dm_target=1
   shot "58-messaging-forward-picker"
   tap "Send" || fail "messaging forward: tap Send"
   wait_for "Forwarded to" 30 || echo "    (no 'Forwarded to N chats' note seen)"
@@ -3443,16 +3500,18 @@ PY
   DEV=B
   for _ in 1 2 3 4 5 6; do has "ZZ Msg Group" && break; back_to_list || true; sleep 2; done
   msg_open "ZZ Msg Group" || fail "messaging forward: B can't open the group"
-  wait_for "msgtest one from A" 60 || fail "messaging forward: B's group has no forwarded text"
-  wait_for "↪ Forwarded" 20 || fail "messaging forward: B's group shows no '↪ Forwarded' label"
-  [ "$photo" = 1 ] && { wait_for 'content-desc="Photo' 60 || fail "messaging forward: B's group has no forwarded photo"; }
+  wait_for "$FT" 60 || fail "messaging forward: B's group has no forwarded text"
+  # (The bubble's merged content description carries the label as its TalkBack prefix "Forwarded, "; the drawn "↪ Forwarded" is in the shot.)
   shot "58-messaging-forwarded-group"
+  wait_for "Forwarded, " 20 || fail "messaging forward: B's group shows no 'Forwarded' label (TalkBack prefix 'Forwarded, ')"
+  [ "$photo" = 1 ] && { for _ in $(seq 1 30); do dump; grep -qE 'content-desc="[^"]*Photo' "$WORK/ui-B.xml" && break; sleep 2; done; grep -qE 'content-desc="[^"]*Photo' "$WORK/ui-B.xml" || fail "messaging forward: B's group has no forwarded photo"; }
   if [ "$dm_target" = 1 ]; then
     back_to_list || true; msg_open "ZZ UI A" || fail "messaging forward: B reopens the DM"
-    local n; n="$(count_text 'msgtest one from A')"
-    for _ in $(seq 1 30); do dump; n="$(count_text 'msgtest one from A')"; [ "${n:-0}" -ge 2 ] && break; sleep 2; done
+    local n; n="$(count_text "$FT")"
+    for _ in $(seq 1 30); do dump; n="$(count_text "$FT")"; [ "${n:-0}" -ge 2 ] && break; sleep 2; done
     [ "${n:-0}" -ge 2 ] || fail "messaging forward: the DM didn't get the forwarded copy (texts: $n)"
-    wait_for "↪ Forwarded" 10 || fail "messaging forward: the DM shows no '↪ Forwarded' label"
+    shot "58-messaging-forwarded-dm"
+    wait_for "Forwarded, " 10 || fail "messaging forward: the DM shows no 'Forwarded' label"
   else echo "UIENTRY SKIP messaging: the picker doesn't list the open DM; forwarded to the group only"; fi
   DEV=A; back_to_list || true
   pass "messaging: forwarded the text$([ "$photo" = 1 ] && echo ' and the photo') to the group$([ "$dm_target" = 1 ] && echo ' and the DM'); B shows '↪ Forwarded'"
@@ -3468,6 +3527,7 @@ PY
   msg_group_pdf "messaging tamil pdf" "MSGPDF-TA" ta
   msg_pdf_check ta "க்ஷேத்ரம்" "முக்கிய புள்ளிகள்" "செயல்கள்"
   pass "messaging: the Tamil PDF extracts க்ஷேத்ரம் / முக்கிய புள்ளிகள் / செயல்கள்; NotoSans and NotoSansTamil are emb yes"
+  for DEV in A B; do A shell wm density reset >/dev/null 2>&1 || true; done
   DEV=A; logcat_ok "messaging"
   DEV=B; logcat_ok "messaging"
   pass "messaging: no crash, no main-thread database work"
