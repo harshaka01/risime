@@ -2066,9 +2066,14 @@ if [ "$RISI2" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_RISI_ONLY:-0}" = 1 ]
   fi
 
   # ---- 15. a note after a test discussion
+  # NON-BLOCKING (Harsha 2026-10-11, rule 11): opening the Official tab here is a script timing race (the tab was open on
+  # the screen, nightly.49 attempt e). If it doesn't open, the notes block is skipped and logged, never a release failure.
+  RN_GO=0
   if [ "$RNOTES" = 1 ]; then
-    DEV=A; official_tab B || fail "risi-notes: A can't open the DM's Official tab"
-    DEV=B; official_tab A || fail "risi-notes: B can't open the DM's Official tab"
+    DEV=A; if official_tab B; then DEV=B; official_tab A && RN_GO=1; fi
+    [ "$RN_GO" = 1 ] || echo "UIENTRY NONBLOCKING risi-notes: the Official tab didn't open in time (script timing race, docs/status/flaky-tests.md); notes block skipped"
+  fi
+  if [ "$RN_GO" = 1 ]; then
     DEV=A; say "We need a quiet interview room for the panel day" || fail "risi-notes: A message 1"
     DEV=B; say "I will lead the room walkthrough the day before" || fail "risi-notes: B message 2"
     DEV=A; say "I will book the interview room by Tuesday 5pm" || fail "risi-notes: A message 3"
