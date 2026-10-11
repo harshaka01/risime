@@ -1328,12 +1328,14 @@ official_tab() {  # (nightly.49 attempt e: the tab was open but the first tap/du
   local i
   open_chat "ZZ UI ${1}" || { sleep 3; open_chat "ZZ UI ${1}" || return 1; }
   for i in $(seq 1 90); do
-    has 'text="Message"' && has 'Risi is listening' && return 0
+    # (The "Risi is listening" strip can drop out of the accessibility tree when a half-scrolled card covers it, nightly.49
+    # attempt g: the screenshot showed it. The Official pane's own search action is the reliable marker.)
+    has 'text="Message"' && { has 'Risi is listening' || has 'Search in Official'; } && return 0
     has 'text="Start Official"' && { tap "Start Official" || true; sleep 2; continue; }
     [ $((i % 10)) = 1 ] && { tap "● Official" || true; }
     sleep 1
   done
-  echo "    [$DEV] official_tab: $(grep -o 'text="[^"]*"' "$WORK/ui-$DEV.xml" | head -12 | tr '\n' ' ')"
+  echo "    [$DEV] official_tab: $(grep -o 'text="[^"]*"' "$WORK/ui-$DEV.xml" | grep -v 'text=""' | head -30 | tr '\n' ' ')"
   return 1
 }
 say() { tap "Message" || return 1; sleep 0.5; A shell input text "$(printf '%s' "$1" | sed 's/ /%s/g')"; sleep 0.5; tap "Send"; sleep 2; }
