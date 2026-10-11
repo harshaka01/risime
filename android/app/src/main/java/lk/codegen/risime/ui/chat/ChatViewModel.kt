@@ -22,6 +22,8 @@ import lk.codegen.risime.net.dmConversationId
 import lk.codegen.risime.realtime.ConnectionState
 
 class ChatViewModel(private val c: AppContainer, private val meId: String, val peerId: String) : ViewModel() {
+    /** The app container (the §33 picker and file card read it). */
+    val container: AppContainer get() = c
     val conversationId = dmConversationId(meId, peerId)
 
     /** §25.4 a Risi draft's [Use] for this chat (taken once; never sent). */
@@ -153,6 +155,12 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
         c.scope.launch { c.engine.deleteForMe(conversationId, listOf(clientMsgId)) }
     }
 
+    /** v1.34 §33: stars, reply, forward, Info, share (this conversation). */
+    val messaging = MessagingController(c, viewModelScope, meId, conversationId)
+
+    /** §33.13 open and save files. */
+    val files = FileActions(c, viewModelScope)
+
     /** §14: photos in this chat. */
     val imgs = ImageActions(c, viewModelScope, meId, conversationId)
 
@@ -194,12 +202,12 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
         }
     }
 
-    fun send(text: String) {
+    fun send(text: String, replyTo: lk.codegen.risime.net.ReplyRef? = null) {
         typingSender.stop()
-        viewModelScope.launch { c.engine.sendText(peerId, text) }
+        viewModelScope.launch { c.engine.sendText(peerId, text, replyTo = replyTo) }
     }
 
-    private fun isImage(id: String) = messages.value.firstOrNull { it.clientMsgId == id }?.image == true
+    private fun isImage(id: String) = messages.value.firstOrNull { it.clientMsgId == id }?.media == true
 
     fun retry(clientMsgId: String) {
         if (isImage(clientMsgId)) return imgs.retry(clientMsgId)

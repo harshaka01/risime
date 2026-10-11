@@ -119,6 +119,13 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- v1.34 §33.10 / §33.13: Share (pipes, no plaintext on disk) and Open-with; read only, grants only. -->
+        <provider
+            android:name=".ui.share.ShareProvider"
+            android:authorities="${applicationId}.share"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
         <!-- FCM data-only wake-ups (contract v1.5). Inert unless google-services.json was present at build. -->
         <service
             android:name=".push.RisiMeMessagingService"

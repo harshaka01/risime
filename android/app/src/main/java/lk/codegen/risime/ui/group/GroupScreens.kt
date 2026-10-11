@@ -222,6 +222,28 @@ fun GroupChatScreen(
     )
     val typingLabel = groupTypingLabel(typing)
     val count = members.count { it.current && it.state != GroupMember.STATE_PENDING_ADD }
+    // v1.34 §33: stars, reply, forward, Info, files.
+    val starred by vm.messaging.starred.collectAsStateWithLifecycle()
+    val replyTo by vm.messaging.replyTo.collectAsStateWithLifecycle()
+    var flash by remember { mutableStateOf<String?>(null) }
+    var starredOpen by remember { mutableStateOf(false) }
+    val x = lk.codegen.risime.ui.chat.ChatMessaging(
+        vm.container, vm.messaging, vm.files, messages, media, starred,
+        nameOf = { id -> if (members.any { it.userId.equals(id, true) && it.kind == GroupMember.KIND_AGENT }) "Risi" else vm.nameOf(id) },
+        onJump = { id ->
+            risiScope.launch {
+                if (lk.codegen.risime.ui.chat.jumpTo(scroll, messages, id)) {
+                    flash = id
+                    kotlinx.coroutines.delay(1_200)
+                    if (flash == id) flash = null
+                } else {
+                    vm.messaging.toast.value = lk.codegen.risime.ui.chat.MessagingStrings.QUOTE_NOT_LOADED
+                }
+            }
+        },
+        canSend = !readOnly && !risiChat,
+        flash = flash,
+    )
     Scaffold(
         topBar = {
             RisiTopBar(
@@ -252,6 +274,11 @@ fun GroupChatScreen(
                         onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock.takeIf { !risiChat },
                         extra = { close ->
                             risi?.takeIf { !risiChat }?.let { h -> lk.codegen.risime.ui.tabs.RisiMenuItems(h, enabled = !readOnly, close = close, onSummarise = { summariseAsk = true }) }
+                            // §33.11 this conversation's starred messages (each tab separate; device-local).
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text(lk.codegen.risime.ui.chat.MessagingStrings.STARRED_MESSAGES, maxLines = 1) }, onClick = { close(); starredOpen = true },
+                                modifier = Modifier.testTag("chat_menu_starred"),
+                            )
                             // §30.6 Risi chat ⋮ → Notes (only on a Risi Notes device).
                             if (risiChat && notesActive && risi != null) {
                                 androidx.compose.material3.DropdownMenuItem(
@@ -272,7 +299,8 @@ fun GroupChatScreen(
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
             tabBar?.invoke()
-            lk.codegen.risime.ui.chat.SelectionBarFor(vm.del, messages, selection)
+            lk.codegen.risime.ui.chat.SelectionBarFor(vm.del, messages, selection, x)
+            lk.codegen.risime.ui.chat.MessagingHost(x, starredOpen, onStarredClose = { starredOpen = false }, groupInfo = { m -> m.messageId?.let(vm::openReadBy) })
             lk.codegen.risime.ui.chat.DeleteHost(vm.del, clearAsk, onClearAskDone = { clearAsk = null }, onDeletedChat = onBack)
             e2eeStrip?.let { strip ->
                 Text(
@@ -312,6 +340,7 @@ fun GroupChatScreen(
                 risi = risiCtx,
                 risiChat = risiChat,
                 scheduledSends = scheduledSends,
+                x = x,
             )
             if (!risiChat) {
                 lk.codegen.risime.ui.chat.ScheduledBubbles(scheduledHere, vm.scheduledCtl)
@@ -355,14 +384,17 @@ fun GroupChatScreen(
                             draft = TextFieldValue("")
                         }
                     },
-                    topSlot = if (risi != null && !risiChat) ({
-                        if (continuing) lk.codegen.risime.ui.tabs.RisiFollowUpChip { followUpDismissed = followUp }
-                        else lk.codegen.risime.ui.tabs.RisiChipRow(risiChip) { risiChip = it }
+                    topSlot = if ((risi != null && !risiChat) || replyTo != null) ({
+                        replyTo?.let { t -> lk.codegen.risime.ui.chat.ReplyComposerBar(t, x.nameOf(t.from)) { vm.messaging.replyTo.value = null } }
+                        if (risi != null && !risiChat) {
+                            if (continuing) lk.codegen.risime.ui.tabs.RisiFollowUpChip { followUpDismissed = followUp }
+                            else lk.codegen.risime.ui.tabs.RisiChipRow(risiChip) { risiChip = it }
+                        }
                     }) else null,
                 )
             }
             reactionsFor?.let { target -> ReactionsSheet(reactions[target].orEmpty(), vm::nameOf) { reactionsFor = null } }
-            readBy?.let { (mid, state) -> ReadBySheet(state, vm::nameOf, onRetry = { vm.openReadBy(mid) }, onDismiss = vm::closeReadBy) }
+            readBy?.let { (mid, state) -> ReadBySheet(state, vm::nameOf, onRetry = { vm.openReadBy(mid) }, onDismiss = vm::closeReadBy, isAgent = vm::isAgent) }
         }
     }
 }
@@ -402,6 +434,8 @@ internal fun GroupMessageList(
     risiChat: Boolean = false,
     /** §26.6 scheduled sends ("Sent late" under a bubble that went out more than 2 minutes late). */
     scheduledSends: Map<String, lk.codegen.risime.data.db.ScheduledSendEntity> = emptyMap(),
+    /** v1.34 §33: forwarded label, quote, star, file card, menu items (null: off). */
+    x: lk.codegen.risime.ui.chat.ChatMessaging? = null,
 ) {
     ChatMessageList(
         messages = messages,
@@ -456,7 +490,9 @@ internal fun GroupMessageList(
                 )
             } else if (risi != null && lk.codegen.risime.data.tabs.RisiMessages.meta(item.m) != null) {
                 // §24.11: stored only when it came from an attested agent leaf in Official (RisiMessages.honoured).
-                lk.codegen.risime.ui.tabs.RisiCardRow(item.m, lk.codegen.risime.data.tabs.RisiMessages.meta(item.m)!!, risi)
+                lk.codegen.risime.ui.chat.RisiCardActions(item.m, x, del?.selectFor(item.m, selection)) {
+                    lk.codegen.risime.ui.tabs.RisiCardRow(item.m, lk.codegen.risime.data.tabs.RisiMessages.meta(item.m)!!, risi)
+                }
             } else {
                 val bubble: @Composable () -> Unit = { GroupBubble(
                     item.m,
@@ -473,6 +509,7 @@ internal fun GroupMessageList(
                     upload = uploads[item.m.clientMsgId],
                     sharedBy = lk.codegen.risime.ui.history.sharedByLabel(item.m, nameOf),
                     tail = startsRun(items, i),
+                    x = x,
                 ) }
                 // §18.6: the sender's photo (or initials) beside incoming group bubbles, on the first of a run.
                 if (!item.m.outgoing) {
@@ -512,7 +549,12 @@ private fun GroupBubble(
     sel: lk.codegen.risime.ui.chat.MsgSelect? = null,
     upload: Float? = null,
     tail: Boolean = true,
+    x: lk.codegen.risime.ui.chat.ChatMessaging? = null,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val extras = x?.let { lk.codegen.risime.ui.chat.bubbleExtras(m, it.rows, it.starred, it.nameOf, it.onJump) }
+    var selectText by remember { mutableStateOf(false) }
+    if (selectText) lk.codegen.risime.ui.chat.SelectTextDialog(m.body) { selectText = false }
     val failed = m.status == MessageStatus.FAILED.name
     var sheet by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
@@ -535,7 +577,7 @@ private fun GroupBubble(
         },
         tapOpensMenu = failed && sel?.selecting != true,
         onMenu = { if (sel?.selecting == true) sel.onToggle() else sheet = true },
-        selected = sel?.selected == true,
+        selected = sel?.selected == true || (x?.flash != null && x.flash == m.clientMsgId),
         noteIsInfo = !failed,
         footer = { ReactionChipsRow(chips, onOpenReactions) },
         sender = sender,
@@ -543,21 +585,32 @@ private fun GroupBubble(
         image = if (m.image) ({ lk.codegen.risime.ui.chat.ImageBubbleContent(media, loader, onImageVisible, send = send, onRetry = retryPhoto) }) else null,
         imageStatus = if (m.image) send?.let { lk.codegen.risime.ui.chat.photoSendText(it) } ?: lk.codegen.risime.ui.chat.imageStatusText(media) else null,
         imageAction = retryPhoto?.let { lk.codegen.risime.ui.chat.PHOTO_RETRY to it },
-        onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else null,
-        tapLabel = if (m.image) lk.codegen.risime.ui.chat.imageTapLabel(lk.codegen.risime.ui.chat.imageTap(media)) else null,
+        onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else if (m.file && x != null) ({ x.files.tap(context, m, media) }) else null,
+        tapLabel = if (m.image) lk.codegen.risime.ui.chat.imageTapLabel(lk.codegen.risime.ui.chat.imageTap(media)) else if (m.file) lk.codegen.risime.ui.chat.FileStrings.OPEN else null,
         tail = tail,
+        forwardHops = extras?.forwardHops,
+        quote = extras?.quote?.let { q -> { lk.codegen.risime.ui.chat.QuoteBlock(q, extras.onQuoteTap) } },
+        starred = extras?.starred == true,
+        attachment = if (m.file && x != null) ({ lk.codegen.risime.ui.chat.FileCard(x.c, m, media) }) else null,
+        attachmentLabel = if (m.file) "File, " + (lk.codegen.risime.data.media.FileMeta.decode(m.systemJson)?.let { lk.codegen.risime.data.media.FileEnvelope.displayName(it.name) } ?: "") else null,
     )
     if (sheet) {
         val actions = buildList<Pair<String, () -> Unit>> {
-            if (!m.image || m.body.isNotBlank()) add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
-            if (m.outgoing && m.messageId != null) add("Info" to onInfo)
+            if (x != null) {
+                // §33.3 a single message copies its content alone; Reply, Forward, Star, Share, Info under the bar's rules.
+                if (lk.codegen.risime.data.messaging.CopyFormat.content(m, single = true) != null) add(lk.codegen.risime.ui.chat.MessagingStrings.COPY to { x.ctl.copy(context, listOf(m), x.nameOrNull) })
+                addAll(lk.codegen.risime.ui.chat.messagingMenuItems(m, x, context) { selectText = true })
+            } else {
+                if (!m.image || m.body.isNotBlank()) add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
+                if (m.outgoing && m.messageId != null) add("Info" to onInfo)
+            }
             if (retryable) add("Retry" to { onRetry(m.clientMsgId) })
             if (failed) add((if (sel != null) "Discard" else "Delete") to { onDelete(m.clientMsgId) })
             if (sel != null && !failed && canAct) {
                 add("Delete" to sel.onDelete)
                 add("Select" to sel.onSelect)
             }
-            if (m.image && m.outgoing && m.status == MessageStatus.PENDING.name) add("Cancel" to { onDelete(m.clientMsgId) })
+            if (m.media && m.outgoing && m.status == MessageStatus.PENDING.name) add("Cancel" to { onDelete(m.clientMsgId) })
         }
         MessageActionsSheet(
             canReact = canAct && m.messageId != null,

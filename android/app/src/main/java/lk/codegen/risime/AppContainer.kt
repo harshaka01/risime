@@ -130,6 +130,7 @@ class AppContainer(
         .build()
 
     val sessionStore = SessionStore(prefs, BuildConfig.DEFAULT_SERVER_URL)
+    private val prefsStore = prefs
     val db = openDb(context)
 
     /** The only place that decides to delete local chats (logout, server change, confirmed other account). */
@@ -856,6 +857,153 @@ class AppContainer(
     val imageUploader = lk.codegen.risime.data.media.ImageUploader(api, db.media(), db.messages(), mediaFiles)
     val imageDownloader = lk.codegen.risime.data.media.ImageDownloader(api, db.media(), mediaFiles, mediaSealer, { mediaCrypto })
     val imageLoader by lazy { lk.codegen.risime.ui.chat.ImageLoader(images) }
+
+    // ---- v1.34 §33 basic messaging ----
+
+    /** §33.4 persists a whole forward (one transaction) before anything is sent. */
+    val forwarder by lazy { lk.codegen.risime.data.messaging.Forwarder(db.messages(), db.media(), dbTx) }
+
+    /** §33.5 the per-target re-encrypt job of a forwarded photo or file (fresh key, fresh upload). */
+    val forwardMedia by lazy {
+        lk.codegen.risime.data.messaging.ForwardMedia(
+            db.media(), db.messages(), mediaSealer, mediaFiles, { mediaCrypto },
+            download = { id -> downloadImage(id) == lk.codegen.risime.data.media.DownloadOutcome.Cached },
+            reencodeImage = { bytes -> lk.codegen.risime.data.media.ImagePipeline(lk.codegen.risime.data.media.AndroidBitmapOps).prepare(bytes) },
+            enqueueUpload = { id -> lk.codegen.risime.push.MediaUploadWorker.enqueue(appContext, id) },
+            log = { Log.w("RisiMe", it) },
+        )
+    }
+
+    /** §33.13 / §33.10 a row's verified ciphertext, decrypted into [dst] (null: not on the phone or failed checks). */
+    suspend fun decryptMediaTo(clientMsgId: String, dst: File): Boolean = runCatching {
+        val core = mediaCrypto ?: return false
+        val row = db.media().get(clientMsgId) ?: return false
+        val f = row.fileName?.let { mediaFiles.file(it) }?.takeIf { it.isFile } ?: return false
+        val enc = mediaSealer.openEnc(clientMsgId, row.sealedEnc)
+        core.decryptFileToFile(f, dst, enc.key, enc.alg, enc.plainSize, row.blobSize, java.util.Base64.getDecoder().decode(row.blobSha256))
+        true
+    }.getOrDefault(false)
+
+    /** §33.10 a media row's `plain_size` (null: no key). */
+    suspend fun mediaPlainSize(clientMsgId: String): Long? = runCatching {
+        db.media().get(clientMsgId)?.let { mediaSealer.openEnc(clientMsgId, it.sealedEnc).plainSize }
+    }.getOrNull()
+
+    /** A media row's thumbnail (the file card shows only this and the external app, never the bytes). */
+    suspend fun mediaThumb(clientMsgId: String): lk.codegen.risime.data.media.ImageThumb? =
+        db.media().get(clientMsgId)?.let { images.thumb(clientMsgId, it) }
+
+    /** §33.14 a PDF made on this phone, encrypted for one target (fresh key) and committed as a `file` outbox row. */
+    suspend fun sendFile(conversationId: String, plain: File, meta: lk.codegen.risime.data.media.FileMeta, thumb: lk.codegen.risime.data.media.ImageThumb?, caption: String = ""): lk.codegen.risime.data.db.MessageEntity? {
+        val core = mediaCrypto ?: return null
+        val me = sessionStore.current()?.user?.id ?: return null
+        val id = java.util.UUID.randomUUID().toString()
+        val name = mediaFiles.nameFor(id)
+        val sealed = withContext(Dispatchers.IO) { core.encryptFile(plain, mediaFiles.file(name)) }
+        if (sealed.cipherSize > lk.codegen.risime.data.media.MediaFormat.MAX_MEDIA_CIPHER) {
+            mediaFiles.file(name).delete()
+            return null
+        }
+        val to = lk.codegen.risime.net.dmPeer(conversationId, me) ?: conversationId
+        val row = lk.codegen.risime.data.db.MessageEntity(
+            clientMsgId = id, messageId = null, conversationId = conversationId, from = me, to = to, body = caption.trim(), serverTs = null,
+            localTs = System.currentTimeMillis(), status = lk.codegen.risime.data.MessageStatus.PENDING.name, outgoing = true,
+            kind = lk.codegen.risime.data.db.MessageEntity.KIND_FILE, systemJson = meta.encode(),
+        )
+        dbTx.run {
+            db.messages().insert(row)
+            db.media().insert(
+                lk.codegen.risime.data.db.MediaEntity(
+                    clientMsgId = id, conversationId = conversationId, outgoing = true, state = lk.codegen.risime.data.db.MediaState.ENCRYPTED.name,
+                    blobId = null, blobSize = sealed.cipherSize, blobSha256 = java.util.Base64.getEncoder().encodeToString(sealed.sha256),
+                    clientBlobId = java.util.UUID.randomUUID().toString(),
+                    sealedEnc = mediaSealer.sealEnc(id, lk.codegen.risime.data.media.ImageEnc(sealed.alg, sealed.key, sealed.plainSize)),
+                    sealedThumb = thumb?.let { mediaSealer.sealThumb(id, it) }, mime = meta.mime, w = 0, h = 0, fileName = name,
+                    expiresAtEst = null, lastAccess = System.currentTimeMillis(),
+                ),
+            )
+        }
+        sealed.key.fill(0)
+        lk.codegen.risime.push.MediaUploadWorker.enqueue(appContext, id)
+        return row
+    }
+
+    /** §33.14 / §33.15 an "Export PDF" (⋮, the note screen, the Calendar, the `pdf` chip): the root shows the sheet. */
+    val pdfRequest = MutableStateFlow<kotlinx.serialization.json.JsonObject?>(null)
+
+    fun requestPdf(source: kotlinx.serialization.json.JsonObject) {
+        pdfRequest.value = source
+    }
+
+    /** §33.8 the one-time Private → Official forward hint (DataStore; a reinstall shows it again once). */
+    private val hintKey = androidx.datastore.preferences.core.booleanPreferencesKey("hints.private_to_official_forward")
+
+    suspend fun privateToOfficialHintShown(): Boolean = prefsStore.data.first()[hintKey] == true
+
+    suspend fun markPrivateToOfficialHintShown() {
+        prefsStore.edit { it[hintKey] = true }
+    }
+
+    /**
+     * §33.4 the picker's candidates: friends' DMs and my groups (each tab its own conversation) with
+     * what the target rules need. Readiness of DMs for media is fetched only when [media] is set.
+     */
+    suspend fun forwardCandidates(hasImage: Boolean, hasFile: Boolean): List<lk.codegen.risime.data.messaging.ForwardCandidate> = withContext(Dispatchers.IO) {
+        val me = sessionStore.current()?.user?.id ?: return@withContext emptyList()
+        val contacts = db.contacts().all().first()
+        val groups = db.groups().allNow()
+        val rows = chatTabs.rows.value
+        val names = lk.codegen.risime.data.tabs.ConversationDirectory.names(me, groups, contacts, rows)
+        val recent = db.messages().recentConversations(500).associate { it.conversationId.lowercase() to it.lastTs }
+        val blocked = contacts.filter { !it.friend }.mapNotNull { it.userId?.lowercase() }.toSet() +
+            this@AppContainer.contacts.friendsState.value.blocked.map { it.userId.lowercase() }
+        val engine = mlsEngine
+        val prefsNow = chatTabs.prefs.value
+        val out = mutableListOf<lk.codegen.risime.data.messaging.ForwardCandidate>()
+        for ((conv, name) in names) {
+            val dm = conv.startsWith("dm:")
+            val row = rows?.get(conv)
+            val official = row?.official == true
+            val group = groups.firstOrNull { it.conversationId.equals(conv, true) }
+            val peer = if (dm) lk.codegen.risime.net.dmPeer(conv, me)?.lowercase() else null
+            val chat = row?.chatId?.lowercase() ?: conv
+            val state = prefsNow[chat]?.officialState
+            var images: Boolean? = null
+            var files: Boolean? = null
+            if (dm && (hasImage || hasFile)) {
+                (runCatching { api.mlsGroup(conv) }.getOrNull() as? ApiResult.Ok)?.value?.let { g -> images = g.imagesReady; files = g.filesReady }
+            }
+            out += lk.codegen.risime.data.messaging.ForwardCandidate(
+                conversationId = conv, name = name, official = official, risiChat = row?.risi == true,
+                e2ee = runCatching { engine?.group(conv) != null }.getOrDefault(false),
+                activeMember = if (dm) true else group?.readOnly == false,
+                officialOff = official && (state == lk.codegen.risime.data.tabs.OfficialState.OFF || state == lk.codegen.risime.data.tabs.OfficialState.NONE),
+                blockedOrUnfriended = peer != null && peer in blocked,
+                imagesReady = images, filesReady = files, lastActivity = recent[conv] ?: 0,
+            )
+        }
+        out
+    }
+
+    /**
+     * §33.4 forward [sources] (chat order) to [targets]: everything is persisted first (one transaction),
+     * texts go at once, each photo or file is re-encrypted and uploaded per target (§33.5).
+     */
+    suspend fun forward(sources: List<lk.codegen.risime.data.db.MessageEntity>, targets: List<String>, addMessage: String?, noteText: (lk.codegen.risime.data.db.MessageEntity) -> String? = { null }): Int {
+        val me = sessionStore.current()?.user?.id ?: return 0
+        val specs = sources.mapNotNull { lk.codegen.risime.data.messaging.ForwardRules.build(it, me, noteText) }
+        if (specs.isEmpty() || targets.isEmpty()) return 0
+        val plan = forwarder.persist(specs, targets, me, addMessage)
+        targets.forEach { deletesUnhide(it) }
+        behaviour.forwarded(specs.size, targets.size)
+        scope.launch { engine.flushOutbox() }
+        scope.launch { plan.mediaJobs.forEach { runCatching { forwardMedia.run(it) } } }
+        return targets.size
+    }
+
+    private suspend fun deletesUnhide(conv: String) {
+        runCatching { db.deletes().chatState(conv)?.takeIf { it.hidden }?.let { db.deletes().putChatState(it.copy(hidden = false)) } }
+    }
 
     // ---- §18 profile photos and group icons (v1.17) ----
 
@@ -1807,6 +1955,13 @@ class AppContainer(
         scope.launch { runCatching { lk.codegen.risime.data.history.HistoryGaps.prune(db.history(), System.currentTimeMillis()) } }
         // §14.7: temp plaintext and orphans go, owed uploads/downloads resume, the cache is trimmed.
         scope.launch { runCatching { images.startup() }.onFailure { Log.w("RisiMe", "image startup: ${it.message}") } }
+        // §33.4: a forward interrupted by a crash or a kill resumes its re-encrypt jobs.
+        scope.launch { runCatching { forwardMedia.resumeAll() }.onFailure { Log.w("RisiMe", "forward resume: ${it.message}") } }
+        // §33.9 a quote whose target is a hidden tombstone reads "This message was deleted".
+        lk.codegen.risime.ui.chat.MessagingHidden.lookup = { id -> db.deletes().deletedId(id) != null }
+        // §33.13 / §33.14 opened files and PDFs left from the last run go.
+        lk.codegen.risime.ui.chat.FileActions.cleanupOpened(appContext)
+        lk.codegen.risime.ui.pdf.PdfExport.cleanup(appContext)
         // §12: group state and owed ops after every (re)join.
         scope.launch {
             realtime.state.collect { if (it == ConnectionState.Live) runCatching { syncGroups() } }

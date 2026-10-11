@@ -113,6 +113,9 @@ class RisiNoteViewModel(private val c: AppContainer, me: String, private val not
     /** Events open in the Calendar tab only on a calendar device. */
     val calendarOn: Boolean get() = c.risiEventsOn()
 
+    /** v1.34 §33.14 ⋮ → "Export PDF" (made on this phone from the note as this screen shows it). */
+    fun exportPdf() = c.requestPdf(lk.codegen.risime.net.PdfSources.note(noteId))
+
     init {
         viewModelScope.launch {
             val rows = env.rows()
@@ -180,6 +183,7 @@ fun NoteRoute(vm: RisiNoteViewModel, onBack: () -> Unit) {
                 vm.share.startWith(RisiNotes.shareText(names.title(v.note), v.note, v.items, vm.env.me, vm.env::nameOf))
             },
             onDelete = vm.model::delete,
+            onExportPdf = vm::exportPdf,
             onBack = onBack,
         )
         Box(Modifier.align(Alignment.BottomCenter)) { ShareNotice(share, vm.share::clearNotice) }

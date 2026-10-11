@@ -307,6 +307,9 @@ object RisiChips {
 
         /** A deep link (`settings.*`, `calendar.event`). */
         data class Open(val target: String, val eventId: String? = null) : Action
+
+        /** v1.34 §33.15 `pdf`: make the PDF of [source] on this phone. */
+        data class Pdf(val source: kotlinx.serialization.json.JsonObject) : Action
     }
 
     data class Chip(val label: String, val action: Action)
@@ -343,6 +346,7 @@ object RisiChips {
                     lk.codegen.risime.net.RisiNextAction.OPEN -> a.target?.takeIf { it in lk.codegen.risime.net.RisiNextAction.TARGETS }
                         ?.takeIf { it != lk.codegen.risime.net.RisiNextAction.CALENDAR_EVENT || !a.eventId.isNullOrBlank() }
                         ?.let { t -> a.label.trim().takeIf { it.isNotEmpty() }?.let { Chip(it, Action.Open(t, a.eventId)) } }
+                    lk.codegen.risime.net.RisiTools134.ACTION_PDF -> a.source?.takeIf { lk.codegen.risime.net.PdfSources.valid(it) }?.let { s -> Chip(a.label.trim().ifEmpty { "PDF" }, Action.Pdf(s)) }
                     else -> null
                 }
             }.take(3)
@@ -364,6 +368,7 @@ object RisiChips {
         when (val a = c.action) {
             is Action.Ask -> send(a.text)
             is Action.Open -> if (a.target == lk.codegen.risime.net.RisiNextAction.SETTINGS_CALENDAR_PERMISSION) askPermission() else host.openTarget(a.target, a.eventId)
+            is Action.Pdf -> host.exportPdf(a.source)
         }
     }
 

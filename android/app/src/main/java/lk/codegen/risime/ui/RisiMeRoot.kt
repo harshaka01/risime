@@ -181,6 +181,8 @@ private fun MainNav(c: AppContainer, meId: String) {
     NotificationPermissionPrompt(c)
     lk.codegen.risime.ui.settings.NotificationHealthAfterUpdate(c) { runCatching { nav.navigate("notif_health") { launchSingleTop = true } } }
     lk.codegen.risime.ui.history.HistoryPromptHost(c)
+    // v1.34 §33.14 Export PDF from anywhere (⋮ on a card, the note screen, the Calendar, the `pdf` chip).
+    lk.codegen.risime.ui.pdf.PdfExportHost(c)
     // §22.7: a fresh install with a server backup offers "Restore your chats" first.
     lk.codegen.risime.ui.backup.RestoreGateHost(c) {
     NavHost(nav, startDestination = "chats") {

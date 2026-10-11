@@ -234,46 +234,62 @@ sealed interface ReadByState {
     data class Error(val message: String) : ReadByState
 
     data class Loaded(val reply: GroupReceiptsReply) : ReadByState
+
+    /** v1.34 §33.12 offline: the last loaded list with "Couldn't refresh · Retry". */
+    data class Stale(val reply: GroupReceiptsReply) : ReadByState
 }
 
 private fun isoMs(s: String?): Long? = s?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
 
-/** Two lists from `GET …/receipts`, fetched on open and not stored: "Read by" and "Delivered to". */
+/** §33.12 the sections of a group message's Info; agent members (`kind: "agent"`) are never listed. */
+data class ReceiptSections(val read: List<lk.codegen.risime.net.GroupReceipt>, val delivered: List<lk.codegen.risime.net.GroupReceipt>, val waiting: List<lk.codegen.risime.net.GroupReceipt>) {
+    companion object {
+        fun of(reply: GroupReceiptsReply, isAgent: (String) -> Boolean): ReceiptSections {
+            val rs = reply.receipts.filterNot { isAgent(it.userId) }
+            return ReceiptSections(
+                read = rs.filter { it.readAt != null }.sortedByDescending { isoMs(it.readAt) },
+                delivered = rs.filter { it.readAt == null && it.deliveredAt != null }.sortedByDescending { isoMs(it.deliveredAt) },
+                waiting = rs.filter { it.deliveredAt == null && it.readAt == null },
+            )
+        }
+    }
+}
+
+/** §33.12 "Read by", "Delivered to" and "Waiting" from `GET …/receipts` (fetched on open, refreshed by `group_receipt`). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ReadBySheet(state: ReadByState, nameOf: (String) -> String, onRetry: () -> Unit, onDismiss: () -> Unit) {
+fun ReadBySheet(state: ReadByState, nameOf: (String) -> String, onRetry: () -> Unit, onDismiss: () -> Unit, isAgent: (String) -> Boolean = { false }) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        ReadByContent(state, nameOf, onRetry, onDismiss)
+        ReadByContent(state, nameOf, onRetry, onDismiss, isAgent)
     }
 }
 
 @Composable
-fun ReadByContent(state: ReadByState, nameOf: (String) -> String, onRetry: () -> Unit, onClose: () -> Unit) {
+fun ReadByContent(state: ReadByState, nameOf: (String) -> String, onRetry: () -> Unit, onClose: () -> Unit, isAgent: (String) -> Boolean = { false }) {
     Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = Spacing.lg)) {
         Text("Message info", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm))
-        when (state) {
-            ReadByState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally).padding(Spacing.lg).semantics { contentDescription = "Loading" })
-            is ReadByState.Error -> ErrorState(state.message, onRetry = onRetry)
-            is ReadByState.Loaded -> {
-                val rs = state.reply.receipts
-                val read = rs.filter { it.readAt != null }.sortedBy { isoMs(it.readAt) }
-                val delivered = rs.filter { it.readAt == null && it.deliveredAt != null }.sortedBy { isoMs(it.deliveredAt) }
-                val waiting = rs.count { it.deliveredAt == null && it.readAt == null }
+        val reply = (state as? ReadByState.Loaded)?.reply ?: (state as? ReadByState.Stale)?.reply
+        when {
+            state == ReadByState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally).padding(Spacing.lg).semantics { contentDescription = "Loading" })
+            state is ReadByState.Error -> ErrorState(state.message, onRetry = onRetry)
+            reply != null -> {
+                if (state is ReadByState.Stale) {
+                    TextButton(onClick = onRetry, modifier = Modifier.padding(horizontal = Spacing.md)) { Text(lk.codegen.risime.ui.chat.MessagingStrings.COULDNT_REFRESH) }
+                }
+                val s = ReceiptSections.of(reply, isAgent)
+                val of = reply.receipts.count { !isAgent(it.userId) }.takeIf { it > 0 } ?: reply.of
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
-                    item { SectionHeader("Read by ${read.size} of ${state.reply.of}", Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) }
-                    if (read.isEmpty()) item { Text("Nobody yet", Modifier.padding(horizontal = Spacing.lg), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    items(read, key = { "r" + it.userId }) { ReceiptRow(nameOf(it.userId), isoMs(it.readAt)) }
+                    item { SectionHeader("Read by ${s.read.size} of $of", Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) }
+                    if (s.read.isEmpty()) item { Text("Nobody yet", Modifier.padding(horizontal = Spacing.lg), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    items(s.read, key = { "r" + it.userId }) { ReceiptRow(nameOf(it.userId), isoMs(it.readAt)) }
                     item { HorizontalDivider(Modifier.padding(vertical = Spacing.sm)) }
-                    item { SectionHeader("Delivered to ${delivered.size}", Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) }
-                    if (delivered.isEmpty()) item { Text("Nobody else", Modifier.padding(horizontal = Spacing.lg), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    items(delivered, key = { "d" + it.userId }) { ReceiptRow(nameOf(it.userId), isoMs(it.deliveredAt)) }
-                    if (waiting > 0) {
-                        item {
-                            Text(
-                                "Not delivered yet: $waiting", Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                    item { SectionHeader("Delivered to ${s.delivered.size}", Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) }
+                    if (s.delivered.isEmpty()) item { Text("Nobody else", Modifier.padding(horizontal = Spacing.lg), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    items(s.delivered, key = { "d" + it.userId }) { ReceiptRow(nameOf(it.userId), isoMs(it.deliveredAt)) }
+                    if (s.waiting.isNotEmpty()) {
+                        item { HorizontalDivider(Modifier.padding(vertical = Spacing.sm)) }
+                        item { SectionHeader("Waiting ${s.waiting.size}", Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) }
+                        items(s.waiting, key = { "w" + it.userId }) { ReceiptRow(nameOf(it.userId), null) }
                     }
                 }
             }

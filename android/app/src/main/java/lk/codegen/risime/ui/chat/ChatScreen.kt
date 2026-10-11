@@ -110,6 +110,30 @@ fun ChatScreen(
     val uploads by vm.imgs.uploads.collectAsStateWithLifecycle()
     val pickPhoto = rememberImageLayer(vm.imgs, messages)
     val historyMarker by vm.historyMarker.collectAsStateWithLifecycle()
+    // v1.34 §33: stars, reply, forward, Info, files.
+    val starred by vm.messaging.starred.collectAsStateWithLifecycle()
+    val replyTo by vm.messaging.replyTo.collectAsStateWithLifecycle()
+    var flash by remember { mutableStateOf<String?>(null) }
+    var starredOpen by remember { mutableStateOf(false) }
+    val jumpScope = rememberCoroutineScope()
+    val peerName = peer?.displayName ?: "Chat"
+    val x = ChatMessaging(
+        vm.container, vm.messaging, vm.files, messages, media, starred,
+        nameOf = { id -> if (id.equals(vm.me, true)) "You" else if (id.equals(vm.peerId, true)) peerName else "" },
+        onJump = { id ->
+            jumpScope.launch {
+                if (jumpTo(scroll, messages, id)) {
+                    flash = id
+                    kotlinx.coroutines.delay(1_200)
+                    if (flash == id) flash = null
+                } else {
+                    vm.messaging.toast.value = MessagingStrings.QUOTE_NOT_LOADED
+                }
+            }
+        },
+        canSend = peer?.friend != false,
+        flash = flash,
+    )
 
     // Read acks only while this chat is actually on screen.
     LaunchedEffect(messages, resumed) {
@@ -163,9 +187,16 @@ fun ChatScreen(
                     // v1.32 item 4: icons <= 2 (video, call); the lock action is in the ⋮ menu, the E2EE state in the subtitle.
                     ChatOverflowMenu(
                         onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock,
-                        extra = if (vm.scheduledMenu() || scheduledHere.isNotEmpty()) ({ close ->
-                            androidx.compose.material3.DropdownMenuItem(text = { Text(SCHEDULED_MESSAGES_TITLE) }, onClick = { close(); scheduledSheet = true })
-                        }) else null,
+                        extra = { close ->
+                            // §33.11 this conversation's starred messages (device-local).
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text(MessagingStrings.STARRED_MESSAGES) }, onClick = { close(); starredOpen = true },
+                                modifier = Modifier.then(androidx.compose.ui.Modifier.testTagOf("chat_menu_starred")),
+                            )
+                            if (vm.scheduledMenu() || scheduledHere.isNotEmpty()) {
+                                androidx.compose.material3.DropdownMenuItem(text = { Text(SCHEDULED_MESSAGES_TITLE) }, onClick = { close(); scheduledSheet = true })
+                            }
+                        },
                     )
                 },
             )
@@ -174,7 +205,8 @@ fun ChatScreen(
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
             tabBar?.invoke()
-            SelectionBarFor(vm.del, messages, selection)
+            SelectionBarFor(vm.del, messages, selection, x)
+            MessagingHost(x, starredOpen, onStarredClose = { starredOpen = false })
             DeleteHost(vm.del, clearAsk, onClearAskDone = { clearAsk = null }, onDeletedChat = onBack)
             E2eeStrip(stripText)
             lk.codegen.risime.ui.common.ChatMessageList(
@@ -215,6 +247,7 @@ fun ChatScreen(
                             upload = uploads[item.m.clientMsgId],
                             sharedBy = lk.codegen.risime.ui.history.sharedByLabel(item.m) { id -> if (id.equals(vm.peerId, true)) name else "your contact" },
                             tail = lk.codegen.risime.ui.common.startsRun(items, i),
+                            x = x,
                         ) }
                     }
                 }
@@ -239,6 +272,7 @@ fun ChatScreen(
                     }
                 }),
                 placeholder = if (encrypted) "Encrypted message" else "Message",
+                topSlot = replyTo?.let { t -> { ReplyComposerBar(t, x.nameOf(t.from).ifBlank { peerName }) { vm.messaging.replyTo.value = null } } },
                 value = draftValue,
                 onValue = {
                     draftValue = it
@@ -246,7 +280,7 @@ fun ChatScreen(
                 },
                 onSend = {
                     if (draftValue.text.isNotBlank()) {
-                        vm.send(draftValue.text)
+                        vm.send(draftValue.text, vm.messaging.takeReply())
                         draftValue = androidx.compose.ui.text.input.TextFieldValue("")
                     }
                 },
@@ -311,7 +345,13 @@ internal fun Bubble(
     sharedBy: String? = null,
     /** The first bubble of a run (WhatsApp tail). */
     tail: Boolean = true,
+    /** v1.34 §33: forwarded label, quote, star, file card and the extra menu items (null: off). */
+    x: ChatMessaging? = null,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val extras = x?.let { bubbleExtras(m, it.rows, it.starred, it.nameOf, it.onJump) }
+    var selectText by remember { mutableStateOf(false) }
+    if (selectText) SelectTextDialog(m.body) { selectText = false }
     val failed = m.status == MessageStatus.FAILED.name
     var sheet by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
@@ -335,19 +375,28 @@ internal fun Bubble(
         },
         tapOpensMenu = failed && sel?.selecting != true,
         onMenu = { if (sel?.selecting == true) sel.onToggle() else sheet = true },
-        selected = sel?.selected == true,
+        selected = sel?.selected == true || (x?.flash != null && x.flash == m.clientMsgId),
         noteIsInfo = !failed,
         footer = { ReactionChipsRow(chips, onOpenReactions) },
         image = if (m.image) ({ ImageBubbleContent(media, loader, onImageVisible, send = send, onRetry = retryPhoto) }) else null,
         imageStatus = if (m.image) send?.let { photoSendText(it) } ?: imageStatusText(media) else null,
         imageAction = retryPhoto?.let { PHOTO_RETRY to it },
-        onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else null,
-        tapLabel = if (m.image) imageTapLabel(imageTap(media)) else null,
+        onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else if (m.file && x != null) ({ x.files.tap(context, m, media) }) else null,
+        tapLabel = if (m.image) imageTapLabel(imageTap(media)) else if (m.file) FileStrings.OPEN else null,
         tail = tail,
+        forwardHops = extras?.forwardHops,
+        quote = extras?.quote?.let { q -> { QuoteBlock(q, extras.onQuoteTap) } },
+        starred = extras?.starred == true,
+        attachment = if (m.file && x != null) ({ FileCard(x.c, m, media) }) else null,
+        attachmentLabel = if (m.file) "File, " + (lk.codegen.risime.data.media.FileMeta.decode(m.systemJson)?.let { lk.codegen.risime.data.media.FileEnvelope.displayName(it.name) } ?: "") else null,
     )
     if (sheet) {
         val actions = buildList<Pair<String, () -> Unit>> {
-            if (!m.image || m.body.isNotBlank()) add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
+            if (x != null) {
+                // §33.3 a single message copies its content alone (a photo: its caption; hidden without one).
+                if (lk.codegen.risime.data.messaging.CopyFormat.content(m, single = true) != null) add(MessagingStrings.COPY to { x.ctl.copy(context, listOf(m), x.nameOrNull) })
+                addAll(messagingMenuItems(m, x, context) { selectText = true })
+            } else if (!m.image || m.body.isNotBlank()) add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
             if (retryable) add("Retry" to { onRetry(m.clientMsgId) })
             // §15.7 (android S-d): with the delete UI on, a never-accepted row's action is "Discard".
             if (failed) add((if (sel != null) "Discard" else "Delete") to { onDelete(m.clientMsgId) })
@@ -356,7 +405,7 @@ internal fun Bubble(
                 add("Select" to sel.onSelect)
             }
             // §14.7: cancelling an uploading photo deletes it (and an uploaded blob).
-            if (m.image && m.outgoing && m.status == MessageStatus.PENDING.name) add("Cancel" to { onDelete(m.clientMsgId) })
+            if (m.media && m.outgoing && m.status == MessageStatus.PENDING.name) add("Cancel" to { onDelete(m.clientMsgId) })
         }
         MessageActionsSheet(
             canReact = canReact,

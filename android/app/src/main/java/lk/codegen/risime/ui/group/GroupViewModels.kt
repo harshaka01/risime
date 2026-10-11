@@ -336,6 +336,14 @@ fun groupE2eeStrip(g: GroupEntity?, encrypted: Boolean?, wait: lk.codegen.risime
 }
 
 class GroupChatViewModel(private val c: AppContainer, private val meId: String, val conversationId: String) : ViewModel() {
+    /** The app container (the §33 picker and file card read it). */
+    val container: AppContainer get() = c
+
+    /** v1.34 §33: stars, reply, forward, Info, share (this conversation, this tab). */
+    val messaging = lk.codegen.risime.ui.chat.MessagingController(c, viewModelScope, meId, conversationId)
+
+    /** §33.13 open and save files. */
+    val files = lk.codegen.risime.ui.chat.FileActions(c, viewModelScope)
     val group: StateFlow<GroupEntity?> = c.db.groups().observe(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
@@ -534,6 +542,9 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override fun ask(text: String) { viewModelScope.launch { requests.ask(text) } }
 
+        // v1.34 §33.15 the `pdf` chip: the PDF is made on this phone (a source not on it: "This isn't on this phone").
+        override fun exportPdf(source: kotlinx.serialization.json.JsonObject) = c.requestPdf(source)
+
         override suspend fun localEvents(fromMs: Long, toMs: Long): lk.codegen.risime.data.tabs.LocalEventsResult =
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 lk.codegen.risime.data.tabs.LocalEvents.build(fromMs, toMs, phone = { c.phoneCalendar.localEvents(fromMs, toMs) }, risi = { c.risiCalendar.eventsNow() })
@@ -668,14 +679,16 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
     fun send(text: String) {
         typingSender.stop()
-        viewModelScope.launch { c.engine.sendText(conversationId, text) }
+        // §33.9 the composer's quote bar (if any) goes with this message.
+        val reply = messaging.takeReply()
+        viewModelScope.launch { c.engine.sendText(conversationId, text, replyTo = reply) }
     }
 
     fun react(targetMessageId: String, emoji: String, op: String) {
         c.scope.launch { c.engine.react(conversationId, targetMessageId, emoji, op) }
     }
 
-    private fun isImage(id: String) = messages.value.firstOrNull { it.clientMsgId == id }?.image == true
+    private fun isImage(id: String) = messages.value.firstOrNull { it.clientMsgId == id }?.media == true
 
     fun retry(clientMsgId: String) {
         if (isImage(clientMsgId)) return imgs.retry(clientMsgId)
@@ -696,12 +709,31 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
     val readBy: StateFlow<Pair<String, ReadByState>?> = _readBy
 
     fun openReadBy(messageId: String) {
-        _readBy.value = messageId to ReadByState.Loading
+        val last = (_readBy.value?.takeIf { it.first == messageId }?.second as? ReadByState.Loaded)?.reply
+        _readBy.value = messageId to (last?.let { ReadByState.Loaded(it) } ?: ReadByState.Loading)
         viewModelScope.launch {
             _readBy.value = messageId to when (val r = c.api.groupReceipts(conversationId, messageId)) {
                 is ApiResult.Ok -> ReadByState.Loaded(r.value)
-                is ApiResult.Error -> ReadByState.Error(if (r.httpStatus == 404) "No longer available" else "Couldn't load (${r.code})")
-                is ApiResult.NetworkError -> ReadByState.Error("Offline — try again")
+                // §33.12: expired from retention.
+                is ApiResult.Error -> ReadByState.Error(if (r.httpStatus == 404) lk.codegen.risime.ui.chat.MessagingStrings.RECEIPTS_GONE else "Couldn't load (${r.code})")
+                // Offline: the last loaded list with "Couldn't refresh · Retry".
+                is ApiResult.NetworkError -> last?.let { ReadByState.Stale(it) } ?: ReadByState.Error("Offline — try again")
+            }
+        }
+    }
+
+    /** §33.12 agent members are never listed in Info. */
+    fun isAgent(userId: String): Boolean = members.value.any { it.userId.equals(userId, true) && it.kind == lk.codegen.risime.net.GroupMember.KIND_AGENT }
+
+    init {
+        // §33.12 `group_receipt` events refresh an open Info live.
+        viewModelScope.launch {
+            messages.collect { rows ->
+                val open = _readBy.value ?: return@collect
+                if (open.second is ReadByState.Loaded && rows.any { it.messageId == open.first }) {
+                    val r = c.api.groupReceipts(conversationId, open.first) as? ApiResult.Ok ?: return@collect
+                    if (_readBy.value?.first == open.first) _readBy.value = open.first to ReadByState.Loaded(r.value)
+                }
             }
         }
     }

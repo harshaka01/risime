@@ -28,6 +28,9 @@ interface RisiCalendarActions {
     /** A view moved outside the listed window: list that range too. */
     fun loadRange(fromMs: Long, toMs: Long) {}
 
+    /** v1.34 §33.14 "Export PDF" of the shown view (≤ 31 days; [view]: day | week | agenda). */
+    fun exportPdf(view: String, fromMs: Long, toMs: Long) {}
+
     fun create(title: String, startMs: Long, endMs: Long, allDay: Boolean) {}
 
     /** The owner's edit: the [edit] object of the editor (title, start, end, all_day). */
@@ -76,6 +79,10 @@ object RisiCalendarEdits {
 /** §29 the Calendar tab next to Chats / Calls / Requests (only on a `risi_events` device). */
 class RisiCalendarViewModel(private val c: AppContainer, val meId: String) : ViewModel(), RisiCalendarActions {
     val on: StateFlow<Boolean> = c.risiEventsActive
+
+    override fun exportPdf(view: String, fromMs: Long, toMs: Long) = c.requestPdf(
+        lk.codegen.risime.net.PdfSources.calendar(view, java.time.Instant.ofEpochMilli(fromMs).toString(), java.time.Instant.ofEpochMilli(toMs).toString()),
+    )
 
     val events: StateFlow<List<RisiEvent>> = c.risiCalendar.events.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 

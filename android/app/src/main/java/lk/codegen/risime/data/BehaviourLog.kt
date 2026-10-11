@@ -32,6 +32,19 @@ class BehaviourLog(
     suspend fun imageSent(peerId: String, bytes: Long, w: Int, h: Int) =
         log(IMAGE_SENT, peerHash(peerId), buildJsonObject { put("bytes", bytes); put("w", w); put("h", h) }.toString())
 
+    /** §33.16 counts only: forwarded n items to m chats (never content, names or ids). */
+    suspend fun forwarded(items: Int, chats: Int) = log(FORWARDED, null, buildJsonObject { put("items", items); put("chats", chats) }.toString())
+
+    /** §33.16 copied n messages. */
+    suspend fun copied(n: Int) = log(COPIED, null, buildJsonObject { put("n", n) }.toString())
+
+    /** §33.16 shared n items. */
+    suspend fun shared(n: Int) = log(SHARED, null, buildJsonObject { put("n", n) }.toString())
+
+    /** §33.14 "pdf exported" with the page count and the source type only. */
+    suspend fun pdfExported(pages: Int, sourceType: String) =
+        log(PDF_EXPORTED, null, buildJsonObject { put("pages", pages); put("source", sourceType) }.toString())
+
     suspend fun peerHash(peerId: String): String = hash(peerId.lowercase(), salt())
 
     private suspend fun log(type: String, peerHash: String?, meta: String?) {
@@ -44,6 +57,10 @@ class BehaviourLog(
         const val MESSAGE_SENT = "message_sent"
         const val REPLY_LATENCY_MS = "reply_latency_ms"
         const val IMAGE_SENT = "image_sent"
+        const val FORWARDED = "forwarded"
+        const val COPIED = "copied"
+        const val SHARED = "shared"
+        const val PDF_EXPORTED = "pdf_exported"
 
         fun hash(peerId: String, salt: String): String =
             MessageDigest.getInstance("SHA-256").digest((peerId + salt).toByteArray())

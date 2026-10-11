@@ -203,8 +203,8 @@ class GroupScreensTest(private val dark: Boolean) {
         rule.onNodeWithText("Kamal").assertIsDisplayed()
         rule.onNodeWithText("Delivered to 1").assertIsDisplayed()
         rule.onNodeWithText("Sunil").assertIsDisplayed()
-        scrollTo("Not delivered yet: 1").assertIsDisplayed()
-        rule.onAllNodesWithText("Nimal").assertCountEquals(0)
+        scrollTo("Waiting 1").assertIsDisplayed()
+        rule.onAllNodesWithText("Nimal").assertCountEquals(1)
         rule.onNodeWithText("Close").performClick()
         assertEquals(listOf("close"), events)
     }

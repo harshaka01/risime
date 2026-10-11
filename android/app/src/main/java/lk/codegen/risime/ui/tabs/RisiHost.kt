@@ -28,6 +28,9 @@ interface RisiHost {
     /** Android's notification settings for this app. */
     fun openNotificationSettings() {}
 
+    /** v1.34 §33.15 a `pdf` chip: render the PDF on this phone (the §33.14 sheet; nothing is sent). */
+    fun exportPdf(source: kotlinx.serialization.json.JsonObject) {}
+
     /** v1.32 §29.7 "Your events": this phone's own events in the range (phone provider + cached Risi Calendar). */
     suspend fun localEvents(fromMs: Long, toMs: Long): lk.codegen.risime.data.tabs.LocalEventsResult = lk.codegen.risime.data.tabs.LocalEventsResult.Unavailable
 

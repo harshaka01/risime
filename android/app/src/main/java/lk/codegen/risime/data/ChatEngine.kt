@@ -1011,7 +1011,7 @@ class ChatEngine(
      * Insert as pending first, then try to push. [target] is a conversation id (`dm:`/`grp:`) or,
      * for a DM, the peer's user id. Returns the client_msg_id.
      */
-    suspend fun sendText(target: String, text: String, clientMsgId: String? = null): String? {
+    suspend fun sendText(target: String, text: String, clientMsgId: String? = null, replyTo: lk.codegen.risime.net.ReplyRef? = null): String? {
         val body = text.trim()
         // §11.1: the server counts graphemes (authoritative); the composer warns with ICU. Here only the byte cap.
         if (body.isEmpty() || body.toByteArray(Charsets.UTF_8).size > MAX_BODY_BYTES) return null
@@ -1036,6 +1036,9 @@ class ChatEngine(
                 localTs = now,
                 status = MessageStatus.PENDING.name,
                 outgoing = true,
+                // §33.9: the quote target (no snippet travels; e2ee only).
+                replyToMessageId = replyTo?.messageId,
+                replyToFrom = replyTo?.from,
             ),
         )
         deletes?.unhide(conv) // §15.7: a deleted chat comes back with my new message

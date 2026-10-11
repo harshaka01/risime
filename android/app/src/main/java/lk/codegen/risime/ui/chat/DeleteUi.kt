@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import lk.codegen.risime.data.db.MessageEntity
 import lk.codegen.risime.data.deletes.DeleteRules
+import lk.codegen.risime.data.messaging.SelectionRules
 import lk.codegen.risime.ui.common.MessageBubble
 import lk.codegen.risime.ui.common.timeOf
 
@@ -284,13 +285,35 @@ class MsgSelect(val selecting: Boolean, val selected: Boolean, val onToggle: () 
 fun copyText(rows: List<MessageEntity>, selection: Set<String>): String =
     rows.filter { it.clientMsgId in selection && !it.system && !it.showsAsDeleted && it.body.isNotBlank() }.joinToString("\n") { it.body }
 
-/** The select-mode bar wired to a controller and the chat's rows. */
+/**
+ * The select-mode bar wired to a controller and the chat's rows. With [messaging] (v1.34 §33.2) it is the
+ * full bar: Copy, Forward, Share, Star, Reply, Info, Delete; without, the older Copy / Delete bar.
+ */
 @Composable
-fun SelectionBarFor(ctl: DeleteController, rows: List<MessageEntity>, selection: Set<String>) {
+fun SelectionBarFor(ctl: DeleteController, rows: List<MessageEntity>, selection: Set<String>, messaging: ChatMessaging? = null) {
     if (selection.isEmpty()) return
     val clipboard = androidx.compose.ui.platform.LocalClipboard.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     androidx.activity.compose.BackHandler { ctl.clearSelection() }
+    if (messaging != null) {
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val selected = rows.filter { it.clientMsgId in selection }
+        val actions = SelectionRules.actions(selected, messaging.ctl.me, messaging.media, messaging.starred, System.currentTimeMillis(), messaging.canSend)
+        SelectionBar(
+            actions = actions,
+            deleteEnabled = ctl.enabled,
+            onCopy = { messaging.ctl.copy(context, selected, messaging.nameOrNull); ctl.clearSelection() },
+            onForward = { messaging.ctl.startForward(selected); ctl.clearSelection() },
+            onShare = { messaging.ctl.share(context, selected, messaging.nameOrNull); ctl.clearSelection() },
+            onStar = { messaging.ctl.setStar(selected, on = !actions.unstar); ctl.clearSelection() },
+            onReply = { selected.singleOrNull()?.let(messaging.ctl::reply); ctl.clearSelection() },
+            onInfo = { selected.singleOrNull()?.let(messaging.ctl::openInfo); ctl.clearSelection() },
+            onDelete = { ctl.ask(selected) },
+            onClose = ctl::clearSelection,
+            onForwardBlocked = { messaging.ctl.toast.value = it },
+        )
+        return
+    }
     SelectionTopBar(
         count = selection.size,
         onCopy = {

@@ -232,6 +232,8 @@ fun NoteScreen(
     onShare: () -> Unit,
     onDelete: () -> Unit,
     onBack: () -> Unit,
+    /** v1.34 §33.14 ⋮ → "Export PDF" (null: no item). */
+    onExportPdf: (() -> Unit)? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -239,10 +241,11 @@ fun NoteScreen(
         topBar = {
             RisiTopBar(title = "Note", onBack = onBack, actions = {
                 if (view != null) IconButton(onClick = onShare, modifier = Modifier.testTag("risi_note_share")) { Icon(Icons.Filled.Share, "Share into a chat") }
-                if (canDelete && view != null) {
+                if ((canDelete || onExportPdf != null) && view != null) {
                     IconButton(onClick = { menu = true }, modifier = Modifier.testTag("risi_note_menu")) { Icon(Icons.Filled.MoreVert, "More") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(text = { Text("Delete from my notes", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { menu = false; confirmDelete = true }, modifier = Modifier.testTag("risi_note_delete"))
+                        onExportPdf?.let { f -> DropdownMenuItem(text = { Text("Export PDF", maxLines = 1) }, onClick = { menu = false; f() }, modifier = Modifier.testTag("risi_note_export_pdf")) }
+                        if (canDelete) DropdownMenuItem(text = { Text("Delete from my notes", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, onClick = { menu = false; confirmDelete = true }, modifier = Modifier.testTag("risi_note_delete"))
                     }
                 }
             })

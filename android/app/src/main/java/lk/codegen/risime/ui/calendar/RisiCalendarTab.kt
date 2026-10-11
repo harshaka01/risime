@@ -118,6 +118,16 @@ fun RisiCalendarScreen(
                         )
                     }
                 }
+                // v1.34 §33.14 the shown view as a PDF (day, week, agenda; at most 31 days).
+                IconButton(onClick = {
+                    val (a, b) = nav.range(zone)
+                    val view = when (nav.mode) {
+                        RisiCalendarViews.Mode.DAY -> "day"
+                        RisiCalendarViews.Mode.WEEK -> "week"
+                        else -> "agenda"
+                    }
+                    actions.exportPdf(view, a, minOf(b, a + 31L * 86_400_000L))
+                }, modifier = Modifier.testTag("calendar_export_pdf")) { Icon(lk.codegen.risime.ui.common.RisiIcons.Pdf, "Export PDF") }
                 IconButton(onClick = { info = true }, modifier = Modifier.testTag("calendar_info")) { Icon(Icons.Default.Info, "About Risi Calendar") }
                 IconButton(onClick = { settingsOpen = true }, modifier = Modifier.testTag("calendar_settings")) { Icon(Icons.Default.Settings, "Calendar settings") }
             }

@@ -42,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -410,6 +411,15 @@ fun MessageBubble(
     imageStatus: String? = null,
     /** §14: the photo's tap target ("Retry"), also a TalkBack action of the merged bubble. */
     imageAction: Pair<String, () -> Unit>? = null,
+    /** v1.34 §33.4 the "Forwarded" label (the envelope's hops), null: not forwarded. */
+    forwardHops: Int? = null,
+    /** §33.9 the quote block above the content. */
+    quote: (@Composable () -> Unit)? = null,
+    /** §33.11 a star in the time row. */
+    starred: Boolean = false,
+    /** §33.13 a file card (in place of a photo), read by TalkBack as [attachmentLabel]. */
+    attachment: (@Composable () -> Unit)? = null,
+    attachmentLabel: String? = null,
     /** The first bubble of a run (a new sender or side): the tail and a little more space above. */
     tail: Boolean = true,
 ) {
@@ -440,11 +450,14 @@ fun MessageBubble(
                 .clearAndSetSemantics {
                     contentDescription = buildString {
                         append(if (mine) "You: " else sender?.let { "$it: " } ?: "")
+                        if (forwardHops != null) append(if (forwardHops >= lk.codegen.risime.net.Forwarding.MANY_TIMES) "Forwarded many times, " else "Forwarded, ")
+                        attachmentLabel?.let { append(it).append(", ") }
                         append(if (image == null) body else if (body.isBlank()) "Photo" else "Photo, $body")
                         imageStatus?.let { append(", ").append(it) }
                         append(", ").append(time)
                         statusLabel?.let { append(", ").append(it) }
                         note?.let { append(". ").append(it) }
+                        if (starred) append(", starred")
                         if (selected) append(", selected")
                     }
                     imageAction?.let { (label, run) ->
@@ -469,9 +482,16 @@ fun MessageBubble(
                         modifier = if (image != null) Modifier.padding(horizontal = Spacing.xs, vertical = Spacing.xxs) else Modifier,
                     )
                 }
+                lk.codegen.risime.ui.chat.ForwardedLabel(forwardHops)
+                quote?.invoke()
                 image?.invoke()
+                attachment?.invoke()
                 val meta: @Composable () -> Unit = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (starred) {
+                            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Star, "Starred", Modifier.size(12.dp).testTag("star_icon"), tint = if (mine) c.bubbleMineMeta else c.bubbleTheirsMeta)
+                            Spacer(Modifier.size(Spacing.xxs))
+                        }
                         Text(time, style = MaterialTheme.typography.labelSmall, color = if (mine) c.bubbleMineMeta else c.bubbleTheirsMeta)
                         if (status != null) {
                             Spacer(Modifier.size(Spacing.xs))
