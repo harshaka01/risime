@@ -69,8 +69,8 @@ enum class ImageTap { OPEN, DOWNLOAD, NONE }
 fun imageStatusText(row: MediaEntity?): String? {
     val state = row?.state?.let { s -> MediaState.entries.firstOrNull { it.name == s } } ?: return "Photo"
     return when (state) {
-        MediaState.ENCRYPTED, MediaState.UPLOADING -> "Sending photo…"
-        MediaState.FAILED -> uploadFailureText(row.failReason)
+        MediaState.REENCRYPT, MediaState.ENCRYPTED, MediaState.UPLOADING -> "Sending photo…"
+        MediaState.FAILED -> if (row.failReason == lk.codegen.risime.data.messaging.ForwardMedia.SOURCE_GONE) "This photo is no longer available" else uploadFailureText(row.failReason)
         MediaState.NONE -> "Tap to download"
         MediaState.DOWNLOADING -> "Downloading…"
         MediaState.GONE -> "This photo is no longer available"

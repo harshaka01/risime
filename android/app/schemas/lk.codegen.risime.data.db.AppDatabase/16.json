@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 16,
-    "identityHash": "74b70969e3ef2da9eb70574325e3764b",
+    "identityHash": "55e9e0c44b878b9ea0cdf12268ae1e79",
     "entities": [
       {
         "tableName": "messages",
@@ -855,7 +855,7 @@
       },
       {
         "tableName": "media",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`client_msg_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `outgoing` INTEGER NOT NULL, `state` TEXT NOT NULL, `blob_id` TEXT, `blob_size` INTEGER NOT NULL, `blob_sha256` TEXT NOT NULL, `client_blob_id` TEXT, `sealed_enc` BLOB NOT NULL, `sealed_thumb` BLOB, `mime` TEXT NOT NULL, `w` INTEGER NOT NULL, `h` INTEGER NOT NULL, `file_name` TEXT, `bytes_have` INTEGER NOT NULL, `expires_at_est` INTEGER, `last_access` INTEGER NOT NULL, `attempts` INTEGER NOT NULL, `next_at` INTEGER NOT NULL, `fail_reason` TEXT, PRIMARY KEY(`client_msg_id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`client_msg_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `outgoing` INTEGER NOT NULL, `state` TEXT NOT NULL, `blob_id` TEXT, `blob_size` INTEGER NOT NULL, `blob_sha256` TEXT NOT NULL, `client_blob_id` TEXT, `sealed_enc` BLOB NOT NULL, `sealed_thumb` BLOB, `mime` TEXT NOT NULL, `w` INTEGER NOT NULL, `h` INTEGER NOT NULL, `file_name` TEXT, `bytes_have` INTEGER NOT NULL, `expires_at_est` INTEGER, `last_access` INTEGER NOT NULL, `attempts` INTEGER NOT NULL, `next_at` INTEGER NOT NULL, `fail_reason` TEXT, `forward_from` TEXT, PRIMARY KEY(`client_msg_id`))",
         "fields": [
           {
             "fieldPath": "clientMsgId",
@@ -969,6 +969,11 @@
           {
             "fieldPath": "failReason",
             "columnName": "fail_reason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "forwardFrom",
+            "columnName": "forward_from",
             "affinity": "TEXT"
           }
         ],
@@ -2298,7 +2303,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '74b70969e3ef2da9eb70574325e3764b')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '55e9e0c44b878b9ea0cdf12268ae1e79')"
     ]
   }
 }

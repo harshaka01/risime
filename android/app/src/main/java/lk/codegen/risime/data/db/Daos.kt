@@ -470,6 +470,9 @@ interface MediaDao {
     @Query("SELECT * FROM media WHERE conversation_id = :conversationId")
     fun forConversation(conversationId: String): Flow<List<MediaEntity>>
 
+    @Query("SELECT * FROM media WHERE state = 'REENCRYPT'")
+    suspend fun reencryptJobs(): List<MediaEntity>
+
     @Query("SELECT * FROM media WHERE outgoing = 1 AND state IN ('ENCRYPTED', 'UPLOADING')")
     suspend fun owedUploads(): List<MediaEntity>
 

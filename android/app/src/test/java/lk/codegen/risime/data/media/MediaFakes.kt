@@ -34,6 +34,7 @@ class FakeMediaDao(private val messages: FakeMessageDao) : MediaDao {
     override fun forConversation(conversationId: String): Flow<List<MediaEntity>> = rows.map { m -> m.values.filter { it.conversationId == conversationId } }
 
     override suspend fun owedUploads() = rows.value.values.filter { it.outgoing && it.state in setOf("ENCRYPTED", "UPLOADING") }
+    override suspend fun reencryptJobs() = rows.value.values.filter { it.state == "REENCRYPT" }
 
     override suspend fun downloadable() = rows.value.values
         .filter { it.state in setOf("NONE", "DOWNLOADING") && it.blobId != null && messages.rows[it.clientMsgId] != null }

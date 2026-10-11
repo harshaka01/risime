@@ -343,6 +343,8 @@ class MediaEntity(
     val attempts: Int = 0,
     @ColumnInfo(name = "next_at") val nextAt: Long = 0,
     @ColumnInfo(name = "fail_reason") val failReason: String? = null,
+    /** v16 (§33.5): a forward's re-upload job: the source row whose plaintext is re-encrypted with a fresh key for this target. */
+    @ColumnInfo(name = "forward_from") val forwardFrom: String? = null,
 ) {
     fun copy(
         state: String = this.state,
@@ -357,14 +359,23 @@ class MediaEntity(
         attempts: Int = this.attempts,
         nextAt: Long = this.nextAt,
         failReason: String? = this.failReason,
+        forwardFrom: String? = this.forwardFrom,
+        sealedEnc: ByteArray = this.sealedEnc,
+        sealedThumb: ByteArray? = this.sealedThumb,
+        mime: String = this.mime,
+        w: Int = this.w,
+        h: Int = this.h,
     ) = MediaEntity(
         clientMsgId, conversationId, outgoing, state, blobId, blobSize, blobSha256, clientBlobId, sealedEnc, sealedThumb,
-        mime, w, h, fileName, bytesHave, expiresAtEst, lastAccess, attempts, nextAt, failReason,
+        mime, w, h, fileName, bytesHave, expiresAtEst, lastAccess, attempts, nextAt, failReason, forwardFrom,
     )
 }
 
 /** §14.7 media states (outgoing: encrypted → uploading → uploaded | failed; incoming: none → downloading → cached | gone | corrupt). */
 enum class MediaState {
+    /** v1.34 §33.5 outgoing forward: waiting to re-encrypt the source ([MediaEntity.forwardFrom]) with a fresh key; then ENCRYPTED. */
+    REENCRYPT,
+
     /** Outgoing: encrypted and persisted, waiting for the upload job. */
     ENCRYPTED,
     UPLOADING,

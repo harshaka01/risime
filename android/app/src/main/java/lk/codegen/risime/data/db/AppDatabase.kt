@@ -357,7 +357,8 @@ object Migration13To14 : Migration(13, 14) {
 /**
  * v16 (§33 basic messaging, §33.18 upgrade gate, hard rule 9): creates `stars` and adds nullable
  * columns to `messages` (forward_hops, reply_to_message_id, reply_to_from, delivered_at, read_at,
- * view_once). No existing row is changed or removed; old rows read as "not forwarded, no reply, no times".
+ * view_once) and to `media` (forward_from: a forward's re-upload job). No existing row is changed or
+ * removed; old rows read as "not forwarded, no reply, no times".
  */
 object Migration15To16 : Migration(15, 16) {
     val SQL = listOf(
@@ -367,6 +368,7 @@ object Migration15To16 : Migration(15, 16) {
         "ALTER TABLE `messages` ADD COLUMN `delivered_at` INTEGER",
         "ALTER TABLE `messages` ADD COLUMN `read_at` INTEGER",
         "ALTER TABLE `messages` ADD COLUMN `view_once` INTEGER",
+        "ALTER TABLE `media` ADD COLUMN `forward_from` TEXT",
         "CREATE TABLE IF NOT EXISTS `stars` (`message_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `starred_at` INTEGER NOT NULL, PRIMARY KEY(`message_id`))",
     )
 
