@@ -233,6 +233,43 @@ export REINSTALL_CHECK_FROM="${REINSTALL_CHECK_FROM:-20031}"
 # On by default from nightly.32 (decision 059). C is updated to the new app before the reinstall
 # (scripts/upgrade-test; UPGRADE_C_STAYS_OLD=1 keeps it on the old one).
 export RESTORE_CHECK_FROM="${RESTORE_CHECK_FROM:-20032}"
+# Two-phone gate (decision 079, Harsha's gate H): the FIRST release of ai.risicloud.risime has no previously
+# published APK of its own, so no in-place upgrade can be tested. Then (or with NEW_PKG_FIRST=1) the BLOCKING gate is
+# scripts/two-phone-test instead: fresh installs on three redroids (sign-in, e2ee 1:1 + group with the lock, photo,
+# a call, Risi in Official, app_id on the server, no crash/ANR), with this build's debug APK (its debug call stats
+# prove the media path). It needs a fresh PASS for this version and HEAD (TWO_PHONE_RESULT=<file>: a result made
+# elsewhere, still checked). Every later release of the new app runs the upgrade gate below again.
+NEW_FEED="https://risicloud.ai/app/risime/ai.risicloud.risime/version.json"
+FIRST_NEW=0
+if [ "${NEW_PKG_FIRST:-0}" = 1 ]; then FIRST_NEW=1
+elif [ ! -f "$REL/publish/ai.risicloud.risime/version.json" ]; then
+  code="$(curl -s -o /dev/null -w '%{http_code}' "$NEW_FEED" || true)"
+  case "$code" in
+    200) ;;
+    404) FIRST_NEW=1 ;;
+    *) echo "can't tell whether ai.risicloud.risime was published before ($NEW_FEED: HTTP ${code:-none}); set NEW_PKG_FIRST=1 or retry"; exit 1 ;;
+  esac
+fi
+if [ "$FIRST_NEW" = 1 ]; then
+  echo "==> two-phone gate (first ai.risicloud.risime release: no previous APK to upgrade from)"
+  TP_RESULT="${TWO_PHONE_RESULT:-$HOME/risime-logs/two-phone-test/v$next.result}"
+  if [ -z "${TWO_PHONE_RESULT:-}" ]; then
+    scripts/android-target check >/dev/null 2>&1 || { echo "two-phone gate needs redroid (spark2)"; exit 1; }
+    TWOPHONE_INSTANCE=_rel2p TWOPHONE_PORT=4131 TWOPHONE_LLM_PORT=8132 \
+      TWOPHONE_REDROID_A=-reltp1 TWOPHONE_REDROID_A_PORT=5674 TWOPHONE_REDROID_B=-reltp2 TWOPHONE_REDROID_B_PORT=5675 \
+      TWOPHONE_REDROID_C=-reltp3 TWOPHONE_REDROID_C_PORT=5676 \
+      STEP_T="${TWOPHONE_STEP_TIMEOUT:-2700}" step scripts/two-phone-test --apk android/app/build/outputs/apk/debug/app-debug.apk \
+        --version "$next" --commit "$(git rev-parse HEAD)" || { echo "TWO-PHONE TEST FAILED: not releasing"; exit 1; }
+  fi
+  tp() { sed -n "/^$1=/{s/^$1=//p;q}" "$TP_RESULT" 2>/dev/null || true; }
+  [ "$(tp result)" = PASS ] || { echo "two-phone test did not pass: $(tp reason)"; exit 1; }
+  [ "$(tp version)" = "$next" ] || { echo "two-phone result is for v$(tp version), not v$next"; exit 1; }
+  [ "$(tp commit)" = "$(git rev-parse HEAD)" ] || { echo "two-phone result is for another commit; re-run it on this HEAD"; exit 1; }
+  age=$(( $(date -u +%s) - $(tp time || echo 0) ))
+  [ "$age" -ge 0 ] && [ "$age" -lt 86400 ] || { echo "two-phone result is older than 24 h; re-run it"; exit 1; }
+  echo "==> two-phone test PASS ($(tp package), checks: $(tp checks); $(tp push))"
+  OVERRIDE_NOTE="First ai.risicloud.risime release: the two-phone gate (scripts/two-phone-test) replaced the upgrade gate. Checks: $(tp checks). $(tp push)."
+else
 echo "==> upgrade test (previous published APK -> v$next)"
 UT_COMMIT="$(git rev-parse HEAD)"
 CAND="$REL/candidate"; mkdir -p "$CAND" "$HOME/risime-logs/upgrade-test"
@@ -299,6 +336,8 @@ age=$(( $(date -u +%s) - $(ut time || echo 0) ))
 [ "$age" -ge 0 ] && [ "$age" -lt 86400 ] || { echo "upgrade test result is older than 24 h; re-run it"; exit 1; }
 echo "==> upgrade test PASS ($(ut old) -> $(ut new) via $UT_VIA_RES on $(ut host)/$(ut device), back step: $(ut back_step), reinstall: $(ut reinstall), restore: $(ut restore), $((age / 60)) min ago)"
 fi
+
+fi  # FIRST_NEW (two-phone gate) / upgrade gate
 
 last="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 notes="docs/releases/v$next.md"
