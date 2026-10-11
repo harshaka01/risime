@@ -1,5 +1,5 @@
 //! UniFFI binding of `risime-mls` (decisions 012, 033; contract v1.7 §10). A thin, FFI-only
-//! layer: every MLS decision lives in the core crate. Kotlin package: `lk.codegen.risime.crypto`.
+//! layer: every MLS decision lives in the core crate. Kotlin package: `ai.risicloud.risime.crypto`.
 //!
 //! Threading: each `MlsClient` serialises its calls with an internal mutex. Calls are blocking and
 //! CPU-bound (a few milliseconds), so make them from a background thread. The client calls back

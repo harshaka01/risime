@@ -1,0 +1,123 @@
+package ai.risicloud.risime.data.tabs
+
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import ai.risicloud.risime.data.db.ChatTabEntity
+import ai.risicloud.risime.data.db.ContactEntity
+import ai.risicloud.risime.data.db.GroupEntity
+import ai.risicloud.risime.net.dmPeer
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * What Risi's cards ask of the rest of the app: a draft's [Use] (open a chat with its composer filled;
+ * nothing is sent) and "Open Risi skills". In memory only.
+ */
+class RisiUiBus {
+    sealed interface Nav {
+        data class Chat(val conversationId: String) : Nav
+
+        data class Skills(val skillId: String?) : Nav
+
+        /** §29.9 [Open] on an event card: the chat list's Calendar tab (the event comes from RisiCalendar.focus). */
+        data object Calendar : Nav
+
+        /** §30.4 a note card's tap / [Open] on `notes_saved` / "From note" in My promises: the note screen. */
+        data class Note(val noteId: String) : Nav
+
+        /** §30.6 the Notes list (Risi chat ⋮ → Notes). */
+        data object Notes : Nav
+
+        /** v1.35 §34.4 Open on a promise / follow-up in Risi's items: My promises. */
+        data class Promises(val itemId: String?) : Nav
+    }
+
+    fun openPromises(itemId: String?) {
+        _nav.tryEmit(Nav.Promises(itemId))
+    }
+
+    /**
+     * Where a chat opened from a Risi card scrolls to: a summary's card, the first message at or after [at],
+     * or (server item 9, My promises) the item's source message [messageId] once it is on this phone.
+     */
+    data class Focus(
+        val summaryId: String? = null,
+        val at: String? = null,
+        val messageId: String? = null,
+        /** v1.35 §34.4 Open on a scheduled message in Risi's items: the chat's "Scheduled messages" sheet. */
+        val scheduled: Boolean = false,
+    )
+
+    private val drafts = ConcurrentHashMap<String, String>()
+    private val focus = ConcurrentHashMap<String, Focus>()
+    private val _nav = MutableSharedFlow<Nav>(extraBufferCapacity = 8)
+    val nav: SharedFlow<Nav> = _nav.asSharedFlow()
+
+    /** [Use]: the target's composer gets [text] when it opens; never sent. */
+    fun useDraft(conversationId: String, text: String) {
+        drafts[conversationId.lowercase()] = text
+        _nav.tryEmit(Nav.Chat(conversationId))
+    }
+
+    /** The draft waiting for [conversationId] (taken once). */
+    fun takeDraft(conversationId: String): String? = drafts.remove(conversationId.lowercase())
+
+    /** §27.3/§27.4 open a chat at a point ([Open chat], [Open Risi chat]). */
+    fun openChat(conversationId: String, f: Focus?) {
+        if (f != null) focus[conversationId.lowercase()] = f else focus.remove(conversationId.lowercase())
+        _nav.tryEmit(Nav.Chat(conversationId))
+    }
+
+    /** The focus waiting for [conversationId] (taken once). */
+    fun takeFocus(conversationId: String): Focus? = focus.remove(conversationId.lowercase())
+
+    fun openCalendar() {
+        _nav.tryEmit(Nav.Calendar)
+    }
+
+    fun openNote(noteId: String) {
+        _nav.tryEmit(Nav.Note(noteId))
+    }
+
+    fun openNotes() {
+        _nav.tryEmit(Nav.Notes)
+    }
+
+    fun openSkills(skillId: String?) {
+        _nav.tryEmit(Nav.Skills(skillId))
+    }
+}
+
+/**
+ * The conversations on this phone and their local names: DMs with a friend ("Kumu"), groups this
+ * user is in (their name), and Official conversations (the chat's name). Risi chats are excluded.
+ */
+object ConversationDirectory {
+    fun names(
+        me: String,
+        groups: List<GroupEntity>,
+        contacts: List<ContactEntity>,
+        tabRows: Map<String, ChatTabEntity>?,
+    ): Map<String, String> {
+        val out = HashMap<String, String>()
+        val byUser = contacts.filter { it.userId != null }.associate { it.userId!!.lowercase() to it.displayName }
+        for (ct in contacts) {
+            val uid = ct.userId ?: continue
+            out[ai.risicloud.risime.net.conversationFor(me, uid).lowercase()] = ct.displayName
+        }
+        for (g in groups) {
+            if (g.readOnly) continue
+            val conv = g.conversationId.lowercase()
+            val row = tabRows?.get(conv)
+            if (row?.risi == true) continue
+            val chat = chatIdOf(conv, tabRows).lowercase()
+            val name = when {
+                !g.name.isNullOrBlank() -> g.name
+                chat.startsWith("dm:") -> dmPeer(chat, me)?.let { byUser[it.lowercase()] }
+                else -> groups.firstOrNull { it.conversationId.equals(chat, true) }?.name?.takeIf { it.isNotBlank() }
+            } ?: "Group"
+            out[conv] = name
+        }
+        return out
+    }
+}

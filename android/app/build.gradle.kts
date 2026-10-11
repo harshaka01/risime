@@ -11,11 +11,36 @@ plugins {
     alias(libs.plugins.room)
 }
 
-// ---- Push (decision 026) ----
-// Firebase config is Harsha's credential: app/google-services.json (gitignored), copied from
-// ~/risime-keys/. Without it the plugin isn't applied and the app builds and runs without push.
-val pushConfigured = file("google-services.json").isFile
-if (pushConfigured) pluginManager.apply("com.google.gms.google-services")
+// ---- Push (decisions 026, 079) ----
+// Firebase config is Harsha's credential, never committed. Source, first that exists: env GOOGLE_SERVICES_JSON,
+// ~/secrets/firebase/google-services.json, or an app/google-services.json already in place (gitignored).
+// It is copied to app/google-services.json and the Firebase plugin is applied only when the file lists every
+// application id this build produces (release + .debug); otherwise the app builds without FCM (push off).
+val risiAppId = "ai.risicloud.risime"
+val risiAppIds = listOf(risiAppId, "$risiAppId.debug")
+val googleServicesTarget = file("google-services.json")
+val googleServicesSource: File? = listOfNotNull(
+    System.getenv("GOOGLE_SERVICES_JSON")?.takeIf { it.isNotBlank() }?.let(::File),
+    File(System.getProperty("user.home"), "secrets/firebase/google-services.json"),
+    googleServicesTarget,
+).firstOrNull { it.isFile }
+val googleServicesPackages: Set<String> = googleServicesSource?.readText()
+    ?.let { Regex(""""package_name"\s*:\s*"([^"]+)"""").findAll(it).map { m -> m.groupValues[1] }.toSet() }
+    .orEmpty()
+val pushConfigured: Boolean = googleServicesSource != null && googleServicesPackages.containsAll(risiAppIds)
+if (pushConfigured) {
+    if (googleServicesSource!!.canonicalPath != googleServicesTarget.canonicalPath) {
+        googleServicesSource.copyTo(googleServicesTarget, overwrite = true)
+    }
+    pluginManager.apply("com.google.gms.google-services")
+} else {
+    // A stale file for another app id would break processGoogleServices if the plugin ever ran; the plugin is off.
+    logger.warn(
+        if (googleServicesSource == null) "risime: WARNING no google-services.json found: building WITHOUT push (FCM off)"
+        else "risime: WARNING ${googleServicesSource.path} lists $googleServicesPackages, not all of $risiAppIds: " +
+            "building WITHOUT push (FCM off). Add the apps in Firebase and re-download google-services.json."
+    )
+}
 
 // ---- E2EE (decisions 012 §5a, 031, 037): native MLS core in debug AND release builds ----
 // Built by ../scripts/build-rust-android when rustup's cargo and an NDK exist (spark2); otherwise
@@ -68,22 +93,26 @@ val updateBaseUrl: String = providers.gradleProperty("risime.updateBaseUrl").orN
     u
 } ?: DEFAULT_UPDATE_BASE_URL
 
-// ---- Release signing (decision 003) ----
-// Read from $HOME/risime-keys/keystore.properties when it exists (spark2); otherwise the release
-// build is unsigned (e.g. on the laptop). Machine paths and secrets never live in the repo.
-val releaseKeystoreProps: Properties? =
-    File(System.getProperty("user.home"), "risime-keys/keystore.properties")
+// ---- Release signing (decisions 003, 079) ----
+// keystore.properties from env RISIME_KEYSTORE_PROPS when set (legacy builds of the old app id point it at
+// ~/risime-keys/keystore.properties), else ~/secrets/signing/keystore.properties (the Risi key, CN=Risi);
+// otherwise the release build is unsigned (e.g. on the laptop). Machine paths and secrets never live in the repo.
+val releaseKeystorePropsFile: File? =
+    (System.getenv("RISIME_KEYSTORE_PROPS")?.takeIf { it.isNotBlank() }?.let(::File)
+        ?: File(System.getProperty("user.home"), "secrets/signing/keystore.properties"))
         .takeIf { it.isFile }
-        ?.let { f -> Properties().apply { f.inputStream().use { load(it) } } }
+val releaseKeystoreProps: Properties? =
+    releaseKeystorePropsFile?.let { f -> Properties().apply { f.inputStream().use { load(it) } } }
+if (releaseKeystoreProps == null) logger.lifecycle("risime: no keystore.properties: the release APK is unsigned")
 
 android {
-    namespace = "lk.codegen.risime"
+    namespace = risiAppId
     compileSdk = 37
     // Pinned so spark2 (ARM64) uses its drop-in arm64 build-tools; AGP would otherwise fetch x86 36.0.0.
     buildToolsVersion = "36.1.0"
 
     defaultConfig {
-        applicationId = "lk.codegen.risime"
+        applicationId = risiAppId
         minSdk = 26
         targetSdk = 37
         versionCode = risiVersionCodeValue
@@ -108,7 +137,7 @@ android {
         // v1.12 §15.11 rollout: the delete send UI (long-press Delete / Select, for me / for everyone).
         // Receive shipped in nightly.14; the send UI is on by default from nightly.18 (testers are on
         // ≥ nightly.17). -Prisime.deletesSend=false builds a receive-only APK again.
-        // The one switch: lk.codegen.risime.data.deletes.DeleteFeature.sendEnabled reads this.
+        // The one switch: ai.risicloud.risime.data.deletes.DeleteFeature.sendEnabled reads this.
         // v1.13 §16.14 rollout: advertise `calls` and enable the call button. On by default; a
         // receive-only nightly (call_end lines, no ringing) builds with -Prisime.calls=false.
         buildConfigField("boolean", "CALLS_ENABLED", (providers.gradleProperty("risime.calls").orNull != "false").toString())
@@ -366,7 +395,7 @@ tasks.withType<Test>().configureEach {
     dependsOn("mergeDebugNativeLibs", "mergeReleaseNativeLibs")
     systemProperty("risime.nativeLibs.debug", layout.buildDirectory.dir("intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib").get().asFile.absolutePath)
     systemProperty("risime.nativeLibs.release", layout.buildDirectory.dir("intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib").get().asFile.absolutePath)
-    systemProperty("risime.buildConfig.release", layout.buildDirectory.file("generated/source/buildConfig/release/lk/codegen/risime/BuildConfig.java").get().asFile.absolutePath)
+    systemProperty("risime.buildConfig.release", layout.buildDirectory.file("generated/source/buildConfig/release/ai/risicloud/risime/BuildConfig.java").get().asFile.absolutePath)
     dependsOn("generateReleaseBuildConfig")
 }
 

@@ -1,0 +1,109 @@
+package ai.risicloud.risime.ui.search
+
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import ai.risicloud.risime.ui.common.EmptyState
+import ai.risicloud.risime.ui.common.InitialsAvatar
+import ai.risicloud.risime.ui.common.ListRow
+import ai.risicloud.risime.ui.common.SectionHeader
+import ai.risicloud.risime.ui.theme.Spacing
+import ai.risicloud.risime.ui.common.shortStamp
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SearchScreen(vm: SearchViewModel, onOpen: (String) -> Unit, onBack: () -> Unit, onLockedFolder: () -> Unit = {}) {
+    val q by vm.query.collectAsStateWithLifecycle()
+    val r by vm.results.collectAsStateWithLifecycle()
+    val codeEntry by vm.codeEntry.collectAsStateWithLifecycle()
+    val lockedCount by vm.lockedCount.collectAsStateWithLifecycle()
+    val lockGate = ai.risicloud.risime.ui.lock.rememberLockGate()
+    ai.risicloud.risime.ui.lock.LockGateDialog(lockGate)
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                title = {
+                    TextField(
+                        value = q,
+                        onValueChange = vm::onQuery,
+                        placeholder = { Text("Search chats and people", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                        singleLine = true,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                        ),
+                        modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                    )
+                },
+            )
+        },
+        contentWindowInsets = WindowInsets(0),
+    ) { pad ->
+        LazyColumn(Modifier.fillMaxSize().padding(pad)) {
+            if (codeEntry) {
+                item(key = "locked-folder") {
+                    ai.risicloud.risime.ui.chats.LockedFolderEntry(lockedCount) {
+                        lockGate.run(ai.risicloud.risime.ui.lock.LOCKED_CHATS_TITLE) {
+                            vm.openLockedFolder()
+                            onLockedFolder()
+                        }
+                    }
+                }
+            } else if (r.query.isEmpty()) {
+                item { EmptyState("Search your contacts and the messages on this device.") }
+            } else if (r.contacts.isEmpty() && r.messages.isEmpty()) {
+                item { EmptyState("No results for “${r.query}”") }
+            }
+            if (r.contacts.isNotEmpty()) item { Header("People") }
+            items(r.contacts, key = { "c:" + it.phone }) { c ->
+                ListRow(
+                    title = c.displayName,
+                    subtitle = c.company,
+                    leading = { InitialsAvatar(c.displayName, photoKey = c.userId) },
+                    onClick = { c.userId?.let(onOpen) },
+                )
+            }
+            if (r.messages.isNotEmpty()) item { Header("Messages") }
+            items(r.messages, key = { "m:" + it.message.clientMsgId }) { h ->
+                ListRow(
+                    title = h.peerName,
+                    // §24.9: with tabs on, every hit shows its tab icon.
+                    subtitle = ai.risicloud.risime.ui.chats.tabIcon(h.tab) + (if (h.message.outgoing) "You: " else "") + ai.risicloud.risime.push.bodyPreview(h.message.kind, h.message.body),
+                    leading = { InitialsAvatar(h.peerName, photoKey = h.peerId) },
+                    meta = shortStamp(h.message.localTs),
+                    onClick = { onOpen(h.openTarget) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun Header(text: String) {
+    SectionHeader(text, Modifier.padding(start = Spacing.lg, top = Spacing.lg, bottom = Spacing.xs))
+}

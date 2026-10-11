@@ -1,0 +1,104 @@
+package ai.risicloud.risime.data.tabs
+
+import kotlinx.coroutines.test.runTest
+import ai.risicloud.risime.data.ChatEngine
+import ai.risicloud.risime.data.FakeGroupDao
+import ai.risicloud.risime.data.FakeGroupOpDao
+import ai.risicloud.risime.data.FakeMessageDao
+import ai.risicloud.risime.data.FakeRealtime
+import ai.risicloud.risime.data.FakeSyncDao
+import ai.risicloud.risime.data.TransactionRunner
+import ai.risicloud.risime.data.groups.GroupStore
+import ai.risicloud.risime.net.ChatEventData
+import ai.risicloud.risime.net.Event
+import ai.risicloud.risime.net.Group
+import ai.risicloud.risime.net.GroupEvent
+import ai.risicloud.risime.net.GroupMeta
+import ai.risicloud.risime.net.ProtocolJson
+import org.junit.Assert.assertEquals
+import org.junit.Test
+import java.io.File
+
+/** §24.8: `chat_event` reaches the tabs hook in event order; group events hand the MLS meta (and the server's hint) to the tab store. */
+class TabsEventsTest {
+    private val me = "7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3"
+    private val official = "grp:4e5f6a7b-8c9d-4e0f-9a1b-2c3d4e5f6a7b"
+    private val chat = "grp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"
+
+    private fun example(name: String) = File(System.getProperty("user.dir"), "../../contract/v1/examples/$name").readText()
+
+    @Test fun chatEventsAreAppliedAndAdvanceTheCursor() = runTest {
+        val seen = mutableListOf<ChatEventData>()
+        val sync = FakeSyncDao()
+        val engine = ChatEngine(
+            messages = FakeMessageDao(), sync = sync,
+            tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
+            scope = this, realtime = { FakeRealtime() }, meId = { me },
+            chatEvents = { _, e, _ -> seen += e },
+        )
+        val events = listOf("event_chat_official_created.json", "event_chat_official_off.json", "event_chat_official_on.json").map { ProtocolJson.decodeFromString<Event>(example(it)) }
+        engine.onEvents(events)
+        assertEquals(listOf("official_created", "official_off", "official_on"), seen.map { it.action })
+        assertEquals(events.last().eventId, sync.cursor())
+    }
+
+    /** §25.3: `risi_tool_call` reaches the hook after its event (never as a message); without the hook it is skipped. */
+    @Test fun risiToolCallsReachTheHookAndAdvanceTheCursor() = runTest {
+        val calls = mutableListOf<ai.risicloud.risime.net.RisiToolCall>()
+        val sync = FakeSyncDao()
+        val messages = FakeMessageDao()
+        val engine = ChatEngine(
+            messages = messages, sync = sync,
+            tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
+            scope = this, realtime = { FakeRealtime() }, meId = { me },
+            groupsEnabled = { true }, risiToolCalls = { calls += it },
+        )
+        val events = listOf("event_risi_tool_call_calendar_check.json", "event_risi_tool_call_calendar_add.json").map { ProtocolJson.decodeFromString<Event>(example(it)) }
+        engine.onEvents(events)
+        assertEquals(listOf("calendar_check", "calendar_add"), calls.map { it.tool })
+        assertEquals(events.last().eventId, sync.cursor())
+
+        val sync2 = FakeSyncDao()
+        val old = ChatEngine(
+            messages = FakeMessageDao(), sync = sync2,
+            tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
+            scope = this, realtime = { FakeRealtime() }, meId = { me },
+        )
+        old.onEvents(events)
+        assertEquals(events.last().eventId, sync2.cursor())
+    }
+
+    @Test fun anAppWithoutTabsSkipsChatEventsButMovesOn() = runTest {
+        val sync = FakeSyncDao()
+        val engine = ChatEngine(
+            messages = FakeMessageDao(), sync = sync,
+            tx = object : TransactionRunner { override suspend fun <T> run(block: suspend () -> T): T = block() },
+            scope = this, realtime = { FakeRealtime() }, meId = { me },
+        )
+        val e = ProtocolJson.decodeFromString<Event>(example("event_chat_official_off.json"))
+        engine.onEvents(listOf(e))
+        assertEquals(e.eventId, sync.cursor())
+    }
+
+    @Test fun groupStoreHandsTheMlsMetaAndTheServerHintToTheTabs() = runTest {
+        val metas = mutableListOf<Pair<String, GroupMeta?>>()
+        val hints = mutableListOf<Triple<String, String?, String?>>()
+        var meta: GroupMeta? = null
+        val store = GroupStore(
+            FakeGroupDao(), FakeGroupOpDao(), FakeMessageDao(), { "dev" }, { meta },
+            onMlsMeta = { c, m -> metas += c to m }, onServerTab = { c, t, id -> hints += Triple(c, t, id) },
+        )
+        val ev = ProtocolJson.decodeFromString<Event>(example("event_group_created_official.json")).groupEvent()!!
+        store.applyEvent("e1", ev, me)
+        assertEquals(listOf(Triple(official, "official", chat)), hints)
+        assertEquals(listOf<Pair<String, GroupMeta?>>(official to null), metas) // not readable yet: nothing recorded
+        meta = GroupMeta(name = "Site team", tab = "official", chatId = chat, agents = listOf("9e1f0000-0000-4000-8000-000000000001"))
+        store.onGroupStateChanged(official, removedSelf = false)
+        assertEquals(official to meta, metas.last())
+        store.applyServerGroup(Group(official, tab = "official", chatId = chat), me)
+        assertEquals(official to meta, metas.last())
+        // A pre-v1.24 group_event carries no tab: no hint.
+        store.applyEvent("e2", GroupEvent(chat, 1, 1, GroupEvent.METADATA_CHANGED, me), me)
+        assertEquals(Triple(chat, null, null), hints.last())
+    }
+}

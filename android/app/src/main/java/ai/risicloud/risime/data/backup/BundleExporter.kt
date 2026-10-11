@@ -1,0 +1,239 @@
+package ai.risicloud.risime.data.backup
+
+import kotlinx.serialization.json.JsonObject
+import ai.risicloud.risime.data.MessageStatus
+import ai.risicloud.risime.data.db.BackupDao
+import ai.risicloud.risime.data.db.DeleteDao
+import ai.risicloud.risime.data.db.GroupDao
+import ai.risicloud.risime.data.db.GroupEntity
+import ai.risicloud.risime.data.db.MediaDao
+import ai.risicloud.risime.data.db.MessageEntity
+import ai.risicloud.risime.data.groups.SystemLine
+import ai.risicloud.risime.data.media.ImageEnvelope
+import ai.risicloud.risime.data.media.MediaSealer
+import ai.risicloud.risime.data.mls.MlsPayload
+import ai.risicloud.risime.net.BlobRef
+import ai.risicloud.risime.net.GroupMember
+import ai.risicloud.risime.net.ProtocolJson
+import ai.risicloud.risime.net.dmPeer
+import ai.risicloud.risime.net.isGroupConversation
+
+/**
+ * §22.5 the bundle writer (android A4): JSON Lines per conversation in pages, never the whole
+ * bundle in memory. Every conversation, not bound to the gap index or 30 days; call lines always
+ * (a backup is the user's own). Never in a backup (§22.5): MLS state and `mls_kv`, the sync cursor,
+ * the device id, tokens, gap rows and §13.3/§17.12 markers, outbox rows (pending/failed), media
+ * files, avatars, settings and the behaviour log.
+ */
+class BundleExporter(
+    private val dao: BackupDao,
+    private val groups: GroupDao,
+    private val deletes: DeleteDao,
+    private val media: MediaDao?,
+    private val sealer: MediaSealer?,
+    private val me: String,
+    /** A DM with an MLS group on this device (the conversation line's `e2ee`); groups always are. */
+    private val dmE2ee: (String) -> Boolean = { false },
+    private val pageSize: Int = 500,
+    /** §24.10 a conversation's MLS-derived tab row (null: Private, its own chat). */
+    private val tabOf: suspend (String) -> ai.risicloud.risime.data.db.ChatTabEntity? = { null },
+) {
+    /**
+     * §24.10 the bundle schema of the last [write]: [BUNDLE_SCHEMA_TABS] when any Official
+     * conversation went in, else [BUNDLE_SCHEMA_PRIVATE] (what every older app reads).
+     */
+    var schema: Int = BUNDLE_SCHEMA_PRIVATE
+        private set
+
+    /** The lines in order, through [out] (one call per line). Returns the counts written. */
+    suspend fun write(out: (ByteArray) -> Unit): BackupCounts {
+        var conversations = 0
+        var messages = 0
+        var tombstones = 0
+        var official = false
+        for (conv in dao.conversationIds()) {
+            conversations++
+            val line = conversationLine(conv)
+            if (line.official) official = true
+            out(encodeLine(BackupConversationLine.serializer(), line))
+            // v1.34 §33.11: the `message` line carries `starred_at` (absent when not starred).
+            val stars = dao.starsIn(conv).associate { it.messageId.lowercase() to it.starredAt }
+            var afterTs = Long.MIN_VALUE
+            var afterId = ""
+            while (true) {
+                val page = dao.page(conv, afterTs, afterId, pageSize)
+                if (page.isEmpty()) break
+                for (m in page) {
+                    val line = rowLine(conv, m, stars) ?: continue
+                    when (line) {
+                        is BackupMessageLine -> { messages++; out(encodeLine(BackupMessageLine.serializer(), line)) }
+                        is BackupTombstoneLine -> { tombstones++; out(encodeLine(BackupTombstoneLine.serializer(), line)) }
+                        is BackupGroupEventLine -> out(encodeLine(BackupGroupEventLine.serializer(), line))
+                    }
+                }
+                val last = page.last()
+                afterTs = last.localTs
+                afterId = last.clientMsgId
+            }
+            // Reactions after every row of the conversation (a reaction applies only to a held target).
+            for (r in dao.confirmedAdds(conv)) {
+                val id = r.confirmedMessageId ?: continue
+                val ts = r.confirmedTs ?: continue
+                messages++
+                out(
+                    encodeLine(
+                        BackupMessageLine.serializer(),
+                        BackupMessageLine(
+                            conversationId = conv, messageId = id.lowercase(), clientMsgId = r.confirmedClientMsgId ?: id.lowercase(),
+                            from = r.reactorUserId.lowercase(), serverTs = ts,
+                            payload = json(MlsPayload.reaction(r.targetMessageId, r.emoji, "add")),
+                            status = if (r.reactorUserId.equals(me, true)) "sent" else null,
+                        ),
+                    ),
+                )
+            }
+            // Hidden tombstones (§15.6): deletes keep winning after a restore.
+            for (d in dao.deletedIds(conv)) {
+                tombstones++
+                out(encodeLine(BackupTombstoneLine.serializer(), BackupTombstoneLine(conversationId = conv, messageId = d.messageId, from = d.deletedBy, serverTs = d.deleteServerTs, scope = d.scope, hidden = true)))
+            }
+        }
+        val contacts = contactLines()
+        contacts.forEach { out(encodeLine(BackupContactLine.serializer(), it)) }
+        schema = if (official) BUNDLE_SCHEMA_TABS else BUNDLE_SCHEMA_PRIVATE
+        return BackupCounts(conversations, messages, tombstones, contacts.size)
+    }
+
+    private fun json(b: ByteArray): JsonObject = ProtocolJson.parseToJsonElement(b.decodeToString()) as JsonObject
+
+    private suspend fun conversationLine(conv: String): BackupConversationLine {
+        val group = isGroupConversation(conv)
+        val g = if (group) groups.get(conv) else null
+        val state = deletes.chatState(conv)
+        val info = g?.let { e ->
+            val admins = groups.members(conv).filter { it.role == GroupMember.ROLE_ADMIN && it.current }.map { it.userId.lowercase() }
+            BackupGroupInfo(
+                name = e.name, icon = null, admins = admins, createdBy = e.createdBy?.lowercase(),
+                state = when (e.state) {
+                    GroupEntity.STATE_LEFT -> "left"
+                    GroupEntity.STATE_REMOVED -> "removed"
+                    else -> "active"
+                },
+            )
+        }
+        // §24.10: an Official conversation carries its chat, tab and chat kind; a Private line stays as in schema 1.
+        val tab = tabOf(conv)?.takeIf { it.official }
+        return BackupConversationLine(
+            conversationId = conv, kind = if (group) "group" else "dm", e2ee = group || dmE2ee(conv),
+            peer = if (group) null else dmPeer(conv, me)?.lowercase(),
+            group = info ?: if (group) BackupGroupInfo() else null,
+            chat = BackupChatInfo(clearedUpto = state?.clearedUpto?.let(BackupTime::ticksToIso), hidden = state?.hidden == true),
+            chatId = tab?.chatId?.lowercase(), tab = tab?.tab, chatKind = tab?.chatKind,
+        )
+    }
+
+    /** One row → its line, or null when it never goes into a backup. */
+    private suspend fun rowLine(conv: String, m: MessageEntity, stars: Map<String, Long> = emptyMap()): Any? {
+        if (m.system) {
+            // §12.7 group lines only; §13.3/§17.12 markers and other local lines stay out.
+            if (!m.clientMsgId.startsWith("sys:")) return null
+            val l = SystemLine.decode(m.systemJson) ?: return null
+            if (l.action in SystemLine.LOCAL_ACTIONS || l.actor.isEmpty()) return null
+            return BackupGroupEventLine(
+                conversationId = conv, eventId = m.clientMsgId.removePrefix("sys:"), action = l.action, actor = l.actor.lowercase(),
+                targets = l.targets.map { it.lowercase() }, role = l.role, serverTs = m.serverTs ?: BackupTime.iso(m.localTs),
+            )
+        }
+        val id = m.messageId?.lowercase()
+        if (m.deleted || m.deleteState != null) {
+            // A tombstone, or a row being deleted for everyone (shown as one meanwhile).
+            return id?.let { BackupTombstoneLine(conversationId = conv, messageId = it, from = m.from.lowercase(), serverTs = m.serverTs, scope = "everyone", hidden = false) }
+        }
+        // Outbox rows (never accepted by the server) are not in a backup.
+        if (m.status == MessageStatus.PENDING.name || m.status == MessageStatus.FAILED.name) return null
+        val payload: JsonObject = when (m.kind) {
+            // §24.10: a Risi message keeps its `risi` object.
+            // v1.34: `forwarded` and `reply_to` are part of the payload (and a reserved `view_once` stays one).
+            MessageEntity.KIND_TEXT -> json(MlsPayload.text(m.body, ai.risicloud.risime.data.mls.sendExtras(m))).let { t ->
+                val risi = if (ai.risicloud.risime.data.tabs.RisiMessages.meta(m) != null) runCatching { ProtocolJson.parseToJsonElement(m.systemJson!!) as JsonObject }.getOrNull() else null
+                if (risi == null) t else JsonObject(t + ("risi" to risi))
+            }.let { viewOnce(m, it) }
+            MessageEntity.KIND_IMAGE -> imagePayload(m)?.let { viewOnce(m, it) } ?: return null
+            MessageEntity.KIND_FILE -> filePayload(m)?.let { viewOnce(m, it) } ?: return null
+            MessageEntity.KIND_CALL -> callPayload(m) ?: return null
+            else -> return null
+        }
+        if (id == null && !m.call) return null
+        return BackupMessageLine(
+            conversationId = conv, messageId = id, clientMsgId = m.clientMsgId, from = m.from.lowercase(), fromDevice = m.fromDevice?.lowercase(),
+            serverTs = m.serverTs, payload = payload, origin = m.origin, sharedBy = m.sharedBy?.lowercase(),
+            status = if (m.outgoing) statusName(m.status) else null,
+            starredAt = id?.let { stars[it] }?.let { BackupTime.iso(it) },
+        )
+    }
+
+    private fun viewOnce(m: MessageEntity, o: JsonObject): JsonObject =
+        if (m.isViewOnce) JsonObject(o + (ai.risicloud.risime.net.ViewOnce.FIELD to JsonObject(emptyMap()))) else o
+
+    /** v1.34 §22.5: a `file` by reference with `enc` and `thumb` (the bytes are not in a backup); a `parts` file as its placeholder. */
+    private suspend fun filePayload(m: MessageEntity): JsonObject? {
+        val meta = ai.risicloud.risime.data.media.FileMeta.decode(m.systemJson) ?: return null
+        if (meta.parts) return null
+        val row = media?.get(m.clientMsgId) ?: return null
+        val s = sealer ?: return null
+        val blobId = row.blobId ?: m.blobId ?: return null
+        val enc = runCatching { s.openEnc(m.clientMsgId, row.sealedEnc) }.getOrNull() ?: return null
+        val thumb = row.sealedThumb?.let { t -> runCatching { s.openThumb(m.clientMsgId, t) }.getOrNull() }
+        val env = ai.risicloud.risime.data.media.FileEnvelope(
+            BlobRef(blobId, row.blobSize, row.blobSha256), enc, meta.name, meta.mime, thumb, meta.pages, m.body.takeIf { it.isNotEmpty() },
+            ai.risicloud.risime.data.mls.sendExtras(m),
+        )
+        val obj = json(env.encode())
+        ai.risicloud.risime.data.media.FileEnvelope.validate(obj) ?: return null
+        return obj
+    }
+
+    private fun statusName(s: String): String = when (s) {
+        MessageStatus.READ.name -> "read"
+        MessageStatus.DELIVERED.name -> "delivered"
+        else -> "sent"
+    }
+
+    /** §17.7: by reference with `enc` and `thumb`, reconstructed and §14.4-validated (expired images still go). */
+    private suspend fun imagePayload(m: MessageEntity): JsonObject? {
+        val row = media?.get(m.clientMsgId) ?: return null
+        val s = sealer ?: return null
+        val blobId = row.blobId ?: m.blobId ?: return null
+        val enc = runCatching { s.openEnc(m.clientMsgId, row.sealedEnc) }.getOrNull() ?: return null
+        val thumb = row.sealedThumb?.let { t -> runCatching { s.openThumb(m.clientMsgId, t) }.getOrNull() }
+        val env = ImageEnvelope(BlobRef(blobId, row.blobSize, row.blobSha256), enc, row.mime, row.w, row.h, thumb, m.body.takeIf { it.isNotEmpty() }, ai.risicloud.risime.data.mls.sendExtras(m))
+        val obj = json(env.encode())
+        ImageEnvelope.validate(obj) ?: return null
+        return obj
+    }
+
+    /** `call_end` or `group_call` as stored (the local `x_over` flag stays on the device). */
+    private fun callPayload(m: MessageEntity): JsonObject? {
+        val obj = runCatching { ProtocolJson.parseToJsonElement(m.systemJson ?: "") as? JsonObject }.getOrNull() ?: return null
+        val clean = ai.risicloud.risime.calls.CallRecords.strip(JsonObject(obj - ai.risicloud.risime.calls.GroupCallLines.LOCAL_OVER))
+        return when (MlsPayload.decode(ProtocolJson.encodeToString(JsonObject.serializer(), clean).toByteArray())) {
+            is MlsPayload.Decoded.Call, is MlsPayload.Decoded.GroupCall -> clean
+            else -> null
+        }
+    }
+
+    /** Contacts with a user id, then group members not among them (names for people in old chats). */
+    private suspend fun contactLines(): List<BackupContactLine> {
+        val out = linkedMapOf<String, BackupContactLine>()
+        for (c in dao.contacts()) {
+            val id = c.userId?.lowercase() ?: continue
+            out.putIfAbsent(id, BackupContactLine(userId = id, displayName = c.displayName, phone = c.phone.takeIf { it.startsWith("+") }))
+        }
+        for (m in dao.allMembers()) {
+            val id = m.userId.lowercase()
+            if (id == me.lowercase() || m.displayName.isBlank()) continue
+            out.putIfAbsent(id, BackupContactLine(userId = id, displayName = m.displayName, phone = m.phone))
+        }
+        return out.values.toList()
+    }
+}
