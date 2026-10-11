@@ -117,13 +117,13 @@ SAMPLER=$!
 
 # Compile the test before the run (a cold compile can take minutes).
 read -r -a EXTRA_GRADLE <<< "${RISIME_GRADLE_ARGS:-}"
-(cd android && timeout 2400 $M ./gradlew --no-configuration-cache "${EXTRA_GRADLE[@]}" testDebugUnitTest --tests 'lk.codegen.risime.live.LiveRisiInteropTest' -q > "$WORK/precompile.log" 2>&1) \
+(cd android && timeout 2400 $M ./gradlew --no-configuration-cache "${EXTRA_GRADLE[@]}" testDebugUnitTest --tests 'ai.risicloud.risime.live.LiveRisiInteropTest' -q > "$WORK/precompile.log" 2>&1) \
   || { tail -20 "$WORK/precompile.log"; fail "test compile failed"; }
 
 echo "==> LiveRisiInteropTest against 127.0.0.1:$PORT"
 set +e
 (cd android && RISIME_INTEROP_CONFIG="$WORK/canary.json" timeout 1200 $M ./gradlew --no-configuration-cache "${EXTRA_GRADLE[@]}" \
-  testDebugUnitTest --tests 'lk.codegen.risime.live.LiveRisiInteropTest' -i 2>&1) > "$WORK/gradle.log"
+  testDebugUnitTest --tests 'ai.risicloud.risime.live.LiveRisiInteropTest' -i 2>&1) > "$WORK/gradle.log"
 rc=$?
 set -e
 grep -E 'INTEROP (PASS|FAIL) risi|^ *NOTE risi' "$WORK/gradle.log" | sed 's/^ *//'

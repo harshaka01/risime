@@ -1,0 +1,3 @@
+# scripts/check-no-ip allowlist: "<path> <address>  # reason". Keep it short; prefer hostnames/config.
+server/lib/risime/auth_log.ex 203.0.113.9          # RFC 5737 documentation address in the moduledoc example
+server/lib/risime/agent/llm/local.ex 127.0.0.0     # the loopback range 127.0.0.0/8 in the loopback check's docs

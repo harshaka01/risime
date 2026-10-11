@@ -16,8 +16,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
-PKG=lk.codegen.risime.debug
-CLS=lk.codegen.risime
+PKG=ai.risicloud.risime.debug
+CLS=ai.risicloud.risime
 SUF="${APPLOCK_INSTANCE:-}"; PORT="${APPLOCK_PORT:-4541}"
 APK=""; KEEP=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
@@ -143,7 +143,7 @@ pass "signed in through the login UI; no lock by default"
 
 # ---------------------------------------------------------------- 1. PIN + lock on (Immediately)
 A shell locksettings set-pin "$PIN" >/dev/null || fail "locksettings set-pin"
-A shell "am broadcast -a lk.codegen.risime.debug.APP_LOCK -p $PKG --ez enabled true --el auto_lock_ms 0" >/dev/null
+A shell "am broadcast -a ai.risicloud.risime.debug.APP_LOCK -p $PKG --ez enabled true --el auto_lock_ms 0" >/dev/null
 for _ in $(seq 1 10); do [ -n "$(rl 'RisiMe debug: app lock enabled=true')" ] && break; sleep 1; done
 [ -n "$(rl 'RisiMe debug: app lock enabled=true')" ] || fail "the debug APP_LOCK broadcast wasn't handled"
 pass "screen-lock PIN set; app lock on, Immediately"

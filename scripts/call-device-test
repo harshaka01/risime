@@ -46,8 +46,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
-PKG=lk.codegen.risime.debug   # the debug build's application id
-CLS=lk.codegen.risime
+PKG=ai.risicloud.risime.debug   # the debug build's application id
+CLS=ai.risicloud.risime
 SUF="${CALLTEST_INSTANCE:-}"; PORT="${CALLTEST_PORT:-4400}"
 APK=""; KEEP=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
@@ -642,7 +642,7 @@ top_act() { A shell dumpsys activity activities 2>/dev/null | grep -m1 -E 'topRe
 no_call_screen() {  # $1 label
   local acts rec; acts="$(A shell dumpsys activity activities 2>/dev/null || true)"; rec="$(A shell dumpsys activity recents 2>/dev/null || true)"
   grep -q "calls.CallActivity" <<<"$acts" && fail "$1: $DEV still has a call screen ($(top_act))"
-  grep -q "lk.codegen.risime.calls" <<<"$rec" && fail "$1: $DEV's Recents still list the call task"
+  grep -q "ai.risicloud.risime.calls" <<<"$rec" && fail "$1: $DEV's Recents still list the call task"
   return 0
 }
 if [ "${CALLTEST_SWITCH_ONLY:-0}" != 1 ]; then

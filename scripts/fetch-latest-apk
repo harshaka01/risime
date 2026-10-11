@@ -26,7 +26,7 @@ if [ "$INSTALL" = 1 ]; then
       echo "$out"
       if grep -q INSTALL_FAILED_UPDATE_INCOMPATIBLE <<<"$out"; then
         echo "  A build signed with a different key is installed (e.g. the v0.1.0 debug build)."
-        echo "  One-time fix (wipes the app's local data): adb -s $d uninstall lk.codegen.risime"
+        echo "  One-time fix (wipes the app's local data): adb -s $d uninstall ai.risicloud.risime"
       fi
     else echo "  installed"; fi
   done

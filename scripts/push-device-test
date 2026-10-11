@@ -46,8 +46,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
-PKG=lk.codegen.risime.debug
-CLS=lk.codegen.risime
+PKG=ai.risicloud.risime.debug
+CLS=ai.risicloud.risime
 SUF="${PUSHTEST_INSTANCE:-}"; PORT="${PUSHTEST_PORT:-4460}"
 B_AUTH="${PUSHTEST_B_AUTH:-oidc}"; OIDC_PORT="${PUSHTEST_OIDC_PORT:-$((PORT + 200))}"
 ISS="http://127.0.0.1:$OIDC_PORT/realms/pushtest"; ISSUER_PID=""
@@ -396,7 +396,7 @@ sign_in_oidc() {
   if ! tap "Use this server"; then tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; fi
   sleep 2
   wait_for "Sign in with RisiCloud" 30 || { echo "    [$DEV] the server offers no RisiCloud sign-in"; return 1; }
-  A shell "am broadcast -a lk.codegen.risime.debug.OIDC_SIGN_IN -p $PKG --es issuer '$ISS' --es client_id risime \
+  A shell "am broadcast -a ai.risicloud.risime.debug.OIDC_SIGN_IN -p $PKG --es issuer '$ISS' --es client_id risime \
     --es access_token '$(cat "$WORK/oidc-access.jwt")' --es refresh_token '$(cat "$WORK/oidc-refresh.jwt")' --es expires_in 3600" >/dev/null
   wait_for "Add friend" 40 || { A logcat -d -s RisiMe:* | grep -a "RisiMe debug: oidc\|RisiMe auth" | tail -5 | sed 's/^/    /'; return 1; }
   dismiss_prompts
@@ -656,7 +656,7 @@ PY
 scenario_locked_chat() {  # $1 label
   local label="$1" ts t0 txt="ptlock$RANDOM$RANDOM" got=""
   DEV=B; open_chat "ZZ Push A" || fail "$label: B can't open the chat to clear its notifications"
-  A shell "am broadcast -a lk.codegen.risime.debug.LOCK_CHAT -p $PKG --ez first_dm true" >/dev/null
+  A shell "am broadcast -a ai.risicloud.risime.debug.LOCK_CHAT -p $PKG --ez first_dm true" >/dev/null
   for _ in $(seq 1 10); do A logcat -d -s RisiMe:* 2>/dev/null | grep -aq "RisiMe debug: lock chat ok" && break; sleep 1; done
   A logcat -d -s RisiMe:* 2>/dev/null | grep -aq "RisiMe debug: lock chat ok" || fail "$label: the debug LOCK_CHAT broadcast did not lock the chat"
   b_sleep recents
@@ -676,7 +676,7 @@ scenario_locked_chat() {  # $1 label
   on_list || fail "$label: no chat list after the cold start"
   has "ZZ Push A" && fail "$label: the locked chat is in B's chat list after a cold start"
   pass "$label: after the process death the locked chat is still out of B's chat list"
-  A shell "am broadcast -a lk.codegen.risime.debug.LOCK_CHAT -p $PKG --ez unlock_all true" >/dev/null
+  A shell "am broadcast -a ai.risicloud.risime.debug.LOCK_CHAT -p $PKG --ez unlock_all true" >/dev/null
   wait_for "ZZ Push A" 20 || fail "$label: unlocking did not bring the chat back"
   [ "$(b_rows_with "$txt")" = 1 ] || fail "$label: the message is not in B's Room after lock/unlock"
   pass "$label: unlocking brings the chat back; the message is in Room (locking never touches messages)"

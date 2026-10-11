@@ -14,10 +14,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 M="$HOME/.local/bin/mise exec --"
-KEYS="$HOME/risime-keys/keystore.properties"
+# Release key (decision 079): the Risi key; RISIME_KEYSTORE_PROPS (also read by the Gradle build) overrides it.
+KEYS="${RISIME_KEYSTORE_PROPS:-$HOME/secrets/signing/keystore.properties}"
 REL="$HOME/risime-releases"
 
-[ -f "$KEYS" ] || { echo "missing $KEYS (dev release keystore)"; exit 1; }
+[ -f "$KEYS" ] || { echo "missing $KEYS (release keystore)"; exit 1; }
 # On main, or (a clean release worktree) a detached HEAD that is exactly origin/main.
 git fetch -q origin main
 # HOTFIX=hotfix/<name>: release a hotfix branch (cut from the last release tag) instead of main, when
@@ -62,17 +63,22 @@ RELEASED=0
 # Restore VERSION on ANY failed exit (explicit `exit 1` included), not only on command errors.
 trap '[ "$RELEASED" = 1 ] || git checkout -q -- VERSION 2>/dev/null || true' EXIT
 
+echo "==> no hard-coded IP addresses (scripts/check-no-ip, decision 079)"
+scripts/check-no-ip || exit 1
+
 echo "==> server gate"
 # Own test DB and keyspace (risime_test_release): other sessions' concurrent `mix test` runs can't
 # truncate or collide with the gate's data.
 step bash -c "cd server && $M mix format --check-formatted && $M mix compile --warnings-as-errors && MIX_TEST_PARTITION=_release $M mix test"
-# Firebase config (decision 026): Harsha's file lives outside git; copy it in when present.
-if [ -f "$HOME/risime-keys/google-services.json" ]; then
-  install -m 600 "$HOME/risime-keys/google-services.json" android/app/google-services.json
-  echo "==> push: google-services.json present (Firebase plugin on)"
+# Firebase config (decisions 026, 079): Harsha's file lives outside git (env GOOGLE_SERVICES_JSON or
+# ~/secrets/firebase/google-services.json). The Gradle build copies it in and turns the Firebase plugin on only
+# when it lists this build's application ids; otherwise it warns and builds without push. A stale copy goes first.
+rm -f android/app/google-services.json
+gs="${GOOGLE_SERVICES_JSON:-$HOME/secrets/firebase/google-services.json}"
+if [ -f "$gs" ] && grep -q '"ai.risicloud.risime"' "$gs" && grep -q '"ai.risicloud.risime.debug"' "$gs"; then
+  echo "==> push: $gs lists ai.risicloud.risime(.debug) (Firebase plugin on)"
 else
-  rm -f android/app/google-services.json
-  echo "==> push: no google-services.json (push off in this build)"
+  echo "==> push: WARNING no google-services.json for ai.risicloud.risime(.debug): push OFF in this build"
 fi
 echo "==> android gate + release build"
 # E2EE: pin the pilot attestation public key (decision 032; public by design, committed).
@@ -196,8 +202,9 @@ if [ -f "$PIN_FILE" ]; then
   [ "${hits:-0}" -gt 0 ] || { echo "release APK lacks the pinned attestation key $kid"; exit 1; }
   echo "==> E2EE: release pins attestation key $kid"
 fi
-[ "$("$BT/apksigner" verify --print-certs "$APK" | grep -c "CN=RisiMe Dev Release" || true)" -gt 0 ] \
-  || { echo "release APK is not signed with the dev release key"; exit 1; }
+# Signer gate (decision 079): ai.risicloud.risime signed with the Risi key (CN=Risi), never a "codegen"
+# certificate (legacy builds only with LEGACY_CODEGEN_BUILD=1).
+scripts/check-apk-signer "$APK" || { echo "release APK is not signed with the release key (CN=Risi)"; exit 1; }
 
 # Upgrade gate (P0 nightly.10 data loss): the previous published APK, signed in with chats, must
 # upgrade in place to THIS candidate with every message kept and no new sign-in. Needs an adb
@@ -242,8 +249,7 @@ if [ -f "$UT_RESULT" ] && [ "$(ut result)" = PASS ] && [ -n "$(ut commit)" ] && 
   other="$(printf '%s\n' "$changed" | grep -vE '^(scripts/upgrade-test|scripts/nightly-release|scripts/publish-release|docs/)' || true)"
   cand_sha="$(sha256sum "$CAND/app-release.apk" | cut -d' ' -f1)"
   if [ -z "$other" ] && [ "$cand_sha" = "$(ut new_sha256)" ]; then
-    [ "$("$BT/apksigner" verify --print-certs "$CAND/app-release.apk" | grep -c "CN=RisiMe Dev Release" || true)" -gt 0 ] \
-      || { echo "staged candidate is not signed with the dev release key"; exit 1; }
+    scripts/check-apk-signer "$CAND/app-release.apk" || { echo "staged candidate is not signed with the release key"; exit 1; }
     echo "==> upgrade test ran on $(ut commit); since then only: $(echo $changed). Releasing the tested candidate (sha256 ${cand_sha:0:12})."
     APK="$CAND/app-release.apk"; UT_COMMIT="$(ut commit)"; REUSED=1
   else

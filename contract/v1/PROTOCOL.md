@@ -8818,7 +8818,7 @@ redacts `Authorization` headers and response bodies in OkHttp logging.
 ### 31.11 Test seams (debug only) and `scripts/fake-gcal`
 - **Android.** The Calendar API base URL `https://www.googleapis.com/calendar/v3/` is compiled in.
   Only a **debug** build has the seam:
-  - a broadcast `lk.codegen.risime.debug.GCAL_TEST`, received only when `BuildConfig.DEBUG`, by a
+  - a broadcast `ai.risicloud.risime.debug.GCAL_TEST`, received only when `BuildConfig.DEBUG`, by a
     receiver in the debug source set protected by `android.permission.DUMP` (so only `adb shell` can
     send it);
   - its extras are `base_url` (only `http://127.0.0.1:<port>/` or `http://10.0.2.2:<port>/`),

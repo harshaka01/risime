@@ -24,7 +24,7 @@
 #   scripts/fake-gcal on 127.0.0.1:$UITEST_GCAL_PORT (default 8198; adb reverse to the phones). A THIRD redroid (-ui3,
 #   5853: UITEST_REDROID_C[_PORT]) is A's second device (A2); A's first (A1, "DEV=A") is the Google device. The server
 #   runs RISI_EVENTS=on RISI_LEDGER=on, first without RISI_GCAL (v1.30 answers, no Google section), then RISI_GCAL=on.
-#   The debug seam `lk.codegen.risime.debug.GCAL_TEST` stands in for Google Play services (Redroid has none).
+#   The debug seam `ai.risicloud.risime.debug.GCAL_TEST` stands in for Google Play services (Redroid has none).
 #   UITEST_GOOGLE_ONLY=1: only steps 1 and 17 (what scripts/nightly-release runs when UIENTRY_GOOGLE=1).
 #
 #  1. A and B sign in through the login UI (dev OTP), become friends, both open the DM; it turns e2ee.
@@ -131,8 +131,8 @@ set -E  # the ERR trap also inside functions (n48g ended silently inside one)
 trap 'rc=$?; echo "UIENTRY ERR line $LINENO (exit $rc): $BASH_COMMAND" >&2' ERR
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
-PKG=lk.codegen.risime.debug
-CLS=lk.codegen.risime
+PKG=ai.risicloud.risime.debug
+CLS=ai.risicloud.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
 APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0; UIBATCH=0; MSG=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;;
@@ -2288,7 +2288,7 @@ fi
 exec {XT}>>"$LOGS/tail-trace.log"; BASH_XTRACEFD=$XT; set -x
 # ---------------------------------------------------------------- 17. (--google) the Google Calendar link (contract v1.31 §31)
 # Gate items 1-9 of §31.12 with scripts/fake-gcal (Google's Calendar API on 127.0.0.1:$GP) and the debug seam
-# `lk.codegen.risime.debug.GCAL_TEST` (a fake authorizer + the base URL: Redroid has no Play services).
+# `ai.risicloud.risime.debug.GCAL_TEST` (a fake authorizer + the base URL: Redroid has no Play services).
 # Devices: A (= "A1", the Google device), C (= "A2", A's second device, signed in with A's phone number), B is only the
 # DM peer. UI texts are the ones of §31.2/§31.8/§31.9 and the android brief (docs/status/briefs/v1.31-android.md);
 # the strings marked TODO(android) are not fixed by the brief: check docs/status/android.md ("v1.31 UI strings").
@@ -2351,7 +2351,7 @@ for r in json.load(sys.stdin):
   gwait() { local n=$1; shift; for _ in $(seq 1 "$n"); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done; return 1; }
   gcopies_eq() { [ "$(gn_copies)" = "$1" ]; }
   seam() {  # $1 = connected | reauth_needed | none, on DEV (debug broadcast, protected by android.permission.DUMP)
-    A shell am broadcast -a lk.codegen.risime.debug.GCAL_TEST -p "$PKG" --es base_url "http://127.0.0.1:$GP/" \
+    A shell am broadcast -a ai.risicloud.risime.debug.GCAL_TEST -p "$PKG" --es base_url "http://127.0.0.1:$GP/" \
       --es access_token "$GTOK" --es account "$GACC" --es state "$1" >/dev/null
   }
   gsee() {  # the answer to the question $1 (on DEV), as the texts below that question: sets ANS
@@ -2820,7 +2820,7 @@ uib_lock_cycle() {
 ui_batch_calendar_prep() {
   DEV=A
   local out
-  P=lk.codegen.risime.debug; SEED=lk.codegen.risime.debug.CALENDAR_SEED
+  P=ai.risicloud.risime.debug; SEED=ai.risicloud.risime.debug.CALENDAR_SEED
   A shell pm grant "$PKG" android.permission.READ_CALENDAR 2>/dev/null || true
   A shell pm grant "$PKG" android.permission.WRITE_CALENDAR 2>/dev/null || true
   seed() { out="$(A shell am broadcast -a "$SEED" -p "$P" "$@" 2>&1 | tr -d '\r')"; printf '%s' "$out" | grep -q 'data="ok' || fail "ui-batch calendar: seed $*: $out"; }

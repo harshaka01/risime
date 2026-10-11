@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Release gate (decision 079): the APK's package and signing certificate must belong together.
+#   scripts/check-apk-signer <apk>      # prints "<package> <subject>" on success, exits 1 otherwise
+#   ai.risicloud.risime   -> signed with the Risi key (subject CN=Risi, ...), never a "codegen" subject.
+#   lk.codegen.risime     -> the legacy app: only with LEGACY_CODEGEN_BUILD=1, and only its old dev release key.
+# Any other package fails. Both scripts/nightly-release and scripts/publish-release run it.
+set -euo pipefail
+apk="${1:?usage: $0 <apk>}"
+[ -f "$apk" ] || { echo "check-apk-signer: no $apk"; exit 1; }
+BT="$(printf '%s\n' "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
+certs="$("$BT/apksigner" verify --print-certs "$apk")" || { echo "check-apk-signer: $apk does not verify"; exit 1; }
+subjects="$(sed -n 's/^Signer #[0-9]* certificate DN: //p' <<<"$certs")"
+[ -n "$subjects" ] || { echo "check-apk-signer: $apk has no signer"; exit 1; }
+badging="$("$BT/aapt2" dump badging "$apk" | sed -n 1p)"   # not head: SIGPIPE under pipefail
+pkg="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")"
+case "$pkg" in
+  ai.risicloud.risime)
+    if grep -qi codegen <<<"$subjects"; then echo "check-apk-signer: $pkg is signed by a codegen certificate ($subjects)"; exit 1; fi
+    [ "$(wc -l <<<"$subjects")" = 1 ] && [[ "$subjects" == "CN=Risi,"* || "$subjects" == "CN=Risi" ]] \
+      || { echo "check-apk-signer: $pkg is not signed with the Risi release key (CN=Risi): $subjects"; exit 1; } ;;
+  lk.codegen.risime)
+    [ "${LEGACY_CODEGEN_BUILD:-}" = 1 ] || { echo "check-apk-signer: $pkg is the legacy app: set LEGACY_CODEGEN_BUILD=1 for a legacy build"; exit 1; }
+    grep -q "CN=RisiMe Dev Release" <<<"$subjects" || { echo "check-apk-signer: legacy $pkg is not signed with its dev release key: $subjects"; exit 1; } ;;
+  *) echo "check-apk-signer: unexpected package '${pkg:-?}'"; exit 1 ;;
+esac
+echo "$pkg $subjects"

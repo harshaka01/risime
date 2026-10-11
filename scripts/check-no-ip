@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Release gate (decision 079): no hard-coded IPv4 address in the app or server code. Scans source files
+# (.kt .java .xml .ex .exs .eex .heex .json .properties) under android/app/src/main, server/lib and
+# server/config/runtime.exs. Always allowed: 127.0.0.1 and 0.0.0.0 (loopback / bind-any) and 10.0.2.2 (the
+# Android emulator's host). Anything else must be listed in scripts/check-no-ip.allow as "<path> <address>"
+# with a reason (e.g. an RFC 5737 documentation address in a doc comment).
+#   scripts/check-no-ip            # exit 1 and list every hit not allowed
+set -euo pipefail
+cd "$(dirname "$0")/.."
+python3 -I - scripts/check-no-ip.allow android/app/src/main server/lib server/config/runtime.exs <<'PY'
+import os, re, sys
+allow_file, *roots = sys.argv[1:]
+ALWAYS = {"127.0.0.1", "0.0.0.0", "10.0.2.2"}
+EXT = (".kt", ".java", ".xml", ".ex", ".exs", ".eex", ".heex", ".json", ".properties")
+allowed = set()
+for line in open(allow_file):
+    line = line.split("#", 1)[0].split()
+    if len(line) >= 2:
+        allowed.add((line[0], line[1]))
+ip = re.compile(r"(?<![\d.])((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})(?![\d.]*\d)")
+def files(root):
+    if os.path.isfile(root):
+        yield root
+        return
+    for d, _, fs in os.walk(root):
+        for f in fs:
+            if f.endswith(EXT):
+                yield os.path.join(d, f)
+bad = []
+for root in roots:
+    if not os.path.exists(root):
+        continue
+    for path in files(root):
+        try:
+            text = open(path, encoding="utf-8").read()
+        except (UnicodeDecodeError, OSError):
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            for m in ip.finditer(line):
+                a = m.group(1)
+                if a not in ALWAYS and (path, a) not in allowed:
+                    bad.append(f"{path}:{n}: {a}")
+if bad:
+    print("check-no-ip: hard-coded IP addresses (use a hostname or config; or allowlist in scripts/check-no-ip.allow):")
+    print("\n".join("  " + b for b in bad))
+    sys.exit(1)
+print("check-no-ip: OK (no hard-coded IP addresses)")
+PY

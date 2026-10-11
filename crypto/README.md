@@ -7,7 +7,7 @@ Plan for the Android binding: `docs/decisions/012-e2ee-android-binding-plan.md`.
 - `Cargo.toml`: Cargo workspace (`Cargo.lock` is committed).
 - `risime-mls/`: the core crate. A small bytes-in/bytes-out API over
   [OpenMLS](https://openmls.tech) 0.9 (`openmls_rust_crypto` 0.6, `openmls_basic_credential` 0.6).
-- `risime-mls-ffi/`: the UniFFI binding (`libuniffi_risime.so`, Kotlin `lk.codegen.risime.crypto`).
+- `risime-mls-ffi/`: the UniFFI binding (`libuniffi_risime.so`, Kotlin `ai.risicloud.risime.crypto`).
 - `risime-mls-nif/`: the Rustler NIF for the server's Risi member client (`librisime_mls_nif.so`,
   Elixir `RisiMe.Agent.Mls.Nif`; contract v1.24 §24.11, decision 065).
 
@@ -542,7 +542,7 @@ Every blob is checked before printing. MLS keys are fresh on each run. Root appl
 
 ## Android build (`risime-mls-ffi`, docs/decisions/012 §5a)
 `risime-mls-ffi` is the UniFFI 0.32 binding (library `libuniffi_risime.so`, Kotlin package
-`lk.codegen.risime.crypto`). It builds natively on spark2 (aarch64) with Rust's Android targets,
+`ai.risicloud.risime.crypto`). It builds natively on spark2 (aarch64) with Rust's Android targets,
 rustup's `rust-lld` and the official NDK sysroot. No NDK executables are used.
 ```bash
 scripts/build-rust-android                  # arm64-v8a + x86_64, release, with ELF/ABI checks
