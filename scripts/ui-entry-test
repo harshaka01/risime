@@ -1324,14 +1324,16 @@ PY
 }
 # ---------------------------------------------------------------- 11. (--ledger) a discussion → each Risi chat's summary
 # The Official tab of the DM, with a usable composer ("Message"); starts Official the first time.
-official_tab() {
-  open_chat "ZZ UI ${1}" || return 1
-  tap "● Official" || return 1
-  for _ in $(seq 1 90); do
-    has 'text="Start Official"' && { tap "Start Official" || true; sleep 2; }
+official_tab() {  # (nightly.49 attempt e: the tab was open but the first tap/dump raced; retry, accept "already there")
+  local i
+  open_chat "ZZ UI ${1}" || { sleep 3; open_chat "ZZ UI ${1}" || return 1; }
+  for i in $(seq 1 90); do
     has 'text="Message"' && has 'Risi is listening' && return 0
+    has 'text="Start Official"' && { tap "Start Official" || true; sleep 2; continue; }
+    [ $((i % 10)) = 1 ] && { tap "● Official" || true; }
     sleep 1
   done
+  echo "    [$DEV] official_tab: $(grep -o 'text="[^"]*"' "$WORK/ui-$DEV.xml" | head -12 | tr '\n' ' ')"
   return 1
 }
 say() { tap "Message" || return 1; sleep 0.5; A shell input text "$(printf '%s' "$1" | sed 's/ /%s/g')"; sleep 0.5; tap "Send"; sleep 2; }
