@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import lk.codegen.risime.AppContainer
 import lk.codegen.risime.data.MessageStatus
@@ -104,6 +105,19 @@ class BasicMessagingUiTest {
         )
     }
 
+    /**
+     * Warm the Room reads the screen depends on (rows, stars, the contact) off the Compose clock, so the
+     * 5 s Compose waits below only measure composition, not the first Room open / native driver load on a
+     * loaded machine. Room queries run on their own executor, so this never needs the paused main looper.
+     */
+    private fun awaitStored(rows: Int, stars: Int = 0) = runBlocking {
+        kotlinx.coroutines.withTimeout(60_000) {
+            c.db.messages().conversation(dm).first { it.size >= rows }
+            if (stars > 0) c.db.stars().idsIn(dm).first { it.size >= stars }
+            c.contacts.contact(kamal).first { it != null }
+        }
+    }
+
     private fun put(vararg ms: MessageEntity) = runBlocking { ms.forEach { c.db.messages().insert(it) } }
 
     private fun waitText(t: String, ms: Long = 5_000) = rule.waitUntil(ms) { rule.onAllNodes(hasText(t, substring = true)).fetchSemanticsNodes().isNotEmpty() }
@@ -119,6 +133,7 @@ class BasicMessagingUiTest {
         val reply = msg("Yes, 3 works", mine = true, agoMs = 100_000).copy(replyToMessageId = original.messageId, replyToFrom = kamal)
         put(original, fwd, many, reply)
         runBlocking { c.db.stars().put(listOf(StarEntity(fwd.messageId!!, dm, 1))) }
+        awaitStored(rows = 4, stars = 1)
         rule.setContent { RisiMeTheme { ChatScreen(ChatViewModel(c, me, kamal), onBack = {}) } }
         waitDesc("Yes, 3 works")
         rule.onNodeWithContentDescription("Forwarded, Site visit moved to 3 PM", substring = true).assertExists()
@@ -132,6 +147,7 @@ class BasicMessagingUiTest {
         val a = msg("first line", mine = false, agoMs = 120_000)
         val b = msg("second line", mine = true, agoMs = 60_000)
         put(a, b)
+        awaitStored(rows = 2)
         val vm = ChatViewModel(c, me, kamal)
         rule.setContent { RisiMeTheme { ChatScreen(vm, onBack = {}) } }
         waitDesc("second line")
@@ -159,6 +175,7 @@ class BasicMessagingUiTest {
     @Test fun replyFromTheMenuSendsReplyTo() {
         val a = msg("Are you coming?", mine = false, agoMs = 60_000)
         put(a)
+        awaitStored(rows = 1)
         val vm = ChatViewModel(c, me, kamal)
         rule.setContent { RisiMeTheme { ChatScreen(vm, onBack = {}) } }
         waitDesc("Are you coming?")
