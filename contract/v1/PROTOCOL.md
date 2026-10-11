@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.36 (Release 0.3)
+# RisiMe Wire Protocol — v1.37 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -298,6 +298,11 @@ Decision 026. Data-only FCM wake-ups; the content is always fetched over the cha
     token (FCM rotates tokens), so it's idempotent.
   - `422 invalid_device` for a bad UUID, an unknown platform, or an empty token.
   - At most 10 devices per user; the oldest is evicted.
+  - **`app_id`** (v1.37, decision 079): optional, the client's Android application id, e.g.
+    `"ai.risicloud.risime"`, `"ai.risicloud.risime.debug"` or `"lk.codegen.risime"`. The server sends this
+    device's pushes through the Firebase project of that app (`ai.risicloud.risime*` → the `risicloud` project,
+    anything else or absent → the original project). Unknown values are stored and treated as absent.
+    Clients built as `ai.risicloud.risime*` always send it; old clients never do.
 - **`DELETE /api/v1/me/devices/{device_id}`** → `204`. Idempotent. Clients call it only for
   **"Log out and delete chats from this phone"** (decision 050). Real removals are this DELETE,
   eviction, prune and a changed key.
@@ -10066,6 +10071,9 @@ With the chat owner's consent the phone uploads an Official chat's existing hist
 Needs an APK; not in v1.36.
 
 ## Changelog
+- **v1.37** (2026-10-11): new app id `ai.risicloud.risime` (decision 079): optional `app_id` on
+  `PUT /api/v1/me/devices/{device_id}` chooses the Firebase project for that device's pushes; example
+  `device_put_app_id.json`. Additive; old clients unchanged.
 - **v1.36** (2026-10-11): Risi Brain v2 (§35, decision 077): long-term sealed memory of Official, `memory_search` /
   `summarise_range`, memory controls and learning opt-out REST, autonomy rules (ingest, calendar proposals,
   summaries, cancellation propagation, follow-ups, 07:00 brief).
