@@ -15,6 +15,11 @@ defmodule RisiMe.Push.FCM do
   * **Results:** 200 → `:ok`; `UNREGISTERED` / `INVALID_ARGUMENT` → `{:error, :unregistered}`
     (the dispatcher deletes the device); 5xx, 429 or 401 → `{:error, :retryable}` (the dispatcher
     retries once); anything else → `{:error, :failed}`.
+  * **Two Firebase projects (v1.37 §8.1, decision 079):** a device whose `app_id` starts with
+    `ai.risicloud.risime` is sent through the `risicloud` project (service account at
+    `FCM_CREDENTIALS_RISICLOUD`); every other device (no or unknown `app_id`) through the original
+    one. Each project has its own cached access token. Without the risicloud credential such a
+    device gets no push (a warning, `{:error, :failed}`): it is never sent through the old project.
   * **Redaction:** logs carry the HTTP status and FCM's error status only, never a push token,
     an access token, the JWT or the key. Req runs without retries and without logging steps.
   """
@@ -28,16 +33,30 @@ defmodule RisiMe.Push.FCM do
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
+  @risicloud_prefix "ai.risicloud.risime"
+
   @impl RisiMe.Push
   def deliver(push_token, payload) do
-    with {:ok, %{token: access, project_id: project}} <- access_token() do
-      send_message(access, project, push_token, payload)
+    key = project_for(RisiMe.Devices.push_app_id(push_token))
+
+    with {:ok, %{token: access, project_id: project}} <- access_token(key) do
+      send_message(key, access, project, push_token, payload)
     end
   rescue
     e ->
       Logger.error("FCM send raised #{inspect(e.__struct__)}")
       {:error, :failed}
   end
+
+  @doc """
+  The credential for a device's `app_id` (v1.37 §8.1): `:risicloud` for `ai.risicloud.risime*`,
+  `:default` for anything else or nil.
+  """
+  def project_for(app_id) when is_binary(app_id) do
+    if String.starts_with?(app_id, @risicloud_prefix), do: :risicloud, else: :default
+  end
+
+  def project_for(_), do: :default
 
   @doc false
   def message(push_token, payload) do
@@ -48,7 +67,7 @@ defmodule RisiMe.Push.FCM do
   defp android(%{"type" => "call"}), do: %{priority: "high", collapse_key: "call", ttl: "45s"}
   defp android(_inbox), do: %{priority: "high", collapse_key: "inbox", ttl: "3600s"}
 
-  defp send_message(access, project, push_token, payload) do
+  defp send_message(key, access, project, push_token, payload) do
     url = "https://fcm.googleapis.com/v1/projects/#{project}/messages:send"
 
     result =
@@ -66,7 +85,7 @@ defmodule RisiMe.Push.FCM do
         :ok
 
       {:ok, %Req.Response{status: 401}} ->
-        GenServer.cast(__MODULE__, :invalidate)
+        GenServer.cast(__MODULE__, {:invalidate, key})
         Logger.warning("FCM send: HTTP 401, access token dropped")
         {:error, :retryable}
 
@@ -106,33 +125,36 @@ defmodule RisiMe.Push.FCM do
 
   ## Access token cache
 
+  # One cache entry per project key (`:default`, `:risicloud`), refreshed independently.
+
   @doc false
-  def access_token, do: GenServer.call(__MODULE__, :access_token, 30_000)
+  def access_token(key \\ :default), do: GenServer.call(__MODULE__, {:access_token, key}, 30_000)
 
   @impl GenServer
-  def init(:ok), do: {:ok, nil}
+  def init(:ok), do: {:ok, %{}}
 
   @impl GenServer
-  def handle_call(:access_token, _from, cached) do
+  def handle_call({:access_token, key}, _from, cache) do
     now = System.os_time(:second)
 
-    case cached do
-      %{expires_at: exp} = c when exp - @refresh_margin_s > now ->
-        {:reply, {:ok, c}, cached}
+    case cache do
+      %{^key => %{expires_at: exp} = c} when exp - @refresh_margin_s > now ->
+        {:reply, {:ok, c}, cache}
 
       _ ->
-        case fetch_access_token(now) do
-          {:ok, fresh} -> {:reply, {:ok, fresh}, fresh}
-          {:error, _} = error -> {:reply, error, nil}
+        case fetch_access_token(key, now) do
+          {:ok, fresh} -> {:reply, {:ok, fresh}, Map.put(cache, key, fresh)}
+          {:error, _} = error -> {:reply, error, Map.delete(cache, key)}
         end
     end
   end
 
   @impl GenServer
-  def handle_cast(:invalidate, _cached), do: {:noreply, nil}
+  def handle_cast(:invalidate, _cache), do: {:noreply, %{}}
+  def handle_cast({:invalidate, key}, cache), do: {:noreply, Map.delete(cache, key)}
 
-  defp fetch_access_token(now) do
-    with {:ok, account} <- service_account(),
+  defp fetch_access_token(key, now) do
+    with {:ok, account} <- service_account(key),
          {:ok, assertion} <- jwt(account, now),
          {:ok, %Req.Response{status: 200, body: %{"access_token" => token} = body}} <-
            Req.post(
@@ -181,9 +203,28 @@ defmodule RisiMe.Push.FCM do
   end
 
   # Read at use; the path and contents are never logged.
-  defp service_account do
-    path = Application.get_env(:risime, :fcm_service_account_file)
+  defp service_account(:risicloud) do
+    case Application.get_env(:risime, :fcm_credentials_risicloud) do
+      path when is_binary(path) and path != "" ->
+        read_account(path, "FCM_CREDENTIALS_RISICLOUD")
 
+      _ ->
+        Logger.warning(
+          "FCM: no FCM_CREDENTIALS_RISICLOUD, push skipped for an ai.risicloud device"
+        )
+
+        {:error, :no_credentials}
+    end
+  end
+
+  defp service_account(:default) do
+    read_account(
+      Application.get_env(:risime, :fcm_service_account_file),
+      "FCM_SERVICE_ACCOUNT_FILE"
+    )
+  end
+
+  defp read_account(path, env) do
     with path when is_binary(path) <- path,
          {:ok, raw} <- File.read(path),
          {:ok, %{"project_id" => p, "client_email" => e, "private_key" => k} = account}
@@ -191,7 +232,7 @@ defmodule RisiMe.Push.FCM do
       {:ok, account}
     else
       _ ->
-        Logger.error("FCM service account file missing or invalid (FCM_SERVICE_ACCOUNT_FILE)")
+        Logger.error("FCM service account file missing or invalid (#{env})")
         {:error, :bad_service_account}
     end
   end

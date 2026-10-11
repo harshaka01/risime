@@ -93,6 +93,10 @@ if config_env() != :test do
            "FCM_SERVICE_ACCOUNT_FILE",
            Path.expand("~/risime-keys/fcm-service-account.json")
          )
+
+  # v1.37 §8.1 (decision 079): the Firebase project "risicloud" for ai.risicloud.risime* devices.
+  # Unset: those devices get no push (never sent through the original project).
+  config :risime, :fcm_credentials_risicloud, System.get_env("FCM_CREDENTIALS_RISICLOUD")
 end
 
 # E2EE attestation key (decision 034). Without the file, E2EE stays off (503 mls_unavailable).

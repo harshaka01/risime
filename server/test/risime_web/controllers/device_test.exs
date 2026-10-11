@@ -120,4 +120,32 @@ defmodule RisiMeWeb.DeviceTest do
     {:ok, nil} = Devices.register(u.id, Ecto.UUID.generate(), body("secret-fcm-token"))
     refute inspect(devices(u.id)) =~ "secret-fcm-token"
   end
+
+  test "v1.37: app_id is stored; malformed values are ignored, not a 422", %{
+    conn: conn,
+    user: u,
+    token: t
+  } do
+    id = Ecto.UUID.generate()
+
+    for {sent, stored} <- [
+          {"ai.risicloud.risime.debug", "ai.risicloud.risime.debug"},
+          {"lk.codegen.risime", "lk.codegen.risime"},
+          {"com.example.unknown", "com.example.unknown"},
+          {"Bad App!", nil},
+          {String.duplicate("a", 101), nil},
+          {42, nil},
+          {"", nil}
+        ] do
+      assert put_device(conn, t, id, body("tok-a", %{"app_id" => sent})) |> response(204)
+      assert [%Device{app_id: ^stored}] = devices(u.id)
+    end
+
+    # Old clients never send it.
+    assert put_device(conn, t, id, body("tok-a")) |> response(204)
+    assert [%Device{app_id: nil}] = devices(u.id)
+    assert Devices.push_app_id("tok-a") == nil
+    assert put_device(conn, t, id, body("tok-a", %{"app_id" => "ai.risicloud.risime"}))
+    assert Devices.push_app_id("tok-a") == "ai.risicloud.risime"
+  end
 end

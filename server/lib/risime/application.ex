@@ -17,6 +17,14 @@ defmodule RisiMe.Application do
          not File.regular?(Application.get_env(:risime, :fcm_service_account_file) || ""),
        do: Logger.error("FCM_ENABLED=true but FCM_SERVICE_ACCOUNT_FILE is missing or not a file")
 
+    # v1.37 §8.1: ai.risicloud.risime* devices need the second project's credential.
+    if Application.get_env(:risime, :push_sender) == RisiMe.Push.FCM and
+         not File.regular?(Application.get_env(:risime, :fcm_credentials_risicloud) || ""),
+       do:
+         Logger.warning(
+           "FCM_CREDENTIALS_RISICLOUD is missing or not a file: ai.risicloud devices get no push"
+         )
+
     if Application.get_env(:risime, :env) == :prod and RisiMe.Auth.Config.dev_local_auth?(),
       do: Logger.warning("DEV_LOCAL_AUTH=true in prod: dev login and opaque tokens are enabled")
 

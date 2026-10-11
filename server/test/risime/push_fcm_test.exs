@@ -1,6 +1,7 @@
 defmodule RisiMe.PushFCMTest do
   @moduledoc "FCM HTTP v1 sender against Req.Test stubs, with a generated (fake) service account."
-  use ExUnit.Case, async: false
+  # DataCase: the sender looks up the device's app_id (v1.37 §8.1) by its push token.
+  use RisiMe.DataCase, async: false
 
   import ExUnit.CaptureLog
 
@@ -10,6 +11,28 @@ defmodule RisiMe.PushFCMTest do
   @access "ya29.access-token-never-logged"
 
   setup do
+    {jwk, pem, path} = service_account!("risime-test")
+    {_jwk2, _pem2, path2} = service_account!("risicloud-test")
+
+    Application.put_env(:risime, :fcm_service_account_file, path)
+    Application.put_env(:risime, :fcm_credentials_risicloud, path2)
+    GenServer.cast(FCM, :invalidate)
+    :sys.get_state(FCM)
+
+    {:ok, calls} = Agent.start_link(fn -> [] end)
+
+    on_exit(fn ->
+      File.rm(path)
+      File.rm(path2)
+      Application.delete_env(:risime, :fcm_service_account_file)
+      Application.delete_env(:risime, :fcm_credentials_risicloud)
+      GenServer.cast(FCM, :invalidate)
+    end)
+
+    %{jwk: jwk, calls: calls, pem: pem}
+  end
+
+  defp service_account!(project) do
     jwk = JOSE.JWK.generate_key({:rsa, 2048})
     {_, pem} = JOSE.JWK.to_pem(jwk)
 
@@ -20,27 +43,15 @@ defmodule RisiMe.PushFCMTest do
       path,
       Jason.encode!(%{
         "type" => "service_account",
-        "project_id" => "risime-test",
+        "project_id" => project,
         "private_key_id" => "kid-1",
         "private_key" => pem,
-        "client_email" => "push@risime-test.iam.gserviceaccount.com",
+        "client_email" => "push@#{project}.iam.gserviceaccount.com",
         "token_uri" => "https://oauth2.googleapis.com/token"
       })
     )
 
-    Application.put_env(:risime, :fcm_service_account_file, path)
-    GenServer.cast(FCM, :invalidate)
-    :sys.get_state(FCM)
-
-    {:ok, calls} = Agent.start_link(fn -> [] end)
-
-    on_exit(fn ->
-      File.rm(path)
-      Application.delete_env(:risime, :fcm_service_account_file)
-      GenServer.cast(FCM, :invalidate)
-    end)
-
-    %{jwk: jwk, calls: calls, pem: pem}
+    {jwk, pem, path}
   end
 
   defp stub(calls, send_fun, token_body \\ %{"access_token" => @access, "expires_in" => 3599}) do
@@ -52,6 +63,7 @@ defmodule RisiMe.PushFCMTest do
       case conn.request_path do
         "/token" -> Req.Test.json(conn, token_body)
         "/v1/projects/risime-test/messages:send" -> send_fun.(conn)
+        "/v1/projects/risicloud-test/messages:send" -> send_fun.(conn)
       end
     end)
 
@@ -156,5 +168,114 @@ defmodule RisiMe.PushFCMTest do
 
     assert log =~ "FCM_SERVICE_ACCOUNT_FILE"
     refute log =~ "/nonexistent"
+  end
+
+  ## v1.37 §8.1 (decision 079): the Firebase project per device app_id
+
+  defp device!(push_token, app_id) do
+    %{user: user} = RisiMe.Fixtures.logged_in_user()
+
+    params =
+      %{"platform" => "android", "push_token" => push_token}
+      |> then(&if(app_id, do: Map.put(&1, "app_id", app_id), else: &1))
+
+    {:ok, _} = RisiMe.Devices.register(user.id, Ecto.UUID.generate(), params)
+    user
+  end
+
+  defp sends(calls) do
+    for {"/v1/projects/" <> rest, _, _} <- Agent.get(calls, & &1),
+        do: rest |> String.split("/") |> hd()
+  end
+
+  defp wait_until(fun, n \\ 50) do
+    cond do
+      fun.() ->
+        :ok
+
+      n == 0 ->
+        flunk("timed out")
+
+      true ->
+        Process.sleep(20)
+        wait_until(fun, n - 1)
+    end
+  end
+
+  test "project_for/1: ai.risicloud.risime* is risicloud, anything else the original project" do
+    assert FCM.project_for("ai.risicloud.risime") == :risicloud
+    assert FCM.project_for("ai.risicloud.risime.debug") == :risicloud
+    assert FCM.project_for("lk.codegen.risime") == :default
+    assert FCM.project_for("com.example.other") == :default
+    assert FCM.project_for(nil) == :default
+  end
+
+  test "each device is sent through its app's project, with separate token caches",
+       %{calls: calls} do
+    device!("tok-old", nil)
+    device!("tok-old-app", "lk.codegen.risime")
+    device!("tok-new", "ai.risicloud.risime")
+    device!("tok-debug", "ai.risicloud.risime.debug")
+    stub(calls, &ok/1)
+
+    for t <- ~w(tok-old tok-new tok-old-app tok-debug),
+        do: assert(:ok = FCM.deliver(t, RisiMe.Push.payload()))
+
+    assert sends(calls) == ~w(risime-test risicloud-test risime-test risicloud-test)
+    # One OAuth token per project, each cached.
+    assert Enum.count(Agent.get(calls, & &1), &match?({"/token", _, _}, &1)) == 2
+
+    # A 401 in one project drops only that project's token.
+    stub(calls, fn c ->
+      if c.request_path =~ "risicloud", do: error(c, 401, "UNAUTHENTICATED"), else: ok(c)
+    end)
+
+    Agent.update(calls, fn _ -> [] end)
+    capture_log(fn -> assert {:error, :retryable} = FCM.deliver("tok-new", %{}) end)
+    stub(calls, &ok/1)
+    assert :ok = FCM.deliver("tok-old", RisiMe.Push.payload())
+    assert :ok = FCM.deliver("tok-new", RisiMe.Push.payload())
+    assert Enum.count(Agent.get(calls, & &1), &match?({"/token", _, _}, &1)) == 1
+  end
+
+  test "without FCM_CREDENTIALS_RISICLOUD an ai.risicloud device gets no push, old devices do",
+       %{calls: calls} do
+    Application.delete_env(:risime, :fcm_credentials_risicloud)
+    device!("tok-old", nil)
+    device!("tok-new", "ai.risicloud.risime")
+    stub(calls, &ok/1)
+
+    log =
+      capture_log(fn ->
+        assert {:error, :no_credentials} = FCM.deliver("tok-new", RisiMe.Push.payload())
+      end)
+
+    assert log =~ "FCM_CREDENTIALS_RISICLOUD"
+    assert sends(calls) == []
+    Agent.update(calls, fn _ -> [] end)
+    assert :ok = FCM.deliver("tok-old", RisiMe.Push.payload())
+    assert sends(calls) == ~w(risime-test)
+  end
+
+  test "UNREGISTERED from the risicloud project removes only that device", %{calls: calls} do
+    new = device!("tok-new", "ai.risicloud.risime")
+    old = device!("tok-old", nil)
+    # The dispatcher sends from a task: let it use the stub.
+    Req.Test.set_req_test_to_shared()
+    stub(calls, fn c -> error(c, 404, "NOT_FOUND", "UNREGISTERED") end)
+    Application.put_env(:risime, :push_sender, FCM)
+
+    on_exit(fn ->
+      Application.put_env(:risime, :push_sender, nil)
+      Req.Test.set_req_test_to_private()
+    end)
+
+    capture_log(fn ->
+      assert RisiMe.Push.Dispatcher.push_inbox(["tok-new"]) == :ok
+      wait_until(fn -> RisiMe.Devices.push_tokens(new.id) == [] end)
+    end)
+
+    assert RisiMe.Devices.push_tokens(new.id) == []
+    assert RisiMe.Devices.push_tokens(old.id) == ["tok-old"]
   end
 end

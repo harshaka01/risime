@@ -32,6 +32,7 @@ defmodule RisiMe.Devices do
          true <- token != nil or mls_key != nil,
          version when is_nil(version) or (is_binary(version) and byte_size(version) <= 64) <-
            params["app_version"],
+         app_id = app_id(params["app_id"]),
          {:ok, attestation} <- attest(user_id, device_id, mls_key) do
       existing = Repo.get_by(Device, user_id: user_id, device_id: device_id)
 
@@ -55,7 +56,7 @@ defmodule RisiMe.Devices do
             device_id,
             platform,
             token,
-            version,
+            {version, app_id},
             user_token_id,
             {mls_key, caps},
             attestation,
@@ -623,7 +624,7 @@ defmodule RisiMe.Devices do
          device_id,
          platform,
          token,
-         version,
+         {version, app_id},
          user_token_id,
          {mls_key, caps},
          attestation,
@@ -650,6 +651,7 @@ defmodule RisiMe.Devices do
           platform: platform,
           push_token: token,
           app_version: version,
+          app_id: app_id,
           user_token_id: user_token_id,
           last_seen_at: now,
           updated_at: now
@@ -669,6 +671,7 @@ defmodule RisiMe.Devices do
               platform: platform,
               push_token: token,
               app_version: version,
+              app_id: app_id,
               user_token_id: user_token_id,
               last_seen_at: now
             ] ++
@@ -683,6 +686,14 @@ defmodule RisiMe.Devices do
 
     evicted
   end
+
+  # v1.37 §8.1: optional; a malformed value is ignored (stored as absent), never a 422. A
+  # well-formed but unknown id is stored and means the original Firebase project.
+  defp app_id(id) when is_binary(id) and byte_size(id) in 1..100 do
+    if id =~ ~r/\A[a-z0-9._]+\z/, do: id
+  end
+
+  defp app_id(_), do: nil
 
   # An FCM token moves with its install: other rows lose it (MLS rows keep their identity).
   defp release_push_token(token, user_id, device_id) do
@@ -778,6 +789,16 @@ defmodule RisiMe.Devices do
       )
 
     cleared + deleted
+  end
+
+  @doc "The `app_id` (v1.37 §8.1) of the device holding `push_token`, or nil (FCM project choice)."
+  def push_app_id(push_token) when is_binary(push_token) do
+    Repo.one(
+      from d in Device,
+        where: d.push_token == ^push_token,
+        select: d.app_id,
+        limit: 1
+    )
   end
 
   @doc "The push token of one device (any user), or nil (§12.4a wake-ups)."

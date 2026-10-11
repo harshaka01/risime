@@ -17,6 +17,14 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
 
+## v1.37 §8.1 app_id / second Firebase project (decision 079) — READY v1.37
+Gate green on main (1204 tests, 0 failures). Migration `20261030100000_device_app_id` (additive, nullable).
+- `PUT /me/devices/{id}` stores `app_id` (≤ 100, `[a-z0-9._]`; malformed → ignored, never 422; unknown ids stored).
+- `RisiMe.Push.FCM` picks the project per push token: `ai.risicloud.risime*` → `FCM_CREDENTIALS_RISICLOUD`
+  (project `risicloud`), else the original `FCM_SERVICE_ACCOUNT_FILE`. Separate OAuth token caches; a 401 drops only
+  that project's token. No risicloud credential → warning, `result=no_credentials`, never sent via the old project.
+  UNREGISTERED cleanup stays per device. `.env` (gitignored) carries the path.
+
 ## v1.35 §34 Risi P0 2026-10-11 (Phase 1, server-only) — READY v1.35
 Gate green on main (1164 tests, 0 failures). Commits 45d7ee3, ca2e1d5. Migration `20261026100000_risi_items` (additive).
 - §34.1 `ScheduleIntent` (fixture `risi_routing_cases.json`, all cases pass) forces `risi_calendar_check` (or `calendar_check`

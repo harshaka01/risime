@@ -10,6 +10,8 @@ defmodule RisiMe.Devices.Device do
     field :platform, :string
     field :push_token, :string
     field :app_version, :string
+    # v1.37 §8.1 (decision 079): the client's application id; picks the Firebase project.
+    field :app_id, :string
     field :user_token_id, :binary_id
     field :last_seen_at, :utc_datetime_usec
     field :mls_signature_key, :binary
