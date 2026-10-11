@@ -22,6 +22,7 @@ in one checkout: `/home/harsha/development/risime`, branch `main`.
 | root / integration | `contract/`, `docs/`, `infra/`, `scripts/`, top-level files |
 | server | `server/`, `docs/status/server.md` |
 | android | `android/`, `docs/status/android.md` |
+| risi (Risi Brain, 2026-10-11) | `server/lib/risime/agent/**`, `server/test/risime/agent/**`, `server/priv/repo/migrations/*risi*`, `docs/status/risi.md`; ships through the **fast lane** (rule 12) |
 
 - **Laptop** (Deepin 25, x86_64) has the same path, `/home/harsha/development/risime`, as a Git
   mirror. It also runs the emulator, the USB phone and the `spark2-tunnel`.
@@ -83,6 +84,14 @@ Google ships the Android build tools for linux-x86_64 only.
    the upgrade gate (no data loss, decision 055), crash/logcat, crypto, and server/android unit tests.
    **Cadence:** release whatever is green at least every 6 hours, with unfinished features behind flags. Never hold a
    finished fix for a test script.
+
+12. **Risi fast lane (Harsha 2026-10-11, "Risi Brain v2").** Risi server-side changes (agent code, prompts, routing,
+   tools, memory, Oban jobs) ship via `scripts/risi-fastlane`: `mix test` for the touched modules (the agent suite)
+   plus format/compile, the Risi canary with the live model, then a safe server-only deploy (tag `v<base>-srvN`,
+   backup, migrate, switch, 60-s watch, auto-rollback). Target: under 30 minutes from commit to live. No APK, no
+   redroid, no ui-entry-test. **Full release gates** apply only to APK, crypto, storage-schema-breaking and protocol
+   (wire) changes; additive server migrations for Risi tables are allowed in the fast lane. The **risi** role
+   (table above) does only Risi Brain work through this lane; root stays release/integration and owns the contract.
 
 ## Stack
 **Server**
