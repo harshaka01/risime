@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Risi fast lane (CLAUDE.md rule 12, Harsha 2026-10-11): ship Risi server-side changes from origin/main in < 30 min.
+#   scripts/risi-fastlane [--skip-canary] [--ref <commit>]
+# 1. a clean worktree at origin/main (or --ref); server format + compile --warnings-as-errors + the agent suite
+#    (test/risime/agent, test/contract) in its own test partition;
+# 2. scripts/risi-canary with the live model (instance _fl);
+# 3. tag v<VERSION>-srvN (next N), push it, scripts/run-server <tag> (backup, migrate, switch);
+# 4. 60-s watch (local /health ok 12/12 and version); else scripts/rollback.
+# Prints "FASTLANE LIVE <tag>" or "FASTLANE FAILED: <step>". Log: ~/risime-logs/fastlane/<time>.log.
+# Never while a deploy holds ~/risime-run/.deploy.lock (run-server waits for it). No APK, no redroid.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+CANARY=1; REF=""
+while [ $# -gt 0 ]; do case "$1" in --skip-canary) CANARY=0; shift;; --ref) REF="$2"; shift 2;; *) echo "unknown arg $1"; exit 2;; esac; done
+LOGD="$HOME/risime-logs/fastlane"; mkdir -p "$LOGD"; LOG="$LOGD/$(date -u +%m%d-%H%M).log"
+say() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LOG"; }
+die() { say "FASTLANE FAILED: $*"; exit 1; }
+git fetch -q origin --tags
+REF="${REF:-$(git rev-parse origin/main)}"
+WT="$HOME/risime-fastlane-wt"
+if [ -e "$WT/.git" ]; then git -C "$WT" fetch -q origin && git -C "$WT" checkout -q --detach "$REF" && git -C "$WT" clean -qfdx -e server/deps -e server/_build
+else git worktree add -q --detach "$WT" "$REF"; fi
+ln -sfn "$REPO/.env" "$WT/.env"
+say "ref $(git -C "$WT" log -1 --format='%h %s' | cut -c1-100)"
+
+say "1/4 server: format, compile, agent + contract tests"
+( cd "$WT/server" && $M mix deps.get >/dev/null && $M mix format --check-formatted && $M mix compile --warnings-as-errors >/dev/null \
+  && MIX_TEST_PARTITION=fl $M mix test test/risime/agent test/contract ) >> "$LOG" 2>&1 || die "server tests (see $LOG)"
+say "    $(grep -E '[0-9]+ tests, [0-9]+ failures' "$LOG" | tail -1)"
+
+if [ "$CANARY" = 1 ]; then
+  say "2/4 Risi canary (live model)"
+  ( cd "$WT" && CANARY_INSTANCE=_fl CANARY_PORT=4397 CANARY_LLM_PORT=8497 timeout 2400 scripts/risi-canary ) >> "$LOG" 2>&1 \
+    && grep -q 'RISI CANARY OK' "$LOG" || die "Risi canary (see $LOG)"
+else say "2/4 Risi canary SKIPPED (--skip-canary)"; fi
+
+BASE="v$(cat "$WT/VERSION")"; N=1
+while git rev-parse -q --verify "refs/tags/$BASE-srv$N" >/dev/null; do N=$((N + 1)); done
+TAG="$BASE-srv$N"
+say "3/4 deploy $TAG"
+git tag -a "$TAG" -m "Risi fast lane $(git -C "$WT" log -1 --format=%h)" "$REF" && git push -q origin "$TAG" || die "tag $TAG"
+PREV="$(cat "$HOME/risime-run/CURRENT" 2>/dev/null || echo '?')"
+if ! timeout 2400 scripts/run-server "$TAG" >> "$LOG" 2>&1; then
+  say "run-server failed; rolling back to $PREV"; scripts/rollback >> "$LOG" 2>&1 || true; die "deploy $TAG (rolled back to $PREV)"
+fi
+
+say "4/4 60-s watch"
+ok=0; for _ in $(seq 1 12); do curl -sf -m 5 http://127.0.0.1:4000/health | grep -q '"status":"ok"' && ok=$((ok + 1)); sleep 5; done
+if [ "$ok" -lt 12 ]; then say "health $ok/12; rolling back to $PREV"; scripts/rollback >> "$LOG" 2>&1 || true; die "watch $ok/12 (rolled back)"; fi
+say "FASTLANE LIVE $TAG (health 12/12)"
