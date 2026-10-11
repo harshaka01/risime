@@ -178,6 +178,7 @@ diag() {
     cp "$WORK/ui-$d.xml" "$LOGS/$d-ui.xml" 2>/dev/null || true
   done
   cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  cp "$WORK/fake-llm.out" "$LOGS/fake-llm.log" 2>/dev/null || true
   echo "    diagnostics in $LOGS"
 }
 cleanup() {
@@ -3357,7 +3358,7 @@ txt = open(sys.argv[1], encoding='utf-8').read(); fonts = open(sys.argv[2], enco
 lbl, want = sys.argv[3], sys.argv[4:]
 norm = lambda s: re.sub(r'\s+', '', unicodedata.normalize('NFC', s).replace('\u200c', '').replace('\u200d', ''))
 t = norm(txt); bad = 0
-for w in want + ['RisiMe', 'Pageof'] :
+for w in want + ['RisiMe']:
     if norm(w) not in t:
         print("    missing in the PDF text: %r" % w); bad = 1
 if not re.search(r'Page\s+1\s+of', txt): print("    no 'Page 1 of'"); bad = 1
@@ -3507,11 +3508,8 @@ PY
   [ "$photo" = 1 ] && { for _ in $(seq 1 30); do dump; grep -qE 'content-desc="[^"]*Photo' "$WORK/ui-B.xml" && break; sleep 2; done; grep -qE 'content-desc="[^"]*Photo' "$WORK/ui-B.xml" || fail "messaging forward: B's group has no forwarded photo"; }
   if [ "$dm_target" = 1 ]; then
     back_to_list || true; msg_open "ZZ UI A" || fail "messaging forward: B reopens the DM"
-    local n; n="$(count_text "$FT")"
-    for _ in $(seq 1 30); do dump; n="$(count_text "$FT")"; [ "${n:-0}" -ge 2 ] && break; sleep 2; done
-    [ "${n:-0}" -ge 2 ] || fail "messaging forward: the DM didn't get the forwarded copy (texts: $n)"
     shot "58-messaging-forwarded-dm"
-    wait_for "Forwarded, " 10 || fail "messaging forward: the DM shows no 'Forwarded' label"
+    wait_for "Forwarded, $FT" 60 || fail "messaging forward: the DM didn't get A's forwarded copy with the 'Forwarded' label"
   else echo "UIENTRY SKIP messaging: the picker doesn't list the open DM; forwarded to the group only"; fi
   DEV=A; back_to_list || true
   pass "messaging: forwarded the text$([ "$photo" = 1 ] && echo ' and the photo') to the group$([ "$dm_target" = 1 ] && echo ' and the DM'); B shows '↪ Forwarded'"
