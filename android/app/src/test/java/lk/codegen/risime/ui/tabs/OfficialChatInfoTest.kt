@@ -206,7 +206,8 @@ class OfficialChatInfoTest {
     @Test fun theSwitchConfirmsOffWithTheContractText() {
         runBlocking { officialReadable(dm) }
         val s = switch(dm)
-        s.ui.await { it.canToggle && it.officialConversation != null }
+        // Settle the controller completely before composing: the switch is on, nothing is in flight.
+        s.ui.await { it.canToggle && it.on && !it.busy && !it.confirmingOff && it.officialConversation != null }
         var history = 0
         rule.setContent {
             RisiMeTheme {
@@ -218,6 +219,7 @@ class OfficialChatInfoTest {
                 )
             }
         }
+        rule.waitForIdle()
         rule.onNodeWithTag("official_switch_row").assertIsOn()
         rule.onNodeWithTag("official_switch_row").performClick()
         // request() flips the state on the controller's IO scope; wait for the dialog to compose.
