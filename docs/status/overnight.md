@@ -1361,3 +1361,11 @@ fixes go out together.
   back step, reinstall, restore) all PASS. ui-batch (non-blocking, rule 11): PASS, 27 steps.
 - Next (Harsha 2026-10-10): docs/NEXT-PHASE.md merged; D1 (Official call connect bug) and E (copy/forward/share/star/PDF),
   contract first.
+
+### 01:58 UTC 2026-10-11: server hotfix v0.2.0-nightly.48-srv1 LIVE (contract v1.35 §34 Phase 1, no APK)
+- Schedule questions force the calendar read (EN/SI/TA/Singlish classifier), `tool` first in the model schema, no
+  write tools after a schedule read, new requests supersede open drafts, Ask me again = the original question,
+  Risi's items ledger (+ GET /api/v1/risi/items), "what have you set up for me?", name check ("Did you mean Shirazi?").
+- Gates: server 1164 tests, boot-check OK (after METRICS_PORT=off for throwaway boots, b5373e5), Risi canary OK with
+  the live model, deploy via run-server (backup, migrate risi_items, switch), 60-s watch 12/12, phones reconnected.
+- run-server's version check now accepts -srvN tags.

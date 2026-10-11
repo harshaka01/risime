@@ -77,7 +77,9 @@ listen="$(ss -ltnH "sport = :$PORT" | awk '{print $4}' | tr '\n' ' ')"
 epmd="$(ss -ltnH 'sport = :4369' | awk '{print $4}' | grep -vE '^(127\.0\.0\.1|\[::1\]):4369$' | grep -c . || true)"
 echo "$TAG" > "$RUNROOT/CURRENT"
 echo "health: $health"; echo "listening: $listen| non-loopback epmd sockets: $epmd"
-grep -q "\"version\":\"${TAG#v}\"" <<<"$health" || { echo "server not healthy on $TAG"; exit 1; }
+# A server-only hotfix tag (vX-srvN) runs the base VERSION: compare without the -srvN suffix.
+VER="${TAG#v}"; VER="${VER%-srv[0-9]*}"
+grep -q '"status":"ok"' <<<"$health" && grep -q "\"version\":\"$VER\"" <<<"$health" || { echo "server not healthy on $TAG"; exit 1; }
 [ "$listen" = "127.0.0.1:$PORT " ] || { echo "UNEXPECTED BIND: $listen"; exit 1; }
 [ "$epmd" = 0 ] || { echo "epmd is listening beyond loopback (4369)"; exit 1; }
 echo "running $TAG (prod release) on 127.0.0.1:$PORT"
