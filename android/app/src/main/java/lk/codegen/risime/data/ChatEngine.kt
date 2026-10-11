@@ -453,13 +453,26 @@ class ChatEngine(
                 r.conversationId?.let { upsertMarker(it, SystemLine.UNDECRYPTABLE, r.serverTs) }
                 recordGaps(r.gaps)
             }
-            if (r is MlsResult.Plaintext) incoming = applyMessage(me, r.message, r.body, systemJson = r.risi) || incoming
+            if (r is MlsResult.Plaintext) incoming = applyMessage(me, r.message, r.body, systemJson = r.risi, extras = r.extras) || incoming
             if (r is MlsResult.Image) {
                 val hooks = images
                 if (hooks != null) {
-                    incoming = applyMessage(me, r.message, r.envelope.caption.orEmpty(), MessageEntity.KIND_IMAGE, r.envelope.blob.blobId) { row ->
+                    incoming = applyMessage(me, r.message, r.envelope.caption.orEmpty(), MessageEntity.KIND_IMAGE, r.envelope.blob.blobId, extras = r.envelope.extras) { row ->
                         hooks.stored(row, r.envelope)
                         imagesStored = true
+                    } || incoming
+                }
+            }
+            if (r is MlsResult.File) {
+                // §33.13: a `parts` file (A) is a placeholder row without media; a v1.34 file keeps its key like an image.
+                val hooks = images
+                if (hooks != null || r.envelope.partsOnly) {
+                    val meta = lk.codegen.risime.data.media.FileMeta.of(r.envelope).encode()
+                    incoming = applyMessage(me, r.message, r.envelope.caption.orEmpty(), MessageEntity.KIND_FILE, r.envelope.blob?.blobId, systemJson = meta, extras = r.envelope.extras) { row ->
+                        if (!r.envelope.partsOnly) {
+                            hooks?.storedFile(row, r.envelope)
+                            imagesStored = true
+                        }
                     } || incoming
                 }
             }
@@ -899,6 +912,8 @@ class ChatEngine(
         blobId: String? = null,
         /** §24.11 a text row's honoured `risi` object (null: an ordinary message). */
         systemJson: String? = null,
+        /** §33.4 / §33.9 / §33.0: `forwarded`, `reply_to`, `view_once` of the envelope. */
+        extras: lk.codegen.risime.net.EnvelopeExtras = lk.codegen.risime.net.EnvelopeExtras.NONE,
         /** In the same transaction, right after the new row (§14.7: the image's media row). */
         onInserted: suspend (MessageEntity) -> Unit = {},
     ): Boolean {
@@ -959,6 +974,10 @@ class ChatEngine(
             blobId = blobId,
             fromDevice = m.fromDevice?.lowercase(),
             systemJson = systemJson,
+            forwardHops = extras.forwardHops,
+            replyToMessageId = extras.replyTo?.messageId,
+            replyToFrom = extras.replyTo?.from,
+            viewOnce = if (extras.viewOnce) true else null,
         )
         if (messages.insert(row) == -1L) return false
         deletes?.unhide(row.conversationId) // §15.7 Delete chat: a new message brings the chat back
@@ -976,6 +995,13 @@ class ChatEngine(
         val next = current.advance(incoming)
         if (next != current || row.messageId == null) {
             messages.updateStatus(row.clientMsgId, next.name, s.messageId, null, if (next == MessageStatus.FAILED) row.failReason else null)
+        }
+        // §33.12 Info: the times of `delivered` / `read` (only statuses received from v1.34 on have them).
+        val at = HistoryMarkers.epochMs(s.at)
+        if (at != null) when (incoming) {
+            MessageStatus.DELIVERED -> messages.setDeliveredAt(row.clientMsgId, at)
+            MessageStatus.READ -> messages.setReadAt(row.clientMsgId, at)
+            else -> Unit
         }
     }
 
@@ -1038,10 +1064,15 @@ class ChatEngine(
             val json = m.systemJson ?: return PushResult.Rejected(AuthErrors.BAD_REQUEST)
             return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { json.toByteArray(Charsets.UTF_8) }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
         }
-        if (m.image) {
-            // §14.7 Sending 6: the stored envelope, encrypted at send time; never in plaintext.
+        if (m.media) {
+            // §14.7 Sending 6 / §33.13: the stored envelope, encrypted at send time; never in plaintext.
             val env = images?.envelope(m.clientMsgId) ?: return PushResult.Rejected(IMAGE_UNAVAILABLE)
             return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { env }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
+        }
+        val extras = lk.codegen.risime.data.mls.sendExtras(m)
+        // §33.4: a forward or a reply is e2ee-only (its fields never travel in a plaintext `msg:send`).
+        if (extras != lk.codegen.risime.net.EnvelopeExtras.NONE) {
+            return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { lk.codegen.risime.data.mls.MlsPayload.text(m.body, extras) }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
         }
         return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { lk.codegen.risime.data.mls.MlsPayload.text(m.body) }) {
             realtime().sendMessage(MsgSend(m.clientMsgId, m.to, m.body, isoMillis(m.localTs)))
@@ -1199,15 +1230,15 @@ class ChatEngine(
 
     /** Never-pushed or refused message: it exists nowhere else (an image's upload is cancelled and an uploaded blob deleted). */
     private suspend fun cancelUnsent(r: MessageEntity) {
-        if (r.image && images is lk.codegen.risime.data.media.ImageRepository) {
+        if (r.media && images is lk.codegen.risime.data.media.ImageRepository) {
             images.deleteUnsent(r.clientMsgId)
             return
         }
         tx.run {
             messages.delete(r.clientMsgId)
-            if (r.image) applier?.purge(r, meId() ?: "", byAdmin = false, tombstone = false)
+            if (r.media) applier?.purge(r, meId() ?: "", byAdmin = false, tombstone = false)
         }
-        if (r.image) deletesApplied = true
+        if (r.media) deletesApplied = true
     }
 
     private suspend fun queueEveryone(conv: String, rows: List<MessageEntity>) {
@@ -1300,9 +1331,10 @@ class ChatEngine(
                 val candidates = listOfNotNull(cursor) + remove.mapNotNull { it.messageId }.filter { lk.codegen.risime.data.deletes.TimeUuid.ticks(it) != null }
                 val upto = candidates.maxByOrNull { lk.codegen.risime.data.deletes.TimeUuid.ticks(it)!! }
                 for (r in remove) {
-                    if (r.image) a.purge(r, me, byAdmin = false, tombstone = false) else messages.delete(r.clientMsgId)
+                    if (r.media) a.purge(r, me, byAdmin = false, tombstone = false) else messages.delete(r.clientMsgId)
                 }
                 dao.deleteConversationReactions(conversationId)
+                dao.deleteConversationStars(conversationId)
                 // §17.13: Clear chat and Delete chat delete the gap rows in the purge transaction.
                 historyDao?.deleteConversationGaps(conversationId)
                 val prev = dao.chatState(conversationId)?.clearedUpto

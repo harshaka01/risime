@@ -13,11 +13,15 @@ import lk.codegen.risime.net.BlobRef
 import java.io.File
 import java.util.Base64
 import java.util.UUID
+import lk.codegen.risime.data.mls.sendExtras
 
 /** What the chat engine needs from the image store (null in builds/tests without images). */
 interface ImageHooks {
     /** §14.7 Receiving 1: inside the event's transaction, with the message row. Nothing is fetched here. */
     suspend fun stored(row: MessageEntity, envelope: ImageEnvelope)
+
+    /** v1.34 §33.13: a `file` with a blob, inside the event's transaction (nothing fetched here). */
+    suspend fun storedFile(row: MessageEntity, envelope: FileEnvelope) {}
 
     /** After the events' transactions: schedule downloads. */
     fun received()
@@ -141,6 +145,23 @@ class ImageRepository(
         )
     }
 
+    override suspend fun storedFile(row: MessageEntity, envelope: FileEnvelope) {
+        val blob = envelope.blob ?: return
+        val enc = envelope.enc ?: return
+        val sent = row.serverTs?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() } ?: clock()
+        media.insert(
+            MediaEntity(
+                clientMsgId = row.clientMsgId, conversationId = row.conversationId, outgoing = row.outgoing, state = MediaState.NONE.name,
+                blobId = blob.blobId, blobSize = blob.size, blobSha256 = blob.sha256, clientBlobId = null,
+                sealedEnc = sealer.sealEnc(row.clientMsgId, enc),
+                sealedThumb = envelope.thumb?.let { sealer.sealThumb(row.clientMsgId, it) },
+                // A file row is told apart from an image by w = h = 0 (no auto-download over 2 MiB, §33.13).
+                mime = envelope.mime, w = 0, h = 0, fileName = null,
+                expiresAtEst = sent + ImageUploader.FETCHABLE_MS, lastAccess = clock(),
+            ),
+        )
+    }
+
     override fun received() = enqueueDownloads()
 
     fun thumb(clientMsgId: String, row: MediaEntity): ImageThumb? =
@@ -240,9 +261,18 @@ class ImageRepository(
         val row = media.get(clientMsgId)?.takeIf { it.state == MediaState.UPLOADED.name || it.state == MediaState.CACHED.name } ?: return null
         val msg = messages.byClientMsgId(clientMsgId) ?: return null
         val blobId = row.blobId ?: return null
+        // §33.4 / §33.9: a forward's `forwarded` and a reply's `reply_to` travel with the media envelope.
+        val extras = sendExtras(msg)
+        if (msg.file) {
+            val meta = FileMeta.decode(msg.systemJson) ?: return null
+            return FileEnvelope(
+                BlobRef(blobId, row.blobSize, row.blobSha256), sealer.openEnc(clientMsgId, row.sealedEnc), meta.name, meta.mime,
+                thumb(clientMsgId, row), meta.pages, msg.body.takeIf { it.isNotBlank() }, extras,
+            ).encode()
+        }
         return ImageEnvelope(
             BlobRef(blobId, row.blobSize, row.blobSha256), sealer.openEnc(clientMsgId, row.sealedEnc), row.mime, row.w, row.h,
-            thumb(clientMsgId, row), msg.body.takeIf { it.isNotBlank() },
+            thumb(clientMsgId, row), msg.body.takeIf { it.isNotBlank() }, extras,
         ).encode()
     }
 

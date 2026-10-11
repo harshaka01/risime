@@ -41,8 +41,8 @@ class DeleteApplier(
      * [tombstone] = false, disappears), with its reactions and image key; files after the commit.
      */
     suspend fun purge(row: MessageEntity, by: String, byAdmin: Boolean, tombstone: Boolean = true) {
-        row.messageId?.let { dao.deleteReactions(listOf(it)) }
-        if (row.image || row.blobId != null) {
+        row.messageId?.let { dao.deleteReactions(listOf(it)); dao.deleteStars(listOf(it)) }
+        if (row.media || row.blobId != null) {
             val files = images?.purgeRow(row.clientMsgId).orEmpty()
             synchronized(this) { purged += PurgedMedia(row.clientMsgId, files) }
         }

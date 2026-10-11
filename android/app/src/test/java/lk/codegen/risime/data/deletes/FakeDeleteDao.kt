@@ -28,7 +28,7 @@ class FakeDeleteDao(private val messages: FakeMessageDao, private val reactions:
     override suspend fun tombstone(clientMsgId: String, by: String, byAdmin: Boolean, at: Long): Int {
         val r = messages.rows[clientMsgId] ?: return 0
         messages.rows[clientMsgId] = r.copy(
-            kind = MessageEntity.KIND_DELETED, body = "", systemJson = null, blobId = null, deletedBy = by, deletedByAdmin = byAdmin,
+            kind = MessageEntity.KIND_DELETED, body = "", systemJson = null, blobId = null, forwardHops = null, replyToMessageId = null, replyToFrom = null, deletedBy = by, deletedByAdmin = byAdmin,
             deletedAt = at, deleteState = null, deleteUnverified = false, receiptDelivered = null, receiptRead = null, receiptOf = null,
             failReason = null, status = if (!r.outgoing) "READ" else r.status, ackedStatus = if (!r.outgoing) "READ" else r.ackedStatus,
         )
@@ -62,6 +62,17 @@ class FakeDeleteDao(private val messages: FakeMessageDao, private val reactions:
 
     override suspend fun deleteConversationReactions(conversationId: String) {
         reactions?.rows?.entries?.removeAll { it.value.conversationId == conversationId }
+    }
+
+    /** §33.11 the star rows (the purge removes them in the same transaction). */
+    val stars = linkedMapOf<String, lk.codegen.risime.data.db.StarEntity>()
+
+    override suspend fun deleteStars(messageIds: List<String>) {
+        stars.keys.removeAll(messageIds.toSet())
+    }
+
+    override suspend fun deleteConversationStars(conversationId: String) {
+        stars.entries.removeAll { it.value.conversationId == conversationId }
     }
 
     override suspend fun queue(o: DeleteOutboxEntity): Long {

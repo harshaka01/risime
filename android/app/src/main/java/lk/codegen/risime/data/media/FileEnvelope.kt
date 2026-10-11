@@ -14,6 +14,21 @@ import java.text.Normalizer
 import java.util.Base64
 
 /**
+ * What a `file` row keeps besides its media row (in `messages.system_json`): the name, the sanitised
+ * mime, the page count and whether it is an A `parts` placeholder (no blob, nothing to open).
+ */
+@kotlinx.serialization.Serializable
+data class FileMeta(val name: String, val mime: String, val pages: Int? = null, val parts: Boolean = false) {
+    fun encode(): String = ProtocolJson.encodeToString(serializer(), this)
+
+    companion object {
+        fun of(e: FileEnvelope) = FileMeta(e.name, e.mime, e.pages, e.partsOnly)
+
+        fun decode(json: String?): FileMeta? = json?.let { runCatching { ProtocolJson.decodeFromString(serializer(), it) }.getOrNull() }
+    }
+}
+
+/**
  * v1.34 §33.13 the minimal `file` MLS application payload, after strict validation. [blob]/[enc] are
  * null only for a `parts` file (reserved for A): a placeholder bubble "Update RisiMe to open this file".
  * [mime] is already the sanitised hint (`application/octet-stream` when malformed); it is never trusted

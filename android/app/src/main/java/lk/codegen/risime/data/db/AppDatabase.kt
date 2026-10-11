@@ -44,6 +44,7 @@ import androidx.sqlite.execSQL
         RisiCalendarStateEntity::class,
         GcalCalendarEntity::class,
         GcalCopyEntity::class,
+        StarEntity::class,
     ],
     version = AppDatabase.VERSION,
     exportSchema = true,
@@ -69,16 +70,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun callLog(): CallLogDao
     abstract fun risiCalendar(): RisiCalendarDao
     abstract fun gcal(): GcalDao
+    abstract fun stars(): StarDao
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 15
+        const val VERSION = 16
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11, Migration11To12, Migration12To13, Migration13To14, Migration14To15)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11, Migration11To12, Migration12To13, Migration13To14, Migration14To15, Migration15To16)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
@@ -345,6 +347,27 @@ object Migration13To14 : Migration(13, 14) {
     val SQL = listOf(
         "CREATE TABLE IF NOT EXISTS `risi_calendar_cache` (`event_id` TEXT NOT NULL, `start_ms` INTEGER NOT NULL, `end_ms` INTEGER NOT NULL, `version` INTEGER NOT NULL, `json` TEXT NOT NULL, PRIMARY KEY(`event_id`))",
         "CREATE TABLE IF NOT EXISTS `risi_calendar_state` (`id` INTEGER NOT NULL, `cursor` TEXT, PRIMARY KEY(`id`))",
+    )
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/**
+ * v16 (§33 basic messaging, §33.18 upgrade gate, hard rule 9): creates `stars` and adds nullable
+ * columns to `messages` (forward_hops, reply_to_message_id, reply_to_from, delivered_at, read_at,
+ * view_once). No existing row is changed or removed; old rows read as "not forwarded, no reply, no times".
+ */
+object Migration15To16 : Migration(15, 16) {
+    val SQL = listOf(
+        "ALTER TABLE `messages` ADD COLUMN `forward_hops` INTEGER",
+        "ALTER TABLE `messages` ADD COLUMN `reply_to_message_id` TEXT",
+        "ALTER TABLE `messages` ADD COLUMN `reply_to_from` TEXT",
+        "ALTER TABLE `messages` ADD COLUMN `delivered_at` INTEGER",
+        "ALTER TABLE `messages` ADD COLUMN `read_at` INTEGER",
+        "ALTER TABLE `messages` ADD COLUMN `view_once` INTEGER",
+        "CREATE TABLE IF NOT EXISTS `stars` (`message_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `starred_at` INTEGER NOT NULL, PRIMARY KEY(`message_id`))",
     )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)

@@ -17,7 +17,10 @@ class MlsNotReady : IllegalStateException("MLS core not open yet: event not appl
 /** What one inbox event meant for MLS (contract §10.3, decision 033). */
 sealed interface MlsResult {
     /** A decrypted e2ee message: insert it like a plaintext one (same transaction). */
-    data class Plaintext(val message: MessageData, val body: String, val risi: String? = null) : MlsResult
+    data class Plaintext(val message: MessageData, val body: String, val risi: String? = null, val extras: lk.codegen.risime.net.EnvelopeExtras = lk.codegen.risime.net.EnvelopeExtras.NONE) : MlsResult
+
+    /** v1.34 §33.13: a decrypted, validated `file` envelope (a `parts` file is a placeholder row without media). */
+    data class File(val message: MessageData, val envelope: lk.codegen.risime.data.media.FileEnvelope) : MlsResult
 
     /** §14.4: a decrypted, validated image envelope (stored with its thumbnail in the same transaction). */
     data class Image(val message: MessageData, val envelope: lk.codegen.risime.data.media.ImageEnvelope) : MlsResult
@@ -333,14 +336,11 @@ class MlsPipeline(
                         msg, p.body,
                         lk.codegen.risime.data.tabs.RisiMessages.honoured(p.risi, if (p.risi != null) mls.groupMeta(conv) else null, d.sender.userId, if (p.risi != null) mls.agentUsers(conv) else emptySet())
                             ?.let(lk.codegen.risime.data.tabs.RisiMessages::encode)?.also { j -> runCatching { onRisiObject(j) } },
+                        p.extras,
                     )
                     is MlsPayload.Decoded.Reaction -> MlsResult.Reaction(msg, p.target, p.emoji, p.op)
                     is MlsPayload.Decoded.Image -> MlsResult.Image(msg, p.envelope)
-                    // §33.13: not stored yet by this build (the `files` capability is not advertised).
-                    is MlsPayload.Decoded.File -> {
-                        log("file envelope in ${msg.messageId}: not supported yet")
-                        MlsResult.Ignored
-                    }
+                    is MlsPayload.Decoded.File -> MlsResult.File(msg, p.envelope)
                     // §15.3: a delete envelope is only valid in a `delete` event; in a `message` event it is dropped and logged.
                     is MlsPayload.Decoded.Delete -> {
                         log("delete envelope in a message event ${msg.messageId}: dropped")

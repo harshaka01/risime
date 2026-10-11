@@ -57,7 +57,7 @@ interface MessageDao {
      */
     @Query(
         "SELECT m.* FROM messages m LEFT JOIN media x ON x.client_msg_id = m.client_msg_id " +
-            "WHERE m.outgoing = 1 AND m.status = 'PENDING' AND (m.kind != 'image' OR x.state = 'UPLOADED') ORDER BY m.local_ts ASC",
+            "WHERE m.outgoing = 1 AND m.status = 'PENDING' AND (m.kind NOT IN ('image', 'file') OR x.state = 'UPLOADED') ORDER BY m.local_ts ASC",
     )
     suspend fun pendingOutbox(): List<MessageEntity>
 
@@ -133,13 +133,13 @@ interface MessageDao {
 
     /** Local search (decision 009: LIKE, no FTS). [pattern] comes from likePattern (backslash escapes). Tombstones and system lines never match (§15.6). */
     @Query(
-        "SELECT * FROM messages WHERE kind IN ('text', 'image') AND delete_state IS NULL AND body LIKE :pattern ESCAPE '\\' ORDER BY local_ts DESC LIMIT :limit",
+        "SELECT * FROM messages WHERE kind IN ('text', 'image', 'file') AND delete_state IS NULL AND view_once IS NULL AND body LIKE :pattern ESCAPE '\\' ORDER BY local_ts DESC LIMIT :limit",
     )
     fun search(pattern: String, limit: Int): Flow<List<MessageEntity>>
 
     /** §24.9 search inside one chat's current tab: one conversation only (the same rules as [search]). */
     @Query(
-        "SELECT * FROM messages WHERE conversation_id = :conversationId AND kind IN ('text', 'image') AND delete_state IS NULL " +
+        "SELECT * FROM messages WHERE conversation_id = :conversationId AND kind IN ('text', 'image', 'file') AND delete_state IS NULL AND view_once IS NULL " +
             "AND body LIKE :pattern ESCAPE '\\' ORDER BY local_ts DESC LIMIT :limit",
     )
     fun searchIn(conversationId: String, pattern: String, limit: Int): Flow<List<MessageEntity>>
@@ -147,6 +147,55 @@ interface MessageDao {
     /** §24.9 chat info media, per tab (one conversation): photos newest first. */
     @Query("SELECT * FROM messages WHERE conversation_id = :conversationId AND kind = 'image' AND delete_state IS NULL ORDER BY local_ts DESC LIMIT :limit")
     fun imagesIn(conversationId: String, limit: Int): Flow<List<MessageEntity>>
+
+    /** §33.12 a DM `status: delivered` time (first one wins). */
+    @Query("UPDATE messages SET delivered_at = COALESCE(delivered_at, :at) WHERE client_msg_id = :clientMsgId AND outgoing = 1")
+    suspend fun setDeliveredAt(clientMsgId: String, at: Long): Int
+
+    /** §33.12 a DM `status: read` time; a read without a delivered sets both to its time. */
+    @Query("UPDATE messages SET read_at = COALESCE(read_at, :at), delivered_at = COALESCE(delivered_at, :at) WHERE client_msg_id = :clientMsgId AND outgoing = 1")
+    suspend fun setReadAt(clientMsgId: String, at: Long): Int
+
+    /** §33.9 a reply's quote target, only in the same conversation. */
+    @Query("SELECT * FROM messages WHERE message_id = :messageId AND conversation_id = :conversationId")
+    suspend fun inConversation(conversationId: String, messageId: String): MessageEntity?
+
+    /** §33.4 the forward picker's "Recent chats": conversations by last activity. */
+    @Query("SELECT conversation_id, MAX(local_ts) AS last_ts FROM messages GROUP BY conversation_id ORDER BY last_ts DESC LIMIT :limit")
+    suspend fun recentConversations(limit: Int): List<ConversationActivity>
+}
+
+/** A conversation and its last activity (device ms). */
+data class ConversationActivity(
+    @androidx.room.ColumnInfo(name = "conversation_id") val conversationId: String,
+    @androidx.room.ColumnInfo(name = "last_ts") val lastTs: Long,
+)
+
+/** v16 (§33.11) device-local stars. */
+@Dao
+interface StarDao {
+    @Upsert
+    suspend fun put(stars: List<StarEntity>)
+
+    @Query("DELETE FROM stars WHERE message_id IN (:messageIds)")
+    suspend fun remove(messageIds: List<String>): Int
+
+    @Query("SELECT message_id FROM stars WHERE conversation_id = :conversationId")
+    fun idsIn(conversationId: String): Flow<List<String>>
+
+    @Query("SELECT * FROM stars WHERE message_id = :messageId")
+    suspend fun get(messageId: String): StarEntity?
+
+    @Query("SELECT * FROM stars")
+    suspend fun all(): List<StarEntity>
+
+    /** One conversation's starred messages, newest star first (tombstones never: their stars were purged). */
+    @Query("SELECT m.*, s.starred_at AS starred_at FROM stars s JOIN messages m ON m.message_id = s.message_id WHERE s.conversation_id = :conversationId ORDER BY s.starred_at DESC")
+    fun starredIn(conversationId: String): Flow<List<StarredMessage>>
+
+    /** Every conversation's starred messages, newest star first. */
+    @Query("SELECT m.*, s.starred_at AS starred_at FROM stars s JOIN messages m ON m.message_id = s.message_id ORDER BY s.starred_at DESC")
+    fun starredAll(): Flow<List<StarredMessage>>
 }
 
 @Dao
@@ -202,7 +251,11 @@ interface WipeDao {
         risiCalendarState()
         gcalCalendars()
         gcalCopies()
+        stars()
     }
+
+    @Query("DELETE FROM stars")
+    suspend fun stars()
 
     @Query("DELETE FROM gcal_calendars")
     suspend fun gcalCalendars()
@@ -327,7 +380,7 @@ interface DeleteDao {
      * image reference or receipts; an incoming one is read and acked (never unread, never acked again).
      */
     @Query(
-        "UPDATE messages SET kind = 'deleted', body = '', system_json = NULL, blob_id = NULL, deleted_by = :by, " +
+        "UPDATE messages SET kind = 'deleted', body = '', system_json = NULL, blob_id = NULL, forward_hops = NULL, reply_to_message_id = NULL, reply_to_from = NULL, deleted_by = :by, " +
             "deleted_by_admin = :byAdmin, deleted_at = :at, delete_state = NULL, delete_unverified = 0, " +
             "receipt_delivered = NULL, receipt_read = NULL, receipt_of = NULL, fail_reason = NULL, " +
             "status = CASE WHEN outgoing = 0 THEN 'READ' ELSE status END, " +
@@ -357,6 +410,14 @@ interface DeleteDao {
 
     @Query("DELETE FROM reactions WHERE conversation_id = :conversationId")
     suspend fun deleteConversationReactions(conversationId: String)
+
+    /** §33.11 / §15.6: a purged message's star goes in the purge transaction. */
+    @Query("DELETE FROM stars WHERE message_id IN (:messageIds)")
+    suspend fun deleteStars(messageIds: List<String>)
+
+    /** §33.11: Clear chat / Delete chat removes the chat's stars (no "keep starred" in v1.34). */
+    @Query("DELETE FROM stars WHERE conversation_id = :conversationId")
+    suspend fun deleteConversationStars(conversationId: String)
 
     // ---- outbox ----
 
@@ -415,7 +476,7 @@ interface MediaDao {
     /** Downloadable images, newest message first (§14.7 Receiving 7). */
     @Query(
         "SELECT x.* FROM media x JOIN messages m ON m.client_msg_id = x.client_msg_id " +
-            "WHERE x.state IN ('NONE', 'DOWNLOADING') AND x.blob_id IS NOT NULL ORDER BY m.local_ts DESC",
+            "WHERE x.state IN ('NONE', 'DOWNLOADING') AND x.blob_id IS NOT NULL AND (x.w > 0 OR x.blob_size <= 2097200) ORDER BY m.local_ts DESC",
     )
     suspend fun downloadable(): List<MediaEntity>
 

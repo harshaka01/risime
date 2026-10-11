@@ -12,6 +12,13 @@ import lk.codegen.risime.net.ProtocolJson
  * application message. Reactions, group events and images will be new `type`s; apps from
  * nightly.8 on ignore types they don't know instead of showing them as text.
  */
+/** §33.4 / §33.9 the extras an outbox row sends: its `forwarded` hops and `reply_to` (never `view_once`). */
+fun sendExtras(m: lk.codegen.risime.data.db.MessageEntity): lk.codegen.risime.net.EnvelopeExtras {
+    val reply = m.replyToMessageId?.let { id -> m.replyToFrom?.let { from -> lk.codegen.risime.net.ReplyRef(id, from) } }
+    val hops = m.forwardHops?.takeIf { it in 1..lk.codegen.risime.net.Forwarding.MAX_HOPS }
+    return if (hops == null && reply == null) lk.codegen.risime.net.EnvelopeExtras.NONE else lk.codegen.risime.net.EnvelopeExtras(hops, reply)
+}
+
 object MlsPayload {
     const val VERSION = 1
     const val TYPE_TEXT = "text"
@@ -55,13 +62,14 @@ object MlsPayload {
         data class Ignored(val type: String) : Decoded
     }
 
-    /** Sending: UTF-8 JSON `{"v":1,"type":"text","body":"…"}`. */
-    fun text(body: String): ByteArray = ProtocolJson.encodeToString(
+    /** Sending: UTF-8 JSON `{"v":1,"type":"text","body":"…"}` (+ §33 `forwarded` / `reply_to`). */
+    fun text(body: String, extras: lk.codegen.risime.net.EnvelopeExtras = lk.codegen.risime.net.EnvelopeExtras.NONE): ByteArray = ProtocolJson.encodeToString(
         JsonObject.serializer(),
         buildJsonObject {
             put("v", VERSION)
             put("type", TYPE_TEXT)
             put("body", body)
+            extras.putInto(this)
         },
     ).toByteArray(Charsets.UTF_8)
 

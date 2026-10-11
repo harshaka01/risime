@@ -56,9 +56,27 @@ data class MessageEntity(
     @ColumnInfo(name = "shared_by") val sharedBy: String? = null,
     /** v9 (§17.16): the sending device of a new e2ee row (so later bundles carry it); null for older rows. */
     @ColumnInfo(name = "from_device") val fromDevice: String? = null,
+    /** v16 (§33.4): the validated `forwarded.hops` (1..255) of this message's envelope; null = not forwarded. */
+    @ColumnInfo(name = "forward_hops") val forwardHops: Int? = null,
+    /** v16 (§33.9): `reply_to.message_id` / `reply_to.from` (no snippet travels; the quote is rendered locally). */
+    @ColumnInfo(name = "reply_to_message_id") val replyToMessageId: String? = null,
+    @ColumnInfo(name = "reply_to_from") val replyToFrom: String? = null,
+    /** v16 (§33.12): when my DM message was delivered / read (the `status` events' `at`, device ms). */
+    @ColumnInfo(name = "delivered_at") val deliveredAt: Long? = null,
+    @ColumnInfo(name = "read_at") val readAt: Long? = null,
+    /** v16 (§33.0): the envelope carried the reserved `view_once` key: never selectable, copied, forwarded, quoted, searched. */
+    @ColumnInfo(name = "view_once") val viewOnce: Boolean? = null,
 ) {
     val system: Boolean get() = kind == KIND_SYSTEM
     val image: Boolean get() = kind == KIND_IMAGE
+
+    /** v1.34 §33.13 a `file` message ([systemJson] = [lk.codegen.risime.data.media.FileMeta]; [body] = the caption). */
+    val file: Boolean get() = kind == KIND_FILE
+
+    /** A row with a media blob (§15.2 "media targets": image and file). */
+    val media: Boolean get() = image || file
+
+    val isViewOnce: Boolean get() = viewOnce == true
     val call: Boolean get() = kind == KIND_CALL
     val risiCtl: Boolean get() = kind == KIND_RISI_CTL
 
@@ -72,6 +90,9 @@ data class MessageEntity(
 
         /** v6 (§14): an image; [body] holds the caption (or ""). */
         const val KIND_IMAGE = "image"
+
+        /** v1.34 §33.13 a file (Room: `kind` is text, no schema change). */
+        const val KIND_FILE = "file"
 
         /** v8 (§16.6): a call-history line ("Missed voice call"); [body] = the line from this user's perspective. */
         const val KIND_CALL = "call"
@@ -801,3 +822,20 @@ object GcalCopyState {
     const val REMOVED_BY_RISI = "removed_by_risi"
     const val DELETED_IN_GOOGLE = "deleted_in_google"
 }
+
+/**
+ * v16 (§33.11): a device-local star. Never synced (an MLS message would tell the other members); kept in
+ * backups as the `message` line's `starred_at`; purged with its message in the same transaction (§15.6).
+ */
+@Entity(tableName = "stars")
+data class StarEntity(
+    @PrimaryKey @ColumnInfo(name = "message_id") val messageId: String,
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    @ColumnInfo(name = "starred_at") val starredAt: Long,
+)
+
+/** A starred message with its row (the Starred screens). */
+data class StarredMessage(
+    @androidx.room.Embedded val message: MessageEntity,
+    @ColumnInfo(name = "starred_at") val starredAt: Long,
+)

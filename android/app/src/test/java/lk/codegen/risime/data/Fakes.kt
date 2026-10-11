@@ -54,7 +54,7 @@ class FakeMessageDao : MessageDao {
     var mediaState: (String) -> String? = { null }
 
     override suspend fun pendingOutbox() =
-        rows.values.filter { it.outgoing && it.status == "PENDING" && (it.kind != MessageEntity.KIND_IMAGE || mediaState(it.clientMsgId) == "UPLOADED") }
+        rows.values.filter { it.outgoing && it.status == "PENDING" && (!it.media || mediaState(it.clientMsgId) == "UPLOADED") }
             .sortedBy { it.localTs }
 
     override suspend fun setBlobId(clientMsgId: String, blobId: String?) {
@@ -132,6 +132,25 @@ class FakeMessageDao : MessageDao {
     override fun search(pattern: String, limit: Int): Flow<List<MessageEntity>> = flowOf(emptyList())
     override fun searchIn(conversationId: String, pattern: String, limit: Int): Flow<List<MessageEntity>> = flowOf(emptyList())
     override fun imagesIn(conversationId: String, limit: Int): Flow<List<MessageEntity>> = flowOf(emptyList())
+
+    override suspend fun setDeliveredAt(clientMsgId: String, at: Long): Int {
+        val r = rows[clientMsgId]?.takeIf { it.outgoing } ?: return 0
+        rows[clientMsgId] = r.copy(deliveredAt = r.deliveredAt ?: at)
+        return 1
+    }
+
+    override suspend fun setReadAt(clientMsgId: String, at: Long): Int {
+        val r = rows[clientMsgId]?.takeIf { it.outgoing } ?: return 0
+        rows[clientMsgId] = r.copy(readAt = r.readAt ?: at, deliveredAt = r.deliveredAt ?: at)
+        return 1
+    }
+
+    override suspend fun inConversation(conversationId: String, messageId: String) =
+        rows.values.firstOrNull { it.messageId == messageId && it.conversationId == conversationId }
+
+    override suspend fun recentConversations(limit: Int) =
+        rows.values.groupBy { it.conversationId }.map { (c, l) -> lk.codegen.risime.data.db.ConversationActivity(c, l.maxOf { it.localTs }) }
+            .sortedByDescending { it.lastTs }.take(limit)
 }
 
 class FakeSyncDao : SyncDao {
