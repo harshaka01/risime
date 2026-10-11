@@ -2042,3 +2042,9 @@ Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/p
   only; (2) the new confirm/answer examples have no `made_by` and the answer example has `local_search: null`; the
   server always adds `made_by` to a Risi post and does not send `local_search` yet (tests compare without them);
   (3) Official-chat `m<n>` refs are not exportable (Risi's own posts are only buffered in the Risi chat).
+
+## Flaky tests fixed (test-only, plus one store read)
+
+- `risi_notes_test` summarise/"today": `t0` (now - 5 h) could sit just before Colombo midnight, so "today" excluded the messages. Test-only; `stable_t0/0` in `LedgerHelpers` keeps the discussion on one local day (`RISI_TEST_T0` re-runs at a chosen instant). Product correct.
+- `skills_s14` "query_canceled": two `mix test` runs on one `risime_test` DB block each other on the fixed Risi agent seed row (open sandbox txn), until the 15 s checkout timeout cancels the query. Worktree checkouts now get their own DB and keyspace partition (`config/test.exs`; `MIX_TEST_PARTITION` still wins). `DataCase` also drains push/call task supervisors before the sandbox owner stops.
+- `daily_summaries_test` failed on local Sundays (week rollup row and second model call); `examples_v130_test` failed once its fixed date left the buffer window: `list_agent_messages` now also covers the Risi clock date (no change when the clock is the wall clock).

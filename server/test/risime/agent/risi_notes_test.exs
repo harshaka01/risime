@@ -36,7 +36,7 @@ defmodule RisiMe.Agent.RisiNotesTest do
     RisiMe.TabsHelpers.risi_tools_on!()
     skills_on!()
 
-    t0 = DateTime.utc_now() |> DateTime.add(-5 * 3600) |> DateTime.truncate(:second)
+    t0 = stable_t0()
     t0 = %{t0 | microsecond: {0, 6}}
     clock!(t0)
 

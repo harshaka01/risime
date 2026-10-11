@@ -1,5 +1,27 @@
 import Config
 
+# Test partition: the suffix of the test database and Cassandra keyspace. Two runs on the same
+# database block each other (the Risi agent seed upserts one fixed row, so a concurrent run's
+# open sandbox transaction holds its lock until the 15 s checkout timeout cancels the query:
+# "query_canceled" in skills_s14 and others) and the Cassandra tables are truncated once per run.
+# `MIX_TEST_PARTITION` wins; otherwise a checkout under `.claude/worktrees/` gets its own
+# partition, derived from its path, so parallel agent worktrees never share state. The main
+# checkout keeps the plain `risime_test`.
+partition =
+  case System.get_env("MIX_TEST_PARTITION") do
+    p when p in [nil, ""] ->
+      cwd = File.cwd!()
+
+      if String.contains?(cwd, "/.claude/worktrees/"),
+        do:
+          "_wt" <>
+            (:crypto.hash(:sha256, cwd) |> Base.encode16(case: :lower) |> binary_part(0, 8)),
+        else: ""
+
+    p ->
+      p
+  end
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
@@ -8,7 +30,7 @@ import Config
 config :risime, RisiMe.Repo,
   username: "risime",
   hostname: "127.0.0.1",
-  database: "risime_test#{System.get_env("MIX_TEST_PARTITION")}",
+  database: "risime_test#{partition}",
   pool: Ecto.Adapters.SQL.Sandbox,
   # Capped: the pilot shares this Postgres (max_connections 100) and several sessions run tests at
   # once; schedulers*2 = 40 per run starved it. Override with TEST_DB_POOL.
@@ -25,7 +47,7 @@ config :risime, :cassandra,
   nodes: ["127.0.0.1:9042"],
   # Follows MIX_TEST_PARTITION like the database, so a separate run (e.g. the release gate,
   # MIX_TEST_PARTITION=_release) never shares or truncates another run's keyspace.
-  keyspace: "risime_test#{System.get_env("MIX_TEST_PARTITION")}",
+  keyspace: "risime_test#{partition}",
   pool_size: 2,
   sync_connect: 10_000
 

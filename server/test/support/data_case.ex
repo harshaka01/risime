@@ -37,7 +37,27 @@ defmodule RisiMe.DataCase do
   """
   def setup_sandbox(tags) do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(RisiMe.Repo, shared: not tags[:async])
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+
+    on_exit(fn ->
+      # Fire-and-forget work (push sends, call jobs) is started under these supervisors and
+      # reads the database. If the owner stops first, Postgrex drops the connection under the
+      # task's in-flight query ("owner exited ... still using a connection"), which crashes the
+      # task and can cancel a query that a following test's process shares. So let it finish.
+      drain_tasks([RisiMe.Push.TaskSupervisor, RisiMe.Calls.TaskSupervisor])
+      Ecto.Adapters.SQL.Sandbox.stop_owner(pid)
+    end)
+  end
+
+  # Waits (bounded) until the supervisors have no running children.
+  defp drain_tasks(sups, deadline \\ System.monotonic_time(:millisecond) + 2_000) do
+    busy? = Enum.any?(sups, fn s -> Process.whereis(s) && Task.Supervisor.children(s) != [] end)
+
+    if busy? and System.monotonic_time(:millisecond) < deadline do
+      Process.sleep(10)
+      drain_tasks(sups, deadline)
+    else
+      :ok
+    end
   end
 
   @doc """

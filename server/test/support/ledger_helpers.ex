@@ -26,6 +26,24 @@ defmodule RisiMe.LedgerHelpers do
           )
   end
 
+  # A fixed-clock start for tests: five hours ago, but never within an hour before the users'
+  # (Colombo) midnight. A "today"
+  # period starts at local midnight, so a t0 just before it left the messages outside "today" and
+  # the test failed for a few minutes a day (real time ~23:15-23:30 UTC). `RISI_TEST_T0` (ISO-8601)
+  # re-runs the suite at a chosen instant.
+  def stable_t0 do
+    t0 =
+      case System.get_env("RISI_TEST_T0") do
+        nil -> DateTime.add(DateTime.utc_now(), -5 * 3600)
+        s -> s |> DateTime.from_iso8601() |> elem(1)
+      end
+      |> DateTime.truncate(:second)
+
+    day = fn dt -> dt |> RisiMe.Agent.Clock.local("Asia/Colombo") |> NaiveDateTime.to_date() end
+
+    if day.(t0) == day.(DateTime.add(t0, 3600)), do: t0, else: DateTime.add(t0, -7200)
+  end
+
   @doc "Sets Risi's clock (`RisiMe.Agent.Clock.now/0`)."
   def clock!(%DateTime{} = at), do: Application.put_env(:risime, :risi_now, at)
 

@@ -118,7 +118,9 @@ defmodule RisiMe.Agent.DailySummariesTest do
 
     at = Clock.to_utc(NaiveDateTime.new!(date, ~T[23:35:00]), @tz)
     assert :ok = DailySummaries.maybe_day(ctx.og, at)
-    [r] = Repo.all(Row)
+    # On a local Sunday the day summary also rolls up its week (a second model call and row).
+    [r] = Repo.all(from r in Row, where: r.scope == "day")
+    calls = length(llm_requests())
     assert r.scope == "day" and r.period_from == date and r.message_count == 6
     assert r.made_by["model"] == "risi-l1"
 
@@ -129,12 +131,12 @@ defmodule RisiMe.Agent.DailySummariesTest do
 
     # Once a day.
     assert DailySummaries.maybe_day(ctx.og, DateTime.add(at, 600)) == :skipped
-    assert length(llm_requests()) == 1
+    assert length(llm_requests()) == calls
 
     # Another chat without messages: no summary, no model call.
     other = risi_chat!([ctx.harsha, ctx.shenika])
     assert DailySummaries.maybe_day(other, at) == :skipped
-    assert length(llm_requests()) == 1
+    assert length(llm_requests()) == calls
   end
 
   test "weekly rollup from the day summaries only; for_range prefers whole weeks", ctx do

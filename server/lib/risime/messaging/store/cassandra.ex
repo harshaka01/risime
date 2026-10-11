@@ -667,9 +667,13 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   # Q12: at most two partitions hold live rows (TTL 24 h): yesterday's and today's.
   @impl true
   def list_agent_messages(conv, since, limit) do
-    today = Date.utc_today()
-    first = if since, do: Enum.max([buffer_day(since), Date.add(today, -1)], Date), else: nil
-    first = first || Date.add(today, -1)
+    # Risi's clock equals the wall clock except in tests that fix it (`:risi_now`); covering both
+    # dates keeps a fixed-clock test reading the partitions it wrote as the real date moves on.
+    real = Date.utc_today()
+    risi = DateTime.to_date(RisiMe.Agent.Clock.now())
+    today = Enum.max([real, risi], Date)
+    yesterday = Date.add(Enum.min([real, risi], Date), -1)
+    first = if since, do: Enum.max([buffer_day(since), yesterday], Date), else: yesterday
 
     first
     |> Date.range(today)
