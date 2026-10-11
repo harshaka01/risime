@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# UI-robot report-only run (Harsha 2026-10-11, nightly.49: "make the ENTIRE ui-entry-test UI-robot run non-blocking").
+#   scripts/ui-robot-report <version> <debug-apk>
+# Started detached by scripts/nightly-release; the release does not wait for it. Runs, one after another, the main
+# ui-entry-test, --ui-batch, --messaging and push-device-test on their own instances/redroids, then writes every
+# failing/non-blocking step to ~/risime-logs/release/robot-v<version>.summary (root copies it into docs/status/flaky-tests.md).
+set -uo pipefail
+cd "$(dirname "$0")/.."
+V="$1"; SRC="$2"; D="$HOME/risime-logs/release/robot-v$V"; mkdir -p "$D"
+APK="$D/app-debug.apk"; cp "$SRC" "$APK"   # a later build in this worktree can't swap the APK under the run
+SUM="$HOME/risime-logs/release/robot-v$V.summary"; : > "$SUM"
+run() {  # <name> <cmd...>
+  local n="$1"; shift; local rc=0
+  timeout -k 60 5400 "$@" > "$D/$n.log" 2>&1 || rc=$?
+  { echo "== $n: $([ $rc = 0 ] && echo PASS || echo "FAIL rc=$rc") ($(grep -c 'UIENTRY PASS' "$D/$n.log") steps passed) log $D/$n.log"
+    grep -E 'UIENTRY (FAIL|NONBLOCKING)|PUSHTEST FAIL|GATE STEP TIMED OUT|^FAIL' "$D/$n.log" | head -20; } >> "$SUM"
+}
+run ui-entry env UITEST_INSTANCE=_rel UITEST_PORT=4552 UITEST_LLM_PORT=8396 UITEST_REDROID_A=-relui1 UITEST_REDROID_A_PORT=5861 \
+  UITEST_REDROID_B=-relui2 UITEST_REDROID_B_PORT=5862 \
+  scripts/ui-entry-test --skills --ledger --calendar --offers --risi-calendar --risi-notes --apk "$APK"
+run ui-batch env UITEST_UIBATCH_ONLY=1 UITEST_INSTANCE=_relb UITEST_PORT=4554 UITEST_LLM_PORT=8395 UITEST_REDROID_A=-relb1 \
+  UITEST_REDROID_A_PORT=5867 UITEST_REDROID_B=-relb2 UITEST_REDROID_B_PORT=5868 scripts/ui-entry-test --skills --ui-batch --apk "$APK"
+run messaging env UITEST_MESSAGING_ONLY=1 UITEST_INSTANCE=_relm UITEST_PORT=4555 UITEST_LLM_PORT=8394 UITEST_REDROID_A=-relm1 \
+  UITEST_REDROID_A_PORT=5869 UITEST_REDROID_B=-relm2 UITEST_REDROID_B_PORT=5870 scripts/ui-entry-test --skills --messaging --apk "$APK"
+run push-device env PUSHTEST_INSTANCE=_rel PUSHTEST_PORT=4470 PUSHTEST_REDROID_A=-relpt1 PUSHTEST_REDROID_A_PORT=5771 \
+  PUSHTEST_REDROID_B=-relpt2 PUSHTEST_REDROID_B_PORT=5772 scripts/push-device-test --apk "$APK"
+echo "== done $(date -u +%FT%TZ)" >> "$SUM"

@@ -123,38 +123,51 @@ fi
 # --risi-calendar --risi-notes (v1.29 §29/§30, Harsha's GATE) add ~15-20 min. Only for those last steps (14-15) the
 # step's own temp server is restarted with RISI_EVENTS=on RISI_NOTES=on RISI_LEDGER=on (step 16 turns them off again
 # and checks the switch-off case); the pilot's switches are not touched.
+# UI robot REPORT-ONLY (Harsha 2026-10-11, nightly.49): the whole redroid UI robot (main ui-entry-test, --ui-batch,
+# --messaging, push-device-test) runs detached AFTER the deploy via scripts/ui-robot-report, never blocking or delaying; failing
+# steps go to docs/status/flaky-tests.md. Blocking stay: unit tests, the boot/crash check, the upgrade (no chat loss) gate.
+# UI_ROBOT_BLOCKING=1 restores the old blocking block below.
+ROBOT_NOTE=""
+if [ "${UI_ROBOT_BLOCKING:-0}" != 1 ]; then
+  if [ -z "${UI_ENTRY_SKIP:-}" ] && scripts/android-target check >/dev/null 2>&1; then
+    echo "==> UI robot: report-only, started detached after the deploy (scripts/ui-robot-report)"
+    ROBOT_NOTE="UI robot (ui-entry-test, ui-batch, messaging, push-device-test): report-only, run after release; failing steps logged in docs/status/flaky-tests.md."
+  fi
+  PUSHTEST_SKIP=1
+else
 if [ -n "${UI_ENTRY_SKIP:-}" ]; then echo "==> ui-entry-test SKIPPED (UI_ENTRY_SKIP)"
-elif scripts/android-target check >/dev/null 2>&1; then
-  echo "==> ui-entry-test (user-style entry points, redroid)"
-  UITEST_INSTANCE=_rel UITEST_PORT=4552 UITEST_LLM_PORT=8396 UITEST_REDROID_A=-relui1 UITEST_REDROID_A_PORT=5861 \
-    UITEST_REDROID_B=-relui2 UITEST_REDROID_B_PORT=5862 \
-    STEP_T="${UIENTRY_STEP_TIMEOUT:-5400}" step scripts/ui-entry-test --skills --ledger --calendar --offers --risi-calendar --risi-notes \
-      --apk android/app/build/outputs/apk/debug/app-debug.apk
-  # The UI-batch end-to-end script (--ui-batch: font scale 1.0/1.3, chips, calendar add/read on redroid) is NON-BLOCKING
-  # (Harsha 2026-10-10, CLAUDE.md rule 11): run once on its own redroids, each step's PASS/FAIL goes into the release notes.
-  UIB_LOG="$HOME/risime-logs/release/uibatch-v$next.log"
-  if UITEST_UIBATCH_ONLY=1 UITEST_INSTANCE=_relb UITEST_PORT=4554 UITEST_LLM_PORT=8395 UITEST_REDROID_A=-relb1 UITEST_REDROID_A_PORT=5867 \
-      UITEST_REDROID_B=-relb2 UITEST_REDROID_B_PORT=5868 timeout -k 60 3000 scripts/ui-entry-test --skills --ui-batch \
-      --apk android/app/build/outputs/apk/debug/app-debug.apk > "$UIB_LOG" 2>&1; then UIB_RES="PASS"; else UIB_RES="FAIL (non-blocking)"; fi
-  echo "==> ui-batch (non-blocking): $UIB_RES; $(grep -c 'UIENTRY PASS' "$UIB_LOG") steps passed; log $UIB_LOG"
-  # The basic-messaging end-to-end script (--messaging: copy format, star/info/reply, forward + "Forwarded" label, Sinhala and
-  # Tamil PDFs with pdftotext/pdffonts; NEXT-PHASE E gate) is NON-BLOCKING the same way, on its own instance and redroids.
-  MSG_LOG="$HOME/risime-logs/release/messaging-v$next.log"
-  if UITEST_MESSAGING_ONLY=1 UITEST_INSTANCE=_relm UITEST_PORT=4555 UITEST_LLM_PORT=8394 UITEST_REDROID_A=-relm1 UITEST_REDROID_A_PORT=5869 \
-      UITEST_REDROID_B=-relm2 UITEST_REDROID_B_PORT=5870 timeout -k 60 3000 scripts/ui-entry-test --skills --messaging \
-      --apk android/app/build/outputs/apk/debug/app-debug.apk > "$MSG_LOG" 2>&1; then MSG_RES="PASS"; else MSG_RES="FAIL (non-blocking)"; fi
-  echo "==> messaging (non-blocking): $MSG_RES; $(grep -c 'UIENTRY PASS' "$MSG_LOG") steps passed; log $MSG_LOG"
-  # Google Calendar link gate (contract v1.31 §31.12, decision 074): OFF by default, so a release isn't blocked before
-  # the server and android parts of v1.31 have landed. Root switches it on with UIENTRY_GOOGLE=1 (e.g. in the unit
-  # environment of the nightly), after which `ui-entry-test --google` (fake-llm + scripts/fake-gcal, A's two devices on
-  # three redroids, step 17 only) must pass. Its own temp server (:4553), store, redroids and ports.
-  if [ "${UIENTRY_GOOGLE:-0}" = 1 ]; then
-    echo "==> ui-entry-test --google (Google Calendar link, redroid + fake-gcal)"
-    UITEST_GOOGLE_ONLY=1 UITEST_INSTANCE=_relg UITEST_PORT=4553 UITEST_LLM_PORT=8397 UITEST_GCAL_PORT=8398 \
-      UITEST_REDROID_A=-relg1 UITEST_REDROID_A_PORT=5864 UITEST_REDROID_B=-relg2 UITEST_REDROID_B_PORT=5865 \
-      UITEST_REDROID_C=-relg3 UITEST_REDROID_C_PORT=5866 \
-      STEP_T="${UIENTRY_STEP_TIMEOUT:-5400}" step scripts/ui-entry-test --google \
+  elif scripts/android-target check >/dev/null 2>&1; then
+    echo "==> ui-entry-test (user-style entry points, redroid)"
+    UITEST_INSTANCE=_rel UITEST_PORT=4552 UITEST_LLM_PORT=8396 UITEST_REDROID_A=-relui1 UITEST_REDROID_A_PORT=5861 \
+      UITEST_REDROID_B=-relui2 UITEST_REDROID_B_PORT=5862 \
+      STEP_T="${UIENTRY_STEP_TIMEOUT:-5400}" step scripts/ui-entry-test --skills --ledger --calendar --offers --risi-calendar --risi-notes \
         --apk android/app/build/outputs/apk/debug/app-debug.apk
+    # The UI-batch end-to-end script (--ui-batch: font scale 1.0/1.3, chips, calendar add/read on redroid) is NON-BLOCKING
+    # (Harsha 2026-10-10, CLAUDE.md rule 11): run once on its own redroids, each step's PASS/FAIL goes into the release notes.
+    UIB_LOG="$HOME/risime-logs/release/uibatch-v$next.log"
+    if UITEST_UIBATCH_ONLY=1 UITEST_INSTANCE=_relb UITEST_PORT=4554 UITEST_LLM_PORT=8395 UITEST_REDROID_A=-relb1 UITEST_REDROID_A_PORT=5867 \
+        UITEST_REDROID_B=-relb2 UITEST_REDROID_B_PORT=5868 timeout -k 60 3000 scripts/ui-entry-test --skills --ui-batch \
+        --apk android/app/build/outputs/apk/debug/app-debug.apk > "$UIB_LOG" 2>&1; then UIB_RES="PASS"; else UIB_RES="FAIL (non-blocking)"; fi
+    echo "==> ui-batch (non-blocking): $UIB_RES; $(grep -c 'UIENTRY PASS' "$UIB_LOG") steps passed; log $UIB_LOG"
+    # The basic-messaging end-to-end script (--messaging: copy format, star/info/reply, forward + "Forwarded" label, Sinhala and
+    # Tamil PDFs with pdftotext/pdffonts; NEXT-PHASE E gate) is NON-BLOCKING the same way, on its own instance and redroids.
+    MSG_LOG="$HOME/risime-logs/release/messaging-v$next.log"
+    if UITEST_MESSAGING_ONLY=1 UITEST_INSTANCE=_relm UITEST_PORT=4555 UITEST_LLM_PORT=8394 UITEST_REDROID_A=-relm1 UITEST_REDROID_A_PORT=5869 \
+        UITEST_REDROID_B=-relm2 UITEST_REDROID_B_PORT=5870 timeout -k 60 3000 scripts/ui-entry-test --skills --messaging \
+        --apk android/app/build/outputs/apk/debug/app-debug.apk > "$MSG_LOG" 2>&1; then MSG_RES="PASS"; else MSG_RES="FAIL (non-blocking)"; fi
+    echo "==> messaging (non-blocking): $MSG_RES; $(grep -c 'UIENTRY PASS' "$MSG_LOG") steps passed; log $MSG_LOG"
+    # Google Calendar link gate (contract v1.31 §31.12, decision 074): OFF by default, so a release isn't blocked before
+    # the server and android parts of v1.31 have landed. Root switches it on with UIENTRY_GOOGLE=1 (e.g. in the unit
+    # environment of the nightly), after which `ui-entry-test --google` (fake-llm + scripts/fake-gcal, A's two devices on
+    # three redroids, step 17 only) must pass. Its own temp server (:4553), store, redroids and ports.
+    if [ "${UIENTRY_GOOGLE:-0}" = 1 ]; then
+      echo "==> ui-entry-test --google (Google Calendar link, redroid + fake-gcal)"
+      UITEST_GOOGLE_ONLY=1 UITEST_INSTANCE=_relg UITEST_PORT=4553 UITEST_LLM_PORT=8397 UITEST_GCAL_PORT=8398 \
+        UITEST_REDROID_A=-relg1 UITEST_REDROID_A_PORT=5864 UITEST_REDROID_B=-relg2 UITEST_REDROID_B_PORT=5865 \
+        UITEST_REDROID_C=-relg3 UITEST_REDROID_C_PORT=5866 \
+        STEP_T="${UIENTRY_STEP_TIMEOUT:-5400}" step scripts/ui-entry-test --google \
+          --apk android/app/build/outputs/apk/debug/app-debug.apk
+    fi
   fi
 fi
 
@@ -164,7 +177,7 @@ BOOTCHECK_INSTANCE=_rel BOOTCHECK_PORT=4591 BOOTCHECK_ENV="$HOME/development/ris
 # Background delivery gate (P0 2026-10-08): scripts/push-device-test with this build's debug APK on its
 # own redroids (screen off + force-idle, and after removal from Recents: message and call within 10 s).
 # PUSHTEST_SKIP=1 skips it (emergency only; say so in the release notes).
-if [ -n "${PUSHTEST_SKIP:-}" ]; then echo "==> push-device-test SKIPPED (PUSHTEST_SKIP)"
+if [ -n "${PUSHTEST_SKIP:-}" ]; then echo "==> push-device-test: ${ROBOT_NOTE:+in the report-only UI robot}${ROBOT_NOTE:-SKIPPED (PUSHTEST_SKIP)}"
 elif scripts/android-target check >/dev/null 2>&1; then
   echo "==> push-device-test (background delivery, redroid)"
   PUSHTEST_INSTANCE=_rel PUSHTEST_PORT=4470 PUSHTEST_REDROID_A=-relpt1 PUSHTEST_REDROID_A_PORT=5771 \
@@ -289,6 +302,7 @@ if [ ! -f "$notes" ]; then
 fi
 [ -n "${OVERRIDE_NOTE:-}" ] && { echo; echo "## Release gate"; echo "- $OVERRIDE_NOTE"; } >> "$notes"
 [ -n "${ANDROID_FLAKY:-}" ] && { echo; echo "## Flaky unit tests (passed on the one re-run)"; echo "- $ANDROID_FLAKY"; } >> "$notes"
+[ -n "$ROBOT_NOTE" ] && { echo; echo "## UI robot (non-blocking, Harsha 2026-10-11)"; echo "$ROBOT_NOTE"; } >> "$notes"
 if [ -n "${UIB_LOG:-}" ] && [ -f "$UIB_LOG" ]; then
   { echo; echo "## UI batch end-to-end (non-blocking, CLAUDE.md rule 11): ${UIB_RES:-not run}"
     grep -E '^UIENTRY (PASS|FAIL)' "$UIB_LOG" | sed -E 's/^UIENTRY (PASS|FAIL) /- \1: /'; } >> "$notes"
@@ -350,5 +364,10 @@ fi
 
 echo "==> switch the pilot server to v$next (prod release; docs/decisions/006, 023)"
 scripts/run-server "v$next"
+if [ -n "$ROBOT_NOTE" ]; then
+  setsid nohup scripts/ui-robot-report "$next" android/app/build/outputs/apk/debug/app-debug.apk \
+    > "$HOME/risime-logs/release/robot-v$next.out" 2>&1 < /dev/null &
+  echo "==> UI robot (report-only) started, pid $!: summary ~/risime-logs/release/robot-v$next.summary"
+fi
 [ "$published" = 1 ] || { echo "DONE v$next (NOT published)"; exit 1; }
 echo "DONE v$next"
