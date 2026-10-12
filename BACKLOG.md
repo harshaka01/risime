@@ -1,5 +1,12 @@
 # RisiMe Backlog (ordered)
 
+## Play Store blockers (Harsha 2026-10-12): required before ANY Play Store upload; next after the ownership quick fix
+1. **Terms of Service + Privacy Policy** as web pages under risicloud.ai (RisiMe), "© RisiCloud", linked from
+   Settings → About → Legal; plus an **account-deletion page** (Play requires it).
+2. **R8 shrinking + obfuscation** for release builds (keep rules for the crypto core / UniFFI, kotlinx.serialization
+   and Firebase); must pass the full gate, including the two-phone and upgrade checks.
+
+
 - **0.1:** one-to-one chat (docs/RELEASE-0.1.md)
 - **0.2:**
   - FCM push (needs Harsha's Firebase project);
