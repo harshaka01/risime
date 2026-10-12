@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -20,6 +21,8 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import androidx.lifecycle.lifecycleScope
 import ai.risicloud.risime.MainActivity
@@ -150,13 +153,7 @@ class CallActivity : ComponentActivity() {
                         tick++
                     }
                 }
-                // The call ended: close the call screen (and its task) and go back to the chat.
-                LaunchedEffect(s, blind) {
-                    if (s == null && blind == null) {
-                        delay(300)
-                        leaveToChat()
-                    }
-                }
+                // (The call's end closes this screen from [watchCallEnd], whatever the lifecycle state.)
                 val snap = s
                 @Suppress("UNUSED_EXPRESSION") tick
                 when {
@@ -214,6 +211,27 @@ class CallActivity : ComponentActivity() {
                 }
             } }
         }
+        watchCallEnd()
+    }
+
+    /**
+     * P0 E (12 Oct, black screen after calls): the call's end closes this screen in EVERY lifecycle state.
+     * It used to be a LaunchedEffect on `collectAsStateWithLifecycle`, which stops collecting once the
+     * activity is STOPPED (Home, the screen off at the ear, another app): a call that ended there left
+     * this activity alive in its own task with a dead "End" screen in Recents, which closed itself again
+     * when the user came back to it (an empty transition instead of the app).
+     */
+    private fun watchCallEnd() {
+        lifecycleScope.launch {
+            kotlinx.coroutines.flow.combine(calls.state, calls.blindRing) { s, b -> s == null && b == null }
+                .distinctUntilChanged()
+                .collectLatest { over ->
+                    if (!over) return@collectLatest
+                    delay(300) // the "Call ended" card for a moment when it is on screen
+                    Log.i("RisiMe", "calls: call screen closes (call over, resumed=$resumed)")
+                    leaveToChat(showChat = resumed)
+                }
+        }
     }
 
     /** Debug builds only: the device test (uiautomator) keeps the call controls on screen. */
@@ -229,7 +247,9 @@ class CallActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         calls.state.value?.conversationId?.let { lastConversation = it }
-        if (!hasCall()) return leaveToChat()
+        // Coming to the front without a call (Recents, a stale notification): straight to the chat. The
+        // lifecycle is still STARTED inside onResume, so this must not depend on it (it used to finish only).
+        if (!hasCall()) return leaveToChat(showChat = true)
         // The proximity sensor may blank the screen only while this screen is in front; §19.5 the
         // camera runs only while it is visible and the phone unlocked (a locked call screen waits).
         resumed = true
@@ -261,23 +281,26 @@ class CallActivity : ComponentActivity() {
         calls.setCameraWanted(on)
     }
 
-    /** Finishes this screen and its task (never an empty activity behind it) and shows the chat. */
-    private fun leaveToChat() {
+    /**
+     * Finishes this screen and its task (never an empty activity behind it). [showChat] (the screen is in
+     * front: Back, Minimise, the end of a call on screen): the app comes to the front first, on the call's chat
+     * when it is known, and only then does this screen finish — one transition from the call screen to the
+     * app. Finishing first started a second, cross-task transition to whatever task was below the call's
+     * (the home screen, another app, a stale call task) while the app's own task was being brought up.
+     * Not in front (Home, the screen off): only finishes, quietly.
+     */
+    private fun leaveToChat(showChat: Boolean = true) {
         if (isFinishing) return
         val conv = calls.state.value?.conversationId ?: lastConversation
-        val visible = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+        if (showChat) {
+            val i = Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            conv?.let { i.putExtra(ai.risicloud.risime.push.Notifier.EXTRA_OPEN_CHAT, it) }
+            runCatching { startActivity(i) }.onFailure { Log.w("RisiMe", "calls: back to the chat: ${it.message}") }
+        }
         // finish(), not finishAndRemoveTask(): removing a task tells the call service the app was
         // swiped away (onTaskRemoved), which ends the call. autoRemoveFromRecents drops the card.
         finish()
-        if (visible && conv != null) {
-            runCatching {
-                startActivity(
-                    Intent(this, MainActivity::class.java)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        .putExtra(ai.risicloud.risime.push.Notifier.EXTRA_OPEN_CHAT, conv),
-                )
-            }
-        }
     }
 
     override fun onNewIntent(intent: Intent) {

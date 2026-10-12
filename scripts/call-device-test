@@ -97,6 +97,8 @@ if [ "${CALLTEST_TURN:-0}" = 1 ]; then
 fi
 # Call 15 (v1.33 D1): TABS=on and Risi on (Official needs Risi in the group, §24.2).
 [ "${CALLTEST_TABS_ONLY:-0}" = 1 ] && { CALLTEST_TABS=1; CALLTEST_FAST=1; CALLTEST_SWITCH_ONLY=1; }
+# CALLTEST_BACK_ONLY=1 (scripts/call-back-test): only the call→Back/hang-up cycles (Official needs TABS=on).
+[ "${CALLTEST_BACK_ONLY:-0}" = 1 ] && { CALLTEST_TABS=1; CALLTEST_FAST=1; CALLTEST_SWITCH_ONLY=1; CALLTEST_TABS_ONLY=1; }
 TABS="${CALLTEST_TABS:-0}"; LLM_PORT="${CALLTEST_LLM_PORT:-8196}"
 : > "$WORK/risi.env"
 if [ "$TABS" = 1 ]; then
@@ -572,6 +574,143 @@ tabs_calls() {
   logcat_ok "call 15"
   pass "call 15: voice and video from both tabs, both directions: the 1:1 peer-to-peer call on the dm:"
 }
+# ---------------------------------------------------------------- P0 E (12 Oct): no black screen after a call
+# CALLTEST_BACK_ONLY=1 (scripts/call-back-test): CALLTEST_BACK_CYCLES (default 10) calls A→B, mixing voice/video,
+# the Private and the Official tab, ended by A's "End call", or by B's hang-up after A left the call screen with
+# Back (the call goes on), Home or the screen off (at the ear); in the last two no call screen or Recents card may
+# be left once the call is over. After each: A's and B's foreground is MainActivity with the chat's elements in the
+# uiautomator dump (never an empty window), no CallActivity left, and the screenshot is not black (mean brightness and spread); then Back
+# from the chat shows the chat list (not black). At the end: Home, the launcher icon and Recents reopen the app
+# normally. Screenshots: docs/status/screens/59-callback-*.png.
+SHOTS="${CALLTEST_SHOTS:-$REPO/docs/status/screens}"; mkdir -p "$SHOTS"
+not_black() {  # $1 png → "mean=… std=…"; exit 1 when black (mean < 12 or almost no spread)
+  python3 -I - "$1" <<'PY'
+import sys
+from PIL import Image, ImageStat
+im = Image.open(sys.argv[1]).convert("L")
+st = ImageStat.Stat(im)
+mean, std = st.mean[0], st.stddev[0]
+print(f"mean={mean:.1f} std={std:.1f}")
+sys.exit(0 if mean >= 12 and std >= 4 else 1)
+PY
+}
+fg_act() { A shell dumpsys activity activities 2>/dev/null | grep -m1 -E 'topResumedActivity' || true; }
+# fg_ok <label> <shot name> <ui grep -E pattern>: $DEV shows the app normally (MainActivity resumed, UI elements, not black).
+fg_ok() {
+  local l="$1" shot="$SHOTS/59-callback-$2.png" pat="$3" act b ok=""
+  for _ in $(seq 1 10); do
+    act="$(fg_act)"; dump
+    if [[ "$act" == *"$PKG/$CLS.MainActivity"* ]] && grep -qE -- "$pat" "$WORK/ui-$DEV.xml"; then ok=1; break; fi
+    sleep 1
+  done
+  A exec-out screencap -p > "$shot" 2>/dev/null || true
+  if [ -z "$ok" ]; then
+    A shell dumpsys activity activities > "$LOGS/$DEV-$2-activities.txt" 2>/dev/null || true
+    grep -o 'text="[^"]*"\|content-desc="[^"]*"' "$WORK/ui-$DEV.xml" | grep -v '=""' | head -8 | sed "s/^/    $DEV shows: /"
+    fail "$l: $DEV's foreground isn't the app's UI (${act:-no resumed activity}; want /$pat/)"
+  fi
+  b="$(not_black "$shot")" || fail "$l: $DEV's screen is black ($b, $shot)"
+  A shell dumpsys activity activities 2>/dev/null | grep -qE "Hist +#[0-9]+: ActivityRecord\{[^}]*calls\.CallActivity" && fail "$l: $DEV still has a CallActivity"
+  echo "    [$DEV] $l: $b"
+}
+CHAT_UI='text="(Encrypted message|Message)"|content-desc="Voice call'
+LIST_UI='content-desc="Refresh friends"|text="Add friend"'
+back_cycle() {  # <n> <private|official> <voice|video> <hangup|back|home|screenoff>
+  local n="$1" tab="$2" kind="$3" how="$4" btn tabtext label m ok
+  btn="Voice call"; [ "$kind" = video ] && btn="Video call"
+  tabtext="🔒 Private"; [ "$tab" = official ] && tabtext="● Official"
+  label="back $n ($tab, $kind, $how)"
+  for DEV in A B; do A shell cmd notification cancel_all >/dev/null 2>&1 || true; A logcat -c; done
+  DEV=B; open_chat "ZZ Call A" || fail "$label: B can't open the DM"
+  DEV=A; open_chat "ZZ Call B" || fail "$label: A can't open the DM"
+  tap "$tabtext" || fail "$label: A has no \"$tabtext\" tab"; sleep 2
+  ok=""; for _ in $(seq 1 20); do tap "$btn" && { ok=1; break; }; sleep 2; done
+  [ -n "$ok" ] || fail "$label: no \"$btn\" button"
+  DEV=B; wait_ring 30 || fail "$label: B never rang"
+  answer_intent || fail "$label: no Answer on B's ring"
+  m=""; for _ in $(seq 1 30); do DEV=A; m="$(media_ok)"; [ -n "$m" ] && { DEV=B; [ -n "$(media_ok)" ] && break; }; m=""; sleep 1; done
+  [ -n "$m" ] || fail "$label: media never connected"
+  sleep 3
+  DEV=A; A exec-out screencap -p > "$SHOTS/59-callback-$n-incall.png" 2>/dev/null || true
+  case "$how" in
+    hangup) DEV=A; tap "End call" || fail "$label: A has no End call" ;;
+    back)
+      DEV=A; A shell input keyevent KEYCODE_BACK; sleep 2
+      fg_ok "$label: A after Back (call goes on)" "$n-A-back-incall" "$CHAT_UI"
+      DEV=B; tap "End call" || fail "$label: B has no End call" ;;
+    home|screenoff)
+      # The call ends while A's call screen is not in front (Home; the screen off, as at the ear): the call
+      # screen must still close (no stale call task or Recents card), and A's app comes back normally.
+      DEV=A; if [ "$how" = home ]; then A shell input keyevent KEYCODE_HOME; else A shell input keyevent KEYCODE_SLEEP; fi
+      sleep 3
+      DEV=B; tap "End call" || fail "$label: B has no End call"
+      sleep 5
+      DEV=A
+      A shell dumpsys activity activities 2>/dev/null | grep -qE "Hist +#[0-9]+: ActivityRecord\{[^}]*calls\.CallActivity" && {
+        A shell dumpsys activity activities > "$LOGS/A-$n-stale-activities.txt" 2>/dev/null || true
+        fail "$label: A's call screen is still alive after the call ended in the background (stale call task)"; }
+      A shell dumpsys activity recents 2>/dev/null | grep -q "A=[0-9]*:ai.risicloud.risime.calls" && fail "$label: A's Recents still list the call task"
+      if [ "$how" = home ]; then
+        A shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10200000 -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || true
+      else
+        A shell input keyevent KEYCODE_WAKEUP; A shell wm dismiss-keyguard >/dev/null 2>&1 || true
+      fi
+      sleep 2 ;;
+  esac
+  sleep 4
+  DEV=A; fg_ok "$label: A after the call" "$n-A-after" "$CHAT_UI"
+  DEV=B; fg_ok "$label: B after the call" "$n-B-after" "$CHAT_UI"
+  # The reported step: Back after the call → the chat list, never a black screen.
+  for DEV in A B; do
+    A shell input keyevent KEYCODE_BACK; sleep 2
+    fg_ok "$label: $DEV Back after the call" "$n-$DEV-back" "$LIST_UI|$CHAT_UI"
+  done
+  logcat_ok "$label"
+  pass "$label: both phones show the app's chat UI after the call and after Back (not black)"
+}
+reopen_ok() {  # Home, then the launcher icon, then Recents: the app's normal UI each time
+  local d tid x1 y1 x2 y2
+  for d in A B; do
+    DEV=$d
+    A shell input keyevent KEYCODE_HOME; sleep 2
+    # The launcher icon's intent (MAIN/LAUNCHER, NEW_TASK|RESET_TASK_IF_NEEDED).
+    A shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10200000 -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || fail "back: $d launcher start"
+    sleep 3
+    fg_ok "back: $d reopened from the launcher" "reopen-launcher-$d" "$LIST_UI|$CHAT_UI"
+    A shell input keyevent KEYCODE_HOME; sleep 2
+    # Recents: the overview's first card (the app, the last task used) tapped.
+    A shell input keyevent KEYCODE_APP_SWITCH; sleep 3; dump
+    tid="$(grep -oE 'resource-id="com.android.launcher3:id/snapshot"[^>]*bounds="\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]"' "$WORK/ui-$DEV.xml" | head -1 | grep -oE '[0-9]+' | tail -4 | tr '\n' ' ')"
+    [ -n "$tid" ] || fail "back: $d's Recents shows no card"
+    read -r x1 y1 x2 y2 <<<"$tid"
+    A shell input tap $(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))
+    sleep 3
+    fg_ok "back: $d reopened from Recents" "reopen-recents-$d" "$LIST_UI|$CHAT_UI"
+  done
+  pass "back: Home → launcher and Recents reopen the app normally on both phones"
+}
+back_calls() {
+  local cycles="${CALLTEST_BACK_CYCLES:-10}" i tab kind how
+  for DEV in A B; do A shell pm grant "$PKG" android.permission.CAMERA 2>/dev/null || true; done
+  DEV=A; official_on "ZZ Call B" || fail "back: A can't start Official for the DM with B"
+  DEV=B; official_on "ZZ Call A" || fail "back: B can't open the DM's Official tab"
+  # The mix (repeats past 10): tab, kind, how the call screen is left.
+  local plan=(
+    "private voice hangup" "private video back" "official voice back" "official video hangup" "private voice home"
+    "official video screenoff" "private video hangup" "official voice back" "official voice home" "private video screenoff"
+  )
+  for i in $(seq 1 "$cycles"); do
+    read -r tab kind how <<<"${plan[$(( (i - 1) % ${#plan[@]} ))]}"
+    back_cycle "$i" "$tab" "$kind" "$how"
+  done
+  reopen_ok
+  pass "back: $cycles call cycles (voice/video, Private/Official, hang-up/Back/Home/screen off): never a black screen"
+}
+if [ "${CALLTEST_BACK_ONLY:-0}" = 1 ]; then
+  # CALLTEST_EXTRA=<file> here: sourced instead of the cycles (scenario debugging with every helper).
+  if [ -n "${CALLTEST_EXTRA:-}" ]; then source "$CALLTEST_EXTRA"; else back_calls; fi
+  echo "CALLTEST OK"; exit 0
+fi
 if [ "${CALLTEST_TABS_ONLY:-0}" = 1 ]; then tabs_calls; echo "CALLTEST OK"; exit 0; fi
 
 if [ "${CALLTEST_SWITCH_ONLY:-0}" != 1 ]; then

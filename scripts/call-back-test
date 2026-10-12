@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# P0 E (12 Oct): no black screen after a call. Two redroid phones with the real app (scripts/call-device-test's
+# setup: temp server with TABS=on RISI=on, sign-in through the real UI, e2ee DM, Official started), then
+# CALLTEST_BACK_CYCLES (default 10) call cycles A→B mixing voice/video, the Private and the Official tab, and
+# ending with "End call" or with Back (the call goes on, then B hangs up). After each cycle both phones must show
+# MainActivity with the chat's elements (uiautomator), no CallActivity left, and a screenshot that isn't black;
+# Back from the chat must show the chat list (not black). Finally Home → launcher icon and Recents reopen the app
+# normally. Screenshots: docs/status/screens/59-callback-*.png.
+#
+#   scripts/call-back-test [--apk app-debug.apk] [--keep]
+#
+# Runs standalone and from the release (its own redroid pair, server port and DB, so it never collides with
+# call-device-test). Prints "CALLTEST PASS|FAIL …" lines and "CALLTEST OK" at the end.
+set -euo pipefail
+args=(); while [ $# -gt 0 ]; do
+  if [ "$1" = --apk ] && [ $# -gt 1 ]; then args+=(--apk "$(realpath "$2")"); shift 2; else args+=("$1"); shift; fi
+done
+set -- "${args[@]+"${args[@]}"}"
+cd "$(dirname "$0")/.."
+export CALLTEST_BACK_ONLY=1
+export CALLTEST_INSTANCE="${CALLTEST_INSTANCE:-_back}"
+export CALLTEST_PORT="${CALLTEST_PORT:-4410}"
+export CALLTEST_LLM_PORT="${CALLTEST_LLM_PORT:-8197}"
+export CALLTEST_REDROID_A="${CALLTEST_REDROID_A:--cb1}" CALLTEST_REDROID_A_PORT="${CALLTEST_REDROID_A_PORT:-5730}"
+export CALLTEST_REDROID_B="${CALLTEST_REDROID_B:--cb2}" CALLTEST_REDROID_B_PORT="${CALLTEST_REDROID_B_PORT:-5731}"
+exec scripts/call-device-test "$@"
