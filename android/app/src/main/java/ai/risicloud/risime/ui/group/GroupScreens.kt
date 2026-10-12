@@ -231,6 +231,8 @@ fun GroupChatScreen(
     val showLine: (MessageEntity, ai.risicloud.risime.net.SourceRef) -> Unit = { row, ref ->
         risiScope.launch {
             row.messageId?.let { ai.risicloud.risime.ui.tabs.scrollToMessage(scroll, messages, it) }
+            // No ids, no text: the device gate reads that the jump happened.
+            android.util.Log.i("RisiMe", "risi: action line jump ${ref.type}")
             ai.risicloud.risime.ui.chat.VoiceJump.apply(vm.container, row, ref)
             flash = row.clientMsgId
             kotlinx.coroutines.delay(1_600)
