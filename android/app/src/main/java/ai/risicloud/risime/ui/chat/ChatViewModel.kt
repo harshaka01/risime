@@ -217,6 +217,11 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
         c.scope.launch { c.engine.retry(clientMsgId) }
     }
 
+    /** Item 3: the user's explicit "Send without encryption" for this one waiting message (the bubble then shows ⚠). */
+    fun sendWithoutEncryption(clientMsgId: String) {
+        c.scope.launch { c.engine.sendWithoutEncryption(clientMsgId) }
+    }
+
     fun delete(clientMsgId: String) {
         if (isImage(clientMsgId)) return imgs.delete(clientMsgId)
         c.scope.launch { c.engine.deleteFailed(clientMsgId) }

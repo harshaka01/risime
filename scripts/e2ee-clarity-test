@@ -1,0 +1,465 @@
+#!/usr/bin/env bash
+# Chat-list clarity gate (android, Harsha 2026-10-12; decision 048 encryption honesty). Two redroid phones on spark2
+# against a temp server from THIS checkout (E2EE on, TABS + Risi with scripts/fake-llm), fresh installs:
+#   scripts/e2ee-clarity-test [--apk app-debug.apk] [--keep]          (a DEBUG build: it uses the debug-only DM-add delay)
+#  1. A, B sign in through the real login UI; C is an account that never signs in (no phone has set up encryption).
+#  2. 1:1 A↔B becomes e2ee; B's chat list shows "🔒 <message>" (Private marker).            shot 65-list-private.png
+#  3. A starts Official in that chat and sends there; B's list shows "● <message>".        shot 65-list-official.png
+#  4. A → C (no E2EE possible yet): "Waiting for encryption…", never plaintext on its own; after 30 s the bubble offers
+#     "Send without encryption"; the tap sends it (the server stores exactly 1 plaintext message for A↔C) and the
+#     bubble and A's list show "⚠ Not encrypted".               shots 65-waiting-new-chat.png, 65-not-encrypted-*.png
+#  5. Reinstall: B delays adding new devices to its 1:1s by 25 s (debug seam files/debug-dm-add-delay-ms); A uninstalls,
+#     reinstalls and signs in (a new device); A's list shows the system line "Earlier messages…" with no padlock;
+#     B sends at once → "Waiting for encryption…" on B; once B adds A's new phone it goes out ENCRYPTED; A receives it
+#     with the lock; the server holds 0 plaintext messages in A↔B.  shots 65-system-line.png, 65-reinstall-*.png
+#  6. No FATAL EXCEPTION / ANR / main-thread DB on either phone.
+# Writes ~/risime-logs/e2ee-clarity-test/v<version>.result; prints "ECTEST PASS|FAIL <step>". Never touches :4000,
+# other sessions' redroids or containers. Screens are copied to docs/status/screens/ with --shots.
+set -euo pipefail
+CALLER_PWD="$PWD"
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+SUF="${EC_INSTANCE:-_ec}"; PORT="${EC_PORT:-4165}"; LLM_PORT="${EC_LLM_PORT:-8165}"; SHOTS=0
+APK=""; KEEP=0; VERSION=""; COMMIT=""
+while [ $# -gt 0 ]; do case "$1" in
+  --apk) APK="$2"; shift 2;; --version) VERSION="$2"; shift 2;; --commit) COMMIT="$2"; shift 2;;
+  --keep) KEEP=1; shift;; --shots) SHOTS=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
+case "$APK" in /*) ;; *) APK="$CALLER_PWD/$APK";; esac
+[ -f "$APK" ] || { echo "no APK at $APK"; exit 2; }
+BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* 2>/dev/null | sort -V | tail -1)"
+badging="$("$BT/aapt2" dump badging "$APK" | sed -n 1p)"
+PKG="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")"
+VN="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$badging")"
+case "$PKG" in ai.risicloud.risime|ai.risicloud.risime.debug) CLS=ai.risicloud.risime ;;
+  *) echo "e2ee-clarity-test is for ai.risicloud.risime(.debug), not '$PKG'"; exit 2 ;; esac
+VERSION="${VERSION:-$VN}"; COMMIT="${COMMIT:-$(git rev-parse HEAD)}"
+APK_SHA="$(sha256sum "$APK" | cut -d' ' -f1)"
+PATH="$("$REPO/scripts/android-target" adb):$PATH"
+I1="${EC_REDROID_A:--ec1}"; P1="${EC_REDROID_A_PORT:-5751}"
+I2="${EC_REDROID_B:--ec2}"; P2="${EC_REDROID_B_PORT:-5752}"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-ectest.XXXXXX")"
+OUTDIR="${EC_OUTDIR:-$HOME/risime-logs/e2ee-clarity-test}"; LOGS="$OUTDIR/run$SUF"; SHOTDIR="$LOGS/shots"; mkdir -p "$OUTDIR" "$LOGS" "$SHOTDIR"
+export RISIME_DEV_DB="risime_ectest$SUF" RISIME_DEV_KEYSPACE="risime_ectest$SUF" ERL_EPMD_ADDRESS=127.0.0.1
+export MIX_BUILD_PATH="$REPO/server/_build/ectest$SUF" RISIME_CODE_RELOADER=false
+RESULT=FAIL; REASON="not finished"; CHECKS=""; PUSH_NOTE="n/a"
+write_result() {
+  { echo "result=$RESULT"; echo "version=$VERSION"; echo "commit=$COMMIT"; echo "package=$PKG"; echo "apk_sha256=$APK_SHA"
+    echo "host=$(hostname)"; echo "device=redroid"; echo "time=$(date -u +%s)"; echo "checks=${CHECKS# }"
+    echo "push=$PUSH_NOTE"; echo "reason=$REASON"; } > "$OUTDIR/v$VERSION.result"
+  echo "==> result: $OUTDIR/v$VERSION.result ($RESULT)"
+}
+pass() { echo "ECTEST PASS $*"; }
+fail() { REASON="$*"; echo "ECTEST FAIL $*"; diag; write_result; exit 1; }
+diag() {
+  local d
+  for d in A B; do
+    [ -n "$(ser $d)" ] || continue
+    adb -s "$(ser $d)" exec-out screencap -p > "$LOGS/$d-screen.png" 2>/dev/null || true
+    adb -s "$(ser $d)" logcat -d > "$LOGS/$d-logcat.txt" 2>/dev/null || true
+    cp "$WORK/ui-$d.xml" "$LOGS/$d-ui.xml" 2>/dev/null || true
+  done
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  echo "    diagnostics in $LOGS"
+}
+SA=""; SB=""
+cleanup() {
+  local rc=$?
+  if [ "$rc" != 0 ] && [ "$REASON" = "not finished" ]; then REASON="aborted (exit $rc)"; write_result || true; fi
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  # This run's server and fake model only: their tmux sessions (never a pattern kill).
+  tmux kill-session -t "risime-ectest$SUF" 2>/dev/null || true
+  tmux kill-session -t "risime-ectest-llm$SUF" 2>/dev/null || true
+  if [ "$KEEP" = 0 ]; then
+    REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+    REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "${WORK:?}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+echo "==> e2ee clarity test: $PKG $VN ($(basename "$APK"), sha256 ${APK_SHA:0:12}), commit ${COMMIT:0:12}"
+
+# ---------------------------------------------------------------- server (E2EE, TABS + Risi with fake-llm)
+for p in "$PORT" "$LLM_PORT"; do ss -ltnH "sport = :$p" | grep -q . && { echo "port $p busy (EC_PORT / EC_LLM_PORT)"; exit 1; }; done
+[ -d server/deps ] || { echo "server/deps missing in $REPO (mix deps.get)"; exit 1; }
+echo "==> MLS NIF (--prod), throwaway keys, fake-llm on 127.0.0.1:$LLM_PORT"
+MLS_NIF_OUT="$WORK/librisime_mls_nif.so" timeout 1200 scripts/build-mls-nif --prod >/dev/null || { echo "scripts/build-mls-nif --prod failed"; exit 1; }
+umask 077
+{ echo "TABS=on"; echo "RISI=on"; echo "RISI_MLS_NIF=$WORK/librisime_mls_nif"; echo "RISI_LLM_URL=http://127.0.0.1:$LLM_PORT/v1"; echo "RISI_FALLBACK=off"
+  echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"; echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; } > "$WORK/risi.env"
+umask 022
+tmux new -d -s "risime-ectest-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT --record '$WORK/llm-requests.jsonl' >> '$WORK/fake-llm.out' 2>&1"
+for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && break; sleep 0.5; done
+curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" || { echo "fake-llm didn't start"; tail -5 "$WORK/fake-llm.out"; exit 1; }
+cat > "$WORK/fixtures.exs" <<'EXS'
+alias RisiMe.{Accounts, Repo}
+alias RisiMe.Accounts.User
+import Ecto.Query
+[mode | _] = System.argv()
+phones = ["+94770000961", "+94770000962", "+94770000963"]
+user! = fn p -> Repo.get_by!(User, phone: p) end
+conv = fn x, y -> RisiMe.Messaging.conversation_id(user!.(x).id, user!.(y).id) end
+case mode do
+  "setup" ->
+    for {p, l} <- Enum.zip(phones, ["A", "B", "C"]) do
+      {:ok, _} = Accounts.allow(%{phone: p, email: "ectest#{String.downcase(l)}@example.com", display_name: "ZZ EC #{l}", company: "Risi"})
+    end
+    IO.puts("ectest: setup ok")
+  "friends" ->
+    [a, b, c] = Enum.map(phones, &user!.(&1).id)
+    for {x, y} <- [{a, b}, {a, c}], do: RisiMe.Social.make_friends!(x, y)
+    IO.puts("ectest: friends ok")
+  "e2ee" ->
+    [pa, pb, _] = phones
+    IO.puts("ectest: e2ee=#{RisiMe.MLS.group(conv.(pa, pb)) != nil}")
+  "plain" ->
+    # Metadata only: how many message events of the A<->X 1:1 in A's inbox carry a plaintext body / a ciphertext.
+    [pa, pb, pc] = phones
+    other = if Enum.at(System.argv(), 1) == "C", do: pc, else: pb
+    cid = conv.(pa, other)
+    evs = RisiMe.Messaging.Store.impl().list_events(user!.(pa).id, nil, 5000, false)
+    msgs = Enum.filter(evs, &(&1.kind == "message" and &1.data["conversation_id"] == cid))
+    IO.puts("ectest: plain=#{Enum.count(msgs, &is_binary(&1.data["body"]))} enc=#{Enum.count(msgs, &is_binary(&1.data["ciphertext"]))}")
+  "a_devices" ->
+    a = user!.(hd(phones)).id
+    n = Repo.aggregate(from(d in RisiMe.Devices.Device, where: d.user_id == ^a and not is_nil(d.mls_signature_key)), :count)
+    IO.puts("ectest: a_devices=#{n}")
+  "risi" ->
+    :ok = RisiMe.Risi.seed()
+    IO.puts("ectest: risi ok")
+end
+EXS
+fx() { (cd server && set -a && . "$WORK/risi.env" && set +a && RISI_MLS_NIF=/nonexistent $M mix run "$WORK/fixtures.exs" "$@" 2>/dev/null | grep '^ectest:' || true); }
+echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB, E2EE on, TABS=on, RISI=on)"
+(cd server && { $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true; } && $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
+  || { echo "could not create/migrate the two-phone store"; exit 1; }
+(cd server && $M mix risime.attestation.gen "$WORK/attest.jwk" >/dev/null 2>&1) || true
+[ -f "$WORK/attest.jwk" ] || { echo "no attestation key"; exit 1; }
+(cd server && $M mix compile >/dev/null 2>&1) || { echo "server compile failed"; exit 1; }
+[ "$(fx risi)" = "ectest: risi ok" ] || { echo "fixture: risi seed"; exit 1; }
+: > "$WORK/server.log"
+tmux new -d -s "risime-ectest$SUF" "cd '$REPO/server' && set -a && . '$WORK/risi.env' && set +a && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
+  PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
+  ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix phx.server >> '$WORK/server.log' 2>&1"
+for _ in $(seq 1 180); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't start"; tail -20 "$WORK/server.log"; exit 1; }
+curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"tabs":"on"' || { echo "the temp server's /auth/config doesn't say tabs: on"; exit 1; }
+[ "$(fx setup)" = "ectest: setup ok" ] || { echo "fixture: setup"; exit 1; }
+otp() { grep -a "\[DEV OTP\] $1:" "$WORK/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true; }
+
+# ---------------------------------------------------------------- phones: fresh installs
+echo "==> two redroid containers ($I1:$P1, $I2:$P2)"
+SA="$(REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" start)" || fail "redroid A didn't start"
+SB="$(REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" start)" || fail "redroid B didn't start"
+ser() { case "$1" in A) echo "$SA";; B) echo "$SB";; esac; }
+DEV=""
+A() { adb -s "$(ser "$DEV")" "$@"; }
+install_fresh() {
+  A uninstall "$PKG" >/dev/null 2>&1 || true
+  A install "$APK" >/dev/null || fail "$DEV: fresh install of $PKG"
+  A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  A shell pm grant "$PKG" android.permission.RECORD_AUDIO 2>/dev/null || true
+  A shell appops set "$PKG" USE_FULL_SCREEN_INTENT allow 2>/dev/null || true
+  # Redroid's IME can hang system_server while binding (docs/status/android.md); `input text` still types.
+  A shell pm disable-user com.android.inputmethod.latin >/dev/null 2>&1 || true
+  A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+  A logcat -G 16M >/dev/null 2>&1 || true
+  A logcat -c || true
+}
+for DEV in A B; do install_fresh; done
+CHECKS+=" fresh_install"
+
+# ---- UI helpers (as scripts/ui-entry-test and scripts/call-device-test)
+dump() { A shell rm -f /sdcard/ui.xml >/dev/null 2>&1; A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui-$DEV.xml" 2>/dev/null || : > "$WORK/ui-$DEV.xml"; }
+has() { dump; grep -qF -- "$1" "$WORK/ui-$DEV.xml"; }
+wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "    [$DEV] timeout waiting for: $1"; return 1; }
+# The centre of the first node whose text or content-desc is $1 ("x*": text prefix; "~x": text/desc contains x;
+# "@x": content-desc equals x; "^x": text equals x).
+node_xy() {
+  dump
+  python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+want = sys.argv[2]
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+def hit(n):
+    t, d = n.get('text') or '', n.get('content-desc') or ''
+    if want.startswith('~'): return want[1:] in t or want[1:] in d
+    if want.startswith('@'): return d == want[1:]
+    if want.startswith('^'): return t == want[1:]
+    return t == want or d == want or (want.endswith('*') and t.startswith(want[:-1]))
+for n in nodes:
+    if hit(n):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+}
+wait_text() { for _ in $(seq 1 "${2:-30}"); do [ -n "$(node_xy "$1")" ] && return 0; sleep 1; done; echo "    [$DEV] timeout waiting for text: $1"; return 1; }
+tap() { local b; b="$(node_xy "$1")"; [ -n "$b" ] || { echo "    [$DEV] no UI node: $1"; return 1; }; A shell input tap $b; }
+clear_field() { A shell "for i in \$(seq 1 80); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true; }
+hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; [[ "$st" == *"mInputShown=true"* ]] && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
+type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
+dismiss_prompts() { has "Not now" && { tap "Not now" || true; }; has "Later" && { tap "Later" || true; }; risi_intro_ok; true; }
+# The one-time Official intro ("Risi listens in Official and helps with follow-ups." + OK) covers the tab row.
+risi_intro_ok() { grep -qF 'Risi listens in Official' "$WORK/ui-$DEV.xml" 2>/dev/null && { tap "OK" >/dev/null || true; sleep 1; }; true; }
+on_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui-$DEV.xml"; }
+wait_list() { for _ in $(seq 1 "${1:-30}"); do on_list && return 0; sleep 1; done; return 1; }
+back_to_list() {
+  for _ in 1 2 3 4 5 6; do
+    on_list && return 0
+    [ -s "$WORK/ui-$DEV.xml" ] || { sleep 1; continue; }
+    A shell input keyevent KEYCODE_BACK; sleep 1
+  done
+  on_list && return 0
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || true
+  wait_list 10
+}
+sign_in() {  # $1 phone, $2 email
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null
+  wait_for "Server:" 40 || return 1
+  tap "Server:*" || return 1; sleep 1
+  tap "Server URL" || tap "http://*" || tap "https://*" || return 1; sleep 0.5
+  clear_field; A shell input text "http://127.0.0.1:$PORT"; sleep 0.5; hide_keyboard
+  if ! tap "Use this server"; then tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; fi
+  sleep 2
+  for _ in $(seq 1 30); do has "Phone number" && break; has "Developer sign-in (OTP)" && tap "Developer sign-in (OTP)"; sleep 1; done
+  wait_for "Phone number" 5 || return 1
+  type_into "Phone number" "$1"; type_into "Work email" "$2"; hide_keyboard; tap "Send code" || return 1
+  wait_for "6-digit code" 30 || return 1
+  local code=""; for _ in $(seq 1 20); do code="$(otp "$1")"; [ -n "$code" ] && break; sleep 1; done
+  [ -n "$code" ] || return 1
+  type_into "6-digit code" "$code"; sleep 1; has "Verify" && tap "Verify" || true
+  wait_list 40 || return 1
+  dismiss_prompts
+}
+open_chat() {
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1; dismiss_prompts
+  back_to_list || { A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2; dismiss_prompts; }
+  wait_for "$1" 40 || return 1; tap "$1"; sleep 2
+}
+ENC="Encrypted message"   # the composer's placeholder in an e2ee chat
+# A chat with Risi on may open on its Official tab: switch to the Private tab (no-op when already there).
+private_tab() {
+  for _ in 1 2 3 4 5; do
+    dump; risi_intro_ok
+    has 'Risi is listening' || grep -qF 'Search in Official' "$WORK/ui-$DEV.xml" || return 0
+    tap "🔒 Private" >/dev/null || true; sleep 2
+  done
+  return 1
+}
+send_text() {  # $1 text
+  { type_into "$ENC" "$1" || type_into "Message" "$1"; } || return 1
+  sleep 0.5; tap "Send"
+}
+# The chat header's e2ee label (decision 048: the "End-to-end encrypted" subtitle or lock icon) and never the "Not end-to-end encrypted yet" strip.
+lock_shown() {
+  for _ in $(seq 1 "${1:-30}"); do
+    dump
+    # 1:1: the "End-to-end encrypted" subtitle/lock. Group: the header's "🔒 N members" is drawn as an unlabelled lock
+    # Icon + "N members" (HEADER_LOCK_PREFIX), invisible to uiautomator; the same `encrypted` flag gives the composer
+    # its "Encrypted message" placeholder, so a group counts with "N members" + that composer (never the strip).
+    ! grep -qF 'Not end-to-end encrypted yet' "$WORK/ui-$DEV.xml" && {
+      grep -qE '(text|content-desc)="End-to-end encrypted"|text="(&#128274;|🔒) [0-9]+ members?"|resource-id="risi_header_lock"' "$WORK/ui-$DEV.xml" \
+        || { grep -qE 'text="[0-9]+ members"' "$WORK/ui-$DEV.xml" && grep -qF "text=\"$ENC\"" "$WORK/ui-$DEV.xml"; }
+    } && return 0
+    sleep 1
+  done
+  echo "    [$DEV] no lock: $(grep -oE '(text|content-desc)="[^"]*(ncrypt)[^"]*"' "$WORK/ui-$DEV.xml" | head -3 | tr '\n' ' ')"
+  return 1
+}
+# The chat list's "New" FAB → its sheet's "New group" (nightly.48+), or an older "New group" FAB.
+tap_new_group() {
+  dump
+  if grep -qE '(text|content-desc)="New"' "$WORK/ui-$DEV.xml" && ! grep -qE '(text|content-desc)="New group"' "$WORK/ui-$DEV.xml"; then
+    tap "New" || return 1; sleep 2
+  fi
+  tap "New group"
+}
+# A small PNG (stdlib only) in the phone's Pictures, indexed so the Photo Picker shows it.
+push_photo() {
+  python3 -I - "$WORK/two-phone.png" <<'PY'
+import struct, sys, zlib
+w, h = 160, 120
+rows = b"".join(b"\x00" + b"".join(bytes((20, 90, 200) if 40 <= x < 120 and 30 <= y < 90 else (230, 120, 40)) for x in range(w)) for y in range(h))
+chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+PY
+  A push "$WORK/two-phone.png" /sdcard/Pictures/two-phone.png >/dev/null
+  A shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Pictures/two-phone.png >/dev/null
+}
+# Calls (as scripts/call-device-test): ringing = the incoming CallStyle notification on the `calls` channel.
+ringing() { local out; out="$(A shell dumpsys notification --noredact 2>/dev/null || true)"; grep -q "pkg=$PKG .*channel=calls " <<<"$out"; }
+wait_ring() { for _ in $(seq 1 "${1:-30}"); do ringing && return 0; sleep 1; done; return 1; }
+answer_intent() {
+  A shell cmd statusbar expand-notifications >/dev/null 2>&1 || true
+  wait_for "Answer" 10 || return 1
+  tap "Answer" || return 1
+  sleep 1
+  A shell cmd statusbar collapse >/dev/null 2>&1 || true
+}
+media_ok() { local out; out="$(A logcat -d 2>/dev/null || true)"; grep -E "call stats: pair=(host|prflx)/(host|prflx) .*dtls=connected srtp=[A-Z_0-9]+" <<<"$out" | tail -1 || true; }
+# The Official tab of the open DM with a usable composer; starts Official the first time. The "Risi is listening"
+# strip can drop out of the accessibility tree (nightly.49): 'Search in Official' counts as well.
+official_tab() {
+  local i
+  for i in $(seq 1 90); do
+    dump; risi_intro_ok
+    has 'text="Message"' && { grep -qF 'Risi is listening' "$WORK/ui-$DEV.xml" || grep -qF 'Search in Official' "$WORK/ui-$DEV.xml"; } && return 0
+    grep -qF 'text="Start Official"' "$WORK/ui-$DEV.xml" && { tap "Start Official" || true; sleep 2; continue; }
+    [ $((i % 10)) = 1 ] && { tap "● Official" || true; }
+    sleep 1
+  done
+  echo "    [$DEV] official_tab: $(grep -o 'text="[^"]*"' "$WORK/ui-$DEV.xml" | grep -v 'text=""' | head -30 | tr '\n' ' ')"
+  return 1
+}
+logcat_ok() {  # $1 label: every phone, no crash / ANR / main-thread DB for the package
+  local d out
+  for d in A B C; do
+    DEV=$d; out="$(A logcat -d 2>/dev/null || true)"
+    printf '%s\n' "$out" | "$REPO/scripts/logcat-gate" "$1 $d" || fail "$1: $d crashed or touched the database on the main thread"
+    grep -qE "ANR in $PKG( |\$|:)" <<<"$out" && fail "$1: ANR in $PKG on $d"
+  done
+  return 0
+}
+
+logcat_ok() {  # $1 label: both phones, no crash / ANR / main-thread DB for the package
+  local d out
+  for d in A B; do
+    DEV=$d; out="$(A logcat -d 2>/dev/null || true)"
+    printf '%s\n' "$out" | "$REPO/scripts/logcat-gate" "$1 $d" || fail "$1: $d crashed or touched the database on the main thread"
+    grep -qE "ANR in $PKG( |\$|:)" <<<"$out" && fail "$1: ANR in $PKG on $d"
+  done
+  return 0
+}
+shot() { A exec-out screencap -p > "$SHOTDIR/65-$1.png" 2>/dev/null || true; echo "    shot 65-$1.png"; }
+# The chat list row's subtitle: the first text node after the row whose title is $1 (entities decoded).
+row_sub() {
+  dump
+  python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import sys, xml.etree.ElementTree as ET
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+seen = False
+for n in nodes:
+    t = n.get('text') or ''
+    if not t:
+        continue
+    if seen:
+        print(t); break
+    if t == sys.argv[2]:
+        seen = True
+PY
+}
+# Wait until the row $1's subtitle satisfies the python expression $2 over `s` (e.g. "s.startswith('🔒 ')").
+wait_row() {
+  local s=""
+  for _ in $(seq 1 "${3:-60}"); do
+    s="$(row_sub "$1")"
+    python3 -I -c "import sys; s=sys.argv[1]; sys.exit(0 if ($2) else 1)" "$s" && { echo "    [$DEV] row '$1': $s"; return 0; }
+    sleep 1
+  done
+  echo "    [$DEV] row '$1' subtitle: '$s'"; return 1
+}
+skip_restore() { has 'text="Skip restore?"' && tap "^Skip" >/dev/null; has "Restore chats" && { tap "^Skip" >/dev/null && sleep 1 && tap "^Skip" >/dev/null; }; true; }
+
+# ---------------------------------------------------------------- 1. sign in, friends (C never signs in)
+DEV=A; sign_in "+94770000961" "ectesta@example.com" || fail "sign-in A"
+DEV=B; sign_in "+94770000962" "ectestb@example.com" || fail "sign-in B"
+[ "$(fx friends)" = "ectest: friends ok" ] || fail "fixture: friends"
+for DEV in A B; do A shell am force-stop "$PKG"; done
+pass "A and B signed in (fresh installs); C has no phone yet"; CHECKS+=" sign_in"
+
+# ---------------------------------------------------------------- 2. Private: e2ee DM, 🔒 in the list
+DEV=B; open_chat "ZZ EC A" || fail "B: the chat with A isn't listed"
+DEV=A; open_chat "ZZ EC B" || fail "A: the chat with B isn't listed"
+for _ in $(seq 1 60); do [ "$(fx e2ee)" = "ectest: e2ee=true" ] && break; sleep 2; done
+[ "$(fx e2ee)" = "ectest: e2ee=true" ] || fail "the DM never became e2ee"
+lock_shown 60 || fail "A: no lock in the DM header"
+send_text "ec-private-1" || fail "A can't send in the DM"
+DEV=B; open_chat "ZZ EC A" || fail "B: DM"
+wait_for "ec-private-1" 60 || fail "B never received A's message"
+lock_shown 60 || fail "B: no lock in the DM header"
+back_to_list || fail "B: back to the list"
+wait_row "ZZ EC A" "s == '🔒 ec-private-1'" 30 || fail "B's list doesn't show '🔒 ec-private-1'"
+shot list-private
+pass "Private: B's list shows 🔒 before the e2ee message"; CHECKS+=" list_private"
+
+# ---------------------------------------------------------------- 3. Official: ● in the list
+DEV=A; open_chat "ZZ EC B" || fail "A: DM for Official"
+tap "● Official" || true; sleep 1
+official_tab || fail "A: the DM's Official tab didn't open"
+tap "Message" || true; sleep 0.5
+A shell input text "ec-official-1"; sleep 0.5
+tap "Send" || fail "A: send in Official"
+DEV=B; back_to_list || true
+wait_row "ZZ EC A" "s == '● ec-official-1'" 120 || fail "B's list doesn't show '● ec-official-1'"
+shot list-official
+pass "Official: B's list shows ● before the Official message"; CHECKS+=" list_official"
+
+# ---------------------------------------------------------------- 4. no E2EE possible: hold, explicit fallback, ⚠
+DEV=A; hide_keyboard; back_to_list || fail "A: back to the list"
+open_chat "ZZ EC C" || fail "A: the chat with C isn't listed"
+send_text "ec-plain-1" || fail "A can't send to C"
+wait_text "~Waiting for encryption" 30 || fail "A → C: no 'Waiting for encryption…'"
+shot waiting-new-chat
+[ "$(fx plain C)" = "ectest: plain=0 enc=0" ] || fail "A → C went out while waiting: $(fx plain C)"
+wait_text "~Tap to send without encryption" 60 || fail "A → C: no 'Send without encryption' offer after 30 s"
+[ "$(fx plain C)" = "ectest: plain=0 enc=0" ] || fail "A → C went out in plaintext on its own: $(fx plain C)"
+pass "A → C held as 'Waiting for encryption…' for 30 s, nothing sent"; CHECKS+=" hold_no_auto_plaintext"
+shot waiting-offer
+tap "^ec-plain-1" || fail "A: can't tap the waiting bubble"
+wait_text "^Send without encryption" 10 || fail "A: the bubble's sheet has no 'Send without encryption'"
+tap "^Send without encryption" || fail "A: tap 'Send without encryption'"
+wait_text "~Not encrypted" 30 || fail "A: the bubble doesn't show ⚠ Not encrypted"
+for _ in $(seq 1 30); do [ "$(fx plain C)" = "ectest: plain=1 enc=0" ] && break; sleep 1; done
+[ "$(fx plain C)" = "ectest: plain=1 enc=0" ] || fail "server: A → C should hold exactly 1 plaintext message: $(fx plain C)"
+shot not-encrypted-bubble
+hide_keyboard; back_to_list || fail "A: back to the list"
+wait_row "ZZ EC C" "s == '⚠ Not encrypted · You: ec-plain-1'" 30 || fail "A's list doesn't show '⚠ Not encrypted · You: ec-plain-1'"
+wait_row "ZZ EC B" "s == '● You: ec-official-1'" 30 || fail "A's list doesn't show '● You: ec-official-1'"
+shot list-markers
+pass "explicit 'Send without encryption': 1 plaintext message on the server, ⚠ on the bubble and in the list"; CHECKS+=" explicit_plaintext list_not_encrypted"
+
+# ---------------------------------------------------------------- 5. reinstall: B's message waits, then goes encrypted
+DEV=B; A shell run-as "$PKG" sh -c 'echo 25000 > files/debug-dm-add-delay-ms' || fail "B: debug seam (a debug APK is needed)"
+open_chat "ZZ EC A" || fail "B: DM before A's reinstall"
+private_tab || fail "B: Private tab"
+DEV=A; install_fresh
+sign_in "+94770000961" "ectesta@example.com" || { skip_restore; wait_list 30; } || fail "sign-in A after the reinstall"
+skip_restore; dismiss_prompts
+for _ in $(seq 1 60); do [ "$(fx a_devices)" = "ectest: a_devices=2" ] && break; sleep 1; done
+[ "$(fx a_devices)" = "ectest: a_devices=2" ] || fail "A's new phone has no MLS device on the server: $(fx a_devices)"
+DEV=B; send_text "ec-after-reinstall" || fail "B can't send right after A's reinstall"
+wait_text "~Waiting for encryption" 15 || fail "B: no 'Waiting for encryption…' while A's new phone isn't in the chat"
+shot reinstall-b-waiting
+pass "B's message waits for A's new phone"; CHECKS+=" reinstall_hold"
+DEV=A; back_to_list || true
+wait_row "ZZ EC B" "s.startswith('Earlier messages') and '🔒' not in s and '●' not in s" 60 || fail "A's list: the system line should show without a padlock"
+shot system-line
+pass "system line in the list without a padlock"; CHECKS+=" system_line_no_lock"
+DEV=B; ok=""
+for _ in $(seq 1 120); do [ -z "$(node_xy "~Waiting for encryption")" ] && { ok=1; break; }; sleep 1; done
+[ -n "$ok" ] || fail "B's message never left 'Waiting for encryption…'"
+shot reinstall-b-sent
+DEV=A; open_chat "ZZ EC B" || fail "A: DM after the reinstall"
+private_tab || true
+wait_for "ec-after-reinstall" 90 || fail "A never received B's message after the reinstall"
+lock_shown 60 || fail "A: no lock after the reinstall"
+[ -z "$(node_xy "~Not encrypted")" ] || fail "A: B's message shows Not encrypted"
+shot reinstall-a-received
+p="$(fx plain B)"; case "$p" in "ectest: plain=0 enc="[1-9]*) ;; *) fail "server: A↔B must hold no plaintext message: $p";; esac
+pass "after A's reinstall B's message went out encrypted ($p); A shows it with the lock"; CHECKS+=" reinstall_encrypted no_plaintext"
+DEV=B; back_to_list || true
+wait_row "ZZ EC A" "s == '🔒 You: ec-after-reinstall'" 30 || fail "B's list doesn't show '🔒 You: ec-after-reinstall'"
+
+# ---------------------------------------------------------------- 6. crash / ANR
+logcat_ok "final"
+pass "no FATAL EXCEPTION / ANR / main-thread DB on A and B"; CHECKS+=" logcat_clean"
+if [ "$SHOTS" = 1 ]; then cp "$SHOTDIR"/65-*.png "$REPO/docs/status/screens/"; echo "==> screens copied to docs/status/screens/65-*.png"; fi
+RESULT=PASS; REASON=ok; write_result
+echo "ECTEST OK"

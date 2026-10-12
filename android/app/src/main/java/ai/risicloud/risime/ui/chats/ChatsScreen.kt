@@ -407,6 +407,31 @@ fun connectionLabel(s: ConnectionState, slow: Boolean = false): String? = when (
     ConnectionState.AuthFailed -> "Signed out"
 }
 
+/** Item 1: the marker of a message sent or received without end-to-end encryption. */
+const val NOT_ENCRYPTED_MARK = "⚠ Not encrypted · "
+
+/**
+ * Item 1/2 (Harsha 2026-10-12, decision 048): the one marker before a chat's last message, never blank for a message:
+ * "🔒 " Private (end-to-end encrypted), "● " Official, "⚠ Not encrypted · " sent or received without E2EE. A system line
+ * ("Earlier messages aren't available on this device") or an empty group row has none (and never a padlock).
+ * [e2eeChat]: this phone holds the chat's MLS group (decides an older row with no recorded state).
+ */
+fun previewMarker(last: ai.risicloud.risime.data.db.LastMessage?, tab: ai.risicloud.risime.data.tabs.Tab?, e2eeChat: Boolean): String {
+    val m = last ?: return ""
+    if (m.kind == ai.risicloud.risime.data.db.MessageEntity.KIND_SYSTEM) return ""
+    if (m.from.isEmpty() && m.body.isEmpty()) return "" // a group row with no message yet carries a placeholder
+    return when {
+        m.e2ee == ai.risicloud.risime.data.db.MessageEntity.E2EE_PLAIN || m.e2ee == ai.risicloud.risime.data.db.MessageEntity.E2EE_PLAIN_OK -> NOT_ENCRYPTED_MARK
+        tab == ai.risicloud.risime.data.tabs.Tab.OFFICIAL -> "● "
+        m.e2ee == ai.risicloud.risime.data.db.MessageEntity.E2EE_YES -> "🔒 "
+        ai.risicloud.risime.net.isGroupConversation(m.conversationId) -> "🔒 " // groups are e2ee-only
+        !m.outgoing && m.fromDevice != null -> "🔒 " // came through MLS (rows from before v17)
+        m.outgoing && m.status == ai.risicloud.risime.data.MessageStatus.PENDING.name -> "🔒 " // it only goes out encrypted
+        e2eeChat -> "🔒 "
+        else -> NOT_ENCRYPTED_MARK
+    }
+}
+
 /** §24.9 the small tab icon before a chat's last message (only while tabs are on and the chat has an Official tab). */
 fun tabIcon(tab: ai.risicloud.risime.data.tabs.Tab?): String = when (tab) {
     ai.risicloud.risime.data.tabs.Tab.PRIVATE -> "🔒 "
@@ -422,7 +447,7 @@ internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> 
         !row.friend -> "Not friends any more"
         !row.registered -> "Waiting for them to confirm their phone"
         row.typing -> TYPING_LABEL
-        row.last != null -> tabIcon(row.lastTab) + dmPreview(row.last)
+        row.last != null -> previewMarker(row.last, row.lastTab, row.e2ee) + dmPreview(row.last)
         // v1.32 UI batch: no "last seen" in the list (it stays in the chat header / info).
         row.vouchedBy != null -> "vouched by ${row.vouchedBy}"
         else -> row.company
@@ -476,10 +501,11 @@ private fun GroupRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> 
         row.typingLabel != null -> row.typingLabel
         row.stateLine != null -> row.stateLine
         last == null || lastText.isEmpty() -> "Group"
-        last.kind == ai.risicloud.risime.data.db.MessageEntity.KIND_DELETED -> tabIcon(row.lastTab) + lastText
-        last.outgoing -> tabIcon(row.lastTab) + "You: $lastText"
-        row.lastSender != null -> tabIcon(row.lastTab) + "${row.lastSender}: $lastText"
-        else -> tabIcon(row.lastTab) + lastText
+        last.kind == ai.risicloud.risime.data.db.MessageEntity.KIND_DELETED -> previewMarker(last, row.lastTab, true) + lastText
+        last.kind == ai.risicloud.risime.data.db.MessageEntity.KIND_SYSTEM -> lastText // item 2: no padlock on a system line
+        last.outgoing -> previewMarker(last, row.lastTab, true) + "You: $lastText"
+        row.lastSender != null -> previewMarker(last, row.lastTab, true) + "${row.lastSender}: $lastText"
+        else -> previewMarker(last, row.lastTab, true) + lastText
     }
     ListRow(
         title = row.name,

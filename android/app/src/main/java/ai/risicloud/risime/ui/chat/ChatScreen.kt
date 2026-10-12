@@ -260,6 +260,7 @@ fun ChatScreen(
                             sharedBy = ai.risicloud.risime.ui.history.sharedByLabel(item.m) { id -> if (id.equals(vm.peerId, true)) name else "your contact" },
                             tail = ai.risicloud.risime.ui.common.startsRun(items, i),
                             x = x,
+                            onSendWithoutEncryption = vm::sendWithoutEncryption,
                         ) }
                     }
                 }
@@ -359,12 +360,17 @@ internal fun Bubble(
     tail: Boolean = true,
     /** v1.34 §33: forwarded label, quote, star, file card and the extra menu items (null: off). */
     x: ChatMessaging? = null,
+    /** Item 3: "Send without encryption" for my 1:1 message still waiting for encryption (null: not offered here). */
+    onSendWithoutEncryption: ((String) -> Unit)? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val extras = x?.let { bubbleExtras(m, it.rows, it.starred, it.nameOf, it.onJump) }
     var selectText by remember { mutableStateOf(false) }
     if (selectText) SelectTextDialog(m.body) { selectText = false }
     val failed = m.status == MessageStatus.FAILED.name
+    val waiting = encryptionWait(m)
+    // A photo/file is never sent in plaintext: it only waits (no "Send without encryption").
+    val offerPlain = onSendWithoutEncryption != null && waiting == EncryptionWait.LONG && !m.media
     var sheet by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
@@ -378,6 +384,8 @@ internal fun Bubble(
         mine = m.outgoing,
         status = if (m.outgoing) MessageStatus.valueOf(m.status) else null,
         note = when {
+            waiting != null -> if (offerPlain) WAITING_FOR_ENCRYPTION_LONG_NOTE else WAITING_FOR_ENCRYPTION_NOTE
+            !failed && m.notEncrypted -> NOT_ENCRYPTED_NOTE
             !failed -> if (m.deleteUnverified) ai.risicloud.risime.data.deletes.DeleteRules.UNVERIFIED_NOTE else null
             m.failReason == AuthErrors.NOT_FRIENDS -> "Not sent — you're not friends"
             m.failReason == AuthErrors.TOO_LONG -> "Not sent — too long"
@@ -385,7 +393,7 @@ internal fun Bubble(
             retryable -> "Not sent — tap to retry or delete"
             else -> "Not sent — tap to delete"
         },
-        tapOpensMenu = failed && sel?.selecting != true,
+        tapOpensMenu = (failed || offerPlain) && sel?.selecting != true,
         onMenu = { if (sel?.selecting == true) sel.onToggle() else sheet = true },
         selected = sel?.selected == true || (x?.flash != null && x.flash == m.clientMsgId),
         noteIsInfo = !failed,
@@ -411,6 +419,7 @@ internal fun Bubble(
                 addAll(messagingMenuItems(m, x, context) { selectText = true })
             } else if (!m.image || m.body.isNotBlank()) add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
             if (retryable) add("Retry" to { onRetry(m.clientMsgId) })
+            if (offerPlain) add(SEND_WITHOUT_ENCRYPTION to { onSendWithoutEncryption?.invoke(m.clientMsgId) })
             // §15.7 (android S-d): with the delete UI on, a never-accepted row's action is "Discard".
             if (failed) add((if (sel != null) "Discard" else "Delete") to { onDelete(m.clientMsgId) })
             if (sel != null && !failed) {
@@ -429,6 +438,24 @@ internal fun Bubble(
             info = sharedBy,
         )
     }
+}
+
+/** Item 3: the bubble note while my 1:1 message waits for encryption (never sent in plaintext on its own). */
+const val WAITING_FOR_ENCRYPTION_NOTE = "Waiting for encryption…"
+const val WAITING_FOR_ENCRYPTION_LONG_NOTE = "Waiting for encryption… Tap to send without encryption"
+const val SEND_WITHOUT_ENCRYPTION = "Send without encryption"
+
+/** Item 1/3: a message that went (or came) without end-to-end encryption. */
+const val NOT_ENCRYPTED_NOTE = "⚠ Not encrypted"
+
+enum class EncryptionWait { SHORT, LONG }
+
+/** Item 3: my unsent message held for encryption ([ChatEngine.E2EE_WAITING] / [ChatEngine.E2EE_WAITING_LONG]); null otherwise. */
+fun encryptionWait(m: ai.risicloud.risime.data.db.MessageEntity): EncryptionWait? = when {
+    !m.outgoing || m.status != MessageStatus.PENDING.name -> null
+    m.failReason == ai.risicloud.risime.data.ChatEngine.E2EE_WAITING -> EncryptionWait.SHORT
+    m.failReason == ai.risicloud.risime.data.ChatEngine.E2EE_WAITING_LONG -> EncryptionWait.LONG
+    else -> null
 }
 
 /** §9: a former friend's chat is read-only; offer a new friend request instead of a composer. */

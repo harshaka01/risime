@@ -117,6 +117,16 @@ class FakeMessageDao : MessageDao {
             .map { (k, v) -> UnreadCount(k, v) },
     )
 
+    override suspend fun setE2ee(clientMsgId: String, e2ee: String?) {
+        rows[clientMsgId]?.let { rows[clientMsgId] = it.copy(e2ee = e2ee) }
+    }
+
+    override suspend fun allowPlaintext(clientMsgId: String): Int {
+        val r = rows[clientMsgId]?.takeIf { it.outgoing && it.messageId == null && (it.status == "PENDING" || it.status == "FAILED") } ?: return 0
+        rows[clientMsgId] = r.copy(e2ee = MessageEntity.E2EE_PLAIN_OK, status = "PENDING", failReason = null)
+        return 1
+    }
+
     override suspend fun retryFailed(clientMsgId: String): Int {
         val r = rows[clientMsgId]?.takeIf { it.status == "FAILED" } ?: return 0
         rows[clientMsgId] = r.copy(status = "PENDING", failReason = null)

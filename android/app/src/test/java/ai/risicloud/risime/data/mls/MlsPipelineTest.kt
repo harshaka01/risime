@@ -1,6 +1,7 @@
 package ai.risicloud.risime.data.mls
 
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -430,15 +431,18 @@ class MlsPipelineTest {
         assertEquals("PENDING", messages.rows[id2]!!.status)
     }
 
-    @Test fun e2eeRequiredOnPlaintextCatchesUpThenEncrypts() = runTest {
+    @Test fun aDmWithoutALocalGroupNeverTriesPlaintextAndEncryptsOnceTheGroupIsHere() = runTest {
+        // Chat-list clarity item 3 (was: a plaintext attempt, e2ee_required, catch up, encrypt): no plaintext attempt at all.
         realtime.sendReplies = { PushResult.Rejected("e2ee_required") }
-        onCatchUp = { mls.groups[conv] = GroupRef(conv, 1, 1) } // the catch-up delivered our Welcome
         val e = engine()
         val id = e.sendText(peer, "z")!!
-        advanceUntilIdle()
-        assertEquals(1, realtime.sent.size) // the plaintext attempt
+        advanceTimeBy(1_000)
+        assertEquals(0, realtime.sent.size)
+        assertEquals("PENDING", messages.rows[id]!!.status)
+        mls.groups[conv] = GroupRef(conv, 1, 1) // our Welcome arrived
+        e.flushOutbox()
+        assertEquals(0, realtime.sent.size)
         assertEquals(1, realtime.sentEncrypted.size)
         assertEquals("SENT", messages.rows[id]!!.status)
-        assertFalse(catchUps.isEmpty())
     }
 }

@@ -93,7 +93,8 @@ class UiBatch20261010Test {
         )
         rule.setContent { RisiMeTheme { ChatRowItem(row, onClick = {}) } }
         rule.onNodeWithText("Kamal").assertIsDisplayed()
-        rule.onNodeWithText("see you").assertIsDisplayed()
+        // Chat-list clarity: the preview carries its marker (here ⚠: no recorded e2ee state and no group on this phone).
+        rule.onNodeWithText("see you", substring = true).assertIsDisplayed()
         assertEquals(0, rule.onAllNodesWithText("last seen", substring = true, ignoreCase = true).fetchSemanticsNodes().size)
     }
 

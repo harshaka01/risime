@@ -114,7 +114,10 @@ class GroupChatEngineTest {
         val dm = e.sendText(peer, "dm still flows")!!
         advanceUntilIdle()
         assertEquals("PENDING", messages.rows[waiting]!!.status)
-        assertEquals("SENT", messages.rows[dm]!!.status)
+        // Chat-list clarity item 3: a DM without its MLS group waits for encryption too (never plaintext on its own).
+        assertEquals("PENDING", messages.rows[dm]!!.status)
+        assertTrue(messages.rows[dm]!!.failReason in setOf(ai.risicloud.risime.data.ChatEngine.E2EE_WAITING, ai.risicloud.risime.data.ChatEngine.E2EE_WAITING_LONG))
+        assertTrue(realtime.sent.isEmpty())
         assertEquals(dmConversationId(me, peer), messages.rows[dm]!!.conversationId)
 
         joinGroup()
