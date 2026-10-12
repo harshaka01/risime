@@ -13,6 +13,12 @@ defmodule RisiMe.MLS.Images do
   The `deletes` capability (v1.12 §15.1) is computed the same way into `deletes_ready` /
   `missing_deletes`, also for plaintext DMs (`deletes_ready` doesn't require e2ee; an instance
   without MLS capabilities counts as missing).
+
+  Agent members (`users.kind = 'agent'`, i.e. Risi in an Official chat, §24) are left out of
+  `images`, `files` and `voice` readiness: an agent has no app instance and reads media through
+  its own §24.11 tree, so it never blocks or appears in `missing_images` / `missing_files` /
+  `missing_voice`. §14.1 says "every member user" and predates agent members (v1.24); this reads it
+  as every human member, as §20.1 already does for `group_calls_ready`.
   """
   import Ecto.Query
 
@@ -27,10 +33,11 @@ defmodule RisiMe.MLS.Images do
   """
   def put_readiness(%{e2ee: e2ee} = view, conversation_id, caller \\ nil) do
     members = member_ids(conversation_id)
-    missing = missing(members, "images")
+    humans = members -- RisiMe.Risi.agents(members)
+    missing = missing(humans, "images")
     missing_deletes = missing(members, "deletes")
-    missing_files = missing(members, "files")
-    missing_voice = missing(members, "voice")
+    missing_files = missing(humans, "files")
+    missing_voice = missing(humans, "voice")
 
     view
     |> Map.merge(%{
