@@ -9,6 +9,10 @@
 #     warm latency within ASR_SMOKE_MAX_S (default 10 s; first, cold call ASR_SMOKE_MAX_COLD_S, 60 s);
 #   - a 3 s silence clip (built in memory) returns empty text (route reason no_speech);
 #   - POST /v1/audio/compare returns every candidate with text, language and processing_s;
+#   - Sinhala script (PROTOCOL v1.40 §36): the si clip through model=auto comes back in Sinhala
+#     script (script_ok, not romanised, no retry); compare on the si clip carries script +
+#     romanised per model and both Sinhala-tuned models pass; the retry logic is exercised inside
+#     the container with a fake runner whose first output is forced Latin (no live hook exists);
 #   - no residual files: the container filesystem is unchanged by the run (docker diff) and its
 #     tmpfs mounts hold nothing but Triton's compiled kernels (no audio).
 # Per-model latency and the container's memory are printed. The key is never printed.
@@ -135,6 +139,14 @@ for rnd in ("cold", "warm"):
         if dt > lim:
             fail(f"{name} ({rnd}): {dt:.2f}s > {lim}s")
         lat.setdefault(out["model"], []).append((rnd, dt, out["load_s"], out["duration"]))
+        if lang == "si" and r.get("fallback") != "memory":
+            sc = out.get("script") or {}
+            if not (out.get("script_ok") is True and out.get("romanised") is False
+                    and sc.get("sinhala_chars", 0) > 0):
+                fail(f"{name}: not Sinhala script: script={sc} script_ok={out.get('script_ok')} "
+                     f"romanised={out.get('romanised')} retried_with={out.get('retried_with')}")
+            print(f"ok   {rnd} si script: {sc['sinhala_chars']} Sinhala / {sc['latin_chars']} "
+                  f"Latin chars, retried_with={out.get('retried_with')}")
         print(f"ok   {rnd} {lang}: -> {out['model']} (p={r.get('probability')}, "
               f"detect {r.get('detect_s')}s, load {out['load_s']}s), {out['duration']:.1f}s audio "
               f"in {dt:.2f}s, CER {c:.0%}: {out['text']}")
@@ -164,7 +176,11 @@ for lang, name, ref in clips[:2]:
     got = [r["model"] for r in out["results"]]
     if got != served:
         fail(f"compare models {got}, want {served}")
-    bad = [r for r in out["results"] if "error" in r or not r["text"].strip()]
+    # Memory floor (other workloads on the host): reported loudly, like fallback: memory above.
+    nomem = [r for r in out["results"] if str(r.get("error", "")).startswith("not enough memory")]
+    for r in nomem:
+        print(f"WARN compare {lang}: {r['model']} not run (memory floor)")
+    bad = [r for r in out["results"] if r not in nomem and ("error" in r or not r["text"].strip())]
     if bad:
         fail(f"compare: {bad}")
     if out["routed_model"] != ROUTE[lang]:
@@ -172,8 +188,21 @@ for lang, name, ref in clips[:2]:
     print(f"ok   compare {lang} ({dt:.1f}s total, detected {out['detected']['language']} "
           f"p={out['detected']['probability']}):")
     for r in out["results"]:
+        if r in nomem:
+            continue
+        sc = ""
+        if lang == "si":
+            if "script" not in r or "romanised" not in r:
+                fail(f"compare si: {r['model']} lacks script/romanised")
+            s_ = r["script"]
+            sc = (f" script {'ok' if s_['ok'] else 'ROMANISED'} si={s_['sinhala_chars']} "
+                  f"latin={s_['latin_chars']}")
+            if r["model"] in ("whisper-small-sinhala", "whisper-large-v3-sinhala") and not s_["ok"]:
+                fail(f"compare si: {r['model']} romanised: {r['text'][:80]!r}")
+        elif "script" in r:
+            fail(f"compare {lang}: unexpected script check on {r['model']}")
         print(f"       {r['model']:30s} {r['processing_s']:6.2f}s (load {r['load_s']:.1f}s) "
-              f"CER {cer(ref.strip(), r['text']):4.0%} lang={r['language']}: {r['text'][:70]}")
+              f"CER {cer(ref.strip(), r['text']):4.0%} lang={r['language']}{sc}: {r['text'][:70]}")
 
 print("info latency per model (request wall time, s):")
 for m, xs in lat.items():
@@ -207,6 +236,46 @@ loaded = [m["id"] for m in get("/v1/models")["data"] if m.get("loaded")]
 print(f"info loaded {loaded}; host MemAvailable {mem['available_mb']} MB "
       f"(floor {mem['min_available_mb']}, budget {mem['budget_mb']} MB)")
 PY
+
+# Sinhala retry fixture: the service's own run_si with a fake runner (no model, no audio).
+fx="$(docker exec "$container" python3 -I -B -c '
+import sys
+sys.path.insert(0, "/app")
+import server as S
+
+SI, LATIN = "හෙට උදේ දහයට හමුවෙමු.", "heta ude dahayata hamuwemu."
+def fake(outputs, calls, nomem=()):
+    def runner(name, audio, language=None, prompt=None, unload_after=False, **kw):
+        assert language == "si" and prompt == S.SI_PROMPT, (language, prompt)
+        calls.append(name)
+        if name in nomem:
+            raise S.NoMemory(name)
+        return {"text": outputs[name], "model": name, "processing_s": 0.1, "load_s": 0.0}
+    return runner
+def check(first, outputs, want_model, want_retry, want_rom, nomem=()):
+    calls = []
+    r = S.run_si(first, None, runner=fake(outputs, calls, nomem))
+    got = (r["model"], r["retried_with"], r["romanised"], r["script_ok"])
+    want = (want_model, want_retry, want_rom, not want_rom)
+    assert got == want, (first, outputs, nomem, got, want, calls)
+    assert len([c for c in calls if c not in nomem]) <= 2, calls
+    print(f"ok   si retry fixture: {first} -> {calls} => model={got[0]} retried_with={got[1]} romanised={got[2]}")
+sm, lg = "whisper-small-sinhala", "whisper-large-v3-sinhala"
+assert S.script_check(SI)[0]["ok"] and S.script_check(LATIN)[1] and not S.script_check("")[1]
+assert S.script_check(LATIN)[0]["latin_chars"] == 23 and S.script_check(SI)[0]["latin_chars"] == 0
+check(sm, {sm: SI, lg: SI}, sm, None, False)
+if lg in S.SPECS:
+    check(sm, {sm: LATIN, lg: SI}, lg, lg, False)
+    check(lg, {lg: LATIN, sm: SI}, sm, sm, False)
+    check(sm, {sm: LATIN, lg: LATIN}, lg, lg, True)
+    check(sm, {sm: LATIN, lg: SI}, sm, None, True, nomem=(lg,))
+    check(S.DEFAULT, {S.DEFAULT: LATIN, lg: SI, sm: SI}, sm, sm, False, nomem=(lg,))
+else:
+    check(S.DEFAULT, {S.DEFAULT: LATIN, sm: SI}, sm, sm, False)
+print("FIXTURE PASS")
+' 2>&1)" || fail "si retry fixture: $fx"
+grep -q '^FIXTURE PASS$' <<<"$fx" || fail "si retry fixture: $fx"
+grep '^ok ' <<<"$fx"
 
 # Residual files: read-only root (docker diff unchanged); tmpfs mounts hold no audio.
 diff1="$(docker diff "$container" 2>/dev/null | sort || true)"
