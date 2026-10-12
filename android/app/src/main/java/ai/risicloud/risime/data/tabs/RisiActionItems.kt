@@ -120,14 +120,43 @@ object RisiActionItems {
         }
     }
 
+    /** v1.43 §38.9 point 6: the "couldn't hear clearly" card's text, every reason, in the card's language. */
+    const val UNCLEAR_EN = "I couldn't hear this clearly."
+    const val UNCLEAR_SI = "මට මෙය පැහැදිලිව ඇසුණේ නැහැ."
+    const val UNCLEAR_TA = "இதை என்னால் தெளிவாகக் கேட்க முடியவில்லை."
+
     /** §38.2 the "couldn't hear clearly" card's text (no items, never a guess). */
-    fun unclearText(card: RisiActionCard): String {
-        val what = if (card.source == RisiKinds142.SOURCE_VOICE_NOTE) "this voice note" else "this call"
-        return when (card.reason) {
-            RisiKinds142.REASON_NO_SPEECH -> "Risi couldn't hear any speech in $what, so it made no action items."
-            else -> "Risi couldn't hear $what clearly, so it made no action items."
-        }
+    fun unclearText(card: RisiActionCard): String = when (card.lang) {
+        "si" -> UNCLEAR_SI
+        "ta" -> UNCLEAR_TA
+        else -> UNCLEAR_EN
     }
+
+    /** v1.43 §38.9 point 1: "It's mine" under an unowned item, and how long it may be claimed. */
+    const val ITS_MINE = "It's mine"
+    const val CLAIM_WINDOW_MS = 48L * 3_600_000
+
+    /** v1.43 §38.9 point 5: under the buttons when the owner's Reminders skill is off (nothing is turned on). */
+    const val REMINDERS_NOTE = "Reminders come here in your Risi chat. Phone reminders (the Reminders skill) stay off."
+
+    /** The item with its live owner: the card's, else the newest `item_update`'s (a claim, §38.9). */
+    fun live(item: ActionItem, views: Map<String, LedgerItemView>): ActionItem =
+        if (item.owner != null) item else views[item.itemId.lowercase()]?.owner?.let { item.copy(owner = it) } ?: item
+
+    /**
+     * §38.9 [It's mine] on the Official card: an unowned item still without an owner, within 48 h of the card
+     * ([postedMs], its server time), not cancelled, not just claimed from this phone, and the screen not read-only.
+     */
+    fun canClaim(item: ActionItem, views: Map<String, LedgerItemView>, postedMs: Long?, nowMs: Long, awaiting: Set<String>, readOnly: Boolean): Boolean {
+        if (readOnly || !item.claim || live(item, views).owner != null) return false
+        if (state(item, views) == RisiItemStates.CANCELLED) return false
+        if (item.itemId.lowercase() in awaiting) return false
+        return postedMs == null || nowMs < postedMs + CLAIM_WINDOW_MS
+    }
+
+    /** §38.9 the Reminders skill is off: the card explains [REMINDERS_NOTE] under [Remind me]. */
+    fun remindersNote(card: RisiActionCard, buttons: List<String>): String? =
+        REMINDERS_NOTE.takeIf { card.remindersSkill == ai.risicloud.risime.net.RisiActions143.REMINDERS_OFF && RisiKinds142.BUTTON_REMIND in buttons }
 
     /** §38.4 past `expires_at`: proposed items are no longer offered. */
     fun expired(card: RisiActionCard, nowMs: Long): Boolean {
@@ -166,10 +195,14 @@ object RisiActionItems {
      * §38.4 [Add to calendar] with a usable time: a timed due in the future → `due` … `due + 60 min`. Null: no usable
      * time (no due, an all-day due, a past due); the phone opens the picker first and never guesses one.
      */
-    fun calendarSlot(item: ActionItem, nowMs: Long): Slot? {
-        if (item.allDay) return null
+    fun calendarSlot(item: ActionItem, nowMs: Long, zone: ZoneId = ZoneId.systemDefault()): Slot? {
         val due = item.due?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() } ?: return null
         if (due <= nowMs) return null
+        if (item.allDay) {
+            // v1.43 §38.9 point 3: an all-day due → an all-day event on that date (00:00 to 00:00 the next day).
+            val day = Instant.ofEpochMilli(due).atZone(zone).toLocalDate()
+            return Slot(day.atStartOfDay(zone).toInstant().toEpochMilli(), day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli(), true)
+        }
         return Slot(due, due + EVENT_MS, false)
     }
 
@@ -184,8 +217,11 @@ object RisiActionItems {
     private val WHEN = DateTimeFormatter.ofPattern("EEE d MMM, HH:mm", Locale.ENGLISH)
     private val HM = DateTimeFormatter.ofPattern("HH:mm", Locale.ENGLISH)
 
-    /** "Wed 14 Oct, 10:00–11:00" in the phone's zone. */
+    private val DAY = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
+
+    /** "Wed 14 Oct, 10:00–11:00" in the phone's zone; an all-day slot "Fri 16 Oct (all day)". */
     fun slotLabel(s: Slot, zone: ZoneId = ZoneId.systemDefault()): String {
+        if (s.allDay) return DAY.format(Instant.ofEpochMilli(s.startMs).atZone(zone)) + " (all day)"
         val a = Instant.ofEpochMilli(s.startMs).atZone(zone)
         val b = Instant.ofEpochMilli(s.endMs).atZone(zone)
         return if (a.toLocalDate() == b.toLocalDate()) WHEN.format(a) + "–" + HM.format(b) else WHEN.format(a) + " – " + WHEN.format(b)

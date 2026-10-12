@@ -84,6 +84,9 @@ interface RisiHost {
     /** v1.42 §38.4 `item_calendar` / `item_remind` / `item_not_mine` in this (the owner's Risi) chat, with the confirmed `edit`. */
     fun actItem142(itemId: String, action: String, edit: kotlinx.serialization.json.JsonObject?) {}
 
+    /** v1.43 §38.9 [It's mine] on the Official card: `item_claim` in this user's own Risi chat. */
+    fun claimItem(itemId: String) {}
+
     /** v1.42 §38.3 an item's line in another conversation: open it there (scrolled, highlighted; a note seeked). */
     fun openLine(conversationId: String, ref: ai.risicloud.risime.net.SourceRef) {}
 

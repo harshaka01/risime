@@ -71,13 +71,24 @@ internal fun ActionItemsCardBody(row: MessageEntity, card: RisiActionCard, ctx: 
             return@Column
         }
         card.summary?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-        val shown = card.items.filter { RisiActionItems.visible(it, RisiActionItems.state(it, ctx.itemViews), me) }
+        // v1.43 §38.9 the live owner: a claimed item shows its claimer.
+        val shown = card.items.map { RisiActionItems.live(it, ctx.itemViews) }.filter { RisiActionItems.visible(it, RisiActionItems.state(it, ctx.itemViews), me) }
         if (shown.isEmpty()) {
             Text("No open items.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        val posted = remember(row.serverTs) { ai.risicloud.risime.data.HistoryMarkers.epochMs(row.serverTs) }
+        var claimed by remember(row.messageId) { mutableStateOf(emptySet<String>()) }
         RisiActionItems.grouped(shown).forEach { (kind, items) ->
             Text(RisiActionItems.kindTitle(kind), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("risi_action_kind_$kind"))
-            items.forEach { item -> ActionItemLine(item, RisiActionItems.state(item, ctx.itemViews), expired = false, ctx = ctx, conversationId = null) }
+            items.forEach { item ->
+                ActionItemLine(item, RisiActionItems.state(item, ctx.itemViews), expired = false, ctx = ctx, conversationId = null)
+                if (RisiActionItems.canClaim(item, ctx.itemViews, posted, ctx.nowMs, ctx.awaiting + claimed, ctx.readOnly) && ctx.host.risiChatAvailable()) {
+                    OutlinedButton(
+                        onClick = { claimed = claimed + item.itemId.lowercase(); ctx.host.claimItem(item.itemId) },
+                        modifier = Modifier.testTag("risi_action_claim"),
+                    ) { Text(RisiActionItems.ITS_MINE, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                }
+            }
         }
         if (shown.any { it.ledger }) {
             Text(RisiActionItems.OWNERS_CONFIRM, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -142,6 +153,9 @@ internal fun ActionConfirmCardBody(row: MessageEntity, card: RisiActionCard, ctx
             }
             left++
             ConfirmItem(item, state, expired, ctx, conv)
+            RisiActionItems.remindersNote(card, RisiActionItems.buttons(item, state, me, expired, ctx.awaiting, ctx.readOnly))?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_action_reminders_note"))
+            }
         }
         if (left == 0 && card.items.isNotEmpty() && card.items.all { RisiActionItems.state(it, views) == RisiItemStates.CANCELLED }) {
             Text(RisiActionItems.NOTHING_LEFT, style = MaterialTheme.typography.bodySmall)

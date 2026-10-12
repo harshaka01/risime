@@ -616,6 +616,17 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
             viewModelScope.launch { requests.actItem142(itemId, action, edit) }
         }
 
+        override fun claimItem(itemId: String) {
+            // v1.43 §38.9 the claim goes to the claimer's own Risi chat (where their confirm card will come).
+            val rc = risiChatId() ?: return
+            viewModelScope.launch {
+                ai.risicloud.risime.data.tabs.RisiRequests(
+                    isOfficial = { c.db.chatTabs().get(rc)?.official == true || rc.lowercase() in c.chatTabs.pendingRisi.value },
+                    send = { c.engine.sendRisiControl(rc, it) },
+                ).claim(itemId)
+            }
+        }
+
         override fun openLine(conversationId: String, ref: ai.risicloud.risime.net.SourceRef) =
             c.risiUi.openChat(conversationId, ai.risicloud.risime.data.tabs.RisiUiBus.Focus(line = ref))
 

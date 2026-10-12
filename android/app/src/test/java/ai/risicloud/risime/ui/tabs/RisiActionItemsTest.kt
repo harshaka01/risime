@@ -149,7 +149,11 @@ class RisiActionItemsTest {
     @Test fun noUsableTimeMeansThePickerNeverAGuess() {
         val i = card("envelope_risi_action_confirm.json").items.single()
         assertNull(RisiActionItems.calendarSlot(i.copy(due = null), now))
-        assertNull(RisiActionItems.calendarSlot(i.copy(allDay = true), now))
+        // v1.43 §38.9: an all-day due is an all-day slot on that date (never a guessed hour).
+        val zone = java.time.ZoneId.of("Asia/Colombo")
+        val day = RisiActionItems.calendarSlot(i.copy(allDay = true, due = "2026-10-16T18:29:59.999Z"), now, zone)!!
+        assertTrue(day.allDay && day.endMs - day.startMs == 86_400_000L)
+        assertEquals("Fri 16 Oct (all day)", RisiActionItems.slotLabel(day, zone))
         assertNull(RisiActionItems.calendarSlot(i, Instant.parse("2026-10-14T00:00:00Z").toEpochMilli()))
         assertNull(RisiActionItems.remindAt(i.copy(due = null), now))
         assertNull(RisiActionItems.remindAt(i, Instant.parse("2026-10-13T11:00:00Z").toEpochMilli()))
@@ -211,8 +215,72 @@ class RisiActionItemsTest {
     @Test fun unclearCardSaysSoAndListsNothing() {
         show(Host(kamal), listOf(row("envelope_risi_action_items_unclear.json")))
         rule.onNodeWithTag("risi_action_items_unclear").assertIsDisplayed()
-        rule.onNodeWithText("Risi couldn't hear this call clearly, so it made no action items.").assertIsDisplayed()
+        // v1.43 §38.9: "I couldn't hear this clearly" in the card's language (this one is Sinhala).
+        rule.onNodeWithText(RisiActionItems.UNCLEAR_SI).assertIsDisplayed()
         assertTrue(rule.onAllNodes(hasTestTag("risi_action_item")).fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test fun unclearTextByLanguage() {
+        val c = card("envelope_risi_action_items_unclear.json")
+        assertEquals("I couldn't hear this clearly.", RisiActionItems.unclearText(c.copy(lang = "en")))
+        assertEquals(RisiActionItems.UNCLEAR_TA, RisiActionItems.unclearText(c.copy(lang = "ta")))
+        assertEquals(RisiActionItems.UNCLEAR_EN, RisiActionItems.unclearText(c.copy(lang = null, reason = RisiKinds142.REASON_NO_SPEECH)))
+    }
+
+    // ---- v1.43 §38.9 ask, never guess ----
+
+    private class ClaimHost(override val me: String) : RisiHost {
+        val claims = mutableListOf<String>()
+        override fun ask(text: String) {}
+        override fun summarise() {}
+        override fun report() {}
+        override fun act(target: String, action: String, editText: String?, editDue: String?) {}
+        override fun feedback(callRef: String, rating: String, reason: String?) {}
+        override fun claimItem(itemId: String) { claims += itemId }
+        override fun risiChatAvailable(): Boolean = true
+    }
+
+    @Test fun unownedItemAsksAndAnyMemberClaimsIt() {
+        val r = row("envelope_risi_action_items_v143.json")
+        val c = card("envelope_risi_action_items_v143.json")
+        val task = c.items.single { it.claim }
+        val host = ClaimHost(kamal)
+        // The card's own time is 2026-10-12T12:31Z; now is 12:40Z: within 48 h.
+        val ctx = risiCardContext(host, listOf(r), { names[it.lowercase()] ?: "Someone" }, now, onRef = {})
+        rule.setContent { RisiMeTheme { Column { RisiCardRow(r, RisiMessages.meta(r)!!, ctx) } } }
+        rule.onNodeWithText("Unassigned", substring = true).assertIsDisplayed()
+        rule.onNodeWithTag("risi_action_claim").performClick()
+        assertEquals(listOf(task.itemId), host.claims)
+        // Once tapped the button goes (the item_update with the owner follows).
+        assertTrue(rule.onAllNodes(hasTestTag("risi_action_claim")).fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test fun claimedItemShowsItsOwnerAndNoButton() {
+        val c = card("envelope_risi_action_items_v143.json")
+        val task = c.items.single { it.claim }
+        val upd = ProtocolJson.decodeFromString<ai.risicloud.risime.net.RisiTextEnvelope>(example("envelope_risi_item_update_v143.json")).risi!!
+        val views = mapOf(task.itemId.lowercase() to LedgerItemView(task.itemId, c.summaryId, upd.owner, emptyList(), task.text, null, false, null, RisiItemStates.PROPOSED, upd.by))
+        assertEquals(kamal, RisiActionItems.live(task, views).owner)
+        assertFalse(RisiActionItems.canClaim(task, views, null, now, emptySet(), false))
+        assertFalse("not after 48 h", RisiActionItems.canClaim(task, emptyMap(), now - RisiActionItems.CLAIM_WINDOW_MS, now, emptySet(), false))
+        assertFalse("read-only", RisiActionItems.canClaim(task, emptyMap(), null, now, emptySet(), true))
+        assertFalse("an owned item is never claimable", RisiActionItems.canClaim(c.items.single { !it.claim }, emptyMap(), null, now, emptySet(), false))
+        // RisiLedger takes the owner from a state-only item_update (no text, no due: the card keeps its own).
+        val m = row("envelope_risi_item_update_v143.json", conv = risiChat)
+        val v = RisiLedger.items(listOf(m))[task.itemId.lowercase()]!!
+        assertEquals(kamal, v.owner)
+        assertEquals(RisiItemStates.PROPOSED, v.state)
+    }
+
+    @Test fun remindersOffIsExplainedNotTurnedOn() {
+        val c = card("envelope_risi_action_confirm_v143.json")
+        val i = c.items.single()
+        assertEquals(RisiActionItems.REMINDERS_NOTE, RisiActionItems.remindersNote(c, i.buttons))
+        assertNull(RisiActionItems.remindersNote(c.copy(remindersSkill = "ask"), i.buttons))
+        assertNull(RisiActionItems.remindersNote(c, i.buttons - RisiKinds142.BUTTON_REMIND))
+        show(Host(harsha), listOf(row("envelope_risi_action_confirm_v143.json", conv = risiChat)))
+        rule.onNodeWithTag("risi_action_reminders_note").assertIsDisplayed()
+        rule.onNodeWithTag("risi_action_remind").assertIsDisplayed()
     }
 
     @Test fun voiceNoteCardNamesTheNoteAndJumpsToIt() {

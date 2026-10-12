@@ -18,7 +18,7 @@ object RisiControl {
     const val TYPE_ACTION = "risi_action"
 
     val REQUEST_ACTIONS = setOf("ask", "summarise", "report")
-    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS + V127_ACTIONS + ai.risicloud.risime.net.RisiActions129.ALL + ai.risicloud.risime.net.RisiActions130.ALL + ai.risicloud.risime.net.RisiKinds141.ACTION_TRANSCRIPT_DELETE + ai.risicloud.risime.net.RisiActions142.ALL
+    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS + V127_ACTIONS + ai.risicloud.risime.net.RisiActions129.ALL + ai.risicloud.risime.net.RisiActions130.ALL + ai.risicloud.risime.net.RisiKinds141.ACTION_TRANSCRIPT_DELETE + ai.risicloud.risime.net.RisiActions142.ALL + ai.risicloud.risime.net.RisiActions143.ITEM_CLAIM
 
     /** §25.4 (v1.25): on a confirm card (`write_id`) or a group reminder (`reminder_id`). */
     val V125_ACTIONS: Set<String> get() = setOf("confirm_write", "cancel_write", "me_too", "not_me")
@@ -133,6 +133,7 @@ object RisiControl {
             "item_decline" -> "Declined an item"
             "item_edit" -> "Edited an item"
             "item_reopen" -> "Reopened an item"
+            ai.risicloud.risime.net.RisiActions143.ITEM_CLAIM -> "Said an item is mine"
             ai.risicloud.risime.net.RisiActions142.ITEM_CALENDAR -> "Added an item to the calendar"
             ai.risicloud.risime.net.RisiActions142.ITEM_REMIND -> "Asked for a reminder"
             ai.risicloud.risime.net.RisiActions142.ITEM_NOT_MINE -> "Said an item isn't theirs"
@@ -260,6 +261,13 @@ class RisiRequests(
     suspend fun actItem142(itemId: String, action: String, edit: JsonObject?): Boolean {
         if (action !in ai.risicloud.risime.net.RisiActions142.ALL || !isOfficial()) return false
         send(RisiControl.action(itemId, action, writeEdit = edit))
+        return true
+    }
+
+    /** v1.43 §38.9 `item_claim` ("It's mine"; `edit: null`), sent in the claimer's own Risi chat. */
+    suspend fun claim(itemId: String): Boolean {
+        if (itemId.isBlank() || !isOfficial()) return false
+        send(RisiControl.action(itemId, ai.risicloud.risime.net.RisiActions143.ITEM_CLAIM))
         return true
     }
 

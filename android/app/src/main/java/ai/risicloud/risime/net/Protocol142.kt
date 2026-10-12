@@ -60,6 +60,14 @@ object RisiKinds142 {
     val BUTTONS = listOf(BUTTON_ADD_PROMISE, BUTTON_ADD_CALENDAR, BUTTON_REMIND, BUTTON_NOT_MINE, BUTTON_EDIT)
 }
 
+/** v1.43 §38.9 "It's mine": `item_claim` (in the claimer's own Risi chat, `target` = `item_id`, `edit: null`). */
+object RisiActions143 {
+    const val ITEM_CLAIM = "item_claim"
+
+    /** §38.9 point 5: the Reminders skill is off (Remind me still works, in the Risi chat). */
+    const val REMINDERS_OFF = "off"
+}
+
 /** §38.4 the new `risi_action`s (sent in the owner's own Risi chat, `target` = `item_id`). */
 object RisiActions142 {
     const val ITEM_CALENDAR = "item_calendar"
@@ -112,6 +120,8 @@ data class ActionItem(
     val state: String? = null,
     @SerialName("source_ref") val sourceRef: SourceRef? = null,
     val buttons: List<String> = emptyList(),
+    /** v1.43 §38.9 an unowned promise/task/meeting any member may claim ("It's mine"). */
+    val claim: Boolean = false,
 ) {
     /** A ledger item: promise/task/meeting with an owner. */
     val ledger: Boolean get() = kind in RisiKinds142.LEDGER_KINDS && owner != null
@@ -138,6 +148,8 @@ data class RisiActionCard(
     @Serializable(with = StringOrListSerializer::class)
     @SerialName("for") val forUsers: List<String> = emptyList(),
     @SerialName("expires_at") val expiresAt: String? = null,
+    /** v1.43 §38.9 the owner's Reminders skill when posted ("off" | "ask" | "allowed"; null: unknown). */
+    @SerialName("reminders_skill") val remindersSkill: String? = null,
     @SerialName("call_ref") val callRef: String? = null,
     @SerialName("made_by") val madeBy: RisiMadeBy? = null,
     val notify: List<String> = emptyList(),
@@ -165,7 +177,13 @@ data class RisiActionCard(
             if (c.unclear) return c.copy(items = emptyList())
             val items = c.items.filter { i ->
                 i.kind in RisiKinds142.ITEM_KINDS && i.text.isNotBlank() && i.text.length <= MAX_TEXT && i.itemId.isNotBlank()
-            }.map { i -> i.copy(buttons = i.buttons.filter { it in RisiKinds142.BUTTONS }) }
+            }.map { i ->
+                i.copy(
+                    buttons = i.buttons.filter { it in RisiKinds142.BUTTONS },
+                    // v1.43 only an unowned promise/task/meeting is claimable.
+                    claim = i.claim && i.owner == null && i.kind in RisiKinds142.LEDGER_KINDS,
+                )
+            }
             return c.copy(items = items)
         }
     }
