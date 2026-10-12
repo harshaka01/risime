@@ -5,6 +5,122 @@ Root side track, 2026-10-10. It answers which open model should serve Risi next 
 **Nothing was switched.** Switching is a separate change that needs Harsha's yes.
 Rerun everything with `scripts/risi-eval` (see "How to rerun").
 
+## ASR eval 2026-10-12 (held-out sets; supersedes the 2026-10-10 Sinhala numbers)
+Harsha's real call (2026-10-12): English good, Sinhala poor. The 2026-10-10 "14.5% WER" of
+whisper-small-sinhala came from the SPEAK-ASR YouTube test, which may overlap its training data,
+so this round scores every model **only on clips its training data doesn't contain**
+(`in_training_of` in the manifest; `scripts/asr-eval`, `scripts/asr-eval-data.py`,
+docs/status/asr-eval.md). Clips go through the speech service itself (same loaders, prompt and
+language forcing as production), in ≤ 15 s chunks like call audio. WER/CER are corpus totals after
+NFC, lower-case, punctuation and ZWJ removal. **Sinhala WER is inflated by word spacing**
+(පිට කොටුවයි vs පිටකොටුවයි), so CER is the better Sinhala signal.
+**No pilot clips:** the server keeps no call audio (decision 066). **No in-house recordings yet:**
+the request is in docs/status/asr-eval.md; they become the deciding set when they arrive.
+
+### Test sets (audio in ~/risime-eval-data, outside Git)
+| Set | Clips | What | Held out for |
+|---|---|---|---|
+| `omni-si` | 60 (64 min) | `facebook/omnilingual-asr-corpus` sin_Sinh **test**: spontaneous answers to prompts, 1 speaker, CC BY 4.0 | every fine-tune; **in-domain** for omnilingual-ctc-1b (Meta trained on the corpus' train split) |
+| `yt5-si` | 47 | SPEAK-ASR YouTube test, only the 5 channels Nerdstorm held out (Carnage, Newsfirst, Arogya, Anoma's Kitchen, Hera's Diary); conversational, half code-mixed | all except whisper-small-sinhala (its pool has 2% YouTube of unknown origin: excluded) |
+| `yt-si` | 50 | SPEAK-ASR YouTube test (the 2026-10-10 set) | not for whisper-small-sinhala, Qwen3-ASR-0.6B-Sinhala (trained on 25 of its channels) |
+| `slr30-si` | 36 (12 speakers) | OpenSLR SLR30, read sentences, CC BY-SA 4.0 | all evaluated models |
+| `fleurs-ta` | 50 | FLEURS ta_in **test**, read, CC BY 4.0 | all (lemuralabs / vasista22 used FLEURS train/dev only) |
+| `fleurs-en` | 20 | FLEURS en_us test | all |
+| `synth-cs` | 6 si+en, 6 ta+en | **synthetic**: a si/ta clip + 0.3 s + an English clip, levelled to the same loudness (no real code-switched recordings exist yet) | all |
+
+### Sinhala (CER / WER; – = in training data, excluded)
+| Model (runtime, size) | omni-si spontaneous | yt5-si conversational | slr30-si read | yt-si | RTF | Licence |
+|---|---|---|---|---|---|---|
+| **Nerdstorm/Qwen3-ASR-0.6B-Sinhala** rev 2 (MLX 8-bit → bf16, transformers; 1.56 GB) | **13.3% / 33.1%** | **21.2% / 42.0%** (card: 20.5% CER on the same channels) | 8.9% / 38.2% | – | 0.20 | CC BY-SA 4.0 |
+| facebook omniASR-CTC-1B (OpenVoiceOS ONNX int8, CPU; 1.03 GB) | 9.5% / 37.8% (in-domain) | 30.2% / 56.8% | 7.4% / 44.2% | 30.6% / 55.3% | 0.05 (CPU) | Apache-2.0 |
+| SinhaSpeech/whisper-small-sinhala run11 (**routed until now**; CT2 fp16; 0.97 GB) | 20.4% / 37.4% | – (6.3% if counted: likely overlap) | **5.2% / 35.3%** | – (9.1%) | 0.03–0.08 | Apache-2.0 |
+| SPEAK-ASR/faster-whisper-medium-si-exp10 (CT2 fp16; 1.53 GB) | 23.1% / 47.9% | 36.0% / 59.0% | 6.4% / 35.3% | 38.8% / 60.0% | 0.12 | **none stated** |
+| janiduchamika/whisper-small-sinhala-general-185k (CT2 fp16; 0.97 GB) | 23.7% / 52.7% | – (not run) | 6.3% / 35.3% | 39.7% / 68.0% | 0.07 | Apache-2.0 |
+| kasunw/whisper-large-v3-sinhala (CT2 int8; on disk since 10-10) | not finished (memory floor) | not finished | not finished | 35.8% / 54.8% (11 clips) | 0.27 | Apache-2.0 |
+| faster-whisper large-v3 (`language=si` + prompt) | – | – | 88.3% / 107.4% | – | 2.2 | MIT |
+
+**Reading:** on read speech the old route (small) is best, but calls are spontaneous. On the two
+clean conversational sets Qwen3-ASR-0.6B-Sinhala is clearly ahead of every Whisper fine-tune
+(omni-si CER 13.3% vs 20.4% for the routed small model; yt5-si 21.2% vs 30–36% for the others).
+whisper-small-sinhala's 6–9% on the YouTube sets next to 20% on omni-si fits training overlap,
+as Harsha suspected. **Nothing reaches ~20% WER** on spontaneous speech (best 33%) →
+docs/status/asr-finetune-plan.md.
+
+### Tamil (FLEURS ta_in test, read speech)
+| Model | CER / WER | RTF | Licence |
+|---|---|---|---|
+| lemuralabs/tamil-asr-qwen3 (**routed**, 4.1 GB bf16, ~6.7 GB resident) | 15.2% / 32.6% | 0.36 | Apache-2.0 |
+| vasista22/whisper-tamil-medium (CT2 int8 of mohankumars26; 0.78 GB) | 15.5% / 31.9% | 0.4 | Apache-2.0 |
+| vasista22/whisper-tamil-small (CT2 fp16; 0.97 GB) | 15.8% / 31.8% | 0.6 | Apache-2.0 |
+| omniASR-CTC-1B (ONNX int8, CPU) | 15.2% / 43.4% | 0.06 | Apache-2.0 |
+| faster-whisper large-v3 (`language=ta`) | 21.6% / 57.4% | 0.6 | MIT |
+
+**Reading:** tamil-asr-qwen3 and the 0.78 GB whisper-tamil-medium tie on FLEURS (15.2% vs
+15.5% CER); both beat large-v3 (21.6%). The ta route stays (no eval reason to change it), and
+whisper-tamil-medium becomes its **memory fallback** (tamil-asr-qwen3 could not even load in
+the first smoke run tonight: MemAvailable floor) and a compare candidate. FLEURS is read speech:
+Tamil recordings will decide between the two.
+
+English (FLEURS en_us, 20 clips): large-v3 2.5% CER / 3.9% WER (unchanged, stays routed);
+omniASR-CTC-1B 3.4% / 9.9% (no punctuation or case).
+
+### Code-switching (synthetic si+en / ta+en, plus the real code-mixed yt5-si clips)
+`en kept` = English words of the reference that come back in Latin letters.
+- **whisper-small-sinhala (and the 185k model):** drops the English sentence entirely (en kept
+  0%) or writes it as phonetic Sinhala ("මෙන්න small අතු රස්පියුන්බර්…" for "The smaller the
+  Rossby number…"). Single English words inside Sinhala sentences mostly survive (yt-si).
+- **Qwen3-ASR-0.6B-Sinhala:** keeps English words in English letters inside Sinhala sentences
+  (yt5-si: en kept 53%, script 89% Sinhala as the references are). Synthetic si+en: 3 of 6 clips
+  come back with the English sentence correctly in English; the other 3 turn it into Sinhala-script
+  syllables that **loop** ("න්‍ර්මිය න්‍ර්මිය …") until the token cap (CER 71.5% on the set). The
+  loop is a known Qwen3-ASR failure on out-of-language audio; the service caps tokens by length.
+- **tamil-asr-qwen3:** writes English as **Tamil-script transliteration** ("ரீவ் கரண்ட்ஸ் …
+  வேவ்ஸ் பிரேக்கிங்" for "Rip currents … waves breaking"), en kept 0%; one clip drops it.
+- **omniASR-CTC-1B:** switches script with the speech: Sinhala in Sinhala, English in Latin (en
+  kept 52% on synthetic si+en), but occasionally emits Tamil or Telugu letters inside Sinhala words
+  (no language conditioning).
+- **SPEAK-ASR medium:** transliterates part of the English (en kept 44%).
+- **Tamil fine-tunes (small/medium):** drop the English sentence (en kept 0%).
+- **`model=auto` (production routing):** the detector decides once per chunk. In the synthetic
+  ta+en chunks it picked **en** every time, and large-v3 then dropped the Tamil or **translated it
+  into English** ("As soon as these expectations came true, Britain and Germany…"). In si+en
+  chunks it picked si 4×, en 2×: whatever language wins, the other half is lost. Real Singlish and
+  Tanglish are mostly English words inside Sinhala/Tamil sentences, where the Sinhala route
+  (Qwen) handles them; whole-sentence switches inside one chunk remain a gap (follow-up: shorter
+  chunks or VAD-segment-level detection).
+
+### Production change (decision 071 amendment c)
+- `model=auto` routes **si → qwen3-asr-0.6b-sinhala** (forced "language Sinhala", the Sinhala
+  prompt as context). whisper-small-sinhala stays loaded as its script retry and memory fallback
+  (`WHISPER_KEEP`, `WHISPER_SI_RETRY_ORDER=whisper-small-sinhala,qwen3-asr-0.6b-sinhala`); a
+  NoMemory on the routed model now falls back to the small model before large-v3.
+- ta and en routes unchanged (tamil-asr-qwen3, large-v3). New: a NoMemory on tamil-asr-qwen3
+  falls back to whisper-tamil-medium (`WHISPER_TA_FALLBACK`) before large-v3.
+- Memory: large-v3 3.0 + small 1.0 + Qwen-si 3.5 + tamil-asr-qwen3 6.7 GB > the 11 GB budget, so
+  a Tamil chunk evicts the Sinhala Qwen (reload 0.6–0.9 s from page cache) and vice versa; fine
+  for the pilot, revisit if si and ta calls overlap often.
+- Deployed 2026-10-12 ~19:50 UTC; `scripts/asr-smoke` PASS (si → Qwen CER 0% on the test clip,
+  warm 2.1 s; ta → tamil-asr-qwen3; en → large-v3; compare per language; retry fixtures; no
+  residual files).
+- Compare (no models list) runs per detected language: si → Qwen, small, omniASR-CTC-1B;
+  ta → tamil-asr-qwen3, whisper-tamil-medium, omniASR-CTC-1B, large-v3; en → large-v3, turbo.
+- Rollback of the routing alone: `WHISPER_ROUTE_SI=whisper-small-sinhala` in `.env`; of the
+  image: `image:` back to `…-asr3`.
+
+### Over 2 GB: download list for Harsha's OK (nothing here was downloaded)
+| Repo | Files (bytes) | Licence | Why |
+|---|---|---|---|
+| `TriLinSL/nemotron-3.5-asr-streaming-si-ta-en-210h` | `best_model/model.nemo` 2,490,736,640 | OpenMDW-1.1 | one streaming model for si + ta + en with code-switching; reported si 8.96% / ta 8.00% CER on its own held-out speakers; needs NeMo in the image |
+| `facebook/omniASR-LLM-1B` | `omniASR-LLM-1B.pt` 9,103,136,284 | Apache-2.0 | the language-conditioned Omnilingual model (fixes the CTC's stray scripts); fairseq2 runtime |
+| `facebook/omniASR-LLM-7B` | `omniASR-LLM-7B.pt` 31,205,087,103 | Apache-2.0 | the only published Sinhala CER (7.2%); reference ceiling, too big next to risi-l1 |
+| `facebook/omniASR-CTC-1B` (or `aadel4/omniASR-CTC-1B-v2`, transformers port) | 3,900,517,028 (3,902,806,784) | Apache-2.0 | fp32 / GPU version of the CTC tested here in int8 on CPU |
+| `openai/whisper-medium` + `SPEAK-ASR/whisper-si-exp-10-medium-all` (LoRA 119,186,168) | `model.safetensors` 3,055,544,304 | Apache-2.0 | SPEAK-ASR's medium trained on OpenSLR + YouTube (the exp10 tested here is OpenSLR only) |
+| `vasista22/whisper-tamil-large-v2` | `pytorch_model.bin` 6,173,647,530 | Apache-2.0 | only if a Tamil Whisper must beat the 0.78 GB medium |
+| OpenSLR 52 (fine-tune data) | 16 zips, ~14 GB | CC BY-SA 4.0 | replay data for the fine-tune plan |
+Not needed: kasunw/whisper-large-v3-sinhala and lemuralabs/tamil-asr-qwen3 are already on disk.
+No Sinhala exists in FLEURS, Common Voice (21 untranscribed clips), Qwen3-ASR base, SeamlessM4T,
+Canary or MMS (`facebook/mms-1b-all` has no Sinhala adapter and is CC BY-NC).
+
 ## 0. Results (2026-10-10)
 
 ### Headline findings
@@ -24,7 +140,7 @@ Rerun everything with `scripts/risi-eval` (see "How to rerun").
 2. **Speech:** whisper large-v3, which is live, is unusable for Sinhala (108% WER) and weak for
    Tamil (58% WER).
    - **SinhaSpeech/whisper-small-sinhala** gets **14.5% WER / 5.7% CER** on YouTube Sinhala
-     (possible overlap with its training data: confirm on Harsha's recordings).
+     (**superseded 2026-10-12**: likely training overlap; see "ASR eval 2026-10-12" above).
    - **lemuralabs/tamil-asr-qwen3**: see the ASR table.
 3. **Memory decides what can be tested at all.**
    - With risi-l1 (47.4 GB), whisper (6.9 GB), Cassandra (6.8 GB) and the gates' Gradle daemons

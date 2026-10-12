@@ -9,6 +9,17 @@ explains the eval that scores them. Results: docs/RISI-MODELS.md ("ASR eval 2026
 memory and dropped), so today's pilot calls can't be replayed. Only the transcripts' quality was
 seen, by Harsha, live.
 
+## Status (2026-10-12 ~20:00 UTC)
+- Held-out public sets scored (omni-si, yt5-si, slr30-si, fleurs-ta, fleurs-en, synthetic
+  code-switch): tables in docs/RISI-MODELS.md. Production now routes `si` to
+  Qwen3-ASR-0.6B-Sinhala (decision 071 amendment c); ta/en unchanged.
+- Not finished (memory floor all evening, MemAvailable 1.7–7 GB): kasunw/whisper-large-v3-sinhala
+  on the held-out sets (11 yt-si clips only). Rerun: start an eval instance and
+  `scripts/asr-eval run --manifest ~/risime-eval-data/manifests/all.jsonl --langs si,si+en
+  --models whisper-large-v3-sinhala --out ~/risime-eval-data/results/si-4.jsonl`.
+- **Waiting for the recordings below.** When they arrive: `python3 -I scripts/asr-eval-data.py`
+  (converts and adds them), then run the si/ta/en routes + compare candidates on `--sets real`.
+
 ## Request: please record (Harsha + a colleague)
 About **62 short clips**, ideally by **two speakers** (you and a colleague), each reading every
 line once. The sentence lists are already on spark2, one sentence per line:

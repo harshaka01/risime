@@ -4,7 +4,7 @@
 #   - port 8200 is bound to 127.0.0.1 only; /health; 401 without the key;
 #   - /v1/models lists auto + the routed models (si, ta, en);
 #   - model=auto on the three Opus test clips in infra/whisper/testdata routes
-#     si -> whisper-small-sinhala, ta -> tamil-asr-qwen3, en -> faster-whisper-large-v3, with a
+#     si -> (WHISPER_ROUTE_SI, from /v1/models), ta -> tamil-asr-qwen3, en -> faster-whisper-large-v3, with a
 #     non-empty transcript, character error rate within ASR_SMOKE_MAX_CER (default 0.35), and
 #     warm latency within ASR_SMOKE_MAX_S (default 10 s; first, cold call ASR_SMOKE_MAX_COLD_S, 60 s);
 #   - a 3 s silence clip (built in memory) returns empty text (route reason no_speech);
@@ -33,7 +33,9 @@ while [[ $# -gt 0 ]]; do
 done
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-WHISPER_API_KEY="${WHISPER_API_KEY:-$(grep -E '^WHISPER_API_KEY=' .env 2>/dev/null | tail -1 | cut -d= -f2-)}"
+env_file=.env
+[[ -f "$env_file" ]] || env_file="$HOME/development/risime/.env"  # from a git worktree
+WHISPER_API_KEY="${WHISPER_API_KEY:-$(grep -E '^WHISPER_API_KEY=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- || true)}"
 [[ -n "$WHISPER_API_KEY" ]] || fail "WHISPER_API_KEY missing from .env"
 export WHISPER_API_KEY WHISPER_URL="$url" TESTDATA="$PWD/infra/whisper/testdata" MANIFEST="$manifest"
 

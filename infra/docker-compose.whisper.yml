@@ -16,7 +16,7 @@ services:
   whisper:
     build:
       context: whisper
-    image: risime/whisper:ct2-4.8.2-fw-1.2.1-asr3
+    image: risime/whisper:ct2-4.8.2-fw-1.2.1-asr4
     restart: unless-stopped
     ports:
       - "127.0.0.1:8200:8000"
@@ -50,6 +50,20 @@ services:
       WHISPER_MIN_AVAILABLE_MB: ${WHISPER_MIN_AVAILABLE_MB:-3072}
       QWEN_ASR_BEAMS: ${QWEN_ASR_BEAMS:-1}
       WHISPER_IDLE_UNLOAD_S: ${WHISPER_IDLE_UNLOAD_S:-900}
+      # Amendment c (2026-10-12, ASR eval on held-out sets, docs/RISI-MODELS.md): si routes to
+      # Qwen3-ASR-0.6B-Sinhala; whisper-small-sinhala stays loaded as its retry/memory fallback.
+      # Rollback of the routing alone: WHISPER_ROUTE_SI=whisper-small-sinhala in .env.
+      WHISPER_ROUTE_SI: ${WHISPER_ROUTE_SI:-qwen3-asr-0.6b-sinhala}
+      WHISPER_ROUTE_TA: ${WHISPER_ROUTE_TA:-tamil-asr-qwen3}
+      # Tamil memory fallback before large-v3 (tamil-asr-qwen3 needs ~6.7 GB).
+      WHISPER_TA_FALLBACK: ${WHISPER_TA_FALLBACK:-whisper-tamil-medium}
+      WHISPER_KEEP: ${WHISPER_KEEP:-whisper-small-sinhala}
+      WHISPER_SI_RETRY_ORDER: ${WHISPER_SI_RETRY_ORDER:-whisper-small-sinhala,qwen3-asr-0.6b-sinhala}
+      # Compare mode without a models list: per detected language (routed model first).
+      WHISPER_COMPARE_SI: ${WHISPER_COMPARE_SI:-whisper-small-sinhala,omnilingual-ctc-1b}
+      WHISPER_COMPARE_TA: ${WHISPER_COMPARE_TA:-whisper-tamil-medium,omnilingual-ctc-1b,faster-whisper-large-v3}
+      WHISPER_COMPARE_EN: ${WHISPER_COMPARE_EN:-faster-whisper-large-v3-turbo}
+      OMNI_CTC_THREADS: ${OMNI_CTC_THREADS:-8}
       TRITON_CACHE_DIR: /cache/triton
       # cudaMallocAsync returns freed CUDA memory instead of caching it: measured 2.0 GB vs
       # 4.4 GB resident for large-v3 (int8_float16 vs float16 + cub_caching), and no slower.

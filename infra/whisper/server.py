@@ -73,6 +73,8 @@ SI_PROMPT = os.environ.get("WHISPER_SI_PROMPT", "මෙය සිංහල ක�
 # is served, and fits memory (NoMemory -> the next one). One retry at most.
 SI_RETRY_ORDER = tuple(os.environ.get("WHISPER_SI_RETRY_ORDER",
                                       "whisper-large-v3-sinhala,whisper-small-sinhala").split(","))
+# Tamil memory fallback (amendment c): used when the routed Tamil model can't be loaded.
+TA_FALLBACK = os.environ.get("WHISPER_TA_FALLBACK", "whisper-tamil-medium")
 # Compare without a models list (amendment c): per detected language, the routed model plus the
 # alternatives worth seeing side by side (unknown names and models not on disk are skipped).
 COMPARE_SETS = {
@@ -135,6 +137,11 @@ for _lang, _n in ROUTE.items():
 for _n, _s in SPECS.items():
     if _s["role"] == "route" and _n not in ROUTE.values():
         _s.update(role="compare", idle_s=120)
+# Kept loaded like a routed model (no idle unload), e.g. the small Sinhala model as the memory
+# fallback when the routed Sinhala model can't be loaded (WHISPER_KEEP, comma list).
+for _n in filter(None, os.environ.get("WHISPER_KEEP", "").split(",")):
+    if _n in SPECS and _n != DEFAULT:
+        SPECS[_n].update(role="resident", idle_s=None)
 if DEFAULT not in SPECS:
     raise SystemExit(f"default model missing: {DEFAULT_DIR}")
 ACCEPTED = set(SPECS) | {"whisper-1", "auto"}
@@ -522,8 +529,32 @@ def transcriptions(request: Request,
                 except NoMemory:
                     routing["fallback"] = "memory"
                     if si:
-                        res = run_si(DEFAULT, audio, prompt=prompt, temperature=temperature,
-                                     vad_filter=vad_filter)
+                        # A smaller Sinhala model before large-v3 (whose Sinhala is unusable):
+                        # the first of SI_RETRY_ORDER that is not the routed one and fits.
+                        res = None
+                        for alt in SI_RETRY_ORDER:
+                            if alt == target or alt not in SPECS:
+                                continue
+                            try:
+                                res = run_si(alt, audio, prompt=prompt, temperature=temperature,
+                                             vad_filter=vad_filter)
+                                routing["fallback_model"] = alt
+                                break
+                            except NoMemory:
+                                continue
+                        if res is None:
+                            res = run_si(DEFAULT, audio, prompt=prompt, temperature=temperature,
+                                         vad_filter=vad_filter)
+                    elif lang == "ta" and TA_FALLBACK in SPECS and TA_FALLBACK != target:
+                        # Tamil: the 0.8 GB Whisper fine-tune (CER 15.5% on FLEURS ta, vs
+                        # large-v3's 21.6%) before large-v3.
+                        try:
+                            res = run(TA_FALLBACK, audio, language="ta", prompt=prompt,
+                                      temperature=temperature, vad_filter=vad_filter)
+                            routing["fallback_model"] = TA_FALLBACK
+                        except NoMemory:
+                            res = run(DEFAULT, audio, language=lang, prompt=prompt,
+                                      temperature=temperature, vad_filter=vad_filter)
                     else:
                         res = run(DEFAULT, audio, language=lang, prompt=prompt,
                                   temperature=temperature, vad_filter=vad_filter)

@@ -102,6 +102,14 @@ def write_wav(path, samples, rate=16000):
         f.write(hdr + raw)
 
 
+def level(samples, target_rms=3000.0):
+    """Scale to a speech RMS of ~-21 dBFS (peaks clipped to int16)."""
+    n = len(samples) or 1
+    rms = (sum(x * x for x in samples) / n) ** 0.5 or 1.0
+    g = target_rms / rms
+    return array.array("h", (max(-32768, min(32767, int(x * g))) for x in samples))
+
+
 def duration(path):
     a, rate = read_wav(path)
     return round(len(a) / rate, 2)
@@ -365,10 +373,12 @@ def synth_cs(data, clips, skip, n=6):
             if ra != 16000 or rb != 16000:
                 continue
             gap = array.array("h", bytes(2 * 4800))
-            out = os.path.join(out_dir, f"{c['id']}+{e['id']}.wav")
+            out = os.path.join(out_dir, f"{c['id']}+{e['id']}.v2.wav")
             if not os.path.exists(out):
-                write_wav(out, a + gap + b)
-            res.append({"id": f"synth-{lang}+en-{i:02d}", "set": "synth-cs", "lang": f"{lang}+en",
+                # Same loudness for both halves: FLEURS clips peak as low as -40 dBFS, and the
+                # service's VAD dropped a quiet English half as silence (v1 of these clips).
+                write_wav(out, level(a) + gap + level(b))
+            res.append({"id": f"synth2-{lang}+en-{i:02d}", "set": "synth-cs", "lang": f"{lang}+en",
                         "audio": out, "text": c["text"] + " " + e["text"],
                         "duration_s": round((len(a) + len(gap) + len(b)) / 16000, 2),
                         "kind": "synthetic-concat", "synthetic": True,

@@ -1,5 +1,5 @@
 # 071 — Self-hosted speech-to-text for Risi call transcription (faster-whisper on 127.0.0.1:8200)
-**Status:** accepted 2026-10-09 (root); **amended 2026-10-12** (multi-model routing for Sinhala and
+**Status:** accepted 2026-10-09 (root); **amended 2026-10-12** (a, b; c = Sinhala route from the held-out ASR eval) (multi-model routing for Sinhala and
 Tamil, new memory numbers: see "Amendment 2026-10-12" at the end, which overrides the image tag,
 default compute type, allocator and memory numbers above). Implements the infra part of decision 070 (§27.7–27.9:
 Risi listening to Official calls). The speech model is named in `made_by.also` as
@@ -293,3 +293,38 @@ Whisper decoders sometimes answer Sinhala speech in Latin letters (romanised) or
 - Image `risime/whisper:ct2-4.8.2-fw-1.2.1-asr3` (only `server.py` changed). Rollback: `image:`
   back to `…-asr2` (kept on disk) with the previous `server.py`; the app server treats the new
   fields as optional.
+
+## Amendment 2026-10-12 (c): Sinhala route from a held-out eval (Harsha: "Sinhala poor")
+- **Why:** the 2026-10-10 Sinhala numbers (whisper-small-sinhala 14.5% WER) came from a YouTube
+  set that likely overlaps its training data. `scripts/asr-eval` now scores each model only on clips
+  outside its training data (manifest `in_training_of`), through this service, in ≤ 15 s chunks.
+  Results and sets: docs/RISI-MODELS.md, "ASR eval 2026-10-12".
+- **Route:** `si` → **`qwen3-asr-0.6b-sinhala`** (Nerdstorm/Qwen3-ASR-0.6B-Sinhala rev 2, MLX 8-bit
+  dequantised to bf16 by `convert_models.py`, loaded by `qwen3_asr.py` with the forced
+  "language Sinhala" prefix). Held-out spontaneous Sinhala: CER 13.3% vs 20.4% for the previous
+  route; conversational (5 held-out YouTube channels): 21.2%, the best of all candidates; it keeps
+  English words in English letters. On read speech the small model stays better (5.2% vs 8.9%).
+  Licence CC BY-SA 4.0 (served, not redistributed). ~3.5 GB resident, RTF ~0.2 (≈3 s per 15 s
+  chunk, vs 0.5 s), unloaded after `WHISPER_IDLE_UNLOAD_S`.
+- **Fallback:** `whisper-small-sinhala` stays loaded (`WHISPER_KEEP`) and is the script retry
+  (`WHISPER_SI_RETRY_ORDER=whisper-small-sinhala,qwen3-asr-0.6b-sinhala`) and the **memory
+  fallback**: a NoMemory on the routed Sinhala model now goes to the first fitting model of the
+  retry order before large-v3 (whose Sinhala is unusable). `routing.fallback_model` names it.
+- **Compare** without a models list runs the set for the detected language (routed model first):
+  si: Qwen, small, `omnilingual-ctc-1b`; ta: tamil-asr-qwen3, `whisper-tamil-medium`,
+  `omnilingual-ctc-1b`, large-v3; en: large-v3, turbo (`WHISPER_COMPARE_SI|TA|EN`).
+  `/v1/models` lists `compare_sets` and `si_retry_order` on the `auto` entry.
+- **New compare-only models** (in `~/risime-models`, served when present): `omnilingual-ctc-1b`
+  (Meta omniASR-CTC-1B, OpenVoiceOS ONNX int8 export, CPU onnxruntime, greedy CTC, input
+  normalised per utterance; `omni_ctc.py`), `whisper-tamil-medium`, `whisper-tamil-small`,
+  `whisper-medium-si-exp10`, `whisper-small-sinhala-185k`. ta and en routes are unchanged
+  (tamil-asr-qwen3 15.2% vs whisper-tamil-medium 15.5% CER on FLEURS ta: a tie), but a NoMemory on
+  tamil-asr-qwen3 now falls back to `whisper-tamil-medium` (`WHISPER_TA_FALLBACK`) before
+  large-v3 (21.6%).
+- **Smoke:** `scripts/asr-smoke` reads routes and compare sets from `/v1/models`
+  (`ASR_SMOKE_ROUTE_SI` pins the expected si route); PASS after the deploy (2026-10-12 ~19:50 UTC).
+- **Image** `risime/whisper:ct2-4.8.2-fw-1.2.1-asr4` (adds `omni_ctc.py`). Rollback: routing only
+  → `WHISPER_ROUTE_SI=whisper-small-sinhala` in `.env`; everything → `image: …-asr3` with the
+  previous compose file (kept on disk). The app server needs no change: it takes the model name
+  from the response.
+- **Not reached:** ~20% WER on spontaneous Sinhala (best 33%): docs/status/asr-finetune-plan.md.

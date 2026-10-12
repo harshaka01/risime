@@ -32,6 +32,8 @@ eval/risi). WER over words, CER over characters without spaces, both as corpus t
 U+0D80-U+0DFF, Tamil U+0B80-U+0BFF, Latin for en) over all letters of the hypothesis (combining
 signs count with their block). For code-switched clips, the reference's own script % is shown
 next to it. "romanised" = a si/ta hypothesis with letters but none in the expected script.
+"en kept" (code-switching) = English words of a si/ta reference (Latin script) that the
+hypothesis also has in Latin script, over all such reference words.
 """
 
 import argparse
@@ -298,6 +300,15 @@ def score(clips, results, langs=None, by=None, include_trained=False):
         st["ref_all"] += rl
         if bl in SCRIPT and l > 0 and e == 0:
             st["romanised"] += 1
+        # Code-switching: English (Latin) words of the reference found in Latin in the hypothesis.
+        if bl in SCRIPT:
+            ref_en = [w for w in rw if w.isascii() and any(ch.isalpha() for ch in w)]
+            hyp_en = collections.Counter(w for w in hw if w.isascii())
+            st["en_ref"] += len(ref_en)
+            for w in ref_en:
+                if hyp_en[w] > 0:
+                    hyp_en[w] -= 1
+                    st["en_kept"] += 1
         if not hyp:
             st["empty"] += 1
         if r.get("retried_with"):
@@ -321,10 +332,12 @@ def cmd_score(a):
     for path in a.results:
         with open(path) as f:
             results += [json.loads(line) for line in f if line.strip()]
-    # The last result per (model, clip) wins (reruns override).
+    # The last successful result per (model, clip) wins (reruns override; errors never do).
     last = {}
     for r in results:
-        last[(r["model"], r["id"])] = r
+        k = (r["model"], r["id"])
+        if "error" not in r or k not in last or "error" in last[k]:  # a success is never
+            last[k] = r                                                # replaced by an error
     agg = score(clips, list(last.values()), a.langs, a.by, a.include_trained)
     rows = []
     for (model, group), st in sorted(agg.items(), key=lambda kv: (kv[0][1], kv[0][0])):
@@ -333,11 +346,11 @@ def cmd_score(a):
                      pct(st["w_err"], st["w_ref"]), pct(st["c_err"], st["c_ref"]),
                      pct(st["s_exp"], st["s_all"]) + (f' (ref {pct(st["ref_exp"], st["ref_all"])})'
                                                       if "+" in group else ""),
-                     str(st["romanised"]), str(st["empty"]),
+                     str(st["romanised"]), pct(st["en_kept"], st["en_ref"]), str(st["empty"]),
                      f'{st["proc_s"] / st["audio_s"]:.2f}' if st["audio_s"] else "–",
                      (f'retried {st["retried"]} ' if st["retried"] else "")
                      + (f'fallback {st["fallback"]} ' if st["fallback"] else "") + served])
-    head = ["set", "model", "n", "excl", "err", "WER", "CER", "script %", "romanised", "empty",
+    head = ["set", "model", "n", "excl", "err", "WER", "CER", "script %", "romanised", "en kept", "empty",
             "RTF", "notes"]
     if a.json:
         print(json.dumps([dict(zip(head, r)) for r in rows], ensure_ascii=False, indent=1))
