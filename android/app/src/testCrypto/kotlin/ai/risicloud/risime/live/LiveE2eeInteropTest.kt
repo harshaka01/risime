@@ -571,14 +571,16 @@ class LiveE2eeInteropTest {
         }
         var copyEventId = ""
         check("history: plaintext sender copy on A's own device, never acked; B reads → ticks") {
-            a1.chat.sendText(bId, "plain from A $run")
+            // Chat-list clarity (2026-10-12): a DM without its MLS group never goes plaintext on its own; this legacy-plaintext
+            // history is built with the user's explicit "Send without encryption" per message.
+            a1.chat.sendWithoutEncryption(a1.chat.sendText(bId, "plain from A $run")!!)
             val atB = await(15_000, "B gets it") { b1.raw.firstOrNull { it.messageData()?.body == "plain from A $run" } }
             copyEventId = atB.eventId
             // The sending device skips its own copy (same client_msg_id): still one row.
             val atA = await(15_000, "A's copy event") { a1.raw.firstOrNull { it.eventId == atB.eventId } }
             ensure(atA.messageData()!!.from == aId) { "copy from ${atA.messageData()!!.from}" }
             ensure(a1.messages.rows.values.count { it.body == "plain from A $run" } == 1) { "duplicate row at A" }
-            b1.chat.sendText(aId, "plain from B $run")
+            b1.chat.sendWithoutEncryption(b1.chat.sendText(aId, "plain from B $run")!!)
             await(15_000, "A gets B's") { a1.bodies().firstOrNull { it == "plain from B $run" } }
             b1.chat.markConversationRead(conv)
             await(15_000, "A's row read") { a1.messages.rows.values.firstOrNull { it.body == "plain from A $run" && it.status == "READ" } }
