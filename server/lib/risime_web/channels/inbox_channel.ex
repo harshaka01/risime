@@ -112,6 +112,18 @@ defmodule RisiMeWeb.InboxChannel do
     end
   end
 
+  # v1.39 §36.3: transcription consent of a 1:1 Official call.
+  def handle_in("call:transcribe", payload, socket) when is_map(payload) do
+    case RisiMe.Agent.CallTranscribe.push(
+           socket.assigns.user_id,
+           socket.assigns[:device_id],
+           payload
+         ) do
+      {:ok, reply} -> {:reply, {:ok, reply}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
+
   # v1.15 §17.4: history sharing pushes (routing and naming only; MLS ciphertext).
   def handle_in("history:" <> _ = event, payload, socket) when is_map(payload) do
     case RisiMe.History.push(event, socket.assigns.user_id, socket.assigns[:device_id], payload) do
@@ -273,6 +285,17 @@ defmodule RisiMeWeb.InboxChannel do
     else
       {:noreply, socket}
     end
+  end
+
+  # v1.39 §36.3: the `call_transcribe` signal reaches only `call_transcribe` devices.
+  def handle_info({:signal, %{kind: "call_transcribe"} = signal}, socket) do
+    if RisiMe.Agent.CallTranscribe.transcribe_device?(
+         socket.assigns.user_id,
+         socket.assigns[:device_id]
+       ),
+       do: push(socket, "signal", signal)
+
+    {:noreply, socket}
   end
 
   def handle_info({:signal, signal}, socket) do

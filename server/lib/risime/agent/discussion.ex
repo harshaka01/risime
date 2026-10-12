@@ -33,6 +33,10 @@ defmodule RisiMe.Agent.Discussion do
     field :call_ref, :binary_id
     field :made_by, :map
     field :created_at, :utc_datetime_usec
+    # v1.39 §36.7 (transcribed calls only, not stored): the call's majority language and each
+    # speaker's language; they set the optional wire `lang`.
+    field :lang, :string, virtual: true
+    field :langs, :map, virtual: true
   end
 
   @doc "Seals `key_points` and `summary`: `{:ok, d}` or `:error` (no key)."

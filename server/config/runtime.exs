@@ -191,6 +191,32 @@ if v = System.get_env("RISI_NOTES"), do: config(:risime, :risi_notes, on?.(v))
 if v = System.get_env("RISI_GCAL"), do: config(:risime, :risi_gcal, on?.(v))
 if v = System.get_env("RISI_TRANSCRIBE"), do: config(:risime, :risi_transcribe, on?.(v))
 
+# v1.39 §36.1 (decision 080): RISI_CALL_TRANSCRIBE=on offers the call-transcription fast path
+# (`/auth/config` `call_transcribe`, default off; only while Risi is up and the speech service is
+# healthy). Off is the kill switch: live sessions stop (`switch_off`), uploads get 503.
+# RISI_DEV_USERS: comma-separated user ids with `User.risi_dev` (§36.1 compare mode; .env only).
+# RISI_SPEECH_URL (loopback only, default http://127.0.0.1:8200) and WHISPER_API_KEY (.env only,
+# never logged) reach the local speech service (decision 071).
+if v = System.get_env("RISI_CALL_TRANSCRIBE"),
+  do: config(:risime, :risi_call_transcribe, on?.(v))
+
+if v = System.get_env("RISI_DEV_USERS") do
+  ids =
+    v
+    |> String.split([",", " ", "\n"], trim: true)
+    |> Enum.map(&String.downcase/1)
+
+  config(:risime, :risi_dev_users, ids)
+end
+
+if config_env() != :test do
+  speech =
+    [url: System.get_env("RISI_SPEECH_URL", "http://127.0.0.1:8200")] ++
+      if(key = System.get_env("WHISPER_API_KEY"), do: [api_key: key], else: [])
+
+  config :risime, :risi_speech_http, speech
+end
+
 # §27.2 quiet-rule thresholds (defaults 600 s, 6 messages, 2 people, 30 min, < 8 a day), so
 # tests and UI gates can shorten them. A value that isn't a positive integer is ignored.
 for {var, key} <- [

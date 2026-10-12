@@ -35,9 +35,31 @@ defmodule RisiMe.Agent.Out do
 
     with :ok <- RateLimiter.hit_if_allowed(:risi_send, :risi, limit, @window),
          {:ok, sent} <- sender().text(conv, body, risi(risi, opts)) do
-      remember(conv, sent, body, risi)
+      # v1.39 §36.8: a line of a speaker who opted out of memory is posted but not remembered.
+      if Keyword.get(opts, :memory, true), do: remember(conv, sent, body, risi)
       {:ok, sent}
     end
+  end
+
+  @doc """
+  v1.39 §36.5: deletes Risi's own posts `ids` in `conv` for everyone (§15 sender delete) and
+  what Risi derived from them. `:ok` or `{:error, reason}`.
+  """
+  def delete(_conv, []), do: :ok
+
+  def delete(conv, ids) when is_list(ids) do
+    ids
+    |> Enum.chunk_every(100)
+    |> Enum.reduce_while(:ok, fn batch, :ok ->
+      case sender().delete(conv, batch) do
+        {:ok, _} ->
+          RisiMe.Agent.Secretary.message_deleted(conv, batch)
+          {:cont, :ok}
+
+        {:error, _} = e ->
+          {:halt, e}
+      end
+    end)
   end
 
   # P0 2026-10-09: in a Risi chat, Risi's own post joins the sealed 24-h buffer (as

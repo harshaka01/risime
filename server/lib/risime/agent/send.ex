@@ -27,4 +27,25 @@ defmodule RisiMe.Agent.Send do
              do: Conversation.send_envelope(pid, envelope, timeout)
     end
   end
+
+  @doc """
+  v1.39 §36.5: deletes Risi's own messages `ids` in `conv` for everyone (§15 sender delete).
+  `{:ok, reply}` or `{:error, reason}`.
+  """
+  def delete(conv, ids, timeout \\ 60_000) when is_list(ids) do
+    cond do
+      ids == [] ->
+        {:ok, %{}}
+
+      not RisiMe.Agent.official?(conv) ->
+        {:error, :private_tab}
+
+      not RisiMe.Agent.may_act?(conv) ->
+        {:error, :not_member}
+
+      true ->
+        with {:ok, pid} <- ConversationSup.ensure(conv),
+             do: Conversation.delete_own(pid, ids, timeout)
+    end
+  end
 end

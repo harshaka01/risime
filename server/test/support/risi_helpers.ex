@@ -24,6 +24,23 @@ defmodule RisiMe.Agent.TestSender do
          }}
     end
   end
+
+  @doc "v1.39 §36.5: Risi deletes its own posts; sends `{:risi_delete, conv, ids}`."
+  def delete(conv, ids) do
+    cond do
+      not RisiMe.Agent.official?(conv) ->
+        {:error, :private_tab}
+
+      not RisiMe.Agent.may_act?(conv) ->
+        {:error, :not_member}
+
+      true ->
+        if pid = Application.get_env(:risime, :risi_test_pid),
+          do: send(pid, {:risi_delete, conv, ids})
+
+        {:ok, %{}}
+    end
+  end
 end
 
 defmodule RisiMe.RisiHelpers do

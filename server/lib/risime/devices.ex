@@ -146,7 +146,7 @@ defmodule RisiMe.Devices do
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
                          group_calls call_switch screen_share tabs risi_tools risi_skills
                          risi_ledger risi_events risi_notes google_calendar files pdf_export
-                         risi_items)
+                         risi_items call_transcribe)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do

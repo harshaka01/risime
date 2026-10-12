@@ -6,7 +6,7 @@ defmodule RisiMeWeb.ApiJSON do
   (examples) it is taken from the map.
   """
   def user(user, phone_verified \\ nil) do
-    %{
+    json = %{
       id: user.id,
       phone: user.phone,
       display_name: user.display_name,
@@ -16,6 +16,9 @@ defmodule RisiMeWeb.ApiJSON do
       vouched_by: vouched_by(user),
       phone_confirmed: phone_confirmed(user)
     }
+
+    # v1.39 §36.1: `risi_dev: true` only for the users in RISI_DEV_USERS (absent otherwise).
+    if RisiMe.Agent.CallTranscribe.dev?(user.id), do: Map.put(json, :risi_dev, true), else: json
   end
 
   # v1.20 §21.4: false while an open sign-up's phone is self-asserted.
