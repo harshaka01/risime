@@ -238,6 +238,7 @@ private fun MainNav(c: AppContainer, meId: String) {
             // §24: a chat is its Private (anchor) id; an Official conversation id opens its chat on the Official tab.
             val tabRows by c.chatTabs.rows.collectAsState()
             val conv = ai.risicloud.risime.data.tabs.chatIdOf(target.lowercase(), tabRows).let { if (it.equals(target, true)) target else it }
+            val pendingRisi by c.chatTabs.pendingRisi.collectAsState()
             val openedOnOfficial = !conv.equals(target, true)
             val tabsOn by c.chatTabs.uiOn.collectAsState()
             val lockedIds by c.lockedChats.ids.collectAsState()
@@ -258,9 +259,10 @@ private fun MainNav(c: AppContainer, meId: String) {
             val headerLock = chatLockControl(c, nav, conv, isLocked, gate)
             // A locked chat is FLAG_SECURE while open (normal chats never are: an entire-screen share shows them).
             ai.risicloud.risime.ui.lock.SecureWindow(ai.risicloud.risime.ui.lock.SecureScreen.LOCKED_CHAT, on = isLocked)
-            // §25.2 the Risi chat (MLS says chat_kind "risi"): one conversation, Official styling, no tabs or
-            // toggle; its composer only asks Risi. Not shown at all on a device without risi_tools.
-            if (ai.risicloud.risime.data.tabs.isRisiChat(conv, tabRows)) {
+            // §25.2 the Risi chat (MLS says chat_kind "risi"; or, with no MLS state here yet after a reinstall,
+            // the server lists it so): one conversation, Official styling, no tabs or toggle; its composer only
+            // asks Risi. Not shown at all on a device without risi_tools.
+            if (ai.risicloud.risime.data.tabs.isRisiChatOrPending(conv, tabRows, pendingRisi)) {
                 val risiOn by c.risiTools.on.collectAsState()
                 if (!risiOn || !tabsOn) {
                     ai.risicloud.risime.ui.tabs.RisiChatUnavailable(onBack = { nav.popBackStack() })

@@ -68,6 +68,22 @@ fun isPrivate(conversationId: String, rows: Map<String, ChatTabEntity>?): Boolea
 /** §25.2: [conversationId] is a Risi chat per its MLS-derived row. */
 fun isRisiChat(conversationId: String, rows: Map<String, ChatTabEntity>?): Boolean = rows?.get(conversationId.lowercase())?.risi == true
 
+/**
+ * §25.2 (P0 2026-10-12): the server lists [conversationId] as this user's Risi chat (`chat_kind: "risi"`,
+ * `tab: "official"`, `chat_id` = its own id) and this device holds no MLS state for it yet (a reinstall).
+ * A display hint only: the Risi chat's row and screen (never "Rejoining group…", never a tab bar or Start
+ * Official), until the MLS state ([isRisiChat]) takes over.
+ */
+fun serverSaysRisiChat(conversationId: String, tab: String?, chatId: String?, chatKind: String?): Boolean =
+    chatKind == ChatTabEntity.KIND_RISI && tab == ChatTabEntity.TAB_OFFICIAL && chatId != null && chatId.equals(conversationId, ignoreCase = true)
+
+/** §25.2 a Risi chat per its MLS-derived row, or (no row yet) per the server's hint [pendingRisi]. */
+fun isRisiChatOrPending(conversationId: String, rows: Map<String, ChatTabEntity>?, pendingRisi: Set<String>): Boolean {
+    val key = conversationId.lowercase()
+    val row = rows?.get(key) ?: return key in pendingRisi
+    return row.risi
+}
+
 /** The chat a conversation belongs to (a conversation without an MLS-derived row is its own chat). */
 fun chatIdOf(conversationId: String, rows: Map<String, ChatTabEntity>?): String = rows?.get(conversationId)?.chatId ?: conversationId
 
@@ -116,6 +132,9 @@ class ChatTabs(
     /** Chats whose Official banner was already shown (§24.9 "a banner" on the first open), kept across restarts. */
     persistedBannerSeen: Set<String> = emptySet(),
     private val persistBannerSeen: (Set<String>) -> Unit = {},
+    /** [pendingRisi] kept across restarts (a restart before the rebuild never shows it as "Rejoining group…"). */
+    persistedPendingRisi: Set<String> = emptySet(),
+    private val persistPendingRisi: (Set<String>) -> Unit = {},
 ) {
     private val _rows = MutableStateFlow<Map<String, ChatTabEntity>?>(null)
 
@@ -147,6 +166,14 @@ class ChatTabs(
      * never shown as Official on the server's word alone).
      */
     val pendingOfficial: StateFlow<Map<String, String>> = _hints.asStateFlow()
+
+    private val _pendingRisi = MutableStateFlow(persistedPendingRisi.map { it.lowercase() }.toSet())
+
+    /**
+     * §25.2 conversations the server lists as this user's Risi chat whose MLS state this device doesn't hold
+     * yet (a reinstall: [serverSaysRisiChat]). Shown as the Risi chat (its row and screen) until MLS tells.
+     */
+    val pendingRisi: StateFlow<Set<String>> = _pendingRisi.asStateFlow()
 
     private val _starting = MutableStateFlow<Set<String>>(emptySet())
 
@@ -238,15 +265,30 @@ class ChatTabs(
         }
         dao.upsert(t)
         _hints.update { it - conversationId.lowercase() }
+        if (conversationId.lowercase() in _pendingRisi.value) {
+            _pendingRisi.update { it - conversationId.lowercase() }
+            persistPendingRisi(_pendingRisi.value)
+        }
         if (t.official) _starting.update { it - t.chatId.lowercase() }
         _rows.update { m -> m?.plus(conversationId.lowercase() to t) }
     }
 
-    /** Server JSON says Official (Group.tab, group_event): only a hint to hide it until MLS tells. */
-    fun noteServerTab(conversationId: String, tab: String?, chatId: String?) {
+    /**
+     * Server JSON says Official (Group.tab, group_event): only a hint to hide it until MLS tells. A Risi chat
+     * (§25.2, `chat_kind: "risi"`) is never hidden: it is its own chat, shown as the Risi chat ([pendingRisi]).
+     */
+    fun noteServerTab(conversationId: String, tab: String?, chatId: String?, chatKind: String? = null) {
         val key = conversationId.lowercase()
         if (tab != ChatTabEntity.TAB_OFFICIAL || chatId == null) return
         if (_rows.value?.containsKey(key) == true) return
+        if (serverSaysRisiChat(conversationId, tab, chatId, chatKind)) {
+            if (key !in _pendingRisi.value) {
+                log("tabs: $conversationId is the Risi chat per the server; no MLS state here yet")
+                _pendingRisi.update { it + key }
+                persistPendingRisi(_pendingRisi.value)
+            }
+            return
+        }
         _hints.update { it + (key to chatId) }
     }
 

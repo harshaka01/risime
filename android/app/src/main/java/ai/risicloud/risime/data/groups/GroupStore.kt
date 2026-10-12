@@ -193,8 +193,8 @@ class GroupStore(
     private val onReset: suspend (conversationId: String, generation: Long) -> Unit = { _, _ -> },
     /** §24.1: the group's MLS `group_meta` was read (null = not known yet): record its chat and tab. */
     private val onMlsMeta: suspend (conversationId: String, meta: GroupMeta?) -> Unit = { _, _ -> },
-    /** §24.1: the server's word on the tab (a hint only, never trusted for Private-ness). */
-    private val onServerTab: (conversationId: String, tab: String?, chatId: String?) -> Unit = { _, _, _ -> },
+    /** §24.1: the server's word on the tab and chat kind (a hint only, never trusted for Private-ness). */
+    private val onServerTab: (conversationId: String, tab: String?, chatId: String?, chatKind: String?) -> Unit = { _, _, _, _ -> },
 ) {
     fun observeGroups() = groups.all()
 
@@ -261,7 +261,7 @@ class GroupStore(
         val now = clock()
         val existing = groups.get(conv)
         val meta = metaOf(conv)
-        onServerTab(conv, e.tab, e.chatId)
+        onServerTab(conv, e.tab, e.chatId, e.chatKind)
         onMlsMeta(conv, meta)
         val mine = e.targets.any { it.equals(me, true) }
         var line: SystemLine? = SystemLine(e.action, e.actor, e.targets, e.role)
@@ -413,7 +413,7 @@ class GroupStore(
         val conv = group.id
         val existing = groups.get(conv)
         val meta = metaOf(conv)
-        onServerTab(conv, group.tab, group.chatId)
+        onServerTab(conv, group.tab, group.chatId, group.chatKind)
         onMlsMeta(conv, meta)
         val state = when {
             group.state == Group.STATE_CREATING -> GroupEntity.STATE_CREATING

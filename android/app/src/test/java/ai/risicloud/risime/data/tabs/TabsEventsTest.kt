@@ -86,7 +86,7 @@ class TabsEventsTest {
         var meta: GroupMeta? = null
         val store = GroupStore(
             FakeGroupDao(), FakeGroupOpDao(), FakeMessageDao(), { "dev" }, { meta },
-            onMlsMeta = { c, m -> metas += c to m }, onServerTab = { c, t, id -> hints += Triple(c, t, id) },
+            onMlsMeta = { c, m -> metas += c to m }, onServerTab = { c, t, id, _ -> hints += Triple(c, t, id) },
         )
         val ev = ProtocolJson.decodeFromString<Event>(example("event_group_created_official.json")).groupEvent()!!
         store.applyEvent("e1", ev, me)

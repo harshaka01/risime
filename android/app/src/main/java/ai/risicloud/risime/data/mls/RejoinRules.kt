@@ -35,11 +35,16 @@ object RejoinRules {
      * when it had no candidate for 24 h after the op's `created_at`. [candidates] null = a pre-v1.21
      * server ("unknown"): never automatically. [opCreatedAtMs] null (no op, or no time): never for
      * "no candidate".
+     *
+     * [risiChat] (§25.2, P0 2026-10-12): the user's Risi chat, whose only human is this user (its only admin)
+     * and whose other member, Risi, never commits: with no candidate nobody can ever re-add this device (a
+     * reinstall of the only phone), so it resets at once, as a DM does (the server allows it).
      */
-    fun group(iAmAdmin: Boolean, candidates: Int?, exhausted: Boolean, opCreatedAtMs: Long?, now: Long): RejoinDecision = when {
+    fun group(iAmAdmin: Boolean, candidates: Int?, exhausted: Boolean, opCreatedAtMs: Long?, now: Long, risiChat: Boolean = false): RejoinDecision = when {
         !iAmAdmin -> RejoinDecision.WAIT
         candidates == null -> RejoinDecision.WAIT
         exhausted && candidates >= 1 -> RejoinDecision.RESET
+        risiChat && candidates == 0 -> RejoinDecision.RESET
         candidates == 0 && opCreatedAtMs != null && now - opCreatedAtMs >= NO_CANDIDATE_RESET_MS -> RejoinDecision.RESET
         else -> RejoinDecision.WAIT
     }

@@ -721,6 +721,8 @@ class AppContainer(
         log = { Log.i("RisiMe", it) },
         persistedBannerSeen = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getStringSet("banner_seen", null).orEmpty(),
         persistBannerSeen = { s -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putStringSet("banner_seen", HashSet(s)).apply() },
+        persistedPendingRisi = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getStringSet("pending_risi", null).orEmpty(),
+        persistPendingRisi = { s -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putStringSet("pending_risi", HashSet(s)).apply() },
     ).also { chatTabsOrNull = it }
 
     /** §24.11 the private Risi REST calls (feedback, facts, commitments). */
@@ -949,7 +951,7 @@ class AppContainer(
                 db.mlsPending().dropOlderGenerations(conv, generation)
             },
             onMlsMeta = { conv, meta -> chatTabs.recordMls(conv, meta) },
-            onServerTab = { conv, tab, chatId -> chatTabs.noteServerTab(conv, tab, chatId) },
+            onServerTab = { conv, tab, chatId, chatKind -> chatTabs.noteServerTab(conv, tab, chatId, chatKind) },
         )
     }
 

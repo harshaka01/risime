@@ -83,6 +83,34 @@ class RisiChatTest {
         override fun feedback(callRef: String, rating: String, reason: String?) = Unit
     }
 
+    @Test fun afterAReinstallTheServerListedRisiChatIsTheRisiRowNeverAStrayGroup() {
+        // P0 2026-10-12: no MLS state yet (no chat_tabs row): the server's hint makes it the Risi row.
+        val rows = listOf(groupRow(risiConv, "Rejoining group…", 100), groupRow(other, "Team", 50))
+        val noRisiRow = mapOf(other to tabFromMls(other, GroupMeta(name = "Team"))!!)
+        val pending = setOf(risiConv)
+        val merged = mergeTabRows(rows, noRisiRow, mapOf(risiConv to risiConv), me, showTabIcon = true, pendingRisi = pending)
+        val out = applyRisiRows(merged, noRisiRow, risiOn = true, pendingRisi = pending)
+        assertEquals(listOf("Risi", "Team"), out.map { it.name })
+        assertTrue(out.first().risi && out.first().conversationId == risiConv)
+        assertTrue("no second 'Risi' entry", out.none { it.target == RISI_NEW_TARGET })
+        assertTrue(out.none { it.name == "Rejoining group…" || it.name == "Group" })
+        // Without the hint the old behaviour: hidden, plus the create entry (the reported "Rejoining group…" path).
+        val old = applyRisiRows(mergeTabRows(rows, noRisiRow, mapOf(risiConv to risiConv), me, showTabIcon = true), noRisiRow, risiOn = true)
+        assertTrue(old.none { it.conversationId == risiConv })
+        // The MLS row wins over the hint: a Private group is never shown as Risi on the server's word.
+        assertFalse(isRisiChatOrPending(other, noRisiRow, setOf(other)))
+        assertTrue(isRisiChatOrPending(risiConv, noRisiRow, pending))
+        assertTrue(isRisiChatOrPending(risiConv, tabs, emptySet()))
+    }
+
+    @Test fun theServerSaysRisiChatOnlyForItsExactShape() {
+        assertTrue(serverSaysRisiChat(risiConv, "official", risiConv.uppercase(), "risi"))
+        assertFalse(serverSaysRisiChat(risiConv, "official", other, "risi"))
+        assertFalse(serverSaysRisiChat(risiConv, "private", risiConv, "risi"))
+        assertFalse(serverSaysRisiChat(risiConv, "official", risiConv, "group"))
+        assertFalse(serverSaysRisiChat(risiConv, "official", null, "risi"))
+    }
+
     @Test fun theRisiChatComposerAlwaysAsksNeverPlainText() {
         val h = Host()
         val plain = mutableListOf<String>()

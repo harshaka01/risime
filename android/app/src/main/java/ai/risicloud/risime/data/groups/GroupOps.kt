@@ -57,6 +57,9 @@ interface GroupApi {
  * §25.2 epoch 0 of a Risi chat: `{"v": 1, "name": null, "icon": null, "admins": [me], "tab": "official",
  * "chat_id": <its own id>, "agents": [risi], "chat_kind": "risi"}` ("" is `null` over the FFI).
  */
+/** §25.2 the server lists [g] as the caller's Risi chat (`chat_kind: "risi"`, Official, `chat_id` = its own id). */
+fun serverRisiChat(g: Group): Boolean = ai.risicloud.risime.data.tabs.serverSaysRisiChat(g.id, g.tab, g.chatId, g.chatKind)
+
 fun risiChatEpoch0Meta(conversationId: String, group: Group, myId: String): GroupMeta {
     val agents = (group.agents + group.members.filter { it.kind == GroupMember.KIND_AGENT }.map { it.userId }).distinctBy { it.lowercase() }
     return GroupMeta(
@@ -303,9 +306,13 @@ class GroupOpsExecutor(
             return OpOutcome.Done
         }
         store.noteRejoinWait(conv, reply)
+        // §12.8 the group awaits a rebuild (epoch null): the rebuilder's epoch 0 brings this device in (a
+        // `rebuild` op naming this device was queued by applyServerGroup). Never another reset (429 for an hour).
+        if (reply.group.epoch == null) return OpOutcome.Done
         val admin = reply.group.myRole == GroupMember.ROLE_ADMIN
         val decision = ai.risicloud.risime.data.mls.RejoinRules.group(
             admin, reply.candidates, reply.exhausted, ai.risicloud.risime.data.mls.RejoinRules.epochMs(reply.op?.createdAt), clock(),
+            risiChat = serverRisiChat(reply.group),
         )
         if (decision == ai.risicloud.risime.data.mls.RejoinDecision.WAIT) return OpOutcome.Done
         log("group $conv: nobody can re-add this device (candidates ${reply.candidates}, exhausted ${reply.exhausted}): last-resort reset")
@@ -634,7 +641,12 @@ class GroupOpsExecutor(
                         // §24.1: a rebuilt Official group stays Official of the same chat (from this device's MLS state, never the server's word).
                         val old = mls.groupMeta(conv)?.takeIf { it.official } ?: officialTab(conv)?.let { GroupMeta(name = name, tab = GroupMeta.TAB_OFFICIAL, chatId = it) }
                         mls.group(conv)?.takeIf { it.generation < g.generation }?.let { mls.deleteGroup(conv) }
-                        val meta = if (old == null) {
+                        val meta = if (old == null && serverRisiChat(g)) {
+                            // §25.2 (P0 2026-10-12): the reinstalled only phone of a Risi chat rebuilds it with no
+                            // MLS state of its own: as the Risi chat again (the core enforces its shape: one human,
+                            // its only admin, Risi the agent), never as a Private "Group".
+                            risiChatEpoch0Meta(conv, g, myId)
+                        } else if (old == null) {
                             GroupMeta(name = name, admins = admins)
                         } else {
                             val agents = (g.agents + g.members.filter { it.kind == GroupMember.KIND_AGENT }.map { it.userId }).distinct()

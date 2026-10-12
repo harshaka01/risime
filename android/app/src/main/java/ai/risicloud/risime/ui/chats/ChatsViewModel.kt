@@ -65,8 +65,14 @@ const val RISI_NEW_TARGET = "risi:new"
  * (none, or only ones I left), a "Risi" entry that creates it on first open. Without `risi_tools` no
  * Risi chat is listed at all (its history stays on the phone, hard rule 9).
  */
-fun applyRisiRows(rows: List<ChatRow>, tabs: Map<String, ai.risicloud.risime.data.db.ChatTabEntity>?, risiOn: Boolean): List<ChatRow> {
-    fun isRisi(r: ChatRow) = r.group && r.conversationId?.let { ai.risicloud.risime.data.tabs.isRisiChat(it, tabs) } == true
+fun applyRisiRows(
+    rows: List<ChatRow>,
+    tabs: Map<String, ai.risicloud.risime.data.db.ChatTabEntity>?,
+    risiOn: Boolean,
+    /** §25.2 Risi chats the server lists whose MLS state this device doesn't hold yet (a reinstall): the Risi row too. */
+    pendingRisi: Set<String> = emptySet(),
+): List<ChatRow> {
+    fun isRisi(r: ChatRow) = r.group && r.conversationId?.let { ai.risicloud.risime.data.tabs.isRisiChatOrPending(it, tabs, pendingRisi) } == true
     val (risi, others) = rows.partition(::isRisi)
     if (!risiOn) return others
     val marked = risi.map { it.copy(name = ai.risicloud.risime.data.tabs.RISI_CHAT_NAME, risi = true, lastTab = null, lastSender = null) }
@@ -131,9 +137,11 @@ fun mergeTabRows(
     pendingOfficial: Map<String, String>,
     meId: String,
     showTabIcon: Boolean,
+    pendingRisi: Set<String> = emptySet(),
 ): List<ChatRow> {
     fun officialChat(r: ChatRow): String? {
         val conv = r.conversationId?.lowercase()?.takeIf { r.group } ?: return null
+        if (conv in pendingRisi) return null // §25.2 the Risi chat is its own row (applyRisiRows)
         val t = tabs?.get(conv)
         // §25.2 a Risi chat is its own row (applyRisiRows), never merged into another chat.
         return if (t != null) t.chatId.lowercase().takeIf { t.official && !t.risi } else pendingOfficial[conv]?.lowercase()
@@ -254,10 +262,10 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
         },
         c.db.deletes().observeChatStates(),
         c.chatTabs.rows,
-        c.chatTabs.pendingOfficial,
+        combine(c.chatTabs.pendingOfficial, c.chatTabs.pendingRisi) { p, r -> p to r },
         combine(c.chatTabs.uiOn, c.risiTools.on) { tabsOn, risiOn -> tabsOn to (tabsOn && risiOn) },
-    ) { rows, states, tabs, pending, (tabsOn, risiOn) ->
-        applyRisiRows(mergeTabRows(hideDeletedChats(rows, states, meId), tabs, pending, meId, tabsOn), tabs, risiOn)
+    ) { rows, states, tabs, (pending, pendingRisi), (tabsOn, risiOn) ->
+        applyRisiRows(mergeTabRows(hideDeletedChats(rows, states, meId), tabs, pending, meId, tabsOn, pendingRisi), tabs, risiOn, pendingRisi)
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

@@ -536,6 +536,56 @@ class GroupOpsExecutorTest {
         assertEquals(listOf("rejoin", "rejoin", "reset:1"), api.calls)
     }
 
+    // ---- P0 2026-10-12: the Risi chat after a reinstall of the owner's only phone ----
+
+    /** My Risi chat (me, its only admin, and Risi), active, and this device holds no state for it. */
+    private fun reinstalledRisiChat(generation: Long = 1, epoch: Long? = 9, pending: List<PendingOp> = emptyList()) {
+        api.group = Group(
+            conv, "active", me, null, generation, epoch, "admin",
+            listOf(member(me, "admin"), GroupMember(risi, "Risi", null, "member", "agent", "active", null)),
+            pending = pending, chatId = conv, tab = "official", chatKind = "risi", agents = listOf(risi),
+        )
+    }
+
+    @Test fun aReinstalledRisiChatWithNoCandidateResetsAtOnce() = runTest {
+        reinstalledRisiChat()
+        api.rejoinCandidates = 0
+        api.rejoinOp = api.rejoinOp!!.copy(committer = null)
+        queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertEquals("Risi never commits: no 24 h wait", listOf("rejoin", "reset:1"), api.calls)
+    }
+
+    @Test fun aReinstalledRisiChatWaitsWhileTheOwnersOtherPhoneCanReAddIt() = runTest {
+        reinstalledRisiChat()
+        api.rejoinCandidates = 1
+        queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertEquals(listOf("rejoin"), api.calls)
+    }
+
+    @Test fun aRisiChatAwaitingItsRebuildIsNeverResetAgain() = runTest {
+        reinstalledRisiChat(generation = 2, epoch = null)
+        api.rejoinCandidates = 0
+        api.rejoinOp = null
+        queue(GroupOpType.REJOIN, auto)
+        exec.runDue()
+        assertEquals("the rebuild brings it in; a second reset would only get 429", listOf("rejoin"), api.calls)
+    }
+
+    @Test fun theRisiChatsRebuildWithoutLocalStateIsTheRisiChatAgainNeverAGroup() = runTest {
+        val op = PendingOp("op-rb", PendingOp.REBUILD, me, committer = MlsDeviceRef(me, "dev-me"))
+        reinstalledRisiChat(generation = 2, epoch = null, pending = listOf(op))
+        store.queueCommit(conv, op)
+        exec.runDue()
+        val c = api.commits.single()
+        assertEquals(2L, c.generation)
+        assertEquals("op-rb", c.opId)
+        val meta = mls.groupMeta(conv)!!
+        assertEquals(GroupMeta(name = "", admins = listOf(me), tab = "official", chatId = conv, agents = listOf(risi), chatKind = "risi"), meta)
+        assertTrue(meta.isRisiChat(conv))
+    }
+
     @Test fun aNonAdminNeverResets() = runTest {
         reinstalledOnlyAdmin()
         api.group = api.group.copy(myRole = GroupMember.ROLE_MEMBER, members = listOf(member(me), member(kamal, "admin")))

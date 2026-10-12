@@ -163,6 +163,13 @@ class DmRepairTest {
         // Group, non-admin: never.
         assertEquals(RejoinDecision.WAIT, RejoinRules.group(false, 2, true, 0, 1))
         assertEquals(RejoinDecision.WAIT, RejoinRules.group(false, 0, false, 0, 10 * day))
+        // §25.2 (P0 2026-10-12) the Risi chat: nobody but the owner's other phones can re-add it (Risi never
+        // commits), so no candidate means a reset at once; a candidate still means waiting.
+        assertEquals(RejoinDecision.RESET, RejoinRules.group(true, 0, false, 0, 1, risiChat = true))
+        assertEquals(RejoinDecision.RESET, RejoinRules.group(true, 0, false, null, 1, risiChat = true))
+        assertEquals(RejoinDecision.WAIT, RejoinRules.group(true, 1, false, 0, 10 * day, risiChat = true))
+        assertEquals(RejoinDecision.WAIT, RejoinRules.group(true, null, false, 0, 10 * day, risiChat = true))
+        assertEquals(RejoinDecision.WAIT, RejoinRules.group(false, 0, false, 0, 10 * day, risiChat = true))
         assertEquals(1_000L, RejoinRules.epochMs("1970-01-01T00:00:01Z"))
         assertNull(RejoinRules.epochMs("not a time"))
         assertEquals("Setting up encryption on this phone… Waiting for a group member to open RisiMe", GROUP_WAITING_TEXT)

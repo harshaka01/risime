@@ -127,6 +127,22 @@ class ChatTabsTest {
         assertEquals(emptyMap<String, String>(), t.pendingOfficial.value)
     }
 
+    @Test fun aServerListedRisiChatIsPendingRisiNotHiddenUntilMlsTells() = runBlocking {
+        val t = tabs()
+        t.noteServerTab(off, "official", off, "risi")
+        assertEquals(setOf(off), t.pendingRisi.value)
+        assertEquals("never hidden as another chat's Official", emptyMap<String, String>(), t.pendingOfficial.value)
+        assertTrue("still Private for every agent path until MLS tells", t.private(off))
+        t.recordMls(off, GroupMeta(name = "", admins = listOf("me"), tab = "official", chatId = off, agents = listOf(risi), chatKind = "risi"))
+        assertEquals(emptySet<String>(), t.pendingRisi.value)
+        assertTrue(isRisiChat(off, t.rows.value))
+        // A conversation with MLS state already: the hint is ignored.
+        t.noteServerTab(grp, "private", grp, null)
+        t.recordMls(grp, GroupMeta(name = "Team"))
+        t.noteServerTab(grp, "official", grp, "risi")
+        assertEquals(emptySet<String>(), t.pendingRisi.value)
+    }
+
     @Test fun uiNeedsTheServerSwitchAndTheAdvertisedCapability() = runBlocking {
         val t = tabs()
         assertFalse(t.uiOn.value)
