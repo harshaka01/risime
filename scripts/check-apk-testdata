@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Release gate (Harsha 2026-10-12): no test clip ships. The speech test clips (android/testdata/transcribe/,
+# infra/whisper/testdata/) are for internal testing only (licences: their README.md files; the MMS-TTS clips are
+# CC BY-NC 4.0), so they must never be inside an APK or anything published.
+#   scripts/check-apk-testdata <apk|dir> [...]
+# Fails when an APK (or any file under a directory, e.g. the publish mirror) holds:
+#   - an audio entry (.ogg .oga .opus .wav .flac .mp3 .m4a .aac .webm), or a path containing "testdata";
+#   - any entry/file whose bytes equal one of the repo's test clips (SHA-256; catches a renamed copy).
+# Lists only paths, never contents.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+[ $# -gt 0 ] || { echo "usage: $0 <apk|dir> [...]"; exit 2; }
+python3 -I - "$PWD" "$@" <<'PY'
+import glob, hashlib, os, sys, zipfile
+
+repo, targets = sys.argv[1], sys.argv[2:]
+AUDIO = (".ogg", ".oga", ".opus", ".wav", ".flac", ".mp3", ".m4a", ".aac", ".webm")
+clips = {}
+for d in ("android/testdata/transcribe", "infra/whisper/testdata"):
+    for p in glob.glob(os.path.join(repo, d, "*")):
+        if os.path.isfile(p) and not p.endswith((".md", ".txt")):
+            clips[hashlib.sha256(open(p, "rb").read()).hexdigest()] = os.path.relpath(p, repo)
+if not clips:
+    print("check-apk-testdata: no test clips found in the repo (wrong checkout?)"); sys.exit(1)
+
+
+def bad_name(n):
+    low = n.lower()
+    return low.endswith(AUDIO) or "testdata" in low
+
+
+def check_apk(path):
+    hits = []
+    with zipfile.ZipFile(path) as z:
+        for info in z.infolist():
+            if info.is_dir():
+                continue
+            if bad_name(info.filename):
+                hits.append(f"{info.filename} (audio/testdata name)")
+                continue
+            h = hashlib.sha256(z.read(info)).hexdigest()
+            if h in clips:
+                hits.append(f"{info.filename} (= {clips[h]})")
+    return hits
+
+
+bad = 0
+for t in targets:
+    if os.path.isdir(t):
+        files = [os.path.join(r, f) for r, _, fs in os.walk(t) for f in fs]
+    elif os.path.isfile(t):
+        files = [t]
+    else:
+        print(f"check-apk-testdata: no {t}"); sys.exit(1)
+    for f in files:
+        hits = []
+        if f.endswith(".apk"):
+            hits = check_apk(f)
+        elif bad_name(os.path.basename(f)):
+            hits = [f"{f} (audio/testdata name)"]
+        elif hashlib.sha256(open(f, "rb").read()).hexdigest() in clips:
+            hits = [f"{f} (a test clip)"]
+        for h in hits:
+            print(f"check-apk-testdata: FAIL {f}: {h}")
+        bad += len(hits)
+        if f.endswith(".apk") and not hits:
+            print(f"check-apk-testdata: OK {os.path.basename(f)}: no audio, no test clip "
+                  f"({len(clips)} clips checked)")
+sys.exit(1 if bad else 0)
+PY

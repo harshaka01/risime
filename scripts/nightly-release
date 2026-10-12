@@ -247,6 +247,8 @@ fi
 scripts/check-apk-signer "$APK" || { echo "release APK is not signed with the release key (CN=Risi)"; exit 1; }
 # Push gate (decisions 026, 079): the release APK carries its own package's Firebase config (push on).
 scripts/check-apk-push "$APK" || { echo "release APK has push OFF or another app's Firebase config: not releasing"; exit 1; }
+# Test-clip gate (Harsha 2026-10-12): no speech test clip (android/testdata, infra/whisper/testdata) nor any audio file.
+scripts/check-apk-testdata "$APK" || { echo "release APK contains a test clip or an audio file: not releasing"; exit 1; }
 
 # Upgrade gate (P0 nightly.10 data loss): the previous published APK, signed in with chats, must
 # upgrade in place to THIS candidate with every message kept and no new sign-in. Needs an adb

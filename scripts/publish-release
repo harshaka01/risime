@@ -45,6 +45,8 @@ BT="$(printf '%s\n' "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V
 # --legacy: the old app's own key and package only (scripts/check-apk-signer's legacy branch).
 [ "$LEGACY" = 1 ] && export LEGACY_CODEGEN_BUILD=1
 scripts/check-apk-signer "$apk" || exit 1
+# Test clips are internal only (Harsha 2026-10-12): none, and no audio file, in a published APK.
+scripts/check-apk-testdata "$apk" || exit 1
 certs="$("$BT/apksigner" verify --print-certs "$apk")"
 cert="$(sed -n 's/.*certificate SHA-256 digest: //p' <<<"$certs" | sed -n 1p)"
 badging="$("$BT/aapt2" dump badging "$apk" | sed -n 1p)"   # not head: SIGPIPE under pipefail
@@ -162,6 +164,7 @@ rsh=(); [ -n "${RISIME_PUBLISH_RSH:-}" ] && rsh=(-e "$RISIME_PUBLISH_RSH")
 # Feeds: ai.risicloud.risime/ (new app) and the root (old app); a publish writes only its own feed + index.html.
 # The --delete below mirrors the local tree: without the new app's feed locally it would delete it remotely. Refuse.
 [ -f "$MIRROR/$NEW_PKG/version.json" ] || { echo "the mirror has no $NEW_PKG/version.json: refusing to upload (would delete the new app's feed)"; exit 1; }
+scripts/check-apk-testdata "$MIRROR" >/dev/null || { scripts/check-apk-testdata "$MIRROR" | grep FAIL; echo "the mirror holds a test clip or an audio file: refusing to upload"; exit 1; }
 rsync -rt --chmod=F644,D755 "${rsh[@]}" --include='*/' --include='risime-*.apk' --exclude='*' "$MIRROR/" "$DEST"
 rsync -rt --chmod=F644,D755 "${rsh[@]}" --delay-updates "$FEED/version.json" "$DEST$SUB"
 rsync -rt --chmod=F644,D755 "${rsh[@]}" --delay-updates "$MIRROR/index.html" "$DEST"
