@@ -516,7 +516,11 @@ if [ "$VOICE" = 1 ]; then
     grep -qE 'text="(Transcript|Couldn.t transcribe)' "$WORK/ui-$DEV.xml" && transcript=1
     shot voice-reply
     TIMINGS+=" voice_typing_ms=${typing:-none} voice_reply_ms=${answered:-none}"
-    [ -n "$typing" ] && pass "voice_typing_state(${typing}ms)" || bad voice_typing_state "no 'Risi is typing…' after the voice note"
+    # With the fake model the reply can land ~1 s after the typing bubble, faster than one UI dump (~1-2 s), so a
+    # reply within the simple-answer budget (6 s) counts as "never silent" even when no dump caught the bubble.
+    if [ -n "$typing" ]; then pass "voice_typing_state(${typing}ms)"
+    elif [ -n "$answered" ] && [ "$answered" -le 6000 ]; then pass "voice_typing_state(reply in ${answered}ms, before a dump caught the typing bubble)"
+    else bad voice_typing_state "no 'Risi is typing…' after the voice note"; fi
     [ -n "$transcript" ] && pass voice_transcript_shown || bad voice_transcript_shown "no transcript under the Risi-chat voice note"
     if [ -n "$answered" ]; then pass "voice_reply(${answered}ms)"; else bad voice_reply "no reply to the voice note within 60 s"; fi
     if [ "$LIVE" = 0 ]; then
