@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.37 (Release 0.3)
+# RisiMe Wire Protocol — v1.38 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -10071,6 +10071,17 @@ With the chat owner's consent the phone uploads an Official chat's existing hist
 Needs an APK; not in v1.36.
 
 ## Changelog
+- **v1.38** (2026-10-12): the Risi chat after a reinstall (P0 bug D; proposal
+  `contract/proposals/2026-10-12-risi-chat-reinstall.md`). Behaviour only, no wire shape change.
+  (1) §12.12.3 server: no `409 rejoin_pending` for a Risi chat whose rejoin op has `candidates: 0` (the owner
+  may reset at once); with a candidate the guard is unchanged. (2) §12.12.3 client: in a Risi chat (server
+  `Group` with `chat_kind: "risi"`, `tab: "official"`, `chat_id` = its id) an admin device resets at once on
+  `candidates: 0`; a group awaiting its rebuild (`epoch: null`) is never reset again from a rejoin reply.
+  (3) §12.5: an agent member's key package may be claimed, by the user named on the `rebuild` op, for an
+  Official group that awaits its rebuild. (4) §12.8: the rebuild of a Risi chat with no local state uses the
+  §25.2 Risi-chat `group_meta`, never a Private group named "Group". (5) §25.2: a group the server lists as the
+  user's Risi chat, while the device has no MLS state for it, is shown as the Risi chat (no tab bar, no Start
+  Official); MLS state wins once it exists, and the hint never makes a conversation Official for an agent path.
 - **v1.37** (2026-10-11): new app id `ai.risicloud.risime` (decision 079): optional `app_id` on
   `PUT /api/v1/me/devices/{device_id}` chooses the Firebase project for that device's pushes; example
   `device_put_app_id.json`. Additive; old clients unchanged.

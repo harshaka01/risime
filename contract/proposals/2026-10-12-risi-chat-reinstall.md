@@ -1,7 +1,6 @@
 # Proposal 2026-10-12: the Risi chat after a reinstall (P0 bug D)
 
-Status: implemented on server and android (no wire shape change); root to fold into PROTOCOL.md
-§12.12.3, §12.5 and §25.2.
+Status: implemented on server and android (no wire shape change); folded into PROTOCOL.md v1.38 (2026-10-12).
 
 ## Problem
 A reinstall of the owner's only phone left the Risi chat at "Rejoining group…" / "Setting up
