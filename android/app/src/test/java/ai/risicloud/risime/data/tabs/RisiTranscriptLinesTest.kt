@@ -61,6 +61,33 @@ class RisiTranscriptLinesTest {
     }
 
     @Test
+    fun compareRowsShowTheSinhalaScriptCheckPerModel() {
+        val c = RisiTranscriptKinds.compare(read("envelope_risi_call_transcript_compare_si_script.json"))!!
+        val rows = RisiTranscriptLines.compareRows(c).associateBy { it.model }
+        assertEquals("Sinhala script ✓ · 17 Sinhala, 0 Latin", rows.getValue("whisper-small-sinhala").script)
+        assertEquals(true, rows.getValue("whisper-small-sinhala").scriptOk)
+        assertEquals("romanised ✗ · 0 Sinhala, 23 Latin", rows.getValue("faster-whisper-large-v3").script)
+        assertEquals(false, rows.getValue("faster-whisper-large-v3").scriptOk)
+        // Tamil script: not Latin, still not Sinhala.
+        assertEquals("not Sinhala script ✗ · 0 Sinhala, 0 Latin", rows.getValue("tamil-asr-qwen3").script)
+        // Only `romanised` (no script object): the verdict without counts.
+        val bare = c.results[0].copy(script = null, romanised = true)
+        assertEquals("romanised ✗", RisiTranscriptLines.scriptLabel(bare))
+        // A failed model or a v1.39 post: no script line.
+        assertNull(RisiTranscriptLines.scriptLabel(c.results[0].copy(text = null, error = "timeout")))
+        val old = RisiTranscriptKinds.compare(read("envelope_risi_call_transcript_compare.json"))!!
+        assertTrue(RisiTranscriptLines.compareRows(old).all { it.script == null && it.scriptOk == null })
+    }
+
+    @Test
+    fun aRomanisedTranscriptLineIsUnchanged() {
+        val t = RisiTranscriptKinds.transcript(read("envelope_risi_call_transcript_romanised.json"))!!
+        assertTrue(t.romanised)
+        // Normal lines show no model name and no script badge.
+        assertEquals("Harsha 17:50: Heta ude dahayata hamuwemu.", RisiTranscriptLines.transcript(t, nameOf, colombo, "body"))
+    }
+
+    @Test
     fun otherKindsAreNotTranscriptKinds() {
         val card = read("envelope_risi_discussion_card_transcribed.json")
         assertNull(RisiTranscriptKinds.transcript(card))

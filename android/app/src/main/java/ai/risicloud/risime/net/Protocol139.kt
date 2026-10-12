@@ -198,6 +198,8 @@ data class RisiCallTranscript(
     val language: String? = null,
     val model: String? = null,
     @SerialName("made_by") val madeBy: RisiMadeBy? = null,
+    /** v1.40 §36.11: a Sinhala chunk of this turn stayed out of Sinhala script after the service's retry. Not rendered. */
+    val romanised: Boolean = false,
 )
 
 /** §36.5 `call_transcribe`: the consent system line (once on `on`, once per final transition). */
@@ -217,7 +219,16 @@ data class RisiCallTranscribeLine(
     val compare: Boolean = false,
 )
 
-/** §36.5 one model's result in compare mode. */
+/** v1.40 §36.11 the speech service's Sinhala script check of one compare result. */
+@Serializable
+data class RisiScriptCheck(
+    val expected: String = "sinh",
+    @SerialName("sinhala_chars") val sinhalaChars: Int = 0,
+    @SerialName("latin_chars") val latinChars: Int = 0,
+    val ok: Boolean = true,
+)
+
+/** §36.5 one model's result in compare mode; v1.40 §36.11 `script` / `romanised` on a Sinhala chunk. */
 @Serializable
 data class RisiCompareResult(
     val model: String,
@@ -225,6 +236,8 @@ data class RisiCompareResult(
     val language: String? = null,
     @SerialName("elapsed_ms") val elapsedMs: Long = 0,
     val error: String? = null,
+    val script: RisiScriptCheck? = null,
+    val romanised: Boolean? = null,
 )
 
 /** §36.5 `call_transcript_compare` (developer compare mode, one post per chunk with speech). */

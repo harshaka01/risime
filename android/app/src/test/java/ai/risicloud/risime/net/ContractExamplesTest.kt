@@ -336,13 +336,25 @@ class ContractExamplesTest {
             "error_transcribe_off.json" to { s -> apiError(s, CallTranscribeErrors.TRANSCRIBE_OFF) },
             "envelope_risi_call_transcript.json" to { s ->
                 ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds139.CALL_TRANSCRIPT) }
-                RisiTranscriptKinds.transcript(s)!!.also { require(it.turn == 1 && it.speaker != null && it.language == "en" && it.text.isNotEmpty() && it.start != null && it.model == it.madeBy!!.model) }
+                RisiTranscriptKinds.transcript(s)!!.also { require(it.turn == 1 && it.speaker != null && it.language == "en" && it.text.isNotEmpty() && it.start != null && it.model == it.madeBy!!.model && !it.romanised) }
             },
             "envelope_risi_call_transcript_compare.json" to { s ->
                 ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds139.CALL_TRANSCRIPT_COMPARE) }
                 RisiTranscriptKinds.compare(s)!!.also {
                     require(it.seq == 4 && it.results.size == 3 && it.ordered.first().model == it.chosen && it.results[1].error == "timeout" && it.results[1].text == null && it.languageDetected == "si")
+                    require(it.results.all { r -> r.script == null && r.romanised == null }) // a v1.39 post: no script check
                 }
+            },
+            // v1.40 §36.11 the Sinhala script check.
+            "envelope_risi_call_transcript_compare_si_script.json" to { s ->
+                RisiTranscriptKinds.compare(s)!!.also {
+                    require(it.languageDetected == "si" && it.results.size == 3 && it.results.all { r -> r.script?.expected == "sinh" && r.romanised != null })
+                    require(it.results[0].script!!.ok && it.results[0].romanised == false && it.results[0].script!!.sinhalaChars == 17)
+                    require(!it.results[2].script!!.ok && it.results[2].romanised == true && it.results[2].script!!.latinChars == 23)
+                }
+            },
+            "envelope_risi_call_transcript_romanised.json" to { s ->
+                RisiTranscriptKinds.transcript(s)!!.also { require(it.romanised && it.language == "si" && it.turn == 2) }
             },
             "envelope_risi_call_transcribe_on.json" to { s ->
                 RisiTranscriptKinds.consentLine(s)!!.also { require(it.state == CallTranscribeStates.ON && it.consents.size == 2 && it.by == null && it.startedAt != null && !it.discard) }

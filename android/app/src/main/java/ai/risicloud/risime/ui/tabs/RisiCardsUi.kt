@@ -502,6 +502,15 @@ private fun CallTranscriptCompareCard(row: MessageEntity, ctx: RisiCardContext, 
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Text(r.text, style = MaterialTheme.typography.bodyMedium, color = if (r.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                            r.script?.let { label ->
+                                // v1.40 §36.11: the Sinhala script check, for judging each model.
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (r.scriptOk == true) OfficialAccent else MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.testTag("risi_compare_script"),
+                                )
+                            }
                         }
                     }
                 }

@@ -59,11 +59,40 @@ object RisiTranscriptLines {
         }
     }
 
-    /** Compare mode: `chosen` first, one row per model ("timeout" / "failed" when it had no text). */
-    data class CompareRow(val model: String, val chosen: Boolean, val elapsedMs: Long, val text: String, val failed: Boolean)
+    /**
+     * Compare mode: `chosen` first, one row per model ("timeout" / "failed" when it had no text).
+     * v1.40 §36.11: [script] is the Sinhala script check for the developer ("Sinhala script ✓ · 17 Sinhala, 0 Latin"),
+     * null when the service made none; [scriptOk] colours it.
+     */
+    data class CompareRow(
+        val model: String,
+        val chosen: Boolean,
+        val elapsedMs: Long,
+        val text: String,
+        val failed: Boolean,
+        val script: String? = null,
+        val scriptOk: Boolean? = null,
+    )
 
     fun compareRows(c: RisiCallTranscriptCompare): List<CompareRow> = c.ordered.map { r: RisiCompareResult ->
-        CompareRow(r.model, r.model == c.chosen, r.elapsedMs, r.text ?: r.error ?: "no text", r.text == null)
+        val ok = r.script?.ok ?: r.romanised?.let { !it }
+        CompareRow(r.model, r.model == c.chosen, r.elapsedMs, r.text ?: r.error ?: "no text", r.text == null, scriptLabel(r), ok.takeIf { r.text != null })
+    }
+
+    /**
+     * v1.40 §36.11 one model's script check: "Sinhala script ✓", "romanised ✗" (Latin letters, no Sinhala) or
+     * "not Sinhala script ✗" (another script, e.g. Tamil), with the character counts. Null without a check or text.
+     */
+    fun scriptLabel(r: RisiCompareResult): String? {
+        if (r.text == null) return null
+        val s = r.script
+        val ok = s?.ok ?: r.romanised?.let { !it } ?: return null
+        val verdict = when {
+            ok -> "Sinhala script ✓"
+            s == null || s.latinChars > 0 -> "romanised ✗"
+            else -> "not Sinhala script ✗"
+        }
+        return if (s == null) verdict else "$verdict · ${s.sinhalaChars} Sinhala, ${s.latinChars} Latin"
     }
 
     /** "Kamal 17:52 · Sinhala detected". */
