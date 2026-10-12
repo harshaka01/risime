@@ -527,7 +527,7 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   def truncate! do
     for table <-
           ~w(inbox_events sent_dedupe message_index group_receipts message_refs call_signals
-             risi_buffer) do
+             risi_buffer risi_llm_calls_by_day risi_llm_calls_by_chat risi_llm_feedback risi_turn_steps) do
       {:ok, _} = Xandra.Cluster.execute(@cluster, "TRUNCATE #{table}", [], timeout: 60_000)
     end
 
