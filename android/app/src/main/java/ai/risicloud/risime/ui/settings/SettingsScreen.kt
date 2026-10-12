@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -108,7 +110,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
                 ai.risicloud.risime.ui.chats.LockedChatsResetSection(container)
                 HorizontalDivider()
             }
-            AboutSection()
+            AboutSection(container)
             HorizontalDivider()
             OutlinedButton(
                 onClick = vm::askLogout,
@@ -223,9 +225,15 @@ const val ABOUT_E2EE_TEXT =
     "Chats are end-to-end encrypted (MLS) once everyone in them runs a current RisiMe. Each chat shows its state."
 
 @Composable
-internal fun AboutSection() {
+internal fun AboutSection(container: ai.risicloud.risime.AppContainer? = null) {
     SectionHeader("About")
-    InfoRow("App version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+    // v1.39 §36.1: seven taps on the version open the Developer section (shown only to `risi_dev` users).
+    val taps = androidx.compose.runtime.remember { DevTapCounter() }
+    var developer by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth().testTag("about_version").clickable { if (taps.tap(System.currentTimeMillis())) developer = true }) {
+        InfoRow("App version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+    }
+    if (developer && container != null) RisiDevSection(container)
     UpdateCheckSection()
     InfoRow("Build", if (BuildConfig.DEBUG) "Debug" else "Release")
     InfoRow("Protocol", "v$PROTOCOL_VERSION")

@@ -96,6 +96,21 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
         ai.risicloud.risime.net.RisiCalendarCard.parse(row.systemJson)?.let { RisiEventUpdateLine(row, it, ctx) }
         return
     }
+    // v1.39 §36.5 call transcription: the consent line, the transcript lines and the developer comparison.
+    if (r.kind == ai.risicloud.risime.net.RisiKinds139.CALL_TRANSCRIBE) {
+        val l = remember(row.systemJson) { ai.risicloud.risime.net.RisiTranscriptKinds.consentLine(row.systemJson) }
+        val zone = remember { java.time.ZoneId.systemDefault() }
+        Box(Modifier.testTag("risi_call_transcribe")) { SystemLineText(l?.let { ai.risicloud.risime.data.tabs.RisiTranscriptLines.consent(it, ctx.nameOf, zone, row.body) } ?: row.body) }
+        return
+    }
+    if (r.kind == ai.risicloud.risime.net.RisiKinds139.CALL_TRANSCRIPT) {
+        CallTranscriptLine(row, ctx, modifier)
+        return
+    }
+    if (r.kind == ai.risicloud.risime.net.RisiKinds139.CALL_TRANSCRIPT_COMPARE) {
+        CallTranscriptCompareCard(row, ctx, modifier)
+        return
+    }
     Box(modifier.fillMaxWidth().padding(end = 32.dp), contentAlignment = Alignment.CenterStart) {
         Surface(
             shape = MaterialTheme.shapes.medium,
@@ -438,5 +453,58 @@ fun RisiEditDialog(initialText: String, initialDue: String?, ownerName: String?,
             dismissButton = { TextButton(onClick = { pickTime = false }) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
             text = { TimePicker(st) },
         )
+    }
+}
+
+/** v1.39 §36.5 one transcript turn: "Harsha 17:52: …" (name from this phone, time in its zone); a quiet line, no card. */
+@Composable
+private fun CallTranscriptLine(row: MessageEntity, ctx: RisiCardContext, modifier: Modifier = Modifier) {
+    val t = remember(row.systemJson) { ai.risicloud.risime.net.RisiTranscriptKinds.transcript(row.systemJson) }
+    val zone = remember { ZoneId.systemDefault() }
+    Box(modifier.fillMaxWidth().padding(end = 32.dp).testTag("risi_call_transcript"), contentAlignment = Alignment.CenterStart) {
+        Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f), border = BorderStroke(1.dp, OfficialAccent.copy(alpha = 0.35f))) {
+            Column(Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs)) {
+                val speaker = t?.speaker
+                if (t != null && speaker != null) {
+                    Text(
+                        listOfNotNull(ctx.nameOf(speaker), ai.risicloud.risime.data.tabs.RisiTranscriptLines.hm(t.start, zone)).joinToString(" "),
+                        style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = OfficialAccent,
+                    )
+                    Text(t.text, style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    Text(row.body, style = MaterialTheme.typography.bodyMedium)
+                }
+                Text("Risi transcript" + (t?.model?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/** v1.39 §36.5 developer compare mode: every model's text and time on one chunk, the routed one first. */
+@Composable
+private fun CallTranscriptCompareCard(row: MessageEntity, ctx: RisiCardContext, modifier: Modifier = Modifier) {
+    val c = remember(row.systemJson) { ai.risicloud.risime.net.RisiTranscriptKinds.compare(row.systemJson) }
+    val zone = remember { ZoneId.systemDefault() }
+    Box(modifier.fillMaxWidth().padding(end = 16.dp).testTag("risi_call_transcript_compare"), contentAlignment = Alignment.CenterStart) {
+        Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp, border = BorderStroke(1.dp, OfficialAccent.copy(alpha = 0.6f))) {
+            Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                Text("Risi · Model comparison", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = OfficialAccent)
+                if (c == null) {
+                    Text(row.body, style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    Text(ai.risicloud.risime.data.tabs.RisiTranscriptLines.compareHeader(c, ctx.nameOf, zone), style = MaterialTheme.typography.labelMedium)
+                    ai.risicloud.risime.data.tabs.RisiTranscriptLines.compareRows(c).forEach { r ->
+                        Column(Modifier.fillMaxWidth().testTag("risi_compare_row")) {
+                            Text(
+                                r.model + (if (r.chosen) " (routed)" else "") + " · ${r.elapsedMs} ms",
+                                style = MaterialTheme.typography.labelSmall, fontWeight = if (r.chosen) FontWeight.Bold else FontWeight.Normal,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(r.text, style = MaterialTheme.typography.bodyMedium, color = if (r.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
