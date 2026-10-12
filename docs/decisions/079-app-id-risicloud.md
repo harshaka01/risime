@@ -30,3 +30,12 @@ app first (§22 backup file).
 Stop publishing the new feed and keep the old app's feed; the old app, its key, its Firebase project and the
 server's old-package push path are never removed in this change, so old installs are unaffected. Server
 changes are additive (per-package FCM choice falls back to the old project).
+
+## Amendment (2026-10-12, v0.3.0-nightly.2)
+- **Own sign-in scheme:** the old app claims `ai.risicloud.risime(.debug)://`, so the new app signs in through
+  `ai.risicloud.risime.app://callback|logout` (debug `ai.risicloud.risime.app.debug://…`). Keycloak client `risime`
+  needs these four URIs; `scripts/check-oidc-redirect` (release gate) checks the two callbacks against the issuer.
+- **Push on:** `~/secrets/firebase/google-services.json` lists the new ids; `scripts/check-apk-push` (release gate)
+  fails a release APK without its own package's `google_app_id`. The server logs one audit line per FCM send
+  (`fcm: send project=… app=… http=…`, no tokens); `scripts/push-proof` summarises it from the pilot log.
+- **Old app line:** `scripts/publish-release --legacy <tag>` rewrites only the root feed; the new app's subfolder stays.

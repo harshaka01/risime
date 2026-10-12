@@ -10,7 +10,7 @@ Nothing in this folder is applied automatically. The RisiCloud lead applies the 
 ## What each side does
 | Piece | Where | Owner | State |
 |---|---|---|---|
-| Keycloak client `risime` (public, PKCE S256, redirects `ai.risicloud.risime[.debug]://callback`, post-logout `…://logout`, `email` scope in access tokens, audience/azp `risime`) | spark, realm `aoa` | RisiCloud lead | **waiting** |
+| Keycloak client `risime` (public, PKCE S256, redirects `ai.risicloud.risime.app://callback` and `ai.risicloud.risime.app.debug://callback`, post-logout `…://logout` (decision 079: the new app's own scheme; the old app's `ai.risicloud.risime[.debug]://` stay); check with `scripts/check-oidc-redirect`, `email` scope in access tokens, audience/azp `risime`) | spark, realm `aoa` | RisiCloud lead | **waiting** |
 | `/app/risime/` downloads route (`Caddyfile.risime` §1) | spark Caddy | RisiCloud lead | **waiting** |
 | rrsync-restricted key in `~/.ssh/authorized_keys` (decision 015) | spark | Harsha | **waiting** (spark refuses the key today) |
 | `/risime/` API route (`Caddyfile.risime` §2, commented out) | spark Caddy | RisiCloud lead | prepared, **off** |

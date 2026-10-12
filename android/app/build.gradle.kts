@@ -123,10 +123,11 @@ android {
         // Release: spark2 via Caddy at risime.risicloud.ai. Debug overrides it with the laptop tunnel.
         // Editable in Settings / on login in every build.
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://risime.risicloud.ai\"")
-        // Keycloak redirects (decision 014): custom scheme per build type so both can be installed.
-        manifestPlaceholders["appAuthRedirectScheme"] = "ai.risicloud.risime"
-        buildConfigField("String", "OIDC_REDIRECT_URI", "\"ai.risicloud.risime://callback\"")
-        buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"ai.risicloud.risime://logout\"")
+        // Keycloak redirects (decisions 014, 079): custom scheme per build type so both can be installed. The old
+        // lk.codegen.risime app already claims ai.risicloud.risime(.debug)://, so this app has its own ".app" scheme.
+        manifestPlaceholders["appAuthRedirectScheme"] = "ai.risicloud.risime.app"
+        buildConfigField("String", "OIDC_REDIRECT_URI", "\"ai.risicloud.risime.app://callback\"")
+        buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"ai.risicloud.risime.app://logout\"")
         // In-app updater (decision 016): release only.
         buildConfigField("boolean", "UPDATER_ENABLED", "true")
         buildConfigField("String", "UPDATE_BASE_URL", "\"$updateBaseUrl\"")
@@ -172,9 +173,9 @@ android {
             applicationIdSuffix = ".debug"
             // Laptop tunnel port (emulator -> 10.0.2.2:4400 -> spark2 127.0.0.1:4000).
             buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:4400\"")
-            manifestPlaceholders["appAuthRedirectScheme"] = "ai.risicloud.risime.debug"
-            buildConfigField("String", "OIDC_REDIRECT_URI", "\"ai.risicloud.risime.debug://callback\"")
-            buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"ai.risicloud.risime.debug://logout\"")
+            manifestPlaceholders["appAuthRedirectScheme"] = "ai.risicloud.risime.app.debug"
+            buildConfigField("String", "OIDC_REDIRECT_URI", "\"ai.risicloud.risime.app.debug://callback\"")
+            buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"ai.risicloud.risime.app.debug://logout\"")
             // Debug builds (.debug id, debug key) never self-update.
             buildConfigField("boolean", "UPDATER_ENABLED", "false")
         }
