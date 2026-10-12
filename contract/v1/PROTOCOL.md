@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.39 (Release 0.3)
+# RisiMe Wire Protocol — v1.40 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -10267,8 +10267,10 @@ The request is auth plus `X-Device-Id` (the bound device), sent as `multipart/fo
 risi: {"v": 1, "kind": "call_transcript", "call_id", "session_id", "turn": int (1-based per session),
   "speaker": uuid, "start": ts, "end": ts, "text": str (≤ 2000 chars), "language": "si" | "ta" | "en",
   "model": alias, "call_ref": null, "made_by": {"model": alias, "provider": "risime", "at", "also": []},
-  "notify": []}
+  "notify": [], "romanised"?: true}
 ```
+- **`romanised`** (v1.40, optional; §36.11): present and `true` only when a Sinhala chunk of the turn was
+  still not in Sinhala script after the speech service's retry. Absent otherwise.
 - **`body`:** `"Harsha 17:52: <text>"`. The name is the server's display name; the phone renders the name
   from its own data and the time in its own zone. These posts are silent.
 - **Grouping:**
@@ -10307,7 +10309,9 @@ it replaces `call_transcript` for that session; `envelope_risi_call_transcript_c
 risi: {"v": 1, "kind": "call_transcript_compare", "call_id", "session_id", "seq", "speaker",
   "start", "end", "language_detected": "si" | "ta" | "en", "chosen": alias (the routed model),
   "results": [{"model": alias, "text": str | null, "language": str | null, "elapsed_ms": int,
-               "error": null | "timeout" | "failed"}],
+               "error": null | "timeout" | "failed",
+               "script"?: {"expected": "sinh", "sinhala_chars": int, "latin_chars": int, "ok": bool},
+               "romanised"?: bool}],
   "call_ref": null, "made_by": {"model": null, "provider": "risime", "at", "also": [{model, provider, task}…]},
   "notify": []}
 ```
@@ -10315,6 +10319,9 @@ risi: {"v": 1, "kind": "call_transcript_compare", "call_id", "session_id", "seq"
 - **`body`:** one line per model, `"<model> (<elapsed> ms): <text>"`, with `chosen` first.
 - **Consent:** the request shown to the peer says "(developer model comparison on)", so the peer allows
   knowing it.
+
+- **`script`, `romanised`** (v1.40, optional; §36.11): on each result without an `error` when the chunk is
+  Sinhala (`language_detected: "si"`). `envelope_risi_call_transcript_compare_si_script.json`.
 
 ### 36.6 The phone (android, normative)
 - **[Transcribe]** appears on the Official call screen under §36.1. A tap sends `request` and shows
@@ -10401,7 +10408,33 @@ Not in v1.39.
     toward showing, only the own microphone is uploaded, and recording stops on `409 stopped`.
   - **Both:** parse every new example. The release gates apply (APK and protocol).
 
+### 36.11 Sinhala script check (v1.40)
+Whisper decoders sometimes answer Sinhala speech in Latin letters ("romanised") or in another script. The
+speech service (decision 071, amendment 2026-10-12 b) therefore:
+- runs a Sinhala chunk (detected `si`, or a `si` hint) with `language=si` and a short Sinhala-script initial
+  prompt;
+- calls a text **romanised** when it has letters but **no** Sinhala character (U+0D80–U+0DFF); Tamil or other
+  scripts count as romanised too. Code-mixed text with some Sinhala characters is not romanised;
+- **normal sessions:** retries a romanised chunk **once** with another Sinhala-tuned model (order:
+  `whisper-large-v3-sinhala`, else `whisper-small-sinhala`, whichever is not the first and fits memory). If the
+  final text is still romanised, the `call_transcript` of that turn carries `"romanised": true`;
+- **compare sessions:** runs every model with the Sinhala prompt (no retry) and adds to each result
+  `script: {"expected": "sinh", "sinhala_chars": int, "latin_chars": int, "ok": bool}` (`ok` = not romanised)
+  and `romanised: bool`.
+
+Rendering (android): the developer compare card shows the script check per model (e.g. "Sinhala script ✓ 17"
+or "romanised ✗ 0 / 23 Latin"). Normal transcript lines are unchanged (no model names, no script badge).
+Clients ignore both fields if they don't know them; a v1.39 client is unaffected.
+
+**Examples:** `envelope_risi_call_transcript_compare_si_script.json`,
+`envelope_risi_call_transcript_romanised.json`. **Gate:** both sides parse them; the server test checks the
+pass-through from the speech service into both kinds.
+
 ## Changelog
+- **v1.40** (2026-10-12): Sinhala script check (§36.11, decision 071 amendment b). Optional `romanised` on
+  `call_transcript`; optional `script {expected, sinhala_chars, latin_chars, ok}` and `romanised` on each
+  `call_transcript_compare` result for Sinhala chunks. The speech service prompts Sinhala chunks in Sinhala
+  script and retries a romanised chunk once on another Sinhala model. Additive.
 - **v1.39** (2026-10-12): the call-transcription fast path (§36, decision 080). 1:1 Official calls only (groups
   reserved, §36.9). Each phone uploads only its own microphone in 10–15 s Ogg/Opus chunks to
   `POST /api/v1/calls/{call_id}/transcribe/chunks`; nothing is stored. Consent is all-participant: the push

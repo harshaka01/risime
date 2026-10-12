@@ -5,6 +5,10 @@ defmodule RisiMe.FakeSpeech do
   `"en:…"`), `"silence"` has no speech, `"fail"` is a service error, and while
   `:fake_speech_gate` is `:closed` every call waits (queue tests). Each call sends
   `{:fake_speech, kind, audio}` to `:risi_test_pid`.
+
+  v1.40 §36.11: `"sx:<text>"` is Sinhala that the service checked for script: `transcribe`
+  answers it with `romanised: true` (still not Sinhala script after the retry), `compare` adds
+  `script` / `romanised` to every result (`faster-whisper-large-v3` romanised, the rest fine).
   """
   @behaviour RisiMe.Agent.Speech
 
@@ -25,6 +29,17 @@ defmodule RisiMe.FakeSpeech do
       :silence ->
         {:ok,
          %{text: "", language: "en", model: Speech.route("en"), elapsed_ms: 5, speech: false}}
+
+      {:script, text} ->
+        {:ok,
+         %{
+           text: text,
+           language: "si",
+           model: "whisper-large-v3-sinhala",
+           elapsed_ms: 40,
+           speech: true,
+           romanised: true
+         }}
 
       {lang, text} ->
         {:ok,
@@ -47,6 +62,27 @@ defmodule RisiMe.FakeSpeech do
            language_detected: "en",
            chosen: Speech.route("en"),
            results: for(m <- Speech.models(), do: result(m, "", "en"))
+         }}
+
+      {:script, text} ->
+        {:ok,
+         %{
+           language_detected: "si",
+           chosen: Speech.route("si"),
+           results:
+             for m <- Speech.models() do
+               if m == "faster-whisper-large-v3",
+                 do:
+                   Map.merge(result(m, "Heta ude dahayata hamuwemu.", "si"), %{
+                     script: %{expected: "sinh", sinhala_chars: 0, latin_chars: 23, ok: false},
+                     romanised: true
+                   }),
+                 else:
+                   Map.merge(result(m, text, "si"), %{
+                     script: %{expected: "sinh", sinhala_chars: 17, latin_chars: 0, ok: true},
+                     romanised: false
+                   })
+             end
          }}
 
       {lang, text} ->
@@ -72,6 +108,7 @@ defmodule RisiMe.FakeSpeech do
 
   defp parse(audio) do
     case String.split(audio, ":", parts: 2) do
+      ["sx", text] -> {:script, text}
       [lang, text] when lang in ["si", "ta", "en"] -> {lang, text}
       _ -> :silence
     end

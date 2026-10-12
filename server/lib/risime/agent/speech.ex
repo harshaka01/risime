@@ -9,12 +9,15 @@ defmodule RisiMe.Agent.Speech do
     is false when VAD found no speech (nothing is posted for it).
   * `compare/2`: every candidate model on the same chunk (developer compare mode), each with a
     30-s timeout.
+  * v1.40 §36.11: `romanised` (transcribe) and `script` / `romanised` (each compare result of a
+    Sinhala chunk) are the service's Sinhala script check, passed through to the Risi posts.
   * `healthy?/0`: the service answers `/health` (cached briefly).
 
   Audio is passed as a binary and never written anywhere by this module.
   """
 
   @type result :: %{
+          optional(:romanised) => boolean,
           text: String.t(),
           language: String.t(),
           model: String.t(),
@@ -22,11 +25,21 @@ defmodule RisiMe.Agent.Speech do
           speech: boolean
         }
 
+  @typedoc "v1.40 §36.11: the speech service's Sinhala script check of one text."
+  @type script :: %{
+          expected: String.t(),
+          sinhala_chars: non_neg_integer,
+          latin_chars: non_neg_integer,
+          ok: boolean
+        }
+
   @type compare_result :: %{
           language_detected: String.t(),
           chosen: String.t(),
           results: [
             %{
+              optional(:script) => script | nil,
+              optional(:romanised) => boolean | nil,
               model: String.t(),
               text: String.t() | nil,
               language: String.t() | nil,

@@ -83,7 +83,8 @@ defmodule RisiMe.Agent.CallTranscribe.Lines do
   defp why(_), do: ""
 
   @doc """
-  One merged turn (§36.5): `turn` = `%{n, speaker, start, end, texts, language, model}`.
+  One merged turn (§36.5): `turn` = `%{n, speaker, start, end, texts, language, model}` and,
+  v1.40 §36.11, `romanised` (true → the optional `"romanised": true`).
   """
   def transcript(%Session{} = s, turn) do
     names = names(s.conversation_id)
@@ -111,6 +112,9 @@ defmodule RisiMe.Agent.CallTranscribe.Lines do
       "notify" => []
     }
 
+    # v1.40 §36.11: only when a Sinhala chunk stayed out of Sinhala script after the retry.
+    risi = if Map.get(turn, :romanised) == true, do: Map.put(risi, "romanised", true), else: risi
+
     {"#{name(names, turn.speaker)} #{hm(turn.start, tz)}: #{text}", risi}
   end
 
@@ -128,6 +132,7 @@ defmodule RisiMe.Agent.CallTranscribe.Lines do
           "elapsed_ms" => r.elapsed_ms,
           "error" => r.error
         }
+        |> put_script(r)
       end)
 
     {chosen, rest} = Enum.split_with(results, &(&1["model"] == c.chosen))
@@ -164,6 +169,28 @@ defmodule RisiMe.Agent.CallTranscribe.Lines do
     }
 
     {body, risi}
+  end
+
+  # v1.40 §36.11: the service's Sinhala script check, when it made one (a Sinhala chunk).
+  defp put_script(m, r) do
+    m =
+      case Map.get(r, :script) do
+        %{} = sc ->
+          Map.put(m, "script", %{
+            "expected" => sc.expected,
+            "sinhala_chars" => sc.sinhala_chars,
+            "latin_chars" => sc.latin_chars,
+            "ok" => sc.ok
+          })
+
+        _ ->
+          m
+      end
+
+    case Map.get(r, :romanised) do
+      b when is_boolean(b) -> Map.put(m, "romanised", b)
+      _ -> m
+    end
   end
 
   defp names(conv), do: Map.new(Secretary.members(conv), &{&1.user_id, &1.name})

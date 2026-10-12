@@ -140,6 +140,74 @@ defmodule RisiMe.Agent.SpeechHttpTest do
            ] = c.results
   end
 
+  test "v1.40 §36.11: the Sinhala script check passes through (transcribe and compare)" do
+    stub(fn conn, _ ->
+      case conn.request_path do
+        "/v1/audio/transcriptions" ->
+          Req.Test.json(conn, %{
+            "text" => "heta hamuwemu",
+            "language" => "si",
+            "model" => "whisper-large-v3-sinhala",
+            "script" => %{"expected" => "sinh", "sinhala_chars" => 0, "latin_chars" => 12},
+            "script_ok" => false,
+            "romanised" => true,
+            "retried_with" => "whisper-large-v3-sinhala"
+          })
+
+        "/v1/audio/compare" ->
+          Req.Test.json(conn, %{
+            "detected" => %{"language" => "si", "probability" => 0.9},
+            "routed_model" => "whisper-small-sinhala",
+            "results" => [
+              %{
+                "model" => "whisper-small-sinhala",
+                "text" => "අ",
+                "language" => "si",
+                "processing_s" => 0.5,
+                "script" => %{
+                  "expected" => "sinh",
+                  "sinhala_chars" => 1,
+                  "latin_chars" => 0,
+                  "ok" => true
+                },
+                "romanised" => false
+              },
+              %{
+                "model" => "faster-whisper-large-v3",
+                "text" => "a",
+                "language" => "si",
+                "processing_s" => 0.5,
+                "script" => %{
+                  "expected" => "sinh",
+                  "sinhala_chars" => 0,
+                  "latin_chars" => 1,
+                  "ok" => false
+                },
+                "romanised" => true
+              },
+              %{"model" => "tamil-asr-qwen3", "error" => "x", "romanised" => true}
+            ]
+          })
+      end
+    end)
+
+    assert {:ok, %{romanised: true, model: "whisper-large-v3-sinhala"}} = Http.transcribe("x")
+    assert {:ok, c} = Http.compare("x")
+
+    assert [
+             %{
+               script: %{expected: "sinh", sinhala_chars: 1, latin_chars: 0, ok: true},
+               romanised: false
+             },
+             %{script: %{ok: false, latin_chars: 1}, romanised: true},
+             %{error: "failed", script: nil, romanised: nil}
+           ] = c.results
+
+    # An older service (no fields): not romanised, no script.
+    stub(fn conn, _ -> Req.Test.json(conn, %{"text" => "අ", "language" => "si"}) end)
+    assert {:ok, %{romanised: false}} = Http.transcribe("x")
+  end
+
   test "compare without the endpoint (404): each model by itself" do
     stub(fn conn, body ->
       case conn.request_path do

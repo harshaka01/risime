@@ -684,7 +684,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
         text: r.text,
         language: r.language,
         model: r.model,
-        ms: meta.duration_ms
+        ms: meta.duration_ms,
+        romanised: Map.get(r, :romanised) == true
       }
 
       add_segment(st, rt, seg)
@@ -720,6 +721,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
             turn
             | end: max_dt(turn.end, seg.end),
               texts: turn.texts ++ [seg.text],
+              romanised: turn.romanised or seg.romanised,
               lang_ms: Map.update(turn.lang_ms, seg.language, seg.ms, &(&1 + seg.ms)),
               model_ms: Map.update(turn.model_ms, seg.model, seg.ms, &(&1 + seg.ms))
           }
@@ -749,6 +751,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       start: seg.start,
       end: seg.end,
       texts: [seg.text],
+      romanised: seg.romanised,
       lang_ms: %{seg.language => seg.ms},
       model_ms: %{seg.model => seg.ms}
     }
@@ -772,6 +775,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       start: turn.start,
       end: turn.end,
       texts: turn.texts,
+      romanised: turn.romanised,
       language: top(turn.lang_ms, "en"),
       model: top(turn.model_ms, Speech.route("en"))
     }

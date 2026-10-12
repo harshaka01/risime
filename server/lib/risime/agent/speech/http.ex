@@ -8,7 +8,8 @@ defmodule RisiMe.Agent.Speech.Http do
     never a file) with `model=auto` and `response_format=verbose_json`: the service detects the
     language with `faster-whisper-large-v3` and routes (§36.5). A service that doesn't serve
     `auto` yet (404) is asked for `faster-whisper-large-v3` instead (remembered for 5 min).
-  * **Compare:** `POST /v1/audio/compare` (per-model `{model, text, language, processing_s}`);
+  * **Compare:** `POST /v1/audio/compare` (per-model `{model, text, language, processing_s}`,
+    plus `script` and `romanised` for a Sinhala chunk, v1.40 §36.11);
     without it (404) each model is asked through `/v1/audio/transcriptions` in parallel. Every
     model has a 30-s timeout.
   * **Health:** `GET /health`, cached 15 s.
@@ -137,9 +138,18 @@ defmodule RisiMe.Agent.Speech.Http do
       language: language,
       model: model,
       elapsed_ms: ms(b["processing_s"], elapsed),
-      speech: speech
+      speech: speech,
+      # v1.40 §36.11: the final text is still not in Sinhala script after the service's retry.
+      romanised: b["romanised"] == true
     }
   end
+
+  # v1.40 §36.11: the service's Sinhala script check of one compare result (absent: nil).
+  defp script(%{"expected" => e, "sinhala_chars" => si, "latin_chars" => la, "ok" => ok})
+       when is_binary(e) and is_integer(si) and is_integer(la) and is_boolean(ok),
+       do: %{expected: e, sinhala_chars: si, latin_chars: la, ok: ok}
+
+  defp script(_), do: nil
 
   defp ms(s, _fallback) when is_number(s), do: round(s * 1000)
   defp ms(_, fallback), do: fallback
@@ -194,7 +204,9 @@ defmodule RisiMe.Agent.Speech.Http do
           text: if(error, do: nil, else: r["text"] && String.trim(to_string(r["text"]))),
           language: if(error, do: nil, else: r["language"]),
           elapsed_ms: ms(r["processing_s"], r["elapsed_ms"] || 0),
-          error: error
+          error: error,
+          script: if(error, do: nil, else: script(r["script"])),
+          romanised: if(error || not is_boolean(r["romanised"]), do: nil, else: r["romanised"])
         }
       end)
 

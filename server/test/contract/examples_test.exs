@@ -415,7 +415,8 @@ defmodule RisiMe.ContractExamplesTest do
         RisiMe.Contract.ExamplesV135Test.files() ++
         RisiMe.Contract.ExamplesV136Test.files() ++
         RisiMe.Contract.ExamplesV137Test.files() ++
-        RisiMe.Contract.ExamplesV139Test.files()
+        RisiMe.Contract.ExamplesV139Test.files() ++
+        RisiMe.Contract.ExamplesV140Test.files()
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
