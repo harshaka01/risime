@@ -120,6 +120,9 @@ interface RealtimeClient {
      */
     suspend fun history(event: String, payload: kotlinx.serialization.json.JsonElement): PushResult<kotlinx.serialization.json.JsonObject> = PushResult.Unavailable
 
+    /** §36.3 (v1.39) `call:transcribe` (request / allow / decline / stop): ok `{"session"}`, else `{"reason"}`. */
+    suspend fun callTranscribe(payload: kotlinx.serialization.json.JsonObject): PushResult<kotlinx.serialization.json.JsonObject> = PushResult.Unavailable
+
     /** §15.9 `chat:clear` (reply ok `{}`). */
     suspend fun clearChat(msg: ai.risicloud.risime.net.ChatClear): PushResult<Unit> = PushResult.Unavailable
 

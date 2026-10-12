@@ -164,6 +164,8 @@ data class CallSnapshot(
     val peerSharing: Boolean = false,
     /** §23.8 the call was in video mode at some point (its `call_end.media` is "video"). */
     val everVideo: Boolean = false,
+    /** v1.39 §36.1: placed from the 1:1's Official tab (this phone's offer, or the peer's offer said `"tab": "official"`). */
+    val official: Boolean = false,
 )
 
 /** §23.2 what a switch attempt ended with (the UI names the peer). */
@@ -286,6 +288,8 @@ class CallStateMachine(
         val localBuffer = mutableListOf<CallEnvelope.Candidate>()
         var gatheringDone = false
         var doneSent = false
+        /** v1.39 §36.1: an Official 1:1 call (fixed by the first offer). */
+        var official = false
         var iceJob: Job? = null
         var checking: Job? = null
         var ended = false
@@ -357,7 +361,7 @@ class CallStateMachine(
      * The call button (the UI checked `calls_ready`, e2ee and RECORD_AUDIO). False = busy already.
      * [video] (§19.6): a video call; [camera] = CAMERA granted (denied: the call goes on with the camera off).
      */
-    suspend fun placeCall(conversationId: String, video: Boolean = false, camera: Boolean = video): Boolean {
+    suspend fun placeCall(conversationId: String, video: Boolean = false, camera: Boolean = video, official: Boolean = false): Boolean {
         val peer = dmPeer(conversationId, me) ?: return false
         // Calling someone who is ringing this device right now: both want the call, so answer it (as glare would).
         val ringingFromPeer = lock.withLock { current?.takeIf { !it.ended && !it.outgoing && it.phase == CallPhase.RINGING_IN && it.peer.equals(peer, true) }?.id }
@@ -368,6 +372,7 @@ class CallStateMachine(
                 return false
             }
             Call(newCallId(), conversationId, peer, outgoing = true, phase = CallPhase.CALLING).also {
+                it.official = official
                 if (video) {
                     it.media = CallEnvelope.MEDIA_VIDEO
                     it.video = true
@@ -408,7 +413,7 @@ class CallStateMachine(
             }
             call.myFirstSdp = sdp
             call.myCurrentSdp = sdp
-            CallEnvelope.Offer(call.id, sdp, iso(serverNow()), media = call.media, features = call.myFeatures.toList())
+            CallEnvelope.Offer(call.id, sdp, iso(serverNow()), media = call.media, features = call.myFeatures.toList(), tab = if (call.official) ai.risicloud.risime.net.CALL_TAB_OFFICIAL else null)
         }
         val r = sig(call.conv, call.peer, offer, call.media)
         lock.withLock {
@@ -794,6 +799,7 @@ class CallStateMachine(
         call.everVideo = call.video
         call.peerFeatures = env.features.toSet()
         call.myFeatures = runCatching { features().toSet() }.getOrDefault(emptySet())
+        call.official = env.official
         call.peerFirstSdp = env.sdp
         call.peerCurrentSdp = env.sdp
         current = call
@@ -1693,7 +1699,7 @@ class CallStateMachine(
             video = c.video, cameraOn = c.cameraOn, wantCamera = c.wantCamera, peerCamera = c.peerCamera, peerCameraAtMs = c.peerCameraAt,
             canSwitch = canSwitch(c), canShare = canShare(c), asking = c.asking?.second, prompt = c.prompt?.second,
             switchNotice = c.switchNotice, videoBlockedUntilMs = c.blockedUntil, sharing = c.screenOn, peerSharing = c.video && c.peerScreen,
-            everVideo = c.everVideo,
+            everVideo = c.everVideo, official = c.official,
         )
     }
 

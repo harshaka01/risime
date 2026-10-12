@@ -73,6 +73,8 @@ class DeviceRegistrar(
     private val pdfExportSupported: () -> Boolean = { false },
     /** v1.35 §34 Phase 2: `confirm_update`, the native `clarify` card and Risi's items (advertised only with `risi_tools`). */
     private val risiItemsSupported: () -> Boolean = { false },
+    /** v1.39 §36.1: `/auth/config` says `call_transcribe: on` and this phone can make Ogg/Opus chunks. */
+    private val callTranscribeSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
 ) {
@@ -130,6 +132,10 @@ class DeviceRegistrar(
             DeviceMls.CAP_PDF_EXPORT.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && imagesSupported() && filesSupported() && pdfExportSupported() },
             // v1.35 §34 Phase 2: `risi_items` only with `risi_tools` (the cards it unlocks live in the Risi chat).
             DeviceMls.CAP_RISI_ITEMS.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiItemsSupported() },
+            // v1.39 §36.1: only with `calls` and `tabs` (Official 1:1 calls), while the server switch is on.
+            DeviceMls.CAP_CALL_TRANSCRIBE.takeIf {
+                mls.deletesSupported && imagesSupported() && callsSupported() && mls.tabsSupported && tabsSupported() && callTranscribeSupported()
+            },
         )
         else -> null
     }

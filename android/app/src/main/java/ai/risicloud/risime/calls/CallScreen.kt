@@ -213,6 +213,12 @@ fun CallScreen(
     center: (@Composable () -> Unit)? = null,
     /** Debug builds' device test keeps the controls up (`files/debug_keep_call_controls`). */
     allowAutoHide: Boolean = true,
+    /** v1.39 §36: the red "Risi transcribing" bar, under the top bar and never auto-hidden (it fails toward showing). */
+    statusBar: (@Composable () -> Unit)? = null,
+    /** v1.39 §36: [Transcribe], "Asking …", notices (above the controls). */
+    extraBanners: (@Composable () -> Unit)? = null,
+    /** v1.39 §36: the peer's consent prompt, over everything. */
+    overlay: (@Composable () -> Unit)? = null,
 ) {
     var controls by remember { mutableStateOf(true) }
     var touch by remember { mutableIntStateOf(0) }
@@ -255,6 +261,7 @@ fun CallScreen(
                     AnimatedVisibility(controls || !videoStage, enter = fadeIn(), exit = fadeOut()) {
                         TopBar(ui, a, scrim = videoStage)
                     }
+                    statusBar?.invoke()
                     if (!videoStage) {
                         Column(Modifier.fillMaxWidth().weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                             if (center != null) center() else CallAvatar(ui.name, pulse = ui.stage == CallStage.INCOMING || ui.stage == CallStage.OUTGOING, photoKey = ui.photoKey, scale = if (compact) 0.72f else 1f)
@@ -263,6 +270,7 @@ fun CallScreen(
                         Spacer(Modifier.weight(1f))
                     }
                     Banners(ui, a)
+                    extraBanners?.invoke()
                     AnimatedVisibility(controls || !videoStage, enter = fadeIn(), exit = fadeOut()) {
                         BottomPanel(ui, a, compact) { touch++ }
                     }
@@ -273,6 +281,7 @@ fun CallScreen(
             }
         }
         ui.prompt?.let { SwitchPrompt(ui.name ?: "", it, a.onPrompt) }
+        overlay?.invoke()
     }
 }
 

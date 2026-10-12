@@ -116,6 +116,40 @@ class ApiClient(
     suspend fun callsRoomStatus(conversationId: String, callId: String, media: String, deviceId: String): ApiResult<CallsRoomStatusReply> =
         call("POST", "calls/rooms", CallsRoomRequest(conversationId, callId, media, CallsRoomRequest.STATUS), headers = mapOf(DEVICE_HEADER to deviceId))
 
+    // ---- §36 (v1.39) the call-transcription fast path ----
+
+    /** §36.3 the newest session of [callId] (participants only; else 404). Called after a reconnect. */
+    suspend fun callTranscribe(callId: String): ApiResult<CallTranscribeReply> =
+        call<Unit, CallTranscribeReply>("GET", "calls/${q(callId)}/transcribe", null)
+
+    /**
+     * §36.4 one chunk of this phone's own microphone (multipart, X-Device-Id = the bound device). The audio
+     * part is built from memory and never logged.
+     */
+    suspend fun uploadTranscribeChunk(
+        callId: String,
+        sessionId: String,
+        seq: Int,
+        offsetMs: Long,
+        durationMs: Long,
+        audio: ByteArray,
+    ): ApiResult<CallTranscribeChunkReply> {
+        val body = okhttp3.MultipartBody.Builder().setType(okhttp3.MultipartBody.FORM)
+            .addFormDataPart("session_id", sessionId)
+            .addFormDataPart("seq", seq.toString())
+            .addFormDataPart("offset_ms", offsetMs.toString())
+            .addFormDataPart("duration_ms", durationMs.toString())
+            .addFormDataPart("codec", "ogg_opus")
+            .addFormDataPart("audio", "chunk.ogg", audio.toRequestBody("audio/ogg".toMediaType()))
+            .build()
+        return execute("POST", "calls/${q(callId)}/transcribe/chunks", body, true, serializer<CallTranscribeChunkReply>())
+    }
+
+    /** §36.1 the developer setting (403 not_developer for everyone not in `RISI_DEV_USERS`). */
+    suspend fun risiDev(): ApiResult<RisiDevSettings> = call<Unit, RisiDevSettings>("GET", "me/risi/dev", null)
+
+    suspend fun putRisiDev(settings: RisiDevSettings): ApiResult<RisiDevSettings> = call("PUT", "me/risi/dev", settings)
+
     // ---- §24 (v1.24) chats and their tabs (tabs devices only) ----
 
     suspend fun chats(deviceId: String): ApiResult<ChatsReply> = call<Unit, ChatsReply>("GET", "chats", null, headers = mapOf(DEVICE_HEADER to deviceId))

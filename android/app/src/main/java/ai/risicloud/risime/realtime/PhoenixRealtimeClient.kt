@@ -150,6 +150,9 @@ class PhoenixRealtimeClient(
     override suspend fun history(event: String, payload: JsonElement): PushResult<JsonObject> =
         if (event.startsWith("history:")) liveConnection()?.push(event, payload) ?: PushResult.Unavailable else PushResult.Rejected("bad_request")
 
+    override suspend fun callTranscribe(payload: JsonObject): PushResult<JsonObject> =
+        liveConnection()?.push(ai.risicloud.risime.net.PUSH_CALL_TRANSCRIBE, payload) ?: PushResult.Unavailable
+
     override suspend fun clearChat(msg: ai.risicloud.risime.net.ChatClear): PushResult<Unit> =
         liveConnection()?.push("chat:clear", ProtocolJson.encodeToJsonElement(msg))?.map { } ?: PushResult.Unavailable
 

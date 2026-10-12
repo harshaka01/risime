@@ -27,6 +27,8 @@ class PresenceTracker(
     private val onKeyPackagesLow: () -> Unit = {},
     /** §25.4 (v1.25) `risi_progress` (sent only to `risi_tools` sockets). */
     private val onRisiProgress: (ai.risicloud.risime.net.RisiProgress) -> Unit = {},
+    /** §36.3 (v1.39) `call_transcribe`: the session on every transition (sent only to `call_transcribe` devices). */
+    private val onCallTranscribe: (ai.risicloud.risime.net.CallTranscribeSession) -> Unit = {},
 ) : SignalSink {
     private val _presence = MutableStateFlow<Map<String, Presence>>(emptyMap())
     val presence: StateFlow<Map<String, Presence>> = _presence.asStateFlow()
@@ -62,6 +64,7 @@ class PresenceTracker(
         signal.friend()?.let(onFriendSignal)
         signal.keyPackagesLow()?.let { onKeyPackagesLow() }
         signal.risiProgress()?.let(onRisiProgress)
+        signal.callTranscribe()?.let(onCallTranscribe)
     }
 
     override fun onDisconnected() {

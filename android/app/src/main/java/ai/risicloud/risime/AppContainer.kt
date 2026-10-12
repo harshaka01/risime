@@ -234,7 +234,42 @@ class AppContainer(
         onFriendSignal = { requestFriendsRefresh() },
         onKeyPackagesLow = { scope.launch { deviceRegistrar.topUp() } },
         onRisiProgress = { p -> if (risiTools.on.value) risiProgress.apply(p) },
+        onCallTranscribe = { s -> if (callTranscribeSwitch.on.value) callTranscribe.onSignal(s) },
     )
+
+    // ---- §36 (v1.39) the call-transcription fast path ----
+
+    /** §36.1 the `call_transcribe` server switch (kept across restarts) and this device's advertisement. */
+    val callTranscribeSwitch = ai.risicloud.risime.data.tabs.RisiToolsSwitch(
+        persistedServerOn = context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).getBoolean("call_transcribe_on", false),
+        persistServerOn = { on -> context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE).edit().putBoolean("call_transcribe_on", on).apply() },
+        log = { Log.i("RisiMe", it.replace("risi_tools", "call_transcribe")) },
+    )
+
+    /** §36 the Transcribe button, the consent prompt, the red bar and the own-microphone chunks. */
+    val callTranscribe: ai.risicloud.risime.calls.transcribe.CallTranscribeManager by lazy {
+        ai.risicloud.risime.calls.transcribe.CallTranscribeManager(
+            scope,
+            object : ai.risicloud.risime.calls.transcribe.TranscribePort {
+                override suspend fun me(): String? = sessionStore.current()?.user?.id
+                override fun available() = callTranscribeSwitch.serverOn.value to callTranscribeSwitch.on.value
+                override fun officialConversationOf(dm: String): String? = ai.risicloud.risime.data.tabs.officialConversationOf(dm, chatTabs.rows.value)
+                override suspend fun push(payload: kotlinx.serialization.json.JsonObject) = realtime.callTranscribe(payload)
+                override suspend fun fetch(callId: String) = api.callTranscribe(callId)
+                override suspend fun upload(callId: String, chunk: ai.risicloud.risime.calls.transcribe.EncodedChunk): ai.risicloud.risime.calls.transcribe.UploadResult =
+                    when (val r = api.uploadTranscribeChunk(callId, chunk.sessionId, chunk.seq, chunk.offsetMs, chunk.durationMs, chunk.audio)) {
+                        is ApiResult.Ok -> ai.risicloud.risime.calls.transcribe.UploadResult.Accepted(r.value.duplicate)
+                        is ApiResult.Error -> ai.risicloud.risime.calls.transcribe.UploadResult.Failed(r.httpStatus, r.code, r.retryAfterSec)
+                        is ApiResult.NetworkError -> ai.risicloud.risime.calls.transcribe.UploadResult.Offline
+                    }
+                override fun serverNow(): Long = serverClock.serverNow()
+            },
+            calls.state,
+            realtime.state,
+            ai.risicloud.risime.calls.transcribe.MediaCodecOpusEncoder(),
+            log = { Log.i("RisiMe", it) },
+        ).also { it.start() }
+    }
 
     // ---- §25 (v1.25) Risi with tools ----
 
@@ -757,6 +792,12 @@ class AppContainer(
         risiEvents.setServerOn(cfg.risiEventsOn)
         val gcalBefore = gcalSwitch.serverOn.value
         gcalSwitch.setServerOn(cfg.googleCalendarOn)
+        val transcribeBefore = callTranscribeSwitch.serverOn.value
+        callTranscribeSwitch.setServerOn(cfg.callTranscribeOn)
+        if (transcribeBefore != cfg.callTranscribeOn) {
+            refreshCapabilities()
+            callTranscribe.refreshAvailability()
+        }
         if (gcalBefore != cfg.googleCalendarOn) refreshCapabilities()
         if (before != cfg.tabsOn || risiBefore != cfg.risiToolsOn || skillsBefore != cfg.risiSkillsOn || ledgerBefore != cfg.risiLedgerOn || eventsBefore != cfg.risiEventsOn || notesBefore != cfg.risiNotesOn) refreshCapabilities()
     }
@@ -1385,6 +1426,8 @@ class AppContainer(
             pdfExportSupported = { true },
             // v1.35 §34 Phase 2 (confirm_update, clarify, Risi's items) ships in this build.
             risiItemsSupported = { true },
+            // v1.39 §36: this build implements §36.2–§36.7 (needs the platform Opus encoder, Android 10+).
+            callTranscribeSupported = { callTranscribeSwitch.serverOn.value && ai.risicloud.risime.calls.transcribe.MediaCodecOpusEncoder.available() },
             onAdvertised = { caps ->
                 val tabs = ai.risicloud.risime.net.DeviceMls.CAP_TABS in caps
                 chatTabs.setAdvertised(tabs)
@@ -1399,6 +1442,8 @@ class AppContainer(
                 val events = ai.risicloud.risime.net.DeviceMls.CAP_RISI_EVENTS in caps
                 risiEvents.setAdvertised(events)
                 risiNotes.setAdvertised(ai.risicloud.risime.net.DeviceMls.CAP_RISI_NOTES in caps)
+                callTranscribeSwitch.setAdvertised(ai.risicloud.risime.net.DeviceMls.CAP_CALL_TRANSCRIBE in caps)
+                callTranscribe.refreshAvailability()
                 val gcalAdvertised = ai.risicloud.risime.net.DeviceMls.CAP_GOOGLE_CALENDAR in caps
                 gcalSwitch.setAdvertised(gcalAdvertised)
                 if (gcalAdvertised) gcalOnStart()
@@ -1726,7 +1771,10 @@ class AppContainer(
     }
 
     val calls: ai.risicloud.risime.calls.CallManager by lazy {
-        ai.risicloud.risime.calls.CallManager(appContext, callPort).also { m -> m.openConversation = { openConversation.value } }
+        ai.risicloud.risime.calls.CallManager(appContext, callPort).also { m ->
+            m.openConversation = { openConversation.value }
+            m.onHangUpHook = { if (callTranscribeSwitch.serverOn.value) callTranscribe.onHangUp() }
+        }
     }
 
     /** The pipeline's call hooks (the manager is created on first use). */

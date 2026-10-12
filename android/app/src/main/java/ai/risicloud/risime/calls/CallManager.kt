@@ -473,7 +473,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         val dm = runCatching { port.dmChatForCall(conversationId) }.getOrNull()
         if (dm != null) {
             log("call: $conversationId is a 1:1's Official conversation: calling on its dm")
-            scope.launch { _machine.value?.placeCall(dm, video, camera) }
+            scope.launch { _machine.value?.placeCall(dm, video, camera, official = true) }
             return
         }
         // §24.5: a group (Private or Official) is a grp: and takes the §20 path.
@@ -633,7 +633,11 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         screenOffReceiver = null
     }
 
+    /** v1.39 §36.2: End tapped (the transcription stop `ended` goes out before the teardown). */
+    var onHangUpHook: () -> Unit = {}
+
     fun hangUp() {
+        runCatching { onHangUpHook() }
         if (blindRing.value != null) return stopBlindRing()
         scope.launch {
             _group.value?.takeIf { state.value?.group == true }?.hangUp()

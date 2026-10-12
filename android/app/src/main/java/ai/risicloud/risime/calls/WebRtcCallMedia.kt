@@ -221,6 +221,9 @@ class WebRtcCallMedia(
             .setUseHardwareNoiseSuppressor(JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported())
             .setUseStereoInput(false)
             .setUseStereoOutput(false)
+            // v1.39 §36.6: the transcription tap gets this phone's OWN capture only (never the remote track);
+            // nothing flows unless a session is `on` and the recorder installed a sink.
+            .setSamplesReadyCallback { s -> ai.risicloud.risime.calls.transcribe.CallMicTap.onMicrophone(s.data, s.sampleRate, s.channelCount) }
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
