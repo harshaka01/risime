@@ -40,7 +40,7 @@ defmodule RisiMe.Agent.Voice do
 
   require Logger
 
-  alias RisiMe.Agent.{Clock, LearningLog, MadeBy, Media, Out, Secretary, Speech, Transcript}
+  alias RisiMe.Agent.{Clock, Lang, LearningLog, MadeBy, Media, Out, Secretary, Speech, Transcript}
   alias RisiMe.{Blobs, Repo, Risi, TimeUUID}
 
   @max_transcribe_ms 300_000
@@ -231,7 +231,7 @@ defmodule RisiMe.Agent.Voice do
   @doc false
   def transcribe(conv, note_id, sender, note, mode, request_id \\ nil) do
     t0 = System.monotonic_time(:millisecond)
-    result = run_speech(conv, note)
+    result = run_speech(conv, note, hint(conv, sender))
     latency = System.monotonic_time(:millisecond) - t0
     # The audio, the ciphertext and the key lived only in `run_speech/2`'s frames.
     :erlang.garbage_collect()
@@ -258,16 +258,28 @@ defmodule RisiMe.Agent.Voice do
       {:error, :exception}
   end
 
+  # The speech service's `language_hint` (decision 071 amendment d): the sender's language and
+  # the chat's. Only the codes are logged.
+  defp hint(conv, sender) do
+    hint = Lang.speech_hint([sender], conv)
+    Logger.info("Risi voice: language hint #{Enum.join(hint, ",")}")
+    hint
+  rescue
+    _ -> []
+  end
+
   # Fetch (as a member), verify, decrypt in memory, transcribe; retried once on a speech error.
-  defp run_speech(conv, note) do
+  defp run_speech(conv, note, hint) do
+    opts = Speech.hint_opts(hint)
+
     case audio(conv, note) do
       {:ok, audio} ->
-        case Speech.transcribe(audio) do
+        case Speech.transcribe(audio, opts) do
           {:ok, r} ->
             {:ok, r}
 
           {:error, _} ->
-            case Speech.transcribe(audio) do
+            case Speech.transcribe(audio, opts) do
               {:ok, r} -> {:ok, r}
               {:error, _} -> {:error, :failed}
             end

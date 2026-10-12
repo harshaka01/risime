@@ -20,7 +20,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
   import Ecto.Query
 
-  alias RisiMe.Agent.{Clock, LearningLog, Out, Speech, Transcript}
+  alias RisiMe.Agent.{Clock, Lang, LearningLog, Out, Speech, Transcript}
   alias RisiMe.Agent.CallTranscribe
   alias RisiMe.Agent.CallTranscribe.{Lines, Session}
   alias RisiMe.{Repo, TimeUUID}
@@ -377,6 +377,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       discard: false,
       models: MapSet.new(),
       lang_ms: %{},
+      hint: hint(s),
       chunks: 0,
       speech_ms: 0,
       latency_ms: 0,
@@ -388,6 +389,18 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     st = save(%{st | rt: rt}, s)
     st = enqueue_post(st, {:consent, s})
     put_timer(st, :tick, {:tick, s.session_id}, t.tick_ms)
+  end
+
+  # The speech service's `language_hint`, once per session (decision 071 amendment d): the
+  # participants' and the Official chat's languages. Only the codes are logged.
+  defp hint(s) do
+    hint = Lang.speech_hint(Session.user_ids(s), s.conversation_id)
+    Logger.info("call transcribe: language hint #{Enum.join(hint, ",")}")
+    hint
+  rescue
+    e ->
+      Logger.warning("call transcribe: no language hint: #{inspect(e.__struct__)}")
+      []
   end
 
   # The session reaches a final state: row, signal, consent line; then the runtime drains
@@ -546,6 +559,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
         {{:value, chunk}, q} = :queue.out(p.queue)
         {audio, meta} = Map.pop(chunk, :audio)
         compare? = st_session(st, sid).compare
+        opts = Speech.hint_opts(Map.get(rt, :hint))
 
         task =
           Task.Supervisor.async_nolink(CallTranscribe.TaskSup, fn ->
@@ -553,8 +567,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
             r =
               if compare?,
-                do: Speech.compare(audio),
-                else: Speech.transcribe(audio)
+                do: Speech.compare(audio, opts),
+                else: Speech.transcribe(audio, opts)
 
             {r, System.monotonic_time(:millisecond) - t0}
           end)

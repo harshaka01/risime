@@ -13,6 +13,9 @@ defmodule RisiMe.Agent.Speech.Http do
     without it (404) each model is asked through `/v1/audio/transcriptions` in parallel. Every
     model has a 30-s timeout.
   * **Health:** `GET /health`, cached 15 s.
+  * **Language hint** (decision 071 amendment d): `opts[:language_hint]` (`["si", "en"]`) is
+    sent as the multipart field `language_hint=si,en` on transcribe and compare (and the
+    per-model fallback); omitted when empty.
 
   Nothing about the audio or the text is logged.
   """
@@ -91,6 +94,8 @@ defmodule RisiMe.Agent.Speech.Http do
         model: model,
         response_format: "verbose_json"
       ]
+
+      fields = with_hint(fields, opts)
 
       case Req.post(req(base <> "/v1/audio/transcriptions", timeout), form_multipart: fields) do
         {:ok, %{status: 200, body: %{} = b}} ->
@@ -179,7 +184,8 @@ defmodule RisiMe.Agent.Speech.Http do
     with {:ok, base} <- base_url() do
       timeout = Keyword.get(opts, :timeout, @timeout_ms)
       # All three models may run one after another on the service.
-      fields = [file: {audio, filename: "chunk.ogg", content_type: "audio/ogg"}]
+      fields =
+        with_hint([file: {audio, filename: "chunk.ogg", content_type: "audio/ogg"}], opts)
 
       case Req.post(req(base <> "/v1/audio/compare", timeout * 3 + 5_000),
              form_multipart: fields
@@ -188,7 +194,7 @@ defmodule RisiMe.Agent.Speech.Http do
           {:ok, compare_result(b)}
 
         {:ok, %{status: 404}} ->
-          compare_each(audio, timeout)
+          compare_each(audio, timeout, opts)
 
         {:ok, %{status: s}} when s in [429, 503] ->
           {:error, :unavailable}
@@ -244,14 +250,16 @@ defmodule RisiMe.Agent.Speech.Http do
   end
 
   # A service without `/v1/audio/compare`: each model by itself, in parallel.
-  defp compare_each(audio, timeout) do
+  defp compare_each(audio, timeout, opts) do
+    hint = Keyword.take(opts, [:language_hint])
+
     results =
       Speech.models()
       |> Task.async_stream(
         fn m ->
           t0 = System.monotonic_time(:millisecond)
 
-          case post_transcription(audio, m, timeout: timeout) do
+          case post_transcription(audio, m, [timeout: timeout] ++ hint) do
             {:ok, r} ->
               %{
                 model: m,
@@ -288,6 +296,13 @@ defmodule RisiMe.Agent.Speech.Http do
         Speech.lang(Enum.find_value(results, &(&1.model == Speech.route("en") && &1.language)))
 
       {:ok, %{language_detected: detected, chosen: Speech.route(detected), results: results}}
+    end
+  end
+
+  defp with_hint(fields, opts) do
+    case Speech.hint_field(opts) do
+      nil -> fields
+      hint -> fields ++ [language_hint: hint]
     end
   end
 

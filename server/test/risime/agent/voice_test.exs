@@ -300,6 +300,34 @@ defmodule RisiMe.Agent.VoiceTest do
       assert %{"status" => "failed", "text" => nil, "model" => nil, "language" => nil} = risi
     end
 
+    test "decision 071 d: the language_hint is the sender's and the chat's si/ta, else none", w do
+      Application.put_env(:risime, :risi_speech, __MODULE__.HintSpeech)
+
+      {env, _, _} = note!(w.a.user.id, w.og, "en:hello")
+      {_, s} = receive_note(w.og, w.a.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      assert_received {:speech_opts, []}
+
+      remember!("elsewhere", w.a.user.id, "හෙට උදේ දහයට හමුවෙමු.")
+      remember!(w.og, w.b.user.id, "நாளை சந்திப்போம்")
+      # B's own language is not A's note's: only A's and the chat's.
+      remember!("elsewhere", w.b.user.id, "நாளை சந்திப்போம்")
+      {env, _, _} = note!(w.a.user.id, w.og, "si:හෙට")
+      {_, s} = receive_note(w.og, w.a.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      assert_received {:speech_opts, [language_hint: ["si", "ta"]]}
+
+      # A sender with only English remembered, in an English chat: no hint.
+      {env, _, _} = note!(w.b.user.id, w.og, "en:hello")
+      RisiMe.Repo.delete_all(RisiMe.Agent.Memory.Message)
+      {_, s} = receive_note(w.og, w.b.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      assert_received {:speech_opts, []}
+    end
+
     test "a blob of another conversation, or a changed blob, is never used", w do
       other = RisiMe.RisiHelpers.risi_chat!([w.a.user, w.b.user])
       intervals!(other, [w.a.user.id, w.b.user.id])
@@ -646,6 +674,47 @@ defmodule RisiMe.Agent.VoiceTest do
   ## Helpers
 
   # The §14.2 media read rule: membership intervals (Risi's too), as the real join writes them.
+  defmodule HintSpeech do
+    @moduledoc false
+    # `RisiMe.FakeSpeech` that also reports the options of each transcribe.
+    @behaviour RisiMe.Agent.Speech
+
+    @impl true
+    def healthy?, do: RisiMe.FakeSpeech.healthy?()
+
+    @impl true
+    def transcribe(audio, opts \\ []) do
+      if pid = Application.get_env(:risime, :risi_test_pid), do: send(pid, {:speech_opts, opts})
+      RisiMe.FakeSpeech.transcribe(audio, opts)
+    end
+
+    @impl true
+    def compare(audio, opts \\ []), do: RisiMe.FakeSpeech.compare(audio, opts)
+  end
+
+  # A remembered human message (as `Memory.put_message/2` stores it).
+  defp remember!(conv, sender, text) do
+    id = Ecto.UUID.generate()
+    {:ok, sealed} = RisiMe.Agent.Seal.seal_text("risi_memory_messages", id, "body", text)
+    now = RisiMe.Agent.Clock.usec(DateTime.utc_now())
+
+    {1, _} =
+      RisiMe.Repo.insert_all(RisiMe.Agent.Memory.Message, [
+        %{
+          id: id,
+          conversation_id: conv,
+          message_id: TimeUUID.generate(),
+          sender_id: sender,
+          from_risi: false,
+          at: now,
+          body_sealed: sealed,
+          inserted_at: now
+        }
+      ])
+
+    :ok
+  end
+
   defp intervals!(conv, users) do
     at = DateTime.add(DateTime.utc_now(), -60, :second)
     :ok = RisiMe.Groups.Membership.open(conv, [RisiMe.Risi.user_id() | users], at)

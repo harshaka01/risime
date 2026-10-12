@@ -258,6 +258,46 @@ defmodule RisiMe.Agent.SpeechHttpTest do
              Enum.sort(Enum.map(RisiMe.Agent.Speech.models(), &("t-" <> &1)))
   end
 
+  test "decision 071 d: language_hint is sent on transcribe and compare, omitted without one" do
+    rec =
+      stub(fn conn, body ->
+        case conn.request_path do
+          "/v1/audio/compare" ->
+            conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
+
+          _ ->
+            m = field(body, "model")
+            Req.Test.json(conn, %{"text" => "t", "language" => "si", "model" => m})
+        end
+      end)
+
+    hints = fn ->
+      rec
+      |> Agent.get(& &1)
+      |> Enum.map(fn {path, body, _} -> {path, field(body, "language_hint")} end)
+    end
+
+    assert {:ok, _} = Http.transcribe("x", language_hint: ["si", "en", "fr", "si"])
+    assert [{"/v1/audio/transcriptions", "si,en"}] = hints.()
+
+    Agent.update(rec, fn _ -> [] end)
+    assert {:ok, _} = Http.transcribe("x")
+    assert {:ok, _} = Http.transcribe("x", language_hint: [])
+    assert {:ok, _} = Http.transcribe("x", language_hint: ["fr"])
+    assert [{_, nil}, {_, nil}, {_, nil}] = hints.()
+
+    # Compare (and its per-model fallback) carries it too.
+    Agent.update(rec, fn _ -> [] end)
+    assert {:ok, _} = Http.compare("x", language_hint: ["ta"])
+    assert [{"/v1/audio/compare", "ta"} | each] = Enum.reverse(hints.())
+    assert length(each) == 3
+    assert Enum.all?(each, &(&1 == {"/v1/audio/transcriptions", "ta"}))
+
+    Agent.update(rec, fn _ -> [] end)
+    assert {:ok, _} = Http.compare("x")
+    assert Enum.all?(hints.(), &(elem(&1, 1) == nil))
+  end
+
   test "health, cached; a non-loopback URL is refused before any request" do
     stub(fn conn, _ -> Req.Test.json(conn, %{"status" => "ok"}) end)
     assert Http.healthy?()

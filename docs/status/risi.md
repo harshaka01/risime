@@ -2,6 +2,19 @@
 
 Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `scripts/risi-fastlane` (root deploys).
 
+## Speech language hints (decision 071 amendment d, 2026-10-13)
+
+**State:** green (`MIX_TEST_PARTITION=lh`). Server-only, no migration, no wire change: fast-lane eligible.
+- `Speech.Http` sends `language_hint=si,ta` on transcribe, compare and the per-model compare fallback
+  when `opts[:language_hint]` is given; omitted otherwise.
+- `Lang.speech_hint/2`: the si/ta among the participants' `user_lang/1` and the chat's new
+  `conv_lang/1` (script of its last 40 remembered human messages); `[]` when none, so all-English
+  calls send nothing (behaviour unchanged for them).
+- `CallTranscribe.Call` computes it once per session (`start_on`) for every chunk; voice notes use the
+  sender's and the chat's. Logs: the codes only (`language hint si,ta`), never text.
+- App language: `contract/proposals/2026-10-13-app-language-hint.md` (for root/Harsha).
+- Rollback without deploy: `WHISPER_HINT_MODE=off` on the speech service.
+
 ## PART 6 steps 0–2: deep agents (decision 084)
 
 **State:** green on `main` (full server suite, `MIX_TEST_PARTITION=da`). Server-only, fast-lane eligible

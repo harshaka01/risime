@@ -77,13 +77,37 @@ defmodule RisiMe.Agent.Lang do
   def user_lang(user) when is_binary(user) do
     import Ecto.Query
 
+    from(m in RisiMe.Agent.Memory.Message,
+      where: m.sender_id == ^user and m.from_risi == false,
+      order_by: [desc: m.at],
+      limit: 40
+    )
+    |> lang_of()
+  end
+
+  def user_lang(_), do: "en"
+
+  @doc """
+  A chat's language (decision 071 amendment d): the script of its last 40 remembered human
+  messages, with `user_lang/1`'s thresholds ("en" when nothing is remembered).
+  """
+  def conv_lang(conv) when is_binary(conv) do
+    import Ecto.Query
+
+    from(m in RisiMe.Agent.Memory.Message,
+      where: m.conversation_id == ^conv and m.from_risi == false,
+      order_by: [desc: m.at],
+      limit: 40
+    )
+    |> lang_of()
+  end
+
+  def conv_lang(_), do: "en"
+
+  defp lang_of(query) do
     langs =
-      RisiMe.Repo.all(
-        from m in RisiMe.Agent.Memory.Message,
-          where: m.sender_id == ^user and m.from_risi == false,
-          order_by: [desc: m.at],
-          limit: 40
-      )
+      query
+      |> RisiMe.Repo.all()
       |> Enum.flat_map(fn m ->
         case RisiMe.Agent.Seal.open_text("risi_memory_messages", m.id, "body", m.body_sealed) do
           {:ok, t} -> [detect(t)]
@@ -104,7 +128,17 @@ defmodule RisiMe.Agent.Lang do
     _ -> "en"
   end
 
-  def user_lang(_), do: "en"
+  @doc """
+  The speech service's `language_hint` (decision 071 amendment d, `WHISPER_HINT_MODE=prior`):
+  the Sinhala/Tamil languages among the `users`' own (`user_lang/1`) and the chat's
+  (`conv_lang/1`), in that order, without duplicates. `[]` when none is known: only si/ta steer
+  the service ("en" changes nothing there), so an all-English call sends no hint.
+  """
+  def speech_hint(users, conv) do
+    (Enum.map(List.wrap(users), &user_lang/1) ++ [conv_lang(conv)])
+    |> Enum.filter(&(&1 in ~w(si ta)))
+    |> Enum.uniq()
+  end
 
   @doc "The language's name for a model prompt."
   def name("si"), do: "Sinhala (සිංහල script)"
