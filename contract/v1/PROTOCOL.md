@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.38 (Release 0.3)
+# RisiMe Wire Protocol — v1.39 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -10070,7 +10070,347 @@ Decision 077 (Harsha 2026-10-11) **overrides the 24-hour limit** of §24.12, §2
 With the chat owner's consent the phone uploads an Official chat's existing history, encrypted to the Risi member.
 Needs an APK; not in v1.36.
 
+## 36. Call transcription fast path: phone-side chunks (v1.39)
+Decision 080 (Harsha 2026-10-12). This is a second, quicker transcription path. It sits next to §27.7–§27.8,
+the LiveKit listener, which is unchanged. **Additive only:** one device capability (`call_transcribe`), one
+`/auth/config` switch, one channel push with its signal, two REST endpoints, three Risi kinds, one optional
+`call_offer` field, the optional `lang` on two §27 kinds, and a developer setting. Old apps see the new Risi
+kinds as `body`.
+
+### 36.0 Principles
+- **Official calls only.** v1.39 covers the 1:1 Official call (a §16/§19 call placed from the Official tab,
+  §24.5 v1.33). Group Official calls come later (§36.9). **A Private call never has a Transcribe button and no
+  code path:** the phone never sends a request, an allow or a chunk for a call it holds as Private. The server
+  refuses any session whose conversation is not an Official `grp:` with Official `on`.
+- **Everyone consents, and anyone stops.** Transcription runs only while **every** participant has allowed.
+  Any participant can stop it for everyone with one tap. Every start, decline and stop is recorded in the chat
+  as a Risi system line, naming who did it and when.
+- **Each phone sends only its own microphone.** Chunks of 10–15 s (Ogg/Opus) go over TLS to the server. The
+  speaker is the authenticated uploader, so no diarisation is needed. **Raw audio is never stored:** each
+  chunk is held in memory (or tmpfs) only until its transcription, then deleted.
+- **This path is not end-to-end encrypted to the members.** The server (inside `RisiMe.Agent`) hears the
+  audio. The UI says so honestly (decision 048): **"Audio is sent to Risi for transcription."**
+- **Local models only**, on spark2, with no commercial fallback for speech.
+
+### 36.1 Switch, capability, developer flag
+- **`GET /auth/config`** gains **`"call_transcribe": "on" | "off"`** (`auth_config_v139.json`). It is `on`
+  only while the server env `RISI_CALL_TRANSCRIBE=on` (default `off`), Risi is available, and the speech
+  service is healthy. Absent means `off`. While it is `off`, phones hide the button, and the server answers
+  every push with `transcribe_off` and every upload with `503 transcribe_off`. Turning it off stops running
+  sessions (reason `switch_off`). This is the kill switch: no new app is needed.
+- **Capability:** a v1.39 app advertises **`"call_transcribe"`** in `mls.capabilities`
+  (`device_put_call_transcribe.json`) once it implements §36.2–§36.7 and renders the §36.5 kinds.
+- **`call_offer.tab`** (inside MLS, §16.2; `call_offer_official_payload.json`): the caller sets
+  `"tab": "official"` on a call placed from a 1:1's Official tab. If it is absent, the call is Private.
+  - Both phones show **[Transcribe]** only when the call's offer said `"official"`, `/auth/config` says `on`,
+    and this device has `call_transcribe`.
+  - A phone that holds the call as Private answers any request for it with `decline` and
+    `"reason": "private_call"`, without asking the user.
+  - The server can't see the tab: it enforces Official `on` and full consent, and the phones enforce the tab.
+- **Developer flag.** The server env `RISI_DEV_USERS` lists user ids (in `.env`).
+  - `User` (§1.3) gains **`"risi_dev": true`** for those users only; it is absent for everyone else
+    (`me_reply_risi_dev.json`).
+  - **`GET` / `PUT /api/v1/me/risi/dev`** with `{"transcribe_compare": bool}` returns
+    `200 {"transcribe_compare": bool}` (`me_risi_dev_put.json`, `me_risi_dev_reply.json`). It answers
+    **`403 not_developer`** to anyone not listed. The setting is stored per user and defaults to `false`.
+  - The app shows the toggle (Settings → About → tap the version 7 times) only when `risi_dev` is true.
+  - The server decides `compare` on each request (§36.2); the client never sets it. A user removed from the
+    list loses compare at their next request.
+
+### 36.2 Consent: the session and its state machine
+One **session** belongs to one call attempt. A call may have at most **3 sessions** in sequence, and only
+one of them may be live at a time.
+
+```
+Session = {"session_id": uuid, "call_id": uuid, "conversation_id": "grp:…" (the Official conversation),
+  "chat_id", "state": "requested" | "on" | "declined" | "expired" | "stopped" | "ended",
+  "requested_by": uuid, "requested_at": ts, "expires_at": ts | null,
+  "participants": [{"user_id", "consent": "allowed" | "pending" | "declined", "at": ts | null}],
+  "compare": bool, "started_at": ts | null, "ended_at": ts | null,
+  "by": uuid | null, "reason": null | "stopped" | "declined" | "expired" | "ended" | "left" | "official_off"
+        | "switch_off" | "max_length" | "unavailable" | "private_call",
+  "discard": bool, "chunk": {"min_ms": 5000, "max_ms": 20000, "max_bytes": 262144}, "server_ts"}
+```
+
+**Transitions** (server, normative):
+```
+(none) / declined / expired / stopped ──request──▶ requested    (requester = allowed; the others = pending)
+requested ──allow by the last pending──▶ on                     (started_at = now)
+requested ──decline by anyone──▶ declined
+requested ──stop by anyone──▶ stopped (reason stopped)         (stop before start = cancel)
+requested ──30 s without full consent──▶ expired
+on ──stop by anyone──▶ stopped        (optional discard)
+on ──stop with reason "ended" (hang-up)──▶ ended
+on ──90 s with no chunk from a participant──▶ ended (reason left)
+on ──4 h after started_at──▶ ended (reason max_length)
+on / requested ──Official off──▶ stopped (official_off) · switch off ──▶ stopped (switch_off)
+on ──speech service down for 60 s──▶ stopped (unavailable)
+```
+`declined`, `expired`, `stopped` and `ended` are final for that session. A new **request** opens a new
+`session_id`, and every participant is asked again.
+
+**Participants** in a 1:1 are the two users of the call:
+- They are taken from the server's own record of the `call_id`: the `from`/`to` of its `ring: true`
+  `call_signal`, kept in memory for 4 h.
+- That call's `dm:` must be the `chat_id` of the named Official conversation.
+- **The device is bound:** a user's consent and uploads come only from the device that sent their `request`
+  or `allow`. Any other device of that user gets `invalid_device`.
+
+**Leaving and rejoining (1:1):**
+- **Hang-up:** the phone sends `stop` with `"reason": "ended"` before it tears down.
+- **Socket drop or ICE restart:** the session stays `on`. The phone keeps recording its own microphone and
+  holds **at most 2 chunks** in memory, dropping the oldest. On reconnect it uploads them with their original
+  `seq`. If no chunk arrives from a participant for 90 s, the session ends (reason `left`).
+- **A new call** (a new `call_id`) never inherits consent.
+
+### 36.3 The wire: push `call:transcribe` and signal `call_transcribe`
+**`call:transcribe`** is a client → server push on the inbox topic (§2). Every push has the shape
+`{"action", "call_id", "conversation_id": "grp:…" (the chat's Official conversation), …extra}`:
+
+| `action` | extra fields | who may send | when |
+|---|---|---|---|
+| `request` | — | a participant, from a `call_transcribe` device | no live session, fewer than 3 sessions so far, not within 10 s of this user's last request |
+| `allow` | `session_id` | a participant whose consent is `pending` | `requested` |
+| `decline` | `session_id`, `reason`: `null` \| `"private_call"` | a pending participant | `requested` |
+| `stop` | `session_id`, `reason`: `"stopped"` \| `"ended"`, `discard`: bool | any participant | `requested` or `on` |
+
+Examples: `call_transcribe_request.json`, `call_transcribe_allow.json`, `call_transcribe_decline.json`,
+`call_transcribe_stop.json`.
+
+- **Reply ok:** `{"session": Session}` (`call_transcribe_reply.json`).
+  - A repeated `allow`, `decline` or `stop` on a final session is idempotent: the reply is ok with the
+    current state.
+- **Reply error** (`{"reason": …}`):
+
+  | Reason | Meaning |
+  |---|---|
+  | `transcribe_off` | the switch is off |
+  | `not_official` | the conversation is not an Official `grp:` with Official `on`, or the call's `dm:` doesn't match its `chat_id` |
+  | `unknown_call` | the server has no record of this `call_id` from the last 4 h |
+  | `not_participant` | the sender is not a participant of the call |
+  | `invalid_device` | the device has no `call_transcribe`, or is not the bound device |
+  | `peer_not_ready` | the other participant has no live `call_transcribe` device |
+  | `busy` | a session is already live, or 3 sessions were used |
+  | `bad_state` | the action doesn't fit the current state |
+  | `rate_limited` | over the limits below |
+  | `transcribe_unavailable` | Risi or the speech service is down, or at capacity |
+
+- **Rate limits:** 30 `call:transcribe` pushes per user per minute, and 10 requests per user per hour.
+- **The signal `call_transcribe`** (§2.3, ephemeral; `signal_call_transcribe.json`):
+  `{"kind": "call_transcribe", "data": Session}`.
+  - It is sent to the live sockets of every participant's `call_transcribe` devices on every transition,
+    including the request itself, so the peer sees the request.
+- **`GET /api/v1/calls/{call_id}/transcribe`** (auth; participants only, else `404 not_found`) returns
+  `200 {"session": Session | null}`, the newest session of the call, in the same shape as
+  `call_transcribe_reply.json`. Phones call it after a reconnect, before they trust any local state.
+
+### 36.4 Upload: `POST /api/v1/calls/{call_id}/transcribe/chunks`
+The request is auth plus `X-Device-Id` (the bound device), sent as `multipart/form-data`:
+
+| Part | Content |
+|---|---|
+| `session_id` | the session's id |
+| `seq` | an int, 0, 1, 2… per (session, device), strictly increasing; gaps are allowed |
+| `offset_ms` | the chunk's start, in ms since `started_at`, from the phone's server-corrected clock (§16.3 offset) |
+| `duration_ms` | 1–20 000 |
+| `codec` | `"ogg_opus"`: Ogg/Opus, mono, 16 or 48 kHz, 16–32 kbit/s |
+| `audio` | the file part, at most **256 KiB** |
+
+- The phone cuts its own microphone into chunks of **10–15 s**. It sends silent chunks too: they act as the
+  keep-alive.
+- It records only while the state is `on` and its own microphone is not muted. While the microphone is muted
+  it sends silent chunks.
+- **Reply:** `202 {"seq": int, "accepted": true, "duplicate": bool}` (`call_transcribe_chunk_reply.json`).
+  A repeated `seq` gets `202` with `duplicate: true`, and the chunk is not transcribed twice.
+- **Errors** (§0 shape; e.g. `error_not_consented.json`, `error_not_official.json`, `error_transcribe_off.json`):
+
+  | Status | Code | Meaning |
+  |---|---|---|
+  | `403` | `not_official` | the call isn't Official |
+  | `403` | `not_participant` | the uploader isn't a participant |
+  | `403` | `invalid_device` | not the bound device |
+  | `404` | `not_found` | unknown session, or the session isn't of this call |
+  | `409` | `not_consented` | the state is `requested` |
+  | `409` | `stopped` | the state is `declined`, `expired`, `stopped` or `ended`; the phone stops recording at once |
+  | `413` | `too_large` | over 256 KiB |
+  | `422` | `bad_request` | codec, duration, or a `seq` that isn't higher |
+  | `429` | `rate_limited` | over 8 chunks per participant per 60 s, with a burst of 3 after a reconnect |
+  | `503` | `transcribe_off` | the switch is off |
+  | `503` | `transcribe_unavailable` | the speech service is down or full; the phone retries the same `seq` once after 5 s, then drops it |
+
+- **No storage** (server, normative):
+  - The chunk is read into memory, or into the speech service's size-limited tmpfs, and is never written to
+    disk or to a log.
+  - It is deleted right after transcription, and also on any error.
+  - On `stop` with `discard`, chunks still queued are dropped without being transcribed.
+  - At most **2 queued chunks per participant** are held. Beyond that, the newest chunk is refused with
+    `503 transcribe_unavailable`.
+
+### 36.5 Models and the Risi kinds
+**Routing** (server, normative):
+1. For each chunk, the speech service detects the language with `faster-whisper-large-v3` among `si`, `ta`
+   and `en`.
+2. The chunk then goes to one model by language:
+
+   | Language | Model alias |
+   |---|---|
+   | `si` | `whisper-small-sinhala` |
+   | `ta` | `tamil-asr-qwen3` |
+   | `en` (and unsure) | `faster-whisper-large-v3` |
+
+   The aliases are served on loopback (decision 080).
+3. A chunk with no speech (VAD) posts nothing.
+
+**The transcript line `call_transcript`** (a `text` envelope from Risi's leaf in the Official conversation,
+§24.11; `envelope_risi_call_transcript.json`):
+```
+risi: {"v": 1, "kind": "call_transcript", "call_id", "session_id", "turn": int (1-based per session),
+  "speaker": uuid, "start": ts, "end": ts, "text": str (≤ 2000 chars), "language": "si" | "ta" | "en",
+  "model": alias, "call_ref": null, "made_by": {"model": alias, "provider": "risime", "at", "also": []},
+  "notify": []}
+```
+- **`body`:** `"Harsha 17:52: <text>"`. The name is the server's display name; the phone renders the name
+  from its own data and the time in its own zone. These posts are silent.
+- **Grouping:**
+  - Consecutive chunks of one speaker are merged into one turn, until another participant's speech starts,
+    the turn reaches 60 s, or the session ends.
+  - A turn is posted when it closes, or after 30 s of an open turn; a continuation is posted as the next
+    `turn`.
+  - Posts follow the order of `start` within the session, on a best-effort basis.
+
+**The consent line `call_transcribe`** (Risi system line in Official; `envelope_risi_call_transcribe_on.json`,
+`envelope_risi_call_transcribe_stopped.json`):
+```
+risi: {"v": 1, "kind": "call_transcribe", "call_id", "session_id",
+  "state": "on" | "declined" | "expired" | "stopped" | "ended",
+  "requested_by": uuid, "consents": [{"user_id", "consent", "at"}], "by": uuid | null, "reason",
+  "discard": bool, "started_at", "ended_at", "compare": bool, "call_ref": null,
+  "made_by": {"model": null, …}, "notify": []}
+```
+It is posted once per final transition and once on `on`. The `body` lines:
+
+| State | `body` |
+|---|---|
+| `on` | "Harsha asked Risi to transcribe this call; Kamal allowed (17:50). Audio is sent to Risi for transcription." |
+| `declined` | "Kamal declined transcription (17:50)." |
+| `expired` | "No answer to the transcription request (17:50)." |
+| `stopped` | "Kamal stopped transcription (18:02)." |
+| `stopped` with `discard` | "Kamal stopped transcription and deleted the transcript (18:02)." |
+| `ended` | "Transcription ended with the call (17:50–18:02)." |
+
+**Stop with `discard`:** Risi deletes its `call_transcript` and `call_transcript_compare` posts of that session
+for everyone (§15, sender delete), deletes the buffer rows, and makes **no summary**. The consent line stays.
+
+**Compare mode `call_transcript_compare`** (only when `session.compare`; one post per chunk with speech, and
+it replaces `call_transcript` for that session; `envelope_risi_call_transcript_compare.json`):
+```
+risi: {"v": 1, "kind": "call_transcript_compare", "call_id", "session_id", "seq", "speaker",
+  "start", "end", "language_detected": "si" | "ta" | "en", "chosen": alias (the routed model),
+  "results": [{"model": alias, "text": str | null, "language": str | null, "elapsed_ms": int,
+               "error": null | "timeout" | "failed"}],
+  "call_ref": null, "made_by": {"model": null, "provider": "risime", "at", "also": [{model, provider, task}…]},
+  "notify": []}
+```
+- Every candidate model runs on the same chunk, with a 30-s timeout each.
+- **`body`:** one line per model, `"<model> (<elapsed> ms): <text>"`, with `chosen` first.
+- **Consent:** the request shown to the peer says "(developer model comparison on)", so the peer allows
+  knowing it.
+
+### 36.6 The phone (android, normative)
+- **[Transcribe]** appears on the Official call screen under §36.1. A tap sends `request` and shows
+  "Asking Kamal…".
+- **The peer's prompt:** a sheet over the call screen says "<name> wants Risi to transcribe this call. Audio
+  is sent to Risi for transcription." It offers **[Allow] [Decline]** and closes when `expires_at` passes.
+- **While `on`:** both phones show a **red bar, "Risi transcribing"**, with [Stop], from the `on` signal
+  until a final state.
+  - [Stop] opens two choices: "Stop" and "Stop and delete transcript".
+  - **The bar fails toward showing:** it is removed only on a final state from the signal, from `GET`, or from
+    a `409 stopped`.
+- Each phone uploads only its own microphone track, captured before the network path: the local
+  `AudioRecord` / WebRTC capture tap, never the remote track. It never uploads in a call held as Private.
+- The phone stops recording at once on any final state or error, and zeroes its buffers.
+
+### 36.7 After the call: summary and follow-ups (reuses §27, §29)
+- **Trigger:** at `ended`, or at `stopped` without `discard`, when the session has **≥ 30 s of speech from
+  ≥ 2 speakers**.
+  - The server runs the §27.2 call extraction on the session's transcript (`source: "call"`, `call_id`,
+    `media` from the call's cleartext `media`).
+  - It posts the per-person **`discussion_summary`** (§27.3, in each Risi chat) and one **`discussion_card`**
+    (§27.4, in Official).
+  - Agreed meetings become **§29.8 `confirm`** calendar cards in each owner's Risi chat (§35.4 rules). Each
+    owner confirms their own items.
+  - `made_by.also` lists every speech model used, with `task: "transcribe"`.
+- **Language, reader first:** both kinds gain an optional **`"lang": "si" | "ta" | "en"`**
+  (`envelope_risi_discussion_card_transcribed.json`).
+  - A per-person copy is written in its reader's language: the language that reader spoke most in the
+    session, else `en`.
+  - The Official card is written in the call's majority language.
+  - Clients ignore `lang` if they don't know it; it changes no rendering rule.
+
+### 36.8 Storage, retention, learning log
+- **Transcript working set:** the §27.8 `risi_buffer` rows `(conversation_id, call_id, seg_n, speaker, start,
+  end, text)`, sealed with `RISI_DATA_KEY`, TTL 24 h. They are deleted after the §36.7 extraction, on a
+  discard, and on Official off.
+- **The posted lines** are Risi posts in Official, so §35.1 applies: sealed, kept until deleted, and covered
+  by §35.3 controls and opt-out.
+  - A participant who opted out of memory is still transcribed for the chat (they consented), but their
+    lines are not kept in memory.
+- **Session state** (Postgres `risi_call_transcribe_sessions`, additive):
+  - It holds `session_id`, `call_id`, `conversation_id`, the participants with their consents and bound
+    devices, `state`, `reason`, `compare`, timestamps and counts. No text, no audio.
+  - Rows are kept 90 days as the consent record.
+- **Learning log** (§24.12):
+  - **Normal sessions:** one `transcribe` row per session, as in §27.8: models, audio seconds per language,
+    chunk count, latency, and `output: null`.
+  - **Compare sessions:** one **`transcribe_compare`** row per chunk per model. It holds the model,
+    `elapsed_ms`, the detected language, `audio_ms`, the input `{session_id, seq, speaker}` plus a SHA-256 of
+    the chunk, and **`output: {"text"}` sealed with `RISI_DATA_KEY`, written with a 30-day TTL**.
+  - This amends §27.9 ("never transcript text in the learning log") for compare rows only. They exist only
+    with the developer's setting and the peer's informed consent.
+  - Never logged anywhere: audio, and transcript text outside these rows.
+
+### 36.9 Groups (later; reserved)
+Group Official calls (§20) use the same push, signal, upload and kinds, with these differences:
+- the participants are the human identities in the LiveKit room;
+- a joiner while `on` turns the state to **`paused`** (uploads get `409 not_consented`) until they allow;
+- a joiner's decline stops the session for everyone;
+- the §27.7 listener and this path never run in the same call (`busy`).
+
+Not in v1.39.
+
+### 36.10 Amendments, examples, gate
+- **§16.2:** `call_offer` gains the optional `tab`. **§24.5 / §27.7:** a 1:1 Official call may be transcribed
+  under §36 only, and never a Private call. **§27.3 / §27.4:** the optional `lang`. **§27.9:** compare rows
+  (§36.8). **§1.3:** `User.risi_dev`.
+- **Examples:**
+  - `auth_config_v139.json`, `device_put_call_transcribe.json`, `call_offer_official_payload.json`;
+  - `call_transcribe_request.json`, `call_transcribe_allow.json`, `call_transcribe_decline.json`,
+    `call_transcribe_stop.json`, `call_transcribe_reply.json`, `signal_call_transcribe.json`;
+  - `call_transcribe_chunk_reply.json`, `error_not_consented.json`, `error_not_official.json`,
+    `error_transcribe_off.json`;
+  - `envelope_risi_call_transcript.json`, `envelope_risi_call_transcript_compare.json`,
+    `envelope_risi_call_transcribe_on.json`, `envelope_risi_call_transcribe_stopped.json`,
+    `envelope_risi_discussion_card_transcribed.json`;
+  - `me_reply_risi_dev.json`, `me_risi_dev_put.json`, `me_risi_dev_reply.json`.
+- **Gate:**
+  - **Server:** the state machine (every transition, including expiry at 30 s and `left` at 90 s), refusal of
+    a Private or unknown call, the bound device, the upload errors and limits, a test that no chunk ever
+    reaches disk (tmpfs only), a discard that deletes the posts, the switch-off stop, and the `not_developer`
+    refusal.
+  - **Android:** the button only on Official calls, the automatic `private_call` decline, the red bar fails
+    toward showing, only the own microphone is uploaded, and recording stops on `409 stopped`.
+  - **Both:** parse every new example. The release gates apply (APK and protocol).
+
 ## Changelog
+- **v1.39** (2026-10-12): the call-transcription fast path (§36, decision 080). 1:1 Official calls only (groups
+  reserved, §36.9). Each phone uploads only its own microphone in 10–15 s Ogg/Opus chunks to
+  `POST /api/v1/calls/{call_id}/transcribe/chunks`; nothing is stored. Consent is all-participant: the push
+  `call:transcribe` (`request` / `allow` / `decline` / `stop`), the signal `call_transcribe` (Session), and
+  `GET /api/v1/calls/{call_id}/transcribe`; a request expires after 30 s. New Risi kinds `call_transcript`,
+  `call_transcribe` (the consent line) and `call_transcript_compare` (developer compare mode:
+  `User.risi_dev`, `GET`/`PUT /api/v1/me/risi/dev`). Also: `/auth/config` `call_transcribe`, the capability
+  `call_transcribe`, the optional `call_offer.tab`, and the optional `lang` on `discussion_summary` and
+  `discussion_card`. Per-language local models; compare rows in the learning log. Additive.
 - **v1.38** (2026-10-12): the Risi chat after a reinstall (P0 bug D; proposal
   `contract/proposals/2026-10-12-risi-chat-reinstall.md`). Behaviour only, no wire shape change.
   (1) §12.12.3 server: no `409 rejoin_pending` for a Risi chat whose rejoin op has `candidates: 0` (the owner
