@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.40 (Release 0.3)
+# RisiMe Wire Protocol — v1.42 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -10430,7 +10430,337 @@ Clients ignore both fields if they don't know them; a v1.39 client is unaffected
 `envelope_risi_call_transcript_romanised.json`. **Gate:** both sides parse them; the server test checks the
 pass-through from the speech service into both kinds.
 
+## 37. Voice notes (v1.41)
+Decision 081 (NEXT-PHASE §A; proposal 2026-10-11-basic-messaging reserved the type). **Additive:** one MLS
+envelope type (`voice`), one device capability (`voice`), one `msg:ack` status (`played`) with its receipt
+fields, one Risi kind (`voice_transcript`), one `risi_action` value, one `/auth/config` switch and one user
+setting. Old apps drop an unknown envelope type (§10.3) and show Risi kinds as `body`.
+
+### 37.0 Principles
+- **A voice note is an E2EE blob, exactly like a photo** (§14): `purpose=media`, format `A256GCM-S64K`
+  (§14.3), a fresh key per upload, caps/quota/TTL of §14.5. **A blob is never reused across conversations**
+  (§33.5): forward = a fresh upload with a fresh key per target. The server never sees plaintext audio.
+- **Private voice notes have no Risi path at all.** Risi is not a member of a Private conversation; no
+  client, server or speech code path touches a Private note, and no audio is sent anywhere but the blob store.
+- **Official voice notes may be transcribed by Risi**, which is a visible MLS member of Official (§24.11): it
+  decrypts the note like any member, transcribes it **in memory**, and discards the audio (§37.6). The UI says
+  so honestly (decision 048). The sender can opt out, per note and by setting.
+- **Local speech models only** (§36.5 routing and §36.11 script check); no commercial fallback for speech.
+
+### 37.1 Switch, capability, readiness
+- **Capability `"voice"`** in `mls.capabilities` (`device_put_voice.json`) once a device implements §37.2–§37.5
+  and renders `voice_transcript`. It also means "understands `played`" (§37.4).
+- **Readiness:** `GET /api/v1/mls/groups/{conversation_id}` gains **`voice_ready`** and **`missing_voice`**,
+  computed exactly as `files_ready` (§33.1). The composer's mic button is shown only when `voice_ready`; a DM
+  or group that isn't shows the §33.1 notice ("Kamal needs to update RisiMe to get voice notes").
+- **`GET /auth/config`** gains **`"voice_transcribe": "on" | "off"`** (`auth_config_v141.json`; absent =
+  `off`): `on` only while `RISI_VOICE_TRANSCRIBE=on` (default `off`), Risi is available and the speech service
+  is healthy. It is the kill switch for §37.6; voice notes themselves work whatever it says.
+
+### 37.2 The `voice` envelope (MLS application message)
+`voice_payload.json`:
+```json
+{"v": 1, "type": "voice",
+ "blob": {"blob_id": "…", "size": 49248, "sha256": "<b64 SHA-256 of the ciphertext>"},
+ "enc": {"alg": "A256GCM-S64K", "key": "<b64 32 bytes>", "plain_size": 49152},
+ "mime": "audio/ogg; codecs=opus", "duration_ms": 12400,
+ "waveform": "<b64 of exactly 64 bytes>"}
+```
+- **`blob`, `enc`:** exactly §14.4 (no nonce field: the key is single-use, §14.3). `plain_size` ≤ the
+  `media` cap (§33.13).
+- **`mime`:** `"audio/ogg; codecs=opus"` (senders always produce this: mono, 48 kHz, 24–32 kbit/s VBR) or
+  `"audio/mp4"` (AAC-LC; receive-only, for future iOS/web senders). Receivers play both. Any other value →
+  dropped.
+- **`duration_ms`:** 500–1 800 000 (30 min; recording stops itself at 30 min).
+- **`waveform`:** exactly **64** levels, one byte each (0 = silence, 255 = loudest), the peak amplitude per
+  1/64 of the note, normalised to the note's own peak. Base64 of 64 bytes (88 chars). It is drawn as the
+  bubble's bars and the playback progress.
+- **Optional:**
+  - **`"transcribe": false`** (`voice_payload_reply_no_transcribe.json`): the sender's opt-out for this note
+    (§37.6). Absent or `true` = allowed. Senders set `false` when their §37.7 setting is off. It is meaningful
+    only in Official; it is never set in a Private tab (there is nothing to opt out of).
+  - **`reply_to`** (§33.9) and **`forwarded`** (§33.4, `voice_payload_forwarded.json`).
+  - **`request_id`** (uuid-v4) only in the user's Risi chat (§37.8, `voice_payload_risi_chat.json`); ignored
+    elsewhere.
+- No caption. Envelope bound 22 KiB (§14.4).
+- **Strict validation before anything is stored or fetched:** the §14.4 `blob`/`enc` checks; `mime` as above;
+  `duration_ms` in range; `waveform` decodes to exactly 64 bytes. Otherwise the envelope is **dropped as
+  malformed and logged** (`voice_payload_bad_waveform.json`: 40 bytes).
+
+### 37.3 Client (android, normative where it says "must")
+- **Record:** hold the mic to record; slide left to cancel; slide up to lock (hands-free) with [Delete] and
+  [Send]. Notes shorter than 0.5 s are discarded. The microphone permission is asked on first use.
+- **Play:** the waveform with progress; 1×/1.5×/2× speed (remembered per app); auto-play the next unplayed
+  voice note of the same chat; keeps playing with the screen off (foreground media session); switches to the
+  earpiece when the proximity sensor is near.
+- **Download:** received voice notes **auto-download on any network** (they are small); verify order §14.7.
+  The decrypted audio is never written outside `noBackupFilesDir`; the ciphertext cache is not evicted while
+  the message exists (hard rule 9).
+- **Preview text** (chat list, notifications, quotes, §33.3 copy): "🎤 Voice note 0:12" (`h:mm:ss` from one
+  hour); the copy line is `<Voice note 0:12>` (proposal table). A reply quote shows "🎤 Voice note 0:12".
+- **Unplayed dot:** a received note shows a dot until it is played on this device (§37.4).
+- **Forward (§33.4/§33.5):** a fresh upload with a fresh key per target; `blob`/`enc` new; `mime`,
+  `duration_ms`, `waveform` copied; **`transcribe`, `request_id`, `reply_to` dropped**. A forwarded note is
+  never transcribed by Risi (§37.6). Targets that aren't `voice_ready` are skipped with the §33.4 notice.
+- **Delete (§15):** `msg:delete` `blob_ids` include voice blobs ("media targets" now covers `voice`).
+- **Official tab, first use:** before the first Official voice note while `voice_transcribe` is `on`, a one-time
+  note: "Risi transcribes voice notes in Official chats. You can turn this off in Settings → Risi." The Private
+  tab never shows any Risi text near the mic.
+
+### 37.4 The `played` receipt (blue mic)
+- **`msg:ack`** (§2.2) accepts **`"status": "played"`** (`msg_ack_played.json`), sent by a recipient's `voice`
+  device when playback of a received voice note **starts** for the first time on that device.
+  Never for one's own notes, never for other types (the server can't see the type; clients must not).
+- **Order:** `delivered` < `read` < `played`; `played` implies `read` (status only moves forward). A server
+  that gets `played` for a message not yet `read` records both.
+- **DM:** the server forwards `status: "played"` (`event_status_played.json`) **only to the sender's `voice`
+  devices**; other devices of the sender see `read` as before.
+- **Group:** `group_receipt` (§12.7) gains **`"played": n`** and **`"all_played": bool`**, present only once
+  the message has at least one `played` ack (`event_group_receipt_v141.json`); a `group_receipt` without them
+  means 0 / false. It is also sent when `all_played` turns true. `GET …/receipts` rows gain **`played_at`**
+  (same rule; `group_receipts_reply_v141.json`).
+- **Ticks** on a voice note: ✓ / ✓✓ / accent ✓✓ as today, and the **mic icon turns accent (blue)** when
+  `played` (DM) or `all_played` (group). Info (§33.12) gains "Played" times.
+- **Own devices:** the unplayed dot is local per device (`played_at` on the row). The server sends `played`
+  only once per (message, recipient user): later `played` acks from that user's other devices are accepted and
+  ignored.
+
+### 37.5 History, backups, restore
+- The `voice` envelope travels in history shares (§17.7) and backups (§22.5) as `payload`, **by reference**
+  like images: the backup holds the key, not the audio. After the blob's TTL (§14.5) a restored note shows
+  "This voice note is no longer available". (Audio inside backups is reserved for a later backup schema.)
+- `backup_entry_message_v141.json`: a message entry gains optional **`played_at`** (incoming voice rows: when
+  this user first played it; `null`/absent otherwise) and `status` may be `"played"` for outgoing rows.
+- Hard rule 9 applies: an update never deletes a voice row or its cached ciphertext; the upgrade gate counts
+  voice notes per conversation alongside photos.
+
+### 37.6 Risi transcription (Official only)
+**When.** Risi transcribes a `voice` note **only** when all hold: the conversation is an Official `grp:` with
+Official `on` (or the user's Risi chat, §37.8); `voice_transcribe` is `on`; the sender is a human member; the
+envelope has no `forwarded` and no `transcribe: false`; the sender's §37.7 setting `transcribe` is not `false`
+(the server checks it too: either opt-out wins); `duration_ms` ≤ **300 000** (5 min; longer notes get no
+transcript). Never in Private, in any form.
+
+**The audio path (server, normative; §36.4 no-storage rules).**
+1. Risi's device receives the MLS message like any member and validates it (§37.2).
+2. It fetches the blob (§14.2, as a member), verifies size and SHA-256, decrypts **in memory** (or the speech
+   service's size-limited tmpfs), and sends the Ogg/Opus to the speech service on loopback.
+3. Routing is §36.5 (detect among `si`/`ta`/`en`, then one model by language) with the §36.11 Sinhala prompt,
+   retry and script check.
+4. The plaintext audio, the ciphertext and the key are deleted right after transcription and on any error.
+   Never written to disk, logs or the learning log.
+
+**The kind `voice_transcript`** (a `text` envelope from Risi's leaf **in the same conversation**, §24.11;
+`envelope_risi_voice_transcript.json`, `envelope_risi_voice_transcript_unclear.json`):
+```
+risi: {"v": 1, "kind": "voice_transcript", "conversation_id": "grp:…", "message_id": timeuuid (the note),
+  "speaker": uuid (the note's authenticated sender), "duration_ms": int,
+  "status": "ok" | "unclear" | "failed", "text": str (≤ 4000 chars) | null,
+  "language": "si" | "ta" | "en" | null, "script"?: {"expected": "sinh", "sinhala_chars", "latin_chars", "ok"},
+  "romanised"?: true, "model": alias | null, "call_ref": null, "made_by", "notify": []}
+```
+- `status: "ok"`: `text` is the transcript. `"unclear"`: no usable speech, the language probability under
+  0.6, or still romanised after the §36.11 retry; `text: null`. `"failed"`: the speech service failed twice;
+  `text: null`. `script`/`romanised` as §36.11 (Sinhala only).
+- **`body`:** "Voice note from Harsha (0:12): <text>", or "Risi couldn't hear Harsha's voice note (0:04)
+  clearly." Silent.
+- **Rendering:** every member sees it (Risi is visible, §24.11), **attached under the note's bubble,
+  collapsed** to one line ("Transcript ▾"), expandable; no separate bubble. If the note isn't on the phone, it
+  shows as a small line. `unclear`/`failed` show "Couldn't transcribe" collapsed. Phones without `voice` show
+  `body`.
+- **Delete:**
+  - deleting the note for everyone (§15) makes Risi delete its `voice_transcript` (sender delete), its buffer
+    row and derived items (§38) within 1 min;
+  - the note's sender can delete only the transcript: **`risi_action` `transcript_delete`** with
+    `target` = the note's `message_id`, `edit: null` (`envelope_risi_action_transcript_delete.json`), sent in
+    the same conversation. Anyone else's is ignored.
+- **Retention (§36.8, §35.1):** the posted transcript is a Risi post in Official (sealed, kept until deleted,
+  §35.3 controls); the working copy in `risi_buffer` is sealed with `RISI_DATA_KEY`, TTL 24 h.
+- **Learning log:** one `transcribe` row per note: model, language, audio seconds, latency, status;
+  `output: null`. Never text or audio.
+
+### 37.7 The sender's setting
+`GET` / `PUT /api/v1/me/risi/voice` (auth) with `{"transcribe": bool, "action_items": bool}` → `200` the same
+shape (`me_risi_voice_put.json`, `me_risi_voice_reply.json`). Both default `true`, stored per user.
+- `transcribe: false`: Risi never transcribes this user's Official voice notes; phones also stamp
+  `transcribe: false` on each note (§37.2), so the note is honoured even before the server sees the setting.
+- `action_items: false`: no §38 extraction from this user's voice notes **or call lines** (§38.6).
+- Settings → Risi: "Transcribe my voice notes in Official chats" and "Find action items in my calls and voice
+  notes".
+
+### 37.8 Voice notes in the Risi chat (§25.2)
+- The composer of the Risi chat sends a `voice` note with a fresh **`request_id`**. Risi transcribes it
+  (`transcribe` is ignored there: the note is a request to Risi), posts `voice_transcript` in the Risi chat,
+  and then handles `text` exactly as a §24.11 `risi_request` `ask` with that `request_id` (§25 loop, §34
+  routing). The **answer is text, in the transcript's language** (`lang` as §36.7), never audio.
+- `unclear`/`failed`: the transcript card says so, and Risi answers "I couldn't hear that clearly. Please try
+  again or type it." (in the app's language); no tools run.
+- No §38 extraction from Risi-chat notes (they are requests).
+
+### 37.9 Amendments, examples, gate
+- **§2.2:** `msg:ack` status `played`. **§12.7:** `group_receipt` `played`/`all_played`, receipt rows
+  `played_at`. **§15.2:** media targets include `voice`. **§22.5:** `played_at`, `status: "played"`.
+  **§33.4/§33.9:** `voice` is forwardable and repliable (fields above). **§24.11:** `risi_action`
+  `transcript_delete`.
+- **Examples:** `auth_config_v141.json`, `device_put_voice.json`, `voice_payload.json`,
+  `voice_payload_reply_no_transcribe.json`, `voice_payload_forwarded.json`, `voice_payload_risi_chat.json`,
+  `voice_payload_bad_waveform.json`, `msg_ack_played.json`, `event_status_played.json`,
+  `event_group_receipt_v141.json`, `group_receipts_reply_v141.json`, `envelope_risi_voice_transcript.json`,
+  `envelope_risi_voice_transcript_unclear.json`, `envelope_risi_action_transcript_delete.json`,
+  `me_risi_voice_put.json`, `me_risi_voice_reply.json`, `backup_entry_message_v141.json`.
+- **Gate:** NEXT-PHASE §A (two-phone send/receive/play, the upgrade gate with voice counts, no plaintext audio
+  on the server: a test that the blob store and logs hold ciphertext only); server: `played` ordering and
+  delivery filter, the Risi audio path never touches disk, no Risi path for a Private conversation, a forwarded
+  or `transcribe: false` note is not transcribed; android: strict validation (bad waveform dropped), forward
+  re-upload, the Private tab has no Risi text. The full release gates apply (APK, protocol).
+
+## 38. Risi voice → action items (v1.42)
+Decision 082 (Part 5). **One pipeline:** the §27.2 extraction (already run on §36 call transcripts, §36.7)
+gains item kinds and line references, and also runs on §37.6 voice-note transcripts. **Scope: Official calls
+(§36) and Official voice notes only.** Never Private, never the Risi chat. Additive: two Risi kinds, three
+`risi_action` values, a `/auth/config` switch, and fields on My promises.
+
+### 38.0 Principles
+- **Visible to all, confirmed by the owner.** One `action_items` card in the Official conversation lists what
+  Risi heard for everyone; each owner confirms **their own** items in their Risi chat. Nothing is tracked
+  without the owner's ✓ (§27.5).
+- **Honest about hearing.** When the speech was unclear, Risi says so and extracts nothing.
+- **Every item links back** to the exact line it came from.
+
+### 38.1 Switch
+`GET /auth/config` gains **`"risi_action_items": "on" | "off"`** (`auth_config_v142.json`; absent = `off`;
+server env `RISI_ACTION_ITEMS`, default `off`). While `off`, §36.7 runs unchanged (§27.3/§27.4 kinds) and no
+voice-note extraction happens. While `on`, for the sources in scope `action_items` replaces the §27.4
+`discussion_card`, and `action_confirm` replaces the §27.3 `discussion_summary` **items** for owners with a
+`risi_ledger` device (others keep the §27.3 legacy path unchanged).
+
+### 38.2 Triggers (server, normative)
+- **Call:** the §36.7 trigger (≥ 30 s of speech from ≥ 2 speakers, at `ended` or `stopped` without `discard`).
+- **Voice note:** a `voice_transcript` with `status: "ok"` and ≥ 5 s of speech, whose sender's
+  `action_items` setting is not `false`. Context: the note's transcript only (plus the members' names for
+  owner resolution).
+- **Quality gate → "couldn't hear clearly":** no items are extracted, and an `action_items` card with
+  `status: "unclear"` is posted, when the source's majority-language probability is under **0.6**, or more
+  than **25 %** of its Sinhala turns are `romanised` (§36.11), or (voice note) the transcript was `unclear`.
+  `reason`: `"low_confidence"` | `"script_check"` | `"no_speech"`. A clear source with no items posts nothing.
+
+### 38.3 The Official card: `action_items`
+A `text` envelope from Risi's leaf in the Official conversation (`envelope_risi_action_items.json`,
+`envelope_risi_action_items_voice_note.json`, `envelope_risi_action_items_unclear.json`):
+```
+risi: {"v": 1, "kind": "action_items", "summary_id": uuid (the §27 extraction id),
+  "conversation_id": "grp:…", "source": "call" | "voice_note", "source_ref": SourceRef (the whole source),
+  "status": "ok" | "unclear", "reason": null | "low_confidence" | "script_check" | "no_speech",
+  "summary": str (≤ 280) | null, "lang": "si" | "ta" | "en",
+  "items": [ActionItem], "call_ref", "made_by", "notify": []}
+ActionItem = {"item_id": uuid, "kind": "promise" | "task" | "meeting" | "decision" | "question" | "number",
+  "text": str (1–200), "owner": uuid | null, "counterpart": [uuid], "due": ts | null, "all_day": bool,
+  "due_text": str | null, "lang": "si" | "ta" | "en",
+  "state": null | "proposed" | "confirmed" | "edited" | "declined" | "done" | "cancelled" | "expired",
+  "source_ref": SourceRef (the line)}
+SourceRef = {"type": "call" | "voice_note", "call_id": uuid | null, "session_id": uuid | null,
+  "message_id": timeuuid | null, "turn": int | null, "offset_ms": int | null, "at": ts}
+```
+- **Kinds:** `promise` (someone will do something), `task` (something to be done, owner maybe unknown),
+  `meeting` (an agreed time together), `decision`, `question` (left open), `number` (a figure stated: price,
+  quantity, date). `promise`/`task`/`meeting` with an `owner` are **ledger items** (`risi_commitments`,
+  `commitment_id = item_id`, §27.9) and carry `state`; the others have `owner: null` and `state: null`.
+- **`owner`:** the speaker for first-person items; a named member resolved among the conversation's members;
+  else `null` (no confirm card; shown as "Unassigned").
+- **`source_ref` per item:** call → `call_id`, `session_id`, `turn` (the §36.5 `call_transcript` turn) and
+  `offset_ms` within it; voice note → `message_id` and `offset_ms` within the note. `at` = the line's time.
+  The card-level `source_ref` names the whole source (`turn`/`offset_ms` null).
+- **Text language:** each item is written in the language spoken (`lang`); `summary` in the majority language
+  (§36.7 rule).
+- **`body`:** "Risi found 4 items in this call: 1 promise, 1 meeting, 1 decision, 1 number. Owners confirm
+  theirs in their Risi chat." (voice note: "…in Harsha's voice note…"). Silent.
+- **Rendering:** grouped by kind, each with owner ("You" / name / "Unassigned"), due and live state
+  (from `item_update`, §27.5). For a voice note the card is attached under the note (like §37.6). **Tap an
+  item → jump to its line:** call → the `call_transcript` post with that `session_id` + `turn` (highlighted);
+  voice note → the note, playback seeked to `offset_ms`, transcript expanded. "Line no longer available" when
+  missing.
+
+### 38.4 The owner's card: `action_confirm` (in the owner's Risi chat)
+One per owner per extraction, only when that owner has items (`envelope_risi_action_confirm.json`):
+```
+risi: {"v": 1, "kind": "action_confirm", "summary_id", "chat_id", "conversation_id": "grp:…",
+  "source", "source_ref", "for": [owner], "lang", "items": [ActionItem + {"buttons": [str]}],
+  "expires_at": ts (posted + 48 h), "call_ref", "made_by", "notify": [owner]}
+```
+- `items`: only that owner's ledger items, `state: "proposed"`. `buttons` per item, from
+  `["add_promise", "add_calendar", "remind", "not_mine", "edit"]`: `add_calendar` only for a `meeting` or an
+  item with a non-all-day future `due`; `remind` only when the Reminders skill is `ask`/`allowed` (§26.3).
+- **Actions** (`risi_action` in the owner's Risi chat, `target` = `item_id`; only the owner; repeats
+  idempotent; after `expires_at` → ignored and the item `expired`, §27.5):
+
+  | Button | `action` | `edit` | Effect |
+  |---|---|---|---|
+  | Add to My promises | `item_confirm` (§27.5) | `null` | `confirmed` |
+  | Edit | `item_edit` (§27.5, §28.6 partial) | `{"text"?, "due"?, "all_day"?}` | `edited` |
+  | Add to calendar | **`item_calendar`** | `null` or `{"title"?, "start"?, "end"?, "all_day"?}` (§28.4 shapes) | confirms the item, then creates the Risi Calendar event at once as §29.8 [Add] (default 60 min from `due`), posts `event_card` `mode: "added"`; with no usable time the phone opens the picker first and sends `edit` (`envelope_risi_action_item_calendar.json`) |
+  | Remind me | **`item_remind`** | `null` (default `due − 1 h`, §24.11 timing) or `{"remind_at": ts}` (future) | confirms the item and sets a §27.6 reminder (`envelope_risi_action_item_remind.json`) |
+  | Not mine | **`item_not_mine`** | `null` | `declined`; the item is offered to nobody else; recorded as owner feedback (`envelope_risi_action_item_not_mine.json`) |
+
+  The tap is the owner's explicit consent, so `item_calendar` and `item_remind` are not asked again under
+  §26.3 "Ask me each time"; under "Allowed" nothing runs without the tap either (§28.5: proactive = asked).
+- After each accepted action Risi posts the §27.5 **`item_update`** (`summary_id`, `item_id`, `state`, …) in
+  the Risi chat of every participant of the source **and** applies the state to the Official card: phones
+  update the `action_items` item with the same `item_id` from any `item_update` they hold.
+- **No `risi_ledger` device:** that owner's items stay on the Official card only, `proposed`, and expire.
+
+### 38.5 My promises: "From calls & voice notes"
+- `GET /api/v1/risi/commitments` items gain **`"kind"`** (the `ActionItem.kind`, or `"promise"` for older
+  items) and **`"source_ref": SourceRef | null`**; `source` may now be **`"voice_note"`**
+  (`risi_commitments_reply_v142.json`).
+- New query parameter **`source=call,voice_note`** (comma list of `chat` | `call` | `voice_note`; default all)
+  filters by `source`. The app's filter chip **"From calls & voice notes"** uses it; a tap on such an item
+  jumps to the line (§38.3) instead of `source_message_id`.
+
+### 38.6 Opt-out, Stop, retention, deletes
+- **Speaker opt-out:** a user whose `action_items` setting (§37.7) is `false`, or who opted out of memory
+  (§35.3), is **not extracted from**: their lines and notes are removed from the extraction input (other
+  speakers' items may still name them as `counterpart`, never as `owner`).
+- **Stop:** a §36 `stop` with `discard` → no extraction (as §36.7). A `transcript_delete` (§37.6) or a §15
+  delete of the note → its items are `cancelled` and removed from the cards (`item_update`).
+- **Retention (NEXT-PHASE §B):** raw transcript text only in `risi_buffer`, sealed, **≤ 24 h**, deleted after
+  extraction. Derived items are sealed with `RISI_DATA_KEY`: ledger items follow §27.5 (unconfirmed expire at
+  48 h; confirmed live until done/cancelled); `decision`/`question`/`number` items are kept **30 days**
+  (longer only if pinned, later), viewable and deletable by any participant via §35.3. Official off deletes
+  everything of that chat within 1 h (§24.4).
+
+### 38.7 Learning log (§24.12)
+- **`extract_actions`** row per extraction: `source` type and ids, model, latency, cost, `lang`, input sizes
+  (turns, audio seconds), output **counts per kind** and per owner — no item text.
+- **`action_feedback`** row per owner action: `item_id`, `kind`, `action` (`confirm` | `edit` | `calendar` |
+  `remind` | `not_mine` | `expired`), which fields an edit changed (`text` / `due`), seconds from posting.
+  This is the training signal for the extraction (own L1/L2 cascade). Never text, never audio.
+
+### 38.8 Amendments, examples, gate
+- **§24.11:** `risi_action` gains `item_calendar`, `item_remind`, `item_not_mine`. **§27.3/§27.4:** replaced
+  for in-scope sources while `risi_action_items` is `on` (§38.1). **§28.7:** `kind`, `source_ref`,
+  `source=` filter. **§36.7:** output via §38.
+- **Examples:** `auth_config_v142.json`, `envelope_risi_action_items.json`,
+  `envelope_risi_action_items_voice_note.json`, `envelope_risi_action_items_unclear.json`,
+  `envelope_risi_action_confirm.json`, `envelope_risi_action_item_calendar.json`,
+  `envelope_risi_action_item_remind.json`, `envelope_risi_action_item_not_mine.json`,
+  `risi_commitments_reply_v142.json`.
+- **Gate:** server: the quality gate (unclear → no items), opt-out speakers excluded, owner-only actions,
+  `item_calendar` creates exactly one event, retention TTLs, no text in the learning log; android: the source
+  jump for both types, the card updates from `item_update`, the filter chip. Server-only changes ship via the
+  Risi fast lane (rule 12); the app parts with the next APK.
+
 ## Changelog
+- **v1.42** (2026-10-12): Risi voice → action items (§38, decision 082). One extraction (§27.2) for Official
+  calls (§36) and Official voice notes: the Official card `action_items` (items with `kind`
+  promise/task/meeting/decision/question/number, owner, due, `lang`, `source_ref` to the exact line; `status`
+  `unclear` = "couldn't hear clearly", no items), the owner's `action_confirm` in their Risi chat, new
+  `risi_action` `item_calendar` / `item_remind` / `item_not_mine`, My promises `kind`, `source_ref`,
+  `source=voice_note` and the `source=` filter; `/auth/config` `risi_action_items`. Additive.
+- **v1.41** (2026-10-12): Voice notes (§37, decision 081). MLS envelope `voice` (E2EE `media` blob, Ogg/Opus,
+  `duration_ms`, 64-level `waveform`, optional `transcribe: false`), capability `voice`, `voice_ready`; the
+  `played` receipt (`msg:ack`, DM `status`, group `played`/`all_played`/`played_at`); Risi `voice_transcript`
+  in Official only (in-memory audio, §36.11 script check), `risi_action` `transcript_delete`, the setting
+  `/me/risi/voice`, voice requests in the Risi chat; `/auth/config` `voice_transcribe`. Additive.
 - **v1.40** (2026-10-12): Sinhala script check (§36.11, decision 071 amendment b). Optional `romanised` on
   `call_transcript`; optional `script {expected, sinhala_chars, latin_chars, ok}` and `romanised` on each
   `call_transcript_compare` result for Sinhala chunks. The speech service prompts Sinhala chunks in Sinhala
