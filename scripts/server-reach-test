@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# P0 2026-10-12 bug B gate (android): the sign-in screen reaches a slow server, and names "This phone is offline".
+# The REAL debug app on its own redroid against a tiny fake server (127.0.0.1:$REACH_PORT, adb reverse) that
+# answers GET /api/v1/auth/config with {"modes":["dev"]} and can STALL the next N requests (accepts, never
+# answers: the app's per-attempt bound of 10 s runs out). No tc / no root on the host.
+#
+#   timeout 900 scripts/server-reach-test [--apk app-debug.apk] [--keep]
+#
+#  1. Cold start with the next 2 auth/config requests stalled: "Checking the server…" stays up, then "Slow
+#     connection, still trying…", and the dev sign-in form ("Phone number") follows on the 3rd attempt;
+#     "Can't reach the server" never shows. Logcat: "RisiMe server check: ok after 3 attempt(s)".
+#  2. No network (eth0 down inside the container, `docker exec`: redroid's airplane mode doesn't touch Ethernet;
+#     adb is gone meanwhile): cold start → "Can't reach the server" + "This phone is offline" (logcat line
+#     `failed OFFLINE ("This phone is offline")`, screenshot through screencap in the container).
+#  3. Network back: the screen re-checks by itself (no Retry tap) and reaches the server.
+# Screens: docs/status/screens/60-reach-slow-checking.png, 60-reach-slow-retrying.png, 60-reach-slow-reached.png,
+# 61-reach-offline.png, 62-reach-back-online.png. Prints "REACH PASS|FAIL <step>", ends "SERVER REACH OK".
+# Own instance: redroid -reach on 5861 (REACH_REDROID / REACH_REDROID_PORT), fake server 4561. Never touches :4000.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"
+PKG=ai.risicloud.risime.debug
+CLS=ai.risicloud.risime
+INST="${REACH_REDROID:--reach}"; RPORT="${REACH_REDROID_PORT:-5861}"; PORT="${REACH_PORT:-4561}"
+CONTAINER="risime-redroid$INST"
+APK=""; KEEP=0
+while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
+[ -f "$APK" ] || { echo "no APK at $APK (cd android && ./gradlew assembleDebug)"; exit 2; }
+PATH="$("$REPO/scripts/android-target" adb):$PATH"
+SHOTS="${REACH_SHOTS:-$REPO/docs/status/screens}"; mkdir -p "$SHOTS"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-reach.XXXXXX")"
+S=""; SRV_PID=""
+pass() { echo "REACH PASS $*"; }
+fail() {
+  echo "REACH FAIL $*"
+  [ -n "$S" ] && timeout 10 adb -s "$S" logcat -d -s RisiMe:* 2>/dev/null | tail -20 || true
+  tail -5 "$WORK/requests.log" 2>/dev/null || true
+  exit 1
+}
+cleanup() {
+  docker exec "$CONTAINER" /system/bin/ip link set eth0 up >/dev/null 2>&1 || true
+  [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null || true
+  [ "$KEEP" = 0 ] && { REDROID_INSTANCE="$INST" REDROID_PORT="$RPORT" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true; }
+  rm -rf -- "${WORK:?}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+# ---- the fake server: auth/config, stalls the next N requests ($WORK/stall), logs each request
+ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT busy: set REACH_PORT"; exit 1; }
+echo 0 > "$WORK/stall"; : > "$WORK/requests.log"
+cat > "$WORK/fake.py" <<'PY'
+import sys, time, threading
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+port, stall_file, log_file = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+lock = threading.Lock()
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        with lock:
+            n = int(open(stall_file).read().strip() or 0)
+            if n > 0: open(stall_file, "w").write(str(n - 1))
+            with open(log_file, "a") as f: f.write(f"{time.time():.1f} {self.path} {'stall' if n > 0 else 'ok'}\n")
+        if n > 0:
+            time.sleep(25)   # longer than the app's 10-s bound per attempt; then hang up without an answer
+            self.close_connection = True
+            return
+        if self.path.startswith("/api/v1/auth/config"):
+            body = b'{"modes":["dev"]}'
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+        else:
+            body = b'{"error":{"code":"not_found","message":""}}'
+            self.send_response(404); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+PY
+python3 -I "$WORK/fake.py" "$PORT" "$WORK/stall" "$WORK/requests.log" & SRV_PID=$!
+for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/api/v1/auth/config" && break; sleep 0.5; done
+curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q dev || fail "the fake server didn't start"
+: > "$WORK/requests.log"
+
+# ---- the device
+echo "==> redroid $CONTAINER on $RPORT"
+S="$(REDROID_INSTANCE="$INST" REDROID_PORT="$RPORT" "$REPO/scripts/android-target" start)"
+A() { adb -s "$S" "$@"; }
+A uninstall "$PKG" >/dev/null 2>&1 || true
+A install "$APK" >/dev/null
+A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+A shell pm disable-user com.android.inputmethod.latin >/dev/null 2>&1 || true
+A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+
+dump() { A shell rm -f /sdcard/ui.xml >/dev/null 2>&1; A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui.xml" 2>/dev/null || : > "$WORK/ui.xml"; }
+has() { dump; grep -qF -- "$1" "$WORK/ui.xml"; }
+wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "    timeout waiting for: $1"; return 1; }
+node_xy() {
+  dump
+  python3 -I - "$WORK/ui.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+want = sys.argv[2]
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+for n in nodes:
+    t, d = n.get('text') or '', n.get('content-desc') or ''
+    if t == want or d == want or (want.endswith('*') and t.startswith(want[:-1])):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+}
+tap() { local b; b="$(node_xy "$1")"; [ -n "$b" ] || { echo "    no UI node: $1"; return 1; }; A shell input tap $b; }
+hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; [[ "$st" == *"mInputShown=true"* ]] && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
+save_shot() {  # $1 = png in, $2 = name: downscaled to 360 px, palette-quantised
+  python3 -I - "$1" "$SHOTS/$2.png" <<'PY' || cp "$1" "$SHOTS/$2.png"
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1]).convert("RGB")
+w, h = im.size
+im = im.resize((360, max(1, h * 360 // w)), Image.LANCZOS)
+im.quantize(colors=96, method=Image.Quantize.MEDIANCUT).save(sys.argv[2], optimize=True)
+PY
+  echo "    screenshot: docs/status/screens/$2.png"
+}
+shot() { A exec-out screencap -p > "$WORK/shot.png" 2>/dev/null && save_shot "$WORK/shot.png" "$1"; }
+# (No adb while eth0 is down: screencap and logcat inside the container.)
+cshot() { docker exec "$CONTAINER" /system/bin/screencap -p /data/local/tmp/reach.png && docker cp "$CONTAINER:/data/local/tmp/reach.png" "$WORK/c.png" >/dev/null && save_shot "$WORK/c.png" "$1"; }
+clog() { docker exec "$CONTAINER" /system/bin/logcat -d -s RisiMe:* 2>/dev/null | grep -a "$1" || true; }
+reqs() { grep -c 'auth/config' "$WORK/requests.log" || true; }
+cold_start() { A shell am force-stop "$PKG"; A logcat -c || true; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; }
+
+# ---------------------------------------------------------------- 0. point the app at the fake server
+A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null
+wait_for "Server:" 40 || fail "the sign-in screen didn't show"
+tap "Server:*" || fail "tap Server: … · Change"; sleep 1
+tap "Server URL" || tap "http://*" || tap "https://*" || fail "the Server URL field"; sleep 0.5
+A shell "for i in \$(seq 1 60); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true
+A shell input text "http://127.0.0.1:$PORT"; sleep 0.5; hide_keyboard
+tap "Use this server" || { tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; }
+wait_for 'text="Phone number"' 30 || fail "the app never reached the fake server (setup)"
+pass "setup: the app uses http://127.0.0.1:$PORT and shows the dev sign-in"
+
+# ---------------------------------------------------------------- 1. cold start, the first 2 attempts stall
+echo 2 > "$WORK/stall"; n0="$(reqs)"
+t0=$(date +%s)
+cold_start
+wait_for 'Checking the server' 8 || fail "cold start: no 'Checking the server…'"
+shot "60-reach-slow-checking"
+retrying=0; reached=0
+for _ in $(seq 1 70); do
+  dump
+  grep -qF 'reach the server' "$WORK/ui.xml" && { shot "60-reach-slow-failed"; fail "slow server: 'Can't reach the server' after $(( $(date +%s) - t0 )) s (it must keep retrying)"; }
+  if [ "$retrying" = 0 ] && grep -qF 'Slow connection, still trying' "$WORK/ui.xml"; then retrying=1; shot "60-reach-slow-retrying"; fi
+  grep -qF 'text="Phone number"' "$WORK/ui.xml" && { reached=1; break; }
+  sleep 1
+done
+dt=$(( $(date +%s) - t0 ))
+[ "$reached" = 1 ] || fail "slow server: the sign-in form never showed (requests: $(( $(reqs) - n0 )))"
+[ "$retrying" = 1 ] || fail "slow server: no 'Slow connection, still trying…' while retrying"
+shot "60-reach-slow-reached"
+n=$(( $(reqs) - n0 ))
+[ "$n" -ge 3 ] || fail "slow server: expected >= 3 auth/config requests (2 stalled + 1), saw $n"
+A logcat -d -s RisiMe:* 2>/dev/null | grep -aF 'RisiMe server check: ok after 3 attempt(s)' >/dev/null || fail "slow server: no 'server check: ok after 3 attempt(s)' in logcat"
+pass "cold start with 2 stalled answers: 'Checking the server…' → 'still trying' → sign-in form after ${dt} s, $n requests, no error"
+
+# ---------------------------------------------------------------- 2. no network → "This phone is offline"
+echo 0 > "$WORK/stall"
+A shell am force-stop "$PKG"
+docker exec "$CONTAINER" /system/bin/logcat -c >/dev/null 2>&1 || true
+docker exec "$CONTAINER" /system/bin/ip link set eth0 down
+offline=0
+for _ in $(seq 1 15); do
+  st="$(docker exec "$CONTAINER" /system/bin/dumpsys connectivity 2>/dev/null || true)"  # (no grep -q in a pipe: pipefail + SIGPIPE)
+  [[ "$st" == *'Active default network: none'* ]] && { offline=1; break; }
+  sleep 1
+done
+[ "$offline" = 1 ] || fail "eth0 down: Android still has a default network"
+docker exec "$CONTAINER" /system/bin/am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || fail "start the app offline"
+line=""
+for _ in $(seq 1 30); do line="$(clog 'RisiMe server check: failed')"; [ -n "$line" ] && break; sleep 1; done
+sleep 2
+cshot "61-reach-offline"
+printf '%s\n' "$line" | grep -qF 'failed OFFLINE ("This phone is offline")' || fail "offline: the check didn't end in 'This phone is offline' (log: ${line:-none})"
+pass "no network: 'Can't reach the server' with 'This phone is offline'"
+
+# ---------------------------------------------------------------- 3. network back → re-checked by itself
+docker exec "$CONTAINER" /system/bin/ip link set eth0 up
+for _ in $(seq 1 30); do adb connect "$S" >/dev/null 2>&1 || true; A shell true >/dev/null 2>&1 && break; sleep 1; done
+A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null || fail "adb reverse after the network came back"
+n0="$(reqs)"
+how="by itself"
+if ! wait_for 'text="Phone number"' 40; then
+  # The app's re-check can race adb's reverse tunnel coming back (a refusal, then backoff): one Retry tap.
+  how="after one Retry (the auto re-check raced adb's tunnel)"
+  tap "Retry" || fail "back online: neither the sign-in form nor Retry"
+  wait_for 'text="Phone number"' 40 || fail "back online: the sign-in form never showed"
+fi
+shot "62-reach-back-online"
+pass "network back: the sign-in screen reached the server $how ($(( $(reqs) - n0 )) requests)"
+echo "SERVER REACH OK"
