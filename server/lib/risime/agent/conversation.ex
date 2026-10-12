@@ -222,7 +222,35 @@ defmodule RisiMe.Agent.Conversation do
   defp buffer(%{sender: %{user_id: u, device_id: d}, plaintext: pt}, data, state) do
     member = Groups.member(state.conv, u)
 
-    if u == data["from"] and member != nil and member.state == "active" and member.kind == "user" do
+    human? =
+      u == data["from"] and member != nil and member.state == "active" and member.kind == "user"
+
+    case human? and voice(pt) do
+      # v1.41 §37.6: a voice note is never buffered (its envelope holds the blob key); it goes
+      # to the in-memory transcription path, which buffers only the transcript.
+      %{} = env ->
+        RisiMe.Agent.Voice.received(
+          state.conv,
+          %{message_id: data["message_id"], sender_id: u},
+          env
+        )
+
+      _ ->
+        buffer_human(human?, u, d, pt, data, state)
+    end
+
+    {:ok, state}
+  end
+
+  defp voice(pt) do
+    case Jason.decode(pt) do
+      {:ok, %{"type" => "voice"} = env} -> env
+      _ -> nil
+    end
+  end
+
+  defp buffer_human(human?, u, d, pt, data, state) do
+    if human? do
       m = %{message_id: data["message_id"], sender_id: u, sender_device: d, plaintext: pt}
       :ok = Transcript.put(state.conv, m)
       # v1.36 §35.1: the long-term memory (sealed; opt-outs dropped before sealing).
@@ -231,7 +259,7 @@ defmodule RisiMe.Agent.Conversation do
       RisiMe.Agent.Secretary.on_message(state.conv, m)
     end
 
-    {:ok, state}
+    :ok
   end
 
   # A message from a later epoch than ours: catch up first (commits may still be in flight).

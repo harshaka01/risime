@@ -17,6 +17,46 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
 
+## v1.41 §37 voice notes (decision 081) — READY v1.41 (not deployed)
+Code: `server/lib/risime/mls/images.ex` (readiness), `devices.ex` (capability), `messaging.ex` +
+`messaging/group_receipts.ex` + `risime_web/channels/inbox_channel.ex` (`played`), `agent/voice.ex`,
+`agent/media.ex` (A256GCM-S64K open, in memory), hooks in `agent/conversation.ex`, `agent/secretary.ex`,
+`workers/risi.ex`, `agent/turn.ex`. Migration `20261101100000_risi_voice` (additive: `risi_voice_settings`,
+`risi_voice_transcripts` = ids only) and CQL `011_voice_played.cql` (additive `group_receipts.played_at`).
+Tests: `test/risime_web/channels/voice_played_v141_test.exs`, `test/risime/agent/voice_test.exs`,
+`test/contract/examples_v141_test.exs` (now server-output comparisons), `speech_http_test.exs`.
+- **Pilot env:** `RISI_VOICE_TRANSCRIBE=on` (default off = kill switch for §37.6/§37.8 only; voice notes, `played`
+  and readiness work without it). Needs Risi up and the speech service healthy (same `WHISPER_API_KEY` /
+  `RISI_SPEECH_URL` as §36).
+- **Server behaviour the phone should know:**
+  - `voice_ready`/`missing_voice` are in every `GET /mls/groups/{id}` view (like `files_ready`: e2ee + every
+    receiving instance of every member advertises `voice`).
+  - `played`: accepted from any recipient device (the server can't see types). DM: if the message wasn't `read`
+    yet the sender first gets a `read` status (all devices), then `status: "played"` reaches only the sender's
+    devices that advertise `voice` (live and on sync; it is never pushed as a wake-up). Once per message: later
+    `played`/`read` acks are ignored. Own-message acks ignored. Group: `played`/`all_played` appear on
+    `group_receipt` only after the first played ack (it implies read; `all_played` turning true is sent at once);
+    `GET …/receipts` rows carry `played_at` (null for the others) only then.
+  - `GET/PUT /api/v1/me/risi/voice`: both booleans required on PUT (`422 bad_request` otherwise); defaults true.
+  - Risi transcribes only: Official `grp:` (or the user's Risi chat with a valid `request_id`), switch on, human
+    active sender, no `forwarded`, ≤ 300 000 ms; in Official also not `transcribe: false` and the setting not off.
+    The blob must be a `media` blob **of the same conversation** whose size and SHA-256 match the envelope;
+    otherwise the transcript is posted as `failed`. `voice_transcript` is silent (`notify: []`); `failed` has
+    `model: null` and a rule `made_by`; `unclear` = no speech, detection probability < 0.6, or romanised.
+    Body for unclear and failed: "Risi couldn't hear <name>'s voice note (m:ss) clearly."
+  - Risi chat: `ok` → buffered as a `risi_request` `ask` (`via: "voice"`, `lang`) and run through the normal §24.11
+    queue (so `queued`/progress/answer as for typed asks; the answer uses the transcript's language);
+    `unclear`/`failed` → an `answer` "I couldn't hear that clearly. Please try again or type it." with the
+    note's `request_id`, `notify: [asker]`. `transcribe:false` and the setting are ignored there.
+  - Deletes: a note deleted for everyone → a job deletes Risi's transcript (seconds); `transcript_delete` from the
+    note's sender deletes it (the action job, seconds); anyone else's is ignored.
+- **Privacy (tested):** the voice envelope (it holds the blob key) is never buffered; the ciphertext is read from
+  the blob store into memory, decrypted in memory, posted to the speech service on loopback, and dropped; the
+  sealed buffer holds only the transcript; the learning log row has `output: null` and no text.
+- **Speech service:** uploads above 1 MiB spool from FastAPI's `SpooledTemporaryFile` to the container's `/tmp`,
+  which is a 256 MB tmpfs in `infra/docker-compose.whisper.yml` (the §37.6 "size-limited tmpfs"); nothing on disk.
+- Gate green 2026-10-12: 1309 tests, 0 failures (partition `vn`).
+
 ## v1.39 §36 call transcription fast path (decision 080) — READY v1.39 (not deployed)
 1:1 Official calls only (groups §36.9 not built). Code: `server/lib/risime/agent/call_transcribe*.ex`,
 `agent/speech*.ex`, `risime_web/plugs/memory_multipart.ex`. Migration `20261031100000_risi_call_transcribe`

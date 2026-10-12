@@ -140,9 +140,17 @@ defmodule RisiMe.Agent.Speech.Http do
       elapsed_ms: ms(b["processing_s"], elapsed),
       speech: speech,
       # v1.40 §36.11: the final text is still not in Sinhala script after the service's retry.
-      romanised: b["romanised"] == true
+      romanised: b["romanised"] == true,
+      # v1.41 §37.6: the routing's detection probability (else the model's), and the script
+      # check of a Sinhala text (nil otherwise), for `voice_transcript`.
+      language_probability: probability(b),
+      script: script(b["script"])
     }
   end
+
+  defp probability(%{"routing" => %{"probability" => p}}) when is_number(p), do: p
+  defp probability(%{"language_probability" => p}) when is_number(p), do: p
+  defp probability(_), do: nil
 
   # v1.40 §36.11: the service's Sinhala script check of one compare result (absent: nil).
   defp script(%{"expected" => e, "sinhala_chars" => si, "latin_chars" => la, "ok" => ok})

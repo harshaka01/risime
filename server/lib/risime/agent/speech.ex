@@ -18,6 +18,8 @@ defmodule RisiMe.Agent.Speech do
 
   @type result :: %{
           optional(:romanised) => boolean,
+          optional(:language_probability) => number | nil,
+          optional(:script) => script | nil,
           text: String.t(),
           language: String.t(),
           model: String.t(),

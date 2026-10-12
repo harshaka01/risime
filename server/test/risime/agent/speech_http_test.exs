@@ -208,6 +208,36 @@ defmodule RisiMe.Agent.SpeechHttpTest do
     assert {:ok, %{romanised: false}} = Http.transcribe("x")
   end
 
+  test "v1.41 §37.6: the detection probability and the transcribe script check" do
+    stub(fn conn, _ ->
+      Req.Test.json(conn, %{
+        "text" => "හෙට",
+        "language" => "si",
+        "language_probability" => 0.91,
+        "routing" => %{"reason" => "detected", "language" => "si", "probability" => 0.55},
+        "script" => %{
+          "expected" => "sinh",
+          "sinhala_chars" => 3,
+          "latin_chars" => 0,
+          "ok" => true
+        },
+        "romanised" => false
+      })
+    end)
+
+    # The routing's detection wins over the model's own probability.
+    assert {:ok, %{language_probability: 0.55, script: %{ok: true, sinhala_chars: 3}}} =
+             Http.transcribe("x")
+
+    stub(fn conn, _ ->
+      Req.Test.json(conn, %{"text" => "hi", "language" => "en", "language_probability" => 0.8})
+    end)
+
+    assert {:ok, %{language_probability: 0.8, script: nil}} = Http.transcribe("x")
+    stub(fn conn, _ -> Req.Test.json(conn, %{"text" => "hi", "language" => "en"}) end)
+    assert {:ok, %{language_probability: nil}} = Http.transcribe("x")
+  end
+
   test "compare without the endpoint (404): each model by itself" do
     stub(fn conn, body ->
       case conn.request_path do

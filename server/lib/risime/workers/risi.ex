@@ -220,6 +220,10 @@ defmodule RisiMe.Workers.Risi do
         a when a in ~w(item_confirm item_decline item_edit item_reopen) ->
           LedgerActions.act(conv, user, env)
 
+        # v1.41 §37.6: the note's sender deletes Risi's transcript (anyone else: ignored).
+        "transcript_delete" ->
+          RisiMe.Agent.Voice.transcript_delete(conv, user, env["target"])
+
         "done" ->
           if risi_chat?(conv),
             do: LedgerActions.act(conv, user, env),
@@ -230,6 +234,15 @@ defmodule RisiMe.Workers.Risi do
       end
     else
       _ -> :ok
+    end
+  end
+
+  # v1.41 §37.6: voice notes deleted for everyone → Risi deletes their transcripts.
+  defp run(%{"kind" => "voice_delete", "conv" => conv, "message_ids" => ids}) when is_list(ids) do
+    case RisiMe.Agent.Voice.delete_transcripts(conv, ids) do
+      :ok -> :ok
+      {:error, :rate_limited} -> {:snooze, 5}
+      {:error, _} = e -> e
     end
   end
 

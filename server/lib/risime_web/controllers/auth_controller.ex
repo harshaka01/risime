@@ -47,6 +47,13 @@ defmodule RisiMeWeb.AuthController do
         do: Map.put(body, :call_transcribe, "on"),
         else: body
 
+    # v1.41 §37.1: `voice_transcribe` "on" while RISI_VOICE_TRANSCRIBE=on, Risi is up and the
+    # speech service is healthy; left out otherwise (absent = off).
+    body =
+      if RisiMe.Agent.Voice.config_on?(),
+        do: Map.put(body, :voice_transcribe, "on"),
+        else: body
+
     json(conn, body)
   end
 

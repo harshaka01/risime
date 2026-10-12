@@ -69,7 +69,9 @@ defmodule RisiMe.Application do
       # v1.19 §20.2: LiveKit RemoveParticipant calls off the group-lock path.
       {Task.Supervisor, name: RisiMe.Calls.TaskSupervisor},
       # v1.39 §36: call records (4 h, memory only) and the per-call transcription processes.
-      RisiMe.Agent.CallTranscribe.Supervisor
+      RisiMe.Agent.CallTranscribe.Supervisor,
+      # v1.41 §37.6: Risi's voice-note transcriptions (in memory, off the MLS lane).
+      {Task.Supervisor, name: RisiMe.Agent.Voice.TaskSup, max_children: 16}
     ]
 
     # v1.24 S5: the Risi agent tree, only with RISI=on, the MLS NIF and its keys. Started after

@@ -9,6 +9,9 @@ defmodule RisiMe.FakeSpeech do
   v1.40 §36.11: `"sx:<text>"` is Sinhala that the service checked for script: `transcribe`
   answers it with `romanised: true` (still not Sinhala script after the retry), `compare` adds
   `script` / `romanised` to every result (`faster-whisper-large-v3` romanised, the rest fine).
+
+  v1.41 §37.6: `transcribe` results carry `language_probability` (0.97) and, for Sinhala, the
+  `script` check; `"lowp:<text>"` is speech whose language was detected with probability 0.4.
   """
   @behaviour RisiMe.Agent.Speech
 
@@ -38,13 +41,46 @@ defmodule RisiMe.FakeSpeech do
            model: "whisper-large-v3-sinhala",
            elapsed_ms: 40,
            speech: true,
-           romanised: true
+           romanised: true,
+           language_probability: 0.97,
+           script: %{
+             expected: "sinh",
+             sinhala_chars: 0,
+             latin_chars: String.length(text),
+             ok: false
+           }
+         }}
+
+      {:lowp, text} ->
+        {:ok,
+         %{
+           text: text,
+           language: "en",
+           model: Speech.route("en"),
+           elapsed_ms: 40,
+           speech: true,
+           language_probability: 0.4
          }}
 
       {lang, text} ->
-        {:ok,
-         %{text: text, language: lang, model: Speech.route(lang), elapsed_ms: 40, speech: true}}
+        r = %{
+          text: text,
+          language: lang,
+          model: Speech.route(lang),
+          elapsed_ms: 40,
+          speech: true,
+          language_probability: 0.97
+        }
+
+        {:ok, if(lang == "si", do: Map.put(r, :script, si_script(text)), else: r)}
     end
+  end
+
+  defp si_script(text) do
+    cs = String.to_charlist(text)
+    si = Enum.count(cs, &(&1 in 0x0D80..0x0DFF))
+    la = Enum.count(cs, &(&1 in ?a..?z or &1 in ?A..?Z))
+    %{expected: "sinh", sinhala_chars: si, latin_chars: la, ok: si > 0}
   end
 
   @impl true
@@ -109,6 +145,7 @@ defmodule RisiMe.FakeSpeech do
   defp parse(audio) do
     case String.split(audio, ":", parts: 2) do
       ["sx", text] -> {:script, text}
+      ["lowp", text] -> {:lowp, text}
       [lang, text] when lang in ["si", "ta", "en"] -> {lang, text}
       _ -> :silence
     end

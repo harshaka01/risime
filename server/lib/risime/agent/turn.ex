@@ -197,7 +197,8 @@ defmodule RisiMe.Agent.Turn do
         schedule: schedule,
         memory: memory,
         # Risi Brain v2: the answer's language (Sinhala/Tamil script enforced, RISI-MODELS.md).
-        lang: Lang.detect(question)
+        # v1.41 §37.8: a voice request is answered in its transcript's language.
+        lang: voice_lang(env) || Lang.detect(question)
       })
 
     # P0 2026-10-09: the pending action draft and (in the Risi chat) the asker's promises.
@@ -1843,4 +1844,8 @@ defmodule RisiMe.Agent.Turn do
     do: Map.update(args, "with_ids", [uid], &Enum.uniq([uid | List.wrap(&1)]))
 
   defp with_id(args, _tool, _uid), do: args
+
+  # v1.41 §37.8: the request a voice note became (`RisiMe.Agent.Voice`) names its language.
+  defp voice_lang(%{"via" => "voice", "lang" => l}) when l in ~w(si ta en), do: l
+  defp voice_lang(_env), do: nil
 end

@@ -107,6 +107,19 @@ defmodule RisiMeWeb.MeController do
     end
   end
 
+  @doc "`GET /api/v1/me/risi/voice` (v1.41 §37.7): `{\"transcribe\": bool, \"action_items\": bool}`."
+  def risi_voice(conn, _params) do
+    json(conn, RisiMe.Agent.Voice.setting(conn.assigns.current_user.id))
+  end
+
+  @doc "`PUT /api/v1/me/risi/voice` (v1.41 §37.7): both booleans required; `200` the same shape."
+  def put_risi_voice(conn, params) do
+    case RisiMe.Agent.Voice.put_setting(conn.assigns.current_user.id, params) do
+      {:ok, setting} -> json(conn, setting)
+      {:error, :bad_request} -> ApiError.send_error(conn, 422, :bad_request)
+    end
+  end
+
   # v1.24 §24.11: `User` gains `tz` once set (absent: the server default).
   defp user_json(conn, user) do
     json = ApiJSON.user(user, Accounts.phone_verified?(user, conn.assigns.current_auth.kind))

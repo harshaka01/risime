@@ -200,6 +200,12 @@ if v = System.get_env("RISI_TRANSCRIBE"), do: config(:risime, :risi_transcribe, 
 if v = System.get_env("RISI_CALL_TRANSCRIBE"),
   do: config(:risime, :risi_call_transcribe, on?.(v))
 
+# v1.41 §37.1 (decision 081): RISI_VOICE_TRANSCRIBE=on lets Risi transcribe Official voice notes
+# and answer Risi-chat voice notes (`/auth/config` `voice_transcribe`, default off; only while
+# Risi is up and the speech service is healthy). Voice notes themselves work either way.
+if v = System.get_env("RISI_VOICE_TRANSCRIBE"),
+  do: config(:risime, :risi_voice_transcribe, on?.(v))
+
 if v = System.get_env("RISI_DEV_USERS") do
   ids =
     v

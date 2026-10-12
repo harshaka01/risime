@@ -565,15 +565,23 @@ defmodule RisiMe.Blobs do
   def release_download(me), do: Slots.release(:down, me)
 
   @doc """
-  `GET /blobs/{id}`: `{:ok, %{path, size, sha256}}` for a reader of the blob (by purpose,
-  §14.2). Everything else, expiry and deletion included, is `{:error, :not_found}`.
+  `GET /blobs/{id}`: `{:ok, %{path, size, sha256, purpose, conversation_id}}` for a reader of the
+  blob (by purpose, §14.2). Everything else, expiry and deletion included, is
+  `{:error, :not_found}`.
   """
   def fetch(me, id) do
     with %{} = b <- row(id),
          true <- live?(b),
          true <- readable?(me, b),
          true <- File.regular?(path(b.id)) do
-      {:ok, %{path: path(b.id), size: b.size, sha256: b.sha256}}
+      {:ok,
+       %{
+         path: path(b.id),
+         size: b.size,
+         sha256: b.sha256,
+         purpose: b.purpose,
+         conversation_id: b.conversation_id
+       }}
     else
       _ -> {:error, :not_found}
     end

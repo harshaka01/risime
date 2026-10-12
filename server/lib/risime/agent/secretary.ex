@@ -312,6 +312,8 @@ defmodule RisiMe.Agent.Secretary do
     RisiMe.Agent.Calendar.forget_conversation(conv)
     # v1.29 §30.7: the chat's notes go too (the cards on phones stay, hard rule 9).
     RisiMe.Agent.Notes.forget(conv)
+    # v1.41 §37.6: the voice-note → transcript mapping.
+    RisiMe.Agent.Voice.forget(conv)
 
     Repo.transaction(fn ->
       Repo.delete_all(from f in Fact, where: f.conversation_id == ^conv)
@@ -342,6 +344,8 @@ defmodule RisiMe.Agent.Secretary do
   def message_deleted(conv, [_ | _] = ids) do
     ids = Enum.uniq(ids)
     RisiMe.Agent.Memory.message_deleted(conv, ids)
+    # v1.41 §37.6: a voice note deleted for everyone takes Risi's transcript with it.
+    RisiMe.Agent.Voice.notes_deleted(conv, ids)
 
     for c <-
           Repo.all(

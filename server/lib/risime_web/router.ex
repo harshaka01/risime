@@ -150,6 +150,9 @@ defmodule RisiMeWeb.Router do
     # v1.39 §36.1, §36.3, §36.4: call transcription.
     get "/me/risi/dev", MeController, :risi_dev
     put "/me/risi/dev", MeController, :put_risi_dev
+    # v1.41 §37.7: the sender's voice-note setting.
+    get "/me/risi/voice", MeController, :risi_voice
+    put "/me/risi/voice", MeController, :put_risi_voice
     get "/calls/:call_id/transcribe", CallsController, :transcribe
     post "/calls/:call_id/transcribe/chunks", CallsController, :transcribe_chunk
   end
