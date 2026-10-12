@@ -120,10 +120,18 @@ class RisiOfficialOnlyTest {
         assertTrue(sendFromComposer(h, true, "what is due Friday?", plain::add))
         assertEquals(listOf("ask:what is due Friday?"), h.calls)
         assertTrue(plain.isEmpty())
-        // Free text is never parsed for intent: "@Risi ..." typed by hand is an ordinary message.
-        assertEquals(false, sendFromComposer(h, false, "@Risi summarise please", plain::add))
-        assertEquals(listOf("@Risi summarise please"), plain)
-        assertEquals(1, h.calls.size)
+        // PART 4 (Harsha 2026-10-12): "@Risi …" typed out is the chip in text form; the rest is the request.
+        assertTrue(sendFromComposer(h, false, "@Risi summarise please", plain::add))
+        assertEquals(listOf("ask:what is due Friday?", "ask:summarise please"), h.calls)
+        // Without the token free text is never parsed for intent: "Risi, …" in a group's Official is a message.
+        assertEquals(false, sendFromComposer(h, false, "Risi, summarise please", plain::add))
+        assertEquals(false, sendFromComposer(h, false, "ask risi@example.com about it", plain::add))
+        assertEquals(listOf("Risi, summarise please", "ask risi@example.com about it"), plain)
+        // In a 1:1 Official "Risi, <question>" is addressed to Risi by name.
+        assertTrue(sendFromComposer(h, false, "Risi, when is the review?", plain::add, directAddress = true))
+        assertEquals("ask:when is the review?", h.calls.last())
+        assertEquals(false, sendFromComposer(h, false, "Tell Risi later", plain::add, directAddress = true))
+        assertEquals(3, h.calls.size)
     }
 
     @Test fun privateHasNoHostSoEvenAnActiveChipSendsAnOrdinaryMessage() {

@@ -395,8 +395,9 @@ fun RisiProgressBubble(shown: RisiProgressStore.Shown, nowMs: Long, modifier: Mo
         ) {
             Row(Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = OfficialAccent)
-                Text("Risi · ", style = MaterialTheme.typography.labelMedium, color = OfficialAccent, fontWeight = FontWeight.SemiBold)
-                Text(RisiStepLabels.of(shown, nowMs), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_progress_text"))
+                val label = RisiStepLabels.of(shown, nowMs)
+                if (label != RisiStepLabels.TYPING) Text("Risi · ", style = MaterialTheme.typography.labelMedium, color = OfficialAccent, fontWeight = FontWeight.SemiBold)
+                Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_progress_text"))
             }
         }
     }

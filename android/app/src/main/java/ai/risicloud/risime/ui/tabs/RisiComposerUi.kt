@@ -57,15 +57,22 @@ fun RisiChipRow(active: Boolean, onToggle: (Boolean) -> Unit) {
  * other case it is an ordinary message, whatever it says ("free text is never parsed for intent").
  * @return true when the chip was used (the caller clears it).
  */
-fun sendFromComposer(risi: RisiHost?, chip: Boolean, text: String, plain: (String) -> Unit, risiChat: Boolean = false): Boolean {
+fun sendFromComposer(risi: RisiHost?, chip: Boolean, text: String, plain: (String) -> Unit, risiChat: Boolean = false, directAddress: Boolean = false): Boolean {
     // §25.2: in the Risi chat every message is a `risi_request` `ask`, never plain text.
     if (risiChat) {
         risi?.ask(text)
         return false
     }
-    if (risi != null && chip) {
-        risi.ask(text)
-        return true
+    if (risi != null) {
+        val talk = ai.risicloud.risime.data.tabs.RisiTalk
+        // The chip, or the "@Risi" token typed out (the chip in text form): the rest of the text is the request.
+        if (chip) {
+            risi.ask(talk.mentionRequest(text) ?: text)
+            return true
+        }
+        talk.mentionRequest(text)?.let { risi.ask(it); return true }
+        // PART 4: in a 1:1 Official, "Risi, <question>" is addressed to Risi by name.
+        if (directAddress) talk.directRequest(text)?.let { risi.ask(it); return true }
     }
     plain(text)
     return false

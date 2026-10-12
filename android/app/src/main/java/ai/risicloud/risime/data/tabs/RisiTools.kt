@@ -249,9 +249,13 @@ object RisiStepLabels {
             RisiProgress.QUEUED -> p.position?.let { "Queued ($it)…" } ?: "Queued…"
             RisiProgress.STEP -> tool(p.step?.tool)
             RisiProgress.WAITING_CONFIRM -> "Waiting for you to confirm…"
-            else -> "Working…"
+            // PART 4 (Harsha 2026-10-12): a turn that is thinking reads as a person typing.
+            else -> TYPING
         }
     }
+
+    /** The bubble while Risi works on an answer (`working`): shown on its own, without the "Risi · " prefix. */
+    const val TYPING = "Risi is typing…"
 }
 
 /** §25.4 the rules of the v1.25 cards (confirm, reminder_set, draft). */

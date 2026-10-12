@@ -136,6 +136,10 @@ fun GroupChatScreen(
      * §20 group ones; the argument shows a tap's explanation. Null: a group's buttons.
      */
     dmCallButtons: (@Composable (toast: (String) -> Unit) -> Unit)? = null,
+    /** PART 4: a 1:1's Official tab: "Risi, <question>" (addressed by name, no chip) is also a request to Risi. */
+    directAddress: Boolean = false,
+    /** PART 4: a group's Private tab (tabs on): "@Risi" typed here offers to move the text to Official. */
+    onMoveToOfficial: ((String) -> Unit)? = null,
 ) {
     val group by vm.group.collectAsStateWithLifecycle()
     val members by vm.members.collectAsStateWithLifecycle()
@@ -196,6 +200,8 @@ fun GroupChatScreen(
     val readOnly = group?.readOnly == true || readOnlyReason != null
     val names = members.associate { it.userId.lowercase() to it.displayName }
     var risiChip by rememberSaveable { mutableStateOf(false) }
+    // PART 4: an example tapped on the empty Risi chat's card focuses the composer (cursor where the card left it).
+    var focusComposer by remember { mutableStateOf(0) }
     // Follow-ups: my next message within 3 min of Risi's answer to me continues with Risi (chip, × to opt out).
     // Composition-scoped: only while an Official follow-up chip can show; cancelled on dispose or when keys change.
     var followUpNow by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -315,6 +321,13 @@ fun GroupChatScreen(
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            // PART 4: "What can Risi do?" at the top of an empty Risi chat; a tap fills the composer, never sends.
+            if (risiChat && !readOnly && ai.risicloud.risime.data.tabs.RisiTalk.emptyRisiChat(messages)) {
+                ai.risicloud.risime.ui.tabs.RisiExamplesCard(onPick = { ex ->
+                    draft = TextFieldValue(ex.text, androidx.compose.ui.text.TextRange(ex.cursor))
+                    focusComposer++
+                })
+            }
             GroupMessageList(
                 messages = messages,
                 meId = meId,
@@ -383,18 +396,38 @@ fun GroupChatScreen(
                     placeholder = if (risiChat || continuing || (risi != null && risiChip)) ai.risicloud.risime.ui.tabs.RISI_ASK_PLACEHOLDER else composerHint ?: if (encrypted == true) "Encrypted message" else "Message",
                     value = draft,
                     onValue = { draft = it; vm.onDraftChanged(it.text) },
+                    focusRequest = focusComposer,
                     onSend = {
                         if (draft.text.isNotBlank()) {
-                            // §24.11: with the @Risi chip the message is a structured `risi_request`; else an ordinary message.
-                            if (ai.risicloud.risime.ui.tabs.sendFromComposer(risi, risiChip || continuing, draft.text, vm::send, risiChat)) risiChip = false
+                            // §24.11: with the @Risi chip (or "@Risi" in the text; in a 1:1 Official also "Risi, …") the
+                            // message is a structured `risi_request`; else an ordinary message.
+                            if (ai.risicloud.risime.ui.tabs.sendFromComposer(risi, risiChip || continuing, draft.text, vm::send, risiChat, directAddress)) risiChip = false
                             draft = TextFieldValue("")
                         }
                     },
-                    topSlot = if ((risi != null && !risiChat) || replyTo != null) ({
+                    topSlot = if ((risi != null && !risiChat) || replyTo != null || (onMoveToOfficial != null && risi == null && ai.risicloud.risime.data.tabs.RisiTalk.mentionsRisi(draft.text))) ({
                         replyTo?.let { t -> ai.risicloud.risime.ui.chat.ReplyComposerBar(t, x.nameOf(t.from)) { vm.messaging.replyTo.value = null } }
                         if (risi != null && !risiChat) {
+                            // PART 4: the "@" picker offers Risi while "@…" can still become "@Risi".
+                            if (!risiChip && !continuing && ai.risicloud.risime.data.tabs.RisiTalk.pickerQuery(draft.text, draft.selection.start) != null) {
+                                ai.risicloud.risime.ui.tabs.RisiMentionPicker {
+                                    ai.risicloud.risime.data.tabs.RisiTalk.applyPick(draft.text, draft.selection.start)?.let { (t, c) ->
+                                        draft = TextFieldValue(t, androidx.compose.ui.text.TextRange(c))
+                                    }
+                                    risiChip = true
+                                    focusComposer++
+                                }
+                            }
                             if (continuing) ai.risicloud.risime.ui.tabs.RisiFollowUpChip { followUpDismissed = followUp }
                             else ai.risicloud.risime.ui.tabs.RisiChipRow(risiChip) { risiChip = it }
+                        } else if (risi == null && onMoveToOfficial != null && ai.risicloud.risime.data.tabs.RisiTalk.mentionsRisi(draft.text)) {
+                            // PART 4: Risi is never in Private; the hint only offers to move the text to Official.
+                            ai.risicloud.risime.ui.tabs.RisiPrivateHint {
+                                val text = draft.text
+                                draft = TextFieldValue("")
+                                vm.onDraftChanged("")
+                                onMoveToOfficial(text)
+                            }
                         }
                     }) else null,
                     // v1.41 §37.3 / §37.8: the mic in Send's place (groups, both tabs, and the Risi chat: a note is a request there).

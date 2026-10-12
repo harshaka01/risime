@@ -672,6 +672,8 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
     /** §25.4 a draft's [Use] opened this chat: the composer starts with it (taken once). */
     fun takeDraft(): String? = c.risiUi.takeDraft(conversationId)
+        // PART 4: text moved here from the chat's Private tab ("Risi only works in Official").
+        ?: c.chatTabs.chatId(conversationId).takeIf { !it.equals(conversationId, true) }?.let { c.risiUi.takeCarried(it) }
 
     /** §26.6 this chat's scheduled messages (the sender's phone only). */
     val scheduledCtl = ai.risicloud.risime.ui.chat.ScheduledControls(

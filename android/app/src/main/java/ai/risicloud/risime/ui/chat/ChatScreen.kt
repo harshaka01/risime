@@ -77,6 +77,11 @@ fun ChatScreen(
     onInfo: (() -> Unit)? = null,
     /** v1.32 item 4: the ⋮ menu's "Lock chat" / "Unlock chat" (null: no item, e.g. tests). */
     lock: ai.risicloud.risime.ui.lock.ChatLockControl? = null,
+    /**
+     * PART 4: the Private tab of a chat that has Official (tabs on): "@Risi" typed here shows "Risi only works in
+     * Official. Move this to Official?"; the button hands the text to Official. Null: no hint (tabs off, tests).
+     */
+    onMoveToOfficial: ((String) -> Unit)? = null,
 ) {
     val messages by vm.messages.collectAsStateWithLifecycle()
     val peer by vm.peer.collectAsStateWithLifecycle()
@@ -285,7 +290,18 @@ fun ChatScreen(
                     }
                 }),
                 placeholder = if (encrypted) "Encrypted message" else "Message",
-                topSlot = replyTo?.let { t -> { ReplyComposerBar(t, x.nameOf(t.from).ifBlank { peerName }) { vm.messaging.replyTo.value = null } } },
+                topSlot = if (replyTo != null || (onMoveToOfficial != null && ai.risicloud.risime.data.tabs.RisiTalk.mentionsRisi(draftValue.text))) ({
+                    replyTo?.let { t -> ReplyComposerBar(t, x.nameOf(t.from).ifBlank { peerName }) { vm.messaging.replyTo.value = null } }
+                    // PART 4: Risi is never in Private; nothing here reaches Risi. The hint only offers the move.
+                    if (onMoveToOfficial != null && ai.risicloud.risime.data.tabs.RisiTalk.mentionsRisi(draftValue.text)) {
+                        ai.risicloud.risime.ui.tabs.RisiPrivateHint {
+                            val text = draftValue.text
+                            draftValue = androidx.compose.ui.text.input.TextFieldValue("")
+                            vm.onDraftChanged("")
+                            onMoveToOfficial(text)
+                        }
+                    }
+                }) else null,
                 // v1.41 §37.3: the mic in Send's place while the box is empty (only on an encrypted chat).
                 voice = if (encrypted && vm.imgs.available) rememberVoiceComposer(
                     vm.container, vm.conversationId, voiceNotReadyText(dm = true, name = peerName),
@@ -502,6 +518,8 @@ internal fun Composer(
     topSlot: (@Composable () -> Unit)? = null,
     /** v1.41 §37.3 the mic in Send's place while the text box is empty, and the recording strip (null: no voice notes). */
     voice: VoiceComposerSlot? = null,
+    /** Each increase focuses the field and shows the keyboard (an example tapped on the empty Risi chat's card). */
+    focusRequest: Int = 0,
 ) {
     // The emoji panel takes the keyboard's place (WhatsApp-style): same height as the last keyboard.
     var panel by remember { mutableStateOf(false) }
@@ -522,6 +540,7 @@ internal fun Composer(
         fieldInteractions.interactions.collect { if (it is androidx.compose.foundation.interaction.PressInteraction.Release) showKeyboard() }
     }
     androidx.activity.compose.BackHandler(enabled = panel) { panel = false }
+    LaunchedEffect(focusRequest) { if (focusRequest > 0) runCatching { showKeyboard() } }
     val text = value.text
     // Graphemes ≤ chars: only count when it could matter.
     val limits = if (text.length < ai.risicloud.risime.data.BodyLimits.COUNTER_FROM) null else ai.risicloud.risime.data.BodyLimits.of(text, ai.risicloud.risime.data.IcuGraphemes)

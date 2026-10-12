@@ -62,6 +62,16 @@ class RisiUiBus {
     /** The draft waiting for [conversationId] (taken once). */
     fun takeDraft(conversationId: String): String? = drafts.remove(conversationId.lowercase())
 
+    private val carried = ConcurrentHashMap<String, String>()
+
+    /** PART 4 [Move to Official] on the Private hint: [text] waits for the Official composer of chat [chatId]. */
+    fun carryToOfficial(chatId: String, text: String) {
+        carried[chatId.lowercase()] = text
+    }
+
+    /** The text carried from Private for chat [chatId]'s Official composer (taken once). */
+    fun takeCarried(chatId: String): String? = carried.remove(chatId.lowercase())
+
     /** §27.3/§27.4 open a chat at a point ([Open chat], [Open Risi chat]). */
     fun openChat(conversationId: String, f: Focus?) {
         if (f != null) focus[conversationId.lowercase()] = f else focus.remove(conversationId.lowercase())

@@ -293,10 +293,19 @@ private fun MainNav(c: AppContainer, meId: String) {
                 },
                 onBack = { nav.popBackStack() },
                 privateScreen = { tabBar ->
+                    // PART 4: "@Risi" typed in Private offers [Move to Official]: the text goes to the Official composer.
+                    val tabsVm = if (tabBar != null) viewModel<ai.risicloud.risime.ui.tabs.ChatTabsViewModel>(key = "tabs:$conv") else null
+                    val moveToOfficial: ((String) -> Unit)? = tabsVm?.let { t ->
+                        { text: String ->
+                            c.risiUi.carryToOfficial(conv, text)
+                            t.controller.select(ai.risicloud.risime.data.tabs.Tab.OFFICIAL)
+                        }
+                    }
                     if (ai.risicloud.risime.net.isGroupConversation(conv)) {
                         ai.risicloud.risime.ui.group.GroupChatScreen(
                             viewModel(key = conv) { ai.risicloud.risime.ui.group.GroupChatViewModel(c, meId, conv) }, meId,
                             onBack = { nav.popBackStack() }, onInfo = groupInfo, tabBar = tabBar, lock = headerLock,
+                            onMoveToOfficial = moveToOfficial,
                         )
                     } else {
                         ai.risicloud.risime.net.dmPeer(conv, meId)?.let { peer ->
@@ -304,6 +313,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                                 viewModel(key = conv) { ChatViewModel(c, meId, peer) }, onBack = { nav.popBackStack() }, tabBar = tabBar,
                                 // Chat info (WhatsApp): Lock chat, media; with tabs on also the Official switch (§24.4).
                                 onInfo = chatInfo, lock = headerLock,
+                                onMoveToOfficial = moveToOfficial,
                             )
                         }
                     }
@@ -330,6 +340,8 @@ private fun MainNav(c: AppContainer, meId: String) {
                         composerHint = ai.risicloud.risime.ui.tabs.OFFICIAL_COMPOSER_HINT,
                         // v1.33 §24.5 (NEXT-PHASE D1): a 1:1's Official calls are the §16/§19 peer-to-peer
                         // calls on its dm: (the peer's name on the call screen), never §20 on the grp:.
+                        // PART 4: in a 1:1 Official "Risi, <question>" is addressed to Risi by name.
+                        directAddress = dmChat,
                         dmCallButtons = if (dmChat) ({ toast ->
                             val dmCalls = viewModel(key = "dmcalls:$conv") { ai.risicloud.risime.ui.chat.DmCallsViewModel(c, conv) }
                             ai.risicloud.risime.ui.chat.DmCallButtons(dmCalls.calls, peerName ?: "", toast)
