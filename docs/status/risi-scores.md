@@ -37,7 +37,21 @@ No pilot rows yet: the first `ScoreboardJob` runs at 00:20 UTC after the fast-la
 <!-- daily:end -->
 
 ## Golden sets
+First live run 2026-10-12 20:30 UTC (risi-l1, 81 cases, sequential, 92 s):
+- **Router:** rules 63/63 in < 1 ms; the risi-l1 tiny prompt alone 93.7% (misses r-si-06, r-ta-03, r-sg-06,
+  r-en-32) at p50 681 ms / p95 950 ms. So rules stay first and the model only decides low-confidence asks.
+- **Ledger extraction** 6/12 (en 5/6; si 1/2, ta 0/2, Singlish 0/2), 2 hallucinations; **summary** 4/6
+  (failed: the injection case s-en-03 and Sinhala s-si-01), 2 hallucinations. The failures haven't been
+  checked by hand yet. Some may be the harness being strict (keywords or a due date in another script), not
+  model errors. Review these before any Ledger/Summary agent uses them as its bar.
+
 <!-- golden:start -->
 | Run (UTC) | Set | Mode | n | Accuracy | Halluc | Traps caught | p50 ms | p95 ms | Model accuracy | Model p50/p95 ms | Failed |
 |---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-12 20:30 | ledger | fake | 12 | 100.0% | 0 | 0 | 3 | 57 | – | – | – |
+| 2026-10-12 20:30 | ledger | live | 12 | 50.0% | 2 | 0 | 3081 | 5700 | – | – | l-en-03, l-si-01, l-ta-01, l-ta-02, l-sg-01, l-sg-02 |
+| 2026-10-12 20:30 | router | fake | 63 | 100.0% | 0 | 0 | 0.1 | 0.3 | – | – | – |
+| 2026-10-12 20:30 | router | live | 63 | 100.0% | 0 | 0 | 0.4 | 0.7 | 93.7% | 681/950 | – |
+| 2026-10-12 20:30 | summary | fake | 6 | 100.0% | 0 | 0 | 2 | 3 | – | – | – |
+| 2026-10-12 20:30 | summary | live | 6 | 66.7% | 2 | 0 | 2395 | 3675 | – | – | s-en-03, s-si-01 |
 <!-- golden:end -->

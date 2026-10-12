@@ -51,7 +51,7 @@ def golden(d, md_path):
     body = section(md, G0, G1, "\n" + GOLDEN_HEAD)
     if GOLDEN_HEAD.strip() not in body:
         body = "\n" + GOLDEN_HEAD
-    run = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    run = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M")
     rows = []
     for f in sorted(glob.glob(os.path.join(d, "*.json"))):
         r = json.load(open(f, encoding="utf-8"))
@@ -70,7 +70,7 @@ def golden(d, md_path):
 def daily(f, md_path):
     table = open(f, encoding="utf-8").read().strip()
     md = open(md_path, encoding="utf-8").read() if os.path.exists(md_path) else "# Risi agent scores\n"
-    stamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     body = f"\nFrom the pilot's `risi_agent_scores` (generated {stamp}).\n\n{table}\n"
     open(md_path, "w", encoding="utf-8").write(replace(md, D0, D1, body))
     print(f"risi-scores: daily section -> {md_path}")
