@@ -200,13 +200,13 @@ defmodule RisiMe.Agent.Speech.Http do
 
     detected =
       Speech.lang(
-        b["language_detected"] || b["language"] ||
+        get_in(b, ["detected", "language"]) || b["language_detected"] || b["language"] ||
           Enum.find_value(results, &(&1.model == Speech.route("en") && &1.language))
       )
 
     %{
       language_detected: detected,
-      chosen: b["chosen"] || Speech.route(detected),
+      chosen: b["routed_model"] || b["chosen"] || Speech.route(detected),
       results: results
     }
   end

@@ -27,8 +27,6 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
   @max_sessions 3
   @queue_max 2
-  @bucket_cap 3.0
-  @bucket_rate 8 / 60_000
   @compare_ttl_s 30 * 86_400
   @idle_ms 300_000
 
@@ -363,7 +361,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
            queue: :queue.new(),
            inflight: nil,
            last_chunk_at: now,
-           tokens: @bucket_cap,
+           tokens: CallTranscribe.timing().chunk_burst / 1,
            tokens_at: now
          }}
       end)
@@ -526,7 +524,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
   end
 
   defp refill(p, now) do
-    tokens = min(@bucket_cap, p.tokens + (now - p.tokens_at) * @bucket_rate)
+    t = CallTranscribe.timing()
+    tokens = min(t.chunk_burst / 1, p.tokens + (now - p.tokens_at) * t.chunk_per_min / 60_000)
     {tokens, %{p | tokens: tokens, tokens_at: now}}
   end
 

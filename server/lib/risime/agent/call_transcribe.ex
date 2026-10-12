@@ -35,7 +35,10 @@ defmodule RisiMe.Agent.CallTranscribe do
     turn_open_ms: 30_000,
     turn_max_ms: 60_000,
     tick_ms: 5_000,
-    unavailable_ms: 60_000
+    unavailable_ms: 60_000,
+    # §36.4: 8 chunks per participant per 60 s, a burst of 3 (a token bucket).
+    chunk_per_min: 8,
+    chunk_burst: 3
   }
 
   @max_live 4

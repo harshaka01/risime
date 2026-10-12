@@ -8,6 +8,7 @@ defmodule RisiMe.Workers.Risi do
   | `extract` | `risi` (2) | commitment extraction of a conversation (debounced, one pending) |
   | `memory_ingest` | `risi` | v1.36 §35: memory items + vectors of a conversation (debounced, one pending) |
   | `discussion_quiet` | `risi` | v1.27 §27.2 quiet rule of a conversation (one pending, moved by each counted message) |
+  | `call_transcribe_summary` | `risi` | v1.39 §36.7: the summary of a transcribed 1:1 Official call (conv + session id) |
   | `item_expire` | `risi_timers` | v1.27 §27.5: a proposed ledger item unconfirmed after 48 h |
   | `request` | `risi_requests` (2) | an `ask`/`summarise`/`report` (or its `error` reply) |
   | `action` | `risi_timers` (4) | a `risi_action`: a commitment, or a confirm card (§25.4; a client write waits ≤ 15 s for the phone here) |

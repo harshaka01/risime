@@ -133,6 +133,9 @@ defmodule RisiMe.CallTranscribeHelpers do
       # Nothing of a test's calls survives it.
       for {_, pid, _, _} <- DynamicSupervisor.which_children(CallTranscribe.CallSup),
           do: DynamicSupervisor.terminate_child(CallTranscribe.CallSup, pid)
+
+      for pid <- Task.Supervisor.children(CallTranscribe.TaskSup),
+          do: Task.Supervisor.terminate_child(CallTranscribe.TaskSup, pid)
     end)
   end
 
