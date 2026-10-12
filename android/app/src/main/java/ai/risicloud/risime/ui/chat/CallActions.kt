@@ -24,7 +24,13 @@ import ai.risicloud.risime.AppContainer
 import ai.risicloud.risime.net.ApiResult
 
 /** §16.1: the DM header's call button state, refetched on chat open and on `mls_membership`. */
-class CallActions(private val c: AppContainer, private val scope: CoroutineScope, private val conversationId: String) {
+class CallActions(
+    private val c: AppContainer,
+    private val scope: CoroutineScope,
+    private val conversationId: String,
+    /** v1.39 §36.1: calls placed from a 1:1's Official tab say `"tab": "official"` in their offer. */
+    private val official: Boolean = false,
+) {
     private val _ready = MutableStateFlow(false)
     val callsReady: StateFlow<Boolean> = _ready
     private val _video = MutableStateFlow(false)
@@ -55,7 +61,7 @@ class CallActions(private val c: AppContainer, private val scope: CoroutineScope
 
     /** §19.6: a video call; [camera] = CAMERA granted (denied: the call goes on with the camera off, android A2). */
     fun startVideo(camera: Boolean) {
-        c.calls.placeCall(conversationId, video = true, camera = camera)
+        c.calls.placeCall(conversationId, video = true, camera = camera, official = official)
         c.calls.openCallScreen()
     }
 
@@ -68,7 +74,7 @@ class CallActions(private val c: AppContainer, private val scope: CoroutineScope
     )
 
     fun start() {
-        c.calls.placeCall(conversationId)
+        c.calls.placeCall(conversationId, official = official)
         c.calls.openCallScreen()
     }
 }
@@ -147,7 +153,7 @@ fun VideoHeaderButton(blocked: String?, onBlocked: (String) -> Unit, onVideoCall
  * `mls_membership` and on reconnect), never the Official `grp:`.
  */
 class DmCallsViewModel(private val c: AppContainer, val dm: String) : ViewModel() {
-    val calls = CallActions(c, viewModelScope, dm)
+    val calls = CallActions(c, viewModelScope, dm, official = true)
 
     init {
         calls.refresh()
