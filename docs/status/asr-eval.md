@@ -13,10 +13,25 @@ seen, by Harsha, live.
 - Held-out public sets scored (omni-si, yt5-si, slr30-si, fleurs-ta, fleurs-en, synthetic
   code-switch): tables in docs/RISI-MODELS.md. Production now routes `si` to
   Qwen3-ASR-0.6B-Sinhala (decision 071 amendment c); ta/en unchanged.
-- Not finished (memory floor all evening, MemAvailable 1.7–7 GB): kasunw/whisper-large-v3-sinhala
+- (Done 2026-10-13, see below.) Not finished then (memory floor, MemAvailable 1.7–7 GB): kasunw/whisper-large-v3-sinhala
   on the held-out sets (11 yt-si clips only). Rerun: start an eval instance and
   `scripts/asr-eval run --manifest ~/risime-eval-data/manifests/all.jsonl --langs si,si+en
   --models whisper-large-v3-sinhala --out ~/risime-eval-data/results/si-4.jsonl`.
+
+## Status (2026-10-13 Sri Lanka, 2026-10-12 ~22:10 UTC; Harsha PART 1/2)
+- Routing check: per-chunk language/probability/model logging is live in the speech service
+  (asr5). Today's pilot calls have only session-level labels: 3 of 4 sessions were labelled 100%
+  English, and one was 84 s si + 36 s en. Details are in docs/RISI-MODELS.md, "Routing check and
+  language hints".
+- Language hints: `prior` beat auto-detect and `force` and is now the service default
+  (`WHISPER_HINT_MODE=prior`). It takes effect once the app server sends `language_hint`
+  (a server-role change, described there).
+- kasunw/whisper-large-v3-sinhala is finished (omni-si 20.1%, yt5-si 35.6%, slr30 6.5% CER). It is
+  not in the top 2.
+- **Still no recordings** in `~/risime-eval-data/real/`. The request below stands.
+- Hint runs on the recordings, when they arrive (si+en / ta+en are the deciding sets):
+  `scripts/asr-eval run --manifest M --models auto --hint-mode off --sets real --out R` and
+  the same with `--hint si --hint-mode prior` (Tamil: `--hint ta`).
 - **Waiting for the recordings below.** When they arrive: `python3 -I scripts/asr-eval-data.py`
   (converts and adds them), then run the si/ta/en routes + compare candidates on `--sets real`.
 

@@ -328,3 +328,27 @@ Whisper decoders sometimes answer Sinhala speech in Latin letters (romanised) or
   previous compose file (kept on disk). The app server needs no change: it takes the model name
   from the response.
 - **Not reached:** ~20% WER on spontaneous Sinhala (best 33%): docs/status/asr-finetune-plan.md.
+
+## Amendment 2026-10-13 (d): routing log and language hints (Harsha PART 1/2)
+Results: docs/RISI-MODELS.md, "Routing check and language hints".
+- **Per-chunk routing log** (metrics only, never text or audio): the detected language, its
+  si/ta/en-renormalised probability and all three probabilities, large-v3's own top language
+  and probability, the hint and hint mode, the routing reason, the answering model, the memory
+  fallback and the script retry. `compare` logs the same. Today's pilot calls predate it: only
+  session-level labels exist (learning-log `transcribe` rows).
+- **`language_hint`** (comma list of si/ta/en) on `/v1/audio/transcriptions`, `/compare` and the
+  new **`/v1/audio/detect`** (routing decision only, used by `scripts/asr-eval detect|routing`).
+  `WHISPER_HINT_MODE` = `off` | **`prior`** (default) | `force`; `WHISPER_HINT_EN_MIN_P` = 0.9.
+  - `prior`: a hinted si/ta wins unless en ≥ 0.9 among the hinted languages + en.
+  - An en-only hint, or no hint, is plain detection.
+  - `prior` won on held-out sets: Sinhala CER −1.8 to −2.3 points, Tamil −2.4, English
+    unchanged. `force` destroys English spoken by a Sinhala/Tamil speaker (CER 99–100%).
+  - `hint_mode` per request overrides the env, for the eval only.
+- **Compare** forces the decided language on every candidate (before, only si was forced, so
+  large-v3 auto-detected on Tamil chunks).
+- The app server does not send hints yet. That is a server-role change: `Speech.Http` adds the
+  field, and `CallTranscribe.Call` derives the hint from the participants' `Lang.user_lang/1`
+  and the chat's language. The app language would need a contract field. Until then behaviour
+  equals before.
+- **Image** `risime/whisper:ct2-4.8.2-fw-1.2.1-asr5`, deployed 2026-10-12 ~22:00 UTC, asr-smoke
+  PASS. Rollback: `WHISPER_HINT_MODE=off` in `.env` (hints ignored), or `image: …-asr4`.

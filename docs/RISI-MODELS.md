@@ -5,6 +5,145 @@ Root side track, 2026-10-10. It answers which open model should serve Risi next 
 **Nothing was switched.** Switching is a separate change that needs Harsha's yes.
 Rerun everything with `scripts/risi-eval` (see "How to rerun").
 
+## Routing check and language hints (2026-10-13, Harsha's PART 1/2)
+Runs: `scripts/asr-eval detect` / `routing` (`~/risime-eval-data/results/detect-1.jsonl`) and
+`scripts/asr-eval run --models auto [--hint si|ta --hint-mode prior|force]`
+(`hint-off.jsonl`, `hint-si.jsonl`, `hint-ta.jsonl`), all on speech image `…-asr5`.
+
+### 1. What today's pilot calls were labelled
+- **No per-chunk record exists for today's calls.** The speech container was recreated at
+  19:41 UTC for asr4, so its log of the 15:3x–16:5x UTC calls was lost. Docker logs are not
+  shipped to Loki. The server keeps no audio and logs no language per chunk.
+- **What survives is the session-level learning-log row** (`transcribe`, `meta.audio_s` per
+  detected language, no text). It covers the 4 Official-call sessions of 2026-10-12:
+
+| Session (UTC) | Audio | Labelled | Models |
+|---|---|---|---|
+| 15:32–15:34 | 144 s | en 144 s | large-v3 |
+| 15:38–15:39 | 120 s | **si 84 s, en 36 s** | small-sinhala + large-v3 |
+| 16:00–16:03 | 360 s | en 360 s | large-v3 |
+| 16:52–16:54 | 264 s | en 264 s | large-v3 |
+
+- Only one session had any chunk labelled Sinhala; 2 of its 7 speech chunks (each up to 12 s)
+  went to large-v3 as English. If Harsha and Shenika spoke Sinhala in the 16:00 or 16:52
+  session, **every chunk was labelled en** and transcribed by large-v3 as English, which looks
+  exactly like "English good, Sinhala poor". The si chunks of 15:38 still went to the old route
+  (whisper-small-sinhala); the Qwen route only went live at 19:50.
+- **From now on every chunk is logged** by the speech service: `transcribed … model= route=
+  detected= p= probs=si:…,ta:…,en:… top=<large-v3's own top language>/<p> hint= mode=
+  fallback= retried_with=`, and the same for compare. It never logs text or audio.
+  `docker logs risime-whisper-whisper-1 | grep transcribed` shows them. The next real call
+  answers this question directly.
+
+**Detection on held-out clips** (per ≤ 15 s chunk, no hint, the production rule: si/ta/en
+renormalised, p < 0.5 → large-v3):
+
+| Set | Chunks | → si | → ta | → en | low p | large-v3's own top language |
+|---|---|---|---|---|---|---|
+| omni-si (spontaneous) | 312 | 98% | 0 | 2% (6) | 0 | si 303, en 3, te 2 |
+| yt5-si (conversational) | 47 | 98% | 0 | 0 | 2% | si 44, **ml 3** |
+| yt-si | 52 | 92% | 2% | 2% | 4% | si 45, ml 2, kn 2 |
+| slr30-si (read) | 37 | 95% | 3% | 0 | 0 | si 33, my/ka/ta |
+| fleurs-ta | 65 | 2% | 94% | 2% | 2% | ta 59 |
+| fleurs-en | 26 | 0 | 0 | 92% (2 no speech) | 0 | en 24 |
+| si+en synthetic | 6 | 67% | 0 | 33% | 0 | |
+| ta+en synthetic | 6 | 0 | 0 | **100%** | 0 | |
+
+- On clean Sinhala, large-v3's detection is right 92–98% of the time. It is not the main
+  failure on these sets, even though it transcribes Sinhala badly.
+- Detection is fragile, though. The smoke clip's own top language is Bengali (0.35), and it
+  only routes to si because si/ta/en are renormalised. Phone audio (Opus, room noise, two
+  voices) may well fall into "en" more often. The per-chunk log will show that.
+- Mixed chunks go to whichever language dominates. Tamil+English went to English every time.
+
+### 2. Language hints: hint vs auto-detect
+`language_hint` (comma list, the languages expected on the call) is a new field on
+`/v1/audio/transcriptions`, `/compare` and `/detect`. `WHISPER_HINT_MODE` (or `hint_mode` per
+request) controls what it does:
+- `off`: ignore the hint (the old behaviour).
+- `prior`: detection is restricted to the hinted languages + en, and a hinted si/ta wins unless
+  en reaches `WHISPER_HINT_EN_MIN_P` (0.9) after renormalising over those.
+- `force`: a hinted si/ta always runs its model (Harsha's "run the Sinhala model whenever a
+  Sinhala speaker is on the call").
+
+A hint of only `en` changes nothing, so typing Singlish never blocks Sinhala detection.
+
+**Sinhala hint** (CER / WER; same clips, same service):
+
+| Set | auto (no hint) | hint si, **prior** | hint si, force |
+|---|---|---|---|
+| omni-si spontaneous (60) | 13.8% / 33.6% | **13.6% / 33.4%** | 13.3% / 33.1% |
+| yt5-si conversational (47) | 23.6% / 43.4% | **21.8% / 42.5%** | 21.8% / 42.5% |
+| slr30-si read (36) | 10.2% / 38.2% | **7.9% / 37.1%** | 7.9% / 37.1% |
+| fleurs-en: English spoken in a "Sinhala" call (20) | 2.5% / 3.9% | **2.5% / 3.9%** | **99.1% / 99.1%** (Sinhala-script gibberish) |
+| si+en synthetic (6) | 57.0% / 56.2% | 75.9% / 77.1% | 71.5% / 74.3% |
+
+**Tamil hint** (tamil-asr-qwen3 could not load all evening because of the memory floor, so
+whisper-tamil-medium answered: `fallback`):
+
+| Set | auto | hint ta, **prior** | hint ta, force |
+|---|---|---|---|
+| fleurs-ta (50) | 18.0% / 34.9% | **15.6% / 32.1%** | 15.7% / 31.9% |
+| fleurs-en (20) | 2.5% / 3.9% | **2.5% / 3.9%** | 100.7% / 100% |
+| ta+en synthetic (6) | 50.9% / 41.7% (0% Tamil script: Tamil translated or dropped) | 53.9% / 61.6% (60% Tamil script) | 55.5% / 74.8% |
+
+**Decision: `prior` wins and is the default (`WHISPER_HINT_MODE=prior`, deployed).**
+- It fixes the Sinhala/Tamil chunks that detection sends elsewhere: −2.3 CER points on read
+  Sinhala, −1.8 on conversational Sinhala, −2.4 on Tamil.
+- It never costs English (fleurs-en is unchanged).
+- `force` gains nothing over `prior` on Sinhala and destroys English: a Sinhala speaker's English
+  sentence comes back as Sinhala-script syllables. So "always the Sinhala model" is not
+  recommended. The hint should mean "Sinhala is likely here", not "Sinhala only".
+- The synthetic si+en clips are worse with a hint (6 clips: a whole English sentence glued to a
+  Sinhala one, which Qwen-si mangles). Real Singlish (English words inside Sinhala sentences,
+  yt5-si) improves. Recordings will decide this.
+- Without a hint, `prior` is identical to `off`, so production is unchanged until the app server
+  sends hints.
+
+**Server change needed for hints to reach the service** (server role; nothing done outside
+infra here):
+1. `RisiMe.Agent.Speech.Http.post_transcription/3` and `compare/2` add the multipart field
+   `language_hint` from `opts[:language_hint]` (a list → `"si,en"`), omitted when empty.
+2. `CallTranscribe.Call` computes the hint once per session and passes
+   `Speech.transcribe(audio, language_hint: hint)` (and to `compare`). The hint is the union of:
+   - each participant's `RisiMe.Agent.Lang.user_lang/1` (the script of their Official messages);
+   - the conversation's language (`Lang.detect` over its recent Official messages);
+   - the participants' app language, once the phones report it.
+
+   Only si/ta matter; en is ignored by the service.
+3. **App language is not on the server today.** The contract has no field for the phone's UI
+   language. Sending it, e.g. an optional `app_lang` in device registration or the
+   `call:transcribe` push, is a contract proposal for root/Harsha.
+
+   Until then `user_lang` is the stand-in. It says "en" for people who type Singlish in Latin
+   letters, so those calls still rely on detection.
+
+### 3. kasunw/whisper-large-v3-sinhala (si forced + Sinhala prompt, CT2 int8)
+Finished on the held-out sets: omni-si **20.1% / 49.4%**, yt5-si **35.6% / 60.2%**, slr30-si
+**6.5% / 38.9%** (100% Sinhala script, nothing romanised, RTF 0.2–0.27).
+- On spontaneous speech it ties whisper-small-sinhala (20.4%) and is far behind Qwen3-ASR-0.6B-Sinhala
+  (13.3%).
+- On conversational speech it is behind Qwen (21.2%) and omniASR-CTC-1B (30.2%).
+- It drops English words (en kept 0%).
+
+It is not a top-2 model, so it stays compare-only by name, outside the default compare set.
+
+### 4. Compare sets (no models list; the routed model first)
+- **si:** `qwen3-asr-0.6b-sinhala` (production), `omnilingual-ctc-1b` (the runner-up on the
+  held-out conversational set, 30.2%, and best on read and on its in-domain spontaneous set),
+  `whisper-small-sinhala` (resident anyway, cheap, the retry model). Unchanged; the top 2 were
+  already there.
+- **ta:** `tamil-asr-qwen3` (production), `whisper-tamil-medium` (the Tamil fine-tune, 15.5%),
+  `omnilingual-ctc-1b`, `faster-whisper-large-v3`.
+  - Fixed in asr5: compare now forces the decided language on every candidate. Before, only si
+    chunks were forced, so large-v3 auto-detected on Tamil chunks; it now runs with
+    `language=ta` next to the Tamil models.
+- **en:** large-v3, turbo.
+
+### 5. In-house recordings
+None yet (`~/risime-eval-data/real/*/` holds only `sentences.txt`); the request in
+docs/status/asr-eval.md stands.
+
 ## ASR eval 2026-10-12 (held-out sets; supersedes the 2026-10-10 Sinhala numbers)
 Harsha's real call (2026-10-12): English good, Sinhala poor. The 2026-10-10 "14.5% WER" of
 whisper-small-sinhala came from the SPEAK-ASR YouTube test, which may overlap its training data,
@@ -36,7 +175,7 @@ the request is in docs/status/asr-eval.md; they become the deciding set when the
 | SinhaSpeech/whisper-small-sinhala run11 (**routed until now**; CT2 fp16; 0.97 GB) | 20.4% / 37.4% | – (6.3% if counted: likely overlap) | **5.2% / 35.3%** | – (9.1%) | 0.03–0.08 | Apache-2.0 |
 | SPEAK-ASR/faster-whisper-medium-si-exp10 (CT2 fp16; 1.53 GB) | 23.1% / 47.9% | 36.0% / 59.0% | 6.4% / 35.3% | 38.8% / 60.0% | 0.12 | **none stated** |
 | janiduchamika/whisper-small-sinhala-general-185k (CT2 fp16; 0.97 GB) | 23.7% / 52.7% | – (not run) | 6.3% / 35.3% | 39.7% / 68.0% | 0.07 | Apache-2.0 |
-| kasunw/whisper-large-v3-sinhala (CT2 int8; on disk since 10-10) | not finished (memory floor) | not finished | not finished | 35.8% / 54.8% (11 clips) | 0.27 | Apache-2.0 |
+| kasunw/whisper-large-v3-sinhala (CT2 int8; on disk since 10-10; finished 2026-10-13) | 20.1% / 49.4% | 35.6% / 60.2% | 6.5% / 38.9% | 35.8% / 54.8% (11 clips) | 0.27 | Apache-2.0 |
 | faster-whisper large-v3 (`language=si` + prompt) | – | – | 88.3% / 107.4% | – | 2.2 | MIT |
 
 **Reading:** on read speech the old route (small) is best, but calls are spontaneous. On the two
