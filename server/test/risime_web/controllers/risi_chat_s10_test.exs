@@ -273,9 +273,47 @@ defmodule RisiMeWeb.RisiChatS10Test do
     {200, %{"generation" => 2}} = reset!(a, new, conv, 1)
 
     # The rebuild is this device's; the chat stays the owner's Risi chat with Risi in it.
-    assert [%{type: "rebuild", committer_device: ^new}] = RisiMe.Groups.Ops.list(conv)
+    assert [%{type: "rebuild", committer_device: ^new, op_id: op_id}] =
+             RisiMe.Groups.Ops.list(conv)
+
     assert RisiMe.RisiChat.of_owner(a.user.id).id == conv
     assert Groups.member(conv, risi.user_id).state == "active"
+
+    # The rebuilder claims Risi's key package again (it was 403 for every reset Official group)…
+    claim = fn dev ->
+      api(
+        :post,
+        "/api/v1/mls/key_packages/claim",
+        a.token,
+        %{"user_ids" => [a.user.id, risi.user_id], "conversation_id" => conv},
+        dev
+      )
+    end
+
+    {200, %{"devices" => devs}} = claim.(new)
+    assert risi.device_id in Enum.map(devs, & &1["device_id"])
+
+    # …and its epoch 0 of generation 2 (this device, the owner's other risi_tools devices, Risi's) is accepted.
+    added =
+      for %{user_id: u, device_id: d} <-
+            Groups.groups_devices([a.user.id, risi.user_id], "risi_tools"),
+          {u, d} != {a.user.id, new},
+          do: ref(u, d)
+
+    {200, %{"epoch" => 1}} =
+      api(
+        :post,
+        "/api/v1/mls/groups/#{conv}/commit",
+        a.token,
+        create_commit([], {a.user.id, new}, %{
+          "generation" => 2,
+          "added" => added,
+          "op_id" => op_id
+        }),
+        new
+      )
+
+    assert RisiMe.Groups.Ops.list(conv) == []
   end
 
   test "an ordinary group keeps the 24 h wait for no candidate (§12.12.3)", ctx do

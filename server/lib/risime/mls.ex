@@ -485,6 +485,12 @@ defmodule RisiMe.MLS do
       g.state == "creating" and g.created_by == me and group(conv) == nil ->
         :ok
 
+      # §12.8 (P0 2026-10-12): an Official group awaiting its rebuild after a reset (no MLS group,
+      # a `rebuild` op naming me): its new epoch 0 adds the agent again, as the first one did.
+      group(conv) == nil and rebuild_committer?(conv, me) and
+          Enum.all?(agents, &agent_member?(conv, &1)) ->
+        :ok
+
       Enum.all?(agents, &agent_add_pending?(conv, &1)) ->
         :ok
 
@@ -492,6 +498,16 @@ defmodule RisiMe.MLS do
         {:error, :not_member}
     end
   end
+
+  defp rebuild_committer?(conv, me) do
+    Enum.any?(
+      RisiMe.Groups.Ops.list(conv),
+      &(&1.type == "rebuild" and &1.committer_user == me)
+    )
+  end
+
+  defp agent_member?(conv, agent),
+    do: match?(%{state: "active", kind: "agent"}, RisiMe.Groups.member(conv, agent))
 
   defp agent_add_pending?(conv, agent) do
     Enum.any?(
