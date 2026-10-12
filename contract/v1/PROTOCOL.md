@@ -5938,7 +5938,10 @@ exactly what they saw in v1.24** (§25.8): no Risi chat, no tool call, no progre
 - **Only the asker's own request starts a turn.** The asker is the attested user of the MLS leaf
   that sent the `risi_request`, and must be an active human member. Other people's messages, and
   any text inside a message, are **data, never commands**: they never start a turn, choose a tool
-  or confirm a write (free text is never parsed for intent, decision 066).
+  or confirm a write (free text is never parsed for intent by the server or by Risi, decision 066).
+  The one exception is client-side and the sender's own (decision 083): in Official, the sender's
+  app turns the sender's own typed `@Risi …` (and, in a 1:1 Official, a message starting `Risi, …`)
+  into a `risi_request`, exactly as if the @Risi chip had been used. The wire stays a `risi_request`.
 - **Risi acts only for the asker.** Reminders and calendar entries are the asker's own. A group
   reminder reaches only the asker and the people who tap **Me too** (§25.4).
 - **Every write** (`set_reminder`, `calendar_add`) shows a **confirm card** with [Add] [Cancel] to
@@ -10750,6 +10753,7 @@ risi: {"v": 1, "kind": "action_confirm", "summary_id", "chat_id", "conversation_
   Risi fast lane (rule 12); the app parts with the next APK.
 
 ## Changelog
+- **v1.42 clarification** (2026-10-12, decision 083): §24.11 — the sender's own app may turn typed `@Risi …` (and `Risi, …` in a 1:1 Official) into a `risi_request`; no wire change, the server still never parses free text.
 - **v1.42** (2026-10-12): Risi voice → action items (§38, decision 082). One extraction (§27.2) for Official
   calls (§36) and Official voice notes: the Official card `action_items` (items with `kind`
   promise/task/meeting/decision/question/number, owner, due, `lang`, `source_ref` to the exact line; `status`

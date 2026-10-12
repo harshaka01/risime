@@ -204,6 +204,8 @@ if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
   STEP_T=2700 step scripts/call-transcribe-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-TRANSCRIBE TEST FAILED: not releasing"; exit 1; }
   echo "==> encryption clarity (scripts/e2ee-clarity-test: list markers, no silent plaintext, hold after a reinstall)"
   STEP_T=2400 step scripts/e2ee-clarity-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "E2EE CLARITY TEST FAILED: not releasing"; exit 1; }
+  echo "==> talking to Risi (scripts/risi-chat-test: replies, offline notice, @Risi in Official, Private hint)"
+  STEP_T=2400 step scripts/risi-chat-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "RISI CHAT TEST FAILED: not releasing"; exit 1; }
 fi
 
 # Background delivery gate (P0 2026-10-08): scripts/push-device-test with this build's debug APK on its
