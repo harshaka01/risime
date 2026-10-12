@@ -217,23 +217,28 @@ fun TabbedChatContent(
     val bar by controller.bar.collectAsStateWithLifecycle()
     val notice by controller.notice.collectAsStateWithLifecycle()
     val banner by controller.banner.collectAsStateWithLifecycle()
+    // P0 2026-10-12 (bug C): ONE Column, so the banner and the notice are rows BELOW the tab row wherever the
+    // chat screen places this lambda. It used to emit three siblings; inside the chat screens' z-order Box
+    // (Box(Modifier.zIndex(1f)) { bar() }) they were all drawn at the top, the banner's "OK" over the search icon.
     val tabBar: @Composable () -> Unit = {
-        val scope = searchScopeOf(controller.chatId, content)
-        ChatTabBar(
-            bar, controller::select, controller::openHistory,
-            onSearch?.let { s -> scope?.let { conv -> { s(conv, if (content is TabContent.Official) Tab.OFFICIAL else Tab.PRIVATE) } } },
-            onStartOfficial = controller::turnOfficialOn,
-        )
-        if (banner && bar.selected == Tab.OFFICIAL) OfficialBanner(controller::dismissBanner)
-        notice?.let { n ->
-            Text(
-                n,
-                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = Spacing.lg, vertical = Spacing.xs).testTag("tabs_notice"),
-                style = MaterialTheme.typography.bodySmall,
+        Column(Modifier.fillMaxWidth().testTag("chat_tab_area")) {
+            val scope = searchScopeOf(controller.chatId, content)
+            ChatTabBar(
+                bar, controller::select, controller::openHistory,
+                onSearch?.let { s -> scope?.let { conv -> { s(conv, if (content is TabContent.Official) Tab.OFFICIAL else Tab.PRIVATE) } } },
+                onStartOfficial = controller::turnOfficialOn,
             )
-            LaunchedEffect(n) {
-                kotlinx.coroutines.delay(6_000)
-                controller.clearNotice()
+            if (banner && bar.selected == Tab.OFFICIAL) OfficialBanner(controller::dismissBanner)
+            notice?.let { n ->
+                Text(
+                    n,
+                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = Spacing.lg, vertical = Spacing.xs).testTag("tabs_notice"),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                LaunchedEffect(n) {
+                    kotlinx.coroutines.delay(6_000)
+                    controller.clearNotice()
+                }
             }
         }
     }

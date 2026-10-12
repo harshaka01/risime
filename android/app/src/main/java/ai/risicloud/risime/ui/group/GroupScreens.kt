@@ -301,7 +301,8 @@ fun GroupChatScreen(
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
             // a11y (Official tab): the tab bar + "Risi is listening" strip sit above the message list in z-order, so a
             // half-scrolled message (its expanded touch bounds) never covers them in the accessibility tree.
-            tabBar?.let { bar -> androidx.compose.foundation.layout.Box(Modifier.zIndex(1f)) { bar() } }
+            // (A Column, not a Box: whatever rows the tab bar emits stack, never overlap; P0 2026-10-12 bug C.)
+            tabBar?.let { bar -> androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth().zIndex(1f)) { bar() } }
             ai.risicloud.risime.ui.chat.SelectionBarFor(vm.del, messages, selection, x)
             ai.risicloud.risime.ui.chat.MessagingHost(x, starredOpen, onStarredClose = { starredOpen = false }, groupInfo = { m -> m.messageId?.let(vm::openReadBy) })
             ai.risicloud.risime.ui.chat.DeleteHost(vm.del, clearAsk, onClearAskDone = { clearAsk = null }, onDeletedChat = onBack)
